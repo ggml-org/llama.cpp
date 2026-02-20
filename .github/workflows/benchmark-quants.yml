@@ -1,0 +1,239 @@
+name: Quantization Benchmarks
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_repo:
+        description: 'HuggingFace model repo to benchmark'
+        default: 'TinyLlama/TinyLlama-1.1B-Chat-v1.0'
+        type: string
+      model_name:
+        description: 'Short name for the model (used in filenames)'
+        default: 'tinyllama-1.1b'
+        type: string
+
+jobs:
+  # ──────────────────────────────────────────────
+  # Job 1: Build llama.cpp and convert model to F16
+  # ──────────────────────────────────────────────
+  build-and-convert:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential python3-pip
+          pip3 install torch transformers sentencepiece protobuf safetensors --break-system-packages
+
+      - name: Build llama.cpp
+        run: |
+          cmake -B build -DGGML_NATIVE=OFF -DGGML_METAL=OFF -DGGML_CUDA=OFF
+          cmake --build build --target llama-quantize llama-perplexity llama-bench -j$(nproc)
+
+      - name: Download and convert model to F16 GGUF
+        run: |
+          huggingface-cli download ${{ inputs.model_repo }} --local-dir models/hf-model
+          python3 convert_hf_to_gguf.py models/hf-model --outfile models/model-F16.gguf --outtype f16
+
+      - name: Download WikiText-2
+        run: |
+          curl -L "https://huggingface.co/datasets/ggml-org/ci/resolve/main/wikitext-2-raw-v1.zip" -o models/wikitext-2-raw.zip
+          cd models && unzip -o wikitext-2-raw.zip
+
+      - name: Quantize all types from F16
+        run: |
+          for type in Q8_0 Q2_K TQ1_0 TQ2_0 Q1_5_K Q2_K_S_NEW; do
+            echo "::group::Quantizing $type"
+            ./build/bin/llama-quantize models/model-F16.gguf "models/model-${type}.gguf" "$type"
+            echo "::endgroup::"
+          done
+
+      - name: Generate Q8_0 baseline logits for KLD
+        run: |
+          mkdir -p results
+          ./build/bin/llama-perplexity \
+            -m models/model-Q8_0.gguf \
+            -f models/wikitext-2-raw/wiki.test.raw \
+            --save-all-logits models/logits-Q8_0.kld \
+            -t $(nproc) -ngl 0 2>&1 | tee results/ppl-Q8_0.txt
+        env:
+          GGML_METAL: "0"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: |
+            build/bin/llama-perplexity
+            build/bin/llama-bench
+            build/bin/libggml*.so*
+            build/bin/libllama*.so*
+          retention-days: 1
+
+      - name: Upload model artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-artifacts
+          path: |
+            models/model-*.gguf
+            models/logits-Q8_0.kld
+            models/wikitext-2-raw/wiki.test.raw
+          retention-days: 1
+
+      - name: Upload Q8_0 perplexity result
+        uses: actions/upload-artifact@v4
+        with:
+          name: result-Q8_0
+          path: results/ppl-Q8_0.txt
+          retention-days: 1
+
+  # ──────────────────────────────────────────────
+  # Job 2: Run perplexity + KLD for each quant type (parallel)
+  # ──────────────────────────────────────────────
+  benchmark:
+    needs: build-and-convert
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        quant: [Q2_K, TQ1_0, TQ2_0, Q1_5_K, Q2_K_S_NEW]
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: build/bin
+
+      - name: Download model artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: model-artifacts
+          path: models
+
+      - name: Make binaries executable
+        run: chmod +x build/bin/llama-perplexity build/bin/llama-bench
+
+      - name: Set library path
+        run: echo "LD_LIBRARY_PATH=${{ github.workspace }}/build/bin" >> $GITHUB_ENV
+
+      - name: Run perplexity + KLD for ${{ matrix.quant }}
+        run: |
+          mkdir -p results
+          echo "===== Perplexity: ${{ matrix.quant }} ====="
+          ./build/bin/llama-perplexity \
+            -m "models/model-${{ matrix.quant }}.gguf" \
+            -f models/wikitext-2-raw/wiki.test.raw \
+            -t $(nproc) -ngl 0 2>&1 | tee results/ppl-${{ matrix.quant }}.txt
+
+          echo ""
+          echo "===== KLD vs Q8_0: ${{ matrix.quant }} ====="
+          ./build/bin/llama-perplexity \
+            -m "models/model-${{ matrix.quant }}.gguf" \
+            -f models/wikitext-2-raw/wiki.test.raw \
+            --kl-divergence --kl-divergence-base models/logits-Q8_0.kld \
+            -t $(nproc) -ngl 0 2>&1 | tee results/kld-${{ matrix.quant }}.txt
+
+      - name: Run llama-bench for ${{ matrix.quant }}
+        run: |
+          echo "===== Performance: ${{ matrix.quant }} ====="
+          ./build/bin/llama-bench \
+            -m "models/model-${{ matrix.quant }}.gguf" \
+            -t $(nproc) -ngl 0 -r 3 2>&1 | tee results/bench-${{ matrix.quant }}.txt
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: result-${{ matrix.quant }}
+          path: results/
+          retention-days: 1
+
+  # ──────────────────────────────────────────────
+  # Job 3: Collate all results into summary
+  # ──────────────────────────────────────────────
+  report:
+    needs: benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: result-*
+          merge-multiple: true
+          path: results
+
+      - name: Generate benchmark report
+        run: |
+          echo "# Quantization Benchmark Results" > report.md
+          echo "" >> report.md
+          echo "**Model:** ${{ inputs.model_repo }}" >> report.md
+          echo "**Date:** $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> report.md
+          echo "" >> report.md
+
+          echo "## Perplexity (WikiText-2)" >> report.md
+          echo "" >> report.md
+          echo "| Type | BPW | PPL | vs Q8_0 |" >> report.md
+          echo "|------|-----|-----|---------|" >> report.md
+
+          Q8_PPL=""
+          for type in Q8_0 Q2_K TQ1_0 TQ2_0 Q1_5_K Q2_K_S_NEW; do
+            FILE="results/ppl-${type}.txt"
+            if [ -f "$FILE" ]; then
+              PPL=$(grep "Final estimate" "$FILE" | grep -oP 'PPL = \K[0-9.]+' || echo "N/A")
+              BPW=$(grep "BPW" "$FILE" | head -1 | grep -oP '\K[0-9.]+(?= BPW)' || echo "N/A")
+              if [ "$type" = "Q8_0" ]; then
+                Q8_PPL="$PPL"
+                echo "| $type | $BPW | $PPL | baseline |" >> report.md
+              else
+                if [ "$Q8_PPL" != "" ] && [ "$PPL" != "N/A" ]; then
+                  DELTA=$(echo "$PPL - $Q8_PPL" | bc 2>/dev/null || echo "N/A")
+                  echo "| $type | $BPW | $PPL | +$DELTA |" >> report.md
+                else
+                  echo "| $type | $BPW | $PPL | N/A |" >> report.md
+                fi
+              fi
+            fi
+          done
+
+          echo "" >> report.md
+          echo "## KL Divergence (vs Q8_0)" >> report.md
+          echo "" >> report.md
+          echo "| Type | Mean KLD | Median KLD | Max KLD |" >> report.md
+          echo "|------|----------|------------|---------|" >> report.md
+
+          for type in Q2_K TQ1_0 TQ2_0 Q1_5_K Q2_K_S_NEW; do
+            FILE="results/kld-${type}.txt"
+            if [ -f "$FILE" ]; then
+              MEAN=$(grep "Mean    KLD" "$FILE" | awk '{print $3}' || echo "N/A")
+              MEDIAN=$(grep "Median  KLD" "$FILE" | awk '{print $3}' || echo "N/A")
+              MAX=$(grep "Maximum KLD" "$FILE" | awk '{print $3}' || echo "N/A")
+              echo "| $type | $MEAN | $MEDIAN | $MAX |" >> report.md
+            fi
+          done
+
+          echo "" >> report.md
+          echo "## Performance (CPU-only)" >> report.md
+          echo "" >> report.md
+          echo '```' >> report.md
+          for type in Q2_K TQ1_0 TQ2_0 Q1_5_K Q2_K_S_NEW; do
+            FILE="results/bench-${type}.txt"
+            if [ -f "$FILE" ]; then
+              echo "=== $type ===" >> report.md
+              tail -5 "$FILE" >> report.md
+              echo "" >> report.md
+            fi
+          done
+          echo '```' >> report.md
+
+          cat report.md
+
+      - name: Post summary
+        run: cat report.md >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-report
+          path: report.md
+          retention-days: 30

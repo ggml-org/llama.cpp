@@ -1,18 +1,18 @@
 #include "common.h"
-#include "llama.h"
 #include "gguf.h"
+#include "llama.h"
 
+#include <algorithm>
+#include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
-#include <vector>
+#include <filesystem>
+#include <fstream>
+#include <map>
 #include <string>
 #include <unordered_map>
-#include <map>
-#include <fstream>
-#include <cmath>
-#include <cctype>
-#include <algorithm>
-#include <filesystem>
+#include <vector>
 
 struct quant_option {
     std::string name;
@@ -21,56 +21,134 @@ struct quant_option {
 };
 
 static const std::vector<quant_option> QUANT_OPTIONS = {
-    { "Q4_0",     LLAMA_FTYPE_MOSTLY_Q4_0,     " 4.34G, +0.4685 ppl @ Llama-3-8B",  },
-    { "Q4_1",     LLAMA_FTYPE_MOSTLY_Q4_1,     " 4.78G, +0.4511 ppl @ Llama-3-8B",  },
-    { "MXFP4_MOE",LLAMA_FTYPE_MOSTLY_MXFP4_MOE," MXFP4 MoE",  },
-    { "Q5_0",     LLAMA_FTYPE_MOSTLY_Q5_0,     " 5.21G, +0.1316 ppl @ Llama-3-8B",  },
-    { "Q5_1",     LLAMA_FTYPE_MOSTLY_Q5_1,     " 5.65G, +0.1062 ppl @ Llama-3-8B",  },
-    { "IQ2_XXS",  LLAMA_FTYPE_MOSTLY_IQ2_XXS,  " 2.06 bpw quantization",            },
-    { "IQ2_XS",   LLAMA_FTYPE_MOSTLY_IQ2_XS,   " 2.31 bpw quantization",            },
-    { "IQ2_S",    LLAMA_FTYPE_MOSTLY_IQ2_S,    " 2.5  bpw quantization",            },
-    { "IQ2_M",    LLAMA_FTYPE_MOSTLY_IQ2_M,    " 2.7  bpw quantization",            },
-    { "IQ1_S",    LLAMA_FTYPE_MOSTLY_IQ1_S,    " 1.56 bpw quantization",            },
-    { "IQ1_M",    LLAMA_FTYPE_MOSTLY_IQ1_M,    " 1.75 bpw quantization",            },
-    { "TQ1_0",    LLAMA_FTYPE_MOSTLY_TQ1_0,    " 1.69 bpw ternarization",           },
-    { "TQ2_0",    LLAMA_FTYPE_MOSTLY_TQ2_0,    " 2.06 bpw ternarization",           },
-    { "Q2_K",     LLAMA_FTYPE_MOSTLY_Q2_K,     " 2.96G, +3.5199 ppl @ Llama-3-8B",  },
-    { "Q2_K_S",   LLAMA_FTYPE_MOSTLY_Q2_K_S,   " 2.96G, +3.1836 ppl @ Llama-3-8B",  },
-    { "IQ3_XXS",  LLAMA_FTYPE_MOSTLY_IQ3_XXS,  " 3.06 bpw quantization",            },
-    { "IQ3_S",    LLAMA_FTYPE_MOSTLY_IQ3_S,    " 3.44 bpw quantization",            },
-    { "IQ3_M",    LLAMA_FTYPE_MOSTLY_IQ3_M,    " 3.66 bpw quantization mix",        },
-    { "Q3_K",     LLAMA_FTYPE_MOSTLY_Q3_K_M,   "alias for Q3_K_M"                   },
-    { "IQ3_XS",   LLAMA_FTYPE_MOSTLY_IQ3_XS,   " 3.3 bpw quantization",             },
-    { "Q3_K_S",   LLAMA_FTYPE_MOSTLY_Q3_K_S,   " 3.41G, +1.6321 ppl @ Llama-3-8B",  },
-    { "Q3_K_M",   LLAMA_FTYPE_MOSTLY_Q3_K_M,   " 3.74G, +0.6569 ppl @ Llama-3-8B",  },
-    { "Q3_K_L",   LLAMA_FTYPE_MOSTLY_Q3_K_L,   " 4.03G, +0.5562 ppl @ Llama-3-8B",  },
-    { "IQ4_NL",   LLAMA_FTYPE_MOSTLY_IQ4_NL,   " 4.50 bpw non-linear quantization", },
-    { "IQ4_XS",   LLAMA_FTYPE_MOSTLY_IQ4_XS,   " 4.25 bpw non-linear quantization", },
-    { "Q4_K",     LLAMA_FTYPE_MOSTLY_Q4_K_M,   "alias for Q4_K_M",                  },
-    { "Q4_K_S",   LLAMA_FTYPE_MOSTLY_Q4_K_S,   " 4.37G, +0.2689 ppl @ Llama-3-8B",  },
-    { "Q4_K_M",   LLAMA_FTYPE_MOSTLY_Q4_K_M,   " 4.58G, +0.1754 ppl @ Llama-3-8B",  },
-    { "Q5_K",     LLAMA_FTYPE_MOSTLY_Q5_K_M,   "alias for Q5_K_M",                  },
-    { "Q5_K_S",   LLAMA_FTYPE_MOSTLY_Q5_K_S,   " 5.21G, +0.1049 ppl @ Llama-3-8B",  },
-    { "Q5_K_M",   LLAMA_FTYPE_MOSTLY_Q5_K_M,   " 5.33G, +0.0569 ppl @ Llama-3-8B",  },
-    { "Q6_K",     LLAMA_FTYPE_MOSTLY_Q6_K,     " 6.14G, +0.0217 ppl @ Llama-3-8B",  },
-    { "Q8_0",     LLAMA_FTYPE_MOSTLY_Q8_0,     " 7.96G, +0.0026 ppl @ Llama-3-8B",  },
-    { "F16",      LLAMA_FTYPE_MOSTLY_F16,      "14.00G, +0.0020 ppl @ Mistral-7B",  },
-    { "BF16",     LLAMA_FTYPE_MOSTLY_BF16,     "14.00G, -0.0050 ppl @ Mistral-7B",  },
-    { "F32",      LLAMA_FTYPE_ALL_F32,         "26.00G              @ 7B",          },
+    {
+     "Q4_0", LLAMA_FTYPE_MOSTLY_Q4_0,
+     " 4.34G, +0.4685 ppl @ Llama-3-8B", },
+    {
+     "Q4_1", LLAMA_FTYPE_MOSTLY_Q4_1,
+     " 4.78G, +0.4511 ppl @ Llama-3-8B", },
+    {
+     "MXFP4_MOE", LLAMA_FTYPE_MOSTLY_MXFP4_MOE,
+     " MXFP4 MoE", },
+    {
+     "Q5_0", LLAMA_FTYPE_MOSTLY_Q5_0,
+     " 5.21G, +0.1316 ppl @ Llama-3-8B", },
+    {
+     "Q5_1", LLAMA_FTYPE_MOSTLY_Q5_1,
+     " 5.65G, +0.1062 ppl @ Llama-3-8B", },
+    {
+     "IQ2_XXS", LLAMA_FTYPE_MOSTLY_IQ2_XXS,
+     " 2.06 bpw quantization", },
+    {
+     "IQ2_XS", LLAMA_FTYPE_MOSTLY_IQ2_XS,
+     " 2.31 bpw quantization", },
+    {
+     "IQ2_S", LLAMA_FTYPE_MOSTLY_IQ2_S,
+     " 2.5  bpw quantization", },
+    {
+     "IQ2_M", LLAMA_FTYPE_MOSTLY_IQ2_M,
+     " 2.7  bpw quantization", },
+    {
+     "IQ1_S", LLAMA_FTYPE_MOSTLY_IQ1_S,
+     " 1.56 bpw quantization", },
+    {
+     "IQ1_M", LLAMA_FTYPE_MOSTLY_IQ1_M,
+     " 1.75 bpw quantization", },
+    {
+     "TQ1_0", LLAMA_FTYPE_MOSTLY_TQ1_0,
+     " 1.69 bpw ternarization", },
+    {
+     "TQ2_0", LLAMA_FTYPE_MOSTLY_TQ2_0,
+     " 2.06 bpw ternarization", },
+    {
+     "Q1_5_K", LLAMA_FTYPE_MOSTLY_Q1_5_K,
+     " 1.81 bpw ternary-coded with 4-bit sub-block scales", },
+    {
+     "Q2_K_S_NEW", LLAMA_FTYPE_MOSTLY_Q2_K_S_NEW,
+     " 2.19 bpw streamlined 2-bit quantization", },
+    {
+     "Q2_K", LLAMA_FTYPE_MOSTLY_Q2_K,
+     " 2.96G, +3.5199 ppl @ Llama-3-8B", },
+    {
+     "Q2_K_S", LLAMA_FTYPE_MOSTLY_Q2_K_S,
+     " 2.96G, +3.1836 ppl @ Llama-3-8B", },
+    {
+     "IQ3_XXS", LLAMA_FTYPE_MOSTLY_IQ3_XXS,
+     " 3.06 bpw quantization", },
+    {
+     "IQ3_S", LLAMA_FTYPE_MOSTLY_IQ3_S,
+     " 3.44 bpw quantization", },
+    {
+     "IQ3_M", LLAMA_FTYPE_MOSTLY_IQ3_M,
+     " 3.66 bpw quantization mix", },
+    { "Q3_K", LLAMA_FTYPE_MOSTLY_Q3_K_M, "alias for Q3_K_M" },
+    {
+     "IQ3_XS", LLAMA_FTYPE_MOSTLY_IQ3_XS,
+     " 3.3 bpw quantization", },
+    {
+     "Q3_K_S", LLAMA_FTYPE_MOSTLY_Q3_K_S,
+     " 3.41G, +1.6321 ppl @ Llama-3-8B", },
+    {
+     "Q3_K_M", LLAMA_FTYPE_MOSTLY_Q3_K_M,
+     " 3.74G, +0.6569 ppl @ Llama-3-8B", },
+    {
+     "Q3_K_L", LLAMA_FTYPE_MOSTLY_Q3_K_L,
+     " 4.03G, +0.5562 ppl @ Llama-3-8B", },
+    {
+     "IQ4_NL", LLAMA_FTYPE_MOSTLY_IQ4_NL,
+     " 4.50 bpw non-linear quantization", },
+    {
+     "IQ4_XS", LLAMA_FTYPE_MOSTLY_IQ4_XS,
+     " 4.25 bpw non-linear quantization", },
+    {
+     "Q4_K", LLAMA_FTYPE_MOSTLY_Q4_K_M,
+     "alias for Q4_K_M", },
+    {
+     "Q4_K_S", LLAMA_FTYPE_MOSTLY_Q4_K_S,
+     " 4.37G, +0.2689 ppl @ Llama-3-8B", },
+    {
+     "Q4_K_M", LLAMA_FTYPE_MOSTLY_Q4_K_M,
+     " 4.58G, +0.1754 ppl @ Llama-3-8B", },
+    {
+     "Q5_K", LLAMA_FTYPE_MOSTLY_Q5_K_M,
+     "alias for Q5_K_M", },
+    {
+     "Q5_K_S", LLAMA_FTYPE_MOSTLY_Q5_K_S,
+     " 5.21G, +0.1049 ppl @ Llama-3-8B", },
+    {
+     "Q5_K_M", LLAMA_FTYPE_MOSTLY_Q5_K_M,
+     " 5.33G, +0.0569 ppl @ Llama-3-8B", },
+    {
+     "Q6_K", LLAMA_FTYPE_MOSTLY_Q6_K,
+     " 6.14G, +0.0217 ppl @ Llama-3-8B", },
+    {
+     "Q8_0", LLAMA_FTYPE_MOSTLY_Q8_0,
+     " 7.96G, +0.0026 ppl @ Llama-3-8B", },
+    {
+     "F16", LLAMA_FTYPE_MOSTLY_F16,
+     "14.00G, +0.0020 ppl @ Mistral-7B", },
+    {
+     "BF16", LLAMA_FTYPE_MOSTLY_BF16,
+     "14.00G, -0.0050 ppl @ Mistral-7B", },
+    {
+     "F32", LLAMA_FTYPE_ALL_F32,
+     "26.00G              @ 7B", },
     // Note: Ensure COPY comes after F32 to avoid ftype 0 from matching.
-    { "COPY",     LLAMA_FTYPE_ALL_F32,         "only copy tensors, no quantizing",  },
+    {
+     "COPY", LLAMA_FTYPE_ALL_F32,
+     "only copy tensors, no quantizing", },
 };
 
 // Quantization types. Changes to this struct must be replicated in llama-quantize.cpp
 struct tensor_quantization {
     std::string name;
-    ggml_type quant = GGML_TYPE_COUNT;
+    ggml_type   quant = GGML_TYPE_COUNT;
 };
 
-static const char * const LLM_KV_QUANTIZE_IMATRIX_FILE       = "quantize.imatrix.file";
-static const char * const LLM_KV_QUANTIZE_IMATRIX_DATASET    = "quantize.imatrix.dataset";
-static const char * const LLM_KV_QUANTIZE_IMATRIX_N_ENTRIES  = "quantize.imatrix.entries_count";
-static const char * const LLM_KV_QUANTIZE_IMATRIX_N_CHUNKS   = "quantize.imatrix.chunks_count";
+static const char * const LLM_KV_QUANTIZE_IMATRIX_FILE      = "quantize.imatrix.file";
+static const char * const LLM_KV_QUANTIZE_IMATRIX_DATASET   = "quantize.imatrix.dataset";
+static const char * const LLM_KV_QUANTIZE_IMATRIX_N_ENTRIES = "quantize.imatrix.entries_count";
+static const char * const LLM_KV_QUANTIZE_IMATRIX_N_CHUNKS  = "quantize.imatrix.chunks_count";
 
 // TODO: share with imatrix.cpp
 static const char * const LLM_KV_IMATRIX_DATASETS    = "imatrix.datasets";
@@ -82,7 +160,8 @@ static bool striequals(const char * a, const char * b) {
         if (std::tolower(*a) != std::tolower(*b)) {
             return false;
         }
-        a++; b++;
+        a++;
+        b++;
     }
     return *a == *b;
 }
@@ -95,7 +174,7 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
     }
     for (const auto & it : QUANT_OPTIONS) {
         if (striequals(it.name.c_str(), ftype_str.c_str())) {
-            ftype = it.ftype;
+            ftype         = it.ftype;
             ftype_str_out = it.name;
             return true;
         }
@@ -104,22 +183,23 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
         int ftype_int = std::stoi(ftype_str);
         for (const auto & it : QUANT_OPTIONS) {
             if (it.ftype == ftype_int) {
-                ftype = it.ftype;
+                ftype         = it.ftype;
                 ftype_str_out = it.name;
                 return true;
             }
         }
-    }
-    catch (...) {
+    } catch (...) {
         // stoi failed
     }
     return false;
 }
 
-[[noreturn]]
-static void usage(const char * executable) {
-    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--include-weights]\n", executable);
-    printf("       [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--tensor-type] [--tensor-type-file]\n");
+[[noreturn]] static void usage(const char * executable) {
+    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--include-weights]\n",
+           executable);
+    printf(
+        "       [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--tensor-type] "
+        "[--tensor-type-file]\n");
     printf("       [--prune-layers] [--keep-split] [--override-kv] [--dry-run]\n");
     printf("       model-f32.gguf [model-quant.gguf] type [nthreads]\n\n");
     printf("  --allow-requantize\n");
@@ -128,11 +208,15 @@ static void usage(const char * executable) {
     printf("                                               from 16bit or 32bit!\n");
     printf("  --leave-output-tensor\n");
     printf("                                      leave output.weight un(re)quantized\n");
-    printf("                                      increases model size but may also increase quality, especially when requantizing\n");
+    printf(
+        "                                      increases model size but may also increase quality, especially when "
+        "requantizing\n");
     printf("  --pure\n");
-    printf("                                      disable k-quant mixtures and quantize all tensors to the same type\n");
+    printf(
+        "                                      disable k-quant mixtures and quantize all tensors to the same type\n");
     printf("  --imatrix file_name\n");
-    printf("                                      use data in file_name as importance matrix for quant optimizations\n");
+    printf(
+        "                                      use data in file_name as importance matrix for quant optimizations\n");
     printf("  --include-weights tensor_name\n");
     printf("                                      use importance matrix for this/these tensor(s)\n");
     printf("  --exclude-weights tensor_name\n");
@@ -143,22 +227,32 @@ static void usage(const char * executable) {
     printf("                                      use this ggml_type for the token embeddings tensor\n");
     printf("  --tensor-type tensor_name=ggml_type\n");
     printf("                                      quantize this tensor to this ggml_type\n");
-    printf("                                      this is an advanced option to selectively quantize tensors. may be specified multiple times.\n");
+    printf(
+        "                                      this is an advanced option to selectively quantize tensors. may be "
+        "specified multiple times.\n");
     printf("                                      example: --tensor-type attn_q=q8_0\n");
     printf("  --tensor-type-file tensor_types.txt\n");
     printf("                                      list of tensors to quantize to a specific ggml_type\n");
-    printf("                                      this is an advanced option to selectively quantize a long list of tensors.\n");
-    printf("                                      the file should use the same format as above, separated by spaces or newlines.\n");
+    printf(
+        "                                      this is an advanced option to selectively quantize a long list of "
+        "tensors.\n");
+    printf(
+        "                                      the file should use the same format as above, separated by spaces or "
+        "newlines.\n");
     printf("  --prune-layers L0,L1,L2...\n");
     printf("                                      comma-separated list of layer numbers to prune from the model\n");
     printf("                                      WARNING: this is an advanced option, use with care.\n");
     printf("  --keep-split\n");
     printf("                                      generate quantized model in the same shards as input\n");
     printf("  --override-kv KEY=TYPE:VALUE\n");
-    printf("                                      override model metadata by key in the quantized model. may be specified multiple times.\n");
+    printf(
+        "                                      override model metadata by key in the quantized model. may be specified "
+        "multiple times.\n");
     printf("                                      WARNING: this is an advanced option, use with care.\n");
     printf("  --dry-run\n");
-    printf("                                      calculate and show the final quantization size without performing quantization\n");
+    printf(
+        "                                      calculate and show the final quantization size without performing "
+        "quantization\n");
     printf("                                      example: llama-quantize --dry-run model-f32.gguf Q4_K\n\n");
     printf("note: --include-weights and --exclude-weights cannot be used together\n\n");
     printf("-----------------------------------------------------------------------------\n");
@@ -175,40 +269,43 @@ static void usage(const char * executable) {
     exit(1);
 }
 
-static int load_legacy_imatrix(const std::string & imatrix_file, std::vector<std::string> & imatrix_datasets, std::unordered_map<std::string, std::vector<float>> & imatrix_data) {
+static int load_legacy_imatrix(const std::string &                                   imatrix_file,
+                               std::vector<std::string> &                            imatrix_datasets,
+                               std::unordered_map<std::string, std::vector<float>> & imatrix_data) {
     std::ifstream in(imatrix_file.c_str(), std::ios::binary);
     if (!in) {
-        printf("%s: failed to open %s\n",__func__, imatrix_file.c_str());
+        printf("%s: failed to open %s\n", __func__, imatrix_file.c_str());
         exit(1);
     }
     int n_entries;
-    in.read((char *)&n_entries, sizeof(n_entries));
+    in.read((char *) &n_entries, sizeof(n_entries));
     if (in.fail() || n_entries < 1) {
         printf("%s: no data in file %s\n", __func__, imatrix_file.c_str());
         exit(1);
     }
     for (int i = 0; i < n_entries; ++i) {
-        int len; in.read((char *)&len, sizeof(len));
-        std::vector<char> name_as_vec(len+1);
-        in.read((char *)name_as_vec.data(), len);
+        int len;
+        in.read((char *) &len, sizeof(len));
+        std::vector<char> name_as_vec(len + 1);
+        in.read((char *) name_as_vec.data(), len);
         if (in.fail()) {
-            printf("%s: failed reading name for entry %d from %s\n", __func__, i+1, imatrix_file.c_str());
+            printf("%s: failed reading name for entry %d from %s\n", __func__, i + 1, imatrix_file.c_str());
             exit(1);
         }
         name_as_vec[len] = 0;
-        std::string name{name_as_vec.data()};
-        auto & e = imatrix_data[name];
-        int ncall;
-        in.read((char *)&ncall, sizeof(ncall));
+        std::string name{ name_as_vec.data() };
+        auto &      e = imatrix_data[name];
+        int         ncall;
+        in.read((char *) &ncall, sizeof(ncall));
         int nval;
-        in.read((char *)&nval, sizeof(nval));
+        in.read((char *) &nval, sizeof(nval));
         if (in.fail() || nval < 1) {
             printf("%s: failed reading number of values for entry %d\n", __func__, i);
             imatrix_data = {};
             exit(1);
         }
         e.resize(nval);
-        in.read((char *)e.data(), nval*sizeof(float));
+        in.read((char *) e.data(), nval * sizeof(float));
         if (in.fail()) {
             printf("%s: failed reading data for entry %d\n", __func__, i);
             imatrix_data = {};
@@ -221,31 +318,34 @@ static int load_legacy_imatrix(const std::string & imatrix_file, std::vector<std
         }
 
         if (getenv("LLAMA_TRACE")) {
-            printf("%s: loaded data (size = %6d, ncall = %6d) for '%s'\n", __func__, int(e.size()), ncall, name.c_str());
+            printf("%s: loaded data (size = %6d, ncall = %6d) for '%s'\n", __func__, int(e.size()), ncall,
+                   name.c_str());
         }
     }
 
     // latest legacy imatrix version contains the dataset filename at the end of the file
     int m_last_call = 0;
     if (in.peek() != EOF) {
-        in.read((char *)&m_last_call, sizeof(m_last_call));
+        in.read((char *) &m_last_call, sizeof(m_last_call));
         int dataset_len;
-        in.read((char *)&dataset_len, sizeof(dataset_len));
+        in.read((char *) &dataset_len, sizeof(dataset_len));
         std::vector<char> dataset_as_vec(dataset_len);
         in.read(dataset_as_vec.data(), dataset_len);
         imatrix_datasets.resize(1);
         imatrix_datasets[0].assign(dataset_as_vec.begin(), dataset_as_vec.end());
         printf("%s: imatrix dataset='%s'\n", __func__, imatrix_datasets[0].c_str());
     }
-    printf("%s: loaded %d importance matrix entries from %s computed on %d chunks\n", __func__, int(imatrix_data.size()), imatrix_file.c_str(), m_last_call);
+    printf("%s: loaded %d importance matrix entries from %s computed on %d chunks\n", __func__,
+           int(imatrix_data.size()), imatrix_file.c_str(), m_last_call);
     return m_last_call;
 }
 
-static int load_imatrix(const std::string & imatrix_file, std::vector<std::string> & imatrix_datasets, std::unordered_map<std::string, std::vector<float>> & imatrix_data) {
-
-    struct ggml_context * ctx = nullptr;
+static int load_imatrix(const std::string &                                   imatrix_file,
+                        std::vector<std::string> &                            imatrix_datasets,
+                        std::unordered_map<std::string, std::vector<float>> & imatrix_data) {
+    struct ggml_context *   ctx              = nullptr;
     struct gguf_init_params meta_gguf_params = {
-        /* .no_alloc = */ false, // the data is needed
+        /* .no_alloc = */ false,  // the data is needed
         /* .ctx      = */ &ctx,
     };
     struct gguf_context * ctx_gguf = gguf_init_from_file(imatrix_file.c_str(), meta_gguf_params);
@@ -282,7 +382,9 @@ static int load_imatrix(const std::string & imatrix_file, std::vector<std::strin
     for (struct ggml_tensor * cur = ggml_get_first_tensor(ctx); cur; cur = ggml_get_next_tensor(ctx, cur)) {
         std::string name = cur->name;
 
-        if (name.empty()) { continue; }
+        if (name.empty()) {
+            continue;
+        }
 
         if (string_remove_suffix(name, sums_suffix)) {
             // in_sum2
@@ -296,7 +398,7 @@ static int load_imatrix(const std::string & imatrix_file, std::vector<std::strin
     }
 
     for (const auto & sc : sums_counts_for) {
-        const        std::string & name   = sc.first;
+        const std::string &        name   = sc.first;
         const struct ggml_tensor * sums   = sc.second.first;
         const struct ggml_tensor * counts = sc.second.second;
 
@@ -317,12 +419,12 @@ static int load_imatrix(const std::string & imatrix_file, std::vector<std::strin
             const float count = ((const float *) counts->data)[j];
             if (count > 0.0f) {
                 for (int64_t i = 0; i < ne0; ++i) {
-                    e[j*ne0 + i] = ((const float *) sums->data)[j*ne0 + i] / count;
+                    e[j * ne0 + i] = ((const float *) sums->data)[j * ne0 + i] / count;
                 }
             } else {
                 // Partial imatrix data, this tensor never got any input during calibration
                 for (int64_t i = 0; i < ne0; ++i) {
-                    e[j*ne0 + i] = 1;
+                    e[j * ne0 + i] = 1;
                 }
             }
             if (count > max_count) {
@@ -330,7 +432,8 @@ static int load_imatrix(const std::string & imatrix_file, std::vector<std::strin
             }
         }
         if (getenv("LLAMA_TRACE")) {
-            printf("%s: loaded data (size = %6d, n_tokens = %6d, n_chunks = %6d) for '%s'\n", __func__, int(e.size()), int(max_count), int(max_count / chunk_size), name.c_str());
+            printf("%s: loaded data (size = %6d, n_tokens = %6d, n_chunks = %6d) for '%s'\n", __func__, int(e.size()),
+                   int(max_count), int(max_count / chunk_size), name.c_str());
         }
     }
 
@@ -347,7 +450,8 @@ static int load_imatrix(const std::string & imatrix_file, std::vector<std::strin
     }
     printf("]\n");
 
-    printf("%s: loaded %d importance matrix entries from %s computed on %d chunks\n", __func__, int(imatrix_data.size()), imatrix_file.c_str(), m_last_chunk);
+    printf("%s: loaded %d importance matrix entries from %s computed on %d chunks\n", __func__,
+           int(imatrix_data.size()), imatrix_file.c_str(), m_last_chunk);
 
     gguf_free(ctx_gguf);
     ggml_free(ctx);
@@ -355,11 +459,11 @@ static int load_imatrix(const std::string & imatrix_file, std::vector<std::strin
     return m_last_chunk;
 }
 
-static int prepare_imatrix(const std::string & imatrix_file,
-        std::vector<std::string> & imatrix_dataset,
-        const std::vector<std::string> & included_weights,
-        const std::vector<std::string> & excluded_weights,
-        std::unordered_map<std::string, std::vector<float>> & imatrix_data) {
+static int prepare_imatrix(const std::string &                                   imatrix_file,
+                           std::vector<std::string> &                            imatrix_dataset,
+                           const std::vector<std::string> &                      included_weights,
+                           const std::vector<std::string> &                      excluded_weights,
+                           std::unordered_map<std::string, std::vector<float>> & imatrix_data) {
     int m_last_call = -1;
     if (!imatrix_file.empty()) {
         m_last_call = load_imatrix(imatrix_file, imatrix_dataset, imatrix_data);
@@ -399,7 +503,7 @@ static int prepare_imatrix(const std::string & imatrix_file,
 
 static ggml_type parse_ggml_type(const char * arg) {
     for (int i = 0; i < GGML_TYPE_COUNT; ++i) {
-        auto type = (ggml_type)i;
+        auto         type = (ggml_type) i;
         const auto * name = ggml_type_name(type);
         if (name && striequals(name, arg)) {
             return type;
@@ -430,7 +534,7 @@ static bool parse_tensor_type(const char * data, std::vector<tensor_quantization
     std::transform(tn.begin(), tn.end(), tn.begin(), tolower);
     sep++;
     tensor_quantization tqz;
-    tqz.name = tn;
+    tqz.name  = tn;
     tqz.quant = parse_ggml_type(sep);
     tensor_type.emplace_back(std::move(tqz));
     if (tqz.quant == GGML_TYPE_COUNT) {
@@ -491,18 +595,18 @@ int main(int argc, char ** argv) {
 
     llama_model_quantize_params params = llama_model_quantize_default_params();
 
-    int arg_idx = 1;
-    std::string imatrix_file;
-    std::vector<std::string> included_weights, excluded_weights;
+    int                                  arg_idx = 1;
+    std::string                          imatrix_file;
+    std::vector<std::string>             included_weights, excluded_weights;
     std::vector<llama_model_kv_override> kv_overrides;
-    std::vector<tensor_quantization> tensor_types;
-    std::vector<int> prune_layers;
+    std::vector<tensor_quantization>     tensor_types;
+    std::vector<int>                     prune_layers;
 
     for (; arg_idx < argc && strncmp(argv[arg_idx], "--", 2) == 0; arg_idx++) {
         if (strcmp(argv[arg_idx], "--leave-output-tensor") == 0) {
             params.quantize_output_tensor = false;
         } else if (strcmp(argv[arg_idx], "--output-tensor-type") == 0) {
-            if (arg_idx < argc-1) {
+            if (arg_idx < argc - 1) {
                 params.output_tensor_type = parse_ggml_type(argv[++arg_idx]);
                 if (params.output_tensor_type == GGML_TYPE_COUNT) {
                     usage(argv[0]);
@@ -511,7 +615,7 @@ int main(int argc, char ** argv) {
                 usage(argv[0]);
             }
         } else if (strcmp(argv[arg_idx], "--token-embedding-type") == 0) {
-            if (arg_idx < argc-1) {
+            if (arg_idx < argc - 1) {
                 params.token_embedding_type = parse_ggml_type(argv[++arg_idx]);
                 if (params.token_embedding_type == GGML_TYPE_COUNT) {
                     usage(argv[0]);
@@ -520,19 +624,19 @@ int main(int argc, char ** argv) {
                 usage(argv[0]);
             }
         } else if (strcmp(argv[arg_idx], "--tensor-type") == 0) {
-            if (arg_idx == argc-1 || !parse_tensor_type(argv[++arg_idx], tensor_types)) {
+            if (arg_idx == argc - 1 || !parse_tensor_type(argv[++arg_idx], tensor_types)) {
                 usage(argv[0]);
             }
         } else if (strcmp(argv[arg_idx], "--tensor-type-file") == 0) {
-            if (arg_idx == argc-1 || !parse_tensor_type_file(argv[++arg_idx], tensor_types)) {
+            if (arg_idx == argc - 1 || !parse_tensor_type_file(argv[++arg_idx], tensor_types)) {
                 usage(argv[0]);
             }
         } else if (strcmp(argv[arg_idx], "--prune-layers") == 0) {
-            if (arg_idx == argc-1 || !parse_layer_prune(argv[++arg_idx], prune_layers)) {
+            if (arg_idx == argc - 1 || !parse_layer_prune(argv[++arg_idx], prune_layers)) {
                 usage(argv[0]);
             }
         } else if (strcmp(argv[arg_idx], "--override-kv") == 0) {
-            if (arg_idx == argc-1 || !string_parse_kv_override(argv[++arg_idx], kv_overrides)) {
+            if (arg_idx == argc - 1 || !string_parse_kv_override(argv[++arg_idx], kv_overrides)) {
                 usage(argv[0]);
             }
         } else if (strcmp(argv[arg_idx], "--dry-run") == 0) {
@@ -542,19 +646,19 @@ int main(int argc, char ** argv) {
         } else if (strcmp(argv[arg_idx], "--pure") == 0) {
             params.pure = true;
         } else if (strcmp(argv[arg_idx], "--imatrix") == 0) {
-            if (arg_idx < argc-1) {
+            if (arg_idx < argc - 1) {
                 imatrix_file = argv[++arg_idx];
             } else {
                 usage(argv[0]);
             }
         } else if (strcmp(argv[arg_idx], "--include-weights") == 0) {
-            if (arg_idx < argc-1) {
+            if (arg_idx < argc - 1) {
                 included_weights.emplace_back(argv[++arg_idx]);
             } else {
                 usage(argv[0]);
             }
         } else if (strcmp(argv[arg_idx], "--exclude-weights") == 0) {
-            if (arg_idx < argc-1) {
+            if (arg_idx < argc - 1) {
                 excluded_weights.emplace_back(argv[++arg_idx]);
             } else {
                 usage(argv[0]);
@@ -574,7 +678,7 @@ int main(int argc, char ** argv) {
         usage(argv[0]);
     }
 
-    std::vector<std::string> imatrix_datasets;
+    std::vector<std::string>                            imatrix_datasets;
     std::unordered_map<std::string, std::vector<float>> imatrix_data;
     int m_last_call = prepare_imatrix(imatrix_file, imatrix_datasets, included_weights, excluded_weights, imatrix_data);
     if (!imatrix_data.empty()) {
@@ -600,7 +704,7 @@ int main(int argc, char ** argv) {
         {
             llama_model_kv_override kvo;
             std::strcpy(kvo.key, LLM_KV_QUANTIZE_IMATRIX_N_ENTRIES);
-            kvo.tag = LLAMA_KV_OVERRIDE_TYPE_INT;
+            kvo.tag     = LLAMA_KV_OVERRIDE_TYPE_INT;
             kvo.val_i64 = imatrix_data.size();
             kv_overrides.emplace_back(std::move(kvo));
         }
@@ -608,7 +712,7 @@ int main(int argc, char ** argv) {
         if (m_last_call > 0) {
             llama_model_kv_override kvo;
             std::strcpy(kvo.key, LLM_KV_QUANTIZE_IMATRIX_N_CHUNKS);
-            kvo.tag = LLAMA_KV_OVERRIDE_TYPE_INT;
+            kvo.tag     = LLAMA_KV_OVERRIDE_TYPE_INT;
             kvo.val_i64 = m_last_call;
             kv_overrides.emplace_back(std::move(kvo));
         }
@@ -616,7 +720,7 @@ int main(int argc, char ** argv) {
     if (!kv_overrides.empty()) {
         kv_overrides.emplace_back();
         kv_overrides.back().key[0] = 0;
-        params.kv_overrides = &kv_overrides;
+        params.kv_overrides        = &kv_overrides;
     }
     if (!tensor_types.empty()) {
         params.tensor_types = &tensor_types;
@@ -637,7 +741,7 @@ int main(int argc, char ** argv) {
     if (try_parse_ftype(argv[arg_idx], params.ftype, ftype_str)) {
         // argv[arg_idx] is the ftype directly: <input> <ftype>
         if (!params.dry_run) {
-            std::string fpath;
+            std::string  fpath;
             const size_t pos = fname_inp.find_last_of("/\\");
             if (pos != std::string::npos) {
                 fpath = fname_inp.substr(0, pos + 1);
@@ -670,7 +774,7 @@ int main(int argc, char ** argv) {
             return 1;
         }
         if (ftype_str == "COPY") {
-           params.only_copy = true;
+            params.only_copy = true;
         }
         arg_idx++;
     }
@@ -679,22 +783,26 @@ int main(int argc, char ** argv) {
     if (argc > arg_idx) {
         try {
             params.nthread = std::stoi(argv[arg_idx]);
-        }
-        catch (const std::exception & e) {
+        } catch (const std::exception & e) {
             fprintf(stderr, "%s: invalid nthread '%s' (%s)\n", __func__, argv[arg_idx], e.what());
             return 1;
         }
     }
 
     if (!params.dry_run &&
-        (
-            params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS  || params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS ||
-            params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_S   || params.ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S  ||
-            params.ftype == LLAMA_FTYPE_MOSTLY_IQ1_S   || params.ftype == LLAMA_FTYPE_MOSTLY_IQ1_M
-        ) && imatrix_data.empty()) {
-        fprintf(stderr, "\n==========================================================================================================\n");
-        fprintf(stderr, "Please do not use IQ1_S, IQ1_M, IQ2_S, IQ2_XXS, IQ2_XS or Q2_K_S quantization without an importance matrix\n");
-        fprintf(stderr, "==========================================================================================================\n\n\n");
+        (params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS || params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS ||
+         params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_S || params.ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S ||
+         params.ftype == LLAMA_FTYPE_MOSTLY_IQ1_S || params.ftype == LLAMA_FTYPE_MOSTLY_IQ1_M) &&
+        imatrix_data.empty()) {
+        fprintf(stderr,
+                "\n===================================================================================================="
+                "======\n");
+        fprintf(stderr,
+                "Please do not use IQ1_S, IQ1_M, IQ2_S, IQ2_XXS, IQ2_XS or Q2_K_S quantization without an importance "
+                "matrix\n");
+        fprintf(stderr,
+                "======================================================================================================"
+                "====\n\n\n");
         return 1;
     }
 
@@ -708,9 +816,11 @@ int main(int argc, char ** argv) {
     print_build_info();
 
     if (params.dry_run) {
-        fprintf(stderr, "%s: calculating quantization size for '%s' as %s", __func__, fname_inp.c_str(), ftype_str.c_str());
+        fprintf(stderr, "%s: calculating quantization size for '%s' as %s", __func__, fname_inp.c_str(),
+                ftype_str.c_str());
     } else {
-        fprintf(stderr, "%s: quantizing '%s' to '%s' as %s", __func__, fname_inp.c_str(), fname_out.c_str(), ftype_str.c_str());
+        fprintf(stderr, "%s: quantizing '%s' to '%s' as %s", __func__, fname_inp.c_str(), fname_out.c_str(),
+                ftype_str.c_str());
     }
 
     if (params.nthread > 0) {
@@ -739,12 +849,11 @@ int main(int argc, char ** argv) {
         const int64_t t_main_end_us = llama_time_us();
 
         printf("\n");
-        printf("%s: quantize time = %8.2f ms\n", __func__, t_quantize_us/1000.0);
-        printf("%s:    total time = %8.2f ms\n", __func__, (t_main_end_us - t_main_start_us)/1000.0);
+        printf("%s: quantize time = %8.2f ms\n", __func__, t_quantize_us / 1000.0);
+        printf("%s:    total time = %8.2f ms\n", __func__, (t_main_end_us - t_main_start_us) / 1000.0);
     }
 
     llama_backend_free();
 
     return 0;
 }
-
