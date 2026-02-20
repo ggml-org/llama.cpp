@@ -23,7 +23,7 @@ jobs:
         run: sdkmanager "ndk;26.3.11579264" "cmake;3.22.1"
 
       - name: Build APK
-        working-directory: examples/llama.android
+        working-directory: examples/kova
         run: ./gradlew assembleRelease --stacktrace
 
       - name: Sign APK
@@ -34,10 +34,10 @@ jobs:
             --ks-key-alias "${{ secrets.KEY_ALIAS }}" \
             --ks-pass pass:"${{ secrets.STORE_PASSWORD }}" \
             --key-pass pass:"${{ secrets.KEY_PASSWORD }}" \
-            examples/llama.android/app/build/outputs/apk/release/app-release-unsigned.apk
+            examples/kova/app/build/outputs/apk/release/app-release-unsigned.apk
 
       - name: Rename APK
-        run: mv examples/llama.android/app/build/outputs/apk/release/app-release-unsigned.apk kova.apk
+        run: mv examples/kova/app/build/outputs/apk/release/app-release-unsigned.apk kova.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
