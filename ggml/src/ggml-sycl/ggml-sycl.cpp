@@ -19985,39 +19985,48 @@ static int ggml_sycl_tensor_split_pct() {
 }
 
 // ---------------------------------------------------------------------------
-// Tensor split: GPU+CPU cooperative MUL_MAT staging
+// Tensor split: per-device GPU+CPU cooperative MUL_MAT staging
+// Indexed by split device index: [0]=primary GPU, [1]=secondary GPU, [2]=CPU
 // ---------------------------------------------------------------------------
-static struct {
+static constexpr int SPLIT_MAX_DEVICES = 3;  // primary GPU, secondary GPU, CPU
+
+struct split_staging {
     float * src1_host = nullptr;   // host-pinned src1 staging (float32)
-    float * output    = nullptr;   // host-pinned CPU output (float32)
+    float * output    = nullptr;   // host-pinned partial output (float32)
     size_t  src1_size = 0;         // allocated bytes for src1
     size_t  out_size  = 0;         // allocated bytes for output
-} g_split_staging;
+};
+static split_staging g_split_staging[SPLIT_MAX_DEVICES];
 
-static void split_staging_ensure(size_t src1_bytes, size_t out_bytes, sycl::queue * q) {
-    if (g_split_staging.src1_size < src1_bytes) {
-        if (g_split_staging.src1_host) {
-            sycl::free(g_split_staging.src1_host, *q);
+static void split_staging_ensure(int dev_idx, size_t src1_bytes, size_t out_bytes,
+                                  sycl::queue * q) {
+    if (dev_idx < 0 || dev_idx >= SPLIT_MAX_DEVICES) return;
+    auto & s = g_split_staging[dev_idx];
+    if (s.src1_size < src1_bytes) {
+        if (s.src1_host) {
+            sycl::free(s.src1_host, *q);
         }
-        g_split_staging.src1_host = (float *) sycl::malloc_host(src1_bytes, *q);
-        if (!g_split_staging.src1_host) {
-            GGML_LOG_WARN("[TENSOR-SPLIT] sycl::malloc_host failed for src1 (%zu bytes)\n", src1_bytes);
-            g_split_staging.src1_size = 0;
+        s.src1_host = (float *) sycl::malloc_host(src1_bytes, *q);
+        if (!s.src1_host) {
+            GGML_LOG_WARN("[TENSOR-SPLIT] sycl::malloc_host failed for src1 dev=%d (%zu bytes)\n",
+                          dev_idx, src1_bytes);
+            s.src1_size = 0;
             return;
         }
-        g_split_staging.src1_size = src1_bytes;
+        s.src1_size = src1_bytes;
     }
-    if (g_split_staging.out_size < out_bytes) {
-        if (g_split_staging.output) {
-            sycl::free(g_split_staging.output, *q);
+    if (s.out_size < out_bytes) {
+        if (s.output) {
+            sycl::free(s.output, *q);
         }
-        g_split_staging.output = (float *) sycl::malloc_host(out_bytes, *q);
-        if (!g_split_staging.output) {
-            GGML_LOG_WARN("[TENSOR-SPLIT] sycl::malloc_host failed for output (%zu bytes)\n", out_bytes);
-            g_split_staging.out_size = 0;
+        s.output = (float *) sycl::malloc_host(out_bytes, *q);
+        if (!s.output) {
+            GGML_LOG_WARN("[TENSOR-SPLIT] sycl::malloc_host failed for output dev=%d (%zu bytes)\n",
+                          dev_idx, out_bytes);
+            s.out_size = 0;
             return;
         }
-        g_split_staging.out_size = out_bytes;
+        s.out_size = out_bytes;
     }
 }
 
@@ -20149,9 +20158,9 @@ static bool ggml_sycl_mul_mat_tensor_split(
         }
 
         if (overlap_weights) {
-            split_staging_ensure(src1_bytes, out_bytes, stream);
-            if (g_split_staging.src1_host && g_split_staging.output) {
-                stream->memcpy(g_split_staging.src1_host, src1->data, src1_bytes).wait();
+            split_staging_ensure(0, src1_bytes, out_bytes, stream);
+            if (g_split_staging[0].src1_host && g_split_staging[0].output) {
+                stream->memcpy(g_split_staging[0].src1_host, src1->data, src1_bytes).wait();
                 src1_prestaged = true;
             }
         }
@@ -20186,12 +20195,12 @@ static bool ggml_sycl_mul_mat_tensor_split(
         // CPU vec_dot runs CONCURRENTLY with GPU.
         ggml_sycl_cpu_vec_dot_rows(src0->type, static_cast<int>(ne00),
                                     overlap_weights,
-                                    g_split_staging.src1_host,
-                                    g_split_staging.output,
+                                    g_split_staging[0].src1_host,
+                                    g_split_staging[0].output,
                                     static_cast<int>(N_cpu));
 
         // Queue H2D copy — NO stream->wait(), NO .wait().
-        stream->memcpy(dst_dd + N_gpu, g_split_staging.output, out_bytes);
+        stream->memcpy(dst_dd + N_gpu, g_split_staging[0].output, out_bytes);
     } else {
         // Fallback: serialized path (pre-staging failed or first-time alloc issue)
         void * host_weights = nullptr;
@@ -20209,20 +20218,20 @@ static bool ggml_sycl_mul_mat_tensor_split(
             host_weights = g_split_weight_staging.data;
         }
 
-        split_staging_ensure(src1_bytes, out_bytes, stream);
-        if (!g_split_staging.src1_host || !g_split_staging.output) {
+        split_staging_ensure(0, src1_bytes, out_bytes, stream);
+        if (!g_split_staging[0].src1_host || !g_split_staging[0].output) {
             return false;
         }
-        stream->memcpy(g_split_staging.src1_host, src1->data, src1_bytes).wait();
+        stream->memcpy(g_split_staging[0].src1_host, src1->data, src1_bytes).wait();
 
         ggml_sycl_cpu_vec_dot_rows(src0->type, static_cast<int>(ne00),
                                     host_weights,
-                                    g_split_staging.src1_host,
-                                    g_split_staging.output,
+                                    g_split_staging[0].src1_host,
+                                    g_split_staging[0].output,
                                     static_cast<int>(N_cpu));
 
         // Same async H2D as overlap path — no waits needed.
-        stream->memcpy(dst_dd + N_gpu, g_split_staging.output, out_bytes);
+        stream->memcpy(dst_dd + N_gpu, g_split_staging[0].output, out_bytes);
     }
 
     return true;
