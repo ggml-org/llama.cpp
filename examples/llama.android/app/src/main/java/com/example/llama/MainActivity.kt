@@ -17,11 +17,14 @@ import androidx.drawerlayout.widget.DrawerLayout
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.arm.aichat.InferenceEngine
+import com.arm.aichat.internal.InferenceEngineImpl
 import com.example.llama.data.AppDatabase
 import com.example.llama.data.Conversation
 import com.example.llama.data.DbMessage
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -39,12 +42,13 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var messageAdapter: MessageAdapter
     private lateinit var conversationAdapter: ConversationAdapter
-
     private lateinit var db: AppDatabase
+    private lateinit var engine: InferenceEngine
 
     private var currentConversationId: String = ""
     private var loadedModelPath: String? = null
     private var isGenerating = false
+    private var generationJob: Job? = null
 
     private val currentMessages = mutableListOf<ChatMessage>()
 
@@ -53,6 +57,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         db = AppDatabase.getInstance(this)
+        engine = InferenceEngineImpl.getInstance(this)
 
         bindViews()
         setupToolbar()
@@ -66,6 +71,11 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             ensureActiveConversation()
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        engine.destroy()
     }
 
     private fun bindViews() {
@@ -177,9 +187,7 @@ class MainActivity : AppCompatActivity() {
 
     private suspend fun createNewConversation(): String = withContext(Dispatchers.IO) {
         val id = UUID.randomUUID().toString()
-        db.chatDao().insertConversation(
-            Conversation(id = id, title = "Yeni Sohbet")
-        )
+        db.chatDao().insertConversation(Conversation(id = id, title = "Yeni Sohbet"))
         withContext(Dispatchers.Main) {
             currentConversationId = id
             saveActiveId(id)
@@ -254,25 +262,42 @@ class MainActivity : AppCompatActivity() {
 
         isGenerating = true
         updateFabIcon()
+        var fullResponse = ""
 
-        // TODO: Gerçek inference buraya gelecek
-        // Şimdilik stub — inference entegrasyonu bir sonraki adım
-        val fullResponse = "[Model henüz entegre edilmedi]"
-        messageAdapter.updateLastAssistantMessage(fullResponse)
-        currentMessages.add(ChatMessage(fullResponse, false))
-
-        lifecycleScope.launch(Dispatchers.IO) {
-            db.chatDao().insertMessage(
-                DbMessage(UUID.randomUUID().toString(), convId, "assistant", fullResponse)
-            )
-            db.chatDao().touchConversation(convId, System.currentTimeMillis())
+        generationJob = lifecycleScope.launch {
+            try {
+                engine.sendUserPrompt(text)
+                    .collect { token ->
+                        fullResponse += token
+                        messageAdapter.updateLastAssistantMessage(fullResponse)
+                        messagesRv.scrollToPosition(currentMessages.size - 1)
+                    }
+            } catch (e: Exception) {
+                messageAdapter.updateLastAssistantMessage(
+                    if (fullResponse.isEmpty()) "[Hata: ${e.message}]" else fullResponse
+                )
+            } finally {
+                if (currentMessages.isNotEmpty() && !currentMessages.last().isUser) {
+                    currentMessages[currentMessages.size - 1] = ChatMessage(fullResponse, false)
+                } else {
+                    currentMessages.add(ChatMessage(fullResponse, false))
+                }
+                if (fullResponse.isNotEmpty()) {
+                    lifecycleScope.launch(Dispatchers.IO) {
+                        db.chatDao().insertMessage(
+                            DbMessage(UUID.randomUUID().toString(), convId, "assistant", fullResponse)
+                        )
+                        db.chatDao().touchConversation(convId, System.currentTimeMillis())
+                    }
+                }
+                isGenerating = false
+                updateFabIcon()
+            }
         }
-
-        isGenerating = false
-        updateFabIcon()
     }
 
     private fun stopGeneration() {
+        generationJob?.cancel()
         isGenerating = false
         updateFabIcon()
     }
@@ -304,11 +329,8 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(this)
             .setTitle("Model Seç")
             .setItems(options.toTypedArray()) { _, which ->
-                if (which == options.size - 1) {
-                    showAddModelDialog()
-                } else {
-                    loadModel(savedModels[which])
-                }
+                if (which == options.size - 1) showAddModelDialog()
+                else loadModel(savedModels[which])
             }
             .show()
     }
@@ -333,9 +355,25 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadModel(path: String) {
-        loadedModelPath = path
-        updateFabIcon()
-        Toast.makeText(this, path.substringAfterLast("/") + " yüklendi", Toast.LENGTH_SHORT).show()
+        lifecycleScope.launch {
+            try {
+                Toast.makeText(this@MainActivity, "Model yükleniyor...", Toast.LENGTH_SHORT).show()
+                engine.loadModel(path)
+                loadedModelPath = path
+                updateFabIcon()
+                Toast.makeText(
+                    this@MainActivity,
+                    path.substringAfterLast("/") + " yüklendi",
+                    Toast.LENGTH_SHORT
+                ).show()
+            } catch (e: Exception) {
+                Toast.makeText(
+                    this@MainActivity,
+                    "Model yüklenemedi: ${e.message}",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
