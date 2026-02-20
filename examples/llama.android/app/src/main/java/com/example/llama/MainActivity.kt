@@ -61,21 +61,48 @@ class MainActivity : AppCompatActivity() {
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
             result.data?.data?.let { uri ->
-                // URI'den gerçek dosya yolunu çıkar
-                val path = uri.path?.let { p ->
-                    when {
-                        p.startsWith("/document/primary:") ->
-                            p.replace("/document/primary:", "/storage/emulated/0/")
-                        p.startsWith("/document/raw:") ->
-                            p.removePrefix("/document/raw:")
-                        else -> p
+                lifecycleScope.launch(Dispatchers.IO) {
+                    try {
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(this@MainActivity, "Dosya kopyalanıyor...", Toast.LENGTH_SHORT).show()
+                        }
+
+                        // Dosya adını al
+                        val fileName = contentResolver.query(
+                            uri, null, null, null, null
+                        )?.use { cursor ->
+                            val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                            cursor.moveToFirst()
+                            cursor.getString(nameIndex)
+                        } ?: "model.gguf"
+
+                        // Cache'e kopyala
+                        val destFile = java.io.File(cacheDir, fileName)
+                        contentResolver.openInputStream(uri)?.use { input ->
+                            destFile.outputStream().use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+
+                        val path = destFile.absolutePath
+                        val prefs = getSharedPreferences("llama_prefs", MODE_PRIVATE)
+                        val models = prefs.getStringSet("saved_models", mutableSetOf())!!.toMutableSet()
+                        models.add(path)
+                        prefs.edit().putStringSet("saved_models", models).apply()
+
+                        withContext(Dispatchers.Main) {
+                            loadModel(path)
+                        }
+                    } catch (e: Exception) {
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(
+                                this@MainActivity,
+                                "Dosya kopyalanamadı: ${e.message}",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
                     }
-                } ?: return@let
-                val prefs = getSharedPreferences("llama_prefs", MODE_PRIVATE)
-                val models = prefs.getStringSet("saved_models", mutableSetOf())!!.toMutableSet()
-                models.add(path)
-                prefs.edit().putStringSet("saved_models", models).apply()
-                loadModel(path)
+                }
             }
         }
     }
@@ -405,12 +432,10 @@ class MainActivity : AppCompatActivity() {
             try {
                 Toast.makeText(this@MainActivity, "Model yükleniyor...", Toast.LENGTH_SHORT).show()
 
-                // Error state'indeyse temizle
                 if (engine.state.value is InferenceEngine.State.Error) {
                     engine.cleanUp()
                 }
 
-                // Engine Initialized olana kadar bekle (max 10 saniye)
                 var waited = 0
                 while (engine.state.value !is InferenceEngine.State.Initialized && waited < 100) {
                     delay(100)
