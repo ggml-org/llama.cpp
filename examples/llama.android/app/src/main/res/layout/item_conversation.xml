@@ -18,7 +18,8 @@
         android:layout_weight="1"
         android:ellipsize="end"
         android:maxLines="2"
-        android:textSize="14sp" />
+        android:textSize="14sp"
+        android:textColor="#CCCCCC" />
 
     <ImageButton
         android:id="@+id/btn_delete_conv"
@@ -27,5 +28,5 @@
         android:background="?attr/selectableItemBackgroundBorderless"
         android:contentDescription="Sil"
         android:src="@android:drawable/ic_menu_delete"
-        android:tint="#888888" />
+        android:tint="#666666" />
 </LinearLayout>
