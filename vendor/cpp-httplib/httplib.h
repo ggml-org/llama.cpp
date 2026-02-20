@@ -8,8 +8,8 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.30.2"
-#define CPPHTTPLIB_VERSION_NUM "0x001E02"
+#define CPPHTTPLIB_VERSION "0.32.0"
+#define CPPHTTPLIB_VERSION_NUM "0x002000"
 
 /*
  * Platform compatibility check
@@ -147,7 +147,7 @@
 #endif
 
 #ifndef CPPHTTPLIB_PAYLOAD_MAX_LENGTH
-#define CPPHTTPLIB_PAYLOAD_MAX_LENGTH ((std::numeric_limits<size_t>::max)())
+#define CPPHTTPLIB_PAYLOAD_MAX_LENGTH (100 * 1024 * 1024) // 100MB
 #endif
 
 #ifndef CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH
@@ -382,6 +382,45 @@ using socket_t = int;
 #endif
 
 #endif // CPPHTTPLIB_OPENSSL_SUPPORT
+
+#ifdef CPPHTTPLIB_MBEDTLS_SUPPORT
+#include <mbedtls/ctr_drbg.h>
+#include <mbedtls/entropy.h>
+#include <mbedtls/error.h>
+#include <mbedtls/md5.h>
+#include <mbedtls/net_sockets.h>
+#include <mbedtls/oid.h>
+#include <mbedtls/pk.h>
+#include <mbedtls/sha1.h>
+#include <mbedtls/sha256.h>
+#include <mbedtls/sha512.h>
+#include <mbedtls/ssl.h>
+#include <mbedtls/x509_crt.h>
+#ifdef _WIN32
+#include <wincrypt.h>
+#ifdef _MSC_VER
+#pragma comment(lib, "crypt32.lib")
+#endif
+#endif // _WIN32
+#if defined(CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN)
+#if TARGET_OS_MAC
+#include <Security/Security.h>
+#endif
+#endif // CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN
+
+// Mbed TLS 3.x API compatibility
+#if MBEDTLS_VERSION_MAJOR >= 3
+#define CPPHTTPLIB_MBEDTLS_V3
+#endif
+
+#endif // CPPHTTPLIB_MBEDTLS_SUPPORT
+
+// Define CPPHTTPLIB_SSL_ENABLED if any SSL backend is available
+// This simplifies conditional compilation when adding new backends (e.g.,
+// wolfSSL)
+#if defined(CPPHTTPLIB_OPENSSL_SUPPORT) || defined(CPPHTTPLIB_MBEDTLS_SUPPORT)
+#define CPPHTTPLIB_SSL_ENABLED
+#endif
 
 #ifdef CPPHTTPLIB_ZLIB_SUPPORT
 #include <zlib.h>
@@ -799,6 +838,105 @@ public:
 using Range = std::pair<ssize_t, ssize_t>;
 using Ranges = std::vector<Range>;
 
+#ifdef CPPHTTPLIB_SSL_ENABLED
+// TLS abstraction layer - public type definitions and API
+namespace tls {
+
+// Opaque handles (defined as void* for abstraction)
+using ctx_t = void *;
+using session_t = void *;
+using const_session_t = const void *; // For read-only session access
+using cert_t = void *;
+using ca_store_t = void *;
+
+// TLS versions
+enum class Version {
+  TLS1_2 = 0x0303,
+  TLS1_3 = 0x0304,
+};
+
+// Subject Alternative Names (SAN) entry types
+enum class SanType { DNS, IP, EMAIL, URI, OTHER };
+
+// SAN entry structure
+struct SanEntry {
+  SanType type;
+  std::string value;
+};
+
+// Verification context for certificate verification callback
+struct VerifyContext {
+  session_t session;        // TLS session handle
+  cert_t cert;              // Current certificate being verified
+  int depth;                // Certificate chain depth (0 = leaf)
+  bool preverify_ok;        // OpenSSL/Mbed TLS pre-verification result
+  long error_code;          // Backend-specific error code (0 = no error)
+  const char *error_string; // Human-readable error description
+
+  // Certificate introspection methods
+  std::string subject_cn() const;
+  std::string issuer_name() const;
+  bool check_hostname(const char *hostname) const;
+  std::vector<SanEntry> sans() const;
+  bool validity(time_t &not_before, time_t &not_after) const;
+  std::string serial() const;
+};
+
+using VerifyCallback = std::function<bool(const VerifyContext &ctx)>;
+
+// TlsError codes for TLS operations (backend-independent)
+enum class ErrorCode : int {
+  Success = 0,
+  WantRead,         // Non-blocking: need to wait for read
+  WantWrite,        // Non-blocking: need to wait for write
+  PeerClosed,       // Peer closed the connection
+  Fatal,            // Unrecoverable error
+  SyscallError,     // System call error (check sys_errno)
+  CertVerifyFailed, // Certificate verification failed
+  HostnameMismatch, // Hostname verification failed
+};
+
+// TLS error information
+struct TlsError {
+  ErrorCode code = ErrorCode::Fatal;
+  uint64_t backend_code = 0; // OpenSSL: ERR_get_error(), mbedTLS: return value
+  int sys_errno = 0;         // errno when SyscallError
+
+  // Convert verification error code to human-readable string
+  static std::string verify_error_to_string(long error_code);
+};
+
+// RAII wrapper for peer certificate
+class PeerCert {
+public:
+  PeerCert();
+  PeerCert(PeerCert &&other) noexcept;
+  PeerCert &operator=(PeerCert &&other) noexcept;
+  ~PeerCert();
+
+  PeerCert(const PeerCert &) = delete;
+  PeerCert &operator=(const PeerCert &) = delete;
+
+  explicit operator bool() const;
+  std::string subject_cn() const;
+  std::string issuer_name() const;
+  bool check_hostname(const char *hostname) const;
+  std::vector<SanEntry> sans() const;
+  bool validity(time_t &not_before, time_t &not_after) const;
+  std::string serial() const;
+
+private:
+  explicit PeerCert(cert_t cert);
+  cert_t cert_ = nullptr;
+  friend PeerCert get_peer_cert_from_session(const_session_t session);
+};
+
+// Callback for TLS context setup (used by SSLServer constructor)
+using ContextSetupCallback = std::function<bool(ctx_t ctx)>;
+
+} // namespace tls
+#endif
+
 struct Request {
   std::string method;
   std::string path;
@@ -828,9 +966,6 @@ struct Request {
   ContentReceiverWithProgress content_receiver;
   DownloadProgress download_progress;
   UploadProgress upload_progress;
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  const SSL *ssl = nullptr;
-#endif
 
   bool has_header(const std::string &key) const;
   std::string get_header_value(const std::string &key, const char *def = "",
@@ -858,6 +993,12 @@ struct Request {
   size_t authorization_count_ = 0;
   std::chrono::time_point<std::chrono::steady_clock> start_time_ =
       (std::chrono::steady_clock::time_point::min)();
+
+#ifdef CPPHTTPLIB_SSL_ENABLED
+  tls::const_session_t ssl = nullptr;
+  tls::PeerCert peer_cert() const;
+  std::string sni() const;
+#endif
 };
 
 struct Response {
@@ -1005,74 +1146,18 @@ public:
 
 class ThreadPool final : public TaskQueue {
 public:
-  explicit ThreadPool(size_t n, size_t mqr = 0)
-      : shutdown_(false), max_queued_requests_(mqr) {
-    threads_.reserve(n);
-    while (n) {
-      threads_.emplace_back(worker(*this));
-      n--;
-    }
-  }
-
+  explicit ThreadPool(size_t n, size_t mqr = 0);
   ThreadPool(const ThreadPool &) = delete;
   ~ThreadPool() override = default;
 
-  bool enqueue(std::function<void()> fn) override {
-    {
-      std::unique_lock<std::mutex> lock(mutex_);
-      if (max_queued_requests_ > 0 && jobs_.size() >= max_queued_requests_) {
-        return false;
-      }
-      jobs_.push_back(std::move(fn));
-    }
-
-    cond_.notify_one();
-    return true;
-  }
-
-  void shutdown() override {
-    // Stop all worker threads...
-    {
-      std::unique_lock<std::mutex> lock(mutex_);
-      shutdown_ = true;
-    }
-
-    cond_.notify_all();
-
-    // Join...
-    for (auto &t : threads_) {
-      t.join();
-    }
-  }
+  bool enqueue(std::function<void()> fn) override;
+  void shutdown() override;
 
 private:
   struct worker {
-    explicit worker(ThreadPool &pool) : pool_(pool) {}
+    explicit worker(ThreadPool &pool);
 
-    void operator()() {
-      for (;;) {
-        std::function<void()> fn;
-        {
-          std::unique_lock<std::mutex> lock(pool_.mutex_);
-
-          pool_.cond_.wait(
-              lock, [&] { return !pool_.jobs_.empty() || pool_.shutdown_; });
-
-          if (pool_.shutdown_ && pool_.jobs_.empty()) { break; }
-
-          fn = pool_.jobs_.front();
-          pool_.jobs_.pop_front();
-        }
-
-        assert(true == static_cast<bool>(fn));
-        fn();
-      }
-
-#if defined(CPPHTTPLIB_OPENSSL_SUPPORT) && !defined(OPENSSL_IS_BORINGSSL) &&   \
-    !defined(LIBRESSL_VERSION_NUMBER)
-      OPENSSL_thread_stop();
-#endif
-    }
+    void operator()();
 
     ThreadPool &pool_;
   };
@@ -1183,6 +1268,9 @@ private:
 int close_socket(socket_t sock);
 
 ssize_t write_headers(Stream &strm, const Headers &headers);
+
+bool set_socket_opt_time(socket_t sock, int level, int optname, time_t sec,
+                         time_t usec);
 
 } // namespace detail
 
@@ -1429,17 +1517,6 @@ public:
          Headers &&request_headers = Headers{})
       : res_(std::move(res)), err_(err),
         request_headers_(std::move(request_headers)) {}
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  Result(std::unique_ptr<Response> &&res, Error err, Headers &&request_headers,
-         int ssl_error)
-      : res_(std::move(res)), err_(err),
-        request_headers_(std::move(request_headers)), ssl_error_(ssl_error) {}
-  Result(std::unique_ptr<Response> &&res, Error err, Headers &&request_headers,
-         int ssl_error, unsigned long ssl_openssl_error)
-      : res_(std::move(res)), err_(err),
-        request_headers_(std::move(request_headers)), ssl_error_(ssl_error),
-        ssl_openssl_error_(ssl_openssl_error) {}
-#endif
   // Response
   operator bool() const { return res_ != nullptr; }
   bool operator==(std::nullptr_t) const { return res_ == nullptr; }
@@ -1454,13 +1531,6 @@ public:
   // Error
   Error error() const { return err_; }
 
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  // SSL Error
-  int ssl_error() const { return ssl_error_; }
-  // OpenSSL Error
-  unsigned long ssl_openssl_error() const { return ssl_openssl_error_; }
-#endif
-
   // Request Headers
   bool has_request_header(const std::string &key) const;
   std::string get_request_header_value(const std::string &key,
@@ -1474,64 +1544,76 @@ private:
   std::unique_ptr<Response> res_;
   Error err_ = Error::Unknown;
   Headers request_headers_;
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+
+#ifdef CPPHTTPLIB_SSL_ENABLED
+public:
+  Result(std::unique_ptr<Response> &&res, Error err, Headers &&request_headers,
+         int ssl_error)
+      : res_(std::move(res)), err_(err),
+        request_headers_(std::move(request_headers)), ssl_error_(ssl_error) {}
+  Result(std::unique_ptr<Response> &&res, Error err, Headers &&request_headers,
+         int ssl_error, unsigned long ssl_backend_error)
+      : res_(std::move(res)), err_(err),
+        request_headers_(std::move(request_headers)), ssl_error_(ssl_error),
+        ssl_backend_error_(ssl_backend_error) {}
+
+  int ssl_error() const { return ssl_error_; }
+  unsigned long ssl_backend_error() const { return ssl_backend_error_; }
+
+private:
   int ssl_error_ = 0;
-  unsigned long ssl_openssl_error_ = 0;
+  unsigned long ssl_backend_error_ = 0;
+#endif
+
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+public:
+  [[deprecated("Use ssl_backend_error() instead")]]
+  unsigned long ssl_openssl_error() const {
+    return ssl_backend_error_;
+  }
 #endif
 };
 
 struct ClientConnection {
   socket_t sock = INVALID_SOCKET;
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  SSL *ssl = nullptr;
-#endif
 
   bool is_open() const { return sock != INVALID_SOCKET; }
 
   ClientConnection() = default;
 
-  ~ClientConnection() {
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-    if (ssl) {
-      SSL_free(ssl);
-      ssl = nullptr;
-    }
-#endif
-    if (sock != INVALID_SOCKET) {
-      detail::close_socket(sock);
-      sock = INVALID_SOCKET;
-    }
-  }
+  ~ClientConnection();
 
   ClientConnection(const ClientConnection &) = delete;
   ClientConnection &operator=(const ClientConnection &) = delete;
 
   ClientConnection(ClientConnection &&other) noexcept
       : sock(other.sock)
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+#ifdef CPPHTTPLIB_SSL_ENABLED
         ,
-        ssl(other.ssl)
+        session(other.session)
 #endif
   {
     other.sock = INVALID_SOCKET;
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-    other.ssl = nullptr;
+#ifdef CPPHTTPLIB_SSL_ENABLED
+    other.session = nullptr;
 #endif
   }
 
   ClientConnection &operator=(ClientConnection &&other) noexcept {
     if (this != &other) {
       sock = other.sock;
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-      ssl = other.ssl;
-#endif
       other.sock = INVALID_SOCKET;
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-      other.ssl = nullptr;
+#ifdef CPPHTTPLIB_SSL_ENABLED
+      session = other.session;
+      other.session = nullptr;
 #endif
     }
     return *this;
   }
+
+#ifdef CPPHTTPLIB_SSL_ENABLED
+  tls::session_t session = nullptr;
+#endif
 };
 
 namespace detail {
@@ -1540,7 +1622,9 @@ struct ChunkedDecoder;
 
 struct BodyReader {
   Stream *stream = nullptr;
+  bool has_content_length = false;
   size_t content_length = 0;
+  size_t payload_max_length = CPPHTTPLIB_PAYLOAD_MAX_LENGTH;
   size_t bytes_read = 0;
   bool chunked = false;
   bool eof = false;
@@ -1610,6 +1694,7 @@ public:
     std::unique_ptr<detail::decompressor> decompressor_;
     std::string decompress_buffer_;
     size_t decompress_offset_ = 0;
+    size_t decompressed_bytes_read_ = 0;
   };
 
   // clang-format off
@@ -1756,10 +1841,6 @@ public:
 
   void set_basic_auth(const std::string &username, const std::string &password);
   void set_bearer_token_auth(const std::string &token);
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  void set_digest_auth(const std::string &username,
-                       const std::string &password);
-#endif
 
   void set_keep_alive(bool on);
   void set_follow_location(bool on);
@@ -1770,30 +1851,14 @@ public:
 
   void set_decompress(bool on);
 
+  void set_payload_max_length(size_t length);
+
   void set_interface(const std::string &intf);
 
   void set_proxy(const std::string &host, int port);
   void set_proxy_basic_auth(const std::string &username,
                             const std::string &password);
   void set_proxy_bearer_token_auth(const std::string &token);
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  void set_proxy_digest_auth(const std::string &username,
-                             const std::string &password);
-#endif
-
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  void set_ca_cert_path(const std::string &ca_cert_file_path,
-                        const std::string &ca_cert_dir_path = std::string());
-  void set_ca_cert_store(X509_STORE *ca_cert_store);
-  X509_STORE *create_ca_cert_store(const char *ca_cert, std::size_t size) const;
-#endif
-
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  void enable_server_certificate_verification(bool enabled);
-  void enable_server_hostname_verification(bool enabled);
-  void set_server_certificate_verifier(
-      std::function<SSLVerifierResponse(SSL *ssl)> verifier);
-#endif
 
   void set_logger(Logger logger);
   void set_error_logger(ErrorLogger error_logger);
@@ -1801,11 +1866,15 @@ public:
 protected:
   struct Socket {
     socket_t sock = INVALID_SOCKET;
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-    SSL *ssl = nullptr;
-#endif
+
+    // For Mbed TLS compatibility: start_time for request timeout tracking
+    std::chrono::time_point<std::chrono::steady_clock> start_time_;
 
     bool is_open() const { return sock != INVALID_SOCKET; }
+
+#ifdef CPPHTTPLIB_SSL_ENABLED
+    tls::session_t ssl = nullptr;
+#endif
   };
 
   virtual bool create_and_connect_socket(Socket &socket, Error &error);
@@ -1872,10 +1941,6 @@ protected:
   std::string basic_auth_username_;
   std::string basic_auth_password_;
   std::string bearer_token_auth_token_;
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  std::string digest_auth_username_;
-  std::string digest_auth_password_;
-#endif
 
   bool keep_alive_ = false;
   bool follow_location_ = false;
@@ -1890,6 +1955,9 @@ protected:
   bool compress_ = false;
   bool decompress_ = true;
 
+  size_t payload_max_length_ = CPPHTTPLIB_PAYLOAD_MAX_LENGTH;
+  bool has_payload_max_length_ = false;
+
   std::string interface_;
 
   std::string proxy_host_;
@@ -1898,32 +1966,10 @@ protected:
   std::string proxy_basic_auth_username_;
   std::string proxy_basic_auth_password_;
   std::string proxy_bearer_token_auth_token_;
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  std::string proxy_digest_auth_username_;
-  std::string proxy_digest_auth_password_;
-#endif
-
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  std::string ca_cert_file_path_;
-  std::string ca_cert_dir_path_;
-
-  X509_STORE *ca_cert_store_ = nullptr;
-#endif
-
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  bool server_certificate_verification_ = true;
-  bool server_hostname_verification_ = true;
-  std::function<SSLVerifierResponse(SSL *ssl)> server_certificate_verifier_;
-#endif
 
   mutable std::mutex logger_mutex_;
   Logger logger_;
   ErrorLogger error_logger_;
-
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  int last_ssl_error_ = 0;
-  unsigned long last_openssl_error_ = 0;
-#endif
 
 private:
   bool send_(Request &req, Response &res, Error &error);
@@ -1969,6 +2015,44 @@ private:
   virtual bool is_ssl() const;
 
   void transfer_socket_ownership_to_handle(StreamHandle &handle);
+
+#ifdef CPPHTTPLIB_SSL_ENABLED
+public:
+  void set_digest_auth(const std::string &username,
+                       const std::string &password);
+  void set_proxy_digest_auth(const std::string &username,
+                             const std::string &password);
+  void set_ca_cert_path(const std::string &ca_cert_file_path,
+                        const std::string &ca_cert_dir_path = std::string());
+  void enable_server_certificate_verification(bool enabled);
+  void enable_server_hostname_verification(bool enabled);
+
+protected:
+  std::string digest_auth_username_;
+  std::string digest_auth_password_;
+  std::string proxy_digest_auth_username_;
+  std::string proxy_digest_auth_password_;
+  std::string ca_cert_file_path_;
+  std::string ca_cert_dir_path_;
+  bool server_certificate_verification_ = true;
+  bool server_hostname_verification_ = true;
+  std::string ca_cert_pem_; // Store CA cert PEM for redirect transfer
+  int last_ssl_error_ = 0;
+  unsigned long last_backend_error_ = 0;
+#endif
+
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+public:
+  [[deprecated("Use load_ca_cert_store() instead")]]
+  void set_ca_cert_store(X509_STORE *ca_cert_store);
+
+  [[deprecated("Use tls::create_ca_store() instead")]]
+  X509_STORE *create_ca_cert_store(const char *ca_cert, std::size_t size) const;
+
+  [[deprecated("Use set_server_certificate_verifier(VerifyCallback) instead")]]
+  virtual void set_server_certificate_verifier(
+      std::function<SSLVerifierResponse(SSL *ssl)> verifier);
+#endif
 };
 
 class Client {
@@ -2138,10 +2222,6 @@ public:
 
   void set_basic_auth(const std::string &username, const std::string &password);
   void set_bearer_token_auth(const std::string &token);
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  void set_digest_auth(const std::string &username,
-                       const std::string &password);
-#endif
 
   void set_keep_alive(bool on);
   void set_follow_location(bool on);
@@ -2153,49 +2233,65 @@ public:
 
   void set_decompress(bool on);
 
+  void set_payload_max_length(size_t length);
+
   void set_interface(const std::string &intf);
 
   void set_proxy(const std::string &host, int port);
   void set_proxy_basic_auth(const std::string &username,
                             const std::string &password);
   void set_proxy_bearer_token_auth(const std::string &token);
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  void set_proxy_digest_auth(const std::string &username,
-                             const std::string &password);
-#endif
-
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  void enable_server_certificate_verification(bool enabled);
-  void enable_server_hostname_verification(bool enabled);
-  void set_server_certificate_verifier(
-      std::function<SSLVerifierResponse(SSL *ssl)> verifier);
-#endif
-
   void set_logger(Logger logger);
   void set_error_logger(ErrorLogger error_logger);
-
-  // SSL
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  void set_ca_cert_path(const std::string &ca_cert_file_path,
-                        const std::string &ca_cert_dir_path = std::string());
-
-  void set_ca_cert_store(X509_STORE *ca_cert_store);
-  void load_ca_cert_store(const char *ca_cert, std::size_t size);
-
-  long get_openssl_verify_result() const;
-
-  SSL_CTX *ssl_context() const;
-#endif
 
 private:
   std::unique_ptr<ClientImpl> cli_;
 
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+#ifdef CPPHTTPLIB_SSL_ENABLED
+public:
+  void set_digest_auth(const std::string &username,
+                       const std::string &password);
+  void set_proxy_digest_auth(const std::string &username,
+                             const std::string &password);
+  void enable_server_certificate_verification(bool enabled);
+  void enable_server_hostname_verification(bool enabled);
+  void set_ca_cert_path(const std::string &ca_cert_file_path,
+                        const std::string &ca_cert_dir_path = std::string());
+
+  void set_ca_cert_store(tls::ca_store_t ca_cert_store);
+  void load_ca_cert_store(const char *ca_cert, std::size_t size);
+
+  void set_server_certificate_verifier(tls::VerifyCallback verifier);
+
+  void set_session_verifier(
+      std::function<SSLVerifierResponse(tls::session_t)> verifier);
+
+  tls::ctx_t tls_context() const;
+
+#if defined(_WIN32) &&                                                         \
+    !defined(CPPHTTPLIB_DISABLE_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE)
+  void enable_windows_certificate_verification(bool enabled);
+#endif
+
+private:
   bool is_ssl_ = false;
+#endif
+
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+public:
+  [[deprecated("Use tls_context() instead")]]
+  SSL_CTX *ssl_context() const;
+
+  [[deprecated("Use set_session_verifier(session_t) instead")]]
+  void set_server_certificate_verifier(
+      std::function<SSLVerifierResponse(SSL *ssl)> verifier);
+
+  [[deprecated("Use Result::ssl_backend_error() instead")]]
+  long get_verify_result() const;
 #endif
 };
 
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+#ifdef CPPHTTPLIB_SSL_ENABLED
 class SSLServer : public Server {
 public:
   SSLServer(const char *cert_path, const char *private_key_path,
@@ -2203,32 +2299,60 @@ public:
             const char *client_ca_cert_dir_path = nullptr,
             const char *private_key_password = nullptr);
 
-  SSLServer(X509 *cert, EVP_PKEY *private_key,
-            X509_STORE *client_ca_cert_store = nullptr);
+  struct PemMemory {
+    const char *cert_pem;
+    size_t cert_pem_len;
+    const char *key_pem;
+    size_t key_pem_len;
+    const char *client_ca_pem;
+    size_t client_ca_pem_len;
+    const char *private_key_password;
+  };
+  explicit SSLServer(const PemMemory &pem);
 
-  SSLServer(
-      const std::function<bool(SSL_CTX &ssl_ctx)> &setup_ssl_ctx_callback);
+  // The callback receives the ctx_t handle which can be cast to the
+  // appropriate backend type (SSL_CTX* for OpenSSL,
+  // tls::impl::MbedTlsContext* for Mbed TLS)
+  explicit SSLServer(const tls::ContextSetupCallback &setup_callback);
 
   ~SSLServer() override;
 
   bool is_valid() const override;
 
-  SSL_CTX *ssl_context() const;
+  bool update_certs_pem(const char *cert_pem, const char *key_pem,
+                        const char *client_ca_pem = nullptr,
+                        const char *password = nullptr);
 
-  void update_certs(X509 *cert, EVP_PKEY *private_key,
-                    X509_STORE *client_ca_cert_store = nullptr);
+  tls::ctx_t tls_context() const { return ctx_; }
 
   int ssl_last_error() const { return last_ssl_error_; }
 
 private:
   bool process_and_close_socket(socket_t sock) override;
 
-  STACK_OF(X509_NAME) * extract_ca_names_from_x509_store(X509_STORE *store);
-
-  SSL_CTX *ctx_;
+  tls::ctx_t ctx_ = nullptr;
   std::mutex ctx_mutex_;
 
   int last_ssl_error_ = 0;
+
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+public:
+  [[deprecated("Use SSLServer(PemMemory) or "
+               "SSLServer(ContextSetupCallback) instead")]]
+  SSLServer(X509 *cert, EVP_PKEY *private_key,
+            X509_STORE *client_ca_cert_store = nullptr);
+
+  [[deprecated("Use SSLServer(ContextSetupCallback) instead")]]
+  SSLServer(
+      const std::function<bool(SSL_CTX &ssl_ctx)> &setup_ssl_ctx_callback);
+
+  [[deprecated("Use tls_context() instead")]]
+  SSL_CTX *ssl_context() const;
+
+  [[deprecated("Use update_certs_pem() instead")]]
+  void update_certs(X509 *cert, EVP_PKEY *private_key,
+                    X509_STORE *client_ca_cert_store = nullptr);
+#endif
 };
 
 class SSLClient final : public ClientImpl {
@@ -2242,20 +2366,34 @@ public:
                      const std::string &client_key_path,
                      const std::string &private_key_password = std::string());
 
-  explicit SSLClient(const std::string &host, int port, X509 *client_cert,
-                     EVP_PKEY *client_key,
-                     const std::string &private_key_password = std::string());
+  struct PemMemory {
+    const char *cert_pem;
+    size_t cert_pem_len;
+    const char *key_pem;
+    size_t key_pem_len;
+    const char *private_key_password;
+  };
+  explicit SSLClient(const std::string &host, int port, const PemMemory &pem);
 
   ~SSLClient() override;
 
   bool is_valid() const override;
 
-  void set_ca_cert_store(X509_STORE *ca_cert_store);
+  void set_ca_cert_store(tls::ca_store_t ca_cert_store);
   void load_ca_cert_store(const char *ca_cert, std::size_t size);
 
-  long get_openssl_verify_result() const;
+  void set_server_certificate_verifier(tls::VerifyCallback verifier);
 
-  SSL_CTX *ssl_context() const;
+  // Post-handshake session verifier (backend-independent)
+  void set_session_verifier(
+      std::function<SSLVerifierResponse(tls::session_t)> verifier);
+
+  tls::ctx_t tls_context() const { return ctx_; }
+
+#if defined(_WIN32) &&                                                         \
+    !defined(CPPHTTPLIB_DISABLE_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE)
+  void enable_windows_certificate_verification(bool enabled);
+#endif
 
 private:
   bool create_and_connect_socket(Socket &socket, Error &error) override;
@@ -2277,26 +2415,45 @@ private:
 
   bool load_certs();
 
-  bool verify_host(X509 *server_cert) const;
-  bool verify_host_with_subject_alt_name(X509 *server_cert) const;
-  bool verify_host_with_common_name(X509 *server_cert) const;
-  bool check_host_name(const char *pattern, size_t pattern_len) const;
-
-  SSL_CTX *ctx_;
+  tls::ctx_t ctx_ = nullptr;
   std::mutex ctx_mutex_;
   std::once_flag initialize_cert_;
 
-  std::vector<std::string> host_components_;
-
   long verify_result_ = 0;
 
-  friend class ClientImpl;
-};
+  std::function<SSLVerifierResponse(tls::session_t)> session_verifier_;
+
+#if defined(_WIN32) &&                                                         \
+    !defined(CPPHTTPLIB_DISABLE_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE)
+  bool enable_windows_cert_verification_ = true;
 #endif
 
-/*
- * Implementation of template methods.
- */
+  friend class ClientImpl;
+
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+public:
+  [[deprecated("Use SSLClient(host, port, PemMemory) instead")]]
+  explicit SSLClient(const std::string &host, int port, X509 *client_cert,
+                     EVP_PKEY *client_key,
+                     const std::string &private_key_password = std::string());
+
+  [[deprecated("Use Result::ssl_backend_error() instead")]]
+  long get_verify_result() const;
+
+  [[deprecated("Use tls_context() instead")]]
+  SSL_CTX *ssl_context() const;
+
+  [[deprecated("Use set_session_verifier(session_t) instead")]]
+  void set_server_certificate_verifier(
+      std::function<SSLVerifierResponse(SSL *ssl)> verifier) override;
+
+private:
+  bool verify_host(X509 *server_cert) const;
+  bool verify_host_with_subject_alt_name(X509 *server_cert) const;
+  bool verify_host_with_common_name(X509 *server_cert) const;
+#endif
+};
+#endif // CPPHTTPLIB_SSL_ENABLED
 
 namespace detail {
 
@@ -2345,66 +2502,6 @@ inline size_t get_header_value_u64(const Headers &headers,
 
 } // namespace detail
 
-inline size_t Request::get_header_value_u64(const std::string &key, size_t def,
-                                            size_t id) const {
-  return detail::get_header_value_u64(headers, key, def, id);
-}
-
-inline size_t Response::get_header_value_u64(const std::string &key, size_t def,
-                                             size_t id) const {
-  return detail::get_header_value_u64(headers, key, def, id);
-}
-
-namespace detail {
-
-inline bool set_socket_opt_impl(socket_t sock, int level, int optname,
-                                const void *optval, socklen_t optlen) {
-  return setsockopt(sock, level, optname,
-#ifdef _WIN32
-                    reinterpret_cast<const char *>(optval),
-#else
-                    optval,
-#endif
-                    optlen) == 0;
-}
-
-inline bool set_socket_opt(socket_t sock, int level, int optname, int optval) {
-  return set_socket_opt_impl(sock, level, optname, &optval, sizeof(optval));
-}
-
-inline bool set_socket_opt_time(socket_t sock, int level, int optname,
-                                time_t sec, time_t usec) {
-#ifdef _WIN32
-  auto timeout = static_cast<uint32_t>(sec * 1000 + usec / 1000);
-#else
-  timeval timeout;
-  timeout.tv_sec = static_cast<long>(sec);
-  timeout.tv_usec = static_cast<decltype(timeout.tv_usec)>(usec);
-#endif
-  return set_socket_opt_impl(sock, level, optname, &timeout, sizeof(timeout));
-}
-
-} // namespace detail
-
-inline void default_socket_options(socket_t sock) {
-  detail::set_socket_opt(sock, SOL_SOCKET,
-#ifdef SO_REUSEPORT
-                         SO_REUSEPORT,
-#else
-                         SO_REUSEADDR,
-#endif
-                         1);
-}
-
-inline std::string get_bearer_token_auth(const Request &req) {
-  if (req.has_header("Authorization")) {
-    constexpr auto bearer_header_prefix_len = detail::str_len("Bearer ");
-    return req.get_header_value("Authorization")
-        .substr(bearer_header_prefix_len);
-  }
-  return "";
-}
-
 template <class Rep, class Period>
 inline Server &
 Server::set_read_timeout(const std::chrono::duration<Rep, Period> &duration) {
@@ -2427,12 +2524,6 @@ Server::set_idle_interval(const std::chrono::duration<Rep, Period> &duration) {
   detail::duration_to_sec_and_usec(
       duration, [&](time_t sec, time_t usec) { set_idle_interval(sec, usec); });
   return *this;
-}
-
-inline size_t Result::get_request_header_value_u64(const std::string &key,
-                                                   size_t def,
-                                                   size_t id) const {
-  return detail::get_header_value_u64(request_headers_, key, def, id);
 }
 
 template <class Rep, class Period>
@@ -2842,105 +2933,73 @@ bool is_field_content(const std::string &s);
 bool is_field_value(const std::string &s);
 
 } // namespace fields
-
 } // namespace detail
+
+/*
+ * TLS Abstraction Layer Declarations
+ */
+
+#ifdef CPPHTTPLIB_SSL_ENABLED
+// TLS abstraction layer - backend-specific type declarations
+#ifdef CPPHTTPLIB_MBEDTLS_SUPPORT
+namespace tls {
+namespace impl {
+
+// Mbed TLS context wrapper (holds config, entropy, DRBG, CA chain, own
+// cert/key). This struct is accessible via tls::impl for use in SSL context
+// setup callbacks (cast ctx_t to tls::impl::MbedTlsContext*).
+struct MbedTlsContext {
+  mbedtls_ssl_config conf;
+  mbedtls_entropy_context entropy;
+  mbedtls_ctr_drbg_context ctr_drbg;
+  mbedtls_x509_crt ca_chain;
+  mbedtls_x509_crt own_cert;
+  mbedtls_pk_context own_key;
+  bool is_server = false;
+  bool verify_client = false;
+  bool has_verify_callback = false;
+
+  MbedTlsContext();
+  ~MbedTlsContext();
+
+  MbedTlsContext(const MbedTlsContext &) = delete;
+  MbedTlsContext &operator=(const MbedTlsContext &) = delete;
+};
+
+} // namespace impl
+} // namespace tls
+#endif
+
+#endif // CPPHTTPLIB_SSL_ENABLED
 
 namespace stream {
 
 class Result {
 public:
-  Result() : chunk_size_(8192) {}
-
-  explicit Result(ClientImpl::StreamHandle &&handle, size_t chunk_size = 8192)
-      : handle_(std::move(handle)), chunk_size_(chunk_size) {}
-
-  Result(Result &&other) noexcept
-      : handle_(std::move(other.handle_)), buffer_(std::move(other.buffer_)),
-        current_size_(other.current_size_), chunk_size_(other.chunk_size_),
-        finished_(other.finished_) {
-    other.current_size_ = 0;
-    other.finished_ = true;
-  }
-
-  Result &operator=(Result &&other) noexcept {
-    if (this != &other) {
-      handle_ = std::move(other.handle_);
-      buffer_ = std::move(other.buffer_);
-      current_size_ = other.current_size_;
-      chunk_size_ = other.chunk_size_;
-      finished_ = other.finished_;
-      other.current_size_ = 0;
-      other.finished_ = true;
-    }
-    return *this;
-  }
-
+  Result();
+  explicit Result(ClientImpl::StreamHandle &&handle, size_t chunk_size = 8192);
+  Result(Result &&other) noexcept;
+  Result &operator=(Result &&other) noexcept;
   Result(const Result &) = delete;
   Result &operator=(const Result &) = delete;
 
-  // Check if the result is valid (connection succeeded and response received)
-  bool is_valid() const { return handle_.is_valid(); }
-  explicit operator bool() const { return is_valid(); }
-
-  // Response status code
-  int status() const {
-    return handle_.response ? handle_.response->status : -1;
-  }
-
-  // Response headers
-  const Headers &headers() const {
-    static const Headers empty_headers;
-    return handle_.response ? handle_.response->headers : empty_headers;
-  }
-
+  // Response info
+  bool is_valid() const;
+  explicit operator bool() const;
+  int status() const;
+  const Headers &headers() const;
   std::string get_header_value(const std::string &key,
-                               const char *def = "") const {
-    return handle_.response ? handle_.response->get_header_value(key, def)
-                            : def;
-  }
+                               const char *def = "") const;
+  bool has_header(const std::string &key) const;
+  Error error() const;
+  Error read_error() const;
+  bool has_read_error() const;
 
-  bool has_header(const std::string &key) const {
-    return handle_.response ? handle_.response->has_header(key) : false;
-  }
-
-  // Error information
-  Error error() const { return handle_.error; }
-  Error read_error() const { return handle_.get_read_error(); }
-  bool has_read_error() const { return handle_.has_read_error(); }
-
-  // Streaming iteration API
-  // Call next() to read the next chunk, then access data via data()/size()
-  // Returns true if data was read, false when stream is exhausted
-  bool next() {
-    if (!handle_.is_valid() || finished_) { return false; }
-
-    if (buffer_.size() < chunk_size_) { buffer_.resize(chunk_size_); }
-
-    ssize_t n = handle_.read(&buffer_[0], chunk_size_);
-    if (n > 0) {
-      current_size_ = static_cast<size_t>(n);
-      return true;
-    }
-
-    current_size_ = 0;
-    finished_ = true;
-    return false;
-  }
-
-  // Pointer to current chunk data (valid after next() returns true)
-  const char *data() const { return buffer_.data(); }
-
-  // Size of current chunk (valid after next() returns true)
-  size_t size() const { return current_size_; }
-
-  // Convenience method: read all remaining data into a string
-  std::string read_all() {
-    std::string result;
-    while (next()) {
-      result.append(data(), size());
-    }
-    return result;
-  }
+  // Stream reading
+  bool next();
+  const char *data() const;
+  size_t size() const;
+  std::string read_all();
 
 private:
   ClientImpl::StreamHandle handle_;
@@ -3205,13 +3264,8 @@ struct SSEMessage {
   std::string data;  // Event payload
   std::string id;    // Event ID for Last-Event-ID header
 
-  SSEMessage() : event("message") {}
-
-  void clear() {
-    event = "message";
-    data.clear();
-    id.clear();
-  }
+  SSEMessage();
+  void clear();
 };
 
 class SSEClient {
@@ -3220,255 +3274,40 @@ public:
   using ErrorHandler = std::function<void(Error)>;
   using OpenHandler = std::function<void()>;
 
-  SSEClient(Client &client, const std::string &path)
-      : client_(client), path_(path) {}
-
-  SSEClient(Client &client, const std::string &path, const Headers &headers)
-      : client_(client), path_(path), headers_(headers) {}
-
-  ~SSEClient() { stop(); }
+  SSEClient(Client &client, const std::string &path);
+  SSEClient(Client &client, const std::string &path, const Headers &headers);
+  ~SSEClient();
 
   SSEClient(const SSEClient &) = delete;
   SSEClient &operator=(const SSEClient &) = delete;
 
   // Event handlers
-  SSEClient &on_message(MessageHandler handler) {
-    on_message_ = std::move(handler);
-    return *this;
-  }
-
-  SSEClient &on_event(const std::string &type, MessageHandler handler) {
-    event_handlers_[type] = std::move(handler);
-    return *this;
-  }
-
-  SSEClient &on_open(OpenHandler handler) {
-    on_open_ = std::move(handler);
-    return *this;
-  }
-
-  SSEClient &on_error(ErrorHandler handler) {
-    on_error_ = std::move(handler);
-    return *this;
-  }
-
-  SSEClient &set_reconnect_interval(int ms) {
-    reconnect_interval_ms_ = ms;
-    return *this;
-  }
-
-  SSEClient &set_max_reconnect_attempts(int n) {
-    max_reconnect_attempts_ = n;
-    return *this;
-  }
+  SSEClient &on_message(MessageHandler handler);
+  SSEClient &on_event(const std::string &type, MessageHandler handler);
+  SSEClient &on_open(OpenHandler handler);
+  SSEClient &on_error(ErrorHandler handler);
+  SSEClient &set_reconnect_interval(int ms);
+  SSEClient &set_max_reconnect_attempts(int n);
 
   // State accessors
-  bool is_connected() const { return connected_.load(); }
-  const std::string &last_event_id() const { return last_event_id_; }
+  bool is_connected() const;
+  const std::string &last_event_id() const;
 
   // Blocking start - runs event loop with auto-reconnect
-  void start() {
-    running_.store(true);
-    run_event_loop();
-  }
+  void start();
 
   // Non-blocking start - runs in background thread
-  void start_async() {
-    running_.store(true);
-    async_thread_ = std::thread([this]() { run_event_loop(); });
-  }
+  void start_async();
 
   // Stop the client (thread-safe)
-  void stop() {
-    running_.store(false);
-    client_.stop(); // Cancel any pending operations
-    if (async_thread_.joinable()) { async_thread_.join(); }
-  }
+  void stop();
 
 private:
-  // Parse a single SSE field line
-  // Returns true if this line ends an event (blank line)
-  bool parse_sse_line(const std::string &line, SSEMessage &msg, int &retry_ms) {
-    // Blank line signals end of event
-    if (line.empty() || line == "\r") { return true; }
-
-    // Lines starting with ':' are comments (ignored)
-    if (!line.empty() && line[0] == ':') { return false; }
-
-    // Find the colon separator
-    auto colon_pos = line.find(':');
-    if (colon_pos == std::string::npos) {
-      // Line with no colon is treated as field name with empty value
-      return false;
-    }
-
-    auto field = line.substr(0, colon_pos);
-    std::string value;
-
-    // Value starts after colon, skip optional single space
-    if (colon_pos + 1 < line.size()) {
-      auto value_start = colon_pos + 1;
-      if (line[value_start] == ' ') { value_start++; }
-      value = line.substr(value_start);
-      // Remove trailing \r if present
-      if (!value.empty() && value.back() == '\r') { value.pop_back(); }
-    }
-
-    // Handle known fields
-    if (field == "event") {
-      msg.event = value;
-    } else if (field == "data") {
-      // Multiple data lines are concatenated with newlines
-      if (!msg.data.empty()) { msg.data += "\n"; }
-      msg.data += value;
-    } else if (field == "id") {
-      // Empty id is valid (clears the last event ID)
-      msg.id = value;
-    } else if (field == "retry") {
-      // Parse retry interval in milliseconds
-      {
-        int v = 0;
-        auto res =
-            detail::from_chars(value.data(), value.data() + value.size(), v);
-        if (res.ec == std::errc{}) { retry_ms = v; }
-      }
-    }
-    // Unknown fields are ignored per SSE spec
-
-    return false;
-  }
-
-  // Main event loop with auto-reconnect
-  void run_event_loop() {
-    auto reconnect_count = 0;
-
-    while (running_.load()) {
-      // Build headers, including Last-Event-ID if we have one
-      auto request_headers = headers_;
-      if (!last_event_id_.empty()) {
-        request_headers.emplace("Last-Event-ID", last_event_id_);
-      }
-
-      // Open streaming connection
-      auto result = stream::Get(client_, path_, request_headers);
-
-      // Connection error handling
-      if (!result) {
-        connected_.store(false);
-        if (on_error_) { on_error_(result.error()); }
-
-        if (!should_reconnect(reconnect_count)) { break; }
-        wait_for_reconnect();
-        reconnect_count++;
-        continue;
-      }
-
-      if (result.status() != 200) {
-        connected_.store(false);
-        // For certain errors, don't reconnect
-        if (result.status() == 204 || // No Content - server wants us to stop
-            result.status() == 404 || // Not Found
-            result.status() == 401 || // Unauthorized
-            result.status() == 403) { // Forbidden
-          if (on_error_) { on_error_(Error::Connection); }
-          break;
-        }
-
-        if (on_error_) { on_error_(Error::Connection); }
-
-        if (!should_reconnect(reconnect_count)) { break; }
-        wait_for_reconnect();
-        reconnect_count++;
-        continue;
-      }
-
-      // Connection successful
-      connected_.store(true);
-      reconnect_count = 0;
-      if (on_open_) { on_open_(); }
-
-      // Event receiving loop
-      std::string buffer;
-      SSEMessage current_msg;
-
-      while (running_.load() && result.next()) {
-        buffer.append(result.data(), result.size());
-
-        // Process complete lines in the buffer
-        size_t line_start = 0;
-        size_t newline_pos;
-
-        while ((newline_pos = buffer.find('\n', line_start)) !=
-               std::string::npos) {
-          auto line = buffer.substr(line_start, newline_pos - line_start);
-          line_start = newline_pos + 1;
-
-          // Parse the line and check if event is complete
-          auto event_complete =
-              parse_sse_line(line, current_msg, reconnect_interval_ms_);
-
-          if (event_complete && !current_msg.data.empty()) {
-            // Update last_event_id for reconnection
-            if (!current_msg.id.empty()) { last_event_id_ = current_msg.id; }
-
-            // Dispatch event to appropriate handler
-            dispatch_event(current_msg);
-
-            current_msg.clear();
-          }
-        }
-
-        // Keep unprocessed data in buffer
-        buffer.erase(0, line_start);
-      }
-
-      // Connection ended
-      connected_.store(false);
-
-      if (!running_.load()) { break; }
-
-      // Check for read errors
-      if (result.has_read_error()) {
-        if (on_error_) { on_error_(result.read_error()); }
-      }
-
-      if (!should_reconnect(reconnect_count)) { break; }
-      wait_for_reconnect();
-      reconnect_count++;
-    }
-
-    connected_.store(false);
-  }
-
-  // Dispatch event to appropriate handler
-  void dispatch_event(const SSEMessage &msg) {
-    // Check for specific event type handler first
-    auto it = event_handlers_.find(msg.event);
-    if (it != event_handlers_.end()) {
-      it->second(msg);
-      return;
-    }
-
-    // Fall back to generic message handler
-    if (on_message_) { on_message_(msg); }
-  }
-
-  // Check if we should attempt to reconnect
-  bool should_reconnect(int count) const {
-    if (!running_.load()) { return false; }
-    if (max_reconnect_attempts_ == 0) { return true; } // unlimited
-    return count < max_reconnect_attempts_;
-  }
-
-  // Wait for reconnect interval
-  void wait_for_reconnect() {
-    // Use small increments to check running_ flag frequently
-    auto waited = 0;
-    while (running_.load() && waited < reconnect_interval_ms_) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
-      waited += 100;
-    }
-  }
+  bool parse_sse_line(const std::string &line, SSEMessage &msg, int &retry_ms);
+  void run_event_loop();
+  void dispatch_event(const SSEMessage &msg);
+  bool should_reconnect(int count) const;
+  void wait_for_reconnect();
 
   // Client and path
   Client &client_;
@@ -3495,7 +3334,6 @@ private:
 };
 
 } // namespace sse
-
 
 
 } // namespace httplib

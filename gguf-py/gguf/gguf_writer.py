@@ -708,6 +708,9 @@ class GGUFWriter:
     def add_leading_dense_block_count(self, length: int) -> None:
         self.add_uint32(Keys.LLM.LEADING_DENSE_BLOCK_COUNT.format(arch=self.arch), length)
 
+    def add_full_attention_interval(self, interval: int) -> None:
+        self.add_uint32(Keys.LLM.FULL_ATTENTION_INTERVAL.format(arch=self.arch), interval)
+
     def add_feed_forward_length(self, length: int | Sequence[int]) -> None:
         if isinstance(length, int):
             self.add_uint32(Keys.LLM.FEED_FORWARD_LENGTH.format(arch=self.arch), length)
@@ -768,6 +771,15 @@ class GGUFWriter:
     def add_value_length_mla(self, length: int) -> None:
         self.add_uint32(Keys.Attention.VALUE_LENGTH_MLA.format(arch=self.arch), length)
 
+    def add_indexer_head_count(self, count: int) -> None:
+        self.add_uint32(Keys.Attention.Indexer.HEAD_COUNT.format(arch=self.arch), count)
+
+    def add_indexer_key_length(self, length: int) -> None:
+        self.add_uint32(Keys.Attention.Indexer.KEY_LENGTH.format(arch=self.arch), length)
+
+    def add_indexer_top_k(self, top_k: int) -> None:
+        self.add_uint32(Keys.Attention.Indexer.TOP_K.format(arch=self.arch), top_k)
+
     def add_max_alibi_bias(self, bias: float) -> None:
         self.add_float32(Keys.Attention.MAX_ALIBI_BIAS.format(arch=self.arch), bias)
 
@@ -823,6 +835,12 @@ class GGUFWriter:
 
     def add_expert_gating_func(self, value: ExpertGatingFuncType) -> None:
         self.add_uint32(Keys.LLM.EXPERT_GATING_FUNC.format(arch=self.arch), value.value)
+
+    def add_swiglu_clamp_exp(self, values: Sequence[float]) -> None:
+        self.add_array(Keys.LLM.SWIGLU_CLAMP_EXP.format(arch=self.arch), values)
+
+    def add_swiglu_clamp_shexp(self, values: Sequence[float]) -> None:
+        self.add_array(Keys.LLM.SWIGLU_CLAMP_SHEXP.format(arch=self.arch), values)
 
     def add_expert_group_scale(self, value: float) -> None:
         self.add_float32(Keys.LLM.EXPERT_GROUP_SCALE.format(arch=self.arch), value)
@@ -979,6 +997,9 @@ class GGUFWriter:
 
     def add_ssm_dt_b_c_rms(self, value: bool) -> None:
         self.add_bool(Keys.SSM.DT_B_C_RMS.format(arch=self.arch), value)
+
+    def add_kda_head_dim(self, value: int) -> None:
+        self.add_uint32(Keys.KDA.HEAD_DIM.format(arch=self.arch), value)
 
     def add_tokenizer_model(self, model: str) -> None:
         self.add_string(Keys.Tokenizer.MODEL, model)

@@ -77,6 +77,7 @@ struct server_slot {
     size_t last_nl_pos = 0;
 
     std::string  generated_text;
+    std::string  debug_generated_text;
     llama_tokens generated_tokens;
 
     // idx of draft tokens in the main batch
@@ -425,7 +426,7 @@ struct server_slot {
 
             if (!only_metrics) {
                 res["prompt"] = ptask->tokens.detokenize(ctx, true);
-                res["generated"] = generated_text;
+                res["generated"] = generated_text.empty() ? debug_generated_text : generated_text;
             }
         }
 
@@ -740,6 +741,11 @@ private:
 
         slots.clear();
 
+        const bool can_spec = common_speculative_is_compat(ctx);
+        if (!can_spec) {
+            SRV_WRN("%s", "speculative decoding not supported by this context\n");
+        }
+
         // initialize slots
         for (int i = 0; i < params_base.n_parallel; i++) {
             server_slot slot;
@@ -752,7 +758,7 @@ private:
             slot.prompt.tokens.has_mtmd = mctx != nullptr;
 
             // try speculative decoding
-            {
+            if (can_spec) {
                 slot.spec = common_speculative_init(params_base.speculative, slot.ctx);
                 if (slot.spec) {
                     if (mctx) {
@@ -1437,6 +1443,12 @@ private:
         res->id_slot = slot.id;
 
         res->index           = slot.task->index;
+
+        // keep copy of last generated text for debugging purposes
+        if (slots_debug) {
+            slot.debug_generated_text = slot.generated_text;
+        }
+
         // in stream mode, content and tokens are already in last partial chunk
         if (slot.task->params.stream) {
             res->content     = "";
@@ -2502,7 +2514,8 @@ private:
                         slot.n_prompt_tokens_processed++;
 
                         // process the last few tokens of the prompt separately in order to allow for a checkpoint to be created.
-                        if (do_checkpoint && slot.task->n_tokens() - slot.prompt.n_tokens() == 64) {
+                        const int n_last = std::min(n_batch, 512);
+                        if (do_checkpoint && slot.task->n_tokens() == slot.prompt.n_tokens() + n_last) {
                             break;
                         }
                     }
@@ -3578,6 +3591,8 @@ void server_routes::init_routes() {
         auto res = create_response();
         std::vector<raw_buffer> files;
         json body = convert_responses_to_chatcmpl(json::parse(req.body));
+        SRV_DBG("%s\n", "Request converted: OpenAI Responses -> OpenAI Chat Completions");
+        SRV_DBG("converted request: %s\n", body.dump().c_str());
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
@@ -3594,6 +3609,8 @@ void server_routes::init_routes() {
         auto res = create_response();
         std::vector<raw_buffer> files;
         json body = convert_anthropic_to_oai(json::parse(req.body));
+        SRV_DBG("%s\n", "Request converted: Anthropic -> OpenAI Chat Completions");
+        SRV_DBG("converted request: %s\n", body.dump().c_str());
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
@@ -3610,6 +3627,8 @@ void server_routes::init_routes() {
         auto res = create_response();
         std::vector<raw_buffer> files;
         json body = convert_anthropic_to_oai(json::parse(req.body));
+        SRV_DBG("%s\n", "Request converted: Anthropic -> OpenAI Chat Completions");
+        SRV_DBG("converted request: %s\n", body.dump().c_str());
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
