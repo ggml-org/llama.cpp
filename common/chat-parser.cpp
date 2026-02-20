@@ -893,23 +893,6 @@ static void common_chat_parse_minimax_m2(common_chat_msg_parser & builder) {
     builder.consume_reasoning_with_xml_tool_calls(form, "<think>", "</think>");
 }
 
-static void common_chat_parse_qwen3_coder_xml(common_chat_msg_parser & builder) {
-    static const xml_tool_call_format form = ([]() {
-        xml_tool_call_format form {};
-        form.scope_start = "<tool_call>";
-        form.tool_start  = "<function=";
-        form.tool_sep    = ">";
-        form.key_start   = "<parameter=";
-        form.key_val_sep = ">";
-        form.val_end     = "</parameter>";
-        form.tool_end    = "</function>";
-        form.scope_end   = "</tool_call>";
-        form.trim_raw_argval = true;
-        return form;
-    })();
-    builder.consume_reasoning_with_xml_tool_calls(form);
-}
-
 static void common_chat_parse_kimi_k2(common_chat_msg_parser & builder) {
     static const xml_tool_call_format form = ([]() {
         xml_tool_call_format form {};
@@ -1589,9 +1572,6 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
             break;
         case COMMON_CHAT_FORMAT_KIMI_K2:
             common_chat_parse_kimi_k2(builder);
-            break;
-        case COMMON_CHAT_FORMAT_QWEN3_CODER_XML:
-            common_chat_parse_qwen3_coder_xml(builder);
             break;
         case COMMON_CHAT_FORMAT_APRIEL_1_5:
             common_chat_parse_apriel_1_5(builder);
