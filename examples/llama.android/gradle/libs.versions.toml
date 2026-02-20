@@ -2,7 +2,7 @@
 
 # Plugins
 agp = "8.13.2"
-kotlin = "2.3.0"
+kotlin = "2.1.21"
 
 # AndroidX
 activity = "1.12.2"
