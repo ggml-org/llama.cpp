@@ -43,7 +43,7 @@ import java.io.IOException
  *
  * @see ai_chat.cpp for the native implementation details
  */
-internal class InferenceEngineImpl private constructor(
+class InferenceEngineImpl private constructor(
     private val nativeLibDir: String
 ) : InferenceEngine {
 
@@ -60,7 +60,7 @@ internal class InferenceEngineImpl private constructor(
          * @throws IllegalArgumentException if native library path is invalid
          * @throws UnsatisfiedLinkError if library failed to load
          */
-        internal fun getInstance(context: Context) =
+        fun getInstance(context: Context) =
             instance ?: synchronized(this) {
                 val nativeLibDir = context.applicationInfo.nativeLibraryDir
                 require(nativeLibDir.isNotBlank()) { "Expected a valid native library path!" }
