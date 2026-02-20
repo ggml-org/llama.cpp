@@ -40,8 +40,8 @@ Before submitting your PR:
   - When adding support for a new model or feature, focus on **CPU support only** in the initial PR unless you have a good reason not to. Add support for other backends like CUDA in follow-up PRs
   - In particular, adding new data types (extension of the `ggml_type` enum) carries with it a disproportionate maintenance burden. As such, to add a new quantization type you will need to meet the following *additional* criteria *at minimum*:
     - providing a model GGUF quantized in the new scheme
-    - providing perplexity comparisons to Q8 as well as to surrounding quants
-    - providing KLD divergence data calculated from the Q8 version for both the new quant as well as the surrounding quants
+    - providing perplexity comparisons to FP16/BF16 (whichever is the native precision) as well as to surrounding quants
+    - providing KLD divergence data calculated from the FP16/BF16 (whichever is the native precision) version for both the new quant as well as the surrounding quants
     - performance data for the new quantization scheme as compared to surrounding quantization schemes on pure CPU
   - Consider allowing write access to your branch for faster reviews, as reviewers can push commits directly
 
