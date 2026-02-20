@@ -1648,106 +1648,13 @@ void ggml_vec_dot_q2_K_s_q8_K(int                        n,
     // Instead of debugging AVX2 vectors inside maddubs, I will just call the generic
     // I need to properly copy the `Q2_K` shuffle if I want to do this right.
     ggml_vec_dot_q2_K_s_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+#elif defined __AVX__
+    // AVX not implemented, fallback
+    ggml_vec_dot_q2_K_s_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
 #else
     ggml_vec_dot_q2_K_s_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
 #endif
 }
-
-// sumf += -dmin * summs in 32bits*8
-acc = _mm256_add_ps(_mm256_mul_ps(_mm256_broadcast_ss(&dmin), _mm256_cvtepi32_ps(MM256_SET_M128I(summs_1, summs_0))),
-                    acc);
-
-const __m128i scales_0  = _mm_cvtepi8_epi16(scales16);
-const __m128i scales_1  = _mm_cvtepi8_epi16(_mm_unpackhi_epi64(scales16, scales16));
-const __m128i scales[2] = { scales_0, scales_1 };
-
-__m128i sumi_0 = _mm_setzero_si128();
-__m128i sumi_1 = _mm_setzero_si128();
-
-for (int j = 0; j < QK_K / 128; ++j) {
-    // load Q8 quants int8*16*8 from block_q8_K.qs[QK_K]
-    const __m128i q8_0 = _mm_loadu_si128((const __m128i *) q8);
-    q8 += 16;
-    const __m128i q8_1 = _mm_loadu_si128((const __m128i *) q8);
-    q8 += 16;
-    const __m128i q8_2 = _mm_loadu_si128((const __m128i *) q8);
-    q8 += 16;
-    const __m128i q8_3 = _mm_loadu_si128((const __m128i *) q8);
-    q8 += 16;
-    const __m128i q8_4 = _mm_loadu_si128((const __m128i *) q8);
-    q8 += 16;
-    const __m128i q8_5 = _mm_loadu_si128((const __m128i *) q8);
-    q8 += 16;
-    const __m128i q8_6 = _mm_loadu_si128((const __m128i *) q8);
-    q8 += 16;
-    const __m128i q8_7 = _mm_loadu_si128((const __m128i *) q8);
-    q8 += 16;
-
-    // load 2bits*16*8 from block_q2_K.qs[QK_K/4]
-    __m128i q2bits = _mm_loadu_si128((const __m128i *) q2);
-    q2 += 16;
-    const __m128i q2_0 = _mm_and_si128(q2bits, m3);
-    const __m128i q2_2 = _mm_and_si128(_mm_srli_epi16(q2bits, 2), m3);
-    const __m128i q2_4 = _mm_and_si128(_mm_srli_epi16(q2bits, 4), m3);
-    const __m128i q2_6 = _mm_and_si128(_mm_srli_epi16(q2bits, 6), m3);
-    q2bits             = _mm_loadu_si128((const __m128i *) q2);
-    q2 += 16;
-    const __m128i q2_1 = _mm_and_si128(q2bits, m3);
-    const __m128i q2_3 = _mm_and_si128(_mm_srli_epi16(q2bits, 2), m3);
-    const __m128i q2_5 = _mm_and_si128(_mm_srli_epi16(q2bits, 4), m3);
-    const __m128i q2_7 = _mm_and_si128(_mm_srli_epi16(q2bits, 6), m3);
-
-    // isuml = q8[l] * ((q2[l] >> shift) & 3) in 8bits*16*8 to 16bits*8*8
-    __m128i p0 = _mm_maddubs_epi16(q2_0, q8_0);
-    __m128i p1 = _mm_maddubs_epi16(q2_1, q8_1);
-    __m128i p2 = _mm_maddubs_epi16(q2_2, q8_2);
-    __m128i p3 = _mm_maddubs_epi16(q2_3, q8_3);
-    __m128i p4 = _mm_maddubs_epi16(q2_4, q8_4);
-    __m128i p5 = _mm_maddubs_epi16(q2_5, q8_5);
-    __m128i p6 = _mm_maddubs_epi16(q2_6, q8_6);
-    __m128i p7 = _mm_maddubs_epi16(q2_7, q8_7);
-
-    // isum += (x[i].scales[is++] & 0xF) * isuml in 16bits*8*8 to 32bits*4*8
-    __m128i shuffle = _mm_set1_epi16(0x0100);
-    p0              = _mm_madd_epi16(_mm_shuffle_epi8(scales[j], shuffle), p0);
-    shuffle         = _mm_add_epi16(shuffle, m2);
-    p1              = _mm_madd_epi16(_mm_shuffle_epi8(scales[j], shuffle), p1);
-    shuffle         = _mm_add_epi16(shuffle, m2);
-    p2              = _mm_madd_epi16(_mm_shuffle_epi8(scales[j], shuffle), p2);
-    shuffle         = _mm_add_epi16(shuffle, m2);
-    p3              = _mm_madd_epi16(_mm_shuffle_epi8(scales[j], shuffle), p3);
-    shuffle         = _mm_add_epi16(shuffle, m2);
-    p4              = _mm_madd_epi16(_mm_shuffle_epi8(scales[j], shuffle), p4);
-    shuffle         = _mm_add_epi16(shuffle, m2);
-    p5              = _mm_madd_epi16(_mm_shuffle_epi8(scales[j], shuffle), p5);
-    shuffle         = _mm_add_epi16(shuffle, m2);
-    p6              = _mm_madd_epi16(_mm_shuffle_epi8(scales[j], shuffle), p6);
-    shuffle         = _mm_add_epi16(shuffle, m2);
-    p7              = _mm_madd_epi16(_mm_shuffle_epi8(scales[j], shuffle), p7);
-
-    p0 = _mm_add_epi32(p0, p1);
-    p2 = _mm_add_epi32(p2, p3);
-    p4 = _mm_add_epi32(p4, p5);
-    p6 = _mm_add_epi32(p6, p7);
-
-    // isum in 32bits*4*2
-    sumi_0 = _mm_add_epi32(sumi_0, _mm_add_epi32(p0, p2));
-    sumi_1 = _mm_add_epi32(sumi_1, _mm_add_epi32(p4, p6));
-}
-
-// sumf += dall * isum - dmin * summs in 32bits
-__m256i sumi = MM256_SET_M128I(sumi_1, sumi_0);
-acc          = _mm256_add_ps(_mm256_mul_ps(_mm256_broadcast_ss(&dall), _mm256_cvtepi32_ps(sumi)), acc);
-}
-
-*s = hsum_float_8(acc);
-
-#else
-UNUSED(x);
-UNUSED(y);
-UNUSED(nb);
-ggml_vec_dot_q2_K_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
-#endif
 }
 
 void ggml_vec_dot_q3_K_q8_K(int                        n,
