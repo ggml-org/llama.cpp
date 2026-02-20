@@ -567,27 +567,21 @@ class ModelBase:
 
     def _repack_nvfp4(self, new_name: str, weight: Tensor, scale: Tensor, scale2: Tensor):
         import torch
-        import numpy as np
         out_features = weight.shape[0]
         n_blocks = scale.shape[1]
 
-        # Dequantize original nibbles, then requantize against stored UE4M3 scale
-        # This ensures nibbles exactly match the scale the MMA will use
         e2m1_lut = torch.tensor([0, 0.5, 1, 1.5, 2, 3, 4, 6, 0, -0.5, -1, -1.5, -2, -3, -4, -6])
 
-        # Unpack original nibbles
         w = weight.reshape(out_features, n_blocks, 8)
         vals = torch.stack([w & 0x0F, w >> 4], dim=-1).reshape(out_features, n_blocks, 16)
 
-        # Dequantize: float_val = E4M3_scale * scale2 * E2M1_float[nibble]
         float_vals = e2m1_lut[vals.long()] * (scale.float() * scale2.float()).unsqueeze(-1)
 
-        # Compute UE4M3 scale from amax
         amax = float_vals.abs().amax(dim=-1)
         scale_f = amax / 6.0
         combined = scale_f.to(torch.float8_e4m3fn).view(torch.uint8).numpy() & 0x7F
 
-        # Decode UE4M3 for requantization
+        # decode UE4M3 scale for requantization
         ue_exp = (combined >> 3) & 0xF
         ue_man = combined & 0x7
         ue_float = np.where(combined == 0, 0.0,
@@ -595,16 +589,14 @@ class ModelBase:
                    (1.0 + ue_man.astype(np.float32) / 8.0) * (2.0 ** (ue_exp.astype(np.float32) - 7))))
         ue_float_t = torch.from_numpy(ue_float).float().unsqueeze(-1)
 
-        # Requantize nibbles against UE4M3 scale
         inv_scale = torch.where(ue_float_t > 0, 1.0 / ue_float_t, torch.zeros_like(ue_float_t))
         target = float_vals * inv_scale
-        kvalues = torch.tensor([0, 0.5, 1, 1.5, 2, 3, 4, 6, 0, -0.5, -1, -1.5, -2, -3, -4, -6], dtype=torch.float32)
-        best_idx = (target.unsqueeze(-1) - kvalues.reshape(1, 1, 1, 16)).abs().argmin(dim=-1).to(torch.uint8)
+        best_idx = (target.unsqueeze(-1) - e2m1_lut.reshape(1, 1, 1, 16)).abs().argmin(dim=-1).to(torch.uint8)
 
-        # Pack as NVFP4: qs[j] = elem[j] | (elem[j+8] << 4) for j=0..7
+        # pack: qs[j] = lo_nibble[j] | (hi_nibble[j] << 4)
         qs = (best_idx[:, :, :8] | (best_idx[:, :, 8:] << 4)).to(torch.uint8)
 
-        # Block: [UE4M3(1), qs(8)] = 9 bytes
+        # block layout: [UE4M3 scale (1 byte), qs (8 bytes)]
         d_bytes = combined.reshape(out_features, n_blocks, 1)
         new_data = np.concatenate([d_bytes, qs.numpy()], axis=-1).reshape(out_features, n_blocks * 9)
         new_shape = [out_features, n_blocks * 16]
@@ -613,8 +605,6 @@ class ModelBase:
 
     def _generate_nvfp4_tensors(self) -> Iterable[tuple[str, Tensor]]:
         import torch
-        import re
-        import numpy as np
 
         # Collect expert tensors for merging: {(bid, proj_type): [(expert_id, repacked_data)]}
         expert_blocks: dict[tuple[int, str], list[tuple[int, np.ndarray]]] = {}
@@ -641,15 +631,32 @@ class ModelBase:
                 bid = int(bid_m.group(1)) if bid_m else 0
                 key = (bid, proj_type)
 
-                # Repack with UE4M3 scale directly
-                import numpy as np
                 out_features = weight.shape[0]
                 n_blocks = scale.shape[1]
-                scale_bytes = (scale.float() * scale2.float()).abs().to(torch.float8_e4m3fn).view(torch.uint8).numpy() & 0x7F
+
+                e2m1_lut = torch.tensor([0, 0.5, 1, 1.5, 2, 3, 4, 6, 0, -0.5, -1, -1.5, -2, -3, -4, -6])
                 w = weight.reshape(out_features, n_blocks, 8)
                 vals = torch.stack([w & 0x0F, w >> 4], dim=-1).reshape(out_features, n_blocks, 16)
-                qs = (vals[:, :, :8] | (vals[:, :, 8:] << 4)).to(torch.uint8)
-                raw = np.concatenate([scale_bytes.reshape(out_features, n_blocks, 1), qs.numpy()], axis=-1).reshape(out_features, n_blocks * 9).copy()
+                float_vals = e2m1_lut[vals.long()] * (scale.float() * scale2.float()).unsqueeze(-1)
+
+                amax = float_vals.abs().amax(dim=-1)
+                scale_f = amax / 6.0
+                combined = scale_f.to(torch.float8_e4m3fn).view(torch.uint8).numpy() & 0x7F
+
+                ue_exp = (combined >> 3) & 0xF
+                ue_man = combined & 0x7
+                ue_float = np.where(combined == 0, 0.0,
+                           np.where(ue_exp == 0, ue_man.astype(np.float32) * 2**-9,
+                           (1.0 + ue_man.astype(np.float32) / 8.0) * (2.0 ** (ue_exp.astype(np.float32) - 7))))
+                ue_float_t = torch.from_numpy(ue_float).float().unsqueeze(-1)
+
+                inv_scale = torch.where(ue_float_t > 0, 1.0 / ue_float_t, torch.zeros_like(ue_float_t))
+                target = float_vals * inv_scale
+                best_idx = (target.unsqueeze(-1) - e2m1_lut.reshape(1, 1, 1, 16)).abs().argmin(dim=-1).to(torch.uint8)
+
+                qs = (best_idx[:, :, :8] | (best_idx[:, :, 8:] << 4)).to(torch.uint8)
+                d_bytes = combined.reshape(out_features, n_blocks, 1)
+                raw = np.concatenate([d_bytes, qs.numpy()], axis=-1).reshape(out_features, n_blocks * 9).copy()
 
                 if key not in expert_blocks:
                     expert_blocks[key] = []
