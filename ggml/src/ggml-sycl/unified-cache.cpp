@@ -993,6 +993,17 @@ unified_cache::~unified_cache() {
         }
     }
     persistent_scratches_.clear();
+
+    // Free partial row entries (multi-device tensor split)
+    for (auto & pair : partial_cache_) {
+        if (pair.second.ptr) {
+            try {
+                sycl::free(pair.second.ptr, queue_);
+            } catch (...) {
+            }
+        }
+    }
+    partial_cache_.clear();
 }
 
 // Fast 64-bit hash of entire data buffer (xxHash-style)
@@ -6509,6 +6520,136 @@ void unified_cache_unpin_model_weights(int device_id, int n_layers, const layer_
     // Unpin each layer
     for (int i = 0; i < n_layers; i++) {
         cache->unpin_layer_weights(i, layers[i], static_cast<ggml_layout_mode>(layout));
+    }
+}
+
+// =============================================================================
+// Multi-Device Partial Row Loading
+// =============================================================================
+
+void * unified_cache::load_partial_rows(const char * tensor_name,
+                                         const void * src_host,
+                                         ggml_type    type,
+                                         int64_t      ncols,
+                                         int64_t      row_count,
+                                         int          device_idx) {
+    if (!tensor_name || !src_host || row_count <= 0 || ncols <= 0) {
+        return nullptr;
+    }
+
+    // Build cache key: "tensor_name:device_idx"
+    std::string key = std::string(tensor_name) + ":" + std::to_string(device_idx);
+
+    // Check if already loaded
+    {
+        std::lock_guard<std::mutex> lock(partial_mutex_);
+        auto it = partial_cache_.find(key);
+        if (it != partial_cache_.end()) {
+            return it->second.ptr;
+        }
+    }
+
+    const size_t row_bytes     = ggml_row_size(type, ncols);
+    const size_t partial_bytes = static_cast<size_t>(row_count) * row_bytes;
+
+    if (partial_bytes == 0) {
+        return nullptr;
+    }
+
+    // Allocate device memory on this cache's queue
+    void * dev_ptr = nullptr;
+    try {
+        dev_ptr = ggml_sycl_malloc_device(partial_bytes, queue_, "unified_cache:partial_rows");
+    } catch (const sycl::exception & e) {
+        GGML_LOG_ERROR("[PARTIAL-ROWS] malloc_device failed for '%s' device %d: %s\n",
+                       tensor_name, device_idx, e.what());
+        return nullptr;
+    }
+    if (!dev_ptr) {
+        GGML_LOG_ERROR("[PARTIAL-ROWS] malloc_device returned nullptr for '%s' device %d (%.2f MB)\n",
+                       tensor_name, device_idx, partial_bytes / (1024.0f * 1024.0f));
+        return nullptr;
+    }
+
+    // Copy AOS data from host to device
+    queue_.memcpy(dev_ptr, src_host, partial_bytes).wait();
+
+    // Apply in-place SOA reorder on device
+    bool reordered = reorder_rows_to_soa(static_cast<uint8_t *>(dev_ptr), type,
+                                          ncols, row_count, partial_bytes, &queue_);
+    if (!reordered) {
+        GGML_LOG_ERROR("[PARTIAL-ROWS] SOA reorder failed for '%s' device %d type %d\n",
+                       tensor_name, device_idx, (int) type);
+        sycl::free(dev_ptr, queue_);
+        return nullptr;
+    }
+
+    // Track in partial cache
+    {
+        std::lock_guard<std::mutex> lock(partial_mutex_);
+        partial_cache_[key] = { dev_ptr, device_idx, partial_bytes };
+    }
+
+    // Update budget tracking (count as weight bytes on this device)
+    used_.fetch_add(partial_bytes, std::memory_order_relaxed);
+
+    GGML_SYCL_DEBUG("[PARTIAL-ROWS] Loaded '%s' device %d: %lld rows, %.2f MB SOA\n",
+                    tensor_name, device_idx, (long long) row_count,
+                    partial_bytes / (1024.0f * 1024.0f));
+
+    return dev_ptr;
+}
+
+void * unified_cache::get_split_weight_ptr(const char * tensor_name, int device_idx) {
+    if (!tensor_name) {
+        return nullptr;
+    }
+    std::string key = std::string(tensor_name) + ":" + std::to_string(device_idx);
+
+    std::lock_guard<std::mutex> lock(partial_mutex_);
+    auto it = partial_cache_.find(key);
+    return (it != partial_cache_.end()) ? it->second.ptr : nullptr;
+}
+
+void unified_cache::free_partial_entries() {
+    std::lock_guard<std::mutex> lock(partial_mutex_);
+    for (auto & pair : partial_cache_) {
+        if (pair.second.ptr && !g_sycl_shutting_down.load()) {
+            sycl::free(pair.second.ptr, queue_);
+            saturating_sub_used(pair.second.bytes);
+        }
+    }
+    partial_cache_.clear();
+}
+
+// Free-standing wrappers for multi-device partial row API
+
+void * unified_cache_load_partial_rows(const char * tensor_name,
+                                        const void * src_host,
+                                        ggml_type    type,
+                                        int64_t      ncols,
+                                        int64_t      row_count,
+                                        int          target_device) {
+    auto * cache = get_unified_cache_for_device(target_device);
+    if (!cache) {
+        GGML_LOG_ERROR("[PARTIAL-ROWS] No cache for device %d\n", target_device);
+        return nullptr;
+    }
+    return cache->load_partial_rows(tensor_name, src_host, type, ncols, row_count, target_device);
+}
+
+void * unified_cache_get_split_weight_ptr(const char * tensor_name, int device) {
+    auto * cache = get_unified_cache_for_device(device);
+    if (!cache) {
+        return nullptr;
+    }
+    return cache->get_split_weight_ptr(tensor_name, device);
+}
+
+void unified_cache_free_partial_entries(int device) {
+    auto * cache = get_unified_cache_for_device(device);
+    if (cache) {
+        cache->free_partial_entries();
     }
 }
 

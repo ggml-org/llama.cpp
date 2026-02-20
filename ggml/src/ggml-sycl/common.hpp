@@ -819,6 +819,13 @@ struct ggml_tensor;
 struct optimize_feature;
 bool reorder_tensor_to_soa(const ggml_tensor * tensor, dpct::queue_ptr stream, const char * caller);
 bool convert_tensor_to_coalesced(const ggml_tensor * tensor, dpct::queue_ptr stream, const char * caller);
+
+// Reorder a raw device buffer from AOS to SOA layout for a given quantized type.
+// Operates on partial row ranges (ncols x nrows). The device buffer must already
+// contain AOS data and will be transformed in-place.
+// Used by unified cache for partial-row loading in multi-device tensor split.
+bool reorder_rows_to_soa(uint8_t * data_device, ggml_type type, int64_t ncols, int64_t nrows,
+                          size_t size, dpct::queue_ptr stream);
 bool ggml_sycl_is_optimize_feature_live(const optimize_feature * feature);
 void ggml_sycl_register_optimize_feature(optimize_feature * feature);
 void ggml_sycl_unregister_optimize_feature(optimize_feature * feature);

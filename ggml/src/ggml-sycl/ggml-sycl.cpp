@@ -16879,6 +16879,35 @@ bool reorder_tensor_to_soa(const ggml_tensor * tensor, dpct::queue_ptr stream, c
     return true;
 }
 
+// Reorder a raw device buffer from AOS to SOA layout for partial row ranges.
+// Used by unified cache for multi-device tensor split weight distribution.
+bool reorder_rows_to_soa(uint8_t * data_device, ggml_type type, int64_t ncols, int64_t nrows,
+                          size_t size, dpct::queue_ptr stream) {
+    if (!data_device || size == 0 || nrows == 0) {
+        return false;
+    }
+    switch (type) {
+        case GGML_TYPE_Q4_0:
+            reorder_qw_q4_0(data_device, static_cast<int>(ncols), static_cast<int>(nrows), size, 0, stream);
+            return true;
+        case GGML_TYPE_Q4_K:
+            reorder_qw_q4_k(data_device, size, 0, stream);
+            return true;
+        case GGML_TYPE_Q6_K:
+            reorder_qw_q6_k(data_device, size, 0, stream);
+            return true;
+        case GGML_TYPE_Q8_0:
+            reorder_qw_q8_0(data_device, static_cast<int>(ncols), static_cast<int>(nrows), size, 0, stream);
+            return true;
+        case GGML_TYPE_MXFP4:
+            reorder_qw_mxfp4(data_device, static_cast<int>(ncols), static_cast<int>(nrows), size, 0, stream);
+            return true;
+        default:
+            GGML_LOG_WARN("[REORDER-ROWS] unsupported type %d for partial SOA reorder\n", (int) type);
+            return false;
+    }
+}
+
 // =============================================================================
 // UNIFIED LAYOUT CONVERSION
 
@@ -19825,9 +19854,129 @@ MatmulDecision UnifiedMatmulOrchestrator::select(const ggml_tensor *            
 
 }  // namespace ggml_sycl
 
-// Tensor split CPU percentage (0 = disabled).
-// Shared between mul_mat dispatch and graph compute.
+// ---------------------------------------------------------------------------
+// 3-device split configuration: B580 + B50 + CPU row splitting
+// ---------------------------------------------------------------------------
+struct split_device_config {
+    float         ratio[3]   = {1.0f, 0.0f, 0.0f};  // fractions: [0]=primary GPU, [1]=secondary GPU, [2]=CPU
+    sycl::queue * queue[2]   = {nullptr, nullptr};    // GPU queues (0=primary, 1=secondary)
+    int           gpu_count  = 0;                     // discovered GPUs (1 or 2)
+    bool          enabled    = false;                  // any non-trivial split active
+};
+
+static split_device_config g_split_config;
+
+// Initialize 3-device split config. Called once (idempotent).
+// primary_queue = the main GPU's in-order queue (device 0).
+static void split_config_init(sycl::queue * primary_queue) {
+    if (g_split_config.queue[0]) {
+        return;  // already initialized
+    }
+    g_split_config.queue[0] = primary_queue;
+    g_split_config.gpu_count = 1;
+
+    // Parse GGML_SYCL_SPLIT_RATIO (new 3-way) or GGML_SYCL_TENSOR_SPLIT (legacy 2-way)
+    const char * ratio_env  = std::getenv("GGML_SYCL_SPLIT_RATIO");
+    const char * legacy_env = std::getenv("GGML_SYCL_TENSOR_SPLIT");
+
+    if (ratio_env) {
+        if (strcmp(ratio_env, "auto") == 0) {
+            // Auto-detect: use fixed 60/32/8 defaults (Task 6 may refine with bandwidth measurement)
+            g_split_config.ratio[0] = 0.60f;
+            g_split_config.ratio[1] = 0.32f;
+            g_split_config.ratio[2] = 0.08f;
+        } else {
+            int r0, r1, r2;
+            if (sscanf(ratio_env, "%d,%d,%d", &r0, &r1, &r2) == 3 && (r0 + r1 + r2) > 0) {
+                float sum = (float)(r0 + r1 + r2);
+                g_split_config.ratio[0] = r0 / sum;
+                g_split_config.ratio[1] = r1 / sum;
+                g_split_config.ratio[2] = r2 / sum;
+            } else {
+                GGML_LOG_WARN("SYCL: invalid GGML_SYCL_SPLIT_RATIO='%s', expected 'N,N,N' or 'auto'\n", ratio_env);
+            }
+        }
+    } else if (legacy_env) {
+        int cpu_pct = std::atoi(legacy_env);
+        if (cpu_pct > 0 && cpu_pct < 100) {
+            g_split_config.ratio[0] = (100.0f - cpu_pct) / 100.0f;
+            g_split_config.ratio[1] = 0.0f;
+            g_split_config.ratio[2] = cpu_pct / 100.0f;
+        }
+    }
+
+    g_split_config.enabled = (g_split_config.ratio[1] > 0.0f || g_split_config.ratio[2] > 0.0f);
+
+    // Discover secondary GPU (B50) if ratio requests it
+    if (g_split_config.ratio[1] > 0.0f) {
+        sycl::device primary_dev = primary_queue->get_device();
+        bool found = false;
+
+        for (auto & p : sycl::platform::get_platforms()) {
+            if (p.get_backend() != sycl::backend::ext_oneapi_level_zero) {
+                continue;
+            }
+            auto devs = p.get_devices(sycl::info::device_type::gpu);
+            if (devs.size() < 2) {
+                continue;
+            }
+            // Find primary and secondary among the platform's devices
+            sycl::device secondary_dev;
+            bool have_primary = false, have_secondary = false;
+            for (auto & d : devs) {
+                if (d == primary_dev) {
+                    have_primary = true;
+                } else if (!have_secondary) {
+                    secondary_dev  = d;
+                    have_secondary = true;
+                }
+            }
+            if (have_primary && have_secondary) {
+                // Create shared context with both GPUs
+                static sycl::context shared_ctx({primary_dev, secondary_dev});
+                static sycl::queue   q1(shared_ctx, secondary_dev, sycl::property::queue::in_order());
+                g_split_config.queue[1]  = &q1;
+                g_split_config.gpu_count = 2;
+                found = true;
+                GGML_LOG_INFO("SYCL 3-device split: %s + %s + CPU (%.0f%%/%.0f%%/%.0f%%)\n",
+                              primary_dev.get_info<sycl::info::device::name>().c_str(),
+                              secondary_dev.get_info<sycl::info::device::name>().c_str(),
+                              g_split_config.ratio[0] * 100,
+                              g_split_config.ratio[1] * 100,
+                              g_split_config.ratio[2] * 100);
+                break;
+            }
+        }
+        if (!found) {
+            // Secondary GPU not found — redistribute its share to primary
+            GGML_LOG_WARN("SYCL: secondary GPU not found, falling back to 2-device split (GPU+CPU)\n");
+            g_split_config.ratio[0] += g_split_config.ratio[1];
+            g_split_config.ratio[1]  = 0.0f;
+        }
+    }
+
+    if (g_split_config.enabled) {
+        if (g_split_config.gpu_count >= 2) {
+            GGML_LOG_INFO("SYCL split: 3-device (%.0f%%/%.0f%%/%.0f%%)\n",
+                          g_split_config.ratio[0] * 100,
+                          g_split_config.ratio[1] * 100,
+                          g_split_config.ratio[2] * 100);
+        } else {
+            GGML_LOG_INFO("SYCL split: GPU+CPU (%.0f%%/%.0f%%)\n",
+                          g_split_config.ratio[0] * 100,
+                          g_split_config.ratio[2] * 100);
+        }
+    }
+}
+
+// Legacy API: returns CPU split percentage (0 = disabled).
+// Delegates to g_split_config when initialized, falls back to env var.
 static int ggml_sycl_tensor_split_pct() {
+    if (g_split_config.queue[0]) {
+        // Config initialized — derive CPU pct from ratio
+        return (int)(g_split_config.ratio[2] * 100.0f + 0.5f);
+    }
+    // Fallback: read env directly (before init)
     static const int pct = []() {
         const char * env = std::getenv("GGML_SYCL_TENSOR_SPLIT");
         return env ? std::atoi(env) : 0;
@@ -20115,9 +20264,10 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
             const layout_mode effective_layout = extra ? get_effective_layout_mode(extra) : GGML_LAYOUT_AOS;
 
             if (has_soa_reorder) {
-                // Tensor split: cooperative GPU+CPU MUL_MAT
-                const int split_pct = ggml_sycl_tensor_split_pct();
-                if (split_pct > 0) {
+                // Tensor split: cooperative multi-device MUL_MAT
+                split_config_init(ctx.stream());
+                if (g_split_config.enabled) {
+                    const int split_pct = (int)(g_split_config.ratio[2] * 100.0f + 0.5f);
                     if (ggml_sycl_mul_mat_tensor_split(ctx, src0, src1, dst,
                                                         split_pct, effective_layout)) {
                         return;
@@ -31803,11 +31953,10 @@ normal_dispatch:
     // graph replay only adds ~2.8% for TG (MMVQ fast-path already eliminates
     // most kernel dispatch overhead). Auto-disable graph for decode phase
     // when tensor split is enabled to allow overlap for every token.
-    if (use_sycl_graph && cached_is_decode && ggml_sycl_tensor_split_pct() > 0) {
+    if (use_sycl_graph && cached_is_decode && g_split_config.enabled) {
         static bool logged_once = false;
         if (!logged_once) {
-            GGML_LOG_INFO("[SYCL] Tensor split %d%%: disabling graph replay for TG (GPU/CPU overlap)\n",
-                          ggml_sycl_tensor_split_pct());
+            GGML_LOG_INFO("[SYCL] Device split active: disabling graph replay for TG (multi-device overlap)\n");
             logged_once = true;
         }
         use_sycl_graph = false;

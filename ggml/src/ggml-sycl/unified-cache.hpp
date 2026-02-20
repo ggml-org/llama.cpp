@@ -574,6 +574,33 @@ class unified_cache {
     cache_layout_result ensure_cached_layout(const cache_layout_request &     request,
                                              const std::vector<sycl::event> & deps);
 
+    // === Multi-Device Partial Row Loading ===
+
+    // Load a contiguous row range of a weight tensor to this device with SOA reorder.
+    // Used by 3-device tensor split: each device stores only its assigned rows.
+    // The source data is AOS from host (mmap-backed), and the result is SOA on device.
+    // Returns device pointer to the SOA-reordered partial tensor, or nullptr on failure.
+    //
+    // tensor_name: tensor name for cache key generation
+    // src_host:    host pointer to the START of the row range (already offset by caller)
+    // type:        quantized type (Q4_0, Q8_0, etc.)
+    // ncols:       number of columns (ne[0]) in the tensor
+    // row_count:   number of rows in this partial range
+    // device_idx:  device index for cache key uniqueness (0=B580, 1=B50)
+    void * load_partial_rows(const char * tensor_name,
+                             const void * src_host,
+                             ggml_type    type,
+                             int64_t      ncols,
+                             int64_t      row_count,
+                             int          device_idx);
+
+    // Look up a previously loaded partial weight for a given tensor and device.
+    // Returns the device pointer, or nullptr if not loaded yet.
+    void * get_split_weight_ptr(const char * tensor_name, int device_idx);
+
+    // Free all partial row entries (called during cache shutdown or device cleanup).
+    void free_partial_entries();
+
     // Check if entry is cached (without loading)
     bool is_cached(const ggml_sycl_cache_id & key, ggml_layout_mode layout) const;
     bool is_cached_any(const ggml_sycl_cache_id & key) const;
@@ -993,6 +1020,17 @@ class unified_cache {
     // One-way flag (false → true, never reset). Used by graph replay / persistent TG
     // to know that baked pointers may reference freed device memory.
     std::atomic<bool> has_evictions_{ false };
+
+    // === Multi-Device Partial Row Cache ===
+    // Stores SOA-reordered partial weight tensors for multi-device tensor split.
+    // Key: "tensor_name:device_idx", Value: device pointer + metadata.
+    struct partial_entry {
+        void * ptr;
+        int    device_idx;
+        size_t bytes;
+    };
+    std::unordered_map<std::string, partial_entry> partial_cache_;
+    std::mutex                                     partial_mutex_;
 
     // Stats
     mutable std::atomic<size_t> hits_{ 0 };
@@ -1462,6 +1500,23 @@ void unpin_routed_experts(const int32_t * expert_ids,
                           const char *    tensor_name,
                           uint64_t        cache_uuid,
                           uint32_t        model_id);
+
+// === Multi-Device Partial Row API (free-standing wrappers) ===
+
+// Load a contiguous row range to a device with SOA reorder.
+// Automatically routes to the correct unified_cache instance for the target device.
+void * unified_cache_load_partial_rows(const char * tensor_name,
+                                       const void * src_host,
+                                       ggml_type    type,
+                                       int64_t      ncols,
+                                       int64_t      row_count,
+                                       int          target_device);
+
+// Look up a previously loaded partial weight on a specific device.
+void * unified_cache_get_split_weight_ptr(const char * tensor_name, int device);
+
+// Free all partial row entries on a device.
+void unified_cache_free_partial_entries(int device);
 
 // === Shutdown API ===
 
