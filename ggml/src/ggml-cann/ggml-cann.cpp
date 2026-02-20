@@ -32,14 +32,18 @@
 #include <aclnnop/aclnn_trans_matmul_weight.h>
 #include <stdarg.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <queue>
+#include <set>
 #include <unordered_set>
+#include <vector>
 
 #define GGML_COMMON_DECL_C
 
@@ -2105,12 +2109,106 @@ static bool ggml_cann_can_fuse(const struct ggml_cgraph *          cgraph,
 }
 
 /**
+ * @brief Check if a tensor depends on any node in the unsynced list.
+ *
+ * This function checks whether the given tensor depends on any of the unsynced
+ * nodes by examining the source tensors recursively.
+ *
+ * @param tensor The tensor to check dependencies for.
+ * @param unsynced_nodes Set of nodes that haven't been synchronized yet.
+ * @return true if the tensor depends on any unsynced node.
+ */
+static bool depends_on_unsynced(const ggml_tensor * tensor,
+                                const std::set<const ggml_tensor *> & unsynced_nodes) {
+    if (tensor == nullptr) {
+        return false;
+    }
+
+    // Check if this tensor itself is unsynced
+    if (unsynced_nodes.count(tensor) > 0) {
+        return true;
+    }
+
+    // Check view source
+    if (tensor->view_src != nullptr && unsynced_nodes.count(tensor->view_src) > 0) {
+        return true;
+    }
+
+    return false;
+}
+
+/**
+ * @brief Check if a node depends on any unsynced nodes through its sources.
+ *
+ * @param node The node to check.
+ * @param unsynced_nodes Set of nodes that haven't been synchronized yet.
+ * @return true if the node depends on any unsynced node.
+ */
+static bool node_depends_on_unsynced(const ggml_tensor * node,
+                                     const std::set<const ggml_tensor *> & unsynced_nodes) {
+    for (int s = 0; s < GGML_MAX_SRC; ++s) {
+        if (depends_on_unsynced(node->src[s], unsynced_nodes)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * @brief Get the underlying data pointer for a tensor.
+ *
+ * Returns the data pointer of the view source if the tensor is a view,
+ * otherwise returns the tensor's own data pointer.
+ *
+ * @param tensor The tensor to get the data pointer for.
+ * @return The underlying data pointer.
+ */
+static inline void * get_data_ptr(const ggml_tensor * tensor) {
+    if (tensor == nullptr) {
+        return nullptr;
+    }
+    return tensor->data;
+}
+
+/**
+ * @brief Check if a node has memory dependencies on pending writes.
+ *
+ * This function checks if any of the node's input tensors read from memory
+ * locations that have pending writes, or if the node's output memory overlaps
+ * with pending writes.
+ *
+ * @param node The node to check.
+ * @param pending_write_ptrs Set of data pointers with pending writes.
+ * @return true if there are memory dependencies.
+ */
+static bool has_memory_dependency(const ggml_tensor * node,
+                                  const std::set<void *> & pending_write_ptrs) {
+    // Check if any source reads from a pending write location
+    for (int s = 0; s < GGML_MAX_SRC; ++s) {
+        void * src_ptr = get_data_ptr(node->src[s]);
+        if (src_ptr != nullptr && pending_write_ptrs.count(src_ptr) > 0) {
+            return true;
+        }
+    }
+
+    // Check if output location has pending writes (WAW hazard)
+    void * dst_ptr = get_data_ptr(node);
+    if (dst_ptr != nullptr && pending_write_ptrs.count(dst_ptr) > 0) {
+        return true;
+    }
+
+    return false;
+}
+
+/**
  * @brief Evaluate the computation graph and optionally capture or execute it using CANN graph API.
  *
  * If CANN graph execution is enabled and graph capture is required, this function begins
  * graph capture, runs the graph, ends capture, and stores the captured graph.
  *
  * Otherwise, it falls back to op-by-op execution using the CANN compute kernel dispatcher.
+ * When multi-stream execution is enabled, nodes are distributed across multiple streams
+ * for parallel execution.
  *
  * @param cann_ctx                     The CANN backend context.
  * @param cgraph                       The ggml computation graph.
@@ -2128,33 +2226,136 @@ static void evaluate_and_capture_cann_graph(ggml_backend_cann_context * cann_ctx
 #endif  // USE_ACL_GRAPH
     // Only perform the graph execution if CANN graphs are not enabled, or we are capturing the graph.
     // With the use of CANN graphs, the execution will be performed by the graph launch.
-    static bool opt_fusion = parse_bool(get_env_as_lowercase("GGML_CANN_OPERATOR_FUSION").value_or(""));
 
     if (!use_cann_graph || cann_graph_capture_required) {
-        for (int i = 0; i < cgraph->n_nodes; i++) {
-            ggml_tensor * node = cgraph->nodes[i];
-            if (opt_fusion) {
-                if (ggml_cann_can_fuse(cgraph, i, { GGML_OP_ADD, GGML_OP_RMS_NORM })) {
-                    ggml_cann_op_add_rms_norm_fused(*cann_ctx, node, cgraph->nodes[i + 1]);
-                    i++;
-                    continue;
+        if (cann_ctx->multi_stream_enabled) {
+            // Multi-stream execution mode using memory-based dependency tracking
+            // Note: multi_stream_enabled implies !use_cann_graph (set in graph_compute)
+            // Track data pointers that have pending writes on each stream
+            std::map<void *, int> pending_writes;  // data_ptr -> stream_id
+            std::set<int> active_streams;  // streams with pending work
+            int current_stream = 0;
+
+            // Ensure stream events are created
+            for (int s = 0; s < GGML_CANN_NUM_COMPUTE_STREAMS; ++s) {
+                if (cann_ctx->stream_events[s] == nullptr) {
+                    ACL_CHECK(aclrtCreateEvent(&cann_ctx->stream_events[s]));
                 }
             }
 
-            if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE ||
-                node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
-                continue;
+            // Helper lambda to wait for a specific stream on the target stream
+            auto wait_for_stream = [&](int src_stream, int target_stream) {
+                if (src_stream == target_stream) return;
+                ACL_CHECK(aclrtRecordEvent(cann_ctx->stream_events[src_stream], cann_ctx->stream(src_stream)));
+                ACL_CHECK(aclrtStreamWaitEvent(cann_ctx->stream(target_stream), cann_ctx->stream_events[src_stream]));
+            };
+
+            for (int i = 0; i < cgraph->n_nodes; i++) {
+                ggml_tensor * node = cgraph->nodes[i];
+
+                if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE ||
+                    node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
+                    continue;
+                }
+
+                if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
+                    continue;
+                }
+
+                // Find which streams we depend on based on input memory locations
+                std::set<int> dependent_streams;
+                for (int s = 0; s < GGML_MAX_SRC; ++s) {
+                    void * src_ptr = get_data_ptr(node->src[s]);
+                    if (src_ptr != nullptr) {
+                        auto it = pending_writes.find(src_ptr);
+                        if (it != pending_writes.end()) {
+                            dependent_streams.insert(it->second);
+                        }
+                    }
+                }
+
+                // Check for WAW hazard (output location has pending write)
+                void * dst_ptr = get_data_ptr(node);
+                if (dst_ptr != nullptr) {
+                    auto it = pending_writes.find(dst_ptr);
+                    if (it != pending_writes.end()) {
+                        dependent_streams.insert(it->second);
+                    }
+                }
+
+                // Choose which stream to execute on
+                int exec_stream;
+                if (dependent_streams.empty()) {
+                    // No dependencies - use round-robin
+                    exec_stream = current_stream;
+                    current_stream = (current_stream + 1) % GGML_CANN_NUM_COMPUTE_STREAMS;
+                } else if (dependent_streams.size() == 1) {
+                    // Single dependency - execute on the same stream to avoid sync overhead
+                    exec_stream = *dependent_streams.begin();
+                } else {
+                    // Multiple dependencies - pick the first dependent stream and wait for others
+                    exec_stream = *dependent_streams.begin();
+                }
+
+                // Wait for all dependent streams (except the exec_stream itself)
+                for (int dep_stream : dependent_streams) {
+                    if (dep_stream != exec_stream) {
+                        wait_for_stream(dep_stream, exec_stream);
+                    }
+                }
+
+                // Execute the node on the chosen stream
+                // Temporarily swap the default stream
+                aclrtStream original_stream = cann_ctx->streams[0];
+                cann_ctx->streams[0] = cann_ctx->stream(exec_stream);
+
+                bool ok = ggml_cann_compute_forward(*cann_ctx, node);
+                if (!ok) {
+                    GGML_LOG_ERROR("%s: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
+                }
+                GGML_ASSERT(ok);
+
+                // Restore the original stream
+                cann_ctx->streams[0] = original_stream;
+
+                // Track the output location
+                if (dst_ptr != nullptr) {
+                    pending_writes[dst_ptr] = exec_stream;
+                    active_streams.insert(exec_stream);
+                }
             }
 
-            if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
-                continue;
+            // Final synchronization - wait for all streams to complete
+            for (int s : active_streams) {
+                ACL_CHECK(aclrtSynchronizeStream(cann_ctx->stream(s)));
             }
+        } else {
+            // Single-stream execution mode (original behavior)
+            for (int i = 0; i < cgraph->n_nodes; i++) {
+                ggml_tensor * node = cgraph->nodes[i];
+                if (cann_ctx->operator_fusion_enabled) {
+                    if (ggml_cann_can_fuse(cgraph, i, { GGML_OP_ADD, GGML_OP_RMS_NORM })) {
+                        ggml_cann_op_add_rms_norm_fused(*cann_ctx, node, cgraph->nodes[i + 1]);
+                        i++;
+                        continue;
+                    }
+                }
 
-            bool ok = ggml_cann_compute_forward(*cann_ctx, node);
-            if (!ok) {
-                GGML_LOG_ERROR("%s: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
+                if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE ||
+                    node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
+                    continue;
+                }
+
+                if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
+                    continue;
+                }
+
+                bool ok = ggml_cann_compute_forward(*cann_ctx, node);
+                if (!ok) {
+                    GGML_LOG_ERROR("%s: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
+                }
+                GGML_ASSERT(ok);
             }
-            GGML_ASSERT(ok);
         }
     }
 
@@ -2197,17 +2398,19 @@ static enum ggml_status ggml_backend_cann_graph_compute(ggml_backend_t backend, 
 #ifdef USE_ACL_GRAPH
     bool use_cann_graph = true;
 
-    static bool prefill_use_graph = parse_bool(get_env_as_lowercase("GGML_CANN_PREFILL_USE_GRAPH").value_or(""));
-    if (!prefill_use_graph) {
-        // Do not use acl_graph for prefill.
-        for (int i = 0; i < cgraph->n_nodes; i++) {
-            ggml_tensor * node = cgraph->nodes[i];
-            // TODO: Optimize here. Currently, we can only
-            // get seq_len by FA's input.
-            if (node->op == GGML_OP_FLASH_ATTN_EXT) {
-                // Q -> src[0], shape: [B, S, N, D]
-                use_cann_graph = (node->src[0]->ne[1] == 1);
-                break;
+    if (use_cann_graph) {
+        static bool prefill_use_graph = parse_bool(get_env_as_lowercase("GGML_CANN_PREFILL_USE_GRAPH").value_or(""));
+        if (!prefill_use_graph) {
+            // Do not use acl_graph for prefill.
+            for (int i = 0; i < cgraph->n_nodes; i++) {
+                ggml_tensor * node = cgraph->nodes[i];
+                // TODO: Optimize here. Currently, we can only
+                // get seq_len by FA's input.
+                if (node->op == GGML_OP_FLASH_ATTN_EXT) {
+                    // Q -> src[0], shape: [B, S, N, D]
+                    use_cann_graph = (node->src[0]->ne[1] == 1);
+                    break;
+                }
             }
         }
     }
@@ -2556,6 +2759,132 @@ static void ggml_backend_cann_event_wait(ggml_backend_t backend, ggml_backend_ev
 }
 
 /**
+ * @brief Optimizes the computation graph for better parallelism in multi-stream execution.
+ *
+ * This function reorders nodes in the computation graph to enable more parallel
+ * execution by grouping together nodes that don't depend on each other. This
+ * reduces the number of synchronizations needed between streams.
+ *
+ * The algorithm (inspired by Vulkan backend):
+ * 1. Skip "empty" nodes (NONE, RESHAPE, TRANSPOSE, VIEW, PERMUTE) as they don't require computation
+ * 2. For each unprocessed node, find subsequent nodes that can be executed in parallel
+ * 3. Nodes can be parallelized if they don't depend on unprocessed nodes
+ * 4. Process in two passes: first real nodes, then view nodes
+ *
+ * @param backend Pointer to the CANN backend structure.
+ * @param graph Pointer to the computation graph to optimize.
+ */
+static void ggml_backend_cann_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * graph) {
+    // Check if graph optimization is disabled via environment variable
+    static bool disable_graph_optimize = parse_bool(get_env_as_lowercase("GGML_CANN_DISABLE_GRAPH_OPTIMIZE").value_or(""));
+    if (disable_graph_optimize) {
+        return;
+    }
+
+    // Helper: check if a node is "empty" (doesn't require actual computation)
+    auto const & is_empty = [](ggml_tensor * node) -> bool {
+        return node->op == GGML_OP_NONE ||
+               node->op == GGML_OP_RESHAPE ||
+               node->op == GGML_OP_TRANSPOSE ||
+               node->op == GGML_OP_VIEW ||
+               node->op == GGML_OP_PERMUTE;
+    };
+
+    // Helper: check if dst depends on src (src is a source of dst)
+    auto const & is_src_of = [](const ggml_tensor * dst, const ggml_tensor * src) -> bool {
+        for (uint32_t s = 0; s < GGML_MAX_SRC; ++s) {
+            if (dst->src[s] == src) {
+                return true;
+            }
+        }
+        // Implicit dependency if they view the same tensor
+        const ggml_tensor * dst2 = dst->view_src ? dst->view_src : dst;
+        const ggml_tensor * src2 = src->view_src ? src->view_src : src;
+        if (dst2 == src2) {
+            return true;
+        }
+        return false;
+    };
+
+    std::vector<ggml_tensor *> new_order;
+    std::vector<bool> used(graph->n_nodes, false);
+
+    int first_unused = 0;
+    while (first_unused < graph->n_nodes) {
+        std::vector<int> current_set;
+
+        // First, grab the next unused node
+        current_set.push_back(first_unused);
+
+        // First pass: Loop through the next N nodes and grab any that don't depend
+        // on other nodes that haven't already been run. This pass only grabs "real"
+        // (non-view) nodes to avoid interleaving real and view nodes.
+        const int NUM_TO_CHECK = 20;
+        for (int j = first_unused + 1; j < std::min(first_unused + NUM_TO_CHECK, graph->n_nodes); ++j) {
+            if (used[j]) {
+                continue;
+            }
+            if (is_empty(graph->nodes[j])) {
+                continue;
+            }
+
+            // Check if this node depends on any unprocessed nodes
+            bool ok = true;
+            for (int c = first_unused; c < j; ++c) {
+                if (!used[c] && is_src_of(graph->nodes[j], graph->nodes[c])) {
+                    ok = false;
+                    break;
+                }
+            }
+            if (ok) {
+                current_set.push_back(j);
+            }
+        }
+
+        // Second pass: grab view nodes that don't depend on unprocessed nodes
+        for (int j = first_unused + 1; j < std::min(first_unused + NUM_TO_CHECK, graph->n_nodes); ++j) {
+            if (used[j]) {
+                continue;
+            }
+            if (!is_empty(graph->nodes[j])) {
+                continue;
+            }
+
+            // Check if this view node depends on any unprocessed nodes
+            bool ok = true;
+            for (int c = first_unused; c < j; ++c) {
+                bool c_in_current_set = std::find(current_set.begin(), current_set.end(), c) != current_set.end();
+                // Skip views whose srcs haven't been processed
+                if (!used[c] && is_src_of(graph->nodes[j], graph->nodes[c]) && !c_in_current_set) {
+                    ok = false;
+                    break;
+                }
+            }
+            if (ok) {
+                current_set.push_back(j);
+            }
+        }
+
+        // Push the current set into new_order
+        for (auto c : current_set) {
+            new_order.push_back(graph->nodes[c]);
+            used[c] = true;
+        }
+
+        while (first_unused < graph->n_nodes && used[first_unused]) {
+            first_unused++;
+        }
+    }
+
+    // Replace the graph with the new order
+    for (int i = 0; i < graph->n_nodes; ++i) {
+        graph->nodes[i] = new_order[i];
+    }
+
+    GGML_UNUSED(backend);
+}
+
+/**
  * @brief Structure defining the interface for the CANN backend.
  *
  * This structure contains function pointers for various operations
@@ -2576,7 +2905,7 @@ static const ggml_backend_i ggml_backend_cann_interface = {
     /* .graph_compute           = */ ggml_backend_cann_graph_compute,
     /* .event_record            = */ ggml_backend_cann_event_record,
     /* .event_wait              = */ ggml_backend_cann_event_wait,
-    /* .graph_optimize          = */ NULL,
+    /* .graph_optimize          = */ ggml_backend_cann_graph_optimize,
 };
 
 /**
