@@ -11172,7 +11172,7 @@ class ModernBertModel(BertModel):
         # these layers act as MLM head, so we don't need them
         if name.startswith("decoder."):
             return
-        
+
         if self.is_token_classification and name.startswith("head."):
             return
 
