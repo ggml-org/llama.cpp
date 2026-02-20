@@ -99,10 +99,10 @@ static inline HVX_Vector hvx_dot_f16_f16_aa_rx4(const void * restrict y,
     if (nloe) {
         // Load x (fp16) and zero-out unused elements
         HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe * 2);
-        HVX_Vector     x0_hf = vx0[i];
-        HVX_Vector     x1_hf = vx1[i];
-        HVX_Vector     x2_hf = vx2[i];
-        HVX_Vector     x3_hf = vx3[i];
+        HVX_Vector     x0_hf = Q6_V_vand_QV(bmask, vx0[i]);
+        HVX_Vector     x1_hf = Q6_V_vand_QV(bmask, vx1[i]);
+        HVX_Vector     x2_hf = Q6_V_vand_QV(bmask, vx2[i]);
+        HVX_Vector     x3_hf = Q6_V_vand_QV(bmask, vx3[i]);
         HVX_Vector     y_hf  = Q6_V_vand_QV(bmask, vy[i]);
 
         HVX_VectorPair xy0_qf = Q6_Wqf32_vmpy_VhfVhf(x0_hf, y_hf);
