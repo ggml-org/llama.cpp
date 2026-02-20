@@ -57,6 +57,7 @@ jobs:
             -m models/model-Q8_0.gguf \
             -f models/wikitext-2-raw/wiki.test.raw \
             --save-all-logits models/logits-Q8_0.kld \
+            --chunks 128 \
             -t $(nproc) -ngl 0 2>&1 | tee results/ppl-Q8_0.txt
 
       - name: Run llama-bench for Q8_0
@@ -129,6 +130,7 @@ jobs:
           ./build/bin/llama-perplexity \
             -m "models/model-${{ matrix.quant }}.gguf" \
             -f models/wikitext-2-raw/wiki.test.raw \
+            --chunks 128 \
             -t $(nproc) -ngl 0 2>&1 | tee results/ppl-${{ matrix.quant }}.txt
 
       - name: Run KLD vs Q8_0 for ${{ matrix.quant }}
@@ -138,6 +140,7 @@ jobs:
             -m "models/model-${{ matrix.quant }}.gguf" \
             -f models/wikitext-2-raw/wiki.test.raw \
             --kl-divergence --kl-divergence-base models/logits-Q8_0.kld \
+            --chunks 128 \
             -t $(nproc) -ngl 0 2>&1 | tee results/kld-${{ matrix.quant }}.txt
 
       - name: Run llama-bench for ${{ matrix.quant }}
