@@ -1701,7 +1701,7 @@ struct block_mxfp4
 
 struct block_nvfp4
 {
-    float16_t d;
+    uint8_t d;
     uint8_t qs[QUANT_K_NVFP4/2];
 };
 
@@ -1769,6 +1769,16 @@ vec4 bf16_to_fp32(uvec4 u)
     return vec4(bf16_to_fp32(u.x), bf16_to_fp32(u.y), bf16_to_fp32(u.z), bf16_to_fp32(u.w));
 }
 
+float ue4m3_to_fp32(uint8_t x) {
+    if (x == 0u || x == 0x7Fu) return 0.0;
+    uint e = (x >> 3) & 0xFu;
+    uint m = x & 0x7u;
+    float raw;
+    if (e == 0u) raw = float(m) * exp2(-9.0);
+    else raw = (1.0 + float(m) / 8.0) * exp2(float(int(e) - 7));
+    return raw * 0.5;
+}
+
 float e8m0_to_fp32(uint8_t x) {
     uint32_t bits;
 
@@ -1798,3 +1808,4 @@ float e8m0_to_fp32(uint8_t x) {
 #endif
 
 #endif // !defined(GGML_TYPES_COMP)
+

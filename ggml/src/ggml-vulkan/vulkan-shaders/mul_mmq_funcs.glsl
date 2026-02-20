@@ -198,7 +198,7 @@ void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
     buf_a[buf_ib].qs[iqs + 4] = pack32(i8vec4(kvalues_mxfp4[i_a1.x], kvalues_mxfp4[i_a1.y], kvalues_mxfp4[i_a1.z], kvalues_mxfp4[i_a1.w]));
 
     if (iqs == 0) {
-        buf_a[buf_ib].d = FLOAT_TYPE(data_a[ib].d);
+        buf_a[buf_ib].d = FLOAT_TYPE(ue4m3_to_fp32(data_a[ib].d));
     }
 }
 

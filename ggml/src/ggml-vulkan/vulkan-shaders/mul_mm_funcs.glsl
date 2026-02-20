@@ -492,7 +492,7 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             const uint ib = idx / 4;
             const uint iqs = (idx & 0x03) * 2;
 
-            const float d = float(data_a[ib].d);
+            const float d = ue4m3_to_fp32(data_a[ib].d);
             const uint vui0 = uint(data_a[ib].qs[iqs]);
             const uint vui1 = uint(data_a[ib].qs[iqs+1]);
 

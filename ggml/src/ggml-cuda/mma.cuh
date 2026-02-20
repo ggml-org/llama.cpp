@@ -1033,6 +1033,29 @@ namespace ggml_cuda_mma {
 #endif  // BLACKWELL_MMA_AVAILABLE
     }
 
+
+    // NVFP4: kind::mxf4nvf4 with scale_vec::4X, ue4m3 (per-16-element UE4M3 scales)
+    // Requires PTX ISA 9.1 (CUDA 13.1+)
+    static __device__ __forceinline__ void mma_block_scaled_nvfp4(tile<16, 8, float> &     D,
+                                                                   const tile<16, 8, int> & A,
+                                                                   const tile<8, 8, int> &  B,
+                                                                   uint32_t                 a_scale,
+                                                                   uint32_t                 b_scale) {
+#if defined(BLACKWELL_MMA_AVAILABLE) && CUDART_VERSION >= 13010
+        const int * Axi = (const int *) A.x;
+        const int * Bxi = (const int *) B.x;
+        float *     Dxi = (float *) D.x;
+
+        asm volatile(
+            "mma.sync.aligned.kind::mxf4nvf4.block_scale.scale_vec::4X.m16n8k64.row.col.f32.e2m1.e2m1.f32.ue4m3 "
+            "{%0, %1, %2, %3}, {%4, %5, %6, %7}, {%8, %9}, {%0, %1, %2, %3}, "
+            "%10, {0, 0}, %11, {0, 0};"
+            : "+f"(Dxi[0]), "+f"(Dxi[1]), "+f"(Dxi[2]), "+f"(Dxi[3])
+            : "r"(Axi[0]), "r"(Axi[1]), "r"(Axi[2]), "r"(Axi[3]), "r"(Bxi[0]), "r"(Bxi[1]), "r"(a_scale), "r"(b_scale));
+#else
+        GGML_UNUSED_VARS(D, A, B, a_scale, b_scale);
+#endif
+    }
     static __device__ __forceinline__ void mma(
             tile<16, 8, float> & D, const tile<16, 8, half2> & A, const tile<8, 8, half2> & B) {
 #ifdef TURING_MMA_AVAILABLE
