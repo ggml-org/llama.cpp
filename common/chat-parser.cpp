@@ -1604,6 +1604,7 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
             break;
         case COMMON_CHAT_FORMAT_EXAONE_MOE:
             common_chat_parse_exaone_moe(builder);
+            break;
         default:
             throw std::runtime_error(std::string("Unsupported format: ") + common_chat_format_name(builder.syntax().format));
     }
