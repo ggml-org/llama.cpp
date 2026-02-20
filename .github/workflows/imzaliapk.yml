@@ -1,0 +1,43 @@
+name: imzalı APK Yap
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK
+        run: sdkmanager "ndk;26.3.11579264" "cmake;3.22.1"
+
+      - name: Build APK
+        working-directory: examples/llama.android
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Sign APK
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > release.keystore
+          $ANDROID_HOME/build-tools/$(ls $ANDROID_HOME/build-tools/ | tail -1)/apksigner sign \
+            --ks release.keystore \
+            --ks-alias "${{ secrets.KEY_ALIAS }}" \
+            --ks-pass pass:"${{ secrets.STORE_PASSWORD }}" \
+            --key-pass pass:"${{ secrets.KEY_PASSWORD }}" \
+            examples/llama.android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-android-release
+          path: examples/llama.android/app/build/outputs/apk/debug/app-debug.apk
