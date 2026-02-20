@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <item
+        android:id="@+id/action_change_model"
+        android:title="Model değiştir"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_clear_chat"
+        android:title="Sohbeti temizle"
+        app:showAsAction="never" />
+</menu>
