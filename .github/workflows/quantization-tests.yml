@@ -1,0 +1,55 @@
+name: Quantization Tests (Ultra-Low-Bit)
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'ggml/src/ggml-quants.*'
+      - 'ggml/src/ggml-common.h'
+      - 'ggml/include/ggml.h'
+      - 'ggml/src/ggml.c'
+      - 'ggml/src/ggml-cpu/**'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'ggml/src/ggml-quants.*'
+      - 'ggml/src/ggml-common.h'
+      - 'ggml/include/ggml.h'
+      - 'ggml/src/ggml.c'
+      - 'ggml/src/ggml-cpu/**'
+  workflow_dispatch:
+
+jobs:
+  quantization-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        build_type: [Release, Debug]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential
+
+      - name: Configure CMake
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DGGML_CPU=ON \
+            -DLLAMA_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build --config ${{ matrix.build_type }} -j $(nproc)
+
+      - name: Run quantize-fns test
+        run: ./build/bin/test-quantize-fns
+        timeout-minutes: 10
+
+      - name: Run quantize-perf test
+        run: ./build/bin/test-quantize-perf --op quantize_row_q1_5_K_ref && ./build/bin/test-quantize-perf --op quantize_row_q2_K_s_ref
+        timeout-minutes: 10
+        if: matrix.build_type == 'Release'

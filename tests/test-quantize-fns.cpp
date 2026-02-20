@@ -1,36 +1,36 @@
 // Unit tests for quantization specific functions - quantize, dequantize and dot product
 
-#include "ggml.h"
 #include "ggml-cpu.h"
+#include "ggml.h"
 
 #undef NDEBUG
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
+
 #include <string>
 #include <vector>
 
 #if defined(_MSC_VER)
-#pragma warning(disable: 4244 4267) // possible loss of data
+#    pragma warning(disable : 4244 4267)  // possible loss of data
 #endif
 
-constexpr float MAX_QUANTIZATION_REFERENCE_ERROR = 0.0001f;
-constexpr float MAX_QUANTIZATION_TOTAL_ERROR = 0.002f;
-constexpr float MAX_QUANTIZATION_TOTAL_ERROR_TERNARY = 0.01f;
-constexpr float MAX_QUANTIZATION_TOTAL_ERROR_2BITS = 0.0075f;
-constexpr float MAX_QUANTIZATION_TOTAL_ERROR_3BITS = 0.0040f;
+constexpr float MAX_QUANTIZATION_REFERENCE_ERROR       = 0.0001f;
+constexpr float MAX_QUANTIZATION_TOTAL_ERROR           = 0.002f;
+constexpr float MAX_QUANTIZATION_TOTAL_ERROR_TERNARY   = 0.01f;
+constexpr float MAX_QUANTIZATION_TOTAL_ERROR_2BITS     = 0.0075f;
+constexpr float MAX_QUANTIZATION_TOTAL_ERROR_3BITS     = 0.0040f;
 constexpr float MAX_QUANTIZATION_TOTAL_ERROR_3BITS_XXS = 0.0050f;
-constexpr float MAX_DOT_PRODUCT_ERROR = 0.02f;
-constexpr float MAX_DOT_PRODUCT_ERROR_LOWBIT = 0.04f;
-constexpr float MAX_DOT_PRODUCT_ERROR_TERNARY = 0.15f;
+constexpr float MAX_DOT_PRODUCT_ERROR                  = 0.02f;
+constexpr float MAX_DOT_PRODUCT_ERROR_LOWBIT           = 0.04f;
+constexpr float MAX_DOT_PRODUCT_ERROR_TERNARY          = 0.15f;
 
-static const char* RESULT_STR[] = {"ok", "FAILED"};
-
+static const char * RESULT_STR[] = { "ok", "FAILED" };
 
 // Generate synthetic data
 static void generate_data(float offset, size_t n, float * dst) {
     for (size_t i = 0; i < n; i++) {
-        dst[i] = 0.1 + 2*cosf(i + offset);
+        dst[i] = 0.1 + 2 * cosf(i + offset);
     }
 }
 
@@ -45,9 +45,12 @@ static float array_rmse(const float * a1, const float * a2, size_t n) {
 }
 
 // Total quantization error on test data
-static float total_quantization_error(const ggml_type_traits * qfns, const ggml_type_traits_cpu * qfns_cpu, size_t test_size, const float * test_data) {
-    std::vector<uint8_t> tmp_q(2*test_size);
-    std::vector<float> tmp_out(test_size);
+static float total_quantization_error(const ggml_type_traits *     qfns,
+                                      const ggml_type_traits_cpu * qfns_cpu,
+                                      size_t                       test_size,
+                                      const float *                test_data) {
+    std::vector<uint8_t> tmp_q(2 * test_size);
+    std::vector<float>   tmp_out(test_size);
 
     qfns_cpu->from_float(test_data, tmp_q.data(), test_size);
     qfns->to_float(tmp_q.data(), tmp_out.data(), test_size);
@@ -55,10 +58,13 @@ static float total_quantization_error(const ggml_type_traits * qfns, const ggml_
 }
 
 // Total quantization error on test data
-static float reference_quantization_error(const ggml_type_traits * qfns, const ggml_type_traits_cpu * qfns_cpu, size_t test_size, const float * test_data) {
-    std::vector<uint8_t> tmp_q(2*test_size);
-    std::vector<float> tmp_out(test_size);
-    std::vector<float> tmp_out_ref(test_size);
+static float reference_quantization_error(const ggml_type_traits *     qfns,
+                                          const ggml_type_traits_cpu * qfns_cpu,
+                                          size_t                       test_size,
+                                          const float *                test_data) {
+    std::vector<uint8_t> tmp_q(2 * test_size);
+    std::vector<float>   tmp_out(test_size);
+    std::vector<float>   tmp_out_ref(test_size);
 
     // FIXME: why is done twice?
     qfns_cpu->from_float(test_data, tmp_q.data(), test_size);
@@ -79,11 +85,15 @@ static float dot_product(const float * a1, const float * a2, size_t test_size) {
 }
 
 // Total dot product error
-static float dot_product_error(const ggml_type_traits * qfns, const ggml_type_traits_cpu * qfns_cpu, size_t test_size, const float * test_data1, const float * test_data2) {
+static float dot_product_error(const ggml_type_traits *     qfns,
+                               const ggml_type_traits_cpu * qfns_cpu,
+                               size_t                       test_size,
+                               const float *                test_data1,
+                               const float *                test_data2) {
     GGML_UNUSED(qfns);
 
-    std::vector<uint8_t> tmp_q1(2*test_size);
-    std::vector<uint8_t> tmp_q2(2*test_size);
+    std::vector<uint8_t> tmp_q1(2 * test_size);
+    std::vector<uint8_t> tmp_q2(2 * test_size);
 
     const auto * vdot = ggml_get_type_traits_cpu(qfns_cpu->vec_dot_type);
 
@@ -99,7 +109,7 @@ static float dot_product_error(const ggml_type_traits * qfns, const ggml_type_tr
 }
 
 int main(int argc, char * argv[]) {
-    bool verbose = false;
+    bool         verbose   = false;
     const size_t test_size = 32 * 128;
 
     std::string arg;
@@ -122,12 +132,12 @@ int main(int argc, char * argv[]) {
 
     ggml_cpu_init();
 
-    int num_failed = 0;
-    bool failed = false;
+    int  num_failed = 0;
+    bool failed     = false;
 
     for (int i = 0; i < GGML_TYPE_COUNT; i++) {
-        ggml_type type = (ggml_type) i;
-        const auto * qfns = ggml_get_type_traits(type);
+        ggml_type    type     = (ggml_type) i;
+        const auto * qfns     = ggml_get_type_traits(type);
         const auto * qfns_cpu = ggml_get_type_traits_cpu(type);
 
         // deprecated - skip
@@ -135,45 +145,53 @@ int main(int argc, char * argv[]) {
             continue;
         }
 
-        const ggml_type ei = (ggml_type)i;
+        const ggml_type ei = (ggml_type) i;
 
         printf("Testing %s\n", ggml_type_name((ggml_type) i));
         ggml_quantize_init(ei);
 
         if (qfns_cpu->from_float && qfns->to_float) {
-            const float total_error = total_quantization_error(qfns, qfns_cpu, test_size, test_data.data());
-            const float max_quantization_error =
-                type == GGML_TYPE_TQ1_0   ? MAX_QUANTIZATION_TOTAL_ERROR_TERNARY :
-                type == GGML_TYPE_TQ2_0   ? MAX_QUANTIZATION_TOTAL_ERROR_TERNARY :
-                type == GGML_TYPE_Q2_K    ? MAX_QUANTIZATION_TOTAL_ERROR_2BITS :
-                type == GGML_TYPE_IQ2_S   ? MAX_QUANTIZATION_TOTAL_ERROR_2BITS :
-                type == GGML_TYPE_Q3_K    ? MAX_QUANTIZATION_TOTAL_ERROR_3BITS :
-                type == GGML_TYPE_IQ3_S   ? MAX_QUANTIZATION_TOTAL_ERROR_3BITS :
-                type == GGML_TYPE_IQ3_XXS ? MAX_QUANTIZATION_TOTAL_ERROR_3BITS_XXS : MAX_QUANTIZATION_TOTAL_ERROR;
-            failed = !(total_error < max_quantization_error);
+            const float total_error            = total_quantization_error(qfns, qfns_cpu, test_size, test_data.data());
+            const float max_quantization_error = type == GGML_TYPE_TQ1_0   ? MAX_QUANTIZATION_TOTAL_ERROR_TERNARY :
+                                                 type == GGML_TYPE_TQ2_0   ? MAX_QUANTIZATION_TOTAL_ERROR_TERNARY :
+                                                 type == GGML_TYPE_Q1_5_K  ? MAX_QUANTIZATION_TOTAL_ERROR_TERNARY :
+                                                 type == GGML_TYPE_Q2_K_S  ? MAX_QUANTIZATION_TOTAL_ERROR_2BITS :
+                                                 type == GGML_TYPE_Q2_K    ? MAX_QUANTIZATION_TOTAL_ERROR_2BITS :
+                                                 type == GGML_TYPE_IQ2_S   ? MAX_QUANTIZATION_TOTAL_ERROR_2BITS :
+                                                 type == GGML_TYPE_Q3_K    ? MAX_QUANTIZATION_TOTAL_ERROR_3BITS :
+                                                 type == GGML_TYPE_IQ3_S   ? MAX_QUANTIZATION_TOTAL_ERROR_3BITS :
+                                                 type == GGML_TYPE_IQ3_XXS ? MAX_QUANTIZATION_TOTAL_ERROR_3BITS_XXS :
+                                                                             MAX_QUANTIZATION_TOTAL_ERROR;
+            failed                             = !(total_error < max_quantization_error);
             num_failed += failed;
             if (failed || verbose) {
-                printf("%5s absolute quantization error:    %s (%f)\n", ggml_type_name(type), RESULT_STR[failed], total_error);
+                printf("%5s absolute quantization error:    %s (%f)\n", ggml_type_name(type), RESULT_STR[failed],
+                       total_error);
             }
 
             const float reference_error = reference_quantization_error(qfns, qfns_cpu, test_size, test_data.data());
-            failed = !(reference_error < MAX_QUANTIZATION_REFERENCE_ERROR);
+            failed                      = !(reference_error < MAX_QUANTIZATION_REFERENCE_ERROR);
             num_failed += failed;
             if (failed || verbose) {
-                printf("%5s reference implementation error: %s (%f)\n", ggml_type_name(type), RESULT_STR[failed], reference_error);
+                printf("%5s reference implementation error: %s (%f)\n", ggml_type_name(type), RESULT_STR[failed],
+                       reference_error);
             }
 
-            const float vec_dot_error = dot_product_error(qfns, qfns_cpu, test_size, test_data.data(), test_data2.data());
-            const float max_allowed_error = type == GGML_TYPE_Q2_K || type == GGML_TYPE_IQ2_XS || type == GGML_TYPE_IQ2_XXS ||
-                                            type == GGML_TYPE_IQ3_XXS || type == GGML_TYPE_IQ3_S || type == GGML_TYPE_IQ2_S
-                                          ? MAX_DOT_PRODUCT_ERROR_LOWBIT
-                                          : type == GGML_TYPE_TQ1_0 || type == GGML_TYPE_TQ2_0
-                                          ? MAX_DOT_PRODUCT_ERROR_TERNARY
-                                          : MAX_DOT_PRODUCT_ERROR;
-            failed = !(vec_dot_error < max_allowed_error);
+            const float vec_dot_error =
+                dot_product_error(qfns, qfns_cpu, test_size, test_data.data(), test_data2.data());
+            const float max_allowed_error = type == GGML_TYPE_Q2_K || type == GGML_TYPE_IQ2_XS ||
+                                                    type == GGML_TYPE_IQ2_XXS || type == GGML_TYPE_IQ3_XXS ||
+                                                    type == GGML_TYPE_IQ3_S || type == GGML_TYPE_IQ2_S ?
+                                                MAX_DOT_PRODUCT_ERROR_LOWBIT :
+                                            type == GGML_TYPE_TQ1_0 || type == GGML_TYPE_TQ2_0 ||
+                                                    type == GGML_TYPE_Q1_5_K || type == GGML_TYPE_Q2_K_S ?
+                                                MAX_DOT_PRODUCT_ERROR_TERNARY :
+                                                MAX_DOT_PRODUCT_ERROR;
+            failed                        = !(vec_dot_error < max_allowed_error);
             num_failed += failed;
             if (failed || verbose) {
-                printf("%5s dot product error:              %s (%f)\n", ggml_type_name(type), RESULT_STR[failed], vec_dot_error);
+                printf("%5s dot product error:              %s (%f)\n", ggml_type_name(type), RESULT_STR[failed],
+                       vec_dot_error);
             }
         }
     }
