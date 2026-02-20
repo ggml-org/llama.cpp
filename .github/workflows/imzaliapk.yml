@@ -24,7 +24,7 @@ jobs:
 
       - name: Build APK
         working-directory: examples/llama.android
-        run: ./gradlew assembleDebug --stacktrace
+        run: ./gradlew assembleRelease --stacktrace
 
       - name: Sign APK
         run: |
@@ -34,10 +34,13 @@ jobs:
             --ks-key-alias "${{ secrets.KEY_ALIAS }}" \
             --ks-pass pass:"${{ secrets.STORE_PASSWORD }}" \
             --key-pass pass:"${{ secrets.KEY_PASSWORD }}" \
-            examples/llama.android/app/build/outputs/apk/debug/app-debug.apk
+            examples/llama.android/app/build/outputs/apk/release/app-release-unsigned.apk
+
+      - name: Rename APK
+        run: mv examples/llama.android/app/build/outputs/apk/release/app-release-unsigned.apk kova.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: llama-android-release
-          path: examples/llama.android/app/build/outputs/apk/debug/app-debug.apk
+          name: kova
+          path: kova.apk
