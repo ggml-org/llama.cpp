@@ -4006,8 +4006,9 @@ struct alignas(64) DeviceOperation {
     void *       merge_src;      // Host-pinned buffer for secondary device's partial output
     void *       merge_dst;      // Device pointer where merged output goes (primary only)
     float *      input_staging;  // Host-pinned activation staging (primary writes, secondary reads)
-    int *        sync_flags;     // Host-pinned atomic flag array [n_operations * n_devices]
-    int          op_idx;         // Operation index for sync flag addressing
+    int *        progress_counter; // Host-pinned (malloc_host): kernel writes via volatile, host reads directly
+    int *        merge_complete;   // Device-local (malloc_device): host writes via H2D, kernel reads via atomic_ref
+    int          op_idx;         // Matmul index for progress/merge addressing
     int          device_idx;     // 0=primary (B580), 1=secondary (B50)
     int          n_devices;      // Total number of GPU devices in split (0 or 1 = no split)
     int          merge_count;    // Number of floats to merge from secondary (N - row_count)
@@ -4072,11 +4073,12 @@ public:
         for (int op_idx = 0; op_idx < args_.n_operations; op_idx++) {
             const DeviceOperation & op = args_.operations[op_idx];
 
-            // Pre-matmul sync: primary stages activation to host-pinned buffer,
-            // secondary waits for it before dispatching tiles.
+            // Pre-matmul sync: poll merge_complete for previous matmul.
+            // Host coordinator writes merge_complete via H2D after staging
+            // the secondary's partial output into primary's device memory.
             if (is_matmul_op(op.type) && op.n_devices > 1 && op.input_staging) {
                 pre_matmul_sync(op);
-                // Barrier so all WGs see the sync result (secondary waited in WG 0)
+                // Barrier so all WGs see the merge_complete poll result
                 if (use_split_barrier) {
                     device_split_barrier(local_id, wg_id, /* reset_tile_counter = */ false);
                 } else {
@@ -4107,24 +4109,20 @@ public:
             }
 
             // Synchronize all work-groups between operations.
-            // Split barrier mode is the default. Use
-            // GGML_SYCL_PERSISTENT_TG_ATOMIC_BARRIER=1 to force atomic fallback.
             if (use_split_barrier) {
                 device_split_barrier(local_id, wg_id, /* reset_tile_counter = */ true);
             } else {
                 device_barrier_atomic(local_id, n_wgs, /* reset_tile_counter = */ true);
             }
 
-            // Post-matmul sync for multi-device row-split MUL_MAT operations.
-            // After all local tiles are done, signal other device(s) and wait
-            // for their completion. Primary device merges secondary's output.
-            // Guard: require sync_flags AND input_staging to confirm this matmul
-            // was actually split. Unsplit matmuls (N_secondary<=0) have n_devices>0
-            // from KernelSplitConfig but no per-op metadata — skip sync for those.
-            if (is_matmul_op(op.type) && op.n_devices > 1 && op.sync_flags && op.input_staging) {
+            // Post-matmul sync: write progress_counter so host coordinator
+            // knows this matmul is complete and can D2H copy the activation.
+            // Guard: require progress_counter AND input_staging to confirm
+            // this matmul was actually split across devices.
+            if (is_matmul_op(op.type) && op.n_devices > 1 && op.progress_counter && op.input_staging) {
                 post_matmul_sync(op);
-                // Second barrier so ALL work-groups see the merged output
-                // before the next operation (RMS_NORM, ROPE, etc.) reads it.
+                // Barrier so ALL work-groups see the progress write before
+                // proceeding to the next operation.
                 if (use_split_barrier) {
                     device_split_barrier(local_id, wg_id, /* reset_tile_counter = */ false);
                 } else {
@@ -4319,90 +4317,67 @@ private:
     //   then signals flag=1 so secondary can read.
     // Secondary (device 1+): waits for flag=1, then proceeds to dispatch matmul tiles
     //   reading from the host-pinned input_staging buffer.
+    // Host-mediated sync: primary polls merge_complete from the PREVIOUS matmul.
+    // The host coordinator writes to merge_complete (device memory) via H2D copy
+    // after staging the secondary's partial output. Primary reads it with a
+    // device-local atomic — this works because both the writer (H2D memcpy by
+    // host) and reader (persistent kernel atomic) operate on sycl::malloc_device
+    // memory, which has coherent access on Intel Arc GPUs.
+    //
+    // Secondary device: not a persistent kernel — host launches per-op MMVQ
+    // kernels, so this method is only called on the primary.
     void pre_matmul_sync(const DeviceOperation & op) {
         const int local_id = item_.get_local_id(0);
         const int wg_id    = item_.get_group_linear_id();
 
-        if (op.n_devices <= 1 || !op.sync_flags || !op.input_staging) return;
+        if (op.n_devices <= 1 || !op.merge_complete || !op.input_staging) return;
 
-        const int flag_base = op.op_idx * op.n_devices;
+        // Only primary device runs the persistent kernel in host-mediated mode
+        if (op.device_idx != 0) return;
 
-        // NOTE: We use volatile pointers instead of sycl::atomic_ref because
-        // Intel Arc GPU's memory_scope::system atomics do NOT flush the L2
-        // cache to host-pinned memory during long-running persistent kernels.
-        // Plain writes via volatile bypass the atomic subsystem and are visible
-        // to other devices via PCIe zero-copy after the write completes.
-        // Each flag slot has a single writer, so atomic RMW is not needed.
-        volatile int * flags = op.sync_flags;
+        // First matmul (op_idx == 0): no previous merge to wait for
+        if (op.op_idx == 0) return;
 
-        if (op.device_idx == 0) {
-            // Primary: stage activation to host-pinned buffer.
-            // WG 0, thread 0 does the copy (K floats, typically 4096 = 16KB).
-            if (wg_id == 0 && local_id == 0) {
-                const float * src = static_cast<const float *>(op.input);
-                volatile float * staging = op.input_staging;
-                for (int i = 0; i < op.input_K; i++) {
-                    staging[i] = src[i];
-                }
-                // Signal: activation is staged (single writer, volatile store)
-                flags[flag_base + 0] = 1;
+        // WG 0, thread 0 polls merge_complete for the previous matmul
+        if (wg_id == 0 && local_id == 0) {
+            sycl::atomic_ref<int, sycl::memory_order::acq_rel,
+                             sycl::memory_scope::device,
+                             sycl::access::address_space::global_space>
+                merge_flag(*op.merge_complete);
+            while (merge_flag.load(sycl::memory_order::acquire) < op.op_idx) {
+                // Spin-wait for host to signal merge completion for previous matmul
             }
-            // Other WGs don't need to wait — they proceed to compute_matmul_tile
-            // which reads from op.input (device memory, valid for primary)
-        } else {
-            // Secondary: wait for primary to stage activation
-            if (wg_id == 0 && local_id == 0) {
-                while (flags[flag_base + 0] < 1) {
-                    // Spin-wait for activation staging (volatile read)
-                }
-            }
-            // All WGs need to see the staged data — barrier ensures WG 0's
-            // wait result is visible before any WG dispatches tiles
         }
     }
 
-    // Post-matmul sync: signals completion and merges partial outputs.
-    // Called after all local matmul tiles are done (after device barrier).
-    // Primary: signals done (flag=2), waits for secondary (flag=2), merges output.
-    // Both devices: signal done (flag=2), wait for other device's flag>=2.
-    // Primary then merges secondary's output. No flag reset needed — each
-    // matmul uses a unique slot, zeroed at token start by memset on host.
+    // Host-mediated sync: primary writes progress_counter (host-pinned) after
+    // completing a matmul. The host coordinator reads it directly (CPU load).
+    // Using volatile store to host-pinned memory — the PCIe write from GPU is
+    // visible to the host CPU since malloc_host lives in system RAM.
+    //
+    // After writing progress, primary does NOT wait here — it proceeds to the
+    // next operation. The pre_matmul_sync at the START of the next split matmul
+    // polls merge_complete, giving the host time to complete the secondary dispatch
+    // and merge while primary runs non-matmul ops (norms, attention, etc.).
     void post_matmul_sync(const DeviceOperation & op) {
         const int local_id = item_.get_local_id(0);
         const int wg_id    = item_.get_group_linear_id();
 
-        if (op.n_devices <= 1 || !op.sync_flags || !op.input_staging) return;
+        if (op.n_devices <= 1 || !op.progress_counter || !op.input_staging) return;
 
-        // Use volatile instead of atomic_ref — see pre_matmul_sync comment
-        // about Intel Arc L2 cache not flushing system-scope atomics.
-        volatile int * flags = op.sync_flags;
+        // Only primary device runs the persistent kernel in host-mediated mode
+        if (op.device_idx != 0) return;
 
+        // WG 0, thread 0 writes the progress counter via volatile store to
+        // host-pinned memory. GPU PCIe writes to system RAM are visible to host.
         if (wg_id == 0 && local_id == 0) {
-            const int flag_base = op.op_idx * op.n_devices;
-
-            // Signal: this device's MUL_MAT is done (flag value 2)
-            flags[flag_base + op.device_idx] = 2;
-
-            // Wait for all other device(s) to signal done
-            for (int d = 0; d < op.n_devices; d++) {
-                if (d == op.device_idx) continue;
-                while (flags[flag_base + d] < 2) {
-                    // Spin-wait for other device's matmul completion (volatile read)
-                }
-            }
-
-            // Primary device: merge secondary's partial output into device memory
-            if (op.device_idx == 0 && op.merge_src && op.merge_dst) {
-                const volatile float * src = static_cast<const volatile float *>(op.merge_src);
-                float *                dst = static_cast<float *>(op.merge_dst);
-                for (int i = 0; i < op.merge_count; i++) {
-                    dst[i] = src[i];
-                }
-            }
+            volatile int * progress = op.progress_counter;
+            *progress = op.op_idx + 1;
         }
 
-        // All threads/WGs wait until WG 0 thread 0 completes the sync + merge
-        // (handled by the caller's subsequent intra-device barrier)
+        // No need to wait for secondary here. The merge wait happens in
+        // pre_matmul_sync of the NEXT split matmul, which runs after the
+        // intervening non-matmul ops give the host time to complete the merge.
     }
 
     void dispatch_operation(const DeviceOperation & op, int tile_idx) {
@@ -6363,9 +6338,10 @@ void UnifiedKernel::launch_persistent_kernel() {
         // Use pre_fusion_idx (saved before GATE+UP+SILU fusion incremented i)
         // because op_meta was indexed by the original plan position.
         if (split_config_set_ && split_config_.n_devices > 1) {
-            dst.device_idx = split_config_.device_idx;
-            dst.n_devices  = split_config_.n_devices;
-            dst.sync_flags = split_config_.sync_flags;
+            dst.device_idx        = split_config_.device_idx;
+            dst.n_devices         = split_config_.n_devices;
+            dst.progress_counter  = split_config_.progress_counter;
+            dst.merge_complete    = split_config_.merge_complete;
             // Look up per-op metadata (sparse: only matmul ops have entries)
             const int meta_idx = static_cast<int>(pre_fusion_idx);
             if (meta_idx < (int) split_config_.op_meta.size() && split_config_.op_meta[meta_idx].row_count > 0) {

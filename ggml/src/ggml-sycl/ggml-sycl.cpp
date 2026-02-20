@@ -19875,30 +19875,47 @@ static split_device_config g_split_config;
 // signaling and merge buffer transfers between GPUs.
 // ---------------------------------------------------------------------------
 struct split_persistent_resources {
-    int *   sync_flags      = nullptr;  // Host-pinned [max_ops * n_devices]
-    float * merge_buf       = nullptr;  // Host-pinned B50 output staging [max_N]
-    float * merge_buf_cpu   = nullptr;  // Host-pinned CPU output staging [max_N] (Phase 2, nullptr for now)
-    float * activation_buf  = nullptr;  // Host-pinned activation staging for cross-device matmul input [max_K]
-    int     sync_size       = 0;        // Allocated sync_flags entries
-    int     merge_buf_size  = 0;        // Allocated merge_buf floats
-    int     merge_cpu_size  = 0;        // Allocated merge_buf_cpu floats (Phase 2)
-    int     activation_size = 0;        // Allocated activation_buf floats
-    bool    allocated       = false;
+    float * merge_buf          = nullptr;  // Host-pinned B50 output staging [max_N]
+    float * merge_buf_cpu      = nullptr;  // Host-pinned CPU output staging [max_N] (Phase 2, nullptr for now)
+    float * activation_buf     = nullptr;  // Host-pinned activation staging for cross-device matmul input [max_K]
+    int *   progress_counter   = nullptr;  // Host-pinned (malloc_host): kernel writes via volatile, host reads directly
+    int *   merge_complete     = nullptr;  // Device-local (malloc_device on primary): host writes via H2D, kernel reads via atomic_ref
+    void *  q8_staging         = nullptr;  // Device-local (malloc_device on secondary): q8_1 quantized input
+    sycl::queue * coord_queue  = nullptr;  // OOQ on primary device for coordinator D2H/H2D (avoids in-order deadlock)
+    int     merge_buf_size     = 0;        // Allocated merge_buf floats
+    int     merge_cpu_size     = 0;        // Allocated merge_buf_cpu floats (Phase 2)
+    int     activation_size    = 0;        // Allocated activation_buf floats
+    int     q8_staging_size    = 0;        // Allocated q8_staging bytes
+    bool    allocated          = false;
 };
 static split_persistent_resources g_split_persistent;
+
+// Per-matmul metadata for host coordinator to dispatch secondary MMVQ kernels.
+struct secondary_matmul_info {
+    int          op_idx;           // Matmul index for progress tracking
+    int          N_secondary;      // Number of rows for secondary device
+    int          N_total;          // Total rows (ne01 for SOA offset calculations)
+    int          K;                // Inner dimension (ne00)
+    int          quant_type;       // GGML quantization type
+    int          weight_layout;    // layout_mode for MMVQ dispatch
+    const void * weight_ptr;       // Secondary device's weight pointer (SOA or AOS)
+    const void * layout_base;      // SOA/coalesced layout base pointer (for reorder kernels)
+    const void * input_device_ptr; // Primary device pointer to matmul input (activation)
+    float *      merge_dst;        // Primary device pointer for H2D merge of secondary output
+    int          row_start;        // First row on secondary (N_primary_aligned)
+};
 
 // Static secondary UnifiedKernel for multi-device persistent TG.
 // Persists across tokens to avoid repeated buffer allocation.
 // Created lazily on first use when split mode is active.
 static std::unique_ptr<ggml_sycl::UnifiedKernel> g_split_secondary_kernel;
 
-// Ensure host-pinned resources are allocated for persistent TG multi-device sync.
-// Grows buffers as needed (idempotent). Allocates via sycl::malloc_host on the
-// primary queue's context so both GPUs can access via PCIe zero-copy.
-// sync_flags are zero-initialized on every call (required per-token reset).
+// Ensure host-pinned resources and device-local counters are allocated for
+// host-mediated persistent TG multi-device sync. Grows buffers as needed
+// (idempotent). Device counters are zero-initialized on every call.
 static void ensure_split_persistent_resources(
         sycl::queue & primary_queue,
-        sycl::queue & shared_queue,
+        sycl::queue & secondary_queue,
         int max_matmul_ops,
         int max_N,
         int max_K,
@@ -19908,35 +19925,24 @@ static void ensure_split_persistent_resources(
     // a context spanning both GPUs) so that host-pinned memory is accessible
     // from both primary and secondary kernels. Using the primary-only context
     // causes DEVICE_LOST when the secondary GPU kernel accesses the memory.
-    auto   ctx = shared_queue.get_context();
+    auto   ctx = secondary_queue.get_context();
 
-    const int need_sync  = max_matmul_ops * n_devices;
     const int need_merge = max_N;
     const int need_act   = max_K;  // Activation staging: hidden_dim floats for cross-device input
+    // q8_1 staging on secondary device: one row of K floats quantized to q8_1
+    const int k_padded   = (max_K + QK8_1 - 1) / QK8_1 * QK8_1;
+    const int need_q8    = (int)(k_padded / QK8_1 * sizeof(block_q8_1));
 
     // Check if current allocations are sufficient
-    if (r.allocated && r.sync_size >= need_sync && r.merge_buf_size >= need_merge
-                    && r.activation_size >= need_act) {
-        // Just zero the flags for the new token
-        std::memset(r.sync_flags, 0, need_sync * sizeof(int));
+    if (r.allocated && r.merge_buf_size >= need_merge && r.activation_size >= need_act
+                    && r.q8_staging_size >= need_q8
+                    && r.progress_counter && r.merge_complete) {
+        // Zero counters for the new token
+        *r.progress_counter = 0;  // Host-pinned: direct write
+        int zero = 0;
+        primary_queue.memcpy(r.merge_complete, &zero, sizeof(int)).wait();
         return;
     }
-
-    // (Re)allocate sync_flags
-    if (r.sync_size < need_sync) {
-        if (r.sync_flags) {
-            sycl::free(r.sync_flags, ctx);
-        }
-        r.sync_flags = sycl::malloc_host<int>(need_sync, ctx);
-        if (!r.sync_flags) {
-            GGML_LOG_WARN("[PERSISTENT-TG-SPLIT] sycl::malloc_host failed for sync_flags (%d ints)\n",
-                          need_sync);
-            r.sync_size = 0;
-            return;
-        }
-        r.sync_size = need_sync;
-    }
-    std::memset(r.sync_flags, 0, need_sync * sizeof(int));
 
     // (Re)allocate merge_buf for secondary GPU partial outputs
     if (r.merge_buf_size < need_merge) {
@@ -19969,9 +19975,59 @@ static void ensure_split_persistent_resources(
         r.activation_size = need_act;
     }
 
+    // Allocate host-pinned progress counter: kernel writes via volatile, host reads directly.
+    // Using malloc_host because D2H memcpy on an OOQ can't reliably see a running
+    // kernel's writes to malloc_device memory on Intel Arc (L2/command list isolation).
+    if (!r.progress_counter) {
+        r.progress_counter = sycl::malloc_host<int>(1, ctx);
+        if (!r.progress_counter) {
+            GGML_LOG_WARN("[PERSISTENT-TG-SPLIT] sycl::malloc_host failed for progress_counter\n");
+            return;
+        }
+    }
+    // Allocate device-local merge_complete: host writes via H2D memcpy on coord OOQ,
+    // kernel reads via device-scope atomic_ref. Both on same device = coherent.
+    if (!r.merge_complete) {
+        r.merge_complete = sycl::malloc_device<int>(1, primary_queue);
+        if (!r.merge_complete) {
+            GGML_LOG_WARN("[PERSISTENT-TG-SPLIT] sycl::malloc_device failed for merge_complete\n");
+            return;
+        }
+    }
+    // Zero both counters
+    *r.progress_counter = 0;  // Host-pinned: direct write
+    int zero = 0;
+    primary_queue.memcpy(r.merge_complete, &zero, sizeof(int)).wait();
+
+    // Allocate q8_1 staging buffer on secondary device for input quantization
+    if (r.q8_staging_size < need_q8) {
+        if (r.q8_staging) {
+            sycl::free(r.q8_staging, secondary_queue);
+        }
+        r.q8_staging = sycl::malloc_device<char>(need_q8, secondary_queue);
+        if (!r.q8_staging) {
+            GGML_LOG_WARN("[PERSISTENT-TG-SPLIT] sycl::malloc_device failed for q8_staging (%d bytes)\n",
+                          need_q8);
+            r.q8_staging_size = 0;
+            return;
+        }
+        r.q8_staging_size = need_q8;
+    }
+
+    // Create OOQ on primary device for coordinator D2H/H2D memcpy operations.
+    // The primary compute queue is in-order, so memcpy submitted there would
+    // serialize behind the persistent kernel — causing deadlock. The coordinator
+    // needs an independent queue to poll progress and write merge_complete
+    // concurrently with the running persistent kernel.
+    if (!r.coord_queue) {
+        static sycl::queue coord_q(primary_queue.get_context(), primary_queue.get_device());
+        r.coord_queue = &coord_q;
+    }
+
     r.allocated = true;
-    GGML_LOG_INFO("[PERSISTENT-TG-SPLIT] Allocated shared resources: sync=%d merge=%d act=%d floats\n",
-                  need_sync, need_merge, need_act);
+    GGML_LOG_INFO("[PERSISTENT-TG-SPLIT] Allocated host-mediated resources: "
+                  "merge=%d act=%d floats, q8=%d bytes, + 2 device counters + coord OOQ\n",
+                  need_merge, need_act, need_q8);
 }
 
 // OOQ merge queue (UNUSED — kept for cleanup backward compatibility).
@@ -31574,7 +31630,8 @@ static bool extract_persistent_plan_split(
         ggml_sycl::UnifiedKernel &  secondary_kernel,
         ggml_backend_sycl_context & ctx,
         ggml_cgraph *               cgraph,
-        const split_device_config & split_cfg) {
+        const split_device_config & split_cfg,
+        std::vector<secondary_matmul_info> & secondary_ops_out) {
 
     // Step 1: Build the primary plan using the existing single-device builder.
     //         This populates primary_kernel.current_plan_ with ALL operations.
@@ -31583,7 +31640,7 @@ static bool extract_persistent_plan_split(
     }
 
     // Step 1b: Collect MUL_MAT weight tensors from the graph in node order.
-    //          This lets us map plan matmul index → graph weight tensor for T5's
+    //          This lets us map plan matmul index -> graph weight tensor for
     //          resolve_split_weight_ptr (which needs the ggml_tensor* for cache lookup).
     std::vector<const ggml_tensor *> matmul_weight_tensors;
     for (int i = 0; i < cgraph->n_nodes; i++) {
@@ -31623,7 +31680,7 @@ static bool extract_persistent_plan_split(
         return false;
     }
 
-    // Step 3: Ensure shared host-pinned resources are allocated.
+    // Step 3: Ensure shared host-pinned resources and device counters are allocated.
     ensure_split_persistent_resources(*split_cfg.queue[0], *split_cfg.queue[1],
                                      n_matmul_ops, max_N, max_K, n_devices);
     if (!g_split_persistent.allocated) {
@@ -31631,54 +31688,13 @@ static bool extract_persistent_plan_split(
         return false;
     }
 
-    // Step 4: Read model dimensions from the primary plan for secondary begin_persistent.
-    OperationDescriptor first_desc;
-    if (!primary_kernel.get_op_descriptor(0, first_desc)) {
-        return false;
-    }
-
-    int n_layers         = 0;
-    int hidden_dim       = first_desc.hidden_dim;
-    int intermediate_dim = first_desc.intermediate_dim;
-    int quant_type       = 0;
-    int n_heads          = 0;
-    int n_kv_heads       = 0;
-    int head_dim         = 0;
-
-    // Scan for model shape: find attention op for n_heads/head_dim, and count layers.
-    for (int i = 0; primary_kernel.get_op_descriptor(i, desc); i++) {
-        if (desc.layer + 1 > n_layers) {
-            n_layers = desc.layer + 1;
-        }
-        if ((desc.type == OperationType::ATTENTION_F16 || desc.type == OperationType::ATTENTION_F32) &&
-            n_heads == 0) {
-            n_heads    = desc.N;
-            n_kv_heads = desc.n_kv_heads;
-            head_dim   = desc.K;
-        }
-        if (is_persistent_matmul_type(desc.type) && quant_type == 0) {
-            quant_type = desc.quant_type;
-        }
-    }
-
-    // Step 5: Build the secondary plan (matmul-only) and build KernelSplitConfig
-    //         for both kernels. The config is consumed by launch_persistent_kernel()
-    //         to populate DeviceOperation cross-device fields.
-    secondary_kernel.begin_persistent(n_layers, 1 /* batch_size */, hidden_dim,
-                                       intermediate_dim, n_heads, n_kv_heads,
-                                       head_dim, quant_type);
-
-    // Build split configs for primary and secondary kernels
+    // Step 4: Build primary KernelSplitConfig with device-local counters
     ggml_sycl::KernelSplitConfig primary_split;
-    primary_split.sync_flags = g_split_persistent.sync_flags;
+    primary_split.progress_counter = g_split_persistent.progress_counter;
+    primary_split.merge_complete   = g_split_persistent.merge_complete;
     primary_split.device_idx = 0;
     primary_split.n_devices  = n_devices;
     primary_split.op_meta.assign(n_total_ops, {});
-
-    ggml_sycl::KernelSplitConfig secondary_split;
-    secondary_split.sync_flags = g_split_persistent.sync_flags;
-    secondary_split.device_idx = 1;
-    secondary_split.n_devices  = n_devices;
 
     g_split_n_devices = n_devices;
 
@@ -31686,6 +31702,8 @@ static bool extract_persistent_plan_split(
     int secondary_ops    = 0;
     const float ratio_primary = split_cfg.ratio[0];
     constexpr int tile_cols = 64;  // persistent matmul tile alignment
+
+    secondary_ops_out.clear();
 
     for (int i = 0; primary_kernel.get_op_descriptor(i, desc); i++) {
         if (!is_persistent_matmul_type(desc.type)) {
@@ -31699,7 +31717,7 @@ static bool extract_persistent_plan_split(
         const int N_secondary       = N_total - N_primary_aligned;
 
         if (N_secondary <= 0) {
-            // All rows on primary — no split for this op
+            // All rows on primary -- no split for this op
             matmul_counter++;
             continue;
         }
@@ -31722,8 +31740,7 @@ static bool extract_persistent_plan_split(
         primary_desc.N = N_primary_aligned;
         primary_kernel.update_op_descriptor(i, primary_desc);
 
-        // Secondary: rows [N_primary_aligned, N_total)
-        // Weight pointer for B50: resolved via T5's resolve_split_weight_ptr
+        // Secondary: resolve weight pointer for B50
         const void * secondary_weight = (matmul_counter < (int) matmul_weight_tensors.size())
             ? resolve_split_weight_ptr(
                   matmul_weight_tensors[matmul_counter],
@@ -31733,39 +31750,30 @@ static bool extract_persistent_plan_split(
                   N_primary_aligned,
                   N_secondary)
             : nullptr;
-        secondary_kernel.add_matmul(
-            desc.layer,
-            secondary_weight,                   // weights: resolved for B50 via split cache
-            g_split_persistent.activation_buf,  // input: host-pinned staging (primary stages before each matmul)
-            g_split_persistent.merge_buf,       // output: host-pinned merge buffer
-            op_type_to_matmul_type(desc.type),
-            desc.M,                             // M: batch size (1 for TG)
-            N_secondary,                        // N: secondary's row count
-            desc.K,                             // K: inner dimension (unchanged)
-            desc.quant_type,
-            desc.weight_layout);
 
-        // Secondary metadata: indexed by secondary plan op index (not primary)
-        ggml_sycl::SplitOpMeta secondary_meta = {};
-        secondary_meta.op_idx        = matmul_counter;
-        secondary_meta.row_start     = N_primary_aligned;
-        secondary_meta.row_count     = N_secondary;
-        secondary_meta.merge_count   = 0;   // secondary doesn't merge
-        secondary_meta.merge_src     = nullptr;
-        secondary_meta.merge_dst     = nullptr;
-        secondary_meta.input_staging = g_split_persistent.activation_buf;
-        secondary_meta.input_K       = desc.K;
-        secondary_split.op_meta.push_back(secondary_meta);
+        // Build host coordinator dispatch info for this matmul
+        secondary_matmul_info info = {};
+        info.op_idx        = matmul_counter;
+        info.N_secondary   = N_secondary;
+        info.N_total       = N_total;
+        info.K             = desc.K;
+        info.quant_type    = desc.quant_type;
+        info.weight_layout = desc.weight_layout;
+        info.weight_ptr    = secondary_weight;
+        info.layout_base      = secondary_weight;  // SOA base is the weight pointer itself
+        info.input_device_ptr = desc.input;        // Primary device pointer to matmul activation
+        info.merge_dst        = merge_dst;
+        info.row_start        = N_primary_aligned;
+        secondary_ops_out.push_back(info);
 
         secondary_ops++;
         matmul_counter++;
     }
 
-    // Apply split configs to both kernels (consumed during launch_persistent_kernel)
+    // Apply split config to primary kernel (consumed during launch_persistent_kernel)
     primary_kernel.set_split_config(primary_split);
-    secondary_kernel.set_split_config(secondary_split);
 
-    GGML_LOG_INFO("[PERSISTENT-TG-SPLIT] Split plan built: primary=%d total ops (%d matmul), "
+    GGML_LOG_INFO("[PERSISTENT-TG-SPLIT] Host-mediated split plan: primary=%d total ops (%d matmul), "
                   "secondary=%d matmul ops, tile_align=%d, ratio=%.0f%%/%.0f%%\n",
                   n_total_ops, n_matmul_ops, secondary_ops,
                   tile_cols, ratio_primary * 100, split_cfg.ratio[1] * 100);
@@ -32649,62 +32657,152 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
         }
 
         // =====================================================================
-        // Multi-device persistent TG kernel dispatch (2-GPU tensor split)
+        // Multi-device persistent TG kernel dispatch (host-mediated 2-GPU)
         // =====================================================================
-        // When tensor split is active with 2+ GPUs, launch persistent kernels
-        // on BOTH devices simultaneously.  The primary kernel handles the full
-        // forward pass (attention, norms, element-wise ops) plus its share of
-        // MUL_MATs.  The secondary kernel handles only its MUL_MAT row range.
-        // Cross-device sync uses host-pinned atomic flags (g_split_persistent).
+        // DISABLED: Intel Arc GPU L2 cache is non-coherent with host-pinned
+        // memory (malloc_host) in BOTH directions. A running persistent kernel
+        // cannot communicate with the host via volatile writes to malloc_host
+        // (host reads stale data) or atomic reads from malloc_device written
+        // by an OOQ memcpy (kernel reads stale L2). This makes host-mediated
+        // coordination impossible while the persistent kernel is running.
         //
-        // Multi-device persistent TG is DISABLED: GPU atomics on host-pinned
-        // memory (sycl::malloc_host) do not work on Intel Arc + Level Zero.
-        // The pre/post_matmul_sync spin-waits never see cross-device updates.
-        // Fall through to normal (per-op) dispatch which handles multi-GPU correctly.
-        // Set GGML_SYCL_PERSISTENT_SPLIT=1 to re-enable for future testing.
+        // The infrastructure below is preserved for future "segmented persistent"
+        // execution where the kernel is split into per-layer segments with host
+        // coordination between them (queue is free between segments).
+        //
+        // Fall through to normal (per-op) dispatch which handles multi-GPU
+        // tensor split correctly at ~27 tok/s for 3-device, ~11 tok/s for 2-device.
+        // Set GGML_SYCL_PERSISTENT_SPLIT=1 to re-enable for testing.
         // NOTE: persistent_split_enabled declared at early exit guard above.
         if (persistent_split_enabled && g_split_config.enabled && g_split_config.gpu_count >= 2) {
-            GGML_SYCL_DEBUG("[PERSISTENT-TG-SPLIT] Using multi-device persistent TG kernel\n");
+            GGML_SYCL_DEBUG("[PERSISTENT-TG-SPLIT] Using host-mediated multi-device persistent TG\n");
 
-            // Lazy-initialize secondary UnifiedKernel (persists across tokens)
+            // Lazy-initialize secondary UnifiedKernel (persists across tokens).
+            // We still need it for extract_persistent_plan_split's signature,
+            // but it is NOT used for persistent execution — only for plan building.
             if (!g_split_secondary_kernel) {
                 sycl::queue * q2 = g_split_config.queue[1];
                 g_split_secondary_kernel.reset(new ggml_sycl::UnifiedKernel(*q2));
-                // Secondary device is always registered as device 1
                 ggml_sycl_unified::XMXConfig xmx2 = ggml_sycl_unified::XMXConfig::from_device(1);
                 g_split_secondary_kernel->configure(xmx2);
                 GGML_SYCL_DEBUG("[PERSISTENT-TG-SPLIT] Created secondary UnifiedKernel for device 1\n");
             }
 
-            ggml_sycl::UnifiedKernel & primary    = *sycl_ctx->unified_kernel;
-            ggml_sycl::UnifiedKernel & secondary  = *g_split_secondary_kernel;
+            ggml_sycl::UnifiedKernel & primary   = *sycl_ctx->unified_kernel;
+            ggml_sycl::UnifiedKernel & secondary = *g_split_secondary_kernel;
 
-            // Build split plans (primary=full graph, secondary=matmul-only)
-            if (!extract_persistent_plan_split(primary, secondary, *sycl_ctx, cgraph, g_split_config)) {
-                GGML_LOG_ERROR("[PERSISTENT-TG-SPLIT] Failed to build split plans, falling back\n");
+            // Build split plan: primary persistent plan + secondary per-op metadata
+            std::vector<secondary_matmul_info> secondary_ops;
+            if (!extract_persistent_plan_split(primary, secondary, *sycl_ctx, cgraph,
+                                               g_split_config, secondary_ops)) {
+                GGML_LOG_ERROR("[PERSISTENT-TG-SPLIT] Failed to build split plan, falling back\n");
                 primary.cancel_persistent();
-                secondary.cancel_persistent();
                 goto normal_dispatch;
             }
 
-            // Launch secondary kernel on a separate host thread.
-            // execute_persistent() blocks the calling thread (queue_.wait() inside),
-            // so we need a separate thread to run both kernels concurrently.
-            // The secondary processes only its MUL_MAT row range; the primary handles
-            // everything else (attention, norms, element-wise) plus its MUL_MAT share.
-            // Cross-device sync via host-pinned atomic flags in g_split_persistent.
-            std::exception_ptr secondary_exception = nullptr;
-            std::thread secondary_thread([&secondary, &secondary_exception]() {
+            sycl::queue * q_secondary = g_split_config.queue[1];
+            auto & res = g_split_persistent;
+
+            // The coordinator uses a separate OOQ on the primary device for
+            // D2H/H2D memcpy. The primary compute queue is in-order, so any
+            // memcpy submitted there would serialize behind the persistent
+            // kernel — causing deadlock. The OOQ runs independently.
+            sycl::queue * q_coord = res.coord_queue;
+
+            // Launch host coordinator thread.
+            // Polls primary's progress_counter (device memory) via D2H memcpy,
+            // then for each completed matmul:
+            //   1) D2H copy activation from primary output to host staging
+            //   2) H2D copy activation to secondary (quantize to q8_1 on device)
+            //   3) Launch MMVQ kernel on secondary
+            //   4) Wait for secondary kernel
+            //   5) H2D copy secondary output to primary merge_dst
+            //   6) H2D write merge_complete counter to primary device memory
+            std::exception_ptr coordinator_exception = nullptr;
+            std::thread coordinator_thread([&]() {
                 try {
-                    secondary.execute_persistent();
+                    GGML_LOG_INFO("[PERSISTENT-TG-SPLIT] Coordinator thread started, %d secondary matmul ops\n",
+                                  (int) secondary_ops.size());
+                    int host_progress = 0;
+                    const int n_matmul_ops = (int) secondary_ops.size();
+
+                    for (int mm_idx = 0; mm_idx < n_matmul_ops; mm_idx++) {
+                        const auto & info = secondary_ops[mm_idx];
+
+                        // Poll primary's progress_counter (host-pinned) directly.
+                        // The kernel writes via volatile store to system RAM.
+                        // Host reads directly -- no D2H memcpy needed.
+                        volatile int * progress_ptr = res.progress_counter;
+                        while (*progress_ptr < info.op_idx + 1) {
+                            // Spin-wait for kernel to signal matmul completion
+                        }
+
+                        // D2H copy matmul input activation from primary device memory
+                        // to host-pinned staging buffer. Uses coord_queue (OOQ on primary
+                        // device) to avoid blocking the in-order compute queue.
+                        q_coord->memcpy(res.activation_buf, info.input_device_ptr,
+                                        info.K * sizeof(float)).wait();
+
+                        // Quantize activation to q8_1 on secondary device.
+                        // SOA/COALESCED weight layouts require SOA Y quantization.
+                        const int K        = info.K;
+                        const int K_padded = (K + QK8_1 - 1) / QK8_1 * QK8_1;
+                        const bool y_soa   = (info.weight_layout == GGML_LAYOUT_SOA ||
+                                              info.weight_layout == GGML_LAYOUT_COALESCED);
+
+                        // Host-pinned activation_buf is accessible from secondary via
+                        // PCIe zero-copy; q8_staging is device memory on secondary.
+                        if (y_soa) {
+                            quantize_row_q8_1_sycl<quantize_and_reorder_q8_1_soa>(
+                                res.activation_buf, res.q8_staging,
+                                K, 1, K_padded, q_secondary);
+                        } else {
+                            quantize_row_q8_1_sycl<quantize_q8_1>(
+                                res.activation_buf, res.q8_staging,
+                                K, 1, K_padded, q_secondary);
+                        }
+                        q_secondary->wait();
+
+                        // Launch MMVQ on secondary device
+                        ggml_sycl::mmvq_bench_args mmvq_args{};
+                        mmvq_args.stream              = q_secondary;
+                        mmvq_args.weight_type         = static_cast<ggml_type>(info.quant_type);
+                        mmvq_args.layout              = static_cast<ggml_layout_mode>(info.weight_layout);
+                        mmvq_args.weights             = info.weight_ptr;
+                        mmvq_args.layout_base         = info.layout_base;
+                        mmvq_args.activations         = res.q8_staging;
+                        mmvq_args.output              = res.merge_buf;  // host-pinned output
+                        mmvq_args.ncols               = K;
+                        mmvq_args.nrows               = info.N_secondary;
+                        mmvq_args.batch               = 1;
+                        mmvq_args.row_low             = 0;
+                        mmvq_args.row_high            = info.N_secondary;
+                        mmvq_args.src1_padded_col_size = K_padded;
+                        mmvq_args.dst_row_stride      = info.N_secondary;
+                        mmvq_args.device_id           = 1;
+
+                        if (!ggml_sycl::ggml_sycl_mmvq_bench_launch(mmvq_args, nullptr)) {
+                            GGML_LOG_ERROR("[PERSISTENT-TG-SPLIT] Secondary MMVQ dispatch failed for matmul %d\n",
+                                          mm_idx);
+                            break;
+                        }
+                        q_secondary->wait();
+
+                        // H2D copy secondary's partial output to primary's merge_dst
+                        // Uses coord_queue to avoid blocking the primary compute queue.
+                        q_coord->memcpy(info.merge_dst, res.merge_buf,
+                                        info.N_secondary * sizeof(float)).wait();
+
+                        // Signal merge completion to primary kernel via device memory
+                        int merge_val = info.op_idx + 1;
+                        q_coord->memcpy(res.merge_complete, &merge_val, sizeof(int)).wait();
+                    }
                 } catch (...) {
-                    secondary_exception = std::current_exception();
+                    coordinator_exception = std::current_exception();
                 }
             });
 
-            // Launch primary kernel on the current thread (blocks until complete).
-            // Primary's cross_device_sync polls sync_flags — secondary signals
-            // completion of each MUL_MAT before primary can merge partial outputs.
+            // Launch primary persistent kernel on the current thread (blocks until complete)
             bool primary_ok = true;
             try {
                 primary.execute_persistent();
@@ -32717,22 +32815,16 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
                 primary_ok = false;
             }
 
-            // Wait for secondary thread to finish (should already be done — primary's
-            // cross_device_sync waits for each secondary MUL_MAT, so by the time
-            // primary finishes, secondary is done too).
-            secondary_thread.join();
+            // Wait for coordinator thread to finish
+            coordinator_thread.join();
 
-            PersistentStats stats2 = secondary.get_last_stats();
-            GGML_SYCL_DEBUG("[PERSISTENT-TG-SPLIT] Secondary complete: %d ops, %.2f ms\n",
-                            stats2.n_operations, stats2.kernel_time_ms);
-
-            if (secondary_exception) {
+            if (coordinator_exception) {
                 try {
-                    std::rethrow_exception(secondary_exception);
+                    std::rethrow_exception(coordinator_exception);
                 } catch (const sycl::exception & e) {
-                    GGML_LOG_ERROR("[PERSISTENT-TG-SPLIT] Secondary kernel failed: %s\n", e.what());
+                    GGML_LOG_ERROR("[PERSISTENT-TG-SPLIT] Coordinator failed: %s\n", e.what());
                 } catch (const std::exception & e) {
-                    GGML_LOG_ERROR("[PERSISTENT-TG-SPLIT] Secondary kernel failed: %s\n", e.what());
+                    GGML_LOG_ERROR("[PERSISTENT-TG-SPLIT] Coordinator failed: %s\n", e.what());
                 }
                 goto normal_dispatch;
             }

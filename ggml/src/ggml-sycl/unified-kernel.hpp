@@ -2561,7 +2561,7 @@ namespace ggml_sycl {
 // Per-operation multi-device split metadata, passed to UnifiedKernel::set_split_config()
 // to populate DeviceOperation cross-device fields during launch_persistent_kernel().
 struct SplitOpMeta {
-    int     op_idx;          // Matmul index for sync_flags addressing
+    int     op_idx;          // Matmul index for progress/merge addressing
     int     row_start;       // First output row this device computes
     int     row_count;       // Number of output rows
     int     merge_count;     // Floats to merge from other device (0 = none)
@@ -2573,7 +2573,8 @@ struct SplitOpMeta {
 
 // Kernel-level split configuration, set once and applied to all ops during launch.
 struct KernelSplitConfig {
-    int *  sync_flags;       // Host-pinned atomic flag array [n_ops * n_devices]
+    int *  progress_counter; // Host-pinned (malloc_host): kernel writes via volatile, host reads directly
+    int *  merge_complete;   // Device-local (malloc_device): host writes via H2D, kernel reads via atomic_ref
     int    device_idx;       // 0=primary, 1=secondary
     int    n_devices;        // Total GPU devices in split (0 or 1 = no split)
     std::vector<SplitOpMeta> op_meta;  // Per-matmul split metadata (indexed by plan op_idx)
