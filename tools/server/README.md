@@ -1741,6 +1741,16 @@ Apart from error types supported by OAI, we also have custom types that are spec
 }
 ```
 
+### Custom default Web UI preferences
+
+You can specify default preferences for the web UI using `--webui-config <JSON config>` or `--webui-config-file <path to JSON config>`. For example, you can disable pasting long text as attachments and enable rendering Markdown in user messages with this command:
+
+```bash
+./llama-server -m model.gguf --webui-config '{"pasteLongTextToFileLen": 0, "renderUserContentAsMarkdown": true}'
+```
+
+You may find available preferences in [settings-config.ts](webui/src/lib/constants/settings-config.ts).
+
 ### Legacy completion web UI
 
 A new chat-based UI has replaced the old completion-based since [this PR](https://github.com/ggml-org/llama.cpp/pull/10175). If you want to use the old completion, start the server with `--path ./tools/server/public_legacy`
