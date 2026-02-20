@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">AI Chat basic sample</string>
+    <string name="app_name">Kova</string>
     <string name="drawer_open">Menüyü aç</string>
     <string name="drawer_close">Menüyü kapat</string>
 </resources>
