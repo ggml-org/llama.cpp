@@ -586,7 +586,7 @@ class unified_cache {
     // type:        quantized type (Q4_0, Q8_0, etc.)
     // ncols:       number of columns (ne[0]) in the tensor
     // row_count:   number of rows in this partial range
-    // device_idx:  device index for cache key uniqueness (0=B580, 1=B50)
+    // device_idx:  device index for cache key uniqueness (0=primary, 1=secondary)
     void * load_partial_rows(const char * tensor_name,
                              const void * src_host,
                              ggml_type    type,
@@ -1519,7 +1519,7 @@ void * unified_cache_get_split_weight_ptr(const char * tensor_name, int device);
 void unified_cache_free_partial_entries(int device);
 
 // Register a unified cache for a device using an externally-managed queue.
-// Used by tensor split to create a cache for the secondary GPU (B50) which has
+// Used by tensor split to create a cache for a secondary GPU which has
 // no llama.cpp backend and thus cannot use create_cache_for_device().
 // Returns the cache pointer, or nullptr on failure.
 unified_cache * unified_cache_register_for_queue(int device_id, sycl::queue & queue);

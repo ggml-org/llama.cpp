@@ -19856,7 +19856,7 @@ MatmulDecision UnifiedMatmulOrchestrator::select(const ggml_tensor *            
 }  // namespace ggml_sycl
 
 // ---------------------------------------------------------------------------
-// 3-device split configuration: B580 + B50 + CPU row splitting
+// 3-device split configuration: primary GPU + secondary GPU + CPU row splitting
 // ---------------------------------------------------------------------------
 struct split_device_config {
     float         ratio[3]   = {1.0f, 0.0f, 0.0f};  // fractions: [0]=primary GPU, [1]=secondary GPU, [2]=CPU
@@ -19908,7 +19908,7 @@ static void split_config_init(sycl::queue * primary_queue) {
 
     g_split_config.enabled = (g_split_config.ratio[1] > 0.0f || g_split_config.ratio[2] > 0.0f);
 
-    // Discover secondary GPU (B50) if ratio requests it
+    // Discover secondary GPU if ratio requests it
     if (g_split_config.ratio[1] > 0.0f) {
         sycl::device primary_dev = primary_queue->get_device();
         bool found = false;
@@ -19940,9 +19940,9 @@ static void split_config_init(sycl::queue * primary_queue) {
                 g_split_config.gpu_count = 2;
                 found = true;
 
-                // Register unified cache for B50 (device 1) using shared context queue.
-                // This avoids the hang from get_unified_cache_for_device(1) which would
-                // try to create a cache via dpct (no backend registered for device 1).
+                // Register unified cache for secondary GPU (device 1) using shared context
+                // queue.  This avoids the hang from get_unified_cache_for_device(1) which
+                // would try to create a cache via dpct (no backend registered for device 1).
                 ggml_sycl::unified_cache_register_for_queue(1, q1);
 
                 GGML_LOG_INFO("SYCL 3-device split: %s + %s + CPU (%.0f%%/%.0f%%/%.0f%%)\n",
@@ -20059,9 +20059,9 @@ static void split_secondary_gpu_ensure(size_t q8_bytes, size_t f32_bytes, sycl::
     }
 }
 
-// Secondary GPU (B50) weight loading via unified cache.
+// Secondary GPU weight loading via unified cache.
 // D2H from primary AOS → host staging → unified_cache_load_partial_rows on device 1.
-// Returns SOA device pointer on B50, or nullptr on failure.
+// Returns SOA device pointer on secondary GPU, or nullptr on failure.
 static const void * split_secondary_weight_load(
         const char * name, ggml_type type, int64_t ncols, int64_t nrows,
         const void * src_device_aos, sycl::queue * q_primary) {
