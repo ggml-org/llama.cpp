@@ -3,14 +3,17 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:layout_marginHorizontal="16dp"
-    android:layout_marginVertical="8dp"
+    android:layout_marginVertical="6dp"
     android:gravity="end">
 
     <TextView
         android:id="@+id/msg_content"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:maxWidth="280dp"
         android:background="@drawable/bg_user_message"
         android:padding="12dp"
-        android:textColor="@android:color/white" />
+        android:lineSpacingMultiplier="1.3"
+        android:textColor="#FFFFFF"
+        android:textSize="15sp" />
 </LinearLayout>
