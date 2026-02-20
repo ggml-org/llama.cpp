@@ -10,6 +10,8 @@ static __global__ void reduce_rows_f32(const float * __restrict__ x, float * __r
     const int num_unroll = 8;
     float     temp[num_unroll];
     float     sum_temp[num_unroll] = { 0.0f };
+
+    GGML_CUDA_PDL_SYNC(); // needs to guard data access (except pointer arithmetic) for x, dst.
     for (int i = col; i < ncols;) {
         for (int j = 0; j < num_unroll; ++j) {
             if (i < ncols) {
@@ -32,8 +34,10 @@ static __global__ void reduce_rows_f32(const float * __restrict__ x, float * __r
     sum = block_reduce<block_reduce_method::SUM>(sum, shared_vals);
 
     if (col != 0) {
+        GGML_CUDA_PDL_LC();
         return;
     }
 
     dst[row] = norm ? sum / ncols : sum;
+    GGML_CUDA_PDL_LC();
 }

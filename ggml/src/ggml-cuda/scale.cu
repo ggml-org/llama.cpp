@@ -6,14 +6,17 @@ static __global__ void scale_f32(const float * x, float * dst, const float scale
     int64_t tid = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
     int64_t stride = (int64_t)blockDim.x * (int64_t)gridDim.x;
 
+    GGML_CUDA_PDL_SYNC(); // needs to guard data access for x, dst.
     for (int64_t i = tid; i < nelements; i += stride) {
         dst[i] = scale * x[i] + bias;
     }
+    GGML_CUDA_PDL_LC();
 }
 
 static void scale_f32_cuda(const float * x, float * dst, const float scale, const float bias, const int64_t nelements, cudaStream_t stream) {
     const int64_t num_blocks = (nelements + CUDA_SCALE_BLOCK_SIZE - 1) / CUDA_SCALE_BLOCK_SIZE;
-    scale_f32<<<MIN(MAX_GRIDDIM_X, num_blocks), CUDA_SCALE_BLOCK_SIZE, 0, stream>>>(x, dst, scale, bias, nelements);
+    auto launch_params = ggml_cuda_kernel_launch_params(MIN(MAX_GRIDDIM_X, num_blocks), CUDA_SCALE_BLOCK_SIZE, 0, stream);
+    ggml_cuda_kernel_launch(scale_f32, launch_params, x, dst, scale, bias, nelements);
 }
 
 void ggml_cuda_op_scale(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {

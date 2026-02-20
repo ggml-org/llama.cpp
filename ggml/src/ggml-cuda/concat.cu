@@ -4,6 +4,7 @@
 static __global__ void concat_f32_dim0(const float * x, const float * y, float * dst, const int ne0, const int ne00) {
     int nidx = threadIdx.x + blockIdx.x * blockDim.x;
     if (nidx >= ne0) {
+        GGML_CUDA_PDL_LC();
         return;
     }
 
@@ -12,6 +13,7 @@ static __global__ void concat_f32_dim0(const float * x, const float * y, float *
         blockIdx.y * ne0 +
         blockIdx.z * ne0 * gridDim.y;
 
+    GGML_CUDA_PDL_SYNC();
     if (nidx < ne00) { // src0
         int offset_src =
             nidx +
@@ -25,6 +27,7 @@ static __global__ void concat_f32_dim0(const float * x, const float * y, float *
             blockIdx.z * (ne0 - ne00) * gridDim.y;
         dst[offset_dst] = y[offset_src];
     }
+    GGML_CUDA_PDL_LC();
 }
 
 static __global__ void concat_f32_dim1(const float * x, const float * y, float * dst, const int ne0, const int ne01) {
@@ -83,7 +86,8 @@ static void concat_f32_cuda(const float * x, const float * y, float * dst, int n
     int num_blocks = (ne0 + CUDA_CONCAT_BLOCK_SIZE - 1) / CUDA_CONCAT_BLOCK_SIZE;
     dim3 gridDim(num_blocks, ne1, ne2);
     if (dim == 0) {
-        concat_f32_dim0<<<gridDim, CUDA_CONCAT_BLOCK_SIZE, 0, stream>>>(x, y, dst, ne0, ne00);
+        auto launch_params = ggml_cuda_kernel_launch_params(gridDim, CUDA_CONCAT_BLOCK_SIZE, 0, stream);
+        ggml_cuda_kernel_launch(concat_f32_dim0, launch_params, x, y, dst, ne0, ne00);
         return;
     }
     if (dim == 1) {
