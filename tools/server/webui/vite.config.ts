@@ -2,10 +2,14 @@ import tailwindcss from '@tailwindcss/vite';
 import { sveltekit } from '@sveltejs/kit/vite';
 import * as fflate from 'fflate';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { resolve } from 'path';
-import { defineConfig } from 'vite';
+import { dirname, resolve } from 'path';
+import { fileURLToPath } from 'url';
+
+import { defineConfig, searchForWorkspaceRoot } from 'vite';
 import devtoolsJson from 'vite-plugin-devtools-json';
 import { storybookTest } from '@storybook/addon-vitest/vitest-plugin';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const GUIDE_FOR_FRONTEND = `
 <!--
@@ -156,11 +160,15 @@ export default defineConfig({
 		proxy: {
 			'/v1': 'http://localhost:8080',
 			'/props': 'http://localhost:8080',
-			'/models': 'http://localhost:8080'
+			'/models': 'http://localhost:8080',
+			'/cors-proxy': 'http://localhost:8080'
 		},
 		headers: {
 			'Cross-Origin-Embedder-Policy': 'require-corp',
 			'Cross-Origin-Opener-Policy': 'same-origin'
+		},
+		fs: {
+			allow: [searchForWorkspaceRoot(process.cwd()), resolve(__dirname, 'tests')]
 		}
 	}
 });

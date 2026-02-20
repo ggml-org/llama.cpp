@@ -916,8 +916,7 @@ json oaicompat_chat_params_parse(
                 json image_url = json_value(p, "image_url", json::object());
                 handle_media(out_files, image_url, opt.media_path);
 
-                // replace this chunk with a marker
-                p["type"] = "text";
+                p["type"] = "media_marker";
                 p["text"] = mtmd_default_marker();
                 p.erase("image_url");
 
@@ -938,8 +937,7 @@ json oaicompat_chat_params_parse(
 
                 // TODO: add audio_url support by reusing handle_media()
 
-                // replace this chunk with a marker
-                p["type"] = "text";
+                p["type"] = "media_marker";
                 p["text"] = mtmd_default_marker();
                 p.erase("input_audio");
 

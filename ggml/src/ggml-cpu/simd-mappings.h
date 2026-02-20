@@ -116,6 +116,17 @@ extern "C" {
 // defined in ggml-cpu.c, initialized in ggml_cpu_init()
 extern float ggml_table_f32_f16[1 << 16];
 
+// precomputed f32 table for e8m0 half (1 KB)
+// defined in ggml-cpu.c, initialized in ggml_cpu_init()
+extern float ggml_table_f32_e8m0_half[1 << 8];
+
+// Use lookup table for E8M0 on x86 (faster than bit manipulation)
+#if defined(__AVX__) || defined(__AVX2__) || defined(__AVX512F__)
+#define GGML_CPU_E8M0_TO_FP32_HALF(x) ggml_table_f32_e8m0_half[(uint8_t)(x)]
+#else
+#define GGML_CPU_E8M0_TO_FP32_HALF(x) GGML_E8M0_TO_FP32_HALF(x)
+#endif
+
 // On ARM NEON, it's quicker to directly convert x -> x instead of calling into ggml_lookup_fp16_to_fp32,
 // so we define GGML_CPU_FP16_TO_FP32 and GGML_CPU_FP32_TO_FP16 elsewhere for NEON.
 // This is also true for POWER9.
@@ -1149,6 +1160,14 @@ static inline void __lsx_f16x4_store(ggml_fp16_t * x, __m128 y) {
     float32x4_t tmp = x[0] + vec_reve(x[0]);        \
     res = tmp[0] + tmp[1];                          \
 }
+#define GGML_F32x4_REDUCE_4(res, s0, s1, s2, s3) \
+{                                                \
+    float32x4_t v = vec_add(vec_add(s0, s1),     \
+                            vec_add(s2, s3));    \
+    v = vec_add(v, vec_sld(v, v, 8));            \
+    v = vec_add(v, vec_sld(v, v, 4));            \
+    res += (ggml_float)vec_extract(v, 0);        \
+}
 
 #define GGML_F32_VEC        GGML_F32x4
 #define GGML_F32_VEC_ZERO   GGML_F32x4_ZERO
@@ -1197,6 +1216,24 @@ static inline void __lzs_f16cx4_store(ggml_fp16_t * x, float32x4_t v_y) {
 #define GGML_F16_VEC_ADD            GGML_F32x4_ADD
 #define GGML_F16_VEC_MUL            GGML_F32x4_MUL
 #define GGML_F16_VEC_REDUCE         GGML_F32x4_REDUCE
+
+// BF16 s390x
+#define GGML_BF16_STEP 16
+#define GGML_BF16_EPR  8
+
+#define GGML_BF16x8         __vector unsigned short
+#define GGML_BF16x8_ZERO    vec_splats((unsigned short)0)
+#define GGML_BF16x8_LOAD(p) vec_xl(0, (const unsigned short *)(p))
+
+#define GGML_BF16_VEC      GGML_BF16x8
+#define GGML_BF16_VEC_ZERO GGML_BF16x8_ZERO
+#define GGML_BF16_VEC_LOAD GGML_BF16x8_LOAD
+#define GGML_BF16_TO_F32_LO(v) ((float32x4_t) vec_mergel((v), GGML_BF16_VEC_ZERO))
+#define GGML_BF16_TO_F32_HI(v) ((float32x4_t) vec_mergeh((v), GGML_BF16_VEC_ZERO))
+#define GGML_BF16_FMA_LO(acc, x, y) \
+    (acc) = GGML_F32x4_FMA((acc), GGML_BF16_TO_F32_LO(x), GGML_BF16_TO_F32_LO(y))
+#define GGML_BF16_FMA_HI(acc, x, y) \
+    (acc) = GGML_F32x4_FMA((acc), GGML_BF16_TO_F32_HI(x), GGML_BF16_TO_F32_HI(y))
 
 #elif defined(__riscv_v_intrinsic)
 

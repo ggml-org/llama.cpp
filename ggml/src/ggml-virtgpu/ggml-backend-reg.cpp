@@ -4,37 +4,70 @@
 #include <iostream>
 #include <mutex>
 
+void ggml_virtgpu_cleanup(virtgpu * gpu);
+
 static virtgpu * apir_initialize() {
-    static virtgpu * apir_gpu_instance = NULL;
-    static bool      apir_initialized  = false;
+    static virtgpu *         gpu          = NULL;
+    static std::atomic<bool> initialized  = false;
+
+    if (initialized) {
+        // fast track
+        return gpu;
+    }
 
     {
         static std::mutex           mutex;
         std::lock_guard<std::mutex> lock(mutex);
 
-        if (apir_initialized) {
-            return apir_gpu_instance;
+        if (initialized) {
+            // thread safe
+            return gpu;
         }
 
-        apir_gpu_instance = create_virtgpu();
-        if (!apir_gpu_instance) {
-            GGML_ABORT("failed to initialize the virtgpu");
+        gpu = create_virtgpu();
+        if (!gpu) {
+            initialized = true;
+            return NULL;
         }
 
-        apir_initialized = true;
+        // Pre-fetch and cache all device information, it will not change
+        gpu->cached_device_info.description  = apir_device_get_description(gpu);
+        if (!gpu->cached_device_info.description) {
+            GGML_ABORT(GGML_VIRTGPU "%s: failed to initialize the virtgpu device description", __func__);
+        }
+        gpu->cached_device_info.name         = apir_device_get_name(gpu);
+        if (!gpu->cached_device_info.name) {
+            GGML_ABORT(GGML_VIRTGPU "%s: failed to initialize the virtgpu device name", __func__);
+        }
+        gpu->cached_device_info.device_count = apir_device_get_count(gpu);
+        gpu->cached_device_info.type         = apir_device_get_type(gpu);
+
+        apir_device_get_memory(gpu,
+                              &gpu->cached_device_info.memory_free,
+                              &gpu->cached_device_info.memory_total);
+
+        apir_buffer_type_host_handle_t buft_host_handle = apir_device_get_buffer_type(gpu);
+        gpu->cached_buffer_type.host_handle             = buft_host_handle;
+        gpu->cached_buffer_type.name                    = apir_buffer_type_get_name(gpu, buft_host_handle);
+        if (!gpu->cached_buffer_type.name) {
+            GGML_ABORT(GGML_VIRTGPU "%s: failed to initialize the virtgpu buffer type name", __func__);
+        }
+        gpu->cached_buffer_type.alignment               = apir_buffer_type_get_alignment(gpu, buft_host_handle);
+        gpu->cached_buffer_type.max_size                = apir_buffer_type_get_max_size(gpu, buft_host_handle);
+
+        initialized = true;
     }
 
-    return apir_gpu_instance;
+    return gpu;
 }
 
 static int ggml_backend_remoting_get_device_count() {
     virtgpu * gpu = apir_initialize();
     if (!gpu) {
-        GGML_LOG_WARN("apir_initialize failed\n");
         return 0;
     }
 
-    return apir_device_get_count(gpu);
+    return gpu->cached_device_info.device_count;
 }
 
 static size_t ggml_backend_remoting_reg_get_device_count(ggml_backend_reg_t reg) {
@@ -52,17 +85,21 @@ ggml_backend_dev_t ggml_backend_remoting_get_device(size_t device) {
 
 static void ggml_backend_remoting_reg_init_devices(ggml_backend_reg_t reg) {
     if (devices.size() > 0) {
-        GGML_LOG_INFO("%s: already initialized\n", __func__);
+        GGML_LOG_INFO(GGML_VIRTGPU "%s: already initialized\n", __func__);
         return;
     }
 
     virtgpu * gpu = apir_initialize();
     if (!gpu) {
-        GGML_LOG_ERROR("apir_initialize failed\n");
+        GGML_LOG_ERROR(GGML_VIRTGPU "%s: apir_initialize failed\n", __func__);
         return;
     }
 
-    static bool initialized = false;
+    static std::atomic<bool> initialized = false;
+
+    if (initialized) {
+        return; // fast track
+    }
 
     {
         static std::mutex           mutex;
@@ -70,10 +107,10 @@ static void ggml_backend_remoting_reg_init_devices(ggml_backend_reg_t reg) {
         if (!initialized) {
             for (int i = 0; i < ggml_backend_remoting_get_device_count(); i++) {
                 ggml_backend_remoting_device_context * ctx       = new ggml_backend_remoting_device_context;
-                char                                   desc[256] = "API Remoting device";
+                char                                   desc[256] = "ggml-virtgpu API Remoting device";
 
                 ctx->device      = i;
-                ctx->name        = GGML_REMOTING_FRONTEND_NAME + std::to_string(i);
+                ctx->name        = GGML_VIRTGPU_NAME + std::to_string(i);
                 ctx->description = desc;
                 ctx->gpu         = gpu;
 
@@ -98,7 +135,7 @@ static ggml_backend_dev_t ggml_backend_remoting_reg_get_device(ggml_backend_reg_
 static const char * ggml_backend_remoting_reg_get_name(ggml_backend_reg_t reg) {
     UNUSED(reg);
 
-    return GGML_REMOTING_FRONTEND_NAME;
+    return GGML_VIRTGPU_NAME;
 }
 
 static const ggml_backend_reg_i ggml_backend_remoting_reg_i = {
@@ -111,8 +148,7 @@ static const ggml_backend_reg_i ggml_backend_remoting_reg_i = {
 ggml_backend_reg_t ggml_backend_virtgpu_reg() {
     virtgpu * gpu = apir_initialize();
     if (!gpu) {
-        GGML_LOG_ERROR("virtgpu_apir_initialize failed\n");
-        return NULL;
+        GGML_LOG_ERROR(GGML_VIRTGPU "%s: virtgpu_apir_initialize failed\n", __func__);
     }
 
     static ggml_backend_reg reg = {
@@ -129,9 +165,25 @@ ggml_backend_reg_t ggml_backend_virtgpu_reg() {
 
     ggml_backend_remoting_reg_init_devices(&reg);
 
-    GGML_LOG_INFO("%s: initialized\n", __func__);
-
     return &reg;
+}
+
+// public function, not exposed in the GGML interface at the moment
+void ggml_virtgpu_cleanup(virtgpu * gpu) {
+    if (gpu->cached_device_info.name) {
+        free(gpu->cached_device_info.name);
+        gpu->cached_device_info.name = NULL;
+    }
+    if (gpu->cached_device_info.description) {
+        free(gpu->cached_device_info.description);
+        gpu->cached_device_info.description = NULL;
+    }
+    if (gpu->cached_buffer_type.name) {
+        free(gpu->cached_buffer_type.name);
+        gpu->cached_buffer_type.name = NULL;
+    }
+
+    mtx_destroy(&gpu->data_shmem_mutex);
 }
 
 GGML_BACKEND_DL_IMPL(ggml_backend_virtgpu_reg)
