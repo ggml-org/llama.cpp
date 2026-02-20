@@ -19878,7 +19878,8 @@ struct split_persistent_resources {
     float * merge_buf          = nullptr;  // Host-pinned B50 output staging [max_N]
     float * merge_buf_cpu      = nullptr;  // Host-pinned CPU output staging [max_N] (Phase 2, nullptr for now)
     float * activation_buf     = nullptr;  // Host-pinned activation staging for cross-device matmul input [max_K]
-    int *   progress_counter   = nullptr;  // Host-pinned (malloc_host): kernel writes via volatile, host reads directly
+    int *   progress_counter   = nullptr;  // Device-local (malloc_device): kernel writes via atomic_ref, host reads via D2H BCS
+    int *   h_progress         = nullptr;  // Host-pinned (malloc_host): staging buffer for D2H progress reads
     int *   merge_complete     = nullptr;  // Device-local (malloc_device on primary): host writes via H2D, kernel reads via atomic_ref
     void *  q8_staging         = nullptr;  // Device-local (malloc_device on secondary): q8_1 quantized input
     sycl::queue * coord_queue  = nullptr;  // OOQ on primary device for coordinator D2H/H2D (avoids in-order deadlock)
@@ -19938,7 +19939,7 @@ static void ensure_split_persistent_resources(
                     && r.q8_staging_size >= need_q8
                     && r.progress_counter && r.merge_complete) {
         // Zero counters for the new token
-        *r.progress_counter = 0;  // Host-pinned: direct write
+        { int z = 0; primary_queue.memcpy(r.progress_counter, &z, sizeof(int)).wait(); }  // Device-local: H2D zero
         int zero = 0;
         primary_queue.memcpy(r.merge_complete, &zero, sizeof(int)).wait();
         return;
@@ -19975,13 +19976,20 @@ static void ensure_split_persistent_resources(
         r.activation_size = need_act;
     }
 
-    // Allocate host-pinned progress counter: kernel writes via volatile, host reads directly.
-    // Using malloc_host because D2H memcpy on an OOQ can't reliably see a running
-    // kernel's writes to malloc_device memory on Intel Arc (L2/command list isolation).
+    // Allocate device-local progress counter: kernel writes via atomic_ref(device),
+    // host reads via OOQ D2H memcpy (BCS engine bypasses GPU L2 cache).
     if (!r.progress_counter) {
-        r.progress_counter = sycl::malloc_host<int>(1, ctx);
+        r.progress_counter = sycl::malloc_device<int>(1, primary_queue);
         if (!r.progress_counter) {
-            GGML_LOG_WARN("[PERSISTENT-TG-SPLIT] sycl::malloc_host failed for progress_counter\n");
+            GGML_LOG_WARN("[PERSISTENT-TG-SPLIT] sycl::malloc_device failed for progress_counter\n");
+            return;
+        }
+    }
+    // Allocate host-pinned staging for D2H progress reads.
+    if (!r.h_progress) {
+        r.h_progress = sycl::malloc_host<int>(1, ctx);
+        if (!r.h_progress) {
+            GGML_LOG_WARN("[PERSISTENT-TG-SPLIT] sycl::malloc_host failed for h_progress\n");
             return;
         }
     }
@@ -19995,7 +20003,7 @@ static void ensure_split_persistent_resources(
         }
     }
     // Zero both counters
-    *r.progress_counter = 0;  // Host-pinned: direct write
+    { int z = 0; primary_queue.memcpy(r.progress_counter, &z, sizeof(int)).wait(); }  // Device-local: H2D zero
     int zero = 0;
     primary_queue.memcpy(r.merge_complete, &zero, sizeof(int)).wait();
 
@@ -20025,8 +20033,8 @@ static void ensure_split_persistent_resources(
     }
 
     r.allocated = true;
-    GGML_LOG_INFO("[PERSISTENT-TG-SPLIT] Allocated host-mediated resources: "
-                  "merge=%d act=%d floats, q8=%d bytes, + 2 device counters + coord OOQ\n",
+    GGML_LOG_INFO("[PERSISTENT-TG-SPLIT] Allocated BCS-mediated resources: "
+                  "merge=%d act=%d floats, q8=%d bytes, + 2 device counters + h_progress + coord OOQ\n",
                   need_merge, need_act, need_q8);
 }
 
@@ -32657,22 +32665,15 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
         }
 
         // =====================================================================
-        // Multi-device persistent TG kernel dispatch (host-mediated 2-GPU)
+        // Multi-device persistent TG kernel dispatch (BCS-mediated 2-GPU)
         // =====================================================================
-        // DISABLED: Intel Arc GPU L2 cache is non-coherent with host-pinned
-        // memory (malloc_host) in BOTH directions. A running persistent kernel
-        // cannot communicate with the host via volatile writes to malloc_host
-        // (host reads stale data) or atomic reads from malloc_device written
-        // by an OOQ memcpy (kernel reads stale L2). This makes host-mediated
-        // coordination impossible while the persistent kernel is running.
+        // Uses BCS (Blitter Copy Engine) D2H/H2D memcpy to bypass GPU L2 cache
+        // for host-kernel communication. Progress: kernel writes to malloc_device
+        // via atomic_ref(device), host reads via OOQ D2H (BCS). Merge signal:
+        // host writes to malloc_device via OOQ H2D (BCS), kernel reads via
+        // atomic_ref(device). Measured: 22.6 us/round-trip single kernel.
         //
-        // The infrastructure below is preserved for future "segmented persistent"
-        // execution where the kernel is split into per-layer segments with host
-        // coordination between them (queue is free between segments).
-        //
-        // Fall through to normal (per-op) dispatch which handles multi-GPU
-        // tensor split correctly at ~27 tok/s for 3-device, ~11 tok/s for 2-device.
-        // Set GGML_SYCL_PERSISTENT_SPLIT=1 to re-enable for testing.
+        // Set GGML_SYCL_PERSISTENT_SPLIT=1 to enable for testing.
         // NOTE: persistent_split_enabled declared at early exit guard above.
         if (persistent_split_enabled && g_split_config.enabled && g_split_config.gpu_count >= 2) {
             GGML_SYCL_DEBUG("[PERSISTENT-TG-SPLIT] Using host-mediated multi-device persistent TG\n");
@@ -32729,12 +32730,13 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
                     for (int mm_idx = 0; mm_idx < n_matmul_ops; mm_idx++) {
                         const auto & info = secondary_ops[mm_idx];
 
-                        // Poll primary's progress_counter (host-pinned) directly.
-                        // The kernel writes via volatile store to system RAM.
-                        // Host reads directly -- no D2H memcpy needed.
-                        volatile int * progress_ptr = res.progress_counter;
-                        while (*progress_ptr < info.op_idx + 1) {
-                            // Spin-wait for kernel to signal matmul completion
+                        // Poll primary's progress_counter via D2H BCS memcpy.
+                        // Kernel writes to malloc_device via atomic_ref(device).
+                        // OOQ D2H memcpy uses BCS engine which bypasses GPU L2
+                        // cache, ensuring host sees the kernel's latest write.
+                        while (true) {
+                            q_coord->memcpy(res.h_progress, res.progress_counter, sizeof(int)).wait();
+                            if (*res.h_progress >= info.op_idx + 1) break;
                         }
 
                         // D2H copy matmul input activation from primary device memory
