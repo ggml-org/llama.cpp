@@ -2967,8 +2967,9 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
         std::vector<server_task> tasks;
 
         const auto & prompt = data.at("prompt");
-        // TODO: this log can become very long, put it behind a flag or think about a more compact format
-        //SRV_DBG("Prompt: %s\n", prompt.is_string() ? prompt.get<std::string>().c_str() : prompt.dump(2).c_str());
+        if (params.verbose_prompt) {
+            SRV_INF("prompt: '%s'\n", prompt.is_string() ? prompt.get<std::string>().c_str() : prompt.dump(2).c_str());
+        }
 
         // process prompt
         std::vector<server_tokens> inputs;
