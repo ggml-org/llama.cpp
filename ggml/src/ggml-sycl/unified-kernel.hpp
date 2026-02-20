@@ -2573,7 +2573,7 @@ struct SplitOpMeta {
 
 // Kernel-level split configuration, set once and applied to all ops during launch.
 struct KernelSplitConfig {
-    int *  progress_counter; // Host-pinned (malloc_host): kernel writes via volatile, host reads directly
+    int *  progress_counter; // Device-local (malloc_device): kernel writes via atomic_ref, host reads via D2H BCS
     int *  merge_complete;   // Device-local (malloc_device): host writes via H2D, kernel reads via atomic_ref
     int    device_idx;       // 0=primary, 1=secondary
     int    n_devices;        // Total GPU devices in split (0 or 1 = no split)
