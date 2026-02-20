@@ -438,7 +438,7 @@ enum ggml_type {
     // GGML_TYPE_IQ4_NL_4_8 = 37,
     // GGML_TYPE_IQ4_NL_8_8 = 38,
     GGML_TYPE_MXFP4   = 39,  // MXFP4 (1 block)
-    GGML_TYPE_Q1_5_K  = 40,  // ~1.8125 bpw base-3 ternary with sub-block scales
+    GGML_TYPE_Q1_5_K  = 40,  // ~1.8125 bpw ternary-coded weights with 4-bit sub-block scales
     GGML_TYPE_Q2_K_S  = 41,  // ~2.1875 bpw streamlined 2-bit with sub-block scales
     GGML_TYPE_COUNT   = 42,
 };
