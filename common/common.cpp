@@ -452,34 +452,6 @@ void string_replace_all(std::string & s, const std::string & search, const std::
     s = std::move(builder);
 }
 
-bool string_ends_with(const std::string_view & str, const std::string_view & suffix) {
-    return str.size() >= suffix.size() && str.compare(str.size()-suffix.size(), suffix.size(), suffix) == 0;
-}
-
-bool string_remove_suffix(std::string & str, const std::string_view & suffix) {
-    bool has_suffix = string_ends_with(str, suffix);
-    if (has_suffix) {
-        str = str.substr(0, str.size() - suffix.size());
-    }
-    return has_suffix;
-}
-
-size_t string_find_partial_stop(const std::string_view & str, const std::string_view & stop) {
-    if (!str.empty() && !stop.empty()) {
-        const char text_last_char = str.back();
-        for (int64_t char_index = stop.size() - 1; char_index >= 0; char_index--) {
-            if (stop[char_index] == text_last_char) {
-                const auto current_partial = stop.substr(0, char_index + 1);
-                if (string_ends_with(str, current_partial)) {
-                    return str.size() - char_index - 1;
-                }
-            }
-        }
-    }
-
-    return std::string::npos;
-}
-
 std::string regex_escape(const std::string & s) {
     static const std::regex special_chars("[.^$|()*+?\\[\\]{}\\\\]");
     return std::regex_replace(s, special_chars, "\\$&");
@@ -879,7 +851,8 @@ std::string fs_get_cache_directory() {
     if (getenv("LLAMA_CACHE")) {
         cache_directory = std::getenv("LLAMA_CACHE");
     } else {
-#if defined(__linux__) || defined(__FreeBSD__) || defined(_AIX) || defined(__OpenBSD__)
+#if defined(__linux__) || defined(__FreeBSD__) || defined(_AIX) || \
+        defined(__OpenBSD__) || defined(__NetBSD__)
         if (std::getenv("XDG_CACHE_HOME")) {
             cache_directory = std::getenv("XDG_CACHE_HOME");
         } else if (std::getenv("HOME")) {
@@ -1223,7 +1196,7 @@ common_init_result_ptr common_init_from_params(common_params & params) {
             return res;
         }
 
-        int err = llama_apply_adapter_cvec(
+        int err = llama_set_adapter_cvec(
                 lctx,
                 cvec.data.data(),
                 cvec.data.size(),
@@ -1325,12 +1298,15 @@ std::string get_model_endpoint() {
 }
 
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora) {
-    llama_clear_adapter_lora(ctx);
-    for (auto & la : lora) {
-        if (la.scale != 0.0f) {
-            llama_set_adapter_lora(ctx, la.ptr, la.scale);
-        }
+    std::vector<llama_adapter_lora *> loras;
+    std::vector<float> scales;
+
+    for (auto & la: lora) {
+        loras.push_back(la.ptr);
+        scales.push_back(la.scale);
     }
+
+    llama_set_adapters_lora(ctx, loras.data(), loras.size(), scales.data());
 }
 
 struct llama_model_params common_model_params_to_llama(common_params & params) {

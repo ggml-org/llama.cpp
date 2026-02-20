@@ -42,6 +42,11 @@ struct clip_graph_internvl : clip_graph {
     ggml_cgraph * build() override;
 };
 
+struct clip_graph_nemotron_v2_vl : clip_graph {
+    clip_graph_nemotron_v2_vl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+};
+
 struct clip_graph_llama4 : clip_graph {
     clip_graph_llama4(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
@@ -49,6 +54,11 @@ struct clip_graph_llama4 : clip_graph {
 
 struct clip_graph_kimivl : clip_graph {
     clip_graph_kimivl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+};
+
+struct clip_graph_paddleocr : clip_graph {
+    clip_graph_paddleocr(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
