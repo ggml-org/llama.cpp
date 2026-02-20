@@ -1552,109 +1552,17 @@ void ggml_vec_dot_q2_K_s_q8_K(int                        n,
 
     const int nb = n / QK_K;
 
-#if defined(__AVX2__)
-    __m256 acc = _mm256_setzero_ps();
-
-    const __m256i m3 = _mm256_set1_epi8(3);
-    const __m256i m4 = _mm256_set1_epi16(0x000F);
-
-    for (int i = 0; i < nb; ++i) {
-        float d = GGML_CPU_FP16_TO_FP32(x[i].d) * y[i].d;
-
-        const uint8_t * GGML_RESTRICT q2 = x[i].qs;
-        const int8_t * GGML_RESTRICT  q8 = y[i].qs;
-
-        // Load 8 4-bit sub-block scales
-        uint32_t scales_u32;
-        memcpy(&scales_u32, x[i].scales, sizeof(scales_u32));
-
-        // Expand 4-bit scales to 16-bit
-        __m128i s128      = _mm_set1_epi32(scales_u32);
-        __m256i s256      = _mm256_cvtepu8_epi16(s128);
-        __m256i scales_lo = _mm256_and_si256(s256, m4);
-        __m256i scales_hi = _mm256_and_si256(_mm256_srli_epi16(s256, 4), m4);
-
-        // Sub-block scales to scalar array for dot product mapping
-        int16_t sub_scales[8];
-        for (int j = 0; j < 4; j++) {
-            sub_scales[2 * j]     = (x[i].scales[j] & 0x0F);
-            sub_scales[2 * j + 1] = (x[i].scales[j] >> 4);
-        }
-
-        __m256i sumi_0123 = _mm256_setzero_si256();
-        __m256i sumi_4567 = _mm256_setzero_si256();
-
-        // 2 passes of 128 elements (32 bytes of 2-bit values)
-        for (int j = 0; j < QK_K / 128; ++j) {
-            const __m256i q2bits = _mm256_loadu_si256((const __m256i *) q2);
-            q2 += 32;
-
-            const __m256i q8_0 = _mm256_loadu_si256((const __m256i *) q8);
-            q8 += 32;
-            const __m256i q8_1 = _mm256_loadu_si256((const __m256i *) q8);
-            q8 += 32;
-            const __m256i q8_2 = _mm256_loadu_si256((const __m256i *) q8);
-            q8 += 32;
-            const __m256i q8_3 = _mm256_loadu_si256((const __m256i *) q8);
-            q8 += 32;
-
-            // Extract 2-bit values
-            const __m256i q2_0 = _mm256_and_si256(q2bits, m3);
-            const __m256i q2_1 = _mm256_and_si256(_mm256_srli_epi16(q2bits, 2), m3);
-            const __m256i q2_2 = _mm256_and_si256(_mm256_srli_epi16(q2bits, 4), m3);
-            const __m256i q2_3 = _mm256_and_si256(_mm256_srli_epi16(q2bits, 6), m3);
-
-            // Dot product (x+1.5 is mapped to 0..3) -> 16-bit intermediate sums
-            __m256i p0 = _mm256_maddubs_epi16(q2_0, q8_0);
-            __m256i p1 = _mm256_maddubs_epi16(q2_1, q8_1);
-            __m256i p2 = _mm256_maddubs_epi16(q2_2, q8_2);
-            __m256i p3 = _mm256_maddubs_epi16(q2_3, q8_3);
-
-            // Apply 4-bit per-sub-block scales
-            // In linear 2-bit packing:
-            // byte 0 has element 0..3. Thus q2bits is 32 bytes = 128 elements.
-            // q2_0 has elements 0,4,8... 124. (Wait, memory layout is interleaved by extraction)
-            // byte 0: q0, q1, q2, q3.
-            // q2_0 gets q0. q2_1 gets q1. q2_2 gets q2. q2_3 gets q3.
-            // Actually: q8_0 gets [0..31]. q2_0 gets q0, q4, q8 ...
-            // Wait, _mm256_maddubs_epi16 expects q8_0 to match q2_0 elements!
-            // But q8_0 is linear load of 32 elements. q2_0 is elements 0,4,8,12...
-            // Oh right, `Q2_K_S` uses the same extraction as `Q2_K` which naturally expects Q8 weights to be properly permuted, OR the sub-block metadata logic relies on `get_scale_shuffle_q3k`.
-            // Let's look at `ggml_vec_dot_q2_K_q8_K`. It uses `get_scale_shuffle_q3k`.
-
-            p0 = _mm256_madd_epi16(_mm256_set1_epi16(sub_scales[4 * j + 0]), p0);
-            p1 = _mm256_madd_epi16(_mm256_set1_epi16(sub_scales[4 * j + 1]), p1);
-            p2 = _mm256_madd_epi16(_mm256_set1_epi16(sub_scales[4 * j + 2]), p2);
-            p3 = _mm256_madd_epi16(_mm256_set1_epi16(sub_scales[4 * j + 3]), p3);
-
-            p0 = _mm256_add_epi32(p0, p1);
-            p2 = _mm256_add_epi32(p2, p3);
-
-            if (j == 0) {
-                sumi_0123 = _mm256_add_epi32(sumi_0123, _mm256_add_epi32(p0, p2));
-            }
-            if (j == 1) {
-                sumi_4567 = _mm256_add_epi32(sumi_4567, _mm256_add_epi32(p0, p2));
-            }
-        }
-
-        // Wait, Q2_K linear repacking problem is handled by the shuffle!
-        // `Q2_K_S` is exactly `Q2_K` but without `dmin`.
-        // I will copy the logic directly and fix the scale extraction!
-        // But the scale logic above uses scalar arrays, which is WRONG for interleaved byte layouts.
-        // Let's defer to scalar implementation first. I don't want to get the math wrong again.
-    }
-
-    // Instead of debugging AVX2 vectors inside maddubs, I will just call the generic
-    // I need to properly copy the `Q2_K` shuffle if I want to do this right.
-    ggml_vec_dot_q2_K_s_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
-#elif defined __AVX__
-    // AVX not implemented, fallback
+#if defined(__AVX2__) || defined(__AVX__)
+    UNUSED(x);
+    UNUSED(y);
+    UNUSED(nb);
     ggml_vec_dot_q2_K_s_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
 #else
+    UNUSED(x);
+    UNUSED(y);
+    UNUSED(nb);
     ggml_vec_dot_q2_K_s_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
 #endif
-}
 }
 
 void ggml_vec_dot_q3_K_q8_K(int                        n,
