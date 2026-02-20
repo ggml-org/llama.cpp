@@ -28,10 +28,10 @@ jobs:
 
       - name: Sign APK
         run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | tr -d '\n' | base64 -d > release.keystore
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > release.keystore
           $ANDROID_HOME/build-tools/$(ls $ANDROID_HOME/build-tools/ | tail -1)/apksigner sign \
             --ks release.keystore \
-            --ks-alias "${{ secrets.KEY_ALIAS }}" \
+            --ks-key-alias "${{ secrets.KEY_ALIAS }}" \
             --ks-pass pass:"${{ secrets.STORE_PASSWORD }}" \
             --key-pass pass:"${{ secrets.KEY_PASSWORD }}" \
             examples/llama.android/app/build/outputs/apk/debug/app-debug.apk
