@@ -28,7 +28,7 @@ jobs:
 
       - name: Sign APK
         run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > release.keystore
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | tr -d '\n' | base64 -d > release.keystore
           $ANDROID_HOME/build-tools/$(ls $ANDROID_HOME/build-tools/ | tail -1)/apksigner sign \
             --ks release.keystore \
             --ks-alias "${{ secrets.KEY_ALIAS }}" \
