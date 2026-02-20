@@ -209,7 +209,7 @@ ONEAPI_DEVICE_SELECTOR=level_zero:0 ./build/bin/llama-bench ...
 | PP512 (Level 3, 30% budget) | ~269 | 15/33 GPU layers, rest on CPU |
 | TG128 (Level 3, 30% budget) | ~14 | CPU offload via fit_params |
 | PP512 (legacy) | ~159 | `GGML_SYCL_UNIFIED_FORCE_LEGACY=1` |
-| Multi-device | HANGS | Unified cache sync issues, avoid |
+| TG128 3-device (B580+B50+CPU) | ~27 | `GGML_SYCL_SPLIT_RATIO="60,32,8"` tensor split |
 
 ### SYCL Environment Variables
 
