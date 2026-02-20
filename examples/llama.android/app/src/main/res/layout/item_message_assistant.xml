@@ -12,5 +12,5 @@
         android:layout_height="wrap_content"
         android:background="@drawable/bg_assistant_message"
         android:padding="12dp"
-        android:textColor="@android:color/black" />
+        android:textColor="#E0E0E0" />
 </LinearLayout>
