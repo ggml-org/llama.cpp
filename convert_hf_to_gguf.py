@@ -2673,10 +2673,10 @@ class LlamaModel(TextModel):
                 if not hasattr(self, '_eagle3_int_tensors'):
                     self._eagle3_int_tensors = {}
                 self._eagle3_int_tensors[name] = data_torch
-                return []
+                return
             # t2d: target to draft vocabulary mapping (not used, skip completely)
             elif name == "t2d":
-                return []
+                return
             # hidden_norm: EAGLE-3 specific layer normalization
             elif name == "model.layers.0.hidden_norm.weight":
                 yield ("blk.0.hidden_norm.weight", data_torch)
