@@ -587,6 +587,22 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 ) {
     bpw_stop.store(false, std::memory_order_relaxed);
 
+    // Vector indices for statistics_data's metrics
+    enum {
+        ENERGY   = 0,
+        MEAN     = 1,
+        ELEMENTS = 2,
+        STDDEV   = 3,
+        SKEWNESS = 4,
+        KURTOSIS = 5,
+        GAIN     = 6,
+        H_NORM   = 7,
+        L2_DIST  = 8,
+        COSSIM   = 9,
+        PCC      = 10,
+        COVAR    = 11
+    };
+
     // SIGINT/SIGTERM signal handlers
     struct signal_scope_guard {
         using handler_t = void (*)(int);
@@ -621,6 +637,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         float min_bpw = 0.0;
         float max_bpw = 0.0;
         size_t n_elements = 0;
+        bool important = false;
     };
 
     // Quantization types
@@ -901,7 +918,6 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         std::vector<float> & dequantized_buffer,
         float tensor_bias,
         const float * slice_bias,
-        float h_norm,
         const wce_cache * ref_wce = nullptr,
         const mse_cache * ref_mse = nullptr
     ) -> quant_error
@@ -1078,8 +1094,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 total_cos_error += slice_sum / (double)rs * (double)nrows;
             }
 
-            const double penalty = 2.0 - std::clamp((double) h_norm, 0.0, 1.0);
-            qe.wce = total_cos_error * penalty;
+            qe.wce = total_cos_error;
             qe.error = qe.wce;
             return qe;
         }
@@ -1306,13 +1321,6 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         auto [act_ptr, act_sz] = get_side_data(activations_data);
 
         // Cache WCE stats once per tensor to avoid repeated map lookups/regex inside compute_quant_error
-        float h_norm = 1.0f;
-        if (valid_wce && statistics_data) {
-            if (auto it = statistics_data->find(remapped_name); it != statistics_data->end() && !it->second.empty()) {
-                h_norm = it->second.size() > 3 ? it->second[1] : 1.0f;
-            }
-        }
-
         std::vector<float> val_storage;
         std::vector<float> act_storage;
         const float * val_vec_ptr = nullptr;
@@ -1440,6 +1448,15 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             dq_buf.reserve(total_rows_sampled * n_per_row);
         }
 
+        // Kurtosis-Gain error scaling factor
+        float scaling_factor = 1.0f;
+        if (statistics_data) {
+            if (auto it = statistics_data->find(remapped_name); it != statistics_data->end() && !it->second.empty()) {
+                const auto & ts = it->second;
+                scaling_factor = 1.0f + std::log1p(std::max(0.0f, ts[KURTOSIS])) * std::max(1.0f, std::isnan(ts[GAIN]) ? 1.0f : ts[GAIN]);
+            }
+        }
+
         for (ggml_type vt : valid_types) {
             if (bpw_stop.load(std::memory_order_relaxed)) { return std::nullopt; }
             const wce_cache * ptr_ref_wce = valid_wce && !ref_wce.row_sq_norm.empty() ? & ref_wce : nullptr;
@@ -1455,8 +1472,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 q_buf,
                 dq_buf,
                 tensor_lambda,
-                slice_lambdas.data(),
-                h_norm,
+                slice_lambdas.empty() ? nullptr : slice_lambdas.data(),
                 ptr_ref_wce,
                 ptr_ref_mse
             );
@@ -1465,7 +1481,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             candidate.type = vt;
             candidate.bpw = (float)tensor_bpw(tensor, vt);
             candidate.bytes = tensor_bytes(tensor, vt);
-            candidate.error = qe.error;
+            candidate.error = qe.error * scaling_factor;
             candidate.mse = qe.mse;
             candidate.proj = qe.proj;
             candidate.wce = qe.wce;
@@ -1616,10 +1632,11 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     auto build_mix = [&]() -> std::unordered_map<std::string, ggml_type> {
         std::unordered_map<std::string, ggml_type> mix;
         LLAMA_LOG_INFO("%s: - estimated tensor quantization mix:\n", func);
-        for (const auto & ti : all_tensors) {
-            LLAMA_LOG_INFO("\t%s: %45s - \t%8s, \t%1.4f bpw,\terror: %.4f\n",
-                func, ggml_get_name(ti.w->tensor), ggml_type_name(ti.candidates[ti.choice].type), ti.candidates[ti.choice].bpw, ti.candidates[ti.choice].error);
-            mix[ggml_get_name(ti.w->tensor)] = ti.candidates[ti.choice].type;
+        for (const auto & tn : all_tensors) {
+            LLAMA_LOG_INFO("\t%s: %45s %s\t%8s, \t%1.4f bpw,\terror: %.4f\n",
+                func, ggml_get_name(tn.w->tensor), tn.important ? "⬆︎" : "-", ggml_type_name(tn.candidates[tn.choice].type), tn.candidates[tn.choice].bpw,
+                tn.candidates[tn.choice].error);
+            mix[ggml_get_name(tn.w->tensor)] = tn.candidates[tn.choice].type;
         }
 
         return mix;
@@ -1634,22 +1651,61 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         return build_mix();
     }
 
+    auto importance_score = [](const std::vector<float> & tstats) -> float {
+        if (tstats.size() < 12) { return 0.0f; }
+
+        const float energy = std::log1pf(std::max(0.0f, (float)tstats[ENERGY]));
+        const float range = 1.0f + std::max(0.0f, tstats[STDDEV]);
+        const float magnitude = std::isfinite(tstats[L2_DIST]) ? 1.0f + tstats[L2_DIST] : 1.0f;
+        const float alignment = std::isfinite(tstats[COSSIM]) ? 1.0f - tstats[COSSIM] : 1.0f;
+        const float concentration = 1.0f - std::clamp(tstats[H_NORM], 0.0f, 100.0f) / 100.0f + EPSILON;
+
+        return energy * range * magnitude * alignment * concentration;
+    };
+
+    // Threshold at which pct of tensors will be marked as important
+    auto threshold_score = [&](const std::unordered_map<std::string, std::vector<float>> & stats, const float pct) -> float {
+        if (stats.empty() || pct < 0.0f || pct > 100.0f) { return std::numeric_limits<float>::quiet_NaN(); }
+
+        std::vector<float> val;
+        val.reserve(stats.size());
+        for (const auto & ts : stats) { val.push_back(importance_score(ts.second)); }
+        if (val.empty()) { return std::numeric_limits<float>::quiet_NaN(); }
+
+        size_t idx = std::round((1.0f - pct / 100.0f) * (val.size() - 1));
+        if (idx >= val.size()) { idx = val.size() - 1; }
+        std::nth_element(val.begin(), val.begin() + idx, val.end());
+
+        return val[idx];
+    };
+
+    float cutoff = std::numeric_limits<float>::quiet_NaN();
+    if (statistics_data && !statistics_data->empty()) { cutoff = threshold_score(* statistics_data, params->importance_pct); }
+    LLAMA_LOG_INFO("%s: - importance score cutoff: %1.4f\n", func, cutoff);
+
     // Certain tensors have a higher impact on model quality, so we apply a lower penalty to them
     auto is_important = [&](const std::string & tensor_name) -> bool {
-        bool important = false;
-        if (params->ignore_tensor_importance) { return important; }
+        if (tensor_name == "output.weight") { return true; }
+        if (params->importance_pct == 0.0f) { return false; }
+        if (std::isfinite(cutoff)) {
+            if (auto it = statistics_data->find(remap_imatrix(tensor_name, mapped)); it != statistics_data->end() && !it->second.empty()) {
+                return importance_score(it->second) >= cutoff;
+            }
+        } else {
+            return tensor_name.find(".attn_output.weight") != std::string::npos ||
+                tensor_name.find(".attn_o.weight") != std::string::npos ||
+                tensor_name.find(".attn_v.weight") != std::string::npos ||
+                tensor_name.find(".ffn_down.weight") != std::string::npos ||
+                tensor_name.find(".ffn_down_exps.weight") != std::string::npos ||
+                tensor_name.find(".time_mix_output.weight") != std::string::npos ||
+                tensor_name.find(".time_mix_value.weight") != std::string::npos;
+        }
 
-        important = tensor_name == "output.weight" ||
-                        tensor_name.find(".attn_output.weight") != std::string::npos ||
-                        tensor_name.find(".attn_o.weight") != std::string::npos ||
-                        tensor_name.find(".attn_v.weight") != std::string::npos ||
-                        tensor_name.find(".ffn_down.weight") != std::string::npos ||
-                        tensor_name.find(".ffn_down_exps.weight") != std::string::npos ||
-                        tensor_name.find(".time_mix_output.weight") != std::string::npos ||
-                        tensor_name.find(".time_mix_value.weight") != std::string::npos;
-
-        return important;
+        return false;
     };
+
+    // Determine tensor importance
+    for (auto & tn : all_tensors) { tn.important = is_important(ggml_get_name(tn.w->tensor)); }
 
     // Minimize error subject to a size target constraint
     auto lagrangian_relaxation = [&](const double mu, std::vector<int> & choices, size_t & bytes, double & cost) {
@@ -1658,8 +1714,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         cost = 0.0;
         for (size_t i = 0; i < all_tensors.size(); ++i) {
             const auto & tn = all_tensors[i];
-            const bool imp = is_important(ggml_get_name(tn.w->tensor));
-            const double eff_mu = imp ? mu * 0.1 : mu; // important tensors get 10x lower penalty
+            const double eff_mu = tn.important ? mu / penalty : mu; // important tensors get a lower penalty
 
             int best = 0;
             double min = INFINITE;
@@ -1764,7 +1819,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             auto bytes = (double)(tn.candidates[next].bytes - tn.candidates[tn.choice].bytes);
             if (bytes > EPSILON) {
                 double ratio = err / bytes;
-                if (is_important(ggml_get_name(tn.w->tensor))) { ratio *= 5.0; } // important tensors get 5x boost
+                if (tn.important) { ratio *= penalty; } // important tensors get a higher priority
                 queue.push({i, next, ratio});
             }
         }
@@ -2051,10 +2106,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             if (params->statistics) {
                 LLAMA_LOG_INFO("%s: imatrix has statistics\n", __func__);
             }
-            if (params->ignore_tensor_importance) {
-                LLAMA_LOG_INFO("%s: distributing budget equitably across all tensors\n", __func__);
-            } else {
-                LLAMA_LOG_INFO("%s: assigning more budget to important tensors\n", __func__);
+            if (params->importance_pct != 0.0f) {
+                LLAMA_LOG_INFO("%s: marking up to %.2f%% of tensors as important\n", __func__, params->importance_pct);
             }
             if (params->use_wce) {
                 LLAMA_LOG_INFO("%s: using experimental Weighted Cosine Error (WCE) optimization\n", __func__);
@@ -2426,7 +2479,7 @@ llama_model_quantize_params llama_model_quantize_default_params() {
         /*.target_size                 =*/ -1,
         /*.save_state                  =*/ false,
         /*.state_file                  =*/ nullptr,
-        /*.ignore_tensor_importance    =*/ false,
+        /*.importance_pct              =*/ 0.0f,
         /*.use_wce                     =*/ false
     };
 

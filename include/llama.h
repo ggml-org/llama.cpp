@@ -399,7 +399,7 @@ extern "C" {
         int64_t target_size;                  // target file size in bytes
         bool save_state;                      // keep bpw state file
         void * state_file;                    // pointer to bpw state file
-        bool ignore_tensor_importance;        // allocate target bpw budget equitably across all tensors
+        float importance_pct;                 // identify up to pct% of tensors as important
         bool use_wce;                         // optimize for WCE instead of MSE
     } llama_model_quantize_params;
 

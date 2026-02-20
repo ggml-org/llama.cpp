@@ -139,8 +139,8 @@ static void usage(const char * executable) {
     printf("      Advanced option to automatically select quantization types to achieve a total bits per weight (bpw) target\n");
     printf("  --target-size N[unit]: target a file size. N must be a positive number with an optional unit (b, kb, mb, gb, tb)\n");
     printf("      Advanced option to automatically select quantization types to achieve a target file size\n");
-    printf("  --ignore-tensor-importance: distribute bpw budget equitably across all tensors\n");
-    printf("      Advanced option to disable assigning more bpw budget to important tensors. It may increase quality for some models\n");
+    printf("  --importance-pct N: mark up to N%% of tensors as important. N must be a positive number between 0.0 and 100.0\n");
+    printf("      Advanced option to select up to N%% of important tensors to keep at a higher precision. It may increase quality for some models\n");
     printf("  --save-state: save the bpw / file size computations to <model name>-<model hash>-mse.bpw_state\n");
     printf("  --state-file file_name: file name to use instead of default\n");
     printf("  --keep-split: will generate quantized model in the same shards as input\n");
@@ -557,6 +557,27 @@ static bool parse_target_bpw(const char * data, float & target_bpw) {
     return true;
 }
 
+static bool parse_importance_pct(const char * data, float & importance_pct) {
+    if (!data) {
+        printf("\n%s: no tensor importance %% provided\n\n", __func__);
+        return false;
+    }
+
+    try {
+        importance_pct = std::stof(data);
+        if (importance_pct < 0.0f || importance_pct > 100.0f) {
+            printf("\n%s: tensor importance %% must be a positive number between 0.0 and 100.0\n\n", __func__);
+            return false;
+        }
+    }
+    catch (const std::exception & e) {
+        printf("\n%s: '%s' is not valid. Tensor importance %% must be a positive number between 0.0 and 100.0\n\n", __func__, data);
+        return false;
+    }
+
+    return true;
+}
+
 static bool parse_target_size(const char * data, int64_t & target_size) {
     if (!data) {
         printf("\n%s: no target file size provided\n\n", __func__);
@@ -633,6 +654,7 @@ int main(int argc, char ** argv) {
     std::vector<int> prune_layers;
     float target_bpw = -1.0f;
     int64_t target_size = -1;
+    float importance_pct = 0.0f;
 
     for (; arg_idx < argc && strncmp(argv[arg_idx], "--", 2) == 0; arg_idx++) {
         if (strcmp(argv[arg_idx], "--leave-output-tensor") == 0) {
@@ -673,8 +695,10 @@ int main(int argc, char ** argv) {
             }
         } else if (strcmp(argv[arg_idx], "--use-wce") == 0) {
             params.use_wce = true;
-        } else if (strcmp(argv[arg_idx], "--ignore-tensor-importance") == 0) {
-            params.ignore_tensor_importance = true;
+        } else if (strcmp(argv[arg_idx], "--importance-pct") == 0) {
+            if (arg_idx == argc-1 || !parse_importance_pct(argv[++arg_idx], importance_pct)) {
+                usage(argv[0]);
+            }
         } else if (strcmp(argv[arg_idx], "--save-state") == 0) {
             params.save_state = true;
         } else if (strcmp(argv[arg_idx], "--state-file") == 0) {
@@ -791,6 +815,9 @@ int main(int argc, char ** argv) {
     }
     if (target_size != -1) {
         params.target_size = target_size;
+    }
+    if (importance_pct != 0.0f) {
+        params.importance_pct = importance_pct;
     }
 
     llama_backend_init();
