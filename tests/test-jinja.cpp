@@ -77,6 +77,15 @@ int main(int argc, char *argv[]) {
 }
 
 static void test_whitespace_control(testing & t) {
+#ifdef _WIN32
+    test_template(t, "trim_blocks removes newline after tag",
+        "{% if true %}\r\n"
+        "hello\r\n"
+        "{% endif %}\r\n",
+        json::object(),
+        "hello\r\n"
+    );
+#else
     test_template(t, "trim_blocks removes newline after tag",
         "{% if true %}\n"
         "hello\n"
@@ -84,7 +93,17 @@ static void test_whitespace_control(testing & t) {
         json::object(),
         "hello\n"
     );
+#endif
 
+#ifdef _WIN32
+    test_template(t, "lstrip_blocks removes leading whitespace",
+        "    {% if true %}\r\n"
+        "    hello\r\n"
+        "    {% endif %}\r\n",
+        json::object(),
+        "    hello\r\n"
+    );
+#else
     test_template(t, "lstrip_blocks removes leading whitespace",
         "    {% if true %}\n"
         "    hello\n"
@@ -92,7 +111,17 @@ static void test_whitespace_control(testing & t) {
         json::object(),
         "    hello\n"
     );
+#endif
 
+#ifdef _WIN32
+    test_template(t, "for loop with trim_blocks",
+        "{% for i in items %}\r\n"
+        "{{ i }}\r\n"
+        "{% endfor %}\r\n",
+        {{"items", json::array({1, 2, 3})}},
+        "1\r\n2\r\n3\r\n"
+    );
+#else
     test_template(t, "for loop with trim_blocks",
         "{% for i in items %}\n"
         "{{ i }}\n"
@@ -100,7 +129,17 @@ static void test_whitespace_control(testing & t) {
         {{"items", json::array({1, 2, 3})}},
         "1\n2\n3\n"
     );
+#endif
 
+#ifdef _WIN32
+    test_template(t, "explicit strip both",
+        "  {%- if true -%}  \r\n"
+        "hello\r\n"
+        "  {%- endif -%}  \r\n",
+        json::object(),
+        "hello"
+    );
+#else
     test_template(t, "explicit strip both",
         "  {%- if true -%}  \n"
         "hello\n"
@@ -108,12 +147,21 @@ static void test_whitespace_control(testing & t) {
         json::object(),
         "hello"
     );
+#endif
 
+#ifdef _WIN32
+    test_template(t, "expression whitespace control",
+        "  {{- 'hello' -}}  \r\n",
+        json::object(),
+        "hello"
+    );
+#else
     test_template(t, "expression whitespace control",
         "  {{- 'hello' -}}  \n",
         json::object(),
         "hello"
     );
+#endif
 
     test_template(t, "inline block no newline",
         "{% if true %}yes{% endif %}",
@@ -655,6 +703,10 @@ static void test_filters(testing & t) {
         "fallback"
     );
 
+    // TODO review if this is needed.
+    // NOTE MSVC compiler may treat "\u2713" as a series of bytes, not a single symbol.
+    // This happens due to MSVC treating source files being set in current locale codepage, which may be Windows-1252.
+    // To pass this test, add to MSVC's build command "/utf-8" option.
     test_template(t, "tojson ensure_ascii=true",
         "{{ data|tojson(ensure_ascii=true) }}",
         {{"data", "\u2713"}},
@@ -673,11 +725,19 @@ static void test_filters(testing & t) {
         "{\"a\": 1, \"b\": [1, 2]}"
     );
 
+#ifdef _WIN32
+    test_template(t, "tojson indent=4",
+        "{{ data|tojson(indent=4) }}",
+        {{"data", {{"a", 1}, {"b", json::array({1, 2})}}}},
+        "{\r\n    \"a\": 1,\r\n    \"b\": [\r\n        1,\r\n        2\r\n    ]\r\n}"
+    );
+#else
     test_template(t, "tojson indent=4",
         "{{ data|tojson(indent=4) }}",
         {{"data", {{"a", 1}, {"b", json::array({1, 2})}}}},
         "{\n    \"a\": 1,\n    \"b\": [\n        1,\n        2\n    ]\n}"
     );
+#endif
 
     test_template(t, "tojson separators=(',',':')",
         "{{ data|tojson(separators=(',',':')) }}",
@@ -685,11 +745,19 @@ static void test_filters(testing & t) {
         "{\"a\":1,\"b\":[1,2]}"
     );
 
+#ifdef _WIN32
+    test_template(t, "tojson separators=(',',': ') indent=2",
+        "{{ data|tojson(separators=(',',': '), indent=2) }}",
+        {{"data", {{"a", 1}, {"b", json::array({1, 2})}}}},
+        "{\r\n  \"a\": 1,\r\n  \"b\": [\r\n    1,\r\n    2\r\n  ]\r\n}"
+    );
+#else
     test_template(t, "tojson separators=(',',': ') indent=2",
         "{{ data|tojson(separators=(',',': '), indent=2) }}",
         {{"data", {{"a", 1}, {"b", json::array({1, 2})}}}},
         "{\n  \"a\": 1,\n  \"b\": [\n    1,\n    2\n  ]\n}"
     );
+#endif
 
     test_template(t, "chained filters",
         "{{ '  HELLO  '|trim|lower }}",
@@ -2126,7 +2194,12 @@ static void test_fuzzing(testing & t) {
             "{{ x + y }}", "{{ x - y }}", "{{ x * y }}",
             "{{ x == y }}", "{{ x != y }}", "{{ x > y }}",
             "{{ range(3) }}", "{{ \"hello\" | upper }}",
-            "text", " ", "\n",
+            "text", " ",
+#ifdef _WIN32
+            "\r\n",
+#else
+            "\n",
+#endif
         };
 
         for (int i = 0; i < num_iterations; ++i) {
