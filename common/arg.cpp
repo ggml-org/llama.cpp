@@ -1301,7 +1301,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, bool value) {
             params.kv_unified = value;
         }
-    ).set_env("LLAMA_ARG_KV_UNIFIED").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_BATCHED, LLAMA_EXAMPLE_BENCH}));
+    ).set_env("LLAMA_ARG_KV_UNIFIED").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_BATCHED, LLAMA_EXAMPLE_BENCH, LLAMA_EXAMPLE_PARALLEL}));
     add_opt(common_arg(
         {"--context-shift"},
         {"--no-context-shift"},
@@ -3435,16 +3435,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 throw std::invalid_argument("ngram size M must be between 1 and 1024 inclusive");
             }
             params.speculative.ngram_size_m = value;
-        }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}));
-    add_opt(common_arg(
-        {"--spec-ngram-check-rate"}, "N",
-        string_format("ngram check rate for ngram-simple/ngram-map speculative decoding (default: %d)", params.speculative.ngram_check_rate),
-        [](common_params & params, int value) {
-            if (value < 1) {
-                throw std::invalid_argument("ngram check rate must be at least 1");
-            }
-            params.speculative.ngram_check_rate = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
