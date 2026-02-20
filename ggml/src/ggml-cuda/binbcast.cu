@@ -2,6 +2,9 @@
 #include <cstdint>
 #include <utility>
 
+template<typename T, size_t>
+using type_for_index = T;
+
 static __device__ __forceinline__ float op_repeat(const float a, const float b) {
     return b;
     GGML_UNUSED(a);
@@ -288,39 +291,24 @@ static void launch_bin_bcast_pack(const ggml_tensor * src0, const ggml_tensor * 
             const uint3 ne1_fastdiv = init_fastdiv_values((uint32_t) ne1);
             const uint3 ne2_fastdiv = init_fastdiv_values((uint32_t) ne2);
 
-            if constexpr (sizeof...(I) > 0) {
-                k_bin_bcast_unravel<bin_op, src0_t, src1_t, dst_t><<<block_num, block_size, 0, stream>>>(
+            {
+                auto launch_params = ggml_cuda_kernel_launch_params((dim3)block_num, block_size, 0, stream);
+                ggml_cuda_kernel_launch(k_bin_bcast_unravel<bin_op, src0_t, src1_t, dst_t, type_for_index<const src1_t *, I>...>, launch_params,
                     src0_dd, src1_dd, dst_dd, ne0_fastdiv, ne1_fastdiv, ne2_fastdiv, ne3, prod_012, prod_01, ne10, ne11,
                     ne12, ne13,
                   /*s0,*/ s1,  s2,  s3,
                     s00, s01, s02, s03,
                     s10, s11, s12, s13, (const src1_t *) dst->src[I + 1]->data...);
-            } else {
-                k_bin_bcast_unravel<bin_op, src0_t, src1_t, dst_t>
-                    <<<block_num, block_size, 0, stream>>>(src0_dd, src1_dd, dst_dd, ne0_fastdiv, ne1_fastdiv,
-                                                           ne2_fastdiv, ne3, prod_012, prod_01, ne10, ne11, ne12, ne13,
-                                                         /*s0,*/ s1,  s2,  s3,
-                                                           s00, s01, s02, s03,
-                                                           s10, s11, s12, s13);
             }
         } else {
             const uint3 ne3_fastdiv = init_fastdiv_values((uint32_t) ne3);
-            if constexpr (sizeof...(I) > 0) {
-                // TODO discuss. Variadic templates are difficult to use with cudaLaunchKernelEx.
-                // For <<<>>>, the compiler can see all args at the call site and deduce src_ptrs... at compile time
-                // For cudaLaunchKernelEx, we would need to explicitly instantiate the kernel template.
-                k_bin_bcast<bin_op, src0_t, src1_t, dst_t><<<block_nums, block_dims, 0, stream>>>(
+            {
+                auto launch_params = ggml_cuda_kernel_launch_params(block_nums, block_dims, 0, stream);
+                ggml_cuda_kernel_launch(k_bin_bcast<bin_op, src0_t, src1_t, dst_t, type_for_index<const src1_t *, I>...>, launch_params,
                     src0_dd, src1_dd, dst_dd, ne0, ne1, ne2, ne3_fastdiv, ne10, ne11, ne12, ne13,
                   /*s0,*/ s1, s2,  s3,
-                    s00 ,s01, s02, s03,
-                    s10, s11, s12, s13, (const src1_t *) dst->src[I + 1]->data...);
-            } else {
-                auto launch_params = ggml_cuda_kernel_launch_params(block_nums, block_dims, 0, stream);
-                ggml_cuda_kernel_launch(k_bin_bcast<bin_op, src0_t, src1_t, dst_t>, launch_params,
-                    src0_dd, src1_dd, dst_dd, ne0, ne1, ne2, ne3_fastdiv, ne10, ne11, ne12, ne13,
-                  /*s0,*/ s1,  s2,  s3,
                     s00, s01, s02, s03,
-                    s10, s11, s12, s13);
+                    s10, s11, s12, s13, (const src1_t *) dst->src[I + 1]->data...);
             }
         }
     }
