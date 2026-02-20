@@ -1,16 +1,13 @@
 name: Quantization Benchmarks
 
 on:
-  workflow_dispatch:
-    inputs:
-      model_repo:
-        description: 'HuggingFace model repo to benchmark'
-        default: 'TinyLlama/TinyLlama-1.1B-Chat-v1.0'
-        type: string
-      model_name:
-        description: 'Short name for the model (used in filenames)'
-        default: 'tinyllama-1.1b'
-        type: string
+  push:
+    branches:
+      - feat/ultra-low-bit-quantization
+
+env:
+  MODEL_REPO: 'TinyLlama/TinyLlama-1.1B-Chat-v1.0'
+  MODEL_NAME: 'tinyllama-1.1b'
 
 permissions:
   contents: write
@@ -37,7 +34,7 @@ jobs:
 
       - name: Download and convert model to F16 GGUF
         run: |
-          huggingface-cli download ${{ inputs.model_repo }} --local-dir models/hf-model
+          huggingface-cli download ${{ env.MODEL_REPO }} --local-dir models/hf-model
           python3 convert_hf_to_gguf.py models/hf-model --outfile models/model-F16.gguf --outtype f16
 
       - name: Download WikiText-2
@@ -179,7 +176,7 @@ jobs:
         run: |
           TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           FILENAME_TS=$(date -u +%Y%m%d-%H%M%S)
-          MODEL_SHORT="${{ inputs.model_name }}"
+          MODEL_SHORT="${{ env.MODEL_NAME }}"
 
           mkdir -p benchmarks
 
@@ -191,7 +188,7 @@ jobs:
           {
             echo "# Quantization Benchmark Results"
             echo ""
-            echo "**Model:** ${{ inputs.model_repo }}"
+            echo "**Model:** ${{ env.MODEL_REPO }}"
             echo "**Date:** ${TIMESTAMP}"
             echo "**Runner:** ubuntu-latest ($(nproc) cores)"
             echo "**Branch:** ${{ github.ref_name }}"
@@ -308,9 +305,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add benchmarks/
-          git commit -m "benchmark: ${{ inputs.model_name }} quantization results [skip ci]
+          git commit -m "benchmark: ${{ env.MODEL_NAME }} quantization results [skip ci]
 
-          Model: ${{ inputs.model_repo }}
+          Model: ${{ env.MODEL_REPO }}
           Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           git push
 
