@@ -1,15 +1,18 @@
 package com.example.llama
 
+import android.app.Activity
 import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.os.Bundle
 import android.view.Menu
 import android.view.MenuItem
 import android.widget.Button
 import android.widget.EditText
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.ActionBarDrawerToggle
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.Toolbar
@@ -25,6 +28,7 @@ import com.example.llama.data.DbMessage
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -51,6 +55,30 @@ class MainActivity : AppCompatActivity() {
     private var generationJob: Job? = null
 
     private val currentMessages = mutableListOf<ChatMessage>()
+
+    private val filePickerLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            result.data?.data?.let { uri ->
+                // URI'den gerçek dosya yolunu çıkar
+                val path = uri.path?.let { p ->
+                    when {
+                        p.startsWith("/document/primary:") ->
+                            p.replace("/document/primary:", "/storage/emulated/0/")
+                        p.startsWith("/document/raw:") ->
+                            p.removePrefix("/document/raw:")
+                        else -> p
+                    }
+                } ?: return@let
+                val prefs = getSharedPreferences("llama_prefs", MODE_PRIVATE)
+                val models = prefs.getStringSet("saved_models", mutableSetOf())!!.toMutableSet()
+                models.add(path)
+                prefs.edit().putStringSet("saved_models", models).apply()
+                loadModel(path)
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -336,21 +364,39 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showAddModelDialog() {
-        val input = EditText(this).apply { hint = "/storage/emulated/0/models/model.gguf" }
         AlertDialog.Builder(this)
-            .setTitle("Model Yolu")
-            .setView(input)
-            .setPositiveButton("Yükle") { _, _ ->
-                val path = input.text.toString().trim()
-                if (path.isNotEmpty()) {
-                    val prefs = getSharedPreferences("llama_prefs", MODE_PRIVATE)
-                    val models = prefs.getStringSet("saved_models", mutableSetOf())!!.toMutableSet()
-                    models.add(path)
-                    prefs.edit().putStringSet("saved_models", models).apply()
-                    loadModel(path)
+            .setTitle("Model Ekle")
+            .setItems(arrayOf("Dosya seçici", "Yol gir")) { _, which ->
+                when (which) {
+                    0 -> {
+                        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            type = "*/*"
+                        }
+                        filePickerLauncher.launch(intent)
+                    }
+                    1 -> {
+                        val input = EditText(this).apply {
+                            hint = "/storage/emulated/0/models/model.gguf"
+                        }
+                        AlertDialog.Builder(this)
+                            .setTitle("Model Yolu")
+                            .setView(input)
+                            .setPositiveButton("Yükle") { _, _ ->
+                                val path = input.text.toString().trim()
+                                if (path.isNotEmpty()) {
+                                    val prefs = getSharedPreferences("llama_prefs", MODE_PRIVATE)
+                                    val models = prefs.getStringSet("saved_models", mutableSetOf())!!.toMutableSet()
+                                    models.add(path)
+                                    prefs.edit().putStringSet("saved_models", models).apply()
+                                    loadModel(path)
+                                }
+                            }
+                            .setNegativeButton("İptal", null)
+                            .show()
+                    }
                 }
             }
-            .setNegativeButton("İptal", null)
             .show()
     }
 
@@ -358,6 +404,19 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             try {
                 Toast.makeText(this@MainActivity, "Model yükleniyor...", Toast.LENGTH_SHORT).show()
+
+                // Error state'indeyse temizle
+                if (engine.state.value is InferenceEngine.State.Error) {
+                    engine.cleanUp()
+                }
+
+                // Engine Initialized olana kadar bekle (max 10 saniye)
+                var waited = 0
+                while (engine.state.value !is InferenceEngine.State.Initialized && waited < 100) {
+                    delay(100)
+                    waited++
+                }
+
                 engine.loadModel(path)
                 loadedModelPath = path
                 updateFabIcon()
