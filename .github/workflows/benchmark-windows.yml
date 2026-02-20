@@ -1,0 +1,113 @@
+name: Windows Self-Hosted Benchmarks
+
+on:
+  push:
+    branches:
+      - feat/ultra-low-bit-quantization
+
+env:
+  MODEL_REPO: 'TinyLlama/TinyLlama-1.1B-Chat-v1.0'
+  MODEL_NAME: 'tinyllama-1.1b'
+
+jobs:
+  benchmark-ryzen:
+    runs-on: [self-hosted, Windows, X64]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          pip install torch transformers sentencepiece protobuf safetensors huggingface_hub[cli]
+
+      - name: Build llama.cpp
+        run: |
+          cmake -B build
+          cmake --build build --config Release -j 12
+          
+          mkdir -p bin
+          find build -name "llama-quantize.exe" -type f -exec cp {} bin/ \;
+          find build -name "llama-perplexity.exe" -type f -exec cp {} bin/ \;
+          find build -name "llama-bench.exe" -type f -exec cp {} bin/ \;
+
+      - name: Download model and data
+        run: |
+          python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='${{ env.MODEL_REPO }}', local_dir='models/hf-model')"
+          python convert_hf_to_gguf.py models/hf-model --outfile models/model-F16.gguf --outtype f16
+          
+          curl -L "https://huggingface.co/datasets/ggml-org/ci/resolve/main/wikitext-2-raw-v1.zip" -o models/wikitext-2-raw.zip
+          cd models && unzip -o wikitext-2-raw.zip
+
+      - name: Run Quantization
+        run: |
+          for type in Q8_0 Q2_K TQ1_0 TQ2_0 Q1_5_K Q2_K_S_NEW; do
+            echo "Quantizing $type"
+            ./bin/llama-quantize.exe models/model-F16.gguf "models/model-${type}.gguf" "$type"
+          done
+
+      - name: Run Perplexity
+        run: |
+          mkdir -p results
+          echo "Running Baseline Perplexity"
+          ./bin/llama-perplexity.exe -m models/model-Q8_0.gguf -f models/wikitext-2-raw/wiki.test.raw --save-all-logits models/logits-Q8_0.kld --chunks 256 -t 12 > results/ppl-Q8_0.txt
+
+          for type in Q2_K TQ1_0 TQ2_0 Q1_5_K Q2_K_S_NEW; do
+            echo "Running Perplexity $type"
+            ./bin/llama-perplexity.exe -m "models/model-${type}.gguf" -f models/wikitext-2-raw/wiki.test.raw --kl-divergence --kl-divergence-base models/logits-Q8_0.kld --chunks 256 -t 12 > results/ppl-${type}.txt
+          done
+
+      - name: Run Benchmark
+        run: |
+          for type in Q8_0 Q2_K TQ1_0 TQ2_0 Q1_5_K Q2_K_S_NEW; do
+            echo "Running Benchmark $type"
+            ./bin/llama-bench.exe -m "models/model-${type}.gguf" -t 12 -ngl 0 -r 3 > results/bench-${type}.txt
+          done
+
+      - name: Generate Report
+        run: |
+          TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          REPORT="results/benchmark-Windows-Ryzen9.md"
+          
+          {
+            echo "# Benchmark Results (Ryzen 9 7900X)"
+            echo "**Model:** ${MODEL_REPO}"
+            echo "**Date:** ${TIMESTAMP}"
+            echo "**Runner:** Self-Hosted Windows x64 (12 Cores)"
+            echo ""
+            echo "## Perplexity & KLD"
+            echo "| Type | PPL | Mean KLD |"
+            echo "|------|-----|----------|"
+          } > $REPORT
+
+          Q8_PPL=$(grep "Final estimate" results/ppl-Q8_0.txt | grep -oP 'PPL = \K[0-9.]+' || echo "N/A")
+          echo "| Q8_0 | $Q8_PPL | 0 |" >> $REPORT
+          
+          for type in Q2_K TQ1_0 TQ2_0 Q1_5_K Q2_K_S_NEW; do
+            PPL=$(grep "Final estimate" results/ppl-${type}.txt | grep -oP 'PPL = \K[0-9.]+' || echo "N/A")
+            KLD=$(grep "Mean    KLD" results/ppl-${type}.txt | awk '{print $3}' || echo "N/A")
+            echo "| **$type** | **$PPL** | $KLD |" >> $REPORT
+          done
+          
+          {
+            echo ""
+            echo "## Performance ($(nproc) threads)"
+            echo "| Type | Prompt (t/s) | Generation (t/s) |"
+            echo "|------|-------------|------------------|"
+          } >> $REPORT
+          
+          for type in Q8_0 Q2_K TQ1_0 TQ2_0 Q1_5_K Q2_K_S_NEW; do
+            FILE="results/bench-${type}.txt"
+            PP=$(grep -oP '\d+\.\d+ ± \d+\.\d+(?= t/s)' "$FILE" | head -1 || echo "N/A")
+            TG=$(grep -oP '\d+\.\d+ ± \d+\.\d+(?= t/s)' "$FILE" | tail -1 || echo "N/A")
+            echo "| $type | $PP | $TG |" >> $REPORT
+          done
+          
+          cat $REPORT
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: result-windows-ryzen
+          path: results/
