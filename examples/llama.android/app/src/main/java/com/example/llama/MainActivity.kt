@@ -26,7 +26,6 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.UUID
-import com.example.llama.Llm
 
 class MainActivity : AppCompatActivity() {
 
@@ -46,7 +45,6 @@ class MainActivity : AppCompatActivity() {
     private var currentConversationId: String = ""
     private var loadedModelPath: String? = null
     private var isGenerating = false
-    private val llm = Llm.instance()
 
     private val currentMessages = mutableListOf<ChatMessage>()
 
@@ -256,38 +254,25 @@ class MainActivity : AppCompatActivity() {
 
         isGenerating = true
         updateFabIcon()
-        var fullResponse = ""
 
-        lifecycleScope.launch {
-            try {
-                llm.send(text, loadedModelPath!!)
-                    .collect { token: String ->
-                        fullResponse += token
-                        messageAdapter.updateLastAssistantMessage(fullResponse)
-                        messagesRv.scrollToPosition(currentMessages.size - 1)
-                    }
-            } catch (e: Exception) {
-                messageAdapter.updateLastAssistantMessage("[Hata: ${e.message}]")
-            } finally {
-                if (currentMessages.isNotEmpty() && !currentMessages.last().isUser) {
-                    currentMessages[currentMessages.size - 1] = ChatMessage(fullResponse, false)
-                } else {
-                    currentMessages.add(ChatMessage(fullResponse, false))
-                }
-                lifecycleScope.launch(Dispatchers.IO) {
-                    db.chatDao().insertMessage(
-                        DbMessage(UUID.randomUUID().toString(), convId, "assistant", fullResponse)
-                    )
-                    db.chatDao().touchConversation(convId, System.currentTimeMillis())
-                }
-                isGenerating = false
-                updateFabIcon()
-            }
+        // TODO: Gerçek inference buraya gelecek
+        // Şimdilik stub — inference entegrasyonu bir sonraki adım
+        val fullResponse = "[Model henüz entegre edilmedi]"
+        messageAdapter.updateLastAssistantMessage(fullResponse)
+        currentMessages.add(ChatMessage(fullResponse, false))
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            db.chatDao().insertMessage(
+                DbMessage(UUID.randomUUID().toString(), convId, "assistant", fullResponse)
+            )
+            db.chatDao().touchConversation(convId, System.currentTimeMillis())
         }
+
+        isGenerating = false
+        updateFabIcon()
     }
 
     private fun stopGeneration() {
-        llm.stop()
         isGenerating = false
         updateFabIcon()
     }
@@ -348,18 +333,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadModel(path: String) {
-        lifecycleScope.launch {
-            try {
-                llm.load(path)
-                loadedModelPath = path
-                updateFabIcon()
-                Toast.makeText(this@MainActivity,
-                    path.substringAfterLast("/") + " yüklendi", Toast.LENGTH_SHORT).show()
-            } catch (e: Exception) {
-                Toast.makeText(this@MainActivity,
-                    "Model yüklenemedi: ${e.message}", Toast.LENGTH_LONG).show()
-            }
-        }
+        loadedModelPath = path
+        updateFabIcon()
+        Toast.makeText(this, path.substringAfterLast("/") + " yüklendi", Toast.LENGTH_SHORT).show()
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
