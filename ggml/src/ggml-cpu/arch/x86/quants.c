@@ -1533,38 +1533,6 @@ void ggml_vec_dot_q2_K_q8_K(int                        n,
 #endif
 }
 
-void ggml_vec_dot_q2_K_s_q8_K(int                        n,
-                              float * GGML_RESTRICT      s,
-                              size_t                     bs,
-                              const void * GGML_RESTRICT vx,
-                              size_t                     bx,
-                              const void * GGML_RESTRICT vy,
-                              size_t                     by,
-                              int                        nrc) {
-    assert(nrc == 1);
-    UNUSED(nrc);
-    UNUSED(bx);
-    UNUSED(by);
-    UNUSED(bs);
-
-    const block_q2_K_s * GGML_RESTRICT x = vx;
-    const block_q8_K * GGML_RESTRICT   y = vy;
-
-    const int nb = n / QK_K;
-
-#if defined(__AVX2__) || defined(__AVX__)
-    UNUSED(x);
-    UNUSED(y);
-    UNUSED(nb);
-    ggml_vec_dot_q2_K_s_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
-#else
-    UNUSED(x);
-    UNUSED(y);
-    UNUSED(nb);
-    ggml_vec_dot_q2_K_s_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
-#endif
-}
-
 void ggml_vec_dot_q3_K_q8_K(int                        n,
                             float * GGML_RESTRICT      s,
                             size_t                     bs,
