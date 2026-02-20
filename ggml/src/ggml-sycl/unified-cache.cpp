@@ -6653,6 +6653,39 @@ void unified_cache_free_partial_entries(int device) {
     }
 }
 
+unified_cache * unified_cache_register_for_queue(int device_id, sycl::queue & queue) {
+    std::lock_guard<std::mutex> lock(g_cache_mutex);
+
+    // Return existing cache if already registered
+    auto it = g_device_caches.find(device_id);
+    if (it != g_device_caches.end()) {
+        return it->second.get();
+    }
+
+    // Query VRAM from the queue's device (no dpct dependency)
+    sycl::device dev    = queue.get_device();
+    size_t       total  = dev.get_info<sycl::info::device::global_mem_size>();
+    size_t       budget = static_cast<size_t>(total * 0.80);  // 80% budget for secondary GPU
+
+    const size_t min_headroom = 256ull * 1024ull * 1024ull;
+    if (total > min_headroom && budget > total - min_headroom) {
+        budget = total - min_headroom;
+    }
+
+    GGML_LOG_INFO("[UNIFIED-CACHE] Registering device %d (%s): total=%.1f MB budget=%.1f MB\n",
+                  device_id, dev.get_info<sycl::info::device::name>().c_str(),
+                  total / (1024.0f * 1024.0f), budget / (1024.0f * 1024.0f));
+
+    const size_t staging_bytes = 16 * 1024 * 1024;  // 16 MB staging for secondary device
+    try {
+        g_device_caches[device_id] = std::make_unique<unified_cache>(queue, budget, staging_bytes, 0);
+        return g_device_caches[device_id].get();
+    } catch (const sycl::exception & e) {
+        GGML_LOG_ERROR("[UNIFIED-CACHE] Failed to register device %d: %s\n", device_id, e.what());
+        return nullptr;
+    }
+}
+
 void shutdown_unified_cache() {
     // Set shutdown flag FIRST so destructors skip sycl::free() calls
     g_sycl_shutting_down.store(true);

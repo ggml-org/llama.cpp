@@ -19939,6 +19939,12 @@ static void split_config_init(sycl::queue * primary_queue) {
                 g_split_config.queue[1]  = &q1;
                 g_split_config.gpu_count = 2;
                 found = true;
+
+                // Register unified cache for B50 (device 1) using shared context queue.
+                // This avoids the hang from get_unified_cache_for_device(1) which would
+                // try to create a cache via dpct (no backend registered for device 1).
+                ggml_sycl::unified_cache_register_for_queue(1, q1);
+
                 GGML_LOG_INFO("SYCL 3-device split: %s + %s + CPU (%.0f%%/%.0f%%/%.0f%%)\n",
                               primary_dev.get_info<sycl::info::device::name>().c_str(),
                               secondary_dev.get_info<sycl::info::device::name>().c_str(),
@@ -20053,61 +20059,45 @@ static void split_secondary_gpu_ensure(size_t q8_bytes, size_t f32_bytes, sycl::
     }
 }
 
-// Persistent SOA weight cache for secondary GPU (bypasses unified cache).
-// Stores device pointers keyed by tensor name. Weights are loaded once (H2D + SOA
-// reorder) on first access and reused for all subsequent tokens.
-static std::unordered_map<std::string, void *> g_split_secondary_weights;
-
-// Load partial weight rows onto the secondary GPU with SOA layout.
-// src_device_aos: AOS weight data on the PRIMARY GPU (device pointer).
-// q_primary: primary GPU queue (for D2H copy).
-// q_secondary: secondary GPU queue (for H2D copy + SOA reorder).
-static const void * split_secondary_weight_get(
+// Secondary GPU (B50) weight loading via unified cache.
+// D2H from primary AOS → host staging → unified_cache_load_partial_rows on device 1.
+// Returns SOA device pointer on B50, or nullptr on failure.
+static const void * split_secondary_weight_load(
         const char * name, ggml_type type, int64_t ncols, int64_t nrows,
-        const void * src_device_aos, sycl::queue * q_primary, sycl::queue * q_secondary) {
-    auto it = g_split_secondary_weights.find(name);
-    if (it != g_split_secondary_weights.end()) {
-        return it->second;
+        const void * src_device_aos, sycl::queue * q_primary) {
+    // Check if already loaded in unified cache for device 1
+    void * cached = ggml_sycl::unified_cache_get_split_weight_ptr(name, 1);
+    if (cached) {
+        return cached;
     }
-    // First access: D2H from primary → host staging → H2D to secondary → SOA reorder
+
+    // First access: D2H from primary GPU → host staging → unified cache
     const size_t row_bytes   = ggml_row_size(type, ncols);
     const size_t total_bytes = (size_t) nrows * row_bytes;
 
-    // Plain host staging (aligned_alloc avoids cross-context USM issues)
-    void * staging = aligned_alloc(64, total_bytes);
+    // Host staging for D2H (sycl::malloc_host on shared context queue for PCIe zero-copy)
+    sycl::queue * q_secondary = g_split_config.queue[1];
+    void * staging = sycl::malloc_host(total_bytes, *q_secondary);
     if (!staging) {
-        GGML_LOG_WARN("[TENSOR-SPLIT-3DEV] staging alloc failed for %s (%zu bytes)\n",
+        GGML_LOG_WARN("[TENSOR-SPLIT-3DEV] sycl::malloc_host failed for %s (%zu bytes)\n",
                       name, total_bytes);
         return nullptr;
     }
-    // D2H: primary GPU device → plain host staging
+    // D2H: primary GPU device → host-pinned staging
     q_primary->memcpy(staging, src_device_aos, total_bytes).wait();
 
-    // Allocate device memory on secondary GPU
-    void * dev_ptr = sycl::malloc_device(total_bytes, *q_secondary);
-    if (!dev_ptr) {
-        GGML_LOG_WARN("[TENSOR-SPLIT-3DEV] sycl::malloc_device failed for %s (%zu bytes)\n",
-                      name, total_bytes);
-        free(staging);
-        return nullptr;
-    }
-    // H2D: plain host staging → secondary GPU device
-    q_secondary->memcpy(dev_ptr, staging, total_bytes).wait();
-    free(staging);
+    // Load into unified cache for device 1 (handles H2D + SOA reorder)
+    void * dev_ptr = ggml_sycl::unified_cache_load_partial_rows(
+        name, staging, type, ncols, nrows, 1);
 
-    // In-place AOS → SOA reorder on secondary GPU
-    bool ok = reorder_rows_to_soa(static_cast<uint8_t *>(dev_ptr), type, ncols, nrows,
-                                   total_bytes, q_secondary);
-    if (!ok) {
-        GGML_LOG_WARN("[TENSOR-SPLIT-3DEV] SOA reorder failed for %s (type=%d)\n",
-                      name, (int) type);
-        sycl::free(dev_ptr, *q_secondary);
-        return nullptr;
+    sycl::free(staging, *q_secondary);
+
+    if (!dev_ptr) {
+        GGML_LOG_WARN("[TENSOR-SPLIT-3DEV] unified cache load failed for %s\n", name);
+    } else {
+        GGML_SYCL_DEBUG("[TENSOR-SPLIT-3DEV] loaded %s via unified cache device 1: %lld rows\n",
+                        name, (long long) nrows);
     }
-    q_secondary->wait();
-    g_split_secondary_weights[name] = dev_ptr;
-    GGML_SYCL_DEBUG("[TENSOR-SPLIT-3DEV] loaded %s on secondary GPU: %lld rows, %zu bytes\n",
-                    name, (long long) nrows, total_bytes);
     return dev_ptr;
 }
 
@@ -20219,14 +20209,13 @@ static bool ggml_sycl_mul_mat_tensor_split(
             src0, device, GGML_LAYOUT_AOS);
         if (!src0_aos && (N_second > 0 || N_cpu > 0)) return false;
 
-        // Secondary GPU: D2H from primary AOS → host staging → H2D to B50 → SOA reorder
+        // Secondary GPU: load via unified cache (D2H → cache → H2D + SOA reorder)
         const void * src0_second = nullptr;
         sycl::queue * stream_second = g_split_config.queue[1];
         if (N_second > 0 && src0->name) {
-            src0_second = split_secondary_weight_get(
+            src0_second = split_secondary_weight_load(
                 src0->name, src0->type, ne00, N_second,
-                src0_aos + N_primary * src0_row_bytes,
-                stream, stream_second);
+                src0_aos + N_primary * src0_row_bytes, stream);
             if (!src0_second) return false;
         }
 
@@ -20267,20 +20256,20 @@ static bool ggml_sycl_mul_mat_tensor_split(
                                     src0_primary, nullptr, src1_ddq, dst_dd,
                                     0, N_primary, 1, K_padded, stream);
 
-        // --- Cross-device src1 staging (plain host memory, no USM context issues) ---
+        // --- Cross-device src1 staging (shared-context host-pinned for PCIe zero-copy) ---
         static float * g_split_src1_host = nullptr;
         static size_t  g_split_src1_size = 0;
         if (g_split_src1_size < src1_f32_bytes) {
-            free(g_split_src1_host);
-            g_split_src1_host = (float *) aligned_alloc(64, src1_f32_bytes);
+            if (g_split_src1_host) sycl::free(g_split_src1_host, *stream_second);
+            g_split_src1_host = (float *) sycl::malloc_host(src1_f32_bytes, *stream_second);
             g_split_src1_size = g_split_src1_host ? src1_f32_bytes : 0;
         }
         if (!g_split_src1_host) return false;
 
-        // D2H: primary GPU device → plain host (works with any SYCL queue)
+        // D2H: primary GPU device → shared-context host-pinned (accessible by both GPUs)
         stream->memcpy(g_split_src1_host, src1->data, src1_f32_bytes).wait();
 
-        // Persistent output staging buffers (plain host, cross-context safe)
+        // Persistent output staging buffers (shared-context host-pinned)
         static float * s_second_out_host     = nullptr;
         static size_t  s_second_out_host_sz  = 0;
         static float * s_second_out_dev      = nullptr;
@@ -20296,10 +20285,10 @@ static bool ggml_sycl_mul_mat_tensor_split(
             }
 
             const size_t second_out_bytes = N_second * sizeof(float);
-            // Ensure host output buffer
+            // Ensure host output buffer (shared-context pinned for both GPUs)
             if (s_second_out_host_sz < second_out_bytes) {
-                free(s_second_out_host);
-                s_second_out_host = (float *) aligned_alloc(64, second_out_bytes);
+                if (s_second_out_host) sycl::free(s_second_out_host, *stream_second);
+                s_second_out_host = (float *) sycl::malloc_host(second_out_bytes, *stream_second);
                 s_second_out_host_sz = s_second_out_host ? second_out_bytes : 0;
             }
             if (!s_second_out_host) return false;
@@ -20346,8 +20335,8 @@ static bool ggml_sycl_mul_mat_tensor_split(
         if (N_cpu > 0) {
             const size_t cpu_out_bytes = N_cpu * sizeof(float);
             if (s_cpu_out_sz < cpu_out_bytes) {
-                free(s_cpu_out);
-                s_cpu_out = (float *) aligned_alloc(64, cpu_out_bytes);
+                if (s_cpu_out) sycl::free(s_cpu_out, *stream_second);
+                s_cpu_out = (float *) sycl::malloc_host(cpu_out_bytes, *stream_second);
                 s_cpu_out_sz = s_cpu_out ? cpu_out_bytes : 0;
             }
             if (!s_cpu_out) return false;
@@ -32770,6 +32759,16 @@ static const char * ggml_backend_sycl_device_get_description(ggml_backend_dev_t 
 
 static void ggml_backend_sycl_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
     ggml_backend_sycl_device_context * ctx = (ggml_backend_sycl_device_context *) dev->context;
+
+    // When tensor split is active, hide non-primary devices from model loading.
+    // Tensor split manages these devices directly via the 3-device dispatch path.
+    static const char * split_env = std::getenv("GGML_SYCL_SPLIT_RATIO");
+    if (split_env && ctx->device > 0) {
+        *free  = 0;
+        *total = 0;
+        return;
+    }
+
     ggml_sycl_set_device(ctx->device);
     SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl_get_device(ctx->device).get_memory_info(*free, *total)));
 

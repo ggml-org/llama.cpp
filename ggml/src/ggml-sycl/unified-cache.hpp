@@ -1518,6 +1518,12 @@ void * unified_cache_get_split_weight_ptr(const char * tensor_name, int device);
 // Free all partial row entries on a device.
 void unified_cache_free_partial_entries(int device);
 
+// Register a unified cache for a device using an externally-managed queue.
+// Used by tensor split to create a cache for the secondary GPU (B50) which has
+// no llama.cpp backend and thus cannot use create_cache_for_device().
+// Returns the cache pointer, or nullptr on failure.
+unified_cache * unified_cache_register_for_queue(int device_id, sycl::queue & queue);
+
 // === Shutdown API ===
 
 // Shutdown the unified cache system before SYCL runtime destruction
