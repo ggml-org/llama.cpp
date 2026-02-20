@@ -35,8 +35,9 @@ enum ApirForwardReturnCode {
     APIR_FORWARD_SUCCESS         = 0,
     APIR_FORWARD_NO_DISPATCH_FCT = 1,
     APIR_FORWARD_TIMEOUT         = 2,
+    APIR_FORWARD_FAILED_TO_SYNC_STREAMS = 3,
 
-    APIR_FORWARD_BASE_INDEX      = 3,  // anything above this is a APIR backend library forward return code
+    APIR_FORWARD_BASE_INDEX      = 4,  // anything above this is a APIR backend library forward return code
 } ;
 
 __attribute__((unused)) static inline const char * apir_command_name(ApirCommandType type) {
@@ -82,6 +83,7 @@ __attribute__((unused)) static const char * apir_forward_error(ApirForwardReturn
     APIR_FORWARD_ERROR(APIR_FORWARD_SUCCESS);
     APIR_FORWARD_ERROR(APIR_FORWARD_NO_DISPATCH_FCT);
     APIR_FORWARD_ERROR(APIR_FORWARD_TIMEOUT);
+    APIR_FORWARD_ERROR(APIR_FORWARD_FAILED_TO_SYNC_STREAMS);
     APIR_FORWARD_ERROR(APIR_FORWARD_BASE_INDEX);
 
     return "Unknown APIR_COMMAND_TYPE_FORWARD error";
