@@ -203,12 +203,12 @@ ONEAPI_DEVICE_SELECTOR=level_zero:0 ./build/bin/llama-bench ...
 
 | Metric | tok/s | Notes |
 |--------|-------|-------|
-| PP512 (Level 0, all VRAM) | ~1242 | oneDNN FP16 path for M>=64 |
-| TG128 (Level 0, all VRAM) | ~70.5 | MMVQ fast-path with SOA layout |
+| PP512 (Level 0, all VRAM) | ~1336 | oneDNN FP16 path for M>=64 |
+| TG128 (Level 0, all VRAM) | ~72 | MMVQ fast-path with SOA layout + graph replay |
+| TG128 (no graph) | ~70 | MMVQ fast-path alone (graph adds only +3%) |
 | PP512 (Level 3, 30% budget) | ~269 | 15/33 GPU layers, rest on CPU |
 | TG128 (Level 3, 30% budget) | ~14 | CPU offload via fit_params |
 | PP512 (legacy) | ~159 | `GGML_SYCL_UNIFIED_FORCE_LEGACY=1` |
-| TG128 (no graph) | ~5.7 | `GGML_SYCL_DISABLE_GRAPH=1` |
 | Multi-device | HANGS | Unified cache sync issues, avoid |
 
 ### SYCL Environment Variables
@@ -218,7 +218,7 @@ ONEAPI_DEVICE_SELECTOR=level_zero:0 ./build/bin/llama-bench ...
 |----------|---------|--------|
 | `GGML_SYCL_UNIFIED_SOA=0` | ON | Disable SOA memory layout (AOS fallback, ~4x slower TG) |
 | `GGML_SYCL_TG_FAST=0` | ON | Disable MMVQ fast-path bypass (slower TG) |
-| `GGML_SYCL_DISABLE_GRAPH=1` | OFF | Disable SYCL graph replay (~12x slower TG) |
+| `GGML_SYCL_DISABLE_GRAPH=1` | OFF | Disable SYCL graph replay (minimal TG impact ~3%, mainly helps PP) |
 | `GGML_SYCL_ONEDNN_PP=0` | ON | Disable oneDNN for prompt processing |
 | `GGML_SYCL_UNIFIED_FORCE_LEGACY=1` | OFF | Force legacy kernel dispatch (bypass unified kernel) |
 
