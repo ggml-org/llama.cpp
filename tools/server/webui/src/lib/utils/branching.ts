@@ -15,6 +15,8 @@
  *        └── message 5 (assistant)
  */
 
+import { MessageRole } from '$lib/enums';
+
 /**
  * Filters messages to get the conversation path from root to a specific leaf node.
  * If the leafNodeId doesn't exist, returns the path with the latest timestamp.
@@ -65,8 +67,13 @@ export function filterByLeafNodeId(
 		currentNode = nodeMap.get(currentNode.parent);
 	}
 
-	// Sort by timestamp to get chronological order (root to leaf)
-	result.sort((a, b) => a.timestamp - b.timestamp);
+	// Sort: system messages first, then by timestamp
+	result.sort((a, b) => {
+		if (a.role === MessageRole.SYSTEM && b.role !== MessageRole.SYSTEM) return -1;
+		if (a.role !== MessageRole.SYSTEM && b.role === MessageRole.SYSTEM) return 1;
+
+		return a.timestamp - b.timestamp;
+	});
 	return result;
 }
 

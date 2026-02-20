@@ -708,6 +708,9 @@ class GGUFWriter:
     def add_leading_dense_block_count(self, length: int) -> None:
         self.add_uint32(Keys.LLM.LEADING_DENSE_BLOCK_COUNT.format(arch=self.arch), length)
 
+    def add_full_attention_interval(self, interval: int) -> None:
+        self.add_uint32(Keys.LLM.FULL_ATTENTION_INTERVAL.format(arch=self.arch), interval)
+
     def add_feed_forward_length(self, length: int | Sequence[int]) -> None:
         if isinstance(length, int):
             self.add_uint32(Keys.LLM.FEED_FORWARD_LENGTH.format(arch=self.arch), length)
@@ -767,6 +770,15 @@ class GGUFWriter:
 
     def add_value_length_mla(self, length: int) -> None:
         self.add_uint32(Keys.Attention.VALUE_LENGTH_MLA.format(arch=self.arch), length)
+
+    def add_indexer_head_count(self, count: int) -> None:
+        self.add_uint32(Keys.Attention.Indexer.HEAD_COUNT.format(arch=self.arch), count)
+
+    def add_indexer_key_length(self, length: int) -> None:
+        self.add_uint32(Keys.Attention.Indexer.KEY_LENGTH.format(arch=self.arch), length)
+
+    def add_indexer_top_k(self, top_k: int) -> None:
+        self.add_uint32(Keys.Attention.Indexer.TOP_K.format(arch=self.arch), top_k)
 
     def add_max_alibi_bias(self, bias: float) -> None:
         self.add_float32(Keys.Attention.MAX_ALIBI_BIAS.format(arch=self.arch), bias)

@@ -1,7 +1,3 @@
-#if defined(_MSC_VER)
-#define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
-#endif
-
 #include "ggml.h"
 #include "gguf.h"
 
@@ -9,12 +5,12 @@
 #include "log.h"
 #include "llama.h"
 #include "sampling.h"
+#include "unicode.h"
 
 #include <algorithm>
 #include <cinttypes>
 #include <climits>
 #include <cmath>
-#include <codecvt>
 #include <chrono>
 #include <cstdarg>
 #include <cstring>
@@ -456,34 +452,6 @@ void string_replace_all(std::string & s, const std::string & search, const std::
     s = std::move(builder);
 }
 
-bool string_ends_with(const std::string_view & str, const std::string_view & suffix) {
-    return str.size() >= suffix.size() && str.compare(str.size()-suffix.size(), suffix.size(), suffix) == 0;
-}
-
-bool string_remove_suffix(std::string & str, const std::string_view & suffix) {
-    bool has_suffix = string_ends_with(str, suffix);
-    if (has_suffix) {
-        str = str.substr(0, str.size() - suffix.size());
-    }
-    return has_suffix;
-}
-
-size_t string_find_partial_stop(const std::string_view & str, const std::string_view & stop) {
-    if (!str.empty() && !stop.empty()) {
-        const char text_last_char = str.back();
-        for (int64_t char_index = stop.size() - 1; char_index >= 0; char_index--) {
-            if (stop[char_index] == text_last_char) {
-                const auto current_partial = stop.substr(0, char_index + 1);
-                if (string_ends_with(str, current_partial)) {
-                    return str.size() - char_index - 1;
-                }
-            }
-        }
-    }
-
-    return std::string::npos;
-}
-
 std::string regex_escape(const std::string & s) {
     static const std::regex special_chars("[.^$|()*+?\\[\\]{}\\\\]");
     return std::regex_replace(s, special_chars, "\\$&");
@@ -706,45 +674,28 @@ bool fs_validate_filename(const std::string & filename, bool allow_subdirs) {
         return false;
     }
 
-    std::u32string filename_utf32;
-    try {
-#if defined(__clang__)
-        // disable C++17 deprecation warning for std::codecvt_utf8
-#    pragma clang diagnostic push
-#    pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#elif defined(__GNUC__)
-#    pragma GCC diagnostic push
-#    pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-#endif
+    size_t offset = 0;
+    while (offset < filename.size()) {
+        utf8_parse_result result = parse_utf8_codepoint(filename, offset);
 
-        std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> converter;
-
-#if defined(__clang__)
-#    pragma clang diagnostic pop
-#elif defined(__GNUC__)
-#    pragma GCC diagnostic pop
-#endif
-
-        filename_utf32 = converter.from_bytes(filename);
-
-        // If the reverse conversion mismatches, it means overlong UTF-8 sequences were used,
-        // or invalid encodings were encountered. Reject such attempts
-        std::string filename_reencoded = converter.to_bytes(filename_utf32);
-        if (filename_reencoded != filename) {
+        if (result.status != utf8_parse_result::SUCCESS) {
             return false;
         }
-    } catch (const std::exception &) {
-        return false;
-    }
+        uint32_t c = result.codepoint;
 
-    // Check for forbidden codepoints:
-    // - Control characters
-    // - Unicode equivalents of illegal characters
-    // - UTF-16 surrogate pairs
-    // - UTF-8 replacement character
-    // - Byte order mark (BOM)
-    // - Illegal characters: / \ : * ? " < > |
-    for (char32_t c : filename_utf32) {
+        if ((result.bytes_consumed == 2 && c < 0x80) ||
+            (result.bytes_consumed == 3 && c < 0x800) ||
+            (result.bytes_consumed == 4 && c < 0x10000)) {
+            return false;
+        }
+
+        // Check for forbidden codepoints:
+        // - Control characters
+        // - Unicode equivalents of illegal characters
+        // - UTF-16 surrogate pairs
+        // - UTF-8 replacement character
+        // - Byte order mark (BOM)
+        // - Illegal characters: / \ : * ? " < > |
         if (c <= 0x1F // Control characters (C0)
             || c == 0x7F // Control characters (DEL)
             || (c >= 0x80 && c <= 0x9F) // Control characters (C1)
@@ -752,6 +703,7 @@ bool fs_validate_filename(const std::string & filename, bool allow_subdirs) {
             || c == 0x2215 // Division Slash (forward slash equivalent)
             || c == 0x2216 // Set Minus (backslash equivalent)
             || (c >= 0xD800 && c <= 0xDFFF) // UTF-16 surrogate pairs
+            || c > 0x10FFFF // Max Unicode limit
             || c == 0xFFFD // Replacement Character (UTF-8)
             || c == 0xFEFF // Byte Order Mark (BOM)
             || c == ':' || c == '*' // Illegal characters
@@ -762,6 +714,7 @@ bool fs_validate_filename(const std::string & filename, bool allow_subdirs) {
             // Subdirectories not allowed, reject path separators
             return false;
         }
+        offset += result.bytes_consumed;
     }
 
     // Reject any leading or trailing ' ', or any trailing '.', these are stripped on Windows and will cause a different filename
@@ -898,7 +851,8 @@ std::string fs_get_cache_directory() {
     if (getenv("LLAMA_CACHE")) {
         cache_directory = std::getenv("LLAMA_CACHE");
     } else {
-#if defined(__linux__) || defined(__FreeBSD__) || defined(_AIX) || defined(__OpenBSD__)
+#if defined(__linux__) || defined(__FreeBSD__) || defined(_AIX) || \
+        defined(__OpenBSD__) || defined(__NetBSD__)
         if (std::getenv("XDG_CACHE_HOME")) {
             cache_directory = std::getenv("XDG_CACHE_HOME");
         } else if (std::getenv("HOME")) {
@@ -1242,7 +1196,7 @@ common_init_result_ptr common_init_from_params(common_params & params) {
             return res;
         }
 
-        int err = llama_apply_adapter_cvec(
+        int err = llama_set_adapter_cvec(
                 lctx,
                 cvec.data.data(),
                 cvec.data.size(),
@@ -1344,12 +1298,15 @@ std::string get_model_endpoint() {
 }
 
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora) {
-    llama_clear_adapter_lora(ctx);
-    for (auto & la : lora) {
-        if (la.scale != 0.0f) {
-            llama_set_adapter_lora(ctx, la.ptr, la.scale);
-        }
+    std::vector<llama_adapter_lora *> loras;
+    std::vector<float> scales;
+
+    for (auto & la: lora) {
+        loras.push_back(la.ptr);
+        scales.push_back(la.scale);
     }
+
+    llama_set_adapters_lora(ctx, loras.data(), loras.size(), scales.data());
 }
 
 struct llama_model_params common_model_params_to_llama(common_params & params) {
@@ -1467,66 +1424,6 @@ void common_batch_add(
     batch.logits  [batch.n_tokens] = logits;
 
     batch.n_tokens++;
-}
-
-//
-// Token utils
-//
-
-size_t common_lcp(const llama_tokens & a, const llama_tokens & b) {
-    size_t i;
-    for (i = 0; i < a.size() && i < b.size() && a[i] == b[i]; i++) {}
-
-    return i;
-}
-
-size_t common_lcs(const llama_tokens & a, const llama_tokens & b) {
-    // check for empty sequences
-    if (a.empty() || b.empty()) {
-        return 0;
-    }
-
-    // get the lengths of the input sequences
-    size_t a_len = a.size();
-    size_t b_len = b.size();
-
-    // initialize the maximum length of the longest common subsequence (LCS)
-    size_t max_length = 0;
-
-    // use two rows instead of a 2D matrix to optimize space
-    std::vector<size_t> prev_row(b_len + 1, 0);
-    std::vector<size_t> curr_row(b_len + 1, 0);
-
-    // iterate through the elements of a
-    for (size_t i = 1; i <= a_len; i++) {
-        // iterate through the elements of b
-        for (size_t j = 1; j <= b_len; j++) {
-            // if elements at the current positions match
-            if (a[i - 1] == b[j - 1]) {
-                // if it's the first element of either sequences, set LCS length to 1
-                if (i == 1 || j == 1) {
-                    curr_row[j] = 1;
-                } else {
-                    // increment LCS length by 1 compared to the previous element
-                    curr_row[j] = prev_row[j - 1] + 1;
-                }
-
-                // update max_length if necessary
-                if (curr_row[j] > max_length) {
-                    max_length = curr_row[j];
-                }
-            } else {
-                // reset LCS length if elements don't match
-                curr_row[j] = 0;
-            }
-        }
-
-        // update the previous row for the next iteration
-        prev_row = curr_row;
-    }
-
-    // return the maximum length of the LCS
-    return max_length;
 }
 
 //

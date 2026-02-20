@@ -1,11 +1,10 @@
 <script lang="ts">
 	import { Download, Upload, Trash2 } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { DialogConversationSelection } from '$lib/components/app';
+	import { DialogConversationSelection, DialogConfirmation } from '$lib/components/app';
 	import { createMessageCountMap } from '$lib/utils';
 	import { conversationsStore, conversations } from '$lib/stores/conversations.svelte';
 	import { toast } from 'svelte-sonner';
-	import DialogConfirmation from '$lib/components/app/dialogs/DialogConfirmation.svelte';
 
 	let exportedConversations = $state<DatabaseConversation[]>([]);
 	let importedConversations = $state<DatabaseConversation[]>([]);

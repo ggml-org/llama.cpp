@@ -6,6 +6,8 @@
 	import * as Select from '$lib/components/ui/select';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { SETTING_CONFIG_DEFAULT, SETTING_CONFIG_INFO } from '$lib/constants/settings-config';
+	import { SETTINGS_KEYS } from '$lib/constants/settings-keys';
+	import { SettingsFieldType } from '$lib/enums/settings';
 	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { ChatSettingsParameterSourceIndicator } from '$lib/components/app';
 	import type { Component } from 'svelte';
@@ -31,7 +33,7 @@
 
 {#each fields as field (field.key)}
 	<div class="space-y-2">
-		{#if field.type === 'input'}
+		{#if field.type === SettingsFieldType.INPUT}
 			{@const paramInfo = getParameterSourceInfo(field.key)}
 			{@const currentValue = String(localConfig[field.key] ?? '')}
 			{@const propsDefault = paramInfo?.serverDefault}
@@ -98,7 +100,7 @@
 					{@html field.help || SETTING_CONFIG_INFO[field.key]}
 				</p>
 			{/if}
-		{:else if field.type === 'textarea'}
+		{:else if field.type === SettingsFieldType.TEXTAREA}
 			<Label for={field.key} class="block flex items-center gap-1.5 text-sm font-medium">
 				{field.label}
 
@@ -121,7 +123,7 @@
 				</p>
 			{/if}
 
-			{#if field.key === 'systemMessage'}
+			{#if field.key === SETTINGS_KEYS.SYSTEM_MESSAGE}
 				<div class="mt-3 flex items-center gap-2">
 					<Checkbox
 						id="showSystemMessage"
@@ -134,7 +136,7 @@
 					</Label>
 				</div>
 			{/if}
-		{:else if field.type === 'select'}
+		{:else if field.type === SettingsFieldType.SELECT}
 			{@const selectedOption = field.options?.find(
 				(opt: { value: string; label: string; icon?: Component }) =>
 					opt.value === localConfig[field.key]
@@ -166,7 +168,7 @@
 				type="single"
 				value={currentValue}
 				onValueChange={(value) => {
-					if (field.key === 'theme' && value && onThemeChange) {
+					if (field.key === SETTINGS_KEYS.THEME && value && onThemeChange) {
 						onThemeChange(value);
 					} else {
 						onConfigChange(field.key, value);
@@ -222,7 +224,7 @@
 					{field.help || SETTING_CONFIG_INFO[field.key]}
 				</p>
 			{/if}
-		{:else if field.type === 'checkbox'}
+		{:else if field.type === SettingsFieldType.CHECKBOX}
 			<div class="flex items-start space-x-3">
 				<Checkbox
 					id={field.key}
