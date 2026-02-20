@@ -8,7 +8,7 @@ env:
 benchmark_arm_task:
   # Free high-performance ARM container (up to 4 CPU cores, 16GB RAM)
   arm_container:
-    image: ubuntu:22.04
+    image: ubuntu:24.04
     cpu: 4
     memory: 16G
   
