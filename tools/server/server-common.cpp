@@ -1104,6 +1104,11 @@ json convert_responses_to_chatcmpl(const json & response_body) {
             return j.contains(key) && j.at(key).is_string();
         };
 
+        // Return true if we should merge with the last message
+        auto should_merge = [&chatcmpl_messages]() -> bool {
+            return !chatcmpl_messages.empty() && chatcmpl_messages.back().value("role", "") == "assistant";
+        };
+
         for (json item : input_value) {
             if (exists_and_is_string(item, "content")) {
                 // #responses_create-input-input_item_list-input_message-content-text_input
@@ -1210,10 +1215,15 @@ json convert_responses_to_chatcmpl(const json & response_body) {
                     });
                 }
 
-                item.erase("status");
-                item.erase("type");
-                item["content"] = chatcmpl_content;
-                chatcmpl_messages.push_back(item);
+                if (should_merge()) {
+                    auto & prev_msg = chatcmpl_messages.back();
+                    prev_msg["content"] = chatcmpl_content;
+                } else {
+                    item.erase("status");
+                    item.erase("type");
+                    item["content"] = chatcmpl_content;
+                    chatcmpl_messages.push_back(item);
+                }
             } else if (exists_and_is_string(item, "arguments") &&
                 exists_and_is_string(item, "call_id") &&
                 exists_and_is_string(item, "name") &&
@@ -1221,24 +1231,34 @@ json convert_responses_to_chatcmpl(const json & response_body) {
                 item.at("type") == "function_call"
             ) {
                 // #responses_create-input-input_item_list-item-function_tool_call
-                json msg = json {
-                    {"role", "assistant"},
-                    {"tool_calls", json::array({ json {
-                        {"function", json {
-                            {"arguments", item.at("arguments")},
-                            {"name",      item.at("name")},
-                        }},
-                        {"id",   item.at("call_id")},
-                        {"type", "function"},
-                    }})},
+                json tool_call = {
+                    {"function", json {
+                        {"arguments", item.at("arguments")},
+                        {"name",      item.at("name")},
+                    }},
+                    {"id",   item.at("call_id")},
+                    {"type", "function"},
                 };
 
-                if (!chatcmpl_messages.empty() && chatcmpl_messages.back().contains("reasoning_content")) {
-                    // Move reasoning content from dummy message to tool call message
-                    msg["reasoning_content"] = chatcmpl_messages.back().at("reasoning_content");
-                    chatcmpl_messages.pop_back();
+                if (should_merge()) {
+                    auto & prev_msg = chatcmpl_messages.back();
+                    if (!exists_and_is_array(prev_msg, "tool_calls")) {
+                        prev_msg["tool_calls"] = json::array();
+                    }
+                    prev_msg["tool_calls"].push_back(tool_call);
+                } else {
+                    chatcmpl_messages.push_back(json {
+                        {"role",       "assistant"},
+                        {"tool_calls", json {
+                            {"function", json {
+                                {"arguments", item.at("arguments")},
+                                {"name",      item.at("name")},
+                            }},
+                            {"id",   item.at("call_id")},
+                            {"type", "function"},
+                        }}
+                    });
                 }
-                chatcmpl_messages.push_back(msg);
             } else if (exists_and_is_string(item, "call_id") &&
                 (exists_and_is_string(item, "output") || exists_and_is_array(item, "output")) &&
                 exists_and_is_string(item, "type") &&
@@ -1282,12 +1302,16 @@ json convert_responses_to_chatcmpl(const json & response_body) {
                     throw std::invalid_argument("item['content']['text'] is not a string");
                 }
 
-                // Pack reasoning content in dummy message
-                chatcmpl_messages.push_back(json {
-                    {"role", "assistant"},
-                    {"content", json::array()},
-                    {"reasoning_content", item.at("content")[0].at("text")},
-                });
+                if (should_merge()) {
+                    auto & prev_msg = chatcmpl_messages.back();
+                    prev_msg["reasoning_content"] = item.at("content")[0].at("text");
+                } else {
+                    chatcmpl_messages.push_back(json {
+                        {"role", "assistant"},
+                        {"content", json::array()},
+                        {"reasoning_content", item.at("content")[0].at("text")},
+                    });
+                }
             } else {
                 throw std::invalid_argument("Cannot determine type of 'item'");
             }
@@ -1295,20 +1319,6 @@ json convert_responses_to_chatcmpl(const json & response_body) {
     } else {
         throw std::invalid_argument("'input' must be a string or array of objects");
     }
-
-    // Remove unused dummy message which contains
-    // reasoning content not followed by tool call
-    chatcmpl_messages.erase(std::remove_if(
-        chatcmpl_messages.begin(),
-        chatcmpl_messages.end(),
-        [](const json & x){ return x.contains("role") &&
-            x.at("role") == "assistant" &&
-            x.contains("content") &&
-            x.at("content") == json::array() &&
-            x.contains("reasoning_content");
-        }),
-        chatcmpl_messages.end()
-    );
 
     chatcmpl_body["messages"] = chatcmpl_messages;
 
