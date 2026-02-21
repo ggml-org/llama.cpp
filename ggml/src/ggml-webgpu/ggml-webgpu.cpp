@@ -2733,6 +2733,7 @@ static ggml_backend_t ggml_backend_webgpu_backend_init(ggml_backend_dev_t dev, c
     };
     return backend;
 }
+// foo
 
 static ggml_backend_buffer_type_t ggml_backend_webgpu_device_get_buffer_type(ggml_backend_dev_t dev) {
     // See GGML Backend Buffer Type Interface section
