@@ -1249,14 +1249,7 @@ json convert_responses_to_chatcmpl(const json & response_body) {
                 } else {
                     chatcmpl_messages.push_back(json {
                         {"role",       "assistant"},
-                        {"tool_calls", json {
-                            {"function", json {
-                                {"arguments", item.at("arguments")},
-                                {"name",      item.at("name")},
-                            }},
-                            {"id",   item.at("call_id")},
-                            {"type", "function"},
-                        }}
+                        {"tool_calls", json::array({tool_call})}
                     });
                 }
             } else if (exists_and_is_string(item, "call_id") &&
