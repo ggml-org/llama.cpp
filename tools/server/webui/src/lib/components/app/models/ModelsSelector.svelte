@@ -251,9 +251,6 @@
 			return options.find((option) => option.id === activeId);
 		}
 
-		if (options.length === 1) {
-			return options[0];
-		}
 		// No selection - return undefined to show "Select model"
 		return undefined;
 	}
