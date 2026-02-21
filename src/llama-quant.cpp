@@ -596,7 +596,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     }
 
     // copy the KV pairs from the input file
-    gguf_set_kv     (ctx_out.get(), ml.meta.get());
+    gguf_set_kv     (ctx_out.get(), ml.metadata);
     gguf_set_val_u32(ctx_out.get(), "general.quantization_version", GGML_QNT_VERSION); // TODO: use LLM_KV
     gguf_set_val_u32(ctx_out.get(), "general.file_type", ftype); // TODO: use LLM_KV
 

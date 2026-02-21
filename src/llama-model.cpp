@@ -492,7 +492,7 @@ void llama_model::load_arch(llama_model_loader & ml) {
 }
 
 void llama_model::load_hparams(llama_model_loader & ml) {
-    const gguf_context * ctx = ml.meta.get();
+    const gguf_context * ctx = ml.metadata;
 
     // get metadata as string
     for (int i = 0; i < gguf_get_n_kv(ctx); i++) {

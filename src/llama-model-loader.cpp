@@ -263,7 +263,7 @@ namespace GGUFMeta {
     template<typename T>
     typename std::enable_if<std::is_integral<T>::value, bool>::type
     llama_model_loader::get_arr_n(const std::string & key, T & result, bool required) {
-        const int kid = gguf_find_key(meta.get(), key.c_str());
+        const int kid = gguf_find_key(metadata, key.c_str());
 
         if (kid < 0) {
             if (required) {
@@ -273,7 +273,7 @@ namespace GGUFMeta {
         }
 
         struct GGUFMeta::ArrayInfo arr_info =
-            GGUFMeta::GKV<GGUFMeta::ArrayInfo>::get_kv(meta.get(), kid);
+            GGUFMeta::GKV<GGUFMeta::ArrayInfo>::get_kv(metadata, kid);
 
 
         result = arr_info.length;
@@ -290,7 +290,7 @@ namespace GGUFMeta {
 
     template<typename T>
     bool llama_model_loader::get_arr(const std::string & key, std::vector<T> & result, bool required) {
-        const gguf_context * ctx = meta.get();
+        const gguf_context * ctx = metadata;
         const int kid = gguf_find_key(ctx, key.c_str());
 
         if (kid < 0 || gguf_get_kv_type(ctx, kid) != GGUF_TYPE_ARRAY) {
@@ -331,7 +331,7 @@ namespace GGUFMeta {
 
     template<typename T, size_t N_MAX>
     bool llama_model_loader::get_arr(const std::string & key, std::array<T, N_MAX> & result, bool required) {
-        const gguf_context * ctx = meta.get();
+        const gguf_context * ctx = metadata;
         const int kid = gguf_find_key(ctx, key.c_str());
 
         if (kid < 0 || gguf_get_kv_type(ctx, kid) != GGUF_TYPE_ARRAY) {
@@ -393,7 +393,7 @@ namespace GGUFMeta {
         const struct llama_model_kv_override * override =
             it != kv_overrides.end() ? &it->second : nullptr;
 
-        const bool found = GGUFMeta::GKV<T>::set(meta.get(), key, result, override);
+        const bool found = GGUFMeta::GKV<T>::set(metadata, key, result, override);
 
         if (required && !found) {
             throw std::runtime_error(format("key not found in model: %s", key.c_str()));
@@ -427,7 +427,7 @@ namespace GGUFMeta {
     // get array of n <= N_MAX elements, or a single element repeated n times
     template<typename T, size_t N_MAX>
     bool llama_model_loader::get_key_or_arr(const std::string & key, std::array<T, N_MAX> & result, uint32_t n, bool required) {
-        const int kid = gguf_find_key(meta.get(), key.c_str());
+        const int kid = gguf_find_key(metadata, key.c_str());
 
         if (kid < 0) {
             if (required) {
@@ -440,9 +440,9 @@ namespace GGUFMeta {
             throw std::runtime_error(format("n > N_MAX: %u > %u for key %s", (uint32_t) n, (uint32_t) N_MAX, key.c_str()));
         }
 
-        if (gguf_get_kv_type(meta.get(), kid) == GGUF_TYPE_ARRAY) {
+        if (gguf_get_kv_type(metadata, kid) == GGUF_TYPE_ARRAY) {
             struct GGUFMeta::ArrayInfo arr_info =
-                GGUFMeta::GKV<GGUFMeta::ArrayInfo>::get_kv(meta.get(), kid);
+                GGUFMeta::GKV<GGUFMeta::ArrayInfo>::get_kv(metadata, kid);
 
             if (n != arr_info.length) {
                 throw std::runtime_error(format("key %s has wrong array length; expected %u, got %u", key.c_str(), n, (uint32_t) arr_info.length));
@@ -473,7 +473,7 @@ namespace GGUFMeta {
     bool llama_model_loader::get_key_or_arr(enum llm_kv kid, uint32_t & result, bool required) {
         const std::string key = llm_kv(kid);
 
-        const int id = gguf_find_key(meta.get(), key.c_str());
+        const int id = gguf_find_key(metadata, key.c_str());
 
         if (id < 0) {
             if (required) {
@@ -483,7 +483,7 @@ namespace GGUFMeta {
         }
 
         // throw and error if type is an array
-        if (gguf_get_kv_type(meta.get(), id) == GGUF_TYPE_ARRAY) {
+        if (gguf_get_kv_type(metadata, id) == GGUF_TYPE_ARRAY) {
             if (required) {
                 throw std::runtime_error(format("expected scalar, found array for key: %s", key.c_str()));
             }
@@ -528,8 +528,8 @@ llama_model_loader::llama_model_loader(
         /*.ctx      = */ &ctx,
     };
 
-    meta.reset(gguf_init_from_file(fname.c_str(), params));
-    if (!meta) {
+    metadata = gguf_init_from_file(fname.c_str(), params);
+    if (metadata == nullptr) {
         throw std::runtime_error(format("%s: failed to load model from %s", __func__, fname.c_str()));
     }
 
@@ -564,7 +564,7 @@ llama_model_loader::llama_model_loader(
         }
         n_elements += ggml_nelements(cur);
         n_bytes    += ggml_nbytes(cur);
-        weights_map.emplace(tensor_name, llama_tensor_weight(files.back().get(), 0, meta.get(), cur));
+        weights_map.emplace(tensor_name, llama_tensor_weight(files.back().get(), 0, metadata, cur));
     }
     uint16_t n_split = 0;
     get_key(llm_kv(LLM_KV_SPLIT_COUNT), n_split, false);
@@ -647,10 +647,10 @@ llama_model_loader::llama_model_loader(
         LLAMA_LOG_INFO("%s: additional %d GGUFs metadata loaded.\n",  __func__, n_split - 1);
     }
 
-    n_kv      = gguf_get_n_kv(meta.get());
+    n_kv      = gguf_get_n_kv(metadata);
     n_tensors = weights_map.size();
 
-    fver = (enum llama_fver) gguf_get_version(meta.get());
+    fver = (enum llama_fver) gguf_get_version(metadata);
 
     LLAMA_LOG_INFO("%s: loaded meta data with %d key-value pairs and %d tensors from %s (version %s)\n",
             __func__, n_kv, n_tensors, fname.c_str(), llama_file_version_name(fver));
@@ -729,14 +729,14 @@ llama_model_loader::llama_model_loader(
         LLAMA_LOG_INFO("%s: Dumping metadata keys/values. Note: KV overrides do not apply in this output.\n", __func__);
 
         for (int i = 0; i < n_kv; i++) {
-            const char * name           = gguf_get_key(meta.get(), i);
-            const enum gguf_type type   = gguf_get_kv_type(meta.get(), i);
+            const char * name           = gguf_get_key(metadata, i);
+            const enum gguf_type type   = gguf_get_kv_type(metadata, i);
             const std::string type_name =
                 type == GGUF_TYPE_ARRAY
-                ? format("%s[%s,%zu]", gguf_type_name(type), gguf_type_name(gguf_get_arr_type(meta.get(), i)), gguf_get_arr_n(meta.get(), i))
+                ? format("%s[%s,%zu]", gguf_type_name(type), gguf_type_name(gguf_get_arr_type(metadata, i)), gguf_get_arr_n(metadata, i))
                 : gguf_type_name(type);
 
-            std::string value          = gguf_kv_to_str(meta.get(), i);
+            std::string value          = gguf_kv_to_str(metadata, i);
             const size_t MAX_VALUE_LEN = 40;
             if (value.size() > MAX_VALUE_LEN) {
                 value = format("%s...", value.substr(0, MAX_VALUE_LEN - 3).c_str());

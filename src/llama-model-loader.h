@@ -84,7 +84,7 @@ struct llama_model_loader {
     std::unordered_map<std::string, llama_model_kv_override> kv_overrides;
     const llama_model_tensor_buft_override * tensor_buft_overrides;
 
-    gguf_context_ptr meta;
+    struct gguf_context * metadata;
     std::vector<ggml_context_ptr> contexts;
 
     std::string arch_name;
