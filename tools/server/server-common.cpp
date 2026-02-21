@@ -1104,12 +1104,9 @@ json convert_responses_to_chatcmpl(const json & response_body) {
             return j.contains(key) && j.at(key).is_string();
         };
 
-        // Return true if we should merge with the last message
-        auto should_merge = [&chatcmpl_messages]() -> bool {
-            return !chatcmpl_messages.empty() && chatcmpl_messages.back().value("role", "") == "assistant";
-        };
-
         for (json item : input_value) {
+            bool merge_prev = !chatcmpl_messages.empty() && chatcmpl_messages.back().value("role", "") == "assistant";
+
             if (exists_and_is_string(item, "content")) {
                 // #responses_create-input-input_item_list-input_message-content-text_input
                 // Only "Input message" contains item["content"]::string
@@ -1215,9 +1212,13 @@ json convert_responses_to_chatcmpl(const json & response_body) {
                     });
                 }
 
-                if (should_merge()) {
+                if (merge_prev) {
                     auto & prev_msg = chatcmpl_messages.back();
-                    prev_msg["content"] = chatcmpl_content;
+                    if (!exists_and_is_array(prev_msg, "content")) {
+                        prev_msg["content"] = json::array();
+                    }
+                    auto & prev_content = prev_msg["content"];
+                    prev_content.insert(prev_content.end(), chatcmpl_content);
                 } else {
                     item.erase("status");
                     item.erase("type");
@@ -1240,7 +1241,7 @@ json convert_responses_to_chatcmpl(const json & response_body) {
                     {"type", "function"},
                 };
 
-                if (should_merge()) {
+                if (merge_prev) {
                     auto & prev_msg = chatcmpl_messages.back();
                     if (!exists_and_is_array(prev_msg, "tool_calls")) {
                         prev_msg["tool_calls"] = json::array();
@@ -1295,7 +1296,7 @@ json convert_responses_to_chatcmpl(const json & response_body) {
                     throw std::invalid_argument("item['content']['text'] is not a string");
                 }
 
-                if (should_merge()) {
+                if (merge_prev) {
                     auto & prev_msg = chatcmpl_messages.back();
                     prev_msg["reasoning_content"] = item.at("content")[0].at("text");
                 } else {
