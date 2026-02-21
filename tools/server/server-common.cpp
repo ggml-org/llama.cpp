@@ -1195,7 +1195,7 @@ json convert_responses_to_chatcmpl(const json & response_body) {
                 item.at("type") == "message"
             ) {
                 // #responses_create-input-input_item_list-item-output_message
-                std::vector<json> chatcmpl_content;
+                auto chatcmpl_content = json::array();
 
                 for (const auto & output_text : item.at("content")) {
                     const std::string type = json_value(output_text, "type", std::string());
@@ -1218,7 +1218,7 @@ json convert_responses_to_chatcmpl(const json & response_body) {
                         prev_msg["content"] = json::array();
                     }
                     auto & prev_content = prev_msg["content"];
-                    prev_content.insert(prev_content.end(), chatcmpl_content);
+                    prev_content.insert(prev_content.end(), chatcmpl_content.begin(), chatcmpl_content.end());
                 } else {
                     item.erase("status");
                     item.erase("type");
