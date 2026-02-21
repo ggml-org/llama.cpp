@@ -861,6 +861,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 builder = std::make_unique<clip_graph_llava>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_DEEPSEEKOCR:
+            {
+                builder = std::make_unique<clip_graph_deepseekocr>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_LFM2A:
             {
                 builder = std::make_unique<clip_graph_conformer>(ctx, img);
@@ -1268,6 +1272,17 @@ struct clip_model_loader {
 
                         hparams.set_warmup_n_tokens(28*28); // avoid OOM on warmup
                     } break;
+                case PROJECTOR_TYPE_DEEPSEEKOCR:
+                    {
+                        hparams.patch_size = 16;
+                        hparams.image_size = 1024;
+                        hparams.warmup_image_size = 1024;
+
+                        get_u32(KEY_SAM_N_BLOCK, hparams.sam_n_layer, true);
+                        get_u32(KEY_SAM_N_HEAD, hparams.sam_n_head, true);
+                        get_u32(KEY_SAM_N_EMBD, hparams.sam_n_embd, true);
+                        get_u32(KEY_ATTN_WINDOW_SIZE, hparams.attn_window_size, true);
+                     } break;
                 case PROJECTOR_TYPE_LFM2A:
                     {
                         // audio preprocessing params
@@ -1592,7 +1607,7 @@ struct clip_model_loader {
                 } break;
             case PROJECTOR_TYPE_GLM4V:
                 {
-                    model.projection     = get_tensor(TN_MM_PROJECTOR);
+                    model.fc_w           = get_tensor(string_format(TN_MM_PROJECTOR, "weight"));
                     model.mm_ffn_up_w    = get_tensor(string_format(TN_MM_UP,        "weight"));
                     model.mm_ffn_up_b    = get_tensor(string_format(TN_MM_UP,        "bias"), false);
                     model.mm_ffn_gate_w  = get_tensor(string_format(TN_MM_GATE,      "weight"));
@@ -1704,7 +1719,7 @@ struct clip_model_loader {
                 } break;
             case PROJECTOR_TYPE_IDEFICS3:
                 {
-                    model.projection = get_tensor(TN_MM_PROJECTOR);
+                    model.fc_w = get_tensor(string_format(TN_MM_PROJECTOR, "weight"));
                 } break;
             case PROJECTOR_TYPE_LFM2:
                 {
@@ -1819,13 +1834,13 @@ struct clip_model_loader {
                 } break;
             case PROJECTOR_TYPE_LLAMA4:
                 {
-                    model.mm_model_proj    = get_tensor(TN_MM_PROJECTOR);
+                    model.mm_model_proj    = get_tensor(string_format(TN_MM_PROJECTOR, "weight"));
                     model.mm_model_mlp_1_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 1, "weight"));
                     model.mm_model_mlp_2_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 2, "weight"));
                 } break;
             case PROJECTOR_TYPE_COGVLM:
                 {
-                    model.mm_model_proj     = get_tensor(TN_MM_PROJECTOR);
+                    model.mm_model_proj     = get_tensor(string_format(TN_MM_PROJECTOR, "weight"));
                     model.mm_post_fc_norm_w = get_tensor(string_format(TN_MM_POST_FC_NORM, "weight"));
                     model.mm_post_fc_norm_b = get_tensor(string_format(TN_MM_POST_FC_NORM, "bias"));
                     model.mm_h_to_4h_w      = get_tensor(string_format(TN_MM_H_TO_4H,      "weight"));
@@ -1841,6 +1856,42 @@ struct clip_model_loader {
                     model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
                     model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"));
                 } break;
+            case PROJECTOR_TYPE_DEEPSEEKOCR:
+                {
+                    model.pos_embed          = get_tensor(TN_SAM_POS_EMBD);
+                    model.patch_embed_proj_w = get_tensor(string_format(TN_SAM_PATCH_EMBD, "weight"));
+                    model.patch_embed_proj_b = get_tensor(string_format(TN_SAM_PATCH_EMBD, "bias"));
+                    model.sam_layers.resize(model.n_sam_layers);
+                    for (int il = 0; il < model.n_sam_layers; ++il) {
+                        auto & layer    = model.sam_layers[il];
+                        layer.qkv_w     = get_tensor(string_format(TN_SAM_ATTN_QKV, il, "weight"));
+                        layer.qkv_b     = get_tensor(string_format(TN_SAM_ATTN_QKV, il, "bias"));
+                        layer.o_w       = get_tensor(string_format(TN_SAM_ATTN_OUT, il, "weight"));
+                        layer.o_b       = get_tensor(string_format(TN_SAM_ATTN_OUT, il, "bias"));
+                        layer.ln_1_w    = get_tensor(string_format(TN_SAM_PRE_NORM, il, "weight"));
+                        layer.ln_1_b    = get_tensor(string_format(TN_SAM_PRE_NORM, il, "bias"));
+                        layer.ln_2_w    = get_tensor(string_format(TN_SAM_POST_NORM, il, "weight"));
+                        layer.ln_2_b    = get_tensor(string_format(TN_SAM_POST_NORM, il, "bias"));
+                        layer.rel_pos_h = get_tensor(string_format(TN_SAM_ATTN_POS_H, il));
+                        layer.rel_pos_w = get_tensor(string_format(TN_SAM_ATTN_POS_W, il));
+                        layer.ff_up_w   = get_tensor(string_format(TN_SAM_FFN_UP, il, "weight"));
+                        layer.ff_up_b   = get_tensor(string_format(TN_SAM_FFN_UP, il, "bias"));
+                        layer.ff_down_w = get_tensor(string_format(TN_SAM_FFN_DOWN, il, "weight"));
+                        layer.ff_down_b = get_tensor(string_format(TN_SAM_FFN_DOWN, il, "bias"));
+                    }
+                    model.neck_0_w       = get_tensor(string_format(TN_SAM_NECK, 0, "weight"));
+                    model.neck_1_b       = get_tensor(string_format(TN_SAM_NECK, 1, "bias"));
+                    model.neck_1_w       = get_tensor(string_format(TN_SAM_NECK, 1, "weight"));
+                    model.neck_2_w       = get_tensor(string_format(TN_SAM_NECK, 2, "weight"));
+                    model.neck_3_b       = get_tensor(string_format(TN_SAM_NECK, 3, "bias"));
+                    model.neck_3_w       = get_tensor(string_format(TN_SAM_NECK, 3, "weight"));
+                    model.net_2          = get_tensor(string_format(TN_SAM_NET, 2, "weight"));
+                    model.net_3          = get_tensor(string_format(TN_SAM_NET, 3, "weight"));
+                    model.image_newline  = get_tensor(TN_IMAGE_NEWLINE);
+                    model.view_seperator = get_tensor(TN_IMAGE_SEPERATOR);
+                    model.fc_w           = get_tensor(string_format(TN_MM_PROJECTOR, "weight"));
+                    model.fc_b           = get_tensor(string_format(TN_MM_PROJECTOR, "bias"));
+                 } break;
             case PROJECTOR_TYPE_LFM2A:
                 {
                     for (int i : {0, 2, 3, 5, 6}) {
@@ -3285,6 +3336,48 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                     }
                 }
             } break;
+        case PROJECTOR_TYPE_DEEPSEEKOCR:
+            {
+                const std::vector native_resolutions = {
+                    /*512 tiny , 640 small, */ 1024 /* base */, 1280 /* large */
+                };
+                // original image size
+                const int orig_w = original_size.width;
+                const int orig_h = original_size.height;
+                const int orig_area = orig_h * orig_w;
+                std::array<uint8_t, 3u> color;
+
+                for (int i = 0; i < 3; i++) {
+                    color[i] = static_cast<unsigned char>(params.image_mean[i] * 255.0f);
+                }
+
+                size_t mode_i = 0;
+                int min_diff = orig_area;
+
+                for (size_t i = 0; i < native_resolutions.size(); i++) {
+                    int r = native_resolutions[i];
+                    if (std::abs(orig_area - r * r) < min_diff) {
+                        mode_i = i;
+                        min_diff = std::abs(orig_area - r * r);
+                    }
+                }
+
+                /* Native Resolution (Base/Large) */
+                const int image_size = native_resolutions[mode_i];
+
+                // Pad to image_size × image_size (center padding)
+                clip_image_u8_ptr padded_img(clip_image_u8_init());
+                img_tool::resize(*img, *padded_img, clip_image_size{image_size, image_size},
+                            img_tool::RESIZE_ALGO_BILINEAR, true, color);
+
+                // Normalize and output
+                clip_image_f32_ptr res(clip_image_f32_init());
+                normalize_image_u8_to_f32(*padded_img, *res, params.image_mean, params.image_std);
+                res_imgs->entries.push_back(std::move(res));
+
+                res_imgs->grid_x = 1;
+                res_imgs->grid_y = 1;
+            } break;
 
         default:
             LOG_ERR("%s: unsupported projector type %d\n", __func__, ctx->proj_type());
@@ -3515,6 +3608,18 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
             {
                 n_patches += 2; // for BOI and EOI token embeddings
             } break;
+        case PROJECTOR_TYPE_DEEPSEEKOCR:
+        {
+            // SAM encoder applies two stride-2 convolutions (net_2 and net_3)
+            // which reduces spatial dimensions by 4x in each direction (16x total)
+            // E.g., 64x64 -> 16x16 patches
+            n_patches /= 16;
+
+            // build_global_local_features adds image newlines and view separator
+            // Formula: h*(w+1) + 1 where h = w = sqrt(n_patches)
+            int h = static_cast<int>(std::sqrt(static_cast<float>(n_patches)));
+            n_patches = h * (h + 1) + 1;
+        } break;
         case PROJECTOR_TYPE_LFM2A:
             {
                 n_patches = ((((img->nx + 1) / 2) + 1) / 2 + 1) / 2;
@@ -3872,6 +3977,30 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 }
                 set_input_i32("patches", patches);
             } break;
+        case PROJECTOR_TYPE_DEEPSEEKOCR:
+            {
+                GGML_ASSERT(pos_w == pos_h);
+
+                const int window = hparams.attn_window_size;
+                const int pos = pos_w;
+                std::vector<int32_t> rel_pos_indices_local(window * window);
+                std::vector<int32_t> rel_pos_indices_global(pos * pos);
+
+                for (int q = 0; q < window; q++) {
+                    for (int k = 0; k < window; k++) {
+                        rel_pos_indices_local[q * window + k] = q - k + window - 1;
+                    }
+                }
+
+                for (int q = 0; q < pos; q++) {
+                    for (int k = 0; k < pos; k++) {
+                        rel_pos_indices_global[q * pos + k] = q - k + pos - 1;
+                    }
+                }
+
+                set_input_i32("rel_pos_indices_local", rel_pos_indices_local);
+                set_input_i32("rel_pos_indices_global", rel_pos_indices_global);
+            } break;
         case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_GEMMA3NV:
         case PROJECTOR_TYPE_IDEFICS3:
@@ -4034,7 +4163,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_GEMMA3NV:
             return ctx->model.mm_input_proj_w->ne[0];
         case PROJECTOR_TYPE_IDEFICS3:
-            return ctx->model.projection->ne[1];
+            return ctx->model.fc_w->ne[1];
         case PROJECTOR_TYPE_ULTRAVOX:
         case PROJECTOR_TYPE_VOXTRAL:
         case PROJECTOR_TYPE_MUSIC_FLAMINGO:
@@ -4055,6 +4184,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.mm_2_w->ne[1];
         case PROJECTOR_TYPE_COGVLM:
             return ctx->model.mm_4h_to_h_w->ne[1];
+        case PROJECTOR_TYPE_DEEPSEEKOCR:
+            return ctx->model.fc_w->ne[1];
         case PROJECTOR_TYPE_LFM2A:
             return ctx->model.position_embeddings->ne[0];
         case PROJECTOR_TYPE_GLM4V:
