@@ -50,96 +50,77 @@ jobs:
           Expand-Archive -Path "models\wikitext-2-raw.zip" -DestinationPath "models" -Force
 
       - name: Run Quantization
+        shell: msys2 {0}
         run: |
-          $types = @("Q8_0", "Q2_K", "TQ1_0", "TQ2_0", "Q1_5_K", "Q2_K_S_NEW")
-          foreach ($type in $types) {
-            Write-Host "Quantizing $type"
-            .\bin\llama-quantize.exe models\model-F16.gguf "models\model-${type}.gguf" $type
-          }
+          for type in Q8_0 Q2_K TQ1_0 TQ2_0 Q1_5_K Q2_K_S_NEW; do
+            echo "Quantizing $type"
+            ./bin/llama-quantize.exe models/model-F16.gguf "models/model-${type}.gguf" "$type"
+          done
 
       - name: Run Perplexity
+        shell: msys2 {0}
         run: |
-          New-Item -ItemType Directory -Force -Path results
-          $ErrorActionPreference = "SilentlyContinue"
-          
-          Write-Host "Running Baseline Perplexity"
-          .\bin\llama-perplexity.exe -m models\model-Q8_0.gguf -f models\wikitext-2-raw\wiki.test.raw --save-all-logits models\logits-Q8_0.kld --chunks 256 -t 12 2>&1 | Out-File -FilePath results\ppl-Q8_0.txt -Encoding utf8
+          mkdir -p results
+          echo "Running Baseline Perplexity"
+          ./bin/llama-perplexity.exe -m models/model-Q8_0.gguf -f models/wikitext-2-raw/wiki.test.raw --save-all-logits models/logits-Q8_0.kld --chunks 256 -t 12 > results/ppl-Q8_0.txt 2>&1 || true
 
-          $types = @("Q2_K", "TQ1_0", "TQ2_0", "Q1_5_K", "Q2_K_S_NEW")
-          foreach ($type in $types) {
-            Write-Host "Running Perplexity $type"
-            .\bin\llama-perplexity.exe -m "models\model-${type}.gguf" -f models\wikitext-2-raw\wiki.test.raw --kl-divergence --kl-divergence-base models\logits-Q8_0.kld --chunks 256 -t 12 2>&1 | Out-File -FilePath results\ppl-${type}.txt -Encoding utf8
-          }
+          for type in Q2_K TQ1_0 TQ2_0 Q1_5_K Q2_K_S_NEW; do
+            echo "Running Perplexity $type"
+            ./bin/llama-perplexity.exe -m "models/model-${type}.gguf" -f models/wikitext-2-raw/wiki.test.raw --kl-divergence --kl-divergence-base models/logits-Q8_0.kld --chunks 256 -t 12 > results/ppl-${type}.txt 2>&1 || true
+          done
 
       - name: Run Benchmark
+        shell: msys2 {0}
         run: |
-          $types = @("Q8_0", "Q2_K", "TQ1_0", "TQ2_0", "Q1_5_K", "Q2_K_S_NEW")
-          $ErrorActionPreference = "SilentlyContinue"
-          foreach ($type in $types) {
-            Write-Host "Running Benchmark $type"
-            .\bin\llama-bench.exe -m "models\model-${type}.gguf" -t 12 -ngl 0 -r 3 2>&1 | Out-File -FilePath results\bench-${type}.txt -Encoding utf8
-          }
+          for type in Q8_0 Q2_K TQ1_0 TQ2_0 Q1_5_K Q2_K_S_NEW; do
+            echo "Running Benchmark $type"
+            ./bin/llama-bench.exe -m "models/model-${type}.gguf" -t 12 -ngl 0 -r 3 > results/bench-${type}.txt 2>&1 || true
+          done
 
       - name: Generate Report
+        shell: msys2 {0}
         run: |
-          $timestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-          $report = "results\benchmark-Windows-Ryzen9.md"
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          REPORT="results/benchmark-Windows-Ryzen9.md"
           
-          $content = @"
-          # Benchmark Results (Ryzen 9 7900X)
-          **Model:** ${{ env.MODEL_REPO }}
-          **Date:** $timestamp
-          **Runner:** Self-Hosted Windows x64 (12 Cores)
+          {
+            echo "# Benchmark Results (Ryzen 9 7900X)"
+            echo "**Model:** ${MODEL_REPO}"
+            echo "**Date:** ${TIMESTAMP}"
+            echo "**Runner:** Self-Hosted Windows x64 (12 Cores)"
+            echo ""
+            echo "## Perplexity & KLD"
+            echo "| Type | PPL | Mean KLD |"
+            echo "|------|-----|----------|"
+          } > $REPORT
+
+          Q8_PPL=$(grep -a "Final estimate" results/ppl-Q8_0.txt | grep -oP 'PPL = \K[0-9.]+' || echo "N/A")
+          echo "| Q8_0 | $Q8_PPL | 0 |" >> $REPORT
           
-          ## Perplexity & KLD
-          | Type | PPL | Mean KLD |
-          |------|-----|----------|
-          "@
+          for type in Q2_K TQ1_0 TQ2_0 Q1_5_K Q2_K_S_NEW; do
+            PPL=$(grep -a "Final estimate" results/ppl-${type}.txt | grep -oP 'PPL = \K[0-9.]+' || echo "N/A")
+            KLD=$(grep -a "Mean    KLD" results/ppl-${type}.txt | awk '{print $3}' || echo "N/A")
+            echo "| **$type** | **$PPL** | $KLD |" >> $REPORT
+          done
           
-          $q8_content = Get-Content results\ppl-Q8_0.txt -Raw
-          $q8_ppl = "N/A"
-          if ($q8_content -match "PPL\s*=\s*([0-9.]+)") { $q8_ppl = $matches[1] }
-          $content += "`n| Q8_0 | $q8_ppl | 0 |"
+          {
+            echo ""
+            echo "## Performance (12 threads)"
+            echo "| Type | Prompt (t/s) | Generation (t/s) |"
+            echo "|------|-------------|------------------|"
+          } >> $REPORT
           
-          $types = @("Q2_K", "TQ1_0", "TQ2_0", "Q1_5_K", "Q2_K_S_NEW")
-          foreach ($type in $types) {
-            $ppl_content = Get-Content results\ppl-${type}.txt -Raw
-            $ppl = "N/A"
-            $kld = "N/A"
-            
-            if ($ppl_content -match "PPL\s*=\s*([0-9.]+)") { $ppl = $matches[1] }
-            if ($ppl_content -match "Mean\s*KLD\s*=\s*([0-9.]+)") { $kld = $matches[1] }
-            
-            $content += "`n| **$type** | **$ppl** | $kld |"
-          }
+          for type in Q8_0 Q2_K TQ1_0 TQ2_0 Q1_5_K Q2_K_S_NEW; do
+            FILE="results/bench-${type}.txt"
+            PP=$(grep -a -oP '\d+\.\d+ ± \d+\.\d+(?= t/s)' "$FILE" | head -1 || echo "N/A")
+            TG=$(grep -a -oP '\d+\.\d+ ± \d+\.\d+(?= t/s)' "$FILE" | tail -1 || echo "N/A")
+            echo "| $type | $PP | $TG |" >> $REPORT
+          done
           
-          $content += @"
-          
-          ## Performance (12 threads)
-          | Type | Prompt (t/s) | Generation (t/s) |
-          |------|-------------|------------------|
-          "@
-          
-          $types_all = @("Q8_0", "Q2_K", "TQ1_0", "TQ2_0", "Q1_5_K", "Q2_K_S_NEW")
-          foreach ($type in $types_all) {
-            $bench_content = Get-Content results\bench-${type}.txt
-            $pp = "N/A"
-            $tg = "N/A"
-            
-            $speeds = $bench_content | Select-String -Pattern "([0-9.]+\s*±\s*[0-9.]+)\s*t/s" -AllMatches
-            if ($speeds.Matches.Count -ge 2) {
-              $pp = $speeds.Matches[0].Groups[1].Value
-              $tg = $speeds.Matches[$speeds.Matches.Count - 1].Groups[1].Value
-            }
-            
-            $content += "`n| $type | $pp | $tg |"
-          }
-          
-          Set-Content -Path $report -Value $content -Encoding utf8
-          Write-Host $content
+          cat $REPORT
 
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
           name: result-windows-ryzen
-          path: results\
+          path: results/
