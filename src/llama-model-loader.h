@@ -85,6 +85,7 @@ struct llama_model_loader {
     const llama_model_tensor_buft_override * tensor_buft_overrides;
 
     gguf_context_ptr metadata_ptr;
+    bool external_metadata = false;
     struct gguf_context * metadata; // either metadata_ptr.get() or external
     std::vector<ggml_context_ptr> contexts;
 

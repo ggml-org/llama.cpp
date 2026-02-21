@@ -652,6 +652,7 @@ llama_model_loader::llama_model_loader(
     }
     } else {
         metadata = external_metadata;
+        this->external_metadata = true;
         get_key(llm_kv(LLM_KV_GENERAL_ARCHITECTURE), arch_name, false);
         llm_kv = LLM_KV(llm_arch_from_string(arch_name));
     }
@@ -983,6 +984,9 @@ bool llama_model_loader::load_all_data(
         llama_mlocks * lmlocks,
         llama_progress_callback progress_callback,
         void * progress_callback_user_data) {
+    if (external_metadata) {
+        return true;
+    }
     GGML_ASSERT(size_data != 0 && "call init_mappings() first");
 
     std::vector<no_init<uint8_t>> read_buf;
