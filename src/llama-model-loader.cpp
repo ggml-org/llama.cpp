@@ -501,6 +501,7 @@ namespace GGUFMeta {
 
 
 llama_model_loader::llama_model_loader(
+        struct gguf_context * external_metadata,
         const std::string & fname,
         std::vector<std::string> & splits,
         bool use_mmap,
@@ -522,6 +523,7 @@ llama_model_loader::llama_model_loader(
 
     tensor_buft_overrides = param_tensor_buft_overrides_p;
 
+    if (external_metadata == nullptr) {
     // Load the main GGUF
     struct ggml_context * ctx = NULL;
     struct gguf_init_params params = {
@@ -647,6 +649,11 @@ llama_model_loader::llama_model_loader(
         }
 
         LLAMA_LOG_INFO("%s: additional %d GGUFs metadata loaded.\n",  __func__, n_split - 1);
+    }
+    } else {
+        metadata = external_metadata;
+        get_key(llm_kv(LLM_KV_GENERAL_ARCHITECTURE), arch_name, false);
+        llm_kv = LLM_KV(llm_arch_from_string(arch_name));
     }
 
     n_kv      = gguf_get_n_kv(metadata);

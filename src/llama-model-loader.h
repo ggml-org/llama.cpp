@@ -96,6 +96,7 @@ struct llama_model_loader {
     std::vector<std::pair<size_t, size_t>> mmaps_used;
 
     llama_model_loader(
+        struct gguf_context * external_metadata,
         const std::string & fname,
         std::vector<std::string> & splits, // optional, only need if the split does not follow naming scheme
         bool use_mmap,
