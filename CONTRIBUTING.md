@@ -41,7 +41,7 @@ Before submitting your PR:
   - In particular, adding new data types (extension of the `ggml_type` enum) carries with it a disproportionate maintenance burden. As such, to add a new quantization type you will need to meet the following *additional* criteria *at minimum*:
     - convert a small model to GGUF using the new type and upload it to HuggingFace
     - provide [perplexity](https://github.com/ggml-org/llama.cpp/tree/master/tools/perplexity) comparisons to FP16/BF16 (whichever is the native precision) as well as to types of similar size
-    - providing KLD divergence data calculated from the FP16/BF16 (whichever is the native precision) version for both the new quant as well as the surrounding quants
+    - provide KL divergence data calculated vs. the FP16/BF16 (whichever is the native precision) version for both the new type as well as types of similar size
     - performance data for the new quantization scheme as compared to surrounding quantization schemes on pure CPU
   - Consider allowing write access to your branch for faster reviews, as reviewers can push commits directly
 
