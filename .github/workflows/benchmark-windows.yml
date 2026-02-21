@@ -53,7 +53,9 @@ jobs:
         shell: msys2 {0}
         run: |
           rm -rf bin build results
-          cmake -B build -DGGML_CUDA=ON
+          export PATH="/c/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.1/bin:$PATH"
+          export CUDA_PATH="/c/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.1"
+          cmake -B build -DGGML_CUDA=ON -DCUDAToolkit_ROOT="C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.1"
           cmake --build build --config Release -j 12
           
           mkdir -p bin
