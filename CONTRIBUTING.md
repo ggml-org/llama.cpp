@@ -42,7 +42,7 @@ Before submitting your PR:
     - convert a small model to GGUF using the new type and upload it to HuggingFace
     - provide [perplexity](https://github.com/ggml-org/llama.cpp/tree/master/tools/perplexity) comparisons to FP16/BF16 (whichever is the native precision) as well as to types of similar size
     - provide KL divergence data calculated vs. the FP16/BF16 (whichever is the native precision) version for both the new type as well as types of similar size
-    - performance data for the new quantization scheme as compared to surrounding quantization schemes on pure CPU
+    - provide [performance data](https://github.com/ggml-org/llama.cpp/tree/master/tools/llama-bench) for the new type in comparison to types of similar size on pure CPU
   - Consider allowing write access to your branch for faster reviews, as reviewers can push commits directly
 
 After submitting your PR:
