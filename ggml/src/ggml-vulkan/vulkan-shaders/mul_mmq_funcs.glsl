@@ -183,45 +183,6 @@ ACC_TYPE mmq_dot_product(const uint ib_a) {
 }
 #endif
 
-#if defined(DATA_A_NVFP4)
-// 1-byte loads for nvfp4 blocks (10 bytes)
-void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
-    const uint32_t qs = pack32(u8vec4(data_a[ib].qs[iqs * 4    ],
-                                      data_a[ib].qs[iqs * 4 + 1],
-                                      data_a[ib].qs[iqs * 4 + 2],
-                                      data_a[ib].qs[iqs * 4 + 3]));
-
-    const u8vec4 i_a0 = unpack8( qs       & 0x0F0F0F0F);
-    const u8vec4 i_a1 = unpack8((qs >> 4) & 0x0F0F0F0F);
-
-    buf_a[buf_ib].qs[iqs    ] = pack32(i8vec4(kvalues_mxfp4[i_a0.x], kvalues_mxfp4[i_a0.y], kvalues_mxfp4[i_a0.z], kvalues_mxfp4[i_a0.w]));
-    buf_a[buf_ib].qs[iqs + 4] = pack32(i8vec4(kvalues_mxfp4[i_a1.x], kvalues_mxfp4[i_a1.y], kvalues_mxfp4[i_a1.z], kvalues_mxfp4[i_a1.w]));
-
-    if (iqs == 0) {
-        buf_a[buf_ib].d = FLOAT_TYPE(ue4m3_to_fp32(data_a[ib].d));
-    }
-}
-
-void block_a_to_registers(const uint reg_ib, const uint buf_ib) {
-    cache_a[reg_ib].d = buf_a[buf_ib].d;
-
-    [[unroll]] for (uint iqs = 0; iqs < 8; iqs++) {
-        cache_a[reg_ib].qs[iqs] = buf_a[buf_ib].qs[iqs];
-    }
-}
-
-ACC_TYPE mmq_dot_product(const uint ib_a) {
-    int32_t q_sum = 0;
-    [[unroll]] for (uint iqs = 0; iqs < 8; iqs++) {
-        const int32_t qs_a = cache_a[ib_a].qs[iqs];
-
-        q_sum += dotPacked4x8EXT(qs_a, cache_b.qs[iqs]);
-    }
-
-    return ACC_TYPE(float(cache_a[ib_a].d) * float(cache_b.ds.x) * float(q_sum));
-}
-#endif
-
 // For k-quants, ib and iqs still assume 32-wide blocks, but k-quants are 256-wide
 // iqs still refers to a 32-bit integer, meaning 0..7 for 32-wide quants
 #if defined(DATA_A_Q2_K)
