@@ -592,18 +592,29 @@ static size_t llama_tensor_quantize_impl(enum ggml_type new_type, const float * 
 
 // does this tensor require an importance matrix?
 static bool tensor_requires_imatrix(const ggml_tensor * t, const ggml_type dst_type, const llama_ftype ftype) {
-    const std::string name = t->name;
-    return (
-        dst_type == GGML_TYPE_IQ2_XXS || dst_type == GGML_TYPE_IQ2_XS ||
-        dst_type == GGML_TYPE_IQ3_XXS || dst_type == GGML_TYPE_IQ1_S  ||
-        dst_type == GGML_TYPE_IQ2_S   || dst_type == GGML_TYPE_IQ1_M  ||
-        (
-            // Q2_K_S is the worst k-quant type - only allow it without imatrix for token embeddings.
-            // should match "token_embd.weight" as well as "per_layer_token_embd.weight"
-            dst_type == GGML_TYPE_Q2_K && ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S &&
-            name.find("token_embd.weight") != std::string::npos
-        )
-    );
+    switch (dst_type) {
+        case GGML_TYPE_IQ3_XXS:
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ1_M:
+        case GGML_TYPE_IQ1_S:
+            return true;
+        case GGML_TYPE_Q2_K:
+            // Q2_K is the worst k-quant type, so always require an imatrix,
+            // except for the token embedding tensors.
+            if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S) {
+                const char * name = t->name;
+                if (std::strncmp(name, "token_embd.weight", 17) == 0 ||
+                    std::strncmp(name, "per_layer_token_embd.weight", 27) == 0) {
+                    return false;
+                }
+                return true;
+            }
+            return false;
+        default:
+            return false;
+    }
 }
 
 // do we allow this tensor to be quantized?
