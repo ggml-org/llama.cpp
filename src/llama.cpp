@@ -1,5 +1,6 @@
 #include "llama.h"
 
+#include "ggml-cpp.h"
 #include "llama-impl.h"
 
 #include "llama-chat.h"
@@ -882,11 +883,10 @@ static int llama_model_load(const std::string & fname, std::vector<std::string> 
 
 static struct llama_model * llama_model_load_from_file_impl(
         struct gguf_context * metadata,
-        llama_model_set_tensor_data_t set_tensor_data,
-        void * set_tensor_data_ud,
         const std::string & path_model,
         std::vector<std::string> & splits,
         struct llama_model_params params) {
+    GGML_ASSERT((metadata == nullptr) != path_model.empty() && "exactly one out of metadata and path_model needs to be defined");
     ggml_time_init();
 
     if (!params.vocab_only && ggml_backend_reg_count() == 0) {
@@ -1023,14 +1023,13 @@ static struct llama_model * llama_model_load_from_file_impl(
     return model;
 }
 
-struct llama_model * llama_model_init(
+struct llama_model * llama_model_empty(
         struct gguf_context * metadata,
-        llama_model_set_tensor_data_t set_tensor_data,
-        void * set_tensor_data_ud,
         struct llama_model_params params) {
+    GGML_ASSERT(metadata != nullptr);
     std::string path_model;
     std::vector<std::string> splits = {};
-    return llama_model_load_from_file_impl(metadata, set_tensor_data, set_tensor_data_ud, path_model, splits, params);
+    return llama_model_load_from_file_impl(metadata, path_model, splits, params);
 }
 // deprecated
 struct llama_model * llama_load_model_from_file(
@@ -1043,7 +1042,7 @@ struct llama_model * llama_model_load_from_file(
         const char * path_model,
         struct llama_model_params params) {
     std::vector<std::string> splits = {};
-    return llama_model_load_from_file_impl(nullptr, nullptr, nullptr, path_model, splits, params);
+    return llama_model_load_from_file_impl(nullptr, path_model, splits, params);
 }
 
 struct llama_model * llama_model_load_from_splits(
@@ -1059,7 +1058,7 @@ struct llama_model * llama_model_load_from_splits(
     for (size_t i = 0; i < n_paths; ++i) {
         splits.push_back(paths[i]);
     }
-    return llama_model_load_from_file_impl(nullptr, nullptr, nullptr, splits.front(), splits, params);
+    return llama_model_load_from_file_impl(nullptr, splits.front(), splits, params);
 }
 
 void llama_model_save_to_file(const struct llama_model * model, const char * path_model) {
