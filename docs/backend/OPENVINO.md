@@ -52,13 +52,13 @@ Accuracy and performance optimizations for quantized models are still work in pr
 The following models have been validated for functionality on Intel® Core™ Ultra Series 1 and Series 2:
 
 - [Llama-3.2-1B-Instruct-GGUF](https://huggingface.co/MaziyarPanahi/Llama-3.2-1B-Instruct-GGUF)
-- [Llama-3.1-8B-Instruct](https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct)
+- [Llama-3.1-8B-Instruct](https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF)
 - [microsoft/Phi-3-mini-4k-instruct-gguf](https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf)
 - [Qwen/Qwen2.5-1.5B-Instruct-GGUF](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF)
-- [Qwen/Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B)
-- [openbmb/MiniCPM-1B-sft-bf16](https://huggingface.co/openbmb/MiniCPM-1B-sft-bf16)
-- [tencent/Hunyuan-7B-Instruct](https://huggingface.co/tencent/Hunyuan-7B-Instruct)
-- [mistralai/Mistral-7B-Instruct-v0.3](https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3)
+- [Qwen/Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B-GGUF)
+- [openbmb/MiniCPM-1B-sft-bf16](https://huggingface.co/openbmb/MiniCPM-S-1B-sft-gguf)
+- [tencent/Hunyuan-7B-Instruct](https://huggingface.co/bartowski/tencent_Hunyuan-7B-Instruct-GGUF)
+- [mistralai/Mistral-7B-Instruct-v0.3](https://huggingface.co/bartowski/Mistral-7B-Instruct-v0.3-GGUF)
 - [bartowski/DeepSeek-R1-Distill-Llama-8B-GGUF](https://huggingface.co/bartowski/DeepSeek-R1-Distill-Llama-8B-GGUF)
 
 ## Build Instructions
