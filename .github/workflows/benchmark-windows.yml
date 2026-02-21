@@ -52,17 +52,14 @@ jobs:
       - name: Build llama.cpp
         shell: msys2 {0}
         run: |
-          if [ -f "bin/llama-quantize.exe" ]; then
-            echo "Binaries already exist. Skipping build."
-          else
-            cmake -B build -DGGML_CUDA=ON
-            cmake --build build --config Release -j 12
-            
-            mkdir -p bin
-            find build -type f \( -name "llama-quantize.exe" -o -name "llama-quantize" \) -exec cp {} bin/llama-quantize.exe \; || true
-            find build -type f \( -name "llama-perplexity.exe" -o -name "llama-perplexity" \) -exec cp {} bin/llama-perplexity.exe \; || true
-            find build -type f \( -name "llama-bench.exe" -o -name "llama-bench" \) -exec cp {} bin/llama-bench.exe \; || true
-          fi
+          rm -rf bin build results
+          cmake -B build -DGGML_CUDA=ON
+          cmake --build build --config Release -j 12
+          
+          mkdir -p bin
+          find build -type f \( -name "llama-quantize.exe" -o -name "llama-quantize" \) -exec cp {} bin/llama-quantize.exe \; || true
+          find build -type f \( -name "llama-perplexity.exe" -o -name "llama-perplexity" \) -exec cp {} bin/llama-perplexity.exe \; || true
+          find build -type f \( -name "llama-bench.exe" -o -name "llama-bench" \) -exec cp {} bin/llama-bench.exe \; || true
 
       - name: Download model and data
         run: |
