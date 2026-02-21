@@ -285,7 +285,7 @@ bool server_http_context::start() {
 
         // Enable address reuse to allow immediate restart of server
         srv->set_socket_options([](socket_t sock) {
-            int flag = 1;
+            const char flag = 1;
             setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(flag));
         });
 
