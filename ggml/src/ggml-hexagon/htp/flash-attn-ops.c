@@ -222,9 +222,9 @@ static inline void hvx_mad_f32_f16_aa_rx2(float * restrict y,
         HVX_Vector xs      = xs_p_lo;
         i = 2 * i;  // index for ptr_y
 
-        if (nloe >= 32) {
+        if (nloe >= VLEN_FP32) {
             ptr_y[i] = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(xs, ptr_y[i]));
-            nloe -= 32; ++i;
+            nloe -= VLEN_FP32; ++i;
             xs = Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_hi_W(xs0_p), Q6_V_hi_W(xs1_p));
         }
 
