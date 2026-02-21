@@ -26,7 +26,7 @@ jobs:
       - name: Setup CUDA Toolkit
         uses: Jimver/cuda-toolkit@v0.2.14
         with:
-          cuda: '12.4.0'
+          cuda: '12.1.0'
           method: 'network'
 
       - name: Install MSYS2, CMake, and GCC
