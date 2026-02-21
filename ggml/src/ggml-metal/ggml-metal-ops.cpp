@@ -1532,6 +1532,8 @@ int ggml_metal_op_rwkv(ggml_metal_op_t ctx, int idx) {
     GGML_TENSOR_LOCALS( int32_t, ne,  op,         ne);
     GGML_TENSOR_LOCALS(uint64_t, nb,  op,         nb);
 
+    const int32_t fuse_exp = ((const int32_t *) op->op_params)[0];
+
     const int64_t B = op->op == GGML_OP_RWKV_WKV6 ? op->src[5]->ne[1] : op->src[6]->ne[1];
     const int64_t T = op->src[0]->ne[2];
     const int64_t C = op->ne[0];
@@ -1556,6 +1558,9 @@ int ggml_metal_op_rwkv(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_bytes   (enc, (void *) &T, sizeof(T), ida++);
     ggml_metal_encoder_set_bytes   (enc, (void *) &C, sizeof(C), ida++);
     ggml_metal_encoder_set_bytes   (enc, (void *) &H, sizeof(H), ida++);
+    if (op->op == GGML_OP_RWKV_WKV7) {
+        ggml_metal_encoder_set_bytes   (enc, (void *) &fuse_exp, sizeof(fuse_exp), ida++);
+    }
 
     ggml_metal_encoder_dispatch_threadgroups(enc, B * H, 1, 1, C/H, 1, 1);
 
