@@ -1696,7 +1696,6 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
     float cutoff = std::numeric_limits<float>::quiet_NaN();
     if (statistics_data && !statistics_data->empty()) { cutoff = threshold_score(* statistics_data, params->importance_pct); }
-    LLAMA_LOG_INFO("%s: - importance score cutoff: %1.4f\n", func, cutoff);
 
     // Certain tensors have a higher impact on model quality, so we apply a lower penalty to them
     auto is_important = [&](const std::string & tensor_name) -> bool {
@@ -2451,9 +2450,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     LLAMA_LOG_INFO("%s: quant size  = %8.2f MiB (%7.4f BPW)\n", __func__, total_size_new/1024.0/1024.0, total_size_new*8.0/ml.n_elements);
 
     if (!params->imatrix && params->dry_run && will_require_imatrix) {
-        LLAMA_LOG_WARN("%s: WARNING: dry run completed successfully, but actually completing this quantization will require an imatrix!\n",
-                       __func__
-        );
+        LLAMA_LOG_WARN("%s: WARNING: dry run completed successfully, but actually completing this quantization will require an imatrix!\n", __func__);
     }
 
     if (qs.n_fallback > 0) {
