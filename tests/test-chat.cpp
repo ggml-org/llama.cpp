@@ -3429,6 +3429,20 @@ static void test_template_output_peg_parsers() {
     }
 
     {
+<<<<<<< feature/gigachat_v3_tool_parser
+        // GigaChat V3
+        auto tmpls = read_templates("models/templates/GigaChat3-10B-A1.8B.jinja");
+
+        // Test basic message
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "Hello, world!\nWhat's up?";
+            t.expect = message_assist;
+        });
+
+        // Test tool call
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "<|message_sep|>\n\nfunction call<|role_sep|>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}";
+=======
         // Step-3.5-Flash (uses Nemotron v3 PEG parser with thinking_forced_open)
         // Unlike Nemotron, Step-3.5-Flash always emits <think> regardless of enable_thinking,
         // so all inputs must include a </think> delimiter.
@@ -3462,11 +3476,21 @@ static void test_template_output_peg_parsers() {
                 "</function>\n"
                 "</tool_call>";
             t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+>>>>>>> master
             t.params.tools = {special_function_tool};
 
             t.expect = message_assist_call;
         });
 
+<<<<<<< feature/gigachat_v3_tool_parser
+        // Test tool call with content before
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "Hello, world!\nWhat's up?"
+                      "<|message_sep|>\n\nfunction call<|role_sep|>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}";
+            t.params.tools = {special_function_tool};
+
+            t.expect = message_assist_call_content;
+=======
         // Test tool call with thinking
         test_peg_parser(tmpls.get(), [&](auto & t) {
             t.input =
@@ -3615,6 +3639,7 @@ static void test_template_output_peg_parsers() {
 
             t.expect.reasoning_content = "I need to output the invoice details in JSON";
             t.expect.content = R"({"amount": 123.45, "date": "2025-12-03"})";
+>>>>>>> master
         });
     }
 
