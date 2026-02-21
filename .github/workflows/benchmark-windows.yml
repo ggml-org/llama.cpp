@@ -23,11 +23,16 @@ jobs:
         with:
           clean: false
 
-      - name: Setup CUDA Toolkit
-        uses: Jimver/cuda-toolkit@v0.2.14
-        with:
-          cuda: '12.1.0'
-          method: 'network'
+      - name: Install NVIDIA CUDA Toolkit 12.1
+        shell: powershell
+        run: |
+          Write-Host "Downloading NVIDIA CUDA Toolkit..."
+          Invoke-WebRequest -Uri "https://developer.download.nvidia.com/compute/cuda/12.1.1/network_installers/cuda_12.1.1_windows_network.exe" -OutFile "cuda_installer.exe"
+          Write-Host "Installing CUDA Toolkit silently..."
+          Start-Process -FilePath ".\cuda_installer.exe" -ArgumentList "-s", "nvcc_12.1", "cudart_12.1" -Wait -NoNewWindow
+          Write-Host "CUDA Installed."
+          $cudaPath = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.1\bin"
+          echo "$cudaPath" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install MSYS2, CMake, and GCC
         uses: msys2/setup-msys2@v2
