@@ -13,7 +13,15 @@ jobs:
   benchmark-ryzen:
     runs-on: [self-hosted, Windows, X64]
     steps:
+      - name: Kill rogue processes
+        run: |
+          taskkill /F /IM llama-perplexity.exe /T || echo "No perplexity running"
+          taskkill /F /IM llama-bench.exe /T || echo "No bench running"
+        shell: cmd
+
       - uses: actions/checkout@v4
+        with:
+          clean: false
 
       - name: Install MSYS2, CMake, and GCC
         uses: msys2/setup-msys2@v2
@@ -33,28 +41,40 @@ jobs:
       - name: Build llama.cpp
         shell: msys2 {0}
         run: |
-          cmake -B build
-          cmake --build build --config Release -j 12
-          
-          mkdir -p bin
-          find build -type f \( -name "llama-quantize.exe" -o -name "llama-quantize" \) -exec cp {} bin/llama-quantize.exe \; || true
-          find build -type f \( -name "llama-perplexity.exe" -o -name "llama-perplexity" \) -exec cp {} bin/llama-perplexity.exe \; || true
-          find build -type f \( -name "llama-bench.exe" -o -name "llama-bench" \) -exec cp {} bin/llama-bench.exe \; || true
+          if [ -f "bin/llama-quantize.exe" ]; then
+            echo "Binaries already exist. Skipping build."
+          else
+            cmake -B build
+            cmake --build build --config Release -j 12
+            
+            mkdir -p bin
+            find build -type f \( -name "llama-quantize.exe" -o -name "llama-quantize" \) -exec cp {} bin/llama-quantize.exe \; || true
+            find build -type f \( -name "llama-perplexity.exe" -o -name "llama-perplexity" \) -exec cp {} bin/llama-perplexity.exe \; || true
+            find build -type f \( -name "llama-bench.exe" -o -name "llama-bench" \) -exec cp {} bin/llama-bench.exe \; || true
+          fi
 
       - name: Download model and data
         run: |
-          python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='${{ env.MODEL_REPO }}', local_dir='models/hf-model')"
-          python convert_hf_to_gguf.py models/hf-model --outfile models\model-F16.gguf --outtype f16
-          
-          Invoke-WebRequest -Uri "https://huggingface.co/datasets/ggml-org/ci/resolve/main/wikitext-2-raw-v1.zip" -OutFile "models\wikitext-2-raw.zip"
-          Expand-Archive -Path "models\wikitext-2-raw.zip" -DestinationPath "models" -Force
+          if (Test-Path "models\model-F16.gguf") {
+            Write-Host "Model already exists. Skipping download."
+          } else {
+            python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='${{ env.MODEL_REPO }}', local_dir='models/hf-model')"
+            python convert_hf_to_gguf.py models/hf-model --outfile models\model-F16.gguf --outtype f16
+            
+            Invoke-WebRequest -Uri "https://huggingface.co/datasets/ggml-org/ci/resolve/main/wikitext-2-raw-v1.zip" -OutFile "models\wikitext-2-raw.zip"
+            Expand-Archive -Path "models\wikitext-2-raw.zip" -DestinationPath "models" -Force
+          }
 
       - name: Run Quantization
         shell: msys2 {0}
         run: |
           for type in Q8_0 Q2_K TQ1_0 TQ2_0 Q1_5_K Q2_K_S_NEW; do
-            echo "Quantizing $type"
-            ./bin/llama-quantize.exe models/model-F16.gguf "models/model-${type}.gguf" "$type"
+            if [ -f "models/model-${type}.gguf" ]; then
+              echo "Model $type already quantized. Skipping."
+            else
+              echo "Quantizing $type"
+              ./bin/llama-quantize.exe models/model-F16.gguf "models/model-${type}.gguf" "$type"
+            fi
           done
 
       - name: Run Perplexity
@@ -62,11 +82,11 @@ jobs:
         run: |
           mkdir -p results
           echo "Running Baseline Perplexity"
-          ./bin/llama-perplexity.exe -m models/model-Q8_0.gguf -f models/wikitext-2-raw/wiki.test.raw --save-all-logits models/logits-Q8_0.kld --chunks 256 -t 12 > results/ppl-Q8_0.txt 2>&1 || true
+          ./bin/llama-perplexity.exe -m models/model-Q8_0.gguf -f models/wikitext-2-raw/wiki.test.raw --save-all-logits models/logits-Q8_0.kld --chunks 256 -t 12 2>&1 | tee results/ppl-Q8_0.txt || true
 
           for type in Q2_K TQ1_0 TQ2_0 Q1_5_K Q2_K_S_NEW; do
             echo "Running Perplexity $type"
-            ./bin/llama-perplexity.exe -m "models/model-${type}.gguf" -f models/wikitext-2-raw/wiki.test.raw --kl-divergence --kl-divergence-base models/logits-Q8_0.kld --chunks 256 -t 12 > results/ppl-${type}.txt 2>&1 || true
+            ./bin/llama-perplexity.exe -m "models/model-${type}.gguf" -f models/wikitext-2-raw/wiki.test.raw --kl-divergence --kl-divergence-base models/logits-Q8_0.kld --chunks 256 -t 12 2>&1 | tee results/ppl-${type}.txt || true
           done
 
       - name: Run Benchmark
@@ -74,7 +94,7 @@ jobs:
         run: |
           for type in Q8_0 Q2_K TQ1_0 TQ2_0 Q1_5_K Q2_K_S_NEW; do
             echo "Running Benchmark $type"
-            ./bin/llama-bench.exe -m "models/model-${type}.gguf" -t 12 -ngl 0 -r 3 > results/bench-${type}.txt 2>&1 || true
+            ./bin/llama-bench.exe -m "models/model-${type}.gguf" -t 12 -ngl 0 -r 3 2>&1 | tee results/bench-${type}.txt || true
           done
 
       - name: Generate Report
