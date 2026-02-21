@@ -4933,8 +4933,10 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
         CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem), &extra->s));
         CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem), &extra->d));
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
-        cl_uchar mask = 0xff;
-        CL_CHECK(clSetKernelArg(kernel, 5, sizeof(cl_uchar), &mask));
+        if (use_adreno_kernels(backend_ctx, tensor)) {
+            cl_uchar mask = 0xff;
+            CL_CHECK(clSetKernelArg(kernel, 5, sizeof(cl_uchar), &mask));
+        }
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
 
         size_t global_work_size[] = {(size_t)ggml_nelements(tensor)/ggml_blck_size(tensor->type), 1, 1};
@@ -9495,6 +9497,7 @@ static void ggml_cl_mul_mat_q6_K_f32_adreno(ggml_backend_t backend, const ggml_t
     ggml_tensor_extra_cl * extra1 = (ggml_tensor_extra_cl *)src1->extra;
     ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
 
+    cl_ulong offset1 = extra1->offset + src1->view_offs;
     cl_ulong offsetd = extrad->offset + dst->view_offs;
 
     const int  ne00 = src0->ne[0];
@@ -9542,7 +9545,7 @@ static void ggml_cl_mul_mat_q6_K_f32_adreno(ggml_backend_t backend, const ggml_t
 
     // subbuffer and image for activation
     if (ne1 == 1) {
-        region.origin = extra1->offset;
+        region.origin = offset1;
         region.size = ne00 * ne1 * sizeof(float);
         CL_CHECK((b_sub_buffer = clCreateSubBuffer(extra1->data_device, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
 
