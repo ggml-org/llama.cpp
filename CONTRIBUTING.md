@@ -39,7 +39,7 @@ Before submitting your PR:
   - For intricate features, consider opening a feature request first to discuss and align expectations
   - When adding support for a new model or feature, focus on **CPU support only** in the initial PR unless you have a good reason not to. Add support for other backends like CUDA in follow-up PRs
   - In particular, adding new data types (extension of the `ggml_type` enum) carries with it a disproportionate maintenance burden. As such, to add a new quantization type you will need to meet the following *additional* criteria *at minimum*:
-    - providing a model GGUF quantized in the new scheme
+    - convert a small model to GGUF using the new type and upload it to HuggingFace
     - providing perplexity comparisons to FP16/BF16 (whichever is the native precision) as well as to surrounding quants
     - providing KLD divergence data calculated from the FP16/BF16 (whichever is the native precision) version for both the new quant as well as the surrounding quants
     - performance data for the new quantization scheme as compared to surrounding quantization schemes on pure CPU
