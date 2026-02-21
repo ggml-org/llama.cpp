@@ -15,9 +15,9 @@ jobs:
     steps:
       - name: Kill rogue processes
         run: |
-          taskkill /F /IM llama-perplexity.exe /T || echo "No perplexity running"
-          taskkill /F /IM llama-bench.exe /T || echo "No bench running"
-        shell: cmd
+          Stop-Process -Name "llama-perplexity" -Force -ErrorAction SilentlyContinue
+          Stop-Process -Name "llama-bench" -Force -ErrorAction SilentlyContinue
+        shell: powershell
 
       - uses: actions/checkout@v4
         with:
