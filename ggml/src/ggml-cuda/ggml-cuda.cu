@@ -3952,7 +3952,7 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
                     GGML_LOG_DEBUG("%s: CUDA graph warmup reset\n", __func__);
                 } else {
                     use_cuda_graph = true;
-                    cuda_graph_update_required = (graph->instance == nullptr);
+                    cuda_graph_update_required = graph->instance == nullptr;
                 }
             }
         }
