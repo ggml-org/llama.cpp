@@ -1,0 +1,126 @@
+name: Windows Benchmark Eval Only
+
+on:
+  workflow_dispatch:
+
+env:
+  MODEL_REPO: 'TinyLlama/TinyLlama-1.1B-Chat-v1.0'
+  MODEL_NAME: 'tinyllama-1.1b'
+
+jobs:
+  benchmark-ryzen-eval:
+    runs-on: [self-hosted, Windows, X64]
+    steps:
+      - name: Kill rogue processes
+        run: |
+          taskkill /F /IM llama-perplexity.exe /T || echo "No perplexity running"
+          taskkill /F /IM llama-bench.exe /T || echo "No bench running"
+        shell: cmd
+
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Install MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            make
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+
+      - name: Run Perplexity Q8_0
+        shell: msys2 {0}
+        run: |
+          mkdir -p results
+          echo "Running Baseline Perplexity Q8_0"
+          ./bin/llama-perplexity.exe -m models/model-Q8_0.gguf -f models/wikitext-2-raw/wiki.test.raw --save-all-logits models/logits-Q8_0.kld --chunks 256 -t 12 2>&1 | tee results/ppl-Q8_0.txt || true
+
+      - name: Run Perplexity Q2_K
+        shell: msys2 {0}
+        run: |
+          echo "Running Perplexity Q2_K"
+          ./bin/llama-perplexity.exe -m "models/model-Q2_K.gguf" -f models/wikitext-2-raw/wiki.test.raw --kl-divergence --kl-divergence-base models/logits-Q8_0.kld --chunks 256 -t 12 2>&1 | tee results/ppl-Q2_K.txt || true
+
+      - name: Run Perplexity TQ1_0
+        shell: msys2 {0}
+        run: |
+          echo "Running Perplexity TQ1_0"
+          ./bin/llama-perplexity.exe -m "models/model-TQ1_0.gguf" -f models/wikitext-2-raw/wiki.test.raw --kl-divergence --kl-divergence-base models/logits-Q8_0.kld --chunks 256 -t 12 2>&1 | tee results/ppl-TQ1_0.txt || true
+
+      - name: Run Perplexity TQ2_0
+        shell: msys2 {0}
+        run: |
+          echo "Running Perplexity TQ2_0"
+          ./bin/llama-perplexity.exe -m "models/model-TQ2_0.gguf" -f models/wikitext-2-raw/wiki.test.raw --kl-divergence --kl-divergence-base models/logits-Q8_0.kld --chunks 256 -t 12 2>&1 | tee results/ppl-TQ2_0.txt || true
+
+      - name: Run Perplexity Q1_5_K
+        shell: msys2 {0}
+        run: |
+          echo "Running Perplexity Q1_5_K"
+          ./bin/llama-perplexity.exe -m "models/model-Q1_5_K.gguf" -f models/wikitext-2-raw/wiki.test.raw --kl-divergence --kl-divergence-base models/logits-Q8_0.kld --chunks 256 -t 12 2>&1 | tee results/ppl-Q1_5_K.txt || true
+
+      - name: Run Perplexity Q2_K_S_NEW
+        shell: msys2 {0}
+        run: |
+          echo "Running Perplexity Q2_K_S_NEW"
+          ./bin/llama-perplexity.exe -m "models/model-Q2_K_S_NEW.gguf" -f models/wikitext-2-raw/wiki.test.raw --kl-divergence --kl-divergence-base models/logits-Q8_0.kld --chunks 256 -t 12 2>&1 | tee results/ppl-Q2_K_S_NEW.txt || true
+
+      - name: Run Benchmark
+        shell: msys2 {0}
+        run: |
+          for type in Q8_0 Q2_K TQ1_0 TQ2_0 Q1_5_K Q2_K_S_NEW; do
+            echo "Running Benchmark $type"
+            ./bin/llama-bench.exe -m "models/model-${type}.gguf" -t 12 -ngl 0 -r 3 2>&1 | tee results/bench-${type}.txt || true
+          done
+
+      - name: Generate Report
+        shell: msys2 {0}
+        run: |
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          REPORT="results/benchmark-Windows-Ryzen9.md"
+          
+          {
+            echo "# Benchmark Results (Ryzen 9 7900X)"
+            echo "**Model:** ${MODEL_REPO}"
+            echo "**Date:** ${TIMESTAMP}"
+            echo "**Runner:** Self-Hosted Windows x64 (12 Cores)"
+            echo ""
+            echo "## Perplexity & KLD"
+            echo "| Type | PPL | Mean KLD |"
+            echo "|------|-----|----------|"
+          } > $REPORT
+
+          Q8_PPL=$(grep -a "Final estimate" results/ppl-Q8_0.txt | grep -oP 'PPL = \K[0-9.]+' || echo "N/A")
+          echo "| Q8_0 | $Q8_PPL | 0 |" >> $REPORT
+          
+          for type in Q2_K TQ1_0 TQ2_0 Q1_5_K Q2_K_S_NEW; do
+            PPL=$(grep -a "Final estimate" results/ppl-${type}.txt | grep -oP 'PPL = \K[0-9.]+' || echo "N/A")
+            KLD=$(grep -a "Mean    KLD" results/ppl-${type}.txt | awk '{print $3}' || echo "N/A")
+            echo "| **$type** | **$PPL** | $KLD |" >> $REPORT
+          done
+          
+          {
+            echo ""
+            echo "## Performance (12 threads)"
+            echo "| Type | Prompt (t/s) | Generation (t/s) |"
+            echo "|------|-------------|------------------|"
+          } >> $REPORT
+          
+          for type in Q8_0 Q2_K TQ1_0 TQ2_0 Q1_5_K Q2_K_S_NEW; do
+            FILE="results/bench-${type}.txt"
+            PP=$(grep -a -oP '\d+\.\d+ ± \d+\.\d+(?= t/s)' "$FILE" | head -1 || echo "N/A")
+            TG=$(grep -a -oP '\d+\.\d+ ± \d+\.\d+(?= t/s)' "$FILE" | tail -1 || echo "N/A")
+            echo "| $type | $PP | $TG |" >> $REPORT
+          done
+          
+          cat $REPORT
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: result-windows-ryzen-eval
+          path: results/
