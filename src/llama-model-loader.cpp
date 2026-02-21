@@ -1,6 +1,7 @@
 #include "llama-model-loader.h"
 
 #include "ggml.h"
+#include "gguf.h"
 
 #include <algorithm>
 #include <array>
@@ -528,7 +529,8 @@ llama_model_loader::llama_model_loader(
         /*.ctx      = */ &ctx,
     };
 
-    metadata = gguf_init_from_file(fname.c_str(), params);
+    metadata_ptr.reset(gguf_init_from_file(fname.c_str(), params));
+    metadata = metadata_ptr.get();
     if (metadata == nullptr) {
         throw std::runtime_error(format("%s: failed to load model from %s", __func__, fname.c_str()));
     }
