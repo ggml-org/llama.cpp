@@ -133,8 +133,8 @@ struct webgpu_buf_pool {
     // which can run on a different thread than the calling thread.
     std::mutex              mutex;
     std::condition_variable cv;
-    size_t                  max_pool_size;
     size_t                  cur_pool_size;
+    size_t                  max_pool_size;
     wgpu::Device            device;
     wgpu::BufferUsage       host_buf_usage;
     wgpu::BufferUsage       dev_buf_usage;
