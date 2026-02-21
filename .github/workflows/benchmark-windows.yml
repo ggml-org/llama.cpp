@@ -23,18 +23,7 @@ jobs:
         with:
           clean: false
 
-      - name: Install NVIDIA CUDA Toolkit 12.1
-        shell: powershell
-        run: |
-          Write-Host "Downloading NVIDIA CUDA Toolkit..."
-          Invoke-WebRequest -Uri "https://developer.download.nvidia.com/compute/cuda/12.1.1/network_installers/cuda_12.1.1_windows_network.exe" -OutFile "cuda_installer.exe"
-          Write-Host "Installing CUDA Toolkit silently..."
-          Start-Process -FilePath ".\cuda_installer.exe" -ArgumentList "-s", "nvcc_12.1", "cudart_12.1" -Wait -NoNewWindow
-          Write-Host "CUDA Installed."
-          $cudaPath = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.1\bin"
-          echo "$cudaPath" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-      - name: Install MSYS2, CMake, and GCC
+      - name: Install MSYS2, CMake, GCC, and Vulkan
         uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
@@ -44,6 +33,9 @@ jobs:
             make
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-vulkan-headers
+            mingw-w64-ucrt-x86_64-vulkan-loader
+            mingw-w64-ucrt-x86_64-shaderc
 
       - name: Install Python dependencies
         run: |
@@ -53,9 +45,7 @@ jobs:
         shell: msys2 {0}
         run: |
           rm -rf bin build results
-          export PATH="/c/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.1/bin:$PATH"
-          export CUDA_PATH="/c/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.1"
-          cmake -B build -DGGML_CUDA=ON -DCUDAToolkit_ROOT="C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.1"
+          cmake -B build -DGGML_VULKAN=ON
           cmake --build build --config Release -j 12
           
           mkdir -p bin
@@ -126,10 +116,10 @@ jobs:
           REPORT="results/benchmark-Windows-Ryzen9.md"
           
           {
-            echo "# Benchmark Results (Ryzen 9 7900X)"
+            echo "# Benchmark Results (Ryzen 9 7900X + RTX 4070 Ti)"
             echo "**Model:** ${MODEL_REPO}"
             echo "**Date:** ${TIMESTAMP}"
-            echo "**Runner:** Self-Hosted Windows x64 (12 Cores)"
+            echo "**Runner:** Self-Hosted Windows x64 (12 Cores + Vulkan GPU)"
             echo ""
             echo "## Perplexity & KLD"
             echo "| Type | PPL | Mean KLD |"
@@ -147,7 +137,7 @@ jobs:
           
           {
             echo ""
-            echo "## Performance (12 threads)"
+            echo "## Performance (12 threads + Vulkan GPU)"
             echo "| Type | Prompt (t/s) | Generation (t/s) |"
             echo "|------|-------------|------------------|"
           } >> $REPORT
