@@ -38,12 +38,6 @@ struct block_a_cache {
     int32_t qs[8];
     FLOAT_TYPE d;
 };
-#elif defined(DATA_A_NVFP4)
-#define QUANT_R_MMQ 2
-struct block_a_cache {
-    int32_t qs[8];
-    FLOAT_TYPE d;
-};
 #elif defined(DATA_A_Q2_K)
 #define QUANT_R_MMQ 4
 struct block_a_cache {

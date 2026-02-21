@@ -433,18 +433,6 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
 }
 #endif
 
-#if defined(DATA_A_NVFP4)
-vec2 dequantize(uint ib, uint iqs, uint a_offset) {
-    const uint vui = uint(data_a[a_offset + ib].qs[iqs]);
-    return vec2(kvalues_mxfp4[vui & 0xF], kvalues_mxfp4[vui >> 4]);
-}
-vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
-    vec2 v0 = dequantize(ib, iqs, a_offset);
-    vec2 v1 = dequantize(ib, iqs + 1, a_offset);
-    return vec4(v0.x, v0.y, v1.x, v1.y);
-}
-#endif
-
 #if defined(DATA_A_F32) || defined(DATA_A_F16) || defined(DATA_A_BF16)
 vec2 get_dm(uint ib, uint a_offset) {
     return vec2(0, 0);
@@ -469,12 +457,6 @@ vec2 get_dm(uint ib, uint a_offset) {
 #if defined(DATA_A_MXFP4)
 vec2 get_dm(uint ib, uint a_offset) {
     return vec2(e8m0_to_fp32(data_a[a_offset + ib].e), 0);
-}
-#endif
-
-#if defined(DATA_A_NVFP4)
-vec2 get_dm(uint ib, uint a_offset) {
-    return vec2(ue4m3_to_fp32(data_a[a_offset + ib].d), 0);
 }
 #endif
 

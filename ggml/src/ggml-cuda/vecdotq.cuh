@@ -322,32 +322,6 @@ static __device__ __forceinline__ float vec_dot_mxfp4_q8_1(
     return d * sumi;
 }
 
-#define VDR_NVFP4_Q8_1_MMVQ 2
-
-// NVFP4 has qk=16, so 2 blocks per q8_1 block. kby = kbx*(16/32) = 0 always.
-// The vec_dot receives the same bq8_1 for even/odd kbx. Use kbx parity to select the half.
-static __device__ __forceinline__ float vec_dot_nvfp4_q8_1(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
-
-    const block_nvfp4 * bq4 = (const block_nvfp4 *) vbq + kbx;
-
-    // kbx even -> first half of q8_1 block (bytes 0-15), kbx odd -> second half (bytes 16-31)
-    const int * q8 = (const int *) bq8_1->qs + (kbx & 1) * 4;
-
-    int sumi = 0;
-#pragma unroll
-    for (int l = 0; l < VDR_NVFP4_Q8_1_MMVQ; ++l) {
-        const int aux_q4 = get_int_b1(bq4->qs, l);
-        const int2 v = get_int_from_table_16(aux_q4, kvalues_mxfp4);
-        sumi = ggml_cuda_dp4a(v.x, q8[l + 0], sumi);
-        sumi = ggml_cuda_dp4a(v.y, q8[l + 2], sumi);
-    }
-
-    // kvalues_mxfp4 are the integer E2M1 values (0,1,2,3,4,6,8,12,...), scale is FP16
-    const float d = ggml_cuda_ue4m3_to_fp32(bq4->d) * __low2float(bq8_1->ds);
-    return d * sumi;
-}
-
 #define VDR_Q2_K_Q8_1_MMVQ 1
 #define VDR_Q2_K_Q8_1_MMQ  4
 
@@ -1230,7 +1204,7 @@ static __device__ __forceinline__ float vec_dot_iq4_nl_q8_1(
         sumi = ggml_cuda_dp4a(v.y, q8[l + 4], sumi);
     }
 
-    const float d = ggml_cuda_ue4m3_to_fp32(bq4->d) * __low2float(bq8_1->ds);
+    const float d = __half2float(bq4->d) * __low2float(bq8_1->ds);
     return d * sumi;
 }
 
@@ -1258,6 +1232,6 @@ static __device__ __forceinline__ float vec_dot_iq4_xs_q8_1(
     const int ls = ((bq4->scales_l[iqs/8] >> (iqs & 0x04)) & 0x0F) | (((bq4->scales_h >> (iqs/2)) & 0x03) << 4);
     sumi *= ls - 32;
 
-    const float d = ggml_cuda_ue4m3_to_fp32(bq4->d) * __low2float(bq8_1[iqs/4].ds);
+    const float d = __half2float(bq4->d) * __low2float(bq8_1[iqs/4].ds);
     return d * sumi;
 }
