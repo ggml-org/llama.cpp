@@ -4956,118 +4956,24 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         if (use_adreno_kernels(backend_ctx, tensor)) {
-            cl_int err;
-            cl_event evt;
-            cl_buffer_region region;
-
-            cl_mem ql_trans;
-            cl_mem qh_trans;
-            cl_mem s_trans;
-            cl_mem d_trans;
-
             cl_int M = tensor->ne[1];   // ne01
             cl_int K = tensor->ne[0];   // ne00
 
             // Transpose ql as ushort
-            backend_ctx->prealloc_quant_trans.allocate(context, size_ql);
-            region.origin = 0;
-            region.size = size_ql;
-            CL_CHECK((ql_trans = clCreateSubBuffer(
-                backend_ctx->prealloc_quant_trans.buffer, CL_MEM_READ_WRITE,
-                CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
-
-            cl_int stride_k_ql = K/4;
-            kernel = backend_ctx->kernel_transpose_16_buf;
-            CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &extra->ql));
-            CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &ql_trans));
-            CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_int), &stride_k_ql));
-            CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_int), &M));
-
-            size_t local_size_ql[3] = {64, 1, 1};
-            size_t global_size_ql[3] = {(size_t)stride_k_ql, (size_t)M, 1};;
-            CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL,
-                global_size_ql, local_size_ql, 0, NULL, NULL));
-
-            CL_CHECK(clEnqueueCopyBuffer(queue, ql_trans, extra->ql, 0, 0, size_ql, 0, NULL, &evt));
-            CL_CHECK(clWaitForEvents(1, &evt));
-            CL_CHECK(clReleaseEvent(evt));
+            transpose_2d_as_16b(backend_ctx,
+                extra->ql, extra->ql, size_ql, K/4, M);
 
             // Transpose qh as uchar
-            backend_ctx->prealloc_quant_trans.allocate(context, size_qh);
-            region.origin = 0;
-            region.size = size_qh;
-            CL_CHECK((qh_trans = clCreateSubBuffer(
-                backend_ctx->prealloc_quant_trans.buffer, CL_MEM_READ_WRITE,
-                CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
-
-            cl_int stride_k_qh = K/4;
-            kernel = backend_ctx->kernel_transpose_8_buf;
-            CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &extra->qh));
-            CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &qh_trans));
-            CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_int), &stride_k_qh));
-            CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_int), &M));
-
-            size_t local_size_qh[3] = {64, 1, 1};
-            size_t global_size_qh[3] = {(size_t)stride_k_qh, (size_t)M, 1};
-            CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL,
-                global_size_qh, local_size_qh, 0, NULL, NULL));
-
-            CL_CHECK(clEnqueueCopyBuffer(queue, qh_trans, extra->qh, 0, 0, size_qh, 0, NULL, &evt));
-            CL_CHECK(clWaitForEvents(1, &evt));
-            CL_CHECK(clReleaseEvent(evt));
+            transpose_2d_as_8b(backend_ctx,
+                extra->qh, extra->qh, size_qh, K/4, M);
 
             // Transpose s as ushort
-            backend_ctx->prealloc_scales_trans.allocate(context, size_s);
-            region.origin = 0;
-            region.size = size_s;
-            CL_CHECK((s_trans = clCreateSubBuffer(
-                backend_ctx->prealloc_scales_trans.buffer, CL_MEM_READ_WRITE,
-                CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
-
-            cl_int stride_k_s = K/16/2;
-            kernel = backend_ctx->kernel_transpose_16_buf;
-            CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &extra->s));
-            CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &s_trans));
-            CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_int), &stride_k_s));
-            CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_int), &M));
-
-            size_t local_size_s[3] = {64, 1, 1};
-            size_t global_size_s[3] = {(size_t)stride_k_s, (size_t)M, 1};
-            CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL,
-                global_size_s, local_size_s, 0, NULL, NULL));
-
-            CL_CHECK(clEnqueueCopyBuffer(queue, s_trans, extra->s, 0, 0, size_s, 0, NULL, &evt));
-            CL_CHECK(clWaitForEvents(1, &evt));
-            CL_CHECK(clReleaseEvent(evt));
+            transpose_2d_as_16b(backend_ctx,
+                extra->s, extra->s, size_s, K/16/2, M);
 
             // Transpose d as ushort
-            backend_ctx->prealloc_scales_trans.allocate(context, size_d);
-            region.origin = 0;
-            region.size = size_d;
-            CL_CHECK((d_trans = clCreateSubBuffer(
-                backend_ctx->prealloc_scales_trans.buffer, CL_MEM_READ_WRITE,
-                CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
-
-            cl_int stride_k_d = K/256;
-            kernel = backend_ctx->kernel_transpose_16_buf;
-            CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &extra->d));
-            CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &d_trans));
-            CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_int), &stride_k_d));
-            CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_int), &M));
-
-            size_t local_size_d[3] = {64, 1, 1};
-            size_t global_size_d[3] = {(size_t)stride_k_d, (size_t)M, 1};
-            CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL,
-                global_size_d, local_size_d, 0, NULL, NULL));
-
-            CL_CHECK(clEnqueueCopyBuffer(queue, d_trans, extra->d, 0, 0, size_d, 0, NULL, &evt));
-            CL_CHECK(clWaitForEvents(1, &evt));
-            CL_CHECK(clReleaseEvent(evt));
-
-            CL_CHECK(clReleaseMemObject(ql_trans));
-            CL_CHECK(clReleaseMemObject(qh_trans));
-            CL_CHECK(clReleaseMemObject(s_trans));
-            CL_CHECK(clReleaseMemObject(d_trans));
+            transpose_2d_as_16b(backend_ctx,
+                extra->d, extra->d, size_d, K/256, M);
         }
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
         return;
