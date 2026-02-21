@@ -48,6 +48,8 @@ const uint32_t D = HSK > HSV ? HSK : HSV;
 const uint32_t kvsh_stride = D / 4 + 1;
 shared FLOAT_TYPEV4 kvsh[SHMEM_STAGING != 0 ? Bc * kvsh_stride : 1];
 
+shared vec4 occupancy_limiter[LIMIT_OCCUPANCY_SHMEM > 0 ? LIMIT_OCCUPANCY_SHMEM : 1];
+
 void main() {
 #ifdef NEEDS_INIT_IQ_SHMEM
     init_iq_shmem(gl_WorkGroupSize);
@@ -61,6 +63,17 @@ void main() {
     const uint32_t rowgroup_tid = gl_LocalInvocationIndex % threads_per_rowgroup;
     const uint32_t d_tid = gl_LocalInvocationIndex % D_split;
     const uint32_t col_tid = (gl_LocalInvocationIndex % threads_per_rowgroup) / D_split;
+
+    if (LIMIT_OCCUPANCY_SHMEM > 0) {
+        // This just exists to avoid the occupancy_limiter array getting optimized out
+        occupancy_limiter[tid] = vec4(tid);
+
+        barrier();
+
+        if (occupancy_limiter[tid] == vec4(99999.0)) {
+            data_ov4[0] = D_TYPEV4(occupancy_limiter[tid]);
+        }
+    }
 
 #define tile_row(r) (row_tid * rows_per_thread + (r))
 

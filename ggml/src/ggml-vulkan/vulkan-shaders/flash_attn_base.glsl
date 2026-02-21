@@ -12,6 +12,7 @@ layout (constant_id =  7) const uint32_t row_split = 1;
 layout (constant_id =  8) const uint32_t SubGroupSize = 32;
 layout (constant_id =  9) const uint32_t SHMEM_STAGING = 0;
 layout (constant_id = 10) const uint32_t Flags = 0;
+layout (constant_id = 11) const uint32_t LIMIT_OCCUPANCY_SHMEM = 0;
 
 const bool USE_MASK_OPT  = (Flags & 1) != 0;
 const bool MASK_ENABLE   = (Flags & 2) != 0;
