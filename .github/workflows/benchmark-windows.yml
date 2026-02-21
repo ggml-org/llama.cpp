@@ -15,22 +15,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install MSYS2, CMake, and GCC
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            make
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+
+      - name: Install Python dependencies
         run: |
           pip install torch transformers sentencepiece protobuf safetensors huggingface_hub[cli]
 
       - name: Build llama.cpp
+        shell: msys2 {0}
         run: |
           cmake -B build
           cmake --build build --config Release -j 12
           
-          New-Item -ItemType Directory -Force -Path bin
-          Copy-Item -Path "build\bin\Release\llama-quantize.exe" -Destination "bin\" -ErrorAction SilentlyContinue
-          Copy-Item -Path "build\bin\Release\llama-perplexity.exe" -Destination "bin\" -ErrorAction SilentlyContinue
-          Copy-Item -Path "build\bin\Release\llama-bench.exe" -Destination "bin\" -ErrorAction SilentlyContinue
-          Copy-Item -Path "build\bin\llama-quantize.exe" -Destination "bin\" -ErrorAction SilentlyContinue
-          Copy-Item -Path "build\bin\llama-perplexity.exe" -Destination "bin\" -ErrorAction SilentlyContinue
-          Copy-Item -Path "build\bin\llama-bench.exe" -Destination "bin\" -ErrorAction SilentlyContinue
+          mkdir -p bin
+          cp build/bin/llama-quantize.exe bin/ || cp build/llama-quantize.exe bin/ || cp build/bin/Release/llama-quantize.exe bin/ || true
+          cp build/bin/llama-perplexity.exe bin/ || cp build/llama-perplexity.exe bin/ || cp build/bin/Release/llama-perplexity.exe bin/ || true
+          cp build/bin/llama-bench.exe bin/ || cp build/llama-bench.exe bin/ || cp build/bin/Release/llama-bench.exe bin/ || true
 
       - name: Download model and data
         run: |
