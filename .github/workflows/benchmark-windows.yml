@@ -23,6 +23,12 @@ jobs:
         with:
           clean: false
 
+      - name: Setup CUDA Toolkit
+        uses: Jimver/cuda-toolkit@v0.2.14
+        with:
+          cuda: '12.4.1'
+          method: 'network'
+
       - name: Install MSYS2, CMake, and GCC
         uses: msys2/setup-msys2@v2
         with:
@@ -44,7 +50,7 @@ jobs:
           if [ -f "bin/llama-quantize.exe" ]; then
             echo "Binaries already exist. Skipping build."
           else
-            cmake -B build
+            cmake -B build -DGGML_CUDA=ON
             cmake --build build --config Release -j 12
             
             mkdir -p bin
@@ -85,7 +91,7 @@ jobs:
             echo "Baseline Perplexity already exists. Skipping."
           else
             echo "Running Baseline Perplexity"
-            ./bin/llama-perplexity.exe -m models/model-Q8_0.gguf -f models/wikitext-2-raw/wiki.test.raw --save-all-logits models/logits-Q8_0.kld --chunks 256 -t 12 2>&1 | tee results/ppl-Q8_0.txt || true
+            ./bin/llama-perplexity.exe -m models/model-Q8_0.gguf -ngl 999 -f models/wikitext-2-raw/wiki.test.raw --save-all-logits models/logits-Q8_0.kld --chunks 256 -t 12 2>&1 | tee results/ppl-Q8_0.txt || true
           fi
 
           for type in Q2_K TQ1_0 TQ2_0 Q1_5_K Q2_K_S_NEW; do
@@ -93,7 +99,7 @@ jobs:
               echo "Perplexity for $type already exists. Skipping."
             else
               echo "Running Perplexity $type"
-              ./bin/llama-perplexity.exe -m "models/model-${type}.gguf" -f models/wikitext-2-raw/wiki.test.raw --kl-divergence --kl-divergence-base models/logits-Q8_0.kld --chunks 256 -t 12 2>&1 | tee results/ppl-${type}.txt || true
+              ./bin/llama-perplexity.exe -m "models/model-${type}.gguf" -ngl 999 -f models/wikitext-2-raw/wiki.test.raw --kl-divergence --kl-divergence-base models/logits-Q8_0.kld --chunks 256 -t 12 2>&1 | tee results/ppl-${type}.txt || true
             fi
           done
 
@@ -105,7 +111,7 @@ jobs:
               echo "Benchmark for $type already exists. Skipping."
             else
               echo "Running Benchmark $type"
-              ./bin/llama-bench.exe -m "models/model-${type}.gguf" -t 12 -ngl 0 -r 3 2>&1 | tee results/bench-${type}.txt || true
+              ./bin/llama-bench.exe -m "models/model-${type}.gguf" -t 12 -ngl 999 -r 3 2>&1 | tee results/bench-${type}.txt || true
             fi
           done
 

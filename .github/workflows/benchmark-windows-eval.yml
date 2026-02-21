@@ -21,6 +21,12 @@ jobs:
         with:
           clean: false
 
+      - name: Setup CUDA Toolkit
+        uses: Jimver/cuda-toolkit@v0.2.14
+        with:
+          cuda: '12.4.1'
+          method: 'network'
+
       - name: Install MSYS2
         uses: msys2/setup-msys2@v2
         with:
@@ -37,44 +43,44 @@ jobs:
         run: |
           mkdir -p results
           echo "Running Baseline Perplexity Q8_0"
-          ./bin/llama-perplexity.exe -m models/model-Q8_0.gguf -f models/wikitext-2-raw/wiki.test.raw --save-all-logits models/logits-Q8_0.kld --chunks 256 -t 12 2>&1 | tee results/ppl-Q8_0.txt || true
+          ./bin/llama-perplexity.exe -m models/model-Q8_0.gguf -ngl 999 -f models/wikitext-2-raw/wiki.test.raw --save-all-logits models/logits-Q8_0.kld --chunks 256 -t 12 2>&1 | tee results/ppl-Q8_0.txt || true
 
       - name: Run Perplexity Q2_K
         shell: msys2 {0}
         run: |
           echo "Running Perplexity Q2_K"
-          ./bin/llama-perplexity.exe -m "models/model-Q2_K.gguf" -f models/wikitext-2-raw/wiki.test.raw --kl-divergence --kl-divergence-base models/logits-Q8_0.kld --chunks 256 -t 12 2>&1 | tee results/ppl-Q2_K.txt || true
+          ./bin/llama-perplexity.exe -m "models/model-Q2_K.gguf" -ngl 999 -f models/wikitext-2-raw/wiki.test.raw --kl-divergence --kl-divergence-base models/logits-Q8_0.kld --chunks 256 -t 12 2>&1 | tee results/ppl-Q2_K.txt || true
 
       - name: Run Perplexity TQ1_0
         shell: msys2 {0}
         run: |
           echo "Running Perplexity TQ1_0"
-          ./bin/llama-perplexity.exe -m "models/model-TQ1_0.gguf" -f models/wikitext-2-raw/wiki.test.raw --kl-divergence --kl-divergence-base models/logits-Q8_0.kld --chunks 256 -t 12 2>&1 | tee results/ppl-TQ1_0.txt || true
+          ./bin/llama-perplexity.exe -m "models/model-TQ1_0.gguf" -ngl 999 -f models/wikitext-2-raw/wiki.test.raw --kl-divergence --kl-divergence-base models/logits-Q8_0.kld --chunks 256 -t 12 2>&1 | tee results/ppl-TQ1_0.txt || true
 
       - name: Run Perplexity TQ2_0
         shell: msys2 {0}
         run: |
           echo "Running Perplexity TQ2_0"
-          ./bin/llama-perplexity.exe -m "models/model-TQ2_0.gguf" -f models/wikitext-2-raw/wiki.test.raw --kl-divergence --kl-divergence-base models/logits-Q8_0.kld --chunks 256 -t 12 2>&1 | tee results/ppl-TQ2_0.txt || true
+          ./bin/llama-perplexity.exe -m "models/model-TQ2_0.gguf" -ngl 999 -f models/wikitext-2-raw/wiki.test.raw --kl-divergence --kl-divergence-base models/logits-Q8_0.kld --chunks 256 -t 12 2>&1 | tee results/ppl-TQ2_0.txt || true
 
       - name: Run Perplexity Q1_5_K
         shell: msys2 {0}
         run: |
           echo "Running Perplexity Q1_5_K"
-          ./bin/llama-perplexity.exe -m "models/model-Q1_5_K.gguf" -f models/wikitext-2-raw/wiki.test.raw --kl-divergence --kl-divergence-base models/logits-Q8_0.kld --chunks 256 -t 12 2>&1 | tee results/ppl-Q1_5_K.txt || true
+          ./bin/llama-perplexity.exe -m "models/model-Q1_5_K.gguf" -ngl 999 -f models/wikitext-2-raw/wiki.test.raw --kl-divergence --kl-divergence-base models/logits-Q8_0.kld --chunks 256 -t 12 2>&1 | tee results/ppl-Q1_5_K.txt || true
 
       - name: Run Perplexity Q2_K_S_NEW
         shell: msys2 {0}
         run: |
           echo "Running Perplexity Q2_K_S_NEW"
-          ./bin/llama-perplexity.exe -m "models/model-Q2_K_S_NEW.gguf" -f models/wikitext-2-raw/wiki.test.raw --kl-divergence --kl-divergence-base models/logits-Q8_0.kld --chunks 256 -t 12 2>&1 | tee results/ppl-Q2_K_S_NEW.txt || true
+          ./bin/llama-perplexity.exe -m "models/model-Q2_K_S_NEW.gguf" -ngl 999 -f models/wikitext-2-raw/wiki.test.raw --kl-divergence --kl-divergence-base models/logits-Q8_0.kld --chunks 256 -t 12 2>&1 | tee results/ppl-Q2_K_S_NEW.txt || true
 
       - name: Run Benchmark
         shell: msys2 {0}
         run: |
           for type in Q8_0 Q2_K TQ1_0 TQ2_0 Q1_5_K Q2_K_S_NEW; do
             echo "Running Benchmark $type"
-            ./bin/llama-bench.exe -m "models/model-${type}.gguf" -t 12 -ngl 0 -r 3 2>&1 | tee results/bench-${type}.txt || true
+            ./bin/llama-bench.exe -m "models/model-${type}.gguf" -t 12 -ngl 999 -r 3 2>&1 | tee results/bench-${type}.txt || true
           done
 
       - name: Generate Report
