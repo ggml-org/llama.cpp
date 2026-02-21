@@ -57,15 +57,13 @@ static inline void hvx_dot_f16_f16_aa(float * restrict r, const void * restrict 
 static inline HVX_Vector hvx_dot_f16_f16_aa_rx4(const void * restrict y,
                                                 const uint8_t * restrict x,
                                                 const size_t stride_x,
-                                                const size_t n) {
+                                                const size_t nvec,
+                                                const size_t nloe) {
     const HVX_Vector * restrict vx0 = (const HVX_Vector * restrict) x;                   // fp16
     const HVX_Vector * restrict vx1 = (const HVX_Vector * restrict) (x + stride_x);      // fp16
     const HVX_Vector * restrict vx2 = (const HVX_Vector * restrict) (x + stride_x * 2);  // fp16
     const HVX_Vector * restrict vx3 = (const HVX_Vector * restrict) (x + stride_x * 3);  // fp16
     const HVX_Vector * restrict vy  = (const HVX_Vector * restrict) y;                   // fp16
-
-    uint32_t nvec = n / VLEN_FP16;                                                       // num full fp16 hvx vectors
-    uint32_t nloe = n % VLEN_FP16;                                                       // leftover elements
 
     HVX_Vector       rsum0 = Q6_V_vsplat_R(0);
     HVX_Vector       rsum1 = Q6_V_vsplat_R(0);
@@ -131,10 +129,14 @@ static inline HVX_Vector hvx_dot_f16_f16_aa_rx32(const void * restrict y,
                                                  const size_t stride_x,
                                                  const size_t n,
                                                  float        s) {
+
+    const size_t nvec = n / VLEN_FP16;                                                       // num full fp16 hvx vectors
+    const size_t nloe = n % VLEN_FP16;                                                       // leftover elements
+
     HVX_Vector   sums;  // initialize at j = 0
     const size_t stride_x_4 = stride_x * 4;
     for (uint32_t j = 0; j < VLEN_FP32; j += 4) {
-        HVX_Vector     sums_x4 = hvx_dot_f16_f16_aa_rx4(y, x, stride_x, n);
+        HVX_Vector     sums_x4 = hvx_dot_f16_f16_aa_rx4(y, x, stride_x, nvec, nloe);
         HVX_VectorPred pred    = Q6_Q_vsetq_R(j * SIZEOF_FP32);
         sums                   = Q6_V_vmux_QVV(pred, sums, sums_x4);
         x += stride_x_4;
