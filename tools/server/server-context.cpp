@@ -2911,6 +2911,9 @@ server_context_meta server_context::get_meta() const {
         /* fim_pre_token          */ llama_vocab_fim_pre(impl->vocab),
         /* fim_sub_token          */ llama_vocab_fim_suf(impl->vocab),
         /* fim_mid_token          */ llama_vocab_fim_mid(impl->vocab),
+        /* fim_pad_token          */ llama_vocab_fim_pad(impl->vocab),
+        /* fim_rep_token          */ llama_vocab_fim_rep(impl->vocab),
+        /* fim_sep_token          */ llama_vocab_fim_sep(impl->vocab),
 
         /* model_vocab_type       */ llama_vocab_type(impl->vocab),
         /* model_vocab_n_tokens   */ llama_vocab_n_tokens(impl->vocab),
