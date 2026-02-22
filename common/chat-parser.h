@@ -26,7 +26,7 @@ class common_chat_msg_parser {
     common_chat_msg result_;
 
   public:
-    common_chat_msg_parser(std::string input, bool is_partial, const common_chat_parser_params & syntax);
+    common_chat_msg_parser(const std::string & input, bool is_partial, const common_chat_parser_params & syntax);
     const std::string & input() const { return input_; }
     size_t pos() const { return pos_; }
     const std::string & healing_marker() const { return healing_marker_; }
