@@ -2198,6 +2198,126 @@ void quantize_row_tq2_0_ref(const float * GGML_RESTRICT x, block_tq2_0 * GGML_RE
     }
 }
 
+static inline uint8_t map_int8_to_uint2_idx(int32_t v0) {
+
+    switch(v0) {
+        case -3:
+        return 0;
+        case -2:
+        return 1;
+        case -1:
+        return 1;
+        case 0:
+        return 1;
+        case 1:
+        return 2;
+        case 2:
+        return 2;
+        case 3:
+        return 3;
+        default:
+        GGML_UNREACHABLE();
+    }
+}
+
+static inline int32_t map_uint2_idx_to_int8(uint8_t v0) {
+
+    switch(v0) {
+        case 0:
+        return -3;
+        case 1:
+        return -1;
+        case 2:
+        return 1;
+        case 3:
+        return 3;
+        default:
+        GGML_UNREACHABLE();
+    }
+}
+
+void quantize_row_q2_0c_ref(const float * GGML_RESTRICT x, block_q2_0c * GGML_RESTRICT y, int64_t k) {
+    const int QK = QKQ2_0C;  // block size
+
+    assert(k % QK == 0);
+
+    // ---- Find per-channel min/max ----
+    float xmin = x[0];
+    float xmax = x[0];
+
+    for (int j = 1; j < k; ++j) {
+
+        const float v = x[j];
+
+        if (v < xmin) xmin = v;
+        if (v > xmax) xmax = v;
+    }
+
+    float d = 0.0f; // scale
+
+    // The four uint2 values [0, 1, 2, 3] map to the Int8 range:
+    // [-3, -1, +1, +3], yielding an evenly spaced, zero-centered distribution.
+    const float qmin = -3.0f;
+    const float qmax = 3.0f;
+
+    if (xmax != xmin) {
+        d = (xmax - xmin) / (qmax - qmin);
+    } else {
+        d = 0.0f;
+    }
+
+    // Number of blocks
+    const int64_t nb = k / QK;
+
+    // All blocks share the same scale.
+    // This enables an optimized matmul implementation.
+    for (int64_t i = 0; i < nb; ++i) {
+        const float *xb = x + i*QK;
+
+        y[i].d = GGML_FP32_TO_FP16(d);
+
+        // ---- Quantize to uint2 ----
+        if (d == 0.0f) {
+            for (int j = 0; j < QK; ++j) {
+                y[i].qs[j] = 0;
+            }
+        } else {
+            const float inv_d = 1.0f / d;
+
+            for (int j = 0; j < QK; j+=4) {
+                float v0 = xb[j + 0];
+                float v1 = xb[j + 1];
+                float v2 = xb[j + 2];
+                float v3 = xb[j + 3];
+
+                // q = round(v / d)
+                int qi0 = (int) lrintf(v0 * inv_d);
+                int qi1 = (int) lrintf(v1 * inv_d);
+                int qi2 = (int) lrintf(v2 * inv_d);
+                int qi3 = (int) lrintf(v3 * inv_d);
+
+                // clamp to int8 range
+                if (qi0 < qmin) qi0 = qmin;
+                if (qi0 > qmax) qi0 = qmax;
+                if (qi1 < qmin) qi1 = qmin;
+                if (qi1 > qmax) qi1 = qmax;
+                if (qi2 < qmin) qi2 = qmin;
+                if (qi2 > qmax) qi2 = qmax;
+                if (qi3 < qmin) qi3 = qmin;
+                if (qi3 > qmax) qi3 = qmax;
+
+                const uint8_t v0_u8 = map_int8_to_uint2_idx(qi0);
+                const uint8_t v1_u8 = map_int8_to_uint2_idx(qi1);
+                const uint8_t v2_u8 = map_int8_to_uint2_idx(qi2);
+                const uint8_t v3_u8 = map_int8_to_uint2_idx(qi3);
+
+                uint8_t rhs_v0 = (v0_u8 & 0x3) | ((v1_u8 << 2) & 0x0C) | ((v2_u8 << 4 & 0x30)) | ((v3_u8 << 6 & 0xC0));
+                y[i].qs[j / 4] = rhs_v0;
+            }
+        }
+    }
+}
+
 size_t quantize_tq1_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
     (void)quant_weights; // not used
     const size_t row_size = ggml_row_size(GGML_TYPE_TQ1_0, n_per_row);
@@ -2209,6 +2329,18 @@ size_t quantize_tq2_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
     (void)quant_weights; // not used
     const size_t row_size = ggml_row_size(GGML_TYPE_TQ2_0, n_per_row);
     quantize_row_tq2_0_ref(src, dst, (int64_t)nrow*n_per_row);
+    return nrow * row_size;
+}
+
+size_t quantize_q2_0c(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    (void)quant_weights; // not used
+    // Number of bytes per row
+    const size_t row_size = ggml_row_size(GGML_TYPE_Q2_0C, n_per_row);
+    for(int64_t i = 0; i < nrow; ++i) {
+        uint8_t * row_dst_bytes = (uint8_t *) dst + (size_t) i * row_size;
+        block_q2_0c * row_dst   = (block_q2_0c *) row_dst_bytes;
+        quantize_row_q2_0c_ref(src + i * n_per_row, row_dst, n_per_row);
+    }
     return nrow * row_size;
 }
 
@@ -2266,6 +2398,32 @@ void dequantize_row_tq2_0(const block_tq2_0 * GGML_RESTRICT x, float * GGML_REST
                     *y++ = (float) (q - 1) * d;
                 }
             }
+        }
+    }
+}
+
+void dequantize_row_q2_0c(const block_q2_0c * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QKQ2_0C == 0);
+    const int64_t nb = k / QKQ2_0C;
+
+    for (int64_t i = 0; i < nb; ++i) {
+
+        const float d = GGML_FP16_TO_FP32(x[i].d);
+
+        for (size_t j = 0; j < QKQ2_0C; j += 4) {
+            const uint8_t rhs_byte = x[i].qs[j/4];
+            const uint8_t u2_idx0 = ((uint8_t)(rhs_byte & 0x03));
+            const uint8_t u2_idx1 = (((uint8_t)((rhs_byte >> 2) & 0x03)));
+            const uint8_t u2_idx2 = (((uint8_t)((rhs_byte >> 4) & 0x03)));
+            const uint8_t u2_idx3 = (((uint8_t)((rhs_byte >> 6) & 0x03)));
+            int32_t q0 = map_uint2_idx_to_int8(u2_idx0);
+            int32_t q1 = map_uint2_idx_to_int8(u2_idx1);
+            int32_t q2 = map_uint2_idx_to_int8(u2_idx2);
+            int32_t q3 = map_uint2_idx_to_int8(u2_idx3);
+            *y++ = (float) (q0) * d;
+            *y++ = (float) (q1) * d;
+            *y++ = (float) (q2) * d;
+            *y++ = (float) (q3) * d;
         }
     }
 }
@@ -5261,6 +5419,10 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_TQ2_0:
             {
                 VALIDATE_ROW_DATA_D_F16_IMPL(block_tq2_0, data, nb);
+            } break;
+        case GGML_TYPE_Q2_0C:
+            {
+                VALIDATE_ROW_DATA_D_F16_IMPL(block_q2_0c, data, nb);
             } break;
         case GGML_TYPE_IQ1_S:
             {
