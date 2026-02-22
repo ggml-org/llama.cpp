@@ -741,7 +741,13 @@ static inline uint8_t ggml_fp32_to_ue4m3(float x) {
     int fp32_exp = ((bits >> 23) & 0xFF) - 127;
     int fp32_man = (bits >> 20) & 0x7;
     int ue4m3_exp = fp32_exp + 7;
-    if (ue4m3_exp <= 0) return 0;
+    if (ue4m3_exp <= 0) {
+        // subnormal: value = man * 2^-9, man = round(x * 2^9)
+        int man = (int)(x * 512.0f + 0.5f);
+        if (man > 7) man = 7;
+        if (man < 1) return 0;
+        return (uint8_t)man;
+    }
     if (ue4m3_exp >= 15) return 0x7E;
     int round_bit = (bits >> 19) & 1;
     int ue4m3_man = fp32_man + round_bit;
