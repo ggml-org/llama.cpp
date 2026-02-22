@@ -141,6 +141,10 @@ class ModelBase:
         self.model_name = model_name
         self.dir_model_card = dir_model  # overridden in convert_lora_to_gguf.py
 
+        # detect NVFP4 quantization (ModelOpt format)
+        quant_config = self.hparams.get("quantization_config")
+        self._is_nvfp4 = isinstance(quant_config, dict) and quant_config.get("quant_algo") == "NVFP4"
+
         # Apply heuristics to figure out typical tensor encoding based on first tensor's dtype
         # NOTE: can't use field "torch_dtype" in config.json, because some finetunes lie.
         if self.ftype == gguf.LlamaFileType.GUESSED:
@@ -267,6 +271,9 @@ class ModelBase:
         return tensors
 
     def dequant_model(self):
+        if self._is_nvfp4:
+            return  # NVFP4 weights are repacked in generate_extra_tensors
+
         tensors_to_remove: list[str] = []
         new_tensors: dict[str, Callable[[], Tensor]] = {}
 
@@ -513,6 +520,14 @@ class ModelBase:
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid # unused
+
+        # skip NVFP4 auxiliary tensors and quantized weights (handled in generate_extra_tensors)
+        if self._is_nvfp4:
+            if name.endswith((".weight_scale", ".weight_scale_2", ".input_scale", ".k_scale", ".v_scale")):
+                return []
+            if name.endswith(".weight") and name.replace(".weight", ".weight_scale") in self.model_tensors:
+                return []
+
         return [(self.map_tensor_name(name), data_torch)]
 
     def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
@@ -524,8 +539,125 @@ class ModelBase:
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         return ()
 
+    def _repack_nvfp4(self, new_name: str, weight: Tensor, scale: Tensor, scale2: Tensor):
+        import torch
+        out_features = weight.shape[0]
+        n_blocks = scale.shape[1]
+
+        e2m1_lut = torch.tensor([0, 0.5, 1, 1.5, 2, 3, 4, 6, 0, -0.5, -1, -1.5, -2, -3, -4, -6])
+
+        w = weight.reshape(out_features, n_blocks, 8)
+        vals = torch.stack([w & 0x0F, w >> 4], dim=-1).reshape(out_features, n_blocks, 16)
+
+        float_vals = e2m1_lut[vals.long()] * (scale.float() * scale2.float()).unsqueeze(-1)
+
+        amax = float_vals.abs().amax(dim=-1)
+        scale_f = amax / 6.0
+        combined = scale_f.to(torch.float8_e4m3fn).view(torch.uint8).numpy() & 0x7F
+
+        # decode UE4M3 scale for requantization
+        ue_exp = (combined >> 3) & 0xF
+        ue_man = combined & 0x7
+        ue_float = np.where(combined == 0, 0.0,
+                   np.where(ue_exp == 0, ue_man.astype(np.float32) * 2**-9,
+                   (1.0 + ue_man.astype(np.float32) / 8.0) * (2.0 ** (ue_exp.astype(np.float32) - 7))))
+        ue_float_t = torch.from_numpy(ue_float).float().unsqueeze(-1)
+
+        inv_scale = torch.where(ue_float_t > 0, 1.0 / ue_float_t, torch.zeros_like(ue_float_t))
+        target = float_vals * inv_scale
+        best_idx = (target.unsqueeze(-1) - e2m1_lut.reshape(1, 1, 1, 16)).abs().argmin(dim=-1).to(torch.uint8)
+
+        # pack: qs[j] = lo_nibble[j] | (hi_nibble[j] << 4)
+        qs = (best_idx[:, :, :8] | (best_idx[:, :, 8:] << 4)).to(torch.uint8)
+
+        # block layout: [UE4M3 scale (1 byte), qs (8 bytes)]
+        d_bytes = combined.reshape(out_features, n_blocks, 1)
+        new_data = np.concatenate([d_bytes, qs.numpy()], axis=-1).reshape(out_features, n_blocks * 9)
+        new_shape = [out_features, n_blocks * 16]
+        logger.info(f"Repacked {new_name} with shape {new_shape} and quantization NVFP4")
+        self.gguf_writer.add_tensor(new_name, new_data, raw_dtype=gguf.GGMLQuantizationType.NVFP4)
+
+    def _generate_nvfp4_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        import torch
+
+        # Collect expert tensors for merging: {(bid, proj_type): [(expert_id, repacked_data)]}
+        expert_blocks: dict[tuple[int, str], list[tuple[int, np.ndarray]]] = {}
+        expert_shapes: dict[tuple[int, str], list[int]] = {}
+
+        for name in list(self.model_tensors.keys()):
+            if not name.endswith(".weight"):
+                continue
+            scale_name = name.replace(".weight", ".weight_scale")
+            scale2_name = name.replace(".weight", ".weight_scale_2")
+            if scale_name not in self.model_tensors:
+                continue
+            # Force eager materialization of lazy tensors
+            weight = LazyTorchTensor.to_eager(self.model_tensors[name]())
+            scale = LazyTorchTensor.to_eager(self.model_tensors[scale_name]())
+            scale2 = LazyTorchTensor.to_eager(self.model_tensors.get(scale2_name, lambda: torch.tensor(1.0))())
+
+            # Check if this is a per-expert tensor
+            m = re.search(r'\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.weight$', name)
+            if m:
+                expert_id = int(m.group(1))
+                proj_type = m.group(2)
+                bid_m = re.search(r'\.layers\.(\d+)\.', name)
+                bid = int(bid_m.group(1)) if bid_m else 0
+                key = (bid, proj_type)
+
+                out_features = weight.shape[0]
+                n_blocks = scale.shape[1]
+
+                e2m1_lut = torch.tensor([0, 0.5, 1, 1.5, 2, 3, 4, 6, 0, -0.5, -1, -1.5, -2, -3, -4, -6])
+                w = weight.reshape(out_features, n_blocks, 8)
+                vals = torch.stack([w & 0x0F, w >> 4], dim=-1).reshape(out_features, n_blocks, 16)
+                float_vals = e2m1_lut[vals.long()] * (scale.float() * scale2.float()).unsqueeze(-1)
+
+                amax = float_vals.abs().amax(dim=-1)
+                scale_f = amax / 6.0
+                combined = scale_f.to(torch.float8_e4m3fn).view(torch.uint8).numpy() & 0x7F
+
+                ue_exp = (combined >> 3) & 0xF
+                ue_man = combined & 0x7
+                ue_float = np.where(combined == 0, 0.0,
+                           np.where(ue_exp == 0, ue_man.astype(np.float32) * 2**-9,
+                           (1.0 + ue_man.astype(np.float32) / 8.0) * (2.0 ** (ue_exp.astype(np.float32) - 7))))
+                ue_float_t = torch.from_numpy(ue_float).float().unsqueeze(-1)
+
+                inv_scale = torch.where(ue_float_t > 0, 1.0 / ue_float_t, torch.zeros_like(ue_float_t))
+                target = float_vals * inv_scale
+                best_idx = (target.unsqueeze(-1) - e2m1_lut.reshape(1, 1, 1, 16)).abs().argmin(dim=-1).to(torch.uint8)
+
+                qs = (best_idx[:, :, :8] | (best_idx[:, :, 8:] << 4)).to(torch.uint8)
+                d_bytes = combined.reshape(out_features, n_blocks, 1)
+                raw = np.concatenate([d_bytes, qs.numpy()], axis=-1).reshape(out_features, n_blocks * 9).copy()
+
+                if key not in expert_blocks:
+                    expert_blocks[key] = []
+                    expert_shapes[key] = [out_features, n_blocks * 16]
+                expert_blocks[key].append((expert_id, raw))
+            else:
+                new_name = self.map_tensor_name(name)
+                self._repack_nvfp4(new_name, weight, scale, scale2)
+
+        # Merge and write expert tensors
+        for (bid, proj_type), experts in expert_blocks.items():
+            experts.sort(key=lambda x: x[0])
+            merged = np.stack([e[1] for e in experts], axis=0)
+            merged_name = f"model.layers.{bid}.mlp.experts.{proj_type}.weight"
+            new_name = self.map_tensor_name(merged_name)
+            shape = expert_shapes[(bid, proj_type)]
+            logger.info(f"Repacked {new_name} with shape [{len(experts)}, {shape[0]}, {shape[1]}] and quantization NVFP4")
+            self.gguf_writer.add_tensor(new_name, merged, raw_dtype=gguf.GGMLQuantizationType.NVFP4)
+
+        return []
+
     def prepare_tensors(self):
         self.dequant_model()
+
+        # NVFP4 weights are repacked and written directly to gguf_writer
+        if self._is_nvfp4:
+            self._generate_nvfp4_tensors()
 
         # Handle empty tensor_map for models with block_count=0 (like MobileNetV5)
         if self.tensor_map.mapping:
@@ -4269,6 +4401,14 @@ class Qwen2MoeModel(TextModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # process the experts separately
         name = name.replace("language_model.", "") # InternVL
+
+        # NVFP4 expert weights are handled in generate_extra_tensors
+        if self._is_nvfp4 and "experts" in name:
+            if name.endswith((".weight", ".weight_scale", ".weight_scale_2", ".input_scale")):
+                if name.endswith(".weight") and name.replace(".weight", ".weight_scale") in self.model_tensors:
+                    return
+                if not name.endswith(".weight"):
+                    return
 
         # handle aggregated expert tensors
         # GGUF stores dimensions reversed from PyTorch, so:

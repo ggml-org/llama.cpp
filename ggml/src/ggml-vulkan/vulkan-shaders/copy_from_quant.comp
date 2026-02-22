@@ -4,7 +4,7 @@
 #include "generic_unary_head.glsl"
 #include "dequant_funcs.glsl"
 
-#if defined(DATA_A_IQ4_NL) || defined(DATA_A_MXFP4)
+#if defined(DATA_A_IQ4_NL) || defined(DATA_A_MXFP4) || defined(DATA_A_NVFP4)
 // 16 invocations needed for init_iq_shmem
 layout(local_size_x = 16, local_size_y = 1, local_size_z = 1) in;
 #else
