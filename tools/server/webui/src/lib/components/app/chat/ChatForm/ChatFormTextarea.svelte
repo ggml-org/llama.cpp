@@ -5,6 +5,7 @@
 	interface Props {
 		class?: string;
 		disabled?: boolean;
+		onInput?: () => void;
 		onKeydown?: (event: KeyboardEvent) => void;
 		onPaste?: (event: ClipboardEvent) => void;
 		placeholder?: string;
@@ -14,6 +15,7 @@
 	let {
 		class: className = '',
 		disabled = false,
+		onInput,
 		onKeydown,
 		onPaste,
 		placeholder = 'Ask anything...',
@@ -52,7 +54,10 @@
 		class:cursor-not-allowed={disabled}
 		{disabled}
 		onkeydown={onKeydown}
-		oninput={(event) => autoResizeTextarea(event.currentTarget)}
+		oninput={(event) => {
+			autoResizeTextarea(event.currentTarget);
+			onInput?.();
+		}}
 		onpaste={onPaste}
 		{placeholder}
 	></textarea>

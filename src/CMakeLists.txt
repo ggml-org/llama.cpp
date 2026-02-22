@@ -84,6 +84,7 @@ add_library(llama
             models/hunyuan-moe.cpp
             models/internlm2.cpp
             models/jais.cpp
+            models/jais2.cpp
             models/jamba.cpp
             models/kimi-linear.cpp
             models/lfm2.cpp
@@ -109,6 +110,7 @@ add_library(llama
             models/openai-moe-iswa.cpp
             models/openelm.cpp
             models/orion.cpp
+            models/paddleocr.cpp
             models/pangu-embedded.cpp
             models/phi2.cpp
             models/phi3.cpp
