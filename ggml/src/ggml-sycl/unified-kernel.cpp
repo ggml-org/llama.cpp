@@ -4737,16 +4737,20 @@ private:
     }
 
     void compute_matmul_tile(const DeviceOperation & op, int tile_idx) {
-        // DMMV (Dequantizing Matrix-Vector Multiply) for M=1 TG workloads.
-        // This path is subgroup-local and barrier-free: each lane owns a strided
-        // subset of K blocks, keeps activation chunks in registers, and reuses
-        // them across multiple output columns in the current tile.
+        // dp4a MMVQ (Matrix-Vector Quantized) for M=1 TG workloads.
+        // Uses integer dp4a (4 INT8 MAD/instruction) instead of scalar float
+        // dequantization for ~4x throughput on Intel Arc GPUs.
+        //
+        // Each lane owns a strided subset of K blocks, quantizes activations
+        // to int8 in-register, and does dp4a against Q4_0 weight nibbles.
+        // The unsigned nibble bias (0-15 vs signed -8..+7) is corrected via:
+        //   result = d_weight * (d_activation * sumi - 8 * sum_activation)
 
-        constexpr int SG_SIZE        = 16;   // Must match reqd_sub_group_size(16)
-        constexpr int DMMV_QK4_0     = 32;   // Q4_0 block size
-        constexpr int N_SGS          = BLOCK_SIZE / SG_SIZE;  // 16 sub-groups
-        constexpr int MAX_ITERS      = 16;   // Supports tile_cols up to 256
-        constexpr int QK4_0_PACKED   = DMMV_QK4_0 / 2;        // 16 bytes
+        constexpr int SG_SIZE      = 16;   // Must match reqd_sub_group_size(16)
+        constexpr int DMMV_QK4_0   = 32;   // Q4_0 block size
+        constexpr int N_SGS        = BLOCK_SIZE / SG_SIZE;  // 16 sub-groups
+        constexpr int MAX_ITERS    = 16;   // Supports tile_cols up to 256
+        constexpr int QK4_0_PACKED = DMMV_QK4_0 / 2;        // 16 bytes
 
         if (op.quant_type != ggml_sycl_unified::QUANT_TYPE_Q4_0) return;
 
@@ -4787,17 +4791,52 @@ private:
             partial_sums[it] = 0.0f;
         }
 
-        // Lane-strided K-block loop.
+        // Lane-strided K-block loop with dp4a.
         for (int block_idx = lane_id; block_idx < k_blocks; block_idx += SG_SIZE) {
             const int k_offset = block_idx * DMMV_QK4_0;
-            float act_lo[QK4_0_PACKED];
-            float act_hi[QK4_0_PACKED];
+
+            // ── Phase 1: In-register activation quantization to int8 ──
+            // Load 32 float activations, compute amax, quantize to int8.
+            // Layout: act[0..15] = "lo" half, act[16..31] = "hi" half
+            float act[DMMV_QK4_0];
+            float amax = 0.0f;
+            float act_sum = 0.0f;
             #pragma unroll
-            for (int i = 0; i < QK4_0_PACKED; ++i) {
-                act_lo[i] = activations[k_offset + i];
-                act_hi[i] = activations[k_offset + i + QK4_0_PACKED];
+            for (int i = 0; i < DMMV_QK4_0; ++i) {
+                act[i] = activations[k_offset + i];
+                amax = sycl::fmax(amax, sycl::fabs(act[i]));
+                act_sum += act[i];
             }
 
+            const float d_act = (amax != 0.0f) ? amax / 127.0f : 0.0f;
+            const float id_act = (d_act != 0.0f) ? 1.0f / d_act : 0.0f;
+
+            // Quantize and pack into int32 for dp4a.
+            // Pack order matches weight nibble extraction:
+            //   u_lo[j] = pack(q8[j*4], q8[j*4+1], q8[j*4+2], q8[j*4+3])  -- for low nibbles
+            //   u_hi[j] = pack(q8[j*4+16], q8[j*4+17], q8[j*4+18], q8[j*4+19]) -- for high nibbles
+            int u_lo[4];  // 4 packed int32 for lo half (elements 0..15)
+            int u_hi[4];  // 4 packed int32 for hi half (elements 16..31)
+            #pragma unroll
+            for (int j = 0; j < 4; ++j) {
+                int8_t q_lo[4], q_hi[4];
+                #pragma unroll
+                for (int k = 0; k < 4; ++k) {
+                    q_lo[k] = static_cast<int8_t>(sycl::round(act[j * 4 + k] * id_act));
+                    q_hi[k] = static_cast<int8_t>(sycl::round(act[j * 4 + k + 16] * id_act));
+                }
+                // Pack 4 int8 into int32 (little-endian byte order)
+                u_lo[j] = (static_cast<uint8_t>(q_lo[0]))       |
+                           (static_cast<uint8_t>(q_lo[1]) << 8)  |
+                           (static_cast<uint8_t>(q_lo[2]) << 16) |
+                           (static_cast<uint8_t>(q_lo[3]) << 24);
+                u_hi[j] = (static_cast<uint8_t>(q_hi[0]))       |
+                           (static_cast<uint8_t>(q_hi[1]) << 8)  |
+                           (static_cast<uint8_t>(q_hi[2]) << 16) |
+                           (static_cast<uint8_t>(q_hi[3]) << 24);
+            }
+
+            // ── Phase 2: dp4a matmul across output rows ──
             #pragma unroll
             for (int iter = 0; iter < MAX_ITERS; ++iter) {
                 if (iter >= iter_count) break;
@@ -4805,28 +4844,33 @@ private:
                 if (n >= N) continue;
 
                 const uint8_t * qs = nullptr;
-                float d = 0.0f;
+                float d_weight = 0.0f;
                 if (use_soa) {
                     const uint8_t * qs_row = qs_base + static_cast<int64_t>(n) * row_qs_bytes;
                     const sycl::half * d_row = d_base + static_cast<int64_t>(n) * k_blocks;
                     qs = qs_row + block_idx * QK4_0_PACKED;
-                    d = static_cast<float>(d_row[block_idx]);
+                    d_weight = static_cast<float>(d_row[block_idx]);
                 } else {
                     const int64_t global_block = static_cast<int64_t>(n) * k_blocks + block_idx;
                     const ggml_sycl_unified::block_q4_0_unified * blk = &weights[global_block];
                     qs = blk->qs;
-                    d = static_cast<float>(blk->d);
+                    d_weight = static_cast<float>(blk->d);
                 }
 
-                float block_sum = 0.0f;
+                // Load 16 weight bytes as 4 int32, extract nibbles, dp4a
+                int sumi = 0;
                 #pragma unroll
-                for (int i = 0; i < QK4_0_PACKED; ++i) {
-                    const uint8_t qs_byte = qs[i];
-                    const float q0 = static_cast<float>((qs_byte & 0x0F) - 8);
-                    const float q1 = static_cast<float>((qs_byte >> 4) - 8);
-                    block_sum += q0 * act_lo[i] + q1 * act_hi[i];
+                for (int j = 0; j < 4; ++j) {
+                    const int v = *reinterpret_cast<const int *>(qs + j * 4);
+                    const int vi_lo = v & 0x0F0F0F0F;
+                    const int vi_hi = (v >> 4) & 0x0F0F0F0F;
+                    sumi = dpct::dp4a(vi_lo, u_lo[j], sumi);
+                    sumi = dpct::dp4a(vi_hi, u_hi[j], sumi);
                 }
-                partial_sums[iter] += block_sum * d;
+
+                // Correct for unsigned nibbles: true_weight = nibble - 8
+                // result = d_weight * (d_act * sumi - 8 * act_sum)
+                partial_sums[iter] += d_weight * (d_act * static_cast<float>(sumi) - 8.0f * act_sum);
             }
         }
 
@@ -4844,19 +4888,18 @@ private:
     }
 
     void compute_matmul_gate_up_silu_tile(const DeviceOperation & op, int tile_idx) {
-        // Fused FFN first stage for TG:
+        // Fused FFN first stage for TG with dp4a integer dot-product:
         //   gate = W_gate * x
         //   up   = W_up   * x
         //   y    = silu(gate) * up
         //
-        // This reuses the same activation loads for both matmuls and avoids
-        // writing/reading intermediate gate/up tensors before SiLU.
+        // Uses in-register activation quantization + dp4a for ~4x throughput.
 
-        constexpr int SG_SIZE        = 16;
-        constexpr int DMMV_QK4_0     = 32;
-        constexpr int N_SGS          = BLOCK_SIZE / SG_SIZE;  // 16 sub-groups
-        constexpr int MAX_ITERS      = 16;   // Supports tile_cols up to 256
-        constexpr int QK4_0_PACKED   = DMMV_QK4_0 / 2;        // 16 bytes
+        constexpr int SG_SIZE      = 16;
+        constexpr int DMMV_QK4_0   = 32;
+        constexpr int N_SGS        = BLOCK_SIZE / SG_SIZE;  // 16 sub-groups
+        constexpr int MAX_ITERS    = 16;   // Supports tile_cols up to 256
+        constexpr int QK4_0_PACKED = DMMV_QK4_0 / 2;        // 16 bytes
 
         if (op.quant_type != ggml_sycl_unified::QUANT_TYPE_Q4_0) return;
 
@@ -4906,14 +4949,41 @@ private:
 
         for (int block_idx = lane_id; block_idx < k_blocks; block_idx += SG_SIZE) {
             const int k_offset = block_idx * DMMV_QK4_0;
-            float act_lo[QK4_0_PACKED];
-            float act_hi[QK4_0_PACKED];
+
+            // ── In-register activation quantization to int8 ──
+            float act[DMMV_QK4_0];
+            float amax = 0.0f;
+            float act_sum = 0.0f;
             #pragma unroll
-            for (int i = 0; i < QK4_0_PACKED; ++i) {
-                act_lo[i] = activations[k_offset + i];
-                act_hi[i] = activations[k_offset + i + QK4_0_PACKED];
+            for (int i = 0; i < DMMV_QK4_0; ++i) {
+                act[i] = activations[k_offset + i];
+                amax = sycl::fmax(amax, sycl::fabs(act[i]));
+                act_sum += act[i];
             }
 
+            const float d_act = (amax != 0.0f) ? amax / 127.0f : 0.0f;
+            const float id_act = (d_act != 0.0f) ? 1.0f / d_act : 0.0f;
+
+            int u_lo[4], u_hi[4];
+            #pragma unroll
+            for (int j = 0; j < 4; ++j) {
+                int8_t q_lo[4], q_hi[4];
+                #pragma unroll
+                for (int k = 0; k < 4; ++k) {
+                    q_lo[k] = static_cast<int8_t>(sycl::round(act[j * 4 + k] * id_act));
+                    q_hi[k] = static_cast<int8_t>(sycl::round(act[j * 4 + k + 16] * id_act));
+                }
+                u_lo[j] = (static_cast<uint8_t>(q_lo[0]))       |
+                           (static_cast<uint8_t>(q_lo[1]) << 8)  |
+                           (static_cast<uint8_t>(q_lo[2]) << 16) |
+                           (static_cast<uint8_t>(q_lo[3]) << 24);
+                u_hi[j] = (static_cast<uint8_t>(q_hi[0]))       |
+                           (static_cast<uint8_t>(q_hi[1]) << 8)  |
+                           (static_cast<uint8_t>(q_hi[2]) << 16) |
+                           (static_cast<uint8_t>(q_hi[3]) << 24);
+            }
+
+            // ── dp4a matmul for gate and up weights ──
             #pragma unroll
             for (int iter = 0; iter < MAX_ITERS; ++iter) {
                 if (iter >= iter_count) break;
@@ -4944,26 +5014,25 @@ private:
                     up_d    = static_cast<float>(up_blk->d);
                 }
 
-                float gate_sum = 0.0f;
-                float up_sum   = 0.0f;
+                int gate_sumi = 0;
+                int up_sumi   = 0;
                 #pragma unroll
-                for (int i = 0; i < QK4_0_PACKED; ++i) {
-                    const float a0 = act_lo[i];
-                    const float a1 = act_hi[i];
+                for (int j = 0; j < 4; ++j) {
+                    const int gv = *reinterpret_cast<const int *>(gate_qs + j * 4);
+                    const int gv_lo = gv & 0x0F0F0F0F;
+                    const int gv_hi = (gv >> 4) & 0x0F0F0F0F;
+                    gate_sumi = dpct::dp4a(gv_lo, u_lo[j], gate_sumi);
+                    gate_sumi = dpct::dp4a(gv_hi, u_hi[j], gate_sumi);
 
-                    const uint8_t gate_byte = gate_qs[i];
-                    const float gate_q0 = static_cast<float>((gate_byte & 0x0F) - 8);
-                    const float gate_q1 = static_cast<float>((gate_byte >> 4) - 8);
-                    gate_sum += gate_q0 * a0 + gate_q1 * a1;
-
-                    const uint8_t up_byte = up_qs[i];
-                    const float up_q0 = static_cast<float>((up_byte & 0x0F) - 8);
-                    const float up_q1 = static_cast<float>((up_byte >> 4) - 8);
-                    up_sum += up_q0 * a0 + up_q1 * a1;
+                    const int uv = *reinterpret_cast<const int *>(up_qs + j * 4);
+                    const int uv_lo = uv & 0x0F0F0F0F;
+                    const int uv_hi = (uv >> 4) & 0x0F0F0F0F;
+                    up_sumi = dpct::dp4a(uv_lo, u_lo[j], up_sumi);
+                    up_sumi = dpct::dp4a(uv_hi, u_hi[j], up_sumi);
                 }
 
-                partial_gate[iter] += gate_sum * gate_d;
-                partial_up[iter]   += up_sum * up_d;
+                partial_gate[iter] += gate_d * (d_act * static_cast<float>(gate_sumi) - 8.0f * act_sum);
+                partial_up[iter]   += up_d * (d_act * static_cast<float>(up_sumi) - 8.0f * act_sum);
             }
         }
 
