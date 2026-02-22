@@ -31,6 +31,40 @@ static inline int nearest_int(float fval) {
     return (i & 0x007fffff) - 0x00400000;
 }
 
+// Helper functions for `fp16` and `fp32`.
+//
+template<int nrows_interleaved, int interleave_size>
+static inline void ggml_repack_mat_f16_NxK_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    assert(k % interleave_size == 0);
+    const int nb = k / interleave_size;
+
+    block_f16<nrows_interleaved, interleave_size> * GGML_RESTRICT y = (block_f16<nrows_interleaved, interleave_size> *) vy;
+
+    for (int i = 0; i < nb; i++) {
+        for (int j = 0; j < nrows_interleaved; j++) {
+            for (int l = 0; l < interleave_size; l++) {
+                y[i].d[j * interleave_size + l] = GGML_CPU_FP32_TO_FP16(x[j * k + i * interleave_size + l]);
+            }
+        }
+    }
+}
+
+template<int nrows_interleaved, int interleave_size>
+static inline void ggml_repack_mat_f32_NxK_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    assert(k % interleave_size == 0);
+    const int nb = k / interleave_size;
+
+    block_f32<nrows_interleaved, interleave_size> * GGML_RESTRICT y = (block_f32<nrows_interleaved, interleave_size> *) vy;
+
+    for (int i = 0; i < nb; i++) {
+        for (int j = 0; j < nrows_interleaved; j++) {
+            for (int l = 0; l < interleave_size; l++) {
+                y[i].d[j * interleave_size + l] = x[j * k + i * interleave_size + l];
+            }
+        }
+    }
+}
+
 // Functions to create the interleaved data layout formats
 
 // interleave 4 block_q4_0s in blocks of blck_size_interleave
@@ -227,33 +261,191 @@ void ggml_quantize_mat_q8_K_4x8_generic(const float * GGML_RESTRICT x, void * GG
     }
 }
 
+#if defined __riscv_zvfh
+void ggml_repack_mat_f16_7x1_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    ggml_repack_mat_f16_NxK_generic<7, 1>(x, vy, k);
+}
+
+void ggml_repack_mat_f32_7x1_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    ggml_repack_mat_f32_NxK_generic<7, 1>(x, vy, k);
+}
+#endif
+
 } // extern "C"
 
-template <int64_t INTER_SIZE, ggml_type PARAM_TYPE>
-void ggml_quantize_mat_t(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t nrow, int64_t n_per_row);
+template <int64_t NB_ROWS, int64_t INTER_SIZE, ggml_type PARAM_TYPE>
+void ggml_repack_mat_t(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t nrow, int64_t n_per_row);
 
-template <> void ggml_quantize_mat_t<4, GGML_TYPE_Q8_0>(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t nrow, int64_t n_per_row) {
+template <> void ggml_repack_mat_t<4, 4, GGML_TYPE_Q8_0>(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t nrow, int64_t n_per_row) {
     assert(nrow == 4);
     UNUSED(nrow);
     ggml_quantize_mat_q8_0_4x4(x, vy, n_per_row);
 }
 
-template <> void ggml_quantize_mat_t<8, GGML_TYPE_Q8_0>(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t nrow, int64_t n_per_row) {
+template <> void ggml_repack_mat_t<4, 8, GGML_TYPE_Q8_0>(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t nrow, int64_t n_per_row) {
     assert(nrow == 4);
     UNUSED(nrow);
     ggml_quantize_mat_q8_0_4x8(x, vy, n_per_row);
 }
 
-template <> void ggml_quantize_mat_t<4, GGML_TYPE_Q8_K>(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t nrow, int64_t n_per_row) {
+template <> void ggml_repack_mat_t<4, 4, GGML_TYPE_Q8_K>(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t nrow, int64_t n_per_row) {
     assert(nrow == 4);
     UNUSED(nrow);
     ggml_quantize_mat_q8_K_4x4(x, vy, n_per_row);
 }
 
-template <> void ggml_quantize_mat_t<8, GGML_TYPE_Q8_K>(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t nrow, int64_t n_per_row) {
+template <> void ggml_repack_mat_t<4, 8, GGML_TYPE_Q8_K>(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t nrow, int64_t n_per_row) {
     assert(nrow == 4);
     UNUSED(nrow);
     ggml_quantize_mat_q8_K_4x8(x, vy, n_per_row);
+}
+
+#if defined __riscv_zvfh
+template <> void ggml_repack_mat_t<7, 1, GGML_TYPE_F16>(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t nrow, int64_t n_per_row) {
+    assert(nrow == 7);
+    UNUSED(nrow);
+    ggml_repack_mat_f16_7x1(x, vy, n_per_row);
+}
+
+template <> void ggml_repack_mat_t<7, 1, GGML_TYPE_F32>(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t nrow, int64_t n_per_row) {
+    assert(nrow == 7);
+    UNUSED(nrow);
+    ggml_repack_mat_f32_7x1(x, vy, n_per_row);
+}
+#endif
+
+template<int interleave_size, int ncols_interleaved>
+static inline void ggml_gemv_f16_KxM_f16_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    const int nb = n / interleave_size;
+
+    assert(nr == 1);
+    assert(n % interleave_size == 0);
+    assert(nc % ncols_interleaved == 0);
+
+    UNUSED(bs);
+    UNUSED(nr);
+
+    float sumf[ncols_interleaved];
+
+    const ggml_half * a_ptr = (const ggml_half *) vy;
+    for (int x = 0; x < nc / ncols_interleaved; x++) {
+        const block_f16<ncols_interleaved, interleave_size> * b_ptr =
+            (const block_f16<ncols_interleaved, interleave_size>  *) vx + (x * nb);
+
+        for (int j = 0; j < ncols_interleaved; j++) { sumf[j] = 0.0f; }
+        for (int l = 0; l < nb; l++) {
+            for (int j = 0; j < ncols_interleaved; j++) {
+                for (int k = 0; k < interleave_size; k++) {
+                    sumf[j] += GGML_FP16_TO_FP32(b_ptr[l].d[j * interleave_size + k]) * GGML_FP16_TO_FP32(a_ptr[l * interleave_size + k]);
+                }
+            }
+        }
+        for (int j = 0; j < ncols_interleaved; j++) { s[x * ncols_interleaved + j] = sumf[j]; }
+    }
+}
+
+template<int interleave_size, int ncols_interleaved>
+static inline void ggml_gemv_f32_KxM_f32_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    const int nb = n / interleave_size;
+
+    assert(nr == 1);
+    assert(n % interleave_size == 0);
+    assert(nc % ncols_interleaved == 0);
+
+    UNUSED(bs);
+    UNUSED(nr);
+
+    float sumf[ncols_interleaved];
+
+    const float * a_ptr = (const float *) vy;
+    for (int x = 0; x < nc / ncols_interleaved; x++) {
+        const block_f32<ncols_interleaved, interleave_size> * b_ptr =
+            (const block_f32<ncols_interleaved, interleave_size>  *) vx + (x * nb);
+
+        for (int j = 0; j < ncols_interleaved; j++) { sumf[j] = 0.0f; }
+        for (int l = 0; l < nb; l++) {
+            for (int j = 0; j < ncols_interleaved; j++) {
+                for (int k = 0; k < interleave_size; k++) {
+                    sumf[j] += b_ptr[l].d[j * interleave_size + k] * a_ptr[l * interleave_size + k];
+                }
+            }
+        }
+        for (int j = 0; j < ncols_interleaved; j++) { s[x * ncols_interleaved + j] = sumf[j]; }
+    }
+}
+
+template<int nrows, int interleave_size, int ncols_interleaved>
+static inline void ggml_gemm_f16_NxKxM_f16_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    const int nb = n / interleave_size;
+
+    assert(nr % nrows == 0);
+    assert(n % interleave_size == 0);
+    assert(nc % ncols_interleaved == 0);
+
+    float sumf[nrows][ncols_interleaved];
+
+    for (int y = 0; y < nr / nrows; y++) {
+        const block_f16<nrows, interleave_size>  * a_ptr =
+            (const block_f16<nrows, interleave_size>  *) vy + (y * nb);
+        for (int x = 0; x < nc / ncols_interleaved; x++) {
+            const block_f16<ncols_interleaved, interleave_size> * b_ptr =
+                (const block_f16<ncols_interleaved, interleave_size> *) vx + (x * nb);
+
+            for (int m = 0; m < nrows; m++) {
+                for (int j = 0; j < ncols_interleaved; j++) { sumf[m][j] = 0.0f; }
+            }
+            for (int l = 0; l < nb; l++) {
+                for (int m = 0; m < nrows; m++) {
+                    for (int j = 0; j < ncols_interleaved; j++) {
+                        for (int k = 0; k < interleave_size; k++) {
+                            sumf[m][j] += GGML_FP16_TO_FP32(b_ptr[l].d[j * interleave_size + k]) * GGML_FP16_TO_FP32(a_ptr[l].d[m * interleave_size + k]);
+                        }
+                    }
+                }
+            }
+            for (int m = 0; m < nrows; m++) {
+                for (int j = 0; j < ncols_interleaved; j++)
+                    { s[(y * nrows + m) * bs + x * ncols_interleaved + j] = sumf[m][j]; }
+            }
+        }
+    }
+}
+
+template<int nrows, int interleave_size, int ncols_interleaved>
+static inline void ggml_gemm_f32_NxKxM_f32_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    const int nb = n / interleave_size;
+
+    assert(nr % nrows == 0);
+    assert(n % interleave_size == 0);
+    assert(nc % ncols_interleaved == 0);
+
+    float sumf[nrows][ncols_interleaved];
+
+    for (int y = 0; y < nr / nrows; y++) {
+        const block_f32<nrows, interleave_size>  * a_ptr =
+            (const block_f32<nrows, interleave_size>  *) vy + (y * nb);
+        for (int x = 0; x < nc / ncols_interleaved; x++) {
+            const block_f32<ncols_interleaved, interleave_size> * b_ptr =
+                (const block_f32<ncols_interleaved, interleave_size> *) vx + (x * nb);
+
+            for (int m = 0; m < nrows; m++) {
+                for (int j = 0; j < ncols_interleaved; j++) { sumf[m][j] = 0.0f; }
+            }
+            for (int l = 0; l < nb; l++) {
+                for (int m = 0; m < nrows; m++) {
+                    for (int j = 0; j < ncols_interleaved; j++) {
+                        for (int k = 0; k < interleave_size; k++) {
+                            sumf[m][j] += b_ptr[l].d[j * interleave_size + k] * a_ptr[l].d[m * interleave_size + k];
+                        }
+                    }
+                }
+            }
+            for (int m = 0; m < nrows; m++) {
+                for (int j = 0; j < ncols_interleaved; j++)
+                    { s[(y * nrows + m) * bs + x * ncols_interleaved + j] = sumf[m][j]; }
+            }
+        }
+    }
 }
 
 template <int M, int N>
@@ -1076,6 +1268,40 @@ void ggml_gemv_q8_0_4x8_q8_0_generic(int                        n,
     }
 }
 
+#if defined __riscv_zvfh
+void ggml_gemv_f16_1x16_f16_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    ggml_gemv_f16_KxM_f16_generic<1, 16>(n, s, bs, vx, vy, nr, nc);
+}
+
+void ggml_gemv_f16_1x32_f16_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    ggml_gemv_f16_KxM_f16_generic<1, 32>(n, s, bs, vx, vy, nr, nc);
+}
+
+void ggml_gemv_f16_1x64_f16_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    ggml_gemv_f16_KxM_f16_generic<1, 64>(n, s, bs, vx, vy, nr, nc);
+}
+
+void ggml_gemv_f16_1x128_f16_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    ggml_gemv_f16_KxM_f16_generic<1, 128>(n, s, bs, vx, vy, nr, nc);
+}
+
+void ggml_gemv_f32_1x16_f32_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    ggml_gemv_f32_KxM_f32_generic<1, 16>(n, s, bs, vx, vy, nr, nc);
+}
+
+void ggml_gemv_f32_1x32_f32_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    ggml_gemv_f32_KxM_f32_generic<1, 32>(n, s, bs, vx, vy, nr, nc);
+}
+
+void ggml_gemv_f32_1x64_f32_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    ggml_gemv_f32_KxM_f32_generic<1, 64>(n, s, bs, vx, vy, nr, nc);
+}
+
+void ggml_gemv_f32_1x128_f32_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    ggml_gemv_f32_KxM_f32_generic<1, 128>(n, s, bs, vx, vy, nr, nc);
+}
+#endif
+
 void ggml_gemm_q4_0_4x4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK8_0;
     const int nb = n / qk;
@@ -1809,6 +2035,40 @@ void ggml_gemm_q8_0_4x8_q8_0_generic(int                        n,
     }
 }
 
+#if defined __riscv_zvfh
+void ggml_gemm_f16_7x1x16_f16_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    ggml_gemm_f16_NxKxM_f16_generic<7, 1, 16>(n, s, bs, vx, vy, nr, nc);
+}
+
+void ggml_gemm_f16_7x1x32_f16_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    ggml_gemm_f16_NxKxM_f16_generic<7, 1, 32>(n, s, bs, vx, vy, nr, nc);
+}
+
+void ggml_gemm_f16_7x1x64_f16_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    ggml_gemm_f16_NxKxM_f16_generic<7, 1, 64>(n, s, bs, vx, vy, nr, nc);
+}
+
+void ggml_gemm_f16_7x1x128_f16_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    ggml_gemm_f16_NxKxM_f16_generic<7, 1, 128>(n, s, bs, vx, vy, nr, nc);
+}
+
+void ggml_gemm_f32_7x1x16_f32_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    ggml_gemm_f32_NxKxM_f32_generic<7, 1, 16>(n, s, bs, vx, vy, nr, nc);
+}
+
+void ggml_gemm_f32_7x1x32_f32_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    ggml_gemm_f32_NxKxM_f32_generic<7, 1, 32>(n, s, bs, vx, vy, nr, nc);
+}
+
+void ggml_gemm_f32_7x1x64_f32_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    ggml_gemm_f32_NxKxM_f32_generic<7, 1, 64>(n, s, bs, vx, vy, nr, nc);
+}
+
+void ggml_gemm_f32_7x1x128_f32_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    ggml_gemm_f32_NxKxM_f32_generic<7, 1, 128>(n, s, bs, vx, vy, nr, nc);
+}
+#endif
+
 } // extern "C"
 
 static block_q8_0x4 make_block_q8_0x4(block_q8_0 * in, unsigned int blck_size_interleave) {
@@ -2493,6 +2753,78 @@ static int repack_iq4_nl_to_iq4_nl_8_bl(struct ggml_tensor * t, int interleave_b
     GGML_UNUSED(data_size);
 }
 
+template<int ncols_interleaved, int interleave_size>
+static int repack_f16_to_f16_MxK_bl(struct ggml_tensor * t, const void * GGML_RESTRICT data, size_t data_size) {
+    GGML_ASSERT(t->type == GGML_TYPE_F16);
+
+    const ggml_half                                     * src = (const ggml_half   *)data;
+          block_f16<ncols_interleaved, interleave_size> * dst = (      block_f16<ncols_interleaved, interleave_size> *)t->data;
+
+    ggml_half dst_tmp[ncols_interleaved * interleave_size];
+
+    int nrow = ggml_nrows(t);
+    int row_size = t->ne[0];
+    int nblocks = row_size / interleave_size;
+
+    GGML_ASSERT(data_size == nrow * nblocks * interleave_size * sizeof(ggml_half));
+
+    if (t->ne[1] % ncols_interleaved != 0 || t->ne[0] % interleave_size != 0) {
+        return -1;
+    }
+
+    for (int b = 0; b < nrow; b += ncols_interleaved) {
+        for (int i = 0; i < nblocks; i++) {
+            for (int j = 0; j < ncols_interleaved; j++) {
+                for (int k = 0; k < interleave_size; k++) {
+                    dst_tmp[j * interleave_size + k] = src[(j + b) * row_size + i * interleave_size + k];
+                }
+            }
+            block_f16<ncols_interleaved, interleave_size> out;
+            memcpy(&out.d, dst_tmp, sizeof(ggml_half) * ncols_interleaved * interleave_size);
+            *dst = out;
+            dst++;
+        }
+    }
+
+    return 0;
+}
+
+template<int ncols_interleaved, int interleave_size>
+static int repack_f32_to_f32_MxK_bl(struct ggml_tensor * t, const void * GGML_RESTRICT data, size_t data_size) {
+    GGML_ASSERT(t->type == GGML_TYPE_F32);
+
+    const float                                         * src = (const float   *)data;
+          block_f32<ncols_interleaved, interleave_size> * dst = (      block_f32<ncols_interleaved, interleave_size> *)t->data;
+
+    float dst_tmp[ncols_interleaved * interleave_size];
+
+    int nrow = ggml_nrows(t);
+    int row_size = t->ne[0];
+    int nblocks = row_size / interleave_size;
+
+    GGML_ASSERT(data_size == nrow * nblocks * interleave_size * sizeof(float));
+
+    if (t->ne[1] % ncols_interleaved != 0 || t->ne[0] % interleave_size != 0) {
+        return -1;
+    }
+
+    for (int b = 0; b < nrow; b += ncols_interleaved) {
+        for (int i = 0; i < nblocks; i++) {
+            for (int j = 0; j < ncols_interleaved; j++) {
+                for (int k = 0; k < interleave_size; k++) {
+                    dst_tmp[j * interleave_size + k] = src[(j + b) * row_size + i * interleave_size + k];
+                }
+            }
+            block_f32<ncols_interleaved, interleave_size> out;
+            memcpy(&out.d, dst_tmp, sizeof(float) * ncols_interleaved * interleave_size);
+            *dst = out;
+            dst++;
+        }
+    }
+
+    return 0;
+}
+
 namespace ggml::cpu::repack {
 // repack
 template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS>
@@ -2555,6 +2887,34 @@ template <> int repack<block_q8_0, 4, 4>(struct ggml_tensor * t, const void * da
 template <> int repack<block_q8_0, 8, 4>(struct ggml_tensor * t, const void * data, size_t data_size) {
     return repack_q8_0_to_q8_0_4_bl(t, 8, data, data_size);
 }
+
+#if defined __riscv_zvfh
+template <> int repack<ggml_half, 1, 16>(struct ggml_tensor * t, const void * data, size_t data_size) {
+    return repack_f16_to_f16_MxK_bl<16, 1>(t, data, data_size);
+}
+template <> int repack<ggml_half, 1, 32>(struct ggml_tensor * t, const void * data, size_t data_size) {
+    return repack_f16_to_f16_MxK_bl<32, 1>(t, data, data_size);
+}
+template <> int repack<ggml_half, 1, 64>(struct ggml_tensor * t, const void * data, size_t data_size) {
+    return repack_f16_to_f16_MxK_bl<64, 1>(t, data, data_size);
+}
+template <> int repack<ggml_half, 1, 128>(struct ggml_tensor * t, const void * data, size_t data_size) {
+    return repack_f16_to_f16_MxK_bl<128, 1>(t, data, data_size);
+}
+
+template <> int repack<float, 1, 16>(struct ggml_tensor * t, const void * data, size_t data_size) {
+    return repack_f32_to_f32_MxK_bl<16, 1>(t, data, data_size);
+}
+template <> int repack<float, 1, 32>(struct ggml_tensor * t, const void * data, size_t data_size) {
+    return repack_f32_to_f32_MxK_bl<32, 1>(t, data, data_size);
+}
+template <> int repack<float, 1, 64>(struct ggml_tensor * t, const void * data, size_t data_size) {
+    return repack_f32_to_f32_MxK_bl<64, 1>(t, data, data_size);
+}
+template <> int repack<float, 1, 128>(struct ggml_tensor * t, const void * data, size_t data_size) {
+    return repack_f32_to_f32_MxK_bl<128, 1>(t, data, data_size);
+}
+#endif
 
 // gemv
 template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PARAM_TYPE>
@@ -2619,20 +2979,54 @@ template <> void gemv<block_q8_0, 8, 4, GGML_TYPE_Q8_0>(int n, float * s, size_t
     ggml_gemv_q8_0_4x8_q8_0(n, s, bs, vx, vy, nr, nc);
 }
 
+#if defined __riscv_zvfh
+template <> void gemv<ggml_half, 1, 16, GGML_TYPE_F16>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+    ggml_gemv_f16_1x16_f16(n, s, bs, vx, vy, nr, nc);
+}
+
+template <> void gemv<ggml_half, 1, 32, GGML_TYPE_F16>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+    ggml_gemv_f16_1x32_f16(n, s, bs, vx, vy, nr, nc);
+}
+
+template <> void gemv<ggml_half, 1, 64, GGML_TYPE_F16>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+    ggml_gemv_f16_1x64_f16(n, s, bs, vx, vy, nr, nc);
+}
+
+template <> void gemv<ggml_half, 1, 128, GGML_TYPE_F16>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+    ggml_gemv_f16_1x128_f16(n, s, bs, vx, vy, nr, nc);
+}
+
+template <> void gemv<float, 1, 16, GGML_TYPE_F32>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+    ggml_gemv_f32_1x16_f32(n, s, bs, vx, vy, nr, nc);
+}
+
+template <> void gemv<float, 1, 32, GGML_TYPE_F32>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+    ggml_gemv_f32_1x32_f32(n, s, bs, vx, vy, nr, nc);
+}
+
+template <> void gemv<float, 1, 64, GGML_TYPE_F32>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+    ggml_gemv_f32_1x64_f32(n, s, bs, vx, vy, nr, nc);
+}
+
+template <> void gemv<float, 1, 128, GGML_TYPE_F32>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+    ggml_gemv_f32_1x128_f32(n, s, bs, vx, vy, nr, nc);
+}
+#endif
+
 // gemm
-template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PARAM_TYPE>
+template <typename BLOC_TYPE, int64_t NB_ROWS, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PARAM_TYPE>
 void gemm(int, float *, size_t, const void *, const void *, int, int);
 
-template <> void gemm<block_q4_0, 4, 4, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+template <> void gemm<block_q4_0, 4, 4, 4, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemm_q4_0_4x4_q8_0(n, s, bs, vx, vy, nr, nc);
 }
 
-template <> void gemm<block_q4_0, 8, 4, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+template <> void gemm<block_q4_0, 4, 8, 4, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemm_q4_0_4x8_q8_0(n, s, bs, vx, vy, nr, nc);
 }
 
 template <>
-void gemm<block_q4_0, 8, 8, GGML_TYPE_Q8_0>(int          n,
+void gemm<block_q4_0, 4, 8, 8, GGML_TYPE_Q8_0>(int          n,
                                             float *      s,
                                             size_t       bs,
                                             const void * vx,
@@ -2642,52 +3036,86 @@ void gemm<block_q4_0, 8, 8, GGML_TYPE_Q8_0>(int          n,
     ggml_gemm_q4_0_8x8_q8_0(n, s, bs, vx, vy, nr, nc);
 }
 
-template <> void gemm<block_q2_K, 8, 8, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+template <> void gemm<block_q2_K, 4, 8, 8, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemm_q2_K_8x8_q8_K(n, s, bs, vx, vy, nr, nc);
 }
 
-template <> void gemm<block_q4_K, 4, 8, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+template <> void gemm<block_q4_K, 4, 4, 8, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemm_q4_K_8x4_q8_K(n, s, bs, vx, vy, nr, nc);
 }
 
-template <> void gemm<block_q4_K, 8, 8, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+template <> void gemm<block_q4_K, 4, 8, 8, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemm_q4_K_8x8_q8_K(n, s, bs, vx, vy, nr, nc);
 }
 
-template <> void gemm<block_q5_K, 8, 8, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+template <> void gemm<block_q5_K, 4, 8, 8, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemm_q5_K_8x8_q8_K(n, s, bs, vx, vy, nr, nc);
 }
 
-template <> void gemm<block_q6_K, 4, 8, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+template <> void gemm<block_q6_K, 4, 4, 8, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemm_q6_K_8x4_q8_K(n, s, bs, vx, vy, nr, nc);
 }
 
-template <> void gemm<block_q6_K, 8, 8, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+template <> void gemm<block_q6_K, 4, 8, 8, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemm_q6_K_8x8_q8_K(n, s, bs, vx, vy, nr, nc);
 }
 
-template <> void gemm<block_iq4_nl, 4, 4, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+template <> void gemm<block_iq4_nl, 4, 4, 4, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemm_iq4_nl_4x4_q8_0(n, s, bs, vx, vy, nr, nc);
 }
 
-template <> void gemm<block_iq4_nl, 8, 8, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+template <> void gemm<block_iq4_nl, 4, 8, 8, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemm_iq4_nl_8x8_q8_0(n, s, bs, vx, vy, nr, nc);
 }
 
-template <> void gemm<block_q8_0, 4, 4, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+template <> void gemm<block_q8_0, 4, 4, 4, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemm_q8_0_4x4_q8_0(n, s, bs, vx, vy, nr, nc);
 }
 
-template <> void gemm<block_q8_0, 8, 4, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+template <> void gemm<block_q8_0, 4, 8, 4, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemm_q8_0_4x8_q8_0(n, s, bs, vx, vy, nr, nc);
 }
+
+#if defined __riscv_zvfh
+template <> void gemm<ggml_half, 7, 1, 16, GGML_TYPE_F16>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+    ggml_gemm_f16_7x1x16_f16(n, s, bs, vx, vy, nr, nc);
+}
+
+template <> void gemm<ggml_half, 7, 1, 32, GGML_TYPE_F16>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+    ggml_gemm_f16_7x1x32_f16(n, s, bs, vx, vy, nr, nc);
+}
+
+template <> void gemm<ggml_half, 7, 1, 64, GGML_TYPE_F16>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+    ggml_gemm_f16_7x1x64_f16(n, s, bs, vx, vy, nr, nc);
+}
+
+template <> void gemm<ggml_half, 7, 1, 128, GGML_TYPE_F16>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+    ggml_gemm_f16_7x1x128_f16(n, s, bs, vx, vy, nr, nc);
+}
+
+template <> void gemm<float, 7, 1, 16, GGML_TYPE_F32>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+    ggml_gemm_f32_7x1x16_f32(n, s, bs, vx, vy, nr, nc);
+}
+
+template <> void gemm<float, 7, 1, 32, GGML_TYPE_F32>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+    ggml_gemm_f32_7x1x32_f32(n, s, bs, vx, vy, nr, nc);
+}
+
+template <> void gemm<float, 7, 1, 64, GGML_TYPE_F32>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+    ggml_gemm_f32_7x1x64_f32(n, s, bs, vx, vy, nr, nc);
+}
+
+template <> void gemm<float, 7, 1, 128, GGML_TYPE_F32>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+    ggml_gemm_f32_7x1x128_f32(n, s, bs, vx, vy, nr, nc);
+}
+#endif
 
 class tensor_traits_base : public ggml::cpu::tensor_traits {
   public:
     virtual int repack(struct ggml_tensor * t, const void * data, size_t data_size) = 0;
 };
 
-template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PARAM_TYPE> class tensor_traits : public tensor_traits_base {
+template <typename BLOC_TYPE, int64_t NB_ROWS, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PARAM_TYPE> class tensor_traits : public tensor_traits_base {
 
     bool work_size(int /* n_threads */, const struct ggml_tensor * op, size_t & size) override {
         // not realy a GGML_TYPE_Q8_0 but same size.
@@ -2769,13 +3197,13 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
 
         GGML_ASSERT(src1_ptr + src1_col_stride * nrows <= (const char *) params->wdata + params->wsize);
 
-        // If there are more than three rows in src1, use gemm; otherwise, use gemv.
-        if (nrows > 3) {
-            gemm<BLOC_TYPE, INTER_SIZE, NB_COLS, PARAM_TYPE>(ne00, (float *) (dst_ptr) + src0_start, nb1 / nb0,
+        // If there are more than `NB_ROWS` rows in src1, use gemm; otherwise, use gemv.
+        if (nrows > (NB_ROWS - 1)) {
+            gemm<BLOC_TYPE, NB_ROWS, INTER_SIZE, NB_COLS, PARAM_TYPE>(ne00, (float *) (dst_ptr) + src0_start, nb1 / nb0,
                                                              src0_ptr + src0_start * nb01, src1_ptr,
-                                                             nrows - (nrows % 4), ncols);
+                                                             nrows - (nrows % NB_ROWS), ncols);
         }
-        for (int iter = nrows - (nrows % 4); iter < nrows; iter++) {
+        for (int iter = nrows - (nrows % NB_ROWS); iter < nrows; iter++) {
             gemv<BLOC_TYPE, INTER_SIZE, NB_COLS, PARAM_TYPE>(ne00, (float *) (dst_ptr + (iter * nb1)) + src0_start,
                                                              ne01, src0_ptr + src0_start * nb01,
                                                              src1_ptr + (src1_col_stride * iter), 1 /* nrows */, ncols);
@@ -2829,12 +3257,12 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
             char * data_ptr  = (char *) src1->data + i12 * nb12;
             char * wdata_ptr = wdata + i12 * nbw2;
 
-            for (int64_t i11 = ith * 4; i11 < ne11 - ne11 % 4; i11 += nth * 4) {
-                ggml_quantize_mat_t<INTER_SIZE, PARAM_TYPE>((float *) (data_ptr + i11 * nb11),
-                                                            (void *) (wdata_ptr + i11 * nbw1), 4, ne10);
+            for (int64_t i11 = ith * NB_ROWS; i11 < ne11 - ne11 % NB_ROWS; i11 += nth * NB_ROWS) {
+                ggml_repack_mat_t<NB_ROWS, INTER_SIZE, PARAM_TYPE>((float *) (data_ptr + i11 * nb11),
+                                                            (void *) (wdata_ptr + i11 * nbw1), NB_ROWS, ne10);
             }
 
-            const int64_t i11_processed = ne11 - ne11 % 4;
+            const int64_t i11_processed = ne11 - ne11 % NB_ROWS;
             for (int64_t i11 = i11_processed + ith; i11 < ne11; i11 += nth) {
                 from_float((float *) (data_ptr + i11 * nb11), (void *) (wdata_ptr + i11 * nbw1), ne10);
             }
@@ -2846,7 +3274,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
         // 4x chunks per thread
         const int64_t nr0 = ggml_nrows(op->src[0]);
 
-        int     nth_scaled  = nth * 4;
+        int     nth_scaled  = nth * NB_ROWS;
         int64_t chunk_size0 = (nr0 + nth_scaled - 1) / nth_scaled;
         int64_t nchunk0     = (nr0 + chunk_size0 - 1) / chunk_size0;
 
@@ -3059,31 +3487,47 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
 
 static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(const struct ggml_tensor * cur) {
     // instance for Q4
-    static const ggml::cpu::repack::tensor_traits<block_q4_0, 4, 4, GGML_TYPE_Q8_0> q4_0_4x4_q8_0;
-    static const ggml::cpu::repack::tensor_traits<block_q4_0, 8, 4, GGML_TYPE_Q8_0> q4_0_4x8_q8_0;
-    static const ggml::cpu::repack::tensor_traits<block_q4_0, 8, 8, GGML_TYPE_Q8_0> q4_0_8x8_q8_0;
+    static const ggml::cpu::repack::tensor_traits<block_q4_0, 4, 4, 4, GGML_TYPE_Q8_0> q4_0_4x4_q8_0;
+    static const ggml::cpu::repack::tensor_traits<block_q4_0, 4, 8, 4, GGML_TYPE_Q8_0> q4_0_4x8_q8_0;
+    static const ggml::cpu::repack::tensor_traits<block_q4_0, 4, 8, 8, GGML_TYPE_Q8_0> q4_0_8x8_q8_0;
 
     // instance for Q4_K
-    static const ggml::cpu::repack::tensor_traits<block_q4_K, 4, 8, GGML_TYPE_Q8_K> q4_K_8x4_q8_K;
-    static const ggml::cpu::repack::tensor_traits<block_q4_K, 8, 8, GGML_TYPE_Q8_K> q4_K_8x8_q8_K;
+    static const ggml::cpu::repack::tensor_traits<block_q4_K, 4, 4, 8, GGML_TYPE_Q8_K> q4_K_8x4_q8_K;
+    static const ggml::cpu::repack::tensor_traits<block_q4_K, 4, 8, 8, GGML_TYPE_Q8_K> q4_K_8x8_q8_K;
 
     // instance for Q5_K
-    static const ggml::cpu::repack::tensor_traits<block_q5_K, 8, 8, GGML_TYPE_Q8_K> q5_K_8x8_q8_K;
+    static const ggml::cpu::repack::tensor_traits<block_q5_K, 4, 8, 8, GGML_TYPE_Q8_K> q5_K_8x8_q8_K;
 
     // instance for Q6_K
-    static const ggml::cpu::repack::tensor_traits<block_q6_K, 4, 8, GGML_TYPE_Q8_K> q6_K_8x4_q8_K;
-    static const ggml::cpu::repack::tensor_traits<block_q6_K, 8, 8, GGML_TYPE_Q8_K> q6_K_8x8_q8_K;
+    static const ggml::cpu::repack::tensor_traits<block_q6_K, 4, 4, 8, GGML_TYPE_Q8_K> q6_K_8x4_q8_K;
+    static const ggml::cpu::repack::tensor_traits<block_q6_K, 4, 8, 8, GGML_TYPE_Q8_K> q6_K_8x8_q8_K;
 
     // instance for Q2
-    static const ggml::cpu::repack::tensor_traits<block_q2_K, 8, 8, GGML_TYPE_Q8_K> q2_K_8x8_q8_K;
+    static const ggml::cpu::repack::tensor_traits<block_q2_K, 4, 8, 8, GGML_TYPE_Q8_K> q2_K_8x8_q8_K;
 
     // instance for IQ4
-    static const ggml::cpu::repack::tensor_traits<block_iq4_nl, 4, 4, GGML_TYPE_Q8_0> iq4_nl_4x4_q8_0;
-    static const ggml::cpu::repack::tensor_traits<block_iq4_nl, 8, 8, GGML_TYPE_Q8_0> iq4_nl_8x8_q8_0;
+    static const ggml::cpu::repack::tensor_traits<block_iq4_nl, 4, 4, 4, GGML_TYPE_Q8_0> iq4_nl_4x4_q8_0;
+    static const ggml::cpu::repack::tensor_traits<block_iq4_nl, 4, 8, 8, GGML_TYPE_Q8_0> iq4_nl_8x8_q8_0;
 
     // instance for Q8_0
-    static const ggml::cpu::repack::tensor_traits<block_q8_0, 4, 4, GGML_TYPE_Q8_0> q8_0_4x4_q8_0;
-    static const ggml::cpu::repack::tensor_traits<block_q8_0, 8, 4, GGML_TYPE_Q8_0> q8_0_4x8_q8_0;
+    static const ggml::cpu::repack::tensor_traits<block_q8_0, 4, 4, 4, GGML_TYPE_Q8_0> q8_0_4x4_q8_0;
+    static const ggml::cpu::repack::tensor_traits<block_q8_0, 4, 8, 4, GGML_TYPE_Q8_0> q8_0_4x8_q8_0;
+
+    // instance for F16
+#if defined __riscv_zvfh
+    static const ggml::cpu::repack::tensor_traits<ggml_half, 7, 1, 16, GGML_TYPE_F16>  f16_7x16x1_f16;
+    static const ggml::cpu::repack::tensor_traits<ggml_half, 7, 1, 32, GGML_TYPE_F16>  f16_7x32x1_f16;
+    static const ggml::cpu::repack::tensor_traits<ggml_half, 7, 1, 64, GGML_TYPE_F16>  f16_7x64x1_f16;
+    static const ggml::cpu::repack::tensor_traits<ggml_half, 7, 1, 128, GGML_TYPE_F16> f16_7x128x1_f16;
+#endif
+
+    // instance for F32
+#if defined __riscv_zvfh
+    static const ggml::cpu::repack::tensor_traits<float, 7, 1, 16, GGML_TYPE_F32> f32_7x16x1_f32;
+    static const ggml::cpu::repack::tensor_traits<float, 7, 1, 32, GGML_TYPE_F32> f32_7x32x1_f32;
+    static const ggml::cpu::repack::tensor_traits<float, 7, 1, 64, GGML_TYPE_F32> f32_7x64x1_f32;
+    static const ggml::cpu::repack::tensor_traits<float, 7, 1, 128, GGML_TYPE_F32> f32_7x128x1_f32;
+#endif
 
     if (cur->type == GGML_TYPE_Q4_0) {
         if (ggml_cpu_has_avx2() || (ggml_cpu_has_sve() && ggml_cpu_has_matmul_int8() && ggml_cpu_get_sve_cnt() == QK8_0)
@@ -3162,6 +3606,30 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
             if (cur->ne[1] % 4 == 0) {
                 return &q8_0_4x4_q8_0;
             }
+        }
+    } else if (cur->type == GGML_TYPE_F16) {
+        if (ggml_cpu_has_riscv_v()) {
+        #if defined __riscv_zvfh
+            switch (__riscv_vlenb() * 8) {
+                case 128:  { if (cur->ne[1] % 16 == 0)  { return &f16_7x16x1_f16;  } break; }
+                case 256:  { if (cur->ne[1] % 32 == 0)  { return &f16_7x32x1_f16;  } break; }
+                case 512:  { if (cur->ne[1] % 64 == 0)  { return &f16_7x64x1_f16;  } break; }
+                case 1024: { if (cur->ne[1] % 128 == 0) { return &f16_7x128x1_f16; } break; }
+                default: return nullptr;
+            }
+        #endif
+        }
+    } else if (cur->type == GGML_TYPE_F32) {
+        if (ggml_cpu_has_riscv_v()) {
+        #if defined __riscv_zvfh
+            switch (__riscv_vlenb() * 8) {
+                case 128:  { if (cur->ne[1] % 16 == 0)  { return &f32_7x16x1_f32;  } break; }
+                case 256:  { if (cur->ne[1] % 32 == 0)  { return &f32_7x32x1_f32;  } break; }
+                case 512:  { if (cur->ne[1] % 64 == 0)  { return &f32_7x64x1_f32;  } break; }
+                case 1024: { if (cur->ne[1] % 128 == 0) { return &f32_7x128x1_f32; } break; }
+                default: return nullptr;
+            }
+        #endif
         }
     }
 
