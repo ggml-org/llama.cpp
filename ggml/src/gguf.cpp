@@ -614,8 +614,8 @@ struct gguf_context * gguf_init_from_file_impl(FILE * file, struct gguf_init_par
 
             // check that tensor type is within defined range
             if (info.t.type < 0 || info.t.type >= GGML_TYPE_COUNT) {
-                GGML_LOG_ERROR("%s: tensor '%s' has invalid ggml type %d (%s)\n",
-                    __func__, info.t.name, info.t.type, ggml_type_name(info.t.type));
+                GGML_LOG_ERROR("%s: tensor '%s' has invalid ggml type %d. should be in [0, %d)\n",
+                    __func__, info.t.name, info.t.type, GGML_TYPE_COUNT);
                 ok = false;
                 break;
             }

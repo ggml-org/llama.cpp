@@ -1266,30 +1266,33 @@ size_t ggml_nbytes_pad(const struct ggml_tensor * tensor) {
 }
 
 int64_t ggml_blck_size(enum ggml_type type) {
-    GGML_ASSERT(type >= 0);
-    GGML_ASSERT(type < GGML_TYPE_COUNT);
+    assert(type >= 0);
+    assert(type < GGML_TYPE_COUNT);
     return type_traits[type].blck_size;
 }
 
 size_t ggml_type_size(enum ggml_type type) {
-    GGML_ASSERT(type >= 0);
-    GGML_ASSERT(type < GGML_TYPE_COUNT);
+    assert(type >= 0);
+    assert(type < GGML_TYPE_COUNT);
     return type_traits[type].type_size;
 }
 
 size_t ggml_row_size(enum ggml_type type, int64_t ne) {
+    assert(type >= 0);
+    assert(type < GGML_TYPE_COUNT);
     assert(ne % ggml_blck_size(type) == 0);
     return ggml_type_size(type)*ne/ggml_blck_size(type);
 }
 
 const char * ggml_type_name(enum ggml_type type) {
-    return type >= 0 && type < GGML_TYPE_COUNT ? type_traits[type].type_name : "NONE";
+    assert(type >= 0);
+    assert(type < GGML_TYPE_COUNT);
+    return type_traits[type].type_name;
 }
 
 bool ggml_is_quantized(enum ggml_type type) {
-    if (type < 0 || type >= GGML_TYPE_COUNT) {
-        return false;
-    }
+    assert(type >= 0);
+    assert(type < GGML_TYPE_COUNT);
     return type_traits[type].is_quantized;
 }
 
