@@ -2141,6 +2141,36 @@ private:
                         SLT_INF(slot, "new prompt, n_ctx_slot = %d, n_keep = %d, task.n_tokens = %d\n",
                                 slot.n_ctx, slot.task->params.n_keep, slot.task->n_tokens());
 
+                        // encoder-decoder: encode prompt through encoder, then feed decoder start token
+                        if (llama_model_has_encoder(model)) {
+                            const int n_enc_tokens = slot.task->n_tokens();
+
+                            llama_batch enc_batch = llama_batch_init(n_enc_tokens, 0, 1);
+                            for (int i = 0; i < n_enc_tokens; i++) {
+                                common_batch_add(enc_batch, slot.task->tokens[i], i, { slot.id }, false);
+                            }
+
+                            if (llama_encode(ctx, enc_batch)) {
+                                llama_batch_free(enc_batch);
+                                send_error(slot, "failed to encode input for encoder-decoder model", ERROR_TYPE_SERVER);
+                                slot.release();
+                                continue;
+                            }
+                            llama_batch_free(enc_batch);
+
+                            llama_token dec_start = llama_model_decoder_start_token(model);
+                            if (dec_start == LLAMA_TOKEN_NULL) {
+                                dec_start = llama_vocab_bos(llama_model_get_vocab(model));
+                            }
+
+                            auto & mut_task = const_cast<server_task &>(*slot.task);
+                            mut_task.tokens = server_tokens(llama_tokens{dec_start}, slot.task->tokens.has_mtmd);
+                            mut_task.params.cache_prompt = false;
+
+                            SLT_INF(slot, "encoder-decoder: encoded %d tokens, decoder start token = %d\n",
+                                    n_enc_tokens, dec_start);
+                        }
+
                         // print prompt tokens (for debugging)
                         /*if (1) {
                             // first 16 tokens (avoid flooding logs)
