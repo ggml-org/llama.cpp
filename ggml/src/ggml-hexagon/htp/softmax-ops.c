@@ -160,8 +160,7 @@ static void hvx_fast_softmax_f32(const uint8_t * restrict src,
         max_vec       = Q6_Vsf_vmax_VsfVsf(max_vec, v1);
     }
 
-    HVX_Vector v = hvx_vec_reduce_max_f32(max_vec);
-    max_vec      = hvx_vec_repl4(v);
+    max_vec = hvx_vec_reduce_max_f32(max_vec); // replicated over all lanes
 
     #pragma unroll(4)
     for (int i = 0; i < step_of_1; i++) {
@@ -175,8 +174,7 @@ static void hvx_fast_softmax_f32(const uint8_t * restrict src,
         v_pad[i] = v3;
     }
 
-    v       = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(sum_vec));
-    sum_vec = hvx_vec_repl4(v);
+    sum_vec = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(sum_vec)); // replicated over all lanes
 
     HVX_VectorPred pos_sum   = Q6_Q_vcmp_gt_VwVw(sum_vec, zero_v);
     HVX_Vector     v4        = hvx_vec_inverse_f32(sum_vec);
