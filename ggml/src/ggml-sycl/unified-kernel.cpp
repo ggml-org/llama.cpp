@@ -4747,10 +4747,10 @@ private:
         //   result = d_weight * (d_activation * sumi - 8 * sum_activation)
 
         constexpr int SG_SIZE      = 16;   // Must match reqd_sub_group_size(16)
-        constexpr int DMMV_QK4_0   = 32;   // Q4_0 block size
+        constexpr int DP4A_QK4_0   = 32;   // Q4_0 block size
         constexpr int N_SGS        = BLOCK_SIZE / SG_SIZE;  // 16 sub-groups
         constexpr int MAX_ITERS    = 16;   // Supports tile_cols up to 256
-        constexpr int QK4_0_PACKED = DMMV_QK4_0 / 2;        // 16 bytes
+        constexpr int QK4_0_PACKED = DP4A_QK4_0 / 2;        // 16 bytes
 
         if (op.quant_type != ggml_sycl_unified::QUANT_TYPE_Q4_0) return;
 
@@ -4767,7 +4767,7 @@ private:
         float *       out         = static_cast<float *>(op.output);
         const int     K           = op.K;
         const int     N           = (op.row_count > 0) ? op.row_count : op.N;
-        const int     k_blocks    = K / DMMV_QK4_0;
+        const int     k_blocks    = K / DP4A_QK4_0;
         if (k_blocks <= 0) return;
 
         const bool use_soa =
@@ -4793,16 +4793,16 @@ private:
 
         // Lane-strided K-block loop with dp4a.
         for (int block_idx = lane_id; block_idx < k_blocks; block_idx += SG_SIZE) {
-            const int k_offset = block_idx * DMMV_QK4_0;
+            const int k_offset = block_idx * DP4A_QK4_0;
 
             // ── Phase 1: In-register activation quantization to int8 ──
             // Load 32 float activations, compute amax, quantize to int8.
             // Layout: act[0..15] = "lo" half, act[16..31] = "hi" half
-            float act[DMMV_QK4_0];
+            float act[DP4A_QK4_0];
             float amax = 0.0f;
             float act_sum = 0.0f;
             #pragma unroll
-            for (int i = 0; i < DMMV_QK4_0; ++i) {
+            for (int i = 0; i < DP4A_QK4_0; ++i) {
                 act[i] = activations[k_offset + i];
                 amax = sycl::fmax(amax, sycl::fabs(act[i]));
                 act_sum += act[i];
@@ -4896,10 +4896,10 @@ private:
         // Uses in-register activation quantization + dp4a for ~4x throughput.
 
         constexpr int SG_SIZE      = 16;
-        constexpr int DMMV_QK4_0   = 32;
+        constexpr int DP4A_QK4_0   = 32;
         constexpr int N_SGS        = BLOCK_SIZE / SG_SIZE;  // 16 sub-groups
         constexpr int MAX_ITERS    = 16;   // Supports tile_cols up to 256
-        constexpr int QK4_0_PACKED = DMMV_QK4_0 / 2;        // 16 bytes
+        constexpr int QK4_0_PACKED = DP4A_QK4_0 / 2;        // 16 bytes
 
         if (op.quant_type != ggml_sycl_unified::QUANT_TYPE_Q4_0) return;
 
@@ -4916,7 +4916,7 @@ private:
         float *       out         = static_cast<float *>(op.output);
         const int     K           = op.K;
         const int     N           = (op.row_count > 0) ? op.row_count : op.N;
-        const int     k_blocks    = K / DMMV_QK4_0;
+        const int     k_blocks    = K / DP4A_QK4_0;
         if (k_blocks <= 0) return;
 
         const bool use_soa =
@@ -4948,14 +4948,15 @@ private:
         }
 
         for (int block_idx = lane_id; block_idx < k_blocks; block_idx += SG_SIZE) {
-            const int k_offset = block_idx * DMMV_QK4_0;
+            const int k_offset = block_idx * DP4A_QK4_0;
 
             // ── In-register activation quantization to int8 ──
-            float act[DMMV_QK4_0];
+            // (Intentionally duplicated from compute_matmul_tile for kernel inlining.)
+            float act[DP4A_QK4_0];
             float amax = 0.0f;
             float act_sum = 0.0f;
             #pragma unroll
-            for (int i = 0; i < DMMV_QK4_0; ++i) {
+            for (int i = 0; i < DP4A_QK4_0; ++i) {
                 act[i] = activations[k_offset + i];
                 amax = sycl::fmax(amax, sycl::fabs(act[i]));
                 act_sum += act[i];
@@ -6234,6 +6235,7 @@ void UnifiedKernel::finish_plan_update() {
 
 void UnifiedKernel::invalidate_plan_cache() {
     free_scratch_pool();
+    deferred_copies_.clear();
     plan_cache_valid_ = false;
     cached_ops_.clear();
     cached_plan_template_ = {};
@@ -7001,7 +7003,7 @@ void UnifiedKernel::launch_persistent_kernel() {
     const bool use_attn_subgroup_dot = persistent_attention_subgroup_dot_enabled();
     if (const char * log_policy = std::getenv("GGML_SYCL_PERSISTENT_TG_LOG_POLICY")) {
         if (std::atoi(log_policy) != 0) {
-            fprintf(stderr, "[PERSISTENT-TG] policy: dag=%d split=%d n_wgs=%d tiles=%d has_attn=%d has_ffn=%d attn_sg_dot=%d wg_aggr=%d\n",
+            GGML_LOG_INFO("[PERSISTENT-TG] policy: dag=%d split=%d n_wgs=%d tiles=%d has_attn=%d has_ffn=%d attn_sg_dot=%d wg_aggr=%d\n",
                     use_dag_mode ? 1 : 0,
                     use_split_barrier ? 1 : 0, n_workgroups, total_tiles,
                     has_attention ? 1 : 0, has_ffn_matmul ? 1 : 0,
