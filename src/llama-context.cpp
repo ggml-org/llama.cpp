@@ -1234,6 +1234,8 @@ int llama_context::encode(const llama_batch & batch_inp) {
             case LLAMA_POOLING_TYPE_CLS:
             case LLAMA_POOLING_TYPE_LAST:
                 {
+                    const int64_t n_embd_tensor = t_embd ? t_embd->ne[0] : hparams.n_embd_inp();
+
                     // extract sequence embeddings
                     auto & embd_seq_out = embd_seq;
 
@@ -1241,8 +1243,8 @@ int llama_context::encode(const llama_batch & batch_inp) {
                         const llama_seq_id seq_id  = ubatch.seq_id_unq[s];
                         const int32_t      seq_idx = ubatch.seq_idx[seq_id];
 
-                        embd_seq_out[seq_id].resize(n_embd);
-                        ggml_backend_tensor_get_async(backend_embd, t_embd, embd_seq_out[seq_id].data(), (n_embd*seq_idx)*sizeof(float), n_embd*sizeof(float));
+                        embd_seq_out[seq_id].resize(n_embd_tensor);
+                        ggml_backend_tensor_get_async(backend_embd, t_embd, embd_seq_out[seq_id].data(), (n_embd_tensor*seq_idx)*sizeof(float), n_embd_tensor*sizeof(float));
                     }
                 } break;
             case LLAMA_POOLING_TYPE_RANK:
@@ -1660,6 +1662,8 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 case LLAMA_POOLING_TYPE_CLS:
                 case LLAMA_POOLING_TYPE_LAST:
                     {
+                        const int64_t n_embd_tensor = t_embd ? t_embd->ne[0] : hparams.n_embd_inp();
+
                         // extract sequence embeddings (cleared before processing each batch)
                         auto & embd_seq_out = embd_seq;
 
@@ -1667,8 +1671,8 @@ int llama_context::decode(const llama_batch & batch_inp) {
                             const llama_seq_id seq_id  = ubatch.seq_id_unq[s];
                             const int32_t      seq_idx = ubatch.seq_idx[seq_id];
 
-                            embd_seq_out[seq_id].resize(n_embd);
-                            ggml_backend_tensor_get_async(backend_embd, t_embd, embd_seq_out[seq_id].data(), (n_embd*seq_idx)*sizeof(float), n_embd*sizeof(float));
+                            embd_seq_out[seq_id].resize(n_embd_tensor);
+                            ggml_backend_tensor_get_async(backend_embd, t_embd, embd_seq_out[seq_id].data(), (n_embd_tensor*seq_idx)*sizeof(float), n_embd_tensor*sizeof(float));
                         }
                     } break;
                 case LLAMA_POOLING_TYPE_RANK:
