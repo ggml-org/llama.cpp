@@ -1223,6 +1223,9 @@ private:
             }
 
             slot.add_token(result);
+            if (params_base.log_output && !result.text_to_send.empty()) {
+                LOG("%s", result.text_to_send.c_str());
+            }
             if (slot.task->params.stream) {
                 send_partial_response(slot, result, false);
             }

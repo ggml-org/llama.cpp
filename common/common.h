@@ -534,6 +534,7 @@ struct common_params {
     int reasoning_budget = -1;
     bool prefill_assistant = true; // if true, any trailing assistant message will be prefilled into the response
     int sleep_idle_seconds = -1;   // if >0, server will sleep after this many seconds of idle time
+    bool log_output = false;       // if true, log generated text to stdout/log file
 
     std::vector<std::string> api_keys;
 
