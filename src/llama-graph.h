@@ -222,6 +222,18 @@ public:
     const llm_arch arch;
 };
 
+class llm_graph_input_max : public llm_graph_input_i {
+public:
+    llm_graph_input_max(const llama_cparams & cparams) : cparams(cparams) {}
+    virtual ~llm_graph_input_max() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    ggml_tensor * mask; // F32 [n_tokens, n_seqs_unq]
+
+    const llama_cparams cparams;
+};
+
 class llm_graph_input_rs : public llm_graph_input_i {
 public:
     llm_graph_input_rs(const llama_memory_recurrent_context * mctx) : mctx(mctx) {}
@@ -847,6 +859,7 @@ struct llm_graph_context {
     ggml_tensor * build_inp_out_ids() const;
     ggml_tensor * build_inp_mean() const;
     ggml_tensor * build_inp_cls() const;
+    ggml_tensor * build_inp_max() const;
 
     ggml_tensor * build_inp_cross_embd() const;
     ggml_tensor * build_inp_pos_bucket_enc() const;
