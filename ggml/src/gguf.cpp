@@ -297,9 +297,9 @@ struct gguf_reader {
             GGML_LOG_ERROR("%s: string length %" PRIu64 " exceeds maximum %d\n", __func__, size, GGUF_MAX_STRING_LENGTH);
             return false;
         }
-        const uint64_t n_remain = remain();
-        if (size > n_remain) {
-            GGML_LOG_ERROR("%s: string length %" PRIu64 " exceeds remaining file size %" PRIu64 "\n", __func__, size, n_remain);
+        const uint64_t nbytes = nbytes_remain();
+        if (size > nbytes) {
+            GGML_LOG_ERROR("%s: string length %" PRIu64 " exceeds remaining file size %" PRIu64 " bytes\n", __func__, size, nbytes);
             return false;
         }
         dst.resize(static_cast<size_t>(size));
@@ -311,8 +311,8 @@ struct gguf_reader {
     }
 
     // remaining bytes in the file
-    uint64_t remain() const {
-        long cur = ftell(file);
+    uint64_t nbytes_remain() const {
+        const long cur = ftell(file);
         if (cur < 0) {
             return 0;
         }
