@@ -257,6 +257,17 @@ set(LLAMA_TEST_NAME test-mtmd-c-api)
 llama_build_and_test(test-mtmd-c-api.c)
 target_link_libraries(${LLAMA_TEST_NAME} PRIVATE mtmd)
 
+# GGUF model data fetcher library for tests that need real model metadata
+if (TARGET cpp-httplib)
+    add_library(gguf-model-data STATIC gguf-model-data.cpp)
+    target_link_libraries(gguf-model-data PRIVATE common cpp-httplib)
+    target_include_directories(gguf-model-data PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
+    add_executable(test-gguf-model-data test-gguf-model-data.cpp)
+    target_link_libraries(test-gguf-model-data PRIVATE gguf-model-data common)
+    llama_test(test-gguf-model-data LABEL "model")
+endif()
+
 # dummy executable - not installed
 get_filename_component(TEST_TARGET test-c.c NAME_WE)
 add_executable(${TEST_TARGET} test-c.c)
