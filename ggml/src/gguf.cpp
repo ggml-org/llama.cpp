@@ -234,13 +234,20 @@ struct gguf_reader {
         if (n > GGUF_MAX_ARRAY_ELEMENTS) {
             return false;
         }
+        const uint64_t nbytes = nbytes_remain();
         if constexpr (std::is_same<T, std::string>::value) {
             // strings are prefixed with their length, so we need to account for that
             if (n > SIZE_MAX / sizeof(uint64_t)) {
                 return false;
             }
+            if (nbytes < n * sizeof(uint64_t)) {
+                return false;
+            }
         } else {
             if (n > SIZE_MAX / sizeof(T)) {
+                return false;
+            }
+            if (nbytes < n * sizeof(T)) {
                 return false;
             }
         }
