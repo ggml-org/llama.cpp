@@ -127,7 +127,8 @@
 	async function executePrompt(prompt: MCPPromptInfo, args: Record<string, string>) {
 		promptError = null;
 
-		const placeholderId = crypto.randomUUID();
+		const placeholderId =
+			globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).substring(2);
 
 		const nonEmptyArgs = Object.fromEntries(
 			Object.entries(args).filter(([, value]) => value.trim() !== '')

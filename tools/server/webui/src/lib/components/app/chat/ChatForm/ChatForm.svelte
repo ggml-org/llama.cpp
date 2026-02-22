@@ -340,7 +340,7 @@
 				// Handle MCP prompt attachments as ChatUploadedFile with mcpPrompt data
 				if (parsed.mcpPromptAttachments.length > 0) {
 					const mcpPromptFiles: ChatUploadedFile[] = parsed.mcpPromptAttachments.map((att) => ({
-						id: crypto.randomUUID(),
+						id: globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).substring(2),
 						name: att.name,
 						size: att.content.length,
 						type: SpecialFileType.MCP_PROMPT,
