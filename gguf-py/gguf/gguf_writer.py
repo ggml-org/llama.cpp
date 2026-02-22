@@ -15,6 +15,7 @@ from typing import IO, Any, Sequence, Mapping
 from string import ascii_letters, digits
 
 import numpy as np
+from .stream_cast import write_cast
 
 from .constants import (
     GGUF_DEFAULT_ALIGNMENT,
@@ -34,6 +35,9 @@ from .quants import quant_shape_from_byte_shape
 
 logger = logging.getLogger(__name__)
 
+def _stream_log(msg: str) -> None:
+    if os.environ.get("GGUF_STREAM_LOG"):
+        print(f"[gguf-writer] {msg}", flush=True)
 
 SHARD_NAME_FORMAT = "{:s}-{:05d}-of-{:05d}.gguf"
 
@@ -422,12 +426,43 @@ class GGUFWriter:
         fout = self.fout[file_id]
 
         # pop the first tensor info
-        # TODO: cleaner way to get the first key
         first_tensor_name = [name for name, _ in zip(self.tensors[file_id].keys(), range(1))][0]
         ti = self.tensors[file_id].pop(first_tensor_name)
         assert ti.nbytes == tensor.nbytes
 
+        # align to data_alignment before writing tensor data
         self.write_padding(fout, fout.tell())
+
+        # --- writer-side streaming for pure dtype casts (survives when tofile() isn't used) ---
+        try:
+            if getattr(tensor, "_gguf_stream_cast", False):
+                # derive the pre-cast lazy source from the astype() node args
+                base = getattr(tensor, "_args", None)
+                base = base[0] if base else None
+
+                src_arr = None
+                try:
+                    src_arr = type(base).to_eager(base)
+                except Exception:
+                    src_arr = None
+
+                if isinstance(src_arr, np.ndarray):
+                    try:
+                        mb = int(os.environ.get("GGUF_CAST_CHUNK_MB", "64") or "64")
+                    except Exception:
+                        mb = 64
+                    tgt_dtype = getattr(tensor, "_gguf_stream_cast_dtype", src_arr.dtype)
+                    _stream_log(f"writer: streaming cast (chunk={mb} MiB) dst={tgt_dtype} shape={getattr(tensor, 'shape', '?')}")
+                    write_cast(fout, src_arr, tgt_dtype, mb)
+                    self.write_padding(fout, ti.nbytes)
+                    self.state = WriterState.WEIGHTS
+                    return
+        except Exception:
+            # fall back to normal path on any unexpected issue
+            pass
+        # ---------------------------------------------------------------------------------------
+
+        # Fallback: rely on the object’s own tofile() (handles lazy or eager)
         tensor.tofile(fout)
         self.write_padding(fout, tensor.nbytes)
 
@@ -463,8 +498,46 @@ class GGUFWriter:
                 # relying on the fact that Python dicts preserve insertion order (since 3.7)
                 for ti in tensors.values():
                     assert ti.tensor is not None  # can only iterate once over the tensors
-                    assert ti.tensor.nbytes == ti.nbytes
-                    ti.tensor.tofile(fout)
+                    obj = ti.tensor
+                    assert obj.nbytes == ti.nbytes
+
+                    # Try writer-side streaming for pure dtype casts
+                    streamed = False
+                    try:
+                        if getattr(obj, "_gguf_stream_cast", False):
+                            # derive the pre-cast lazy source from the astype() node args
+                            base = getattr(obj, "_args", None)
+                            base = base[0] if base else None
+
+                            src_arr = None
+                            try:
+                                src_arr = type(base).to_eager(base)
+                            except Exception:
+                                src_arr = None
+
+                            if isinstance(src_arr, np.ndarray):
+                                try:
+                                    mb = int(os.environ.get("GGUF_CAST_CHUNK_MB", "64") or "64")
+                                except Exception:
+                                    mb = 64
+                                tgt_dtype = getattr(obj, "_gguf_stream_cast_dtype", src_arr.dtype)
+                                _stream_log(f"writer: streaming cast (chunk={mb} MiB) dst={tgt_dtype} shape={getattr(obj, 'shape', '?')}")
+                                write_cast(fout, src_arr, tgt_dtype, mb)
+                                streamed = True
+                    except Exception:
+                        streamed = False  # fall back below on any issue
+
+                    if streamed:
+                        if shard_bar is not None:
+                            shard_bar.update(ti.nbytes)
+                        if bar is not None:
+                            bar.update(ti.nbytes)
+                        self.write_padding(fout, ti.nbytes)
+                        ti.tensor = None
+                        continue
+
+                    # Fallback: object’s tofile()
+                    obj.tofile(fout)
                     if shard_bar is not None:
                         shard_bar.update(ti.nbytes)
                     if bar is not None:
