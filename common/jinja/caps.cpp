@@ -224,7 +224,7 @@ caps caps_get(jinja::program & prog) {
                 },
             });
         },
-        [&](bool success, value & messages, value & tools, const std::string & res) {
+        [&](bool success, value & messages, value & tools, const std::string &/*res*/) {
             if (!success) {
                 result.supports_tool_calls = false;
                 result.supports_tools = false;
@@ -235,9 +235,7 @@ caps caps_get(jinja::program & prog) {
             caps_print_stats(tool_name, "tools[0].function.name");
             caps_print_stats(tools, "tools");
             if (!tool_name->stats.used) {
-                if (!tools->stats.used && res.find(tool_name->as_string().str()) == std::string::npos) {
-                    result.supports_tools = false;
-                }
+                result.supports_tools = false;
             }
 
             auto & tool_calls = messages->at(1)->at("tool_calls");;

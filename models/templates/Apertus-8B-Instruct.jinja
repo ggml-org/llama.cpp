@@ -97,20 +97,20 @@
 
 {%- macro render_tools(tools) -%}
     {%- for tool in tools %}
-        {{- "// " + tool.description + "\n" }}
-        {{- "type "+ tool.name + " = " }}
-        {%- if tool.parameters and tool.parameters.properties %}
+        {{- "// " + tool.function.description + "\n" }}
+        {{- "type "+ tool.function.name + " = " }}
+        {%- if tool.function.parameters and tool.function.parameters.properties %}
             {{- "(_: {\n" }}
-            {%- for param_name, param_spec in tool.parameters.properties.items() %}
+            {%- for param_name, param_spec in tool.function.parameters.properties.items() %}
                 {%- if param_spec.description %}
                     {{- "// " + param_spec.description + "\n" }}
                 {%- endif %}
                 {{- param_name }}
-                {%- if param_name not in (tool.parameters.required or []) -%}
+                {%- if param_name not in (tool.function.parameters.required or []) -%}
                     {{- "?" }}
                 {%- endif -%}
                 {{- ": " }}
-                {{- render_typescript_type(param_spec, tool.parameters.required or []) }}
+                {{- render_typescript_type(param_spec, tool.function.parameters.required or []) }}
                 {%- if param_spec.default is defined -%}
                     {%- if param_spec.enum %}
                         {{- ", // default: " + param_spec.default }}
