@@ -6024,6 +6024,7 @@ void UnifiedKernel::cancel_persistent() {
         current_plan_->temp_device_alloc_bytes = 0;
     }
     current_plan_.reset();
+    deferred_copies_.clear();
 }
 
 // -----------------------------------------------------------------------------
@@ -6312,6 +6313,34 @@ void * UnifiedKernel::scratch_output(int op_idx) const {
         return scratch_outputs_[op_idx];
     }
     return nullptr;
+}
+
+void UnifiedKernel::add_deferred_copy(int source_op_idx, void * src_ptr, void * dst, size_t bytes) {
+    GGML_SYCL_DEBUG("[DEFERRED-CPY] Registered: op_idx=%d src_ptr=%p dst=%p bytes=%zu\n",
+                    source_op_idx, src_ptr, dst, bytes);
+    deferred_copies_.push_back({source_op_idx, src_ptr, dst, bytes});
+}
+
+void UnifiedKernel::execute_deferred_copies() {
+    if (deferred_copies_.empty()) {
+        return;
+    }
+    GGML_SYCL_DEBUG("[DEFERRED-CPY] Executing %zu deferred copies\n", deferred_copies_.size());
+    for (const auto & dc : deferred_copies_) {
+        void * src = dc.src_ptr;
+        // Resolve source from scratch pool if we have a valid op index
+        if (dc.source_op_idx >= 0) {
+            void * scratch = scratch_output(dc.source_op_idx);
+            if (scratch) {
+                src = scratch;
+            }
+        }
+        GGML_SYCL_DEBUG("[DEFERRED-CPY] memcpy: src=%p dst=%p bytes=%zu (op_idx=%d)\n",
+                        src, dc.dst, dc.bytes, dc.source_op_idx);
+        queue_.memcpy(dc.dst, src, dc.bytes);
+    }
+    queue_.wait();
+    deferred_copies_.clear();
 }
 
 void UnifiedKernel::free_scratch_pool() {

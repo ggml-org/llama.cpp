@@ -2692,6 +2692,18 @@ public:
     void * scratch_output(int op_idx) const;
     void   free_scratch_pool();
 
+    // Deferred copy-back: CPY nodes execute AFTER the persistent kernel, not during
+    // plan extraction.  The source is identified by plan op index so that
+    // build_scratch_pool() remap is handled transparently via scratch_outputs_.
+    struct DeferredCopy {
+        int    source_op_idx;  // plan op whose scratch output is the copy source (-1 = use src_ptr)
+        void * src_ptr;        // fallback source pointer when source_op_idx < 0
+        void * dst;            // destination pointer (ggml output buffer, not remapped)
+        size_t bytes;          // number of bytes to copy
+    };
+    void add_deferred_copy(int source_op_idx, void * src_ptr, void * dst, size_t bytes);
+    void execute_deferred_copies();
+
     bool            supports_persistent() const;
     bool            is_building_plan() const;
     PersistentStats get_last_stats() const;
@@ -2729,6 +2741,9 @@ private:
     void *              scratch_pool_      = nullptr;
     size_t              scratch_pool_size_ = 0;
     std::vector<void *> scratch_outputs_;    // per-op scratch pointers (nullptr = use ggml)
+
+    // Deferred CPY nodes — executed after persistent kernel, sources remapped by scratch pool
+    std::vector<DeferredCopy> deferred_copies_;
 
     void *  persistent_buffers_[4] = {nullptr, nullptr, nullptr, nullptr};
     int *   tile_counter_          = nullptr;

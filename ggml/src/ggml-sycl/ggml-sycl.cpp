@@ -29854,7 +29854,13 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                                 fast_path_ok = false;
                                 break;
                             }
-                            ggml_sycl_cpy(ctx, node->src[0], node->src[1]);
+                            // Defer CPY until after persistent kernel execution.
+                            // Source op is the last plan op before this CPY node.
+                            int source_op_idx = op_idx > 0 ? op_idx - 1 : -1;
+                            void * src_ptr = ggml_sycl_get_data_ptr(node->src[0], ctx.device);
+                            void * dst_ptr = ggml_sycl_get_data_ptr(node->src[1], ctx.device);
+                            size_t nbytes  = ggml_nbytes(node->src[0]);
+                            kernel.add_deferred_copy(source_op_idx, src_ptr, dst_ptr, nbytes);
                             break;
                         }
 
@@ -31436,12 +31442,34 @@ full_build:
                 }
 
             case GGML_OP_CPY:
-                // Keep CPY side effects in order for downstream consumers.
+                // Defer CPY until after persistent kernel execution.  The source
+                // is identified by plan op index so build_scratch_pool() remap is
+                // handled transparently via scratch_outputs_.
                 if (!node->src[0] || !node->src[1]) {
                     GGML_LOG_ERROR("[PERSISTENT-TG] CPY missing src\n");
                     return false;
                 }
-                ggml_sycl_cpy(ctx, node->src[0], node->src[1]);
+                {
+                    // Find which plan op produced the CPY source data.
+                    // Follow view_src chain (VIEW/RESHAPE/PERMUTE skip plan ops).
+                    const ggml_tensor * origin = node->src[0];
+                    while (origin && tensor_to_op.find(origin) == tensor_to_op.end()) {
+                        if (origin->view_src) {
+                            origin = origin->view_src;
+                        } else {
+                            origin = nullptr;
+                        }
+                    }
+                    int source_op_idx = (origin) ? tensor_to_op[origin] : -1;
+
+                    void * src_ptr = ggml_sycl_get_data_ptr(node->src[0], ctx.device);
+                    void * dst_ptr = ggml_sycl_get_data_ptr(node->src[1], ctx.device);
+                    size_t nbytes  = ggml_nbytes(node->src[0]);
+                    kernel.add_deferred_copy(source_op_idx, src_ptr, dst_ptr, nbytes);
+                    GGML_SYCL_DEBUG("[PERSISTENT-TG] Deferred CPY: %s -> %s (%zu bytes, source_op=%d)\n",
+                                    node->src[0]->name ? node->src[0]->name : "?",
+                                    node->src[1]->name ? node->src[1]->name : "?", nbytes, source_op_idx);
+                }
                 executed_cpy++;
                 break;
 
@@ -32828,6 +32856,8 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
                 goto normal_dispatch;
             }
 
+            primary.execute_deferred_copies();
+
             PersistentStats stats = primary.get_last_stats();
             GGML_SYCL_DEBUG("[PERSISTENT-TG-SPLIT] Phased complete: %d ops, %.2f ms\n",
                             stats.n_operations, stats.kernel_time_ms);
@@ -32884,6 +32914,7 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
 
         try {
             kernel.execute_persistent();
+            kernel.execute_deferred_copies();
 
             PersistentStats stats = kernel.get_last_stats();
             GGML_SYCL_DEBUG("[PERSISTENT-TG] Execution complete: %d ops, %.2f ms\n", stats.n_operations,
