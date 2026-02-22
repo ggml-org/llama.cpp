@@ -32691,7 +32691,7 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
     // reducing kernel dispatch overhead for token generation (M=1) workloads.
     //
     // Requirements:
-    // - Persistent TG enabled (default; GGML_SYCL_PERSISTENT_TG=0 to disable)
+    // - Persistent TG enabled (GGML_SYCL_PERSISTENT_TG=1; disabled by default)
     // - Decode phase (batch size == 1)
     // - Supported model architecture and quantization
     // - XMX hardware support

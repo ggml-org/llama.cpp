@@ -6961,7 +6961,8 @@ void UnifiedKernel::launch_persistent_kernel() {
     constexpr int BLOCK_SIZE = 256;
     const bool use_split_barrier = persistent_use_split_barrier();
     int n_workgroups;
-    // Check if DAG mode is disabled via environment variable
+    // DAG mode is the default scheduling mode — set GGML_SYCL_PERSISTENT_TG_DAG=0
+    // to fall back to device-scope barrier scheduling with fewer work-groups.
     bool use_dag_mode = dag_allocated_;
     if (use_dag_mode) {
         static int dag_env_checked = -1;
@@ -6973,8 +6974,8 @@ void UnifiedKernel::launch_persistent_kernel() {
     }
 
     if (use_dag_mode) {
-        // DAG mode: no device-scope barriers, so WG count is not barrier-constrained.
-        // Use max_compute_units / 2 by default for good parallelism across independent ops.
+        // DAG mode: no device-scope barriers, so WG count scales with GPU size.
+        // 2x faster than 4-WG barrier mode on Arc B580 (20.9 vs 10.4 tok/s, Mistral 7B Q4_0).
         try {
             const int max_cu = (int)queue_.get_device().get_info<sycl::info::device::max_compute_units>();
             n_workgroups = std::clamp(max_cu / 2, 4, 64);
@@ -7000,11 +7001,12 @@ void UnifiedKernel::launch_persistent_kernel() {
     const bool use_attn_subgroup_dot = persistent_attention_subgroup_dot_enabled();
     if (const char * log_policy = std::getenv("GGML_SYCL_PERSISTENT_TG_LOG_POLICY")) {
         if (std::atoi(log_policy) != 0) {
-            GGML_LOG_INFO("[PERSISTENT-TG] policy: split=%d n_wgs=%d tiles=%d has_attn=%d has_ffn=%d attn_sg_dot=%d wg_aggr=%d\n",
-                          use_split_barrier ? 1 : 0, n_workgroups, total_tiles,
-                          has_attention ? 1 : 0, has_ffn_matmul ? 1 : 0,
-                          use_attn_subgroup_dot ? 1 : 0,
-                          persistent_aggressive_wg_policy_enabled() ? 1 : 0);
+            fprintf(stderr, "[PERSISTENT-TG] policy: dag=%d split=%d n_wgs=%d tiles=%d has_attn=%d has_ffn=%d attn_sg_dot=%d wg_aggr=%d\n",
+                    use_dag_mode ? 1 : 0,
+                    use_split_barrier ? 1 : 0, n_workgroups, total_tiles,
+                    has_attention ? 1 : 0, has_ffn_matmul ? 1 : 0,
+                    use_attn_subgroup_dot ? 1 : 0,
+                    persistent_aggressive_wg_policy_enabled() ? 1 : 0);
         }
     }
 
