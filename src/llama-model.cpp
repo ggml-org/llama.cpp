@@ -2825,7 +2825,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         ggml_backend_buffer_type_t first_moved_to_buft = nullptr;
 
         auto create_tensor = [&](const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) -> ggml_tensor * {
-            if (ml.external_metadata) {
+            if (ml.files.empty()) {
                 llm_tensor_info info;
                 try {
                     info = llm_tensor_info_for(tn.tensor);
@@ -2848,7 +2848,10 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 }
                 ggml_backend_buffer_type_t buft = buft_list->at(0).second;
                 ggml_context * ctx = ctx_for_buft(buft);
-                return ggml_new_tensor(ctx, GGML_TYPE_F32, ne.size(), std::data(ne));
+                ggml_tensor * ret = ggml_new_tensor(ctx, GGML_TYPE_F32, ne.size(), std::data(ne));
+                std::string name = tn;
+                ggml_set_name(ret, name.c_str());
+                return ret;
             }
             ggml_tensor * t_meta = ml.get_tensor_meta(tn.str().c_str());
 

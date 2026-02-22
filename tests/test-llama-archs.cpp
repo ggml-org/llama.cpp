@@ -1,3 +1,4 @@
+#include "ggml-backend.h"
 #include "ggml.h"
 #include "gguf.h"
 #include "ggml-cpp.h"
@@ -9,19 +10,24 @@
 #include <string>
 #include <vector>
 
-static bool test_arch(const std::string & arch_name) {
-
+static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
+    ggml_backend_tensor_memset(tensor, 0, 0, ggml_nbytes(tensor));
+    GGML_UNUSED(userdata);
 }
 
 int main(int argc, char ** argv) {
     const uint32_t n_ctx   = 32;
     const uint32_t n_embd  = 256;
+    const uint32_t n_head  = 2;
+    const uint32_t n_ff    = 384;
     const uint32_t n_vocab = 256;
 
     gguf_context_ptr metadata(gguf_init_empty());
     gguf_set_val_str(metadata.get(), "general.architecture",                   "llama");
     gguf_set_val_u32(metadata.get(), "llama.context_length",                   n_ctx);
     gguf_set_val_u32(metadata.get(), "llama.embedding_length",                 n_embd);
+    gguf_set_val_u32(metadata.get(), "llama.attention.head_count",             n_head);
+    gguf_set_val_u32(metadata.get(), "llama.feed_forward_length",              n_ff);
     gguf_set_val_u32(metadata.get(), "llama.block_count",                      2);
     gguf_set_val_f32(metadata.get(), "llama.attention.layer_norm_rms_epsilon", 1e-5f);
     gguf_set_val_u32(metadata.get(), "llama.vocab_size",                       n_vocab);
@@ -47,5 +53,5 @@ int main(int argc, char ** argv) {
     add_tensor("token_embd.weight", n_embd, n_vocab);
 
     llama_model_params params = llama_model_default_params();
-    llama_model_ptr(llama_model_empty(metadata.get(), params));
+    llama_model_ptr(llama_model_init(metadata.get(), set_tensor_data, nullptr, params));
 }

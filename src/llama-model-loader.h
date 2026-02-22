@@ -85,8 +85,9 @@ struct llama_model_loader {
     const llama_model_tensor_buft_override * tensor_buft_overrides;
 
     gguf_context_ptr metadata_ptr;
-    bool external_metadata = false;
-    struct gguf_context * metadata; // either metadata_ptr.get() or external
+    struct gguf_context * metadata; // either metadata_ptr.get() or externally set
+    llama_model_set_tensor_data_t set_tensor_data;
+    void * set_tensor_data_ud;
     std::vector<ggml_context_ptr> contexts;
 
     std::string arch_name;
@@ -97,7 +98,9 @@ struct llama_model_loader {
     std::vector<std::pair<size_t, size_t>> mmaps_used;
 
     llama_model_loader(
-        struct gguf_context * external_metadata,
+        struct gguf_context * metadata,
+        llama_model_set_tensor_data_t set_tensor_data,
+        void * set_tensor_data_ud,
         const std::string & fname,
         std::vector<std::string> & splits, // optional, only need if the split does not follow naming scheme
         bool use_mmap,

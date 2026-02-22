@@ -501,7 +501,9 @@ namespace GGUFMeta {
 
 
 llama_model_loader::llama_model_loader(
-        struct gguf_context * external_metadata,
+        struct gguf_context * metadata,
+        llama_model_set_tensor_data_t set_tensor_data,
+        void * set_tensor_data_ud,
         const std::string & fname,
         std::vector<std::string> & splits,
         bool use_mmap,
@@ -509,7 +511,8 @@ llama_model_loader::llama_model_loader(
         bool check_tensors,
         bool no_alloc,
         const llama_model_kv_override * param_overrides_p,
-        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p) {
+        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p)
+        : metadata(metadata), set_tensor_data(set_tensor_data), set_tensor_data_ud(set_tensor_data_ud) {
     int trace = 0;
     if (getenv("LLAMA_TRACE")) {
         trace = atoi(getenv("LLAMA_TRACE"));
@@ -523,7 +526,7 @@ llama_model_loader::llama_model_loader(
 
     tensor_buft_overrides = param_tensor_buft_overrides_p;
 
-    if (external_metadata == nullptr) {
+    if (!fname.empty()) {
     // Load the main GGUF
     struct ggml_context * ctx = NULL;
     struct gguf_init_params params = {
@@ -651,8 +654,6 @@ llama_model_loader::llama_model_loader(
         LLAMA_LOG_INFO("%s: additional %d GGUFs metadata loaded.\n",  __func__, n_split - 1);
     }
     } else {
-        metadata = external_metadata;
-        this->external_metadata = true;
         get_key(llm_kv(LLM_KV_GENERAL_ARCHITECTURE), arch_name, false);
         llm_kv = LLM_KV(llm_arch_from_string(arch_name));
     }
@@ -984,7 +985,10 @@ bool llama_model_loader::load_all_data(
         llama_mlocks * lmlocks,
         llama_progress_callback progress_callback,
         void * progress_callback_user_data) {
-    if (external_metadata) {
+    if (files.empty()) {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            set_tensor_data(t, set_tensor_data_ud);
+        }
         return true;
     }
     GGML_ASSERT(size_data != 0 && "call init_mappings() first");

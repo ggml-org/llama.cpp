@@ -441,9 +441,13 @@ extern "C" {
 
     LLAMA_API void llama_detach_threadpool(struct llama_context * ctx);
 
-    // Create a new model from GGUF metadata
-    LLAMA_API struct llama_model * llama_model_empty(
+    typedef void (*llama_model_set_tensor_data_t)(struct ggml_tensor * tensor, void * userdata);
+
+    // Create a new model from GGUF metadata as well as a function to set the tensor data
+    LLAMA_API struct llama_model * llama_model_init(
                     struct gguf_context * metadata,
+          llama_model_set_tensor_data_t   set_tensor_data,    // function to initialize tensor data with
+                                   void * set_tensor_data_ud, // userdata for function
               struct llama_model_params   params);
 
     DEPRECATED(LLAMA_API struct llama_model * llama_load_model_from_file(
