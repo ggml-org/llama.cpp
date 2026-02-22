@@ -1189,16 +1189,17 @@ json convert_responses_to_chatcmpl(const json & response_body) {
                 //     item.at("status") == "completed" ||
                 //     item.at("status") == "incomplete") &&
                 // item["status"] not sent by codex-cli
-                exists_and_is_string(item, "type") &&
-                item.at("type") == "message"
+                // item["type"] == "message" for OutputMessage, absent for EasyInputMessage
+                (!item.contains("type") || item.at("type") == "message")
             ) {
                 // #responses_create-input-input_item_list-item-output_message
+                // Also handles AssistantMessageItemParam / EasyInputMessage with role "assistant"
                 std::vector<json> chatcmpl_content;
 
                 for (const auto & output_text : item.at("content")) {
                     const std::string type = json_value(output_text, "type", std::string());
-                    if (type != "output_text") {
-                        throw std::invalid_argument("'type' must be 'output_text'");
+                    if (type != "output_text" && type != "input_text") {
+                        throw std::invalid_argument("'type' must be 'output_text' or 'input_text'");
                     }
                     if (!exists_and_is_string(output_text, "text")) {
                         throw std::invalid_argument("'Output text' requires 'text'");

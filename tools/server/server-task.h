@@ -109,6 +109,7 @@ struct task_result_state {
     const std::string oai_resp_reasoning_id;
     const std::string oai_resp_message_id;
     std::string oai_resp_fc_id; // function call ID for current args delta
+    int oai_resp_seq_num = 0;  // sequence number counter for streaming events
 
     task_result_state(const common_chat_parser_params & chat_parser_params)
         : chat_parser_params(chat_parser_params)
@@ -367,6 +368,7 @@ struct server_task_result_cmpl_final : server_task_result {
     std::string oai_resp_id;
     std::string oai_resp_reasoning_id;
     std::string oai_resp_message_id;
+    int oai_resp_seq_num = 0;
 
     virtual bool is_stop() override {
         return true; // in stream mode, final responses are considered stop
@@ -381,6 +383,7 @@ struct server_task_result_cmpl_final : server_task_result {
         oai_resp_id = state.oai_resp_id;
         oai_resp_reasoning_id = state.oai_resp_reasoning_id;
         oai_resp_message_id = state.oai_resp_message_id;
+        oai_resp_seq_num = state.oai_resp_seq_num;
     }
 
     json to_json_non_oaicompat();
@@ -430,6 +433,7 @@ struct server_task_result_cmpl_partial : server_task_result {
     std::string oai_resp_reasoning_id;
     std::string oai_resp_message_id;
     std::string oai_resp_fc_id;
+    int * oai_resp_seq_num_ptr = nullptr; // pointer to persistent counter in task_result_state
 
     // for Anthropic API: track if any reasoning content has been generated
     bool anthropic_has_reasoning = false;
