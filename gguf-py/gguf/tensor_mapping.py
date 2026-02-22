@@ -1367,6 +1367,7 @@ class TensorNameMap:
             "model.vision.patch_embedding.proj", # cogvlm
             "siglip2.vision_model.embeddings.patch_embedding",
             "vision_model.radio_model.model.patch_generator.embedder", # Nemotron Nano v2 VL
+            "vision_model.conv1", # Step3-VL
         ),
 
         MODEL_TENSOR.V_ENC_EMBD_NORM: (
@@ -1384,6 +1385,7 @@ class TensorNameMap:
             "model.vision.patch_embedding.position_embedding", # cogvlm
             "visual.embeddings.position_embedding", # glm4v
             "vision_model.radio_model.model.patch_generator.pos_embed", # Nemotron Nano v2 VL
+            "vision_model.positional_embedding", # Step3-VL (no .weight suffix, handled in modify_tensors)
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_QKV: (
@@ -1404,6 +1406,7 @@ class TensorNameMap:
             "visual.blocks.{bid}.attn.q", # qwen2vl, generated
             "vision_tower.encoder.blocks.{bid}.wq", # kimi-vl, generated
             "siglip2.vision_model.encoder.layers.{bid}.self_attn.q_proj", # youtuvl
+            "vision_model.transformer.resblocks.{bid}.attn.q", # Step3-VL, generated from fused QKV
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_Q_NORM: (
@@ -1423,6 +1426,7 @@ class TensorNameMap:
             "visual.blocks.{bid}.attn.k", # qwen2vl, generated
             "vision_tower.encoder.blocks.{bid}.wk", # kimi-vl, generated
             "siglip2.vision_model.encoder.layers.{bid}.self_attn.k_proj",
+            "vision_model.transformer.resblocks.{bid}.attn.k", # Step3-VL, generated from fused QKV
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_K_NORM: (
@@ -1442,6 +1446,7 @@ class TensorNameMap:
             "visual.blocks.{bid}.attn.v", # qwen2vl, generated
             "vision_tower.encoder.blocks.{bid}.wv", # kimi-vl, generated
             "siglip2.vision_model.encoder.layers.{bid}.self_attn.v_proj",
+            "vision_model.transformer.resblocks.{bid}.attn.v", # Step3-VL, generated from fused QKV
         ),
 
         MODEL_TENSOR.V_ENC_INPUT_NORM: (
@@ -1458,6 +1463,7 @@ class TensorNameMap:
             "model.vision.transformer.layers.{bid}.input_layernorm", # cogvlm
             "siglip2.vision_model.encoder.layers.{bid}.layer_norm1",
             "vision_model.radio_model.model.blocks.{bid}.norm1", # Nemotron Nano v2 VL
+            "vision_model.transformer.resblocks.{bid}.ln_1", # Step3-VL
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_O: (
@@ -1475,6 +1481,7 @@ class TensorNameMap:
             "model.vision.transformer.layers.{bid}.attention.dense", # cogvlm
             "siglip2.vision_model.encoder.layers.{bid}.self_attn.out_proj", # youtuvl
             "vision_model.radio_model.model.blocks.{bid}.attn.proj", # Nemotron Nano v2 VL
+            "vision_model.transformer.resblocks.{bid}.attn.out_proj", # Step3-VL
         ),
 
         MODEL_TENSOR.V_ENC_POST_ATTN_NORM: (
@@ -1491,6 +1498,7 @@ class TensorNameMap:
             "model.vision.transformer.layers.{bid}.post_attention_layernorm", # cogvlm
             "siglip2.vision_model.encoder.layers.{bid}.layer_norm2",
             "vision_model.radio_model.model.blocks.{bid}.norm2", # Nemotron Nano v2 VL
+            "vision_model.transformer.resblocks.{bid}.ln_2", # Step3-VL
         ),
 
         MODEL_TENSOR.V_ENC_FFN_UP: (
@@ -1508,6 +1516,7 @@ class TensorNameMap:
             "model.vision.transformer.layers.{bid}.mlp.fc1", # cogvlm
             "siglip2.vision_model.encoder.layers.{bid}.mlp.fc1",
             "vision_model.radio_model.model.blocks.{bid}.mlp.fc1", # Nemotron Nano v2 VL
+            "vision_model.transformer.resblocks.{bid}.mlp.c_fc", # Step3-VL
         ),
 
         MODEL_TENSOR.V_ENC_FFN_GATE: (
@@ -1531,16 +1540,19 @@ class TensorNameMap:
             "model.vision.transformer.layers.{bid}.mlp.fc2", # cogvlm
             "siglip2.vision_model.encoder.layers.{bid}.mlp.fc2",
             "vision_model.radio_model.model.blocks.{bid}.mlp.fc2", # Nemotron Nano v2 VL
+            "vision_model.transformer.resblocks.{bid}.mlp.c_proj", # Step3-VL
         ),
 
         MODEL_TENSOR.V_LAYER_SCALE_1: (
             "vision_tower.vision_model.encoder.layers.{bid}.ls1", # InternVL
             "model.vision_tower.encoder.layer.{bid}.lambda_1", # Intern-S1
+            "vision_model.transformer.resblocks.{bid}.ls_1", # Step3-VL (.gamma suffix handled in modify_tensors)
         ),
 
         MODEL_TENSOR.V_LAYER_SCALE_2: (
             "vision_tower.vision_model.encoder.layers.{bid}.ls2", # InternVL
             "model.vision_tower.encoder.layer.{bid}.lambda_2", # Intern-S1
+            "vision_model.transformer.resblocks.{bid}.ls_2", # Step3-VL (.gamma suffix handled in modify_tensors)
         ),
 
         MODEL_TENSOR.V_PRE_NORM: (
@@ -1548,6 +1560,7 @@ class TensorNameMap:
             "vision_tower.ln_pre", # pixtral-hf
             "vision_encoder.ln_pre", # pixtral
             "vision_model.layernorm_pre", # llama4
+            "vision_model.ln_pre", # Step3-VL
         ),
 
         MODEL_TENSOR.V_POST_NORM: (

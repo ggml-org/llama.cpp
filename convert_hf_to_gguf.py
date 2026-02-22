@@ -3558,7 +3558,8 @@ class Qwen2Model(TextModel):
             name = name.replace("language_model.", "") # for InternVL
         if name.startswith("mlp") or name.startswith("multi_modal_projector") \
                 or name.startswith("vision_model") or name.startswith("audio_tower") \
-                or name.startswith("model.vision_tower") or name.startswith("model.multi_modal_projector"):
+                or name.startswith("model.vision_tower") or name.startswith("model.multi_modal_projector") \
+                or name.startswith("vit_large_projector"):
             # skip vision and audio tensors
             return
         yield from super().modify_tensors(data_torch, name, bid)
@@ -11681,6 +11682,111 @@ class YoutuVLVisionModel(MmprojModel):
             # If mapping fails, log warning and skip
             logger.warning(f"Cannot map tensor: {name}")
             return
+
+
+@ModelBase.register("StepVLForConditionalGeneration", "Step3VLForCausalLM", "Step3VLBaseForCausalLM")
+class Step3VLMmprojModel(MmprojModel):
+    # Step3-VL: PE-lang 1.8B ViT encoder with 2D RoPE + abs pos embd, two stride-2 Conv2d downsamplers, linear projector
+    # Architecture: 47 transformer blocks, hidden_size=1536, 16 heads, patch_size=14, image_size=728
+    # Projector: Conv2d(1536→3072, 3×3, s2) → Conv2d(3072→6144, 3×3, s2) → Linear(6144→4096)
+    # NO activations between projector layers
+
+    # Standard CLIP normalization values used by Step3-VL
+    _DEFAULT_IMAGE_MEAN = [0.48145466, 0.4578275, 0.40821073]
+    _DEFAULT_IMAGE_STD  = [0.26862954, 0.26130258, 0.27577711]
+
+    def get_vision_config(self) -> dict[str, Any] | None:
+        vision_config = self.global_config.get("vision_config")
+        if vision_config is None:
+            return None
+        width = vision_config["width"]
+        mlp_ratio = vision_config.get("mlp_ratio", 4.0)
+        return {
+            **vision_config,
+            "hidden_size": width,
+            "intermediate_size": round(width * mlp_ratio),
+            "num_hidden_layers": vision_config["layers"],
+            "num_attention_heads": vision_config["heads"],
+        }
+
+    def set_gguf_parameters(self):
+        hparams = self.hparams_vision
+        assert hparams is not None
+
+        # Provide default image normalization BEFORE super() which reads them
+        if "image_mean" not in self.preprocessor_config:
+            self.preprocessor_config["image_mean"] = self._DEFAULT_IMAGE_MEAN
+        if "image_std" not in self.preprocessor_config:
+            self.preprocessor_config["image_std"] = self._DEFAULT_IMAGE_STD
+
+        super().set_gguf_parameters()
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.STEP3VL)
+
+        # LayerNorm epsilon (standard default for CLIP-style ViT)
+        self.gguf_writer.add_vision_attention_layernorm_eps(
+            hparams.get("layer_norm_eps", 1e-5))
+
+        # 2D RoPE: theta=10000.0, interleave_freq=false
+        # The C++ side reads rope_freq_base from GGUF metadata
+        rope_theta = hparams.get("rope_theta", 10000.0)
+        self.gguf_writer.add_rope_freq_base(rope_theta)
+
+        # Do NOT set use_gelu or use_silu — default FFN_GELU_QUICK matches Step3-VL's quick_gelu
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        if ".position_embd.weight" in new_name:
+            return gguf.GGMLQuantizationType.F32
+        # Keep projector Conv2d and Linear in high precision
+        if new_name.startswith("mm."):
+            return gguf.GGMLQuantizationType.F16 if self.ftype == gguf.LlamaFileType.MOSTLY_F16 else gguf.GGMLQuantizationType.F32
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Filter to only vision encoder + projector tensors
+        # Step3-VL uses bare "vision_model." prefix (no "model." prefix) for vision tensors
+        if not (name.startswith("vision_model.") or name.startswith("vit_large_projector.")):
+            return
+
+        # Handle positional_embedding (no .weight suffix in HF checkpoint)
+        if "positional_embedding" in name and not name.endswith((".weight", ".bias")):
+            name += ".weight"
+
+        # Handle layer scale .gamma suffix → .weight
+        if name.endswith(".gamma"):
+            name = name[:-len(".gamma")] + ".weight"
+
+        # Handle fused QKV: in_proj_weight/bias → split into q/k/v
+        if "attn.in_proj_" in name:
+            is_weight = "in_proj_weight" in name
+            suffix = "weight" if is_weight else "bias"
+            c3 = data_torch.shape[0]
+            assert c3 % 3 == 0
+            c = c3 // 3
+            wq = data_torch[:c]
+            wk = data_torch[c:c * 2]
+            wv = data_torch[c * 2:]
+            base = name.replace(f"in_proj_{suffix}", "")
+            yield from super().modify_tensors(wq, base + f"q.{suffix}", bid)
+            yield from super().modify_tensors(wk, base + f"k.{suffix}", bid)
+            yield from super().modify_tensors(wv, base + f"v.{suffix}", bid)
+            return
+
+        # Handle projector tensors → mm.N naming for C++ clip.cpp
+        if "vit_downsampler1" in name:
+            suffix = ".weight" if name.endswith(".weight") else ".bias"
+            yield ("mm.0" + suffix, data_torch)
+            return
+        if "vit_downsampler2" in name:
+            suffix = ".weight" if name.endswith(".weight") else ".bias"
+            yield ("mm.1" + suffix, data_torch)
+            return
+        if "vit_large_projector" in name:
+            suffix = ".weight" if name.endswith(".weight") else ".bias"
+            yield ("mm.2" + suffix, data_torch)
+            return
+
+        # Standard mapping for all other vision encoder tensors
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("SolarOpenForCausalLM")

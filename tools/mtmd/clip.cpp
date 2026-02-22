@@ -873,6 +873,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 builder = std::make_unique<clip_graph_youtuvl>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_STEP3VL:
+            {
+                builder = std::make_unique<clip_graph_step3vl>(ctx, img);
+            } break;
         default:
             GGML_ABORT("missing cgraph builder");
     }
@@ -1233,6 +1237,13 @@ struct clip_model_loader {
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
                         hparams.set_limit_image_tokens(8, 4096);
                         hparams.set_warmup_n_tokens(46*46); // avoid OOM on warmup
+                    } break;
+                case PROJECTOR_TYPE_STEP3VL:
+                    {
+                        // Step3-VL: 2D RoPE with theta=10000, two stride-2 Conv2d downsamplers (4x spatial reduction per dim)
+                        hparams.rope_theta = 10000.0f;
+                        // image_size=728, patch_size=14 → 52×52 patches → after 2 downsamplers → 13×13 = 169 tokens
+                        hparams.set_warmup_n_tokens(52*52);
                     } break;
                 case PROJECTOR_TYPE_LLAMA4:
                     {
@@ -1801,6 +1812,16 @@ struct clip_model_loader {
                     model.mm_0_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 0, "weight"));
                     model.mm_1_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 1, "weight"));
                     model.mm_3_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 3, "weight"));
+                } break;
+            case PROJECTOR_TYPE_STEP3VL:
+                {
+                    // Step3-VL projector: Conv2d downsampler1 (mm.0), Conv2d downsampler2 (mm.1), Linear (mm.2)
+                    model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
+                    model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"), false);
+                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
+                    model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"), false);
+                    model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"), false);
                 } break;
             case PROJECTOR_TYPE_GLMA:
                 {
@@ -3125,6 +3146,7 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_INTERNVL: // TODO @ngxson : support dynamic resolution
         case PROJECTOR_TYPE_NEMOTRON_V2_VL:
+        case PROJECTOR_TYPE_STEP3VL:
             {
                 clip_image_u8 resized_image;
                 int sz = params.image_size;
@@ -3431,6 +3453,13 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                 // dynamic size (2 conv, so double patch size)
                 int x_patch = img->nx / (params.patch_size * 2);
                 int y_patch = img->ny / (params.patch_size * 2);
+                n_patches = x_patch * y_patch;
+            } break;
+        case PROJECTOR_TYPE_STEP3VL:
+            {
+                // Step3-VL: two stride-2 Conv2d downsamplers = 4x reduction per spatial dim
+                int x_patch = img->nx / (params.patch_size * 4);
+                int y_patch = img->ny / (params.patch_size * 4);
                 n_patches = x_patch * y_patch;
             } break;
         case PROJECTOR_TYPE_GEMMA3:
@@ -3826,6 +3855,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         case PROJECTOR_TYPE_KIMIVL:
         case PROJECTOR_TYPE_KIMIK25:
         case PROJECTOR_TYPE_LIGHTONOCR:
+        case PROJECTOR_TYPE_STEP3VL:
             {
                 // set the 2D positions
                 int n_patches_per_col = image_size_width / patch_size;
@@ -4059,6 +4089,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.position_embeddings->ne[0];
         case PROJECTOR_TYPE_GLM4V:
             return ctx->model.mm_ffn_down_w->ne[1];
+        case PROJECTOR_TYPE_STEP3VL:
+            return ctx->model.mm_2_w->ne[1]; // mm.2 is the Linear(6144→4096) projector
         default:
             GGML_ABORT("Unknown projector type");
     }
