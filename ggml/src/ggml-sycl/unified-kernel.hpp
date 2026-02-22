@@ -30,6 +30,7 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <functional>
 #include <string>
 #include <memory>
 #include <unordered_map>
@@ -2641,6 +2642,14 @@ public:
     void add_temp_device_alloc(void * ptr, size_t bytes);
     void add_temp_device_alloc_handle(const ggml_sycl::alloc_handle & handle);
     void execute_persistent();
+    // Phased persistent execution: launches the kernel in segments, calling
+    // on_matmul_complete(matmul_index, phase_op_count) after each matmul
+    // boundary. This allows host-mediated multi-device sync without
+    // requiring mid-kernel GPU-to-host signaling.
+    // The callback receives: matmul sequential index (0-based) and the
+    // number of operations in the completed phase.
+    using phase_callback_t = std::function<void(int matmul_idx)>;
+    void execute_persistent_phased(phase_callback_t on_matmul_complete);
     void cancel_persistent();
 
     // Plan caching: reuse operation sequence between TG tokens

@@ -4328,7 +4328,9 @@ private:
         // First matmul (op_idx == 0): no previous merge to wait for
         if (op.op_idx == 0) return;
 
-        // WG 0, thread 0 polls merge_complete for the previous matmul
+        // WG 0, thread 0 polls merge_complete for the previous matmul.
+        // Device-scope atomic_ref on device-local memory (malloc_device).
+        // Host writes via H2D BCS memcpy which bypasses GPU L2 cache.
         if (wg_id == 0 && local_id == 0) {
             sycl::atomic_ref<int, sycl::memory_order::relaxed,
                              sycl::memory_scope::device,
@@ -4770,7 +4772,11 @@ private:
             static_cast<const ggml_sycl_unified::block_q4_0_unified *>(op.weights);
         const uint8_t * qs_base = static_cast<const uint8_t *>(op.weights);
         const int row_qs_bytes = k_blocks * QK4_0_PACKED;
-        const int64_t total_blocks = static_cast<int64_t>(N) * k_blocks;
+        // SOA layout: all quantized bytes for N_total rows first, then all scales.
+        // Use op.N (full row count) for d_offset, not the computation bound N.
+        // When row_count < N, we still need the correct scale offset.
+        const int     N_soa       = op.N;  // Full weight tensor rows for SOA addressing
+        const int64_t total_blocks = static_cast<int64_t>(N_soa) * k_blocks;
         const int64_t d_offset = total_blocks * QK4_0_PACKED;  // Byte offset to scale values
         const sycl::half * d_base = reinterpret_cast<const sycl::half *>(
             static_cast<const char *>(op.weights) + d_offset);
@@ -4881,7 +4887,9 @@ private:
         const uint8_t * gate_qs_base = static_cast<const uint8_t *>(op.weights);
         const uint8_t * up_qs_base   = static_cast<const uint8_t *>(op.aux);
         const int row_qs_bytes       = k_blocks * QK4_0_PACKED;
-        const int64_t total_blocks   = static_cast<int64_t>(N) * k_blocks;
+        // SOA layout: use op.N (full row count) for d_offset, not computation-bound N.
+        const int     N_soa          = op.N;
+        const int64_t total_blocks   = static_cast<int64_t>(N_soa) * k_blocks;
         const int64_t d_offset       = total_blocks * QK4_0_PACKED;
         const sycl::half * gate_d_base = reinterpret_cast<const sycl::half *>(
             static_cast<const char *>(op.weights) + d_offset);
@@ -6201,6 +6209,7 @@ void * UnifiedKernel::get_rows_stable_ptr(size_t bytes) {
 
 void UnifiedKernel::build_scratch_pool() {
     if (!current_plan_ || current_plan_->operations.empty()) {
+        GGML_SYCL_DEBUG("[SCRATCH-POOL] no plan or empty\n");
         return;
     }
 
@@ -6211,19 +6220,27 @@ void UnifiedKernel::build_scratch_pool() {
     size_t total_bytes = 0;
     scratch_outputs_.resize(n_ops, nullptr);
 
+    int n_with_bytes = 0;
+    int n_skipped = 0;
     for (int i = 0; i < n_ops; i++) {
         const auto & op = ops[i];
         // Skip ops with dedicated buffer management or no output_bytes
         if (op.type == OperationType::SET_ROWS || op.type == OperationType::GET_ROWS ||
             op.type == OperationType::STRIDED_COPY || op.output_bytes <= 0) {
             scratch_outputs_[i] = nullptr;
+            n_skipped++;
             continue;
         }
+        n_with_bytes++;
         size_t aligned = (op.output_bytes + 255) & ~(size_t) 255;
         total_bytes += aligned;
     }
 
+    GGML_SYCL_DEBUG("[SCRATCH-POOL] n_ops=%d with_bytes=%d skipped=%d total_bytes=%zu\n",
+                    n_ops, n_with_bytes, n_skipped, total_bytes);
+
     if (total_bytes == 0) {
+        GGML_SYCL_DEBUG("[SCRATCH-POOL] total_bytes=0, returning early\n");
         return;
     }
 
@@ -6236,6 +6253,8 @@ void UnifiedKernel::build_scratch_pool() {
             ggml_sycl::unified_cache_add_runtime_bytes(device_id_, scratch_pool_size_,
                                                        ggml_sycl::runtime_category::GRAPH);
         }
+        // Re-initialize scratch_outputs_ after free_scratch_pool() cleared it
+        scratch_outputs_.assign(n_ops, nullptr);
     }
 
     if (!scratch_pool_) {
@@ -6334,6 +6353,289 @@ void UnifiedKernel::execute_persistent() {
         // Budget stays reserved — ownership transfers to cached allocs
         plan_cache_valid_ = true;
         GGML_SYCL_DEBUG("[PERSISTENT-TG] Plan cached: %zu operations\n", cached_ops_.size());
+    }
+
+    // Free non-cached temp allocs
+    if (current_plan_->temp_device_alloc_bytes > 0 && device_id_ >= 0) {
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, current_plan_->temp_device_alloc_bytes, ggml_sycl::runtime_category::GRAPH);
+    }
+    for (auto & [ptr, sz] : current_plan_->temp_device_allocs) {
+        auto hit = current_plan_->temp_device_alloc_handles.find(ptr);
+        if (hit != current_plan_->temp_device_alloc_handles.end()) {
+            (void) ggml_sycl::unified_free(hit->second);
+        } else {
+            sycl::free(ptr, queue_);
+        }
+    }
+    current_plan_->temp_device_allocs.clear();
+    current_plan_->temp_device_alloc_handles.clear();
+    current_plan_->temp_device_alloc_bytes = 0;
+
+    // Clear the plan after execution (cached copy remains)
+    current_plan_.reset();
+}
+
+void UnifiedKernel::execute_persistent_phased(phase_callback_t on_matmul_complete) {
+    if (!current_plan_ || !current_plan_->is_valid()) {
+        GGML_LOG_ERROR("UnifiedKernel: execute_persistent_phased called with invalid plan\n");
+        return;
+    }
+
+    // Build the device-side operation table (same as launch_persistent_kernel)
+    const size_t n_ops = current_plan_->operations.size();
+    std::vector<DeviceOperation> host_ops;
+    host_ops.reserve(n_ops);
+
+    for (size_t i = 0; i < n_ops; i++) {
+        const auto & src = current_plan_->operations[i];
+        DeviceOperation dst = {};
+
+        dst.type             = static_cast<int>(src.type);
+        dst.layer            = src.layer;
+        dst.weights          = src.weights;
+        dst.input            = src.input;
+        dst.output           = src.output;
+        dst.aux              = src.aux;
+        dst.mask             = src.mask;
+        dst.q_nb0            = src.q_nb0;
+        dst.q_nb1            = src.q_nb1;
+        dst.q_nb2            = src.q_nb2;
+        dst.q_nb3            = src.q_nb3;
+        dst.k_nb0            = src.k_nb0;
+        dst.k_nb1            = src.k_nb1;
+        dst.k_nb2            = src.k_nb2;
+        dst.k_nb3            = src.k_nb3;
+        dst.v_nb0            = src.v_nb0;
+        dst.v_nb1            = src.v_nb1;
+        dst.v_nb2            = src.v_nb2;
+        dst.v_nb3            = src.v_nb3;
+        dst.M                = src.M;
+        dst.N                = src.N;
+        dst.K                = src.K;
+        dst.tile_cols        = 0;
+        dst.output_bytes     = src.output_bytes;
+        dst.hidden_dim       = src.hidden_dim;
+        dst.intermediate_dim = src.intermediate_dim;
+        dst.eps              = src.eps;
+        dst.scale            = src.scale;
+        dst.quant_type       = src.quant_type;
+        dst.weight_layout    = src.weight_layout;
+        dst.n_kv_heads       = src.n_kv_heads;
+        dst.mask_type        = src.mask_type;
+        dst.mask_nb0         = src.mask_nb0;
+        dst.mask_nb1         = src.mask_nb1;
+        dst.mask_nb2         = src.mask_nb2;
+        dst.mask_nb3         = src.mask_nb3;
+        dst.mask_ne2         = src.mask_ne2;
+        dst.mask_ne3         = src.mask_ne3;
+
+        const size_t pre_fusion_idx = i;
+
+        // No GATE+UP+SILU fusion in phased split: secondary has separate ops
+        // (same reason as the monolithic split path disables fusion).
+
+        // Apply split metadata for row adjustment only.
+        // n_devices is set to 0 to disable in-kernel sync (host manages sync
+        // between phases). progress_counter and merge_complete are left null.
+        if (split_config_set_ && split_config_.n_devices > 1) {
+            dst.device_idx = split_config_.device_idx;
+            dst.n_devices  = 0;  // Disable in-kernel sync — host handles it
+            // Look up per-op metadata for row range adjustment
+            const int meta_idx = static_cast<int>(pre_fusion_idx);
+            if (meta_idx < (int) split_config_.op_meta.size() && split_config_.op_meta[meta_idx].row_count > 0) {
+                const auto & meta = split_config_.op_meta[meta_idx];
+                dst.op_idx        = meta.op_idx;
+                dst.row_start     = meta.row_start;
+                dst.row_count     = meta.row_count;
+                dst.merge_count   = meta.merge_count;
+                dst.merge_src     = meta.merge_src;
+                dst.merge_dst     = meta.merge_dst;
+                dst.input_staging = meta.input_staging;
+                dst.input_K       = meta.input_K;
+                // Keep dst.N as full N_total for SOA weight addressing.
+                // row_count controls computation bounds in the kernel.
+            }
+        }
+
+        const OperationType op_type = static_cast<OperationType>(dst.type);
+
+        // Calculate tiles (same logic as launch_persistent_kernel).
+        // For split matmuls, use row_count for tile calculation (not full N).
+        const int effective_N = (dst.row_count > 0) ? dst.row_count : dst.N;
+        switch (op_type) {
+            case OperationType::RMS_NORM:
+                dst.n_tiles = 1;
+                break;
+            case OperationType::ADD:
+            case OperationType::MUL:
+            case OperationType::GET_ROWS:
+            case OperationType::SET_ROWS:
+            case OperationType::STRIDED_COPY:
+                dst.n_tiles = (dst.M + 255) / 256;
+                break;
+            case OperationType::SILU_MUL:
+                dst.n_tiles = (dst.intermediate_dim + 255) / 256;
+                break;
+            case OperationType::MATMUL_Q_PROJ:
+            case OperationType::MATMUL_K_PROJ:
+            case OperationType::MATMUL_V_PROJ:
+            case OperationType::MATMUL_OUT_PROJ:
+            case OperationType::MATMUL_GATE:
+            case OperationType::MATMUL_UP:
+            case OperationType::MATMUL_DOWN:
+            case OperationType::MATMUL_GATE_UP_SILU: {
+                dst.tile_cols = persistent_matmul_tile_cols(op_type, effective_N, dst.K);
+                dst.n_tiles = (effective_N + dst.tile_cols - 1) / dst.tile_cols;
+                break;
+            }
+            case OperationType::ATTENTION_F16:
+            case OperationType::ATTENTION_F32:
+                dst.n_tiles = dst.N;
+                break;
+            case OperationType::ROPE:
+                dst.n_tiles = 1;
+                break;
+            case OperationType::SOFTMAX:
+                dst.n_tiles = std::max(1, dst.M);
+                break;
+            default:
+                dst.n_tiles = 1;
+        }
+        host_ops.push_back(dst);
+    }
+
+    // Identify matmul boundaries for phase splitting.
+    // A "phase" runs from phase_start to the next split matmul (inclusive).
+    // After each phase, the host dispatches secondary + merge before proceeding.
+    struct phase_info {
+        int start;         // First op index in this phase
+        int count;         // Number of ops in this phase
+        int matmul_idx;    // Sequential matmul index (-1 if phase ends without matmul)
+    };
+    std::vector<phase_info> phases;
+    int phase_start = 0;
+    int matmul_counter = 0;
+
+    for (int i = 0; i < (int) host_ops.size(); i++) {
+        const auto & op = host_ops[i];
+        const auto op_type = static_cast<OperationType>(op.type);
+        const bool is_split_matmul = (op.row_count > 0) &&
+            PersistentTGKernelImpl<256>::is_matmul_op(op.type);
+
+        if (is_split_matmul) {
+            // End current phase at this matmul (inclusive)
+            phases.push_back({phase_start, i - phase_start + 1, matmul_counter});
+            matmul_counter++;
+            phase_start = i + 1;
+        }
+    }
+    // Trailing ops after the last matmul (if any)
+    if (phase_start < (int) host_ops.size()) {
+        phases.push_back({phase_start, (int) host_ops.size() - phase_start, -1});
+    }
+
+    GGML_SYCL_DEBUG("[PERSISTENT-TG-PHASED] %d phases, %d split matmuls, %zu total ops\n",
+                    (int) phases.size(), matmul_counter, host_ops.size());
+
+    // Kernel launch configuration (same as launch_persistent_kernel)
+    constexpr int BLOCK_SIZE = 256;
+    const bool use_split_barrier = persistent_use_split_barrier();
+    const int attention_slm = current_plan_->head_dim + 2 * (BLOCK_SIZE / 16);
+    const int matmul_slm    = (BLOCK_SIZE / 16) * 32;
+    const int slm_floats   = std::max({BLOCK_SIZE / 16,
+                                       current_plan_->hidden_dim,
+                                       attention_slm,
+                                       matmul_slm});
+    const bool use_attn_subgroup_dot = persistent_attention_subgroup_dot_enabled();
+    double total_elapsed_ms = 0.0;
+
+    // Execute each phase as a separate kernel launch
+    for (const auto & phase : phases) {
+        // Upload phase operations to device memory (reuse pooled allocation)
+        if (phase.count > d_ops_pool_size_) {
+            if (d_ops_pool_) sycl::free(d_ops_pool_, queue_);
+            d_ops_pool_ = static_cast<void *>(sycl::malloc_device<DeviceOperation>(phase.count, queue_));
+            d_ops_pool_size_ = d_ops_pool_ ? phase.count : 0;
+        }
+        DeviceOperation * d_ops = static_cast<DeviceOperation *>(d_ops_pool_);
+        queue_.memcpy(d_ops, &host_ops[phase.start], phase.count * sizeof(DeviceOperation)).wait();
+
+        // Compute tiles and work-groups for this phase
+        int phase_tiles = 0;
+        bool phase_has_attention = false;
+        bool phase_has_ffn = false;
+        for (int j = 0; j < phase.count; j++) {
+            phase_tiles += host_ops[phase.start + j].n_tiles;
+            const auto t = static_cast<OperationType>(host_ops[phase.start + j].type);
+            if (t == OperationType::ATTENTION_F16 || t == OperationType::ATTENTION_F32) {
+                phase_has_attention = true;
+            }
+            if (t == OperationType::MATMUL_GATE || t == OperationType::MATMUL_UP ||
+                t == OperationType::MATMUL_DOWN || t == OperationType::MATMUL_GATE_UP_SILU) {
+                phase_has_ffn = true;
+            }
+        }
+        const int n_workgroups = persistent_num_workgroups(phase_tiles, phase_has_attention,
+                                                           phase_has_ffn, use_split_barrier);
+
+        // Reset sync state and launch
+        queue_.memset(sync_block_, 0, 3 * sizeof(int)).wait();
+
+        PersistentKernelArgs args = {};
+        args.operations            = d_ops;
+        args.n_operations          = phase.count;
+        args.use_split_barrier     = use_split_barrier ? 1 : 0;
+        args.use_attn_subgroup_dot = use_attn_subgroup_dot ? 1 : 0;
+        args.tile_counter          = tile_counter_;
+        args.barrier_counter       = barrier_counter_;
+        args.barrier_sense         = barrier_sense_;
+        for (int i = 0; i < 4; i++) {
+            args.scratch_buffers[i] = persistent_buffers_[i];
+        }
+        args.hidden_dim       = current_plan_->hidden_dim;
+        args.intermediate_dim = current_plan_->intermediate_dim;
+        args.use_dag          = 0;  // No DAG mode for phased execution
+
+        const auto start = std::chrono::high_resolution_clock::now();
+        queue_.submit([&](sycl::handler & cgh) {
+            sycl::local_accessor<float, 1> slm(slm_floats, cgh);
+            const auto args_copy = args;
+            cgh.parallel_for(
+                sycl::nd_range<1>(n_workgroups * BLOCK_SIZE, BLOCK_SIZE),
+                [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
+                    PersistentTGKernelImpl<BLOCK_SIZE> kernel(args_copy, slm, item);
+                    kernel.run();
+                });
+        });
+        queue_.wait();
+        const auto end = std::chrono::high_resolution_clock::now();
+        total_elapsed_ms += std::chrono::duration<double, std::milli>(end - start).count();
+
+        // Call host callback after matmul phases
+        if (phase.matmul_idx >= 0 && on_matmul_complete) {
+            on_matmul_complete(phase.matmul_idx);
+        }
+    }
+
+    // Record stats
+    last_stats_.n_operations   = static_cast<int>(host_ops.size());
+    last_stats_.n_layers       = current_plan_->n_layers;
+    last_stats_.total_tiles    = 0;
+    for (const auto & op : host_ops) last_stats_.total_tiles += op.n_tiles;
+    last_stats_.kernel_time_ms = total_elapsed_ms;
+
+    // Cache plan template after first successful execution
+    if (!plan_cache_valid_) {
+        copy_plan_shape(*current_plan_, cached_plan_template_);
+        cached_ops_ = current_plan_->operations;
+        cached_temp_device_allocs_ = current_plan_->temp_device_allocs;
+        cached_temp_device_alloc_handles_ = current_plan_->temp_device_alloc_handles;
+        cached_temp_device_alloc_bytes_ = current_plan_->temp_device_alloc_bytes;
+        current_plan_->temp_device_allocs.clear();
+        current_plan_->temp_device_alloc_handles.clear();
+        current_plan_->temp_device_alloc_bytes = 0;
+        plan_cache_valid_ = true;
+        GGML_SYCL_DEBUG("[PERSISTENT-TG-PHASED] Plan cached: %zu operations\n", cached_ops_.size());
     }
 
     // Free non-cached temp allocs
@@ -6474,14 +6776,16 @@ void UnifiedKernel::launch_persistent_kernel() {
                 dst.merge_dst     = meta.merge_dst;
                 dst.input_staging = meta.input_staging;
                 dst.input_K       = meta.input_K;
-                // For split matmul, adjust N to row_count
-                dst.N = meta.row_count;
+                // Keep dst.N as full N_total for SOA weight addressing.
+                // row_count controls computation bounds in the kernel.
             }
         }
 
         const OperationType op_type = static_cast<OperationType>(dst.type);
 
-        // Calculate tiles for this operation
+        // Calculate tiles for this operation.
+        // For split matmuls, use row_count for tile calculation (not full N).
+        const int effective_N = (dst.row_count > 0) ? dst.row_count : dst.N;
         switch (op_type) {
             case OperationType::RMS_NORM:
                 dst.n_tiles = 1;  // Single cooperative tile -- one work-group processes this
@@ -6504,8 +6808,8 @@ void UnifiedKernel::launch_persistent_kernel() {
             case OperationType::MATMUL_UP:
             case OperationType::MATMUL_DOWN:
             case OperationType::MATMUL_GATE_UP_SILU: {
-                dst.tile_cols = persistent_matmul_tile_cols(op_type, dst.N, dst.K);
-                dst.n_tiles = (dst.N + dst.tile_cols - 1) / dst.tile_cols;
+                dst.tile_cols = persistent_matmul_tile_cols(op_type, effective_N, dst.K);
+                dst.n_tiles = (effective_N + dst.tile_cols - 1) / dst.tile_cols;
                 if (op_type == OperationType::MATMUL_GATE ||
                     op_type == OperationType::MATMUL_UP ||
                     op_type == OperationType::MATMUL_DOWN ||
