@@ -29006,6 +29006,16 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                 }
             };
 
+            // Resolve output pointer: use scratch pool if available, else ggml buffer.
+            // Scratch pool eliminates buffer aliasing in the persistent kernel.
+            auto resolve_output_ptr = [&](int op_idx, const ggml_tensor * node) -> void * {
+                void * scratch = kernel.scratch_output(op_idx);
+                if (scratch) {
+                    return scratch;
+                }
+                return get_tensor_ptr_view_fast(node);
+            };
+
             bool fast_path_ok    = true;
             int  op_idx          = 0;
             int  last_layer_fast = -1;
@@ -29073,7 +29083,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                                 break;
                             }
                             const void * input  = resolve_input_ptr_no_materialize(node->src[0]);
-                            void *       output = get_tensor_ptr_view_fast(node);
+                            void *       output = resolve_output_ptr(op_idx, node);
                             if (!input || !output || !ggml_is_contiguous(node)) {
                                 fast_path_ok = false;
                                 break;
@@ -29134,7 +29144,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                                 (int64_t) node->nb[2],
                                 (int64_t) node->nb[3],
                             };
-                            void * output = get_tensor_ptr_view_fast(node);
+                            void * output = resolve_output_ptr(op_idx, node);
                             if (is_quantized_weight) {
                                 input = resolve_input_ptr_no_materialize(node->src[1]);
                                 if (!input || !output || !ggml_is_contiguous(node)) {
@@ -29183,7 +29193,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                             }
                             const void *  src0       = resolve_input_ptr_no_materialize(node->src[0]);
                             const void *  src1       = resolve_input_ptr_no_materialize(node->src[1]);
-                            void *        mul_out    = get_tensor_ptr_view_fast(node);
+                            void *        mul_out    = resolve_output_ptr(op_idx, node);
                             const int64_t n_elements = ggml_nelements(node);
                             if (!src0 || !src1 || !mul_out || n_elements <= 0 ||
                                 n_elements > std::numeric_limits<int>::max()) {
@@ -29215,7 +29225,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                             }
                             const void *  src0       = resolve_input_ptr_no_materialize(node->src[0]);
                             const void *  src1       = resolve_input_ptr_no_materialize(node->src[1]);
-                            void *        add_out    = get_tensor_ptr_view_fast(node);
+                            void *        add_out    = resolve_output_ptr(op_idx, node);
                             const int64_t n_elements = ggml_nelements(node);
                             if (!src0 || !src1 || !add_out || n_elements <= 0 ||
                                 n_elements > std::numeric_limits<int>::max()) {
@@ -29247,7 +29257,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                             }
                             const void * gate    = resolve_input_ptr_no_materialize(node->src[0]);
                             const void * up      = resolve_input_ptr_no_materialize(node->src[1]);
-                            void *       glu_out = get_tensor_ptr_view_fast(node);
+                            void *       glu_out = resolve_output_ptr(op_idx, node);
                             if (!gate || !up || !glu_out) {
                                 fast_path_ok = false;
                                 break;
@@ -29359,7 +29369,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                             }
 
                             void * input_rope  = const_cast<void *>(resolve_input_ptr_no_materialize(node->src[0]));
-                            void * output_rope = get_tensor_ptr_view_fast(node);
+                            void * output_rope = resolve_output_ptr(op_idx, node);
                             if (!input_rope || !output_rope || !ggml_is_contiguous(node)) {
                                 fast_path_ok = false;
                                 break;
@@ -29407,7 +29417,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                             }
 
                             const void * input  = resolve_input_ptr_no_materialize(src0);
-                            void *       output = get_tensor_ptr_view_fast(node);
+                            void *       output = resolve_output_ptr(op_idx, node);
                             if (!input || !output || !ggml_is_contiguous(node)) {
                                 fast_path_ok = false;
                                 break;
@@ -29514,7 +29524,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                             const void * q_ptr               = resolve_input_ptr_with_nb(Q_fa, layer, q_nb, true);
                             const void * k_ptr               = resolve_input_ptr_with_nb(K_fa, layer, k_nb, true);
                             const void * v_ptr               = resolve_input_ptr_with_nb(V_fa, layer, v_nb, true);
-                            void *       out_ptr             = get_tensor_ptr_view_fast(node);
+                            void *       out_ptr             = resolve_output_ptr(op_idx, node);
                             if (!q_ptr || !k_ptr || !v_ptr || !out_ptr || !ggml_is_contiguous(node)) {
                                 fast_path_ok = false;
                                 break;
@@ -29699,7 +29709,10 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                                 fast_path_ok = false;
                                 break;
                             }
-                            const void * src_ptr = get_tensor_ptr_view_fast(src0);
+                            const void * src_ptr = resolve_input_ptr_no_materialize(src0);
+                            if (!src_ptr) {
+                                src_ptr = get_tensor_ptr_view_fast(src0);
+                            }
                             const void * idx_ptr = get_tensor_ptr_view_fast(src1);
                             void *       dst_ptr = get_tensor_ptr_view_fast(node);
                             if (!dst_ptr && node->src[2]) {
@@ -32898,6 +32911,8 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
             kernel.cancel_persistent();
             goto normal_dispatch;
         }
+
+        kernel.build_scratch_pool();
 
         try {
             kernel.execute_persistent();
