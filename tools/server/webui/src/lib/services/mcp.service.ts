@@ -1,5 +1,8 @@
 import { Client } from '@modelcontextprotocol/sdk/client';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import {
+	StreamableHTTPClientTransport,
+	StreamableHTTPError
+} from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
 import type {
@@ -76,6 +79,18 @@ export class MCPService {
 			level,
 			details
 		};
+	}
+
+	/**
+	 * Detect if an error indicates an expired/invalidated MCP session.
+	 * Per MCP spec 2025-11-25: HTTP 404 means session invalidated, client MUST
+	 * discard its session ID and start a new session with a fresh initialize request.
+	 *
+	 * @param error - The caught error to inspect
+	 * @returns true if the error is a StreamableHTTP 404 (session not found)
+	 */
+	static isSessionExpiredError(error: unknown): boolean {
+		return error instanceof StreamableHTTPError && error.code === 404;
 	}
 
 	/**
@@ -379,6 +394,11 @@ export class MCPService {
 
 			return result.tools ?? [];
 		} catch (error) {
+			// Let session-expired errors propagate for reconnection handling
+			if (this.isSessionExpiredError(error)) {
+				throw error;
+			}
+
 			console.warn(`[MCPService][${connection.serverName}] Failed to list tools:`, error);
 
 			return [];
@@ -398,6 +418,11 @@ export class MCPService {
 
 			return result.prompts ?? [];
 		} catch (error) {
+			// Let session-expired errors propagate for reconnection handling
+			if (this.isSessionExpiredError(error)) {
+				throw error;
+			}
+
 			console.warn(`[MCPService][${connection.serverName}] Failed to list prompts:`, error);
 
 			return [];
@@ -460,6 +485,11 @@ export class MCPService {
 			};
 		} catch (error) {
 			if (isAbortError(error)) {
+				throw error;
+			}
+
+			// Let session-expired errors propagate unwrapped for reconnection handling
+			if (this.isSessionExpiredError(error)) {
 				throw error;
 			}
 
@@ -576,6 +606,10 @@ export class MCPService {
 				nextCursor: result.nextCursor
 			};
 		} catch (error) {
+			if (this.isSessionExpiredError(error)) {
+				throw error;
+			}
+
 			console.warn(`[MCPService][${connection.serverName}] Failed to list resources:`, error);
 
 			return { resources: [] };
@@ -618,6 +652,10 @@ export class MCPService {
 				nextCursor: result.nextCursor
 			};
 		} catch (error) {
+			if (this.isSessionExpiredError(error)) {
+				throw error;
+			}
+
 			console.warn(
 				`[MCPService][${connection.serverName}] Failed to list resource templates:`,
 				error
