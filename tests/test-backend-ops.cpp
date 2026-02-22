@@ -40,6 +40,7 @@
 #include <thread>
 #include <vector>
 #include <unordered_map>
+#include <map>
 
 #ifdef __EMSCRIPTEN__
 #   define N_THREADS 1
@@ -7330,6 +7331,25 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    test_cases.emplace_back(new test_conv_2d( { 16, 16, 8, 1}, { 3, 3, 8, 12},
+            GGML_TYPE_F16, 1, 1, 1, 1, 1, 1, false));
+    test_cases.emplace_back(new test_conv_2d( { 16, 16, 16, 1}, { 3, 3, 16, 6},
+            GGML_TYPE_F16, 1, 1, 1, 1, 1, 1, false));
+    test_cases.emplace_back(new test_conv_2d( { 16, 16, 24, 1}, { 3, 3, 24, 6},
+            GGML_TYPE_F16, 1, 1, 1, 1, 1, 1, false));
+    test_cases.emplace_back(new test_conv_2d( { 16, 16, 8, 3},  { 3, 3, 8, 6},
+            GGML_TYPE_F16, 1, 1, 1, 1, 1, 1, false));
+    test_cases.emplace_back(new test_conv_2d( { 24, 24, 32, 1 }, { 3, 3, 32, 8},
+            GGML_TYPE_F16, 1, 1, 1, 1, 1, 1, false));
+    test_cases.emplace_back(new test_conv_2d( { 24, 24, 96, 1 }, { 3, 3, 96, 8},
+            GGML_TYPE_F16, 1, 1, 1, 1, 1, 1, false));
+    test_cases.emplace_back(new test_conv_2d( { 24, 24, 128, 1 }, { 3, 3, 128, 8},
+            GGML_TYPE_F16, 1, 1, 1, 1, 1, 1, false));
+    test_cases.emplace_back(new test_conv_2d( { 24, 24, 128, 3 }, { 3, 3, 128, 8},
+            GGML_TYPE_F16, 1, 1, 1, 1, 1, 1, false));
+
+
+
     // sycl backend will limit task global_range < MAX_INT
     // test cases for 2D im2col with large input W and H (occurs in stable-diffusion)
     // however these cases need to alloc more memory which may fail in some devices (Intel Arc770, etc.)
@@ -8444,6 +8464,71 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
                 { act_case[kwh_idx], act_case[kwh_idx], act_case[Cin_idx], act_case[Cout_idx] },
                 kernel_type, 1, 1, 0, 0, 1, 1, false));
         }
+    }
+
+    // Stable-diffusion layers
+    std::map<std::string, uint32_t> idx_sd{
+        { "iw",   0 },
+        { "ih",   1 },
+        { "kw",   2 },
+        { "kh",   3 },
+        { "Cout", 4 },
+        { "Cin",  5 },
+        { "B",    6 },
+    };
+
+    // Input image size
+    uint32_t w = 768;
+    uint32_t h = 1024;
+
+    // Number of filters (base)
+    uint32_t Cout_b = 128;
+    uint32_t Cin_b  = 128;
+
+    std::vector<std::array<uint32_t, 7>> cases_sd = {
+        { w / 8, h / 8, 3, 3, Cout_b * 4, Cin_b * 4, 1 }, // x10 (called 10 times)
+        { w / 4, h / 4, 3, 3, Cout_b * 4, Cin_b * 4, 1 }, // x7
+        { w / 2, h / 2, 3, 3, Cout_b * 2, Cin_b * 2, 1 }, // x5
+        { w,     h,     3, 3, Cout_b,     Cin_b,     1 }, // x5
+        { w / 8, h / 8, 1, 1, Cout_b * 4, Cin_b * 4, 1 }, // x4
+        { w / 8, h / 8, 1, 1, 4,          4,         1 },
+        { w / 8, h / 8, 3, 3, Cout_b * 4, 4,         1 },
+
+        { w / 2, h / 2, 3, 3, Cout_b * 4, Cin_b * 4, 1 },
+        { w / 2, h / 2, 3, 3, Cout_b * 2, Cin_b * 4, 1 },
+        { w / 2, h / 2, 1, 1, Cout_b * 2, Cin_b * 4, 1 },
+
+        { w,     h,     3, 3, Cout_b,     Cin_b * 2, 1 },
+        { w,     h,     1, 1, Cout_b,     Cin_b * 2, 1 },
+        { w,     h,     3, 3, Cout_b * 2, Cin_b * 2, 1 },
+
+        { w,     h,     3, 3, 3,          Cin_b,     1 },
+    };
+
+    for (auto act_case : cases_sd) {
+        GGML_ASSERT(act_case[idx_sd["kw"]] == 3 || act_case[idx_sd["kw"]] == 1);
+        GGML_ASSERT(act_case[idx_sd["kh"]] == 3 || act_case[idx_sd["kh"]] == 1);
+
+        uint32_t p0 = act_case[idx_sd["kw"]] == 3 ? 1 : 0;
+        uint32_t p1 = act_case[idx_sd["kh"]] == 3 ? 1 : 0;
+
+        test_cases.emplace_back(new test_conv_2d(
+            { act_case[idx_sd["iw"]], act_case[idx_sd["ih"]], act_case[idx_sd["Cin"]], act_case[idx_sd["B"]] },
+            { act_case[idx_sd["kw"]], act_case[idx_sd["kh"]], act_case[idx_sd["Cin"]], act_case[idx_sd["Cout"]] },
+            GGML_TYPE_F16, 1, 1, p0, p1, 1, 1, false));
+    }
+
+    for (auto act_case : cases_sd) {
+        GGML_ASSERT(act_case[idx_sd["kw"]] == 3 || act_case[idx_sd["kw"]] == 1);
+        GGML_ASSERT(act_case[idx_sd["kh"]] == 3 || act_case[idx_sd["kh"]] == 1);
+
+        uint32_t p0 = act_case[idx_sd["kw"]] == 3 ? 1 : 0;
+        uint32_t p1 = act_case[idx_sd["kh"]] == 3 ? 1 : 0;
+
+        test_cases.emplace_back(new test_conv_2d(
+            { act_case[idx_sd["iw"]], act_case[idx_sd["ih"]], act_case[idx_sd["Cin"]], act_case[idx_sd["B"]] },
+            { act_case[idx_sd["kw"]], act_case[idx_sd["kh"]], act_case[idx_sd["Cin"]], act_case[idx_sd["Cout"]] },
+            GGML_TYPE_F32, 1, 1, p0, p1, 1, 1, false));
     }
 
     test_cases.emplace_back(new test_bin_bcast(ggml_add, GGML_TYPE_F32, {4096, 1, 1, 1}, {1,   1, 1, 1}));
