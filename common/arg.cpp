@@ -1578,7 +1578,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sparam());
     add_opt(common_arg(
-        {"--temp"}, "N",
+        {"--temp", "--temperature"}, "N",
         string_format("temperature (default: %.2f)", (double)params.sampling.temp),
         [](common_params & params, const std::string & value) {
             params.sampling.temp = std::stof(value);
@@ -1611,7 +1611,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sparam());
     add_opt(common_arg(
-        {"--top-nsigma"}, "N",
+        {"--top-n-sigma", "--top-nsigma"}, "N",
         string_format("top-n-sigma sampling (default: %.2f, -1.0 = disabled)", params.sampling.top_n_sigma),
         [](common_params & params, const std::string & value) {
             params.sampling.top_n_sigma = std::stof(value);
@@ -1634,7 +1634,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sparam());
     add_opt(common_arg(
-        {"--typical"}, "N",
+        {"--typical-p", "--typical"}, "N",
         string_format("locally typical sampling, parameter p (default: %.2f, 1.0 = disabled)", (double)params.sampling.typ_p),
         [](common_params & params, const std::string & value) {
             params.sampling.typ_p = std::stof(value);
