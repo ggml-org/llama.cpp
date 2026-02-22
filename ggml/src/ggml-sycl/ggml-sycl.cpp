@@ -30064,7 +30064,7 @@ full_build:
                             GGML_LOG_WARN("[PERSISTENT-TG] RMS debug buffer alloc failed (dim=%d)\n", rms_dim);
                         }
                     }
-                    kernel.add_rms_norm(layer, nullptr, input, output, eps, rms_dim);
+                    kernel.add_rms_norm(layer, nullptr, input, output, eps, rms_dim, ggml_nbytes(node));
                     log_op("RMS_NORM", layer, node, output);
                     ops_added++;
                     record_trace(node->op, node, output, ops_added - 1);
@@ -30317,7 +30317,8 @@ full_build:
 
                     kernel.add_matmul(layer, weight, input, output, mtype, M, N, K, weight_type, (int) weight_layout,
                                       is_f16_weight ? weight_nb : nullptr, is_f16_weight ? input_nb : nullptr,
-                                      is_f16_weight ? output_nb : nullptr, src0_ne2, src0_ne3, src1_ne2, src1_ne3);
+                                      is_f16_weight ? output_nb : nullptr, src0_ne2, src0_ne3, src1_ne2, src1_ne3,
+                                      ggml_nbytes(node));
                     log_op("MUL_MAT", layer, node, output);
                     ops_added++;
                     record_trace(node->op, node, output, ops_added - 1);
@@ -30397,7 +30398,7 @@ full_build:
                             }
                         }
                     }
-                    kernel.add_mul(layer, src0, src1, mul_out, (int) n_elements);
+                    kernel.add_mul(layer, src0, src1, mul_out, (int) n_elements, ggml_nbytes(node));
                     log_op("MUL", layer, node, mul_out);
                     ops_added++;
                     record_trace(node->op, node, mul_out, ops_added - 1);
@@ -30465,7 +30466,7 @@ full_build:
                             }
                         }
                     }
-                    kernel.add_add(layer, src0, src1, add_out, (int) n_elements);
+                    kernel.add_add(layer, src0, src1, add_out, (int) n_elements, ggml_nbytes(node));
                     log_op("ADD", layer, node, add_out);
                     ops_added++;
                     record_trace(node->op, node, add_out, ops_added - 1);
@@ -30519,7 +30520,7 @@ full_build:
                         return false;
                     }
                     void * glu_out = get_tensor_ptr_view_fast(node);
-                    kernel.add_silu_mul(layer, gate, up, glu_out);
+                    kernel.add_silu_mul(layer, gate, up, glu_out, ggml_nbytes(node));
                     log_op("GLU", layer, node, glu_out);
                     ops_added++;
                     record_trace(node->op, node, glu_out, ops_added - 1);
@@ -30680,7 +30681,7 @@ full_build:
                     desc.head_dim       = head_dim_rope;
                     desc.position       = position;
                     desc.is_neox        = is_neox;
-                    kernel.add_rope(layer, desc);
+                    kernel.add_rope(layer, desc, ggml_nbytes(node));
                     log_op("ROPE", layer, node, output_rope);
                     ops_added++;
                     record_trace(node->op, node, output_rope, ops_added - 1);
@@ -30781,7 +30782,8 @@ full_build:
 
                     kernel.add_softmax(layer, input, mask_ptr, nullptr, output, (int) n_rows, (int) n_cols,
                                        (int) src0->ne[1], (int) src0->ne[2], (int) src0->ne[3], scale, max_bias,
-                                       mask_type, mask_nb0, mask_nb1, mask_nb2, mask_nb3, mask_ne2, mask_ne3);
+                                       mask_type, mask_nb0, mask_nb1, mask_nb2, mask_nb3, mask_ne2, mask_ne3,
+                                       ggml_nbytes(node));
                     log_op("SOFT_MAX", layer, node, output);
                     ops_added++;
                     record_trace(node->op, node, output, ops_added - 1);
@@ -31170,7 +31172,7 @@ full_build:
                     attn_desc.mask_nb3            = mask_nb3;
                     attn_desc.mask_ne2            = mask_ne2;
                     attn_desc.mask_ne3            = mask_ne3;
-                    kernel.add_attention(layer, attn_desc);
+                    kernel.add_attention(layer, attn_desc, ggml_nbytes(node));
                     log_op("FLASH_ATTN_EXT", layer, node, out_ptr);
                     ops_added++;
                     record_trace(node->op, node, out_ptr, ops_added - 1);

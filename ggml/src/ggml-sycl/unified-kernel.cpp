@@ -5601,7 +5601,7 @@ void UnifiedKernel::begin_persistent(int n_layers, int batch_size, int hidden_di
 
 void UnifiedKernel::add_rms_norm(int layer, const void * weights,
                                  const void * input, void * output,
-                                 float eps, int hidden_dim) {
+                                 float eps, int hidden_dim, int64_t output_bytes) {
     if (!current_plan_) {
         GGML_LOG_ERROR("UnifiedKernel: add_rms_norm called without begin_persistent\n");
         return;
@@ -5615,6 +5615,7 @@ void UnifiedKernel::add_rms_norm(int layer, const void * weights,
     op.output = output;
     op.hidden_dim = hidden_dim > 0 ? hidden_dim : current_plan_->hidden_dim;
     op.eps = eps;
+    op.output_bytes = output_bytes;
 
     current_plan_->operations.push_back(op);
 }
@@ -5626,7 +5627,8 @@ void UnifiedKernel::add_matmul(int layer, const void * weights, const void * inp
                                const int64_t * input_nb,
                                const int64_t * output_nb,
                                int weight_ne2, int weight_ne3,
-                               int input_ne2, int input_ne3) {
+                               int input_ne2, int input_ne3,
+                               int64_t output_bytes) {
     if (!current_plan_) {
         GGML_LOG_ERROR("UnifiedKernel: add_matmul called without begin_persistent\n");
         return;
@@ -5675,13 +5677,14 @@ void UnifiedKernel::add_matmul(int layer, const void * weights, const void * inp
     // Reuse mask dims to carry batched matmul extent metadata for persistent tiles.
     op.mask_ne2 = input_ne2;
     op.mask_ne3 = input_ne3;
+    op.output_bytes = output_bytes;
     (void) weight_ne2;
     (void) weight_ne3;
 
     current_plan_->operations.push_back(op);
 }
 
-void UnifiedKernel::add_attention(int layer, const AttentionDescriptor & desc) {
+void UnifiedKernel::add_attention(int layer, const AttentionDescriptor & desc, int64_t output_bytes) {
     if (!current_plan_) {
         GGML_LOG_ERROR("UnifiedKernel: add_attention called without begin_persistent\n");
         return;
@@ -5721,11 +5724,13 @@ void UnifiedKernel::add_attention(int layer, const AttentionDescriptor & desc) {
     op.mask_nb3  = desc.mask_nb3;
     op.mask_ne2  = desc.mask_ne2;
     op.mask_ne3  = desc.mask_ne3;
+    op.output_bytes = output_bytes;
 
     current_plan_->operations.push_back(op);
 }
 
-void UnifiedKernel::add_silu_mul(int layer, const void * gate, const void * up, void * output) {
+void UnifiedKernel::add_silu_mul(int layer, const void * gate, const void * up, void * output,
+                                 int64_t output_bytes) {
     if (!current_plan_) {
         GGML_LOG_ERROR("UnifiedKernel: add_silu_mul called without begin_persistent\n");
         return;
@@ -5738,39 +5743,44 @@ void UnifiedKernel::add_silu_mul(int layer, const void * gate, const void * up, 
     op.aux = const_cast<void *>(up);
     op.output = output;
     op.intermediate_dim = current_plan_->intermediate_dim;
+    op.output_bytes = output_bytes;
 
     current_plan_->operations.push_back(op);
 }
 
-void UnifiedKernel::add_add(int layer, const void * src0, const void * src1, void * output, int n_elements) {
+void UnifiedKernel::add_add(int layer, const void * src0, const void * src1, void * output, int n_elements,
+                            int64_t output_bytes) {
     if (!current_plan_) {
         GGML_LOG_ERROR("UnifiedKernel: add_add called without begin_persistent\n");
         return;
     }
 
     OperationDescriptor op = {};
-    op.type   = OperationType::ADD;
-    op.layer  = layer;
-    op.input  = src0;
-    op.aux    = const_cast<void *>(src1);
-    op.output = output;
-    op.M      = n_elements;
+    op.type         = OperationType::ADD;
+    op.layer        = layer;
+    op.input        = src0;
+    op.aux          = const_cast<void *>(src1);
+    op.output       = output;
+    op.M            = n_elements;
+    op.output_bytes = output_bytes;
     current_plan_->operations.push_back(op);
 }
 
-void UnifiedKernel::add_mul(int layer, const void * src0, const void * src1, void * output, int n_elements) {
+void UnifiedKernel::add_mul(int layer, const void * src0, const void * src1, void * output, int n_elements,
+                            int64_t output_bytes) {
     if (!current_plan_) {
         GGML_LOG_ERROR("UnifiedKernel: add_mul called without begin_persistent\n");
         return;
     }
 
     OperationDescriptor op = {};
-    op.type   = OperationType::MUL;
-    op.layer  = layer;
-    op.input  = src0;
-    op.aux    = const_cast<void *>(src1);
-    op.output = output;
-    op.M      = n_elements;
+    op.type         = OperationType::MUL;
+    op.layer        = layer;
+    op.input        = src0;
+    op.aux          = const_cast<void *>(src1);
+    op.output       = output;
+    op.M            = n_elements;
+    op.output_bytes = output_bytes;
     current_plan_->operations.push_back(op);
 }
 
@@ -5852,34 +5862,36 @@ void UnifiedKernel::add_softmax(int layer, const void * input, const void * mask
                                 const void * sinks, void * output, int n_rows, int n_cols,
                                 int ne01, int ne02, int ne03, float scale, float max_bias,
                                 int mask_type, int64_t mask_nb0, int64_t mask_nb1,
-                                int64_t mask_nb2, int64_t mask_nb3, int mask_ne2, int mask_ne3) {
+                                int64_t mask_nb2, int64_t mask_nb3, int mask_ne2, int mask_ne3,
+                                int64_t output_bytes) {
     if (!current_plan_) {
         GGML_LOG_ERROR("UnifiedKernel: add_softmax called without begin_persistent\n");
         return;
     }
 
     OperationDescriptor op = {};
-    op.type      = OperationType::SOFTMAX;
-    op.layer     = layer;
-    op.input     = input;
-    op.mask      = mask;
-    op.aux       = const_cast<void *>(sinks);
-    op.output    = output;
-    op.M         = n_rows;
-    op.N         = n_cols;
-    op.K         = ne01;
-    op.q_nb0     = ne01;
-    op.q_nb1     = ne02;
-    op.q_nb2     = ne03;
-    op.scale     = scale;
-    op.eps       = max_bias;
-    op.mask_type = mask_type;
-    op.mask_nb0  = mask_nb0;
-    op.mask_nb1  = mask_nb1;
-    op.mask_nb2  = mask_nb2;
-    op.mask_nb3  = mask_nb3;
-    op.mask_ne2  = mask_ne2;
-    op.mask_ne3  = mask_ne3;
+    op.type         = OperationType::SOFTMAX;
+    op.layer        = layer;
+    op.input        = input;
+    op.mask         = mask;
+    op.aux          = const_cast<void *>(sinks);
+    op.output       = output;
+    op.M            = n_rows;
+    op.N            = n_cols;
+    op.K            = ne01;
+    op.q_nb0        = ne01;
+    op.q_nb1        = ne02;
+    op.q_nb2        = ne03;
+    op.scale        = scale;
+    op.eps          = max_bias;
+    op.mask_type    = mask_type;
+    op.mask_nb0     = mask_nb0;
+    op.mask_nb1     = mask_nb1;
+    op.mask_nb2     = mask_nb2;
+    op.mask_nb3     = mask_nb3;
+    op.mask_ne2     = mask_ne2;
+    op.mask_ne3     = mask_ne3;
+    op.output_bytes = output_bytes;
     current_plan_->operations.push_back(op);
 }
 
@@ -5921,7 +5933,7 @@ void UnifiedKernel::set_persistent_debug_hash(uint64_t * debug_ptr, int debug_by
     current_plan_->debug_hash_bytes = debug_bytes;
 }
 
-void UnifiedKernel::add_rope(int layer, const RopeDescriptor & desc) {
+void UnifiedKernel::add_rope(int layer, const RopeDescriptor & desc, int64_t output_bytes) {
     if (!current_plan_) {
         GGML_LOG_ERROR("UnifiedKernel: add_rope called without begin_persistent\n");
         return;
@@ -5936,6 +5948,7 @@ void UnifiedKernel::add_rope(int layer, const RopeDescriptor & desc) {
     op.M = desc.position;
     // Encode RoPE mode in scale: 1.0 = NEOX (split pairs), 0.0 = NORMAL (adjacent pairs)
     op.scale = desc.is_neox ? 1.0f : 0.0f;
+    op.output_bytes = output_bytes;
 
     if (desc.k) {
         // Dual-tensor mode: rotate both Q and K in-place

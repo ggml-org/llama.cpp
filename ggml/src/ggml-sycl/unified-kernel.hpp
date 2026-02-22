@@ -2602,7 +2602,7 @@ public:
                           int intermediate_dim, int n_heads, int n_kv_heads,
                           int head_dim, int quant_type);
     void add_rms_norm(int layer, const void * weights, const void * input, void * output,
-                      float eps, int hidden_dim);
+                      float eps, int hidden_dim, int64_t output_bytes = 0);
     void add_matmul(int layer, const void * weights, const void * input,
                     void * output, MatmulType type, int M, int N, int K,
                     int quant_type, int weight_layout,
@@ -2610,11 +2610,12 @@ public:
                     const int64_t * input_nb = nullptr,
                     const int64_t * output_nb = nullptr,
                     int weight_ne2 = 1, int weight_ne3 = 1,
-                    int input_ne2 = 1, int input_ne3 = 1);
-    void add_attention(int layer, const AttentionDescriptor & desc);
-    void add_silu_mul(int layer, const void * gate, const void * up, void * output);
-    void add_add(int layer, const void * src0, const void * src1, void * output, int n_elements);
-    void add_mul(int layer, const void * src0, const void * src1, void * output, int n_elements);
+                    int input_ne2 = 1, int input_ne3 = 1,
+                    int64_t output_bytes = 0);
+    void add_attention(int layer, const AttentionDescriptor & desc, int64_t output_bytes = 0);
+    void add_silu_mul(int layer, const void * gate, const void * up, void * output, int64_t output_bytes = 0);
+    void add_add(int layer, const void * src0, const void * src1, void * output, int n_elements, int64_t output_bytes = 0);
+    void add_mul(int layer, const void * src0, const void * src1, void * output, int n_elements, int64_t output_bytes = 0);
     void add_get_rows(int layer, const void * src0, const void * indices, void * output,
                       int n_elements, int64_t ne00, int64_t ne10, int64_t ne11, int64_t ne12,
                       int64_t nb01, int64_t nb02, int64_t nb03,
@@ -2630,8 +2631,9 @@ public:
                      const void * sinks, void * output, int n_rows, int n_cols,
                      int ne01, int ne02, int ne03, float scale, float max_bias,
                      int mask_type, int64_t mask_nb0, int64_t mask_nb1,
-                     int64_t mask_nb2, int64_t mask_nb3, int mask_ne2, int mask_ne3);
-    void add_rope(int layer, const RopeDescriptor & desc);
+                     int64_t mask_nb2, int64_t mask_nb3, int mask_ne2, int mask_ne3,
+                     int64_t output_bytes = 0);
+    void add_rope(int layer, const RopeDescriptor & desc, int64_t output_bytes = 0);
     void set_persistent_debug_attn(float * debug_ptr, int layer, int debug_floats);
     void set_persistent_debug_rms(float * debug_ptr, int layer, int hidden_dim, int * flag);
     void set_persistent_debug_matmul(float * debug_ptr, int layer, MatmulType type, int out_dim, int * flag);
