@@ -168,6 +168,8 @@ class GGUFReader:
         tensor_count, kv_count = temp_counts
         offs = self._build_fields(offs, kv_count)
 
+        # Build Tensor Info Fields
+        offs, tensors_fields = self._build_tensor_info(offs, tensor_count)
         new_align = self.fields.get('general.alignment')
         if new_align is not None:
             if new_align.types != [GGUFValueType.UINT32]:
