@@ -20634,12 +20634,14 @@ static bool ggml_sycl_mul_mat_tensor_split(
             }
             if (!s_second_out_dev) return false;
 
-            // H2D: host → secondary device f32 buffer (depends on D2H completion)
-            stream_second->submit([&](sycl::handler & h) {
-                h.depends_on(e_src1_host);
-                h.memcpy(g_split_secondary_gpu.f32_dev,
-                         s_src1_ring[ring_slot], src1_f32_bytes);
-            });
+            // H2D: host → secondary device f32 buffer.
+            // Wait explicitly instead of depends_on: the primary compute queue
+            // and secondary queue use different SYCL contexts (dpct vs shared),
+            // so cross-context event deps in depends_on cause SIGSEGV in the
+            // SYCL runtime scheduler's cleanupCommand.
+            e_src1_host.wait();
+            stream_second->memcpy(g_split_secondary_gpu.f32_dev,
+                                  s_src1_ring[ring_slot], src1_f32_bytes);
 
             // Q8 quantize on secondary GPU (in-order queue: waits for H2D implicitly)
             quantize_row_q8_1_sycl<quantize_and_reorder_q8_1_soa>(
@@ -20713,27 +20715,26 @@ static bool ggml_sycl_mul_mat_tensor_split(
             }
         }
 
-        // --- Merge outputs to primary dst via OOQ (doesn't stall primary compute) ---
-        // The merge queue is out-of-order on the primary GPU.  Each merge memcpy
-        // uses depends_on for its data dependency and runs as soon as data is ready
-        // — without blocking the primary in-order compute queue for the next MUL_MAT.
-        // Merge events are drained before any non-tensor-split consumer op.
         // --- Merge outputs on the primary compute queue ---
-        // Merges MUST run on the same in-order queue that subsequent consumer ops
-        // use.  A separate OOQ merge queue fails: cross-device depends_on
-        // (e_second_out is from the secondary GPU queue) doesn't enforce data
-        // visibility on Level Zero OOQs.  In-order compute queue handles
-        // cross-device deps correctly.
+        // Merges run on the primary in-order compute queue so consumer ops
+        // (ADD, NORM, etc.) see the merged data without explicit drain.
+        // Cross-device event waits use explicit event.wait() on the host
+        // instead of handler::depends_on(), because the primary compute queue
+        // (dpct context) and secondary queue (shared context) use different
+        // SYCL contexts — cross-context depends_on causes SIGSEGV.
         if (N_second > 0) {
-            // Merge secondary GPU output.  depends_on(e_second_out) ensures
-            // the secondary D2H completes before the memcpy starts.  In-order
-            // semantics ensure primary MMVQ also completes first.
-            g_pending_merges.push_back(stream->submit([&](sycl::handler & h) {
-                h.depends_on(e_second_out);
-                h.memcpy(dst_dd + N_primary,
-                         s_second_out_ring[ring_slot],
-                         N_second * sizeof(float));
-            }));
+            // Merge secondary GPU output.  Wait for secondary D2H explicitly
+            // instead of depends_on: the primary compute queue (dpct context)
+            // and secondary queue (shared context) use different SYCL contexts,
+            // so cross-context event deps in depends_on cause SIGSEGV in the
+            // SYCL runtime scheduler's cleanupCommand.  The explicit wait
+            // ensures data visibility; the in-order primary queue ensures
+            // primary MMVQ also completes before the merge memcpy.
+            e_second_out.wait();
+            g_pending_merges.push_back(stream->memcpy(
+                dst_dd + N_primary,
+                s_second_out_ring[ring_slot],
+                N_second * sizeof(float)));
         }
         if (N_cpu > 0) {
             // Wait for background vec_dot, then merge on compute queue.
