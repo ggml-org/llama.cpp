@@ -153,6 +153,17 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_TQ2_0         = 37, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_MXFP4_MOE     = 38, // except 1d tensors
 
+        // IDs must match ik_llama.cpp for GGUF interoperability
+        // IDs 135-137 reserved
+        LLAMA_FTYPE_MOSTLY_IQ2_K         = 138, // except 1d tensors, ~2.375 bpw
+        LLAMA_FTYPE_MOSTLY_IQ3_K         = 139, // except 1d tensors, ~3.44 bpw
+        LLAMA_FTYPE_MOSTLY_IQ4_K         = 140, // except 1d tensors, 4.5 bpw
+        LLAMA_FTYPE_MOSTLY_IQ5_K         = 141, // except 1d tensors, 5.5 bpw
+        LLAMA_FTYPE_MOSTLY_IQ6_K         = 142, // except 1d tensors, 6.625 bpw
+        // IDs 143-156 reserved
+
+        // refer to ik_llama.cpp for IDs 200+ (some are reserved)
+
         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
     };
 

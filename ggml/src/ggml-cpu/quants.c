@@ -1,3 +1,7 @@
+// =========================== IQ*_K quantization types (Iwan Kawrakow)
+// Ported from ik_llama.cpp - https://github.com/ikawrakow/ik_llama.cpp
+// MIT License - Copyright (C) 2024 Iwan Kawrakow
+
 #define GGML_COMMON_IMPL_C
 #include "ggml-common.h"
 
@@ -1190,4 +1194,256 @@ void quantize_row_iq4_nl(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, 
 void quantize_row_iq4_xs(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
     assert(k % QK_K == 0);
     quantize_iq4_xs(x, y, 1, k, NULL);
+}
+
+void ggml_vec_dot_iq2_k_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(bs);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(nrc);
+
+    const block_iq2_k * GGML_RESTRICT x = (const block_iq2_k *)vx;
+    const block_q8_K  * GGML_RESTRICT y = (const block_q8_K *)vy;
+
+    const int nb = n / QK_K;
+
+    float sumf = 0;
+    for (int ibl = 0; ibl < nb; ++ibl) {
+        const float d = GGML_CPU_FP16_TO_FP32(x[ibl].d) * y[ibl].d;
+        const uint8_t * qs = x[ibl].qs;
+        const int8_t  * qy = y[ibl].qs;
+        uint16_t extra = x[ibl].extra;
+
+        float sumi = 0;
+        int shift = 0;
+        for (int ib32 = 0; ib32 < QK_K/32; ++ib32) {
+            // Two 16-element sub-blocks per 32-element block
+            const int ls1 = (x[ibl].scales[ib32] & 0xf) - 8;
+            const int ls2 = (x[ibl].scales[ib32] >>  4) - 8;
+            const int8_t * values1 = extra & 1 ? iq2nl_values + 4 : iq2nl_values;
+            const int8_t * values2 = extra & 2 ? iq2nl_values + 4 : iq2nl_values;
+            extra >>= 2;
+
+            int suml1 = 0, suml2 = 0;
+            for (int j = 0; j < 16; ++j) {
+                suml1 += qy[j+ 0] * values1[(qs[j+ 0] >> shift) & 3];
+                suml2 += qy[j+16] * values2[(qs[j+16] >> shift) & 3];
+            }
+            sumi += ls1 * suml1 + ls2 * suml2;
+            qy += 32;
+            shift += 2;
+            if (shift == 8) { qs += 32; shift = 0; }
+        }
+        sumf += d * sumi;
+    }
+    *s = sumf;
+}
+
+void ggml_vec_dot_iq3_k_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(bs);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(nrc);
+
+    const block_iq3_k * GGML_RESTRICT x = (const block_iq3_k *)vx;
+    const block_q8_K  * GGML_RESTRICT y = (const block_q8_K *)vy;
+
+    const int nb = n / QK_K;
+
+    float sumf = 0;
+    for (int ibl = 0; ibl < nb; ++ibl) {
+        const float d = GGML_CPU_FP16_TO_FP32(x[ibl].d) * y[ibl].d;
+        const uint8_t * qs = x[ibl].qs;
+        const uint8_t * qh = x[ibl].qh;
+        const int8_t  * qy = y[ibl].qs;
+        uint16_t sh = x[ibl].scales_h;
+        uint16_t extra = x[ibl].extra;
+
+        float sumi = 0;
+        for (int ib32 = 0; ib32 < QK_K/32; ++ib32) {
+            float dl1 = (2*(x[ibl].scales_l[ib32] & 0xf) + 1) * ((sh & 1) ? -1 : 1);
+            float dl2 = (2*(x[ibl].scales_l[ib32] >>  4) + 1) * ((sh & 2) ? -1 : 1);
+            sh >>= 2;
+            const int8_t * values1 = extra & 1 ? iq3nl_values + 8 : iq3nl_values;
+            const int8_t * values2 = extra & 2 ? iq3nl_values + 8 : iq3nl_values;
+            extra >>= 2;
+            int shift_l = 2*(ib32%4);
+            int shift_h = ib32%8;
+            int suml1 = 0, suml2 = 0;
+            for (int j = 0; j < 16; ++j) {
+                suml1 += qy[j+ 0] * values1[((qs[j+ 0] >> shift_l) & 3) | (((qh[j+ 0] >> shift_h) & 1) << 2)];
+                suml2 += qy[j+16] * values2[((qs[j+16] >> shift_l) & 3) | (((qh[j+16] >> shift_h) & 1) << 2)];
+            }
+            sumi += dl1*suml1 + dl2*suml2;
+            qy += 32;
+            if (shift_l == 6) qs += 32;
+        }
+        sumf += d * sumi;
+    }
+    *s = sumf;
+}
+
+void ggml_vec_dot_iq4_k_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(bs);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(nrc);
+
+    const block_iq4_k * GGML_RESTRICT x = (const block_iq4_k *)vx;
+    const block_q8_K  * GGML_RESTRICT y = (const block_q8_K *)vy;
+
+    const int nb = n / QK_K;
+
+    float sumf = 0;
+    for (int ibl = 0; ibl < nb; ++ibl) {
+        const float d = GGML_CPU_FP16_TO_FP32(x[ibl].d) * y[ibl].d;
+        const uint8_t * qs = x[ibl].qs;
+        const int8_t  * qy = y[ibl].qs;
+        uint16_t extra = x[ibl].extra;
+
+        float sumi = 0;
+        for (int ib = 0; ib < QK_K/32; ++ib) {
+            const uint8_t sh = x[ibl].scales_h[ib/2] >> 4*(ib%2);
+            const float dl1 = ((x[ibl].scales_l[ib] & 0xf) | ((sh << 4) & 0x30)) - 32;
+            const float dl2 = ((x[ibl].scales_l[ib] >>  4) | ((sh << 2) & 0x30)) - 32;
+            const int8_t * values1 = extra & 1 ? iq4k_values + 16 : iq4k_values;
+            const int8_t * values2 = extra & 2 ? iq4k_values + 16 : iq4k_values;
+            extra >>= 2;
+            int suml1 = 0, suml2 = 0;
+            for (int j = 0; j < 16; ++j) {
+                suml1 += qy[j+ 0] * values1[qs[j] & 0xf];
+                suml2 += qy[j+16] * values2[qs[j] >>  4];
+            }
+            sumi += dl1*suml1 + dl2*suml2;
+            qy += 32;
+            qs += 16;
+        }
+        sumf += d * sumi;
+    }
+    *s = sumf;
+}
+
+void ggml_vec_dot_iq5_k_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(bs);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(nrc);
+
+    const block_iq5_k * GGML_RESTRICT x = (const block_iq5_k *)vx;
+    const block_q8_K  * GGML_RESTRICT y = (const block_q8_K *)vy;
+
+    const int nb = n / QK_K;
+
+    float sumf = 0;
+    for (int ibl = 0; ibl < nb; ++ibl) {
+        const float d = GGML_CPU_FP16_TO_FP32(x[ibl].d) * y[ibl].d;
+        const uint8_t * qs = x[ibl].qs;
+        const uint8_t * qh = x[ibl].qh;
+        const int8_t  * qy = y[ibl].qs;
+        uint16_t extra = x[ibl].extra;
+
+        float sumi = 0;
+        int shift = 0;
+        for (int ib64 = 0; ib64 < QK_K/64; ++ib64) {
+            float dl1 = ((x[ibl].scales_l[2*ib64+0] & 0xf) | ((x[ibl].scales_h[ib64] << 4) & 0x30)) - 32;
+            float dl2 = ((x[ibl].scales_l[2*ib64+0] >>  4) | ((x[ibl].scales_h[ib64] << 2) & 0x30)) - 32;
+            float dl3 = ((x[ibl].scales_l[2*ib64+1] & 0xf) | ((x[ibl].scales_h[ib64] >> 0) & 0x30)) - 32;
+            float dl4 = ((x[ibl].scales_l[2*ib64+1] >>  4) | ((x[ibl].scales_h[ib64] >> 2) & 0x30)) - 32;
+            const int8_t * values1 = iq5nl_values + ((extra & 1) << 5);
+            const int8_t * values2 = iq5nl_values + ((extra & 2) << 4);
+            const int8_t * values3 = iq5nl_values + ((extra & 4) << 3);
+            const int8_t * values4 = iq5nl_values + ((extra & 8) << 2);
+            int suml1 = 0, suml2 = 0, suml3 = 0, suml4 = 0;
+            for (int j = 0; j < 16; ++j) {
+                suml1 += qy[j+ 0] * values1[(qs[j+ 0] & 0xf) | (((qh[j+ 0] >> shift) & 1) << 4)];
+                suml2 += qy[j+16] * values2[(qs[j+16] & 0xf) | (((qh[j+16] >> shift) & 1) << 4)];
+                suml3 += qy[j+32] * values3[(qs[j+ 0] >>  4) | (((qh[j+ 0] >> shift) & 2) << 3)];
+                suml4 += qy[j+48] * values4[(qs[j+16] >>  4) | (((qh[j+16] >> shift) & 2) << 3)];
+            }
+            sumi += dl1*suml1 + dl2*suml2 + dl3*suml3 + dl4*suml4;
+            qy += 64;
+            qs += 32;
+            extra >>= 4;
+            shift += 2;
+            if (shift == 8) { qh += 32; shift = 0; }
+        }
+        sumf += d * sumi;
+    }
+    *s = sumf;
+}
+
+// IQ6_K uses polynomial dequantization
+#define A_IQ6K -127.f
+#define B_IQ6K 6.2568f
+#define C_IQ6K 0.11218f
+#define D_IQ6K 0.0011972f
+#define S_IQ6K 1.f
+
+void ggml_vec_dot_iq6_k_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(bs);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(nrc);
+
+    const block_iq6_k * GGML_RESTRICT x = (const block_iq6_k *)vx;
+    const block_q8_K  * GGML_RESTRICT y = (const block_q8_K *)vy;
+
+    const int nb = n / QK_K;
+
+    float sumf = 0;
+    for (int i = 0; i < nb; ++i) {
+        const float d = GGML_CPU_FP16_TO_FP32(x[i].d) * y[i].d;
+        const uint8_t * qs = x[i].qs;
+        const uint8_t * qh = x[i].qh;
+        const int8_t  * sl = x[i].scales;
+        const int8_t  * q8 = y[i].qs;
+
+        uint16_t extra = x[i].extra;
+
+        int shift = 0;
+        int sumb = 0;
+        for (int ib64 = 0; ib64 < QK_K/64; ++ib64) {
+            int dl1 = sl[4*ib64 + 0];
+            int dl2 = sl[4*ib64 + 1];
+            int dl3 = sl[4*ib64 + 2];
+            int dl4 = sl[4*ib64 + 3];
+            float m1 = extra & 1 ? S_IQ6K : 0;
+            float m2 = extra & 2 ? S_IQ6K : 0;
+            float m3 = extra & 4 ? S_IQ6K : 0;
+            float m4 = extra & 8 ? S_IQ6K : 0;
+            float sumi1 = 0, sumi2 = 0, sumi3 = 0, sumi4 = 0;
+            for (int j = 0; j < 16; ++j) {
+                float q1 = ((qs[j+ 0] & 0xf) | (((qh[j+ 0] >> shift) & 0x03) << 4));
+                float q2 = ((qs[j+16] & 0xf) | (((qh[j+16] >> shift) & 0x03) << 4));
+                float q3 = ((qs[j+ 0] >>  4) | (((qh[j+ 0] >> shift) & 0x0c) << 2));
+                float q4 = ((qs[j+16] >>  4) | (((qh[j+16] >> shift) & 0x0c) << 2));
+                float v1 = A_IQ6K + q1*(B_IQ6K + q1*(-C_IQ6K + q1*D_IQ6K)) + m1;
+                float v2 = A_IQ6K + q2*(B_IQ6K + q2*(-C_IQ6K + q2*D_IQ6K)) + m2;
+                float v3 = A_IQ6K + q3*(B_IQ6K + q3*(-C_IQ6K + q3*D_IQ6K)) + m3;
+                float v4 = A_IQ6K + q4*(B_IQ6K + q4*(-C_IQ6K + q4*D_IQ6K)) + m4;
+                sumi1 += q8[j+ 0] * v1;
+                sumi2 += q8[j+16] * v2;
+                sumi3 += q8[j+32] * v3;
+                sumi4 += q8[j+48] * v4;
+            }
+            sumb += dl1 * sumi1 + dl2 * sumi2 + dl3 * sumi3 + dl4 * sumi4;
+            q8 += 64;
+            qs += 32;
+            extra >>= 4;
+            shift += 4;
+            if (shift == 8) { qh += 32; shift = 0; }
+        }
+        sumf += d * sumb;
+    }
+    *s = sumf;
 }
