@@ -1,5 +1,6 @@
 #include "llama-model.h"
 
+#include "ggml.h"
 #include "llama-impl.h"
 #include "llama-mmap.h"
 #include "llama-cparams.h"
@@ -492,7 +493,7 @@ void llama_model::load_arch(llama_model_loader & ml) {
 }
 
 void llama_model::load_hparams(llama_model_loader & ml) {
-    const gguf_context * ctx = ml.meta.get();
+    const gguf_context * ctx = ml.metadata;
 
     // get metadata as string
     for (int i = 0; i < gguf_get_n_kv(ctx); i++) {
@@ -2760,7 +2761,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     int max_n_tensors = ml.n_tensors;
     max_n_tensors += 1;         // duplicated output tensor
     max_n_tensors += n_layer*2; // duplicated rope freq tensors
-    const size_t ctx_size = ggml_tensor_overhead()*max_n_tensors;
+    const size_t ctx_size = ggml_tensor_overhead()*max_n_tensors + 1024*1024*1024; // FIXME
 
     // define a comparator for the buft -> ctx map to ensure that the order is well-defined:
     struct ggml_backend_buft_comparator {
@@ -2824,6 +2825,34 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         ggml_backend_buffer_type_t first_moved_to_buft = nullptr;
 
         auto create_tensor = [&](const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) -> ggml_tensor * {
+            if (ml.files.empty()) {
+                llm_tensor_info info;
+                try {
+                    info = llm_tensor_info_for(tn.tensor);
+                } catch (const std::out_of_range & e) {
+                    throw std::runtime_error(format("missing tensor info mapping for %s", tn.str().c_str()));
+                }
+                buft_list_t * buft_list;
+                switch (info.layer) {
+                    case LLM_TENSOR_LAYER_INPUT:
+                        buft_list = pimpl->dev_input.buft_list;
+                        break;
+                    case LLM_TENSOR_LAYER_OUTPUT:
+                        buft_list = pimpl->dev_output.buft_list;
+                        break;
+                    case LLM_TENSOR_LAYER_REPEATING:
+                        buft_list = pimpl->dev_layer.at(tn.bid).buft_list;
+                        break;
+                    default:
+                        GGML_ABORT("fatl error");
+                }
+                ggml_backend_buffer_type_t buft = buft_list->at(0).second;
+                ggml_context * ctx = ctx_for_buft(buft);
+                ggml_tensor * ret = ggml_new_tensor(ctx, GGML_TYPE_F32, ne.size(), std::data(ne));
+                std::string name = tn;
+                ggml_set_name(ret, name.c_str());
+                return ret;
+            }
             ggml_tensor * t_meta = ml.get_tensor_meta(tn.str().c_str());
 
             if (!t_meta) {
