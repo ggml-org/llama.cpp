@@ -1274,6 +1274,9 @@ class TextModel(ModelBase):
         if chkhsh == "b4b8ca1f9769494fbd956ebc4c249de6131fb277a4a3345a7a92c7dd7a55808d":
             # ref: https://huggingface.co/jdopensource/JoyAI-LLM-Flash
             res = "joyai-llm"
+        if chkhsh == "e4d54df1ebc1f2b91acd986c5b51aa50837d5faf7c7398e73c1f9e9ee5d19869":
+            # ref: https://huggingface.co/kakaocorp/kanana-2-30b-a3b-instruct-2601
+            res = "kanana2"
 
         if res is None:
             logger.warning("\n")
