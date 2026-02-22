@@ -465,7 +465,10 @@ export class MCPService {
 
 			const message = error instanceof Error ? error.message : String(error);
 
-			throw new Error(`Tool execution failed: ${message}`);
+			throw new Error(
+				`Tool "${params.name}" execution failed on server "${connection.serverName}": ${message}`,
+				{ cause: error instanceof Error ? error : undefined }
+			);
 		}
 	}
 
