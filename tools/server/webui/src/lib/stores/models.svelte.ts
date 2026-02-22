@@ -306,6 +306,16 @@ class ModelsStore {
 			const response = await ModelsService.listRouter();
 			this.routerModels = response.data;
 			await this.fetchModalitiesForLoadedModels();
+
+			const o = this.models.filter((option) => {
+				const modelProps = this.getModelProps(option.model);
+
+				return modelProps?.webui !== false;
+			});
+
+			if (o.length === 1 && this.isModelLoaded(o[0].model)) {
+				this.selectModelById(o[0].id);
+			}
 		} catch (error) {
 			console.warn('Failed to fetch router models:', error);
 			this.routerModels = [];
