@@ -653,6 +653,54 @@ class MCPStore {
 	}
 
 	/**
+	 * Immediately reconnect to a server by creating a fresh transport and session.
+	 * Used when a session-expired error (HTTP 404) is detected during tool execution.
+	 * Per MCP spec 2025-11-25: client MUST discard session ID and re-initialize.
+	 *
+	 * Unlike autoReconnect (which uses exponential backoff for connectivity issues),
+	 * this performs a single immediate reconnection attempt since the server is known
+	 * to be reachable (it responded with 404).
+	 */
+	private async reconnectServer(serverName: string): Promise<void> {
+		const serverConfig = this.serverConfigs.get(serverName);
+		if (!serverConfig) {
+			throw new Error(`[MCPStore] No config found for ${serverName}, cannot reconnect`);
+		}
+
+		// Disconnect stale connection (clears old transport + session ID)
+		const oldConnection = this.connections.get(serverName);
+		if (oldConnection) {
+			await MCPService.disconnect(oldConnection).catch(console.warn);
+			this.connections.delete(serverName);
+		}
+
+		console.log(`[MCPStore][${serverName}] Session expired, reconnecting with fresh session...`);
+
+		const listChangedHandlers = this.createListChangedHandlers(serverName);
+		const connection = await MCPService.connect(
+			serverName,
+			serverConfig,
+			DEFAULT_MCP_CONFIG.clientInfo,
+			DEFAULT_MCP_CONFIG.capabilities,
+			(phase) => {
+				if (phase === MCPConnectionPhase.DISCONNECTED) {
+					console.log(`[MCPStore][${serverName}] Connection lost, starting auto-reconnect`);
+					this.autoReconnect(serverName);
+				}
+			},
+			listChangedHandlers
+		);
+
+		// Replace connection and rebuild tool index for this server
+		this.connections.set(serverName, connection);
+		for (const tool of connection.tools) {
+			this.toolsIndex.set(tool.name, serverName);
+		}
+
+		console.log(`[MCPStore][${serverName}] Session recovered successfully`);
+	}
+
+	/**
 	 * Auto-reconnect to a server with exponential backoff.
 	 * Continues indefinitely until successful.
 	 */
@@ -914,7 +962,21 @@ class MCPStore {
 
 		const args = this.parseToolArguments(toolCall.function.arguments);
 
-		return MCPService.callTool(connection, { name: toolName, arguments: args }, signal);
+		try {
+			return await MCPService.callTool(connection, { name: toolName, arguments: args }, signal);
+		} catch (error) {
+			// Session expired (server restarted) - reconnect and retry once
+			if (MCPService.isSessionExpiredError(error)) {
+				await this.reconnectServer(serverName);
+
+				const newConnection = this.connections.get(serverName);
+				if (!newConnection) throw new Error(`Failed to reconnect to "${serverName}"`);
+
+				return MCPService.callTool(newConnection, { name: toolName, arguments: args }, signal);
+			}
+
+			throw error;
+		}
 	}
 
 	async executeToolByName(
@@ -927,7 +989,20 @@ class MCPStore {
 		const connection = this.connections.get(serverName);
 		if (!connection) throw new Error(`Server "${serverName}" is not connected`);
 
-		return MCPService.callTool(connection, { name: toolName, arguments: args }, signal);
+		try {
+			return await MCPService.callTool(connection, { name: toolName, arguments: args }, signal);
+		} catch (error) {
+			if (MCPService.isSessionExpiredError(error)) {
+				await this.reconnectServer(serverName);
+
+				const newConnection = this.connections.get(serverName);
+				if (!newConnection) throw new Error(`Failed to reconnect to "${serverName}"`);
+
+				return MCPService.callTool(newConnection, { name: toolName, arguments: args }, signal);
+			}
+
+			throw error;
+		}
 	}
 
 	private parseToolArguments(args: string | Record<string, unknown>): Record<string, unknown> {
