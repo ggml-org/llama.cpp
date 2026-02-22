@@ -100,6 +100,9 @@ export { isTextFileByName, readFileAsText, isLikelyTextFile } from './text-files
 // Debounce utilities
 export { debounce } from './debounce';
 
+// Sanitization utilities
+export { sanitizeKeyValuePairKey, sanitizeKeyValuePairValue } from './sanitize';
+
 // Image error fallback utilities
 export { getImageErrorFallbackHtml } from './image-error-fallback';
 

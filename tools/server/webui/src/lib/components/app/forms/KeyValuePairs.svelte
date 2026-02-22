@@ -1,7 +1,15 @@
 <script lang="ts">
 	import { Plus, Trash2 } from '@lucide/svelte';
 	import { Input } from '$lib/components/ui/input';
-	import { autoResizeTextarea } from '$lib/utils';
+	import {
+		autoResizeTextarea,
+		sanitizeKeyValuePairKey,
+		sanitizeKeyValuePairValue
+	} from '$lib/utils';
+	import {
+		KEY_VALUE_PAIR_KEY_MAX_LENGTH,
+		KEY_VALUE_PAIR_VALUE_MAX_LENGTH
+	} from '$lib/constants/key-value-pairs';
 	import type { KeyValuePair } from '$lib/types';
 
 	interface Props {
@@ -36,15 +44,39 @@
 		onPairsChange(pairs.filter((_, i) => i !== index));
 	}
 
-	function updatePairKey(index: number, key: string) {
+	function updatePairKey(index: number, rawKey: string) {
+		const key = sanitizeKeyValuePairKey(rawKey);
 		const newPairs = [...pairs];
+
 		newPairs[index] = { ...newPairs[index], key };
 		onPairsChange(newPairs);
 	}
 
-	function updatePairValue(index: number, value: string) {
+	function trimPairKey(index: number, key: string) {
+		const trimmed = key.trim();
+		if (trimmed === key) return;
+
 		const newPairs = [...pairs];
+
+		newPairs[index] = { ...newPairs[index], key: trimmed };
+		onPairsChange(newPairs);
+	}
+
+	function updatePairValue(index: number, rawValue: string) {
+		const value = sanitizeKeyValuePairValue(rawValue);
+		const newPairs = [...pairs];
+
 		newPairs[index] = { ...newPairs[index], value };
+		onPairsChange(newPairs);
+	}
+
+	function trimPairValue(index: number, value: string) {
+		const trimmed = value.trim();
+		if (trimmed === value) return;
+
+		const newPairs = [...pairs];
+
+		newPairs[index] = { ...newPairs[index], value: trimmed };
 		onPairsChange(newPairs);
 	}
 </script>
@@ -77,7 +109,9 @@
 						type="text"
 						placeholder={keyPlaceholder}
 						value={pair.key}
+						maxlength={KEY_VALUE_PAIR_KEY_MAX_LENGTH}
 						oninput={(e) => updatePairKey(index, e.currentTarget.value)}
+						onblur={(e) => trimPairKey(index, e.currentTarget.value)}
 						class="flex-1"
 					/>
 
@@ -85,10 +119,12 @@
 						use:autoResizeTextarea
 						placeholder={valuePlaceholder}
 						value={pair.value}
+						maxlength={KEY_VALUE_PAIR_VALUE_MAX_LENGTH}
 						oninput={(e) => {
 							updatePairValue(index, e.currentTarget.value);
 							autoResizeTextarea(e.currentTarget);
 						}}
+						onblur={(e) => trimPairValue(index, e.currentTarget.value)}
 						class="flex-1 resize-none rounded-md border border-input bg-transparent px-3 py-2 text-sm leading-5 placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
 						rows="1"
 					></textarea>
