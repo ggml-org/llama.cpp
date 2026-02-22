@@ -21,7 +21,7 @@
 	data-slot="sidebar-trigger"
 	variant="ghost"
 	size="icon"
-	class="rounded-full backdrop-blur-lg {className} h-9! w-9!"
+	class="rounded-full backdrop-blur-lg {className} md:left-unset -top-2 -left-2 h-9! w-9! md:top-0"
 	type="button"
 	onclick={(e) => {
 		onclick?.(e);
