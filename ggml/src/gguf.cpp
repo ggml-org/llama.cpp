@@ -294,7 +294,7 @@ struct gguf_reader {
             return false;
         }
         if (size > GGUF_MAX_STRING_LENGTH) {
-            GGML_LOG_ERROR("%s: string length %" PRIu64 " exceeds maximum %d\n", __func__, size, GGUF_MAX_STRING_LENGTH);
+            GGML_LOG_ERROR("%s: string length %" PRIu64 " exceeds maximum %" PRIu64 "\n", __func__, size, (uint64_t) GGUF_MAX_STRING_LENGTH);
             return false;
         }
         const uint64_t nbytes = nbytes_remain();
