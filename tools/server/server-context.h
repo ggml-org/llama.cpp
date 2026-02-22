@@ -30,6 +30,9 @@ struct server_context_meta {
     llama_token fim_pre_token;
     llama_token fim_sub_token;
     llama_token fim_mid_token;
+    llama_token fim_pad_token;
+    llama_token fim_rep_token;
+    llama_token fim_sep_token;
 
     // model meta
     enum llama_vocab_type model_vocab_type;

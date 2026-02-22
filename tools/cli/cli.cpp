@@ -380,6 +380,15 @@ int main(int argc, char ** argv) {
                 console::error("file does not exist or cannot be opened: '%s'\n", fname.c_str());
                 continue;
             }
+            if (inf.fim_sep_token != LLAMA_TOKEN_NULL) {
+                cur_msg += common_token_to_piece(ctx_cli.ctx_server.get_llama_context(), inf.fim_sep_token, true);
+                cur_msg += fname;
+                cur_msg.push_back('\n');
+            } else {
+                cur_msg += "--- File: ";
+                cur_msg += fname;
+                cur_msg += " ---\n";
+            }
             cur_msg += marker;
             console::log("Loaded text from '%s'\n", fname.c_str());
             continue;
