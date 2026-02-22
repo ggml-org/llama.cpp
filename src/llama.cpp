@@ -176,6 +176,12 @@ static void llama_params_fit_impl(
     const size_t nd = devs.size(); // number of devices
     if (nd == 0) {
         LLAMA_LOG_INFO("%s: no devices with dedicated memory found\n", __func__);
+
+        // fixes: https://github.com/ggml-org/llama.cpp/issues/19646
+        if (cparams->n_ctx == 0) {
+            cparams->n_ctx = 4096;
+            LLAMA_LOG_INFO("%s: defaulting context size to %d\n", __func__, cparams->n_ctx);
+        }
         return;
     }
 
