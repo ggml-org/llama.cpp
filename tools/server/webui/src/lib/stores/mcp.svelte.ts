@@ -30,7 +30,8 @@ import {
 	MCP_SERVER_ID_PREFIX,
 	MCP_RECONNECT_INITIAL_DELAY,
 	MCP_RECONNECT_BACKOFF_MULTIPLIER,
-	MCP_RECONNECT_MAX_DELAY
+	MCP_RECONNECT_MAX_DELAY,
+	MCP_RECONNECT_ATTEMPT_TIMEOUT_MS
 } from '$lib/constants/mcp';
 import type {
 	MCPToolCall,
@@ -655,6 +656,15 @@ class MCPStore {
 	/**
 	 * Auto-reconnect to a server with exponential backoff.
 	 * Continues indefinitely until successful.
+	 *
+	 * Race-condition safety: when the phase callback fires a DISCONNECTED event
+	 * while we are still inside this function (e.g., the server drops right after
+	 * a successful connect()), a naive inner `autoReconnect()` call would be
+	 * swallowed by the `reconnectingServers` guard, leaving the server
+	 * permanently disconnected once the outer call exits. We solve this by
+	 * deferring the new reconnection via the `needsReconnect` flag: the flag is
+	 * set inside the phase callback and honoured in the `finally` block after
+	 * the guard entry has been removed.
 	 */
 	private async autoReconnect(serverName: string): Promise<void> {
 		// Guard against concurrent reconnections
@@ -673,6 +683,9 @@ class MCPStore {
 
 		this.reconnectingServers.add(serverName);
 		let backoff = MCP_RECONNECT_INITIAL_DELAY;
+		// Flag set by the phase callback when a DISCONNECTED event fires while
+		// reconnectingServers still holds this server (see JSDoc above).
+		let needsReconnect = false;
 
 		try {
 			while (true) {
@@ -681,20 +694,44 @@ class MCPStore {
 				console.log(`[MCPStore][${serverName}] Auto-reconnecting...`);
 
 				try {
+					// Per-attempt timeout: reject if the server doesn't respond in time,
+					// then fall through to backoff logic as with any other failure.
+					const timeoutPromise = new Promise<never>((_, reject) =>
+						setTimeout(
+							() =>
+								reject(
+									new Error(
+										`Reconnect attempt timed out after ${MCP_RECONNECT_ATTEMPT_TIMEOUT_MS}ms`
+									)
+								),
+							MCP_RECONNECT_ATTEMPT_TIMEOUT_MS
+						)
+					);
+
+					needsReconnect = false;
 					const listChangedHandlers = this.createListChangedHandlers(serverName);
-					const connection = await MCPService.connect(
+					const connectPromise = MCPService.connect(
 						serverName,
 						serverConfig,
 						DEFAULT_MCP_CONFIG.clientInfo,
 						DEFAULT_MCP_CONFIG.capabilities,
 						(phase) => {
 							if (phase === MCPConnectionPhase.DISCONNECTED) {
-								console.log(`[MCPStore][${serverName}] Connection lost, restarting auto-reconnect`);
-								this.autoReconnect(serverName);
+								if (this.reconnectingServers.has(serverName)) {
+									// Reconnect loop is active; defer to after it exits.
+									needsReconnect = true;
+								} else {
+									console.log(
+										`[MCPStore][${serverName}] Connection lost, restarting auto-reconnect`
+									);
+									this.autoReconnect(serverName);
+								}
 							}
 						},
 						listChangedHandlers
 					);
+
+					const connection = await Promise.race([connectPromise, timeoutPromise]);
 
 					// Replace old connection with new one
 					this.connections.set(serverName, connection);
@@ -713,6 +750,14 @@ class MCPStore {
 			}
 		} finally {
 			this.reconnectingServers.delete(serverName);
+			// If the phase callback signalled a disconnect while this function held
+			// the guard, kick off a fresh reconnect now that the guard is released.
+			if (needsReconnect) {
+				console.log(
+					`[MCPStore][${serverName}] Deferred disconnect detected, restarting auto-reconnect`
+				);
+				this.autoReconnect(serverName);
+			}
 		}
 	}
 
