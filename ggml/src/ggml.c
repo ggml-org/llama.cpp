@@ -1648,11 +1648,12 @@ static struct ggml_object * ggml_new_object(struct ggml_context * ctx, enum ggml
 
     // integer overflow checks
     if (cur_end > SIZE_MAX - size_needed) {
-        GGML_LOG_WARN("%s: overflow detected in cur_end + size_needed\n", __func__);
+        GGML_LOG_WARN("%s: overflow detected in cur_end (%zu) + size_needed (%zu)\n", __func__, cur_end, size_needed);
         return NULL;
     }
     if (cur_end + size_needed > SIZE_MAX - GGML_OBJECT_SIZE) {
-        GGML_LOG_WARN("%s: overflow detected in cur_end + size_needed + GGML_OBJECT_SIZE\n", __func__);
+        GGML_LOG_WARN("%s: overflow detected in cur_end (%zu) + size_needed (%zu) + GGML_OBJECT_SIZE (%zu)\n", __func__,
+                cur_end, size_needed, (size_t) GGML_OBJECT_SIZE);
         return NULL;
     }
 
