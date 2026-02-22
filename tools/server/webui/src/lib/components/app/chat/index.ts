@@ -171,6 +171,13 @@ export { default as ChatForm } from './ChatForm/ChatForm.svelte';
 export { default as ChatFormActionAttachmentsDropdown } from './ChatForm/ChatFormActions/ChatFormActionAttachmentsDropdown.svelte';
 
 /**
+ * Mobile sheet variant of the file attachment selector. Renders a bottom sheet
+ * with the same options as ChatFormActionAttachmentsDropdown, optimized for
+ * touch interaction on mobile devices.
+ */
+export { default as ChatFormActionAttachmentsSheet } from './ChatForm/ChatFormActions/ChatFormActionAttachmentsSheet.svelte';
+
+/**
  * Audio recording button with real-time recording indicator. Records audio
  * and converts to WAV format for upload. Only visible when the active model
  * supports audio modality and setting for automatic audio input is enabled. Shows recording duration while active.
