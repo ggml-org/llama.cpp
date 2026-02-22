@@ -605,6 +605,19 @@ static void test_positions() {
   }
 }
 
+static void test_seed_oss_closing_tag() {
+    common_chat_parser_params params;
+    params.format = COMMON_CHAT_FORMAT_SEED_OSS;
+
+    // Simple input ending with '>'
+    std::string input = "test>";
+    auto msg = common_chat_parse(input, false, params);
+
+    // Check that the closing '>' is present
+    assert_equals(true, msg.content.find('>') != std::string::npos);
+    assert_equals(input, msg.content);
+}
+
 int main() {
     test_positions();
     test_json_with_dumped_args_no_args();
@@ -612,6 +625,7 @@ int main() {
     test_reasoning();
     test_regex();
     test_deepseek_v3_1_tool_calls();
+    test_seed_oss_closing_tag();
     std::cout << "All tests passed!\n";
     return 0;
 }
