@@ -1282,13 +1282,6 @@ size_t ggml_row_size(enum ggml_type type, int64_t ne) {
     return ggml_type_size(type)*ne/ggml_blck_size(type);
 }
 
-double ggml_type_sizef(enum ggml_type type) {
-    if (type < 0 || type >= GGML_TYPE_COUNT) {
-        return 0.0;
-    }
-    return ((double)(type_traits[type].type_size))/type_traits[type].blck_size;
-}
-
 const char * ggml_type_name(enum ggml_type type) {
     return type >= 0 && type < GGML_TYPE_COUNT ? type_traits[type].type_name : "NONE";
 }
