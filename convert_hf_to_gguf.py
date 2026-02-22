@@ -8689,6 +8689,137 @@ class T5EncoderModel(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("T5ForConditionalGeneration", "aya")
+class AyaModel(TextModel):
+    """
+    Aya-101 model converter.
+    Aya-101 is a multilingual T5-based model supporting 101 languages.
+    Based on T5 architecture with encoder-decoder structure.
+    """
+    model_arch = gguf.MODEL_ARCH.AYA
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.shared_token_embeddings_found = False
+
+    def set_vocab(self):
+        tokenizer_json_path = self.dir_model / 'tokenizer.json'
+
+        if not tokenizer_json_path.is_file():
+            raise FileNotFoundError(f"File not found: {tokenizer_json_path}")
+
+        logger.info("Loading vocabulary from tokenizer.json")
+
+        from transformers import AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained(
+            self.dir_model,
+            trust_remote_code=False
+        )
+
+        vocab_size = self.hparams.get('vocab_size', len(tokenizer))
+        logger.info(f"Vocabulary size: {vocab_size}")
+
+        tokens: list[bytes] = []
+        scores: list[float] = []
+        toktypes: list[int] = []
+
+        vocab = tokenizer.get_vocab()
+
+        sorted_vocab = sorted(vocab.items(), key=lambda x: x[1])
+
+        for token_str, token_id in sorted_vocab:
+            token_bytes = token_str.encode('utf-8')
+            tokens.append(token_bytes)
+
+            if token_id < 3:  # <pad>, </s>, <unk>
+                scores.append(-1000.0)
+                toktypes.append(SentencePieceTokenTypes.CONTROL)
+            else:
+                scores.append(0.0)
+                toktypes.append(SentencePieceTokenTypes.NORMAL)
+
+        while len(tokens) < vocab_size:
+            pad_id = len(tokens)
+            tokens.append(f"[PAD{pad_id}]".encode("utf-8"))
+            scores.append(-1000.0)
+            toktypes.append(SentencePieceTokenTypes.UNUSED)
+
+        self.gguf_writer.add_tokenizer_model("t5")
+        self.gguf_writer.add_tokenizer_pre("default")
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_scores(scores)
+        self.gguf_writer.add_token_types(toktypes)
+
+        special_vocab = gguf.SpecialVocab(self.dir_model, n_vocab=len(tokens))
+        special_vocab.add_to_gguf(self.gguf_writer)
+
+        logger.info(f"Vocabulary written: {len(tokens)} tokens")
+
+    def set_gguf_parameters(self):
+        if (n_ctx := self.find_hparam(["n_positions"], optional=True)) is None:
+            logger.warning("Couldn't find context length in config.json, assuming default value of 512")
+            n_ctx = 512
+        self.gguf_writer.add_context_length(n_ctx)
+
+        self.gguf_writer.add_embedding_length(self.hparams["d_model"])
+        self.gguf_writer.add_feed_forward_length(self.hparams["d_ff"])
+        self.gguf_writer.add_block_count(self.block_count)
+
+        if (dec_n_layer := self.hparams.get("num_decoder_layers")) is not None:
+            self.gguf_writer.add_decoder_block_count(dec_n_layer)
+
+        self.gguf_writer.add_head_count(self.hparams["num_heads"])
+        self.gguf_writer.add_key_length(self.hparams["d_kv"])
+        self.gguf_writer.add_value_length(self.hparams["d_kv"])
+
+        self.gguf_writer.add_layer_norm_eps(self.hparams["layer_norm_epsilon"])
+        self.gguf_writer.add_layer_norm_rms_eps(self.hparams["layer_norm_epsilon"])
+
+        self.gguf_writer.add_relative_attn_buckets_count(self.hparams["relative_attention_num_buckets"])
+
+        self.gguf_writer.add_decoder_start_token_id(self.hparams["decoder_start_token_id"])
+
+        self.gguf_writer.add_file_type(self.ftype)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid  # unused
+
+        if name in ["decoder.embed_tokens.weight", "encoder.embed_tokens.weight", "shared.weight"]:
+            if not self.shared_token_embeddings_found:
+                name = "shared.weight"
+                self.shared_token_embeddings_found = True
+            else:
+                logger.debug(f"Skipping shared tensor {name!r} in safetensors so that convert can end normally.")
+                return []
+
+        return [(self.map_tensor_name(name), data_torch)]
+
+    def model_tensor_name_map(self) -> dict[str, str]:
+        return {
+            "relative_attention_bias": "rel_attn_bias",
+            "encoder": "enc",
+            "decoder": "dec",
+            "block": "blk",
+            "layer": "l",
+            "SelfAttention": "attn",
+            "EncDecAttention": "cross_attn",
+            "DenseReluDense": "ffn",
+            "q": "q",
+            "k": "k",
+            "v": "v",
+            "o": "out",
+            "wi_0": "gate",
+            "wi_1": "up",
+            "wo": "down",
+            "layer_norm": "norm",
+            "final_layer_norm": "output_norm",
+            "embed_tokens": "token_embd",
+            "shared": "token_embd",
+            "lm_head": "output",
+        }
+
+
 @ModelBase.register("Jais2ForCausalLM")
 class Jais2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.JAIS2

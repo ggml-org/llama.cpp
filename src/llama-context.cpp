@@ -1268,7 +1268,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
     }
 
     // TODO: hacky solution
-    if (model.arch == LLM_ARCH_T5 && t_embd) {
+    if ((model.arch == LLM_ARCH_T5 || model.arch == LLM_ARCH_AYA) && t_embd) {
         //cross.t_embd = t_embd;
 
         synchronize();
@@ -1783,7 +1783,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     bool has_embd   = cparams.embeddings;
 
     // TODO: hacky enc-dec support
-    if (model.arch == LLM_ARCH_T5) {
+    if (model.arch == LLM_ARCH_T5 || model.arch == LLM_ARCH_AYA) {
         has_logits = true;
         has_embd   = true;
     }
