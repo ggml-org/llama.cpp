@@ -1,0 +1,18 @@
+name: Wipe Windows Benchmark Cache
+on: workflow_dispatch
+jobs:
+  wipe:
+    runs-on: [self-hosted, Windows, X64]
+    steps:
+      - name: Kill rogue processes
+        run: |
+          Stop-Process -Name "llama-perplexity" -Force -ErrorAction SilentlyContinue
+          Stop-Process -Name "llama-bench" -Force -ErrorAction SilentlyContinue
+        shell: powershell
+      - uses: actions/checkout@v4
+      - name: Wipe
+        shell: powershell
+        run: |
+          if (Test-Path "bin") { Remove-Item -Recurse -Force "bin" }
+          if (Test-Path "build") { Remove-Item -Recurse -Force "build" }
+          if (Test-Path "results") { Remove-Item -Recurse -Force "results" }

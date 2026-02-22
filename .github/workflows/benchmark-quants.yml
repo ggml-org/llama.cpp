@@ -1,0 +1,322 @@
+name: Quantization Benchmarks
+
+on:
+  push:
+    branches:
+      - feat/ultra-low-bit-quantization
+
+env:
+  MODEL_REPO: 'TinyLlama/TinyLlama-1.1B-Chat-v1.0'
+  MODEL_NAME: 'tinyllama-1.1b'
+
+permissions:
+  contents: write
+
+jobs:
+  # ──────────────────────────────────────────────
+  # Job 1: Build llama.cpp and convert model to F16
+  # ──────────────────────────────────────────────
+  build-and-convert:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential python3-pip
+          pip3 install torch transformers sentencepiece protobuf safetensors "huggingface_hub[cli]" --break-system-packages
+
+      - name: Build llama.cpp
+        run: |
+          cmake -B build -DGGML_NATIVE=OFF -DGGML_METAL=OFF -DGGML_CUDA=OFF
+          cmake --build build --target llama-quantize llama-perplexity llama-bench -j$(nproc)
+
+      - name: Download and convert model to F16 GGUF
+        run: |
+          python3 -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='${{ env.MODEL_REPO }}', local_dir='models/hf-model')"
+          python3 convert_hf_to_gguf.py models/hf-model --outfile models/model-F16.gguf --outtype f16
+
+      - name: Download WikiText-2
+        run: |
+          curl -L "https://huggingface.co/datasets/ggml-org/ci/resolve/main/wikitext-2-raw-v1.zip" -o models/wikitext-2-raw.zip
+          cd models && unzip -o wikitext-2-raw.zip
+
+      - name: Quantize all types from F16
+        run: |
+          for type in Q8_0 Q2_K TQ1_0 TQ2_0 Q1_5_K Q2_K_S_NEW; do
+            echo "::group::Quantizing $type"
+            ./build/bin/llama-quantize models/model-F16.gguf "models/model-${type}.gguf" "$type"
+            echo "::endgroup::"
+          done
+
+      - name: Generate Q8_0 baseline perplexity + logits for KLD
+        run: |
+          mkdir -p results
+          ./build/bin/llama-perplexity \
+            -m models/model-Q8_0.gguf \
+            -f models/wikitext-2-raw/wiki.test.raw \
+            --save-all-logits models/logits-Q8_0.kld \
+            --chunks 128 \
+            -t $(nproc) -ngl 0 2>&1 | tee results/ppl-Q8_0.txt
+
+      - name: Run llama-bench for Q8_0
+        run: |
+          ./build/bin/llama-bench \
+            -m models/model-Q8_0.gguf \
+            -t $(nproc) -ngl 0 -r 3 2>&1 | tee results/bench-Q8_0.txt
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: |
+            build/bin/llama-perplexity
+            build/bin/llama-bench
+            build/bin/libggml*.so*
+            build/bin/libllama*.so*
+          retention-days: 7
+
+      - name: Upload model artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-artifacts
+          path: |
+            models/model-*.gguf
+            models/logits-Q8_0.kld
+            models/wikitext-2-raw/wiki.test.raw
+          retention-days: 7
+
+      - name: Upload Q8_0 results
+        uses: actions/upload-artifact@v4
+        with:
+          name: result-Q8_0
+          path: results/
+          retention-days: 90
+
+  # ──────────────────────────────────────────────
+  # Job 2: Run perplexity + KLD for each quant type (parallel)
+  # ──────────────────────────────────────────────
+  benchmark:
+    needs: build-and-convert
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        quant: [Q2_K, TQ1_0, TQ2_0, Q1_5_K, Q2_K_S_NEW]
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: build/bin
+
+      - name: Download model artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: model-artifacts
+          path: models
+
+      - name: Make binaries executable
+        run: chmod +x build/bin/llama-perplexity build/bin/llama-bench
+
+      - name: Set library path
+        run: echo "LD_LIBRARY_PATH=${{ github.workspace }}/build/bin" >> $GITHUB_ENV
+
+      - name: Run perplexity for ${{ matrix.quant }}
+        run: |
+          mkdir -p results
+          echo "===== Perplexity: ${{ matrix.quant }} ====="
+          ./build/bin/llama-perplexity \
+            -m "models/model-${{ matrix.quant }}.gguf" \
+            -f models/wikitext-2-raw/wiki.test.raw \
+            --chunks 128 \
+            -t $(nproc) -ngl 0 2>&1 | tee results/ppl-${{ matrix.quant }}.txt
+
+      - name: Run KLD vs Q8_0 for ${{ matrix.quant }}
+        run: |
+          echo "===== KLD vs Q8_0: ${{ matrix.quant }} ====="
+          ./build/bin/llama-perplexity \
+            -m "models/model-${{ matrix.quant }}.gguf" \
+            -f models/wikitext-2-raw/wiki.test.raw \
+            --kl-divergence --kl-divergence-base models/logits-Q8_0.kld \
+            --chunks 128 \
+            -t $(nproc) -ngl 0 2>&1 | tee results/kld-${{ matrix.quant }}.txt
+
+      - name: Run llama-bench for ${{ matrix.quant }}
+        run: |
+          echo "===== Performance: ${{ matrix.quant }} ====="
+          ./build/bin/llama-bench \
+            -m "models/model-${{ matrix.quant }}.gguf" \
+            -t $(nproc) -ngl 0 -r 3 2>&1 | tee results/bench-${{ matrix.quant }}.txt
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: result-${{ matrix.quant }}
+          path: results/
+          retention-days: 90
+
+  # ──────────────────────────────────────────────
+  # Job 3: Collate all results and commit report to repo
+  # ──────────────────────────────────────────────
+  report:
+    needs: benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Download all results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: result-*
+          merge-multiple: true
+          path: results
+
+      - name: Generate benchmark report
+        run: |
+          TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          FILENAME_TS=$(date -u +%Y%m%d-%H%M%S)
+          MODEL_SHORT="${{ env.MODEL_NAME }}"
+
+          mkdir -p benchmarks
+
+          cat > benchmarks/benchmark-${MODEL_SHORT}-${FILENAME_TS}.md << 'HEADER'
+          # Quantization Benchmark Results
+          HEADER
+
+          # Overwrite with proper content
+          {
+            echo "# Quantization Benchmark Results"
+            echo ""
+            echo "**Model:** ${{ env.MODEL_REPO }}"
+            echo "**Date:** ${TIMESTAMP}"
+            echo "**Runner:** ubuntu-latest ($(nproc) cores)"
+            echo "**Branch:** ${{ github.ref_name }}"
+            echo "**Commit:** ${{ github.sha }}"
+            echo ""
+            echo "---"
+            echo ""
+            echo "## Model Sizes"
+            echo ""
+            echo "| Type | BPW | Description |"
+            echo "|------|-----|-------------|"
+            echo "| Q8_0 | 8.50 | Baseline (high quality) |"
+            echo "| Q2_K | 3.14 | Existing 2-bit k-quant |"
+            echo "| TQ1_0 | 2.15 | Existing ternary |"
+            echo "| TQ2_0 | 2.48 | Existing ternary |"
+            echo "| **Q1_5_K** | **2.26** | **NEW: ternary-coded with 4-bit sub-block scales** |"
+            echo "| **Q2_K_S_NEW** | **2.59** | **NEW: streamlined 2-bit quantization** |"
+            echo ""
+            echo "## Perplexity (WikiText-2)"
+            echo ""
+            echo "| Type | PPL | vs Q8_0 |"
+            echo "|------|-----|---------|"
+          } > benchmarks/benchmark-${MODEL_SHORT}-${FILENAME_TS}.md
+
+          Q8_PPL=""
+          for type in Q8_0 Q2_K TQ1_0 TQ2_0 Q1_5_K Q2_K_S_NEW; do
+            FILE="results/ppl-${type}.txt"
+            if [ -f "$FILE" ]; then
+              PPL=$(grep "Final estimate" "$FILE" | grep -oP 'PPL = \K[0-9.]+' || echo "N/A")
+              if [ "$type" = "Q8_0" ]; then
+                Q8_PPL="$PPL"
+                echo "| $type | $PPL | baseline |" >> benchmarks/benchmark-${MODEL_SHORT}-${FILENAME_TS}.md
+              else
+                if [ "$Q8_PPL" != "" ] && [ "$PPL" != "N/A" ] && [ "$Q8_PPL" != "N/A" ]; then
+                  DELTA=$(echo "$PPL - $Q8_PPL" | bc 2>/dev/null || echo "N/A")
+                  echo "| **$type** | **$PPL** | +$DELTA |" >> benchmarks/benchmark-${MODEL_SHORT}-${FILENAME_TS}.md
+                else
+                  echo "| $type | $PPL | N/A |" >> benchmarks/benchmark-${MODEL_SHORT}-${FILENAME_TS}.md
+                fi
+              fi
+            else
+              echo "| $type | (not available) | - |" >> benchmarks/benchmark-${MODEL_SHORT}-${FILENAME_TS}.md
+            fi
+          done
+
+          {
+            echo ""
+            echo "## KL Divergence (vs Q8_0)"
+            echo ""
+            echo "Lower is better — measures how faithfully the quantized model preserves the original model's behavior."
+            echo ""
+            echo "| Type | Mean KLD | Median KLD | 95th % KLD | Max KLD |"
+            echo "|------|----------|------------|------------|---------|"
+          } >> benchmarks/benchmark-${MODEL_SHORT}-${FILENAME_TS}.md
+
+          for type in Q2_K TQ1_0 TQ2_0 Q1_5_K Q2_K_S_NEW; do
+            FILE="results/kld-${type}.txt"
+            if [ -f "$FILE" ] && grep -q "Mean    KLD" "$FILE"; then
+              MEAN=$(grep "Mean    KLD" "$FILE" | awk '{print $3}')
+              MEDIAN=$(grep "Median  KLD" "$FILE" | awk '{print $3}')
+              P95=$(grep "95.0%   KLD" "$FILE" | awk '{print $3}')
+              MAX=$(grep "Maximum KLD" "$FILE" | awk '{print $3}')
+              echo "| **$type** | $MEAN | $MEDIAN | $P95 | $MAX |" >> benchmarks/benchmark-${MODEL_SHORT}-${FILENAME_TS}.md
+            else
+              echo "| $type | (not available) | - | - | - |" >> benchmarks/benchmark-${MODEL_SHORT}-${FILENAME_TS}.md
+            fi
+          done
+
+          {
+            echo ""
+            echo "## Performance (CPU-only, $(nproc) threads)"
+            echo ""
+            echo "| Type | Prompt (t/s) | Generation (t/s) |"
+            echo "|------|-------------|------------------|"
+          } >> benchmarks/benchmark-${MODEL_SHORT}-${FILENAME_TS}.md
+
+          for type in Q8_0 Q2_K TQ1_0 TQ2_0 Q1_5_K Q2_K_S_NEW; do
+            FILE="results/bench-${type}.txt"
+            if [ -f "$FILE" ]; then
+              PP=$(grep -oP '\d+\.\d+ ± \d+\.\d+(?= t/s)' "$FILE" | head -1 || echo "N/A")
+              TG=$(grep -oP '\d+\.\d+ ± \d+\.\d+(?= t/s)' "$FILE" | tail -1 || echo "N/A")
+              echo "| $type | $PP | $TG |" >> benchmarks/benchmark-${MODEL_SHORT}-${FILENAME_TS}.md
+            else
+              echo "| $type | (not available) | - |" >> benchmarks/benchmark-${MODEL_SHORT}-${FILENAME_TS}.md
+            fi
+          done
+
+          {
+            echo ""
+            echo "## Raw llama-bench Output"
+            echo ""
+            echo '```'
+          } >> benchmarks/benchmark-${MODEL_SHORT}-${FILENAME_TS}.md
+
+          for type in Q8_0 Q2_K TQ1_0 TQ2_0 Q1_5_K Q2_K_S_NEW; do
+            FILE="results/bench-${type}.txt"
+            if [ -f "$FILE" ]; then
+              echo "=== $type ===" >> benchmarks/benchmark-${MODEL_SHORT}-${FILENAME_TS}.md
+              cat "$FILE" >> benchmarks/benchmark-${MODEL_SHORT}-${FILENAME_TS}.md
+              echo "" >> benchmarks/benchmark-${MODEL_SHORT}-${FILENAME_TS}.md
+            fi
+          done
+
+          echo '```' >> benchmarks/benchmark-${MODEL_SHORT}-${FILENAME_TS}.md
+
+          echo "REPORT_FILE=benchmarks/benchmark-${MODEL_SHORT}-${FILENAME_TS}.md" >> $GITHUB_ENV
+          cat benchmarks/benchmark-${MODEL_SHORT}-${FILENAME_TS}.md
+
+      - name: Post to job summary
+        run: cat "$REPORT_FILE" >> $GITHUB_STEP_SUMMARY
+
+      - name: Commit report to repository
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add benchmarks/
+          git commit -m "benchmark: ${{ env.MODEL_NAME }} quantization results [skip ci]
+
+          Model: ${{ env.MODEL_REPO }}
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          git push
+
+      - name: Upload report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-report
+          path: benchmarks/
+          retention-days: 90
