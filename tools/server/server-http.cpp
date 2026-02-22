@@ -282,6 +282,13 @@ bool server_http_context::start() {
         was_bound = srv->bind_to_port(hostname, 8080);
     } else {
         LOG_INF("%s: binding port with default address family\n", __func__);
+
+        // Enable address reuse to allow immediate restart of server
+        srv->set_socket_options([](socket_t sock) {
+            const char flag = 1;
+            setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(flag));
+        });
+
         // bind HTTP listen port
         if (port == 0) {
             int bound_port = srv->bind_to_any_port(hostname);
