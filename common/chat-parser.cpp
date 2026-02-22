@@ -129,14 +129,14 @@ static void parse_json_tool_calls(
     }
 }
 
-common_chat_msg_parser::common_chat_msg_parser(const std::string & input, bool is_partial, const common_chat_parser_params & syntax)
+common_chat_msg_parser::common_chat_msg_parser(std::string input, bool is_partial, const common_chat_parser_params & syntax)
     : input_(input), is_partial_(is_partial), syntax_(syntax)
 {
     result_.role = "assistant";
 
     while (true) {
         std::string id = std::to_string(std::rand());
-        if (input.find(id) == std::string::npos) {
+        if (input_.find(id) == std::string::npos) {
             healing_marker_ = id;
             break;
         }

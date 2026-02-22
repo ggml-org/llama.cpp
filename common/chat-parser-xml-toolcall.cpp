@@ -737,7 +737,7 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
                     reasoning_content = content.substr(0, pos);
                     content.erase(0, pos + end_think.size());
                 }
-                if (builder.pos() == builder.input().size() && all_space(content)) {
+                if (builder.pos() == builder.input().size() && all_space(content) && builder.is_partial()) {
                     rstrip(reasoning_content);
                     trim_potential_partial_word(reasoning_content);
                     rstrip(reasoning_content);
@@ -802,8 +802,8 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
             }
         }
 
-        // remove potential partial suffix
-        if (builder.pos() == builder.input().size()) {
+        // remove potential partial suffix (only for partial/streaming parsing)
+        if (builder.pos() == builder.input().size() && builder.is_partial()) {
             if (unclosed_reasoning_content.empty()) {
                 rstrip(content);
                 trim_potential_partial_word(content);

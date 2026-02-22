@@ -605,6 +605,21 @@ static void test_positions() {
   }
 }
 
+static void test_qwen3_coder_xml_closing_tag() {
+    common_chat_parser_params params;
+    params.format = COMMON_CHAT_FORMAT_MINIMAX_M2;
+
+    // Test that closing tag '>' is preserved in non-partial parsing
+    std::string input = "<prompt_engineering_answer_edited_files>\n</prompt_engineering_answer_edited_files>\n<prompt_engineering_answer_comments>\nTest comment\n</prompt_engineering_answer_comments>";
+    auto msg = common_chat_parse(input, false, params);
+
+    // Check that the closing '>' is present
+    assert_equals(true, msg.content.find("</prompt_engineering_answer_comments>") != std::string::npos);
+
+    // Check entire content matches (should preserve all tags)
+    assert_equals(input, msg.content);
+}
+
 int main() {
     test_positions();
     test_json_with_dumped_args_no_args();
@@ -612,6 +627,7 @@ int main() {
     test_reasoning();
     test_regex();
     test_deepseek_v3_1_tool_calls();
+    test_qwen3_coder_xml_closing_tag();
     std::cout << "All tests passed!\n";
     return 0;
 }
