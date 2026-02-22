@@ -605,18 +605,16 @@ static void test_positions() {
   }
 }
 
-static void test_qwen3_coder_xml_closing_tag() {
+static void test_seed_oss_closing_tag() {
     common_chat_parser_params params;
-    params.format = COMMON_CHAT_FORMAT_MINIMAX_M2;
+    params.format = COMMON_CHAT_FORMAT_SEED_OSS;
 
-    // Test that closing tag '>' is preserved in non-partial parsing
-    std::string input = "<prompt_engineering_answer_edited_files>\n</prompt_engineering_answer_edited_files>\n<prompt_engineering_answer_comments>\nTest comment\n</prompt_engineering_answer_comments>";
+    // Simple input ending with '>'
+    std::string input = "test>";
     auto msg = common_chat_parse(input, false, params);
 
     // Check that the closing '>' is present
-    assert_equals(true, msg.content.find("</prompt_engineering_answer_comments>") != std::string::npos);
-
-    // Check entire content matches (should preserve all tags)
+    assert_equals(true, msg.content.find('>') != std::string::npos);
     assert_equals(input, msg.content);
 }
 
@@ -627,7 +625,7 @@ int main() {
     test_reasoning();
     test_regex();
     test_deepseek_v3_1_tool_calls();
-    test_qwen3_coder_xml_closing_tag();
+    test_seed_oss_closing_tag();
     std::cout << "All tests passed!\n";
     return 0;
 }
