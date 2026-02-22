@@ -5,14 +5,6 @@
 
 using namespace ggml_cuda_mma;
 
-// MFMA tiles are designed for 64-thread wavefronts (ne = I*J/64), so the effective
-// warp size for the fattn MMA kernel must be 64 on CDNA to match the hardware wavefront.
-#if defined(AMD_MFMA_AVAILABLE)
-#define FATTN_WARP_SIZE 64
-#else
-#define FATTN_WARP_SIZE WARP_SIZE
-#endif
-
 // Config options for the MMA kernel.
 // Should not affect results, only speed/register pressure/shared memory use.
 struct fattn_mma_config {
@@ -153,7 +145,7 @@ static constexpr __host__ __device__ fattn_mma_config ggml_cuda_fattn_mma_get_co
 
     // Fallback for unsupported DKQ values (e.g. 576). Must return non-zero values to satisfy
     // compile-time static_asserts even though the kernel guard prevents runtime execution.
-    // nthreads=256 gives nwarps=8 (FATTN_WARP_SIZE=32), nbatch_fa=128 satisfies np*16 divisibility.
+    // nthreads=256 gives nwarps=4 (warp_size=64) or 8 (warp_size=32), nbatch_fa=128 satisfies np*16 divisibility.
     return fattn_mma_config(256, 1, 128, 4, 4, 4, 1, false);
 }
 
@@ -292,6 +284,7 @@ static constexpr __device__ int ggml_cuda_fattn_mma_get_nstages(const int DKQ, c
 template<int stride_tile, int nwarps, int nbatch_fa, bool use_cp_async, bool oob_check>
 static __device__ __forceinline__ void flash_attn_ext_f16_load_tile(
         const half2 * const __restrict__ KV, half2 * const __restrict__ tile_KV, const int D2, const int stride_KV, const int i_sup) {
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
     // K/V data is loaded with decreasing granularity for D for better memory bandwidth.
     // The minimum granularity with cp.async is 16 bytes, with synchronous data loading it's 4 bytes.
     if constexpr (use_cp_async) {
@@ -303,10 +296,10 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_tile(
         const unsigned int tile_KV_32 = ggml_cuda_cvta_generic_to_shared(tile_KV);
 
         auto load = [&] __device__ (auto n) {
-            const int stride_k = FATTN_WARP_SIZE >> n;
-            const int k0_start = stride_k == FATTN_WARP_SIZE ? 0 : chunks_per_row - chunks_per_row % (2*stride_k);
+            const int stride_k = warp_size >> n;
+            const int k0_start = stride_k == warp_size ? 0 : chunks_per_row - chunks_per_row % (2*stride_k);
             const int k0_stop  =                             chunks_per_row - chunks_per_row % (1*stride_k);
-            const int stride_i = FATTN_WARP_SIZE / stride_k;
+            const int stride_i = warp_size / stride_k;
 
             if (k0_start == k0_stop) {
                 return;
@@ -314,7 +307,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_tile(
 
 #pragma unroll
             for (int i0 = 0; i0 < nbatch_fa; i0 += nwarps*stride_i) {
-                const int i = i0 + threadIdx.y*stride_i + (stride_k == FATTN_WARP_SIZE ? 0 : threadIdx.x / stride_k);
+                const int i = i0 + threadIdx.y*stride_i + (stride_k == warp_size ? 0 : threadIdx.x / stride_k);
 
                 if (i0 + nwarps*stride_i > nbatch_fa && i >= nbatch_fa) {
                     break;
@@ -322,7 +315,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_tile(
 
 #pragma unroll
                 for (int k0 = k0_start; k0 < k0_stop; k0 += stride_k) {
-                    const int k = k0 + (stride_k == FATTN_WARP_SIZE ? threadIdx.x : threadIdx.x % stride_k);
+                    const int k = k0 + (stride_k == warp_size ? threadIdx.x : threadIdx.x % stride_k);
 
                     cp_async_cg_16<preload>(tile_KV_32 + i*(stride_tile*sizeof(half2)) + k*16, KV + i*stride_KV + k*h2_per_chunk);
                 }
@@ -338,10 +331,10 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_tile(
     } else {
         // TODO use ggml_cuda_memcpy_1
         auto load = [&] __device__ (const int n) {
-            const int stride_k = FATTN_WARP_SIZE >> n;
-            const int k0_start = stride_k == FATTN_WARP_SIZE ? 0 : D2 - D2 % (2*stride_k);
+            const int stride_k = warp_size >> n;
+            const int k0_start = stride_k == warp_size ? 0 : D2 - D2 % (2*stride_k);
             const int k0_stop  =                             D2 - D2 % (1*stride_k);
-            const int stride_i = FATTN_WARP_SIZE / stride_k;
+            const int stride_i = warp_size / stride_k;
 
             if (k0_start == k0_stop) {
                 return;
@@ -349,7 +342,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_tile(
 
 #pragma unroll
             for (int i0 = 0; i0 < nbatch_fa; i0 += nwarps*stride_i) {
-                const int i = i0 + threadIdx.y*stride_i + (stride_k == FATTN_WARP_SIZE ? 0 : threadIdx.x / stride_k);
+                const int i = i0 + threadIdx.y*stride_i + (stride_k == warp_size ? 0 : threadIdx.x / stride_k);
 
                 if (i0 + nwarps*stride_i > nbatch_fa && i >= nbatch_fa) {
                     break;
@@ -357,7 +350,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_tile(
 
 #pragma unroll
                 for (int k0 = k0_start; k0 < k0_stop; k0 += stride_k) {
-                    const int k = k0 + (stride_k == FATTN_WARP_SIZE ? threadIdx.x : threadIdx.x % stride_k);
+                    const int k = k0 + (stride_k == warp_size ? threadIdx.x : threadIdx.x % stride_k);
 
                     tile_KV[i*stride_tile + k] = !oob_check || i < i_sup ? KV[i*stride_KV + k] : make_half2(0.0f, 0.0f);
                 }
@@ -375,18 +368,19 @@ template<int ncols1, int nwarps, int nbatch_fa, bool use_cp_async, bool oob_chec
 static __device__ __forceinline__ void flash_attn_ext_f16_load_mask(
         const half * const __restrict__ mask_h, half * const __restrict__ tile_mask,
         const int stride_mask, const int i_sup, const int j0, const uint3 ne01) {
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
     if constexpr (use_cp_async) {
-        static_assert(nbatch_fa <= 8*FATTN_WARP_SIZE && nbatch_fa % 8 == 0, "bad nbatch_fa");
+        static_assert(nbatch_fa <= 8*warp_size && nbatch_fa % 8 == 0, "bad nbatch_fa");
         static_assert(!oob_check, "OOB check incompatible with cp_async");
         constexpr int preload = nbatch_fa >= 32 ? nbatch_fa * sizeof(half) : 64;
-        constexpr int cols_per_warp = 8*FATTN_WARP_SIZE/nbatch_fa;
+        constexpr int cols_per_warp = 8*warp_size/nbatch_fa;
         constexpr int stride_j = nwarps * cols_per_warp;
 
         const unsigned int tile_mask_32 = ggml_cuda_cvta_generic_to_shared(tile_mask);
 
 #pragma unroll
         for (int j1 = 0; j1 < ncols1; j1 += stride_j) {
-            const int j_sram = j1 + threadIdx.y*cols_per_warp + threadIdx.x / (FATTN_WARP_SIZE/cols_per_warp);
+            const int j_sram = j1 + threadIdx.y*cols_per_warp + threadIdx.x / (warp_size/cols_per_warp);
             const int j_vram = fastmodulo(j0 + j_sram, ne01);
 
             if (j1 + stride_j > ncols1 && j_sram >= ncols1) {
@@ -408,25 +402,25 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_mask(
             }
 
 #pragma unroll
-            for (int i0 = 0; i0 < nbatch_fa; i0 += FATTN_WARP_SIZE) {
+            for (int i0 = 0; i0 < nbatch_fa; i0 += warp_size) {
                 const int i = i0 + threadIdx.x;
 
                 tile_mask[j_sram*(nbatch_fa + 8) + i] = i < i_sup ? mask_h[j_vram*stride_mask + i] : half(0.0f);
             }
         }
-    } else if constexpr (nbatch_fa < 2*FATTN_WARP_SIZE) {
-        constexpr int cols_per_warp = 2*FATTN_WARP_SIZE/nbatch_fa;
+    } else if constexpr (nbatch_fa < 2*warp_size) {
+        constexpr int cols_per_warp = 2*warp_size/nbatch_fa;
         constexpr int stride_j = nwarps * cols_per_warp;
 #pragma unroll
         for (int j1 = 0; j1 < ncols1; j1 += stride_j) {
-            const int j_sram = j1 + threadIdx.y*cols_per_warp + threadIdx.x / (FATTN_WARP_SIZE/cols_per_warp);
+            const int j_sram = j1 + threadIdx.y*cols_per_warp + threadIdx.x / (warp_size/cols_per_warp);
             const int j_vram = fastmodulo(j0 + j_sram, ne01);
 
             if (j1 + stride_j > ncols1 && j_sram >= ncols1) {
                 break;
             }
 
-            const int i = threadIdx.x % (FATTN_WARP_SIZE/cols_per_warp);
+            const int i = threadIdx.x % (warp_size/cols_per_warp);
 
             ggml_cuda_memcpy_1<sizeof(half2)>(tile_mask + j_sram*(nbatch_fa + 8) + 2*i, mask_h + j_vram*stride_mask + 2*i);
         }
@@ -441,7 +435,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_mask(
             }
 
 #pragma unroll
-            for (int i0 = 0; i0 < nbatch_fa; i0 += 2*FATTN_WARP_SIZE) {
+            for (int i0 = 0; i0 < nbatch_fa; i0 += 2*warp_size) {
                 const int i = i0 + 2*threadIdx.x;
 
                 ggml_cuda_memcpy_1<sizeof(half2)>(tile_mask + j_sram*(nbatch_fa + 8) + i, mask_h + j_vram*stride_mask + i);
@@ -480,6 +474,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
         const int kb0,
         const int k_VKQ_sup) {
 #if defined(VOLTA_MMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || (defined(AMD_WMMA_AVAILABLE) && defined(RDNA4)) || defined(AMD_MFMA_AVAILABLE)
+    constexpr int  warp_size       = ggml_cuda_get_physical_warp_size();
     constexpr int  ncols           = ncols1 * ncols2;
     constexpr int  cols_per_warp   = T_B_KQ::I;
     constexpr int  cols_per_thread = get_cols_per_thread();
@@ -652,7 +647,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
         for (int col = 0; col < cols_per_thread; ++col) {
 #pragma unroll
             for (int offset = 16; offset >= 4; offset >>= 1) {
-                KQ_max_new[col] = fmaxf(KQ_max_new[col], __shfl_xor_sync(0xFFFFFFFF, KQ_max_new[col], offset, FATTN_WARP_SIZE));
+                KQ_max_new[col] = fmaxf(KQ_max_new[col], __shfl_xor_sync(0xFFFFFFFF, KQ_max_new[col], offset, warp_size));
             }
         }
 
@@ -732,7 +727,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
 #endif // defined(TURING_MMA_AVAILABLE)
 #pragma unroll
             for (int offset = offset_first; offset >= offset_last; offset >>= 1) {
-                KQ_max_new[col] = fmaxf(KQ_max_new[col], __shfl_xor_sync(0xFFFFFFFF, KQ_max_new[col], offset, FATTN_WARP_SIZE));
+                KQ_max_new[col] = fmaxf(KQ_max_new[col], __shfl_xor_sync(0xFFFFFFFF, KQ_max_new[col], offset, warp_size));
             }
         }
 
@@ -1016,6 +1011,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
 #if defined(VOLTA_MMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || (defined(AMD_WMMA_AVAILABLE) && defined(RDNA4)) || defined(AMD_MFMA_AVAILABLE)
     //In this kernel Q, K, V are matrices while i, j, k are matrix indices.
 
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
     constexpr int ncols = ncols1 * ncols2;
     using     T_A_KQ    = typename mma_tile_sizes<ncols>::T_A_KQ;
     using     T_B_KQ    = typename mma_tile_sizes<ncols>::T_B_KQ;
@@ -1073,10 +1069,10 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
     // The loading is done with decreasing granularity for D for better memory bandwidth.
     const half2 scale_h2 = make_half2(scale, scale);
 #pragma unroll
-    for (int stride_k : {FATTN_WARP_SIZE, FATTN_WARP_SIZE/2, FATTN_WARP_SIZE/4, FATTN_WARP_SIZE/8}) {
-        const int k0_start  = stride_k == FATTN_WARP_SIZE ? 0 : DKQ/2 - (DKQ/2) % (2*stride_k);
+    for (int stride_k : {warp_size, warp_size/2, warp_size/4, warp_size/8}) {
+        const int k0_start  = stride_k == warp_size ? 0 : DKQ/2 - (DKQ/2) % (2*stride_k);
         const int k0_stop   =                             DKQ/2 - (DKQ/2) % (1*stride_k);
-        const int stride_jc = FATTN_WARP_SIZE / stride_k;
+        const int stride_jc = warp_size / stride_k;
 
         if (k0_start == k0_stop) {
             continue;
@@ -1084,7 +1080,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
 
 #pragma unroll
         for (int jc0 = 0; jc0 < ncols; jc0 += nwarps*stride_jc) {
-            const int jc = jc0 + threadIdx.y*stride_jc + (stride_k == FATTN_WARP_SIZE ? 0 : threadIdx.x / stride_k);
+            const int jc = jc0 + threadIdx.y*stride_jc + (stride_k == warp_size ? 0 : threadIdx.x / stride_k);
 
             if (jc0 + nwarps*stride_jc > ncols && jc >= ncols) {
                 break;
@@ -1096,7 +1092,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
             if ((ncols1 == 1 || jt*ncols1 + j < int(ne01.z)) && (ncols2 == 1 || zt_gqa*ncols2 + c < gqa_ratio)) {
 #pragma unroll
                 for (int k0 = k0_start; k0 < k0_stop; k0 += stride_k) {
-                    const int k = k0 + (stride_k == FATTN_WARP_SIZE ? threadIdx.x : threadIdx.x % stride_k);
+                    const int k = k0 + (stride_k == warp_size ? threadIdx.x : threadIdx.x % stride_k);
 
                     const float2 tmp = Q_f2[(jt*ncols1 + j)*stride_Q1 + c*stride_Q2 + k];
                     tile_Q[jc*stride_tile_Q + k] = scale_h2 * make_half2(tmp.x, tmp.y);
@@ -1104,7 +1100,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
             } else {
 #pragma unroll
                 for (int k0 = k0_start; k0 < k0_stop; k0 += stride_k) {
-                    const int k = k0 + (stride_k == FATTN_WARP_SIZE ? threadIdx.x : threadIdx.x % stride_k);
+                    const int k = k0 + (stride_k == warp_size ? threadIdx.x : threadIdx.x % stride_k);
 
                     tile_Q[jc*stride_tile_Q + k] = make_half2(0.0f, 0.0f);
                 }
@@ -1213,7 +1209,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
         for (int col = 0; col < cols_per_thread; ++col) {
 #pragma unroll
             for (int offset = offset_first; offset >= offset_last; offset >>= 1) {
-                KQ_rowsum[col] += __shfl_xor_sync(0xFFFFFFFF, KQ_rowsum[col], offset, FATTN_WARP_SIZE);
+                KQ_rowsum[col] += __shfl_xor_sync(0xFFFFFFFF, KQ_rowsum[col], offset, warp_size);
             }
         }
     }
@@ -1356,14 +1352,14 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
         // Warps with threadIdx.y % np != 0 must NOT return early.
         // All threads must return simultaneously to avoid race conditions with work on the next tile.
 
-        constexpr int nmeta = np*cols_per_warp >= FATTN_WARP_SIZE ? np*cols_per_warp/FATTN_WARP_SIZE : 1;
+        constexpr int nmeta = np*cols_per_warp >= warp_size ? np*cols_per_warp/warp_size : 1;
 
-        const int jc_meta = threadIdx.y*cols_per_warp + (np*cols_per_warp < FATTN_WARP_SIZE ? threadIdx.x % (np*cols_per_warp) : threadIdx.x);
+        const int jc_meta = threadIdx.y*cols_per_warp + (np*cols_per_warp < warp_size ? threadIdx.x % (np*cols_per_warp) : threadIdx.x);
         float2 * const meta_ptr = ((float2 *) tile_Q) + jc_meta*(tile_stride/2) + nbatch_combine/2;
         float2 meta[nmeta];
 #pragma unroll
         for (int imeta = 0; imeta < nmeta; ++imeta) {
-            meta[imeta] = meta_ptr[imeta * FATTN_WARP_SIZE * tile_stride/2];
+            meta[imeta] = meta_ptr[imeta * warp_size * tile_stride/2];
         }
 
         float KQ_cmn = meta[0].x; // KQ combine max new, max between all parallel warps.
@@ -1373,8 +1369,8 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
         }
 #pragma unroll
         for (int offset = np*cols_per_warp/2; offset >= cols_per_warp; offset >>= 1) {
-            if (offset < FATTN_WARP_SIZE) {
-                KQ_cmn = fmaxf(KQ_cmn, __shfl_xor_sync(0xFFFFFFFF, KQ_cmn, offset, FATTN_WARP_SIZE));
+            if (offset < warp_size) {
+                KQ_cmn = fmaxf(KQ_cmn, __shfl_xor_sync(0xFFFFFFFF, KQ_cmn, offset, warp_size));
             }
         }
 
@@ -1391,8 +1387,8 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
         }
 #pragma unroll
         for (int offset = np*cols_per_warp/2; offset >= cols_per_warp; offset >>= 1) {
-            if (offset < FATTN_WARP_SIZE) {
-                KQ_crs += __shfl_xor_sync(0xFFFFFFFF, KQ_crs, offset, FATTN_WARP_SIZE);
+            if (offset < warp_size) {
+                KQ_crs += __shfl_xor_sync(0xFFFFFFFF, KQ_crs, offset, warp_size);
             }
         }
 
@@ -1401,19 +1397,19 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
         // Write back combined meta data:
 #pragma unroll
         for (int imeta = 0; imeta < nmeta; ++imeta) {
-            if (np*cols_per_warp >= FATTN_WARP_SIZE || threadIdx.x < np*cols_per_warp) {
+            if (np*cols_per_warp >= warp_size || threadIdx.x < np*cols_per_warp) {
                 // Combined KQ max scale + rowsum.
-                meta_ptr[imeta * FATTN_WARP_SIZE * tile_stride/2] = make_float2(KQ_cms[imeta], KQ_crs);
+                meta_ptr[imeta * warp_size * tile_stride/2] = make_float2(KQ_cms[imeta], KQ_crs);
             }
         }
 
         // Combined KQ max + rowsum.
-        static_assert(cols_per_warp <= FATTN_WARP_SIZE);
-        if (needs_fixup && (cols_per_warp == FATTN_WARP_SIZE || threadIdx.x < cols_per_warp)) {
+        static_assert(cols_per_warp <= warp_size);
+        if (needs_fixup && (cols_per_warp == warp_size || threadIdx.x < cols_per_warp)) {
             float2 * dstk_fixup_meta = dstk_fixup + blockIdx.x*ncols;
             dstk_fixup_meta[(threadIdx.y/np)*cols_per_warp + threadIdx.x] = make_float2(KQ_cmn, KQ_crs);
         }
-        if (is_fixup && (cols_per_warp == FATTN_WARP_SIZE || threadIdx.x < cols_per_warp)) {
+        if (is_fixup && (cols_per_warp == warp_size || threadIdx.x < cols_per_warp)) {
             float2 * dstk_fixup_meta = dstk_fixup + (gridDim.x + blockIdx.x)*ncols;
             dstk_fixup_meta[(threadIdx.y/np)*cols_per_warp + threadIdx.x] = make_float2(KQ_cmn, KQ_crs);
         }
@@ -1461,10 +1457,10 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
             float2 * dstk_fixup_data = dstk_fixup + gridDim.x*(2*ncols) + blockIdx.x*(ncols*(DV/2));
 
 #pragma unroll
-            for (int stride_k : {FATTN_WARP_SIZE, FATTN_WARP_SIZE/2, FATTN_WARP_SIZE/4, FATTN_WARP_SIZE/8}) {
-                const int k0_start  = stride_k == FATTN_WARP_SIZE ? 0 : nbatch_combine - nbatch_combine % (2*stride_k);
+            for (int stride_k : {warp_size, warp_size/2, warp_size/4, warp_size/8}) {
+                const int k0_start  = stride_k == warp_size ? 0 : nbatch_combine - nbatch_combine % (2*stride_k);
                 const int k0_stop   =                             nbatch_combine - nbatch_combine % (1*stride_k);
-                const int stride_jc = FATTN_WARP_SIZE / stride_k;
+                const int stride_jc = warp_size / stride_k;
 
                 if (k0_start == k0_stop) {
                     continue;
@@ -1472,7 +1468,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
 
 #pragma unroll
                 for (int jc0_dst = 0; jc0_dst < ncols; jc0_dst += (nwarps/np)*stride_jc) {
-                    const int jc_dst = jc0_dst + (threadIdx.y/np)*stride_jc + (stride_k == FATTN_WARP_SIZE ? 0 : threadIdx.x / stride_k);
+                    const int jc_dst = jc0_dst + (threadIdx.y/np)*stride_jc + (stride_k == warp_size ? 0 : threadIdx.x / stride_k);
 
                     if (jc0_dst + (nwarps/np)*stride_jc > ncols && jc_dst >= ncols) {
                         break;
@@ -1490,7 +1486,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
                     const float * meta_j = (const float *) tile_Q + jc_tile_K*tile_stride + nbatch_combine;
 #pragma unroll
                     for (int k0 = k0_start; k0 < k0_stop; k0 += stride_k) {
-                        const int k = k0 + (stride_k == FATTN_WARP_SIZE ? threadIdx.x : threadIdx.x % stride_k);
+                        const int k = k0 + (stride_k == warp_size ? threadIdx.x : threadIdx.x % stride_k);
 
                         float2 dstk_val = make_float2(0.0f, 0.0f);
 #pragma unroll
@@ -1588,10 +1584,11 @@ static __global__ void flash_attn_ext_f16(
     }
 #endif // defined(AMD_MFMA_AVAILABLE)
 
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
     constexpr int ncols     = ncols1 * ncols2;
     constexpr int nbatch_fa = ggml_cuda_fattn_mma_get_nbatch_fa(DKQ, DV, ncols);
     constexpr int nthreads  = ggml_cuda_fattn_mma_get_nthreads(DKQ, DV, ncols);
-    constexpr int nwarps    = nthreads / FATTN_WARP_SIZE;
+    constexpr int nwarps    = nthreads / warp_size;
 
     const int gqa_ratio = ne02 / ne12; // With grouped query attention there are > 1 Q matrices per K, V matrix.
 
