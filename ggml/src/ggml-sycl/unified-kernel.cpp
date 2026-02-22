@@ -5474,6 +5474,8 @@ void UnifiedKernel::free_persistent_buffers() {
         get_rows_pool_ = nullptr;
         get_rows_pool_size_ = 0;
     }
+    // Free scratch output pool
+    free_scratch_pool();
     // Free DAG allocations
     if (dag_allocated_) {
         if (dag_state_.ready_counter)    sycl::free(dag_state_.ready_counter, queue_);
@@ -6153,6 +6155,7 @@ void UnifiedKernel::finish_plan_update() {
 }
 
 void UnifiedKernel::invalidate_plan_cache() {
+    free_scratch_pool();
     plan_cache_valid_ = false;
     cached_ops_.clear();
     cached_plan_template_ = {};
@@ -6190,6 +6193,119 @@ void * UnifiedKernel::get_rows_stable_ptr(size_t bytes) {
         ggml_sycl::unified_cache_add_runtime_bytes(device_id_, get_rows_pool_size_, ggml_sycl::runtime_category::GRAPH);
     }
     return get_rows_pool_;
+}
+
+// -----------------------------------------------------------------------------
+// Scratch Output Pool
+// -----------------------------------------------------------------------------
+
+void UnifiedKernel::build_scratch_pool() {
+    if (!current_plan_ || current_plan_->operations.empty()) {
+        return;
+    }
+
+    const auto & ops = current_plan_->operations;
+    const int    n_ops = static_cast<int>(ops.size());
+
+    // Phase 1: compute total scratch needed
+    size_t total_bytes = 0;
+    scratch_outputs_.resize(n_ops, nullptr);
+
+    for (int i = 0; i < n_ops; i++) {
+        const auto & op = ops[i];
+        // Skip ops with dedicated buffer management or no output_bytes
+        if (op.type == OperationType::SET_ROWS || op.type == OperationType::GET_ROWS ||
+            op.type == OperationType::STRIDED_COPY || op.output_bytes <= 0) {
+            scratch_outputs_[i] = nullptr;
+            continue;
+        }
+        size_t aligned = (op.output_bytes + 255) & ~(size_t) 255;
+        total_bytes += aligned;
+    }
+
+    if (total_bytes == 0) {
+        return;
+    }
+
+    // Phase 2: grow-on-demand allocation
+    if (total_bytes > scratch_pool_size_ || !scratch_pool_) {
+        free_scratch_pool();
+        scratch_pool_      = sycl::malloc_device(total_bytes, queue_);
+        scratch_pool_size_ = scratch_pool_ ? total_bytes : 0;
+        if (scratch_pool_size_ > 0 && device_id_ >= 0) {
+            ggml_sycl::unified_cache_add_runtime_bytes(device_id_, scratch_pool_size_,
+                                                       ggml_sycl::runtime_category::GRAPH);
+        }
+    }
+
+    if (!scratch_pool_) {
+        GGML_LOG_ERROR("[UNIFIED-KERNEL] scratch pool alloc failed (%zu bytes)\n", total_bytes);
+        scratch_outputs_.clear();
+        return;
+    }
+
+    GGML_SYCL_DEBUG("[UNIFIED-KERNEL] scratch pool: %zu bytes (%d ops) on device %d\n", total_bytes, n_ops, device_id_);
+
+    // Phase 3: sub-allocate and forward-pass remap
+    char * pool_base = static_cast<char *>(scratch_pool_);
+    size_t offset    = 0;
+    std::unordered_map<const void *, void *> remap;
+
+    for (int i = 0; i < n_ops; i++) {
+        auto & op = current_plan_->operations[i];
+
+        // Remap inputs from previous ops' aliased outputs
+        if (op.input) {
+            auto it = remap.find(op.input);
+            if (it != remap.end()) {
+                op.input = it->second;
+            }
+        }
+        if (op.aux) {
+            auto it = remap.find(static_cast<const void *>(op.aux));
+            if (it != remap.end()) {
+                op.aux = it->second;
+            }
+        }
+
+        // Skip ops that don't get scratch
+        if (op.type == OperationType::SET_ROWS || op.type == OperationType::GET_ROWS ||
+            op.type == OperationType::STRIDED_COPY || op.output_bytes <= 0) {
+            continue;
+        }
+
+        // Sub-allocate scratch for this op's output
+        void * scratch_ptr = pool_base + offset;
+        size_t aligned     = (op.output_bytes + 255) & ~(size_t) 255;
+        offset += aligned;
+
+        // Register in remap table
+        if (op.output) {
+            remap[op.output] = scratch_ptr;
+        }
+        op.output          = scratch_ptr;
+        scratch_outputs_[i] = scratch_ptr;
+    }
+}
+
+void * UnifiedKernel::scratch_output(int op_idx) const {
+    if (op_idx >= 0 && op_idx < static_cast<int>(scratch_outputs_.size())) {
+        return scratch_outputs_[op_idx];
+    }
+    return nullptr;
+}
+
+void UnifiedKernel::free_scratch_pool() {
+    if (scratch_pool_) {
+        if (scratch_pool_size_ > 0 && device_id_ >= 0) {
+            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, scratch_pool_size_,
+                                                       ggml_sycl::runtime_category::GRAPH);
+        }
+        sycl::free(scratch_pool_, queue_);
+        scratch_pool_      = nullptr;
+        scratch_pool_size_ = 0;
+    }
+    scratch_outputs_.clear();
 }
 
 // -----------------------------------------------------------------------------

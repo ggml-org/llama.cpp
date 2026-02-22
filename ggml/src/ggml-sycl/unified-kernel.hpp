@@ -2676,6 +2676,13 @@ public:
     bool has_dag() const { return dag_allocated_; }
     const DeviceDAGState & dag_state() const { return dag_state_; }
 
+    // Scratch pool: single contiguous device allocation for all persistent op outputs.
+    // Replaces ggml compute-buffer output pointers with stable kernel-owned addresses.
+    // Forward-pass remap rewires the plan's data-flow chain during full_build.
+    void   build_scratch_pool();
+    void * scratch_output(int op_idx) const;
+    void   free_scratch_pool();
+
     bool            supports_persistent() const;
     bool            is_building_plan() const;
     PersistentStats get_last_stats() const;
@@ -2708,6 +2715,11 @@ private:
     // GET_ROWS stable copy pool
     void * get_rows_pool_      = nullptr;
     size_t get_rows_pool_size_ = 0;
+
+    // Scratch pool for persistent kernel — eliminates ggml buffer aliasing
+    void *              scratch_pool_      = nullptr;
+    size_t              scratch_pool_size_ = 0;
+    std::vector<void *> scratch_outputs_;    // per-op scratch pointers (nullptr = use ggml)
 
     void *  persistent_buffers_[4] = {nullptr, nullptr, nullptr, nullptr};
     int *   tile_counter_          = nullptr;
