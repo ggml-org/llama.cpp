@@ -45,6 +45,11 @@ export const SETTINGS_KEYS = {
 	DRY_BASE: 'dry_base',
 	DRY_ALLOWED_LENGTH: 'dry_allowed_length',
 	DRY_PENALTY_LAST_N: 'dry_penalty_last_n',
+	// MCP
+	AGENTIC_MAX_TURNS: 'agenticMaxTurns',
+	ALWAYS_SHOW_AGENTIC_TURNS: 'alwaysShowAgenticTurns',
+	AGENTIC_MAX_TOOL_PREVIEW_LINES: 'agenticMaxToolPreviewLines',
+	SHOW_TOOL_CALL_IN_PROGRESS: 'showToolCallInProgress',
 	// Developer
 	DISABLE_REASONING_PARSING: 'disableReasoningParsing',
 	SHOW_RAW_OUTPUT_SWITCH: 'showRawOutputSwitch',

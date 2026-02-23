@@ -1,12 +1,21 @@
 <script lang="ts">
 	import {
+		ChatAttachmentMcpPrompt,
+		ChatAttachmentMcpResource,
 		ChatAttachmentThumbnailImage,
 		ChatAttachmentThumbnailFile,
 		HorizontalScrollCarousel,
 		DialogChatAttachmentPreview,
-		DialogChatAttachmentsViewAll
+		DialogChatAttachmentsViewAll,
+		DialogMcpResourcePreview
 	} from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
+	import { AttachmentType } from '$lib/enums';
+	import type {
+		DatabaseMessageExtraMcpPrompt,
+		DatabaseMessageExtraMcpResource,
+		MCPResourceAttachment
+	} from '$lib/types';
 	import { getAttachmentDisplayItems } from '$lib/utils';
 
 	interface Props {
@@ -49,6 +58,8 @@
 	let isScrollable = $state(false);
 	let previewDialogOpen = $state(false);
 	let previewItem = $state<ChatAttachmentPreviewItem | null>(null);
+	let mcpResourcePreviewOpen = $state(false);
+	let mcpResourcePreviewExtra = $state<DatabaseMessageExtraMcpResource | null>(null);
 	let showViewAll = $derived(limitToSingleRow && displayItems.length > 0 && isScrollable);
 	let viewAllDialogOpen = $state(false);
 
@@ -67,6 +78,26 @@
 		previewDialogOpen = true;
 	}
 
+	function openMcpResourcePreview(extra: DatabaseMessageExtraMcpResource) {
+		mcpResourcePreviewExtra = extra;
+		mcpResourcePreviewOpen = true;
+	}
+
+	function toMcpResourceAttachment(
+		extra: DatabaseMessageExtraMcpResource,
+		id: string
+	): MCPResourceAttachment {
+		return {
+			id,
+			resource: {
+				uri: extra.uri,
+				name: extra.name,
+				title: extra.name,
+				serverName: extra.serverName
+			}
+		};
+	}
+
 	$effect(() => {
 		if (carouselRef && displayItems.length) {
 			carouselRef.resetScroll();
@@ -82,7 +113,41 @@
 				onScrollableChange={(scrollable) => (isScrollable = scrollable)}
 			>
 				{#each displayItems as item (item.id)}
-					{#if item.isImage && item.preview}
+					{#if item.isMcpPrompt}
+						{@const mcpPrompt =
+							item.attachment?.type === AttachmentType.MCP_PROMPT
+								? (item.attachment as DatabaseMessageExtraMcpPrompt)
+								: item.uploadedFile?.mcpPrompt
+									? {
+											type: AttachmentType.MCP_PROMPT as const,
+											name: item.name,
+											serverName: item.uploadedFile.mcpPrompt.serverName,
+											promptName: item.uploadedFile.mcpPrompt.promptName,
+											content: item.textContent ?? '',
+											arguments: item.uploadedFile.mcpPrompt.arguments
+										}
+									: null}
+						{#if mcpPrompt}
+							<ChatAttachmentMcpPrompt
+								class="max-w-[300px] min-w-[200px] flex-shrink-0 {limitToSingleRow
+									? 'first:ml-4 last:mr-4'
+									: ''}"
+								prompt={mcpPrompt}
+								{readonly}
+								isLoading={item.isLoading}
+								loadError={item.loadError}
+								onRemove={onFileRemove ? () => onFileRemove(item.id) : undefined}
+							/>
+						{/if}
+					{:else if item.isMcpResource && item.attachment?.type === AttachmentType.MCP_RESOURCE}
+						{@const mcpResource = item.attachment as DatabaseMessageExtraMcpResource}
+
+						<ChatAttachmentMcpResource
+							class="flex-shrink-0 {limitToSingleRow ? 'first:ml-4 last:mr-4' : ''}"
+							attachment={toMcpResourceAttachment(mcpResource, item.id)}
+							onClick={() => openMcpResourcePreview(mcpResource)}
+						/>
+					{:else if item.isImage && item.preview}
 						<ChatAttachmentThumbnailImage
 							class="flex-shrink-0 cursor-pointer {limitToSingleRow ? 'first:ml-4 last:mr-4' : ''}"
 							id={item.id}
@@ -128,7 +193,39 @@
 		{:else}
 			<div class="flex flex-wrap items-start justify-end gap-3">
 				{#each displayItems as item (item.id)}
-					{#if item.isImage && item.preview}
+					{#if item.isMcpPrompt}
+						{@const mcpPrompt =
+							item.attachment?.type === AttachmentType.MCP_PROMPT
+								? (item.attachment as DatabaseMessageExtraMcpPrompt)
+								: item.uploadedFile?.mcpPrompt
+									? {
+											type: AttachmentType.MCP_PROMPT as const,
+											name: item.name,
+											serverName: item.uploadedFile.mcpPrompt.serverName,
+											promptName: item.uploadedFile.mcpPrompt.promptName,
+											content: item.textContent ?? '',
+											arguments: item.uploadedFile.mcpPrompt.arguments
+										}
+									: null}
+
+						{#if mcpPrompt}
+							<ChatAttachmentMcpPrompt
+								class="max-w-[300px] min-w-[200px]"
+								prompt={mcpPrompt}
+								{readonly}
+								isLoading={item.isLoading}
+								loadError={item.loadError}
+								onRemove={onFileRemove ? () => onFileRemove(item.id) : undefined}
+							/>
+						{/if}
+					{:else if item.isMcpResource && item.attachment?.type === AttachmentType.MCP_RESOURCE}
+						{@const mcpResource = item.attachment as DatabaseMessageExtraMcpResource}
+
+						<ChatAttachmentMcpResource
+							attachment={toMcpResourceAttachment(mcpResource, item.id)}
+							onClick={() => openMcpResourcePreview(mcpResource)}
+						/>
+					{:else if item.isImage && item.preview}
 						<ChatAttachmentThumbnailImage
 							class="cursor-pointer"
 							id={item.id}
@@ -184,3 +281,7 @@
 	{imageClass}
 	{activeModelId}
 />
+
+{#if mcpResourcePreviewExtra}
+	<DialogMcpResourcePreview bind:open={mcpResourcePreviewOpen} extra={mcpResourcePreviewExtra} />
+{/if}

@@ -1,0 +1,97 @@
+<script lang="ts">
+	import { Cable, ExternalLink } from '@lucide/svelte';
+	import { Switch } from '$lib/components/ui/switch';
+	import type { MCPServerInfo, MCPCapabilitiesInfo } from '$lib/types';
+	import { MCPTransportType } from '$lib/enums';
+	import { MCP_TRANSPORT_LABELS, MCP_TRANSPORT_ICONS } from '$lib/constants/mcp';
+	import { Badge } from '$lib/components/ui/badge';
+	import { McpCapabilitiesBadges } from '$lib/components/app/mcp';
+
+	interface Props {
+		displayName: string;
+		faviconUrl: string | null;
+		enabled: boolean;
+		disabled?: boolean;
+		onToggle: (enabled: boolean) => void;
+		serverInfo?: MCPServerInfo;
+		capabilities?: MCPCapabilitiesInfo;
+		transportType?: MCPTransportType;
+	}
+
+	let {
+		displayName,
+		faviconUrl,
+		enabled,
+		disabled = false,
+		onToggle,
+		serverInfo,
+		capabilities,
+		transportType
+	}: Props = $props();
+</script>
+
+<div class="space-y-3">
+	<div class="flex items-start justify-between gap-3">
+		<div class="grid min-w-0 gap-3">
+			<div class="flex items-center gap-2 overflow-hidden">
+				{#if faviconUrl}
+					<img
+						src={faviconUrl}
+						alt=""
+						class="h-5 w-5 shrink-0 rounded"
+						onerror={(e) => {
+							(e.currentTarget as HTMLImageElement).style.display = 'none';
+						}}
+					/>
+				{:else}
+					<div class="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-muted">
+						<Cable class="h-3 w-3 text-muted-foreground" />
+					</div>
+				{/if}
+
+				<p class="min-w-0 shrink-0 truncate leading-none font-medium">{displayName}</p>
+
+				{#if serverInfo?.version}
+					<Badge variant="secondary" class="h-4 min-w-0 truncate px-1 text-[10px]">
+						v{serverInfo.version}
+					</Badge>
+				{/if}
+
+				{#if serverInfo?.websiteUrl}
+					<a
+						href={serverInfo.websiteUrl}
+						target="_blank"
+						rel="noopener noreferrer"
+						class="shrink-0 text-muted-foreground hover:text-foreground"
+						aria-label="Open website"
+					>
+						<ExternalLink class="h-3 w-3" />
+					</a>
+				{/if}
+			</div>
+
+			{#if capabilities || transportType}
+				<div class="flex flex-wrap items-center gap-1">
+					{#if transportType}
+						{@const TransportIcon = MCP_TRANSPORT_ICONS[transportType]}
+						<Badge variant="outline" class="h-5 gap-1 px-1.5 text-[10px]">
+							{#if TransportIcon}
+								<TransportIcon class="h-3 w-3" />
+							{/if}
+
+							{MCP_TRANSPORT_LABELS[transportType] || transportType}
+						</Badge>
+					{/if}
+
+					{#if capabilities}
+						<McpCapabilitiesBadges {capabilities} />
+					{/if}
+				</div>
+			{/if}
+		</div>
+
+		<div class="flex shrink-0 items-center pl-2">
+			<Switch checked={enabled} {disabled} onCheckedChange={onToggle} />
+		</div>
+	</div>
+</div>

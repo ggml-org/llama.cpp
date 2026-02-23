@@ -1,3 +1,20 @@
+import type { AgenticConfig } from '$lib/types/agentic';
+
+export const ATTACHMENT_SAVED_REGEX = /\[Attachment saved: ([^\]]+)\]/;
+
+export const NEWLINE_SEPARATOR = '\n';
+
+export const TURN_LIMIT_MESSAGE = '\n\n```\nTurn limit reached\n```\n';
+
+export const LLM_ERROR_BLOCK_START = '\n\n```\nUpstream LLM error:\n';
+export const LLM_ERROR_BLOCK_END = '\n```\n';
+
+export const DEFAULT_AGENTIC_CONFIG: AgenticConfig = {
+	enabled: true,
+	maxTurns: 100,
+	maxToolPreviewLines: 25
+} as const;
+
 // Agentic tool call tag markers
 export const AGENTIC_TAGS = {
 	TOOL_CALL_START: '<<<AGENTIC_TOOL_CALL_START>>>',
@@ -12,6 +29,9 @@ export const REASONING_TAGS = {
 	START: '<<<reasoning_content_start>>>',
 	END: '<<<reasoning_content_end>>>'
 } as const;
+
+// Regex for trimming leading/trailing newlines
+export const TRIM_NEWLINES_REGEX = /^\n+|\n+$/g;
 
 // Regex patterns for parsing agentic content
 export const AGENTIC_REGEX = {

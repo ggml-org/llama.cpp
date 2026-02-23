@@ -6,13 +6,15 @@
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { DatabaseService } from '$lib/services';
 	import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants/ui';
-	import { MessageRole } from '$lib/enums';
+	import { MessageRole, AttachmentType } from '$lib/enums';
 	import {
 		ChatMessageAssistant,
 		ChatMessageUser,
-		ChatMessageSystem
+		ChatMessageSystem,
+		ChatMessageMcpPrompt
 	} from '$lib/components/app/chat';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
+	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
 
 	interface Props {
 		class?: string;
@@ -81,6 +83,20 @@
 		saveOnly: handleSaveEditOnly,
 		cancel: handleCancelEdit,
 		startEdit: handleEdit
+	});
+
+	let mcpPromptExtra = $derived.by(() => {
+		if (message.role !== MessageRole.USER) return null;
+		if (message.content.trim()) return null;
+		if (!message.extra || message.extra.length !== 1) return null;
+
+		const extra = message.extra[0];
+
+		if (extra.type === AttachmentType.MCP_PROMPT) {
+			return extra as DatabaseMessageExtraMcpPrompt;
+		}
+
+		return null;
 	});
 
 	$effect(() => {
@@ -236,6 +252,21 @@
 		class={className}
 		{deletionInfo}
 		{message}
+		onConfirmDelete={handleConfirmDelete}
+		onCopy={handleCopy}
+		onDelete={handleDelete}
+		onEdit={handleEdit}
+		onNavigateToSibling={handleNavigateToSibling}
+		onShowDeleteDialogChange={handleShowDeleteDialogChange}
+		{showDeleteDialog}
+		{siblingInfo}
+	/>
+{:else if mcpPromptExtra}
+	<ChatMessageMcpPrompt
+		class={className}
+		{deletionInfo}
+		{message}
+		mcpPrompt={mcpPromptExtra}
 		onConfirmDelete={handleConfirmDelete}
 		onCopy={handleCopy}
 		onDelete={handleDelete}
