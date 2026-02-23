@@ -4,7 +4,7 @@ The auto-parser automatically analyzes chat templates to determine how to parse 
 
 ## Overview
 
-The unified auto-parser uses a **pure differential, compositional approach** to analyze chat templates:
+The unified auto-parser uses a pure differential (inspired by `git diff` algorithm), compositional approach to analyze chat templates:
 
 **Core Philosophy**:
 
