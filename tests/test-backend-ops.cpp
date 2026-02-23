@@ -31,15 +31,19 @@
 #include <cstring>
 #include <ctime>
 #include <future>
+#include <fstream>
 #include <memory>
 #include <random>
 #include <regex>
 #include <set>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <vector>
 #include <unordered_map>
+
+#include <nlohmann/json.hpp>
 
 #ifdef __EMSCRIPTEN__
 #   define N_THREADS 1
@@ -418,6 +422,10 @@ static std::string var_to_str(ggml_scale_mode mode) {
         str += "|antialias";
     }
     return str;
+}
+
+static std::string var_to_str(ggml_op op) {
+    return ggml_op_name(op);
 }
 
 #define VAR_TO_STR(x) (#x "=" + var_to_str(x))
@@ -6594,6 +6602,81 @@ struct test_diag : public test_case {
     }
 };
 
+// Deserializable generic test case
+struct input_tensor {
+    ggml_type type;
+    std::array<int64_t, 4> ne;
+};
+
+static std::string var_to_str(const std::vector<input_tensor>& sources) {
+    std::ostringstream oss;
+    bool first = true;
+    for (const auto& src : sources) {
+        if (!first) oss << ",";
+        oss << ggml_type_name(src.type) << "[" << src.ne[0] << "," << src.ne[1] << "," << src.ne[2] << "," << src.ne[3] << "]";
+        first = false;
+    }
+    return oss.str();
+}
+
+static std::string var_to_str(const std::array<int32_t, GGML_MAX_OP_PARAMS / sizeof(int32_t)>& params) {
+    std::ostringstream oss;
+    oss << "[";
+    bool first = true;
+    for (size_t i = 0; i < params.size(); ++i) {
+        if (params[i] != 0) {
+            if (!first) oss << ",";
+            oss << i << ":" << params[i];
+            first = false;
+        }
+    }
+    oss << "]";
+    return oss.str();
+}
+
+
+struct test_generic_op : public test_case {
+    const ggml_op op;
+    const ggml_type type;
+    const std::array<int64_t, 4> ne;
+    const std::array<int32_t, GGML_MAX_OP_PARAMS / sizeof(int32_t)> op_params;
+
+    const std::vector<input_tensor> sources;
+
+    std::string vars() override {
+        return VARS_TO_STR5(op, type, ne, op_params, sources);
+    }
+
+    test_generic_op(ggml_op op, ggml_type type, std::array<int64_t, 4> ne,
+                    std::array<int32_t, GGML_MAX_OP_PARAMS / sizeof(int32_t)> op_params,
+                    std::vector<input_tensor> sources)
+        : op(op), type(type), ne(ne), op_params(op_params), sources(sources) {}
+
+    // Define how a simple GGML compute graph can be constructed for the new GGML op.
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        const size_t source_count = std::min(sources.size(), (size_t)GGML_MAX_SRC);
+
+        std::array<ggml_tensor *, GGML_MAX_SRC> source_tensors;
+        for (size_t i = 0; i < source_count; ++i) {
+            const input_tensor& src = sources[i];
+            source_tensors[i] = ggml_new_tensor_4d(ctx, src.type, src.ne[0], src.ne[1], src.ne[2], src.ne[3]);
+        }
+
+        ggml_tensor * out = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
+        out->op = op;
+        for (size_t i = 0; i < source_count; ++i) {
+            out->src[i] = source_tensors[i];
+        }
+
+        memcpy(out->op_params, op_params.data(), GGML_MAX_OP_PARAMS);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+
+};
+
 
 enum llm_norm_type {
     LLM_NORM,
@@ -8653,8 +8736,41 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     return test_cases;
 }
 
+static std::vector<std::unique_ptr<test_case>> make_test_cases_from_json(const char * path) {
+    std::ifstream f(path);
+    nlohmann::json data = nlohmann::json::parse(f);
+
+    GGML_ASSERT(data.is_array());
+
+    std::vector<std::unique_ptr<test_case>> test_cases;
+
+    for (const auto& input_case : data) {
+        const ggml_op op = input_case["op"];
+        const ggml_type type = input_case["type"];
+        auto ne_arr = input_case["ne"];
+        const std::array<int64_t, 4> ne = {ne_arr[0], ne_arr[1], ne_arr[2], ne_arr[3]};
+
+        auto op_arr = input_case["op_params"];
+        std::array<int32_t, GGML_MAX_OP_PARAMS / sizeof(int32_t)> op_params = {};
+        for (size_t i = 0; i < op_arr.size() && i < op_params.size(); i++) {
+            op_params[i] = op_arr[i];
+        }
+
+        std::vector<input_tensor> sources;
+        for (const auto& src : input_case["sources"]) {
+            auto ne_arr = src["ne"];
+            const std::array<int64_t, 4> src_ne = {ne_arr[0], ne_arr[1], ne_arr[2], ne_arr[3]};
+            sources.push_back({(ggml_type)src["type"], src_ne});
+        }
+
+        test_cases.emplace_back(new test_generic_op(op, type, ne, op_params, sources));
+    }
+
+    return test_cases;
+}
+
 static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op_names_filter, const char * params_filter,
-                         printer * output_printer) {
+                         printer * output_printer, const char * test_json_path) {
     auto filter_test_cases = [](std::vector<std::unique_ptr<test_case>> & test_cases, const char * params_filter) {
         if (params_filter == nullptr) {
             return;
@@ -8672,9 +8788,26 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
         }
     };
 
+    std::vector<std::unique_ptr<test_case>> test_cases;
+
+    if (test_json_path == nullptr) {
+        switch (mode) {
+        case MODE_TEST:
+        case MODE_GRAD:
+        case MODE_SUPPORT:
+            test_cases = make_test_cases_eval();
+            break;
+        case MODE_PERF:
+            test_cases = make_test_cases_perf();
+            break;
+        }
+    } else {
+        test_cases = make_test_cases_from_json(test_json_path);
+    }
+
+    filter_test_cases(test_cases, params_filter);
+
     if (mode == MODE_TEST) {
-        auto test_cases = make_test_cases_eval();
-        filter_test_cases(test_cases, params_filter);
         ggml_backend_t backend_cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL);
         if (backend_cpu == NULL) {
             test_operation_info info("", "", "CPU");
@@ -8714,8 +8847,6 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
     }
 
     if (mode == MODE_GRAD) {
-        auto test_cases = make_test_cases_eval();
-        filter_test_cases(test_cases, params_filter);
         size_t n_ok = 0;
         for (auto & test : test_cases) {
             if (test->eval_grad(backend, op_names_filter, output_printer)) {
@@ -8728,8 +8859,6 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
     }
 
     if (mode == MODE_PERF) {
-        auto test_cases = make_test_cases_perf();
-        filter_test_cases(test_cases, params_filter);
         for (auto & test : test_cases) {
             test->eval_perf(backend, op_names_filter, output_printer);
         }
@@ -8737,9 +8866,6 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
     }
 
     if (mode == MODE_SUPPORT) {
-        auto test_cases = make_test_cases_eval();
-        filter_test_cases(test_cases, params_filter);
-
         // Filter out fusion cases
         test_cases.erase(
             std::remove_if(test_cases.begin(), test_cases.end(), [](const std::unique_ptr<test_case> & tc) {
@@ -8858,7 +8984,8 @@ static void show_test_coverage() {
 }
 
 static void usage(char ** argv) {
-    printf("Usage: %s [mode] [-o <op,..>] [-b <backend>] [-p <params regex>] [--output <console|sql|csv>] [--list-ops] [--show-coverage]\n", argv[0]);
+    printf("Usage: %s [mode] [-o <op,..>] [-b <backend>] [-p <params regex>] [--output <console|sql|csv>] [--list-ops]", argv[0]);
+    printf(" [--show-coverage] [--test-json <path>]\n");
     printf("    valid modes:\n");
     printf("      - test (default, compare with CPU backend for correctness)\n");
     printf("      - grad (compare gradients from backpropagation with method of finite differences)\n");
@@ -8869,6 +8996,7 @@ static void usage(char ** argv) {
     printf("    --output specifies output format (default: console, options: console, sql, csv)\n");
     printf("    --list-ops lists all available GGML operations\n");
     printf("    --show-coverage shows test coverage\n");
+    printf("    --test-json reads test operators from a json\n");
 }
 
 int main(int argc, char ** argv) {
@@ -8877,6 +9005,7 @@ int main(int argc, char ** argv) {
     const char * op_names_filter = nullptr;
     const char * backend_filter = nullptr;
     const char * params_filter = nullptr;
+    const char * test_json_path = nullptr;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "test") == 0) {
@@ -8924,6 +9053,13 @@ int main(int argc, char ** argv) {
         } else if (strcmp(argv[i], "--show-coverage") == 0) {
             show_test_coverage();
             return 0;
+        } else if (strcmp(argv[i], "--test-json") == 0) {
+            if (i + 1 < argc) {
+                test_json_path = argv[++i];
+            } else {
+                usage(argv);
+                return 1;
+            }
         } else {
             usage(argv);
             return 1;
@@ -8976,7 +9112,7 @@ int main(int argc, char ** argv) {
                                                              false, "", ggml_backend_dev_description(dev),
                                                              total / 1024 / 1024, free / 1024 / 1024, true));
 
-        bool ok = test_backend(backend, mode, op_names_filter, params_filter, output_printer.get());
+        bool ok = test_backend(backend, mode, op_names_filter, params_filter, output_printer.get(), test_json_path);
 
         if (ok) {
             n_ok++;
