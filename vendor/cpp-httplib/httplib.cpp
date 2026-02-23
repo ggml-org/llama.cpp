@@ -1660,6 +1660,7 @@ public:
   bool is_readable() const override;
   bool wait_readable() const override;
   bool wait_writable() const override;
+  bool is_peer_alive() const override;
   ssize_t read(char *ptr, size_t size) override;
   ssize_t write(const char *ptr, size_t size) override;
   void get_remote_ip_and_port(std::string &ip, int &port) const override;
@@ -3313,10 +3314,10 @@ bool write_content_with_progress(Stream &strm,
     return ok;
   };
 
-  data_sink.is_writable = [&]() -> bool { return strm.wait_writable(); };
+  data_sink.is_writable = [&]() -> bool { return strm.is_peer_alive(); };
 
   while (offset < end_offset && !is_shutting_down()) {
-    if (!strm.wait_writable()) {
+    if (!strm.wait_writable() || !strm.is_peer_alive()) {
       error = Error::Write;
       return false;
     } else if (!content_provider(offset, end_offset - offset, data_sink)) {
@@ -3326,6 +3327,11 @@ bool write_content_with_progress(Stream &strm,
       error = Error::Write;
       return false;
     }
+  }
+
+  if (offset < end_offset) { // exited due to is_shutting_down(), not completion
+    error = Error::Write;
+    return false;
   }
 
   error = Error::Success;
@@ -3367,12 +3373,12 @@ write_content_without_length(Stream &strm,
     return ok;
   };
 
-  data_sink.is_writable = [&]() -> bool { return strm.wait_writable(); };
+  data_sink.is_writable = [&]() -> bool { return strm.is_peer_alive(); };
 
   data_sink.done = [&](void) { data_available = false; };
 
   while (data_available && !is_shutting_down()) {
-    if (!strm.wait_writable()) {
+    if (!strm.wait_writable() || !strm.is_peer_alive()) {
       return false;
     } else if (!content_provider(offset, 0, data_sink)) {
       return false;
@@ -3380,7 +3386,8 @@ write_content_without_length(Stream &strm,
       return false;
     }
   }
-  return true;
+  return !data_available; // true only if done() was called, false if shutting
+                          // down
 }
 
 template <typename T, typename U>
@@ -3416,7 +3423,7 @@ write_content_chunked(Stream &strm, const ContentProvider &content_provider,
     return ok;
   };
 
-  data_sink.is_writable = [&]() -> bool { return strm.wait_writable(); };
+  data_sink.is_writable = [&]() -> bool { return strm.is_peer_alive(); };
 
   auto done_with_trailer = [&](const Headers *trailer) {
     if (!ok) { return; }
@@ -3466,7 +3473,7 @@ write_content_chunked(Stream &strm, const ContentProvider &content_provider,
   };
 
   while (data_available && !is_shutting_down()) {
-    if (!strm.wait_writable()) {
+    if (!strm.wait_writable() || !strm.is_peer_alive()) {
       error = Error::Write;
       return false;
     } else if (!content_provider(offset, 0, data_sink)) {
@@ -3476,6 +3483,11 @@ write_content_chunked(Stream &strm, const ContentProvider &content_provider,
       error = Error::Write;
       return false;
     }
+  }
+
+  if (data_available) { // exited due to is_shutting_down(), not done()
+    error = Error::Write;
+    return false;
   }
 
   error = Error::Success;
@@ -4646,6 +4658,7 @@ public:
   bool is_readable() const override;
   bool wait_readable() const override;
   bool wait_writable() const override;
+  bool is_peer_alive() const override;
   ssize_t read(char *ptr, size_t size) override;
   ssize_t write(const char *ptr, size_t size) override;
   void get_remote_ip_and_port(std::string &ip, int &port) const override;
@@ -6069,8 +6082,11 @@ bool SocketStream::wait_readable() const {
 }
 
 bool SocketStream::wait_writable() const {
-  return select_write(sock_, write_timeout_sec_, write_timeout_usec_) > 0 &&
-         is_socket_alive(sock_);
+  return select_write(sock_, write_timeout_sec_, write_timeout_usec_) > 0;
+}
+
+bool SocketStream::is_peer_alive() const {
+  return detail::is_socket_alive(sock_);
 }
 
 ssize_t SocketStream::read(char *ptr, size_t size) {
@@ -6401,7 +6417,11 @@ bool SSLSocketStream::wait_readable() const {
 
 bool SSLSocketStream::wait_writable() const {
   return select_write(sock_, write_timeout_sec_, write_timeout_usec_) > 0 &&
-         is_socket_alive(sock_) && !tls::is_peer_closed(session_, sock_);
+         !tls::is_peer_closed(session_, sock_);
+}
+
+bool SSLSocketStream::is_peer_alive() const {
+  return !tls::is_peer_closed(session_, sock_);
 }
 
 ssize_t SSLSocketStream::read(char *ptr, size_t size) {
@@ -6925,34 +6945,32 @@ bool Server::write_response_core(Stream &strm, bool close_connection,
   if (post_routing_handler_) { post_routing_handler_(req, res); }
 
   // Response line and headers
-  {
-    detail::BufferStream bstrm;
-    if (!detail::write_response_line(bstrm, res.status)) { return false; }
-    if (header_writer_(bstrm, res.headers) <= 0) { return false; }
+  detail::BufferStream bstrm;
+  if (!detail::write_response_line(bstrm, res.status)) { return false; }
+  if (header_writer_(bstrm, res.headers) <= 0) { return false; }
 
-    // Flush buffer
-    auto &data = bstrm.get_buffer();
-    detail::write_data(strm, data.data(), data.size());
+  // Combine small body with headers to reduce write syscalls
+  if (req.method != "HEAD" && !res.body.empty() && !res.content_provider_) {
+    bstrm.write(res.body.data(), res.body.size());
   }
 
-  // Body
+  // Log before writing to avoid race condition with client-side code that
+  // accesses logger-captured data immediately after receiving the response.
+  output_log(req, res);
+
+  // Flush buffer
+  auto &data = bstrm.get_buffer();
+  if (!detail::write_data(strm, data.data(), data.size())) { return false; }
+
+  // Streaming body
   auto ret = true;
-  if (req.method != "HEAD") {
-    if (!res.body.empty()) {
-      if (!detail::write_data(strm, res.body.data(), res.body.size())) {
-        ret = false;
-      }
-    } else if (res.content_provider_) {
-      if (write_content_with_provider(strm, req, res, boundary, content_type)) {
-        res.content_provider_success_ = true;
-      } else {
-        ret = false;
-      }
+  if (req.method != "HEAD" && res.content_provider_) {
+    if (write_content_with_provider(strm, req, res, boundary, content_type)) {
+      res.content_provider_success_ = true;
+    } else {
+      ret = false;
     }
   }
-
-  // Log
-  output_log(req, res);
 
   return ret;
 }
