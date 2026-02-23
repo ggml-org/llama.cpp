@@ -226,7 +226,7 @@ static std::optional<gguf_remote_model> gguf_parse_meta(const std::vector<char> 
 
 // cache handling for local download
 static std::string get_default_cache_dir() {
-    return fs_get_cache_directory() + "gguf-headers";
+    return fs_get_cache_directory() + "gguf-headers/";
 }
 
 static std::string sanitize_for_path(const std::string & s) {
@@ -355,28 +355,38 @@ static std::optional<gguf_remote_model> fetch_and_parse(
     // Start at 2MB, double each time, cap at 64MB
     size_t chunk_size = 2 * 1024 * 1024;
     const size_t max_chunk = 64 * 1024 * 1024;
+    std::vector<char> body;
 
     while (chunk_size <= max_chunk) {
         fprintf(stderr, "gguf_fetch: downloading %zu bytes from %s\n", chunk_size, filename.c_str());
 
         char range_buf[64];
-        snprintf(range_buf, sizeof(range_buf), "bytes=0-%zu", chunk_size - 1);
+        snprintf(range_buf, sizeof(range_buf), "bytes=%zu-%zu", body.size(), chunk_size - 1);
         httplib::Headers headers = {{"Range", range_buf}};
 
-        auto [code, body] = gguf_http_get(url, headers, 120);
+        auto [code, body_buf] = gguf_http_get(url, headers, 120);
         if (code != 200 && code != 206) {
             fprintf(stderr, "gguf_fetch: HTTP %ld fetching %s\n", code, url.c_str());
             return std::nullopt;
         }
 
-        if (body.empty()) {
+        if (body_buf.empty()) {
             fprintf(stderr, "gguf_fetch: empty response\n");
             return std::nullopt;
         }
 
+        if (code == 206) {
+            body.insert(body.end(), body_buf.begin(), body_buf.end());
+        }
+        if (code == 200) {
+            body = body_buf;
+        }
+
         auto result = gguf_parse_meta(body);
         if (result.has_value()) {
-            write_file(cache_path, body);
+            bool ok = write_file(cache_path, body);
+            fprintf(stderr, "gguf_fetch: cache write %s (%s, %zu bytes)\n",
+                    ok ? "OK" : "FAILED", cache_path.c_str(), body.size());
             return result;
         }
 
