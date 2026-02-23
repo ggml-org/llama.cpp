@@ -51,7 +51,6 @@ add_library(${TARGET} STATIC
     chat-auto-parser-helpers.cpp
     chat-auto-parser.h
     chat-diff-analyzer.cpp
-    chat-diff-analyzer.h
     chat-peg-parser.cpp
     chat-peg-parser.h
     chat.cpp

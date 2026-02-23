@@ -1,10 +1,10 @@
 #include "chat-auto-parser.h"
-#include "chat-diff-analyzer.h"
 #include "chat-peg-parser.h"
 #include "chat.h"
 #include "json-schema-to-grammar.h"
 #include "nlohmann/json.hpp"
 
+#include <stdexcept>
 #include <string>
 
 using json = nlohmann::ordered_json;
@@ -29,28 +29,29 @@ parser_build_context::parser_build_context(common_chat_peg_builder & p, const te
 common_chat_params peg_generator::generate_parser(const common_chat_template &    tmpl,
                                                   const struct templates_params & inputs) {
     // Run differential analysis to extract template structure
-    autoparser analysis(tmpl);
-    return generate_parser(tmpl, inputs, analysis);
+    struct autoparser autoparser;
+    autoparser.analyze_template(tmpl);
+    return generate_parser(tmpl, inputs, autoparser);
 }
 
 common_chat_params peg_generator::generate_parser(const common_chat_template &    tmpl,
                                                   const struct templates_params & inputs,
-                                                  const autoparser &              analysis) {
+                                                  const autoparser &              autoparser) {
     // Build the parser using the analysis results
-    auto parser = analysis.build_parser(inputs);
+    auto parser = autoparser.build_parser(inputs);
 
     // Create the result structure
     common_chat_params data;
     data.prompt           = common_chat_template_direct_apply(tmpl, inputs);
     data.format           = COMMON_CHAT_FORMAT_PEG_NATIVE;
-    data.preserved_tokens = analysis.preserved_tokens;
+    data.preserved_tokens = autoparser.preserved_tokens;
     data.parser           = parser.save();
 
     // Build grammar if tools are present
     bool has_tools =
-        analysis.tools.format.mode != tool_format::NONE && inputs.tools.is_array() && !inputs.tools.empty();
-    std::string trigger_marker = !analysis.tools.format.section_start.empty() ? analysis.tools.format.section_start :
-                                                                                analysis.tools.format.per_call_start;
+        autoparser.tools.format.mode != tool_format::NONE && inputs.tools.is_array() && !inputs.tools.empty();
+    std::string trigger_marker = !autoparser.tools.format.section_start.empty() ? autoparser.tools.format.section_start :
+                                                                                autoparser.tools.format.per_call_start;
     bool        include_grammar =
         has_tools && ((inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO && !trigger_marker.empty()) ||
                       inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED);
@@ -78,6 +79,9 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
 }
 
 common_peg_arena autoparser::build_parser(const templates_params & inputs) const {
+    if (!analysis_complete) {
+        throw std::invalid_argument("Cannot call build_parser on autoparser without performing analysis first, call analyze_template(...)");
+    }
     return build_chat_peg_parser([&](common_chat_peg_builder & p) {
         // If the template uses Python dict format (single-quoted strings in JSON structures),
         // pre-register a json-string rule that accepts both quote styles. This must happen

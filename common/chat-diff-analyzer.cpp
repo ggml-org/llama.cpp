@@ -1,5 +1,4 @@
-#include "chat-diff-analyzer.h"
-
+#include "chat-auto-parser.h"
 #include "chat-auto-parser-helpers.h"
 #include "chat-peg-parser.h"
 #include "chat.h"
@@ -161,12 +160,11 @@ static std::string mode_to_str(T mode) {
     return os.str();
 }
 
-autoparser::autoparser(const common_chat_template & tmpl)
-    : jinja_caps(tmpl.original_caps())
-    , reasoning(tmpl, jinja_caps.supports_tool_calls)
-    , content(tmpl, reasoning)
-    , tools(jinja_caps.supports_tool_calls ? analyze_tools(tmpl, jinja_caps, reasoning) : analyze_tools())
-{
+void autoparser::analyze_template(const common_chat_template & tmpl) {
+    jinja_caps = tmpl.original_caps();
+    reasoning = analyze_reasoning(tmpl, jinja_caps.supports_tool_calls);
+    content = analyze_content(tmpl, reasoning);
+    tools = analyze_tools(jinja_caps.supports_tool_calls ? analyze_tools(tmpl, jinja_caps, reasoning) : analyze_tools());
     collect_preserved_tokens();
 
     for (auto & workaround : workarounds) {
@@ -206,6 +204,7 @@ autoparser::autoparser(const common_chat_template & tmpl)
         ).c_str());
 
     LOG_DBG(ANSI_PURPLE "=== Differential analysis complete ===\n" ANSI_RESET);
+    analysis_complete = true;
 }
 
 void autoparser::collect_preserved_tokens() {

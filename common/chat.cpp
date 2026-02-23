@@ -1,7 +1,6 @@
 #include "chat.h"
 
 #include "chat-auto-parser.h"
-#include "chat-diff-analyzer.h"
 #include "chat-peg-parser.h"
 #include "common.h"
 #include "ggml.h"
@@ -1301,9 +1300,10 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
 
     try {
         LOG_DBG("Using differential autoparser\n");
-        auto analysis = autoparser::autoparser(tmpl);
-        auto auto_params = autoparser::peg_generator::generate_parser(tmpl, params, analysis);
-        auto_params.supports_thinking = analysis.reasoning.mode != autoparser::reasoning_mode::NONE;
+        struct autoparser::autoparser autoparser;
+        autoparser.analyze_template(tmpl);
+        auto auto_params = autoparser::peg_generator::generate_parser(tmpl, params, autoparser);
+        auto_params.supports_thinking = autoparser.reasoning.mode != autoparser::reasoning_mode::NONE;
         return auto_params;
     } catch (const std::exception & e) {
         throw std::invalid_argument(std::string("Unable to generate parser for this template. Automatic parser generation failed: ") + e.what());

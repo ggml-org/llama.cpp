@@ -1,5 +1,5 @@
 #include "chat-auto-parser-helpers.h"
-#include "chat-diff-analyzer.h"
+#include "chat-auto-parser.h"
 #include "chat-peg-parser.h"
 #include "chat.h"
 #include "peg-parser.h"
@@ -593,7 +593,7 @@ static void test_compare_variants_basic(testing & t) {
         p.messages[0]["content"] = "World";
     };
 
-    auto result = autoparser::compare_variants(tmpl, params, modifier);
+    auto result = ::compare_variants(tmpl, params, modifier);
 
     if (!t.assert_true("result should have value", result.has_value())) {
         return;
@@ -616,7 +616,7 @@ static void test_compare_variants_messages_modifier(testing & t) {
         p.messages[0]["content"] = "B";
     };
 
-    std::optional<compare_variants_result> result = autoparser::compare_variants(tmpl, params, modifier);
+    std::optional<compare_variants_result> result = ::compare_variants(tmpl, params, modifier);
 
     if (!t.assert_true("result should have value", result.has_value())) {
         return;
@@ -639,7 +639,7 @@ static void test_compare_variants_tools_modifier(testing & t) {
         p.tools[0]["name"] = "bar";
     };
 
-    auto result = autoparser::compare_variants(tmpl, params, modifier);
+    auto result = ::compare_variants(tmpl, params, modifier);
 
     if (!t.assert_true("result should have value", result.has_value())) {
         return;
@@ -663,7 +663,7 @@ static void test_compare_variants_both_modifiers(testing & t) {
         p.messages[0]["role"] = "newuser";
     };
 
-    auto result = autoparser::compare_variants(tmpl, params, modifier);
+    auto result = ::compare_variants(tmpl, params, modifier);
 
     if (!t.assert_true("result should have value", result.has_value())) {
         return;
@@ -686,7 +686,7 @@ static void test_compare_variants_template_failure(testing & t) {
         p.messages[0]["content"] = "World";
     };
 
-    auto result = autoparser::compare_variants(tmpl, params, modifier);
+    auto result = ::compare_variants(tmpl, params, modifier);
 
     t.assert_true("result should be nullopt on template failure", !result.has_value());
 }
@@ -701,7 +701,7 @@ static void test_compare_variants_identity(testing & t) {
     });
 
     // No modifier - should use identity
-    auto result = autoparser::compare_variants(tmpl, params, nullptr);
+    auto result = ::compare_variants(tmpl, params, nullptr);
 
     if (!t.assert_true("result should have value", result.has_value())) {
         return;
@@ -812,7 +812,7 @@ static void test_seed_oss_tool_presence(testing & t) {
     params_with_tools.add_generation_prompt = false;
     params_with_tools.enable_thinking = true;
 
-    auto result = autoparser::compare_variants(tmpl, params_no_tools,
+    auto result = ::compare_variants(tmpl, params_no_tools,
         [&](template_params & p) {
             p.messages = params_with_tools.messages;
         });
@@ -874,7 +874,7 @@ static void test_seed_oss_call_count(testing & t) {
     params_one.add_generation_prompt = false;
     params_one.enable_thinking = true;
 
-    auto result = autoparser::compare_variants(tmpl, params_one,
+    auto result = ::compare_variants(tmpl, params_one,
         [&](template_params & p) {
             p.messages = json::array({user_msg, assistant_two_calls});
         });
@@ -966,7 +966,7 @@ static void test_seed_oss_function_names(testing & t) {
     params_alpha.add_generation_prompt = false;
     params_alpha.enable_thinking = true;
 
-    auto result = autoparser::compare_variants(tmpl, params_alpha,
+    auto result = ::compare_variants(tmpl, params_alpha,
         [&](template_params & p) {
             p.messages = json::array({user_msg, assistant_func_beta});
         });
@@ -1070,7 +1070,7 @@ static void test_seed_oss_argument_count(testing & t) {
     params_zero.add_generation_prompt = false;
     params_zero.enable_thinking = true;
 
-    auto result_zero_one = autoparser::compare_variants(tmpl, params_zero,
+    auto result_zero_one = ::compare_variants(tmpl, params_zero,
         [&](template_params & p) {
             p.messages = json::array({user_msg, assistant_one_arg});
         });
@@ -1088,7 +1088,7 @@ static void test_seed_oss_argument_count(testing & t) {
     params_one.add_generation_prompt = false;
     params_one.enable_thinking = true;
 
-    auto result_one_two = autoparser::compare_variants(tmpl, params_one,
+    auto result_one_two = ::compare_variants(tmpl, params_one,
         [&](template_params & p) {
             p.messages = json::array({user_msg, assistant_two_args});
         });
@@ -1146,7 +1146,7 @@ static void test_seed_oss_args_presence(testing & t) {
     params_same.enable_thinking = true;
 
     // Test same arg vs other arg
-    auto result_same_other = autoparser::compare_variants(tmpl, params_same,
+    auto result_same_other = ::compare_variants(tmpl, params_same,
         [&](template_params & p) {
             p.messages = json::array({user_msg, assistant_other_arg});
         });
@@ -1165,7 +1165,7 @@ static void test_seed_oss_args_presence(testing & t) {
         diff5a.right.find("value2") != std::string::npos || diff5a.prefix.find("value2") != std::string::npos || diff5a.suffix.find("value2") != std::string::npos);
 
     // Test same arg vs both args
-    auto result_same_both = autoparser::compare_variants(tmpl, params_same,
+    auto result_same_both = ::compare_variants(tmpl, params_same,
         [&](template_params & p) {
             p.messages = json::array({user_msg, assistant_both_args});
         });
@@ -1214,7 +1214,7 @@ static void test_seed_oss_tool_with_reasoning(testing & t) {
     params_tool_only.add_generation_prompt = false;
     params_tool_only.enable_thinking = true;
 
-    auto result = autoparser::compare_variants(tmpl, params_tool_only,
+    auto result = ::compare_variants(tmpl, params_tool_only,
         [&](template_params & p) {
             p.messages = json::array({user_msg, assistant_tool_with_reasoning});
         });
@@ -1287,7 +1287,8 @@ static void test_nemotron_reasoning_detection(testing & t) {
     params.enable_thinking = true;
 
     // Run differential analysis
-    auto analysis = autoparser::autoparser(tmpl);
+    struct autoparser analysis;
+    analysis.analyze_template(tmpl);
 
     // Check reasoning markers
     t.assert_equal("reasoning_start should be '<think>'", "<think>", analysis.reasoning.start);
@@ -1308,7 +1309,8 @@ static void test_nemotron_tool_format(testing & t) {
     common_chat_template tmpl = load_nemotron_template(t);
 
     // Run differential analysis
-    auto analysis = autoparser::autoparser(tmpl);
+    struct autoparser analysis;
+    analysis.analyze_template(tmpl);
 
     // Check tool markers - Nemotron uses per-call wrapping (each call individually wrapped)
     t.assert_equal("tool_section_start should be empty (per-call format)", "", analysis.tools.format.section_start);
@@ -1346,7 +1348,8 @@ static void test_cohere_reasoning_detection(testing & t) {
     common_chat_template tmpl = load_cohere_template(t);
 
     // Run differential analysis
-    auto analysis = autoparser::autoparser(tmpl);
+    struct autoparser analysis;
+    analysis.analyze_template(tmpl);
 
     // Check reasoning markers - Cohere uses special token format
     t.assert_equal("reasoning_start should be '<|START_THINKING|>'", "<|START_THINKING|>", analysis.reasoning.start);
@@ -1367,7 +1370,8 @@ static void test_tool_format_cohere(testing & t) {
     common_chat_template tmpl = load_cohere_template(t);
 
     // Run differential analysis
-    auto analysis = autoparser::autoparser(tmpl);
+    struct autoparser analysis;
+    analysis.analyze_template(tmpl);
 
     // Check tool section markers - Cohere uses ACTION markers
     t.assert_equal("tool_section_start should be '<|START_ACTION|>'", "<|START_ACTION|>", analysis.tools.format.section_start);
