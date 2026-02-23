@@ -133,12 +133,12 @@ struct webgpu_buf_pool {
     // which can run on a different thread than the calling thread.
     std::mutex              mutex;
     std::condition_variable cv;
-    size_t                  cur_pool_size;
-    size_t                  max_pool_size;
-    wgpu::Device            device;
-    wgpu::BufferUsage       host_buf_usage;
-    wgpu::BufferUsage       dev_buf_usage;
-    size_t                  buf_size;
+    // size_t                  cur_pool_size;
+    // size_t                  max_pool_size;
+    // wgpu::Device            device;
+    // wgpu::BufferUsage       host_buf_usage;
+    // wgpu::BufferUsage       dev_buf_usage;
+    // size_t                  buf_size;
 
     void init(wgpu::Device      device,
               int               num_bufs,
@@ -146,12 +146,12 @@ struct webgpu_buf_pool {
               wgpu::BufferUsage dev_buf_usage,
               wgpu::BufferUsage host_buf_usage,
               size_t            max_pool_size = WEBGPU_NUM_PARAM_BUFS * 3) {
-        this->max_pool_size  = max_pool_size;
-        this->cur_pool_size  = num_bufs;
-        this->device         = device;
-        this->host_buf_usage = host_buf_usage;
-        this->dev_buf_usage  = dev_buf_usage;
-        this->buf_size       = buf_size;
+        // this->max_pool_size  = max_pool_size;
+        // this->cur_pool_size  = num_bufs;
+        // this->device         = device;
+        // this->host_buf_usage = host_buf_usage;
+        // this->dev_buf_usage  = dev_buf_usage;
+        // this->buf_size       = buf_size;
         for (int i = 0; i < num_bufs; i++) {
             wgpu::Buffer host_buf;
             wgpu::Buffer dev_buf;
@@ -169,18 +169,18 @@ struct webgpu_buf_pool {
             return bufs;
         }
 
-        // Try growing the pool if no free buffers
-        if (free.empty() && cur_pool_size < max_pool_size) {
-            wgpu::Buffer host_buf;
-            wgpu::Buffer dev_buf;
-            ggml_webgpu_create_buffer(device, host_buf, buf_size, host_buf_usage, "ggml_webgpu_host_pool_buf");
-            ggml_webgpu_create_buffer(device, dev_buf, buf_size, dev_buf_usage, "ggml_webgpu_dev_pool_buf");
-            if (!(host_buf && dev_buf)) {
-                GGML_ABORT("webgpu_buf_pool: failed to allocate buffers");
-            }
-            cur_pool_size++;
-            return webgpu_pool_bufs{ host_buf, dev_buf };
-        }
+        // // Try growing the pool if no free buffers
+        // if (free.empty() && cur_pool_size < max_pool_size) {
+        //     wgpu::Buffer host_buf;
+        //     wgpu::Buffer dev_buf;
+        //     ggml_webgpu_create_buffer(device, host_buf, buf_size, host_buf_usage, "ggml_webgpu_host_pool_buf");
+        //     ggml_webgpu_create_buffer(device, dev_buf, buf_size, dev_buf_usage, "ggml_webgpu_dev_pool_buf");
+        //     if (!(host_buf && dev_buf)) {
+        //         GGML_ABORT("webgpu_buf_pool: failed to allocate buffers");
+        //     }
+        //     cur_pool_size++;
+        //     return webgpu_pool_bufs{ host_buf, dev_buf };
+        // }
 
         cv.wait(lock, [this] { return !free.empty(); });
         webgpu_pool_bufs bufs = free.back();
