@@ -4104,9 +4104,13 @@ public:
 
             // Post-matmul sync: signal progress, wait for merge, then copy
             // the secondary's partial output from host-pinned staging to device
-            // scratch. The kernel-side copy ensures data passes through the GPU
-            // L2 cache, making it coherent for subsequent operations that read
-            // the full matmul output (ROPE, ATTENTION, SILU_MUL, ADD, etc.).
+            // scratch. The kernel-side copy is required for L2 cache coherency:
+            // BCS H2D writes to device scratch bypass the GPU L2 cache, but
+            // the kernel's normal float reads go through L2. If L2 contains
+            // stale data for the merge_dst cache lines, the kernel sees garbage.
+            // By having the kernel itself copy from host-pinned memory (read via
+            // PCIe zero-copy, bypasses L2) to device scratch (write goes through
+            // L2), subsequent reads from scratch are guaranteed coherent.
             //
             // Flow:
             //   1. Kernel writes progress_counter (host reads via BCS D2H)
@@ -4131,7 +4135,7 @@ public:
                     device_barrier_atomic(local_id, n_wgs, /* reset_tile_counter = */ false);
                 }
                 // Cooperative copy: all work-groups copy merge data from
-                // host-pinned staging to device scratch
+                // host-pinned staging to device scratch (L2-coherent path)
                 copy_merge_data(op);
                 // Barrier after copy so all WGs have finished writing before
                 // any subsequent op reads the merged output
@@ -4332,13 +4336,16 @@ private:
     //   2. wait_for_merge:    spin on merge_complete  (host writes via BCS H2D)
     //   3. copy_merge_data:   copy from host-pinned merge_src to device scratch
     //
-    // The kernel-side copy in step 3 is critical for L2 cache coherency.
+    // The kernel-side copy in step 3 is required for L2 cache coherency.
     // BCS H2D writes to device scratch bypass the GPU L2 cache, but the
-    // kernel's normal loads read through L2. If L2 contains stale data for
-    // the merge_dst cache lines, the kernel sees garbage. By having the
+    // kernel's normal float reads go through L2. If L2 contains stale data
+    // for the merge_dst cache lines, the kernel sees garbage. By having the
     // kernel itself copy from host-pinned memory (read via PCIe zero-copy,
     // bypasses L2) to device scratch (write goes through L2), subsequent
     // reads from scratch are guaranteed to see the fresh data.
+    //
+    // This was confirmed experimentally: direct BCS H2D to merge_dst
+    // produced wrong output, while the kernel-side copy path is correct.
 
     // Signal that this matmul's primary rows are complete.
     // WG 0, thread 0 writes progress_counter via device-scope atomic_ref

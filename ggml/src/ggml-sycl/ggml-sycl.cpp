@@ -32482,6 +32482,18 @@ static bool should_use_persistent_tg(ggml_backend_sycl_context & ctx, ggml_cgrap
         return false;
     }
 
+    // 1a. Multi-device guard: when multiple SYCL GPUs are visible, the backend
+    // scheduler splits the graph across devices (pipeline parallelism). Each
+    // device's graph_compute only sees a partial graph. The persistent TG kernel
+    // expects the FULL transformer forward pass and produces garbage output
+    // when given a partial graph. Disable unless persistent_split is active
+    // (which handles multi-device via row-split within a single monolithic kernel).
+    static const bool persistent_split_env = (std::getenv("GGML_SYCL_PERSISTENT_SPLIT") != nullptr);
+    if (ggml_backend_sycl_get_device_count() > 1 && !persistent_split_env) {
+        GGML_SYCL_DEBUG("[PERSISTENT-TG] Disabled: multi-device pipeline parallelism splits graph\n");
+        return false;
+    }
+
     // 1b. Model exceeds VRAM or cache has evictions — persistent TG records weight
     // pointers that become stale. Disable to use per-op dispatch.
     // Exception: tensor split env var is set — split mode manages weight placement
@@ -32732,12 +32744,11 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
         // result to host-pinned merge_src. The kernel copies from merge_src
         // to device scratch after seeing merge_complete (L2-coherent copy).
         //
-        // L2 cache coherency fix: BCS H2D writes to device scratch bypass the
-        // GPU L2 cache, but kernel normal loads read through L2 (stale data).
-        // Instead, the host writes to host-pinned memory (merge_src) and the
-        // kernel itself copies merge_src -> merge_dst. Kernel reads from
-        // host-pinned go through PCIe zero-copy (bypasses L2); kernel writes
-        // to device scratch go through L2, making data coherent for subsequent ops.
+        // L2 cache coherency: BCS H2D writes to device scratch bypass the GPU
+        // L2 cache, but kernel normal float reads go through L2 (stale data).
+        // Direct BCS H2D to merge_dst was tested and confirmed to produce wrong
+        // output. The kernel-side copy from host-pinned memory (PCIe zero-copy,
+        // bypasses L2) to device scratch (writes go through L2) is required.
         //
         // Set GGML_SYCL_PERSISTENT_SPLIT=1 to enable for testing.
         // NOTE: persistent_split_enabled declared at early exit guard above.
@@ -32880,6 +32891,7 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
 
                     // Step 4: Launch MMVQ on secondary device.
                     // Output goes to merge_buf (host-pinned), NOT to device scratch.
+                    // The kernel copies merge_buf -> merge_dst for L2 coherency.
                     ggml_sycl::mmvq_bench_args mmvq_args{};
                     mmvq_args.stream               = q_secondary;
                     mmvq_args.weight_type          = static_cast<ggml_type>(info.quant_type);
