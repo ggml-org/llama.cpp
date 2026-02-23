@@ -361,7 +361,7 @@ static void test_backend_temp_sampling(const test_params & params) {
             GGML_ASSERT(false && "Failed to decode token");
         }
 
-        // Verfify sequence 0
+        // Verify sequence 0
         {
             int32_t batch_idx = test_ctx.idx_for_seq(0);
             int n_logits = llama_get_sampled_logits_count_ith(test_ctx.ctx.get(), batch_idx);
@@ -379,7 +379,7 @@ static void test_backend_temp_sampling(const test_params & params) {
         }
 
 
-        // Verfify sequence 1
+        // Verify sequence 1
         {
             int32_t batch_idx = test_ctx.idx_for_seq(1);
 
