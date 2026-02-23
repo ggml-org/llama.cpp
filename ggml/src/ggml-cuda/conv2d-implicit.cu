@@ -964,8 +964,7 @@ static void launch_conv2d_implicit_split_kernel(ggml_backend_cuda_context & ctx,
         int id = ggml_cuda_get_device();
 
         ggml_cuda_pool_alloc<half> Y_H(ctx.pool(id), ksplit * P.k * P.Oh * P.Ow * P.n);
-        cudaFuncSetAttribute(conv2d_implicit_kernel<half, BM, BN, BK, WM, WN, WK, ksplit, NUM_THREADS>,
-            cudaFuncAttributeMaxDynamicSharedMemorySize,    65536); // set shared memory limit to 64KB which is maximum for sm_75
+        CUDA_SET_SHARED_MEMORY_LIMIT((conv2d_implicit_kernel<half, BM, BN, BK, WM, WN, WK, ksplit, NUM_THREADS>), 65536);// set shared memory limit to 64KB which is maximum for sm_75
         dim3 gridDim(BlocksN, BlocksM, ksplit);
         dim3 blockDim(ThreadsN, ThreadsM);
 
@@ -1162,15 +1161,15 @@ static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const floa
             }
         }
 
-        cudaFuncSetAttribute(conv2d_implicit_kernel<float, BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 0, NumThreads>,
-            cudaFuncAttributeMaxDynamicSharedMemorySize,    65536); // set shared memory limit to 64KB which is maximum for sm_75
+        CUDA_SET_SHARED_MEMORY_LIMIT((conv2d_implicit_kernel<float, BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 0, NumThreads>), 65536);// set shared memory limit to 64KB which is maximum for sm_75
+
         dim3 gridDim(BlocksN, BlocksM);
         dim3 blockDim(ThreadsN, ThreadsM);
 
         conv2d_implicit_kernel<float, BM_dim, BN_dim, BK_dim,
             WM_dim, WN_dim, WK_dim, 0, NumThreads>
             <<<gridDim, blockDim, shmem_bytes, st>>>(X_H, K_H, Y_D, P);
-    } else{
+    } else {
        conv2d_implicit_cuda<half, 1>(X_D, K_D, Y_D, P, st);
     }
 
