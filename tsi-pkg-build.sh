@@ -6,6 +6,13 @@
 #git checkout master
 #git merge upstream/master
 
+# NOTE:
+# To ensure environment variables are set in the current shell,
+# always run this script using:
+#   source tsi-pkg-build.sh
+# or
+#   . tsi-pkg-build.sh
+
 set -e
 
 # --- Host-arch aware MLIR SDK selection
