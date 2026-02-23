@@ -436,50 +436,59 @@ void dequantize_row_mxfp4(const block_mxfp4 * GGML_RESTRICT x, float * GGML_REST
 
 void quantize_row_nvfp4_ref(const float * GGML_RESTRICT x, block_nvfp4 * GGML_RESTRICT y, int64_t k) {
     static const int qk = QK_NVFP4;
+    static const int qk_sub = QK_NVFP4_SUB;
+    static const int n_sub = QK_NVFP4 / QK_NVFP4_SUB;
 
     assert(k % qk == 0);
 
     const int nb = k / qk;
 
     for (int i = 0; i < nb; i++) {
-        float amax = 0.0f;
+        // Quantize each sub-block independently
+        for (int s = 0; s < n_sub; s++) {
+            const float * xb = x + i*qk + s*qk_sub;
 
-        for (int j = 0; j < qk; j++) {
-            const float v = x[i*qk + j];
-            if (amax < fabsf(v)) {
-                amax = fabsf(v);
+            float amax = 0.0f;
+            for (int j = 0; j < qk_sub; j++) {
+                if (amax < fabsf(xb[j])) {
+                    amax = fabsf(xb[j]);
+                }
             }
-        }
 
-        y[i].d = ggml_fp32_to_ue4m3(amax / 6.0f);
-        const float d = ggml_ue4m3_to_fp32(y[i].d);
+            y[i].d[s] = GGML_FP32_TO_FP16(ggml_ue4m3_to_fp32(ggml_fp32_to_ue4m3(amax / 6.0f)));
+            const float d = GGML_FP16_TO_FP32(y[i].d[s]);
 
-        for (int j = 0; j < qk/2; ++j) {
-            const uint8_t x0 = best_index_mxfp4(x[i*qk + 0    + j], d);
-            const uint8_t x1 = best_index_mxfp4(x[i*qk + qk/2 + j], d);
+            for (int j = 0; j < qk_sub/2; ++j) {
+                const uint8_t x0 = best_index_mxfp4(xb[0        + j], d);
+                const uint8_t x1 = best_index_mxfp4(xb[qk_sub/2 + j], d);
 
-            y[i].qs[j]  = x0;
-            y[i].qs[j] |= x1 << 4;
+                y[i].qs[s*(qk_sub/2) + j] = x0 | (x1 << 4);
+            }
         }
     }
 }
 
 void dequantize_row_nvfp4(const block_nvfp4 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
     static const int qk = QK_NVFP4;
+    static const int qk_sub = QK_NVFP4_SUB;
+    static const int n_sub = QK_NVFP4 / QK_NVFP4_SUB;
 
     assert(k % qk == 0);
 
     const int nb = k / qk;
 
     for (int i = 0; i < nb; i++) {
-        const float d = ggml_ue4m3_to_fp32(x[i].d);
+        for (int s = 0; s < n_sub; s++) {
+            const float d = GGML_FP16_TO_FP32(x[i].d[s]);
+            float * yb = y + i*qk + s*qk_sub;
 
-        for (int j = 0; j < qk/2; ++j) {
-            const int8_t x0 = kvalues_mxfp4[x[i].qs[j] & 0x0F];
-            const int8_t x1 = kvalues_mxfp4[x[i].qs[j] >>   4];
+            for (int j = 0; j < qk_sub/2; ++j) {
+                const int8_t v0 = kvalues_mxfp4[x[i].qs[s*(qk_sub/2) + j] & 0x0F];
+                const int8_t v1 = kvalues_mxfp4[x[i].qs[s*(qk_sub/2) + j] >>   4];
 
-            y[i*qk + j + 0   ] = x0*d;
-            y[i*qk + j + qk/2] = x1*d;
+                yb[j + 0       ] = v0*d;
+                yb[j + qk_sub/2] = v1*d;
+            }
         }
     }
 }
@@ -5283,7 +5292,7 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
             } break;
         case GGML_TYPE_NVFP4:
             {
-                VALIDATE_ROW_DATA_D_F16_IMPL(block_nvfp4, data, nb);
+                VALIDATE_ROW_DATA_DVEC_F16_IMPL(block_nvfp4, data, nb, QK_NVFP4/QK_NVFP4_SUB);
             } break;
         case GGML_TYPE_Q2_K:
             {

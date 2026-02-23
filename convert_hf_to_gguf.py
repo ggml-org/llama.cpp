@@ -596,10 +596,19 @@ class ModelBase:
         # pack: qs[j] = lo_nibble[j] | (hi_nibble[j] << 4)
         qs = (best_idx[:, :, :8] | (best_idx[:, :, 8:] << 4)).to(torch.uint8)
 
-        # block layout: [UE4M3 scale (1 byte), qs (8 bytes)]
-        d_bytes = combined.reshape(out_features, n_blocks, 1)
-        new_data = np.concatenate([d_bytes, qs.numpy()], axis=-1).reshape(out_features, n_blocks * 9)
-        new_shape = [out_features, n_blocks * 16]
+        # super-block layout (QK=64, 4 sub-blocks of 16):
+        # [d0,d1,d2,d3 as fp16 (8 bytes), qs0(8), qs1(8), qs2(8), qs3(8) (32 bytes)] = 40 bytes
+        n_super = n_blocks // 4
+        # Convert UE4M3 scales to fp16
+        ue_exp = (combined >> 3) & 0xF
+        ue_man = combined & 0x7
+        ue_float = np.where(combined == 0, 0.0,
+                   np.where(ue_exp == 0, ue_man.astype(np.float32) * 2**-9,
+                   (1.0 + ue_man.astype(np.float32) / 8.0) * (2.0 ** (ue_exp.astype(np.float32) - 7))))
+        d_fp16 = (ue_float * 0.5).astype(np.float16).reshape(out_features, n_super, 4)
+        qs_grouped = qs.numpy().reshape(out_features, n_super, 4, 8).reshape(out_features, n_super, 32)
+        new_data = np.concatenate([d_fp16.view(np.uint8), qs_grouped], axis=-1).reshape(out_features, n_super * 40)
+        new_shape = [out_features, n_super * 64]
         logger.info(f"Repacked {new_name} with shape {new_shape} and quantization NVFP4")
         self.gguf_writer.add_tensor(new_name, new_data, raw_dtype=gguf.GGMLQuantizationType.NVFP4)
 
@@ -655,12 +664,14 @@ class ModelBase:
                 best_idx = (target.unsqueeze(-1) - e2m1_lut.reshape(1, 1, 1, 16)).abs().argmin(dim=-1).to(torch.uint8)
 
                 qs = (best_idx[:, :, :8] | (best_idx[:, :, 8:] << 4)).to(torch.uint8)
-                d_bytes = combined.reshape(out_features, n_blocks, 1)
-                raw = np.concatenate([d_bytes, qs.numpy()], axis=-1).reshape(out_features, n_blocks * 9).copy()
+                n_super = n_blocks // 4
+                d_fp16 = (ue_float * 0.5).astype(np.float16).reshape(out_features, n_super, 4)
+                qs_grouped = qs.numpy().reshape(out_features, n_super, 4, 8).reshape(out_features, n_super, 32)
+                raw = np.concatenate([d_fp16.view(np.uint8), qs_grouped], axis=-1).reshape(out_features, n_super * 40).copy()
 
                 if key not in expert_blocks:
                     expert_blocks[key] = []
-                    expert_shapes[key] = [out_features, n_blocks * 16]
+                    expert_shapes[key] = [out_features, n_super * 64]
                 expert_blocks[key].append((expert_id, raw))
             else:
                 new_name = self.map_tensor_name(name)
