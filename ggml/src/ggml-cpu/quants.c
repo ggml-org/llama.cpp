@@ -114,6 +114,28 @@ void quantize_row_q8_K_generic(const float * GGML_RESTRICT x, void * GGML_RESTRI
     quantize_row_q8_K_ref(x, y, k);
 }
 
+//===================================== IQ*_K quants ======================================
+
+void quantize_row_iq2_k(const float * x, void * vy, int64_t k) {
+    quantize_row_iq2_k_ref(x, vy, k);
+}
+
+void quantize_row_iq3_k(const float * x, void * vy, int64_t k) {
+    quantize_row_iq3_k_ref(x, vy, k);
+}
+
+void quantize_row_iq4_k(const float * x, void * vy, int64_t k) {
+    quantize_row_iq4_k_ref(x, vy, k);
+}
+
+void quantize_row_iq5_k(const float * x, void * vy, int64_t k) {
+    quantize_row_iq5_k_ref(x, vy, k);
+}
+
+void quantize_row_iq6_k(const float * x, void * vy, int64_t k) {
+    quantize_row_iq6_k_ref(x, vy, k);
+}
+
 //===================================== Dot products =================================
 
 void ggml_vec_dot_q4_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
