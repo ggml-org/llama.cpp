@@ -15,12 +15,13 @@ static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
     GGML_UNUSED(userdata);
 }
 
-int main(int argc, char ** argv) {
+int main(int /*argc*/, char ** /*argv*/) {
     const uint32_t n_ctx   = 32;
-    const uint32_t n_embd  = 256;
-    const uint32_t n_head  = 2;
-    const uint32_t n_ff    = 384;
-    const uint32_t n_vocab = 256;
+    const uint32_t n_embd  = 32;
+    const uint32_t n_head  = 1;
+    const uint32_t n_ff    = 32;
+    const uint32_t n_vocab = 32;
+    const uint32_t n_layer = 1;
 
     gguf_context_ptr metadata(gguf_init_empty());
     gguf_set_val_str(metadata.get(), "general.architecture",                   "llama");
@@ -28,7 +29,7 @@ int main(int argc, char ** argv) {
     gguf_set_val_u32(metadata.get(), "llama.embedding_length",                 n_embd);
     gguf_set_val_u32(metadata.get(), "llama.attention.head_count",             n_head);
     gguf_set_val_u32(metadata.get(), "llama.feed_forward_length",              n_ff);
-    gguf_set_val_u32(metadata.get(), "llama.block_count",                      2);
+    gguf_set_val_u32(metadata.get(), "llama.block_count",                      n_layer);
     gguf_set_val_f32(metadata.get(), "llama.attention.layer_norm_rms_epsilon", 1e-5f);
     gguf_set_val_u32(metadata.get(), "llama.vocab_size",                       n_vocab);
 
