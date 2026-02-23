@@ -1306,10 +1306,8 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         auto_params.supports_thinking = analysis.reasoning.mode != autoparser::reasoning_mode::NONE;
         return auto_params;
     } catch (const std::exception & e) {
-        LOG_WRN("Automatic parser generation failed: %s\n", e.what());
+        throw std::invalid_argument(std::string("Unable to generate parser for this template. Automatic parser generation failed: ") + e.what());
     }
-
-    GGML_ABORT("Unable to generate parser for this template.");
 }
 
 // Legacy template route (adhoc C++ implementation of known templates), forward to llama_chat_apply_template.

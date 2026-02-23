@@ -981,7 +981,7 @@ public:
         if (schema.empty() || schema_type == "object") {
             return _add_rule(rule_name, _add_primitive("object", PRIMITIVE_RULES.at("object")));
         }
-        if (schema_type.is_null()) {
+        if (schema_type.is_null() && schema.is_object()) {
             // No type constraint and no recognized structural keywords (e.g. {"description": "..."}).
             // Per JSON Schema semantics this is equivalent to {} and accepts any value.
             return _add_rule(rule_name, _add_primitive("value", PRIMITIVE_RULES.at("value")));
