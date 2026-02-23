@@ -8,7 +8,7 @@ The unified auto-parser uses a pure differential, compositional approach (inspir
 
 **Core Philosophy**:
 
-- **Zero Hardcoded Patterns**: All markers extracted through template comparison (the **only heuristic** is JSON detection to distinguish `JSON_NATIVE` from tag-based formats)
+- **Minimize Hardcoded Patterns**: All markers extracted through template comparison (the only heuristic is JSON detection to distinguish `JSON_NATIVE` from tag-based formats)
 - **Compositional Architecture**: Separate analyzer structs for reasoning, content, and tools — each responsible for its own analysis and parser construction
 
 **Analysis + Parser Building in Two Steps**:
