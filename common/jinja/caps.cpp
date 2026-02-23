@@ -17,7 +17,7 @@ using json = nlohmann::ordered_json;
 namespace jinja {
 
 using caps_json_fn = std::function<json()>;
-using caps_analyze_fn = std::function<void(bool, value &, value &, const std::string &)>;
+using caps_analyze_fn = std::function<void(bool, value &, value &)>;
 
 static void caps_try_execute(jinja::program & prog,
                              const caps_json_fn & messages_fn,
