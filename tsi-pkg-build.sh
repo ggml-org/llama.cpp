@@ -6,7 +6,25 @@
 #git checkout master
 #git merge upstream/master
 
+# NOTE:
+# To ensure environment variables are set in the current shell,
+# always run this script using:
+#   source tsi-pkg-build.sh
+# or
+#   . tsi-pkg-build.sh
+
 set -e
+
+# --- Host-arch aware MLIR SDK selection
+m="$(uname -m)"
+case "$m" in
+  x86_64|amd64) arch="x86_64" ;;
+  aarch64|arm64) arch="aarch64" ;;
+  *)
+    log_error "Unsupported host arch from uname -m: $m"
+    exit 1
+    ;;
+esac
 
 # Accept MLIR_COMPILER_DIR and TOOLBOX_DIR as arguments or environment variables
 # Usage: ./tsi-pkg-build.sh [release|debug] [MLIR_COMPILER_DIR] [TOOLBOX_DIR]
@@ -16,7 +34,7 @@ TOOLBOX_DIR=${3:-${TOOLBOX_DIR:-}}
 
 # Default to SDK paths if not provided
 if [ -z "${MLIR_COMPILER_DIR}" ]; then
-  MLIR_SDK_VERSION=${MLIR_SDK_VERSION:-/proj/rel/sw/sdk-r.0.2.3}
+  MLIR_SDK_VERSION=${MLIR_SDK_VERSION:-/proj/rel/sw/sdk-r.0.2.4/${arch}}
   MLIR_COMPILER_DIR=${MLIR_SDK_VERSION}/compiler
   echo "Using default MLIR_COMPILER_DIR: ${MLIR_COMPILER_DIR}"
 fi
@@ -45,6 +63,7 @@ echo "TOOLBOX_DIR: ${TOOLBOX_DIR}"
 export MLIR_SDK_VERSION=${MLIR_SDK_VERSION:-$(dirname ${MLIR_COMPILER_DIR})}
 export COMPILER_INSTALL_DIR=${MLIR_COMPILER_DIR}
 export TOOLBOX_DIR
+export FAU_LOOKUP_TABLE_PATH=${MLIR_SDK_VERSION}/ffm/txe-ffm-cpp/third-party/FAU/include/
 
 # Check if enable_coverage is passed as an argument
 ENABLE_COVERAGE_FLAG=""
@@ -60,7 +79,6 @@ done
 echo 'updating submodule'
 git submodule update --recursive --init
 cd ggml-tsi-kernel/
-#module load gcc/13.3.0
 # Set compiler environment variables to use GCC 13.3.0
 export CC="/proj/local/gcc-13.3.0/bin/gcc"
 export CXX="/proj/local/gcc-13.3.0/bin/g++"
