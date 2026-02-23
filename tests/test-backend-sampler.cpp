@@ -361,7 +361,7 @@ static void test_backend_temp_sampling(const test_params & params) {
             GGML_ASSERT(false && "Failed to decode token");
         }
 
-        // Verfify sequence 0
+        // Verify sequence 0
         {
             int32_t batch_idx = test_ctx.idx_for_seq(0);
             int n_logits = llama_get_sampled_logits_count_ith(test_ctx.ctx.get(), batch_idx);
@@ -379,7 +379,7 @@ static void test_backend_temp_sampling(const test_params & params) {
         }
 
 
-        // Verfify sequence 1
+        // Verify sequence 1
         {
             int32_t batch_idx = test_ctx.idx_for_seq(1);
 
@@ -395,7 +395,7 @@ static void test_backend_temp_sampling(const test_params & params) {
         }
     }
 
-    // lambda to testing non-positive temperature values.
+    // lambda for testing non-positive temperature values.
     auto test_argmax_temp = [&](float temp) {
         printf("\nTesting temperature = %.1f\n", temp);
 
@@ -454,7 +454,7 @@ static void test_backend_temp_ext_sampling(const test_params & params) {
         }
     }
 
-    // lambda to testing non-positive temp/delta/exponent values.
+    // lambda for testing non-positive temp/delta/exponent values.
     auto test_argmax_temp = [&](float temp, float delta, float exponent) {
         printf("\nTesting temperature = %.1f, delta = %1.f, exponent = %1.f\n", temp, delta, exponent);
 
@@ -530,7 +530,7 @@ static void test_backend_min_p_sampling(const test_params & params) {
     printf("min-p cpu sampled token id:%d, string: '%s'\n", token, token_str.c_str());
     GGML_ASSERT(token >= 0 && token < test_ctx.n_vocab);
 
-    // Decode and sampler 10 more tokens
+    // Decode and sample 10 more tokens
     for (int i = 0; i < 10; i++) {
         int32_t loop_idx = test_ctx.idx_for_seq(seq_id);
         llama_token token = llama_sampler_sample(chain.get(), test_ctx.ctx.get(), loop_idx);
@@ -582,7 +582,7 @@ static void test_backend_top_p_sampling(const test_params & params) {
     printf("top-p cpu sampled token id:%d, string: '%s'\n", token, token_str.c_str());
     GGML_ASSERT(token >= 0 && token < test_ctx.n_vocab);
 
-    // Decode and sampler 10 more tokens
+    // Decode and sample 10 more tokens
     for (int i = 0; i < 10; i++) {
         int32_t loop_idx = test_ctx.idx_for_seq(seq_id);
         llama_token token = llama_sampler_sample(chain.get(), test_ctx.ctx.get(), loop_idx);
@@ -619,7 +619,7 @@ static void test_backend_multi_sequence_sampling(const test_params & params) {
         GGML_ASSERT(false && "Failed to decode token");
     }
 
-    // Verfiy sequence 0
+    // Verify sequence 0
     {
         int32_t batch_idx = test_ctx.idx_for_seq(0);
         llama_token token = llama_get_sampled_token_ith(test_ctx.ctx.get(), batch_idx);
@@ -763,7 +763,7 @@ static void test_backend_logit_bias_sampling(const test_params & params) {
     printf("backend logit bias sampling test PASSED\n");
 }
 
-// This test verifies that it is possible to have two different backend sampler,
+// This test verifies that it is possible to have two different backend samplers,
 // one that uses the backend dist sampler, and another that uses CPU dist sampler.
 static void test_backend_mixed_sampling(const test_params & params) {
     struct llama_sampler_chain_params chain_params_0 = llama_sampler_chain_default_params();
@@ -791,7 +791,7 @@ static void test_backend_mixed_sampling(const test_params & params) {
         GGML_ASSERT(false && "Failed to decode token");
     }
 
-    // Verfiy sequence 0 that used the dist backend sampler.
+    // Verify sequence 0 that used the dist backend sampler.
     {
         int32_t batch_idx = test_ctx.idx_for_seq(0);
         llama_token token = llama_get_sampled_token_ith(test_ctx.ctx.get(), batch_idx);
@@ -802,7 +802,7 @@ static void test_backend_mixed_sampling(const test_params & params) {
         //GGML_ASSERT(llama_get_sampled_logits_count_ith(test_ctx.ctx.get(), batch_idx) == 0);
     }
 
-    // Verfiy sequence 1 that used the top-k backend sampler.
+    // Verify sequence 1 that used the top-k backend sampler.
     {
         int32_t batch_idx = test_ctx.idx_for_seq(1);
         float * logits = llama_get_sampled_logits_ith(test_ctx.ctx.get(), batch_idx);
@@ -934,7 +934,7 @@ static void test_backend_cpu_mixed_batch(const test_params & params) {
         // samplers.
         llama_set_sampler(test_ctx.ctx.get(), 0, nullptr);
 
-        // Create a CPU sampler and verify we can sampler from it.
+        // Create a CPU sampler and verify we can sample from it.
         struct llama_sampler_chain_params chain_params = llama_sampler_chain_default_params();
         llama_sampler_ptr chain(llama_sampler_chain_init(chain_params));
         llama_sampler_chain_add(chain.get(), llama_sampler_init_greedy());
