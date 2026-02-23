@@ -98,7 +98,7 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
         kq = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, CS, CS, n_chunks, HB);
         kq = ggml_clamp(ctx0, kq, 0.0f, 0.0f);
         const int64_t block_size = 16;
-        const int64_t n_blocks = CHUNK_SIZE / block_size; 
+        const int64_t n_blocks = CHUNK_SIZE / block_size;
 
         ggml_tensor * k_block[n_blocks];
         ggml_tensor * q_block[n_blocks];
