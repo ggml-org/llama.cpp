@@ -472,8 +472,8 @@ static void ggml_gemv_q5_K_NxM_q8_K_generic_impl(int                        n,
     UNUSED(bs);
     UNUSED(nr);
 
-    float    sumf[8];
-    float    sum_minf[8];
+    float    sumf[ncols_interleaved];
+    float    sum_minf[ncols_interleaved];
     uint32_t utmp[32];
     int      sumi1;
     int      sumi2;
@@ -489,7 +489,7 @@ static void ggml_gemv_q5_K_NxM_q8_K_generic_impl(int                        n,
         }
         for (int l = 0; l < nb; l++) {
             for (int sb = 0; sb < 8; sb++) {
-                memcpy(utmp + sb * 4, b_ptr[l].scales + sb * 12, 12);
+                memcpy(utmp + sb * 4, b_ptr[l].scales + sb * K_SCALE_SIZE, K_SCALE_SIZE);
                 utmp[sb * 4 + 3]      = ((utmp[sb * 4 + 2] >> 4) & kmask2) | (((utmp[sb * 4 + 1] >> 6) & kmask3) << 4);
                 const uint32_t uaux_0 = utmp[sb * 4 + 1] & kmask1;
                 utmp[sb * 4 + 1]      = (utmp[sb * 4 + 2] & kmask2) | (((utmp[sb * 4 + 0] >> 6) & kmask3) << 4);
@@ -497,8 +497,9 @@ static void ggml_gemv_q5_K_NxM_q8_K_generic_impl(int                        n,
                 utmp[sb * 4 + 0] &= kmask1;
             }
             for (int k = 0; k < (qk / (2 * blocklen)); k++) {
-                uint8_t * scales_0 = (uint8_t *) utmp + (k / (32 / blocklen)) * 32;
-                uint8_t * scales_1 = (uint8_t *) utmp + (k / (32 / blocklen)) * 32 + 16;
+                constexpr int scale_stride = 32;
+                uint8_t *     scales_0     = (uint8_t *) utmp + (k / (32 / blocklen)) * scale_stride;
+                uint8_t *     scales_1     = (uint8_t *) utmp + (k / (32 / blocklen)) * scale_stride + 16;
 
                 const int qh_shift = (k / (32 / blocklen)) * 2;
                 for (int j = 0; j < ncols_interleaved; j++) {
@@ -565,8 +566,8 @@ static void ggml_gemm_q5_K_NxM_q8_K_generic_impl(int                        n,
     assert(nr % 4 == 0);
     assert(nc % ncols_interleaved == 0);
 
-    float    sumf[4][8];
-    float    sum_minf[4][8];
+    float    sumf[4][ncols_interleaved];
+    float    sum_minf[4][ncols_interleaved];
     uint32_t utmp[32];
     int      sumi1;
     int      sumi2;
@@ -584,7 +585,7 @@ static void ggml_gemm_q5_K_NxM_q8_K_generic_impl(int                        n,
             }
             for (int l = 0; l < nb; l++) {
                 for (int sb = 0; sb < 8; sb++) {
-                    memcpy(utmp + sb * 4, b_ptr[l].scales + sb * 12, 12);
+                    memcpy(utmp + sb * 4, b_ptr[l].scales + sb * K_SCALE_SIZE, K_SCALE_SIZE);
                     utmp[sb * 4 + 3] = ((utmp[sb * 4 + 2] >> 4) & kmask2) | (((utmp[sb * 4 + 1] >> 6) & kmask3) << 4);
                     const uint32_t uaux_0 = utmp[sb * 4 + 1] & kmask1;
                     utmp[sb * 4 + 1]      = (utmp[sb * 4 + 2] & kmask2) | (((utmp[sb * 4 + 0] >> 6) & kmask3) << 4);
@@ -592,8 +593,9 @@ static void ggml_gemm_q5_K_NxM_q8_K_generic_impl(int                        n,
                     utmp[sb * 4 + 0] &= kmask1;
                 }
                 for (int k = 0; k < (qk / (2 * blocklen)); k++) {
-                    uint8_t * scales_0 = (uint8_t *) utmp + (k / (32 / blocklen)) * 32;
-                    uint8_t * scales_1 = (uint8_t *) utmp + (k / (32 / blocklen)) * 32 + 16;
+                    constexpr int scale_stride = 32;
+                    uint8_t *     scales_0     = (uint8_t *) utmp + (k / (32 / blocklen)) * scale_stride;
+                    uint8_t *     scales_1     = (uint8_t *) utmp + (k / (32 / blocklen)) * scale_stride + 16;
 
                     const int qh_shift = (k / (32 / blocklen)) * 2;
                     for (int m = 0; m < 4; m++) {
