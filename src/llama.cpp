@@ -88,48 +88,72 @@ static std::vector<llama_device_memory_data> llama_get_device_memory_data(
         throw std::runtime_error("failed to create llama_context from model");
     }
 
-    std::vector<llama_device_memory_data> ret(model->devices.size());
+    // if no devices are found, we default to the CPU backend
+    ggml_backend_dev_t cpu_dev = nullptr;
+    if (model->devices.empty()) {
+        cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+        if (cpu_dev == nullptr) {
+            throw std::runtime_error(format("%s: no CPU backend found", __func__));
+        }
+    }
+
+    // automatically assume 1 device since the CPU backend is always available
+    size_t n_dev = model->devices.empty() ? 1 : model->devices.size();
+    std::vector<llama_device_memory_data> ret(n_dev);
 
     std::map<ggml_backend_buffer_type_t, llama_memory_breakdown_data> memory_breakdown = ctx->memory_breakdown();
 
     for (const auto & [buft, mb] : memory_breakdown) {
-        if (ggml_backend_buft_is_host(buft)) {
-            continue;
-        }
+        if (cpu_dev) {
+            ret[0].mb.model   += mb.model;
+            ret[0].mb.context += mb.context;
+            ret[0].mb.compute += mb.compute;
+        } else {
+            if (ggml_backend_buft_is_host(buft)) {
+                continue;
+            }
 
-        ggml_backend_dev_t dev = ggml_backend_buft_get_device(buft);
-        if (!dev) {
-            continue;
-        }
-        for (size_t i = 0; i < ret.size(); i++) {
-            if (model->devices[i] == dev) {
-                ret[i].mb.model   += mb.model;
-                ret[i].mb.context += mb.context;
-                ret[i].mb.compute += mb.compute;
-                break;
+            ggml_backend_dev_t dev = ggml_backend_buft_get_device(buft);
+            if (!dev) {
+                continue;
+            }
+            for (size_t i = 0; i < ret.size(); i++) {
+                if (model->devices[i] == dev) {
+                    ret[i].mb.model   += mb.model;
+                    ret[i].mb.context += mb.context;
+                    ret[i].mb.compute += mb.compute;
+                    break;
+                }
             }
         }
     }
+
     for (size_t i = 0; i < ret.size(); i++) {
         size_t free;
         size_t total;
-        ggml_backend_dev_memory(model->devices[i], &free, &total);
 
-        // devices can return 0 bytes for free and total memory if they do not
-        // have any to report. in this case, we will use the host memory as a fallback
-        // fixes: https://github.com/ggml-org/llama.cpp/issues/18577
-        if (free == 0 && total == 0) {
-            ggml_backend_dev_t cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
-            if (cpu_dev == nullptr) {
-                throw std::runtime_error(format("%s: no CPU backend found", __func__));
-            }
+        if (cpu_dev) {
             ggml_backend_dev_memory(cpu_dev, &free, &total);
+        } else {
+            ggml_backend_dev_memory(model->devices[i], &free, &total);
+
+            // devices can return 0 bytes for free and total memory if they do not
+            // have any to report. in this case, we will use the host memory as a fallback
+            // fixes: https://github.com/ggml-org/llama.cpp/issues/18577
+            if (free == 0 && total == 0) {
+                ggml_backend_dev_memory(cpu_dev, &free, &total);
+            }
         }
+
         ret[i].free  = free;
         ret[i].total = total;
     }
 
-    devs           = model->devices;
+    if (cpu_dev) {
+        devs = { cpu_dev };
+    } else {
+        devs = model->devices;
+    }
     hp_ngl         = model->hparams.n_layer;
     hp_n_ctx_train = model->hparams.n_ctx_train;
     hp_n_expert    = model->hparams.n_expert;
@@ -322,6 +346,11 @@ static void llama_params_fit_impl(
                 LLAMA_LOG_INFO("%s: context size set by user to %" PRIu32 " -> no change\n", __func__, cparams->n_ctx);
             }
         }
+    }
+
+    if (nd == 1 && ggml_backend_dev_type(devs[0]) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+        LLAMA_LOG_INFO("%s: skipping layer allocation on host-only memory\n", __func__);
+        return;
     }
 
     if (mparams->n_gpu_layers != default_mparams.n_gpu_layers) {
