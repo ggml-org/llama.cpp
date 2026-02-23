@@ -673,7 +673,7 @@ static void test_filters(testing & t) {
 
 #ifdef _WIN32
     if (g_python_mode && GetACP() != CP_UTF8) {
-        t.log("Skipping test case \"tojson ensure_ascii=true\" due to Windows' active codepage"
+        t.log("Skipping test case \"tojson ensure_ascii=true\" due to Windows' active codepage "
               "is not being set to UTF-8.\n"
               "It causes subprocesses to misinterpret arguments encoded in UTF-8.");
     } else {
