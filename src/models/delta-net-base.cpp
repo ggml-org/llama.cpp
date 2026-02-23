@@ -91,36 +91,92 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
     ggml_tensor * kb = nullptr;
     ggml_tensor * kq = nullptr;
     if (kda) {
+        const int64_t HB = H_k * n_seqs;
         const int64_t CHB = n_chunks * H_k * n_seqs;
+        kb = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, CS, CS, n_chunks, HB);
+        kb = ggml_clamp(ctx0, kb, 0.0f, 0.0f);
+        kq = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, CS, CS, n_chunks, HB);
+        kq = ggml_clamp(ctx0, kq, 0.0f, 0.0f);
+        const int64_t block_size = 16;
+        const int64_t n_blocks = CHUNK_SIZE / block_size; 
 
-        ggml_tensor * g_cs_i = ggml_reshape_4d(ctx0, g_cs, CS, 1, S_k, CHB);  // [chunk_size, 1, S_k, CHB]
-        ggml_tensor * g_cs_j = ggml_reshape_4d(ctx0, g_cs, 1, CS, S_k, CHB);  // [1, chunk_size, S_k, CHB]
+        ggml_tensor * k_block[n_blocks];
+        ggml_tensor * q_block[n_blocks];
+        ggml_tensor * gk_block[n_blocks];
+        ggml_tensor * gk_block_bc[n_blocks];
+        for (int64_t j = 0; j < n_blocks; ++j) {
+            int64_t j_start = j * block_size;
 
-        g_cs_j = ggml_repeat_4d(ctx0, g_cs_j, CS, CS, S_k, CHB);  // [1, chunk_size, S_k, CHB] -> [chunk_size, chunk_size, S_k, CHB]
+            // k_i_block: [S, block_size, C, HB]
+            k_block[j] = ggml_cont(ctx0, ggml_view_4d(ctx0, k,
+                S_k, block_size, n_chunks, HB,
+                k->nb[1], k->nb[2], k->nb[3],
+                j_start * k->nb[1]));
 
-        // decay_mask [chunk_size,chunk_size,S_k,CHB]
-        ggml_tensor * decay_mask;
-        decay_mask = ggml_sub(ctx0, g_cs_j, g_cs_i);
-        decay_mask = ggml_tri(ctx0, decay_mask, GGML_TRI_TYPE_LOWER_DIAG);
-        decay_mask = ggml_exp(ctx0, decay_mask);
-        cb(decay_mask, "decay_mask", il);
+            k_block[j] = ggml_reshape_4d(ctx0, k_block[j], S_k, block_size, 1, CHB);
+            // q_i_block: [S, block_size, C, HB]
+            q_block[j] = ggml_cont(ctx0, ggml_view_4d(ctx0, q,
+                    S_k, block_size, n_chunks, HB,
+                    q->nb[1], q->nb[2], q->nb[3],
+                    j_start * q->nb[1]));
 
-        // decay_mask [S_k,BT_j,BT_i,CHB] *Note* second and third chunk_sizes are switched
-        decay_mask = ggml_cont_4d(ctx0, ggml_permute(ctx0, decay_mask, 2, 1, 0, 3), S_k, CS, CS, CHB);
+            q_block[j] = ggml_reshape_4d(ctx0, q_block[j], S_k, block_size, 1, CHB);
+            // gk_j_block: [S, block_size, C, HB]
+            gk_block[j] = ggml_cont(ctx0, ggml_view_4d(ctx0, g_cs,
+                block_size, S_k, n_chunks, HB,
+                g_cs->nb[1], g_cs->nb[2], g_cs->nb[3],
+                j_start * g_cs->nb[0]));
+            gk_block[j] = ggml_reshape_4d(ctx0, gk_block[j], 1, block_size, S_k, CHB);
 
-        ggml_tensor * k_b_i = ggml_reshape_4d(ctx0, k_b, S_k, CS,  1, CHB);
-        ggml_tensor * k_j   = ggml_reshape_4d(ctx0, k,   S_k,  1, CS, CHB);
-        ggml_tensor * q_i   = ggml_reshape_4d(ctx0, q,   S_k, CS,  1, CHB);
+            gk_block_bc[j] = ggml_repeat_4d(ctx0, gk_block[j], block_size, block_size, S_k, CHB);
 
-        ggml_tensor * decay_k_b_i = ggml_mul(ctx0, decay_mask, k_b_i);
-        ggml_tensor * decay_q_i   = ggml_mul(ctx0, decay_mask, q_i);
+            gk_block[j] = ggml_reshape_4d(ctx0, gk_block[j], block_size, 1, S_k, CHB);
+        }
 
-        // decay_k_b_i [S,BT,BT,CHB] @ k_j [S,1,BT,CHB] = Akk [BT,1,BT,CHB]
-        kb = ggml_mul_mat(ctx0, decay_k_b_i, k_j);
-        kq = ggml_mul_mat(ctx0, decay_q_i,   k_j);
+        for (int64_t j = 0; j < n_blocks; ++j) {
+            int64_t j_start = j * block_size;
 
-        kb = ggml_cont(ctx0, ggml_transpose(ctx0, ggml_reshape_4d(ctx0, kb, CS, CS, n_chunks, H_v * n_seqs)));
-        kq = ggml_cont(ctx0, ggml_transpose(ctx0, ggml_reshape_4d(ctx0, kq, CS, CS, n_chunks, H_v * n_seqs)));
+            ggml_tensor * k_j_block = ggml_reshape_4d(ctx0, k_block[j], S_k, 1, block_size, CHB);
+            for (int64_t i = 0; i <= j; ++i) {
+                int64_t i_start = i * block_size;
+
+                ggml_tensor * decay_mask = ggml_sub(ctx0, gk_block_bc[j], gk_block[i]);
+                cb(decay_mask, "decay_mask", il);
+
+                // Apply diag_mask only at diagnoal blocks
+                if (i == j) {
+                    decay_mask = ggml_tri(ctx0, decay_mask, GGML_TRI_TYPE_LOWER_DIAG);
+                }
+                decay_mask = ggml_exp(ctx0, decay_mask);
+
+                // decay_mask [S_k,BT_j,BT_i,ShHB] *Note* second and third chunk_sizes are switched
+                decay_mask = ggml_cont_4d(ctx0, ggml_permute(ctx0, decay_mask, 2, 1, 0, 3), S_k, block_size, block_size, CHB);
+
+                ggml_tensor * decay_k_i = ggml_mul(ctx0, decay_mask, k_block[i]);
+                ggml_tensor * decay_q_i = ggml_mul(ctx0, decay_mask, q_block[i]);
+
+                ggml_tensor * Akk_block = ggml_mul_mat(ctx0, decay_k_i, k_j_block);
+                ggml_tensor * Aqk_block = ggml_mul_mat(ctx0, decay_q_i, k_j_block);
+
+                Akk_block = ggml_cont(ctx0, ggml_transpose(ctx0, ggml_reshape_4d(ctx0, Akk_block, block_size, block_size, n_chunks, HB)));
+                Aqk_block = ggml_cont(ctx0, ggml_transpose(ctx0, ggml_reshape_4d(ctx0, Aqk_block, block_size, block_size, n_chunks, HB)));
+
+                if (i == j) {
+                    Aqk_block = ggml_tri(ctx0, Aqk_block, GGML_TRI_TYPE_LOWER_DIAG);
+                    Akk_block = ggml_tri(ctx0, Akk_block, GGML_TRI_TYPE_LOWER);
+                }
+
+                // Accumulate into Akk and Aqk at position [j_start:j_end, i_start:i_end]
+                kb = ggml_set(ctx0, kb, Akk_block,
+                    kb->nb[1], kb->nb[2], kb->nb[3],
+                    i_start * kb->nb[0] + j_start * kb->nb[1]);
+                kq = ggml_set(ctx0, kq, Aqk_block,
+                    kq->nb[1], kq->nb[2], kq->nb[3],
+                    i_start * kq->nb[0] + j_start * kq->nb[1]);
+            }
+        }
+        kb = ggml_mul(ctx0, kb, b);
+        cb(kq, "kq", il);
     } else {
         ggml_tensor * g_cs_i = g_cs;
         ggml_tensor * g_cs_j = ggml_reshape_4d(ctx0, g_cs, 1, CS, n_chunks, H_v * n_seqs);
