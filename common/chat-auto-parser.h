@@ -32,14 +32,14 @@ struct templates_params {
     bool                                  mark_input    = true;  // whether to mark input strings in the jinja context
 };
 
-class universal_peg_generator {
+class peg_generator {
   public:
     static common_chat_params generate_parser(const common_chat_template &    tmpl,
                                               const struct templates_params & inputs);
 
     static common_chat_params generate_parser(const common_chat_template &    tmpl,
                                               const struct templates_params & inputs,
-                                              const analyze_template &        analysis);
+                                              const autoparser &        analysis);
 };
 
 }  // namespace autoparser

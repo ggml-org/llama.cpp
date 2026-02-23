@@ -18,7 +18,7 @@ class common_chat_peg_mapper {
     virtual void from_ast(const common_peg_ast_arena & arena, const common_peg_parse_result & result);
     virtual void map(const common_peg_ast_node & node);
     private:
-      // Tool call handling state (merged from common_chat_peg_unified_mapper)
+      // Tool call handling state
       std::optional<common_chat_tool_call> pending_tool_call;  // Tool call waiting for name
       common_chat_tool_call *              current_tool          = nullptr;
       int                                  arg_count             = 0;

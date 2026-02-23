@@ -1287,7 +1287,7 @@ static void test_nemotron_reasoning_detection(testing & t) {
     params.enable_thinking = true;
 
     // Run differential analysis
-    auto analysis = autoparser::analyze_template(tmpl);
+    auto analysis = autoparser::autoparser(tmpl);
 
     // Check reasoning markers
     t.assert_equal("reasoning_start should be '<think>'", "<think>", analysis.reasoning.start);
@@ -1308,7 +1308,7 @@ static void test_nemotron_tool_format(testing & t) {
     common_chat_template tmpl = load_nemotron_template(t);
 
     // Run differential analysis
-    auto analysis = autoparser::analyze_template(tmpl);
+    auto analysis = autoparser::autoparser(tmpl);
 
     // Check tool markers - Nemotron uses per-call wrapping (each call individually wrapped)
     t.assert_equal("tool_section_start should be empty (per-call format)", "", analysis.tools.format.section_start);
@@ -1346,7 +1346,7 @@ static void test_cohere_reasoning_detection(testing & t) {
     common_chat_template tmpl = load_cohere_template(t);
 
     // Run differential analysis
-    auto analysis = autoparser::analyze_template(tmpl);
+    auto analysis = autoparser::autoparser(tmpl);
 
     // Check reasoning markers - Cohere uses special token format
     t.assert_equal("reasoning_start should be '<|START_THINKING|>'", "<|START_THINKING|>", analysis.reasoning.start);
@@ -1367,7 +1367,7 @@ static void test_tool_format_cohere(testing & t) {
     common_chat_template tmpl = load_cohere_template(t);
 
     // Run differential analysis
-    auto analysis = autoparser::analyze_template(tmpl);
+    auto analysis = autoparser::autoparser(tmpl);
 
     // Check tool section markers - Cohere uses ACTION markers
     t.assert_equal("tool_section_start should be '<|START_ACTION|>'", "<|START_ACTION|>", analysis.tools.format.section_start);

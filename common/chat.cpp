@@ -1301,8 +1301,8 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
 
     try {
         LOG_DBG("Using differential autoparser\n");
-        auto analysis = autoparser::analyze_template(tmpl);
-        auto auto_params = autoparser::universal_peg_generator::generate_parser(tmpl, params, analysis);
+        auto analysis = autoparser::autoparser(tmpl);
+        auto auto_params = autoparser::peg_generator::generate_parser(tmpl, params, analysis);
         auto_params.supports_thinking = analysis.reasoning.mode != autoparser::reasoning_mode::NONE;
         return auto_params;
     } catch (const std::exception & e) {

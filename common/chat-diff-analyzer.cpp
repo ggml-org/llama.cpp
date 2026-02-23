@@ -26,10 +26,10 @@ static const std::string USER_MSG = "U_USER_MSG Hello END_U";
 static const std::string ASSISTANT_MSG = "A_ASST_MSG I can help END_A";
 static const std::string THINKING_CONTENT = "REASON_PART I am thinking END_R";
 
-static std::vector<std::function<void(const common_chat_template & tmpl, analyze_template &)>> workarounds(
+static std::vector<std::function<void(const common_chat_template & tmpl, autoparser &)>> workarounds(
     { // Old reasoning Qwen templates - they don't really display reasoning content, but we still want to
       // support reasoning on them
-      [](const common_chat_template & tmpl, analyze_template & analysis) -> void {
+      [](const common_chat_template & tmpl, autoparser & analysis) -> void {
           if (tmpl.src.find("content.split('</think>')") != std::string::npos &&
               analysis.reasoning.mode == reasoning_mode::NONE) {
               analysis.reasoning.mode  = reasoning_mode::FORCED_OPEN;
@@ -41,7 +41,7 @@ static std::vector<std::function<void(const common_chat_template & tmpl, analyze
           }
       },
       // Granite 3.3, with separate reasoning and content markers
-      [](const common_chat_template & tmpl, analyze_template & analysis) -> void {
+      [](const common_chat_template & tmpl, autoparser & analysis) -> void {
           if (tmpl.src.find("Write your thoughts between <think></think> and write your response between "
                             "<response></response>") != std::string::npos) {
               analysis.reasoning.mode  = reasoning_mode::TAG_BASED;
@@ -58,7 +58,7 @@ static std::vector<std::function<void(const common_chat_template & tmpl, analyze
           }
       },
       // Cohere Command R+ - content wrapped in <|CHATBOT_TOKEN|>...<|END_OF_TURN_TOKEN|>
-      [](const common_chat_template & tmpl, analyze_template & analysis) -> void {
+      [](const common_chat_template & tmpl, autoparser & analysis) -> void {
           if (tmpl.src.find("<|CHATBOT_TOKEN|>") != std::string::npos &&
               tmpl.src.find("<|END_OF_TURN_TOKEN|>") != std::string::npos && analysis.content.start.empty()) {
               analysis.content.mode  = content_mode::ALWAYS_WRAPPED;
@@ -70,7 +70,7 @@ static std::vector<std::function<void(const common_chat_template & tmpl, analyze
           }
       },
       // Functionary - no tool call section delimiter
-      [](const common_chat_template & tmpl, analyze_template & analysis) -> void {
+      [](const common_chat_template & tmpl, autoparser & analysis) -> void {
           if (tmpl.src.find("set has_code_interpreter = tools | selectattr(\"type\", \"equalto\", "
                             "\"code_interpreter\") | list | length > 0") != std::string::npos) {
               analysis.content.mode                = content_mode::PLAIN;
@@ -91,7 +91,7 @@ static std::vector<std::function<void(const common_chat_template & tmpl, analyze
           }
       },
       // DeepSeek-R1-Distill-Qwen
-      [](const common_chat_template & tmpl, analyze_template & analysis) -> void {
+      [](const common_chat_template & tmpl, autoparser & analysis) -> void {
           if (tmpl.src.find(
                   "{{'<｜Assistant｜><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>' + tool['type'] + '<｜tool▁sep｜>'") !=
               std::string::npos) {
@@ -104,7 +104,7 @@ static std::vector<std::function<void(const common_chat_template & tmpl, analyze
           }
       },
       // Seed - Python dicts
-      [](const common_chat_template & tmpl, analyze_template & analysis) -> void {
+      [](const common_chat_template & tmpl, autoparser & analysis) -> void {
           if (tmpl.src.find("<seed:bos>") != std::string::npos) {
               analysis.tools.format.uses_python_dicts = true;
           }
@@ -161,7 +161,7 @@ static std::string mode_to_str(T mode) {
     return os.str();
 }
 
-analyze_template::analyze_template(const common_chat_template & tmpl)
+autoparser::autoparser(const common_chat_template & tmpl)
     : jinja_caps(tmpl.original_caps())
     , reasoning(tmpl, jinja_caps.supports_tool_calls)
     , content(tmpl, reasoning)
@@ -208,7 +208,7 @@ analyze_template::analyze_template(const common_chat_template & tmpl)
     LOG_DBG(ANSI_PURPLE "=== Differential analysis complete ===\n" ANSI_RESET);
 }
 
-void analyze_template::collect_preserved_tokens() {
+void autoparser::collect_preserved_tokens() {
     auto add_token = [this](const std::string & org_token) {
         std::string token = trim_whitespace(org_token);
         if (!token.empty()) {

@@ -342,7 +342,7 @@ struct analyze_tools : analyze_base {
 // Top-level template analyzer (merges differential_analyzer + diff_analysis_result)
 // ============================================================================
 
-struct analyze_template {
+struct autoparser {
     jinja::caps        jinja_caps;
     analyze_reasoning  reasoning;
     analyze_content    content;
@@ -352,9 +352,9 @@ struct analyze_template {
     std::vector<std::string> preserved_tokens;
 
     // Constructor: runs full differential analysis on a template
-    explicit analyze_template(const common_chat_template & tmpl);
+    explicit autoparser(const common_chat_template & tmpl);
 
-    // Build the unified PEG parser for this template
+    // Build the PEG parser for this template
     common_peg_arena build_parser(const templates_params & inputs) const;
 
   private:
