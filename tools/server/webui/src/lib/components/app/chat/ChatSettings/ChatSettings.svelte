@@ -115,6 +115,11 @@
 					type: SettingsFieldType.CHECKBOX
 				},
 				{
+					key: SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS,
+					label: 'Use full height code blocks',
+					type: SettingsFieldType.CHECKBOX
+				},
+				{
 					key: SETTINGS_KEYS.DISABLE_AUTO_SCROLL,
 					label: 'Disable automatic scroll',
 					type: SettingsFieldType.CHECKBOX
