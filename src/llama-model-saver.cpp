@@ -112,21 +112,23 @@ void llama_model_saver::add_kv_from_model() {
     std::vector<float>       scores(n_vocab);
     std::vector<int32_t>     token_types(n_vocab);
 
-    for (int32_t id = 0; id < n_vocab; ++id) {
-        const llama_vocab::token_data & token_data = vocab.get_token_data(id);
+    if (vocab.get_type() != LLAMA_VOCAB_TYPE_NONE) {
+        for (int32_t id = 0; id < n_vocab; ++id) {
+            const llama_vocab::token_data & token_data = vocab.get_token_data(id);
 
-        tokens[id] = token_data.text;
-        scores[id] = token_data.score;
+            tokens[id] = token_data.text;
+            scores[id] = token_data.score;
 
-        switch(token_data.attr) {
-            case LLAMA_TOKEN_ATTR_UNKNOWN:      token_types[id] = LLAMA_TOKEN_TYPE_UNKNOWN;      break;
-            case LLAMA_TOKEN_ATTR_UNUSED:       token_types[id] = LLAMA_TOKEN_TYPE_UNUSED;       break;
-            case LLAMA_TOKEN_ATTR_NORMAL:       token_types[id] = LLAMA_TOKEN_TYPE_NORMAL;       break;
-            case LLAMA_TOKEN_ATTR_CONTROL:      token_types[id] = LLAMA_TOKEN_TYPE_CONTROL;      break;
-            case LLAMA_TOKEN_ATTR_USER_DEFINED: token_types[id] = LLAMA_TOKEN_TYPE_USER_DEFINED; break;
-            case LLAMA_TOKEN_ATTR_BYTE:         token_types[id] = LLAMA_TOKEN_TYPE_BYTE;         break;
-            case LLAMA_TOKEN_ATTR_UNDEFINED:
-            default:                            token_types[id] = LLAMA_TOKEN_TYPE_UNDEFINED;    break;
+            switch(token_data.attr) {
+                case LLAMA_TOKEN_ATTR_UNKNOWN:      token_types[id] = LLAMA_TOKEN_TYPE_UNKNOWN;      break;
+                case LLAMA_TOKEN_ATTR_UNUSED:       token_types[id] = LLAMA_TOKEN_TYPE_UNUSED;       break;
+                case LLAMA_TOKEN_ATTR_NORMAL:       token_types[id] = LLAMA_TOKEN_TYPE_NORMAL;       break;
+                case LLAMA_TOKEN_ATTR_CONTROL:      token_types[id] = LLAMA_TOKEN_TYPE_CONTROL;      break;
+                case LLAMA_TOKEN_ATTR_USER_DEFINED: token_types[id] = LLAMA_TOKEN_TYPE_USER_DEFINED; break;
+                case LLAMA_TOKEN_ATTR_BYTE:         token_types[id] = LLAMA_TOKEN_TYPE_BYTE;         break;
+                case LLAMA_TOKEN_ATTR_UNDEFINED:
+                default:                            token_types[id] = LLAMA_TOKEN_TYPE_UNDEFINED;    break;
+            }
         }
     }
 
