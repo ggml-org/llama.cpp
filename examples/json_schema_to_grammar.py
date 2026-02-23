@@ -689,6 +689,11 @@ class SchemaConverter:
         elif (schema_type == 'object') or (len(schema) == 0):
             return self._add_rule(rule_name, self._add_primitive('object', PRIMITIVE_RULES['object']))
 
+        elif schema_type is None:
+            # No type constraint and no recognized structural keywords (e.g. {"description": "..."}).
+            # Per JSON Schema semantics this is equivalent to {} and accepts any value.
+            return self._add_rule(rule_name, self._add_primitive('value', PRIMITIVE_RULES['value']))
+
         else:
             assert schema_type in PRIMITIVE_RULES, f'Unrecognized schema: {schema}'
             # TODO: support minimum, maximum, exclusiveMinimum, exclusiveMaximum at least for zero
