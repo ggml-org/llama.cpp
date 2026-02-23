@@ -624,6 +624,8 @@ struct vk_device_struct {
     // floor(log2(maxComputeWorkGroupInvocations))
     uint32_t max_workgroup_size_log2 {};
 
+    bool flash_attention_fp16;
+
     bool coopmat_support;
     bool coopmat_acc_f32_support {};
     bool coopmat_acc_f16_support {};
@@ -3382,7 +3384,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
             } \
         }
 
-    if (device->fp16) {
+    if (device->flash_attention_fp16) {
         CREATE_FA(GGML_TYPE_F32, f32, FA_SCALAR, )
         CREATE_FA(GGML_TYPE_F16, f16, FA_SCALAR, )
         CREATE_FA(GGML_TYPE_Q4_0, q4_0, FA_SCALAR, )
@@ -5418,6 +5420,10 @@ static vk_device ggml_vk_get_device(size_t idx) {
         } else if (getenv("GGML_VK_FORCE_MMVQ")) {
             device->mmvq_mode = 1;
         }
+
+        // Driver issues with older AMD GPUs on Windows, see https://github.com/ggml-org/llama.cpp/pull/19625#issuecomment-3940840613
+        const bool is_amd_proprietary_gcn = device->vendor_id == VK_VENDOR_ID_AMD && device->architecture == AMD_GCN && device->driver_id == vk::DriverId::eAmdProprietary;
+        device->flash_attention_fp16 = device->fp16 && !is_amd_proprietary_gcn;
 
         return device;
     }
@@ -8559,7 +8565,7 @@ static bool ggml_vk_flash_attn_scalar_shmem_support(const vk_device& device, con
     const uint32_t Br = params.block_rows;
     const uint32_t Bc = params.block_cols;
 
-    const uint32_t float_type_size = device->fp16 ? sizeof(ggml_fp16_t) : sizeof(float);
+    const uint32_t float_type_size = device->flash_attention_fp16 ? sizeof(ggml_fp16_t) : sizeof(float);
 
     // tmpsh is overestimated slightly
     const uint32_t tmpsh = wg_size * sizeof(float);
@@ -8682,7 +8688,7 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     uint32_t workgroups_y = (uint32_t)neq2;
     uint32_t workgroups_z = (uint32_t)neq3;
 
-    const bool f32acc = !ctx->device->fp16 || dst->op_params[3] == GGML_PREC_F32;
+    const bool f32acc = !ctx->device->flash_attention_fp16 || dst->op_params[3] == GGML_PREC_F32;
 
     // For scalar/coopmat1 FA, we can use the "large" size to accommodate qga.
     // For coopmat2 FA, we always use the small size (which is still pretty large for gqa).
