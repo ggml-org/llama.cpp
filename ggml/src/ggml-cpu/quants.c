@@ -227,37 +227,33 @@ void ggml_vec_dot_nvfp4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, 
     UNUSED(bx);
     UNUSED(by);
     UNUSED(bs);
-    assert(n % QK8_0 == 0);
+    assert(n % QK_NVFP4 == 0);
 
     const block_nvfp4 * GGML_RESTRICT x = vx;
     const block_q8_0 * GGML_RESTRICT y = vy;
 
-    const int nb = n / QK8_0; // number of q8_0 blocks
+    const int nb = n / QK_NVFP4; // number of super-blocks
+    // Each super-block has 4 sub-blocks of 16 elements = 64 elements = 2 q8_0 blocks
 
     float sumf = 0;
 
     for (int ib = 0; ib < nb; ++ib) {
-        // First NVFP4 block (first 16 elements of q8_0 block)
-        const block_nvfp4 * x0 = &x[2*ib + 0];
-        const block_nvfp4 * x1 = &x[2*ib + 1];
+        for (int s_idx = 0; s_idx < 4; ++s_idx) {
+            const float d = GGML_FP16_TO_FP32(x[ib].d[s_idx]);
+            // Which q8_0 block and offset within it
+            const int q8_block = s_idx / 2;  // 0 or 1
+            const int q8_off   = (s_idx % 2) * QK_NVFP4_SUB;  // 0 or 16
+            const float dy = GGML_CPU_FP16_TO_FP32(y[2*ib + q8_block].d);
 
-        const float d0 = ggml_ue4m3_to_fp32(x0->d);
-        const float d1 = ggml_ue4m3_to_fp32(x1->d);
-        const float dy = GGML_CPU_FP16_TO_FP32(y[ib].d);
+            int sumi_lo = 0, sumi_hi = 0;
+            for (int j = 0; j < QK_NVFP4_SUB/2; ++j) {
+                const uint8_t qv = x[ib].qs[s_idx*(QK_NVFP4_SUB/2) + j];
+                sumi_lo += y[2*ib + q8_block].qs[q8_off + j +               0] * kvalues_mxfp4[qv & 0xf];
+                sumi_hi += y[2*ib + q8_block].qs[q8_off + j + QK_NVFP4_SUB/2] * kvalues_mxfp4[qv >>  4];
+            }
 
-        int sumi0_lo = 0, sumi0_hi = 0;
-        for (int j = 0; j < QK_NVFP4/2; ++j) {
-            sumi0_lo += y[ib].qs[j +           0] * kvalues_mxfp4[x0->qs[j] & 0xf];
-            sumi0_hi += y[ib].qs[j + QK_NVFP4/2 ] * kvalues_mxfp4[x0->qs[j] >>  4];
+            sumf += dy * d * (sumi_lo + sumi_hi);
         }
-
-        int sumi1_lo = 0, sumi1_hi = 0;
-        for (int j = 0; j < QK_NVFP4/2; ++j) {
-            sumi1_lo += y[ib].qs[QK_NVFP4 + j +           0] * kvalues_mxfp4[x1->qs[j] & 0xf];
-            sumi1_hi += y[ib].qs[QK_NVFP4 + j + QK_NVFP4/2 ] * kvalues_mxfp4[x1->qs[j] >>  4];
-        }
-
-        sumf += dy * (d0 * (sumi0_lo + sumi0_hi) + d1 * (sumi1_lo + sumi1_hi));
     }
     *s = sumf;
 }

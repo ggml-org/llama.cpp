@@ -197,12 +197,13 @@ typedef struct {
 } block_mxfp4;
 static_assert(sizeof(block_mxfp4) == sizeof(uint8_t) + QK_MXFP4/2, "wrong mxfp4 block size/padding");
 
-#define QK_NVFP4 16
+#define QK_NVFP4 64
+#define QK_NVFP4_SUB 16  // sub-block size for per-group scales
 typedef struct {
-    uint8_t d;  // UE4M3 scale (original E4M3 from NVIDIA ModelOpt)
-    uint8_t qs[QK_NVFP4/2];
+    ggml_half d[QK_NVFP4/QK_NVFP4_SUB]; // scales as fp16 (8 bytes, 16B-aligned with qs)
+    uint8_t qs[QK_NVFP4/2];             // packed 4-bit values (32 bytes)
 } block_nvfp4;
-static_assert(sizeof(block_nvfp4) == sizeof(uint8_t) + QK_NVFP4/2, "wrong nvfp4 block size/padding");
+static_assert(sizeof(block_nvfp4) == sizeof(ggml_half)*(QK_NVFP4/QK_NVFP4_SUB) + QK_NVFP4/2, "wrong nvfp4 block size/padding");
 
 #define QK5_0 32
 typedef struct {
