@@ -1,26 +1,29 @@
 <script lang="ts">
 	import {
-		ModelBadge,
 		ChatMessageActions,
 		ChatMessageStatistics,
-		ChatMessageThinkingBlock,
-		CopyToClipboardIcon,
 		MarkdownContent,
+		ModelBadge,
 		ModelsSelector
 	} from '$lib/components/app';
+	import ChatMessageThinkingBlock from './ChatMessageThinkingBlock.svelte';
+	import { getMessageEditContext } from '$lib/contexts';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
-	import { useModelChangeValidation } from '$lib/hooks/use-model-change-validation.svelte';
-	import { isLoading } from '$lib/stores/chat.svelte';
-	import { autoResizeTextarea, copyToClipboard } from '$lib/utils';
+	import { isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
+	import { autoResizeTextarea, copyToClipboard, isIMEComposing } from '$lib/utils';
+	import { tick } from 'svelte';
 	import { fade } from 'svelte/transition';
-	import { Check, X, Wrench } from '@lucide/svelte';
+	import { Check, X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
-	import { INPUT_CLASSES } from '$lib/constants/input-classes';
+	import { INPUT_CLASSES } from '$lib/constants/css-classes';
+	import { MessageRole, KeyboardKey } from '$lib/enums';
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { config } from '$lib/stores/settings.svelte';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
+	import { modelsStore } from '$lib/stores/models.svelte';
+	import { ServerModelStatus } from '$lib/enums';
+	import { REASONING_TAGS } from '$lib/constants/agentic';
 
 	interface Props {
 		class?: string;
@@ -30,150 +33,198 @@
 			assistantMessages: number;
 			messageTypes: string[];
 		} | null;
-		editedContent?: string;
-		isEditing?: boolean;
+		isLastAssistantMessage?: boolean;
 		message: DatabaseMessage;
 		messageContent: string | undefined;
-		onCancelEdit?: () => void;
 		onCopy: () => void;
 		onConfirmDelete: () => void;
 		onContinue?: () => void;
 		onDelete: () => void;
 		onEdit?: () => void;
-		onEditKeydown?: (event: KeyboardEvent) => void;
-		onEditedContentChange?: (content: string) => void;
 		onNavigateToSibling?: (siblingId: string) => void;
 		onRegenerate: (modelOverride?: string) => void;
-		onSaveEdit?: () => void;
 		onShowDeleteDialogChange: (show: boolean) => void;
-		onShouldBranchAfterEditChange?: (value: boolean) => void;
 		showDeleteDialog: boolean;
-		shouldBranchAfterEdit?: boolean;
 		siblingInfo?: ChatMessageSiblingInfo | null;
 		textareaElement?: HTMLTextAreaElement;
-		thinkingContent: string | null;
-		toolCallContent: ApiChatCompletionToolCall[] | string | null;
+	}
+
+	interface ParsedReasoningContent {
+		content: string;
+		reasoningContent: string | null;
+		hasReasoningMarkers: boolean;
+	}
+
+	function parseReasoningContent(content: string | undefined): ParsedReasoningContent {
+		if (!content) {
+			return {
+				content: '',
+				reasoningContent: null,
+				hasReasoningMarkers: false
+			};
+		}
+
+		const plainParts: string[] = [];
+		const reasoningParts: string[] = [];
+		const { START, END } = REASONING_TAGS;
+		let cursor = 0;
+		let hasReasoningMarkers = false;
+
+		while (cursor < content.length) {
+			const startIndex = content.indexOf(START, cursor);
+
+			if (startIndex === -1) {
+				plainParts.push(content.slice(cursor));
+				break;
+			}
+
+			hasReasoningMarkers = true;
+			plainParts.push(content.slice(cursor, startIndex));
+
+			const reasoningStart = startIndex + START.length;
+			const endIndex = content.indexOf(END, reasoningStart);
+
+			if (endIndex === -1) {
+				reasoningParts.push(content.slice(reasoningStart));
+				cursor = content.length;
+				break;
+			}
+
+			reasoningParts.push(content.slice(reasoningStart, endIndex));
+			cursor = endIndex + END.length;
+		}
+
+		return {
+			content: plainParts.join(''),
+			reasoningContent: reasoningParts.length > 0 ? reasoningParts.join('\n\n') : null,
+			hasReasoningMarkers
+		};
 	}
 
 	let {
 		class: className = '',
 		deletionInfo,
-		editedContent = '',
-		isEditing = false,
+		isLastAssistantMessage = false,
 		message,
 		messageContent,
-		onCancelEdit,
 		onConfirmDelete,
 		onContinue,
 		onCopy,
 		onDelete,
 		onEdit,
-		onEditKeydown,
-		onEditedContentChange,
 		onNavigateToSibling,
 		onRegenerate,
-		onSaveEdit,
 		onShowDeleteDialogChange,
-		onShouldBranchAfterEditChange,
 		showDeleteDialog,
-		shouldBranchAfterEdit = false,
 		siblingInfo = null,
-		textareaElement = $bindable(),
-		thinkingContent,
-		toolCallContent = null
+		textareaElement = $bindable()
 	}: Props = $props();
 
-	const toolCalls = $derived(
-		Array.isArray(toolCallContent) ? (toolCallContent as ApiChatCompletionToolCall[]) : null
-	);
-	const fallbackToolCalls = $derived(typeof toolCallContent === 'string' ? toolCallContent : null);
+	// Get edit context
+	const editCtx = getMessageEditContext();
 
+	// Local state for assistant-specific editing
+	let shouldBranchAfterEdit = $state(false);
+
+	function handleEditKeydown(event: KeyboardEvent) {
+		if (event.key === KeyboardKey.ENTER && !event.shiftKey && !isIMEComposing(event)) {
+			event.preventDefault();
+			editCtx.save();
+		} else if (event.key === KeyboardKey.ESCAPE) {
+			event.preventDefault();
+			editCtx.cancel();
+		}
+	}
+
+	const parsedMessageContent = $derived.by(() => parseReasoningContent(messageContent));
+	const visibleMessageContent = $derived(parsedMessageContent.content);
+	const thinkingContent = $derived(parsedMessageContent.reasoningContent);
+	const hasReasoningMarkers = $derived(parsedMessageContent.hasReasoningMarkers);
 	const processingState = useProcessingState();
 
 	let currentConfig = $derived(config());
 	let isRouter = $derived(isRouterMode());
-	let displayedModel = $derived((): string | null => {
-		if (message.model) {
-			return message.model;
+	let showRawOutput = $state(false);
+	let statsContainerEl: HTMLDivElement | undefined = $state();
+
+	function getScrollParent(el: HTMLElement): HTMLElement | null {
+		let parent = el.parentElement;
+		while (parent) {
+			const style = getComputedStyle(parent);
+			if (/(auto|scroll)/.test(style.overflowY)) {
+				return parent;
+			}
+			parent = parent.parentElement;
+		}
+		return null;
+	}
+
+	async function handleStatsViewChange() {
+		const el = statsContainerEl;
+		if (!el) {
+			return;
 		}
 
-		return null;
-	});
+		const scrollParent = getScrollParent(el);
+		if (!scrollParent) {
+			return;
+		}
 
-	const { handleModelChange } = useModelChangeValidation({
-		getRequiredModalities: () => conversationsStore.getModalitiesUpToMessage(message.id),
-		onSuccess: (modelName) => onRegenerate(modelName)
-	});
+		const yBefore = el.getBoundingClientRect().top;
+
+		await tick();
+
+		const delta = el.getBoundingClientRect().top - yBefore;
+		if (delta !== 0) {
+			scrollParent.scrollTop += delta;
+		}
+
+		// Correct any drift after browser paint
+		requestAnimationFrame(() => {
+			const drift = el.getBoundingClientRect().top - yBefore;
+
+			if (Math.abs(drift) > 1) {
+				scrollParent.scrollTop += drift;
+			}
+		});
+	}
+
+	let displayedModel = $derived(message.model ?? null);
+
+	let isCurrentlyLoading = $derived(isLoading());
+	let isStreaming = $derived(isChatStreaming());
+	let hasNoContent = $derived(!visibleMessageContent?.trim());
+	let isActivelyProcessing = $derived(isCurrentlyLoading || isStreaming);
+
+	let showProcessingInfoTop = $derived(
+		message?.role === MessageRole.ASSISTANT &&
+			isActivelyProcessing &&
+			hasNoContent &&
+			isLastAssistantMessage
+	);
+
+	let showProcessingInfoBottom = $derived(
+		message?.role === MessageRole.ASSISTANT &&
+			isActivelyProcessing &&
+			!hasNoContent &&
+			isLastAssistantMessage
+	);
 
 	function handleCopyModel() {
-		const model = displayedModel();
-
-		void copyToClipboard(model ?? '');
+		void copyToClipboard(displayedModel ?? '');
 	}
 
 	$effect(() => {
-		if (isEditing && textareaElement) {
+		if (editCtx.isEditing && textareaElement) {
 			autoResizeTextarea(textareaElement);
 		}
 	});
 
 	$effect(() => {
-		if (isLoading() && !message?.content?.trim()) {
+		if (showProcessingInfoTop || showProcessingInfoBottom) {
 			processingState.startMonitoring();
 		}
 	});
-
-	function formatToolCallBadge(toolCall: ApiChatCompletionToolCall, index: number) {
-		const callNumber = index + 1;
-		const functionName = toolCall.function?.name?.trim();
-		const label = functionName || `Call #${callNumber}`;
-
-		const payload: Record<string, unknown> = {};
-
-		const id = toolCall.id?.trim();
-		if (id) {
-			payload.id = id;
-		}
-
-		const type = toolCall.type?.trim();
-		if (type) {
-			payload.type = type;
-		}
-
-		if (toolCall.function) {
-			const fnPayload: Record<string, unknown> = {};
-
-			const name = toolCall.function.name?.trim();
-			if (name) {
-				fnPayload.name = name;
-			}
-
-			const rawArguments = toolCall.function.arguments?.trim();
-			if (rawArguments) {
-				try {
-					fnPayload.arguments = JSON.parse(rawArguments);
-				} catch {
-					fnPayload.arguments = rawArguments;
-				}
-			}
-
-			if (Object.keys(fnPayload).length > 0) {
-				payload.function = fnPayload;
-			}
-		}
-
-		const formattedPayload = JSON.stringify(payload, null, 2);
-
-		return {
-			label,
-			tooltip: formattedPayload,
-			copyValue: formattedPayload
-		};
-	}
-
-	function handleCopyToolCall(payload: string) {
-		void copyToClipboard(payload, 'Tool call copied to clipboard');
-	}
 </script>
 
 <div
@@ -181,34 +232,36 @@
 	role="group"
 	aria-label="Assistant message with actions"
 >
-	{#if thinkingContent}
+	{#if !editCtx.isEditing && thinkingContent}
 		<ChatMessageThinkingBlock
 			reasoningContent={thinkingContent}
 			isStreaming={!message.timestamp}
-			hasRegularContent={!!messageContent?.trim()}
+			hasRegularContent={!!visibleMessageContent?.trim()}
 		/>
 	{/if}
 
-	{#if message?.role === 'assistant' && isLoading() && !message?.content?.trim()}
+	{#if showProcessingInfoTop}
 		<div class="mt-6 w-full max-w-[48rem]" in:fade>
 			<div class="processing-container">
 				<span class="processing-text">
-					{processingState.getPromptProgressText() ?? processingState.getProcessingMessage()}
+					{processingState.getPromptProgressText() ??
+						processingState.getProcessingMessage() ??
+						'Processing...'}
 				</span>
 			</div>
 		</div>
 	{/if}
 
-	{#if isEditing}
+	{#if editCtx.isEditing}
 		<div class="w-full">
 			<textarea
 				bind:this={textareaElement}
-				bind:value={editedContent}
+				value={editCtx.editedContent}
 				class="min-h-[50vh] w-full resize-y rounded-2xl px-3 py-2 text-sm {INPUT_CLASSES}"
-				onkeydown={onEditKeydown}
+				onkeydown={handleEditKeydown}
 				oninput={(e) => {
 					autoResizeTextarea(e.currentTarget);
-					onEditedContentChange?.(e.currentTarget.value);
+					editCtx.setContent(e.currentTarget.value);
 				}}
 				placeholder="Edit assistant message..."
 			></textarea>
@@ -218,30 +271,35 @@
 					<Checkbox
 						id="branch-after-edit"
 						bind:checked={shouldBranchAfterEdit}
-						onCheckedChange={(checked) => onShouldBranchAfterEditChange?.(checked === true)}
+						onCheckedChange={(checked) => (shouldBranchAfterEdit = checked === true)}
 					/>
 					<Label for="branch-after-edit" class="cursor-pointer text-sm text-muted-foreground">
 						Branch conversation after edit
 					</Label>
 				</div>
 				<div class="flex gap-2">
-					<Button class="h-8 px-3" onclick={onCancelEdit} size="sm" variant="outline">
+					<Button class="h-8 px-3" onclick={editCtx.cancel} size="sm" variant="outline">
 						<X class="mr-1 h-3 w-3" />
 						Cancel
 					</Button>
 
-					<Button class="h-8 px-3" onclick={onSaveEdit} disabled={!editedContent?.trim()} size="sm">
+					<Button
+						class="h-8 px-3"
+						onclick={editCtx.save}
+						disabled={!editCtx.editedContent?.trim()}
+						size="sm"
+					>
 						<Check class="mr-1 h-3 w-3" />
 						Save
 					</Button>
 				</div>
 			</div>
 		</div>
-	{:else if message.role === 'assistant'}
-		{#if config().disableReasoningFormat}
+	{:else if message.role === MessageRole.ASSISTANT}
+		{#if showRawOutput}
 			<pre class="raw-output">{messageContent || ''}</pre>
 		{:else}
-			<MarkdownContent content={messageContent || ''} />
+			<MarkdownContent content={visibleMessageContent || ''} attachments={message.extra} />
 		{/if}
 	{:else}
 		<div class="text-sm whitespace-pre-wrap">
@@ -249,18 +307,41 @@
 		</div>
 	{/if}
 
+	{#if showProcessingInfoBottom}
+		<div class="mt-4 w-full max-w-[48rem]" in:fade>
+			<div class="processing-container">
+				<span class="processing-text">
+					{processingState.getPromptProgressText() ??
+						processingState.getProcessingMessage() ??
+						'Processing...'}
+				</span>
+			</div>
+		</div>
+	{/if}
+
 	<div class="info my-6 grid gap-4 tabular-nums">
-		{#if displayedModel()}
-			<div class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground">
+		{#if displayedModel}
+			<div
+				bind:this={statsContainerEl}
+				class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground"
+			>
 				{#if isRouter}
 					<ModelsSelector
-						currentModel={displayedModel()}
-						onModelChange={handleModelChange}
+						currentModel={displayedModel}
 						disabled={isLoading()}
-						upToMessageId={message.id}
+						onModelChange={async (modelId, modelName) => {
+							const status = modelsStore.getModelStatus(modelId);
+
+							if (status !== ServerModelStatus.LOADED) {
+								await modelsStore.loadModel(modelId);
+							}
+
+							onRegenerate(modelName);
+							return true;
+						}}
 					/>
 				{:else}
-					<ModelBadge model={displayedModel() || undefined} onclick={handleCopyModel} />
+					<ModelBadge model={displayedModel || undefined} onclick={handleCopyModel} />
 				{/if}
 
 				{#if currentConfig.showMessageStats && message.timings && message.timings.predicted_n && message.timings.predicted_ms}
@@ -269,6 +350,7 @@
 						promptMs={message.timings.prompt_ms}
 						predictedTokens={message.timings.predicted_n}
 						predictedMs={message.timings.predicted_ms}
+						onActiveViewChange={handleStatsViewChange}
 					/>
 				{:else if isLoading() && currentConfig.showMessageStats}
 					{@const liveStats = processingState.getLiveProcessingStats()}
@@ -290,53 +372,11 @@
 				{/if}
 			</div>
 		{/if}
-
-		{#if config().showToolCalls}
-			{#if (toolCalls && toolCalls.length > 0) || fallbackToolCalls}
-				<span class="inline-flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-					<span class="inline-flex items-center gap-1">
-						<Wrench class="h-3.5 w-3.5" />
-
-						<span>Tool calls:</span>
-					</span>
-
-					{#if toolCalls && toolCalls.length > 0}
-						{#each toolCalls as toolCall, index (toolCall.id ?? `${index}`)}
-							{@const badge = formatToolCallBadge(toolCall, index)}
-							<button
-								type="button"
-								class="tool-call-badge inline-flex cursor-pointer items-center gap-1 rounded-sm bg-muted-foreground/15 px-1.5 py-0.75"
-								title={badge.tooltip}
-								aria-label={`Copy tool call ${badge.label}`}
-								onclick={() => handleCopyToolCall(badge.copyValue)}
-							>
-								{badge.label}
-								<CopyToClipboardIcon
-									text={badge.copyValue}
-									ariaLabel={`Copy tool call ${badge.label}`}
-								/>
-							</button>
-						{/each}
-					{:else if fallbackToolCalls}
-						<button
-							type="button"
-							class="tool-call-badge tool-call-badge--fallback inline-flex cursor-pointer items-center gap-1 rounded-sm bg-muted-foreground/15 px-1.5 py-0.75"
-							title={fallbackToolCalls}
-							aria-label="Copy tool call payload"
-							onclick={() => handleCopyToolCall(fallbackToolCalls)}
-						>
-							{fallbackToolCalls}
-							<CopyToClipboardIcon text={fallbackToolCalls} ariaLabel="Copy tool call payload" />
-						</button>
-					{/if}
-				</span>
-			{/if}
-		{/if}
 	</div>
 
-	{#if message.timestamp && !isEditing}
+	{#if message.timestamp && !editCtx.isEditing}
 		<ChatMessageActions
-			role="assistant"
+			role={MessageRole.ASSISTANT}
 			justify="start"
 			actionsPosition="left"
 			{siblingInfo}
@@ -345,13 +385,16 @@
 			{onCopy}
 			{onEdit}
 			{onRegenerate}
-			onContinue={currentConfig.enableContinueGeneration && !thinkingContent
+			onContinue={currentConfig.enableContinueGeneration && !hasReasoningMarkers
 				? onContinue
 				: undefined}
 			{onDelete}
 			{onConfirmDelete}
 			{onNavigateToSibling}
 			{onShowDeleteDialogChange}
+			showRawOutputSwitch={currentConfig.showRawOutputSwitch}
+			rawOutputEnabled={showRawOutput}
+			onRawOutputToggle={(enabled) => (showRawOutput = enabled)}
 		/>
 	{/if}
 </div>
@@ -400,19 +443,6 @@
 		font-size: 0.875rem;
 		line-height: 1.6;
 		white-space: pre-wrap;
-		word-break: break-word;
-	}
-
-	.tool-call-badge {
-		max-width: 12rem;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
-
-	.tool-call-badge--fallback {
-		max-width: 20rem;
-		white-space: normal;
 		word-break: break-word;
 	}
 </style>

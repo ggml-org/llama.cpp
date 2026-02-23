@@ -42,7 +42,6 @@ struct llama_hparams {
 
     uint32_t n_ctx_train; // context size the model was trained on
     uint32_t n_embd;
-    uint32_t n_embd_features = 0;
     uint32_t n_layer;
     int32_t n_layer_kv_from_start = -1; // if non-negative, the first n_layer_kv_from_start layers have KV cache
     uint32_t n_rot;
@@ -193,6 +192,11 @@ struct llama_hparams {
     std::array<float, LLAMA_MAX_LAYERS> xielu_alpha_p;
     std::array<float, LLAMA_MAX_LAYERS> xielu_beta;
     std::array<float, LLAMA_MAX_LAYERS> xielu_eps;
+
+    // DSA (deepseek sparse attention)
+    uint32_t indexer_n_head    = 0;
+    uint32_t indexer_head_size = 0;
+    uint32_t indexer_top_k     = 0;
 
     // qwen3vl deepstack
     uint32_t n_deepstack_layers = 0;

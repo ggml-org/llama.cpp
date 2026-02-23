@@ -52,6 +52,7 @@ struct cli_context {
     json messages = json::array();
     std::vector<raw_buffer> input_files;
     task_params defaults;
+    bool verbose_prompt;
 
     // thread for showing "loading" animation
     std::atomic<bool> loading_show;
@@ -66,6 +67,8 @@ struct cli_context {
         defaults.stream = true; // make sure we always use streaming mode
         defaults.timings_per_token = true; // in order to get timings even when we cancel mid-way
         // defaults.return_progress = true; // TODO: show progress
+
+        verbose_prompt = params.verbose_prompt;
     }
 
     std::string generate_completion(result_timings & out_timings) {
@@ -89,6 +92,12 @@ struct cli_context {
             }
 
             rd.post_task({std::move(task)});
+        }
+
+        if (verbose_prompt) {
+            console::set_display(DISPLAY_TYPE_PROMPT);
+            console::log("%s\n\n", chat_params.prompt.c_str());
+            console::set_display(DISPLAY_TYPE_RESET);
         }
 
         // wait for first result
@@ -370,6 +379,15 @@ int main(int argc, char ** argv) {
             if (marker.empty()) {
                 console::error("file does not exist or cannot be opened: '%s'\n", fname.c_str());
                 continue;
+            }
+            if (inf.fim_sep_token != LLAMA_TOKEN_NULL) {
+                cur_msg += common_token_to_piece(ctx_cli.ctx_server.get_llama_context(), inf.fim_sep_token, true);
+                cur_msg += fname;
+                cur_msg.push_back('\n');
+            } else {
+                cur_msg += "--- File: ";
+                cur_msg += fname;
+                cur_msg += " ---\n";
             }
             cur_msg += marker;
             console::log("Loaded text from '%s'\n", fname.c_str());
