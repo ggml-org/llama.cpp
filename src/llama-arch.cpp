@@ -79,6 +79,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_T5,               "t5"               },
     { LLM_ARCH_T5ENCODER,        "t5encoder"        },
     { LLM_ARCH_JAIS,             "jais"             },
+    { LLM_ARCH_JAIS2,            "jais2"            },
     { LLM_ARCH_NEMOTRON,         "nemotron"         },
     { LLM_ARCH_NEMOTRON_H,       "nemotron_h"       },
     { LLM_ARCH_NEMOTRON_H_MOE,   "nemotron_h_moe"   },
@@ -120,6 +121,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_RND1,             "rnd1"             },
     { LLM_ARCH_PANGU_EMBED,      "pangu-embedded"   },
     { LLM_ARCH_MISTRAL3,         "mistral3"         },
+    { LLM_ARCH_PADDLEOCR,        "paddleocr"        },
     { LLM_ARCH_MIMO2,            "mimo2"            },
     { LLM_ARCH_STEP35,           "step35"           },
     { LLM_ARCH_LLAMA_EMBED,      "llama-embed"      },
@@ -738,6 +740,7 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
         case LLM_ARCH_INTERNLM2:
         case LLM_ARCH_GRANITE:
         case LLM_ARCH_ERNIE4_5:
+        case LLM_ARCH_PADDLEOCR:
         case LLM_ARCH_SMOLLM3:
         case LLM_ARCH_DREAM:
         case LLM_ARCH_LLADA:
@@ -1789,6 +1792,20 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_FFN_NORM,
                 LLM_TENSOR_FFN_UP,
                 LLM_TENSOR_FFN_GATE,
+                LLM_TENSOR_FFN_DOWN,
+            };
+        case LLM_ARCH_JAIS2:
+            return {
+                LLM_TENSOR_TOKEN_EMBD,
+                LLM_TENSOR_OUTPUT_NORM,
+                LLM_TENSOR_OUTPUT,
+                LLM_TENSOR_ATTN_NORM,
+                LLM_TENSOR_ATTN_Q,
+                LLM_TENSOR_ATTN_K,
+                LLM_TENSOR_ATTN_V,
+                LLM_TENSOR_ATTN_OUT,
+                LLM_TENSOR_FFN_NORM,
+                LLM_TENSOR_FFN_UP,
                 LLM_TENSOR_FFN_DOWN,
             };
         case LLM_ARCH_NEMOTRON_H:

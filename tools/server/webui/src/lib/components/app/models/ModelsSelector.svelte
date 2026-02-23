@@ -42,7 +42,13 @@
 		useGlobalSelection = false
 	}: Props = $props();
 
-	let options = $derived(modelOptions());
+	let options = $derived(
+		modelOptions().filter((option) => {
+			const modelProps = modelsStore.getModelProps(option.model);
+
+			return modelProps?.webui !== false;
+		})
+	);
 	let loading = $derived(modelsLoading());
 	let updating = $derived(modelsUpdating());
 	let activeId = $derived(selectedModelId());
