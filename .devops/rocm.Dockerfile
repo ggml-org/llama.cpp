@@ -16,7 +16,7 @@ FROM ${BASE_ROCM_DEV_CONTAINER} AS build
 # check https://rocm.docs.amd.com/projects/radeon-ryzen/en/latest/docs/compatibility/compatibilityrad/native_linux/native_linux_compatibility.html
 # check https://rocm.docs.amd.com/projects/radeon-ryzen/en/latest/docs/compatibility/compatibilityryz/native_linux/native_linux_compatibility.html
 
-ARG ROCM_DOCKER_ARCH='gfx908;gfx90a;gfx942;gfx1030;gfx1100;gfx1101;gfx1151;gfx1150;gfx1200;gfx1201'
+ARG ROCM_DOCKER_ARCH='gfx908;gfx90a;gfx942;gfx950;gfx1030;gfx1100;gfx1101;gfx1151;gfx1150;gfx1200;gfx1201'
 
 # Set ROCm architectures
 ENV AMDGPU_TARGETS=${ROCM_DOCKER_ARCH}

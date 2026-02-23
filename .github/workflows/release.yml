@@ -523,7 +523,7 @@ jobs:
       matrix:
         include:
           - ROCM_VERSION: "7.2"
-            gpu_targets: "gfx908;gfx90a;gfx942;gfx1030;gfx1100;gfx1101;gfx1151;gfx1150;gfx1200;gfx1201"
+            gpu_targets: "gfx908;gfx90a;gfx942;gfx950;gfx1030;gfx1100;gfx1101;gfx1151;gfx1150;gfx1200;gfx1201"
             build: 'x64'
 
     steps:
