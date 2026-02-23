@@ -76,6 +76,36 @@ int main() {
     TEST_ASSERT(result2.has_value(), "cached fetch should succeed");
     TEST_ASSERT(result2->tensors.size() == model.tensors.size(), "cached result should match");
 
+    // Test a split MoE model without specifying quant (should default to Q8_0)
+    auto result3 = gguf_fetch_model_meta("ggml-org/GLM-4.6V-GGUF");
+    const auto & model3 = result3.value();
+
+    fprintf(stderr, "Architecture: %s\n", model3.architecture.c_str());
+    fprintf(stderr, "n_embd:       %u\n", model3.n_embd);
+    fprintf(stderr, "n_ff:         %u\n", model3.n_ff);
+    fprintf(stderr, "n_vocab:      %u\n", model3.n_vocab);
+    fprintf(stderr, "n_layer:      %u\n", model3.n_layer);
+    fprintf(stderr, "n_head:       %u\n", model3.n_head);
+    fprintf(stderr, "n_head_kv:    %u\n", model3.n_head_kv);
+    fprintf(stderr, "n_expert:     %u\n", model3.n_expert);
+    fprintf(stderr, "n_embd_head_k:%u\n", model3.n_embd_head_k);
+    fprintf(stderr, "n_embd_head_v:%u\n", model3.n_embd_head_v);
+    fprintf(stderr, "tensors:      %zu\n", model3.tensors.size());
+
+    // Verify architecture
+    TEST_ASSERT(model3.architecture == "glm4moe", "expected architecture 'glm4moe'");
+
+    // Verify key dimensions (GLM-4.6V)
+    TEST_ASSERT(model3.n_layer == 46, "expected n_layer == 46");
+    TEST_ASSERT(model3.n_embd == 4096, "expected n_embd == 4096");
+    TEST_ASSERT(model3.n_head == 96, "expected n_head == 96");
+    TEST_ASSERT(model3.n_head_kv == 8, "expected n_head_kv == 8");
+    TEST_ASSERT(model3.n_expert == 128, "expected n_expert == 128 (MoE)");
+    TEST_ASSERT(model3.n_vocab == 151552, "expected n_vocab == 151552");
+
+    // Verify tensor count
+    TEST_ASSERT(model3.tensors.size() == 780, "expected tensor count == 780");
+
     fprintf(stderr, "=== ALL TESTS PASSED ===\n");
     return 0;
 }

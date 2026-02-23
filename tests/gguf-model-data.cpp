@@ -104,6 +104,18 @@ static bool gguf_skip_value(gguf_buf_reader & r, int32_t vtype) {
 }
 
 static bool gguf_read_uint32_val(gguf_buf_reader & r, int32_t vtype, uint32_t & out) {
+    if (vtype == GGUF_TYPE_UINT8) {
+        uint8_t v; if (!r.read_val(v)) { return false; } out = v; return true;
+    }
+    if (vtype == GGUF_TYPE_INT8) {
+        int8_t v; if (!r.read_val(v)) { return false; } out = (uint32_t)v; return true;
+    }
+    if (vtype == GGUF_TYPE_UINT16) {
+        uint16_t v; if (!r.read_val(v)) { return false; } out = v; return true;
+    }
+    if (vtype == GGUF_TYPE_INT16) {
+        int16_t v; if (!r.read_val(v)) { return false; } out = (uint32_t)v; return true;
+    }
     if (vtype == GGUF_TYPE_UINT32) {
         uint32_t v; if (!r.read_val(v)) { return false; } out = v; return true;
     }
@@ -161,6 +173,22 @@ static std::optional<gguf_remote_model> gguf_parse_meta(const std::vector<char> 
         if (key == "general.architecture" && vtype == GGUF_TYPE_STRING) {
             if (!r.read_str(model.architecture)) { return std::nullopt; }
             arch_prefix = model.architecture + ".";
+            continue;
+        }
+
+        // Extract split.count for proper handling of split files
+        if (key == "split.count") {
+            uint32_t v;
+            if (!gguf_read_uint32_val(r, vtype, v)) { return std::nullopt; }
+            model.n_split = (uint16_t)v;
+            continue;
+        }
+
+        // Extract split.tensors.count so we can verify we have all tensors
+        if (key == "split.tensors.count") {
+            uint32_t v;
+            if (!gguf_read_uint32_val(r, vtype, v)) { return std::nullopt; }
+            model.n_split_tensors = v;
             continue;
         }
 
@@ -292,7 +320,12 @@ static std::pair<long, std::vector<char>> gguf_http_get(
     }
 }
 
-static std::string detect_gguf_filename(const std::string & repo, const std::string & quant) {
+// Find the filename for given repo/quant.
+// For split models, returns the first shard (the one containing "00001-of-")
+// split_prefix is set to the portion before "-00001-of-XXXXX.gguf" when a split file is found
+static std::string detect_gguf_filename(const std::string & repo, const std::string & quant,
+                                        std::string & split_prefix) {
+    split_prefix.clear();
     std::string api_url = "https://huggingface.co/api/models/" + repo;
 
     auto [code, body] = gguf_http_get(api_url, {}, 30);
@@ -336,12 +369,23 @@ static std::string detect_gguf_filename(const std::string & repo, const std::str
     }
 
     std::sort(matches.begin(), matches.end());
+
+    // Prefer non-split, non-supplementary file
     for (const auto & m : matches) {
-        // prefer non-split files if possible
-        if (m.find("-of-") == std::string::npos) {
+        if (m.find("-of-") == std::string::npos && m.find("mmproj") == std::string::npos) {
             return m;
         }
     }
+
+    // Return the first shard (00001-of-) and extract the prefix
+    for (const auto & m : matches) {
+        auto pos = m.find("-00001-of-");
+        if (pos != std::string::npos) {
+            split_prefix = m.substr(0, pos);
+            return m;
+        }
+    }
+
     return matches[0];
 }
 
@@ -398,25 +442,12 @@ static std::optional<gguf_remote_model> fetch_and_parse(
     return std::nullopt;
 }
 
-#endif // CPPHTTPLIB_OPENSSL_SUPPORT
-
-std::optional<gguf_remote_model> gguf_fetch_model_meta(
+// Try cache first, then fetch and parse a single GGUF shard.
+static std::optional<gguf_remote_model> fetch_or_cached(
         const std::string & repo,
-        const std::string & quant,
-        const std::string & cache_dir) {
-#ifndef CPPHTTPLIB_OPENSSL_SUPPORT
-    (void)repo; (void)quant; (void)cache_dir;
-    fprintf(stderr, "gguf_fetch: HTTPS support not compiled\n");
-    return std::nullopt;
-#else
-    std::string cdir = cache_dir.empty() ? get_default_cache_dir() : cache_dir;
-    std::string repo_part = sanitize_for_path(repo);
-
-    std::string filename = detect_gguf_filename(repo, quant);
-    if (filename.empty()) {
-        return std::nullopt;
-    }
-
+        const std::string & filename,
+        const std::string & cdir,
+        const std::string & repo_part) {
     std::string fname_part = sanitize_for_path(filename);
     std::string cache_path = cdir + "/" + repo_part + "--" + fname_part + ".partial";
 
@@ -433,5 +464,68 @@ std::optional<gguf_remote_model> gguf_fetch_model_meta(
 
     fs_create_directory_with_parents(cdir);
     return fetch_and_parse(repo, filename, cache_path);
+}
+
+#endif // CPPHTTPLIB_OPENSSL_SUPPORT
+
+std::optional<gguf_remote_model> gguf_fetch_model_meta(
+        const std::string & repo,
+        const std::string & quant,
+        const std::string & cache_dir) {
+#ifndef CPPHTTPLIB_OPENSSL_SUPPORT
+    (void)repo; (void)quant; (void)cache_dir;
+    fprintf(stderr, "gguf_fetch: HTTPS support not compiled\n");
+    return std::nullopt;
+#else
+    std::string cdir = cache_dir.empty() ? get_default_cache_dir() : cache_dir;
+    std::string repo_part = sanitize_for_path(repo);
+
+    std::string split_prefix;
+    std::string filename = detect_gguf_filename(repo, quant, split_prefix);
+    if (filename.empty()) {
+        return std::nullopt;
+    }
+
+    auto model_opt = fetch_or_cached(repo, filename, cdir, repo_part);
+    if (!model_opt.has_value()) {
+        fprintf(stderr, "gguf_fetch: failed to fetch %s\n", filename.c_str());
+        return std::nullopt;
+    }
+
+    auto & model = model_opt.value();
+
+    // If the model is split across multiple files we need to fetch the remaining shards metadata
+    if (model.n_split > 1) {
+        if (split_prefix.empty()) {
+            fprintf(stderr, "gguf_fetch: model reports %u splits but filename has no split pattern\n", model.n_split);
+            return std::nullopt;
+        }
+
+        fprintf(stderr, "gguf_fetch: split model with %u shards, fetching remaining %u...\n",
+                model.n_split, model.n_split - 1);
+
+        for (int i = 2; i <= model.n_split; i++) {
+            char shard_name[256];
+            snprintf(shard_name, sizeof(shard_name), "%s-%05d-of-%05d.gguf",
+                     split_prefix.c_str(), i, (int)model.n_split);
+
+            auto shard = fetch_or_cached(repo, shard_name, cdir, repo_part);
+            if (!shard.has_value()) {
+                fprintf(stderr, "gguf_fetch: failed to fetch shard %d: %s\n", i, shard_name);
+                return std::nullopt;
+            }
+
+            model.tensors.insert(model.tensors.end(),
+                std::make_move_iterator(shard->tensors.begin()),
+                std::make_move_iterator(shard->tensors.end()));
+        }
+
+        if (model.n_split_tensors > 0 && model.tensors.size() != model.n_split_tensors) {
+            fprintf(stderr, "gguf_fetch: WARNING: expected %u tensors from split.tensors.count, got %zu\n",
+                    model.n_split_tensors, model.tensors.size());
+        }
+    }
+
+    return model_opt;
 #endif
 }

@@ -26,6 +26,8 @@ struct gguf_remote_model {
     uint32_t    n_expert;         // <arch>.expert_count (0 if absent)
     uint32_t    n_embd_head_k;    // <arch>.attention.key_length
     uint32_t    n_embd_head_v;    // <arch>.attention.value_length
+    uint16_t    n_split;          // split.count (0 = not split)
+    uint32_t    n_split_tensors;  // split.tensors.count (0 if not split)
 
     std::vector<gguf_remote_tensor> tensors;
 };
