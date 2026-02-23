@@ -147,3 +147,7 @@ export {
 	createTimeoutSignal,
 	withAbortSignal
 } from './abort';
+
+// Cryptography utilities
+
+export { uuid } from './uuid';

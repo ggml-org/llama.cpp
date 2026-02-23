@@ -2,7 +2,7 @@
 	import { Plus } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
-	import { getFaviconUrl } from '$lib/utils';
+	import { getFaviconUrl, uuid } from '$lib/utils';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { McpServerCard, McpServerCardSkeleton, McpServerForm } from '$lib/components/app/mcp';
@@ -57,9 +57,7 @@
 	function saveNewServer() {
 		if (newServerUrlError) return;
 
-		const newServerId = crypto.randomUUID
-			? crypto.randomUUID()
-			: `${MCP_SERVER_ID_PREFIX}-${Date.now()}`;
+		const newServerId = uuid() ?? `${MCP_SERVER_ID_PREFIX}-${Date.now()}`;
 
 		mcpStore.addServer({
 			id: newServerId,

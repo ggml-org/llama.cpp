@@ -23,7 +23,7 @@ import { browser } from '$app/environment';
 import { MCPService } from '$lib/services/mcp.service';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { mcpResourceStore } from '$lib/stores/mcp-resources.svelte';
-import { parseMcpServerSettings, detectMcpTransportFromUrl, getFaviconUrl } from '$lib/utils';
+import { parseMcpServerSettings, detectMcpTransportFromUrl, getFaviconUrl, uuid } from '$lib/utils';
 import { MCPConnectionPhase, MCPLogLevel, HealthCheckStatus, MCPRefType } from '$lib/enums';
 import {
 	DEFAULT_MCP_CONFIG,
@@ -391,7 +391,7 @@ class MCPStore {
 	): void {
 		const servers = this.getServers();
 		const newServer: MCPServerSettingsEntry = {
-			id: serverData.id || (crypto.randomUUID ? crypto.randomUUID() : `server-${Date.now()}`),
+			id: serverData.id || (uuid() ?? `server-${Date.now()}`),
 			enabled: serverData.enabled,
 			url: serverData.url.trim(),
 			name: serverData.name,

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { debounce } from '$lib/utils';
+	import { debounce, uuid } from '$lib/utils';
 	import { KeyboardKey } from '$lib/enums';
 	import type { MCPPromptInfo, GetPromptResult, MCPServerSettingsEntry } from '$lib/types';
 	import { SvelteMap } from 'svelte/reactivity';
@@ -127,8 +127,7 @@
 	async function executePrompt(prompt: MCPPromptInfo, args: Record<string, string>) {
 		promptError = null;
 
-		const placeholderId =
-			globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).substring(2);
+		const placeholderId = uuid();
 
 		const nonEmptyArgs = Object.fromEntries(
 			Object.entries(args).filter(([, value]) => value.trim() !== '')

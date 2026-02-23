@@ -25,7 +25,7 @@
 	import { mcpHasResourceAttachments } from '$lib/stores/mcp-resources.svelte';
 	import { conversationsStore, activeMessages } from '$lib/stores/conversations.svelte';
 	import type { GetPromptResult, MCPPromptInfo, PromptMessage } from '$lib/types';
-	import { isIMEComposing, parseClipboardContent } from '$lib/utils';
+	import { isIMEComposing, parseClipboardContent, uuid } from '$lib/utils';
 	import {
 		AudioRecorder,
 		convertToWav,
@@ -340,7 +340,7 @@
 				// Handle MCP prompt attachments as ChatUploadedFile with mcpPrompt data
 				if (parsed.mcpPromptAttachments.length > 0) {
 					const mcpPromptFiles: ChatUploadedFile[] = parsed.mcpPromptAttachments.map((att) => ({
-						id: globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).substring(2),
+						id: uuid(),
 						name: att.name,
 						size: att.content.length,
 						type: SpecialFileType.MCP_PROMPT,
