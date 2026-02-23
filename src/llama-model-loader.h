@@ -111,6 +111,12 @@ struct llama_model_loader {
 
     std::map<ggml_backend_buffer_type_t, ggml_context_ptr, ggml_backend_buft_comparator> ctx_map;
 
+    // track tensors that had to be moved for debugging:
+    size_t n_tensors_moved = 0;
+    ggml_tensor * first_tensor_moved = nullptr;
+    ggml_backend_buffer_type_t first_moved_from_buft = nullptr;
+    ggml_backend_buffer_type_t first_moved_to_buft = nullptr;
+
     llama_model_loader(
         struct gguf_context * metadata,
         llama_model_set_tensor_data_t set_tensor_data,

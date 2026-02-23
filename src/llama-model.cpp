@@ -2630,40 +2630,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             throw std::runtime_error("model has expert layers but no expert layers are used");
         }
 
-        int n_moved_tensors = 0;
-        ggml_tensor * first_moved_tensor = nullptr;
-        ggml_backend_buffer_type_t first_moved_from_buft = nullptr;
-        ggml_backend_buffer_type_t first_moved_to_buft = nullptr;
-
         auto create_tensor = [&](const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) -> ggml_tensor * {
-            // if (ml.files.empty()) {
-            //     llm_tensor_info info;
-            //     try {
-            //         info = llm_tensor_info_for(tn.tensor);
-            //     } catch (const std::out_of_range & e) {
-            //         throw std::runtime_error(format("missing tensor info mapping for %s", tn.str().c_str()));
-            //     }
-            //     buft_list_t * buft_list;
-            //     switch (info.layer) {
-            //         case LLM_TENSOR_LAYER_INPUT:
-            //             buft_list = pimpl->dev_input.buft_list;
-            //             break;
-            //         case LLM_TENSOR_LAYER_OUTPUT:
-            //             buft_list = pimpl->dev_output.buft_list;
-            //             break;
-            //         case LLM_TENSOR_LAYER_REPEATING:
-            //             buft_list = pimpl->dev_layer.at(tn.bid).buft_list;
-            //             break;
-            //         default:
-            //             GGML_ABORT("fatl error");
-            //     }
-            //     ggml_backend_buffer_type_t buft = buft_list->at(0).second;
-            //     ggml_context * ctx = ctx_for_buft(buft);
-            //     ggml_tensor * ret = ggml_new_tensor(ctx, GGML_TYPE_F32, ne.size(), std::data(ne));
-            //     std::string name = tn;
-            //     ggml_set_name(ret, name.c_str());
-            //     return ret;
-            // }
             const buft_list_t * buft_list_layer = tn.bid == -1 ? nullptr : pimpl->dev_layer.at(tn.bid).buft_list;
             return ml.create_tensor(
                 hparams, &pimpl->cpu_buft_list, pimpl->dev_input.buft_list, pimpl->dev_output.buft_list, buft_list_layer,
@@ -7369,12 +7336,6 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 } break;
             default:
                 throw std::runtime_error("unknown architecture");
-        }
-
-        if (n_moved_tensors > 0) {
-            LLAMA_LOG_DEBUG("%s: tensor '%s' (%s) (and %d others) cannot be used with preferred buffer type %s, using %s instead\n",
-                __func__, first_moved_tensor->name, ggml_type_name(first_moved_tensor->type), n_moved_tensors - 1,
-                ggml_backend_buft_name(first_moved_from_buft), ggml_backend_buft_name(first_moved_to_buft));
         }
     }
 

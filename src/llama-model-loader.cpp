@@ -1032,6 +1032,35 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         return it->second.get();
     };
 
+    if (files.empty()) {
+        llm_tensor_info info;
+        try {
+            info = llm_tensor_info_for(tn.tensor);
+        } catch (const std::out_of_range & e) {
+            throw std::runtime_error(format("missing tensor info mapping for %s", tn.str().c_str()));
+        }
+        const buft_list_t * buft_list;
+        switch (info.layer) {
+            case LLM_TENSOR_LAYER_INPUT:
+                buft_list = buft_list_input;
+                break;
+            case LLM_TENSOR_LAYER_OUTPUT:
+                buft_list = buft_list_output;
+                break;
+            case LLM_TENSOR_LAYER_REPEATING:
+                buft_list = buft_list_layer;
+                break;
+            default:
+                GGML_ABORT("fatal error");
+        }
+        ggml_backend_buffer_type_t buft = buft_list->at(0).second;
+        ggml_context * ctx = ctx_for_buft(buft);
+        ggml_tensor * ret = ggml_new_tensor(ctx, GGML_TYPE_F32, ne.size(), std::data(ne));
+        std::string name = tn;
+        ggml_set_name(ret, name.c_str());
+        return ret;
+    }
+
     ggml_tensor * t_meta = get_tensor_meta(tn.str().c_str());
 
     if (!t_meta) {
@@ -1149,14 +1178,14 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         buft = ggml_backend_dev_buffer_type(cpu_dev);
     }
 
-    // if (buft != buft_list->front().second) {
-    //     n_moved_tensors++;
-    //     if (!first_moved_tensor) {
-    //         first_moved_tensor = t_meta;
-    //         first_moved_from_buft = buft_list->front().second;
-    //         first_moved_to_buft   = buft;
-    //     }
-    // }
+    if (buft != buft_list->front().second) {
+        n_tensors_moved++;
+        if (!first_tensor_moved) {
+            first_tensor_moved = t_meta;
+            first_moved_from_buft = buft_list->front().second;
+            first_moved_to_buft   = buft;
+        }
+    }
 
     ggml_context * ctx = ctx_for_buft(buft);
 
@@ -1221,6 +1250,11 @@ struct ggml_tensor * llama_model_loader::create_tensor_as_view(struct ggml_conte
 void llama_model_loader::done_getting_tensors() const {
     if (n_created != n_tensors) {
         throw std::runtime_error(format("%s: wrong number of tensors; expected %d, got %d", __func__, n_tensors, n_created));
+    }
+    if (n_tensors_moved > 0) {
+        LLAMA_LOG_DEBUG("%s: tensor '%s' (%s) (and %zu others) cannot be used with preferred buffer type %s, using %s instead\n",
+            __func__, first_tensor_moved->name, ggml_type_name(first_tensor_moved->type), n_tensors_moved - 1,
+            ggml_backend_buft_name(first_moved_from_buft), ggml_backend_buft_name(first_moved_to_buft));
     }
 }
 
