@@ -705,6 +705,14 @@ inline bool string_remove_suffix(std::string & str, std::string_view suffix) {
     return false;
 }
 
+inline bool string_remove_prefix(std::string & str, std::string_view prefix) {
+    if (string_starts_with(str, prefix)) {
+        str.erase(0, prefix.size());
+        return true;
+    }
+    return false;
+}
+
 inline size_t string_find_partial_stop(std::string_view str, std::string_view stop) {
     if (!str.empty() && !stop.empty()) {
         const size_t max_len = std::min(str.size(), stop.size());
@@ -737,7 +745,6 @@ bool fs_create_directory_with_parents(const std::string & path);
 bool fs_is_directory(const std::string & path);
 
 std::string fs_get_cache_directory();
-std::string fs_get_cache_file(const std::string & filename);
 
 struct common_file_info {
     std::string path;
