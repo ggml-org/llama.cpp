@@ -2674,9 +2674,10 @@ public:
     bool get_op_descriptor(int op_idx, OperationDescriptor & out) const;
     bool update_op_descriptor(int op_idx, const OperationDescriptor & desc);
 
-    // Multi-device split: set per-kernel split config that populates DeviceOperation
-    // cross-device fields during launch_persistent_kernel().
+    // Multi-device split: set/get per-kernel split config that populates
+    // DeviceOperation cross-device fields during launch_persistent_kernel().
     void set_split_config(const KernelSplitConfig & config);
+    void get_split_config(KernelSplitConfig & out) const;
 
     // DAG scheduling for barrier-free persistent kernel
     void build_dag(const std::vector<std::vector<int>> & successors,
@@ -2703,6 +2704,18 @@ public:
     };
     void add_deferred_copy(int source_op_idx, void * src_ptr, void * dst, size_t bytes);
     void execute_deferred_copies();
+
+    // Launch persistent kernel asynchronously (does NOT wait for completion).
+    // Returns after submitting the kernel to the queue. The caller is
+    // responsible for waiting on queue_ or using the kernel's device-local
+    // progress_counter/merge_complete counters for host-mediated coordination.
+    // Used by the host coordinator thread approach for multi-device persistent TG.
+    void launch_persistent_kernel_async();
+
+    // Finalize after async persistent kernel execution: cache the plan template,
+    // free temp device allocations, and reset the current plan. Must be called
+    // after the kernel has completed (queue_.wait() has returned).
+    void finalize_persistent();
 
     bool            supports_persistent() const;
     bool            is_building_plan() const;

@@ -4073,19 +4073,6 @@ public:
         for (int op_idx = 0; op_idx < args_.n_operations; op_idx++) {
             const DeviceOperation & op = args_.operations[op_idx];
 
-            // Pre-matmul sync: poll merge_complete for previous matmul.
-            // Host coordinator writes merge_complete via BCS H2D after merging
-            // the secondary's partial output into primary's device memory.
-            if (is_matmul_op(op.type) && op.n_devices > 1 && op.merge_complete) {
-                pre_matmul_sync(op);
-                // Barrier so all WGs see the merge_complete poll result
-                if (use_split_barrier) {
-                    device_split_barrier(local_id, wg_id, /* reset_tile_counter = */ false);
-                } else {
-                    device_barrier_atomic(local_id, n_wgs, /* reset_tile_counter = */ false);
-                }
-            }
-
             // Work-stealing: each work-group claims tiles atomically
             while (true) {
                 int tile_idx = -1;
@@ -4115,12 +4102,39 @@ public:
                 device_barrier_atomic(local_id, n_wgs, /* reset_tile_counter = */ true);
             }
 
-            // Post-matmul sync: write progress_counter so host coordinator
-            // knows this matmul is complete and can BCS D2H read the progress.
+            // Post-matmul sync: signal progress, wait for merge, then copy
+            // the secondary's partial output from host-pinned staging to device
+            // scratch. The kernel-side copy ensures data passes through the GPU
+            // L2 cache, making it coherent for subsequent operations that read
+            // the full matmul output (ROPE, ATTENTION, SILU_MUL, ADD, etc.).
+            //
+            // Flow:
+            //   1. Kernel writes progress_counter (host reads via BCS D2H)
+            //   2. Kernel waits for merge_complete (host writes via BCS H2D)
+            //   3. Kernel copies merge_src (host-pinned) -> merge_dst (scratch)
+            //      Host-pinned reads bypass L2 (PCIe zero-copy); kernel writes
+            //      go through L2, so subsequent reads see the fresh data.
             if (is_matmul_op(op.type) && op.n_devices > 1 && op.progress_counter) {
                 post_matmul_sync(op);
-                // Barrier so ALL work-groups see the progress write before
-                // proceeding to the next operation.
+                // Barrier so ALL work-groups see the progress write
+                if (use_split_barrier) {
+                    device_split_barrier(local_id, wg_id, /* reset_tile_counter = */ false);
+                } else {
+                    device_barrier_atomic(local_id, n_wgs, /* reset_tile_counter = */ false);
+                }
+                // Wait for host coordinator to complete the merge
+                wait_for_merge(op);
+                // Barrier so all WGs see merge_complete before the copy
+                if (use_split_barrier) {
+                    device_split_barrier(local_id, wg_id, /* reset_tile_counter = */ false);
+                } else {
+                    device_barrier_atomic(local_id, n_wgs, /* reset_tile_counter = */ false);
+                }
+                // Cooperative copy: all work-groups copy merge data from
+                // host-pinned staging to device scratch
+                copy_merge_data(op);
+                // Barrier after copy so all WGs have finished writing before
+                // any subsequent op reads the merged output
                 if (use_split_barrier) {
                     device_split_barrier(local_id, wg_id, /* reset_tile_counter = */ false);
                 } else {
@@ -4307,70 +4321,94 @@ private:
     }
 
     // Cross-device synchronization for multi-device row-split persistent TG.
-    // Called after intra-device barrier for MUL_MAT ops when n_devices > 1.
-    // Only WG 0, thread 0 performs signaling/polling to minimize PCIe bus traffic.
-    // Other threads wait at the subsequent intra-device barrier.
-    // Pre-matmul sync: waits for host coordinator to finish merging the previous matmul.
-    // After the secondary GPU completes its MMVQ partial output, the host coordinator
-    // merges results and writes merge_complete (device memory) via H2D BCS memcpy.
-    // Primary polls merge_complete with a device-local atomic_ref — this works because
-    // both the BCS writer (H2D memcpy) and kernel reader (atomic_ref) operate on
-    // sycl::malloc_device memory, and BCS bypasses the GPU L2 cache.
     //
-    // Secondary device: not a persistent kernel — host launches per-op MMVQ
-    // kernels, so this method is only called on the primary.
-    void pre_matmul_sync(const DeviceOperation & op) {
-        const int local_id = item_.get_local_id(0);
-        const int wg_id    = item_.get_group_linear_id();
-
-        if (op.n_devices <= 1 || !op.merge_complete) return;
-
-        // First matmul (op_idx == 0): no previous merge to wait for
-        if (op.op_idx == 0) return;
-
-        // WG 0, thread 0 polls merge_complete for the previous matmul.
-        // Device-scope atomic_ref on device-local memory (malloc_device).
-        // Host writes via H2D BCS memcpy which bypasses GPU L2 cache.
-        if (wg_id == 0 && local_id == 0) {
-            sycl::atomic_ref<int, sycl::memory_order::relaxed,
-                             sycl::memory_scope::device,
-                             sycl::access::address_space::global_space>
-                merge_flag(*op.merge_complete);
-            while (merge_flag.load(sycl::memory_order::acquire) < op.op_idx) {
-                // Spin-wait for host to signal merge completion for previous matmul
-            }
-        }
-    }
-
-    // Host-mediated sync: primary writes progress_counter (device-local) after
-    // completing a matmul via atomic_ref<device>. The host coordinator reads it
-    // via OOQ D2H memcpy which uses the BCS engine to bypass the GPU L2 cache.
+    // The monolithic persistent kernel runs all ops in a single launch.
+    // For split matmuls, the primary device computes rows [0, N_primary)
+    // while a host coordinator thread concurrently dispatches MMVQ on the
+    // secondary device for rows [N_primary, N_total).
     //
-    // After writing progress, primary does NOT wait here — it proceeds to the
-    // next operation. The pre_matmul_sync at the START of the next split matmul
-    // polls merge_complete, giving the host time to complete the secondary dispatch
-    // and merge while primary runs non-matmul ops (norms, attention, etc.).
+    // After each split matmul completes on primary:
+    //   1. post_matmul_sync:  write progress_counter (host reads via BCS D2H)
+    //   2. wait_for_merge:    spin on merge_complete  (host writes via BCS H2D)
+    //   3. copy_merge_data:   copy from host-pinned merge_src to device scratch
+    //
+    // The kernel-side copy in step 3 is critical for L2 cache coherency.
+    // BCS H2D writes to device scratch bypass the GPU L2 cache, but the
+    // kernel's normal loads read through L2. If L2 contains stale data for
+    // the merge_dst cache lines, the kernel sees garbage. By having the
+    // kernel itself copy from host-pinned memory (read via PCIe zero-copy,
+    // bypasses L2) to device scratch (write goes through L2), subsequent
+    // reads from scratch are guaranteed to see the fresh data.
+
+    // Signal that this matmul's primary rows are complete.
+    // WG 0, thread 0 writes progress_counter via device-scope atomic_ref
+    // to malloc_device memory. Host coordinator reads via OOQ D2H memcpy
+    // (BCS engine bypasses GPU L2 cache).
     void post_matmul_sync(const DeviceOperation & op) {
         const int local_id = item_.get_local_id(0);
         const int wg_id    = item_.get_group_linear_id();
 
-        if (op.n_devices <= 1 || !op.progress_counter) return;
+        if (op.n_devices <= 1 || !op.progress_counter) {
+            return;
+        }
 
-        // WG 0, thread 0 writes the progress counter via atomic_ref to
-        // device-local memory (malloc_device). Host reads via OOQ D2H memcpy
-        // which uses the BCS engine to bypass the GPU L2 cache, ensuring
-        // the host sees the kernel's write immediately.
         if (wg_id == 0 && local_id == 0) {
-            sycl::atomic_ref<int, sycl::memory_order::relaxed,
-                             sycl::memory_scope::device,
+            sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device,
                              sycl::access::address_space::global_space>
                 prog(*op.progress_counter);
             prog.store(op.op_idx + 1, sycl::memory_order::release);
         }
+    }
 
-        // No need to wait for secondary here. The merge wait happens in
-        // pre_matmul_sync of the NEXT split matmul, which runs after the
-        // intervening non-matmul ops give the host time to complete the merge.
+    // Wait for the host coordinator to signal that the secondary's partial
+    // output is ready in host-pinned merge_src. WG 0, thread 0 polls
+    // merge_complete via device-scope atomic_ref on malloc_device memory.
+    // Host writes merge_complete via BCS H2D which bypasses GPU L2 cache.
+    void wait_for_merge(const DeviceOperation & op) {
+        const int local_id = item_.get_local_id(0);
+        const int wg_id    = item_.get_group_linear_id();
+
+        if (op.n_devices <= 1 || !op.merge_complete) {
+            return;
+        }
+
+        const int target = op.op_idx + 1;
+
+        if (wg_id == 0 && local_id == 0) {
+            sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device,
+                             sycl::access::address_space::global_space>
+                merge_flag(*op.merge_complete);
+            while (merge_flag.load(sycl::memory_order::acquire) < target) {
+                // Spin-wait for host to signal merge data ready
+            }
+        }
+    }
+
+    // Cooperative copy: all work-groups copy merge_count floats from
+    // host-pinned merge_src to device scratch merge_dst.
+    // Reads from host-pinned memory go through PCIe zero-copy (bypasses L2).
+    // Writes to device scratch go through L2 cache, making the data
+    // coherent for subsequent kernel reads.
+    void copy_merge_data(const DeviceOperation & op) {
+        if (op.merge_count <= 0 || !op.merge_src || !op.merge_dst) {
+            return;
+        }
+
+        const int local_id = item_.get_local_id(0);
+        const int wg_id    = item_.get_group_linear_id();
+        const int n_wgs    = item_.get_group_range(0);
+        const int block_sz = item_.get_local_range(0);
+
+        const float * src = static_cast<const float *>(op.merge_src);
+        float *       dst = static_cast<float *>(op.merge_dst);
+        const int     n   = op.merge_count;
+
+        // Distribute copy across all work-groups and threads
+        const int total_threads = n_wgs * block_sz;
+        const int global_id     = wg_id * block_sz + local_id;
+        for (int i = global_id; i < n; i += total_threads) {
+            dst[i] = src[i];
+        }
     }
 
     void dispatch_operation(const DeviceOperation & op, int tile_idx) {
@@ -6076,6 +6114,10 @@ void UnifiedKernel::set_split_config(const KernelSplitConfig & config) {
     split_config_set_ = true;
 }
 
+void UnifiedKernel::get_split_config(KernelSplitConfig & out) const {
+    out = split_config_;
+}
+
 void UnifiedKernel::cancel_persistent() {
     if (current_plan_) {
         if (current_plan_->temp_device_alloc_bytes > 0 && device_id_ >= 0) {
@@ -7126,6 +7168,254 @@ void UnifiedKernel::launch_persistent_kernel() {
     last_stats_.kernel_time_ms       = elapsed_ms;
 
     // Device ops table is pooled — no per-call free needed
+}
+
+void UnifiedKernel::launch_persistent_kernel_async() {
+    if (!current_plan_ || current_plan_->operations.empty()) {
+        return;
+    }
+
+    // Build device-side operation table (same as launch_persistent_kernel)
+    const size_t                 n_ops = current_plan_->operations.size();
+    std::vector<DeviceOperation> host_ops;
+    host_ops.reserve(n_ops);
+
+    int  total_tiles    = 0;
+    bool has_attention  = false;
+    bool has_ffn_matmul = false;
+    for (size_t i = 0; i < n_ops; i++) {
+        const auto &    src = current_plan_->operations[i];
+        DeviceOperation dst = {};
+
+        dst.type             = static_cast<int>(src.type);
+        dst.layer            = src.layer;
+        dst.weights          = src.weights;
+        dst.input            = src.input;
+        dst.output           = src.output;
+        dst.aux              = src.aux;
+        dst.mask             = src.mask;
+        dst.q_nb0            = src.q_nb0;
+        dst.q_nb1            = src.q_nb1;
+        dst.q_nb2            = src.q_nb2;
+        dst.q_nb3            = src.q_nb3;
+        dst.k_nb0            = src.k_nb0;
+        dst.k_nb1            = src.k_nb1;
+        dst.k_nb2            = src.k_nb2;
+        dst.k_nb3            = src.k_nb3;
+        dst.v_nb0            = src.v_nb0;
+        dst.v_nb1            = src.v_nb1;
+        dst.v_nb2            = src.v_nb2;
+        dst.v_nb3            = src.v_nb3;
+        dst.M                = src.M;
+        dst.N                = src.N;
+        dst.K                = src.K;
+        dst.tile_cols        = 0;
+        dst.output_bytes     = src.output_bytes;
+        dst.hidden_dim       = src.hidden_dim;
+        dst.intermediate_dim = src.intermediate_dim;
+        dst.eps              = src.eps;
+        dst.scale            = src.scale;
+        dst.quant_type       = src.quant_type;
+        dst.weight_layout    = src.weight_layout;
+        dst.n_kv_heads       = src.n_kv_heads;
+        dst.mask_type        = src.mask_type;
+        dst.mask_nb0         = src.mask_nb0;
+        dst.mask_nb1         = src.mask_nb1;
+        dst.mask_nb2         = src.mask_nb2;
+        dst.mask_nb3         = src.mask_nb3;
+        dst.mask_ne2         = src.mask_ne2;
+        dst.mask_ne3         = src.mask_ne3;
+
+        const size_t pre_fusion_idx = i;
+
+        // No GATE+UP+SILU fusion when split is active (deadlocks secondary sync)
+        const bool split_active = split_config_set_ && split_config_.n_devices > 1;
+        if (!split_active && src.type == OperationType::MATMUL_GATE && (i + 2) < n_ops) {
+            const auto & up   = current_plan_->operations[i + 1];
+            const auto & silu = current_plan_->operations[i + 2];
+            const bool   contiguous_chain =
+                (up.type == OperationType::MATMUL_UP) && (silu.type == OperationType::SILU_MUL) &&
+                (src.layer == up.layer) && (up.layer == silu.layer) && (src.input == up.input) && (src.M == up.M) &&
+                (src.N == up.N) && (src.K == up.K) && (src.quant_type == up.quant_type) &&
+                (src.weight_layout == up.weight_layout) && (silu.input == src.output) && (silu.aux == up.output) &&
+                (src.weights != nullptr) && (up.weights != nullptr) && (silu.output != nullptr);
+
+            if (contiguous_chain) {
+                dst.type   = static_cast<int>(OperationType::MATMUL_GATE_UP_SILU);
+                dst.aux    = const_cast<void *>(up.weights);
+                dst.output = silu.output;
+                i += 2;
+            }
+        }
+
+        // Apply multi-device split metadata
+        if (split_config_set_ && split_config_.n_devices > 1) {
+            dst.device_idx       = split_config_.device_idx;
+            dst.n_devices        = split_config_.n_devices;
+            dst.progress_counter = split_config_.progress_counter;
+            dst.merge_complete   = split_config_.merge_complete;
+            const int meta_idx   = static_cast<int>(pre_fusion_idx);
+            if (meta_idx < (int) split_config_.op_meta.size() && split_config_.op_meta[meta_idx].row_count > 0) {
+                const auto & meta = split_config_.op_meta[meta_idx];
+                dst.op_idx        = meta.op_idx;
+                dst.row_start     = meta.row_start;
+                dst.row_count     = meta.row_count;
+                dst.merge_count   = meta.merge_count;
+                dst.merge_src     = meta.merge_src;
+                dst.merge_dst     = meta.merge_dst;
+                dst.input_staging = meta.input_staging;
+                dst.input_K       = meta.input_K;
+            }
+        }
+
+        const OperationType op_type     = static_cast<OperationType>(dst.type);
+        const int           effective_N = (dst.row_count > 0) ? dst.row_count : dst.N;
+        switch (op_type) {
+            case OperationType::RMS_NORM:
+                dst.n_tiles = 1;
+                break;
+            case OperationType::ADD:
+            case OperationType::MUL:
+            case OperationType::GET_ROWS:
+            case OperationType::SET_ROWS:
+            case OperationType::STRIDED_COPY:
+                dst.n_tiles = (dst.M + 255) / 256;
+                break;
+            case OperationType::SILU_MUL:
+                dst.n_tiles = (dst.intermediate_dim + 255) / 256;
+                break;
+            case OperationType::MATMUL_Q_PROJ:
+            case OperationType::MATMUL_K_PROJ:
+            case OperationType::MATMUL_V_PROJ:
+            case OperationType::MATMUL_OUT_PROJ:
+            case OperationType::MATMUL_GATE:
+            case OperationType::MATMUL_UP:
+            case OperationType::MATMUL_DOWN:
+            case OperationType::MATMUL_GATE_UP_SILU:
+                {
+                    dst.tile_cols = persistent_matmul_tile_cols(op_type, effective_N, dst.K);
+                    dst.n_tiles   = (effective_N + dst.tile_cols - 1) / dst.tile_cols;
+                    if (op_type == OperationType::MATMUL_GATE || op_type == OperationType::MATMUL_UP ||
+                        op_type == OperationType::MATMUL_DOWN || op_type == OperationType::MATMUL_GATE_UP_SILU) {
+                        has_ffn_matmul = true;
+                    }
+                    break;
+                }
+            case OperationType::ATTENTION_F16:
+            case OperationType::ATTENTION_F32:
+                dst.n_tiles   = dst.N;
+                has_attention = true;
+                break;
+            case OperationType::ROPE:
+                dst.n_tiles = 1;
+                break;
+            case OperationType::SOFTMAX:
+                dst.n_tiles = std::max(1, dst.M);
+                break;
+            default:
+                dst.n_tiles = 1;
+        }
+        total_tiles += dst.n_tiles;
+        host_ops.push_back(dst);
+    }
+
+    // Copy operation table to device
+    const int n_ops_device = static_cast<int>(host_ops.size());
+    if (n_ops_device > d_ops_pool_size_) {
+        if (d_ops_pool_) {
+            sycl::free(d_ops_pool_, queue_);
+        }
+        d_ops_pool_      = static_cast<void *>(sycl::malloc_device<DeviceOperation>(n_ops_device, queue_));
+        d_ops_pool_size_ = d_ops_pool_ ? n_ops_device : 0;
+    }
+    DeviceOperation * d_ops = static_cast<DeviceOperation *>(d_ops_pool_);
+    queue_.memcpy(d_ops, host_ops.data(), host_ops.size() * sizeof(DeviceOperation)).wait();
+
+    // Kernel configuration: use barrier mode (not DAG) for split compatibility
+    constexpr int BLOCK_SIZE        = 256;
+    const bool    use_split_barrier = persistent_use_split_barrier();
+    const int  n_workgroups  = persistent_num_workgroups(total_tiles, has_attention, has_ffn_matmul, use_split_barrier);
+    const int  attention_slm = current_plan_->head_dim + 2 * (BLOCK_SIZE / 16);
+    const int  matmul_slm    = (BLOCK_SIZE / 16) * 32;
+    const int  slm_floats    = std::max({ BLOCK_SIZE / 16, current_plan_->hidden_dim, attention_slm, matmul_slm });
+    const bool use_attn_subgroup_dot = persistent_attention_subgroup_dot_enabled();
+
+    // Reset sync state
+    queue_.memset(sync_block_, 0, 3 * sizeof(int)).wait();
+
+    PersistentKernelArgs args  = {};
+    args.operations            = d_ops;
+    args.n_operations          = n_ops_device;
+    args.use_split_barrier     = use_split_barrier ? 1 : 0;
+    args.use_attn_subgroup_dot = use_attn_subgroup_dot ? 1 : 0;
+    args.tile_counter          = tile_counter_;
+    args.barrier_counter       = barrier_counter_;
+    args.barrier_sense         = barrier_sense_;
+    for (int i = 0; i < 4; i++) {
+        args.scratch_buffers[i] = persistent_buffers_[i];
+    }
+    args.hidden_dim       = current_plan_->hidden_dim;
+    args.intermediate_dim = current_plan_->intermediate_dim;
+    args.dag              = dag_state_;
+    args.use_dag          = 0;  // No DAG mode for split -- use barrier-based run()
+
+    // Submit kernel but do NOT wait -- caller manages synchronization
+    // via progress_counter/merge_complete device-local counters.
+    queue_.submit([&](sycl::handler & cgh) {
+        sycl::local_accessor<float, 1> slm(slm_floats, cgh);
+        const auto                     args_copy = args;
+        cgh.parallel_for(sycl::nd_range<1>(n_workgroups * BLOCK_SIZE, BLOCK_SIZE),
+                         [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
+                             PersistentTGKernelImpl<BLOCK_SIZE> kernel(args_copy, slm, item);
+                             kernel.run();
+                         });
+    });
+
+    // Record stats (timing will be measured by the caller)
+    last_stats_.n_operations   = n_ops_device;
+    last_stats_.n_layers       = current_plan_->n_layers;
+    last_stats_.total_tiles    = total_tiles;
+    last_stats_.kernel_time_ms = 0.0;  // Caller measures
+}
+
+void UnifiedKernel::finalize_persistent() {
+    if (!current_plan_) {
+        return;  // Already finalized or never started
+    }
+
+    // Cache plan template after first successful execution
+    if (!plan_cache_valid_) {
+        copy_plan_shape(*current_plan_, cached_plan_template_);
+        cached_ops_                       = current_plan_->operations;
+        cached_temp_device_allocs_        = current_plan_->temp_device_allocs;
+        cached_temp_device_alloc_handles_ = current_plan_->temp_device_alloc_handles;
+        cached_temp_device_alloc_bytes_   = current_plan_->temp_device_alloc_bytes;
+        current_plan_->temp_device_allocs.clear();
+        current_plan_->temp_device_alloc_handles.clear();
+        current_plan_->temp_device_alloc_bytes = 0;
+        plan_cache_valid_                      = true;
+        GGML_SYCL_DEBUG("[PERSISTENT-TG] Plan cached (async finalize): %zu operations\n", cached_ops_.size());
+    }
+
+    // Free non-cached temp allocs
+    if (current_plan_->temp_device_alloc_bytes > 0 && device_id_ >= 0) {
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, current_plan_->temp_device_alloc_bytes,
+                                                   ggml_sycl::runtime_category::GRAPH);
+    }
+    for (auto & [ptr, sz] : current_plan_->temp_device_allocs) {
+        auto hit = current_plan_->temp_device_alloc_handles.find(ptr);
+        if (hit != current_plan_->temp_device_alloc_handles.end()) {
+            (void) ggml_sycl::unified_free(hit->second);
+        } else {
+            sycl::free(ptr, queue_);
+        }
+    }
+    current_plan_->temp_device_allocs.clear();
+    current_plan_->temp_device_alloc_handles.clear();
+    current_plan_->temp_device_alloc_bytes = 0;
+
+    // Clear the plan after execution (cached copy remains)
+    current_plan_.reset();
 }
 
 // -----------------------------------------------------------------------------
