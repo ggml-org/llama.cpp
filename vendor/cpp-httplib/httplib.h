@@ -8,8 +8,8 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.33.1"
-#define CPPHTTPLIB_VERSION_NUM "0x002101"
+#define CPPHTTPLIB_VERSION "0.34.0"
+#define CPPHTTPLIB_VERSION_NUM "0x002200"
 
 /*
  * Platform compatibility check
@@ -1038,6 +1038,32 @@ make_file_provider(const std::string &name, const std::string &filepath,
   return fdp;
 }
 
+inline std::pair<size_t, ContentProvider>
+make_file_body(const std::string &filepath) {
+  std::ifstream f(filepath, std::ios::binary | std::ios::ate);
+  if (!f) { return {0, ContentProvider{}}; }
+  auto size = static_cast<size_t>(f.tellg());
+
+  ContentProvider provider = [filepath](size_t offset, size_t length,
+                                        DataSink &sink) -> bool {
+    std::ifstream f(filepath, std::ios::binary);
+    if (!f) { return false; }
+    f.seekg(static_cast<std::streamoff>(offset));
+    if (!f.good()) { return false; }
+    char buf[8192];
+    while (length > 0) {
+      auto to_read = (std::min)(sizeof(buf), length);
+      f.read(buf, static_cast<std::streamsize>(to_read));
+      auto n = static_cast<size_t>(f.gcount());
+      if (n == 0) { break; }
+      if (!sink.write(buf, n)) { return false; }
+      length -= n;
+    }
+    return true;
+  };
+  return {size, std::move(provider)};
+}
+
 using ContentReceiverWithProgress = std::function<bool(
     const char *data, size_t data_length, size_t offset, size_t total_length)>;
 
@@ -1352,6 +1378,7 @@ public:
   virtual bool is_readable() const = 0;
   virtual bool wait_readable() const = 0;
   virtual bool wait_writable() const = 0;
+  virtual bool is_peer_alive() const { return wait_writable(); }
 
   virtual ssize_t read(char *ptr, size_t size) = 0;
   virtual ssize_t write(const char *ptr, size_t size) = 0;
