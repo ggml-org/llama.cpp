@@ -13,9 +13,24 @@ if (GGML_TSAVORITE)
         set(GGML_TSAVORITE_TARGET "posix")
     endif()
 
+    # --- Host-arch aware MLIR SDK selection (CMake equivalent of uname -m case) ---
+    execute_process(
+        COMMAND uname -m
+        OUTPUT_VARIABLE HOST_M
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+
+    if (HOST_M STREQUAL "x86_64" OR HOST_M STREQUAL "amd64")
+        set(MLIR_SDK_ARCH "x86_64")
+    elseif (HOST_M STREQUAL "aarch64" OR HOST_M STREQUAL "arm64")
+        set(MLIR_SDK_ARCH "aarch64")
+    else()
+        message(FATAL_ERROR "Unsupported host arch from uname -m: ${HOST_M}")
+    endif()
+
     if (NOT DEFINED MLIR_COMPILER_DIR)
         if (NOT DEFINED $ENV{MLIR_SDK_VERSION})
-            set (MLIR_COMPILER_DIR /proj/rel/sw/sdk-r.0.2.3/compiler)
+            set (MLIR_COMPILER_DIR /proj/rel/sw/sdk-r.0.2.4/${MLIR_SDK_ARCH}/compiler)
             message("MLIR_SDK_VERSION not set defaulting to ${MLIR_COMPILER_DIR}")
         else()
             set (MLIR_COMPILER_DIR $ENV{MLIR_SDK_VERSION}/compiler)
@@ -24,7 +39,7 @@ if (GGML_TSAVORITE)
 
     if (NOT DEFINED RUNTIME_DIR)
         if (NOT DEFINED $ENV{MLIR_SDK_VERSION})
-            set (RUNTIME_DIR /proj/rel/sw/sdk-r.0.2.3/${GGML_TSAVORITE_TARGET}/runtime)
+            set (RUNTIME_DIR /proj/rel/sw/sdk-r.0.2.4/${MLIR_SDK_ARCH}/${GGML_TSAVORITE_TARGET}/runtime)
             message("MLIR_SDK_VERSION not set defaulting to ${RUNTIME_DIR}")
         else()
             set (RUNTIME_DIR $ENV{MLIR_SDK_VERSION}/${GGML_TSAVORITE_TARGET}/runtime)
