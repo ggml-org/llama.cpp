@@ -2876,6 +2876,21 @@ static ggml_sycl_device_info ggml_sycl_init() {
     }
     device_map.swap(gpu_device_map);
 
+    // When GGML_SYCL_PERSISTENT_SPLIT is set and multiple GPUs are visible,
+    // expose only the primary GPU (device 0) to the backend scheduler.
+    // This forces the scheduler to send the FULL computation graph to device 0
+    // instead of splitting it across GPUs via pipeline parallelism.
+    // The persistent TG kernel requires the complete transformer forward pass;
+    // partial graphs produce garbage output.
+    // The secondary GPU remains accessible internally via SYCL platform scanning
+    // in split_config_init(), which discovers devices independently of device_count.
+    if (std::getenv("GGML_SYCL_PERSISTENT_SPLIT") != nullptr && device_map.size() > 1) {
+        GGML_LOG_INFO("[SYCL] PERSISTENT_SPLIT: exposing only device 0 to scheduler "
+                      "(%zu physical GPUs available for internal split)\n",
+                      device_map.size());
+        device_map.resize(1);
+    }
+
     info.device_count = static_cast<int>(device_map.size());
     ggml_sycl_set_device_map(device_map.data(), info.device_count);
     if (g_ggml_sycl_debug && !device_map.empty()) {
