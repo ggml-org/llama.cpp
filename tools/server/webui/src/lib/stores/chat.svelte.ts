@@ -498,7 +498,8 @@ class ChatStore {
 				MessageRole.USER,
 				content,
 				MessageType.TEXT,
-				parentIdForUserMessage ?? '-1'
+				parentIdForUserMessage ?? '-1',
+				extras
 			);
 			if (isNewConversation && content)
 				await conversationsStore.updateConversationName(currentConv.id, content.trim());

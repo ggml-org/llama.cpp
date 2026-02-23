@@ -185,7 +185,10 @@ bool llm_graph_input_out_ids::can_reuse(const llm_graph_params & params) {
 }
 
 void llm_graph_input_mean::set_input(const llama_ubatch * ubatch) {
-    if (cparams.embeddings && cparams.pooling_type == LLAMA_POOLING_TYPE_MEAN) {
+    if (cparams.embeddings   &&
+       (cparams.pooling_type == LLAMA_POOLING_TYPE_MEAN ||
+        cparams.pooling_type == LLAMA_POOLING_TYPE_RANK )) {
+
         const int64_t n_tokens     = ubatch->n_tokens;
         const int64_t n_seq_tokens = ubatch->n_seq_tokens;
         const int64_t n_seqs_unq   = ubatch->n_seqs_unq;
@@ -1125,8 +1128,8 @@ ggml_tensor * llm_graph_context::build_ffn(
 
     if (down) {
         cur = build_lora_mm(down, cur);
-        if (arch == LLM_ARCH_GLM4 || arch == LLM_ARCH_GLM4_MOE) {
-            // GLM4 and GLM4_MOE seem to have numerical issues with half-precision accumulators
+        if (arch == LLM_ARCH_GLM4 || arch == LLM_ARCH_GLM4_MOE || arch == LLM_ARCH_JAIS2) {
+            // GLM4, GLM4_MOE, and JAIS2 seem to have numerical issues with half-precision accumulators
             ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
         }
     }
@@ -1721,7 +1724,8 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 
     ggml_tensor * cur;
 
-    if (cparams.flash_attn && kq_b == nullptr) {
+    const bool use_flash_attn = cparams.flash_attn && kq_b == nullptr;
+    if (use_flash_attn) {
         GGML_ASSERT(kq_b == nullptr && "Flash attention does not support KQ bias yet");
 
         if (v_trans) {
@@ -1981,8 +1985,8 @@ ggml_tensor * llm_graph_context::build_attn(
 
     if (wo) {
         cur = build_lora_mm(wo, cur);
-        if (arch == LLM_ARCH_GLM4 || arch == LLM_ARCH_GLM4_MOE) {
-            // GLM4 and GLM4_MOE seem to have numerical issues with half-precision accumulators
+        if (arch == LLM_ARCH_GLM4 || arch == LLM_ARCH_GLM4_MOE || arch == LLM_ARCH_JAIS2) {
+            // GLM4, GLM4_MOE, and JAIS2 seem to have numerical issues with half-precision accumulators
             ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
         }
     }
@@ -2414,8 +2418,9 @@ llm_graph_input_mem_hybrid_iswa * llm_graph_context::build_inp_mem_hybrid_iswa()
 
 void llm_graph_context::build_dense_out(
     ggml_tensor * dense_2,
+    ggml_tensor * dense_2_b,
     ggml_tensor * dense_3) const {
-    if (!cparams.embeddings || !(dense_2 || dense_3)) {
+    if (!cparams.embeddings || !(dense_2 || dense_2_b || dense_3)) {
         return;
     }
     ggml_tensor * cur = res->t_embd_pooled != nullptr ? res->t_embd_pooled : res->t_embd;
@@ -2423,6 +2428,9 @@ void llm_graph_context::build_dense_out(
 
     if (dense_2) {
         cur = ggml_mul_mat(ctx0, dense_2, cur);
+    }
+    if (dense_2_b) {
+        cur = ggml_add(ctx0, cur, dense_2_b);
     }
     if (dense_3) {
         cur = ggml_mul_mat(ctx0, dense_3, cur);
@@ -2437,7 +2445,8 @@ void llm_graph_context::build_pooling(
         ggml_tensor * cls,
         ggml_tensor * cls_b,
         ggml_tensor * cls_out,
-        ggml_tensor * cls_out_b) const {
+        ggml_tensor * cls_out_b,
+        ggml_tensor * cls_norm) const {
     if (!cparams.embeddings) {
         return;
     }
@@ -2476,8 +2485,15 @@ void llm_graph_context::build_pooling(
             } break;
         case LLAMA_POOLING_TYPE_RANK:
             {
-                ggml_tensor * inp_cls = build_inp_cls();
-                cur = ggml_get_rows(ctx0, inp, inp_cls);
+                if (arch == LLM_ARCH_MODERN_BERT) {
+                    // modern bert gte reranker builds mean first then applies prediction head and classifier
+                    // https://github.com/huggingface/transformers/blob/main/src/transformers/models/modernbert/modular_modernbert.py#L1404-1411
+                    ggml_tensor * inp_mean = build_inp_mean();
+                    cur = ggml_mul_mat(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, inp)), inp_mean);
+                } else {
+                    ggml_tensor * inp_cls = build_inp_cls();
+                    cur = ggml_get_rows(ctx0, inp, inp_cls);
+                }
 
                 // classification head
                 // https://github.com/huggingface/transformers/blob/5af7d41e49bbfc8319f462eb45253dcb3863dfb7/src/transformers/models/roberta/modeling_roberta.py#L1566
@@ -2486,7 +2502,15 @@ void llm_graph_context::build_pooling(
                     if (cls_b) {
                         cur = ggml_add(ctx0, cur, cls_b);
                     }
-                    cur = ggml_tanh(ctx0, cur);
+                    if (arch == LLM_ARCH_MODERN_BERT) {
+                        cur = ggml_gelu(ctx0, cur);
+                    } else {
+                        cur = ggml_tanh(ctx0, cur);
+                    }
+                    if (cls_norm) {
+                        // head norm
+                        cur = build_norm(cur, cls_norm, NULL, LLM_NORM, -1);
+                    }
                 }
 
                 // some models don't have `cls_out`, for example: https://huggingface.co/jinaai/jina-reranker-v1-tiny-en
