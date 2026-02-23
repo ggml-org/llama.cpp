@@ -1163,6 +1163,9 @@ class TextModel(ModelBase):
         if chkhsh == "b53802fb28e26d645c3a310b34bfe07da813026ec7c7716883404d5e0f8b1901":
             # ref: https://huggingface.co/core42/jais-13b
             res = "jais"
+        if chkhsh == "bc5108ee1eb6a3d600cadd065f63190fbd0554dbc9e4bbd6a0d977970afc8d2a":
+            # ref: https://huggingface.co/inceptionai/Jais-2-8B-Chat
+            res = "jais-2"
         if chkhsh == "7b3e7548e4308f52a76e8229e4e6cc831195d0d1df43aed21ac6c93da05fec5f":
             # ref: https://huggingface.co/WisdomShell/CodeShell-7B
             res = "codeshell"
@@ -1271,6 +1274,9 @@ class TextModel(ModelBase):
         if chkhsh == "b4b8ca1f9769494fbd956ebc4c249de6131fb277a4a3345a7a92c7dd7a55808d":
             # ref: https://huggingface.co/jdopensource/JoyAI-LLM-Flash
             res = "joyai-llm"
+        if chkhsh == "e4d54df1ebc1f2b91acd986c5b51aa50837d5faf7c7398e73c1f9e9ee5d19869":
+            # ref: https://huggingface.co/kakaocorp/kanana-2-30b-a3b-instruct-2601
+            res = "kanana2"
 
         if res is None:
             logger.warning("\n")
@@ -3730,6 +3736,13 @@ class Ernie4_5Model(TextModel):
     def set_vocab(self):
         self._set_vocab_sentencepiece()
 
+        tokenizer_config_file = self.dir_model / 'tokenizer_config.json'
+        if tokenizer_config_file.is_file():
+            with open(tokenizer_config_file, "r", encoding="utf-8") as f:
+                tokenizer_config_json = json.load(f)
+                if "add_prefix_space" in tokenizer_config_json:
+                    self.gguf_writer.add_add_space_prefix(tokenizer_config_json["add_prefix_space"])
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
 
@@ -3738,6 +3751,10 @@ class Ernie4_5Model(TextModel):
         num_kv_heads = self.hparams["num_key_value_heads"]
         if (head_dim := self.hparams.get("head_dim")) is None:
             head_dim = self.hparams["hidden_size"] // num_heads
+
+        if "mlp_AR" in name or "vision_model" in name:
+            # skip vision model and projector tensors
+            return
 
         if "ernie." in name:
             name = name.replace("ernie.", "model.")
@@ -3846,6 +3863,48 @@ class Ernie4_5MoeModel(Ernie4_5Model):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@ModelBase.register("PaddleOCRVLForConditionalGeneration")
+class PaddleOCRModel(Ernie4_5Model):
+    model_arch = gguf.MODEL_ARCH.PADDLEOCR
+
+
+@ModelBase.register("PaddleOCRVisionModel")
+class PaddleOCRVisionModel(MmprojModel):
+    # PaddleOCR-VL uses a modified version of Siglip
+    min_pixels: int = 0
+    max_pixels: int = 0
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.hparams_vision is not None
+        self.min_pixels = self.preprocessor_config["min_pixels"]
+        self.max_pixels = self.preprocessor_config["max_pixels"]
+        self.hparams_vision["image_size"] = int(math.sqrt(self.max_pixels))
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        assert self.hparams_vision is not None
+        hparams = self.hparams_vision
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.PADDLEOCR)
+        self.gguf_writer.add_vision_max_pixels(self.max_pixels)
+        self.gguf_writer.add_vision_min_pixels(self.min_pixels)
+        self.gguf_writer.add_vision_use_gelu(True)
+        self.gguf_writer.add_vision_attention_layernorm_eps(hparams.get("rms_norm_eps", 1e-6))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        name = name.replace("visual.", "model.")
+
+        if "vision_model" in name or "mlp_AR" in name:
+            if "packing_position_embedding" in name:
+                return # unused
+            elif "vision_model.head" in name:
+                # we don't yet support image embeddings for this model
+                return
+            else:
+                yield from super().modify_tensors(data_torch, name, bid)
+        return # skip other tensors
 
 
 @ModelBase.register(
@@ -4584,7 +4643,7 @@ class Qwen3VLVisionModel(MmprojModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("Glm4vForConditionalGeneration", "Glm4vMoeForConditionalGeneration")
+@ModelBase.register("Glm4vForConditionalGeneration", "Glm4vMoeForConditionalGeneration", "GlmOcrForConditionalGeneration")
 class Glm4VVisionModel(Qwen3VLVisionModel):
     def set_gguf_parameters(self):
         MmprojModel.set_gguf_parameters(self) # skip Qwen3VLVisionModel parameters
@@ -8633,6 +8692,17 @@ class T5EncoderModel(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("Jais2ForCausalLM")
+class Jais2Model(TextModel):
+    model_arch = gguf.MODEL_ARCH.JAIS2
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+        head_dim = hparams.get("head_dim", hparams["hidden_size"] // hparams["num_attention_heads"])
+        self.gguf_writer.add_rope_dimension_count(head_dim)
+
+
 @ModelBase.register("JAISLMHeadModel")
 class JaisModel(TextModel):
     model_arch = gguf.MODEL_ARCH.JAIS
@@ -8776,13 +8846,34 @@ class Glm4Model(TextModel):
             n_head = self.hparams["num_attention_heads"]
             n_kv_head = self.hparams["num_key_value_heads"]
             n_embd = self.hparams["hidden_size"]
-            head_dim = n_embd // n_head
+            head_dim = self.hparams.get("head_dim", n_embd // n_head)
             # because llama.cpp M-RoPE kernel only supports Neox ordering, we have to permute the weights here
             if name.endswith(("q_proj.weight", "q_proj.bias")):
                 data_torch = Glm4Model.normal_to_neox(data_torch, n_head, n_head, head_dim, self.partial_rotary_factor)
             if name.endswith(("k_proj.weight", "k_proj.bias")):
                 data_torch = Glm4Model.normal_to_neox(data_torch, n_head, n_kv_head, head_dim, self.partial_rotary_factor)
         yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("GlmOcrForConditionalGeneration")
+class GlmOCRModel(Glm4Model):
+    model_arch = gguf.MODEL_ARCH.GLM4
+    use_mrope = False
+    partial_rotary_factor = 0.5
+
+    # Note: GLM-OCR is the same as GLM4, but with an extra NextN/MTP prediction layer
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # GLM-OCR has num_hidden_layers + 1 actual layers (including NextN layer)
+        self.block_count = self.hparams["num_hidden_layers"] + self.hparams.get("num_nextn_predict_layers", 0)
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        # NextN/MTP prediction layers
+        if (num_nextn_predict_layers := self.hparams.get("num_nextn_predict_layers")) is not None:
+            self.gguf_writer.add_nextn_predict_layers(num_nextn_predict_layers)
 
 
 @ModelBase.register("Glm4MoeForCausalLM", "Glm4vMoeForConditionalGeneration")
@@ -10705,7 +10796,7 @@ class LFM2Model(TextModel):
     def set_gguf_parameters(self):
         # set num_key_value_heads only for attention layers
         self.hparams["num_key_value_heads"] = [
-            self.hparams["num_key_value_heads"] if layer_type == "full_attention" else 0
+            self.hparams["num_key_value_heads"] if layer_type != "conv" else 0
             for layer_type in self.hparams["layer_types"]
         ]
 
@@ -10891,6 +10982,28 @@ class LFM2AudioModel(ConformerAudioModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("Lfm25AudioTokenizer")
+class LFM25AudioTokenizer(LFM2Model):
+    model_arch = gguf.MODEL_ARCH.LFM2
+
+    def set_vocab(self):
+        self._set_vocab_none()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_sliding_window(self.hparams["sliding_window"])
+        self.gguf_writer.add_embedding_length_out(self.hparams["output_size"])
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name == "istft.window" or name.startswith("emb.emb"):
+            return
+
+        if name.startswith("lin"):
+            name = name.replace("lin", "dense_2_out")
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
 @ModelBase.register("SmallThinkerForCausalLM")
 class SmallThinkerModel(TextModel):
     model_arch = gguf.MODEL_ARCH.SMALLTHINKER
@@ -10982,12 +11095,16 @@ class ModernBertModel(BertModel):
         self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # these layers act as MLM head, so we don't need them
-        if name.startswith("decoder."):
-            return
-
         if name.startswith("model."):
             name = name[6:]
+
+        if self.cls_out_labels:
+            # For BertForSequenceClassification (direct projection layer)
+            if name == "classifier.weight":
+                name = "classifier.out_proj.weight"
+
+            if name == "classifier.bias":
+                name = "classifier.out_proj.bias"
 
         yield from super().modify_tensors(data_torch, name, bid)
 

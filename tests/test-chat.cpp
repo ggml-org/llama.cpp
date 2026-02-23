@@ -229,6 +229,20 @@ common_chat_tool python_tool {
         "required": ["code"]
     })",
 };
+common_chat_tool todo_list_tool {
+    /* .name = */ "todo_list",
+    /* .description = */ "Create or update the todo list",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "todos": {
+                "type": "array",
+                "description": "List of TODO list items"
+            }
+        },
+        "required": ["todos"]
+    })",
+};
 common_chat_tool code_interpreter_tool {
     /* .name = */ "code_interpreter",
     /* .description = */ "an ipython interpreter",
@@ -3018,540 +3032,26 @@ Hey there!<|im_end|>
         );
     }
 
-    // Test Qwen3-Coder XML format
     {
-        // Basic XML tool call parsing
-        assert_msg_equals(
-            message_assist_call,
-            test_chat_parse(
-                "<tool_call>\n"
-                "  <function=special_function>\n"
-                "    <parameter=arg1>\n"
-                "      1\n"
-                "    </parameter>\n"
-                "  </function>\n"
-                "</tool_call>",
-                /* is_partial= */ false,
-                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+        // Step-3.5-Flash template: uses same XML output format as Qwen3-Coder and Nemotron v3,
+        // but with <think> support. Routes to the Nemotron v3 PEG parser for streaming and
+        // schema-aware parameter parsing.
+        auto tmpls = read_templates("models/templates/stepfun-ai-Step-3.5-Flash.jinja");
+        assert_equals(COMMON_CHAT_FORMAT_PEG_CONSTRUCTED, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
 
-        // Multiple parameters with different types
-        common_chat_msg expected_multi_param;
-        expected_multi_param.role = "assistant";
-        expected_multi_param.tool_calls = {
-            { "complex_function", "{\"name\":\"John Doe\",\"age\":30,\"active\":true,\"score\":95.5}", "" }
-        };
-
-        test_parser_with_streaming(expected_multi_param,
-                "<tool_call>\n"
-                "  <function=complex_function>\n"
-                "    <parameter=name>\n"
-                "      John Doe\n"
-                "    </parameter>\n"
-                "    <parameter=age>\n"
-                "      30\n"
-                "    </parameter>\n"
-                "    <parameter=active>\n"
-                "      true\n"
-                "    </parameter>\n"
-                "    <parameter=score>\n"
-                "      95.5\n"
-                "    </parameter>\n"
-                "  </function>\n"
-                "</tool_call>",
-            [&](const std::string &msg) { return test_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
-
-        // Special characters and Unicode
-        common_chat_msg expected_special_chars;
-        expected_special_chars.role = "assistant";
-        expected_special_chars.tool_calls = {
-            { "unicode_function", "{\"message\":\"Hello 世界! 🌍 Special chars: @#$%^&*()\"}", "" }
-        };
-
-        test_parser_with_streaming(expected_special_chars,
-                "<tool_call>\n"
-                "  <function=unicode_function>\n"
-                "    <parameter=message>\n"
-                "      Hello 世界! 🌍 Special chars: @#$%^&*()\n"
-                "    </parameter>\n"
-                "  </function>\n"
-                "</tool_call>",
-            [&](const std::string &msg) { return test_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
-
-        // Multiline content with newlines and indentation
-        common_chat_msg expected_multiline;
-        expected_multiline.role = "assistant";
-        expected_multiline.tool_calls = {
-            { "code_function", "{\"code\":\"def hello():\\n    print(\\\"Hello, World!\\\")\\n    return True\"}", "" }
-        };
-
-        test_parser_with_streaming(expected_multiline,
-                "<tool_call>\n"
-                "  <function=code_function>\n"
-                "    <parameter=code>\n"
-                "def hello():\n"
-                "    print(\"Hello, World!\")\n"
-                "    return True\n"
-                "    </parameter>\n"
-                "  </function>\n"
-                "</tool_call>",
-            [&](const std::string &msg) { return test_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
-
-        // JSON object as parameter value
-        common_chat_msg expected_json_param;
-        expected_json_param.role = "assistant";
-        expected_json_param.tool_calls = {
-            { "json_function", "{\"config\":{\"host\":\"localhost\",\"port\":8080,\"ssl\":false}}", "" }
-        };
-
-        test_parser_with_streaming(
-            expected_json_param,
-                "<tool_call>\n"
-                "  <function=json_function>\n"
-                "    <parameter=config>\n"
-                "      {\"host\": \"localhost\", \"port\": 8080, \"ssl\": false}\n"
-                "    </parameter>\n"
-                "  </function>\n"
-                "</tool_call>",
-            [&](const std::string &msg) { return test_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
-
-        // Array as parameter value
-        common_chat_msg expected_array_param;
-        expected_array_param.role = "assistant";
-        expected_array_param.tool_calls = {
-            { "array_function", "{\"items\":[\"apple\",\"banana\",\"cherry\"]}", "" }
-        };
-
-        test_parser_with_streaming(
-            expected_array_param,
-                "<tool_call>\n"
-                "  <function=array_function>\n"
-                "    <parameter=items>\n"
-                "      [\"apple\", \"banana\", \"cherry\"]\n"
-                "    </parameter>\n"
-                "  </function>\n"
-                "</tool_call>",
-            [&](const std::string &msg) { return test_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
-
-        // Empty parameter
-        common_chat_msg expected_empty_param;
-        expected_empty_param.role = "assistant";
-        expected_empty_param.tool_calls = {
-            { "empty_function", "{\"empty_param\":\"\"}", "" }
-        };
-
-        test_parser_with_streaming(
-            expected_empty_param,
-                "<tool_call>\n"
-                "  <function=empty_function>\n"
-                "    <parameter=empty_param>\n"
-                "    </parameter>\n"
-                "  </function>\n"
-                "</tool_call>",
-            [&](const std::string &msg) { return test_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
-
-        // Boolean values (true/false)
-        common_chat_msg expected_boolean;
-        expected_boolean.role = "assistant";
-        expected_boolean.tool_calls = {
-            { "boolean_function", "{\"enabled\":true,\"debug\":false}", "" }
-        };
-
-        test_parser_with_streaming(
-            expected_boolean,
-                "<tool_call>\n"
-                "  <function=boolean_function>\n"
-                "    <parameter=enabled>\n"
-                "      true\n"
-                "    </parameter>\n"
-                "    <parameter=debug>\n"
-                "      false\n"
-                "    </parameter>\n"
-                "  </function>\n"
-                "</tool_call>",
-            [&](const std::string &msg) { return test_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
-
-        // Null value
-        common_chat_msg expected_null;
-        expected_null.role = "assistant";
-        expected_null.tool_calls = {
-            { "null_function", "{\"optional_param\":null}", "" }
-        };
-
-        test_parser_with_streaming(
-            expected_null,
-                "<tool_call>\n"
-                "  <function=null_function>\n"
-                "    <parameter=optional_param>\n"
-                "      null\n"
-                "    </parameter>\n"
-                "  </function>\n"
-                "</tool_call>",
-            [&](const std::string &msg) { return test_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
-
-        // Negative numbers and scientific notation
-        common_chat_msg expected_numbers;
-        expected_numbers.role = "assistant";
-        expected_numbers.tool_calls = {
-            { "math_function", "{\"negative\":-42,\"decimal\":-3.14,\"scientific\":1.23e-4}", "" }
-        };
-
-        test_parser_with_streaming(
-            expected_numbers,
-                "<tool_call>\n"
-                "  <function=math_function>\n"
-                "    <parameter=negative>\n"
-                "      -42\n"
-                "    </parameter>\n"
-                "    <parameter=decimal>\n"
-                "      -3.14\n"
-                "    </parameter>\n"
-                "    <parameter=scientific>\n"
-                "      1.23e-4\n"
-                "    </parameter>\n"
-                "  </function>\n"
-                "</tool_call>",
-            [&](const std::string &msg) { return test_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
-
-        // XML-like content in parameters (should be escaped)
-        common_chat_msg expected_xml_content;
-        expected_xml_content.role = "assistant";
-        expected_xml_content.tool_calls = {
-            { "xml_function", "{\"xml_content\":\"<root><item>value</item></root>\"}", "" }
-        };
-
-        test_parser_with_streaming(
-            expected_xml_content,
-                "<tool_call>\n"
-                "  <function=xml_function>\n"
-                "    <parameter=xml_content>\n"
-                "      <root><item>value</item></root>\n"
-                "    </parameter>\n"
-                "  </function>\n"
-                "</tool_call>",
-            [&](const std::string &msg) { return test_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
-
-        // Quotes and escape characters
-        common_chat_msg expected_quotes;
-        expected_quotes.role = "assistant";
-        expected_quotes.tool_calls = {
-            { "quote_function", "{\"message\":\"She said \\\"Hello!\\\" and left.\"}", "" }
-        };
-
-        test_parser_with_streaming(
-            expected_quotes,
-                "<tool_call>\n"
-                "  <function=quote_function>\n"
-                "    <parameter=message>\n"
-                "      She said \"Hello!\" and left.\n"
-                "    </parameter>\n"
-                "  </function>\n"
-                "</tool_call>",
-            [&](const std::string &msg) { return test_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
-
-        // Long parameter value (simplified)
-        std::string long_text = "This is a long text parameter that should test the parser's ability to handle larger amounts of text data.";
-
-        common_chat_msg expected_long_text;
-        expected_long_text.role = "assistant";
-        expected_long_text.tool_calls = {
-            { "long_function", "{\"long_text\":\"" + long_text + "\"}", "" }
-        };
-
-        test_parser_with_streaming(
-            expected_long_text,
-                "<tool_call>\n"
-                "  <function=long_function>\n"
-                "    <parameter=long_text>\n"
-                "      " + long_text + "\n"
-                "    </parameter>\n"
-                "  </function>\n"
-                "</tool_call>",
-            [&](const std::string &msg) { return test_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
-
-        // Mixed content with text before and after tool call
-        common_chat_msg expected_mixed_content;
-        expected_mixed_content.role = "assistant";
-        expected_mixed_content.content = "I'll help you search for products. ";
-        expected_mixed_content.tool_calls = {
-            { "search_function", "{\"query\":\"laptops\"}", "" }
-        };
-
-        test_parser_with_streaming(
-            expected_mixed_content,
-                "I'll help you search for products. <tool_call>\n"
-                "  <function=search_function>\n"
-                "    <parameter=query>\n"
-                "      laptops\n"
-                "    </parameter>\n"
-                "  </function>\n"
-                "</tool_call>",
-            [&](const std::string &msg) { return test_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
-
-        // Compact format (no extra whitespace)
-        common_chat_msg expected_compact;
-        expected_compact.role = "assistant";
-        expected_compact.tool_calls = {
-            { "compact_function", "{\"param\":\"value\"}", "" }
-        };
-
-        test_parser_with_streaming(
-            expected_compact,
-                "<tool_call><function=compact_function><parameter=param>value</parameter></function></tool_call>",
-            [&](const std::string &msg) { return test_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
-
-        // Function name with underscores and numbers
-        common_chat_msg expected_complex_name;
-        expected_complex_name.role = "assistant";
-        expected_complex_name.tool_calls = {
-            { "get_user_data_v2", "{\"user_id\":12345}", "" }
-        };
-
-        test_parser_with_streaming(
-            expected_complex_name,
-                "<tool_call>\n"
-                "  <function=get_user_data_v2>\n"
-                "    <parameter=user_id>\n"
-                "      12345\n"
-                "    </parameter>\n"
-                "  </function>\n"
-                "</tool_call>",
-            [&](const std::string &msg) { return test_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
-
-        // Parameter names with underscores and numbers
-        common_chat_msg expected_complex_params;
-        expected_complex_params.role = "assistant";
-        expected_complex_params.tool_calls = {
-            { "test_function", "{\"param_1\":\"value1\",\"param_2_name\":\"value2\",\"param3\":123}", "" }
-        };
-
-        test_parser_with_streaming(
-            expected_complex_params,
-                "<tool_call>\n"
-                "  <function=test_function>\n"
-                "    <parameter=param_1>\n"
-                "      value1\n"
-                "    </parameter>\n"
-                "    <parameter=param_2_name>\n"
-                "      value2\n"
-                "    </parameter>\n"
-                "    <parameter=param3>\n"
-                "      123\n"
-                "    </parameter>\n"
-                "  </function>\n"
-                "</tool_call>",
-            [&](const std::string &msg) { return test_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
-
-        // Very deeply nested XML content in parameter
-        common_chat_msg expected_deep_xml;
-        expected_deep_xml.role = "assistant";
-        expected_deep_xml.tool_calls = {
-            { "xml_parser", "{\"xml\":\"<root><level1><level2><level3>deep content</level3></level2></level1></root>\"}", "" }
-        };
-
-        test_parser_with_streaming(
-            expected_deep_xml,
-                "<tool_call>\n"
-                "  <function=xml_parser>\n"
-                "    <parameter=xml>\n"
-                "      <root><level1><level2><level3>deep content</level3></level2></level1></root>\n"
-                "    </parameter>\n"
-                "  </function>\n"
-                "</tool_call>",
-            [&](const std::string &msg) { return test_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
-
-        // Parameter with only whitespace
-        common_chat_msg expected_whitespace_param;
-        expected_whitespace_param.role = "assistant";
-        expected_whitespace_param.tool_calls = {
-            { "whitespace_function", "{\"spaces\":\"\"}", "" }
-        };
-
-        test_parser_with_streaming(
-            expected_whitespace_param,
-                "<tool_call>\n"
-                "  <function=whitespace_function>\n"
-                "    <parameter=spaces>\n"
-                "      \n"
-                "    </parameter>\n"
-                "  </function>\n"
-                "</tool_call>",
-            [&](const std::string &msg) { return test_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
-
-        // Parameter with tabs and mixed whitespace
-        common_chat_msg expected_mixed_whitespace;
-        expected_mixed_whitespace.role = "assistant";
-        expected_mixed_whitespace.tool_calls = {
-            { "tab_function", "{\"content\":\"line1\\n\\tindented line\\n    spaces\"}", "" }
-        };
-
-        test_parser_with_streaming(
-            expected_mixed_whitespace,
-                "<tool_call>\n"
-                "  <function=tab_function>\n"
-                "    <parameter=content>\n"
-                "line1\n"
-                "\tindented line\n"
-                "    spaces\n"
-                "    </parameter>\n"
-                "  </function>\n"
-                "</tool_call>",
-            [&](const std::string &msg) { return test_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
-
-        // Control characters and special Unicode
-        common_chat_msg expected_control_chars;
-        expected_control_chars.role = "assistant";
-        expected_control_chars.tool_calls = {
-            { "control_function", "{\"text\":\"Line1\\nLine2\\tTabbed\\rCarriage return\"}", "" }
-        };
-
-        test_parser_with_streaming(
-            expected_control_chars,
-                "<tool_call>\n"
-                "  <function=control_function>\n"
-                "    <parameter=text>\n"
-                "Line1\nLine2\tTabbed\rCarriage return\n"
-                "    </parameter>\n"
-                "  </function>\n"
-                "</tool_call>",
-            [&](const std::string &msg) { return test_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
-
-        // Emoji and extended Unicode characters
-        common_chat_msg expected_emoji;
-        expected_emoji.role = "assistant";
-        expected_emoji.tool_calls = {
-            { "emoji_function", "{\"message\":\"Hello! 👋 🌟 🚀 Testing emojis: 😀😃😄😁 and symbols: ∑∏∆∇\"}", "" }
-        };
-
-        test_parser_with_streaming(
-            expected_emoji,
-                "<tool_call>\n"
-                "  <function=emoji_function>\n"
-                "    <parameter=message>\n"
-                "      Hello! 👋 🌟 🚀 Testing emojis: 😀😃😄😁 and symbols: ∑∏∆∇\n"
-                "    </parameter>\n"
-                "  </function>\n"
-                "</tool_call>",
-            [&](const std::string &msg) { return test_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
-
-        // Mathematical expressions and formulas
-        common_chat_msg expected_math;
-        expected_math.role = "assistant";
-        expected_math.tool_calls = {
-            { "math_function", "{\"formula\":\"E = mc² and ∫f(x)dx = F(x) + C\"}", "" }
-        };
-
-        test_parser_with_streaming(
-            expected_math,
-                "<tool_call>\n"
-                "  <function=math_function>\n"
-                "    <parameter=formula>\n"
-                "      E = mc² and ∫f(x)dx = F(x) + C\n"
-                "    </parameter>\n"
-                "  </function>\n"
-                "</tool_call>",
-            [&](const std::string &msg) { return test_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
-
-        // SQL injection-like content (should be safely escaped)
-        common_chat_msg expected_sql;
-        expected_sql.role = "assistant";
-        expected_sql.tool_calls = {
-            { "sql_function", "{\"query\":\"SELECT * FROM users WHERE id = 1; DROP TABLE users; --\"}", "" }
-        };
-
-        test_parser_with_streaming(
-            expected_sql,
-                "<tool_call>\n"
-                "  <function=sql_function>\n"
-                "    <parameter=query>\n"
-                "      SELECT * FROM users WHERE id = 1; DROP TABLE users; --\n"
-                "    </parameter>\n"
-                "  </function>\n"
-                "</tool_call>",
-            [&](const std::string &msg) { return test_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
-
-        // HTML/XML injection content
-        common_chat_msg expected_html;
-        expected_html.role = "assistant";
-        expected_html.tool_calls = {
-            { "html_function", "{\"content\":\"<script>alert('xss')</script><img src=x onerror=alert(1)>\"}", "" }
-        };
-
-        test_parser_with_streaming(
-            expected_html,
-                "<tool_call>\n"
-                "  <function=html_function>\n"
-                "    <parameter=content>\n"
-                "      <script>alert('xss')</script><img src=x onerror=alert(1)>\n"
-                "    </parameter>\n"
-                "  </function>\n"
-                "</tool_call>",
-            [&](const std::string &msg) { return test_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
-
-        // Binary-like content (base64)
-        common_chat_msg expected_binary;
-        expected_binary.role = "assistant";
-        expected_binary.tool_calls = {
-            { "binary_function", "{\"data\":\"SGVsbG8gV29ybGQhIFRoaXMgaXMgYmFzZTY0IGVuY29kZWQgdGV4dC4=\"}", "" }
-        };
-
-        test_parser_with_streaming(
-            expected_binary,
-                "<tool_call>\n"
-                "  <function=binary_function>\n"
-                "    <parameter=data>\n"
-                "      SGVsbG8gV29ybGQhIFRoaXMgaXMgYmFzZTY0IGVuY29kZWQgdGV4dC4=\n"
-                "    </parameter>\n"
-                "  </function>\n"
-                "</tool_call>",
-            [&](const std::string &msg) { return test_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
-
-        // Very large numbers (should be parsed as scientific notation)
-        common_chat_msg expected_large_numbers;
-        expected_large_numbers.role = "assistant";
-        expected_large_numbers.tool_calls = {
-            { "number_function", "{\"big_int\":1e+60}", "" }  // Large number becomes scientific notation
-        };
-
-        test_parser_with_streaming(
-            expected_large_numbers,
-                "<tool_call>\n"
-                "  <function=number_function>\n"
-                "    <parameter=big_int>\n"
-                "      999999999999999999999999999999999999999999999999999999999999\n"
-                "    </parameter>\n"
-                "  </function>\n"
-                "</tool_call>",
-            [&](const std::string &msg) { return test_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
-    }
-
-    {
-        // Qwen3-Coder template
-        auto tmpls = read_templates("models/templates/Qwen3-Coder.jinja");
-        common_chat_templates_inputs inputs;
-        inputs.messages = { message_user };
-
-        common_chat_tool qwen_union_tool {
-            /* .name = */ "qwen_union",
-            /* .description = */ "Test tool for union/anyOf handling",
-            /* .parameters = */ R"({
-                "type": "object",
-                "properties": {
-                    "priority": { "type": ["number", "null"] },
-                    "maybe_text": { "anyOf": [ { "type": "string" } ] },
-                    "config": { "anyOf": [ { "type": "object" }, { "type": "null" } ] }
-                },
-                "required": []
-            })",
-        };
-        inputs.tools = { qwen_union_tool };
-
-        auto params = common_chat_templates_apply(tmpls.get(), inputs);
-        assert_equals(COMMON_CHAT_FORMAT_QWEN3_CODER_XML, params.format);
-        assert_equals(false, params.grammar.empty());
-
-        // Grammar should compile successfully
-        auto grammar = build_grammar(params.grammar);
-        GGML_ASSERT(grammar && "Failed to build Qwen3-Coder grammar with union types");
+        // Grammar and PEG parser should be generated with thinking_forced_open
+        {
+            common_chat_templates_inputs inputs;
+            inputs.messages = { message_user };
+            inputs.tools = { special_function_tool };
+            auto params = common_chat_templates_apply(tmpls.get(), inputs);
+            assert_equals(COMMON_CHAT_FORMAT_PEG_CONSTRUCTED, params.format);
+            assert_equals(true, params.thinking_forced_open);
+            assert_equals(false, params.grammar.empty());
+            assert_equals(false, params.parser.empty());
+            auto grammar = build_grammar(params.grammar);
+            GGML_ASSERT(grammar && "Failed to build Step-3.5-Flash grammar");
+        }
     }
 }
 
@@ -3640,6 +3140,135 @@ static void test_template_output_peg_parsers() {
 
             t.expect.reasoning_content = "I need to output the invoice details in JSON";
             t.expect.content =R"({"amount": 123.45, "date": "2025-12-03"})";
+        });
+    }
+
+    {
+        // Qwen3-Coder
+        auto tmpls = read_templates("models/templates/Qwen3-Coder.jinja");
+
+        // Test basic message
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "Hello, world!\nWhat's up?";
+            t.expect = message_assist;
+        });
+
+        // Test tool call
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+                "<tool_call>\n"
+                "<function=special_function>\n"
+                "<parameter=arg1>\n"
+                "1\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>";
+            t.params.tools = {special_function_tool};
+            t.expect = message_assist_call;
+        });
+
+        // Test parallel tool calls
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+                "<tool_call>\n"
+                "<function=special_function>\n"
+                "<parameter=arg1>\n"
+                "1\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>\n"
+                "<tool_call>\n"
+                "<function=special_function_with_opt>\n"
+                "<parameter=arg1>\n"
+                "1\n"
+                "</parameter>\n"
+                "<parameter=arg2>\n"
+                "2\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>";
+            t.params.parallel_tool_calls = true;
+            t.params.tools = {special_function_tool, special_function_tool_with_optional_param};
+
+            t.expect.tool_calls = {{
+                /* .name = */      "special_function",
+                /* .arguments = */ R"({"arg1": 1})",
+                /* .id = */        {},
+            }, {
+                /* .name = */      "special_function_with_opt",
+                /* .arguments = */ R"({"arg1": 1, "arg2": 2})",
+                /* .id = */        {},
+            }};
+        });
+
+        // Test tool call with string parameter
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+                "<tool_call>\n"
+                "<function=python>\n"
+                "<parameter=code>\n"
+                "def hello():\n"
+                "    print(\"Hello, world!\")\n"
+                "\n"
+                "hello()\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>";
+            t.params.tools = {python_tool};
+
+            t.expect.tool_calls = {{
+                /* .name = */      "python",
+                /* .arguments = */ "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}",
+                /* .id = */        {},
+            }};
+        });
+
+        // Test tool call with JSON parameter
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+                "<tool_call>\n"
+                "<function=todo_list>\n"
+                "<parameter=todos>\n"
+                "[{\"item\": \"Check stuff\", \"selected\": false}, {\"item\": \"Prepare stuff\", \"selected\": true}]\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>";
+            t.params.tools = {todo_list_tool};
+
+            t.expect.tool_calls = {{
+                /* .name = */      "todo_list",
+                /* .arguments = */ "{\"todos\": [{\"item\": \"Check stuff\", \"selected\": false}, {\"item\": \"Prepare stuff\", \"selected\": true}]}",
+                /* .id = */        {},
+            }};
+        });
+
+        // Test tool call with string parameter and no closing </parameter> tag
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+                "<tool_call>\n"
+                "<function=python>\n"
+                "<parameter=code>\n"
+                "def hello():\n"
+                "    print(\"Hello, world!\")\n"
+                "\n"
+                "hello()\n"
+                "</function>\n"
+                "</tool_call>";
+            t.params.tools = {python_tool};
+
+            t.expect.tool_calls = {{
+                /* .name = */      "python",
+                /* .arguments = */ "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}",
+                /* .id = */        {},
+            }};
+        });
+
+        // Test response format
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = R"({"amount": 123.45, "date": "2025-12-03"})";
+            t.params.json_schema = invoice_schema;
+
+            t.expect.content = R"({"amount": 123.45, "date": "2025-12-03"})";
         });
     }
 
@@ -3786,6 +3415,196 @@ static void test_template_output_peg_parsers() {
         });
 
         // Test response format
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+              "I need to output the invoice details in JSON\n"
+              "</think>\n"
+              R"({"amount": 123.45, "date": "2025-12-03"})";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.json_schema = invoice_schema;
+
+            t.expect.reasoning_content = "I need to output the invoice details in JSON";
+            t.expect.content = R"({"amount": 123.45, "date": "2025-12-03"})";
+        });
+    }
+
+    {
+        // Step-3.5-Flash (uses Nemotron v3 PEG parser with thinking_forced_open)
+        // Unlike Nemotron, Step-3.5-Flash always emits <think> regardless of enable_thinking,
+        // so all inputs must include a </think> delimiter.
+        auto tmpls = read_templates("models/templates/stepfun-ai-Step-3.5-Flash.jinja");
+
+        // Test basic message with reasoning
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "I'm\nthinking\n</think>\nHello, world!\nWhat's up?";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+
+            t.expect = message_assist_thoughts;
+        });
+
+        // Test basic message without thinking content
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "</think>\nHello, world!\nWhat's up?";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+
+            t.expect = message_assist;
+        });
+
+        // Test tool call without thinking content
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+                "</think>\n"
+                "<tool_call>\n"
+                "<function=special_function>\n"
+                "<parameter=arg1>\n"
+                "1\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.tools = {special_function_tool};
+
+            t.expect = message_assist_call;
+        });
+
+        // Test tool call with thinking
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+                "I'm\nthinking\n</think>\n"
+                "<tool_call>\n"
+                "<function=special_function>\n"
+                "<parameter=arg1>\n"
+                "1\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.tools = {special_function_tool};
+
+            t.expect = message_assist_call_thoughts;
+        });
+
+        // Test parallel tool calls with thinking
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+                "I'm\nthinking\n</think>\n"
+                "<tool_call>\n"
+                "<function=special_function>\n"
+                "<parameter=arg1>\n"
+                "1\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>\n"
+                "<tool_call>\n"
+                "<function=special_function_with_opt>\n"
+                "<parameter=arg1>\n"
+                "1\n"
+                "</parameter>\n"
+                "<parameter=arg2>\n"
+                "2\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.parallel_tool_calls = true;
+            t.params.tools = {special_function_tool, special_function_tool_with_optional_param};
+
+            t.expect.reasoning_content = "I'm\nthinking";
+            t.expect.tool_calls = {{
+                /* .name = */      "special_function",
+                /* .arguments = */ R"({"arg1": 1})",
+                /* .id = */        {},
+            }, {
+                /* .name = */      "special_function_with_opt",
+                /* .arguments = */ R"({"arg1": 1, "arg2": 2})",
+                /* .id = */        {},
+            }};
+        });
+
+        // Test parallel tool calls without thinking content
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+                "</think>\n"
+                "<tool_call>\n"
+                "<function=special_function>\n"
+                "<parameter=arg1>\n"
+                "1\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>\n"
+                "<tool_call>\n"
+                "<function=special_function_with_opt>\n"
+                "<parameter=arg1>\n"
+                "1\n"
+                "</parameter>\n"
+                "<parameter=arg2>\n"
+                "2\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.parallel_tool_calls = true;
+            t.params.tools = {special_function_tool, special_function_tool_with_optional_param};
+
+            t.expect.tool_calls = {{
+                /* .name = */      "special_function",
+                /* .arguments = */ R"({"arg1": 1})",
+                /* .id = */        {},
+            }, {
+                /* .name = */      "special_function_with_opt",
+                /* .arguments = */ R"({"arg1": 1, "arg2": 2})",
+                /* .id = */        {},
+            }};
+        });
+
+        // Test tool call with code string parameter
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+                "</think>\n"
+                "<tool_call>\n"
+                "<function=python>\n"
+                "<parameter=code>\n"
+                "def hello():\n"
+                "    print(\"Hello, world!\")\n"
+                "\n"
+                "hello()\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.tools = {python_tool};
+
+            t.expect.tool_calls = {{
+                /* .name = */      "python",
+                /* .arguments = */ "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}",
+                /* .id = */        {},
+            }};
+        });
+
+        // Test tool call with string parameter and no closing </parameter> tag
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+                "</think>\n"
+                "<tool_call>\n"
+                "<function=python>\n"
+                "<parameter=code>\n"
+                "def hello():\n"
+                "    print(\"Hello, world!\")\n"
+                "\n"
+                "hello()\n"
+                "</function>\n"
+                "</tool_call>";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.tools = {python_tool};
+
+            t.expect.tool_calls = {{
+                /* .name = */      "python",
+                /* .arguments = */ "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}",
+                /* .id = */        {},
+            }};
+        });
+
+        // Test response format (JSON schema with thinking)
         test_peg_parser(tmpls.get(), [&](auto & t) {
             t.input =
               "I need to output the invoice details in JSON\n"
