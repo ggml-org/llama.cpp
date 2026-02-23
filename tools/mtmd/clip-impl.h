@@ -36,6 +36,8 @@
 // vision-specific
 #define KEY_VISION_PROJ_TYPE    "clip.vision.projector_type" // for models with mixed modalities
 #define KEY_IMAGE_SIZE          "clip.vision.image_size"
+#define KEY_IMAGE_MIN_PIXELS    "clip.vision.image_min_pixels"
+#define KEY_IMAGE_MAX_PIXELS    "clip.vision.image_max_pixels"
 #define KEY_PREPROC_IMAGE_SIZE  "clip.vision.preproc_image_size"
 #define KEY_PATCH_SIZE          "clip.vision.patch_size"
 #define KEY_IMAGE_MEAN          "clip.vision.image_mean"
@@ -227,12 +229,15 @@ enum projector_type {
     PROJECTOR_TYPE_MUSIC_FLAMINGO,
     PROJECTOR_TYPE_LFM2,
     PROJECTOR_TYPE_KIMIVL,
+    PROJECTOR_TYPE_PADDLEOCR,
     PROJECTOR_TYPE_LIGHTONOCR,
     PROJECTOR_TYPE_COGVLM,
     PROJECTOR_TYPE_JANUS_PRO,
     PROJECTOR_TYPE_LFM2A,
     PROJECTOR_TYPE_GLM4V,
     PROJECTOR_TYPE_YOUTUVL,
+    PROJECTOR_TYPE_KIMIK25,
+    PROJECTOR_TYPE_NEMOTRON_V2_VL,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -260,12 +265,15 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_MUSIC_FLAMINGO, "musicflamingo"},
     { PROJECTOR_TYPE_LFM2,      "lfm2"},
     { PROJECTOR_TYPE_KIMIVL,    "kimivl"},
+    { PROJECTOR_TYPE_PADDLEOCR, "paddleocr"},
     { PROJECTOR_TYPE_LIGHTONOCR,"lightonocr"},
     { PROJECTOR_TYPE_COGVLM,    "cogvlm"},
     { PROJECTOR_TYPE_JANUS_PRO, "janus_pro"},
     { PROJECTOR_TYPE_LFM2A,     "lfm2a"},
     { PROJECTOR_TYPE_GLM4V,     "glm4v"},
     { PROJECTOR_TYPE_YOUTUVL,   "youtuvl"},
+    { PROJECTOR_TYPE_KIMIK25,   "kimik25"},
+    { PROJECTOR_TYPE_NEMOTRON_V2_VL, "nemotron_v2_vl"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {

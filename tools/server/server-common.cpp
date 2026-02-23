@@ -916,8 +916,7 @@ json oaicompat_chat_params_parse(
                 json image_url = json_value(p, "image_url", json::object());
                 handle_media(out_files, image_url, opt.media_path);
 
-                // replace this chunk with a marker
-                p["type"] = "text";
+                p["type"] = "media_marker";
                 p["text"] = mtmd_default_marker();
                 p.erase("image_url");
 
@@ -938,8 +937,7 @@ json oaicompat_chat_params_parse(
 
                 // TODO: add audio_url support by reusing handle_media()
 
-                // replace this chunk with a marker
-                p["type"] = "text";
+                p["type"] = "media_marker";
                 p["text"] = mtmd_default_marker();
                 p.erase("input_audio");
 
@@ -1107,6 +1105,8 @@ json convert_responses_to_chatcmpl(const json & response_body) {
         };
 
         for (json item : input_value) {
+            bool merge_prev = !chatcmpl_messages.empty() && chatcmpl_messages.back().value("role", "") == "assistant";
+
             if (exists_and_is_string(item, "content")) {
                 // #responses_create-input-input_item_list-input_message-content-text_input
                 // Only "Input message" contains item["content"]::string
@@ -1195,7 +1195,7 @@ json convert_responses_to_chatcmpl(const json & response_body) {
                 item.at("type") == "message"
             ) {
                 // #responses_create-input-input_item_list-item-output_message
-                std::vector<json> chatcmpl_content;
+                auto chatcmpl_content = json::array();
 
                 for (const auto & output_text : item.at("content")) {
                     const std::string type = json_value(output_text, "type", std::string());
@@ -1212,10 +1212,19 @@ json convert_responses_to_chatcmpl(const json & response_body) {
                     });
                 }
 
-                item.erase("status");
-                item.erase("type");
-                item["content"] = chatcmpl_content;
-                chatcmpl_messages.push_back(item);
+                if (merge_prev) {
+                    auto & prev_msg = chatcmpl_messages.back();
+                    if (!exists_and_is_array(prev_msg, "content")) {
+                        prev_msg["content"] = json::array();
+                    }
+                    auto & prev_content = prev_msg["content"];
+                    prev_content.insert(prev_content.end(), chatcmpl_content.begin(), chatcmpl_content.end());
+                } else {
+                    item.erase("status");
+                    item.erase("type");
+                    item["content"] = chatcmpl_content;
+                    chatcmpl_messages.push_back(item);
+                }
             } else if (exists_and_is_string(item, "arguments") &&
                 exists_and_is_string(item, "call_id") &&
                 exists_and_is_string(item, "name") &&
@@ -1223,24 +1232,27 @@ json convert_responses_to_chatcmpl(const json & response_body) {
                 item.at("type") == "function_call"
             ) {
                 // #responses_create-input-input_item_list-item-function_tool_call
-                json msg = json {
-                    {"role", "assistant"},
-                    {"tool_calls", json::array({ json {
-                        {"function", json {
-                            {"arguments", item.at("arguments")},
-                            {"name",      item.at("name")},
-                        }},
-                        {"id",   item.at("call_id")},
-                        {"type", "function"},
-                    }})},
+                json tool_call = {
+                    {"function", json {
+                        {"arguments", item.at("arguments")},
+                        {"name",      item.at("name")},
+                    }},
+                    {"id",   item.at("call_id")},
+                    {"type", "function"},
                 };
 
-                if (!chatcmpl_messages.empty() && chatcmpl_messages.back().contains("reasoning_content")) {
-                    // Move reasoning content from dummy message to tool call message
-                    msg["reasoning_content"] = chatcmpl_messages.back().at("reasoning_content");
-                    chatcmpl_messages.pop_back();
+                if (merge_prev) {
+                    auto & prev_msg = chatcmpl_messages.back();
+                    if (!exists_and_is_array(prev_msg, "tool_calls")) {
+                        prev_msg["tool_calls"] = json::array();
+                    }
+                    prev_msg["tool_calls"].push_back(tool_call);
+                } else {
+                    chatcmpl_messages.push_back(json {
+                        {"role",       "assistant"},
+                        {"tool_calls", json::array({tool_call})}
+                    });
                 }
-                chatcmpl_messages.push_back(msg);
             } else if (exists_and_is_string(item, "call_id") &&
                 (exists_and_is_string(item, "output") || exists_and_is_array(item, "output")) &&
                 exists_and_is_string(item, "type") &&
@@ -1284,12 +1296,16 @@ json convert_responses_to_chatcmpl(const json & response_body) {
                     throw std::invalid_argument("item['content']['text'] is not a string");
                 }
 
-                // Pack reasoning content in dummy message
-                chatcmpl_messages.push_back(json {
-                    {"role", "assistant"},
-                    {"content", json::array()},
-                    {"reasoning_content", item.at("content")[0].at("text")},
-                });
+                if (merge_prev) {
+                    auto & prev_msg = chatcmpl_messages.back();
+                    prev_msg["reasoning_content"] = item.at("content")[0].at("text");
+                } else {
+                    chatcmpl_messages.push_back(json {
+                        {"role", "assistant"},
+                        {"content", json::array()},
+                        {"reasoning_content", item.at("content")[0].at("text")},
+                    });
+                }
             } else {
                 throw std::invalid_argument("Cannot determine type of 'item'");
             }
@@ -1297,20 +1313,6 @@ json convert_responses_to_chatcmpl(const json & response_body) {
     } else {
         throw std::invalid_argument("'input' must be a string or array of objects");
     }
-
-    // Remove unused dummy message which contains
-    // reasoning content not followed by tool call
-    chatcmpl_messages.erase(std::remove_if(
-        chatcmpl_messages.begin(),
-        chatcmpl_messages.end(),
-        [](const json & x){ return x.contains("role") &&
-            x.at("role") == "assistant" &&
-            x.contains("content") &&
-            x.at("content") == json::array() &&
-            x.contains("reasoning_content");
-        }),
-        chatcmpl_messages.end()
-    );
 
     chatcmpl_body["messages"] = chatcmpl_messages;
 

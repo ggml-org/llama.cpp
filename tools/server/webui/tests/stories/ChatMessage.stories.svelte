@@ -93,7 +93,7 @@
 	}}
 	play={async () => {
 		const { settingsStore } = await import('$lib/stores/settings.svelte');
-		settingsStore.updateConfig('disableReasoningFormat', false);
+		settingsStore.updateConfig('showRawOutputSwitch', false);
 	}}
 />
 
@@ -105,7 +105,7 @@
 	}}
 	play={async () => {
 		const { settingsStore } = await import('$lib/stores/settings.svelte');
-		settingsStore.updateConfig('disableReasoningFormat', false);
+		settingsStore.updateConfig('showRawOutputSwitch', false);
 	}}
 />
 
@@ -117,7 +117,7 @@
 	}}
 	play={async () => {
 		const { settingsStore } = await import('$lib/stores/settings.svelte');
-		settingsStore.updateConfig('disableReasoningFormat', false);
+		settingsStore.updateConfig('showRawOutputSwitch', false);
 	}}
 />
 
@@ -129,7 +129,7 @@
 	}}
 	play={async () => {
 		const { settingsStore } = await import('$lib/stores/settings.svelte');
-		settingsStore.updateConfig('disableReasoningFormat', true);
+		settingsStore.updateConfig('showRawOutputSwitch', true);
 	}}
 />
 
@@ -141,7 +141,7 @@
 	asChild
 	play={async () => {
 		const { settingsStore } = await import('$lib/stores/settings.svelte');
-		settingsStore.updateConfig('disableReasoningFormat', false);
+		settingsStore.updateConfig('showRawOutputSwitch', false);
 		// Phase 1: Stream reasoning content in chunks
 		let reasoningText =
 			'I need to think about this carefully. Let me break down the problem:\n\n1. The user is asking for help with something complex\n2. I should provide a thorough and helpful response\n3. I need to consider multiple approaches\n4. The best solution would be to explain step by step\n\nThis approach will ensure clarity and understanding.';
@@ -193,7 +193,7 @@
 	}}
 	play={async () => {
 		const { settingsStore } = await import('$lib/stores/settings.svelte');
-		settingsStore.updateConfig('disableReasoningFormat', false);
+		settingsStore.updateConfig('showRawOutputSwitch', false);
 		// Import the chat store to simulate loading state
 		const { chatStore } = await import('$lib/stores/chat.svelte');
 

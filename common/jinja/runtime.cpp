@@ -85,7 +85,7 @@ value identifier::execute_impl(context & ctx) {
     auto builtins = global_builtins();
     if (!it->is_undefined()) {
         if (ctx.is_get_stats) {
-            it->stats.used = true;
+            value_t::stats_t::mark_used(it);
         }
         JJ_DEBUG("Identifier '%s' found, type = %s", val.c_str(), it->type().c_str());
         return it;
@@ -142,6 +142,13 @@ value binary_expression::execute_impl(context & ctx) {
             return true;
         }
         return false;
+    };
+
+    auto test_is_in = [&]() -> bool {
+        func_args args(ctx);
+        args.push_back(left_val);
+        args.push_back(right_val);
+        return global_builtins().at("test_is_in")(args)->as_bool();
     };
 
     // Handle undefined and null values
@@ -223,19 +230,11 @@ value binary_expression::execute_impl(context & ctx) {
             return result;
         }
     } else if (is_val<value_array>(right_val)) {
-        auto & arr = right_val->as_array();
-        bool member = false;
-        for (const auto & item : arr) {
-            if (*left_val == *item) {
-                member = true;
-                break;
-            }
-        }
+        // case: 1 in [0, 1, 2]
+        bool member = test_is_in();
         if (op.value == "in") {
-            JJ_DEBUG("Checking membership: %s in Array is %d", left_val->type().c_str(), member);
             return mk_val<value_bool>(member);
         } else if (op.value == "not in") {
-            JJ_DEBUG("Checking non-membership: %s not in Array is %d", left_val->type().c_str(), !member);
             return mk_val<value_bool>(!member);
         }
     }
@@ -252,22 +251,23 @@ value binary_expression::execute_impl(context & ctx) {
 
     // String membership
     if (is_val<value_string>(left_val) && is_val<value_string>(right_val)) {
-        auto left_str = left_val->as_string().str();
-        auto right_str = right_val->as_string().str();
+        // case: "a" in "abc"
+        bool member = test_is_in();
         if (op.value == "in") {
-            return mk_val<value_bool>(right_str.find(left_str) != std::string::npos);
+            return mk_val<value_bool>(member);
         } else if (op.value == "not in") {
-            return mk_val<value_bool>(right_str.find(left_str) == std::string::npos);
+            return mk_val<value_bool>(!member);
         }
     }
 
     // Value key in object
     if (is_val<value_object>(right_val)) {
-        bool has_key = right_val->has_key(left_val);
+        // case: key in {key: value}
+        bool member = test_is_in();
         if (op.value == "in") {
-            return mk_val<value_bool>(has_key);
+            return mk_val<value_bool>(member);
         } else if (op.value == "not in") {
-            return mk_val<value_bool>(!has_key);
+            return mk_val<value_bool>(!member);
         }
     }
 
@@ -277,7 +277,7 @@ value binary_expression::execute_impl(context & ctx) {
 static value try_builtin_func(context & ctx, const std::string & name, value & input, bool undef_on_missing = false) {
     JJ_DEBUG("Trying built-in function '%s' for type %s", name.c_str(), input->type().c_str());
     if (ctx.is_get_stats) {
-        input->stats.used = true;
+        value_t::stats_t::mark_used(input);
         input->stats.ops.insert(name);
     }
     auto builtins = input->get_builtins();
@@ -446,6 +446,12 @@ value for_statement::execute_impl(context & ctx) {
 
     value iterable_val = iter_expr->execute(scope);
 
+    // mark the variable being iterated as used for stats
+    if (ctx.is_get_stats) {
+        value_t::stats_t::mark_used(iterable_val);
+        iterable_val->stats.ops.insert("array_access");
+    }
+
     if (iterable_val->is_undefined()) {
         JJ_DEBUG("%s", "For loop iterable is undefined, skipping loop");
         iterable_val = mk_val<value_array>();
@@ -464,7 +470,7 @@ value for_statement::execute_impl(context & ctx) {
             items.push_back(std::move(tuple));
         }
         if (ctx.is_get_stats) {
-            iterable_val->stats.used = true;
+            value_t::stats_t::mark_used(iterable_val);
             iterable_val->stats.ops.insert("object_access");
         }
     } else {
@@ -474,7 +480,7 @@ value for_statement::execute_impl(context & ctx) {
             items.push_back(item);
         }
         if (ctx.is_get_stats) {
-            iterable_val->stats.used = true;
+            value_t::stats_t::mark_used(iterable_val);
             iterable_val->stats.ops.insert("array_access");
         }
     }
@@ -811,8 +817,9 @@ value member_expression::execute_impl(context & ctx) {
     }
 
     if (ctx.is_get_stats && val && object && property) {
-        val->stats.used = true;
-        object->stats.used = true;
+        value_t::stats_t::mark_used(val);
+        value_t::stats_t::mark_used(object);
+        value_t::stats_t::mark_used(property);
         if (is_val<value_int>(property)) {
             object->stats.ops.insert("array_access");
         } else if (is_val<value_string>(property)) {

@@ -836,16 +836,9 @@ static inline void ggml_sycl_op_floor(ggml_backend_sycl_context & ctx, ggml_tens
 }
 
 static inline void ggml_sycl_op_ceil(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
-        [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
-            const int num_blocks = ceil_div(k_elements, 256);
-            stream->parallel_for(
-                sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(256),
-                                  sycl::range<1>(256)),
-                [=](sycl::nd_item<1> item_ct1) {
-                    unary_op_ceil_kernel(src, dst_ptr, k_elements, item_ct1);
-                });
-        });
+    ggml_sycl_detail::ggml_sycl_op_unary(ctx, dst, [](auto x) {
+        return op_ceil(x);
+    });
 }
 
 static inline void ggml_sycl_op_round(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
