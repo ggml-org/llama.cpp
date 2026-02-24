@@ -283,10 +283,12 @@ bool server_http_context::start() {
     } else {
         LOG_INF("%s: binding port with default address family\n", __func__);
 
-        // Enable address reuse to allow immediate restart of server
+        // Set linger time to 0 to force close the socket immediately when the server stops
         srv->set_socket_options([](socket_t sock) {
-            const char flag = 1;
-            setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(flag));
+            linger sl{};
+            sl.l_onoff  = 1;
+            sl.l_linger = 0;
+            setsockopt(sock, SOL_SOCKET, SO_LINGER, reinterpret_cast<const char *>(&sl), sizeof(sl));
         });
 
         // bind HTTP listen port
