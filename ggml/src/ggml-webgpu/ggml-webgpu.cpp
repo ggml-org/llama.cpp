@@ -145,7 +145,7 @@ struct webgpu_buf_pool {
               size_t            buf_size,
               wgpu::BufferUsage dev_buf_usage,
               wgpu::BufferUsage host_buf_usage,
-              size_t            max_pool_size = WEBGPU_NUM_PARAM_BUFS * 3) {
+              size_t            max_pool_size = WEBGPU_NUM_PARAM_BUFS * 4) {
         this->max_pool_size  = max_pool_size;
         this->cur_pool_size  = num_bufs;
         this->device         = device;
@@ -171,21 +171,24 @@ struct webgpu_buf_pool {
 
         // Try growing the pool if no free buffers
         if (free.empty() && cur_pool_size < max_pool_size) {
-            wgpu::Buffer host_buf;
-            wgpu::Buffer dev_buf;
-            ggml_webgpu_create_buffer(device, host_buf, buf_size, host_buf_usage, "ggml_webgpu_host_pool_buf");
-            ggml_webgpu_create_buffer(device, dev_buf, buf_size, dev_buf_usage, "ggml_webgpu_dev_pool_buf");
-            if (!(host_buf && dev_buf)) {
-                GGML_ABORT("webgpu_buf_pool: failed to allocate buffers");
-            }
             cur_pool_size++;
-            return webgpu_pool_bufs{ host_buf, dev_buf };
+        } else {
+            cv.wait(lock, [this] { return !free.empty(); });
+            webgpu_pool_bufs bufs = free.back();
+            free.pop_back();
+            return bufs;
         }
+        
+        wgpu::Buffer host_buf;
+        wgpu::Buffer dev_buf;
+        ggml_webgpu_create_buffer(device, host_buf, buf_size, host_buf_usage, "ggml_webgpu_host_pool_buf");
+        ggml_webgpu_create_buffer(device, dev_buf, buf_size, dev_buf_usage, "ggml_webgpu_dev_pool_buf");
+        
+        if (!(host_buf && dev_buf)) {
+            GGML_ABORT("webgpu_buf_pool: failed to allocate buffers");
+        }
+        return webgpu_pool_bufs{ host_buf, dev_buf };
 
-        cv.wait(lock, [this] { return !free.empty(); });
-        webgpu_pool_bufs bufs = free.back();
-        free.pop_back();
-        return bufs;
     }
 
     void free_bufs(std::vector<webgpu_pool_bufs> bufs) {
