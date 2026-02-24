@@ -69,6 +69,26 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_load(JNIEnv *env, jobject, jstr
     return 0;
 }
 
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_arm_aichat_internal_InferenceEngineImpl_loadFromFd(JNIEnv *env, jobject, jint fd, jstring jmodel_name) {
+    char fd_path[64];
+    snprintf(fd_path, sizeof(fd_path), "/proc/self/fd/%d", fd);
+
+    const auto *model_name = env->GetStringUTFChars(jmodel_name, 0);
+    LOGd("%s: Loading model via fd %d (%s) from %s", __func__, fd, model_name, fd_path);
+    env->ReleaseStringUTFChars(jmodel_name, model_name);
+
+    llama_model_params model_params = llama_model_default_params();
+    auto *model = llama_model_load_from_file(fd_path, model_params);
+    if (!model) {
+        LOGe("%s: Failed for fd path: %s", __func__, fd_path);
+        return 1;
+    }
+    g_model = model;
+    return 0;
+}
+
 static llama_context *init_context(llama_model *model, const int n_ctx = DEFAULT_CONTEXT_SIZE, const bool flash_attn = false) {
     if (!model) {
         LOGe("%s: model cannot be null", __func__);
