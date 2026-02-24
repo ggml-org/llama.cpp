@@ -145,7 +145,7 @@ struct webgpu_buf_pool {
               size_t            buf_size,
               wgpu::BufferUsage dev_buf_usage,
               wgpu::BufferUsage host_buf_usage,
-              size_t            max_pool_size = WEBGPU_NUM_PARAM_BUFS * 4) {
+              size_t            max_pool_size = WEBGPU_NUM_PARAM_BUFS * 2) {
         this->max_pool_size  = max_pool_size;
         this->cur_pool_size  = num_bufs;
         this->device         = device;
