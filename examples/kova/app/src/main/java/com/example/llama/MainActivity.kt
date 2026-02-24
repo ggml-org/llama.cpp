@@ -119,6 +119,7 @@ class MainActivity : AppCompatActivity() {
     private var topK: Int = 40
     private var noThinking: Boolean = false
     private var autoLoadLastModel: Boolean = false
+    private var flashAttn: Boolean = false
 
     private val currentMessages = mutableListOf<ChatMessage>()
 
@@ -250,6 +251,7 @@ class MainActivity : AppCompatActivity() {
         topK         = prefs.getInt("top_k", 40)
         noThinking        = prefs.getBoolean("no_thinking", false)
         autoLoadLastModel = prefs.getBoolean("auto_load_last_model", false)
+        flashAttn         = prefs.getBoolean("flash_attn", false)
     }
 
     private fun saveSettings() {
@@ -261,6 +263,7 @@ class MainActivity : AppCompatActivity() {
             .putInt("top_k", topK)
             .putBoolean("no_thinking", noThinking)
             .putBoolean("auto_load_last_model", autoLoadLastModel)
+            .putBoolean("flash_attn", flashAttn)
             .apply()
     }
 
@@ -575,7 +578,7 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 (engine as? com.arm.aichat.internal.InferenceEngineImpl)
-                    ?.applySettings(contextSize, temperature, topP, topK)
+                    ?.applySettings(contextSize, temperature, topP, topK, flashAttn)
 
                 val pathToLoad: String
 
@@ -667,7 +670,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
-                log("Kova", "Model yüklendi: $modelName template=$selectedTemplate")
+                log("Kova", "Model yüklendi: $modelName template=$selectedTemplate flashAttn=$flashAttn")
                 updateFabIcon()
                 updateActiveModelSubtitle()
                 // Son yüklü modeli kaydet (otomatik yükleme için)
@@ -841,6 +844,26 @@ class MainActivity : AppCompatActivity() {
                 .apply { bottomMargin = (8*dp).toInt() }
         })
 
+        layout.addView(sectionTitle("Performans"))
+        val flashAttnRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                .apply { bottomMargin = (4*dp).toInt() }
+        }
+        val flashAttnLabel = TextView(ctx).apply {
+            text = "⚡ Flash Attention"; textSize = 13f
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        @Suppress("DEPRECATION")
+        val flashAttnSwitch = Switch(ctx).apply { isChecked = flashAttn }
+        flashAttnRow.addView(flashAttnLabel); flashAttnRow.addView(flashAttnSwitch)
+        layout.addView(flashAttnRow)
+        layout.addView(TextView(ctx).apply {
+            text = "Bazı modellerde üretim hızını artırır. Değişiklik sonraki model yüklemede etkinleşir."; textSize = 11f; alpha = 0.6f
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                .apply { bottomMargin = (8*dp).toInt() }
+        })
+
         AlertDialog.Builder(this).setTitle("⚙️ Ayarlar").setView(scrollView)
             .setPositiveButton("Kaydet") { _, _ ->
                 val checkedId = ctxGroup.checkedRadioButtonId
@@ -854,6 +877,7 @@ class MainActivity : AppCompatActivity() {
                 topK         = maxOf(1, topKBar.progress)
                 noThinking   = noThinkingSwitch.isChecked
                 autoLoadLastModel = autoLoadSwitch.isChecked
+                flashAttn    = flashAttnSwitch.isChecked
                 saveSettings()
                 Toast.makeText(this, "Ayarlar kaydedildi", Toast.LENGTH_SHORT).show()
             }
@@ -1074,6 +1098,7 @@ class MainActivity : AppCompatActivity() {
                 put("top_k", topK)
                 put("no_thinking", noThinking)
                 put("auto_load_last_model", autoLoadLastModel)
+                put("flash_attn", flashAttn)
                 put("last_loaded_model", prefs.getString("last_loaded_model", null) ?: "")
             }
             root.put("settings", settingsObj)
@@ -1414,6 +1439,7 @@ class MainActivity : AppCompatActivity() {
                 if (s.has("top_k"))                editor.putInt("top_k", s.getInt("top_k"))
                 if (s.has("no_thinking"))          editor.putBoolean("no_thinking", s.getBoolean("no_thinking"))
                 if (s.has("auto_load_last_model")) editor.putBoolean("auto_load_last_model", s.getBoolean("auto_load_last_model"))
+                if (s.has("flash_attn"))           editor.putBoolean("flash_attn", s.getBoolean("flash_attn"))
                 if (s.has("last_loaded_model") && s.getString("last_loaded_model").isNotEmpty())
                     editor.putString("last_loaded_model", s.getString("last_loaded_model"))
                 editor.apply()
