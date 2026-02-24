@@ -62,6 +62,7 @@ add_library(llama
             models/dream.cpp
             models/ernie4-5-moe.cpp
             models/ernie4-5.cpp
+            models/eurobert.cppy
             models/exaone-moe.cpp
             models/exaone.cpp
             models/exaone4.cpp
@@ -104,7 +105,6 @@ add_library(llama
             models/nemotron-h.cpp
             models/nemotron.cpp
             models/neo-bert.cpp
-            models/eurobert.cpp
             models/olmo.cpp
             models/olmo2.cpp
             models/olmoe.cpp
