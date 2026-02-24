@@ -932,6 +932,36 @@ extern "C" {
             struct llama_context * ctx,
               struct llama_batch   batch);
 
+    // Get the encoder output (cross-attention state) after llama_encode().
+    // Returns the number of encoder tokens (n_enc), or 0 if no encoder output is stored.
+    // If embd is not NULL, copies the encoder embeddings to embd (must have space for n_enc * n_embd floats).
+    // If seq_ids and n_seq_ids are not NULL, copies the per-token sequence IDs used during encoding.
+    //   seq_ids must point to an array of n_enc pointers, each pointing to a buffer of at least max_seq_ids llama_seq_id elements.
+    //   n_seq_ids must point to an array of n_enc int32_t elements.
+    LLAMA_API int32_t llama_get_cross_state(
+            const struct llama_context * ctx,
+                           int64_t    * n_embd,
+                             float    * embd,
+                    llama_seq_id    ** seq_ids,
+                         int32_t    * n_seq_ids,
+                         int32_t      max_seq_ids);
+
+    // Set the encoder output (cross-attention state) before llama_decode().
+    // Used to restore or concatenate encoder outputs for concurrent encoder-decoder slots.
+    // embd must contain n_enc * n_embd floats.
+    // seq_ids[i] must point to n_seq_ids[i] sequence IDs for each encoder token i.
+    LLAMA_API void llama_set_cross_state(
+            struct llama_context * ctx,
+                       int64_t    n_embd,
+                       int64_t    n_enc,
+                   const float  * embd,
+          const llama_seq_id * const * seq_ids,
+                 const int32_t  * n_seq_ids);
+
+    // Clear the encoder output (cross-attention state).
+    LLAMA_API void llama_clear_cross_state(
+            struct llama_context * ctx);
+
     // Set the number of threads used for decoding
     // n_threads is the number of threads used for generation (single token)
     // n_threads_batch is the number of threads used for prompt and batch processing (multiple tokens)

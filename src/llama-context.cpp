@@ -3299,6 +3299,74 @@ int32_t llama_encode(
     return ret;
 }
 
+int32_t llama_get_cross_state(
+        const llama_context * ctx,
+                    int64_t * n_embd_out,
+                      float * embd,
+             llama_seq_id ** seq_ids,
+                  int32_t  * n_seq_ids,
+                  int32_t    max_seq_ids) {
+    const auto & cross = ctx->cross;
+    if (cross.v_embd.empty()) {
+        return 0;
+    }
+
+    if (n_embd_out) {
+        *n_embd_out = cross.n_embd;
+    }
+
+    if (embd) {
+        memcpy(embd, cross.v_embd.data(), cross.v_embd.size() * sizeof(float));
+    }
+
+    if (seq_ids && n_seq_ids) {
+        for (int64_t i = 0; i < cross.n_enc; i++) {
+            int32_t count = 0;
+            for (const auto & seq_id : cross.seq_ids_enc[i]) {
+                if (count < max_seq_ids) {
+                    seq_ids[i][count] = seq_id;
+                }
+                count++;
+            }
+            n_seq_ids[i] = (int32_t) cross.seq_ids_enc[i].size();
+        }
+    }
+
+    return (int32_t) cross.n_enc;
+}
+
+void llama_set_cross_state(
+        llama_context * ctx,
+              int64_t   n_embd,
+              int64_t   n_enc,
+          const float * embd,
+        const llama_seq_id * const * seq_ids,
+        const int32_t * n_seq_ids) {
+    auto & cross = ctx->cross;
+
+    cross.n_embd = n_embd;
+    cross.n_enc  = n_enc;
+    cross.v_embd.resize(n_embd * n_enc);
+    memcpy(cross.v_embd.data(), embd, n_embd * n_enc * sizeof(float));
+
+    cross.seq_ids_enc.resize(n_enc);
+    for (int64_t i = 0; i < n_enc; i++) {
+        cross.seq_ids_enc[i].clear();
+        for (int32_t s = 0; s < n_seq_ids[i]; s++) {
+            cross.seq_ids_enc[i].insert(seq_ids[i][s]);
+        }
+    }
+}
+
+void llama_clear_cross_state(
+        llama_context * ctx) {
+    auto & cross = ctx->cross;
+    cross.n_embd = 0;
+    cross.n_enc  = 0;
+    cross.v_embd.clear();
+    cross.seq_ids_enc.clear();
+}
+
 int32_t llama_decode(
         llama_context * ctx,
           llama_batch   batch) {

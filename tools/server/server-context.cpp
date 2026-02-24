@@ -564,6 +564,19 @@ private:
     bool add_bos_token  = true;
     bool has_encoder    = false; // true if model is encoder-decoder (e.g., T5, BART)
 
+    // per-slot encoder output for concurrent encoder-decoder support
+    struct slot_enc_output {
+        int64_t n_embd = 0;
+        int64_t n_enc  = 0;
+        std::vector<float> v_embd;
+        std::vector<std::set<llama_seq_id>> seq_ids_enc;
+    };
+
+    // each slot's encoder output is saved here after llama_encode() and concatenated
+    // before the batched llama_decode() call
+    std::unordered_map<int, slot_enc_output> slot_cross;
+    bool cross_dirty = false; // true when slot_cross changed and needs rebuilding
+
     int32_t n_ctx; // total context for all clients / slots
 
     // slots / clients
@@ -794,6 +807,11 @@ private:
 
             slot.callback_on_release = [this](int id_slot) {
                 queue_tasks.pop_deferred_task(id_slot);
+
+                // clean up encoder output for this slot
+                if (has_encoder && slot_cross.erase(id_slot) > 0) {
+                    cross_dirty = true;
+                }
             };
 
             slot.reset();
@@ -2220,6 +2238,39 @@ private:
 
                             SLT_INF(slot, "encoder completed, %d tokens encoded\n", slot.task->n_tokens());
 
+                            // save this slot's encoder output for later concatenation
+                            {
+                                int64_t enc_n_embd = 0;
+                                const int32_t enc_n_enc = llama_get_cross_state(ctx, &enc_n_embd, nullptr, nullptr, nullptr, 0);
+                                if (enc_n_enc > 0) {
+                                    auto & sc = slot_cross[slot.id];
+                                    sc.n_embd = enc_n_embd;
+                                    sc.n_enc  = enc_n_enc;
+                                    sc.v_embd.resize(enc_n_embd * enc_n_enc);
+                                    sc.seq_ids_enc.resize(enc_n_enc);
+
+                                    // get embeddings
+                                    llama_get_cross_state(ctx, nullptr, sc.v_embd.data(), nullptr, nullptr, 0);
+
+                                    // get seq_ids - use temporary buffers
+                                    std::vector<llama_seq_id> seq_id_buf(enc_n_enc);
+                                    std::vector<llama_seq_id *> seq_id_ptrs(enc_n_enc);
+                                    std::vector<int32_t> n_seq_ids(enc_n_enc);
+                                    for (int32_t i = 0; i < enc_n_enc; i++) {
+                                        seq_id_ptrs[i] = &seq_id_buf[i];
+                                    }
+                                    llama_get_cross_state(ctx, nullptr, nullptr, seq_id_ptrs.data(), n_seq_ids.data(), 1);
+
+                                    for (int32_t i = 0; i < enc_n_enc; i++) {
+                                        sc.seq_ids_enc[i].clear();
+                                        sc.seq_ids_enc[i].insert(seq_id_buf[i]);
+                                    }
+
+                                    cross_dirty = true;
+                                    SLT_DBG(slot, "saved encoder output: n_enc=%d, n_embd=%lld\n", enc_n_enc, (long long)enc_n_embd);
+                                }
+                            }
+
                             // get decoder start token
                             llama_token decoder_start_token = llama_model_decoder_start_token(model);
                             if (decoder_start_token == LLAMA_TOKEN_NULL) {
@@ -2238,7 +2289,7 @@ private:
                             slot.prompt.tokens.push_back(decoder_start_token);
                             slot.n_prompt_tokens_processed = slot.task->n_tokens();
 
-                            common_sampler_reset(slot.smpl.get());
+                            slot.init_sampler();
 
                             slot.n_decoded = 0;
                             slot.i_batch = batch.n_tokens - 1;
@@ -2699,6 +2750,56 @@ private:
                     break;
                 }
             }
+        }
+
+        // concatenate all saved encoder outputs into the cross-attention state
+        if (has_encoder && cross_dirty && !slot_cross.empty()) {
+            int64_t total_n_enc = 0;
+            int64_t n_embd = 0;
+
+            for (const auto & [id, sc] : slot_cross) {
+                total_n_enc += sc.n_enc;
+                n_embd = sc.n_embd; // all slots have the same n_embd
+            }
+
+            const int32_t n_ctx_train = llama_model_n_ctx_train(model);
+            if (total_n_enc > n_ctx_train) {
+                SRV_ERR("total encoder tokens (%lld) exceeds n_ctx_train (%d), some slots may produce errors\n",
+                        (long long)total_n_enc, n_ctx_train);
+            }
+
+            // build concatenated embeddings and seq_ids
+            std::vector<float> cat_embd(n_embd * total_n_enc);
+            std::vector<std::set<llama_seq_id>> cat_seq_ids(total_n_enc);
+
+            int64_t offset = 0;
+            for (const auto & [id, sc] : slot_cross) {
+                memcpy(cat_embd.data() + offset * n_embd, sc.v_embd.data(), sc.n_enc * n_embd * sizeof(float));
+                for (int64_t i = 0; i < sc.n_enc; i++) {
+                    cat_seq_ids[offset + i] = sc.seq_ids_enc[i];
+                }
+                offset += sc.n_enc;
+            }
+
+            // convert to the format expected by llama_set_cross_state
+            std::vector<std::vector<llama_seq_id>> seq_id_vecs(total_n_enc);
+            std::vector<const llama_seq_id *> seq_id_ptrs(total_n_enc);
+            std::vector<int32_t> n_seq_ids(total_n_enc);
+            for (int64_t i = 0; i < total_n_enc; i++) {
+                seq_id_vecs[i].assign(cat_seq_ids[i].begin(), cat_seq_ids[i].end());
+                seq_id_ptrs[i] = seq_id_vecs[i].data();
+                n_seq_ids[i] = (int32_t) seq_id_vecs[i].size();
+            }
+
+            llama_set_cross_state(ctx, n_embd, total_n_enc, cat_embd.data(), seq_id_ptrs.data(), n_seq_ids.data());
+
+            SRV_DBG("rebuilt cross-attention state: %lld total encoder tokens from %zu slots\n",
+                    (long long)total_n_enc, slot_cross.size());
+
+            cross_dirty = false;
+        } else if (has_encoder && cross_dirty && slot_cross.empty()) {
+            llama_clear_cross_state(ctx);
+            cross_dirty = false;
         }
 
         SRV_DBG("decoding batch, n_tokens = %d\n", batch.n_tokens);
