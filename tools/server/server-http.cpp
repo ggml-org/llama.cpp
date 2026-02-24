@@ -345,7 +345,7 @@ static std::string build_query_string(const httplib::Request & req) {
         if (!qs.empty()) {
             qs += '&';
         }
-        qs += key + "=" + value;
+        qs += httplib::encode_query_component(key) + "=" + httplib::encode_query_component(value);
     }
     return qs;
 }
