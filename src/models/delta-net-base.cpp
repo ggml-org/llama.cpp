@@ -93,10 +93,6 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
     if (kda) {
         const int64_t HB = H_k * n_seqs;
         const int64_t CHB = n_chunks * H_k * n_seqs;
-        kb = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, CS, CS, n_chunks, HB);
-        kb = ggml_clamp(ctx0, kb, 0.0f, 0.0f);
-        kq = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, CS, CS, n_chunks, HB);
-        kq = ggml_clamp(ctx0, kq, 0.0f, 0.0f);
         const int64_t block_size = 16;
         const int64_t n_blocks = CHUNK_SIZE / block_size;
 
@@ -133,13 +129,14 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
             gk_block[j] = ggml_reshape_4d(ctx0, gk_block[j], block_size, 1, S_k, CHB);
         }
 
+        ggml_tensor * kb_rows[n_blocks];
+        ggml_tensor * kq_rows[n_blocks];
         for (int64_t j = 0; j < n_blocks; ++j) {
-            int64_t j_start = j * block_size;
+            ggml_tensor * kb_row = nullptr;
+            ggml_tensor * kq_row = nullptr;
 
             ggml_tensor * k_j_block = ggml_reshape_4d(ctx0, k_block[j], S_k, 1, block_size, CHB);
             for (int64_t i = 0; i <= j; ++i) {
-                int64_t i_start = i * block_size;
-
                 ggml_tensor * decay_mask = ggml_sub(ctx0, gk_block_bc[j], gk_block[i]);
                 cb(decay_mask, "decay_mask", il);
 
@@ -166,14 +163,28 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
                     Akk_block = ggml_tri(ctx0, Akk_block, GGML_TRI_TYPE_LOWER);
                 }
 
-                // Accumulate into Akk and Aqk at position [j_start:j_end, i_start:i_end]
-                kb = ggml_set(ctx0, kb, Akk_block,
-                    kb->nb[1], kb->nb[2], kb->nb[3],
-                    i_start * kb->nb[0] + j_start * kb->nb[1]);
-                kq = ggml_set(ctx0, kq, Aqk_block,
-                    kq->nb[1], kq->nb[2], kq->nb[3],
-                    i_start * kq->nb[0] + j_start * kq->nb[1]);
+                // Build row by concatenating blocks along dim 0
+                kb_row = (kb_row == nullptr) ? Akk_block : ggml_concat(ctx0, kb_row, Akk_block, 0);
+                kq_row = (kq_row == nullptr) ? Aqk_block : ggml_concat(ctx0, kq_row, Aqk_block, 0);
             }
+
+            // Pad upper-triangle portion with zeros along dim 0
+            int64_t pad_cols = (n_blocks - j - 1) * block_size;
+            if (pad_cols > 0) {
+                kb_row = ggml_pad(ctx0, kb_row, pad_cols, 0, 0, 0);
+                kq_row = ggml_pad(ctx0, kq_row, pad_cols, 0, 0, 0);
+            }
+
+            kb_rows[j] = kb_row;
+            kq_rows[j] = kq_row;
+        }
+
+        // Assemble full matrix by concatenating rows along dim 1
+        kb = kb_rows[0];
+        kq = kq_rows[0];
+        for (int64_t j = 1; j < n_blocks; ++j) {
+            kb = ggml_concat(ctx0, kb, kb_rows[j], 1);
+            kq = ggml_concat(ctx0, kq, kq_rows[j], 1);
         }
         kb = ggml_mul(ctx0, kb, b);
         cb(kq, "kq", il);
