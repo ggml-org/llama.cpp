@@ -6034,6 +6034,14 @@ void UnifiedKernel::build_phase_schedule(const std::vector<std::vector<int>> & s
     queue_.memset(phase_schedule_.phase_done, 0, sizeof(int));
     queue_.wait();
 
+    // Save original (pre-fusion-remapping) phase data for subsequent tokens.
+    // launch_persistent_kernel modifies host_phase_entries/offset/tiles in-place
+    // during fusion remapping. Without these originals, the second token would
+    // double-remap device indices through plan_to_device, producing wrong ops.
+    orig_phase_entries_ = host_phase_entries_;
+    orig_phase_offset_  = host_phase_offset_;
+    orig_phase_tiles_   = host_phase_tiles_;
+
     GGML_SYCL_DEBUG("[PERSISTENT-TG] Phase schedule built: %d ops, %d phases\n",
                     n_ops, n_phases);
 }
@@ -6626,6 +6634,10 @@ void UnifiedKernel::invalidate_plan_cache() {
     plan_cache_valid_ = false;
     cached_ops_.clear();
     cached_plan_template_ = {};
+    // Clear original phase schedule data (rebuilt on next full build)
+    orig_phase_entries_.clear();
+    orig_phase_offset_.clear();
+    orig_phase_tiles_.clear();
     if (cached_temp_device_alloc_bytes_ > 0 && device_id_ >= 0) {
         ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, cached_temp_device_alloc_bytes_, ggml_sycl::runtime_category::GRAPH);
     }
@@ -6846,10 +6858,10 @@ void UnifiedKernel::add_deferred_copy(int source_op_idx, void * src_ptr, void * 
 
 void UnifiedKernel::execute_deferred_copies() {
     if (deferred_copies_.empty()) {
-        fprintf(stderr, "[DEFERRED-CPY] No deferred copies to execute\n");
+        GGML_SYCL_DEBUG("[DEFERRED-CPY] No deferred copies to execute\n");
         return;
     }
-    fprintf(stderr, "[DEFERRED-CPY] Executing %zu deferred copies\n", deferred_copies_.size());
+    GGML_SYCL_DEBUG("[DEFERRED-CPY] Executing %zu deferred copies\n", deferred_copies_.size());
     for (const auto & dc : deferred_copies_) {
         void * src = dc.src_ptr;
         // Resolve source from scratch pool if we have a valid op index
@@ -6859,16 +6871,11 @@ void UnifiedKernel::execute_deferred_copies() {
                 src = scratch;
             }
         }
-        fprintf(stderr, "[DEFERRED-CPY] memcpy: src=%p dst=%p bytes=%zu (op_idx=%d)\n",
-                        src, dc.dst, dc.bytes, dc.source_op_idx);
+        GGML_SYCL_DEBUG("[DEFERRED-CPY] memcpy: src=%p dst=%p bytes=%zu (op_idx=%d)\n", src, dc.dst, dc.bytes,
+                        dc.source_op_idx);
         if (src && dc.dst && dc.bytes > 0) {
-            // Dump first 4 floats from src before copy
-            float dbg_buf[4] = {};
-            queue_.memcpy(dbg_buf, src, std::min(dc.bytes, sizeof(dbg_buf))).wait();
-            fprintf(stderr, "[DEFERRED-CPY] src data: %.6f %.6f %.6f %.6f\n",
-                    dbg_buf[0], dbg_buf[1], dbg_buf[2], dbg_buf[3]);
+            queue_.memcpy(dc.dst, src, dc.bytes);
         }
-        queue_.memcpy(dc.dst, src, dc.bytes);
         queue_.wait();
     }
     deferred_copies_.clear();
@@ -7426,7 +7433,20 @@ void UnifiedKernel::launch_persistent_kernel() {
     // Fusion may have merged GATE+UP+SILU_MUL into a single device op, so
     // plan op indices in phase entries must be remapped to device op indices.
     if (phase_allocated_) {
-        const int n_phases = phase_schedule_.n_phases;
+        // Restore original (pre-fusion) phase data before remapping.
+        // launch_persistent_kernel modifies host_phase_entries/offset/tiles
+        // in-place during fusion remapping. On subsequent tokens (plan cache
+        // hits), the host arrays from the previous token contain device indices.
+        // Remapping device indices through plan_to_device produces wrong ops.
+        // Always start from the originals captured in build_phase_schedule.
+        if (!orig_phase_entries_.empty()) {
+            host_phase_entries_ = orig_phase_entries_;
+            host_phase_offset_  = orig_phase_offset_;
+            host_phase_tiles_   = orig_phase_tiles_;
+        }
+
+        // Use the original phase count (before compaction from previous token)
+        const int n_phases     = static_cast<int>(host_phase_offset_.size()) - 1;
         const int n_device_ops = static_cast<int>(host_ops.size());
 
         // Rebuild entries: remap op_idx, remove fused-away entries, recompute offsets.

@@ -2844,6 +2844,14 @@ private:
     std::vector<DevicePhaseEntry> host_phase_entries_;
     std::vector<int>       host_phase_offset_;
     std::vector<int>       host_phase_tiles_;
+    // Original (pre-fusion-remapping) phase data from build_phase_schedule.
+    // launch_persistent_kernel remaps plan indices -> device indices each token,
+    // modifying host_phase_entries/offset/tiles. Without these originals,
+    // the second token would double-remap (device indices through plan_to_device),
+    // producing wrong op indices and stale output.
+    std::vector<DevicePhaseEntry> orig_phase_entries_;
+    std::vector<int>              orig_phase_offset_;
+    std::vector<int>              orig_phase_tiles_;
 
     void copy_plan_shape(const PersistentPlan & src, PersistentPlan & dst);
     void allocate_persistent_buffers(int hidden_dim, int intermediate_dim);

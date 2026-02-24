@@ -19927,6 +19927,13 @@ struct secondary_matmul_info {
 // Created lazily on first use when split mode is active.
 static std::unique_ptr<ggml_sycl::UnifiedKernel> g_split_secondary_kernel;
 
+// Cached secondary ops for plan caching across tokens in multi-device persistent TG.
+// On first token: built by extract_persistent_plan_split + scratch fixup.
+// On subsequent tokens: reused with only merge_dst/input_device_ptr updated from
+// the remapped scratch pool. Weight pointers are stable (pinned in split mode).
+static std::vector<secondary_matmul_info> g_cached_secondary_ops;
+static bool                               g_split_plan_cached = false;
+
 // Ensure host-pinned resources and device-local counters are allocated for
 // host-mediated persistent TG multi-device sync. Grows buffers as needed
 // (idempotent). Device counters are zero-initialized on every call.
@@ -29903,7 +29910,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                 if (kernel.has_dag()) {
                     kernel.reset_dag_counters();
                 }
-                GGML_SYCL_DEBUG("[PERSISTENT-TG] Fast cached plan update: %d ops\n", op_idx);
+                GGML_SYCL_DEBUG("[PERSISTENT-TG] Using cached plan: %d ops\n", op_idx);
                 return true;
             }
 
@@ -32933,50 +32940,111 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
             ggml_sycl::UnifiedKernel & primary   = *sycl_ctx->unified_kernel;
             ggml_sycl::UnifiedKernel & secondary = *g_split_secondary_kernel;
 
-            // Build split plan: primary persistent plan + secondary per-op metadata
+            // Plan caching: on first token, build full split plan + scratch pool.
+            // On subsequent tokens, extract_persistent_plan (called inside
+            // extract_persistent_plan_split) uses the fast cached path that
+            // clones from template + updates mutable pointers. We still need to
+            // rebuild the scratch pool (remap pointers) and update secondary_ops
+            // merge_dst/input_device_ptr from the remapped plan each token.
+            // The expensive parts we skip on cached path:
+            //   - resolve_split_weight_ptr (secondary device cache lookups)
+            //   - row split computation (static geometry)
+            //   - KernelSplitConfig op_meta construction (static except merge_dst)
             std::vector<secondary_matmul_info> secondary_ops;
-            if (!extract_persistent_plan_split(primary, secondary, *sycl_ctx, cgraph,
-                                               g_split_config, secondary_ops)) {
-                GGML_LOG_ERROR("[PERSISTENT-TG-SPLIT] Failed to build split plan, falling back\n");
-                primary.cancel_persistent();
-                goto normal_dispatch;
-            }
 
-            // Build scratch pool for primary: replaces aliased ggml buffer
-            // pointers with unique device allocations so the persistent kernel
-            // can safely reuse them across operations.
-            primary.build_scratch_pool();
+            if (g_split_plan_cached && primary.has_cached_plan()) {
+                // ---- Cached fast path ----
+                // extract_persistent_plan handles its own plan caching internally:
+                // has_cached_plan() -> begin_plan_update() -> graph walk updating
+                // mutable pointers -> finish_plan_update(). This updates the
+                // primary kernel's plan operations with fresh activation/KV/mask
+                // pointers while preserving the operation structure and weights.
+                if (!extract_persistent_plan(primary, *sycl_ctx, cgraph)) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG-SPLIT] Cached plan update failed, rebuilding\n");
+                    primary.cancel_persistent();
+                    g_split_plan_cached = false;
+                    g_cached_secondary_ops.clear();
+                    goto normal_dispatch;
+                }
 
-            // Fix up secondary_ops AND split_config op_meta after scratch pool:
-            // merge_dst and input_device_ptr were captured from the original
-            // ggml buffer before scratch pool remapped the plan's output ptrs.
-            // Both secondary_ops (host coordinator) and split_config op_meta
-            // (kernel DeviceOperation) must point to the remapped scratch.
-            ggml_sycl::KernelSplitConfig updated_split;
-            primary.get_split_config(updated_split);
+                // Rebuild scratch pool: remaps plan output/input pointers to
+                // stable scratch allocations. The pool buffer persists across
+                // tokens (grow-on-demand), but the pointer remapping must run
+                // each token because begin_plan_update() clones pre-scratch
+                // pointers from the cached template.
+                primary.build_scratch_pool();
 
-            for (auto & info : secondary_ops) {
-                void * scratch = primary.scratch_output(info.plan_op_idx);
-                if (scratch) {
-                    // merge_dst: secondary's output appends after primary rows
-                    info.merge_dst = static_cast<float *>(scratch) + info.row_start;
-                    // Also update split_config op_meta for kernel-side copy
-                    if (info.plan_op_idx < (int) updated_split.op_meta.size()) {
-                        updated_split.op_meta[info.plan_op_idx].merge_dst =
-                            static_cast<float *>(scratch) + info.row_start;
+                // Restore cached secondary_ops and update mutable pointers
+                // (merge_dst, input_device_ptr) from the remapped scratch plan.
+                secondary_ops = g_cached_secondary_ops;
+
+                ggml_sycl::KernelSplitConfig updated_split;
+                primary.get_split_config(updated_split);
+
+                for (auto & info : secondary_ops) {
+                    void * scratch = primary.scratch_output(info.plan_op_idx);
+                    if (scratch) {
+                        info.merge_dst = static_cast<float *>(scratch) + info.row_start;
+                        if (info.plan_op_idx < (int) updated_split.op_meta.size()) {
+                            updated_split.op_meta[info.plan_op_idx].merge_dst =
+                                static_cast<float *>(scratch) + info.row_start;
+                        }
+                    }
+                    OperationDescriptor op_desc;
+                    if (primary.get_op_descriptor(info.plan_op_idx, op_desc)) {
+                        info.input_device_ptr = op_desc.input;
                     }
                 }
-                // input_device_ptr: the matmul's activation input may also have
-                // been remapped if it's the output of a preceding operation.
-                // Get the current plan descriptor which has the remapped pointer.
-                OperationDescriptor op_desc;
-                if (primary.get_op_descriptor(info.plan_op_idx, op_desc)) {
-                    info.input_device_ptr = op_desc.input;
-                }
-            }
 
-            // Apply updated split config with remapped merge_dst pointers
-            primary.set_split_config(updated_split);
+                primary.set_split_config(updated_split);
+
+                // Reset sync counters for new token (ensure_split_persistent_resources
+                // is NOT called on cached path since resources are already allocated,
+                // but we must still zero the device counters).
+                sycl::queue * q_pri = g_split_config.queue[0];
+                int           zero  = 0;
+                q_pri->memcpy(g_split_persistent.progress_counter, &zero, sizeof(int)).wait();
+                q_pri->memcpy(g_split_persistent.merge_complete, &zero, sizeof(int)).wait();
+
+                GGML_SYCL_DEBUG("[PERSISTENT-TG-SPLIT] Using cached plan (%d secondary ops)\n",
+                                (int) secondary_ops.size());
+            } else {
+                // ---- Full build path (first token or shape change) ----
+                if (!extract_persistent_plan_split(primary, secondary, *sycl_ctx, cgraph, g_split_config,
+                                                   secondary_ops)) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG-SPLIT] Failed to build split plan, falling back\n");
+                    primary.cancel_persistent();
+                    goto normal_dispatch;
+                }
+
+                // Build scratch pool for primary: replaces aliased ggml buffer
+                // pointers with unique device allocations so the persistent kernel
+                // can safely reuse them across operations.
+                primary.build_scratch_pool();
+
+                // Fix up secondary_ops AND split_config op_meta after scratch pool:
+                // merge_dst and input_device_ptr were captured from the original
+                // ggml buffer before scratch pool remapped the plan's output ptrs.
+                ggml_sycl::KernelSplitConfig updated_split;
+                primary.get_split_config(updated_split);
+
+                for (auto & info : secondary_ops) {
+                    void * scratch = primary.scratch_output(info.plan_op_idx);
+                    if (scratch) {
+                        info.merge_dst = static_cast<float *>(scratch) + info.row_start;
+                        if (info.plan_op_idx < (int) updated_split.op_meta.size()) {
+                            updated_split.op_meta[info.plan_op_idx].merge_dst =
+                                static_cast<float *>(scratch) + info.row_start;
+                        }
+                    }
+                    OperationDescriptor op_desc;
+                    if (primary.get_op_descriptor(info.plan_op_idx, op_desc)) {
+                        info.input_device_ptr = op_desc.input;
+                    }
+                }
+
+                primary.set_split_config(updated_split);
+            }
 
             sycl::queue * q_secondary = g_split_config.queue[1];
             sycl::queue * q_primary   = g_split_config.queue[0];
@@ -33117,6 +33185,16 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
 
             primary.execute_deferred_copies();
 
+            // Cache secondary_ops after first successful execution.
+            // The plan template is cached inside finalize_persistent() above;
+            // we cache the secondary ops separately for the split coordinator.
+            if (!g_split_plan_cached) {
+                g_cached_secondary_ops = secondary_ops;
+                g_split_plan_cached    = true;
+                GGML_LOG_INFO("[PERSISTENT-TG-SPLIT] Split plan cached: %d secondary ops\n",
+                              (int) secondary_ops.size());
+            }
+
             GGML_SYCL_DEBUG("[PERSISTENT-TG-SPLIT] Host-mediated complete: %d secondary ops, %.2f ms\n",
                             n_secondary_ops, elapsed_ms);
 
@@ -33169,86 +33247,6 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
         }
 
         kernel.build_scratch_pool();
-
-        // DEBUG: verify first op's input has non-zero data after scratch remap
-        {
-            sycl::queue * dbg_q = sycl_ctx->stream();
-            PersistentStats pre_stats = kernel.get_last_stats();
-            int n_total_ops = pre_stats.n_operations;
-            // Dump first op's input (should be token embedding from GET_ROWS)
-            void * first_input = kernel.scratch_output(-1); // will return nullptr
-            // Use the plan operations directly
-            const auto & plan_ops = kernel.get_plan_operations();
-            if (!plan_ops.empty() && plan_ops[0].input) {
-                float fbuf[4] = {};
-                dbg_q->memcpy(fbuf, plan_ops[0].input, sizeof(fbuf)).wait();
-                fprintf(stderr, "[DBG-OP0] op[0] input: %.6f %.6f %.6f %.6f (ptr=%p, type=%d)\n",
-                        fbuf[0], fbuf[1], fbuf[2], fbuf[3], plan_ops[0].input, (int)plan_ops[0].type);
-            }
-            if (plan_ops.size() > 1 && plan_ops[1].input) {
-                float fbuf[4] = {};
-                dbg_q->memcpy(fbuf, plan_ops[1].input, sizeof(fbuf)).wait();
-                fprintf(stderr, "[DBG-OP1] op[1] input: %.6f %.6f %.6f %.6f (ptr=%p, type=%d)\n",
-                        fbuf[0], fbuf[1], fbuf[2], fbuf[3], plan_ops[1].input, (int)plan_ops[1].type);
-            }
-        }
-
-        // Diagnostic: dump attention op[9] parameters before execution
-        {
-            const auto & plan_ops_dbg = kernel.get_plan_operations();
-            for (int ai = 0; ai < (int)plan_ops_dbg.size() && ai < 20; ai++) {
-                const auto & aop = plan_ops_dbg[ai];
-                if (aop.type == OperationType::ATTENTION_F16 || aop.type == OperationType::ATTENTION_F32) {
-                    sycl::queue * dbg_q = sycl_ctx->stream();
-                    fprintf(stderr, "[DBG-ATTN] op[%d] type=%s seq_len(M)=%d n_heads(N)=%d head_dim(K)=%d "
-                            "n_kv_heads=%d scale=%.6f\n",
-                            ai, aop.type == OperationType::ATTENTION_F16 ? "ATTENTION_F16" : "ATTENTION_F32",
-                            aop.M, aop.N, aop.K, aop.n_kv_heads, aop.scale);
-                    fprintf(stderr, "[DBG-ATTN]   input(Q)=%p weights(K)=%p aux(V)=%p mask=%p output=%p\n",
-                            aop.input, aop.weights, aop.aux, aop.mask, aop.output);
-                    fprintf(stderr, "[DBG-ATTN]   q_nb: %lld %lld %lld %lld\n",
-                            (long long)aop.q_nb0, (long long)aop.q_nb1,
-                            (long long)aop.q_nb2, (long long)aop.q_nb3);
-                    fprintf(stderr, "[DBG-ATTN]   k_nb: %lld %lld %lld %lld\n",
-                            (long long)aop.k_nb0, (long long)aop.k_nb1,
-                            (long long)aop.k_nb2, (long long)aop.k_nb3);
-                    fprintf(stderr, "[DBG-ATTN]   v_nb: %lld %lld %lld %lld\n",
-                            (long long)aop.v_nb0, (long long)aop.v_nb1,
-                            (long long)aop.v_nb2, (long long)aop.v_nb3);
-                    fprintf(stderr, "[DBG-ATTN]   mask_type=%d mask_nb: %lld %lld %lld %lld "
-                            "mask_ne2=%d mask_ne3=%d\n",
-                            aop.mask_type,
-                            (long long)aop.mask_nb0, (long long)aop.mask_nb1,
-                            (long long)aop.mask_nb2, (long long)aop.mask_nb3,
-                            aop.mask_ne2, aop.mask_ne3);
-                    // Dump first few bytes of K cache to check if it's F16 or F32
-                    if (aop.weights) {
-                        uint16_t kbuf_u16[8] = {};
-                        dbg_q->memcpy(kbuf_u16, aop.weights, sizeof(kbuf_u16)).wait();
-                        fprintf(stderr, "[DBG-ATTN]   K raw u16: %04x %04x %04x %04x %04x %04x %04x %04x\n",
-                                kbuf_u16[0], kbuf_u16[1], kbuf_u16[2], kbuf_u16[3],
-                                kbuf_u16[4], kbuf_u16[5], kbuf_u16[6], kbuf_u16[7]);
-                        // Interpret as F16 values
-                        sycl::half * kbuf_f16 = reinterpret_cast<sycl::half *>(kbuf_u16);
-                        fprintf(stderr, "[DBG-ATTN]   K as f16: %.4f %.4f %.4f %.4f\n",
-                                (float)kbuf_f16[0], (float)kbuf_f16[1],
-                                (float)kbuf_f16[2], (float)kbuf_f16[3]);
-                        // Interpret as F32 values
-                        float * kbuf_f32 = reinterpret_cast<float *>(kbuf_u16);
-                        fprintf(stderr, "[DBG-ATTN]   K as f32: %.6f %.6f %.6f %.6f\n",
-                                kbuf_f32[0], kbuf_f32[1], kbuf_f32[2], kbuf_f32[3]);
-                    }
-                    // Dump Q data
-                    if (aop.input) {
-                        float qbuf[4] = {};
-                        dbg_q->memcpy(qbuf, aop.input, sizeof(qbuf)).wait();
-                        fprintf(stderr, "[DBG-ATTN]   Q data: %.6f %.6f %.6f %.6f\n",
-                                qbuf[0], qbuf[1], qbuf[2], qbuf[3]);
-                    }
-                    break;  // Only dump first attention op
-                }
-            }
-        }
 
         try {
             kernel.execute_persistent();
@@ -33306,6 +33304,10 @@ normal_dispatch:
     }
     if (g_split_secondary_kernel && g_split_secondary_kernel->has_cached_plan()) {
         g_split_secondary_kernel->invalidate_plan_cache();
+    }
+    if (g_split_plan_cached) {
+        g_split_plan_cached = false;
+        g_cached_secondary_ops.clear();
     }
 
 #ifdef GGML_SYCL_GRAPH
