@@ -178,17 +178,16 @@ struct webgpu_buf_pool {
             free.pop_back();
             return bufs;
         }
-        
+
         wgpu::Buffer host_buf;
         wgpu::Buffer dev_buf;
         ggml_webgpu_create_buffer(device, host_buf, buf_size, host_buf_usage, "ggml_webgpu_host_pool_buf");
         ggml_webgpu_create_buffer(device, dev_buf, buf_size, dev_buf_usage, "ggml_webgpu_dev_pool_buf");
-        
+
         if (!(host_buf && dev_buf)) {
             GGML_ABORT("webgpu_buf_pool: failed to allocate buffers");
         }
         return webgpu_pool_bufs{ host_buf, dev_buf };
-
     }
 
     void free_bufs(std::vector<webgpu_pool_bufs> bufs) {
