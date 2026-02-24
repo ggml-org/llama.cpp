@@ -66,6 +66,7 @@ class InferenceEngineImpl private constructor(
 
     @FastNative private external fun init(nativeLibDir: String)
     @FastNative private external fun load(modelPath: String): Int
+    @FastNative private external fun loadFromFd(fd: Int, modelName: String): Int
     @FastNative private external fun prepare(
         contextSize: Int,
         temperature: Float,
@@ -141,6 +142,34 @@ class InferenceEngineImpl private constructor(
                 _state.value = InferenceEngine.State.ModelReady
             } catch (e: Exception) {
                 Log.e(TAG, (e.message ?: "Error loading model") + "\n" + pathToModel, e)
+                _state.value = InferenceEngine.State.Error(e)
+                throw e
+            }
+        }
+
+    suspend fun loadModelFromFd(fd: Int, modelName: String) =
+        withContext(llamaDispatcher) {
+            check(_state.value is InferenceEngine.State.Initialized) {
+                "Cannot load model in ${_state.value.javaClass.simpleName}!"
+            }
+
+            try {
+                Log.i(TAG, "Loading model via fd=$fd name=$modelName")
+                _readyForSystemPrompt = false
+                _state.value = InferenceEngine.State.LoadingModel
+                loadFromFd(fd, modelName).let {
+                    if (it != 0) throw UnsupportedArchitectureException()
+                }
+                prepare(cfgContextSize, cfgTemperature, cfgTopP, cfgTopK, cfgFlashAttn).let {
+                    if (it != 0) throw IOException("Failed to prepare resources")
+                }
+                Log.i(TAG, "Model loaded via fd!")
+                _readyForSystemPrompt = true
+
+                _cancelGeneration = false
+                _state.value = InferenceEngine.State.ModelReady
+            } catch (e: Exception) {
+                Log.e(TAG, "Error loading model via fd: ${e.message}", e)
                 _state.value = InferenceEngine.State.Error(e)
                 throw e
             }
