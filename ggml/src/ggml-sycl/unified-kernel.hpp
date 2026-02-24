@@ -407,6 +407,25 @@ struct DeviceDAGState {
     int   n_ops;              // total operation count
 };
 
+// Phase-based scheduling: pre-computed topological levels for O(1) tile claiming.
+// Replaces the O(n_ops) DAG scan with a flat per-phase tile counter.
+// Each phase contains ops that are fully independent (all predecessors are in
+// earlier phases), so within a phase all tiles can run in any order.
+struct DevicePhaseEntry {
+    int op_idx;        // Index into the DeviceOperation array
+    int tile_offset;   // Cumulative tile offset within this phase (for reverse-mapping flat tile → op)
+};
+
+struct DevicePhaseSchedule {
+    DevicePhaseEntry * entries;       // [total_ops] Flat array grouped by phase
+    int *              phase_offset;  // [n_phases+1] CSR: phase i uses entries[phase_offset[i]..phase_offset[i+1])
+    int *              phase_tiles;   // [n_phases] Total tile count for each phase
+    int *              phase_counter; // [1] atomic: flat tile counter within current phase
+    int *              phase_done;    // [1] atomic: WGs that finished current phase (for barrier)
+    int                n_phases;      // Number of execution phases
+    int                total_ops;     // Total number of ops across all phases
+};
+
 // =============================================================================
 // Persistent Plan and Stats
 // =============================================================================
@@ -2692,9 +2711,13 @@ public:
     // DAG scheduling for barrier-free persistent kernel
     void build_dag(const std::vector<std::vector<int>> & successors,
                    const std::vector<int> & in_degree);
+    void build_phase_schedule(const std::vector<std::vector<int>> & successors,
+                              const std::vector<int> & in_degree);
     void reset_dag_counters();
     bool has_dag() const { return dag_allocated_; }
     const DeviceDAGState & dag_state() const { return dag_state_; }
+    bool has_phase_schedule() const { return phase_allocated_; }
+    const DevicePhaseSchedule & phase_schedule() const { return phase_schedule_; }
 
     // Scratch pool: single contiguous device allocation for all persistent op outputs.
     // Replaces ggml compute-buffer output pointers with stable kernel-owned addresses.
@@ -2812,6 +2835,15 @@ private:
     int                    dag_pool_n_edges_   = 0;
     std::vector<int>       host_initial_ready_counter_;
     std::vector<int>       host_n_tiles_;
+
+    // Phase-based scheduling state (replaces DAG scan with O(1) tile claiming)
+    DevicePhaseSchedule    phase_schedule_     = {};
+    bool                   phase_allocated_    = false;
+    int                    phase_pool_n_ops_   = 0;
+    int                    phase_pool_n_phases_ = 0;
+    std::vector<DevicePhaseEntry> host_phase_entries_;
+    std::vector<int>       host_phase_offset_;
+    std::vector<int>       host_phase_tiles_;
 
     void copy_plan_shape(const PersistentPlan & src, PersistentPlan & dst);
     void allocate_persistent_buffers(int hidden_dim, int intermediate_dim);

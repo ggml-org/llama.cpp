@@ -31791,6 +31791,8 @@ full_build:
 
         // 3. Build the device-side DAG (reads tile counts from current_plan_ internally)
         kernel.build_dag(successors, in_degree);
+        // 3b. Also build phase schedule (topological levels) for O(1) tile claiming
+        kernel.build_phase_schedule(successors, in_degree);
 
         if (g_ggml_sycl_debug) {
             int total_edges = 0;

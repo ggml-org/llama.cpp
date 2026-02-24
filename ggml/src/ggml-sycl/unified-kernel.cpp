@@ -4029,6 +4029,9 @@ struct PersistentKernelArgs {
     int                     intermediate_dim;
     DeviceDAGState          dag;              // DAG scheduling state
     int                     use_dag;          // 1 = DAG mode, 0 = legacy barriers
+    DevicePhaseSchedule     phase;            // Phase scheduling state
+    int                     use_phase;        // 1 = phase mode, 0 = DAG/legacy
+    int                     n_workgroups;     // Total WGs for device-scope barrier
 };
 
 // =============================================================================
@@ -4243,6 +4246,56 @@ public:
             // Intra-WG sync only — ensures all threads done before claiming next op
             // NO device-scope barrier!
             sycl::group_barrier(item_.get_group());
+        }
+    }
+
+    // Phase-based scheduling: pre-computed topological levels with O(1) tile claiming.
+    // Each phase has a flat tile counter. Within a phase, ops are independent so
+    // WGs grab tiles freely. Between phases, device_split_barrier ensures all WGs
+    // see the previous phase's results before proceeding.
+    void run_phase() {
+        const int local_id = item_.get_local_id(0);
+        const int wg_id    = item_.get_group_linear_id();
+        const DevicePhaseSchedule & sched = args_.phase;
+
+        for (int phase = 0; phase < sched.n_phases; phase++) {
+            const int phase_start = sched.phase_offset[phase];
+            const int phase_end   = sched.phase_offset[phase + 1];
+            const int total_tiles = sched.phase_tiles[phase];
+
+            if (total_tiles > 0) {
+                // Claim and process tiles within this phase using a single atomic counter.
+                // Uses args_.tile_counter (same pointer that device_split_barrier resets).
+                while (true) {
+                    int flat_tile = -1;
+                    if (local_id == 0) {
+                        sycl::atomic_ref<int, sycl::memory_order::relaxed,
+                                         sycl::memory_scope::device,
+                                         sycl::access::address_space::global_space>
+                            tc(*args_.tile_counter);
+                        flat_tile = tc.fetch_add(1);
+                    }
+                    flat_tile = sycl::group_broadcast(item_.get_group(), flat_tile, 0);
+                    if (flat_tile >= total_tiles) break;
+
+                    // Find which op this flat tile belongs to.
+                    // Linear scan over ops in this phase (typically 1-3 ops per phase).
+                    int op_entry_idx = phase_start;
+                    for (int e = phase_start + 1; e < phase_end; e++) {
+                        if (sched.entries[e].tile_offset > flat_tile) break;
+                        op_entry_idx = e;
+                    }
+                    const int op_idx   = sched.entries[op_entry_idx].op_idx;
+                    const int tile_off = sched.entries[op_entry_idx].tile_offset;
+                    const int tile_idx = flat_tile - tile_off;
+
+                    dispatch_operation(args_.operations[op_idx], tile_idx);
+                }
+            }
+
+            // Device-scope barrier between phases with tile counter reset.
+            // Uses atomic sense-reversing barrier (race-free, scales to many WGs).
+            device_barrier_atomic(local_id, args_.n_workgroups, /* reset_tile_counter = */ true);
         }
     }
 
@@ -5773,6 +5826,18 @@ void UnifiedKernel::free_persistent_buffers() {
         dag_pool_n_ops_     = 0;
         dag_pool_n_edges_   = 0;
     }
+    // Free phase schedule allocations
+    if (phase_allocated_) {
+        if (phase_schedule_.entries)       sycl::free(phase_schedule_.entries, queue_);
+        if (phase_schedule_.phase_offset)  sycl::free(phase_schedule_.phase_offset, queue_);
+        if (phase_schedule_.phase_tiles)   sycl::free(phase_schedule_.phase_tiles, queue_);
+        if (phase_schedule_.phase_counter) sycl::free(phase_schedule_.phase_counter, queue_);
+        if (phase_schedule_.phase_done)    sycl::free(phase_schedule_.phase_done, queue_);
+        phase_schedule_     = {};
+        phase_allocated_    = false;
+        phase_pool_n_ops_   = 0;
+        phase_pool_n_phases_ = 0;
+    }
     invalidate_plan_cache();
     persistent_buffer_size_ = 0;
 }
@@ -5859,6 +5924,118 @@ void UnifiedKernel::reset_dag_counters() {
     queue_.memset(dag_state_.tiles_done, 0, n_ops * sizeof(int));
     queue_.memset(dag_state_.completed_count, 0, sizeof(int));
     queue_.wait();
+}
+
+// -----------------------------------------------------------------------------
+// Phase-Based Scheduling Methods
+// -----------------------------------------------------------------------------
+
+void UnifiedKernel::build_phase_schedule(const std::vector<std::vector<int>> & successors,
+                                          const std::vector<int> & in_degree) {
+    const int n_ops = static_cast<int>(in_degree.size());
+    if (n_ops <= 0) return;
+
+    // Compute topological levels (BFS-based level assignment).
+    // Level 0 = source ops (in_degree 0), level k = max(predecessors' levels) + 1.
+    std::vector<int> level(n_ops, 0);
+    {
+        // Build predecessor lists from successor lists
+        std::vector<std::vector<int>> predecessors(n_ops);
+        for (int i = 0; i < n_ops; i++) {
+            for (int s : successors[i]) {
+                predecessors[s].push_back(i);
+            }
+        }
+        // BFS from sources
+        std::vector<int> remaining_in(in_degree.begin(), in_degree.end());
+        std::vector<int> queue_buf;
+        queue_buf.reserve(n_ops);
+        for (int i = 0; i < n_ops; i++) {
+            if (remaining_in[i] == 0) {
+                queue_buf.push_back(i);
+                level[i] = 0;
+            }
+        }
+        int head = 0;
+        while (head < (int) queue_buf.size()) {
+            const int op = queue_buf[head++];
+            for (int s : successors[op]) {
+                level[s] = std::max(level[s], level[op] + 1);
+                if (--remaining_in[s] == 0) {
+                    queue_buf.push_back(s);
+                }
+            }
+        }
+    }
+
+    // Find max level = n_phases - 1
+    int max_level = 0;
+    for (int i = 0; i < n_ops; i++) {
+        max_level = std::max(max_level, level[i]);
+    }
+    const int n_phases = max_level + 1;
+
+    // Group ops by level/phase
+    std::vector<std::vector<int>> phase_ops(n_phases);
+    for (int i = 0; i < n_ops; i++) {
+        phase_ops[level[i]].push_back(i);
+    }
+
+    // Build flat entries array and offset/tiles arrays
+    host_phase_entries_.clear();
+    host_phase_entries_.reserve(n_ops);
+    host_phase_offset_.resize(n_phases + 1);
+    host_phase_tiles_.resize(n_phases);
+
+    host_phase_offset_[0] = 0;
+    for (int p = 0; p < n_phases; p++) {
+        int phase_tile_total = 0;
+        for (int op_idx : phase_ops[p]) {
+            DevicePhaseEntry entry;
+            entry.op_idx      = op_idx;
+            entry.tile_offset = phase_tile_total;
+            host_phase_entries_.push_back(entry);
+            // Tile count is uploaded separately (computed during launch_persistent_kernel).
+            // For now, use 0; we'll update it before device upload.
+            phase_tile_total += 0;  // placeholder
+        }
+        host_phase_offset_[p + 1] = static_cast<int>(host_phase_entries_.size());
+        host_phase_tiles_[p] = 0;  // placeholder, updated in launch_persistent_kernel
+    }
+
+    // Allocate device arrays (grow-on-demand)
+    if (n_ops > phase_pool_n_ops_ || n_phases > phase_pool_n_phases_) {
+        if (phase_allocated_) {
+            sycl::free(phase_schedule_.entries, queue_);
+            sycl::free(phase_schedule_.phase_offset, queue_);
+            sycl::free(phase_schedule_.phase_tiles, queue_);
+            sycl::free(phase_schedule_.phase_counter, queue_);
+            sycl::free(phase_schedule_.phase_done, queue_);
+        }
+        const int alloc_ops    = n_ops + 64;
+        const int alloc_phases = n_phases + 16;
+        phase_schedule_.entries      = sycl::malloc_device<DevicePhaseEntry>(alloc_ops, queue_);
+        phase_schedule_.phase_offset = sycl::malloc_device<int>(alloc_phases + 1, queue_);
+        phase_schedule_.phase_tiles  = sycl::malloc_device<int>(alloc_phases, queue_);
+        phase_schedule_.phase_counter = sycl::malloc_device<int>(1, queue_);
+        phase_schedule_.phase_done   = sycl::malloc_device<int>(1, queue_);
+        phase_pool_n_ops_    = alloc_ops;
+        phase_pool_n_phases_ = alloc_phases;
+    }
+    phase_schedule_.n_phases  = n_phases;
+    phase_schedule_.total_ops = n_ops;
+    phase_allocated_ = true;
+
+    // Upload static topology (phase_offset)
+    queue_.memcpy(phase_schedule_.phase_offset, host_phase_offset_.data(),
+                  (n_phases + 1) * sizeof(int));
+    // Initialize counters to zero
+    queue_.memset(phase_schedule_.phase_counter, 0, sizeof(int));
+    queue_.memset(phase_schedule_.phase_done, 0, sizeof(int));
+    queue_.wait();
+
+    GGML_SYCL_DEBUG("[PERSISTENT-TG] Phase schedule built: %d ops, %d phases\n",
+                    n_ops, n_phases);
 }
 
 // -----------------------------------------------------------------------------
@@ -7051,6 +7228,9 @@ void UnifiedKernel::launch_persistent_kernel() {
     const size_t n_ops = current_plan_->operations.size();
     std::vector<DeviceOperation> host_ops;
     host_ops.reserve(n_ops);
+    // Mapping from plan op index to device op index (-1 if fused away).
+    // Used to remap phase schedule entries after GATE+UP+SILU fusion.
+    std::vector<int> plan_to_device(n_ops, -1);
 
     int total_tiles = 0;
     bool has_attention = false;
@@ -7104,14 +7284,13 @@ void UnifiedKernel::launch_persistent_kernel() {
 
         // Fuse MATMUL_GATE + MATMUL_UP + SILU_MUL into a single op when the
         // dependency chain is explicit and contiguous in the persistent plan.
-        // NOTE: Fusion changes the operation count and invalidates DAG indices
-        // (built pre-fusion in extract_persistent_plan). Skip fusion when DAG is active.
-        // NOTE: Also skip fusion when multi-device split is active because the
-        // fused op runs pre/post_matmul_sync once (for GATE's op_idx), but the
-        // secondary kernel has separate GATE and UP ops each needing their own
-        // sync slot — fusion would deadlock the secondary's UP spin-wait.
+        // Fusion is enabled for: legacy barrier mode and phase mode.
+        // Disabled for: DAG mode (invalidates per-op atomic counters) unless
+        // phase mode overrides it, and multi-device split (deadlocks secondary sync).
+        // Phase mode remaps op indices after fusion via plan_to_device[].
         const bool split_active = split_config_set_ && split_config_.n_devices > 1;
-        if (!dag_allocated_ && !split_active && src.type == OperationType::MATMUL_GATE && (i + 2) < n_ops) {
+        const bool fusion_ok = !split_active && (!dag_allocated_ || phase_allocated_);
+        if (fusion_ok && src.type == OperationType::MATMUL_GATE && (i + 2) < n_ops) {
             const auto & up   = current_plan_->operations[i + 1];
             const auto & silu = current_plan_->operations[i + 2];
             const bool contiguous_chain =
@@ -7217,6 +7396,16 @@ void UnifiedKernel::launch_persistent_kernel() {
                 dst.n_tiles = 1;
         }
         total_tiles += dst.n_tiles;
+        // Record plan-to-device index mapping for phase schedule remapping after fusion.
+        // pre_fusion_idx = original plan index; i may have advanced past fused-away ops.
+        const int device_idx = static_cast<int>(host_ops.size());
+        plan_to_device[pre_fusion_idx] = device_idx;
+        // Mark fused-away ops (UP, SILU_MUL) as -1 in the mapping
+        if (i > pre_fusion_idx) {
+            for (size_t fused = pre_fusion_idx + 1; fused <= i; fused++) {
+                plan_to_device[fused] = -1;
+            }
+        }
         host_ops.push_back(dst);
     }
 
@@ -7233,6 +7422,100 @@ void UnifiedKernel::launch_persistent_kernel() {
         queue_.memcpy(dag_state_.n_tiles, host_n_tiles_.data(), n * sizeof(int)).wait();
     }
 
+    // Update phase schedule: remap op indices after fusion, rebuild tile counts.
+    // Fusion may have merged GATE+UP+SILU_MUL into a single device op, so
+    // plan op indices in phase entries must be remapped to device op indices.
+    if (phase_allocated_) {
+        const int n_phases = phase_schedule_.n_phases;
+        const int n_device_ops = static_cast<int>(host_ops.size());
+
+        // Rebuild entries: remap op_idx, remove fused-away entries, recompute offsets.
+        std::vector<DevicePhaseEntry> remapped_entries;
+        remapped_entries.reserve(host_phase_entries_.size());
+        std::vector<int> new_phase_offset(n_phases + 1);
+        std::vector<int> new_phase_tiles(n_phases);
+
+        new_phase_offset[0] = 0;
+        for (int p = 0; p < n_phases; p++) {
+            int phase_tile_total = 0;
+            for (int e = host_phase_offset_[p]; e < host_phase_offset_[p + 1]; e++) {
+                const int plan_idx = host_phase_entries_[e].op_idx;
+                const int dev_idx = (plan_idx < (int) plan_to_device.size())
+                                        ? plan_to_device[plan_idx] : plan_idx;
+                if (dev_idx < 0) continue;  // Fused away (UP or SILU_MUL)
+
+                DevicePhaseEntry entry;
+                entry.op_idx      = dev_idx;
+                entry.tile_offset = phase_tile_total;
+                const int tile_count = (dev_idx < n_device_ops) ? host_n_tiles_[dev_idx] : 1;
+                phase_tile_total += tile_count;
+                remapped_entries.push_back(entry);
+            }
+            new_phase_offset[p + 1] = static_cast<int>(remapped_entries.size());
+            new_phase_tiles[p] = phase_tile_total;
+        }
+
+        // Update host-side arrays
+        host_phase_entries_ = std::move(remapped_entries);
+        host_phase_offset_  = std::move(new_phase_offset);
+        host_phase_tiles_   = std::move(new_phase_tiles);
+
+        // Remove empty phases (e.g., phases that only had SILU_MUL ops, now fused away)
+        {
+            std::vector<DevicePhaseEntry> compacted_entries;
+            std::vector<int> compacted_offset;
+            std::vector<int> compacted_tiles;
+            compacted_offset.push_back(0);
+            for (int p = 0; p < n_phases; p++) {
+                const int start = host_phase_offset_[p];
+                const int end   = host_phase_offset_[p + 1];
+                if (start == end) continue;  // Empty phase, skip
+                for (int e = start; e < end; e++) {
+                    compacted_entries.push_back(host_phase_entries_[e]);
+                }
+                compacted_offset.push_back(static_cast<int>(compacted_entries.size()));
+                compacted_tiles.push_back(host_phase_tiles_[p]);
+            }
+            host_phase_entries_ = std::move(compacted_entries);
+            host_phase_offset_  = std::move(compacted_offset);
+            host_phase_tiles_   = std::move(compacted_tiles);
+            phase_schedule_.n_phases  = static_cast<int>(host_phase_tiles_.size());
+            phase_schedule_.total_ops = static_cast<int>(host_phase_entries_.size());
+        }
+
+        // Ensure device allocation is sufficient after compaction
+        const int final_n_phases = phase_schedule_.n_phases;
+        const int final_n_ops    = phase_schedule_.total_ops;
+        if (final_n_ops > phase_pool_n_ops_ || final_n_phases > phase_pool_n_phases_) {
+            // Grow device arrays (rare: only if fusion increased beyond initial allocation)
+            sycl::free(phase_schedule_.entries, queue_);
+            sycl::free(phase_schedule_.phase_offset, queue_);
+            sycl::free(phase_schedule_.phase_tiles, queue_);
+            const int alloc_ops    = final_n_ops + 64;
+            const int alloc_phases = final_n_phases + 16;
+            phase_schedule_.entries      = sycl::malloc_device<DevicePhaseEntry>(alloc_ops, queue_);
+            phase_schedule_.phase_offset = sycl::malloc_device<int>(alloc_phases + 1, queue_);
+            phase_schedule_.phase_tiles  = sycl::malloc_device<int>(alloc_phases, queue_);
+            phase_pool_n_ops_    = alloc_ops;
+            phase_pool_n_phases_ = alloc_phases;
+        }
+
+        // Upload to device
+        queue_.memcpy(phase_schedule_.entries, host_phase_entries_.data(),
+                      final_n_ops * sizeof(DevicePhaseEntry));
+        queue_.memcpy(phase_schedule_.phase_offset, host_phase_offset_.data(),
+                      (final_n_phases + 1) * sizeof(int));
+        queue_.memcpy(phase_schedule_.phase_tiles, host_phase_tiles_.data(),
+                      final_n_phases * sizeof(int));
+        // Reset counters
+        queue_.memset(phase_schedule_.phase_counter, 0, sizeof(int));
+        queue_.memset(phase_schedule_.phase_done, 0, sizeof(int));
+        queue_.wait();
+
+        GGML_SYCL_DEBUG("[PERSISTENT-TG] Phase schedule updated after fusion: %d ops, %d phases "
+                        "(from %d plan ops)\n", final_n_ops, final_n_phases, (int) n_ops);
+    }
+
     // Copy operation table to device (reuse pooled allocation when capacity is sufficient)
     const int n_ops_device = static_cast<int>(host_ops.size());
     if (n_ops_device > d_ops_pool_size_) {
@@ -7247,10 +7530,24 @@ void UnifiedKernel::launch_persistent_kernel() {
     constexpr int BLOCK_SIZE = 256;
     const bool use_split_barrier = persistent_use_split_barrier();
     int n_workgroups;
-    // DAG mode is the default scheduling mode — set GGML_SYCL_PERSISTENT_TG_DAG=0
-    // to fall back to device-scope barrier scheduling with fewer work-groups.
+    // Scheduling mode selection: phase > dag > legacy barriers
+    // Phase mode: pre-computed topological levels with O(1) tile claiming (default when available)
+    // DAG mode: per-op atomic dependency counters (fallback)
+    // Legacy: device-scope barriers (slowest, set GGML_SYCL_PERSISTENT_TG_DAG=0)
+    bool use_phase_mode = phase_allocated_;
     bool use_dag_mode = dag_allocated_;
-    if (use_dag_mode) {
+    if (use_phase_mode) {
+        // Phase mode is default when available. Set GGML_SYCL_PERSISTENT_TG_PHASE=0 to disable.
+        static int phase_env_checked = -1;
+        if (phase_env_checked < 0) {
+            const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_PHASE");
+            phase_env_checked = (env != nullptr && std::strcmp(env, "0") == 0) ? 0 : 1;
+        }
+        use_phase_mode = (phase_env_checked != 0);
+    }
+    if (use_phase_mode) {
+        use_dag_mode = false;  // Phase mode supersedes DAG mode
+    } else if (use_dag_mode) {
         static int dag_env_checked = -1;
         if (dag_env_checked < 0) {
             const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_DAG");
@@ -7259,9 +7556,8 @@ void UnifiedKernel::launch_persistent_kernel() {
         use_dag_mode = (dag_env_checked != 0);
     }
 
-    if (use_dag_mode) {
-        // DAG mode: no device-scope barriers, so WG count scales with GPU size.
-        // 2x faster than 4-WG barrier mode on Arc B580 (20.9 vs 10.4 tok/s, Mistral 7B Q4_0).
+    if (use_phase_mode || use_dag_mode) {
+        // Phase/DAG mode: WG count scales with GPU size.
         try {
             const int max_cu = (int)queue_.get_device().get_info<sycl::info::device::max_compute_units>();
             n_workgroups = std::clamp(max_cu / 2, 4, 64);
@@ -7287,7 +7583,8 @@ void UnifiedKernel::launch_persistent_kernel() {
     const bool use_attn_subgroup_dot = persistent_attention_subgroup_dot_enabled();
     if (const char * log_policy = std::getenv("GGML_SYCL_PERSISTENT_TG_LOG_POLICY")) {
         if (std::atoi(log_policy) != 0) {
-            GGML_LOG_INFO("[PERSISTENT-TG] policy: dag=%d split=%d n_wgs=%d tiles=%d has_attn=%d has_ffn=%d attn_sg_dot=%d wg_aggr=%d\n",
+            GGML_LOG_INFO("[PERSISTENT-TG] policy: phase=%d dag=%d split=%d n_wgs=%d tiles=%d has_attn=%d has_ffn=%d attn_sg_dot=%d wg_aggr=%d\n",
+                    use_phase_mode ? 1 : 0,
                     use_dag_mode ? 1 : 0,
                     use_split_barrier ? 1 : 0, n_workgroups, total_tiles,
                     has_attention ? 1 : 0, has_ffn_matmul ? 1 : 0,
@@ -7299,7 +7596,10 @@ void UnifiedKernel::launch_persistent_kernel() {
     auto run_persistent_kernel = [&](const DeviceOperation * operations, int operation_count) -> double {
         const bool use_dag = use_dag_mode;
 
-        if (use_dag) {
+        if (use_phase_mode) {
+            // Phase mode: reset tile counter + barrier state before each launch
+            queue_.memset(sync_block_, 0, 3 * sizeof(int)).wait();
+        } else if (use_dag) {
             // Reset DAG scheduling counters for this token
             reset_dag_counters();
         } else {
@@ -7322,6 +7622,9 @@ void UnifiedKernel::launch_persistent_kernel() {
         args.intermediate_dim = current_plan_->intermediate_dim;
         args.dag              = dag_state_;
         args.use_dag          = use_dag ? 1 : 0;
+        args.phase            = phase_schedule_;
+        args.use_phase        = use_phase_mode ? 1 : 0;
+        args.n_workgroups     = n_workgroups;
 
         const auto start = std::chrono::high_resolution_clock::now();
         queue_.submit([&](sycl::handler & cgh) {
@@ -7331,7 +7634,9 @@ void UnifiedKernel::launch_persistent_kernel() {
                 sycl::nd_range<1>(n_workgroups * BLOCK_SIZE, BLOCK_SIZE),
                 [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
                     PersistentTGKernelImpl<BLOCK_SIZE> kernel(args_copy, slm, item);
-                    if (args_copy.use_dag) {
+                    if (args_copy.use_phase) {
+                        kernel.run_phase();
+                    } else if (args_copy.use_dag) {
                         kernel.run_dag();
                     } else {
                         kernel.run();
@@ -7600,6 +7905,9 @@ void UnifiedKernel::launch_persistent_kernel_async() {
     args.intermediate_dim = current_plan_->intermediate_dim;
     args.dag              = dag_state_;
     args.use_dag          = 0;  // No DAG mode for split -- use barrier-based run()
+    args.phase            = phase_schedule_;
+    args.use_phase        = 0;  // No phase mode for split -- use barrier-based run()
+    args.n_workgroups     = n_workgroups;
 
     // Submit kernel but do NOT wait -- caller manages synchronization
     // via progress_counter/merge_complete device-local counters.
