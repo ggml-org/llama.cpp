@@ -896,8 +896,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         ggml_type target_type = llama_tensor_get_type(qs.get(), params, tensor, default_type);
 
         if (!params->imatrix &&
-            tensor_requires_imatrix(tensor, target_type, ftype) &&
-            tensor_allows_quantization(params, model.arch, tensor)
+            tensor_allows_quantization(params, model.arch, tensor) &&
+            tensor_requires_imatrix(tensor, target_type, ftype)
         ) { // this tensor requires an imatrix but we don't have one!
             if (params->dry_run) {
                 // set flag for warning later, but continue with dry run
