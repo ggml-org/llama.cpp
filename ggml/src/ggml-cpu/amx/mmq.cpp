@@ -2079,7 +2079,7 @@ void tinygemm_kernel_amx(int M, int N, int KB, const void * RESTRICT _A, const v
         _tile_stored(TMM5, Tile5(C_pre), TILE_N * sizeof(int32_t));
 
         if (need_unpack) {
-            unpack_B<TB>(Tile1, B_blk0);
+            unpack_B<TB>(Tile1, B_blk1);
             _tile_loadd(TMM1, Tile1, TILE_N * VNNI_BLK);
         } else {
             _tile_loadd(TMM1, B_blk1, TILE_N * VNNI_BLK);
