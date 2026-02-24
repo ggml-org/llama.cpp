@@ -95,6 +95,7 @@ private:
     std::string bin_path;
     std::vector<std::string> base_env;
     common_preset base_preset; // base preset from llama-server CLI args
+    std::string default_model_name;
 
     void update_meta(const std::string & name, const server_model_meta & meta);
 
@@ -141,6 +142,9 @@ public:
     // notify the router server that a model instance is ready
     // return the monitoring thread (to be joined by the caller)
     static std::thread setup_child_server(const std::function<void(int)> & shutdown_handler);
+
+    // Resolve model name: fallback to default if requested name is empty or not found
+    std::string resolve_model_name(const std::string & requested);
 };
 
 struct server_models_routes {
