@@ -6606,6 +6606,7 @@ struct test_diag : public test_case {
 struct input_tensor {
     ggml_type type;
     std::array<int64_t, 4> ne;
+    std::array<size_t, 4> nb; // strides (0 = use default contiguous strides)
 };
 
 static std::string var_to_str(const std::vector<input_tensor>& sources) {
@@ -6614,6 +6615,9 @@ static std::string var_to_str(const std::vector<input_tensor>& sources) {
     for (const auto& src : sources) {
         if (!first) oss << ",";
         oss << ggml_type_name(src.type) << "[" << src.ne[0] << "," << src.ne[1] << "," << src.ne[2] << "," << src.ne[3] << "]";
+        if (src.nb[0] != 0) {
+            oss << "nb[" << src.nb[0] << "," << src.nb[1] << "," << src.nb[2] << "," << src.nb[3] << "]";
+        }
         first = false;
     }
     return oss.str();
@@ -6659,7 +6663,35 @@ struct test_generic_op : public test_case {
         std::array<ggml_tensor *, GGML_MAX_SRC> source_tensors;
         for (size_t i = 0; i < source_count; ++i) {
             const input_tensor& src = sources[i];
-            source_tensors[i] = ggml_new_tensor_4d(ctx, src.type, src.ne[0], src.ne[1], src.ne[2], src.ne[3]);
+            bool has_nb = src.nb[0] != 0;
+
+            if (has_nb) {
+                // Compute the total buffer size using the same method as ggml_nbytes
+                size_t total_size;
+                const size_t blck_size = ggml_blck_size(src.type);
+                if (blck_size == 1) {
+                    total_size = ggml_type_size(src.type);
+                    for (int d = 0; d < 4; d++) {
+                        total_size += (src.ne[d] - 1) * src.nb[d];
+                    }
+                } else {
+                    total_size = src.ne[0] * src.nb[0] / blck_size;
+                    for (int d = 1; d < 4; d++) {
+                        total_size += (src.ne[d] - 1) * src.nb[d];
+                    }
+                }
+
+                // Convert bytes to elements, padded to block size for quantized types
+                const size_t type_size = ggml_type_size(src.type);
+                size_t backing_elements = (total_size * blck_size + type_size - 1) / type_size;
+                backing_elements = ((backing_elements + blck_size - 1) / blck_size) * blck_size;
+                ggml_tensor * backing = ggml_new_tensor_1d(ctx, src.type, backing_elements);
+                source_tensors[i] = ggml_view_4d(ctx, backing,
+                    src.ne[0], src.ne[1], src.ne[2], src.ne[3],
+                    src.nb[1], src.nb[2], src.nb[3], 0);
+            } else {
+                source_tensors[i] = ggml_new_tensor_4d(ctx, src.type, src.ne[0], src.ne[1], src.ne[2], src.ne[3]);
+            }
         }
 
         ggml_tensor * out = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
@@ -6679,7 +6711,6 @@ struct test_generic_op : public test_case {
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
         case GGML_OP_OUT_PROD:
-        case GGML_OP_FLASH_ATTN_EXT:
         case GGML_OP_CONV_TRANSPOSE_2D:
         case GGML_OP_IM2COL:
         case GGML_OP_CONV_2D:
@@ -6691,8 +6722,80 @@ struct test_generic_op : public test_case {
             return 1e-6;
         case GGML_OP_RWKV_WKV7:
             return 5e-3;
+        case GGML_OP_FLASH_ATTN_EXT:
+        {
+            // Scale error with kv length to account for accumulating floating point error
+            const int64_t kv = sources[1].ne[1];
+            return 5e-4 * std::max(1.0, kv / 20000.0);
+        }
         default:
             return 1e-7;
+        }
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        ggml_tensor * out = ggml_get_tensor(ctx, "out");
+
+        for (size_t i = 0; i < sources.size() && i < GGML_MAX_SRC; i++) {
+            ggml_tensor * t = out->src[i];
+            if (!t) {
+                break;
+            }
+
+            // FLASH_ATTN_EXT: src[3] is the KQ mask
+            if (op == GGML_OP_FLASH_ATTN_EXT && i == 3) {
+                init_tensor_kq_mask(t);
+                continue;
+            }
+
+            if ((t->type == GGML_TYPE_I32 || t->type == GGML_TYPE_I64) && !ggml_is_view_op(t->op)) {
+                if (op == GGML_OP_GET_ROWS || op == GGML_OP_GET_ROWS_BACK) {
+                    const int64_t num_rows = sources[0].ne[1];
+                    const int64_t nels = ggml_nelements(t);
+                    std::vector<int32_t> data(nels);
+                    for (int64_t i = 0; i < nels; i++) {
+                        data[i] = rand() % num_rows;
+                    }
+                    ggml_backend_tensor_set(t, data.data(), 0, nels * sizeof(int32_t));
+                } else if (op == GGML_OP_SET_ROWS) {
+                    init_set_rows_row_ids(t, ne[1]);
+                } else if (op == GGML_OP_ROPE) {
+                    const int mode = op_params[2];
+                    const int64_t nels = (mode & GGML_ROPE_TYPE_MROPE) ? ne[2] * 4 : ne[2];
+                    std::vector<int32_t> data(nels);
+                    for (int64_t i = 0; i < nels; i++) {
+                        data[i] = rand() % ne[2];
+                    }
+                    ggml_backend_tensor_set(t, data.data(), 0, nels * sizeof(int32_t));
+                } else if (op == GGML_OP_MUL_MAT_ID || op == GGML_OP_ADD_ID) {
+                    const int64_t n_expert = (op == GGML_OP_MUL_MAT_ID) ? sources[0].ne[2] : sources[1].ne[1];
+                    std::random_device rd;
+                    std::default_random_engine rng(rd());
+                    for (int64_t r = 0; r < ggml_nrows(t); r++) {
+                        std::vector<int32_t> data(t->ne[0]);
+                        for (int32_t i = 0; i < t->ne[0]; i++) {
+                            data[i] = i % n_expert;
+                        }
+                        std::shuffle(data.begin(), data.end(), rng);
+                        ggml_backend_tensor_set(t, data.data(), r * t->nb[1], t->ne[0] * sizeof(int32_t));
+                    }
+                } else if (op == GGML_OP_SSM_SCAN) {
+                    std::random_device rd;
+                    std::default_random_engine rng(rd());
+                    for (int64_t r = 0; r < ggml_nrows(t); r++) {
+                        std::vector<int32_t> data(t->ne[0]);
+                        for (int32_t i = 0; i < t->ne[0]; i++) {
+                            data[i] = i;
+                        }
+                        std::shuffle(data.begin(), data.end(), rng);
+                        ggml_backend_tensor_set(t, data.data(), r * t->nb[1], t->ne[0] * sizeof(int32_t));
+                    }
+                } else {
+                    init_tensor_uniform(t);
+                }
+            } else {
+                init_tensor_uniform(t);
+            }
         }
     }
 };
@@ -8785,7 +8888,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_from_json(const c
         for (const auto& src : input_case["sources"]) {
             auto ne_arr = src["ne"];
             const std::array<int64_t, 4> src_ne = {ne_arr[0], ne_arr[1], ne_arr[2], ne_arr[3]};
-            sources.push_back({(ggml_type)src["type"], src_ne});
+            std::array<size_t, 4> src_nb = {};
+            if (src.contains("nb")) {
+                auto nb_arr = src["nb"];
+                src_nb = {nb_arr[0], nb_arr[1], nb_arr[2], nb_arr[3]};
+            }
+            sources.push_back({(ggml_type)src["type"], src_ne, src_nb});
         }
 
         test_cases.emplace_back(new test_generic_op(op, type, ne, op_params, sources));
