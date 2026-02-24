@@ -1018,6 +1018,8 @@ class MainActivity : AppCompatActivity() {
         tokenUpdateCounter = 0
         updateFabIcon()
         var fullResponse = ""
+        var tokenCount = 0
+        val generationStartTime = System.currentTimeMillis()
 
         val formattedText = buildFormattedPrompt(messages)
         val lastUserText = messages.lastOrNull { it.isUser }?.content ?: ""
@@ -1044,6 +1046,7 @@ class MainActivity : AppCompatActivity() {
                             .replace("<|eot_id|>", "")
                             .replace("<|im_end|>", "")
                         fullResponse += cleaned
+                        tokenCount++
                         val newIndex = messageAdapter.updateLastAssistantMessage(fullResponse)
                         if (autoScroll) messagesRv.scrollToPosition(newIndex)
                         tokenUpdateCounter++
@@ -1054,11 +1057,16 @@ class MainActivity : AppCompatActivity() {
                     if (fullResponse.isEmpty()) "[Hata: ${e.message}]" else fullResponse
                 )
             } finally {
+                val elapsedSec = (System.currentTimeMillis() - generationStartTime) / 1000f
+                val tps = if (elapsedSec > 0f && tokenCount > 0) tokenCount / elapsedSec else null
+
                 if (currentMessages.isNotEmpty() && !currentMessages.last().isUser) {
-                    currentMessages[currentMessages.size - 1] = ChatMessage(fullResponse, false)
+                    currentMessages[currentMessages.size - 1] = ChatMessage(fullResponse, false, tps)
                 } else {
-                    currentMessages.add(ChatMessage(fullResponse, false))
+                    currentMessages.add(ChatMessage(fullResponse, false, tps))
                 }
+                // t/s'i son mesajda göster
+                messageAdapter.updateLastAssistantMessage(fullResponse, tps)
                 if (fullResponse.isNotEmpty()) {
                     lifecycleScope.launch(Dispatchers.IO) {
                         db.chatDao().insertMessage(com.example.llama.data.DbMessage(
