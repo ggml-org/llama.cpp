@@ -8758,6 +8758,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
 
 static std::vector<std::unique_ptr<test_case>> make_test_cases_from_json(const char * path) {
     std::ifstream f(path);
+
+    if (!f.is_open()) {
+        throw std::runtime_error("Unable to read JSON file");
+    }
+
     nlohmann::json data = nlohmann::json::parse(f);
 
     GGML_ASSERT(data.is_array());
