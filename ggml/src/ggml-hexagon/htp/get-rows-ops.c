@@ -15,6 +15,13 @@
 #include "htp-ops.h"
 #include "hvx-utils.h"
 
+struct get_rows_context {
+    struct htp_ops_context * octx;
+    uint32_t src1_nrows_per_thread;
+    struct fastdiv_values get_rows_div_ne10;
+    struct fastdiv_values get_rows_div_ne10_ne11;
+};
+
 #define get_rows_preamble \
     const uint32_t ne00 = octx->src0.ne[0]; \
     const uint32_t ne01 = octx->src0.ne[1]; \
@@ -39,20 +46,22 @@
                                             \
     const uint32_t nr = ne10 * ne11 * ne12;
 
-static int get_rows_thread_f32_f32(struct htp_ops_context * octx, const int nth, const int ith) {
+static void get_rows_thread_f32_f32(unsigned int nth, unsigned int ith, void *data) {
+    struct get_rows_context * grctx = (struct get_rows_context *)data;
+    struct htp_ops_context * octx = grctx->octx;
     get_rows_preamble;
 
     // parallelize by src1 elements (which correspond to dst rows)
-    const uint32_t dr  = octx->src1_nrows_per_thread;
+    const uint32_t dr  = grctx->src1_nrows_per_thread;
     const uint32_t ir0 = dr * ith;
     const uint32_t ir1 = (ir0 + dr < nr) ? (ir0 + dr) : nr;
 
     const bool is_i32 = (octx->src1.type == HTP_TYPE_I32);
 
     for (uint32_t i = ir0; i < ir1; ++i) {
-        const uint32_t i12 = fastdiv(i, &octx->get_rows_div_ne10_ne11);
+        const uint32_t i12 = fastdiv(i, &grctx->get_rows_div_ne10_ne11);
         const uint32_t rem = i - i12 * ne11 * ne10;
-        const uint32_t i11 = fastdiv(rem, &octx->get_rows_div_ne10);
+        const uint32_t i11 = fastdiv(rem, &grctx->get_rows_div_ne10);
         const uint32_t i10 = rem - i11 * ne10;
 
         const uintptr_t src1_addr = octx->src1.data + i10*nb10 + i11*nb11 + i12*nb12;
@@ -68,12 +77,6 @@ static int get_rows_thread_f32_f32(struct htp_ops_context * octx, const int nth,
         const uintptr_t dst_ptr  = octx->dst.data  + i10*nb1  + i11*nb2  + i12*nb3;
         hvx_copy_f32_uu((uint8_t *)dst_ptr, (const uint8_t *)src0_ptr, ne00);
     }
-
-    return HTP_STATUS_OK;
-}
-
-static void get_rows_work_f32_f32(unsigned int n, unsigned int i, void *data) {
-    get_rows_thread_f32_f32((struct htp_ops_context *) data, n, i);
 }
 
 int op_get_rows(struct htp_ops_context * octx) {
@@ -95,12 +98,14 @@ int op_get_rows(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
-    octx->get_rows_div_ne10      = init_fastdiv_values(octx->src1.ne[0]);
-    octx->get_rows_div_ne10_ne11 = init_fastdiv_values(octx->src1.ne[0] * octx->src1.ne[1]);
+    struct get_rows_context grctx;
+    grctx.octx = octx;
+    grctx.get_rows_div_ne10      = init_fastdiv_values(octx->src1.ne[0]);
+    grctx.get_rows_div_ne10_ne11 = init_fastdiv_values(octx->src1.ne[0] * octx->src1.ne[1]);
 
     const uint32_t n_jobs = MIN(nr, octx->n_threads);
-    octx->src1_nrows_per_thread = (nr + n_jobs - 1) / n_jobs;
+    grctx.src1_nrows_per_thread = (nr + n_jobs - 1) / n_jobs;
 
-    worker_pool_run_func(octx->ctx->worker_pool, get_rows_work_f32_f32, octx, n_jobs);
+    worker_pool_run_func(octx->ctx->worker_pool, get_rows_thread_f32_f32, &grctx, n_jobs);
     return HTP_STATUS_OK;
 }

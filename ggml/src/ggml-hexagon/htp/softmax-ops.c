@@ -10,6 +10,7 @@
 
 #include "hex-dma.h"
 #include "hvx-utils.h"
+#include "hex-fastdiv.h"
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
@@ -48,7 +49,7 @@
     const uint32_t nb2 = dst->nb[2];                       \
     const uint32_t nb3 = dst->nb[3];
 
-struct softmax_th_ctx {
+struct htp_softmax_context {
     bool     use_f16;
     bool     use_src1;
     uint32_t n_head;
@@ -59,28 +60,48 @@ struct softmax_th_ctx {
     float m0;
     float m1;
 
+    uint32_t src0_nrows_per_thread;
+    struct fastdiv_values fastdiv_ne01;
+    struct fastdiv_values fastdiv_ne02;
+    struct fastdiv_values fastdiv_ne12; // For mask broadcasting
+    struct fastdiv_values fastdiv_ne13; // For mask broadcasting
+    size_t spad_stride;
+
     struct htp_ops_context * octx;
 };
 
-static void init_softmax_ctx(struct softmax_th_ctx * softmax_ctx, struct htp_ops_context * octx) {
+static void init_softmax_ctx(struct htp_softmax_context * smctx, struct htp_ops_context * octx) {
     const struct htp_tensor * src0 = &octx->src0;
     const struct htp_tensor * src1 = &octx->src1;
 
-    memset(softmax_ctx, 0, sizeof(struct softmax_th_ctx));
+    memset(smctx, 0, sizeof(struct htp_softmax_context));
 
-    memcpy(&softmax_ctx->scale, (float *) octx->op_params, sizeof(float));
-    memcpy(&softmax_ctx->max_bias, (float *) octx->op_params + 1, sizeof(float));
+    memcpy(&smctx->scale, (float *) octx->op_params, sizeof(float));
+    memcpy(&smctx->max_bias, (float *) octx->op_params + 1, sizeof(float));
 
-    softmax_ctx->n_head      = src0->ne[2];
-    softmax_ctx->n_head_log2 = 1u << (uint32_t) floor(log2(softmax_ctx->n_head));
+    smctx->n_head      = src0->ne[2];
+    smctx->n_head_log2 = 1u << (uint32_t) floor(log2(smctx->n_head));
 
-    softmax_ctx->m0 = powf(2.0f, -(softmax_ctx->max_bias) / softmax_ctx->n_head_log2);
-    softmax_ctx->m1 = powf(2.0f, -(softmax_ctx->max_bias / 2.0f) / softmax_ctx->n_head_log2);
+    smctx->m0 = powf(2.0f, -(smctx->max_bias) / smctx->n_head_log2);
+    smctx->m1 = powf(2.0f, -(smctx->max_bias / 2.0f) / smctx->n_head_log2);
 
-    softmax_ctx->use_src1 = (src1->ne[0] != 0);
-    softmax_ctx->use_f16  = (src1->ne[0] != 0) && (src1->type == HTP_TYPE_F16);
+    smctx->use_src1 = (src1->ne[0] != 0);
+    smctx->use_f16  = (src1->ne[0] != 0) && (src1->type == HTP_TYPE_F16);
 
-    softmax_ctx->octx = octx;
+    smctx->octx = octx;
+
+    // Initialize fastdiv values
+    const uint32_t ne01 = src0->ne[1];
+    const uint32_t ne02 = src0->ne[2];
+
+    if (ne01 > 0) smctx->fastdiv_ne01 = init_fastdiv_values(ne01);
+    if (ne02 > 0) smctx->fastdiv_ne02 = init_fastdiv_values(ne02);
+
+    const uint32_t ne12 = (src1->ne[0]) ? src1->ne[2] : 1;
+    const uint32_t ne13 = (src1->ne[0]) ? src1->ne[3] : 1;
+
+    if (ne12 > 0) smctx->fastdiv_ne12 = init_fastdiv_values(ne12);
+    if (ne13 > 0) smctx->fastdiv_ne13 = init_fastdiv_values(ne13);
 }
 
 static void hvx_fast_softmax_prep_f32(const uint8_t * restrict src,
@@ -139,8 +160,7 @@ static void hvx_fast_softmax_f32(const uint8_t * restrict src,
         max_vec       = Q6_Vsf_vmax_VsfVsf(max_vec, v1);
     }
 
-    HVX_Vector v = hvx_vec_reduce_max_f32(max_vec);
-    max_vec      = hvx_vec_repl4(v);
+    max_vec = hvx_vec_reduce_max_f32(max_vec); // replicated over all lanes
 
     #pragma unroll(4)
     for (int i = 0; i < step_of_1; i++) {
@@ -154,8 +174,7 @@ static void hvx_fast_softmax_f32(const uint8_t * restrict src,
         v_pad[i] = v3;
     }
 
-    v       = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(sum_vec));
-    sum_vec = hvx_vec_repl4(v);
+    sum_vec = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(sum_vec)); // replicated over all lanes
 
     HVX_VectorPred pos_sum   = Q6_Q_vcmp_gt_VwVw(sum_vec, zero_v);
     HVX_Vector     v4        = hvx_vec_inverse_f32(sum_vec);
@@ -183,83 +202,9 @@ static float hvx_softmax_f32(const uint8_t * restrict src,
     return sum;
 }
 
-static void softmax_htp_f32(int nth, int ith, struct softmax_th_ctx * softmax_ctx, int opt_path) {
-    struct htp_ops_context * octx = softmax_ctx->octx;
-
-    const struct htp_tensor * src0 = &octx->src0;
-    const struct htp_tensor * src1 = &octx->src1;
-    const struct htp_tensor * dst  = &octx->dst;
-
-    htp_softmax_preamble3;
-
-    uint8_t * src0_spad_data = octx->src0_spad.data + (ith * nb01);
-    uint8_t * src1_spad_data = octx->src1_spad.data + (ith * nb01);
-    uint8_t * dst_spad_data  = octx->dst_spad.data + (ith * nb1);
-
-    float * wp0 = (float *) src0_spad_data;
-    float * wp1 = (float *) src1_spad_data;
-    float * wp2 = (float *) dst_spad_data;
-
-    for (uint32_t i03 = 0; i03 < ne03; i03++) {
-        for (uint32_t i02 = 0; i02 < ne02; i02++) {
-            for (uint32_t i01 = ith; i01 < ne01; i01 += nth) {
-                const uint32_t i11 = i01;
-                const uint32_t i12 = i02 % ne12;
-                const uint32_t i13 = i03 % ne13;
-
-                // ALiBi
-                const uint32_t h = i02;  // head
-
-                const float slope = (softmax_ctx->max_bias > 0.0f) ?
-                                        h < softmax_ctx->n_head_log2 ?
-                                        powf(softmax_ctx->m0, h + 1) :
-                                        powf(softmax_ctx->m1, 2 * (h - softmax_ctx->n_head_log2) + 1) :
-                                        1.0f;
-
-                float * sp = (float *) ((char *) octx->src0.data + i01 * nb01 + i02 * nb02 + i03 * nb03);
-                float * dp = (float *) ((char *) octx->dst.data + i01 * nb1 + i02 * nb2 + i03 * nb3);
-
-                // broadcast the mask across rows
-                __fp16 * mp_f16 = (softmax_ctx->use_src1) ?
-                                      (__fp16 *) ((char *) octx->src1.data + i11 * nb11 + i12 * nb12 + i13 * nb13) :
-                                      NULL;
-                float *  mp_f32 = (softmax_ctx->use_src1) ?
-                                      (float *) ((char *) octx->src1.data + i11 * nb11 + i12 * nb12 + i13 * nb13) :
-                                      NULL;
-
-                if ((1 == opt_path) && (mp_f32) && !(softmax_ctx->use_f16)) {
-                    hvx_fast_softmax_prep_f32((const uint8_t *) sp, (uint8_t *) wp0, ne00, softmax_ctx->scale,
-                                              (const uint8_t *) mp_f32, slope);
-                } else {
-                    hvx_scale_f32((uint8_t *) wp0, (const uint8_t *) sp, ne00, softmax_ctx->scale);
-                    if (mp_f32) {
-                        if (softmax_ctx->use_f16) {
-                            for (int i = 0; i < ne00; ++i) {
-                                wp0[i] += slope * (float) mp_f16[i];
-                            }
-                        } else {
-                            for (int i = 0; i < ne00; ++i) {
-                                wp0[i] += slope * mp_f32[i];
-                            }
-                        }
-                    }
-                }
-
-                if (1 == opt_path) {
-                    hvx_fast_softmax_f32((const uint8_t *) wp0, (uint8_t *) dp, (uint8_t *) wp1, ne00);
-                } else {
-                    float max = hvx_reduce_max_f32((const uint8_t *) wp0, ne00);
-                    float sum = hvx_softmax_f32((const uint8_t *) wp0, (uint8_t *) wp2, (uint8_t *) wp1, ne00, max);
-                    sum       = sum > 0.0 ? (1.0 / sum) : 1;
-                    hvx_scale_f32((uint8_t *) dp, (const uint8_t *) wp2, ne00, sum);
-                }
-            }
-        }
-    }
-}
-
-static void softmax_job_f32_per_thread(struct softmax_th_ctx * softmax_ctx, int nth, int ith) {
-    struct htp_ops_context * octx = softmax_ctx->octx;
+static void softmax_job_f32(unsigned int nth, unsigned int ith, void * data) {
+    struct htp_softmax_context * smctx = (struct htp_softmax_context *) data;
+    struct htp_ops_context * octx = smctx->octx;
 
     const struct htp_tensor * src0 = &octx->src0;
     const struct htp_tensor * src1 = &octx->src1;
@@ -268,7 +213,7 @@ static void softmax_job_f32_per_thread(struct softmax_th_ctx * softmax_ctx, int 
     htp_softmax_preamble3;
 
     const uint32_t src0_nrows            = ne01 * ne02 * ne03;  // src0 rows
-    const uint32_t src0_nrows_per_thread = octx->src0_nrows_per_thread;
+    const uint32_t src0_nrows_per_thread = smctx->src0_nrows_per_thread;
 
     const uint32_t src0_start_row = src0_nrows_per_thread * ith;
     const uint32_t src0_end_row   = MIN(src0_start_row + src0_nrows_per_thread, src0_nrows);
@@ -291,18 +236,101 @@ static void softmax_job_f32_per_thread(struct softmax_th_ctx * softmax_ctx, int 
         opt_path = 1;
     }
 
-    softmax_htp_f32(nth, ith, softmax_ctx, opt_path);
+    uint8_t * src0_spad_data = octx->src0_spad.data + (ith * smctx->spad_stride);
+    uint8_t * src1_spad_data = octx->src1_spad.data + (ith * smctx->spad_stride);
+    uint8_t * dst_spad_data  = octx->dst_spad.data + (ith * smctx->spad_stride);
+
+    float * wp0 = (float *) src0_spad_data;
+    float * wp1 = (float *) src1_spad_data;
+    float * wp2 = (float *) dst_spad_data;
+
+    uint32_t prev_i2 = (uint32_t)-1;
+    float slope = 1.0f;
+
+    for (uint32_t r = src0_start_row; r < src0_end_row; ++r) {
+        uint32_t i1 = fastmodulo(r, ne01, &smctx->fastdiv_ne01);
+        uint32_t r_div_ne01 = fastdiv(r, &smctx->fastdiv_ne01);
+        uint32_t i2 = fastmodulo(r_div_ne01, ne02, &smctx->fastdiv_ne02);
+        uint32_t i3 = fastdiv(r_div_ne01, &smctx->fastdiv_ne02);
+
+        // Map to original logic indices
+        // i01 = i1
+        // i02 = i2
+        // i03 = i3
+
+        const uint32_t i11 = i1;
+        // const uint32_t i12 = i2 % ne12;
+        // const uint32_t i13 = i3 % ne13;
+
+        uint32_t i12, i13;
+        if (ne12 == ne02) {
+             i12 = i2;
+        } else {
+             i12 = fastmodulo(i2, ne12, &smctx->fastdiv_ne12);
+        }
+
+        if (ne13 == ne03) {
+             i13 = i3;
+        } else {
+             i13 = fastmodulo(i3, ne13, &smctx->fastdiv_ne13);
+        }
+
+        // ALiBi
+        if (i2 != prev_i2) {
+            const uint32_t h = i2;  // head
+
+            slope = (smctx->max_bias > 0.0f) ?
+                        h < smctx->n_head_log2 ?
+                        powf(smctx->m0, h + 1) :
+                        powf(smctx->m1, 2 * (h - smctx->n_head_log2) + 1) :
+                        1.0f;
+            prev_i2 = i2;
+        }
+
+        float * sp = (float *) ((char *) octx->src0.data + i1 * nb01 + i2 * nb02 + i3 * nb03);
+        float * dp = (float *) ((char *) octx->dst.data + i1 * nb1 + i2 * nb2 + i3 * nb3);
+
+        // broadcast the mask across rows
+        __fp16 * mp_f16 = (smctx->use_src1) ?
+                              (__fp16 *) ((char *) octx->src1.data + i11 * nb11 + i12 * nb12 + i13 * nb13) :
+                              NULL;
+        float *  mp_f32 = (smctx->use_src1) ?
+                              (float *) ((char *) octx->src1.data + i11 * nb11 + i12 * nb12 + i13 * nb13) :
+                              NULL;
+
+        if ((1 == opt_path) && (mp_f32) && !(smctx->use_f16)) {
+            hvx_fast_softmax_prep_f32((const uint8_t *) sp, (uint8_t *) wp0, ne00, smctx->scale,
+                                      (const uint8_t *) mp_f32, slope);
+        } else {
+            hvx_scale_f32((uint8_t *) wp0, (const uint8_t *) sp, ne00, smctx->scale);
+            if (mp_f32) {
+                if (smctx->use_f16) {
+                    for (int i = 0; i < ne00; ++i) {
+                        wp0[i] += slope * (float) mp_f16[i];
+                    }
+                } else {
+                    for (int i = 0; i < ne00; ++i) {
+                        wp0[i] += slope * mp_f32[i];
+                    }
+                }
+            }
+        }
+
+        if (1 == opt_path) {
+            hvx_fast_softmax_f32((const uint8_t *) wp0, (uint8_t *) dp, (uint8_t *) wp1, ne00);
+        } else {
+            float max = hvx_reduce_max_f32((const uint8_t *) wp0, ne00);
+            float sum = hvx_softmax_f32((const uint8_t *) wp0, (uint8_t *) wp2, (uint8_t *) wp1, ne00, max);
+            sum       = sum > 0.0 ? (1.0 / sum) : 1;
+            hvx_scale_f32((uint8_t *) dp, (const uint8_t *) wp2, ne00, sum);
+        }
+    }
 
     t2 = HAP_perf_get_qtimer_count();
 
     FARF(HIGH, "softmax-f32 %d/%d/%d/%d: %ux%ux%ux%u (%u:%u) x %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n", ith, nth,
-         softmax_ctx->use_f16, opt_path, ne00, ne01, ne02, ne03, src0_start_row, src0_end_row, ne10, ne11, ne12, ne13,
+         smctx->use_f16, opt_path, ne00, ne01, ne02, ne03, src0_start_row, src0_end_row, ne10, ne11, ne12, ne13,
          ne0, ne1, ne2, ne3, (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
-}
-
-static void softmax_job_dispatcher_f32(unsigned int n, unsigned int i, void * p_data) {
-    struct softmax_th_ctx * p_softmax_ctx = (struct softmax_th_ctx *) p_data;
-    softmax_job_f32_per_thread(p_softmax_ctx, n, i);
 }
 
 static int execute_op_softmax_f32(struct htp_ops_context * octx) {
@@ -312,17 +340,12 @@ static int execute_op_softmax_f32(struct htp_ops_context * octx) {
     const struct htp_tensor * src1 = &octx->src1;
     struct htp_tensor *       dst  = &octx->dst;
 
-    worker_callback_t op_func;
-    const char *      op_type = NULL;
-
-    struct softmax_th_ctx softmax_ctx;
+    struct htp_softmax_context smctx;
+    const char * op_type = "softmax-f32";
 
     switch (octx->op) {
         case HTP_OP_SOFTMAX:
-            op_func = softmax_job_dispatcher_f32;
-            op_type = "softmax-f32";
-
-            init_softmax_ctx(&softmax_ctx, octx);
+            init_softmax_ctx(&smctx, octx);
             break;
 
         default:
@@ -341,6 +364,9 @@ static int execute_op_softmax_f32(struct htp_ops_context * octx) {
     octx->dst_spad.size  = hex_round_up(dst_row_size, 128) * n_threads;
     octx->src0_spad.size = hex_round_up(src0_row_size, 128) * n_threads;
     octx->src1_spad.size = hex_round_up(src1_row_size, 128) * n_threads;
+
+    // Use stride for calculating offset
+    smctx.spad_stride = hex_round_up(src0_row_size, 128);
 
     size_t spad_size = octx->src0_spad.size + octx->src1_spad.size + octx->dst_spad.size;
 
@@ -371,8 +397,8 @@ static int execute_op_softmax_f32(struct htp_ops_context * octx) {
 
     if (!(octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)) {
         uint32_t n_jobs             = MIN(n_threads, src0_nrows);
-        octx->src0_nrows_per_thread = (src0_nrows + n_jobs - 1) / n_jobs;
-        worker_pool_run_func(octx->ctx->worker_pool, op_func, &softmax_ctx, n_jobs);
+        smctx.src0_nrows_per_thread = (src0_nrows + n_jobs - 1) / n_jobs;
+        worker_pool_run_func(octx->ctx->worker_pool, softmax_job_f32, &smctx, n_jobs);
     }
 
     return err;
