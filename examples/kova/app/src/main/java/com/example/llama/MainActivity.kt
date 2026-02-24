@@ -618,6 +618,14 @@ class MainActivity : AppCompatActivity() {
                         log("Kova", "fd ile yükleme başarılı")
                     } catch (e: Exception) {
                         log("Kova", "fd yöntemi başarısız (${e.message}), kopyalama yöntemine geçiliyor...")
+                        // Engine'i Error state'inden Initialized'a döndür
+                        if (engine.state.value is InferenceEngine.State.Error) {
+                            engine.cleanUp()
+                            var waited2 = 0
+                            while (engine.state.value !is InferenceEngine.State.Initialized && waited2 < 50) {
+                                delay(100); waited2++
+                            }
+                        }
                     } finally {
                         pfd.close()
                     }
