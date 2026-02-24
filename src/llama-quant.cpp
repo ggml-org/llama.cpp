@@ -590,8 +590,13 @@ static size_t llama_tensor_quantize_impl(enum ggml_type new_type, const float * 
     return new_size;
 }
 
-// does this tensor require an importance matrix?
-static bool tensor_requires_imatrix(const ggml_tensor * t, const ggml_type dst_type, const llama_ftype ftype) {
+// does this tensor require importance matrix data?
+static bool tensor_requires_imatrix(const char * tensor_name, const ggml_type dst_type, const llama_ftype ftype) {
+    if (std::strcmp(tensor_name, "token_embd.weight") == 0 ||
+        std::strcmp(tensor_name, "per_layer_token_embd.weight") == 0) {
+        // token embedding tensors should never require imatrix data
+        return false;
+    }
     switch (dst_type) {
         case GGML_TYPE_IQ3_XXS:
         case GGML_TYPE_IQ2_XXS:
@@ -601,18 +606,9 @@ static bool tensor_requires_imatrix(const ggml_tensor * t, const ggml_type dst_t
         case GGML_TYPE_IQ1_S:
             return true;
         case GGML_TYPE_Q2_K:
-            // Q2_K_S is the worst k-quant type, so always require an imatrix,
-            // except for the token embedding tensors.
-            // ref: https://github.com/ggml-org/llama.cpp/pull/19526#issuecomment-3930522135
-            if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S) {
-                const char * name = t->name;
-                if (std::strncmp(name, "token_embd.weight", 17) == 0 ||
-                    std::strncmp(name, "per_layer_token_embd.weight", 27) == 0) {
-                    return false;
-                }
-                return true;
-            }
-            return false;
+            // as a general rule, the k-type quantizations don't require imatrix data.
+            // the only exception is Q2_K tensors that are part of a Q2_K_S file.
+            return ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S;
         default:
             return false;
     }
@@ -898,7 +894,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
         if (!params->imatrix &&
             tensor_allows_quantization(params, model.arch, tensor) &&
-            tensor_requires_imatrix(tensor, target_type, ftype)
+            tensor_requires_imatrix(tensor->name, target_type, ftype)
         ) { // this tensor requires an imatrix but we don't have one!
             if (params->dry_run) {
                 // set flag for warning later, but continue with dry run
@@ -1029,7 +1025,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                                tensor_size/1024.0/1024.0,
                                new_size/1024.0/1024.0,
                                ggml_type_name(new_type));
-                if (!will_require_imatrix && tensor_requires_imatrix(tensor, new_type, ftype)) {
+                if (!will_require_imatrix && tensor_requires_imatrix(tensor->name, new_type, ftype)) {
                     will_require_imatrix = true;
                 }
             } else {
@@ -1072,7 +1068,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                         }
                     }
                 }
-                if (!imatrix && tensor_requires_imatrix(tensor, new_type, ftype)) {
+                if (!imatrix && tensor_requires_imatrix(tensor->name, new_type, ftype)) {
                     // ddh0: we should never reach this anymore, since we now check for imatrix
                     //       requirements in the preliminary loop over model weights, but I am
                     //       leaving this check here as a guard, just in case.
