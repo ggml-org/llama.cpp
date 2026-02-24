@@ -6127,7 +6127,6 @@ class NeoBert(BertModel):
 
 @ModelBase.register("EuroBertModel")
 class EuroBertModel(TextModel):
-    """EuroBert - a bidirectional encoder with Llama-style architecture (RoPE, RMSNorm, SwiGLU)."""
     model_arch = gguf.MODEL_ARCH.EUROBERT
 
     def set_vocab(self):
@@ -6145,8 +6144,7 @@ class EuroBertModel(TextModel):
 
         self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
 
-        # Pooling type - last token pooling (EOS token aggregates sequence info)
-        self.gguf_writer.add_pooling_type(gguf.PoolingType.LAST)
+        self._try_set_pooling_type()
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # Strip "model." prefix from tensor names
