@@ -3102,7 +3102,7 @@ static void quantize_row_iq2_xxs_impl(const float * GGML_RESTRICT x, void * GGML
                 memset(L, 0, 32);
                 continue;
             }
-            float scale = make_qp_quants(32, kMaxQ+1, xval, (uint8_t*)Laux, weight);
+            float scale = make_qp_quants(32, kMaxQ+1, xval, (uint8_t*)L, weight);
             float eff_max = scale*kMaxQ;
             memset(L, 0, 32);
             if (eff_max <= 0) {
@@ -3278,12 +3278,11 @@ static void quantize_row_iq2_xs_impl(const float * GGML_RESTRICT x, void * GGML_
             }
             float max = xval[0];
             for (int i = 1; i < 16; ++i) max = MAX(max, xval[i]);
+            memset(L, 0, 16);
             if (max < GROUP_MAX_EPS) {
                 scales[ib] = 0;
-                memset(L, 0, 16);
                 continue;
             }
-            memset(L, 0, 16);
             float best = 0;
             float scale = max/(2*kMaxQ-1);
             is_on_grid[0] = is_on_grid[1] = true;
@@ -3720,12 +3719,11 @@ static void quantize_row_iq3_xxs_impl(int grid_size, const float * GGML_RESTRICT
             }
             float max = xval[0];
             for (int i = 1; i < 32; ++i) max = MAX(max, xval[i]);
+            memset(L, 0, 32);
             if (max < GROUP_MAX_EPS_IQ3_XXS) {
                 scales[ib] = 0;
-                memset(L, 0, 32);
                 continue;
             }
-            memset(L, 0, 32);
             float best = 0;
             float scale = max/(2*kMaxQ-1);
             for (int k = 0; k < 8; ++k) is_on_grid[k] = true;
@@ -3929,11 +3927,11 @@ static void quantize_row_iq3_s_impl(int block_size, const float * GGML_RESTRICT 
             }
             float max = xval[0];
             for (int i = 1; i < block_size; ++i) max = MAX(max, xval[i]);
+            memset(L, 0, block_size);
             if (!max) {
                 scales[ib] = 0;
                 continue;
             }
-            memset(L, 0, block_size);
             float best = 0;
             float scale = max/(2*kMaxQ-1);
             for (int k = 0; k < bs4; ++k) is_on_grid[k] = false;
@@ -4894,12 +4892,11 @@ static void quantize_row_iq2_s_impl(const float * GGML_RESTRICT x, void * GGML_R
             }
             float max = xval[0];
             for (int i = 1; i < 16; ++i) max = MAX(max, xval[i]);
+            memset(L, 0, 16);
             if (max < GROUP_MAX_EPS_IQ2_S) {
                 scales[ib] = 0;
-                memset(L, 0, 16);
                 continue;
             }
-            memset(L, 0, 16);
             float best = 0;
             float scale = max/(2*kMaxQ-1);
             is_on_grid[0] = is_on_grid[1] = true;
