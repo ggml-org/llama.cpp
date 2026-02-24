@@ -11,7 +11,8 @@ import io.noties.markwon.Markwon
 
 data class ChatMessage(
     val content: String,
-    val isUser: Boolean
+    val isUser: Boolean,
+    val tokensPerSecond: Float? = null
 )
 
 class MessageAdapter(
@@ -64,13 +65,13 @@ class MessageAdapter(
         notifyDataSetChanged()
     }
 
-    fun updateLastAssistantMessage(text: String): Int {
+    fun updateLastAssistantMessage(text: String, tps: Float? = null): Int {
         if (messages.isNotEmpty() && !messages.last().isUser) {
-            messages[messages.size - 1] = ChatMessage(content = text, isUser = false)
+            messages[messages.size - 1] = ChatMessage(content = text, isUser = false, tokensPerSecond = tps)
             // expandedPositions'a dokunmuyoruz — toggle durumu korunur
             notifyItemChanged(messages.size - 1)
         } else {
-            messages.add(ChatMessage(content = text, isUser = false))
+            messages.add(ChatMessage(content = text, isUser = false, tokensPerSecond = tps))
             notifyItemInserted(messages.size - 1)
         }
         return messages.size - 1
@@ -137,6 +138,15 @@ class MessageAdapter(
             markwon?.setMarkdown(textView, displayText) ?: run { textView.text = displayText }
             textView.setTextIsSelectable(true)
 
+            // --- t/s göstergesi ---
+            val tps = message.tokensPerSecond
+            if (tps != null && tps > 0f) {
+                holder.txtTps.visibility = View.VISIBLE
+                holder.txtTps.text = "%.2f t/s".format(tps)
+            } else {
+                holder.txtTps.visibility = View.GONE
+            }
+
             holder.itemView.findViewById<Button>(R.id.btn_copy).setOnClickListener {
                 onCopy(parsed.visibleContent.ifEmpty { message.content })
             }
@@ -155,5 +165,6 @@ class MessageAdapter(
         val thinkingHeader: LinearLayout = view.findViewById(R.id.thinking_header)
         val thinkingContent: TextView = view.findViewById(R.id.thinking_content)
         val thinkingChevron: TextView = view.findViewById(R.id.thinking_chevron)
+        val txtTps: TextView = view.findViewById(R.id.txt_tps)
     }
 }
