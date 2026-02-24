@@ -133,25 +133,25 @@ struct webgpu_buf_pool {
     // which can run on a different thread than the calling thread.
     std::mutex              mutex;
     std::condition_variable cv;
-    // size_t                  cur_pool_size;
-    // size_t                  max_pool_size;
-    // wgpu::Device            device;
-    // wgpu::BufferUsage       host_buf_usage;
-    // wgpu::BufferUsage       dev_buf_usage;
-    // size_t                  buf_size;
+    size_t                  cur_pool_size;
+    size_t                  max_pool_size;
+    wgpu::Device            device;
+    wgpu::BufferUsage       host_buf_usage;
+    wgpu::BufferUsage       dev_buf_usage;
+    size_t                  buf_size;
 
     void init(wgpu::Device      device,
               int               num_bufs,
               size_t            buf_size,
               wgpu::BufferUsage dev_buf_usage,
-              wgpu::BufferUsage host_buf_usage) {
-              //size_t            max_pool_size = WEBGPU_NUM_PARAM_BUFS * 3) {
-        // this->max_pool_size  = max_pool_size;
-        // this->cur_pool_size  = num_bufs;
-        // this->device         = device;
-        // this->host_buf_usage = host_buf_usage;
-        // this->dev_buf_usage  = dev_buf_usage;
-        // this->buf_size       = buf_size;
+              wgpu::BufferUsage host_buf_usage,
+              size_t            max_pool_size = WEBGPU_NUM_PARAM_BUFS * 3) {
+        this->max_pool_size  = max_pool_size;
+        this->cur_pool_size  = num_bufs;
+        this->device         = device;
+        this->host_buf_usage = host_buf_usage;
+        this->dev_buf_usage  = dev_buf_usage;
+        this->buf_size       = buf_size;
         for (int i = 0; i < num_bufs; i++) {
             wgpu::Buffer host_buf;
             wgpu::Buffer dev_buf;
@@ -169,18 +169,18 @@ struct webgpu_buf_pool {
             return bufs;
         }
 
-        // // Try growing the pool if no free buffers
-        // if (free.empty() && cur_pool_size < max_pool_size) {
-        //     wgpu::Buffer host_buf;
-        //     wgpu::Buffer dev_buf;
-        //     ggml_webgpu_create_buffer(device, host_buf, buf_size, host_buf_usage, "ggml_webgpu_host_pool_buf");
-        //     ggml_webgpu_create_buffer(device, dev_buf, buf_size, dev_buf_usage, "ggml_webgpu_dev_pool_buf");
-        //     if (!(host_buf && dev_buf)) {
-        //         GGML_ABORT("webgpu_buf_pool: failed to allocate buffers");
-        //     }
-        //     cur_pool_size++;
-        //     return webgpu_pool_bufs{ host_buf, dev_buf };
-        // }
+        // Try growing the pool if no free buffers
+        if (free.empty() && cur_pool_size < max_pool_size) {
+            wgpu::Buffer host_buf;
+            wgpu::Buffer dev_buf;
+            ggml_webgpu_create_buffer(device, host_buf, buf_size, host_buf_usage, "ggml_webgpu_host_pool_buf");
+            ggml_webgpu_create_buffer(device, dev_buf, buf_size, dev_buf_usage, "ggml_webgpu_dev_pool_buf");
+            if (!(host_buf && dev_buf)) {
+                GGML_ABORT("webgpu_buf_pool: failed to allocate buffers");
+            }
+            cur_pool_size++;
+            return webgpu_pool_bufs{ host_buf, dev_buf };
+        }
 
         cv.wait(lock, [this] { return !free.empty(); });
         webgpu_pool_bufs bufs = free.back();
@@ -2713,8 +2713,7 @@ static webgpu_context initialize_webgpu_context(ggml_backend_dev_t dev) {
     webgpu_context                       webgpu_ctx = std::make_shared<webgpu_context_struct>();
     webgpu_ctx->global_ctx                          = dev_ctx->webgpu_global_ctx;
     webgpu_ctx->shader_lib = std::make_unique<ggml_webgpu_shader_lib>(dev_ctx->webgpu_global_ctx->device);
-    webgpu_ctx->param_buf_pool.init(webgpu_ctx->global_ctx->device, WEBGPU_NUM_PARAM_BUFS,
-                                    WEBGPU_PARAMS_BUF_SIZE_BYTES,
+    webgpu_ctx->param_buf_pool.init(webgpu_ctx->global_ctx->device, WEBGPU_NUM_PARAM_BUFS, WEBGPU_PARAMS_BUF_SIZE_BYTES,
                                     wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Uniform,
                                     wgpu::BufferUsage::CopySrc | wgpu::BufferUsage::MapWrite);
     webgpu_ctx->set_rows_error_buf_pool.init(webgpu_ctx->global_ctx->device, WEBGPU_NUM_SET_ROWS_ERROR_BUFS,
