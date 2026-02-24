@@ -257,7 +257,7 @@ llama_pos server_tokens::pos_next(int64_t n_tokens) const {
     GGML_ASSERT(n_tokens <= (int64_t)tokens.size());
 
     while (idx < n_tokens) {
-        auto media_it = map_idx_to_media.find(idx);
+        const auto media_it = map_idx_to_media.find(idx);
         if (media_it != map_idx_to_media.end()) {
             const auto & chunk = media_it->second;
             const llama_pos n_pos = mtmd_input_chunk_get_n_pos(chunk.get());
@@ -274,7 +274,7 @@ llama_pos server_tokens::pos_next(int64_t n_tokens) const {
     return pos;
 }
 
-size_t server_tokens::tokens_up_to_pos(llama_pos max_pos) const {
+size_t server_tokens::size_up_to_pos(llama_pos max_pos) const {
     if (!has_mtmd) {
         return std::min((size_t)(max_pos + 1), tokens.size());
     }
@@ -283,7 +283,7 @@ size_t server_tokens::tokens_up_to_pos(llama_pos max_pos) const {
     llama_pos pos = 0;
 
     while (idx < tokens.size()) {
-        auto media_it = map_idx_to_media.find(idx);
+        const auto media_it = map_idx_to_media.find(idx);
         if (media_it != map_idx_to_media.end()) {
             const auto & chunk = media_it->second;
             const llama_pos n_pos = mtmd_input_chunk_get_n_pos(chunk.get());
