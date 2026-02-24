@@ -6,6 +6,7 @@
 #include "llama-adapter.h"
 
 #include <cstdint>
+#include <cstring>
 #include <vector>
 #include <memory>
 #include <set>
@@ -55,21 +56,71 @@ enum llm_norm_type {
     LLM_NORM_GROUP,
 };
 
-// TODO: tmp - need something better to pass the data from the encoder to the decoder
 struct llama_cross {
-    // the output embeddings from the encoder as a ggml tensor
-    // TODO: this needs more work to be correct, for now copy the embeddings data to host memory
-    //       ref: https://github.com/ggml-org/llama.cpp/pull/11213#discussion_r1969892524
-    //ggml_tensor * t_embd = nullptr;
-
     int64_t n_embd = 0;
-    int64_t n_enc  = 0;
+    int64_t n_enc  = 0; // total encoder positions across all active sequences
 
-    // embeddings data copied to host memory (tmp)
+    // materialized view: concatenation of all per-sequence embeddings
     std::vector<float> v_embd;
 
-    // needed to construct the cross-attention mask in the decoder
+    // per-position set of owning sequence IDs (indexes into v_embd rows)
     std::vector<std::set<llama_seq_id>> seq_ids_enc;
+
+    // per-sequence encoder embedding storage
+    struct seq_embd {
+        int64_t              n_enc = 0;
+        std::vector<float>   v_embd;
+    };
+
+    std::map<llama_seq_id, seq_embd> seqs;
+
+    // store encoder output for a sequence and rebuild the materialized view
+    void set_seq(llama_seq_id seq_id, int64_t n_embd_in, int64_t n_enc_in, const float * data) {
+        this->n_embd = n_embd_in;
+
+        auto & s   = seqs[seq_id];
+        s.n_enc    = n_enc_in;
+        s.v_embd.assign(data, data + n_embd_in * n_enc_in);
+
+        rebuild();
+    }
+
+    void clear_seq(llama_seq_id seq_id) {
+        if (seqs.erase(seq_id)) {
+            rebuild();
+        }
+    }
+
+    bool empty() const { return seqs.empty(); }
+
+private:
+    // concatenate all per-sequence embeddings into the flat materialized buffer
+    void rebuild() {
+        n_enc = 0;
+        for (const auto & kv : seqs) {
+            n_enc += kv.second.n_enc;
+        }
+
+        v_embd.resize(n_embd * n_enc);
+        seq_ids_enc.resize(n_enc);
+
+        int64_t offset = 0;
+        for (const auto & kv : seqs) {
+            const llama_seq_id  sid = kv.first;
+            const seq_embd    & se  = kv.second;
+
+            memcpy(v_embd.data() + offset * n_embd,
+                   se.v_embd.data(),
+                   se.n_enc * n_embd * sizeof(float));
+
+            for (int64_t i = 0; i < se.n_enc; ++i) {
+                seq_ids_enc[offset + i].clear();
+                seq_ids_enc[offset + i].insert(sid);
+            }
+
+            offset += se.n_enc;
+        }
+    }
 };
 
 struct llm_graph_params;
@@ -248,14 +299,20 @@ public:
 class llm_graph_input_cross_embd : public llm_graph_input_i {
 public:
     llm_graph_input_cross_embd(
-            const llama_cross * cross) : cross(cross) {}
+            const llama_cross * cross, uint32_t n_seq_max, uint32_t n_ctx_train)
+        : cross(cross), n_seq_max(n_seq_max), n_ctx_train(n_ctx_train) {}
     virtual ~llm_graph_input_cross_embd() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
+    bool can_reuse(const llm_graph_params & params) override;
 
-    ggml_tensor * cross_embd; // F32 [n_embd, n_outputs_enc]
+    ggml_tensor * cross_embd = nullptr; // F32 [n_embd, n_enc]
 
     const llama_cross * cross;
+    const uint32_t n_seq_max;
+    const uint32_t n_ctx_train;
+
+    int64_t n_enc_built = 0; // n_enc when this graph was built
 };
 
 class llm_graph_input_attn_no_cache : public llm_graph_input_i {
@@ -392,17 +449,23 @@ public:
 
 class llm_graph_input_attn_cross : public llm_graph_input_i {
 public:
-    llm_graph_input_attn_cross(const llama_cross * cross) : cross(cross) {}
+    llm_graph_input_attn_cross(const llama_cross * cross, uint32_t n_seq_max, uint32_t n_ctx_train)
+        : cross(cross), n_seq_max(n_seq_max), n_ctx_train(n_ctx_train) {}
     ~llm_graph_input_attn_cross() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
+    bool can_reuse(const llm_graph_params & params) override;
 
     ggml_tensor * get_kq_mask_cross() const { return cross_kq_mask_cnv; }
 
-    ggml_tensor * cross_kq_mask     = nullptr; // F32 [n_outputs_enc, n_batch, 1, 1]
-    ggml_tensor * cross_kq_mask_cnv = nullptr; // F32 [n_outputs_enc, n_batch, 1, 1]
+    ggml_tensor * cross_kq_mask     = nullptr; // F32 [n_enc, n_batch, 1, 1]
+    ggml_tensor * cross_kq_mask_cnv = nullptr; // F32 [n_enc, n_batch, 1, 1]
 
-    const llama_cross * cross = nullptr;
+    const llama_cross * cross       = nullptr;
+    const uint32_t      n_seq_max;
+    const uint32_t      n_ctx_train;
+
+    int64_t n_enc_built = 0; // n_enc when this graph was built
 };
 
 class llm_graph_input_mem_hybrid : public llm_graph_input_i {

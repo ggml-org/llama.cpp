@@ -1267,33 +1267,33 @@ int llama_context::encode(const llama_batch & batch_inp) {
         }
     }
 
-    // TODO: hacky solution
     if ((model.arch == LLM_ARCH_T5 || model.arch == LLM_ARCH_AYA) && t_embd) {
-        //cross.t_embd = t_embd;
-
         synchronize();
 
-        cross.n_embd = t_embd->ne[0];
-        cross.n_enc  = t_embd->ne[1];
-        cross.v_embd.resize(cross.n_embd*cross.n_enc);
-        memcpy(cross.v_embd.data(), embd.data, ggml_nbytes(t_embd));
+        const int64_t enc_n_embd = t_embd->ne[0];
+        const int64_t enc_n_enc  = t_embd->ne[1];
 
         const auto & batch = balloc->get_batch();
 
-        // remember the sequence ids used during the encoding - needed for cross attention later
-        cross.seq_ids_enc.resize(n_tokens);
+        // collect unique sequence IDs from this encode batch
+        std::set<llama_seq_id> seq_ids;
         for (uint32_t i = 0; i < n_tokens; i++) {
-            cross.seq_ids_enc[i].clear();
-
             for (int s = 0; s < batch.n_seq_id[i]; s++) {
-                const llama_seq_id seq_id = batch.seq_id[i][s];
-
-                cross.seq_ids_enc[i].insert(seq_id);
+                seq_ids.insert(batch.seq_id[i][s]);
             }
+        }
+
+        // store encoder output per sequence so parallel slots don't overwrite each other
+        for (const llama_seq_id sid : seq_ids) {
+            cross.set_seq(sid, enc_n_embd, enc_n_enc, (const float *) embd.data);
         }
     }
 
     return 0;
+}
+
+void llama_context::encode_clear_seq(llama_seq_id seq_id) {
+    cross.clear_seq(seq_id);
 }
 
 static std::map<llama_seq_id, uint32_t> build_seq_to_output_row(const llama_ubatch & ubatch, uint32_t row_offset) {
@@ -3297,6 +3297,12 @@ int32_t llama_encode(
     }
 
     return ret;
+}
+
+void llama_encode_clear_seq(
+        llama_context * ctx,
+            llama_seq_id seq_id) {
+    ctx->encode_clear_seq(seq_id);
 }
 
 int32_t llama_decode(

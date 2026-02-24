@@ -133,6 +133,7 @@ struct server_slot {
         SLT_INF(*this, "clearing prompt with %zu tokens\n", prompt.tokens.size());
 
         llama_memory_seq_rm(llama_get_memory(ctx), id, -1, -1);
+        llama_encode_clear_seq(ctx, id);
         prompt.tokens.clear();
     }
 
