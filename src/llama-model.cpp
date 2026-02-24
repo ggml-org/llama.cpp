@@ -123,6 +123,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_8B_A1B:        return "8B.A1B";
         case LLM_TYPE_16B_A1B:       return "16B.A1B";
         case LLM_TYPE_21B_A3B:       return "21B.A3B";
+        case LLM_TYPE_24B_A2B:       return "24B.A2B";
         case LLM_TYPE_30B_A3B:       return "30B.A3B";
         case LLM_TYPE_31B_A3_5B:     return "31B.A3.5B";
         case LLM_TYPE_35B_A3B:       return "35B.A3B";
@@ -1703,8 +1704,8 @@ void llama_model::load_hparams(llama_model_loader & ml) {
             } break;
         case LLM_ARCH_DEEPSEEK2:
             {
-                // lite variants include DeepSeek-V2-Lite, GigaChat3-10B-A1.8B
-                const bool is_lite = (hparams.n_layer == 27 || hparams.n_layer == 26);
+                // lite variants include DeepSeek-V2-Lite, GigaChat3-10B-A1.8B, Kanana-2-30B-A3B
+                const bool is_lite = (hparams.n_layer == 27 || hparams.n_layer == 26 || (hparams.n_layer == 48 && n_vocab == 128256));
 
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
                 ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,   hparams.n_layer_dense_lead);
@@ -2381,7 +2382,11 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     hparams.recurrent_layer_arr[il] = hparams.n_head_kv(il) == 0;
                 }
 
-                type = LLM_TYPE_8B_A1B;
+                switch (hparams.n_layer) {
+                    case 24: type = LLM_TYPE_8B_A1B;  break;
+                    case 40: type = LLM_TYPE_24B_A2B; break;
+                    default: type = LLM_TYPE_UNKNOWN;
+                }
             } break;
         case LLM_ARCH_SMALLTHINKER:
             {
