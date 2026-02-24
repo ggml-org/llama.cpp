@@ -3102,8 +3102,13 @@ static void quantize_row_iq2_xxs_impl(const float * GGML_RESTRICT x, void * GGML
                 memset(L, 0, 32);
                 continue;
             }
-            float scale = make_qp_quants(32, kMaxQ+1, xval, (uint8_t*)L, weight);
+            float scale = make_qp_quants(32, kMaxQ+1, xval, (uint8_t*)Laux, weight);
             float eff_max = scale*kMaxQ;
+            memset(L, 0, 32);
+            if (eff_max <= 0) {
+                scales[ib] = 0;
+                continue;
+            }
             float best = 0;
             for (int is = -6; is <= 6; ++is) {
                 float id = (2*kMaxQ-1+is*0.1f)/eff_max;
@@ -3278,6 +3283,7 @@ static void quantize_row_iq2_xs_impl(const float * GGML_RESTRICT x, void * GGML_
                 memset(L, 0, 16);
                 continue;
             }
+            memset(L, 0, 16);
             float best = 0;
             float scale = max/(2*kMaxQ-1);
             is_on_grid[0] = is_on_grid[1] = true;
@@ -3719,6 +3725,7 @@ static void quantize_row_iq3_xxs_impl(int grid_size, const float * GGML_RESTRICT
                 memset(L, 0, 32);
                 continue;
             }
+            memset(L, 0, 32);
             float best = 0;
             float scale = max/(2*kMaxQ-1);
             for (int k = 0; k < 8; ++k) is_on_grid[k] = true;
@@ -3926,6 +3933,7 @@ static void quantize_row_iq3_s_impl(int block_size, const float * GGML_RESTRICT 
                 scales[ib] = 0;
                 continue;
             }
+            memset(L, 0, block_size);
             float best = 0;
             float scale = max/(2*kMaxQ-1);
             for (int k = 0; k < bs4; ++k) is_on_grid[k] = false;
@@ -4245,6 +4253,7 @@ static void quantize_row_iq1_s_impl(const float * GGML_RESTRICT x, void * GGML_R
             for (int i = 1; i < block_size; ++i) max = MAX(max, fabsf(xb[i]));
             if (max < GROUP_MAX_EPS_IQ1_S) {
                 scales[ib] = 0;
+                shifts[ib] = 1;
                 memset(L, 1, block_size);
                 continue;
             }
@@ -4285,7 +4294,12 @@ static void quantize_row_iq1_s_impl(const float * GGML_RESTRICT x, void * GGML_R
                     }
                 }
             }
-            GGML_ASSERT(besti1 >= 0 && besti2 >= 0 && best_shift != 0);
+            if (besti1 < 0 || besti2 < 0 || best_shift == 0) {
+                scales[ib] = 0;
+                shifts[ib] = 1;
+                memset(L, 1, block_size);
+                continue;
+            }
             for (int j =      0; j < besti1; ++j) L[idx[2*j]] = 0;
             for (int j = besti1; j < besti2; ++j) L[idx[2*j]] = 1;
             for (int j = besti2; j < block_size; ++j) L[idx[2*j]] = 2;
@@ -4429,6 +4443,7 @@ static void quantize_row_iq1_m_impl(const float * GGML_RESTRICT x, void * GGML_R
             for (int i = 1; i < block_size; ++i) max = MAX(max, fabsf(xb[i]));
             if (max < GROUP_MAX_EPS_IQ1_M) {
                 scales[ib] = 0;
+                shifts[ib] = 0;
                 memset(L, 1, block_size);
                 continue;
             }
@@ -4527,7 +4542,12 @@ static void quantize_row_iq1_m_impl(const float * GGML_RESTRICT x, void * GGML_R
                     }
                 }
             }
-            GGML_ASSERT(besti1 >= 0 && besti2 >= 0 && best_k >= 0);
+            if (besti1 < 0 || besti2 < 0 || best_k < 0) {
+                scales[ib] = 0;
+                shifts[ib] = 0;
+                memset(L, 1, block_size);
+                continue;
+            }
             for (int j =      0; j < besti1; ++j) L[idx[2*j]] = 0;
             for (int j = besti1; j < besti2; ++j) L[idx[2*j]] = 1;
             for (int j = besti2; j < block_size; ++j) L[idx[2*j]] = 2;
@@ -4876,8 +4896,10 @@ static void quantize_row_iq2_s_impl(const float * GGML_RESTRICT x, void * GGML_R
             for (int i = 1; i < 16; ++i) max = MAX(max, xval[i]);
             if (max < GROUP_MAX_EPS_IQ2_S) {
                 scales[ib] = 0;
+                memset(L, 0, 16);
                 continue;
             }
+            memset(L, 0, 16);
             float best = 0;
             float scale = max/(2*kMaxQ-1);
             is_on_grid[0] = is_on_grid[1] = true;
