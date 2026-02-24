@@ -810,7 +810,7 @@ class MainActivity : AppCompatActivity() {
 
         layout.addView(sectionTitle("Context Window (token)"))
         val ctxGroup = RadioGroup(ctx).apply { orientation = RadioGroup.HORIZONTAL }
-        val ctxOptions = listOf(2048, 4096, 8192)
+        val ctxOptions = listOf(1024, 2048, 4096, 8192)
         val ctxRadios = ctxOptions.map { size ->
             RadioButton(ctx).apply { text = size.toString(); id = View.generateViewId(); isChecked = (size == contextSize) }
         }
