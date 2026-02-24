@@ -78,6 +78,10 @@ int main() {
 
     // Test a split MoE model without specifying quant (should default to Q8_0)
     auto result3 = gguf_fetch_model_meta("ggml-org/GLM-4.6V-GGUF");
+    if (!result3.has_value()) {
+        fprintf(stderr, "SKIP: could not fetch GLM-4.6V metadata (no network?)\n");
+        return 0;
+    }
     const auto & model3 = result3.value();
 
     fprintf(stderr, "Architecture: %s\n", model3.architecture.c_str());

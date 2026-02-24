@@ -158,7 +158,7 @@ static std::optional<gguf_remote_model> gguf_parse_meta(const std::vector<char> 
     uint64_t tensor_count = (uint64_t)tensor_count_raw;
     uint64_t kv_count     = (uint64_t)kv_count_raw;
 
-    gguf_remote_model model = {};
+    gguf_remote_model model;
 
     std::string arch_prefix;
 
@@ -193,24 +193,21 @@ static std::optional<gguf_remote_model> gguf_parse_meta(const std::vector<char> 
         }
 
         if (!arch_prefix.empty()) {
-            bool matched = false;
             uint32_t * target = nullptr;
 
-            if (key == arch_prefix + "embedding_length")         { target = &model.n_embd; }
-            else if (key == arch_prefix + "feed_forward_length")  { target = &model.n_ff; }
-            else if (key == arch_prefix + "block_count")          { target = &model.n_layer; }
+            if (key == arch_prefix + "embedding_length")              { target = &model.n_embd; }
+            else if (key == arch_prefix + "feed_forward_length")      { target = &model.n_ff; }
+            else if (key == arch_prefix + "block_count")              { target = &model.n_layer; }
             else if (key == arch_prefix + "attention.head_count")     { target = &model.n_head; }
             else if (key == arch_prefix + "attention.head_count_kv")  { target = &model.n_head_kv; }
-            else if (key == arch_prefix + "expert_count")         { target = &model.n_expert; }
+            else if (key == arch_prefix + "expert_count")             { target = &model.n_expert; }
             else if (key == arch_prefix + "attention.key_length")     { target = &model.n_embd_head_k; }
             else if (key == arch_prefix + "attention.value_length")   { target = &model.n_embd_head_v; }
 
             if (target) {
                 if (!gguf_read_uint32_val(r, vtype, *target)) { return std::nullopt; }
-                matched = true;
+                continue;
             }
-
-            if (matched) { continue; }
         }
 
         if (!gguf_skip_value(r, vtype)) { return std::nullopt; }
@@ -220,7 +217,6 @@ static std::optional<gguf_remote_model> gguf_parse_meta(const std::vector<char> 
     model.tensors.reserve((size_t)tensor_count);
     for (uint64_t i = 0; i < tensor_count; i++) {
         gguf_remote_tensor t;
-        t.ne[0] = 1; t.ne[1] = 1; t.ne[2] = 1; t.ne[3] = 1;
 
         if (!r.read_str(t.name))    { return std::nullopt; }
         if (!r.read_val(t.n_dims))  { return std::nullopt; }
@@ -399,39 +395,34 @@ static std::optional<gguf_remote_model> fetch_and_parse(
     // Start at 2MB, double each time, cap at 64MB
     size_t chunk_size = 2 * 1024 * 1024;
     const size_t max_chunk = 64 * 1024 * 1024;
-    std::vector<char> body;
 
     while (chunk_size <= max_chunk) {
         fprintf(stderr, "gguf_fetch: downloading %zu bytes from %s\n", chunk_size, filename.c_str());
 
         char range_buf[64];
-        snprintf(range_buf, sizeof(range_buf), "bytes=%zu-%zu", body.size(), chunk_size - 1);
+        snprintf(range_buf, sizeof(range_buf), "bytes=0-%zu", chunk_size - 1);
         httplib::Headers headers = {{"Range", range_buf}};
 
-        auto [code, body_buf] = gguf_http_get(url, headers, 120);
+        auto [code, body] = gguf_http_get(url, headers, 120);
         if (code != 200 && code != 206) {
             fprintf(stderr, "gguf_fetch: HTTP %ld fetching %s\n", code, url.c_str());
             return std::nullopt;
         }
 
-        if (body_buf.empty()) {
+        if (body.empty()) {
             fprintf(stderr, "gguf_fetch: empty response\n");
             return std::nullopt;
         }
 
-        if (code == 206) {
-            body.insert(body.end(), body_buf.begin(), body_buf.end());
-        }
-        if (code == 200) {
-            body = body_buf;
-        }
-
         auto result = gguf_parse_meta(body);
         if (result.has_value()) {
-            bool ok = write_file(cache_path, body);
-            fprintf(stderr, "gguf_fetch: cache write %s (%s, %zu bytes)\n",
-                    ok ? "OK" : "FAILED", cache_path.c_str(), body.size());
+            write_file(cache_path, body);
             return result;
+        }
+
+        if (code == 200) {
+            fprintf(stderr, "gguf_fetch: server returned full response but metadata parse failed\n");
+            return std::nullopt;
         }
 
         // Parse failed, try larger chunk
@@ -505,13 +496,14 @@ std::optional<gguf_remote_model> gguf_fetch_model_meta(
                 model.n_split, model.n_split - 1);
 
         for (int i = 2; i <= model.n_split; i++) {
-            char shard_name[256];
-            snprintf(shard_name, sizeof(shard_name), "%s-%05d-of-%05d.gguf",
-                     split_prefix.c_str(), i, (int)model.n_split);
+            char num_buf[6], total_buf[6];
+            snprintf(num_buf,   sizeof(num_buf),   "%05d", i);
+            snprintf(total_buf, sizeof(total_buf), "%05d", (int)model.n_split);
+            std::string shard_name = split_prefix + "-" + num_buf + "-of-" + total_buf + ".gguf";
 
             auto shard = fetch_or_cached(repo, shard_name, cdir, repo_part);
             if (!shard.has_value()) {
-                fprintf(stderr, "gguf_fetch: failed to fetch shard %d: %s\n", i, shard_name);
+                fprintf(stderr, "gguf_fetch: failed to fetch shard %d: %s\n", i, shard_name.c_str());
                 return std::nullopt;
             }
 
