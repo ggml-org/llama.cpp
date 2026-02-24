@@ -69,7 +69,7 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_load(JNIEnv *env, jobject, jstr
     return 0;
 }
 
-static llama_context *init_context(llama_model *model, const int n_ctx = DEFAULT_CONTEXT_SIZE) {
+static llama_context *init_context(llama_model *model, const int n_ctx = DEFAULT_CONTEXT_SIZE, const bool flash_attn = false) {
     if (!model) {
         LOGe("%s: model cannot be null", __func__);
         return nullptr;
@@ -87,6 +87,7 @@ static llama_context *init_context(llama_model *model, const int n_ctx = DEFAULT
              __func__, trained_context_size, n_ctx);
     }
     ctx_params.n_ctx = n_ctx;
+    ctx_params.flash_attn = flash_attn;
     ctx_params.n_batch = BATCH_SIZE;
     ctx_params.n_ubatch = BATCH_SIZE;
     ctx_params.n_threads = n_threads;
@@ -118,13 +119,14 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_prepare(
         jint n_ctx,
         jfloat temperature,
         jfloat top_p,
-        jint top_k
+        jint top_k,
+        jboolean flash_attn
 ) {
     g_context_size = n_ctx;
-    LOGi("prepare(): context_size=%d temp=%.2f top_p=%.2f top_k=%d",
-         g_context_size, temperature, top_p, top_k);
+    LOGi("prepare(): context_size=%d temp=%.2f top_p=%.2f top_k=%d flash_attn=%d",
+         g_context_size, temperature, top_p, top_k, (int)flash_attn);
 
-    auto *context = init_context(g_model, g_context_size);
+    auto *context = init_context(g_model, g_context_size, (bool)flash_attn);
     if (!context) { return 1; }
     g_context = context;
     g_batch = llama_batch_init(BATCH_SIZE, 0, 1);
