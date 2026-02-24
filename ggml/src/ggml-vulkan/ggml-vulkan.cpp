@@ -13824,6 +13824,18 @@ static uint32_t ggml_vk_fuse_multi_add(ggml_backend_vk_context * ctx, const stru
     return num_adds;
 }
 
+static int32_t find_first_set(uint32_t x) {
+    int32_t ret = 0;
+    if (!x) {
+        return -1;
+    }
+    while (!(x & 1)) {
+        x >>= 1;
+        ret++;
+    }
+    return ret;
+}
+
 static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     VK_LOG_DEBUG("ggml_backend_vk_graph_compute(" << cgraph->n_nodes << " nodes)");
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
@@ -14056,7 +14068,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
             ggml_tensor *output_nodes[2] {};
             output_nodes[0] = cgraph->nodes[i + ctx->num_additional_fused_ops];
             if (bits) {
-                int output_idx = (uint32_t)ceilf(log2f(float(bits)));
+                int output_idx = find_first_set(bits);
                 GGML_ASSERT(bits == (1u << output_idx));
                 output_nodes[1] = cgraph->nodes[i + output_idx];
             }
@@ -14089,6 +14101,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
                                 for (int n = 0; n < k; ++n) {
                                     if (cgraph->nodes[i + n] == src) {
                                         found = true;
+                                        break;
                                     }
                                 }
                                 if (!found) {
