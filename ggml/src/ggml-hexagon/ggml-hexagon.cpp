@@ -1749,23 +1749,6 @@ static inline bool ggml_backend_buffer_is_hexagon_repack(const struct ggml_backe
     return b->buft->iface.alloc_buffer == ggml_backend_hexagon_repack_buffer_type_alloc_buffer;
 }
 
-static bool hex_supported_dims2(const struct ggml_tensor * x, const struct ggml_tensor * y) {
-    if (x->ne[0] != y->ne[0]) {
-        return false;
-    }
-    if (x->ne[1] != y->ne[1]) {
-        return false;
-    }
-    if (x->ne[2] != y->ne[2]) {
-        return false;
-    }
-    if (x->ne[3] != y->ne[3]) {
-        return false;
-    }
-
-    return true;
-}
-
 static bool ggml_hexagon_supported_flash_attn_ext(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * src1 = op->src[1];
@@ -1797,43 +1780,6 @@ static bool ggml_hexagon_supported_flash_attn_ext(const struct ggml_hexagon_sess
     return opt_experimental;
 }
 
-static bool hex_supported_src0_type(ggml_type t) {
-    return t == GGML_TYPE_F32;
-}
-
-static bool hex_supported_src1_type(ggml_type t) {
-    return t == GGML_TYPE_F32;
-}
-
-static bool hex_supported_src2_type(ggml_type t) {
-    return t == GGML_TYPE_F32;
-}
-
-static bool hex_supported_src1_type2(ggml_type t) {
-    return t == GGML_TYPE_F16;
-}
-
-static bool hex_supported_src1_type3(ggml_type t) {
-    return t == GGML_TYPE_I32;
-}
-
-static bool hex_supported_dst_type(ggml_type t) {
-    return t == GGML_TYPE_F32;
-}
-
-static bool hex_supported_dims(const struct ggml_tensor * x, const struct ggml_tensor * y) {
-    // TODO: support broadcast for ne[2 and 3]
-    if (x->ne[0] != y->ne[0]) {
-        return false;
-    }
-    if (x->ne[2] != y->ne[2]) {
-        return false;
-    }
-    if (x->ne[3] != y->ne[3]) {
-        return false;
-    }
-    return true;
-}
 
 static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * sess, const struct ggml_tensor * dst) {
     const struct ggml_tensor * src0 = dst->src[0];
@@ -1919,19 +1865,19 @@ static bool ggml_hexagon_supported_binary(const struct ggml_hexagon_session * se
     const struct ggml_tensor * src1 = op->src[1];
     const struct ggml_tensor * dst  = op;
 
-    if (!hex_supported_src0_type(src0->type)) {
+    if (src0->type != GGML_TYPE_F32) {
         return false;
     }
-    if (!hex_supported_src1_type(src1->type)) {
+    if (src1->type != GGML_TYPE_F32) {
         return false;
     }
-    if (!hex_supported_dst_type(dst->type)) {
+    if (dst->type != GGML_TYPE_F32) {
         return false;
     }
-    if (!hex_supported_dims2(src0, dst)) {
+    if (!ggml_are_same_shape(src0, dst)) {
         return false;
     }
-    if (!ggml_can_repeat(src1, src0)) {
+    if (!ggml_can_repeat(src1, src0) || ggml_is_permuted(src1)) {
         return false;
     }
 
@@ -1943,16 +1889,16 @@ static bool ggml_hexagon_supported_add_id(const struct ggml_hexagon_session * se
     const struct ggml_tensor * src1 = op->src[1];
     const struct ggml_tensor * dst  = op;
 
-    if (!hex_supported_src0_type(src0->type)) {
+    if (src0->type != GGML_TYPE_F32) {
         return false;
     }
-    if (!hex_supported_src1_type(src1->type)) {
+    if (src1->type != GGML_TYPE_F32) {
         return false;
     }
-    if (!hex_supported_dst_type(dst->type)) {
+    if (dst->type != GGML_TYPE_F32) {
         return false;
     }
-    if (!hex_supported_dims2(src0, dst)) {
+    if (!ggml_are_same_shape(src0, dst)) {
         return false;
     }
 
@@ -1968,13 +1914,13 @@ static bool ggml_hexagon_supported_unary(const struct ggml_hexagon_session * ses
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * dst  = op;
 
-    if (!hex_supported_src0_type(src0->type)) {
+    if (src0->type != GGML_TYPE_F32) {
         return false;
     }
-    if (!hex_supported_dst_type(dst->type)) {
+    if (dst->type != GGML_TYPE_F32) {
         return false;
     }
-    if (!hex_supported_dims2(src0, dst)) {
+    if (!ggml_are_same_shape(src0, dst)) {
         return false;
     }
 
@@ -1990,10 +1936,10 @@ static bool ggml_hexagon_supported_sum_rows(const struct ggml_hexagon_session * 
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * dst  = op;
 
-    if (!hex_supported_src0_type(src0->type)) {
+    if (src0->type != GGML_TYPE_F32) {
         return false;
     }
-    if (!hex_supported_dst_type(dst->type)) {
+    if (dst->type != GGML_TYPE_F32) {
         return false;
     }
 
@@ -2011,10 +1957,10 @@ static bool ggml_hexagon_supported_activations(const struct ggml_hexagon_session
     const struct ggml_tensor * src1 = op->src[1];
     const struct ggml_tensor * dst  = op;
 
-    if (!hex_supported_src0_type(src0->type)) {
+    if (src0->type != GGML_TYPE_F32) {
         return false;
     }
-    if (!hex_supported_dst_type(dst->type)) {
+    if (dst->type != GGML_TYPE_F32) {
         return false;
     }
 
@@ -2023,10 +1969,10 @@ static bool ggml_hexagon_supported_activations(const struct ggml_hexagon_session
     }
 
     if (src1) {
-        if (!hex_supported_src1_type(src1->type)) {
+        if (src1->type != GGML_TYPE_F32) {
             return false;
         }
-        if (!hex_supported_dims2(src0, src1)) {
+        if (!ggml_are_same_shape(src0, src1)) {
             return false;
         }
         if (!ggml_is_contiguous(src1)) {
@@ -2047,15 +1993,15 @@ static bool ggml_hexagon_supported_softmax(const struct ggml_hexagon_session * s
         return false;  // FIXME: add support for sinks
     }
 
-    if (!hex_supported_src0_type(src0->type)) {
+    if (src0->type != GGML_TYPE_F32) {
         return false;
     }
-    if (!hex_supported_dst_type(dst->type)) {
+    if (dst->type != GGML_TYPE_F32) {
         return false;
     }
 
     if (src1) {
-        if (!hex_supported_src1_type(src1->type) && !hex_supported_src1_type2(src1->type)) {
+        if (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_F16) {
             return false;
         }
         if (src0->ne[0] != src1->ne[0]) {
@@ -2162,17 +2108,17 @@ static bool ggml_hexagon_supported_rope(const struct ggml_hexagon_session * sess
     const struct ggml_tensor * src2 = op->src[2];
     const struct ggml_tensor * dst  = op;
 
-    if (!hex_supported_src0_type(src0->type)) {
+    if (src0->type != GGML_TYPE_F32) {
         return false;  // FIXME: add support for GGML_TYPE_F16 for src0
     }
-    if (!hex_supported_dst_type(dst->type)) {
+    if (dst->type != GGML_TYPE_F32) {
         return false;
     }
-    if (!hex_supported_src1_type3(src1->type)) {
+    if (src1->type != GGML_TYPE_I32) {
         return false;
     }
     if (src2) {
-        if (!hex_supported_src2_type(src2->type)) {
+        if (src2->type != GGML_TYPE_F32) {
             return false;
         }
         int n_dims = op_params[1];
