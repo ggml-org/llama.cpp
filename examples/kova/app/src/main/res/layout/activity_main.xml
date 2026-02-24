@@ -106,8 +106,20 @@
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/conversations_list"
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
             android:divider="@null" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Kova v4.0 • matrixportalx ❤️"
+            android:textColor="#E0E0E0"
+            android:textSize="11sp"
+            android:alpha="0.45"
+            android:gravity="center"
+            android:paddingTop="12dp"
+            android:paddingBottom="16dp" />
     </LinearLayout>
 
 </androidx.drawerlayout.widget.DrawerLayout>
