@@ -116,6 +116,7 @@ enum llm_type {
     LLM_TYPE_8B_A1B, // lfm2moe
     LLM_TYPE_16B_A1B,
     LLM_TYPE_21B_A3B, // Ernie MoE small
+    LLM_TYPE_24B_A2B, // lfm2moe
     LLM_TYPE_30B_A3B,
     LLM_TYPE_31B_A3_5B,
     LLM_TYPE_35B_A3B, // Qwen3.5
@@ -475,6 +476,7 @@ struct llama_model {
     struct ggml_tensor * cls_b     = nullptr;
     struct ggml_tensor * cls_out   = nullptr;
     struct ggml_tensor * cls_out_b = nullptr;
+    struct ggml_tensor * cls_norm  = nullptr;
 
     struct ggml_tensor * conv1d   = nullptr;
     struct ggml_tensor * conv1d_b = nullptr;
@@ -491,8 +493,9 @@ struct llama_model {
     //Dense linear projections for SentenceTransformers models like embeddinggemma
     // For Sentence Transformers models structure see
     // https://sbert.net/docs/sentence_transformer/usage/custom_models.html#structure-of-sentence-transformer-models
-    struct ggml_tensor * dense_2_out_layers = nullptr;
-    struct ggml_tensor * dense_3_out_layers = nullptr;
+    struct ggml_tensor * dense_2_out_layers   = nullptr;
+    struct ggml_tensor * dense_2_out_layers_b = nullptr;
+    struct ggml_tensor * dense_3_out_layers   = nullptr;
 
     // gguf metadata
     std::unordered_map<std::string, std::string> gguf_kv;
