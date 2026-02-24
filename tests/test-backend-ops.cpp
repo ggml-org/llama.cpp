@@ -6674,7 +6674,27 @@ struct test_generic_op : public test_case {
         return out;
     }
 
-
+    double max_nmse_err() override {
+        switch (op) {
+        case GGML_OP_MUL_MAT:
+        case GGML_OP_MUL_MAT_ID:
+        case GGML_OP_OUT_PROD:
+        case GGML_OP_FLASH_ATTN_EXT:
+        case GGML_OP_CONV_TRANSPOSE_2D:
+        case GGML_OP_IM2COL:
+        case GGML_OP_CONV_2D:
+        case GGML_OP_CONV_3D:
+        case GGML_OP_SET_ROWS:
+        case GGML_OP_CPY:
+            return 5e-4;
+        case GGML_OP_SOFT_MAX:
+            return 1e-6;
+        case GGML_OP_RWKV_WKV7:
+            return 5e-3;
+        default:
+            return 1e-7;
+        }
+    }
 };
 
 
