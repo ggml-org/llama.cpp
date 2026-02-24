@@ -425,6 +425,51 @@ struct DevicePhaseSchedule {
 };
 
 // =============================================================================
+// Role-Based WG Specialization Structures
+// =============================================================================
+
+// Role categories for persistent TG work-group specialization.
+// Elementwise WGs handle small 1-tile ops (RMS_NORM, MUL, ADD, ROPE, etc.)
+// Matmul WGs handle compute-heavy ops (all MUL_MAT variants, ATTENTION)
+enum class OpRole : int {
+    ELEM   = 0,  // Elementwise (small, 1-few tiles)
+    MATMUL = 1,  // Matrix multiply / attention (many tiles)
+};
+
+// A sync point between roles: one role completes a segment, the other waits.
+struct RoleSyncPoint {
+    int op_before;   // Last op index in the completing role's segment
+    int op_after;    // First op index in the waiting role's segment
+    int from_role;   // Role that signals (0=ELEM, 1=MATMUL)
+};
+
+// Per-role segment: a contiguous range of ops assigned to one role.
+struct RoleSegment {
+    int first_op;    // First op index (into device ops array)
+    int last_op;     // Last op index (inclusive)
+    int role;        // 0=ELEM, 1=MATMUL
+    int total_tiles; // Sum of tiles across all ops in this segment
+    int sync_before; // Sync point index to wait on before starting (-1 = none)
+    int sync_after;  // Sync point index to signal after completing (-1 = none)
+};
+
+// Device-side role schedule passed to the kernel.
+struct DeviceRoleSchedule {
+    const RoleSegment *  elem_segments;     // [n_elem_segments] Segments for elementwise WGs
+    const RoleSegment *  matmul_segments;   // [n_matmul_segments] Segments for matmul WGs
+    int *                sync_flags;        // [n_sync_points * 2] Pairs: elem_done, matmul_done
+    int *                role_tile_counter; // [1] Atomic tile counter for elem role work stealing
+    int *                elem_barrier_cnt;  // [1] Atomic counter for elem-role intra-barrier
+    int *                elem_barrier_sense;// [1] Sense flag for elem-role intra-barrier
+    int *                mm_barrier_cnt;    // [1] Atomic counter for matmul-role intra-barrier
+    int *                mm_barrier_sense;  // [1] Sense flag for matmul-role intra-barrier
+    int                  n_elem_segments;   // Number of elementwise segments
+    int                  n_matmul_segments; // Number of matmul segments
+    int                  n_sync_points;     // Number of cross-role sync points
+    int                  n_elem_wgs;        // Number of WGs assigned to elementwise role
+};
+
+// =============================================================================
 // Persistent Plan and Stats
 // =============================================================================
 
@@ -2586,6 +2631,10 @@ inline bool can_use_xmx(int64_t /* M */, int64_t /* N */, int64_t /* K */) {
 
 namespace ggml_sycl {
 
+// Forward declaration: DeviceOperation is defined in unified-kernel.cpp (device-side struct).
+// Needed for build_role_schedule() method signature.
+struct DeviceOperation;
+
 // Per-operation multi-device split metadata, passed to UnifiedKernel::set_split_config()
 // to populate DeviceOperation cross-device fields during launch_persistent_kernel().
 struct SplitOpMeta {
@@ -2851,6 +2900,16 @@ private:
     std::vector<int>              orig_phase_offset_;
     std::vector<int>              orig_phase_tiles_;
 
+    // Role-based WG specialization state
+    DeviceRoleSchedule     role_schedule_       = {};
+    bool                   role_allocated_       = false;
+    int                    role_pool_n_elem_     = 0;
+    int                    role_pool_n_matmul_   = 0;
+    int                    role_pool_n_sync_     = 0;
+    std::vector<RoleSegment>   host_elem_segments_;
+    std::vector<RoleSegment>   host_matmul_segments_;
+    std::vector<RoleSyncPoint> host_sync_points_;
+
     void copy_plan_shape(const PersistentPlan & src, PersistentPlan & dst);
     void allocate_persistent_buffers(int hidden_dim, int intermediate_dim);
     void free_persistent_buffers();
@@ -2859,6 +2918,7 @@ private:
     int persistent_matmul_tile_cols(OperationType type, int N, int K) const;
     int persistent_num_workgroups(int total_tiles, bool has_attention, bool has_ffn, bool use_split_barrier) const;
     void launch_persistent_kernel();
+    void build_role_schedule(const std::vector<DeviceOperation> & host_ops);
 };
 
 }  // namespace ggml_sycl

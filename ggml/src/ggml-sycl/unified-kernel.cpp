@@ -4032,6 +4032,8 @@ struct PersistentKernelArgs {
     DevicePhaseSchedule     phase;            // Phase scheduling state
     int                     use_phase;        // 1 = phase mode, 0 = DAG/legacy
     int                     n_workgroups;     // Total WGs for device-scope barrier
+    DeviceRoleSchedule      role;             // Role-based WG specialization state
+    int                     use_role;         // 1 = role mode, 0 = fallback to phase/DAG/legacy
 };
 
 // =============================================================================
@@ -4304,6 +4306,326 @@ public:
         }
     }
 
+    // -------------------------------------------------------------------------
+    // Role-specialized execution: elementwise WGs and matmul WGs run
+    // independent op sequences with lightweight atomic flag synchronization
+    // instead of expensive device-scope barriers.
+    // -------------------------------------------------------------------------
+    void run_role_specialized() {
+        const int local_id = item_.get_local_id(0);
+        const int wg_id    = item_.get_group_linear_id();
+        const int n_wgs    = item_.get_group_range(0);
+        const DeviceRoleSchedule & role = args_.role;
+
+        // --- Kernel-side reset of role sync flags (L2 coherency fix) ---
+        // BCS memset from host writes directly to VRAM but does NOT invalidate
+        // the GPU L2 cache. Sync flags written by the PREVIOUS kernel invocation
+        // remain stale in L2, causing spin-wait loops to see non-zero values and
+        // skip synchronization on the second token.  Reset all role-specific
+        // device state here using device-scope atomic stores which go through L2
+        // and properly update the cache lines.
+        if (local_id == 0 && wg_id == 0) {
+            // Zero all cross-role sync flags
+            for (int i = 0; i < role.n_sync_points * 2; i++) {
+                sycl::atomic_ref<int, sycl::memory_order::acq_rel,
+                                 sycl::memory_scope::device,
+                                 sycl::access::address_space::global_space>
+                    flag(role.sync_flags[i]);
+                flag.store(0, sycl::memory_order::release);
+            }
+            // Zero role tile counter
+            sycl::atomic_ref<int, sycl::memory_order::acq_rel,
+                             sycl::memory_scope::device,
+                             sycl::access::address_space::global_space>
+                tc(*role.role_tile_counter);
+            tc.store(0, sycl::memory_order::release);
+            // Zero per-role barrier counters and sense flags
+            sycl::atomic_ref<int, sycl::memory_order::acq_rel,
+                             sycl::memory_scope::device,
+                             sycl::access::address_space::global_space>
+                ec(*role.elem_barrier_cnt);
+            ec.store(0, sycl::memory_order::release);
+            sycl::atomic_ref<int, sycl::memory_order::acq_rel,
+                             sycl::memory_scope::device,
+                             sycl::access::address_space::global_space>
+                es(*role.elem_barrier_sense);
+            es.store(0, sycl::memory_order::release);
+            sycl::atomic_ref<int, sycl::memory_order::acq_rel,
+                             sycl::memory_scope::device,
+                             sycl::access::address_space::global_space>
+                mc(*role.mm_barrier_cnt);
+            mc.store(0, sycl::memory_order::release);
+            sycl::atomic_ref<int, sycl::memory_order::acq_rel,
+                             sycl::memory_scope::device,
+                             sycl::access::address_space::global_space>
+                ms(*role.mm_barrier_sense);
+            ms.store(0, sycl::memory_order::release);
+        }
+        // FULL device barrier — ALL workgroups (both roles) must see the reset
+        // before proceeding to role-specific work.  Uses the global barrier
+        // so that both elem and matmul WGs participate.
+        // Note: device_split_barrier delegates to device_barrier_atomic since
+        // device-scope SPIR-V split barriers are non-functional on Arc B580.
+        if (args_.use_split_barrier != 0) {
+            device_split_barrier(local_id, wg_id, false);
+        } else {
+            device_barrier_atomic(local_id, n_wgs, false);
+        }
+
+        const bool is_elem_wg = (wg_id < role.n_elem_wgs);
+
+        if (is_elem_wg) {
+            // --- Elementwise role ---
+            // Process elementwise segments sequentially, syncing with matmul
+            // role at segment boundaries via atomic flags.
+            for (int seg_idx = 0; seg_idx < role.n_elem_segments; seg_idx++) {
+                const RoleSegment & seg = role.elem_segments[seg_idx];
+
+                // Wait for matmul role to complete its preceding segment
+                // (if this segment depends on matmul output)
+                if (seg.sync_before >= 0) {
+                    // matmul_done flag is at sync_flags[sync_idx * 2 + 1]
+                    const int flag_idx = seg.sync_before * 2 + 1;
+                    if (local_id == 0 && wg_id == 0) {
+                        sycl::atomic_ref<int, sycl::memory_order::acq_rel,
+                                         sycl::memory_scope::device,
+                                         sycl::access::address_space::global_space>
+                            flag(role.sync_flags[flag_idx]);
+                        while (flag.load(sycl::memory_order::acquire) == 0) {
+                            // Spin-wait for matmul role completion
+                        }
+                    }
+                    // Broadcast completion to all elementwise WG threads
+                    sycl::group_barrier(item_.get_group());
+                    // Inter-WG broadcast for multi-WG elementwise role:
+                    // WG 0 saw the flag; other elem WGs need to sync too.
+                    if (role.n_elem_wgs > 1) {
+                        // Use a simple atomic barrier among elem WGs only
+                        device_barrier_atomic_n(local_id, role.n_elem_wgs);
+                    }
+                }
+
+                // Combined completion + counter-reset barrier (same as matmul path).
+                if (seg_idx > 0 && seg.sync_before < 0) {
+                    if (role.n_elem_wgs > 1) {
+                        device_barrier_atomic_n(local_id, role.n_elem_wgs, role.role_tile_counter);
+                    } else {
+                        if (local_id == 0) {
+                            sycl::atomic_ref<int, sycl::memory_order::relaxed,
+                                             sycl::memory_scope::device,
+                                             sycl::access::address_space::global_space>
+                                tc(*role.role_tile_counter);
+                            tc.store(0);
+                        }
+                        sycl::group_barrier(item_.get_group());
+                    }
+                } else {
+                    // First segment or after cross-role sync: just reset counter + barrier
+                    if (local_id == 0 && wg_id == 0) {
+                        sycl::atomic_ref<int, sycl::memory_order::relaxed,
+                                         sycl::memory_scope::device,
+                                         sycl::access::address_space::global_space>
+                            tc(*role.role_tile_counter);
+                        tc.store(0);
+                    }
+                    if (role.n_elem_wgs > 1) {
+                        device_barrier_atomic_n(local_id, role.n_elem_wgs);
+                    } else {
+                        sycl::group_barrier(item_.get_group());
+                    }
+                }
+
+                // Work-steal tiles across all ops in this segment
+                const int seg_total_tiles = seg.total_tiles;
+                while (true) {
+                    int flat_tile = -1;
+                    if (local_id == 0) {
+                        sycl::atomic_ref<int, sycl::memory_order::relaxed,
+                                         sycl::memory_scope::device,
+                                         sycl::access::address_space::global_space>
+                            tc(*role.role_tile_counter);
+                        flat_tile = tc.fetch_add(1);
+                    }
+                    flat_tile = sycl::group_broadcast(item_.get_group(), flat_tile, 0);
+                    if (flat_tile >= seg_total_tiles) break;
+
+                    // Map flat tile to op within segment.
+                    // Walk ops sequentially (typically 1-4 ops per segment).
+                    int cumulative = 0;
+                    for (int op_i = seg.first_op; op_i <= seg.last_op; op_i++) {
+                        const int op_tiles = args_.operations[op_i].n_tiles;
+                        if (flat_tile < cumulative + op_tiles) {
+                            dispatch_operation(args_.operations[op_i], flat_tile - cumulative);
+                            break;
+                        }
+                        cumulative += op_tiles;
+                    }
+                }
+
+                // Signal that this elementwise segment is done
+                if (seg.sync_after >= 0) {
+                    // Barrier among elem WGs first to ensure all tiles complete
+                    if (role.n_elem_wgs > 1) {
+                        device_barrier_atomic_n(local_id, role.n_elem_wgs);
+                    } else {
+                        sycl::group_barrier(item_.get_group());
+                    }
+                    // elem_done flag is at sync_flags[sync_idx * 2]
+                    const int flag_idx = seg.sync_after * 2;
+                    if (local_id == 0 && wg_id == 0) {
+                        sycl::atomic_ref<int, sycl::memory_order::acq_rel,
+                                         sycl::memory_scope::device,
+                                         sycl::access::address_space::global_space>
+                            flag(role.sync_flags[flag_idx]);
+                        flag.store(seg.sync_after + 1, sycl::memory_order::release);  // Use sync index + 1 as non-zero sentinel
+                    }
+                }
+            }
+        } else {
+            // --- Matmul role ---
+            // Matmul WGs are numbered from n_elem_wgs to n_total-1.
+            // They use a separate atomic tile counter for work-stealing.
+            const int matmul_wg_id    = wg_id - role.n_elem_wgs;
+            const int n_matmul_wgs    = item_.get_group_range(0) - role.n_elem_wgs;
+
+            for (int seg_idx = 0; seg_idx < role.n_matmul_segments; seg_idx++) {
+                const RoleSegment & seg = role.matmul_segments[seg_idx];
+
+                // Wait for elementwise role to complete its preceding segment
+                if (seg.sync_before >= 0) {
+                    // elem_done flag is at sync_flags[sync_idx * 2]
+                    const int flag_idx = seg.sync_before * 2;
+                    const int expected = seg.sync_before + 1;
+                    if (local_id == 0 && matmul_wg_id == 0) {
+                        sycl::atomic_ref<int, sycl::memory_order::acq_rel,
+                                         sycl::memory_scope::device,
+                                         sycl::access::address_space::global_space>
+                            flag(role.sync_flags[flag_idx]);
+                        while (flag.load(sycl::memory_order::acquire) < expected) {
+                            // Spin-wait for elementwise role completion
+                        }
+                    }
+                    sycl::group_barrier(item_.get_group());
+                    if (n_matmul_wgs > 1) {
+                        device_barrier_atomic_n(local_id, n_matmul_wgs);
+                    }
+                }
+
+                // Combined completion + counter-reset barrier.
+                // When there's no cross-role sync before this segment (seg.sync_before < 0)
+                // and this isn't the first segment, we need a completion barrier to ensure
+                // all WGs finished the previous segment before the tile counter is reset.
+                // The counter reset is folded into the barrier's "last arrival" branch
+                // to avoid a second barrier, halving the barrier overhead.
+                if (seg_idx > 0 && seg.sync_before < 0) {
+                    if (n_matmul_wgs > 1) {
+                        device_barrier_atomic_n(local_id, n_matmul_wgs, args_.tile_counter);
+                    } else {
+                        // Single WG: just reset counter directly (no race possible)
+                        if (local_id == 0) {
+                            sycl::atomic_ref<int, sycl::memory_order::relaxed,
+                                             sycl::memory_scope::device,
+                                             sycl::access::address_space::global_space>
+                                tc(*args_.tile_counter);
+                            tc.store(0);
+                        }
+                        sycl::group_barrier(item_.get_group());
+                    }
+                } else {
+                    // First segment or after cross-role sync: just reset counter + barrier
+                    if (local_id == 0 && matmul_wg_id == 0) {
+                        sycl::atomic_ref<int, sycl::memory_order::relaxed,
+                                         sycl::memory_scope::device,
+                                         sycl::access::address_space::global_space>
+                            tc(*args_.tile_counter);
+                        tc.store(0);
+                    }
+                    if (n_matmul_wgs > 1) {
+                        device_barrier_atomic_n(local_id, n_matmul_wgs);
+                    } else {
+                        sycl::group_barrier(item_.get_group());
+                    }
+                }
+
+                // Work-steal tiles across all ops in this matmul segment
+                const int seg_total_tiles = seg.total_tiles;
+                while (true) {
+                    int flat_tile = -1;
+                    if (local_id == 0) {
+                        sycl::atomic_ref<int, sycl::memory_order::relaxed,
+                                         sycl::memory_scope::device,
+                                         sycl::access::address_space::global_space>
+                            tc(*args_.tile_counter);
+                        flat_tile = tc.fetch_add(1);
+                    }
+                    flat_tile = sycl::group_broadcast(item_.get_group(), flat_tile, 0);
+                    if (flat_tile >= seg_total_tiles) break;
+
+                    // Map flat tile to op within segment
+                    int cumulative = 0;
+                    for (int op_i = seg.first_op; op_i <= seg.last_op; op_i++) {
+                        const int op_tiles = args_.operations[op_i].n_tiles;
+                        if (flat_tile < cumulative + op_tiles) {
+                            dispatch_operation(args_.operations[op_i], flat_tile - cumulative);
+                            break;
+                        }
+                        cumulative += op_tiles;
+                    }
+                }
+
+                // After segment: handle multi-device sync if needed
+                // (only matmul ops may need cross-device merge)
+                for (int op_i = seg.first_op; op_i <= seg.last_op; op_i++) {
+                    const DeviceOperation & op = args_.operations[op_i];
+                    if (is_matmul_op(op.type) && op.n_devices > 1 && op.progress_counter) {
+                        // Need inter-matmul-WG barrier first
+                        if (n_matmul_wgs > 1) {
+                            device_barrier_atomic_n(local_id, n_matmul_wgs);
+                        } else {
+                            sycl::group_barrier(item_.get_group());
+                        }
+                        post_matmul_sync(op);
+                        if (n_matmul_wgs > 1) {
+                            device_barrier_atomic_n(local_id, n_matmul_wgs);
+                        } else {
+                            sycl::group_barrier(item_.get_group());
+                        }
+                        wait_for_merge(op);
+                        if (n_matmul_wgs > 1) {
+                            device_barrier_atomic_n(local_id, n_matmul_wgs);
+                        } else {
+                            sycl::group_barrier(item_.get_group());
+                        }
+                        copy_merge_data(op);
+                        if (n_matmul_wgs > 1) {
+                            device_barrier_atomic_n(local_id, n_matmul_wgs);
+                        } else {
+                            sycl::group_barrier(item_.get_group());
+                        }
+                    }
+                }
+
+                // Signal that this matmul segment is done
+                if (seg.sync_after >= 0) {
+                    if (n_matmul_wgs > 1) {
+                        device_barrier_atomic_n(local_id, n_matmul_wgs);
+                    } else {
+                        sycl::group_barrier(item_.get_group());
+                    }
+                    // matmul_done flag is at sync_flags[sync_idx * 2 + 1]
+                    const int flag_idx = seg.sync_after * 2 + 1;
+                    if (local_id == 0 && matmul_wg_id == 0) {
+                        sycl::atomic_ref<int, sycl::memory_order::acq_rel,
+                                         sycl::memory_scope::device,
+                                         sycl::access::address_space::global_space>
+                            flag(role.sync_flags[flag_idx]);
+                        flag.store(seg.sync_after + 1, sycl::memory_order::release);
+                    }
+                }
+            }
+        }
+    }
+
 private:
     const PersistentKernelArgs &    args_;
     sycl::local_accessor<float, 1> slm_;
@@ -4312,13 +4634,22 @@ private:
     // Device-scope split barrier synchronization (default path).
     // Optional tile-counter reset is done by one global thread before barrier.
     void device_split_barrier(int local_id, int wg_id, bool reset_tile_counter = false) {
-        // NOTE: Device-scope SPIR-V split barriers (ControlBarrierArriveINTEL /
-        // ControlBarrierWaitINTEL with ScopeDevice) produce INCORRECT results
-        // on Arc B580 with Level Zero driver 1.14.x, regardless of whether
-        // all invocations or only WG leaders participate. The barrier appears
-        // to not enforce global memory visibility across work-groups.
-        // Fall back to atomic sense-reversing barrier for correctness.
-        // Keeping this function for future driver/HW validation.
+        // SPV_INTEL_split_barrier is INHERENTLY WORKGROUP-ONLY on Intel GPUs.
+        //
+        // The OpenCL spec (cl_intel_split_work_group_barrier) states:
+        //   "Scope for Execution must be WorkGroup."
+        // The underlying VISA SBARRIER instruction has no scope parameter —
+        // it is hardwired to thread-group (workgroup) scope. When IGC lowers
+        // ControlBarrierArriveINTEL with ScopeDevice, the device scope is
+        // silently ignored and only intra-WG synchronization occurs.
+        //
+        // No Intel GPU hardware (Xe, Xe2, PVC) provides a device-scope
+        // barrier instruction. SBARRIER, NBARRIER, and BARRIER are all
+        // thread-group-scoped. Cross-workgroup sync requires software
+        // barriers using device-scope atomics (Sorensen et al., OOPSLA 2016).
+        //
+        // Delegates to atomic sense-reversing barrier unconditionally.
+        (void) wg_id;
         device_barrier_atomic(local_id, item_.get_group_range(0), reset_tile_counter);
     }
 
@@ -4367,6 +4698,52 @@ private:
         }
 
         // Synchronize within WG so all threads see the barrier completion
+        sycl::group_barrier(item_.get_group());
+    }
+
+    // Role-local barrier: synchronizes only n_role_wgs work-groups (not all WGs).
+    // Uses per-role counter/sense from the DeviceRoleSchedule, so elementwise
+    // and matmul WGs can barrier independently without interfering.
+    // Optional tile_counter_to_reset: if non-null, the last WG to arrive resets
+    // the given tile counter to 0 before releasing the barrier, combining the
+    // completion barrier and counter-reset barrier into a single operation.
+    void device_barrier_atomic_n(int local_id, int n_role_wgs, int * tile_counter_to_reset = nullptr) {
+        const int wg_id = item_.get_group_linear_id();
+        const bool is_elem = (wg_id < args_.role.n_elem_wgs);
+
+        sycl::group_barrier(item_.get_group());
+
+        if (local_id == 0) {
+            int * cnt_ptr   = is_elem ? args_.role.elem_barrier_cnt   : args_.role.mm_barrier_cnt;
+            int * sense_ptr = is_elem ? args_.role.elem_barrier_sense : args_.role.mm_barrier_sense;
+
+            sycl::atomic_ref<int, sycl::memory_order::acq_rel,
+                             sycl::memory_scope::device,
+                             sycl::access::address_space::global_space>
+                cnt(*cnt_ptr);
+            sycl::atomic_ref<int, sycl::memory_order::acq_rel,
+                             sycl::memory_scope::device,
+                             sycl::access::address_space::global_space>
+                sense(*sense_ptr);
+
+            int cur_sense = sense.load();
+            if (cnt.fetch_add(1) == n_role_wgs - 1) {
+                cnt.store(0);
+                if (tile_counter_to_reset) {
+                    sycl::atomic_ref<int, sycl::memory_order::relaxed,
+                                     sycl::memory_scope::device,
+                                     sycl::access::address_space::global_space>
+                        tc(*tile_counter_to_reset);
+                    tc.store(0);
+                }
+                sense.store(1 - cur_sense);
+            } else {
+                while (sense.load() == cur_sense) {
+                    // Busy-wait
+                }
+            }
+        }
+
         sycl::group_barrier(item_.get_group());
     }
 
@@ -5642,10 +6019,11 @@ PersistentStats UnifiedKernel::get_last_stats() const {
 }
 
 bool UnifiedKernel::persistent_use_split_barrier() const {
-    // Device-scope SPIR-V split barriers are BROKEN on Arc B580 (Level Zero
-    // driver 1.14.x): they produce incorrect output regardless of
-    // invocation pattern. Default to atomic sense-reversing barriers which
-    // are correct.  Keep env var for future driver validation.
+    // SPV_INTEL_split_barrier is inherently workgroup-only (OpenCL spec:
+    // "Scope for Execution must be WorkGroup"; VISA SBARRIER has no scope
+    // parameter). No Intel GPU hardware supports device-scope barriers.
+    // device_split_barrier() always delegates to device_barrier_atomic().
+    // Env var retained for diagnostic/benchmarking purposes.
     if (const char * force_split = std::getenv("GGML_SYCL_PERSISTENT_TG_SPLIT_BARRIER")) {
         return std::atoi(force_split) != 0;
     }
@@ -5849,6 +6227,20 @@ void UnifiedKernel::free_persistent_buffers() {
         phase_pool_n_ops_   = 0;
         phase_pool_n_phases_ = 0;
     }
+    // Free role schedule allocations
+    if (role_allocated_) {
+        if (role_schedule_.elem_segments)    sycl::free(const_cast<RoleSegment *>(role_schedule_.elem_segments), queue_);
+        if (role_schedule_.matmul_segments)  sycl::free(const_cast<RoleSegment *>(role_schedule_.matmul_segments), queue_);
+        // sync_flags is the base of a single contiguous allocation that includes
+        // role_tile_counter, elem_barrier_cnt/sense, mm_barrier_cnt/sense
+        if (role_schedule_.sync_flags)       sycl::free(role_schedule_.sync_flags, queue_);
+
+        role_schedule_       = {};
+        role_allocated_      = false;
+        role_pool_n_elem_    = 0;
+        role_pool_n_matmul_  = 0;
+        role_pool_n_sync_    = 0;
+    }
     invalidate_plan_cache();
     persistent_buffer_size_ = 0;
 }
@@ -6047,6 +6439,245 @@ void UnifiedKernel::build_phase_schedule(const std::vector<std::vector<int>> & s
 
     GGML_SYCL_DEBUG("[PERSISTENT-TG] Phase schedule built: %d ops, %d phases\n",
                     n_ops, n_phases);
+}
+
+// -----------------------------------------------------------------------------
+// Role-Based WG Specialization Schedule Construction
+// -----------------------------------------------------------------------------
+
+// Classify ops into "compute role" (matmul WGs) vs "elem role" (dedicated WGs).
+// Most cheap ops are reclassified as compute-role to reduce cross-role sync points.
+// Only ROPE stays as elem-role due to its complex memory access pattern that
+// benefits from dedicated work-groups.
+//
+// IMPORTANT: Consecutive same-role ops with data dependencies are split into
+// separate intra-role segments (with per-role barrier but NO cross-role sync).
+// See build_role_schedule() for the segment splitting logic.
+static bool is_compute_role_op(int type) {
+    const auto t = static_cast<OperationType>(type);
+    // Only ROPE is elem-role — everything else runs on matmul/compute WGs
+    return t != OperationType::ROPE;
+}
+
+void UnifiedKernel::build_role_schedule(const std::vector<DeviceOperation> & host_ops) {
+    const int n_ops = static_cast<int>(host_ops.size());
+    if (n_ops <= 0) return;
+
+    // Step 1: Classify each op as ELEM or MATMUL
+    std::vector<OpRole> op_roles(n_ops);
+    int n_elem_ops = 0;
+    int n_matmul_ops = 0;
+    for (int i = 0; i < n_ops; i++) {
+        if (is_compute_role_op(host_ops[i].type)) {
+            op_roles[i] = OpRole::MATMUL;
+            n_matmul_ops++;
+        } else {
+            op_roles[i] = OpRole::ELEM;
+            n_elem_ops++;
+        }
+    }
+
+    // If all ops are one role, no point in specialization — fall back to phase mode.
+    if (n_elem_ops == 0 || n_matmul_ops == 0) {
+        host_elem_segments_.clear();
+        host_matmul_segments_.clear();
+        host_sync_points_.clear();
+        role_allocated_ = false;
+        GGML_SYCL_DEBUG("[PERSISTENT-TG] Role schedule skipped: all ops are same role (%d elem, %d matmul)\n",
+                        n_elem_ops, n_matmul_ops);
+        return;
+    }
+
+    // Step 2: Build segments that preserve data-dependency ordering while
+    // minimizing barrier overhead.
+    //
+    // Key invariant: within a segment, tiles from different ops can be processed
+    // in ANY order by different WGs. Therefore, only INDEPENDENT ops can share a
+    // segment. Dependent ops (e.g., ADD reading from OUT_PROJ output) must be in
+    // separate segments, ordered by the completion barrier + counter-reset barrier.
+    //
+    // Merging rules:
+    //   - Role transitions always create a new segment (cross-role sync point).
+    //   - Consecutive MATMUL ops (MATMUL_* types) of the same role are merged
+    //     because they're independent projections from the same input (Q/K/V,
+    //     GATE/UP). Their outputs don't feed each other.
+    //   - All other consecutive same-role ops create separate segments because
+    //     they typically have sequential data dependencies (e.g., RMS_NORM →
+    //     matmul, OUT_PROJ → ADD, SILU_MUL → DOWN).
+    //
+    // Cross-role sync points (expensive: atomic flag + spin-wait) are only
+    // created at role transitions. Within the same role, consecutive segments
+    // are ordered by the completion-barrier + counter-reset-barrier mechanism,
+    // which is much cheaper (intra-role barriers only, no flag spin-wait).
+    host_elem_segments_.clear();
+    host_matmul_segments_.clear();
+    host_sync_points_.clear();
+
+    struct TempSegment {
+        int first_op;
+        int last_op;
+        OpRole role;
+        int total_tiles;
+    };
+    std::vector<TempSegment> all_segments;
+    all_segments.reserve(n_ops);
+
+    // Helper: check if an op is a matmul projection (can be merged with adjacent matmuls)
+    auto is_mergeable_matmul = [](int type) -> bool {
+        const auto t = static_cast<OperationType>(type);
+        return t == OperationType::MATMUL_Q_PROJ  || t == OperationType::MATMUL_K_PROJ  ||
+               t == OperationType::MATMUL_V_PROJ  || t == OperationType::MATMUL_OUT_PROJ ||
+               t == OperationType::MATMUL_GATE    || t == OperationType::MATMUL_UP       ||
+               t == OperationType::MATMUL_DOWN    || t == OperationType::MATMUL_GATE_UP_SILU;
+    };
+
+    int seg_start = 0;
+    OpRole cur_role = op_roles[0];
+    int seg_tiles = host_ops[0].n_tiles;
+
+    for (int i = 1; i < n_ops; i++) {
+        // Always break at role transitions
+        bool break_segment = (op_roles[i] != cur_role);
+
+        if (!break_segment) {
+            // Same role: only merge consecutive matmul ops (independent projections).
+            // All other same-role transitions create a new segment to preserve
+            // data-dependency ordering via the completion barrier.
+            const bool prev_is_matmul = is_mergeable_matmul(host_ops[i - 1].type);
+            const bool curr_is_matmul = is_mergeable_matmul(host_ops[i].type);
+            break_segment = !(prev_is_matmul && curr_is_matmul);
+        }
+
+        if (break_segment) {
+            all_segments.push_back({seg_start, i - 1, cur_role, seg_tiles});
+            seg_start = i;
+            cur_role = op_roles[i];
+            seg_tiles = host_ops[i].n_tiles;
+        } else {
+            seg_tiles += host_ops[i].n_tiles;
+        }
+    }
+    // Final segment
+    all_segments.push_back({seg_start, n_ops - 1, cur_role, seg_tiles});
+
+    // Step 3: Create sync points at role transitions.
+    // Between consecutive segments of different roles, we need a sync point.
+    // sync_point[k]: segment k signals, segment k+1 waits.
+    int n_sync = 0;
+    for (size_t s = 1; s < all_segments.size(); s++) {
+        if (all_segments[s].role != all_segments[s - 1].role) {
+            RoleSyncPoint sp;
+            sp.op_before  = all_segments[s - 1].last_op;
+            sp.op_after   = all_segments[s].first_op;
+            sp.from_role  = static_cast<int>(all_segments[s - 1].role);
+            host_sync_points_.push_back(sp);
+            n_sync++;
+        }
+    }
+
+    // Step 4: Build per-role segment lists with sync linkage.
+    // Walk all_segments, assign sync_before/sync_after based on transition order.
+    int sync_idx = 0;
+    for (size_t s = 0; s < all_segments.size(); s++) {
+        const auto & ts = all_segments[s];
+        RoleSegment seg;
+        seg.first_op    = ts.first_op;
+        seg.last_op     = ts.last_op;
+        seg.role        = static_cast<int>(ts.role);
+        seg.total_tiles = ts.total_tiles;
+        seg.sync_before = -1;
+        seg.sync_after  = -1;
+
+        // Check if there's a sync point before this segment (i.e., between s-1 and s)
+        if (s > 0 && all_segments[s].role != all_segments[s - 1].role) {
+            // This segment needs to wait for the sync point at (sync_idx - 1)
+            // The sync_idx was already incremented for the transition between s-1 and s
+            seg.sync_before = sync_idx - 1;
+        }
+        // Check if there's a sync point after this segment (i.e., between s and s+1)
+        if (s + 1 < all_segments.size() && all_segments[s].role != all_segments[s + 1].role) {
+            seg.sync_after = sync_idx;
+            sync_idx++;
+        }
+
+        if (ts.role == OpRole::ELEM) {
+            host_elem_segments_.push_back(seg);
+        } else {
+            host_matmul_segments_.push_back(seg);
+        }
+    }
+
+    // Step 5: Allocate device memory for sync flags and role-local barriers.
+    // We need: n_sync_points * 2 ints for sync flags (elem_done + matmul_done)
+    //          1 int for role_tile_counter
+    //          4 ints for per-role barrier (elem_cnt, elem_sense, mm_cnt, mm_sense)
+    const int sync_ints = n_sync * 2 + 1 + 4;  // sync_flags + tile_counter + barriers
+    const int n_elem_segs   = static_cast<int>(host_elem_segments_.size());
+    const int n_matmul_segs = static_cast<int>(host_matmul_segments_.size());
+
+    // Allocate or reuse device arrays
+    if (!role_allocated_ ||
+        n_elem_segs > role_pool_n_elem_ ||
+        n_matmul_segs > role_pool_n_matmul_ ||
+        n_sync > role_pool_n_sync_) {
+        // Free old allocations
+        if (role_allocated_) {
+            if (role_schedule_.elem_segments)    sycl::free(const_cast<RoleSegment *>(role_schedule_.elem_segments), queue_);
+            if (role_schedule_.matmul_segments)  sycl::free(const_cast<RoleSegment *>(role_schedule_.matmul_segments), queue_);
+            if (role_schedule_.sync_flags)       sycl::free(role_schedule_.sync_flags, queue_);
+            if (role_schedule_.role_tile_counter) sycl::free(role_schedule_.role_tile_counter, queue_);
+            // Barrier counters are within the sync_flags allocation (contiguous block)
+            // Actually let's use a single allocation for all sync ints
+        }
+
+        // Allocate segments
+        const int alloc_elem   = n_elem_segs + 16;
+        const int alloc_matmul = n_matmul_segs + 16;
+        const int alloc_sync   = std::max(n_sync, 1) + 8;
+
+        role_schedule_.elem_segments   = sycl::malloc_device<RoleSegment>(alloc_elem, queue_);
+        role_schedule_.matmul_segments = sycl::malloc_device<RoleSegment>(alloc_matmul, queue_);
+
+        // Single allocation for all sync/counter/barrier ints.
+        // Each atomic counter/sense pair is padded to 64 bytes (16 ints) to avoid
+        // false sharing on GPU L2 cache lines. Without padding, the elem and matmul
+        // barrier counters share a cache line, causing stale reads in spin-wait loops
+        // and barrier malfunction with 3+ elementwise WGs.
+        constexpr int CL_INTS = 16;  // 64 bytes / 4 bytes per int
+        const int total_ints = alloc_sync * 2 + CL_INTS * 5;  // sync_flags + 5 padded slots
+        int * sync_block = sycl::malloc_device<int>(total_ints, queue_);
+        role_schedule_.sync_flags        = sync_block;                                    // [0..2*alloc_sync)
+        role_schedule_.role_tile_counter = sync_block + alloc_sync * 2;                   // CL-aligned slot 0
+        role_schedule_.elem_barrier_cnt  = sync_block + alloc_sync * 2 + CL_INTS;         // CL-aligned slot 1
+        role_schedule_.elem_barrier_sense= sync_block + alloc_sync * 2 + CL_INTS * 2;     // CL-aligned slot 2
+        role_schedule_.mm_barrier_cnt    = sync_block + alloc_sync * 2 + CL_INTS * 3;     // CL-aligned slot 3
+        role_schedule_.mm_barrier_sense  = sync_block + alloc_sync * 2 + CL_INTS * 4;     // CL-aligned slot 4
+
+        role_pool_n_elem_   = alloc_elem;
+        role_pool_n_matmul_ = alloc_matmul;
+        role_pool_n_sync_   = alloc_sync;
+        role_allocated_     = true;
+    }
+
+    // Upload segment data to device
+    queue_.memcpy(const_cast<RoleSegment *>(role_schedule_.elem_segments),
+                  host_elem_segments_.data(), n_elem_segs * sizeof(RoleSegment));
+    queue_.memcpy(const_cast<RoleSegment *>(role_schedule_.matmul_segments),
+                  host_matmul_segments_.data(), n_matmul_segs * sizeof(RoleSegment));
+
+    // Zero sync flags + counters
+    const int total_zero = n_sync * 2 + 1 + 4;
+    queue_.memset(role_schedule_.sync_flags, 0, total_zero * sizeof(int));
+    queue_.wait();
+
+    role_schedule_.n_elem_segments   = n_elem_segs;
+    role_schedule_.n_matmul_segments = n_matmul_segs;
+    role_schedule_.n_sync_points     = n_sync;
+
+    GGML_SYCL_DEBUG("[PERSISTENT-TG] Role schedule: %d elem segs, %d matmul segs, %d cross-role syncs "
+                    "(%d elem ops, %d matmul ops, %d total segs)\n",
+                    n_elem_segs, n_matmul_segs, n_sync, n_elem_ops, n_matmul_ops,
+                    n_elem_segs + n_matmul_segs);
 }
 
 // -----------------------------------------------------------------------------
@@ -7558,37 +8189,86 @@ void UnifiedKernel::launch_persistent_kernel() {
     DeviceOperation * d_ops = static_cast<DeviceOperation *>(d_ops_pool_);
     queue_.memcpy(d_ops, host_ops.data(), host_ops.size() * sizeof(DeviceOperation)).wait();
 
+    // Build role schedule from the final device ops (after fusion).
+    // This classifies ops into ELEM/MATMUL roles and identifies sync points.
+    build_role_schedule(host_ops);
+
     // Kernel configuration
     constexpr int BLOCK_SIZE = 256;
     const bool use_split_barrier = persistent_use_split_barrier();
     int n_workgroups;
-    // Scheduling mode selection: phase > dag > legacy barriers
+    // Scheduling mode selection: role > phase > dag > legacy barriers
+    // Role mode: split WGs into elementwise + matmul roles with atomic flag sync (fastest)
     // Phase mode: pre-computed topological levels with O(1) tile claiming (default when available)
     // DAG mode: per-op atomic dependency counters (fallback)
     // Legacy: device-scope barriers (slowest, set GGML_SYCL_PERSISTENT_TG_DAG=0)
+    bool use_role_mode = role_allocated_ && !host_elem_segments_.empty() && !host_matmul_segments_.empty();
     bool use_phase_mode = phase_allocated_;
     bool use_dag_mode = dag_allocated_;
-    if (use_phase_mode) {
-        // Phase mode is default when available. Set GGML_SYCL_PERSISTENT_TG_PHASE=0 to disable.
-        static int phase_env_checked = -1;
-        if (phase_env_checked < 0) {
-            const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_PHASE");
-            phase_env_checked = (env != nullptr && std::strcmp(env, "0") == 0) ? 0 : 1;
+    // Role mode: opt-in via GGML_SYCL_PERSISTENT_TG_ROLE=1 (default OFF, experimental).
+    // Also disabled for multi-device split (role sync not yet compatible with cross-device merge).
+    if (use_role_mode) {
+        static int role_env_checked = -1;
+        if (role_env_checked < 0) {
+            const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_ROLE");
+            role_env_checked = (env != nullptr && std::strcmp(env, "1") == 0) ? 1 : 0;
         }
-        use_phase_mode = (phase_env_checked != 0);
+        const bool split_active = split_config_set_ && split_config_.n_devices > 1;
+        use_role_mode = (role_env_checked == 1) && !split_active;
     }
-    if (use_phase_mode) {
-        use_dag_mode = false;  // Phase mode supersedes DAG mode
-    } else if (use_dag_mode) {
-        static int dag_env_checked = -1;
-        if (dag_env_checked < 0) {
-            const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_DAG");
-            dag_env_checked = (env != nullptr && std::strcmp(env, "0") == 0) ? 0 : 1;
+    if (use_role_mode) {
+        // Role mode supersedes all other modes
+        use_phase_mode = false;
+        use_dag_mode = false;
+    } else {
+        if (use_phase_mode) {
+            // Phase mode is default when available. Set GGML_SYCL_PERSISTENT_TG_PHASE=0 to disable.
+            static int phase_env_checked = -1;
+            if (phase_env_checked < 0) {
+                const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_PHASE");
+                phase_env_checked = (env != nullptr && std::strcmp(env, "0") == 0) ? 0 : 1;
+            }
+            use_phase_mode = (phase_env_checked != 0);
         }
-        use_dag_mode = (dag_env_checked != 0);
+        if (use_phase_mode) {
+            use_dag_mode = false;  // Phase mode supersedes DAG mode
+        } else if (use_dag_mode) {
+            static int dag_env_checked = -1;
+            if (dag_env_checked < 0) {
+                const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_DAG");
+                dag_env_checked = (env != nullptr && std::strcmp(env, "0") == 0) ? 0 : 1;
+            }
+            use_dag_mode = (dag_env_checked != 0);
+        }
     }
 
-    if (use_phase_mode || use_dag_mode) {
+    int n_elem_wgs = 0;
+    if (use_role_mode) {
+        // Role mode: n_elem_wgs (small, handles tiny ops) + n_matmul_wgs (large, handles compute).
+        // Default n_elem=1: most elementwise ops have 1 tile (RMS_NORM, MUL, ADD, ROPE, SOFTMAX),
+        // so multi-WG parallelism adds overhead without benefit. The performance win comes from
+        // dedicating maximum WGs to the compute-heavy matmul role.
+        n_elem_wgs = 1;   // Default: 1 elementwise WG (sufficient for 1-tile ops)
+        int n_matmul_wgs = 40;  // Default: 40 matmul WGs
+
+        // Allow env var overrides
+        if (const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_N_ELEM_WGS")) {
+            char * end = nullptr;
+            const long parsed = std::strtol(env, &end, 10);
+            if (end && end != env && parsed > 0 && parsed <= 32) {
+                n_elem_wgs = static_cast<int>(parsed);
+            }
+        }
+        if (const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_N_MATMUL_WGS")) {
+            char * end = nullptr;
+            const long parsed = std::strtol(env, &end, 10);
+            if (end && end != env && parsed > 0 && parsed <= 512) {
+                n_matmul_wgs = static_cast<int>(parsed);
+            }
+        }
+        n_workgroups = n_elem_wgs + n_matmul_wgs;
+        role_schedule_.n_elem_wgs = n_elem_wgs;
+    } else if (use_phase_mode || use_dag_mode) {
         // Phase/DAG mode: WG count scales with GPU size.
         try {
             const int max_cu = (int)queue_.get_device().get_info<sycl::info::device::max_compute_units>();
@@ -7626,7 +8306,11 @@ void UnifiedKernel::launch_persistent_kernel() {
     const bool use_attn_subgroup_dot = persistent_attention_subgroup_dot_enabled();
     if (const char * log_policy = std::getenv("GGML_SYCL_PERSISTENT_TG_LOG_POLICY")) {
         if (std::atoi(log_policy) != 0) {
-            GGML_LOG_INFO("[PERSISTENT-TG] policy: phase=%d dag=%d split=%d n_wgs=%d tiles=%d has_attn=%d has_ffn=%d attn_sg_dot=%d wg_aggr=%d\n",
+            GGML_LOG_INFO("[PERSISTENT-TG] policy: role=%d(elem=%d,mm=%d,sync=%d) phase=%d dag=%d split=%d n_wgs=%d tiles=%d has_attn=%d has_ffn=%d attn_sg_dot=%d wg_aggr=%d\n",
+                    use_role_mode ? 1 : 0,
+                    use_role_mode ? n_elem_wgs : 0,
+                    use_role_mode ? (n_workgroups - n_elem_wgs) : 0,
+                    use_role_mode ? role_schedule_.n_sync_points : 0,
                     use_phase_mode ? 1 : 0,
                     use_dag_mode ? 1 : 0,
                     use_split_barrier ? 1 : 0, n_workgroups, total_tiles,
@@ -7638,8 +8322,18 @@ void UnifiedKernel::launch_persistent_kernel() {
 
     auto run_persistent_kernel = [&](const DeviceOperation * operations, int operation_count) -> double {
         const bool use_dag = use_dag_mode;
+        const bool use_role = use_role_mode;
 
-        if (use_phase_mode) {
+        if (use_role) {
+            // Role mode: reset only the global sync_block (tile_counter, barrier_counter,
+            // barrier_sense) used by device_barrier_atomic at kernel start.
+            // Role-specific sync flags, barrier counters, and sense flags are reset
+            // INSIDE the kernel via device-scope atomic stores to avoid the L2 cache
+            // coherency bug: BCS memset writes to VRAM but does not invalidate L2,
+            // leaving stale non-zero values from the previous token visible to the
+            // kernel on its next invocation.
+            queue_.memset(sync_block_, 0, 3 * sizeof(int)).wait();
+        } else if (use_phase_mode) {
             // Phase mode: reset tile counter + barrier state before each launch
             queue_.memset(sync_block_, 0, 3 * sizeof(int)).wait();
         } else if (use_dag) {
@@ -7668,6 +8362,8 @@ void UnifiedKernel::launch_persistent_kernel() {
         args.phase            = phase_schedule_;
         args.use_phase        = use_phase_mode ? 1 : 0;
         args.n_workgroups     = n_workgroups;
+        args.role             = role_schedule_;
+        args.use_role         = use_role ? 1 : 0;
 
         const auto start = std::chrono::high_resolution_clock::now();
         queue_.submit([&](sycl::handler & cgh) {
@@ -7677,7 +8373,9 @@ void UnifiedKernel::launch_persistent_kernel() {
                 sycl::nd_range<1>(n_workgroups * BLOCK_SIZE, BLOCK_SIZE),
                 [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
                     PersistentTGKernelImpl<BLOCK_SIZE> kernel(args_copy, slm, item);
-                    if (args_copy.use_phase) {
+                    if (args_copy.use_role) {
+                        kernel.run_role_specialized();
+                    } else if (args_copy.use_phase) {
                         kernel.run_phase();
                     } else if (args_copy.use_dag) {
                         kernel.run_dag();
