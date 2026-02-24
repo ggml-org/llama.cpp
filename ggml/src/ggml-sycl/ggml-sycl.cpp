@@ -29033,9 +29033,10 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                 return get_tensor_ptr_view_fast(node);
             };
 
-            bool fast_path_ok    = true;
-            int  op_idx          = 0;
-            int  last_layer_fast = -1;
+            bool fast_path_ok      = true;
+            int  op_idx            = 0;
+            int  last_layer_fast   = -1;
+            int  get_rows_counter  = 0;
 
             for (int i = 0; i < cgraph->n_nodes && fast_path_ok; i++) {
                 ggml_tensor * node = cgraph->nodes[i];
@@ -29077,11 +29078,22 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                                 fast_path_ok = false;
                                 break;
                             }
+                            // Non-weight GET_ROWS: forward src[0] pointer (identity in TG M=1 mode)
+                            if (!ggml_sycl_tensor_is_weight(node->src[0])) {
+                                const void * src_ptr = resolve_input_ptr_no_materialize(node->src[0]);
+                                if (src_ptr) {
+                                    materialized_ptrs[node] = const_cast<void *>(src_ptr);
+                                } else {
+                                    fast_path_ok = false;
+                                }
+                                break;
+                            }
                             ggml_sycl_op_get_rows(ctx, node);
                             q->wait_and_throw();
                             if (ggml_is_contiguous(node) && !ggml_is_permuted(node)) {
+                                const int    gr_idx     = get_rows_counter++;
                                 const size_t bytes      = ggml_nbytes(node);
-                                void *       stable_ptr = kernel.get_rows_stable_ptr(bytes);
+                                void *       stable_ptr = kernel.get_rows_stable_ptr(gr_idx, bytes);
                                 const void * out_ptr    = get_tensor_ptr_view_fast(node);
                                 if (!stable_ptr || !out_ptr) {
                                     fast_path_ok = false;
@@ -29908,13 +29920,40 @@ full_build:
                             quant_type);
 
     // 3. Walk graph and add operations
-    int                                          last_layer     = -1;
-    int                                          min_layer_seen = std::numeric_limits<int>::max();
-    int                                          max_layer_seen = -1;
+    int                                          last_layer        = -1;
+    int                                          min_layer_seen    = std::numeric_limits<int>::max();
+    int                                          max_layer_seen    = -1;
+    int                                          get_rows_counter  = 0;
     // DAG construction: track which graph node produced which op index
     std::unordered_map<const ggml_tensor *, int> tensor_to_op;
     std::vector<int>                             node_to_last_op(cgraph->n_nodes, -1);
     std::vector<int>                             op_to_graph_node;  // reverse: op index → graph node index
+
+    // Helper: find the plan op index that produces the given ggml tensor.
+    // Follows view chains (VIEW/RESHAPE/PERMUTE don't produce ops).
+    // Returns -1 if the tensor comes from an external source (weights, embeddings, KV cache).
+    auto find_source_op = [&](const ggml_tensor * tensor) -> int {
+        if (!tensor) return -1;
+        const ggml_tensor * origin = tensor;
+        int depth = 0;
+        while (origin) {
+            auto it = tensor_to_op.find(origin);
+            if (it != tensor_to_op.end()) {
+                return it->second;
+            }
+            if (origin->view_src) {
+                depth++;
+                origin = origin->view_src;
+            } else {
+                // External input (weight, embedding, KV cache) - no source op
+                GGML_SYCL_DEBUG("[FIND-SRC] external tensor='%s' op=%d depth=%d\n",
+                                tensor->name, tensor->op, depth);
+                return -1;  // external input (weight, embedding, KV cache)
+            }
+        }
+        return -1;
+    };
+
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node       = cgraph->nodes[i];
         const int     ops_before = ops_added;  // track if this node adds an op
@@ -29975,6 +30014,40 @@ full_build:
                                        node->src[1]->type, node->type);
                         return false;
                     }
+                    // Only pre-execute GET_ROWS that read from weight tensors (token
+                    // embedding lookup).  GET_ROWS from computed intermediates (e.g.
+                    // attn_out-N, l_out-N) read stale ggml buffer data because the
+                    // persistent kernel computes those into scratch.  Skip them so
+                    // downstream ops resolve their inputs from the kernel's scratch
+                    // pool via the normal materialized_ptrs chain.
+                    const bool is_weight_lookup = ggml_sycl_tensor_is_weight(node->src[0]);
+                    if (!is_weight_lookup) {
+                        // Non-weight GET_ROWS: row extraction from a computed intermediate.
+                        // In TG mode (M=1), the source tensor has 1 row so GET_ROWS extracts
+                        // row 0 -- an identity operation.  Forward the source pointer directly.
+                        const void * src_ptr = resolve_input_ptr_no_materialize(node->src[0]);
+                        if (src_ptr) {
+                            materialized_ptrs[node] = const_cast<void *>(src_ptr);
+                            GGML_SYCL_DEBUG("[PERSISTENT-TG] Non-weight GET_ROWS forwarded: %s -> %s (ptr=%p)\n",
+                                            node->src[0]->name[0] ? node->src[0]->name : "(unnamed)",
+                                            node->name[0] ? node->name : "(unnamed)",
+                                            src_ptr);
+                            // Register this GET_ROWS passthrough in tensor_to_op so that
+                            // downstream find_source_op() can trace through it.  The GET_ROWS
+                            // is an identity op — its output is produced by whatever plan op
+                            // produced src[0].  Without this, build_scratch_pool() can't remap
+                            // downstream inputs because their source_op stays -1.
+                            int src_op = find_source_op(node->src[0]);
+                            if (src_op >= 0) {
+                                tensor_to_op[node] = src_op;
+                            }
+                        } else {
+                            GGML_LOG_ERROR("[PERSISTENT-TG] Non-weight GET_ROWS: cannot resolve src0=%s\n",
+                                          node->src[0]->name[0] ? node->src[0]->name : "(unnamed)");
+                            return false;
+                        }
+                        break;
+                    }
                     // Keep GET_ROWS outside persistent execution for now.
                     // The in-kernel GET_ROWS path is unstable on B-series Xe and can trigger
                     // UR_RESULT_ERROR_DEVICE_LOST; pre-executing keeps decode robust while the
@@ -29990,9 +30063,10 @@ full_build:
                     }
                     if (ggml_is_contiguous(node) && !ggml_is_permuted(node)) {
                         const size_t bytes      = ggml_nbytes(node);
-                        void *       stable_ptr = kernel.get_rows_stable_ptr(bytes);
+                        const int    gr_idx     = get_rows_counter++;
+                        void *       stable_ptr = kernel.get_rows_stable_ptr(gr_idx, bytes);
                         if (!stable_ptr) {
-                            GGML_LOG_ERROR("[PERSISTENT-TG] GET_ROWS stable alloc failed (%zu bytes)\n", bytes);
+                            GGML_LOG_ERROR("[PERSISTENT-TG] GET_ROWS stable alloc failed (slot=%d, %zu bytes)\n", gr_idx, bytes);
                             return false;
                         }
                         const void * out_ptr = get_tensor_ptr_view_fast(node);
@@ -31504,6 +31578,73 @@ full_build:
                 }
                 op_to_graph_node[o] = i;
             }
+
+            // Scratch pool linkage: annotate each produced op with the plan
+            // operation indices of its input/aux producers.  This replaces the
+            // broken pointer-based remap in build_scratch_pool() that fails
+            // when ggml's allocator recycles buffer addresses.
+            //
+            // For single-op nodes (the common case), the mapping is:
+            //   input ← src that was used for op.input (varies by op type)
+            //   aux   ← src that was used for op.aux   (varies by op type)
+            //
+            // We determine the mapping from the ggml op type:
+            if (node && ops_added == ops_before + 1) {
+                auto & last_op = kernel.get_plan_operations_mut().back();
+                switch (node->op) {
+                    case GGML_OP_ADD:
+                        // input = src[0], aux = src[1]
+                        last_op.input_source_op = find_source_op(node->src[0]);
+                        last_op.aux_source_op   = find_source_op(node->src[1]);
+                        break;
+                    case GGML_OP_MUL:
+                        // input = src[0], aux = src[1] (the norm weights are external)
+                        last_op.input_source_op = find_source_op(node->src[0]);
+                        last_op.aux_source_op   = find_source_op(node->src[1]);
+                        break;
+                    case GGML_OP_RMS_NORM:
+                        // input = src[0] (the input hidden state)
+                        last_op.input_source_op = find_source_op(node->src[0]);
+                        break;
+                    case GGML_OP_MUL_MAT:
+                        // input = src[1] (activations), weights = src[0] (external)
+                        last_op.input_source_op = find_source_op(node->src[1]);
+                        break;
+                    case GGML_OP_GLU:
+                        {
+                            // GLU: input = gate, aux = up.  The full-build code uses
+                            // the 'swapped' op_param to decide which src is gate vs up.
+                            // Match that logic so scratch-pool remaps to the correct buffers.
+                            const int32_t       swapped  = ggml_get_op_params_i32(node, 1);
+                            const ggml_tensor * gate_src = swapped ? node->src[1] : node->src[0];
+                            const ggml_tensor * up_src   = swapped ? node->src[0] : node->src[1];
+                            last_op.input_source_op = find_source_op(gate_src);
+                            last_op.aux_source_op   = find_source_op(up_src);
+                        }
+                        break;
+                    case GGML_OP_ROPE:
+                        // input = src[0]
+                        last_op.input_source_op = find_source_op(node->src[0]);
+                        break;
+                    case GGML_OP_SOFT_MAX:
+                        // input = src[0], mask = src[1] (external KV mask)
+                        last_op.input_source_op = find_source_op(node->src[0]);
+                        break;
+                    case GGML_OP_FLASH_ATTN_EXT:
+                        // Q = src[0], K = src[1] (KV cache), V = src[2] (KV cache)
+                        last_op.input_source_op = find_source_op(node->src[0]);
+                        break;
+                    case GGML_OP_SET_ROWS:
+                        // input = src[0] (data to write to KV cache, e.g. ROPE'd K or V_PROJ output)
+                        // SET_ROWS writes src[0] into dst at positions given by src[1].
+                        // When scratch pool remaps the source op's output to scratch,
+                        // SET_ROWS must read from scratch (not the stale ggml buffer).
+                        last_op.input_source_op = find_source_op(node->src[0]);
+                        break;
+                    default:
+                        break;
+                }
+            }
         }
         if (profile_build && node) {
             build_ms_by_op[node->op] += std::chrono::duration<double, std::milli>(clock_t::now() - node_start).count();
@@ -32511,18 +32652,25 @@ static bool should_use_persistent_tg(ggml_backend_sycl_context & ctx, ggml_cgrap
 
     // 1b. Model exceeds VRAM or cache has evictions — persistent TG records weight
     // pointers that become stale. Disable to use per-op dispatch.
-    // Exception: tensor split env var is set — split mode manages weight placement
-    // per-device, no eviction. Check env var directly because split_config_init
-    // hasn't been called yet (it's called lazily inside the persistent TG block).
+    // Exceptions that bypass this gate:
+    //   - tensor split env var is set — split mode manages weight placement
+    //   - GGML_SYCL_PERSISTENT_TG explicitly set — user wants persistent TG
+    //   - GGML_SYCL_PERSISTENT_SPLIT explicitly set — user wants persistent split
+    // The persistent plan builder re-resolves all weight pointers fresh each token
+    // via get_tensor_ptr_fast(), so stale pointers from a previous plan are not
+    // a concern. Host-resident weights (after eviction) are accessible via PCIe
+    // zero-copy; the persistent kernel reads them correctly in AOS layout.
     static const bool split_env_set = (std::getenv("GGML_SYCL_SPLIT_RATIO") != nullptr
-                                    || std::getenv("GGML_SYCL_TENSOR_SPLIT") != nullptr);
+                                    || std::getenv("GGML_SYCL_TENSOR_SPLIT") != nullptr
+                                    || persistent_split_env
+                                    || std::getenv("GGML_SYCL_PERSISTENT_TG") != nullptr);
     if (!split_env_set) {
         if (g_model_exceeds_vram.load(std::memory_order_acquire) || ggml_sycl::unified_cache_has_evictions()) {
             GGML_SYCL_DEBUG("[PERSISTENT-TG] Disabled: weight pointers may be stale\n");
             return false;
         }
     } else {
-        GGML_SYCL_DEBUG("[PERSISTENT-TG] Split env set: skipping VRAM/eviction gate\n");
+        GGML_SYCL_DEBUG("[PERSISTENT-TG] Env override set: skipping VRAM/eviction gate\n");
     }
 
     if (!cgraph || cgraph->n_nodes == 0) {
@@ -33019,6 +33167,86 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
         }
 
         kernel.build_scratch_pool();
+
+        // DEBUG: verify first op's input has non-zero data after scratch remap
+        {
+            sycl::queue * dbg_q = sycl_ctx->stream();
+            PersistentStats pre_stats = kernel.get_last_stats();
+            int n_total_ops = pre_stats.n_operations;
+            // Dump first op's input (should be token embedding from GET_ROWS)
+            void * first_input = kernel.scratch_output(-1); // will return nullptr
+            // Use the plan operations directly
+            const auto & plan_ops = kernel.get_plan_operations();
+            if (!plan_ops.empty() && plan_ops[0].input) {
+                float fbuf[4] = {};
+                dbg_q->memcpy(fbuf, plan_ops[0].input, sizeof(fbuf)).wait();
+                fprintf(stderr, "[DBG-OP0] op[0] input: %.6f %.6f %.6f %.6f (ptr=%p, type=%d)\n",
+                        fbuf[0], fbuf[1], fbuf[2], fbuf[3], plan_ops[0].input, (int)plan_ops[0].type);
+            }
+            if (plan_ops.size() > 1 && plan_ops[1].input) {
+                float fbuf[4] = {};
+                dbg_q->memcpy(fbuf, plan_ops[1].input, sizeof(fbuf)).wait();
+                fprintf(stderr, "[DBG-OP1] op[1] input: %.6f %.6f %.6f %.6f (ptr=%p, type=%d)\n",
+                        fbuf[0], fbuf[1], fbuf[2], fbuf[3], plan_ops[1].input, (int)plan_ops[1].type);
+            }
+        }
+
+        // Diagnostic: dump attention op[9] parameters before execution
+        {
+            const auto & plan_ops_dbg = kernel.get_plan_operations();
+            for (int ai = 0; ai < (int)plan_ops_dbg.size() && ai < 20; ai++) {
+                const auto & aop = plan_ops_dbg[ai];
+                if (aop.type == OperationType::ATTENTION_F16 || aop.type == OperationType::ATTENTION_F32) {
+                    sycl::queue * dbg_q = sycl_ctx->stream();
+                    fprintf(stderr, "[DBG-ATTN] op[%d] type=%s seq_len(M)=%d n_heads(N)=%d head_dim(K)=%d "
+                            "n_kv_heads=%d scale=%.6f\n",
+                            ai, aop.type == OperationType::ATTENTION_F16 ? "ATTENTION_F16" : "ATTENTION_F32",
+                            aop.M, aop.N, aop.K, aop.n_kv_heads, aop.scale);
+                    fprintf(stderr, "[DBG-ATTN]   input(Q)=%p weights(K)=%p aux(V)=%p mask=%p output=%p\n",
+                            aop.input, aop.weights, aop.aux, aop.mask, aop.output);
+                    fprintf(stderr, "[DBG-ATTN]   q_nb: %lld %lld %lld %lld\n",
+                            (long long)aop.q_nb0, (long long)aop.q_nb1,
+                            (long long)aop.q_nb2, (long long)aop.q_nb3);
+                    fprintf(stderr, "[DBG-ATTN]   k_nb: %lld %lld %lld %lld\n",
+                            (long long)aop.k_nb0, (long long)aop.k_nb1,
+                            (long long)aop.k_nb2, (long long)aop.k_nb3);
+                    fprintf(stderr, "[DBG-ATTN]   v_nb: %lld %lld %lld %lld\n",
+                            (long long)aop.v_nb0, (long long)aop.v_nb1,
+                            (long long)aop.v_nb2, (long long)aop.v_nb3);
+                    fprintf(stderr, "[DBG-ATTN]   mask_type=%d mask_nb: %lld %lld %lld %lld "
+                            "mask_ne2=%d mask_ne3=%d\n",
+                            aop.mask_type,
+                            (long long)aop.mask_nb0, (long long)aop.mask_nb1,
+                            (long long)aop.mask_nb2, (long long)aop.mask_nb3,
+                            aop.mask_ne2, aop.mask_ne3);
+                    // Dump first few bytes of K cache to check if it's F16 or F32
+                    if (aop.weights) {
+                        uint16_t kbuf_u16[8] = {};
+                        dbg_q->memcpy(kbuf_u16, aop.weights, sizeof(kbuf_u16)).wait();
+                        fprintf(stderr, "[DBG-ATTN]   K raw u16: %04x %04x %04x %04x %04x %04x %04x %04x\n",
+                                kbuf_u16[0], kbuf_u16[1], kbuf_u16[2], kbuf_u16[3],
+                                kbuf_u16[4], kbuf_u16[5], kbuf_u16[6], kbuf_u16[7]);
+                        // Interpret as F16 values
+                        sycl::half * kbuf_f16 = reinterpret_cast<sycl::half *>(kbuf_u16);
+                        fprintf(stderr, "[DBG-ATTN]   K as f16: %.4f %.4f %.4f %.4f\n",
+                                (float)kbuf_f16[0], (float)kbuf_f16[1],
+                                (float)kbuf_f16[2], (float)kbuf_f16[3]);
+                        // Interpret as F32 values
+                        float * kbuf_f32 = reinterpret_cast<float *>(kbuf_u16);
+                        fprintf(stderr, "[DBG-ATTN]   K as f32: %.6f %.6f %.6f %.6f\n",
+                                kbuf_f32[0], kbuf_f32[1], kbuf_f32[2], kbuf_f32[3]);
+                    }
+                    // Dump Q data
+                    if (aop.input) {
+                        float qbuf[4] = {};
+                        dbg_q->memcpy(qbuf, aop.input, sizeof(qbuf)).wait();
+                        fprintf(stderr, "[DBG-ATTN]   Q data: %.6f %.6f %.6f %.6f\n",
+                                qbuf[0], qbuf[1], qbuf[2], qbuf[3]);
+                    }
+                    break;  // Only dump first attention op
+                }
+            }
+        }
 
         try {
             kernel.execute_persistent();
@@ -33700,6 +33928,24 @@ normal_dispatch:
     // In prefix mode, dispatch the CPU suffix before record_completion.
     // The RAII guard handles this for early returns; call explicitly for normal exit.
     suffix_guard.dispatch_suffix();
+
+    // DEBUG: dump logits for comparison with persistent path
+    {
+        sycl::queue * dbg_q = sycl_ctx->stream();
+        for (int gi = cgraph->n_nodes - 1; gi >= 0; gi--) {
+            ggml_tensor * gn = cgraph->nodes[gi];
+            if (gn && gn->op == GGML_OP_MUL_MAT && gn->type == GGML_TYPE_F32 &&
+                gn->ne[0] > 10000) {
+                const void * dst_ptr = (const char *) gn->data + gn->view_offs;
+                float dst_buf[4] = {};
+                dbg_q->memcpy(dst_buf, dst_ptr, sizeof(dst_buf)).wait();
+                GGML_LOG_WARN("[DBG-BASELINE] %s: %.6f %.6f %.6f %.6f (ptr=%p)\n",
+                              gn->name ? gn->name : "?",
+                              dst_buf[0], dst_buf[1], dst_buf[2], dst_buf[3], dst_ptr);
+                break;
+            }
+        }
+    }
 
     record_completion(graph_executed);
     return GGML_STATUS_SUCCESS;

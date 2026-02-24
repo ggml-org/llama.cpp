@@ -339,6 +339,16 @@ struct OperationDescriptor {
     int64_t       mask_nb3;
     int           mask_ne2;
     int           mask_ne3;
+
+    // Scratch pool linkage: which plan operation produces this op's input/aux.
+    // -1 means the pointer comes from an external source (weights, KV cache,
+    // GET_ROWS stable buffer, etc.) and should NOT be remapped by the scratch pool.
+    // Non-negative values are plan operation indices whose scratch output should
+    // be used as this op's input/aux after scratch pool allocation.
+    // This replaces the broken pointer-based remap that fails when ggml's memory
+    // allocator recycles buffer addresses across non-overlapping tensor lifetimes.
+    int           input_source_op  = -1;
+    int           aux_source_op    = -1;
 };
 
 // Metadata for materializing strided/view tensors into contiguous buffers.
@@ -2668,7 +2678,7 @@ public:
                         const float * cos_cache, const float * sin_cache, int position);
     void finish_plan_update();    // API bookend; no-op currently, validates plan readiness in future
     void invalidate_plan_cache();
-    void * get_rows_stable_ptr(size_t bytes);
+    void * get_rows_stable_ptr(int get_rows_index, size_t bytes);
     int cached_op_count() const;
     OperationType plan_op_type(int op_idx) const;
     bool get_op_descriptor(int op_idx, OperationDescriptor & out) const;
@@ -2692,6 +2702,22 @@ public:
     void   build_scratch_pool();
     void * scratch_output(int op_idx) const;
     void   free_scratch_pool();
+
+    // Debug accessor: get the current plan's operations for diagnostic inspection.
+    const std::vector<OperationDescriptor> & get_plan_operations() const {
+        static const std::vector<OperationDescriptor> empty;
+        if (current_plan_) return current_plan_->operations;
+        if (!cached_ops_.empty()) return cached_ops_;
+        return empty;
+    }
+
+    // Mutable accessor for annotating plan operations during extraction.
+    // Used by extract_persistent_plan to set input_source_op/aux_source_op.
+    std::vector<OperationDescriptor> & get_plan_operations_mut() {
+        static std::vector<OperationDescriptor> empty;
+        if (current_plan_) return current_plan_->operations;
+        return empty;
+    }
 
     // Deferred copy-back: CPY nodes execute AFTER the persistent kernel, not during
     // plan extraction.  The source is identified by plan op index so that
@@ -2746,14 +2772,25 @@ private:
     // Batched sync counter (tile_counter + barrier_counter + barrier_sense)
     int *  sync_block_      = nullptr;
 
-    // GET_ROWS stable copy pool
-    void * get_rows_pool_      = nullptr;
-    size_t get_rows_pool_size_ = 0;
+    // GET_ROWS stable copy pools (one per GET_ROWS node in graph).
+    // Multiple GET_ROWS can appear in the graph (token embedding + intermediate lookups).
+    // Each needs its own buffer to avoid data clobbering.
+    struct GetRowsSlot {
+        void * ptr  = nullptr;
+        size_t size = 0;
+    };
+    std::vector<GetRowsSlot> get_rows_slots_;
 
     // Scratch pool for persistent kernel — eliminates ggml buffer aliasing
     void *              scratch_pool_      = nullptr;
     size_t              scratch_pool_size_ = 0;
     std::vector<void *> scratch_outputs_;    // per-op scratch pointers (nullptr = use ggml)
+
+    // Final output copy-back: the ggml buffer destination for logits.
+    // Set once during the first build_scratch_pool (full_build) when op.output
+    // still points to the ggml tensor buffer. On subsequent fast-path tokens,
+    // op.output is already remapped to scratch, so we reuse this cached pointer.
+    void *              final_output_ggml_dst_ = nullptr;
 
     // Deferred CPY nodes — executed after persistent kernel, sources remapped by scratch pool
     std::vector<DeferredCopy> deferred_copies_;

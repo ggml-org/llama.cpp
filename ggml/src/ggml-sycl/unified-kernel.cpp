@@ -4781,6 +4781,116 @@ private:
         }
     }
 
+    // ----------------------------------------------------------------
+    // Q6_K scalar dequantize-and-dot matmul for M=1 TG workloads.
+    //
+    // Q6_K: 256 elements/block, 6-bit weights with 16 sub-block int8 scales.
+    // Block layout (AOS): [ql: 128 bytes][qh: 64 bytes][scales: 16 int8][d: fp16]
+    // Total: 210 bytes/block.
+    //
+    // Uses scalar float path (not dp4a) because Q6_K's complex bit-packing
+    // with per-sub-block int8 scales doesn't map cleanly to dp4a.  Only used
+    // for output.weight (1 matmul per token) so perf impact is < 0.5%.
+    // ----------------------------------------------------------------
+    void compute_matmul_tile_q6k(const DeviceOperation & op, int tile_idx) {
+        constexpr int SG_SIZE   = 16;
+        constexpr int N_SGS     = BLOCK_SIZE / SG_SIZE;
+        constexpr int MAX_ITERS = 16;
+        constexpr int QK6_K     = 256;
+
+        const int local_id = item_.get_local_id(0);
+        const int sg_id    = local_id / SG_SIZE;
+        const int lane_id  = local_id % SG_SIZE;
+
+        const int tile_cols  = op.tile_cols > 0 ? op.tile_cols : 64;
+        const int iter_count = (tile_cols + N_SGS - 1) / N_SGS;
+        if (iter_count <= 0 || iter_count > MAX_ITERS) return;
+        const int tile_start = tile_idx * tile_cols;
+
+        const float * activations = static_cast<const float *>(op.input);
+        float *       out         = static_cast<float *>(op.output);
+        const int     K           = op.K;
+        const int     N           = (op.row_count > 0) ? op.row_count : op.N;
+        const int     k_blocks    = K / QK6_K;
+        if (k_blocks <= 0) return;
+
+        // Use struct-based access (matches DMMV reference exactly).
+        const ggml_sycl_unified::block_q6_K_unified * weight_base =
+            static_cast<const ggml_sycl_unified::block_q6_K_unified *>(op.weights);
+
+        float partial_sums[MAX_ITERS];
+        #pragma unroll
+        for (int it = 0; it < MAX_ITERS; ++it) {
+            partial_sums[it] = 0.0f;
+        }
+
+        // Lane-strided K-block loop
+        for (int block_idx = lane_id; block_idx < k_blocks; block_idx += SG_SIZE) {
+            const int k_offset = block_idx * QK6_K;
+
+            #pragma unroll
+            for (int iter = 0; iter < MAX_ITERS; ++iter) {
+                if (iter >= iter_count) break;
+                const int n = tile_start + iter * N_SGS + sg_id;
+                if (n >= N) continue;
+
+                // Row n, block block_idx: struct access (AOS layout)
+                const ggml_sycl_unified::block_q6_K_unified & blk =
+                    weight_base[static_cast<int64_t>(n) * k_blocks + block_idx];
+
+                const float d = static_cast<float>(blk.d);
+
+                // Dequantize and dot-product using the Q6_K element layout.
+                // Mirrors dequantize_block_q6_K: ip=0..1, il=0..31.
+                float block_sum = 0.0f;
+
+                for (int ip = 0; ip < 2; ++ip) {
+                    for (int il = 0; il < 32; ++il) {
+                        const int     is      = 8 * ip + il / 16;
+                        const uint8_t ql_val  = blk.ql[64 * ip + il];
+                        const uint8_t ql_val2 = blk.ql[64 * ip + il + 32];
+                        const uint8_t qh_val  = blk.qh[32 * ip + il];
+                        const int8_t * sc     = blk.scales + is;
+
+                        // Element 128*ip + il
+                        {
+                            const int8_t q = static_cast<int8_t>((ql_val & 0xF) | (((qh_val >> 0) & 3) << 4)) - 32;
+                            block_sum += d * sc[0] * q * activations[k_offset + 128 * ip + il];
+                        }
+                        // Element 128*ip + il + 32
+                        {
+                            const int8_t q = static_cast<int8_t>((ql_val2 & 0xF) | (((qh_val >> 2) & 3) << 4)) - 32;
+                            block_sum += d * sc[2] * q * activations[k_offset + 128 * ip + il + 32];
+                        }
+                        // Element 128*ip + il + 64
+                        {
+                            const int8_t q = static_cast<int8_t>((ql_val >> 4) | (((qh_val >> 4) & 3) << 4)) - 32;
+                            block_sum += d * sc[4] * q * activations[k_offset + 128 * ip + il + 64];
+                        }
+                        // Element 128*ip + il + 96
+                        {
+                            const int8_t q = static_cast<int8_t>((ql_val2 >> 4) | (((qh_val >> 6) & 3) << 4)) - 32;
+                            block_sum += d * sc[6] * q * activations[k_offset + 128 * ip + il + 96];
+                        }
+                    }
+                }
+                partial_sums[iter] += block_sum;
+            }
+        }
+
+        // Final subgroup reduction + output write
+        auto sg = item_.get_sub_group();
+        #pragma unroll
+        for (int iter = 0; iter < MAX_ITERS; ++iter) {
+            if (iter >= iter_count) break;
+            const int n = tile_start + iter * N_SGS + sg_id;
+            float partial_sum = sycl::reduce_over_group(sg, partial_sums[iter], sycl::plus<float>());
+            if (lane_id == 0 && n < N) {
+                out[n] = partial_sum;
+            }
+        }
+    }
+
     void compute_matmul_tile(const DeviceOperation & op, int tile_idx) {
         // dp4a MMVQ (Matrix-Vector Quantized) for M=1 TG workloads.
         // Uses integer dp4a (4 INT8 MAD/instruction) instead of scalar float
@@ -4796,6 +4906,12 @@ private:
         constexpr int N_SGS        = BLOCK_SIZE / SG_SIZE;  // 16 sub-groups
         constexpr int MAX_ITERS    = 16;   // Supports tile_cols up to 256
         constexpr int QK4_0_PACKED = DP4A_QK4_0 / 2;        // 16 bytes
+
+        // Dispatch Q6_K to dedicated handler (used by output.weight in Q4_0 models)
+        if (op.quant_type == ggml_sycl_unified::QUANT_TYPE_Q6_K) {
+            compute_matmul_tile_q6k(op, tile_idx);
+            return;
+        }
 
         if (op.quant_type != ggml_sycl_unified::QUANT_TYPE_Q4_0) return;
 
@@ -5098,9 +5214,30 @@ private:
         }
     }
 
+    // Load a KV cache element using byte-based stride addressing.
+    // For F16 (type==13, ATTENTION_F16): reads sycl::half and converts to float.
+    // For F32 (type==14, ATTENTION_F32): reads float directly.
+    // base_ptr: raw pointer to the start of the KV cache
+    // byte_offset: pre-computed byte offset into the cache
+    static inline float load_kv_element(const void * base_ptr, int64_t byte_offset, int op_type) {
+        const char * ptr = static_cast<const char *>(base_ptr) + byte_offset;
+        if (op_type == static_cast<int>(OperationType::ATTENTION_F16)) {
+            return static_cast<float>(*reinterpret_cast<const sycl::half *>(ptr));
+        }
+        return *reinterpret_cast<const float *>(ptr);
+    }
+
     void compute_attention_tile(const DeviceOperation & op, int tile_idx) {
         // Self-attention for M=1 (single query token) in token generation.
         // tile_idx = head index. Each work-group processes one attention head.
+        //
+        // KV cache addressing uses byte-based strides from the OperationDescriptor:
+        //   k_nb0 = element size in bytes (2 for F16, 4 for F32)
+        //   k_nb1 = sequence position stride in bytes
+        //   k_nb2 = KV head stride in bytes
+        //   (same for v_nb0/1/2)
+        //
+        // Q is always F32 with q_nb2 = per-head stride in bytes.
         //
         // Fast path: cache attention scores/probabilities in SLM so pass 2 does
         // not recompute Q·K per output dimension.
@@ -5118,6 +5255,7 @@ private:
         const int n_kv_heads = op.n_kv_heads;
         const float scale    = op.scale;
         const bool use_sg_dot = (args_.use_attn_subgroup_dot != 0);
+        const int  kv_type   = op.type;  // ATTENTION_F16 or ATTENTION_F32
 
         if (head >= n_heads || seq_len <= 0) return;
 
@@ -5125,15 +5263,23 @@ private:
                             ? head / (n_heads / n_kv_heads)
                             : head;
 
-        const float * q       = static_cast<const float *>(op.input);
-        const float * k_cache = static_cast<const float *>(op.weights);
-        const float * v_cache = static_cast<const float *>(op.aux);
-        float *       output  = static_cast<float *>(op.output);
+        // Q is always F32. Use byte-based head stride (q_nb2).
+        const char * q_base = static_cast<const char *>(op.input);
+        const float * q_head = reinterpret_cast<const float *>(q_base + head * op.q_nb2);
 
-        const float * q_head = q + head * head_dim;
-        const float * k_head = k_cache + kv_head * seq_len * head_dim;
-        const float * v_head = v_cache + kv_head * seq_len * head_dim;
-        float *       o_head = output + head * head_dim;
+        // K/V cache: use byte-based strides for head and position addressing.
+        // k_nb0 = element size, k_nb1 = seq stride, k_nb2 = head stride
+        const char * k_base = static_cast<const char *>(op.weights);
+        const char * v_base = static_cast<const char *>(op.aux);
+        const int64_t k_head_offset = static_cast<int64_t>(kv_head) * op.k_nb2;
+        const int64_t v_head_offset = static_cast<int64_t>(kv_head) * op.v_nb2;
+        const int64_t k_seq_stride  = op.k_nb1;
+        const int64_t v_seq_stride  = op.v_nb1;
+        const int64_t k_elem_stride = op.k_nb0;
+        const int64_t v_elem_stride = op.v_nb0;
+
+        float * output_ptr = static_cast<float *>(op.output);
+        float * o_head     = output_ptr + head * head_dim;
         auto wg = item_.get_group();
 
         // SLM layout:
@@ -5154,10 +5300,11 @@ private:
             float local_max = -1e30f;
             if (use_sg_dot) {
                 for (int p = sg_id; p < seq_len; p += N_SGS) {
-                    const float * k_pos = k_head + p * head_dim;
+                    const int64_t k_pos_offset = k_head_offset + static_cast<int64_t>(p) * k_seq_stride;
                     float partial = 0.0f;
                     for (int d = lane_id; d < head_dim; d += SG_SIZE) {
-                        partial += slm_[d] * k_pos[d];
+                        const float k_val = load_kv_element(k_base, k_pos_offset + d * k_elem_stride, kv_type);
+                        partial += slm_[d] * k_val;
                     }
                     float score = sycl::reduce_over_group(sg, partial, sycl::plus<float>());
                     if (lane_id == 0) {
@@ -5169,9 +5316,10 @@ private:
             } else {
                 for (int p = tid; p < seq_len; p += BLOCK_SIZE) {
                     float score = 0.0f;
-                    const float * k_pos = k_head + p * head_dim;
+                    const int64_t k_pos_offset = k_head_offset + static_cast<int64_t>(p) * k_seq_stride;
                     for (int d = 0; d < head_dim; d++) {
-                        score += slm_[d] * k_pos[d];
+                        const float k_val = load_kv_element(k_base, k_pos_offset + d * k_elem_stride, kv_type);
+                        score += slm_[d] * k_val;
                     }
                     score *= scale;
                     slm_[slm_scores_base + p] = score;
@@ -5209,7 +5357,9 @@ private:
                 float acc = 0.0f;
                 for (int p = 0; p < seq_len; ++p) {
                     const float prob = slm_[slm_scores_base + p] * inv_sum;
-                    acc += prob * v_head[p * head_dim + d];
+                    const int64_t v_pos_offset = v_head_offset + static_cast<int64_t>(p) * v_seq_stride;
+                    const float v_val = load_kv_element(v_base, v_pos_offset + d * v_elem_stride, kv_type);
+                    acc += prob * v_val;
                 }
                 o_head[d] = acc;
             }
@@ -5220,10 +5370,11 @@ private:
         float local_max = -1e30f;
         if (use_sg_dot) {
             for (int p = sg_id; p < seq_len; p += N_SGS) {
-                const float * k_pos = k_head + p * head_dim;
+                const int64_t k_pos_offset = k_head_offset + static_cast<int64_t>(p) * k_seq_stride;
                 float partial = 0.0f;
                 for (int d = lane_id; d < head_dim; d += SG_SIZE) {
-                    partial += slm_[d] * k_pos[d];
+                    const float k_val = load_kv_element(k_base, k_pos_offset + d * k_elem_stride, kv_type);
+                    partial += slm_[d] * k_val;
                 }
                 float score = sycl::reduce_over_group(sg, partial, sycl::plus<float>());
                 if (lane_id == 0) {
@@ -5234,9 +5385,10 @@ private:
         } else {
             for (int p = tid; p < seq_len; p += BLOCK_SIZE) {
                 float score = 0.0f;
-                const float * k_pos = k_head + p * head_dim;
+                const int64_t k_pos_offset = k_head_offset + static_cast<int64_t>(p) * k_seq_stride;
                 for (int d = 0; d < head_dim; ++d) {
-                    score += slm_[d] * k_pos[d];
+                    const float k_val = load_kv_element(k_base, k_pos_offset + d * k_elem_stride, kv_type);
+                    score += slm_[d] * k_val;
                 }
                 score *= scale;
                 local_max = sycl::fmax(local_max, score);
@@ -5248,10 +5400,11 @@ private:
         float local_sum = 0.0f;
         if (use_sg_dot) {
             for (int p = sg_id; p < seq_len; p += N_SGS) {
-                const float * k_pos = k_head + p * head_dim;
+                const int64_t k_pos_offset = k_head_offset + static_cast<int64_t>(p) * k_seq_stride;
                 float partial = 0.0f;
                 for (int d = lane_id; d < head_dim; d += SG_SIZE) {
-                    partial += slm_[d] * k_pos[d];
+                    const float k_val = load_kv_element(k_base, k_pos_offset + d * k_elem_stride, kv_type);
+                    partial += slm_[d] * k_val;
                 }
                 float score = sycl::reduce_over_group(sg, partial, sycl::plus<float>());
                 if (lane_id == 0) {
@@ -5262,9 +5415,10 @@ private:
         } else {
             for (int p = tid; p < seq_len; p += BLOCK_SIZE) {
                 float score = 0.0f;
-                const float * k_pos = k_head + p * head_dim;
+                const int64_t k_pos_offset = k_head_offset + static_cast<int64_t>(p) * k_seq_stride;
                 for (int d = 0; d < head_dim; ++d) {
-                    score += slm_[d] * k_pos[d];
+                    const float k_val = load_kv_element(k_base, k_pos_offset + d * k_elem_stride, kv_type);
+                    score += slm_[d] * k_val;
                 }
                 score *= scale;
                 local_sum += sycl::exp(score - global_max);
@@ -5278,13 +5432,16 @@ private:
             float acc = 0.0f;
             for (int p = 0; p < seq_len; ++p) {
                 float score = 0.0f;
-                const float * k_pos = k_head + p * head_dim;
+                const int64_t k_pos_offset = k_head_offset + static_cast<int64_t>(p) * k_seq_stride;
                 for (int dd = 0; dd < head_dim; ++dd) {
-                    score += slm_[dd] * k_pos[dd];
+                    const float k_val = load_kv_element(k_base, k_pos_offset + dd * k_elem_stride, kv_type);
+                    score += slm_[dd] * k_val;
                 }
                 score *= scale;
                 const float prob = sycl::exp(score - global_max) * inv_sum;
-                acc += prob * v_head[p * head_dim + d];
+                const int64_t v_pos_offset = v_head_offset + static_cast<int64_t>(p) * v_seq_stride;
+                const float v_val = load_kv_element(v_base, v_pos_offset + d * v_elem_stride, kv_type);
+                acc += prob * v_val;
             }
             o_head[d] = acc;
         }
@@ -5589,14 +5746,17 @@ void UnifiedKernel::free_persistent_buffers() {
     barrier_counter_ = nullptr;
     barrier_sense_   = nullptr;
     if (d_ops_pool_) { sycl::free(d_ops_pool_, queue_); d_ops_pool_ = nullptr; d_ops_pool_size_ = 0; }
-    if (get_rows_pool_) {
-        if (get_rows_pool_size_ > 0 && device_id_ >= 0) {
-            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, get_rows_pool_size_, ggml_sycl::runtime_category::GRAPH);
+    for (auto & slot : get_rows_slots_) {
+        if (slot.ptr) {
+            if (slot.size > 0 && device_id_ >= 0) {
+                ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, slot.size, ggml_sycl::runtime_category::GRAPH);
+            }
+            sycl::free(slot.ptr, queue_);
+            slot.ptr  = nullptr;
+            slot.size = 0;
         }
-        sycl::free(get_rows_pool_, queue_);
-        get_rows_pool_ = nullptr;
-        get_rows_pool_size_ = 0;
     }
+    get_rows_slots_.clear();
     // Free scratch output pool
     free_scratch_pool();
     // Free DAG allocations
@@ -6285,6 +6445,7 @@ void UnifiedKernel::finish_plan_update() {
 void UnifiedKernel::invalidate_plan_cache() {
     free_scratch_pool();
     deferred_copies_.clear();
+    final_output_ggml_dst_ = nullptr;
     plan_cache_valid_ = false;
     cached_ops_.clear();
     cached_plan_template_ = {};
@@ -6304,24 +6465,32 @@ void UnifiedKernel::invalidate_plan_cache() {
     cached_temp_device_alloc_bytes_ = 0;
 }
 
-void * UnifiedKernel::get_rows_stable_ptr(size_t bytes) {
-    if (bytes <= get_rows_pool_size_ && get_rows_pool_) {
-        return get_rows_pool_;
+void * UnifiedKernel::get_rows_stable_ptr(int get_rows_index, size_t bytes) {
+    // Grow the slot vector on demand
+    if (get_rows_index < 0) {
+        GGML_LOG_ERROR("UnifiedKernel::get_rows_stable_ptr: negative index %d\n", get_rows_index);
+        return nullptr;
     }
-    // Free old pool and untrack
-    if (get_rows_pool_) {
-        sycl::free(get_rows_pool_, queue_);
-        if (get_rows_pool_size_ > 0 && device_id_ >= 0) {
-            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, get_rows_pool_size_, ggml_sycl::runtime_category::GRAPH);
+    if (get_rows_index >= (int) get_rows_slots_.size()) {
+        get_rows_slots_.resize(get_rows_index + 1);
+    }
+    auto & slot = get_rows_slots_[get_rows_index];
+    if (bytes <= slot.size && slot.ptr) {
+        return slot.ptr;
+    }
+    // Free old buffer and untrack
+    if (slot.ptr) {
+        sycl::free(slot.ptr, queue_);
+        if (slot.size > 0 && device_id_ >= 0) {
+            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, slot.size, ggml_sycl::runtime_category::GRAPH);
         }
     }
-    get_rows_pool_ = sycl::malloc_device(bytes, queue_);
-    get_rows_pool_size_ = get_rows_pool_ ? bytes : 0;
-    // Track new pool
-    if (get_rows_pool_size_ > 0 && device_id_ >= 0) {
-        ggml_sycl::unified_cache_add_runtime_bytes(device_id_, get_rows_pool_size_, ggml_sycl::runtime_category::GRAPH);
+    slot.ptr  = sycl::malloc_device(bytes, queue_);
+    slot.size = slot.ptr ? bytes : 0;
+    if (slot.size > 0 && device_id_ >= 0) {
+        ggml_sycl::unified_cache_add_runtime_bytes(device_id_, slot.size, ggml_sycl::runtime_category::GRAPH);
     }
-    return get_rows_pool_;
+    return slot.ptr;
 }
 
 // -----------------------------------------------------------------------------
@@ -6329,6 +6498,11 @@ void * UnifiedKernel::get_rows_stable_ptr(size_t bytes) {
 // -----------------------------------------------------------------------------
 
 void UnifiedKernel::build_scratch_pool() {
+    // Allow disabling scratch pool for debugging (uses ggml's original pointers)
+    if (std::getenv("GGML_SYCL_PERSISTENT_TG_NO_SCRATCH") != nullptr) {
+        GGML_SYCL_DEBUG("[SCRATCH-POOL] DISABLED by env var\n");
+        return;
+    }
     if (!current_plan_ || current_plan_->operations.empty()) {
         GGML_SYCL_DEBUG("[SCRATCH-POOL] no plan or empty\n");
         return;
@@ -6386,25 +6560,43 @@ void UnifiedKernel::build_scratch_pool() {
 
     GGML_SYCL_DEBUG("[UNIFIED-KERNEL] scratch pool: %zu bytes (%d ops) on device %d\n", total_bytes, n_ops, device_id_);
 
-    // Phase 3: sub-allocate and forward-pass remap
+    // Phase 3: sub-allocate and forward-pass remap.
+    // The LAST operation with output_bytes > 0 is typically the final matmul
+    // (output.weight -> logits).  Its output gets remapped from the ggml tensor
+    // buffer to scratch.  After kernel execution, the logits must be copied back
+    // to the original ggml buffer so llama.cpp can read them.  Save the original
+    // destination pointer and register a deferred copy-back.
     char * pool_base = static_cast<char *>(scratch_pool_);
     size_t offset    = 0;
     std::unordered_map<const void *, void *> remap;
 
+    // Track final op for copy-back
+    int    final_op_idx    = -1;
+    size_t final_op_bytes  = 0;
+
+    int n_linked_input = 0, n_linked_aux = 0;
+
     for (int i = 0; i < n_ops; i++) {
         auto & op = current_plan_->operations[i];
 
-        // Remap inputs from previous ops' aliased outputs
-        if (op.input) {
-            auto it = remap.find(op.input);
-            if (it != remap.end()) {
-                op.input = it->second;
+        // Remap inputs using op-index-based linkage ONLY.
+        // The pointer-based remap fallback is disabled because ggml's memory allocator
+        // recycles buffer addresses across non-overlapping tensor lifetimes, causing
+        // false collisions in the remap table.  Pointers without source_op linkage
+        // (input_source_op/aux_source_op == -1) are external (weights, KV cache, masks,
+        // GET_ROWS stable buffers) and must NOT be remapped.
+        if (op.input_source_op >= 0 && op.input_source_op < i) {
+            void * src_scratch = scratch_outputs_[op.input_source_op];
+            if (src_scratch) {
+                op.input = src_scratch;
+                n_linked_input++;
             }
         }
-        if (op.aux) {
-            auto it = remap.find(static_cast<const void *>(op.aux));
-            if (it != remap.end()) {
-                op.aux = it->second;
+        if (op.aux_source_op >= 0 && op.aux_source_op < i) {
+            void * src_scratch = scratch_outputs_[op.aux_source_op];
+            if (src_scratch) {
+                op.aux = src_scratch;
+                n_linked_aux++;
             }
         }
 
@@ -6419,12 +6611,46 @@ void UnifiedKernel::build_scratch_pool() {
         size_t aligned     = (op.output_bytes + 255) & ~(size_t) 255;
         offset += aligned;
 
-        // Register in remap table
+        // Track the last op with output for copy-back identification
+        if (op.output) {
+            final_op_idx   = i;
+            final_op_bytes = op.output_bytes;
+
+            // On the FIRST call (full_build), op.output points to the ggml
+            // tensor buffer.  On subsequent fast-path calls, op.output is
+            // already the scratch pointer from the previous invocation.
+            // Cache the ggml pointer on first sight so we always copy logits
+            // back to the correct ggml buffer, not to scratch.
+            if (op.output != scratch_ptr && final_output_ggml_dst_ == nullptr) {
+                final_output_ggml_dst_ = op.output;
+            }
+        }
+
+        // Register in remap table (fallback for ops without explicit source linkage)
         if (op.output) {
             remap[op.output] = scratch_ptr;
         }
         op.output          = scratch_ptr;
         scratch_outputs_[i] = scratch_ptr;
+    }
+
+    GGML_SYCL_DEBUG("[SCRATCH-POOL] linkage stats: linked_input=%d linked_aux=%d\n",
+                    n_linked_input, n_linked_aux);
+
+    // Register deferred copy-back for the final operation's output.
+    // After kernel execution, the logits live in scratch; llama.cpp reads
+    // from the original ggml tensor buffer.  The copy-back bridges the gap.
+    // Use the cached ggml destination from the first build (full_build) since
+    // on fast-path tokens, op.output is already a scratch pointer.
+    void * copy_back_dst = final_output_ggml_dst_;
+    if (final_op_idx >= 0 && copy_back_dst && final_op_bytes > 0) {
+        GGML_SYCL_DEBUG("[SCRATCH-POOL] Final output copy-back: op=%d type=%d "
+                        "dst=%p bytes=%zu scratch=%p\n",
+                        final_op_idx,
+                        (int) current_plan_->operations[final_op_idx].type,
+                        copy_back_dst, final_op_bytes,
+                        scratch_outputs_[final_op_idx]);
+        add_deferred_copy(final_op_idx, nullptr, copy_back_dst, final_op_bytes);
     }
 }
 
@@ -6443,9 +6669,10 @@ void UnifiedKernel::add_deferred_copy(int source_op_idx, void * src_ptr, void * 
 
 void UnifiedKernel::execute_deferred_copies() {
     if (deferred_copies_.empty()) {
+        fprintf(stderr, "[DEFERRED-CPY] No deferred copies to execute\n");
         return;
     }
-    GGML_SYCL_DEBUG("[DEFERRED-CPY] Executing %zu deferred copies\n", deferred_copies_.size());
+    fprintf(stderr, "[DEFERRED-CPY] Executing %zu deferred copies\n", deferred_copies_.size());
     for (const auto & dc : deferred_copies_) {
         void * src = dc.src_ptr;
         // Resolve source from scratch pool if we have a valid op index
@@ -6455,15 +6682,23 @@ void UnifiedKernel::execute_deferred_copies() {
                 src = scratch;
             }
         }
-        GGML_SYCL_DEBUG("[DEFERRED-CPY] memcpy: src=%p dst=%p bytes=%zu (op_idx=%d)\n",
+        fprintf(stderr, "[DEFERRED-CPY] memcpy: src=%p dst=%p bytes=%zu (op_idx=%d)\n",
                         src, dc.dst, dc.bytes, dc.source_op_idx);
+        if (src && dc.dst && dc.bytes > 0) {
+            // Dump first 4 floats from src before copy
+            float dbg_buf[4] = {};
+            queue_.memcpy(dbg_buf, src, std::min(dc.bytes, sizeof(dbg_buf))).wait();
+            fprintf(stderr, "[DEFERRED-CPY] src data: %.6f %.6f %.6f %.6f\n",
+                    dbg_buf[0], dbg_buf[1], dbg_buf[2], dbg_buf[3]);
+        }
         queue_.memcpy(dc.dst, src, dc.bytes);
+        queue_.wait();
     }
-    queue_.wait();
     deferred_copies_.clear();
 }
 
 void UnifiedKernel::free_scratch_pool() {
+    final_output_ggml_dst_ = nullptr;
     if (scratch_pool_) {
         if (scratch_pool_size_ > 0 && device_id_ >= 0) {
             ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, scratch_pool_size_,
