@@ -163,7 +163,7 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
             const auto & cell = cells[tail_id];
             // partial intersection is invalid if it includes the final pos
             if (0 < p0 && p0 <= cell.pos && p1 > cell.pos) {
-                //printf("[DEBUG] inside `llama_memory_recurrent::seq_rm`: partial intersection is invalid, so returning false\n");
+                //printf("[DEBUG] inside `llama_memory_recurrent::seq_rm`: partial intersection is invalid, so returning false, p0 = %d, cell.pos = %d, p1 = %d\n", p0, cell.pos, p1);
                 return false;
             }
             // invalidate tails which will be cleared
@@ -599,20 +599,9 @@ bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch) {
     // update the pos of the used seqs
     for (uint32_t s = 0; s < n_seqs; ++s) {
         const uint32_t i = s*n_seq_tokens;
+        const llama_pos last_pos = ubatch.pos[i + n_seq_tokens - 1];
         const int32_t cell_id = s + min;
         auto & cell = cells[cell_id];
-
-        // The temporal plane may have the same value for all image tokens, so we need the max across ALL planes to get the true sequence position.
-        llama_pos last_pos = ubatch.pos[i + n_seq_tokens - 1];
-
-        // For M-RoPE image/audio embeddings,positions are stored in multiple planes. The temporal plane may have the same value for all tokens, so scan all planes for the true max.
-        if (ubatch.n_pos > 1 && ubatch.embd != nullptr) {
-            for (uint32_t p = 0; p < ubatch.n_pos; ++p) {
-                for (uint32_t t = 0; t < n_seq_tokens; ++t) {
-                    last_pos = std::max(last_pos, ubatch.pos[p * ubatch.n_tokens + i + t]);
-                }
-            }
-        }
 
         if (cell.pos >= 0 && last_pos != cell.pos + (llama_pos) n_seq_tokens) {
             // What should happen when the pos backtracks or skips a value?

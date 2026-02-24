@@ -556,7 +556,6 @@ struct server_task_result_apply_lora : server_task_result {
 struct server_prompt_checkpoint {
     llama_pos pos_min;
     llama_pos pos_max;
-    int n_tokens_cached;
 
     std::vector<uint8_t> data;
 
