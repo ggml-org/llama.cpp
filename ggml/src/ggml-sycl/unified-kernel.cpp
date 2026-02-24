@@ -4256,6 +4256,8 @@ public:
     void run_phase() {
         const int local_id = item_.get_local_id(0);
         const int wg_id    = item_.get_group_linear_id();
+        const int n_wgs    = item_.get_group_range(0);
+        const bool use_split = (args_.use_split_barrier != 0);
         const DevicePhaseSchedule & sched = args_.phase;
 
         for (int phase = 0; phase < sched.n_phases; phase++) {
@@ -4294,8 +4296,11 @@ public:
             }
 
             // Device-scope barrier between phases with tile counter reset.
-            // Uses atomic sense-reversing barrier (race-free, scales to many WGs).
-            device_barrier_atomic(local_id, args_.n_workgroups, /* reset_tile_counter = */ true);
+            if (use_split) {
+                device_split_barrier(local_id, wg_id, /* reset_tile_counter = */ true);
+            } else {
+                device_barrier_atomic(local_id, n_wgs, /* reset_tile_counter = */ true);
+            }
         }
     }
 
@@ -4307,26 +4312,14 @@ private:
     // Device-scope split barrier synchronization (default path).
     // Optional tile-counter reset is done by one global thread before barrier.
     void device_split_barrier(int local_id, int wg_id, bool reset_tile_counter = false) {
-        sycl::group_barrier(item_.get_group());
-
-        // Device-scope split barrier on Arc is significantly faster when only
-        // work-group leaders participate in the global synchronization.
-        if (local_id == 0) {
-            if (reset_tile_counter && wg_id == 0) {
-                sycl::atomic_ref<int, sycl::memory_order::acq_rel,
-                                 sycl::memory_scope::device,
-                                 sycl::access::address_space::global_space>
-                    tile_counter(*args_.tile_counter);
-                tile_counter.store(0);
-            }
-
-            constexpr int kDeviceSemantics =
-                SemanticsGlobalMem | static_cast<int>(SPIRVMemorySemantics::AcquireRelease);
-            split_barrier_arrive(ScopeDevice, kDeviceSemantics);
-            split_barrier_wait(ScopeDevice, kDeviceSemantics);
-        }
-
-        sycl::group_barrier(item_.get_group());
+        // NOTE: Device-scope SPIR-V split barriers (ControlBarrierArriveINTEL /
+        // ControlBarrierWaitINTEL with ScopeDevice) produce INCORRECT results
+        // on Arc B580 with Level Zero driver 1.14.x, regardless of whether
+        // all invocations or only WG leaders participate. The barrier appears
+        // to not enforce global memory visibility across work-groups.
+        // Fall back to atomic sense-reversing barrier for correctness.
+        // Keeping this function for future driver/HW validation.
+        device_barrier_atomic(local_id, item_.get_group_range(0), reset_tile_counter);
     }
 
     // Atomic sense-reversing barrier for device-scope synchronization.
@@ -4519,7 +4512,7 @@ private:
         }
     }
 
-    void compute_rms_norm_tile(const DeviceOperation & op, int tile_idx) {
+    __attribute__((noinline)) void compute_rms_norm_tile(const DeviceOperation & op, int tile_idx) {
         // RMS norm is a single-tile cooperative operation (tile_idx ignored)
         (void)tile_idx;
 
@@ -4571,7 +4564,7 @@ private:
         }
     }
 
-    void compute_silu_mul_tile(const DeviceOperation & op, int tile_idx) {
+    __attribute__((noinline)) void compute_silu_mul_tile(const DeviceOperation & op, int tile_idx) {
         const int     tid              = item_.get_local_id(0);
         const int     intermediate_dim = op.intermediate_dim;
         const int     tile_size        = BLOCK_SIZE;  // Elements per tile = work-group size
@@ -4627,7 +4620,7 @@ private:
         return *reinterpret_cast<const float *>(mask_b + off);
     }
 
-    void compute_add_tile(const DeviceOperation & op, int tile_idx) {
+    __attribute__((noinline)) void compute_add_tile(const DeviceOperation & op, int tile_idx) {
         const int idx = tile_idx * BLOCK_SIZE + item_.get_local_id(0);
         if (idx >= op.M) {
             return;
@@ -4638,7 +4631,7 @@ private:
         y[idx] = a[idx] + b[idx];
     }
 
-    void compute_mul_tile(const DeviceOperation & op, int tile_idx) {
+    __attribute__((noinline)) void compute_mul_tile(const DeviceOperation & op, int tile_idx) {
         const int idx = tile_idx * BLOCK_SIZE + item_.get_local_id(0);
         if (idx >= op.M) {
             return;
@@ -4649,7 +4642,7 @@ private:
         y[idx] = a[idx] * b[idx];
     }
 
-    void compute_get_rows_tile(const DeviceOperation & op, int tile_idx) {
+    __attribute__((noinline)) void compute_get_rows_tile(const DeviceOperation & op, int tile_idx) {
         const int idx = tile_idx * BLOCK_SIZE + item_.get_local_id(0);
         if (idx >= op.M) {
             return;
@@ -4702,7 +4695,7 @@ private:
         dst[dst_off] = v;
     }
 
-    void compute_set_rows_tile(const DeviceOperation & op, int tile_idx) {
+    __attribute__((noinline)) void compute_set_rows_tile(const DeviceOperation & op, int tile_idx) {
         const int idx = tile_idx * BLOCK_SIZE + item_.get_local_id(0);
         if (idx >= op.M) {
             return;
@@ -4749,7 +4742,7 @@ private:
         store_f32_or_f16(dst + dst_off, meta->dst_type, v);
     }
 
-    void compute_strided_copy_tile(const DeviceOperation & op, int tile_idx) {
+    __attribute__((noinline)) void compute_strided_copy_tile(const DeviceOperation & op, int tile_idx) {
         const int idx = tile_idx * BLOCK_SIZE + item_.get_local_id(0);
         if (idx >= op.M) {
             return;
@@ -4792,7 +4785,7 @@ private:
         }
     }
 
-    void compute_softmax_tile(const DeviceOperation & op, int tile_idx) {
+    __attribute__((noinline)) void compute_softmax_tile(const DeviceOperation & op, int tile_idx) {
         const int row = tile_idx;
         if (row >= op.M || op.N <= 0 || !op.input || !op.output) {
             return;
@@ -5280,7 +5273,7 @@ private:
         return *reinterpret_cast<const float *>(ptr);
     }
 
-    void compute_attention_tile(const DeviceOperation & op, int tile_idx) {
+    __attribute__((noinline)) void compute_attention_tile(const DeviceOperation & op, int tile_idx) {
         // Self-attention for M=1 (single query token) in token generation.
         // tile_idx = head index. Each work-group processes one attention head.
         //
@@ -5500,7 +5493,7 @@ private:
         }
     }
 
-    void compute_rope_tile(const DeviceOperation & op, int tile_idx) {
+    __attribute__((noinline)) void compute_rope_tile(const DeviceOperation & op, int tile_idx) {
         // RoPE: Apply rotary position embeddings (NORMAL or NEOX style).
         // cos/sin caches are pre-computed for the current position, size = head_dim/2 each.
         // This is a cooperative operation - all threads in the work-group participate.
@@ -5649,17 +5642,14 @@ PersistentStats UnifiedKernel::get_last_stats() const {
 }
 
 bool UnifiedKernel::persistent_use_split_barrier() const {
-    // Default to split barriers. Keep atomic fallback for driver/runtime
-    // triage via GGML_SYCL_PERSISTENT_TG_ATOMIC_BARRIER=1.
-    if (const char * force_atomic = std::getenv("GGML_SYCL_PERSISTENT_TG_ATOMIC_BARRIER")) {
-        if (std::atoi(force_atomic) != 0) {
-            return false;
-        }
-    }
+    // Device-scope SPIR-V split barriers are BROKEN on Arc B580 (Level Zero
+    // driver 1.14.x): they produce incorrect output regardless of
+    // invocation pattern. Default to atomic sense-reversing barriers which
+    // are correct.  Keep env var for future driver validation.
     if (const char * force_split = std::getenv("GGML_SYCL_PERSISTENT_TG_SPLIT_BARRIER")) {
         return std::atoi(force_split) != 0;
     }
-    return true;
+    return false;
 }
 
 bool UnifiedKernel::persistent_dispatch_uses_dag() const {
@@ -7602,7 +7592,18 @@ void UnifiedKernel::launch_persistent_kernel() {
         // Phase/DAG mode: WG count scales with GPU size.
         try {
             const int max_cu = (int)queue_.get_device().get_info<sycl::info::device::max_compute_units>();
-            n_workgroups = std::clamp(max_cu / 2, 4, 64);
+            // Optimal WG count balances matmul tile parallelism against
+            // barrier overhead. Benchmarked on Arc B580 (160 CUs):
+            //   8 WGs: 13.3 tok/s  (starved)
+            //  16 WGs: 25.3 tok/s
+            //  24 WGs: 30.6 tok/s
+            //  32 WGs: 37.9 tok/s
+            //  36 WGs: 38.1 tok/s
+            //  40 WGs: 39.6 tok/s  <-- peak (max_cu/4)
+            //  44 WGs: 34.8 tok/s
+            //  48 WGs: 34.0 tok/s
+            //  64 WGs: 29.6 tok/s
+            n_workgroups = std::clamp(max_cu / 4, 4, 64);
         } catch (...) {
             n_workgroups = 16;
         }
