@@ -584,9 +584,10 @@ class ModelBase:
         # decode UE4M3 scale for requantization
         ue_exp = (combined >> 3) & 0xF
         ue_man = combined & 0x7
-        ue_float = np.where(combined == 0, 0.0,
-                   np.where(ue_exp == 0, ue_man.astype(np.float32) * 2**-9,
-                   (1.0 + ue_man.astype(np.float32) / 8.0) * (2.0 ** (ue_exp.astype(np.float32) - 7))))
+        ue_float = np.where(
+            combined == 0, 0.0,
+            np.where(ue_exp == 0, ue_man.astype(np.float32) * 2**-9,
+                     (1.0 + ue_man.astype(np.float32) / 8.0) * (2.0 ** (ue_exp.astype(np.float32) - 7))))
         ue_float_t = torch.from_numpy(ue_float).float().unsqueeze(-1)
 
         inv_scale = torch.where(ue_float_t > 0, 1.0 / ue_float_t, torch.zeros_like(ue_float_t))
@@ -602,9 +603,10 @@ class ModelBase:
         # Convert UE4M3 scales to fp16
         ue_exp = (combined >> 3) & 0xF
         ue_man = combined & 0x7
-        ue_float = np.where(combined == 0, 0.0,
-                   np.where(ue_exp == 0, ue_man.astype(np.float32) * 2**-9,
-                   (1.0 + ue_man.astype(np.float32) / 8.0) * (2.0 ** (ue_exp.astype(np.float32) - 7))))
+        ue_float = np.where(
+            combined == 0, 0.0,
+            np.where(ue_exp == 0, ue_man.astype(np.float32) * 2**-9,
+                     (1.0 + ue_man.astype(np.float32) / 8.0) * (2.0 ** (ue_exp.astype(np.float32) - 7))))
         d_fp16 = (ue_float * 0.5).astype(np.float16).reshape(out_features, n_super, 4)
         qs_grouped = qs.numpy().reshape(out_features, n_super, 4, 8).reshape(out_features, n_super, 32)
         new_data = np.concatenate([d_fp16.view(np.uint8), qs_grouped], axis=-1).reshape(out_features, n_super * 40)
@@ -654,9 +656,10 @@ class ModelBase:
 
                 ue_exp = (combined >> 3) & 0xF
                 ue_man = combined & 0x7
-                ue_float = np.where(combined == 0, 0.0,
-                           np.where(ue_exp == 0, ue_man.astype(np.float32) * 2**-9,
-                           (1.0 + ue_man.astype(np.float32) / 8.0) * (2.0 ** (ue_exp.astype(np.float32) - 7))))
+                ue_float = np.where(
+                    combined == 0, 0.0,
+                    np.where(ue_exp == 0, ue_man.astype(np.float32) * 2**-9,
+                             (1.0 + ue_man.astype(np.float32) / 8.0) * (2.0 ** (ue_exp.astype(np.float32) - 7))))
                 ue_float_t = torch.from_numpy(ue_float).float().unsqueeze(-1)
 
                 inv_scale = torch.where(ue_float_t > 0, 1.0 / ue_float_t, torch.zeros_like(ue_float_t))
