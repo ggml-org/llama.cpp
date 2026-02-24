@@ -180,7 +180,7 @@ static void llama_tensor_dequantize_impl(
 }
 
 // internal standard logic for selecting the target tensor type for a specific
-// quantization mixture & model architecture
+// quantization mixture and model architecture
 static ggml_type llama_tensor_get_type_impl(
     quantization_state_impl * qs,
                   ggml_type   new_type,
@@ -468,7 +468,7 @@ static ggml_type llama_tensor_get_type(
             for (const auto & [tname, qtype] : tensor_types) {
                 if (std::regex pattern(tname); std::regex_search(tensor_name, pattern)) {
                     if  (qtype != new_type) {
-                        if (!qs->preliminary) {
+                        if (!qs->preliminary) { // only show this during actual quantization
                             LLAMA_LOG_WARN("(manual override: %s -> %s) ", ggml_type_name(new_type), ggml_type_name(qtype));
                         }
                         new_type = qtype; // if two or more types are specified for the same tensor, the last match wins
@@ -601,8 +601,9 @@ static bool tensor_requires_imatrix(const ggml_tensor * t, const ggml_type dst_t
         case GGML_TYPE_IQ1_S:
             return true;
         case GGML_TYPE_Q2_K:
-            // Q2_K is the worst k-quant type, so always require an imatrix,
+            // Q2_K_S is the worst k-quant type, so always require an imatrix,
             // except for the token embedding tensors.
+            // ref: https://github.com/ggml-org/llama.cpp/pull/19526#issuecomment-3930522135
             if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S) {
                 const char * name = t->name;
                 if (std::strncmp(name, "token_embd.weight", 17) == 0 ||
@@ -1052,13 +1053,13 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 if (imatrix_data) {
                     auto it = imatrix_data->find(remap_imatrix(tensor->name, mapped));
                     if (it == imatrix_data->end()) {
-                        LLAMA_LOG_INFO("\n====== %s: did not find weights for %s\n", __func__, tensor->name);
+                        LLAMA_LOG_INFO("\n%s: did not find imatrix data for %s\n", __func__, tensor->name);
                     } else {
                         if (it->second.size() == (size_t)tensor->ne[0]*tensor->ne[2]) {
                             imatrix = it->second.data();
                         } else {
-                            LLAMA_LOG_INFO("\n====== %s: imatrix size %d is different from tensor size %d for %s\n", __func__,
-                                    int(it->second.size()), int(tensor->ne[0]*tensor->ne[2]), tensor->name);
+                            LLAMA_LOG_INFO("\n%s: imatrix size %d is different from tensor size %d for %s\n",
+                                           __func__, int(it->second.size()), int(tensor->ne[0]*tensor->ne[2]), tensor->name);
 
                             // this can happen when quantizing an old mixtral model with split tensors with a new incompatible imatrix
                             // this is a significant error and it may be good idea to abort the process if this happens,
@@ -1074,8 +1075,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 if (!imatrix && tensor_requires_imatrix(tensor, new_type, ftype)) {
                     // ddh0: we should never reach this anymore, since we now check for imatrix
                     //       requirements in the preliminary loop over model weights, but I am
-                    //       leaving this old check here as a guard, just in case.
-                    LLAMA_LOG_ERROR("\n\n============================================================\n");
+                    //       leaving this check here as a guard, just in case.
+                    LLAMA_LOG_ERROR("\n============================================================\n");
                     LLAMA_LOG_ERROR("Missing importance matrix for tensor %s in a very low-bit quantization\n", tensor->name);
                     LLAMA_LOG_ERROR("The result will be garbage, so bailing out\n");
                     LLAMA_LOG_ERROR("============================================================\n\n");
@@ -1087,7 +1088,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 if (tensor->type == GGML_TYPE_F32) {
                     f32_data = (float *) tensor->data;
                 } else if (ggml_is_quantized(tensor->type) && !params->allow_requantize) {
-                    throw std::runtime_error(format("requantizing from type %s is disabled", ggml_type_name(tensor->type)));
+                    throw std::runtime_error(format("%s: requantizing from type %s is disabled", __func__, ggml_type_name(tensor->type)));
                 } else {
                     llama_tensor_dequantize_impl(tensor, f32_conv_buf, workers, nelements, nthread);
                     f32_data = (float *) f32_conv_buf.data();
