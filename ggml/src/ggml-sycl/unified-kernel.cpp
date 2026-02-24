@@ -5662,6 +5662,28 @@ bool UnifiedKernel::persistent_use_split_barrier() const {
     return true;
 }
 
+bool UnifiedKernel::persistent_dispatch_uses_dag() const {
+    // Returns true when DAG mode will be the active dispatch mode.
+    // Phase mode supersedes DAG mode.  Both can be disabled via env vars.
+    if (!dag_allocated_) return false;
+    // Check if phase mode is active (supersedes DAG)
+    if (phase_allocated_) {
+        static int phase_env = -1;
+        if (phase_env < 0) {
+            const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_PHASE");
+            phase_env = (env != nullptr && std::strcmp(env, "0") == 0) ? 0 : 1;
+        }
+        if (phase_env != 0) return false;  // Phase mode active → DAG not used
+    }
+    // Phase is disabled or not allocated; check if DAG itself is disabled
+    static int dag_env = -1;
+    if (dag_env < 0) {
+        const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_DAG");
+        dag_env = (env != nullptr && std::strcmp(env, "0") == 0) ? 0 : 1;
+    }
+    return (dag_env != 0);
+}
+
 int UnifiedKernel::persistent_matmul_tile_cols(OperationType type, int N, int K) const {
     (void) N;
     (void) K;
@@ -7288,11 +7310,12 @@ void UnifiedKernel::launch_persistent_kernel() {
         // Fuse MATMUL_GATE + MATMUL_UP + SILU_MUL into a single op when the
         // dependency chain is explicit and contiguous in the persistent plan.
         // Fusion is enabled for: legacy barrier mode and phase mode.
-        // Disabled for: DAG mode (invalidates per-op atomic counters) unless
-        // phase mode overrides it, and multi-device split (deadlocks secondary sync).
+        // Disabled for: DAG dispatch mode (invalidates per-op atomic counters
+        // because fusion changes op count but DAG topology uses plan op indices)
+        // and multi-device split (deadlocks secondary sync).
         // Phase mode remaps op indices after fusion via plan_to_device[].
         const bool split_active = split_config_set_ && split_config_.n_devices > 1;
-        const bool fusion_ok = !split_active && (!dag_allocated_ || phase_allocated_);
+        const bool fusion_ok = !split_active && !persistent_dispatch_uses_dag();
         if (fusion_ok && src.type == OperationType::MATMUL_GATE && (i + 2) < n_ops) {
             const auto & up   = current_plan_->operations[i + 1];
             const auto & silu = current_plan_->operations[i + 2];
@@ -7422,6 +7445,13 @@ void UnifiedKernel::launch_persistent_kernel() {
     // extract_persistent_plan, but tile counts weren't available until now)
     if (dag_allocated_ && dag_state_.n_tiles != nullptr) {
         const int n = static_cast<int>(host_n_tiles_.size());
+        // Safety: when DAG is the active dispatch mode, fusion must be disabled
+        // so device op count matches the DAG topology's op count.
+        // In phase mode, fusion is legal (phase remap handles it), so skip check.
+        if (persistent_dispatch_uses_dag()) {
+            GGML_ASSERT(n == dag_state_.n_ops &&
+                        "DAG n_ops / device ops count mismatch — fusion must be disabled for DAG dispatch");
+        }
         queue_.memcpy(dag_state_.n_tiles, host_n_tiles_.data(), n * sizeof(int)).wait();
     }
 
@@ -7788,8 +7818,11 @@ void UnifiedKernel::launch_persistent_kernel_async() {
         const size_t pre_fusion_idx = i;
 
         // No GATE+UP+SILU fusion when split is active (deadlocks secondary sync)
+        // or when DAG dispatch mode is active (fusion changes op count but DAG
+        // topology uses plan op indices — mismatch causes hang).
         const bool split_active = split_config_set_ && split_config_.n_devices > 1;
-        if (!split_active && src.type == OperationType::MATMUL_GATE && (i + 2) < n_ops) {
+        const bool fusion_ok = !split_active && !persistent_dispatch_uses_dag();
+        if (fusion_ok && src.type == OperationType::MATMUL_GATE && (i + 2) < n_ops) {
             const auto & up   = current_plan_->operations[i + 1];
             const auto & silu = current_plan_->operations[i + 2];
             const bool   contiguous_chain =

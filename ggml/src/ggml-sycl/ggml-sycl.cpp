@@ -31822,6 +31822,28 @@ full_build:
             }
         }
 
+        // 2b. Fill missing edges from source_op linkage (catches SET_ROWS, GLU, etc.)
+        //     The tensor_to_op approach above may miss edges when src tensors go through
+        //     view chains that tensor_to_op can't fully resolve.  The input_source_op /
+        //     aux_source_op fields on each OperationDescriptor are populated via
+        //     find_source_op() during plan building and are authoritative.
+        {
+            const auto & ops = kernel.get_plan_operations();
+            for (int o = 0; o < n_ops && o < (int) ops.size(); o++) {
+                auto check_source = [&](int src_op) {
+                    if (src_op >= 0 && src_op < n_ops && src_op != o) {
+                        auto & succ = successors[src_op];
+                        if (std::find(succ.begin(), succ.end(), o) == succ.end()) {
+                            succ.push_back(o);
+                            in_degree[o]++;
+                        }
+                    }
+                };
+                check_source(ops[o].input_source_op);
+                check_source(ops[o].aux_source_op);
+            }
+        }
+
         // 3. Build the device-side DAG (reads tile counts from current_plan_ internally)
         kernel.build_dag(successors, in_degree);
         // 3b. Also build phase schedule (topological levels) for O(1) tile claiming
