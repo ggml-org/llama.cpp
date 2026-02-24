@@ -53,13 +53,15 @@ class InferenceEngineImpl private constructor(
     private var cfgTemperature: Float = 0.8f
     private var cfgTopP: Float        = 0.95f
     private var cfgTopK: Int          = 40
+    private var cfgFlashAttn: Boolean = false
 
-    fun applySettings(contextSize: Int, temperature: Float, topP: Float, topK: Int) {
+    fun applySettings(contextSize: Int, temperature: Float, topP: Float, topK: Int, flashAttn: Boolean = false) {
         cfgContextSize = contextSize
         cfgTemperature = temperature
         cfgTopP        = topP
         cfgTopK        = topK
-        Log.i(TAG, "Settings applied: ctx=$contextSize temp=$temperature topP=$topP topK=$topK")
+        cfgFlashAttn   = flashAttn
+        Log.i(TAG, "Settings applied: ctx=$contextSize temp=$temperature topP=$topP topK=$topK flashAttn=$flashAttn")
     }
 
     @FastNative private external fun init(nativeLibDir: String)
@@ -68,7 +70,8 @@ class InferenceEngineImpl private constructor(
         contextSize: Int,
         temperature: Float,
         topP: Float,
-        topK: Int
+        topK: Int,
+        flashAttn: Boolean
     ): Int
     @FastNative private external fun systemInfo(): String
     @FastNative private external fun benchModel(pp: Int, tg: Int, pl: Int, nr: Int): String
@@ -115,9 +118,6 @@ class InferenceEngineImpl private constructor(
             }
 
             try {
-                // /proc/self/fd/N yolları için File.canRead() yanlış false döner
-                // (sembolik link kontrolü geçemez). Bu yüzden fd yollarını atla,
-                // normal yollar için ise standart kontrolleri uygula.
                 Log.i(TAG, "Checking access to model file... \n$pathToModel")
                 File(pathToModel).let {
                     require(it.exists()) { "File not found" }
@@ -131,7 +131,7 @@ class InferenceEngineImpl private constructor(
                 load(pathToModel).let {
                     if (it != 0) throw UnsupportedArchitectureException()
                 }
-                prepare(cfgContextSize, cfgTemperature, cfgTopP, cfgTopK).let {
+                prepare(cfgContextSize, cfgTemperature, cfgTopP, cfgTopK, cfgFlashAttn).let {
                     if (it != 0) throw IOException("Failed to prepare resources")
                 }
                 Log.i(TAG, "Model loaded!")
