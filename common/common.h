@@ -390,6 +390,8 @@ struct common_params {
 
     enum llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER; // how to split the model across GPUs
 
+    int32_t n_threads_load = -1; // number of threads for parallel model loading (-1 = unlimited, 1 = sequential)
+
     struct cpu_params cpuparams;
     struct cpu_params cpuparams_batch;
 

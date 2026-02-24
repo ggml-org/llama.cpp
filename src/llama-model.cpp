@@ -13,18 +13,26 @@
 
 #include "ggml-cpp.h"
 
+#if defined(GGML_USE_CUDA) || defined(GGML_USE_HIP)
+#include "ggml-cuda.h"
+#endif
+
 #include "models/models.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <cfloat>
 #include <cstring>
 #include <cmath>
 #include <functional>
+#include <future>
 #include <map>
+#include <mutex>
 #include <regex>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 
 const char * llm_type_name(llm_type type) {
     switch (type) {
@@ -7805,11 +7813,78 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     }
 
     // load tensor data
-    for (auto & [ctx, buf_map] : ctx_buf_maps) {
-        if (!ml.load_all_data(ctx, buf_map, use_mlock ? &pimpl->mlock_mmaps : NULL, params.progress_callback, params.progress_callback_user_data)) {
+    // Parallel loading for multi-GPU: each GPU context loads in its own thread
+    const bool parallel_load_disabled = (getenv("GGML_NO_PARALLEL_LOAD") != nullptr);
+    // Check both env vars: GGML_PARALLEL_LOAD_LIMIT (legacy) and LLAMA_ARG_THREADS_LOAD (from -tl flag)
+    const char * limit_env = getenv("GGML_PARALLEL_LOAD_LIMIT");
+    if (!limit_env) {
+        limit_env = getenv("LLAMA_ARG_THREADS_LOAD");
+    }
+    // Default limit: 4 threads for ROCm (hipStreamPerThread is buggy with many threads)
+    // NVIDIA can handle more, but 4 is a safe default. User can override with env var.
+#if defined(GGML_USE_HIP)
+    const size_t default_limit = 4;
+#else
+    const size_t default_limit = SIZE_MAX;
+#endif
+    const size_t parallel_limit = limit_env ? (size_t)std::max(1, atoi(limit_env)) : default_limit;
+    const size_t n_contexts = ctx_buf_maps.size();
+    const bool use_parallel = !parallel_load_disabled && n_contexts > 1 && parallel_limit > 1;
+
+    if (use_parallel) {
+        LLAMA_LOG_INFO("%s: using parallel loading for %zu GPU contexts (limit=%zu)\n", __func__, n_contexts, parallel_limit);
+
+        std::atomic<bool> load_failed{false};
+        std::vector<std::future<bool>> futures;
+        futures.reserve(n_contexts);
+
+        for (auto & [ctx, buf_map] : ctx_buf_maps) {
+            // Respect parallel limit
+            if (futures.size() >= parallel_limit) {
+                // Wait for oldest future before starting new one
+                if (!futures[0].get()) {
+                    load_failed = true;
+                }
+                futures.erase(futures.begin());
+            }
+
+            auto * ctx_ptr = ctx;
+            auto * buf_map_ptr = &buf_map;
+            auto * mlock_ptr = use_mlock ? &pimpl->mlock_mmaps : nullptr;
+
+            futures.push_back(std::async(std::launch::async, [&ml, ctx_ptr, buf_map_ptr, mlock_ptr, &load_failed]() {
+                if (load_failed) return false;
+                // Each thread needs independent file I/O - load_all_data handles this internally
+                bool result = ml.load_all_data(ctx_ptr, *buf_map_ptr, mlock_ptr,
+                    /*progress_callback*/ nullptr,
+                    /*progress_callback_user_data*/ nullptr);
+                return result;
+            }));
+        }
+
+        // Wait for all remaining futures
+        for (auto & f : futures) {
+            if (!f.get()) {
+                load_failed = true;
+            }
+        }
+
+        if (load_failed) {
             return false;
         }
+    } else {
+        // Sequential loading (single GPU or parallel disabled)
+        for (auto & [ctx, buf_map] : ctx_buf_maps) {
+            if (!ml.load_all_data(ctx, buf_map, use_mlock ? &pimpl->mlock_mmaps : NULL, params.progress_callback, params.progress_callback_user_data)) {
+                return false;
+            }
+        }
     }
+
+    // Sync all async CUDA/HIP load streams before continuing
+#if defined(GGML_USE_CUDA) || defined(GGML_USE_HIP)
+    ggml_cuda_sync_load_streams();
+#endif
 
     if (use_mmap_buffer) {
         for (auto & mapping : ml.mappings) {

@@ -7,6 +7,7 @@
 #include <cinttypes>
 #include <cstring>
 #include <future>
+#include <unordered_map>
 
 static const size_t kiB = 1024;
 static const size_t MiB = 1024*kiB;
@@ -537,6 +538,7 @@ llama_model_loader::llama_model_loader(
     llm_kv = LLM_KV(llm_arch_from_string(arch_name));
 
     files.emplace_back(new llama_file(fname.c_str(), "rb", use_direct_io));
+    file_paths.push_back(fname);
     contexts.emplace_back(ctx);
 
     if (use_mmap && use_direct_io) {
@@ -619,6 +621,7 @@ llama_model_loader::llama_model_loader(
             }
 
             files.emplace_back(new llama_file(fname_split, "rb", use_direct_io));
+            file_paths.push_back(fname_split);
             contexts.emplace_back(ctx);
 
             // Save tensors data offset info of the shard.
@@ -765,6 +768,12 @@ llama_model_loader::llama_model_loader(
     this->use_direct_io = use_direct_io;
     this->check_tensors = check_tensors;
     this->no_alloc = no_alloc;
+
+    // Initialize per-file mutexes for thread-safe parallel loading
+    file_mutexes.resize(files.size());
+    for (auto & mtx_ptr : file_mutexes) {
+        mtx_ptr = std::make_unique<std::mutex>();
+    }
 }
 
 std::string llama_model_loader::get_arch_name() const {
@@ -979,6 +988,20 @@ bool llama_model_loader::load_all_data(
     std::vector<no_init<uint8_t>> read_buf;
     std::vector<std::future<std::pair<ggml_tensor *, bool>>> validation_result;
 
+    // Thread-local file handles for parallel loading (no mutex needed!)
+    // Each thread opens its own file descriptor for true parallel I/O
+    thread_local std::unordered_map<size_t, std::unique_ptr<llama_file>> local_files;
+    auto get_local_file = [this](size_t idx) -> llama_file * {
+        auto it = local_files.find(idx);
+        if (it == local_files.end()) {
+            auto file = std::make_unique<llama_file>(file_paths.at(idx).c_str(), "rb");
+            auto * ptr = file.get();
+            local_files[idx] = std::move(file);
+            return ptr;
+        }
+        return it->second.get();
+    };
+
     // 4 staging buffers for async uploads, each sized 1MB seems to be a good default for single NVMe drives.
     // NVMe raid configurations might require more / larger buffers.
     constexpr size_t n_buffers = 4;
@@ -1000,6 +1023,13 @@ bool llama_model_loader::load_all_data(
         if (use_mmap || check_tensors) {
             return nullptr;
         }
+#if defined(GGML_USE_HIP)
+        // Disable async uploads on ROCm - hipStreamPerThread and events are buggy
+        // and cause GPU hangs with multi-threaded loading
+        // See: https://github.com/ROCm/HIP/issues/1174
+        LLAMA_LOG_DEBUG("%s: async uploads disabled on ROCm\n", func);
+        return nullptr;
+#endif
         // When not using mmaped io use async uploads from pinned memory to GPU memory.
         // First determine if the backend supports the necessary features for async uploads.
         auto * buf = bufs.count(0) ? bufs.at(0) : nullptr;
@@ -1121,9 +1151,11 @@ bool llama_model_loader::load_all_data(
                 ggml_backend_tensor_set(cur, data, 0, n_size);
             }
         } else {
-            const auto & file = files.at(weight->idx);
+            // Use thread-local file handle for parallel I/O (no mutex needed!)
+            llama_file * file = get_local_file(weight->idx);
 
             if (ggml_backend_buffer_is_host(cur->buffer)) {
+                // Direct read to host buffer - no mutex needed with per-thread file handle
                 file->seek(weight->offs, SEEK_SET);
                 file->read_raw(cur->data, n_size);
                 if (check_tensors) {
@@ -1132,7 +1164,7 @@ bool llama_model_loader::load_all_data(
                     }));
                 }
             } else {
-                // If upload_backend is valid load the tensor in chunks to pinned memory and upload the buffers asynchronously to the GPU.
+                // GPU buffer - read then transfer
                 if (upload_backend) {
                     size_t offset = weight->offs;
                     alignment = file->read_alignment();
@@ -1187,6 +1219,7 @@ bool llama_model_loader::load_all_data(
                     }
                 } else {
                     read_buf.resize(n_size);
+                    // Read with thread-local file handle - no mutex needed!
                     file->seek(weight->offs, SEEK_SET);
                     file->read_raw(read_buf.data(), n_size);
                     ggml_backend_tensor_set(cur, read_buf.data(), 0, n_size);
