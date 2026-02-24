@@ -605,53 +605,61 @@ class MainActivity : AppCompatActivity() {
                         return@launch
                     }
 
-                    // Eski geçici dosyayı sil
-                    deleteTempModelFile()
-
                     val cacheDir = externalCacheDir ?: cacheDir
                     val tempFile = java.io.File(cacheDir, "model_active_$modelName")
 
-                    // İlerleme dialogu
-                    progressDialog = android.app.ProgressDialog(this@MainActivity).apply {
-                        setTitle("Model hazırlanıyor")
-                        setMessage("$modelName kopyalanıyor...")
-                        isIndeterminate = false
-                        max = 100
-                        setProgressStyle(android.app.ProgressDialog.STYLE_HORIZONTAL)
-                        setCancelable(false)
-                        show()
-                    }
+                    // Aynı model zaten önbellekte varsa tekrar kopyalama
+                    val docFile = androidx.documentfile.provider.DocumentFile
+                        .fromSingleUri(this@MainActivity, uri)
+                    val originalSize = docFile?.length() ?: 0L
 
-                    log("Kova", "Kopyalama başlıyor: $modelName")
+                    if (tempFile.exists() && originalSize > 0 && tempFile.length() == originalSize) {
+                        log("Kova", "Model zaten önbellekte, kopyalama atlandı: ${tempFile.name}")
+                        activeTempModelFile = tempFile
+                        pathToLoad = tempFile.absolutePath
+                    } else {
+                        // Eski geçici dosyayı sil
+                        deleteTempModelFile()
 
-                    withContext(Dispatchers.IO) {
-                        contentResolver.openInputStream(uri)?.use { input ->
-                            val docFile = androidx.documentfile.provider.DocumentFile
-                                .fromSingleUri(this@MainActivity, uri)
-                            val totalBytes = docFile?.length() ?: 0L
-                            var copiedBytes = 0L
-                            tempFile.outputStream().use { output ->
-                                val buf = ByteArray(8 * 1024 * 1024)
-                                var n: Int
-                                while (input.read(buf).also { n = it } != -1) {
-                                    output.write(buf, 0, n)
-                                    copiedBytes += n
-                                    if (totalBytes > 0) {
-                                        val progress = (copiedBytes * 100 / totalBytes).toInt()
-                                        withContext(Dispatchers.Main) {
-                                            progressDialog?.progress = progress
+                        // İlerleme dialogu
+                        progressDialog = android.app.ProgressDialog(this@MainActivity).apply {
+                            setTitle("Model hazırlanıyor")
+                            setMessage("$modelName kopyalanıyor...")
+                            isIndeterminate = false
+                            max = 100
+                            setProgressStyle(android.app.ProgressDialog.STYLE_HORIZONTAL)
+                            setCancelable(false)
+                            show()
+                        }
+
+                        log("Kova", "Kopyalama başlıyor: $modelName")
+
+                        withContext(Dispatchers.IO) {
+                            contentResolver.openInputStream(uri)?.use { input ->
+                                var copiedBytes = 0L
+                                tempFile.outputStream().use { output ->
+                                    val buf = ByteArray(8 * 1024 * 1024)
+                                    var n: Int
+                                    while (input.read(buf).also { n = it } != -1) {
+                                        output.write(buf, 0, n)
+                                        copiedBytes += n
+                                        if (originalSize > 0) {
+                                            val progress = (copiedBytes * 100 / originalSize).toInt()
+                                            withContext(Dispatchers.Main) {
+                                                progressDialog?.progress = progress
+                                            }
                                         }
                                     }
                                 }
-                            }
-                        } ?: throw Exception("Dosya açılamadı: $uri")
-                    }
+                            } ?: throw Exception("Dosya açılamadı: $uri")
+                        }
 
-                    progressDialog?.dismiss()
-                    progressDialog = null
-                    activeTempModelFile = tempFile
-                    pathToLoad = tempFile.absolutePath
-                    log("Kova", "Kopyalama tamamlandı: ${tempFile.length()} bytes")
+                        progressDialog?.dismiss()
+                        progressDialog = null
+                        activeTempModelFile = tempFile
+                        pathToLoad = tempFile.absolutePath
+                        log("Kova", "Kopyalama tamamlandı: ${tempFile.length()} bytes")
+                    }
 
                 } else {
                     pathToLoad = entry
