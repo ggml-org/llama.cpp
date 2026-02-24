@@ -4,8 +4,64 @@
     android:layout_height="wrap_content"
     android:layout_marginHorizontal="16dp"
     android:layout_marginVertical="6dp"
+    android:orientation="vertical"
     android:gravity="start">
 
+    <!-- Thinking block (varsayılan: gizli) -->
+    <LinearLayout
+        android:id="@+id/thinking_section"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="#1A2A2A3E"
+        android:layout_marginBottom="4dp"
+        android:visibility="gone">
+
+        <!-- Başlık satırı (tıklanabilir) -->
+        <LinearLayout
+            android:id="@+id/thinking_header"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:padding="8dp"
+            android:background="?attr/selectableItemBackground"
+            android:clickable="true"
+            android:focusable="true">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="💭 Düşünce süreci"
+                android:textColor="#A0A0C0"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/thinking_chevron"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="▾"
+                android:textColor="#A0A0C0"
+                android:textSize="14sp"
+                android:paddingStart="4dp" />
+        </LinearLayout>
+
+        <!-- Thinking içeriği (varsayılan: gizli = kapalı) -->
+        <TextView
+            android:id="@+id/thinking_content"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:visibility="gone"
+            android:padding="8dp"
+            android:paddingTop="0dp"
+            android:textColor="#808099"
+            android:textSize="12sp"
+            android:fontFamily="monospace"
+            android:textIsSelectable="true" />
+    </LinearLayout>
+
+    <!-- Asistan mesaj balonu -->
     <TextView
         android:id="@+id/msg_content"
         android:layout_width="wrap_content"
@@ -15,5 +71,41 @@
         android:padding="12dp"
         android:lineSpacingMultiplier="1.3"
         android:textColor="#E0E0E0"
-        android:textSize="15sp" />
+        android:textSize="15sp"
+        android:textIsSelectable="true" />
+
+    <!-- Aksiyon butonları -->
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginStart="4dp"
+        android:layout_marginTop="2dp">
+
+        <Button
+            android:id="@+id/btn_copy"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="📋"
+            android:textSize="14sp"
+            android:minWidth="0dp"
+            android:minHeight="0dp"
+            android:paddingHorizontal="6dp"
+            android:paddingVertical="2dp" />
+
+        <Button
+            android:id="@+id/btn_regenerate"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="🔄"
+            android:textSize="14sp"
+            android:minWidth="0dp"
+            android:minHeight="0dp"
+            android:paddingHorizontal="6dp"
+            android:paddingVertical="2dp" />
+
+    </LinearLayout>
+
 </LinearLayout>
