@@ -716,16 +716,14 @@ class MainActivity : AppCompatActivity() {
      */
     private fun tryGetRealPath(uri: android.net.Uri): String? {
         return try {
-            val docId = androidx.documentfile.provider.DocumentFile
-                .fromSingleUri(this, uri)?.uri?.lastPathSegment
-                ?: uri.lastPathSegment
-                ?: return null
+            // SAF URI formatı: content://com.android.externalstorage.documents/document/primary%3ADownload%2Fmodel.gguf
+            // uri.lastPathSegment → "primary:Download/model.gguf" (Android otomatik decode eder)
+            val lastSegment = uri.lastPathSegment ?: return null
+            log("Kova", "tryGetRealPath lastSegment: $lastSegment")
 
-            // Örnek docId: "primary:Depo/Modeller/model.gguf"
-            val decoded = java.net.URLDecoder.decode(docId, "UTF-8")
-            if (!decoded.contains(":")) return null
+            if (!lastSegment.contains(":")) return null
 
-            val parts = decoded.split(":", limit = 2)
+            val parts = lastSegment.split(":", limit = 2)
             val volume = parts[0].lowercase()
             val relativePath = parts[1]
 
@@ -737,6 +735,7 @@ class MainActivity : AppCompatActivity() {
 
             val fullPath = "$basePath/$relativePath"
             val file = java.io.File(fullPath)
+            log("Kova", "tryGetRealPath fullPath: $fullPath exists=${file.exists()} canRead=${file.canRead()}")
             if (file.exists() && file.canRead()) fullPath else null
         } catch (e: Exception) {
             log("Kova", "tryGetRealPath hatası: ${e.message}")
@@ -810,7 +809,7 @@ class MainActivity : AppCompatActivity() {
 
         layout.addView(sectionTitle("Context Window (token)"))
         val ctxGroup = RadioGroup(ctx).apply { orientation = RadioGroup.HORIZONTAL }
-        val ctxOptions = listOf(1024, 2048, 4096, 8192)
+        val ctxOptions = listOf(2048, 4096, 8192)
         val ctxRadios = ctxOptions.map { size ->
             RadioButton(ctx).apply { text = size.toString(); id = View.generateViewId(); isChecked = (size == contextSize) }
         }
