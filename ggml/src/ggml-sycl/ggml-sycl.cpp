@@ -19934,6 +19934,32 @@ static std::unique_ptr<ggml_sycl::UnifiedKernel> g_split_secondary_kernel;
 static std::vector<secondary_matmul_info> g_cached_secondary_ops;
 static bool                               g_split_plan_cached = false;
 
+// Fix up secondary_ops and split_config op_meta after scratch pool remapping.
+// merge_dst and input_device_ptr were captured from the original ggml buffer
+// before scratch pool remapped the plan's output pointers. This must run on
+// both the cached path (each token) and the full build path (first token).
+static void fixup_secondary_ops_after_scratch(ggml_sycl::UnifiedKernel &           primary,
+                                              std::vector<secondary_matmul_info> & secondary_ops) {
+    ggml_sycl::KernelSplitConfig updated_split;
+    primary.get_split_config(updated_split);
+
+    for (auto & info : secondary_ops) {
+        void * scratch = primary.scratch_output(info.plan_op_idx);
+        if (scratch) {
+            info.merge_dst = static_cast<float *>(scratch) + info.row_start;
+            if (info.plan_op_idx < (int) updated_split.op_meta.size()) {
+                updated_split.op_meta[info.plan_op_idx].merge_dst = static_cast<float *>(scratch) + info.row_start;
+            }
+        }
+        OperationDescriptor op_desc;
+        if (primary.get_op_descriptor(info.plan_op_idx, op_desc)) {
+            info.input_device_ptr = op_desc.input;
+        }
+    }
+
+    primary.set_split_config(updated_split);
+}
+
 // Ensure host-pinned resources and device-local counters are allocated for
 // host-mediated persistent TG multi-device sync. Grows buffers as needed
 // (idempotent). Device counters are zero-initialized on every call.
@@ -32977,26 +33003,7 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
                 // Restore cached secondary_ops and update mutable pointers
                 // (merge_dst, input_device_ptr) from the remapped scratch plan.
                 secondary_ops = g_cached_secondary_ops;
-
-                ggml_sycl::KernelSplitConfig updated_split;
-                primary.get_split_config(updated_split);
-
-                for (auto & info : secondary_ops) {
-                    void * scratch = primary.scratch_output(info.plan_op_idx);
-                    if (scratch) {
-                        info.merge_dst = static_cast<float *>(scratch) + info.row_start;
-                        if (info.plan_op_idx < (int) updated_split.op_meta.size()) {
-                            updated_split.op_meta[info.plan_op_idx].merge_dst =
-                                static_cast<float *>(scratch) + info.row_start;
-                        }
-                    }
-                    OperationDescriptor op_desc;
-                    if (primary.get_op_descriptor(info.plan_op_idx, op_desc)) {
-                        info.input_device_ptr = op_desc.input;
-                    }
-                }
-
-                primary.set_split_config(updated_split);
+                fixup_secondary_ops_after_scratch(primary, secondary_ops);
 
                 // Reset sync counters for new token (ensure_split_persistent_resources
                 // is NOT called on cached path since resources are already allocated,
@@ -33025,25 +33032,7 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
                 // Fix up secondary_ops AND split_config op_meta after scratch pool:
                 // merge_dst and input_device_ptr were captured from the original
                 // ggml buffer before scratch pool remapped the plan's output ptrs.
-                ggml_sycl::KernelSplitConfig updated_split;
-                primary.get_split_config(updated_split);
-
-                for (auto & info : secondary_ops) {
-                    void * scratch = primary.scratch_output(info.plan_op_idx);
-                    if (scratch) {
-                        info.merge_dst = static_cast<float *>(scratch) + info.row_start;
-                        if (info.plan_op_idx < (int) updated_split.op_meta.size()) {
-                            updated_split.op_meta[info.plan_op_idx].merge_dst =
-                                static_cast<float *>(scratch) + info.row_start;
-                        }
-                    }
-                    OperationDescriptor op_desc;
-                    if (primary.get_op_descriptor(info.plan_op_idx, op_desc)) {
-                        info.input_device_ptr = op_desc.input;
-                    }
-                }
-
-                primary.set_split_config(updated_split);
+                fixup_secondary_ops_after_scratch(primary, secondary_ops);
             }
 
             sycl::queue * q_secondary = g_split_config.queue[1];

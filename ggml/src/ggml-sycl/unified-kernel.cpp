@@ -5831,8 +5831,7 @@ void UnifiedKernel::free_persistent_buffers() {
         if (phase_schedule_.entries)       sycl::free(phase_schedule_.entries, queue_);
         if (phase_schedule_.phase_offset)  sycl::free(phase_schedule_.phase_offset, queue_);
         if (phase_schedule_.phase_tiles)   sycl::free(phase_schedule_.phase_tiles, queue_);
-        if (phase_schedule_.phase_counter) sycl::free(phase_schedule_.phase_counter, queue_);
-        if (phase_schedule_.phase_done)    sycl::free(phase_schedule_.phase_done, queue_);
+
         phase_schedule_     = {};
         phase_allocated_    = false;
         phase_pool_n_ops_   = 0;
@@ -6009,16 +6008,12 @@ void UnifiedKernel::build_phase_schedule(const std::vector<std::vector<int>> & s
             sycl::free(phase_schedule_.entries, queue_);
             sycl::free(phase_schedule_.phase_offset, queue_);
             sycl::free(phase_schedule_.phase_tiles, queue_);
-            sycl::free(phase_schedule_.phase_counter, queue_);
-            sycl::free(phase_schedule_.phase_done, queue_);
         }
         const int alloc_ops    = n_ops + 64;
         const int alloc_phases = n_phases + 16;
         phase_schedule_.entries      = sycl::malloc_device<DevicePhaseEntry>(alloc_ops, queue_);
         phase_schedule_.phase_offset = sycl::malloc_device<int>(alloc_phases + 1, queue_);
         phase_schedule_.phase_tiles  = sycl::malloc_device<int>(alloc_phases, queue_);
-        phase_schedule_.phase_counter = sycl::malloc_device<int>(1, queue_);
-        phase_schedule_.phase_done   = sycl::malloc_device<int>(1, queue_);
         phase_pool_n_ops_    = alloc_ops;
         phase_pool_n_phases_ = alloc_phases;
     }
@@ -6027,11 +6022,7 @@ void UnifiedKernel::build_phase_schedule(const std::vector<std::vector<int>> & s
     phase_allocated_ = true;
 
     // Upload static topology (phase_offset)
-    queue_.memcpy(phase_schedule_.phase_offset, host_phase_offset_.data(),
-                  (n_phases + 1) * sizeof(int));
-    // Initialize counters to zero
-    queue_.memset(phase_schedule_.phase_counter, 0, sizeof(int));
-    queue_.memset(phase_schedule_.phase_done, 0, sizeof(int));
+    queue_.memcpy(phase_schedule_.phase_offset, host_phase_offset_.data(), (n_phases + 1) * sizeof(int));
     queue_.wait();
 
     // Save original (pre-fusion-remapping) phase data for subsequent tokens.
@@ -6757,7 +6748,6 @@ void UnifiedKernel::build_scratch_pool() {
     // destination pointer and register a deferred copy-back.
     char * pool_base = static_cast<char *>(scratch_pool_);
     size_t offset    = 0;
-    std::unordered_map<const void *, void *> remap;
 
     // Track final op for copy-back
     int    final_op_idx    = -1;
@@ -6769,11 +6759,13 @@ void UnifiedKernel::build_scratch_pool() {
         auto & op = current_plan_->operations[i];
 
         // Remap inputs using op-index-based linkage ONLY.
-        // The pointer-based remap fallback is disabled because ggml's memory allocator
+        // Only op-index-based linkage is used because ggml's memory allocator
         // recycles buffer addresses across non-overlapping tensor lifetimes, causing
-        // false collisions in the remap table.  Pointers without source_op linkage
+        // false collisions in pointer-based remapping.  Pointers without source_op linkage
         // (input_source_op/aux_source_op == -1) are external (weights, KV cache, masks,
         // GET_ROWS stable buffers) and must NOT be remapped.
+        GGML_ASSERT(op.input_source_op != i && "source_op self-reference is a DAG bug");
+        GGML_ASSERT(op.aux_source_op != i && "aux_source_op self-reference is a DAG bug");
         if (op.input_source_op >= 0 && op.input_source_op < i) {
             void * src_scratch = scratch_outputs_[op.input_source_op];
             if (src_scratch) {
@@ -6815,10 +6807,6 @@ void UnifiedKernel::build_scratch_pool() {
             }
         }
 
-        // Register in remap table (fallback for ops without explicit source linkage)
-        if (op.output) {
-            remap[op.output] = scratch_ptr;
-        }
         op.output          = scratch_ptr;
         scratch_outputs_[i] = scratch_ptr;
     }
@@ -6908,7 +6896,11 @@ void UnifiedKernel::execute_persistent() {
     // Launch the persistent kernel
     launch_persistent_kernel();
 
-    // Cache plan template after first successful execution
+    // Cache plan template after first successful execution.
+    // cached_ops_ stores post-scratch-pool operations.  Ops whose source_op == -1
+    // retain their scratch pointers across tokens; this is safe because -1 means
+    // the input is external (weights, embeddings, KV cache) whose device pointers
+    // are resolved fresh each token via begin_plan_update().
     if (!plan_cache_valid_) {
         copy_plan_shape(*current_plan_, cached_plan_template_);
         cached_ops_ = current_plan_->operations;
@@ -7192,7 +7184,11 @@ void UnifiedKernel::execute_persistent_phased(phase_callback_t on_matmul_complet
     for (const auto & op : host_ops) last_stats_.total_tiles += op.n_tiles;
     last_stats_.kernel_time_ms = total_elapsed_ms;
 
-    // Cache plan template after first successful execution
+    // Cache plan template after first successful execution.
+    // cached_ops_ stores post-scratch-pool operations.  Ops whose source_op == -1
+    // retain their scratch pointers across tokens; this is safe because -1 means
+    // the input is external (weights, embeddings, KV cache) whose device pointers
+    // are resolved fresh each token via begin_plan_update().
     if (!plan_cache_valid_) {
         copy_plan_shape(*current_plan_, cached_plan_template_);
         cached_ops_ = current_plan_->operations;
@@ -7525,11 +7521,7 @@ void UnifiedKernel::launch_persistent_kernel() {
                       final_n_ops * sizeof(DevicePhaseEntry));
         queue_.memcpy(phase_schedule_.phase_offset, host_phase_offset_.data(),
                       (final_n_phases + 1) * sizeof(int));
-        queue_.memcpy(phase_schedule_.phase_tiles, host_phase_tiles_.data(),
-                      final_n_phases * sizeof(int));
-        // Reset counters
-        queue_.memset(phase_schedule_.phase_counter, 0, sizeof(int));
-        queue_.memset(phase_schedule_.phase_done, 0, sizeof(int));
+        queue_.memcpy(phase_schedule_.phase_tiles, host_phase_tiles_.data(), final_n_phases * sizeof(int));
         queue_.wait();
 
         GGML_SYCL_DEBUG("[PERSISTENT-TG] Phase schedule updated after fusion: %d ops, %d phases "
@@ -7953,7 +7945,11 @@ void UnifiedKernel::finalize_persistent() {
         return;  // Already finalized or never started
     }
 
-    // Cache plan template after first successful execution
+    // Cache plan template after first successful execution.
+    // cached_ops_ stores post-scratch-pool operations.  Ops whose source_op == -1
+    // retain their scratch pointers across tokens; this is safe because -1 means
+    // the input is external (weights, embeddings, KV cache) whose device pointers
+    // are resolved fresh each token via begin_plan_update().
     if (!plan_cache_valid_) {
         copy_plan_shape(*current_plan_, cached_plan_template_);
         cached_ops_                       = current_plan_->operations;

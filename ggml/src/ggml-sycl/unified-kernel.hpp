@@ -420,8 +420,6 @@ struct DevicePhaseSchedule {
     DevicePhaseEntry * entries;       // [total_ops] Flat array grouped by phase
     int *              phase_offset;  // [n_phases+1] CSR: phase i uses entries[phase_offset[i]..phase_offset[i+1])
     int *              phase_tiles;   // [n_phases] Total tile count for each phase
-    int *              phase_counter; // [1] atomic: flat tile counter within current phase
-    int *              phase_done;    // [1] atomic: WGs that finished current phase (for barrier)
     int                n_phases;      // Number of execution phases
     int                total_ops;     // Total number of ops across all phases
 };
