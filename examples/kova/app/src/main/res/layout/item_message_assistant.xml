@@ -74,11 +74,12 @@
         android:textSize="15sp"
         android:textIsSelectable="true" />
 
-    <!-- Aksiyon butonları -->
+    <!-- Aksiyon butonları ve t/s göstergesi -->
     <LinearLayout
-        android:layout_width="wrap_content"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
+        android:gravity="center_vertical"
         android:layout_marginStart="4dp"
         android:layout_marginTop="2dp">
 
@@ -105,6 +106,15 @@
             android:minHeight="0dp"
             android:paddingHorizontal="6dp"
             android:paddingVertical="2dp" />
+
+        <TextView
+            android:id="@+id/txt_tps"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:textSize="11sp"
+            android:textColor="#707070"
+            android:visibility="gone" />
 
     </LinearLayout>
 
