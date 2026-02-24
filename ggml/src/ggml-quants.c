@@ -3104,9 +3104,9 @@ static void quantize_row_iq2_xxs_impl(const float * GGML_RESTRICT x, void * GGML
             }
             float scale = make_qp_quants(32, kMaxQ+1, xval, (uint8_t*)L, weight);
             float eff_max = scale*kMaxQ;
-            memset(L, 0, 32);
             if (eff_max <= 0) {
                 scales[ib] = 0;
+                memset(L, 0, 32);
                 continue;
             }
             float best = 0;
