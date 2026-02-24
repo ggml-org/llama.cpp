@@ -2382,7 +2382,6 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     hparams.recurrent_layer_arr[il] = hparams.n_head_kv(il) == 0;
                 }
 
-                type = LLM_TYPE_8B_A1B;
                 switch (hparams.n_layer) {
                     case 24: type = LLM_TYPE_8B_A1B;  break;
                     case 40: type = LLM_TYPE_24B_A2B; break;
