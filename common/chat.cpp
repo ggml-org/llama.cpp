@@ -736,7 +736,6 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_MINIMAX_M2: return "MiniMax-M2";
         case COMMON_CHAT_FORMAT_GLM_4_5: return "GLM 4.5";
         case COMMON_CHAT_FORMAT_KIMI_K2: return "Kimi K2";
-        case COMMON_CHAT_FORMAT_QWEN3_CODER_XML: return "Qwen3 Coder";
         case COMMON_CHAT_FORMAT_APRIEL_1_5: return "Apriel 1.5";
         case COMMON_CHAT_FORMAT_XIAOMI_MIMO: return "Xiaomi MiMo";
         case COMMON_CHAT_FORMAT_SOLAR_OPEN: return "Solar Open";
@@ -1522,14 +1521,17 @@ static common_chat_params common_chat_params_init_nemotron_v2(const common_chat_
     return data;
 }
 
-static common_chat_params common_chat_params_init_nemotron_v3(const common_chat_template & tmpl, const struct templates_params & inputs) {
+static common_chat_params common_chat_params_init_qwen3_coder(const common_chat_template & tmpl, const struct templates_params & inputs) {
     common_chat_params data;
 
     data.prompt = apply(tmpl, inputs);
     data.format = COMMON_CHAT_FORMAT_PEG_CONSTRUCTED;
 
+    // Nemotron Nano 3 and Step-3.5-Flash use the Qwen3 Coder tool calling with thinking
+    bool supports_reasoning = (tmpl.source().find("<think>") != std::string::npos);
+
     // Handle thinking tags appropriately based on inputs.enable_thinking
-    if (string_ends_with(data.prompt, "<think>\n")) {
+    if (supports_reasoning && string_ends_with(data.prompt, "<think>\n")) {
         if (!inputs.enable_thinking) {
             data.prompt += "</think>";
         } else {
@@ -1538,11 +1540,13 @@ static common_chat_params common_chat_params_init_nemotron_v3(const common_chat_
     }
 
     data.preserved_tokens = {
-        "<think>",
-        "</think>",
         "<tool_call>",
         "</tool_call>",
     };
+
+    if (supports_reasoning) {
+        data.preserved_tokens.insert(data.preserved_tokens.end(), {"<think>", "</think>"});
+    }
 
     auto has_tools = inputs.tools.is_array() && !inputs.tools.empty();
     auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
@@ -1550,7 +1554,7 @@ static common_chat_params common_chat_params_init_nemotron_v3(const common_chat_
 
     auto parser = build_chat_peg_constructed_parser([&](auto & p) {
         auto reasoning = p.eps();
-        if (inputs.enable_thinking && extract_reasoning) {
+        if (supports_reasoning && inputs.enable_thinking && extract_reasoning) {
             auto reasoning_content = p.reasoning(p.until("</think>")) + ("</think>" | p.end());
             if (data.thinking_forced_open) {
                 reasoning = reasoning_content;
@@ -1882,38 +1886,6 @@ static common_chat_params common_chat_params_init_minimax_m2(const common_chat_t
         /* form.val_end     = */ "</parameter>\n",
         /* form.tool_end    = */ "</invoke>\n",
         /* form.scope_end   = */ "</minimax:tool_call>",
-    };
-    build_grammar_xml_tool_call(data, params.tools, form);
-
-    return data;
-}
-
-static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_chat_template & tmpl, const struct templates_params & params) {
-    common_chat_params data;
-    data.grammar_lazy = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
-
-    data.prompt = apply(tmpl, params);
-    data.format = COMMON_CHAT_FORMAT_QWEN3_CODER_XML;
-
-    data.preserved_tokens = {
-        "<tool_call>",
-        "</tool_call>",
-        "<function=",
-        "</function>",
-        "<parameter=",
-        "</parameter>",
-    };
-
-    // build grammar for tool call
-    static const xml_tool_call_format form {
-        /* form.scope_start = */ "<tool_call>\n",
-        /* form.tool_start  = */ "<function=",
-        /* form.tool_sep    = */ ">\n",
-        /* form.key_start   = */ "<parameter=",
-        /* form.key_val_sep = */ ">\n",
-        /* form.val_end     = */ "\n</parameter>\n",
-        /* form.tool_end    = */ "</function>\n",
-        /* form.scope_end   = */ "</tool_call>",
     };
     build_grammar_xml_tool_call(data, params.tools, form);
 
@@ -3147,13 +3119,7 @@ static common_chat_params common_chat_templates_apply_jinja(
         src.find("<function=") != std::string::npos &&
         src.find("<parameter=") != std::string::npos) {
         workaround::func_args_not_string(params.messages);
-        // Models with <think> support (Step-3.5-Flash, Nemotron 3 Nano) use the
-        // Nemotron v3 PEG parser for streaming and schema-aware parameter parsing.
-        // Qwen3-Coder has no <think> in its template.
-        if (src.find("<think>") != std::string::npos) {
-            return common_chat_params_init_nemotron_v3(tmpl, params);
-        }
-        return common_chat_params_init_qwen3_coder_xml(tmpl, params);
+        return common_chat_params_init_qwen3_coder(tmpl, params);
     }
 
     // Xiaomi MiMo format detection (must come before Hermes 2 Pro)
