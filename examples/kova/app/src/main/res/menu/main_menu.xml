@@ -4,11 +4,32 @@
 
     <item
         android:id="@+id/action_change_model"
-        android:title="Model değiştir"
+        android:title="Model Değiştir"
         app:showAsAction="never" />
 
     <item
         android:id="@+id/action_clear_chat"
-        android:title="Sohbeti temizle"
+        android:title="Sohbeti Temizle"
         app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_settings"
+        android:title="⚙️ Ayarlar"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_backup"
+        android:title="💾 Sohbetleri Yedekle"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_restore"
+        android:title="📂 Yedekten Geri Yükle"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_logs"
+        android:title="🔍 Logları Göster"
+        app:showAsAction="never" />
+
 </menu>
