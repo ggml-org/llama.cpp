@@ -446,7 +446,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         // MMA vs tile crossover benchmarked on MI300X @ d32768:
         //   hsk=64  (gqa=4): MMA wins at eff >= 128 (+11%)
         //   hsk=128 (gqa=4): MMA wins at eff >= 128 (+4%)
-        if (eff_nq >= 128) {
+        if (eff_nq >= (GGML_CUDA_CC_IS_CDNA1(cc) && Q->ne[0] == 64 ? 64 : 128)) {
             return BEST_FATTN_KERNEL_MMA_F16;
         }
         // Fall through to tile kernel for small effective batch sizes.
