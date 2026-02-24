@@ -1019,7 +1019,7 @@ class MainActivity : AppCompatActivity() {
         updateFabIcon()
         var fullResponse = ""
         var tokenCount = 0
-        val generationStartTime = System.currentTimeMillis()
+        var generationStartTime = 0L
 
         val formattedText = buildFormattedPrompt(messages)
         val lastUserText = messages.lastOrNull { it.isUser }?.content ?: ""
@@ -1045,6 +1045,7 @@ class MainActivity : AppCompatActivity() {
                             .replace("<start_of_turn>", "")
                             .replace("<|eot_id|>", "")
                             .replace("<|im_end|>", "")
+                        if (tokenCount == 0) generationStartTime = System.currentTimeMillis()
                         fullResponse += cleaned
                         tokenCount++
                         val newIndex = messageAdapter.updateLastAssistantMessage(fullResponse)
