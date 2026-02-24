@@ -836,7 +836,7 @@ private:
             slot.prompt.tokens.has_mtmd = mctx != nullptr;
 
             // try speculative decoding
-            if (can_spec || params_base.speculative.ckpt_num_tries > 0) {
+            if (can_spec || params_base.speculative.use_checkpoints) {
                 if (mctx) {
                     SRV_ERR("%s\n", "speculative decoding is not supported with multimodal");
                     return false;

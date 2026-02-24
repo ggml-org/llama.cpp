@@ -3448,13 +3448,17 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
-        {"--spec-ckpt-num-tries"}, "N",
-        string_format("number of tries for speculative decoding with recurrent memory (default: %d)", params.speculative.ckpt_num_tries),
-        [](common_params & params, int value) {
-            if (value < 0 || value > 10) {
-                throw std::invalid_argument("number of tries must be between 0 and 10 inclusive");
+        {"--spec-use-checkpoints"}, "[on|off|auto]",
+        string_format("use checkpoints to rewind token history in recurrent models ('on', 'off', or 'auto', default: %s)",
+                        params.speculative.use_checkpoints ? "on" : "off"),
+        [](common_params & params, const std::string & value) {
+            if (is_truthy(value) || is_autoy(value)) {
+                params.speculative.use_checkpoints = true;
+            } else if (is_falsey(value)) {
+                params.speculative.use_checkpoints = false;
+            } else {
+                throw std::invalid_argument("invalid value for --spec-use-checkpoints");
             }
-            params.speculative.ckpt_num_tries = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(

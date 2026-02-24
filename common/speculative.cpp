@@ -1136,8 +1136,8 @@ struct common_speculative_session::impl {
             clear_draft();
             return draft;
         }
-        if (params_spec.ckpt_num_tries > 0
-                && spec_ckpt_n_denials >= params_spec.ckpt_num_tries) {
+        if (params_spec.use_checkpoints
+                && spec_ckpt_n_denials > 0) {
             clear_draft();
             return draft;
         }
@@ -1166,7 +1166,7 @@ struct common_speculative_session::impl {
             draft.resize(n_draft_max);
         }
 
-        bool do_checkpoint = !draft.empty() && params_spec.ckpt_num_tries > 0;
+        bool do_checkpoint = !draft.empty() && params_spec.use_checkpoints;
         if (do_checkpoint && cached_text_tokens.size() > 5) {
             LOG_DBG("draft.size = %zu, n_spec_denials = %d, do_checkpoint = %s, tokens=[..., %d, %d, %d]\n",
                 draft.size(), spec_ckpt_n_denials,
@@ -1234,8 +1234,6 @@ struct common_speculative_session::impl {
 
                     return common_speculative_accept_response(std::move(ids), n_draft, true);
                 }
-
-                //spec_ckpt_n_accepted = (spec_ckpt_n_denials < params_spec.ckpt_num_tries) ? (int) (ids.size() - 1) : 0;
 
                 callback.batch_clear();
             }
