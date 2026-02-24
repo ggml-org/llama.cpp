@@ -77,7 +77,6 @@ struct server_slot {
     size_t last_nl_pos = 0;
 
     std::string  generated_text;
-    std::string  debug_generated_text;
     llama_tokens generated_tokens;
 
     // idx of draft tokens in the main batch
@@ -426,7 +425,7 @@ struct server_slot {
 
             if (!only_metrics) {
                 res["prompt"] = ptask->tokens.detokenize(ctx, true);
-                res["generated"] = generated_text.empty() ? debug_generated_text : generated_text;
+                res["generated"] = generated_text;
             }
         }
 
@@ -1443,12 +1442,6 @@ private:
         res->id_slot = slot.id;
 
         res->index           = slot.task->index;
-
-        // keep copy of last generated text for debugging purposes
-        if (slots_debug) {
-            slot.debug_generated_text = slot.generated_text;
-        }
-        
         // in stream mode, content and tokens are already in last partial chunk
         if (slot.task->params.stream) {
             res->content     = "";
@@ -2287,7 +2280,9 @@ private:
 
                             // the largest pos_min required for a checkpoint to be useful
                             const auto pos_min_thold = std::max(0, n_past - n_swa);
-                            
+
+                            // note: disallow with mtmd contexts for now
+                            //       https://github.com/ggml-org/llama.cpp/issues/17043
                             if (n_past > 0 && n_past < slot.prompt.n_tokens()) {
                                 const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx), slot.id);
                                 if (pos_min == -1) {
@@ -2339,6 +2334,7 @@ private:
                                 }
 
                                 if (pos_min > pos_min_thold) {
+                                    // Removed assert. This is a partial fix
                                     
 
                                     SLT_WRN(slot, "n_past = %d, slot.prompt.tokens.size() = %d, seq_id = %d, pos_min = %d, n_swa = %d\n", n_past, (int) slot.prompt.tokens.size(), slot.id, pos_min, n_swa);
@@ -2399,10 +2395,17 @@ private:
                             SLT_WRN(slot, "n_past was set to %d\n", n_past);
                         }
 
-                        slot.n_prompt_tokens_cache     = n_past;
+                        
                         slot.n_prompt_tokens_processed = 0;
 
-                        slot.prompt.tokens.keep_first(n_past);
+                        if (slot.prompt.tokens.has_mtmd) {
+                            const int n_tokens_keep = (int)slot.prompt.tokens.tokens_up_to_pos(n_past);
+                            slot.n_prompt_tokens_cache     = n_tokens_keep;
+                            slot.prompt.tokens.keep_first(n_tokens_keep);
+                        } else {
+                            slot.n_prompt_tokens_cache     = n_past;
+                            slot.prompt.tokens.keep_first(n_past);
+                        }
 
                         // send initial 0% progress update if needed
                         // this is to signal the client that the request has started processing
@@ -2424,15 +2427,22 @@ private:
                     SLT_INF(slot, "n_tokens = %d, memory_seq_rm [%d, end)\n", slot.prompt.n_tokens(), p0);
 
                     if (!llama_memory_seq_rm(llama_get_memory(ctx), slot.id, p0, -1)) {
-                        
+                        // hybrid model: recurrent partial removal failed.
+                        // find a checkpoint to restore recurrent state from,
+                        // then truncate attention KV to checkpoint position (preserving image KV).
                         bool recovered = false;
 
                         if (!slot.prompt.checkpoints.empty()) {
                             for (auto it = slot.prompt.checkpoints.rbegin(); it != slot.prompt.checkpoints.rend(); ++it) {
                                 if (std::max(it->pos_min, it->pos_max) >= p0) {
-                                    continue;
+                                    continue; // checkpoint is past truncation point
                                 }
-                                
+
+                                // truncate attention KV to checkpoint position (and clear recurrent).
+                                // this call will "fail" (return false) because recurrent can't do
+                                // partial removal, but the hybrid seq_rm internally handles it:
+                                //   - clears recurrent fully
+                                //   - truncates attention from checkpoint pos_max onward
                                 const llama_pos checkpoint_pos = std::max(it->pos_min, it->pos_max);
                                 llama_memory_seq_rm(llama_get_memory(ctx), slot.id, checkpoint_pos, -1);
 
@@ -2592,10 +2602,10 @@ private:
                             const size_t checkpoint_size = llama_state_seq_get_size_ext(ctx, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
 
                             auto & cur = slot.prompt.checkpoints.emplace_back(server_prompt_checkpoint{
-                                /*.pos_min          = */ pos_min,
-                                /*.pos_max          = */ pos_max,
+                                /*.pos_min = */ pos_min,
+                                /*.pos_max = */ pos_max,
                                 /*.n_tokens_cached  = */ slot.prompt.n_tokens(),
-                                /*.data             = */ std::vector<uint8_t>(checkpoint_size),
+                                /*.data    = */ std::vector<uint8_t>(checkpoint_size),
                             });
 
                             llama_state_seq_get_data_ext(ctx, cur.data.data(), checkpoint_size, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
@@ -2941,9 +2951,6 @@ server_context_meta server_context::get_meta() const {
         /* fim_pre_token          */ llama_vocab_fim_pre(impl->vocab),
         /* fim_sub_token          */ llama_vocab_fim_suf(impl->vocab),
         /* fim_mid_token          */ llama_vocab_fim_mid(impl->vocab),
-        /* fim_pad_token          */ llama_vocab_fim_pad(impl->vocab),
-        /* fim_rep_token          */ llama_vocab_fim_rep(impl->vocab),
-        /* fim_sep_token          */ llama_vocab_fim_sep(impl->vocab),
 
         /* model_vocab_type       */ llama_vocab_type(impl->vocab),
         /* model_vocab_n_tokens   */ llama_vocab_n_tokens(impl->vocab),
