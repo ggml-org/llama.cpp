@@ -586,11 +586,11 @@ class MainActivity : AppCompatActivity() {
                     val uri = entryToUri(entry)
 
                     // URI erişimini başlamadan önce doğrula
-                    val canRead = try {
-                        contentResolver.openInputStream(uri)?.close(); true
-                    } catch (e: Exception) { false }
+                    val pfd = try {
+                        contentResolver.openFileDescriptor(uri, "r")
+                    } catch (e: Exception) { null }
 
-                    if (!canRead) {
+                    if (pfd == null) {
                         AlertDialog.Builder(this@MainActivity)
                             .setTitle("⚠️ Model Erişilemiyor")
                             .setMessage("\"$modelName\" dosyasına erişim izni yok veya dosya taşınmış.\n\nBu genellikle yedekten geri yüklenen modellerde olur. Modeli listeden kaldırıp tekrar ekleyin.")
@@ -605,10 +605,41 @@ class MainActivity : AppCompatActivity() {
                         return@launch
                     }
 
+                    val fd = pfd.fd
+                    log("Kova", "fd yöntemi deneniyor: fd=$fd model=$modelName")
+
+                    // fd ile doğrudan yüklemeyi dene
+                    var fdSuccess = false
+                    try {
+                        (engine as? com.arm.aichat.internal.InferenceEngineImpl)
+                            ?.loadModelFromFd(fd, modelName)
+                        fdSuccess = true
+                        loadedModelPath = entry
+                        log("Kova", "fd ile yükleme başarılı")
+                    } catch (e: Exception) {
+                        log("Kova", "fd yöntemi başarısız (${e.message}), kopyalama yöntemine geçiliyor...")
+                    } finally {
+                        pfd.close()
+                    }
+
+                    if (fdSuccess) {
+                        // fd ile yüklendi, sistem promptu ve UI güncelle
+                        if (systemPrompt.isNotEmpty() && selectedTemplate == 0) {
+                            try { engine.setSystemPrompt(systemPrompt) } catch (_: Exception) {}
+                        }
+                        log("Kova", "Model yüklendi (fd): $modelName template=$selectedTemplate flashAttn=$flashAttn")
+                        updateFabIcon()
+                        updateActiveModelSubtitle()
+                        getSharedPreferences("llama_prefs", MODE_PRIVATE).edit()
+                            .putString("last_loaded_model", entry).apply()
+                        Toast.makeText(this@MainActivity, "$modelName yüklendi", Toast.LENGTH_SHORT).show()
+                        return@launch
+                    }
+
+                    // fd başarısız — kopyalama yöntemine geç
                     val cacheDir = externalCacheDir ?: cacheDir
                     val tempFile = java.io.File(cacheDir, "model_active_$modelName")
 
-                    // Aynı model zaten önbellekte varsa tekrar kopyalama
                     val docFile = androidx.documentfile.provider.DocumentFile
                         .fromSingleUri(this@MainActivity, uri)
                     val originalSize = docFile?.length() ?: 0L
@@ -618,10 +649,8 @@ class MainActivity : AppCompatActivity() {
                         activeTempModelFile = tempFile
                         pathToLoad = tempFile.absolutePath
                     } else {
-                        // Eski geçici dosyayı sil
                         deleteTempModelFile()
 
-                        // İlerleme dialogu
                         progressDialog = android.app.ProgressDialog(this@MainActivity).apply {
                             setTitle("Model hazırlanıyor")
                             setMessage("$modelName kopyalanıyor...")
