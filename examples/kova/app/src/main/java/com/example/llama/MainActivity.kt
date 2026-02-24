@@ -604,98 +604,71 @@ class MainActivity : AppCompatActivity() {
                             .setNegativeButton("İptal", null).show()
                         return@launch
                     }
+                    pfd.close()
 
-                    val fd = pfd.fd
-                    log("Kova", "fd yöntemi deneniyor: fd=$fd model=$modelName")
-
-                    // fd ile doğrudan yüklemeyi dene
-                    var fdSuccess = false
-                    try {
-                        (engine as? com.arm.aichat.internal.InferenceEngineImpl)
-                            ?.loadModelFromFd(fd, modelName)
-                        fdSuccess = true
-                        loadedModelPath = entry
-                        log("Kova", "fd ile yükleme başarılı")
-                    } catch (e: Exception) {
-                        log("Kova", "fd yöntemi başarısız (${e.message}), kopyalama yöntemine geçiliyor...")
-                        // Engine'i Error state'inden Initialized'a döndür
-                        if (engine.state.value is InferenceEngine.State.Error) {
-                            engine.cleanUp()
-                            var waited2 = 0
-                            while (engine.state.value !is InferenceEngine.State.Initialized && waited2 < 50) {
-                                delay(100); waited2++
-                            }
-                        }
-                    } finally {
-                        pfd.close()
-                    }
-
-                    if (fdSuccess) {
-                        // fd ile yüklendi, sistem promptu ve UI güncelle
-                        if (systemPrompt.isNotEmpty() && selectedTemplate == 0) {
-                            try { engine.setSystemPrompt(systemPrompt) } catch (_: Exception) {}
-                        }
-                        log("Kova", "Model yüklendi (fd): $modelName template=$selectedTemplate flashAttn=$flashAttn")
-                        updateFabIcon()
-                        updateActiveModelSubtitle()
-                        getSharedPreferences("llama_prefs", MODE_PRIVATE).edit()
-                            .putString("last_loaded_model", entry).apply()
-                        Toast.makeText(this@MainActivity, "$modelName yüklendi", Toast.LENGTH_SHORT).show()
-                        return@launch
-                    }
-
-                    // fd başarısız — kopyalama yöntemine geç
-                    val cacheDir = externalCacheDir ?: cacheDir
-                    val tempFile = java.io.File(cacheDir, "model_active_$modelName")
-
-                    val docFile = androidx.documentfile.provider.DocumentFile
-                        .fromSingleUri(this@MainActivity, uri)
-                    val originalSize = docFile?.length() ?: 0L
-
-                    if (tempFile.exists() && originalSize > 0 && tempFile.length() == originalSize) {
-                        log("Kova", "Model zaten önbellekte, kopyalama atlandı: ${tempFile.name}")
-                        activeTempModelFile = tempFile
-                        pathToLoad = tempFile.absolutePath
+                    // SAF URI'den gerçek dosya yolunu çıkarmayı dene
+                    // content://com.android.externalstorage.documents/document/primary%3ADepo%2F...
+                    // → /storage/emulated/0/Depo/...
+                    val realPath = tryGetRealPath(uri)
+                    if (realPath != null && java.io.File(realPath).exists() && java.io.File(realPath).canRead()) {
+                        log("Kova", "Gerçek yol bulundu, kopyalama atlandı: $realPath")
+                        pathToLoad = realPath
                     } else {
-                        deleteTempModelFile()
+                        log("Kova", "Gerçek yol bulunamadı (${realPath}), kopyalama yöntemine geçiliyor...")
 
-                        progressDialog = android.app.ProgressDialog(this@MainActivity).apply {
-                            setTitle("Model hazırlanıyor")
-                            setMessage("$modelName kopyalanıyor...")
-                            isIndeterminate = false
-                            max = 100
-                            setProgressStyle(android.app.ProgressDialog.STYLE_HORIZONTAL)
-                            setCancelable(false)
-                            show()
-                        }
+                        // Kopyalama yöntemine geç
+                        val cacheDir = externalCacheDir ?: cacheDir
+                        val tempFile = java.io.File(cacheDir, "model_active_$modelName")
 
-                        log("Kova", "Kopyalama başlıyor: $modelName")
+                        val docFile = androidx.documentfile.provider.DocumentFile
+                            .fromSingleUri(this@MainActivity, uri)
+                        val originalSize = docFile?.length() ?: 0L
 
-                        withContext(Dispatchers.IO) {
-                            contentResolver.openInputStream(uri)?.use { input ->
-                                var copiedBytes = 0L
-                                tempFile.outputStream().use { output ->
-                                    val buf = ByteArray(8 * 1024 * 1024)
-                                    var n: Int
-                                    while (input.read(buf).also { n = it } != -1) {
-                                        output.write(buf, 0, n)
-                                        copiedBytes += n
-                                        if (originalSize > 0) {
-                                            val progress = (copiedBytes * 100 / originalSize).toInt()
-                                            withContext(Dispatchers.Main) {
-                                                progressDialog?.progress = progress
+                        if (tempFile.exists() && originalSize > 0 && tempFile.length() == originalSize) {
+                            log("Kova", "Model zaten önbellekte, kopyalama atlandı: ${tempFile.name}")
+                            activeTempModelFile = tempFile
+                            pathToLoad = tempFile.absolutePath
+                        } else {
+                            deleteTempModelFile()
+
+                            progressDialog = android.app.ProgressDialog(this@MainActivity).apply {
+                                setTitle("Model hazırlanıyor")
+                                setMessage("$modelName kopyalanıyor...")
+                                isIndeterminate = false
+                                max = 100
+                                setProgressStyle(android.app.ProgressDialog.STYLE_HORIZONTAL)
+                                setCancelable(false)
+                                show()
+                            }
+
+                            log("Kova", "Kopyalama başlıyor: $modelName")
+
+                            withContext(Dispatchers.IO) {
+                                contentResolver.openInputStream(uri)?.use { input ->
+                                    var copiedBytes = 0L
+                                    tempFile.outputStream().use { output ->
+                                        val buf = ByteArray(8 * 1024 * 1024)
+                                        var n: Int
+                                        while (input.read(buf).also { n = it } != -1) {
+                                            output.write(buf, 0, n)
+                                            copiedBytes += n
+                                            if (originalSize > 0) {
+                                                val progress = (copiedBytes * 100 / originalSize).toInt()
+                                                withContext(Dispatchers.Main) {
+                                                    progressDialog?.progress = progress
+                                                }
                                             }
                                         }
                                     }
-                                }
-                            } ?: throw Exception("Dosya açılamadı: $uri")
-                        }
+                                } ?: throw Exception("Dosya açılamadı: $uri")
+                            }
 
-                        progressDialog?.dismiss()
-                        progressDialog = null
-                        activeTempModelFile = tempFile
-                        pathToLoad = tempFile.absolutePath
-                        log("Kova", "Kopyalama tamamlandı: ${tempFile.length()} bytes")
+                            progressDialog?.dismiss()
+                            progressDialog = null
+                            activeTempModelFile = tempFile
+                            pathToLoad = tempFile.absolutePath
+                            log("Kova", "Kopyalama tamamlandı: ${tempFile.length()} bytes")
+                        }
                     }
 
                 } else {
@@ -730,6 +703,44 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this@MainActivity, "Model yüklenemedi: ${e.message}", Toast.LENGTH_LONG).show()
                 log("Kova", "Model yükleme hatası: ${e.message}")
             }
+        }
+    }
+
+    /**
+     * SAF URI'den gerçek dosya yolunu çıkarmaya çalışır.
+     * content://com.android.externalstorage.documents/document/primary%3ADepo%2FModeller%2Fmodel.gguf
+     * → /storage/emulated/0/Depo/Modeller/model.gguf
+     *
+     * Sadece dahili depolama (primary) ve harici SD kart için çalışır.
+     * Google Drive, Dropbox vb. için null döner.
+     */
+    private fun tryGetRealPath(uri: android.net.Uri): String? {
+        return try {
+            val docId = androidx.documentfile.provider.DocumentFile
+                .fromSingleUri(this, uri)?.uri?.lastPathSegment
+                ?: uri.lastPathSegment
+                ?: return null
+
+            // Örnek docId: "primary:Depo/Modeller/model.gguf"
+            val decoded = java.net.URLDecoder.decode(docId, "UTF-8")
+            if (!decoded.contains(":")) return null
+
+            val parts = decoded.split(":", limit = 2)
+            val volume = parts[0].lowercase()
+            val relativePath = parts[1]
+
+            val basePath = when {
+                volume == "primary" -> "/storage/emulated/0"
+                volume.isNotEmpty() -> "/storage/$volume"
+                else -> return null
+            }
+
+            val fullPath = "$basePath/$relativePath"
+            val file = java.io.File(fullPath)
+            if (file.exists() && file.canRead()) fullPath else null
+        } catch (e: Exception) {
+            log("Kova", "tryGetRealPath hatası: ${e.message}")
+            null
         }
     }
 
