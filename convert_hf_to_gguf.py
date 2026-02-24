@@ -6125,7 +6125,7 @@ class NeoBert(BertModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("EuroBertModel", "EuroBertForMaskedLM", "EuroBertForSequenceClassification")
+@ModelBase.register("EuroBertModel")
 class EuroBertModel(TextModel):
     """EuroBert - a bidirectional encoder with Llama-style architecture (RoPE, RMSNorm, SwiGLU)."""
     model_arch = gguf.MODEL_ARCH.EUROBERT
@@ -6149,10 +6149,6 @@ class EuroBertModel(TextModel):
         self.gguf_writer.add_pooling_type(gguf.PoolingType.LAST)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # Skip MLM head layers
-        if name.startswith("lm_head"):
-            return []
-
         # Strip "model." prefix from tensor names
         if name.startswith("model."):
             name = name[6:]
