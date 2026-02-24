@@ -4,6 +4,7 @@
     android:layout_height="wrap_content"
     android:layout_marginHorizontal="16dp"
     android:layout_marginVertical="6dp"
+    android:orientation="vertical"
     android:gravity="end">
 
     <TextView
@@ -15,5 +16,40 @@
         android:padding="12dp"
         android:lineSpacingMultiplier="1.3"
         android:textColor="#FFFFFF"
-        android:textSize="15sp" />
+        android:textSize="15sp"
+        android:textIsSelectable="true" />
+
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginEnd="4dp"
+        android:layout_marginTop="2dp">
+
+        <Button
+            android:id="@+id/btn_edit"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="✏️"
+            android:textSize="14sp"
+            android:minWidth="0dp"
+            android:minHeight="0dp"
+            android:paddingHorizontal="6dp"
+            android:paddingVertical="2dp" />
+
+        <Button
+            android:id="@+id/btn_copy"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="📋"
+            android:textSize="14sp"
+            android:minWidth="0dp"
+            android:minHeight="0dp"
+            android:paddingHorizontal="6dp"
+            android:paddingVertical="2dp" />
+
+    </LinearLayout>
+
 </LinearLayout>
