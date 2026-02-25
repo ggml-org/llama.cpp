@@ -179,6 +179,75 @@ static void llama_tensor_dequantize_impl(
     workers.clear();
 }
 
+static bool tensor_name_match_token_embd(const char * tensor_name) {
+    return (
+        std::strcmp(tensor_name, "token_embd.weight") == 0 ||
+        std::strcmp(tensor_name, "per_layer_token_embd.weight") == 0
+    );
+}
+
+// do we allow this tensor to be quantized?
+static bool tensor_allows_quantization(const llama_model_quantize_params * params, llm_arch arch, const ggml_tensor * tensor) {
+    const std::string name = tensor->name;
+
+    // This used to be a regex, but <regex> has an extreme cost to compile times.
+    bool allowed = name.rfind("weight") == name.size() - 6; // ends with 'weight'?
+
+    // quantize only 2D and 3D tensors (experts)
+    allowed &= (ggml_n_dims(tensor) >= 2);
+
+    // do not quantize norm tensors
+    allowed &= name.find("_norm.weight") == std::string::npos;
+
+    allowed &= params->quantize_output_tensor || name != "output.weight";
+    allowed &= !params->only_copy;
+
+    // do not quantize expert gating tensors
+    // NOTE: can't use LLM_TN here because the layer number is not known
+    allowed &= name.find("ffn_gate_inp.weight") == std::string::npos;
+
+    // these are very small (e.g. 4x4)
+    allowed &= name.find("altup")  == std::string::npos;
+    allowed &= name.find("laurel") == std::string::npos;
+
+    // these are not too big so keep them as it is
+    allowed &= name.find("per_layer_model_proj") == std::string::npos;
+
+    // do not quantize positional embeddings and token types (BERT)
+    allowed &= name != LLM_TN(arch)(LLM_TENSOR_POS_EMBD,    "weight");
+    allowed &= name != LLM_TN(arch)(LLM_TENSOR_TOKEN_TYPES, "weight");
+
+    // do not quantize Mamba /Kimi's small conv1d weights
+    // NOTE: can't use LLM_TN here because the layer number is not known
+    allowed &= name.find("ssm_conv1d") == std::string::npos;
+    allowed &= name.find("shortconv.conv.weight") == std::string::npos;
+
+    // do not quantize RWKV's small yet 2D weights
+    allowed &= name.find("time_mix_first.weight") == std::string::npos;
+    allowed &= name.find("time_mix_w0.weight") == std::string::npos;
+    allowed &= name.find("time_mix_w1.weight") == std::string::npos;
+    allowed &= name.find("time_mix_w2.weight") == std::string::npos;
+    allowed &= name.find("time_mix_v0.weight") == std::string::npos;
+    allowed &= name.find("time_mix_v1.weight") == std::string::npos;
+    allowed &= name.find("time_mix_v2.weight") == std::string::npos;
+    allowed &= name.find("time_mix_a0.weight") == std::string::npos;
+    allowed &= name.find("time_mix_a1.weight") == std::string::npos;
+    allowed &= name.find("time_mix_a2.weight") == std::string::npos;
+    allowed &= name.find("time_mix_g1.weight") == std::string::npos;
+    allowed &= name.find("time_mix_g2.weight") == std::string::npos;
+    allowed &= name.find("time_mix_decay_w1.weight") == std::string::npos;
+    allowed &= name.find("time_mix_decay_w2.weight") == std::string::npos;
+    allowed &= name.find("time_mix_lerp_fused.weight") == std::string::npos;
+
+    // do not quantize relative position bias (T5)
+    allowed &= name.find("attn_rel_b.weight") == std::string::npos;
+
+    // do not quantize specific multimodal tensors
+    allowed &= name.find(".position_embd.") == std::string::npos;
+
+    return allowed;
+}
+
 // internal standard logic for selecting the target tensor type for a specific
 // quantization mixture and model architecture
 static ggml_type llama_tensor_get_type_impl(
@@ -448,7 +517,6 @@ static ggml_type llama_tensor_get_type_impl(
     return new_type;
 }
 
-
 // determine the ggml_type that this tensor should be quantized to
 static ggml_type llama_tensor_get_type(
               quantization_state_impl * qs,
@@ -456,10 +524,8 @@ static ggml_type llama_tensor_get_type(
                     const ggml_tensor * tensor,
                       const ggml_type   default_type
 ) {
-    // if quantization not allowed, return the current type
     if (!tensor_allows_quantization(params, qs->model.arch, tensor)) {
-        fprintf(stderr, "\n---\n// if quantization not allowed, return the current type (%s)\n---\n", ggml_type_name(tensor->type)); fflush(stderr);
-        return tensor->type;
+        return tensor->type; // if quantization not allowed, return the current type
     }
 
     ggml_type new_type = default_type;
@@ -509,7 +575,7 @@ static ggml_type llama_tensor_get_type(
 
                 switch (new_type) {
                     case GGML_TYPE_TQ1_0:
-                    case GGML_TYPE_TQ2_0:  new_type = GGML_TYPE_Q4_0; break;  // TODO: use a symmetric type instead
+                    case GGML_TYPE_TQ2_0:  new_type = GGML_TYPE_Q4_0; break;  // TODO: use a symmetric type instead?
                     case GGML_TYPE_IQ2_XXS:
                     case GGML_TYPE_IQ2_XS:
                     case GGML_TYPE_IQ2_S:
@@ -524,8 +590,17 @@ static ggml_type llama_tensor_get_type(
                     case GGML_TYPE_Q5_K:   new_type = GGML_TYPE_Q5_1;   break;
                     case GGML_TYPE_Q6_K:   new_type = GGML_TYPE_Q8_0;   break;
                     default:
+                        //
+                        // the majority of oddly-shaped tensors are handled by
+                        // `tensor_allows_quantization` above, so it should be very unusual to
+                        // reach this point.
+                        //
+                        // if you are getting this warning a lot, consider adding a case for
+                        // this type of tensor to the `tensor_allows_quantization` function, or
+                        // updating the logic in `llama_tensor_get_type_impl`.
+                        //
+                        LLAMA_LOG_WARN("%s (WARNING: falling back to F16); ", msg);
                         new_type = GGML_TYPE_F16;
-                        LLAMA_LOG_WARN("%s", msg);
                 }
             }
         }
@@ -595,9 +670,8 @@ static size_t llama_tensor_quantize_impl(enum ggml_type new_type, const float * 
 
 // does this tensor require importance matrix data?
 static bool tensor_requires_imatrix(const char * tensor_name, const ggml_type dst_type, const llama_ftype ftype) {
-    if (std::strcmp(tensor_name, "token_embd.weight") == 0 ||
-        std::strcmp(tensor_name, "per_layer_token_embd.weight") == 0) {
-        // token embedding tensors should never require imatrix data
+    // token embedding tensors should never require imatrix data
+    if (tensor_name_match_token_embd(tensor_name)) {
         return false;
     }
     switch (dst_type) {
@@ -615,68 +689,6 @@ static bool tensor_requires_imatrix(const char * tensor_name, const ggml_type ds
         default:
             return false;
     }
-}
-
-// do we allow this tensor to be quantized?
-static bool tensor_allows_quantization(const llama_model_quantize_params * params, llm_arch arch, const ggml_tensor * tensor) {
-    const std::string name = tensor->name;
-
-    // This used to be a regex, but <regex> has an extreme cost to compile times.
-    bool allowed = name.rfind("weight") == name.size() - 6; // ends with 'weight'?
-
-    // quantize only 2D and 3D tensors (experts)
-    allowed &= (ggml_n_dims(tensor) >= 2);
-
-    // do not quantize norm tensors
-    allowed &= name.find("_norm.weight") == std::string::npos;
-
-    allowed &= params->quantize_output_tensor || name != "output.weight";
-    allowed &= !params->only_copy;
-
-    // do not quantize expert gating tensors
-    // NOTE: can't use LLM_TN here because the layer number is not known
-    allowed &= name.find("ffn_gate_inp.weight") == std::string::npos;
-
-    // these are very small (e.g. 4x4)
-    allowed &= name.find("altup")  == std::string::npos;
-    allowed &= name.find("laurel") == std::string::npos;
-
-    // these are not too big so keep them as it is
-    allowed &= name.find("per_layer_model_proj") == std::string::npos;
-
-    // do not quantize positional embeddings and token types (BERT)
-    allowed &= name != LLM_TN(arch)(LLM_TENSOR_POS_EMBD,    "weight");
-    allowed &= name != LLM_TN(arch)(LLM_TENSOR_TOKEN_TYPES, "weight");
-
-    // do not quantize Mamba /Kimi's small conv1d weights
-    // NOTE: can't use LLM_TN here because the layer number is not known
-    allowed &= name.find("ssm_conv1d") == std::string::npos;
-    allowed &= name.find("shortconv.conv.weight") == std::string::npos;
-
-    // do not quantize RWKV's small yet 2D weights
-    allowed &= name.find("time_mix_first.weight") == std::string::npos;
-    allowed &= name.find("time_mix_w0.weight") == std::string::npos;
-    allowed &= name.find("time_mix_w1.weight") == std::string::npos;
-    allowed &= name.find("time_mix_w2.weight") == std::string::npos;
-    allowed &= name.find("time_mix_v0.weight") == std::string::npos;
-    allowed &= name.find("time_mix_v1.weight") == std::string::npos;
-    allowed &= name.find("time_mix_v2.weight") == std::string::npos;
-    allowed &= name.find("time_mix_a0.weight") == std::string::npos;
-    allowed &= name.find("time_mix_a1.weight") == std::string::npos;
-    allowed &= name.find("time_mix_a2.weight") == std::string::npos;
-    allowed &= name.find("time_mix_g1.weight") == std::string::npos;
-    allowed &= name.find("time_mix_g2.weight") == std::string::npos;
-    allowed &= name.find("time_mix_decay_w1.weight") == std::string::npos;
-    allowed &= name.find("time_mix_decay_w2.weight") == std::string::npos;
-    allowed &= name.find("time_mix_lerp_fused.weight") == std::string::npos;
-
-    // do not quantize relative position bias (T5)
-    allowed &= name.find("attn_rel_b.weight") == std::string::npos;
-
-    // do not quantize specific multimodal tensors
-    allowed &= name.find(".position_embd.") == std::string::npos;
-
-    return allowed;
 }
 
 static void llama_model_quantize_impl(const std::string & fname_inp, const std::string & fname_out, const llama_model_quantize_params * params) {
