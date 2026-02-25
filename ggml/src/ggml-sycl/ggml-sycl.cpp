@@ -28847,19 +28847,6 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
         }
         kernel.add_temp_device_alloc_handle(dst_alloc);
 
-        ggml_sycl::alloc_request meta_req = mat_req;
-        meta_req.size                     = sizeof(StridedCopyMeta);
-        ggml_sycl::alloc_handle meta_alloc{};
-        if (!ggml_sycl::unified_alloc(meta_req, &meta_alloc) || meta_alloc.ptr == nullptr) {
-            GGML_LOG_ERROR("[PERSISTENT-TG] Failed to allocate StridedCopyMeta\n");
-            return nullptr;
-        }
-        auto * meta_dev = static_cast<StridedCopyMeta *>(meta_alloc.ptr);
-        if (log_ops && (max_ops_limit <= 0 || ops_added >= max_ops_limit - 2)) {
-            GGML_LOG_INFO("[PERSISTENT-TG] resolve_input_ptr: alloc meta_dev=%p\n", (void *) meta_dev);
-        }
-        kernel.add_temp_device_alloc_handle(meta_alloc);
-
         StridedCopyMeta meta = {};
         for (int d = 0; d < GGML_MAX_DIMS; d++) {
             meta.ne[d] = tensor->ne[d];
@@ -28867,8 +28854,6 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
         }
         meta.type_size = (int32_t) ggml_type_size(tensor->type);
         meta.pad       = 0;
-
-        q->memcpy(meta_dev, &meta, sizeof(meta)).wait();
 
         if (log_ops && (max_ops_limit <= 0 || ops_added >= max_ops_limit - 2)) {
             GGML_LOG_INFO("[PERSISTENT-TG] resolve_input_ptr: materialize name=%s bytes=%zu\n",
@@ -28884,7 +28869,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
             return nullptr;
         }
         const int64_t output_bytes = n_elements * meta.type_size;
-        kernel.add_strided_copy(layer, src_ptr, dst_ptr, meta_dev, (int) n_elements, output_bytes);
+        kernel.add_strided_copy(layer, src_ptr, dst_ptr, meta, (int) n_elements, output_bytes);
         log_op("STRIDED_COPY", layer, tensor, dst_ptr);
         ops_added++;
 
@@ -29132,7 +29117,8 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                                     fast_path_ok = false;
                                     break;
                                 }
-                                q->memcpy(stable_ptr, out_ptr, bytes).wait();
+                                // No .wait() needed: in-order queue ensures D2D copy completes before kernel
+                                q->memcpy(stable_ptr, out_ptr, bytes);
                                 materialized_ptrs[node] = stable_ptr;
                             }
                             break;
@@ -29423,8 +29409,9 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                                 }
                                 d_cos = static_cast<float *>(cos_alloc.ptr);
                                 d_sin = static_cast<float *>(sin_alloc.ptr);
-                                q->memcpy(d_cos, cos_cache.data(), half_dim * sizeof(float)).wait();
-                                q->memcpy(d_sin, sin_cache.data(), half_dim * sizeof(float)).wait();
+                                // Batch both uploads (in-order queue ensures completion before kernel)
+                                q->memcpy(d_cos, cos_cache.data(), half_dim * sizeof(float));
+                                q->memcpy(d_sin, sin_cache.data(), half_dim * sizeof(float));
                                 kernel.add_temp_device_alloc_handle(cos_alloc);
                                 kernel.add_temp_device_alloc_handle(sin_alloc);
                                 rope_cache_by_pos.emplace(rope_cache_key, std::make_pair(d_cos, d_sin));
@@ -29805,8 +29792,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                                 }
                             }
 
-                            if (!kernel.get_op_descriptor(op_idx, op_desc) || op_desc.type != OperationType::SET_ROWS ||
-                                !op_desc.weights) {
+                            if (!kernel.get_op_descriptor(op_idx, op_desc) || op_desc.type != OperationType::SET_ROWS) {
                                 fast_path_ok = false;
                                 break;
                             }
@@ -29834,7 +29820,6 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                             meta.dst_type    = dst_type;
                             meta.idx_type    = idx_type;
                             meta.pad         = 0;
-                            q->memcpy(const_cast<void *>(op_desc.weights), &meta, sizeof(meta)).wait();
 
                             const int64_t n_elements = meta.nc * meta.nr * meta.ne02 * meta.ne03;
                             if (n_elements <= 0 || n_elements > std::numeric_limits<int>::max()) {
@@ -29846,12 +29831,14 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                                                  (meta.ne1 > 0 ? (meta.ne1 - 1) * meta.nb1 : 0) +
                                                  (meta.ne02 > 0 ? (meta.ne02 - 1) * meta.nb2 : 0) +
                                                  (meta.ne03 > 0 ? (meta.ne03 - 1) * meta.nb3 : 0);
-                            op_desc.input        = src_ptr;
-                            op_desc.aux          = const_cast<void *>(idx_ptr);
-                            op_desc.output       = dst_ptr;
-                            op_desc.mask         = nullptr;
-                            op_desc.M            = (int) n_elements;
-                            op_desc.output_bytes = last + elem_size;
+                            op_desc.input            = src_ptr;
+                            op_desc.aux              = const_cast<void *>(idx_ptr);
+                            op_desc.output           = dst_ptr;
+                            op_desc.mask             = nullptr;
+                            op_desc.M                = (int) n_elements;
+                            op_desc.output_bytes     = last + elem_size;
+                            op_desc.set_rows_meta    = meta;
+                            op_desc.has_embedded_meta = true;
                             if (!kernel.update_op_descriptor(op_idx, op_desc)) {
                                 fast_path_ok = false;
                                 break;
@@ -29878,7 +29865,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                                 break;
                             }
                             if (!kernel.get_op_descriptor(op_idx, op_desc) ||
-                                op_desc.type != OperationType::STRIDED_COPY || !op_desc.weights) {
+                                op_desc.type != OperationType::STRIDED_COPY) {
                                 fast_path_ok = false;
                                 break;
                             }
@@ -29889,17 +29876,18 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                             }
                             meta.type_size = (int32_t) ggml_type_size(node->type);
                             meta.pad       = 0;
-                            q->memcpy(const_cast<void *>(op_desc.weights), &meta, sizeof(meta)).wait();
 
                             const int64_t n_elements = ggml_nelements(node->src[0]);
                             if (n_elements <= 0 || n_elements > std::numeric_limits<int>::max()) {
                                 fast_path_ok = false;
                                 break;
                             }
-                            op_desc.input        = src_ptr;
-                            op_desc.output       = dst_ptr;
-                            op_desc.M            = (int) n_elements;
-                            op_desc.output_bytes = n_elements * meta.type_size;
+                            op_desc.input             = src_ptr;
+                            op_desc.output            = dst_ptr;
+                            op_desc.M                 = (int) n_elements;
+                            op_desc.output_bytes      = n_elements * meta.type_size;
+                            op_desc.strided_copy_meta = meta;
+                            op_desc.has_embedded_meta = true;
                             if (!kernel.update_op_descriptor(op_idx, op_desc)) {
                                 fast_path_ok = false;
                                 break;
@@ -30797,8 +30785,9 @@ full_build:
                         }
                         d_cos = static_cast<float *>(cos_alloc.ptr);
                         d_sin = static_cast<float *>(sin_alloc.ptr);
-                        q->memcpy(d_cos, cos_cache.data(), half_dim * sizeof(float)).wait();
-                        q->memcpy(d_sin, sin_cache.data(), half_dim * sizeof(float)).wait();
+                        // Batch both uploads (in-order queue ensures completion before kernel)
+                        q->memcpy(d_cos, cos_cache.data(), half_dim * sizeof(float));
+                        q->memcpy(d_sin, sin_cache.data(), half_dim * sizeof(float));
 
                         kernel.add_temp_device_alloc_handle(cos_alloc);
                         kernel.add_temp_device_alloc_handle(sin_alloc);
@@ -31428,22 +31417,6 @@ full_build:
                     meta.idx_type    = idx_type;
                     meta.pad         = 0;
 
-                    ggml_sycl::alloc_request meta_req;
-                    meta_req.queue                          = q;
-                    meta_req.device                         = ctx.device;
-                    meta_req.size                           = sizeof(SetRowsMeta);
-                    meta_req.intent.role                    = ggml_sycl::alloc_role::GRAPH_TMP;
-                    meta_req.intent.category                = ggml_sycl::runtime_category::GRAPH;
-                    meta_req.intent.constraints.must_device = true;
-                    ggml_sycl::alloc_handle meta_alloc{};
-                    if (!ggml_sycl::unified_alloc(meta_req, &meta_alloc) || meta_alloc.ptr == nullptr) {
-                        GGML_LOG_ERROR("[PERSISTENT-TG] Failed to allocate SetRowsMeta\n");
-                        return false;
-                    }
-                    auto * meta_dev = static_cast<SetRowsMeta *>(meta_alloc.ptr);
-                    kernel.add_temp_device_alloc_handle(meta_alloc);
-                    q->memcpy(meta_dev, &meta, sizeof(meta)).wait();
-
                     const int64_t n_elements = meta.nc * meta.nr * meta.ne02 * meta.ne03;
                     if (n_elements > std::numeric_limits<int>::max()) {
                         GGML_LOG_ERROR("[PERSISTENT-TG] SET_ROWS tensor too large: %lld elements\n",
@@ -31477,7 +31450,7 @@ full_build:
                                          (meta.ne02 > 0 ? (meta.ne02 - 1) * meta.nb2 : 0) +
                                          (meta.ne03 > 0 ? (meta.ne03 - 1) * meta.nb3 : 0);
                     const int64_t output_bytes = last + elem_size;
-                    kernel.add_set_rows(layer, src_ptr, idx_ptr, dst_ptr, meta_dev, (int) n_elements, debug_ptr,
+                    kernel.add_set_rows(layer, src_ptr, idx_ptr, dst_ptr, meta, (int) n_elements, debug_ptr,
                                         output_bytes);
                     log_op("SET_ROWS", layer, node, dst_ptr);
                     ops_added++;
@@ -31531,22 +31504,6 @@ full_build:
                     meta.type_size = (int32_t) ggml_type_size(node->type);
                     meta.pad       = 0;
 
-                    ggml_sycl::alloc_request meta_req;
-                    meta_req.queue                          = q;
-                    meta_req.device                         = ctx.device;
-                    meta_req.size                           = sizeof(StridedCopyMeta);
-                    meta_req.intent.role                    = ggml_sycl::alloc_role::GRAPH_TMP;
-                    meta_req.intent.category                = ggml_sycl::runtime_category::GRAPH;
-                    meta_req.intent.constraints.must_device = true;
-                    ggml_sycl::alloc_handle meta_alloc{};
-                    if (!ggml_sycl::unified_alloc(meta_req, &meta_alloc) || meta_alloc.ptr == nullptr) {
-                        GGML_LOG_ERROR("[PERSISTENT-TG] Failed to allocate StridedCopyMeta for CONT\n");
-                        return false;
-                    }
-                    auto * meta_dev = static_cast<StridedCopyMeta *>(meta_alloc.ptr);
-                    kernel.add_temp_device_alloc_handle(meta_alloc);
-                    q->memcpy(meta_dev, &meta, sizeof(meta)).wait();
-
                     const int64_t n_elements = ggml_nelements(node->src[0]);
                     if (n_elements > std::numeric_limits<int>::max()) {
                         GGML_LOG_ERROR("[PERSISTENT-TG] CONT tensor too large: %lld elements\n",
@@ -31554,7 +31511,7 @@ full_build:
                         return false;
                     }
                     const int64_t output_bytes = n_elements * meta.type_size;
-                    kernel.add_strided_copy(layer, src_ptr, dst_ptr, meta_dev, (int) n_elements, output_bytes);
+                    kernel.add_strided_copy(layer, src_ptr, dst_ptr, meta, (int) n_elements, output_bytes);
                     log_op("STRIDED_COPY", layer, node, dst_ptr);
                     ops_added++;
                     if (g_ggml_sycl_debug) {

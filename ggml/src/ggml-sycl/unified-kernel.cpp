@@ -4013,6 +4013,13 @@ struct alignas(64) DeviceOperation {
     int          n_devices;      // Total number of GPU devices in split (0 or 1 = no split)
     int          merge_count;    // Number of floats to merge from secondary (N - row_count)
     int          input_K;        // K dimension for activation staging (number of floats to stage)
+
+    // Embedded per-op metadata (eliminates separate device allocations + per-token memcpy uploads).
+    // With malloc_host ops table, host writes directly and kernel reads via PCIe zero-copy.
+    union {
+        SetRowsMeta       set_rows_meta;
+        StridedCopyMeta   strided_copy_meta;
+    };
 };
 
 // Arguments passed to the persistent kernel
@@ -5077,8 +5084,8 @@ private:
         if (idx >= op.M) {
             return;
         }
-        const SetRowsMeta * meta = static_cast<const SetRowsMeta *>(op.weights);
-        if (!meta || !op.input || !op.aux || !op.output) {
+        const SetRowsMeta * meta = &op.set_rows_meta;
+        if (!op.input || !op.aux || !op.output) {
             return;
         }
 
@@ -5124,8 +5131,8 @@ private:
         if (idx >= op.M) {
             return;
         }
-        const StridedCopyMeta * meta = static_cast<const StridedCopyMeta *>(op.weights);
-        if (!meta || !op.input || !op.output || meta->type_size <= 0) {
+        const StridedCopyMeta * meta = &op.strided_copy_meta;
+        if (!op.input || !op.output || meta->type_size <= 0) {
             return;
         }
 
@@ -6275,9 +6282,9 @@ void UnifiedKernel::build_dag(const std::vector<std::vector<int>> & successors,
         dag_state_.ready_counter    = sycl::malloc_device<int>(alloc_ops, queue_);
         dag_state_.tile_claimed     = sycl::malloc_device<int>(alloc_ops, queue_);
         dag_state_.tiles_done       = sycl::malloc_device<int>(alloc_ops, queue_);
-        dag_state_.successor_offset = sycl::malloc_device<int>(alloc_ops + 1, queue_);
-        dag_state_.successor_list   = sycl::malloc_device<int>(std::max(alloc_edges, 1), queue_);
-        dag_state_.n_tiles          = sycl::malloc_device<int>(alloc_ops, queue_);
+        dag_state_.successor_offset = sycl::malloc_host<int>(alloc_ops + 1, queue_);
+        dag_state_.successor_list   = sycl::malloc_host<int>(std::max(alloc_edges, 1), queue_);
+        dag_state_.n_tiles          = sycl::malloc_host<int>(alloc_ops, queue_);
         dag_state_.completed_count  = sycl::malloc_device<int>(1, queue_);
         dag_pool_n_ops_   = alloc_ops;
         dag_pool_n_edges_ = alloc_edges;
@@ -6298,13 +6305,11 @@ void UnifiedKernel::build_dag(const std::vector<std::vector<int>> & successors,
     // Cache host-side initial state for fast per-token reset
     host_initial_ready_counter_ = in_degree;
 
-    // Upload static topology to device (n_tiles uploaded later in launch_persistent_kernel
-    // after tile counts are computed from DeviceOperations)
-    queue_.memcpy(dag_state_.successor_offset, offsets.data(), (n_ops + 1) * sizeof(int));
+    // Copy static topology to host-pinned buffers (kernel reads via PCIe zero-copy)
+    std::memcpy(dag_state_.successor_offset, offsets.data(), (n_ops + 1) * sizeof(int));
     if (n_edges > 0) {
-        queue_.memcpy(dag_state_.successor_list, flat_successors.data(), n_edges * sizeof(int));
+        std::memcpy(dag_state_.successor_list, flat_successors.data(), n_edges * sizeof(int));
     }
-    queue_.wait();
 
     // Log DAG statistics
     int source_count = 0;
@@ -6406,7 +6411,7 @@ void UnifiedKernel::build_phase_schedule(const std::vector<std::vector<int>> & s
         host_phase_tiles_[p] = 0;  // placeholder, updated in launch_persistent_kernel
     }
 
-    // Allocate device arrays (grow-on-demand)
+    // Allocate host-pinned arrays (grow-on-demand; kernel reads via PCIe zero-copy)
     if (n_ops > phase_pool_n_ops_ || n_phases > phase_pool_n_phases_) {
         if (phase_allocated_) {
             sycl::free(phase_schedule_.entries, queue_);
@@ -6415,9 +6420,9 @@ void UnifiedKernel::build_phase_schedule(const std::vector<std::vector<int>> & s
         }
         const int alloc_ops    = n_ops + 64;
         const int alloc_phases = n_phases + 16;
-        phase_schedule_.entries      = sycl::malloc_device<DevicePhaseEntry>(alloc_ops, queue_);
-        phase_schedule_.phase_offset = sycl::malloc_device<int>(alloc_phases + 1, queue_);
-        phase_schedule_.phase_tiles  = sycl::malloc_device<int>(alloc_phases, queue_);
+        phase_schedule_.entries      = sycl::malloc_host<DevicePhaseEntry>(alloc_ops, queue_);
+        phase_schedule_.phase_offset = sycl::malloc_host<int>(alloc_phases + 1, queue_);
+        phase_schedule_.phase_tiles  = sycl::malloc_host<int>(alloc_phases, queue_);
         phase_pool_n_ops_    = alloc_ops;
         phase_pool_n_phases_ = alloc_phases;
     }
@@ -6425,9 +6430,8 @@ void UnifiedKernel::build_phase_schedule(const std::vector<std::vector<int>> & s
     phase_schedule_.total_ops = n_ops;
     phase_allocated_ = true;
 
-    // Upload static topology (phase_offset)
-    queue_.memcpy(phase_schedule_.phase_offset, host_phase_offset_.data(), (n_phases + 1) * sizeof(int));
-    queue_.wait();
+    // Copy static topology to host-pinned buffer (no queue memcpy needed)
+    std::memcpy(phase_schedule_.phase_offset, host_phase_offset_.data(), (n_phases + 1) * sizeof(int));
 
     // Save original (pre-fusion-remapping) phase data for subsequent tokens.
     // launch_persistent_kernel modifies host_phase_entries/offset/tiles in-place
@@ -6635,8 +6639,8 @@ void UnifiedKernel::build_role_schedule(const std::vector<DeviceOperation> & hos
         const int alloc_matmul = n_matmul_segs + 16;
         const int alloc_sync   = std::max(n_sync, 1) + 8;
 
-        role_schedule_.elem_segments   = sycl::malloc_device<RoleSegment>(alloc_elem, queue_);
-        role_schedule_.matmul_segments = sycl::malloc_device<RoleSegment>(alloc_matmul, queue_);
+        role_schedule_.elem_segments   = sycl::malloc_host<RoleSegment>(alloc_elem, queue_);
+        role_schedule_.matmul_segments = sycl::malloc_host<RoleSegment>(alloc_matmul, queue_);
 
         // Single allocation for all sync/counter/barrier ints.
         // Each atomic counter/sense pair is padded to 64 bytes (16 ints) to avoid
@@ -6659,13 +6663,13 @@ void UnifiedKernel::build_role_schedule(const std::vector<DeviceOperation> & hos
         role_allocated_     = true;
     }
 
-    // Upload segment data to device
-    queue_.memcpy(const_cast<RoleSegment *>(role_schedule_.elem_segments),
-                  host_elem_segments_.data(), n_elem_segs * sizeof(RoleSegment));
-    queue_.memcpy(const_cast<RoleSegment *>(role_schedule_.matmul_segments),
-                  host_matmul_segments_.data(), n_matmul_segs * sizeof(RoleSegment));
+    // Copy segment data to host-pinned buffers (kernel reads via PCIe zero-copy)
+    std::memcpy(const_cast<RoleSegment *>(role_schedule_.elem_segments),
+                host_elem_segments_.data(), n_elem_segs * sizeof(RoleSegment));
+    std::memcpy(const_cast<RoleSegment *>(role_schedule_.matmul_segments),
+                host_matmul_segments_.data(), n_matmul_segs * sizeof(RoleSegment));
 
-    // Zero sync flags + counters
+    // Zero sync flags + counters (these are device memory for kernel atomics)
     const int total_zero = n_sync * 2 + 1 + 4;
     queue_.memset(role_schedule_.sync_flags, 0, total_zero * sizeof(int));
     queue_.wait();
@@ -6923,7 +6927,7 @@ void UnifiedKernel::add_get_rows(int layer, const void * src0, const void * indi
 }
 
 void UnifiedKernel::add_set_rows(int layer, const void * src0, const void * indices,
-                                 void * dst, const SetRowsMeta * meta, int n_elements,
+                                 void * dst, const SetRowsMeta & meta, int n_elements,
                                  const void * debug_ptr, int64_t output_bytes) {
     if (!current_plan_) {
         GGML_LOG_ERROR("UnifiedKernel: add_set_rows called without begin_persistent\n");
@@ -6931,20 +6935,22 @@ void UnifiedKernel::add_set_rows(int layer, const void * src0, const void * indi
     }
 
     OperationDescriptor op = {};
-    op.type         = OperationType::SET_ROWS;
-    op.layer        = layer;
-    op.input        = src0;
-    op.aux          = const_cast<void *>(indices);
-    op.output       = dst;
-    op.weights      = meta;
-    op.mask         = debug_ptr;
-    op.M            = n_elements;
-    op.output_bytes = output_bytes;
+    op.type              = OperationType::SET_ROWS;
+    op.layer             = layer;
+    op.input             = src0;
+    op.aux               = const_cast<void *>(indices);
+    op.output            = dst;
+    op.weights           = nullptr;  // Not used; metadata is embedded
+    op.mask              = debug_ptr;
+    op.M                 = n_elements;
+    op.output_bytes      = output_bytes;
+    op.set_rows_meta     = meta;
+    op.has_embedded_meta = true;
     current_plan_->operations.push_back(op);
 }
 
 void UnifiedKernel::add_strided_copy(int layer, const void * src, void * dst,
-                                     const StridedCopyMeta * meta, int n_elements,
+                                     const StridedCopyMeta & meta, int n_elements,
                                      int64_t output_bytes) {
     if (!current_plan_) {
         GGML_LOG_ERROR("UnifiedKernel: add_strided_copy called without begin_persistent\n");
@@ -6952,13 +6958,15 @@ void UnifiedKernel::add_strided_copy(int layer, const void * src, void * dst,
     }
 
     OperationDescriptor op = {};
-    op.type         = OperationType::STRIDED_COPY;
-    op.layer        = layer;
-    op.input        = src;
-    op.output       = dst;
-    op.weights      = meta;
-    op.M            = n_elements;
-    op.output_bytes = output_bytes;
+    op.type               = OperationType::STRIDED_COPY;
+    op.layer              = layer;
+    op.input              = src;
+    op.output             = dst;
+    op.weights            = nullptr;  // Not used; metadata is embedded
+    op.M                  = n_elements;
+    op.output_bytes       = output_bytes;
+    op.strided_copy_meta  = meta;
+    op.has_embedded_meta  = true;
     current_plan_->operations.push_back(op);
 }
 
@@ -7632,6 +7640,15 @@ void UnifiedKernel::execute_persistent_phased(phase_callback_t on_matmul_complet
         dst.mask_ne2         = src.mask_ne2;
         dst.mask_ne3         = src.mask_ne3;
 
+        // Copy embedded per-op metadata (SET_ROWS, STRIDED_COPY)
+        if (src.has_embedded_meta) {
+            if (src.type == OperationType::SET_ROWS) {
+                dst.set_rows_meta = src.set_rows_meta;
+            } else if (src.type == OperationType::STRIDED_COPY) {
+                dst.strided_copy_meta = src.strided_copy_meta;
+            }
+        }
+
         const size_t pre_fusion_idx = i;
 
         // No GATE+UP+SILU fusion in phased split: secondary has separate ops
@@ -7754,14 +7771,14 @@ void UnifiedKernel::execute_persistent_phased(phase_callback_t on_matmul_complet
 
     // Execute each phase as a separate kernel launch
     for (const auto & phase : phases) {
-        // Upload phase operations to device memory (reuse pooled allocation)
+        // Copy phase operations to host-pinned pool (kernel reads via PCIe zero-copy)
         if (phase.count > d_ops_pool_size_) {
             if (d_ops_pool_) sycl::free(d_ops_pool_, queue_);
-            d_ops_pool_ = static_cast<void *>(sycl::malloc_device<DeviceOperation>(phase.count, queue_));
+            d_ops_pool_ = static_cast<void *>(sycl::malloc_host<DeviceOperation>(phase.count, queue_));
             d_ops_pool_size_ = d_ops_pool_ ? phase.count : 0;
         }
         DeviceOperation * d_ops = static_cast<DeviceOperation *>(d_ops_pool_);
-        queue_.memcpy(d_ops, &host_ops[phase.start], phase.count * sizeof(DeviceOperation)).wait();
+        std::memcpy(d_ops, &host_ops[phase.start], phase.count * sizeof(DeviceOperation));
 
         // Compute tiles and work-groups for this phase
         int phase_tiles = 0;
@@ -7781,8 +7798,8 @@ void UnifiedKernel::execute_persistent_phased(phase_callback_t on_matmul_complet
         const int n_workgroups = persistent_num_workgroups(phase_tiles, phase_has_attention,
                                                            phase_has_ffn, use_split_barrier);
 
-        // Reset sync state and launch
-        queue_.memset(sync_block_, 0, 3 * sizeof(int)).wait();
+        // Reset sync state before launch (no .wait() needed: in-order queue)
+        queue_.memset(sync_block_, 0, 3 * sizeof(int));
 
         PersistentKernelArgs args = {};
         args.operations            = d_ops;
@@ -7923,6 +7940,17 @@ void UnifiedKernel::launch_persistent_kernel() {
         dst.mask_nb3         = src.mask_nb3;
         dst.mask_ne2         = src.mask_ne2;
         dst.mask_ne3         = src.mask_ne3;
+
+        // Copy embedded per-op metadata (SET_ROWS, STRIDED_COPY) from OperationDescriptor
+        // to DeviceOperation. With malloc_host ops table, the kernel reads these directly
+        // via PCIe zero-copy — no per-token device memcpy needed.
+        if (src.has_embedded_meta) {
+            if (src.type == OperationType::SET_ROWS) {
+                dst.set_rows_meta = src.set_rows_meta;
+            } else if (src.type == OperationType::STRIDED_COPY) {
+                dst.strided_copy_meta = src.strided_copy_meta;
+            }
+        }
 
         // Save the pre-fusion index for split metadata lookup.
         // Fusion (below) advances i by +2, but op_meta was indexed by the original plan position.
@@ -8073,7 +8101,7 @@ void UnifiedKernel::launch_persistent_kernel() {
             GGML_ASSERT(n == dag_state_.n_ops &&
                         "DAG n_ops / device ops count mismatch — fusion must be disabled for DAG dispatch");
         }
-        queue_.memcpy(dag_state_.n_tiles, host_n_tiles_.data(), n * sizeof(int)).wait();
+        std::memcpy(dag_state_.n_tiles, host_n_tiles_.data(), n * sizeof(int));
     }
 
     // Update phase schedule: remap op indices after fusion, rebuild tile counts.
@@ -8150,44 +8178,43 @@ void UnifiedKernel::launch_persistent_kernel() {
             phase_schedule_.total_ops = static_cast<int>(host_phase_entries_.size());
         }
 
-        // Ensure device allocation is sufficient after compaction
+        // Ensure host-pinned allocation is sufficient after compaction
         const int final_n_phases = phase_schedule_.n_phases;
         const int final_n_ops    = phase_schedule_.total_ops;
         if (final_n_ops > phase_pool_n_ops_ || final_n_phases > phase_pool_n_phases_) {
-            // Grow device arrays (rare: only if fusion increased beyond initial allocation)
+            // Grow host-pinned arrays (rare: only if fusion increased beyond initial allocation)
             sycl::free(phase_schedule_.entries, queue_);
             sycl::free(phase_schedule_.phase_offset, queue_);
             sycl::free(phase_schedule_.phase_tiles, queue_);
             const int alloc_ops    = final_n_ops + 64;
             const int alloc_phases = final_n_phases + 16;
-            phase_schedule_.entries      = sycl::malloc_device<DevicePhaseEntry>(alloc_ops, queue_);
-            phase_schedule_.phase_offset = sycl::malloc_device<int>(alloc_phases + 1, queue_);
-            phase_schedule_.phase_tiles  = sycl::malloc_device<int>(alloc_phases, queue_);
+            phase_schedule_.entries      = sycl::malloc_host<DevicePhaseEntry>(alloc_ops, queue_);
+            phase_schedule_.phase_offset = sycl::malloc_host<int>(alloc_phases + 1, queue_);
+            phase_schedule_.phase_tiles  = sycl::malloc_host<int>(alloc_phases, queue_);
             phase_pool_n_ops_    = alloc_ops;
             phase_pool_n_phases_ = alloc_phases;
         }
 
-        // Upload to device
-        queue_.memcpy(phase_schedule_.entries, host_phase_entries_.data(),
-                      final_n_ops * sizeof(DevicePhaseEntry));
-        queue_.memcpy(phase_schedule_.phase_offset, host_phase_offset_.data(),
-                      (final_n_phases + 1) * sizeof(int));
-        queue_.memcpy(phase_schedule_.phase_tiles, host_phase_tiles_.data(), final_n_phases * sizeof(int));
-        queue_.wait();
+        // Copy to host-pinned buffers (no queue memcpy needed, kernel reads via PCIe zero-copy)
+        std::memcpy(phase_schedule_.entries, host_phase_entries_.data(),
+                    final_n_ops * sizeof(DevicePhaseEntry));
+        std::memcpy(phase_schedule_.phase_offset, host_phase_offset_.data(),
+                    (final_n_phases + 1) * sizeof(int));
+        std::memcpy(phase_schedule_.phase_tiles, host_phase_tiles_.data(), final_n_phases * sizeof(int));
 
         GGML_SYCL_DEBUG("[PERSISTENT-TG] Phase schedule updated after fusion: %d ops, %d phases "
                         "(from %d plan ops)\n", final_n_ops, final_n_phases, (int) n_ops);
     }
 
-    // Copy operation table to device (reuse pooled allocation when capacity is sufficient)
+    // Copy operation table to host-pinned pool (kernel reads via PCIe zero-copy, no device memcpy)
     const int n_ops_device = static_cast<int>(host_ops.size());
     if (n_ops_device > d_ops_pool_size_) {
         if (d_ops_pool_) sycl::free(d_ops_pool_, queue_);
-        d_ops_pool_ = static_cast<void *>(sycl::malloc_device<DeviceOperation>(n_ops_device, queue_));
+        d_ops_pool_ = static_cast<void *>(sycl::malloc_host<DeviceOperation>(n_ops_device, queue_));
         d_ops_pool_size_ = d_ops_pool_ ? n_ops_device : 0;
     }
     DeviceOperation * d_ops = static_cast<DeviceOperation *>(d_ops_pool_);
-    queue_.memcpy(d_ops, host_ops.data(), host_ops.size() * sizeof(DeviceOperation)).wait();
+    std::memcpy(d_ops, host_ops.data(), host_ops.size() * sizeof(DeviceOperation));
 
     // Build role schedule from the final device ops (after fusion).
     // This classifies ops into ELEM/MATMUL roles and identifies sync points.
@@ -8332,16 +8359,19 @@ void UnifiedKernel::launch_persistent_kernel() {
             // coherency bug: BCS memset writes to VRAM but does not invalidate L2,
             // leaving stale non-zero values from the previous token visible to the
             // kernel on its next invocation.
-            queue_.memset(sync_block_, 0, 3 * sizeof(int)).wait();
+            // No .wait() needed: in-order queue ensures memset completes before kernel launch.
+            queue_.memset(sync_block_, 0, 3 * sizeof(int));
         } else if (use_phase_mode) {
-            // Phase mode: reset tile counter + barrier state before each launch
-            queue_.memset(sync_block_, 0, 3 * sizeof(int)).wait();
+            // Phase mode: reset tile counter + barrier state before each launch.
+            // No .wait() needed: in-order queue ensures memset completes before kernel launch.
+            queue_.memset(sync_block_, 0, 3 * sizeof(int));
         } else if (use_dag) {
             // Reset DAG scheduling counters for this token
             reset_dag_counters();
         } else {
-            // Reset tile counter + barrier state (counter=0, sense=0) in single memset
-            queue_.memset(sync_block_, 0, 3 * sizeof(int)).wait();
+            // Reset tile counter + barrier state (counter=0, sense=0) in single memset.
+            // No .wait() needed: in-order queue ensures memset completes before kernel launch.
+            queue_.memset(sync_block_, 0, 3 * sizeof(int));
         }
 
         PersistentKernelArgs args = {};
@@ -8421,14 +8451,14 @@ void UnifiedKernel::launch_persistent_kernel() {
             }
 
             DeviceOperation * d_ops_subset =
-                sycl::malloc_device<DeviceOperation>(ops_by_type[idx].size(), queue_);
+                sycl::malloc_host<DeviceOperation>(ops_by_type[idx].size(), queue_);
             if (!d_ops_subset) {
                 GGML_LOG_WARN("[PERSISTENT-TG] execute profile: alloc failed for op=%s\n",
                               persistent_op_type_name(static_cast<OperationType>(idx)));
                 continue;
             }
-            queue_.memcpy(d_ops_subset, ops_by_type[idx].data(),
-                          ops_by_type[idx].size() * sizeof(DeviceOperation)).wait();
+            std::memcpy(d_ops_subset, ops_by_type[idx].data(),
+                         ops_by_type[idx].size() * sizeof(DeviceOperation));
 
             double total_ms = 0.0;
             for (int it = 0; it < profile_exec_iters; ++it) {
@@ -8513,6 +8543,15 @@ void UnifiedKernel::launch_persistent_kernel_async() {
         dst.mask_nb3         = src.mask_nb3;
         dst.mask_ne2         = src.mask_ne2;
         dst.mask_ne3         = src.mask_ne3;
+
+        // Copy embedded per-op metadata (SET_ROWS, STRIDED_COPY)
+        if (src.has_embedded_meta) {
+            if (src.type == OperationType::SET_ROWS) {
+                dst.set_rows_meta = src.set_rows_meta;
+            } else if (src.type == OperationType::STRIDED_COPY) {
+                dst.strided_copy_meta = src.strided_copy_meta;
+            }
+        }
 
         const size_t pre_fusion_idx = i;
 
@@ -8610,17 +8649,17 @@ void UnifiedKernel::launch_persistent_kernel_async() {
         host_ops.push_back(dst);
     }
 
-    // Copy operation table to device
+    // Copy operation table to host-pinned pool (kernel reads via PCIe zero-copy)
     const int n_ops_device = static_cast<int>(host_ops.size());
     if (n_ops_device > d_ops_pool_size_) {
         if (d_ops_pool_) {
             sycl::free(d_ops_pool_, queue_);
         }
-        d_ops_pool_      = static_cast<void *>(sycl::malloc_device<DeviceOperation>(n_ops_device, queue_));
+        d_ops_pool_      = static_cast<void *>(sycl::malloc_host<DeviceOperation>(n_ops_device, queue_));
         d_ops_pool_size_ = d_ops_pool_ ? n_ops_device : 0;
     }
     DeviceOperation * d_ops = static_cast<DeviceOperation *>(d_ops_pool_);
-    queue_.memcpy(d_ops, host_ops.data(), host_ops.size() * sizeof(DeviceOperation)).wait();
+    std::memcpy(d_ops, host_ops.data(), host_ops.size() * sizeof(DeviceOperation));
 
     // Kernel configuration: use barrier mode (not DAG) for split compatibility
     constexpr int BLOCK_SIZE        = 256;

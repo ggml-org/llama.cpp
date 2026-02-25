@@ -303,6 +303,40 @@ struct RopeDescriptor {
     bool          is_neox;    // true = NEOX layout (split pairs), false = NORMAL (adjacent pairs)
 };
 
+// Metadata for materializing strided/view tensors into contiguous buffers.
+struct StridedCopyMeta {
+    int64_t ne[4];
+    int64_t nb[4];
+    int32_t type_size;
+    int32_t pad;
+};
+
+// Metadata for GGML_OP_SET_ROWS.
+struct SetRowsMeta {
+    int64_t nc;
+    int64_t nr;
+    int64_t ne1;
+    int64_t ne02;
+    int64_t ne03;
+    int64_t ne11;
+    int64_t ne12;
+    int64_t nb00;
+    int64_t nb01;
+    int64_t nb02;
+    int64_t nb03;
+    int64_t nb0;
+    int64_t nb1;
+    int64_t nb2;
+    int64_t nb3;
+    int64_t nb10;
+    int64_t nb11;
+    int64_t nb12;
+    int32_t src_type;
+    int32_t dst_type;
+    int32_t idx_type;
+    int32_t pad;
+};
+
 struct OperationDescriptor {
     OperationType type;
     int           layer;
@@ -349,40 +383,16 @@ struct OperationDescriptor {
     // allocator recycles buffer addresses across non-overlapping tensor lifetimes.
     int           input_source_op  = -1;
     int           aux_source_op    = -1;
-};
 
-// Metadata for materializing strided/view tensors into contiguous buffers.
-struct StridedCopyMeta {
-    int64_t ne[4];
-    int64_t nb[4];
-    int32_t type_size;
-    int32_t pad;
-};
-
-// Metadata for GGML_OP_SET_ROWS.
-struct SetRowsMeta {
-    int64_t nc;
-    int64_t nr;
-    int64_t ne1;
-    int64_t ne02;
-    int64_t ne03;
-    int64_t ne11;
-    int64_t ne12;
-    int64_t nb00;
-    int64_t nb01;
-    int64_t nb02;
-    int64_t nb03;
-    int64_t nb0;
-    int64_t nb1;
-    int64_t nb2;
-    int64_t nb3;
-    int64_t nb10;
-    int64_t nb11;
-    int64_t nb12;
-    int32_t src_type;
-    int32_t dst_type;
-    int32_t idx_type;
-    int32_t pad;
+    // Embedded per-op metadata for SET_ROWS and STRIDED_COPY operations.
+    // Stored here to avoid separate device allocations and per-token memcpy uploads.
+    // The union overlaps with no other fields; only the relevant member is used
+    // based on the operation type.
+    union {
+        SetRowsMeta       set_rows_meta;
+        StridedCopyMeta   strided_copy_meta;
+    };
+    bool has_embedded_meta = false;  // True when set_rows_meta/strided_copy_meta is populated
 };
 
 // =============================================================================
@@ -2699,10 +2709,10 @@ public:
                       int64_t s10, int64_t s11, int64_t s12,
                       int64_t s1, int64_t s2, int64_t s3, int src0_type);
     void add_set_rows(int layer, const void * src0, const void * indices,
-                      void * dst, const SetRowsMeta * meta, int n_elements,
+                      void * dst, const SetRowsMeta & meta, int n_elements,
                       const void * debug_ptr = nullptr, int64_t output_bytes = -1);
     void add_strided_copy(int layer, const void * src, void * dst,
-                          const StridedCopyMeta * meta, int n_elements,
+                          const StridedCopyMeta & meta, int n_elements,
                           int64_t output_bytes = -1);
     void add_softmax(int layer, const void * input, const void * mask,
                      const void * sinks, void * output, int n_rows, int n_cols,
