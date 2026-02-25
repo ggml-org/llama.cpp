@@ -2,13 +2,13 @@
 > ## gfx906 Custom Changes + Benchmarks
 > Canonical tracker for this fork. Update this block whenever custom patches or benchmark results change.
 >
-> Last updated: `2026-02-25 22:08 UTC`  
+> Last updated: `2026-02-25 22:12 UTC`  
 > Tracking branch: `gfx906`  
 > Base reference: `origin/master @ a96a1120`
 >
 > Branch legend:
-> - `master` = staging ground branch; ready-to-upstream work for `ggml-org/llama.cpp`
-> - `gfx906` = finished, stable fork features; changes land here first; never meant to upstream
+> - `master` = staging ground branch; tracks upstream `master` as closely as possible; ready-to-upstream work for `ggml-org/llama.cpp`
+> - `gfx906` = finished, stable fork features; changes land here first; never meant to upstream; does not track upstream `master`
 > - `fast-load-upstream` = upstream-candidate branch for `GFX906-001`
 >
 > Status legend:
