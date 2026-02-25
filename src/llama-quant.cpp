@@ -782,7 +782,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         if (imatrix_data) {
             LLAMA_LOG_INFO("\n%s: have importance matrix data with %d entries\n",
                            __func__, (int)imatrix_data->size());
-            qs->has_imatrix = true;
             // check imatrix for nans or infs
             for (const auto & kv : *imatrix_data) {
                 for (float f : kv.second) {
