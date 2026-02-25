@@ -4275,9 +4275,36 @@ public:
             const int phase_end   = sched.phase_offset[phase + 1];
             const int total_tiles = sched.phase_tiles[phase];
 
-            if (total_tiles > 0) {
-                // Claim and process tiles within this phase using a single atomic counter.
-                // Uses args_.tile_counter (same pointer that device_split_barrier resets).
+            if (total_tiles < 0) {
+                // Serial chain phase: consecutive dependent phases with few tiles,
+                // merged to eliminate barriers between them. Only ONE WG executes
+                // the entire chain sequentially. Other WGs skip to the barrier.
+                //
+                // Safety: data dependencies exist between ops in the chain, but
+                // they are satisfied because the single WG processes ops in order.
+                // No cross-WG synchronization is needed since no other WG touches
+                // any of the chain's data.
+                int claimed = -1;
+                if (local_id == 0) {
+                    sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device,
+                                     sycl::access::address_space::global_space>
+                        tc(*args_.tile_counter);
+                    claimed = tc.fetch_add(1);
+                }
+                claimed = sycl::group_broadcast(item_.get_group(), claimed, 0);
+                if (claimed == 0) {
+                    // This WG executes all ops in the chain sequentially,
+                    // processing ALL tiles for each op before moving to the next.
+                    for (int e = phase_start; e < phase_end; e++) {
+                        const int op_idx   = sched.entries[e].op_idx;
+                        const int op_tiles = args_.operations[op_idx].n_tiles;
+                        for (int t = 0; t < op_tiles; t++) {
+                            dispatch_operation(args_.operations[op_idx], t);
+                        }
+                    }
+                }
+            } else if (total_tiles > 0) {
+                // Normal parallel phase: claim and process tiles using atomic counter.
                 while (true) {
                     int flat_tile = -1;
                     if (local_id == 0) {
@@ -6157,6 +6184,7 @@ int UnifiedKernel::persistent_num_workgroups(int total_tiles, bool has_attention
                     }
                 } else {
                     // Conservative default: ~1 persistent work-group per 4 CUs.
+                    // Clamped to [8, 32] — on Arc B580 (160 CUs) this gives 32.
                     n_workgroups = std::clamp(max_compute_units / 4, 8, 32);
                 }
             }
@@ -8239,6 +8267,208 @@ void UnifiedKernel::launch_persistent_kernel() {
             host_phase_tiles_   = std::move(compacted_tiles);
             phase_schedule_.n_phases  = static_cast<int>(host_phase_tiles_.size());
             phase_schedule_.total_ops = static_cast<int>(host_phase_entries_.size());
+        }
+
+        // ── Serial chain coalescing ──────────────────────────────────────
+        // Merge consecutive phases into "serial chains" that eliminate
+        // device-scope barriers between them. A serial chain is executed
+        // by a single WG that processes all ops in sequence; other WGs
+        // skip directly to the barrier at the end of the chain.
+        //
+        // Only phases containing "cheap" elementwise ops are candidates.
+        // MATMUL and ATTENTION phases are NEVER chained because their
+        // per-tile compute cost is high (10-100us/tile), making serial
+        // execution much slower than parallel. Elementwise ops (RMS_NORM,
+        // ADD, MUL, ROPE, SET_ROWS, SOFTMAX) have ~0.5-5us/tile, so
+        // serializing up to ~32 tiles costs ~16-160us, comparable to or
+        // less than the barrier cost saved (~28us each).
+        //
+        // Serial chain phases are signaled by phase_tiles[p] = -1.
+        // The kernel's run_phase() handles this: one WG claims the chain
+        // and executes all entries sequentially.
+        //
+        // NOTE: Coalescing is disabled by default because benchmarking shows
+        // it causes a ~33% regression on Arc B580. The root cause is that
+        // serial chains force N-1 WGs to spin-wait at the barrier while only
+        // 1 WG does useful work, which is slower than a clean barrier where
+        // all WGs participate equally. Enable for experimentation only.
+        // Enable with: GGML_SYCL_PERSISTENT_TG_COALESCE=1
+        static const bool coalesce_enabled = (std::getenv("GGML_SYCL_PERSISTENT_TG_COALESCE") != nullptr);
+        if (coalesce_enabled) {
+            // Helper: check if a phase contains only cheap (non-matmul, non-attention) ops.
+            auto phase_is_cheap = [&](int p) -> bool {
+                const int ps = host_phase_offset_[p];
+                const int pe = host_phase_offset_[p + 1];
+                for (int e = ps; e < pe; e++) {
+                    const int oi = host_phase_entries_[e].op_idx;
+                    if (oi < 0 || oi >= n_device_ops) {
+                        return false;
+                    }
+                    const auto ot = static_cast<OperationType>(host_ops[oi].type);
+                    switch (ot) {
+                        case OperationType::RMS_NORM:
+                        case OperationType::ADD:
+                        case OperationType::MUL:
+                        case OperationType::ROPE:
+                        case OperationType::SET_ROWS:
+                        case OperationType::SOFTMAX:
+                        case OperationType::SILU_MUL:
+                        case OperationType::GET_ROWS:
+                        case OperationType::STRIDED_COPY:
+                            break;         // Cheap: OK to chain
+                        default:
+                            return false;  // MATMUL, ATTENTION, GATE_UP_SILU — too expensive
+                    }
+                }
+                return true;
+            };
+
+            // Configurable tile threshold via env var for tuning.
+            static const int serial_tile_limit = [] {
+                if (const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_SERIAL_LIMIT")) {
+                    const int v = std::atoi(env);
+                    if (v > 0) {
+                        return v;
+                    }
+                }
+                return 48;  // Default: merge chains with up to 48 total tiles
+            }();
+
+            const int                     pre_coalesce_phases = static_cast<int>(host_phase_tiles_.size());
+            std::vector<DevicePhaseEntry> coalesced_entries;
+            std::vector<int>              coalesced_offset;
+            std::vector<int>              coalesced_tiles;
+            coalesced_entries.reserve(host_phase_entries_.size());
+            coalesced_offset.reserve(host_phase_offset_.size());
+            coalesced_tiles.reserve(host_phase_tiles_.size());
+            coalesced_offset.push_back(0);
+
+            int p = 0;
+            while (p < pre_coalesce_phases) {
+                const int tiles_p = host_phase_tiles_[p];
+
+                // Only chain cheap (elementwise-only) phases below the tile limit.
+                if (!phase_is_cheap(p) || tiles_p > serial_tile_limit) {
+                    // Emit as-is (parallel phase).
+                    const int ps = host_phase_offset_[p];
+                    const int pe = host_phase_offset_[p + 1];
+                    for (int e = ps; e < pe; e++) {
+                        coalesced_entries.push_back(host_phase_entries_[e]);
+                    }
+                    coalesced_offset.push_back(static_cast<int>(coalesced_entries.size()));
+                    coalesced_tiles.push_back(tiles_p);
+                    p++;
+                    continue;
+                }
+
+                // Scan forward: accumulate consecutive cheap, small phases.
+                int chain_start  = p;
+                int chain_tiles  = 0;
+                int chain_phases = 0;
+                while (p < pre_coalesce_phases) {
+                    const int next_tiles = host_phase_tiles_[p];
+                    if (!phase_is_cheap(p) || next_tiles > serial_tile_limit) {
+                        break;
+                    }
+                    if (chain_tiles + next_tiles > serial_tile_limit && chain_phases > 0) {
+                        break;
+                    }
+                    chain_tiles += next_tiles;
+                    chain_phases++;
+                    p++;
+                }
+
+                if (chain_phases >= 2) {
+                    // Merge into a single serial chain phase.
+                    for (int cp = chain_start; cp < chain_start + chain_phases; cp++) {
+                        const int cs = host_phase_offset_[cp];
+                        const int ce = host_phase_offset_[cp + 1];
+                        for (int e = cs; e < ce; e++) {
+                            coalesced_entries.push_back(host_phase_entries_[e]);
+                        }
+                    }
+                    coalesced_offset.push_back(static_cast<int>(coalesced_entries.size()));
+                    coalesced_tiles.push_back(-1);  // Serial chain marker
+                } else {
+                    // Only 1 phase in the "chain" — emit as normal.
+                    const int ps = host_phase_offset_[chain_start];
+                    const int pe = host_phase_offset_[chain_start + 1];
+                    for (int e = ps; e < pe; e++) {
+                        coalesced_entries.push_back(host_phase_entries_[e]);
+                    }
+                    coalesced_offset.push_back(static_cast<int>(coalesced_entries.size()));
+                    coalesced_tiles.push_back(host_phase_tiles_[chain_start]);
+                }
+            }
+
+            const int post_coalesce_phases = static_cast<int>(coalesced_tiles.size());
+            if (post_coalesce_phases < pre_coalesce_phases) {
+                host_phase_entries_         = std::move(coalesced_entries);
+                host_phase_offset_          = std::move(coalesced_offset);
+                host_phase_tiles_           = std::move(coalesced_tiles);
+                phase_schedule_.n_phases    = post_coalesce_phases;
+                phase_schedule_.total_ops   = static_cast<int>(host_phase_entries_.size());
+                static bool coalesce_logged = false;
+                if (!coalesce_logged) {
+                    coalesce_logged = true;
+                    fprintf(stderr,
+                            "[PERSISTENT-TG] Phase coalescing: %d -> %d phases "
+                            "(eliminated %d barriers)\n",
+                            pre_coalesce_phases, post_coalesce_phases, pre_coalesce_phases - post_coalesce_phases);
+                }
+            }
+        }  // if (coalesce_enabled)
+
+        // Diagnostic: print phase schedule breakdown (first token only).
+        {
+            static bool diag_printed = false;
+            if (!diag_printed) {
+                diag_printed       = true;
+                const int np       = static_cast<int>(host_phase_tiles_.size());
+                int       n_serial = 0, n_parallel = 0, total_serial_ops = 0;
+                int       max_chain = 0;
+                for (int p = 0; p < np; p++) {
+                    if (host_phase_tiles_[p] < 0) {
+                        n_serial++;
+                        const int chain_ops = host_phase_offset_[p + 1] - host_phase_offset_[p];
+                        total_serial_ops += chain_ops;
+                        if (chain_ops > max_chain) {
+                            max_chain = chain_ops;
+                        }
+                    } else {
+                        n_parallel++;
+                    }
+                }
+                fprintf(stderr,
+                        "[PERSISTENT-TG] Phase breakdown: %d total (%d parallel, "
+                        "%d serial chains covering %d ops, max chain=%d)\n",
+                        np, n_parallel, n_serial, total_serial_ops, max_chain);
+
+                // Print per-phase detail if LOG_PHASES env is set
+                static const bool log_phases = (std::getenv("GGML_SYCL_PERSISTENT_TG_LOG_PHASES") != nullptr);
+                if (log_phases) {
+                    const char * op_names[] = { "RMS_NORM", "ADD",          "MUL",         "GET_ROWS", "Q_PROJ",
+                                                "K_PROJ",   "V_PROJ",       "OUT_PROJ",    "GATE",     "UP",
+                                                "DOWN",     "GATE_UP_SILU", "ROPE",        "ATTN_F16", "ATTN_F32",
+                                                "SILU_MUL", "SET_ROWS",     "STRIDED_CPY", "SOFTMAX" };
+                    for (int p = 0; p < np; p++) {
+                        const int ps    = host_phase_offset_[p];
+                        const int pe    = host_phase_offset_[p + 1];
+                        const int tiles = host_phase_tiles_[p];
+                        fprintf(stderr, "  Phase %3d: tiles=%3d ops=%d [", p, tiles, pe - ps);
+                        for (int e = ps; e < pe; e++) {
+                            const int    oi    = host_phase_entries_[e].op_idx;
+                            const int    otype = (oi < n_device_ops) ? host_ops[oi].type : -1;
+                            const char * name  = (otype >= 0 && otype < 19) ? op_names[otype] : "?";
+                            if (e > ps) {
+                                fprintf(stderr, ", ");
+                            }
+                            fprintf(stderr, "%s", name);
+                        }
+                        fprintf(stderr, "]\n");
+                    }
+                }
+            }
         }
 
         // Ensure host-pinned allocation is sufficient after compaction

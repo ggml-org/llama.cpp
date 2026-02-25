@@ -30592,14 +30592,73 @@ full_build:
                             GGML_LOG_WARN("[PERSISTENT-TG] RMS debug buffer alloc failed (dim=%d)\n", rms_dim);
                         }
                     }
-                    kernel.add_rms_norm(layer, nullptr, input, output, eps, rms_dim, ggml_nbytes(node));
-                    log_op("RMS_NORM", layer, node, output);
+                    // ── RMS_NORM + MUL fusion ──────────────────────────────────
+                    // In ggml graphs, RMS_NORM computes x/rms(x), then a following
+                    // MUL node applies the norm weight: y = rms_norm(x) * weight.
+                    // The persistent RMS_NORM kernel already supports fused weight
+                    // multiplication (output[i] = input[i] * scale * w). By passing
+                    // the weight pointer directly, we eliminate the separate MUL op
+                    // AND the device-scope barrier between them.
+                    // NOTE: Benchmarking shows fusion is ~5% slower on Arc B580 due
+                    // to increased memory traffic in the fused RMS_NORM kernel
+                    // (reading weight tensor) outweighing the barrier savings.
+                    // Enable with: GGML_SYCL_PERSISTENT_TG_RMS_FUSION=1
+                    static const bool rms_fusion_enabled =
+                        (std::getenv("GGML_SYCL_PERSISTENT_TG_RMS_FUSION") != nullptr);
+                    const void * rms_weights   = nullptr;
+                    void *       fused_output  = output;
+                    bool         fused_rms_mul = false;
+                    if (rms_fusion_enabled && i + 1 < cgraph->n_nodes) {
+                        const ggml_tensor * next = cgraph->nodes[i + 1];
+                        // Pattern: MUL(rms_norm_output, norm_weight) where norm_weight
+                        // is a 1D weight tensor (same shape as hidden dim).
+                        if (next && next->op == GGML_OP_MUL && next->src[0] == node && next->src[1] &&
+                            ggml_are_same_shape(next->src[0], next->src[1]) && next->src[1]->type == GGML_TYPE_F32 &&
+                            ggml_is_contiguous(next)) {
+                            const void * wptr = resolve_input_ptr(next->src[1], layer);
+                            if (wptr) {
+                                wptr = ensure_device_access_ptr(next->src[1], wptr, "RMS_NORM fused weight");
+                                if (wptr) {
+                                    rms_weights   = wptr;
+                                    fused_output  = get_tensor_ptr_view_fast(next);
+                                    fused_output  = const_cast<void *>(ensure_device_access_ptr(
+                                        next, fused_output, "RMS_NORM fused output", ggml_nbytes(next)));
+                                    fused_rms_mul = (fused_output != nullptr);
+                                }
+                            }
+                        }
+                    }
+                    kernel.add_rms_norm(layer, rms_weights, input, fused_rms_mul ? fused_output : output, eps, rms_dim,
+                                        fused_rms_mul ? ggml_nbytes(cgraph->nodes[i + 1]) : ggml_nbytes(node));
+                    log_op("RMS_NORM", layer, node, fused_rms_mul ? fused_output : output);
                     ops_added++;
-                    record_trace(node->op, node, output, ops_added - 1);
+                    record_trace(node->op, node, fused_rms_mul ? fused_output : output, ops_added - 1);
+                    if (fused_rms_mul) {
+                        // Record fused MUL node in DAG tracking so downstream
+                        // consumers resolve the fused op as their producer.
+                        const int     fused_op_idx = ops_added - 1;
+                        ggml_tensor * mul_node     = cgraph->nodes[i + 1];
+                        tensor_to_op[mul_node]     = fused_op_idx;
+                        node_to_last_op[i + 1]     = fused_op_idx;
+                        // Record trace entry for the MUL's output
+                        record_trace(mul_node->op, mul_node, fused_output, fused_op_idx);
+                        // Map the fused op to BOTH graph nodes (RMS_NORM and MUL)
+                        if ((int) op_to_graph_node.size() <= fused_op_idx) {
+                            op_to_graph_node.resize(fused_op_idx + 1, -1);
+                        }
+                        // The op is already mapped to the RMS_NORM graph node (i).
+                        // For DAG purposes, both nodes i and i+1 produce the same op.
+                        i++;  // Skip the MUL node
+                        GGML_SYCL_DEBUG(
+                            "[PERSISTENT-TG]   RMS_NORM+MUL fused: layer=%d input=%p output=%p weights=%p\n", layer,
+                            input, fused_output, rms_weights);
+                    } else {
+                        GGML_SYCL_DEBUG("[PERSISTENT-TG]   RMS_NORM: layer=%d input=%p output=%p\n", layer, input,
+                                        output);
+                    }
                     if (g_ggml_sycl_debug) {
                         plan_op_counts[GGML_OP_RMS_NORM]++;
                     }
-                    GGML_SYCL_DEBUG("[PERSISTENT-TG]   RMS_NORM: layer=%d input=%p output=%p\n", layer, input, output);
                     break;
                 }
 
