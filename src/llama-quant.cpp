@@ -1112,8 +1112,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 }
                 if (!imatrix && tensor_requires_imatrix(tensor->name, new_type, ftype)) {
                     // we should never reach this anymore, since we now check for imatrix
-                    // requirements in the preliminary loop over model weights, but I am
-                    // leaving this check here as a guard, just in case. - @ddh0
+                    // requirements in the preliminary loop over model weights, but this check
+                    // is left here as a guard, just in case.
                     LLAMA_LOG_ERROR("\n============================================================\n");
                     LLAMA_LOG_ERROR("Missing importance matrix for tensor %s in a very low-bit quantization\n", tensor->name);
                     LLAMA_LOG_ERROR("The result will be garbage, so bailing out\n");
