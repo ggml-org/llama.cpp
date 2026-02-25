@@ -6656,15 +6656,20 @@ struct test_generic_op : public test_case {
     const std::array<int32_t, GGML_MAX_OP_PARAMS / sizeof(int32_t)> op_params;
 
     const std::vector<input_tensor> sources;
+    const std::string name;
 
     std::string vars() override {
-        return VARS_TO_STR4(type, ne, op_params, sources);
+        if (name.empty()) {
+            return VARS_TO_STR4(type, ne, op_params, sources);
+        }
+
+        return VARS_TO_STR5(name, type, ne, op_params, sources);
     }
 
     test_generic_op(ggml_op op, ggml_type type, std::array<int64_t, 4> ne,
                     std::array<int32_t, GGML_MAX_OP_PARAMS / sizeof(int32_t)> op_params,
-                    std::vector<input_tensor> sources)
-        : op(op), type(type), ne(ne), op_params(op_params), sources(sources) {}
+                    std::vector<input_tensor> sources, std::string name = "")
+        : op(op), type(type), ne(ne), op_params(op_params), sources(sources), name(std::move(name)) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         const size_t source_count = std::min(sources.size(), (size_t)GGML_MAX_SRC);
@@ -8906,7 +8911,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_from_json(const c
             sources.push_back({(ggml_type)src["type"], src_ne, src_nb});
         }
 
-        test_cases.emplace_back(new test_generic_op(op, type, ne, op_params, sources));
+        std::string name;
+        if (input_case.contains("name")) {
+            name = input_case["name"];
+        }
+
+        test_cases.emplace_back(new test_generic_op(op, type, ne, op_params, sources, std::move(name)));
     }
 
     return test_cases;

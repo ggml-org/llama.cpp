@@ -34,6 +34,7 @@ struct test_object {
     std::array<int64_t, 4> ne;
     std::vector<int32_t> op_params;
     std::vector<input_tensor> sources;
+    std::string name;
 
     nlohmann::json to_json() const {
         nlohmann::json test;
@@ -47,6 +48,10 @@ struct test_object {
         test["ne"] = { ne[0], ne[1], ne[2], ne[3] };
 
         test["op_params"] = op_params;
+
+        if (!name.empty()) {
+            test["name"] = name;
+        }
 
         nlohmann::json j_sources = nlohmann::json::array();
         for (size_t s = 0; s < sources.size(); s++) {
@@ -98,6 +103,7 @@ static void extract_graph_ops(ggml_cgraph * cgraph, const char * label, std::set
             test.sources.emplace_back(node->src[s]->type, node->src[s]->ne, node->src[s]->nb);
         }
 
+        test.name = node->name;
         tests.insert(test);
     }
 
