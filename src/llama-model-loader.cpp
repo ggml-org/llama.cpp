@@ -4,13 +4,39 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cinttypes>
+#include <cstdlib>
 #include <cstring>
 #include <future>
 
 static const size_t kiB = 1024;
 static const size_t MiB = 1024*kiB;
 static const size_t GiB = 1024*MiB;
+
+static size_t llama_parse_env_size_t(const char * name, size_t default_value, size_t min_value, size_t max_value) {
+    const char * value = std::getenv(name);
+    if (value == nullptr || value[0] == '\0') {
+        return default_value;
+    }
+
+    errno = 0;
+    char * end = nullptr;
+    const unsigned long long parsed = std::strtoull(value, &end, 10);
+    if (errno != 0 || end == value || (end != nullptr && *end != '\0')) {
+        LLAMA_LOG_WARN("%s: invalid value '%s' for %s, using default %zu\n",
+            __func__, value, name, default_value);
+        return default_value;
+    }
+
+    if (parsed < min_value || parsed > max_value) {
+        LLAMA_LOG_WARN("%s: out-of-range value '%s' for %s, expected [%zu, %zu], using default %zu\n",
+            __func__, value, name, min_value, max_value, default_value);
+        return default_value;
+    }
+
+    return static_cast<size_t>(parsed);
+}
 
 const char * llama_file_version_name(llama_fver version) {
     switch (version) {
@@ -973,34 +999,39 @@ bool llama_model_loader::load_all_data(
         llama_buf_map & bufs,
         llama_mlocks * lmlocks,
         llama_progress_callback progress_callback,
-        void * progress_callback_user_data) {
+        void * progress_callback_user_data,
+        bool finalize) {
     GGML_ASSERT(size_data != 0 && "call init_mappings() first");
 
     std::vector<no_init<uint8_t>> read_buf;
     std::vector<std::future<std::pair<ggml_tensor *, bool>>> validation_result;
 
-    // 4 staging buffers for async uploads, each sized 1MB seems to be a good default for single NVMe drives.
-    // NVMe raid configurations might require more / larger buffers.
-    constexpr size_t n_buffers = 4;
+    // Staging ring defaults used when env knobs are unset.
+    // LLAMA_LOAD_N_BUFFERS controls ring depth, LLAMA_LOAD_BUFFER_MB controls chunk size.
+    const size_t n_buffers = llama_parse_env_size_t("LLAMA_LOAD_N_BUFFERS", 4, 1, 64);
 
     size_t alignment = 1;
     for (const auto & file : files) {
         alignment = std::max(file->read_alignment(), alignment);
     }
 
-    // Buffer size: balance between memory usage and I/O efficiency
-    // 64MB works well for NVMe drives
-    const size_t buffer_size = alignment != 1 ? 64 * 1024 * 1024 + 2 * alignment : 1 * 1024 * 1024;
+    const size_t default_buffer_mb = (use_mmap || alignment != 1) ? 64 : 1;
+    const size_t buffer_mb = llama_parse_env_size_t("LLAMA_LOAD_BUFFER_MB", default_buffer_mb, 1, 1024);
+
+    // Buffer size: tuneable tradeoff between memory use and throughput.
+    // Keep extra headroom for alignment-sensitive direct I/O reads.
+    const size_t buffer_size = buffer_mb * MiB + (alignment != 1 ? 2 * alignment : 0);
+    LLAMA_LOG_DEBUG("%s: load staging config n_buffers=%zu buffer_mb=%zu alignment=%zu\n",
+        __func__, n_buffers, buffer_mb, alignment);
 
     std::vector<ggml_backend_buffer_t> host_buffers;
     std::vector<ggml_backend_event_t> events;
     std::vector<void *> host_ptrs;
     size_t buffer_idx = 0; // buffer to use for async loads
     ggml_backend_t upload_backend = [&](const char * func) -> ggml_backend_t {
-        if (use_mmap || check_tensors) {
+        if (check_tensors) {
             return nullptr;
         }
-        // When not using mmaped io use async uploads from pinned memory to GPU memory.
         // First determine if the backend supports the necessary features for async uploads.
         auto * buf = bufs.count(0) ? bufs.at(0) : nullptr;
         if (!buf) {
@@ -1029,7 +1060,6 @@ bool llama_model_loader::load_all_data(
                 ggml_backend_dev_name(dev));
             return nullptr;
         }
-
         auto * host_buft = ggml_backend_dev_host_buffer_type(dev);
         if (!host_buft) {
             LLAMA_LOG_DEBUG("%s: no host buffer type found for device %s\n", func,
@@ -1037,7 +1067,7 @@ bool llama_model_loader::load_all_data(
             return nullptr;
         }
 
-        // If the backend is supported, create pinned memory buffers and events for synchronisation.
+        // Create pinned host staging buffers and events for async uploads.
         for (size_t idx = 0; idx < n_buffers; ++idx) {
             auto * buf = ggml_backend_buft_alloc_buffer(host_buft, buffer_size);
 
@@ -1077,6 +1107,20 @@ bool llama_model_loader::load_all_data(
             ggml_backend_name(upload_backend));
     }
 
+    size_t size_done_local = 0;
+
+    auto can_use_upload_backend = [&](const ggml_tensor * tensor) -> bool {
+        if (!upload_backend) {
+            return false;
+        }
+        ggml_backend_buffer_t tensor_buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+        if (!tensor_buf || ggml_backend_buffer_is_host(tensor_buf)) {
+            return false;
+        }
+        ggml_backend_dev_t upload_dev = ggml_backend_get_device(upload_backend);
+        return ggml_backend_buffer_get_type(tensor_buf) == ggml_backend_dev_buffer_type(upload_dev);
+    };
+
     for (struct ggml_tensor * cur = ggml_get_first_tensor(ctx); cur != NULL; cur = ggml_get_next_tensor(ctx, cur)) {
         const auto * weight = get_weight(ggml_get_name(cur));
         if (weight == nullptr) {
@@ -1085,7 +1129,12 @@ bool llama_model_loader::load_all_data(
         }
 
         if (progress_callback) {
-            if (!progress_callback((float) size_done / size_data, progress_callback_user_data)) {
+            size_t size_done_snapshot = 0;
+            {
+                std::lock_guard<std::mutex> lock(load_mutex);
+                size_done_snapshot = size_done;
+            }
+            if (!progress_callback((float) size_done_snapshot / size_data, progress_callback_user_data)) {
                 return false;
             }
         }
@@ -1114,9 +1163,30 @@ bool llama_model_loader::load_all_data(
                     lmlock->grow_to(weight->offs + n_size);
                 }
 
-                auto & mmap_used = mmaps_used[weight->idx];
-                mmap_used.first  = std::min(mmap_used.first,  weight->offs);
-                mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
+                {
+                    std::lock_guard<std::mutex> lock(load_mutex);
+                    auto & mmap_used = mmaps_used[weight->idx];
+                    mmap_used.first  = std::min(mmap_used.first,  weight->offs);
+                    mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
+                }
+            } else if (can_use_upload_backend(cur)) {
+                size_t data_read = 0;
+
+                while (data_read < n_size) {
+                    const size_t data_to_copy = std::min<size_t>(buffer_size, n_size - data_read);
+
+                    // Wait for previous upload to complete before reusing the staging buffer.
+                    ggml_backend_event_synchronize(events[buffer_idx]);
+
+                    std::memcpy(host_ptrs[buffer_idx], data + data_read, data_to_copy);
+
+                    ggml_backend_tensor_set_async(upload_backend, cur, host_ptrs[buffer_idx], data_read, data_to_copy);
+                    ggml_backend_event_record(events[buffer_idx], upload_backend);
+
+                    data_read += data_to_copy;
+                    ++buffer_idx;
+                    buffer_idx %= n_buffers;
+                }
             } else {
                 ggml_backend_tensor_set(cur, data, 0, n_size);
             }
@@ -1197,7 +1267,12 @@ bool llama_model_loader::load_all_data(
             }
         }
 
-        size_done += n_size;
+        if (progress_callback) {
+            std::lock_guard<std::mutex> lock(load_mutex);
+            size_done += n_size;
+        } else {
+            size_done_local += n_size;
+        }
     }
 
     // free temporary resources used for async uploads
@@ -1223,24 +1298,50 @@ bool llama_model_loader::load_all_data(
         throw std::runtime_error("found tensors with invalid data");
     }
 
-    // check if this is the last call and do final cleanup
-    if (size_done >= size_data) {
-        // unmap offloaded tensors and metadata
-        if (use_mmap) {
-            for (uint32_t idx = 0; idx < mappings.size(); idx++) {
-                const auto & mmap_used = mmaps_used.at(idx);
-                auto & mapping = mappings.at(idx);
-                mapping->unmap_fragment(0, mmap_used.first);
-                if (mmap_used.second != 0) {
-                    mapping->unmap_fragment(mmap_used.second, mapping->size());
-                }
+    if (size_done_local != 0) {
+        std::lock_guard<std::mutex> lock(load_mutex);
+        size_done += size_done_local;
+    }
+
+    if (finalize) {
+        return finalize_data_loading(progress_callback, progress_callback_user_data);
+    }
+
+    return true;
+}
+
+bool llama_model_loader::finalize_data_loading(
+        llama_progress_callback progress_callback,
+        void * progress_callback_user_data) {
+    bool should_finalize = false;
+    {
+        std::lock_guard<std::mutex> lock(load_mutex);
+        if (size_done >= size_data && !load_finalized) {
+            load_finalized = true;
+            should_finalize = true;
+        }
+    }
+
+    if (!should_finalize) {
+        return true;
+    }
+
+    // unmap offloaded tensors and metadata
+    if (use_mmap) {
+        for (uint32_t idx = 0; idx < mappings.size(); idx++) {
+            const auto & mmap_used = mmaps_used.at(idx);
+            auto & mapping = mappings.at(idx);
+            mapping->unmap_fragment(0, mmap_used.first);
+            if (mmap_used.second != 0) {
+                mapping->unmap_fragment(mmap_used.second, mapping->size());
             }
         }
-        if (progress_callback) {
-            // Even though the model is done loading, we still honor
-            // cancellation since we need to free allocations.
-            return progress_callback(1.0f, progress_callback_user_data);
-        }
+    }
+
+    if (progress_callback) {
+        // Even though the model is done loading, we still honor
+        // cancellation since we need to free allocations.
+        return progress_callback(1.0f, progress_callback_user_data);
     }
 
     return true;

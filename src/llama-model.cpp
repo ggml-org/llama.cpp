@@ -21,6 +21,7 @@
 #include <cstring>
 #include <cmath>
 #include <functional>
+#include <future>
 #include <map>
 #include <regex>
 #include <sstream>
@@ -7676,7 +7677,10 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
     ml.done_getting_tensors();
 
-    ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
+    // For GPU offload, avoid MAP_POPULATE pre-faulting the whole model before upload starts.
+    // This allows staged uploads to start earlier and overlap with paging/copy work.
+    const bool prefetch_mmap = n_gpu_layers == 0;
+    ml.init_mappings(prefetch_mmap, use_mlock ? &pimpl->mlock_mmaps : nullptr);
     pimpl->mappings.reserve(ml.mappings.size());
 
     // create the backend buffers
@@ -7805,9 +7809,38 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     }
 
     // load tensor data
-    for (auto & [ctx, buf_map] : ctx_buf_maps) {
-        if (!ml.load_all_data(ctx, buf_map, use_mlock ? &pimpl->mlock_mmaps : NULL, params.progress_callback, params.progress_callback_user_data)) {
+    const bool can_parallel_mmap_load =
+        ml.use_mmap &&
+        !use_mlock &&
+        !ml.check_tensors &&
+        ctx_buf_maps.size() > 1;
+
+    if (can_parallel_mmap_load) {
+        std::vector<std::future<bool>> load_futures;
+        load_futures.reserve(ctx_buf_maps.size());
+
+        for (auto & [ctx, buf_map] : ctx_buf_maps) {
+            ggml_context * ctx_ptr = ctx;
+            llama_buf_map * buf_map_ptr = &buf_map;
+            load_futures.emplace_back(std::async(std::launch::async, [&ml, ctx_ptr, buf_map_ptr]() {
+                return ml.load_all_data(ctx_ptr, *buf_map_ptr, nullptr, nullptr, nullptr, /* finalize = */ false);
+            }));
+        }
+
+        for (auto & load_future : load_futures) {
+            if (!load_future.get()) {
+                return false;
+            }
+        }
+
+        if (!ml.finalize_data_loading(params.progress_callback, params.progress_callback_user_data)) {
             return false;
+        }
+    } else {
+        for (auto & [ctx, buf_map] : ctx_buf_maps) {
+            if (!ml.load_all_data(ctx, buf_map, use_mlock ? &pimpl->mlock_mmaps : NULL, params.progress_callback, params.progress_callback_user_data, /* finalize = */ true)) {
+                return false;
+            }
         }
     }
 

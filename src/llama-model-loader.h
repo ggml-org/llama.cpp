@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <map>
+#include <mutex>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -93,6 +94,8 @@ struct llama_model_loader {
     size_t size_done = 0;
     size_t size_data = 0;
     std::vector<std::pair<size_t, size_t>> mmaps_used;
+    std::mutex load_mutex;
+    bool load_finalized = false;
 
     llama_model_loader(
         const std::string & fname,
@@ -167,6 +170,11 @@ struct llama_model_loader {
             struct ggml_context * ctx,
             llama_buf_map & bufs,
             llama_mlocks * lmlocks,
+            llama_progress_callback progress_callback,
+            void * progress_callback_user_data,
+            bool finalize = true);
+
+    bool finalize_data_loading(
             llama_progress_callback progress_callback,
             void * progress_callback_user_data);
 
