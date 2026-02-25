@@ -11,7 +11,7 @@
 	import { getFileTypeCategory } from '$lib/utils';
 	import { config } from '$lib/stores/settings.svelte';
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
-	import { isRouterMode } from '$lib/stores/server.svelte';
+	import { isRouterMode, serverError } from '$lib/stores/server.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { activeMessages } from '$lib/stores/conversations.svelte';
 
@@ -45,6 +45,7 @@
 
 	let currentConfig = $derived(config());
 	let isRouter = $derived(isRouterMode());
+	let isOffline = $derived(!!serverError());
 
 	let conversationModel = $derived(
 		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])
@@ -168,7 +169,7 @@
 
 	<div class="ml-auto flex items-center gap-1.5">
 		<ModelsSelector
-			{disabled}
+			disabled={disabled || isOffline}
 			bind:this={selectorModelRef}
 			currentModel={conversationModel}
 			forceForegroundText={true}
