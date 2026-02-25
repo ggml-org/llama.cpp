@@ -220,7 +220,7 @@ void ggml_vec_dot_mxfp4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, 
     *s = sumf;
 }
 
-// NVFP4 has block_size=16, q8_0 has block_size=32, so 2 NVFP4 blocks per 1 q8_0 block
+// NVFP4: super-block of 64 elements = 4 sub-blocks of 16 = 2 q8_0 blocks
 void ggml_vec_dot_nvfp4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
@@ -232,17 +232,15 @@ void ggml_vec_dot_nvfp4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, 
     const block_nvfp4 * GGML_RESTRICT x = vx;
     const block_q8_0 * GGML_RESTRICT y = vy;
 
-    const int nb = n / QK_NVFP4; // number of super-blocks
-    // Each super-block has 4 sub-blocks of 16 elements = 64 elements = 2 q8_0 blocks
+    const int nb = n / QK_NVFP4;
 
     float sumf = 0;
 
     for (int ib = 0; ib < nb; ++ib) {
         for (int s_idx = 0; s_idx < 4; ++s_idx) {
-            const float d = GGML_FP16_TO_FP32(x[ib].d[s_idx]);
-            // Which q8_0 block and offset within it
-            const int q8_block = s_idx / 2;  // 0 or 1
-            const int q8_off   = (s_idx % 2) * QK_NVFP4_SUB;  // 0 or 16
+            const float d = ggml_ue4m3_to_fp32(x[ib].d[s_idx]);
+            const int q8_block = s_idx / 2;
+            const int q8_off   = (s_idx % 2) * QK_NVFP4_SUB;
             const float dy = GGML_CPU_FP16_TO_FP32(y[2*ib + q8_block].d);
 
             int sumi_lo = 0, sumi_hi = 0;

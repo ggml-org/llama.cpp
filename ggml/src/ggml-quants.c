@@ -444,7 +444,6 @@ void quantize_row_nvfp4_ref(const float * GGML_RESTRICT x, block_nvfp4 * GGML_RE
     const int nb = k / qk;
 
     for (int i = 0; i < nb; i++) {
-        // Quantize each sub-block independently
         for (int s = 0; s < n_sub; s++) {
             const float * xb = x + i*qk + s*qk_sub;
 
@@ -455,8 +454,11 @@ void quantize_row_nvfp4_ref(const float * GGML_RESTRICT x, block_nvfp4 * GGML_RE
                 }
             }
 
-            y[i].d[s] = GGML_FP32_TO_FP16(ggml_ue4m3_to_fp32(ggml_fp32_to_ue4m3(amax / 6.0f)));
-            const float d = GGML_FP16_TO_FP32(y[i].d[s]);
+            // Store UE4M3 scale directly; ggml_ue4m3_to_fp32 includes the 0.5 factor
+            // to match kvalues_mxfp4 convention (kvalues are 2x actual E2M1 values)
+            const uint8_t ue = ggml_fp32_to_ue4m3(amax / 6.0f);
+            y[i].d[s] = ue;
+            const float d = ggml_ue4m3_to_fp32(ue);
 
             for (int j = 0; j < qk_sub/2; ++j) {
                 const uint8_t x0 = best_index_mxfp4(xb[0        + j], d);
@@ -479,7 +481,7 @@ void dequantize_row_nvfp4(const block_nvfp4 * GGML_RESTRICT x, float * GGML_REST
 
     for (int i = 0; i < nb; i++) {
         for (int s = 0; s < n_sub; s++) {
-            const float d = GGML_FP16_TO_FP32(x[i].d[s]);
+            const float d = ggml_ue4m3_to_fp32(x[i].d[s]);
             float * yb = y + i*qk + s*qk_sub;
 
             for (int j = 0; j < qk_sub/2; ++j) {
@@ -2155,12 +2157,6 @@ size_t quantize_mxfp4(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
     GGML_UNUSED(quant_weights);
     quantize_row_mxfp4_ref(src, dst, (int64_t)nrow*n_per_row);
     return nrow * ggml_row_size(GGML_TYPE_MXFP4, n_per_row);
-}
-
-size_t quantize_nvfp4(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
-    GGML_UNUSED(quant_weights);
-    quantize_row_nvfp4_ref(src, dst, (int64_t)nrow*n_per_row);
-    return nrow * ggml_row_size(GGML_TYPE_NVFP4, n_per_row);
 }
 
 // ====================== Ternary (de)-quantization (BitNet b1.58 and TriLMs)
@@ -5292,7 +5288,9 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
             } break;
         case GGML_TYPE_NVFP4:
             {
-                VALIDATE_ROW_DATA_DVEC_F16_IMPL(block_nvfp4, data, nb, QK_NVFP4/QK_NVFP4_SUB);
+                // UE4M3 scales are uint8_t — all byte values are valid
+                GGML_UNUSED(data);
+                GGML_UNUSED(nb);
             } break;
         case GGML_TYPE_Q2_K:
             {

@@ -566,50 +566,52 @@ class ModelBase:
         return ()
 
     def _repack_nvfp4(self, new_name: str, weight: Tensor, scale: Tensor, scale2: Tensor):
+        """Repack NVFP4 ModelOpt tensors into ggml block layout.
+        When scale2 ≈ 1.0, preserves original E4M3 scale bits exactly.
+        Otherwise dequantizes and requantizes with scale2 baked in."""
         import torch
         out_features = weight.shape[0]
         n_blocks = scale.shape[1]
 
         e2m1_lut = torch.tensor([0, 0.5, 1, 1.5, 2, 3, 4, 6, 0, -0.5, -1, -1.5, -2, -3, -4, -6])
 
+        # Unpack ModelOpt nibble-packed weights
         w = weight.reshape(out_features, n_blocks, 8)
         vals = torch.stack([w & 0x0F, w >> 4], dim=-1).reshape(out_features, n_blocks, 16)
 
-        float_vals = e2m1_lut[vals.long()] * (scale.float() * scale2.float()).unsqueeze(-1)
+        scale2_trivial = (scale2.numel() <= 1 and abs(float(scale2.float().sum()) - 1.0) < 1e-6)
 
-        amax = float_vals.abs().amax(dim=-1)
-        scale_f = amax / 6.0
-        combined = scale_f.to(torch.float8_e4m3fn).view(torch.uint8).numpy() & 0x7F
+        if scale2_trivial:
+            # Preserve original E4M3 scale bits as UE4M3 (strip sign bit)
+            d_ue = scale.view(torch.uint8).numpy().reshape(out_features, n_blocks) & 0x7F
+            qs = (vals[:, :, :8] | (vals[:, :, 8:] << 4)).to(torch.uint8).numpy()
+        else:
+            # Dequantize with scale2, then requantize into UE4M3 scales + E2M1 nibbles
+            float_vals = e2m1_lut[vals.long()] * (scale.float() * scale2.float()).unsqueeze(-1)
 
-        # decode UE4M3 scale for requantization
-        ue_exp = (combined >> 3) & 0xF
-        ue_man = combined & 0x7
-        ue_float = np.where(
-            combined == 0, 0.0,
-            np.where(ue_exp == 0, ue_man.astype(np.float32) * 2**-9,
-                     (1.0 + ue_man.astype(np.float32) / 8.0) * (2.0 ** (ue_exp.astype(np.float32) - 7))))
-        ue_float_t = torch.from_numpy(ue_float).float().unsqueeze(-1)
+            amax = float_vals.abs().amax(dim=-1)
+            d_ue = (amax / 6.0).to(torch.float8_e4m3fn).view(torch.uint8).numpy() & 0x7F
 
-        inv_scale = torch.where(ue_float_t > 0, 1.0 / ue_float_t, torch.zeros_like(ue_float_t))
-        target = float_vals * inv_scale
-        best_idx = (target.unsqueeze(-1) - e2m1_lut.reshape(1, 1, 1, 16)).abs().argmin(dim=-1).to(torch.uint8)
+            # Decode UE4M3 scales to find best E2M1 indices
+            ue_exp = (d_ue >> 3) & 0xF
+            ue_man = d_ue & 0x7
+            ue_float = np.where(
+                d_ue == 0, 0.0,
+                np.where(ue_exp == 0, ue_man.astype(np.float32) * 2**-9,
+                         (1.0 + ue_man.astype(np.float32) / 8.0) * (2.0 ** (ue_exp.astype(np.float32) - 7))))
+            ue_float_t = torch.from_numpy(ue_float).float().unsqueeze(-1)
 
-        # pack: qs[j] = lo_nibble[j] | (hi_nibble[j] << 4)
-        qs = (best_idx[:, :, :8] | (best_idx[:, :, 8:] << 4)).to(torch.uint8)
+            inv_scale = torch.where(ue_float_t > 0, 1.0 / ue_float_t, torch.zeros_like(ue_float_t))
+            target = float_vals * inv_scale
+            best_idx = (target.unsqueeze(-1) - e2m1_lut.reshape(1, 1, 1, 16)).abs().argmin(dim=-1).to(torch.uint8)
 
-        # super-block layout (QK=64, 4 sub-blocks of 16):
-        # [d0,d1,d2,d3 as fp16 (8 bytes), qs0(8), qs1(8), qs2(8), qs3(8) (32 bytes)] = 40 bytes
+            qs = (best_idx[:, :, :8] | (best_idx[:, :, 8:] << 4)).numpy()
+
+        # Pack into super-blocks: [4 UE4M3 scales, 32 qs bytes] = 36 bytes per 64 elements
         n_super = n_blocks // 4
-        # Convert UE4M3 scales to fp16
-        ue_exp = (combined >> 3) & 0xF
-        ue_man = combined & 0x7
-        ue_float = np.where(
-            combined == 0, 0.0,
-            np.where(ue_exp == 0, ue_man.astype(np.float32) * 2**-9,
-                     (1.0 + ue_man.astype(np.float32) / 8.0) * (2.0 ** (ue_exp.astype(np.float32) - 7))))
-        d_fp16 = (ue_float * 0.5).astype(np.float16).reshape(out_features, n_super, 4)
-        qs_grouped = qs.numpy().reshape(out_features, n_super, 4, 8).reshape(out_features, n_super, 32)
-        new_data = np.concatenate([d_fp16.view(np.uint8), qs_grouped], axis=-1).reshape(out_features, n_super * 40)
+        d_grouped = d_ue.reshape(out_features, n_super, 4)
+        qs_grouped = qs.reshape(out_features, n_super, 4, 8).reshape(out_features, n_super, 32)
+        new_data = np.concatenate([d_grouped, qs_grouped], axis=-1).reshape(out_features, n_super * 36)
         new_shape = [out_features, n_super * 64]
         logger.info(f"Repacked {new_name} with shape {new_shape} and quantization NVFP4")
         self.gguf_writer.add_tensor(new_name, new_data, raw_dtype=gguf.GGMLQuantizationType.NVFP4)
@@ -644,33 +646,39 @@ class ModelBase:
 
                 out_features = weight.shape[0]
                 n_blocks = scale.shape[1]
+                scale2_trivial = (scale2.numel() <= 1 and abs(float(scale2.float().sum()) - 1.0) < 1e-6)
 
                 e2m1_lut = torch.tensor([0, 0.5, 1, 1.5, 2, 3, 4, 6, 0, -0.5, -1, -1.5, -2, -3, -4, -6])
                 w = weight.reshape(out_features, n_blocks, 8)
                 vals = torch.stack([w & 0x0F, w >> 4], dim=-1).reshape(out_features, n_blocks, 16)
-                float_vals = e2m1_lut[vals.long()] * (scale.float() * scale2.float()).unsqueeze(-1)
 
-                amax = float_vals.abs().amax(dim=-1)
-                scale_f = amax / 6.0
-                combined = scale_f.to(torch.float8_e4m3fn).view(torch.uint8).numpy() & 0x7F
+                if scale2_trivial:
+                    # Preserve original E4M3 scale bits directly
+                    d_ue = scale.view(torch.uint8).numpy().reshape(out_features, n_blocks) & 0x7F
+                    qs = (vals[:, :, :8] | (vals[:, :, 8:] << 4)).to(torch.uint8).numpy()
+                else:
+                    # Requantize with baked-in scale2
+                    float_vals = e2m1_lut[vals.long()] * (scale.float() * scale2.float()).unsqueeze(-1)
+                    amax = float_vals.abs().amax(dim=-1)
+                    d_ue = (amax / 6.0).to(torch.float8_e4m3fn).view(torch.uint8).numpy() & 0x7F
 
-                ue_exp = (combined >> 3) & 0xF
-                ue_man = combined & 0x7
-                ue_float = np.where(
-                    combined == 0, 0.0,
-                    np.where(ue_exp == 0, ue_man.astype(np.float32) * 2**-9,
-                             (1.0 + ue_man.astype(np.float32) / 8.0) * (2.0 ** (ue_exp.astype(np.float32) - 7))))
-                ue_float_t = torch.from_numpy(ue_float).float().unsqueeze(-1)
+                    ue_exp = (d_ue >> 3) & 0xF
+                    ue_man = d_ue & 0x7
+                    ue_float = np.where(
+                        d_ue == 0, 0.0,
+                        np.where(ue_exp == 0, ue_man.astype(np.float32) * 2**-9,
+                                 (1.0 + ue_man.astype(np.float32) / 8.0) * (2.0 ** (ue_exp.astype(np.float32) - 7))))
+                    ue_float_t = torch.from_numpy(ue_float).float().unsqueeze(-1)
 
-                inv_scale = torch.where(ue_float_t > 0, 1.0 / ue_float_t, torch.zeros_like(ue_float_t))
-                target = float_vals * inv_scale
-                best_idx = (target.unsqueeze(-1) - e2m1_lut.reshape(1, 1, 1, 16)).abs().argmin(dim=-1).to(torch.uint8)
+                    inv_scale = torch.where(ue_float_t > 0, 1.0 / ue_float_t, torch.zeros_like(ue_float_t))
+                    target = float_vals * inv_scale
+                    best_idx = (target.unsqueeze(-1) - e2m1_lut.reshape(1, 1, 1, 16)).abs().argmin(dim=-1).to(torch.uint8)
+                    qs = (best_idx[:, :, :8] | (best_idx[:, :, 8:] << 4)).numpy()
 
-                qs = (best_idx[:, :, :8] | (best_idx[:, :, 8:] << 4)).to(torch.uint8)
                 n_super = n_blocks // 4
-                d_fp16 = (ue_float * 0.5).astype(np.float16).reshape(out_features, n_super, 4)
-                qs_grouped = qs.numpy().reshape(out_features, n_super, 4, 8).reshape(out_features, n_super, 32)
-                raw = np.concatenate([d_fp16.view(np.uint8), qs_grouped], axis=-1).reshape(out_features, n_super * 40).copy()
+                d_grouped = d_ue.reshape(out_features, n_super, 4)
+                qs_grouped = qs.reshape(out_features, n_super, 4, 8).reshape(out_features, n_super, 32)
+                raw = np.concatenate([d_grouped, qs_grouped], axis=-1).reshape(out_features, n_super * 36).copy()
 
                 if key not in expert_blocks:
                     expert_blocks[key] = []

@@ -3932,7 +3932,7 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.TQ1_0:   (256, 2 + 4 * 13),
     GGMLQuantizationType.TQ2_0:   (256, 2 + 64),
     GGMLQuantizationType.MXFP4:   (32, 1 + 16),
-    GGMLQuantizationType.NVFP4:   (64, 8 + 32),
+    GGMLQuantizationType.NVFP4:   (64, 4 + 32),
 }
 
 
