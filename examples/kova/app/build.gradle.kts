@@ -12,7 +12,7 @@ android {
         applicationId = "com.kova.chat"
         minSdk = 33
         targetSdk = 36
-        versionCode = 4
+        versionCode = 5
         versionName = "4.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
