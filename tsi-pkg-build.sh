@@ -34,7 +34,7 @@ TOOLBOX_DIR=${3:-${TOOLBOX_DIR:-}}
 
 # Default to SDK paths if not provided
 if [ -z "${MLIR_COMPILER_DIR}" ]; then
-  MLIR_SDK_VERSION=${MLIR_SDK_VERSION:-/proj/rel/sw/sdk-r.0.2.4/${arch}}
+  MLIR_SDK_VERSION=${MLIR_SDK_VERSION:-/proj/rel/sw/sdk-r.0.2.5/${arch}}
   MLIR_COMPILER_DIR=${MLIR_SDK_VERSION}/compiler
   echo "Using default MLIR_COMPILER_DIR: ${MLIR_COMPILER_DIR}"
 fi
