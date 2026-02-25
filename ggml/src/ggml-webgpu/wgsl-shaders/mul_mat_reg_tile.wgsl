@@ -54,7 +54,8 @@ var<workgroup> shmem: array<f16, TILE_SRC0_SHMEM + TILE_SRC1_SHMEM>;
 
 @compute @workgroup_size(TOTAL_WORKGROUP_SIZE)
 fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
-        @builtin(local_invocation_id) local_id: vec3<u32>) {
+        @builtin(local_invocation_id) local_id: vec3<u32>,
+        @builtin(num_workgroups) num_wg: vec3<u32>) {
 
     let thread_id = local_id.x;
     let local_m = get_local_m(thread_id);
@@ -64,9 +65,11 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     let wg_m_count = (params.m + WORKGROUP_SIZE_M * TILE_M - 1u) / (WORKGROUP_SIZE_M * TILE_M);
     let wg_per_matrix = wg_m_count * wg_n_count;
 
-    let batch_idx = wg_id.x / wg_per_matrix;
+    let wg_linear = wg_id.y * num_wg.x + wg_id.x;
 
-    let wg_in_batch = wg_id.x % wg_per_matrix;
+    let batch_idx = wg_linear / wg_per_matrix;
+
+    let wg_in_batch = wg_linear % wg_per_matrix;
     let wg_m = wg_in_batch % wg_m_count;
     let wg_n = wg_in_batch / wg_m_count;
 
