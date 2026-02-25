@@ -263,7 +263,20 @@
 			Loading models…
 		</div>
 	{:else if options.length === 0 && isRouter}
-		<p class="text-xs text-muted-foreground">No models available.</p>
+		{#if currentModel}
+			<span
+				class={cn(
+					'inline-flex items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs text-muted-foreground',
+					className
+				)}
+				style="max-width: min(calc(100cqw - 9rem), 20rem)"
+			>
+				<Package class="h-3.5 w-3.5" />
+				<TruncatedText text={currentModel} class="min-w-0 font-medium" />
+			</span>
+		{:else}
+			<p class="text-xs text-muted-foreground">No models available.</p>
+		{/if}
 	{:else}
 		{@const selectedOption = getDisplayOption()}
 
