@@ -617,8 +617,6 @@ class ModelBase:
         self.gguf_writer.add_tensor(new_name, new_data, raw_dtype=gguf.GGMLQuantizationType.NVFP4)
 
     def _generate_nvfp4_tensors(self) -> Iterable[tuple[str, Tensor]]:
-        import torch
-
         # Collect expert tensors for merging: {(bid, proj_type): [(expert_id, repacked_data)]}
         expert_blocks: dict[tuple[int, str], list[tuple[int, np.ndarray]]] = {}
         expert_shapes: dict[tuple[int, str], list[int]] = {}
