@@ -29023,7 +29023,335 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                                               g_persistent_rms_dbg.enabled || g_persistent_matmul_dbg.enabled ||
                                               g_persistent_add_dbg.enabled || g_persistent_mul_dbg.enabled;
 
-        if (!fast_path_debug_disabled) {
+        // ----------------------------------------------------------------
+        // ULTRA-FAST path: skip full ggml graph walk, update only mutable ops.
+        // After the first successful fast-path update builds an update recipe,
+        // subsequent tokens use it to iterate only the ~130 ops that need
+        // per-token pointer updates (out of ~350 plan ops and ~1158 graph nodes).
+        // ----------------------------------------------------------------
+        if (!fast_path_debug_disabled && kernel.has_update_recipe()) {
+            kernel.begin_plan_update();
+
+            const auto & recipe = kernel.get_update_recipe();
+            bool         recipe_ok          = true;
+            int          get_rows_counter   = 0;
+            int32_t      rope_position_cached_r = -1;
+
+            for (const auto & entry : recipe) {
+                if (!recipe_ok) {
+                    break;
+                }
+                // Skip CPY sentinel entries (handled separately after the loop)
+                if (entry.get_rows_idx == -2) {
+                    continue;
+                }
+                const int           oi   = entry.plan_op_idx;
+                ggml_tensor *       node = cgraph->nodes[entry.graph_node_idx];
+
+                // GET_ROWS has no plan op (plan_op_idx == -1); others use direct mutable access
+                OperationDescriptor * op = (oi >= 0) ? kernel.get_op_descriptor_mut(oi) : nullptr;
+                if (oi >= 0 && !op) {
+                    recipe_ok = false;
+                    break;
+                }
+
+                switch (entry.op_type) {
+                    case OperationType::GET_ROWS:
+                        {
+                            // Re-execute embedding lookup (different token each time)
+                            if (!node || !node->src[0] || !node->src[1]) {
+                                recipe_ok = false;
+                                break;
+                            }
+                            ggml_sycl_op_get_rows(ctx, node);
+                            q->wait_and_throw();
+                            const int    gr_idx     = get_rows_counter++;
+                            const size_t bytes      = ggml_nbytes(node);
+                            void *       stable_ptr = kernel.get_rows_stable_ptr(gr_idx, bytes);
+                            const void * out_ptr    = get_tensor_ptr_view_fast(node);
+                            if (!stable_ptr || !out_ptr) {
+                                recipe_ok = false;
+                                break;
+                            }
+                            q->memcpy(stable_ptr, out_ptr, bytes);
+                            materialized_ptrs[node] = stable_ptr;
+                            break;
+                        }
+
+                    case OperationType::ROPE:
+                        {
+                            // Position changes every token; recompute cos/sin tables.
+                            if (!node || !node->src[0] || !node->src[1] || !op) {
+                                recipe_ok = false;
+                                break;
+                            }
+                            const int  n_dims  = ((int32_t *) node->op_params)[1];
+                            const int  half_dim = n_dims / 2;
+                            float      freq_base;
+                            memcpy(&freq_base, (int32_t *) node->op_params + 5, sizeof(float));
+
+                            int32_t position = rope_position_cached_r;
+                            if (position < 0) {
+                                const int32_t * pos_device = (const int32_t *) get_tensor_ptr_view_fast(node->src[1]);
+                                if (!pos_device) {
+                                    recipe_ok = false;
+                                    break;
+                                }
+                                q->memcpy(&position, pos_device, sizeof(int32_t)).wait();
+                                rope_position_cached_r = position;
+                            }
+
+                            const uint64_t rope_cache_key =
+                                (static_cast<uint64_t>(static_cast<uint32_t>(position)) << 32) |
+                                static_cast<uint64_t>(static_cast<uint32_t>(n_dims));
+                            float * d_cos = nullptr;
+                            float * d_sin = nullptr;
+                            auto    rope_it = rope_cache_by_pos.find(rope_cache_key);
+                            if (rope_it != rope_cache_by_pos.end()) {
+                                d_cos = rope_it->second.first;
+                                d_sin = rope_it->second.second;
+                            } else {
+                                std::vector<float> cos_cache(half_dim);
+                                std::vector<float> sin_cache(half_dim);
+                                for (int j = 0; j < half_dim; j++) {
+                                    const float theta =
+                                        (float) position * powf(freq_base, -2.0f * (float) j / (float) n_dims);
+                                    cos_cache[j] = cosf(theta);
+                                    sin_cache[j] = sinf(theta);
+                                }
+                                ggml_sycl::alloc_request rope_req;
+                                rope_req.queue                          = q;
+                                rope_req.device                         = ctx.device;
+                                rope_req.size                           = half_dim * sizeof(float);
+                                rope_req.intent.role                    = ggml_sycl::alloc_role::GRAPH_TMP;
+                                rope_req.intent.category                = ggml_sycl::runtime_category::GRAPH;
+                                rope_req.intent.constraints.must_device = true;
+                                ggml_sycl::alloc_handle cos_alloc{};
+                                ggml_sycl::alloc_handle sin_alloc{};
+                                if (!ggml_sycl::unified_alloc(rope_req, &cos_alloc) ||
+                                    !ggml_sycl::unified_alloc(rope_req, &sin_alloc) || cos_alloc.ptr == nullptr ||
+                                    sin_alloc.ptr == nullptr) {
+                                    (void) ggml_sycl::unified_free(cos_alloc);
+                                    (void) ggml_sycl::unified_free(sin_alloc);
+                                    recipe_ok = false;
+                                    break;
+                                }
+                                d_cos = static_cast<float *>(cos_alloc.ptr);
+                                d_sin = static_cast<float *>(sin_alloc.ptr);
+                                q->memcpy(d_cos, cos_cache.data(), half_dim * sizeof(float));
+                                q->memcpy(d_sin, sin_cache.data(), half_dim * sizeof(float));
+                                kernel.add_temp_device_alloc_handle(cos_alloc);
+                                kernel.add_temp_device_alloc_handle(sin_alloc);
+                                rope_cache_by_pos.emplace(rope_cache_key, std::make_pair(d_cos, d_sin));
+                            }
+
+                            const int mode      = ((int32_t *) node->op_params)[2];
+                            const bool is_neox   = mode & GGML_ROPE_TYPE_NEOX;
+
+                            // Direct in-place update (no copy-modify-copy pattern)
+                            op->weights    = d_cos;
+                            op->aux        = d_sin;
+                            op->M          = position;
+                            op->scale      = is_neox ? 1.0f : 0.0f;
+                            break;
+                        }
+
+                    case OperationType::SOFTMAX:
+                        {
+                            // Mask pointer changes each token
+                            if (!node || !op) {
+                                recipe_ok = false;
+                                break;
+                            }
+                            const ggml_tensor * mask = node->src[1];
+                            if (mask) {
+                                int64_t mask_nb[GGML_MAX_DIMS] = {};
+                                const void * mask_ptr = resolve_input_ptr_with_nb(mask, op->layer, mask_nb, true);
+                                if (!mask_ptr) {
+                                    recipe_ok = false;
+                                    break;
+                                }
+                                op->mask     = mask_ptr;
+                                op->mask_nb0 = mask_nb[0];
+                                op->mask_nb1 = mask_nb[1];
+                                op->mask_nb2 = mask_nb[2];
+                                op->mask_nb3 = mask_nb[3];
+                                op->mask_ne2 = (int) mask->ne[2];
+                                op->mask_ne3 = (int) mask->ne[3];
+                            }
+                            op->N = (int) node->src[0]->ne[0];
+                            break;
+                        }
+
+                    case OperationType::ATTENTION_F16:
+                    case OperationType::ATTENTION_F32:
+                        {
+                            // K/V cache pointers, mask, and seq_len change each token
+                            if (!node || !node->src[1] || !node->src[2] || !op) {
+                                recipe_ok = false;
+                                break;
+                            }
+                            const ggml_tensor * K_fa = node->src[1];
+                            const ggml_tensor * V_fa = node->src[2];
+                            const ggml_tensor * mask = node->src[3];
+
+                            int64_t k_nb[GGML_MAX_DIMS] = {};
+                            int64_t v_nb[GGML_MAX_DIMS] = {};
+                            const void * k_ptr = resolve_input_ptr_with_nb(K_fa, op->layer, k_nb, true);
+                            const void * v_ptr = resolve_input_ptr_with_nb(V_fa, op->layer, v_nb, true);
+                            if (!k_ptr || !v_ptr) {
+                                recipe_ok = false;
+                                break;
+                            }
+
+                            int seq_len_attn = (int) K_fa->ne[1];  // k_seq_axis = 1
+                            if (decode_kv_pos_hint >= 0 && decode_kv_pos_hint + 1 < (int64_t) seq_len_attn) {
+                                seq_len_attn = (int) (decode_kv_pos_hint + 1);
+                            }
+
+                            op->weights = k_ptr;
+                            op->aux     = const_cast<void *>(v_ptr);
+                            op->M       = seq_len_attn;
+                            op->k_nb0   = k_nb[0];
+                            op->k_nb1   = k_nb[1];  // k_seq_axis
+                            op->k_nb2   = k_nb[2];  // k_head_axis
+                            op->k_nb3   = k_nb[3];
+                            op->v_nb0   = v_nb[0];
+                            op->v_nb1   = v_nb[1];  // v_seq_axis
+                            op->v_nb2   = v_nb[2];  // v_head_axis
+                            op->v_nb3   = v_nb[3];
+
+                            if (mask) {
+                                int64_t mask_nb[GGML_MAX_DIMS] = {};
+                                const void * mask_ptr = resolve_input_ptr_with_nb(mask, op->layer, mask_nb, true);
+                                if (!mask_ptr) {
+                                    recipe_ok = false;
+                                    break;
+                                }
+                                op->mask     = mask_ptr;
+                                op->mask_nb0 = mask_nb[0];
+                                op->mask_nb1 = mask_nb[1];
+                                op->mask_nb2 = mask_nb[2];
+                                op->mask_nb3 = mask_nb[3];
+                                op->mask_ne2 = (int) mask->ne[2];
+                                op->mask_ne3 = (int) mask->ne[3];
+                            }
+                            break;
+                        }
+
+                    case OperationType::SET_ROWS:
+                        {
+                            // Index pointer and KV write position change each token
+                            if (!node || !node->src[0] || !node->src[1] || !op) {
+                                recipe_ok = false;
+                                break;
+                            }
+                            const ggml_tensor * src1 = node->src[1];
+
+                            const void * idx_ptr = get_tensor_ptr_view_fast(src1);
+                            void *       dst_ptr = get_tensor_ptr_view_fast(node);
+                            if (!dst_ptr && node->src[2]) {
+                                dst_ptr = get_tensor_ptr_view_fast(node->src[2]);
+                            }
+                            if (!idx_ptr || !dst_ptr) {
+                                recipe_ok = false;
+                                break;
+                            }
+
+                            // Read KV position from index tensor (needed for seq_len hint)
+                            if (decode_kv_pos_hint < 0) {
+                                const int32_t idx_type =
+                                    (src1->type == GGML_TYPE_I64) ? 1 : (src1->type == GGML_TYPE_I32 ? 0 : -1);
+                                if (idx_type == 1) {
+                                    int64_t idx0 = -1;
+                                    q->memcpy(&idx0, idx_ptr, sizeof(idx0)).wait();
+                                    if (idx0 >= 0) {
+                                        decode_kv_pos_hint = idx0;
+                                    }
+                                } else if (idx_type == 0) {
+                                    int32_t idx0 = -1;
+                                    q->memcpy(&idx0, idx_ptr, sizeof(idx0)).wait();
+                                    if (idx0 >= 0) {
+                                        decode_kv_pos_hint = idx0;
+                                    }
+                                }
+                            }
+
+                            // Direct in-place update of mutable fields
+                            op->aux    = const_cast<void *>(idx_ptr);
+                            op->output = dst_ptr;
+                            // Strides from ggml tensors (may change between tokens)
+                            op->set_rows_meta.nb0  = (int64_t) node->nb[0];
+                            op->set_rows_meta.nb1  = (int64_t) node->nb[1];
+                            op->set_rows_meta.nb2  = (int64_t) node->nb[2];
+                            op->set_rows_meta.nb3  = (int64_t) node->nb[3];
+                            op->set_rows_meta.nb10 = (int64_t) src1->nb[0];
+                            op->set_rows_meta.nb11 = (int64_t) src1->nb[1];
+                            op->set_rows_meta.nb12 = (int64_t) src1->nb[2];
+                            break;
+                        }
+
+                    case OperationType::STRIDED_COPY:
+                        {
+                            // CONT ops: re-resolve input/output from ggml tensors
+                            if (!node || !node->src[0] || !op) {
+                                recipe_ok = false;
+                                break;
+                            }
+                            const void * src_ptr = get_tensor_ptr_view_fast(node->src[0]);
+                            void *       dst_ptr = get_tensor_ptr_view_fast(node);
+                            if (!src_ptr || !dst_ptr) {
+                                recipe_ok = false;
+                                break;
+                            }
+                            op->input  = src_ptr;
+                            op->output = dst_ptr;
+                            break;
+                        }
+
+                    default:
+                        // Unexpected op type in recipe — fall back
+                        recipe_ok = false;
+                        break;
+                }
+
+            }
+
+            if (recipe_ok) {
+                // Re-add deferred copies (CPY nodes) from the recipe
+                kernel.clear_deferred_copies();
+                for (const auto & entry : recipe) {
+                    if (entry.op_type == OperationType::GET_ROWS && entry.get_rows_idx == -2) {
+                        // Sentinel: this is a CPY entry stored in the recipe
+                        ggml_tensor * cpy_node = cgraph->nodes[entry.graph_node_idx];
+                        if (cpy_node && cpy_node->src[0] && cpy_node->src[1]) {
+                            int    source_op_idx = entry.plan_op_idx;
+                            void * src_ptr       = ggml_sycl_get_data_ptr(cpy_node->src[0], ctx.device);
+                            void * dst_ptr       = ggml_sycl_get_data_ptr(cpy_node->src[1], ctx.device);
+                            size_t nbytes        = ggml_nbytes(cpy_node->src[0]);
+                            kernel.add_deferred_copy(source_op_idx, src_ptr, dst_ptr, nbytes);
+                        }
+                    }
+                }
+
+                kernel.finish_plan_update();
+                if (kernel.has_dag()) {
+                    kernel.reset_dag_counters();
+                }
+                GGML_SYCL_DEBUG("[PERSISTENT-TG] Using RECIPE update: %zu mutable ops (of %d plan ops)\n",
+                                recipe.size(), kernel.cached_op_count());
+                return true;
+            }
+
+            // Recipe failed — invalidate and go straight to full rebuild
+            GGML_LOG_WARN("[PERSISTENT-TG] Recipe update failed, falling back to full rebuild\n");
+            kernel.invalidate_update_recipe();
+            kernel.invalidate_plan_cache();
+            kernel.cancel_persistent();
+            goto full_build;
+        }
+
+        if (!fast_path_debug_disabled && kernel.has_cached_plan()) {
             kernel.begin_plan_update();
 
             auto is_matmul_type = [](OperationType type) -> bool {
@@ -29055,6 +29383,10 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
             int  op_idx            = 0;
             int  last_layer_fast   = -1;
             int  get_rows_counter  = 0;
+
+            // Track mutable ops for recipe building (only on first fast-path)
+            const bool building_recipe = !kernel.has_update_recipe();
+            std::vector<UpdateRecipeEntry> recipe_entries;
 
             for (int i = 0; i < cgraph->n_nodes && fast_path_ok; i++) {
                 ggml_tensor * node = cgraph->nodes[i];
@@ -29120,6 +29452,12 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                                 // No .wait() needed: in-order queue ensures D2D copy completes before kernel
                                 q->memcpy(stable_ptr, out_ptr, bytes);
                                 materialized_ptrs[node] = stable_ptr;
+                                if (building_recipe) {
+                                    recipe_entries.push_back({-1, OperationType::GET_ROWS,
+                                                              PtrSource::STABLE, PtrSource::STABLE,
+                                                              PtrSource::STABLE, PtrSource::STABLE,
+                                                              i, gr_idx - 1});
+                                }
                             }
                             break;
                         }
@@ -29441,6 +29779,12 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                                 break;
                             }
                             materialized_ptrs[node] = output_rope;
+                            if (building_recipe) {
+                                recipe_entries.push_back({op_idx, OperationType::ROPE,
+                                                          PtrSource::SCRATCH_OP, PtrSource::SCRATCH_OP,
+                                                          PtrSource::STABLE, PtrSource::STABLE,
+                                                          i, -1});
+                            }
                             op_idx++;
                             break;
                         }
@@ -29536,6 +29880,12 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                                 break;
                             }
                             materialized_ptrs[node] = output;
+                            if (building_recipe && mask) {
+                                recipe_entries.push_back({op_idx, OperationType::SOFTMAX,
+                                                          PtrSource::SCRATCH_OP, PtrSource::SCRATCH_OP,
+                                                          PtrSource::STABLE, PtrSource::GGML_TENSOR,
+                                                          i, -1});
+                            }
                             op_idx++;
                             break;
                         }
@@ -29731,6 +30081,14 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                                 break;
                             }
                             materialized_ptrs[node] = out_ptr;
+                            if (building_recipe) {
+                                recipe_entries.push_back({op_idx,
+                                                          (K_fa->type == GGML_TYPE_F16) ? OperationType::ATTENTION_F16
+                                                                                        : OperationType::ATTENTION_F32,
+                                                          PtrSource::SCRATCH_OP, PtrSource::SCRATCH_OP,
+                                                          PtrSource::KV_CACHE, PtrSource::GGML_TENSOR,
+                                                          i, -1});
+                            }
                             op_idx++;
                             break;
                         }
@@ -29843,6 +30201,12 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                                 fast_path_ok = false;
                                 break;
                             }
+                            if (building_recipe) {
+                                recipe_entries.push_back({op_idx, OperationType::SET_ROWS,
+                                                          PtrSource::SCRATCH_OP, PtrSource::GGML_TENSOR,
+                                                          PtrSource::GGML_TENSOR, PtrSource::STABLE,
+                                                          i, -1});
+                            }
                             op_idx++;
                             break;
                         }
@@ -29892,6 +30256,12 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                                 fast_path_ok = false;
                                 break;
                             }
+                            if (building_recipe) {
+                                recipe_entries.push_back({op_idx, OperationType::STRIDED_COPY,
+                                                          PtrSource::GGML_TENSOR, PtrSource::GGML_TENSOR,
+                                                          PtrSource::STABLE, PtrSource::STABLE,
+                                                          i, -1});
+                            }
                             op_idx++;
                             break;
                         }
@@ -29909,6 +30279,13 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                             void * dst_ptr = ggml_sycl_get_data_ptr(node->src[1], ctx.device);
                             size_t nbytes  = ggml_nbytes(node->src[0]);
                             kernel.add_deferred_copy(source_op_idx, src_ptr, dst_ptr, nbytes);
+                            if (building_recipe) {
+                                // Use GET_ROWS type with get_rows_idx=-2 as sentinel for CPY
+                                recipe_entries.push_back({source_op_idx, OperationType::GET_ROWS,
+                                                          PtrSource::STABLE, PtrSource::STABLE,
+                                                          PtrSource::STABLE, PtrSource::STABLE,
+                                                          i, -2});
+                            }
                             break;
                         }
 
@@ -29923,6 +30300,26 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                 // Reset DAG per-token scheduling state (topology is static across tokens)
                 if (kernel.has_dag()) {
                     kernel.reset_dag_counters();
+                }
+                // Build update recipe on first successful fast-path
+                if (building_recipe && !recipe_entries.empty()) {
+                    int n_gr = 0, n_rope = 0, n_sm = 0, n_attn = 0, n_sr = 0, n_sc = 0, n_cpy = 0;
+                    for (const auto & e : recipe_entries) {
+                        if (e.get_rows_idx == -2)              n_cpy++;
+                        else if (e.op_type == OperationType::GET_ROWS)      n_gr++;
+                        else if (e.op_type == OperationType::ROPE)          n_rope++;
+                        else if (e.op_type == OperationType::SOFTMAX)       n_sm++;
+                        else if (e.op_type == OperationType::ATTENTION_F16 ||
+                                 e.op_type == OperationType::ATTENTION_F32) n_attn++;
+                        else if (e.op_type == OperationType::SET_ROWS)      n_sr++;
+                        else if (e.op_type == OperationType::STRIDED_COPY)  n_sc++;
+                    }
+                    GGML_LOG_INFO("[PERSISTENT-TG] Built update recipe: %zu mutable ops "
+                                  "(gr=%d rope=%d sm=%d attn=%d sr=%d sc=%d cpy=%d) "
+                                  "of %d plan ops, %d graph nodes\n",
+                                  recipe_entries.size(), n_gr, n_rope, n_sm, n_attn, n_sr, n_sc, n_cpy,
+                                  op_idx, cgraph->n_nodes);
+                    kernel.set_update_recipe(std::move(recipe_entries));
                 }
                 GGML_SYCL_DEBUG("[PERSISTENT-TG] Using cached plan: %d ops\n", op_idx);
                 return true;

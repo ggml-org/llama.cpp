@@ -396,6 +396,36 @@ struct OperationDescriptor {
 };
 
 // =============================================================================
+// Update Recipe: compact per-token refresh for persistent TG plan
+// =============================================================================
+// Instead of iterating all 1158 ggml graph nodes per token (which takes ~2-3ms),
+// the update recipe captures exactly which plan ops need which fields refreshed.
+// Most ops have scratch-pool-linked input/output that is stable across tokens;
+// only a small subset needs per-token pointer resolution.
+
+// Classification of how a pointer should be resolved on each token.
+enum class PtrSource : uint8_t {
+    STABLE,       // Pointer is stable across tokens (scratch pool, weight, etc.)
+    SCRATCH_OP,   // Linked to another op's scratch output (input_source_op/aux_source_op)
+    GET_ROWS,     // Comes from GET_ROWS re-execution result
+    KV_CACHE,     // KV cache base pointer (stable base, but seq_len changes)
+    GGML_TENSOR,  // Must resolve from ggml tensor each token
+};
+
+// Per-op entry in the update recipe.  Only ops with at least one non-STABLE
+// field appear in the "mutable ops" list; fully-stable ops are skipped entirely.
+struct UpdateRecipeEntry {
+    int           plan_op_idx;       // Index into cached_ops_ / current_plan_->operations
+    OperationType op_type;           // Cached for quick dispatch
+    PtrSource     input_src;         // How to resolve op.input
+    PtrSource     output_src;        // How to resolve op.output
+    PtrSource     aux_src;           // How to resolve op.aux
+    PtrSource     mask_src;          // How to resolve op.mask
+    int           graph_node_idx;    // ggml graph node index (for tensor access)
+    int           get_rows_idx;      // GET_ROWS slot index (for GET_ROWS ops)
+};
+
+// =============================================================================
 // DAG Scheduling State for Persistent Kernel
 // =============================================================================
 
@@ -2759,6 +2789,13 @@ public:
     OperationType plan_op_type(int op_idx) const;
     bool get_op_descriptor(int op_idx, OperationDescriptor & out) const;
     bool update_op_descriptor(int op_idx, const OperationDescriptor & desc);
+    OperationDescriptor * get_op_descriptor_mut(int op_idx);  // Direct mutable access (no copy)
+
+    // Update recipe: compact per-token refresh that skips the full ggml graph walk
+    bool has_update_recipe() const { return update_recipe_valid_; }
+    void set_update_recipe(std::vector<UpdateRecipeEntry> && recipe);
+    const std::vector<UpdateRecipeEntry> & get_update_recipe() const { return update_recipe_; }
+    void invalidate_update_recipe();
 
     // Multi-device split: set/get per-kernel split config that populates
     // DeviceOperation cross-device fields during launch_persistent_kernel().
@@ -2809,6 +2846,7 @@ public:
         size_t bytes;          // number of bytes to copy
     };
     void add_deferred_copy(int source_op_idx, void * src_ptr, void * dst, size_t bytes);
+    void clear_deferred_copies() { deferred_copies_.clear(); }
     void execute_deferred_copies();
 
     // Launch persistent kernel asynchronously (does NOT wait for completion).
@@ -2844,6 +2882,10 @@ private:
     std::unordered_map<void *, ggml_sycl::alloc_handle> cached_temp_device_alloc_handles_;
     size_t                                               cached_temp_device_alloc_bytes_ = 0;
     bool                             plan_cache_valid_ = false;
+
+    // Update recipe: compact per-token refresh (see UpdateRecipeEntry)
+    std::vector<UpdateRecipeEntry>   update_recipe_;
+    bool                             update_recipe_valid_ = false;
 
     // Device ops table pool (DeviceOperation * — defined in unified-kernel.cpp)
     void * d_ops_pool_      = nullptr;

@@ -7209,6 +7209,13 @@ bool UnifiedKernel::update_op_descriptor(int op_idx, const OperationDescriptor &
     return true;
 }
 
+OperationDescriptor * UnifiedKernel::get_op_descriptor_mut(int op_idx) {
+    if (!current_plan_ || op_idx < 0 || op_idx >= (int) current_plan_->operations.size()) {
+        return nullptr;
+    }
+    return &current_plan_->operations[op_idx];
+}
+
 void UnifiedKernel::update_op_pointers(int op_idx, const void * input, void * output,
                                         const void * aux, const void * mask) {
     if (!current_plan_ || op_idx < 0 || op_idx >= (int) current_plan_->operations.size()) {
@@ -7294,6 +7301,19 @@ void UnifiedKernel::invalidate_plan_cache() {
     cached_temp_device_allocs_.clear();
     cached_temp_device_alloc_handles_.clear();
     cached_temp_device_alloc_bytes_ = 0;
+    // Also invalidate the update recipe when plan cache is invalidated
+    update_recipe_.clear();
+    update_recipe_valid_ = false;
+}
+
+void UnifiedKernel::set_update_recipe(std::vector<UpdateRecipeEntry> && recipe) {
+    update_recipe_       = std::move(recipe);
+    update_recipe_valid_ = true;
+}
+
+void UnifiedKernel::invalidate_update_recipe() {
+    update_recipe_.clear();
+    update_recipe_valid_ = false;
 }
 
 void * UnifiedKernel::get_rows_stable_ptr(int get_rows_index, size_t bytes) {
