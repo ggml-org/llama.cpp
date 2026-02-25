@@ -525,7 +525,7 @@ static ggml_type llama_tensor_get_type(
                       const ggml_type   default_type
 ) {
     if (!tensor_allows_quantization(params, qs->model.arch, tensor)) {
-        return tensor->type; // if quantization not allowed, return the current type
+        return tensor->type; // if quantization not allowed, just return the current type
     }
 
     ggml_type new_type = default_type;
@@ -592,14 +592,15 @@ static ggml_type llama_tensor_get_type(
                     default:
                         //
                         // the majority of oddly-shaped tensors are handled by
-                        // `tensor_allows_quantization` above, so it should be very unusual to
-                        // reach this point.
+                        // `tensor_allows_quantization`, so it should be very unusual to reach
+                        // this point.
                         //
                         // if you are getting this warning a lot, consider adding a case for
-                        // this type of tensor to the `tensor_allows_quantization` function, or
-                        // updating the logic in `llama_tensor_get_type_impl`.
+                        // this type of tensor to the `tensor_allows_quantization` function.
                         //
-                        LLAMA_LOG_WARN("%s (WARNING: falling back to F16); ", msg);
+                        if (!qs->preliminary) {
+                            LLAMA_LOG_WARN("(WARNING: falling back to F16 due to unusual shape) ");
+                        }
                         new_type = GGML_TYPE_F16;
                 }
             }
@@ -1006,7 +1007,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             ml.load_data_for(tensor);
         }
 
-        LLAMA_LOG_INFO("[%4d/%4d] %36s - [%s], type = %6s, ",
+        LLAMA_LOG_INFO("[%4d/%4d] %36s: [%s], type: %7s, ",
                        ++idx, ml.n_tensors,
                        ggml_get_name(tensor),
                        llama_format_tensor_shape(tensor).c_str(),
@@ -1036,16 +1037,16 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             // the --dry-run option calculates the final quantization size without quantizing
             if (do_quantize) {
                 new_size = ggml_nrows(tensor) * ggml_row_size(new_type, tensor->ne[0]);
-                LLAMA_LOG_INFO("size = %8.2f MiB -> %8.2f MiB (%s)\n",
+                LLAMA_LOG_INFO("size: %8.2f MiB -> type: %7s, size: %8.2f MiB\n",
                                tensor_size/1024.0/1024.0,
-                               new_size/1024.0/1024.0,
-                               ggml_type_name(new_type));
+                               ggml_type_name(new_type),
+                               new_size/1024.0/1024.0);
                 if (!will_require_imatrix && tensor_requires_imatrix(tensor->name, new_type, ftype)) {
                     will_require_imatrix = true;
                 }
             } else {
                 new_size = tensor_size;
-                LLAMA_LOG_INFO("size = %8.2f MiB\n", new_size/1024.0/1024.0);
+                LLAMA_LOG_INFO("size: %8.2f MiB\n", new_size/1024.0/1024.0);
             }
             total_size_org += tensor_size;
             total_size_new += new_size;
@@ -1056,7 +1057,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 new_type = tensor->type;
                 new_data = tensor->data;
                 new_size = tensor_size;
-                LLAMA_LOG_INFO("size = %8.2f MiB\n", tensor_size/1024.0/1024.0);
+                LLAMA_LOG_INFO("size: %8.2f MiB\n", tensor_size/1024.0/1024.0);
             } else {
                 const int64_t nelements = ggml_nelements(tensor);
 
@@ -1105,7 +1106,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                     f32_data = (float *) f32_conv_buf.data();
                 }
 
-                LLAMA_LOG_INFO("converting to %s .. ", ggml_type_name(new_type));
+                LLAMA_LOG_INFO("quantizing to %7s ... ", ggml_type_name(new_type));
                 fflush(stdout);
 
                 if (work.size() < (size_t)nelements * 4) {
@@ -1132,7 +1133,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
                     new_size += llama_tensor_quantize_impl(new_type, f32_data_03, new_data_03, chunk_size, nrows, n_per_row, imatrix_03, workers, nthread_use);
                 }
-                LLAMA_LOG_INFO("size = %8.2f MiB -> %8.2f MiB\n", tensor_size/1024.0/1024.0, new_size/1024.0/1024.0);
+                LLAMA_LOG_INFO("%8.2f MiB -> %8.2f MiB\n", tensor_size/1024.0/1024.0, new_size/1024.0/1024.0);
             } // do_quantize
 
             total_size_org += tensor_size;
