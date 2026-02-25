@@ -460,6 +460,7 @@ struct DevicePhaseSchedule {
     DevicePhaseEntry * entries;       // [total_ops] Flat array grouped by phase
     int *              phase_offset;  // [n_phases+1] CSR: phase i uses entries[phase_offset[i]..phase_offset[i+1])
     int *              phase_tiles;   // [n_phases] Total tile count for each phase
+    int *              phase_type;    // [n_phases] 0=HEAVY (device barrier), 1=LIGHT (flag-based)
     int                n_phases;      // Number of execution phases
     int                total_ops;     // Total number of ops across all phases
 };
@@ -2951,6 +2952,11 @@ private:
     std::vector<DevicePhaseEntry> orig_phase_entries_;
     std::vector<int>              orig_phase_offset_;
     std::vector<int>              orig_phase_tiles_;
+
+    // Two-tier light barrier state
+    std::vector<int>       host_phase_type_;      // [n_phases] 0=HEAVY, 1=LIGHT
+    int *                  light_flags_         = nullptr;  // [max_phases] device-alloc completion flags
+    int                    light_flags_size_    = 0;        // Current allocation size in elements
 
     // Role-based WG specialization state
     DeviceRoleSchedule     role_schedule_       = {};

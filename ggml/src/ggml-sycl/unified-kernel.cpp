@@ -4042,6 +4042,8 @@ struct PersistentKernelArgs {
     DeviceRoleSchedule      role;             // Role-based WG specialization state
     int                     use_role;         // 1 = role mode, 0 = fallback to phase/DAG/legacy
     int                     skip_barriers;    // 1 = skip device-scope barriers (profiling only, wrong output)
+    int *                   light_flags;      // [n_phases] Per-phase completion flags for light barriers
+    int                     use_light_barriers; // 1 = use two-tier barriers (light for cheap phases)
 };
 
 // =============================================================================
@@ -4268,22 +4270,43 @@ public:
         const int wg_id    = item_.get_group_linear_id();
         const int n_wgs    = item_.get_group_range(0);
         const bool use_split = (args_.use_split_barrier != 0);
+        const bool use_light = (args_.use_light_barriers != 0) && (args_.light_flags != nullptr);
         const DevicePhaseSchedule & sched = args_.phase;
 
         for (int phase = 0; phase < sched.n_phases; phase++) {
             const int phase_start = sched.phase_offset[phase];
             const int phase_end   = sched.phase_offset[phase + 1];
             const int total_tiles = sched.phase_tiles[phase];
+            // Phase type: 0=HEAVY (device barrier), 1=LIGHT (flag-based)
+            const int ptype = (use_light && sched.phase_type != nullptr)
+                                  ? sched.phase_type[phase] : 0;
 
-            if (total_tiles < 0) {
+            if (ptype == 1 && total_tiles > 0) {
+                // ── LIGHT phase: static assignment to WG 0 ──────────────
+                // WG 0 processes all tiles sequentially. No tile_counter
+                // needed — light phases bypass the global tile_counter entirely.
+                // Other WGs skip directly to the light barrier.
+                //
+                // This eliminates both: (a) tile_counter atomics during claiming,
+                // and (b) tile_counter reset after the phase. The light barrier
+                // costs ~1-5us (1 atomic store + N loads) vs ~39us for a heavy
+                // barrier (N atomic increments + N spin-waits).
+                if (wg_id == 0) {
+                    for (int e = phase_start; e < phase_end; e++) {
+                        const int op_idx   = sched.entries[e].op_idx;
+                        const int op_tiles = args_.operations[op_idx].n_tiles;
+                        for (int t = 0; t < op_tiles; t++) {
+                            dispatch_operation(args_.operations[op_idx], t);
+                        }
+                    }
+                }
+                // Light barrier: WG 0 signals done, all WGs poll.
+                light_barrier(local_id, phase);
+
+            } else if (total_tiles < 0) {
                 // Serial chain phase: consecutive dependent phases with few tiles,
                 // merged to eliminate barriers between them. Only ONE WG executes
                 // the entire chain sequentially. Other WGs skip to the barrier.
-                //
-                // Safety: data dependencies exist between ops in the chain, but
-                // they are satisfied because the single WG processes ops in order.
-                // No cross-WG synchronization is needed since no other WG touches
-                // any of the chain's data.
                 int claimed = -1;
                 if (local_id == 0) {
                     sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device,
@@ -4293,8 +4316,6 @@ public:
                 }
                 claimed = sycl::group_broadcast(item_.get_group(), claimed, 0);
                 if (claimed == 0) {
-                    // This WG executes all ops in the chain sequentially,
-                    // processing ALL tiles for each op before moving to the next.
                     for (int e = phase_start; e < phase_end; e++) {
                         const int op_idx   = sched.entries[e].op_idx;
                         const int op_tiles = args_.operations[op_idx].n_tiles;
@@ -4303,7 +4324,15 @@ public:
                         }
                     }
                 }
+                // Heavy barrier for serial chain (tile counter reset needed)
+                if (use_split) {
+                    device_split_barrier(local_id, wg_id, /* reset_tile_counter = */ true);
+                } else {
+                    device_barrier_atomic(local_id, n_wgs, /* reset_tile_counter = */ true);
+                }
+
             } else if (total_tiles > 0) {
+                // ── HEAVY phase: parallel work-stealing ──────────────────
                 // Normal parallel phase: claim and process tiles using atomic counter.
                 while (true) {
                     int flat_tile = -1;
@@ -4317,8 +4346,6 @@ public:
                     flat_tile = sycl::group_broadcast(item_.get_group(), flat_tile, 0);
                     if (flat_tile >= total_tiles) break;
 
-                    // Find which op this flat tile belongs to.
-                    // Linear scan over ops in this phase (typically 1-3 ops per phase).
                     int op_entry_idx = phase_start;
                     for (int e = phase_start + 1; e < phase_end; e++) {
                         if (sched.entries[e].tile_offset > flat_tile) break;
@@ -4330,13 +4357,20 @@ public:
 
                     dispatch_operation(args_.operations[op_idx], tile_idx);
                 }
-            }
+                // Heavy barrier with tile counter reset
+                if (use_split) {
+                    device_split_barrier(local_id, wg_id, /* reset_tile_counter = */ true);
+                } else {
+                    device_barrier_atomic(local_id, n_wgs, /* reset_tile_counter = */ true);
+                }
 
-            // Device-scope barrier between phases with tile counter reset.
-            if (use_split) {
-                device_split_barrier(local_id, wg_id, /* reset_tile_counter = */ true);
             } else {
-                device_barrier_atomic(local_id, n_wgs, /* reset_tile_counter = */ true);
+                // total_tiles == 0: empty phase, just barrier
+                if (use_split) {
+                    device_split_barrier(local_id, wg_id, /* reset_tile_counter = */ true);
+                } else {
+                    device_barrier_atomic(local_id, n_wgs, /* reset_tile_counter = */ true);
+                }
             }
         }
     }
@@ -4756,6 +4790,76 @@ private:
                 while (sense.load() == cur_sense) {
                     // Busy-wait
                 }
+            }
+        }
+
+        // Synchronize within WG so all threads see the barrier completion
+        sycl::group_barrier(item_.get_group());
+    }
+
+    // Light barrier: flag-based signaling for phases where only a few WGs did work.
+    //
+    // For elementwise phases (1-16 tiles), most WGs are idle — they claimed a
+    // tile index >= total_tiles and broke out of the work-stealing loop without
+    // doing any work. A full device-scope barrier would force all N WGs to
+    // arrive and spin-wait (~1us x N_WGS), but the data dependency only
+    // requires that the WG(s) that actually produced output have finished.
+    //
+    // Mechanism:
+    //   - After the work-stealing loop, each WG atomically increments the
+    //     per-phase flag by the number of tiles it processed (0 if idle).
+    //   - At the barrier point, thread 0 of each WG polls the flag until it
+    //     reaches total_tiles (meaning ALL tiles are done).
+    //   - WG 0 resets the tile counter for the next phase.
+    //   - The flag is reset by the last WG to observe completion.
+    //
+    // Cost: ~1-5us (one atomic increment + short poll) vs ~39us for device barrier.
+    // The poll terminates almost immediately because the producing WG(s)
+    // increment the flag before any consumer WG reads it (both happen after
+    // the same work-stealing loop).
+    void light_barrier(int local_id, int phase_idx) {
+        // Light barrier: flag-based signaling for phases where WG 0
+        // processed all tiles. No tile_counter involvement — light phases
+        // use static assignment (WG 0 processes all tiles sequentially).
+        //
+        // Flow:
+        //   - WG 0 already processed all tiles (before calling this)
+        //   - WG 0 signals completion via atomic store to light_flags[phase]
+        //   - All WGs poll light_flags[phase] until signaled
+        //   - No tile_counter reset needed (light phases don't use tile_counter)
+        //
+        // Cost: ~1us (1 atomic store from WG 0) + ~1-5us (40 atomic loads)
+        // vs ~39us for a full device-scope barrier with 40 WGs.
+
+        // Profiling mode: skip all synchronization
+        if (args_.skip_barriers) {
+            sycl::group_barrier(item_.get_group());
+            return;
+        }
+
+        // Synchronize within the work-group first
+        sycl::group_barrier(item_.get_group());
+
+        if (local_id == 0) {
+            const int wg_id = item_.get_group_linear_id();
+
+            sycl::atomic_ref<int, sycl::memory_order::acq_rel,
+                             sycl::memory_scope::device,
+                             sycl::access::address_space::global_space>
+                flag(args_.light_flags[phase_idx]);
+
+            if (wg_id == 0) {
+                // Producer: signal that all tiles are done.
+                // Use store with release semantics so all data written by
+                // WG 0 during tile processing is visible to consumers.
+                flag.store(1);
+            }
+
+            // All WGs (including WG 0) poll until the flag is set.
+            // For WG 0 this is immediate (it just set the flag).
+            // For WGs 1-39 this resolves in 1-2 cache line accesses.
+            while (flag.load() < 1) {
+                // Busy-wait
             }
         }
 
@@ -6298,11 +6402,18 @@ void UnifiedKernel::free_persistent_buffers() {
         if (phase_schedule_.entries)       sycl::free(phase_schedule_.entries, queue_);
         if (phase_schedule_.phase_offset)  sycl::free(phase_schedule_.phase_offset, queue_);
         if (phase_schedule_.phase_tiles)   sycl::free(phase_schedule_.phase_tiles, queue_);
+        if (phase_schedule_.phase_type)    sycl::free(phase_schedule_.phase_type, queue_);
 
         phase_schedule_     = {};
         phase_allocated_    = false;
         phase_pool_n_ops_   = 0;
         phase_pool_n_phases_ = 0;
+    }
+    // Free light barrier flags
+    if (light_flags_) {
+        sycl::free(light_flags_, queue_);
+        light_flags_      = nullptr;
+        light_flags_size_ = 0;
     }
     // Free role schedule allocations
     if (role_allocated_) {
@@ -6487,12 +6598,14 @@ void UnifiedKernel::build_phase_schedule(const std::vector<std::vector<int>> & s
             sycl::free(phase_schedule_.entries, queue_);
             sycl::free(phase_schedule_.phase_offset, queue_);
             sycl::free(phase_schedule_.phase_tiles, queue_);
+            if (phase_schedule_.phase_type) sycl::free(phase_schedule_.phase_type, queue_);
         }
         const int alloc_ops    = n_ops + 64;
         const int alloc_phases = n_phases + 16;
         phase_schedule_.entries      = sycl::malloc_host<DevicePhaseEntry>(alloc_ops, queue_);
         phase_schedule_.phase_offset = sycl::malloc_host<int>(alloc_phases + 1, queue_);
         phase_schedule_.phase_tiles  = sycl::malloc_host<int>(alloc_phases, queue_);
+        phase_schedule_.phase_type   = sycl::malloc_host<int>(alloc_phases, queue_);
         phase_pool_n_ops_    = alloc_ops;
         phase_pool_n_phases_ = alloc_phases;
     }
@@ -8479,16 +8592,19 @@ void UnifiedKernel::launch_persistent_kernel() {
             sycl::free(phase_schedule_.entries, queue_);
             sycl::free(phase_schedule_.phase_offset, queue_);
             sycl::free(phase_schedule_.phase_tiles, queue_);
+            if (phase_schedule_.phase_type) sycl::free(phase_schedule_.phase_type, queue_);
             const int alloc_ops    = final_n_ops + 64;
             const int alloc_phases = final_n_phases + 16;
             phase_schedule_.entries      = sycl::malloc_host<DevicePhaseEntry>(alloc_ops, queue_);
             phase_schedule_.phase_offset = sycl::malloc_host<int>(alloc_phases + 1, queue_);
             phase_schedule_.phase_tiles  = sycl::malloc_host<int>(alloc_phases, queue_);
+            phase_schedule_.phase_type   = sycl::malloc_host<int>(alloc_phases, queue_);
             phase_pool_n_ops_    = alloc_ops;
             phase_pool_n_phases_ = alloc_phases;
         }
 
         // Copy to host-pinned buffers (no queue memcpy needed, kernel reads via PCIe zero-copy)
+        // Note: phase_type is populated later (after n_workgroups is known for threshold)
         std::memcpy(phase_schedule_.entries, host_phase_entries_.data(),
                     final_n_ops * sizeof(DevicePhaseEntry));
         std::memcpy(phase_schedule_.phase_offset, host_phase_offset_.data(),
@@ -8640,6 +8756,94 @@ void UnifiedKernel::launch_persistent_kernel() {
         }
     }
 
+    // ── Two-tier barrier classification ────────────────────────────────
+    // Classify each phase as HEAVY (device barrier) or LIGHT (flag-based).
+    // Must happen AFTER n_workgroups is determined (used for auto threshold).
+    // HEAVY: phases with many tiles (n_tiles >= threshold), where multiple
+    //   WGs contribute to output and a device-scope barrier is needed.
+    // LIGHT: phases with few tiles (n_tiles < threshold), where 1-2 WGs
+    //   do all the work and the barrier is pure overhead for idle WGs.
+    //
+    // Light barriers: experimental, disabled by default.
+    // Benchmarking on Intel Arc B580 (Xe2) shows device-scope atomic loads
+    // serialize at ~1us per work-group, making flag-based light barriers cost
+    // the same ~39us as full sense-reversing barriers with 40 WGs.
+    // The hardware lacks a fast broadcast mechanism for cross-WG signaling.
+    // Enable with GGML_SYCL_PERSISTENT_TG_LIGHT_BARRIERS=1 for experimentation
+    // on different hardware or driver versions.
+    static const bool light_barriers_enabled = [] {
+        const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_LIGHT_BARRIERS");
+        if (env != nullptr && std::strcmp(env, "1") == 0) {
+            return true;
+        }
+        return false;
+    }();
+
+    static const int light_threshold = [] {
+        if (const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_LIGHT_THRESHOLD")) {
+            const int v = std::atoi(env);
+            if (v > 0) return v;
+        }
+        return 0;  // 0 means auto (N_WGS/2 at runtime)
+    }();
+
+    if (use_phase_mode && light_barriers_enabled) {
+        const int n_final_phases = phase_schedule_.n_phases;
+        const bool split_active = split_config_set_ && split_config_.n_devices > 1;
+        host_phase_type_.resize(n_final_phases);
+
+        int n_light = 0, n_heavy = 0;
+        for (int p = 0; p < n_final_phases; p++) {
+            const int tiles = host_phase_tiles_[p];
+            if (tiles < 0 || split_active) {
+                host_phase_type_[p] = 0;  // HEAVY
+                n_heavy++;
+            } else {
+                const int thresh = (light_threshold > 0) ? light_threshold : (n_workgroups / 2);
+                if (tiles > 0 && tiles < thresh) {
+                    host_phase_type_[p] = 1;  // LIGHT
+                    n_light++;
+                } else {
+                    host_phase_type_[p] = 0;  // HEAVY
+                    n_heavy++;
+                }
+            }
+        }
+
+        // Allocate light barrier flags (device memory, one int per phase).
+        if (n_light > 0 && n_final_phases > light_flags_size_) {
+            if (light_flags_) sycl::free(light_flags_, queue_);
+            const int alloc_size = n_final_phases + 16;
+            light_flags_      = sycl::malloc_device<int>(alloc_size, queue_);
+            light_flags_size_ = alloc_size;
+        }
+
+        // Copy phase_type to host-pinned buffer
+        if (phase_schedule_.phase_type && n_final_phases > 0) {
+            std::memcpy(phase_schedule_.phase_type, host_phase_type_.data(),
+                        n_final_phases * sizeof(int));
+        }
+
+        {
+            static bool light_diag_printed = false;
+            if (!light_diag_printed && n_light > 0) {
+                light_diag_printed = true;
+                fprintf(stderr,
+                        "[PERSISTENT-TG] Light barriers: %d LIGHT + %d HEAVY "
+                        "= %d phases (threshold=%d, n_wgs=%d)\n",
+                        n_light, n_heavy, n_final_phases,
+                        (light_threshold > 0) ? light_threshold : (n_workgroups / 2),
+                        n_workgroups);
+            }
+        }
+    }
+
+    // Two-tier light barriers: enabled when phase mode is active and at least one
+    // phase is classified as LIGHT.
+    const bool use_light_barriers = use_phase_mode && light_barriers_enabled &&
+        light_flags_ != nullptr &&
+        std::any_of(host_phase_type_.begin(), host_phase_type_.end(), [](int t) { return t == 1; });
+
     auto run_persistent_kernel = [&](const DeviceOperation * operations, int operation_count) -> double {
         const bool use_dag = use_dag_mode;
         const bool use_role = use_role_mode;
@@ -8658,6 +8862,12 @@ void UnifiedKernel::launch_persistent_kernel() {
             // Phase mode: reset tile counter + barrier state before each launch.
             // No .wait() needed: in-order queue ensures memset completes before kernel launch.
             queue_.memset(sync_block_, 0, 3 * sizeof(int));
+            // Reset light barrier flags (device memory) before each kernel launch.
+            // Light flags are per-phase completion counters that accumulate during
+            // the kernel and must start at 0.
+            if (use_light_barriers && light_flags_ && phase_schedule_.n_phases > 0) {
+                queue_.memset(light_flags_, 0, phase_schedule_.n_phases * sizeof(int));
+            }
         } else if (use_dag) {
             // Reset DAG scheduling counters for this token
             reset_dag_counters();
@@ -8687,6 +8897,8 @@ void UnifiedKernel::launch_persistent_kernel() {
         args.n_workgroups     = n_workgroups;
         args.role             = role_schedule_;
         args.use_role         = use_role ? 1 : 0;
+        args.light_flags      = use_light_barriers ? light_flags_ : nullptr;
+        args.use_light_barriers = use_light_barriers ? 1 : 0;
         {
             static int skip_env_checked = -1;
             if (skip_env_checked < 0) {
