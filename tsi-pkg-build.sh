@@ -2,32 +2,44 @@
 # Safe to source: does not leak -e/-u into the interactive shell.
 #
 # Build modes:
-#   Release build:
-#     source tsi-pkg-build.sh release
-#
-#   Debug (detailed performance) build:
-#     source tsi-pkg-build.sh debug
-#
-#   Default (developer build):
-#     source tsi-pkg-build.sh
+#   Release build:  source tsi-pkg-build.sh release
+#   Debug build:    source tsi-pkg-build.sh debug
+#   Default build:  source tsi-pkg-build.sh
 
 log_error(){ echo "ERROR: $*" >&2; }
-log_info(){ echo "INFO:  $*"; }
+log_info(){  echo "INFO:  $*"; }
 
 # detect sourced vs executed
 __TSI_SOURCED=0
 (return 0 2>/dev/null) && __TSI_SOURCED=1 || true
 __TSI_OLD_SET="$(set +o)"
+__OLD_VIRTUAL_ENV=""
 
 run() { "$@"; local rc=$?; [ $rc -eq 0 ] || log_error "cmd failed ($rc): $*"; return $rc; }
 absdir() { (cd "$1" 2>/dev/null && pwd); }
+tolower(){ echo "$1" | tr '[:upper:]' '[:lower:]'; }
 
 die() {
   log_error "$*"
   if [ "$__TSI_SOURCED" -eq 1 ]; then return 1; else exit 1; fi
 }
 
-tolower(){ echo "$1" | tr '[:upper:]' '[:lower:]'; }
+cleanup() {
+  # leave/restore venv
+  if [ -n "${__OLD_VIRTUAL_ENV:-}" ] && [ -f "${__OLD_VIRTUAL_ENV}/bin/activate" ]; then
+    # shellcheck disable=SC1091
+    source "${__OLD_VIRTUAL_ENV}/bin/activate" >/dev/null 2>&1 || true
+  else
+    type deactivate >/dev/null 2>&1 && deactivate || true
+  fi
+
+  # restore caller shell behavior
+  eval "${__TSI_OLD_SET}" >/dev/null 2>&1 || true
+  stty sane 2>/dev/null || true
+
+  # don't leak traps into parent shell
+  trap - RETURN EXIT 2>/dev/null || true
+}
 
 select_arch() {
   local m; m="$(uname -m)"
@@ -56,11 +68,13 @@ parse_args() {
 
 resolve_paths() {
   local arch="$1"
+
   if [ -z "${MLIR_COMPILER_DIR_IN}" ]; then
     MLIR_SDK_VERSION="${MLIR_SDK_VERSION:-/proj/rel/sw/sdk-r.0.2.5/${arch}}"
     MLIR_COMPILER_DIR_IN="${MLIR_SDK_VERSION}/compiler"
     log_info "Using default MLIR_COMPILER_DIR: ${MLIR_COMPILER_DIR_IN}"
   fi
+
   if [ -z "${TOOLBOX_DIR_IN}" ]; then
     MLIR_SDK_VERSION="${MLIR_SDK_VERSION:-$(dirname "${MLIR_COMPILER_DIR_IN}")}"
     TOOLBOX_DIR_IN="${MLIR_SDK_VERSION}/toolbox/build/install-fpga"
@@ -89,10 +103,10 @@ setup_toolchain() {
 setup_python() {
   log_info "creating python virtual env"
   __OLD_VIRTUAL_ENV="${VIRTUAL_ENV:-}"
+
   run /proj/local/Python-3.11.12/bin/python3 -m venv blob-creation || return 1
   # shellcheck disable=SC1091
   run bash -c 'source blob-creation/bin/activate && python -V >/dev/null' || return 1
-  # activate for current shell
   # shellcheck disable=SC1091
   source blob-creation/bin/activate || return 1
 
@@ -189,19 +203,22 @@ bundle_fpga() {
   mkdir -p "${TSI_GGML_BUNDLE_INSTALL_DIR}"
   rm -f "${TSI_GGML_BUNDLE_INSTALL_DIR}/ggml.sh"
 
-  cat > "./${TSI_GGML_BUNDLE_INSTALL_DIR}/ggml.sh" <<EOL
+  # Generate script without expansion, then substitute blob dir (avoids heredoc/quoting bugs)
+  cat > "./${TSI_GGML_BUNDLE_INSTALL_DIR}/ggml.sh" <<'EOL'
 #!/bin/bash
-export LD_LIBRARY_PATH=\${LD_LIBRARY_PATH}:\$(pwd)
+export LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:$(pwd)
 
 tsi_kernels=("add" "sub" "mult" "div" "abs" "inv" "neg" "sin" "sqrt" "sqr" "sigmoid" "silu" "rms_norm" "swiglu" \
 "add_16" "sub_16" "mult_16" "div_16" "abs_16" "inv_16" "neg_16" "sin_16" "sqrt_16" "sqr_16" "sigmoid_16" "silu_16" "rms_norm_16" "swiglu_16")
 
-for kernel in "\${tsi_kernels[@]}"; do
-  mkdir -p ${TSI_BLOB_INSTALL_DIR}/txe_\$kernel
-  cp blobs ${TSI_BLOB_INSTALL_DIR}/txe_\$kernel/ -r
+for kernel in "${tsi_kernels[@]}"; do
+  mkdir -p __TSI_BLOB_INSTALL_DIR__/txe_${kernel}
+  cp blobs __TSI_BLOB_INSTALL_DIR__/txe_${kernel}/ -r
 done
 EOL
-  chmod +x "${TSI_GGML_BUNDLE_INSTALL_DIR}/ggml.sh" || return 1
+
+  sed -i "s|__TSI_BLOB_INSTALL_DIR__|${TSI_BLOB_INSTALL_DIR}|g" "./${TSI_GGML_BUNDLE_INSTALL_DIR}/ggml.sh"
+  chmod +x "./${TSI_GGML_BUNDLE_INSTALL_DIR}/ggml.sh" || return 1
 
   cp "${GGML_TSI_INSTALL_DIR}/fpga/blobs" "${TSI_GGML_BUNDLE_INSTALL_DIR}/" -r || return 1
   cp build-fpga/bin/llama-cli "${TSI_GGML_BUNDLE_INSTALL_DIR}/" || return 1
@@ -228,6 +245,7 @@ main() {
   local arch; arch="$(select_arch)" || return $?
   parse_args "$@"
   resolve_paths "$arch" || return $?
+
   run git submodule update --recursive --init || return 1
 
   cd ggml-tsi-kernel/ || return 1
@@ -245,23 +263,17 @@ main() {
   return 0
 }
 
-main "$@"; __rc=$?
+# Ensure cleanup runs even on errors; do not leak trap in sourced shell
+if [ "$__TSI_SOURCED" -eq 1 ]; then
+  trap cleanup RETURN
+else
+  trap cleanup EXIT
+fi
 
-# restore caller shell behavior (prevents TAB/prompt issues)
-eval "${__TSI_OLD_SET}" >/dev/null 2>&1 || true
-stty sane 2>/dev/null || true
+main "$@"; __rc=$?
 
 if [ "$__TSI_SOURCED" -eq 1 ]; then
   return "$__rc"
 else
   exit "$__rc"
-fi
-
-
-# Exit venv (or restore previous venv if one was active)
-if [ -n "${__OLD_VIRTUAL_ENV}" ]; then
-  # shellcheck disable=SC1091
-  source "${__OLD_VIRTUAL_ENV}/bin/activate" || true
-else
-  deactivate || true
 fi
