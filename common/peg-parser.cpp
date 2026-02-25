@@ -1683,7 +1683,8 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
                 return gbnf_excluding_pattern(p.delimiters);
             } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
                 if (p.schema) {
-                    if (p.raw && p.schema->contains("type") && p.schema->at("type").is_string() && p.schema->at("type") == "string") {
+                    // TODO: always use child parser GBNF conversion to work around problem with single quotes being unsupported
+                    if (p.raw/* && p.schema->contains("type") && p.schema->at("type").is_string() && p.schema->at("type") == "string"*/) {
                         // TODO: Implement more comprehensive grammar generation for raw strings.
                         // For now, use the grammar emitted from the underlying parser.
                         return to_gbnf(p.child);

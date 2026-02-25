@@ -1029,10 +1029,9 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
 
                 // Pattern 2: recipient in channel header
                 // "<|channel|>(analysis|commentary) to=functions.NAME[constraint]<|message|>ARGS"
-
                 auto tool_in_channel = p.tool(channel + p.tool_open(func_name + constraint + MESSAGE) + args);
 
-                tool_choice |= p.trigger_rule("tool-" + name, tool_in_role | tool_in_channel);
+                tool_choice |= tool_in_role | tool_in_channel;
             });
 
             auto min_calls = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0;
@@ -1041,7 +1040,7 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
             auto role_start = p.optional(p.space() + p.literal(START_ASSISTANT));
             auto tool_call  = p.rule("tool-call", p.repeat(role_start + tool_choice, min_calls, max_calls) + p.end());
 
-            return p.choice({ tool_call, p.one_or_more(segment) + tool_call });
+            return p.choice({ p.trigger_rule("single-tool", tool_call), p.trigger_rule("tools", p.one_or_more(segment) + tool_call) });
         }
 
         return contents;
@@ -1120,8 +1119,8 @@ static common_chat_params common_chat_params_init_functionary_v3_2(const common_
         });
 
         auto content_only = content_until_end;
-        auto content_and_tools = content_until_tool + p.one_or_more(tool_choice);
-                auto tools_only = p.one_or_more(tool_choice);
+        auto tools_only = p.trigger_rule("tools", p.one_or_more(tool_choice));
+        auto content_and_tools = content_until_tool + tools_only;
 
         if (inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED) {
             if (inputs.parallel_tool_calls) {
@@ -1151,9 +1150,9 @@ static common_chat_params common_chat_params_init_functionary_v3_2(const common_
         });
 
         // Grammar trigger for when the model starts outputting a tool call
-        // (after the initial ">>>" in the generation prompt)
+        // (after the initial ">>>" in the generation prompt but recipient other than "all")
         data.grammar_triggers = {
-            { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, ">>>" }
+            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, ">>>(?!all)" }
         };
     }
 

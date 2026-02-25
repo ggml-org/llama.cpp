@@ -323,7 +323,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
                                                                      "tool-" + name + "-arg-" + param_name + "-schema",
                                                                      param_schema, true)) :
                                     p.tool_arg_json_value(p.schema(
-                                        p.json(), "tool-" + name + "-arg-" + param_name + "-schema", param_schema)) +
+                                        p.json(), "tool-" + name + "-arg-" + param_name + "-schema", param_schema, format.uses_python_dicts)) +
                                         p.space()) +
                 p.tool_arg_close(p.literal(arguments.value_suffix)));
 
