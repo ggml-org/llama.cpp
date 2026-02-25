@@ -1,5 +1,6 @@
 #pragma once
 
+// clang-format off
 #include "virtgpu-utils.h"
 #include "virtgpu-shm.h"
 #include "virtgpu-apir.h"
@@ -23,6 +24,7 @@
 #include "apir_hw.h"
 #include <drm/virtgpu_drm.h>
 #include "venus_hw.h"
+// clang-format on
 
 #ifndef VIRTGPU_DRM_CAPSET_APIR
 // Will be defined include/drm/virtgpu_drm.h when

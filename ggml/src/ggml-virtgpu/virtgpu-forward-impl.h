@@ -1,10 +1,13 @@
-#include "virtgpu.h"
+#pragma once
 
+// clang-format off
+#include "virtgpu.h"
 #include "ggml-remoting.h"
 #include "backend/shared/apir_backend.h"
 #include "backend/shared/apir_cs_ggml.h"
 
 #include "ggml-backend-impl.h"
+// clang-format on
 
 #define REMOTE_CALL_PREPARE(gpu_dev_name, encoder_name, apir_command_type__) \
     int32_t REMOTE_CALL_PREPARE_forward_flag = (int32_t) apir_command_type__; \
