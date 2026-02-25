@@ -6605,13 +6605,27 @@ struct input_tensor {
     std::array<size_t, 4> nb; // strides (0 = use default contiguous strides)
 };
 
+static bool is_non_contiguous(const input_tensor & src) {
+    if (src.nb[0] == 0) {
+        return false;
+    }
+    const size_t default_nb0 = ggml_type_size(src.type);
+    const size_t default_nb1 = default_nb0 * (src.ne[0] / ggml_blck_size(src.type));
+    const size_t default_nb2 = default_nb1 * src.ne[1];
+    const size_t default_nb3 = default_nb2 * src.ne[2];
+    return src.nb[0] != default_nb0 ||
+           src.nb[1] != default_nb1 ||
+           src.nb[2] != default_nb2 ||
+           src.nb[3] != default_nb3;
+}
+
 static std::string var_to_str(const std::vector<input_tensor>& sources) {
     std::ostringstream oss;
     bool first = true;
     for (const auto& src : sources) {
         if (!first) oss << ",";
         oss << ggml_type_name(src.type) << "[" << src.ne[0] << "," << src.ne[1] << "," << src.ne[2] << "," << src.ne[3] << "]";
-        if (src.nb[0] != 0) {
+        if (is_non_contiguous(src)) {
             oss << "nb[" << src.nb[0] << "," << src.nb[1] << "," << src.nb[2] << "," << src.nb[3] << "]";
         }
         first = false;
@@ -6660,20 +6674,7 @@ struct test_generic_op : public test_case {
         for (size_t i = 0; i < source_count; ++i) {
             const input_tensor& src = sources[i];
 
-            // Check if the exported strides differ from default contiguous layout.
-            bool needs_view = false;
-            if (src.nb[0] != 0) {
-                const size_t default_nb0 = ggml_type_size(src.type);
-                const size_t default_nb1 = default_nb0 * (src.ne[0] / ggml_blck_size(src.type));
-                const size_t default_nb2 = default_nb1 * src.ne[1];
-                const size_t default_nb3 = default_nb2 * src.ne[2];
-                needs_view = (src.nb[0] != default_nb0 ||
-                              src.nb[1] != default_nb1 ||
-                              src.nb[2] != default_nb2 ||
-                              src.nb[3] != default_nb3);
-            }
-
-            if (needs_view) {
+            if (is_non_contiguous(src)) {
                 // Compute the total buffer size using the same method as ggml_nbytes
                 size_t total_size;
                 const size_t blck_size = ggml_blck_size(src.type);
