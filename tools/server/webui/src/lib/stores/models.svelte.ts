@@ -1,4 +1,5 @@
 import { SvelteSet } from 'svelte/reactivity';
+import { toast } from 'svelte-sonner';
 import { ServerModelStatus, ModelModality } from '$lib/enums';
 import { ModelsService, PropsService } from '$lib/services';
 import { serverStore } from '$lib/stores/server.svelte';
@@ -547,8 +548,10 @@ class ModelsStore {
 			await this.pollForModelStatus(modelId, ServerModelStatus.LOADED);
 
 			await this.updateModelModalities(modelId);
+			toast.success(`Model loaded: ${this.toDisplayName(modelId)}`);
 		} catch (error) {
 			this.error = error instanceof Error ? error.message : 'Failed to load model';
+			toast.error(`Failed to load model: ${this.toDisplayName(modelId)}`);
 			throw error;
 		} finally {
 			this.modelLoadingStates.set(modelId, false);
@@ -573,8 +576,10 @@ class ModelsStore {
 			await ModelsService.unload(modelId);
 
 			await this.pollForModelStatus(modelId, ServerModelStatus.UNLOADED);
+			toast.info(`Model unloaded: ${this.toDisplayName(modelId)}`);
 		} catch (error) {
 			this.error = error instanceof Error ? error.message : 'Failed to unload model';
+			toast.error(`Failed to unload model: ${this.toDisplayName(modelId)}`);
 			throw error;
 		} finally {
 			this.modelLoadingStates.set(modelId, false);
