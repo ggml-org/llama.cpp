@@ -32,7 +32,7 @@
  */
 
 import { browser } from '$app/environment';
-import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
+import { SETTING_CONFIG_DEFAULT } from '$lib/constants';
 import { ParameterSyncService } from '$lib/services/parameter-sync.service';
 import { serverStore } from '$lib/stores/server.svelte';
 import {
@@ -44,7 +44,7 @@ import {
 import {
 	CONFIG_LOCALSTORAGE_KEY,
 	USER_OVERRIDES_LOCALSTORAGE_KEY
-} from '$lib/constants/localstorage-keys';
+} from '$lib/constants';
 
 class SettingsStore {
 	/**

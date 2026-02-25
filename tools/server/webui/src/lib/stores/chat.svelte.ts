@@ -28,12 +28,12 @@ import {
 	findLeafNode,
 	isAbortError
 } from '$lib/utils';
-import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants/ui';
-import { REASONING_TAGS } from '$lib/constants/agentic';
+import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants';
+import { REASONING_TAGS } from '$lib/constants';
 import {
 	MAX_INACTIVE_CONVERSATION_STATES,
 	INACTIVE_CONVERSATION_STATE_MAX_AGE_MS
-} from '$lib/constants/cache';
+} from '$lib/constants';
 import type {
 	ChatMessageTimings,
 	ChatMessagePromptProgress,
