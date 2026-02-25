@@ -9423,10 +9423,10 @@ static void ggml_cl_mul_mat_q6_K_f32_adreno(ggml_backend_t backend, const ggml_t
     cl_ulong offset1 = extra1->offset + src1->view_offs;
     cl_ulong offsetd = extrad->offset + dst->view_offs;
 
-    const int  ne00 = src0->ne[0];
-    const int  ne01 = src0->ne[1];
+    const int ne00 = src0->ne[0];
+    const int ne01 = src0->ne[1];
 
-    const int  ne1 = dst->ne[1];
+    const int ne1 = dst->ne[1];
 
     GGML_ASSERT(ne00 % ggml_blck_size(src0->type) == 0);
 
@@ -9497,70 +9497,54 @@ static void ggml_cl_mul_mat_q6_K_f32_adreno(ggml_backend_t backend, const ggml_t
         CL_CHECK(clReleaseMemObject(b_sub_buffer));
         CL_CHECK(clReleaseMemObject(b_img));
     } else {
-        // transpose activation
         cl_mem b_sub_buf;
         cl_mem b_buf_trans;
         cl_mem b_img;
         cl_mem b_img_trans;
 
-        region.origin = extra1->offset;
+        // subbuffer for activation
+        region.origin = offset1;
         region.size = ne00 * ne1 * sizeof(float);
-        CL_CHECK((b_sub_buf = clCreateSubBuffer(
-            extra1->data_device,
-            0,
-            CL_BUFFER_CREATE_TYPE_REGION,
-            &region,
-            &err), err));
+        CL_CHECK((b_sub_buf = clCreateSubBuffer(extra1->data_device, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
+
+        // image for activation
         img_fmt.image_channel_order = CL_RGBA;
         img_fmt.image_channel_data_type = CL_FLOAT;
         memset(&img_desc, 0, sizeof(img_desc));
         img_desc.image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER;
         img_desc.image_width = ne00 * ne1 / 4;
         img_desc.buffer = b_sub_buf;
-        CL_CHECK((b_img = clCreateImage(
-            context,
-            CL_MEM_READ_ONLY,
-            &img_fmt,
-            &img_desc,
-            NULL,
-            &err), err));
+        CL_CHECK((b_img = clCreateImage(context, CL_MEM_READ_ONLY, &img_fmt, &img_desc, NULL, &err), err));
 
-        // how much padding to add
+        // pad N to multiple of 8
         int extra_elements = ne1 % 8;
         int padding = 0;
         if (extra_elements > 0){
             padding = 8 - extra_elements;
         }
 
+        // subbuffer for transposed activation
         region.origin = 0;
         region.size = ne00 * (ne1 + padding) * sizeof(float)/2;
         backend_ctx->prealloc_act_trans.allocate(context, region.size);
-        CL_CHECK((b_buf_trans = clCreateSubBuffer(
-            backend_ctx->prealloc_act_trans.buffer,
-            0,
-            CL_BUFFER_CREATE_TYPE_REGION,
-            &region,
-            &err), err));
+        CL_CHECK((b_buf_trans = clCreateSubBuffer(backend_ctx->prealloc_act_trans.buffer, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
+
+        // image for transposed activation
         img_fmt.image_channel_order = CL_RGBA;
         img_fmt.image_channel_data_type = CL_HALF_FLOAT;
         memset(&img_desc, 0, sizeof(img_desc));
         img_desc.image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER;
         img_desc.image_width = ne00 * (ne1 + padding) / 4;
         img_desc.buffer = b_buf_trans;
-        CL_CHECK((b_img_trans = clCreateImage(
-            context,
-            0,
-            &img_fmt,
-            &img_desc,
-            NULL,
-            &err), err));
+        CL_CHECK((b_img_trans = clCreateImage(context, 0, &img_fmt, &img_desc, NULL, &err), err));
 
+        // transpose activation
         int height_B = ne1/4;
         if (height_B == 0) {
             height_B = 1;
         }
         int width_B = ne00/4;
-        int padded_height_B = (ne1 + padding)/4;
+        int padded_height_B = (ne1 + padding) / 4;
 
         kernel = backend_ctx->kernel_transpose_32_16;
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &b_img));
@@ -9570,12 +9554,10 @@ static void ggml_cl_mul_mat_q6_K_f32_adreno(ggml_backend_t backend, const ggml_t
         CL_CHECK(clSetKernelArg(kernel, 4, sizeof(int),    &padded_height_B));
 
         size_t local_size_t[2] = { 1, 16 };
-        size_t global_size_t[2] = {
-            static_cast<size_t>(width_B),
-            static_cast<size_t>(padded_height_B)
-        };
+        size_t global_size_t[2] = { (size_t)width_B, (size_t)padded_height_B };
         backend_ctx->enqueue_ndrange_kernel(kernel, 2, global_size_t, local_size_t, dst);
 
+        // gemm
         kernel = backend_ctx->kernel_gemm_noshuffle_q6_K_f32;
         int padded_N = ne1 + padding;
 
@@ -9591,8 +9573,8 @@ static void ggml_cl_mul_mat_q6_K_f32_adreno(ggml_backend_t backend, const ggml_t
         CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne00));
         CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne1));
 
-        size_t global_work_size[3] = {(size_t)CEIL_DIV(ne1, 8), (size_t)ne01/4, 1};
-        size_t local_work_size[3] = {1, 128, 1};
+        size_t global_work_size[3] = {(size_t)CEIL_DIV(ne1, 8), (size_t)CEIL_DIV(ne01, 4), 1};
+        size_t local_work_size[3] = {2, 128, 1};
         backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 
         CL_CHECK(clReleaseMemObject(b_sub_buf));
