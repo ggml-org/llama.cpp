@@ -54,7 +54,7 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
 import java.security.SecureRandom
-// v10 - externalCacheDir ile geçici model kopyalama
+// v4.2 - predictLength (Generated Tokens) ayarı eklendi
 
 class MainActivity : AppCompatActivity() {
 
@@ -113,6 +113,7 @@ class MainActivity : AppCompatActivity() {
 
     // Ayarlar
     private var contextSize: Int = 2048
+    private var predictLength: Int = 512  // Generated Tokens — contextSize'dan bağımsız
     private var systemPrompt: String = ""
     private var temperature: Float = 0.8f
     private var topP: Float = 0.95f
@@ -244,11 +245,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun loadSettings() {
         val prefs = getSharedPreferences("llama_prefs", MODE_PRIVATE)
-        contextSize  = prefs.getInt("context_size", 2048)
-        systemPrompt = prefs.getString("system_prompt", "") ?: ""
-        temperature  = prefs.getFloat("temperature", 0.8f)
-        topP         = prefs.getFloat("top_p", 0.95f)
-        topK         = prefs.getInt("top_k", 40)
+        contextSize       = prefs.getInt("context_size", 2048)
+        predictLength     = prefs.getInt("predict_length", 512)
+        systemPrompt      = prefs.getString("system_prompt", "") ?: ""
+        temperature       = prefs.getFloat("temperature", 0.8f)
+        topP              = prefs.getFloat("top_p", 0.95f)
+        topK              = prefs.getInt("top_k", 40)
         noThinking        = prefs.getBoolean("no_thinking", false)
         autoLoadLastModel = prefs.getBoolean("auto_load_last_model", false)
         flashAttn         = prefs.getBoolean("flash_attn", false)
@@ -257,6 +259,7 @@ class MainActivity : AppCompatActivity() {
     private fun saveSettings() {
         getSharedPreferences("llama_prefs", MODE_PRIVATE).edit()
             .putInt("context_size", contextSize)
+            .putInt("predict_length", predictLength)
             .putString("system_prompt", systemPrompt)
             .putFloat("temperature", temperature)
             .putFloat("top_p", topP)
@@ -807,6 +810,7 @@ class MainActivity : AppCompatActivity() {
             ).apply { topMargin = (12*dp).toInt(); bottomMargin = (4*dp).toInt() }
         }
 
+        // ── Context Window ──
         layout.addView(sectionTitle("Context Window (token)"))
         val ctxGroup = RadioGroup(ctx).apply { orientation = RadioGroup.HORIZONTAL }
         val ctxOptions = listOf(512, 1024, 2048, 4096, 8192)
@@ -815,7 +819,30 @@ class MainActivity : AppCompatActivity() {
         }
         ctxRadios.forEach { ctxGroup.addView(it) }
         layout.addView(ctxGroup)
+        layout.addView(TextView(ctx).apply {
+            text = "Modelin toplam hafızası. RAM kullanımını doğrudan etkiler."; textSize = 11f; alpha = 0.6f
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = (4*dp).toInt() }
+        })
 
+        // ── Generated Tokens (predict_length) ──
+        layout.addView(sectionTitle("Generated Tokens (yanıt uzunluğu)"))
+        val predictGroup = RadioGroup(ctx).apply { orientation = RadioGroup.HORIZONTAL }
+        val predictOptions = listOf(128, 256, 512, 1024, 2048)
+        val predictRadios = predictOptions.map { size ->
+            RadioButton(ctx).apply { text = size.toString(); id = View.generateViewId(); isChecked = (size == predictLength) }
+        }
+        predictRadios.forEach { predictGroup.addView(it) }
+        layout.addView(predictGroup)
+        layout.addView(TextView(ctx).apply {
+            text = "Tek yanıtta üretilebilecek maksimum token sayısı. Günlük sohbet için 256–512, uzun içerik için 1024–2048 önerilir."; textSize = 11f; alpha = 0.6f
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = (4*dp).toInt() }
+        })
+
+        // ── Sistem Prompt ──
         layout.addView(sectionTitle("Sistem Prompt"))
         val systemPromptInput = EditText(ctx).apply {
             hint = "Örn: Sen yardımcı bir asistansın."
@@ -823,6 +850,7 @@ class MainActivity : AppCompatActivity() {
         }
         layout.addView(systemPromptInput)
 
+        // ── Temperature ──
         layout.addView(sectionTitle("Temperature: %.2f".format(temperature)))
         val tempLabel = layout.getChildAt(layout.childCount - 1) as TextView
         val tempBar = SeekBar(ctx).apply {
@@ -835,6 +863,7 @@ class MainActivity : AppCompatActivity() {
         }
         layout.addView(tempBar)
 
+        // ── Top-P ──
         layout.addView(sectionTitle("Top-P: %.2f".format(topP)))
         val topPLabel = layout.getChildAt(layout.childCount - 1) as TextView
         val topPBar = SeekBar(ctx).apply {
@@ -847,6 +876,7 @@ class MainActivity : AppCompatActivity() {
         }
         layout.addView(topPBar)
 
+        // ── Top-K ──
         layout.addView(sectionTitle("Top-K: $topK"))
         val topKLabel = layout.getChildAt(layout.childCount - 1) as TextView
         val topKBar = SeekBar(ctx).apply {
@@ -859,6 +889,7 @@ class MainActivity : AppCompatActivity() {
         }
         layout.addView(topKBar)
 
+        // ── Qwen3 ──
         layout.addView(sectionTitle("Qwen3 Ayarı"))
         val noThinkingRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL
@@ -879,6 +910,7 @@ class MainActivity : AppCompatActivity() {
                 .apply { bottomMargin = (8*dp).toInt() }
         })
 
+        // ── Model Yükleme ──
         layout.addView(sectionTitle("Model Yükleme"))
         val autoLoadRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL
@@ -899,6 +931,7 @@ class MainActivity : AppCompatActivity() {
                 .apply { bottomMargin = (8*dp).toInt() }
         })
 
+        // ── Performans ──
         layout.addView(sectionTitle("Performans"))
         val flashAttnRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL
@@ -921,18 +954,25 @@ class MainActivity : AppCompatActivity() {
 
         AlertDialog.Builder(this).setTitle("⚙️ Ayarlar").setView(scrollView)
             .setPositiveButton("Kaydet") { _, _ ->
-                val checkedId = ctxGroup.checkedRadioButtonId
-                if (checkedId != -1) {
-                    val idx = ctxRadios.indexOfFirst { it.id == checkedId }
+                // Context Window
+                val checkedCtxId = ctxGroup.checkedRadioButtonId
+                if (checkedCtxId != -1) {
+                    val idx = ctxRadios.indexOfFirst { it.id == checkedCtxId }
                     if (idx >= 0) contextSize = ctxOptions[idx]
                 }
-                systemPrompt = systemPromptInput.text.toString().trim()
-                temperature  = tempBar.progress / 100f
-                topP         = topPBar.progress / 100f
-                topK         = maxOf(1, topKBar.progress)
-                noThinking   = noThinkingSwitch.isChecked
+                // Generated Tokens
+                val checkedPredictId = predictGroup.checkedRadioButtonId
+                if (checkedPredictId != -1) {
+                    val idx = predictRadios.indexOfFirst { it.id == checkedPredictId }
+                    if (idx >= 0) predictLength = predictOptions[idx]
+                }
+                systemPrompt      = systemPromptInput.text.toString().trim()
+                temperature       = tempBar.progress / 100f
+                topP              = topPBar.progress / 100f
+                topK              = maxOf(1, topKBar.progress)
+                noThinking        = noThinkingSwitch.isChecked
                 autoLoadLastModel = autoLoadSwitch.isChecked
-                flashAttn    = flashAttnSwitch.isChecked
+                flashAttn         = flashAttnSwitch.isChecked
                 saveSettings()
                 Toast.makeText(this, "Ayarlar kaydedildi", Toast.LENGTH_SHORT).show()
             }
@@ -1081,7 +1121,7 @@ class MainActivity : AppCompatActivity() {
         val formattedText = buildFormattedPrompt(messages)
         val lastUserText = messages.lastOrNull { it.isUser }?.content ?: ""
         log("Kova", "sendMessageContent: template=$selectedTemplate turns=${messages.size} " +
-            "noThinking=$noThinking lastUser='${lastUserText.take(40)}' promptLen=${formattedText.length}")
+            "noThinking=$noThinking predictLength=$predictLength lastUser='${lastUserText.take(40)}' promptLen=${formattedText.length}")
 
         generationJob = lifecycleScope.launch {
             var waited = 0
@@ -1090,7 +1130,7 @@ class MainActivity : AppCompatActivity() {
             messageAdapter.isStreaming = true
 
             try {
-                engine.sendUserPrompt(formattedText, predictLength = contextSize)
+                engine.sendUserPrompt(formattedText, predictLength = predictLength)
                     .collect { token ->
                         val cleaned = token
                             .replace("<|END_OF_TURN_TOKEN|>", "")
@@ -1175,6 +1215,7 @@ class MainActivity : AppCompatActivity() {
         if (inclSettings) {
             val settingsObj = JSONObject().apply {
                 put("context_size", contextSize)
+                put("predict_length", predictLength)
                 put("system_prompt", systemPrompt)
                 put("temperature", temperature.toDouble())
                 put("top_p", topP.toDouble())
@@ -1516,6 +1557,7 @@ class MainActivity : AppCompatActivity() {
                 val s      = root.getJSONObject("settings")
                 val editor = prefs.edit()
                 if (s.has("context_size"))         editor.putInt("context_size", s.getInt("context_size"))
+                if (s.has("predict_length"))        editor.putInt("predict_length", s.getInt("predict_length"))
                 if (s.has("system_prompt"))        editor.putString("system_prompt", s.getString("system_prompt"))
                 if (s.has("temperature"))          editor.putFloat("temperature", s.getDouble("temperature").toFloat())
                 if (s.has("top_p"))                editor.putFloat("top_p", s.getDouble("top_p").toFloat())
