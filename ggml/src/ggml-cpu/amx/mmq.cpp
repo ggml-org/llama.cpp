@@ -202,35 +202,27 @@ struct tile_config_t{
 //    advanced-matrix-extensions-intrinsics-functions.html
 //
 
-#define TC_CONFIG_TILE(i, r, cb) tc.rows[i] = r; tc.colsb[i] = cb
-void ggml_tile_config_init(void) {
-    static thread_local bool is_first_time = true;
+inline void ggml_tile_config_init(void) {
+    static thread_local bool done = false;
 
-    if (!is_first_time) {
+    if (done) {
         return;
     }
 
-    static thread_local tile_config_t tc;
-    tile_config_t current_tc;
-    _tile_storeconfig(&current_tc);
+    alignas(64) tile_config_t tc = {};
+    tc.palette_id = 1;
+    tc.start_row = 0;
+    tc.rows[0] = 8;   tc.colsb[0] = 64;
+    tc.rows[1] = 8;   tc.colsb[1] = 64;
+    tc.rows[2] = 16;  tc.colsb[2] = 32;
+    tc.rows[3] = 16;  tc.colsb[3] = 32;
+    tc.rows[4] = 16;  tc.colsb[4] = 64;
+    tc.rows[5] = 16;  tc.colsb[5] = 64;
+    tc.rows[6] = 16;  tc.colsb[6] = 64;
+    tc.rows[7] = 16;  tc.colsb[7] = 64;
 
-    // load only when config changes
-    if (tc.palette_id == 0 || (memcmp(&current_tc.colsb, &tc.colsb, sizeof(uint16_t) * 8) != 0 &&
-                               memcmp(&current_tc.rows, &tc.rows, sizeof(uint8_t) * 8) != 0)) {
-        tc.palette_id = 1;
-        tc.start_row = 0;
-        TC_CONFIG_TILE(TMM0, 8, 64);
-        TC_CONFIG_TILE(TMM1, 8, 64);
-        TC_CONFIG_TILE(TMM2, 16, 32);
-        TC_CONFIG_TILE(TMM3, 16, 32);
-        TC_CONFIG_TILE(TMM4, 16, 64);
-        TC_CONFIG_TILE(TMM5, 16, 64);
-        TC_CONFIG_TILE(TMM6, 16, 64);
-        TC_CONFIG_TILE(TMM7, 16, 64);
-        _tile_loadconfig(&tc);
-    }
-
-    is_first_time = false;
+    _tile_loadconfig(&tc);
+    done = true;
 }
 
 // we need an extra 16 * 4B (TILE_N * int32_t) for each NB/KB block for compensation.
