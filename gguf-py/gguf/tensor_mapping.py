@@ -568,7 +568,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.FFN_GATE_UP_EXP: (
-            "model.layers.{bid}.mlp.experts.gate_up_proj",              # gpt-oss
+            "model.layers.{bid}.mlp.experts.gate_up_proj",
         ),
 
         # Feed-forward down
