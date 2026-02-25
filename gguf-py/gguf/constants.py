@@ -3872,6 +3872,7 @@ class VisionProjectorType:
     MUSIC_FLAMINGO = "musicflamingo" # audio
     GLM4V = "glm4v"
     YOUTUVL = "youtuvl"
+    DOTS_OCR = "dots_ocr"
     NEMOTRON_V2_VL = "nemotron_v2_vl"
 
 

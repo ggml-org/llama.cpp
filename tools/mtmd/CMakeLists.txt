@@ -24,6 +24,7 @@ add_library(mtmd
             models/llama4.cpp
             models/llava.cpp
             models/minicpmv.cpp
+            models/dots_ocr.cpp
             models/paddleocr.cpp
             models/pixtral.cpp
             models/qwen2vl.cpp

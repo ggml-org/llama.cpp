@@ -207,6 +207,8 @@ llm_chat_template llm_chat_detect_template(const std::string & tmpl) {
         return LLM_CHAT_TEMPLATE_LLAMA4;
     } else if (tmpl_contains("<|endofuserprompt|>")) {
         return LLM_CHAT_TEMPLATE_DOTS1;
+    } else if (tmpl_contains("<|endofuser|>") && tmpl_contains("<|endofassistant|>")) {
+        return LLM_CHAT_TEMPLATE_DOTS_OCR;
     } else if (tmpl_contains("<|extra_0|>") && tmpl_contains("<|extra_4|>")) {
         return LLM_CHAT_TEMPLATE_HUNYUAN_MOE;
     } else if (tmpl_contains("<|start|>") && tmpl_contains("<|channel|>")) {
@@ -759,6 +761,21 @@ int32_t llm_chat_apply_template(
         }
         if (add_ass) {
             ss << "<|response|>";
+        }
+    } else if (tmpl == LLM_CHAT_TEMPLATE_DOTS_OCR) {
+        // dots.ocr (DotsOCRForCausalLM)
+        for (auto message : chat) {
+            std::string role(message->role);
+            if (role == "system") {
+                ss << "<|system|>" << message->content << "<|endofsystem|>\n";
+            } else if (role == "user") {
+                ss << "<|user|>" << message->content << "<|endofuser|>";
+            } else {
+                ss << "<|assistant|>" << message->content << "<|endofassistant|>";
+            }
+        }
+        if (add_ass) {
+            ss << "<|assistant|>";
         }
     } else if (tmpl == LLM_CHAT_TEMPLATE_HUNYUAN_MOE) {
         // tencent/Hunyuan-A13B-Instruct

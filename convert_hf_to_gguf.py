@@ -3537,7 +3537,7 @@ class QwenModel(TextModel):
         self._set_vocab_qwen()
 
 
-@ModelBase.register("Qwen2Model", "Qwen2ForCausalLM", "Qwen2AudioForConditionalGeneration", "KORMoForCausalLM", "AudioFlamingo3ForConditionalGeneration")
+@ModelBase.register("Qwen2Model", "Qwen2ForCausalLM", "Qwen2AudioForConditionalGeneration", "KORMoForCausalLM", "AudioFlamingo3ForConditionalGeneration", "DotsOCRForCausalLM")
 class Qwen2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2
 
@@ -3557,7 +3557,8 @@ class Qwen2Model(TextModel):
         if "language_model." in name:
             name = name.replace("language_model.", "") # for InternVL
         if name.startswith("mlp") or name.startswith("multi_modal_projector") \
-                or name.startswith("vision_model") or name.startswith("audio_tower") \
+                or name.startswith("vision_model") or name.startswith("vision_tower") \
+                or name.startswith("audio_tower") \
                 or name.startswith("model.vision_tower") or name.startswith("model.multi_modal_projector"):
             # skip vision and audio tensors
             return
@@ -4062,6 +4063,73 @@ class Qwen25OmniModel(Qwen2VLVisionModel):
                 # this tensor is left unused in transformers code
                 # https://github.com/huggingface/transformers/blob/6e3063422c4b1c014aa60c32b9254fd2902f0f28/src/transformers/models/qwen2_5_omni/modular_qwen2_5_omni.py#L1809
                 return
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("DotsOCRForCausalLM")
+class DotsOCRVisionModel(Qwen2VLVisionModel):
+    """dots.ocr vision encoder - modified Qwen2-VL with RMSNorm, SiLU MLP, Conv2D patches."""
+
+    def __init__(self, *args, **kwargs):
+        # dots.ocr uses standard HF key names (num_attention_heads, num_hidden_layers)
+        # not Qwen2-VL's (num_heads, depth), so skip parent's renames to avoid clobbering
+        MmprojModel.__init__(self, *args, **kwargs)
+        assert self.hparams_vision is not None
+        hv = self.hparams_vision
+        hv.setdefault("image_size", 560)
+        if "embed_dim" in hv and hv.get("embed_dim") != hv.get("hidden_size"):
+            hv["intermediate_size"] = hv.get("hidden_size")
+            hv["hidden_size"] = hv.get("embed_dim")
+
+    def set_gguf_parameters(self):
+        # call grandparent (MmprojModel), not Qwen2VLVisionModel which checks model_type
+        MmprojModel.set_gguf_parameters(self)
+        assert self.hparams_vision is not None
+        hparams = self.hparams_vision
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.DOTS_OCR)
+        self.gguf_writer.add_vision_use_silu(True)
+        self.gguf_writer.add_vision_attention_layernorm_eps(hparams.get("rms_norm_eps", 1e-5))
+        self.gguf_writer.add_vision_spatial_merge_size(hparams.get("spatial_merge_size", 2))
+        # write min/max pixels from preprocessor config
+        if "min_pixels" in self.preprocessor_config and "max_pixels" in self.preprocessor_config:
+            self.gguf_writer.add_vision_min_pixels(self.preprocessor_config["min_pixels"])
+            self.gguf_writer.add_vision_max_pixels(self.preprocessor_config["max_pixels"])
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if not name.startswith("vision_tower."):
+            return  # skip non-vision tensors
+
+        # Rename vision_tower → visual to match existing tensor mappings
+        name = name.replace("vision_tower.", "visual.", 1)
+
+        # Handle patchifier paths (dots.ocr-specific naming)
+        name = name.replace(".patch_embed.patchifier.proj.", ".patch_embed.proj.")
+        name = name.replace(".patch_embed.patchifier.norm.", ".post_conv_layernorm.")
+
+        # Handle SiLU gated MLP: fc1=gate, fc2=up, fc3=down
+        # (differs from Qwen2-VL where fc1=up, fc2=down with GELU)
+        name = name.replace(".mlp.fc1.", ".mlp.gate_proj.")
+        name = name.replace(".mlp.fc2.", ".mlp.up_proj.")
+        name = name.replace(".mlp.fc3.", ".mlp.down_proj.")
+
+        # post_trunk_norm → v.post_ln (build_vit applies after VIT loop)
+        if "post_trunk_norm" in name:
+            new_name = name.replace("visual.post_trunk_norm.", "v.post_ln.")
+            yield (new_name, data_torch)
+            return
+
+        # merger.ln_q → mm.input_norm (applied manually before spatial merge)
+        if "merger.ln_q" in name:
+            new_name = name.replace("visual.merger.ln_q.", "mm.input_norm.")
+            yield (new_name, data_torch)
+            return
+
+        # Conv2D patch embedding (no Conv3D temporal split like Qwen2-VL)
+        if "patch_embed.proj.weight" in name:
+            yield from MmprojModel.modify_tensors(self, data_torch, name, bid)
+            return
+
+        # QKV splitting and other tensors handled by parent
         yield from super().modify_tensors(data_torch, name, bid)
 
 
