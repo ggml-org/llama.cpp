@@ -235,7 +235,7 @@ static inline void hvx_mad_f32_f16_aa_rx2(float * restrict y,
     }
 }
 
-#define FLASH_ATTN_BLOCK_SIZE 128
+#define FLASH_ATTN_BLOCK_SIZE 64
 
 struct htp_fa_context {
     const struct htp_ops_context * octx;
@@ -384,8 +384,8 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
         const uint8_t * q_row_ptr = (const uint8_t *) q->data + (iq1*nbq1 + iq2*nbq2 + iq3*nbq3);
         dma_queue_push(dma, dma_make_ptr(spad_q, q_row_ptr), factx->size_q_row_padded, nbq1, size_q_row, 1);
 
-        FARF(HIGH, "fa %u: prefetch Q: ir %u iq1 %u iq2 %u iq3 %u q_row_ptr %p size %u : usec %u", ith, ir, iq1, iq2, iq3, q_row_ptr, size_q_row,
-                        (unsigned)HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - factx->t_start));
+        // FARF(HIGH, "fa %u: prefetch Q: ir %u iq1 %u iq2 %u iq3 %u q_row_ptr %p size %u : usec %u", ith, ir, iq1, iq2, iq3, q_row_ptr, size_q_row,
+        //                 (unsigned)HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - factx->t_start));
 
         const __fp16 * mp_base = NULL;
         if (mask) {
@@ -417,10 +417,10 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
                 dma_queue_push(dma, dma_make_ptr(m_dst, m_src), current_block_size * 2, current_block_size * 2, current_block_size * 2, 1);
             }
 
-            FARF(HIGH, "fa %u: prefetch KVM: ir %u ib %u iq1 %u iq2 %u iq3 %u : size_k_row %u size_v_row %u bs %u: usec %u",
-                        ith, ir, ib, iq1, iq2, iq3,
-                        size_k_row, size_v_row, current_block_size,
-                        (unsigned)HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - factx->t_start));
+            // FARF(HIGH, "fa %u: prefetch KVM: ir %u ib %u iq1 %u iq2 %u iq3 %u : size_k_row %u size_v_row %u bs %u: usec %u",
+            //             ith, ir, ib, iq1, iq2, iq3,
+            //             size_k_row, size_v_row, current_block_size,
+            //             (unsigned)HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - factx->t_start));
         }
 
         const uint32_t h = iq2; // head index
@@ -448,9 +448,9 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
             uint8_t * v_base = dma_queue_pop(dma).dst; // V
             __fp16  * m_base = mask ? dma_queue_pop(dma).dst : NULL; // M
 
-            FARF(HIGH, "fa %u: process: ir %u ib %u : iq1 %u iq2 %u iq3 %u q_ptr_vtcm %p : usec %u",
-                         ith, ir, ib, iq1, iq2, iq3, q_ptr_vtcm,
-                         (unsigned)HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - factx->t_start));
+            // FARF(HIGH, "fa %u: process: ir %u ib %u : iq1 %u iq2 %u iq3 %u q_ptr_vtcm %p : usec %u",
+            //              ith, ir, ib, iq1, iq2, iq3, q_ptr_vtcm,
+            //             (unsigned)HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - factx->t_start));
 
             // Inner loop processing the block from VTCM
             uint32_t ic = 0;
@@ -581,10 +581,10 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
                     dma_queue_push(dma, dma_make_ptr(m_base, m_src), next_block_size * 2, next_block_size * 2, next_block_size * 2, 1);
                 }
 
-                FARF(HIGH, "fa %u: prefetch KVM: ir %u ib %u : iq1 %u iq2 %u iq3 %u : size_k_row %u size_v_row %u bs %u: usec %u",
-                        ith, ir, next_ib, iq1, iq2, iq3,
-                        size_k_row, size_v_row, next_block_size,
-                        (unsigned)HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - factx->t_start));
+                // FARF(HIGH, "fa %u: prefetch KVM: ir %u ib %u : iq1 %u iq2 %u iq3 %u : size_k_row %u size_v_row %u bs %u: usec %u",
+                //         ith, ir, next_ib, iq1, iq2, iq3,
+                //         size_k_row, size_v_row, next_block_size,
+                //         (unsigned)HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - factx->t_start));
             }
         }
 
