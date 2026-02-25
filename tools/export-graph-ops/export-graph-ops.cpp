@@ -2,9 +2,6 @@
 #include "common.h"
 #include "log.h"
 #include "llama.h"
-#include "llama-context.h"
-#include "llama-graph.h"
-#include "llama-memory.h"
 #include "ggml.h"
 
 #include "nlohmann/json.hpp"
@@ -130,25 +127,18 @@ int main(int argc, char ** argv) {
 
     llama_context * ctx = init_result->context();
 
-    const auto & cparams = ctx->get_cparams();
-    const uint32_t n_seqs  = cparams.n_seq_max;
-    const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
-
-    llama_memory_context_ptr mctx;
-    auto * memory = ctx->get_memory();
-    if (memory) {
-        mctx = memory->init_full();
-    }
+    const uint32_t n_seqs  = llama_n_seq_max(ctx);
+    const uint32_t n_tokens = std::min(llama_n_ctx(ctx), llama_n_ubatch(ctx));
 
     std::set<test_object> tests;
 
-    auto * gf_pp = ctx->graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get());
+    auto * gf_pp = llama_graph_reserve(ctx, n_tokens, n_seqs, n_tokens);
     if (!gf_pp) {
         throw std::runtime_error("failed to reserve prompt processing graph");
     }
     extract_graph_ops(gf_pp, "pp", tests);
 
-    auto * gf_tg = ctx->graph_reserve(n_seqs, n_seqs, n_seqs, mctx.get());
+    auto * gf_tg = llama_graph_reserve(ctx, n_seqs, n_seqs, n_seqs);
     if (!gf_tg) {
         throw std::runtime_error("failed to reserve token generation graph");
     }
