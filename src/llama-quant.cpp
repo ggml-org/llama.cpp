@@ -505,7 +505,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         case LLAMA_FTYPE_ALL_F32:     default_type = GGML_TYPE_F32;  break;
 
         case LLAMA_FTYPE_MOSTLY_MXFP4_MOE: default_type = GGML_TYPE_MXFP4; break;
-        case LLAMA_FTYPE_MOSTLY_NVFP4: default_type = GGML_TYPE_NVFP4; break;
 
         // K-quants
         case LLAMA_FTYPE_MOSTLY_Q2_K_S:
