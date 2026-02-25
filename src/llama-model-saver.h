@@ -7,10 +7,11 @@
 
 struct llama_model_saver {
     struct gguf_context * gguf_ctx = nullptr;
-    const struct llama_model & model;
+    const struct llama_model * model;
     const struct LLM_KV llm_kv;
 
-    llama_model_saver(const struct llama_model & model);
+    llama_model_saver(const struct llama_model * model);
+    llama_model_saver(enum llm_arch arch);
     ~llama_model_saver();
 
     void add_kv(enum llm_kv key, uint32_t     value);

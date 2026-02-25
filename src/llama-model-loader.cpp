@@ -886,7 +886,8 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
             } break;
         case GGML_OP_MUL_MAT_ID:
             {
-                int n_expert_used = hparams.n_expert_used;
+                const int n_expert_used = hparams.n_expert_used;
+                GGML_ASSERT(n_expert_used > 0);
                 ggml_tensor * b = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, w->ne[0], n_expert_used, 512);
                 ggml_tensor * ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_expert_used, 512);
                 op_tensor = ggml_mul_mat_id(ctx, w, b, ids);
@@ -898,7 +899,8 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
             } break;
         case GGML_OP_ADD_ID:
             {
-                int n_expert_used = hparams.n_expert_used;
+                const int n_expert_used = hparams.n_expert_used;
+                GGML_ASSERT(n_expert_used > 0);
                 ggml_tensor * a = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, w->ne[0], n_expert_used, 512);
                 ggml_tensor * c = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_expert_used, 512);
                 op_tensor = ggml_add_id(ctx, a, w, c);
@@ -915,8 +917,8 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
             } break;
         case GGML_OP_ROPE:
             {
-                int n_embd_head = hparams.n_embd_head_v;
-                int n_head = hparams.n_head();
+                const int n_embd_head = hparams.n_embd_head_v;
+                const int n_head = hparams.n_head();
                 ggml_tensor * a = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd_head, n_head, 512);
                 ggml_tensor * b = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 512);
                 op_tensor = ggml_rope_ext(
@@ -1163,6 +1165,15 @@ struct ggml_tensor * llama_model_loader::create_tensor(
 
     if (files.empty()) {
         constexpr ggml_type type = GGML_TYPE_F32; // TODO make configurable
+
+        // for tensors that are not required some of the dimensions can be invalid:
+        if (flags & TENSOR_NOT_REQUIRED) {
+            for (size_t dim = 0; dim < ne.size(); dim++) {
+                if (ne.begin()[dim] <= 0) {
+                    return nullptr;
+                }
+            }
+        }
 
         ggml_tensor t_meta;
         memset(&t_meta, 0, sizeof(ggml_tensor));

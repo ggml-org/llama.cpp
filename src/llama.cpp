@@ -1070,7 +1070,7 @@ struct llama_model * llama_model_load_from_splits(
 }
 
 void llama_model_save_to_file(const struct llama_model * model, const char * path_model) {
-    llama_model_saver ms(*model);
+    llama_model_saver ms(model);
     ms.add_kv_from_model();
     ms.add_tensors_from_model();
     ms.save(path_model);
