@@ -65,6 +65,10 @@ class MessageAdapter(
         notifyDataSetChanged()
     }
 
+    // Üretim devam ediyorsa true — Markdown parse atlanır, düz metin gösterilir.
+    // Üretim bitince false yapılınca son bind'da Markdown render edilir.
+    var isStreaming: Boolean = false
+
     fun updateLastAssistantMessage(text: String, tps: Float? = null): Int {
         if (messages.isNotEmpty() && !messages.last().isUser) {
             messages[messages.size - 1] = ChatMessage(content = text, isUser = false, tokensPerSecond = tps)
@@ -135,7 +139,14 @@ class MessageAdapter(
             val displayText = parsed.visibleContent.ifEmpty {
                 if (parsed.thinkContent != null) "" else "…"
             }
-            markwon?.setMarkdown(textView, displayText) ?: run { textView.text = displayText }
+            // Üretim devam ediyorken Markwon parse pahalıdır — düz metin göster.
+            // Üretim bitince (isStreaming=false) tam Markdown render yapılır.
+            val isLastMessage = position == messages.size - 1
+            if (isStreaming && isLastMessage) {
+                textView.text = displayText
+            } else {
+                markwon?.setMarkdown(textView, displayText) ?: run { textView.text = displayText }
+            }
             textView.setTextIsSelectable(true)
 
             // --- t/s göstergesi ---
