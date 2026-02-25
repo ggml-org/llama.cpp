@@ -617,6 +617,13 @@ extern "C" {
             const char * fname_out,
             const llama_model_quantize_params * params);
 
+    // Reserve a new compute graph. It is valid until the next call to llama_graph_reserve.
+    LLAMA_API struct ggml_cgraph * llama_graph_reserve(
+            struct llama_context * ctx,
+            uint32_t n_tokens,
+            uint32_t n_seqs,
+            uint32_t n_outputs);
+
     //
     // Adapters
     //
