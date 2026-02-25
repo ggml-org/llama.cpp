@@ -2,6 +2,7 @@
 
 #include "ggml-et-common.h"
 #include "ggml.h"
+#include "ggml-et-logger.h"
 #include <inttypes.h>
 
 // Performance logging macros for ET ops
@@ -11,7 +12,7 @@
 #define ET_PERF_END(op_name, kernel_name, node) do { \
     int64_t _et_perf_end = ggml_time_us(); \
     int64_t _et_perf_duration = _et_perf_end - _et_perf_start; \
-    GGML_LOG_DEBUG("ET_PERF|op=%s|kernel=%s|duration_us=%" PRId64 "|tensor=%s|shape=[%" PRId64 ",%" PRId64 ",%" PRId64 ",%" PRId64 "]|start_us=%" PRId64 "|end_us=%" PRId64 "\n", \
+    ET_LOG_DEBUG("ET_PERF|op=%s|kernel=%s|duration_us=%" PRId64 "|tensor=%s|shape=[%" PRId64 ",%" PRId64 ",%" PRId64 ",%" PRId64 "]|start_us=%" PRId64 "|end_us=%" PRId64 "\n", \
         op_name, kernel_name, _et_perf_duration, (node)->name, \
         (node)->ne[0], (node)->ne[1], (node)->ne[2], (node)->ne[3], \
         _et_perf_start, _et_perf_end); \
@@ -20,7 +21,7 @@
 #define ET_PERF_END_EXT(op_name, kernel_name, node, fmt, ...) do { \
     int64_t _et_perf_end = ggml_time_us(); \
     int64_t _et_perf_duration = _et_perf_end - _et_perf_start; \
-    GGML_LOG_DEBUG("ET_PERF|op=%s|kernel=%s|duration_us=%" PRId64 "|tensor=%s|shape=[%" PRId64 ",%" PRId64 ",%" PRId64 ",%" PRId64 "]|start_us=%" PRId64 "|end_us=%" PRId64 "|" fmt "\n", \
+    ET_LOG_DEBUG("ET_PERF|op=%s|kernel=%s|duration_us=%" PRId64 "|tensor=%s|shape=[%" PRId64 ",%" PRId64 ",%" PRId64 ",%" PRId64 "]|start_us=%" PRId64 "|end_us=%" PRId64 "|" fmt "\n", \
         op_name, kernel_name, _et_perf_duration, (node)->name, \
         (node)->ne[0], (node)->ne[1], (node)->ne[2], (node)->ne[3], \
         _et_perf_start, _et_perf_end, ##__VA_ARGS__); \

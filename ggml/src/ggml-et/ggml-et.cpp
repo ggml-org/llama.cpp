@@ -3,6 +3,7 @@
 #include "ggml-et-kernels.h"
 #include "ggml-et-memops.h"
 #include "ggml-et-ops.h"
+#include "ggml-et-logger.h"
 
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
@@ -77,7 +78,7 @@ static void ggml_et_dump_operator_metadata(const ggml_tensor* ggtensor)
     }
 }
 
-static void et_log_internal(ggml_log_level level, const char* file, int line, const char* fmt, ...) {
+void ggml_et_log_internal(ggml_log_level level, const char* file, int line, const char* fmt, ...) {
     static ggml_log_level min_log_level = []() -> ggml_log_level {
         const char* env = getenv("GGML_ET_LOG_LEVEL");
         if(!env) {
@@ -123,13 +124,6 @@ static void et_log_internal(ggml_log_level level, const char* file, int line, co
     free(log_string);
     free(full_message);
 }
-
-#define ET_LOG_INTERNAL(level, ...) et_log_internal(level, __FILE_NAME__, __LINE__, __VA_ARGS__)
-#define ET_LOG(...) ET_LOG_INTERNAL(GGML_LOG_LEVEL_TRACE, __VA_ARGS__)
-#define ET_LOG_DEBUG(...) ET_LOG_INTERNAL(GGML_LOG_LEVEL_DEBUG, __VA_ARGS__)
-#define ET_LOG_INFO(...) ET_LOG_INTERNAL(GGML_LOG_LEVEL_INFO, __VA_ARGS__)
-#define ET_LOG_WARN(...) ET_LOG_INTERNAL(GGML_LOG_LEVEL_WARN, __VA_ARGS__)
-#define ET_LOG_ERROR(...) ET_LOG_INTERNAL(GGML_LOG_LEVEL_ERROR, __VA_ARGS__)
 
 static struct ggml_et_driver {
     std::shared_ptr<dev::IDeviceLayer> device_layer;
