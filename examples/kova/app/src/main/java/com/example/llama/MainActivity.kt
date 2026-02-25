@@ -401,7 +401,7 @@ class MainActivity : AppCompatActivity() {
 
     private suspend fun loadMessagesForCurrent() = withContext(Dispatchers.IO) {
         val dbMessages = db.chatDao().getMessages(currentConversationId)
-        val chatMessages = dbMessages.map { ChatMessage(content = it.content, isUser = it.role == "user") }
+        val chatMessages = dbMessages.map { ChatMessage(content = it.content, isUser = it.role == "user", tokensPerSecond = it.tps) }
         withContext(Dispatchers.Main) {
             currentMessages.clear()
             currentMessages.addAll(chatMessages)
@@ -965,7 +965,8 @@ class MainActivity : AppCompatActivity() {
                 db.chatDao().insertMessage(com.example.llama.data.DbMessage(
                     id = java.util.UUID.randomUUID().toString(), conversationId = convId,
                     role = if (msg.isUser) "user" else "assistant", content = msg.content,
-                    timestamp = System.currentTimeMillis() + idx
+                    timestamp = System.currentTimeMillis() + idx,
+                    tps = msg.tokensPerSecond
                 ))
             }
         }
@@ -1143,7 +1144,8 @@ class MainActivity : AppCompatActivity() {
                 if (fullResponse.isNotEmpty()) {
                     lifecycleScope.launch(Dispatchers.IO) {
                         db.chatDao().insertMessage(com.example.llama.data.DbMessage(
-                            java.util.UUID.randomUUID().toString(), convId, "assistant", fullResponse, System.currentTimeMillis()
+                            java.util.UUID.randomUUID().toString(), convId, "assistant", fullResponse,
+                            System.currentTimeMillis(), tps
                         ))
                         db.chatDao().touchConversation(convId, System.currentTimeMillis())
                     }
