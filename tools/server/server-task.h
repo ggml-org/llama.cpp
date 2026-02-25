@@ -557,6 +557,8 @@ struct server_prompt_checkpoint {
     llama_pos pos_min;
     llama_pos pos_max;
 
+    int64_t n_tokens;
+
     std::vector<uint8_t> data;
 
     size_t size() const {
