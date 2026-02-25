@@ -319,22 +319,37 @@ struct gguf_reader {
 
     // remaining bytes in the file
     uint64_t nbytes_remain() const {
+#if defined(_WIN32)
+        const __int64 cur = _ftelli64(file);
+        if (cur < 0) {
+            return 0;
+        }
+        if (_fseeki64(file, 0, SEEK_END) != 0) {
+            _fseeki64(file, cur, SEEK_END);
+            return 0;
+        }
+        const __int64 end = _ftelli64(file);
+        if (end < 0) {
+            _fseeki64(file, cur, SEEK_SET);
+            return 0;
+        }
+        _fseeki64(file, cur, SEEK_SET);
+#else
         const long cur = ftell(file);
         if (cur < 0) {
             return 0;
         }
         if (fseek(file, 0, SEEK_END) != 0) {
             fseek(file, cur, SEEK_SET);
-
             return 0;
         }
         const long end = ftell(file);
         if (end < 0) {
             fseek(file, cur, SEEK_SET);
-
             return 0;
         }
         fseek(file, cur, SEEK_SET);
+#endif
         return static_cast<uint64_t>(end - cur);
     }
 };
