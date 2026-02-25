@@ -133,6 +133,11 @@
 					key: SETTINGS_KEYS.AUTO_SHOW_SIDEBAR_ON_NEW_CHAT,
 					label: 'Auto-show sidebar on new chat',
 					type: SettingsFieldType.CHECKBOX
+				},
+				{
+					key: SETTINGS_KEYS.SHOW_RAW_MODEL_NAMES,
+					label: 'Show raw model names',
+					type: SettingsFieldType.CHECKBOX
 				}
 			]
 		},
