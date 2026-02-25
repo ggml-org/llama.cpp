@@ -4041,6 +4041,7 @@ struct PersistentKernelArgs {
     int                     n_workgroups;     // Total WGs for device-scope barrier
     DeviceRoleSchedule      role;             // Role-based WG specialization state
     int                     use_role;         // 1 = role mode, 0 = fallback to phase/DAG/legacy
+    int                     skip_barriers;    // 1 = skip device-scope barriers (profiling only, wrong output)
 };
 
 // =============================================================================
@@ -4391,24 +4392,28 @@ public:
                 // Wait for matmul role to complete its preceding segment
                 // (if this segment depends on matmul output)
                 if (seg.sync_before >= 0) {
-                    // matmul_done flag is at sync_flags[sync_idx * 2 + 1]
-                    const int flag_idx = seg.sync_before * 2 + 1;
-                    if (local_id == 0 && wg_id == 0) {
-                        sycl::atomic_ref<int, sycl::memory_order::acq_rel,
-                                         sycl::memory_scope::device,
-                                         sycl::access::address_space::global_space>
-                            flag(role.sync_flags[flag_idx]);
-                        while (flag.load(sycl::memory_order::acquire) == 0) {
-                            // Spin-wait for matmul role completion
+                    if (!args_.skip_barriers) {
+                        // matmul_done flag is at sync_flags[sync_idx * 2 + 1]
+                        const int flag_idx = seg.sync_before * 2 + 1;
+                        if (local_id == 0 && wg_id == 0) {
+                            sycl::atomic_ref<int, sycl::memory_order::acq_rel,
+                                             sycl::memory_scope::device,
+                                             sycl::access::address_space::global_space>
+                                flag(role.sync_flags[flag_idx]);
+                            while (flag.load(sycl::memory_order::acquire) == 0) {
+                                // Spin-wait for matmul role completion
+                            }
                         }
-                    }
-                    // Broadcast completion to all elementwise WG threads
-                    sycl::group_barrier(item_.get_group());
-                    // Inter-WG broadcast for multi-WG elementwise role:
-                    // WG 0 saw the flag; other elem WGs need to sync too.
-                    if (role.n_elem_wgs > 1) {
-                        // Use a simple atomic barrier among elem WGs only
-                        device_barrier_atomic_n(local_id, role.n_elem_wgs);
+                        // Broadcast completion to all elementwise WG threads
+                        sycl::group_barrier(item_.get_group());
+                        // Inter-WG broadcast for multi-WG elementwise role:
+                        // WG 0 saw the flag; other elem WGs need to sync too.
+                        if (role.n_elem_wgs > 1) {
+                            // Use a simple atomic barrier among elem WGs only
+                            device_barrier_atomic_n(local_id, role.n_elem_wgs);
+                        }
+                    } else {
+                        sycl::group_barrier(item_.get_group());
                     }
                 }
 
@@ -4500,21 +4505,25 @@ public:
 
                 // Wait for elementwise role to complete its preceding segment
                 if (seg.sync_before >= 0) {
-                    // elem_done flag is at sync_flags[sync_idx * 2]
-                    const int flag_idx = seg.sync_before * 2;
-                    const int expected = seg.sync_before + 1;
-                    if (local_id == 0 && matmul_wg_id == 0) {
-                        sycl::atomic_ref<int, sycl::memory_order::acq_rel,
-                                         sycl::memory_scope::device,
-                                         sycl::access::address_space::global_space>
-                            flag(role.sync_flags[flag_idx]);
-                        while (flag.load(sycl::memory_order::acquire) < expected) {
-                            // Spin-wait for elementwise role completion
+                    if (!args_.skip_barriers) {
+                        // elem_done flag is at sync_flags[sync_idx * 2]
+                        const int flag_idx = seg.sync_before * 2;
+                        const int expected = seg.sync_before + 1;
+                        if (local_id == 0 && matmul_wg_id == 0) {
+                            sycl::atomic_ref<int, sycl::memory_order::acq_rel,
+                                             sycl::memory_scope::device,
+                                             sycl::access::address_space::global_space>
+                                flag(role.sync_flags[flag_idx]);
+                            while (flag.load(sycl::memory_order::acquire) < expected) {
+                                // Spin-wait for elementwise role completion
+                            }
                         }
-                    }
-                    sycl::group_barrier(item_.get_group());
-                    if (n_matmul_wgs > 1) {
-                        device_barrier_atomic_n(local_id, n_matmul_wgs);
+                        sycl::group_barrier(item_.get_group());
+                        if (n_matmul_wgs > 1) {
+                            device_barrier_atomic_n(local_id, n_matmul_wgs);
+                        }
+                    } else {
+                        sycl::group_barrier(item_.get_group());
                     }
                 }
 
@@ -4668,6 +4677,25 @@ private:
     // Optional tile-counter reset is done by the last arriving WG before
     // releasing the barrier so next operation can start immediately.
     void device_barrier_atomic(int local_id, int n_wgs, bool reset_tile_counter = false) {
+        // Profiling mode: replace device-scope barriers with a lightweight
+        // version that still resets the tile counter (from WG 0 only to avoid
+        // races) but does NOT spin-wait for all WGs to arrive.
+        // Output WILL be wrong, but measures pure compute time without barrier overhead.
+        if (args_.skip_barriers) {
+            sycl::group_barrier(item_.get_group());
+            // Only WG 0 resets the tile counter to avoid race where multiple
+            // WGs reset it while others are still claiming tiles (infinite loop).
+            if (reset_tile_counter && local_id == 0 && item_.get_group_linear_id() == 0) {
+                sycl::atomic_ref<int, sycl::memory_order::relaxed,
+                                 sycl::memory_scope::device,
+                                 sycl::access::address_space::global_space>
+                    tile_counter(*args_.tile_counter);
+                tile_counter.store(0);
+            }
+            sycl::group_barrier(item_.get_group());
+            return;
+        }
+
         // First synchronize within the work-group
         sycl::group_barrier(item_.get_group());
 
@@ -4715,6 +4743,20 @@ private:
     // the given tile counter to 0 before releasing the barrier, combining the
     // completion barrier and counter-reset barrier into a single operation.
     void device_barrier_atomic_n(int local_id, int n_role_wgs, int * tile_counter_to_reset = nullptr) {
+        // Profiling mode: skip role-local barriers
+        if (args_.skip_barriers) {
+            sycl::group_barrier(item_.get_group());
+            if (tile_counter_to_reset && local_id == 0) {
+                sycl::atomic_ref<int, sycl::memory_order::relaxed,
+                                 sycl::memory_scope::device,
+                                 sycl::access::address_space::global_space>
+                    tc(*tile_counter_to_reset);
+                tc.store(0);
+            }
+            sycl::group_barrier(item_.get_group());
+            return;
+        }
+
         const int wg_id = item_.get_group_linear_id();
         const bool is_elem = (wg_id < args_.role.n_elem_wgs);
 
@@ -7835,6 +7877,7 @@ void UnifiedKernel::execute_persistent_phased(phase_callback_t on_matmul_complet
         args.hidden_dim       = current_plan_->hidden_dim;
         args.intermediate_dim = current_plan_->intermediate_dim;
         args.use_dag          = 0;  // No DAG mode for phased execution
+        args.skip_barriers    = 0;  // No barrier skip in phased execution profiling path
 
         const auto start = std::chrono::high_resolution_clock::now();
         queue_.submit([&](sycl::handler & cgh) {
@@ -8414,6 +8457,13 @@ void UnifiedKernel::launch_persistent_kernel() {
         args.n_workgroups     = n_workgroups;
         args.role             = role_schedule_;
         args.use_role         = use_role ? 1 : 0;
+        {
+            static int skip_env_checked = -1;
+            if (skip_env_checked < 0) {
+                skip_env_checked = (std::getenv("GGML_SYCL_PERSISTENT_TG_SKIP_BARRIERS") != nullptr) ? 1 : 0;
+            }
+            args.skip_barriers = skip_env_checked;
+        }
 
         const auto start = std::chrono::high_resolution_clock::now();
         queue_.submit([&](sycl::handler & cgh) {
@@ -8711,6 +8761,7 @@ void UnifiedKernel::launch_persistent_kernel_async() {
     args.phase            = phase_schedule_;
     args.use_phase        = 0;  // No phase mode for split -- use barrier-based run()
     args.n_workgroups     = n_workgroups;
+    args.skip_barriers    = 0;  // No barrier skip in async split path
 
     // Submit kernel but do NOT wait -- caller manages synchronization
     // via progress_counter/merge_complete device-local counters.
