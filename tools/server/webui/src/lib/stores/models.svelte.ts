@@ -262,15 +262,17 @@ class ModelsStore {
 				const displayNameSource =
 					details?.name && details.name.trim().length > 0 ? details.name : item.id;
 				const displayName = this.toDisplayName(displayNameSource);
+				const modelId = details?.model || item.id;
 
 				return {
 					id: item.id,
 					name: displayName,
-					model: details?.model || item.id,
+					model: modelId,
 					description: details?.description,
 					capabilities: rawCapabilities.filter((value: unknown): value is string => Boolean(value)),
 					details: details?.details,
-					meta: item.meta ?? null
+					meta: item.meta ?? null,
+					parsedId: ModelsService.parseModelId(modelId)
 				} satisfies ModelOption;
 			});
 
