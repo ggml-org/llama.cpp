@@ -1147,14 +1147,10 @@ class MainActivity : AppCompatActivity() {
                         responseBuilder.append(cleaned)
                         tokenCount++
                         tokenUpdateCounter++
-                        // Her 4 token'da UI güncellenir (düz metin — hızlı).
-                        // Her 20 token'da Markdown render de yapılır (throttled Markwon).
+                        // Her 4 token'da UI ve Markdown güncellenir.
                         if (tokenUpdateCounter % 4 == 0) {
                             val snapshot = responseBuilder.toString()
-                            val doMarkdown = tokenUpdateCounter % 20 == 0
-                            messageAdapter.markdownThisUpdate = doMarkdown
                             val newIndex = messageAdapter.updateLastAssistantMessage(snapshot)
-                            messageAdapter.markdownThisUpdate = false
                             if (autoScroll) messagesRv.scrollToPosition(newIndex)
                         }
                         if (tokenUpdateCounter % 20 == 0) {
