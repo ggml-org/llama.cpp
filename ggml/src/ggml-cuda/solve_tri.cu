@@ -87,7 +87,7 @@ static void solve_tri_f32_cublas(ggml_backend_cuda_context & ctx,
 #    pragma clang diagnostic push
 #    pragma clang diagnostic ignored "-Wpass-failed"
 #endif  // __clang__
-template <int n_template, int k_template>
+template <int n_template, int ncols_template>
 static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
                                           const float * __restrict__ B,
                                           float * __restrict__ X,
@@ -99,17 +99,21 @@ static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
                                           const size_t nb2,
                                           const size_t nb3,
                                           const int    n_arg,
-                                          const int    k_arg) {
+                                          const int    ncols_arg,
+                                          const int    ld_arg,
+                                          const int    col0_arg) {
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
 
-    const int n = n_template == 0 ? n_arg : n_template;
-    const int k = k_template == 0 ? k_arg : k_template;
+    const int n     = n_template == 0 ? n_arg : n_template;
+    const int ncols = ncols_template == 0 ? ncols_arg : ncols_template;
+    const int ld    = ld_arg;
+    const int col0  = col0_arg;
 
     const int batch_idx = blockIdx.x;
     const int lane      = threadIdx.x;
     const int col_idx   = threadIdx.y;
 
-    if (col_idx >= k) {
+    if (col_idx >= ncols) {
         return;
     }
 
@@ -126,7 +130,7 @@ static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
     const int offset = threadIdx.x + threadIdx.y * blockDim.x;
 
 #pragma unroll
-    for (int i = 0; i < n * n; i += k * warp_size) {
+    for (int i = 0; i < n * n; i += ncols * warp_size) {
         const int i0 = i + offset;
         if (i0 < n * n) {
             sA[i0] = A_batch[i0];
@@ -135,8 +139,8 @@ static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
 
     __syncthreads();
 
-    float x_low  = (lane < n) ? B_batch[lane * k + col_idx] : 0.0f;
-    float x_high = (warp_size + lane < n) ? B_batch[(warp_size + lane) * k + col_idx] : 0.0f;
+    float x_low  = (lane < n) ? B_batch[lane * ld + col0 + col_idx] : 0.0f;
+    float x_high = (warp_size + lane < n) ? B_batch[(warp_size + lane) * ld + col0 + col_idx] : 0.0f;
 
     const int half      = warp_size;
     const int nrows_low = (n < half) ? n : half;
@@ -173,13 +177,85 @@ static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
         const int row = rr * warp_size + lane;
         if (row < n) {
             const float val            = (row < half) ? x_low : x_high;
-            X_batch[row * k + col_idx] = val;
+            X_batch[row * ld + col0 + col_idx] = val;
         }
     }
 }
 #ifdef __clang__
 #    pragma clang diagnostic pop
 #endif  // __clang__
+
+static void solve_tri_f32_cuda_tile(const float * A,
+                                    const float * B,
+                                    float *       X,
+                                    int           n,
+                                    int           ncols,
+                                    int           ld,
+                                    int           col0,
+                                    int64_t       ne02,
+                                    int64_t       ne03,
+                                    size_t        nb02,
+                                    size_t        nb03,
+                                    size_t        nb12,
+                                    size_t        nb13,
+                                    size_t        nb2,
+                                    size_t        nb3,
+                                    cudaStream_t  stream) {
+    const uint3 ne02_fd = init_fastdiv_values((uint32_t) ne02);
+    const int   warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
+    dim3        threads(warp_size, ncols);
+    dim3        grid(ne02 * ne03);
+    if (n == 64) {
+        switch (ncols) {
+            case 32:
+                solve_tri_f32_fast<64, 32>
+                    <<<grid, threads, 0, stream>>>(A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, 0, 0, ld, col0);
+                break;
+            case 16:
+                solve_tri_f32_fast<64, 16>
+                    <<<grid, threads, 0, stream>>>(A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, 0, 0, ld, col0);
+                break;
+            case 14:
+                solve_tri_f32_fast<64, 14>
+                    <<<grid, threads, 0, stream>>>(A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, 0, 0, ld, col0);
+                break;
+            case 12:
+                solve_tri_f32_fast<64, 12>
+                    <<<grid, threads, 0, stream>>>(A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, 0, 0, ld, col0);
+                break;
+            case 10:
+                solve_tri_f32_fast<64, 10>
+                    <<<grid, threads, 0, stream>>>(A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, 0, 0, ld, col0);
+                break;
+            case 8:
+                solve_tri_f32_fast<64, 8>
+                    <<<grid, threads, 0, stream>>>(A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, 0, 0, ld, col0);
+                break;
+            case 6:
+                solve_tri_f32_fast<64, 6>
+                    <<<grid, threads, 0, stream>>>(A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, 0, 0, ld, col0);
+                break;
+            case 4:
+                solve_tri_f32_fast<64, 4>
+                    <<<grid, threads, 0, stream>>>(A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, 0, 0, ld, col0);
+                break;
+            case 2:
+                solve_tri_f32_fast<64, 2>
+                    <<<grid, threads, 0, stream>>>(A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, 0, 0, ld, col0);
+                break;
+            case 1:
+                solve_tri_f32_fast<64, 1>
+                    <<<grid, threads, 0, stream>>>(A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, 0, 0, ld, col0);
+                break;
+            default:
+                solve_tri_f32_fast<0, 0>
+                    <<<grid, threads, 0, stream>>>(A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, n, ncols, ld, col0);
+        }
+    } else {  // run general case
+        solve_tri_f32_fast<0, 0>
+            <<<grid, threads, 0, stream>>>(A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, n, ncols, ld, col0);
+    }
+}
 
 static void solve_tri_f32_cuda(const float * A,
                                const float * B,
@@ -195,59 +271,15 @@ static void solve_tri_f32_cuda(const float * A,
                                size_t        nb2,
                                size_t        nb3,
                                cudaStream_t  stream) {
-    const uint3 ne02_fd = init_fastdiv_values((uint32_t) ne02);
-    const int   warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
-    dim3        threads(warp_size, k);
-    dim3        grid(ne02 * ne03);
-    if (n == 64) {
-        switch (k) {
-            case 32:
-                solve_tri_f32_fast<64, 32>
-                    <<<grid, threads, 0, stream>>>(A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, 0, 0);
-                break;
-            case 16:
-                solve_tri_f32_fast<64, 16>
-                    <<<grid, threads, 0, stream>>>(A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, 0, 0);
-                break;
-            case 14:
-                solve_tri_f32_fast<64, 14>
-                    <<<grid, threads, 0, stream>>>(A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, 0, 0);
-                break;
-            case 12:
-                solve_tri_f32_fast<64, 12>
-                    <<<grid, threads, 0, stream>>>(A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, 0, 0);
-                break;
-            case 10:
-                solve_tri_f32_fast<64, 10>
-                    <<<grid, threads, 0, stream>>>(A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, 0, 0);
-                break;
-            case 8:
-                solve_tri_f32_fast<64, 8>
-                    <<<grid, threads, 0, stream>>>(A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, 0, 0);
-                break;
-            case 6:
-                solve_tri_f32_fast<64, 6>
-                    <<<grid, threads, 0, stream>>>(A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, 0, 0);
-                break;
-            case 4:
-                solve_tri_f32_fast<64, 4>
-                    <<<grid, threads, 0, stream>>>(A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, 0, 0);
-                break;
-            case 2:
-                solve_tri_f32_fast<64, 2>
-                    <<<grid, threads, 0, stream>>>(A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, 0, 0);
-                break;
-            case 1:
-                solve_tri_f32_fast<64, 1>
-                    <<<grid, threads, 0, stream>>>(A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, 0, 0);
-                break;
-            default:
-                solve_tri_f32_fast<0, 0>
-                    <<<grid, threads, 0, stream>>>(A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, n, k);
-        }
-    } else {  // run general case
-        solve_tri_f32_fast<0, 0>
-            <<<grid, threads, 0, stream>>>(A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, n, k);
+    const int max_k_fast = 1024 / ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
+    if (k <= max_k_fast) {
+        solve_tri_f32_cuda_tile(A, B, X, n, k, k, 0, ne02, ne03, nb02, nb03, nb12, nb13, nb2, nb3, stream);
+        return;
+    }
+
+    for (int col0 = 0; col0 < k; col0 += max_k_fast) {
+        const int k_tile = col0 + max_k_fast <= k ? max_k_fast : (k - col0);
+        solve_tri_f32_cuda_tile(A, B, X, n, k_tile, k, col0, ne02, ne03, nb02, nb03, nb12, nb13, nb2, nb3, stream);
     }
 }
 
@@ -263,9 +295,7 @@ void ggml_cuda_op_solve_tri(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     const int64_t ne02 = src0->ne[2];
     const int64_t ne03 = src0->ne[3];
 
-    const int max_k_fast = 1024 / ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
-
-    if (n <= MAX_N_FAST && k <= max_k_fast) {
+    if (n <= MAX_N_FAST) {
         solve_tri_f32_cuda((const float *) src0->data, (const float *) src1->data, (float *) dst->data, n, k,
                            src0->ne[2], src0->ne[3], src0->nb[2] / sizeof(float), src0->nb[3] / sizeof(float),
                            src1->nb[2] / sizeof(float), src1->nb[3] / sizeof(float), dst->nb[2] / sizeof(float),
