@@ -9438,31 +9438,31 @@ static void ggml_cl_mul_mat_q6_K_f32_adreno(ggml_backend_t backend, const ggml_t
     cl_image_format  img_fmt;
     cl_image_desc    img_desc;
 
-    cl_mem           ql_img = nullptr;
-    cl_mem           qh_img = nullptr;
-    cl_mem           b_sub_buffer = nullptr;
-    cl_mem           b_img = nullptr;
-
-    // image for ql
-    img_fmt.image_channel_order = CL_R;
-    img_fmt.image_channel_data_type = CL_FLOAT;
-    memset(&img_desc, 0, sizeof(img_desc));
-    img_desc.image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER;
-    img_desc.image_width = ne01 * ne00 / 8;
-    img_desc.buffer = extra0_q6_K->ql;
-    CL_CHECK((ql_img = clCreateImage(context, CL_MEM_READ_ONLY, &img_fmt, &img_desc, NULL, &err), err));
-
-    // image for qh
-    img_fmt.image_channel_order = CL_R;
-    img_fmt.image_channel_data_type = CL_HALF_FLOAT;
-    memset(&img_desc, 0, sizeof(img_desc));
-    img_desc.image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER;
-    img_desc.image_width = ne01 * ne00 / 8;
-    img_desc.buffer = extra0_q6_K->qh;
-    CL_CHECK((qh_img = clCreateImage(context, CL_MEM_READ_ONLY, &img_fmt, &img_desc, NULL, &err), err));
-
     // subbuffer and image for activation
     if (ne1 == 1) {
+        cl_mem ql_img = nullptr;
+        cl_mem qh_img = nullptr;
+        cl_mem b_sub_buffer = nullptr;
+        cl_mem b_img = nullptr;
+
+        // image for ql
+        img_fmt.image_channel_order = CL_R;
+        img_fmt.image_channel_data_type = CL_FLOAT;
+        memset(&img_desc, 0, sizeof(img_desc));
+        img_desc.image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER;
+        img_desc.image_width = ne01 * ne00 / 8;
+        img_desc.buffer = extra0_q6_K->ql;
+        CL_CHECK((ql_img = clCreateImage(context, CL_MEM_READ_ONLY, &img_fmt, &img_desc, NULL, &err), err));
+
+        // image for qh
+        img_fmt.image_channel_order = CL_R;
+        img_fmt.image_channel_data_type = CL_HALF_FLOAT;
+        memset(&img_desc, 0, sizeof(img_desc));
+        img_desc.image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER;
+        img_desc.image_width = ne01 * ne00 / 8;
+        img_desc.buffer = extra0_q6_K->qh;
+        CL_CHECK((qh_img = clCreateImage(context, CL_MEM_READ_ONLY, &img_fmt, &img_desc, NULL, &err), err));
+
         region.origin = offset1;
         region.size = ne00 * ne1 * sizeof(float);
         CL_CHECK((b_sub_buffer = clCreateSubBuffer(extra1->data_device, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
@@ -9491,16 +9491,21 @@ static void ggml_cl_mul_mat_q6_K_f32_adreno(ggml_backend_t backend, const ggml_t
         size_t global_work_size[3] = {(size_t)CEIL_DIV(ne01/2, 64)*64, 4, 1};
 
         backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+
+        CL_CHECK(clReleaseMemObject(ql_img));
+        CL_CHECK(clReleaseMemObject(qh_img));
+        CL_CHECK(clReleaseMemObject(b_sub_buffer));
+        CL_CHECK(clReleaseMemObject(b_img));
     } else {
         // transpose activation
-        cl_mem b_buf;
+        cl_mem b_sub_buf;
         cl_mem b_buf_trans;
         cl_mem b_img;
         cl_mem b_img_trans;
 
         region.origin = extra1->offset;
         region.size = ne00 * ne1 * sizeof(float);
-        CL_CHECK((b_buf = clCreateSubBuffer(
+        CL_CHECK((b_sub_buf = clCreateSubBuffer(
             extra1->data_device,
             0,
             CL_BUFFER_CREATE_TYPE_REGION,
@@ -9511,7 +9516,7 @@ static void ggml_cl_mul_mat_q6_K_f32_adreno(ggml_backend_t backend, const ggml_t
         memset(&img_desc, 0, sizeof(img_desc));
         img_desc.image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER;
         img_desc.image_width = ne00 * ne1 / 4;
-        img_desc.buffer = b_buf;
+        img_desc.buffer = b_sub_buf;
         CL_CHECK((b_img = clCreateImage(
             context,
             CL_MEM_READ_ONLY,
@@ -9590,7 +9595,7 @@ static void ggml_cl_mul_mat_q6_K_f32_adreno(ggml_backend_t backend, const ggml_t
         size_t local_work_size[3] = {1, 128, 1};
         backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 
-        CL_CHECK(clReleaseMemObject(b_buf));
+        CL_CHECK(clReleaseMemObject(b_sub_buf));
         CL_CHECK(clReleaseMemObject(b_img));
         CL_CHECK(clReleaseMemObject(b_buf_trans));
         CL_CHECK(clReleaseMemObject(b_img_trans));
