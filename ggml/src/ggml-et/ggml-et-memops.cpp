@@ -1,5 +1,6 @@
 #include "ggml-et-memops.h"
 #include "ggml-et-kernels.h"
+#include "ggml-et-logger.h"
 #include "ggml-impl.h"
 
 // Kernel parameter structure for memset operation
@@ -15,11 +16,11 @@ bool ggml_et_memset(ggml_backend_et_device_context* dev_ctx,
                     uint8_t value,
                     size_t size) {
     if (!dev_ctx || !dst_ptr || size == 0) {
-        GGML_LOG_ERROR("ET: Invalid memset parameters\n");
+        ET_LOG_ERROR("ET: Invalid memset parameters\n");
         return false;
     }
 
-    GGML_LOG_DEBUG("ET: memset device %d: ptr=%p, value=0x%02x, size=%zu\n",
+    ET_LOG_DEBUG("ET: memset device %d: ptr=%p, value=0x%02x, size=%zu\n",
                   dev_ctx->devidx, dst_ptr, value, size);
 
     // Prepare kernel parameters
@@ -33,10 +34,10 @@ bool ggml_et_memset(ggml_backend_et_device_context* dev_ctx,
     bool success = ggml_et_launch_kernel(dev_ctx, "memops", &params, sizeof(params));
 
     if (!success) {
-        GGML_LOG_ERROR("ET: memset kernel launch failed\n");
+        ET_LOG_ERROR("ET: memset kernel launch failed\n");
         return false;
     }
 
-    GGML_LOG_DEBUG("ET: memset completed successfully\n");
+    ET_LOG_DEBUG("ET: memset completed successfully\n");
     return true;
 }
