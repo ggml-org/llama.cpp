@@ -65,14 +65,18 @@ class MessageAdapter(
         notifyDataSetChanged()
     }
 
-    // Üretim devam ediyorsa true — Markdown parse atlanır, düz metin gösterilir.
-    // Üretim bitince false yapılınca son bind'da Markdown render edilir.
+    // Üretim devam ediyorsa true.
+    // false olunca son bind'da tam Markdown render yapılır.
     var isStreaming: Boolean = false
+
+    // Üretim sırasında Markdown render yapılacak mı?
+    // MainActivity her 20 token'da bunu true yapıp updateLastAssistantMessage çağırır,
+    // sonra tekrar false'a çeker — bu sayede her 20 token'da bir Markwon çalışır.
+    var markdownThisUpdate: Boolean = false
 
     fun updateLastAssistantMessage(text: String, tps: Float? = null): Int {
         if (messages.isNotEmpty() && !messages.last().isUser) {
             messages[messages.size - 1] = ChatMessage(content = text, isUser = false, tokensPerSecond = tps)
-            // expandedPositions'a dokunmuyoruz — toggle durumu korunur
             notifyItemChanged(messages.size - 1)
         } else {
             messages.add(ChatMessage(content = text, isUser = false, tokensPerSecond = tps))
@@ -113,7 +117,6 @@ class MessageAdapter(
                 holder.thinkingSection.visibility = View.VISIBLE
                 holder.thinkingContent.text = parsed.thinkContent
 
-                // Durumu expandedPositions'tan oku — üretim sırasında da korunur
                 val isExpanded = expandedPositions.contains(position)
                 holder.thinkingContent.visibility = if (isExpanded) View.VISIBLE else View.GONE
                 holder.thinkingChevron.text = if (isExpanded) "▴" else "▾"
@@ -139,13 +142,25 @@ class MessageAdapter(
             val displayText = parsed.visibleContent.ifEmpty {
                 if (parsed.thinkContent != null) "" else "…"
             }
-            // Üretim devam ediyorken Markwon parse pahalıdır — düz metin göster.
-            // Üretim bitince (isStreaming=false) tam Markdown render yapılır.
+
             val isLastMessage = position == messages.size - 1
-            if (isStreaming && isLastMessage) {
-                textView.text = displayText
-            } else {
-                markwon?.setMarkdown(textView, displayText) ?: run { textView.text = displayText }
+            when {
+                // Üretim bitti — her zaman tam Markdown render
+                !isStreaming -> {
+                    markwon?.setMarkdown(textView, displayText) ?: run { textView.text = displayText }
+                }
+                // Üretim devam ediyor, bu güncelleme Markdown için işaretlendi (her 20 token'da bir)
+                isLastMessage && markdownThisUpdate -> {
+                    markwon?.setMarkdown(textView, displayText) ?: run { textView.text = displayText }
+                }
+                // Üretim devam ediyor, normal güncelleme — düz metin (hızlı)
+                isLastMessage -> {
+                    textView.text = displayText
+                }
+                // Eski mesajlar — her zaman Markdown
+                else -> {
+                    markwon?.setMarkdown(textView, displayText) ?: run { textView.text = displayText }
+                }
             }
             textView.setTextIsSelectable(true)
 
