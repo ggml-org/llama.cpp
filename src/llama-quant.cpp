@@ -456,7 +456,14 @@ static ggml_type llama_tensor_get_type(
                     const ggml_tensor * tensor,
                       const ggml_type   default_type
 ) {
+    // if quantization not allowed, return the current type
+    if (!tensor_allows_quantization(params, qs->model.arch, tensor)) {
+        fprintf(stderr, "\n---\n// if quantization not allowed, return the current type (%s)\n---\n", ggml_type_name(tensor->type)); fflush(stderr);
+        return tensor->type;
+    }
+
     ggml_type new_type = default_type;
+
     // get more optimal quantization type based on the tensor shape, layer, etc.
     if (!params->pure && ggml_is_quantized(default_type)) {
 
@@ -486,20 +493,20 @@ static ggml_type llama_tensor_get_type(
 
         // incompatible tensor shapes are handled here - fallback to a compatible type
         {
-            bool convert_incompatible_tensor = false;
-
             const int64_t nx = tensor->ne[0];
             const int64_t ny = tensor->ne[1];
             const int64_t qk_k = ggml_blck_size(new_type);
 
-            if (nx % qk_k != 0) {
-                if (!qs->preliminary) {
-                    LLAMA_LOG_WARN("\n%s: tensor cols %" PRId64 " x %" PRId64 " are not divisible by %" PRId64 ", required for %s; ", __func__, nx, ny, qk_k, ggml_type_name(new_type));
-                }
-                convert_incompatible_tensor = true;
-            }
+            if (nx % qk_k != 0) { // this tensor's shape is incompatible with this quant
+                char msg[256];
+                snprintf(msg, sizeof(msg), "\n%s: %s: columns [%" PRId64 ", %" PRId64 "] are not divisible by %" PRId64 ", required for type %s; ",
+                                __func__, tensor->name, nx, ny, qk_k, ggml_type_name(new_type));
 
-            if (convert_incompatible_tensor) {
+                if (!qs->preliminary) {
+                    LLAMA_LOG_WARN("%s", msg);
+                    ++qs->n_fallback;
+                }
+
                 switch (new_type) {
                     case GGML_TYPE_TQ1_0:
                     case GGML_TYPE_TQ2_0:  new_type = GGML_TYPE_Q4_0; break;  // TODO: use a symmetric type instead
@@ -516,13 +523,9 @@ static ggml_type llama_tensor_get_type(
                     case GGML_TYPE_Q4_K:   new_type = GGML_TYPE_Q5_0;   break;
                     case GGML_TYPE_Q5_K:   new_type = GGML_TYPE_Q5_1;   break;
                     case GGML_TYPE_Q6_K:   new_type = GGML_TYPE_Q8_0;   break;
-                    default: throw std::runtime_error("unsupported tensor size");
-                }
-                if (tensor->ne[0] % ggml_blck_size(new_type) != 0) {
-                    new_type = GGML_TYPE_F16;
-                }
-                if (!qs->preliminary) {
-                    ++qs->n_fallback;
+                    default:
+                        new_type = GGML_TYPE_F16;
+                        LLAMA_LOG_WARN("%s", msg);
                 }
             }
         }
