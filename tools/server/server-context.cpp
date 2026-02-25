@@ -1448,7 +1448,7 @@ private:
         if (slots_debug) {
             slot.debug_generated_text = slot.generated_text;
         }
-
+        
         // in stream mode, content and tokens are already in last partial chunk
         if (slot.task->params.stream) {
             res->content     = "";
@@ -2287,10 +2287,8 @@ private:
 
                             // the largest pos_min required for a checkpoint to be useful
                             const auto pos_min_thold = std::max(0, n_past - n_swa);
-
-                            // note: disallow with mtmd contexts for now
-                            //       https://github.com/ggml-org/llama.cpp/issues/17043
-                            if (!mctx && n_past > 0 && n_past < slot.prompt.n_tokens()) {
+                            
+                            if (n_past > 0 && n_past < slot.prompt.n_tokens()) {
                                 const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx), slot.id);
                                 if (pos_min == -1) {
                                     SLT_ERR(slot, "n_past = %d, slot.prompt.tokens.size() = %d, seq_id = %d, pos_min = %d\n", n_past, (int) slot.prompt.tokens.size(), slot.id, pos_min);
@@ -2341,8 +2339,7 @@ private:
                                 }
 
                                 if (pos_min > pos_min_thold) {
-                                    // TODO: support can be added in the future when corresponding vision models get released
-                                    GGML_ASSERT(!slot.prompt.tokens.has_mtmd);
+                                    
 
                                     SLT_WRN(slot, "n_past = %d, slot.prompt.tokens.size() = %d, seq_id = %d, pos_min = %d, n_swa = %d\n", n_past, (int) slot.prompt.tokens.size(), slot.id, pos_min, n_swa);
 
@@ -2402,10 +2399,15 @@ private:
                             SLT_WRN(slot, "n_past was set to %d\n", n_past);
                         }
 
-                        slot.n_prompt_tokens_cache     = n_past;
                         slot.n_prompt_tokens_processed = 0;
-
-                        slot.prompt.tokens.keep_first(n_past);
+                        if (slot.prompt.tokens.has_mtmd) {
+                            const int n_tokens_keep = (int)slot.prompt.tokens.tokens_up_to_pos(n_past);
+                            slot.n_prompt_tokens_cache = n_tokens_keep;
+                            slot.prompt.tokens.keep_first(n_tokens_keep);
+                        } else {
+                            slot.n_prompt_tokens_cache = n_past;
+                            slot.prompt.tokens.keep_first(n_past);
+                        }
 
                         // send initial 0% progress update if needed
                         // this is to signal the client that the request has started processing
@@ -2427,14 +2429,46 @@ private:
                     SLT_INF(slot, "n_tokens = %d, memory_seq_rm [%d, end)\n", slot.prompt.n_tokens(), p0);
 
                     if (!llama_memory_seq_rm(llama_get_memory(ctx), slot.id, p0, -1)) {
-                        SLT_WRN(slot, "failed to truncate tokens with position >= %d - clearing the memory\n", p0);
+                        
+                        bool recovered = false;
 
-                        slot.prompt_clear(true);
+                        if (!slot.prompt.checkpoints.empty()) {
+                            for (auto it = slot.prompt.checkpoints.rbegin(); it != slot.prompt.checkpoints.rend(); ++it) {
+                                if (std::max(it->pos_min, it->pos_max) >= p0) {
+                                    continue;
+                                }
+                                
+                                const llama_pos checkpoint_pos = std::max(it->pos_min, it->pos_max);
+                                llama_memory_seq_rm(llama_get_memory(ctx), slot.id, checkpoint_pos, -1);
 
-                        // there is no common part left
-                        slot.n_prompt_tokens_cache = 0;
+                                const size_t checkpoint_size = it->data.size();
+                                const size_t n = llama_state_seq_set_data_ext(ctx, it->data.data(), checkpoint_size, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+
+                                if (n == checkpoint_size) {
+                                    const int n_past_new = (int)slot.prompt.tokens.tokens_up_to_pos(checkpoint_pos);
+
+                                    SLT_WRN(slot, "recovered recurrent state from checkpoint (pos_min = %d, pos_max = %d, n_tokens = %d), n_past: %d -> %d\n",
+                                            it->pos_min, it->pos_max, it->n_tokens_cached, slot.prompt.n_tokens(), n_past_new);
+
+                                    slot.prompt.tokens.keep_first(n_past_new);
+                                    slot.n_prompt_tokens_cache = n_past_new;
+                                    recovered = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (!recovered) {
+                            SLT_WRN(slot, "failed to recover recurrent state - clearing the memory%s\n", "");
+
+                            llama_memory_seq_rm(llama_get_memory(ctx), slot.id, -1, -1);
+
+                            auto saved_checkpoints = std::move(slot.prompt.checkpoints);
+                            slot.prompt_clear(true);
+                            slot.n_prompt_tokens_cache = 0;
+                            slot.prompt.checkpoints = std::move(saved_checkpoints);
+                        }
                     }
-
                     // check if we should process the image
                     if (slot.prompt.n_tokens() < slot.task->n_tokens() && input_tokens[slot.prompt.n_tokens()] == LLAMA_TOKEN_NULL) {
                         // process the image
@@ -2563,9 +2597,10 @@ private:
                             const size_t checkpoint_size = llama_state_seq_get_size_ext(ctx, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
 
                             auto & cur = slot.prompt.checkpoints.emplace_back(server_prompt_checkpoint{
-                                /*.pos_min = */ pos_min,
-                                /*.pos_max = */ pos_max,
-                                /*.data    = */ std::vector<uint8_t>(checkpoint_size),
+                                /*.pos_min          = */ pos_min,
+                                /*.pos_max          = */ pos_max,
+                                /*.n_tokens_cached  = */ slot.prompt.n_tokens(),
+                                /*.data             = */ std::vector<uint8_t>(checkpoint_size),
                             });
 
                             llama_state_seq_get_data_ext(ctx, cur.data.data(), checkpoint_size, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
@@ -2911,9 +2946,6 @@ server_context_meta server_context::get_meta() const {
         /* fim_pre_token          */ llama_vocab_fim_pre(impl->vocab),
         /* fim_sub_token          */ llama_vocab_fim_suf(impl->vocab),
         /* fim_mid_token          */ llama_vocab_fim_mid(impl->vocab),
-        /* fim_pad_token          */ llama_vocab_fim_pad(impl->vocab),
-        /* fim_rep_token          */ llama_vocab_fim_rep(impl->vocab),
-        /* fim_sep_token          */ llama_vocab_fim_sep(impl->vocab),
 
         /* model_vocab_type       */ llama_vocab_type(impl->vocab),
         /* model_vocab_n_tokens   */ llama_vocab_n_tokens(impl->vocab),

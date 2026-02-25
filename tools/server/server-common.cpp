@@ -246,6 +246,38 @@ llama_pos server_tokens::pos_next() const {
     return res;
 }
 
+size_t server_tokens::tokens_up_to_pos(llama_pos max_pos) const {
+    if (!has_mtmd) {
+        return std::min((size_t)(max_pos + 1), tokens.size());
+    }
+
+    size_t idx = 0;
+    llama_pos current_pos = 0;
+
+    while (idx < tokens.size()) {
+        auto media_it = map_idx_to_media.find(idx);
+        if (media_it != map_idx_to_media.end()) {
+            const auto & chunk = media_it->second;
+            const llama_pos n_pos = mtmd_input_chunk_get_n_pos(chunk.get());
+            const size_t   n_tok = mtmd_input_chunk_get_n_tokens(chunk.get());
+
+            if (current_pos + n_pos > max_pos + 1) {
+                break;
+            }
+            current_pos += n_pos;
+            idx += n_tok;
+        } else {
+            if (current_pos > max_pos) {
+                break;
+            }
+            current_pos++;
+            idx++;
+        }
+    }
+
+    return idx;
+}
+
 std::string server_tokens::str() const {
     std::ostringstream oss;
     oss << "tokens: ";
