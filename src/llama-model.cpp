@@ -175,7 +175,9 @@ static llama_rope_scaling_type llama_rope_scaling_type_from_string(const std::st
 }
 
 // checks if the weight tensor can be used with the specified buffer type and device
-static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w, ggml_op op, ggml_backend_buffer_type_t buft, ggml_backend_dev_t dev) {
+static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w,
+                                  ggml_op op, ggml_backend_buffer_type_t buft, ggml_backend_dev_t dev,
+                                  int64_t n_parallel) {
     GGML_ASSERT(w != nullptr);
 
     if (op == GGML_OP_NONE) {
@@ -203,7 +205,7 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
             } break;
         case GGML_OP_MUL_MAT:
             {
-                ggml_tensor * b = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, w->ne[0], 512, w->ne[2], w->ne[3]);
+                ggml_tensor * b = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, w->ne[0], 512, n_parallel, w->ne[3]);
                 op_tensor = ggml_mul_mat(ctx, w, b);
             } break;
         case GGML_OP_MUL_MAT_ID:
@@ -315,12 +317,12 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
 using buft_list_t = std::vector<std::pair<ggml_backend_dev_t, ggml_backend_buffer_type_t>>;
 
 // find the first buffer type in the list that can use the tensor
-static ggml_backend_buffer_type_t select_weight_buft(const llama_hparams & hparams, ggml_tensor * tensor, ggml_op op, const buft_list_t & buft_list) {
+static ggml_backend_buffer_type_t select_weight_buft(const llama_hparams & hparams, ggml_tensor * tensor, ggml_op op, const buft_list_t & buft_list, int64_t n_parallel) {
     GGML_ASSERT(!buft_list.empty());
     for (const auto & cur : buft_list) {
         ggml_backend_dev_t cur_dev = cur.first;
         ggml_backend_buffer_type_t cur_buft = cur.second;
-        if (weight_buft_supported(hparams, tensor, op, cur_buft, cur_dev)) {
+        if (weight_buft_supported(hparams, tensor, op, cur_buft, cur_dev, n_parallel)) {
             return cur_buft;
         }
     }
@@ -2914,7 +2916,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     if (std::regex_search(tensor_name, pattern)) {
                         if (overrides->buft == ggml_backend_cpu_buffer_type()) {
                             // when overriding to a CPU buffer, consider the extra buffer types
-                            buft = select_weight_buft(hparams, t_meta, op, pimpl->cpu_buft_list);
+                            buft = select_weight_buft(hparams, t_meta, op, pimpl->cpu_buft_list, params.n_parallel);
                         } else {
                             buft = overrides->buft;
                         }
@@ -2929,7 +2931,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             }
 
             if (!buft) {
-                buft = select_weight_buft(hparams, t_meta, op, *buft_list);
+                buft = select_weight_buft(hparams, t_meta, op, *buft_list, params.n_parallel);
                 if (!buft) {
                     throw std::runtime_error(format("failed to find a compatible buffer type for tensor %s", tn.str().c_str()));
                 }
@@ -8842,6 +8844,7 @@ llama_model_params llama_model_default_params() {
         /*.split_mode                  =*/ LLAMA_SPLIT_MODE_LAYER,
         /*.main_gpu                    =*/ 0,
         /*.tensor_split                =*/ nullptr,
+        /*.n_parallel                  =*/ 1,
         /*.progress_callback           =*/ nullptr,
         /*.progress_callback_user_data =*/ nullptr,
         /*.kv_overrides                =*/ nullptr,
