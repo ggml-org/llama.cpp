@@ -44,10 +44,22 @@ struct quantization_state_impl {
     bool has_output  = false; // used to figure out if a model shares tok_embd with the output weight
     bool preliminary = true;  // if this flag is true, we are in the preliminary loop, and we skip certain operations, like incrementing counters
 
+    // tensor type override patterns
+    std::vector<std::pair<std::regex, ggml_type>> tensor_type_patterns;
+
     quantization_state_impl(const llama_model & model, const llama_model_quantize_params * params)
         : model(model)
         , params(params)
-        {}
+    {
+        // compile regex patterns once - they are expensive, and used twice
+        if (params->tensor_types) {
+            const auto & tensor_types =
+                *static_cast<const std::vector<tensor_quantization> *>(params->tensor_types);
+            for (const auto & [tname, qtype] : tensor_types) {
+                tensor_type_patterns.emplace_back(std::regex(tname), qtype);
+            }
+        }
+    }
 };
 
 static void zeros(std::ofstream & file, size_t n) {
@@ -535,16 +547,16 @@ static ggml_type llama_tensor_get_type(
 
         // if the user provided tensor types - use those
         bool manual = false;
-        if (params->tensor_types) {
-            const std::vector<tensor_quantization> & tensor_types = *static_cast<const std::vector<tensor_quantization> *>(params->tensor_types);
+        if (!qs->tensor_type_patterns.empty()) {
             const std::string tensor_name(tensor->name);
-            for (const auto & [tname, qtype] : tensor_types) {
-                if (std::regex pattern(tname); std::regex_search(tensor_name, pattern)) {
-                    if  (qtype != new_type) {
-                        if (!qs->preliminary) { // only show this during actual quantization
-                            LLAMA_LOG_WARN("(manual override: %s -> %s) ", ggml_type_name(new_type), ggml_type_name(qtype));
+            for (const auto & [pattern, qtype] : qs->tensor_type_patterns) {
+                if (std::regex_search(tensor_name, pattern)) {
+                    if (qtype != new_type) {
+                        if (!qs->preliminary) {
+                            LLAMA_LOG_WARN("(manual override: %s -> %s) ",
+                                           ggml_type_name(new_type), ggml_type_name(qtype));
                         }
-                        new_type = qtype; // if two or more types are specified for the same tensor, the last match wins
+                        new_type = qtype;
                         manual = true;
                         break;
                     }
