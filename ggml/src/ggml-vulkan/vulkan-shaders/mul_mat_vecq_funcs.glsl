@@ -113,7 +113,7 @@ FLOAT_TYPE mul_q8_1(const int32_t q_sum, const float da, const vec2 dsb, const i
 #endif
 
 #if defined(DATA_A_TQ2_0)
-#include "tq_utils.comp"
+#include "tq_utils.glsl"
 
 i32vec2 repack(uint ib, uint iqs) {
     const int t00 = tq2_dequantize(ib, iqs + 0);
@@ -139,7 +139,7 @@ ACC_TYPE mul_q8_1(const int32_t q_sum, const float da, const vec2 dsb, const int
 #endif
 
 #if defined(DATA_A_TQ1_0)
-#include "tq_utils.comp"
+#include "tq_utils.glsl"
 
 i32vec2 repack(uint ib, uint iqs) {
     const int t00 = tq1_dequantize(ib, iqs + 0);

@@ -1,5 +1,5 @@
 #if defined(DATA_A_TQ2_0) || defined(DATA_A_TQ1_0)
-#include "tq_utils.comp"
+#include "tq_utils.glsl"
 #endif
 
 void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uint idx_m, const uint block, const uint end_k) {

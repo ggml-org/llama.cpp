@@ -422,7 +422,7 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
 #endif
 
 #if defined(DATA_A_TQ2_0)
-#include "tq_utils.comp"
+#include "tq_utils.glsl"
 
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     return vec2(tq2_dequantize(ib + a_offset, iqs), tq2_dequantize(ib + a_offset, iqs + 1));
@@ -438,7 +438,7 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
 #endif
 
 #if defined(DATA_A_TQ1_0)
-#include "tq_utils.comp"
+#include "tq_utils.glsl"
 
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     return vec2(tq1_dequantize(ib + a_offset, iqs), tq1_dequantize(ib + a_offset, iqs + 1));
