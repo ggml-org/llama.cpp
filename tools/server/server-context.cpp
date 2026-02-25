@@ -995,9 +995,6 @@ private:
             // don't update the cache if the slot's context is empty
             update_cache = update_cache && tokens.size() > 0;
 
-            // TODO: mtmd does not support prompt cache
-            update_cache = update_cache && (ret->mctx == nullptr);
-
             if (update_cache) {
                 SRV_WRN("%s", "updating prompt cache\n");
 
