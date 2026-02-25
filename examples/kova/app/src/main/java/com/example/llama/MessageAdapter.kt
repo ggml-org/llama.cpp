@@ -65,13 +65,8 @@ class MessageAdapter(
         notifyDataSetChanged()
     }
 
-    // Üretim devam ediyorsa true.
-    // false olunca son bind'da tam Markdown render yapılır.
+    // Geriye dönük uyumluluk için bırakıldı — artık kullanılmıyor.
     var isStreaming: Boolean = false
-
-    // Üretim sırasında Markdown render yapılacak mı?
-    // MainActivity her 20 token'da bunu true yapıp updateLastAssistantMessage çağırır,
-    // sonra tekrar false'a çeker — bu sayede her 20 token'da bir Markwon çalışır.
     var markdownThisUpdate: Boolean = false
 
     fun updateLastAssistantMessage(text: String, tps: Float? = null): Int {
@@ -144,24 +139,8 @@ class MessageAdapter(
             }
 
             val isLastMessage = position == messages.size - 1
-            when {
-                // Üretim bitti — her zaman tam Markdown render
-                !isStreaming -> {
-                    markwon?.setMarkdown(textView, displayText) ?: run { textView.text = displayText }
-                }
-                // Üretim devam ediyor, bu güncelleme Markdown için işaretlendi (her 20 token'da bir)
-                isLastMessage && markdownThisUpdate -> {
-                    markwon?.setMarkdown(textView, displayText) ?: run { textView.text = displayText }
-                }
-                // Üretim devam ediyor, normal güncelleme — düz metin (hızlı)
-                isLastMessage -> {
-                    textView.text = displayText
-                }
-                // Eski mesajlar — her zaman Markdown
-                else -> {
-                    markwon?.setMarkdown(textView, displayText) ?: run { textView.text = displayText }
-                }
-            }
+            // Her durumda Markdown render — üretim sırasında da, bitince de.
+            markwon?.setMarkdown(textView, displayText) ?: run { textView.text = displayText }
             textView.setTextIsSelectable(true)
 
             // --- t/s göstergesi ---
