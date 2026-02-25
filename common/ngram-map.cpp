@@ -231,7 +231,7 @@ void common_ngram_map_draft(common_ngram_map & map,
         GGML_ABORT("%s: cur_len exceeds UINT32_MAX: %zu", __func__, cur_len);
     }
 
-    if (map.idx_last_check  > cur_len) {
+    if (map.idx_last_check > cur_len) {
         // Should not happen because of common_ngram_map_begin().
         GGML_ABORT("%s: map.idx_last_check > cur_len: %zu > %zu", __func__, map.idx_last_check, cur_len);
     }
@@ -386,7 +386,7 @@ void common_ngram_map_draft(common_ngram_map & map,
         LOG_DBG("%s: key_idx = %zu, key_offset = %zu, key_num = %d, draft.size = %zu\n", __func__,
                 curr_key.key_idx, key_offset, curr_key.key_num, draft.size());
 
-        map.last_draft_created   = false;
+        map.last_draft_created   = true;
         map.last_draft_key_idx   = key_offset;
         map.last_draft_value_idx = 0; // value 0 is used for simple mode
         return;

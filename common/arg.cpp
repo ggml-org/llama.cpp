@@ -3448,6 +3448,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
+        {"--spec-use-checkpoints"}, "[on|off|auto]",
+        string_format("use checkpoints to rewind token history in recurrent models ('on', 'off', or 'auto', default: %s)",
+                        params.speculative.use_checkpoints ? "on" : "off"),
+        [](common_params & params, const std::string & value) {
+            if (is_truthy(value) || is_autoy(value)) {
+                params.speculative.use_checkpoints = true;
+            } else if (is_falsey(value)) {
+                params.speculative.use_checkpoints = false;
+            } else {
+                throw std::invalid_argument("invalid value for --spec-use-checkpoints");
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"-ctkd", "--cache-type-k-draft"}, "TYPE",
         string_format(
             "KV cache data type for K for the draft model\n"
