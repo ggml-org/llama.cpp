@@ -14,6 +14,18 @@ export interface ModelOption {
 	modalities?: ModelModalities;
 	details?: ApiModelDetails['details'];
 	meta?: ApiModelDataEntry['meta'];
+	parsedId?: ParsedModelId;
+}
+
+export interface ParsedModelId {
+	raw: string;
+	orgName: string | null;
+	modelName: string | null;
+	params: string | null;
+	activatedParams: string | null;
+	format: string | null;
+	quantization: string | null;
+	tags: string[];
 }
 
 /**
