@@ -114,7 +114,7 @@ static int gen_model(const char * path_model) {
     std::mt19937 gen(rd());
 
     llama_model_params params = llama_model_default_params();
-    llama_model_ptr model(llama_model_init(metadata.get(), set_tensor_data, &gen, params));
+    llama_model_ptr model(llama_model_init_from_user(metadata.get(), set_tensor_data, &gen, params));
     llama_model_save_to_file(model.get(), path_model);
 
     return 0;

@@ -1,5 +1,6 @@
 #include "llama-model-loader.h"
 
+#include "ggml-alloc.h"
 #include "ggml.h"
 #include "gguf.h"
 #include "llama-hparams.h"
@@ -1032,37 +1033,7 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         return it->second.get();
     };
 
-    if (files.empty()) {
-        llm_tensor_info info;
-        try {
-            info = llm_tensor_info_for(tn.tensor);
-        } catch (const std::out_of_range & e) {
-            throw std::runtime_error(format("missing tensor info mapping for %s", tn.str().c_str()));
-        }
-        const buft_list_t * buft_list;
-        switch (info.layer) {
-            case LLM_TENSOR_LAYER_INPUT:
-                buft_list = buft_list_input;
-                break;
-            case LLM_TENSOR_LAYER_OUTPUT:
-                buft_list = buft_list_output;
-                break;
-            case LLM_TENSOR_LAYER_REPEATING:
-                buft_list = buft_list_layer;
-                break;
-            default:
-                GGML_ABORT("fatal error");
-        }
-        ggml_backend_buffer_type_t buft = buft_list->at(0).second;
-        ggml_context * ctx = ctx_for_buft(buft);
-        ggml_tensor * ret = ggml_new_tensor(ctx, GGML_TYPE_F32, ne.size(), std::data(ne));
-        std::string name = tn;
-        ggml_set_name(ret, name.c_str());
-        return ret;
-    }
-
-    ggml_tensor * t_meta = get_tensor_meta(tn.str().c_str());
-
+    auto buft_for_tensor = [&](ggml_tensor * t_meta) -> ggml_backend_buffer_type_t {
     if (!t_meta) {
         if (flags & TENSOR_NOT_REQUIRED) {
             return nullptr;
@@ -1187,6 +1158,34 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         }
     }
 
+        return buft;
+    };
+
+    if (files.empty()) {
+        constexpr ggml_type type = GGML_TYPE_F32; // TODO make configurable
+
+        ggml_tensor t_meta;
+        memset(&t_meta, 0, sizeof(ggml_tensor));
+        t_meta.type = type;
+        for (size_t dim = 0; dim < GGML_MAX_DIMS; dim++) {
+            t_meta.ne[dim] = dim < ne.size() ? ne.begin()[dim] : 1;
+            t_meta.nb[dim] = dim == 0 ? ggml_type_size(type) : t_meta.ne[dim-1]*t_meta.nb[dim-1];
+        }
+        ggml_set_name(&t_meta, tn.str().c_str());
+
+        ggml_backend_buffer_type_t buft = buft_for_tensor(&t_meta);
+        GGML_ASSERT(buft != nullptr);
+        ggml_context * ctx = ctx_for_buft(buft);
+        ggml_tensor * ret = ggml_dup_tensor(ctx, &t_meta);
+        ggml_set_name(ret, tn.str().c_str());
+        return ret;
+    }
+
+    ggml_tensor * t_meta = get_tensor_meta(tn.str().c_str());
+    ggml_backend_buffer_type_t buft = buft_for_tensor(t_meta);
+    if (buft == nullptr) {
+        return nullptr; // return type is ggml_tensor *
+    }
     ggml_context * ctx = ctx_for_buft(buft);
 
     // if duplicated, check if the original tensor was allocated in the same buffer type context and avoid creating a new one
@@ -1197,9 +1196,8 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         }
     }
 
-    const std::string name = tn;
-    LLAMA_LOG_DEBUG("%s: loading tensor %s\n", __func__, name.c_str());
-    const struct ggml_tensor * cur = check_tensor_dims(name, ne, !(flags & TENSOR_NOT_REQUIRED));
+    LLAMA_LOG_DEBUG("%s: loading tensor %s\n", __func__, tn.str().c_str());
+    const struct ggml_tensor * cur = check_tensor_dims(tn.str(), ne, !(flags & TENSOR_NOT_REQUIRED));
 
     if (cur == NULL) {
         return NULL;

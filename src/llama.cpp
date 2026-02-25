@@ -1027,7 +1027,7 @@ static struct llama_model * llama_model_load_from_file_impl(
     return model;
 }
 
-struct llama_model * llama_model_init(
+struct llama_model * llama_model_init_from_user(
         struct gguf_context * metadata,
         llama_model_set_tensor_data_t set_tensor_data,
         void * set_tensor_data_ud,
@@ -1035,6 +1035,8 @@ struct llama_model * llama_model_init(
     GGML_ASSERT(metadata != nullptr);
     std::string path_model;
     std::vector<std::string> splits = {};
+    params.use_mmap = false;
+    params.use_extra_bufts = false;
     return llama_model_load_from_file_impl(metadata, set_tensor_data, set_tensor_data_ud, path_model, splits, params);
 }
 // deprecated
