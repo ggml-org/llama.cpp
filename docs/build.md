@@ -806,14 +806,14 @@ git switch dev_backend_openvino
 - **Linux:**
     ```bash
     source /opt/intel/openvino/setupvars.sh
-    cmake -B build/ReleaseOV -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_OPENVINO=ON -DGGML_CPU_REPACK=OFF
+    cmake -B build/ReleaseOV -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_OPENVINO=ON
     cmake --build build/ReleaseOV --parallel
     ```
 
 - **Windows:**
     ```cmd
     "C:\Program Files (x86)\Intel\openvino_2026.0.1\setupvars.bat"
-    cmake -B build\ReleaseOV -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_OPENVINO=ON -DGGML_CPU_REPACK=OFF -DLLAMA_CURL=OFF -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake
+    cmake -B build\ReleaseOV -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_OPENVINO=ON -DLLAMA_CURL=OFF -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake
     cmake --build build\ReleaseOV --parallel
     ```
 
