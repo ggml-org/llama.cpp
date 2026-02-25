@@ -62,6 +62,7 @@ llama_context::llama_context(
     cparams.cb_eval           = params.cb_eval;
     cparams.cb_eval_user_data = params.cb_eval_user_data;
 
+    cparams.n_sampling_outputs_max = params.n_sampling_outputs_max;
     // Initialize backend samplers here so they are part of the sampling graph
     // before the reserve passes run later in this function. This avoids a later
     // re-reserve when graph nodes change.
@@ -1947,14 +1948,29 @@ void llama_context::output_reorder() {
 //
 
 uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
+    uint32_t res;
     if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_KIMI_LINEAR || model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE) {
-        return std::max<uint32_t>(n_tokens * 40, 32u * model.n_tensors());
+        res = std::max<uint32_t>(n_tokens * 40, 32u * model.n_tensors());
+    } else {
+        res = std::max<uint32_t>(1024u, 8u*model.n_tensors());
+        for (const auto & lora : model.loras) {
+            res += lora->get_n_nodes();
+        }
     }
-    uint32_t res = std::max<uint32_t>(1024u, 8u*model.n_tensors());
-    for (const auto & lora : model.loras) {
-        res += lora->get_n_nodes();
+
+    // Account for backend sampling with multiple outputs per sequence.
+    uint32_t sampling_nodes = 0;
+    if (!sampling.samplers.empty()) {
+        const uint32_t tensors_per_output   = 50;
+        const uint32_t sampling_outputs     = std::min<uint32_t>(n_tokens, cparams.n_sampling_outputs_max);
+
+        // Account for worst case (all sequences could have backend samplers).
+        const uint32_t max_samplers         = cparams.n_seq_max;
+
+        sampling_nodes = tensors_per_output * sampling_outputs * max_samplers;
     }
-    return res;
+
+    return res + sampling_nodes;
 }
 
 llm_graph_result * llama_context::get_gf_res_reserve() const {
@@ -2795,6 +2811,7 @@ llama_context_params llama_context_default_params() {
         /*.kv_unified                  =*/ false,
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
+        /*.n_sampling_outputs_max      =*/ 32,
     };
 
     return result;

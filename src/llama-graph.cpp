@@ -2599,6 +2599,10 @@ void llm_graph_context::build_sampling() const {
     // this is important in order to minimize graph reallocations
     ggml_tensor * logits_t = ggml_pad(ctx0, res->t_logits, 0, 1, 0, 0);
 
+    // During graph reservation, n_outputs can be very large (for example 512 for worst-case PP).
+    // We cap it to a user-configurable maximum since typical multi output scenarios use far fewer.
+    const uint32_t max_outputs = std::min<uint32_t>(n_outputs, cparams.n_sampling_outputs_max);
+
     for (const auto & [seq_id, sampler] : samplers) {
         const auto row_it = seq_to_logit_rows.find(seq_id);
 
