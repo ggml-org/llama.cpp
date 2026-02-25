@@ -448,6 +448,8 @@ class MainActivity : AppCompatActivity() {
     private fun stopGeneration() {
         generationJob?.cancel()
         generationJob = null
+        // Not: sendMessageContent finally bloğu CancellationException sonrasında da çalışır,
+        // dolayısıyla fullResponse doluysa DB'ye otomatik kaydedilir.
         isGenerating = false
         updateFabIcon()
         generationService?.onGenerationCancelled()
@@ -1108,6 +1110,10 @@ class MainActivity : AppCompatActivity() {
                         tokenUpdateCounter++
                         if (tokenUpdateCounter % 20 == 0) generationService?.onTokenUpdate(fullResponse)
                     }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Kullanıcı durdurdu — fullResponse doluysa finally bloğu DB'ye kaydeder
+                log("Kova", "Üretim kullanıcı tarafından durduruldu. ${fullResponse.length} karakter üretildi.")
+                throw e  // Coroutine sisteminin düzgün kapanması için rethrow
             } catch (e: Exception) {
                 messageAdapter.updateLastAssistantMessage(
                     if (fullResponse.isEmpty()) "[Hata: ${e.message}]" else fullResponse
