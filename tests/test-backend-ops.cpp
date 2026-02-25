@@ -424,10 +424,6 @@ static std::string var_to_str(ggml_scale_mode mode) {
     return str;
 }
 
-static std::string var_to_str(ggml_op op) {
-    return ggml_op_name(op);
-}
-
 #define VAR_TO_STR(x) (#x "=" + var_to_str(x))
 
 #define VARS_TO_STR1(a) VAR_TO_STR(a)
@@ -6648,7 +6644,7 @@ struct test_generic_op : public test_case {
     const std::vector<input_tensor> sources;
 
     std::string vars() override {
-        return VARS_TO_STR5(op, type, ne, op_params, sources);
+        return VARS_TO_STR4(type, ne, op_params, sources);
     }
 
     test_generic_op(ggml_op op, ggml_type type, std::array<int64_t, 4> ne,
@@ -6748,7 +6744,7 @@ struct test_generic_op : public test_case {
                 continue;
             }
 
-            if ((t->type == GGML_TYPE_I32 || t->type == GGML_TYPE_I64) && !ggml_is_view_op(t->op)) {
+            if (t->type == GGML_TYPE_I32 || t->type == GGML_TYPE_I64) {
                 if (op == GGML_OP_GET_ROWS || op == GGML_OP_GET_ROWS_BACK) {
                     const int64_t num_rows = sources[0].ne[1];
                     const int64_t nels = ggml_nelements(t);
