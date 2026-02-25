@@ -2,8 +2,8 @@
 > ## gfx906 Custom Changes + Benchmarks
 > Canonical tracker for this fork. Update this block whenever custom patches or benchmark results change.
 >
-> Last updated: `2026-02-25 22:00 UTC`  
-> Branch head: `217c6eb9`  
+> Last updated: `2026-02-25 22:03 UTC`  
+> Tracking branch: `gfx906`  
 > Base reference: `origin/master @ a96a1120`
 >
 > Status legend:
@@ -11,9 +11,15 @@
 > - `submitted upstream (llama.cpp #N)` = opened in `ggml-org/llama.cpp` and pending
 > - `not upstreamed` = no PR yet
 >
-> | ID | Change | Scope | Upstream State | Benchmarks |
-> | --- | --- | --- | --- | --- |
-> | GFX906-001 | Fast mmap GPU loading path: staged pinned host ring, async uploads, parallel mmap context loading, and no `MAP_POPULATE` for GPU offload. Includes `LLAMA_LOAD_N_BUFFERS` and `LLAMA_LOAD_BUFFER_MB` tuning knobs. | `src/llama-model.cpp`, `src/llama-model-loader.cpp`, `src/llama-model-loader.h` | `not upstreamed` | Qwen3.5-122B-A10B Q4_K_XL, 4x MI50, full context: baseline mmap `17379.03 ms`; PR default `7808.37 ms` (`-55.1%`); PR tuned (`8x32`) `7645.37 ms` (`-56.0%`); prior direct-io `11445.16 ms` |
+> ### Entries
+> **GFX906-001: Fast mmap GPU loading path**  
+> Scope: `src/llama-model.cpp`, `src/llama-model-loader.cpp`, `src/llama-model-loader.h`  
+> Upstream state: `not upstreamed`  
+> Benchmarks (Qwen3.5-122B-A10B Q4_K_XL, 4x MI50, full context):
+> - Baseline mmap: `17379.03 ms`
+> - Fork default (`4x64MB`): `7808.37 ms` (`-55.1%`)
+> - Fork tuned (`8x32MB`): `7645.37 ms` (`-56.0%`)
+> - Prior direct-io baseline: `11445.16 ms`
 
 # llama.cpp
 
