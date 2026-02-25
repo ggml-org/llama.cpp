@@ -54,9 +54,8 @@ static size_t ggml_backend_remoting_buffer_type_get_alloc_size(ggml_backend_buff
                                                                const ggml_tensor *        tensor) {
     virtgpu * gpu = BUFT_TO_GPU(buft);
 
-    if (tensor->buffer == NULL
-        || !tensor->buffer->context
-        || !buft->device->iface.supports_buft(buft->device, tensor->buffer->buft)) {
+    if (tensor->buffer == NULL || !tensor->buffer->context ||
+        !buft->device->iface.supports_buft(buft->device, tensor->buffer->buft)) {
         return ggml_nbytes(tensor);
     }
 

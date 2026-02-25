@@ -7,7 +7,7 @@
 
 #include <cstdint>
 
-static uint32_t validate_graph_operation(size_t cgraph_size, uint32_t shmem_res_id, const char* operation) {
+static uint32_t validate_graph_operation(size_t cgraph_size, uint32_t shmem_res_id, const char * operation) {
     if (cgraph_size == 0) {
         GGML_LOG_ERROR(GGML_VIRTGPU_BCK "%s: Zero-size computation graph\n", operation);
         return 1;
@@ -61,8 +61,8 @@ uint32_t backend_backend_graph_compute(apir_encoder * enc, apir_decoder * dec, v
     }
 
     if (cgraph->n_nodes < 0 || cgraph->n_leafs < 0) {
-        GGML_LOG_ERROR(GGML_VIRTGPU_BCK "%s: Invalid negative node/leaf count: nodes=%d leafs=%d\n",
-                      __func__, cgraph->n_nodes, cgraph->n_leafs);
+        GGML_LOG_ERROR(GGML_VIRTGPU_BCK "%s: Invalid negative node/leaf count: nodes=%d leafs=%d\n", __func__,
+                       cgraph->n_nodes, cgraph->n_leafs);
         return 1;
     }
 
@@ -73,8 +73,8 @@ uint32_t backend_backend_graph_compute(apir_encoder * enc, apir_decoder * dec, v
         if (dev->iface.supports_op(dev, op)) {
             continue;
         }
-        GGML_LOG_ERROR(GGML_VIRTGPU_BCK "%s: Graph node %d (%s) not supported by the backend\n",
-                       __func__, idx, ggml_op_desc(op));
+        GGML_LOG_ERROR(GGML_VIRTGPU_BCK "%s: Graph node %d (%s) not supported by the backend\n", __func__, idx,
+                       ggml_op_desc(op));
 
         status = GGML_STATUS_ABORTED;
         apir_encode_ggml_status(enc, &status);

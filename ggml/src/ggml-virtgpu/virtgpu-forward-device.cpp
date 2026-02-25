@@ -26,7 +26,7 @@ char * apir_device_get_name(virtgpu * gpu) {
     REMOTE_CALL(gpu, encoder, decoder, ret);
 
     const size_t string_size = apir_decode_array_size_unchecked(decoder);
-    char            * string = (char *) apir_decoder_alloc_array(sizeof(char), string_size);
+    char *       string      = (char *) apir_decoder_alloc_array(sizeof(char), string_size);
     if (!string) {
         GGML_LOG_ERROR(GGML_VIRTGPU "%s: Could not allocate the device name buffer\n", __func__);
         return NULL;

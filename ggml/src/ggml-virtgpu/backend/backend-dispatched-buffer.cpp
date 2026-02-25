@@ -6,11 +6,10 @@
 
 #include <cstdint>
 
-static uint32_t validate_buffer_operation(size_t offset, size_t size, const char* operation) {
+static uint32_t validate_buffer_operation(size_t offset, size_t size, const char * operation) {
     // Only check for critical integer overflow - no arbitrary size limits
     if (offset > SIZE_MAX - size) {
-        GGML_LOG_ERROR(GGML_VIRTGPU_BCK "%s: Integer overflow in offset+size: %zu + %zu\n",
-                      operation, offset, size);
+        GGML_LOG_ERROR(GGML_VIRTGPU_BCK "%s: Integer overflow in offset+size: %zu + %zu\n", operation, offset, size);
         return 1;
     }
 
