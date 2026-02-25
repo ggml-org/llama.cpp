@@ -18,6 +18,14 @@
 #define GGUF_MAX_STRING_LENGTH  (1024*1024*1024)
 #define GGUF_MAX_ARRAY_ELEMENTS (1024*1024*1024)
 
+#ifdef _WIN32
+#    define gguf_ftell _ftelli64
+#    define gguf_fseek _fseeki64
+#else
+#    define gguf_ftell ftello
+#    define gguf_fseek fseeko
+#endif
+
 template <typename T>
 struct type_to_gguf_type;
 
@@ -319,22 +327,22 @@ struct gguf_reader {
 
     // remaining bytes in the file
     uint64_t nbytes_remain() const {
-        const long cur = ftell(file);
+        const int64_t cur = gguf_ftell(file);
         if (cur < 0) {
             return 0;
         }
-        if (fseek(file, 0, SEEK_END) != 0) {
-            fseek(file, cur, SEEK_SET);
+        if (gguf_fseek(file, 0, SEEK_END) != 0) {
+            gguf_fseek(file, cur, SEEK_SET);
 
             return 0;
         }
-        const long end = ftell(file);
+        const int64_t end = gguf_ftell(file);
         if (end < 0) {
-            fseek(file, cur, SEEK_SET);
+            gguf_fseek(file, cur, SEEK_SET);
 
             return 0;
         }
-        fseek(file, cur, SEEK_SET);
+        gguf_fseek(file, cur, SEEK_SET);
         return static_cast<uint64_t>(end - cur);
     }
 };
@@ -671,14 +679,14 @@ struct gguf_context * gguf_init_from_file_impl(FILE * file, struct gguf_init_par
     GGML_ASSERT(int64_t(ctx->info.size()) == n_tensors);
 
     // we require the data section to be aligned, so take into account any padding
-    if (fseek(file, GGML_PAD(ftell(file), ctx->alignment), SEEK_SET) != 0) {
+    if (gguf_fseek(file, GGML_PAD(gguf_ftell(file), ctx->alignment), SEEK_SET) != 0) {
         GGML_LOG_ERROR("%s: failed to seek to beginning of data section\n", __func__);
         gguf_free(ctx);
         return nullptr;
     }
 
     // store the current file offset - this is where the data section starts
-    ctx->offset = ftell(file);
+    ctx->offset = gguf_ftell(file);
 
     // compute the total size of the data section, taking into account the alignment
     {
