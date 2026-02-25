@@ -17,5 +17,6 @@ data class DbMessage(
     val conversationId: String,
     val role: String,
     val content: String,
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    val tps: Float? = null  // Token/saniye — sadece assistant mesajlarında dolu
 )
