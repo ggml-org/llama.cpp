@@ -660,7 +660,7 @@ static size_t llama_tensor_quantize_impl(enum ggml_type new_type, const float * 
     return new_size;
 }
 
-// quantize a single tensor, handling expert slicing and work buffer management
+// quantize a single tensor, handling expert parallelism and work buffer management
 static size_t llama_tensor_quantize(
                 const ggml_tensor * tensor,
                         ggml_type   new_type,
@@ -688,16 +688,20 @@ static size_t llama_tensor_quantize(
 
     const int64_t ne_0_x_1  = tensor->ne[0] * tensor->ne[1];
     const int64_t n_experts = tensor->ne[2];
+    const int64_t nchunk = (ne_0_x_1 + chunk_size - 1) / chunk_size;
 
-    // parallelize across experts instead of within them, if possible
+    // enough chunks to feed all threads?
+    const bool expert_parallel = n_experts >= nthread && nthread > 1 && nchunk < nthread;
+
+    // parallelize across experts instead of within them, if it would be more efficient
     //
     // this launches threads once rather than n_experts times,
     // which avoids massive thread creation overhead for
     // MoE models (which can be very large)
-    if (n_experts >= nthread && nthread > 1) {
+    if (expert_parallel) {
         std::mutex mutex;
         std::atomic<int64_t> next_expert{0};
-        size_t    total_size = 0;
+        size_t    new_size = 0;
         bool      valid      = true;
 
         auto compute = [&]() {
@@ -710,10 +714,9 @@ static size_t llama_tensor_quantize(
                 }
 
                 const float * f32_data_expert = f32_data + expert * ne_0_x_1;
-                void        * new_data_expert = (char *)new_data
-                    + ggml_row_size(new_type, n_per_row) * expert * nrows;
-                const float * imatrix_expert  = imatrix
-                    ? imatrix + expert * n_per_row : nullptr;
+                void        * new_data_expert = (char *)new_data + ggml_row_size(new_type, n_per_row)
+                                                                 * expert * nrows;
+                const float * imatrix_expert  = imatrix ? imatrix + expert * n_per_row : nullptr;
 
                 // quantize this entire expert single-threaded
                 size_t expert_size = ggml_quantize_chunk(
@@ -732,40 +735,41 @@ static size_t llama_tensor_quantize(
 
             // accumulate local result
             std::lock_guard<std::mutex> lock(mutex);
-            total_size += local_size;
+            new_size += local_size;
         };
 
         for (int i = 0; i < nthread - 1; ++i) {
             workers.emplace_back(compute);
         }
         compute(); // main thread participates too
-        for (auto & w : workers) { w.join(); }
+        for (auto & w : workers) {
+            w.join();
+        }
         workers.clear();
-
         if (!valid) {
             throw std::runtime_error("quantized data validation failed");
         }
-        return total_size;
+
+        return new_size;
+    } else {
+        // parallelize within each expert (original behaviour)
+        const int64_t nthread_use = nthread > 1
+            ? std::max((int64_t)1, std::min((int64_t)nthread, nchunk))
+            : 1;
+
+        size_t new_size = 0;
+        for (int64_t i03 = 0; i03 < n_experts; ++i03) {
+            const float * f32_data_03 = f32_data + i03 * ne_0_x_1;
+            void        * new_data_03 = (char *)new_data + ggml_row_size(new_type, n_per_row) * i03 * nrows;
+            const float * imatrix_03  = imatrix ? imatrix + i03 * n_per_row : nullptr;
+
+            new_size += llama_tensor_quantize_impl(
+                new_type, f32_data_03, new_data_03, chunk_size,
+                nrows, n_per_row, imatrix_03, workers, nthread_use);
+        }
+
+        return new_size;
     }
-
-    // fallback: few experts (or single-threaded) — parallelize within each expert (original behavior)
-    const int64_t nchunk = (ne_0_x_1 + chunk_size - 1)/chunk_size;
-    const int64_t nthread_use = nthread > 1
-        ? std::max((int64_t)1, std::min((int64_t)nthread, nchunk))
-        : 1;
-
-    size_t new_size = 0;
-    for (int64_t i03 = 0; i03 < n_experts; ++i03) {
-        const float * f32_data_03 = f32_data + i03 * ne_0_x_1;
-        void        * new_data_03 = (char *)new_data + ggml_row_size(new_type, n_per_row) * i03 * nrows;
-        const float * imatrix_03  = imatrix ? imatrix + i03 * n_per_row : nullptr;
-
-        new_size += llama_tensor_quantize_impl(
-            new_type, f32_data_03, new_data_03, chunk_size,
-            nrows, n_per_row, imatrix_03, workers, nthread_use);
-    }
-
-    return new_size;
 }
 
 // does this tensor require importance matrix data?
