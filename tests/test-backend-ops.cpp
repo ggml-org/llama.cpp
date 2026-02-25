@@ -6659,9 +6659,21 @@ struct test_generic_op : public test_case {
         std::array<ggml_tensor *, GGML_MAX_SRC> source_tensors;
         for (size_t i = 0; i < source_count; ++i) {
             const input_tensor& src = sources[i];
-            bool has_nb = src.nb[0] != 0;
 
-            if (has_nb) {
+            // Check if the exported strides differ from default contiguous layout.
+            bool needs_view = false;
+            if (src.nb[0] != 0) {
+                const size_t default_nb0 = ggml_type_size(src.type);
+                const size_t default_nb1 = default_nb0 * (src.ne[0] / ggml_blck_size(src.type));
+                const size_t default_nb2 = default_nb1 * src.ne[1];
+                const size_t default_nb3 = default_nb2 * src.ne[2];
+                needs_view = (src.nb[0] != default_nb0 ||
+                              src.nb[1] != default_nb1 ||
+                              src.nb[2] != default_nb2 ||
+                              src.nb[3] != default_nb3);
+            }
+
+            if (needs_view) {
                 // Compute the total buffer size using the same method as ggml_nbytes
                 size_t total_size;
                 const size_t blck_size = ggml_blck_size(src.type);
@@ -6732,6 +6744,9 @@ struct test_generic_op : public test_case {
     void initialize_tensors(ggml_context * ctx) override {
         ggml_tensor * out = ggml_get_tensor(ctx, "out");
 
+        std::random_device rd;
+        std::default_random_engine rng(rd());
+
         for (size_t i = 0; i < sources.size() && i < GGML_MAX_SRC; i++) {
             ggml_tensor * t = out->src[i];
             if (!t) {
@@ -6749,8 +6764,9 @@ struct test_generic_op : public test_case {
                     const int64_t num_rows = sources[0].ne[1];
                     const int64_t nels = ggml_nelements(t);
                     std::vector<int32_t> data(nels);
+                    std::uniform_int_distribution<int32_t> dist(0, num_rows - 1);
                     for (int64_t i = 0; i < nels; i++) {
-                        data[i] = rand() % num_rows;
+                        data[i] = dist(rng);
                     }
                     ggml_backend_tensor_set(t, data.data(), 0, nels * sizeof(int32_t));
                 } else if (op == GGML_OP_SET_ROWS) {
@@ -6759,14 +6775,13 @@ struct test_generic_op : public test_case {
                     const int mode = op_params[2];
                     const int64_t nels = (mode & GGML_ROPE_TYPE_MROPE) ? ne[2] * 4 : ne[2];
                     std::vector<int32_t> data(nels);
+                    std::uniform_int_distribution<int32_t> dist(0, ne[2] - 1);
                     for (int64_t i = 0; i < nels; i++) {
-                        data[i] = rand() % ne[2];
+                        data[i] = dist(rng);
                     }
                     ggml_backend_tensor_set(t, data.data(), 0, nels * sizeof(int32_t));
                 } else if (op == GGML_OP_MUL_MAT_ID || op == GGML_OP_ADD_ID) {
                     const int64_t n_expert = (op == GGML_OP_MUL_MAT_ID) ? sources[0].ne[2] : sources[1].ne[1];
-                    std::random_device rd;
-                    std::default_random_engine rng(rd());
                     for (int64_t r = 0; r < ggml_nrows(t); r++) {
                         std::vector<int32_t> data(t->ne[0]);
                         for (int32_t i = 0; i < t->ne[0]; i++) {
@@ -6776,8 +6791,6 @@ struct test_generic_op : public test_case {
                         ggml_backend_tensor_set(t, data.data(), r * t->nb[1], t->ne[0] * sizeof(int32_t));
                     }
                 } else if (op == GGML_OP_SSM_SCAN) {
-                    std::random_device rd;
-                    std::default_random_engine rng(rd());
                     for (int64_t r = 0; r < ggml_nrows(t); r++) {
                         std::vector<int32_t> data(t->ne[0]);
                         for (int32_t i = 0; i < t->ne[0]; i++) {
