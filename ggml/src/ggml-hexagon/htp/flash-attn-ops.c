@@ -17,6 +17,9 @@
 #include "htp-msg.h"
 #include "htp-ops.h"
 
+// Must be multiple of 32
+#define FLASH_ATTN_BLOCK_SIZE (32 * 2)
+
 // Dot product of two F16 vectors, accumulating to float
 
 #if __HVX_ARCH__ < 79
@@ -225,8 +228,8 @@ static inline HVX_Vector hvx_dot_f16_f16_aa_rx32(const void * restrict y,
                                                  const size_t n,
                                                  float        s) {
 
-    const size_t nvec = n / VLEN_FP16;                                                       // num full fp16 hvx vectors
-    const size_t nloe = n % VLEN_FP16;                                                       // leftover elements
+    const size_t nvec = n / VLEN_FP16; // num full fp16 hvx vectors
+    const size_t nloe = n % VLEN_FP16; // leftover elements
 
     HVX_Vector   sums;  // initialize at j = 0
     const size_t stride_x_4 = stride_x * 4;
@@ -329,8 +332,6 @@ static inline void hvx_mad_f32_f16_aa_rx2(float * restrict y,
         }
     }
 }
-
-#define FLASH_ATTN_BLOCK_SIZE 64
 
 struct htp_fa_context {
     const struct htp_ops_context * octx;
@@ -550,9 +551,8 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
             // Inner loop processing the block from VTCM
             uint32_t ic = 0;
 
-            // Process in blocks of 32 (VLEN_FP32)
-            static_assert(FLASH_ATTN_BLOCK_SIZE / VLEN_FP32 <= 4, "FLASH_ATTN_BLOCK_SIZE changed, fix HVX_Vector_x4 usage");
-            HVX_Vector_x4 scores_x4;
+            // Process in sub-blocks of 32 (VLEN_FP32)
+            HVX_Vector sb_scores[FLASH_ATTN_BLOCK_SIZE / VLEN_FP32];
             HVX_Vector v_max = hvx_vec_splat_f32(-INFINITY);
             for (uint32_t iv = 0; ic + VLEN_FP32 <= current_block_size; ic += VLEN_FP32, ++iv) {
                 // 1. Compute scores
@@ -575,7 +575,7 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
                     scores = Q6_Vsf_equals_Vqf32(scores);
                 }
 
-                scores_x4.v[iv] = scores;
+                sb_scores[iv] = scores;
                 v_max = hvx_vec_reduce_max2_f32(scores, v_max); // All lanes have block max
             }
 
@@ -590,7 +590,7 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
 
                 HVX_Vector p_sum_vec = hvx_vec_splat_f32(0.0f);
                 for (uint32_t ic2 = 0, iv = 0; ic2 + VLEN_FP32 <= current_block_size; ic2 += VLEN_FP32, ++iv) {
-                    HVX_Vector scores = scores_x4.v[iv];
+                    HVX_Vector scores = sb_scores[iv];
                     HVX_Vector scores_shifted = Q6_Vqf32_vsub_VsfVsf(scores, M_vec);
                     HVX_Vector P = hvx_vec_exp_f32(Q6_Vsf_equals_Vqf32(scores_shifted));
 
