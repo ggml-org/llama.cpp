@@ -6666,7 +6666,6 @@ struct test_generic_op : public test_case {
                     std::vector<input_tensor> sources)
         : op(op), type(type), ne(ne), op_params(op_params), sources(sources) {}
 
-    // Define how a simple GGML compute graph can be constructed for the new GGML op.
     ggml_tensor * build_graph(ggml_context * ctx) override {
         const size_t source_count = std::min(sources.size(), (size_t)GGML_MAX_SRC);
 
@@ -6675,7 +6674,6 @@ struct test_generic_op : public test_case {
             const input_tensor& src = sources[i];
 
             if (is_non_contiguous(src)) {
-                // Compute the total buffer size using the same method as ggml_nbytes
                 size_t total_size;
                 const size_t blck_size = ggml_blck_size(src.type);
                 if (blck_size == 1) {
@@ -6698,6 +6696,8 @@ struct test_generic_op : public test_case {
                 source_tensors[i] = ggml_view_4d(ctx, backing,
                     src.ne[0], src.ne[1], src.ne[2], src.ne[3],
                     src.nb[1], src.nb[2], src.nb[3], 0);
+                // nb[0] does not get set by view_4d, so set it manually
+                source_tensors[i]->nb[0] = src.nb[0];
             } else {
                 source_tensors[i] = ggml_new_tensor_4d(ctx, src.type, src.ne[0], src.ne[1], src.ne[2], src.ne[3]);
             }
