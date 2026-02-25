@@ -1911,6 +1911,23 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             })
             .run();
 
+        // Test with code content (asian unicode chars)
+        tst.test(
+               "<tool_call>\n"
+               "<function=python>\n"
+               "<parameter=code>\n"
+               "格\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({
+                python_tool
+        })
+            .expect_tool_calls({
+                { "python", "{\"code\": \"格\"}", {} },
+            })
+            .run();
+
         // Test with HTML tag content
         tst.test(
                "<tool_call>\n"

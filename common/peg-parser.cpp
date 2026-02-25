@@ -35,7 +35,7 @@ static bool is_hex_digit(const char c) {
 // This is used in common_peg_until_parser and to build a GBNF exclusion grammar
 struct trie {
     struct node {
-        std::map<unsigned char, size_t> children;
+        std::map<uint32_t, size_t> children;  // Use uint32_t to store Unicode codepoints
         bool is_word;
     };
 
