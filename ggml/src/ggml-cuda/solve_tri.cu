@@ -3,7 +3,6 @@
 #include "solve_tri.cuh"
 
 #define MAX_N_FAST 64
-#define MAX_K_FAST 32
 
 static __global__ void get_batch_pointers(const float *  A,
                                           float *        X,
@@ -79,7 +78,7 @@ static void solve_tri_f32_cublas(ggml_backend_cuda_context & ctx,
 }
 
 // ======================
-// Fast Kernel (n <= 64, k <= 32) - Warp-based parallel reduction
+// Fast Kernel (n <= 64, k <= max_k_fast) - Warp-based parallel reduction
 // ======================
 // When ncols_template == 0 the bounds for the loops in this function are not
 // known and can't be unrolled. As we want to keep pragma unroll for all other
@@ -101,6 +100,8 @@ static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
                                           const size_t nb3,
                                           const int    n_arg,
                                           const int    k_arg) {
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+
     const int n = n_template == 0 ? n_arg : n_template;
     const int k = k_template == 0 ? k_arg : k_template;
 
@@ -125,7 +126,7 @@ static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
     const int offset = threadIdx.x + threadIdx.y * blockDim.x;
 
 #pragma unroll
-    for (int i = 0; i < n * n; i += k * WARP_SIZE) {
+    for (int i = 0; i < n * n; i += k * warp_size) {
         const int i0 = i + offset;
         if (i0 < n * n) {
             sA[i0] = A_batch[i0];
@@ -135,9 +136,9 @@ static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
     __syncthreads();
 
     float x_low  = (lane < n) ? B_batch[lane * k + col_idx] : 0.0f;
-    float x_high = (WARP_SIZE + lane < n) ? B_batch[(WARP_SIZE + lane) * k + col_idx] : 0.0f;
+    float x_high = (warp_size + lane < n) ? B_batch[(warp_size + lane) * k + col_idx] : 0.0f;
 
-    const int half      = WARP_SIZE;
+    const int half      = warp_size;
     const int nrows_low = (n < half) ? n : half;
 
 #pragma unroll
@@ -146,7 +147,7 @@ static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
         if (lane < row) {
             sum += sA[row * n + lane] * x_low;
         }
-        sum = warp_reduce_sum(sum);
+        sum = warp_reduce_sum<warp_size>(sum);
 
         if (lane == row) {
             x_low = (x_low - sum) / sA[row * n + row];
@@ -160,7 +161,7 @@ static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
         if (j < row) {
             sum += sA[row * n + j] * x_high;
         }
-        sum = warp_reduce_sum(sum);
+        sum = warp_reduce_sum<warp_size>(sum);
 
         if (lane == row - half) {
             x_high = (x_high - sum) / sA[row * n + row];
@@ -169,7 +170,7 @@ static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
 
 #pragma unroll
     for (int rr = 0; rr < 2; ++rr) {
-        const int row = rr * WARP_SIZE + lane;
+        const int row = rr * warp_size + lane;
         if (row < n) {
             const float val            = (row < half) ? x_low : x_high;
             X_batch[row * k + col_idx] = val;
@@ -195,7 +196,8 @@ static void solve_tri_f32_cuda(const float * A,
                                size_t        nb3,
                                cudaStream_t  stream) {
     const uint3 ne02_fd = init_fastdiv_values((uint32_t) ne02);
-    dim3        threads(WARP_SIZE, k);
+    const int   warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
+    dim3        threads(warp_size, k);
     dim3        grid(ne02 * ne03);
     if (n == 64) {
         switch (k) {
@@ -261,7 +263,9 @@ void ggml_cuda_op_solve_tri(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     const int64_t ne02 = src0->ne[2];
     const int64_t ne03 = src0->ne[3];
 
-    if (n <= MAX_N_FAST && k <= MAX_K_FAST) {
+    const int max_k_fast = 1024 / ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
+
+    if (n <= MAX_N_FAST && k <= max_k_fast) {
         solve_tri_f32_cuda((const float *) src0->data, (const float *) src1->data, (float *) dst->data, n, k,
                            src0->ne[2], src0->ne[3], src0->nb[2] / sizeof(float), src0->nb[3] / sizeof(float),
                            src1->nb[2] / sizeof(float), src1->nb[3] / sizeof(float), dst->nb[2] / sizeof(float),
