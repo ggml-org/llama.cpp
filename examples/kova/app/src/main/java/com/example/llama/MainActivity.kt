@@ -448,8 +448,6 @@ class MainActivity : AppCompatActivity() {
     private fun stopGeneration() {
         generationJob?.cancel()
         generationJob = null
-        // Not: sendMessageContent finally bloğu CancellationException sonrasında da çalışır,
-        // dolayısıyla fullResponse doluysa DB'ye otomatik kaydedilir.
         isGenerating = false
         updateFabIcon()
         generationService?.onGenerationCancelled()
@@ -1074,7 +1072,8 @@ class MainActivity : AppCompatActivity() {
         isGenerating = true
         tokenUpdateCounter = 0
         updateFabIcon()
-        var fullResponse = ""
+        // String birleştirme yerine StringBuilder — her token'da kopya oluşturmaz
+        val responseBuilder = StringBuilder()
         var tokenCount = 0
         var generationStartTime = 0L
 
@@ -1087,6 +1086,7 @@ class MainActivity : AppCompatActivity() {
             var waited = 0
             while (generationService == null && waited < 20) { kotlinx.coroutines.delay(50); waited++ }
             generationService?.onGenerationStarted()
+            messageAdapter.isStreaming = true
 
             try {
                 engine.sendUserPrompt(formattedText, predictLength = contextSize)
@@ -1103,31 +1103,42 @@ class MainActivity : AppCompatActivity() {
                             .replace("<|eot_id|>", "")
                             .replace("<|im_end|>", "")
                         if (tokenCount == 0) generationStartTime = System.currentTimeMillis()
-                        fullResponse += cleaned
+                        responseBuilder.append(cleaned)
                         tokenCount++
-                        val newIndex = messageAdapter.updateLastAssistantMessage(fullResponse)
-                        if (autoScroll) messagesRv.scrollToPosition(newIndex)
                         tokenUpdateCounter++
-                        if (tokenUpdateCounter % 20 == 0) generationService?.onTokenUpdate(fullResponse)
+                        // UI her 4 tokenda bir güncelleniyor — Markwon parse yükünü azaltır.
+                        // Çok sık çağrı main thread'i bloke eder ve token üretimini yavaşlatır.
+                        if (tokenUpdateCounter % 4 == 0) {
+                            val snapshot = responseBuilder.toString()
+                            val newIndex = messageAdapter.updateLastAssistantMessage(snapshot)
+                            if (autoScroll) messagesRv.scrollToPosition(newIndex)
+                        }
+                        if (tokenUpdateCounter % 20 == 0) {
+                            generationService?.onTokenUpdate(responseBuilder.toString())
+                        }
                     }
             } catch (e: kotlinx.coroutines.CancellationException) {
-                // Kullanıcı durdurdu — fullResponse doluysa finally bloğu DB'ye kaydeder
-                log("Kova", "Üretim kullanıcı tarafından durduruldu. ${fullResponse.length} karakter üretildi.")
-                throw e  // Coroutine sisteminin düzgün kapanması için rethrow
+                log("Kova", "Üretim kullanıcı tarafından durduruldu. ${responseBuilder.length} karakter üretildi.")
+                throw e
             } catch (e: Exception) {
+                val current = responseBuilder.toString()
                 messageAdapter.updateLastAssistantMessage(
-                    if (fullResponse.isEmpty()) "[Hata: ${e.message}]" else fullResponse
+                    if (current.isEmpty()) "[Hata: ${e.message}]" else current
                 )
             } finally {
+                val fullResponse = responseBuilder.toString()
                 val elapsedSec = (System.currentTimeMillis() - generationStartTime) / 1000f
                 val tps = if (elapsedSec > 0f && tokenCount > 0) tokenCount / elapsedSec else null
+
+                // Üretim bitti — artık Markdown render edilebilir
+                messageAdapter.isStreaming = false
 
                 if (currentMessages.isNotEmpty() && !currentMessages.last().isUser) {
                     currentMessages[currentMessages.size - 1] = ChatMessage(fullResponse, false, tps)
                 } else {
                     currentMessages.add(ChatMessage(fullResponse, false, tps))
                 }
-                // t/s'i son mesajda göster
+                // Üretim bitince son halini t/s ile birlikte göster (Markdown render dahil)
                 messageAdapter.updateLastAssistantMessage(fullResponse, tps)
                 if (fullResponse.isNotEmpty()) {
                     lifecycleScope.launch(Dispatchers.IO) {
