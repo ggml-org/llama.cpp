@@ -1175,10 +1175,8 @@ jobs:
     runs-on: windows-2022
 
     env:
-      # The ROCm version must correspond to the version used in the HIP SDK.
-      ROCM_VERSION: "6.4.2"
       # Make sure this is in sync with build-cache.yml
-      HIPSDK_INSTALLER_VERSION: "25.Q3"
+      HIPSDK_INSTALLER_VERSION: "26.Q1"
 
     steps:
       - name: Clone
@@ -1188,7 +1186,7 @@ jobs:
       - name: Grab rocWMMA package
         id: grab_rocwmma
         run: |
-          curl -o rocwmma.deb "https://repo.radeon.com/rocm/apt/${{ env.ROCM_VERSION }}/pool/main/r/rocwmma-dev/rocwmma-dev_1.7.0.60402-120~24.04_amd64.deb"
+          curl -o rocwmma.deb "https://repo.radeon.com/rocm/apt/7.2/pool/main/r/rocwmma-dev/rocwmma-dev_2.2.0.70200-43~24.04_amd64.deb"
           7z x rocwmma.deb
           7z x data.tar
 
@@ -1231,7 +1229,7 @@ jobs:
           cmake -G "Unix Makefiles" -B build -S . `
             -DCMAKE_C_COMPILER="${env:HIP_PATH}\bin\clang.exe" `
             -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\bin\clang++.exe" `
-            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/opt/rocm-${{ env.ROCM_VERSION }}/include/" `
+            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/opt/rocm-7.2.0/include/" `
             -DCMAKE_BUILD_TYPE=Release `
             -DLLAMA_BUILD_BORINGSSL=ON `
             -DROCM_DIR="${env:HIP_PATH}" `
