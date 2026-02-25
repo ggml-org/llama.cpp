@@ -23,21 +23,23 @@ typedef uint64_t ApirCommandFlags;
 
 enum ApirLoadLibraryReturnCode {
     APIR_LOAD_LIBRARY_SUCCESS                        = 0,
+    // these error codes are returned by the Virglrenderer APIR component
     APIR_LOAD_LIBRARY_HYPERCALL_INITIALIZATION_ERROR = 1,
     APIR_LOAD_LIBRARY_ALREADY_LOADED                 = 2,
     APIR_LOAD_LIBRARY_ENV_VAR_MISSING                = 3,
     APIR_LOAD_LIBRARY_CANNOT_OPEN                    = 4,
     APIR_LOAD_LIBRARY_SYMBOL_MISSING                 = 5,
-    // anything above this is a APIR backend library initialization return code
+    // any value greater than this is an APIR *backend library* initialization return code
     APIR_LOAD_LIBRARY_INIT_BASE_INDEX                = 6,
 };
 
 enum ApirForwardReturnCode {
     APIR_FORWARD_SUCCESS                = 0,
+    // these error codes are returned by the Virglrenderer APIR component
     APIR_FORWARD_NO_DISPATCH_FCT        = 1,
     APIR_FORWARD_TIMEOUT                = 2,
     APIR_FORWARD_FAILED_TO_SYNC_STREAMS = 3,
-    // anything above this is a APIR backend library forward return code
+    // any value greater than this index an APIR *backend library* forward return code
     APIR_FORWARD_BASE_INDEX             = 4,
 };
 
