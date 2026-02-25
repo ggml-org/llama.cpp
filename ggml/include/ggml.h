@@ -427,7 +427,8 @@ extern "C" {
         // GGML_TYPE_IQ4_NL_4_8 = 37,
         // GGML_TYPE_IQ4_NL_8_8 = 38,
         GGML_TYPE_MXFP4   = 39, // MXFP4 (1 block)
-        GGML_TYPE_COUNT   = 40,
+        GGML_TYPE_Q3_PT  = 40, // 3.875 bpw per-tensor Lloyd-Max, 16-elem affine sub-blocks
+        GGML_TYPE_COUNT   = 41,
     };
 
     // precision
@@ -455,6 +456,7 @@ extern "C" {
         GGML_FTYPE_MOSTLY_IQ2_XXS = 15, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ2_XS  = 16, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ3_XXS = 17, // except 1d tensors
+        GGML_FTYPE_MOSTLY_Q3_PT  = 26, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ1_S   = 18, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ4_NL  = 19, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ3_S   = 20, // except 1d tensors

@@ -1956,6 +1956,10 @@ void ggml_vec_dot_iq3_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 #endif
 }
 
+void ggml_vec_dot_q3_pt_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    ggml_vec_dot_q3_pt_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+}
+
 #if defined(__loongarch_asx)
 static inline __m256i mul_add_epi8(const __m256i x, const __m256i y) {
     const __m256i a = __lasx_xvmulwev_h_b(x, y);

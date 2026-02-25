@@ -5569,6 +5569,7 @@ void ggml_compute_forward_clamp(
         case GGML_TYPE_IQ1_M:
         case GGML_TYPE_IQ4_NL:
         case GGML_TYPE_IQ4_XS:
+        case GGML_TYPE_Q3_PT:
         case GGML_TYPE_IQ3_S:
         case GGML_TYPE_IQ2_S:
         case GGML_TYPE_Q8_K:

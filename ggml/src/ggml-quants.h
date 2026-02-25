@@ -96,6 +96,26 @@ GGML_API size_t quantize_q8_0(const float * GGML_RESTRICT src, void * GGML_RESTR
 
 GGML_API size_t quantize_mxfp4(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 
+GGML_API void quantize_row_q3_pt_ref(const float * GGML_RESTRICT x, block_q3_pt * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_q3_pt(const block_q3_pt * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_q3_pt(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+
+// Q3_PT levels management (per-tensor Lloyd-Max levels in [0,1])
+GGML_API void          iq3kl_set_levels(const float * levels);   // set global levels (quantization)
+GGML_API const float * iq3kl_get_levels(void);
+GGML_API void          iq3kl_free_levels(void);
+
+// Per-tensor levels registry (inference — range-based lookup by data address)
+GGML_API void          iq3kl_register_tensor_levels(const void * data, size_t nbytes, const float * levels);
+GGML_API void          iq3kl_clear_tensor_levels(void);
+GGML_API const float * iq3kl_get_tensor_levels(const void * data_ptr);
+
+// Train 8 Lloyd-Max levels from tensor data via weighted k-means on affine-normalized
+// 16-element sub-block values. Also sets the global levels via iq3kl_set_levels().
+// data: float array [nrow * n_per_row], imatrix: importance weights [n_per_row] or NULL.
+GGML_API void          iq3kl_train_levels(const float * data, int64_t nrow, int64_t n_per_row,
+                                          const float * imatrix, float levels_out[8]);
+
 GGML_API void iq2xs_init_impl(enum ggml_type type);
 GGML_API void iq2xs_free_impl(enum ggml_type type);
 GGML_API void iq3xs_init_impl(int grid_size);

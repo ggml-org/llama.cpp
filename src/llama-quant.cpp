@@ -1,7 +1,9 @@
 #include "llama-quant.h"
+#include "ggml.h"
 #include "llama-impl.h"
 #include "llama-model.h"
 #include "llama-model-loader.h"
+#include "llama.h"
 
 #include <algorithm>
 #include <cmath>
@@ -12,6 +14,13 @@
 #include <regex>
 #include <thread>
 #include <unordered_map>
+
+// Q3_PT levels functions (defined in ggml-quants.c)
+extern "C" {
+    void   iq3kl_train_levels(const float * data, int64_t nrow, int64_t n_per_row,
+                               const float * imatrix, float levels_out[8]);
+    void   iq3kl_set_levels(const float * levels);
+}
 
 // Quantization types. Changes to this struct must be replicated in quantize.cpp
 struct tensor_quantization {
@@ -248,6 +257,9 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             else if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_XXS) {
                 new_type = GGML_TYPE_IQ3_S;
             }
+            else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_PT) {
+                new_type = GGML_TYPE_IQ4_XS;
+            }
             else if (ftype == LLAMA_FTYPE_MOSTLY_TQ1_0 || ftype == LLAMA_FTYPE_MOSTLY_TQ2_0) {
                 new_type = GGML_TYPE_Q4_K;
             }
@@ -285,6 +297,9 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
         }
         else if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_XXS) {
             new_type = qs.model.hparams.n_gqa() >= 4 ? GGML_TYPE_Q4_K : !qs.has_imatrix ? GGML_TYPE_IQ3_S : GGML_TYPE_IQ3_XXS;
+        }
+        else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_PT) {
+            new_type = GGML_TYPE_Q3_PT;
         }
         else if ((ftype == LLAMA_FTYPE_MOSTLY_IQ3_XS || ftype == LLAMA_FTYPE_MOSTLY_IQ3_S) && qs.model.hparams.n_gqa() >= 4) {
             new_type = GGML_TYPE_Q4_K;
@@ -354,6 +369,9 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
         }
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_L) {
             new_type = arch == LLM_ARCH_FALCON ? GGML_TYPE_Q4_K : GGML_TYPE_Q5_K;
+        }
+        else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_PT) {
+            new_type = GGML_TYPE_IQ4_XS;
         }
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q4_K_M) {
             if (arch == LLM_ARCH_FALCON) {
@@ -484,6 +502,7 @@ static bool tensor_type_requires_imatrix(const ggml_tensor * t, const ggml_type 
         dst_type == GGML_TYPE_IQ2_XXS || dst_type == GGML_TYPE_IQ2_XS ||
         dst_type == GGML_TYPE_IQ3_XXS || dst_type == GGML_TYPE_IQ1_S  ||
         dst_type == GGML_TYPE_IQ2_S   || dst_type == GGML_TYPE_IQ1_M  ||
+        dst_type == GGML_TYPE_Q3_PT  ||
         (   // Q2_K_S is the worst k-quant type - only allow it without imatrix for token embeddings
             dst_type == GGML_TYPE_Q2_K && ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S && strcmp(t->name, "token_embd.weight") != 0
         )
@@ -531,6 +550,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         case LLAMA_FTYPE_MOSTLY_IQ4_XS:  default_type = GGML_TYPE_IQ4_XS;  break;
         case LLAMA_FTYPE_MOSTLY_IQ3_S:   default_type = GGML_TYPE_IQ3_S;   break;
         case LLAMA_FTYPE_MOSTLY_IQ3_M:   default_type = GGML_TYPE_IQ3_S;   break;
+        case LLAMA_FTYPE_MOSTLY_Q3_PT:  default_type = GGML_TYPE_Q3_PT;  break;
 
         default: throw std::runtime_error(format("invalid output file type %d\n", ftype));
     }
@@ -747,6 +767,83 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
     const auto tn = LLM_TN(model.arch);
 
+    // Q3_PT two-pass approach: train all per-tensor levels BEFORE opening the output
+    // file, so the levels KV entry is already populated at the time of the metadata placeholder.
+    static const size_t IQ3KL_N_LEVELS = 8;
+    std::vector<float> iq3kl_all_levels;  // indexed by position in tensors[]
+    if (ftype == LLAMA_FTYPE_MOSTLY_Q3_PT && !params->dry_run) {
+        LLAMA_LOG_INFO("%s: Q3_PT pass 1: training per-tensor levels...\n", __func__);
+        iq3kl_all_levels.assign(tensors.size() * IQ3KL_N_LEVELS, 0.0f);
+
+        // Temporary dequant buffer for pass 1 (reuse f32_conv_buf / read_data declared below)
+        std::vector<no_init<uint8_t>> p1_read_data;
+        std::vector<no_init<float>>   p1_f32_buf;
+        std::vector<std::thread>      p1_workers;
+        p1_workers.reserve(nthread);
+
+        for (size_t ti = 0; ti < tensors.size(); ++ti) {
+            ggml_tensor * tensor = tensors[ti]->tensor;
+            const std::string tname = ggml_get_name(tensor);
+
+            // Determine whether this tensor will be Q3_PT (mirror the pass-2 logic)
+            bool quantize = tname.rfind("weight") == tname.size() - 6;
+            quantize &= (ggml_n_dims(tensor) >= 2);
+            quantize &= tname.find("_norm.weight")        == std::string::npos;
+            quantize &= tname.find("ffn_gate_inp.weight") == std::string::npos;
+            if (!quantize) { continue; }
+
+            ggml_type new_type = default_type;
+            if (!params->pure) {
+                new_type = llama_tensor_get_type(qs, new_type, tensor, ftype);
+            }
+            if (new_type != GGML_TYPE_Q3_PT) { continue; }
+
+            // Load tensor data
+            const size_t tsz = ggml_nbytes(tensor);
+            if (!ml.use_mmap) {
+                if (p1_read_data.size() < tsz) { p1_read_data.resize(tsz); }
+                tensor->data = p1_read_data.data();
+            }
+            ml.load_data_for(tensor);
+
+            // Dequantize to f32 if needed
+            const int64_t nelements = ggml_nelements(tensor);
+            float * f32_data;
+            if (tensor->type == GGML_TYPE_F32) {
+                f32_data = (float *) tensor->data;
+            } else {
+                llama_tensor_dequantize_impl(tensor, p1_f32_buf, p1_workers, nelements, nthread);
+                f32_data = (float *) p1_f32_buf.data();
+            }
+
+            // Resolve imatrix
+            const float * imatrix = nullptr;
+            if (imatrix_data) {
+                auto it2 = imatrix_data->find(remap_imatrix(tensor->name, mapped));
+                if (it2 != imatrix_data->end() &&
+                    it2->second.size() == (size_t)tensor->ne[0] * tensor->ne[2]) {
+                    imatrix = it2->second.data();
+                }
+            }
+
+            const int64_t n_per_row = tensor->ne[0];
+            const int64_t nrows     = tensor->ne[1];
+
+            LLAMA_LOG_INFO("%s: Q3_PT levels for [%zu/%zu] %s\n", __func__, ti+1, tensors.size(), tensor->name);
+            iq3kl_train_levels(f32_data, nrows, n_per_row, imatrix,
+                               iq3kl_all_levels.data() + ti * IQ3KL_N_LEVELS);
+        }
+
+        // All levels ready — store in GGUF metadata before the file is opened
+        for (auto & ctx : ctx_outs) {
+            if (ctx) {
+                gguf_set_arr_data(ctx.get(), "q3_pt.levels", GGUF_TYPE_FLOAT32,
+                                  iq3kl_all_levels.data(), iq3kl_all_levels.size());
+            }
+        }
+        LLAMA_LOG_INFO("%s: Q3_PT pass 1 complete.\n", __func__);
+    }
+
     // no output file for --dry-run
     if (!params->dry_run) {
         new_ofstream(0);
@@ -755,6 +852,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     // flag for `--dry-run`, to let the user know if imatrix will be required for a real
     // quantization, as a courtesy
     bool will_require_imatrix = false;
+    size_t tensor_pass2_idx = 0;  // index into tensors[], used for Q3_PT levels lookup
 
     for (const auto * it : tensors) {
         const auto & weight = *it;
@@ -846,7 +944,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             new_type = default_type;
 
             // get more optimal quantization type based on the tensor shape, layer, etc.
-            if (!params->pure && ggml_is_quantized(default_type)) {
+            if (ggml_is_quantized(default_type)) {
                 // if the user provided tensor types - use those
                 bool manual = false;
                 if (params->tensor_types) {
@@ -865,7 +963,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 }
 
                 // if not manual - use the standard logic for choosing the quantization type based on the selected mixture
-                if (!manual) {
+                if (!manual && !params->pure) {
                     new_type = llama_tensor_get_type(qs, new_type, tensor, ftype);
                 }
 
@@ -1012,6 +1110,11 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 const int64_t nchunk = (nelements_matrix + chunk_size - 1)/chunk_size;
                 const int64_t nthread_use = nthread > 1 ? std::max((int64_t)1, std::min((int64_t)nthread, nchunk)) : 1;
 
+                // Q3_PT: set the per-tensor levels (trained in pass 1) as global for quantization
+                if (new_type == GGML_TYPE_Q3_PT) {
+                    iq3kl_set_levels(iq3kl_all_levels.data() + tensor_pass2_idx * IQ3KL_N_LEVELS);
+                }
+
                 // quantize each expert separately since they have different importance matrices
                 new_size = 0;
                 for (int64_t i03 = 0; i03 < tensor->ne[2]; ++i03) {
@@ -1058,6 +1161,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             fout.write((const char *) new_data, new_size);
             zeros(fout, GGML_PAD(new_size, align) - new_size);
         } // no --dry-run
+
+        tensor_pass2_idx++;
     } // iterate over tensors
 
     if (!params->dry_run) {

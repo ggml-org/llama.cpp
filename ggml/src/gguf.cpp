@@ -1327,37 +1327,63 @@ struct gguf_writer_base {
 
         if (kv.is_array) {
             write(GGUF_TYPE_ARRAY);
-            write(kv.get_type());
+            const enum gguf_type elem_type = kv.get_type();
+            write(elem_type);
             write(ne);
+            // Write array element data based on element type
+            switch (elem_type) {
+                case GGUF_TYPE_UINT8:
+                case GGUF_TYPE_INT8:
+                case GGUF_TYPE_UINT16:
+                case GGUF_TYPE_INT16:
+                case GGUF_TYPE_UINT32:
+                case GGUF_TYPE_INT32:
+                case GGUF_TYPE_FLOAT32:
+                case GGUF_TYPE_UINT64:
+                case GGUF_TYPE_INT64:
+                case GGUF_TYPE_FLOAT64: {
+                    // Write raw bytes inline for array data
+                    for (size_t i = 0; i < kv.data.size(); ++i) {
+                        write(kv.data[i]);
+                    }
+                } break;
+                case GGUF_TYPE_BOOL: {
+                    for (size_t i = 0; i < ne; ++i) {
+                        write(kv.get_val<bool>(i));
+                    }
+                } break;
+                case GGUF_TYPE_STRING: {
+                    for (size_t i = 0; i < ne; ++i) {
+                        write(kv.get_val<std::string>(i));
+                    }
+                } break;
+                case GGUF_TYPE_ARRAY:
+                default: GGML_ABORT("invalid array element type");
+            }
         } else {
             write(kv.get_type());
-        }
-
-        switch (kv.get_type()) {
-            case GGUF_TYPE_UINT8:
-            case GGUF_TYPE_INT8:
-            case GGUF_TYPE_UINT16:
-            case GGUF_TYPE_INT16:
-            case GGUF_TYPE_UINT32:
-            case GGUF_TYPE_INT32:
-            case GGUF_TYPE_FLOAT32:
-            case GGUF_TYPE_UINT64:
-            case GGUF_TYPE_INT64:
-            case GGUF_TYPE_FLOAT64: {
-                write(kv.data);
-            } break;
-            case GGUF_TYPE_BOOL: {
-                for (size_t i = 0; i < ne; ++i) {
-                    write(kv.get_val<bool>(i));
-                }
-            } break;
-            case GGUF_TYPE_STRING: {
-                for (size_t i = 0; i < ne; ++i) {
-                    write(kv.get_val<std::string>(i));
-                }
-            } break;
-            case GGUF_TYPE_ARRAY:
-            default: GGML_ABORT("invalid type");
+            switch (kv.get_type()) {
+                case GGUF_TYPE_UINT8:
+                case GGUF_TYPE_INT8:
+                case GGUF_TYPE_UINT16:
+                case GGUF_TYPE_INT16:
+                case GGUF_TYPE_UINT32:
+                case GGUF_TYPE_INT32:
+                case GGUF_TYPE_FLOAT32:
+                case GGUF_TYPE_UINT64:
+                case GGUF_TYPE_INT64:
+                case GGUF_TYPE_FLOAT64: {
+                    write(kv.data);
+                } break;
+                case GGUF_TYPE_BOOL: {
+                    write(kv.get_val<bool>(0));
+                } break;
+                case GGUF_TYPE_STRING: {
+                    write(kv.get_val<std::string>(0));
+                } break;
+                case GGUF_TYPE_ARRAY:
+                default: GGML_ABORT("invalid type");
+            }
         }
     }
 

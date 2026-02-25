@@ -1001,6 +1001,62 @@ void ggml_vec_dot_iq3_s_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
     *s = sumf;
 }
 
+void ggml_vec_dot_q3_pt_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q3_pt * GGML_RESTRICT x = vx;
+    const block_q8_K   * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+    const float * levels = iq3kl_get_tensor_levels(vx);
+    GGML_ASSERT(levels != NULL && "Q3_PT levels not set for tensor");
+
+    float sumf = 0.f;
+    for (int i = 0; i < nb; ++i) {
+        const float xd    = GGML_CPU_FP16_TO_FP32(x[i].d);
+        const float xdmin = GGML_CPU_FP16_TO_FP32(x[i].dmin);
+        const float yd    = y[i].d;
+        const uint8_t * sc = x[i].scales;
+        const uint8_t * qs = x[i].qs;
+        const int8_t  * q8 = y[i].qs;
+
+        float block_sum = 0.f;
+        for (int ib = 0; ib < QK_K/16; ++ib) {
+            // Inline 6-bit unpack for range scale (index ib) and neg_min scale (index ib + QK_K/16)
+            const int sbit0  = ib * 6,              sbyte0 = sbit0 / 8,  soff0 = sbit0 % 8;
+            const int sbit1  = (ib + QK_K/16) * 6,  sbyte1 = sbit1 / 8,  soff1 = sbit1 % 8;
+            uint8_t qrange = (sc[sbyte0] >> soff0) & 0x3F;
+            if (soff0 > 2) { qrange |= (uint8_t)((sc[sbyte0+1] << (8 - soff0)) & 0x3F); }
+            uint8_t qnmin  = (sc[sbyte1] >> soff1) & 0x3F;
+            if (soff1 > 2) { qnmin  |= (uint8_t)((sc[sbyte1+1] << (8 - soff1)) & 0x3F); }
+            const float range   = xd    * (float)qrange;
+            const float sub_min = -xdmin * (float)qnmin;
+
+            float sum_lq = 0.f;
+            for (int j = 0; j < 16; ++j) {
+                // Inline 3-bit unpack
+                const int qk    = ib * 16 + j;
+                const int qbit  = qk * 3;
+                const int qbyte = qbit / 8;
+                const int qoff  = qbit % 8;
+                int q = (qs[qbyte] >> qoff) & 0x7;
+                if (qoff > 5) { q |= (int)((qs[qbyte+1] << (8 - qoff)) & 0x7); }
+                sum_lq += levels[q] * (float)q8[qk];
+            }
+            // min contribution uses precomputed 16-element sum from block_q8_K.bsums
+            block_sum += sum_lq * range + sub_min * (float)y[i].bsums[ib];
+        }
+        sumf += block_sum * yd;
+    }
+    *s = sumf;
+}
+
 void ggml_vec_dot_iq1_s_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
