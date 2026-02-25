@@ -1034,129 +1034,129 @@ struct ggml_tensor * llama_model_loader::create_tensor(
     };
 
     auto buft_for_tensor = [&](ggml_tensor * t_meta) -> ggml_backend_buffer_type_t {
-    if (!t_meta) {
-        if (flags & TENSOR_NOT_REQUIRED) {
+        if (!t_meta) {
+            if (flags & TENSOR_NOT_REQUIRED) {
+                return nullptr;
+            }
+            throw std::runtime_error(format("missing tensor '%s'", tn.str().c_str()));
+        }
+
+        // some models use the token embedding tensor as the output, but since these are used in different layers and with different ops
+        // the tensor is duplicated
+        // to handle this, we check if the tensor is duplicated, and if so, we assume that it is being loaded as the output tensor
+        llm_tensor tn_tensor = tn.tensor;
+        if (tn.tensor == LLM_TENSOR_TOKEN_EMBD && flags & TENSOR_DUPLICATED) {
+            tn_tensor = LLM_TENSOR_OUTPUT;
+        }
+
+        llm_tensor_info info;
+        try {
+            info = llm_tensor_info_for(tn_tensor);
+        } catch (const std::out_of_range & e) {
+            throw std::runtime_error(format("missing tensor info mapping for %s", tn.str().c_str()));
+        }
+
+        // skip unused tensors
+        if (info.op == GGML_OP_NONE || flags & TENSOR_SKIP) {
+            const size_t nbytes = ggml_nbytes(t_meta);
+            LLAMA_LOG_WARN("model has unused tensor %s (size = %zu bytes) -- ignoring\n", tn.str().c_str(), nbytes);
+
+            size_data -= nbytes;
+            n_created++;
+
             return nullptr;
         }
-        throw std::runtime_error(format("missing tensor '%s'", tn.str().c_str()));
-    }
 
-    // some models use the token embedding tensor as the output, but since these are used in different layers and with different ops
-    // the tensor is duplicated
-    // to handle this, we check if the tensor is duplicated, and if so, we assume that it is being loaded as the output tensor
-    llm_tensor tn_tensor = tn.tensor;
-    if (tn.tensor == LLM_TENSOR_TOKEN_EMBD && flags & TENSOR_DUPLICATED) {
-        tn_tensor = LLM_TENSOR_OUTPUT;
-    }
-
-    llm_tensor_info info;
-    try {
-        info = llm_tensor_info_for(tn_tensor);
-    } catch (const std::out_of_range & e) {
-        throw std::runtime_error(format("missing tensor info mapping for %s", tn.str().c_str()));
-    }
-
-    // skip unused tensors
-    if (info.op == GGML_OP_NONE || flags & TENSOR_SKIP) {
-        const size_t nbytes = ggml_nbytes(t_meta);
-        LLAMA_LOG_WARN("model has unused tensor %s (size = %zu bytes) -- ignoring\n", tn.str().c_str(), nbytes);
-
-        size_data -= nbytes;
-        n_created++;
-
-        return nullptr;
-    }
-
-    // tensors with "bias" suffix are always used with GGML_OP_ADD or GGML_OP_ADD_ID
-    ggml_op op;
-    bool bias = tn.suffix != nullptr && strcmp(tn.suffix, "bias") == 0;
-    if (bias) {
-        if (info.op == GGML_OP_MUL_MAT_ID) {
-            op = GGML_OP_ADD_ID;
+        // tensors with "bias" suffix are always used with GGML_OP_ADD or GGML_OP_ADD_ID
+        ggml_op op;
+        bool bias = tn.suffix != nullptr && strcmp(tn.suffix, "bias") == 0;
+        if (bias) {
+            if (info.op == GGML_OP_MUL_MAT_ID) {
+                op = GGML_OP_ADD_ID;
+            } else {
+                op = GGML_OP_ADD;
+            }
         } else {
-            op = GGML_OP_ADD;
+            op = info.op;
         }
-    } else {
-        op = info.op;
-    }
 
-    // sanity checks
-    if (info.layer == LLM_TENSOR_LAYER_INPUT || info.layer == LLM_TENSOR_LAYER_OUTPUT) {
-        if (tn.bid != -1) {
-            GGML_ABORT("input/output layer tensor %s used with a layer number", tn.str().c_str());
-        }
-    } else {
-        if (tn.bid == -1) {
-            GGML_ABORT("repeating layer tensor %s used without a layer number", tn.str().c_str());
-        }
-    }
-
-    // select the buffer type for this tensor
-    const buft_list_t * buft_list;
-    switch (info.layer) {
-        case LLM_TENSOR_LAYER_INPUT:
-            buft_list = buft_list_input;
-            break;
-        case LLM_TENSOR_LAYER_OUTPUT:
-            buft_list = buft_list_output;
-            break;
-        case LLM_TENSOR_LAYER_REPEATING:
-            GGML_ASSERT(buft_list_layer != nullptr);
-            buft_list = buft_list_layer;
-            break;
-        default:
-            GGML_ABORT("invalid layer %d for tensor %s", info.layer, tn.str().c_str());
-    }
-
-    ggml_backend_buffer_type_t buft = nullptr;
-
-    // check overrides
-    if (tensor_buft_overrides) {
-        std::string tensor_name = tn.str();
-        for (const auto * overrides = tensor_buft_overrides; overrides->pattern != nullptr; ++overrides) {
-            std::regex pattern(overrides->pattern);
-            if (std::regex_search(tensor_name, pattern)) {
-                if (overrides->buft == ggml_backend_cpu_buffer_type()) {
-                    // when overriding to a CPU buffer, consider the extra buffer types
-                    buft = select_weight_buft(hparams, t_meta, op, buft_list_cpu);
-                } else {
-                    buft = overrides->buft;
-                }
-
-                LLAMA_LOG_DEBUG("tensor %s (%zu MiB %s) buffer type overridden to %s\n",
-                        tensor_name.c_str(),
-                        ggml_nbytes(t_meta) / 1024 / 1024, ggml_type_name(t_meta->type),
-                        ggml_backend_buft_name(buft));
-                break;
+        // sanity checks
+        if (info.layer == LLM_TENSOR_LAYER_INPUT || info.layer == LLM_TENSOR_LAYER_OUTPUT) {
+            if (tn.bid != -1) {
+                GGML_ABORT("input/output layer tensor %s used with a layer number", tn.str().c_str());
+            }
+        } else {
+            if (tn.bid == -1) {
+                GGML_ABORT("repeating layer tensor %s used without a layer number", tn.str().c_str());
             }
         }
-    }
 
-    if (!buft) {
-        buft = select_weight_buft(hparams, t_meta, op, buft_list);
+        // select the buffer type for this tensor
+        const buft_list_t * buft_list;
+        switch (info.layer) {
+            case LLM_TENSOR_LAYER_INPUT:
+                buft_list = buft_list_input;
+                break;
+            case LLM_TENSOR_LAYER_OUTPUT:
+                buft_list = buft_list_output;
+                break;
+            case LLM_TENSOR_LAYER_REPEATING:
+                GGML_ASSERT(buft_list_layer != nullptr);
+                buft_list = buft_list_layer;
+                break;
+            default:
+                GGML_ABORT("invalid layer %d for tensor %s", info.layer, tn.str().c_str());
+        }
+
+        ggml_backend_buffer_type_t buft = nullptr;
+
+        // check overrides
+        if (tensor_buft_overrides) {
+            std::string tensor_name = tn.str();
+            for (const auto * overrides = tensor_buft_overrides; overrides->pattern != nullptr; ++overrides) {
+                std::regex pattern(overrides->pattern);
+                if (std::regex_search(tensor_name, pattern)) {
+                    if (overrides->buft == ggml_backend_cpu_buffer_type()) {
+                        // when overriding to a CPU buffer, consider the extra buffer types
+                        buft = select_weight_buft(hparams, t_meta, op, buft_list_cpu);
+                    } else {
+                        buft = overrides->buft;
+                    }
+
+                    LLAMA_LOG_DEBUG("tensor %s (%zu MiB %s) buffer type overridden to %s\n",
+                            tensor_name.c_str(),
+                            ggml_nbytes(t_meta) / 1024 / 1024, ggml_type_name(t_meta->type),
+                            ggml_backend_buft_name(buft));
+                    break;
+                }
+            }
+        }
+
         if (!buft) {
-            throw std::runtime_error(format("failed to find a compatible buffer type for tensor %s", tn.str().c_str()));
+            buft = select_weight_buft(hparams, t_meta, op, buft_list);
+            if (!buft) {
+                throw std::runtime_error(format("failed to find a compatible buffer type for tensor %s", tn.str().c_str()));
+            }
         }
-    }
 
-    // avoid using a host buffer when using mmap
-    auto * buft_dev = ggml_backend_buft_get_device(buft);
-    if (use_mmap && buft_dev && buft == ggml_backend_dev_host_buffer_type(buft_dev)) {
-        auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
-        if (!cpu_dev) {
-            throw std::runtime_error("no CPU backend found");
+        // avoid using a host buffer when using mmap
+        auto * buft_dev = ggml_backend_buft_get_device(buft);
+        if (use_mmap && buft_dev && buft == ggml_backend_dev_host_buffer_type(buft_dev)) {
+            auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+            if (!cpu_dev) {
+                throw std::runtime_error("no CPU backend found");
+            }
+            buft = ggml_backend_dev_buffer_type(cpu_dev);
         }
-        buft = ggml_backend_dev_buffer_type(cpu_dev);
-    }
 
-    if (buft != buft_list->front().second) {
-        n_tensors_moved++;
-        if (!first_tensor_moved) {
-            first_tensor_moved = t_meta;
-            first_moved_from_buft = buft_list->front().second;
-            first_moved_to_buft   = buft;
+        if (buft != buft_list->front().second) {
+            n_tensors_moved++;
+            if (!first_tensor_moved) {
+                first_tensor_moved = t_meta;
+                first_moved_from_buft = buft_list->front().second;
+                first_moved_to_buft   = buft;
+            }
         }
-    }
 
         return buft;
     };
