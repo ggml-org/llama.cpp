@@ -370,12 +370,13 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processSystemPrompt(
     const auto *system_prompt = env->GetStringUTFChars(jsystem_prompt, nullptr);
     LOGd("%s: System prompt received: \n%s", __func__, system_prompt);
     std::string formatted_system_prompt(system_prompt);
-    env->ReleaseStringUTFChars(jsystem_prompt, system_prompt);
-
+    // Release öncesinde has_chat_template kontrolü yapılıyor — system_prompt serbest bırakıldıktan
+    // sonra kullanılmaması için chat_add_and_format'a formatted_system_prompt geçiliyor.
     const bool has_chat_template = common_chat_templates_was_explicit(g_chat_templates.get());
     if (has_chat_template) {
-        formatted_system_prompt = chat_add_and_format(ROLE_SYSTEM, system_prompt);
+        formatted_system_prompt = chat_add_and_format(ROLE_SYSTEM, formatted_system_prompt);
     }
+    env->ReleaseStringUTFChars(jsystem_prompt, system_prompt);
 
     const auto system_tokens = common_tokenize(g_context, formatted_system_prompt,
                                                /* add_special= */ false,
