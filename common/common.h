@@ -209,6 +209,8 @@ struct common_params_sampling {
     bool    ignore_eos         = false;
     bool    no_perf            = false;  // disable performance metrics
     bool    timing_per_token   = false;
+    bool    blue_noise         = false;  // use blue noise RNG instead of white noise for dist sampler
+    enum llama_rng_type rng_type = LLAMA_RNG_TYPE_MT19937; // RNG type for dist sampler
 
     uint64_t user_sampling_config = 0; // bitfield to track user-specified samplers
 

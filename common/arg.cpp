@@ -1578,6 +1578,26 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sparam());
     add_opt(common_arg(
+        {"--blue-noise"},
+        "use blue noise RNG for sampling instead of white noise",
+        [](common_params & params) {
+            params.sampling.blue_noise = true;
+        }
+    ).set_sparam());
+    add_opt(common_arg(
+        {"--rng-type"}, "{mt19937,lowbias32}",
+        "RNG type for sampling (default: mt19937)",
+        [](common_params & params, const std::string & value) {
+            if (value == "mt19937") {
+                params.sampling.rng_type = LLAMA_RNG_TYPE_MT19937;
+            } else if (value == "lowbias32") {
+                params.sampling.rng_type = LLAMA_RNG_TYPE_LOWBIAS32;
+            } else {
+                throw std::invalid_argument("invalid value");
+            }
+        }
+    ).set_sparam());
+    add_opt(common_arg(
         {"--temp"}, "N",
         string_format("temperature (default: %.2f)", (double)params.sampling.temp),
         [](common_params & params, const std::string & value) {
