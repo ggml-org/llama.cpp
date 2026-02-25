@@ -1634,7 +1634,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sparam());
     add_opt(common_arg(
-        {"--typical-p", "--typical"}, "N",
+        {"--typical", "--typical-p"}, "N",
         string_format("locally typical sampling, parameter p (default: %.2f, 1.0 = disabled)", (double)params.sampling.typ_p),
         [](common_params & params, const std::string & value) {
             params.sampling.typ_p = std::stof(value);
