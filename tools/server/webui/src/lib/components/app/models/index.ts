@@ -71,3 +71,4 @@ export { default as ModelsSelector } from './ModelsSelector.svelte';
  * ```
  */
 export { default as ModelBadge } from './ModelBadge.svelte';
+export { default as ModelId } from './ModelId.svelte';
