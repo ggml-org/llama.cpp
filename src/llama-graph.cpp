@@ -504,7 +504,6 @@ void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
     const int64_t n_tokens = ubatch->n_tokens;
 
     GGML_ASSERT(ggml_backend_buffer_is_host(cross_kq_mask->buffer));
-    GGML_ASSERT(!ubatch->equal_seqs()); // TODO: use ubatch->n_seqs instead of failing
 
     float * data = (float *) cross_kq_mask->data;
 
@@ -1797,6 +1796,15 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         }
 
         if (kq_b) {
+            if (n_stream > 1) {
+                // kq_b is [n_kv, n_tokens, n_head, 1] but kq is [n_kv, n_tokens/n_stream, n_head, n_stream]
+                // tokens in the ubatch are ordered by stream (all of stream 0 first, then stream 1, etc.)
+                // first split n_tokens into (n_tps, n_stream), then swap n_stream and n_head dims
+                const int64_t n_tps = kq_b->ne[1] / n_stream;
+                kq_b = ggml_reshape_4d(ctx0, kq_b, kq_b->ne[0], n_tps, n_stream, kq_b->ne[2]);
+                kq_b = ggml_permute(ctx0, kq_b, 0, 1, 3, 2);
+                kq_b = ggml_cont(ctx0, kq_b);
+            }
             kq = ggml_add(ctx0, kq, kq_b);
             cb(kq, "kq_plus_kq_b", il);
         }

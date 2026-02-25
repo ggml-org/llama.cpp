@@ -263,6 +263,10 @@ private:
 
     llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
 
+    friend int32_t llama_get_cross_state(const llama_context *, int64_t *, float *, llama_seq_id **, int32_t *, int32_t);
+    friend void    llama_set_cross_state(llama_context *, int64_t, int64_t, const float *, const llama_seq_id * const *, const int32_t *);
+    friend void    llama_clear_cross_state(llama_context *);
+
     std::unique_ptr<llama_memory_i> memory;
 
     // decode output (2-dimensional array: [n_outputs][n_vocab])
