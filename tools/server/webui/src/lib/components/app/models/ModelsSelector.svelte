@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { ChevronDown, Loader2, Package, Power } from '@lucide/svelte';
+	import { ChevronDown, HardDriveDownload, HardDriveUpload, Loader2, Package, Power, PowerOff } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { cn } from '$lib/components/ui/utils';
@@ -16,9 +16,10 @@
 	import { KeyboardKey, ServerModelStatus } from '$lib/enums';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import {
+		ActionIcon,
 		DialogModelInformation,
 		DropdownMenuSearchable,
-		TruncatedText
+		ModelId
 	} from '$lib/components/app';
 	import type { ModelOption } from '$lib/types/models';
 
@@ -93,6 +94,21 @@
 				(option) =>
 					option.model.toLowerCase().includes(term) || option.name?.toLowerCase().includes(term)
 			);
+		})()
+	);
+
+	// Group filteredOptions by orgName, preserving flat indices for keyboard navigation
+	let groupedFilteredOptions = $derived(
+		(() => {
+			const groups = new Map<string, { option: ModelOption; flatIndex: number }[]>();
+			for (let i = 0; i < filteredOptions.length; i++) {
+				const option = filteredOptions[i];
+				const orgName = option.parsedId?.orgName ?? null;
+				const key = orgName ?? '';
+				if (!groups.has(key)) groups.set(key, []);
+				groups.get(key)!.push({ option, flatIndex: i });
+			}
+			return Array.from(groups.entries()).map(([orgName, items]) => ({ orgName, items }));
 		})()
 	);
 
@@ -214,12 +230,13 @@
 
 	function getDisplayOption(): ModelOption | undefined {
 		if (!isRouter) {
-			if (serverModel) {
+			const displayModel = serverModel || currentModel;
+			if (displayModel) {
 				return {
-					id: 'current',
-					model: serverModel,
-					name: serverModel.split('/').pop() || serverModel,
-					capabilities: [] // Empty array for single model mode
+					id: serverModel ? 'current' : 'offline-current',
+					model: displayModel,
+					name: displayModel.split('/').pop() || displayModel,
+					capabilities: []
 				};
 			}
 
@@ -273,7 +290,7 @@
 				style="max-width: min(calc(100cqw - 9rem), 20rem)"
 			>
 				<Package class="h-3.5 w-3.5" />
-				<TruncatedText text={currentModel} class="min-w-0 font-medium" />
+				<ModelId modelId={currentModel} class="min-w-0" />
 			</span>
 		{:else}
 			<p class="text-xs text-muted-foreground">No models available.</p>
@@ -308,10 +325,18 @@
 					>
 						<Package class="h-3.5 w-3.5" />
 
-						<TruncatedText
-							text={selectedOption?.model || 'Select model'}
-							class="min-w-0 font-medium"
-						/>
+						{#if selectedOption}
+							<Tooltip.Root>
+								<Tooltip.Trigger class="min-w-0 overflow-hidden">
+									<ModelId modelId={selectedOption.model} class="min-w-0" />
+								</Tooltip.Trigger>
+								<Tooltip.Content>
+									<p class="font-mono">{selectedOption.model}</p>
+								</Tooltip.Content>
+							</Tooltip.Root>
+						{:else}
+							<span class="min-w-0 font-medium">Select model</span>
+						{/if}
 
 						{#if updating || isLoadingModel}
 							<Loader2 class="h-3 w-3.5 animate-spin" />
@@ -355,12 +380,17 @@
 							{#if filteredOptions.length === 0}
 								<p class="px-4 py-3 text-sm text-muted-foreground">No models found.</p>
 							{/if}
-							{#each filteredOptions as option, index (option.id)}
+						{#each groupedFilteredOptions as group (group.orgName)}
+							{#if group.orgName}
+								<p class="px-2 pt-2 pb-0.5 text-xs font-semibold text-muted-foreground/60 select-none">{group.orgName}</p>
+							{/if}
+							{#each group.items as { option, flatIndex } (option.id)}
 								{@const status = getModelStatus(option.model)}
 								{@const isLoaded = status === ServerModelStatus.LOADED}
 								{@const isLoading = status === ServerModelStatus.LOADING}
 								{@const isSelected = currentModel === option.model || activeId === option.id}
-								{@const isHighlighted = index === highlightedIndex}
+								{@const isHighlighted = flatIndex === highlightedIndex}
+
 
 								<div
 									class={cn(
@@ -375,7 +405,7 @@
 									aria-selected={isSelected || isHighlighted}
 									tabindex="0"
 									onclick={() => handleSelect(option.id)}
-									onmouseenter={() => (highlightedIndex = index)}
+									onmouseenter={() => (highlightedIndex = flatIndex)}
 									onkeydown={(e) => {
 										if (e.key === 'Enter' || e.key === ' ') {
 											e.preventDefault();
@@ -383,13 +413,9 @@
 										}
 									}}
 								>
-									<span
-										class="min-w-0 flex-1 truncate text-left sm:overflow-visible sm:pr-2 sm:text-clip sm:whitespace-nowrap"
-									>
-										{option.model}
-									</span>
+									<ModelId modelId={option.model} class="flex-1" />
 
-									<div class="flex w-6 shrink-0 justify-center">
+									<div class="flex shrink-0 items-center gap-1.5">
 										{#if isLoading}
 											<Tooltip.Root>
 												<Tooltip.Trigger>
@@ -400,34 +426,40 @@
 												</Tooltip.Content>
 											</Tooltip.Root>
 										{:else if isLoaded}
-											<Tooltip.Root>
-												<Tooltip.Trigger>
-													<button
-														type="button"
-														class="relative flex h-4 w-4 items-center justify-center"
-														onclick={(e) => {
-															e.stopPropagation();
-															modelsStore.unloadModel(option.model);
-														}}
-													>
-														<span
-															class="h-2 w-2 rounded-full bg-green-500 transition-opacity group-hover:opacity-0"
-														></span>
-														<Power
-															class="absolute h-4 w-4 text-red-500 opacity-0 transition-opacity group-hover:opacity-100 hover:text-red-600"
-														/>
-													</button>
-												</Tooltip.Trigger>
-												<Tooltip.Content class="z-[9999]">
-													<p>Unload model</p>
-												</Tooltip.Content>
-											</Tooltip.Root>
+											<div class="flex items-center justify-center w-4">
+												<span class="h-2 w-2 rounded-full bg-green-500 group-hover:hidden"></span>
+
+												<!-- svelte-ignore a11y_no_static_element_interactions -->
+												<!-- svelte-ignore a11y_click_events_have_key_events -->
+												<div class="hidden group-hover:flex" onclick={(e) => e.stopPropagation()}>
+													<ActionIcon
+														icon={PowerOff}
+														tooltip="Unload model"
+														class="text-red-500 hover:text-red-600 h-3 w-3"
+														onclick={() => modelsStore.unloadModel(option.model)}
+													/>
+												</div>
+											</div>
 										{:else}
-											<span class="h-2 w-2 rounded-full bg-muted-foreground/50"></span>
+											<div class="flex items-center justify-center w-4">
+												<span class="h-2 w-2 rounded-full bg-muted-foreground/50 group-hover:hidden"></span>
+
+												<!-- svelte-ignore a11y_no_static_element_interactions -->
+												<!-- svelte-ignore a11y_click_events_have_key_events -->
+												<div class="hidden group-hover:flex" onclick={(e) => e.stopPropagation()}>
+													<ActionIcon
+														icon={Power}
+														tooltip="Load model"
+														class="h-3 w-3"
+														onclick={() => modelsStore.loadModel(option.model)}
+													/>
+												</div>
+											</div>
 										{/if}
 									</div>
 								</div>
 							{/each}
+						{/each}
 						</div>
 					</DropdownMenuSearchable>
 				</DropdownMenu.Content>
@@ -451,7 +483,16 @@
 			>
 				<Package class="h-3.5 w-3.5" />
 
-				<TruncatedText text={selectedOption?.model || ''} class="min-w-0 font-medium" />
+				{#if selectedOption}
+					<Tooltip.Root>
+						<Tooltip.Trigger class="min-w-0 overflow-hidden">
+							<ModelId modelId={selectedOption.model} class="min-w-0" />
+						</Tooltip.Trigger>
+						<Tooltip.Content>
+							<p class="font-mono">{selectedOption.model}</p>
+						</Tooltip.Content>
+					</Tooltip.Root>
+				{/if}
 
 				{#if updating}
 					<Loader2 class="h-3 w-3.5 animate-spin" />
