@@ -1049,7 +1049,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                        llama_format_tensor_shape(tensor).c_str(),
                        ggml_type_name(tensor->type));
 
-        ggml_type new_type = target_types[i];
+        ggml_type const new_type = target_types[i];
         bool do_quantize = (new_type != tensor->type);
 
         void * new_data;
@@ -1080,7 +1080,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         } else {
             // no --dry-run, perform quantization
             if (!do_quantize) {
-                new_type = tensor->type;
+                GGML_ASSERT(tensor->type == new_type);
                 new_data = tensor->data;
                 new_size = tensor_size;
                 LLAMA_LOG_INFO("size: %8.2f MiB\n", tensor_size/1024.0/1024.0);
