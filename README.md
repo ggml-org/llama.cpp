@@ -2,9 +2,14 @@
 > ## gfx906 Custom Changes + Benchmarks
 > Canonical tracker for this fork. Update this block whenever custom patches or benchmark results change.
 >
-> Last updated: `2026-02-25 22:03 UTC`  
+> Last updated: `2026-02-25 22:08 UTC`  
 > Tracking branch: `gfx906`  
 > Base reference: `origin/master @ a96a1120`
+>
+> Branch legend:
+> - `master` = staging ground branch; ready-to-upstream work for `ggml-org/llama.cpp`
+> - `gfx906` = finished, stable fork features; changes land here first; never meant to upstream
+> - `fast-load-upstream` = upstream-candidate branch for `GFX906-001`
 >
 > Status legend:
 > - `upstreamed (llama.cpp #N)` = merged in `ggml-org/llama.cpp`
@@ -14,6 +19,8 @@
 > ### Entries
 > **GFX906-001: Fast mmap GPU loading path**  
 > Scope: `src/llama-model.cpp`, `src/llama-model-loader.cpp`, `src/llama-model-loader.h`  
+> Feature branch: `fast-load-upstream`  
+> https://github.com/skyne98/llama.cpp-gfx906/tree/fast-load-upstream  
 > Upstream state: `not upstreamed`  
 > Benchmarks (Qwen3.5-122B-A10B Q4_K_XL, 4x MI50, full context):
 > - Baseline mmap: `17379.03 ms`
