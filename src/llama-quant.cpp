@@ -979,17 +979,23 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
     // pre-allocate work buffers to avoid repeated resizing
     {
-        size_t max_tensor_bytes = 0;
-        size_t max_nelements    = 0;
+        size_t max_tensor_bytes    = 0;
+        size_t max_nelements       = 0;
+        size_t max_nelements_dequant = 0;
         for (const auto * w : weights) {
             max_tensor_bytes = std::max(max_tensor_bytes, ggml_nbytes(w->tensor));
             max_nelements    = std::max(max_nelements,    (size_t)ggml_nelements(w->tensor));
+            if (w->tensor->type != GGML_TYPE_F32) {
+                max_nelements_dequant = std::max(max_nelements_dequant, (size_t)ggml_nelements(w->tensor));
+            }
         }
         if (!ml.use_mmap) {
             read_data.resize(max_tensor_bytes);
         }
         work.resize(max_nelements * 4);
-        f32_conv_buf.resize(max_nelements);
+        if (max_nelements_dequant > 0) {
+            f32_conv_buf.resize(max_nelements_dequant);
+        }
     }
 
     uint16_t n_split = 1;
