@@ -79,6 +79,8 @@
 		return options.some((option) => option.model === currentModel);
 	});
 
+	let isLoadingModel = $state(false);
+
 	let searchTerm = $state('');
 	let highlightedIndex = $state<number>(-1);
 
@@ -187,15 +189,6 @@
 		} else {
 			// Update global selection
 			await modelsStore.selectModelById(option.id);
-
-			// Load the model if not already loaded (router mode)
-			if (isRouter && getModelStatus(option.model) !== ServerModelStatus.LOADED) {
-				try {
-					await modelsStore.loadModel(option.model);
-				} catch (error) {
-					console.error('Failed to load model:', error);
-				}
-			}
 		}
 
 		if (shouldCloseMenu) {
@@ -208,6 +201,14 @@
 				);
 				textarea?.focus();
 			});
+		}
+
+		if (!onModelChange && isRouter && getModelStatus(option.model) !== ServerModelStatus.LOADED) {
+			isLoadingModel = true;
+			modelsStore
+				.loadModel(option.model)
+				.catch((error) => console.error('Failed to load model:', error))
+				.finally(() => (isLoadingModel = false));
 		}
 	}
 
@@ -312,7 +313,7 @@
 							class="min-w-0 font-medium"
 						/>
 
-						{#if updating}
+						{#if updating || isLoadingModel}
 							<Loader2 class="h-3 w-3.5 animate-spin" />
 						{:else}
 							<ChevronDown class="h-3 w-3.5" />
