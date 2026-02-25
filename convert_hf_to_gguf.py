@@ -1149,8 +1149,8 @@ class TextModel(ModelBase):
             # ref: https://huggingface.co/jinaai/jina-embeddings-v2-base-de
             res = "jina-v2-de"
         if chkhsh == "a023e9fdc5a11f034d3ef515b92350e56fb2af1f66c6b6811a4444ea9bf8763d":
-            # ref: https://huggingface.co/jinaai/jina-embeddings-v5-text-nano-retrieval
-            res = "jina-v5-nano-ret"
+            # ref: https://huggingface.co/jinaai/jina-embeddings-v5-text-nano
+            res = "jina-v5-nano"
         if chkhsh == "c136ed14d01c2745d4f60a9596ae66800e2b61fa45643e72436041855ad4089d":
             # ref: https://huggingface.co/abacusai/Smaug-Llama-3-70B-Instruct
             res = "smaug-bpe"
@@ -6128,16 +6128,15 @@ class NeoBert(BertModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("EuroBertModel")
+@ModelBase.register("EuroBertModel", "JinaEmbeddingsV5Model")
 class EuroBertModel(TextModel):
     model_arch = gguf.MODEL_ARCH.EUROBERT
 
     def set_vocab(self):
         # EuroBert uses Llama-style BPE tokenizer
         self._set_vocab_gpt2()
-        # Match HuggingFace tokenizer: no BOS, but add EOS for last-token pooling
+        # Match HuggingFace tokenizer: no BOS
         self.gguf_writer.add_add_bos_token(False)
-        self.gguf_writer.add_add_eos_token(True)
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
