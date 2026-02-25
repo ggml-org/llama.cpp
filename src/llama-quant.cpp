@@ -12,6 +12,7 @@
 #include <regex>
 #include <thread>
 #include <memory>
+#include <atomic>
 #include <unordered_map>
 
 // Quantization types. Changes to this struct must be replicated in quantize.cpp
