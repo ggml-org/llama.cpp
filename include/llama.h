@@ -387,6 +387,7 @@ extern "C" {
         // note: the samplers must be sampler chains (i.e. use llama_sampler_chain_init)
         struct llama_sampler_seq_config * samplers;
         size_t                            n_samplers;
+        uint32_t                          n_sampling_outputs_max;
     };
 
     struct llama_model_tensor_override {
