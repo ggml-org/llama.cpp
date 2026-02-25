@@ -47,8 +47,8 @@ kernel void kernel_gemm_noshuffle_q6_K_f32(
 
         // load 4x elements (ushort) of ql on M, each ushort contains 4 weights
         // 4x ushort correspons to 4 rows on M
-        ushort4 bits4 = vload4(0, ptr_ql + (i/4)*m); // ql packed in 4s
-        uchar4  bits2 = vload4(0, ptr_qh + (i/8)*m); // qh packed in 8s
+        ushort4 bits4 = vload4(0, ptr_ql + (i/4)*m); // ql packed in 4s in ushort
+        uchar4  bits2 = vload4(0, ptr_qh + (i/4)*m); // qh packed in 4s in uchar
 
         // load 4 consecutive scales
         char8 scale_s_8 = as_char8(vload4(0, ptr_s + (i/16/2)*m)); // 1 char scale every 16 elements, packed in 2s
