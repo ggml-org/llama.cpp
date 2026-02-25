@@ -1,11 +1,5 @@
 #include "models.h"
 
-// EuroBert: bidirectional encoder with Llama-style architecture
-// - RoPE positional embeddings
-// - RMSNorm (pre-norm)
-// - SwiGLU FFN with separate gate/up projections
-// - Separate Q/K/V projections (not fused)
-
 llm_build_eurobert::llm_build_eurobert(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v;
 
@@ -15,7 +9,6 @@ llm_build_eurobert::llm_build_eurobert(const llama_model & model, const llm_grap
     ggml_tensor * inpL;
     ggml_tensor * inp_pos = build_inp_pos();
 
-    // construct input embeddings (token only, no type embeddings, no position embeddings - using RoPE)
     inpL = build_inp_embd(model.tok_embd);
     cb(inpL, "inp_embd", -1);
 
@@ -26,7 +19,6 @@ llm_build_eurobert::llm_build_eurobert(const llama_model & model, const llm_grap
     for (int il = 0; il < n_layer; ++il) {
         ggml_tensor * cur = inpL;
 
-        // pre-norm (RMSNorm before attention)
         cur = build_norm(inpL,
                 model.layers[il].attn_norm, NULL,
                 LLM_NORM_RMS, il);
@@ -36,7 +28,6 @@ llm_build_eurobert::llm_build_eurobert(const llama_model & model, const llm_grap
             ggml_tensor * Kcur;
             ggml_tensor * Vcur;
 
-            // self-attention with separate Q/K/V projections (no bias)
             Qcur = build_lora_mm(model.layers[il].wq, cur);
             Kcur = build_lora_mm(model.layers[il].wk, cur);
             Vcur = build_lora_mm(model.layers[il].wv, cur);
@@ -45,7 +36,6 @@ llm_build_eurobert::llm_build_eurobert(const llama_model & model, const llm_grap
             Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
             Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-            // RoPE
             Qcur = ggml_rope_ext(
                     ctx0, Qcur, inp_pos, nullptr,
                     n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
@@ -73,19 +63,16 @@ llm_build_eurobert::llm_build_eurobert(const llama_model & model, const llm_grap
             inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
         }
 
-        // residual connection
         cur = ggml_add(ctx0, cur, inpL);
 
         ggml_tensor * ffn_inp = cur;
         cb(ffn_inp, "ffn_inp", il);
 
-        // pre-norm (RMSNorm before FFN)
         cur = build_norm(ffn_inp,
                 model.layers[il].ffn_norm, NULL,
                 LLM_NORM_RMS, il);
         cb(cur, "ffn_norm", il);
 
-        // SwiGLU feed-forward network with separate gate and up projections
         cur = build_ffn(cur,
                 model.layers[il].ffn_up, NULL, NULL,
                 model.layers[il].ffn_gate, NULL, NULL,
@@ -93,15 +80,12 @@ llm_build_eurobert::llm_build_eurobert(const llama_model & model, const llm_grap
                 NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);
 
-        // residual connection
         cur = ggml_add(ctx0, cur, ffn_inp);
 
-        // input for next layer
         inpL = cur;
     }
     cur = inpL;
 
-    // final output norm (RMSNorm)
     cur = build_norm(cur,
             model.output_norm, NULL,
             LLM_NORM_RMS, -1);

@@ -6133,10 +6133,8 @@ class EuroBertModel(TextModel):
     model_arch = gguf.MODEL_ARCH.EUROBERT
 
     def set_vocab(self):
-        # EuroBert uses Llama-style BPE tokenizer
-        self._set_vocab_gpt2()
-        # Match HuggingFace tokenizer: no BOS
         self.gguf_writer.add_add_bos_token(False)
+        self._set_vocab_gpt2()
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
