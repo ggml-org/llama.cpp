@@ -12,11 +12,9 @@
 #include <filesystem>
 #include <fstream>
 
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
 #include "http.h"
 #define JSON_ASSERT GGML_ASSERT
 #include <nlohmann/json.hpp>
-#endif
 
 // Equivalent of RangeView
 struct gguf_buf_reader {
@@ -282,8 +280,6 @@ static bool write_file(const std::string & path, const std::vector<char> & data)
 }
 
 // HuggingFace file auto-detection and HTTP download
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-
 static std::pair<long, std::vector<char>> gguf_http_get(
         const std::string & url,
         const httplib::Headers & headers = {},
@@ -457,17 +453,10 @@ static std::optional<gguf_remote_model> fetch_or_cached(
     return fetch_and_parse(repo, filename, cache_path);
 }
 
-#endif // CPPHTTPLIB_OPENSSL_SUPPORT
-
 std::optional<gguf_remote_model> gguf_fetch_model_meta(
         const std::string & repo,
         const std::string & quant,
         const std::string & cache_dir) {
-#ifndef CPPHTTPLIB_OPENSSL_SUPPORT
-    (void)repo; (void)quant; (void)cache_dir;
-    fprintf(stderr, "gguf_fetch: HTTPS support not compiled\n");
-    return std::nullopt;
-#else
     std::string cdir = cache_dir.empty() ? get_default_cache_dir() : cache_dir;
     std::string repo_part = sanitize_for_path(repo);
 
@@ -519,5 +508,4 @@ std::optional<gguf_remote_model> gguf_fetch_model_meta(
     }
 
     return model_opt;
-#endif
 }
