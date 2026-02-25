@@ -1799,21 +1799,6 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             })
             .run();
 
-        // single-quote normalization
-        tst.test(
-               "<seed:tool_call>\n"
-               "<function=todo_list>\n"
-               "<parameter=todos>[{'item': 'Check stuff', 'selected': false}, {'item': 'Prepare stuff', 'selected': true}]</parameter>\n"
-               "</function>\n"
-               "</seed:tool_call>")
-            .tools({
-                todo_list
-        })
-            .expect_tool_calls({
-                { "todo_list", "{\"todos\": [{\"item\": \"Check stuff\", \"selected\": false}, {\"item\": \"Prepare stuff\", \"selected\": true}]}", {} },
-            })
-            .run();
-
         // tool call with inside quotes
         tst.test(
                "<seed:tool_call>\n"

@@ -101,13 +101,7 @@ static std::vector<std::function<void(const common_chat_template & tmpl, autopar
               analysis.tools.format.per_call_end   = "<｜tool▁call▁end｜>";
               analysis.tools.function.close        = "```";
           }
-      },
-      // Seed - Python dicts
-      [](const common_chat_template & tmpl, autoparser & analysis) -> void {
-          if (tmpl.src.find("<seed:bos>") != std::string::npos) {
-              analysis.tools.format.uses_python_dicts = true;
-          }
-      },
+      }
     });
 
 // Common JSON structures
