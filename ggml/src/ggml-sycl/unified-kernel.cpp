@@ -8263,6 +8263,8 @@ class micro_graph_rope_tag;
 class micro_graph_strided_copy_tag;
 class micro_graph_silu_mul_elem_tag;
 class micro_graph_softmax_tag;
+class micro_graph_set_rows_tag;
+class micro_graph_attention_tag;
 
 // ADD: output[i] = src0[i] + src1[i]
 // Reads pointers from ops table at runtime for graph replay correctness.
@@ -8623,6 +8625,339 @@ static void micro_submit_softmax(sycl::queue & q, const DeviceOperation * d_ops,
     });
 }
 
+// SET_ROWS: scatter-write elements from src0 into dst at rows indexed by src1.
+// Metadata (SetRowsMeta) is stable across tokens — captured at record time.
+// Data pointers (input, aux, output) read live from ops table.
+static void micro_submit_set_rows(sycl::queue & q, const DeviceOperation * d_ops, int op_idx) {
+    constexpr int           WG_SIZE    = 256;
+    const DeviceOperation & op_rec     = d_ops[op_idx];
+    const int               n_elements = op_rec.M;
+    if (n_elements <= 0) {
+        return;
+    }
+    const int n_wgs = (n_elements + WG_SIZE - 1) / WG_SIZE;
+
+    // Capture stable SetRowsMeta fields at record time (structural, don't change per token)
+    const SetRowsMeta meta = op_rec.set_rows_meta;
+
+    q.submit([&](sycl::handler & cgh) {
+        cgh.parallel_for<micro_graph_set_rows_tag>(
+            sycl::nd_range<1>(n_wgs * WG_SIZE, WG_SIZE), [=](sycl::nd_item<1> item) {
+                const int idx = item.get_global_linear_id();
+                if (idx >= n_elements) {
+                    return;
+                }
+
+                // Read data pointers live from ops table
+                const DeviceOperation & op = d_ops[op_idx];
+                if (!op.input || !op.aux || !op.output) {
+                    return;
+                }
+
+                const int64_t ne00 = meta.nc;
+                const int64_t ne01 = meta.nr;
+                const int64_t ne02 = meta.ne02;
+                const int64_t ne03 = meta.ne03;
+                if (ne00 <= 0 || ne01 <= 0 || ne02 <= 0 || ne03 <= 0) {
+                    return;
+                }
+
+                const int64_t i03 = idx / (ne00 * ne01 * ne02);
+                const int64_t r1  = idx - i03 * ne00 * ne01 * ne02;
+                const int64_t i02 = r1 / (ne00 * ne01);
+                const int64_t r2  = r1 - i02 * ne00 * ne01;
+                const int64_t i01 = r2 / ne00;
+                const int64_t i00 = r2 - i01 * ne00;
+
+                const int64_t i10 = i01;
+                const int64_t i11 = meta.ne11 > 0 ? (i02 % meta.ne11) : 0;
+                const int64_t i12 = meta.ne12 > 0 ? (i03 % meta.ne12) : 0;
+
+                const char * src0 = static_cast<const char *>(op.input);
+                const char * src1 = static_cast<const char *>(op.aux);
+                char *       dst  = static_cast<char *>(op.output);
+
+                const int64_t idx_off = i10 * meta.nb10 + i11 * meta.nb11 + i12 * meta.nb12;
+
+                // Inline load_idx
+                int64_t dst_row;
+                if (meta.idx_type == 1) {
+                    dst_row = *reinterpret_cast<const int64_t *>(src1 + idx_off);
+                } else {
+                    dst_row = static_cast<int64_t>(*reinterpret_cast<const int32_t *>(src1 + idx_off));
+                }
+                if (dst_row < 0 || dst_row >= meta.ne1) {
+                    return;
+                }
+
+                const int     src_elem_size = (meta.src_type == 1) ? (int) sizeof(sycl::half) : (int) sizeof(float);
+                const int     dst_elem_size = (meta.dst_type == 1) ? (int) sizeof(sycl::half) : (int) sizeof(float);
+                const int64_t src_off       = i01 * meta.nb01 + i02 * meta.nb02 + i03 * meta.nb03 + i00 * src_elem_size;
+                const int64_t dst_off = dst_row * meta.nb1 + i02 * meta.nb2 + i03 * meta.nb3 + i00 * dst_elem_size;
+
+                // Inline load_f32_or_f16 + store_f32_or_f16
+                float v;
+                if (meta.src_type == 1) {
+                    v = static_cast<float>(*reinterpret_cast<const sycl::half *>(src0 + src_off));
+                } else {
+                    v = *reinterpret_cast<const float *>(src0 + src_off);
+                }
+                if (meta.dst_type == 1) {
+                    *reinterpret_cast<sycl::half *>(dst + dst_off) = sycl::half(v);
+                } else {
+                    *reinterpret_cast<float *>(dst + dst_off) = v;
+                }
+            });
+    });
+}
+
+// ATTENTION: standalone two-pass online softmax attention kernel.
+// Each work-group handles one attention head. SLM caches the query vector
+// and (if it fits) the attention scores for the fast path.
+// Reads all data pointers live from ops table for graph replay correctness.
+static void micro_submit_attention(sycl::queue &           q,
+                                   const DeviceOperation * d_ops,
+                                   int                     op_idx,
+                                   int                     slm_size,
+                                   bool                    use_attn_subgroup_dot) {
+    constexpr int WG_SIZE = 256;
+    constexpr int SG_SIZE = 16;
+    constexpr int N_SGS   = WG_SIZE / SG_SIZE;
+
+    // Read structural params at record time (stable across tokens)
+    const DeviceOperation & op_rec  = d_ops[op_idx];
+    const int               n_heads = op_rec.N;
+    if (n_heads <= 0) {
+        return;
+    }
+
+    // SLM layout: [0..head_dim-1] = query, [head_dim..head_dim+2*N_SGS-1] = reduction,
+    //             [scores_base..] = score cache (if fits)
+    const int slm_floats     = slm_size;  // Same SLM size as monolithic kernel
+    const int use_sg_dot_int = use_attn_subgroup_dot ? 1 : 0;
+
+    q.submit([&](sycl::handler & cgh) {
+        sycl::local_accessor<float, 1> slm(slm_floats, cgh);
+        cgh.parallel_for<micro_graph_attention_tag>(
+            sycl::nd_range<1>(n_heads * WG_SIZE, WG_SIZE),
+            [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
+                const int head = item.get_group_linear_id();
+                if (head >= n_heads) {
+                    return;
+                }
+
+                const int tid     = item.get_local_id(0);
+                auto      sg      = item.get_sub_group();
+                const int sg_id   = sg.get_group_linear_id();
+                const int lane_id = sg.get_local_linear_id();
+                auto      wg      = item.get_group();
+
+                // Read all metadata live from ops table
+                const DeviceOperation & op         = d_ops[op_idx];
+                const int               seq_len    = op.M;
+                const int               head_dim   = op.K;
+                const int               n_kv_heads = op.n_kv_heads;
+                const float             scale      = op.scale;
+                const bool              use_sg_dot = (use_sg_dot_int != 0);
+                const int               kv_type    = op.type;
+
+                if (seq_len <= 0) {
+                    return;
+                }
+
+                const int kv_head = (n_kv_heads > 0 && n_kv_heads < n_heads) ? head / (n_heads / n_kv_heads) : head;
+
+                // Q is always F32, use byte-based head stride
+                const char *  q_base = static_cast<const char *>(op.input);
+                const float * q_head = reinterpret_cast<const float *>(q_base + head * op.q_nb2);
+
+                // K/V cache: byte-based strides
+                const char *  k_base        = static_cast<const char *>(op.weights);
+                const char *  v_base        = static_cast<const char *>(op.aux);
+                const int64_t k_head_offset = static_cast<int64_t>(kv_head) * op.k_nb2;
+                const int64_t v_head_offset = static_cast<int64_t>(kv_head) * op.v_nb2;
+                const int64_t k_seq_stride  = op.k_nb1;
+                const int64_t v_seq_stride  = op.v_nb1;
+                const int64_t k_elem_stride = op.k_nb0;
+                const int64_t v_elem_stride = op.v_nb0;
+
+                float * output_ptr = static_cast<float *>(op.output);
+                float * o_head     = output_ptr + head * head_dim;
+
+                // Inline load_kv_element lambda
+                auto load_kv = [&](const void * base_ptr, int64_t byte_offset) -> float {
+                    const char * ptr = static_cast<const char *>(base_ptr) + byte_offset;
+                    if (kv_type == static_cast<int>(OperationType::ATTENTION_F16)) {
+                        return static_cast<float>(*reinterpret_cast<const sycl::half *>(ptr));
+                    }
+                    return *reinterpret_cast<const float *>(ptr);
+                };
+
+                // SLM layout
+                const int slm_reduce_base = head_dim;
+                const int slm_scores_base = slm_reduce_base + 2 * N_SGS;
+                const int slm_scores_cap  = slm_floats - slm_scores_base;
+
+                // Load query into SLM
+                for (int d = tid; d < head_dim; d += WG_SIZE) {
+                    slm[d] = q_head[d];
+                }
+                sycl::group_barrier(wg);
+
+                // Fast path: cache scores in SLM
+                if (slm_scores_cap >= seq_len) {
+                    float local_max = -1e30f;
+                    if (use_sg_dot) {
+                        for (int p = sg_id; p < seq_len; p += N_SGS) {
+                            const int64_t k_pos_offset = k_head_offset + static_cast<int64_t>(p) * k_seq_stride;
+                            float         partial      = 0.0f;
+                            for (int d = lane_id; d < head_dim; d += SG_SIZE) {
+                                const float k_val = load_kv(k_base, k_pos_offset + d * k_elem_stride);
+                                partial += slm[d] * k_val;
+                            }
+                            float score = sycl::reduce_over_group(sg, partial, sycl::plus<float>());
+                            if (lane_id == 0) {
+                                score *= scale;
+                                slm[slm_scores_base + p] = score;
+                                local_max                = sycl::fmax(local_max, score);
+                            }
+                        }
+                    } else {
+                        for (int p = tid; p < seq_len; p += WG_SIZE) {
+                            float         score        = 0.0f;
+                            const int64_t k_pos_offset = k_head_offset + static_cast<int64_t>(p) * k_seq_stride;
+                            for (int d = 0; d < head_dim; d++) {
+                                const float k_val = load_kv(k_base, k_pos_offset + d * k_elem_stride);
+                                score += slm[d] * k_val;
+                            }
+                            score *= scale;
+                            slm[slm_scores_base + p] = score;
+                            local_max                = sycl::fmax(local_max, score);
+                        }
+                    }
+
+                    const float max_contrib = use_sg_dot ? ((lane_id == 0) ? local_max : -1e30f) : local_max;
+                    const float global_max  = sycl::reduce_over_group(wg, max_contrib, sycl::maximum<float>());
+
+                    float local_sum = 0.0f;
+                    if (use_sg_dot) {
+                        for (int p = sg_id; p < seq_len; p += N_SGS) {
+                            if (lane_id == 0) {
+                                const float e            = sycl::exp(slm[slm_scores_base + p] - global_max);
+                                slm[slm_scores_base + p] = e;
+                                local_sum += e;
+                            }
+                        }
+                    } else {
+                        for (int p = tid; p < seq_len; p += WG_SIZE) {
+                            const float e            = sycl::exp(slm[slm_scores_base + p] - global_max);
+                            slm[slm_scores_base + p] = e;
+                            local_sum += e;
+                        }
+                    }
+
+                    const float sum_contrib = use_sg_dot ? ((lane_id == 0) ? local_sum : 0.0f) : local_sum;
+                    const float global_sum  = sycl::reduce_over_group(wg, sum_contrib, sycl::plus<float>());
+                    const float inv_sum     = (global_sum > 0.0f) ? (1.0f / global_sum) : 0.0f;
+
+                    sycl::group_barrier(wg);
+
+                    for (int d = tid; d < head_dim; d += WG_SIZE) {
+                        float acc = 0.0f;
+                        for (int p = 0; p < seq_len; ++p) {
+                            const float   prob         = slm[slm_scores_base + p] * inv_sum;
+                            const int64_t v_pos_offset = v_head_offset + static_cast<int64_t>(p) * v_seq_stride;
+                            const float   v_val        = load_kv(v_base, v_pos_offset + d * v_elem_stride);
+                            acc += prob * v_val;
+                        }
+                        o_head[d] = acc;
+                    }
+                    return;
+                }
+
+                // Fallback: scores don't fit in SLM — 3-pass approach
+                float local_max = -1e30f;
+                if (use_sg_dot) {
+                    for (int p = sg_id; p < seq_len; p += N_SGS) {
+                        const int64_t k_pos_offset = k_head_offset + static_cast<int64_t>(p) * k_seq_stride;
+                        float         partial      = 0.0f;
+                        for (int d = lane_id; d < head_dim; d += SG_SIZE) {
+                            const float k_val = load_kv(k_base, k_pos_offset + d * k_elem_stride);
+                            partial += slm[d] * k_val;
+                        }
+                        float score = sycl::reduce_over_group(sg, partial, sycl::plus<float>());
+                        if (lane_id == 0) {
+                            score *= scale;
+                            local_max = sycl::fmax(local_max, score);
+                        }
+                    }
+                } else {
+                    for (int p = tid; p < seq_len; p += WG_SIZE) {
+                        float         score        = 0.0f;
+                        const int64_t k_pos_offset = k_head_offset + static_cast<int64_t>(p) * k_seq_stride;
+                        for (int d = 0; d < head_dim; ++d) {
+                            const float k_val = load_kv(k_base, k_pos_offset + d * k_elem_stride);
+                            score += slm[d] * k_val;
+                        }
+                        score *= scale;
+                        local_max = sycl::fmax(local_max, score);
+                    }
+                }
+                const float max_contrib_fb = use_sg_dot ? ((lane_id == 0) ? local_max : -1e30f) : local_max;
+                const float global_max_fb  = sycl::reduce_over_group(wg, max_contrib_fb, sycl::maximum<float>());
+
+                float local_sum = 0.0f;
+                if (use_sg_dot) {
+                    for (int p = sg_id; p < seq_len; p += N_SGS) {
+                        const int64_t k_pos_offset = k_head_offset + static_cast<int64_t>(p) * k_seq_stride;
+                        float         partial      = 0.0f;
+                        for (int d = lane_id; d < head_dim; d += SG_SIZE) {
+                            const float k_val = load_kv(k_base, k_pos_offset + d * k_elem_stride);
+                            partial += slm[d] * k_val;
+                        }
+                        float score = sycl::reduce_over_group(sg, partial, sycl::plus<float>());
+                        if (lane_id == 0) {
+                            score *= scale;
+                            local_sum += sycl::exp(score - global_max_fb);
+                        }
+                    }
+                } else {
+                    for (int p = tid; p < seq_len; p += WG_SIZE) {
+                        float         score        = 0.0f;
+                        const int64_t k_pos_offset = k_head_offset + static_cast<int64_t>(p) * k_seq_stride;
+                        for (int d = 0; d < head_dim; ++d) {
+                            const float k_val = load_kv(k_base, k_pos_offset + d * k_elem_stride);
+                            score += slm[d] * k_val;
+                        }
+                        score *= scale;
+                        local_sum += sycl::exp(score - global_max_fb);
+                    }
+                }
+                const float sum_contrib_fb = use_sg_dot ? ((lane_id == 0) ? local_sum : 0.0f) : local_sum;
+                const float global_sum_fb  = sycl::reduce_over_group(wg, sum_contrib_fb, sycl::plus<float>());
+                const float inv_sum_fb     = (global_sum_fb > 0.0f) ? (1.0f / global_sum_fb) : 0.0f;
+
+                for (int d = tid; d < head_dim; d += WG_SIZE) {
+                    float acc = 0.0f;
+                    for (int p = 0; p < seq_len; ++p) {
+                        float         score        = 0.0f;
+                        const int64_t k_pos_offset = k_head_offset + static_cast<int64_t>(p) * k_seq_stride;
+                        for (int dd = 0; dd < head_dim; ++dd) {
+                            const float k_val = load_kv(k_base, k_pos_offset + dd * k_elem_stride);
+                            score += slm[dd] * k_val;
+                        }
+                        score *= scale;
+                        const float   prob         = sycl::exp(score - global_max_fb) * inv_sum_fb;
+                        const int64_t v_pos_offset = v_head_offset + static_cast<int64_t>(p) * v_seq_stride;
+                        const float   v_val        = load_kv(v_base, v_pos_offset + d * v_elem_stride);
+                        acc += prob * v_val;
+                    }
+                    o_head[d] = acc;
+                }
+            });
+    });
+}
+
 void UnifiedKernel::invalidate_micro_graph() {
     micro_graph_valid_ = false;
     micro_graph_.reset();
@@ -8736,6 +9071,8 @@ void UnifiedKernel::record_micro_graph() {
     int          n_dedicated_copy    = 0;
     int          n_dedicated_silu    = 0;
     int          n_dedicated_softmax = 0;
+    int          n_dedicated_setrows = 0;
+    int          n_dedicated_attn    = 0;
     // Extra tile counter index for split-phase fallback ops
     // (starts after the per-phase counters)
     int          extra_counter_idx   = n_phases;
@@ -8837,11 +9174,12 @@ void UnifiedKernel::record_micro_graph() {
             // ── Per-op split: emit dedicated kernels for eligible ops,
             //    individual run_micro_single_op fallbacks for the rest ──
             // This handles mixed phases (e.g. ROPE+ATTENTION, ROPE+SET_ROWS)
-            // by extracting the lightweight ops into dedicated kernels while
-            // keeping complex ops (ATTENTION, GET/SET_ROWS) as minimal
-            // single-op fallback nodes.  Each dedicated kernel launches only
-            // the work it needs (1 WG for ROPE/RMS_NORM, ceil(N/256) WGs for
-            // elementwise) instead of the 40-WG generic run_micro_phase.
+            // by extracting ops into dedicated kernels (ADD, MUL, RMS_NORM,
+            // ROPE, STRIDED_COPY, SILU_MUL, SOFTMAX, SET_ROWS, ATTENTION).
+            // Each dedicated kernel launches only the work it needs
+            // (1 WG for ROPE/RMS_NORM, n_heads WGs for ATTENTION,
+            // ceil(N/256) WGs for elementwise) instead of the 40-WG generic
+            // run_micro_phase.  Only GET_ROWS remains as fallback.
             for (int e = phase_start; e < phase_end; e++) {
                 const int               op_idx = d_entries[e].op_idx;
                 const DeviceOperation & op     = d_ops[op_idx];
@@ -8882,6 +9220,17 @@ void UnifiedKernel::record_micro_graph() {
                     case OperationType::SOFTMAX:
                         micro_submit_softmax(queue_, d_ops, op_idx);
                         n_dedicated_softmax++;
+                        handled = true;
+                        break;
+                    case OperationType::SET_ROWS:
+                        micro_submit_set_rows(queue_, d_ops, op_idx);
+                        n_dedicated_setrows++;
+                        handled = true;
+                        break;
+                    case OperationType::ATTENTION_F16:
+                    case OperationType::ATTENTION_F32:
+                        micro_submit_attention(queue_, d_ops, op_idx, slm_floats, use_attn_subgroup_dot);
+                        n_dedicated_attn++;
                         handled = true;
                         break;
                     default:
@@ -8971,7 +9320,8 @@ void UnifiedKernel::record_micro_graph() {
     micro_graph_valid_ = true;
 
     const int n_dedicated_total = n_dedicated_add + n_dedicated_mul + n_dedicated_rms + n_dedicated_rope +
-                                  n_dedicated_copy + n_dedicated_silu + n_dedicated_softmax;
+                                  n_dedicated_copy + n_dedicated_silu + n_dedicated_softmax + n_dedicated_setrows +
+                                  n_dedicated_attn;
     const int total_graph_nodes =
         1 + n_quantize_nodes + mmvq_node_count + n_dedicated_total + n_fallback_nodes;  // 1=memset
 
@@ -8982,11 +9332,12 @@ void UnifiedKernel::record_micro_graph() {
             fprintf(stderr,
                     "[MICRO-GRAPH] Recorded: %d phases, %d WGs, %d total nodes "
                     "(MMVQ=%d quantize=%d silu_mul=%d "
-                    "dedicated=%d[add=%d mul=%d rms=%d rope=%d copy=%d silu=%d softmax=%d] "
+                    "dedicated=%d[add=%d mul=%d rms=%d rope=%d copy=%d silu=%d softmax=%d setrows=%d attn=%d] "
                     "fallback=%d)\n",
                     n_phases, n_workgroups, total_graph_nodes, mmvq_node_count - n_silu_mul_nodes * 2, n_quantize_nodes,
                     n_silu_mul_nodes, n_dedicated_total, n_dedicated_add, n_dedicated_mul, n_dedicated_rms,
-                    n_dedicated_rope, n_dedicated_copy, n_dedicated_silu, n_dedicated_softmax, n_fallback_nodes);
+                    n_dedicated_rope, n_dedicated_copy, n_dedicated_silu, n_dedicated_softmax, n_dedicated_setrows,
+                    n_dedicated_attn, n_fallback_nodes);
             const int n_fb_total = n_fb_rope + n_fb_attn + n_fb_setrows + n_fb_getrows + n_fb_copy + n_fb_softmax +
                                    n_fb_add + n_fb_mul + n_fb_rms + n_fb_silu + n_fb_other;
             fprintf(stderr,

@@ -30723,6 +30723,9 @@ full_build:
                     // Persistent Q4_0 path is materially faster with SoA than AoS.
                     // Try to promote AoS -> SoA for this path only, with safe rollback
                     // if SoA is unavailable for the tensor.
+                    // NOTE: Q6_K SOA promotion disabled — the MMVQ Q6_K SOA path produces
+                    // incorrect output for lm_head (pre-existing bug). The 1 Q6_K AOS matmul
+                    // correctly falls through to the generic fallback path.
                     if (is_quantized_weight && weight_type == GGML_TYPE_Q4_0 && weight_layout == GGML_LAYOUT_AOS &&
                         persistent_tg_prefer_soa_layout()) {
                         const layout_mode soa_layout =
