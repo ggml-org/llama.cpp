@@ -260,6 +260,55 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     return allowed;
 }
 
+// incompatible tensor shapes are handled here - fallback to a compatible type
+static ggml_type tensor_type_fallback(quantization_state_impl * qs, const ggml_tensor * t, const ggml_type new_type) {
+    ggml_type return_type = new_type;
+    const int64_t nx = t->ne[0];
+    const int64_t ny = t->ne[1];
+    const int64_t qk_k = ggml_blck_size(new_type);
+    if (nx % qk_k != 0) { // this tensor's shape is incompatible with this quant
+        LLAMA_LOG_WARN("\n%s: tensor %s: shape [%" PRId64 ", %" PRId64 "] not divisible by %" PRId64 ", required for type %s; ",
+                        __func__, t->name, nx, ny, qk_k, ggml_type_name(new_type));
+        ++qs->n_fallback;
+
+        switch (new_type) {
+            // types on the left: block size 256
+            case GGML_TYPE_IQ1_S:
+            case GGML_TYPE_IQ1_M:
+            case GGML_TYPE_IQ2_XXS:
+            case GGML_TYPE_IQ2_XS:
+            case GGML_TYPE_IQ2_S:
+            case GGML_TYPE_IQ3_XXS:
+            case GGML_TYPE_IQ3_S:   // types on the right: block size 32
+            case GGML_TYPE_IQ4_XS:  return_type = GGML_TYPE_IQ4_NL; break;
+            case GGML_TYPE_Q2_K:
+            case GGML_TYPE_Q3_K:
+            case GGML_TYPE_TQ1_0:
+            case GGML_TYPE_TQ2_0:   return_type = GGML_TYPE_Q4_0;   break;
+            case GGML_TYPE_Q4_K:    return_type = GGML_TYPE_Q5_0;   break;
+            case GGML_TYPE_Q5_K:    return_type = GGML_TYPE_Q5_1;   break;
+            case GGML_TYPE_Q6_K:    return_type = GGML_TYPE_Q8_0;   break;
+            // not supported here
+            default:
+                throw std::runtime_error(format(
+                    "no tensor type fallback is defined for the specified type: %s",
+                    ggml_type_name(return_type)));
+        }
+        if (nx % ggml_blck_size(new_type) != 0) {
+            //
+            // it is very rare that tensor colums are not divisible by 32,
+            // so in the vast majority of cases, we never reach this.
+            //
+            // if you are seeing this message a lot, consider updating
+            // `tensor_allows_quantization` so this path never sees this tensor
+            //
+            LLAMA_LOG_WARN("(WARNING: falling back to F16 due to unusual shape) ");
+            return_type = GGML_TYPE_F16;
+        }
+    }
+    return return_type;
+}
+
 // internal standard logic for selecting the target tensor type for a specific
 // quantization mixture and model architecture
 static ggml_type llama_tensor_get_type_impl(
@@ -560,42 +609,8 @@ static ggml_type llama_tensor_get_type(
             new_type = llama_tensor_get_type_impl(qs, new_type, tensor, params->ftype);
         }
 
-        // incompatible tensor shapes are handled here - fallback to a compatible type
-        {
-            const int64_t nx = tensor->ne[0];
-            const int64_t ny = tensor->ne[1];
-            const int64_t qk_k = ggml_blck_size(new_type);
-
-            if (nx % qk_k != 0) { // this tensor's shape is incompatible with this quant
-                LLAMA_LOG_WARN("\n%s: tensor %s: shape [%" PRId64 ", %" PRId64 "] not divisible by %" PRId64 ", required for type %s; ",
-                                __func__, tensor->name, nx, ny, qk_k, ggml_type_name(new_type));
-                ++qs->n_fallback;
-
-                switch (new_type) {
-                    // types on the left  are qk_k % 256 == 0
-                    // types on the right are qk_k % 32  == 0
-                    case GGML_TYPE_TQ1_0:
-                    case GGML_TYPE_TQ2_0:   new_type = GGML_TYPE_Q4_0; break;  // TODO: use a symmetric type instead?
-                    case GGML_TYPE_IQ2_XXS:
-                    case GGML_TYPE_IQ2_XS:
-                    case GGML_TYPE_IQ2_S:
-                    case GGML_TYPE_IQ3_XXS:
-                    case GGML_TYPE_IQ3_S:
-                    case GGML_TYPE_IQ1_S:
-                    case GGML_TYPE_IQ1_M:
-                    case GGML_TYPE_Q2_K:
-                    case GGML_TYPE_Q3_K:
-                    case GGML_TYPE_IQ4_XS:  new_type = GGML_TYPE_IQ4_NL; break;
-                    case GGML_TYPE_Q4_K:    new_type = GGML_TYPE_Q5_0;   break;
-                    case GGML_TYPE_Q5_K:    new_type = GGML_TYPE_Q5_1;   break;
-                    case GGML_TYPE_Q6_K:    new_type = GGML_TYPE_Q8_0;   break;
-                }
-                if (nx % ggml_blck_size(new_type) != 0) {
-                    LLAMA_LOG_WARN("(WARNING: falling back to F16 due to unusual shape) ");
-                    new_type = GGML_TYPE_F16;
-                }
-            }
-        }
+        // fallback to a compatible type if necessary
+        new_type = tensor_type_fallback(qs, tensor, new_type);
     }
     return new_type;
 }
@@ -792,57 +807,57 @@ static bool tensor_requires_imatrix(const char * tensor_name, const ggml_type ds
 
 // given a file type, get the default tensor type
 static ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
-    ggml_type return_ftype;
+    ggml_type return_type;
     switch (ftype) {
         // floating-point types
-        case LLAMA_FTYPE_ALL_F32:     return_ftype = GGML_TYPE_F32;  break;
-        case LLAMA_FTYPE_MOSTLY_F16:  return_ftype = GGML_TYPE_F16;  break;
-        case LLAMA_FTYPE_MOSTLY_BF16: return_ftype = GGML_TYPE_BF16; break;
+        case LLAMA_FTYPE_ALL_F32:     return_type = GGML_TYPE_F32;  break;
+        case LLAMA_FTYPE_MOSTLY_F16:  return_type = GGML_TYPE_F16;  break;
+        case LLAMA_FTYPE_MOSTLY_BF16: return_type = GGML_TYPE_BF16; break;
 
         // static quants
-        case LLAMA_FTYPE_MOSTLY_Q4_0: return_ftype = GGML_TYPE_Q4_0; break;
-        case LLAMA_FTYPE_MOSTLY_Q4_1: return_ftype = GGML_TYPE_Q4_1; break;
-        case LLAMA_FTYPE_MOSTLY_Q5_0: return_ftype = GGML_TYPE_Q5_0; break;
-        case LLAMA_FTYPE_MOSTLY_Q5_1: return_ftype = GGML_TYPE_Q5_1; break;
-        case LLAMA_FTYPE_MOSTLY_Q8_0: return_ftype = GGML_TYPE_Q8_0; break;
+        case LLAMA_FTYPE_MOSTLY_Q4_0: return_type = GGML_TYPE_Q4_0; break;
+        case LLAMA_FTYPE_MOSTLY_Q4_1: return_type = GGML_TYPE_Q4_1; break;
+        case LLAMA_FTYPE_MOSTLY_Q5_0: return_type = GGML_TYPE_Q5_0; break;
+        case LLAMA_FTYPE_MOSTLY_Q5_1: return_type = GGML_TYPE_Q5_1; break;
+        case LLAMA_FTYPE_MOSTLY_Q8_0: return_type = GGML_TYPE_Q8_0; break;
 
         // k-quants
         case LLAMA_FTYPE_MOSTLY_Q2_K_S:
-        case LLAMA_FTYPE_MOSTLY_Q2_K:   return_ftype = GGML_TYPE_Q2_K; break;
+        case LLAMA_FTYPE_MOSTLY_Q2_K:   return_type = GGML_TYPE_Q2_K; break;
         case LLAMA_FTYPE_MOSTLY_Q3_K_S:
         case LLAMA_FTYPE_MOSTLY_Q3_K_M:
-        case LLAMA_FTYPE_MOSTLY_Q3_K_L: return_ftype = GGML_TYPE_Q3_K; break;
+        case LLAMA_FTYPE_MOSTLY_Q3_K_L: return_type = GGML_TYPE_Q3_K; break;
         case LLAMA_FTYPE_MOSTLY_Q4_K_S:
-        case LLAMA_FTYPE_MOSTLY_Q4_K_M: return_ftype = GGML_TYPE_Q4_K; break;
+        case LLAMA_FTYPE_MOSTLY_Q4_K_M: return_type = GGML_TYPE_Q4_K; break;
         case LLAMA_FTYPE_MOSTLY_Q5_K_S:
-        case LLAMA_FTYPE_MOSTLY_Q5_K_M: return_ftype = GGML_TYPE_Q5_K; break;
-        case LLAMA_FTYPE_MOSTLY_Q6_K:   return_ftype = GGML_TYPE_Q6_K; break;
+        case LLAMA_FTYPE_MOSTLY_Q5_K_M: return_type = GGML_TYPE_Q5_K; break;
+        case LLAMA_FTYPE_MOSTLY_Q6_K:   return_type = GGML_TYPE_Q6_K; break;
 
         // i-quants
-        case LLAMA_FTYPE_MOSTLY_IQ1_S:   return_ftype = GGML_TYPE_IQ1_S;   break;
-        case LLAMA_FTYPE_MOSTLY_IQ1_M:   return_ftype = GGML_TYPE_IQ1_M;   break;
-        case LLAMA_FTYPE_MOSTLY_IQ2_XXS: return_ftype = GGML_TYPE_IQ2_XXS; break;
-        case LLAMA_FTYPE_MOSTLY_IQ2_XS:  return_ftype = GGML_TYPE_IQ2_XS;  break;
-        case LLAMA_FTYPE_MOSTLY_IQ2_S:   return_ftype = GGML_TYPE_IQ2_XS;  break;
-        case LLAMA_FTYPE_MOSTLY_IQ2_M:   return_ftype = GGML_TYPE_IQ2_S;   break;
-        case LLAMA_FTYPE_MOSTLY_IQ3_XXS: return_ftype = GGML_TYPE_IQ3_XXS; break;
+        case LLAMA_FTYPE_MOSTLY_IQ1_S:   return_type = GGML_TYPE_IQ1_S;   break;
+        case LLAMA_FTYPE_MOSTLY_IQ1_M:   return_type = GGML_TYPE_IQ1_M;   break;
+        case LLAMA_FTYPE_MOSTLY_IQ2_XXS: return_type = GGML_TYPE_IQ2_XXS; break;
+        case LLAMA_FTYPE_MOSTLY_IQ2_XS:  return_type = GGML_TYPE_IQ2_XS;  break;
+        case LLAMA_FTYPE_MOSTLY_IQ2_S:   return_type = GGML_TYPE_IQ2_XS;  break;
+        case LLAMA_FTYPE_MOSTLY_IQ2_M:   return_type = GGML_TYPE_IQ2_S;   break;
+        case LLAMA_FTYPE_MOSTLY_IQ3_XXS: return_type = GGML_TYPE_IQ3_XXS; break;
         case LLAMA_FTYPE_MOSTLY_IQ3_XS:
         case LLAMA_FTYPE_MOSTLY_IQ3_S:
-        case LLAMA_FTYPE_MOSTLY_IQ3_M:   return_ftype = GGML_TYPE_IQ3_S;   break;
-        case LLAMA_FTYPE_MOSTLY_IQ4_XS:  return_ftype = GGML_TYPE_IQ4_XS;  break;
-        case LLAMA_FTYPE_MOSTLY_IQ4_NL:  return_ftype = GGML_TYPE_IQ4_NL;  break;
+        case LLAMA_FTYPE_MOSTLY_IQ3_M:   return_type = GGML_TYPE_IQ3_S;   break;
+        case LLAMA_FTYPE_MOSTLY_IQ4_XS:  return_type = GGML_TYPE_IQ4_XS;  break;
+        case LLAMA_FTYPE_MOSTLY_IQ4_NL:  return_type = GGML_TYPE_IQ4_NL;  break;
 
         // MXFP4
-        case LLAMA_FTYPE_MOSTLY_MXFP4_MOE: return_ftype = GGML_TYPE_MXFP4; break;
+        case LLAMA_FTYPE_MOSTLY_MXFP4_MOE: return_type = GGML_TYPE_MXFP4; break;
 
         // ternary
-        case LLAMA_FTYPE_MOSTLY_TQ1_0: return_ftype = GGML_TYPE_TQ1_0; break;
-        case LLAMA_FTYPE_MOSTLY_TQ2_0: return_ftype = GGML_TYPE_TQ2_0; break;
+        case LLAMA_FTYPE_MOSTLY_TQ1_0: return_type = GGML_TYPE_TQ1_0; break;
+        case LLAMA_FTYPE_MOSTLY_TQ2_0: return_type = GGML_TYPE_TQ2_0; break;
 
         // otherwise, invalid
         default: throw std::runtime_error(format("invalid output file type %d\n", ftype));
     }
-    return return_ftype;
+    return return_type;
 }
 
 static void llama_model_quantize_impl(const std::string & fname_inp, const std::string & fname_out, const llama_model_quantize_params * params) {
