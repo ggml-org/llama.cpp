@@ -43,6 +43,7 @@ struct quantization_state_impl {
     // flags
     bool has_imatrix = false; // do we have imatrix data?
     bool has_output  = false; // used to figure out if a model shares tok_embd with the output weight
+    bool preliminary = true;  // if this flag is set, we are not yet in the main loop over model weights
 
     // tensor type override patterns
     std::vector<std::pair<std::regex, ggml_type>> tensor_type_patterns;
@@ -547,8 +548,10 @@ static ggml_type llama_tensor_get_type(
             for (const auto & [pattern, qtype] : qs->tensor_type_patterns) {
                 if (std::regex_search(tensor_name, pattern)) {
                     if (qtype != new_type) {
-                        LLAMA_LOG_WARN("(manual override: %s -> %s) ",
-                                        ggml_type_name(new_type), ggml_type_name(qtype));
+                        if (!qs->preliminary) {
+                            LLAMA_LOG_WARN("(manual override: %s -> %s) ",
+                                            ggml_type_name(new_type), ggml_type_name(qtype));
+                        }
                         new_type = qtype;
                         manual = true;
                         break;
@@ -1164,6 +1167,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
         void * new_data;
         size_t new_size;
+
+        qs->preliminary = false;
 
         //
         // perform quantization (or dry run)
