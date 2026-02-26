@@ -178,8 +178,8 @@ ggml_tensor * llm_build_plamo2::build_plamo2_mamba_layer(llm_graph_input_rs * in
     ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
     ggml_tensor * ssm_states_all  = mctx_cur->get_s_l(il);
 
-    ggml_tensor * conv = build_rs(inp, conv_states_all, 2*d_inner, n_seqs);
-    conv               = ggml_reshape_3d(ctx0, conv, d_conv - 1, d_inner, n_seqs);
+    ggml_tensor * conv = build_rs(inp, conv_states_all, hparams.n_embd_r(), n_seqs);
+    conv               = ggml_reshape_3d(ctx0, conv, d_conv - 1, d_inner + 2 * n_group * d_state, n_seqs);
 
     // {n_embd, n_tokens} => {n_embd, n_seq_tokens, n_seqs}
     cur = ggml_reshape_3d(ctx0, cur, cur->ne[0], n_seq_tokens, n_seqs);
@@ -216,8 +216,8 @@ ggml_tensor * llm_build_plamo2::build_plamo2_mamba_layer(llm_graph_input_rs * in
 
         ggml_build_forward_expand(gf, ggml_cpy(ctx0, last_conv,
                                                ggml_view_1d(ctx0, conv_states_all,
-                                                            (d_conv - 1) * d_inner * (n_seqs),
-                                                            kv_head * (d_conv - 1) * d_inner *
+                                                            (d_conv - 1) * (d_inner + 2 * n_group * d_state) * (n_seqs),
+                                                            kv_head * (d_conv - 1) * (d_inner + 2 * n_group * d_state) *
                                                                 ggml_element_size(conv_states_all))));
         cb(conv_states_all, "mamba_conv1d_state", il);
 

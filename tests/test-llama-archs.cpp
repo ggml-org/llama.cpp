@@ -264,8 +264,9 @@ static std::vector<float> get_logits(
         ms.add_kv(LLM_KV_FEED_FORWARD_LENGTH, n_ff);
     }
 
-    ms.add_kv(LLM_KV_USE_PARALLEL_RESIDUAL, false); // TODO
-    ms.add_kv(LLM_KV_LOGIT_SCALE,           1.0f); // TODO
+    ms.add_kv(LLM_KV_USE_PARALLEL_RESIDUAL,   false); // TODO
+    ms.add_kv(LLM_KV_LOGIT_SCALE,             1.0f); // TODO
+    ms.add_kv(LLM_KV_FULL_ATTENTION_INTERVAL, uint32_t(2));
 
     if (arch == LLM_ARCH_PLAMO2 || arch == LLM_ARCH_JAMBA || arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE ||
             arch == LLM_ARCH_GRANITE_HYBRID) {
@@ -301,14 +302,9 @@ static std::vector<float> get_logits(
         ms.add_kv(LLM_KV_EXPERTS_PER_GROUP,          uint32_t(1));
     }
 
-    // ms.add_kv(LLM_KV_SSM_INNER_SIZE,     uint32_t(64));
-    // ms.add_kv(LLM_KV_SSM_CONV_KERNEL,    uint32_t(4));
-    // ms.add_kv(LLM_KV_SSM_STATE_SIZE,     uint32_t(16));
-    // ms.add_kv(LLM_KV_SSM_TIME_STEP_RANK, uint32_t(16));
-    // ms.add_kv(LLM_KV_SSM_GROUP_COUNT,    uint32_t(2));
-    ms.add_kv(LLM_KV_SSM_INNER_SIZE,     2*n_embd);
-    ms.add_kv(LLM_KV_SSM_CONV_KERNEL,    uint32_t(3));
-    ms.add_kv(LLM_KV_SSM_STATE_SIZE,     uint32_t(5));
+    ms.add_kv(LLM_KV_SSM_INNER_SIZE,     arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE ? 64 : 2*n_embd);
+    ms.add_kv(LLM_KV_SSM_CONV_KERNEL,    uint32_t(4));
+    ms.add_kv(LLM_KV_SSM_STATE_SIZE,     uint32_t(32));
     ms.add_kv(LLM_KV_SSM_TIME_STEP_RANK, n_head);
     ms.add_kv(LLM_KV_SSM_GROUP_COUNT,    arch == LLM_ARCH_PLAMO2 ? 0 : uint32_t(2));
 
@@ -362,6 +358,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_QWEN3MOE:
         case LLM_ARCH_QWEN3NEXT:
         case LLM_ARCH_QWEN3VLMOE:
+        case LLM_ARCH_QWEN35MOE:
         case LLM_ARCH_PHIMOE:
         case LLM_ARCH_DBRX:
         case LLM_ARCH_OLMOE:
@@ -452,9 +449,6 @@ static int test_backends(const size_t seed, const ggml_log_level log_level) {
         if (arch == LLM_ARCH_BERT || arch == LLM_ARCH_MODERN_BERT || arch == LLM_ARCH_NOMIC_BERT || arch == LLM_ARCH_NOMIC_BERT_MOE ||
                 arch == LLM_ARCH_NEO_BERT || arch == LLM_ARCH_JINA_BERT_V2 || arch == LLM_ARCH_JINA_BERT_V3) {
             continue; // TODO vocab
-        }
-        if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE) {
-            continue; // TODO SSM tensors
         }
         if (arch == LLM_ARCH_MINICPM3 || arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_PLM) {
             continue; // TODO LoRA rank
