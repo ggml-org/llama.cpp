@@ -764,6 +764,7 @@ static void gemm_q4_b32_8x8_q8_0_lut_avx(int n, float * GGML_RESTRICT s, size_t 
                         std::is_same_v<block_tx8, block_iq4_nlx8>) {
                     col_scale_f32 = GGML_F32Cx8x2_LOAD(b_ptr_0[b].d, b_ptr_1[b].d);
                 } else if constexpr (std::is_same_v<block_tx8, block_mxfp4x8>) {
+                    //TODO: simd-ify
                     col_scale_f32 = _mm512_set_ps(
                         GGML_CPU_E8M0_TO_FP32_HALF(b_ptr_1[b].e[7]),
                         GGML_CPU_E8M0_TO_FP32_HALF(b_ptr_1[b].e[6]),
@@ -974,6 +975,7 @@ static void gemm_q4_b32_8x8_q8_0_lut_avx(int n, float * GGML_RESTRICT s, size_t 
                         std::is_same_v<block_tx8, block_iq4_nlx8>) {
                     col_scale_f32 = GGML_F32Cx8x2_LOAD(b_ptr_0[b].d, b_ptr_1[b].d);
                 } else if constexpr (std::is_same_v<block_tx8, block_mxfp4x8>) {
+                    //TODO: simd-ify
                     col_scale_f32 = _mm512_set_ps(
                         GGML_CPU_E8M0_TO_FP32_HALF(b_ptr_1[b].e[7]),
                         GGML_CPU_E8M0_TO_FP32_HALF(b_ptr_1[b].e[6]),
