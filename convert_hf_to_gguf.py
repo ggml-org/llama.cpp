@@ -520,6 +520,13 @@ class ModelBase:
         raise NotImplementedError("set_gguf_parameters() must be implemented in subclasses")
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # skip NVFP4 auxiliary tensors (handled in _generate_nvfp4_tensors)
+        if self._is_nvfp4:
+            if name.endswith((".weight_scale", ".weight_scale_2", ".input_scale", ".k_scale", ".v_scale")):
+                return []
+            if name.endswith(".weight") and name.replace(".weight", ".weight_scale") in self.model_tensors:
+                return []
+
         new_name = self.map_tensor_name(name)
 
         # Handle gate/up expert tensor fusion if enabled
@@ -542,13 +549,6 @@ class ModelBase:
             # If we buffered a gate/up tensor, wait for the other
             if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.FFN_GATE_EXP, bid) or \
                self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.FFN_UP_EXP, bid):
-                return []
-
-        # skip NVFP4 auxiliary tensors and quantized weights (handled in generate_extra_tensors)
-        if self._is_nvfp4:
-            if name.endswith((".weight_scale", ".weight_scale_2", ".input_scale", ".k_scale", ".v_scale")):
-                return []
-            if name.endswith(".weight") and name.replace(".weight", ".weight_scale") in self.model_tensors:
                 return []
 
         return [(new_name, data_torch)]
