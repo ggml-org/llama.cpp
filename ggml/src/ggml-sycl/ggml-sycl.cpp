@@ -12023,7 +12023,12 @@ static bool ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx,
                 is_zeros ? 1 : 0, ggml_sycl_layout_is_soa(src0_extra) ? 1 : 0);
         }
         if constexpr (quantize_enabled) {
-            const size_t required_size              = nrows1 * src1_padded_row_size * q8_1_ts / q8_1_bs;
+            // Q6_K SOA MMVQ reads ds[iby + bq8_offset + 2*i] with max index = K/QK8_1 + 7,
+            // overflowing 8 half2 entries (32 bytes) past the nominal ds region.
+            constexpr size_t Q6K_DS_OVERFLOW_PAD    = 8 * sizeof(sycl::half2);  // 32 bytes
+            const bool       is_soa_active          = ggml_sycl_layout_is_soa_or_coalesced(src0_extra);
+            const size_t     required_size          = nrows1 * src1_padded_row_size * q8_1_ts / q8_1_bs
+                                                    + (is_soa_active ? Q6K_DS_OVERFLOW_PAD : 0);
             // Buffer aliasing debug - check if src1_ddf overlaps with any pre-allocated buffers
             static bool  buffer_alias_debug_checked = false;
             static bool  do_buffer_alias_debug      = false;
@@ -27609,9 +27614,12 @@ static void ggml_sycl_mmvq_soa_pre_allocate_buffers(ggml_backend_sycl_context & 
 
     // Calculate buffer size (use max dimensions for all buffers)
     // Q8_1 format: 32 int8 quants + 2 half2 scales per block
+    // Q6_K SOA MMVQ reads ds[iby + bq8_offset + 2*i] with max index = K/QK8_1 + 7,
+    // overflowing 8 half2 entries (32 bytes) past the nominal ds region.
+    constexpr size_t Q6K_DS_OVERFLOW_PAD = 8 * sizeof(sycl::half2);  // 32 bytes
     const int64_t ne10_padded   = GGML_PAD(max_ne10, MATRIX_ROW_PADDING);
     const int64_t q8_1_row_size = ne10_padded * sizeof(block_q8_1) / QK8_1;
-    const size_t  buffer_size   = max_nrows * q8_1_row_size;
+    const size_t  buffer_size   = max_nrows * q8_1_row_size + Q6K_DS_OVERFLOW_PAD;
     GGML_SYCL_DEBUG("[MMVQ-SOA-GRAPH] Pre-allocating %d Q8_1 buffers, %zu bytes each (ne10=%lld, nrows=%lld)\n",
 
                     soa_mmvq_count, buffer_size, (long long) max_ne10, (long long) max_nrows);
@@ -28470,6 +28478,15 @@ static bool persistent_tg_prefer_soa_layout() {
         prefer           = (env == nullptr || std::atoi(env) != 0) ? 1 : 0;
     }
     return prefer != 0;
+}
+
+static bool persistent_tg_micro_graph_enabled() {
+    static int checked = -1;
+    if (checked < 0) {
+        const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_MICRO_GRAPH");
+        checked = (env != nullptr && std::strcmp(env, "0") != 0) ? 1 : 0;
+    }
+    return checked == 1;
 }
 
 // One-time initialization of persistent TG debug configuration.
@@ -30720,14 +30737,19 @@ full_build:
                         }
                     }
 
-                    // Persistent Q4_0 path is materially faster with SoA than AoS.
+                    // Persistent Q4_0/Q6_K path is materially faster with SoA than AoS.
                     // Try to promote AoS -> SoA for this path only, with safe rollback
                     // if SoA is unavailable for the tensor.
-                    // NOTE: Q6_K SOA promotion disabled — the MMVQ Q6_K SOA path produces
-                    // incorrect output for lm_head (pre-existing bug). The 1 Q6_K AOS matmul
-                    // correctly falls through to the generic fallback path.
-                    if (is_quantized_weight && weight_type == GGML_TYPE_Q4_0 && weight_layout == GGML_LAYOUT_AOS &&
-                        persistent_tg_prefer_soa_layout()) {
+                    // NOTE: Q6_K SOA promotion requires micro-graph mode
+                    // (GGML_SYCL_PERSISTENT_TG_MICRO_GRAPH=1) because the monolithic
+                    // persistent kernel's compute_matmul_tile_q6k is AOS-only.
+                    // The micro-graph path dispatches via mmvq_submit_q6_k_soa which
+                    // correctly handles SOA weight layout.
+                    const bool q6k_soa_eligible = (weight_type == GGML_TYPE_Q6_K) &&
+                                                   persistent_tg_micro_graph_enabled();
+                    if (is_quantized_weight &&
+                        (weight_type == GGML_TYPE_Q4_0 || q6k_soa_eligible) &&
+                        weight_layout == GGML_LAYOUT_AOS && persistent_tg_prefer_soa_layout()) {
                         const layout_mode soa_layout =
                             ggml_sycl_adjust_layout_for_tensor(weight_tensor, GGML_LAYOUT_SOA, ctx.device);
                         if (soa_layout == GGML_LAYOUT_SOA) {

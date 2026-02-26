@@ -89,7 +89,10 @@ void mmvq_submit_quantize_q8_1_soa(sycl::queue & q,
 // Compute SOA Q8_1 buffer size in bytes for a given K dimension
 inline size_t mmvq_q8_1_soa_size(int K) {
     // quants: K bytes, ds: (K/QK8_1) * sizeof(half2) = K/32 * 4
-    return static_cast<size_t>(K) + (K / QK8_1) * sizeof(sycl::half2);
+    // Q6_K SOA kernel reads ds[iby + bq8_offset + 2*i] with max index = K/QK8_1 + 7
+    // Add 8 half2 entries of overflow padding to prevent out-of-bounds read
+    constexpr size_t Q6K_DS_OVERFLOW_PAD = 8 * sizeof(sycl::half2);  // 32 bytes
+    return static_cast<size_t>(K) + (K / QK8_1) * sizeof(sycl::half2) + Q6K_DS_OVERFLOW_PAD;
 }
 
 #endif // GGML_SYCL_MMVQ_HPP
