@@ -25,33 +25,10 @@ message("Using ET Platform at ${ET_PLATFORM_PATH}")
 
 find_package(runtime REQUIRED)
 
-# --- Device kernels (cross-compiled via ExternalProject) ---
-include(ExternalProject)
+# Build ET kernels (cross-compiled in subdirectory scope)
+add_subdirectory(et-kernels)
 
-set(KERNEL_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/et-kernels)
-set(KERNEL_CMAKE_ARGS "")
-if(DEFINED ADDRESS)
-    list(APPEND KERNEL_CMAKE_ARGS -DADDRESS=${ADDRESS})
-endif()
-
-
-ExternalProject_Add(et-kernels-build
-    SOURCE_DIR  ${CMAKE_CURRENT_SOURCE_DIR}/et-kernels
-    BINARY_DIR  ${KERNEL_BINARY_DIR}
-    CMAKE_ARGS  -DCMAKE_TOOLCHAIN_FILE=${ET_PLATFORM_PATH}/lib/cmake/riscv64-ec-toolchain.cmake
-                -DCMAKE_PREFIX_PATH=${ET_PLATFORM_PATH}
-                -DCMAKE_MODULE_PATH=${ET_PLATFORM_PATH}/lib/cmake/cmake-modules
-                -DCMAKE_BUILD_TYPE=Release
-                -DCMAKE_INSTALL_LIBDIR=lib
-                -DTOOLCHAIN_DIR=${ET_PLATFORM_PATH}
-                ${KERNEL_CMAKE_ARGS}
-    INSTALL_COMMAND ""
-    BUILD_ALWAYS TRUE
-)
-
-set(EMBED_HPP ${KERNEL_BINARY_DIR}/ggml-et-kernels-embed.hpp)
-set(EMBED_CPP ${KERNEL_BINARY_DIR}/ggml-et-kernels-embed.cpp)
-
+# --- Host backend library ---
 ggml_add_backend_library(ggml-et
                          ggml-et.cpp
                          ggml-et-kernels.cpp
@@ -62,21 +39,21 @@ ggml_add_backend_library(ggml-et
 
 # Mark generated files as such
 set_source_files_properties(
-    ${EMBED_CPP}
-    ${EMBED_HPP}
+    ${CMAKE_CURRENT_BINARY_DIR}/et-kernels/ggml-et-kernels-embed.cpp
+    ${CMAKE_CURRENT_BINARY_DIR}/et-kernels/ggml-et-kernels-embed.hpp
     PROPERTIES GENERATED TRUE
 )
 
 # Add embedded kernel sources
 target_sources(ggml-et PRIVATE
-    ${EMBED_CPP}
-    ${EMBED_HPP}
+    ${CMAKE_CURRENT_BINARY_DIR}/et-kernels/ggml-et-kernels-embed.cpp
+    ${CMAKE_CURRENT_BINARY_DIR}/et-kernels/ggml-et-kernels-embed.hpp
 )
 
 # Include directory for embedded headers
-target_include_directories(ggml-et PRIVATE ${KERNEL_BINARY_DIR})
+target_include_directories(ggml-et PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/et-kernels)
 
 target_link_libraries(ggml-et PRIVATE runtime::etrt_static deviceLayer::deviceLayer)
 
 # Ensure kernels are built and embedded before the backend library
-add_dependencies(ggml-et et-kernels-build)
+add_dependencies(ggml-et et-kernels-embed)
