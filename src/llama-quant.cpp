@@ -530,6 +530,13 @@ static ggml_type llama_tensor_get_type(
 
     ggml_type new_type = default_type;
 
+    if (params->token_embedding_type < GGML_TYPE_COUNT && tensor_name_match_token_embd(tensor->name)) {
+        return params->token_embedding_type;
+    }
+    if (params->output_tensor_type < GGML_TYPE_COUNT && strcmp(tensor->name, "output.weight") == 0) {
+        return params->output_tensor_type;
+    }
+
     // get more optimal quantization type based on the tensor shape, layer, etc.
     if (!params->pure && ggml_is_quantized(default_type)) {
 
@@ -598,12 +605,6 @@ static ggml_type llama_tensor_get_type(
                 }
             }
         }
-    }
-    if (params->token_embedding_type < GGML_TYPE_COUNT && strcmp(tensor->name, "token_embd.weight") == 0) {
-        new_type = params->token_embedding_type;
-    }
-    if (params->output_tensor_type < GGML_TYPE_COUNT && strcmp(tensor->name, "output.weight") == 0) {
-        new_type = params->output_tensor_type;
     }
     return new_type;
 }
