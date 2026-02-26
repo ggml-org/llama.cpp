@@ -5627,6 +5627,8 @@ typedef struct {
 static_assert(sizeof(block_q4_0) == sizeof(ggml_fp16_t) + QK4_0 / 2,
     "wrong q4_0 block size/padding");
 
+#define QK_MXFP4 32
+
 #include <math.h>
 #ifdef __cplusplus
 #include "half.hpp"
@@ -5670,7 +5672,7 @@ static void dump_tensor(ggml_backend_t backend, const struct ggml_tensor * tenso
         buf_d = malloc(size_e);
 
         CL_CHECK(clEnqueueReadBuffer(queue, extra->q, CL_TRUE, 0, size_q, buf_q, 0, NULL, NULL));
-        CL_CHECK(clEnqueueReadBuffer(queue, extra->d, CL_TRUE, 0, size_e, buf_d, 0, NULL, NULL));
+        CL_CHECK(clEnqueueReadBuffer(queue, extra->e, CL_TRUE, 0, size_e, buf_d, 0, NULL, NULL));
         CL_CHECK(clFinish(queue));
     } else {
         // Read out the tensor from GPU memory.
@@ -9561,6 +9563,9 @@ static void ggml_cl_mul_mat_q6_K_f32_adreno(ggml_backend_t backend, const ggml_t
         kernel = backend_ctx->kernel_gemm_noshuffle_q6_K_f32;
         int padded_N = ne1 + padding;
 
+        cl_ushort mask_f000 = 0xF000;
+        cl_uchar  mask_c0   = 0xC0;
+
         CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0_q6_K->ql));
         CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0_q6_K->qh));
         CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra0_q6_K->s));
@@ -9572,6 +9577,8 @@ static void ggml_cl_mul_mat_q6_K_f32_adreno(ggml_backend_t backend, const ggml_t
         CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &padded_N));
         CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne00));
         CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne1));
+        CL_CHECK(clSetKernelArg(kernel, 11, sizeof(cl_ushort),&mask_f000));
+        CL_CHECK(clSetKernelArg(kernel, 12, sizeof(cl_uchar), &mask_c0));
 
         size_t global_work_size[3] = {(size_t)CEIL_DIV(ne1, 8), (size_t)CEIL_DIV(ne01, 4), 1};
         size_t local_work_size[3] = {2, 128, 1};
