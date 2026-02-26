@@ -61,6 +61,7 @@ enum mmvq_parameter_table_id {
     MMVQ_PARAMETERS_GENERIC = 0,
     MMVQ_PARAMETERS_GCN,
     MMVQ_PARAMETERS_RDNA2,
+    MMVQ_PARAMETERS_RDNA3,
     MMVQ_PARAMETERS_RDNA4
 };
 
@@ -68,7 +69,7 @@ static constexpr __device__ mmvq_parameter_table_id get_device_table_id() {
 #if defined(RDNA4)
     return MMVQ_PARAMETERS_RDNA4;
 #elif defined(RDNA3)
-    return MMVQ_PARAMETERS_RDNA4;
+    return MMVQ_PARAMETERS_RDNA3;
 #elif defined(RDNA2)
     return MMVQ_PARAMETERS_RDNA2;
 #elif defined(GCN) || defined(CDNA)
@@ -83,7 +84,7 @@ static __host__ mmvq_parameter_table_id get_device_table_id(int cc) {
         return MMVQ_PARAMETERS_RDNA4;
     }
     if (GGML_CUDA_CC_IS_RDNA3(cc)) {
-        return MMVQ_PARAMETERS_RDNA4;
+        return MMVQ_PARAMETERS_RDNA3;
     }
     if (GGML_CUDA_CC_IS_RDNA2(cc)) {
         return MMVQ_PARAMETERS_RDNA2;
@@ -142,6 +143,26 @@ static constexpr __host__ __device__ int calc_nwarps(ggml_type type, int ncols_d
                 case GGML_TYPE_Q6_K:
                 case GGML_TYPE_IQ4_NL:
                 case GGML_TYPE_IQ4_XS:
+                    return 8;
+                default:
+                    return 1;
+            }
+        }
+        return 1;
+    }
+    if (table_id == MMVQ_PARAMETERS_RDNA3) {
+        // RDNA3 (W7900): stricter whitelist than RDNA4.
+        // Q2_K / Q5_K / IQ4_XS regress in full quant sweeps.
+        if (ncols_dst == 1) {
+            switch (type) {
+                case GGML_TYPE_Q4_0:
+                case GGML_TYPE_Q4_1:
+                case GGML_TYPE_Q5_0:
+                case GGML_TYPE_Q5_1:
+                case GGML_TYPE_Q8_0:
+                case GGML_TYPE_Q4_K:
+                case GGML_TYPE_Q6_K:
+                case GGML_TYPE_IQ4_NL:
                     return 8;
                 default:
                     return 1;
