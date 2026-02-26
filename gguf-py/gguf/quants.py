@@ -719,6 +719,32 @@ class NVFP4(__Quant, qtype=GGMLQuantizationType.NVFP4):
             (1.0 + man / 8.0) * (2.0 ** (exp.astype(np.float32) - 7)))
         return np.where((x == 0) | (x == 0x7F), 0.0, raw * 0.5)
 
+    @staticmethod
+    def fp32_to_ue4m3(x: np.ndarray) -> np.ndarray:
+        """Vectorized float32 to unsigned E4M3, matching ggml_fp32_to_ue4m3 in C."""
+        x = np.clip(x, 0.0, 448.0).astype(np.float32)
+        bits = x.view(np.uint32)
+        fp32_exp = ((bits >> 23) & 0xFF).astype(np.int32) - 127
+        fp32_man = ((bits >> 20) & 0x7).astype(np.int32)
+        ue4m3_exp = fp32_exp + 7
+
+        # Subnormal
+        sub_man = np.clip((x * 512.0 + 0.5).astype(np.int32), 0, 7)
+        sub_result = np.where(sub_man >= 1, sub_man, 0).astype(np.uint8)
+
+        # Normal with rounding
+        round_bit = ((bits >> 19) & 1).astype(np.int32)
+        man = fp32_man + round_bit
+        exp = ue4m3_exp.copy()
+        overflow = man > 7
+        man = np.where(overflow, 0, man)
+        exp = np.where(overflow, exp + 1, exp)
+        normal_result = np.where(exp >= 15, np.uint8(0x7E), ((exp << 3) | man).astype(np.uint8))
+
+        return np.where(x <= 0.0, np.uint8(0),
+               np.where(ue4m3_exp <= 0, sub_result,
+               np.where(ue4m3_exp >= 15, np.uint8(0x7E), normal_result)))
+
     @classmethod
     def dequantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
         n_super = blocks.shape[0]

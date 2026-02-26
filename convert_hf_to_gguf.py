@@ -589,7 +589,7 @@ class ModelBase:
             float_vals = e2m1_lut[vals.long()] * (scale.float() * scale2.float()).unsqueeze(-1)
 
             amax = float_vals.abs().amax(dim=-1)
-            d_ue = (amax / 6.0).to(torch.float8_e4m3fn).view(torch.uint8).numpy() & 0x7F
+            d_ue = gguf.quants.NVFP4.fp32_to_ue4m3((amax / 6.0).numpy())
 
             # Decode UE4M3 scales to find best E2M1 indices
             ue_exp = (d_ue >> 3) & 0xF

@@ -454,9 +454,8 @@ void quantize_row_nvfp4_ref(const float * GGML_RESTRICT x, block_nvfp4 * GGML_RE
                 }
             }
 
-            // Store UE4M3 scale directly; ggml_ue4m3_to_fp32 includes the 0.5 factor
-            // to match kvalues_mxfp4 convention (kvalues are 2x actual E2M1 values)
-            const uint8_t ue = ggml_fp32_to_ue4m3(amax / (floor(log2(amax)) - 2));
+            // UE4M3 scale: amax / 6.0 maps the max E2M1 value (6.0) to amax
+            const uint8_t ue = ggml_fp32_to_ue4m3(amax / 6.0f);
             y[i].d[s] = ue;
             const float d = ggml_ue4m3_to_fp32(ue);
 
