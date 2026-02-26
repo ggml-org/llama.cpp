@@ -34,8 +34,6 @@ struct ggml_et_get_rows_params {
 #define CACHE_LINE_SIZE 64
 #define CACHE_ELEMENTS(elem_size) (CACHE_LINE_SIZE / (elem_size))
 
-KERNEL_TRAMPOLINE();
-
 // Copy a row of F32 data from source to destination
 static void copy_f32_row(float* dst, const float* src, int64_t num_elements) {
     // Simple memcpy for F32 data - no conversion needed

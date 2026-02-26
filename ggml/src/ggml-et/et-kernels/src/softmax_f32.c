@@ -41,8 +41,6 @@ struct ggml_et_softmax_params {
     float max_bias;              // Max bias for ALiBi (0.0f if not used)
 };
 
-KERNEL_TRAMPOLINE();
-
 // Find maximum value in array - needed for numerical stability
 static float find_max_f32(const float* x, int n) {
     float max_val = x[0];

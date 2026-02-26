@@ -39,8 +39,6 @@ struct ggml_et_rope_params {
     rope_params_t rope_params;
 };
 
-KERNEL_TRAMPOLINE();
-
 // YaRN helper functions
 static inline float rope_yarn_ramp(const float low, const float high, const int i0) {
     float denom = high - low;

@@ -25,8 +25,30 @@ message("Using ET Platform at ${ET_PLATFORM_PATH}")
 
 find_package(runtime REQUIRED)
 
-# Build ET kernels
-add_subdirectory(et-kernels)
+# --- Device kernels (cross-compiled via ExternalProject) ---
+include(ExternalProject)
+
+set(KERNEL_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/et-kernels)
+set(ADDRESS_ARG "")
+if(DEFINED ADDRESS)
+    list(APPEND KERNEL_CMAKE_ARGS -DADDRESS=${ADDRESS})
+endif()
+
+ExternalProject_Add(et-kernels-build
+    SOURCE_DIR  ${CMAKE_CURRENT_SOURCE_DIR}/et-kernels
+    BINARY_DIR  ${KERNEL_BINARY_DIR}
+    CMAKE_ARGS  -DCMAKE_TOOLCHAIN_FILE=${ET_PLATFORM_PATH}/lib/cmake/riscv64-ec-toolchain.cmake
+                -DCMAKE_PREFIX_PATH=${ET_PLATFORM_PATH}
+                -DCMAKE_MODULE_PATH=${ET_PLATFORM_PATH}/lib/cmake/cmake-modules
+                -DCMAKE_BUILD_TYPE=Release
+                -DCMAKE_INSTALL_LIBDIR=lib
+                -DTOOLCHAIN_DIR=${ET_PLATFORM_PATH}
+                ${ADDRESS_ARG}
+    INSTALL_COMMAND ""
+)
+
+set(EMBED_HPP ${KERNEL_BINARY_DIR}/ggml-et-kernels-embed.hpp)
+set(EMBED_CPP ${KERNEL_BINARY_DIR}/ggml-et-kernels-embed.cpp)
 
 ggml_add_backend_library(ggml-et
                          ggml-et.cpp
@@ -38,21 +60,21 @@ ggml_add_backend_library(ggml-et
 
 # Mark generated files as such
 set_source_files_properties(
-    ${CMAKE_CURRENT_BINARY_DIR}/et-kernels/ggml-et-kernels-embed.cpp
-    ${CMAKE_CURRENT_BINARY_DIR}/et-kernels/ggml-et-kernels-embed.hpp
+    ${EMBED_CPP}
+    ${EMBED_HPP}
     PROPERTIES GENERATED TRUE
 )
 
 # Add embedded kernel sources
 target_sources(ggml-et PRIVATE
-    ${CMAKE_CURRENT_BINARY_DIR}/et-kernels/ggml-et-kernels-embed.cpp
-    ${CMAKE_CURRENT_BINARY_DIR}/et-kernels/ggml-et-kernels-embed.hpp
+    ${EMBED_CPP}
+    ${EMBED_HPP}
 )
 
 # Include directory for embedded headers
-target_include_directories(ggml-et PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/et-kernels)
+target_include_directories(ggml-et PRIVATE ${KERNEL_BINARY_DIR})
 
 target_link_libraries(ggml-et PRIVATE runtime::etrt_static deviceLayer::deviceLayer)
 
 # Ensure kernels are built and embedded before the backend library
-add_dependencies(ggml-et et-kernels-embed)
+add_dependencies(ggml-et et-kernels-build)

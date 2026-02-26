@@ -44,7 +44,7 @@ def main():
     parser.add_argument('--input-dir', required=True, help='Directory containing .elf files')
     parser.add_argument('--output-hpp', required=True, help='Output header file path')
     parser.add_argument('--output-cpp', required=True, help='Output source file path')
-    parser.add_argument('--kernels', nargs='+', required=True, help='List of kernel names')
+    parser.add_argument('--kernels', nargs='+', help='List of kernel names (auto-discovered from *.elf if omitted)')
 
     args = parser.parse_args()
 
@@ -52,7 +52,12 @@ def main():
 
     # Collect all kernels
     kernels = []
-    for kernel_name in args.kernels:
+    if args.kernels:
+        kernel_names = args.kernels
+    else:
+        kernel_names = sorted(p.stem for p in input_dir.glob('*.elf'))
+
+    for kernel_name in kernel_names:
         elf_path = input_dir / f"{kernel_name}.elf"
         if not elf_path.exists():
             print(f"Warning: Kernel ELF not found: {elf_path}")

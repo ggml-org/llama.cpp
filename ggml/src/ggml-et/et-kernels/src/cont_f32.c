@@ -15,8 +15,6 @@ struct ggml_et_cont_params {
     struct ggml_tensor dst;      // F32 output tensor (contiguous)
 };
 
-KERNEL_TRAMPOLINE();
-
 int entry_point(struct ggml_et_cont_params* params, void* env) {
     kernel_environment_t* kernel_env = (kernel_environment_t*)env;
 
