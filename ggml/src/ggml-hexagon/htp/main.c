@@ -1082,6 +1082,36 @@ static void proc_hmx_matmul_req(struct htp_context *     ctx,
                                 struct htp_general_req * req,
                                 struct dspqueue_buffer * bufs,
                                 size_t                   n_bufs) {
+    // HMX activation tile is 32×32: M and K must both be 32-aligned.
+    // HMX weight tile requires N to be 32-aligned (K checked separately below).
+    if (req->src1.ne[1] % 32 != 0 || req->src0.ne[1] % 32 != 0) {
+        proc_matmul_req(ctx, req, bufs, n_bufs);
+        return;
+    }
+
+    // HMX only supports F16, Q4_0, Q8_0, IQ4_NL weights.
+    // Other types (e.g. MXFP4) fall back to HVX.
+    {
+        uint32_t wtype = req->src0.type;
+        if (wtype != HTP_TYPE_F16  &&
+            wtype != HTP_TYPE_Q4_0 &&
+            wtype != HTP_TYPE_Q8_0 &&
+            wtype != HTP_TYPE_IQ4_NL) {
+            proc_matmul_req(ctx, req, bufs, n_bufs);
+            return;
+        }
+        // Quantised HMX path requires K aligned to 256 (x4x2 super-block).
+        // F16 HMX path requires K aligned to 32 (tile width).
+        if (wtype != HTP_TYPE_F16 && req->src0.ne[0] % 256 != 0) {
+            proc_matmul_req(ctx, req, bufs, n_bufs);
+            return;
+        }
+        if (wtype == HTP_TYPE_F16 && req->src0.ne[0] % 32 != 0) {
+            proc_matmul_req(ctx, req, bufs, n_bufs);
+            return;
+        }
+    }
+
     (void) n_bufs;
 
     struct dspqueue_buffer rsp_bufs[1];

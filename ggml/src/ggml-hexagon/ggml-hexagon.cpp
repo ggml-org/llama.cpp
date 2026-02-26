@@ -186,7 +186,7 @@ void ggml_hexagon_session::flush() {
                                 (uint8_t *) &rsp,        // Message
                                 DSPQUEUE_TIMEOUT);       // Timeout
 
-        if (err == AEE_EEXPIRED) {
+        if (err == AEE_EEXPIRED || err == AEE_EINTERRUPTED) {
             // TODO: might need to bail out if the HTP is stuck on something
             continue;
         }
@@ -1381,355 +1381,6 @@ static void repack_mxfp4x4x2_mxfp4(void * data, const ggml_tensor * t, size_t si
     ggml_aligned_free(buf_rp, row_size_rp);
 }
 
-// ======== HMX super-block formats (v73+) ====================
-//
-// HMX tile-permuted super-block format: 8 consecutive block_q4_0/q8_0 along K dimension
-// are coalesced into a single super-block with scales first, then quants sequentially
-// concatenated. This is fundamentally different from x4x2 (quants-first, HVX-interleaved)
-// and from CPU block_q4_0x8 (cross-row gathering).
-//
-// Key properties:
-//   - Scales first (16 bytes), then quants (128 or 256 bytes)
-//   - Quants are unsigned, sequentially concatenated (no XOR 0x88, no interleaving)
-//   - Same total size as standard format: 144 bytes / 256 elements (Q4_0)
-//   - Same total size as standard format: 272 bytes / 256 elements (Q8_0)
-
-#define HMX_SUPERBLOCK_NBLOCKS 8   // blocks per HMX super-block
-#define HMX_FP16_TILE_ROWS     32  // HMX FP16 tile rows
-#define HMX_FP16_TILE_COLS     32  // HMX FP16 tile columns
-
-// HMX Q4_0 super-block: 8 consecutive block_q4_0 along K, scales first
-typedef struct {
-    ggml_half scales[8];               // 8 x fp16 scales (16 bytes)
-    uint8_t   quants[8 * QK4_0 / 2];  // 8 x 16 = 128 bytes 4-bit quants
-} hmx_block_q4_0;                      // 144 bytes / 256 elements
-
-// HMX Q8_0 super-block: 8 consecutive block_q8_0 along K, scales first
-typedef struct {
-    ggml_half scales[8];               // 8 x fp16 scales (16 bytes)
-    int8_t    quants[8 * QK8_0];       // 8 x 32 = 256 bytes 8-bit quants
-} hmx_block_q8_0;                      // 272 bytes / 256 elements
-
-// --- Q4_0 / IQ4_NL HMX repack (forward) ---
-// Converts standard GGML block_q4_0 (or block_iq4_nl, same layout) to hmx_block_q4_0.
-// Full super-blocks are repacked into HMX format; tail blocks (< 8) are kept in
-// standard block_q4_0 format — the DSP kernel handles the tail with HVX.
-static void repack_q4_0_to_hmx_superblock(ggml_tensor * t, const void * data, size_t size) {
-    const int64_t ne0  = t->ne[0];  // K (inner dimension)
-    const int64_t nrows = ggml_nrows(t);
-    const size_t  row_size = ggml_row_size(t->type, ne0);
-
-    GGML_ASSERT(ne0 % QK4_0 == 0);
-
-    const int64_t n_blocks_per_row      = ne0 / QK4_0;
-    const int64_t n_superblocks_per_row = n_blocks_per_row / HMX_SUPERBLOCK_NBLOCKS;
-    const int64_t n_tail_blocks         = n_blocks_per_row % HMX_SUPERBLOCK_NBLOCKS;
-
-    const size_t  total_tensor_size = (size_t)nrows * row_size;
-    const size_t  n_bytes_to_copy   = size < total_tensor_size ? size : total_tensor_size;
-    const int64_t n_full_rows       = n_bytes_to_copy / row_size;
-
-    if (n_tail_blocks > 0) {
-        GGML_LOG_WARN("ggml-hex: repack-q4_0-hmx %s : K=%" PRId64 " not a multiple of %d, "
-                      "%" PRId64 " tail blocks will use HVX fallback on DSP\n",
-                      t->name, ne0, HMX_SUPERBLOCK_NBLOCKS * QK4_0, n_tail_blocks);
-    }
-
-    HEX_VERBOSE("ggml-hex: repack-q4_0-hmx %s : data %p size %zu dims %" PRId64 "x%" PRId64
-                " row-size %zu superblocks %" PRId64 " tail %" PRId64 "\n",
-                t->name, data, size, ne0, nrows, row_size, n_superblocks_per_row, n_tail_blocks);
-
-    for (int64_t r = 0; r < n_full_rows; r++) {
-        const block_q4_0  * src_row = (const block_q4_0 *)((const uint8_t *)data + r * row_size);
-        hmx_block_q4_0    * dst_row = (hmx_block_q4_0 *)((uint8_t *)t->data + r * row_size);
-
-        for (int64_t sb = 0; sb < n_superblocks_per_row; sb++) {
-            // Gather 8 scales
-            for (int b = 0; b < HMX_SUPERBLOCK_NBLOCKS; b++) {
-                dst_row[sb].scales[b] = src_row[sb * HMX_SUPERBLOCK_NBLOCKS + b].d;
-            }
-            // Sequentially concatenate 8 quant blocks (no interleaving, unsigned)
-            for (int b = 0; b < HMX_SUPERBLOCK_NBLOCKS; b++) {
-                memcpy(&dst_row[sb].quants[b * (QK4_0 / 2)],
-                       src_row[sb * HMX_SUPERBLOCK_NBLOCKS + b].qs, QK4_0 / 2);
-            }
-        }
-
-        // Tail blocks: repack for DSP-side HVX processing
-        if (n_tail_blocks > 0) {
-            const int64_t k_tail         = n_tail_blocks * QK4_0;
-            const size_t  tail_byte_size = n_tail_blocks * sizeof(block_q4_0);
-            const int64_t tail_src_idx   = n_superblocks_per_row * HMX_SUPERBLOCK_NBLOCKS;
-            const size_t  tail_offset    = n_superblocks_per_row * sizeof(hmx_block_q4_0);
-#ifdef GGML_HEXAGON_HMX_TAIL_HVX
-            // Pad to 8 blocks and repack into x4x2 format, matching the original HVX repack
-            // approach: pad → repack full group → copy only valid bytes.
-            block_q4_0 buf_pd[HMX_SUPERBLOCK_NBLOCKS];
-            init_row_q4x4x2(buf_pd, k_tail);
-            memcpy(buf_pd, &src_row[tail_src_idx], tail_byte_size);
-
-            uint8_t buf_rp[sizeof(hmx_block_q4_0)];
-            repack_row_q4x4x2(buf_rp, buf_pd, k_tail);
-
-            memcpy((uint8_t *)t->data + r * row_size + tail_offset,
-                   buf_rp, tail_byte_size);
-#else
-            // unreachable: supports_op rejects non-256-aligned K when TAIL_HVX is off
-            GGML_ASSERT(0 && "HMX tail block without GGML_HEXAGON_HMX_TAIL_HVX");
-#endif
-        }
-    }
-}
-
-// --- Q4_0 / IQ4_NL HMX repack (inverse, for debug only: used by get_tensor) ---
-// In normal inference the DSP consumes super-blocks directly; this is only
-// needed when the host reads back repacked weights (e.g. verification).
-static void repack_hmx_superblock_to_q4_0(void * data, const ggml_tensor * t, size_t size) {
-    const int64_t ne0  = t->ne[0];
-    const int64_t nrows = ggml_nrows(t);
-    const size_t  row_size = ggml_row_size(t->type, ne0);
-
-    GGML_ASSERT(ne0 % QK4_0 == 0);
-
-    const int64_t n_blocks_per_row      = ne0 / QK4_0;
-    const int64_t n_superblocks_per_row = n_blocks_per_row / HMX_SUPERBLOCK_NBLOCKS;
-    const int64_t n_tail_blocks         = n_blocks_per_row % HMX_SUPERBLOCK_NBLOCKS;
-
-    const size_t  total_tensor_size = (size_t)nrows * row_size;
-    const size_t  n_bytes_to_copy   = size < total_tensor_size ? size : total_tensor_size;
-    const int64_t n_full_rows       = n_bytes_to_copy / row_size;
-
-    HEX_VERBOSE("ggml-hex: repack-hmx-q4_0 %s : data %p size %zu dims %" PRId64 "x%" PRId64 " row-size %zu\n",
-                t->name, data, size, ne0, nrows, row_size);
-
-    for (int64_t r = 0; r < n_full_rows; r++) {
-        const hmx_block_q4_0 * src_row = (const hmx_block_q4_0 *)((const uint8_t *)t->data + r * row_size);
-        block_q4_0           * dst_row = (block_q4_0 *)((uint8_t *)data + r * row_size);
-
-        for (int64_t sb = 0; sb < n_superblocks_per_row; sb++) {
-            for (int b = 0; b < HMX_SUPERBLOCK_NBLOCKS; b++) {
-                dst_row[sb * HMX_SUPERBLOCK_NBLOCKS + b].d = src_row[sb].scales[b];
-            }
-            for (int b = 0; b < HMX_SUPERBLOCK_NBLOCKS; b++) {
-                memcpy(dst_row[sb * HMX_SUPERBLOCK_NBLOCKS + b].qs,
-                       &src_row[sb].quants[b * (QK4_0 / 2)], QK4_0 / 2);
-            }
-        }
-
-        // Tail blocks: unpack from tensor format back to standard block_q4_0
-        if (n_tail_blocks > 0) {
-            const int64_t k_tail         = n_tail_blocks * QK4_0;
-            const size_t  tail_byte_size = n_tail_blocks * sizeof(block_q4_0);
-            const size_t  tail_offset    = n_superblocks_per_row * sizeof(hmx_block_q4_0);
-            const int64_t tail_dst_idx   = n_superblocks_per_row * HMX_SUPERBLOCK_NBLOCKS;
-#ifdef GGML_HEXAGON_HMX_TAIL_HVX
-            // Inverse of x4x2 repack: pad → unpack → copy valid blocks
-            uint8_t buf_pd[sizeof(hmx_block_q4_0)];
-            memset(buf_pd, 0, sizeof(buf_pd));
-            memcpy(buf_pd, (const uint8_t *)t->data + r * row_size + tail_offset, tail_byte_size);
-
-            block_q4_0 buf_rp[HMX_SUPERBLOCK_NBLOCKS];
-            memset(buf_rp, 0, sizeof(buf_rp));
-            unpack_row_q4x4x2(buf_rp, buf_pd, k_tail);
-
-            memcpy(&dst_row[tail_dst_idx], buf_rp, tail_byte_size);
-#else
-            // unreachable: supports_op rejects non-256-aligned K when TAIL_HVX is off
-            GGML_ASSERT(0 && "HMX tail block without GGML_HEXAGON_HMX_TAIL_HVX");
-#endif
-        }
-    }
-}
-
-// --- Q8_0 HMX repack (forward) ---
-// Full super-blocks are repacked into HMX format; tail blocks (< 8) are kept in
-// standard block_q8_0 format — the DSP kernel handles the tail with HVX.
-static void repack_q8_0_to_hmx_superblock(ggml_tensor * t, const void * data, size_t size) {
-    const int64_t ne0  = t->ne[0];
-    const int64_t nrows = ggml_nrows(t);
-    const size_t  row_size = ggml_row_size(t->type, ne0);
-
-    GGML_ASSERT(ne0 % QK8_0 == 0);
-
-    const int64_t n_blocks_per_row      = ne0 / QK8_0;
-    const int64_t n_superblocks_per_row = n_blocks_per_row / HMX_SUPERBLOCK_NBLOCKS;
-    const int64_t n_tail_blocks         = n_blocks_per_row % HMX_SUPERBLOCK_NBLOCKS;
-
-    const size_t  total_tensor_size = (size_t)nrows * row_size;
-    const size_t  n_bytes_to_copy   = size < total_tensor_size ? size : total_tensor_size;
-    const int64_t n_full_rows       = n_bytes_to_copy / row_size;
-
-    if (n_tail_blocks > 0) {
-        GGML_LOG_WARN("ggml-hex: repack-q8_0-hmx %s : K=%" PRId64 " not a multiple of %d, "
-                      "%" PRId64 " tail blocks will use HVX fallback on DSP\n",
-                      t->name, ne0, HMX_SUPERBLOCK_NBLOCKS * QK8_0, n_tail_blocks);
-    }
-
-    HEX_VERBOSE("ggml-hex: repack-q8_0-hmx %s : data %p size %zu dims %" PRId64 "x%" PRId64
-                " row-size %zu superblocks %" PRId64 " tail %" PRId64 "\n",
-                t->name, data, size, ne0, nrows, row_size, n_superblocks_per_row, n_tail_blocks);
-
-    for (int64_t r = 0; r < n_full_rows; r++) {
-        const block_q8_0  * src_row = (const block_q8_0 *)((const uint8_t *)data + r * row_size);
-        hmx_block_q8_0    * dst_row = (hmx_block_q8_0 *)((uint8_t *)t->data + r * row_size);
-
-        for (int64_t sb = 0; sb < n_superblocks_per_row; sb++) {
-            for (int b = 0; b < HMX_SUPERBLOCK_NBLOCKS; b++) {
-                dst_row[sb].scales[b] = src_row[sb * HMX_SUPERBLOCK_NBLOCKS + b].d;
-            }
-            for (int b = 0; b < HMX_SUPERBLOCK_NBLOCKS; b++) {
-                memcpy(&dst_row[sb].quants[b * QK8_0],
-                       src_row[sb * HMX_SUPERBLOCK_NBLOCKS + b].qs, QK8_0);
-            }
-        }
-
-        // Tail blocks: repack for DSP-side HVX processing
-        if (n_tail_blocks > 0) {
-            const int64_t k_tail         = n_tail_blocks * QK8_0;
-            const size_t  tail_byte_size = n_tail_blocks * sizeof(block_q8_0);
-            const int64_t tail_src_idx   = n_superblocks_per_row * HMX_SUPERBLOCK_NBLOCKS;
-            const size_t  tail_offset    = n_superblocks_per_row * sizeof(hmx_block_q8_0);
-#ifdef GGML_HEXAGON_HMX_TAIL_HVX
-            // Pad to 8 blocks and repack into x4x2 format
-            block_q8_0 buf_pd[HMX_SUPERBLOCK_NBLOCKS];
-            init_row_q8x4x2(buf_pd, k_tail);
-            memcpy(buf_pd, &src_row[tail_src_idx], tail_byte_size);
-
-            uint8_t buf_rp[sizeof(hmx_block_q8_0)];
-            repack_row_q8x4x2(buf_rp, buf_pd, k_tail);
-
-            memcpy((uint8_t *)t->data + r * row_size + tail_offset,
-                   buf_rp, tail_byte_size);
-#else
-            // unreachable: supports_op rejects non-256-aligned K when TAIL_HVX is off
-            GGML_ASSERT(0 && "HMX tail block without GGML_HEXAGON_HMX_TAIL_HVX");
-#endif
-        }
-    }
-}
-
-// --- Q8_0 HMX repack (inverse, for debug only: used by get_tensor) ---
-static void repack_hmx_superblock_to_q8_0(void * data, const ggml_tensor * t, size_t size) {
-    const int64_t ne0  = t->ne[0];
-    const int64_t nrows = ggml_nrows(t);
-    const size_t  row_size = ggml_row_size(t->type, ne0);
-
-    GGML_ASSERT(ne0 % QK8_0 == 0);
-
-    const int64_t n_blocks_per_row      = ne0 / QK8_0;
-    const int64_t n_superblocks_per_row = n_blocks_per_row / HMX_SUPERBLOCK_NBLOCKS;
-    const int64_t n_tail_blocks         = n_blocks_per_row % HMX_SUPERBLOCK_NBLOCKS;
-
-    const size_t  total_tensor_size = (size_t)nrows * row_size;
-    const size_t  n_bytes_to_copy   = size < total_tensor_size ? size : total_tensor_size;
-    const int64_t n_full_rows       = n_bytes_to_copy / row_size;
-
-    HEX_VERBOSE("ggml-hex: repack-hmx-q8_0 %s : data %p size %zu dims %" PRId64 "x%" PRId64 " row-size %zu\n",
-                t->name, data, size, ne0, nrows, row_size);
-
-    for (int64_t r = 0; r < n_full_rows; r++) {
-        const hmx_block_q8_0 * src_row = (const hmx_block_q8_0 *)((const uint8_t *)t->data + r * row_size);
-        block_q8_0           * dst_row = (block_q8_0 *)((uint8_t *)data + r * row_size);
-
-        for (int64_t sb = 0; sb < n_superblocks_per_row; sb++) {
-            for (int b = 0; b < HMX_SUPERBLOCK_NBLOCKS; b++) {
-                dst_row[sb * HMX_SUPERBLOCK_NBLOCKS + b].d = src_row[sb].scales[b];
-            }
-            for (int b = 0; b < HMX_SUPERBLOCK_NBLOCKS; b++) {
-                memcpy(dst_row[sb * HMX_SUPERBLOCK_NBLOCKS + b].qs,
-                       &src_row[sb].quants[b * QK8_0], QK8_0);
-            }
-        }
-
-        // Tail blocks: unpack from tensor format back to standard block_q8_0
-        if (n_tail_blocks > 0) {
-            const int64_t k_tail         = n_tail_blocks * QK8_0;
-            const size_t  tail_byte_size = n_tail_blocks * sizeof(block_q8_0);
-            const size_t  tail_offset    = n_superblocks_per_row * sizeof(hmx_block_q8_0);
-            const int64_t tail_dst_idx   = n_superblocks_per_row * HMX_SUPERBLOCK_NBLOCKS;
-#ifdef GGML_HEXAGON_HMX_TAIL_HVX
-            // Inverse of x4x2 repack: pad → unpack → copy valid blocks
-            uint8_t buf_pd[sizeof(hmx_block_q8_0)];
-            memset(buf_pd, 0, sizeof(buf_pd));
-            memcpy(buf_pd, (const uint8_t *)t->data + r * row_size + tail_offset, tail_byte_size);
-
-            block_q8_0 buf_rp[HMX_SUPERBLOCK_NBLOCKS];
-            memset(buf_rp, 0, sizeof(buf_rp));
-            unpack_row_q8x4x2(buf_rp, buf_pd, k_tail);
-
-            memcpy(&dst_row[tail_dst_idx], buf_rp, tail_byte_size);
-#else
-            // unreachable: supports_op rejects non-256-aligned K when TAIL_HVX is off
-            GGML_ASSERT(0 && "HMX tail block without GGML_HEXAGON_HMX_TAIL_HVX");
-#endif
-        }
-    }
-}
-
-// --- FP16 tile permutation (forward) ---
-// Converts FP16 weights from row-major [N, K] to 32x32 tile-major format for HMX.
-// Each tile is 32 rows x 32 cols = 1024 FP16 elements (2048 bytes).
-// Requires: K % 32 == 0 and N % 32 == 0.
-static void repack_f16_to_tile_permuted(ggml_tensor * t, const void * data, size_t size) {
-    const int64_t K = t->ne[0];
-    const int64_t N = t->ne[1];
-
-    GGML_ASSERT(K % HMX_FP16_TILE_COLS == 0);
-    GGML_ASSERT(N % HMX_FP16_TILE_ROWS == 0);
-
-    const int n_col_tiles = (int)(K / HMX_FP16_TILE_COLS);
-
-    const ggml_half * src = (const ggml_half *)data;
-    ggml_half       * dst = (ggml_half *)t->data;
-
-    HEX_VERBOSE("ggml-hex: repack-f16-tile %s : data %p size %zu dims %" PRId64 "x%" PRId64 "\n",
-                t->name, data, size, K, N);
-
-    GGML_UNUSED(size);
-
-    for (int64_t row = 0; row < N; row++) {
-        int r0 = (int)(row / HMX_FP16_TILE_ROWS);  // tile row index
-        int r1 = (int)(row % HMX_FP16_TILE_ROWS);  // intra-tile row
-
-        for (int c0 = 0; c0 < n_col_tiles; c0++) {
-            int tile_idx = r0 * n_col_tiles + c0;
-            memcpy(&dst[tile_idx * 1024 + r1 * HMX_FP16_TILE_COLS],
-                   &src[row * K + c0 * HMX_FP16_TILE_COLS],
-                   HMX_FP16_TILE_COLS * sizeof(ggml_half));
-        }
-    }
-}
-
-// --- FP16 tile permutation (inverse, for debug only: used by get_tensor) ---
-static void repack_tile_permuted_to_f16(void * data, const ggml_tensor * t, size_t size) {
-    const int64_t K = t->ne[0];
-    const int64_t N = t->ne[1];
-
-    GGML_ASSERT(K % HMX_FP16_TILE_COLS == 0);
-    GGML_ASSERT(N % HMX_FP16_TILE_ROWS == 0);
-
-    const int n_col_tiles = (int)(K / HMX_FP16_TILE_COLS);
-
-    const ggml_half * src = (const ggml_half *)t->data;
-    ggml_half       * dst = (ggml_half *)data;
-
-    HEX_VERBOSE("ggml-hex: repack-tile-f16 %s : data %p size %zu dims %" PRId64 "x%" PRId64 "\n",
-                t->name, data, size, K, N);
-
-    GGML_UNUSED(size);
-
-    for (int64_t row = 0; row < N; row++) {
-        int r0 = (int)(row / HMX_FP16_TILE_ROWS);
-        int r1 = (int)(row % HMX_FP16_TILE_ROWS);
-
-        for (int c0 = 0; c0 < n_col_tiles; c0++) {
-            int tile_idx = r0 * n_col_tiles + c0;
-            memcpy(&dst[row * K + c0 * HMX_FP16_TILE_COLS],
-                   &src[tile_idx * 1024 + r1 * HMX_FP16_TILE_COLS],
-                   HMX_FP16_TILE_COLS * sizeof(ggml_half));
-        }
-    }
-}
 
 static void ggml_backend_hexagon_buffer_set_tensor(ggml_backend_buffer_t buffer,
                                                    ggml_tensor *         tensor,
@@ -1742,64 +1393,29 @@ static void ggml_backend_hexagon_buffer_set_tensor(ggml_backend_buffer_t buffer,
     HEX_VERBOSE("ggml-hex: %s set-tensor %s : data %p offset %zu size %zu\n", sess->name.c_str(), tensor->name, data,
                 offset, size);
 
-    if (opt_arch >= 73) {
-        // v73+ HMX tile-permuted super-block format
-        switch (tensor->type) {
-            case GGML_TYPE_Q4_0:
-            case GGML_TYPE_IQ4_NL:
-                GGML_ASSERT(offset == 0);
-                GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
-                repack_q4_0_to_hmx_superblock(tensor, data, size);
-                break;
+    switch (tensor->type) {
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_IQ4_NL:   // IQ4_NL uses same binary layout as Q4_0
+            GGML_ASSERT(offset == 0);
+            GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
+            repack_q4_0_q4x4x2(tensor, data, size);
+            break;
 
-            case GGML_TYPE_Q8_0:
-                GGML_ASSERT(offset == 0);
-                GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
-                repack_q8_0_to_hmx_superblock(tensor, data, size);
-                break;
+        case GGML_TYPE_Q8_0:
+            GGML_ASSERT(offset == 0);
+            GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
+            repack_q8_0_q8x4x2(tensor, data, size);
+            break;
 
-            case GGML_TYPE_F16:
-                GGML_ASSERT(offset == 0);
-                GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
-                repack_f16_to_tile_permuted(tensor, data, size);
-                break;
+        case GGML_TYPE_MXFP4:
+            GGML_ASSERT(offset == 0);
+            GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
+            repack_mxfp4_mxfp4x4x2(tensor, data, size);
+            break;
 
-            case GGML_TYPE_MXFP4:
-                // v73+ HMX does not support MXFP4, fall back to HVX x4x2 repack
-                GGML_ASSERT(offset == 0);
-                GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
-                repack_mxfp4_mxfp4x4x2(tensor, data, size);
-                break;
-
-            default:
-                memcpy((char *) tensor->data + offset, data, size);
-                break;
-        }
-    } else {
-        // v68/v69 HVX x4x2 format
-        switch (tensor->type) {
-            case GGML_TYPE_Q4_0:
-                GGML_ASSERT(offset == 0);
-                GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
-                repack_q4_0_q4x4x2(tensor, data, size);
-                break;
-
-            case GGML_TYPE_Q8_0:
-                GGML_ASSERT(offset == 0);
-                GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
-                repack_q8_0_q8x4x2(tensor, data, size);
-                break;
-
-            case GGML_TYPE_MXFP4:
-                GGML_ASSERT(offset == 0);
-                GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
-                repack_mxfp4_mxfp4x4x2(tensor, data, size);
-                break;
-
-            default:
-                memcpy((char *) tensor->data + offset, data, size);
-                break;
-        }
+        default:
+            memcpy((char *) tensor->data + offset, data, size);
+            break;
     }
 }
 
@@ -1814,64 +1430,29 @@ static void ggml_backend_hexagon_buffer_get_tensor(ggml_backend_buffer_t buffer,
     HEX_VERBOSE("ggml-hex: %s get-tensor %s : data %p offset %zu size %zu\n", sess->name.c_str(), tensor->name, data,
                 offset, size);
 
-    if (opt_arch >= 73) {
-        // v73+ HMX tile-permuted super-block format (inverse)
-        switch (tensor->type) {
-            case GGML_TYPE_Q4_0:
-            case GGML_TYPE_IQ4_NL:
-                GGML_ASSERT(offset == 0);
-                GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
-                repack_hmx_superblock_to_q4_0(data, tensor, size);
-                break;
+    switch (tensor->type) {
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_IQ4_NL:
+            GGML_ASSERT(offset == 0);
+            GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
+            repack_q4x4x2_q4_0(data, tensor, size);
+            break;
 
-            case GGML_TYPE_Q8_0:
-                GGML_ASSERT(offset == 0);
-                GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
-                repack_hmx_superblock_to_q8_0(data, tensor, size);
-                break;
+        case GGML_TYPE_Q8_0:
+            GGML_ASSERT(offset == 0);
+            GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
+            repack_q8x4x2_q8_0(data, tensor, size);
+            break;
 
-            case GGML_TYPE_F16:
-                GGML_ASSERT(offset == 0);
-                GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
-                repack_tile_permuted_to_f16(data, tensor, size);
-                break;
+        case GGML_TYPE_MXFP4:
+            GGML_ASSERT(offset == 0);
+            GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
+            repack_mxfp4x4x2_mxfp4(data, tensor, size);
+            break;
 
-            case GGML_TYPE_MXFP4:
-                // v73+ HMX does not support MXFP4, fall back to HVX x4x2 repack (inverse)
-                GGML_ASSERT(offset == 0);
-                GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
-                repack_mxfp4x4x2_mxfp4(data, tensor, size);
-                break;
-
-            default:
-                memcpy(data, (const char *) tensor->data + offset, size);
-                break;
-        }
-    } else {
-        // v68/v69 HVX x4x2 format (inverse)
-        switch (tensor->type) {
-            case GGML_TYPE_Q4_0:
-                GGML_ASSERT(offset == 0);
-                GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
-                repack_q4x4x2_q4_0(data, tensor, size);
-                break;
-
-            case GGML_TYPE_Q8_0:
-                GGML_ASSERT(offset == 0);
-                GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
-                repack_q8x4x2_q8_0(data, tensor, size);
-                break;
-
-            case GGML_TYPE_MXFP4:
-                GGML_ASSERT(offset == 0);
-                GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
-                repack_mxfp4x4x2_mxfp4(data, tensor, size);
-                break;
-
-            default:
-                memcpy(data, (const char *) tensor->data + offset, size);
-                break;
-        }
+        default:
+            memcpy(data, (const char *) tensor->data + offset, size);
+            break;
     }
 }
 
@@ -1949,7 +1530,11 @@ static size_t ggml_backend_hexagon_buffer_type_get_max_size(ggml_backend_buffer_
 }
 
 static bool ggml_backend_hexagon_buffer_type_is_host(ggml_backend_buffer_type_t buft) {
-    return opt_hostbuf;
+    // buffer stores quantized data in repacked format (e.g. q4x4x2 instead of q4_0),
+    // so raw tensor->data is not in standard host-readable format.
+    // returning false forces ggml_backend_tensor_copy to go through get_tensor/set_tensor
+    // which properly handles the format conversion.
+    return false;
     GGML_UNUSED(buft);
 }
 
@@ -2244,15 +1829,6 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
             if (src0->ne[0] % 32) {
                 return false;
             }
-#ifndef GGML_HEXAGON_HMX_TAIL_HVX
-            // Without tail HVX repack, v73+ HMX path requires K aligned to 256
-            // (8 blocks per super-block) — reject and fall back to CPU otherwise
-            if (opt_arch >= 73 && src0->type != GGML_TYPE_MXFP4) {
-                if (src0->ne[0] % (HMX_SUPERBLOCK_NBLOCKS * QK4_0)) {
-                    return false;
-                }
-            }
-#endif
 
             if (ggml_nrows(src0) > 16 * 1024) {
                 return false;  // typically the lm-head which would be too large for VTCM
@@ -2276,11 +1852,6 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
             if (src0->ne[0] % 32) {
                 return false;
             }
-#ifndef GGML_HEXAGON_HMX_TAIL_HVX
-            if (src0->ne[0] % (HMX_SUPERBLOCK_NBLOCKS * QK4_0)) {
-                return false;
-            }
-#endif
             if (src0->ne[1] > 16 * 1024) {
                 return false;
             }
@@ -3485,7 +3056,7 @@ static void ggml_backend_hexagon_device_get_props(ggml_backend_dev_t dev, struct
     ggml_backend_hexagon_device_get_memory(dev, &props->memory_free, &props->memory_total);
     props->caps = {
         /* .async                 = */ true,
-        /* .host_buffer           = */ (bool) opt_hostbuf,
+        /* .host_buffer           = */ false,
         /* .buffer_from_host_ptr  = */ false,
         /* .events                = */ false,
     };

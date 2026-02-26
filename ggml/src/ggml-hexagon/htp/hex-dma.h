@@ -124,14 +124,6 @@ static inline bool dma_queue_push_vtcm_to_ddr(dma_queue * q,
     return dma_queue_push(q, dptr, dst_row_size, src_row_size, dst_row_size, nrows);
 }
 
-// 1D linear transfer: convenience wrapper for HMX weight loading.
-// Implements 1D by setting roiwidth=length, roiheight=1, strides=length.
-static inline bool dma_queue_push_1d(dma_queue * q,
-                                      dma_ptr     dptr,
-                                      size_t      length) {
-    return dma_queue_push(q, dptr, length, length, length, 1);
-}
-
 static inline dma_ptr dma_queue_pop(dma_queue * q) {
     dma_ptr dptr  = { NULL };
 
