@@ -21,7 +21,9 @@ kernel void kernel_gemm_noshuffle_q6_K_f32(
         int m,
         int n,
         int k,
-        int n_no_padding
+        int n_no_padding,
+        ushort mask_f000,
+        uchar  mask_c0
 ) {
     dst = (global float *)( (global char *)dst + offsetd );
 
@@ -92,10 +94,10 @@ kernel void kernel_gemm_noshuffle_q6_K_f32(
         // j=3
         B.s0123 = read_imageh(src1, gy*2 + (i + 3)*n_4 + 0);
         B.s4567 = read_imageh(src1, gy*2 + (i + 3)*n_4 + 1);
-        dequantized_weights.s0 = (convert_half((((bits4.s0 & 0xF000) >> 12) | ((bits2.s0 * 0xC0) >> 2))) - 32.f) * scale_s.s0 * scale_d.s0;
-        dequantized_weights.s1 = (convert_half((((bits4.s1 & 0xF000) >> 12) | ((bits2.s1 * 0xC0) >> 2))) - 32.f) * scale_s.s1 * scale_d.s1;
-        dequantized_weights.s2 = (convert_half((((bits4.s2 & 0xF000) >> 12) | ((bits2.s2 * 0xC0) >> 2))) - 32.f) * scale_s.s2 * scale_d.s2;
-        dequantized_weights.s3 = (convert_half((((bits4.s3 & 0xF000) >> 12) | ((bits2.s3 * 0xC0) >> 2))) - 32.f) * scale_s.s3 * scale_d.s3;
+        dequantized_weights.s0 = (convert_half((((bits4.s0 & mask_f000) >> 12) | ((bits2.s0 & mask_c0) >> 2))) - 32.f) * scale_s.s0 * scale_d.s0;
+        dequantized_weights.s1 = (convert_half((((bits4.s1 & mask_f000) >> 12) | ((bits2.s1 & mask_c0) >> 2))) - 32.f) * scale_s.s1 * scale_d.s1;
+        dequantized_weights.s2 = (convert_half((((bits4.s2 & mask_f000) >> 12) | ((bits2.s2 & mask_c0) >> 2))) - 32.f) * scale_s.s2 * scale_d.s2;
+        dequantized_weights.s3 = (convert_half((((bits4.s3 & mask_f000) >> 12) | ((bits2.s3 & mask_c0) >> 2))) - 32.f) * scale_s.s3 * scale_d.s3;
         c0 += B * dequantized_weights.s0;
         c1 += B * dequantized_weights.s1;
         c2 += B * dequantized_weights.s2;
