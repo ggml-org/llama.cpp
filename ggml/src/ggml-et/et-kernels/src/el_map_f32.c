@@ -91,8 +91,6 @@ static inline void block_add(float* dst_block, const float* src0_block, const fl
     }
 }
 
-KERNEL_TRAMPOLINE();
-
 int entry_point(struct ggml_et_binary_params* params, void* env) {
     kernel_environment_t* kernel_env = (kernel_environment_t*)env;
 

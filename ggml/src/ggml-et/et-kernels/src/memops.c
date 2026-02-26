@@ -20,8 +20,6 @@ struct memset_params {
     size_t size;           // Number of bytes to set
 };
 
-KERNEL_TRAMPOLINE();
-
 // Main entry point for memory operations kernel
 int entry_point(struct memset_params* params, void* env) {
     kernel_environment_t* kernel_env = (kernel_environment_t*)env;

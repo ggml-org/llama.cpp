@@ -10,8 +10,6 @@
 #include "quants.h"
 #include "block_ops.h"
 
-KERNEL_TRAMPOLINE();
-
 // Main entry point for MUL_MAT Q8_0 x F32 kernel
 int entry_point(struct ggml_et_binary_params* params, void* env) {
     // Cast env to proper type

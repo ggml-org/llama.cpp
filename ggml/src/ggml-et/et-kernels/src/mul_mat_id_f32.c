@@ -47,8 +47,6 @@
 #include "quants.h"
 #include "block_ops.h"
 
-KERNEL_TRAMPOLINE();
-
 // Main entry point for MUL_MAT_ID kernel (Mixture of Experts)
 int entry_point(struct ggml_et_mul_mat_id_params* params, void* env) {
     kernel_environment_t* kernel_env = (kernel_environment_t*)env;

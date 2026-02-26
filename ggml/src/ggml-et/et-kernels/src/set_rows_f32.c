@@ -32,8 +32,6 @@ struct ggml_et_set_rows_params {
     struct ggml_tensor dst;      // F32/F16 destination tensor
 };
 
-KERNEL_TRAMPOLINE();
-
 // Copy a row of F32 data to F32 destination (no conversion)
 static void copy_f32_to_f32_row(float* dst, const float* src, int64_t num_elements) {
     for (int64_t i = 0; i < num_elements; i++) {

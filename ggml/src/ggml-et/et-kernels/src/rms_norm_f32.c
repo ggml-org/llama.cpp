@@ -17,8 +17,6 @@ struct ggml_et_rms_norm_params {
     float eps;                // Epsilon parameter for numerical stability
 };
 
-KERNEL_TRAMPOLINE();
-
 int entry_point(struct ggml_et_rms_norm_params* params, void* env) {
     kernel_environment_t* kernel_env = (kernel_environment_t*)env;
 

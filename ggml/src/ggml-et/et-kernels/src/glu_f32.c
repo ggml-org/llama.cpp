@@ -120,8 +120,6 @@ static inline void block_swiglu(float* dst_block, const float* x_block, const fl
     }
 }
 
-KERNEL_TRAMPOLINE();
-
 // Main entry point for GLU kernel
 int entry_point(struct ggml_et_glu_params* params, void* env) {
     // Cast env to proper type

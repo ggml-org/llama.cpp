@@ -1,30 +1,40 @@
-cmake_minimum_required(VERSION 3.16)
-project(ggml-kernels C)
+# ggml-et: Device kernel build (cross-compiled via ExternalProject)
+#
+# This is invoked automatically by the parent CMakeLists.txt via ExternalProject_Add
+# with the RISC-V toolchain. It can also be built standalone:
+#
+#   cmake -B build-kernels \
+#     -DCMAKE_TOOLCHAIN_FILE=/opt/et/lib/cmake/riscv64-ec-toolchain.cmake \
+#     -DCMAKE_PREFIX_PATH=/opt/et \
+#     -DCMAKE_MODULE_PATH=/opt/et/lib/cmake/cmake-modules \
+#     -DCMAKE_BUILD_TYPE=Release \
+#     ggml/src/ggml-et/et-kernels/
+#   cmake --build build-kernels
 
-# Configure RISC-V toolchain
-if(DEFINED ENV{ET_TOOLCHAIN})
-    set(TOOLCHAIN_ROOT $ENV{ET_TOOLCHAIN})
-elseif(DEFINED ENV{TOOLCHAIN_ROOT})
-    set(TOOLCHAIN_ROOT $ENV{TOOLCHAIN_ROOT})
-else()
-    set(TOOLCHAIN_ROOT /opt/et)
-endif()
+cmake_minimum_required(VERSION 3.17)
+project(ggml-et-kernels LANGUAGES C ASM)
 
-set(RISCV_PREFIX ${TOOLCHAIN_ROOT}/bin/riscv64-unknown-elf-)
-set(CMAKE_C_COMPILER ${RISCV_PREFIX}gcc)
-set(CMAKE_STRIP ${RISCV_PREFIX}strip)
-set(CMAKE_OBJDUMP ${RISCV_PREFIX}objdump)
-set(CMAKE_ADDR2LINE ${RISCV_PREFIX}addr2line)
-set(CMAKE_LINKER_TYPE LLD) # So the host can use MOLD
+include(DeviceUtils)
 
-message(STATUS "Using RISC-V toolchain at: ${TOOLCHAIN_ROOT}")
-message(STATUS "C compiler: ${CMAKE_C_COMPILER}")
-
-# Ensure we have the address parameter
+# Ensure we have the base address parameter
 if(NOT DEFINED ADDRESS)
     set(ADDRESS "0x8005801000")
     message(STATUS "ADDRESS not specified, using default: ${ADDRESS}")
 endif()
+
+set(LINKER_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/src/linker.ld)
+set(CHECK_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_unimplemented_instructions.sh)
+
+# addr2line is not set by the toolchain file
+if(DEFINED TOOLCHAIN_DIR)
+    set(CMAKE_ADDR2LINE "${TOOLCHAIN_DIR}/bin/riscv64-unknown-elf-addr2line")
+else()
+    set(CMAKE_ADDR2LINE "/opt/et/bin/riscv64-unknown-elf-addr2line")
+endif()
+
+# Track address changes to trigger relinking
+set(ADDRESS_FILE ${CMAKE_CURRENT_BINARY_DIR}/et_address.txt)
+file(CONFIGURE OUTPUT ${ADDRESS_FILE} CONTENT "${ADDRESS}" @ONLY)
 
 # Define kernel list
 set(KERNELS
@@ -42,114 +52,43 @@ set(KERNELS
     memops
 )
 
-set(ADDRESS_FILE ${CMAKE_CURRENT_BINARY_DIR}/et_address.txt)
-file(CONFIGURE OUTPUT ${ADDRESS_FILE} CONTENT "${ADDRESS}" @ONLY)
-
-# Function to create bare metal kernel
-function(create_bare_metal_kernel KERNEL_NAME)
-    set(KERNEL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/${KERNEL_NAME}.c)
-    set(LINKER_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/src/linker.ld)
-    set(CHECK_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_unimplemented_instructions.sh)
-
-    add_executable(${KERNEL_NAME}.elf ${KERNEL_SRC})
-
-    target_compile_options(${KERNEL_NAME}.elf PRIVATE
-        -march=rv64imf
-        -mabi=lp64f
-        -mcmodel=medany
-        -fno-zero-initialized-in-bss
-        -ffunction-sections
-        -fdata-sections
-        -O3
-        -g0
-        -nostdlib
-        -ffreestanding
-        -std=c99
+foreach(KERNEL ${KERNELS})
+    add_riscv_executable(${KERNEL})
+    target_sources(${KERNEL}.elf PRIVATE
+        src/${KERNEL}.c
+        src/crt.S
     )
-
-    set_target_properties(${KERNEL_NAME}.elf PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-        LINK_DEPENDS "${LINKER_SCRIPT};${ADDRESS_FILE}"
-    )
-
-    target_include_directories(${KERNEL_NAME}.elf PRIVATE
+    target_include_directories(${KERNEL}.elf PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
     )
-
-    target_link_options(${KERNEL_NAME}.elf PRIVATE
-        -nostartfiles
-        -T ${LINKER_SCRIPT}
+    # C-only flags — must not apply to .S files
+    target_compile_options(${KERNEL}.elf PRIVATE
+        $<$<COMPILE_LANGUAGE:C>:-fno-zero-initialized-in-bss>
+        $<$<COMPILE_LANGUAGE:C>:-ffreestanding>
+        $<$<COMPILE_LANGUAGE:C>:-std=c99>
+    )
+    target_link_options(${KERNEL}.elf PRIVATE
         -Wl,--defsym=BASE_ADDRESS=${ADDRESS}
         -Wl,--entry=_start
-        -Wl,--gc-sections
     )
-
-    # Track linker script AND address file changes
-    set_target_properties(${KERNEL_NAME}.elf PROPERTIES
-        LINK_DEPENDS "${LINKER_SCRIPT};${ADDRESS_FILE}"
+    # Append to LINK_DEPENDS (macro already sets it for the linker script)
+    set_property(TARGET ${KERNEL}.elf APPEND PROPERTY
+        LINK_DEPENDS "${ADDRESS_FILE}"
     )
 
     # Post-build: strip and check (fails build if check script fails)
-    add_custom_command(TARGET ${KERNEL_NAME}.elf POST_BUILD
-        COMMAND ${CMAKE_STRIP} --strip-debug $<TARGET_FILE:${KERNEL_NAME}.elf>
+    add_custom_command(TARGET ${KERNEL}.elf POST_BUILD
+        COMMAND ${CMAKE_STRIP} --strip-debug $<TARGET_FILE:${KERNEL}.elf>
         COMMAND ${CHECK_SCRIPT}
-            ${CMAKE_OBJDUMP} ${CMAKE_ADDR2LINE} $<TARGET_FILE:${KERNEL_NAME}.elf>
-        # Make check script a dependency so changes to it trigger re-check
+            ${CMAKE_OBJDUMP} ${CMAKE_ADDR2LINE} $<TARGET_FILE:${KERNEL}.elf>
         DEPENDS ${CHECK_SCRIPT}
         VERBATIM
     )
-endfunction()
-
-# Create all kernels
-foreach(KERNEL ${KERNELS})
-    create_bare_metal_kernel(${KERNEL})
 endforeach()
-
-# Create a single target that depends on all kernels
-add_custom_target(et-kernels-all ALL)
-foreach(KERNEL ${KERNELS})
-    add_dependencies(et-kernels-all ${KERNEL}.elf)
-endforeach()
-
-# Find Python3 for embedding kernels
-find_package(Python3 REQUIRED)
-
-# Generate embedded kernel source files
-set(EMBED_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/scripts/embed_kernels.py)
-set(EMBED_HPP ${CMAKE_CURRENT_BINARY_DIR}/ggml-et-kernels-embed.hpp)
-set(EMBED_CPP ${CMAKE_CURRENT_BINARY_DIR}/ggml-et-kernels-embed.cpp)
-
-# Build list of kernel ELF file dependencies
-set(KERNEL_ELF_FILES)
-foreach(KERNEL ${KERNELS})
-    list(APPEND KERNEL_ELF_FILES ${CMAKE_CURRENT_BINARY_DIR}/${KERNEL}.elf)
-endforeach()
-
-add_custom_command(
-    OUTPUT ${EMBED_HPP} ${EMBED_CPP}
-    COMMAND ${Python3_EXECUTABLE} ${EMBED_SCRIPT}
-        --input-dir ${CMAKE_CURRENT_BINARY_DIR}
-        --output-hpp ${EMBED_HPP}
-        --output-cpp ${EMBED_CPP}
-        --kernels ${KERNELS}
-    DEPENDS ${KERNEL_ELF_FILES} ${EMBED_SCRIPT}
-    COMMENT "Embedding ET kernels into source code"
-    VERBATIM
-)
-
-# Create target for embedded sources
-add_custom_target(et-kernels-embed ALL
-    DEPENDS ${EMBED_HPP} ${EMBED_CPP}
-)
-add_dependencies(et-kernels-embed et-kernels-all)
-
-# Note: Embedded sources are build-time artifacts only
-# They are included in ggml-et backend compilation but not installed separately
 
 # Print summary
-message(STATUS "GGML Bare Metal Kernels configured:")
+message(STATUS "GGML ET Kernels configured:")
 foreach(KERNEL ${KERNELS})
     message(STATUS "  - ${KERNEL}")
 endforeach()
 message(STATUS "Base address: ${ADDRESS}")
-message(STATUS "Embedded sources: ${EMBED_HPP}, ${EMBED_CPP}")
