@@ -1482,7 +1482,7 @@ jobs:
       - name: Test
         id: ggml-ci
         run: |
-          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+          LLAMA_ARG_THREADS=$(nproc) LLAMA_ARG_REPACK=1 GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-arm64-cpu-low-perf:
     runs-on: ubuntu-22.04-arm
@@ -1508,7 +1508,7 @@ jobs:
       - name: Test
         id: ggml-ci
         run: |
-          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+          LLAMA_ARG_THREADS=$(nproc) LLAMA_ARG_REPACK=1 GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-x64-cpu-high-perf:
     runs-on: ubuntu-22.04
@@ -1534,7 +1534,7 @@ jobs:
       - name: Test
         id: ggml-ci
         run: |
-          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+          LLAMA_ARG_THREADS=$(nproc) LLAMA_ARG_REPACK=1 GG_BUILD_HIGH_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-arm64-cpu-high-perf:
     runs-on: ubuntu-22.04-arm
@@ -1560,7 +1560,7 @@ jobs:
       - name: Test
         id: ggml-ci
         run: |
-          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 GG_BUILD_NO_SVE=1 GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+          LLAMA_ARG_THREADS=$(nproc) LLAMA_ARG_REPACK=1 GG_BUILD_HIGH_PERF=1 GG_BUILD_NO_SVE=1 GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-arm64-cpu-high-perf-sve:
     runs-on: ubuntu-22.04-arm
@@ -1586,7 +1586,7 @@ jobs:
       - name: Test
         id: ggml-ci
         run: |
-          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+          LLAMA_ARG_THREADS=$(nproc) LLAMA_ARG_REPACK=1 GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-x64-nvidia-cuda:
     runs-on: [self-hosted, Linux, X64, NVIDIA]
@@ -1641,7 +1641,7 @@ jobs:
       - name: Test
         id: ggml-ci
         run: |
-          bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+          LLAMA_ARG_REPACK=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
 
   # ggml-ci-x64-amd-vulkan:
   #   runs-on: [self-hosted, Linux, X64, AMD]
@@ -1727,30 +1727,30 @@ jobs:
           GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   ggml-ci-arm64-cpu-kleidiai:
-     runs-on: ubuntu-22.04-arm
+      runs-on: ubuntu-22.04-arm
 
-     steps:
-       - name: Clone
-         id: checkout
-         uses: actions/checkout@v6
+      steps:
+        - name: Clone
+          id: checkout
+          uses: actions/checkout@v6
 
-       - name: ccache
-         uses: ggml-org/ccache-action@v1.2.16
-         with:
-           key: ggml-ci-arm64-cpu-kleidiai
-           evict-old-files: 1d
-           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        - name: ccache
+          uses: ggml-org/ccache-action@v1.2.16
+          with:
+            key: ggml-ci-arm64-cpu-kleidiai
+            evict-old-files: 1d
+            save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
-       - name: Dependencies
-         id: depends
-         run: |
-           sudo apt-get update
-           sudo apt-get install -y build-essential
+        - name: Dependencies
+          id: depends
+          run: |
+            sudo apt-get update
+            sudo apt-get install -y build-essential
 
-       - name: Test
-         id: ggml-ci
-         run: |
-           GG_BUILD_KLEIDIAI=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+        - name: Test
+          id: ggml-ci
+          run: |
+            LLAMA_ARG_REPACK=1 GG_BUILD_KLEIDIAI=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ubuntu-cpu-cmake-riscv64-native:
     runs-on: RISCV64
@@ -2088,49 +2088,50 @@ jobs:
           ctest -L main --verbose
 
   ggml-ci-arm64-graviton4-kleidiai:
-     runs-on: ah-ubuntu_22_04-c8g_8x
+      runs-on: ah-ubuntu_22_04-c8g_8x
 
-     steps:
-       - name: Clone
-         id: checkout
-         uses: actions/checkout@v6
+      steps:
+        - name: Clone
+          id: checkout
+          uses: actions/checkout@v6
 
-       - name: Dependencies
-         id: depends
-         run: |
-           set -euxo pipefail
-           sudo apt-get update
-           sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
-           apt-get install -y \
-            build-essential \
-            python3-venv \
-            gpg \
-            wget \
-            time \
-            git-lfs
+        - name: Dependencies
+          id: depends
+          run: |
+            set -euxo pipefail
+            sudo apt-get update
+            sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
+            apt-get install -y \
+             build-essential \
+             python3-venv \
+             gpg \
+             wget \
+             time \
+             git-lfs
 
-           git lfs install
+            git lfs install
 
-           # install the latest cmake
-           sudo install -d /usr/share/keyrings
-           wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc \
-            | gpg --dearmor \
-            | sudo tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
-           echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ jammy main' \
-            | sudo tee /etc/apt/sources.list.d/kitware.list
-           sudo apt-get update
-           sudo apt-get install -y cmake
+            # install the latest cmake
+            sudo install -d /usr/share/keyrings
+            wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc \
+             | gpg --dearmor \
+             | sudo tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
+            echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ jammy main' \
+             | sudo tee /etc/apt/sources.list.d/kitware.list
+            sudo apt-get update
+            sudo apt-get install -y cmake
 
-       - name: ccache
-         uses: ggml-org/ccache-action@v1.2.16
-         with:
-           key: ggml-ci-arm64-graviton4-kleidiai
-           evict-old-files: 1d
-           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        - name: ccache
+          uses: ggml-org/ccache-action@v1.2.16
+          with:
+            key: ggml-ci-arm64-graviton4-kleidiai
+            evict-old-files: 1d
+            save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
-       - name: Test
-         id: ggml-ci
-         run: |
-           GG_BUILD_KLEIDIAI=1 \
-           GG_BUILD_EXTRA_TESTS_0=1 \
-           bash ./ci/run.sh ./tmp/results ./tmp/mnt
+        - name: Test
+          id: ggml-ci
+          run: |
+            LLAMA_ARG_REPACK=1 \
+            GG_BUILD_KLEIDIAI=1 \
+            GG_BUILD_EXTRA_TESTS_0=1 \
+            bash ./ci/run.sh ./tmp/results ./tmp/mnt
