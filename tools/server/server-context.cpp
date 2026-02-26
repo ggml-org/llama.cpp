@@ -814,7 +814,10 @@ private:
         }
         SRV_WRN("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
 
-        if (!params_base.model.name.empty()) {
+        if (!params_base.model_alias.empty()) {
+            // backward compat: use first alias as model name
+            model_name = *params_base.model_alias.begin();
+        } else if (!params_base.model.name.empty()) {
             model_name = params_base.model.name;
         } else {
             // fallback: derive model name from file name
