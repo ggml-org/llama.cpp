@@ -53,6 +53,7 @@ foreach(KERNEL ${KERNELS})
     add_riscv_executable(${KERNEL})
     target_sources(${KERNEL}.elf PRIVATE
         src/${KERNEL}.c
+        src/crt.S
     )
     target_include_directories(${KERNEL}.elf PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -63,6 +64,16 @@ foreach(KERNEL ${KERNELS})
         $<$<COMPILE_LANGUAGE:C>:-fno-zero-initialized-in-bss>
         $<$<COMPILE_LANGUAGE:C>:-ffreestanding>
         $<$<COMPILE_LANGUAGE:C>:-std=c99>
+        $<$<COMPILE_LANGUAGE:C>:-ffat-lto-objects>
+        $<$<COMPILE_LANGUAGE:C>:-mcmodel=medany>
+        $<$<COMPILE_LANGUAGE:C>:-mabi=lp64f>
+        $<$<COMPILE_LANGUAGE:C>:-march=rv64imf>
+        $<$<COMPILE_LANGUAGE:C>:-ffunction-sections>
+        $<$<COMPILE_LANGUAGE:C>:-fdata-sections>
+        $<$<COMPILE_LANGUAGE:C>:-O3>
+        $<$<COMPILE_LANGUAGE:C>:-g0>
+        $<$<COMPILE_LANGUAGE:C>:-nostdlib>
+        $<$<COMPILE_LANGUAGE:C>:-ffreestanding>
     )
     target_link_options(${KERNEL}.elf PRIVATE
         -Wl,--defsym=BASE_ADDRESS=${ADDRESS}
