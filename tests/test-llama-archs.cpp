@@ -269,7 +269,7 @@ static std::vector<float> get_logits(
     ms.add_kv(LLM_KV_FULL_ATTENTION_INTERVAL, uint32_t(2));
 
     if (arch == LLM_ARCH_PLAMO2 || arch == LLM_ARCH_JAMBA || arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE ||
-            arch == LLM_ARCH_GRANITE_HYBRID) {
+            arch == LLM_ARCH_GRANITE_HYBRID || arch == LLM_ARCH_LFM2 || arch == LLM_ARCH_LFM2MOE) {
         GGML_ASSERT(n_layer >= 2);
         std::vector<uint32_t> n_head_per_layer;
         n_head_per_layer.reserve(n_layer);
@@ -307,6 +307,7 @@ static std::vector<float> get_logits(
     ms.add_kv(LLM_KV_SSM_STATE_SIZE,     uint32_t(32));
     ms.add_kv(LLM_KV_SSM_TIME_STEP_RANK, n_head);
     ms.add_kv(LLM_KV_SSM_GROUP_COUNT,    arch == LLM_ARCH_PLAMO2 ? 0 : uint32_t(2));
+    ms.add_kv(LLM_KV_SHORTCONV_L_CACHE,  uint32_t(3));
 
     std::mt19937 gen(seed);
 
@@ -375,6 +376,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_ERNIE4_5_MOE:
         case LLM_ARCH_HUNYUAN_MOE:
         case LLM_ARCH_OPENAI_MOE:
+        case LLM_ARCH_LFM2MOE:
         case LLM_ARCH_SMALLTHINKER:
         case LLM_ARCH_LLADA_MOE:
         case LLM_ARCH_GROVEMOE:
@@ -468,9 +470,6 @@ static int test_backends(const size_t seed, const ggml_log_level log_level) {
         }
         if (arch == LLM_ARCH_WAVTOKENIZER_DEC) {
             continue; // TODO needs special hparams
-        }
-        if (arch == LLM_ARCH_LFM2 || arch == LLM_ARCH_LFM2MOE) {
-            continue; // TODO shortcov l cache
         }
         if (arch == LLM_ARCH_APERTUS) {
             continue; // TODO xielu
