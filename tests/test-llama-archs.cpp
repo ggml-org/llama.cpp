@@ -242,7 +242,7 @@ static std::vector<float> get_logits(
     const uint32_t n_head  = 2;
     const uint32_t n_ff    = 384;
     const uint32_t n_vocab = 128;
-    const uint32_t n_layer = 2;
+    const uint32_t n_layer = arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE ? 3 : 2;
 
     const uint32_t n_embd_head = n_embd / n_head;
 
@@ -252,20 +252,34 @@ static std::vector<float> get_logits(
     ms.add_kv(LLM_KV_CONTEXT_LENGTH,        n_ctx);
     ms.add_kv(LLM_KV_EMBEDDING_LENGTH,      n_embd);
     ms.add_kv(LLM_KV_BLOCK_COUNT,           n_layer);
-    ms.add_kv(LLM_KV_FEED_FORWARD_LENGTH,   n_ff);
+
+    if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
+        std::vector<uint32_t> n_ff_per_layer;
+        n_ff_per_layer.reserve(n_layer);
+        for (uint32_t il = 0; il < n_layer; il++) {
+            n_ff_per_layer.push_back(il <= 1 ? 0 : n_ff);
+        }
+        ms.add_kv(LLM_KV_FEED_FORWARD_LENGTH, n_ff_per_layer);
+    } else {
+        ms.add_kv(LLM_KV_FEED_FORWARD_LENGTH, n_ff);
+    }
+
     ms.add_kv(LLM_KV_USE_PARALLEL_RESIDUAL, false); // TODO
     ms.add_kv(LLM_KV_LOGIT_SCALE,           1.0f); // TODO
 
-    if (arch == LLM_ARCH_JAMBA) {
+    if (arch == LLM_ARCH_PLAMO2 || arch == LLM_ARCH_JAMBA || arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE ||
+            arch == LLM_ARCH_GRANITE_HYBRID) {
         GGML_ASSERT(n_layer >= 2);
         std::vector<uint32_t> n_head_per_layer;
         n_head_per_layer.reserve(n_layer);
         for (uint32_t il = 0; il < n_layer; il++) {
-            n_head_per_layer.push_back(il % 2 == 0 ? n_embd : 0);
+            n_head_per_layer.push_back(il == 1 ? 0 : n_head);
         }
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head_per_layer);
+        ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, n_head_per_layer);
     } else {
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head);
+        ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, n_head);
     }
 
     ms.add_kv(LLM_KV_ATTENTION_CLAMP_KQV,         1.0f);
@@ -296,7 +310,7 @@ static std::vector<float> get_logits(
     ms.add_kv(LLM_KV_SSM_CONV_KERNEL,    uint32_t(3));
     ms.add_kv(LLM_KV_SSM_STATE_SIZE,     uint32_t(5));
     ms.add_kv(LLM_KV_SSM_TIME_STEP_RANK, n_head);
-    ms.add_kv(LLM_KV_SSM_GROUP_COUNT,    uint32_t(2));
+    ms.add_kv(LLM_KV_SSM_GROUP_COUNT,    arch == LLM_ARCH_PLAMO2 ? 0 : uint32_t(2));
 
     std::mt19937 gen(seed);
 
@@ -439,9 +453,7 @@ static int test_backends(const size_t seed, const ggml_log_level log_level) {
                 arch == LLM_ARCH_NEO_BERT || arch == LLM_ARCH_JINA_BERT_V2 || arch == LLM_ARCH_JINA_BERT_V3) {
             continue; // TODO vocab
         }
-        if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_PLAMO2 ||
-                arch == LLM_ARCH_FALCON_H1 || arch == LLM_ARCH_NEMOTRON_H ||
-                arch == LLM_ARCH_NEMOTRON_H_MOE || arch == LLM_ARCH_GRANITE_HYBRID) {
+        if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE) {
             continue; // TODO SSM tensors
         }
         if (arch == LLM_ARCH_MINICPM3 || arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_PLM) {
