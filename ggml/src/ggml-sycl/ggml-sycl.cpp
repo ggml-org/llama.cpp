@@ -29352,7 +29352,10 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                 }
 
                 kernel.finish_plan_update();
-                if (kernel.has_dag()) {
+                // Reset DAG counters only for monolithic kernel's DAG dispatch mode.
+                // Micro-graph path uses per-op tile counters + generation counter instead;
+                // resetting DAG counters wastes 4 queue ops + a blocking wait per token.
+                if (kernel.has_dag() && !kernel.uses_micro_graph()) {
                     kernel.reset_dag_counters();
                 }
                 GGML_SYCL_DEBUG("[PERSISTENT-TG] Using RECIPE update: %zu mutable ops (of %d plan ops)\n",
@@ -30314,8 +30317,10 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
 
             if (fast_path_ok && op_idx == kernel.cached_op_count()) {
                 kernel.finish_plan_update();
-                // Reset DAG per-token scheduling state (topology is static across tokens)
-                if (kernel.has_dag()) {
+                // Reset DAG per-token scheduling state (topology is static across tokens).
+                // Skip for micro-graph path: it uses per-op tile counters + generation
+                // counter, not DAG counters. Saves 4 queue ops + blocking wait per token.
+                if (kernel.has_dag() && !kernel.uses_micro_graph()) {
                     kernel.reset_dag_counters();
                 }
                 // Build update recipe on first successful fast-path

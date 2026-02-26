@@ -2817,6 +2817,7 @@ public:
     const DeviceDAGState & dag_state() const { return dag_state_; }
     bool has_phase_schedule() const { return phase_allocated_; }
     const DevicePhaseSchedule & phase_schedule() const { return phase_schedule_; }
+    bool uses_micro_graph() const { return micro_graph_valid_; }
 
     // Scratch pool: single contiguous device allocation for all persistent op outputs.
     // Replaces ggml compute-buffer output pointers with stable kernel-owned addresses.
