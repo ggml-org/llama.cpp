@@ -2520,7 +2520,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ));
     add_opt(common_arg(
         {"-a", "--alias"}, "STRING",
-        "set alias for model name (to be used by REST API)",
+        "set model name alias, comma-separated for multiple aliases (to be used by API)",
         [](common_params & params, const std::string & value) {
             params.model_alias = value;
         }
