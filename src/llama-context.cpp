@@ -682,6 +682,13 @@ float * llama_context::get_logits() {
     return logits.data;
 }
 
+float * llama_context::get_mtp_logits() {
+    if (!mtp_logits_valid || mtp_logits_buf.empty()) {
+        return nullptr;
+    }
+    return mtp_logits_buf.data();
+}
+
 int64_t llama_context::output_resolve_row(int32_t i) const {
     int64_t j = -1;
 
@@ -1691,6 +1698,26 @@ int llama_context::decode(const llama_batch & batch_inp) {
                         GGML_ABORT("unknown pooling type");
                     }
             }
+        }
+
+        // Extract MTP logits if available
+        if (res->t_logits_mtp != nullptr && n_outputs > 0) {
+            ggml_backend_t backend_mtp = ggml_backend_sched_get_tensor_backend(sched.get(), res->t_logits_mtp);
+            if (backend_mtp != nullptr) {
+                // MTP logits shape: [n_vocab, n_tokens]
+                // We extract only the last output position's logits for draft token generation
+                const int64_t mtp_n_vocab = res->t_logits_mtp->ne[0];
+                const int64_t mtp_n_tokens = res->t_logits_mtp->ne[1];
+
+                mtp_logits_buf.resize(mtp_n_vocab);
+                // Get the logits for the last token position
+                const size_t offset = (mtp_n_tokens - 1) * mtp_n_vocab * sizeof(float);
+                ggml_backend_tensor_get_async(backend_mtp, res->t_logits_mtp,
+                    mtp_logits_buf.data(), offset, mtp_n_vocab * sizeof(float));
+                mtp_logits_valid = true;
+            }
+        } else {
+            mtp_logits_valid = false;
         }
 
         // Copy backend sampling output if this ubatch produced any sampling tensors.
@@ -2969,6 +2996,12 @@ float * llama_get_logits_ith(llama_context * ctx, int32_t i) {
     }
 
     return res;
+}
+
+float * llama_get_mtp_logits(llama_context * ctx) {
+    ctx->synchronize();
+
+    return ctx->get_mtp_logits();
 }
 
 float * llama_get_embeddings(llama_context * ctx) {

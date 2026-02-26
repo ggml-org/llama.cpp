@@ -746,6 +746,19 @@ private:
             SRV_WRN("%s", "speculative decoding not supported by this context\n");
         }
 
+        // Auto-detect MTP capability: if the model has MTP layers and no speculative
+        // type is explicitly configured, automatically enable MTP speculation
+        if (params_base.speculative.type == COMMON_SPECULATIVE_TYPE_NONE) {
+            const int32_t n_mtp = llama_model_n_mtp_layers(llama_get_model(ctx));
+            if (n_mtp > 0) {
+                SRV_INF("model has %d MTP layer(s) - auto-enabling MTP speculative decoding\n", n_mtp);
+                params_base.speculative.type = COMMON_SPECULATIVE_TYPE_MTP;
+                if (params_base.speculative.n_max < n_mtp) {
+                    params_base.speculative.n_max = n_mtp; // at least 1 draft token per MTP layer
+                }
+            }
+        }
+
         // initialize slots
         for (int i = 0; i < params_base.n_parallel; i++) {
             server_slot slot;

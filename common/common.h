@@ -168,6 +168,7 @@ enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_NONE,          // no speculative decoding
     COMMON_SPECULATIVE_TYPE_DRAFT,         // draft model
     COMMON_SPECULATIVE_TYPE_EAGLE3,        // eagle draft model
+    COMMON_SPECULATIVE_TYPE_MTP,           // multi-token prediction (uses model's built-in MTP head)
     COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,  // simple self-speculative decoding
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,   // self-speculative decoding with n-gram keys only
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, // self-speculative decoding with n-gram keys and 4 m-gram values

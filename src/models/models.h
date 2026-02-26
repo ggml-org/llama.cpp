@@ -611,6 +611,11 @@ private:
                 ggml_tensor * input,
                         int   il);
 
+    // Build the MTP (Multi-Token Prediction) head
+    // Takes the hidden state from the last transformer layer and produces draft logits
+    // The MTP head uses nextn.* tensors stored in the MTP layer(s)
+    void build_mtp_head();
+
     const llama_model & model;
 };
 
