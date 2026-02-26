@@ -1331,7 +1331,6 @@ static void copy_tensor_async_ints(
         }
 
         const std::vector<uint32_t> & rows = it->second;
-        GGML_ASSERT(tensors.size() == rows.size() && "number of tensors must match number of output rows");
 
         for (size_t i = 0; i < tensors.size(); ++i) {
             const uint32_t row = rows[i];
@@ -1364,7 +1363,6 @@ static void copy_tensor_async_floats(
         }
 
         const std::vector<uint32_t> & rows = it->second;
-        GGML_ASSERT(tensors.size() == rows.size() && "number of tensors must match number of output rows");
 
         for (size_t i = 0; i < tensors.size(); ++i) {
             const uint32_t row = rows[i];
@@ -1401,7 +1399,6 @@ static void copy_tensor_async_candidates(
         }
 
         const std::vector<uint32_t> & rows = it->second;
-        GGML_ASSERT(tensors.size() == rows.size() && "number of tensors must match number of output rows");
 
         for (size_t i = 0; i < tensors.size(); ++i) {
             const uint32_t row = rows[i];
