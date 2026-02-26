@@ -2759,6 +2759,10 @@ public:
     void add_temp_device_alloc(void * ptr, size_t bytes);
     void add_temp_device_alloc_handle(const ggml_sycl::alloc_handle & handle);
     void execute_persistent();
+    // Graph overhead benchmark: measures per-node SYCL graph replay latency.
+    // Called once on first persistent token to determine if micro-graph approach
+    // is viable (go/no-go decision gate for graph-of-micro-kernels experiment).
+    void benchmark_graph_overhead();
     // Phased persistent execution: launches the kernel in segments, calling
     // on_matmul_complete(matmul_index, phase_op_count) after each matmul
     // boundary. This allows host-mediated multi-device sync without

@@ -7738,6 +7738,283 @@ void UnifiedKernel::free_scratch_pool() {
 }
 
 // -----------------------------------------------------------------------------
+// Graph Overhead Benchmark (Step 0 of micro-graph experiment)
+// -----------------------------------------------------------------------------
+// Measures per-node SYCL graph replay latency to determine if replacing the
+// monolithic persistent kernel's software barriers with SYCL graph HW ordering
+// is viable. Tests three scenarios:
+//   1. Minimal single_task nodes (baseline overhead)
+//   2. Realistic parallel_for nodes with varying NDRanges and SLM
+//   3. Mixed workload simulating the actual persistent plan composition
+//
+// Decision gate:
+//   < 3us/node  -> proceed with full micro-graph implementation
+//   3-10us/node -> proceed but with grouped/fused nodes
+//   > 30us/node -> abandon approach, software barriers are faster
+
+void UnifiedKernel::benchmark_graph_overhead() {
+    namespace sycl_ex = sycl::ext::oneapi::experimental;
+
+    fprintf(stderr, "\n[GRAPH-OVERHEAD] === SYCL Graph Per-Node Overhead Benchmark ===\n");
+    fprintf(stderr, "[GRAPH-OVERHEAD] Device: %s\n",
+            queue_.get_device().get_info<sycl::info::device::name>().c_str());
+
+    // Allocate scratch for kernels
+    int * dummy = sycl::malloc_device<int>(4096, queue_);
+    if (!dummy) {
+        fprintf(stderr, "[GRAPH-OVERHEAD] ERROR: failed to allocate device memory\n");
+        return;
+    }
+    queue_.memset(dummy, 0, 4096 * sizeof(int)).wait();
+
+    // ---------- Test 1: Minimal single_task nodes ----------
+    {
+        const int N_NODES = 350;
+        const int N_REPS  = 100;
+
+        sycl_ex::command_graph g(queue_.get_context(), queue_.get_device());
+        g.begin_recording(queue_);
+        for (int i = 0; i < N_NODES; i++) {
+            queue_.submit([&](sycl::handler & cgh) {
+                cgh.single_task([=]() { dummy[0] = i; });
+            });
+        }
+        g.end_recording();
+        auto exec = g.finalize();
+
+        // Warm up
+        queue_.ext_oneapi_graph(exec);
+        queue_.wait();
+
+        // Measure
+        auto t0 = std::chrono::high_resolution_clock::now();
+        for (int rep = 0; rep < N_REPS; rep++) {
+            queue_.ext_oneapi_graph(exec);
+            queue_.wait();
+        }
+        auto t1 = std::chrono::high_resolution_clock::now();
+        double us = std::chrono::duration<double, std::micro>(t1 - t0).count() / N_REPS;
+        fprintf(stderr, "[GRAPH-OVERHEAD] Test 1 (single_task): %d nodes, %.1f us/replay, %.2f us/node\n",
+                N_NODES, us, us / N_NODES);
+    }
+
+    // ---------- Test 2: parallel_for with varying NDRange sizes ----------
+    {
+        const int nd_range_sizes[] = { 256, 4096, 32768 };
+        const int wg_size = 256;
+
+        for (int nd_size : nd_range_sizes) {
+            const int N_NODES = 350;
+            const int N_REPS  = 100;
+            const int n_wgs   = (nd_size + wg_size - 1) / wg_size;
+            const int total   = n_wgs * wg_size;
+
+            sycl_ex::command_graph g(queue_.get_context(), queue_.get_device());
+            g.begin_recording(queue_);
+            for (int i = 0; i < N_NODES; i++) {
+                queue_.submit([&](sycl::handler & cgh) {
+                    cgh.parallel_for(
+                        sycl::nd_range<1>(total, wg_size),
+                        [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
+                            if (item.get_global_linear_id() == 0) {
+                                dummy[0] = i;
+                            }
+                        });
+                });
+            }
+            g.end_recording();
+            auto exec = g.finalize();
+
+            queue_.ext_oneapi_graph(exec);
+            queue_.wait();
+
+            auto t0 = std::chrono::high_resolution_clock::now();
+            for (int rep = 0; rep < N_REPS; rep++) {
+                queue_.ext_oneapi_graph(exec);
+                queue_.wait();
+            }
+            auto t1 = std::chrono::high_resolution_clock::now();
+            double us = std::chrono::duration<double, std::micro>(t1 - t0).count() / N_REPS;
+            fprintf(stderr, "[GRAPH-OVERHEAD] Test 2 (parallel_for nd=%d, wg=%d): %d nodes, %.1f us/replay, %.2f us/node\n",
+                    nd_size, wg_size, N_NODES, us, us / N_NODES);
+        }
+    }
+
+    // ---------- Test 3: parallel_for with SLM (local memory) ----------
+    {
+        const int N_NODES = 350;
+        const int N_REPS  = 100;
+        const int slm_sizes[] = { 640, 2048, 16384 };  // attention, matmul, rms_norm (floats)
+
+        for (int slm_floats : slm_sizes) {
+            sycl_ex::command_graph g(queue_.get_context(), queue_.get_device());
+            g.begin_recording(queue_);
+            for (int i = 0; i < N_NODES; i++) {
+                queue_.submit([&](sycl::handler & cgh) {
+                    sycl::local_accessor<float, 1> slm(slm_floats, cgh);
+                    cgh.parallel_for(
+                        sycl::nd_range<1>(10 * 256, 256),
+                        [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
+                            slm[item.get_local_linear_id()] = static_cast<float>(i);
+                            sycl::group_barrier(item.get_group());
+                            if (item.get_global_linear_id() == 0) {
+                                dummy[0] = static_cast<int>(slm[0]);
+                            }
+                        });
+                });
+            }
+            g.end_recording();
+            auto exec = g.finalize();
+
+            queue_.ext_oneapi_graph(exec);
+            queue_.wait();
+
+            auto t0 = std::chrono::high_resolution_clock::now();
+            for (int rep = 0; rep < N_REPS; rep++) {
+                queue_.ext_oneapi_graph(exec);
+                queue_.wait();
+            }
+            auto t1 = std::chrono::high_resolution_clock::now();
+            double us = std::chrono::duration<double, std::micro>(t1 - t0).count() / N_REPS;
+            fprintf(stderr, "[GRAPH-OVERHEAD] Test 3 (parallel_for+SLM=%d floats): %d nodes, %.1f us/replay, %.2f us/node\n",
+                    slm_floats, N_NODES, us, us / N_NODES);
+        }
+    }
+
+    // ---------- Test 4: Mixed workload simulating real persistent plan ----------
+    // Mistral 7B has ~350 ops: ~128 matmuls (64 tiles each), ~32 RMS_NORM (1 tile),
+    // ~32 ADD/MUL (16 tiles), ~32 attention (32 tiles), ~32 ROPE (1 tile), etc.
+    {
+        const int N_REPS = 100;
+        // Simulate: 128 matmul-like + 32 norm-like + 32 add-like + 32 attn-like + ~126 misc
+        struct NodeSpec { int count; int nd_total; int wg_size; int slm_floats; const char * label; };
+        NodeSpec specs[] = {
+            { 128,  64 * 256, 256, 512,   "matmul"    },  // 64 WGs, small SLM
+            {  32,   1 * 256, 256, 4096,  "rms_norm"  },  // 1 WG, large SLM
+            {  32,  16 * 256, 256, 0,     "add/mul"   },  // 16 WGs, no SLM
+            {  32,  32 * 256, 256, 640,   "attention"  }, // 32 WGs, medium SLM
+            {  32,   1 * 256, 256, 0,     "rope/misc"  }, // 1 WG, no SLM
+        };
+        int total_nodes = 0;
+        for (auto & s : specs) total_nodes += s.count;
+
+        sycl_ex::command_graph g(queue_.get_context(), queue_.get_device());
+        g.begin_recording(queue_);
+        for (auto & spec : specs) {
+            for (int i = 0; i < spec.count; i++) {
+                queue_.submit([&](sycl::handler & cgh) {
+                    if (spec.slm_floats > 0) {
+                        sycl::local_accessor<float, 1> slm(spec.slm_floats, cgh);
+                        cgh.parallel_for(
+                            sycl::nd_range<1>(spec.nd_total, spec.wg_size),
+                            [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
+                                slm[item.get_local_linear_id()] = static_cast<float>(i);
+                                sycl::group_barrier(item.get_group());
+                                if (item.get_global_linear_id() == 0) {
+                                    dummy[0] = static_cast<int>(slm[0]);
+                                }
+                            });
+                    } else {
+                        cgh.parallel_for(
+                            sycl::nd_range<1>(spec.nd_total, spec.wg_size),
+                            [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
+                                if (item.get_global_linear_id() == 0) {
+                                    dummy[0] = i;
+                                }
+                            });
+                    }
+                });
+            }
+        }
+        g.end_recording();
+        auto exec = g.finalize();
+
+        queue_.ext_oneapi_graph(exec);
+        queue_.wait();
+
+        auto t0 = std::chrono::high_resolution_clock::now();
+        for (int rep = 0; rep < N_REPS; rep++) {
+            queue_.ext_oneapi_graph(exec);
+            queue_.wait();
+        }
+        auto t1 = std::chrono::high_resolution_clock::now();
+        double us = std::chrono::duration<double, std::micro>(t1 - t0).count() / N_REPS;
+        fprintf(stderr, "[GRAPH-OVERHEAD] Test 4 (mixed %d nodes): %.1f us/replay, %.2f us/node\n",
+                total_nodes, us, us / total_nodes);
+    }
+
+    // ---------- Test 5: Baseline comparison — no graph, raw submissions ----------
+    {
+        const int N_NODES = 350;
+        const int N_REPS  = 100;
+
+        // Warm up
+        for (int i = 0; i < N_NODES; i++) {
+            queue_.submit([&](sycl::handler & cgh) {
+                cgh.single_task([=]() { dummy[0] = i; });
+            });
+        }
+        queue_.wait();
+
+        auto t0 = std::chrono::high_resolution_clock::now();
+        for (int rep = 0; rep < N_REPS; rep++) {
+            for (int i = 0; i < N_NODES; i++) {
+                queue_.submit([&](sycl::handler & cgh) {
+                    cgh.single_task([=]() { dummy[0] = i; });
+                });
+            }
+            queue_.wait();
+        }
+        auto t1 = std::chrono::high_resolution_clock::now();
+        double us = std::chrono::duration<double, std::micro>(t1 - t0).count() / N_REPS;
+        fprintf(stderr, "[GRAPH-OVERHEAD] Test 5 (no-graph baseline): %d submissions, %.1f us/batch, %.2f us/submit\n",
+                N_NODES, us, us / N_NODES);
+    }
+
+    // ---------- Test 6: Scaling test — vary node count ----------
+    {
+        const int node_counts[] = { 10, 50, 100, 200, 350, 500, 700 };
+        const int N_REPS = 100;
+
+        for (int N : node_counts) {
+            sycl_ex::command_graph g(queue_.get_context(), queue_.get_device());
+            g.begin_recording(queue_);
+            for (int i = 0; i < N; i++) {
+                queue_.submit([&](sycl::handler & cgh) {
+                    cgh.parallel_for(
+                        sycl::nd_range<1>(10 * 256, 256),
+                        [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
+                            if (item.get_global_linear_id() == 0) {
+                                dummy[0] = i;
+                            }
+                        });
+                });
+            }
+            g.end_recording();
+            auto exec = g.finalize();
+
+            queue_.ext_oneapi_graph(exec);
+            queue_.wait();
+
+            auto t0 = std::chrono::high_resolution_clock::now();
+            for (int rep = 0; rep < N_REPS; rep++) {
+                queue_.ext_oneapi_graph(exec);
+                queue_.wait();
+            }
+            auto t1 = std::chrono::high_resolution_clock::now();
+            double us = std::chrono::duration<double, std::micro>(t1 - t0).count() / N_REPS;
+            fprintf(stderr, "[GRAPH-OVERHEAD] Test 6 (scaling N=%d): %.1f us/replay, %.2f us/node\n",
+                    N, us, us / N);
+        }
+    }
+
+    sycl::free(dummy, queue_);
+
+    fprintf(stderr, "[GRAPH-OVERHEAD] === Benchmark Complete ===\n");
+    fprintf(stderr, "[GRAPH-OVERHEAD] Decision: < 3us/node -> proceed, 3-10us -> grouped nodes, > 30us -> abandon\n\n");
+}
+
+// -----------------------------------------------------------------------------
 // Persistent Execution
 // -----------------------------------------------------------------------------
 
@@ -7745,6 +8022,18 @@ void UnifiedKernel::execute_persistent() {
     if (!current_plan_ || !current_plan_->is_valid()) {
         GGML_LOG_ERROR("UnifiedKernel: execute_persistent called with invalid plan\n");
         return;
+    }
+
+    // Run graph overhead benchmark on the very first persistent token.
+    // Controlled by GGML_SYCL_PERSISTENT_TG_BENCH_GRAPH env var.
+    {
+        static bool bench_done = false;
+        if (!bench_done) {
+            bench_done = true;
+            if (std::getenv("GGML_SYCL_PERSISTENT_TG_BENCH_GRAPH") != nullptr) {
+                benchmark_graph_overhead();
+            }
+        }
     }
 
     // Launch the persistent kernel
