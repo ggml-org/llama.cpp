@@ -4062,7 +4062,8 @@ struct MicroPhaseArgs {
     int                      phase_start;       // Start index into phase_entries
     int                      phase_end;         // End index into phase_entries
     int                      total_tiles;       // Total tiles in this phase
-    int *                    tile_counter;       // Per-phase tile counter (pre-zeroed)
+    int *                    tile_counter;       // Per-phase tile counter (device alloc)
+    const int *              generation;         // Generation counter (malloc_host), for counter-less zeroing
     int                      use_attn_subgroup_dot;
     void *                   scratch_buffers[4];
     int                      hidden_dim;
@@ -4075,7 +4076,8 @@ struct MicroSingleOpArgs {
     const DeviceOperation * operations;    // Full ops table (malloc_host)
     int                     op_idx;        // Index into operations[]
     int                     n_tiles;       // Number of tiles for this op
-    int *                   tile_counter;  // Unique tile counter (pre-zeroed)
+    int *                   tile_counter;  // Unique tile counter (device alloc)
+    const int *             generation;    // Generation counter (malloc_host), for counter-less zeroing
     int                     use_attn_subgroup_dot;
     void *                  scratch_buffers[4];
     int                     hidden_dim;
@@ -4770,6 +4772,11 @@ public:
 
         PersistentTGKernelImpl<BLOCK_SIZE> kernel(args_shim, slm, item);
 
+        // Generation-based tile claiming: tile counters accumulate across
+        // tokens without zeroing.  The generation counter (malloc_host,
+        // incremented by the host each token) tells us the base offset.
+        const int base = margs.generation ? (*margs.generation) * total_tiles : 0;
+
         // Work-stealing tile loop (same as HEAVY phase in run_phase)
         while (true) {
             int flat_tile = -1;
@@ -4781,7 +4788,8 @@ public:
                 flat_tile = tc.fetch_add(1);
             }
             flat_tile = sycl::group_broadcast(item.get_group(), flat_tile, 0);
-            if (flat_tile >= total_tiles) break;
+            if (flat_tile >= base + total_tiles) break;
+            flat_tile -= base;
 
             // Map flat_tile to (op_idx, tile_idx) via phase entries
             const int phase_start = margs.phase_start;
@@ -4823,6 +4831,12 @@ public:
         PersistentTGKernelImpl<BLOCK_SIZE> kernel(args_shim, slm, item);
         const DeviceOperation &            op = args.operations[args.op_idx];
 
+        // Generation-based tile claiming: tile counters accumulate across
+        // tokens without zeroing.  The generation counter (malloc_host,
+        // incremented by the host each token) tells us the base offset.
+        // Tile indices for this token are [base, base + n_tiles).
+        const int base = args.generation ? (*args.generation) * n_tiles : 0;
+
         while (true) {
             int tile_idx = -1;
             if (local_id == 0) {
@@ -4832,11 +4846,11 @@ public:
                 tile_idx = tc.fetch_add(1);
             }
             tile_idx = sycl::group_broadcast(item.get_group(), tile_idx, 0);
-            if (tile_idx >= n_tiles) {
+            if (tile_idx >= base + n_tiles) {
                 break;
             }
 
-            kernel.dispatch_operation(op, tile_idx);
+            kernel.dispatch_operation(op, tile_idx - base);
         }
     }
 
@@ -6316,6 +6330,10 @@ UnifiedKernel::~UnifiedKernel() {
     if (micro_tile_counters_) {
         sycl::free(micro_tile_counters_, queue_);
         micro_tile_counters_ = nullptr;
+    }
+    if (micro_generation_) {
+        sycl::free(micro_generation_, queue_);
+        micro_generation_ = nullptr;
     }
     // Free MMVQ micro-graph Q8 and scratch buffers
     for (int i = 0; i < 2; i++) {
@@ -8961,6 +8979,11 @@ static void micro_submit_attention(sycl::queue &           q,
 void UnifiedKernel::invalidate_micro_graph() {
     micro_graph_valid_ = false;
     micro_graph_.reset();
+    // Reset generation to -1 so the next graph's first ++generation yields 0,
+    // matching the freshly-zeroed tile counters from record_micro_graph().
+    if (micro_generation_) {
+        *micro_generation_ = -1;
+    }
 }
 
 void UnifiedKernel::record_micro_graph() {
@@ -9000,6 +9023,17 @@ void UnifiedKernel::record_micro_graph() {
         if (micro_tile_counters_) sycl::free(micro_tile_counters_, queue_);
         micro_tile_counters_   = sycl::malloc_device<int>(n_counters_needed, queue_);
         micro_tile_counters_n_ = n_counters_needed;
+        // Zero counters once at allocation (generation starts at 0)
+        queue_.memset(micro_tile_counters_, 0, n_counters_needed * sizeof(int)).wait();
+    }
+
+    // ── Allocate generation counter (host-pinned, read by GPU via PCIe zero-copy) ──
+    // Generation-based tile claiming eliminates per-token memfill: instead of
+    // zeroing all tile counters before each graph replay, we increment the
+    // generation and kernels compute their tile range as [gen*n_tiles, (gen+1)*n_tiles).
+    if (!micro_generation_) {
+        micro_generation_ = sycl::malloc_host<int>(1, queue_);
+        *micro_generation_ = -1;  // First ++generation yields 0, matching zeroed counters
     }
 
     // ── SLM size (same logic as launch_persistent_kernel) ──
@@ -9045,9 +9079,9 @@ void UnifiedKernel::record_micro_graph() {
 
     mod_graph.begin_recording(queue_);
 
-    // Bulk-zero all tile counters at the start of the graph
-    // (phases + extra counters for split-phase fallback ops)
-    queue_.memset(micro_tile_counters_, 0, n_counters_needed * sizeof(int));
+    // NOTE: No bulk memset of tile counters here — eliminated by generation-based
+    // tile claiming.  Counters accumulate across tokens; the generation counter
+    // (malloc_host, incremented by host each token) tells kernels the valid range.
 
     // Get pointers to the ops table and phase entries (both malloc_host)
     const DeviceOperation * d_ops = static_cast<const DeviceOperation *>(d_ops_pool_);
@@ -9252,6 +9286,7 @@ void UnifiedKernel::record_micro_graph() {
                     sargs.op_idx                = op_idx;
                     sargs.n_tiles               = op_tiles;
                     sargs.tile_counter          = &micro_tile_counters_[counter_idx];
+                    sargs.generation            = micro_generation_;
                     sargs.use_attn_subgroup_dot = use_attn_subgroup_dot ? 1 : 0;
                     for (int i = 0; i < 4; i++) {
                         sargs.scratch_buffers[i] = persistent_buffers_[i];
@@ -9323,7 +9358,7 @@ void UnifiedKernel::record_micro_graph() {
                                   n_dedicated_copy + n_dedicated_silu + n_dedicated_softmax + n_dedicated_setrows +
                                   n_dedicated_attn;
     const int total_graph_nodes =
-        1 + n_quantize_nodes + mmvq_node_count + n_dedicated_total + n_fallback_nodes;  // 1=memset
+        n_quantize_nodes + mmvq_node_count + n_dedicated_total + n_fallback_nodes;  // no memset (generation counters)
 
     {
         static bool logged = false;
@@ -9417,6 +9452,21 @@ void UnifiedKernel::execute_persistent() {
         // Build ops table (updates pointers from UPDATE recipe) but skip
         // monolithic kernel launch. Then replay the pre-recorded SYCL graph.
         launch_persistent_kernel(/* build_only = */ true);
+
+        // Increment generation counter (host-pinned, read by GPU via PCIe
+        // zero-copy).  This eliminates per-token memfill of tile counters:
+        // kernels compute their tile range as [gen*n_tiles, (gen+1)*n_tiles).
+        if (micro_generation_) {
+            (*micro_generation_)++;
+            // Overflow guard: generation * n_tiles must fit in int32.  For fallback
+            // ops n_tiles is typically 1-64, but guard conservatively at 100K to
+            // prevent overflow for any tile count up to ~21K (INT_MAX / 100K ≈ 21K).
+            if (*micro_generation_ > 100000 && micro_tile_counters_ && micro_tile_counters_n_ > 0) {
+                queue_.memset(micro_tile_counters_, 0, micro_tile_counters_n_ * sizeof(int)).wait();
+                *micro_generation_ = 0;
+            }
+        }
+
         launch_micro_graph_kernel();
     } else {
         // ── Monolithic kernel path (default or first token) ────────────

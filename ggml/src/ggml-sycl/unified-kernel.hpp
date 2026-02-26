@@ -2993,6 +2993,7 @@ private:
     std::unique_ptr<MicroGraphState> micro_graph_;
     int *  micro_tile_counters_     = nullptr;  // [n_phases] per-phase tile counters (device alloc)
     int    micro_tile_counters_n_   = 0;        // Allocated count
+    int *  micro_generation_        = nullptr;  // Generation counter (malloc_host), incremented per token
     bool   micro_graph_valid_       = false;    // True when recorded graph matches current plan
 
     // MMVQ micro-graph: Q8_1 SOA activation buffers for MMVQ kernel dispatch
