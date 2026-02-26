@@ -144,10 +144,7 @@ class ModelBase:
         self.metadata_override = metadata_override
         self.model_name = model_name
         self.dir_model_card = dir_model  # overridden in convert_lora_to_gguf.py
-
-        # detect NVFP4 quantization (ModelOpt format)
-        quant_config = self.hparams.get("quantization_config")
-        self._is_nvfp4 = isinstance(quant_config, dict) and quant_config.get("quant_algo") == "NVFP4"
+        self._is_nvfp4 = False
 
         # Apply heuristics to figure out typical tensor encoding based on first tensor's dtype
         # NOTE: can't use field "torch_dtype" in config.json, because some finetunes lie.
@@ -683,6 +680,10 @@ class ModelBase:
         return []
 
     def prepare_tensors(self):
+        # detect NVFP4 quantization (ModelOpt format)
+        quant_config = self.hparams.get("quantization_config")
+        self._is_nvfp4 = isinstance(quant_config, dict) and quant_config.get("quant_algo") == "NVFP4"
+
         self.dequant_model()
 
         # NVFP4 weights are repacked and written directly to gguf_writer
