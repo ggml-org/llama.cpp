@@ -88,7 +88,7 @@ llm_build_qwen35moe::llm_build_qwen35moe(const llama_model & model, const llm_gr
 
     // Build MTP head if nextn_predict_layers > 0
     if (hparams.nextn_predict_layers > 0) {
-        build_mtp_head();
+        build_mtp_head(inp, inp_pos, sections);
     }
 }
 
@@ -427,26 +427,29 @@ ggml_tensor * llm_build_qwen35moe ::build_layer_ffn(ggml_tensor * cur, const int
     return cur;
 }
 
-void llm_build_qwen35moe::build_mtp_head() {
-    // MTP (Multi-Token Prediction) head
+void llm_build_qwen35moe::build_mtp_head(
+        llm_graph_input_mem_hybrid * inp,
+        ggml_tensor * inp_pos,
+        int * sections) {
+    // MTP (Multi-Token Prediction) head with full transformer block
     //
     // The MTP module takes the hidden state from the last transformer layer
     // and uses ggml_argmax on the main model's logits to determine the greedy
     // token selection in-graph, eliminating the need for two-pass execution.
     //
     // MTP forward pass for each MTP layer k:
-    //   1. sampled_token = argmax(main_logits)     greedy in-graph token selection
-    //   2. emb = embed_tokens(sampled_token)       token embedding lookup
-    //   3. h_norm = hnorm(hidden_state)            normalize hidden state
-    //   4. e_norm = enorm(emb)                     normalize token embedding
+    //   1. sampled_token = argmax(main_logits)       greedy in-graph token selection
+    //   2. emb = embed_tokens(sampled_token)         token embedding lookup
+    //   3. h_norm = hnorm(hidden_state)              normalize hidden state
+    //   4. e_norm = enorm(emb)                       normalize token embedding
     //   5. combined = eh_proj(concat(e_norm, h_norm))  project concatenation
-    //   6. Run combined through one transformer block (attention + MoE FFN)
-    //   7. logits = lm_head(shared_head_norm(output))  shared LM head
+    //   6. attn_norm → attention → residual           transformer block attention
+    //   7. attn_post_norm → MoE FFN → residual        transformer block FFN
+    //   8. logits = lm_head(shared_head_norm(output))  shared LM head
 
     const int n_transformer_layers = n_layer - hparams.nextn_predict_layers;
 
     // Use ggml_argmax on the main model's logits for in-graph greedy token selection
-    // This avoids the need for a separate graph execution or external token input
     ggml_tensor * main_logits = res->t_logits; // [n_vocab, n_tokens]
     GGML_ASSERT(main_logits != nullptr);
 
@@ -469,7 +472,6 @@ void llm_build_qwen35moe::build_mtp_head() {
         }
 
         // Step 1: Get token embedding using greedy argmax tokens
-        // Use MTP's own embed_tokens if available, otherwise use main model's tok_embd
         ggml_tensor * tok_embd_mtp = layer.nextn.embed_tokens ? layer.nextn.embed_tokens : model.tok_embd;
         ggml_tensor * emb = ggml_get_rows(ctx0, tok_embd_mtp, greedy_tokens);
         cb(emb, "mtp_token_embd", il);
@@ -483,37 +485,59 @@ void llm_build_qwen35moe::build_mtp_head() {
         cb(e_norm, "mtp_enorm", il);
 
         // Step 4: Concatenate [e_norm, h_norm] and project through eh_proj
-        // eh_proj expects [2*n_embd] input -> [n_embd] output
         ggml_tensor * concat = ggml_concat(ctx0, e_norm, h_norm, 0); // [2*n_embd, n_tokens]
         cb(concat, "mtp_concat", il);
 
         ggml_tensor * projected = build_lora_mm(layer.nextn.eh_proj, concat);
         cb(projected, "mtp_projected", il);
 
-        // Step 5: Transformer block
-        // Run through the MTP layer's attention + MoE FFN if tensors are available.
-        // The MTP layer reuses the same architecture as regular transformer layers.
+        // Step 5-7: Full transformer block (attention + MoE FFN)
+        // The MTP layer uses the same hybrid architecture as main transformer layers.
+        // For Qwen3.5 MoE, the MTP layer index determines whether it uses
+        // linear attention (Gated Delta Net) or full attention based on the
+        // (il+1) % full_attn_interval pattern.
+        ggml_tensor * cur = projected;
+
         if (model.layers[il].attn_norm != nullptr) {
-            // MTP layer has full transformer block tensors loaded
-            // Apply attention + FFN using the regular layer building methods
-            ggml_tensor * cur = projected;
+            ggml_tensor * inpSA = cur;
 
             // Pre-attention norm
-            ggml_tensor * attn_norm_out = build_norm(cur,
-                model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
-            cb(attn_norm_out, "mtp_attn_norm", il);
+            cur = build_norm(cur, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
+            cb(cur, "mtp_attn_norm", il);
 
-            // NOTE: The full attention + FFN block for MTP layers requires careful
-            // handling of the hybrid architecture (linear vs full attention) and
-            // KV cache management. For now, skip the transformer block and use
-            // the projected hidden state directly. The full transformer block
-            // should be added when the memory/cache infrastructure supports MTP layers.
-            mtp_hidden = projected;
-        } else {
-            mtp_hidden = projected;
+            // Attention: choose based on layer type (recurrent vs full)
+            if (hparams.is_recurrent(il)) {
+                // Linear attention (Gated Delta Net) - uses recurrent state
+                cur = build_layer_attn_linear(inp->get_recr(), cur, il);
+            } else {
+                // Full attention - uses KV cache
+                cur = build_layer_attn(inp->get_attn(), cur, inp_pos, sections, il);
+            }
+
+            // Residual connection after attention
+            cur = ggml_add(ctx0, cur, inpSA);
+            cb(cur, "mtp_attn_residual", il);
+
+            // Save for FFN residual
+            ggml_tensor * ffn_residual = cur;
+
+            // Post-attention norm
+            ggml_tensor * attn_post_norm = build_norm(cur,
+                model.layers[il].attn_post_norm, nullptr, LLM_NORM_RMS, il);
+            cb(attn_post_norm, "mtp_attn_post_norm", il);
+
+            // MoE FFN
+            cur = build_layer_ffn(attn_post_norm, il);
+            cb(cur, "mtp_ffn_out", il);
+
+            // Residual connection after FFN
+            cur = ggml_add(ctx0, cur, ffn_residual);
+            cb(cur, "mtp_post_moe", il);
         }
 
-        // Step 6: Apply shared head norm and LM head for draft logits
+        mtp_hidden = cur;
+
+        // Step 8: Apply shared head norm and LM head for draft logits
         ggml_tensor * mtp_normed;
         if (layer.nextn.shared_head_norm != nullptr) {
             mtp_normed = build_norm(mtp_hidden, layer.nextn.shared_head_norm, nullptr, LLM_NORM_RMS, il);
@@ -522,7 +546,6 @@ void llm_build_qwen35moe::build_mtp_head() {
         }
         cb(mtp_normed, "mtp_head_norm", il);
 
-        // Use MTP's own LM head if available, otherwise use main model's output head
         ggml_tensor * lm_head = layer.nextn.shared_head_head ? layer.nextn.shared_head_head : model.output;
         ggml_tensor * mtp_logits = build_lora_mm(lm_head, mtp_normed);
         cb(mtp_logits, "mtp_logits", il);
