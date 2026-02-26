@@ -567,8 +567,10 @@ static ggml_type llama_tensor_get_type(
                 ++qs->n_fallback;
 
                 switch (new_type) {
+                    // types on the left  are qk_k % 256 == 0
+                    // types on the right are qk_k % 32  == 0
                     case GGML_TYPE_TQ1_0:
-                    case GGML_TYPE_TQ2_0:  new_type = GGML_TYPE_Q4_0; break;  // TODO: use a symmetric type instead?
+                    case GGML_TYPE_TQ2_0:   new_type = GGML_TYPE_Q4_0; break;  // TODO: use a symmetric type instead?
                     case GGML_TYPE_IQ2_XXS:
                     case GGML_TYPE_IQ2_XS:
                     case GGML_TYPE_IQ2_S:
@@ -578,10 +580,10 @@ static ggml_type llama_tensor_get_type(
                     case GGML_TYPE_IQ1_M:
                     case GGML_TYPE_Q2_K:
                     case GGML_TYPE_Q3_K:
-                    case GGML_TYPE_IQ4_XS: new_type = GGML_TYPE_IQ4_NL; break;
-                    case GGML_TYPE_Q4_K:   new_type = GGML_TYPE_Q5_0;   break;
-                    case GGML_TYPE_Q5_K:   new_type = GGML_TYPE_Q5_1;   break;
-                    case GGML_TYPE_Q6_K:   new_type = GGML_TYPE_Q8_0;   break;
+                    case GGML_TYPE_IQ4_XS:  new_type = GGML_TYPE_IQ4_NL; break;
+                    case GGML_TYPE_Q4_K:    new_type = GGML_TYPE_Q5_0;   break;
+                    case GGML_TYPE_Q5_K:    new_type = GGML_TYPE_Q5_1;   break;
+                    case GGML_TYPE_Q6_K:    new_type = GGML_TYPE_Q8_0;   break;
                     default:
                         //
                         // the majority of oddly-shaped tensors are handled by
@@ -697,7 +699,7 @@ static size_t llama_tensor_quantize(
     //
     // this launches threads once rather than n_experts times,
     // which avoids massive thread creation overhead for
-    // MoE models (which can be very large)
+    // MoE models (which can have 256+ experts)
     if (expert_parallel) {
         std::mutex mutex;
         std::atomic<int64_t> next_expert{0};
@@ -759,9 +761,10 @@ static size_t llama_tensor_quantize(
 
         size_t new_size = 0;
         for (int64_t i03 = 0; i03 < n_experts; ++i03) {
-            const float * f32_data_03 = f32_data + i03 * ne_0_x_1;
-            void        * new_data_03 = (char *)new_data + ggml_row_size(new_type, n_per_row) * i03 * nrows;
             const float * imatrix_03  = imatrix ? imatrix + i03 * n_per_row : nullptr;
+            const float * f32_data_03 = f32_data + i03 * ne_0_x_1;
+            void        * new_data_03 = (char *)new_data + ggml_row_size(new_type, n_per_row)
+                                                         * i03 * nrows;
 
             new_size += llama_tensor_quantize_impl(
                 new_type, f32_data_03, new_data_03, chunk_size,
