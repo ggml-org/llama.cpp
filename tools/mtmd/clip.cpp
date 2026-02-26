@@ -1985,17 +1985,21 @@ struct clip_graph {
     }
 
     ggml_cgraph * build_dots_ocr() {
-        // 2D input positions
-        ggml_tensor * pos_h = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_patches);
-        ggml_set_name(pos_h, "pos_h");
-        ggml_set_input(pos_h);
+        // dots.ocr uses 2D RoPE with sections [d_head/4, d_head/4, 0, 0]
+        // only the first half of head dims are rotated (h and w), rest are unrotated
+        // this requires ggml_rope_multi (not build_rope_2d which rotates all dims)
+        GGML_ASSERT(d_head % 4 == 0);
+        int mrope_sections[4] = {d_head/4, d_head/4, 0, 0};
 
-        ggml_tensor * pos_w = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_patches);
-        ggml_set_name(pos_w, "pos_w");
-        ggml_set_input(pos_w);
+        ggml_tensor * positions = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_patches * 4);
+        ggml_set_name(positions, "positions");
+        ggml_set_input(positions);
 
         auto add_pos = [&](ggml_tensor * cur, const clip_layer &) {
-            return build_rope_2d(ctx0, cur, pos_h, pos_w, hparams.rope_theta, false);
+            return ggml_rope_multi(
+                        ctx0, cur, positions, nullptr,
+                        d_head/2, mrope_sections, GGML_ROPE_TYPE_VISION,
+                        32768, hparams.rope_theta, 1, 0, 1, 32, 1);
         };
 
         ggml_tensor * inp = build_inp();
@@ -4980,7 +4984,6 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         case PROJECTOR_TYPE_PIXTRAL:
         case PROJECTOR_TYPE_KIMIVL:
         case PROJECTOR_TYPE_LIGHTONOCR:
-        case PROJECTOR_TYPE_DOTS_OCR:
             {
                 // set the 2D positions
                 int n_patches_per_col = image_size_width / patch_size;
@@ -4995,6 +4998,18 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                     pos_data[i] = i % n_patches_per_col;
                 }
                 set_input_i32("pos_w", pos_data);
+            } break;
+        case PROJECTOR_TYPE_DOTS_OCR:
+            {
+                // dots.ocr uses ggml_rope_multi with 4-component positions [h, w, 0, 0]
+                int n_patches_per_col = image_size_width / patch_size;
+                std::vector<int> positions(n_pos * 4, 0); // init all to 0
+                for (int i = 0; i < n_pos; i++) {
+                    positions[i]         = i / n_patches_per_col; // h
+                    positions[n_pos + i] = i % n_patches_per_col; // w
+                    // components 2 and 3 stay 0 (mrope sections are 0)
+                }
+                set_input_i32("positions", positions);
             } break;
         case PROJECTOR_TYPE_GLM_EDGE:
         {
