@@ -13,6 +13,8 @@
 #include "etsoc/isa/hart.h"
 
 #include <stdint.h>
+#include "etsoc/isa/hart.h"
+#include "etsoc/common/utils.h"
 
 #define SOC_MINIONS_PER_SHIRE    32
 #define NUM_HARTS_PER_MINION     2
