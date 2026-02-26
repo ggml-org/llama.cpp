@@ -23,17 +23,17 @@ int main() {
 
     const auto & model = result.value();
 
-    fprintf(stderr, "Architecture: %s\n", model.architecture.c_str());
-    fprintf(stderr, "n_embd:       %u\n", model.n_embd);
-    fprintf(stderr, "n_ff:         %u\n", model.n_ff);
-    fprintf(stderr, "n_vocab:      %u\n", model.n_vocab);
-    fprintf(stderr, "n_layer:      %u\n", model.n_layer);
-    fprintf(stderr, "n_head:       %u\n", model.n_head);
-    fprintf(stderr, "n_head_kv:    %u\n", model.n_head_kv);
-    fprintf(stderr, "n_expert:     %u\n", model.n_expert);
-    fprintf(stderr, "n_embd_head_k:%u\n", model.n_embd_head_k);
-    fprintf(stderr, "n_embd_head_v:%u\n", model.n_embd_head_v);
-    fprintf(stderr, "tensors:      %zu\n", model.tensors.size());
+    fprintf(stderr, "Architecture:  %s\n", model.architecture.c_str());
+    fprintf(stderr, "n_embd:        %u\n", model.n_embd);
+    fprintf(stderr, "n_ff:          %u\n", model.n_ff);
+    fprintf(stderr, "n_vocab:       %u\n", model.n_vocab);
+    fprintf(stderr, "n_layer:       %u\n", model.n_layer);
+    fprintf(stderr, "n_head:        %u\n", model.n_head);
+    fprintf(stderr, "n_head_kv:     %u\n", model.n_head_kv);
+    fprintf(stderr, "n_expert:      %u\n", model.n_expert);
+    fprintf(stderr, "n_embd_head_k: %u\n", model.n_embd_head_k);
+    fprintf(stderr, "n_embd_head_v: %u\n", model.n_embd_head_v);
+    fprintf(stderr, "tensors:       %zu\n", model.tensors.size());
 
     // Verify architecture
     TEST_ASSERT(model.architecture == "qwen3", "expected architecture 'qwen3'");
@@ -54,11 +54,17 @@ int main() {
     bool found_token_embd = false;
     bool found_output_norm = false;
     for (const auto & t : model.tensors) {
-        if (t.name == "blk.0.attn_q.weight")  { found_attn_q = true; }
-        if (t.name == "token_embd.weight")     { found_token_embd = true; }
-        if (t.name == "output_norm.weight")    { found_output_norm = true; }
+        if (t.name == "blk.0.attn_q.weight") {
+            found_attn_q = true;
+        }
+        if (t.name == "token_embd.weight") {
+            found_token_embd = true;
+        }
+        if (t.name == "output_norm.weight") {
+            found_output_norm = true;
+        }
     }
-    TEST_ASSERT(found_attn_q,     "expected tensor 'blk.0.attn_q.weight'");
+    TEST_ASSERT(found_attn_q, "expected tensor 'blk.0.attn_q.weight'");
     TEST_ASSERT(found_token_embd, "expected tensor 'token_embd.weight'");
     TEST_ASSERT(found_output_norm, "expected tensor 'output_norm.weight'");
 
@@ -84,17 +90,17 @@ int main() {
     }
     const auto & model3 = result3.value();
 
-    fprintf(stderr, "Architecture: %s\n", model3.architecture.c_str());
-    fprintf(stderr, "n_embd:       %u\n", model3.n_embd);
-    fprintf(stderr, "n_ff:         %u\n", model3.n_ff);
-    fprintf(stderr, "n_vocab:      %u\n", model3.n_vocab);
-    fprintf(stderr, "n_layer:      %u\n", model3.n_layer);
-    fprintf(stderr, "n_head:       %u\n", model3.n_head);
-    fprintf(stderr, "n_head_kv:    %u\n", model3.n_head_kv);
-    fprintf(stderr, "n_expert:     %u\n", model3.n_expert);
-    fprintf(stderr, "n_embd_head_k:%u\n", model3.n_embd_head_k);
-    fprintf(stderr, "n_embd_head_v:%u\n", model3.n_embd_head_v);
-    fprintf(stderr, "tensors:      %zu\n", model3.tensors.size());
+    fprintf(stderr, "Architecture:  %s\n", model3.architecture.c_str());
+    fprintf(stderr, "n_embd:        %u\n", model3.n_embd);
+    fprintf(stderr, "n_ff:          %u\n", model3.n_ff);
+    fprintf(stderr, "n_vocab:       %u\n", model3.n_vocab);
+    fprintf(stderr, "n_layer:       %u\n", model3.n_layer);
+    fprintf(stderr, "n_head:        %u\n", model3.n_head);
+    fprintf(stderr, "n_head_kv:     %u\n", model3.n_head_kv);
+    fprintf(stderr, "n_expert:      %u\n", model3.n_expert);
+    fprintf(stderr, "n_embd_head_k: %u\n", model3.n_embd_head_k);
+    fprintf(stderr, "n_embd_head_v: %u\n", model3.n_embd_head_v);
+    fprintf(stderr, "tensors:       %zu\n", model3.tensors.size());
 
     // Verify architecture
     TEST_ASSERT(model3.architecture == "glm4moe", "expected architecture 'glm4moe'");

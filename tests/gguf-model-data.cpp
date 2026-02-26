@@ -24,11 +24,15 @@ struct gguf_buf_reader {
 
     gguf_buf_reader(const std::vector<char> & buf) : data(buf.data()), size(buf.size()), pos(0) {}
 
-    bool has_n_bytes(size_t n) const { return pos + n <= size; }
+    bool has_n_bytes(size_t n) const {
+        return pos + n <= size;
+    }
 
     template <typename T>
     bool read_val(T & out) {
-        if (!has_n_bytes(sizeof(T))) { return false; }
+        if (!has_n_bytes(sizeof(T))) {
+            return false;
+        }
         memcpy(&out, data + pos, sizeof(T));
         pos += sizeof(T);
         return true;
@@ -36,15 +40,21 @@ struct gguf_buf_reader {
 
     bool read_str(std::string & out) {
         uint64_t len;
-        if (!read_val(len))    { return false; }
-        if (!has_n_bytes((size_t)len)) { return false; }
+        if (!read_val(len)) {
+            return false;
+        }
+        if (!has_n_bytes((size_t)len)) {
+            return false;
+        }
         out.assign(data + pos, (size_t)len);
         pos += (size_t)len;
         return true;
     }
 
     bool skip(size_t n) {
-        if (!has_n_bytes(n)) { return false; }
+        if (!has_n_bytes(n)) {
+            return false;
+        }
         pos += n;
         return true;
     }
@@ -63,7 +73,7 @@ static size_t gguf_val_type_size(int32_t vtype) {
         case GGUF_TYPE_UINT64:  return 8;
         case GGUF_TYPE_INT64:   return 8;
         case GGUF_TYPE_FLOAT64: return 8;
-        default:               return 0; // string/array handled separately
+        default:                return 0; // string/array handled separately
     }
 }
 
@@ -76,55 +86,107 @@ static bool gguf_skip_value(gguf_buf_reader & r, int32_t vtype) {
     if (vtype == GGUF_TYPE_ARRAY) {
         int32_t elem_type;
         uint64_t count;
-        if (!r.read_val(elem_type)) { return false; }
-        if (!r.read_val(count))     { return false; }
+        if (!r.read_val(elem_type)) {
+            return false;
+        }
+        if (!r.read_val(count)) {
+            return false;
+        }
         if (elem_type == GGUF_TYPE_STRING) {
             for (uint64_t i = 0; i < count; i++) {
                 std::string tmp;
-                if (!r.read_str(tmp)) { return false; }
+                if (!r.read_str(tmp)) {
+                    return false;
+                }
             }
             return true;
         }
         if (elem_type == GGUF_TYPE_ARRAY) {
             // nested arrays - recurse
             for (uint64_t i = 0; i < count; i++) {
-                if (!gguf_skip_value(r, GGUF_TYPE_ARRAY)) { return false; }
+                if (!gguf_skip_value(r, GGUF_TYPE_ARRAY)) {
+                    return false;
+                }
             }
             return true;
         }
         size_t elem_sz = gguf_val_type_size(elem_type);
-        if (elem_sz == 0) { return false; }
+        if (elem_sz == 0) {
+            return false;
+        }
         return r.skip((size_t)count * elem_sz);
     }
     size_t sz = gguf_val_type_size(vtype);
-    if (sz == 0) { return false; }
+    if (sz == 0) {
+        return false;
+    }
     return r.skip(sz);
 }
 
 static bool gguf_read_uint32_val(gguf_buf_reader & r, int32_t vtype, uint32_t & out) {
     if (vtype == GGUF_TYPE_UINT8) {
-        uint8_t v; if (!r.read_val(v)) { return false; } out = v; return true;
+        uint8_t v;
+        if (!r.read_val(v)) {
+            return false;
+        }
+        out = v;
+        return true;
     }
     if (vtype == GGUF_TYPE_INT8) {
-        int8_t v; if (!r.read_val(v)) { return false; } out = (uint32_t)v; return true;
+        int8_t v;
+        if (!r.read_val(v)) {
+            return false;
+        }
+        out = (uint32_t)v;
+        return true;
     }
     if (vtype == GGUF_TYPE_UINT16) {
-        uint16_t v; if (!r.read_val(v)) { return false; } out = v; return true;
+        uint16_t v;
+        if (!r.read_val(v)) {
+            return false;
+        }
+        out = v;
+        return true;
     }
     if (vtype == GGUF_TYPE_INT16) {
-        int16_t v; if (!r.read_val(v)) { return false; } out = (uint32_t)v; return true;
+        int16_t v;
+        if (!r.read_val(v)) {
+            return false;
+        }
+        out = (uint32_t)v;
+        return true;
     }
     if (vtype == GGUF_TYPE_UINT32) {
-        uint32_t v; if (!r.read_val(v)) { return false; } out = v; return true;
+        uint32_t v;
+        if (!r.read_val(v)) {
+            return false;
+        }
+        out = v;
+        return true;
     }
     if (vtype == GGUF_TYPE_INT32) {
-        int32_t v; if (!r.read_val(v)) { return false; } out = (uint32_t)v; return true;
+        int32_t v;
+        if (!r.read_val(v)) {
+            return false;
+        }
+        out = (uint32_t)v;
+        return true;
     }
     if (vtype == GGUF_TYPE_UINT64) {
-        uint64_t v; if (!r.read_val(v)) { return false; } out = (uint32_t)v; return true;
+        uint64_t v;
+        if (!r.read_val(v)) {
+            return false;
+        }
+        out = (uint32_t)v;
+        return true;
     }
     if (vtype == GGUF_TYPE_INT64) {
-        int64_t v; if (!r.read_val(v)) { return false; } out = (uint32_t)v; return true;
+        int64_t v;
+        if (!r.read_val(v)) {
+            return false;
+        }
+        out = (uint32_t)v;
+        return true;
     }
     return false;
 }
@@ -135,14 +197,18 @@ static std::optional<gguf_remote_model> gguf_parse_meta(const std::vector<char> 
 
     // Header: magic(4) + version(4) + tensor_count(8) + kv_count(8) = 24 bytes minimum
     uint32_t magic_raw;
-    if (!r.read_val(magic_raw)) { return std::nullopt; }
+    if (!r.read_val(magic_raw)) {
+        return std::nullopt;
+    }
     if (memcmp(&magic_raw, "GGUF", 4) != 0) {
         fprintf(stderr, "gguf_parse_meta: invalid magic\n");
         return std::nullopt;
     }
 
     uint32_t version;
-    if (!r.read_val(version)) { return std::nullopt; }
+    if (!r.read_val(version)) {
+        return std::nullopt;
+    }
     if (version < 2 || version > 3) {
         fprintf(stderr, "gguf_parse_meta: unsupported version %u\n", version);
         return std::nullopt;
@@ -150,8 +216,12 @@ static std::optional<gguf_remote_model> gguf_parse_meta(const std::vector<char> 
 
     int64_t tensor_count_raw;
     int64_t kv_count_raw;
-    if (!r.read_val(tensor_count_raw)) { return std::nullopt; }
-    if (!r.read_val(kv_count_raw))     { return std::nullopt; }
+    if (!r.read_val(tensor_count_raw)) {
+        return std::nullopt;
+    }
+    if (!r.read_val(kv_count_raw)) {
+        return std::nullopt;
+    }
 
     uint64_t tensor_count = (uint64_t)tensor_count_raw;
     uint64_t kv_count     = (uint64_t)kv_count_raw;
@@ -163,13 +233,19 @@ static std::optional<gguf_remote_model> gguf_parse_meta(const std::vector<char> 
     // Parse KV pairs
     for (uint64_t i = 0; i < kv_count; i++) {
         std::string key;
-        if (!r.read_str(key)) { return std::nullopt; }
+        if (!r.read_str(key)) {
+            return std::nullopt;
+        }
 
         int32_t vtype;
-        if (!r.read_val(vtype)) { return std::nullopt; }
+        if (!r.read_val(vtype)) {
+            return std::nullopt;
+        }
 
         if (key == "general.architecture" && vtype == GGUF_TYPE_STRING) {
-            if (!r.read_str(model.architecture)) { return std::nullopt; }
+            if (!r.read_str(model.architecture)) {
+                return std::nullopt;
+            }
             arch_prefix = model.architecture + ".";
             continue;
         }
@@ -177,7 +253,9 @@ static std::optional<gguf_remote_model> gguf_parse_meta(const std::vector<char> 
         // Extract split.count for proper handling of split files
         if (key == "split.count") {
             uint32_t v;
-            if (!gguf_read_uint32_val(r, vtype, v)) { return std::nullopt; }
+            if (!gguf_read_uint32_val(r, vtype, v)) {
+                return std::nullopt;
+            }
             model.n_split = (uint16_t)v;
             continue;
         }
@@ -185,7 +263,9 @@ static std::optional<gguf_remote_model> gguf_parse_meta(const std::vector<char> 
         // Extract split.tensors.count so we can verify we have all tensors
         if (key == "split.tensors.count") {
             uint32_t v;
-            if (!gguf_read_uint32_val(r, vtype, v)) { return std::nullopt; }
+            if (!gguf_read_uint32_val(r, vtype, v)) {
+                return std::nullopt;
+            }
             model.n_split_tensors = v;
             continue;
         }
@@ -193,7 +273,7 @@ static std::optional<gguf_remote_model> gguf_parse_meta(const std::vector<char> 
         if (!arch_prefix.empty()) {
             uint32_t * target = nullptr;
 
-            if (key == arch_prefix + "embedding_length")              { target = &model.n_embd; }
+            if      (key == arch_prefix + "embedding_length")         { target = &model.n_embd; }
             else if (key == arch_prefix + "feed_forward_length")      { target = &model.n_ff; }
             else if (key == arch_prefix + "block_count")              { target = &model.n_layer; }
             else if (key == arch_prefix + "attention.head_count")     { target = &model.n_head; }
@@ -203,12 +283,16 @@ static std::optional<gguf_remote_model> gguf_parse_meta(const std::vector<char> 
             else if (key == arch_prefix + "attention.value_length")   { target = &model.n_embd_head_v; }
 
             if (target) {
-                if (!gguf_read_uint32_val(r, vtype, *target)) { return std::nullopt; }
+                if (!gguf_read_uint32_val(r, vtype, *target)) {
+                    return std::nullopt;
+                }
                 continue;
             }
         }
 
-        if (!gguf_skip_value(r, vtype)) { return std::nullopt; }
+        if (!gguf_skip_value(r, vtype)) {
+            return std::nullopt;
+        }
     }
 
     // Parse tensor info entries
@@ -216,8 +300,12 @@ static std::optional<gguf_remote_model> gguf_parse_meta(const std::vector<char> 
     for (uint64_t i = 0; i < tensor_count; i++) {
         gguf_remote_tensor t;
 
-        if (!r.read_str(t.name))    { return std::nullopt; }
-        if (!r.read_val(t.n_dims))  { return std::nullopt; }
+        if (!r.read_str(t.name)) {
+            return std::nullopt;
+        }
+        if (!r.read_val(t.n_dims)) {
+            return std::nullopt;
+        }
 
         if (t.n_dims > 4) {
             fprintf(stderr, "gguf_parse_meta: tensor '%s' has %u dims (max 4)\n", t.name.c_str(), t.n_dims);
@@ -225,15 +313,21 @@ static std::optional<gguf_remote_model> gguf_parse_meta(const std::vector<char> 
         }
 
         for (uint32_t d = 0; d < t.n_dims; d++) {
-            if (!r.read_val(t.ne[d])) { return std::nullopt; }
+            if (!r.read_val(t.ne[d])) {
+                return std::nullopt;
+            }
         }
 
         int32_t type_raw;
-        if (!r.read_val(type_raw)) { return std::nullopt; }
+        if (!r.read_val(type_raw)) {
+            return std::nullopt;
+        }
         t.type = (ggml_type)type_raw;
 
         uint64_t offset;
-        if (!r.read_val(offset)) { return std::nullopt; }
+        if (!r.read_val(offset)) {
+            return std::nullopt;
+        }
 
         // Infer n_vocab from token_embd.weight
         if (t.name == "token_embd.weight") {
@@ -263,9 +357,13 @@ static std::string sanitize_for_path(const std::string & s) {
 
 static bool read_file(const std::string & path, std::vector<char> & out) {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f.good()) { return false; }
+    if (!f.good()) {
+        return false;
+    }
     auto sz = f.tellg();
-    if (sz <= 0) { return false; }
+    if (sz <= 0) {
+        return false;
+    }
     out.resize((size_t)sz);
     f.seekg(0);
     f.read(out.data(), sz);
@@ -274,7 +372,9 @@ static bool read_file(const std::string & path, std::vector<char> & out) {
 
 static bool write_file(const std::string & path, const std::vector<char> & data) {
     std::ofstream f(path, std::ios::binary | std::ios::trunc);
-    if (!f.good()) { return false; }
+    if (!f.good()) {
+        return false;
+    }
     f.write(data.data(), (std::streamsize)data.size());
     return f.good();
 }
@@ -346,7 +446,9 @@ static std::string detect_gguf_filename(const std::string & repo, const std::str
     for (const auto & sibling : j["siblings"]) {
         if (!sibling.contains("rfilename")) { continue; }
         std::string fname = sibling["rfilename"].get<std::string>();
-        if (fname.size() < 5 || fname.substr(fname.size() - 5) != ".gguf") { continue; }
+        if (fname.size() < 5 || fname.substr(fname.size() - 5) != ".gguf") {
+            continue;
+        }
 
         std::string fname_upper = fname;
         for (char & c : fname_upper) { c = (char)toupper(c); }
