@@ -1,4 +1,5 @@
 #include "common.h"
+#include "log.h"
 #include "ggml-backend.h"
 #include "ggml.h"
 #include "gguf.h"
@@ -8,6 +9,7 @@
 #include "../src/llama-arch.h"
 #include "../src/llama-model-saver.h"
 
+#include <cstdio>
 #include <cstring>
 #include <cstdint>
 #include <random>
@@ -233,7 +235,8 @@ static int test_vs_disk(const char * path_model, const char * path_results) {
 }
 
 static std::vector<float> get_logits(
-        const llm_arch arch, const size_t seed, const std::vector<llama_token> & tokens, const std::vector<ggml_backend_dev_t> & devs) {
+        const llm_arch arch, const bool moe, const size_t seed, const std::vector<llama_token> & tokens,
+        const std::vector<ggml_backend_dev_t> & devs) {
     const uint32_t n_ctx   = 128;
     const uint32_t n_embd  = 256;
     const uint32_t n_head  = 2;
@@ -251,8 +254,6 @@ static std::vector<float> get_logits(
     ms.add_kv(LLM_KV_BLOCK_COUNT,                      n_layer);
     ms.add_kv(LLM_KV_FEED_FORWARD_LENGTH,              n_ff);
     ms.add_kv(LLM_KV_USE_PARALLEL_RESIDUAL,            false); // TODO
-    // ms.add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,    n_ff);
-    // ms.add_kv(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,     uint32_t(2));
     ms.add_kv(LLM_KV_LOGIT_SCALE,                      1.0f); // TODO
     ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT,             n_head);
     ms.add_kv(LLM_KV_ATTENTION_CLAMP_KQV,              1.0f);
@@ -263,6 +264,17 @@ static std::vector<float> get_logits(
     ms.add_kv(LLM_KV_TOKENIZER_MODEL,                  "no_vocab");
     // ms.add_kv(LLM_KV_DENSE_2_FEAT_OUT,              n_embd);
     // ms.add_kv(LLM_KV_DENSE_3_FEAT_IN,               n_embd);
+
+    if (moe) {
+        ms.add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, n_ff);
+        ms.add_kv(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,  uint32_t(2));
+        ms.add_kv(LLM_KV_EXPERT_COUNT,               uint32_t(2));
+        ms.add_kv(LLM_KV_EXPERT_USED_COUNT,          uint32_t(1));
+        ms.add_kv(LLM_KV_EXPERT_SHARED_COUNT,        uint32_t(1));
+        ms.add_kv(LLM_KV_EXPERT_GATING_FUNC,         uint32_t(2)); // sigmoid
+        ms.add_kv(LLM_KV_EXPERT_GROUP_SCALE,         1.0f);
+        ms.add_kv(LLM_KV_EXPERTS_PER_GROUP,          uint32_t(1));
+    }
 
     std::mt19937 gen(seed);
 
@@ -306,7 +318,7 @@ static std::vector<float> get_logits(
     return ret;
 }
 
-static bool moe_only(const llm_arch arch) {
+static bool moe_mandatory(const llm_arch arch) {
     switch (arch) {
         case LLM_ARCH_LLAMA4:
         case LLM_ARCH_GROK:
@@ -343,6 +355,24 @@ static bool moe_only(const llm_arch arch) {
     }
 }
 
+static bool moe_implemented(const llm_arch arch) {
+    if (moe_mandatory(arch)) {
+        return true;
+    }
+    switch (arch) {
+        case LLM_ARCH_LLAMA:
+        case LLM_ARCH_REFACT:
+        case LLM_ARCH_MINICPM:
+        case LLM_ARCH_GRANITE:
+        case LLM_ARCH_GRANITE_MOE:
+        case LLM_ARCH_MISTRAL3:
+        case LLM_ARCH_LLAMA_EMBED:
+            return true;
+        default:
+            return false;
+    }
+}
+
 static int test_backends(const size_t seed, const ggml_log_level log_level) {
     struct user_data_t {
         struct {
@@ -372,6 +402,9 @@ static int test_backends(const size_t seed, const ggml_log_level log_level) {
     }
 
     bool all_ok = true;
+    common_log_flush(common_log_main());
+    printf("|%15s|%30s|%6s|%8s|%6s|\n", "Model arch.", "Device", "Config", "NMSE", "Status");
+    printf("|---------------|------------------------------|------|--------|------|\n");
     for (const llm_arch & arch : llm_arch_all()) {
         if (arch == LLM_ARCH_CLIP || arch == LLM_ARCH_GPTJ || arch == LLM_ARCH_UNKNOWN) {
             continue; // These models don't have usable implementations.
@@ -388,10 +421,11 @@ static int test_backends(const size_t seed, const ggml_log_level log_level) {
                 arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE || arch == LLM_ARCH_GRANITE_HYBRID) {
             continue; // TODO SSM tensors
         }
-        if (arch == LLM_ARCH_MINICPM3 || arch == LLM_ARCH_PLM) {
+        if (arch == LLM_ARCH_MINICPM3 || arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_PLM) {
             continue; // TODO LoRA rank
         }
-        if (arch == LLM_ARCH_GEMMA3N || arch == LLM_ARCH_GEMMA_EMBEDDING || arch == LLM_ARCH_COHERE2 || arch == LLM_ARCH_EXAONE_MOE) {
+        if (arch == LLM_ARCH_GEMMA3N || arch == LLM_ARCH_GEMMA_EMBEDDING || arch == LLM_ARCH_COHERE2 || arch == LLM_ARCH_EXAONE_MOE ||
+                arch == LLM_ARCH_OPENAI_MOE || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35) {
             continue; // TODO sliding window
         }
         if (arch == LLM_ARCH_T5 || arch == LLM_ARCH_T5ENCODER) {
@@ -415,21 +449,34 @@ static int test_backends(const size_t seed, const ggml_log_level log_level) {
         if (arch == LLM_ARCH_KIMI_LINEAR) {
             continue; // TODO MLA
         }
-        if (moe_only(arch)) {
-            continue;
+        if (arch == LLM_ARCH_LLAMA4) {
+            continue; // TODO attn_scale problems
         }
-        const std::vector<float> logits_cpu = get_logits(arch, seed, tokens, {});
-        for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
-            ggml_backend_dev_t dev = ggml_backend_dev_get(i);
-            if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+        if (arch == LLM_ARCH_AFMOE) {
+            continue; // TODO segfault
+        }
+        for (bool moe : {false, true}) {
+            if (moe && !moe_implemented(arch)) {
                 continue;
             }
-            const std::vector<float> logits_dev = get_logits(arch, seed, tokens, {dev});
-            const double nmse_val = nmse(logits_cpu.data(), logits_dev.data(), logits_cpu.size());
-            const bool ok = nmse_val <= 1e-6;
-            all_ok = all_ok && ok;
-            printf("%s, %s: NMSE=%.2e, \033[1;%s\033[0m\n",
-                llm_arch_name(arch), ggml_backend_dev_description(dev), nmse_val, ok ? "32mOK" : "31mFAIL");
+            if (!moe && moe_mandatory(arch)) {
+                continue;
+            }
+            const std::vector<float> logits_cpu = get_logits(arch, moe, seed, tokens, {});
+            for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+                ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+                if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+                    continue;
+                }
+                const std::vector<float> logits_dev = get_logits(arch, moe, seed, tokens, {dev});
+                const double nmse_val = nmse(logits_cpu.data(), logits_dev.data(), logits_cpu.size());
+                const bool ok = nmse_val <= 1e-6;
+                all_ok = all_ok && ok;
+                char nmse_str[10];
+                snprintf(nmse_str, sizeof(nmse_str), "%.2e", nmse_val);
+                printf("|%15s|%30s|%6s|%8s|%17s|\n", llm_arch_name(arch), ggml_backend_dev_description(dev),
+                    moe ? "MoE" : "Dense", nmse_str, ok ? "\033[1;32mOK\033[0m" : "\033[1;31mFAIL\033[0m");
+            }
         }
     }
     llama_log_set(ud.original_logger.callback, ud.original_logger.user_data);
