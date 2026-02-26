@@ -41,7 +41,12 @@ export { setConfigValue, getConfigValue, configToParameterRecord } from './confi
 export { buildProxiedUrl, getProxiedUrlString } from './cors-proxy';
 
 // Conversation utilities
-export { createMessageCountMap, getMessageCount } from './conversation-utils';
+export {
+	createMessageCountMap,
+	getMessageCount,
+	generateConversationFilename,
+	downloadConversationFile
+} from './conversation-utils';
 
 // Clipboard utilities
 export {

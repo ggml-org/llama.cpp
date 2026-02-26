@@ -23,7 +23,7 @@ import { browser } from '$app/environment';
 import { toast } from 'svelte-sonner';
 import { DatabaseService } from '$lib/services/database.service';
 import { config } from '$lib/stores/settings.svelte';
-import { filterByLeafNodeId, findLeafNode } from '$lib/utils';
+import { filterByLeafNodeId, findLeafNode, downloadConversationFile } from '$lib/utils';
 import type { McpServerOverride } from '$lib/types/database';
 import { MessageRole } from '$lib/enums';
 
@@ -636,40 +636,7 @@ class ConversationsStore {
 			messages = await DatabaseService.getConversationMessages(convId);
 		}
 
-		this.triggerDownload({ conv: conversation, messages });
-	}
-
-	/**
-	 * Exports all conversations with their messages as a JSON file
-	 * @returns The list of exported conversations
-	 */
-	async exportAllConversations(): Promise<DatabaseConversation[]> {
-		const allConversations = await DatabaseService.getAllConversations();
-
-		if (allConversations.length === 0) {
-			throw new Error('No conversations to export');
-		}
-
-		const allData = await Promise.all(
-			allConversations.map(async (conv) => {
-				const messages = await DatabaseService.getConversationMessages(conv.id);
-				return { conv, messages };
-			})
-		);
-
-		const blob = new Blob([JSON.stringify(allData, null, 2)], { type: 'application/json' });
-		const url = URL.createObjectURL(blob);
-		const a = document.createElement('a');
-		a.href = url;
-		a.download = `all_conversations_${new Date().toISOString().split('T')[0]}.json`;
-		document.body.appendChild(a);
-		a.click();
-		document.body.removeChild(a);
-		URL.revokeObjectURL(url);
-
-		toast.success(`All conversations (${allConversations.length}) prepared for download`);
-
-		return allConversations;
+		downloadConversationFile({ conv: conversation, messages });
 	}
 
 	/**
@@ -742,37 +709,6 @@ class ConversationsStore {
 		const result = await DatabaseService.importConversations(data);
 		await this.loadConversations();
 		return result;
-	}
-
-	/**
-	 * Triggers file download in browser
-	 */
-	private triggerDownload(data: ExportedConversations, filename?: string): void {
-		const conversation =
-			'conv' in data ? data.conv : Array.isArray(data) ? data[0]?.conv : undefined;
-
-		if (!conversation) {
-			console.error('Invalid data: missing conversation');
-			return;
-		}
-
-		const conversationName = conversation.name?.trim() || '';
-		const truncatedSuffix = conversationName
-			.toLowerCase()
-			.replace(/[^a-z0-9]/gi, '_')
-			.replace(/_+/g, '_')
-			.substring(0, 20);
-		const downloadFilename = filename || `conversation_${conversation.id}_${truncatedSuffix}.json`;
-
-		const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-		const url = URL.createObjectURL(blob);
-		const a = document.createElement('a');
-		a.href = url;
-		a.download = downloadFilename;
-		document.body.appendChild(a);
-		a.click();
-		document.body.removeChild(a);
-		URL.revokeObjectURL(url);
 	}
 }
 
