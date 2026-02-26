@@ -3,7 +3,6 @@
 #include "ggml-et-kernels.h"
 #include "ggml-et-memops.h"
 #include "ggml-et-ops.h"
-#include "ggml-et-logger.h"
 
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
@@ -78,53 +77,6 @@ static void ggml_et_dump_operator_metadata(const ggml_tensor* ggtensor)
     }
 }
 
-void ggml_et_log_internal(ggml_log_level level, const char* file, int line, const char* fmt, ...) {
-    static ggml_log_level min_log_level = []() -> ggml_log_level {
-        const char* env = getenv("GGML_ET_LOG_LEVEL");
-        if(!env) {
-            return GGML_LOG_LEVEL_INFO;
-        }
-        if(strcmp(env, "NONE") == 0) {
-            return GGML_LOG_LEVEL_NONE;
-        }
-        if (strcmp(env, "DEBUG") == 0) {
-            return GGML_LOG_LEVEL_DEBUG;
-        }
-        if (strcmp(env, "INFO") == 0) {
-            return GGML_LOG_LEVEL_INFO;
-        }
-        if (strcmp(env, "WARN") == 0) {
-            return GGML_LOG_LEVEL_WARN;
-        }
-        if (strcmp(env, "ERROR") == 0) {
-            return GGML_LOG_LEVEL_ERROR;
-        }
-        return GGML_LOG_LEVEL_NONE;
-    }();
-
-    if(level < min_log_level) {
-        return;
-    }
-
-    va_list args;
-    va_start(args, fmt);
-    char* log_string = NULL;
-    if(vasprintf(&log_string, fmt, args) == -1) {
-        GGML_ASSERT(false && "Failed to print log message");
-    }
-    va_end(args);
-
-    char* full_message = NULL;
-    if(asprintf(&full_message, "%s - %s:%d", log_string, file, line) == -1) {
-        free(log_string);
-        GGML_ASSERT(false && "Failed to print full log message");
-    }
-
-    ggml_log_internal(level, "%s\n", full_message);
-    free(log_string);
-    free(full_message);
-}
-
 static struct ggml_et_driver {
     std::shared_ptr<dev::IDeviceLayer> device_layer;
     std::shared_ptr<rt::IRuntime> runtime;
@@ -179,9 +131,9 @@ static inline auto ggml_et_get_default_sysemu_options() {
     for (const auto& file : required_files) {
         if (!fs::exists(file) || fs::file_size(file) == 0) {
             // Check that each path has a valid existing non-zero file otherwise emulator just silently hangs
-            ET_LOG_ERROR("ET: Unable to find required sysemu file: %s", file.c_str());
-            ET_LOG_ERROR("ET: Confirm et-platform is correctly installed at configured path.");
-            exit(1);
+            GGML_LOG_ERROR("ET: Unable to find required sysemu file: %s", file.c_str());
+            GGML_LOG_ERROR("ET: Confirm et-platform is correctly installed at configured path.");
+            abort();
         }
     }
 
@@ -208,38 +160,35 @@ static bool ggml_et_driver_init() {
 	try {
         #if defined GGML_ET_SYSEMU && GGML_ET_SYSEMU
         // For emulator device using sysEmuOptions provided by function above enabled compiling with `-DGGML_ET_SYSEMU=ON`
-        ET_LOG_INFO("ET: Attempting to initialize sysemu device loading firmware from %s", ggml_et_get_default_et_path().c_str());
         _drv.device_layer = dev::IDeviceLayer::createSysEmuDeviceLayer(ggml_et_get_default_sysemu_options());
         #else
         // For physical PCIe device
-        ET_LOG_INFO("ET: Attempting to initialize PCIe hardware device");
         _drv.device_layer = dev::IDeviceLayer::createPcieDeviceLayer();
         #endif
 
 	    _drv.runtime = rt::IRuntime::create(_drv.device_layer);
-	    ET_LOG_INFO("ET: FOUND %d devices!", _drv.device_layer->getDevicesCount());
 
 	    // Initialize profiler if requested via environment variable
 	    const char* profile_path = getenv("GGML_ET_PROFILE");
 	    if (profile_path) {
 	        std::string output_path = std::string(profile_path) + "/et_runtime_trace.json";
-	        ET_LOG_INFO("ET: Profiling enabled, output: %s", output_path.c_str());
 
 	        _drv.profile_stream = std::make_unique<std::ofstream>(output_path);
 	        if (!_drv.profile_stream->is_open()) {
-	            ET_LOG_ERROR("ET: Failed to open profiling output file: %s", output_path.c_str());
+	            GGML_LOG_ERROR("ET: Failed to open profiling output file: %s", output_path.c_str());
+				abort();
 	        } else {
 	            auto* profiler = _drv.runtime->getProfiler();
 	            profiler->start(*_drv.profile_stream, rt::IProfiler::OutputType::Json);
 	            _drv.profiling_enabled = true;
-	            ET_LOG_INFO("ET: Runtime profiler started (JSON format)");
+	            GGML_LOG_INFO("ET: Runtime profiler started (JSON format)");
 
 	            // Register cleanup at program exit
 	            std::atexit(ggml_et_driver_cleanup);
 	        }
 	    }
 	} catch (const std::exception& e) {
-	    ET_LOG_ERROR("ggml_et: %s", e.what());
+	    GGML_LOG_ERROR("ggml_et: %s", e.what());
 	    if (_drv.device_layer != nullptr)
 		_drv.device_layer.reset();
 	    if (_drv.runtime != nullptr)
@@ -260,7 +209,7 @@ std::shared_ptr<rt::IRuntime> ggml_et_runtime() {
 
 static void ggml_et_driver_cleanup() {
     if (_drv.profiling_enabled && _drv.runtime) {
-        ET_LOG_INFO("ET: Stopping runtime profiler");
+        GGML_LOG_INFO("ET: Stopping runtime profiler");
         auto profiler = _drv.runtime->getProfiler();
         profiler->stop();
         _drv.profiling_enabled = false;
@@ -279,7 +228,6 @@ static void ggml_backend_et_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     if (ctx->data != nullptr) {
         std::shared_ptr<rt::IRuntime> runtime = ggml_et_runtime();
         if (runtime) {
-            ET_LOG_DEBUG("ET: Freeing %zu bytes on device %d (ptr=%p)", ctx->size, ctx->devidx, ctx->data);
             runtime->freeDevice(ctx->rtid, static_cast<std::byte*>(ctx->data));
         }
     }
@@ -294,38 +242,30 @@ static void * ggml_backend_et_buffer_get_base(ggml_backend_buffer_t buffer) {
 static enum ggml_status ggml_backend_et_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
     // View tensors share buffer with their view_src, no additional initialization needed
     if (tensor->view_src != NULL) {
-        ET_LOG_DEBUG("ET: init_tensor for view tensor %s (view_src=%s, view_offs=%zu)",
-                      tensor->name, tensor->view_src->name, tensor->view_offs);
         return GGML_STATUS_SUCCESS;
     }
 
     const size_t original_size = ggml_nbytes(tensor);
     const size_t padded_size = ggml_backend_buft_get_alloc_size(buffer->buft, tensor);
 
-    ET_LOG_DEBUG("ET: init_tensor for tensor %s (type=%s, size=%zu bytes, padded=%zu bytes)",
-                  tensor->name, ggml_type_name(tensor->type), original_size, padded_size);
-
     // Clear padding bytes to avoid NaN values
+    // XXX: Martin - do we need this?
     if (padded_size > original_size) {
         const size_t padding_size = padded_size - original_size;
-        ET_LOG_DEBUG("ET: Clearing %zu padding bytes for tensor %s to avoid NaN values",
-                      padding_size, tensor->name);
 
         // Get device context to access memops kernel
         ggml_backend_et_device_context * dev_ctx = (ggml_backend_et_device_context *)buffer->buft->device->context;
         if (!dev_ctx) {
-            ET_LOG_ERROR("ET: Failed to get device context for padding clear");
+            GGML_LOG_ERROR("ET: Failed to get device context for padding clear");
             return GGML_STATUS_FAILED;
         }
 
         // Use device-side memset kernel for efficient padding clear
         std::byte * padding_ptr = static_cast<std::byte*>(tensor->data) + original_size;
         if (!ggml_et_memset(dev_ctx, padding_ptr, 0, padding_size)) {
-            ET_LOG_ERROR("ET: Failed to clear padding using memset kernel for tensor %s", tensor->name);
+            GGML_LOG_ERROR("ET: Failed to clear padding using memset kernel for tensor %s", tensor->name);
             return GGML_STATUS_FAILED;
         }
-
-        ET_LOG_DEBUG("ET: Padding cleared successfully for tensor %s using memops kernel", tensor->name);
     }
 
     return GGML_STATUS_SUCCESS;
@@ -345,7 +285,6 @@ static void ggml_backend_et_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml
     std::byte * dst_ptr = static_cast<std::byte*>(tensor->data) + offset;
     const std::byte * src_ptr = static_cast<const std::byte*>(data);
 
-    ET_LOG_DEBUG("ET: Host->Device transfer %zu bytes (offset=%zu, tensor=%p, device=%d)", size, offset, (void*)tensor, ctx->devidx);
     rt::EventId event = runtime->memcpyHostToDevice(stream, src_ptr, dst_ptr, size, true /*barrier*/);
 
     runtime->waitForEvent(event);
@@ -364,7 +303,6 @@ static void ggml_backend_et_buffer_get_tensor(ggml_backend_buffer_t buffer, cons
     const std::byte * src_ptr = static_cast<const std::byte*>(tensor->data) + offset;
     std::byte * dst_ptr = static_cast<std::byte*>(data);
 
-    ET_LOG_DEBUG("ET: Device->Host transfer %zu bytes (offset=%zu, tensor=%p, device=%d)", size, offset, static_cast<const void*>(tensor), ctx->devidx);
     rt::EventId event = runtime->memcpyDeviceToHost(stream, src_ptr, dst_ptr, size, true /*barrier*/);
 
     runtime->waitForEvent(event);
@@ -380,28 +318,24 @@ static bool ggml_backend_et_buffer_cpy_tensor(ggml_backend_buffer_t buffer, cons
 static void ggml_backend_et_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
     ggml_backend_et_buffer_context * ctx = (ggml_backend_et_buffer_context *)buffer->context;
 
-    ET_LOG_DEBUG("ET: buffer_clear called for device %d (size=%zu bytes, value=0x%02x)",
-                  ctx->devidx, ctx->size, value);
-
     if (ctx->size == 0 || ctx->data == nullptr) {
-        ET_LOG_DEBUG("ET: buffer_clear skipped (empty buffer)");
         return;
     }
 
     // Get device context to access memops kernel
     ggml_backend_et_device_context * dev_ctx = (ggml_backend_et_device_context *)buffer->buft->device->context;
     if (!dev_ctx) {
-        ET_LOG_ERROR("ET: Failed to get device context for buffer clear");
+        GGML_LOG_ERROR("ET: Failed to get device context for buffer clear");
         return;
     }
 
     // Use device-side memset kernel for efficient clearing
     if (!ggml_et_memset(dev_ctx, ctx->data, value, ctx->size)) {
-        ET_LOG_ERROR("ET: buffer_clear failed using memset kernel");
+        GGML_LOG_ERROR("ET: buffer_clear failed using memset kernel");
         return;
     }
 
-    ET_LOG_DEBUG("ET: Buffer cleared successfully using memops kernel");
+    GGML_LOG_DEBUG("ET: Buffer cleared successfully using memops kernel");
 }
 
 static const struct ggml_backend_buffer_i ggml_backend_et_buffer_i = {
@@ -447,7 +381,6 @@ static ggml_backend_buffer_t ggml_backend_et_buffer_type_alloc_buffer(ggml_backe
         return nullptr;
     }
 
-    ET_LOG_DEBUG("ET: Allocated %zu bytes on device %d (ptr=%p)", size, btctx->devidx, ctx->data);
     return ggml_backend_buffer_init(buft, ggml_backend_et_buffer_i, ctx, size);
 }
 
@@ -532,16 +465,12 @@ static bool ggml_backend_et_cpy_tensor_async(ggml_backend_t backend_src, ggml_ba
 static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     ggml_backend_et_device_context * dev_ctx = (ggml_backend_et_device_context *)backend->device->context;
 
-    ET_LOG_DEBUG("ET: Computing graph with %d nodes", cgraph->n_nodes);
-
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
 
         if (node->op == GGML_OP_NONE) {
             continue;
         }
-
-        ET_LOG_DEBUG("ET: Processing node %d: %s (%s)", i, node->name, ggml_op_name(node->op));
 
         switch (node->op) {
             case GGML_OP_MUL:
@@ -593,16 +522,14 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
             case GGML_OP_PERMUTE:
             case GGML_OP_TRANSPOSE:
                 // These are metadata-only operations that require no computation
-                ET_LOG_DEBUG("ET: No-op metadata operation: %s", ggml_op_name(node->op));
                 break;
 
             default:
-                ET_LOG_ERROR("ET: Unsupported operation in graph: %s", ggml_op_name(node->op));
+                GGML_LOG_ERROR("ET: Unsupported operation in graph: %s", ggml_op_name(node->op));
                 return GGML_STATUS_FAILED;
         }
     }
 
-    ET_LOG_DEBUG("ET: Graph computation completed successfully");
     return GGML_STATUS_SUCCESS;
 }
 
@@ -800,7 +727,7 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 // Defensive check: ensure dst and src0 are not aliased (separate buffers)
                 // While GGML design currently guarantees this, check for future robustness
                 if (op->data && op->src[0]->data && op->data == op->src[0]->data) {
-                    ET_LOG_WARN("ET: CONT operation detected aliased tensors (dst == src0), unsupported");
+                    GGML_LOG_WARN("ET: CONT operation detected aliased tensors (dst == src0), unsupported");
                     supported = false;
                 } else {
                     supported = true;
@@ -845,10 +772,6 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             supported = false;
             break;
     }
-
-    ET_LOG_DEBUG("ET: Device query support for %s (type=%s, shape=%s, bytes=%zu%s%s) -> %s",
-                   op_name, type_name, shape_str, ggml_nbytes(op), src_info, output_contiguity,
-                   supported ? "SUPPORTED" : "unsupported");
 
     return supported;
 }
@@ -1035,7 +958,6 @@ ggml_backend_reg_t ggml_backend_et_reg(void) {
 
 	    // Create default stream for ordered execution on this device
 	    dev_ctx->default_stream = ggml_et_runtime()->createStream(rtid);
-	    ET_LOG_DEBUG("ET: Created default stream for device %d", i);
 
 	    dev->context = dev_ctx;
 
@@ -1055,8 +977,9 @@ ggml_guid_t ggml_backend_et_guid(void) {
 }
 
 ggml_backend_t ggml_backend_et_init(size_t devidx) {
-    if (!ggml_et_driver_init())
-	return nullptr;
+    if (!ggml_et_driver_init()) {
+        return nullptr;
+    }
 
     if (devidx >= (size_t)ggml_backend_et_get_device_count()) {
         return nullptr;
