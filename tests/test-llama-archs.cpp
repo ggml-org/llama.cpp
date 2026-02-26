@@ -247,23 +247,34 @@ static std::vector<float> get_logits(
     const uint32_t n_embd_head = n_embd / n_head;
 
     llama_model_saver ms(arch);
-    ms.add_kv(LLM_KV_GENERAL_ARCHITECTURE,             llm_arch_name(arch));
-    ms.add_kv(LLM_KV_VOCAB_SIZE,                       n_vocab);
-    ms.add_kv(LLM_KV_CONTEXT_LENGTH,                   n_ctx);
-    ms.add_kv(LLM_KV_EMBEDDING_LENGTH,                 n_embd);
-    ms.add_kv(LLM_KV_BLOCK_COUNT,                      n_layer);
-    ms.add_kv(LLM_KV_FEED_FORWARD_LENGTH,              n_ff);
-    ms.add_kv(LLM_KV_USE_PARALLEL_RESIDUAL,            false); // TODO
-    ms.add_kv(LLM_KV_LOGIT_SCALE,                      1.0f); // TODO
-    ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT,             n_head);
-    ms.add_kv(LLM_KV_ATTENTION_CLAMP_KQV,              1.0f);
-    ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_EPS,          1e-5f);
-    ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,      1e-5f);
-    // ms.add_kv(LLM_KV_ATTENTION_RELATIVE_BUCKETS_COUNT, uint32_t(2));
-    ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS,          std::vector<uint32_t>({n_embd_head/4, n_embd_head/4, n_embd_head/4, n_embd_head/4}));
-    ms.add_kv(LLM_KV_TOKENIZER_MODEL,                  "no_vocab");
-    // ms.add_kv(LLM_KV_DENSE_2_FEAT_OUT,              n_embd);
-    // ms.add_kv(LLM_KV_DENSE_3_FEAT_IN,               n_embd);
+    ms.add_kv(LLM_KV_GENERAL_ARCHITECTURE, llm_arch_name(arch));
+    ms.add_kv(LLM_KV_VOCAB_SIZE,            n_vocab);
+    ms.add_kv(LLM_KV_CONTEXT_LENGTH,        n_ctx);
+    ms.add_kv(LLM_KV_EMBEDDING_LENGTH,      n_embd);
+    ms.add_kv(LLM_KV_BLOCK_COUNT,           n_layer);
+    ms.add_kv(LLM_KV_FEED_FORWARD_LENGTH,   n_ff);
+    ms.add_kv(LLM_KV_USE_PARALLEL_RESIDUAL, false); // TODO
+    ms.add_kv(LLM_KV_LOGIT_SCALE,           1.0f); // TODO
+
+    if (arch == LLM_ARCH_JAMBA) {
+        GGML_ASSERT(n_layer >= 2);
+        std::vector<uint32_t> n_head_per_layer;
+        n_head_per_layer.reserve(n_layer);
+        for (uint32_t il = 0; il < n_layer; il++) {
+            n_head_per_layer.push_back(il % 2 == 0 ? n_embd : 0);
+        }
+        ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head_per_layer);
+    } else {
+        ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head);
+    }
+
+    ms.add_kv(LLM_KV_ATTENTION_CLAMP_KQV,         1.0f);
+    ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_EPS,     1e-5f);
+    ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, 1e-5f);
+    ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS,     std::vector<uint32_t>({n_embd_head/4, n_embd_head/4, n_embd_head/4, n_embd_head/4}));
+    ms.add_kv(LLM_KV_TOKENIZER_MODEL,             "no_vocab");
+    // ms.add_kv(LLM_KV_DENSE_2_FEAT_OUT,         n_embd);
+    // ms.add_kv(LLM_KV_DENSE_3_FEAT_IN,          n_embd);
 
     if (moe) {
         ms.add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, n_ff);
@@ -429,7 +440,7 @@ static int test_backends(const size_t seed, const ggml_log_level log_level) {
             continue; // TODO vocab
         }
         if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_PLAMO2 ||
-                arch == LLM_ARCH_JAMBA || arch == LLM_ARCH_FALCON_H1 || arch == LLM_ARCH_NEMOTRON_H ||
+                arch == LLM_ARCH_FALCON_H1 || arch == LLM_ARCH_NEMOTRON_H ||
                 arch == LLM_ARCH_NEMOTRON_H_MOE || arch == LLM_ARCH_GRANITE_HYBRID) {
             continue; // TODO SSM tensors
         }
