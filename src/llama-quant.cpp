@@ -854,13 +854,9 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     ggml_type default_type;
     llama_ftype ftype = params->ftype;
 
-    int nthread = params->nthread;
+    int nthread = params->nthread <= 0 ? std::thread::hardware_concurrency() : params->nthread;
 
     default_type = llama_ftype_get_default_type(ftype);
-
-    if (nthread <= 0) {
-        nthread = std::thread::hardware_concurrency();
-    }
 
     // mmap consistently increases speed on Linux, and also increases speed on Windows with
     // hot cache. It may cause a slowdown on macOS, possibly related to free memory.
@@ -1103,11 +1099,13 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         new_ofstream(0);
     }
 
+    // work buffers
+
     std::vector<no_init<uint8_t>> read_data;
     std::vector<no_init<uint8_t>> work;
     std::vector<no_init<float>> f32_conv_buf;
 
-    // pre-allocate work buffers to avoid repeated resizing
+    // pre-allocate work buffers to avoid repeated resizing (things are slow otherwise)
     {
         size_t max_tensor_bytes    = 0;
         size_t max_nelements       = 0;
