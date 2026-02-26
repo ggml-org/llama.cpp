@@ -29,10 +29,11 @@ find_package(runtime REQUIRED)
 include(ExternalProject)
 
 set(KERNEL_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/et-kernels)
-set(ADDRESS_ARG "")
+set(KERNEL_CMAKE_ARGS "")
 if(DEFINED ADDRESS)
     list(APPEND KERNEL_CMAKE_ARGS -DADDRESS=${ADDRESS})
 endif()
+
 
 ExternalProject_Add(et-kernels-build
     SOURCE_DIR  ${CMAKE_CURRENT_SOURCE_DIR}/et-kernels
@@ -43,8 +44,9 @@ ExternalProject_Add(et-kernels-build
                 -DCMAKE_BUILD_TYPE=Release
                 -DCMAKE_INSTALL_LIBDIR=lib
                 -DTOOLCHAIN_DIR=${ET_PLATFORM_PATH}
-                ${ADDRESS_ARG}
+                ${KERNEL_CMAKE_ARGS}
     INSTALL_COMMAND ""
+    BUILD_ALWAYS TRUE
 )
 
 set(EMBED_HPP ${KERNEL_BINARY_DIR}/ggml-et-kernels-embed.hpp)
