@@ -167,6 +167,8 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
     GGML_ASSERT(n_seqs != 0);
     GGML_ASSERT(ubatch.equal_seqs());
     GGML_ASSERT(ubatch.n_tokens == n_seq_tokens * n_seqs);
+    GGML_ASSERT(d_inner % n_head == 0);
+    GGML_ASSERT(d_inner % n_group == 0);
 
     ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
     ggml_tensor * ssm_states_all  = mctx_cur->get_s_l(il);

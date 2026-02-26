@@ -284,8 +284,8 @@ static std::vector<float> get_logits(
     ms.add_kv(LLM_KV_SSM_INNER_SIZE,     2*n_embd);
     ms.add_kv(LLM_KV_SSM_CONV_KERNEL,    uint32_t(3));
     ms.add_kv(LLM_KV_SSM_STATE_SIZE,     uint32_t(5));
-    ms.add_kv(LLM_KV_SSM_TIME_STEP_RANK, uint32_t(7));
-    ms.add_kv(LLM_KV_SSM_GROUP_COUNT,    uint32_t(14));
+    ms.add_kv(LLM_KV_SSM_TIME_STEP_RANK, n_head);
+    ms.add_kv(LLM_KV_SSM_GROUP_COUNT,    uint32_t(2));
 
     std::mt19937 gen(seed);
 
@@ -429,7 +429,7 @@ static int test_backends(const size_t seed, const ggml_log_level log_level) {
             continue; // TODO vocab
         }
         if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_PLAMO2 ||
-                arch == LLM_ARCH_MAMBA2 || arch == LLM_ARCH_JAMBA || arch == LLM_ARCH_FALCON_H1 || arch == LLM_ARCH_NEMOTRON_H ||
+                arch == LLM_ARCH_JAMBA || arch == LLM_ARCH_FALCON_H1 || arch == LLM_ARCH_NEMOTRON_H ||
                 arch == LLM_ARCH_NEMOTRON_H_MOE || arch == LLM_ARCH_GRANITE_HYBRID) {
             continue; // TODO SSM tensors
         }
