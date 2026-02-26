@@ -9361,14 +9361,17 @@ void UnifiedKernel::launch_micro_graph_kernel() {
     // the ops table pointers were captured at record time but the data is
     // read live by the GPU kernels.
 
-    const auto start = std::chrono::high_resolution_clock::now();
+    // Submit the recorded SYCL graph for replay.
+    // Do NOT wait here — the framework calls ggml_backend_sycl_synchronize()
+    // (which waits on the same in-order queue) after graph_compute returns.
+    // Removing queue_.wait() avoids a ~29ms CPU-side busy-spin per token
+    // (zeCommandQueueSynchronize).  Deferred copies also use queue_ so
+    // in-order semantics guarantee they execute after the graph completes.
     queue_.ext_oneapi_graph(micro_graph_->exec_graph);
-    queue_.wait();
-    const auto end = std::chrono::high_resolution_clock::now();
-    const double elapsed_ms = std::chrono::duration<double, std::milli>(end - start).count();
 
-    // Record stats
-    last_stats_.kernel_time_ms = elapsed_ms;
+    // Timing is not meaningful without a wait; the caller can measure
+    // end-to-end latency externally (e.g. via llama-bench).
+    last_stats_.kernel_time_ms = 0.0;
 }
 
 // Reusable env var check for micro-graph mode
