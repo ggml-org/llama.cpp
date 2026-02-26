@@ -2979,8 +2979,21 @@ private:
     bool persistent_dispatch_uses_dag() const;
     int persistent_matmul_tile_cols(OperationType type, int N, int K) const;
     int persistent_num_workgroups(int total_tiles, bool has_attention, bool has_ffn, bool use_split_barrier) const;
-    void launch_persistent_kernel();
+    void launch_persistent_kernel(bool build_only = false);
     void build_role_schedule(const std::vector<DeviceOperation> & host_ops);
+
+    // Micro-graph: SYCL command graph with one node per phase, replacing software barriers
+    void launch_micro_graph_kernel();
+    void record_micro_graph();      // Record + finalize command graph from phase schedule
+    void invalidate_micro_graph();  // Mark graph as needing re-record
+
+    // Micro-graph state
+    // Forward-declared opaque type to avoid exposing SYCL graph extension headers in the .hpp
+    struct MicroGraphState;
+    std::unique_ptr<MicroGraphState> micro_graph_;
+    int *  micro_tile_counters_     = nullptr;  // [n_phases] per-phase tile counters (device alloc)
+    int    micro_tile_counters_n_   = 0;        // Allocated count
+    bool   micro_graph_valid_       = false;    // True when recorded graph matches current plan
 };
 
 }  // namespace ggml_sycl

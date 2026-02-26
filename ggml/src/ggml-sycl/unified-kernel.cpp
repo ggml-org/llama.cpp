@@ -4047,6 +4047,27 @@ struct PersistentKernelArgs {
 };
 
 // =============================================================================
+// Micro-graph phase kernel arguments
+// =============================================================================
+// Lightweight per-phase args for the micro-graph approach. Each graph node
+// receives its own tile_counter pointer (pre-zeroed for the whole token)
+// and phase bounds. The full DeviceOperation table is shared via malloc_host
+// PCIe zero-copy, same as the monolithic kernel.
+
+struct MicroPhaseArgs {
+    const DeviceOperation * operations;        // Full ops table (malloc_host, shared across phases)
+    const DevicePhaseEntry * phase_entries;     // Phase entries array (malloc_host)
+    int                      phase_start;       // Start index into phase_entries
+    int                      phase_end;         // End index into phase_entries
+    int                      total_tiles;       // Total tiles in this phase
+    int *                    tile_counter;       // Per-phase tile counter (pre-zeroed)
+    int                      use_attn_subgroup_dot;
+    void *                   scratch_buffers[4];
+    int                      hidden_dim;
+    int                      intermediate_dim;
+};
+
+// =============================================================================
 // Persistent Kernel Implementation
 // =============================================================================
 // This class encapsulates the persistent kernel's work-stealing loop.
@@ -4700,6 +4721,66 @@ public:
                     }
                 }
             }
+        }
+    }
+
+    // ── Micro-graph single-phase kernel ──────────────────────────────────
+    // Processes exactly ONE phase of the persistent plan, with no barriers.
+    // Called as a standalone graph node; SYCL graph HW ordering replaces
+    // device-scope barriers between phases.
+    //
+    // Uses a separate MicroPhaseArgs struct to avoid carrying the full
+    // PersistentKernelArgs (which contains barrier/DAG/role state unused here).
+    // The dispatch_operation() calls are identical to run_phase().
+    static void run_micro_phase(const MicroPhaseArgs & margs,
+                                sycl::local_accessor<float, 1> slm,
+                                sycl::nd_item<1> item) {
+        const int local_id    = item.get_local_id(0);
+        const int total_tiles = margs.total_tiles;
+        if (total_tiles <= 0) return;
+
+        // Build a minimal PersistentKernelArgs for dispatch_operation().
+        // Only the fields accessed by compute_*_tile functions are needed:
+        //   operations, scratch_buffers, hidden_dim, intermediate_dim,
+        //   use_attn_subgroup_dot.
+        PersistentKernelArgs args_shim = {};
+        args_shim.operations           = margs.operations;
+        args_shim.n_operations         = 0;  // unused by dispatch
+        args_shim.use_attn_subgroup_dot = margs.use_attn_subgroup_dot;
+        for (int i = 0; i < 4; i++) {
+            args_shim.scratch_buffers[i] = margs.scratch_buffers[i];
+        }
+        args_shim.hidden_dim       = margs.hidden_dim;
+        args_shim.intermediate_dim = margs.intermediate_dim;
+
+        PersistentTGKernelImpl<BLOCK_SIZE> kernel(args_shim, slm, item);
+
+        // Work-stealing tile loop (same as HEAVY phase in run_phase)
+        while (true) {
+            int flat_tile = -1;
+            if (local_id == 0) {
+                sycl::atomic_ref<int, sycl::memory_order::relaxed,
+                                 sycl::memory_scope::device,
+                                 sycl::access::address_space::global_space>
+                    tc(*margs.tile_counter);
+                flat_tile = tc.fetch_add(1);
+            }
+            flat_tile = sycl::group_broadcast(item.get_group(), flat_tile, 0);
+            if (flat_tile >= total_tiles) break;
+
+            // Map flat_tile to (op_idx, tile_idx) via phase entries
+            const int phase_start = margs.phase_start;
+            const int phase_end   = margs.phase_end;
+            int op_entry_idx = phase_start;
+            for (int e = phase_start + 1; e < phase_end; e++) {
+                if (margs.phase_entries[e].tile_offset > flat_tile) break;
+                op_entry_idx = e;
+            }
+            const int op_idx   = margs.phase_entries[op_entry_idx].op_idx;
+            const int tile_off = margs.phase_entries[op_entry_idx].tile_offset;
+            const int tile_idx = flat_tile - tile_off;
+
+            kernel.dispatch_operation(margs.operations[op_idx], tile_idx);
         }
     }
 
@@ -6173,6 +6254,13 @@ UnifiedKernel::UnifiedKernel(sycl::queue & queue)
 UnifiedKernel::~UnifiedKernel() {
     free_persistent_buffers();
     // runtime_tracked_bytes_ is decremented inside free_persistent_buffers()
+
+    // Free micro-graph resources
+    micro_graph_.reset();
+    if (micro_tile_counters_) {
+        sycl::free(micro_tile_counters_, queue_);
+        micro_tile_counters_ = nullptr;
+    }
 }
 
 void UnifiedKernel::configure(const ggml_sycl_unified::XMXConfig & xmx_config) {
@@ -7487,6 +7575,8 @@ void UnifiedKernel::invalidate_plan_cache() {
     // Also invalidate the update recipe when plan cache is invalidated
     update_recipe_.clear();
     update_recipe_valid_ = false;
+    // Invalidate micro-graph (ops table pointers change on plan rebuild)
+    invalidate_micro_graph();
 }
 
 void UnifiedKernel::set_update_recipe(std::vector<UpdateRecipeEntry> && recipe) {
@@ -8015,6 +8105,191 @@ void UnifiedKernel::benchmark_graph_overhead() {
 }
 
 // -----------------------------------------------------------------------------
+// Micro-Graph Implementation (graph-of-micro-kernels)
+// -----------------------------------------------------------------------------
+// Replaces the monolithic persistent kernel's 387 device-scope atomic barriers
+// with a SYCL command graph containing one parallel_for node per phase.
+// Level Zero enforces ordering via hardware command lists, eliminating the
+// ~15ms barrier overhead (387 barriers * ~39us each).
+//
+// Architecture:
+//   - Phase schedule (from build_phase_schedule) defines operation ordering
+//   - Each phase becomes a separate parallel_for graph node
+//   - Within each phase, work-groups work-steal tiles (same as run_phase HEAVY path)
+//   - Per-phase tile counters (device-allocated, bulk-zeroed once per token)
+//   - Graph is recorded once, replayed each token; UPDATE recipe modifies the
+//     malloc_host ops table in-place between replays (PCIe zero-copy)
+
+namespace sycl_ex = sycl::ext::oneapi::experimental;
+
+struct UnifiedKernel::MicroGraphState {
+    sycl_ex::command_graph<sycl_ex::graph_state::executable> exec_graph;
+
+    // Constructor: must be constructed from an executable graph
+    explicit MicroGraphState(sycl_ex::command_graph<sycl_ex::graph_state::executable> && g)
+        : exec_graph(std::move(g)) {}
+};
+
+void UnifiedKernel::invalidate_micro_graph() {
+    micro_graph_valid_ = false;
+    micro_graph_.reset();
+}
+
+void UnifiedKernel::record_micro_graph() {
+    if (!phase_allocated_ || host_phase_tiles_.empty()) {
+        GGML_LOG_ERROR("[MICRO-GRAPH] Cannot record: no phase schedule available\n");
+        return;
+    }
+
+    const int n_phases = static_cast<int>(host_phase_tiles_.size());
+    constexpr int BLOCK_SIZE = 256;
+
+    // ── Determine n_workgroups (same logic as launch_persistent_kernel) ──
+    int n_workgroups;
+    try {
+        const int max_cu = (int)queue_.get_device().get_info<sycl::info::device::max_compute_units>();
+        n_workgroups = std::clamp(max_cu / 4, 4, 64);
+    } catch (...) {
+        n_workgroups = 16;
+    }
+    if (const char * env_wgs = std::getenv("GGML_SYCL_PERSISTENT_TG_N_WGS")) {
+        char * end = nullptr;
+        const long parsed = std::strtol(env_wgs, &end, 10);
+        if (end && end != env_wgs && parsed > 0 && parsed <= 128) {
+            n_workgroups = static_cast<int>(parsed);
+        }
+    }
+
+    // ── Allocate per-phase tile counters (device memory) ──
+    if (n_phases > micro_tile_counters_n_) {
+        if (micro_tile_counters_) sycl::free(micro_tile_counters_, queue_);
+        micro_tile_counters_ = sycl::malloc_device<int>(n_phases + 16, queue_);
+        micro_tile_counters_n_ = n_phases + 16;
+    }
+
+    // ── SLM size (same logic as launch_persistent_kernel) ──
+    const int attention_slm = current_plan_->head_dim + 2 * (BLOCK_SIZE / 16);
+    const int matmul_slm    = (BLOCK_SIZE / 16) * 32;
+    const int slm_floats    = std::max({BLOCK_SIZE / 16,
+                                        current_plan_->hidden_dim,
+                                        attention_slm,
+                                        matmul_slm});
+    const bool use_attn_subgroup_dot = persistent_attention_subgroup_dot_enabled();
+
+    // ── Record SYCL command graph ──
+    sycl_ex::command_graph mod_graph(queue_.get_context(), queue_.get_device());
+
+    mod_graph.begin_recording(queue_);
+
+    // Bulk-zero all per-phase tile counters at the start of the graph
+    queue_.memset(micro_tile_counters_, 0, n_phases * sizeof(int));
+
+    // Get pointers to the ops table and phase entries (both malloc_host)
+    const DeviceOperation * d_ops = static_cast<const DeviceOperation *>(d_ops_pool_);
+    const DevicePhaseEntry * d_entries = phase_schedule_.entries;
+
+    for (int p = 0; p < n_phases; p++) {
+        const int phase_start = host_phase_offset_[p];
+        const int phase_end   = host_phase_offset_[p + 1];
+        const int total_tiles = host_phase_tiles_[p];
+
+        // Skip empty phases
+        if (phase_start == phase_end || total_tiles == 0) continue;
+
+        // For serial chain phases (total_tiles < 0), use 1 WG and tile count = entry count
+        const bool is_serial = (total_tiles < 0);
+        const int effective_wgs = is_serial ? 1 : n_workgroups;
+
+        // For serial chains, compute actual total tiles by summing ops
+        int actual_tiles = total_tiles;
+        if (is_serial) {
+            actual_tiles = 0;
+            for (int e = phase_start; e < phase_end; e++) {
+                const int op_idx = d_entries[e].op_idx;
+                actual_tiles += d_ops[op_idx].n_tiles;
+            }
+        }
+
+        // Build micro-phase args — captured by value in the lambda
+        MicroPhaseArgs margs = {};
+        margs.operations     = d_ops;
+        margs.phase_entries  = d_entries;
+        margs.phase_start    = phase_start;
+        margs.phase_end      = phase_end;
+        margs.total_tiles    = actual_tiles;
+        margs.tile_counter   = &micro_tile_counters_[p];
+        margs.use_attn_subgroup_dot = use_attn_subgroup_dot ? 1 : 0;
+        for (int i = 0; i < 4; i++) {
+            margs.scratch_buffers[i] = persistent_buffers_[i];
+        }
+        margs.hidden_dim       = current_plan_->hidden_dim;
+        margs.intermediate_dim = current_plan_->intermediate_dim;
+
+        queue_.submit([&](sycl::handler & cgh) {
+            sycl::local_accessor<float, 1> slm(slm_floats, cgh);
+            const auto margs_copy = margs;
+            cgh.parallel_for(
+                sycl::nd_range<1>(effective_wgs * BLOCK_SIZE, BLOCK_SIZE),
+                [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
+                    PersistentTGKernelImpl<BLOCK_SIZE>::run_micro_phase(
+                        margs_copy, slm, item);
+                });
+        });
+    }
+
+    mod_graph.end_recording();
+
+    // Finalize into executable graph
+    auto exec = mod_graph.finalize();
+    micro_graph_ = std::make_unique<MicroGraphState>(std::move(exec));
+    micro_graph_valid_ = true;
+
+    {
+        static bool logged = false;
+        if (!logged) {
+            logged = true;
+            fprintf(stderr, "[MICRO-GRAPH] Recorded: %d phases, %d WGs, %d SLM floats\n",
+                    n_phases, n_workgroups, slm_floats);
+        }
+    }
+}
+
+void UnifiedKernel::launch_micro_graph_kernel() {
+    if (!micro_graph_ || !micro_graph_valid_) {
+        GGML_LOG_ERROR("[MICRO-GRAPH] Cannot launch: no valid graph\n");
+        return;
+    }
+
+    // The ops table (malloc_host) may have been updated via the UPDATE recipe.
+    // Graph replay picks up changes automatically via PCIe zero-copy —
+    // the ops table pointers were captured at record time but the data is
+    // read live by the GPU kernels.
+
+    const auto start = std::chrono::high_resolution_clock::now();
+    queue_.ext_oneapi_graph(micro_graph_->exec_graph);
+    queue_.wait();
+    const auto end = std::chrono::high_resolution_clock::now();
+    const double elapsed_ms = std::chrono::duration<double, std::milli>(end - start).count();
+
+    // Record stats
+    last_stats_.kernel_time_ms = elapsed_ms;
+}
+
+// Reusable env var check for micro-graph mode
+static bool micro_graph_mode_enabled() {
+    static int checked = -1;
+    if (checked < 0) {
+        const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_MICRO_GRAPH");
+        if (env == nullptr) {
+            checked = 0;  // Default OFF (experimental)
+        } else {
+            checked = (std::strcmp(env, "0") == 0) ? 0 : 1;
+        }
+    }
+    return checked == 1;
+}
+
+// -----------------------------------------------------------------------------
 // Persistent Execution
 // -----------------------------------------------------------------------------
 
@@ -8036,8 +8311,28 @@ void UnifiedKernel::execute_persistent() {
         }
     }
 
-    // Launch the persistent kernel
-    launch_persistent_kernel();
+    const bool use_micro_graph = micro_graph_mode_enabled() && phase_allocated_;
+
+    if (use_micro_graph && micro_graph_valid_) {
+        // ── Micro-graph fast path ──────────────────────────────────────
+        // Build ops table (updates pointers from UPDATE recipe) but skip
+        // monolithic kernel launch. Then replay the pre-recorded SYCL graph.
+        launch_persistent_kernel(/* build_only = */ true);
+        launch_micro_graph_kernel();
+    } else {
+        // ── Monolithic kernel path (default or first token) ────────────
+        launch_persistent_kernel();
+
+        // After first monolithic execution, record the micro-graph for subsequent tokens
+        if (use_micro_graph && !micro_graph_valid_) {
+            try {
+                record_micro_graph();
+            } catch (const sycl::exception & exc) {
+                GGML_LOG_WARN("[MICRO-GRAPH] Recording failed: %s — falling back to monolithic\n", exc.what());
+                micro_graph_valid_ = false;
+            }
+        }
+    }
 
     // Cache plan template after first successful execution.
     // cached_ops_ stores post-scratch-pool operations.  Ops whose source_op == -1
@@ -8375,7 +8670,7 @@ void UnifiedKernel::execute_persistent_phased(phase_callback_t on_matmul_complet
     current_plan_.reset();
 }
 
-void UnifiedKernel::launch_persistent_kernel() {
+void UnifiedKernel::launch_persistent_kernel(bool build_only) {
     if (!current_plan_ || current_plan_->operations.empty()) {
         return;
     }
@@ -8917,6 +9212,17 @@ void UnifiedKernel::launch_persistent_kernel() {
     // Build role schedule from the final device ops (after fusion).
     // This classifies ops into ELEM/MATMUL roles and identifies sync points.
     build_role_schedule(host_ops);
+
+    // In build_only mode, we've finished preparing the ops table and phase
+    // schedule. The caller (micro-graph path) will launch the graph instead
+    // of the monolithic kernel.
+    if (build_only) {
+        last_stats_.n_operations = n_ops_device;
+        last_stats_.n_layers     = current_plan_->n_layers;
+        last_stats_.total_tiles  = total_tiles;
+        last_stats_.kernel_time_ms = 0.0;
+        return;
+    }
 
     // Kernel configuration
     constexpr int BLOCK_SIZE = 256;
