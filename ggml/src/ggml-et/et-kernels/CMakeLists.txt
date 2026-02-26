@@ -25,6 +25,9 @@ endif()
 set(LINKER_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/src/linker.ld)
 set(CHECK_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_unimplemented_instructions.sh)
 
+find_package(et-common-libs REQUIRED)
+find_package(esperantoTrace REQUIRED)
+
 # addr2line is not set by the toolchain file
 if(DEFINED TOOLCHAIN_DIR)
     set(CMAKE_ADDR2LINE "${TOOLCHAIN_DIR}/bin/riscv64-unknown-elf-addr2line")
@@ -61,6 +64,13 @@ foreach(KERNEL ${KERNELS})
     target_include_directories(${KERNEL}.elf PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
     )
+    
+    target_link_libraries(${KERNEL}.elf
+        PRIVATE
+            et-common-libs::cm-umode
+            esperantoTrace::et_trace
+    )
+    
     # C-only flags — must not apply to .S files
     target_compile_options(${KERNEL}.elf PRIVATE
         $<$<COMPILE_LANGUAGE:C>:-fno-zero-initialized-in-bss>

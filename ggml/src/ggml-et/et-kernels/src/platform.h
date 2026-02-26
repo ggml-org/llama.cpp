@@ -8,6 +8,8 @@
 #define PLATFORM_H
 
 #include <stdint.h>
+#include "etsoc/isa/hart.h"
+#include "etsoc/common/utils.h"
 
 #define SOC_MINIONS_PER_SHIRE 32
 #define NUM_HARTS_PER_MINION 2
@@ -20,13 +22,6 @@ typedef struct {
     uint32_t frequency;         // Frequency of Minion cores in MHz (offset 16)
     uint32_t padding2;          // Padding to maintain alignment
 } __attribute__((packed, aligned(64))) kernel_environment_t;
-
-// Get absolute hart ID using inline assembly
-static inline uint64_t get_hart_id(void) {
-    uint64_t hart_id;
-    __asm__ volatile("csrr %0, hartid" : "=r"(hart_id));
-    return hart_id;
-}
 
 // Manual implementation of count trailing zeros for bare metal environment
 // NOTE: This simple loop-based implementation is used for portability.
