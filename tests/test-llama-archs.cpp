@@ -276,6 +276,17 @@ static std::vector<float> get_logits(
         ms.add_kv(LLM_KV_EXPERTS_PER_GROUP,          uint32_t(1));
     }
 
+    // ms.add_kv(LLM_KV_SSM_INNER_SIZE,     uint32_t(64));
+    // ms.add_kv(LLM_KV_SSM_CONV_KERNEL,    uint32_t(4));
+    // ms.add_kv(LLM_KV_SSM_STATE_SIZE,     uint32_t(16));
+    // ms.add_kv(LLM_KV_SSM_TIME_STEP_RANK, uint32_t(16));
+    // ms.add_kv(LLM_KV_SSM_GROUP_COUNT,    uint32_t(2));
+    ms.add_kv(LLM_KV_SSM_INNER_SIZE,     2*n_embd);
+    ms.add_kv(LLM_KV_SSM_CONV_KERNEL,    uint32_t(3));
+    ms.add_kv(LLM_KV_SSM_STATE_SIZE,     uint32_t(5));
+    ms.add_kv(LLM_KV_SSM_TIME_STEP_RANK, uint32_t(7));
+    ms.add_kv(LLM_KV_SSM_GROUP_COUNT,    uint32_t(14));
+
     std::mt19937 gen(seed);
 
     llama_model_params model_params = llama_model_default_params();
@@ -324,6 +335,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_GROK:
         case LLM_ARCH_QWEN2MOE:
         case LLM_ARCH_QWEN3MOE:
+        case LLM_ARCH_QWEN3NEXT:
         case LLM_ARCH_QWEN3VLMOE:
         case LLM_ARCH_PHIMOE:
         case LLM_ARCH_DBRX:
@@ -417,8 +429,8 @@ static int test_backends(const size_t seed, const ggml_log_level log_level) {
             continue; // TODO vocab
         }
         if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_PLAMO2 ||
-                arch == LLM_ARCH_MAMBA || arch == LLM_ARCH_MAMBA2 || arch == LLM_ARCH_JAMBA || arch == LLM_ARCH_FALCON_H1 ||
-                arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE || arch == LLM_ARCH_GRANITE_HYBRID) {
+                arch == LLM_ARCH_MAMBA2 || arch == LLM_ARCH_JAMBA || arch == LLM_ARCH_FALCON_H1 || arch == LLM_ARCH_NEMOTRON_H ||
+                arch == LLM_ARCH_NEMOTRON_H_MOE || arch == LLM_ARCH_GRANITE_HYBRID) {
             continue; // TODO SSM tensors
         }
         if (arch == LLM_ARCH_MINICPM3 || arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_PLM) {
