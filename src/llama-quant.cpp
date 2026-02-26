@@ -701,8 +701,8 @@ static size_t llama_tensor_quantize(
     if (expert_parallel) {
         std::mutex mutex;
         std::atomic<int64_t> next_expert{0};
-        size_t    new_size = 0;
-        bool      valid      = true;
+        size_t new_size = 0;
+        bool valid = true;
 
         auto compute = [&]() {
             size_t local_size = 0;
@@ -741,7 +741,7 @@ static size_t llama_tensor_quantize(
         for (int i = 0; i < nthread - 1; ++i) {
             workers.emplace_back(compute);
         }
-        compute(); // main thread participates too
+        compute(); // main thread participates too // TODO: is this optimal?
         for (auto & w : workers) {
             w.join();
         }
