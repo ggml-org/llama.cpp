@@ -4069,6 +4069,19 @@ struct MicroPhaseArgs {
     int                      intermediate_dim;
 };
 
+// Arguments for single-op fallback kernel (split from mixed phases).
+// Simpler than MicroPhaseArgs: directly references one op by index.
+struct MicroSingleOpArgs {
+    const DeviceOperation * operations;    // Full ops table (malloc_host)
+    int                     op_idx;        // Index into operations[]
+    int                     n_tiles;       // Number of tiles for this op
+    int *                   tile_counter;  // Unique tile counter (pre-zeroed)
+    int                     use_attn_subgroup_dot;
+    void *                  scratch_buffers[4];
+    int                     hidden_dim;
+    int                     intermediate_dim;
+};
+
 // =============================================================================
 // Persistent Kernel Implementation
 // =============================================================================
@@ -4783,6 +4796,47 @@ public:
             const int tile_idx = flat_tile - tile_off;
 
             kernel.dispatch_operation(margs.operations[op_idx], tile_idx);
+        }
+    }
+
+    // Single-op micro-graph fallback: dispatches tiles for exactly one op.
+    // Avoids the phase_entries tile_offset mapping issue when splitting mixed phases.
+    static void run_micro_single_op(const MicroSingleOpArgs &      args,
+                                    sycl::local_accessor<float, 1> slm,
+                                    sycl::nd_item<1>               item) {
+        const int local_id = item.get_local_id(0);
+        const int n_tiles  = args.n_tiles;
+        if (n_tiles <= 0) {
+            return;
+        }
+
+        PersistentKernelArgs args_shim  = {};
+        args_shim.operations            = args.operations;
+        args_shim.n_operations          = 0;
+        args_shim.use_attn_subgroup_dot = args.use_attn_subgroup_dot;
+        for (int i = 0; i < 4; i++) {
+            args_shim.scratch_buffers[i] = args.scratch_buffers[i];
+        }
+        args_shim.hidden_dim       = args.hidden_dim;
+        args_shim.intermediate_dim = args.intermediate_dim;
+
+        PersistentTGKernelImpl<BLOCK_SIZE> kernel(args_shim, slm, item);
+        const DeviceOperation &            op = args.operations[args.op_idx];
+
+        while (true) {
+            int tile_idx = -1;
+            if (local_id == 0) {
+                sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device,
+                                 sycl::access::address_space::global_space>
+                    tc(*args.tile_counter);
+                tile_idx = tc.fetch_add(1);
+            }
+            tile_idx = sycl::group_broadcast(item.get_group(), tile_idx, 0);
+            if (tile_idx >= n_tiles) {
+                break;
+            }
+
+            kernel.dispatch_operation(op, tile_idx);
         }
     }
 
@@ -8188,6 +8242,387 @@ static void mmvq_submit_silu_mul(sycl::queue & q,
     });
 }
 
+// =============================================================================
+// Dedicated micro-graph kernel tags and submit helpers
+// =============================================================================
+// Each op type gets a unique kernel tag class for SYCL graph node identification.
+// These lightweight kernels replace the heavy run_micro_phase fallback by
+// submitting exactly the right amount of work per op (no 40-WG overhead).
+//
+// IMPORTANT: All kernels read their data pointers from the DeviceOperation
+// table (in malloc_host memory) at graph REPLAY time, NOT at record time.
+// This ensures the UPDATE recipe's per-token pointer changes are visible.
+// The ops table pointer and op_idx are captured at record time (stable), and
+// the actual data pointers (input, output, aux, weights) are dereferenced
+// live via PCIe zero-copy on each replay.
+
+class micro_graph_add_tag;
+class micro_graph_mul_tag;
+class micro_graph_rms_norm_tag;
+class micro_graph_rope_tag;
+class micro_graph_strided_copy_tag;
+class micro_graph_silu_mul_elem_tag;
+class micro_graph_softmax_tag;
+
+// ADD: output[i] = src0[i] + src1[i]
+// Reads pointers from ops table at runtime for graph replay correctness.
+static void micro_submit_add(sycl::queue & q, const DeviceOperation * d_ops, int op_idx) {
+    constexpr int WG_SIZE    = 256;
+    // Read n_elements at record time (M is stable across tokens)
+    const int     n_elements = d_ops[op_idx].M;
+    const int     n_wgs      = (n_elements + WG_SIZE - 1) / WG_SIZE;
+    q.submit([&](sycl::handler & cgh) {
+        cgh.parallel_for<micro_graph_add_tag>(sycl::nd_range<1>(n_wgs * WG_SIZE, WG_SIZE), [=](sycl::nd_item<1> item) {
+            const int idx = item.get_global_linear_id();
+            if (idx >= n_elements) {
+                return;
+            }
+            // Read pointers live from ops table (malloc_host, PCIe zero-copy)
+            const DeviceOperation & op = d_ops[op_idx];
+            const float *           a  = static_cast<const float *>(op.input);
+            const float *           b  = static_cast<const float *>(op.aux);
+            float *                 y  = static_cast<float *>(op.output);
+            y[idx]                     = a[idx] + b[idx];
+        });
+    });
+}
+
+// MUL: output[i] = src0[i] * src1[i]
+static void micro_submit_mul(sycl::queue & q, const DeviceOperation * d_ops, int op_idx) {
+    constexpr int WG_SIZE    = 256;
+    const int     n_elements = d_ops[op_idx].M;
+    const int     n_wgs      = (n_elements + WG_SIZE - 1) / WG_SIZE;
+    q.submit([&](sycl::handler & cgh) {
+        cgh.parallel_for<micro_graph_mul_tag>(sycl::nd_range<1>(n_wgs * WG_SIZE, WG_SIZE), [=](sycl::nd_item<1> item) {
+            const int idx = item.get_global_linear_id();
+            if (idx >= n_elements) {
+                return;
+            }
+            const DeviceOperation & op = d_ops[op_idx];
+            const float *           a  = static_cast<const float *>(op.input);
+            const float *           b  = static_cast<const float *>(op.aux);
+            float *                 y  = static_cast<float *>(op.output);
+            y[idx]                     = a[idx] * b[idx];
+        });
+    });
+}
+
+// RMS_NORM: cooperative single-WG reduction + normalize
+// Uses SLM for cross-subgroup reduction (16 floats for 256/16 = 16 subgroups).
+static void micro_submit_rms_norm(sycl::queue & q, const DeviceOperation * d_ops, int op_idx) {
+    constexpr int WG_SIZE = 256;
+    constexpr int SG_SIZE = 16;
+    constexpr int N_WARPS = WG_SIZE / SG_SIZE;
+
+    q.submit([&](sycl::handler & cgh) {
+        sycl::local_accessor<float, 1> slm(N_WARPS, cgh);
+        cgh.parallel_for<micro_graph_rms_norm_tag>(
+            sycl::nd_range<1>(WG_SIZE, WG_SIZE), [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
+                const int tid     = item.get_local_id(0);
+                auto      sg      = item.get_sub_group();
+                const int warp_id = sg.get_group_linear_id();
+                const int lane_id = sg.get_local_linear_id();
+
+                // Read pointers live from ops table
+                const DeviceOperation & op         = d_ops[op_idx];
+                const int               hidden_dim = op.hidden_dim;
+                const float             eps        = op.eps;
+                const float *           input      = static_cast<const float *>(op.input);
+                const float *           weights    = static_cast<const float *>(op.weights);
+                float *                 output     = static_cast<float *>(op.output);
+
+                // Sum of squares
+                float sum_sq = 0.0f;
+                for (int i = tid; i < hidden_dim; i += WG_SIZE) {
+                    float val = input[i];
+                    sum_sq += val * val;
+                }
+
+                // Subgroup reduction
+                sum_sq = sycl::reduce_over_group(sg, sum_sq, sycl::plus<float>());
+
+                // Cross-subgroup reduction via SLM
+                if (lane_id == 0) {
+                    slm[warp_id] = sum_sq;
+                }
+                sycl::group_barrier(item.get_group());
+
+                if (warp_id == 0) {
+                    sum_sq = (lane_id < N_WARPS) ? slm[lane_id] : 0.0f;
+                    sum_sq = sycl::reduce_over_group(sg, sum_sq, sycl::plus<float>());
+                    if (lane_id == 0) {
+                        slm[0] = sum_sq;
+                    }
+                }
+                sycl::group_barrier(item.get_group());
+
+                // Normalize
+                const float rms   = sycl::sqrt(slm[0] / hidden_dim + eps);
+                const float scale = 1.0f / rms;
+
+                for (int i = tid; i < hidden_dim; i += WG_SIZE) {
+                    const float w = weights ? weights[i] : 1.0f;
+                    output[i]     = input[i] * scale * w;
+                }
+            });
+    });
+}
+
+// ROPE: cooperative single-WG rotary position embedding
+// Handles both dual-tensor (Q+K, n_kv_heads>0) and single-tensor modes.
+// The mode (dual vs single) is determined at record time from op.n_kv_heads.
+// Pointers are read live from the ops table at replay time.
+static void micro_submit_rope(sycl::queue & q, const DeviceOperation * d_ops, int op_idx, bool is_dual_mode) {
+    constexpr int WG_SIZE = 256;
+
+    q.submit([&](sycl::handler & cgh) {
+        cgh.parallel_for<micro_graph_rope_tag>(sycl::nd_range<1>(WG_SIZE, WG_SIZE), [=](sycl::nd_item<1> item) {
+            const int               tid = item.get_local_id(0);
+            const DeviceOperation & op  = d_ops[op_idx];
+
+            const int     n_heads    = op.N;
+            const int     head_dim   = op.K;
+            const int     n_kv_heads = op.n_kv_heads;
+            const int     half_dim   = head_dim / 2;
+            const bool    is_neox    = (op.scale > 0.5f);
+            const float * cos_cache  = static_cast<const float *>(op.weights);
+
+            if (is_dual_mode) {
+                // Dual-tensor mode: rotate both Q and K in-place
+                float *       q_data      = const_cast<float *>(static_cast<const float *>(op.input));
+                float *       k_data      = static_cast<float *>(op.aux);
+                const float * sin_cache   = static_cast<const float *>(op.output);
+                const int     total_heads = n_heads + n_kv_heads;
+                const int     total_pairs = total_heads * half_dim;
+
+                for (int idx = tid; idx < total_pairs; idx += WG_SIZE) {
+                    const int head_idx = idx / half_dim;
+                    const int dim_idx  = idx % half_dim;
+
+                    float * data;
+                    if (head_idx < n_heads) {
+                        data = q_data + head_idx * head_dim;
+                    } else {
+                        data = k_data + (head_idx - n_heads) * head_dim;
+                    }
+
+                    const float cos_val = cos_cache[dim_idx];
+                    const float sin_val = sin_cache[dim_idx];
+
+                    if (is_neox) {
+                        const float x0           = data[dim_idx];
+                        const float x1           = data[dim_idx + half_dim];
+                        data[dim_idx]            = x0 * cos_val - x1 * sin_val;
+                        data[dim_idx + half_dim] = x0 * sin_val + x1 * cos_val;
+                    } else {
+                        const float x0        = data[2 * dim_idx];
+                        const float x1        = data[2 * dim_idx + 1];
+                        data[2 * dim_idx]     = x0 * cos_val - x1 * sin_val;
+                        data[2 * dim_idx + 1] = x0 * sin_val + x1 * cos_val;
+                    }
+                }
+            } else {
+                // Single-tensor mode: read from input, write to output
+                const float * src_data    = static_cast<const float *>(op.input);
+                float *       dst_data    = static_cast<float *>(op.output);
+                const float * sin_cache   = static_cast<const float *>(op.aux);
+                const int     total_pairs = n_heads * half_dim;
+
+                for (int idx = tid; idx < total_pairs; idx += WG_SIZE) {
+                    const int head_idx = idx / half_dim;
+                    const int dim_idx  = idx % half_dim;
+
+                    const float * src = src_data + head_idx * head_dim;
+                    float *       dst = dst_data + head_idx * head_dim;
+
+                    const float cos_val = cos_cache[dim_idx];
+                    const float sin_val = sin_cache[dim_idx];
+
+                    if (is_neox) {
+                        const float x0          = src[dim_idx];
+                        const float x1          = src[dim_idx + half_dim];
+                        dst[dim_idx]            = x0 * cos_val - x1 * sin_val;
+                        dst[dim_idx + half_dim] = x0 * sin_val + x1 * cos_val;
+                    } else {
+                        const float x0       = src[2 * dim_idx];
+                        const float x1       = src[2 * dim_idx + 1];
+                        dst[2 * dim_idx]     = x0 * cos_val - x1 * sin_val;
+                        dst[2 * dim_idx + 1] = x0 * sin_val + x1 * cos_val;
+                    }
+                }
+            }
+        });
+    });
+}
+
+// STRIDED_COPY: generic strided memcpy
+// Dimensions and strides are stable across tokens (structural), so captured at
+// record time.  Data pointers read live from ops table.
+static void micro_submit_strided_copy(sycl::queue & q, const DeviceOperation * d_ops, int op_idx) {
+    constexpr int           WG_SIZE    = 256;
+    const DeviceOperation & op_rec     = d_ops[op_idx];
+    const int               n_elements = op_rec.M;
+    const int               n_wgs      = (n_elements + WG_SIZE - 1) / WG_SIZE;
+
+    // Structural metadata is stable across tokens — capture by value
+    const int64_t ne0       = op_rec.strided_copy_meta.ne[0];
+    const int64_t ne1       = op_rec.strided_copy_meta.ne[1] > 0 ? op_rec.strided_copy_meta.ne[1] : 1;
+    const int64_t ne2       = op_rec.strided_copy_meta.ne[2] > 0 ? op_rec.strided_copy_meta.ne[2] : 1;
+    const int64_t ne3       = op_rec.strided_copy_meta.ne[3] > 0 ? op_rec.strided_copy_meta.ne[3] : 1;
+    const int64_t nb0       = op_rec.strided_copy_meta.nb[0];
+    const int64_t nb1       = op_rec.strided_copy_meta.nb[1];
+    const int64_t nb2       = op_rec.strided_copy_meta.nb[2];
+    const int64_t nb3       = op_rec.strided_copy_meta.nb[3];
+    const int32_t type_size = op_rec.strided_copy_meta.type_size;
+
+    q.submit([&](sycl::handler & cgh) {
+        cgh.parallel_for<micro_graph_strided_copy_tag>(
+            sycl::nd_range<1>(n_wgs * WG_SIZE, WG_SIZE), [=](sycl::nd_item<1> item) {
+                const int idx = item.get_global_linear_id();
+                if (idx >= n_elements) {
+                    return;
+                }
+
+                // Read data pointers live from ops table
+                const DeviceOperation & op  = d_ops[op_idx];
+                const char *            src = static_cast<const char *>(op.input);
+                char *                  dst = static_cast<char *>(op.output);
+
+                const int64_t i3 = idx / (ne0 * ne1 * ne2);
+                const int64_t r1 = idx - i3 * ne0 * ne1 * ne2;
+                const int64_t i2 = r1 / (ne0 * ne1);
+                const int64_t r2 = r1 - i2 * ne0 * ne1;
+                const int64_t i1 = r2 / ne0;
+                const int64_t i0 = r2 - i1 * ne0;
+                if (i3 >= ne3) {
+                    return;
+                }
+
+                const int64_t src_off = i0 * nb0 + i1 * nb1 + i2 * nb2 + i3 * nb3;
+                const int64_t dst_off = (int64_t) idx * type_size;
+
+                if (type_size == 4) {
+                    *reinterpret_cast<uint32_t *>(dst + dst_off) = *reinterpret_cast<const uint32_t *>(src + src_off);
+                } else if (type_size == 2) {
+                    *reinterpret_cast<uint16_t *>(dst + dst_off) = *reinterpret_cast<const uint16_t *>(src + src_off);
+                } else if (type_size == 1) {
+                    dst[dst_off] = src[src_off];
+                } else {
+                    for (int b = 0; b < type_size; ++b) {
+                        dst[dst_off + b] = src[src_off + b];
+                    }
+                }
+            });
+    });
+}
+
+// SILU_MUL (elementwise): output[i] = silu(gate[i]) * up[i]
+// Separate tag from mmvq_graph_silu_mul_tag to avoid kernel name collisions.
+static void micro_submit_silu_mul(sycl::queue & q, const DeviceOperation * d_ops, int op_idx) {
+    constexpr int           WG_SIZE    = 256;
+    const DeviceOperation & op_rec     = d_ops[op_idx];
+    const int               n_elements = op_rec.intermediate_dim > 0 ? op_rec.intermediate_dim : op_rec.M;
+    const int               n_wgs      = (n_elements + WG_SIZE - 1) / WG_SIZE;
+    q.submit([&](sycl::handler & cgh) {
+        cgh.parallel_for<micro_graph_silu_mul_elem_tag>(sycl::nd_range<1>(n_wgs * WG_SIZE, WG_SIZE),
+                                                        [=](sycl::nd_item<1> item) {
+                                                            const int idx = item.get_global_linear_id();
+                                                            if (idx >= n_elements) {
+                                                                return;
+                                                            }
+                                                            const DeviceOperation & op = d_ops[op_idx];
+                                                            const float * gate   = static_cast<const float *>(op.input);
+                                                            const float * up     = static_cast<const float *>(op.aux);
+                                                            float *       output = static_cast<float *>(op.output);
+                                                            const float   g      = gate[idx];
+                                                            const float   sigmoid_g = 1.0f / (1.0f + sycl::exp(-g));
+                                                            output[idx]             = g * sigmoid_g * up[idx];
+                                                        });
+    });
+}
+
+// SOFTMAX: cooperative multi-WG (one WG per row), uses group_barrier for reduction.
+// Reads all data pointers live from ops table for graph replay correctness.
+static void micro_submit_softmax(sycl::queue & q, const DeviceOperation * d_ops, int op_idx) {
+    constexpr int           WG_SIZE = 256;
+    const DeviceOperation & op_rec  = d_ops[op_idx];
+    const int               n_rows  = op_rec.M;
+    const int               n_cols  = op_rec.N;
+    if (n_rows <= 0 || n_cols <= 0) {
+        return;
+    }
+
+    q.submit([&](sycl::handler & cgh) {
+        cgh.parallel_for<micro_graph_softmax_tag>(
+            sycl::nd_range<1>(n_rows * WG_SIZE, WG_SIZE), [=](sycl::nd_item<1> item) {
+                const int row = item.get_group_linear_id();
+                if (row >= n_rows) {
+                    return;
+                }
+                const int tid = item.get_local_id(0);
+
+                // Read all pointers and metadata live from ops table
+                const DeviceOperation & op        = d_ops[op_idx];
+                const float *           x         = static_cast<const float *>(op.input);
+                float *                 y         = static_cast<float *>(op.output);
+                const float             scale     = op.scale;
+                const void *            mask      = op.mask;
+                const int               mask_type = op.mask_type;
+                const int64_t           mask_nb0  = op.mask_nb0;
+                const int64_t           mask_nb1  = op.mask_nb1;
+                const int64_t           mask_nb2  = op.mask_nb2;
+                const int64_t           mask_nb3  = op.mask_nb3;
+                const int               mask_ne2  = op.mask_ne2;
+                const int               mask_ne3  = op.mask_ne3;
+                const int64_t           ne01      = op.q_nb0 > 0 ? op.q_nb0 : 1;
+                const int64_t           ne02      = op.q_nb1 > 0 ? op.q_nb1 : 1;
+
+                const int64_t i03     = row / (ne01 * ne02);
+                const int64_t r1      = row - i03 * ne01 * ne02;
+                const int64_t i02     = r1 / ne01;
+                const int64_t i01     = r1 - i02 * ne01;
+                const int64_t row_off = (int64_t) row * n_cols;
+
+                // Load softmax mask helper (inlined)
+                auto load_mask = [&](int col) -> float {
+                    if (!mask || mask_type < 0) {
+                        return 0.0f;
+                    }
+                    const int64_t m_ne2  = mask_ne2 > 0 ? mask_ne2 : 1;
+                    const int64_t m_ne3  = mask_ne3 > 0 ? mask_ne3 : 1;
+                    const int64_t m02    = m_ne2 > 0 ? (i02 % m_ne2) : 0;
+                    const int64_t m03    = m_ne3 > 0 ? (i03 % m_ne3) : 0;
+                    const int64_t off    = i01 * mask_nb1 + m02 * mask_nb2 + m03 * mask_nb3 + (int64_t) col * mask_nb0;
+                    const char *  mask_b = static_cast<const char *>(mask);
+                    if (mask_type == 1) {
+                        return static_cast<float>(*reinterpret_cast<const sycl::half *>(mask_b + off));
+                    }
+                    return *reinterpret_cast<const float *>(mask_b + off);
+                };
+
+                float local_max = -INFINITY;
+                for (int col = tid; col < n_cols; col += WG_SIZE) {
+                    float v   = x[row_off + col] * scale + load_mask(col);
+                    local_max = sycl::fmax(local_max, v);
+                }
+                const float row_max = sycl::reduce_over_group(item.get_group(), local_max, sycl::maximum<float>());
+
+                float local_sum = 0.0f;
+                for (int col = tid; col < n_cols; col += WG_SIZE) {
+                    float v = x[row_off + col] * scale + load_mask(col);
+                    local_sum += sycl::exp(v - row_max);
+                }
+                const float row_sum = sycl::reduce_over_group(item.get_group(), local_sum, sycl::plus<float>());
+                const float inv_sum = row_sum > 0.0f ? (1.0f / row_sum) : 0.0f;
+
+                for (int col = tid; col < n_cols; col += WG_SIZE) {
+                    float v          = x[row_off + col] * scale + load_mask(col);
+                    y[row_off + col] = sycl::exp(v - row_max) * inv_sum;
+                }
+            });
+    });
+}
+
 void UnifiedKernel::invalidate_micro_graph() {
     micro_graph_valid_ = false;
     micro_graph_.reset();
@@ -8219,11 +8654,17 @@ void UnifiedKernel::record_micro_graph() {
         }
     }
 
-    // ── Allocate per-phase tile counters (device memory) ──
-    if (n_phases > micro_tile_counters_n_) {
+    // ── Allocate tile counters (device memory) ──
+    // We need one counter per phase PLUS extra counters for split-phase
+    // fallback ops (when a mixed phase is split into dedicated + fallback
+    // per-op nodes, each fallback op needs its own counter).
+    // Upper bound: total ops across all phases.
+    const int total_phase_ops   = host_phase_offset_.back();  // last offset = total entries
+    const int n_counters_needed = n_phases + total_phase_ops + 16;
+    if (n_counters_needed > micro_tile_counters_n_) {
         if (micro_tile_counters_) sycl::free(micro_tile_counters_, queue_);
-        micro_tile_counters_ = sycl::malloc_device<int>(n_phases + 16, queue_);
-        micro_tile_counters_n_ = n_phases + 16;
+        micro_tile_counters_   = sycl::malloc_device<int>(n_counters_needed, queue_);
+        micro_tile_counters_n_ = n_counters_needed;
     }
 
     // ── SLM size (same logic as launch_persistent_kernel) ──
@@ -8269,8 +8710,9 @@ void UnifiedKernel::record_micro_graph() {
 
     mod_graph.begin_recording(queue_);
 
-    // Bulk-zero all per-phase tile counters at the start of the graph
-    queue_.memset(micro_tile_counters_, 0, n_phases * sizeof(int));
+    // Bulk-zero all tile counters at the start of the graph
+    // (phases + extra counters for split-phase fallback ops)
+    queue_.memset(micro_tile_counters_, 0, n_counters_needed * sizeof(int));
 
     // Get pointers to the ops table and phase entries (both malloc_host)
     const DeviceOperation * d_ops = static_cast<const DeviceOperation *>(d_ops_pool_);
@@ -8287,6 +8729,20 @@ void UnifiedKernel::record_micro_graph() {
     int n_fallback_nodes = 0;
     int n_silu_mul_nodes = 0;
     int n_skipped_phases = 0;
+    int          n_dedicated_add     = 0;
+    int          n_dedicated_mul     = 0;
+    int          n_dedicated_rms     = 0;
+    int          n_dedicated_rope    = 0;
+    int          n_dedicated_copy    = 0;
+    int          n_dedicated_silu    = 0;
+    int          n_dedicated_softmax = 0;
+    // Extra tile counter index for split-phase fallback ops
+    // (starts after the per-phase counters)
+    int          extra_counter_idx   = n_phases;
+    // Fallback phase diagnostics
+    int          n_fb_rope = 0, n_fb_attn = 0, n_fb_setrows = 0, n_fb_getrows = 0;
+    int          n_fb_copy = 0, n_fb_softmax = 0, n_fb_add = 0, n_fb_mul = 0;
+    int          n_fb_rms = 0, n_fb_silu = 0, n_fb_other = 0;
 
     for (int p = 0; p < n_phases; p++) {
         const int phase_start = host_phase_offset_[p];
@@ -8378,44 +8834,132 @@ void UnifiedKernel::record_micro_graph() {
                 }
             }
         } else {
-            // ── Fallback: generic run_micro_phase for non-matmul phases ──
-            const bool is_serial = (total_tiles < 0);
-            const int effective_wgs = is_serial ? 1 : n_workgroups;
+            // ── Per-op split: emit dedicated kernels for eligible ops,
+            //    individual run_micro_single_op fallbacks for the rest ──
+            // This handles mixed phases (e.g. ROPE+ATTENTION, ROPE+SET_ROWS)
+            // by extracting the lightweight ops into dedicated kernels while
+            // keeping complex ops (ATTENTION, GET/SET_ROWS) as minimal
+            // single-op fallback nodes.  Each dedicated kernel launches only
+            // the work it needs (1 WG for ROPE/RMS_NORM, ceil(N/256) WGs for
+            // elementwise) instead of the 40-WG generic run_micro_phase.
+            for (int e = phase_start; e < phase_end; e++) {
+                const int               op_idx = d_entries[e].op_idx;
+                const DeviceOperation & op     = d_ops[op_idx];
+                const auto              t      = static_cast<OperationType>(op.type);
 
-            int actual_tiles = total_tiles;
-            if (is_serial) {
-                actual_tiles = 0;
-                for (int e = phase_start; e < phase_end; e++) {
-                    const int op_idx = d_entries[e].op_idx;
-                    actual_tiles += d_ops[op_idx].n_tiles;
+                bool handled = false;
+                switch (t) {
+                    case OperationType::ADD:
+                        micro_submit_add(queue_, d_ops, op_idx);
+                        n_dedicated_add++;
+                        handled = true;
+                        break;
+                    case OperationType::MUL:
+                        micro_submit_mul(queue_, d_ops, op_idx);
+                        n_dedicated_mul++;
+                        handled = true;
+                        break;
+                    case OperationType::RMS_NORM:
+                        micro_submit_rms_norm(queue_, d_ops, op_idx);
+                        n_dedicated_rms++;
+                        handled = true;
+                        break;
+                    case OperationType::ROPE:
+                        micro_submit_rope(queue_, d_ops, op_idx, op.n_kv_heads > 0);
+                        n_dedicated_rope++;
+                        handled = true;
+                        break;
+                    case OperationType::STRIDED_COPY:
+                        micro_submit_strided_copy(queue_, d_ops, op_idx);
+                        n_dedicated_copy++;
+                        handled = true;
+                        break;
+                    case OperationType::SILU_MUL:
+                        micro_submit_silu_mul(queue_, d_ops, op_idx);
+                        n_dedicated_silu++;
+                        handled = true;
+                        break;
+                    case OperationType::SOFTMAX:
+                        micro_submit_softmax(queue_, d_ops, op_idx);
+                        n_dedicated_softmax++;
+                        handled = true;
+                        break;
+                    default:
+                        break;
+                }
+
+                if (!handled) {
+                    // ── Single-op fallback: run_micro_single_op for one op ──
+                    // Uses dedicated tile counter (not the phase counter) and
+                    // direct op_idx reference (no phase_entries tile_offset mapping).
+                    const int  op_tiles      = d_ops[op_idx].n_tiles;
+                    const bool is_serial     = (total_tiles < 0);
+                    const int  effective_wgs = (is_serial || op_tiles <= 1) ? 1 : n_workgroups;
+
+                    const int counter_idx = extra_counter_idx++;
+
+                    MicroSingleOpArgs sargs     = {};
+                    sargs.operations            = d_ops;
+                    sargs.op_idx                = op_idx;
+                    sargs.n_tiles               = op_tiles;
+                    sargs.tile_counter          = &micro_tile_counters_[counter_idx];
+                    sargs.use_attn_subgroup_dot = use_attn_subgroup_dot ? 1 : 0;
+                    for (int i = 0; i < 4; i++) {
+                        sargs.scratch_buffers[i] = persistent_buffers_[i];
+                    }
+                    sargs.hidden_dim       = current_plan_->hidden_dim;
+                    sargs.intermediate_dim = current_plan_->intermediate_dim;
+
+                    queue_.submit([&](sycl::handler & cgh) {
+                        sycl::local_accessor<float, 1> slm(slm_floats, cgh);
+                        const auto                     sargs_copy = sargs;
+                        cgh.parallel_for(sycl::nd_range<1>(effective_wgs * BLOCK_SIZE, BLOCK_SIZE),
+                                         [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
+                                             PersistentTGKernelImpl<BLOCK_SIZE>::run_micro_single_op(sargs_copy, slm,
+                                                                                                     item);
+                                         });
+                    });
+                    n_fallback_nodes++;
+
+                    // Diagnostic: count op types in fallback
+                    switch (t) {
+                        case OperationType::ROPE:
+                            n_fb_rope++;
+                            break;
+                        case OperationType::ATTENTION_F16:
+                        case OperationType::ATTENTION_F32:
+                            n_fb_attn++;
+                            break;
+                        case OperationType::SET_ROWS:
+                            n_fb_setrows++;
+                            break;
+                        case OperationType::GET_ROWS:
+                            n_fb_getrows++;
+                            break;
+                        case OperationType::STRIDED_COPY:
+                            n_fb_copy++;
+                            break;
+                        case OperationType::SOFTMAX:
+                            n_fb_softmax++;
+                            break;
+                        case OperationType::ADD:
+                            n_fb_add++;
+                            break;
+                        case OperationType::MUL:
+                            n_fb_mul++;
+                            break;
+                        case OperationType::RMS_NORM:
+                            n_fb_rms++;
+                            break;
+                        case OperationType::SILU_MUL:
+                            n_fb_silu++;
+                            break;
+                        default:
+                            n_fb_other++;
+                            break;
+                    }
                 }
             }
-
-            MicroPhaseArgs margs = {};
-            margs.operations     = d_ops;
-            margs.phase_entries  = d_entries;
-            margs.phase_start    = phase_start;
-            margs.phase_end      = phase_end;
-            margs.total_tiles    = actual_tiles;
-            margs.tile_counter   = &micro_tile_counters_[p];
-            margs.use_attn_subgroup_dot = use_attn_subgroup_dot ? 1 : 0;
-            for (int i = 0; i < 4; i++) {
-                margs.scratch_buffers[i] = persistent_buffers_[i];
-            }
-            margs.hidden_dim       = current_plan_->hidden_dim;
-            margs.intermediate_dim = current_plan_->intermediate_dim;
-
-            queue_.submit([&](sycl::handler & cgh) {
-                sycl::local_accessor<float, 1> slm(slm_floats, cgh);
-                const auto margs_copy = margs;
-                cgh.parallel_for(
-                    sycl::nd_range<1>(effective_wgs * BLOCK_SIZE, BLOCK_SIZE),
-                    [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
-                        PersistentTGKernelImpl<BLOCK_SIZE>::run_micro_phase(
-                            margs_copy, slm, item);
-                    });
-            });
-            n_fallback_nodes++;
         }
     }
 
@@ -8426,17 +8970,31 @@ void UnifiedKernel::record_micro_graph() {
     micro_graph_ = std::make_unique<MicroGraphState>(std::move(exec));
     micro_graph_valid_ = true;
 
-    const int total_graph_nodes = 1 + n_quantize_nodes + mmvq_node_count + n_fallback_nodes; // 1=memset
+    const int n_dedicated_total = n_dedicated_add + n_dedicated_mul + n_dedicated_rms + n_dedicated_rope +
+                                  n_dedicated_copy + n_dedicated_silu + n_dedicated_softmax;
+    const int total_graph_nodes =
+        1 + n_quantize_nodes + mmvq_node_count + n_dedicated_total + n_fallback_nodes;  // 1=memset
 
     {
         static bool logged = false;
         if (!logged) {
             logged = true;
-            fprintf(stderr, "[MICRO-GRAPH] Recorded: %d phases, %d WGs, %d total nodes "
-                    "(MMVQ=%d quantize=%d silu_mul=%d fallback=%d)\n",
-                    n_phases, n_workgroups, total_graph_nodes,
-                    mmvq_node_count - n_silu_mul_nodes * 2, n_quantize_nodes,
-                    n_silu_mul_nodes, n_fallback_nodes);
+            fprintf(stderr,
+                    "[MICRO-GRAPH] Recorded: %d phases, %d WGs, %d total nodes "
+                    "(MMVQ=%d quantize=%d silu_mul=%d "
+                    "dedicated=%d[add=%d mul=%d rms=%d rope=%d copy=%d silu=%d softmax=%d] "
+                    "fallback=%d)\n",
+                    n_phases, n_workgroups, total_graph_nodes, mmvq_node_count - n_silu_mul_nodes * 2, n_quantize_nodes,
+                    n_silu_mul_nodes, n_dedicated_total, n_dedicated_add, n_dedicated_mul, n_dedicated_rms,
+                    n_dedicated_rope, n_dedicated_copy, n_dedicated_silu, n_dedicated_softmax, n_fallback_nodes);
+            const int n_fb_total = n_fb_rope + n_fb_attn + n_fb_setrows + n_fb_getrows + n_fb_copy + n_fb_softmax +
+                                   n_fb_add + n_fb_mul + n_fb_rms + n_fb_silu + n_fb_other;
+            fprintf(stderr,
+                    "[MICRO-GRAPH] Fallback ops breakdown (%d ops in %d phases): "
+                    "rope=%d attn=%d set_rows=%d get_rows=%d copy=%d softmax=%d "
+                    "add=%d mul=%d rms=%d silu=%d other=%d\n",
+                    n_fb_total, n_fallback_nodes, n_fb_rope, n_fb_attn, n_fb_setrows, n_fb_getrows, n_fb_copy,
+                    n_fb_softmax, n_fb_add, n_fb_mul, n_fb_rms, n_fb_silu, n_fb_other);
         }
     }
 }
