@@ -2765,6 +2765,42 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
 
     }
+
+    // GigaChat V3
+    {
+        auto tst = peg_tester("models/templates/GigaChat3-10B-A1.8B.jinja", detailed_debug);
+        tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
+        tst.test("<|message_sep|>\n\nfunction call<|role_sep|>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}")
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+
+        tst.test(
+            "Hello, world!\nWhat's up?"
+            "<|message_sep|>\n\nfunction call<|role_sep|>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}"
+        )
+            .tools({ special_function_tool })
+            .expect(message_assist_call_content)
+            .run();
+    }
+
+    // GigaChat V3.1
+    {
+        auto tst = peg_tester("models/templates/GigaChat3.1-10B-A1.8B.jinja", detailed_debug);
+        tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
+        tst.test("<|function_call|>{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}")
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+
+        tst.test(
+            "Hello, world!\nWhat's up?"
+            "<|function_call|>{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}"
+        )
+            .tools({ special_function_tool })
+            .expect(message_assist_call_content)
+            .run();
+    }
 }
 
 // Test the developer role to system workaround with a simple mock template
