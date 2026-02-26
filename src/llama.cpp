@@ -1003,6 +1003,10 @@ static struct llama_model * llama_model_load_from_file_impl(
                 props.memory_free/1024/1024);
     }
 
+    if (model->devices.empty() && !params.use_extra_bufts) {
+        LLAMA_LOG_WARN("%s: no non-CPU devices found, consider enabling use_extra_bufts for better performance\n", __func__);
+    }
+
     const int status = llama_model_load(path_model, splits, *model, params);
     GGML_ASSERT(status <= 0);
     if (status < 0) {
