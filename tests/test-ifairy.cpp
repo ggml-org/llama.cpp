@@ -481,29 +481,16 @@ static bool test_ifairy_lut_transform_cache() {
 static bool test_ifairy_lut_transform_invalid_shape() {
     printf("\n=== Test 2.2: iFairy LUT transform invalid shape ===\n");
 
-    struct ggml_init_params params = {
-        /*.mem_size   =*/2 * 1024 * 1024,
-        /*.mem_buffer =*/NULL,
-        /*.no_alloc   =*/false,
-    };
-    struct ggml_context * ctx = ggml_init(params);
-    if (!ctx) {
-        fprintf(stderr, "Failed to init ggml context\n");
-        return false;
-    }
-
     const int64_t k_bad = QK_IFAIRY - 1;
     const int64_t rows  = 1;
-    ggml_tensor * w     = ggml_new_tensor_2d(ctx, GGML_TYPE_IFAIRY, k_bad, rows);
-    if (!w || !w->data) {
-        fprintf(stderr, "Failed to allocate ifairy tensor\n");
-        ggml_free(ctx);
-        return false;
-    }
-    memset(w->data, 0, ggml_nbytes(w));
+    ggml_tensor   w     = {};
+    w.type              = GGML_TYPE_IFAIRY;
+    w.ne[0]             = k_bad;
+    w.ne[1]             = rows;
+    w.ne[2]             = 1;
+    w.ne[3]             = 1;
 
-    const bool ok = ggml_ifairy_lut_transform_tensor(w, NULL);
-    ggml_free(ctx);
+    const bool ok = ggml_ifairy_lut_transform_tensor(&w, NULL);
     ggml_ifairy_lut_free();
 
     if (ok) {
