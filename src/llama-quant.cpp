@@ -795,52 +795,68 @@ static bool tensor_requires_imatrix(const char * tensor_name, const ggml_type ds
     }
 }
 
+// given a file type, get the default tensor type
+static ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
+    ggml_type return_ftype;
+    switch (ftype) {
+        // floating-point types
+        case LLAMA_FTYPE_ALL_F32:     return_ftype = GGML_TYPE_F32;  break;
+        case LLAMA_FTYPE_MOSTLY_F16:  return_ftype = GGML_TYPE_F16;  break;
+        case LLAMA_FTYPE_MOSTLY_BF16: return_ftype = GGML_TYPE_BF16; break;
+
+        // static quants
+        case LLAMA_FTYPE_MOSTLY_Q4_0: return_ftype = GGML_TYPE_Q4_0; break;
+        case LLAMA_FTYPE_MOSTLY_Q4_1: return_ftype = GGML_TYPE_Q4_1; break;
+        case LLAMA_FTYPE_MOSTLY_Q5_0: return_ftype = GGML_TYPE_Q5_0; break;
+        case LLAMA_FTYPE_MOSTLY_Q5_1: return_ftype = GGML_TYPE_Q5_1; break;
+        case LLAMA_FTYPE_MOSTLY_Q8_0: return_ftype = GGML_TYPE_Q8_0; break;
+
+        // k-quants
+        case LLAMA_FTYPE_MOSTLY_Q2_K_S:
+        case LLAMA_FTYPE_MOSTLY_Q2_K:   return_ftype = GGML_TYPE_Q2_K; break;
+        case LLAMA_FTYPE_MOSTLY_Q3_K_S:
+        case LLAMA_FTYPE_MOSTLY_Q3_K_M:
+        case LLAMA_FTYPE_MOSTLY_Q3_K_L: return_ftype = GGML_TYPE_Q3_K; break;
+        case LLAMA_FTYPE_MOSTLY_Q4_K_S:
+        case LLAMA_FTYPE_MOSTLY_Q4_K_M: return_ftype = GGML_TYPE_Q4_K; break;
+        case LLAMA_FTYPE_MOSTLY_Q5_K_S:
+        case LLAMA_FTYPE_MOSTLY_Q5_K_M: return_ftype = GGML_TYPE_Q5_K; break;
+        case LLAMA_FTYPE_MOSTLY_Q6_K:   return_ftype = GGML_TYPE_Q6_K; break;
+
+        // i-quants
+        case LLAMA_FTYPE_MOSTLY_IQ1_S:   return_ftype = GGML_TYPE_IQ1_S;   break;
+        case LLAMA_FTYPE_MOSTLY_IQ1_M:   return_ftype = GGML_TYPE_IQ1_M;   break;
+        case LLAMA_FTYPE_MOSTLY_IQ2_XXS: return_ftype = GGML_TYPE_IQ2_XXS; break;
+        case LLAMA_FTYPE_MOSTLY_IQ2_XS:  return_ftype = GGML_TYPE_IQ2_XS;  break;
+        case LLAMA_FTYPE_MOSTLY_IQ2_S:   return_ftype = GGML_TYPE_IQ2_XS;  break;
+        case LLAMA_FTYPE_MOSTLY_IQ2_M:   return_ftype = GGML_TYPE_IQ2_S;   break;
+        case LLAMA_FTYPE_MOSTLY_IQ3_XXS: return_ftype = GGML_TYPE_IQ3_XXS; break;
+        case LLAMA_FTYPE_MOSTLY_IQ3_XS:
+        case LLAMA_FTYPE_MOSTLY_IQ3_S:
+        case LLAMA_FTYPE_MOSTLY_IQ3_M:   return_ftype = GGML_TYPE_IQ3_S;   break;
+        case LLAMA_FTYPE_MOSTLY_IQ4_XS:  return_ftype = GGML_TYPE_IQ4_XS;  break;
+        case LLAMA_FTYPE_MOSTLY_IQ4_NL:  return_ftype = GGML_TYPE_IQ4_NL;  break;
+
+        // MXFP4
+        case LLAMA_FTYPE_MOSTLY_MXFP4_MOE: return_ftype = GGML_TYPE_MXFP4; break;
+
+        // ternary
+        case LLAMA_FTYPE_MOSTLY_TQ1_0: return_ftype = GGML_TYPE_TQ1_0; break;
+        case LLAMA_FTYPE_MOSTLY_TQ2_0: return_ftype = GGML_TYPE_TQ2_0; break;
+
+        // otherwise, invalid
+        default: throw std::runtime_error(format("invalid output file type %d\n", ftype));
+    }
+    return return_ftype;
+}
+
 static void llama_model_quantize_impl(const std::string & fname_inp, const std::string & fname_out, const llama_model_quantize_params * params) {
     ggml_type default_type;
     llama_ftype ftype = params->ftype;
 
-    switch (params->ftype) {
-        case LLAMA_FTYPE_MOSTLY_Q4_0: default_type = GGML_TYPE_Q4_0; break;
-        case LLAMA_FTYPE_MOSTLY_Q4_1: default_type = GGML_TYPE_Q4_1; break;
-        case LLAMA_FTYPE_MOSTLY_Q5_0: default_type = GGML_TYPE_Q5_0; break;
-        case LLAMA_FTYPE_MOSTLY_Q5_1: default_type = GGML_TYPE_Q5_1; break;
-        case LLAMA_FTYPE_MOSTLY_Q8_0: default_type = GGML_TYPE_Q8_0; break;
-        case LLAMA_FTYPE_MOSTLY_F16:  default_type = GGML_TYPE_F16;  break;
-        case LLAMA_FTYPE_MOSTLY_BF16: default_type = GGML_TYPE_BF16; break;
-        case LLAMA_FTYPE_ALL_F32:     default_type = GGML_TYPE_F32;  break;
-
-        case LLAMA_FTYPE_MOSTLY_MXFP4_MOE: default_type = GGML_TYPE_MXFP4; break;
-
-        // K-quants
-        case LLAMA_FTYPE_MOSTLY_Q2_K_S:
-        case LLAMA_FTYPE_MOSTLY_Q2_K:    default_type = GGML_TYPE_Q2_K;    break;
-        case LLAMA_FTYPE_MOSTLY_IQ3_XS:  default_type = GGML_TYPE_IQ3_S;   break;
-        case LLAMA_FTYPE_MOSTLY_Q3_K_S:
-        case LLAMA_FTYPE_MOSTLY_Q3_K_M:
-        case LLAMA_FTYPE_MOSTLY_Q3_K_L:  default_type = GGML_TYPE_Q3_K;    break;
-        case LLAMA_FTYPE_MOSTLY_Q4_K_S:
-        case LLAMA_FTYPE_MOSTLY_Q4_K_M:  default_type = GGML_TYPE_Q4_K;    break;
-        case LLAMA_FTYPE_MOSTLY_Q5_K_S:
-        case LLAMA_FTYPE_MOSTLY_Q5_K_M:  default_type = GGML_TYPE_Q5_K;    break;
-        case LLAMA_FTYPE_MOSTLY_Q6_K:    default_type = GGML_TYPE_Q6_K;    break;
-        case LLAMA_FTYPE_MOSTLY_TQ1_0:   default_type = GGML_TYPE_TQ1_0;   break;
-        case LLAMA_FTYPE_MOSTLY_TQ2_0:   default_type = GGML_TYPE_TQ2_0;   break;
-        case LLAMA_FTYPE_MOSTLY_IQ2_XXS: default_type = GGML_TYPE_IQ2_XXS; break;
-        case LLAMA_FTYPE_MOSTLY_IQ2_XS:  default_type = GGML_TYPE_IQ2_XS;  break;
-        case LLAMA_FTYPE_MOSTLY_IQ2_S:   default_type = GGML_TYPE_IQ2_XS;  break;
-        case LLAMA_FTYPE_MOSTLY_IQ2_M:   default_type = GGML_TYPE_IQ2_S;   break;
-        case LLAMA_FTYPE_MOSTLY_IQ3_XXS: default_type = GGML_TYPE_IQ3_XXS; break;
-        case LLAMA_FTYPE_MOSTLY_IQ1_S:   default_type = GGML_TYPE_IQ1_S;   break;
-        case LLAMA_FTYPE_MOSTLY_IQ1_M:   default_type = GGML_TYPE_IQ1_M;   break;
-        case LLAMA_FTYPE_MOSTLY_IQ4_NL:  default_type = GGML_TYPE_IQ4_NL;  break;
-        case LLAMA_FTYPE_MOSTLY_IQ4_XS:  default_type = GGML_TYPE_IQ4_XS;  break;
-        case LLAMA_FTYPE_MOSTLY_IQ3_S:   default_type = GGML_TYPE_IQ3_S;   break;
-        case LLAMA_FTYPE_MOSTLY_IQ3_M:   default_type = GGML_TYPE_IQ3_S;   break;
-
-        default: throw std::runtime_error(format("invalid output file type %d\n", ftype));
-    }
-
     int nthread = params->nthread;
+
+    default_type = llama_ftype_get_default_type(ftype);
 
     if (nthread <= 0) {
         nthread = std::thread::hardware_concurrency();
@@ -950,7 +966,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
         if (remapped_name != it.first) {
             ggml_set_name(it.second.tensor, remapped_name.c_str());
-            LLAMA_LOG_DEBUG("%s: tensor %s remapped to %s\n", __func__, it.first.c_str(), ggml_get_name(it.second.tensor));
+            LLAMA_LOG_DEBUG("%s: tensor %s remapped to %s\n",
+                            __func__, it.first.c_str(), ggml_get_name(it.second.tensor));
         }
         weights.push_back(&it.second);
     }
@@ -960,7 +977,10 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
     // keep_split requires that the weights are sorted by split index
     if (params->keep_split) {
-        std::sort(weights.begin(), weights.end(), [](const llama_model_loader::llama_tensor_weight * a, const llama_model_loader::llama_tensor_weight * b) {
+        std::sort(weights.begin(), weights.end(), [](
+            const llama_model_loader::llama_tensor_weight * a,
+            const llama_model_loader::llama_tensor_weight * b
+        ) {
             if (a->idx == b->idx) {
                 return a->offs < b->offs;
             }
@@ -972,31 +992,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     workers.reserve(nthread);
 
     int idx = 0;
-
-    std::vector<no_init<uint8_t>> read_data;
-    std::vector<no_init<uint8_t>> work;
-    std::vector<no_init<float>> f32_conv_buf;
-
-    // pre-allocate work buffers to avoid repeated resizing
-    {
-        size_t max_tensor_bytes    = 0;
-        size_t max_nelements       = 0;
-        size_t max_nelements_dequant = 0;
-        for (const auto * w : weights) {
-            max_tensor_bytes = std::max(max_tensor_bytes, ggml_nbytes(w->tensor));
-            max_nelements    = std::max(max_nelements,    (size_t)ggml_nelements(w->tensor));
-            if (w->tensor->type != GGML_TYPE_F32) {
-                max_nelements_dequant = std::max(max_nelements_dequant, (size_t)ggml_nelements(w->tensor));
-            }
-        }
-        if (!ml.use_mmap) {
-            read_data.resize(max_tensor_bytes);
-        }
-        work.resize(max_nelements * 4);
-        if (max_nelements_dequant > 0) {
-            f32_conv_buf.resize(max_nelements_dequant);
-        }
-    }
 
     uint16_t n_split = 1;
 
@@ -1011,11 +1006,14 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
     std::vector<ggml_type> target_types(weights.size());
 
-    // flag for `--dry-run`, to let the user know if imatrix will be required for a real
-    // quantization, as a courtesy
+    // flag for `--dry-run`, to let the user know if imatrix will be required
+    // for a real quantization, as a courtesy
     bool will_require_imatrix = false;
 
+    //
     // preliminary iteration over all weights (not the main loop)
+    //
+
     for (size_t i = 0; i < weights.size(); ++i) {
         const auto * it = weights[i];
         const ggml_tensor * tensor = it->tensor;
@@ -1105,10 +1103,38 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         new_ofstream(0);
     }
 
+    std::vector<no_init<uint8_t>> read_data;
+    std::vector<no_init<uint8_t>> work;
+    std::vector<no_init<float>> f32_conv_buf;
+
+    // pre-allocate work buffers to avoid repeated resizing
+    {
+        size_t max_tensor_bytes    = 0;
+        size_t max_nelements       = 0;
+        size_t max_nelements_dequant = 0;
+        for (const auto * w : weights) {
+            max_tensor_bytes = std::max(max_tensor_bytes, ggml_nbytes(w->tensor));
+            max_nelements    = std::max(max_nelements,    (size_t)ggml_nelements(w->tensor));
+            if (w->tensor->type != GGML_TYPE_F32) {
+                max_nelements_dequant = std::max(max_nelements_dequant, (size_t)ggml_nelements(w->tensor));
+            }
+        }
+        if (!ml.use_mmap) {
+            read_data.resize(max_tensor_bytes);
+        }
+        work.resize(max_nelements * 4);
+        if (max_nelements_dequant > 0) {
+            f32_conv_buf.resize(max_nelements_dequant);
+        }
+    }
+
     size_t total_size_org = 0;
     size_t total_size_new = 0;
 
+    //
     // iterate over all weights (main loop)
+    //
+
     for (size_t i = 0; i < weights.size(); ++i) {
         const auto * it = weights[i];
         const auto & weight = *it;
