@@ -5322,6 +5322,59 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, 
     if (tensor->type == GGML_TYPE_Q6_K) {
         ggml_tensor_extra_cl_q6_K * extra = (ggml_tensor_extra_cl_q6_K *)tensor->extra;
 
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+        if (use_adreno_kernels(backend_ctx, tensor)) {
+            static ggml_cl_buffer buf_trans_ql;
+            static ggml_cl_buffer buf_trans_qh;
+            static ggml_cl_buffer buf_trans_s;
+            static ggml_cl_buffer buf_trans_d;
+            static ggml_cl_buffer buf_unpacked;
+
+            cl_int M = tensor->ne[1];   // ne01
+            cl_int K = tensor->ne[0];   // ne00
+
+            GGML_ASSERT(K % ggml_blck_size(tensor->type) == 0);
+
+            size_t size_ql = ggml_nelements(tensor)/ggml_blck_size(tensor->type)*ggml_blck_size(tensor->type)/2;
+            size_t size_qh = ggml_nelements(tensor)/ggml_blck_size(tensor->type)*ggml_blck_size(tensor->type)/4;
+            size_t size_s  = ggml_nelements(tensor)/ggml_blck_size(tensor->type)*ggml_blck_size(tensor->type)/16;
+            size_t size_d  = ggml_nelements(tensor)/ggml_blck_size(tensor->type)*sizeof(ggml_fp16_t);
+            GGML_ASSERT(size_ql + size_qh + size_s + size_d == ggml_nbytes(tensor) && "Incorrect tensor size");
+
+            buf_trans_ql.allocate(backend_ctx->context, size_ql);
+            buf_trans_qh.allocate(backend_ctx->context, size_qh);
+            buf_trans_s.allocate(backend_ctx->context, size_s);
+            buf_trans_d.allocate(backend_ctx->context, size_d);
+            buf_unpacked.allocate(backend_ctx->context, ggml_nbytes(tensor));
+
+            // transpose ql, qh, s and d back
+            transpose_2d_as_16b(backend_ctx, extra->ql, buf_trans_ql.buffer, size_ql, M, K/4);
+            transpose_2d_as_8b(backend_ctx,  extra->qh, buf_trans_qh.buffer, size_qh, M, K/4);
+            transpose_2d_as_16b(backend_ctx, extra->s,  buf_trans_s.buffer,  size_s,  M, K/16/2);
+            transpose_2d_as_16b(backend_ctx, extra->d,  buf_trans_d.buffer,  size_d,  M, K/256);
+
+            // unpack
+            cl_uchar mask = 0xFF;
+            cl_kernel kernel = backend_ctx->kernel_restore_block_q6_K_noshuffle;
+            CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &buf_trans_ql.buffer));
+            CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &buf_trans_qh.buffer));
+            CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &buf_trans_s.buffer));
+            CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem), &buf_trans_d.buffer));
+            CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem), &buf_unpacked.buffer));
+            CL_CHECK(clSetKernelArg(kernel, 5, sizeof(cl_uchar), &mask));
+
+            size_t global_work_size[] = {(size_t)ggml_nelements(tensor)/ggml_blck_size(tensor->type), 1, 1};
+            size_t local_work_size[] = {1, 1, 1};
+
+            cl_event evt;
+            CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
+            CL_CHECK(clWaitForEvents(1, &evt));
+            CL_CHECK(clEnqueueReadBuffer(queue, buf_unpacked.buffer, CL_TRUE, offset, size, data, 0, NULL, NULL));
+
+            return;
+        }
+#endif // GGML_OPENCL_USE_ADRENO_KERNELS
+
         cl_int err;
         cl_mem data_device = clCreateBuffer(context, CL_MEM_READ_WRITE,
             ggml_nbytes(tensor), NULL, &err);
