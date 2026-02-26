@@ -1148,6 +1148,9 @@ class TextModel(ModelBase):
         if chkhsh == "27949a2493fc4a9f53f5b9b029c82689cfbe5d3a1929bb25e043089e28466de6":
             # ref: https://huggingface.co/jinaai/jina-embeddings-v2-base-de
             res = "jina-v2-de"
+        if chkhsh == "a023e9fdc5a11f034d3ef515b92350e56fb2af1f66c6b6811a4444ea9bf8763d":
+            # ref: https://huggingface.co/jinaai/jina-embeddings-v5-text-nano
+            res = "jina-v5-nano"
         if chkhsh == "c136ed14d01c2745d4f60a9596ae66800e2b61fa45643e72436041855ad4089d":
             # ref: https://huggingface.co/abacusai/Smaug-Llama-3-70B-Instruct
             res = "smaug-bpe"
@@ -6119,6 +6122,32 @@ class NeoBert(BertModel):
         if name.startswith("decoder."):
             return
 
+        if name.startswith("model."):
+            name = name[6:]
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("EuroBertModel", "JinaEmbeddingsV5Model")
+class EuroBertModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.EUROBERT
+
+    def set_vocab(self):
+        self.gguf_writer.add_add_bos_token(False)
+        self._set_vocab_gpt2()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        # EuroBert is bidirectional (encoder)
+        self.gguf_writer.add_causal_attention(False)
+
+        self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
+
+        self._try_set_pooling_type()
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Strip "model." prefix from tensor names
         if name.startswith("model."):
             name = name[6:]
 

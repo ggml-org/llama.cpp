@@ -379,6 +379,7 @@ class MODEL_ARCH(IntEnum):
     NEO_BERT         = auto()
     JINA_BERT_V2     = auto()
     JINA_BERT_V3     = auto()
+    EUROBERT         = auto()
     BLOOM            = auto()
     STABLELM         = auto()
     QWEN             = auto()
@@ -820,6 +821,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.NEO_BERT:         "neo-bert",
     MODEL_ARCH.JINA_BERT_V2:     "jina-bert-v2",
     MODEL_ARCH.JINA_BERT_V3:     "jina-bert-v3",
+    MODEL_ARCH.EUROBERT:         "eurobert",
     MODEL_ARCH.BLOOM:            "bloom",
     MODEL_ARCH.STABLELM:         "stablelm",
     MODEL_ARCH.QWEN:             "qwen",
@@ -1586,6 +1588,19 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
         MODEL_TENSOR.LAYER_OUT_NORM,
+    ],
+    MODEL_ARCH.EUROBERT: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_DOWN,
     ],
     MODEL_ARCH.MPT: [
         MODEL_TENSOR.TOKEN_EMBD,
