@@ -54,6 +54,6 @@ adb $adbserial $adbhost shell " \
     $verbose $experimental $sched $opmask $profile $nhvx $ndev $hb \
       ./$branch/bin/llama-cli --no-mmap -m $basedir/../gguf/$model \
          --poll 1000 -t 6 --cpu-mask 0xfc --cpu-strict 1           \
-         --ctx-size 8192 --batch-size 128 -fa on \
-         -ngl 99 --device $device $cli_opts $@   \
+         --ctx-size 8192 --ubatch-size 256 -fa on                  \
+         -ngl 99 --device $device $cli_opts $@                     \
 "

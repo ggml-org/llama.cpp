@@ -167,7 +167,12 @@ public:
     // for debugging
     std::string str() const;
 
-    llama_pos pos_next() const;
+    // the next position after n_tokens. if n_tokens < 0, return the next position after all tokens.
+    llama_pos pos_next(int64_t n_tokens = -1) const;
+
+    // number of tokens with position <= max_pos
+    size_t size_up_to_pos(llama_pos max_pos) const;
+
     const mtmd::input_chunk_ptr & find_chunk(size_t idx) const;
 
     void push_back(llama_token tok);
