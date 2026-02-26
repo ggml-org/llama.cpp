@@ -11,7 +11,7 @@ extern "C" {
 
 // backend API
 GGML_BACKEND_API ggml_guid_t     ggml_backend_et_guid(void);
-GGML_BACKEND_API ggml_backend_t ggml_backend_et_init(size_t dev_num);
+GGML_BACKEND_API ggml_backend_t ggml_backend_et_init(size_t devidx);
 
 GGML_BACKEND_API bool ggml_backend_is_et(ggml_backend_t backend);
 GGML_BACKEND_API int  ggml_backend_et_get_device_count(void);
