@@ -743,6 +743,68 @@ jobs:
             -DGGML_SYCL_F16=ON
           cmake --build build --config Release -j $(nproc)
 
+  ubuntu-24-cmake-openvino:
+      runs-on: ubuntu-24.04
+
+      env:
+        # Sync versions in build.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
+        OPENVINO_VERSION_MAJOR: "2026.0.1"
+        OPENVINO_VERSION_FULL: "2026.0.1.20960.91859257636"
+
+      steps:
+        - name: Clone
+          id: checkout
+          uses: actions/checkout@v4
+
+        - name: ccache
+          uses: ggml-org/ccache-action@v1.2.16
+          with:
+            key: ubuntu-24-cmake-openvino-no-preset-v1
+            evict-old-files: 1d
+
+        - name: Dependencies
+          id: depends
+          run: |
+            sudo apt-get update
+            sudo apt-get install -y build-essential libssl-dev libtbb12 cmake ninja-build python3-pip
+            sudo apt install ocl-icd-opencl-dev opencl-headers opencl-clhpp-headers intel-opencl-icd
+
+        - name: Use OpenVINO Toolkit Cache
+          uses: actions/cache@v4
+          id: cache-openvino
+          with:
+            path: ./openvino_toolkit
+            key: openvino-toolkit-v${{ env.OPENVINO_VERSION_FULL }}-${{ runner.os }}
+
+        - name: Setup OpenVINO Toolkit
+          if: steps.cache-openvino.outputs.cache-hit != 'true'
+          uses: ./.github/actions/linux-setup-openvino
+          with:
+            path: ./openvino_toolkit
+            version_major: ${{ env.OPENVINO_VERSION_MAJOR }}
+            version_full: ${{ env.OPENVINO_VERSION_FULL }}
+
+        - name: Install OpenVINO dependencies
+          run: |
+            cd ./openvino_toolkit
+            chmod +x ./install_dependencies/install_openvino_dependencies.sh
+            echo "Y" | sudo -E ./install_dependencies/install_openvino_dependencies.sh
+
+        - name: Build
+          id: cmake_build
+          run: |
+            source ./openvino_toolkit/setupvars.sh
+            cmake -B build/ReleaseOV -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DGGML_OPENVINO=ON
+            cmake --build build/ReleaseOV --config Release -j $(nproc)
+
+        - name: Test
+          id: cmake_test
+          run: |
+            cd ${{ github.workspace }}
+            ctest --test-dir build/ReleaseOV -L main --verbose --timeout 2000
+
   build-linux-cross:
     uses: ./.github/workflows/build-linux-cross.yml
 

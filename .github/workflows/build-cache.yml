@@ -63,6 +63,34 @@ jobs:
           path: ./spacemit_toolchain
           version: ${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}
 
+  ubuntu-24-openvino-cache:
+    runs-on: ubuntu-24.04
+
+    env:
+      # Sync versions in build.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
+      OPENVINO_VERSION_MAJOR: "2026.0.1"
+      OPENVINO_VERSION_FULL: "2026.0.1.20960.91859257636"
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Cache
+        uses: actions/cache@v4
+        id: cache-openvino
+        with:
+          path: ./openvino_toolkit
+          key: openvino-toolkit-v${{ env.OPENVINO_VERSION_FULL }}-${{ runner.os }}
+
+      - name: Setup OpenVINO Toolkit
+        if: steps.cache-openvino.outputs.cache-hit != 'true'
+        uses: ./.github/actions/linux-setup-openvino
+        with:
+          path: ./openvino_toolkit
+          version_major: ${{ env.OPENVINO_VERSION_MAJOR }}
+          version_full: ${{ env.OPENVINO_VERSION_FULL }}
+
   windows-2022-rocm-cache:
     runs-on: windows-2022
 
