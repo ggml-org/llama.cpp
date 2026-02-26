@@ -438,7 +438,7 @@ typedef struct {
 } block_q3_pt;
 static_assert(sizeof(block_q3_pt) == 124, "wrong q3_pt block size");
 
-#define IQ3KL_N_LEVELS 8
+#define Q3PT_N_LEVELS 8
 
 #endif // GGML_COMMON_DECL
 #endif // GGML_COMMON_DECL

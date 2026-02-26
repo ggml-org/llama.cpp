@@ -17,9 +17,9 @@
 
 // Q3_PT levels functions (defined in ggml-quants.c)
 extern "C" {
-    void   iq3kl_train_levels(const float * data, int64_t nrow, int64_t n_per_row,
+    void   q3pt_train_levels(const float * data, int64_t nrow, int64_t n_per_row,
                                const float * imatrix, float levels_out[8]);
-    void   iq3kl_set_levels(const float * levels);
+    void   q3pt_set_levels(const float * levels);
 }
 
 // Quantization types. Changes to this struct must be replicated in quantize.cpp
@@ -769,11 +769,11 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
     // Q3_PT two-pass approach: train all per-tensor levels BEFORE opening the output
     // file, so the levels KV entry is already populated at the time of the metadata placeholder.
-    static const size_t IQ3KL_N_LEVELS = 8;
-    std::vector<float> iq3kl_all_levels;  // indexed by position in tensors[]
+    static const size_t Q3PT_N_LEVELS = 8;
+    std::vector<float> q3pt_all_levels;  // indexed by position in tensors[]
     if (ftype == LLAMA_FTYPE_MOSTLY_Q3_PT && !params->dry_run) {
         LLAMA_LOG_INFO("%s: Q3_PT pass 1: training per-tensor levels...\n", __func__);
-        iq3kl_all_levels.assign(tensors.size() * IQ3KL_N_LEVELS, 0.0f);
+        q3pt_all_levels.assign(tensors.size() * Q3PT_N_LEVELS, 0.0f);
 
         // Temporary dequant buffer for pass 1 (reuse f32_conv_buf / read_data declared below)
         std::vector<no_init<uint8_t>> p1_read_data;
@@ -830,15 +830,15 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             const int64_t nrows     = tensor->ne[1];
 
             LLAMA_LOG_INFO("%s: Q3_PT levels for [%zu/%zu] %s\n", __func__, ti+1, tensors.size(), tensor->name);
-            iq3kl_train_levels(f32_data, nrows, n_per_row, imatrix,
-                               iq3kl_all_levels.data() + ti * IQ3KL_N_LEVELS);
+            q3pt_train_levels(f32_data, nrows, n_per_row, imatrix,
+                               q3pt_all_levels.data() + ti * Q3PT_N_LEVELS);
         }
 
         // All levels ready — store in GGUF metadata before the file is opened
         for (auto & ctx : ctx_outs) {
             if (ctx) {
                 gguf_set_arr_data(ctx.get(), "q3_pt.levels", GGUF_TYPE_FLOAT32,
-                                  iq3kl_all_levels.data(), iq3kl_all_levels.size());
+                                  q3pt_all_levels.data(), q3pt_all_levels.size());
             }
         }
         LLAMA_LOG_INFO("%s: Q3_PT pass 1 complete.\n", __func__);
@@ -1112,7 +1112,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
                 // Q3_PT: set the per-tensor levels (trained in pass 1) as global for quantization
                 if (new_type == GGML_TYPE_Q3_PT) {
-                    iq3kl_set_levels(iq3kl_all_levels.data() + tensor_pass2_idx * IQ3KL_N_LEVELS);
+                    q3pt_set_levels(q3pt_all_levels.data() + tensor_pass2_idx * Q3PT_N_LEVELS);
                 }
 
                 // quantize each expert separately since they have different importance matrices

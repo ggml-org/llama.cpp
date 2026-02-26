@@ -4083,66 +4083,66 @@ void quantize_row_iq3_s_ref(const float * GGML_RESTRICT x, block_iq3_s * GGML_RE
 // 16-element sub-block values. Stored in GGUF as "q3_pt.levels" (float32 array).
 
 // Global levels (used during quantization for the current tensor)
-static float iq3kl_levels[IQ3KL_N_LEVELS];
-static bool  iq3kl_levels_set = false;
+static float q3pt_levels[Q3PT_N_LEVELS];
+static bool  q3pt_levels_set = false;
 
-void iq3kl_set_levels(const float * levels) {
-    memcpy(iq3kl_levels, levels, IQ3KL_N_LEVELS * sizeof(float));
-    iq3kl_levels_set = true;
+void q3pt_set_levels(const float * levels) {
+    memcpy(q3pt_levels, levels, Q3PT_N_LEVELS * sizeof(float));
+    q3pt_levels_set = true;
 }
 
-const float * iq3kl_get_levels(void) {
-    return iq3kl_levels_set ? iq3kl_levels : NULL;
+const float * q3pt_get_levels(void) {
+    return q3pt_levels_set ? q3pt_levels : NULL;
 }
 
-void iq3kl_free_levels(void) {
-    iq3kl_levels_set = false;
+void q3pt_free_levels(void) {
+    q3pt_levels_set = false;
 }
 
 // Per-tensor levels registry for inference (range-based lookup by data address)
-#define IQ3KL_MAX_TENSORS 1024
+#define Q3PT_MAX_TENSORS 1024
 
 typedef struct {
     const void * data;
     size_t nbytes;
-    float levels[IQ3KL_N_LEVELS];
-} iq3kl_tensor_entry;
+    float levels[Q3PT_N_LEVELS];
+} q3pt_tensor_entry;
 
-static iq3kl_tensor_entry iq3kl_tensor_registry[IQ3KL_MAX_TENSORS];
-static int iq3kl_tensor_registry_count = 0;
+static q3pt_tensor_entry q3pt_tensor_registry[Q3PT_MAX_TENSORS];
+static int q3pt_tensor_registry_count = 0;
 
-GGML_API void iq3kl_register_tensor_levels(const void * data, size_t nbytes, const float * levels) {
-    if (iq3kl_tensor_registry_count >= IQ3KL_MAX_TENSORS) { return; }
-    for (int i = 0; i < iq3kl_tensor_registry_count; ++i) {
-        if (iq3kl_tensor_registry[i].data == data) {
-            iq3kl_tensor_registry[i].nbytes = nbytes;
-            memcpy(iq3kl_tensor_registry[i].levels, levels, IQ3KL_N_LEVELS * sizeof(float));
+GGML_API void q3pt_register_tensor_levels(const void * data, size_t nbytes, const float * levels) {
+    if (q3pt_tensor_registry_count >= Q3PT_MAX_TENSORS) { return; }
+    for (int i = 0; i < q3pt_tensor_registry_count; ++i) {
+        if (q3pt_tensor_registry[i].data == data) {
+            q3pt_tensor_registry[i].nbytes = nbytes;
+            memcpy(q3pt_tensor_registry[i].levels, levels, Q3PT_N_LEVELS * sizeof(float));
             return;
         }
     }
-    iq3kl_tensor_registry[iq3kl_tensor_registry_count].data   = data;
-    iq3kl_tensor_registry[iq3kl_tensor_registry_count].nbytes = nbytes;
-    memcpy(iq3kl_tensor_registry[iq3kl_tensor_registry_count].levels, levels, IQ3KL_N_LEVELS * sizeof(float));
-    iq3kl_tensor_registry_count++;
+    q3pt_tensor_registry[q3pt_tensor_registry_count].data   = data;
+    q3pt_tensor_registry[q3pt_tensor_registry_count].nbytes = nbytes;
+    memcpy(q3pt_tensor_registry[q3pt_tensor_registry_count].levels, levels, Q3PT_N_LEVELS * sizeof(float));
+    q3pt_tensor_registry_count++;
 }
 
-GGML_API void iq3kl_clear_tensor_levels(void) {
-    iq3kl_tensor_registry_count = 0;
+GGML_API void q3pt_clear_tensor_levels(void) {
+    q3pt_tensor_registry_count = 0;
 }
 
-GGML_API const float * iq3kl_get_tensor_levels(const void * data_ptr) {
+GGML_API const float * q3pt_get_tensor_levels(const void * data_ptr) {
     const uint8_t * p = (const uint8_t *)data_ptr;
-    for (int i = 0; i < iq3kl_tensor_registry_count; ++i) {
-        const uint8_t * base = (const uint8_t *)iq3kl_tensor_registry[i].data;
-        if (p >= base && p < base + iq3kl_tensor_registry[i].nbytes) {
-            return iq3kl_tensor_registry[i].levels;
+    for (int i = 0; i < q3pt_tensor_registry_count; ++i) {
+        const uint8_t * base = (const uint8_t *)q3pt_tensor_registry[i].data;
+        if (p >= base && p < base + q3pt_tensor_registry[i].nbytes) {
+            return q3pt_tensor_registry[i].levels;
         }
     }
-    return iq3kl_get_levels();
+    return q3pt_get_levels();
 }
 
-void iq3kl_train_levels(const float * data, int64_t nrow, int64_t n_per_row,
-                        const float * imatrix, float levels_out[IQ3KL_N_LEVELS]) {
+void q3pt_train_levels(const float * data, int64_t nrow, int64_t n_per_row,
+                        const float * imatrix, float levels_out[Q3PT_N_LEVELS]) {
 
     const int64_t n_sub   = n_per_row / 16;       // 16-element sub-blocks per row
 
@@ -4184,15 +4184,15 @@ void iq3kl_train_levels(const float * data, int64_t nrow, int64_t n_per_row,
     }
 
     // Initialize 8 levels uniformly in [0, 1]
-    float levels[IQ3KL_N_LEVELS];
-    for (int k = 0; k < IQ3KL_N_LEVELS; ++k) {
-        levels[k] = (float)k / (IQ3KL_N_LEVELS - 1);
+    float levels[Q3PT_N_LEVELS];
+    for (int k = 0; k < Q3PT_N_LEVELS; ++k) {
+        levels[k] = (float)k / (Q3PT_N_LEVELS - 1);
     }
 
     // Lloyd-Max (weighted k-means) iterations with early convergence
     for (int iter = 0; iter < 300; ++iter) {
-        float sum_w [IQ3KL_N_LEVELS] = {0};
-        float sum_wt[IQ3KL_N_LEVELS] = {0};
+        float sum_w [Q3PT_N_LEVELS] = {0};
+        float sum_wt[Q3PT_N_LEVELS] = {0};
 
         // Process bins instead of individual values
         for (int b = 0; b < N_BINS; ++b) {
@@ -4200,7 +4200,7 @@ void iq3kl_train_levels(const float * data, int64_t nrow, int64_t n_per_row,
             const float t = (b + 0.5f) * bin_width;  // representative value at bin center
             int best = 0;
             float best_d2 = (t - levels[0]) * (t - levels[0]);
-            for (int k = 1; k < IQ3KL_N_LEVELS; ++k) {
+            for (int k = 1; k < Q3PT_N_LEVELS; ++k) {
                 float d2 = (t - levels[k]) * (t - levels[k]);
                 if (d2 < best_d2) { best_d2 = d2; best = k; }
             }
@@ -4210,7 +4210,7 @@ void iq3kl_train_levels(const float * data, int64_t nrow, int64_t n_per_row,
 
         // Check for early convergence
         float max_delta = 0.0f;
-        for (int k = 0; k < IQ3KL_N_LEVELS; ++k) {
+        for (int k = 0; k < Q3PT_N_LEVELS; ++k) {
             if (sum_w[k] > 1e-12f) {
                 float new_level = sum_wt[k] / sum_w[k];
                 max_delta = fmaxf(max_delta, fabsf(new_level - levels[k]));
@@ -4220,15 +4220,15 @@ void iq3kl_train_levels(const float * data, int64_t nrow, int64_t n_per_row,
         if (max_delta < 1e-10f) break;
 
         // Keep levels sorted (insertion sort — 8 elements)
-        for (int k = 1; k < IQ3KL_N_LEVELS; ++k) {
+        for (int k = 1; k < Q3PT_N_LEVELS; ++k) {
             float v = levels[k]; int m = k - 1;
             while (m >= 0 && levels[m] > v) { levels[m+1] = levels[m]; m--; }
             levels[m+1] = v;
         }
     }
 
-    memcpy(levels_out, levels, IQ3KL_N_LEVELS * sizeof(float));
-    iq3kl_set_levels(levels);
+    memcpy(levels_out, levels, Q3PT_N_LEVELS * sizeof(float));
+    q3pt_set_levels(levels);
     free(bin_sum_w);
     free(bin_sum_wt);
 }
@@ -4237,7 +4237,7 @@ void iq3kl_train_levels(const float * data, int64_t nrow, int64_t n_per_row,
 
 // 6-bit sequential packing: 32 values in 24 bytes (4 values per 3 bytes).
 // Indices 0..15 = sub-block ranges, 16..31 = sub-block neg_mins.
-static inline uint8_t iq3kl_sc_get(const uint8_t * GGML_RESTRICT sc, int i) {
+static inline uint8_t q3pt_sc_get(const uint8_t * GGML_RESTRICT sc, int i) {
     const int bit  = i * 6;
     const int byte = bit / 8;
     const int off  = bit % 8;
@@ -4246,7 +4246,7 @@ static inline uint8_t iq3kl_sc_get(const uint8_t * GGML_RESTRICT sc, int i) {
     return val;
 }
 
-static inline void iq3kl_sc_set(uint8_t * GGML_RESTRICT sc, int i, uint8_t v) {
+static inline void q3pt_sc_set(uint8_t * GGML_RESTRICT sc, int i, uint8_t v) {
     const int bit  = i * 6;
     const int byte = bit / 8;
     const int off  = bit % 8;
@@ -4255,7 +4255,7 @@ static inline void iq3kl_sc_set(uint8_t * GGML_RESTRICT sc, int i, uint8_t v) {
 }
 
 // 3-bit sequential packing: 256 values in 96 bytes (8 values per 3 bytes).
-static inline int iq3kl_unpack3(const uint8_t * GGML_RESTRICT qs, int k) {
+static inline int q3pt_unpack3(const uint8_t * GGML_RESTRICT qs, int k) {
     const int bit  = k * 3;
     const int byte = bit / 8;
     const int off  = bit % 8;
@@ -4264,7 +4264,7 @@ static inline int iq3kl_unpack3(const uint8_t * GGML_RESTRICT qs, int k) {
     return val;
 }
 
-static inline void iq3kl_pack3(uint8_t * GGML_RESTRICT qs, int k, int v) {
+static inline void q3pt_pack3(uint8_t * GGML_RESTRICT qs, int k, int v) {
     const int bit  = k * 3;
     const int byte = bit / 8;
     const int off  = bit % 8;
@@ -4275,7 +4275,7 @@ static inline void iq3kl_pack3(uint8_t * GGML_RESTRICT qs, int k, int v) {
 void dequantize_row_q3_pt(const block_q3_pt * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
     assert(k % QK_K == 0);
     const int nb = k / QK_K;
-    const float * L = iq3kl_get_tensor_levels(x);
+    const float * L = q3pt_get_tensor_levels(x);
     GGML_ASSERT(L != NULL && "Q3_PT levels not set for tensor");
 
     for (int i = 0; i < nb; i++) {
@@ -4285,10 +4285,10 @@ void dequantize_row_q3_pt(const block_q3_pt * GGML_RESTRICT x, float * GGML_REST
         const uint8_t * qs = x[i].qs;
 
         for (int ib = 0; ib < QK_K/16; ++ib) {
-            const float range   = d    * (float)iq3kl_sc_get(sc, ib);
-            const float sub_min = -dmin * (float)iq3kl_sc_get(sc, ib + QK_K/16);
+            const float range   = d    * (float)q3pt_sc_get(sc, ib);
+            const float sub_min = -dmin * (float)q3pt_sc_get(sc, ib + QK_K/16);
             for (int j = 0; j < 16; ++j) {
-                const int q = iq3kl_unpack3(qs, ib*16 + j);
+                const int q = q3pt_unpack3(qs, ib*16 + j);
                 y[ib*16 + j] = L[q] * range + sub_min;
             }
         }
@@ -4296,7 +4296,7 @@ void dequantize_row_q3_pt(const block_q3_pt * GGML_RESTRICT x, float * GGML_REST
     }
 }
 
-#define IQ3KL_REFINE_ITERS 5
+#define Q3PT_REFINE_ITERS 5
 
 // Find the optimal global d-scale for 6-bit (nmax=63) sub-block range quantization,
 // minimizing Σ_i weights[i] * (vals[i] - d * clamp(round(vals[i]/d), 0, nmax))^2.
@@ -4304,7 +4304,7 @@ void dequantize_row_q3_pt(const block_q3_pt * GGML_RESTRICT x, float * GGML_REST
 // Without imatrix all weights are equal and the winner is always max/nmax, so this is a no-op.
 // With imatrix it can redirect scale resolution to important sub-blocks at the cost of
 // less important ones that would otherwise dominate via raw max().
-static float iq3kl_find_optimal_d(const float * GGML_RESTRICT vals,
+static float q3pt_find_optimal_d(const float * GGML_RESTRICT vals,
                                    const float * GGML_RESTRICT weights,
                                    int n, int nmax) {
     float max_val = 0.f;
@@ -4330,12 +4330,12 @@ static void quantize_row_q3_pt_impl(const float * GGML_RESTRICT x,
                                      void * GGML_RESTRICT        vy,
                                      int64_t                     n,
                                      const float * GGML_RESTRICT quant_weights) {
-    GGML_ASSERT(iq3kl_levels_set && "Q3_PT levels not set - call iq3kl_set_levels() first");
+    GGML_ASSERT(q3pt_levels_set && "Q3_PT levels not set - call q3pt_set_levels() first");
     GGML_ASSERT(n % QK_K == 0);
 
     const int64_t  nbl = n / QK_K;
     block_q3_pt * y   = (block_q3_pt *) vy;
-    const float *  L   = iq3kl_levels;
+    const float *  L   = q3pt_levels;
 
     for (int ibl = 0; ibl < nbl; ++ibl) {
         const float *  xbl = x + QK_K * ibl;
@@ -4350,7 +4350,7 @@ static void quantize_row_q3_pt_impl(const float * GGML_RESTRICT x,
         }
 
         // Per-sub-block importance weights: sum of AWQ weights over 16 elements.
-        // Used by iq3kl_find_optimal_d() to direct scale resolution toward important sub-blocks.
+        // Used by q3pt_find_optimal_d() to direct scale resolution toward important sub-blocks.
         float w_ib[QK_K / 16];
         for (int ib = 0; ib < QK_K / 16; ++ib) {
             float wsum = 0.f;
@@ -4401,7 +4401,7 @@ static void quantize_row_q3_pt_impl(const float * GGML_RESTRICT x,
                 const float t       = (xj - sub_min0) * inv_range0;
                 int         best    = 0;
                 float       best_d2 = (t - L[0]) * (t - L[0]);
-                for (int k = 1; k < IQ3KL_N_LEVELS; ++k) {
+                for (int k = 1; k < Q3PT_N_LEVELS; ++k) {
                     const float d2 = (t - L[k]) * (t - L[k]);
                     if (d2 < best_d2) {
                         best_d2 = d2;
@@ -4429,8 +4429,8 @@ static void quantize_row_q3_pt_impl(const float * GGML_RESTRICT x,
         }
 
         // Importance-weighted d/dmin search (replaces plain max/63)
-        float d_val    = iq3kl_find_optimal_d(sub_ranges, w_ib, QK_K / 16, 63);
-        float dmin_val = iq3kl_find_optimal_d(neg_mins, w_ib, QK_K / 16, 63);
+        float d_val    = q3pt_find_optimal_d(sub_ranges, w_ib, QK_K / 16, 63);
+        float dmin_val = q3pt_find_optimal_d(neg_mins, w_ib, QK_K / 16, 63);
 
         // Quantize ranges and neg_mins to 6-bit
         memset(blk->scales, 0, sizeof(blk->scales));
@@ -4440,42 +4440,42 @@ static void quantize_row_q3_pt_impl(const float * GGML_RESTRICT x,
         for (int ib = 0; ib < QK_K / 16; ++ib) {
             uint8_t sc = MIN(63, nearest_int(inv_d * sub_ranges[ib]));
             uint8_t sm = MIN(63, nearest_int(inv_dmin * neg_mins[ib]));
-            iq3kl_sc_set(blk->scales, ib, sc);
-            iq3kl_sc_set(blk->scales, ib + QK_K / 16, sm);
+            q3pt_sc_set(blk->scales, ib, sc);
+            q3pt_sc_set(blk->scales, ib + QK_K / 16, sm);
         }
         blk->d    = GGML_FP32_TO_FP16(d_val);
         blk->dmin = GGML_FP32_TO_FP16(dmin_val);
 
         // Initial level assignment
         for (int ib = 0; ib < QK_K / 16; ++ib) {
-            const float range     = d_val * (float) iq3kl_sc_get(blk->scales, ib);
-            const float sub_min   = -dmin_val * (float) iq3kl_sc_get(blk->scales, ib + QK_K / 16);
+            const float range     = d_val * (float) q3pt_sc_get(blk->scales, ib);
+            const float sub_min   = -dmin_val * (float) q3pt_sc_get(blk->scales, ib + QK_K / 16);
             const float inv_range = range > 1e-6f ? 1.f / range : 0.f;
             for (int j = 0; j < 16; ++j) {
                 const int   elem    = ib * 16 + j;
                 const float t       = (xbl[elem] - sub_min) * inv_range;
                 int         best    = 0;
                 float       best_d2 = (t - L[0]) * (t - L[0]);
-                for (int k = 1; k < IQ3KL_N_LEVELS; ++k) {
+                for (int k = 1; k < Q3PT_N_LEVELS; ++k) {
                     const float d2 = (t - L[k]) * (t - L[k]);
                     if (d2 < best_d2) {
                         best_d2 = d2;
                         best    = k;
                     }
                 }
-                iq3kl_pack3(blk->qs, elem, best);
+                q3pt_pack3(blk->qs, elem, best);
             }
         }
 
         // Iterative refinement: weighted LS for (range, neg_min) + importance-weighted d/dmin.
-        for (int iter = 0; iter < IQ3KL_REFINE_ITERS; ++iter) {
+        for (int iter = 0; iter < Q3PT_REFINE_ITERS; ++iter) {
             for (int ib = 0; ib < QK_K / 16; ++ib) {
                 double sA = 0, sB = 0, sC = 0, sD = 0, sE = 0;
                 for (int j = 0; j < 16; ++j) {
                     const int   elem = ib * 16 + j;
                     const float xj   = xbl[elem];
                     const float w  = quant_weights ? quant_weights[QK_K * ibl + elem] * sqrtf(sigma2 + xj * xj) : 1.0f;
-                    const float lq = L[iq3kl_unpack3(blk->qs, elem)];
+                    const float lq = L[q3pt_unpack3(blk->qs, elem)];
                     sA += (double) w * (double) lq * (double) lq;
                     sB += (double) w * (double) lq;
                     sC += (double) w;
@@ -4493,8 +4493,8 @@ static void quantize_row_q3_pt_impl(const float * GGML_RESTRICT x,
             }
 
             // Importance-weighted d/dmin search on updated sub_ranges/neg_mins
-            d_val    = iq3kl_find_optimal_d(sub_ranges, w_ib, QK_K / 16, 63);
-            dmin_val = iq3kl_find_optimal_d(neg_mins, w_ib, QK_K / 16, 63);
+            d_val    = q3pt_find_optimal_d(sub_ranges, w_ib, QK_K / 16, 63);
+            dmin_val = q3pt_find_optimal_d(neg_mins, w_ib, QK_K / 16, 63);
 
             // Re-pack scales
             memset(blk->scales, 0, sizeof(blk->scales));
@@ -4503,8 +4503,8 @@ static void quantize_row_q3_pt_impl(const float * GGML_RESTRICT x,
             for (int ib = 0; ib < QK_K / 16; ++ib) {
                 uint8_t sc = MIN(63, nearest_int(inv_d2 * sub_ranges[ib]));
                 uint8_t sm = MIN(63, nearest_int(inv_dmin2 * neg_mins[ib]));
-                iq3kl_sc_set(blk->scales, ib, sc);
-                iq3kl_sc_set(blk->scales, ib + QK_K / 16, sm);
+                q3pt_sc_set(blk->scales, ib, sc);
+                q3pt_sc_set(blk->scales, ib + QK_K / 16, sm);
             }
             blk->d    = GGML_FP32_TO_FP16(d_val);
             blk->dmin = GGML_FP32_TO_FP16(dmin_val);
@@ -4512,22 +4512,22 @@ static void quantize_row_q3_pt_impl(const float * GGML_RESTRICT x,
             // Re-assign levels
             memset(blk->qs, 0, sizeof(blk->qs));
             for (int ib = 0; ib < QK_K / 16; ++ib) {
-                const float range     = d_val * (float) iq3kl_sc_get(blk->scales, ib);
-                const float sub_min   = -dmin_val * (float) iq3kl_sc_get(blk->scales, ib + QK_K / 16);
+                const float range     = d_val * (float) q3pt_sc_get(blk->scales, ib);
+                const float sub_min   = -dmin_val * (float) q3pt_sc_get(blk->scales, ib + QK_K / 16);
                 const float inv_range = range > 1e-6f ? 1.f / range : 0.f;
                 for (int j = 0; j < 16; ++j) {
                     const int   elem    = ib * 16 + j;
                     const float t       = (xbl[elem] - sub_min) * inv_range;
                     int         best    = 0;
                     float       best_d2 = (t - L[0]) * (t - L[0]);
-                    for (int k = 1; k < IQ3KL_N_LEVELS; ++k) {
+                    for (int k = 1; k < Q3PT_N_LEVELS; ++k) {
                         const float d2 = (t - L[k]) * (t - L[k]);
                         if (d2 < best_d2) {
                             best_d2 = d2;
                             best    = k;
                         }
                     }
-                    iq3kl_pack3(blk->qs, elem, best);
+                    q3pt_pack3(blk->qs, elem, best);
                 }
             }
         }

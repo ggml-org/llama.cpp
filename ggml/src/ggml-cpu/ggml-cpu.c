@@ -385,7 +385,7 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .nrows                    = 1,
     },
     [GGML_TYPE_Q3_PT] = {
-        // from_float not set — requires codebook initialization via iq3kl_set_codebook()
+        // from_float not set — requires codebook initialization via q3pt_set_codebook()
         .vec_dot                  = ggml_vec_dot_q3_pt_q8_K,
         .vec_dot_type             = GGML_TYPE_Q8_K,
         .nrows                    = 1,

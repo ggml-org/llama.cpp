@@ -1014,7 +1014,7 @@ void ggml_vec_dot_q3_pt_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
 
     const int nb = n / QK_K;
 
-    const float * levels = iq3kl_get_tensor_levels(vx);
+    const float * levels = q3pt_get_tensor_levels(vx);
     GGML_ASSERT(levels != NULL && "Q3_PT levels not set for tensor");
 
     float sumf = 0.f;
