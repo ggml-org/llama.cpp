@@ -7664,6 +7664,11 @@ void UnifiedKernel::invalidate_plan_cache() {
     // Also invalidate the update recipe when plan cache is invalidated
     update_recipe_.clear();
     update_recipe_valid_ = false;
+    // Invalidate incremental ops table update state
+    ops_table_valid_     = false;
+    plan_to_device_cache_.clear();
+    cached_n_device_ops_ = 0;
+    cached_total_tiles_  = 0;
     // Invalidate micro-graph (ops table pointers change on plan rebuild)
     invalidate_micro_graph();
 }
@@ -9824,6 +9829,110 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
         return;
     }
 
+    // ── Incremental fast path for micro-graph build_only updates ────────
+    // When build_only=true and we have a valid ops table from a previous token,
+    // skip the full rebuild (heap alloc, fusion, phase schedule, role schedule,
+    // memcpy). Instead, patch only the mutable pointer/stride/dimension fields
+    // directly in d_ops_pool_ (malloc_host). The GPU reads these via PCIe
+    // zero-copy on graph replay, so changes are visible immediately.
+    //
+    // Fields that change per token (identified by UPDATE recipe analysis):
+    //   - Pointer fields: input, output, aux, mask, weights
+    //   - Stride fields: q_nb*, k_nb*, v_nb*, mask_nb*
+    //   - Dimensions: M (seq_len/position), N (softmax width)
+    //   - Embedded metadata: set_rows_meta, strided_copy_meta
+    //
+    // Fields that are structurally fixed (same every token):
+    //   - type, layer, K, hidden_dim, intermediate_dim, eps, quant_type,
+    //     weight_layout, n_tiles, tile_cols, n_kv_heads, mask_type,
+    //     output_bytes, row_start, row_count, etc.
+    if (build_only && ops_table_valid_ && d_ops_pool_ && !plan_to_device_cache_.empty() &&
+        current_plan_->operations.size() == plan_to_device_cache_.size()) {
+        DeviceOperation * d_ops      = static_cast<DeviceOperation *>(d_ops_pool_);
+        const size_t      n_plan_ops = current_plan_->operations.size();
+
+        for (size_t i = 0; i < n_plan_ops; i++) {
+            const int dev_idx = plan_to_device_cache_[i];
+            if (dev_idx < 0 || dev_idx >= cached_n_device_ops_) {
+                continue;  // Fused away or out-of-range
+            }
+
+            const auto &      src = current_plan_->operations[i];
+            DeviceOperation & dst = d_ops[dev_idx];
+
+            // Patch mutable pointer fields
+            dst.weights = src.weights;
+            dst.input   = src.input;
+            dst.output  = src.output;
+            dst.aux     = src.aux;
+            dst.mask    = src.mask;
+
+            // Patch mutable stride fields
+            dst.q_nb0 = src.q_nb0;
+            dst.q_nb1 = src.q_nb1;
+            dst.q_nb2 = src.q_nb2;
+            dst.q_nb3 = src.q_nb3;
+            dst.k_nb0 = src.k_nb0;
+            dst.k_nb1 = src.k_nb1;
+            dst.k_nb2 = src.k_nb2;
+            dst.k_nb3 = src.k_nb3;
+            dst.v_nb0 = src.v_nb0;
+            dst.v_nb1 = src.v_nb1;
+            dst.v_nb2 = src.v_nb2;
+            dst.v_nb3 = src.v_nb3;
+
+            // Patch mutable dimension/scalar fields
+            dst.M     = src.M;
+            dst.N     = src.N;
+            dst.scale = src.scale;
+
+            // Patch mutable mask fields
+            dst.mask_nb0 = src.mask_nb0;
+            dst.mask_nb1 = src.mask_nb1;
+            dst.mask_nb2 = src.mask_nb2;
+            dst.mask_nb3 = src.mask_nb3;
+            dst.mask_ne2 = src.mask_ne2;
+            dst.mask_ne3 = src.mask_ne3;
+
+            // Patch embedded per-op metadata (SET_ROWS, STRIDED_COPY)
+            if (src.has_embedded_meta) {
+                if (src.type == OperationType::SET_ROWS) {
+                    dst.set_rows_meta = src.set_rows_meta;
+                } else if (src.type == OperationType::STRIDED_COPY) {
+                    dst.strided_copy_meta = src.strided_copy_meta;
+                }
+            }
+
+            // For fused GATE+UP+SILU ops, also patch the aux (UP weights)
+            // and output (SiLU output) from the fused source ops.
+            // The fusion mapping ensures dev_idx points to the GATE_UP_SILU device op,
+            // and UP/SILU plan ops have dev_idx=-1 (fused away). The GATE plan op's
+            // aux and output were already set by the plan update to the correct values
+            // for the unfused GATE op, but the fused device op needs:
+            //   aux = UP weights (from plan op i+1)
+            //   output = SILU output (from plan op i+2)
+            // These are patched during fusion in the full build; here we re-apply
+            // from the cached plan ops that follow this GATE op.
+            if (static_cast<OperationType>(dst.type) == OperationType::MATMUL_GATE_UP_SILU) {
+                // The next two plan ops (UP, SILU_MUL) were fused into this device op.
+                // Patch aux (UP weights) and output (SILU output) from them.
+                if (i + 2 < n_plan_ops) {
+                    const auto & up_src   = current_plan_->operations[i + 1];
+                    const auto & silu_src = current_plan_->operations[i + 2];
+                    dst.aux               = const_cast<void *>(up_src.weights);  // UP weight tensor
+                    dst.output            = silu_src.output;                     // fused SiLU output
+                }
+            }
+        }
+
+        // Report stats (same as full build_only path)
+        last_stats_.n_operations   = cached_n_device_ops_;
+        last_stats_.n_layers       = current_plan_->n_layers;
+        last_stats_.total_tiles    = cached_total_tiles_;
+        last_stats_.kernel_time_ms = 0.0;
+        return;
+    }
+
     // Build device-side operation table
     const size_t n_ops = current_plan_->operations.size();
     std::vector<DeviceOperation> host_ops;
@@ -10366,6 +10475,13 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
     // schedule. The caller (micro-graph path) will launch the graph instead
     // of the monolithic kernel.
     if (build_only) {
+        // Cache the plan-to-device mapping for incremental updates on subsequent tokens.
+        // This enables the fast path at the top of this function to skip the full rebuild.
+        plan_to_device_cache_ = plan_to_device;
+        cached_n_device_ops_  = n_ops_device;
+        cached_total_tiles_   = total_tiles;
+        ops_table_valid_      = true;
+
         last_stats_.n_operations = n_ops_device;
         last_stats_.n_layers     = current_plan_->n_layers;
         last_stats_.total_tiles  = total_tiles;

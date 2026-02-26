@@ -2897,6 +2897,15 @@ private:
     void * d_ops_pool_      = nullptr;
     int    d_ops_pool_size_ = 0;
 
+    // Incremental ops table update state for micro-graph build_only path.
+    // After the first full build, ops_table_valid_ is set and subsequent
+    // build_only calls skip the full rebuild — only mutable pointer/stride
+    // fields are patched directly in d_ops_pool_ (malloc_host, PCIe zero-copy).
+    bool             ops_table_valid_ = false;
+    std::vector<int> plan_to_device_cache_;  // plan op idx -> device op idx (-1 = fused away)
+    int              cached_n_device_ops_ = 0;
+    int              cached_total_tiles_  = 0;
+
     // Batched sync counter (tile_counter + barrier_counter + barrier_sense)
     int *  sync_block_      = nullptr;
 
