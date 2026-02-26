@@ -571,6 +571,8 @@ class ConversationsStore {
 	private triggerDownload(data: ExportedConversations, filename?: string): void {
 		const conversation =
 			'conv' in data ? data.conv : Array.isArray(data) ? data[0]?.conv : undefined;
+		const msgs =
+			'messages' in data ? data.messages : Array.isArray(data) ? data[0]?.messages : undefined;
 
 		if (!conversation) {
 			console.error('Invalid data: missing conversation');
@@ -583,7 +585,21 @@ class ConversationsStore {
 			.replace(/[^a-z0-9]/gi, '_')
 			.replace(/_+/g, '_')
 			.substring(0, 20);
-		const downloadFilename = filename || `conversation_${conversation.id}_${truncatedSuffix}.json`;
+		let downloadFilename: string;
+		if (filename) {
+			downloadFilename = filename;
+		} else {
+			const dateInFname = msgs?.length
+				? new Date(Math.max(...msgs.map((m: DatabaseMessage) => m.timestamp)))
+				: new Date();
+			const saveTimestamp = dateInFname
+				.toISOString()
+				.slice(0, 19)
+				.replace('T', '_')
+				.replace(/:/g, '-');
+			const trimmedConvId = conversation?.id?.slice(0, 8) ?? '';
+			downloadFilename = `${saveTimestamp}_conv_${trimmedConvId}_${truncatedSuffix}.json`;
+		}
 
 		const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
 		const url = URL.createObjectURL(blob);
