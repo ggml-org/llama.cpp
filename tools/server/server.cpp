@@ -92,7 +92,7 @@ int main(int argc, char ** argv) {
 
     // for consistency between server router mode and single-model mode, we set the same model name as alias
     if (params.model_alias.empty() && !params.model.name.empty()) {
-        params.model_alias = params.model.name;
+        params.model_alias.insert(params.model.name);
     }
 
     common_init();

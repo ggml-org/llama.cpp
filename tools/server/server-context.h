@@ -6,13 +6,15 @@
 
 #include <cstddef>
 #include <memory>
+#include <set>
 
 struct server_context_impl; // private implementation
 
 struct server_context_meta {
     std::string build_info;
     std::string model_name;
-    std::vector<std::string> model_aliases;
+    std::set<std::string> model_aliases;
+    std::set<std::string> model_tags;
     std::string model_path;
     bool has_mtmd;
     bool has_inp_image;

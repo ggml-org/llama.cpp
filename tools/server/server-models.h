@@ -52,7 +52,8 @@ static std::string server_model_status_to_string(server_model_status status) {
 struct server_model_meta {
     common_preset preset;
     std::string name;
-    std::vector<std::string> aliases; // additional names that resolve to this model
+    std::set<std::string> aliases; // additional names that resolve to this model
+    std::set<std::string> tags;    // informational tags, not used for routing
     int port = 0;
     server_model_status status = SERVER_MODEL_STATUS_UNLOADED;
     int64_t last_used = 0; // for LRU unloading
@@ -85,7 +86,6 @@ private:
     std::mutex mutex;
     std::condition_variable cv;
     std::map<std::string, instance_t> mapping;
-    std::map<std::string, std::string> name_index; // alias/name -> canonical name
 
     // for stopping models
     std::condition_variable cv_stop;
@@ -113,9 +113,6 @@ public:
 
     // check if a model instance exists (thread-safe)
     bool has_model(const std::string & name);
-
-    // resolve alias/name to canonical model name, returns empty string if not found (thread-safe)
-    std::string resolve_name(const std::string & name);
 
     // return a copy of model metadata (thread-safe)
     std::optional<server_model_meta> get_meta(const std::string & name);
