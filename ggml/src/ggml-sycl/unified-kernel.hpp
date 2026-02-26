@@ -2994,6 +2994,19 @@ private:
     int *  micro_tile_counters_     = nullptr;  // [n_phases] per-phase tile counters (device alloc)
     int    micro_tile_counters_n_   = 0;        // Allocated count
     bool   micro_graph_valid_       = false;    // True when recorded graph matches current plan
+
+    // MMVQ micro-graph: Q8_1 SOA activation buffers for MMVQ kernel dispatch
+    // Allocated once when MMVQ graph mode is enabled, reused across tokens.
+    // Two buffers for ping-pong: attn_norm→{Q,K,V,O} uses buf[0],
+    // ffn_norm→{gate,up,down} uses buf[1].  Lifetimes don't overlap within a layer.
+    void * mmvq_q8_bufs_[2]       = {nullptr, nullptr};
+    size_t mmvq_q8_buf_size_      = 0;   // Size of each buffer in bytes
+
+    // Temporary scratch for split GATE_UP_SILU: gate_output and up_output
+    // Each is intermediate_dim floats.  Allocated alongside Q8 buffers.
+    float * mmvq_gate_scratch_    = nullptr;
+    float * mmvq_up_scratch_      = nullptr;
+    size_t  mmvq_gate_scratch_sz_ = 0;
 };
 
 }  // namespace ggml_sycl

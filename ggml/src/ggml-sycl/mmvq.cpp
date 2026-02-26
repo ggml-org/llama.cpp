@@ -4676,6 +4676,89 @@ static sycl::event mmvq_stream_slice(sycl::queue &                    queue,
     return ggml_sycl_submit_marker<ggml_sycl_mmvq_marker_kernel>(queue);
 }
 
+// =============================================================================
+// Direct MMVQ kernel submission wrappers for persistent TG micro-graph
+// =============================================================================
+// These submit standalone MMVQ kernels without ggml_tensor metadata.
+// Weights must be in SOA layout.  Activations in SOA Q8_1 format.
+
+// Kernel name tags (distinct from the static-function kernel names above)
+class mmvq_persistent_q4_0_tag;
+class mmvq_persistent_q6_k_tag;
+class mmvq_persistent_quantize_tag;
+
+void mmvq_submit_q4_0_soa(sycl::queue & q,
+                           const void * weights_soa,
+                           const void * y_q8_soa,
+                           float *      dst,
+                           int          ncols,
+                           int          nrows,
+                           int          total_nrows,
+                           int          row_low) {
+    GGML_ASSERT(ncols % QK4_0 == 0);
+    const int        block_num_y   = ceil_div(nrows, GGML_SYCL_MMV_Y);
+    constexpr size_t num_subgroups = 16;
+
+    const sycl::range<3> global_size(1, GGML_SYCL_MMV_Y, block_num_y * WARP_SIZE);
+    const sycl::range<3> workgroup_size(1, GGML_SYCL_MMV_Y, num_subgroups * WARP_SIZE);
+
+    q.submit([&](sycl::handler & cgh) {
+        cgh.parallel_for<mmvq_persistent_q4_0_tag>(
+            sycl::nd_range<3>(global_size, workgroup_size),
+            [=](sycl::nd_item<3> nd_item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                mul_mat_vec_q_reorder<reorder_vec_dot_q_sycl<GGML_TYPE_Q4_0>>(
+                    weights_soa, y_q8_soa, dst, ncols, nrows, total_nrows, row_low, nd_item);
+            });
+    });
+}
+
+void mmvq_submit_q6_k_soa(sycl::queue & q,
+                            const void * weights_soa,
+                            const void * y_q8_soa,
+                            float *      dst,
+                            int          ncols,
+                            int          nrows,
+                            int          total_nrows,
+                            int          row_low) {
+    GGML_ASSERT(ncols % QK_K == 0);
+    const int        block_num_y   = ceil_div(nrows, GGML_SYCL_MMV_Y);
+    constexpr size_t num_subgroups = 16;
+
+    const sycl::range<3> global_size(1, GGML_SYCL_MMV_Y, block_num_y * WARP_SIZE);
+    const sycl::range<3> workgroup_size(1, GGML_SYCL_MMV_Y, num_subgroups * WARP_SIZE);
+
+    q.submit([&](sycl::handler & cgh) {
+        cgh.parallel_for<mmvq_persistent_q6_k_tag>(
+            sycl::nd_range<3>(global_size, workgroup_size),
+            [=](sycl::nd_item<3> nd_item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                mul_mat_vec_q_reorder<reorder_vec_dot_q_sycl<GGML_TYPE_Q6_K>>(
+                    weights_soa, y_q8_soa, dst, ncols, nrows, total_nrows, row_low, nd_item);
+            });
+    });
+}
+
+void mmvq_submit_quantize_q8_1_soa(sycl::queue & q,
+                                     const float * x,
+                                     void *        y_q8_soa,
+                                     int           ncols) {
+    // Single-row quantization (M=1 for TG).
+    // Uses quantize_and_reorder_q8_1_soa to produce SOA layout:
+    //   quants at [0, ncols), ds at [ncols, ncols + ncols/QK8_1 * 4)
+    const int ky          = 1;
+    const int kx_padded   = ncols;  // No padding for M=1
+    const int num_blocks  = ky * (ncols / QK8_1);
+    const auto local_range  = std::size_t(WARP_SIZE);
+    const auto global_range = num_blocks * local_range;
+
+    q.submit([&](sycl::handler & cgh) {
+        cgh.parallel_for<mmvq_persistent_quantize_tag>(
+            sycl::nd_range<1>({ global_range }, { local_range }),
+            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                quantize_and_reorder_q8_1_soa<QK8_1 / WARP_SIZE>()(x, y_q8_soa, ncols, kx_padded, it);
+            });
+    });
+}
+
 void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx,
                                 const ggml_tensor *         src0,
                                 const ggml_tensor *         src1,

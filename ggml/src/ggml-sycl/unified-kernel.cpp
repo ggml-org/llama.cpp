@@ -20,6 +20,8 @@
 //
 
 #include "unified-kernel.hpp"
+#include "mmvq.hpp"
+#include "quantize.hpp"
 
 #include <array>
 #include <chrono>
@@ -6261,6 +6263,21 @@ UnifiedKernel::~UnifiedKernel() {
         sycl::free(micro_tile_counters_, queue_);
         micro_tile_counters_ = nullptr;
     }
+    // Free MMVQ micro-graph Q8 and scratch buffers
+    for (int i = 0; i < 2; i++) {
+        if (mmvq_q8_bufs_[i]) {
+            sycl::free(mmvq_q8_bufs_[i], queue_);
+            mmvq_q8_bufs_[i] = nullptr;
+        }
+    }
+    if (mmvq_gate_scratch_) {
+        sycl::free(mmvq_gate_scratch_, queue_);
+        mmvq_gate_scratch_ = nullptr;
+    }
+    if (mmvq_up_scratch_) {
+        sycl::free(mmvq_up_scratch_, queue_);
+        mmvq_up_scratch_ = nullptr;
+    }
 }
 
 void UnifiedKernel::configure(const ggml_sycl_unified::XMXConfig & xmx_config) {
@@ -8130,6 +8147,47 @@ struct UnifiedKernel::MicroGraphState {
         : exec_graph(std::move(g)) {}
 };
 
+// Check if MMVQ kernel dispatch is enabled for micro-graph matmul nodes.
+// Default ON when micro-graph is enabled.  Disable with GGML_SYCL_PERSISTENT_TG_MMVQ_GRAPH=0
+static bool mmvq_graph_mode_enabled() {
+    static int checked = -1;
+    if (checked < 0) {
+        const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_MMVQ_GRAPH");
+        if (env != nullptr && std::strcmp(env, "0") == 0) {
+            checked = 0;
+        } else {
+            checked = 1;  // Default ON
+        }
+    }
+    return checked == 1;
+}
+
+// Kernel name tag for the standalone silu_mul kernel used in micro-graph GATE_UP_SILU split
+class mmvq_graph_silu_mul_tag;
+
+// Submit a standalone silu_mul kernel: output[i] = silu(gate[i]) * up[i]
+static void mmvq_submit_silu_mul(sycl::queue & q,
+                                  const float * gate,
+                                  const float * up,
+                                  float *       output,
+                                  int           n) {
+    constexpr int WG_SIZE = 256;
+    const int n_wgs = (n + WG_SIZE - 1) / WG_SIZE;
+
+    q.submit([&](sycl::handler & cgh) {
+        cgh.parallel_for<mmvq_graph_silu_mul_tag>(
+            sycl::nd_range<1>(n_wgs * WG_SIZE, WG_SIZE),
+            [=](sycl::nd_item<1> item) {
+                const int idx = item.get_global_linear_id();
+                if (idx < n) {
+                    const float g         = gate[idx];
+                    const float sigmoid_g = 1.0f / (1.0f + sycl::exp(-g));
+                    output[idx] = g * sigmoid_g * up[idx];
+                }
+            });
+    });
+}
+
 void UnifiedKernel::invalidate_micro_graph() {
     micro_graph_valid_ = false;
     micro_graph_.reset();
@@ -8143,6 +8201,7 @@ void UnifiedKernel::record_micro_graph() {
 
     const int n_phases = static_cast<int>(host_phase_tiles_.size());
     constexpr int BLOCK_SIZE = 256;
+    const bool use_mmvq = mmvq_graph_mode_enabled();
 
     // ── Determine n_workgroups (same logic as launch_persistent_kernel) ──
     int n_workgroups;
@@ -8176,6 +8235,35 @@ void UnifiedKernel::record_micro_graph() {
                                         matmul_slm});
     const bool use_attn_subgroup_dot = persistent_attention_subgroup_dot_enabled();
 
+    // ── MMVQ buffer allocation (once, stable across tokens) ──
+    // Allocate Q8_1 SOA buffers and gate/up scratch for MMVQ graph nodes.
+    // Two Q8 buffers for ping-pong between attn_norm and ffn_norm quantization.
+    int mmvq_node_count = 0;
+    if (use_mmvq) {
+        const int hidden_dim       = current_plan_->hidden_dim;
+        const int intermediate_dim = current_plan_->intermediate_dim;
+        const size_t q8_hidden     = mmvq_q8_1_soa_size(hidden_dim);
+        const size_t q8_inter      = mmvq_q8_1_soa_size(intermediate_dim);
+        const size_t q8_size       = std::max(q8_hidden, q8_inter);
+
+        if (mmvq_q8_buf_size_ < q8_size) {
+            for (int i = 0; i < 2; i++) {
+                if (mmvq_q8_bufs_[i]) sycl::free(mmvq_q8_bufs_[i], queue_);
+                mmvq_q8_bufs_[i] = sycl::malloc_device(q8_size, queue_);
+            }
+            mmvq_q8_buf_size_ = q8_size;
+        }
+
+        const size_t gate_scratch_sz = intermediate_dim * sizeof(float);
+        if (mmvq_gate_scratch_sz_ < gate_scratch_sz) {
+            if (mmvq_gate_scratch_) sycl::free(mmvq_gate_scratch_, queue_);
+            if (mmvq_up_scratch_)   sycl::free(mmvq_up_scratch_, queue_);
+            mmvq_gate_scratch_ = static_cast<float *>(sycl::malloc_device(gate_scratch_sz, queue_));
+            mmvq_up_scratch_   = static_cast<float *>(sycl::malloc_device(gate_scratch_sz, queue_));
+            mmvq_gate_scratch_sz_ = gate_scratch_sz;
+        }
+    }
+
     // ── Record SYCL command graph ──
     sycl_ex::command_graph mod_graph(queue_.get_context(), queue_.get_device());
 
@@ -8188,53 +8276,147 @@ void UnifiedKernel::record_micro_graph() {
     const DeviceOperation * d_ops = static_cast<const DeviceOperation *>(d_ops_pool_);
     const DevicePhaseEntry * d_entries = phase_schedule_.entries;
 
+    // Track which Q8 buffer to use and when to re-quantize.
+    // Re-quantize whenever the input pointer or K dimension changes.
+    // Ping-pong between buf[0] and buf[1] so concurrent reads from a
+    // previous quantize don't conflict with a new write.
+    int cur_q8_buf         = 0;
+    int last_q8_K          = 0;       // K dimension of last quantized vector
+    const void * last_q8_input = nullptr; // Input pointer of last quantize
+    int n_quantize_nodes = 0;
+    int n_fallback_nodes = 0;
+    int n_silu_mul_nodes = 0;
+    int n_skipped_phases = 0;
+
     for (int p = 0; p < n_phases; p++) {
         const int phase_start = host_phase_offset_[p];
         const int phase_end   = host_phase_offset_[p + 1];
         const int total_tiles = host_phase_tiles_[p];
 
         // Skip empty phases
-        if (phase_start == phase_end || total_tiles == 0) continue;
+        if (phase_start == phase_end || total_tiles == 0) { n_skipped_phases++; continue; }
 
-        // For serial chain phases (total_tiles < 0), use 1 WG and tile count = entry count
-        const bool is_serial = (total_tiles < 0);
-        const int effective_wgs = is_serial ? 1 : n_workgroups;
+        // ── Check ALL ops in this phase for MMVQ eligibility ──
+        // If every op in the phase is an MMVQ-eligible matmul, emit
+        // individual MMVQ graph nodes.  Otherwise fall back to the
+        // generic run_micro_phase kernel for the entire phase.
+        // This avoids double-computation in mixed phases.
+        const int n_phase_ops = phase_end - phase_start;
+        bool all_mmvq = false;
 
-        // For serial chains, compute actual total tiles by summing ops
-        int actual_tiles = total_tiles;
-        if (is_serial) {
-            actual_tiles = 0;
+        if (use_mmvq && n_phase_ops > 0) {
+            all_mmvq = true;
             for (int e = phase_start; e < phase_end; e++) {
                 const int op_idx = d_entries[e].op_idx;
-                actual_tiles += d_ops[op_idx].n_tiles;
+                const DeviceOperation & op = d_ops[op_idx];
+                const auto layout  = static_cast<ggml_sycl_unified::LayoutMode>(op.weight_layout);
+                const bool is_soa  = (layout == ggml_sycl_unified::LayoutMode::SOA);
+                const bool is_q4_0 = (op.quant_type == ggml_sycl_unified::QUANT_TYPE_Q4_0);
+                const bool is_q6_k = (op.quant_type == ggml_sycl_unified::QUANT_TYPE_Q6_K);
+                if (!is_soa || !(is_q4_0 || is_q6_k) ||
+                    !PersistentTGKernelImpl<BLOCK_SIZE>::is_matmul_op(op.type)) {
+                    all_mmvq = false;
+                    break;
+                }
             }
         }
 
-        // Build micro-phase args — captured by value in the lambda
-        MicroPhaseArgs margs = {};
-        margs.operations     = d_ops;
-        margs.phase_entries  = d_entries;
-        margs.phase_start    = phase_start;
-        margs.phase_end      = phase_end;
-        margs.total_tiles    = actual_tiles;
-        margs.tile_counter   = &micro_tile_counters_[p];
-        margs.use_attn_subgroup_dot = use_attn_subgroup_dot ? 1 : 0;
-        for (int i = 0; i < 4; i++) {
-            margs.scratch_buffers[i] = persistent_buffers_[i];
-        }
-        margs.hidden_dim       = current_plan_->hidden_dim;
-        margs.intermediate_dim = current_plan_->intermediate_dim;
+        if (all_mmvq) {
+            // ── Emit MMVQ nodes for each op in this phase ──
+            for (int e = phase_start; e < phase_end; e++) {
+                const int op_idx = d_entries[e].op_idx;
+                const DeviceOperation & op = d_ops[op_idx];
+                const bool is_q4_0 = (op.quant_type == ggml_sycl_unified::QUANT_TYPE_Q4_0);
 
-        queue_.submit([&](sycl::handler & cgh) {
-            sycl::local_accessor<float, 1> slm(slm_floats, cgh);
-            const auto margs_copy = margs;
-            cgh.parallel_for(
-                sycl::nd_range<1>(effective_wgs * BLOCK_SIZE, BLOCK_SIZE),
-                [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
-                    PersistentTGKernelImpl<BLOCK_SIZE>::run_micro_phase(
-                        margs_copy, slm, item);
-                });
-        });
+                // Quantize if needed (input pointer or K changed)
+                const int K = op.K;
+                const bool need_quant = (op.input != last_q8_input || K != last_q8_K);
+
+                if (need_quant) {
+                    cur_q8_buf = 1 - cur_q8_buf;
+                    const float * input_f32 = static_cast<const float *>(op.input);
+                    void * q8_dst = mmvq_q8_bufs_[cur_q8_buf];
+                    mmvq_submit_quantize_q8_1_soa(queue_, input_f32, q8_dst, K);
+                    n_quantize_nodes++;
+                    last_q8_K     = K;
+                    last_q8_input = op.input;
+                }
+
+                // Emit MMVQ node(s)
+                const auto op_type  = static_cast<OperationType>(op.type);
+                const int  N        = (op.row_count > 0) ? op.row_count : op.N;
+                const int  N_total  = op.N;
+                const int  row_low  = op.row_start;
+                const void * q8_src = mmvq_q8_bufs_[cur_q8_buf];
+
+                if (op_type == OperationType::MATMUL_GATE_UP_SILU) {
+                    const void * gate_weights = op.weights;
+                    const void * up_weights   = op.aux;
+                    float * gate_out = mmvq_gate_scratch_;
+                    float * up_out   = mmvq_up_scratch_;
+                    float * final_out = static_cast<float *>(op.output);
+
+                    if (is_q4_0) {
+                        mmvq_submit_q4_0_soa(queue_, gate_weights, q8_src, gate_out, K, N, N_total, row_low);
+                        mmvq_submit_q4_0_soa(queue_, up_weights,   q8_src, up_out,   K, N, N_total, row_low);
+                    } else {
+                        mmvq_submit_q6_k_soa(queue_, gate_weights, q8_src, gate_out, K, N, N_total, row_low);
+                        mmvq_submit_q6_k_soa(queue_, up_weights,   q8_src, up_out,   K, N, N_total, row_low);
+                    }
+                    const int intermediate_dim = op.intermediate_dim > 0 ? op.intermediate_dim : N;
+                    mmvq_submit_silu_mul(queue_, gate_out, up_out, final_out, intermediate_dim);
+                    mmvq_node_count += 3;
+                    n_silu_mul_nodes++;
+                } else {
+                    float * dst = static_cast<float *>(op.output);
+                    if (is_q4_0) {
+                        mmvq_submit_q4_0_soa(queue_, op.weights, q8_src, dst, K, N, N_total, row_low);
+                    } else {
+                        mmvq_submit_q6_k_soa(queue_, op.weights, q8_src, dst, K, N, N_total, row_low);
+                    }
+                    mmvq_node_count++;
+                }
+            }
+        } else {
+            // ── Fallback: generic run_micro_phase for non-matmul phases ──
+            const bool is_serial = (total_tiles < 0);
+            const int effective_wgs = is_serial ? 1 : n_workgroups;
+
+            int actual_tiles = total_tiles;
+            if (is_serial) {
+                actual_tiles = 0;
+                for (int e = phase_start; e < phase_end; e++) {
+                    const int op_idx = d_entries[e].op_idx;
+                    actual_tiles += d_ops[op_idx].n_tiles;
+                }
+            }
+
+            MicroPhaseArgs margs = {};
+            margs.operations     = d_ops;
+            margs.phase_entries  = d_entries;
+            margs.phase_start    = phase_start;
+            margs.phase_end      = phase_end;
+            margs.total_tiles    = actual_tiles;
+            margs.tile_counter   = &micro_tile_counters_[p];
+            margs.use_attn_subgroup_dot = use_attn_subgroup_dot ? 1 : 0;
+            for (int i = 0; i < 4; i++) {
+                margs.scratch_buffers[i] = persistent_buffers_[i];
+            }
+            margs.hidden_dim       = current_plan_->hidden_dim;
+            margs.intermediate_dim = current_plan_->intermediate_dim;
+
+            queue_.submit([&](sycl::handler & cgh) {
+                sycl::local_accessor<float, 1> slm(slm_floats, cgh);
+                const auto margs_copy = margs;
+                cgh.parallel_for(
+                    sycl::nd_range<1>(effective_wgs * BLOCK_SIZE, BLOCK_SIZE),
+                    [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
+                        PersistentTGKernelImpl<BLOCK_SIZE>::run_micro_phase(
+                            margs_copy, slm, item);
+                    });
+            });
+            n_fallback_nodes++;
+        }
     }
 
     mod_graph.end_recording();
@@ -8244,12 +8426,17 @@ void UnifiedKernel::record_micro_graph() {
     micro_graph_ = std::make_unique<MicroGraphState>(std::move(exec));
     micro_graph_valid_ = true;
 
+    const int total_graph_nodes = 1 + n_quantize_nodes + mmvq_node_count + n_fallback_nodes; // 1=memset
+
     {
         static bool logged = false;
         if (!logged) {
             logged = true;
-            fprintf(stderr, "[MICRO-GRAPH] Recorded: %d phases, %d WGs, %d SLM floats\n",
-                    n_phases, n_workgroups, slm_floats);
+            fprintf(stderr, "[MICRO-GRAPH] Recorded: %d phases, %d WGs, %d total nodes "
+                    "(MMVQ=%d quantize=%d silu_mul=%d fallback=%d)\n",
+                    n_phases, n_workgroups, total_graph_nodes,
+                    mmvq_node_count - n_silu_mul_nodes * 2, n_quantize_nodes,
+                    n_silu_mul_nodes, n_fallback_nodes);
         }
     }
 }

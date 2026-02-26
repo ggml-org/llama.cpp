@@ -46,4 +46,50 @@ bool ggml_sycl_convert_to_coalesced_q8_0(const ggml_tensor * tensor, dpct::queue
 bool ggml_sycl_convert_to_coalesced_q6_k(const ggml_tensor * tensor, dpct::queue_ptr stream);
 bool ggml_sycl_convert_to_coalesced_mxfp4(const ggml_tensor * tensor, dpct::queue_ptr stream);
 
+// =============================================================================
+// Direct MMVQ kernel submission for persistent TG micro-graph
+// =============================================================================
+// These wrappers submit standalone MMVQ kernels to a queue without requiring
+// ggml_tensor metadata.  They are used by the micro-graph persistent TG path
+// to replace the generic dp4a compute_matmul_tile with the optimized MMVQ
+// kernels that use pre-quantized Q8_1 activations.
+//
+// Weights must be in SOA (Structure-of-Arrays) layout.
+// Activations (vy) must be in SOA Q8_1 format (quants at [0,K), ds at [K,...)).
+// Use quantize_row_q8_1_sycl<quantize_and_reorder_q8_1_soa> to produce vy.
+
+// Q4_0 SOA MMVQ: weights in SOA layout, activations in SOA Q8_1
+void mmvq_submit_q4_0_soa(sycl::queue & q,
+                           const void * weights_soa,
+                           const void * y_q8_soa,
+                           float *      dst,
+                           int          ncols,
+                           int          nrows,
+                           int          total_nrows,
+                           int          row_low);
+
+// Q6_K SOA MMVQ: weights in SOA layout, activations in SOA Q8_1
+void mmvq_submit_q6_k_soa(sycl::queue & q,
+                            const void * weights_soa,
+                            const void * y_q8_soa,
+                            float *      dst,
+                            int          ncols,
+                            int          nrows,
+                            int          total_nrows,
+                            int          row_low);
+
+// Float-to-Q8_1 SOA quantization kernel submission for micro-graph
+// Input:  x[ncols] float activations
+// Output: y_q8[ncols + ncols/QK8_1 * 4] SOA Q8_1
+void mmvq_submit_quantize_q8_1_soa(sycl::queue & q,
+                                     const float * x,
+                                     void *        y_q8_soa,
+                                     int           ncols);
+
+// Compute SOA Q8_1 buffer size in bytes for a given K dimension
+inline size_t mmvq_q8_1_soa_size(int K) {
+    // quants: K bytes, ds: (K/QK8_1) * sizeof(half2) = K/32 * 4
+    return static_cast<size_t>(K) + (K / QK8_1) * sizeof(sycl::half2);
+}
+
 #endif // GGML_SYCL_MMVQ_HPP
