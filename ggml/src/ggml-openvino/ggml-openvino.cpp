@@ -593,36 +593,6 @@ bool ggml_backend_buft_is_openvino_host(ggml_backend_buffer_type_t buft) {
     return buft->iface.get_name == ggml_backend_openvino_host_buffer_type_get_name;
 }
 
-// =====================================================
-// OpenVINO Backend Context and Interface
-// =====================================================
-
-struct ggml_backend_openvino_context {
-    int device;               // the device ID currently in use
-    std::string name;         // context Name
-    std::string description;  // context description
-
-    // OpenVINO core components
-    ov::Core core;                             // OpenVINO core interface
-    std::shared_ptr<ov::CompiledModel> model;  // compiled Model
-    ov::InferRequest infer_request;            // inference Request
-
-    // OpenVINO Multi-stream support
-    static const int MAX_STREAMS = 8;       // define the maximum number of flows
-    std::vector<ov::InferRequest> streams;  // used to support multi-stream reasoning
-    int current_stream;                     // the currently active stream index
-
-    // state Management
-    bool is_initialized;  // initialize
-
-    ggml_backend_openvino_context() :
-        device(0),
-        name("OpenVINO"),
-        description("OpenVINO Backend Context"),
-        current_stream(0),
-        is_initialized(false) {}
-};
-
 static void ggml_backend_openvino_free(ggml_backend_t backend) {
     ggml_backend_openvino_context * ctx = (ggml_backend_openvino_context *) backend->context;
     delete ctx;
@@ -635,7 +605,7 @@ static const char * ggml_backend_openvino_get_name(ggml_backend_t backend) {
 }
 
 static enum ggml_status ggml_backend_openvino_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
-    return ov_graph_compute(cgraph);
+    return ov_graph_compute(cgraph, backend);
     GGML_UNUSED(backend);
 }
 

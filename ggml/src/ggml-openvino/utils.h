@@ -36,10 +36,28 @@ struct graph_key_hash {
     }
 };
 
-enum ggml_status ov_graph_compute(struct ggml_cgraph * cgraph);
+struct ov_runtime_context {
+    std::string device;
+    bool stateful;
+    size_t stateful_kv_size;
+    std::mutex cache_mutex;
+    std::unordered_map<graph_key, std::shared_ptr<GgmlOvDecoder>, graph_key_hash> decoder_cache;
+    std::unordered_map<graph_key, std::shared_ptr<ov::InferRequest>, graph_key_hash> infer_request_cache;
+    std::unordered_map<graph_key, std::shared_ptr<ov::InferRequest>, graph_key_hash> infer_request_cache_prefill;
+    std::unordered_map<graph_key, std::vector<std::string>, graph_key_hash> ov_input_names_cache;
+    std::unordered_map<graph_key, std::vector<std::string>, graph_key_hash> ov_output_names_cache;
 
-enum ggml_status ov_graph_compute_dynamic(struct ggml_cgraph * cgraph, const std::string & device, bool stateful = false);
-enum ggml_status ov_graph_compute_static(struct ggml_cgraph * cgraph);
+    ov_runtime_context() :
+        ov_core(ov_singleton_core()),
+        device("CPU"),
+        stateful(false),
+        stateful_kv_size(0) {}
+};
+
+enum ggml_status ov_graph_compute(struct ggml_cgraph * cgraph, ggml_backend_t backend);
+
+enum ggml_status ov_graph_compute_dynamic(struct ggml_cgraph * cgraph, std::shared_ptr<ov_runtime_context> r_ctx);
+enum ggml_status ov_graph_compute_static(struct ggml_cgraph * cgraph, std::shared_ptr<ov_runtime_context> r_ctx);
 
 size_t checksum(const void * data, size_t size);
 
