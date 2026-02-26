@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+#define ET_TRACE_BUFFER_SIZE (1024 * 1024 * 8UL)
+
 // Load kernel from file or embedded data and store handle in device context
 // Returns true on success, false on failure
 //
@@ -25,7 +27,8 @@ bool ggml_et_launch_kernel(ggml_backend_et_device_context* dev_ctx,
                            const std::string& kernel_name,
                            void* params,
                            size_t params_size,
-                           uint64_t shire_mask = 0xFFFFFFFF);
+                           uint64_t shire_mask = 0xFFFFFFFF,
+                           bool enable_print = false);
 
 // Unload kernel from device and free resources
 // Safe to call even if kernel not loaded

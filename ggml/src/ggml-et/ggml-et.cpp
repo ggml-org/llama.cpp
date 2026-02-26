@@ -959,6 +959,8 @@ ggml_backend_reg_t ggml_backend_et_reg(void) {
 	    // Create default stream for ordered execution on this device
 	    dev_ctx->default_stream = ggml_et_runtime()->createStream(rtid);
 
+		dev_ctx->trace_buffer = ggml_et_runtime()->mallocDevice(rtid, ET_TRACE_BUFFER_SIZE);
+
 	    dev->context = dev_ctx;
 
 	    ctx->devices.push_back(dev);

@@ -96,7 +96,7 @@ bool ggml_et_load_kernel(ggml_backend_et_device_context* dev_ctx, const std::str
 }
 
 bool ggml_et_launch_kernel(ggml_backend_et_device_context* dev_ctx, const std::string& kernel_name,
-                          void* params, size_t params_size, uint64_t shire_mask) {
+                          void* params, size_t params_size, uint64_t shire_mask, bool enable_print) {
     std::shared_ptr<rt::IRuntime> runtime = ggml_et_runtime();
     if (!runtime) {
         GGML_LOG_ERROR("ET: Runtime not available for kernel launch\n");
@@ -128,14 +128,42 @@ bool ggml_et_launch_kernel(ggml_backend_et_device_context* dev_ctx, const std::s
         k_opts.setShireMask(shire_mask);  // Default: all shires (0xFFFFFFFF)
         k_opts.setBarrier(true);          // Wait for completion
         k_opts.setFlushL3(false);         // No L3 flush needed
+        if(enable_print) {
+            k_opts.setUserTracing(
+                reinterpret_cast<uint64_t>(dev_ctx->trace_buffer),
+                static_cast<uint32_t>(ET_TRACE_BUFFER_SIZE),
+                0,                              // threshold
+                shire_mask,                     // shire mask
+                0xFFFFFFFFFFFFFFFFULL,          // threadMask — all threads
+                0xFFFFFFFFU,                    // eventMask — all events
+                0xFFFFFFFFU                     // filterMask — all levels
+            );
+        }
 
         runtime->kernelLaunch(dev_ctx->default_stream, kernel_id,
                              reinterpret_cast<std::byte*>(params), params_size, k_opts);
 
         // Wait for completion (synchronous execution)
         runtime->waitForStream(dev_ctx->default_stream);
-        return true;
 
+        std::vector<std::byte> hostTraceBuf(ET_TRACE_BUFFER_SIZE);
+        runtime->memcpyDeviceToHost(
+            dev_ctx->default_stream, dev_ctx->trace_buffer, hostTraceBuf.data(), ET_TRACE_BUFFER_SIZE);
+        runtime->waitForStream(dev_ctx->default_stream);
+
+        if(enable_print) {
+            const auto* traceHeader = reinterpret_cast<const trace_buffer_std_header_t*>(hostTraceBuf.data());
+            const trace_entry_header_t* entry = nullptr;
+            while ((entry = Trace_Decode(traceHeader, entry))) {
+                if (entry->type != TRACE_TYPE_STRING) {
+                    continue;
+                }
+                const auto* strEntry = reinterpret_cast<const trace_string_t*>(entry);
+                printf("[hart %d] %s", entry->hart_id, strEntry->string);
+            }
+        }
+
+        return true;
     } catch (const std::exception& e) {
         GGML_LOG_ERROR("ET: Failed to launch kernel %s: %s\n", kernel_name.c_str(), e.what());
         return false;

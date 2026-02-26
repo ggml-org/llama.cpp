@@ -37,6 +37,9 @@ struct ggml_backend_et_device_context {
     // Kernel management - default stream for ordered execution on this device
     rt::StreamId default_stream;
     std::unordered_map<std::string, rt::KernelId> loaded_kernels;
+
+    // trace buffer - for printing support
+    std::byte* trace_buffer;
 };
 
 struct ggml_backend_et_reg_ctx {
