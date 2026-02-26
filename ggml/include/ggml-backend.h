@@ -315,7 +315,8 @@ extern "C" {
 
     // Get the number of splits of the last graph
     GGML_API int                  ggml_backend_sched_get_n_splits(ggml_backend_sched_t sched);
-    GGML_API int                  ggml_backend_sched_get_n_copies(ggml_backend_sched_t sched);
+    GGML_API int                  ggml_backend_sched_get_n_copies (ggml_backend_sched_t sched);
+    GGML_API int                  ggml_backend_sched_get_cur_copy (ggml_backend_sched_t sched);
 
     GGML_API ggml_backend_buffer_type_t ggml_backend_sched_get_buffer_type(ggml_backend_sched_t sched, ggml_backend_t backend);
     GGML_API size_t                     ggml_backend_sched_get_buffer_size(ggml_backend_sched_t sched, ggml_backend_t backend);
@@ -328,6 +329,7 @@ extern "C" {
 
     // Allocate and compute graph on the backend scheduler
     GGML_API bool                 ggml_backend_sched_alloc_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph); // returns success
+    GGML_API bool                 ggml_backend_sched_alloc_graph_reuse(ggml_backend_sched_t sched, struct ggml_cgraph * graph); // advance copy slot without re-splitting (pipeline parallelism)
     GGML_API enum ggml_status     ggml_backend_sched_graph_compute(ggml_backend_sched_t sched, struct ggml_cgraph * graph);
     GGML_API enum ggml_status     ggml_backend_sched_graph_compute_async(ggml_backend_sched_t sched, struct ggml_cgraph * graph);
     GGML_API void                 ggml_backend_sched_synchronize(ggml_backend_sched_t sched);

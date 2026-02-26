@@ -10,6 +10,8 @@
 
 #include <cstddef>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -75,6 +77,8 @@ struct llama_model_loader {
     bool no_alloc;
 
     llama_files files;
+    std::vector<std::string> file_paths; // file paths for creating per-thread file handles
+    mutable std::vector<std::unique_ptr<std::mutex>> file_mutexes; // per-file mutexes for thread-safe parallel loading
     llama_ftype ftype;
     llama_fver  fver;
 

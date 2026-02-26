@@ -1067,35 +1067,39 @@ bool llama_context::set_adapter_cvec(
     return cvec->apply(model, data, len, n_embd, il_start, il_end);
 }
 
-llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
+llm_graph_result * llama_context::prepare_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret, llm_graph_result * res_in) {
     if (mctx && !mctx->apply()) {
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
         ret = GGML_STATUS_FAILED;
         return nullptr;
     }
 
-    auto * res = gf_res_prev.get();
+    auto * res = res_in ? res_in : gf_res_prev.get();
     auto * gf  = res->get_gf();
 
-    // the new graph parameters
-    // in order to correctly reuse a graph, it's full topology has to be uniquely determined by these parameters
     const auto gparams = graph_params(res, ubatch, mctx, gtype);
 
     if (!graph_reuse_disable && res->can_reuse(gparams)) {
-        //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
-
         n_reused++;
+
+        if (cparams.pipeline_parallel && ggml_backend_sched_get_n_copies(sched.get()) > 1) {
+            // With pipeline parallelism (n_copies > 1), advance the scheduler's copy slot
+            // so consecutive ubatches use different input buffer slots.
+            // alloc_graph_reuse skips the expensive split_graph backend-assignment pass;
+            // it only rebuilds graph_copy with the new copy-slot tensor pointers.
+            if (!ggml_backend_sched_alloc_graph_reuse(sched.get(), gf)) {
+                LLAMA_LOG_ERROR("%s: failed to reuse graph for pipeline parallelism\n", __func__);
+                ret = GGML_STATUS_ALLOC_FAILED;
+                return nullptr;
+            }
+        }
     } else {
         res->reset();
 
         ggml_backend_sched_reset(sched.get());
         ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
 
-        //const auto t_start_us = ggml_time_us();
-
         gf = model.build_graph(gparams);
-
-        //LLAMA_LOG_INFO("graph build time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
 
         if (!gf) {
             LLAMA_LOG_ERROR("%s: failed to initialize graph\n", __func__);
@@ -1110,16 +1114,33 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         }
     }
 
-    // set the input data for the input tensors
-    {
-        //const auto t_start_us = ggml_time_us();
+    res->set_inputs(&ubatch);
 
-        res->set_inputs(&ubatch);
+    ret = GGML_STATUS_SUCCESS;
+    return res;
+}
 
-        //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
+llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
+    static int s_ubatch_idx = 0;
+    const int ubatch_idx = s_ubatch_idx++;
+
+    const int64_t t_prepare_start = ggml_time_us();
+    auto * res = prepare_ubatch(ubatch, gtype, mctx, ret);
+    if (!res) {
+        return nullptr;
+    }
+    const double dt_prepare = (ggml_time_us() - t_prepare_start) / 1000.0;
+
+    const int64_t t_submit_start = ggml_time_us();
+    const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
+    const double dt_submit = (ggml_time_us() - t_submit_start) / 1000.0;
+
+    if (cparams.pipeline_parallel) {
+        LLAMA_LOG_DEBUG("[pp ubatch %2d] cur_copy=%d prepare=%.2fms submit=%.2fms\n",
+                ubatch_idx % 2, ggml_backend_sched_get_cur_copy(sched.get()),
+                dt_prepare, dt_submit);
     }
 
-    const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
         ret = status;

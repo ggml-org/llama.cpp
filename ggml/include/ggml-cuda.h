@@ -42,6 +42,8 @@ GGML_BACKEND_API void ggml_backend_cuda_unregister_host_buffer(void * buffer);
 
 GGML_BACKEND_API ggml_backend_reg_t ggml_backend_cuda_reg(void);
 
+GGML_BACKEND_API void ggml_cuda_sync_load_streams(void);
+
 #ifdef  __cplusplus
 }
 #endif

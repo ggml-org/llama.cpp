@@ -126,6 +126,18 @@ struct llama_context {
             llama_memory_context_i * mctx,
                        ggml_status & ret);
 
+    // CPU-only preparation phase: apply mctx, build/reuse graph, set inputs.
+    // Does NOT dispatch to GPU. Call graph_compute(res->get_gf(), ...) separately.
+    // If res_in is nullptr, uses gf_res_prev. Pass gf_res_reserve.get() for the
+    // second pipeline slot to enable double-buffered ubatch overlap.
+    // Returns nullptr on failure (ret is set accordingly).
+    llm_graph_result * prepare_ubatch(
+                const llama_ubatch & ubatch,
+                    llm_graph_type   gtype,
+            llama_memory_context_i * mctx,
+                       ggml_status & ret,
+              llm_graph_result     * res_in = nullptr);
+
     int encode(const llama_batch & batch_inp);
     int decode(const llama_batch & batch_inp);
 
