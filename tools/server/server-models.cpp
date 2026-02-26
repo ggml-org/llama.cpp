@@ -184,6 +184,32 @@ void server_models::add_model(server_model_meta && meta) {
     if (mapping.find(meta.name) != mapping.end()) {
         throw std::runtime_error(string_format("model '%s' appears multiple times", meta.name.c_str()));
     }
+    if (name_index.find(meta.name) != name_index.end()) {
+        throw std::runtime_error(string_format("model name '%s' conflicts with an existing alias", meta.name.c_str()));
+    }
+
+    // parse aliases from preset's --alias option (comma-separated)
+    std::string alias_str;
+    if (meta.preset.get_option("LLAMA_ARG_ALIAS", alias_str) && !alias_str.empty()) {
+        for (auto & alias : string_split<std::string>(alias_str, ',')) {
+            alias = string_strip(alias);
+            if (alias.empty()) {
+                continue;
+            }
+            if (name_index.find(alias) != name_index.end()) {
+                throw std::runtime_error(string_format("alias '%s' for model '%s' conflicts with an existing name or alias",
+                    alias.c_str(), meta.name.c_str()));
+            }
+            meta.aliases.push_back(alias);
+        }
+    }
+
+    // index canonical name + all aliases
+    name_index[meta.name] = meta.name;
+    for (const auto & alias : meta.aliases) {
+        name_index[alias] = meta.name;
+    }
+
     meta.update_args(ctx_preset, bin_path); // render args
     std::string name = meta.name;
     mapping[name] = instance_t{
@@ -249,6 +275,7 @@ void server_models::load_models() {
         server_model_meta meta{
             /* preset       */ preset.second,
             /* name         */ preset.first,
+            /* aliases      */ {},
             /* port         */ 0,
             /* status       */ SERVER_MODEL_STATUS_UNLOADED,
             /* last_used    */ 0,
@@ -268,7 +295,18 @@ void server_models::load_models() {
         SRV_INF("Available models (%zu) (*: custom preset)\n", mapping.size());
         for (const auto & [name, inst] : mapping) {
             bool has_custom = custom_names.find(name) != custom_names.end();
-            SRV_INF("  %c %s\n", has_custom ? '*' : ' ', name.c_str());
+            if (inst.meta.aliases.empty()) {
+                SRV_INF("  %c %s\n", has_custom ? '*' : ' ', name.c_str());
+            } else {
+                std::string alias_list;
+                for (const auto & a : inst.meta.aliases) {
+                    if (!alias_list.empty()) {
+                        alias_list += ", ";
+                    }
+                    alias_list += a;
+                }
+                SRV_INF("  %c %s (aliases: %s)\n", has_custom ? '*' : ' ', name.c_str(), alias_list.c_str());
+            }
         }
     }
 
@@ -316,16 +354,25 @@ void server_models::update_meta(const std::string & name, const server_model_met
     cv.notify_all(); // notify wait_until_loaded
 }
 
+std::string server_models::resolve_name(const std::string & name) {
+    std::lock_guard<std::mutex> lk(mutex);
+    auto it = name_index.find(name);
+    if (it != name_index.end()) {
+        return it->second;
+    }
+    return "";
+}
+
 bool server_models::has_model(const std::string & name) {
     std::lock_guard<std::mutex> lk(mutex);
-    return mapping.find(name) != mapping.end();
+    return name_index.find(name) != name_index.end();
 }
 
 std::optional<server_model_meta> server_models::get_meta(const std::string & name) {
     std::lock_guard<std::mutex> lk(mutex);
-    auto it = mapping.find(name);
-    if (it != mapping.end()) {
-        return it->second.meta;
+    auto it = name_index.find(name);
+    if (it != name_index.end()) {
+        return mapping[it->second].meta;
     }
     return std::nullopt;
 }
@@ -821,6 +868,11 @@ void server_models_routes::init_routes() {
     this->proxy_get = [this](const server_http_req & req) {
         std::string method = "GET";
         std::string name = req.get_param("model");
+        // resolve alias to canonical model name
+        std::string resolved = models.resolve_name(name);
+        if (!resolved.empty()) {
+            name = resolved;
+        }
         bool autoload = is_autoload(params, req);
         auto error_res = std::make_unique<server_http_res>();
         if (!router_validate_model(name, models, autoload, error_res)) {
@@ -833,6 +885,11 @@ void server_models_routes::init_routes() {
         std::string method = "POST";
         json body = json::parse(req.body);
         std::string name = json_value(body, "model", std::string());
+        // resolve alias to canonical model name
+        std::string resolved = models.resolve_name(name);
+        if (!resolved.empty()) {
+            name = resolved;
+        }
         bool autoload = is_autoload(params, req);
         auto error_res = std::make_unique<server_http_res>();
         if (!router_validate_model(name, models, autoload, error_res)) {
@@ -845,6 +902,11 @@ void server_models_routes::init_routes() {
         auto res = std::make_unique<server_http_res>();
         json body = json::parse(req.body);
         std::string name = json_value(body, "model", std::string());
+        // resolve alias to canonical model name
+        std::string resolved = models.resolve_name(name);
+        if (!resolved.empty()) {
+            name = resolved;
+        }
         auto model = models.get_meta(name);
         if (!model.has_value()) {
             res_err(res, format_error_response("model is not found", ERROR_TYPE_NOT_FOUND));
@@ -883,6 +945,7 @@ void server_models_routes::init_routes() {
             }
             models_json.push_back(json {
                 {"id",       meta.name},
+                {"aliases",  meta.aliases},
                 {"object",   "model"},    // for OAI-compat
                 {"owned_by", "llamacpp"}, // for OAI-compat
                 {"created",  t},          // for OAI-compat
@@ -901,6 +964,11 @@ void server_models_routes::init_routes() {
         auto res = std::make_unique<server_http_res>();
         json body = json::parse(req.body);
         std::string name = json_value(body, "model", std::string());
+        // resolve alias to canonical model name
+        std::string resolved = models.resolve_name(name);
+        if (!resolved.empty()) {
+            name = resolved;
+        }
         auto model = models.get_meta(name);
         if (!model.has_value()) {
             res_err(res, format_error_response("model is not found", ERROR_TYPE_INVALID_REQUEST));
