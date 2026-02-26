@@ -573,6 +573,8 @@ static ggml_type llama_tensor_get_type(
                                 __func__, tensor->name, nx, ny, qk_k, ggml_type_name(new_type));
                 ++qs->n_fallback;
 
+                bool no_compatible_type = false;
+
                 switch (new_type) {
                     // types on the left  are qk_k % 256 == 0
                     // types on the right are qk_k % 32  == 0
@@ -591,17 +593,11 @@ static ggml_type llama_tensor_get_type(
                     case GGML_TYPE_Q4_K:    new_type = GGML_TYPE_Q5_0;   break;
                     case GGML_TYPE_Q5_K:    new_type = GGML_TYPE_Q5_1;   break;
                     case GGML_TYPE_Q6_K:    new_type = GGML_TYPE_Q8_0;   break;
-                    default:
-                        //
-                        // the majority of oddly-shaped tensors are handled by
-                        // `tensor_allows_quantization`, so it should be very unusual to reach
-                        // this point.
-                        //
-                        // if you are getting this warning a lot, consider adding a case for
-                        // this type of tensor to the `tensor_allows_quantization` function.
-                        //
-                        LLAMA_LOG_WARN("(WARNING: falling back to F16 due to unusual shape) ");
-                        new_type = GGML_TYPE_F16;
+                    default: no_compatible_type = true;
+                }
+                if (no_compatible_type) {
+                    LLAMA_LOG_WARN("(WARNING: falling back to F16 due to unusual shape) ");
+                    new_type = GGML_TYPE_F16;
                 }
             }
         }
