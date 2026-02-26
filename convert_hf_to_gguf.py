@@ -565,7 +565,7 @@ class ModelBase:
     @staticmethod
     def _nvfp4_pack(weight: Tensor, scale: Tensor, scale2: Tensor) -> tuple[np.ndarray, list[int]]:
         """Repack NVFP4 ModelOpt tensors into ggml super-block layout.
-        When scale2 ≈ 1.0, preserves original E4M3 scale bits exactly.
+        When scale2 is close to 1.0, preserves original E4M3 scale bits exactly.
         Otherwise dequantizes and requantizes with scale2 baked in.
         Returns (raw_data, logical_shape)."""
         
