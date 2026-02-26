@@ -35,6 +35,7 @@ struct llama_cparams {
     bool warmup;
     bool op_offload;
     bool kv_unified;
+    bool eagle3_extract_enabled;  // enable layer extraction for EAGLE3 speculative decoding
     bool pipeline_parallel;
 
     enum llama_pooling_type pooling_type;

@@ -4,6 +4,7 @@
 #include "speculative.h"
 #include "log.h"
 #include "llama.h"
+#include "chat.h"
 
 #include <cstdio>
 #include <cstring>
@@ -76,13 +77,53 @@ int main(int argc, char ** argv) {
             return 1;
         }
 
+        params.speculative.model_tgt = model_tgt;
         params.speculative.model_dft = model_dft.get();
         params.speculative.cparams_dft = common_context_params_to_llama(params_dft);
+
+        if (params.speculative.eagle3) {
+            llama_set_eagle3(ctx_tgt, model_dft.get());
+        }
     }
+
+    // Apply chat template for EAGLE3 if available which can increase the acceptance rate
+    std::string prompt = params.prompt;
+    if (params.speculative.eagle3) {
+        auto chat_templates = common_chat_templates_init(model_tgt, params.chat_template);
+        if (common_chat_templates_was_explicit(chat_templates.get())) {
+            std::vector<common_chat_msg> chat_msgs;
+            common_chat_msg user_msg;
+            user_msg.role = "user";
+            user_msg.content = params.prompt;
+            chat_msgs.push_back(user_msg);
+
+            common_chat_templates_inputs inputs;
+            inputs.messages = chat_msgs;
+            inputs.add_generation_prompt = true;
+            prompt = common_chat_templates_apply(chat_templates.get(), inputs).prompt;
+            LOG_INF("%s: EAGLE3 chat template applied\n", __func__);
+        }
+    }
+
+    int n_predict = 0;
+    int n_drafted = 0;
+    int n_accept  = 0;
+
+    // used to determine end of generation
+    bool has_eos = false;
+
+    // ================================================
+    // everything until here is standard initialization
+    // the relevant stuff for speculative decoding starts here
+
+    const auto t_enc_start = ggml_time_us();
+
+    // target model sampling context
+    struct common_sampler * smpl = common_sampler_init(model_tgt, params.sampling);
 
     // Tokenize the prompt
     std::vector<llama_token> inp;
-    inp = common_tokenize(ctx_tgt, params.prompt, true, true);
+    inp = common_tokenize(ctx_tgt, prompt, true, true);
 
     if (llama_n_ctx(ctx_tgt) < (uint32_t) inp.size()) {
         LOG_ERR("%s: the prompt exceeds the context size (%d tokens, ctx %d)\n", __func__, (int) inp.size(), llama_n_ctx(ctx_tgt));
@@ -102,33 +143,38 @@ int main(int argc, char ** argv) {
         LOG("%s", common_token_to_piece(ctx_tgt, id).c_str());
     }
 
-    int n_predict = 0;
-    int n_drafted = 0;
-    int n_accept  = 0;
-
-    // used to determine end of generation
-    bool has_eos = false;
-
-    // ================================================
-    // everything until here is standard initialization
-    // the relevant stuff for speculative decoding starts here
-
-    const auto t_enc_start = ggml_time_us();
-
-    // target model sampling context
-    struct common_sampler * smpl = common_sampler_init(model_tgt, params.sampling);
-
     // eval the prompt
-    llama_decode(ctx_tgt, llama_batch_get_one(inp.data(), inp.size() - 1));
+    llama_token id_last;
+    llama_tokens prompt_tgt;
+    int n_past;
 
-    // note: keep the last token separate!
-    llama_token id_last = inp.back();
+    // TODO: simplify
+    if (params.speculative.eagle3) {
+        // Target model decodes full prompt and sample first token and intermediate features are extracted
+        llama_decode(ctx_tgt, llama_batch_get_one(inp.data(), inp.size()));
 
-    // all tokens currently in the target context
-    llama_tokens prompt_tgt(inp.begin(), inp.end() - 1);
-    prompt_tgt.reserve(llama_n_ctx(ctx_tgt));
+        id_last = common_sampler_sample(smpl, ctx_tgt, -1);
+        common_sampler_accept(smpl, id_last, true);
+        LOG("%s", common_token_to_piece(ctx_tgt, id_last).c_str());
+        n_predict++;
 
-    int n_past = inp.size() - 1;
+        // all tokens currently in the target context
+        prompt_tgt.assign(inp.begin(), inp.end());
+        prompt_tgt.reserve(llama_n_ctx(ctx_tgt));
+
+        n_past = inp.size();
+    } else {
+        llama_decode(ctx_tgt, llama_batch_get_one(inp.data(), inp.size() - 1));
+
+        // note: keep the last token separate!
+        id_last = inp.back();
+
+        // all tokens currently in the target context
+        prompt_tgt.assign(inp.begin(), inp.end() - 1);
+        prompt_tgt.reserve(llama_n_ctx(ctx_tgt));
+
+        n_past = inp.size() - 1;
+    }
 
     // init the speculator
     const auto & params_spec = params.speculative;

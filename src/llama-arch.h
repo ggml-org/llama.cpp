@@ -132,6 +132,7 @@ enum llm_arch {
     LLM_ARCH_MAINCODER,
     LLM_ARCH_KIMI_LINEAR,
     LLM_ARCH_UNKNOWN,
+    LLM_ARCH_EAGLE3,
 };
 
 enum llm_kv {
@@ -312,6 +313,10 @@ enum llm_kv {
     LLM_KV_CONVNEXT_BLOCK_COUNT,
 
     LLM_KV_CLASSIFIER_OUTPUT_LABELS,
+
+    LLM_KV_EAGLE3_EXTRACT_LAYERS,
+    LLM_KV_EAGLE3_TARGET_HIDDEN_SIZE,
+    LLM_KV_EAGLE3_NORM_BEFORE_RESIDUAL,
 
     LLM_KV_SHORTCONV_L_CACHE,
 
@@ -534,6 +539,9 @@ enum llm_tensor {
     LLM_TENSOR_NEXTN_HNORM,
     LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD,
     LLM_TENSOR_NEXTN_SHARED_HEAD_NORM,
+    LLM_TENSOR_EAGLE3_FC,              // eagle3: feature fusion layer
+    LLM_TENSOR_EAGLE3_HIDDEN_NORM,     // eagle3: additional normalization layer
+    LLM_TENSOR_EAGLE3_D2T,             // eagle3: draft to target vocabulary mapping
 };
 
 enum llm_tensor_layer {

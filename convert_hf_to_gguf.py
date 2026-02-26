@@ -97,6 +97,7 @@ class ModelBase:
     metadata_override: Path | None
     dir_model_card: Path
     remote_hf_model_id: str | None
+    target_model_dir: Path | None
 
     # subclasses should define this!
     model_arch: gguf.MODEL_ARCH
@@ -116,7 +117,7 @@ class ModelBase:
                  split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False,
                  small_first_shard: bool = False, hparams: dict[str, Any] | None = None, remote_hf_model_id: str | None = None,
                  disable_mistral_community_chat_template: bool = False,
-                 sentence_transformers_dense_modules: bool = False):
+                 sentence_transformers_dense_modules: bool = False, target_model_dir: Path | None = None):
         if type(self) is ModelBase or \
                 type(self) is TextModel or \
                 type(self) is MmprojModel:
@@ -135,6 +136,7 @@ class ModelBase:
         self.dry_run = dry_run
         self.remote_hf_model_id = remote_hf_model_id
         self.sentence_transformers_dense_modules = sentence_transformers_dense_modules
+        self.target_model_dir = target_model_dir
         self.hparams = ModelBase.load_hparams(self.dir_model, self.is_mistral_format) if hparams is None else hparams
         self.model_tensors = self.index_tensors(remote_hf_model_id=remote_hf_model_id)
         self.metadata_override = metadata_override
@@ -2533,6 +2535,9 @@ class StableLMModel(TextModel):
     "VLlama3ForCausalLM",
     "LlavaForConditionalGeneration",
     "VoxtralForConditionalGeneration",
+    "LlamaForCausalLMEagle3",
+    "Eagle3Speculator",
+    "Eagle3DraftModel",
     "IQuestCoderForCausalLM",
     "LlamaModel")
 class LlamaModel(TextModel):
@@ -2547,7 +2552,60 @@ class LlamaModel(TextModel):
         hparams = ModelBase.load_hparams(self.dir_model, is_mistral_format=False)
         self.origin_hf_arch = hparams.get('architectures', [None])[0]
 
+        # detect EAGLE-3 llama checkpoint
+        if "draft_vocab_size" in self.hparams and self.hparams["num_hidden_layers"] == 1:
+            self.is_eagle3 = True
+            self.model_arch = gguf.MODEL_ARCH.EAGLE3
+            logger.info("Detected EAGLE-3 draft model, switching to EAGLE3 architecture")
+            # Re-initialize tensor_map with EAGLE3 architecture
+            self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+            # Update gguf_writer architecture
+            self.gguf_writer.arch = gguf.MODEL_ARCH_NAMES[self.model_arch]
+            self.gguf_writer.add_architecture()
+            if not hasattr(self, 'target_model_dir') or not self.target_model_dir:
+                raise ValueError(
+                    "EAGLE3 model requires --target-model-dir to be specified. "
+                    "Please provide the path to the target model directory to read config.json"
+                )
+            # Read both EAGLE3 raw config and target model config
+            with open(self.dir_model / "config.json", 'r', encoding='utf-8') as f:
+                eagle3_raw_config = json.load(f)
+            with open(self.target_model_dir / "config.json", 'r', encoding='utf-8') as f:
+                target_config = json.load(f)
+
+            # EAGLE3 extract_layers
+            target_num_layers = target_config["num_hidden_layers"]
+            extract_layers = [2, target_num_layers // 2, target_num_layers - 3]
+            logger.info(f"EAGLE3: extract_layers = {extract_layers} (target model has {target_num_layers} layers)")
+            self.gguf_writer.add_array(f"{self.gguf_writer.arch}.extract_layers", extract_layers)
+
+            # EAGLE3 target_hidden_size: prefer EAGLE3 config, fallback to target config
+            if "target_hidden_size" in eagle3_raw_config and eagle3_raw_config["target_hidden_size"] is not None:
+                target_hidden_size = eagle3_raw_config["target_hidden_size"]
+                logger.info(f"EAGLE3: target_hidden_size = {target_hidden_size} (from EAGLE3 config)")
+            else:
+                target_hidden_size = target_config["hidden_size"]
+                logger.info(f"EAGLE3: target_hidden_size = {target_hidden_size} (from target model config)")
+            self.gguf_writer.add_uint32(f"{self.gguf_writer.arch}.target_hidden_size", target_hidden_size)
+
+            # Eagle3Speculator norm_before_residual specific handling
+            norm_before_residual = eagle3_raw_config.get("norm_before_residual", False)
+            logger.info(f"EAGLE3: norm_before_residual = {norm_before_residual} (from EAGLE3 config)")
+            self.gguf_writer.add_bool(f"{self.gguf_writer.arch}.norm_before_residual", norm_before_residual)
+
     def set_vocab(self):
+        # For EAGLE-3 models, use tokenizer from target model if provided
+        if hasattr(self, 'is_eagle3') and self.is_eagle3:
+            if self.target_model_dir is None:
+                raise ValueError(
+                    "EAGLE-3 draft model requires --target-model-dir to be specified. "
+                    "Please provide the path to the target model directory containing the tokenizer."
+                )
+            logger.info(f"EAGLE-3: Using tokenizer from target model: {self.target_model_dir}")
+            # Temporarily swap dir_model to load tokenizer from target model
+            original_dir_model = self.dir_model
+            self.dir_model = self.target_model_dir
+
         if self.origin_hf_arch == "GlmasrModel":
             return self._set_vocab_glmedge()
 
@@ -2591,6 +2649,10 @@ class LlamaModel(TextModel):
         if self.hparams.get("vocab_size", 32000) == 49152:
             self.gguf_writer.add_add_bos_token(False)
 
+        # Restore original dir_model for EAGLE-3
+        if hasattr(self, 'is_eagle3') and self.is_eagle3:
+            self.dir_model = original_dir_model
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hparams = self.hparams
@@ -2612,7 +2674,55 @@ class LlamaModel(TextModel):
 
     _experts: list[dict[str, Tensor]] | None = None
 
+    def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
+        tensors = super().index_tensors(remote_hf_model_id)
+
+        # Handle Eagle3Speculator nested config
+        if "transformer_layer_config" in self.hparams:
+            self.hparams = {**self.hparams, **self.hparams["transformer_layer_config"]}
+            
+        # EAGLE-3 detection: check hparams directly (before self.is_eagle3 is set)
+        if "draft_vocab_size" in self.hparams and self.hparams["num_hidden_layers"] == 1:
+            logger.info("EAGLE-3: Renaming midlayer.* or layers.0.* to model.layers.0.*")
+            new_tensors = {}
+            # EAGLE-3: rename midlayer.* to model.layers.0.* for compatibility with llama model
+            for name, gen in tensors.items():
+                if name.startswith("midlayer."):
+                    new_name = "model.layers.0." + name[len("midlayer."):]
+                    new_tensors[new_name] = gen
+                elif name.startswith("layers.0."): # layers.0.* -> model.layers.0.* (Eagle3Speculator format)
+                    new_name = "model." + name
+                    new_tensors[new_name] = gen
+                else:
+                    new_tensors[name] = gen
+            return new_tensors
+        else:
+            return tensors
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+
+        # Eagle-3 llama checkpoint special handling
+        if hasattr(self, 'is_eagle3') and self.is_eagle3:
+            # Eagle-3 llama checkpoint special weights handling
+            # fc.weight: feature fusion layer
+            if name == "fc.weight":
+                yield (name, data_torch)
+                return
+            # d2t: draft to target vocabulary mapping
+            elif name == "d2t":
+                # Skip parent class processing (store for manual handling in prepare_tensors)
+                if not hasattr(self, '_eagle3_int_tensors'):
+                    self._eagle3_int_tensors = {}
+                self._eagle3_int_tensors[name] = data_torch
+                return
+            # t2d: target to draft vocabulary mapping (not used, skip completely)
+            elif name == "t2d":
+                return
+            # hidden_norm: EAGLE-3 specific layer normalization
+            elif name == "model.layers.0.hidden_norm.weight":
+                yield ("blk.0.hidden_norm.weight", data_torch)
+                return
+
         n_head = self.find_hparam(["n_heads", "num_attention_heads"])
         n_kv_head = self.find_hparam(["n_kv_heads", "num_key_value_heads"])
 
@@ -2682,6 +2792,17 @@ class LlamaModel(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        # EAGLE3: If no lm_head in draft model, load from target model
+        if hasattr(self, 'is_eagle3') and self.is_eagle3 and "lm_head.weight" not in self.model_tensors:
+            from safetensors import safe_open
+            for sf_file in self.target_model_dir.glob("*.safetensors"):
+                with safe_open(sf_file, framework="pt") as f:
+                    if "lm_head.weight" in f.keys():
+                        lm_head = f.get_tensor("lm_head.weight")
+                        logger.info(f"EAGLE3: No lm_head in draft model, loaded lm_head from {sf_file.name}, shape = {lm_head.shape}")
+                        yield ("output.weight", lm_head)
+                        break
+
         if rope_params := self.rope_parameters.get("full_attention", self.rope_parameters):
             if rope_params.get("rope_type", '').lower() == "llama3":
                 base = rope_params.get("rope_theta", 10000.0)
@@ -2712,7 +2833,25 @@ class LlamaModel(TextModel):
                 yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FREQS), torch.tensor(rope_factors, dtype=torch.float32))
 
     def prepare_tensors(self):
+        # EAGLE-3: collect original dtypes BEFORE parent class converts them to F32
+        eagle3_original_dtypes = {}
+        if hasattr(self, 'is_eagle3') and self.is_eagle3:
+            for name, data_torch in self.get_tensors():
+                if name == "d2t":
+                    eagle3_original_dtypes[name] = data_torch.dtype
+
         super().prepare_tensors()
+
+        if hasattr(self, 'is_eagle3') and self.is_eagle3 and hasattr(self, '_eagle3_int_tensors'):
+            for name, data_torch in self._eagle3_int_tensors.items():
+                old_dtype = eagle3_original_dtypes.get(name, data_torch.dtype)
+                # Keep as int64 to match original torch tensor dtype
+                data = data_torch.to(torch.int64).numpy()
+                data_qtype = gguf.GGMLQuantizationType.I64
+
+                shape_str = f"{{{', '.join(str(n) for n in reversed(data.shape))}}}"
+                logger.info(f"{name + ',':<30} {old_dtype} --> {data_qtype.name}, shape = {shape_str}")
+                self.gguf_writer.add_tensor(name, data, raw_dtype=data_qtype)
 
         if self._experts is not None:
             # flatten `list[dict[str, Tensor]]` into `list[str]`
@@ -11718,6 +11857,7 @@ class LazyTorchTensor(gguf.LazyBase):
         torch.float16: np.float16,
         torch.float32: np.float32,
         torch.uint8: np.uint8,
+        torch.int64: np.int64,
     }
 
     # only used when byteswapping data. Only correct size is needed
@@ -11877,6 +12017,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--no-tensor-first-split", action="store_true",
         help="do not add tensors to the first split (disabled by default)"
+    )
+    parser.add_argument(
+        "--target-model-dir", type=str, default=None,
+        help="directory containing target model tokenizer (for EAGLE-3 draft models that don't have their own tokenizer)",
     )
     parser.add_argument(
         "--metadata", type=Path,
@@ -12050,7 +12194,8 @@ def main() -> None:
                                      split_max_size=split_str_to_n_bytes(args.split_max_size), dry_run=args.dry_run,
                                      small_first_shard=args.no_tensor_first_split,
                                      remote_hf_model_id=hf_repo_id, disable_mistral_community_chat_template=disable_mistral_community_chat_template,
-                                     sentence_transformers_dense_modules=args.sentence_transformers_dense_modules
+                                     sentence_transformers_dense_modules=args.sentence_transformers_dense_modules,
+                                     target_model_dir=Path(args.target_model_dir) if args.target_model_dir else None
                                      )
 
         if args.vocab_only:
