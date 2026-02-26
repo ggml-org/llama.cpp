@@ -13,7 +13,6 @@ struct apir_encoder {
     const char * start;
     const char * end;
     bool         fatal;
-
 };
 
 struct apir_decoder {
@@ -28,8 +27,8 @@ struct apir_decoder {
 
 static apir_decoder apir_new_decoder(const char * ptr, size_t size) {
     apir_decoder dec = {
-        .cur = ptr,
-        .end = ptr + size,
+        .cur   = ptr,
+        .end   = ptr + size,
         .fatal = false,
     };
 
@@ -79,10 +78,7 @@ static inline bool apir_decoder_get_fatal(const apir_decoder * dec) {
  * encode peek
  */
 
-static inline bool apir_decoder_peek_internal(apir_decoder * dec,
-                                              size_t                size,
-                                              void *                val,
-                                              size_t                val_size) {
+static inline bool apir_decoder_peek_internal(apir_decoder * dec, size_t size, void * val, size_t val_size) {
     assert(val_size <= size);
 
     if (unlikely(size > (size_t) (dec->end - dec->cur))) {
@@ -332,8 +328,7 @@ static inline void apir_decode_char_array(apir_decoder * dec, char * val, size_t
 static inline void * apir_decoder_alloc_array(size_t size, size_t count) {
     size_t alloc_size;
     if (unlikely(__builtin_mul_overflow(size, count, &alloc_size))) {
-        GGML_LOG_ERROR("%s: overflow in array allocation of %zu * %zu bytes\n",
-                       __func__, size, count);
+        GGML_LOG_ERROR("%s: overflow in array allocation of %zu * %zu bytes\n", __func__, size, count);
         return NULL;
     }
 
@@ -352,20 +347,19 @@ static inline void apir_decode_bool_t(apir_decoder * dec, bool * val) {
 
 /* apir_buffer_type_host_handle_t */
 
-static inline void apir_encode_apir_buffer_type_host_handle_t(apir_encoder *                  enc,
+static inline void apir_encode_apir_buffer_type_host_handle_t(apir_encoder *                         enc,
                                                               const apir_buffer_type_host_handle_t * val) {
     apir_encode(enc, sizeof(apir_buffer_type_host_handle_t), val, sizeof(apir_buffer_type_host_handle_t));
 }
 
-static inline void apir_decode_apir_buffer_type_host_handle_t(apir_decoder *            dec,
+static inline void apir_decode_apir_buffer_type_host_handle_t(apir_decoder *                   dec,
                                                               apir_buffer_type_host_handle_t * val) {
     apir_decode(dec, sizeof(apir_buffer_type_host_handle_t), val, sizeof(apir_buffer_type_host_handle_t));
 }
 
 /* apir_buffer_host_handle_t */
 
-static inline void apir_encode_apir_buffer_host_handle_t(apir_encoder *             enc,
-                                                         const apir_buffer_host_handle_t * val) {
+static inline void apir_encode_apir_buffer_host_handle_t(apir_encoder * enc, const apir_buffer_host_handle_t * val) {
     apir_encode(enc, sizeof(apir_buffer_host_handle_t), val, sizeof(apir_buffer_host_handle_t));
 }
 

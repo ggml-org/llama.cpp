@@ -53,9 +53,9 @@ static int virtgpu_handshake(virtgpu * gpu) {
 
     if (!decoder) {
         GGML_ABORT(GGML_VIRTGPU
-            "%s: failed to initiate the communication with the virglrenderer library. "
-            "Most likely, the wrong virglrenderer library was loaded in the hypervisor.",
-            __func__);
+                   "%s: failed to initiate the communication with the virglrenderer library. "
+                   "Most likely, the wrong virglrenderer library was loaded in the hypervisor.",
+                   __func__);
         return 1;
     }
 
@@ -65,8 +65,7 @@ static int virtgpu_handshake(virtgpu * gpu) {
     uint32_t host_minor;
 
     if (ret_magic != APIR_HANDSHAKE_MAGIC) {
-        GGML_ABORT(GGML_VIRTGPU
-                   "%s: handshake with the virglrenderer failed (code=%d | %s)", __func__, ret_magic,
+        GGML_ABORT(GGML_VIRTGPU "%s: handshake with the virglrenderer failed (code=%d | %s)", __func__, ret_magic,
                    apir_backend_initialize_error(ret_magic));
     } else {
         apir_decode_uint32_t(decoder, &host_major);
@@ -140,15 +139,13 @@ static ApirLoadLibraryReturnCode virtgpu_load_library(virtgpu * gpu) {
                        "Make sure virglrenderer is correctly configured by the hypervisor. (%s) ",
                        __func__, apir_load_library_error(ret));
         } else {
-            GGML_ABORT(GGML_VIRTGPU
-                       "%s: virglrenderer could not load the API Remoting backend library. (%s - code %d)", __func__,
-                       apir_load_library_error(ret), ret);
+            GGML_ABORT(GGML_VIRTGPU "%s: virglrenderer could not load the API Remoting backend library. (%s - code %d)",
+                       __func__, apir_load_library_error(ret), ret);
         }
         return ret;
     }
 
-    GGML_LOG_INFO(GGML_VIRTGPU
-                  "%s: virglrenderer successfully loaded the API Remoting backend library.\n", __func__);
+    GGML_LOG_INFO(GGML_VIRTGPU "%s: virglrenderer successfully loaded the API Remoting backend library.\n", __func__);
 
     ApirLoadLibraryReturnCode apir_ret = (ApirLoadLibraryReturnCode) (ret - APIR_LOAD_LIBRARY_INIT_BASE_INDEX);
 
@@ -158,10 +155,11 @@ static ApirLoadLibraryReturnCode virtgpu_load_library(virtgpu * gpu) {
                    "Make sure virglrenderer is correctly configured by the hypervisor. (%s)",
                    __func__, apir_load_library_error(apir_ret));
     } else if (apir_ret == APIR_LOAD_LIBRARY_SYMBOL_MISSING) {
-        GGML_ABORT(GGML_VIRTGPU
-                   "%s: the API Remoting backend library couldn't load the GGML backend library, some symbols are missing. "
-                   "Make sure virglrenderer is correctly configured by the hypervisor. (%s)",
-                   __func__, apir_load_library_error(apir_ret));
+        GGML_ABORT(
+            GGML_VIRTGPU
+            "%s: the API Remoting backend library couldn't load the GGML backend library, some symbols are missing. "
+            "Make sure virglrenderer is correctly configured by the hypervisor. (%s)",
+            __func__, apir_load_library_error(apir_ret));
     } else if (apir_ret < APIR_LOAD_LIBRARY_INIT_BASE_INDEX) {
         GGML_ABORT(GGML_VIRTGPU
                    "%s: the API Remoting backend library couldn't load the GGML backend library: apir code=%d | %s)",
@@ -169,8 +167,8 @@ static ApirLoadLibraryReturnCode virtgpu_load_library(virtgpu * gpu) {
     } else {
         uint32_t lib_ret = apir_ret - APIR_LOAD_LIBRARY_INIT_BASE_INDEX;
         GGML_ABORT(GGML_VIRTGPU
-                   "%s: the API Remoting backend library initialize its backend library: apir code=%d)", __func__,
-                   lib_ret);
+                   "%s: the API Remoting backend library failed to initialize its backend library: apir code=%d)",
+                   __func__, lib_ret);
     }
     return ret;
 }
@@ -184,55 +182,49 @@ virtgpu * create_virtgpu() {
     // Initialize mutex to protect shared data_shmem buffer
     if (mtx_init(&gpu->data_shmem_mutex, mtx_plain) != thrd_success) {
         delete gpu;
-        GGML_ABORT(GGML_VIRTGPU
-                   "%s: failed to initialize data_shmem mutex", __func__);
+        GGML_ABORT(GGML_VIRTGPU "%s: failed to initialize data_shmem mutex", __func__);
         return NULL;
     }
 
     if (virtgpu_open(gpu) != APIR_SUCCESS) {
-        GGML_LOG_ERROR(GGML_VIRTGPU
-                       "%s: failed to open the virtgpu device\n", __func__);
+        GGML_LOG_ERROR(GGML_VIRTGPU "%s: failed to open the virtgpu device\n", __func__);
         return NULL;
     }
 
     if (virtgpu_init_capset(gpu) != APIR_SUCCESS) {
         if (gpu->use_apir_capset) {
             GGML_ABORT(GGML_VIRTGPU
-                       "%s: failed to initialize the virtgpu APIR capset. Make sure that the virglrenderer library supports it.", __func__);
+                       "%s: failed to initialize the virtgpu APIR capset. Make sure that the virglrenderer library "
+                       "supports it.",
+                       __func__);
         } else {
-            GGML_ABORT(GGML_VIRTGPU
-                       "%s: failed to initialize the virtgpu Venus capset", __func__);
+            GGML_ABORT(GGML_VIRTGPU "%s: failed to initialize the virtgpu Venus capset", __func__);
         }
         return NULL;
     }
 
     if (virtgpu_init_context(gpu) != APIR_SUCCESS) {
-        GGML_ABORT(GGML_VIRTGPU
-                   "%s: failed to initialize the GPU context", __func__);
+        GGML_ABORT(GGML_VIRTGPU "%s: failed to initialize the GPU context", __func__);
         return NULL;
     }
 
     if (virtgpu_shmem_create(gpu, SHMEM_REPLY_SIZE, &gpu->reply_shmem)) {
-        GGML_ABORT(GGML_VIRTGPU
-                   "%s: failed to create the shared reply memory pages", __func__);
+        GGML_ABORT(GGML_VIRTGPU "%s: failed to create the shared reply memory pages", __func__);
         return NULL;
     }
 
     if (virtgpu_shmem_create(gpu, SHMEM_DATA_SIZE, &gpu->data_shmem)) {
-        GGML_ABORT(GGML_VIRTGPU
-                   "%s: failed to create the shared data memory pages", __func__);
+        GGML_ABORT(GGML_VIRTGPU "%s: failed to create the shared data memory pages", __func__);
         return NULL;
     }
 
     if (virtgpu_handshake(gpu)) {
-        GGML_ABORT(GGML_VIRTGPU
-                   "%s: failed to handshake with the virglrenderer library", __func__);
+        GGML_ABORT(GGML_VIRTGPU "%s: failed to handshake with the virglrenderer library", __func__);
         return NULL;
     }
 
     if (virtgpu_load_library(gpu) != APIR_LOAD_LIBRARY_SUCCESS) {
-        GGML_ABORT(GGML_VIRTGPU
-                   "%s: failed to load the backend library", __func__);
+        GGML_ABORT(GGML_VIRTGPU "%s: failed to load the backend library", __func__);
         return NULL;
     }
 
@@ -243,8 +235,7 @@ static virt_gpu_result_t virtgpu_open(virtgpu * gpu) {
     drmDevicePtr devs[8];
     int          count = drmGetDevices2(0, devs, ARRAY_SIZE(devs));
     if (count < 0) {
-        GGML_LOG_ERROR(GGML_VIRTGPU
-                       "%s: failed to enumerate DRM devices\n", __func__);
+        GGML_LOG_ERROR(GGML_VIRTGPU "%s: failed to enumerate DRM devices\n", __func__);
         return APIR_ERROR_INITIALIZATION_FAILED;
     }
 
@@ -266,19 +257,17 @@ static virt_gpu_result_t virtgpu_open_device(virtgpu * gpu, const drmDevicePtr d
 
     int fd = open(node_path, O_RDWR | O_CLOEXEC);
     if (fd < 0) {
-        GGML_ABORT(GGML_VIRTGPU
-                   "%s: failed to open %s", __func__, node_path);
+        GGML_ABORT(GGML_VIRTGPU "%s: failed to open %s", __func__, node_path);
         return APIR_ERROR_INITIALIZATION_FAILED;
     }
 
     drmVersionPtr version = drmGetVersion(fd);
     if (!version || strcmp(version->name, "virtio_gpu") || version->version_major != 0) {
         if (version) {
-            GGML_LOG_ERROR(GGML_VIRTGPU
-                           "%s: unknown DRM driver %s version %d\n", __func__, version->name, version->version_major);
+            GGML_LOG_ERROR(GGML_VIRTGPU "%s: unknown DRM driver %s version %d\n", __func__, version->name,
+                           version->version_major);
         } else {
-            GGML_LOG_ERROR(GGML_VIRTGPU
-                           "%s: failed to get DRM driver version\n", __func__);
+            GGML_LOG_ERROR(GGML_VIRTGPU "%s: failed to get DRM driver version\n", __func__);
         }
 
         if (version) {
@@ -322,9 +311,8 @@ static virt_gpu_result_t virtgpu_init_capset(virtgpu * gpu) {
         virtgpu_ioctl_get_caps(gpu, gpu->capset.id, gpu->capset.version, &gpu->capset.data, sizeof(gpu->capset.data));
 
     if (ret) {
-        GGML_LOG_ERROR(GGML_VIRTGPU
-                       "%s: failed to get APIR v%d capset: %s\n",
-                       __func__, gpu->capset.version, strerror(errno));
+        GGML_LOG_ERROR(GGML_VIRTGPU "%s: failed to get APIR v%d capset: %s\n", __func__, gpu->capset.version,
+                       strerror(errno));
         return APIR_ERROR_INITIALIZATION_FAILED;
     }
 
@@ -547,13 +535,10 @@ static void log_call_duration(long long call_duration_ns, const char * name) {
     double call_duration_s  = (double) call_duration_ns / 1e9;  // 1 second = 1e9 nanoseconds
 
     if (call_duration_s > 1) {
-        GGML_LOG_INFO(GGML_VIRTGPU
-                      "waited %.2fs for the %s host reply...\n", call_duration_s, name);
+        GGML_LOG_INFO(GGML_VIRTGPU "waited %.2fs for the %s host reply...\n", call_duration_s, name);
     } else if (call_duration_ms > 1) {
-        GGML_LOG_INFO(GGML_VIRTGPU
-                      "waited %.2fms for the %s host reply...\n", call_duration_ms, name);
+        GGML_LOG_INFO(GGML_VIRTGPU "waited %.2fms for the %s host reply...\n", call_duration_ms, name);
     } else {
-        GGML_LOG_INFO(GGML_VIRTGPU
-                      "waited %lldns for the %s host reply...\n", call_duration_ns, name);
+        GGML_LOG_INFO(GGML_VIRTGPU "waited %lldns for the %s host reply...\n", call_duration_ns, name);
     }
 }

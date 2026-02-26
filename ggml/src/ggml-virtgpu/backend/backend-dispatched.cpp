@@ -1,6 +1,6 @@
 #include "backend-dispatched.h"
-#include "backend-virgl-apir.h"
 
+#include "backend-virgl-apir.h"
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
 #include "ggml-impl.h"
@@ -28,19 +28,24 @@ uint32_t backend_dispatch_initialize(void * ggml_backend_reg_fct_p) {
         return APIR_BACKEND_INITIALIZE_BACKEND_REG_FAILED;
     }
 
-    if (!reg->iface.get_device_count(reg)) {
-        GGML_LOG_ERROR(GGML_VIRTGPU_BCK "%s: backend initialization failed: no device found\n", __func__);
+    size_t device_count = reg->iface.get_device_count(reg);
+    if (!device_count) {
+        GGML_LOG_ERROR(GGML_VIRTGPU_BCK "%s: no device found\n", __func__);
         return APIR_BACKEND_INITIALIZE_NO_DEVICE;
     }
 
     dev = reg->iface.get_device(reg, 0);
 
     if (!dev) {
-        GGML_LOG_ERROR(GGML_VIRTGPU_BCK "%s: backend initialization failed: no device received\n", __func__);
+        GGML_LOG_ERROR(GGML_VIRTGPU_BCK "%s: failed to get device\n", __func__);
         return APIR_BACKEND_INITIALIZE_NO_DEVICE;
     }
 
     bck = dev->iface.init_backend(dev, NULL);
+    if (!bck) {
+        GGML_LOG_ERROR(GGML_VIRTGPU_BCK "%s: backend initialization failed\n", __func__);
+        return APIR_BACKEND_INITIALIZE_BACKEND_INIT_FAILED;
+    }
 
     return APIR_BACKEND_INITIALIZE_SUCCESS;
 }
