@@ -191,6 +191,11 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
     if (params.grammar.compare(0, 11, "%llguidance") == 0) {
 #ifdef LLAMA_USE_LLGUIDANCE
         grmr = llama_sampler_init_llg(vocab, "lark", params.grammar.c_str());
+        // fail closed: if llguidance grammar parsing failed, return nullptr
+        if (grmr == nullptr) {
+            llama_sampler_free(chain);
+            return nullptr;
+        }
 #else
         GGML_ABORT("llguidance (cmake -DLLAMA_LLGUIDANCE=ON) is not enabled");
 #endif // LLAMA_USE_LLGUIDANCE
@@ -246,6 +251,12 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
                          trigger_tokens.data(), trigger_tokens.size());
              } else {
                  grmr = llama_sampler_init_grammar(vocab, params.grammar.c_str(), "root");
+             }
+             // fail closed: if grammar was requested but parsing failed, return nullptr
+             // this ensures the server returns an error instead of generating unconstrained output
+             if (grmr == nullptr) {
+                 llama_sampler_free(chain);
+                 return nullptr;
              }
         }
     }
