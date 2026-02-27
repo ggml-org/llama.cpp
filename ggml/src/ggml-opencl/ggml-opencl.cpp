@@ -4420,8 +4420,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
 
         tensor->extra = extra;
 
-    // transpose the weights, scales and mins
-    #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         if (use_adreno_kernels(backend_ctx, tensor)) {
 
             int M = tensor->ne[1];
@@ -4436,7 +4435,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
             // Transpose m as ushort
             transpose_2d_as_16b(backend_ctx, extra->m, extra->m, size_m, K/32, M);
         }
-    #endif // GGML_OPENCL_USE_ADRENO_KERNELS
+#endif // GGML_OPENCL_USE_ADRENO_KERNELS
         return;
     }
     if (tensor->type == GGML_TYPE_MXFP4) {
