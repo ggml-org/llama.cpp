@@ -288,15 +288,26 @@ static std::vector<float> get_logits(
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, n_head);
     }
 
-    ms.add_kv(LLM_KV_ATTENTION_CLAMP_KQV,              1.0f);
-    ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_EPS,          1e-5f);
-    ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,      1e-5f);
-    ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW,         n_ctx/8);
-    ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, uint32_t(2));
-    ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS,          std::vector<uint32_t>({n_embd_head/4, n_embd_head/4, n_embd_head/4, n_embd_head/4}));
-    ms.add_kv(LLM_KV_TOKENIZER_MODEL,                  "no_vocab");
-    // ms.add_kv(LLM_KV_DENSE_2_FEAT_OUT,              n_embd);
-    // ms.add_kv(LLM_KV_DENSE_3_FEAT_IN,               n_embd);
+    ms.add_kv(LLM_KV_ATTENTION_CLAMP_KQV,         1.0f);
+    ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_EPS,     1e-5f);
+    ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, 1e-5f);
+    ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW,    n_ctx/8);
+
+    if (arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35) {
+        std::vector<uint32_t> pattern;
+        pattern.reserve(n_layer);
+        for (uint32_t il = 0; il < n_layer; il++) {
+            pattern.push_back(il % 2);
+        }
+        ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, pattern);
+    } else {
+        ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, uint32_t(2));
+    }
+
+    ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({n_embd_head/4, n_embd_head/4, n_embd_head/4, n_embd_head/4}));
+    ms.add_kv(LLM_KV_TOKENIZER_MODEL,         "no_vocab");
+    // ms.add_kv(LLM_KV_DENSE_2_FEAT_OUT,     n_embd);
+    // ms.add_kv(LLM_KV_DENSE_3_FEAT_IN,      n_embd);
 
     if (moe) {
         ms.add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, n_ff);
@@ -375,6 +386,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_DEEPSEEK2:
         case LLM_ARCH_GLM4_MOE:
         case LLM_ARCH_GLM_DSA:
+        case LLM_ARCH_EXAONE_MOE:
         case LLM_ARCH_BAILINGMOE:
         case LLM_ARCH_BAILINGMOE2:
         case LLM_ARCH_DOTS1:
@@ -461,10 +473,6 @@ static int test_backends(const size_t seed, const ggml_log_level log_level) {
         }
         if (arch == LLM_ARCH_MINICPM3 || arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_PLM) {
             continue; // TODO LoRA rank
-        }
-        if (arch == LLM_ARCH_GEMMA_EMBEDDING || arch == LLM_ARCH_COHERE2 || arch == LLM_ARCH_EXAONE_MOE ||
-                arch == LLM_ARCH_OPENAI_MOE || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35) {
-            continue; // TODO sliding window
         }
         if (arch == LLM_ARCH_T5 || arch == LLM_ARCH_T5ENCODER) {
             continue; // TODO attention buckets
