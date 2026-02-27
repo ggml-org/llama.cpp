@@ -10,6 +10,7 @@
 #include "expert-prefetch.hpp"
 
 #include "common.hpp"
+#include "cpu-dispatch.hpp"   // expert_miss_precision, burst threshold config
 
 #include <cstdlib>
 
@@ -107,16 +108,10 @@ bool ExpertPrefetcher::hint(int layer_idx, int expert_idx) {
     // on dma_queue_, returning a per-expert sycl::event for granular await.
     sycl::event ev = cache_->prefetch_async(layer_idx, expert_idx, dma_queue_);
 
-    // Re-lookup to get the now-allocated device pointer
-    ExpertLookup post_lk = cache_->lookup(layer_idx, expert_idx);
-
     PrefetchRequest req;
-    req.key        = key;
-    req.device_dst = post_lk.device_ptr;
-    req.host_src   = lk.host_ptr;
-    req.bytes      = 0;  // Size managed by ExpertCache slot_size_
-    req.event      = ev;
-    req.completed  = false;
+    req.key       = key;
+    req.event     = ev;
+    req.completed = false;
     inflight_[key] = req;
 
     return true;
@@ -155,17 +150,57 @@ void ExpertPrefetcher::hint_batch(int layer_idx, const std::vector<int> & expert
         // Submit async H2D on our OOQ
         sycl::event ev = cache_->prefetch_async(layer_idx, eidx, dma_queue_);
 
-        ExpertLookup post_lk = cache_->lookup(layer_idx, eidx);
-
         PrefetchRequest req;
-        req.key        = key;
-        req.device_dst = post_lk.device_ptr;
-        req.host_src   = lk.host_ptr;
-        req.bytes      = 0;
-        req.event      = ev;
-        req.completed  = false;
+        req.key       = key;
+        req.event     = ev;
+        req.completed = false;
         inflight_[key] = req;
     }
+}
+
+// ============================================================================
+// Adaptive prefetch: first N experts get DMA, rest dispatched to CPU
+// ============================================================================
+
+std::vector<int> ExpertPrefetcher::hint_batch_adaptive(
+    int layer_idx,
+    const std::vector<int> & expert_indices,
+    int n_miss_total)
+{
+    std::vector<int> cpu_indices;
+
+    if (!initialized_ || expert_indices.empty()) {
+        return cpu_indices;
+    }
+
+    const expert_miss_precision mode = ggml_sycl_expert_miss_precision_mode();
+    const int threshold = ggml_sycl_expert_miss_burst_threshold();
+
+    // If full precision or below threshold: prefetch all
+    if (mode == expert_miss_precision::FULL || n_miss_total <= threshold) {
+        hint_batch(layer_idx, expert_indices);
+        return cpu_indices;  // empty: all prefetched
+    }
+
+    // Split: first `threshold` experts get prefetch, rest go to CPU
+    const int n_prefetch = std::min(threshold, static_cast<int>(expert_indices.size()));
+
+    std::vector<int> prefetch_indices(expert_indices.begin(),
+                                      expert_indices.begin() + n_prefetch);
+    cpu_indices.assign(expert_indices.begin() + n_prefetch,
+                       expert_indices.end());
+
+    // Schedule DMA for the prefetch batch
+    if (!prefetch_indices.empty()) {
+        hint_batch(layer_idx, prefetch_indices);
+    }
+
+    GGML_SYCL_DEBUG("[PREFETCH] Adaptive: %d prefetch, %d cpu-fallback "
+                    "(threshold=%d, miss=%d)\n",
+                    n_prefetch, (int) cpu_indices.size(),
+                    threshold, n_miss_total);
+
+    return cpu_indices;
 }
 
 // ============================================================================
@@ -179,15 +214,30 @@ void * ExpertPrefetcher::await(int layer_idx, int expert_idx) {
 
     expert_key key{ layer_idx, expert_idx };
 
+    // Extract event under lock, then release before waiting.
+    // This avoids blocking hint() callers during DMA completion.
+    sycl::event ev_copy;
+    bool found = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-
         auto it = inflight_.find(key);
-        if (it != inflight_.end()) {
-            // Wait on the per-expert sycl::event (granular, not global queue wait).
-            // This blocks only until THIS expert's H2D DMA completes on dma_queue_.
-            it->second.event.wait();
+        if (it != inflight_.end() && !it->second.completed) {
+            ev_copy = it->second.event;
+            found = true;
+        }
+    }
 
+    if (found) {
+        // Wait on the per-expert sycl::event (granular, not global queue wait).
+        // This blocks only until THIS expert's H2D DMA completes on dma_queue_.
+        // Mutex is NOT held during the wait, so hint() can proceed concurrently.
+        ev_copy.wait();
+
+        // Re-acquire lock to update state. Re-lookup because the map could
+        // have changed while the lock was released (e.g. cancel_all()).
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = inflight_.find(key);
+        if (it != inflight_.end() && !it->second.completed) {
             it->second.completed = true;
             completed_count_++;
         }

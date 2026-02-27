@@ -35,12 +35,9 @@ namespace ggml_sycl {
 
 // Tracks a single in-flight DMA prefetch operation.
 struct PrefetchRequest {
-    expert_key   key;
-    void *       device_dst = nullptr;  // VRAM slot (from ExpertCache)
-    const void * host_src   = nullptr;  // Host RAM source
-    size_t       bytes      = 0;
-    sycl::event  event;                 // DMA completion event from dma_queue_
-    bool         completed  = false;
+    expert_key  key;
+    sycl::event event;                 // DMA completion event from dma_queue_
+    bool        completed = false;
 };
 
 // Async DMA engine for prefetching MoE expert weights from host RAM to VRAM.
@@ -86,6 +83,20 @@ class ExpertPrefetcher {
 
     // Schedule async prefetch of multiple experts for a layer (non-blocking).
     void hint_batch(int layer_idx, const std::vector<int> & expert_indices);
+
+    // Adaptive prefetch: schedules prefetch for first `threshold` experts at
+    // full precision.  When n_miss_total > burst threshold AND mixed-precision
+    // mode is active, remaining experts are NOT prefetched — they will be
+    // dispatched to CPU compute via cpu_expert_mul_mat_int4() instead.
+    // Returns the indices of experts that should use CPU compute (not prefetched).
+    //
+    // Usage:
+    //   auto cpu_indices = prefetcher.hint_batch_adaptive(layer, experts, n_miss);
+    //   // cpu_indices: experts to dispatch via cpu_expert_mul_mat_int4()
+    //   // remaining: await() as normal (they were prefetched to VRAM)
+    std::vector<int> hint_batch_adaptive(int layer_idx,
+                                         const std::vector<int> & expert_indices,
+                                         int n_miss_total);
 
     // Wait for a specific expert's prefetch to complete and return its VRAM ptr.
     // Waits on the per-expert sycl::event (not a global queue wait).
