@@ -9,6 +9,7 @@
 #include "ggml.h"
 
 #include <atomic>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -593,36 +594,6 @@ bool ggml_backend_buft_is_openvino_host(ggml_backend_buffer_type_t buft) {
     return buft->iface.get_name == ggml_backend_openvino_host_buffer_type_get_name;
 }
 
-// =====================================================
-// OpenVINO Backend Context and Interface
-// =====================================================
-
-struct ggml_backend_openvino_context {
-    int device;               // the device ID currently in use
-    std::string name;         // context Name
-    std::string description;  // context description
-
-    // OpenVINO core components
-    ov::Core core;                             // OpenVINO core interface
-    std::shared_ptr<ov::CompiledModel> model;  // compiled Model
-    ov::InferRequest infer_request;            // inference Request
-
-    // OpenVINO Multi-stream support
-    static const int MAX_STREAMS = 8;       // define the maximum number of flows
-    std::vector<ov::InferRequest> streams;  // used to support multi-stream reasoning
-    int current_stream;                     // the currently active stream index
-
-    // state Management
-    bool is_initialized;  // initialize
-
-    ggml_backend_openvino_context() :
-        device(0),
-        name("OpenVINO"),
-        description("OpenVINO Backend Context"),
-        current_stream(0),
-        is_initialized(false) {}
-};
-
 static void ggml_backend_openvino_free(ggml_backend_t backend) {
     ggml_backend_openvino_context * ctx = (ggml_backend_openvino_context *) backend->context;
     delete ctx;
@@ -635,7 +606,7 @@ static const char * ggml_backend_openvino_get_name(ggml_backend_t backend) {
 }
 
 static enum ggml_status ggml_backend_openvino_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
-    return ov_graph_compute(cgraph);
+    return ov_graph_compute(cgraph, backend);
     GGML_UNUSED(backend);
 }
 
@@ -657,7 +628,7 @@ static const ggml_backend_i ggml_backend_openvino_interface = {
 };
 
 int ggml_backend_openvino_get_device_count() {
-    return ggml_openvino_info().device_count;
+    return 1;
 }
 
 static ggml_guid_t ggml_backend_openvino_guid(void) {
@@ -678,6 +649,17 @@ GGML_BACKEND_API ggml_backend_t ggml_backend_openvino_init(int device) {
         GGML_LOG_ERROR("%s: failed to allocate context\n", __func__);
         return nullptr;
     }
+
+    ctx->runtime_context = std::make_shared<ov_runtime_context>();
+    if (ctx->runtime_context == nullptr) {
+        GGML_LOG_ERROR("%s: failed to allocate runtime context\n", __func__);
+        delete ctx;
+        return nullptr;
+    }
+
+    std::shared_ptr<ov_runtime_context> r_ctx = std::static_pointer_cast<ov_runtime_context>(ctx->runtime_context);
+    r_ctx->device = ggml_openvino_get_device_name();
+    r_ctx->stateful = getenv("GGML_OPENVINO_STATEFUL_EXECUTION") && !ggml_openvino_is_npu();
 
     ggml_backend_t openvino_backend = new ggml_backend{
         /* .guid      = */ ggml_backend_openvino_guid(),
@@ -1059,7 +1041,7 @@ static const char * ggml_backend_openvino_reg_get_name(ggml_backend_reg_t reg) {
 
 static size_t ggml_backend_openvino_reg_get_device_count(ggml_backend_reg_t reg) {
     GGML_UNUSED(reg);
-    return ggml_openvino_info().device_count;
+    return (size_t) ggml_backend_openvino_get_device_count();
 }
 
 static ggml_backend_dev_t ggml_backend_openvino_reg_get_device(ggml_backend_reg_t reg, size_t index) {
@@ -1068,36 +1050,17 @@ static ggml_backend_dev_t ggml_backend_openvino_reg_get_device(ggml_backend_reg_
     return ctx->devices[index];
 }
 
-static void * ggml_backend_openvino_get_proc_address(ggml_backend_reg_t reg, const char * name) {
-    GGML_UNUSED(reg);
-    GGML_UNUSED(name);
-    return nullptr;
-}
-
 static const struct ggml_backend_reg_i ggml_backend_openvino_reg_interface = {
     /* .get_name         = */ ggml_backend_openvino_reg_get_name,
     /* .get_device_count = */ ggml_backend_openvino_reg_get_device_count,
     /* .get_device       = */ ggml_backend_openvino_reg_get_device,
-    /* .get_proc_address = */ ggml_backend_openvino_get_proc_address,
+    /* .get_proc_address = */ NULL,
 };
 
-static int get_openvino_device_count() {
-    return 1;
-}
-
-static ggml_openvino_device_info ggml_openvino_init() {
+static void ggml_openvino_init() {
     // Initialize device config singleton from env var
     ggml_openvino_init_device_config();
     GGML_LOG_INFO("OpenVINO: using device %s\n", ggml_openvino_get_device_name().c_str());
-
-    ggml_openvino_device_info info = {};
-    info.device_count = get_openvino_device_count();
-    return info;
-}
-
-const ggml_openvino_device_info & ggml_openvino_info() {
-    static ggml_openvino_device_info info = ggml_openvino_init();
-    return info;
 }
 
 GGML_BACKEND_API ggml_backend_reg_t ggml_backend_openvino_reg(void) {
@@ -1108,9 +1071,11 @@ GGML_BACKEND_API ggml_backend_reg_t ggml_backend_openvino_reg(void) {
         static std::mutex mutex;
         std::lock_guard<std::mutex> lock(mutex);
         if (!initialized) {
+            ggml_openvino_init();
+
             ggml_backend_openvino_reg_context * ctx = new ggml_backend_openvino_reg_context;
 
-            for (int i = 0; i < ggml_openvino_info().device_count; i++) {
+            for (int i = 0; i < ggml_backend_openvino_get_device_count(); i++) {
                 ggml_backend_openvino_device_context * dev_ctx = new ggml_backend_openvino_device_context;
                 dev_ctx->device = i;
                 dev_ctx->name = GGML_OPENVINO_NAME + std::to_string(i);

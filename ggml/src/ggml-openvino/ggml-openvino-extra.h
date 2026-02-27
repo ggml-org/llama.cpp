@@ -167,3 +167,16 @@ ggml_openvino_tensor_extra * ggml_openvino_create_tensor_extra(const ggml_tensor
 // Register an extra with the tensor's OpenVINO buffer context for proper lifetime management.
 // This sets tensor->extra and tracks the extra in the buffer context for cleanup.
 void ggml_openvino_buffer_register_extra(ggml_tensor * tensor, ggml_openvino_extra_base * extra);
+
+// =====================================================
+// OpenVINO Backend Context and Interface
+// =====================================================
+struct ggml_backend_openvino_context {
+    int device = 0;
+    std::string name = "OpenVINO";
+    std::string description = "OpenVINO Backend Context";
+
+    std::shared_ptr<void> runtime_context = nullptr;
+
+    ggml_backend_openvino_context() = default;
+};
