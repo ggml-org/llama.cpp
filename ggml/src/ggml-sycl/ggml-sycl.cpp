@@ -29103,7 +29103,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                                 break;
                             }
                             ggml_sycl_op_get_rows(ctx, node);
-                            q->wait_and_throw();
+                            // In-order queue: subsequent memcpy serializes after GET_ROWS
                             const int    gr_idx     = get_rows_counter++;
                             const size_t bytes      = ggml_nbytes(node);
                             void *       stable_ptr = kernel.get_rows_stable_ptr(gr_idx, bytes);
@@ -29479,7 +29479,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                                 break;
                             }
                             ggml_sycl_op_get_rows(ctx, node);
-                            q->wait_and_throw();
+                            // In-order queue: subsequent memcpy serializes after GET_ROWS
                             if (ggml_is_contiguous(node) && !ggml_is_permuted(node)) {
                                 const int    gr_idx     = get_rows_counter++;
                                 const size_t bytes      = ggml_nbytes(node);
@@ -30511,9 +30511,7 @@ full_build:
                     // UR_RESULT_ERROR_DEVICE_LOST; pre-executing keeps decode robust while the
                     // persistent GET_ROWS kernel is debugged separately.
                     ggml_sycl_op_get_rows(ctx, node);
-                    // GET_ROWS dispatch is async; ensure the output buffer is ready before
-                    // hashing/copying to a stable pointer for later persistent ops.
-                    q->wait_and_throw();
+                    // In-order queue: trace hash and D2D memcpy serialize after GET_ROWS
                     if (g_sycl_tg_trace_hash) {
                         void * out_ptr = get_tensor_ptr_view_fast(node);
                         ggml_sycl_trace_tensor_hash(ctx, node, out_ptr, "persist-pre", g_sycl_trace_op_index++,
@@ -30532,7 +30530,7 @@ full_build:
                             GGML_LOG_ERROR("[PERSISTENT-TG] GET_ROWS output ptr missing\n");
                             return false;
                         }
-                        q->memcpy(stable_ptr, out_ptr, bytes).wait();
+                        q->memcpy(stable_ptr, out_ptr, bytes);
                         materialized_ptrs[node] = stable_ptr;
                     }
                     executed_get_rows++;
