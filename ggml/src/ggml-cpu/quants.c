@@ -1100,6 +1100,81 @@ void ggml_vec_dot_iq1_s_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
     *s = sumf;
 }
 
+// Q3_KPT vec_dot - similar to Q3_K but with learned levels
+void ggml_vec_dot_q3_kpt_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q3_kpt * GGML_RESTRICT x = vx;
+    const block_q8_K   * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+    const float * levels = q3kpt_get_tensor_levels(vx);
+    GGML_ASSERT(levels != NULL && "Q3_KPT levels not set for tensor");
+
+    const uint32_t kmask1 = 0x03030303;
+    const uint32_t kmask2 = 0x0f0f0f0f;
+
+    float sumf = 0.f;
+    for (int i = 0; i < nb; ++i) {
+        const float d_all = GGML_CPU_FP16_TO_FP32(x[i].d);
+        const float yd = y[i].d;
+        const uint8_t * q = x[i].qs;
+        const uint8_t * hm = x[i].hmask;
+        const int8_t  * q8 = y[i].qs;
+        uint8_t m = 1;
+
+        uint32_t aux32[4];
+        memcpy(aux32, x[i].scales, 12);
+        uint32_t tmp = aux32[2];
+        aux32[2] = ((aux32[0] >> 4) & kmask2) | (((tmp >> 4) & kmask1) << 4);
+        aux32[3] = ((aux32[1] >> 4) & kmask2) | (((tmp >> 6) & kmask1) << 4);
+        aux32[0] = (aux32[0] & kmask2) | (((tmp >> 0) & kmask1) << 4);
+        aux32[1] = (aux32[1] & kmask2) | (((tmp >> 2) & kmask1) << 4);
+        const uint8_t * aux = (const uint8_t *)aux32;
+
+        int is = 0;
+        float block_sum = 0.f;
+        for (int blk = 0; blk < QK_K; blk += 128) {
+            int shift = 0;
+            for (int j = 0; j < 4; ++j) {
+                int sc1 = (int)aux[is] - 32;
+                int sc2 = (int)aux[is+1] - 32;
+                is += 2;
+                float dl1 = d_all * sc1;
+                float dl2 = d_all * sc2;
+
+                float sum1 = 0.f, sum2 = 0.f;
+                for (int l = 0; l < 16; ++l) {
+                    int k_idx = ((q[l+0] >> shift) & 3) + ((hm[l+0] & m) ? 4 : 0);
+                    sum1 += (levels[k_idx] * 7.0f - 4.0f) * (float)q8[l+0];
+                }
+                for (int l = 0; l < 16; ++l) {
+                    int k_idx = ((q[l+16] >> shift) & 3) + ((hm[l+16] & m) ? 4 : 0);
+                    sum2 += (levels[k_idx] * 7.0f - 4.0f) * (float)q8[l+16];
+                }
+                block_sum += dl1 * sum1 + dl2 * sum2;
+
+                shift += 2;
+                m <<= 1;
+                q8 += 32;
+            }
+            q += 32;
+        }
+        sumf += block_sum * yd;
+    }
+    *s = sumf;
+}
+
+void ggml_vec_dot_q3_kpt_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    ggml_vec_dot_q3_kpt_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+}
+
 void ggml_vec_dot_iq1_m_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);

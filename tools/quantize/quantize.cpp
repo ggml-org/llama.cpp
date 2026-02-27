@@ -38,6 +38,7 @@ static const std::vector<quant_option> QUANT_OPTIONS = {
     { "Q2_K_S",   LLAMA_FTYPE_MOSTLY_Q2_K_S,   " 2.96G, +3.1836 ppl @ Llama-3-8B",  },
     { "IQ3_XXS",  LLAMA_FTYPE_MOSTLY_IQ3_XXS,  " 3.06 bpw quantization",            },
     { "Q3_PT",    LLAMA_FTYPE_MOSTLY_Q3_PT,  " 3.25 bpw quantization",            },
+    { "Q3_KPT",   LLAMA_FTYPE_MOSTLY_Q3_KPT,   " Q3_K with learned per-tensor levels" },
     { "IQ3_S",    LLAMA_FTYPE_MOSTLY_IQ3_S,    " 3.44 bpw quantization",            },
     { "IQ3_M",    LLAMA_FTYPE_MOSTLY_IQ3_M,    " 3.66 bpw quantization mix",        },
     { "Q3_K",     LLAMA_FTYPE_MOSTLY_Q3_K_M,   "alias for Q3_K_M"                   },

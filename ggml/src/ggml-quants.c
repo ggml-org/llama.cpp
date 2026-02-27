@@ -4071,16 +4071,495 @@ void quantize_row_iq3_s_ref(const float * GGML_RESTRICT x, block_iq3_s * GGML_RE
     quantize_iq3_s(x, y, 1, k, NULL);
 }
 
-// ====================== Q3_PT: 3.875 bpw per-tensor Lloyd-Max ======================
+// ====================== Q3_KPT: Q3_K with learned per-tensor levels ======================
 //
-// Block format (124 bytes per QK_K=256 elements):
-//   d     (2 bytes): global scale for 16-element sub-block ranges
-//   dmin  (2 bytes): global scale for sub-block neg_mins (-sub_min)
-//   scales[24]     : 32 × 6-bit values (0..15 = ranges, 16..31 = neg_mins)
-//   qs[96]         : 256 × 3-bit indices into 8-entry per-tensor Lloyd-Max level table
+// Block format: Identical to block_q3_K (110 bytes per QK_K=256 elements)
+//   hmask[QK_K/8] : high bit for 3-bit indices
+//   qs[QK_K/4]    : low 2 bits for 3-bit indices
+//   scales[12]    : 6-bit quantized scales
+//   d             : super-block scale
 //
-// Per-tensor: 8 float32 "levels" in [0,1] from Lloyd-Max training on affine-normalized
-// 16-element sub-block values. Stored in GGUF as "q3_pt.levels" (float32 array).
+// The difference from Q3_K: instead of q ∈ {-4,-3,-2,-1,0,1,2,3},
+// we use learned levels L[0..7] and compute: x = d * sc * (L[k] - 4)
+// where k is the 3-bit index.
+//
+// Per-tensor: 8 float32 "levels" in [0,1] from Lloyd-Max training.
+// Stored in GGUF as "q3_kpt.levels" (float32 array).
+
+static float q3kpt_levels[Q3KPT_N_LEVELS];
+static bool  q3kpt_levels_set = false;
+
+GGML_API void q3kpt_set_levels(const float * levels) {
+    memcpy(q3kpt_levels, levels, Q3KPT_N_LEVELS * sizeof(float));
+    q3kpt_levels_set = true;
+}
+
+GGML_API const float * q3kpt_get_levels(void) {
+    return q3kpt_levels_set ? q3kpt_levels : NULL;
+}
+
+GGML_API void q3kpt_free_levels(void) {
+    q3kpt_levels_set = false;
+}
+
+// Per-tensor levels registry for inference
+#define Q3KPT_MAX_TENSORS 1024
+
+typedef struct {
+    const void * data;
+    size_t nbytes;
+    float levels[Q3KPT_N_LEVELS];
+} q3kpt_tensor_entry;
+
+static q3kpt_tensor_entry q3kpt_tensor_registry[Q3KPT_MAX_TENSORS];
+static int q3kpt_tensor_registry_count = 0;
+
+GGML_API void q3kpt_register_tensor_levels(const void * data, size_t nbytes, const float * levels) {
+    if (q3kpt_tensor_registry_count >= Q3KPT_MAX_TENSORS) { return; }
+    for (int i = 0; i < q3kpt_tensor_registry_count; ++i) {
+        if (q3kpt_tensor_registry[i].data == data) {
+            q3kpt_tensor_registry[i].nbytes = nbytes;
+            memcpy(q3kpt_tensor_registry[i].levels, levels, Q3KPT_N_LEVELS * sizeof(float));
+            return;
+        }
+    }
+    q3kpt_tensor_registry[q3kpt_tensor_registry_count].data   = data;
+    q3kpt_tensor_registry[q3kpt_tensor_registry_count].nbytes = nbytes;
+    memcpy(q3kpt_tensor_registry[q3kpt_tensor_registry_count].levels, levels, Q3KPT_N_LEVELS * sizeof(float));
+    q3kpt_tensor_registry_count++;
+}
+
+GGML_API void q3kpt_clear_tensor_levels(void) {
+    q3kpt_tensor_registry_count = 0;
+}
+
+GGML_API const float * q3kpt_get_tensor_levels(const void * data_ptr) {
+    const uint8_t * p = (const uint8_t *)data_ptr;
+    for (int i = 0; i < q3kpt_tensor_registry_count; ++i) {
+        const uint8_t * base = (const uint8_t *)q3kpt_tensor_registry[i].data;
+        if (p >= base && p < base + q3kpt_tensor_registry[i].nbytes) {
+            return q3kpt_tensor_registry[i].levels;
+        }
+    }
+    return q3kpt_get_levels();
+}
+
+// Train levels in the symmetric quantization space
+GGML_API void q3kpt_train_levels(const float * data,
+                                 int64_t       nrow,
+                                 int64_t       n_per_row,
+                                 const float * imatrix,
+                                 float         levels_out[Q3KPT_N_LEVELS]) {
+    // Binning parameters
+    const int   N_BINS     = 8192;
+    const float bin_width  = 1.0f / N_BINS;
+    float *     bin_sum_w  = (float *) calloc(N_BINS, sizeof(float));
+    float *     bin_sum_wt = (float *) calloc(N_BINS, sizeof(float));
+    GGML_ASSERT(bin_sum_w && bin_sum_wt);
+
+    const int nb = (int) (n_per_row / QK_K);
+
+    // Single pass: use simple max_abs/4 scale estimation per sub-block, then bin
+    for (int64_t row = 0; row < nrow; ++row) {
+        const float * xrow = data + row * n_per_row;
+
+        for (int i = 0; i < nb; i++) {
+            const float * x = xrow + i * QK_K;
+
+            for (int j = 0; j < QK_K / 16; ++j) {
+                // Simple symmetric scale: max_abs / 4
+                float amax = 0;
+                for (int l = 0; l < 16; ++l) {
+                    float ax = fabsf(x[16 * j + l]);
+                    if (ax > amax) {
+                        amax = ax;
+                    }
+                }
+                if (amax < 1e-10f) {
+                    continue;
+                }
+
+                float d     = amax / 4.0f;
+                float inv_d = 1.0f / d;
+
+                for (int l = 0; l < 16; ++l) {
+                    float val = x[16 * j + l] * inv_d;
+                    // Map from [-4, 3] symmetric space to [0, 1]
+                    float t = (val + 4.0f) / 7.0f;
+
+                    if (t < 0.0f) {
+                        t = 0.0f;
+                    }
+                    if (t > 1.0f) {
+                        t = 1.0f;
+                    }
+
+                    int bin_idx = (int) (t * N_BINS);
+                    if (bin_idx >= N_BINS) {
+                        bin_idx = N_BINS - 1;
+                    }
+
+                    int   elem = i * QK_K + 16 * j + l;
+                    float w    = imatrix ? imatrix[elem] : 1.0f;
+                    if (w < 1e-10f) {
+                        w = 1e-10f;
+                    }
+                    w *= d * d;
+
+                    bin_sum_w[bin_idx] += w;
+                    bin_sum_wt[bin_idx] += w * t;
+                }
+            }
+        }
+    }
+
+    // Initialize 8 levels uniformly in [0, 1]
+    float levels[Q3KPT_N_LEVELS];
+    for (int k = 0; k < Q3KPT_N_LEVELS; ++k) {
+        levels[k] = (float) k / (Q3KPT_N_LEVELS - 1);
+    }
+
+    // Lloyd-Max iterations on bins
+    for (int iter = 0; iter < 100; ++iter) {
+        float sum_w[Q3KPT_N_LEVELS]  = { 0 };
+        float sum_wt[Q3KPT_N_LEVELS] = { 0 };
+
+        for (int b = 0; b < N_BINS; ++b) {
+            if (bin_sum_w[b] < 1e-12f) {
+                continue;
+            }
+            const float t       = (b + 0.5f) * bin_width;
+            int         best    = 0;
+            float       best_d2 = (t - levels[0]) * (t - levels[0]);
+            for (int k = 1; k < Q3KPT_N_LEVELS; ++k) {
+                float d2 = (t - levels[k]) * (t - levels[k]);
+                if (d2 < best_d2) {
+                    best_d2 = d2;
+                    best    = k;
+                }
+            }
+            sum_w[best] += bin_sum_w[b];
+            sum_wt[best] += bin_sum_wt[b];
+        }
+
+        float max_delta = 0.0f;
+        for (int k = 0; k < Q3KPT_N_LEVELS; ++k) {
+            if (sum_w[k] > 1e-12f) {
+                float new_level = sum_wt[k] / sum_w[k];
+                max_delta       = fmaxf(max_delta, fabsf(new_level - levels[k]));
+                levels[k]       = new_level;
+            }
+        }
+        if (max_delta < 1e-10f) {
+            break;
+        }
+
+        for (int k = 1; k < Q3KPT_N_LEVELS; ++k) {
+            float v = levels[k];
+            int   m = k - 1;
+            while (m >= 0 && levels[m] > v) {
+                levels[m + 1] = levels[m];
+                m--;
+            }
+            levels[m + 1] = v;
+        }
+    }
+
+    memcpy(levels_out, levels, Q3KPT_N_LEVELS * sizeof(float));
+    q3kpt_set_levels(levels);
+    free(bin_sum_w);
+    free(bin_sum_wt);
+}
+
+void dequantize_row_q3_kpt(const block_q3_kpt * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int64_t nb     = k / QK_K;
+    const float * levels = q3kpt_get_tensor_levels(x);
+    GGML_ASSERT(levels != NULL && "Q3_KPT levels not set for tensor");
+
+    // levels are in [0,1], map to approximate [-4, 3] range for Q3_K compatibility
+    // The dequant formula: y = d * sc * (L[k] * 8 - 4) = d * sc * (L[k] - 0.5) * 8
+    // But simpler: store shifted levels and use: y = d * sc * L_shifted[k]
+    // where L_shifted[k] = (L[k] - 0.5) * 8 or just use (L[k] - 4) if L is in [0,7]
+
+    // Actually, let's use: reconstructed = d * sc * (L[k] - 4)
+    // where L[k] is in [0, 7] (shifted from [0,1])
+
+    const uint32_t kmask1 = 0x03030303;
+    const uint32_t kmask2 = 0x0f0f0f0f;
+
+    for (int i = 0; i < nb; i++) {
+        const float     d_all = GGML_FP16_TO_FP32(x[i].d);
+        const uint8_t * q     = x[i].qs;
+        const uint8_t * hm    = x[i].hmask;
+        uint8_t         m     = 1;
+
+        uint32_t aux32[4];
+        memcpy(aux32, x[i].scales, 12);
+        uint32_t tmp        = aux32[2];
+        aux32[2]            = ((aux32[0] >> 4) & kmask2) | (((tmp >> 4) & kmask1) << 4);
+        aux32[3]            = ((aux32[1] >> 4) & kmask2) | (((tmp >> 6) & kmask1) << 4);
+        aux32[0]            = (aux32[0] & kmask2) | (((tmp >> 0) & kmask1) << 4);
+        aux32[1]            = (aux32[1] & kmask2) | (((tmp >> 2) & kmask1) << 4);
+        const uint8_t * aux = (const uint8_t *) aux32;
+
+        int is = 0;
+        for (int n = 0; n < QK_K; n += 128) {
+            int shift = 0;
+            for (int j = 0; j < 4; ++j) {
+                int sc1 = (int) aux[is] - 32;
+                int sc2 = (int) aux[is + 1] - 32;
+                is += 2;
+                float dl1 = d_all * sc1;
+                float dl2 = d_all * sc2;
+
+                for (int l = 0; l < 16; ++l) {
+                    int k_idx = ((q[l + 0] >> shift) & 3) + ((hm[l + 0] & m) ? 4 : 0);
+                    y[l + 0]  = dl1 * (levels[k_idx] * 7.0f - 4.0f);
+                }
+                for (int l = 0; l < 16; ++l) {
+                    int k_idx = ((q[l + 16] >> shift) & 3) + ((hm[l + 16] & m) ? 4 : 0);
+                    y[l + 16] = dl2 * (levels[k_idx] * 7.0f - 4.0f);
+                }
+                y += 32;
+                shift += 2;
+                m <<= 1;
+            }
+            q += 32;
+        }
+    }
+}
+
+// Helper: find optimal symmetric scale for non-uniform mapped levels.
+// Closely mirrors make_qx_quants but uses nearest-mapped-level assignment
+// instead of rounding to nearest integer.
+// mapped_levels[k] = levels[k]*7 - 4, k=0..7.
+// Returns the per-sub-block scale d such that x[i] ≈ d * ml[L[i]].
+// L[i] gets the best level index [0..7].
+static float make_q3kpt_quants(int                         n,
+                               const float * GGML_RESTRICT x,
+                               int8_t * GGML_RESTRICT      L,
+                               const float * GGML_RESTRICT weight,
+                               const float *               mapped_levels) {
+    // Find the most negative and most positive mapped levels
+    float ml_neg = mapped_levels[0], ml_pos = mapped_levels[Q3KPT_N_LEVELS - 1];
+
+    // Precompute boundaries for branchless nearest-level search
+    float bounds[Q3KPT_N_LEVELS - 1];
+    for (int k = 0; k < Q3KPT_N_LEVELS - 1; ++k) {
+        bounds[k] = 0.5f * (mapped_levels[k] + mapped_levels[k + 1]);
+    }
+
+    // Find max absolute value in data (and its sign)
+    float max = 0, amax = 0;
+    for (int i = 0; i < n; ++i) {
+        float ax = fabsf(x[i]);
+        if (ax > amax) {
+            amax = ax;
+            max  = x[i];
+        }
+    }
+    if (amax < GROUP_MAX_EPS) {
+        // Find level closest to 0
+        int   zero_k = 0;
+        float zero_d = fabsf(mapped_levels[0]);
+        for (int k = 1; k < Q3KPT_N_LEVELS; ++k) {
+            if (fabsf(mapped_levels[k]) < zero_d) {
+                zero_d = fabsf(mapped_levels[k]);
+                zero_k = k;
+            }
+        }
+        for (int i = 0; i < n; ++i) {
+            L[i] = zero_k;
+        }
+        return 0.f;
+    }
+
+    float best_scale = 0;
+    float best_obj   = 0;
+    bool  first      = true;
+
+    for (int is = -15; is <= 15; ++is) {
+        float iscales[2] = {
+            -(fabsf(ml_neg) + 0.1f * is) / max,  // map max to ml_neg (Q3_K style)
+            (fabsf(ml_pos) + 0.1f * is) / max    // map max to ml_pos
+        };
+
+        for (int opt = 0; opt < 2; ++opt) {
+            float iscale = iscales[opt];
+
+            float sumlx = 0, suml2 = 0;
+            for (int i = 0; i < n; ++i) {
+                float scaled  = x[i] * iscale;
+                // Branchless nearest level assignment
+                int best_k = (scaled > bounds[0]) + (scaled > bounds[1]) + (scaled > bounds[2]) +
+                             (scaled > bounds[3]) + (scaled > bounds[4]) + (scaled > bounds[5]) + (scaled > bounds[6]);
+                float w = weight ? weight[i] : x[i] * x[i];
+                sumlx += w * x[i] * mapped_levels[best_k];
+                suml2 += w * mapped_levels[best_k] * mapped_levels[best_k];
+            }
+
+            if (suml2 > 0 && (first || sumlx * sumlx > best_obj * suml2)) {
+                float scale = sumlx / suml2;
+                best_obj    = scale * sumlx;
+                best_scale  = scale;
+                first       = false;
+                // Re-assign L with this iscale
+                for (int i = 0; i < n; ++i) {
+                    float scaled  = x[i] * iscale;
+                    int best_k = (scaled > bounds[0]) + (scaled > bounds[1]) + (scaled > bounds[2]) +
+                                 (scaled > bounds[3]) + (scaled > bounds[4]) + (scaled > bounds[5]) + (scaled > bounds[6]);
+                    L[i] = best_k;
+                }
+            }
+        }
+    }
+    return best_scale;
+}
+
+static void quantize_row_q3_kpt_impl(const float * GGML_RESTRICT  x,
+                                     block_q3_kpt * GGML_RESTRICT y,
+                                     int64_t                      n_per_row,
+                                     const float * GGML_RESTRICT  quant_weights) {
+    assert(n_per_row % QK_K == 0);
+    const int     nb     = n_per_row / QK_K;
+    const float * levels = q3kpt_get_levels();
+    GGML_ASSERT(levels != NULL && "Q3_KPT levels not set - call q3kpt_set_levels() first");
+
+    // Precompute mapped levels: ml[k] = levels[k] * 7 - 4
+    float mapped_levels[Q3KPT_N_LEVELS];
+    for (int k = 0; k < Q3KPT_N_LEVELS; ++k) {
+        mapped_levels[k] = levels[k] * 7.0f - 4.0f;
+    }
+
+    // Precompute boundaries for branchless nearest-level search
+    float bounds[Q3KPT_N_LEVELS - 1];
+    for (int k = 0; k < Q3KPT_N_LEVELS - 1; ++k) {
+        bounds[k] = 0.5f * (mapped_levels[k] + mapped_levels[k + 1]);
+    }
+
+    int8_t L[QK_K];
+    float  scales[QK_K / 16];
+    float  weight[16];
+    float  sw[QK_K / 16];
+    int8_t Ls[QK_K / 16];
+
+    for (int i = 0; i < nb; i++) {
+        float sumx2 = 0;
+        for (int j = 0; j < QK_K; ++j) {
+            sumx2 += x[j] * x[j];
+        }
+        float sigma2 = 2 * sumx2 / QK_K;
+
+        // First pass: find per-sub-block scales optimized for mapped levels
+        for (int j = 0; j < QK_K / 16; ++j) {
+            if (quant_weights) {
+                const float * qw = quant_weights + QK_K * i + 16 * j;
+                for (int l = 0; l < 16; ++l) {
+                    weight[l] = qw[l] * sqrtf(sigma2 + x[16 * j + l] * x[16 * j + l]);
+                }
+            } else {
+                for (int l = 0; l < 16; ++l) {
+                    weight[l] = x[16 * j + l] * x[16 * j + l];
+                }
+            }
+            float sumw = 0;
+            for (int l = 0; l < 16; ++l) {
+                sumw += weight[l];
+            }
+            sw[j] = sumw;
+
+            scales[j] = make_q3kpt_quants(16, x + 16 * j, L + 16 * j, weight, mapped_levels);
+        }
+
+        // Two-tier scale quantization (identical to Q3_K)
+        memset(y[i].scales, 0, 12);
+        float d_block = make_qx_quants(QK_K / 16, 32, scales, Ls, 1, sw);
+        for (int j = 0; j < QK_K / 16; ++j) {
+            int l = Ls[j];
+            if (j < 8) {
+                y[i].scales[j] = l & 0xF;
+            } else {
+                y[i].scales[j - 8] |= ((l & 0xF) << 4);
+            }
+            l >>= 4;
+            y[i].scales[j % 4 + 8] |= (l << (2 * (j / 4)));
+        }
+        y[i].d = GGML_FP32_TO_FP16(d_block);
+
+        // Second pass: level assignment using the quantized scales but
+        // assigning nearest LEARNED LEVEL instead of nearest integer
+        int8_t sc;
+        for (int j = 0; j < QK_K / 16; ++j) {
+            sc      = j < 8 ? y[i].scales[j] & 0xF : y[i].scales[j - 8] >> 4;
+            sc      = (sc | (((y[i].scales[8 + j % 4] >> (2 * (j / 4))) & 3) << 4)) - 32;
+            float d = GGML_FP16_TO_FP32(y[i].d) * sc;
+            if (!d) {
+                // Find level closest to 0 for zero-scale sub-blocks
+                int   zero_k    = 0;
+                float zero_dist = fabsf(mapped_levels[0]);
+                for (int k = 1; k < Q3KPT_N_LEVELS; ++k) {
+                    if (fabsf(mapped_levels[k]) < zero_dist) {
+                        zero_dist = fabsf(mapped_levels[k]);
+                        zero_k    = k;
+                    }
+                }
+                for (int ii = 0; ii < 16; ++ii) {
+                    L[16 * j + ii] = zero_k;
+                }
+                continue;
+            }
+            for (int ii = 0; ii < 16; ++ii) {
+                float scaled  = x[16 * j + ii] / d;
+                // Branchless nearest level assignment
+                int best_k = (scaled > bounds[0]) + (scaled > bounds[1]) + (scaled > bounds[2]) +
+                             (scaled > bounds[3]) + (scaled > bounds[4]) + (scaled > bounds[5]) + (scaled > bounds[6]);
+                L[16 * j + ii] = best_k;
+            }
+        }
+
+        // Pack level indices (same bit layout as Q3_K)
+        memset(y[i].hmask, 0, QK_K / 8);
+        int     m  = 0;
+        uint8_t hm = 1;
+        for (int j = 0; j < QK_K; ++j) {
+            if (L[j] > 3) {
+                y[i].hmask[m] |= hm;
+                L[j] -= 4;
+            }
+            if (++m == QK_K / 8) {
+                m = 0;
+                hm <<= 1;
+            }
+        }
+        for (int j = 0; j < QK_K; j += 128) {
+            for (int l = 0; l < 32; ++l) {
+                y[i].qs[j / 4 + l] = L[j + l] | (L[j + l + 32] << 2) | (L[j + l + 64] << 4) | (L[j + l + 96] << 6);
+            }
+        }
+        x += QK_K;
+    }
+}
+
+size_t quantize_q3_kpt(const float * GGML_RESTRICT src,
+                       void * GGML_RESTRICT        dst,
+                       int64_t                     nrow,
+                       int64_t                     n_per_row,
+                       const float *               imatrix) {
+    size_t row_size = ggml_row_size(GGML_TYPE_Q3_KPT, n_per_row);
+    char * qrow     = (char *) dst;
+    for (int64_t row = 0; row < nrow; ++row) {
+        quantize_row_q3_kpt_impl(src, (block_q3_kpt *) qrow, n_per_row, imatrix);
+        src += n_per_row;
+        qrow += row_size;
+    }
+    return nrow * row_size;
+}
+
+void quantize_row_q3_kpt_ref(const float * GGML_RESTRICT x, block_q3_kpt * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    quantize_q3_kpt(x, y, 1, k, NULL);
+}
 
 // Global levels (used during quantization for the current tensor)
 static float q3pt_levels[Q3PT_N_LEVELS];
@@ -5798,6 +6277,10 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_Q3_PT:
             {
                 VALIDATE_ROW_DATA_D_F16_IMPL(block_q3_pt, data, nb);
+            } break;
+        case GGML_TYPE_Q3_KPT:
+            {
+                VALIDATE_ROW_DATA_D_F16_IMPL(block_q3_kpt, data, nb);
             } break;
 
         case GGML_TYPE_I8:

@@ -276,6 +276,7 @@ typedef struct {
 } block_q2_K;
 static_assert(sizeof(block_q2_K) == 2*sizeof(ggml_half) + QK_K/16 + QK_K/4, "wrong q2_K block size/padding");
 
+
 // 3-bit quantization
 // weight is represented as x = a * q
 // 16 blocks of 16 elements each
@@ -304,6 +305,12 @@ typedef struct {
     uint8_t qs[QK_K/2];           // 4--bit quants
 } block_q4_K;
 static_assert(sizeof(block_q4_K) == 2*sizeof(ggml_half) + K_SCALE_SIZE + QK_K/2, "wrong q4_K block size/padding");
+
+// Q3_KPT: Q3_K with learned per-tensor levels
+// Reuses block_q3_K structure but maps 3-bit indices through learned level table
+typedef block_q3_K block_q3_kpt;
+#define Q3KPT_N_LEVELS 8
+
 
 // 5-bit quantization
 // 8 blocks of 32 elements each

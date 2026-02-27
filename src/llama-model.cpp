@@ -22,6 +22,13 @@ extern "C" {
     void            q3pt_clear_tensor_levels(void);
 }
 
+// Q3_KPT levels functions (defined in ggml-quants.c)
+extern "C" {
+    void            q3kpt_set_levels(const float * levels);
+    void            q3kpt_register_tensor_levels(const void * data, size_t nbytes, const float * levels);
+    void            q3kpt_clear_tensor_levels(void);
+}
+
 #include <algorithm>
 #include <cassert>
 #include <cfloat>
@@ -7894,6 +7901,46 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             }
             if (n_registered > 0) {
                 LLAMA_LOG_INFO("%s: registered %d Q3_PT per-tensor level tables\n", __func__, n_registered);
+            }
+        }
+    }
+
+    // Q3_KPT: load per-tensor levels from GGUF metadata and register them.
+    {
+        static const size_t Q3KPT_N_LEVELS = 8;
+        int64_t lv_idx = gguf_find_key(ml.meta.get(), "q3_kpt.levels");
+        if (lv_idx >= 0) {
+            const float * lv_data = (const float *)gguf_get_arr_data(ml.meta.get(), lv_idx);
+            const size_t  lv_len  = gguf_get_arr_n(ml.meta.get(), lv_idx);
+
+            // Build tensor-name to slot index map (GGUF file order = quantizer order)
+            std::unordered_map<std::string, size_t> name_to_slot;
+            {
+                const int64_t n_tensors = gguf_get_n_tensors(ml.meta.get());
+                for (int64_t ti = 0; ti < n_tensors; ++ti) {
+                    name_to_slot[gguf_get_tensor_name(ml.meta.get(), ti)] = (size_t)ti;
+                }
+            }
+
+            q3kpt_clear_tensor_levels();
+            int n_registered = 0;
+
+            for (auto & [ctx, buf_map] : ctx_buf_maps) {
+                for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+                    if (t->type != GGML_TYPE_Q3_KPT || t->data == nullptr) { continue; }
+                    auto it = name_to_slot.find(ggml_get_name(t));
+                    if (it == name_to_slot.end()) { continue; }
+                    const size_t lv_offset = it->second * Q3KPT_N_LEVELS;
+                    if (lv_offset + Q3KPT_N_LEVELS > lv_len) { continue; }
+                    q3kpt_register_tensor_levels(t->data, ggml_nbytes(t), lv_data + lv_offset);
+                    if (n_registered == 0) {
+                        q3kpt_set_levels(lv_data + lv_offset);  // global fallback
+                    }
+                    n_registered++;
+                }
+            }
+            if (n_registered > 0) {
+                LLAMA_LOG_INFO("%s: registered %d Q3_KPT per-tensor level tables\n", __func__, n_registered);
             }
         }
     }
