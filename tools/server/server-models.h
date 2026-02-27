@@ -2,7 +2,6 @@
 
 #include "common.h"
 #include "preset.h"
-#include "http.h"
 #include "server-common.h"
 #include "server-http.h"
 
@@ -185,8 +184,8 @@ public:
                       const std::map<std::string, std::string> & headers,
                       const std::string & body,
                       const std::function<bool()> should_stop,
-                      int32_t timeout_read = 600,
-                      int32_t timeout_write = 600
+                      int32_t timeout_read,
+                      int32_t timeout_write
                       );
     ~server_http_proxy() {
         if (cleanup) {
@@ -201,49 +200,4 @@ private:
         std::string data;
         std::string content_type;
     };
-};
-
-// BELOW IS DEMO CODE FOR PROXY HANDLERS
-// DO NOT MERGE IT AS-IS
-
-static server_http_res_ptr proxy_request(const server_http_req & req, std::string method) {
-    std::string target_url = req.get_param("url");
-    common_http_url parsed_url = common_http_parse_url(target_url);
-
-    if (parsed_url.host.empty()) {
-        throw std::runtime_error("invalid target URL: missing host");
-    }
-
-    if (parsed_url.path.empty()) {
-        parsed_url.path = "/";
-    }
-
-    if (!parsed_url.password.empty()) {
-        throw std::runtime_error("authentication in target URL is not supported");
-    }
-
-    if (parsed_url.scheme != "http" && parsed_url.scheme != "https") {
-        throw std::runtime_error("unsupported URL scheme in target URL: " + parsed_url.scheme);
-    }
-
-    SRV_INF("proxying %s request to %s://%s%s\n", method.c_str(), parsed_url.scheme.c_str(), parsed_url.host.c_str(), parsed_url.path.c_str());
-
-    auto proxy = std::make_unique<server_http_proxy>(
-            method,
-            parsed_url.host,
-            parsed_url.scheme == "http" ? 80 : 443,
-            parsed_url.path,
-            req.headers,
-            req.body,
-            req.should_stop);
-
-    return proxy;
-}
-
-static server_http_context::handler_t proxy_handler_post = [](const server_http_req & req) -> server_http_res_ptr {
-    return proxy_request(req, "POST");
-};
-
-static server_http_context::handler_t proxy_handler_get = [](const server_http_req & req) -> server_http_res_ptr {
-    return proxy_request(req, "GET");
 };

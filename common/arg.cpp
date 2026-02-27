@@ -2811,6 +2811,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_WEBUI_CONFIG_FILE"));
     add_opt(common_arg(
+        {"--webui-cors-proxy"},
+        {"--no-webui-cors-proxy"},
+        string_format("experimental: whether to enable CORS proxy, used by MCP - do not enable in untrusted environments (default: %s)", params.webui_cors_proxy ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.webui_cors_proxy = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_WEBUI_CORS_PROXY"));
+    add_opt(common_arg(
         {"--webui"},
         {"--no-webui"},
         string_format("whether to enable the Web UI (default: %s)", params.webui ? "enabled" : "disabled"),
