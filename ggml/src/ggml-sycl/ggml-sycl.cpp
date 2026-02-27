@@ -221,6 +221,8 @@ static void ggml_sycl_release_host_weight_extras(ggml_sycl_host_weight_release_m
 #include "ggml-sycl/cpu-dispatch.hpp"
 // MoE expert VRAM cache for hybrid GPU+CPU inference
 #include "ggml-sycl/expert-cache.hpp"
+// MoE expert prefetch DMA engine + prediction
+#include "ggml-sycl/expert-prefetch.hpp"
 
 // ---------------------------------------------------------------------------
 // Per-device ExpertCache instances for MoE hybrid GPU+CPU inference.
@@ -234,6 +236,118 @@ static ggml_sycl::ExpertCache * ggml_sycl_get_expert_cache(int device) {
     }
     auto * cache = &g_expert_caches[device];
     return cache->is_initialized() ? cache : nullptr;
+}
+
+// ---------------------------------------------------------------------------
+// Per-device ExpertPrefetcher and ExpertPredictor for MoE hybrid inference.
+// Initialized by moe_hybrid_init_once() on first graph with MUL_MAT_ID nodes.
+// ---------------------------------------------------------------------------
+static ggml_sycl::ExpertPrefetcher g_expert_prefetchers[GGML_SYCL_MAX_DEVICES];
+static ggml_sycl::ExpertPredictor  g_expert_predictors[GGML_SYCL_MAX_DEVICES];
+static std::once_flag              g_moe_hybrid_init_flags[GGML_SYCL_MAX_DEVICES];
+
+// Compute a stable, unique cache layer ID from a tensor name.
+// This ensures each distinct weight tensor (e.g. blk.0.ffn_gate_exps vs
+// blk.0.ffn_up_exps) gets a unique key in the expert cache, even though
+// ggml_sycl_tp_extract_layer_number returns the same block number for both.
+static int moe_cache_layer_id(const char * name) {
+    if (!name) return 0;
+    // FNV-1a 32-bit hash for deterministic, low-collision mapping
+    uint32_t h = 2166136261u;
+    for (const char * p = name; *p; ++p) {
+        h ^= static_cast<uint32_t>(*p);
+        h *= 16777619u;
+    }
+    return static_cast<int>(h & 0x7FFFFFFF);
+}
+
+// Scan a compute graph for MUL_MAT_ID nodes, initialize ExpertCache with
+// expert registrations, and set up prefetcher + predictor.
+// Called once per device via std::call_once.
+static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * cgraph) {
+    const int device = ctx.device;
+    auto & cache     = g_expert_caches[device];
+    sycl::queue & q  = *ctx.stream();
+
+    // Scan graph for MUL_MAT_ID nodes to discover MoE architecture
+    int    n_moe_layers     = 0;
+    int    n_experts_per_layer = 0;
+    size_t expert_weight_bytes = 0;
+
+    struct moe_expert_info {
+        int          layer_id;
+        int          expert_idx;
+        const void * host_ptr;
+        size_t       bytes;
+    };
+    std::vector<moe_expert_info> expert_list;
+
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        const ggml_tensor * node = cgraph->nodes[i];
+        if (node->op != GGML_OP_MUL_MAT_ID) {
+            continue;
+        }
+        const ggml_tensor * src0 = node->src[0];
+        if (!src0 || !src0->data) {
+            continue;
+        }
+
+        // Use name-hash based layer_id so each distinct tensor
+        // (gate/up/down within the same block) gets a unique cache key.
+        int layer_id = moe_cache_layer_id(src0->name);
+
+        const int64_t n_experts = src0->ne[2] > 0 ? src0->ne[2] : 1;
+        const size_t  nb02      = src0->nb[2];
+
+        if (n_experts > n_experts_per_layer) {
+            n_experts_per_layer = static_cast<int>(n_experts);
+        }
+        if (nb02 > expert_weight_bytes) {
+            expert_weight_bytes = nb02;
+        }
+        n_moe_layers++;
+
+        // Register each expert's host pointer
+        for (int e = 0; e < n_experts; e++) {
+            const void * host_ptr = static_cast<const char *>(src0->data)
+                                    + static_cast<size_t>(e) * nb02;
+            expert_list.push_back({ layer_id, e, host_ptr, nb02 });
+        }
+    }
+
+    if (n_moe_layers == 0) {
+        GGML_LOG_INFO("[MOE-HYBRID] No MUL_MAT_ID nodes found, MoE hybrid disabled\n");
+        return;
+    }
+
+    GGML_LOG_INFO("[MOE-HYBRID] Detected MoE: %d layers, %d experts/layer, %.1f KB/expert\n",
+                  n_moe_layers, n_experts_per_layer, expert_weight_bytes / 1024.0);
+
+    // Initialize ExpertCache with default budget (50% remaining VRAM)
+    cache.init(device, 0 /* default budget */, q);
+
+    // Register all experts
+    for (const auto & info : expert_list) {
+        cache.register_expert(info.layer_id, info.expert_idx, info.host_ptr, info.bytes);
+    }
+
+    GGML_LOG_INFO("[MOE-HYBRID] Registered %zu experts, cache slots=%zu, budget=%.1f MB\n",
+                  expert_list.size(), cache.total_slots(),
+                  cache.vram_budget() / (1024.0 * 1024.0));
+
+    // Initialize ExpertPrefetcher
+    auto & prefetcher = g_expert_prefetchers[device];
+    prefetcher.init(q, &cache);
+
+    // Initialize ExpertPredictor (estimate n_experts_used from typical MoE top-K)
+    if (ggml_sycl::ggml_sycl_expert_predict_enabled()) {
+        auto & predictor = g_expert_predictors[device];
+        // Default top-K = min(8, n_experts) — most MoE models use top-2 to top-8
+        int n_experts_used = std::min(8, n_experts_per_layer);
+        predictor.init(n_moe_layers, n_experts_per_layer, n_experts_used);
+        GGML_LOG_INFO("[MOE-HYBRID] Predictor initialized: %d layers, %d experts, top-%d\n",
+                      n_moe_layers, n_experts_per_layer, n_experts_used);
+    }
 }
 
 // Layout-size helpers (defined later).
@@ -23598,19 +23712,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     }
     if (use_expert_cache) {
         const bool is_host_buffer = host_weights;
-        layer_id                  = ggml_sycl_tp_extract_layer_number(src0->name);
-        if (layer_id < 0) {
-            ggml_sycl_cache_id cache_key = ggml_backend_sycl_get_weight_cache_key(src0, ctx.device);
-            if (cache_key.valid) {
-                uint64_t hash = ggml_sycl_hash_combine(static_cast<size_t>(cache_key.model_id),
-                                                       static_cast<size_t>(cache_key.name_hash));
-                hash          = ggml_sycl_hash_combine(hash, static_cast<size_t>(cache_key.aux_id));
-                layer_id      = static_cast<int>(hash & 0x7FFFFFFF);
-            } else {
-                layer_id = static_cast<int>(reinterpret_cast<uintptr_t>(ggml_sycl_get_data_ptr(src0, ctx.device)) &
-                                            0x7FFFFFFF);
-            }
-        }
+        // Use name-hash layer_id to match moe_hybrid_init_once() registrations.
+        // This ensures each tensor (gate/up/down) maps to a unique cache key.
+        layer_id = moe_cache_layer_id(src0->name);
         GGML_SYCL_DEBUG("[MoE] Using expert cache for %s (layer=%d, host_buf=%d, ptr_type=%d)\n", src0->name, layer_id,
                         is_host_buffer, (int) ptr_type);
     }
@@ -23841,13 +23945,51 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
         moe_hybrid_val = moe_hybrid_enabled.load(std::memory_order_acquire);
     }
 
-    const bool moe_hybrid_active = (moe_hybrid_val != 0) && use_expert_cache && (ne12 == 1);
+    // MoE hybrid dispatch requires CPU fallback for cache misses.
+    // Only enable for types that have vec_dot CPU support (Q4_0, Q8_0, etc.).
+    // Types like MXFP4 lack CPU vec_dot and produce zero outputs.
+    const auto * cpu_traits_check = ggml_get_type_traits_cpu(src0->type);
+    const bool   cpu_type_ok      = cpu_traits_check && cpu_traits_check->vec_dot;
+    const bool moe_hybrid_active = (moe_hybrid_val != 0) && use_expert_cache && (ne12 == 1) && cpu_type_ok;
+
+    // Expert cache stores raw AOS bytes (no layout conversion during H2D).
+    // Force AOS layout so the GPU kernel interprets the data correctly.
+    if (moe_hybrid_active && route_layout != GGML_LAYOUT_AOS) {
+        route_layout                   = GGML_LAYOUT_AOS;
+        local_extra.optimized_feature  = optimize_feature(reorder_mode::NONE);
+        local_extra.layout.mode        = GGML_LAYOUT_AOS;
+    }
 
     if (ne12 == 1) {
         // ---------------------------------------------------------------
         // Hybrid dispatch: partition experts into GPU (staged) + CPU (miss)
         // ---------------------------------------------------------------
         if (moe_hybrid_active) {
+            // Hybrid dispatch uses host sync (future.get, stream.wait) which
+            // is incompatible with SYCL graph recording.
+            ctx.moe_graphs_disabled_once = true;
+
+            // --- Expert prediction + prefetch (T6 + T3 integration) ---
+            // Predict which experts will be needed and prefetch cache misses
+            // while GPU is still computing attention for this layer.
+            auto & prefetcher = g_expert_prefetchers[ctx.device];
+            auto & predictor  = g_expert_predictors[ctx.device];
+            if (predictor.is_active() && prefetcher.is_active()) {
+                auto predicted = predictor.predict(layer_id);
+                prefetcher.hint_batch(layer_id, predicted);
+            }
+
+            // Await any in-flight prefetches for this layer before dispatch
+            if (prefetcher.is_active()) {
+                // Read actual router selections from ids tensor
+                for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
+                    for (int64_t id = 0; id < n_ids; id++) {
+                        const int32_t eid = ids_host[static_cast<size_t>(iid1 * n_ids + id)];
+                        prefetcher.await(layer_id, eid);
+                    }
+                }
+            }
+
             // Partition experts using ExpertCache::lookup() -- the source of
             // truth for whether an expert's weights are in device VRAM.
             auto * expert_cache = ggml_sycl_get_expert_cache(ctx.device);
@@ -23889,14 +24031,14 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             }
 
             // Update access scores for all dispatched experts
+            static std::atomic<uint64_t> moe_token_counter{0};
+            moe_token_counter.fetch_add(1, std::memory_order_relaxed);
             if (expert_cache) {
-                static std::atomic<uint64_t> token_counter{0};
-                token_counter.fetch_add(1, std::memory_order_relaxed);
                 for (const auto & e : gpu_entries) {
-                    expert_cache->update_score(layer_id, e.expert_id, token_counter);
+                    expert_cache->update_score(layer_id, e.expert_id, moe_token_counter);
                 }
                 for (const auto & e : cpu_entries) {
-                    expert_cache->update_score(layer_id, e.expert_id, token_counter);
+                    expert_cache->update_score(layer_id, e.expert_id, moe_token_counter);
                 }
             }
 
@@ -24032,6 +24174,34 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             }
             if (cpu_output_pinned) {
                 sycl::free(cpu_output_pinned, stream->get_context());
+            }
+
+            // --- Record actual expert selections (T6 + T7 integration) ---
+            // Feed actual router selections to predictor for accuracy tracking
+            // and to expert cache for co-activation scoring / warm-start.
+            {
+                // Collect unique expert IDs from all dispatched entries
+                std::vector<int> actual_experts;
+                actual_experts.reserve(gpu_entries.size() + cpu_entries.size());
+                for (const auto & e : gpu_entries) {
+                    actual_experts.push_back(e.expert_id);
+                }
+                for (const auto & e : cpu_entries) {
+                    actual_experts.push_back(e.expert_id);
+                }
+
+                // Record for predictor accuracy tracking
+                if (predictor.is_active()) {
+                    predictor.record_actual(layer_id, actual_experts);
+                }
+
+                // Record for cache co-activation scoring and warm-start
+                if (expert_cache && !actual_experts.empty()) {
+                    expert_cache->record_access_batch(
+                        layer_id, actual_experts.data(),
+                        static_cast<int>(actual_experts.size()),
+                        moe_token_counter.load(std::memory_order_relaxed));
+                }
             }
 
         } else {
@@ -26484,6 +26654,29 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
             g_layer_map_initialized.store(true, std::memory_order_release);
         }
     }
+    // MoE hybrid initialization: detect MUL_MAT_ID nodes and initialize
+    // ExpertCache, ExpertPrefetcher, and ExpertPredictor on first graph compute.
+    {
+        static std::atomic<int> moe_hybrid_gate{ -1 };
+        int gate_val = moe_hybrid_gate.load(std::memory_order_acquire);
+        if (gate_val < 0) {
+            const char * env = getenv("GGML_SYCL_MOE_HYBRID");
+            int new_val = env ? atoi(env) : 0;
+            moe_hybrid_gate.compare_exchange_strong(gate_val, new_val,
+                                                     std::memory_order_release,
+                                                     std::memory_order_acquire);
+            gate_val = moe_hybrid_gate.load(std::memory_order_acquire);
+        }
+        if (gate_val != 0) {
+            const int dev = sycl_ctx->device;
+            if (dev >= 0 && dev < GGML_SYCL_MAX_DEVICES) {
+                std::call_once(g_moe_hybrid_init_flags[dev], [&]() {
+                    moe_hybrid_init_once(*sycl_ctx, cgraph);
+                });
+            }
+        }
+    }
+
     // Increment pass ID for TP FFN norm cache (detects stale cached data)
     if (g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1) {
         ggml_sycl_tp_new_pass();
