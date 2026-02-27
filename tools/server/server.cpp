@@ -199,7 +199,7 @@ int main(int argc, char ** argv) {
     ctx_http.get ("/slots",               ex_wrapper(routes.get_slots));
     ctx_http.post("/slots/:id_slot",      ex_wrapper(routes.post_slots));
     // CORS proxy (EXPERIMENTAL, only used by the Web UI for MCP)
-    if (params.webui_cors_proxy) {
+    if (params.webui_mcp_proxy) {
         SRV_WRN("%s", "-----------------\n");
         SRV_WRN("%s", "CORS proxy is enabled, do not expose server to untrusted environments\n");
         SRV_WRN("%s", "This feature is EXPERIMENTAL and may be removed or changed in future versions\n");
