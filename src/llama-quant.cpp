@@ -261,17 +261,20 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
 }
 
 // incompatible tensor shapes are handled here - fallback to a compatible type
-static ggml_type tensor_type_fallback(quantization_state_impl * qs, const ggml_tensor * t, const ggml_type new_type) {
-    ggml_type return_type = new_type;
+static ggml_type tensor_type_fallback(quantization_state_impl * qs, const ggml_tensor * t, const ggml_type target_type) {
+
+    ggml_type return_type = target_type;
+
     const int64_t nx = t->ne[0];
     const int64_t ny = t->ne[1];
-    const int64_t qk_k = ggml_blck_size(new_type);
+    const int64_t qk_k = ggml_blck_size(target_type);
+
     if (nx % qk_k != 0) { // this tensor's shape is incompatible with this quant
         LLAMA_LOG_WARN("\n%s: tensor %s: shape [%" PRId64 ", %" PRId64 "] not divisible by %" PRId64 ", required for type %s; ",
-                        __func__, t->name, nx, ny, qk_k, ggml_type_name(new_type));
+                        __func__, t->name, nx, ny, qk_k, ggml_type_name(target_type));
         ++qs->n_fallback;
 
-        switch (new_type) {
+        switch (target_type) {
             // types on the left: block size 256
             case GGML_TYPE_IQ1_S:
             case GGML_TYPE_IQ1_M:
@@ -288,19 +291,18 @@ static ggml_type tensor_type_fallback(quantization_state_impl * qs, const ggml_t
             case GGML_TYPE_Q4_K:    return_type = GGML_TYPE_Q5_0;   break;
             case GGML_TYPE_Q5_K:    return_type = GGML_TYPE_Q5_1;   break;
             case GGML_TYPE_Q6_K:    return_type = GGML_TYPE_Q8_0;   break;
-            // not supported here
             default:
                 throw std::runtime_error(format(
                     "no tensor type fallback is defined for the specified type: %s",
-                    ggml_type_name(return_type)));
+                    ggml_type_name(target_type)));
         }
-        if (nx % ggml_blck_size(new_type) != 0) {
+        if (nx % ggml_blck_size(return_type) != 0) {
             //
-            // it is very rare that tensor colums are not divisible by 32,
-            // so in the vast majority of cases, we never reach this.
+            // the fallback return type is still not compatible for this tensor!
             //
-            // if you are seeing this message a lot, consider updating
-            // `tensor_allows_quantization` so this path never sees this tensor
+            // likely, this tensor's first dimension is not divisible by 32.
+            // this is very rare. we can either abort the quantization, or
+            // fallback to F16 / F32.
             //
             LLAMA_LOG_WARN("(WARNING: falling back to F16 due to unusual shape) ");
             return_type = GGML_TYPE_F16;
@@ -309,8 +311,8 @@ static ggml_type tensor_type_fallback(quantization_state_impl * qs, const ggml_t
     return return_type;
 }
 
-// internal standard logic for selecting the target tensor type for a specific
-// quantization mixture and model architecture
+// internal standard logic for selecting the target tensor type for a given
+// tensor, ftype, and model arch
 static ggml_type llama_tensor_get_type_impl(
     quantization_state_impl * qs,
                   ggml_type   new_type,
@@ -577,14 +579,14 @@ static ggml_type llama_tensor_get_type(
         return tensor->type; // if quantization not allowed, just return the current type
     }
 
-    ggml_type new_type = default_type;
-
     if (params->token_embedding_type < GGML_TYPE_COUNT && tensor_name_match_token_embd(tensor->name)) {
         return params->token_embedding_type;
     }
     if (params->output_tensor_type < GGML_TYPE_COUNT && strcmp(tensor->name, "output.weight") == 0) {
         return params->output_tensor_type;
     }
+
+    ggml_type new_type = default_type;
 
     // get more optimal quantization type based on the tensor shape, layer, etc.
     if (!params->pure && ggml_is_quantized(default_type)) {
@@ -604,12 +606,12 @@ static ggml_type llama_tensor_get_type(
             }
         }
 
-        // if not manual - use the standard logic for choosing the quantization type based on the selected mixture
+        // if not manual - use the standard logic for choosing the quantization type
         if (!manual) {
             new_type = llama_tensor_get_type_impl(qs, new_type, tensor, params->ftype);
         }
 
-        // fallback to a compatible type if necessary
+        // fallback to a compatible type if necessary based on tensor shape
         new_type = tensor_type_fallback(qs, tensor, new_type);
     }
     return new_type;
@@ -892,6 +894,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     model.load_hparams(ml);
     model.load_stats  (ml);
 
+    // quantization state
     auto qs = std::make_unique<quantization_state_impl>(model, params);
 
     // these need to be set to n_layer by default
@@ -1115,7 +1118,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     std::vector<no_init<uint8_t>> work;
     std::vector<no_init<float>> f32_conv_buf;
 
-    // pre-allocate work buffers to avoid repeated resizing (things are slow otherwise)
+    // pre-allocate work buffers to avoid repeated resizing
     {
         size_t max_tensor_bytes    = 0;
         size_t max_nelements       = 0;
@@ -1292,8 +1295,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     }
 
     if (qs->n_fallback > 0) {
-        LLAMA_LOG_WARN("%s: WARNING: %d tensor(s) required fallback quantization\n",
-                       __func__, qs->n_fallback);
+        LLAMA_LOG_WARN("%s: WARNING: %d of %d tensor(s) required fallback quantization\n",
+                       __func__, qs->n_fallback, ml.n_tensors);
     }
 }
 
