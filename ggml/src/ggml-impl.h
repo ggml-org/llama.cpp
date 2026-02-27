@@ -98,6 +98,10 @@ static bool ggml_op_is_empty(enum ggml_op op) {
     }
 }
 
+static inline bool ggml_impl_is_view(const struct ggml_tensor * t) {
+    return t->view_src != NULL;
+}
+
 static inline float ggml_compute_softplus_f32(float input) {
     return (input > 20.0f) ? input : logf(1 + expf(input));
 }
@@ -609,6 +613,9 @@ static inline bool ggml_can_fuse_ext(const struct ggml_cgraph * cgraph, const in
 
         struct ggml_tensor * node = cgraph->nodes[node_idxs[i]];
         if (node->op != ops[i]) {
+            return false;
+        }
+        if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
             return false;
         }
         if (i < num_ops - 1 && !ggml_node_has_n_uses(cgraph, node_idxs[i], 1)) {

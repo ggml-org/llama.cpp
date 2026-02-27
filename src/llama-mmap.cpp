@@ -265,7 +265,8 @@ struct llama_file::impl {
                         continue;  // Interrupted by signal, retry
                     }
                     // Fallback to std::fread in case the DMA controller cannot access the buffer
-                    if (errno == EFAULT) {
+                    if (errno == EFAULT || errno == EINVAL) {
+                        LLAMA_LOG_WARN("%s: Falling back to buffered IO due to %s\n", __func__, strerror(errno));
                         auto curr_off = tell();
                         close(fd);
                         fd = -1;
@@ -384,6 +385,9 @@ int llama_file::file_id() const {
 #ifdef _WIN32
     return _fileno(pimpl->fp);
 #else
+    if (pimpl->fd != -1) {
+        return pimpl->fd;
+    }
 #if defined(fileno)
     return fileno(pimpl->fp);
 #else
@@ -500,6 +504,8 @@ struct llama_mmap::impl {
         }
     }
 #elif defined(_WIN32)
+    HANDLE hMapping = nullptr;
+
     impl(struct llama_file * file, size_t prefetch, bool numa) {
         GGML_UNUSED(numa);
 
@@ -507,7 +513,7 @@ struct llama_mmap::impl {
 
         HANDLE hFile = (HANDLE) _get_osfhandle(file->file_id());
 
-        HANDLE hMapping = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
+        hMapping = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
 
         if (hMapping == NULL) {
             DWORD error = GetLastError();
@@ -516,9 +522,9 @@ struct llama_mmap::impl {
 
         addr = MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0);
         DWORD error = GetLastError();
-        CloseHandle(hMapping);
 
         if (addr == NULL) {
+            CloseHandle(hMapping);
             throw std::runtime_error(format("MapViewOfFile failed: %s", llama_format_win_err(error).c_str()));
         }
 
@@ -550,9 +556,17 @@ struct llama_mmap::impl {
     }
 
     ~impl() {
-        if (!UnmapViewOfFile(addr)) {
-            LLAMA_LOG_WARN("warning: UnmapViewOfFile failed: %s\n",
-                    llama_format_win_err(GetLastError()).c_str());
+        if (hMapping) {
+            if (addr) {
+                if (!UnmapViewOfFile(addr)) {
+                    LLAMA_LOG_WARN("warning: UnmapViewOfFile failed: %s\n",
+                            llama_format_win_err(GetLastError()).c_str());
+                }
+            }
+            if (!CloseHandle(hMapping)) {
+                LLAMA_LOG_WARN("warning: CloseHandle failed: %s\n",
+                        llama_format_win_err(GetLastError()).c_str());
+            }
         }
     }
 #else

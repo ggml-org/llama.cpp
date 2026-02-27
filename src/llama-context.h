@@ -4,6 +4,7 @@
 #include "llama-cparams.h"
 #include "llama-graph.h"
 #include "llama-adapter.h"
+#include "llama-impl.h"
 
 #include "ggml-cpp.h"
 #include "ggml-opt.h"
@@ -39,6 +40,14 @@ struct llama_context {
                   llama_context_params params);
 
     ~llama_context();
+
+    // reserve a new backend scheduler (if needed)
+    // for example, when:
+    //   - changing loras
+    //   - changing samplers
+    //   - changing attention type
+    //   - etc.
+    void sched_reserve();
 
     void synchronize();
 
@@ -96,16 +105,11 @@ struct llama_context {
     void set_causal_attn(bool value);
     void set_warmup(bool value);
 
-    void set_adapter_lora(
-            llama_adapter_lora * adapter,
-            float scale);
+    void set_adapters_lora(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
 
-    bool rm_adapter_lora(
-            llama_adapter_lora * adapter);
+    bool adapters_lora_are_same(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
 
-    void clear_adapter_lora();
-
-    bool apply_adapter_cvec(
+    bool set_adapter_cvec(
             const float * data,
                  size_t   len,
                 int32_t   n_embd,
@@ -204,7 +208,7 @@ private:
 
     // Make sure enough space is available for outputs.
     // Returns max number of outputs for which space was reserved.
-    uint32_t output_reserve(int32_t n_outputs, const llama_batch & batch);
+    uint32_t output_reserve(int32_t n_outputs);
 
     void output_reorder();
 
@@ -252,43 +256,36 @@ private:
 
     const llama_model & model;
 
-    llama_cparams       cparams;
-    llama_adapter_cvec  cvec;
-    llama_adapter_loras loras;
+    llama_cparams cparams;
+
+    llama_adapter_cvec_ptr  cvec;
+    llama_adapter_loras_ptr loras;
 
     llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
 
     std::unique_ptr<llama_memory_i> memory;
 
     // decode output (2-dimensional array: [n_outputs][n_vocab])
-    size_t  logits_size = 0; // capacity (of floats) for logits
-    float * logits      = nullptr;
+    buffer_view<float> logits = {nullptr, 0};
 
     // embeddings output (2-dimensional array: [n_outputs][n_embd])
     // populated only when pooling_type == LLAMA_POOLING_TYPE_NONE
-    size_t  embd_size = 0; // capacity (of floats) for embeddings
-    float * embd      = nullptr;
+    buffer_view<float> embd = {nullptr, 0};
 
-    // TODO: simplify
     struct sampling_info {
+        // !samplers.empty() to check if any samplers are active
         std::map<llama_seq_id, llama_sampler *> samplers;
 
-        float       * logits      = nullptr;
-        size_t        logits_size = 0;
-
-        llama_token * sampled      = nullptr;
-        size_t        sampled_size = 0;
-
-        float       * probs        = nullptr;
-        size_t        probs_size   = 0;
-
-        llama_token * candidates   = nullptr;
-        size_t        candidates_size = 0;
+        buffer_view<float>       logits     = {nullptr, 0};
+        buffer_view<llama_token> sampled    = {nullptr, 0};
+        buffer_view<float>       probs      = {nullptr, 0};
+        buffer_view<llama_token> candidates = {nullptr, 0};
 
         std::vector<uint32_t> logits_count;
         std::vector<uint32_t> probs_count;
         std::vector<uint32_t> candidates_count;
 
+        // optimization
         std::vector<llama_token> token_ids_full_vocab;
     };
 
@@ -313,6 +310,8 @@ private:
     std::vector<swap_info> output_swaps;
 
     ggml_backend_sched_ptr sched;
+
+    bool sched_need_reserve = true;
 
     ggml_backend_t backend_cpu = nullptr;
     std::vector<ggml_backend_ptr> backends;

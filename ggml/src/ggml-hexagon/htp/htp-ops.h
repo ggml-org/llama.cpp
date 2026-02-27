@@ -4,10 +4,11 @@
 #include "htp-ctx.h"
 #include "htp-msg.h"
 #include "worker-pool.h"
-#include "ops-utils.h"
 
 #include <assert.h>
 #include <stdint.h>
+
+#include <hex-fastdiv.h>
 
 // ggml-common.h must be included prior to this header
 
@@ -43,37 +44,6 @@ struct htp_ops_context {
     uint32_t src0_nrows_per_thread;
     uint32_t src1_nrows_per_thread;
 
-    struct fastdiv_values src0_div1;  // fastdiv values for ne1
-    struct fastdiv_values src0_div2;  // fastdiv values for ne2
-    struct fastdiv_values src0_div3;  // fastdiv values for ne3
-    struct fastdiv_values src0_div21; // fastdiv values for ne2 * ne1
-
-    struct fastdiv_values src1_div1;  // fastdiv values for ne1
-    struct fastdiv_values src1_div2;  // fastdiv values for ne2
-    struct fastdiv_values src1_div3;  // fastdiv values for ne3
-    struct fastdiv_values src1_div21; // fastdiv values for ne2 * ne1
-
-    struct fastdiv_values src3_div1;  // fastdiv values for ne1
-    struct fastdiv_values src3_div2;  // fastdiv values for ne2
-    struct fastdiv_values src3_div3;  // fastdiv values for ne3
-    struct fastdiv_values src3_div21; // fastdiv values for ne2 * ne1
-
-    struct fastdiv_values broadcast_rk2;
-    struct fastdiv_values broadcast_rk3;
-    struct fastdiv_values broadcast_rv2;
-    struct fastdiv_values broadcast_rv3;
-
-    struct fastdiv_values mm_div_ne12_ne1; // fastdiv values for ne12 * ne1
-    struct fastdiv_values mm_div_ne1;      // fastdiv values for ne1
-    struct fastdiv_values mm_div_r2;       // fastdiv values for ne12 / ne02
-    struct fastdiv_values mm_div_r3;       // fastdiv values for ne13 / ne03
-
-    struct fastdiv_values set_rows_div_ne12; // fastdiv values for ne12
-    struct fastdiv_values set_rows_div_ne11; // fastdiv values for ne11
-
-    struct fastdiv_values get_rows_div_ne10;      // fastdiv values for ne10
-    struct fastdiv_values get_rows_div_ne10_ne11; // fastdiv values for ne10 * ne11
-
     uint32_t flags;
 };
 
@@ -81,6 +51,7 @@ int op_matmul(struct htp_ops_context * octx);
 int op_matmul_id(struct htp_ops_context * octx);
 int op_binary(struct htp_ops_context * octx);
 int op_unary(struct htp_ops_context * octx);
+int op_sum_rows(struct htp_ops_context * octx);
 int op_activations(struct htp_ops_context * octx);
 int op_softmax(struct htp_ops_context * octx);
 int op_add_id(struct htp_ops_context * octx);
@@ -88,5 +59,7 @@ int op_rope(struct htp_ops_context * octx);
 int op_flash_attn_ext(struct htp_ops_context * octx);
 int op_set_rows(struct htp_ops_context * octx);
 int op_get_rows(struct htp_ops_context * octx);
+int op_cpy(struct htp_ops_context * octx);
+int op_argsort(struct htp_ops_context * octx);
 
 #endif /* HTP_OPS_H */

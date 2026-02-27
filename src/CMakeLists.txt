@@ -24,13 +24,14 @@ add_library(llama
             llama-kv-cache-iswa.cpp
             llama-memory.cpp
             llama-memory-hybrid.cpp
+            llama-memory-hybrid-iswa.cpp
             llama-memory-recurrent.cpp
             llama-mmap.cpp
             llama-model-loader.cpp
             llama-model-saver.cpp
             llama-model.cpp
             llama-quant.cpp
-            llama-sampling.cpp
+            llama-sampler.cpp
             llama-vocab.cpp
             unicode-data.cpp
             unicode.cpp
@@ -56,13 +57,15 @@ add_library(llama
             models/deci.cpp
             models/deepseek.cpp
             models/deepseek2.cpp
+            models/delta-net-base.cpp
             models/dots1.cpp
             models/dream.cpp
             models/ernie4-5-moe.cpp
             models/ernie4-5.cpp
+            models/eurobert.cpp
+            models/exaone-moe.cpp
             models/exaone.cpp
             models/exaone4.cpp
-            models/exaone-moe.cpp
             models/falcon-h1.cpp
             models/falcon.cpp
             models/gemma-embedding.cpp
@@ -82,17 +85,21 @@ add_library(llama
             models/hunyuan-moe.cpp
             models/internlm2.cpp
             models/jais.cpp
+            models/jais2.cpp
             models/jamba.cpp
+            models/kimi-linear.cpp
             models/lfm2.cpp
             models/llada-moe.cpp
             models/llada.cpp
             models/llama-iswa.cpp
             models/llama.cpp
             models/maincoder.cpp
+            models/mamba-base.cpp
             models/mamba.cpp
             models/mimo2-iswa.cpp
             models/minicpm3.cpp
             models/minimax-m2.cpp
+            models/mistral3.cpp
             models/modern-bert.cpp
             models/mpt.cpp
             models/nemotron-h.cpp
@@ -104,6 +111,7 @@ add_library(llama
             models/openai-moe-iswa.cpp
             models/openelm.cpp
             models/orion.cpp
+            models/paddleocr.cpp
             models/pangu-embedded.cpp
             models/phi2.cpp
             models/phi3.cpp
@@ -116,10 +124,12 @@ add_library(llama
             models/qwen2moe.cpp
             models/qwen2vl.cpp
             models/qwen3.cpp
-            models/qwen3vl.cpp
-            models/qwen3vl-moe.cpp
+            models/qwen35.cpp
+            models/qwen35moe.cpp
             models/qwen3moe.cpp
             models/qwen3next.cpp
+            models/qwen3vl-moe.cpp
+            models/qwen3vl.cpp
             models/refact.cpp
             models/rnd1.cpp
             models/rwkv6-base.cpp
@@ -133,12 +143,11 @@ add_library(llama
             models/stablelm.cpp
             models/starcoder.cpp
             models/starcoder2.cpp
+            models/step35-iswa.cpp
             models/t5-dec.cpp
             models/t5-enc.cpp
             models/wavtokenizer-dec.cpp
             models/xverse.cpp
-            models/mistral3.cpp
-            models/graph-context-mamba.cpp
             )
 
 set_target_properties(llama PROPERTIES

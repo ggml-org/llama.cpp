@@ -19,12 +19,7 @@
 #include <thread>
 #include <vector>
 
-#if defined(LLAMA_USE_CURL)
-#include <curl/curl.h>
-#include <curl/easy.h>
-#elif defined(LLAMA_USE_HTTPLIB)
 #include "http.h"
-#endif
 
 #ifndef __EMSCRIPTEN__
 #ifdef __linux__
@@ -117,44 +112,18 @@ static void write_etag(const std::string & path, const std::string & etag) {
 }
 
 static std::string read_etag(const std::string & path) {
-    std::string none;
     const std::string etag_path = path + ".etag";
-
-    if (std::filesystem::exists(etag_path)) {
-        std::ifstream etag_in(etag_path);
-        if (!etag_in) {
-            LOG_ERR("%s: could not open .etag file for reading: %s\n", __func__, etag_path.c_str());
-            return none;
-        }
-        std::string etag;
-        std::getline(etag_in, etag);
-        return etag;
+    if (!std::filesystem::exists(etag_path)) {
+        return {};
     }
-
-    // no etag file, but maybe there is an old .json
-    // remove this code later
-    const std::string metadata_path = path + ".json";
-
-    if (std::filesystem::exists(metadata_path)) {
-        std::ifstream metadata_in(metadata_path);
-        try {
-            nlohmann::json metadata_json;
-            metadata_in >> metadata_json;
-            LOG_DBG("%s: previous metadata file found %s: %s\n", __func__, metadata_path.c_str(),
-                    metadata_json.dump().c_str());
-            if (metadata_json.contains("etag") && metadata_json.at("etag").is_string()) {
-                std::string etag = metadata_json.at("etag");
-                write_etag(path, etag);
-                if (!std::filesystem::remove(metadata_path)) {
-                    LOG_WRN("%s: failed to delete old .json metadata file: %s\n", __func__, metadata_path.c_str());
-                }
-                return etag;
-            }
-        } catch (const nlohmann::json::exception & e) {
-            LOG_ERR("%s: error reading metadata file %s: %s\n", __func__, metadata_path.c_str(), e.what());
-        }
+    std::ifstream etag_in(etag_path);
+    if (!etag_in) {
+        LOG_ERR("%s: could not open .etag file for reading: %s\n", __func__, etag_path.c_str());
+        return {};
     }
-    return none;
+    std::string etag;
+    std::getline(etag_in, etag);
+    return etag;
 }
 
 static bool is_http_status_ok(int status) {
@@ -170,337 +139,6 @@ std::pair<std::string, std::string> common_download_split_repo_tag(const std::st
     }
     return {hf_repo, tag};
 }
-
-#ifdef LLAMA_USE_CURL
-
-//
-// CURL utils
-//
-
-using curl_ptr = std::unique_ptr<CURL, decltype(&curl_easy_cleanup)>;
-
-// cannot use unique_ptr for curl_slist, because we cannot update without destroying the old one
-struct curl_slist_ptr {
-    struct curl_slist * ptr = nullptr;
-    ~curl_slist_ptr() {
-        if (ptr) {
-            curl_slist_free_all(ptr);
-        }
-    }
-};
-
-static CURLcode common_curl_perf(CURL * curl) {
-    CURLcode res = curl_easy_perform(curl);
-    if (res != CURLE_OK) {
-        LOG_ERR("%s: curl_easy_perform() failed\n", __func__);
-    }
-
-    return res;
-}
-
-// Send a HEAD request to retrieve the etag and last-modified headers
-struct common_load_model_from_url_headers {
-    std::string etag;
-    std::string last_modified;
-    std::string accept_ranges;
-};
-
-struct FILE_deleter {
-    void operator()(FILE * f) const { fclose(f); }
-};
-
-static size_t common_header_callback(char * buffer, size_t, size_t n_items, void * userdata) {
-    common_load_model_from_url_headers * headers = (common_load_model_from_url_headers *) userdata;
-    static std::regex                    header_regex("([^:]+): (.*)\r\n");
-    static std::regex                    etag_regex("ETag", std::regex_constants::icase);
-    static std::regex                    last_modified_regex("Last-Modified", std::regex_constants::icase);
-    static std::regex                    accept_ranges_regex("Accept-Ranges", std::regex_constants::icase);
-    std::string                          header(buffer, n_items);
-    std::smatch                          match;
-    if (std::regex_match(header, match, header_regex)) {
-        const std::string & key   = match[1];
-        const std::string & value = match[2];
-        if (std::regex_match(key, match, etag_regex)) {
-            headers->etag = value;
-        } else if (std::regex_match(key, match, last_modified_regex)) {
-            headers->last_modified = value;
-        } else if (std::regex_match(key, match, accept_ranges_regex)) {
-            headers->accept_ranges = value;
-        }
-    }
-
-    return n_items;
-}
-
-static size_t common_write_callback(void * data, size_t size, size_t nmemb, void * fd) {
-    return std::fwrite(data, size, nmemb, static_cast<FILE *>(fd));
-}
-
-// helper function to hide password in URL
-static std::string llama_download_hide_password_in_url(const std::string & url) {
-    // Use regex to match and replace the user[:password]@ pattern in URLs
-    // Pattern: scheme://[user[:password]@]host[...]
-    static const std::regex url_regex(R"(^(?:[A-Za-z][A-Za-z0-9+.-]://)(?:[^/@]+@)?.$)");
-    std::smatch             match;
-
-    if (std::regex_match(url, match, url_regex)) {
-        // match[1] = scheme (e.g., "https://")
-        // match[2] = user[:password]@ part
-        // match[3] = rest of URL (host and path)
-        return match[1].str() + "********@" + match[3].str();
-    }
-
-    return url;  // No credentials found or malformed URL
-}
-
-static void common_curl_easy_setopt_head(CURL * curl, const std::string & url) {
-    // Set the URL, allow to follow http redirection
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-
-#    if defined(_WIN32)
-    // CURLSSLOPT_NATIVE_CA tells libcurl to use standard certificate store of
-    //   operating system. Currently implemented under MS-Windows.
-    curl_easy_setopt(curl, CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA);
-#    endif
-
-    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);      // will trigger the HEAD verb
-    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1L);  // hide head request progress
-    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, common_header_callback);
-}
-
-static void common_curl_easy_setopt_get(CURL * curl) {
-    curl_easy_setopt(curl, CURLOPT_NOBODY, 0L);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, common_write_callback);
-
-    //  display download progress
-    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-}
-
-static bool common_pull_file(CURL * curl, const std::string & path_temporary) {
-    if (std::filesystem::exists(path_temporary)) {
-        const std::string partial_size = std::to_string(std::filesystem::file_size(path_temporary));
-        LOG_INF("%s: server supports range requests, resuming download from byte %s\n", __func__, partial_size.c_str());
-        const std::string range_str = partial_size + "-";
-        curl_easy_setopt(curl, CURLOPT_RANGE, range_str.c_str());
-    }
-
-    // Always open file in append mode could be resuming
-    std::unique_ptr<FILE, FILE_deleter> outfile(fopen(path_temporary.c_str(), "ab"));
-    if (!outfile) {
-        LOG_ERR("%s: error opening local file for writing: %s\n", __func__, path_temporary.c_str());
-        return false;
-    }
-
-    common_curl_easy_setopt_get(curl);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, outfile.get());
-
-    return common_curl_perf(curl) == CURLE_OK;
-}
-
-static bool common_download_head(CURL *              curl,
-                                 curl_slist_ptr &    http_headers,
-                                 const std::string & url,
-                                 const std::string & bearer_token) {
-    if (!curl) {
-        LOG_ERR("%s: error initializing libcurl\n", __func__);
-        return false;
-    }
-
-    http_headers.ptr = curl_slist_append(http_headers.ptr, "User-Agent: llama-cpp");
-    // Check if hf-token or bearer-token was specified
-    if (!bearer_token.empty()) {
-        std::string auth_header = "Authorization: Bearer " + bearer_token;
-        http_headers.ptr        = curl_slist_append(http_headers.ptr, auth_header.c_str());
-    }
-
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, http_headers.ptr);
-    common_curl_easy_setopt_head(curl, url);
-    return common_curl_perf(curl) == CURLE_OK;
-}
-
-// download one single file from remote URL to local path
-// returns status code or -1 on error
-static int common_download_file_single_online(const std::string & url,
-                                               const std::string & path,
-                                               const std::string & bearer_token,
-                                               const common_header_list & custom_headers) {
-    static const int max_attempts        = 3;
-    static const int retry_delay_seconds = 2;
-
-    for (int i = 0; i < max_attempts; ++i) {
-        std::string etag;
-
-        // Check if the file already exists locally
-        const auto file_exists = std::filesystem::exists(path);
-        if (file_exists) {
-            etag = read_etag(path);
-        } else {
-            LOG_INF("%s: no previous model file found %s\n", __func__, path.c_str());
-        }
-
-        bool head_request_ok = false;
-        bool should_download = !file_exists;  // by default, we should download if the file does not exist
-
-        // Initialize libcurl
-        curl_ptr curl(curl_easy_init(), &curl_easy_cleanup);
-        common_load_model_from_url_headers headers;
-        curl_easy_setopt(curl.get(), CURLOPT_HEADERDATA, &headers);
-        curl_slist_ptr http_headers;
-
-        for (const auto & h : custom_headers) {
-             std::string s = h.first + ": " + h.second;
-             http_headers.ptr = curl_slist_append(http_headers.ptr, s.c_str());
-        }
-        const bool     was_perform_successful = common_download_head(curl.get(), http_headers, url, bearer_token);
-        if (!was_perform_successful) {
-            head_request_ok = false;
-        }
-
-        long http_code = 0;
-        curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &http_code);
-        if (http_code == 200) {
-            head_request_ok = true;
-        } else {
-            LOG_WRN("%s: HEAD invalid http status code received: %ld\n", __func__, http_code);
-            head_request_ok = false;
-        }
-
-        // if head_request_ok is false, we don't have the etag or last-modified headers
-        // we leave should_download as-is, which is true if the file does not exist
-        bool should_download_from_scratch = false;
-        if (head_request_ok) {
-            // check if ETag or Last-Modified headers are different
-            // if it is, we need to download the file again
-            if (!etag.empty() && etag != headers.etag) {
-                LOG_WRN("%s: ETag header is different (%s != %s): triggering a new download\n", __func__, etag.c_str(),
-                        headers.etag.c_str());
-                should_download              = true;
-                should_download_from_scratch = true;
-            }
-        }
-
-        const bool accept_ranges_supported = !headers.accept_ranges.empty() && headers.accept_ranges != "none";
-        if (should_download) {
-            if (file_exists &&
-                !accept_ranges_supported) {  // Resumable downloads not supported, delete and start again.
-                LOG_WRN("%s: deleting previous downloaded file: %s\n", __func__, path.c_str());
-                if (remove(path.c_str()) != 0) {
-                    LOG_ERR("%s: unable to delete file: %s\n", __func__, path.c_str());
-                    return -1;
-                }
-            }
-
-            const std::string path_temporary = path + ".downloadInProgress";
-            if (should_download_from_scratch) {
-                if (std::filesystem::exists(path_temporary)) {
-                    if (remove(path_temporary.c_str()) != 0) {
-                        LOG_ERR("%s: unable to delete file: %s\n", __func__, path_temporary.c_str());
-                        return -1;
-                    }
-                }
-
-                if (std::filesystem::exists(path)) {
-                    if (remove(path.c_str()) != 0) {
-                        LOG_ERR("%s: unable to delete file: %s\n", __func__, path.c_str());
-                        return -1;
-                    }
-                }
-            }
-            if (head_request_ok) {
-                write_etag(path, headers.etag);
-            }
-
-            // start the download
-            LOG_INF("%s: trying to download model from %s to %s (server_etag:%s, server_last_modified:%s)...\n",
-                    __func__, llama_download_hide_password_in_url(url).c_str(), path_temporary.c_str(),
-                    headers.etag.c_str(), headers.last_modified.c_str());
-            const bool was_pull_successful = common_pull_file(curl.get(), path_temporary);
-            if (!was_pull_successful) {
-                if (i + 1 < max_attempts) {
-                    const int exponential_backoff_delay = std::pow(retry_delay_seconds, i) * 1000;
-                    LOG_WRN("%s: retrying after %d milliseconds...\n", __func__, exponential_backoff_delay);
-                    std::this_thread::sleep_for(std::chrono::milliseconds(exponential_backoff_delay));
-                } else {
-                    LOG_ERR("%s: curl_easy_perform() failed after %d attempts\n", __func__, max_attempts);
-                }
-
-                continue;
-            }
-
-            long http_code = 0;
-            curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &http_code);
-
-            int status = static_cast<int>(http_code);
-            if (!is_http_status_ok(http_code)) {
-                LOG_ERR("%s: invalid http status code received: %ld\n", __func__, http_code);
-                return status; // TODO: maybe only return on certain codes
-            }
-
-            if (rename(path_temporary.c_str(), path.c_str()) != 0) {
-                LOG_ERR("%s: unable to rename file: %s to %s\n", __func__, path_temporary.c_str(), path.c_str());
-                return -1;
-            }
-
-            return static_cast<int>(http_code);
-        } else {
-            LOG_INF("%s: using cached file: %s\n", __func__, path.c_str());
-
-            return 304; // Not Modified - fake cached response
-        }
-    }
-
-    return -1; // max attempts reached
-}
-
-std::pair<long, std::vector<char>> common_remote_get_content(const std::string & url, const common_remote_params & params) {
-    curl_ptr       curl(curl_easy_init(), &curl_easy_cleanup);
-    curl_slist_ptr http_headers;
-    std::vector<char> res_buffer;
-
-    curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 1L);
-    curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl.get(), CURLOPT_VERBOSE, 0L);
-    typedef size_t(*CURLOPT_WRITEFUNCTION_PTR)(void * ptr, size_t size, size_t nmemb, void * data);
-    auto write_callback = [](void * ptr, size_t size, size_t nmemb, void * data) -> size_t {
-        auto data_vec = static_cast<std::vector<char> *>(data);
-        data_vec->insert(data_vec->end(), (char *)ptr, (char *)ptr + size * nmemb);
-        return size * nmemb;
-    };
-    curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, static_cast<CURLOPT_WRITEFUNCTION_PTR>(write_callback));
-    curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &res_buffer);
-#if defined(_WIN32)
-    curl_easy_setopt(curl.get(), CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA);
-#endif
-    if (params.timeout > 0) {
-        curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, params.timeout);
-    }
-    if (params.max_size > 0) {
-        curl_easy_setopt(curl.get(), CURLOPT_MAXFILESIZE, params.max_size);
-    }
-    http_headers.ptr = curl_slist_append(http_headers.ptr, "User-Agent: llama-cpp");
-
-    for (const auto & header : params.headers) {
-        std::string header_ = header.first + ": " + header.second;
-        http_headers.ptr = curl_slist_append(http_headers.ptr, header_.c_str());
-    }
-    curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, http_headers.ptr);
-
-    CURLcode res = curl_easy_perform(curl.get());
-
-    if (res != CURLE_OK) {
-        std::string error_msg = curl_easy_strerror(res);
-        throw std::runtime_error("error: cannot make GET request: " + error_msg);
-    }
-
-    long res_code;
-    curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &res_code);
-
-    return { res_code, std::move(res_buffer) };
-}
-
-#elif defined(LLAMA_USE_HTTPLIB)
 
 class ProgressBar {
     static inline std::mutex mutex;
@@ -637,7 +275,10 @@ static bool common_pull_file(httplib::Client & cli,
     );
 
     if (!res) {
-        LOG_ERR("%s: error during download. Status: %d\n", __func__, res ? res->status : -1);
+        LOG_ERR("%s: download failed: %s (status: %d)\n",
+                __func__,
+                httplib::to_string(res.error()).c_str(),
+                res ? res->status : -1);
         return false;
     }
 
@@ -646,23 +287,26 @@ static bool common_pull_file(httplib::Client & cli,
 
 // download one single file from remote URL to local path
 // returns status code or -1 on error
-static int common_download_file_single_online(const std::string & url,
-                                               const std::string & path,
-                                               const std::string & bearer_token,
-                                               const common_header_list & custom_headers) {
+static int common_download_file_single_online(const std::string        & url,
+                                              const std::string        & path,
+                                              const std::string        & bearer_token,
+                                              const common_header_list & custom_headers) {
     static const int max_attempts        = 3;
     static const int retry_delay_seconds = 2;
 
     auto [cli, parts] = common_http_client(url);
 
-    httplib::Headers default_headers = {{"User-Agent", "llama-cpp"}};
-    if (!bearer_token.empty()) {
-        default_headers.insert({"Authorization", "Bearer " + bearer_token});
-    }
+    httplib::Headers headers;
     for (const auto & h : custom_headers) {
-        default_headers.emplace(h.first, h.second);
+        headers.emplace(h.first, h.second);
     }
-    cli.set_default_headers(default_headers);
+    if (headers.find("User-Agent") == headers.end()) {
+        headers.emplace("User-Agent", "llama-cpp/" + build_info);
+    }
+    if (!bearer_token.empty()) {
+        headers.emplace("Authorization", "Bearer " + bearer_token);
+    }
+    cli.set_default_headers(headers);
 
     const bool file_exists = std::filesystem::exists(path);
 
@@ -673,62 +317,64 @@ static int common_download_file_single_online(const std::string & url,
         LOG_INF("%s: no previous model file found %s\n", __func__, path.c_str());
     }
 
-    for (int i = 0; i < max_attempts; ++i) {
-        auto head = cli.Head(parts.path);
-        bool head_ok = head && head->status >= 200 && head->status < 300;
-        if (!head_ok) {
-            LOG_WRN("%s: HEAD invalid http status code received: %d\n", __func__, head ? head->status : -1);
-            if (file_exists) {
-                LOG_INF("%s: Using cached file (HEAD failed): %s\n", __func__, path.c_str());
-                return 304; // 304 Not Modified - fake cached response
-            }
-            return head->status; // cannot use cached file, return raw status code
-            // TODO: maybe retry only on certain codes
-        }
-
-        std::string etag;
-        if (head_ok && head->has_header("ETag")) {
-            etag = head->get_header_value("ETag");
-        }
-
-        size_t total_size = 0;
-        if (head_ok && head->has_header("Content-Length")) {
-            try {
-                total_size = std::stoull(head->get_header_value("Content-Length"));
-            } catch (const std::exception& e) {
-                LOG_WRN("%s: Invalid Content-Length in HEAD response: %s\n", __func__, e.what());
-            }
-        }
-
-        bool supports_ranges = false;
-        if (head_ok && head->has_header("Accept-Ranges")) {
-            supports_ranges = head->get_header_value("Accept-Ranges") != "none";
-        }
-
-        bool should_download_from_scratch = false;
-        if (!last_etag.empty() && !etag.empty() && last_etag != etag) {
-            LOG_WRN("%s: ETag header is different (%s != %s): triggering a new download\n", __func__,
-                    last_etag.c_str(), etag.c_str());
-            should_download_from_scratch = true;
-        }
-
+    auto head = cli.Head(parts.path);
+    if (!head || head->status < 200 || head->status >= 300) {
+        LOG_WRN("%s: HEAD failed, status: %d\n", __func__, head ? head->status : -1);
         if (file_exists) {
-            if (!should_download_from_scratch) {
-                LOG_INF("%s: using cached file: %s\n", __func__, path.c_str());
-                return 304; // 304 Not Modified - fake cached response
-            }
-            LOG_WRN("%s: deleting previous downloaded file: %s\n", __func__, path.c_str());
-            if (remove(path.c_str()) != 0) {
-                LOG_ERR("%s: unable to delete file: %s\n", __func__, path.c_str());
-                return -1;
-            }
+            LOG_INF("%s: using cached file (HEAD failed): %s\n", __func__, path.c_str());
+            return 304; // 304 Not Modified - fake cached response
+        }
+        return head ? head->status : -1;
+    }
+
+    std::string etag;
+    if (head->has_header("ETag")) {
+        etag = head->get_header_value("ETag");
+    }
+
+    size_t total_size = 0;
+    if (head->has_header("Content-Length")) {
+        try {
+            total_size = std::stoull(head->get_header_value("Content-Length"));
+        } catch (const std::exception& e) {
+            LOG_WRN("%s: invalid Content-Length in HEAD response: %s\n", __func__, e.what());
+        }
+    }
+
+    bool supports_ranges = false;
+    if (head->has_header("Accept-Ranges")) {
+        supports_ranges = head->get_header_value("Accept-Ranges") != "none";
+    }
+
+    if (file_exists) {
+        if (etag.empty()) {
+            LOG_INF("%s: using cached file (no server etag): %s\n", __func__, path.c_str());
+            return 304; // 304 Not Modified - fake cached response
+        }
+        if (!last_etag.empty() && last_etag == etag) {
+            LOG_INF("%s: using cached file (same etag): %s\n", __func__, path.c_str());
+            return 304; // 304 Not Modified - fake cached response
+        }
+        if (remove(path.c_str()) != 0) {
+            LOG_ERR("%s: unable to delete file: %s\n", __func__, path.c_str());
+            return -1;
+        }
+    }
+
+    const std::string path_temporary = path + ".downloadInProgress";
+    int delay = retry_delay_seconds;
+
+    for (int i = 0; i < max_attempts; ++i) {
+        if (i) {
+            LOG_WRN("%s: retrying after %d seconds...\n", __func__, delay);
+            std::this_thread::sleep_for(std::chrono::seconds(delay));
+            delay *= retry_delay_seconds;
         }
 
-        const std::string path_temporary = path + ".downloadInProgress";
         size_t existing_size = 0;
 
         if (std::filesystem::exists(path_temporary)) {
-            if (supports_ranges && !should_download_from_scratch) {
+            if (supports_ranges) {
                 existing_size = std::filesystem::file_size(path_temporary);
             } else if (remove(path_temporary.c_str()) != 0) {
                 LOG_ERR("%s: unable to delete file: %s\n", __func__, path_temporary.c_str());
@@ -736,32 +382,23 @@ static int common_download_file_single_online(const std::string & url,
             }
         }
 
-        // start the download
-        LOG_INF("%s: trying to download model from %s to %s (etag:%s)...\n",
-                __func__, common_http_show_masked_url(parts).c_str(), path_temporary.c_str(), etag.c_str());
-        const bool was_pull_successful = common_pull_file(cli, parts.path, path_temporary, supports_ranges, existing_size, total_size);
-        if (!was_pull_successful) {
-            if (i + 1 < max_attempts) {
-                const int exponential_backoff_delay = std::pow(retry_delay_seconds, i) * 1000;
-                LOG_WRN("%s: retrying after %d milliseconds...\n", __func__, exponential_backoff_delay);
-                std::this_thread::sleep_for(std::chrono::milliseconds(exponential_backoff_delay));
-            } else {
-                LOG_ERR("%s: download failed after %d attempts\n", __func__, max_attempts);
+        LOG_INF("%s: downloading from %s to %s (etag:%s)...\n",
+                __func__, common_http_show_masked_url(parts).c_str(),
+                path_temporary.c_str(), etag.c_str());
+
+        if (common_pull_file(cli, parts.path, path_temporary, supports_ranges, existing_size, total_size)) {
+            if (std::rename(path_temporary.c_str(), path.c_str()) != 0) {
+                LOG_ERR("%s: unable to rename file: %s to %s\n", __func__, path_temporary.c_str(), path.c_str());
+                return -1;
             }
-            continue;
+            if (!etag.empty()) {
+                write_etag(path, etag);
+            }
+            return head->status;
         }
-
-        if (std::rename(path_temporary.c_str(), path.c_str()) != 0) {
-            LOG_ERR("%s: unable to rename file: %s to %s\n", __func__, path_temporary.c_str(), path.c_str());
-            return -1;
-        }
-        if (!etag.empty()) {
-            write_etag(path, etag);
-        }
-
-        return head->status; // TODO: use actual GET status?
     }
 
+    LOG_ERR("%s: download failed after %d attempts\n", __func__, max_attempts);
     return -1; // max attempts reached
 }
 
@@ -769,10 +406,12 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string  
                                                              const common_remote_params & params) {
     auto [cli, parts] = common_http_client(url);
 
-    httplib::Headers headers = {{"User-Agent", "llama-cpp"}};
-
-    for (const auto & header : params.headers) {
-        headers.emplace(header.first, header.second);
+    httplib::Headers headers;
+    for (const auto & h : params.headers) {
+        headers.emplace(h.first, h.second);
+    }
+    if (headers.find("User-Agent") == headers.end()) {
+        headers.emplace("User-Agent", "llama-cpp/" + build_info);
     }
 
     if (params.timeout > 0) {
@@ -796,10 +435,6 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string  
 
     return { res->status, std::move(buf) };
 }
-
-#endif // LLAMA_USE_CURL
-
-#if defined(LLAMA_USE_CURL) || defined(LLAMA_USE_HTTPLIB)
 
 int common_download_file_single(const std::string & url,
                                 const std::string & path,
@@ -1128,30 +763,6 @@ std::string common_docker_resolve_model(const std::string & docker) {
         throw;
     }
 }
-
-#else
-
-common_hf_file_res common_get_hf_file(const std::string &, const std::string &, bool, const common_header_list &) {
-    throw std::runtime_error("download functionality is not enabled in this build");
-}
-
-bool common_download_model(const common_params_model &, const std::string &, bool, const common_header_list &) {
-    throw std::runtime_error("download functionality is not enabled in this build");
-}
-
-std::string common_docker_resolve_model(const std::string &) {
-    throw std::runtime_error("download functionality is not enabled in this build");
-}
-
-int common_download_file_single(const std::string &,
-                                const std::string &,
-                                const std::string &,
-                                bool,
-                                const common_header_list &) {
-    throw std::runtime_error("download functionality is not enabled in this build");
-}
-
-#endif // LLAMA_USE_CURL || LLAMA_USE_HTTPLIB
 
 std::vector<common_cached_model_info> common_list_cached_models() {
     std::vector<common_cached_model_info> models;

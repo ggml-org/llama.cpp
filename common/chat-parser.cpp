@@ -129,7 +129,7 @@ static void parse_json_tool_calls(
     }
 }
 
-common_chat_msg_parser::common_chat_msg_parser(const std::string & input, bool is_partial, const common_chat_syntax & syntax)
+common_chat_msg_parser::common_chat_msg_parser(const std::string & input, bool is_partial, const common_chat_parser_params & syntax)
     : input_(input), is_partial_(is_partial), syntax_(syntax)
 {
     result_.role = "assistant";
@@ -893,23 +893,6 @@ static void common_chat_parse_minimax_m2(common_chat_msg_parser & builder) {
     builder.consume_reasoning_with_xml_tool_calls(form, "<think>", "</think>");
 }
 
-static void common_chat_parse_qwen3_coder_xml(common_chat_msg_parser & builder) {
-    static const xml_tool_call_format form = ([]() {
-        xml_tool_call_format form {};
-        form.scope_start = "<tool_call>";
-        form.tool_start  = "<function=";
-        form.tool_sep    = ">";
-        form.key_start   = "<parameter=";
-        form.key_val_sep = ">";
-        form.val_end     = "</parameter>";
-        form.tool_end    = "</function>";
-        form.scope_end   = "</tool_call>";
-        form.trim_raw_argval = true;
-        return form;
-    })();
-    builder.consume_reasoning_with_xml_tool_calls(form);
-}
-
 static void common_chat_parse_kimi_k2(common_chat_msg_parser & builder) {
     static const xml_tool_call_format form = ([]() {
         xml_tool_call_format form {};
@@ -1590,9 +1573,6 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
         case COMMON_CHAT_FORMAT_KIMI_K2:
             common_chat_parse_kimi_k2(builder);
             break;
-        case COMMON_CHAT_FORMAT_QWEN3_CODER_XML:
-            common_chat_parse_qwen3_coder_xml(builder);
-            break;
         case COMMON_CHAT_FORMAT_APRIEL_1_5:
             common_chat_parse_apriel_1_5(builder);
             break;
@@ -1611,7 +1591,7 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
     builder.finish();
 }
 
-common_chat_msg common_chat_parse(const std::string & input, bool is_partial, const common_chat_syntax & syntax) {
+common_chat_msg common_chat_parse(const std::string & input, bool is_partial, const common_chat_parser_params & syntax) {
     if (syntax.format == COMMON_CHAT_FORMAT_PEG_SIMPLE ||
         syntax.format == COMMON_CHAT_FORMAT_PEG_NATIVE ||
         syntax.format == COMMON_CHAT_FORMAT_PEG_CONSTRUCTED) {
@@ -1630,12 +1610,12 @@ common_chat_msg common_chat_parse(const std::string & input, bool is_partial, co
     }
     auto msg = builder.result();
     if (!is_partial) {
-        LOG_DBG("Parsed message: %s\n", common_chat_msgs_to_json_oaicompat<json>({msg}).at(0).dump().c_str());
+        LOG_DBG("Parsed message: %s\n", common_chat_msgs_to_json_oaicompat({msg}).at(0).dump().c_str());
     }
     return msg;
 }
 
-common_chat_msg common_chat_peg_parse(const common_peg_arena & parser, const std::string & input, bool is_partial, const common_chat_syntax & syntax) {
+common_chat_msg common_chat_peg_parse(const common_peg_arena & parser, const std::string & input, bool is_partial, const common_chat_parser_params & syntax) {
     if (parser.empty()) {
         throw std::runtime_error("Failed to parse due to missing parser definition.");
     }
@@ -1663,7 +1643,7 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena & parser, const std
         mapper.from_ast(ctx.ast, result);
     }
     if (!is_partial) {
-        LOG_DBG("Parsed message: %s\n", common_chat_msgs_to_json_oaicompat<json>({msg}).at(0).dump().c_str());
+        LOG_DBG("Parsed message: %s\n", common_chat_msgs_to_json_oaicompat({msg}).at(0).dump().c_str());
     }
     return msg;
 }

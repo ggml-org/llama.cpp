@@ -57,6 +57,8 @@ extern const char * LLAMA_COMMIT;
 extern const char * LLAMA_COMPILER;
 extern const char * LLAMA_BUILD_TARGET;
 
+const static std::string build_info("b" + std::to_string(LLAMA_BUILD_NUMBER) + "-" + LLAMA_COMMIT);
+
 struct common_control_vector_load_info;
 
 //
@@ -119,6 +121,7 @@ enum common_sampler_type {
     COMMON_SAMPLER_TYPE_INFILL      = 9,
     COMMON_SAMPLER_TYPE_PENALTIES   = 10,
     COMMON_SAMPLER_TYPE_TOP_N_SIGMA = 11,
+    COMMON_SAMPLER_TYPE_ADAPTIVE_P  = 12,
 };
 
 // dimensionality reduction methods, used by cvector-generator
@@ -161,37 +164,50 @@ enum common_params_sampling_config : uint64_t {
     COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_ETA    = 1 << 11,
 };
 
+enum common_speculative_type {
+    COMMON_SPECULATIVE_TYPE_NONE,          // no speculative decoding
+    COMMON_SPECULATIVE_TYPE_DRAFT,         // draft model
+    COMMON_SPECULATIVE_TYPE_EAGLE3,        // eagle draft model
+    COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,  // simple self-speculative decoding
+    COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,   // self-speculative decoding with n-gram keys only
+    COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, // self-speculative decoding with n-gram keys and 4 m-gram values
+    COMMON_SPECULATIVE_TYPE_NGRAM_MOD,
+    COMMON_SPECULATIVE_TYPE_NGRAM_CACHE,   // self-speculative decoding with 3-level n-gram cache
+    COMMON_SPECULATIVE_TYPE_COUNT          // number of types, unknown type
+};
 
 // sampling parameters
 struct common_params_sampling {
     uint32_t seed = LLAMA_DEFAULT_SEED; // the seed used to initialize llama_sampler
 
-    int32_t n_prev             = 64;    // number of previous tokens to remember
-    int32_t n_probs            = 0;     // if greater than 0, output the probabilities of top n_probs tokens.
-    int32_t min_keep           = 0;     // 0 = disabled, otherwise samplers should return at least min_keep tokens
-    int32_t top_k              = 40;    // <= 0 to use vocab size
-    float   top_p              = 0.95f; // 1.0 = disabled
-    float   min_p              = 0.05f; // 0.0 = disabled
-    float   xtc_probability    = 0.00f; // 0.0 = disabled
-    float   xtc_threshold      = 0.10f; // > 0.5 disables XTC
-    float   typ_p              = 1.00f; // typical_p, 1.0 = disabled
-    float   temp               = 0.80f; // <= 0.0 to sample greedily, 0.0 to not output probabilities
-    float   dynatemp_range     = 0.00f; // 0.0 = disabled
-    float   dynatemp_exponent  = 1.00f; // controls how entropy maps to temperature in dynamic temperature sampler
-    int32_t penalty_last_n     = 64;    // last n tokens to penalize (0 = disable penalty, -1 = context size)
-    float   penalty_repeat     = 1.00f; // 1.0 = disabled
-    float   penalty_freq       = 0.00f; // 0.0 = disabled
-    float   penalty_present    = 0.00f; // 0.0 = disabled
-    float   dry_multiplier     = 0.0f;  // 0.0 = disabled;      DRY repetition penalty for tokens extending repetition:
-    float   dry_base           = 1.75f; // 0.0 = disabled;      multiplier * base ^ (length of sequence before token - allowed length)
-    int32_t dry_allowed_length = 2;     // tokens extending repetitions beyond this receive penalty
-    int32_t dry_penalty_last_n = -1;    // how many tokens to scan for repetitions (0 = disable penalty, -1 = context size)
-    int32_t mirostat           = 0;     // 0 = disabled, 1 = mirostat, 2 = mirostat 2.0
-    float   top_n_sigma        = -1.00f;// -1.0 = disabled
-    float   mirostat_tau       = 5.00f; // target entropy
-    float   mirostat_eta       = 0.10f; // learning rate
+    int32_t n_prev             = 64;     // number of previous tokens to remember
+    int32_t n_probs            = 0;      // if greater than 0, output the probabilities of top n_probs tokens.
+    int32_t min_keep           = 0;      // 0 = disabled, otherwise samplers should return at least min_keep tokens
+    int32_t top_k              = 40;     // <= 0 to use vocab size
+    float   top_p              = 0.95f;  // 1.0 = disabled
+    float   min_p              = 0.05f;  // 0.0 = disabled
+    float   xtc_probability    = 0.00f;  // 0.0 = disabled
+    float   xtc_threshold      = 0.10f;  // > 0.5 disables XTC
+    float   typ_p              = 1.00f;  // typical_p, 1.0 = disabled
+    float   temp               = 0.80f;  // <= 0.0 to sample greedily, 0.0 to not output probabilities
+    float   dynatemp_range     = 0.00f;  // 0.0 = disabled
+    float   dynatemp_exponent  = 1.00f;  // controls how entropy maps to temperature in dynamic temperature sampler
+    int32_t penalty_last_n     = 64;     // last n tokens to penalize (0 = disable penalty, -1 = context size)
+    float   penalty_repeat     = 1.00f;  // 1.0 = disabled
+    float   penalty_freq       = 0.00f;  // 0.0 = disabled
+    float   penalty_present    = 0.00f;  // 0.0 = disabled
+    float   dry_multiplier     = 0.0f;   // 0.0 = disabled;      DRY repetition penalty for tokens extending repetition:
+    float   dry_base           = 1.75f;  // 0.0 = disabled;      multiplier * base ^ (length of sequence before token - allowed length)
+    int32_t dry_allowed_length = 2;      // tokens extending repetitions beyond this receive penalty
+    int32_t dry_penalty_last_n = -1;     // how many tokens to scan for repetitions (0 = disable penalty, -1 = context size)
+    float   adaptive_target    = -1.0f;  // select tokens near this probability (valid range 0.0 to 1.0; negative = disabled)
+    float   adaptive_decay     = 0.90f;  // EMA decay for adaptation; history ≈ 1/(1-decay) tokens (0.0 - 0.99)
+    int32_t mirostat           = 0;      // 0 = disabled, 1 = mirostat, 2 = mirostat 2.0
+    float   top_n_sigma        = -1.00f; // -1.0 = disabled
+    float   mirostat_tau       = 5.00f;  // target entropy
+    float   mirostat_eta       = 0.10f;  // learning rate
     bool    ignore_eos         = false;
-    bool    no_perf            = false; // disable performance metrics
+    bool    no_perf            = false;  // disable performance metrics
     bool    timing_per_token   = false;
 
     uint64_t user_sampling_config = 0; // bitfield to track user-specified samplers
@@ -237,17 +253,39 @@ struct common_params_model {
     std::string name        = ""; // in format <user>/<model>[:<tag>] (tag is optional)     // NOLINT
 };
 
-struct common_params_speculative {
-    std::vector<ggml_backend_dev_t> devices; // devices to use for offloading
+struct common_ngram_mod;
 
-    int32_t n_ctx        =     0; // draft context size
-    int32_t n_max        =    16; // maximum number of tokens to draft during speculative decoding
-    int32_t n_min        =     0; // minimum number of draft tokens to use for speculative decoding
-    int32_t n_gpu_layers =    -1; // number of layers to store in VRAM for the draft model (-1 - use default)
-    float   p_split      =  0.1f; // speculative decoding split probability
-    float   p_min        = 0.75f; // minimum speculative decoding probability (greedy)
-    std::vector<std::pair<std::string, std::string>> replacements; // main to speculative model replacements
-    std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
+struct common_params_speculative {
+    common_speculative_type type = COMMON_SPECULATIVE_TYPE_NONE; // type of speculative decoding
+
+    // general-purpose speculative decoding parameters
+
+    int32_t n_max   = 16; // maximum number of tokens to draft during speculative decoding
+    int32_t n_min   = 0; // minimum number of draft tokens to use for speculative decoding
+    float   p_split = 0.1f; // speculative decoding split probability
+    float   p_min   = 0.75f; // minimum speculative decoding probability (greedy)
+
+    // ngram-based speculative decoding
+
+    uint16_t ngram_size_n     = 12; // ngram size for lookup
+    uint16_t ngram_size_m     = 48; // mgram size for speculative tokens
+    uint16_t ngram_min_hits   =  1; // minimum hits at ngram/mgram lookup for mgram to be proposed
+
+    std::shared_ptr<common_ngram_mod> ngram_mod;
+
+    std::string lookup_cache_static;  // path of static ngram cache file for lookup decoding           // NOLINT
+    std::string lookup_cache_dynamic; // path of dynamic ngram cache file for lookup decoding          // NOLINT
+
+    // draft-model speculative decoding
+
+    struct common_params_model mparams_dft;
+
+    llama_model * model_dft = nullptr; // a llama_model that can be shared by multiple speculative contexts
+
+    llama_context_params cparams_dft; // these are the parameters for the draft llama_context
+
+    int32_t n_ctx        = 0;  // draft context size
+    int32_t n_gpu_layers = -1; // number of layers to store in VRAM for the draft model (-1 - use default)
 
     ggml_type cache_type_k = GGML_TYPE_F16; // KV cache data type for the K
     ggml_type cache_type_v = GGML_TYPE_F16; // KV cache data type for the V
@@ -255,7 +293,14 @@ struct common_params_speculative {
     struct cpu_params cpuparams;
     struct cpu_params cpuparams_batch;
 
-    struct common_params_model model;
+    std::vector<ggml_backend_dev_t> devices; // devices to use for offloading
+
+    std::vector<std::pair<std::string, std::string>> replacements; // main to speculative model replacements
+    std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
+
+    bool has_dft() const {
+        return !mparams_dft.path.empty() || !mparams_dft.hf_repo.empty();
+    }
 };
 
 struct common_params_vocoder {
@@ -281,6 +326,7 @@ struct common_params_diffusion {
 };
 
 // reasoning API response format (not to be confused as chat template's reasoning format)
+// only used by server
 enum common_reasoning_format {
     COMMON_REASONING_FORMAT_NONE,
     COMMON_REASONING_FORMAT_AUTO,            // Same as deepseek, using `message.reasoning_content`
@@ -364,7 +410,8 @@ struct common_params {
 
     struct common_params_model model;
 
-    std::string model_alias          = ""; // model alias                                                   // NOLINT
+    std::set<std::string> model_alias;     // model aliases                                                 // NOLINT
+    std::set<std::string> model_tags;      // model tags (informational, not used for routing)              // NOLINT
     std::string hf_token             = ""; // HF token                                                      // NOLINT
     std::string prompt               = "";                                                                  // NOLINT
     std::string system_prompt        = "";                                                                  // NOLINT
@@ -372,8 +419,6 @@ struct common_params {
     std::string path_prompt_cache    = ""; // path to file for saving/loading prompt eval state             // NOLINT
     std::string input_prefix         = ""; // string to prefix user inputs with                             // NOLINT
     std::string input_suffix         = ""; // string to suffix user inputs with                             // NOLINT
-    std::string lookup_cache_static  = ""; // path of static ngram cache file for lookup decoding           // NOLINT
-    std::string lookup_cache_dynamic = ""; // path of dynamic ngram cache file for lookup decoding          // NOLINT
     std::string logits_file          = ""; // file for saving *all* logits                                  // NOLINT
 
     // llama-debug specific options
@@ -432,7 +477,7 @@ struct common_params {
 
     bool input_prefix_bos  = false; // prefix BOS to user inputs, preceding input_prefix
     bool use_mmap          = true;  // enable mmap to use filesystem cache
-    bool use_direct_io     = true;  // read from disk without buffering for faster model loading
+    bool use_direct_io     = false; // read from disk without buffering
     bool use_mlock         = false; // use mlock to keep model in memory
     bool verbose_prompt    = false; // print prompt tokens before generation
     bool display_prompt    = true;  // print prompt before generation
@@ -569,10 +614,6 @@ struct common_params {
     // return false from callback to abort model loading or true to continue
     llama_progress_callback load_progress_callback = NULL;
     void *                  load_progress_callback_user_data = NULL;
-
-    bool has_speculative() const {
-        return !speculative.model.path.empty() || !speculative.model.hf_repo.empty();
-    }
 };
 
 // call once at the start of a program if it uses libcommon
@@ -630,30 +671,55 @@ static std::vector<T> string_split(const std::string & str, char delim) {
 }
 
 template<>
-std::vector<std::string> string_split<std::string>(const std::string & input, char separator)
+inline std::vector<std::string> string_split<std::string>(const std::string & str, char delim)
 {
     std::vector<std::string> parts;
     size_t begin_pos = 0;
-    size_t separator_pos = input.find(separator);
-    while (separator_pos != std::string::npos) {
-        std::string part = input.substr(begin_pos, separator_pos - begin_pos);
+    size_t delim_pos = str.find(delim);
+    while (delim_pos != std::string::npos) {
+        std::string part = str.substr(begin_pos, delim_pos - begin_pos);
         parts.emplace_back(part);
-        begin_pos = separator_pos + 1;
-        separator_pos = input.find(separator, begin_pos);
+        begin_pos = delim_pos + 1;
+        delim_pos = str.find(delim, begin_pos);
     }
-    parts.emplace_back(input.substr(begin_pos, separator_pos - begin_pos));
+    parts.emplace_back(str.substr(begin_pos));
     return parts;
 }
 
-static bool string_starts_with(const std::string & str,
-                               const std::string & prefix) {  // While we wait for C++20's std::string::starts_with...
-    return str.rfind(prefix, 0) == 0;
+// remove when moving to c++20
+inline bool string_starts_with(std::string_view str, std::string_view prefix) {
+    return str.size() >= prefix.size() &&
+           str.compare(0, prefix.size(), prefix) == 0;
 }
 
-// While we wait for C++20's std::string::ends_with...
-bool string_ends_with(const std::string_view & str, const std::string_view & suffix);
-bool string_remove_suffix(std::string & str, const std::string_view & suffix);
-size_t string_find_partial_stop(const std::string_view & str, const std::string_view & stop);
+// remove when moving to c++20
+inline bool string_ends_with(std::string_view str, std::string_view suffix) {
+    return str.size() >= suffix.size() &&
+           str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+inline bool string_remove_suffix(std::string & str, std::string_view suffix) {
+    if (string_ends_with(str, suffix)) {
+        str.resize(str.size() - suffix.size());
+        return true;
+    }
+    return false;
+}
+
+inline size_t string_find_partial_stop(std::string_view str, std::string_view stop) {
+    if (!str.empty() && !stop.empty()) {
+        const size_t max_len = std::min(str.size(), stop.size());
+        const char last_char = str.back();
+        for (size_t len = max_len; len > 0; --len) {
+            if (stop[len - 1] == last_char) {
+                if (string_ends_with(str, stop.substr(0, len))) {
+                    return str.size() - len;
+                }
+            }
+        }
+    }
+    return std::string::npos;
+}
 
 bool string_parse_kv_override(const char * data, std::vector<llama_model_kv_override> & overrides);
 void string_process_escapes(std::string & input);
@@ -708,8 +774,6 @@ struct common_init_result {
 
     std::vector<llama_adapter_lora_ptr> & lora();
 
-    void free_context();
-
 private:
     struct impl;
     std::unique_ptr<impl> pimpl;
@@ -741,15 +805,22 @@ void common_batch_add(
     const std::vector<llama_seq_id> & seq_ids,
                                bool   logits);
 
+// decodes a single batch of tokens for a prompt and manages session tokens
 //
-// Token utils
-//
+// Note: We save state before the last token so that we can replay it to ensure
+// compatibility with all memory types. Recurrent/hybrid models cannot remove
+// tokens from memory, so this approach works across all model architectures.
+bool common_prompt_batch_decode(
+              struct llama_context * ctx,
+    const std::vector<llama_token> & embd,
+                               int & n_past,
+                               int   n_batch,
+                  std::string_view   state_path,
+                              bool   save_state);
 
-// longest common prefix
-size_t common_lcp(const llama_tokens & a, const llama_tokens & b);
-
-// longet common subsequence
-size_t common_lcs(const llama_tokens & a, const llama_tokens & b);
+// replays the last token after loading state to regenerate logits
+// used after loading session state to ensure the sampling context has valid logits
+bool common_replay_last_token(struct llama_context * ctx, llama_token last_token, int32_t pos);
 
 //
 // Vocab utils
@@ -842,11 +913,11 @@ const char * const LLM_KV_SPLIT_TENSORS_COUNT = "split.tensors.count";
 
 const char * const LLM_FFN_EXPS_REGEX = "\\.ffn_(up|down|gate)_(ch|)exps";
 
-static std::string llm_ffn_exps_block_regex(int idx) {
+inline std::string llm_ffn_exps_block_regex(int idx) {
     return string_format("blk\\.%d%s", idx, LLM_FFN_EXPS_REGEX);
 }
 
-static llama_model_tensor_buft_override llm_ffn_exps_cpu_override() {
+inline llama_model_tensor_buft_override llm_ffn_exps_cpu_override() {
     return { LLM_FFN_EXPS_REGEX, ggml_backend_cpu_buffer_type() };
 }
 

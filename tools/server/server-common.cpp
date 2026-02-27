@@ -231,19 +231,77 @@ server_tokens::server_tokens(mtmd::input_chunks & mtmd_chunks, bool has_mtmd) : 
 server_tokens::server_tokens(const llama_tokens & tokens, bool has_mtmd) : has_mtmd(has_mtmd), tokens(tokens) {
 }
 
-llama_pos server_tokens::pos_next() const {
+llama_pos server_tokens::pos_next(int64_t n_tokens) const {
     if (!has_mtmd) {
-        return tokens.size();
+        if (n_tokens < 0) {
+            return tokens.size();
+        }
+
+        return n_tokens;
     }
 
-    llama_pos res = tokens.size();
+    if (n_tokens < 0) {
+        llama_pos res = tokens.size();
 
-    for (auto it = map_idx_to_media.begin(); it != map_idx_to_media.end(); ++it) {
-        const auto & chunk = it->second;
-        res += mtmd_input_chunk_get_n_pos(chunk.get()) - mtmd_input_chunk_get_n_tokens(chunk.get());
+        for (auto it = map_idx_to_media.begin(); it != map_idx_to_media.end(); ++it) {
+            const auto & chunk = it->second;
+            res += mtmd_input_chunk_get_n_pos(chunk.get()) - mtmd_input_chunk_get_n_tokens(chunk.get());
+        }
+
+        return res;
     }
 
-    return res;
+    int64_t idx = 0;
+    llama_pos pos = 0;
+
+    GGML_ASSERT(n_tokens <= (int64_t)tokens.size());
+
+    while (idx < n_tokens) {
+        const auto media_it = map_idx_to_media.find(idx);
+        if (media_it != map_idx_to_media.end()) {
+            const auto & chunk = media_it->second;
+            const llama_pos n_pos = mtmd_input_chunk_get_n_pos(chunk.get());
+            const size_t n_tok = mtmd_input_chunk_get_n_tokens(chunk.get());
+
+            pos += n_pos;
+            idx += n_tok;
+        } else {
+            pos++;
+            idx++;
+        }
+    }
+
+    return pos;
+}
+
+size_t server_tokens::size_up_to_pos(llama_pos max_pos) const {
+    if (!has_mtmd) {
+        return std::min((size_t)(max_pos + 1), tokens.size());
+    }
+
+    size_t idx = 0;
+    llama_pos pos = 0;
+
+    while (idx < tokens.size()) {
+        const auto media_it = map_idx_to_media.find(idx);
+        if (media_it != map_idx_to_media.end()) {
+            const auto & chunk = media_it->second;
+            const llama_pos n_pos = mtmd_input_chunk_get_n_pos(chunk.get());
+            const size_t n_tok = mtmd_input_chunk_get_n_tokens(chunk.get());
+
+            pos += n_pos;
+            idx += n_tok;
+        } else {
+            pos++;
+            idx++;
+        }
+
+        if (pos > max_pos) {
+            break;
+        }
+    }
+
+    return idx;
 }
 
 std::string server_tokens::str() const {
@@ -779,7 +837,6 @@ static void handle_media(
         // download remote image
         // TODO @ngxson : maybe make these params configurable
         common_remote_params params;
-        params.headers.push_back({"User-Agent", "llama.cpp/" + build_info});
         params.max_size = 1024 * 1024 * 10; // 10MB
         params.timeout  = 10; // seconds
         SRV_INF("downloading image from '%s'\n", url.c_str());
@@ -831,7 +888,7 @@ static void handle_media(
 // used by /chat/completions endpoint
 json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
-    const oaicompat_parser_options & opt,
+    const server_chat_params & opt,
     std::vector<raw_buffer> & out_files)
 {
     json llama_params;
@@ -917,8 +974,7 @@ json oaicompat_chat_params_parse(
                 json image_url = json_value(p, "image_url", json::object());
                 handle_media(out_files, image_url, opt.media_path);
 
-                // replace this chunk with a marker
-                p["type"] = "text";
+                p["type"] = "media_marker";
                 p["text"] = mtmd_default_marker();
                 p.erase("image_url");
 
@@ -939,8 +995,7 @@ json oaicompat_chat_params_parse(
 
                 // TODO: add audio_url support by reusing handle_media()
 
-                // replace this chunk with a marker
-                p["type"] = "text";
+                p["type"] = "media_marker";
                 p["text"] = mtmd_default_marker();
                 p.erase("input_audio");
 
@@ -1012,7 +1067,7 @@ json oaicompat_chat_params_parse(
     }
 
     // Apply chat template to the list of messages
-    auto chat_params = common_chat_templates_apply(opt.tmpls, inputs);
+    auto chat_params = common_chat_templates_apply(opt.tmpls.get(), inputs);
 
     /* Append assistant prefilled message */
     if (prefill_assistant_message) {
@@ -1068,6 +1123,287 @@ json oaicompat_chat_params_parse(
     }
 
     return llama_params;
+}
+
+json convert_responses_to_chatcmpl(const json & response_body) {
+    if (!response_body.contains("input")) {
+        throw std::invalid_argument("'input' is required");
+    }
+    if (!json_value(response_body, "previous_response_id", std::string{}).empty()) {
+        throw std::invalid_argument("llama.cpp does not support 'previous_response_id'.");
+    }
+
+    const json input_value = response_body.at("input");
+    json chatcmpl_body = response_body;
+    chatcmpl_body.erase("input");
+    std::vector<json> chatcmpl_messages;
+
+    if (response_body.contains("instructions")) {
+        chatcmpl_messages.push_back({
+            {"role",    "system"},
+            {"content", json_value(response_body, "instructions", std::string())},
+        });
+        chatcmpl_body.erase("instructions");
+    }
+
+    if (input_value.is_string()) {
+        // #responses_create-input-text_input
+        chatcmpl_messages.push_back({
+            {"role",    "user"},
+            {"content", input_value},
+        });
+    } else if (input_value.is_array()) {
+        // #responses_create-input-input_item_list
+
+        static auto exists_and_is_array = [](const json & j, const char * key) -> bool {
+            return j.contains(key) && j.at(key).is_array();
+        };
+        static auto exists_and_is_string = [](const json & j, const char * key) -> bool {
+            return j.contains(key) && j.at(key).is_string();
+        };
+
+        for (json item : input_value) {
+            bool merge_prev = !chatcmpl_messages.empty() && chatcmpl_messages.back().value("role", "") == "assistant";
+
+            if (exists_and_is_string(item, "content")) {
+                // #responses_create-input-input_item_list-input_message-content-text_input
+                // Only "Input message" contains item["content"]::string
+                // After converting item["content"]::string to item["content"]::array,
+                // we can treat "Input message" as sum of "Item-Input message" and "Item-Output message"
+                item["content"] = json::array({
+                    json {
+                        {"text", item.at("content")},
+                        {"type", "input_text"}
+                    }
+                });
+            }
+
+            if (exists_and_is_array(item, "content") &&
+                exists_and_is_string(item, "role") &&
+                (item.at("role") == "user" ||
+                    item.at("role") == "system" ||
+                    item.at("role") == "developer")
+            ) {
+                // #responses_create-input-input_item_list-item-input_message
+                std::vector<json> chatcmpl_content;
+
+                for (const json & input_item : item.at("content")) {
+                    const std::string type = json_value(input_item, "type", std::string());
+
+                    if (type == "input_text") {
+                        if (!input_item.contains("text")) {
+                            throw std::invalid_argument("'Input text' requires 'text'");
+                        }
+                        chatcmpl_content.push_back({
+                            {"text", input_item.at("text")},
+                            {"type", "text"},
+                        });
+                    } else if (type == "input_image") {
+                        // While `detail` is marked as required,
+                        // it has default value("auto") and can be omitted.
+
+                        if (!input_item.contains("image_url")) {
+                            throw std::invalid_argument("'image_url' is required");
+                        }
+                        chatcmpl_content.push_back({
+                            {"image_url", json {
+                                {"url", input_item.at("image_url")}
+                            }},
+                            {"type", "image_url"},
+                        });
+                    } else if (type == "input_file") {
+                        throw std::invalid_argument("'input_file' is not supported by llamacpp at this moment");
+                        // if (input_item.contains("file_url")) {
+                        //     // chat completion API does not support file_url
+                        //     throw std::invalid_argument("'file_url' is not supported");
+                        // }
+                        // if (!input_item.contains("file_data") || !input_item.contains("filename")) {
+                        //     throw std::invalid_argument("Both 'file_data' and 'filename' are required");
+                        // }
+                        // chatcmpl_content.push_back({
+                        //     {"file", json {
+                        //         {"file_data", input_item.at("file_data")},
+                        //         {"filename",  input_item.at("filename")},
+                        //     }},
+                        //     {"type", "file"},
+                        // });
+                    } else {
+                        throw std::invalid_argument("'type' must be one of 'input_text', 'input_image', or 'input_file'");
+                    }
+                }
+
+                if (item.contains("type")) {
+                    item.erase("type");
+                }
+                if (item.contains("status")) {
+                    item.erase("status");
+                }
+                item["content"] = chatcmpl_content;
+
+                chatcmpl_messages.push_back(item);
+            } else if (exists_and_is_array(item, "content") &&
+                exists_and_is_string(item, "role") &&
+                item.at("role") == "assistant" &&
+                // exists_and_is_string(item, "status") &&
+                // (item.at("status") == "in_progress" ||
+                //     item.at("status") == "completed" ||
+                //     item.at("status") == "incomplete") &&
+                // item["status"] not sent by codex-cli
+                exists_and_is_string(item, "type") &&
+                item.at("type") == "message"
+            ) {
+                // #responses_create-input-input_item_list-item-output_message
+                auto chatcmpl_content = json::array();
+
+                for (const auto & output_text : item.at("content")) {
+                    const std::string type = json_value(output_text, "type", std::string());
+                    if (type != "output_text") {
+                        throw std::invalid_argument("'type' must be 'output_text'");
+                    }
+                    if (!exists_and_is_string(output_text, "text")) {
+                        throw std::invalid_argument("'Output text' requires 'text'");
+                    }
+                    // Ignore annotations and logprobs for now
+                    chatcmpl_content.push_back({
+                        {"text", output_text.at("text")},
+                        {"type", "text"},
+                    });
+                }
+
+                if (merge_prev) {
+                    auto & prev_msg = chatcmpl_messages.back();
+                    if (!exists_and_is_array(prev_msg, "content")) {
+                        prev_msg["content"] = json::array();
+                    }
+                    auto & prev_content = prev_msg["content"];
+                    prev_content.insert(prev_content.end(), chatcmpl_content.begin(), chatcmpl_content.end());
+                } else {
+                    item.erase("status");
+                    item.erase("type");
+                    item["content"] = chatcmpl_content;
+                    chatcmpl_messages.push_back(item);
+                }
+            } else if (exists_and_is_string(item, "arguments") &&
+                exists_and_is_string(item, "call_id") &&
+                exists_and_is_string(item, "name") &&
+                exists_and_is_string(item, "type") &&
+                item.at("type") == "function_call"
+            ) {
+                // #responses_create-input-input_item_list-item-function_tool_call
+                json tool_call = {
+                    {"function", json {
+                        {"arguments", item.at("arguments")},
+                        {"name",      item.at("name")},
+                    }},
+                    {"id",   item.at("call_id")},
+                    {"type", "function"},
+                };
+
+                if (merge_prev) {
+                    auto & prev_msg = chatcmpl_messages.back();
+                    if (!exists_and_is_array(prev_msg, "tool_calls")) {
+                        prev_msg["tool_calls"] = json::array();
+                    }
+                    prev_msg["tool_calls"].push_back(tool_call);
+                } else {
+                    chatcmpl_messages.push_back(json {
+                        {"role",       "assistant"},
+                        {"tool_calls", json::array({tool_call})}
+                    });
+                }
+            } else if (exists_and_is_string(item, "call_id") &&
+                (exists_and_is_string(item, "output") || exists_and_is_array(item, "output")) &&
+                exists_and_is_string(item, "type") &&
+                item.at("type") == "function_call_output"
+            ) {
+                // #responses_create-input-input_item_list-item-function_tool_call_output
+                if (item.at("output").is_string()) {
+                    chatcmpl_messages.push_back(json {
+                        {"content",      item.at("output")},
+                        {"role",         "tool"},
+                        {"tool_call_id", item.at("call_id")},
+                    });
+                } else {
+                    json chatcmpl_outputs = item.at("output");
+                    for (json & chatcmpl_output : chatcmpl_outputs) {
+                        if (!chatcmpl_output.contains("type") || chatcmpl_output.at("type") != "input_text") {
+                            throw std::invalid_argument("Output of tool call should be 'Input text'");
+                        }
+                        chatcmpl_output["type"] = "text";
+                    }
+                    chatcmpl_messages.push_back(json {
+                        {"content",      chatcmpl_outputs},
+                        {"role",         "tool"},
+                        {"tool_call_id", item.at("call_id")},
+                    });
+                }
+            } else if (// exists_and_is_string(item, "id") &&
+                // item["id"] not sent by codex-cli
+                exists_and_is_array(item, "summary") &&
+                exists_and_is_string(item, "type") &&
+                item.at("type") == "reasoning") {
+                // #responses_create-input-input_item_list-item-reasoning
+
+                if (!exists_and_is_array(item, "content")) {
+                    throw std::invalid_argument("item['content'] is not an array");
+                }
+                if (item.at("content").empty()) {
+                    throw std::invalid_argument("item['content'] is empty");
+                }
+                if (!exists_and_is_string(item.at("content")[0], "text")) {
+                    throw std::invalid_argument("item['content']['text'] is not a string");
+                }
+
+                if (merge_prev) {
+                    auto & prev_msg = chatcmpl_messages.back();
+                    prev_msg["reasoning_content"] = item.at("content")[0].at("text");
+                } else {
+                    chatcmpl_messages.push_back(json {
+                        {"role", "assistant"},
+                        {"content", json::array()},
+                        {"reasoning_content", item.at("content")[0].at("text")},
+                    });
+                }
+            } else {
+                throw std::invalid_argument("Cannot determine type of 'item'");
+            }
+        }
+    } else {
+        throw std::invalid_argument("'input' must be a string or array of objects");
+    }
+
+    chatcmpl_body["messages"] = chatcmpl_messages;
+
+    if (response_body.contains("tools")) {
+        if (!response_body.at("tools").is_array()) {
+            throw std::invalid_argument("'tools' must be an array of objects");
+        }
+        std::vector<json> chatcmpl_tools;
+        for (json resp_tool : response_body.at("tools")) {
+            json chatcmpl_tool;
+
+            if (json_value(resp_tool, "type", std::string()) != "function") {
+                throw std::invalid_argument("'type' of tool must be 'function'");
+            }
+            resp_tool.erase("type");
+            chatcmpl_tool["type"] = "function";
+
+            if (!resp_tool.contains("strict")) {
+                resp_tool["strict"] = true;
+            }
+            chatcmpl_tool["function"] = resp_tool;
+            chatcmpl_tools.push_back(chatcmpl_tool);
+        }
+        chatcmpl_body.erase("tools");
+        chatcmpl_body["tools"] = chatcmpl_tools;
+    }
+
+    if (response_body.contains("max_output_tokens")) {
+        chatcmpl_body.erase("max_output_tokens");
+        chatcmpl_body["max_tokens"] = response_body["max_output_tokens"];
+    }
+
+    return chatcmpl_body;
 }
 
 json convert_anthropic_to_oai(const json & body) {
@@ -1470,6 +1806,24 @@ std::string format_oai_sse(const json & data) {
         ss << "data: " <<
             safe_json_to_str(data) <<
             "\n\n"; // required by RFC 8895 - A message is terminated by a blank line (two line terminators in a row).
+    };
+
+    if (data.is_array()) {
+        for (const auto & item : data) {
+            send_single(item);
+        }
+    } else {
+        send_single(data);
+    }
+
+    return ss.str();
+}
+
+std::string format_oai_resp_sse(const json & data) {
+    std::ostringstream ss;
+    auto send_single = [&ss](const json & event_obj) {
+        ss << "event: " << event_obj.at("event").get<std::string>() << "\n";
+        ss << "data: " << safe_json_to_str(event_obj.at("data")) << "\n\n";
     };
 
     if (data.is_array()) {

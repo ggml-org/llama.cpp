@@ -5,8 +5,8 @@ FROM ubuntu:$UBUNTU_VERSION AS build
 # Install build tools
 RUN apt update && apt install -y git build-essential cmake wget xz-utils
 
-# Install cURL and Vulkan SDK dependencies
-RUN apt install -y libcurl4-openssl-dev curl \
+# Install SSL and Vulkan SDK dependencies
+RUN apt install -y libssl-dev curl \
     libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libvulkan-dev glslc
 
 # Build it
@@ -54,6 +54,7 @@ RUN apt-get update \
     build-essential \
     git \
     python3 \
+    python3-dev \
     python3-pip \
     python3-wheel \
     && pip install --break-system-packages --upgrade setuptools \

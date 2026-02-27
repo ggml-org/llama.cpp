@@ -27,7 +27,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -45,7 +45,6 @@ jobs:
             -DCMAKE_INSTALL_RPATH='@loader_path' \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DLLAMA_FATAL_WARNINGS=ON \
-            -DLLAMA_CURL=OFF \
             -DLLAMA_BUILD_BORINGSSL=ON \
             -DGGML_METAL_USE_BF16=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
@@ -64,7 +63,7 @@ jobs:
           tar -czvf llama-${{ steps.tag.outputs.name }}-bin-macos-arm64.tar.gz -s ",./,llama-${{ steps.tag.outputs.name }}/," -C ./build/bin .
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           path: llama-${{ steps.tag.outputs.name }}-bin-macos-arm64.tar.gz
           name: llama-bin-macos-arm64.tar.gz
@@ -75,7 +74,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -95,7 +94,6 @@ jobs:
             -DCMAKE_INSTALL_RPATH='@loader_path' \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DLLAMA_FATAL_WARNINGS=ON \
-            -DLLAMA_CURL=OFF \
             -DLLAMA_BUILD_BORINGSSL=ON \
             -DGGML_METAL=OFF \
             -DGGML_RPC=ON \
@@ -113,7 +111,7 @@ jobs:
           tar -czvf llama-${{ steps.tag.outputs.name }}-bin-macos-x64.tar.gz -s ",./,llama-${{ steps.tag.outputs.name }}/," -C ./build/bin .
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           path: llama-${{ steps.tag.outputs.name }}-bin-macos-x64.tar.gz
           name: llama-bin-macos-x64.tar.gz
@@ -135,7 +133,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -161,8 +159,6 @@ jobs:
             -DGGML_NATIVE=OFF \
             -DGGML_CPU_ALL_VARIANTS=ON \
             -DLLAMA_FATAL_WARNINGS=ON \
-            -DLLAMA_CURL=OFF \
-            -DLLAMA_OPENSSL=ON \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
@@ -177,7 +173,7 @@ jobs:
           tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}.tar.gz --transform "s,./,llama-${{ steps.tag.outputs.name }}/," -C ./build/bin .
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}.tar.gz
           name: llama-bin-ubuntu-${{ matrix.build }}.tar.gz
@@ -188,7 +184,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -212,8 +208,6 @@ jobs:
           cmake -B build \
             -DCMAKE_INSTALL_RPATH='$ORIGIN' \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
-            -DLLAMA_CURL=OFF \
-            -DLLAMA_OPENSSL=ON \
             -DGGML_BACKEND_DL=ON \
             -DGGML_NATIVE=OFF \
             -DGGML_CPU_ALL_VARIANTS=ON \
@@ -232,7 +226,7 @@ jobs:
           tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.tar.gz --transform "s,./,llama-${{ steps.tag.outputs.name }}/," -C ./build/bin .
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.tar.gz
           name: llama-bin-ubuntu-vulkan-x64.tar.gz
@@ -248,7 +242,7 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -269,7 +263,6 @@ jobs:
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" ${{ matrix.arch == 'x64' && 'x64' || 'amd64_arm64' }}
           cmake -S . -B build -G "Ninja Multi-Config" ^
             -D CMAKE_TOOLCHAIN_FILE=cmake/${{ matrix.arch }}-windows-llvm.cmake ^
-            -DLLAMA_CURL=OFF ^
             -DLLAMA_BUILD_BORINGSSL=ON ^
             -DGGML_NATIVE=OFF ^
             -DGGML_BACKEND_DL=ON ^
@@ -285,7 +278,7 @@ jobs:
           7z a -snl llama-bin-win-cpu-${{ matrix.arch }}.zip .\build\bin\Release\*
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           path: llama-bin-win-cpu-${{ matrix.arch }}.zip
           name: llama-bin-win-cpu-${{ matrix.arch }}.zip
@@ -312,7 +305,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
@@ -358,7 +351,7 @@ jobs:
       - name: Build
         id: cmake_build
         run: |
-          cmake -S . -B build ${{ matrix.defines }} -DGGML_NATIVE=OFF -DGGML_CPU=OFF -DGGML_BACKEND_DL=ON -DLLAMA_CURL=OFF
+          cmake -S . -B build ${{ matrix.defines }} -DGGML_NATIVE=OFF -DGGML_CPU=OFF -DGGML_BACKEND_DL=ON -DLLAMA_BUILD_BORINGSSL=ON
           cmake --build build --config Release --target ${{ matrix.target }}
 
       - name: Pack artifacts
@@ -367,7 +360,7 @@ jobs:
           7z a -snl llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip .\build\bin\Release\${{ matrix.target }}.dll
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           path: llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
           name: llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
@@ -382,7 +375,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install ccache
         uses: ggml-org/ccache-action@v1.2.16
@@ -412,7 +405,7 @@ jobs:
             -DGGML_NATIVE=OFF ^
             -DGGML_CPU=OFF ^
             -DGGML_CUDA=ON ^
-            -DLLAMA_CURL=OFF ^
+            -DLLAMA_BUILD_BORINGSSL=ON ^
             -DGGML_CUDA_CUB_3DOT2=ON
           set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
           cmake --build build --config Release -j %NINJA_JOBS% --target ggml-cuda
@@ -423,7 +416,7 @@ jobs:
           7z a -snl llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip .\build\bin\Release\ggml-cuda.dll
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           path: llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip
           name: llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip
@@ -438,7 +431,7 @@ jobs:
           7z a cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip $dst\*
 
       - name: Upload Cuda runtime
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           path: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip
           name: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip
@@ -458,7 +451,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
@@ -481,7 +474,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release ^
             -DGGML_BACKEND_DL=ON -DBUILD_SHARED_LIBS=ON ^
             -DGGML_CPU=OFF -DGGML_SYCL=ON ^
-            -DLLAMA_CURL=OFF
+            -DLLAMA_BUILD_BORINGSSL=ON
           cmake --build build --target ggml-sycl -j
 
       - name: Build the release package
@@ -518,38 +511,134 @@ jobs:
           7z a -snl llama-bin-win-sycl-x64.zip ./build/bin/*
 
       - name: Upload the release package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           path: llama-bin-win-sycl-x64.zip
           name: llama-bin-win-sycl-x64.zip
+
+  ubuntu-22-rocm:
+    runs-on: ubuntu-22.04
+
+    strategy:
+      matrix:
+        include:
+          - ROCM_VERSION: "7.2"
+            gpu_targets: "gfx908;gfx90a;gfx942;gfx1030;gfx1100;gfx1101;gfx1151;gfx1150;gfx1200;gfx1201"
+            build: 'x64'
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: ubuntu-rocm-cmake-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
+          evict-old-files: 1d
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt install -y build-essential git cmake wget
+
+      - name: Setup Legacy ROCm
+        if: matrix.ROCM_VERSION == '7.2'
+        id: legacy_env
+        run: |
+          sudo mkdir --parents --mode=0755 /etc/apt/keyrings
+          wget https://repo.radeon.com/rocm/rocm.gpg.key -O - | \
+            gpg --dearmor | sudo tee /etc/apt/keyrings/rocm.gpg > /dev/null
+
+          sudo tee /etc/apt/sources.list.d/rocm.list << EOF
+          deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/${{ matrix.ROCM_VERSION }} jammy main
+          EOF
+
+          sudo tee /etc/apt/preferences.d/rocm-pin-600 << EOF
+          Package: *
+          Pin: release o=repo.radeon.com
+          Pin-Priority: 600
+          EOF
+
+          sudo apt update
+          sudo apt-get install -y libssl-dev rocm-hip-sdk
+
+      - name: Setup TheRock
+        if: matrix.ROCM_VERSION != '7.2'
+        id: therock_env
+        run: |
+          wget https://repo.amd.com/rocm/tarball/therock-dist-linux-gfx1151-${{ matrix.ROCM_VERSION }}.tar.gz
+          mkdir install
+          tar -xf *.tar.gz -C install
+          export ROCM_PATH=$(pwd)/install
+          echo ROCM_PATH=$ROCM_PATH >> $GITHUB_ENV
+          echo PATH=$PATH:$ROCM_PATH/bin >> $GITHUB_ENV
+          echo LD_LIBRARY_PATH=$ROCM_PATH/lib:$ROCM_PATH/llvm/lib:$ROCM_PATH/lib/rocprofiler-systems >> $GITHUB_ENV
+
+      - name: Build with native CMake HIP support
+        id: cmake_build
+        run: |
+          cmake -B build -S . \
+            -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
+            -DCMAKE_HIP_FLAGS="-mllvm --amdgpu-unroll-threshold-local=600" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_NATIVE=OFF \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DGGML_CPU_ALL_VARIANTS=ON \
+            -DGPU_TARGETS="${{ matrix.gpu_targets }}" \
+            -DGGML_HIP=ON \
+            -DHIP_PLATFORM=amd \
+            -DGGML_HIP_ROCWMMA_FATTN=ON \
+            ${{ env.CMAKE_ARGS }}
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Determine tag name
+        id: tag
+        uses: ./.github/actions/get-tag-name
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        run: |
+          cp LICENSE ./build/bin/
+          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}.tar.gz --transform "s,./,llama-${{ steps.tag.outputs.name }}/," -C ./build/bin .
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}.tar.gz
+          name: llama-bin-ubuntu-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}.tar.gz
 
   windows-hip:
     runs-on: windows-2022
 
     env:
-      HIPSDK_INSTALLER_VERSION: "25.Q3"
+      HIPSDK_INSTALLER_VERSION: "26.Q1"
 
     strategy:
       matrix:
         include:
           - name: "radeon"
-            gpu_targets: "gfx1151;gfx1200;gfx1201;gfx1100;gfx1101;gfx1102;gfx1030;gfx1031;gfx1032"
+            gpu_targets: "gfx1150;gfx1151;gfx1200;gfx1201;gfx1100;gfx1101;gfx1102;gfx1030;gfx1031;gfx1032"
 
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Grab rocWMMA package
         id: grab_rocwmma
         run: |
-          curl -o rocwmma.deb "https://repo.radeon.com/rocm/apt/7.0.1/pool/main/r/rocwmma-dev/rocwmma-dev_2.0.0.70001-42~24.04_amd64.deb"
+          curl -o rocwmma.deb "https://repo.radeon.com/rocm/apt/7.2/pool/main/r/rocwmma-dev/rocwmma-dev_2.2.0.70200-43~24.04_amd64.deb"
           7z x rocwmma.deb
           7z x data.tar
 
       - name: Cache ROCm Installation
         id: cache-rocm
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: C:\Program Files\AMD\ROCm
           key: rocm-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ runner.os }}
@@ -566,7 +655,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           write-host "Downloading AMD HIP SDK Installer"
-          Invoke-WebRequest -Uri "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-${{ env.HIPSDK_INSTALLER_VERSION }}-WinSvr2022-For-HIP.exe" -OutFile "${env:RUNNER_TEMP}\rocm-install.exe"
+          Invoke-WebRequest -Uri "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-${{ env.HIPSDK_INSTALLER_VERSION }}-Win11-For-HIP.exe" -OutFile "${env:RUNNER_TEMP}\rocm-install.exe"
           write-host "Installing AMD HIP SDK"
           $proc = Start-Process "${env:RUNNER_TEMP}\rocm-install.exe" -ArgumentList '-install' -NoNewWindow -PassThru
           $completed = $proc.WaitForExit(600000)
@@ -600,20 +689,20 @@ jobs:
           cmake -G "Unix Makefiles" -B build -S . `
             -DCMAKE_C_COMPILER="${env:HIP_PATH}\bin\clang.exe" `
             -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\bin\clang++.exe" `
-            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/opt/rocm-7.0.1/include/ -Wno-ignored-attributes -Wno-nested-anon-types" `
+            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/opt/rocm-7.2.0/include/ -Wno-ignored-attributes -Wno-nested-anon-types" `
             -DCMAKE_BUILD_TYPE=Release `
             -DGGML_BACKEND_DL=ON `
             -DGGML_NATIVE=OFF `
             -DGGML_CPU=OFF `
-            -DAMDGPU_TARGETS="${{ matrix.gpu_targets }}" `
+            -DGPU_TARGETS="${{ matrix.gpu_targets }}" `
             -DGGML_HIP_ROCWMMA_FATTN=ON `
             -DGGML_HIP=ON `
-            -DLLAMA_CURL=OFF
+            -DLLAMA_BUILD_BORINGSSL=ON
           cmake --build build --target ggml-hip -j ${env:NUMBER_OF_PROCESSORS}
           md "build\bin\rocblas\library\"
           md "build\bin\hipblaslt\library"
-          cp "${env:HIP_PATH}\bin\hipblas.dll" "build\bin\"
-          cp "${env:HIP_PATH}\bin\hipblaslt.dll" "build\bin\"
+          cp "${env:HIP_PATH}\bin\libhipblas.dll" "build\bin\"
+          cp "${env:HIP_PATH}\bin\libhipblaslt.dll" "build\bin\"
           cp "${env:HIP_PATH}\bin\rocblas.dll" "build\bin\"
           cp "${env:HIP_PATH}\bin\rocblas\library\*" "build\bin\rocblas\library\"
           cp "${env:HIP_PATH}\bin\hipblaslt\library\*" "build\bin\hipblaslt\library\"
@@ -624,7 +713,7 @@ jobs:
           7z a -snl llama-bin-win-hip-${{ matrix.name }}-x64.zip .\build\bin\*
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           path: llama-bin-win-hip-${{ matrix.name }}-x64.zip
           name: llama-bin-win-hip-${{ matrix.name }}-x64.zip
@@ -634,7 +723,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -649,7 +738,7 @@ jobs:
           cmake -B build -G Xcode \
             -DGGML_METAL_USE_BF16=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
-            -DLLAMA_CURL=OFF \
+            -DLLAMA_OPENSSL=OFF \
             -DLLAMA_BUILD_EXAMPLES=OFF \
             -DLLAMA_BUILD_TOOLS=OFF \
             -DLLAMA_BUILD_TESTS=OFF \
@@ -679,7 +768,7 @@ jobs:
           zip -r -y llama-${{ steps.tag.outputs.name }}-xcframework.zip build-apple/llama.xcframework
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           path: llama-${{ steps.tag.outputs.name }}-xcframework.zip
           name: llama-${{ steps.tag.outputs.name }}-xcframework.zip
@@ -688,13 +777,29 @@ jobs:
   openEuler-cann:
     strategy:
       matrix:
-        arch: [x86, aarch64]
-        chip_type: ['910b', '310p']
-        build: ['Release']
+        include:
+          # 910b with aclgraph (both architectures)
+          - arch: x86
+            chip_type: '910b'
+            build: 'Release'
+            use_acl_graph: 'on'
+          - arch: aarch64
+            chip_type: '910b'
+            build: 'Release'
+            use_acl_graph: 'on'
+          # 310p without aclgraph (both architectures)
+          - arch: x86
+            chip_type: '310p'
+            build: 'Release'
+            use_acl_graph: 'off'
+          - arch: aarch64
+            chip_type: '310p'
+            build: 'Release'
+            use_acl_graph: 'off'
     runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -716,6 +821,7 @@ jobs:
         env:
           BUILD_TYPE: ${{ matrix.build }}
           SOC_TYPE: ascend${{ matrix.chip_type }}
+          USE_ACL_GRAPH: ${{ matrix.use_acl_graph }}
         run: |
           HOST_UID=$(id -u)
           HOST_GID=$(id -g)
@@ -725,6 +831,7 @@ jobs:
             -w /workspace \
             -e SOC_TYPE=${SOC_TYPE} \
             -e BUILD_TYPE=${BUILD_TYPE} \
+            -e USE_ACL_GRAPH=${USE_ACL_GRAPH} \
             "${{ steps.cann-image.outputs.image }}" \
             bash -lc '
               set -e
@@ -734,10 +841,9 @@ jobs:
               export LD_LIBRARY_PATH=${ASCEND_TOOLKIT_HOME}/lib64:${ASCEND_TOOLKIT_HOME}/$(uname -m)-linux/devlib/:${LD_LIBRARY_PATH}
               cmake -S . -B build \
                   -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
-                  -DLLAMA_CURL=OFF \
-                  -DLLAMA_OPENSSL=ON \
                   -DGGML_CANN=on \
-                  -DSOC_TYPE=${SOC_TYPE}
+                  -DSOC_TYPE=${SOC_TYPE} \
+                  -DUSE_ACL_GRAPH=${USE_ACL_GRAPH}
               cmake --build build -j $(nproc)
 
               chown -R '"${HOST_UID}"':'"${HOST_GID}"' /workspace/build
@@ -750,13 +856,13 @@ jobs:
       - name: Pack artifacts
         run: |
           cp LICENSE ./build/bin/
-          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}.tar.gz --transform "s,./,llama-${{ steps.tag.outputs.name }}/," -C ./build/bin .
+          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz --transform "s,./,llama-${{ steps.tag.outputs.name }}/," -C ./build/bin .
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
-          path: llama-${{ steps.tag.outputs.name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}.tar.gz
-          name: llama-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}.tar.gz
+          path: llama-${{ steps.tag.outputs.name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz
+          name: llama-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz
 
   release:
     if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
@@ -774,6 +880,7 @@ jobs:
       - windows-cuda
       - windows-sycl
       - windows-hip
+      - ubuntu-22-rocm
       - ubuntu-22-cpu
       - ubuntu-22-vulkan
       - macOS-arm64
@@ -784,7 +891,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -794,7 +901,7 @@ jobs:
 
       - name: Download artifacts
         id: download-artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           path: ./artifact
           merge-multiple: true
@@ -858,6 +965,7 @@ jobs:
             **Linux:**
             - [Ubuntu x64 (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-x64.tar.gz)
             - [Ubuntu x64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.tar.gz)
+            - [Ubuntu x64 (ROCm 7.2)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-7.2-x64.tar.gz)
             - [Ubuntu s390x (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-s390x.tar.gz)
 
             **Windows:**
@@ -871,13 +979,13 @@ jobs:
 
             **openEuler:**
             - [openEuler x86 (310p)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-310p-openEuler-x86.tar.gz)
-            - [openEuler x86 (910b)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-910b-openEuler-x86.tar.gz)
+            - [openEuler x86 (910b, ACL Graph)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-910b-openEuler-x86-aclgraph.tar.gz)
             - [openEuler aarch64 (310p)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-310p-openEuler-aarch64.tar.gz)
-            - [openEuler aarch64 (910b)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-910b-openEuler-aarch64.tar.gz)
+            - [openEuler aarch64 (910b, ACL Graph)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-910b-openEuler-aarch64-aclgraph.tar.gz)
 
       - name: Upload release
         id: upload_release
-        uses: actions/github-script@v3
+        uses: actions/github-script@v8
         with:
           github-token: ${{secrets.GITHUB_TOKEN}}
           script: |
@@ -887,7 +995,7 @@ jobs:
             for (let file of await fs.readdirSync('./release')) {
               if (path.extname(file) === '.zip' || file.endsWith('.tar.gz')) {
                 console.log('uploadReleaseAsset', file);
-                await github.repos.uploadReleaseAsset({
+                await github.rest.repos.uploadReleaseAsset({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   release_id: release_id,
