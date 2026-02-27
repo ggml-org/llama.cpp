@@ -4946,72 +4946,30 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, 
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         if (use_adreno_kernels(backend_ctx, tensor)) {
-            cl_int err;
-            cl_kernel kernel;
+            static ggml_cl_buffer buf_trans_q;
+            static ggml_cl_buffer buf_trans_m;
+            static ggml_cl_buffer buf_trans_d;
+            static ggml_cl_buffer buf_unpacked;
 
             cl_int M = tensor->ne[1];
             cl_int K = tensor->ne[0];
 
-            GGML_ASSERT(K % 32 == 0);
-            GGML_ASSERT(M % 4 == 0);
+            GGML_ASSERT(K % ggml_blck_size(tensor->type) == 0);
 
             size_t size_q = (ggml_nelements(tensor)/ggml_blck_size(tensor->type))*ggml_blck_size(tensor->type)/2;
             size_t size_d = (ggml_nelements(tensor)/ggml_blck_size(tensor->type))*sizeof(ggml_fp16_t);
             size_t size_m = (ggml_nelements(tensor)/ggml_blck_size(tensor->type))*sizeof(ggml_fp16_t);
             GGML_ASSERT(size_d + size_q + size_m == ggml_nbytes(tensor) && "Incorrect tensor size");
 
-            cl_mem buf_trans_q;
-            cl_mem buf_trans_d;
-            cl_mem buf_trans_m;
+            buf_trans_q.allocate(backend_ctx->context, size_q);
+            buf_trans_m.allocate(backend_ctx->context, size_m);
+            buf_trans_d.allocate(backend_ctx->context, size_d);
+            buf_unpacked.allocate(backend_ctx->context, ggml_nbytes(tensor));
 
-            CL_CHECK((buf_trans_q = clCreateBuffer(context, CL_MEM_READ_WRITE,
-                size_q, NULL, &err), err));
-            CL_CHECK((buf_trans_d = clCreateBuffer(context, CL_MEM_READ_WRITE,
-                size_d, NULL, &err), err));
-            CL_CHECK((buf_trans_m = clCreateBuffer(context, CL_MEM_READ_WRITE,
-                size_m, NULL, &err), err));
-
-            kernel = backend_ctx->kernel_transpose_16_buf;
-
-            cl_int stride_k_q = K/4;
-            size_t local_size_q[3] = {64, 1, 1};
-            size_t global_size_q[3] = {(size_t)M, (size_t)stride_k_q, 1};
-
-            CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &extra->q));
-            CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &buf_trans_q));
-            CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_int), &M));
-            CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_int), &stride_k_q));
-
-            CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL,
-                global_size_q, local_size_q, 0, NULL, NULL));
-
-            cl_int stride_k_d = K/32;
-            size_t local_size_d[3] = {64, 1, 1};
-            size_t global_size_d[3] = {(size_t)M, (size_t)stride_k_d, 1};
-
-            CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &extra->d));
-            CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &buf_trans_d));
-            CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_int), &M));
-            CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_int), &stride_k_d));
-
-            CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL,
-                global_size_d, local_size_d, 0, NULL, NULL));
-
-            cl_int stride_k_m = K/32;
-            size_t local_size_m[3] = {64, 1, 1};
-            size_t global_size_m[3] = {(size_t)M, (size_t)stride_k_m, 1};
-
-            CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &extra->m));
-            CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &buf_trans_m));
-            CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_int), &M));
-            CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_int), &stride_k_m));
-
-            CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL,
-                global_size_m, local_size_m, 0, NULL, NULL));
-
-            cl_mem data_device = clCreateBuffer(context, CL_MEM_READ_WRITE,
-                ggml_nbytes(tensor), NULL, &err);
-            CL_CHECK(err);
+            // transpose q, d, m back
+            transpose_2d_as_16b(backend_ctx, extra->q, buf_trans_q.buffer, size_q, M, K/4);
+            transpose_2d_as_16b(backend_ctx, extra->d, buf_trans_d.buffer, size_d, M, K/32);
+            transpose_2d_as_16b(backend_ctx, extra->m, buf_trans_m.buffer, size_m, M, K/32);
 
             cl_uchar mask_0F = 0x0F;
             cl_uchar mask_F0 = 0xF0;
@@ -5019,26 +4977,16 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, 
             size_t global_work_size[] = {(size_t)ggml_nelements(tensor)/ggml_blck_size(tensor->type), 1, 1};
             size_t local_work_size[] = {1, 1, 1};
 
-            kernel = backend_ctx->kernel_restore_block_q4_1_noshuffle;
-            CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &buf_trans_q));
-            CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem),   &buf_trans_d));
-            CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &buf_trans_m));
-            CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem),   &data_device));
+            cl_kernel kernel = backend_ctx->kernel_restore_block_q4_1_noshuffle;
+            CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &buf_trans_q.buffer));
+            CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem),   &buf_trans_d.buffer));
+            CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &buf_trans_m.buffer));
+            CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem),   &buf_unpacked.buffer));
             CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_uchar), &mask_0F));
             CL_CHECK(clSetKernelArg(kernel, 5, sizeof(cl_uchar), &mask_F0));
 
-            CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL,
-                global_work_size, local_work_size, 0, NULL, NULL));
-
-            CL_CHECK(clEnqueueReadBuffer(
-                queue, data_device, CL_TRUE, offset,
-                size, data, 0, NULL, NULL));
-
-            CL_CHECK(clReleaseMemObject(data_device));
-            CL_CHECK(clReleaseMemObject(buf_trans_q));
-            CL_CHECK(clReleaseMemObject(buf_trans_d));
-            CL_CHECK(clReleaseMemObject(buf_trans_m));
-
+            CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
+            CL_CHECK(clEnqueueReadBuffer(queue, buf_unpacked.buffer, CL_TRUE, offset, size, data, 0, NULL, NULL));
             return;
         }
 #endif
