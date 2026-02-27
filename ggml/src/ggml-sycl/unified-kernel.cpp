@@ -7904,7 +7904,10 @@ void UnifiedKernel::execute_deferred_copies() {
         if (src && dc.dst && dc.bytes > 0) {
             queue_.memcpy(dc.dst, src, dc.bytes);
         }
-        queue_.wait();
+        // No .wait() needed: queue_ is in-order, so each memcpy serializes
+        // after the previous one (and after the micro-graph replay).
+        // The framework calls ggml_backend_sycl_synchronize() after
+        // graph_compute returns, which waits on this same queue.
     }
     deferred_copies_.clear();
 }
