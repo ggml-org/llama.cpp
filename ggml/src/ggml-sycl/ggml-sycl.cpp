@@ -21696,20 +21696,44 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                             if (!used_onednn_fp16)
 #    endif  // GGML_SYCL_DNNL
                             {
-                                // Call unified dispatch
-                                GGML_SYCL_DEBUG(
-                                    "[UNIFIED] Dispatching via unified kernel: M=%lld K=%lld N=%lld type=%d layout=%d "
-                                    "src0=%p(%s) src1=%p dst=%p\n",
-                                    (long long) M, (long long) K, (long long) N, src0->type,
-                                    static_cast<int>(src0_layout), src0_data, src0_ptr_source ? src0_ptr_source : "?",
-                                    src1_data, dst_data);
-
                                 // Convert layout_mode to LayoutMode enum for kernel
                                 const auto kernel_layout = (requested_layout == GGML_LAYOUT_SOA) ?
                                                                ggml_sycl_unified::LayoutMode::SOA :
                                                                ggml_sycl_unified::LayoutMode::AOS;
-                                ggml_sycl::ggml_sycl_mul_mat_unified_default(
-                                    *ctx.stream(), src0_data, src1_data, dst_data, M, N, K, src0->type, kernel_layout);
+
+                                // Batch dimension handling: iterate over ne[2]*ne[3] batch planes.
+                                // When ne12 > ne02, weights are broadcast (same weight plane used
+                                // for multiple activation/output planes).
+                                const int64_t ne02 = src0->ne[2];
+                                const int64_t ne03 = src0->ne[3];
+                                const int64_t ne12 = src1->ne[2];
+                                const int64_t ne13 = src1->ne[3];
+                                const int64_t n_batch = ne12 * ne13;
+                                GGML_ASSERT(ne03 == ne13);
+                                GGML_ASSERT(ne12 >= ne02 && ne12 % ne02 == 0);
+                                const int64_t i02_divisor = ne12 / ne02;
+                                const size_t  src0_plane_bytes = static_cast<size_t>(N) * ggml_row_size(src0->type, K);
+                                const int64_t src1_plane_elems = M * K;
+                                const int64_t dst_plane_elems  = M * N;
+
+                                GGML_SYCL_DEBUG(
+                                    "[UNIFIED] Dispatching via unified kernel: M=%lld K=%lld N=%lld type=%d layout=%d "
+                                    "src0=%p(%s) src1=%p dst=%p n_batch=%lld\n",
+                                    (long long) M, (long long) K, (long long) N, src0->type,
+                                    static_cast<int>(src0_layout), src0_data, src0_ptr_source ? src0_ptr_source : "?",
+                                    src1_data, dst_data, (long long) n_batch);
+
+                                for (int64_t i0 = 0; i0 < n_batch; ++i0) {
+                                    const int64_t src0_batch = i0 / i02_divisor;
+                                    const char *  src0_batch_ptr =
+                                        static_cast<const char *>(src0_data) + src0_batch * src0_plane_bytes;
+                                    const float * src1_batch_ptr = src1_data + i0 * src1_plane_elems;
+                                    float *       dst_batch_ptr  = dst_data  + i0 * dst_plane_elems;
+
+                                    ggml_sycl::ggml_sycl_mul_mat_unified_default(
+                                        *ctx.stream(), src0_batch_ptr, src1_batch_ptr, dst_batch_ptr,
+                                        M, N, K, src0->type, kernel_layout);
+                                }
                             }
 
                             // Optional numeric spot-check against a host reference.
