@@ -480,9 +480,7 @@ void ExpertCache::record_access_batch(int current_layer, const int * expert_ids,
     if (warmup_active_) {
         warmup_tokens_++;
         if (warmup_tokens_ >= warmup_target_) {
-            // Unlock before finish_warmup (which takes unique lock internally)
-            lock.unlock();
-            finish_warmup();
+            finish_warmup_locked();  // mutex_ already held by caller
             return;
         }
     }
@@ -492,8 +490,11 @@ void ExpertCache::record_access_batch(int current_layer, const int * expert_ids,
 }
 
 void ExpertCache::finish_warmup() {
-    std::unique_lock lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+    finish_warmup_locked();
+}
 
+void ExpertCache::finish_warmup_locked() {
     if (!warmup_active_ || warmup_done_) {
         return;
     }
@@ -603,7 +604,7 @@ void ExpertCache::recompute_score(ExpertSlot & slot, uint64_t current_token) con
     float co_act_term = 0.0f;
     if (!co_activation_.empty()) {
         int64_t slot_key = make_key(slot.layer_idx, slot.expert_idx);
-        // Sum co-activation counts with other cached experts in same layer
+        // O(n) scan over cached experts. Consider per-layer index if n_slots_ > 1000.
         for (const auto & [cached_key, slot_idx] : lookup_map_) {
             if (slot_idx == -1) continue;
             const auto & other = slots_[slot_idx];

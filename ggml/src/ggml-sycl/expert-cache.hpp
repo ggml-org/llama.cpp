@@ -211,6 +211,9 @@ private:
     // Log hit rate periodically (every log_interval_ tokens).
     void maybe_log_stats();
 
+    // Warm-start bulk-load. Assumes caller holds unique lock on mutex_.
+    void finish_warmup_locked();
+
     void * pool_      = nullptr;  // sycl::malloc_device contiguous pool
     size_t pool_size_  = 0;
     size_t slot_size_  = 0;       // Max expert size (aligned to 256)
