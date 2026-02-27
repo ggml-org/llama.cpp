@@ -547,6 +547,109 @@ static void test_layer_distance_eviction() {
     printf("PASSED\n");
 }
 
+// Test 100-slot cache with load/evict/lookup cycle (spec requirement).
+static void test_100_slots() {
+    printf("test_100_slots: ");
+
+    sycl::queue q;
+
+    // 100 slots of 1 MB each = 100 MB
+    constexpr size_t VRAM_BUDGET = 100 * EXPERT_SIZE;
+
+    ggml_sycl::ExpertCache cache;
+    cache.init(0, VRAM_BUDGET, q);
+    assert(cache.is_initialized());
+    assert(cache.total_slots() == 100);
+
+    // Register 200 experts across 10 layers (20 per layer)
+    constexpr int N_LAYERS  = 10;
+    constexpr int N_EXPERTS = 20;
+    constexpr int N_TOTAL   = N_LAYERS * N_EXPERTS;
+
+    auto host_ptrs = allocate_host_experts(q, N_TOTAL, EXPERT_SIZE);
+    int idx = 0;
+    for (int layer = 0; layer < N_LAYERS; layer++) {
+        for (int expert = 0; expert < N_EXPERTS; expert++) {
+            cache.register_expert(layer, expert, host_ptrs[idx++], EXPERT_SIZE);
+        }
+    }
+
+    // Phase 1: Load first 100 experts (fills all slots)
+    for (int layer = 0; layer < N_LAYERS; layer++) {
+        for (int expert = 0; expert < 10; expert++) {
+            void * ptr = cache.ensure_cached(layer, expert, q);
+            assert(ptr != nullptr);
+        }
+    }
+
+    assert(cache.cached_count() == 100);
+    assert(cache.cache_misses() == 100);
+    assert(cache.cache_hits() == 0);
+
+    // Phase 2: Re-access some experts (generate hits)
+    for (int layer = 0; layer < 5; layer++) {
+        for (int expert = 0; expert < 5; expert++) {
+            void * ptr = cache.ensure_cached(layer, expert, q);
+            assert(ptr != nullptr);
+        }
+    }
+
+    assert(cache.cache_hits() == 25);
+    assert(cache.cached_count() == 100);
+
+    // Phase 3: Load 50 new experts -> triggers 50 evictions
+    for (int layer = 0; layer < 5; layer++) {
+        for (int expert = 10; expert < 20; expert++) {
+            void * ptr = cache.ensure_cached(layer, expert, q);
+            assert(ptr != nullptr);
+        }
+    }
+
+    // Still 100 cached (50 evicted, 50 new loaded)
+    assert(cache.cached_count() == 100);
+    assert(cache.cache_misses() == 150);  // 100 initial + 50 new
+
+    // Phase 4: Lookup all -- some cached, some evicted
+    int n_cached = 0;
+    for (int layer = 0; layer < N_LAYERS; layer++) {
+        for (int expert = 0; expert < N_EXPERTS; expert++) {
+            auto lk = cache.lookup(layer, expert);
+            assert(lk.host_ptr != nullptr);  // All registered
+            if (lk.is_cached) {
+                n_cached++;
+            }
+        }
+    }
+    assert(n_cached == 100);
+
+    // Phase 5: Verify evict_and_load API works
+    {
+        // Create a fresh host buffer for a "new" expert
+        void * fresh = sycl::malloc_host(EXPERT_SIZE, q);
+        assert(fresh != nullptr);
+        memset(fresh, 0xAB, EXPERT_SIZE);
+
+        // Use evict_and_load on a new layer/expert pair (layer 99, expert 0)
+        void * dev_ptr = cache.evict_and_load(99, 0, fresh, EXPERT_SIZE, q);
+        assert(dev_ptr != nullptr);
+        assert(cache.is_cached_in_vram(99, 0));
+
+        sycl::free(fresh, q);
+    }
+
+    // Hit rate sanity check: should be > 0
+    assert(cache.hit_rate() > 0.0f);
+
+    cache.shutdown();
+
+    // After shutdown: everything should be cleaned up
+    assert(!cache.is_initialized());
+    assert(cache.cached_count() == 0);
+
+    free_host_experts(q, host_ptrs);
+    printf("PASSED\n");
+}
+
 int main() {
     try {
         printf("\n=== Expert Cache Unit Tests ===\n\n");
@@ -562,6 +665,7 @@ int main() {
         test_rolling_hit_rate();
         test_warmup_phase_transition();
         test_layer_distance_eviction();
+        test_100_slots();
 
         printf("\nAll tests PASSED!\n\n");
         return 0;

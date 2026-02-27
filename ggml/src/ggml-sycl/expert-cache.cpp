@@ -47,6 +47,12 @@ static int get_warmup_token_count() {
 // ExpertCache implementation
 // ---------------------------------------------------------------------------
 
+size_t ExpertCache::default_budget(int device_id) {
+    // 50% of remaining VRAM after dense layers (weights + runtime allocations).
+    size_t available = unified_cache_available_for_compute(device_id);
+    return available / 2;
+}
+
 void ExpertCache::init(int device_id, size_t vram_budget_bytes, sycl::queue & q) {
     std::unique_lock lock(mutex_);
 
@@ -58,12 +64,17 @@ void ExpertCache::init(int device_id, size_t vram_budget_bytes, sycl::queue & q)
     device_id_ = device_id;
     queue_     = &q;
 
-    // Check env var override
+    // Check env var override first
     size_t override_bytes = get_expert_cache_budget_override();
     if (override_bytes > 0) {
         vram_budget_bytes = override_bytes;
         GGML_LOG_INFO("[EXPERT-CACHE] Budget overridden by GGML_SYCL_EXPERT_CACHE_MB: %zu MB\n",
                       static_cast<size_t>(vram_budget_bytes / (1024ULL * 1024ULL)));
+    } else if (vram_budget_bytes == 0) {
+        // Use default: 50% of remaining VRAM after dense layers
+        vram_budget_bytes = default_budget(device_id);
+        GGML_LOG_INFO("[EXPERT-CACHE] Using default budget (50%% of remaining VRAM): %.1f MB\n",
+                      vram_budget_bytes / (1024.0 * 1024.0));
     }
 
     pool_size_ = vram_budget_bytes;

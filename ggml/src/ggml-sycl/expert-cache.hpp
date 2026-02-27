@@ -112,6 +112,19 @@ public:
     // Async prefetch (non-blocking H2D). Returns event for completion.
     sycl::event prefetch_async(int layer_idx, int expert_idx, sycl::queue & q);
 
+    // Evict lowest-score slot and load a new expert into VRAM.
+    // Registers the expert if not already registered, then ensures it is cached.
+    // Returns device pointer, or nullptr on failure.
+    void * evict_and_load(int layer_idx, int expert_idx,
+                          const void * host_src, size_t bytes, sycl::queue & q) {
+        register_expert(layer_idx, expert_idx, host_src, bytes);
+        return ensure_cached(layer_idx, expert_idx, q);
+    }
+
+    // Compute default VRAM budget: 50% of remaining VRAM after dense layers.
+    // Returns 0 if device info is unavailable.
+    static size_t default_budget(int device_id);
+
     // Update access statistics after use.
     void update_score(int layer_idx, int expert_idx, uint64_t token_counter);
 
