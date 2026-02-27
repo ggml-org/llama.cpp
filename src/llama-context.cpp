@@ -158,6 +158,17 @@ llama_context::llama_context(
     cparams.op_offload = params.op_offload;
     cparams.kv_unified = params.kv_unified;
 
+    cparams.attn_weights = params.attn_weights;
+    if (cparams.attn_weights && cparams.flash_attn) {
+        throw std::runtime_error("attention weight extraction requires flash_attn to be disabled");
+    }
+    if (cparams.attn_weights) {
+        // default: head 0 of the last layer
+        const int32_t default_layer = (int32_t)(hparams.n_layer - 1);
+        attn_heads.push_back({default_layer, 0});
+        cparams.attn_layers.insert(default_layer);
+    }
+
     // initialized later
     cparams.pipeline_parallel = false;
 
@@ -769,6 +780,52 @@ float * llama_context::get_embeddings_seq(llama_seq_id seq_id) {
     }
 
     return it->second.data();
+}
+
+void llama_context::set_attn_heads(const int32_t * layers, const int32_t * heads, size_t n_pairs) {
+    const auto & hparams = model.hparams;
+
+    attn_heads.clear();
+    attn_heads.reserve(n_pairs);
+    cparams.attn_layers.clear();
+
+    for (size_t i = 0; i < n_pairs; i++) {
+        if (layers[i] < 0 || layers[i] >= (int32_t) hparams.n_layer) {
+            LLAMA_LOG_ERROR("%s: invalid layer index %d (model has %u layers), skipping\n",
+                    __func__, layers[i], hparams.n_layer);
+            continue;
+        }
+        if (heads[i] < 0 || heads[i] >= (int32_t) hparams.n_head(layers[i])) {
+            LLAMA_LOG_ERROR("%s: invalid head index %d for layer %d (layer has %u heads), skipping\n",
+                    __func__, heads[i], layers[i], hparams.n_head(layers[i]));
+            continue;
+        }
+        attn_heads.push_back({layers[i], heads[i]});
+        cparams.attn_layers.insert(layers[i]);
+    }
+
+    sched_need_reserve = true;
+}
+
+float * llama_context::get_attn_ith(int32_t i) {
+    output_reorder();
+
+    try {
+        if (attn.data == nullptr) {
+            return nullptr;
+        }
+
+        const int64_t j = output_resolve_row(i);
+        const size_t attn_stride = attn_heads.size() * cparams.n_ctx;
+        return attn.data + j * attn_stride;
+    } catch (const std::exception & err) {
+        LLAMA_LOG_ERROR("%s: invalid attention id %d, reason: %s\n", __func__, i, err.what());
+        return nullptr;
+    }
+}
+
+int32_t llama_context::get_attn_n_kv() const {
+    return attn_n_kv;
 }
 
 llama_token llama_context::get_sampled_token_ith(int32_t idx) {
@@ -1693,6 +1750,59 @@ int llama_context::decode(const llama_batch & batch_inp) {
             }
         }
 
+        // extract attention weights
+        if (attn.data && cparams.attn_weights && n_outputs > 0 && !attn_heads.empty()) {
+            const size_t n_pairs = attn_heads.size();
+            const size_t attn_stride = n_pairs * cparams.n_ctx; // stride per output token in the attn buffer
+
+            // iterate over requested (layer, head) pairs
+            for (size_t p = 0; p < n_pairs; p++) {
+                const int layer = attn_heads[p].layer;
+                const int head  = attn_heads[p].head;
+
+                auto it = res->t_attn.find(layer);
+                if (it == res->t_attn.end() || it->second == nullptr) {
+                    continue;
+                }
+
+                ggml_tensor * t = it->second;
+                ggml_backend_t backend_attn = ggml_backend_sched_get_tensor_backend(sched.get(), t);
+                GGML_ASSERT(backend_attn != nullptr);
+
+                // t shape: [n_kv, n_tokens_in_stream, n_head, n_stream]
+                const int64_t t_n_kv             = t->ne[0];
+                const int64_t t_n_tokens_in_stream = t->ne[1];
+                const int64_t t_n_head           = t->ne[2];
+                const int64_t t_n_stream         = t->ne[3];
+
+                attn_n_kv = (int32_t) t_n_kv;
+
+                GGML_ASSERT(head < t_n_head);
+
+                // extract attention for each output token
+                int32_t out_idx = 0;
+                for (uint32_t i = 0; i < ubatch.n_tokens; i++) {
+                    if (!ubatch.output[i]) {
+                        continue;
+                    }
+
+                    // compute token position within stream
+                    const int64_t stream   = t_n_stream > 1 ? (int64_t) i / t_n_tokens_in_stream : 0;
+                    const int64_t t_in_str = t_n_stream > 1 ? (int64_t) i % t_n_tokens_in_stream : (int64_t) i;
+
+                    // byte offset into the tensor for this (token, head, stream)
+                    const size_t src_offset = ((stream * t_n_head + head) * t_n_tokens_in_stream + t_in_str) * t_n_kv * sizeof(float);
+
+                    // destination in the output buffer
+                    float * dst = attn.data + (n_outputs_prev + out_idx) * attn_stride + p * cparams.n_ctx;
+
+                    ggml_backend_tensor_get_async(backend_attn, t, dst, src_offset, t_n_kv * sizeof(float));
+
+                    out_idx++;
+                }
+            }
+        }
+
         // Copy backend sampling output if this ubatch produced any sampling tensors.
         if (has_samplers && (!res->t_sampled.empty() || !res->t_sampled_probs.empty() || !res->t_sampled_logits.empty())) {
             const auto seq_to_output_row = build_seq_to_output_row(ubatch, n_outputs_prev);
@@ -1795,6 +1905,10 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     logits.size = has_logits ? n_vocab*n_outputs_max : 0;
     embd.size   = has_embd ? n_embd_out*n_outputs_max : 0;
 
+    const bool has_attn = cparams.attn_weights && !attn_heads.empty();
+    const size_t n_attn_pairs = attn_heads.size();
+    attn.size = has_attn ? n_attn_pairs * cparams.n_ctx * n_outputs_max : 0;
+
     // Allocate backend sampling output buffers if there are backend samplers configured.
     const bool has_sampling = !sampling.samplers.empty();
     if (has_sampling) {
@@ -1809,8 +1923,8 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 
     const size_t prev_size = buf_output ? ggml_backend_buffer_get_size(buf_output.get()) : 0;
     const size_t new_size  =
-        (logits.size + embd.size + backend_float_count) * sizeof(float) +
-        (                          backend_token_count) * sizeof(llama_token);
+        (logits.size + embd.size + attn.size + backend_float_count) * sizeof(float) +
+        (                                      backend_token_count) * sizeof(llama_token);
 
     // alloc only when more than the current capacity is required
     // TODO: also consider shrinking the buffer
@@ -1826,6 +1940,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
             buf_output = nullptr;
             logits.data = nullptr;
             embd.data = nullptr;
+            attn.data = nullptr;
         }
 
         auto * buft = ggml_backend_cpu_buffer_type();
@@ -1852,6 +1967,9 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 
     embd = has_embd ? buffer_view<float>{(float *) (base + offset), embd.size} : buffer_view<float>{nullptr, 0};
     offset += embd.size * sizeof(float);
+
+    attn = has_attn ? buffer_view<float>{(float *) (base + offset), attn.size} : buffer_view<float>{nullptr, 0};
+    offset += attn.size * sizeof(float);
 
     if (has_sampling) {
         sampling.logits = {(float *) (base + offset), (size_t)(n_vocab*n_outputs_max)};
@@ -1914,6 +2032,13 @@ void llama_context::output_reorder() {
         if (embd.size > 0) {
             for (uint64_t k = 0; k < n_embd; k++) {
                 std::swap(embd.data[i0*n_embd + k], embd.data[i1*n_embd + k]);
+            }
+        }
+
+        if (attn.size > 0) {
+            const uint64_t attn_stride = attn_heads.size() * cparams.n_ctx;
+            for (uint64_t k = 0; k < attn_stride; k++) {
+                std::swap(attn.data[i0*attn_stride + k], attn.data[i1*attn_stride + k]);
             }
         }
 
@@ -2799,6 +2924,7 @@ llama_context_params llama_context_default_params() {
         /*.op_offload                  =*/ true,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
+        /*.attn_weights                =*/ false,
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
     };
@@ -2987,6 +3113,22 @@ float * llama_get_embeddings_seq(llama_context * ctx, llama_seq_id seq_id) {
     ctx->synchronize();
 
     return ctx->get_embeddings_seq(seq_id);
+}
+
+void llama_set_attn_heads(llama_context * ctx, const int32_t * layers, const int32_t * heads, size_t n_pairs) {
+    ctx->set_attn_heads(layers, heads, n_pairs);
+}
+
+float * llama_get_attn_ith(llama_context * ctx, int32_t i) {
+    ctx->synchronize();
+
+    return ctx->get_attn_ith(i);
+}
+
+int32_t llama_get_attn_n_kv(llama_context * ctx) {
+    ctx->synchronize();
+
+    return ctx->get_attn_n_kv();
 }
 
 bool llama_set_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler * smpl) {
