@@ -8,7 +8,8 @@
 #endif
 
 #define QK4_0 32
-#define N_SIMDGROUP 4
+#define NSUBGROUPS 4
+#define SUBGROUP_SIZE 64
 
 #define dequantizeBlockAccum_ns_sgbroadcast_1_hi(total_sums, bits4, scale, minv, y) \
     float shared_y; \
@@ -190,21 +191,15 @@
 #ifdef ADRENO_GPU
 REQD_SUBGROUP_SIZE_64
 #endif
-__kernel void kernel_gemv_noshuffle_q4_1_f32(
-        __read_only  image1d_buffer_t src0_q,  // quantized A
-        global half2  * src0_d,  // A scales
-        global half2  * src0_m,  // A mins
-        __read_only  image1d_buffer_t src1,    // B
-        ulong offset1,            // offset to B (0)
-        global float * dst,     // C
-        ulong offsetd,            // offset to C (0)
-        int ne00,               // K
-        int ne01,               // M
-        int ne02,               // 1
-        int ne10,               // K
-        int ne12,               // 1
-        int ne0,                // M
-        int ne1)                // N
+kernel void kernel_gemv_noshuffle_q4_1_f32(
+        read_only  image1d_buffer_t src0_q,
+        global half2  * src0_d,
+        global half2  * src0_m,
+        read_only  image1d_buffer_t src1,
+        global float * dst,
+        ulong offsetd,
+        int ne00,
+        int ne01)
 {
     uint groupId = get_local_id(1);
     uint gid     = get_global_id(0);
@@ -214,17 +209,17 @@ __kernel void kernel_gemv_noshuffle_q4_1_f32(
     uint M = ne01;
 
     uint LINE_STRIDE_A = M / 2;
-    uint BLOCK_STRIDE_A = N_SIMDGROUP * M;
+    uint BLOCK_STRIDE_A = NSUBGROUPS * M;
 
-    __private uint4     regA;
-    __private half2     regS;
-    __private half2     regM;
-    __private float8    regB;
+    private uint4     regA;
+    private half2     regS;
+    private half2     regM;
+    private float8    regB;
 
-    __private float2 totalSum = (float2)(0.0f);
+    private float2 totalSum = (float2)(0.0f);
 
     // loop along K in block granularity, skip 4 blocks every iter
-    for (uint k = groupId; k < (K / QK4_0); k += N_SIMDGROUP) {
+    for (uint k = groupId; k < (K / QK4_0); k += NSUBGROUPS) {
         regS = src0_d[gid + k * LINE_STRIDE_A]; // each fiber loads scale of two rows
         regM = src0_m[gid + k * LINE_STRIDE_A]; // each fiber loads min of two rows
         // first 4 fibers in each wave load 8 B values to its private scope
@@ -256,14 +251,28 @@ __kernel void kernel_gemv_noshuffle_q4_1_f32(
     }
 
     // reduction in local memory, assumes #wave=4
-    __local float2 reduceLM[SIMDGROUP_WIDTH * 3];
-    if (groupId == 1) reduceLM[SIMDGROUP_WIDTH * 0 + slid] = totalSum;
-    if (groupId == 2) reduceLM[SIMDGROUP_WIDTH * 1 + slid] = totalSum;
-    if (groupId == 3) reduceLM[SIMDGROUP_WIDTH * 2 + slid] = totalSum;
+    local float2 reduceLM[SUBGROUP_SIZE * 3];
+    if (groupId == 1) {
+        reduceLM[SUBGROUP_SIZE * 0 + slid] = totalSum;
+    }
+    if (groupId == 2) {
+        reduceLM[SUBGROUP_SIZE * 1 + slid] = totalSum;
+    }
+    if (groupId == 3) {
+        reduceLM[SUBGROUP_SIZE * 2 + slid] = totalSum;
+    }
+
     barrier(CLK_LOCAL_MEM_FENCE);
-    if (groupId == 0) totalSum += reduceLM[SIMDGROUP_WIDTH * 0 + slid];
-    if (groupId == 0) totalSum += reduceLM[SIMDGROUP_WIDTH * 1 + slid];
-    if (groupId == 0) totalSum += reduceLM[SIMDGROUP_WIDTH * 2 + slid];
+
+    if (groupId == 0) {
+        totalSum += reduceLM[SUBGROUP_SIZE * 0 + slid];
+    }
+    if (groupId == 0) {
+        totalSum += reduceLM[SUBGROUP_SIZE * 1 + slid];
+    }
+    if (groupId == 0) {
+        totalSum += reduceLM[SUBGROUP_SIZE * 2 + slid];
+    }
 
     // 2 outputs per fiber in wave 0
     if (groupId == 0) {

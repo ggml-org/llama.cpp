@@ -12,16 +12,18 @@ REQD_SUBGROUP_SIZE_128
 #endif
 
 kernel void kernel_mul_mm_q4_1_f32_8x4(
-        global const ushort * src0_q,
-        global const half  * src0_d,
-        global const half  * src0_m,
-        __read_only image1d_buffer_t src1,
-        global float * dst,
-        int m,
-        int n,
-        int k,
-        int n_no_padding
+    global const ushort * src0_q,
+    global const half  * src0_d,
+    global const half  * src0_m,
+    read_only image1d_buffer_t src1,
+    global float * dst,
+    ulong offsetd,
+    int m,
+    int n,
+    int k,
+    int n_no_padding
 ) {
+    dst = (global float *)((global char *)dst + offsetd);
 
     int m_4 = m >> 2;
     int n_4 = n >> 2;
@@ -33,12 +35,12 @@ kernel void kernel_mul_mm_q4_1_f32_8x4(
     half8 c0 = 0, c1 = 0, c2 = 0, c3 = 0;
     half8 B;
     half4 dequantized_weights;
-    __global const ushort* weight_ptr = src0_q + gx_2;
-    __global const half*   scale_ptr  = src0_d + gx_2;
-    __global const half*   min_ptr    = src0_m + gx_2;
 
-    for(int i=0; i<k; i+=4){
+    global const ushort* weight_ptr = src0_q + gx_2;
+    global const half*   scale_ptr  = src0_d + gx_2;
+    global const half*   min_ptr    = src0_m + gx_2;
 
+    for(int i = 0; i < k; i += 4) {
         B.s0123 = read_imageh(src1, gy*2 + (i)*(n_4));
         B.s4567 = read_imageh(src1, gy*2 + (i)*(n_4)+1);
 
