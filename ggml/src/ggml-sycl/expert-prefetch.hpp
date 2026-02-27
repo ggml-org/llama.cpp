@@ -10,17 +10,17 @@
 // host RAM to VRAM while the GPU is busy computing attention. This overlaps
 // PCIe transfer with GPU compute, hiding latency for cache-miss experts.
 //
-// Uses an out-of-order SYCL queue for DMA (separate from the compute queue)
-// and integrates with expert_cache for VRAM slot allocation. The hint/await
-// API allows a prediction thread to schedule prefetches while the GPU thread
-// blocks only when the expert is actually needed.
+// Uses an out-of-order SYCL queue (dma_queue_) for DMA, separate from the
+// compute queue. hint() submits memcpy on dma_queue_ via
+// ExpertCache::prefetch_async() and stores the returned sycl::event in a
+// PrefetchRequest. await() waits on the per-expert event for granular
+// synchronization.
 //
 // L2 coherency: BCS H2D to malloc_device completes BEFORE the kernel
 // launches because await() is called before kernel submission, and the
 // in-order compute queue serializes after await().
 
-#ifndef GGML_SYCL_EXPERT_PREFETCH_HPP
-#define GGML_SYCL_EXPERT_PREFETCH_HPP
+#pragma once
 
 #include <cstddef>
 #include <cstdint>
@@ -34,12 +34,12 @@
 namespace ggml_sycl {
 
 // Tracks a single in-flight DMA prefetch operation.
-struct prefetch_request {
+struct PrefetchRequest {
     expert_key   key;
-    void *       device_dst = nullptr;  // VRAM slot from expert_cache
+    void *       device_dst = nullptr;  // VRAM slot (from ExpertCache)
     const void * host_src   = nullptr;  // Host RAM source
     size_t       bytes      = 0;
-    sycl::event  event;                 // DMA completion event
+    sycl::event  event;                 // DMA completion event from dma_queue_
     bool         completed  = false;
 };
 
@@ -53,31 +53,32 @@ struct prefetch_request {
 // thread calls await().
 //
 // Usage:
-//   expert_prefetcher prefetcher;
+//   ExpertPrefetcher prefetcher;
 //   prefetcher.init(compute_queue, &cache);
-//   prefetcher.hint(layer + 2, expert_id);    // non-blocking
-//   void * ptr = prefetcher.await(layer, id); // blocks until ready
+//   prefetcher.hint(layer + 2, expert_id);    // non-blocking H2D on OOQ
+//   void * ptr = prefetcher.await(layer, id); // waits on per-expert event
 //
-class expert_prefetcher {
+class ExpertPrefetcher {
   public:
-    expert_prefetcher() = default;
-    ~expert_prefetcher();
+    ExpertPrefetcher() = default;
+    ~ExpertPrefetcher();
 
     // Non-copyable, non-movable
-    expert_prefetcher(const expert_prefetcher &)             = delete;
-    expert_prefetcher & operator=(const expert_prefetcher &) = delete;
-    expert_prefetcher(expert_prefetcher &&)                  = delete;
-    expert_prefetcher & operator=(expert_prefetcher &&)      = delete;
+    ExpertPrefetcher(const ExpertPrefetcher &)             = delete;
+    ExpertPrefetcher & operator=(const ExpertPrefetcher &) = delete;
+    ExpertPrefetcher(ExpertPrefetcher &&)                  = delete;
+    ExpertPrefetcher & operator=(ExpertPrefetcher &&)      = delete;
 
     // Initialize the prefetcher.
     // compute_q: the primary in-order compute queue (used to derive context/device)
     // cache: the expert VRAM cache (for slot allocation + host pointer lookup)
-    void init(sycl::queue & compute_q, expert_cache * cache);
+    void init(sycl::queue & compute_q, ExpertCache * cache);
 
     // Shut down: cancel all in-flight prefetches, wait for completion.
     void shutdown();
 
     // Schedule async prefetch of a single expert (non-blocking).
+    // Submits H2D memcpy on dma_queue_ via ExpertCache::prefetch_async().
     // Returns true if a new prefetch was scheduled.
     // Returns false if: already cached in VRAM, already in-flight, no capacity,
     //                   cache is null, or expert is not registered.
@@ -86,9 +87,10 @@ class expert_prefetcher {
     // Schedule async prefetch of multiple experts for a layer (non-blocking).
     void hint_batch(int layer_idx, const std::vector<int> & expert_indices);
 
-    // Wait for a specific expert's prefetch to complete and return its VRAM pointer.
-    // If the expert is already cached (no in-flight prefetch), returns the cached ptr
-    // via expert_cache::get_expert(). Returns nullptr if expert not registered.
+    // Wait for a specific expert's prefetch to complete and return its VRAM ptr.
+    // Waits on the per-expert sycl::event (not a global queue wait).
+    // If the expert is already cached (no in-flight prefetch), returns the
+    // cached ptr via ExpertCache::lookup(). Returns nullptr if not registered.
     void * await(int layer_idx, int expert_idx);
 
     // Cancel all pending prefetches and wait for in-flight DMAs to complete.
@@ -103,17 +105,17 @@ class expert_prefetcher {
     bool is_active() const { return initialized_; }
 
   private:
-    sycl::queue    dma_queue_;                // OOQ for async H2D
-    expert_cache * cache_         = nullptr;
-    int            prefetch_depth_ = 2;       // Default: 2 layers ahead
-    bool           initialized_   = false;
+    sycl::queue     dma_queue_;                // OOQ for async H2D DMA
+    ExpertCache *   cache_         = nullptr;
+    int             prefetch_depth_ = 2;       // Default: 2 layers ahead
+    bool            initialized_   = false;
 
-    // Maximum simultaneous in-flight prefetches.
-    // Double-buffered: overlaps current layer's DMA with next layer's compute.
+    // Max concurrent DMA operations. MoE models activate up to 8 experts
+    // per layer, so 8 in-flight requests covers a full layer's worth of misses.
     static constexpr int max_inflight_ = 8;
 
     // In-flight prefetch tracking. Key = expert_key.
-    std::unordered_map<expert_key, prefetch_request, expert_key_hash> inflight_;
+    std::unordered_map<expert_key, PrefetchRequest, expert_key_hash> inflight_;
 
     mutable std::mutex mutex_;
 
@@ -127,6 +129,7 @@ class expert_prefetcher {
     bool has_capacity() const;
 };
 
-}  // namespace ggml_sycl
+// Backward-compatible type alias.
+using expert_prefetcher = ExpertPrefetcher;
 
-#endif  // GGML_SYCL_EXPERT_PREFETCH_HPP
+}  // namespace ggml_sycl

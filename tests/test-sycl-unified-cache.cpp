@@ -9,7 +9,7 @@
 // - ChunkManager (sub-tensor streaming)
 // - EvictionPolicy (priority-based LRU eviction)
 // - KVCacheManager (per-head KV cache)
-// - expert_prefetcher (MoE expert prefetch DMA engine)
+// - ExpertPrefetcher (MoE expert prefetch DMA engine)
 // - ComputeBufferManager (P0 compute buffers)
 //
 // Test Cases:
@@ -484,11 +484,11 @@ static bool test_memory_accounting() {
 static bool test_prefetch_through_unified() {
     printf("TEST: test_prefetch_through_unified\n");
 
-    // The expert_prefetcher integrates with expert_cache for DMA-based prefetch.
+    // The ExpertPrefetcher integrates with ExpertCache for DMA-based prefetch.
     // Full integration testing requires a SYCL device + expert_cache instance.
     // Basic API smoke test: verify uninitialized prefetcher is safe.
 
-    ggml_sycl::expert_prefetcher prefetcher;
+    ggml_sycl::ExpertPrefetcher prefetcher;
 
     // Not active before init
     if (prefetcher.is_active()) {

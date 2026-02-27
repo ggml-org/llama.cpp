@@ -1,8 +1,8 @@
 // SYCL Expert Prefetch DMA Engine unit tests
-// Tests for expert_prefetcher hint/await API with SYCL device integration.
+// Tests for ExpertPrefetcher hint/await API with SYCL device integration.
 //
 // Part of MoE hybrid inference system (epic llama.cpp-j8eb, Task 3).
-// Requires SYCL runtime: tests real async H2D DMA via expert_cache.
+// Requires SYCL runtime: tests real async H2D DMA via ExpertCache.
 
 #include <algorithm>
 #include <cmath>
@@ -21,8 +21,8 @@
 // =============================================================================
 
 // Minimal pinned_chunk_pool stub for test compilation.
-// The expert_cache constructor takes a pinned_chunk_pool& but the prefetcher
-// tests exercise the DMA path via expert_cache's copy_queue.
+// The ExpertCache constructor takes a pinned_chunk_pool& but the prefetcher
+// tests exercise the DMA path via ExpertCache's copy_queue.
 
 static sycl::queue make_test_queue() {
     try {
@@ -39,7 +39,7 @@ static sycl::queue make_test_queue() {
 static bool test_lifecycle() {
     printf("TEST: test_lifecycle\n");
 
-    ggml_sycl::expert_prefetcher pf;
+    ggml_sycl::ExpertPrefetcher pf;
 
     // Not active before init
     if (pf.is_active()) {
@@ -65,7 +65,7 @@ static bool test_lifecycle() {
 static bool test_prefetch_depth_default() {
     printf("TEST: test_prefetch_depth_default\n");
 
-    ggml_sycl::expert_prefetcher pf;
+    ggml_sycl::ExpertPrefetcher pf;
 
     // Default depth should be 2
     if (pf.prefetch_depth() != 2) {
@@ -83,7 +83,7 @@ static bool test_prefetch_depth_default() {
 static bool test_hint_requires_init() {
     printf("TEST: test_hint_requires_init\n");
 
-    ggml_sycl::expert_prefetcher pf;
+    ggml_sycl::ExpertPrefetcher pf;
 
     bool result = pf.hint(0, 0);
     if (result) {
@@ -101,7 +101,7 @@ static bool test_hint_requires_init() {
 static bool test_await_requires_init() {
     printf("TEST: test_await_requires_init\n");
 
-    ggml_sycl::expert_prefetcher pf;
+    ggml_sycl::ExpertPrefetcher pf;
 
     void * ptr = pf.await(0, 0);
     if (ptr != nullptr) {
@@ -119,7 +119,7 @@ static bool test_await_requires_init() {
 static bool test_initial_counts() {
     printf("TEST: test_initial_counts\n");
 
-    ggml_sycl::expert_prefetcher pf;
+    ggml_sycl::ExpertPrefetcher pf;
 
     if (pf.pending_count() != 0) {
         printf("  FAIL: initial pending_count should be 0, got %d\n", pf.pending_count());
@@ -141,7 +141,7 @@ static bool test_initial_counts() {
 static bool test_cancel_all_safe() {
     printf("TEST: test_cancel_all_safe\n");
 
-    ggml_sycl::expert_prefetcher pf;
+    ggml_sycl::ExpertPrefetcher pf;
 
     // Should not crash
     pf.cancel_all();
@@ -156,7 +156,7 @@ static bool test_cancel_all_safe() {
 static bool test_shutdown_safe() {
     printf("TEST: test_shutdown_safe\n");
 
-    ggml_sycl::expert_prefetcher pf;
+    ggml_sycl::ExpertPrefetcher pf;
 
     // Should not crash
     pf.shutdown();
@@ -176,7 +176,7 @@ static bool test_shutdown_safe() {
 static bool test_hint_batch_safe() {
     printf("TEST: test_hint_batch_safe\n");
 
-    ggml_sycl::expert_prefetcher pf;
+    ggml_sycl::ExpertPrefetcher pf;
 
     std::vector<int> experts = { 0, 1, 2 };
     // Should not crash

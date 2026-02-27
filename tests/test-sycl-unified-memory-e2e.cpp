@@ -535,11 +535,11 @@ static bool test_compute_buffer_protection() {
 static bool test_expert_prefetch_integration() {
     printf("TEST: test_expert_prefetch_integration\n");
 
-    // The expert_prefetcher integrates with expert_cache for DMA-based prefetch.
-    // Full integration testing requires a real expert_cache instance.
+    // The ExpertPrefetcher integrates with ExpertCache for DMA-based prefetch.
+    // Full integration testing requires a real ExpertCache instance.
     // Basic API smoke test: verify uninitialized prefetcher is safe.
 
-    ggml_sycl::expert_prefetcher prefetcher;
+    ggml_sycl::ExpertPrefetcher prefetcher;
 
     // Not active before init
     if (prefetcher.is_active()) {

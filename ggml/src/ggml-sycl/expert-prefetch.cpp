@@ -19,18 +19,18 @@ namespace ggml_sycl {
 // Lifecycle
 // ============================================================================
 
-expert_prefetcher::~expert_prefetcher() {
+ExpertPrefetcher::~ExpertPrefetcher() {
     if (initialized_) {
         shutdown();
     }
 }
 
-void expert_prefetcher::init(sycl::queue & compute_q, expert_cache * cache) {
+void ExpertPrefetcher::init(sycl::queue & compute_q, ExpertCache * cache) {
     if (initialized_) {
         return;
     }
     if (!cache) {
-        GGML_LOG_WARN("[SYCL] expert_prefetcher::init called with null cache\n");
+        GGML_LOG_WARN("[SYCL] ExpertPrefetcher::init called with null cache\n");
         return;
     }
 
@@ -54,7 +54,7 @@ void expert_prefetcher::init(sycl::queue & compute_q, expert_cache * cache) {
                   prefetch_depth_, max_inflight_);
 }
 
-void expert_prefetcher::shutdown() {
+void ExpertPrefetcher::shutdown() {
     if (!initialized_) {
         return;
     }
@@ -66,10 +66,10 @@ void expert_prefetcher::shutdown() {
 }
 
 // ============================================================================
-// Hint: schedule a non-blocking async H2D prefetch
+// Hint: schedule a non-blocking async H2D prefetch on dma_queue_
 // ============================================================================
 
-bool expert_prefetcher::hint(int layer_idx, int expert_idx) {
+bool ExpertPrefetcher::hint(int layer_idx, int expert_idx) {
     if (!initialized_) {
         return false;
     }
@@ -84,7 +84,13 @@ bool expert_prefetcher::hint(int layer_idx, int expert_idx) {
     }
 
     // Already cached in VRAM?
-    if (cache_->is_cached_in_vram(layer_idx, expert_idx)) {
+    ExpertLookup lk = cache_->lookup(layer_idx, expert_idx);
+    if (lk.is_cached) {
+        return false;
+    }
+
+    // Not registered in cache (no host pointer)?
+    if (!lk.host_ptr) {
         return false;
     }
 
@@ -96,53 +102,32 @@ bool expert_prefetcher::hint(int layer_idx, int expert_idx) {
         }
     }
 
-    // Use expert_cache to allocate a VRAM slot and get the host source pointer.
-    // expert_cache::prefetch does allocation + async copy internally on its
-    // copy_queue_. We wrap it here to track per-expert completion.
-    //
-    // However, expert_cache::prefetch uses its own copy_queue_ and does NOT
-    // return per-expert events. Instead, we use our own OOQ DMA queue to
-    // submit the memcpy directly, leveraging the cache's host registration
-    // to get host_ptr and allocate_vram for device_ptr.
-    //
-    // For now, delegate to expert_cache::prefetch for the batch and track
-    // via cache's wait_prefetch. This is simpler and avoids duplicating
-    // VRAM allocation logic.
+    // Submit async H2D DMA on our OOQ via ExpertCache::prefetch_async().
+    // This allocates a VRAM slot (evicting if needed) and submits the memcpy
+    // on dma_queue_, returning a per-expert sycl::event for granular await.
+    sycl::event ev = cache_->prefetch_async(layer_idx, expert_idx, dma_queue_);
 
-    // Trigger the cache to prefetch this single expert
-    std::vector<expert_key> batch = { key };
-    // Use expert_size = 0 to let the cache use its registered size.
-    // We need to know the expert size -- look it up from the cache's host entries.
-    // Since expert_cache doesn't expose expert size directly, we use a reasonable
-    // default and let the cache handle it.
+    // Re-lookup to get the now-allocated device pointer
+    ExpertLookup post_lk = cache_->lookup(layer_idx, expert_idx);
 
-    // We actually want to do the DMA ourselves for per-expert event tracking.
-    // But expert_cache owns VRAM allocation, so we call get_expert which does
-    // sync load if needed. For truly async, we'd need to expose allocate_vram
-    // from expert_cache.
-    //
-    // Compromise: use expert_cache::prefetch for the actual transfer (it uses
-    // its own OOQ), and store a "pending" marker. await() calls wait_prefetch().
-
-    cache_->prefetch(batch, 0);  // size 0: cache uses registered size
-
-    prefetch_request req;
-    req.key       = key;
-    req.completed = false;
+    PrefetchRequest req;
+    req.key        = key;
+    req.device_dst = post_lk.device_ptr;
+    req.host_src   = lk.host_ptr;
+    req.bytes      = 0;  // Size managed by ExpertCache slot_size_
+    req.event      = ev;
+    req.completed  = false;
     inflight_[key] = req;
 
     return true;
 }
 
-void expert_prefetcher::hint_batch(int layer_idx, const std::vector<int> & expert_indices) {
+void ExpertPrefetcher::hint_batch(int layer_idx, const std::vector<int> & expert_indices) {
     if (!initialized_) {
         return;
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
-
-    std::vector<expert_key> batch;
-    batch.reserve(expert_indices.size());
 
     for (int eidx : expert_indices) {
         expert_key key{ layer_idx, eidx };
@@ -151,9 +136,15 @@ void expert_prefetcher::hint_batch(int layer_idx, const std::vector<int> & exper
         if (inflight_.find(key) != inflight_.end()) {
             continue;
         }
-        if (cache_->is_cached_in_vram(layer_idx, eidx)) {
+
+        ExpertLookup lk = cache_->lookup(layer_idx, eidx);
+        if (lk.is_cached) {
             continue;
         }
+        if (!lk.host_ptr) {
+            continue;
+        }
+
         if (!has_capacity()) {
             gc_completed();
             if (!has_capacity()) {
@@ -161,24 +152,27 @@ void expert_prefetcher::hint_batch(int layer_idx, const std::vector<int> & exper
             }
         }
 
-        batch.push_back(key);
+        // Submit async H2D on our OOQ
+        sycl::event ev = cache_->prefetch_async(layer_idx, eidx, dma_queue_);
 
-        prefetch_request req;
-        req.key       = key;
-        req.completed = false;
+        ExpertLookup post_lk = cache_->lookup(layer_idx, eidx);
+
+        PrefetchRequest req;
+        req.key        = key;
+        req.device_dst = post_lk.device_ptr;
+        req.host_src   = lk.host_ptr;
+        req.bytes      = 0;
+        req.event      = ev;
+        req.completed  = false;
         inflight_[key] = req;
-    }
-
-    if (!batch.empty()) {
-        cache_->prefetch(batch, 0);
     }
 }
 
 // ============================================================================
-// Await: block until a specific expert is available in VRAM
+// Await: block until a specific expert's DMA completes, return VRAM ptr
 // ============================================================================
 
-void * expert_prefetcher::await(int layer_idx, int expert_idx) {
+void * ExpertPrefetcher::await(int layer_idx, int expert_idx) {
     if (!initialized_) {
         return nullptr;
     }
@@ -190,26 +184,28 @@ void * expert_prefetcher::await(int layer_idx, int expert_idx) {
 
         auto it = inflight_.find(key);
         if (it != inflight_.end()) {
-            // This expert has an in-flight prefetch. Wait for the cache's
-            // copy queue to complete all pending transfers.
-            cache_->wait_prefetch();
+            // Wait on the per-expert sycl::event (granular, not global queue wait).
+            // This blocks only until THIS expert's H2D DMA completes on dma_queue_.
+            it->second.event.wait();
 
-            // Mark completed
             it->second.completed = true;
             completed_count_++;
         }
     }
 
-    // Return the expert's pointer (VRAM if cached, host fallback otherwise).
-    // After wait_prefetch(), the expert should be in VRAM.
-    return cache_->get_expert(layer_idx, expert_idx, 0);
+    // Return the expert's VRAM pointer. After the per-expert event completes,
+    // the data is guaranteed visible (BCS H2D to malloc_device completes
+    // before kernel launch because await() is called before submission on
+    // the in-order compute queue).
+    ExpertLookup lk = cache_->lookup(layer_idx, expert_idx);
+    return lk.is_cached ? lk.device_ptr : lk.host_ptr;
 }
 
 // ============================================================================
 // Cancel: drain all in-flight prefetches
 // ============================================================================
 
-void expert_prefetcher::cancel_all() {
+void ExpertPrefetcher::cancel_all() {
     if (!initialized_) {
         return;
     }
@@ -217,8 +213,8 @@ void expert_prefetcher::cancel_all() {
     std::lock_guard<std::mutex> lock(mutex_);
 
     if (!inflight_.empty()) {
-        // Wait for all pending DMAs via the cache's copy queue
-        cache_->wait_prefetch();
+        // Wait for all pending DMAs on our OOQ
+        dma_queue_.wait();
 
         for (auto & [key, req] : inflight_) {
             if (!req.completed) {
@@ -234,7 +230,7 @@ void expert_prefetcher::cancel_all() {
 // Statistics
 // ============================================================================
 
-int expert_prefetcher::pending_count() const {
+int ExpertPrefetcher::pending_count() const {
     std::lock_guard<std::mutex> lock(mutex_);
     int pending = 0;
     for (const auto & [key, req] : inflight_) {
@@ -245,7 +241,7 @@ int expert_prefetcher::pending_count() const {
     return pending;
 }
 
-int expert_prefetcher::completed_count() const {
+int ExpertPrefetcher::completed_count() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return completed_count_;
 }
@@ -254,7 +250,7 @@ int expert_prefetcher::completed_count() const {
 // Internal helpers
 // ============================================================================
 
-void expert_prefetcher::gc_completed() {
+void ExpertPrefetcher::gc_completed() {
     // Called with mutex_ held.
     // Remove entries that have been completed and consumed by await().
     auto it = inflight_.begin();
@@ -267,7 +263,7 @@ void expert_prefetcher::gc_completed() {
     }
 }
 
-bool expert_prefetcher::has_capacity() const {
+bool ExpertPrefetcher::has_capacity() const {
     // Called with mutex_ held.
     return static_cast<int>(inflight_.size()) < max_inflight_;
 }
