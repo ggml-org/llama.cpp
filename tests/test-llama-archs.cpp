@@ -291,6 +291,8 @@ static std::vector<float> get_logits(
     ms.add_kv(LLM_KV_ATTENTION_CLAMP_KQV,         1.0f);
     ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_EPS,     1e-5f);
     ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, 1e-5f);
+    ms.add_kv(LLM_KV_ATTENTION_Q_LORA_RANK,       uint32_t(32));
+    ms.add_kv(LLM_KV_ATTENTION_KV_LORA_RANK,      uint32_t(32));
     ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW,    n_ctx/8);
 
     if (arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35) {
@@ -304,6 +306,9 @@ static std::vector<float> get_logits(
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, uint32_t(2));
     }
 
+    ms.add_kv(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT, uint32_t(1));
+    ms.add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH, uint32_t(64));
+    ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,      uint32_t(8));
     ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({n_embd_head/4, n_embd_head/4, n_embd_head/4, n_embd_head/4}));
     ms.add_kv(LLM_KV_TOKENIZER_MODEL,         "no_vocab");
     // ms.add_kv(LLM_KV_DENSE_2_FEAT_OUT,     n_embd);
@@ -471,16 +476,13 @@ static int test_backends(const size_t seed, const ggml_log_level log_level) {
                 arch == LLM_ARCH_NEO_BERT || arch == LLM_ARCH_JINA_BERT_V2 || arch == LLM_ARCH_JINA_BERT_V3) {
             continue; // TODO vocab
         }
-        if (arch == LLM_ARCH_MINICPM3 || arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_PLM) {
-            continue; // TODO LoRA rank
-        }
         if (arch == LLM_ARCH_T5 || arch == LLM_ARCH_T5ENCODER) {
             continue; // TODO attention buckets
         }
         if (arch == LLM_ARCH_RWKV6 || arch == LLM_ARCH_RWKV6QWEN2 || arch == LLM_ARCH_RWKV7 || arch == LLM_ARCH_ARWKV7) {
             continue; // TODO RWKV
         }
-        if (arch == LLM_ARCH_CHAMELEON) {
+        if (arch == LLM_ARCH_CHAMELEON || arch == LLM_ARCH_PLM) {
             continue; // TODO tensor shapes
         }
         if (arch == LLM_ARCH_WAVTOKENIZER_DEC) {
@@ -489,7 +491,7 @@ static int test_backends(const size_t seed, const ggml_log_level log_level) {
         if (arch == LLM_ARCH_APERTUS) {
             continue; // TODO xielu
         }
-        if (arch == LLM_ARCH_KIMI_LINEAR) {
+        if (arch == LLM_ARCH_KIMI_LINEAR || arch == LLM_ARCH_GLM_DSA) {
             continue; // TODO MLA
         }
         if (arch == LLM_ARCH_LLAMA4) {
