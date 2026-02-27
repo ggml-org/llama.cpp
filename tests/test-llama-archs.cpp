@@ -242,16 +242,25 @@ static std::vector<float> get_logits(
     const uint32_t n_head  = 2;
     const uint32_t n_ff    = 384;
     const uint32_t n_vocab = 128;
-    const uint32_t n_layer = arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE ? 3 : 2;
+    uint32_t       n_layer = 2;
+    if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
+        n_layer = 3;
+    } else if (arch == LLM_ARCH_GEMMA3) {
+        n_layer = 6;
+    } else if (arch == LLM_ARCH_GEMMA3N) {
+        n_layer = 25;
+    } else if (arch == LLM_ARCH_OLMO2) {
+        n_layer = 4;
+    }
 
     const uint32_t n_embd_head = n_embd / n_head;
 
     llama_model_saver ms(arch);
     ms.add_kv(LLM_KV_GENERAL_ARCHITECTURE, llm_arch_name(arch));
-    ms.add_kv(LLM_KV_VOCAB_SIZE,            n_vocab);
-    ms.add_kv(LLM_KV_CONTEXT_LENGTH,        n_ctx);
-    ms.add_kv(LLM_KV_EMBEDDING_LENGTH,      n_embd);
-    ms.add_kv(LLM_KV_BLOCK_COUNT,           n_layer);
+    ms.add_kv(LLM_KV_VOCAB_SIZE,           n_vocab);
+    ms.add_kv(LLM_KV_CONTEXT_LENGTH,       n_ctx);
+    ms.add_kv(LLM_KV_EMBEDDING_LENGTH,     n_embd);
+    ms.add_kv(LLM_KV_BLOCK_COUNT,          n_layer);
 
     if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
         std::vector<uint32_t> n_ff_per_layer;
@@ -283,13 +292,15 @@ static std::vector<float> get_logits(
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, n_head);
     }
 
-    ms.add_kv(LLM_KV_ATTENTION_CLAMP_KQV,         1.0f);
-    ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_EPS,     1e-5f);
-    ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, 1e-5f);
-    ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS,     std::vector<uint32_t>({n_embd_head/4, n_embd_head/4, n_embd_head/4, n_embd_head/4}));
-    ms.add_kv(LLM_KV_TOKENIZER_MODEL,             "no_vocab");
-    // ms.add_kv(LLM_KV_DENSE_2_FEAT_OUT,         n_embd);
-    // ms.add_kv(LLM_KV_DENSE_3_FEAT_IN,          n_embd);
+    ms.add_kv(LLM_KV_ATTENTION_CLAMP_KQV,              1.0f);
+    ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_EPS,          1e-5f);
+    ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,      1e-5f);
+    ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW,         n_ctx/8);
+    ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, uint32_t(2));
+    ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS,          std::vector<uint32_t>({n_embd_head/4, n_embd_head/4, n_embd_head/4, n_embd_head/4}));
+    ms.add_kv(LLM_KV_TOKENIZER_MODEL,                  "no_vocab");
+    // ms.add_kv(LLM_KV_DENSE_2_FEAT_OUT,              n_embd);
+    // ms.add_kv(LLM_KV_DENSE_3_FEAT_IN,               n_embd);
 
     if (moe) {
         ms.add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, n_ff);
@@ -455,7 +466,7 @@ static int test_backends(const size_t seed, const ggml_log_level log_level) {
         if (arch == LLM_ARCH_MINICPM3 || arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_PLM) {
             continue; // TODO LoRA rank
         }
-        if (arch == LLM_ARCH_GEMMA3N || arch == LLM_ARCH_GEMMA_EMBEDDING || arch == LLM_ARCH_COHERE2 || arch == LLM_ARCH_EXAONE_MOE ||
+        if (arch == LLM_ARCH_GEMMA_EMBEDDING || arch == LLM_ARCH_COHERE2 || arch == LLM_ARCH_EXAONE_MOE ||
                 arch == LLM_ARCH_OPENAI_MOE || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35) {
             continue; // TODO sliding window
         }
