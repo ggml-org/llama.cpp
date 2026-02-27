@@ -435,6 +435,13 @@ void ExpertPredictor::record_actual(int layer_idx, const std::vector<int> & actu
             accuracy_hits_++;
         }
         accuracy_ring_pos_ = (accuracy_ring_pos_ + 1) % ACCURACY_WINDOW;
+
+        // Periodic logging every ACCURACY_WINDOW predictions
+        if (accuracy_total_ >= ACCURACY_WINDOW && accuracy_ring_pos_ == 0) {
+            float rate = static_cast<float>(accuracy_hits_) / static_cast<float>(accuracy_total_);
+            GGML_LOG_INFO("[EXPERT-PREDICT] accuracy=%.1f%% (%d/%d) over last %d samples\n",
+                          rate * 100.0f, accuracy_hits_, accuracy_total_, ACCURACY_WINDOW);
+        }
     }
 }
 
