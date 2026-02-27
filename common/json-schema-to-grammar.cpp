@@ -961,7 +961,10 @@ public:
             _build_min_max_int(min_value, max_value, out);
             out << ") space";
             return _add_rule(rule_name, out.str());
-        } else if (schema.empty() || schema_type == "object") {
+        } else if (schema.contains("required") && schema_type.is_null()) {
+	    // Type can be null if schema contains "required". Properties are optional too
+	    return _add_rule(rule_name, _add_primitive("object", PRIMITIVE_RULES.at("object")));
+	} else if (schema.empty() || schema_type == "object") {
             return _add_rule(rule_name, _add_primitive("object", PRIMITIVE_RULES.at("object")));
         } else {
             if (!schema_type.is_string() || PRIMITIVE_RULES.find(schema_type.get<std::string>()) == PRIMITIVE_RULES.end()) {
