@@ -143,4 +143,96 @@ class ExpertPrefetcher {
 // Backward-compatible type alias.
 using expert_prefetcher = ExpertPrefetcher;
 
+// ============================================================================
+// ExpertPredictor: pre-attention expert prediction for MoE prefetching
+// ============================================================================
+//
+// Predicts which experts will be needed AFTER attention completes, giving
+// a full attention computation's worth of time (~17ms) to prefetch cache-miss
+// experts. Runs on CPU only (no GPU involvement), <0.5ms.
+//
+// Heuristic (no learned predictor):
+//   1. Reuse last token's experts for the same layer (~70% accuracy due to
+//      expert access temporal locality)
+//   2. Fill remaining slots from global frequency table (experts most commonly
+//      activated across all tokens)
+//
+// Integration: after each layer's attention, call predict() for the next MoE
+// layer and feed results to ExpertPrefetcher::hint_batch().
+//
+// Accuracy tracking: record_actual() compares predictions vs router selections,
+// maintains a rolling hit rate.
+//
+// Env var: GGML_SYCL_EXPERT_PREDICT=1 enables prediction (default: ON when
+// expert cache is active).
+//
+class ExpertPredictor {
+  public:
+    ExpertPredictor() = default;
+
+    // Non-copyable, non-movable
+    ExpertPredictor(const ExpertPredictor &)             = delete;
+    ExpertPredictor & operator=(const ExpertPredictor &) = delete;
+    ExpertPredictor(ExpertPredictor &&)                  = delete;
+    ExpertPredictor & operator=(ExpertPredictor &&)      = delete;
+
+    // Initialize the predictor.
+    //   n_layers:       total number of transformer layers
+    //   n_experts:      total experts per MoE layer
+    //   n_experts_used: experts activated per token (top-K)
+    void init(int n_layers, int n_experts, int n_experts_used);
+
+    // Predict which experts will be needed for a given layer.
+    // Returns up to n_experts_used predicted expert indices.
+    // hidden_state is unused in heuristic mode (reserved for future learned predictor).
+    std::vector<int> predict(int layer_idx, const float * hidden_state = nullptr);
+
+    // Record actual expert selections from the router for accuracy tracking.
+    // Called after MUL_MAT_ID with the real expert indices chosen by the gating network.
+    void record_actual(int layer_idx, const std::vector<int> & actual_experts);
+
+    // Statistics
+    float hit_rate() const;       // Rolling prediction accuracy (0.0 - 1.0)
+    int   total_predictions() const;
+    int   total_hits() const;
+    bool  is_active() const { return initialized_; }
+
+  private:
+    bool initialized_ = false;
+    int  n_layers_      = 0;
+    int  n_experts_     = 0;
+    int  n_experts_used_ = 0;
+
+    // Per-layer last-token expert selections.
+    // last_experts_[layer] = vector of expert indices used by previous token.
+    std::vector<std::vector<int>> last_experts_;
+
+    // Global frequency table: freq_table_[layer][expert] = access count.
+    std::vector<std::vector<uint32_t>> freq_table_;
+
+    // Last prediction per layer (for accuracy comparison).
+    std::vector<std::vector<int>> last_prediction_;
+
+    // Rolling accuracy stats (last 100 predictions).
+    static constexpr int ACCURACY_WINDOW = 100;
+    int accuracy_hits_  = 0;
+    int accuracy_total_ = 0;
+
+    // Circular buffer for rolling window eviction
+    struct AccuracySample {
+        bool hit = false;
+    };
+    std::vector<AccuracySample> accuracy_ring_;
+    int                         accuracy_ring_pos_ = 0;
+
+    mutable std::mutex mutex_;
+
+    // Get top-K experts by frequency for a layer (excluding already-selected ones).
+    std::vector<int> top_k_by_freq(int layer_idx, const std::vector<int> & exclude, int k) const;
+};
+
+// Check if expert prediction is enabled via environment variable.
+// Default: ON (returns true unless GGML_SYCL_EXPERT_PREDICT=0).
+bool ggml_sycl_expert_predict_enabled();
+
 }  // namespace ggml_sycl

@@ -12,7 +12,9 @@
 #include "common.hpp"
 #include "cpu-dispatch.hpp"   // expert_miss_precision, burst threshold config
 
+#include <algorithm>
 #include <cstdlib>
+#include <numeric>
 
 namespace ggml_sycl {
 
@@ -316,6 +318,197 @@ void ExpertPrefetcher::gc_completed() {
 bool ExpertPrefetcher::has_capacity() const {
     // Called with mutex_ held.
     return static_cast<int>(inflight_.size()) < max_inflight_;
+}
+
+// ============================================================================
+// ExpertPredictor: pre-attention expert prediction
+// ============================================================================
+
+void ExpertPredictor::init(int n_layers, int n_experts, int n_experts_used) {
+    if (initialized_) {
+        return;
+    }
+    if (n_layers <= 0 || n_experts <= 0 || n_experts_used <= 0) {
+        return;
+    }
+
+    n_layers_       = n_layers;
+    n_experts_      = n_experts;
+    n_experts_used_ = n_experts_used;
+
+    last_experts_.resize(n_layers);
+    freq_table_.resize(n_layers, std::vector<uint32_t>(n_experts, 0));
+    last_prediction_.resize(n_layers);
+
+    accuracy_ring_.resize(ACCURACY_WINDOW);
+    accuracy_ring_pos_ = 0;
+    accuracy_hits_     = 0;
+    accuracy_total_    = 0;
+
+    initialized_ = true;
+    GGML_LOG_INFO("[SYCL] Expert predictor initialized (layers=%d, experts=%d, top_k=%d)\n",
+                  n_layers, n_experts, n_experts_used);
+}
+
+std::vector<int> ExpertPredictor::predict(int layer_idx, const float * /*hidden_state*/) {
+    if (!initialized_ || layer_idx < 0 || layer_idx >= n_layers_) {
+        return {};
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    std::vector<int> predicted;
+    predicted.reserve(n_experts_used_);
+
+    // Heuristic 1: Reuse last token's experts for this layer.
+    // Expert access has strong temporal locality (~70% overlap between
+    // consecutive tokens in the same layer).
+    const auto & last = last_experts_[layer_idx];
+    for (int eidx : last) {
+        if (static_cast<int>(predicted.size()) >= n_experts_used_) {
+            break;
+        }
+        predicted.push_back(eidx);
+    }
+
+    // Heuristic 2: Fill remaining slots from global frequency table.
+    // Picks the most commonly activated experts (excluding already-predicted ones).
+    if (static_cast<int>(predicted.size()) < n_experts_used_) {
+        int remaining = n_experts_used_ - static_cast<int>(predicted.size());
+        auto freq_fill = top_k_by_freq(layer_idx, predicted, remaining);
+        predicted.insert(predicted.end(), freq_fill.begin(), freq_fill.end());
+    }
+
+    // Store prediction for accuracy tracking
+    last_prediction_[layer_idx] = predicted;
+
+    return predicted;
+}
+
+void ExpertPredictor::record_actual(int layer_idx, const std::vector<int> & actual_experts) {
+    if (!initialized_ || layer_idx < 0 || layer_idx >= n_layers_) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    // Update last-token expert selections for this layer
+    last_experts_[layer_idx] = actual_experts;
+
+    // Update global frequency table
+    for (int eidx : actual_experts) {
+        if (eidx >= 0 && eidx < n_experts_) {
+            freq_table_[layer_idx][eidx]++;
+        }
+    }
+
+    // Accuracy tracking: compare last prediction vs actual
+    const auto & pred = last_prediction_[layer_idx];
+    if (!pred.empty()) {
+        // Count how many predicted experts were actually selected
+        int hits = 0;
+        for (int p : pred) {
+            for (int a : actual_experts) {
+                if (p == a) {
+                    hits++;
+                    break;
+                }
+            }
+        }
+
+        // Compute per-prediction hit rate: fraction of actual experts that were predicted
+        bool sample_hit = (hits > 0 && !actual_experts.empty() &&
+                           hits >= static_cast<int>(actual_experts.size()) / 2);
+
+        // Update rolling window
+        if (accuracy_total_ >= ACCURACY_WINDOW) {
+            // Evict oldest sample
+            if (accuracy_ring_[accuracy_ring_pos_].hit) {
+                accuracy_hits_--;
+            }
+        } else {
+            accuracy_total_++;
+        }
+
+        accuracy_ring_[accuracy_ring_pos_].hit = sample_hit;
+        if (sample_hit) {
+            accuracy_hits_++;
+        }
+        accuracy_ring_pos_ = (accuracy_ring_pos_ + 1) % ACCURACY_WINDOW;
+    }
+}
+
+float ExpertPredictor::hit_rate() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (accuracy_total_ == 0) {
+        return 0.0f;
+    }
+    return static_cast<float>(accuracy_hits_) / static_cast<float>(accuracy_total_);
+}
+
+int ExpertPredictor::total_predictions() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return accuracy_total_;
+}
+
+int ExpertPredictor::total_hits() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return accuracy_hits_;
+}
+
+std::vector<int> ExpertPredictor::top_k_by_freq(int layer_idx,
+                                                 const std::vector<int> & exclude,
+                                                 int k) const {
+    // Called with mutex_ held.
+    if (layer_idx < 0 || layer_idx >= n_layers_ || k <= 0) {
+        return {};
+    }
+
+    const auto & freq = freq_table_[layer_idx];
+
+    // Build indices sorted by frequency (descending)
+    std::vector<int> indices(n_experts_);
+    std::iota(indices.begin(), indices.end(), 0);
+
+    std::partial_sort(indices.begin(),
+                      indices.begin() + std::min(k + static_cast<int>(exclude.size()), n_experts_),
+                      indices.end(),
+                      [&freq](int a, int b) { return freq[a] > freq[b]; });
+
+    // Pick top-k that aren't in the exclude set
+    std::vector<int> result;
+    result.reserve(k);
+    for (int idx : indices) {
+        if (static_cast<int>(result.size()) >= k) {
+            break;
+        }
+        bool excluded = false;
+        for (int ex : exclude) {
+            if (idx == ex) {
+                excluded = true;
+                break;
+            }
+        }
+        if (!excluded) {
+            result.push_back(idx);
+        }
+    }
+
+    return result;
+}
+
+// ============================================================================
+// Environment variable helper
+// ============================================================================
+
+bool ggml_sycl_expert_predict_enabled() {
+    static int cached = -1;
+    if (cached < 0) {
+        const char * env = std::getenv("GGML_SYCL_EXPERT_PREDICT");
+        // Default: ON (1) unless explicitly set to 0
+        cached = (!env || std::atoi(env) != 0) ? 1 : 0;
+    }
+    return cached != 0;
 }
 
 }  // namespace ggml_sycl
