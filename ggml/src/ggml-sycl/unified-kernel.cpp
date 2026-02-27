@@ -6607,6 +6607,7 @@ void UnifiedKernel::free_persistent_buffers() {
         role_pool_n_sync_    = 0;
     }
     invalidate_plan_cache();
+    host_ops_ = {};  // Release heap memory (invalidate_plan_cache only clears, keeps capacity)
     persistent_buffer_size_ = 0;
 }
 
@@ -7666,6 +7667,7 @@ void UnifiedKernel::invalidate_plan_cache() {
     update_recipe_valid_ = false;
     // Invalidate incremental ops table update state
     ops_table_valid_     = false;
+    host_ops_.clear();
     plan_to_device_cache_.clear();
     cached_n_device_ops_ = 0;
     cached_total_tiles_  = 0;
@@ -9935,8 +9937,8 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
 
     // Build device-side operation table
     const size_t n_ops = current_plan_->operations.size();
-    std::vector<DeviceOperation> host_ops;
-    host_ops.reserve(n_ops);
+    host_ops_.clear();
+    host_ops_.reserve(n_ops);
     // Mapping from plan op index to device op index (-1 if fused away).
     // Used to remap phase schedule entries after GATE+UP+SILU fusion.
     std::vector<int> plan_to_device(n_ops, -1);
@@ -10119,7 +10121,7 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
         total_tiles += dst.n_tiles;
         // Record plan-to-device index mapping for phase schedule remapping after fusion.
         // pre_fusion_idx = original plan index; i may have advanced past fused-away ops.
-        const int device_idx = static_cast<int>(host_ops.size());
+        const int device_idx = static_cast<int>(host_ops_.size());
         plan_to_device[pre_fusion_idx] = device_idx;
         // Mark fused-away ops (UP, SILU_MUL) as -1 in the mapping
         if (i > pre_fusion_idx) {
@@ -10127,13 +10129,13 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
                 plan_to_device[fused] = -1;
             }
         }
-        host_ops.push_back(dst);
+        host_ops_.push_back(dst);
     }
 
     // Cache host-side tile counts for DAG construction (before device upload)
-    host_n_tiles_.resize(host_ops.size());
-    for (size_t i = 0; i < host_ops.size(); i++) {
-        host_n_tiles_[i] = host_ops[i].n_tiles;
+    host_n_tiles_.resize(host_ops_.size());
+    for (size_t i = 0; i < host_ops_.size(); i++) {
+        host_n_tiles_[i] = host_ops_[i].n_tiles;
     }
 
     // Upload tile counts to DAG device array (DAG topology was built earlier in
@@ -10168,7 +10170,7 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
 
         // Use the original phase count (before compaction from previous token)
         const int n_phases     = static_cast<int>(host_phase_offset_.size()) - 1;
-        const int n_device_ops = static_cast<int>(host_ops.size());
+        const int n_device_ops = static_cast<int>(host_ops_.size());
 
         // Rebuild entries: remap op_idx, remove fused-away entries, recompute offsets.
         std::vector<DevicePhaseEntry> remapped_entries;
@@ -10259,7 +10261,7 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
                     if (oi < 0 || oi >= n_device_ops) {
                         return false;
                     }
-                    const auto ot = static_cast<OperationType>(host_ops[oi].type);
+                    const auto ot = static_cast<OperationType>(host_ops_[oi].type);
                     switch (ot) {
                         case OperationType::RMS_NORM:
                         case OperationType::ADD:
@@ -10413,7 +10415,7 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
                         fprintf(stderr, "  Phase %3d: tiles=%3d ops=%d [", p, tiles, pe - ps);
                         for (int e = ps; e < pe; e++) {
                             const int    oi    = host_phase_entries_[e].op_idx;
-                            const int    otype = (oi < n_device_ops) ? host_ops[oi].type : -1;
+                            const int    otype = (oi < n_device_ops) ? host_ops_[oi].type : -1;
                             const char * name  = (otype >= 0 && otype < 19) ? op_names[otype] : "?";
                             if (e > ps) {
                                 fprintf(stderr, ", ");
@@ -10458,22 +10460,19 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
     }
 
     // Copy operation table to host-pinned pool (kernel reads via PCIe zero-copy, no device memcpy)
-    const int n_ops_device = static_cast<int>(host_ops.size());
+    const int n_ops_device = static_cast<int>(host_ops_.size());
     if (n_ops_device > d_ops_pool_size_) {
         if (d_ops_pool_) sycl::free(d_ops_pool_, queue_);
         d_ops_pool_ = static_cast<void *>(sycl::malloc_host<DeviceOperation>(n_ops_device, queue_));
         d_ops_pool_size_ = d_ops_pool_ ? n_ops_device : 0;
     }
     DeviceOperation * d_ops = static_cast<DeviceOperation *>(d_ops_pool_);
-    std::memcpy(d_ops, host_ops.data(), host_ops.size() * sizeof(DeviceOperation));
-
-    // Build role schedule from the final device ops (after fusion).
-    // This classifies ops into ELEM/MATMUL roles and identifies sync points.
-    build_role_schedule(host_ops);
+    std::memcpy(d_ops, host_ops_.data(), host_ops_.size() * sizeof(DeviceOperation));
 
     // In build_only mode, we've finished preparing the ops table and phase
     // schedule. The caller (micro-graph path) will launch the graph instead
-    // of the monolithic kernel.
+    // of the monolithic kernel. Skip the role schedule since it's only used
+    // by the monolithic kernel's role-based dispatch.
     if (build_only) {
         // Cache the plan-to-device mapping for incremental updates on subsequent tokens.
         // This enables the fast path at the top of this function to skip the full rebuild.
@@ -10488,6 +10487,11 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
         last_stats_.kernel_time_ms = 0.0;
         return;
     }
+
+    // Build role schedule from the final device ops (after fusion).
+    // This classifies ops into ELEM/MATMUL roles and identifies sync points.
+    // Only needed for the monolithic kernel's role-based dispatch (skipped in build_only path above).
+    build_role_schedule(host_ops_);
 
     // Kernel configuration
     constexpr int BLOCK_SIZE = 256;
@@ -10806,7 +10810,7 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
         std::array<std::vector<DeviceOperation>, kTypeCount> ops_by_type;
         std::array<int, kTypeCount> tiles_by_type = {};
 
-        for (const auto & op : host_ops) {
+        for (const auto & op : host_ops_) {
             const int idx = op.type;
             if (idx < 0 || idx >= kTypeCount) {
                 continue;

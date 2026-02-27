@@ -2897,6 +2897,11 @@ private:
     void * d_ops_pool_      = nullptr;
     int    d_ops_pool_size_ = 0;
 
+    // Persistent host-side DeviceOperation vector for launch_persistent_kernel().
+    // Kept as a member to avoid per-token heap allocation on the full build path.
+    // .clear() preserves capacity; freed in free_persistent_buffers().
+    std::vector<DeviceOperation> host_ops_;
+
     // Incremental ops table update state for micro-graph build_only path.
     // After the first full build, ops_table_valid_ is set and subsequent
     // build_only calls skip the full rebuild — only mutable pointer/stride
