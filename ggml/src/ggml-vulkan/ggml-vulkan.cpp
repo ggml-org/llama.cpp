@@ -13417,6 +13417,9 @@ static void ggml_backend_vk_set_tensor_async(ggml_backend_t backend, ggml_tensor
         deferred_memcpy(ctx->sync_staging->ptr, data, size, &compute_ctx->in_memcpys);
         ggml_vk_synchronize(ctx);
     }
+    if (compute_ctx->p->cmd_buffer_idx > 4) {
+        ggml_vk_command_pool_cleanup(ctx->device, *compute_ctx->p);
+    }
 }
 
 static void ggml_backend_vk_get_tensor_async(ggml_backend_t backend, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
