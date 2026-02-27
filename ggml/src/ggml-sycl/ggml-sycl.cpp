@@ -21169,6 +21169,80 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
     // Unified kernel / full dispatch path: drain any pending merge
     split_merge_drain();
 
+    // =====================================================================
+    // MXFP4 per-expert direct dispatch: bypass orchestrator for MoE experts
+    // =====================================================================
+    // When mul_mat_id routes per-expert slices through ggml_sycl_mul_mat(),
+    // the row tensors have src0->data set to a valid device pointer (from
+    // expert cache) but lack proper layout choice registration and cache
+    // keys that the orchestrator/get_layout_ptr_for machinery expects.
+    // Route MXFP4 directly to the unified kernel which handles it natively.
+    if (src0->type == GGML_TYPE_MXFP4 &&
+        ggml_sycl::should_use_unified(src0->type) &&
+        ggml_sycl_unified_dispatch_enabled() &&
+        src1->type == GGML_TYPE_F32 &&
+        dst->type == GGML_TYPE_F32 &&
+        ggml_is_contiguous(src1) && !ggml_is_transposed(src1) && !ggml_is_permuted(src1)) {
+        // Try src0->data first: per-expert row tensors from mul_mat_id have
+        // src0->data set to the correct per-expert device pointer by the MoE dispatch.
+        // get_layout_ptr_for resolves via the full tensor's cache key and returns the
+        // FULL weight buffer pointer (same for every expert), which is wrong.
+        // For non-MoE tensors, src0->data and get_layout_ptr_for return the same thing.
+        const void * src0_data = nullptr;
+        if (src0->data) {
+            const sycl::usm::alloc alloc = sycl::get_pointer_type(
+                src0->data, ctx.stream()->get_context());
+            if (alloc == sycl::usm::alloc::device) {
+                src0_data = src0->data;
+            }
+        }
+        if (!src0_data) {
+            src0_data = ggml_sycl_get_layout_ptr_for(src0, ctx.device, GGML_LAYOUT_AOS);
+        }
+        if (src0_data) {
+            // Use tensor->data directly instead of ggml_sycl_get_data_ptr() because
+            // per-expert row tensors from mul_mat_id have src1_row.data set to the
+            // correct contiguous buffer slice, but extra->data_device[] still points
+            // to the FULL activation tensor. ggml_sycl_get_data_ptr() would return
+            // the stale full-tensor pointer, causing garbage output for PP batches.
+            const float * src1_data = static_cast<const float *>(src1->data);
+            float *       dst_data  = static_cast<float *>(dst->data);
+            if (src1_data && dst_data) {
+                const int64_t M = src1->ne[1];
+                const int64_t K = src0->ne[0];
+                const int64_t N = src0->ne[1];
+
+                const int64_t ne02 = src0->ne[2];
+                const int64_t ne03 = src0->ne[3];
+                const int64_t ne12 = src1->ne[2];
+                const int64_t ne13 = src1->ne[3];
+                const int64_t n_batch = ne12 * ne13;
+                const int64_t i02_divisor = (ne02 > 0) ? (ne12 / ne02) : 1;
+                const size_t  src0_plane_bytes = static_cast<size_t>(N) * ggml_row_size(src0->type, K);
+                const int64_t src1_plane_elems = M * K;
+                const int64_t dst_plane_elems  = M * N;
+
+                GGML_SYCL_DEBUG("[MXFP4-DIRECT] M=%lld K=%lld N=%lld n_batch=%lld src0=%p src1=%p dst=%p\n",
+                                (long long) M, (long long) K, (long long) N, (long long) n_batch,
+                                src0_data, src1_data, dst_data);
+
+                for (int64_t i0 = 0; i0 < n_batch; ++i0) {
+                    const int64_t src0_batch = i0 / i02_divisor;
+                    const char *  src0_batch_ptr =
+                        static_cast<const char *>(src0_data) + src0_batch * src0_plane_bytes;
+                    const float * src1_batch_ptr = src1_data + i0 * src1_plane_elems;
+                    float *       dst_batch_ptr  = dst_data  + i0 * dst_plane_elems;
+
+                    ggml_sycl::ggml_sycl_mul_mat_unified_default(
+                        *ctx.stream(), src0_batch_ptr, src1_batch_ptr, dst_batch_ptr,
+                        M, N, K, src0->type, ggml_sycl_unified::LayoutMode::AOS);
+                }
+                return;
+            }
+        }
+        // If we get here, pointers were null -- fall through to full dispatch
+    }
+
     auto is_kqv_matmul = [](const ggml_tensor * a, const ggml_tensor * b, const ggml_tensor * c) -> bool {
         if (c && c->name && std::strstr(c->name, "kqv") != nullptr) {
             return true;

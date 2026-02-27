@@ -1917,7 +1917,7 @@ inline bool ggml_sycl_unified_dispatch_env_enabled() {
 
 inline bool ggml_sycl_should_use_unified_type(ggml_type type) {
     // Mirror ggml_sycl::should_use_unified() without pulling in dispatch.hpp
-    return type == GGML_TYPE_Q4_0;
+    return type == GGML_TYPE_Q4_0 || type == GGML_TYPE_MXFP4;
 }
 
 inline void * ggml_sycl_get_layout_ptr_for(const ggml_tensor * tensor,
