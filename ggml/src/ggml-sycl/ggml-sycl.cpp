@@ -245,6 +245,10 @@ static ggml_sycl::ExpertCache * ggml_sycl_get_expert_cache(int device) {
 static ggml_sycl::ExpertPrefetcher g_expert_prefetchers[GGML_SYCL_MAX_DEVICES];
 static ggml_sycl::ExpertPredictor  g_expert_predictors[GGML_SYCL_MAX_DEVICES];
 static std::once_flag              g_moe_hybrid_init_flags[GGML_SYCL_MAX_DEVICES];
+// Map hash-based layer_id → sequential index for ExpertPredictor arrays.
+// ExpertCache/ExpertPrefetcher use hash IDs directly (hash-map based),
+// but ExpertPredictor indexes into fixed-size arrays sized by layer count.
+static std::unordered_map<int, int> g_moe_layer_seq[GGML_SYCL_MAX_DEVICES];
 
 // Compute a stable, unique cache layer ID from a tensor name.
 // This ensures each distinct weight tensor (e.g. blk.0.ffn_gate_exps vs
@@ -296,6 +300,11 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
         // (gate/up/down within the same block) gets a unique cache key.
         int layer_id = moe_cache_layer_id(src0->name);
 
+        // Build hash→sequential mapping for ExpertPredictor
+        if (g_moe_layer_seq[device].find(layer_id) == g_moe_layer_seq[device].end()) {
+            g_moe_layer_seq[device][layer_id] = static_cast<int>(g_moe_layer_seq[device].size());
+        }
+
         const int64_t n_experts = src0->ne[2] > 0 ? src0->ne[2] : 1;
         const size_t  nb02      = src0->nb[2];
 
@@ -344,9 +353,10 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
         auto & predictor = g_expert_predictors[device];
         // Default top-K = min(8, n_experts) — most MoE models use top-2 to top-8
         int n_experts_used = std::min(8, n_experts_per_layer);
-        predictor.init(n_moe_layers, n_experts_per_layer, n_experts_used);
+        const int n_seq_layers = static_cast<int>(g_moe_layer_seq[device].size());
+        predictor.init(n_seq_layers, n_experts_per_layer, n_experts_used);
         GGML_LOG_INFO("[MOE-HYBRID] Predictor initialized: %d layers, %d experts, top-%d\n",
-                      n_moe_layers, n_experts_per_layer, n_experts_used);
+                      n_seq_layers, n_experts_per_layer, n_experts_used);
     }
 }
 
@@ -23974,8 +23984,21 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             // while GPU is still computing attention for this layer.
             auto & prefetcher = g_expert_prefetchers[ctx.device];
             auto & predictor  = g_expert_predictors[ctx.device];
-            if (predictor.is_active() && prefetcher.is_active()) {
-                auto predicted = predictor.predict(layer_id);
+
+            // Translate hash-based layer_id to sequential index for predictor.
+            // ExpertPredictor uses dense arrays indexed [0..n_layers), while
+            // ExpertCache/Prefetcher accept arbitrary hash IDs directly.
+            int seq_layer_id = -1;
+            {
+                auto & seq_map = g_moe_layer_seq[ctx.device];
+                auto it = seq_map.find(layer_id);
+                if (it != seq_map.end()) {
+                    seq_layer_id = it->second;
+                }
+            }
+
+            if (predictor.is_active() && prefetcher.is_active() && seq_layer_id >= 0) {
+                auto predicted = predictor.predict(seq_layer_id);
                 prefetcher.hint_batch(layer_id, predicted);
             }
 
@@ -24191,8 +24214,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 }
 
                 // Record for predictor accuracy tracking
-                if (predictor.is_active()) {
-                    predictor.record_actual(layer_id, actual_experts);
+                if (predictor.is_active() && seq_layer_id >= 0) {
+                    predictor.record_actual(seq_layer_id, actual_experts);
                 }
 
                 // Record for cache co-activation scoring and warm-start
