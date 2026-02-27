@@ -9,7 +9,7 @@
 // - ChunkManager (sub-tensor streaming)
 // - EvictionPolicy (priority-based LRU eviction)
 // - KVCacheManager (per-head KV cache)
-// - ExpertPrefetcher (MoE expert prefetching)
+// - expert_prefetcher (MoE expert prefetch DMA engine)
 // - ComputeBufferManager (P0 compute buffers)
 //
 // Test Cases:
@@ -484,44 +484,32 @@ static bool test_memory_accounting() {
 static bool test_prefetch_through_unified() {
     printf("TEST: test_prefetch_through_unified\n");
 
-    // The ExpertPrefetcher should integrate with the unified cache
-    // This tests that the prefetcher uses the same allocation path
+    // The expert_prefetcher integrates with expert_cache for DMA-based prefetch.
+    // Full integration testing requires a SYCL device + expert_cache instance.
+    // Basic API smoke test: verify uninitialized prefetcher is safe.
 
-    ggml_sycl::ExpertPrefetcher prefetcher;
+    ggml_sycl::expert_prefetcher prefetcher;
 
-    // Configure for a small MoE model
-    prefetcher.configure(4, 8, 10_MB);  // 4 layers, 8 experts, 10MB each
-
-    // Create router scores (simulating what the model would produce)
-    float scores[8] = { 0.1f, 0.3f, 0.5f, 0.05f, 0.02f, 0.01f, 0.01f, 0.01f };
-
-    // Start prefetch for layer 0, top-2 experts
-    ggml_sycl::PrefetchBatch batch = prefetcher.start_prefetch(0, scores, 8, 2);
-
-    // Check that predictions are sorted by score (descending)
-    if (batch.predictions.size() < 2) {
-        printf("  FAIL: expected at least 2 predictions, got %zu\n", batch.predictions.size());
+    // Not active before init
+    if (prefetcher.is_active()) {
+        printf("  FAIL: should not be active before init\n");
         return false;
     }
 
-    // Verify sorted order - highest score first
-    for (size_t i = 1; i < batch.predictions.size(); ++i) {
-        if (batch.predictions[i].score > batch.predictions[i - 1].score) {
-            printf("  FAIL: predictions not sorted by score\n");
-            return false;
-        }
+    // hint/await should be safe when uninitialized
+    bool hint_result = prefetcher.hint(0, 0);
+    if (hint_result) {
+        printf("  FAIL: hint should return false before init\n");
+        return false;
     }
 
-    // Record which experts were actually selected
-    std::vector<uint32_t> selected = { 2, 1 };  // expert 2 (0.5) and expert 1 (0.3)
-    prefetcher.record_selections(0, selected, batch);
+    void * ptr = prefetcher.await(0, 0);
+    if (ptr != nullptr) {
+        printf("  FAIL: await should return nullptr before init\n");
+        return false;
+    }
 
-    // Check accuracy tracking
-    float accuracy = prefetcher.get_layer_accuracy(0);
-    // With correct predictions, accuracy should be positive
-    // (exact value depends on implementation details)
-
-    printf("  PASS: prefetch through unified interface works, accuracy=%.2f\n", accuracy);
+    printf("  PASS: prefetch through unified interface (DMA engine smoke test)\n");
     return true;
 }
 

@@ -1734,14 +1734,18 @@ if(GGML_SYCL)
     install(TARGETS test-memory-budget RUNTIME)
     add_test(NAME test-memory-budget COMMAND $<TARGET_FILE:test-memory-budget>)
 
-    # test-sycl-expert-prefetch: Tests for hybrid expert prefetching with sorted caching
-    # Part of unified memory management system (epic llama.cpp-v3n, task llama.cpp-eqa)
-    # Note: Standalone test - does not require SYCL runtime, tests pure C++ logic only
+    # test-sycl-expert-prefetch: Tests for async expert prefetch DMA engine
+    # Part of MoE hybrid inference system (epic llama.cpp-j8eb, Task 3)
+    # Requires SYCL runtime: tests real async H2D DMA via expert_cache
     add_executable(test-sycl-expert-prefetch test-sycl-expert-prefetch.cpp
-        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl/expert-prefetch.cpp)
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl/expert-prefetch.cpp
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl/expert-cache.cpp)
+    target_link_libraries(test-sycl-expert-prefetch PRIVATE ggml)
     target_include_directories(test-sycl-expert-prefetch PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
         ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
-    target_compile_options(test-sycl-expert-prefetch PRIVATE "-Wno-narrowing")
+    target_compile_options(test-sycl-expert-prefetch PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-sycl-expert-prefetch PRIVATE "-fsycl")
     install(TARGETS test-sycl-expert-prefetch RUNTIME)
     add_test(NAME test-sycl-expert-prefetch COMMAND $<TARGET_FILE:test-sycl-expert-prefetch>)
 

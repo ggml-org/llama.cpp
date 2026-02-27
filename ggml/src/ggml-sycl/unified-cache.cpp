@@ -5770,7 +5770,7 @@ void unified_cache_log_budget_summary(int device) {
         exceeds ? "yes" : "no");
 
     // Per-category runtime breakdown
-    static const char * cat_names[] = { "KV_CACHE", "COMPUTE", "STAGING", "GRAPH", "HOST_COMPUTE", "OTHER" };
+    static const char * cat_names[] = { "KV_CACHE", "COMPUTE", "STAGING", "GRAPH", "HOST_COMPUTE", "EXPERT_CACHE", "OTHER" };
     GGML_LOG_INFO("[UNIFIED-CACHE] Runtime breakdown for device %d:\n", device);
     for (int c = 0; c < static_cast<int>(runtime_category::COUNT); c++) {
         const size_t cat_bytes = g_runtime_cat_bytes[effective_device][c].load(std::memory_order_relaxed);

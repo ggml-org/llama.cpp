@@ -1,208 +1,130 @@
-// Expert Prefetcher for MoE models
-// Part of unified memory management system (epic llama.cpp-v3n, task llama.cpp-eqa)
 //
-// This header defines the interface. Implementation in expert-prefetch.cpp.
-// TDD: Interface defined by tests in test-sycl-expert-prefetch.cpp
+// MIT license
+// Copyright (C) 2024 Intel Corporation
+// SPDX-License-Identifier: MIT
 //
-// Hybrid Prefetch Strategy:
-// - Predictive: Prefetch top-K experts based on router scores BEFORE ARGSORT
-// - On-demand: If router selects unexpected expert, stream immediately
-// - Sorted: Prefetch in descending score order for optimal cache access
-// - Adaptive: Track prediction accuracy per layer, adjust prefetch count
+
+// Async Expert Prefetch DMA Engine for MoE Hybrid Inference
 //
-// Priority Integration (via eviction-policy.hpp):
-// - P2_HOT_EXPERT: Recently used, high confidence
-// - P3_WARM_EXPERT: Prefetched/predicted, not yet confirmed
-// - P4_COLD_EXPERT: Not recently used, evict first
+// Schedules non-blocking H2D DMA to prefetch predicted expert weights from
+// host RAM to VRAM while the GPU is busy computing attention. This overlaps
+// PCIe transfer with GPU compute, hiding latency for cache-miss experts.
+//
+// Uses an out-of-order SYCL queue for DMA (separate from the compute queue)
+// and integrates with expert_cache for VRAM slot allocation. The hint/await
+// API allows a prediction thread to schedule prefetches while the GPU thread
+// blocks only when the expert is actually needed.
+//
+// L2 coherency: BCS H2D to malloc_device completes BEFORE the kernel
+// launches because await() is called before kernel submission, and the
+// in-order compute queue serializes after await().
 
 #ifndef GGML_SYCL_EXPERT_PREFETCH_HPP
 #define GGML_SYCL_EXPERT_PREFETCH_HPP
 
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
+#include <sycl/sycl.hpp>
+#include <unordered_map>
 #include <vector>
+
+#include "expert-cache.hpp"
 
 namespace ggml_sycl {
 
-// Forward declarations
-class ChunkManager;
-class EvictionPolicy;
-
-// Single expert prediction with score and metadata
-struct ExpertPrediction {
-    uint32_t expert_id;  // Expert index
-    float    score;      // Router score for this expert
-    bool     selected;   // Was this expert actually selected by router?
-
-    ExpertPrediction() : expert_id(0), score(0.0f), selected(false) {}
+// Tracks a single in-flight DMA prefetch operation.
+struct prefetch_request {
+    expert_key   key;
+    void *       device_dst = nullptr;  // VRAM slot from expert_cache
+    const void * host_src   = nullptr;  // Host RAM source
+    size_t       bytes      = 0;
+    sycl::event  event;                 // DMA completion event
+    bool         completed  = false;
 };
 
-// Batch of predictions for one layer invocation
-struct PrefetchBatch {
-    uint32_t                      layer_id;     // Layer this batch is for
-    std::vector<ExpertPrediction> predictions;  // Sorted by score descending
-
-    // Stats for this batch
-    size_t num_prefetched;  // How many experts we prefetched
-    size_t num_selected;    // How many were actually selected (set by record_selections)
-    size_t num_hits;        // Prefetched AND selected
-    size_t num_misses;      // Selected but NOT prefetched (had to stream on-demand)
-
-    PrefetchBatch() : layer_id(0), num_prefetched(0), num_selected(0), num_hits(0), num_misses(0) {}
-};
-
-// Per-layer accuracy statistics
-struct LayerStats {
-    std::atomic<uint64_t> total_predictions{ 0 };
-    std::atomic<uint64_t> correct_predictions{ 0 };
-
-    LayerStats() = default;
-
-    // Copy constructor (load from source atomics)
-    LayerStats(const LayerStats & other) :
-        total_predictions(other.total_predictions.load(std::memory_order_relaxed)),
-        correct_predictions(other.correct_predictions.load(std::memory_order_relaxed)) {}
-
-    // Move constructor (load from source atomics)
-    LayerStats(LayerStats && other) noexcept :
-        total_predictions(other.total_predictions.load(std::memory_order_relaxed)),
-        correct_predictions(other.correct_predictions.load(std::memory_order_relaxed)) {}
-
-    // Copy assignment
-    LayerStats & operator=(const LayerStats & other) {
-        if (this != &other) {
-            total_predictions.store(other.total_predictions.load(std::memory_order_relaxed), std::memory_order_relaxed);
-            correct_predictions.store(other.correct_predictions.load(std::memory_order_relaxed),
-                                      std::memory_order_relaxed);
-        }
-        return *this;
-    }
-
-    // Move assignment
-    LayerStats & operator=(LayerStats && other) noexcept {
-        if (this != &other) {
-            total_predictions.store(other.total_predictions.load(std::memory_order_relaxed), std::memory_order_relaxed);
-            correct_predictions.store(other.correct_predictions.load(std::memory_order_relaxed),
-                                      std::memory_order_relaxed);
-        }
-        return *this;
-    }
-
-    // Calculate accuracy ratio
-    float accuracy() const {
-        uint64_t total = total_predictions.load(std::memory_order_relaxed);
-        if (total == 0) {
-            return 0.0f;
-        }
-        return static_cast<float>(correct_predictions.load(std::memory_order_relaxed)) / static_cast<float>(total);
-    }
-
-    // Minimum samples required before adaptive prefetch kicks in
-    // This ensures we have stable accuracy measurement before adjusting
-    // Set to 50 to allow ~12 batches of 4 predictions to establish baseline
-    static constexpr uint64_t MIN_SAMPLES_FOR_ADAPTIVE = 50;
-
-    // Adaptive prefetch count based on accuracy
-    // Higher accuracy -> prefetch exactly top_k
-    // Lower accuracy -> prefetch extra buffer
-    // No data yet or insufficient samples -> prefetch exactly top_k
-    size_t recommended_prefetch_count(size_t top_k) const {
-        uint64_t total = total_predictions.load(std::memory_order_relaxed);
-        // Need minimum samples before adaptive prefetch kicks in
-        if (total < MIN_SAMPLES_FOR_ADAPTIVE) {
-            return top_k;
-        }
-
-        float acc = accuracy();
-        if (acc >= 0.95f) {
-            return top_k;  // Very accurate, prefetch exactly K
-        }
-        if (acc >= 0.80f) {
-            return top_k + 1;  // Good, small buffer
-        }
-        if (acc >= 0.60f) {
-            return top_k + 2;  // Moderate, more buffer
-        }
-        return top_k + 4;      // Poor, significant buffer
-    }
-};
-
-// Aggregate statistics across all layers
-struct PrefetchStats {
-    uint64_t total_predictions;
-    uint64_t total_correct;
-    float    overall_accuracy;
-
-    PrefetchStats() : total_predictions(0), total_correct(0), overall_accuracy(0.0f) {}
-};
-
-// Main prefetcher class
-// Manages predictive prefetching of MoE experts based on router scores
-class ExpertPrefetcher {
+// Async DMA engine for prefetching MoE expert weights from host RAM to VRAM.
+//
+// Schedules non-blocking H2D DMA using an out-of-order SYCL queue (separate
+// from the compute queue). Supports multiple prefetches in flight and
+// per-expert await for compute/transfer overlap.
+//
+// Thread-safe: hint() can be called from a prediction thread while the GPU
+// thread calls await().
+//
+// Usage:
+//   expert_prefetcher prefetcher;
+//   prefetcher.init(compute_queue, &cache);
+//   prefetcher.hint(layer + 2, expert_id);    // non-blocking
+//   void * ptr = prefetcher.await(layer, id); // blocks until ready
+//
+class expert_prefetcher {
   public:
-    ExpertPrefetcher();
-    ~ExpertPrefetcher();
+    expert_prefetcher() = default;
+    ~expert_prefetcher();
 
-    // Non-copyable, non-movable (contains atomics)
-    ExpertPrefetcher(const ExpertPrefetcher &)             = delete;
-    ExpertPrefetcher & operator=(const ExpertPrefetcher &) = delete;
-    ExpertPrefetcher(ExpertPrefetcher &&)                  = delete;
-    ExpertPrefetcher & operator=(ExpertPrefetcher &&)      = delete;
+    // Non-copyable, non-movable
+    expert_prefetcher(const expert_prefetcher &)             = delete;
+    expert_prefetcher & operator=(const expert_prefetcher &) = delete;
+    expert_prefetcher(expert_prefetcher &&)                  = delete;
+    expert_prefetcher & operator=(expert_prefetcher &&)      = delete;
 
-    // Configuration
-    // num_layers: Number of MoE layers in the model
-    // num_experts: Number of experts per layer
-    // expert_size: Size of each expert in bytes (for streaming estimation)
-    void configure(uint32_t num_layers, uint32_t num_experts, size_t expert_size);
+    // Initialize the prefetcher.
+    // compute_q: the primary in-order compute queue (used to derive context/device)
+    // cache: the expert VRAM cache (for slot allocation + host pointer lookup)
+    void init(sycl::queue & compute_q, expert_cache * cache);
 
-    // Start prefetching experts for a layer based on router scores
-    // Returns a PrefetchBatch with predictions sorted by score (highest first)
-    // This initiates async DMA for top-K experts
-    //
-    // layer_id: Which MoE layer (0 to num_layers-1)
-    // router_scores: Array of scores for each expert (size = num_experts)
-    // num_experts: Number of experts (size of router_scores array)
-    // top_k: How many experts will be selected by router
-    PrefetchBatch start_prefetch(uint32_t layer_id, const float * router_scores, size_t num_experts, size_t top_k);
+    // Shut down: cancel all in-flight prefetches, wait for completion.
+    void shutdown();
 
-    // Get expert data - uses prefetch if available, else streams on-demand
-    // Updates batch.num_hits or batch.num_misses accordingly
-    //
-    // layer_id: Which MoE layer
-    // expert_id: Which expert to retrieve
-    // batch: The PrefetchBatch from start_prefetch (updated with hit/miss stats)
-    void * get_expert_data(uint32_t layer_id, uint32_t expert_id, PrefetchBatch & batch);
+    // Schedule async prefetch of a single expert (non-blocking).
+    // Returns true if a new prefetch was scheduled.
+    // Returns false if: already cached in VRAM, already in-flight, no capacity,
+    //                   cache is null, or expert is not registered.
+    bool hint(int layer_idx, int expert_idx);
 
-    // Record which experts were actually selected by the router
-    // Updates accuracy tracking for adaptive prefetch count
-    //
-    // layer_id: Which MoE layer
-    // selected_experts: Vector of expert IDs that were selected
-    // batch: The PrefetchBatch from start_prefetch (updated with selection info)
-    void record_selections(uint32_t layer_id, const std::vector<uint32_t> & selected_experts, PrefetchBatch & batch);
+    // Schedule async prefetch of multiple experts for a layer (non-blocking).
+    void hint_batch(int layer_idx, const std::vector<int> & expert_indices);
 
-    // Get the prefetch order index for an expert in a batch
-    // Returns the position (0 = first prefetched, 1 = second, etc.)
-    // Returns -1 if expert was not prefetched
-    int get_prefetch_order(const PrefetchBatch & batch, uint32_t expert_id) const;
+    // Wait for a specific expert's prefetch to complete and return its VRAM pointer.
+    // If the expert is already cached (no in-flight prefetch), returns the cached ptr
+    // via expert_cache::get_expert(). Returns nullptr if expert not registered.
+    void * await(int layer_idx, int expert_idx);
 
-    // Get prediction accuracy for a specific layer
-    // Returns 0.0 if no data or invalid layer
-    float get_layer_accuracy(uint32_t layer_id) const;
+    // Cancel all pending prefetches and wait for in-flight DMAs to complete.
+    void cancel_all();
 
-    // Get aggregate statistics across all layers
-    PrefetchStats get_stats() const;
+    // Return the configured prefetch depth (layers ahead to look).
+    int prefetch_depth() const { return prefetch_depth_; }
 
-    // Reset all accuracy statistics
-    void reset_stats();
-
-    // Print statistics to stdout (for debugging)
-    void print_stats() const;
+    // Statistics
+    int  pending_count() const;
+    int  completed_count() const;
+    bool is_active() const { return initialized_; }
 
   private:
-    struct Impl;
-    Impl * impl_;
+    sycl::queue    dma_queue_;                // OOQ for async H2D
+    expert_cache * cache_         = nullptr;
+    int            prefetch_depth_ = 2;       // Default: 2 layers ahead
+    bool           initialized_   = false;
+
+    // Maximum simultaneous in-flight prefetches.
+    // Double-buffered: overlaps current layer's DMA with next layer's compute.
+    static constexpr int max_inflight_ = 8;
+
+    // In-flight prefetch tracking. Key = expert_key.
+    std::unordered_map<expert_key, prefetch_request, expert_key_hash> inflight_;
+
+    mutable std::mutex mutex_;
+
+    // Stats
+    int completed_count_ = 0;
+
+    // Garbage-collect completed requests to free tracking slots.
+    void gc_completed();
+
+    // Check if we have room for more in-flight requests.
+    bool has_capacity() const;
 };
 
 }  // namespace ggml_sycl

@@ -1,242 +1,275 @@
-// Expert Prefetcher implementation
-// Part of unified memory management system (epic llama.cpp-v3n, task llama.cpp-eqa)
 //
-// TDD: Implementation follows RED-GREEN-REFACTOR cycle.
-// Tests in test-sycl-expert-prefetch.cpp define expected behavior.
+// MIT license
+// Copyright (C) 2024 Intel Corporation
+// SPDX-License-Identifier: MIT
+//
+
+// Async Expert Prefetch DMA Engine implementation.
+// See expert-prefetch.hpp for design overview.
 
 #include "expert-prefetch.hpp"
 
-#include <algorithm>
-#include <cstdio>
-#include <unordered_set>
-#include <vector>
+#include "common.hpp"
+
+#include <cstdlib>
 
 namespace ggml_sycl {
 
 // ============================================================================
-// Implementation structure (pimpl pattern)
+// Lifecycle
 // ============================================================================
-struct ExpertPrefetcher::Impl {
-    uint32_t num_layers{ 0 };
-    uint32_t num_experts{ 0 };
-    size_t   expert_size{ 0 };
 
-    std::vector<LayerStats> layer_stats;
-
-    // Stub data storage for mock expert data
-    // In production, this would be integrated with ChunkManager/unified_cache
-    std::vector<uint8_t> mock_data;
-};
-
-// ============================================================================
-// Constructor / Destructor
-// ============================================================================
-ExpertPrefetcher::ExpertPrefetcher() : impl_(new Impl()) {}
-
-ExpertPrefetcher::~ExpertPrefetcher() {
-    delete impl_;
+expert_prefetcher::~expert_prefetcher() {
+    if (initialized_) {
+        shutdown();
+    }
 }
 
-// ============================================================================
-// Configuration
-// ============================================================================
-void ExpertPrefetcher::configure(uint32_t num_layers, uint32_t num_experts, size_t expert_size) {
-    impl_->num_layers  = num_layers;
-    impl_->num_experts = num_experts;
-    impl_->expert_size = expert_size;
-
-    impl_->layer_stats.clear();
-    impl_->layer_stats.resize(num_layers);
-
-    // Allocate mock data buffer (for testing without real SYCL device)
-    impl_->mock_data.resize(expert_size > 0 ? expert_size : 1024);
-}
-
-// ============================================================================
-// Start prefetch - sorts experts by score and initiates prefetching
-// ============================================================================
-PrefetchBatch ExpertPrefetcher::start_prefetch(uint32_t      layer_id,
-                                               const float * router_scores,
-                                               size_t        num_experts,
-                                               size_t        top_k) {
-    PrefetchBatch batch;
-    batch.layer_id       = layer_id;
-    batch.num_prefetched = 0;
-    batch.num_selected   = 0;
-    batch.num_hits       = 0;
-    batch.num_misses     = 0;
-
-    // Handle edge cases
-    if (router_scores == nullptr || num_experts == 0 || top_k == 0) {
-        return batch;
+void expert_prefetcher::init(sycl::queue & compute_q, expert_cache * cache) {
+    if (initialized_) {
+        return;
+    }
+    if (!cache) {
+        GGML_LOG_WARN("[SYCL] expert_prefetcher::init called with null cache\n");
+        return;
     }
 
-    // 1. Score and sort all experts by descending score
-    // Use pair<score, expert_id> for sorting, with expert_id as tiebreaker
-    std::vector<std::pair<float, uint32_t>> scored;
-    scored.reserve(num_experts);
-    for (uint32_t i = 0; i < num_experts; i++) {
-        scored.emplace_back(router_scores[i], i);
-    }
+    cache_ = cache;
 
-    // Sort descending by score, then ascending by expert_id (for stable tiebreaking)
-    std::sort(scored.begin(), scored.end(), [](const auto & a, const auto & b) {
-        if (a.first != b.first) {
-            return a.first > b.first;  // Higher score first
-        }
-        return a.second < b.second;    // Lower ID first for ties
-    });
+    // Create an out-of-order queue on the same device/context for DMA.
+    // OOQ allows multiple H2D transfers to overlap and run concurrently.
+    dma_queue_ = sycl::queue(compute_q.get_context(), compute_q.get_device());
 
-    // 2. Determine prefetch count based on layer accuracy (adaptive)
-    size_t prefetch_count = top_k;
-    if (layer_id < impl_->layer_stats.size()) {
-        prefetch_count = impl_->layer_stats[layer_id].recommended_prefetch_count(top_k);
-    }
-    prefetch_count = std::min(prefetch_count, num_experts);
-
-    // 3. Build predictions list for top experts
-    batch.predictions.reserve(prefetch_count);
-    for (size_t i = 0; i < prefetch_count; i++) {
-        ExpertPrediction pred;
-        pred.expert_id = scored[i].second;
-        pred.score     = scored[i].first;
-        pred.selected  = false;
-
-        // In production: initiate async DMA here
-        // pred.prefetch_future = async_stream_expert(layer_id, pred.expert_id);
-
-        batch.predictions.push_back(pred);
-    }
-
-    batch.num_prefetched = prefetch_count;
-    return batch;
-}
-
-// ============================================================================
-// Get expert data - uses prefetch if available, else streams on-demand
-// ============================================================================
-void * ExpertPrefetcher::get_expert_data(uint32_t layer_id, uint32_t expert_id, PrefetchBatch & batch) {
-    (void) layer_id;  // Used in production for actual streaming
-
-    // Check if expert was prefetched
-    for (const auto & pred : batch.predictions) {
-        if (pred.expert_id == expert_id) {
-            // Expert was prefetched - this is a hit
-            batch.num_hits++;
-
-            // In production: return pred.prefetch_future.get();
-            // For testing: return mock data pointer
-            return impl_->mock_data.data();
+    // Read prefetch depth from environment
+    const char * depth_env = std::getenv("GGML_SYCL_EXPERT_PREFETCH_DEPTH");
+    if (depth_env) {
+        int d = std::atoi(depth_env);
+        if (d > 0 && d <= 16) {
+            prefetch_depth_ = d;
         }
     }
 
-    // Expert was NOT prefetched - this is a miss (must stream on-demand)
-    batch.num_misses++;
+    initialized_ = true;
+    GGML_LOG_INFO("[SYCL] Expert prefetcher initialized (depth=%d, max_inflight=%d)\n",
+                  prefetch_depth_, max_inflight_);
+}
 
-    // In production: stream_expert_sync(layer_id, expert_id)
-    // For testing: return mock data pointer
-    return impl_->mock_data.data();
+void expert_prefetcher::shutdown() {
+    if (!initialized_) {
+        return;
+    }
+
+    cancel_all();
+    initialized_ = false;
+    cache_       = nullptr;
+    GGML_LOG_INFO("[SYCL] Expert prefetcher shut down (completed=%d)\n", completed_count_);
 }
 
 // ============================================================================
-// Record selections - updates accuracy tracking
+// Hint: schedule a non-blocking async H2D prefetch
 // ============================================================================
-void ExpertPrefetcher::record_selections(uint32_t                      layer_id,
-                                         const std::vector<uint32_t> & selected_experts,
-                                         PrefetchBatch &               batch) {
-    // Record number of selections
-    batch.num_selected = selected_experts.size();
 
-    // Build set for O(1) lookup
-    std::unordered_set<uint32_t> selected_set(selected_experts.begin(), selected_experts.end());
+bool expert_prefetcher::hint(int layer_idx, int expert_idx) {
+    if (!initialized_) {
+        return false;
+    }
 
-    // Count how many predictions were correct
-    size_t correct = 0;
-    for (auto & pred : batch.predictions) {
-        if (selected_set.count(pred.expert_id)) {
-            pred.selected = true;
-            correct++;
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    expert_key key{ layer_idx, expert_idx };
+
+    // Already in-flight?
+    if (inflight_.find(key) != inflight_.end()) {
+        return false;
+    }
+
+    // Already cached in VRAM?
+    if (cache_->is_cached_in_vram(layer_idx, expert_idx)) {
+        return false;
+    }
+
+    // Room for more in-flight?
+    if (!has_capacity()) {
+        gc_completed();
+        if (!has_capacity()) {
+            return false;
         }
     }
 
-    // Update layer statistics
-    if (layer_id < impl_->layer_stats.size()) {
-        impl_->layer_stats[layer_id].total_predictions.fetch_add(batch.num_prefetched, std::memory_order_relaxed);
-        impl_->layer_stats[layer_id].correct_predictions.fetch_add(correct, std::memory_order_relaxed);
+    // Use expert_cache to allocate a VRAM slot and get the host source pointer.
+    // expert_cache::prefetch does allocation + async copy internally on its
+    // copy_queue_. We wrap it here to track per-expert completion.
+    //
+    // However, expert_cache::prefetch uses its own copy_queue_ and does NOT
+    // return per-expert events. Instead, we use our own OOQ DMA queue to
+    // submit the memcpy directly, leveraging the cache's host registration
+    // to get host_ptr and allocate_vram for device_ptr.
+    //
+    // For now, delegate to expert_cache::prefetch for the batch and track
+    // via cache's wait_prefetch. This is simpler and avoids duplicating
+    // VRAM allocation logic.
+
+    // Trigger the cache to prefetch this single expert
+    std::vector<expert_key> batch = { key };
+    // Use expert_size = 0 to let the cache use its registered size.
+    // We need to know the expert size -- look it up from the cache's host entries.
+    // Since expert_cache doesn't expose expert size directly, we use a reasonable
+    // default and let the cache handle it.
+
+    // We actually want to do the DMA ourselves for per-expert event tracking.
+    // But expert_cache owns VRAM allocation, so we call get_expert which does
+    // sync load if needed. For truly async, we'd need to expose allocate_vram
+    // from expert_cache.
+    //
+    // Compromise: use expert_cache::prefetch for the actual transfer (it uses
+    // its own OOQ), and store a "pending" marker. await() calls wait_prefetch().
+
+    cache_->prefetch(batch, 0);  // size 0: cache uses registered size
+
+    prefetch_request req;
+    req.key       = key;
+    req.completed = false;
+    inflight_[key] = req;
+
+    return true;
+}
+
+void expert_prefetcher::hint_batch(int layer_idx, const std::vector<int> & expert_indices) {
+    if (!initialized_) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    std::vector<expert_key> batch;
+    batch.reserve(expert_indices.size());
+
+    for (int eidx : expert_indices) {
+        expert_key key{ layer_idx, eidx };
+
+        // Skip if already in-flight or already cached
+        if (inflight_.find(key) != inflight_.end()) {
+            continue;
+        }
+        if (cache_->is_cached_in_vram(layer_idx, eidx)) {
+            continue;
+        }
+        if (!has_capacity()) {
+            gc_completed();
+            if (!has_capacity()) {
+                break;
+            }
+        }
+
+        batch.push_back(key);
+
+        prefetch_request req;
+        req.key       = key;
+        req.completed = false;
+        inflight_[key] = req;
+    }
+
+    if (!batch.empty()) {
+        cache_->prefetch(batch, 0);
     }
 }
 
 // ============================================================================
-// Get prefetch order - returns position in prefetch queue, or -1 if not prefetched
+// Await: block until a specific expert is available in VRAM
 // ============================================================================
-int ExpertPrefetcher::get_prefetch_order(const PrefetchBatch & batch, uint32_t expert_id) const {
-    for (size_t i = 0; i < batch.predictions.size(); i++) {
-        if (batch.predictions[i].expert_id == expert_id) {
-            return static_cast<int>(i);
+
+void * expert_prefetcher::await(int layer_idx, int expert_idx) {
+    if (!initialized_) {
+        return nullptr;
+    }
+
+    expert_key key{ layer_idx, expert_idx };
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        auto it = inflight_.find(key);
+        if (it != inflight_.end()) {
+            // This expert has an in-flight prefetch. Wait for the cache's
+            // copy queue to complete all pending transfers.
+            cache_->wait_prefetch();
+
+            // Mark completed
+            it->second.completed = true;
+            completed_count_++;
         }
     }
-    return -1;  // Not prefetched
+
+    // Return the expert's pointer (VRAM if cached, host fallback otherwise).
+    // After wait_prefetch(), the expert should be in VRAM.
+    return cache_->get_expert(layer_idx, expert_idx, 0);
 }
 
 // ============================================================================
-// Get layer accuracy
+// Cancel: drain all in-flight prefetches
 // ============================================================================
-float ExpertPrefetcher::get_layer_accuracy(uint32_t layer_id) const {
-    if (layer_id >= impl_->layer_stats.size()) {
-        return 0.0f;
-    }
-    return impl_->layer_stats[layer_id].accuracy();
-}
 
-// ============================================================================
-// Get stats - aggregate statistics across all layers
-// ============================================================================
-PrefetchStats ExpertPrefetcher::get_stats() const {
-    PrefetchStats stats;
-    stats.total_predictions = 0;
-    stats.total_correct     = 0;
-
-    for (const auto & layer : impl_->layer_stats) {
-        stats.total_predictions += layer.total_predictions.load(std::memory_order_relaxed);
-        stats.total_correct += layer.correct_predictions.load(std::memory_order_relaxed);
+void expert_prefetcher::cancel_all() {
+    if (!initialized_) {
+        return;
     }
 
-    if (stats.total_predictions > 0) {
-        stats.overall_accuracy = static_cast<float>(stats.total_correct) / static_cast<float>(stats.total_predictions);
-    } else {
-        stats.overall_accuracy = 0.0f;
-    }
+    std::lock_guard<std::mutex> lock(mutex_);
 
-    return stats;
-}
+    if (!inflight_.empty()) {
+        // Wait for all pending DMAs via the cache's copy queue
+        cache_->wait_prefetch();
 
-// ============================================================================
-// Reset stats
-// ============================================================================
-void ExpertPrefetcher::reset_stats() {
-    for (auto & layer : impl_->layer_stats) {
-        layer.total_predictions.store(0, std::memory_order_relaxed);
-        layer.correct_predictions.store(0, std::memory_order_relaxed);
+        for (auto & [key, req] : inflight_) {
+            if (!req.completed) {
+                req.completed = true;
+                completed_count_++;
+            }
+        }
+        inflight_.clear();
     }
 }
 
 // ============================================================================
-// Print stats
+// Statistics
 // ============================================================================
-void ExpertPrefetcher::print_stats() const {
-    printf("=== Expert Prefetcher Stats ===\n");
-    printf("Configured: %u layers, %u experts, %zu bytes/expert\n", impl_->num_layers, impl_->num_experts,
-           impl_->expert_size);
 
-    for (uint32_t i = 0; i < impl_->num_layers; i++) {
-        const auto & stats = impl_->layer_stats[i];
-        printf("Layer %u: accuracy=%.1f%% (%lu/%lu)\n", i, stats.accuracy() * 100.0f, stats.correct_predictions.load(),
-               stats.total_predictions.load());
+int expert_prefetcher::pending_count() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    int pending = 0;
+    for (const auto & [key, req] : inflight_) {
+        if (!req.completed) {
+            pending++;
+        }
     }
+    return pending;
+}
 
-    auto aggregate = get_stats();
-    printf("Overall: accuracy=%.1f%% (%lu/%lu)\n", aggregate.overall_accuracy * 100.0f, aggregate.total_correct,
-           aggregate.total_predictions);
+int expert_prefetcher::completed_count() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return completed_count_;
+}
+
+// ============================================================================
+// Internal helpers
+// ============================================================================
+
+void expert_prefetcher::gc_completed() {
+    // Called with mutex_ held.
+    // Remove entries that have been completed and consumed by await().
+    auto it = inflight_.begin();
+    while (it != inflight_.end()) {
+        if (it->second.completed) {
+            it = inflight_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+bool expert_prefetcher::has_capacity() const {
+    // Called with mutex_ held.
+    return static_cast<int>(inflight_.size()) < max_inflight_;
 }
 
 }  // namespace ggml_sycl

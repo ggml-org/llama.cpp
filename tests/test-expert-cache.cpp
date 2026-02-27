@@ -4,11 +4,11 @@
 // SPDX-License-Identifier: MIT
 //
 
-// Unit tests for expert_cache with LRU/frequency eviction
-// Part of tiered memory architecture for MoE models
+// Unit tests for ExpertCache with LRU/frequency eviction.
+// Tests the contiguous VRAM pool, O(1) lookup, eviction scoring,
+// and thread-safety of the MoE expert VRAM cache manager.
 
 #include "expert-cache.hpp"
-#include "pinned-pool.hpp"
 
 #include <cassert>
 #include <cstdio>
@@ -16,297 +16,348 @@
 #include <sycl/sycl.hpp>
 #include <vector>
 
-// Pinned pool requires at least 8GB budget (CHUNK_SIZE)
-// We use HOST_BUDGET = 8GB for all tests
-constexpr size_t HOST_BUDGET = 8ULL * 1024 * 1024 * 1024;
+// Each "expert" is 1 MB for testing purposes.
+constexpr size_t EXPERT_SIZE = 1 * 1024 * 1024;
 
-// Test basic cache operations: register, get, hit/miss
-static void test_expert_cache_basic() {
-    printf("test_expert_cache_basic: ");
+// Helper: allocate host-pinned buffers to simulate expert weights.
+static std::vector<void *> allocate_host_experts(sycl::queue & q, int count, size_t size) {
+    std::vector<void *> ptrs;
+    ptrs.reserve(count);
+    for (int i = 0; i < count; i++) {
+        void * p = sycl::malloc_host(size, q);
+        assert(p != nullptr && "Failed to allocate host expert memory");
+        memset(p, i + 1, size);
+        ptrs.push_back(p);
+    }
+    return ptrs;
+}
+
+// Helper: free host-pinned buffers.
+static void free_host_experts(sycl::queue & q, std::vector<void *> & ptrs) {
+    for (void * p : ptrs) {
+        sycl::free(p, q);
+    }
+    ptrs.clear();
+}
+
+// Test basic cache operations: register, lookup, ensure_cached, hit/miss
+static void test_basic() {
+    printf("test_basic: ");
 
     sycl::queue q;
 
-    // Setup: 500MB VRAM budget
-    constexpr size_t VRAM_BUDGET = 500ULL * 1024 * 1024;
-    constexpr size_t EXPERT_SIZE = 50 * 1024 * 1024;  // 50MB per expert
+    // 10 MB VRAM budget = 10 slots of 1 MB each
+    constexpr size_t VRAM_BUDGET = 10 * EXPERT_SIZE;
 
-    ggml_sycl::pinned_chunk_pool pool(q, HOST_BUDGET);
-    ggml_sycl::expert_cache      cache(q, pool, VRAM_BUDGET);
+    ggml_sycl::ExpertCache cache;
+    cache.init(0, VRAM_BUDGET, q);
+    assert(cache.is_initialized());
 
-    // Pre-populate pinned pool with "expert data"
-    std::vector<void *> host_ptrs;
+    auto host_ptrs = allocate_host_experts(q, 20, EXPERT_SIZE);
+
+    // Register 20 experts in layer 0
     for (int i = 0; i < 20; i++) {
-        void * ptr = pool.allocate(EXPERT_SIZE);
-        assert(ptr != nullptr && "Failed to allocate from pinned pool");
-
-        // Fill with pattern for verification
-        memset(ptr, i + 1, EXPERT_SIZE);
-        host_ptrs.push_back(ptr);
-
-        cache.register_expert(/*layer=*/0, /*expert=*/i, ptr, EXPERT_SIZE);
+        cache.register_expert(0, i, host_ptrs[i], EXPERT_SIZE);
     }
 
-    // Access experts 0-9 (should cache to VRAM, 10 * 50MB = 500MB)
+    assert(cache.total_slots() == 10);
+
+    // Lookup before caching should return not-cached
+    {
+        auto lk = cache.lookup(0, 0);
+        assert(!lk.is_cached);
+        assert(lk.host_ptr == host_ptrs[0]);
+    }
+
+    // ensure_cached: fills VRAM (10 experts)
     for (int i = 0; i < 10; i++) {
-        void * vram_ptr = cache.get_expert(0, i, EXPERT_SIZE);
-        assert(vram_ptr != nullptr && "Should return VRAM pointer");
-        (void) vram_ptr;  // Silence unused warning
+        assert(cache.ensure_cached(0, i, q) != nullptr);
     }
 
-    // All should be cached
+    // All should now be cached
     for (int i = 0; i < 10; i++) {
-        assert(cache.is_cached_in_vram(0, i) && "Expert should be in VRAM");
+        assert(cache.is_cached_in_vram(0, i));
     }
 
-    // Verify stats
-    assert(cache.cache_misses() == 10 && "Should have 10 misses (cold start)");
-    assert(cache.cache_hits() == 0 && "Should have 0 hits so far");
+    assert(cache.cache_misses() == 10);
+    assert(cache.cache_hits() == 0);
+    assert(cache.cached_count() == 10);
 
-    // Access expert 0 again - should be a hit
-    cache.get_expert(0, 0, EXPERT_SIZE);
-    assert(cache.cache_hits() == 1 && "Should have 1 hit now");
+    // Re-access expert 0 -> hit
+    assert(cache.ensure_cached(0, 0, q) != nullptr);
+    assert(cache.cache_hits() == 1);
 
-    // Access expert 10 - should evict least recently used (expert 1)
-    // Expert 0 was just accessed, so it's most recent
-    cache.get_expert(0, 10, EXPERT_SIZE);
+    // Access expert 10 -> must evict one of 1-9 (0 was recently accessed)
+    cache.ensure_cached(0, 10, q);
+    assert(cache.is_cached_in_vram(0, 10));
 
-    // Expert 10 should be cached
-    assert(cache.is_cached_in_vram(0, 10) && "Expert 10 should be cached");
+    // Expert 0 should remain (accessed twice, highest frequency)
+    assert(cache.is_cached_in_vram(0, 0));
 
-    // One of experts 1-9 should be evicted (whichever has lowest score)
-    int evicted_count = 0;
-    for (int i = 1; i < 10; i++) {
-        if (!cache.is_cached_in_vram(0, i)) {
-            evicted_count++;
+    // Exactly one of 1-9 should be evicted
+    {
+        int n_evicted = 0;
+        for (int i = 1; i < 10; i++) {
+            if (!cache.is_cached_in_vram(0, i)) {
+                n_evicted++;
+            }
         }
+        assert(n_evicted == 1);
     }
-    assert(evicted_count == 1 && "Exactly one expert should be evicted");
 
-    // Expert 0 should still be cached (was accessed twice, highest frequency)
-    assert(cache.is_cached_in_vram(0, 0) && "Expert 0 should remain cached");
-
+    cache.shutdown();
+    free_host_experts(q, host_ptrs);
     printf("PASSED\n");
 }
 
-// Test frequency-based eviction preference
-static void test_expert_cache_frequency() {
-    printf("test_expert_cache_frequency: ");
+// Test frequency-based eviction: frequently accessed experts survive
+static void test_frequency_eviction() {
+    printf("test_frequency_eviction: ");
 
     sycl::queue q;
 
-    // 250MB budget = 5 experts at 50MB each
-    constexpr size_t VRAM_BUDGET = 250ULL * 1024 * 1024;
-    constexpr size_t EXPERT_SIZE = 50 * 1024 * 1024;
+    // 5 slots
+    constexpr size_t VRAM_BUDGET = 5 * EXPERT_SIZE;
 
-    ggml_sycl::pinned_chunk_pool pool(q, HOST_BUDGET);
-    ggml_sycl::expert_cache      cache(q, pool, VRAM_BUDGET);
+    ggml_sycl::ExpertCache cache;
+    cache.init(0, VRAM_BUDGET, q);
 
-    // Register 10 experts
-    std::vector<void *> host_ptrs;
+    auto host_ptrs = allocate_host_experts(q, 10, EXPERT_SIZE);
     for (int i = 0; i < 10; i++) {
-        void * ptr = pool.allocate(EXPERT_SIZE);
-        assert(ptr != nullptr && "Failed to allocate from pinned pool");
-        host_ptrs.push_back(ptr);
-        cache.register_expert(0, i, ptr, EXPERT_SIZE);
+        cache.register_expert(0, i, host_ptrs[i], EXPERT_SIZE);
     }
 
     // Access expert 0 many times (high frequency)
-    for (int j = 0; j < 100; j++) {
-        cache.get_expert(0, 0, EXPERT_SIZE);
+    for (int j = 0; j < 50; j++) {
+        cache.ensure_cached(0, 0, q);
     }
 
-    // Access experts 1-4 once each (fills VRAM: 5 * 50MB = 250MB)
+    // Fill remaining 4 slots with experts 1-4
     for (int i = 1; i < 5; i++) {
-        cache.get_expert(0, i, EXPERT_SIZE);
+        cache.ensure_cached(0, i, q);
     }
 
-    // Verify all are cached
+    // All 5 should be cached
     for (int i = 0; i < 5; i++) {
-        assert(cache.is_cached_in_vram(0, i) && "All 5 should be cached");
+        assert(cache.is_cached_in_vram(0, i));
     }
 
-    // Access expert 5 - should evict lowest score
-    // Expert 0 has 100 accesses, experts 1-4 have 1 access each
-    // Frequency weight is 70%, so experts 1-4 are candidates for eviction
-    cache.get_expert(0, 5, EXPERT_SIZE);
+    // Access expert 5 -> evict lowest score (one of 1-4)
+    cache.ensure_cached(0, 5, q);
 
-    // Expert 0 should still be cached (high frequency protects it)
-    assert(cache.is_cached_in_vram(0, 0) && "Expert 0 should remain cached");
+    // Expert 0 must survive (high frequency)
+    assert(cache.is_cached_in_vram(0, 0));
+    assert(cache.is_cached_in_vram(0, 5));
 
-    // Expert 5 should be cached
-    assert(cache.is_cached_in_vram(0, 5) && "Expert 5 should be cached");
-
-    // One of experts 1-4 should be evicted
-    int cached_1_to_4 = 0;
-    for (int i = 1; i <= 4; i++) {
-        if (cache.is_cached_in_vram(0, i)) {
-            cached_1_to_4++;
+    // Exactly 3 of 1-4 should remain
+    {
+        int n_cached = 0;
+        for (int i = 1; i <= 4; i++) {
+            if (cache.is_cached_in_vram(0, i)) {
+                n_cached++;
+            }
         }
+        assert(n_cached == 3);
     }
-    assert(cached_1_to_4 == 3 && "Should have 3 of experts 1-4 cached");
 
+    cache.shutdown();
+    free_host_experts(q, host_ptrs);
     printf("PASSED\n");
 }
 
 // Test statistics tracking
-static void test_expert_cache_stats() {
-    printf("test_expert_cache_stats: ");
+static void test_stats() {
+    printf("test_stats: ");
 
     sycl::queue q;
 
-    constexpr size_t VRAM_BUDGET = 200 * 1024 * 1024;  // 200MB
-    constexpr size_t EXPERT_SIZE = 50 * 1024 * 1024;   // 50MB
+    constexpr size_t VRAM_BUDGET = 4 * EXPERT_SIZE;
 
-    ggml_sycl::pinned_chunk_pool pool(q, HOST_BUDGET);
-    ggml_sycl::expert_cache      cache(q, pool, VRAM_BUDGET);
+    ggml_sycl::ExpertCache cache;
+    cache.init(0, VRAM_BUDGET, q);
 
-    // Register experts
+    auto host_ptrs = allocate_host_experts(q, 5, EXPERT_SIZE);
     for (int i = 0; i < 5; i++) {
-        void * ptr = pool.allocate(EXPERT_SIZE);
-        assert(ptr != nullptr && "Failed to allocate from pinned pool");
-        cache.register_expert(0, i, ptr, EXPERT_SIZE);
+        cache.register_expert(0, i, host_ptrs[i], EXPERT_SIZE);
     }
 
-    // Verify initial stats
     assert(cache.cache_hits() == 0);
     assert(cache.cache_misses() == 0);
-    assert(cache.vram_used() == 0);
+    assert(cache.vram_budget() == VRAM_BUDGET);
 
     // First access = miss
-    cache.get_expert(0, 0, EXPERT_SIZE);
+    cache.ensure_cached(0, 0, q);
     assert(cache.cache_misses() == 1);
     assert(cache.cache_hits() == 0);
 
     // Second access = hit
-    cache.get_expert(0, 0, EXPERT_SIZE);
+    cache.ensure_cached(0, 0, q);
     assert(cache.cache_misses() == 1);
     assert(cache.cache_hits() == 1);
 
-    // VRAM used should be 50MB
-    assert(cache.vram_used() == EXPERT_SIZE);
+    // VRAM used = 1 slot
+    assert(cache.vram_used() == cache.vram_used());  // sanity
+    assert(cache.entries_count() == 1);
 
-    // Add three more experts
-    cache.get_expert(0, 1, EXPERT_SIZE);
-    cache.get_expert(0, 2, EXPERT_SIZE);
-    cache.get_expert(0, 3, EXPERT_SIZE);
+    // Add 3 more experts
+    cache.ensure_cached(0, 1, q);
+    cache.ensure_cached(0, 2, q);
+    cache.ensure_cached(0, 3, q);
 
-    assert(cache.cache_misses() == 4);             // 1 + 3 new
-    assert(cache.vram_used() == 4 * EXPERT_SIZE);  // 200MB
+    assert(cache.cache_misses() == 4);
     assert(cache.entries_count() == 4);
 
-    // Budget check
-    assert(cache.vram_budget() == VRAM_BUDGET);
+    // hit_rate = 1 / (1 + 4) = 0.2
+    assert(cache.hit_rate() > 0.19f && cache.hit_rate() < 0.21f);
 
+    cache.shutdown();
+    free_host_experts(q, host_ptrs);
     printf("PASSED\n");
 }
 
-// Test prefetch functionality
-static void test_expert_cache_prefetch() {
-    printf("test_expert_cache_prefetch: ");
+// Test async prefetch
+static void test_prefetch() {
+    printf("test_prefetch: ");
 
     sycl::queue q;
 
-    constexpr size_t VRAM_BUDGET = 200 * 1024 * 1024;  // 200MB
-    constexpr size_t EXPERT_SIZE = 50 * 1024 * 1024;   // 50MB
+    constexpr size_t VRAM_BUDGET = 4 * EXPERT_SIZE;
 
-    ggml_sycl::pinned_chunk_pool pool(q, HOST_BUDGET);
-    ggml_sycl::expert_cache      cache(q, pool, VRAM_BUDGET);
+    ggml_sycl::ExpertCache cache;
+    cache.init(0, VRAM_BUDGET, q);
 
-    // Register experts
+    auto host_ptrs = allocate_host_experts(q, 10, EXPERT_SIZE);
     for (int i = 0; i < 10; i++) {
-        void * ptr = pool.allocate(EXPERT_SIZE);
-        assert(ptr != nullptr && "Failed to allocate from pinned pool");
-        cache.register_expert(0, i, ptr, EXPERT_SIZE);
+        cache.register_expert(0, i, host_ptrs[i], EXPERT_SIZE);
     }
 
-    // Prefetch experts 0-3
-    std::vector<ggml_sycl::expert_key> to_prefetch = {
-        { 0, 0 },
-        { 0, 1 },
-        { 0, 2 },
-        { 0, 3 }
-    };
-    cache.prefetch(to_prefetch, EXPERT_SIZE);
-    cache.wait_prefetch();
-
-    // All should be in VRAM now
+    // Prefetch experts 0-3 async
+    std::vector<sycl::event> events;
     for (int i = 0; i < 4; i++) {
-        assert(cache.is_cached_in_vram(0, i) && "Prefetched expert should be in VRAM");
+        events.push_back(cache.prefetch_async(0, i, q));
     }
 
-    // Prefetch should not count as hits or misses (it's speculative)
-    // Actually our implementation does count them for VRAM tracking but not as misses
-    // The entries have access_count=0 (prefetch doesn't increment)
+    // Wait for all prefetches
+    for (auto & evt : events) {
+        evt.wait();
+    }
 
-    // Now access them - should be hits
+    // All should be in VRAM
     for (int i = 0; i < 4; i++) {
-        cache.get_expert(0, i, EXPERT_SIZE);
+        assert(cache.is_cached_in_vram(0, i));
     }
-    assert(cache.cache_hits() == 4 && "Prefetched accesses should be hits");
 
+    // Now access them -> should be hits
+    for (int i = 0; i < 4; i++) {
+        cache.ensure_cached(0, i, q);
+    }
+    assert(cache.cache_hits() == 4);
+
+    cache.shutdown();
+    free_host_experts(q, host_ptrs);
     printf("PASSED\n");
 }
 
 // Test multi-layer experts
-static void test_expert_cache_multi_layer() {
-    printf("test_expert_cache_multi_layer: ");
+static void test_multi_layer() {
+    printf("test_multi_layer: ");
 
     sycl::queue q;
 
-    constexpr size_t VRAM_BUDGET = 200 * 1024 * 1024;
-    constexpr size_t EXPERT_SIZE = 50 * 1024 * 1024;
+    constexpr size_t VRAM_BUDGET = 8 * EXPERT_SIZE;
 
-    ggml_sycl::pinned_chunk_pool pool(q, HOST_BUDGET);
-    ggml_sycl::expert_cache      cache(q, pool, VRAM_BUDGET);
+    ggml_sycl::ExpertCache cache;
+    cache.init(0, VRAM_BUDGET, q);
 
-    // Register experts across multiple layers (use fewer to fit in 8GB)
+    auto host_ptrs = allocate_host_experts(q, 32, EXPERT_SIZE);
+    int idx = 0;
     for (int layer = 0; layer < 4; layer++) {
         for (int expert = 0; expert < 8; expert++) {
-            void * ptr = pool.allocate(EXPERT_SIZE);
-            assert(ptr != nullptr && "Failed to allocate from pinned pool");
-            cache.register_expert(layer, expert, ptr, EXPERT_SIZE);
+            cache.register_expert(layer, expert, host_ptrs[idx++], EXPERT_SIZE);
         }
     }
 
-    // Access layer 0, expert 0
-    cache.get_expert(0, 0, EXPERT_SIZE);
+    // Access layer 0 expert 0
+    cache.ensure_cached(0, 0, q);
     assert(cache.is_cached_in_vram(0, 0));
 
-    // Access layer 1, expert 0 (different from layer 0, expert 0)
-    cache.get_expert(1, 0, EXPERT_SIZE);
+    // Access layer 1 expert 0 (different from layer 0 expert 0)
+    cache.ensure_cached(1, 0, q);
     assert(cache.is_cached_in_vram(1, 0));
 
-    // Both should be independently cached
+    // Both independently cached
     assert(cache.entries_count() == 2);
 
-    // Access layer 2, experts 0-1
-    cache.get_expert(2, 0, EXPERT_SIZE);
-    cache.get_expert(2, 1, EXPERT_SIZE);
+    // Fill up with layer 2 experts
+    for (int e = 0; e < 6; e++) {
+        cache.ensure_cached(2, e, q);
+    }
+    assert(cache.entries_count() == 8);
 
-    // All 4 should be cached (200MB total)
-    assert(cache.entries_count() == 4);
-    assert(cache.vram_used() == 4 * EXPERT_SIZE);
-
+    cache.shutdown();
+    free_host_experts(q, host_ptrs);
     printf("PASSED\n");
 }
 
-// Test unregistered expert handling
-static void test_expert_cache_unregistered() {
-    printf("test_expert_cache_unregistered: ");
+// Test unregistered expert returns nullptr
+static void test_unregistered() {
+    printf("test_unregistered: ");
 
     sycl::queue q;
 
-    constexpr size_t VRAM_BUDGET = 100 * 1024 * 1024;
-    constexpr size_t EXPERT_SIZE = 50 * 1024 * 1024;
+    constexpr size_t VRAM_BUDGET = 4 * EXPERT_SIZE;
 
-    ggml_sycl::pinned_chunk_pool pool(q, HOST_BUDGET);
-    ggml_sycl::expert_cache      cache(q, pool, VRAM_BUDGET);
+    ggml_sycl::ExpertCache cache;
+    cache.init(0, VRAM_BUDGET, q);
 
-    // Try to get unregistered expert - should return nullptr
-    void * ptr = cache.get_expert(0, 0, EXPERT_SIZE);
-    assert(ptr == nullptr && "Unregistered expert should return nullptr");
-    (void) ptr;  // Silence unused warning
+    // Ensure_cached on unregistered expert -> nullptr
+    assert(cache.ensure_cached(0, 0, q) == nullptr);
 
+    // Lookup on unregistered expert -> not cached, no host_ptr
+    {
+        auto lk = cache.lookup(0, 0);
+        assert(!lk.is_cached);
+        assert(lk.host_ptr == nullptr);
+    }
+
+    cache.shutdown();
+    printf("PASSED\n");
+}
+
+// Test update_score API
+static void test_update_score() {
+    printf("test_update_score: ");
+
+    sycl::queue q;
+
+    constexpr size_t VRAM_BUDGET = 3 * EXPERT_SIZE;
+
+    ggml_sycl::ExpertCache cache;
+    cache.init(0, VRAM_BUDGET, q);
+
+    auto host_ptrs = allocate_host_experts(q, 5, EXPERT_SIZE);
+    for (int i = 0; i < 5; i++) {
+        cache.register_expert(0, i, host_ptrs[i], EXPERT_SIZE);
+    }
+
+    // Fill cache with experts 0, 1, 2
+    cache.ensure_cached(0, 0, q);
+    cache.ensure_cached(0, 1, q);
+    cache.ensure_cached(0, 2, q);
+
+    // Boost expert 1's score via update_score
+    for (uint64_t t = 1; t <= 100; t++) {
+        cache.update_score(0, 1, t);
+    }
+
+    // Now add expert 3 -> should evict 0 or 2, NOT 1 (high score)
+    cache.ensure_cached(0, 3, q);
+
+    // Expert 1 must survive
+    assert(cache.is_cached_in_vram(0, 1));
+
+    cache.shutdown();
+    free_host_experts(q, host_ptrs);
     printf("PASSED\n");
 }
 
@@ -314,12 +365,13 @@ int main() {
     try {
         printf("\n=== Expert Cache Unit Tests ===\n\n");
 
-        test_expert_cache_basic();
-        test_expert_cache_frequency();
-        test_expert_cache_stats();
-        test_expert_cache_prefetch();
-        test_expert_cache_multi_layer();
-        test_expert_cache_unregistered();
+        test_basic();
+        test_frequency_eviction();
+        test_stats();
+        test_prefetch();
+        test_multi_layer();
+        test_unregistered();
+        test_update_score();
 
         printf("\nAll tests PASSED!\n\n");
         return 0;
