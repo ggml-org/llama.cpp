@@ -29,6 +29,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <limits>
 #include <mutex>
@@ -218,6 +219,22 @@ static void ggml_sycl_release_host_weight_extras(ggml_sycl_host_weight_release_m
 
 // CPU compute path for data-local dispatch
 #include "ggml-sycl/cpu-dispatch.hpp"
+// MoE expert VRAM cache for hybrid GPU+CPU inference
+#include "ggml-sycl/expert-cache.hpp"
+
+// ---------------------------------------------------------------------------
+// Per-device ExpertCache instances for MoE hybrid GPU+CPU inference.
+// Initialized lazily when GGML_SYCL_MOE_HYBRID=1 and first MUL_MAT_ID runs.
+// ---------------------------------------------------------------------------
+static ggml_sycl::ExpertCache g_expert_caches[GGML_SYCL_MAX_DEVICES];
+
+static ggml_sycl::ExpertCache * ggml_sycl_get_expert_cache(int device) {
+    if (device < 0 || device >= GGML_SYCL_MAX_DEVICES) {
+        return nullptr;
+    }
+    auto * cache = &g_expert_caches[device];
+    return cache->is_initialized() ? cache : nullptr;
+}
 
 // Layout-size helpers (defined later).
 static size_t ggml_sycl_layout_bytes_for_tensor(const ggml_tensor * tensor, layout_mode layout, int device);
@@ -23808,40 +23825,204 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     local_extra.layout.data_ptr    = nullptr;
     src0_row.extra                 = &local_extra;
     src0_row.layout                = &local_extra.layout;
+    // ---------------------------------------------------------------------------
+    // MoE hybrid GPU+CPU dispatch gate (GGML_SYCL_MOE_HYBRID=1)
+    // When enabled and weights are host-resident (mmap/shared), experts that
+    // failed GPU staging (expert_ptrs_host[i] == nullptr) are computed on CPU
+    // instead of being skipped. GPU-staged experts use the fast MMVQ path.
+    // ---------------------------------------------------------------------------
+    static std::atomic<int> moe_hybrid_enabled{ -1 };
+    int                     moe_hybrid_val = moe_hybrid_enabled.load(std::memory_order_acquire);
+    if (moe_hybrid_val < 0) {
+        const char * env     = getenv("GGML_SYCL_MOE_HYBRID");
+        int          new_val = env ? atoi(env) : 0;  // Default: OFF during development
+        moe_hybrid_enabled.compare_exchange_strong(moe_hybrid_val, new_val, std::memory_order_release,
+                                                    std::memory_order_acquire);
+        moe_hybrid_val = moe_hybrid_enabled.load(std::memory_order_acquire);
+    }
+
+    const bool moe_hybrid_active = (moe_hybrid_val != 0) && use_expert_cache && (ne12 == 1);
+
     if (ne12 == 1) {
-        for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
-            for (int64_t id = 0; id < n_ids; id++) {
-                const int32_t i02 = ids_host[static_cast<size_t>(iid1 * n_ids + id)];
-                GGML_ASSERT(i02 >= 0 && i02 < n_as);
-                const int64_t i11        = id % ne11;
-                const int64_t i12        = iid1;
-                const int64_t i1         = id;
-                const int64_t i2         = i12;
-                const void *  expert_ptr = nullptr;
-                if (use_expert_cache) {
-                    if (expert_ptrs_host) {
-                        expert_ptr = expert_ptrs_host[i02];
-                    }
+        // ---------------------------------------------------------------
+        // Hybrid dispatch: partition experts into GPU (staged) + CPU (miss)
+        // ---------------------------------------------------------------
+        if (moe_hybrid_active) {
+            // Partition experts based on whether they were staged to GPU memory.
+            // expert_ptrs_host[i02] != nullptr  →  GPU path (device pointer)
+            // expert_ptrs_host[i02] == nullptr   →  CPU path (host mmap pointer)
+            struct expert_dispatch_entry {
+                int64_t iid1;       // token index
+                int64_t id;         // expert slot index within token
+                int32_t expert_id;  // global expert ID
+            };
+            std::vector<expert_dispatch_entry> gpu_entries;
+            std::vector<expert_dispatch_entry> cpu_entries;
+            gpu_entries.reserve(static_cast<size_t>(ids->ne[1] * n_ids));
+            cpu_entries.reserve(static_cast<size_t>(n_ids));
 
-                    if (!expert_ptr) {
-                        // Cannot use mmap fallback - GPU cannot access non-USM memory
-                        // Skip this expert instead of crashing with DEVICE_LOST
-                        GGML_LOG_ERROR("[MoE] Expert L%d:E%d not cached - memory exhausted, skipping\n", layer_id,
-                                       (int) i02);
+            for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
+                for (int64_t id = 0; id < n_ids; id++) {
+                    const int32_t i02 = ids_host[static_cast<size_t>(iid1 * n_ids + id)];
+                    GGML_ASSERT(i02 >= 0 && i02 < n_as);
 
-                        continue;
+                    const void * dev_ptr = (expert_ptrs_host && i02 < n_as)
+                                             ? expert_ptrs_host[i02]
+                                             : nullptr;
+                    if (dev_ptr) {
+                        gpu_entries.push_back({ iid1, id, i02 });
+                    } else {
+                        cpu_entries.push_back({ iid1, id, i02 });
                     }
-                } else {
-                    expert_ptr = static_cast<const char *>(src0_layout_base) + i02 * expert_size;
+                }
+            }
+
+            GGML_SYCL_DEBUG("[MoE-HYBRID] L%d: %zu GPU + %zu CPU experts\n",
+                            layer_id, gpu_entries.size(), cpu_entries.size());
+
+            // ----- CPU path: dispatch cache-miss experts concurrently -----
+            // CPU computes directly from mmap host pointers; outputs go to a
+            // host buffer that is later H2D-copied into the device dst tensor.
+            std::vector<float>          cpu_output_buf;
+            std::vector<cpu_expert_task> cpu_tasks;
+            std::vector<float>          src1_host_buf;
+
+            if (!cpu_entries.empty()) {
+                const int64_t K = ne00;  // input dimension (columns)
+                const int64_t N = ne01;  // output rows per expert
+
+                // Stage src1 activations to host. Each expert slot may have
+                // a different activation slice (i11 = id % ne11), so we copy
+                // one K-float vector per CPU expert.
+                src1_host_buf.resize(static_cast<size_t>(cpu_entries.size())
+                                     * static_cast<size_t>(K));
+                for (size_t ci = 0; ci < cpu_entries.size(); ci++) {
+                    const auto &  entry    = cpu_entries[ci];
+                    const int64_t i11      = entry.id % ne11;
+                    const int64_t i12      = entry.iid1;
+                    const char *  src1_dev = src1_original + i11 * nb11 + i12 * nb12;
+                    float *       dst_host = src1_host_buf.data()
+                                             + ci * static_cast<size_t>(K);
+                    stream->memcpy(dst_host, src1_dev,
+                                   static_cast<size_t>(K) * sizeof(float));
+                }
+                stream->wait();  // Wait for all activation D2H copies
+
+                // Allocate host output buffer for all CPU experts
+                cpu_output_buf.resize(static_cast<size_t>(cpu_entries.size())
+                                      * static_cast<size_t>(N), 0.0f);
+
+                // Build cpu_expert_task array using mmap host pointers
+                cpu_tasks.reserve(cpu_entries.size());
+                for (size_t ci = 0; ci < cpu_entries.size(); ci++) {
+                    const auto & entry = cpu_entries[ci];
+                    // Expert weight host pointer from mmap: src0->data + expert_id * nb02
+                    const void * host_weight =
+                        static_cast<const char *>(src0->data)
+                        + static_cast<size_t>(entry.expert_id) * nb02;
+
+                    cpu_expert_task task;
+                    task.weight_host = host_weight;
+                    task.act_host    = src1_host_buf.data()
+                                       + ci * static_cast<size_t>(K);
+                    task.output_host = cpu_output_buf.data()
+                                       + ci * static_cast<size_t>(N);
+                    task.type        = src0->type;
+                    task.K           = static_cast<int>(K);
+                    task.N           = static_cast<int>(N);
+                    cpu_tasks.push_back(task);
                 }
 
-                src0_row.data = const_cast<void *>(expert_ptr);
+                // Launch CPU experts asynchronously so they overlap with GPU
+                // kernel submissions below. std::async runs the TBB-parallel
+                // batched dispatch on a separate thread; we join before merge.
+            }
 
+            std::future<void> cpu_future;
+            if (!cpu_tasks.empty()) {
+                auto * tasks_ptr = cpu_tasks.data();
+                int    n_tasks   = static_cast<int>(cpu_tasks.size());
+                cpu_future = std::async(std::launch::async, [tasks_ptr, n_tasks]() {
+                    ggml_sycl_cpu_expert_mul_mat_batched(tasks_ptr, n_tasks);
+                });
+            }
+
+            // ----- GPU path: dispatch staged (cache-hit) experts -----
+            for (const auto & entry : gpu_entries) {
+                const int64_t iid1 = entry.iid1;
+                const int64_t id   = entry.id;
+                const int32_t i02  = entry.expert_id;
+                const int64_t i11  = id % ne11;
+                const int64_t i12  = iid1;
+                const int64_t i1   = id;
+                const int64_t i2   = i12;
+
+                const void * expert_ptr = expert_ptrs_host[i02];
+                GGML_ASSERT(expert_ptr != nullptr);
+
+                src0_row.data               = const_cast<void *>(expert_ptr);
                 local_extra.layout.data_ptr = const_cast<void *>(expert_ptr);
                 src1_row.data               = src1_original + i11 * nb11 + i12 * nb12;
                 dst_row.data                = dst_original + i1 * nb1 + i2 * nb2;
 
                 ggml_sycl_mul_mat(ctx, &src0_row, &src1_row, &dst_row, &route_layout);
+            }
+
+            // ----- Merge: wait for CPU, then H2D copy outputs -----
+            if (cpu_future.valid()) {
+                cpu_future.get();  // Block until CPU experts finish
+            }
+            if (!cpu_entries.empty()) {
+                const int64_t N = ne01;
+                for (size_t ci = 0; ci < cpu_entries.size(); ci++) {
+                    const auto &  entry   = cpu_entries[ci];
+                    const int64_t i1      = entry.id;
+                    const int64_t i2      = entry.iid1;
+                    char *        dst_d   = dst_original + i1 * nb1 + i2 * nb2;
+                    const float * cpu_out = cpu_output_buf.data()
+                                            + ci * static_cast<size_t>(N);
+
+                    // Async H2D copy of CPU expert output into device dst
+                    stream->memcpy(dst_d, cpu_out,
+                                   static_cast<size_t>(N) * sizeof(float));
+                }
+                // Wait for all H2D merges to complete before returning
+                stream->wait();
+            }
+
+        } else {
+            // ----- Standard (non-hybrid) per-expert dispatch -----
+            for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
+                for (int64_t id = 0; id < n_ids; id++) {
+                    const int32_t i02 = ids_host[static_cast<size_t>(iid1 * n_ids + id)];
+                    GGML_ASSERT(i02 >= 0 && i02 < n_as);
+                    const int64_t i11        = id % ne11;
+                    const int64_t i12        = iid1;
+                    const int64_t i1         = id;
+                    const int64_t i2         = i12;
+                    const void *  expert_ptr = nullptr;
+                    if (use_expert_cache) {
+                        if (expert_ptrs_host) {
+                            expert_ptr = expert_ptrs_host[i02];
+                        }
+
+                        if (!expert_ptr) {
+                            GGML_LOG_ERROR("[MoE] Expert L%d:E%d not cached - memory exhausted, skipping\n",
+                                           layer_id, (int) i02);
+                            continue;
+                        }
+                    } else {
+                        expert_ptr = static_cast<const char *>(src0_layout_base) + i02 * expert_size;
+                    }
+
+                    src0_row.data = const_cast<void *>(expert_ptr);
+
+                    local_extra.layout.data_ptr = const_cast<void *>(expert_ptr);
+                    src1_row.data               = src1_original + i11 * nb11 + i12 * nb12;
+                    dst_row.data                = dst_original + i1 * nb1 + i2 * nb2;
+
+                    ggml_sycl_mul_mat(ctx, &src0_row, &src1_row, &dst_row, &route_layout);
+                }
             }
         }
 
