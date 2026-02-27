@@ -172,26 +172,11 @@ void ggml_openvino_buffer_register_extra(ggml_tensor * tensor, ggml_openvino_ext
 // OpenVINO Backend Context and Interface
 // =====================================================
 struct ggml_backend_openvino_context {
-    int device;               // the device ID currently in use
-    std::string name;         // context Name
-    std::string description;  // context description
+    int device = 0;
+    std::string name = "OpenVINO";
+    std::string description = "OpenVINO Backend Context";
 
-    // OpenVINO runtime context
-    std::shared_ptr<void> ov_runtime_context;
+    std::shared_ptr<void> runtime_context = nullptr;
 
-    // OpenVINO Multi-stream support
-    static const int MAX_STREAMS = 8;       // define the maximum number of flows
-    std::vector<ov::InferRequest> streams;  // used to support multi-stream reasoning
-    int current_stream;                     // the currently active stream index
-
-    // state Management
-    bool is_initialized;  // initialize
-
-    ggml_backend_openvino_context() :
-        device(0),
-        name("OpenVINO"),
-        description("OpenVINO Backend Context"),
-        current_stream(0),
-        ov_runtime_context(nullptr),
-        is_initialized(false) {}
+    ggml_backend_openvino_context() = default;
 };

@@ -47,15 +47,8 @@ enum ggml_status ov_graph_compute(ggml_cgraph * cgraph, ggml_backend_t backend) 
 
         const auto is_static = ggml_openvino_is_npu();
 
-        if (ctx->ov_runtime_context == nullptr) {
-            ctx->ov_runtime_context = std::make_shared<ov_runtime_context>();
-        }
-	std::shared_ptr<ov_runtime_context> r_ctx = std::static_pointer_cast<ov_runtime_context>(ctx->ov_runtime_context);
-        r_ctx->device = ggml_openvino_get_device_name();
-        r_ctx->stateful = false;
-        if (getenv("GGML_OPENVINO_STATEFUL_EXECUTION") && !is_static) {
-            r_ctx->stateful = true;
-        }
+        GGML_ASSERT(ctx->runtime_context != nullptr);
+        std::shared_ptr<ov_runtime_context> r_ctx = std::static_pointer_cast<ov_runtime_context>(ctx->runtime_context);
 
         return is_static ? ov_graph_compute_static(cgraph, r_ctx) : ov_graph_compute_dynamic(cgraph, r_ctx);
     } catch (const ov::Exception & e) {
