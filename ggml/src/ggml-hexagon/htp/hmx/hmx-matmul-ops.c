@@ -837,13 +837,12 @@ void core_mma_chunk_fp16(__fp16 *c, const __fp16 *a, const __fp16 *b, const __fp
 
       __fp16 *accum_tile = c + (i * n_col_tiles + j) * HMX_FP16_TILE_N_ELMS;
       if (!zero_init) {
-        hmx_load_tiles_fp16(accum_tile, eye_tile, 1);
+        hmx_load_tile_pair_fp16(accum_tile, eye_tile);
       }
 
-      for (int k = 0; k < n_dot_tiles; k += 32) {
-        int    offset  = k * HMX_FP16_TILE_N_ELMS;
-        size_t n_tiles = hmx_smin(n_dot_tiles - k, 32);
-        hmx_load_tiles_fp16(row_tiles + offset, col_tiles + offset, n_tiles);
+      for (int k = 0; k < n_dot_tiles; ++k) {
+        int offset = k * HMX_FP16_TILE_N_ELMS;
+        hmx_load_tile_pair_fp16(row_tiles + offset, col_tiles + offset);
       }
 
       hmx_consume_accumulator_fp16(accum_tile);

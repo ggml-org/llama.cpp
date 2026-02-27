@@ -36,11 +36,27 @@ static HMX_INLINE_ALWAYS void hmx_load_tiles_fp16(const __fp16 *row_tiles,
         : "memory");
 }
 
-static HMX_INLINE_ALWAYS void hmx_consume_accumulator_fp16(__fp16 *out) {
+// Load a single activation+weight tile pair (no :deep streaming).
+// Matches the reference pattern: Q6_activation_hf_mxmem_RR / Q6_weight_hf_mxmem_RR.
+static HMX_INLINE_ALWAYS void hmx_load_tile_pair_fp16(const __fp16 *act_tile,
+                                                       const __fp16 *wt_tile) {
+    // Rt values from the reference (test_aizip_mm2.c):
+    //   activation Rt = 0x7FFF (single tile, large safe limit)
+    //   weight     Rt = 1920  (offset to last 128-byte vector in tile: 15*128)
     asm volatile(
-        "cvt.hf = acc(%0)\n"
-        "mxmem(%1, %2) = cvt\n"
-        :: "r"(2), "r"(out), "r"(0)
+        "{ activation.hf = mxmem(%0, %1)\n"
+        "weight.hf = mxmem(%2, %3) }\n"
+        :: "r"(act_tile), "r"(0x7FFF), "r"(wt_tile), "r"(1920)
+        : "memory");
+}
+
+static HMX_INLINE_ALWAYS void hmx_consume_accumulator_fp16(__fp16 *out) {
+    // Use the combined convert-and-store instruction (matches the reference
+    // Q6_mxmem_AR_after_hf intrinsic).  The previous two-instruction sequence
+    // "cvt.hf = acc(2); mxmem = cvt" used an undocumented Rs=2 parameter.
+    asm volatile(
+        "mxmem(%0, %1):after.hf = acc\n"
+        :: "r"(out), "r"(0)
         : "memory");
 }
 
