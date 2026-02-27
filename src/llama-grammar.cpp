@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <stdexcept>
 
+#define MAX_RECURSION_DEPTH 100
 #define MAX_REPETITION_THRESHOLD 2000
 //
 // helpers
@@ -434,13 +435,17 @@ const char * llama_grammar_parser::parse_alternates(
         const char        * src,
         const std::string & rule_name,
         uint32_t            rule_id,
-        bool                is_nested) {
+        bool                is_nested,
+        int                 depth) {
+    if (depth > MAX_RECURSION_DEPTH) {
+        throw std::runtime_error("grammar recursion depth exceeded");
+    }
     llama_grammar_rule rule;
-    const char * pos = parse_sequence(src, rule_name, rule, is_nested);
+    const char * pos = parse_sequence(src, rule_name, rule, is_nested, depth);
     while (*pos == '|') {
         rule.push_back({LLAMA_GRETYPE_ALT, 0});
         pos = parse_space(pos + 1, true);
-        pos = parse_sequence(pos, rule_name, rule, is_nested);
+        pos = parse_sequence(pos, rule_name, rule, is_nested, depth);
     }
     rule.push_back({LLAMA_GRETYPE_END, 0});
     add_rule(rule_id, rule);
@@ -451,7 +456,8 @@ const char * llama_grammar_parser::parse_sequence(
         const char         * src,
         const std::string  & rule_name,
         llama_grammar_rule & rule,
-        bool               is_nested) {
+        bool               is_nested,
+        int                depth) {
     size_t last_sym_start = rule.size();
     const char * pos = src;
 
@@ -573,7 +579,7 @@ const char * llama_grammar_parser::parse_sequence(
             // parse nested alternates into synthesized rule
             pos = parse_space(pos + 1, true);
             uint32_t sub_rule_id = generate_symbol_id(rule_name);
-            pos = parse_alternates(pos, rule_name, sub_rule_id, true);
+            pos = parse_alternates(pos, rule_name, sub_rule_id, true, depth + 1);
             last_sym_start = rule.size();
             // output reference to synthesized rule
             rule.push_back({LLAMA_GRETYPE_RULE_REF, sub_rule_id});
