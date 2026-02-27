@@ -468,6 +468,7 @@ enum ggml_status naive_compute(ggml_cgraph * cgraph,
 
     ov::InferRequest infer_request;
     auto remote_context = ggml_openvino_get_remote_context();
+    core.set_property(device, ov::hint::execution_mode(ov::hint::ExecutionMode::ACCURACY));
     if (remote_context.has_value()) {
         infer_request = core.compile_model(model, remote_context.value(), config).create_infer_request();
     } else {

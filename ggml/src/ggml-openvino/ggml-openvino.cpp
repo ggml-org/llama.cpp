@@ -963,6 +963,10 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
             //               ggml_glu_op_name(ggml_get_glu_op(op)));
             return false;
         }
+        if (op->src[1] == nullptr && op->src[0]->ne[0] % 2 != 0) {
+            // triggers bug in ov gpu
+            return false;
+        }
         break;
     }
     default: {
