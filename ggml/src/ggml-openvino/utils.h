@@ -48,7 +48,6 @@ struct ov_runtime_context {
     std::unordered_map<graph_key, std::vector<std::string>, graph_key_hash> ov_output_names_cache;
 
     ov_runtime_context() :
-        ov_core(ov_singleton_core()),
         device("CPU"),
         stateful(false),
         stateful_kv_size(0) {}
