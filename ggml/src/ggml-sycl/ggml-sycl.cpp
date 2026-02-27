@@ -28807,6 +28807,15 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
         q->memcpy(&val, ptr, sizeof(int32_t)).wait();
         return val;
     };
+    auto read_i64_host_or_d2h = [&](const void * ptr) -> int64_t {
+        const auto alloc_type = sycl::get_pointer_type(ptr, sycl_ctx_ref);
+        if (alloc_type == sycl::usm::alloc::host || alloc_type == sycl::usm::alloc::shared) {
+            return *(const int64_t *)ptr;
+        }
+        int64_t val;
+        q->memcpy(&val, ptr, sizeof(int64_t)).wait();
+        return val;
+    };
     auto log_op = [&](const char * tag, int layer, const ggml_tensor * node, const void * output_ptr) {
         if (!log_ops) {
             return;
@@ -29293,14 +29302,12 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                                 const int32_t idx_type =
                                     (src1->type == GGML_TYPE_I64) ? 1 : (src1->type == GGML_TYPE_I32 ? 0 : -1);
                                 if (idx_type == 1) {
-                                    int64_t idx0 = -1;
-                                    q->memcpy(&idx0, idx_ptr, sizeof(idx0)).wait();
+                                    int64_t idx0 = read_i64_host_or_d2h(idx_ptr);
                                     if (idx0 >= 0) {
                                         decode_kv_pos_hint = idx0;
                                     }
                                 } else if (idx_type == 0) {
-                                    int32_t idx0 = -1;
-                                    q->memcpy(&idx0, idx_ptr, sizeof(idx0)).wait();
+                                    int32_t idx0 = read_i32_host_or_d2h(static_cast<const int32_t *>(idx_ptr));
                                     if (idx0 >= 0) {
                                         decode_kv_pos_hint = idx0;
                                     }
@@ -30169,14 +30176,12 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                             }
                             if (decode_kv_pos_hint < 0) {
                                 if (idx_type == 1) {
-                                    int64_t idx0 = -1;
-                                    q->memcpy(&idx0, idx_ptr, sizeof(idx0)).wait();
+                                    int64_t idx0 = read_i64_host_or_d2h(idx_ptr);
                                     if (idx0 >= 0) {
                                         decode_kv_pos_hint = idx0;
                                     }
                                 } else {
-                                    int32_t idx0 = -1;
-                                    q->memcpy(&idx0, idx_ptr, sizeof(idx0)).wait();
+                                    int32_t idx0 = read_i32_host_or_d2h(static_cast<const int32_t *>(idx_ptr));
                                     if (idx0 >= 0) {
                                         decode_kv_pos_hint = idx0;
                                     }
@@ -31878,14 +31883,12 @@ full_build:
                     // Later FLASH_ATTN uses this to clamp seq_len to the live KV extent.
                     if (decode_kv_pos_hint < 0) {
                         if (idx_type == 1) {
-                            int64_t idx0 = -1;
-                            q->memcpy(&idx0, idx_ptr, sizeof(idx0)).wait();
+                            int64_t idx0 = read_i64_host_or_d2h(idx_ptr);
                             if (idx0 >= 0) {
                                 decode_kv_pos_hint = idx0;
                             }
                         } else if (idx_type == 0) {
-                            int32_t idx0 = -1;
-                            q->memcpy(&idx0, idx_ptr, sizeof(idx0)).wait();
+                            int32_t idx0 = read_i32_host_or_d2h(static_cast<const int32_t *>(idx_ptr));
                             if (idx0 >= 0) {
                                 decode_kv_pos_hint = idx0;
                             }
