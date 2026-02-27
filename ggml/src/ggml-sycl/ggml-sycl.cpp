@@ -28794,6 +28794,19 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
         nb[2]            = nb[1] * tensor->ne[1];
         nb[3]            = nb[2] * tensor->ne[2];
     };
+    // Helper: read a single int32_t from a tensor pointer, preferring host-side
+    // read when the pointer is host-accessible (malloc_host or malloc_shared).
+    // Falls back to blocking D2H memcpy only for device-only pointers.
+    const sycl::context & sycl_ctx_ref = q->get_context();
+    auto read_i32_host_or_d2h = [&](const int32_t * ptr) -> int32_t {
+        const auto alloc_type = sycl::get_pointer_type(ptr, sycl_ctx_ref);
+        if (alloc_type == sycl::usm::alloc::host || alloc_type == sycl::usm::alloc::shared) {
+            return *ptr;
+        }
+        int32_t val;
+        q->memcpy(&val, ptr, sizeof(int32_t)).wait();
+        return val;
+    };
     auto log_op = [&](const char * tag, int layer, const ggml_tensor * node, const void * output_ptr) {
         if (!log_ops) {
             return;
@@ -29109,12 +29122,12 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
 
                             int32_t position = rope_position_cached_r;
                             if (position < 0) {
-                                const int32_t * pos_device = (const int32_t *) get_tensor_ptr_view_fast(node->src[1]);
-                                if (!pos_device) {
+                                const int32_t * pos_ptr = (const int32_t *) get_tensor_ptr_view_fast(node->src[1]);
+                                if (!pos_ptr) {
                                     recipe_ok = false;
                                     break;
                                 }
-                                q->memcpy(&position, pos_device, sizeof(int32_t)).wait();
+                                position               = read_i32_host_or_d2h(pos_ptr);
                                 rope_position_cached_r = position;
                             }
 
@@ -29721,12 +29734,12 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
                             const int half_dim = n_dims / 2;
                             int32_t   position = rope_position_cached;
                             if (position < 0) {
-                                const int32_t * pos_device = (const int32_t *) get_tensor_ptr_view_fast(node->src[1]);
-                                if (!pos_device) {
+                                const int32_t * pos_ptr = (const int32_t *) get_tensor_ptr_view_fast(node->src[1]);
+                                if (!pos_ptr) {
                                     fast_path_ok = false;
                                     break;
                                 }
-                                q->memcpy(&position, pos_device, sizeof(int32_t)).wait();
+                                position             = read_i32_host_or_d2h(pos_ptr);
                                 rope_position_cached = position;
                             }
 
@@ -31224,12 +31237,12 @@ full_build:
                     // For TG mode (M=1), there's only one position value
                     int32_t position = rope_position_cached;
                     if (position < 0) {
-                        const int32_t * pos_device = (const int32_t *) get_tensor_ptr_view_fast(node->src[1]);
-                        if (!pos_device) {
+                        const int32_t * pos_ptr = (const int32_t *) get_tensor_ptr_view_fast(node->src[1]);
+                        if (!pos_ptr) {
                             GGML_LOG_ERROR("[PERSISTENT-TG] ROPE position tensor missing\n");
                             return false;
                         }
-                        q->memcpy(&position, pos_device, sizeof(int32_t)).wait();
+                        position             = read_i32_host_or_d2h(pos_ptr);
                         rope_position_cached = position;
                     }
 
