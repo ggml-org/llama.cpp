@@ -4,8 +4,12 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <memory>
+#include <mutex>
 #include <openvino/runtime/core.hpp>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 struct graph_key {
     int n_nodes;
