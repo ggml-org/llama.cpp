@@ -265,13 +265,12 @@ static ggml_type tensor_type_fallback(quantization_state_impl * qs, const ggml_t
 
     ggml_type return_type = target_type;
 
-    const int64_t nx = t->ne[0];
-    const int64_t ny = t->ne[1];
+    const int64_t ncols = t->ne[0];
     const int64_t qk_k = ggml_blck_size(target_type);
 
-    if (nx % qk_k != 0) { // this tensor's shape is incompatible with this quant
-        LLAMA_LOG_WARN("\n%s: tensor %s: shape [%" PRId64 ", %" PRId64 "] not divisible by %" PRId64 ", required for type %s; ",
-                        __func__, t->name, nx, ny, qk_k, ggml_type_name(target_type));
+    if (ncols % qk_k != 0) { // this tensor's shape is incompatible with this quant
+        LLAMA_LOG_WARN("warning: %36s: ncols %6" PRId64 " not divisible by %3" PRId64 " (required for type %7s) ",
+                        t->name, ncols, qk_k, ggml_type_name(target_type));
         ++qs->n_fallback;
 
         switch (target_type) {
@@ -293,26 +292,26 @@ static ggml_type tensor_type_fallback(quantization_state_impl * qs, const ggml_t
             case GGML_TYPE_Q6_K:    return_type = GGML_TYPE_Q8_0;   break;
             default:
                 throw std::runtime_error(format(
-                    "no tensor type fallback is defined for the specified type: %s",
+                    "no tensor type fallback is defined for type %s",
                     ggml_type_name(target_type)));
         }
-        if (nx % ggml_blck_size(return_type) != 0) {
+        if (ncols % ggml_blck_size(return_type) != 0) {
             //
             // the fallback return type is still not compatible for this tensor!
             //
-            // likely, this tensor's first dimension is not divisible by 32.
+            // most likely, this tensor's first dimension is not divisible by 32.
             // this is very rare. we can either abort the quantization, or
             // fallback to F16 / F32.
             //
             LLAMA_LOG_WARN("(WARNING: falling back to F16 due to unusual shape) ");
             return_type = GGML_TYPE_F16;
         }
+        LLAMA_LOG_WARN("-> falling back to %7s\n", ggml_type_name(return_type));
     }
     return return_type;
 }
 
-// internal standard logic for selecting the target tensor type for a given
-// tensor, ftype, and model arch
+// internal standard logic for selecting the target tensor type for a given tensor, ftype, and model arch
 static ggml_type llama_tensor_get_type_impl(
     quantization_state_impl * qs,
                   ggml_type   new_type,
@@ -606,12 +605,12 @@ static ggml_type llama_tensor_get_type(
             }
         }
 
-        // if not manual - use the standard logic for choosing the quantization type
+        // if not manual - use the internal logic for choosing the quantization type
         if (!manual) {
             new_type = llama_tensor_get_type_impl(qs, new_type, tensor, params->ftype);
         }
 
-        // fallback to a compatible type if necessary based on tensor shape
+        // fallback to a compatible type if necessary
         new_type = tensor_type_fallback(qs, tensor, new_type);
     }
     return new_type;
