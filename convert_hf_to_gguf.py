@@ -116,7 +116,8 @@ class ModelBase:
                  split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False,
                  small_first_shard: bool = False, hparams: dict[str, Any] | None = None, remote_hf_model_id: str | None = None,
                  disable_mistral_community_chat_template: bool = False,
-                 sentence_transformers_dense_modules: bool = False):
+                 sentence_transformers_dense_modules: bool = False,
+                 fuse_gate_up_exps: bool = False):
         if type(self) is ModelBase or \
                 type(self) is TextModel or \
                 type(self) is MmprojModel:
@@ -135,6 +136,9 @@ class ModelBase:
         self.dry_run = dry_run
         self.remote_hf_model_id = remote_hf_model_id
         self.sentence_transformers_dense_modules = sentence_transformers_dense_modules
+        self.fuse_gate_up_exps = fuse_gate_up_exps
+        self._gate_exp_buffer: dict[int, Tensor] = {}
+        self._up_exp_buffer: dict[int, Tensor] = {}
         self.hparams = ModelBase.load_hparams(self.dir_model, self.is_mistral_format) if hparams is None else hparams
         self.model_tensors = self.index_tensors(remote_hf_model_id=remote_hf_model_id)
         self.metadata_override = metadata_override
@@ -512,8 +516,31 @@ class ModelBase:
         raise NotImplementedError("set_gguf_parameters() must be implemented in subclasses")
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        del bid # unused
-        return [(self.map_tensor_name(name), data_torch)]
+        new_name = self.map_tensor_name(name)
+
+        # Handle gate/up expert tensor fusion if enabled
+        if self.fuse_gate_up_exps and bid is not None:
+            if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.FFN_GATE_EXP, bid):
+                self._gate_exp_buffer[bid] = data_torch
+            elif self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.FFN_UP_EXP, bid):
+                self._up_exp_buffer[bid] = data_torch
+
+            # Check if both gate and up are buffered for this layer
+            if bid in self._gate_exp_buffer and bid in self._up_exp_buffer:
+                gate_data = self._gate_exp_buffer.pop(bid)
+                up_data = self._up_exp_buffer.pop(bid)
+                # gate/up shape: (n_expert, n_ff, n_embd), concatenate to (n_expert, n_ff*2, n_embd)
+                fused_data = torch.cat([gate_data, up_data], dim=1)
+                fused_name = self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_UP_EXP, bid)
+                logger.info(f"Fused gate_exps and up_exps for layer {bid}")
+                return [(fused_name, fused_data)]
+
+            # If we buffered a gate/up tensor, wait for the other
+            if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.FFN_GATE_EXP, bid) or \
+               self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.FFN_UP_EXP, bid):
+                return []
+
+        return [(new_name, data_torch)]
 
     def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
         del name, new_name, bid, n_dims  # unused
@@ -1148,6 +1175,9 @@ class TextModel(ModelBase):
         if chkhsh == "27949a2493fc4a9f53f5b9b029c82689cfbe5d3a1929bb25e043089e28466de6":
             # ref: https://huggingface.co/jinaai/jina-embeddings-v2-base-de
             res = "jina-v2-de"
+        if chkhsh == "a023e9fdc5a11f034d3ef515b92350e56fb2af1f66c6b6811a4444ea9bf8763d":
+            # ref: https://huggingface.co/jinaai/jina-embeddings-v5-text-nano
+            res = "jina-v5-nano"
         if chkhsh == "c136ed14d01c2745d4f60a9596ae66800e2b61fa45643e72436041855ad4089d":
             # ref: https://huggingface.co/abacusai/Smaug-Llama-3-70B-Instruct
             res = "smaug-bpe"
@@ -1163,6 +1193,9 @@ class TextModel(ModelBase):
         if chkhsh == "b53802fb28e26d645c3a310b34bfe07da813026ec7c7716883404d5e0f8b1901":
             # ref: https://huggingface.co/core42/jais-13b
             res = "jais"
+        if chkhsh == "bc5108ee1eb6a3d600cadd065f63190fbd0554dbc9e4bbd6a0d977970afc8d2a":
+            # ref: https://huggingface.co/inceptionai/Jais-2-8B-Chat
+            res = "jais-2"
         if chkhsh == "7b3e7548e4308f52a76e8229e4e6cc831195d0d1df43aed21ac6c93da05fec5f":
             # ref: https://huggingface.co/WisdomShell/CodeShell-7B
             res = "codeshell"
@@ -1271,6 +1304,9 @@ class TextModel(ModelBase):
         if chkhsh == "b4b8ca1f9769494fbd956ebc4c249de6131fb277a4a3345a7a92c7dd7a55808d":
             # ref: https://huggingface.co/jdopensource/JoyAI-LLM-Flash
             res = "joyai-llm"
+        if chkhsh == "e4d54df1ebc1f2b91acd986c5b51aa50837d5faf7c7398e73c1f9e9ee5d19869":
+            # ref: https://huggingface.co/kakaocorp/kanana-2-30b-a3b-instruct-2601
+            res = "kanana2"
 
         if res is None:
             logger.warning("\n")
@@ -3730,6 +3766,13 @@ class Ernie4_5Model(TextModel):
     def set_vocab(self):
         self._set_vocab_sentencepiece()
 
+        tokenizer_config_file = self.dir_model / 'tokenizer_config.json'
+        if tokenizer_config_file.is_file():
+            with open(tokenizer_config_file, "r", encoding="utf-8") as f:
+                tokenizer_config_json = json.load(f)
+                if "add_prefix_space" in tokenizer_config_json:
+                    self.gguf_writer.add_add_space_prefix(tokenizer_config_json["add_prefix_space"])
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
 
@@ -3738,6 +3781,10 @@ class Ernie4_5Model(TextModel):
         num_kv_heads = self.hparams["num_key_value_heads"]
         if (head_dim := self.hparams.get("head_dim")) is None:
             head_dim = self.hparams["hidden_size"] // num_heads
+
+        if "mlp_AR" in name or "vision_model" in name:
+            # skip vision model and projector tensors
+            return
 
         if "ernie." in name:
             name = name.replace("ernie.", "model.")
@@ -3846,6 +3893,48 @@ class Ernie4_5MoeModel(Ernie4_5Model):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@ModelBase.register("PaddleOCRVLForConditionalGeneration")
+class PaddleOCRModel(Ernie4_5Model):
+    model_arch = gguf.MODEL_ARCH.PADDLEOCR
+
+
+@ModelBase.register("PaddleOCRVisionModel")
+class PaddleOCRVisionModel(MmprojModel):
+    # PaddleOCR-VL uses a modified version of Siglip
+    min_pixels: int = 0
+    max_pixels: int = 0
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.hparams_vision is not None
+        self.min_pixels = self.preprocessor_config["min_pixels"]
+        self.max_pixels = self.preprocessor_config["max_pixels"]
+        self.hparams_vision["image_size"] = int(math.sqrt(self.max_pixels))
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        assert self.hparams_vision is not None
+        hparams = self.hparams_vision
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.PADDLEOCR)
+        self.gguf_writer.add_vision_max_pixels(self.max_pixels)
+        self.gguf_writer.add_vision_min_pixels(self.min_pixels)
+        self.gguf_writer.add_vision_use_gelu(True)
+        self.gguf_writer.add_vision_attention_layernorm_eps(hparams.get("rms_norm_eps", 1e-6))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        name = name.replace("visual.", "model.")
+
+        if "vision_model" in name or "mlp_AR" in name:
+            if "packing_position_embedding" in name:
+                return # unused
+            elif "vision_model.head" in name:
+                # we don't yet support image embeddings for this model
+                return
+            else:
+                yield from super().modify_tensors(data_torch, name, bid)
+        return # skip other tensors
 
 
 @ModelBase.register(
@@ -6060,6 +6149,32 @@ class NeoBert(BertModel):
         if name.startswith("decoder."):
             return
 
+        if name.startswith("model."):
+            name = name[6:]
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("EuroBertModel", "JinaEmbeddingsV5Model")
+class EuroBertModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.EUROBERT
+
+    def set_vocab(self):
+        self.gguf_writer.add_add_bos_token(False)
+        self._set_vocab_gpt2()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        # EuroBert is bidirectional (encoder)
+        self.gguf_writer.add_causal_attention(False)
+
+        self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
+
+        self._try_set_pooling_type()
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Strip "model." prefix from tensor names
         if name.startswith("model."):
             name = name[6:]
 
@@ -8633,6 +8748,17 @@ class T5EncoderModel(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("Jais2ForCausalLM")
+class Jais2Model(TextModel):
+    model_arch = gguf.MODEL_ARCH.JAIS2
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+        head_dim = hparams.get("head_dim", hparams["hidden_size"] // hparams["num_attention_heads"])
+        self.gguf_writer.add_rope_dimension_count(head_dim)
+
+
 @ModelBase.register("JAISLMHeadModel")
 class JaisModel(TextModel):
     model_arch = gguf.MODEL_ARCH.JAIS
@@ -10726,7 +10852,7 @@ class LFM2Model(TextModel):
     def set_gguf_parameters(self):
         # set num_key_value_heads only for attention layers
         self.hparams["num_key_value_heads"] = [
-            self.hparams["num_key_value_heads"] if layer_type == "full_attention" else 0
+            self.hparams["num_key_value_heads"] if layer_type != "conv" else 0
             for layer_type in self.hparams["layer_types"]
         ]
 
@@ -10912,6 +11038,28 @@ class LFM2AudioModel(ConformerAudioModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("Lfm25AudioTokenizer")
+class LFM25AudioTokenizer(LFM2Model):
+    model_arch = gguf.MODEL_ARCH.LFM2
+
+    def set_vocab(self):
+        self._set_vocab_none()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_sliding_window(self.hparams["sliding_window"])
+        self.gguf_writer.add_embedding_length_out(self.hparams["output_size"])
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name == "istft.window" or name.startswith("emb.emb"):
+            return
+
+        if name.startswith("lin"):
+            name = name.replace("lin", "dense_2_out")
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
 @ModelBase.register("SmallThinkerForCausalLM")
 class SmallThinkerModel(TextModel):
     model_arch = gguf.MODEL_ARCH.SMALLTHINKER
@@ -11003,12 +11151,16 @@ class ModernBertModel(BertModel):
         self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # these layers act as MLM head, so we don't need them
-        if name.startswith("decoder."):
-            return
-
         if name.startswith("model."):
             name = name[6:]
+
+        if self.cls_out_labels:
+            # For BertForSequenceClassification (direct projection layer)
+            if name == "classifier.weight":
+                name = "classifier.out_proj.weight"
+
+            if name == "classifier.bias":
+                name = "classifier.out_proj.bias"
 
         yield from super().modify_tensors(data_torch, name, bid)
 
@@ -11817,6 +11969,11 @@ def parse_args() -> argparse.Namespace:
               "Default these modules are not included.")
     )
 
+    parser.add_argument(
+        "--fuse-gate-up-exps", action="store_true",
+        help="Fuse gate_exps and up_exps tensors into a single gate_up_exps tensor for MoE models.",
+    )
+
     args = parser.parse_args()
     if not args.print_supported_models and args.model is None:
         parser.error("the following arguments are required: model")
@@ -11954,7 +12111,8 @@ def main() -> None:
                                      split_max_size=split_str_to_n_bytes(args.split_max_size), dry_run=args.dry_run,
                                      small_first_shard=args.no_tensor_first_split,
                                      remote_hf_model_id=hf_repo_id, disable_mistral_community_chat_template=disable_mistral_community_chat_template,
-                                     sentence_transformers_dense_modules=args.sentence_transformers_dense_modules
+                                     sentence_transformers_dense_modules=args.sentence_transformers_dense_modules,
+                                     fuse_gate_up_exps=args.fuse_gate_up_exps
                                      )
 
         if args.vocab_only:

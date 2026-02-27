@@ -567,6 +567,10 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.chunk_experts.gate_proj",           # grovemoe
         ),
 
+        MODEL_TENSOR.FFN_GATE_UP_EXP: (
+            "model.layers.{bid}.mlp.experts.gate_up_proj",
+        ),
+
         # Feed-forward down
         MODEL_TENSOR.FFN_DOWN: (
             "gpt_neox.layers.{bid}.mlp.dense_4h_to_h",                # gptneox
@@ -1240,6 +1244,10 @@ class TensorNameMap:
         MODEL_TENSOR.CLS_OUT: (
             "classifier.out_proj", # roberta
         ),
+
+        MODEL_TENSOR.CLS_NORM: (
+            "head.norm", # modern-bert
+        ),
         #############################################################################
 
         MODEL_TENSOR.CONVNEXT_DW: (
@@ -1321,6 +1329,7 @@ class TensorNameMap:
             "multi_modal_projector.linear_{bid}",
             "mm_projector.proj.linear_{bid}", # Kimi-K2.5
             "visual.merger.mlp.{bid}", # qwen2vl
+            "mlp_AR.linear_{bid}", # PaddleOCR-VL
             "merger.mlp.{bid}",
         ),
 
@@ -1570,6 +1579,7 @@ class TensorNameMap:
             "mm_projector.pre_norm", # Kimi-K2.5
             "pre_mm_projector_norm",
             "model.vision.linear_proj.norm1", # cogvlm
+            "mlp_AR.pre_norm", # PaddleOCR-VL
             "merger.ln_q",
         ),
 
@@ -1595,6 +1605,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_RESMPL_ATTN_OUT: (
             "resampler.attn.out_proj",
+            "model.vision_model.head.attention.out_proj",
         ),
 
         MODEL_TENSOR.V_RESMPL_KV: (

@@ -8,8 +8,8 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.32.0"
-#define CPPHTTPLIB_VERSION_NUM "0x002000"
+#define CPPHTTPLIB_VERSION "0.34.0"
+#define CPPHTTPLIB_VERSION_NUM "0x002200"
 
 /*
  * Platform compatibility check
@@ -185,6 +185,14 @@
                       : 0))
 #endif
 
+#ifndef CPPHTTPLIB_THREAD_POOL_MAX_COUNT
+#define CPPHTTPLIB_THREAD_POOL_MAX_COUNT (CPPHTTPLIB_THREAD_POOL_COUNT * 4)
+#endif
+
+#ifndef CPPHTTPLIB_THREAD_POOL_IDLE_TIMEOUT
+#define CPPHTTPLIB_THREAD_POOL_IDLE_TIMEOUT 3 // seconds
+#endif
+
 #ifndef CPPHTTPLIB_RECV_FLAGS
 #define CPPHTTPLIB_RECV_FLAGS 0
 #endif
@@ -199,6 +207,22 @@
 
 #ifndef CPPHTTPLIB_MAX_LINE_LENGTH
 #define CPPHTTPLIB_MAX_LINE_LENGTH 32768
+#endif
+
+#ifndef CPPHTTPLIB_WEBSOCKET_MAX_PAYLOAD_LENGTH
+#define CPPHTTPLIB_WEBSOCKET_MAX_PAYLOAD_LENGTH 16777216
+#endif
+
+#ifndef CPPHTTPLIB_WEBSOCKET_READ_TIMEOUT_SECOND
+#define CPPHTTPLIB_WEBSOCKET_READ_TIMEOUT_SECOND 300
+#endif
+
+#ifndef CPPHTTPLIB_WEBSOCKET_CLOSE_TIMEOUT_SECOND
+#define CPPHTTPLIB_WEBSOCKET_CLOSE_TIMEOUT_SECOND 5
+#endif
+
+#ifndef CPPHTTPLIB_WEBSOCKET_PING_INTERVAL_SECOND
+#define CPPHTTPLIB_WEBSOCKET_PING_INTERVAL_SECOND 30
 #endif
 
 /*
@@ -310,6 +334,7 @@ using socket_t = int;
 #include <errno.h>
 #include <exception>
 #include <fcntl.h>
+#include <fstream>
 #include <functional>
 #include <iomanip>
 #include <iostream>
@@ -328,6 +353,9 @@ using socket_t = int;
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#if __cplusplus >= 201703L
+#include <any>
+#endif
 
 #if defined(CPPHTTPLIB_USE_NON_BLOCKING_GETADDRINFO) ||                        \
     defined(CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN)
@@ -415,10 +443,46 @@ using socket_t = int;
 
 #endif // CPPHTTPLIB_MBEDTLS_SUPPORT
 
+#ifdef CPPHTTPLIB_WOLFSSL_SUPPORT
+#include <wolfssl/options.h>
+
+#include <wolfssl/openssl/x509v3.h>
+
+// Fallback definitions for older wolfSSL versions (e.g., 5.6.6)
+#ifndef WOLFSSL_GEN_EMAIL
+#define WOLFSSL_GEN_EMAIL 1
+#endif
+#ifndef WOLFSSL_GEN_DNS
+#define WOLFSSL_GEN_DNS 2
+#endif
+#ifndef WOLFSSL_GEN_URI
+#define WOLFSSL_GEN_URI 6
+#endif
+#ifndef WOLFSSL_GEN_IPADD
+#define WOLFSSL_GEN_IPADD 7
+#endif
+
+#include <wolfssl/ssl.h>
+#include <wolfssl/wolfcrypt/hash.h>
+#include <wolfssl/wolfcrypt/md5.h>
+#include <wolfssl/wolfcrypt/sha256.h>
+#include <wolfssl/wolfcrypt/sha512.h>
+#ifdef _WIN32
+#include <wincrypt.h>
+#ifdef _MSC_VER
+#pragma comment(lib, "crypt32.lib")
+#endif
+#endif // _WIN32
+#if defined(CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN)
+#if TARGET_OS_MAC
+#include <Security/Security.h>
+#endif
+#endif // CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN
+#endif // CPPHTTPLIB_WOLFSSL_SUPPORT
+
 // Define CPPHTTPLIB_SSL_ENABLED if any SSL backend is available
-// This simplifies conditional compilation when adding new backends (e.g.,
-// wolfSSL)
-#if defined(CPPHTTPLIB_OPENSSL_SUPPORT) || defined(CPPHTTPLIB_MBEDTLS_SUPPORT)
+#if defined(CPPHTTPLIB_OPENSSL_SUPPORT) ||                                     \
+    defined(CPPHTTPLIB_MBEDTLS_SUPPORT) || defined(CPPHTTPLIB_WOLFSSL_SUPPORT)
 #define CPPHTTPLIB_SSL_ENABLED
 #endif
 
@@ -439,6 +503,10 @@ using socket_t = int;
  * Declaration
  */
 namespace httplib {
+
+namespace ws {
+class WebSocket;
+} // namespace ws
 
 namespace detail {
 
@@ -711,6 +779,143 @@ using Match = std::smatch;
 using DownloadProgress = std::function<bool(size_t current, size_t total)>;
 using UploadProgress = std::function<bool(size_t current, size_t total)>;
 
+
+#if __cplusplus >= 201703L
+
+using any = std::any;
+using bad_any_cast = std::bad_any_cast;
+
+template <typename T> T any_cast(const any &a) { return std::any_cast<T>(a); }
+template <typename T> T any_cast(any &a) { return std::any_cast<T>(a); }
+template <typename T> T any_cast(any &&a) {
+  return std::any_cast<T>(std::move(a));
+}
+template <typename T> const T *any_cast(const any *a) noexcept {
+  return std::any_cast<T>(a);
+}
+template <typename T> T *any_cast(any *a) noexcept {
+  return std::any_cast<T>(a);
+}
+
+#else // C++11/14 implementation
+
+class bad_any_cast : public std::bad_cast {
+public:
+  const char *what() const noexcept override { return "bad any_cast"; }
+};
+
+namespace detail {
+
+using any_type_id = const void *;
+
+// Returns a unique per-type ID without RTTI.
+// The static address is stable across TUs because function templates are
+// implicitly inline and the ODR merges their statics into one.
+template <typename T> any_type_id any_typeid() noexcept {
+  static const char id = 0;
+  return &id;
+}
+
+struct any_storage {
+  virtual ~any_storage() = default;
+  virtual std::unique_ptr<any_storage> clone() const = 0;
+  virtual any_type_id type_id() const noexcept = 0;
+};
+
+template <typename T> struct any_value final : any_storage {
+  T value;
+  template <typename U> explicit any_value(U &&v) : value(std::forward<U>(v)) {}
+  std::unique_ptr<any_storage> clone() const override {
+    return std::unique_ptr<any_storage>(new any_value<T>(value));
+  }
+  any_type_id type_id() const noexcept override { return any_typeid<T>(); }
+};
+
+} // namespace detail
+
+class any {
+  std::unique_ptr<detail::any_storage> storage_;
+
+public:
+  any() noexcept = default;
+  any(const any &o) : storage_(o.storage_ ? o.storage_->clone() : nullptr) {}
+  any(any &&) noexcept = default;
+  any &operator=(const any &o) {
+    storage_ = o.storage_ ? o.storage_->clone() : nullptr;
+    return *this;
+  }
+  any &operator=(any &&) noexcept = default;
+
+  template <
+      typename T, typename D = typename std::decay<T>::type,
+      typename std::enable_if<!std::is_same<D, any>::value, int>::type = 0>
+  any(T &&v) : storage_(new detail::any_value<D>(std::forward<T>(v))) {}
+
+  template <
+      typename T, typename D = typename std::decay<T>::type,
+      typename std::enable_if<!std::is_same<D, any>::value, int>::type = 0>
+  any &operator=(T &&v) {
+    storage_.reset(new detail::any_value<D>(std::forward<T>(v)));
+    return *this;
+  }
+
+  bool has_value() const noexcept { return storage_ != nullptr; }
+  void reset() noexcept { storage_.reset(); }
+
+  template <typename T> friend T *any_cast(any *a) noexcept;
+  template <typename T> friend const T *any_cast(const any *a) noexcept;
+};
+
+template <typename T> T *any_cast(any *a) noexcept {
+  if (!a || !a->storage_) { return nullptr; }
+  if (a->storage_->type_id() != detail::any_typeid<T>()) { return nullptr; }
+  return &static_cast<detail::any_value<T> *>(a->storage_.get())->value;
+}
+
+template <typename T> const T *any_cast(const any *a) noexcept {
+  if (!a || !a->storage_) { return nullptr; }
+  if (a->storage_->type_id() != detail::any_typeid<T>()) { return nullptr; }
+  return &static_cast<const detail::any_value<T> *>(a->storage_.get())->value;
+}
+
+template <typename T> T any_cast(const any &a) {
+  using U =
+      typename std::remove_cv<typename std::remove_reference<T>::type>::type;
+  const U *p = any_cast<U>(&a);
+#ifndef CPPHTTPLIB_NO_EXCEPTIONS
+  if (!p) { throw bad_any_cast{}; }
+#else
+  if (!p) { std::abort(); }
+#endif
+  return static_cast<T>(*p);
+}
+
+template <typename T> T any_cast(any &a) {
+  using U =
+      typename std::remove_cv<typename std::remove_reference<T>::type>::type;
+  U *p = any_cast<U>(&a);
+#ifndef CPPHTTPLIB_NO_EXCEPTIONS
+  if (!p) { throw bad_any_cast{}; }
+#else
+  if (!p) { std::abort(); }
+#endif
+  return static_cast<T>(*p);
+}
+
+template <typename T> T any_cast(any &&a) {
+  using U =
+      typename std::remove_cv<typename std::remove_reference<T>::type>::type;
+  U *p = any_cast<U>(&a);
+#ifndef CPPHTTPLIB_NO_EXCEPTIONS
+  if (!p) { throw bad_any_cast{}; }
+#else
+  if (!p) { std::abort(); }
+#endif
+  return static_cast<T>(std::move(*p));
+}
+
+#endif // __cplusplus >= 201703L
+
 struct Response;
 using ResponseHandler = std::function<bool(const Response &response)>;
 
@@ -804,6 +1009,60 @@ struct FormDataProvider {
   std::string content_type;
 };
 using FormDataProviderItems = std::vector<FormDataProvider>;
+
+inline FormDataProvider
+make_file_provider(const std::string &name, const std::string &filepath,
+                   const std::string &filename = std::string(),
+                   const std::string &content_type = std::string()) {
+  FormDataProvider fdp;
+  fdp.name = name;
+  fdp.filename = filename.empty() ? filepath : filename;
+  fdp.content_type = content_type;
+  fdp.provider = [filepath](size_t offset, DataSink &sink) -> bool {
+    std::ifstream f(filepath, std::ios::binary);
+    if (!f) { return false; }
+    if (offset > 0) {
+      f.seekg(static_cast<std::streamoff>(offset));
+      if (!f.good()) {
+        sink.done();
+        return true;
+      }
+    }
+    char buf[8192];
+    f.read(buf, sizeof(buf));
+    auto n = static_cast<size_t>(f.gcount());
+    if (n > 0) { return sink.write(buf, n); }
+    sink.done(); // EOF
+    return true;
+  };
+  return fdp;
+}
+
+inline std::pair<size_t, ContentProvider>
+make_file_body(const std::string &filepath) {
+  std::ifstream f(filepath, std::ios::binary | std::ios::ate);
+  if (!f) { return {0, ContentProvider{}}; }
+  auto size = static_cast<size_t>(f.tellg());
+
+  ContentProvider provider = [filepath](size_t offset, size_t length,
+                                        DataSink &sink) -> bool {
+    std::ifstream f(filepath, std::ios::binary);
+    if (!f) { return false; }
+    f.seekg(static_cast<std::streamoff>(offset));
+    if (!f.good()) { return false; }
+    char buf[8192];
+    while (length > 0) {
+      auto to_read = (std::min)(sizeof(buf), length);
+      f.read(buf, static_cast<std::streamsize>(to_read));
+      auto n = static_cast<size_t>(f.gcount());
+      if (n == 0) { break; }
+      if (!sink.write(buf, n)) { return false; }
+      length -= n;
+    }
+    return true;
+  };
+  return {size, std::move(provider)};
+}
 
 using ContentReceiverWithProgress = std::function<bool(
     const char *data, size_t data_length, size_t offset, size_t total_length)>;
@@ -1010,6 +1269,10 @@ struct Response {
   std::string body;
   std::string location; // Redirect location
 
+  // User-defined context — set by pre-routing/pre-request handlers and read
+  // by route handlers to pass arbitrary data (e.g. decoded auth tokens).
+  std::map<std::string, any> user_data;
+
   bool has_header(const std::string &key) const;
   std::string get_header_value(const std::string &key, const char *def = "",
                                size_t id = 0) const;
@@ -1115,6 +1378,7 @@ public:
   virtual bool is_readable() const = 0;
   virtual bool wait_readable() const = 0;
   virtual bool wait_writable() const = 0;
+  virtual bool is_peer_alive() const { return wait_writable(); }
 
   virtual ssize_t read(char *ptr, size_t size) = 0;
   virtual ssize_t write(const char *ptr, size_t size) = 0;
@@ -1123,6 +1387,11 @@ public:
   virtual socket_t socket() const = 0;
 
   virtual time_t duration() const = 0;
+
+  virtual void set_read_timeout(time_t sec, time_t usec = 0) {
+    (void)sec;
+    (void)usec;
+  }
 
   ssize_t write(const char *ptr);
   ssize_t write(const std::string &s);
@@ -1146,7 +1415,7 @@ public:
 
 class ThreadPool final : public TaskQueue {
 public:
-  explicit ThreadPool(size_t n, size_t mqr = 0);
+  explicit ThreadPool(size_t n, size_t max_n = 0, size_t mqr = 0);
   ThreadPool(const ThreadPool &) = delete;
   ~ThreadPool() override = default;
 
@@ -1154,20 +1423,22 @@ public:
   void shutdown() override;
 
 private:
-  struct worker {
-    explicit worker(ThreadPool &pool);
+  void worker(bool is_dynamic);
+  void move_to_finished(std::thread::id id);
+  void cleanup_finished_threads();
 
-    void operator()();
-
-    ThreadPool &pool_;
-  };
-  friend struct worker;
-
-  std::vector<std::thread> threads_;
-  std::list<std::function<void()>> jobs_;
+  size_t base_thread_count_;
+  size_t max_thread_count_;
+  size_t max_queued_requests_;
+  size_t idle_thread_count_;
 
   bool shutdown_;
-  size_t max_queued_requests_ = 0;
+
+  std::list<std::function<void()>> jobs_;
+  std::vector<std::thread> threads_;       // base threads
+  std::list<std::thread> dynamic_threads_; // dynamic threads
+  std::vector<std::thread>
+      finished_threads_; // exited dynamic threads awaiting join
 
   std::condition_variable cond_;
   std::mutex mutex_;
@@ -1294,6 +1565,11 @@ public:
   using Expect100ContinueHandler =
       std::function<int(const Request &, Response &)>;
 
+  using WebSocketHandler =
+      std::function<void(const Request &, ws::WebSocket &)>;
+  using SubProtocolSelector =
+      std::function<std::string(const std::vector<std::string> &protocols)>;
+
   Server();
 
   virtual ~Server();
@@ -1310,6 +1586,10 @@ public:
   Server &Delete(const std::string &pattern, Handler handler);
   Server &Delete(const std::string &pattern, HandlerWithContentReader handler);
   Server &Options(const std::string &pattern, Handler handler);
+
+  Server &WebSocket(const std::string &pattern, WebSocketHandler handler);
+  Server &WebSocket(const std::string &pattern, WebSocketHandler handler,
+                    SubProtocolSelector sub_protocol_selector);
 
   bool set_base_dir(const std::string &dir,
                     const std::string &mount_point = std::string());
@@ -1386,7 +1666,8 @@ protected:
                        int remote_port, const std::string &local_addr,
                        int local_port, bool close_connection,
                        bool &connection_closed,
-                       const std::function<void(Request &)> &setup_request);
+                       const std::function<void(Request &)> &setup_request,
+                       bool *websocket_upgraded = nullptr);
 
   std::atomic<socket_t> svr_sock_{INVALID_SOCKET};
 
@@ -1487,6 +1768,14 @@ private:
   Handlers delete_handlers_;
   HandlersForContentReader delete_handlers_for_content_reader_;
   Handlers options_handlers_;
+
+  struct WebSocketHandlerEntry {
+    std::unique_ptr<detail::MatcherBase> matcher;
+    WebSocketHandler handler;
+    SubProtocolSelector sub_protocol_selector;
+  };
+  using WebSocketHandlers = std::vector<WebSocketHandlerEntry>;
+  WebSocketHandlers websocket_handlers_;
 
   HandlerWithResponse error_handler_;
   ExceptionHandler exception_handler_;
@@ -2970,6 +3259,36 @@ struct MbedTlsContext {
 } // namespace tls
 #endif
 
+#ifdef CPPHTTPLIB_WOLFSSL_SUPPORT
+namespace tls {
+namespace impl {
+
+// wolfSSL context wrapper (holds WOLFSSL_CTX and related state).
+// This struct is accessible via tls::impl for use in SSL context
+// setup callbacks (cast ctx_t to tls::impl::WolfSSLContext*).
+struct WolfSSLContext {
+  WOLFSSL_CTX *ctx = nullptr;
+  bool is_server = false;
+  bool verify_client = false;
+  bool has_verify_callback = false;
+  std::string ca_pem_data_; // accumulated PEM for get_ca_names/get_ca_certs
+
+  WolfSSLContext();
+  ~WolfSSLContext();
+
+  WolfSSLContext(const WolfSSLContext &) = delete;
+  WolfSSLContext &operator=(const WolfSSLContext &) = delete;
+};
+
+// CA store for wolfSSL: holds raw PEM bytes to allow reloading into any ctx
+struct WolfSSLCAStore {
+  std::string pem_data;
+};
+
+} // namespace impl
+} // namespace tls
+#endif
+
 #endif // CPPHTTPLIB_SSL_ENABLED
 
 namespace stream {
@@ -3334,6 +3653,143 @@ private:
 };
 
 } // namespace sse
+
+namespace ws {
+
+enum class Opcode : uint8_t {
+  Continuation = 0x0,
+  Text = 0x1,
+  Binary = 0x2,
+  Close = 0x8,
+  Ping = 0x9,
+  Pong = 0xA,
+};
+
+enum class CloseStatus : uint16_t {
+  Normal = 1000,
+  GoingAway = 1001,
+  ProtocolError = 1002,
+  UnsupportedData = 1003,
+  NoStatus = 1005,
+  Abnormal = 1006,
+  InvalidPayload = 1007,
+  PolicyViolation = 1008,
+  MessageTooBig = 1009,
+  MandatoryExtension = 1010,
+  InternalError = 1011,
+};
+
+enum ReadResult : int { Fail = 0, Text = 1, Binary = 2 };
+
+class WebSocket {
+public:
+  WebSocket(const WebSocket &) = delete;
+  WebSocket &operator=(const WebSocket &) = delete;
+  ~WebSocket();
+
+  ReadResult read(std::string &msg);
+  bool send(const std::string &data);
+  bool send(const char *data, size_t len);
+  void close(CloseStatus status = CloseStatus::Normal,
+             const std::string &reason = "");
+  const Request &request() const;
+  bool is_open() const;
+
+private:
+  friend class httplib::Server;
+  friend class WebSocketClient;
+
+  WebSocket(Stream &strm, const Request &req, bool is_server)
+      : strm_(strm), req_(req), is_server_(is_server) {
+    start_heartbeat();
+  }
+
+  WebSocket(std::unique_ptr<Stream> &&owned_strm, const Request &req,
+            bool is_server)
+      : strm_(*owned_strm), owned_strm_(std::move(owned_strm)), req_(req),
+        is_server_(is_server) {
+    start_heartbeat();
+  }
+
+  void start_heartbeat();
+  bool send_frame(Opcode op, const char *data, size_t len, bool fin = true);
+
+  Stream &strm_;
+  std::unique_ptr<Stream> owned_strm_;
+  Request req_;
+  bool is_server_;
+  std::atomic<bool> closed_{false};
+  std::mutex write_mutex_;
+  std::thread ping_thread_;
+  std::mutex ping_mutex_;
+  std::condition_variable ping_cv_;
+};
+
+class WebSocketClient {
+public:
+  explicit WebSocketClient(const std::string &scheme_host_port_path,
+                           const Headers &headers = {});
+
+  ~WebSocketClient();
+  WebSocketClient(const WebSocketClient &) = delete;
+  WebSocketClient &operator=(const WebSocketClient &) = delete;
+
+  bool is_valid() const;
+
+  bool connect();
+  ReadResult read(std::string &msg);
+  bool send(const std::string &data);
+  bool send(const char *data, size_t len);
+  void close(CloseStatus status = CloseStatus::Normal,
+             const std::string &reason = "");
+  bool is_open() const;
+  const std::string &subprotocol() const;
+  void set_read_timeout(time_t sec, time_t usec = 0);
+  void set_write_timeout(time_t sec, time_t usec = 0);
+
+#ifdef CPPHTTPLIB_SSL_ENABLED
+  void set_ca_cert_path(const std::string &path);
+  void set_ca_cert_store(tls::ca_store_t store);
+  void enable_server_certificate_verification(bool enabled);
+#endif
+
+private:
+  void shutdown_and_close();
+  bool create_stream(std::unique_ptr<Stream> &strm);
+
+  std::string host_;
+  int port_;
+  std::string path_;
+  Headers headers_;
+  std::string subprotocol_;
+  bool is_valid_ = false;
+  socket_t sock_ = INVALID_SOCKET;
+  std::unique_ptr<WebSocket> ws_;
+  time_t read_timeout_sec_ = CPPHTTPLIB_WEBSOCKET_READ_TIMEOUT_SECOND;
+  time_t read_timeout_usec_ = 0;
+  time_t write_timeout_sec_ = CPPHTTPLIB_CLIENT_WRITE_TIMEOUT_SECOND;
+  time_t write_timeout_usec_ = CPPHTTPLIB_CLIENT_WRITE_TIMEOUT_USECOND;
+
+#ifdef CPPHTTPLIB_SSL_ENABLED
+  bool is_ssl_ = false;
+  tls::ctx_t tls_ctx_ = nullptr;
+  tls::session_t tls_session_ = nullptr;
+  std::string ca_cert_file_path_;
+  tls::ca_store_t ca_cert_store_ = nullptr;
+  bool server_certificate_verification_ = true;
+#endif
+};
+
+namespace impl {
+
+bool is_valid_utf8(const std::string &s);
+
+bool read_websocket_frame(Stream &strm, Opcode &opcode, std::string &payload,
+                          bool &fin, bool expect_masked, size_t max_len);
+
+} // namespace impl
+
+} // namespace ws
 
 
 } // namespace httplib

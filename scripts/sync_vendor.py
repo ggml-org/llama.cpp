@@ -5,7 +5,7 @@ import os
 import sys
 import subprocess
 
-HTTPLIB_VERSION = "d4180e923f846b44a3d30acd938438d6e64fc9f6"
+HTTPLIB_VERSION = "refs/tags/v0.34.0"
 
 vendor = {
     "https://github.com/nlohmann/json/releases/latest/download/json.hpp":     "vendor/nlohmann/json.hpp",

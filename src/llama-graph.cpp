@@ -185,7 +185,10 @@ bool llm_graph_input_out_ids::can_reuse(const llm_graph_params & params) {
 }
 
 void llm_graph_input_mean::set_input(const llama_ubatch * ubatch) {
-    if (cparams.embeddings && cparams.pooling_type == LLAMA_POOLING_TYPE_MEAN) {
+    if (cparams.embeddings   &&
+       (cparams.pooling_type == LLAMA_POOLING_TYPE_MEAN ||
+        cparams.pooling_type == LLAMA_POOLING_TYPE_RANK )) {
+
         const int64_t n_tokens     = ubatch->n_tokens;
         const int64_t n_seq_tokens = ubatch->n_seq_tokens;
         const int64_t n_seqs_unq   = ubatch->n_seqs_unq;
@@ -1125,8 +1128,8 @@ ggml_tensor * llm_graph_context::build_ffn(
 
     if (down) {
         cur = build_lora_mm(down, cur);
-        if (arch == LLM_ARCH_GLM4 || arch == LLM_ARCH_GLM4_MOE) {
-            // GLM4 and GLM4_MOE seem to have numerical issues with half-precision accumulators
+        if (arch == LLM_ARCH_GLM4 || arch == LLM_ARCH_GLM4_MOE || arch == LLM_ARCH_JAIS2) {
+            // GLM4, GLM4_MOE, and JAIS2 seem to have numerical issues with half-precision accumulators
             ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
         }
     }
@@ -1162,7 +1165,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                float   w_scale,
          llama_expert_gating_func_type gating_op,
                  int   il,
-         ggml_tensor * probs_in) const {
+         ggml_tensor * probs_in,
+         ggml_tensor * gate_up_exps) const {
     return build_moe_ffn(
         cur,
         gate_inp,  /* gate_inp_b  */ nullptr,
@@ -1178,7 +1182,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         w_scale,
         gating_op,
         il,
-        probs_in
+        probs_in,
+        gate_up_exps
     );
 }
 
@@ -1201,7 +1206,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                float   w_scale,
         llama_expert_gating_func_type gating_op,
                  int   il,
-         ggml_tensor * probs_in) const {
+         ggml_tensor * probs_in,
+         ggml_tensor * gate_up_exps,
+         ggml_tensor * gate_up_exps_b) const {
     const int64_t n_embd   = cur->ne[0];
     const int64_t n_tokens = cur->ne[1];
     const bool weight_before_ffn = arch == LLM_ARCH_LLAMA4; // for llama4, we apply the sigmoid-ed weights before the FFN
@@ -1340,26 +1347,48 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         cb(cur, "ffn_moe_weighted", il);
     }
 
-    ggml_tensor * up = build_lora_mm_id(up_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
-    cb(up, "ffn_moe_up", il);
-
-    if (up_exps_b) {
-        up = ggml_add_id(ctx0, up, up_exps_b, selected_experts);
-        cb(up, "ffn_moe_up_biased", il);
-    }
-
+    ggml_tensor * up = nullptr;
     ggml_tensor * experts = nullptr;
-    if (gate_exps) {
-        cur = build_lora_mm_id(gate_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
+
+    if (gate_up_exps) {
+        // merged gate_up path: one mul_mat_id, then split into gate and up views
+        ggml_tensor * gate_up = build_lora_mm_id(gate_up_exps, cur, selected_experts); // [n_ff*2, n_expert_used, n_tokens]
+        cb(gate_up, "ffn_moe_gate_up", il);
+
+        if (gate_up_exps_b) {
+            gate_up = ggml_add_id(ctx0, gate_up, gate_up_exps_b, selected_experts);
+            cb(gate_up, "ffn_moe_gate_up_biased", il);
+        }
+
+        const int64_t n_ff = gate_up->ne[0] / 2;
+        cur = ggml_view_3d(ctx0, gate_up, n_ff, gate_up->ne[1], gate_up->ne[2], gate_up->nb[1], gate_up->nb[2], 0);
         cb(cur, "ffn_moe_gate", il);
+        up  = ggml_view_3d(ctx0, gate_up, n_ff, gate_up->ne[1], gate_up->ne[2], gate_up->nb[1], gate_up->nb[2], n_ff * gate_up->nb[0]);
+        cb(up, "ffn_moe_up", il);
     } else {
-        cur = up;
+        // separate gate and up path
+        up = build_lora_mm_id(up_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
+        cb(up, "ffn_moe_up", il);
+
+        if (up_exps_b) {
+            up = ggml_add_id(ctx0, up, up_exps_b, selected_experts);
+            cb(up, "ffn_moe_up_biased", il);
+        }
+
+        if (gate_exps) {
+            cur = build_lora_mm_id(gate_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
+            cb(cur, "ffn_moe_gate", il);
+        } else {
+            cur = up;
+        }
+
+        if (gate_exps_b) {
+            cur = ggml_add_id(ctx0, cur, gate_exps_b, selected_experts);
+            cb(cur, "ffn_moe_gate_biased", il);
+        }
     }
 
-    if (gate_exps_b) {
-        cur = ggml_add_id(ctx0, cur, gate_exps_b, selected_experts);
-        cb(cur, "ffn_moe_gate_biased", il);
-    }
+    const bool has_gate = gate_exps || gate_up_exps;
 
     switch (type_op) {
         case LLM_FFN_SILU:
@@ -1382,7 +1411,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                         break;
                     }
                 }
+            }
 
+            if (has_gate) {
                 cur = ggml_swiglu_split(ctx0, cur, up);
                 cb(cur, "ffn_moe_swiglu", il);
             } else {
@@ -1390,7 +1421,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                 cb(cur, "ffn_moe_silu", il);
             } break;
         case LLM_FFN_GELU:
-            if (gate_exps) {
+            if (has_gate) {
                 cur = ggml_geglu_split(ctx0, cur, up);
                 cb(cur, "ffn_moe_geglu", il);
             } else {
@@ -1406,7 +1437,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                 cb(cur, "ffn_moe_swiglu_oai", il);
             } break;
         case LLM_FFN_RELU:
-            if (gate_exps) {
+            if (has_gate) {
                 cur = ggml_reglu_split(ctx0, cur, up);
                 cb(cur, "ffn_moe_reglu", il);
             } else {
@@ -1414,7 +1445,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                 cb(cur, "ffn_moe_relu", il);
             } break;
         case LLM_FFN_RELU_SQR:
-            if (gate_exps) {
+            if (has_gate) {
                 // TODO: add support for gated squared relu
                 GGML_ABORT("fatal error: gated squared relu not implemented");
             } else {
@@ -1721,7 +1752,8 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 
     ggml_tensor * cur;
 
-    if (cparams.flash_attn && kq_b == nullptr) {
+    const bool use_flash_attn = cparams.flash_attn && kq_b == nullptr;
+    if (use_flash_attn) {
         GGML_ASSERT(kq_b == nullptr && "Flash attention does not support KQ bias yet");
 
         if (v_trans) {
@@ -1981,8 +2013,8 @@ ggml_tensor * llm_graph_context::build_attn(
 
     if (wo) {
         cur = build_lora_mm(wo, cur);
-        if (arch == LLM_ARCH_GLM4 || arch == LLM_ARCH_GLM4_MOE) {
-            // GLM4 and GLM4_MOE seem to have numerical issues with half-precision accumulators
+        if (arch == LLM_ARCH_GLM4 || arch == LLM_ARCH_GLM4_MOE || arch == LLM_ARCH_JAIS2) {
+            // GLM4, GLM4_MOE, and JAIS2 seem to have numerical issues with half-precision accumulators
             ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
         }
     }
@@ -2414,8 +2446,9 @@ llm_graph_input_mem_hybrid_iswa * llm_graph_context::build_inp_mem_hybrid_iswa()
 
 void llm_graph_context::build_dense_out(
     ggml_tensor * dense_2,
+    ggml_tensor * dense_2_b,
     ggml_tensor * dense_3) const {
-    if (!cparams.embeddings || !(dense_2 || dense_3)) {
+    if (!cparams.embeddings || !(dense_2 || dense_2_b || dense_3)) {
         return;
     }
     ggml_tensor * cur = res->t_embd_pooled != nullptr ? res->t_embd_pooled : res->t_embd;
@@ -2423,6 +2456,9 @@ void llm_graph_context::build_dense_out(
 
     if (dense_2) {
         cur = ggml_mul_mat(ctx0, dense_2, cur);
+    }
+    if (dense_2_b) {
+        cur = ggml_add(ctx0, cur, dense_2_b);
     }
     if (dense_3) {
         cur = ggml_mul_mat(ctx0, dense_3, cur);
@@ -2437,7 +2473,8 @@ void llm_graph_context::build_pooling(
         ggml_tensor * cls,
         ggml_tensor * cls_b,
         ggml_tensor * cls_out,
-        ggml_tensor * cls_out_b) const {
+        ggml_tensor * cls_out_b,
+        ggml_tensor * cls_norm) const {
     if (!cparams.embeddings) {
         return;
     }
@@ -2476,8 +2513,15 @@ void llm_graph_context::build_pooling(
             } break;
         case LLAMA_POOLING_TYPE_RANK:
             {
-                ggml_tensor * inp_cls = build_inp_cls();
-                cur = ggml_get_rows(ctx0, inp, inp_cls);
+                if (arch == LLM_ARCH_MODERN_BERT) {
+                    // modern bert gte reranker builds mean first then applies prediction head and classifier
+                    // https://github.com/huggingface/transformers/blob/main/src/transformers/models/modernbert/modular_modernbert.py#L1404-1411
+                    ggml_tensor * inp_mean = build_inp_mean();
+                    cur = ggml_mul_mat(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, inp)), inp_mean);
+                } else {
+                    ggml_tensor * inp_cls = build_inp_cls();
+                    cur = ggml_get_rows(ctx0, inp, inp_cls);
+                }
 
                 // classification head
                 // https://github.com/huggingface/transformers/blob/5af7d41e49bbfc8319f462eb45253dcb3863dfb7/src/transformers/models/roberta/modeling_roberta.py#L1566
@@ -2486,7 +2530,15 @@ void llm_graph_context::build_pooling(
                     if (cls_b) {
                         cur = ggml_add(ctx0, cur, cls_b);
                     }
-                    cur = ggml_tanh(ctx0, cur);
+                    if (arch == LLM_ARCH_MODERN_BERT) {
+                        cur = ggml_gelu(ctx0, cur);
+                    } else {
+                        cur = ggml_tanh(ctx0, cur);
+                    }
+                    if (cls_norm) {
+                        // head norm
+                        cur = build_norm(cur, cls_norm, NULL, LLM_NORM, -1);
+                    }
                 }
 
                 // some models don't have `cls_out`, for example: https://huggingface.co/jinaai/jina-reranker-v1-tiny-en
