@@ -38,7 +38,7 @@ static inline HVX_Vector hvx_vec_splat_f32(float v) {
     return Q6_V_vsplat_R(u.i);
 }
 
-static inline HVX_Vector hvx_vec_splat_f16(float v) {
+static inline HVX_Vector hvx_vec_splat_f16(_Float16 v) {
     union { __fp16 f; uint16_t i; } u = { .f = v };
     return Q6_Vh_vsplat_R(u.i);
 }

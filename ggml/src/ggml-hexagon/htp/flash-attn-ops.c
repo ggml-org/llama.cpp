@@ -10,6 +10,7 @@
 
 #include "hex-dma.h"
 #include "hvx-utils.h"
+#include "hvx-dump.h"
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
@@ -245,14 +246,14 @@ static inline HVX_Vector hvx_dot_f16_f16_aa_rx32(const void * restrict y,
 }
 
 // MAD: y (F32) += x (F16) * s (F32)
-static inline void hvx_mad_f32_f16_aa(float * restrict y, const void * restrict x, int n, float s) {
+static inline void hvx_mad_f32_f16_aa(float * restrict y, const void * restrict x, const __fp16 * restrict s, int n) {
     const HVX_Vector * restrict ptr_x = (const HVX_Vector *) x;
     HVX_Vector * restrict ptr_y = (HVX_Vector *) y;
 
     uint32_t nvec = n / VLEN_FP16; // num full fp16 hvx vectors
     uint32_t nloe = n % VLEN_FP16; // leftover elements
 
-    HVX_Vector S = hvx_vec_splat_f16(s);
+    HVX_Vector S = hvx_vec_splat_f16(*s);
 
     uint32_t i = 0;
     #pragma unroll(4)
@@ -281,13 +282,9 @@ static inline void hvx_mad_f32_f16_aa(float * restrict y, const void * restrict 
     }
 }
 
-// MAD: y (F32) += x0 (F16) * s0 (F32) + x1 (F16) * s1 (F32)
-static inline void hvx_mad_f32_f16_aa_rx2(float * restrict y,
-                                          const void * restrict x0,
-                                          const void * restrict x1,
-                                          float s0,
-                                          float s1,
-                                          int   n) {
+// MAD: y (F32) += x0 (F16) * s0 (F16) + x1 (F16) * s1 (F16)
+static inline void hvx_mad_f32_f16_aa_rx2(float * restrict y, const void * restrict x0, const void * restrict x1,
+                                          const __fp16 * restrict s0, const __fp16 * restrict s1, int n) {
     const HVX_Vector * restrict ptr_x0 = (const HVX_Vector *) x0;
     const HVX_Vector * restrict ptr_x1 = (const HVX_Vector *) x1;
     HVX_Vector * restrict ptr_y        = (HVX_Vector *) y;
@@ -295,8 +292,8 @@ static inline void hvx_mad_f32_f16_aa_rx2(float * restrict y,
     uint32_t nvec = n / VLEN_FP16;  // num full fp16 hvx vectors
     uint32_t nloe = n % VLEN_FP16;  // leftover elements
 
-    HVX_Vector S0 = hvx_vec_splat_f16(s0);
-    HVX_Vector S1 = hvx_vec_splat_f16(s1);
+    HVX_Vector S0 = hvx_vec_splat_f16(*s0);
+    HVX_Vector S1 = hvx_vec_splat_f16(*s1);
 
     uint32_t i = 0;
     #pragma unroll(2)
@@ -527,7 +524,7 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
 
         // Clear accumulator
         hvx_splat_f32_a(spad_a, 0, DV);
-        float * VKQ32 = (float *) spad_a;
+        float * VKQ32 = (float *) (spad_a + 0);
 
         uint8_t * q_ptr_vtcm = dma_queue_pop(dma).dst;
         if (factx->is_q_fp32) {
@@ -582,8 +579,8 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
             {
                 // 4. Online Softmax Update
                 HVX_Vector M_new_vec = Q6_Vsf_vmax_VsfVsf(v_max, M_vec);
-                HVX_Vector diff_vec  = Q6_Vqf32_vsub_VsfVsf(M_vec, M_new_vec);
-                HVX_Vector ms_vec    = hvx_vec_exp_f32(Q6_Vsf_equals_Vqf32(diff_vec));
+                HVX_Vector diff_vec  = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_VsfVsf(M_vec, M_new_vec));
+                HVX_Vector ms_vec    = hvx_vec_exp_f32(diff_vec);
                 M_vec = M_new_vec;
 
                 hvx_scale_vec_f32_aa((uint8_t *) VKQ32, (const uint8_t *) VKQ32, DV, ms_vec);
@@ -597,13 +594,13 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
                     p_sum_vec = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(p_sum_vec, P));
 
                     // 5. Accumulate V
-                    float __attribute__((aligned(VLEN))) p_arr[VLEN_FP32];
-                    *(HVX_Vector *) p_arr = P;
+                    __fp16 __attribute__((aligned(VLEN))) p_arr[VLEN_FP16];
+                    *(HVX_Vector *) p_arr = hvx_vec_f32_to_f16(P, hvx_vec_splat_f32(0));
 
                     for (uint32_t j = 0; j < VLEN_FP32; j += 2) {
                         const uint32_t  cur_ic = ic2 + j;
                         const uint8_t * v_ptr  = v_base + cur_ic * factx->size_v_row_padded;
-                        hvx_mad_f32_f16_aa_rx2(VKQ32, v_ptr, v_ptr + factx->size_v_row_padded, p_arr[j], p_arr[j + 1], DV);
+                        hvx_mad_f32_f16_aa_rx2(VKQ32, v_ptr, v_ptr + factx->size_v_row_padded, (p_arr + j), (p_arr + j + 1), DV);
                     }
                 }
 
@@ -631,7 +628,7 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
                     }
 
                     const float Mold = M;
-                    float vs = 1.0f;
+                    __fp16 vs = 1.0f;
 
                     if (s_val > M) {
                         M = s_val;
@@ -649,7 +646,7 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
 
                     const uint8_t * v_ptr = v_base + ic * factx->size_v_row_padded;
 
-                    hvx_mad_f32_f16_aa(VKQ32, v_ptr, DV, vs);
+                    hvx_mad_f32_f16_aa(VKQ32, v_ptr, &vs, DV);
                 }
 
                 M_vec = hvx_vec_splat_f32(M);
