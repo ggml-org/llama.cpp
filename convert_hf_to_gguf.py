@@ -22,6 +22,9 @@ import math
 import numpy as np
 import torch
 
+# Check for legacy torch compatibility flag (needed for older PyTorch versions, e.g., 2.2.2 on Intel Mac)
+_LEGACY_TORCH = "--legacy-torch" in sys.argv
+
 if TYPE_CHECKING:
     from torch import Tensor
 
@@ -11777,44 +11780,82 @@ class LazyTorchTensor(gguf.LazyBase):
     }
 
     # only used when byteswapping data. Only correct size is needed
-    _dtype_byteswap_map: dict[torch.dtype, type] = {
-        torch.float64: np.float64,
-        torch.float32: np.float32,
-        torch.bfloat16: np.float16,
-        torch.float16: np.float16,
-        torch.int64: np.int64,
-        torch.uint64: np.uint64,
-        torch.int32: np.int32,
-        torch.uint32: np.uint32,
-        torch.int16: np.int16,
-        torch.uint16: np.uint16,
-        torch.int8: np.int8,
-        torch.uint8: np.uint8,
-        torch.bool: np.uint8,
-        torch.float8_e4m3fn: np.uint8,
-        torch.float8_e5m2: np.uint8,
-    }
+    if _LEGACY_TORCH:
+        # Compatible with older PyTorch versions (e.g., 2.2.2 on Intel Mac)
+        # Missing in PyTorch < 2.3: uint64, uint32, uint16
+        _dtype_byteswap_map: dict[torch.dtype, type] = {
+            torch.float64: np.float64,
+            torch.float32: np.float32,
+            torch.bfloat16: np.float16,
+            torch.float16: np.float16,
+            torch.int64: np.int64,
+            torch.int32: np.int32,
+            torch.int16: np.int16,
+            torch.int8: np.int8,
+            torch.uint8: np.uint8,
+            torch.bool: np.uint8,
+            torch.float8_e4m3fn: np.uint8,
+            torch.float8_e5m2: np.uint8,
+        }
+    else:
+        _dtype_byteswap_map: dict[torch.dtype, type] = {
+            torch.float64: np.float64,
+            torch.float32: np.float32,
+            torch.bfloat16: np.float16,
+            torch.float16: np.float16,
+            torch.int64: np.int64,
+            torch.uint64: np.uint64,
+            torch.int32: np.int32,
+            torch.uint32: np.uint32,
+            torch.int16: np.int16,
+            torch.uint16: np.uint16,
+            torch.int8: np.int8,
+            torch.uint8: np.uint8,
+            torch.bool: np.uint8,
+            torch.float8_e4m3fn: np.uint8,
+            torch.float8_e5m2: np.uint8,
+        }
 
     # used for safetensors slices
     # ref: https://github.com/huggingface/safetensors/blob/079781fd0dc455ba0fe851e2b4507c33d0c0d407/bindings/python/src/lib.rs#L1046
     # TODO: uncomment U64, U32, and U16, ref: https://github.com/pytorch/pytorch/issues/58734
-    _dtype_str_map: dict[str, torch.dtype] = {
-        "F64": torch.float64,
-        "F32": torch.float32,
-        "BF16": torch.bfloat16,
-        "F16": torch.float16,
-        # "U64": torch.uint64,
-        "I64": torch.int64,
-        # "U32": torch.uint32,
-        "I32": torch.int32,
-        # "U16": torch.uint16,
-        "I16": torch.int16,
-        "U8": torch.uint8,
-        "I8": torch.int8,
-        "BOOL": torch.bool,
-        "F8_E4M3": torch.float8_e4m3fn,
-        "F8_E5M2": torch.float8_e5m2,
-    }
+    if _LEGACY_TORCH:
+        # Compatible with older PyTorch versions (e.g., 2.2.2 on Intel Mac)
+        _dtype_str_map: dict[str, torch.dtype] = {
+            "F64": torch.float64,
+            "F32": torch.float32,
+            "BF16": torch.bfloat16,
+            "F16": torch.float16,
+            # "U64": torch.uint64,
+            "I64": torch.int64,
+            # "U32": torch.uint32,
+            "I32": torch.int32,
+            # "U16": torch.uint16,
+            "I16": torch.int16,
+            "U8": torch.uint8,
+            "I8": torch.int8,
+            "BOOL": torch.bool,
+            "F8_E4M3": torch.float8_e4m3fn,
+            "F8_E5M2": torch.float8_e5m2,
+        }
+    else:
+        _dtype_str_map: dict[str, torch.dtype] = {
+            "F64": torch.float64,
+            "F32": torch.float32,
+            "BF16": torch.bfloat16,
+            "F16": torch.float16,
+            # "U64": torch.uint64,
+            "I64": torch.int64,
+            # "U32": torch.uint32,
+            "I32": torch.int32,
+            # "U16": torch.uint16,
+            "I16": torch.int16,
+            "U8": torch.uint8,
+            "I8": torch.int8,
+            "BOOL": torch.bool,
+            "F8_E4M3": torch.float8_e4m3fn,
+            "F8_E5M2": torch.float8_e5m2,
+        }
 
     def numpy(self) -> gguf.LazyNumpyTensor:
         dtype = self._dtype_map[self.dtype]
@@ -11967,6 +12008,10 @@ def parse_args() -> argparse.Namespace:
         help=("Whether to include sentence-transformers dense modules. "
               "It can be used for sentence-transformers models, like google/embeddinggemma-300m. "
               "Default these modules are not included.")
+    )
+    parser.add_argument(
+        "--legacy-torch", action="store_true",
+        help="Use legacy PyTorch dtype mappings for compatibility with older PyTorch versions (e.g., 2.2.2 on Intel Mac)."
     )
 
     parser.add_argument(
