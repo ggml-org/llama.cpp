@@ -79,9 +79,12 @@ if (WIN32)
     set(CMAKE_SHARED_MODULE_PREFIX  "")
 endif()
 
-option(BUILD_SHARED_LIBS           "ggml: build shared libraries" ${BUILD_SHARED_LIBS_DEFAULT})
-option(GGML_BACKEND_DL             "ggml: build backends as dynamic libraries (requires BUILD_SHARED_LIBS)" OFF)
-set(GGML_BACKEND_DIR "" CACHE PATH "ggml: directory to load dynamic backends from (requires GGML_BACKEND_DL")
+option(BUILD_SHARED_LIBS                                  "ggml: build shared libraries" ${BUILD_SHARED_LIBS_DEFAULT})
+option(GGML_BACKEND_DL                                    "ggml: build backends as dynamic libraries (requires BUILD_SHARED_LIBS)" OFF)
+set(GGML_BACKEND_DIR                        "" CACHE PATH "ggml: DEPRECATED: directory to load dynamic backends from (requires GGML_BACKEND_DL")
+set(GGML_BACKEND_INSTALL_DIR                "" CACHE PATH "ggml: directory to install dynamic backends into (requires GGML_BACKEND_DL")
+set(GGML_BACKEND_ABSOLUTE_SEARCH_DIR        "" CACHE PATH "ggml: directory to load dynamic backends from (requires GGML_BACKEND_DL")
+set(GGML_BACKEND_RELATIVE_TO_EXE_SEARCH_DIR "" CACHE PATH "ggml: directory relative to the executable to load dynamic backends from (requires GGML_BACKEND_DL")
 
 #
 # option list
