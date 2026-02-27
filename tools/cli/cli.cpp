@@ -158,21 +158,72 @@ struct cli_context {
         return curr_content;
     }
 
-    // TODO: support remote files in the future (http, https, etc)
-    std::string load_input_file(const std::string & fname, bool is_media) {
-        std::ifstream file(fname, std::ios::binary);
+    bool load_data_from_url(const std::string & url, std::vector<char> & out) {
+#if defined(LLAMA_USE_CURL) || defined(LLAMA_USE_HTTPLIB)
+        try {
+            common_remote_params params;
+            params.headers.push_back("User-Agent: llama.cpp/" + build_info);
+            params.max_size = 1024 * 1024 * 10; // 10MB
+            params.timeout  = 10; // seconds
+            auto [http_code, data] = common_remote_get_content(url, params);
+            if (http_code != 200) {
+                console::error("Failed to fetch from URL: %s, HTTP code: %ld\n", url.c_str(), http_code);
+                return false;
+            }
+            if (data.empty()) {
+                console::error("Fetched empty content from URL: %s\n", url.c_str());
+                return false;
+            }
+            out = std::move(data);
+            return true;
+        } catch (const std::exception & e) {
+            console::error("Exception while fetching from URL: %s, error: %s\n", url.c_str(), e.what());
+            return false;
+        }
+#else
+        console::error("Network support is disabled. Compile with LLAMA_USE_CURL or LLAMA_USE_HTTPLIB to enable URL loading.\n");
+        GGML_UNUSED(url);
+        GGML_UNUSED(out);
+        return false;
+#endif
+    }
+
+    bool load_data_from_file(const std::string & path, std::vector<char> & out) {
+        std::ifstream file(path, std::ios::binary);
         if (!file) {
+            console::error("Failed to open file: %s\n", path.c_str());
+            return false;
+        }
+        out.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        return true;
+    }
+
+    // load input from local path or url
+    std::string load_input_file(const std::string & source, bool is_media) {
+        static auto is_url = [](const std::string & s) {
+            return s.find("http://") == 0 || s.find("https://") == 0;
+        };
+
+        std::vector<char> data;
+
+        bool success = false;
+        if (is_url(source)) {
+            success = load_data_from_url(source, data);
+        } else {
+            success = load_data_from_file(source, data);
+        }
+
+        if (!success) {
             return "";
         }
+
         if (is_media) {
             raw_buffer buf;
-            buf.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            buf.assign(data.begin(), data.end());
             input_files.push_back(std::move(buf));
             return mtmd_default_marker();
-        } else {
-            std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-            return content;
         }
+        return std::string(data.data(), data.size());
     }
 
     common_chat_params format_chat() {
@@ -284,10 +335,10 @@ int main(int argc, char ** argv) {
     console::log("  /clear              clear the chat history\n");
     console::log("  /read               add a text file\n");
     if (inf.has_inp_image) {
-        console::log("  /image <file>       add an image file\n");
+        console::log("  /image <path|url>   add an image file (supports URL)\n");
     }
     if (inf.has_inp_audio) {
-        console::log("  /audio <file>       add an audio file\n");
+        console::log("  /audio <path|url>   add an audio file (supports URL)\n");
     }
     console::log("\n");
 
