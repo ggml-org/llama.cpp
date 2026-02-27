@@ -667,18 +667,42 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
         return l;
     };
     constexpr auto trim_suffix = [](std::string &content, std::initializer_list<std::string_view> list) {
-        auto best_match = content.size();
-        for (auto pattern: list) {
-            if (pattern.size() == 0) continue;
+        // Trim partial suffixes that look like an incomplete special marker (e.g. "<|tool_call_end|>").
+        //
+        // Some tool syntaxes include a normal JSON delimiter *before* a special token, e.g. "}<|tool_call_end|>".
+        // In that case we must avoid trimming the valid JSON '}' when only the beginning of the pattern matches.
+        auto best_erase_from = content.size();
+
+        for (auto pattern : list) {
+            if (pattern.empty()) {
+                continue;
+            }
+
+            // If the pattern contains a '<', treat everything before it as a "normal prefix" and only trim if the
+            // model actually started emitting the special token (i.e. matched beyond the prefix).
+            const auto special_pos = pattern.find('<');
+
             for (auto match_idx = content.size() - std::min(pattern.size(), content.size()); content.size() > match_idx; match_idx++) {
-                auto match_len = content.size() - match_idx;
-                if (content.compare(match_idx, match_len, pattern.data(), match_len) == 0 && best_match > match_idx) {
-                    best_match = match_idx;
+                const auto match_len = content.size() - match_idx;
+                if (content.compare(match_idx, match_len, pattern.data(), match_len) != 0) {
+                    continue;
+                }
+
+                if (special_pos != std::string_view::npos && special_pos > 0) {
+                    // Only matched the normal prefix (e.g. "}") - do not trim.
+                    if (match_len <= special_pos) {
+                        continue;
+                    }
+                    // Trim from the start of the special token, preserving the normal prefix.
+                    best_erase_from = std::min(best_erase_from, match_idx + special_pos);
+                } else {
+                    best_erase_from = std::min(best_erase_from, match_idx);
                 }
             }
         }
-        if (content.size() > best_match) {
-            content.erase(best_match);
+
+        if (content.size() > best_erase_from) {
+            content.erase(best_erase_from);
         }
     };
     const auto trim_potential_partial_word = [&start_think, &end_think, &form, trim_suffix](std::string &content) {

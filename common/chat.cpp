@@ -1894,10 +1894,28 @@ static common_chat_params common_chat_params_init_minimax_m2(const common_chat_t
 
 static common_chat_params common_chat_params_init_kimi_k2(const common_chat_template & tmpl, const struct templates_params & params) {
     common_chat_params data;
-    data.grammar_lazy = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+    const bool has_tools  = params.tools.is_array() && !params.tools.empty();
+    const bool has_schema = params.json_schema.is_object();
+
+    data.grammar_lazy = has_tools && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
 
     data.prompt = apply(tmpl, params);
     data.format = COMMON_CHAT_FORMAT_KIMI_K2;
+
+    
+    if (has_tools && has_schema) {
+        throw std::runtime_error("Kimi K2: cannot combine \"tools\" with \"json_schema\"/response_format; remove tools or remove response_format");
+    }
+    
+    if (!has_tools && has_schema) {
+        if (!params.grammar.empty()) {
+            throw std::runtime_error("Either \"json_schema\" or \"grammar\" can be specified, but not both");
+        }
+        // Mirror the generic "content-only" schema enforcement behavior
+        data.grammar = json_schema_to_grammar(params.json_schema);
+    } else {
+        data.grammar = params.grammar;
+    }
 
     data.preserved_tokens = {
         "<think>",
