@@ -191,10 +191,10 @@ class ExpertPredictor {
     // Called after MUL_MAT_ID with the real expert indices chosen by the gating network.
     void record_actual(int layer_idx, const std::vector<int> & actual_experts);
 
-    // Statistics
+    // Statistics (rolling window of last ACCURACY_WINDOW predictions)
     float hit_rate() const;       // Rolling prediction accuracy (0.0 - 1.0)
-    int   total_predictions() const;
-    int   total_hits() const;
+    int   window_size() const;    // Current window sample count (up to ACCURACY_WINDOW)
+    int   window_hits() const;    // Hits within current window
     bool  is_active() const { return initialized_; }
 
   private:
@@ -218,12 +218,10 @@ class ExpertPredictor {
     int accuracy_hits_  = 0;
     int accuracy_total_ = 0;
 
-    // Circular buffer for rolling window eviction
-    struct AccuracySample {
-        bool hit = false;
-    };
-    std::vector<AccuracySample> accuracy_ring_;
-    int                         accuracy_ring_pos_ = 0;
+    // Circular buffer for rolling window eviction.
+    // uint8_t avoids std::vector<bool> specialization issues.
+    std::vector<uint8_t> accuracy_ring_;
+    int                  accuracy_ring_pos_ = 0;
 
     mutable std::mutex mutex_;
 

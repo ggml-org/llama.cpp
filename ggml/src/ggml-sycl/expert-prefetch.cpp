@@ -416,21 +416,22 @@ void ExpertPredictor::record_actual(int layer_idx, const std::vector<int> & actu
             }
         }
 
-        // Compute per-prediction hit rate: fraction of actual experts that were predicted
+        // Hit if we predicted at least half of the actual experts
+        // (integer division: lenient for odd sizes).
         bool sample_hit = (hits > 0 && !actual_experts.empty() &&
                            hits >= static_cast<int>(actual_experts.size()) / 2);
 
         // Update rolling window
         if (accuracy_total_ >= ACCURACY_WINDOW) {
             // Evict oldest sample
-            if (accuracy_ring_[accuracy_ring_pos_].hit) {
+            if (accuracy_ring_[accuracy_ring_pos_]) {
                 accuracy_hits_--;
             }
         } else {
             accuracy_total_++;
         }
 
-        accuracy_ring_[accuracy_ring_pos_].hit = sample_hit;
+        accuracy_ring_[accuracy_ring_pos_] = sample_hit ? 1 : 0;
         if (sample_hit) {
             accuracy_hits_++;
         }
@@ -439,8 +440,8 @@ void ExpertPredictor::record_actual(int layer_idx, const std::vector<int> & actu
         // Periodic logging every ACCURACY_WINDOW predictions
         if (accuracy_total_ >= ACCURACY_WINDOW && accuracy_ring_pos_ == 0) {
             float rate = static_cast<float>(accuracy_hits_) / static_cast<float>(accuracy_total_);
-            GGML_LOG_INFO("[EXPERT-PREDICT] accuracy=%.1f%% (%d/%d) over last %d samples\n",
-                          rate * 100.0f, accuracy_hits_, accuracy_total_, ACCURACY_WINDOW);
+            GGML_LOG_INFO("[EXPERT-PREDICT] accuracy=%.1f%% (hits=%d, window=%d)\n",
+                          rate * 100.0f, accuracy_hits_, accuracy_total_);
         }
     }
 }
@@ -453,12 +454,12 @@ float ExpertPredictor::hit_rate() const {
     return static_cast<float>(accuracy_hits_) / static_cast<float>(accuracy_total_);
 }
 
-int ExpertPredictor::total_predictions() const {
+int ExpertPredictor::window_size() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return accuracy_total_;
 }
 
-int ExpertPredictor::total_hits() const {
+int ExpertPredictor::window_hits() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return accuracy_hits_;
 }

@@ -295,8 +295,8 @@ static bool test_predictor_accuracy() {
     // Record same actuals again -- prediction should be a hit
     pred.record_actual(0, { 1, 5 });
 
-    if (pred.total_predictions() != 1) {
-        printf("  FAIL: expected 1 prediction, got %d\n", pred.total_predictions());
+    if (pred.window_size() != 1) {
+        printf("  FAIL: expected 1 prediction, got %d\n", pred.window_size());
         return false;
     }
 
@@ -391,9 +391,12 @@ static bool test_predict_env_var() {
     // Note: this reads env var at first call and caches, so we can only
     // test the default behavior reliably.
     bool enabled = ggml_sycl::ggml_sycl_expert_predict_enabled();
-    printf("  INFO: GGML_SYCL_EXPERT_PREDICT enabled=%d\n", enabled);
+    if (!enabled) {
+        printf("  FAIL: default should be enabled\n");
+        return false;
+    }
 
-    printf("  PASS: env var helper works\n");
+    printf("  PASS: env var default is ON\n");
     return true;
 }
 
