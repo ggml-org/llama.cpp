@@ -580,6 +580,8 @@ private:
     float slot_prompt_similarity = 0.0f;
 
     std::string model_name; // name of the loaded model, to be used by API
+    std::set<std::string> model_aliases; // additional names for the model
+    std::set<std::string> model_tags;    // informational tags
 
     bool sleeping = false;
 
@@ -813,16 +815,18 @@ private:
         SRV_WRN("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
 
         if (!params_base.model_alias.empty()) {
-            // user explicitly specified model name
-            model_name = params_base.model_alias;
+            // backward compat: use first alias as model name
+            model_name = *params_base.model_alias.begin();
         } else if (!params_base.model.name.empty()) {
-            // use model name in registry format (for models in cache)
             model_name = params_base.model.name;
         } else {
             // fallback: derive model name from file name
             auto model_path = std::filesystem::path(params_base.model.path);
             model_name = model_path.filename().string();
         }
+
+        model_aliases = params_base.model_alias;
+        model_tags    = params_base.model_tags;
 
         if (!is_resume) {
             return init();
@@ -2892,6 +2896,8 @@ server_context_meta server_context::get_meta() const {
     return server_context_meta {
         /* build_info             */ build_info,
         /* model_name             */ impl->model_name,
+        /* model_aliases          */ impl->model_aliases,
+        /* model_tags             */ impl->model_tags,
         /* model_path             */ impl->params_base.model.path,
         /* has_mtmd               */ impl->mctx != nullptr,
         /* has_inp_image          */ impl->chat_params.allow_image,
@@ -3688,6 +3694,8 @@ void server_routes::init_routes() {
             {"data", {
                 {
                     {"id",       meta->model_name},
+                    {"aliases",  meta->model_aliases},
+                    {"tags",     meta->model_tags},
                     {"object",   "model"},
                     {"created",  std::time(0)},
                     {"owned_by", "llamacpp"},
