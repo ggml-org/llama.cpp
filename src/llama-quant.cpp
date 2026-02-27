@@ -223,6 +223,10 @@ static bool tensor_name_match_token_embd(const char * tensor_name) {
     );
 }
 
+static bool tensor_name_match_output_weight(const char * tensor_name) {
+    return std::strcmp(tensor_name, "output.weight");
+}
+
 // do we allow this tensor to be quantized?
 static bool tensor_allows_quantization(const llama_model_quantize_params * params, llm_arch arch, const ggml_tensor * tensor) {
     const std::string name = tensor->name;
@@ -334,52 +338,51 @@ static ggml_type tensor_type_fallback(quantization_state_impl * qs, const ggml_t
     return return_type;
 }
 
-// classify tensor, computed once in preliminary pass
-static tensor_category classify_tensor(const std::string & name) {
-    if (name == "output.weight") {
+static tensor_category tensor_get_category(const std::string & tensor_name) {
+    if (tensor_name == "output.weight") {
         return tensor_category::OUTPUT;
     }
 
-    if (tensor_name_match_token_embd(name.c_str())) {
+    if (tensor_name_match_token_embd(tensor_name.c_str())) {
         return tensor_category::TOKEN_EMBD;
     }
 
     // attention tensors - order matters, check more specific patterns first
 
-    if (name.find("attn_qkv.weight") != std::string::npos) {
+    if (tensor_name.find("attn_qkv.weight") != std::string::npos) {
         return tensor_category::ATTENTION_QKV;
     }
-    if (name.find("attn_kv_b.weight") != std::string::npos) {
+    if (tensor_name.find("attn_kv_b.weight") != std::string::npos) {
         return tensor_category::ATTENTION_KV_B;
     }
-    if (name.find("attn_v.weight") != std::string::npos) {
+    if (tensor_name.find("attn_v.weight") != std::string::npos) {
         return tensor_category::ATTENTION_V;
     }
-    if (name.find("attn_k.weight") != std::string::npos) {
+    if (tensor_name.find("attn_k.weight") != std::string::npos) {
         return tensor_category::ATTENTION_K;
     }
-    if (name.find("attn_q.weight") != std::string::npos) {
+    if (tensor_name.find("attn_q.weight") != std::string::npos) {
         return tensor_category::ATTENTION_Q;
     }
-    if (name.find("attn_output.weight") != std::string::npos) {
+    if (tensor_name.find("attn_output.weight") != std::string::npos) {
         return tensor_category::ATTENTION_OUTPUT;
     }
 
     // FFN
-    if (name.find("ffn_down") != std::string::npos) {
+    if (tensor_name.find("ffn_down") != std::string::npos) {
         return tensor_category::FFN_DOWN;
     }
-    if (name.find("ffn_gate") != std::string::npos) {
+    if (tensor_name.find("ffn_gate") != std::string::npos) {
         return tensor_category::FFN_GATE;
     }
-    if (name.find("ffn_up") != std::string::npos) {
+    if (tensor_name.find("ffn_up") != std::string::npos) {
         return tensor_category::FFN_UP;
     }
 
     return tensor_category::OTHER;
 }
 
-// check if category is an attention-v-like tensor (for counting purposes)
+// check if category is an attention-v-like tensor
 static bool category_is_attention_vlike(tensor_category cat) {
     return cat == tensor_category::ATTENTION_V ||
            cat == tensor_category::ATTENTION_QKV ||
@@ -859,8 +862,7 @@ static size_t llama_tensor_quantize(
 
 // does this tensor require importance matrix data?
 static bool tensor_requires_imatrix(const char * tensor_name, const ggml_type dst_type, const llama_ftype ftype) {
-    // token embedding tensors should never require imatrix data
-    if (tensor_name_match_token_embd(tensor_name)) {
+    if (tensor_name_match_token_embd(tensor_name) || tensor_name_match_output_weight(tensor_name)) {
         return false;
     }
     switch (dst_type) {
@@ -1086,9 +1088,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     std::vector<gguf_context_ptr> ctx_outs(n_split);
     ctx_outs[0] = std::move(ctx_out);
 
-    // we save compute tensor metadata once for internal purposes, and cache it
-    // here to avoid re-computation between the preliminary and main loops
-    // (string matching, etc.)
+    // we compute tensor metadata once and cache it here to avoid re-computation
+    // between the preliminary and main loops (string matching, etc.)
     std::vector<tensor_metadata> metadata(weights.size());
 
     // flag for `--dry-run`, to let the user know if imatrix will be required
@@ -1102,15 +1103,15 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     for (size_t i = 0; i < weights.size(); ++i) {
         const auto * it = weights[i];
         const ggml_tensor * tensor = it->tensor;
-        const std::string name = tensor->name;
+        const char * name = tensor->name;
 
-        metadata[i].category = classify_tensor(name);
+        metadata[i].category = tensor_get_category(name);
 
         if (category_is_attention_vlike(metadata[i].category)) {
             ++qs->n_attention_wv;
         }
 
-        if (metadata[i].category == tensor_category::OUTPUT) {
+        if (tensor_name_match_output_weight(name)) {
             qs->has_output = true;
         }
 
@@ -1139,7 +1140,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                                   "        - offending tensor: %s\n"
                                   "        - target type: %s\n"
                                   "============================================================================\n\n",
-                                  name.c_str(), ggml_type_name(metadata[i].target_type));
+                                  name, ggml_type_name(metadata[i].target_type));
                 throw std::runtime_error("this quantization requires an imatrix!");
             }
         }
@@ -1192,7 +1193,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
     std::vector<no_init<uint8_t>> read_data;
     std::vector<no_init<uint8_t>> work;
-    std::vector<no_init<float>> f32_conv_buf;
+    std::vector<no_init<float>>   f32_conv_buf;
 
     // pre-allocate work buffers to avoid repeated resizing
     {
@@ -1227,7 +1228,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         const auto & weight = *it;
         ggml_tensor * tensor = weight.tensor;
 
-        const auto & meta = metadata[i];
+        const auto & tm = metadata[i];
 
         if (!params->dry_run && (weight.idx != cur_split && params->keep_split)) {
             close_ofstream();
@@ -1252,7 +1253,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                        llama_format_tensor_shape(tensor).c_str(),
                        ggml_type_name(tensor->type));
 
-        ggml_type const new_type = meta.target_type;
+        ggml_type const new_type = tm.target_type;
         bool do_quantize = (new_type != tensor->type);
 
         void * new_data;
@@ -1270,7 +1271,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                                tensor_size/1024.0/1024.0,
                                ggml_type_name(new_type),
                                new_size/1024.0/1024.0);
-                if (!will_require_imatrix && meta.requires_imatrix) {
+                if (!will_require_imatrix && tm.requires_imatrix) {
                     will_require_imatrix = true;
                 }
             } else {
@@ -1292,7 +1293,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
                 const float * imatrix = nullptr;
                 if (imatrix_data) {
-                    auto it_imatrix = imatrix_data->find(meta.remapped_imatrix_name);
+                    auto it_imatrix = imatrix_data->find(tm.remapped_imatrix_name);
                     if (it_imatrix == imatrix_data->end()) {
                         LLAMA_LOG_INFO("\n%s: did not find imatrix data for %s; ", __func__, tensor->name);
                     } else {
@@ -1306,14 +1307,14 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                             // this is a significant error and it may be good idea to abort the process if this happens,
                             // since many people will miss the error and not realize that most of the model is being quantized without an imatrix
                             // tok_embd should be ignored in this case, since it always causes this warning
-                            if (meta.category != tensor_category::TOKEN_EMBD) {
+                            if (tm.category != tensor_category::TOKEN_EMBD) {
                                 throw std::runtime_error(format("imatrix size %d is different from tensor size %d for %s",
                                         int(it_imatrix->second.size()), int(tensor->ne[0]*tensor->ne[2]), tensor->name));
                             }
                         }
                     }
                 }
-                if (!imatrix && meta.requires_imatrix) {
+                if (!imatrix && tm.requires_imatrix) {
                     // we should never reach this anymore, since we now check for imatrix
                     // requirements in the preliminary loop over model weights, but this check
                     // is left here as a guard, just in case.
@@ -1348,10 +1349,10 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             total_size_new += new_size;
 
             // update the gguf meta data as we go
-            const std::string name = tensor->name;
-            gguf_set_tensor_type(ctx_outs[cur_split].get(), name.c_str(), new_type);
-            GGML_ASSERT(gguf_get_tensor_size(ctx_outs[cur_split].get(), gguf_find_tensor(ctx_outs[cur_split].get(), name.c_str())) == new_size);
-            gguf_set_tensor_data(ctx_outs[cur_split].get(), name.c_str(), new_data);
+            const char * name = tensor->name;
+            gguf_set_tensor_type(ctx_outs[cur_split].get(), name, new_type);
+            GGML_ASSERT(gguf_get_tensor_size(ctx_outs[cur_split].get(), gguf_find_tensor(ctx_outs[cur_split].get(), name)) == new_size);
+            gguf_set_tensor_data(ctx_outs[cur_split].get(), name, new_data);
 
             // write tensor data + padding
             fout.write((const char *) new_data, new_size);
