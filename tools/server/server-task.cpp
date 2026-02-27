@@ -1011,6 +1011,7 @@ json server_task_result_cmpl_final::to_json_anthropic() {
     if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
         stop_reason = oaicompat_msg.tool_calls.empty() ? "end_turn" : "tool_use";
     }
+    const int32_t cache_read_input_tokens = n_cache_read_input_tokens >= 0 ? n_cache_read_input_tokens : 0;
 
     json content_blocks = json::array();
 
@@ -1064,6 +1065,7 @@ json server_task_result_cmpl_final::to_json_anthropic() {
         {"stop_sequence", stopping_word.empty() ? nullptr : json(stopping_word)},
         {"usage", {
             {"input_tokens", n_prompt_tokens},
+            {"cache_read_input_tokens", cache_read_input_tokens},
             {"output_tokens", n_decoded}
         }}
     };
@@ -1078,6 +1080,7 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
     if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
         stop_reason = oaicompat_msg.tool_calls.empty() ? "end_turn" : "tool_use";
     }
+    const int32_t cache_read_input_tokens = n_cache_read_input_tokens >= 0 ? n_cache_read_input_tokens : 0;
 
     bool has_thinking = !oaicompat_msg.reasoning_content.empty();
     bool has_text     = !oaicompat_msg.content.empty();
@@ -1556,6 +1559,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
 json server_task_result_cmpl_partial::to_json_anthropic() {
     json events = json::array();
     bool first = (n_decoded == 1);
+    const int32_t cache_read_input_tokens = n_cache_read_input_tokens >= 0 ? n_cache_read_input_tokens : 0;
     // use member variables to track block state across streaming calls
     // (anthropic_thinking_block_started, anthropic_text_block_started)
 
@@ -1574,6 +1578,7 @@ json server_task_result_cmpl_partial::to_json_anthropic() {
                     {"stop_sequence", nullptr},
                     {"usage", {
                         {"input_tokens", n_prompt_tokens},
+                        {"cache_read_input_tokens", cache_read_input_tokens},
                         {"output_tokens", 0}
                     }}
                 }}
