@@ -2972,6 +2972,7 @@ static void ggml_cl2_free(ggml_backend_t backend) {
     }
 }
 
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
 static void transpose_2d(
     ggml_backend_opencl_context * backend_ctx,
     cl_kernel kernel,
@@ -3045,6 +3046,7 @@ static void transpose_2d_as_32b(
     transpose_2d(backend_ctx, backend_ctx->kernel_transpose_32_buf,
         src, dst, size, stride, rows, blocking);
 }
+#endif // GGML_OPENCL_USE_ADRENO_KERNELS
 
 //------------------------------------------------------------------------------
 // Tensor extra management
