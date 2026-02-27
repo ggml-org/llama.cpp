@@ -63,8 +63,6 @@
     dma_queue * dma_queue             = octx->ctx->dma[ith]; \
     uint32_t    src0_nrows_per_thread = octx->src0_nrows_per_thread;
 
-#define SSM_CONV_GATHER_SPAD_SIZE 2048
-
 // Scalar FP32 SSM_CONV implementation
 static void ssm_conv_thread_f32_f32(struct htp_ops_context * octx, uint32_t nth, uint32_t ith) {
     htp_ssm_conv_tensors_preamble;
@@ -194,10 +192,9 @@ static void ssm_conv_thread_f32_f32_hvx(struct htp_ops_context * octx, uint32_t 
                 HVX_Vector acc_vec = Q6_V_vzero();
 
                 for (uint32_t i0 = 0; i0 < d_conv; ++i0) {
-                    Q6_vgather_ARMVw(src0_vec,
-                                     SCATTER_TYPE(spad_src0 + (i0 + i1 * ncs) * sizeof(float) + i2 * (src0->nb[0])),
+                    Q6_vgather_ARMVw(src0_vec, GATHER_TYPE(spad_src0 + (i0 + i1 * ncs) * sizeof(float) + i2 * (src0->nb[0])),
                                      src0_gather_len, (*(const HVX_Vector *) src0_offsets));
-                    Q6_vgather_ARMVw(src1_vec, SCATTER_TYPE(spad_src1 + (i0 + i1 * nc) * sizeof(float)),
+                    Q6_vgather_ARMVw(src1_vec, GATHER_TYPE(spad_src1 + (i0 + i1 * nc) * sizeof(float)),
                                      src1_gather_len, (*(const HVX_Vector *) src1_offsets));
 
                     HVX_Vector prod = Q6_Vqf32_vmpy_VsfVsf(*(const HVX_Vector *) src0_vec, *(const HVX_Vector *) src1_vec);
@@ -255,33 +252,38 @@ int op_ssm_conv_f32(struct htp_ops_context * octx) {
             }
         }
 
-        // d_inner chunks per thread
-        const int dr = (d_inner + n_jobs - 1) / n_jobs;
+        if (use_hvx) {
+            // d_inner chunks per thread
+            const int dr = (d_inner + n_jobs - 1) / n_jobs;
 
-        octx->src0_spad.size_per_thread = hex_round_up(dr * nb01, 256);
-        octx->src1_spad.size_per_thread = hex_round_up(dr * nb11, 256);
-        octx->dst_spad.size_per_thread  = hex_round_up(dr * sizeof(float), 256);
+            octx->src0_spad.size_per_thread = hex_round_up(dr * nb01, 256);
+            octx->src1_spad.size_per_thread = hex_round_up(dr * nb11, 256);
+            octx->dst_spad.size_per_thread  = hex_round_up(dr * sizeof(float), 256);
 
-        octx->src1_spad.size = octx->src1_spad.size_per_thread * octx->n_threads;
-        octx->src0_spad.size = octx->src0_spad.size_per_thread * octx->n_threads;
-        octx->dst_spad.size  = octx->dst_spad.size_per_thread * octx->n_threads;
+            octx->src1_spad.size = octx->src1_spad.size_per_thread * octx->n_threads;
+            octx->src0_spad.size = octx->src0_spad.size_per_thread * octx->n_threads;
+            octx->dst_spad.size  = octx->dst_spad.size_per_thread * octx->n_threads;
 
-        octx->src0_spad.data = octx->ctx->vtcm_base + SSM_CONV_GATHER_SPAD_SIZE;
-        octx->src1_spad.data = octx->src0_spad.data + octx->src0_spad.size;
-        octx->dst_spad.data  = octx->src1_spad.data + octx->src1_spad.size;
+            // Compute gather scratchpad size for src0 and src1
+            const size_t gather_spad_size = n_jobs * VLEN * 2;
 
-        FARF(HIGH, "ssm_conv-f32: spad-per-thread:(%u:%u:%u) spad-sizes:(%u:%u:%u) spad-data:(%p:%p:%p)\n",
-                octx->src0_spad.size_per_thread, octx->src1_spad.size_per_thread, octx->dst_spad.size_per_thread,
-                octx->src0_spad.size, octx->src1_spad.size, octx->dst_spad.size, octx->src0_spad.data,
-                octx->src1_spad.data, octx->dst_spad.data);
+            octx->src0_spad.data = octx->ctx->vtcm_base + gather_spad_size;
+            octx->src1_spad.data = octx->src0_spad.data + octx->src0_spad.size;
+            octx->dst_spad.data  = octx->src1_spad.data + octx->src1_spad.size;
 
-        const size_t total_spad_size =
-            SSM_CONV_GATHER_SPAD_SIZE + octx->src0_spad.size + octx->src1_spad.size + octx->dst_spad.size;
+            FARF(HIGH, "ssm_conv-f32: gather-spad:%zu spad-per-thread:(%u:%u:%u) spad-sizes:(%u:%u:%u) spad-data:(%p:%p:%p)\n",
+                gather_spad_size, octx->src0_spad.size_per_thread, octx->src1_spad.size_per_thread,
+                octx->dst_spad.size_per_thread, octx->src0_spad.size, octx->src1_spad.size, octx->dst_spad.size,
+                octx->src0_spad.data, octx->src1_spad.data, octx->dst_spad.data);
 
-        if (total_spad_size > octx->ctx->vtcm_size) {
-            FARF(HIGH, "ssm_conv-f32: HVX scratchpad size %zu exceeds VTCM size %zu",
-                 total_spad_size, octx->ctx->vtcm_size);
-            use_hvx = 0;
+            const size_t total_spad_size =
+                gather_spad_size + octx->src0_spad.size + octx->src1_spad.size + octx->dst_spad.size;
+
+            if (total_spad_size > octx->ctx->vtcm_size) {
+                FARF(HIGH, "ssm_conv-f32: HVX scratchpad size %zu exceeds VTCM size %zu", total_spad_size,
+                     octx->ctx->vtcm_size);
+                use_hvx = 0;
+            }
         }
 
         FARF(HIGH, "ssm-conv-f32: (%ux%ux%ux%u) x (%ux%ux%ux%u) -> (%ux%ux%ux%u) : use_hvx %d\n", src0->ne[0],
