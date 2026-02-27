@@ -38,7 +38,7 @@ struct quantization_state_impl {
     int32_t i_ffn_up       = 0;
 
     // per-quantization
-    int32_t n_fallback     = 0;
+    int32_t n_fallback = 0;
 
     // flags
     bool has_imatrix = false; // do we have imatrix data?
@@ -64,21 +64,21 @@ struct quantization_state_impl {
 
 // tensor categorization (used to avoid repeated string matching)
 enum class tensor_category {
+    TOKEN_EMBD,
+    ATTENTION_Q,
     ATTENTION_V,
     ATTENTION_K,
-    ATTENTION_Q,
-    ATTENTION_OUTPUT,
     ATTENTION_QKV,
     ATTENTION_KV_B,
-    FFN_DOWN,
-    FFN_GATE,
+    ATTENTION_OUTPUT,
     FFN_UP,
+    FFN_GATE,
+    FFN_DOWN,
     OUTPUT,
-    TOKEN_EMBD,
     OTHER
 };
 
-// cached metadata per tensor (avoids recomputation)
+// cached metadata per tensor (avoids re-computation / re-checking)
 struct tensor_metadata {
     ggml_type target_type;
     tensor_category category;
@@ -144,10 +144,7 @@ static std::string remap_imatrix(const std::string & orig_name, const std::map<i
     return orig_name;
 }
 
-static void llama_tensor_dequantize_impl(
-    ggml_tensor * tensor, std::vector<no_init<float>> & output, std::vector<std::thread> & workers,
-    const size_t nelements, const int nthread
-) {
+static void llama_tensor_dequantize_impl(ggml_tensor * tensor, std::vector<no_init<float>> & output, std::vector<std::thread> & workers, const size_t nelements, const int nthread) {
     if (output.size() < nelements) {
         output.resize(nelements);
     }
@@ -224,7 +221,7 @@ static bool tensor_name_match_token_embd(const char * tensor_name) {
 }
 
 static bool tensor_name_match_output_weight(const char * tensor_name) {
-    return std::strcmp(tensor_name, "output.weight");
+    return std::strcmp(tensor_name, "output.weight") == 0;
 }
 
 // do we allow this tensor to be quantized?
@@ -234,13 +231,13 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     // This used to be a regex, but <regex> has an extreme cost to compile times.
     bool allowed = name.rfind("weight") == name.size() - 6; // ends with 'weight'?
 
-    // quantize only 2D and 3D tensors (experts)
+    // quantize only 2D and 3D tensors
     allowed &= (ggml_n_dims(tensor) >= 2);
 
     // do not quantize norm tensors
     allowed &= name.find("_norm.weight") == std::string::npos;
 
-    allowed &= params->quantize_output_tensor || name != "output.weight";
+    allowed &= params->quantize_output_tensor || !tensor_name_match_output_weight(tensor->name);
     allowed &= !params->only_copy;
 
     // do not quantize expert gating tensors
@@ -330,7 +327,7 @@ static ggml_type tensor_type_fallback(quantization_state_impl * qs, const ggml_t
             // this is very rare. we can either abort the quantization, or
             // fallback to F16 / F32.
             //
-            LLAMA_LOG_WARN("(WARNING: falling back to F16 due to unusual shape) ");
+            LLAMA_LOG_WARN("(WARNING: must use F16 due to unusual shape) ");
             return_type = GGML_TYPE_F16;
         }
         LLAMA_LOG_WARN("-> falling back to %7s\n", ggml_type_name(return_type));
@@ -339,7 +336,7 @@ static ggml_type tensor_type_fallback(quantization_state_impl * qs, const ggml_t
 }
 
 static tensor_category tensor_get_category(const std::string & tensor_name) {
-    if (tensor_name == "output.weight") {
+    if (tensor_name_match_output_weight(tensor_name.c_str())) {
         return tensor_category::OUTPUT;
     }
 
@@ -383,7 +380,7 @@ static tensor_category tensor_get_category(const std::string & tensor_name) {
 }
 
 // check if category is an attention-v-like tensor
-static bool category_is_attention_vlike(tensor_category cat) {
+static bool category_is_attn_v(tensor_category cat) {
     return cat == tensor_category::ATTENTION_V ||
            cat == tensor_category::ATTENTION_QKV ||
            cat == tensor_category::ATTENTION_KV_B;
@@ -472,7 +469,7 @@ static ggml_type llama_tensor_get_type_impl(
         }
     } else if (ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS || ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS || ftype == LLAMA_FTYPE_MOSTLY_IQ1_S ||
                ftype == LLAMA_FTYPE_MOSTLY_IQ2_S || ftype == LLAMA_FTYPE_MOSTLY_IQ2_M    || ftype == LLAMA_FTYPE_MOSTLY_IQ1_M) {
-        if (category == tensor_category::ATTENTION_V) {
+        if (category_is_attn_v(category)) {
             if (qs->model.hparams.n_gqa() >= 4 || qs->model.hparams.n_expert >= 4) new_type = GGML_TYPE_Q4_K;
             else new_type = ftype == LLAMA_FTYPE_MOSTLY_IQ2_S || ftype == LLAMA_FTYPE_MOSTLY_IQ2_M ? GGML_TYPE_IQ3_S : GGML_TYPE_Q2_K;
             ++qs->i_attention_wv;
@@ -494,7 +491,7 @@ static ggml_type llama_tensor_get_type_impl(
                 else if (ftype == LLAMA_FTYPE_MOSTLY_IQ2_S || ftype == LLAMA_FTYPE_MOSTLY_IQ2_M) new_type = GGML_TYPE_IQ3_S;
             }
         }
-    } else if (category == tensor_category::ATTENTION_V) {
+    } else if (category_is_attn_v(category)) {
         if      (ftype == LLAMA_FTYPE_MOSTLY_Q2_K) {
             new_type = qs->model.hparams.n_gqa() >= 4 ? GGML_TYPE_Q4_K : GGML_TYPE_Q3_K;
         }
@@ -649,7 +646,7 @@ static ggml_type llama_tensor_get_type(
     const llama_model_quantize_params * params,
                     const ggml_tensor * tensor,
                       const ggml_type   default_type,
-                    const tensor_metadata & tm
+                const tensor_metadata & tm
 ) {
     if (!tm.allows_quantization) {
         return tensor->type; // if quantization not allowed, just return the current type
@@ -1096,6 +1093,16 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     // for a real quantization, as a courtesy
     bool will_require_imatrix = false;
 
+    // quantization work buffers (we avoid resizing in the main loop)
+
+    std::vector<no_init<uint8_t>> read_data;
+    std::vector<no_init<uint8_t>> work;
+    std::vector<no_init<float>>   f32_conv_buf;
+
+    size_t max_nelements_dequant = 0;
+    size_t max_tensor_bytes = 0;
+    size_t max_nelements = 0;
+
     //
     // preliminary iteration over all weights (not the main loop)
     //
@@ -1107,7 +1114,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
         metadata[i].category = tensor_get_category(name);
 
-        if (category_is_attention_vlike(metadata[i].category)) {
+        if (category_is_attn_v(metadata[i].category)) {
             ++qs->n_attention_wv;
         }
 
@@ -1144,6 +1151,20 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 throw std::runtime_error("this quantization requires an imatrix!");
             }
         }
+        max_tensor_bytes = std::max(max_tensor_bytes, ggml_nbytes(tensor));
+        max_nelements    = std::max(max_nelements,    (size_t)ggml_nelements(tensor));
+        if (tensor->type != GGML_TYPE_F32) {
+            max_nelements_dequant = std::max(max_nelements_dequant, (size_t)ggml_nelements(tensor));
+        }
+    }
+
+    // resize work buffers as needed
+    if (!ml.use_mmap) {
+        read_data.resize(max_tensor_bytes);
+    }
+    work.resize(max_nelements * 4);
+    if (max_nelements_dequant > 0) {
+        f32_conv_buf.resize(max_nelements_dequant);
     }
 
     // Set split info if needed
@@ -1187,33 +1208,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     // no output file for --dry-run
     if (!params->dry_run) {
         new_ofstream(0);
-    }
-
-    // work buffers
-
-    std::vector<no_init<uint8_t>> read_data;
-    std::vector<no_init<uint8_t>> work;
-    std::vector<no_init<float>>   f32_conv_buf;
-
-    // pre-allocate work buffers to avoid repeated resizing
-    {
-        size_t max_tensor_bytes    = 0;
-        size_t max_nelements       = 0;
-        size_t max_nelements_dequant = 0;
-        for (const auto * w : weights) {
-            max_tensor_bytes = std::max(max_tensor_bytes, ggml_nbytes(w->tensor));
-            max_nelements    = std::max(max_nelements,    (size_t)ggml_nelements(w->tensor));
-            if (w->tensor->type != GGML_TYPE_F32) {
-                max_nelements_dequant = std::max(max_nelements_dequant, (size_t)ggml_nelements(w->tensor));
-            }
-        }
-        if (!ml.use_mmap) {
-            read_data.resize(max_tensor_bytes);
-        }
-        work.resize(max_nelements * 4);
-        if (max_nelements_dequant > 0) {
-            f32_conv_buf.resize(max_nelements_dequant);
-        }
     }
 
     size_t total_size_org = 0;
