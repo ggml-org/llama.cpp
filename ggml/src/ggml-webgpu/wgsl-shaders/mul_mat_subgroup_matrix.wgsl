@@ -84,6 +84,11 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
     let batch_idx = wg_linear / wg_per_matrix;
 
+    let total_batches = params.bs02 * params.broadcast2 * params.bs03 * params.broadcast3;
+    if (batch_idx >= total_batches) {
+        return;
+    }
+
     let wg_in_batch = wg_linear % wg_per_matrix;
     let wg_m = wg_in_batch % wg_m_count;
     let wg_n = wg_in_batch / wg_m_count;
