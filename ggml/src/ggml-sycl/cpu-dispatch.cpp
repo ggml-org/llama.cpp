@@ -270,6 +270,11 @@ static inline void simd_mul_mat_q4_0_q8_0_4row(
     const void * GGML_RESTRICT vx0, const void * GGML_RESTRICT vx1,
     const void * GGML_RESTRICT vx2, const void * GGML_RESTRICT vx3,
     const void * GGML_RESTRICT vy);
+static inline void simd_mul_mat_q6_K_q8_K_4row(
+    int K_elem, float * GGML_RESTRICT out,
+    const void * GGML_RESTRICT vx0, const void * GGML_RESTRICT vx1,
+    const void * GGML_RESTRICT vx2, const void * GGML_RESTRICT vx3,
+    const void * GGML_RESTRICT vy);
 #if defined(__AVXVNNIINT8__)
 static inline void simd_mul_mat_q4_0_q8_0_8row(
     int K_elem, float * GGML_RESTRICT out,
@@ -353,6 +358,17 @@ void ggml_sycl_cpu_vec_dot_rows(ggml_type type, int ne00,
                         // 4-row kernel (AVX2, with or without VNNI)
                         for (; i + 3 < r.end(); i += 4) {
                             simd_mul_mat_q4_0_q8_0_4row(
+                                ne00, output + i,
+                                (const char *) src0_host + (size_t)(i + 0) * row_stride,
+                                (const char *) src0_host + (size_t)(i + 1) * row_stride,
+                                (const char *) src0_host + (size_t)(i + 2) * row_stride,
+                                (const char *) src0_host + (size_t)(i + 3) * row_stride,
+                                src1_q_data);
+                        }
+                    } else if (type == GGML_TYPE_Q6_K) {
+                        // Q6_K 4-row kernel: amortize Q8_K activation load across 4 rows
+                        for (; i + 3 < r.end(); i += 4) {
+                            simd_mul_mat_q6_K_q8_K_4row(
                                 ne00, output + i,
                                 (const char *) src0_host + (size_t)(i + 0) * row_stride,
                                 (const char *) src0_host + (size_t)(i + 1) * row_stride,
@@ -1885,6 +1901,135 @@ static inline void simd_mul_mat_q4_0_q8_0_16row(
 
 #endif // defined(__AVXVNNIINT8__)
 
+// ---------------------------------------------------------------------------
+// Q6_K x Q8_K  4-row SIMD kernel (AVX2)
+// ---------------------------------------------------------------------------
+//
+// Processes 4 weight rows against 1 activation row in a single pass.
+// Q8_K activation data is loaded ONCE and reused across 4 Q6_K weight rows.
+// Each Q6_K block has 256 elements: ql[128] + qh[64] + scales[16] + d(fp16).
+// Each Q8_K block has 256 elements: qs[256] + d(float) + bsums[16].
+//
+// Uses the same algorithm as ggml_vec_dot_q6_K_q8_K (x86/quants.c AVX2 path)
+// but with 4 independent accumulator sets.
+
+// Scale shuffle table for Q6_K: 16 int8_t scales, each broadcast to 8 bytes.
+// Index i selects the shuffle mask for 1 of 16 scale values.
+static inline __m128i get_scale_shuffle_q6k(int i) {
+    static const uint8_t k_shuffle[128] = {
+         0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
+         2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3,
+         4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5,
+         6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7,
+         8, 8, 8, 8, 8, 8, 8, 8, 9, 9, 9, 9, 9, 9, 9, 9,
+        10,10,10,10,10,10,10,10, 11,11,11,11,11,11,11,11,
+        12,12,12,12,12,12,12,12, 13,13,13,13,13,13,13,13,
+        14,14,14,14,14,14,14,14, 15,15,15,15,15,15,15,15
+    };
+    return _mm_loadu_si128((const __m128i *) k_shuffle + i);
+}
+
+// Process 4 Q6_K weight rows x 1 Q8_K activation row.
+// Loads each Q8_K block once and dots against 4 Q6_K blocks simultaneously.
+// Returns 4 dot products in out[0..3].
+static inline void simd_mul_mat_q6_K_q8_K_4row(
+    int K_elem,
+    float * GGML_RESTRICT out,
+    const void * GGML_RESTRICT vx0,
+    const void * GGML_RESTRICT vx1,
+    const void * GGML_RESTRICT vx2,
+    const void * GGML_RESTRICT vx3,
+    const void * GGML_RESTRICT vy
+) {
+    const int nb = K_elem / QK_K;
+
+    const block_q6_K * GGML_RESTRICT x0 = (const block_q6_K *) vx0;
+    const block_q6_K * GGML_RESTRICT x1 = (const block_q6_K *) vx1;
+    const block_q6_K * GGML_RESTRICT x2 = (const block_q6_K *) vx2;
+    const block_q6_K * GGML_RESTRICT x3 = (const block_q6_K *) vx3;
+    const block_q8_K * GGML_RESTRICT y  = (const block_q8_K *) vy;
+
+    const __m256i m4   = _mm256_set1_epi8(0xF);
+    const __m256i m2   = _mm256_set1_epi8(3);
+    const __m256i m32s = _mm256_set1_epi8(32);
+
+    __m256 acc0 = _mm256_setzero_ps();
+    __m256 acc1 = _mm256_setzero_ps();
+    __m256 acc2 = _mm256_setzero_ps();
+    __m256 acc3 = _mm256_setzero_ps();
+
+    for (int ib = 0; ib < nb; ib++) {
+        // Load activation scale ONCE per block
+        const float q8_d = y[ib].d;
+
+// Macro: compute one Q6_K row's contribution for this block.
+// xr = pointer to Q6_K block for this row, accR = accumulator.
+#define PROCESS_Q6K_ROW(xr, accR) \
+        do { \
+            const float d = q8_d * GGML_FP16_TO_FP32((xr)[ib].d); \
+            const uint8_t * GGML_RESTRICT q4 = (xr)[ib].ql; \
+            const uint8_t * GGML_RESTRICT qh = (xr)[ib].qh; \
+            const int8_t  * GGML_RESTRICT q8 = y[ib].qs; \
+            const __m128i scales = _mm_loadu_si128((const __m128i *)(xr)[ib].scales); \
+            __m256i sumi = _mm256_setzero_si256(); \
+            int is = 0; \
+            for (int j = 0; j < QK_K / 128; j++) { \
+                const __m128i scale_0 = _mm_shuffle_epi8(scales, get_scale_shuffle_q6k(is + 0)); \
+                const __m128i scale_1 = _mm_shuffle_epi8(scales, get_scale_shuffle_q6k(is + 1)); \
+                const __m128i scale_2 = _mm_shuffle_epi8(scales, get_scale_shuffle_q6k(is + 2)); \
+                const __m128i scale_3 = _mm_shuffle_epi8(scales, get_scale_shuffle_q6k(is + 3)); \
+                is += 4; \
+                const __m256i q4bits1 = _mm256_loadu_si256((const __m256i *) q4); q4 += 32; \
+                const __m256i q4bits2 = _mm256_loadu_si256((const __m256i *) q4); q4 += 32; \
+                const __m256i q4bitsH = _mm256_loadu_si256((const __m256i *) qh); qh += 32; \
+                const __m256i q4h_0 = _mm256_slli_epi16(_mm256_and_si256(q4bitsH, m2), 4); \
+                const __m256i q4h_1 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(q4bitsH, 2), m2), 4); \
+                const __m256i q4h_2 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(q4bitsH, 4), m2), 4); \
+                const __m256i q4h_3 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(q4bitsH, 6), m2), 4); \
+                const __m256i q4_0 = _mm256_or_si256(_mm256_and_si256(q4bits1, m4), q4h_0); \
+                const __m256i q4_1 = _mm256_or_si256(_mm256_and_si256(q4bits2, m4), q4h_1); \
+                const __m256i q4_2 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(q4bits1, 4), m4), q4h_2); \
+                const __m256i q4_3 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(q4bits2, 4), m4), q4h_3); \
+                const __m256i q8_0 = _mm256_loadu_si256((const __m256i *) q8); q8 += 32; \
+                const __m256i q8_1 = _mm256_loadu_si256((const __m256i *) q8); q8 += 32; \
+                const __m256i q8_2 = _mm256_loadu_si256((const __m256i *) q8); q8 += 32; \
+                const __m256i q8_3 = _mm256_loadu_si256((const __m256i *) q8); q8 += 32; \
+                __m256i q8s_0 = _mm256_maddubs_epi16(m32s, q8_0); \
+                __m256i q8s_1 = _mm256_maddubs_epi16(m32s, q8_1); \
+                __m256i q8s_2 = _mm256_maddubs_epi16(m32s, q8_2); \
+                __m256i q8s_3 = _mm256_maddubs_epi16(m32s, q8_3); \
+                __m256i p16_0 = _mm256_maddubs_epi16(q4_0, q8_0); \
+                __m256i p16_1 = _mm256_maddubs_epi16(q4_1, q8_1); \
+                __m256i p16_2 = _mm256_maddubs_epi16(q4_2, q8_2); \
+                __m256i p16_3 = _mm256_maddubs_epi16(q4_3, q8_3); \
+                p16_0 = _mm256_sub_epi16(p16_0, q8s_0); \
+                p16_1 = _mm256_sub_epi16(p16_1, q8s_1); \
+                p16_2 = _mm256_sub_epi16(p16_2, q8s_2); \
+                p16_3 = _mm256_sub_epi16(p16_3, q8s_3); \
+                p16_0 = _mm256_madd_epi16(_mm256_cvtepi8_epi16(scale_0), p16_0); \
+                p16_1 = _mm256_madd_epi16(_mm256_cvtepi8_epi16(scale_1), p16_1); \
+                p16_2 = _mm256_madd_epi16(_mm256_cvtepi8_epi16(scale_2), p16_2); \
+                p16_3 = _mm256_madd_epi16(_mm256_cvtepi8_epi16(scale_3), p16_3); \
+                sumi = _mm256_add_epi32(sumi, _mm256_add_epi32(p16_0, p16_1)); \
+                sumi = _mm256_add_epi32(sumi, _mm256_add_epi32(p16_2, p16_3)); \
+            } \
+            accR = _mm256_fmadd_ps(_mm256_broadcast_ss(&d), _mm256_cvtepi32_ps(sumi), accR); \
+        } while (0)
+
+        PROCESS_Q6K_ROW(x0, acc0);
+        PROCESS_Q6K_ROW(x1, acc1);
+        PROCESS_Q6K_ROW(x2, acc2);
+        PROCESS_Q6K_ROW(x3, acc3);
+
+#undef PROCESS_Q6K_ROW
+    }
+
+    out[0] = ggml_sycl_hsum_float_8(acc0);
+    out[1] = ggml_sycl_hsum_float_8(acc1);
+    out[2] = ggml_sycl_hsum_float_8(acc2);
+    out[3] = ggml_sycl_hsum_float_8(acc3);
+}
+
 #endif // defined(__AVX2__)
 
 // ---------------------------------------------------------------------------
@@ -2090,6 +2235,39 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
                                         }
                                     });
                             });
+                        } else if (src0->type == GGML_TYPE_Q6_K) {
+                            ggml_sycl_cpu_arena().execute([&] {
+                                ggml_sycl_tbb::parallel_for(
+                                    ggml_sycl_tbb::blocked_range<int>(0, N_int, grain),
+                                    [&, src1_q_data](const ggml_sycl_tbb::blocked_range<int> & r) {
+                                        int n = r.begin();
+                                        for (; n + 3 < r.end(); n += 4) {
+                                            for (dnnl_dim_t m = 0; m < M; m++) {
+                                                float results[4];
+                                                simd_mul_mat_q6_K_q8_K_4row(
+                                                    static_cast<int>(K), results,
+                                                    src0_batch + (n + 0) * nb01,
+                                                    src0_batch + (n + 1) * nb01,
+                                                    src0_batch + (n + 2) * nb01,
+                                                    src0_batch + (n + 3) * nb01,
+                                                    src1_q_data + m * q_row_size);
+                                                dst_batch[m * ldc + n + 0] = results[0];
+                                                dst_batch[m * ldc + n + 1] = results[1];
+                                                dst_batch[m * ldc + n + 2] = results[2];
+                                                dst_batch[m * ldc + n + 3] = results[3];
+                                            }
+                                        }
+                                        for (; n < r.end(); n++) {
+                                            const void * weight_row = src0_batch + n * nb01;
+                                            for (dnnl_dim_t m = 0; m < M; m++) {
+                                                float dot_result = 0.0f;
+                                                cpu_traits->vec_dot(static_cast<int>(K), &dot_result, sizeof(float),
+                                                                    weight_row, 0, src1_q_data + m * q_row_size, 0, 1);
+                                                dst_batch[m * ldc + n] = dot_result;
+                                            }
+                                        }
+                                    });
+                            });
                         } else {
 #endif
                         ggml_sycl_cpu_arena().execute([&] {
@@ -2139,6 +2317,33 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
                                     dst_batch[m * ldc + static_cast<dnnl_dim_t>(n)] = dot_result;
                                 }
                             }
+                        } else if (src0->type == GGML_TYPE_Q6_K) {
+                            int n = 0;
+                            for (; n + 3 < N_int; n += 4) {
+                                for (dnnl_dim_t m = 0; m < M; m++) {
+                                    float results[4];
+                                    simd_mul_mat_q6_K_q8_K_4row(
+                                        static_cast<int>(K), results,
+                                        src0_batch + (n + 0) * nb01,
+                                        src0_batch + (n + 1) * nb01,
+                                        src0_batch + (n + 2) * nb01,
+                                        src0_batch + (n + 3) * nb01,
+                                        src1_q_buf.data() + m * q_row_size);
+                                    dst_batch[m * ldc + static_cast<dnnl_dim_t>(n + 0)] = results[0];
+                                    dst_batch[m * ldc + static_cast<dnnl_dim_t>(n + 1)] = results[1];
+                                    dst_batch[m * ldc + static_cast<dnnl_dim_t>(n + 2)] = results[2];
+                                    dst_batch[m * ldc + static_cast<dnnl_dim_t>(n + 3)] = results[3];
+                                }
+                            }
+                            for (; n < N_int; n++) {
+                                const void * weight_row = src0_batch + static_cast<dnnl_dim_t>(n) * nb01;
+                                for (dnnl_dim_t m = 0; m < M; m++) {
+                                    float dot_result = 0.0f;
+                                    cpu_traits->vec_dot(static_cast<int>(K), &dot_result, sizeof(float), weight_row, 0,
+                                                        src1_q_buf.data() + m * q_row_size, 0, 1);
+                                    dst_batch[m * ldc + static_cast<dnnl_dim_t>(n)] = dot_result;
+                                }
+                            }
                         } else {
 #endif
                         for (int n = 0; n < N_int; n++) {
@@ -2163,6 +2368,33 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
                                 for (dnnl_dim_t m = 0; m < M; m++) {
                                     float results[4];
                                     simd_mul_mat_q4_0_q8_0_4row(
+                                        static_cast<int>(K), results,
+                                        src0_batch + (n + 0) * nb01,
+                                        src0_batch + (n + 1) * nb01,
+                                        src0_batch + (n + 2) * nb01,
+                                        src0_batch + (n + 3) * nb01,
+                                        src1_q_buf.data() + m * q_row_size);
+                                    dst_batch[m * ldc + n + 0] = results[0];
+                                    dst_batch[m * ldc + n + 1] = results[1];
+                                    dst_batch[m * ldc + n + 2] = results[2];
+                                    dst_batch[m * ldc + n + 3] = results[3];
+                                }
+                            }
+                            for (; n < N; n++) {
+                                const void * weight_row = src0_batch + n * nb01;
+                                for (dnnl_dim_t m = 0; m < M; m++) {
+                                    float dot_result = 0.0f;
+                                    cpu_traits->vec_dot(static_cast<int>(K), &dot_result, sizeof(float), weight_row, 0,
+                                                        src1_q_buf.data() + m * q_row_size, 0, 1);
+                                    dst_batch[m * ldc + n] = dot_result;
+                                }
+                            }
+                        } else if (src0->type == GGML_TYPE_Q6_K) {
+                            dnnl_dim_t n = 0;
+                            for (; n + 3 < N; n += 4) {
+                                for (dnnl_dim_t m = 0; m < M; m++) {
+                                    float results[4];
+                                    simd_mul_mat_q6_K_q8_K_4row(
                                         static_cast<int>(K), results,
                                         src0_batch + (n + 0) * nb01,
                                         src0_batch + (n + 1) * nb01,
