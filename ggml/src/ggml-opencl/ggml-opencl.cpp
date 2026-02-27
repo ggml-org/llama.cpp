@@ -8632,14 +8632,14 @@ static void ggml_cl_mul_mat_q4_1_f32_adreno(ggml_backend_t backend, const ggml_t
 
         kernel = backend_ctx->kernel_gemv_noshuffle_q4_1_f32;
 
-        CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &q_img));
-        CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &extra0_q4_1->d));
-        CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &extra0_q4_1->m));
-        CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem), &b_img));
-        CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem), &extrad->data_device));
+        CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &q_img));
+        CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem),   &extra0_q4_1->d));
+        CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &extra0_q4_1->m));
+        CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem),   &b_img));
+        CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem),   &extrad->data_device));
         CL_CHECK(clSetKernelArg(kernel, 5, sizeof(cl_ulong), &offsetd));
-        CL_CHECK(clSetKernelArg(kernel, 6, sizeof(cl_int), &ne00));
-        CL_CHECK(clSetKernelArg(kernel, 7, sizeof(cl_int), &ne01));
+        CL_CHECK(clSetKernelArg(kernel, 6, sizeof(cl_int),   &ne00));
+        CL_CHECK(clSetKernelArg(kernel, 7, sizeof(cl_int),   &ne01));
 
         size_t local_work_size[3] = {64, 4, 1};
         size_t global_work_size[3] = {(size_t)CEIL_DIV(ne01/2, 64)*64, 4, 1};
@@ -9106,13 +9106,6 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
     int padding;
     // <--------------------------------------------> //
 
-    // q8_0 x fp32
-    if (src0t == GGML_TYPE_Q8_0 && src1t == GGML_TYPE_F32 &&
-        enable_adreno_trans_weight(backend_ctx, src0)) {
-            ggml_cl_mul_mat_q8_0_f32_adreno(backend, src0, src1, dst);
-            return;
-    }
-
     // NOTE: Kernels using image1d_buffer_t (e.g., src0_q) would normally require
     // a limit check, but q4_0 / q4_1 tensors are very unlikely to exceed that
     // limit, so the check is omitted.
@@ -9120,6 +9113,13 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
     // q4_1 x fp32
     if (src0t == GGML_TYPE_Q4_1 && src1t == GGML_TYPE_F32) {
             ggml_cl_mul_mat_q4_1_f32_adreno(backend, src0, src1, dst);
+            return;
+    }
+
+    // q8_0 x fp32
+    if (src0t == GGML_TYPE_Q8_0 && src1t == GGML_TYPE_F32 &&
+        enable_adreno_trans_weight(backend_ctx, src0)) {
+            ggml_cl_mul_mat_q8_0_f32_adreno(backend, src0, src1, dst);
             return;
     }
 
