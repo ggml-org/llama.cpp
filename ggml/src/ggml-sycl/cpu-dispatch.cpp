@@ -542,6 +542,198 @@ void ggml_sycl_cpu_vec_dot_batched(const cpu_vec_dot_batch_item * items, int n_i
 }
 
 // ---------------------------------------------------------------------------
+// MoE Expert CPU MUL_MAT — compute expert matmuls directly from host RAM
+// ---------------------------------------------------------------------------
+//
+// These functions compute individual expert MUL_MATs on the CPU, reading
+// quantized weights directly from host RAM (e.g., mmap'd GGUF file).
+// For MoE models, this avoids streaming 4.2 MB expert weights over PCIe
+// (20 GB/s) — instead, the CPU reads from DDR5 at 38 GB/s and returns
+// only the ~14 KB activation output.
+//
+// The pattern mirrors ggml_sycl_cpu_vec_dot_rows / batched but operates
+// on raw pointer inputs instead of ggml_tensor metadata.
+// ---------------------------------------------------------------------------
+
+void ggml_sycl_cpu_expert_mul_mat(const cpu_expert_task & task) {
+    if (task.N <= 0 || task.K <= 0 || !task.weight_host || !task.act_host || !task.output_host) {
+        return;
+    }
+
+    // Delegate to ggml_sycl_cpu_vec_dot_rows which handles activation
+    // quantization, TBB parallelism, and SIMD kernels (Q4_0 4-row, etc.).
+    ggml_sycl_cpu_vec_dot_rows(task.type, task.K,
+                                task.weight_host, task.act_host,
+                                task.output_host, task.N);
+}
+
+void ggml_sycl_cpu_expert_mul_mat_batched(
+    const cpu_expert_task * tasks, int n_tasks,
+    int n_threads)
+{
+    if (n_tasks <= 0 || !tasks) {
+        return;
+    }
+
+    GGML_UNUSED(n_threads);  // TBB arena size set globally via ggml_sycl_cpu_threads_hint
+
+    // --- Phase 1: Pre-quantize unique activation vectors ---
+    // Multiple experts in the same layer share the same activation input.
+    // We quantize once and reuse across all experts with the same act_host/K.
+    struct act_q_key {
+        const float * ptr;
+        int           K;
+        bool operator==(const act_q_key & o) const { return ptr == o.ptr && K == o.K; }
+    };
+    struct act_q_hash {
+        size_t operator()(const act_q_key & k) const {
+            return std::hash<const void *>()(k.ptr) ^ (std::hash<int>()(k.K) << 16);
+        }
+    };
+    std::unordered_map<act_q_key, std::vector<uint8_t>, act_q_hash> act_q_map;
+
+    for (int i = 0; i < n_tasks; i++) {
+        const auto & t = tasks[i];
+        if (!t.act_host || !t.weight_host || t.N <= 0 || t.K <= 0) {
+            continue;
+        }
+        act_q_key key{t.act_host, t.K};
+        if (act_q_map.count(key)) {
+            continue;
+        }
+
+        const auto * cpu_traits = ggml_get_type_traits_cpu(t.type);
+        if (!cpu_traits || !cpu_traits->vec_dot) {
+            continue;
+        }
+        const ggml_type   vdt        = cpu_traits->vec_dot_type;
+        const auto *      vdt_traits = ggml_get_type_traits_cpu(vdt);
+        ggml_from_float_t from_float = vdt_traits ? vdt_traits->from_float : nullptr;
+        if (!from_float) {
+            continue;
+        }
+
+        const size_t q_size = ggml_row_size(vdt, t.K);
+        auto & entry = act_q_map[key];
+        entry.resize(q_size);
+        from_float(t.act_host, entry.data(), t.K);
+    }
+
+    if (act_q_map.empty()) {
+        return;
+    }
+
+    // Build per-task Q8 pointer array for O(1) access in the parallel loop.
+    std::vector<const uint8_t *> task_act_q(n_tasks, nullptr);
+    for (int i = 0; i < n_tasks; i++) {
+        act_q_key key{tasks[i].act_host, tasks[i].K};
+        auto it = act_q_map.find(key);
+        if (it != act_q_map.end()) {
+            task_act_q[i] = it->second.data();
+        }
+    }
+
+    // --- Phase 2: Row-level parallel_for ---
+    // Flatten all experts' rows into a single parallel_for for max load balance.
+    struct task_meta {
+        const ggml_type_traits_cpu * cpu_traits;
+        size_t                       row_stride;
+        int                          prefix_rows;
+    };
+    std::vector<task_meta> meta(n_tasks);
+    int total_rows = 0;
+    for (int i = 0; i < n_tasks; i++) {
+        meta[i].prefix_rows = total_rows;
+        const auto & t = tasks[i];
+        if (!task_act_q[i] || !t.weight_host || !t.output_host || t.N <= 0) {
+            meta[i].cpu_traits = nullptr;
+            meta[i].row_stride = 0;
+            continue;
+        }
+        meta[i].cpu_traits = ggml_get_type_traits_cpu(t.type);
+        meta[i].row_stride = ggml_row_size(t.type, t.K);
+        total_rows += t.N;
+    }
+
+    if (total_rows == 0) {
+        return;
+    }
+
+    const cpu_expert_task * tasks_ptr = tasks;
+    const uint8_t **        q8_ptrs   = task_act_q.data();
+    const task_meta *       meta_ptr  = meta.data();
+
+#if GGML_SYCL_HAS_TBB
+    ggml_sycl_cpu_arena().execute([&] {
+        ggml_sycl_tbb::parallel_for(
+            ggml_sycl_tbb::blocked_range<int>(0, total_rows, 64),
+            [tasks_ptr, q8_ptrs, meta_ptr, n_tasks](
+                const ggml_sycl_tbb::blocked_range<int> & range) {
+                // Binary search for starting task
+                int cur_task = 0;
+                {
+                    int lo = 0, hi = n_tasks;
+                    while (lo < hi) {
+                        int mid = (lo + hi) / 2;
+                        if (meta_ptr[mid].prefix_rows <= range.begin()) {
+                            cur_task = mid;
+                            lo = mid + 1;
+                        } else {
+                            hi = mid;
+                        }
+                    }
+                }
+
+                for (int flat_r = range.begin(); flat_r < range.end(); flat_r++) {
+                    while (cur_task + 1 < n_tasks
+                           && flat_r >= meta_ptr[cur_task + 1].prefix_rows) {
+                        cur_task++;
+                    }
+                    const auto & m = meta_ptr[cur_task];
+                    if (!m.cpu_traits) {
+                        continue;
+                    }
+                    const auto & t  = tasks_ptr[cur_task];
+                    int local_r     = flat_r - m.prefix_rows;
+
+                    const void * row =
+                        (const char *) t.weight_host + (size_t) local_r * m.row_stride;
+                    float dot = 0.0f;
+                    m.cpu_traits->vec_dot(t.K, &dot, sizeof(float),
+                                          row, 0, q8_ptrs[cur_task], 0, 1);
+                    t.output_host[local_r] = dot;
+                }
+            });
+    });
+#else
+    // No-TBB fallback: sequential over flattened rows.
+    int cur_task = 0;
+    for (int flat_r = 0; flat_r < total_rows; flat_r++) {
+        while (cur_task + 1 < n_tasks
+               && flat_r >= meta[cur_task + 1].prefix_rows) {
+            cur_task++;
+        }
+        const auto & m = meta[cur_task];
+        if (!m.cpu_traits) {
+            continue;
+        }
+        const auto & t  = tasks_ptr[cur_task];
+        int local_r     = flat_r - m.prefix_rows;
+
+        const void * row =
+            (const char *) t.weight_host + (size_t) local_r * m.row_stride;
+        float dot = 0.0f;
+        m.cpu_traits->vec_dot(t.K, &dot, sizeof(float),
+                              row, 0, q8_ptrs[cur_task], 0, 1);
+        t.output_host[local_r] = dot;
+    }
+#endif
+
+    GGML_SYCL_DEBUG("[EXPERT-CPU] Batched expert mul_mat: %d tasks, %d total_rows, %d unique activations\n",
+                    n_tasks, total_rows, (int) act_q_map.size());
+}
+
+// ---------------------------------------------------------------------------
 // Retained activation state: eliminates per-op staging overhead
 // ---------------------------------------------------------------------------
 //

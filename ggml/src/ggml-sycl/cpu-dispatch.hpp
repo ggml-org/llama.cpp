@@ -95,4 +95,36 @@ void   ggml_sycl_host_task_mode_set(bool active);
 void   ggml_sycl_batched_mode_set(bool active);
 bool   ggml_sycl_batched_mode_active();
 
+// ---------------------------------------------------------------------------
+// MoE Expert CPU MUL_MAT — compute expert matmuls directly from host RAM
+// ---------------------------------------------------------------------------
+
+// Describes a single expert's matmul work for CPU dispatch.
+// weight_host is a raw pointer into host RAM (e.g. mmap'd GGUF file).
+// act_host is the activation vector (float, length K).
+// output_host receives the result (float, length N).
+struct cpu_expert_task {
+    const void *  weight_host;   // Expert weight data in host RAM (quantized)
+    const float * act_host;      // Activation vector (float32, length K)
+    float *       output_host;   // Output buffer (float32, length N)
+    ggml_type     type;          // Weight quant type (Q4_0, Q8_0, Q6_K, etc.)
+    int           K;             // Input dimension (columns per weight row)
+    int           N;             // Output rows (expert output dimension)
+};
+
+// Compute one expert's matmul on CPU, reading weights directly from host RAM.
+// output[i] = dot(weight_row[i], quantize(act)) for i in [0, N).
+// Uses the existing TBB thread pool for parallel row computation.
+// Supports any quantized type with vec_dot (Q4_0, Q8_0, Q6_K, etc.).
+void ggml_sycl_cpu_expert_mul_mat(const cpu_expert_task & task);
+
+// Compute multiple experts concurrently on the CPU thread pool.
+// Deduplicates activation quantization: tasks sharing the same act_host pointer
+// and K dimension share one quantized copy.  All experts' rows are flattened
+// into a single TBB parallel_for for maximum load balancing.
+// n_threads=0 means auto (hardware_concurrency - 2, capped at 32).
+void ggml_sycl_cpu_expert_mul_mat_batched(
+    const cpu_expert_task * tasks, int n_tasks,
+    int n_threads = 0);
+
 #endif // GGML_SYCL_CPU_DISPATCH_HPP
