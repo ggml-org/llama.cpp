@@ -127,4 +127,31 @@ void ggml_sycl_cpu_expert_mul_mat_batched(
     const cpu_expert_task * tasks, int n_tasks,
     int n_threads = 0);
 
+// ---------------------------------------------------------------------------
+// Mixed-Precision Cache Miss Loading (HOBBIT-style)
+// ---------------------------------------------------------------------------
+
+// Precision mode for cache-miss expert computation.
+enum class expert_miss_precision {
+    FULL  = 0,   // Always use full precision (Q4_0/Q6_K as-is)
+    MIXED = 1,   // Use INT4 for burst misses (>threshold per layer)
+};
+
+// Return the configured miss precision mode.
+// Reads GGML_SYCL_EXPERT_MISS_PRECISION env var (full|mixed, default: mixed).
+expert_miss_precision ggml_sycl_expert_miss_precision_mode();
+
+// Return the burst miss threshold (default: 3).
+// When miss count per layer exceeds this, mixed precision activates.
+// Reads GGML_SYCL_EXPERT_MISS_BURST_THRESHOLD env var.
+int ggml_sycl_expert_miss_burst_threshold();
+
+// Compute multiple experts with adaptive precision based on miss count.
+// When n_tasks > burst_threshold AND mode == MIXED, experts beyond the
+// threshold are computed at reduced precision (truncated INT4 from Q4_0).
+// First burst_threshold experts always use full precision.
+void ggml_sycl_cpu_expert_mul_mat_adaptive(
+    const cpu_expert_task * tasks, int n_tasks,
+    int n_miss_total);
+
 #endif // GGML_SYCL_CPU_DISPATCH_HPP
