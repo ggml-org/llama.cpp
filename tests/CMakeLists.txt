@@ -1659,6 +1659,19 @@ if(GGML_SYCL)
     install(TARGETS test-expert-cache RUNTIME)
     add_test(NAME test-expert-cache COMMAND $<TARGET_FILE:test-expert-cache>)
 
+    # test-sycl-cpu-dispatch: Tests for T8 mixed-precision cache miss loading
+    # INT4 fast-path kernel correctness, adaptive dispatch split, Q6_K fallback
+    add_executable(test-sycl-cpu-dispatch test-sycl-cpu-dispatch.cpp)
+    target_link_libraries(test-sycl-cpu-dispatch PRIVATE ggml)
+    target_include_directories(test-sycl-cpu-dispatch PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-sycl-cpu-dispatch PRIVATE "-fsycl" "-Wno-narrowing" "-mavx2" "-mfma")
+    target_link_options(test-sycl-cpu-dispatch PRIVATE "-fsycl")
+    install(TARGETS test-sycl-cpu-dispatch RUNTIME)
+    add_test(NAME test-sycl-cpu-dispatch COMMAND $<TARGET_FILE:test-sycl-cpu-dispatch>)
+
     # test-dense-scheduler: Tests for double-buffered dense layer scheduler
     # Part of tiered memory architecture for MoE models
     add_executable(test-dense-scheduler test-dense-scheduler.cpp)

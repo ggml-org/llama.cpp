@@ -816,7 +816,8 @@ static void cpu_expert_mul_mat_int4(const cpu_expert_task & task) {
     }
 
     const size_t q_size = ggml_row_size(vdt, K);
-    std::vector<uint8_t> q8_buf(q_size);
+    static thread_local std::vector<uint8_t> q8_buf;
+    q8_buf.resize(q_size);
     vdt_traits->from_float(task.act_host, q8_buf.data(), K);
 
     // Process 4 rows at a time using INT4 fast kernel
@@ -831,7 +832,7 @@ static void cpu_expert_mul_mat_int4(const cpu_expert_task & task) {
             q8_buf.data());
     }
 
-    // Remainder rows: fall back to standard vec_dot (1 row at a time)
+    // Remainder rows (1-3) use full-precision vec_dot -- negligible vs 4096+ INT4 rows
     for (; n < N; n++) {
         const void * row = (const char *) task.weight_host + (size_t) n * row_stride;
         float dot = 0.0f;
@@ -854,6 +855,10 @@ void ggml_sycl_cpu_expert_mul_mat_adaptive(
 
     const int threshold = ggml_sycl_expert_miss_burst_threshold();
     const expert_miss_precision mode = ggml_sycl_expert_miss_precision_mode();
+
+    // n_miss_total: total cache misses for this layer (triggers mixed mode)
+    // n_tasks: number of expert tasks in this dispatch call (may be <= n_miss_total)
+    // threshold: first N tasks always get full precision regardless
 
     // If full precision mode or miss count below threshold, use standard batched dispatch
     if (mode == expert_miss_precision::FULL || n_miss_total <= threshold) {
@@ -1807,6 +1812,16 @@ static inline float ggml_sycl_hsum_float_8(const __m256 x) {
     return _mm_cvtss_f32(res);
 }
 
+// Convert ggml_half to float via raw bit extraction.
+// Under -fsycl, ggml_half is sycl::half, and implicit conversion to uint16_t
+// truncates the float value (e.g. sycl::half(0.125) -> uint16_t(0)) instead
+// of preserving the FP16 bit pattern. Use memcpy to extract raw bits safely.
+static inline float cpu_half_to_f32(ggml_half h) {
+    uint16_t bits;
+    memcpy(&bits, &h, sizeof(bits));
+    return ggml_compute_fp16_to_fp32(bits);
+}
+
 // Process 4 weight rows x 1 activation row for Q4_0 x Q8_0.
 // Loads each Q8_0 block once and dots against 4 Q4_0 blocks simultaneously.
 // Returns 4 dot products in dst[0..3].
@@ -1837,12 +1852,12 @@ static inline void simd_mul_mat_q4_0_q8_0_4row(
 
     for (int ib = 0; ib < nb; ib++) {
         // Load activation block ONCE (amortized across 4 weight rows)
-        const float   q8_d = GGML_FP16_TO_FP32(y[ib].d);
+        const float   q8_d = cpu_half_to_f32(y[ib].d);
         const __m256i qy   = _mm256_loadu_si256((const __m256i *)y[ib].qs);
 
         // --- Row 0 ---
         {
-            const float d  = GGML_FP16_TO_FP32(x0[ib].d) * q8_d;
+            const float d  = cpu_half_to_f32(x0[ib].d) * q8_d;
             __m256i     qx = ggml_sycl_bytes_from_nibbles_32(x0[ib].qs);
             qx             = _mm256_sub_epi8(qx, off);
 #if defined(__AVXVNNIINT8__)
@@ -1860,7 +1875,7 @@ static inline void simd_mul_mat_q4_0_q8_0_4row(
 
         // --- Row 1 ---
         {
-            const float d  = GGML_FP16_TO_FP32(x1[ib].d) * q8_d;
+            const float d  = cpu_half_to_f32(x1[ib].d) * q8_d;
             __m256i     qx = ggml_sycl_bytes_from_nibbles_32(x1[ib].qs);
             qx             = _mm256_sub_epi8(qx, off);
 #if defined(__AVXVNNIINT8__)
@@ -1878,7 +1893,7 @@ static inline void simd_mul_mat_q4_0_q8_0_4row(
 
         // --- Row 2 ---
         {
-            const float d  = GGML_FP16_TO_FP32(x2[ib].d) * q8_d;
+            const float d  = cpu_half_to_f32(x2[ib].d) * q8_d;
             __m256i     qx = ggml_sycl_bytes_from_nibbles_32(x2[ib].qs);
             qx             = _mm256_sub_epi8(qx, off);
 #if defined(__AVXVNNIINT8__)
@@ -1896,7 +1911,7 @@ static inline void simd_mul_mat_q4_0_q8_0_4row(
 
         // --- Row 3 ---
         {
-            const float d  = GGML_FP16_TO_FP32(x3[ib].d) * q8_d;
+            const float d  = cpu_half_to_f32(x3[ib].d) * q8_d;
             __m256i     qx = ggml_sycl_bytes_from_nibbles_32(x3[ib].qs);
             qx             = _mm256_sub_epi8(qx, off);
 #if defined(__AVXVNNIINT8__)
@@ -1957,7 +1972,7 @@ static inline void simd_mul_mat_q4_0_q8_0_4row_int4(
     // _mm256_maddubs_epi16 treats arg1 as unsigned, arg2 as signed.
 #define PROCESS_ROW_INT4(xrow, acc)                                            \
     {                                                                          \
-        const float   d  = GGML_FP16_TO_FP32(xrow[ib].d) * q8_d;             \
+        const float   d  = cpu_half_to_f32(xrow[ib].d) * q8_d;             \
         const __m256i qx = ggml_sycl_bytes_from_nibbles_32(xrow[ib].qs);      \
         const __m256i dot    = _mm256_maddubs_epi16(qx, qy);                  \
         const __m256i ones   = _mm256_set1_epi16(1);                           \
@@ -1967,7 +1982,7 @@ static inline void simd_mul_mat_q4_0_q8_0_4row_int4(
     }
 
     for (int ib = 0; ib < nb; ib++) {
-        const float   q8_d = GGML_FP16_TO_FP32(y[ib].d);
+        const float   q8_d = cpu_half_to_f32(y[ib].d);
         const __m256i qy   = _mm256_loadu_si256((const __m256i *)y[ib].qs);
 
         PROCESS_ROW_INT4(x0, acc0)
@@ -2027,12 +2042,12 @@ static inline void simd_mul_mat_q4_0_q8_0_8row(
 
     for (int ib = 0; ib < nb; ib++) {
         // Load activation block ONCE (amortized across 8 weight rows)
-        const float   q8_d = GGML_FP16_TO_FP32(y[ib].d);
+        const float   q8_d = cpu_half_to_f32(y[ib].d);
         const __m256i qy   = _mm256_loadu_si256((const __m256i *)y[ib].qs);
 
 #define PROCESS_ROW_VNNI(xptr, accum) \
         { \
-            const float d  = GGML_FP16_TO_FP32(xptr[ib].d) * q8_d; \
+            const float d  = cpu_half_to_f32(xptr[ib].d) * q8_d; \
             __m256i     qx = ggml_sycl_bytes_from_nibbles_32(xptr[ib].qs); \
             qx             = _mm256_sub_epi8(qx, off); \
             const __m256i prod = _mm256_dpbssd_epi32(_mm256_setzero_si256(), qx, qy); \
@@ -2086,11 +2101,11 @@ static inline void simd_mul_mat_q4_0_q8_0_16row(
     }
 
     for (int ib = 0; ib < nb; ib++) {
-        const float   q8_d = GGML_FP16_TO_FP32(y[ib].d);
+        const float   q8_d = cpu_half_to_f32(y[ib].d);
         const __m256i qy   = _mm256_loadu_si256((const __m256i *)y[ib].qs);
 
         for (int r = 0; r < 16; r++) {
-            const float d  = GGML_FP16_TO_FP32(xr[r][ib].d) * q8_d;
+            const float d  = cpu_half_to_f32(xr[r][ib].d) * q8_d;
             __m256i     qx = ggml_sycl_bytes_from_nibbles_32(xr[r][ib].qs);
             qx             = _mm256_sub_epi8(qx, off);
             const __m256i prod = _mm256_dpbssd_epi32(_mm256_setzero_si256(), qx, qy);
@@ -2170,7 +2185,7 @@ static inline void simd_mul_mat_q6_K_q8_K_4row(
 // xr = pointer to Q6_K block for this row, accR = accumulator.
 #define PROCESS_Q6K_ROW(xr, accR) \
         do { \
-            const float d = q8_d * GGML_FP16_TO_FP32((xr)[ib].d); \
+            const float d = q8_d * cpu_half_to_f32((xr)[ib].d); \
             const uint8_t * GGML_RESTRICT q4 = (xr)[ib].ql; \
             const uint8_t * GGML_RESTRICT qh = (xr)[ib].qh; \
             const int8_t  * GGML_RESTRICT q8 = y[ib].qs; \
