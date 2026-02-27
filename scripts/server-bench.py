@@ -230,7 +230,7 @@ def benchmark(
 
     logger.info("")
     logger.info(f"Benchmark duration:                {token_t_last:.2f} s")
-    logger.info(f"Request throughput:                {n_prompts / token_t_last:.2f} requests/s = {n_prompts / (token_t_last / 60):.2f} requests/min")
+    logger.info(f"Request throughput:                {n_prompts / token_t_last:.2f} requests/s = {n_prompts / (token_t_last/60):.2f} requests/min")
     logger.info(f"Total prompt length:               {np.sum(prompt_n)} tokens")
     logger.info(f"Average prompt length:             {np.mean(prompt_n):.2f} tokens")
     logger.info(f"Average prompt latency:            {1e3 * np.mean(prompt_t):.2f} ms")
