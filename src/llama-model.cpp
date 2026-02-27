@@ -534,7 +534,9 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     hparams.n_attn_temp_floor_scale = 8192;
                     hparams.f_attn_temp_scale       = 0.1f;
                     hparams.f_attn_temp_offset      = 1.0f;
-                    hparams.set_swa_pattern(4);   // pattern: 3 chunked - 1 full
+                    uint32_t swa_period             = 4; // pattern: 3 chunked - 1 full
+                    ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
+                    hparams.set_swa_pattern(swa_period);
 
                     hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
                     hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
@@ -583,7 +585,9 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 // Pattern: 3 sliding - 1 full (global_attn_every_n_layers = 4)
                 if (hparams.n_swa > 0) {
                     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-                    hparams.set_swa_pattern(4);
+                    uint32_t swa_period = 4;
+                    ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
+                    hparams.set_swa_pattern(swa_period);
 
                     hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
                     hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
@@ -751,10 +755,9 @@ void llama_model::load_hparams(llama_model_loader & ml) {
             {
                 const bool found_swa = ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
                 if (found_swa && hparams.n_swa > 0) {
-                    uint32_t swa_period = 3;
                     hparams.swa_type = LLAMA_SWA_TYPE_SYMMETRIC;
-
                     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa);
+                    uint32_t swa_period = 3;
                     ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
                     hparams.set_swa_pattern(swa_period, true);
                 } else {
@@ -1107,9 +1110,9 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
                 const bool found_swa = ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
                 if (found_swa && hparams.n_swa > 0) {
-                    uint32_t swa_period = 8;
                     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
                     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
+                    uint32_t swa_period = 8;
                     ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
                     hparams.set_swa_pattern(swa_period);
                 } else {
@@ -1172,7 +1175,9 @@ void llama_model::load_hparams(llama_model_loader & ml) {
             {
                 hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
                 hparams.n_swa = 4096; // default value of gemma 2
-                hparams.set_swa_pattern(2);
+                uint32_t swa_period = 2;
+                ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
+                hparams.set_swa_pattern(swa_period);
                 hparams.attn_soft_cap = true;
                 hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
                 hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
@@ -1200,7 +1205,9 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 const bool found_swa = ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
                 if (found_swa && hparams.n_swa > 0) {
                     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-                    hparams.set_swa_pattern(6);
+                    uint32_t swa_period = 6;
+                    ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
+                    hparams.set_swa_pattern(swa_period);
 
                     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
                 } else {
@@ -1228,8 +1235,10 @@ void llama_model::load_hparams(llama_model_loader & ml) {
             } break;
         case LLM_ARCH_GEMMA3N:
             {
+                uint32_t swa_period = 5;
+                ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
                 hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-                hparams.set_swa_pattern(5);
+                hparams.set_swa_pattern(swa_period);
 
                 hparams.n_layer_kv_from_start     = 20;
                 hparams.f_attention_scale         = 1.0f;
@@ -1247,7 +1256,9 @@ void llama_model::load_hparams(llama_model_loader & ml) {
         case LLM_ARCH_GEMMA_EMBEDDING:
             {
                 hparams.swa_type = LLAMA_SWA_TYPE_SYMMETRIC;
-                hparams.set_swa_pattern(6);
+                uint32_t swa_period = 6;
+                ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
+                hparams.set_swa_pattern(swa_period);
 
                 hparams.causal_attn = false; // embeddings do not use causal attention
 
@@ -1389,7 +1400,9 @@ void llama_model::load_hparams(llama_model_loader & ml) {
         case LLM_ARCH_COHERE2:
             {
                 hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-                hparams.set_swa_pattern(4);
+                uint32_t swa_period = 4;
+                ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
+                hparams.set_swa_pattern(swa_period);
                 hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
                 hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
 
@@ -1431,7 +1444,9 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 const bool found_swa = ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
                 if (found_swa && hparams.n_swa > 0) {
                     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-                    hparams.set_swa_pattern(4);
+                    uint32_t swa_period = 4;
+                    ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
+                    hparams.set_swa_pattern(swa_period);
 
                     hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
                     hparams.rope_freq_scale_train_swa = 1.0; // See olmo2.cpp
@@ -1846,7 +1861,9 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 if (hparams.n_layer == 64) {    // 32B
                     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
                     hparams.n_swa = 4096;
-                    hparams.set_swa_pattern(4);
+                    uint32_t swa_period = 4;
+                    ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
+                    hparams.set_swa_pattern(swa_period);
 
                     hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
                     hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
@@ -1866,7 +1883,9 @@ void llama_model::load_hparams(llama_model_loader & ml) {
             {
                 hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
                 hparams.n_swa = 128;
-                hparams.set_swa_pattern(4);
+                uint32_t swa_period = 4;
+                ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
+                hparams.set_swa_pattern(swa_period);
                 hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
                 hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
 
@@ -2183,7 +2202,9 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa);
 
                 hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-                hparams.set_swa_pattern(2);
+                uint32_t swa_period = 2;
+                ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
+                hparams.set_swa_pattern(swa_period);
 
                 hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
                 hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
@@ -2236,9 +2257,11 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 const bool found_swa = ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
 
                 if (found_swa && hparams.n_swa > 0) {
-                    hparams.swa_type      = LLAMA_SWA_TYPE_STANDARD;
-                    hparams.n_swa         = 4096;
-                    hparams.set_swa_pattern(4, true);
+                    hparams.swa_type    = LLAMA_SWA_TYPE_STANDARD;
+                    hparams.n_swa       = 4096;
+                    uint32_t swa_period = 4;
+                    ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
+                    hparams.set_swa_pattern(swa_period, true);
 
                     hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
                     hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;

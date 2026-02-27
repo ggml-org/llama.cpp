@@ -238,19 +238,15 @@ static std::vector<float> get_logits(
         const llm_arch arch, const bool moe, const size_t seed, const std::vector<llama_token> & tokens,
         const std::vector<ggml_backend_dev_t> & devs) {
     const uint32_t n_ctx   = 128;
-    const uint32_t n_embd  = 256;
-    const uint32_t n_head  = 2;
-    const uint32_t n_ff    = 384;
+    const uint32_t n_embd  = arch == LLM_ARCH_GEMMA3N ? 64 : 256;
+    const uint32_t n_head  = arch == LLM_ARCH_GEMMA3N ? 1 : 2;
+    const uint32_t n_ff    = arch == LLM_ARCH_GEMMA3N ? 96 : 384;
     const uint32_t n_vocab = 128;
     uint32_t       n_layer = 2;
     if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
         n_layer = 3;
-    } else if (arch == LLM_ARCH_GEMMA3) {
-        n_layer = 6;
     } else if (arch == LLM_ARCH_GEMMA3N) {
-        n_layer = 25;
-    } else if (arch == LLM_ARCH_OLMO2) {
-        n_layer = 4;
+        n_layer = 22; // hparams.n_layer_kv_from_start = 20 is hardcoded
     }
 
     const uint32_t n_embd_head = n_embd / n_head;
