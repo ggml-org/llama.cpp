@@ -3627,6 +3627,30 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_TTS}));
 
     add_opt(common_arg(
+        {"--rerank-bge-m3-default"},
+        string_format("use BAAI/bge-reranker-v2-m3 (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.model.hf_repo = "BAAI/bge-reranker-v2-m3";
+            params.model.hf_file = "bge-reranker-v2-m3-Q8_0.gguf";
+            params.embedding = true;
+            params.port = 8015;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+
+    add_opt(common_arg(
+        {"--chat-llama3.1-8b-default"},
+        string_format("use Meta Llama 3.1 8B Instruct (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.model.hf_repo = "gaianet/Meta-Llama-3.1-8B-Instruct-GGUF"; 
+            params.model.hf_file = "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf";
+            params.port = 8016;
+            params.n_ubatch = 512;
+            params.n_batch = 2048;
+            params.n_ctx = 8192; 
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+
+    add_opt(common_arg(
         {"--embd-gemma-default"},
         string_format("use default EmbeddingGemma model (note: can download weights from the internet)"),
         [](common_params & params) {
