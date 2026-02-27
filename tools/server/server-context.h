@@ -1,3 +1,5 @@
+#pragma once
+
 #include "server-http.h"
 #include "server-task.h"
 #include "server-queue.h"
