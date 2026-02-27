@@ -883,7 +883,7 @@ static bool tensor_requires_imatrix(const char * tensor_name, const ggml_type ds
 static ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
     ggml_type return_type;
     switch (ftype) {
-        // floating-point types
+        // floating-point
         case LLAMA_FTYPE_ALL_F32:     return_type = GGML_TYPE_F32;  break;
         case LLAMA_FTYPE_MOSTLY_F16:  return_type = GGML_TYPE_F16;  break;
         case LLAMA_FTYPE_MOSTLY_BF16: return_type = GGML_TYPE_BF16; break;
@@ -1132,12 +1132,11 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         metadata[i].allows_quantization = tensor_allows_quantization(params, model.arch, tensor);
         metadata[i].target_type = llama_tensor_get_type(qs.get(), params, tensor, default_type, metadata[i]);
         metadata[i].requires_imatrix = tensor_requires_imatrix(tensor->name, metadata[i].target_type, ftype);
-        metadata[i].remapped_imatrix_name = remap_imatrix(tensor->name, mapped);
 
-        if (!params->imatrix &&
-            metadata[i].allows_quantization &&
-            metadata[i].requires_imatrix
-        ) { // this tensor requires an imatrix but we don't have one!
+        if (params->imatrix) {
+            metadata[i].remapped_imatrix_name = remap_imatrix(tensor->name, mapped);
+        } else if (metadata[i].allows_quantization && metadata[i].requires_imatrix) {
+            // this tensor requires an imatrix but we don't have one!
             if (params->dry_run) {
                 // set flag for warning later, but continue with dry run
                 will_require_imatrix = true;
@@ -1158,7 +1157,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         }
     }
 
-    // resize work buffers as needed
+    // resize work buffers as needed before quantization starts
     if (!ml.use_mmap) {
         read_data.resize(max_tensor_bytes);
     }
