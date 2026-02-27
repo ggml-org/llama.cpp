@@ -1280,6 +1280,9 @@ class TextModel(ModelBase):
         if chkhsh == "9b1be57e70d20d9501b2b3186e792d81181ae36ada3903c26f9fea418cf87206":
             # ref: https://huggingface.co/inclusionAI/Ling-mini-base-2.0
             res = "bailingmoe2"
+        if chkhsh == "f9c762bae4ba0efbb6e71279acfb1546f9711729551c3a81c5c0645116f988cd":
+            # ref: https://huggingface.co/bharatgenai/Param2-17B-A2.4B-Thinking
+            res = "bailingmoe2"
         if chkhsh == "53e325976a6e142379c19b09afcae354f2f496f147afa8f9e189a33fe4e3024e":
             # ref: https://huggingface.co/ibm-granite/granite-docling-258M
             res = "granite-docling"
@@ -9034,6 +9037,100 @@ class Glm4MoeModel(TextModel):
         super().prepare_tensors()
         if self._experts is not None:
             # flatten `list[dict[str, Tensor]]` into `list[str]`
+            experts = [k for d in self._experts for k in d.keys()]
+            if len(experts) > 0:
+                raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@ModelBase.register("Param2MoEForCausalLM")
+class Param2MoEModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.PARAM2MOE
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.block_count = self.hparams["num_hidden_layers"]
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def set_vocab(self):
+        self._set_vocab_gpt2()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        head_dim = self.hparams.get("head_dim", 64)
+        partial_rotary = self.hparams.get("partial_rotary_factor", 1.0)
+        self.gguf_writer.add_rope_dimension_count(int(head_dim * partial_rotary))
+
+        self.gguf_writer.add_expert_count(self.hparams["num_experts"])
+        self.gguf_writer.add_expert_used_count(self.hparams["num_experts_per_tok"])
+        self.gguf_writer.add_expert_shared_count(self.hparams["num_shared_experts"])
+        self.gguf_writer.add_expert_feed_forward_length(self.hparams["moe_intermediate_size"])
+        self.gguf_writer.add_leading_dense_block_count(self.hparams.get("first_k_dense_replace", 1))
+        self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+
+        if (scale := self.hparams.get("routed_scaling_factor")) is not None:
+            self.gguf_writer.add_expert_weights_scale(scale)
+        if (norm := self.hparams.get("norm_topk_prob")) is not None:
+            self.gguf_writer.add_expert_weights_norm(norm)
+
+    _experts: list[dict[str, Tensor]] | None = None
+
+    def modify_tensors(
+        self, data_torch: Tensor, name: str, bid: int | None
+    ) -> Iterable[tuple[str, Tensor]]:
+
+        if "query_key_value" in name:
+            num_heads = self.hparams["num_attention_heads"]
+            num_kv_heads = self.hparams["num_key_value_heads"]
+            head_dim = self.hparams.get("head_dim", 64)
+
+            total_heads = num_heads + 2 * num_kv_heads
+            hidden = data_torch.shape[-1]
+            qkv = data_torch.reshape(total_heads, head_dim, hidden)
+
+            q = qkv[:num_heads].reshape(-1, hidden)
+            k = qkv[num_heads:num_heads + num_kv_heads].reshape(-1, hidden)
+            v = qkv[num_heads + num_kv_heads:].reshape(-1, hidden)
+
+            q_name = name.replace("attention.query_key_value", "self_attn.q_proj")
+            k_name = name.replace("attention.query_key_value", "self_attn.k_proj")
+            v_name = name.replace("attention.query_key_value", "self_attn.v_proj")
+            yield from super().modify_tensors(q, q_name, bid)
+            yield from super().modify_tensors(k, k_name, bid)
+            yield from super().modify_tensors(v, v_name, bid)
+            return
+
+        if name.find("mlp.experts") != -1 and ".shared_experts." not in name:
+            n_experts = self.hparams["num_experts"]
+            assert bid is not None
+
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+
+            self._experts[bid][name] = data_torch
+
+            if len(self._experts[bid]) >= n_experts * 3:
+                for w_name in ["down_proj", "gate_proj", "up_proj"]:
+                    datas: list[Tensor] = []
+                    for xid in range(n_experts):
+                        ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
+                        datas.append(self._experts[bid][ename])
+                        del self._experts[bid][ename]
+                    data_torch = torch.stack(datas, dim=0)
+                    merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
+                    yield from super().modify_tensors(data_torch, merged_name, bid)
+                return
+            else:
+                return
+
+        if name.endswith("expert_bias"):
+            name = name.replace("expert_bias", "e_score_correction.bias")
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+        if self._experts is not None:
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")

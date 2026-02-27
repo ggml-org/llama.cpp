@@ -262,6 +262,7 @@ struct llm_build_glm4_moe : public llm_graph_context {
     llm_build_glm4_moe(const llama_model & model, const llm_graph_params & params);
 };
 
+
 struct llm_build_gpt2 : public llm_graph_context {
     llm_build_gpt2(const llama_model & model, const llm_graph_params & params);
 };
