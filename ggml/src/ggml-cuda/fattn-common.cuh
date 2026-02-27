@@ -722,7 +722,11 @@ static __global__ void flash_attn_stream_k_fixup(
     }
 
     // Write back final result:
-    *dst = dst_val / rowsum;
+    if (!(rowsum > 0.0f)) {
+        *dst = 0.0f;
+    } else {
+        *dst = dst_val / rowsum;
+    }
 }
 
 template<int D> // D == head size

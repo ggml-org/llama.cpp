@@ -474,7 +474,11 @@ static __global__ void flash_attn_ext_f16(
             }
             float dst_val = VKQ[j_VKQ*D_padded + i];
             if (gridDim.y == 1) {
-                dst_val /= KQ_rowsum_j;
+                if (!(KQ_rowsum_j > 0.0f)) {
+                    dst_val = 0.0f;
+                } else {
+                    dst_val /= KQ_rowsum_j;
+                }
             }
             dst[j_dst_unrolled*D + i] = dst_val;
         }
