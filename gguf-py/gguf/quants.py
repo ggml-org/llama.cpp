@@ -742,8 +742,8 @@ class NVFP4(__Quant, qtype=GGMLQuantizationType.NVFP4):
         normal_result = np.where(exp >= 15, np.uint8(0x7E), ((exp << 3) | man).astype(np.uint8))
 
         return np.where(x <= 0.0, np.uint8(0),
-               np.where(ue4m3_exp <= 0, sub_result,
-               np.where(ue4m3_exp >= 15, np.uint8(0x7E), normal_result)))
+                        np.where(ue4m3_exp <= 0, sub_result,
+                        np.where(ue4m3_exp >= 15, np.uint8(0x7E), normal_result)))
 
     @classmethod
     def dequantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:

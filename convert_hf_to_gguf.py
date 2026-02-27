@@ -568,7 +568,7 @@ class ModelBase:
         When scale2 is close to 1.0, preserves original E4M3 scale bits exactly.
         Otherwise dequantizes and requantizes with scale2 baked in.
         Returns (raw_data, logical_shape)."""
-        
+
         out_features = weight.shape[0]
         n_blocks = scale.shape[1]
 
