@@ -11,7 +11,7 @@
 REQD_SUBGROUP_SIZE_128
 #endif
 
-kernel void kernel_mul_mm_q4_1_f32_8x4(
+kernel void kernel_gemm_noshuffle_q4_1_f32(
     global const ushort * src0_q,
     global const half  * src0_d,
     global const half  * src0_m,

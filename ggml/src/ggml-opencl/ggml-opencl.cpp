@@ -1,4 +1,3 @@
-#include "CL/cl_platform.h"
 #define CL_TARGET_OPENCL_VERSION GGML_OPENCL_TARGET_VERSION
 #define CL_USE_DEPRECATED_OPENCL_1_2_APIS
 
@@ -704,8 +703,8 @@ struct ggml_backend_opencl_context {
     cl_kernel CL_mul_mat_vec_q4_0_f32_1d_4x_flat_4096_1_4096;
     cl_kernel CL_mul_mat_vec_q4_0_f32_1d_4x_flat_11008_1_4096;
     cl_kernel CL_mul_mat_vec_q4_0_f32_1d_4x_flat_32000_1_4096;
-    cl_kernel kernel_mul_mm_q4_1_f32_8x4;
     cl_kernel kernel_gemv_noshuffle_q4_1_f32;
+    cl_kernel kernel_gemm_noshuffle_q4_1_f32;
     cl_kernel kernel_mul_mm_q8_0_f32_8x4;
     cl_kernel CL_mul_mat_vec_q8_0_f32;
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
@@ -2389,22 +2388,22 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
         GGML_LOG_CONT(".");
     }
 
-    // mul_mm_q4_1_f32_8x4
+    // gemm_noshuffle_q4_1_f32
     {
 #ifdef GGML_OPENCL_EMBED_KERNELS
-        const std::string kernel_src_q4_1_8x4_gemm {
-            #include "mul_mm_q4_1_f32_8x4.cl.h"
+        const std::string kernel_src {
+            #include "gemm_noshuffle_q4_1_f32.cl.h"
        };
 #else
-        const std::string kernel_src_q4_1_8x4_gemm = read_file("mul_mm_q4_1_f32_8x4.cl");
+        const std::string kernel_src = read_file("gemm_noshuffle_q4_1_f32.cl");
 #endif
-        cl_program prog = build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src_q4_1_8x4_gemm.c_str(), compile_opts);
-        CL_CHECK((backend_ctx->kernel_mul_mm_q4_1_f32_8x4 = clCreateKernel(prog, "kernel_mul_mm_q4_1_f32_8x4", &err), err));
+        cl_program prog = build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+        CL_CHECK((backend_ctx->kernel_gemm_noshuffle_q4_1_f32 = clCreateKernel(prog, "kernel_gemm_noshuffle_q4_1_f32", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
 
-    // gemv_noshuffle_general_q4_1_f32
+    // gemv_noshuffle_q4_1_f32
     {
         std::string CL_gemv_compile_opts = std::string("-cl-std=") + opencl_c_std +
                                        " -cl-mad-enable ";
@@ -2413,15 +2412,15 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
         }
 
 #ifdef GGML_OPENCL_EMBED_KERNELS
-        const std::string kernel_src_CL_gemv_general {
-            #include "gemv_noshuffle_general_q4_1_f32.cl.h"
+        const std::string kernel_src {
+            #include "gemv_noshuffle_q4_1_f32.cl.h"
         };
 #else
-        const std::string kernel_src_CL_gemv_general = read_file("gemv_noshuffle_general_q4_1_f32.cl");
+        const std::string kernel_src = read_file("gemv_noshuffle_q4_1_f32.cl");
 #endif
 
         cl_program prog = build_program_from_source(
-            backend_ctx->context, backend_ctx->device, kernel_src_CL_gemv_general.c_str(), CL_gemv_compile_opts);
+            backend_ctx->context, backend_ctx->device, kernel_src.c_str(), CL_gemv_compile_opts);
 
         CL_CHECK((backend_ctx->kernel_gemv_noshuffle_q4_1_f32 = clCreateKernel(prog, "kernel_gemv_noshuffle_q4_1_f32", &err), err));
         CL_CHECK(clReleaseProgram(prog));
@@ -8708,7 +8707,7 @@ static void ggml_cl_mul_mat_q4_1_f32_adreno(ggml_backend_t backend, const ggml_t
         backend_ctx->enqueue_ndrange_kernel(kernel, 2, global_work_size_t, local_work_size_t, dst);
 
         // gemm
-        kernel = backend_ctx->kernel_mul_mm_q4_1_f32_8x4;
+        kernel = backend_ctx->kernel_gemm_noshuffle_q4_1_f32;
         int padded_N = N + padding;
 
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra0_q4_1->q));
