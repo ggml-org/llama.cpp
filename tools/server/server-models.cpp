@@ -291,7 +291,9 @@ void server_models::load_models() {
     for (const auto & [name, inst] : mapping) {
         std::string val;
         if (inst.meta.preset.get_option(COMMON_ARG_PRESET_LOAD_ON_STARTUP, val)) {
-            models_to_load.push_back(name);
+            if (common_arg_utils::is_truthy(val)) {
+                models_to_load.push_back(name);
+            }
         }
     }
     if ((int)models_to_load.size() > base_params.models_max) {

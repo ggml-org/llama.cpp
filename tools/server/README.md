@@ -1510,7 +1510,7 @@ version = 1
 ; If the same key is defined in a specific preset, it will override the value in this global section.
 [*]
 c = 8192
-n-gpu-layer = 8
+n-gpu-layers = 8
 
 ; If the key corresponds to an existing model on the server,
 ; this will be used as the default config for that model
