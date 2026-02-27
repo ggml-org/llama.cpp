@@ -30,6 +30,20 @@ static size_t get_expert_cache_budget_override() {
 }
 
 // ---------------------------------------------------------------------------
+// Env var: GGML_SYCL_EXPERT_CACHE_WARMUP=N overrides warmup token count.
+// ---------------------------------------------------------------------------
+static int get_warmup_token_count() {
+    const char * env = std::getenv("GGML_SYCL_EXPERT_CACHE_WARMUP");
+    if (env) {
+        int n = std::atoi(env);
+        if (n >= 0) {
+            return n;  // 0 = disable warmup
+        }
+    }
+    return 32;  // Default: profile first 32 tokens
+}
+
+// ---------------------------------------------------------------------------
 // ExpertCache implementation
 // ---------------------------------------------------------------------------
 
@@ -80,8 +94,13 @@ void ExpertCache::init(int device_id, size_t vram_budget_bytes, sycl::queue & q)
     // Track budget via unified cache
     unified_cache_add_runtime_bytes(device_id_, pool_size_, runtime_category::EXPERT_CACHE);
 
-    GGML_LOG_INFO("[EXPERT-CACHE] Initialized: pool=%.1f MB device=%d\n",
-                  pool_size_ / (1024.0 * 1024.0), device_id_);
+    // Read warm-start configuration
+    warmup_target_ = get_warmup_token_count();
+    warmup_active_ = (warmup_target_ > 0);
+    warmup_done_   = !warmup_active_;
+
+    GGML_LOG_INFO("[EXPERT-CACHE] Initialized: pool=%.1f MB device=%d warmup=%d tokens\n",
+                  pool_size_ / (1024.0 * 1024.0), device_id_, warmup_target_);
 }
 
 void ExpertCache::shutdown() {
@@ -111,9 +130,18 @@ void ExpertCache::shutdown() {
     slot_size_ = 0;
     slots_.clear();
     lookup_map_.clear();
-    hits_   = 0;
-    misses_ = 0;
-    global_token_ = 0;
+    hits_           = 0;
+    misses_         = 0;
+    global_token_   = 0;
+    current_layer_  = -1;
+    co_activation_.clear();
+    warmup_freq_.clear();
+    warmup_tokens_  = 0;
+    warmup_active_  = false;
+    warmup_done_    = false;
+    rolling_idx_    = 0;
+    rolling_count_  = 0;
+    last_log_token_ = 0;
 }
 
 ExpertCache::~ExpertCache() {
@@ -372,20 +400,218 @@ size_t ExpertCache::entries_count() const {
     return lookup_map_.size();
 }
 
+float ExpertCache::rolling_hit_rate() const {
+    std::shared_lock lock(mutex_);
+    if (rolling_count_ == 0) {
+        return 0.0f;
+    }
+    int total_hits   = 0;
+    int total_misses = 0;
+    int n = std::min(rolling_count_, ROLLING_WINDOW);
+    for (int i = 0; i < n; i++) {
+        total_hits   += rolling_buf_[i].hits;
+        total_misses += rolling_buf_[i].misses;
+    }
+    int total = total_hits + total_misses;
+    return total > 0 ? static_cast<float>(total_hits) / static_cast<float>(total) : 0.0f;
+}
+
+bool ExpertCache::is_warmup_phase() const {
+    std::shared_lock lock(mutex_);
+    return warmup_active_;
+}
+
+void ExpertCache::record_access_batch(int current_layer, const int * expert_ids,
+                                       int n_experts, uint64_t token_counter) {
+    std::unique_lock lock(mutex_);
+
+    current_layer_ = current_layer;
+    global_token_  = token_counter;
+
+    // Track per-token hits/misses for rolling window
+    int token_hits   = 0;
+    int token_misses = 0;
+
+    for (int i = 0; i < n_experts; i++) {
+        int64_t key = make_key(current_layer, expert_ids[i]);
+
+        // Track warmup frequency
+        if (warmup_active_) {
+            warmup_freq_[key]++;
+        }
+
+        // Track hit/miss for rolling stats
+        auto it = lookup_map_.find(key);
+        if (it != lookup_map_.end()) {
+            token_hits++;
+        } else {
+            token_misses++;
+        }
+
+        // Track co-activation: for each pair (i, j) where i < j,
+        // record that these experts were activated together.
+        for (int j = i + 1; j < n_experts; j++) {
+            int64_t key_j = make_key(current_layer, expert_ids[j]);
+            // Encode pair as sorted (min, max) key
+            int64_t pair_key = (std::min(key, key_j) << 32) | (std::max(key, key_j) & 0xFFFFFFFF);
+            co_activation_[pair_key]++;
+        }
+    }
+
+    // Update rolling window
+    rolling_buf_[rolling_idx_] = { token_hits, token_misses };
+    rolling_idx_ = (rolling_idx_ + 1) % ROLLING_WINDOW;
+    if (rolling_count_ < ROLLING_WINDOW) {
+        rolling_count_++;
+    }
+
+    // Warmup phase tracking
+    if (warmup_active_) {
+        warmup_tokens_++;
+        if (warmup_tokens_ >= warmup_target_) {
+            // Unlock before finish_warmup (which takes unique lock internally)
+            lock.unlock();
+            finish_warmup();
+            return;
+        }
+    }
+
+    // Periodic logging
+    maybe_log_stats();
+}
+
+void ExpertCache::finish_warmup() {
+    std::unique_lock lock(mutex_);
+
+    if (!warmup_active_ || warmup_done_) {
+        return;
+    }
+
+    warmup_active_ = false;
+    warmup_done_   = true;
+
+    if (!queue_ || n_slots_ == 0) {
+        GGML_LOG_INFO("[EXPERT-CACHE] Warm-start: no pool available, skipping bulk-load\n");
+        warmup_freq_.clear();
+        return;
+    }
+
+    // Sort experts by frequency (descending) and bulk-load top-N into VRAM
+    std::vector<std::pair<int64_t, uint32_t>> sorted_freq(warmup_freq_.begin(),
+                                                           warmup_freq_.end());
+    std::sort(sorted_freq.begin(), sorted_freq.end(),
+              [](const auto & a, const auto & b) { return a.second > b.second; });
+
+    int n_loaded = 0;
+    for (const auto & [key, freq] : sorted_freq) {
+        if (n_loaded >= n_slots_) {
+            break;  // Pool full
+        }
+
+        // Already cached?
+        if (lookup_map_.find(key) != lookup_map_.end()) {
+            continue;
+        }
+
+        // Find host source
+        auto host_it = host_entries_.find(key);
+        if (host_it == host_entries_.end()) {
+            continue;
+        }
+
+        // Find a free slot
+        int target_slot = -1;
+        for (int i = 0; i < n_slots_; i++) {
+            if (slots_[i].layer_idx == -1) {
+                target_slot = i;
+                break;
+            }
+        }
+        if (target_slot == -1) {
+            break;  // No more free slots
+        }
+
+        // H2D copy
+        const void * host_src  = host_it->second.ptr;
+        size_t       src_bytes = host_it->second.size;
+        queue_->memcpy(slots_[target_slot].device_ptr, host_src, src_bytes).wait();
+
+        // Decode layer/expert from key
+        int layer_idx  = static_cast<int>(key / MAX_EXPERTS_PER_LAYER);
+        int expert_idx = static_cast<int>(key % MAX_EXPERTS_PER_LAYER);
+
+        slots_[target_slot].layer_idx   = layer_idx;
+        slots_[target_slot].expert_idx  = expert_idx;
+        slots_[target_slot].size_bytes  = src_bytes;
+        slots_[target_slot].frequency   = freq;
+        slots_[target_slot].last_access = global_token_;
+        recompute_score(slots_[target_slot], global_token_);
+
+        lookup_map_[key] = target_slot;
+        n_loaded++;
+    }
+
+    GGML_LOG_INFO("[EXPERT-CACHE] Warm-start complete: loaded %d/%d experts after %d tokens\n",
+                  n_loaded, n_slots_, warmup_tokens_);
+
+    warmup_freq_.clear();
+}
+
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
 
 void ExpertCache::recompute_score(ExpertSlot & slot, uint64_t current_token) const {
-    // score = alpha * frequency + beta * (token_counter - last_access)
-    // alpha = 1.0, beta = -0.01
+    // Enhanced scoring formula:
+    //   score = alpha*frequency + beta*recency + gamma*layer_distance + delta*co_activation
+    //
+    // alpha = 1.0   : access frequency (higher = more valuable)
+    // beta  = -0.01 : recency penalty (older = less valuable)
+    // gamma = -0.5  : layer-distance penalty (far from current layer = less valuable)
+    // delta = 0.1   : co-activation bonus (frequently paired experts stay together)
+    //
     // Higher score = more valuable (less likely to evict)
     constexpr float alpha = 1.0f;
     constexpr float beta  = -0.01f;
+    constexpr float gamma = -0.5f;
+    constexpr float delta = 0.1f;
 
     float freq_term    = alpha * static_cast<float>(slot.frequency);
     float recency_term = beta * static_cast<float>(current_token - slot.last_access);
-    slot.score = freq_term + recency_term;
+
+    // Layer-distance penalty: experts from layers far from the current
+    // processing layer are less likely to be needed soon.
+    float layer_dist_term = 0.0f;
+    if (current_layer_ >= 0 && slot.layer_idx >= 0) {
+        int dist = std::abs(slot.layer_idx - current_layer_);
+        layer_dist_term = gamma * static_cast<float>(dist);
+    }
+
+    // Co-activation bonus: check if this expert is frequently activated
+    // with any currently-cached expert in the same layer.
+    float co_act_term = 0.0f;
+    if (!co_activation_.empty()) {
+        int64_t slot_key = make_key(slot.layer_idx, slot.expert_idx);
+        // Sum co-activation counts with other cached experts in same layer
+        for (const auto & [cached_key, slot_idx] : lookup_map_) {
+            if (slot_idx == -1) continue;
+            const auto & other = slots_[slot_idx];
+            if (other.layer_idx != slot.layer_idx) continue;
+            if (other.layer_idx == -1) continue;
+
+            int64_t other_key = make_key(other.layer_idx, other.expert_idx);
+            if (other_key == slot_key) continue;
+
+            int64_t pair_key = (std::min(slot_key, other_key) << 32)
+                               | (std::max(slot_key, other_key) & 0xFFFFFFFF);
+            auto co_it = co_activation_.find(pair_key);
+            if (co_it != co_activation_.end()) {
+                co_act_term += delta * static_cast<float>(co_it->second);
+            }
+        }
+    }
+
+    slot.score = freq_term + recency_term + layer_dist_term + co_act_term;
 }
 
 int ExpertCache::find_eviction_candidate() const {
@@ -407,6 +633,33 @@ int ExpertCache::find_eviction_candidate() const {
     }
 
     return best_idx;
+}
+
+void ExpertCache::maybe_log_stats() {
+    // Called with mutex_ held.
+    if (global_token_ - last_log_token_ < log_interval_) {
+        return;
+    }
+    last_log_token_ = global_token_;
+
+    uint64_t total = hits_ + misses_;
+    float    hr    = total > 0 ? 100.0f * static_cast<float>(hits_) / static_cast<float>(total) : 0.0f;
+
+    // Compute rolling hit rate (inline, mutex already held)
+    float rhr = 0.0f;
+    if (rolling_count_ > 0) {
+        int rh = 0, rm = 0;
+        int n = std::min(rolling_count_, ROLLING_WINDOW);
+        for (int i = 0; i < n; i++) {
+            rh += rolling_buf_[i].hits;
+            rm += rolling_buf_[i].misses;
+        }
+        int rt = rh + rm;
+        rhr = rt > 0 ? 100.0f * static_cast<float>(rh) / static_cast<float>(rt) : 0.0f;
+    }
+
+    GGML_LOG_INFO("[EXPERT-CACHE] hit_rate=%.1f%% rolling=%.1f%% cached=%zu/%d pool=%.1f MB\n",
+                  hr, rhr, lookup_map_.size(), n_slots_, pool_size_ / (1024.0 * 1024.0));
 }
 
 int64_t ExpertCache::make_key(int layer, int expert) const {

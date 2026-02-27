@@ -361,6 +361,192 @@ static void test_update_score() {
     printf("PASSED\n");
 }
 
+// Test warm-start profiling: record_access_batch collects frequency,
+// finish_warmup bulk-loads the most popular experts into VRAM.
+static void test_warmup_bulk_load() {
+    printf("test_warmup_bulk_load: ");
+
+    sycl::queue q;
+
+    // 4 slots, 8 experts across 2 layers
+    constexpr size_t VRAM_BUDGET = 4 * EXPERT_SIZE;
+
+    ggml_sycl::ExpertCache cache;
+    cache.init(0, VRAM_BUDGET, q);
+    assert(cache.is_initialized());
+
+    // Initially in warmup phase
+    assert(cache.is_warmup_phase());
+
+    auto host_ptrs = allocate_host_experts(q, 8, EXPERT_SIZE);
+    for (int layer = 0; layer < 2; layer++) {
+        for (int expert = 0; expert < 4; expert++) {
+            cache.register_expert(layer, expert, host_ptrs[layer * 4 + expert], EXPERT_SIZE);
+        }
+    }
+
+    // Simulate 32 tokens of warmup.
+    // Experts (0,0) and (0,1) are "hot" — accessed every token.
+    // Experts (1,2) and (1,3) are accessed occasionally.
+    for (int token = 0; token < 31; token++) {
+        int hot_ids[] = { 0, 1 };
+        cache.record_access_batch(0, hot_ids, 2, static_cast<uint64_t>(token));
+
+        // Occasional access to layer 1 experts
+        if (token % 5 == 0) {
+            int cold_ids[] = { 2, 3 };
+            cache.record_access_batch(1, cold_ids, 2, static_cast<uint64_t>(token));
+        }
+    }
+
+    // Still in warmup (31 < default 32 tokens)
+    assert(cache.is_warmup_phase());
+
+    // Token 32: triggers finish_warmup
+    {
+        int hot_ids[] = { 0, 1 };
+        cache.record_access_batch(0, hot_ids, 2, 31);
+    }
+
+    // Warmup complete
+    assert(!cache.is_warmup_phase());
+
+    // Hot experts should be bulk-loaded into VRAM
+    assert(cache.is_cached_in_vram(0, 0));
+    assert(cache.is_cached_in_vram(0, 1));
+
+    // Should have loaded up to 4 experts (pool capacity)
+    assert(cache.cached_count() <= 4);
+    assert(cache.cached_count() >= 2);  // At least the hot experts
+
+    cache.shutdown();
+    free_host_experts(q, host_ptrs);
+    printf("PASSED\n");
+}
+
+// Test rolling hit rate tracking
+static void test_rolling_hit_rate() {
+    printf("test_rolling_hit_rate: ");
+
+    sycl::queue q;
+
+    constexpr size_t VRAM_BUDGET = 4 * EXPERT_SIZE;
+
+    ggml_sycl::ExpertCache cache;
+    cache.init(0, VRAM_BUDGET, q);
+
+    auto host_ptrs = allocate_host_experts(q, 8, EXPERT_SIZE);
+    for (int i = 0; i < 8; i++) {
+        cache.register_expert(0, i, host_ptrs[i], EXPERT_SIZE);
+    }
+
+    // Initially zero
+    assert(cache.rolling_hit_rate() == 0.0f);
+
+    // Pre-fill cache with experts 0-3 so we get hits
+    for (int i = 0; i < 4; i++) {
+        cache.ensure_cached(0, i, q);
+    }
+
+    // Disable warmup by finishing it (simulate enough tokens quickly)
+    // We need to go past warmup phase for rolling stats to be meaningful
+    // Record batch accesses: experts 0,1 are cached -> hits, 4,5 are not -> misses
+    for (int token = 0; token < 40; token++) {
+        int ids[] = { 0, 1 };  // Both cached -> hits
+        cache.record_access_batch(0, ids, 2, static_cast<uint64_t>(token));
+    }
+
+    // Rolling hit rate should be ~1.0 (all hits)
+    float rhr = cache.rolling_hit_rate();
+    assert(rhr > 0.95f);  // Should be close to 1.0
+
+    cache.shutdown();
+    free_host_experts(q, host_ptrs);
+    printf("PASSED\n");
+}
+
+// Test that is_warmup_phase transitions correctly
+static void test_warmup_phase_transition() {
+    printf("test_warmup_phase_transition: ");
+
+    sycl::queue q;
+
+    constexpr size_t VRAM_BUDGET = 4 * EXPERT_SIZE;
+
+    ggml_sycl::ExpertCache cache;
+    cache.init(0, VRAM_BUDGET, q);
+
+    auto host_ptrs = allocate_host_experts(q, 4, EXPERT_SIZE);
+    for (int i = 0; i < 4; i++) {
+        cache.register_expert(0, i, host_ptrs[i], EXPERT_SIZE);
+    }
+
+    // Should start in warmup
+    assert(cache.is_warmup_phase());
+
+    // Record enough batches to complete warmup (default: 32 tokens)
+    for (int token = 0; token < 33; token++) {
+        int ids[] = { 0 };
+        cache.record_access_batch(0, ids, 1, static_cast<uint64_t>(token));
+    }
+
+    // Should no longer be in warmup
+    assert(!cache.is_warmup_phase());
+
+    // Calling finish_warmup again should be a no-op
+    cache.finish_warmup();
+    assert(!cache.is_warmup_phase());
+
+    cache.shutdown();
+    free_host_experts(q, host_ptrs);
+    printf("PASSED\n");
+}
+
+// Test that layer-distance scoring affects eviction decisions
+static void test_layer_distance_eviction() {
+    printf("test_layer_distance_eviction: ");
+
+    sycl::queue q;
+
+    // 3 slots for 6 experts across 3 layers
+    constexpr size_t VRAM_BUDGET = 3 * EXPERT_SIZE;
+
+    ggml_sycl::ExpertCache cache;
+    cache.init(0, VRAM_BUDGET, q);
+
+    auto host_ptrs = allocate_host_experts(q, 6, EXPERT_SIZE);
+    for (int layer = 0; layer < 3; layer++) {
+        cache.register_expert(layer, 0, host_ptrs[layer * 2], EXPERT_SIZE);
+        cache.register_expert(layer, 1, host_ptrs[layer * 2 + 1], EXPERT_SIZE);
+    }
+
+    // Fill cache with experts from layers 0, 1, 2
+    cache.ensure_cached(0, 0, q);
+    cache.ensure_cached(1, 0, q);
+    cache.ensure_cached(2, 0, q);
+
+    // All 3 slots full, equal frequency (1 each)
+
+    // Tell the cache we're processing layer 2 via record_access_batch
+    int ids[] = { 0 };
+    cache.record_access_batch(2, ids, 1, 100);
+
+    // Now force eviction by adding layer 2, expert 1
+    // Layer 0 expert should be evicted (farthest from current_layer=2)
+    cache.ensure_cached(2, 1, q);
+
+    // Layer 2 experts should survive (closest to current layer)
+    assert(cache.is_cached_in_vram(2, 0));
+    assert(cache.is_cached_in_vram(2, 1));
+
+    // Layer 0 should be evicted (farthest from layer 2)
+    assert(!cache.is_cached_in_vram(0, 0));
+
+    cache.shutdown();
+    free_host_experts(q, host_ptrs);
+    printf("PASSED\n");
+}
+
 int main() {
     try {
         printf("\n=== Expert Cache Unit Tests ===\n\n");
@@ -372,6 +558,10 @@ int main() {
         test_multi_layer();
         test_unregistered();
         test_update_score();
+        test_warmup_bulk_load();
+        test_rolling_hit_rate();
+        test_warmup_phase_transition();
+        test_layer_distance_eviction();
 
         printf("\nAll tests PASSED!\n\n");
         return 0;

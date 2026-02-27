@@ -11,6 +11,7 @@
 #include <shared_mutex>
 #include <sycl/sycl.hpp>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace ggml_sycl {
@@ -114,10 +115,23 @@ public:
     // Update access statistics after use.
     void update_score(int layer_idx, int expert_idx, uint64_t token_counter);
 
+    // Record a batch of expert accesses for the current token/layer.
+    // Used to track co-activation patterns and warm-start profiling.
+    // current_layer is the layer being processed; expert_ids are the
+    // router-selected expert indices for this token.
+    void record_access_batch(int current_layer, const int * expert_ids, int n_experts,
+                             uint64_t token_counter);
+
+    // Trigger warm-start bulk-load after profiling phase completes.
+    // Loads the top-N most-frequent experts into VRAM. Called automatically
+    // by record_access_batch() when warmup token count is reached.
+    void finish_warmup();
+
     // Stats
     size_t cached_count() const;
     size_t total_slots() const;
-    float  hit_rate() const;  // Rolling hits / (hits + misses)
+    float  hit_rate() const;         // All-time hits / (hits + misses)
+    float  rolling_hit_rate() const; // Rolling window (last 100 tokens)
 
     size_t vram_budget() const;
     size_t vram_used() const;
@@ -127,6 +141,9 @@ public:
 
     // True if init() has been called and pool is allocated.
     bool is_initialized() const { return pool_ != nullptr; }
+
+    // True if warm-start profiling phase is active (collecting stats, not caching yet).
+    bool is_warmup_phase() const;
 
     // -----------------------------------------------------------------
     // Backward-compatible API used by expert_prefetcher (Track C).
@@ -168,8 +185,7 @@ private:
     }
 
     // Compute eviction score. Lower = evict first.
-    // score = alpha * frequency + beta * (token_counter - last_access)
-    // alpha = 1.0, beta = -0.01
+    // score = alpha*frequency + beta*recency + gamma*layer_distance + delta*co_activation
     void recompute_score(ExpertSlot & slot, uint64_t current_token) const;
 
     // Find the slot with lowest score (eviction candidate).
@@ -178,6 +194,9 @@ private:
 
     // Make hash key from (layer, expert) pair.
     int64_t make_key(int layer, int expert) const;
+
+    // Log hit rate periodically (every log_interval_ tokens).
+    void maybe_log_stats();
 
     void * pool_      = nullptr;  // sycl::malloc_device contiguous pool
     size_t pool_size_  = 0;
@@ -198,9 +217,39 @@ private:
 
     mutable std::shared_mutex mutex_;
 
-    // Stats
+    // Stats (all-time)
     uint64_t hits_   = 0;
     uint64_t misses_ = 0;
+
+    // Rolling hit rate tracking (window of last ROLLING_WINDOW tokens)
+    static constexpr int ROLLING_WINDOW = 100;
+    struct RollingEntry {
+        int hits   = 0;
+        int misses = 0;
+    };
+    RollingEntry rolling_buf_[ROLLING_WINDOW] = {};
+    int          rolling_idx_   = 0;   // Current write index (circular)
+    int          rolling_count_ = 0;   // Total entries written (capped at ROLLING_WINDOW)
+
+    // Current layer being processed (set by record_access_batch)
+    int current_layer_ = -1;
+
+    // Co-activation tracking: pair(key_a, key_b) -> count.
+    // Tracks how often two experts are activated together in the same token.
+    // Stored as sorted-pair keys to avoid (a,b)/(b,a) duplication.
+    std::unordered_map<int64_t, uint32_t> co_activation_;
+
+    // Warm-start profiling state
+    int      warmup_target_   = 32;   // Default: profile first 32 tokens
+    int      warmup_tokens_   = 0;    // Tokens seen so far during warmup
+    bool     warmup_active_   = true; // True during warmup phase
+    bool     warmup_done_     = false; // True after warmup bulk-load completed
+    // Expert access frequency during warmup: key -> count
+    std::unordered_map<int64_t, uint32_t> warmup_freq_;
+
+    // Periodic logging
+    uint64_t log_interval_     = 100;  // Log every N tokens
+    uint64_t last_log_token_   = 0;
 
     // Global token counter for scoring
     uint64_t global_token_ = 0;
