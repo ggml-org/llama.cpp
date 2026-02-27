@@ -330,6 +330,28 @@ SYCL_EXTERNAL inline float dequant_q4_0(const block_q4_0_unified * block, int i)
 }
 
 /**
+ * Dequantize a single MXFP4 weight to float.
+ *
+ * MXFP4 format: E8M0 shared exponent + E2M1 mantissa (4-bit, packed in bytes)
+ * - For index i <  16: value = kvalues_mxfp4_unified[qs[i] & 0x0F] * scale
+ * - For index i >= 16: value = kvalues_mxfp4_unified[qs[i-16] >> 4] * scale
+ *
+ * @param block Pointer to MXFP4 block
+ * @param i     Index within block (0..31)
+ * @return Dequantized float value
+ */
+SYCL_EXTERNAL inline float dequant_mxfp4(const block_mxfp4_unified * block, int i) {
+    const float scale = e8m0_to_float_half(block->e);
+    int8_t      kval;
+    if (i < 16) {
+        kval = kvalues_mxfp4_unified[block->qs[i] & 0x0F];
+    } else {
+        kval = kvalues_mxfp4_unified[block->qs[i - 16] >> 4];
+    }
+    return static_cast<float>(kval) * scale;
+}
+
+/**
  * Dequantize Q4_0 weight to half precision for XMX.
  *
  * @param block Pointer to Q4_0 block
@@ -345,6 +367,26 @@ SYCL_EXTERNAL inline sycl::half dequant_q4_0_half(const block_q4_0_unified * blo
         qs_val = block->qs[i - 16] >> 4;
     }
     return static_cast<sycl::half>(qs_val - 8) * d;
+}
+
+/**
+ * Dequantize a single MXFP4 weight to half precision for XMX.
+ *
+ * MXFP4 format: E8M0 shared exponent + E2M1 mantissa (4-bit, packed in bytes)
+ *
+ * @param block Pointer to MXFP4 block
+ * @param i     Index within block (0..31)
+ * @return Dequantized half value
+ */
+SYCL_EXTERNAL inline sycl::half dequant_mxfp4_half(const block_mxfp4_unified * block, int i) {
+    const float scale = e8m0_to_float_half(block->e);
+    int8_t      kval;
+    if (i < 16) {
+        kval = kvalues_mxfp4_unified[block->qs[i] & 0x0F];
+    } else {
+        kval = kvalues_mxfp4_unified[block->qs[i - 16] >> 4];
+    }
+    return static_cast<sycl::half>(static_cast<float>(kval) * scale);
 }
 
 /**
@@ -457,10 +499,14 @@ SYCL_EXTERNAL void unified_matmul_xmx_kernel_impl(sycl::nd_item<2>              
     const int k_tiles = (args.K + TILE_K - 1) / TILE_K;
     const int k_blocks_per_row = args.K / UNIFIED_QK4_0;
 
-    // Cast weight pointer (AoS layout)
-    const block_q4_0_unified * weights = static_cast<const block_q4_0_unified *>(args.weights);
+    // Quant type dispatch
+    const bool is_mxfp4 = (args.quant_type == QUANT_TYPE_MXFP4);
 
-    // SoA layout pointers
+    // Cast weight pointers based on quant type (different struct sizes: Q4_0=18B, MXFP4=17B)
+    const block_q4_0_unified *  weights_q4 = static_cast<const block_q4_0_unified *>(args.weights);
+    const block_mxfp4_unified * weights_mx = static_cast<const block_mxfp4_unified *>(args.weights);
+
+    // SoA layout pointers (Q4_0 specific — MXFP4 uses AOS path)
     // SoA layout: [qs: N rows × K/32 blocks × 16 bytes/block] [d: N rows × K/32 blocks × sizeof(half)]
     const bool use_soa = (args.layout == LayoutMode::SOA);
     const int64_t total_blocks = args.N * k_blocks_per_row;
@@ -522,13 +568,17 @@ SYCL_EXTERNAL void unified_matmul_xmx_kernel_impl(sycl::nd_item<2>              
                 const int64_t k_global = k_start + k_off;
                 const int block_in_row = static_cast<int>(k_global / UNIFIED_QK4_0);
                 const int idx_in_block = static_cast<int>(k_global % UNIFIED_QK4_0);
-                if (use_soa) {
-                    // SoA layout: separate qs and d arrays
+                if (use_soa && !is_mxfp4) {
+                    // SoA layout: separate qs and d arrays (Q4_0 only)
                     w = dequant_q4_0_half_soa(qs_base, d_base, n_global, k_blocks_per_row, block_in_row, idx_in_block);
-                } else {
-                    // AoS layout: contiguous block_q4_0_unified structs
+                } else if (is_mxfp4) {
+                    // MXFP4: AoS layout with 17-byte blocks
                     const int block_idx = static_cast<int>(n_global * k_blocks_per_row + block_in_row);
-                    w = dequant_q4_0_half(&weights[block_idx], idx_in_block);
+                    w                   = dequant_mxfp4_half(&weights_mx[block_idx], idx_in_block);
+                } else {
+                    // Q4_0 AoS layout: contiguous block_q4_0_unified structs
+                    const int block_idx = static_cast<int>(n_global * k_blocks_per_row + block_in_row);
+                    w                   = dequant_q4_0_half(&weights_q4[block_idx], idx_in_block);
                 }
             }
             slm_weights[n_off * TILE_K + k_off] = w;
@@ -1984,11 +2034,13 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_kernel_impl(
         return;
     }
 
-    // Number of Q4_0 blocks per weight row
+    // Number of quantized blocks per weight row (QK=32 for both Q4_0 and MXFP4)
     const int k_blocks_per_row = static_cast<int>(args.K / UNIFIED_QK4_0);
+    const bool is_mxfp4         = (args.quant_type == QUANT_TYPE_MXFP4);
 
-    // Cast weight pointer
-    const block_q4_0_unified * weights = static_cast<const block_q4_0_unified *>(args.weights);
+    // Cast weight pointers based on quant type (different struct sizes: Q4_0=18B, MXFP4=17B)
+    const block_q4_0_unified *  weights_q4 = static_cast<const block_q4_0_unified *>(args.weights);
+    const block_mxfp4_unified * weights_mx = static_cast<const block_mxfp4_unified *>(args.weights);
 
     // Initialize accumulator: [8 x 16] float
     esimd::simd<float, ESIMD_ACC_SIZE> acc = 0.0f;
@@ -2023,10 +2075,15 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_kernel_impl(
             const int64_t n_global = n_start + n;
             if (n_global >= args.N) continue;
 
-            // Vectorized tile dequantization for this row
-            esimd::simd<sycl::half, ESIMD_K_PER_DPAS> row_weights =
-                dequant_q4_0_tile_vectorized<ESIMD_K_PER_DPAS>(
-                    weights, n_global, k_start, args.K, k_blocks_per_row, k_len);
+            // Vectorized tile dequantization: dispatch based on quant type
+            esimd::simd<sycl::half, ESIMD_K_PER_DPAS> row_weights;
+            if (is_mxfp4) {
+                row_weights = dequant_mxfp4_tile_vectorized<ESIMD_K_PER_DPAS>(weights_mx, n_global, k_start, args.K,
+                                                                              k_blocks_per_row, k_len);
+            } else {
+                row_weights = dequant_q4_0_tile_vectorized<ESIMD_K_PER_DPAS>(weights_q4, n_global, k_start, args.K,
+                                                                             k_blocks_per_row, k_len);
+            }
 
             // Repack to VNNI layout: b[(k/2) * N * 2 + n * 2 + (k%2)]
             #pragma unroll
@@ -2138,11 +2195,13 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_int8_kernel_impl(
         return;
     }
 
-    // Number of Q4_0 blocks per weight row
+    // Number of quantized blocks per weight row (QK=32 for both Q4_0 and MXFP4)
     const int k_blocks_per_row = static_cast<int>(args.K / UNIFIED_QK4_0);
+    const bool is_mxfp4         = (args.quant_type == QUANT_TYPE_MXFP4);
 
-    // Cast weight pointer
-    const block_q4_0_unified * weights = static_cast<const block_q4_0_unified *>(args.weights);
+    // Cast weight pointers based on quant type (different struct sizes: Q4_0=18B, MXFP4=17B)
+    const block_q4_0_unified *  weights_q4 = static_cast<const block_q4_0_unified *>(args.weights);
+    const block_mxfp4_unified * weights_mx = static_cast<const block_mxfp4_unified *>(args.weights);
 
     // Initialize FP32 accumulator for final result: [8 x 16]
     // We accumulate in FP32 because each K-tile has different scales
@@ -2207,18 +2266,30 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_int8_kernel_impl(
                 const int idx_in_block = static_cast<int>(k_global % UNIFIED_QK4_0);
 
                 const int block_idx = static_cast<int>(n_global * k_blocks_per_row + k_block_idx);
-                const block_q4_0_unified * blk = &weights[block_idx];
-                const float d = static_cast<float>(blk->d);
 
-                int qs_val;
-                if (idx_in_block < 16) {
-                    qs_val = blk->qs[idx_in_block] & 0x0F;
+                // Dequantize based on quant type
+                float w_val;
+                if (is_mxfp4) {
+                    const block_mxfp4_unified * blk   = &weights_mx[block_idx];
+                    const float                 scale = e8m0_to_scale_esimd(blk->e);
+                    int8_t                      kval;
+                    if (idx_in_block < 16) {
+                        kval = kvalues_mxfp4_unified[blk->qs[idx_in_block] & 0x0F];
+                    } else {
+                        kval = kvalues_mxfp4_unified[blk->qs[idx_in_block - 16] >> 4];
+                    }
+                    w_val = static_cast<float>(kval) * scale;
                 } else {
-                    qs_val = blk->qs[idx_in_block - 16] >> 4;
+                    const block_q4_0_unified * blk = &weights_q4[block_idx];
+                    const float                d   = static_cast<float>(blk->d);
+                    int                        qs_val;
+                    if (idx_in_block < 16) {
+                        qs_val = blk->qs[idx_in_block] & 0x0F;
+                    } else {
+                        qs_val = blk->qs[idx_in_block - 16] >> 4;
+                    }
+                    w_val = static_cast<float>(qs_val - 8) * d;
                 }
-
-                // Dequantize to FP: w = (nibble - 8) * d
-                const float w_val = static_cast<float>(qs_val - 8) * d;
                 w_fp[n][k] = w_val;
 
                 // Track max-abs for this column
@@ -2406,11 +2477,13 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_cooperative_impl(
     // Check if this sub-group has work (boundary check)
     const bool sg_has_work = (m_sg_start < args.M && n_sg_start < args.N);
 
-    // Number of Q4_0 blocks per weight row
+    // Number of quantized blocks per weight row (QK=32 for both Q4_0 and MXFP4)
     const int k_blocks_per_row = static_cast<int>(args.K / UNIFIED_QK4_0);
+    const bool is_mxfp4         = (args.quant_type == QUANT_TYPE_MXFP4);
 
-    // Cast weight pointer
-    const block_q4_0_unified * weights = static_cast<const block_q4_0_unified *>(args.weights);
+    // Cast weight pointers based on quant type (different struct sizes: Q4_0=18B, MXFP4=17B)
+    const block_q4_0_unified *  weights_q4 = static_cast<const block_q4_0_unified *>(args.weights);
+    const block_mxfp4_unified * weights_mx = static_cast<const block_mxfp4_unified *>(args.weights);
 
     // Initialize SLM for this work-group
     // Layout: [weights: 16 x 16 half][activations: 16 x 16 half]
@@ -2446,9 +2519,12 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_cooperative_impl(
             const int64_t prefetch_k_start = (kt + prefetch_distance) * ESIMD_K_PER_DPAS;
 
             // Prefetch weights for future K-tile (work-items 0..15)
-            prefetch_weights_cooperative<ESIMD_K_PER_DPAS, COOP_WG_N>(
-                weights, n_wg_start, prefetch_k_start, args,
-                k_blocks_per_row, local_id, COOP_WG_N);
+            // Use generic dispatcher to handle both Q4_0 and MXFP4 block strides
+            if (local_id < COOP_WG_N) {
+                const int64_t n_global = n_wg_start + local_id;
+                prefetch_weights_block_generic<ESIMD_K_PER_DPAS>(args.weights, n_global, prefetch_k_start, args.K,
+                                                                 k_blocks_per_row, args.N, args.quant_type);
+            }
 
             // Prefetch activations for future K-tile (work-items 16..31)
             prefetch_activations_cooperative<ESIMD_K_PER_DPAS, COOP_WG_M>(
@@ -2479,9 +2555,14 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_cooperative_impl(
             esimd::simd<sycl::half, ELEMS_PER_ROW> w_row = sycl::half(0.0f);
 
             if (n_global < args.N) {
-                // Vectorized dequantization: load and unpack entire tile at once
-                w_row = dequant_q4_0_tile_vectorized<ELEMS_PER_ROW>(
-                    weights, n_global, k_start, args.K, k_blocks_per_row, k_len);
+                // Vectorized dequantization: dispatch based on quant type
+                if (is_mxfp4) {
+                    w_row = dequant_mxfp4_tile_vectorized<ELEMS_PER_ROW>(weights_mx, n_global, k_start, args.K,
+                                                                         k_blocks_per_row, k_len);
+                } else {
+                    w_row = dequant_q4_0_tile_vectorized<ELEMS_PER_ROW>(weights_q4, n_global, k_start, args.K,
+                                                                        k_blocks_per_row, k_len);
+                }
 
                 // Zero out elements beyond k_len for boundary handling
                 #pragma unroll
@@ -2683,11 +2764,13 @@ SYCL_ESIMD_FUNCTION void large_tile_esimd_kernel_impl(
     // Check if this sub-group has work (boundary check)
     const bool sg_has_work = (m_sg_start < args.M && n_sg_start < args.N);
 
-    // Number of Q4_0 blocks per weight row
+    // Number of quantized blocks per weight row (QK=32 for both Q4_0 and MXFP4)
     const int k_blocks_per_row = static_cast<int>(args.K / UNIFIED_QK4_0);
+    const bool is_mxfp4         = (args.quant_type == QUANT_TYPE_MXFP4);
 
-    // Cast weight pointer
-    const block_q4_0_unified * weights = static_cast<const block_q4_0_unified *>(args.weights);
+    // Cast weight pointers based on quant type (different struct sizes: Q4_0=18B, MXFP4=17B)
+    const block_q4_0_unified *  weights_q4 = static_cast<const block_q4_0_unified *>(args.weights);
+    const block_mxfp4_unified * weights_mx = static_cast<const block_mxfp4_unified *>(args.weights);
 
     // Initialize SLM for this work-group
     esimd::slm_init<LARGE_SLM_TOTAL_BYTES>();
@@ -2726,26 +2809,35 @@ SYCL_ESIMD_FUNCTION void large_tile_esimd_kernel_impl(
             esimd::simd<sycl::half, ELEMS_PER_ROW> w_row = sycl::half(0.0f);
 
             if (n_global < args.N) {
-                // Dequantize 32 elements (may span 1-2 Q4_0 blocks since Q4_0 has 32 elements)
-                // K_start should be aligned to 32 for LARGE_TILE_K=32
-
-                #pragma unroll
-                for (int k = 0; k < ELEMS_PER_ROW; k++) {
-                    if (k >= k_len) {
-                        w_row[k] = sycl::half(0.0f);
-                        continue;
+                // Dequantize 32 elements, dispatching based on quant type
+                if (is_mxfp4) {
+                    // MXFP4: use vectorized tile dequantization
+                    esimd::simd<sycl::half, ELEMS_PER_ROW> dq = dequant_mxfp4_tile_vectorized<ELEMS_PER_ROW>(
+                        weights_mx, n_global, k_start, args.K, k_blocks_per_row, k_len);
+#        pragma unroll
+                    for (int k = 0; k < ELEMS_PER_ROW; k++) {
+                        w_row[k] = (k < k_len) ? dq[k] : sycl::half(0.0f);
                     }
-                    const int64_t k_global = k_start + k;
-                    const int64_t block_idx = n_global * k_blocks_per_row + k_global / UNIFIED_QK4_0;
-                    const int idx_in_block = static_cast<int>(k_global % UNIFIED_QK4_0);
+                } else {
+// Q4_0: inline scalar dequantization
+#        pragma unroll
+                    for (int k = 0; k < ELEMS_PER_ROW; k++) {
+                        if (k >= k_len) {
+                            w_row[k] = sycl::half(0.0f);
+                            continue;
+                        }
+                        const int64_t k_global     = k_start + k;
+                        const int64_t block_idx    = n_global * k_blocks_per_row + k_global / UNIFIED_QK4_0;
+                        const int     idx_in_block = static_cast<int>(k_global % UNIFIED_QK4_0);
 
-                    const block_q4_0_unified * blk = &weights[block_idx];
-                    const sycl::half d = blk->d;
-                    const int byte_idx = idx_in_block / 2;
-                    const int nibble_sel = idx_in_block % 2;
-                    const uint8_t packed = blk->qs[byte_idx];
-                    const int q_val = nibble_sel ? ((packed >> 4) & 0xF) : (packed & 0xF);
-                    w_row[k] = static_cast<sycl::half>(static_cast<float>(d) * (q_val - 8));
+                        const block_q4_0_unified * blk        = &weights_q4[block_idx];
+                        const sycl::half           d          = blk->d;
+                        const int                  byte_idx   = idx_in_block / 2;
+                        const int                  nibble_sel = idx_in_block % 2;
+                        const uint8_t              packed     = blk->qs[byte_idx];
+                        const int                  q_val      = nibble_sel ? ((packed >> 4) & 0xF) : (packed & 0xF);
+                        w_row[k] = static_cast<sycl::half>(static_cast<float>(d) * (q_val - 8));
+                    }
                 }
             }
 
@@ -3076,9 +3168,11 @@ void unified_matmul_kernel_impl(sycl::nd_item<2>                   item,
     // Number of K tiles
     const int k_tiles = (args.K + TILE_K - 1) / TILE_K;
     const int k_blocks_per_row = args.K / UNIFIED_QK4_0;
+    const bool is_mxfp4         = (args.quant_type == QUANT_TYPE_MXFP4);
 
-    // Cast weight pointer
-    const block_q4_0_unified * weights = static_cast<const block_q4_0_unified *>(args.weights);
+    // Cast weight pointers based on quant type (different struct sizes: Q4_0=18B, MXFP4=17B)
+    const block_q4_0_unified *  weights_q4 = static_cast<const block_q4_0_unified *>(args.weights);
+    const block_mxfp4_unified * weights_mx = static_cast<const block_mxfp4_unified *>(args.weights);
 
     // Initialize accumulator for each thread's output elements
     // Each thread computes multiple output elements
@@ -3112,8 +3206,13 @@ void unified_matmul_kernel_impl(sycl::nd_item<2>                   item,
                 const int block_idx = static_cast<int>(n_global * k_blocks_per_row + k_global / UNIFIED_QK4_0);
                 const int idx_in_block = static_cast<int>(k_global % UNIFIED_QK4_0);
 
-                // Dequantize and store to SLM
-                float w = dequant_q4_0(&weights[block_idx], idx_in_block);
+                // Dequantize and store to SLM (dispatch based on quant type)
+                float w;
+                if (is_mxfp4) {
+                    w = dequant_mxfp4(&weights_mx[block_idx], idx_in_block);
+                } else {
+                    w = dequant_q4_0(&weights_q4[block_idx], idx_in_block);
+                }
                 slm_weights[n_off * TILE_K + k_off] = w;
             }
         }
