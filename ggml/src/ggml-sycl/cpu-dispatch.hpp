@@ -122,7 +122,9 @@ void ggml_sycl_cpu_expert_mul_mat(const cpu_expert_task & task);
 // Deduplicates activation quantization: tasks sharing the same act_host pointer
 // and K dimension share one quantized copy.  All experts' rows are flattened
 // into a single TBB parallel_for for maximum load balancing.
-// n_threads=0 means auto (hardware_concurrency - 2, capped at 32).
+// n_threads is currently unused; thread count is controlled by the global
+// TBB arena (see ggml_sycl_cpu_threads_hint). Parameter retained for future
+// per-call control.
 void ggml_sycl_cpu_expert_mul_mat_batched(
     const cpu_expert_task * tasks, int n_tasks,
     int n_threads = 0);
