@@ -506,6 +506,9 @@ task_params server_task::params_from_json_cmpl(
         throw std::runtime_error("n_cmpl cannot be greater than the number of slots, please increase -np");
     }
 
+    params.n_token_healing_enabled = json_value(data, "n_token_healing_enabled", defaults.n_token_healing_enabled);
+    params.n_token_healing_max_retries = json_value(data, "n_token_healing_max_retries", defaults.n_token_healing_max_retries);
+
     return params;
 }
 

@@ -88,6 +88,10 @@ struct task_params {
 
     json format_logit_bias(const std::vector<llama_logit_bias> & logit_bias) const;
     json to_json(bool only_metrics = false) const;
+
+    //for completion tooling
+    bool n_token_healing_enabled = false;
+    int32_t n_token_healing_max_retries = 3;
 };
 
 // struct for tracking the state of a task (e.g., for streaming)
@@ -121,6 +125,16 @@ struct task_result_state {
         const std::string & text_added,
         bool is_partial,
         std::vector<common_chat_msg_diff> & diffs);
+};
+
+struct token_healing_params {
+    llama_token healing_token;
+    std::string healing_token_text;
+};
+
+struct token_healing_result {
+    mutable std::string accepted_healing_token_text;
+    mutable bool token_healing_complete;
 };
 
 struct server_task {
@@ -253,6 +267,10 @@ struct server_task {
     bool is_child() const {
         return id_parent != -1;
     }
+
+    token_healing_params token_healing_params;
+
+    token_healing_result token_healing_result;
 };
 
 struct result_timings {
