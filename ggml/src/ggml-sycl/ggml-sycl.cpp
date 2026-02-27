@@ -23855,11 +23855,12 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 int64_t iid1;       // token index
                 int64_t id;         // expert slot index within token
                 int32_t expert_id;  // global expert ID
+                void *  device_ptr; // cached device pointer (GPU entries only)
             };
             std::vector<expert_dispatch_entry> gpu_entries;
             std::vector<expert_dispatch_entry> cpu_entries;
             gpu_entries.reserve(static_cast<size_t>(ids->ne[1] * n_ids));
-            cpu_entries.reserve(static_cast<size_t>(n_ids));
+            cpu_entries.reserve(static_cast<size_t>(ids->ne[1] * n_ids));
 
             for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
                 for (int64_t id = 0; id < n_ids; id++) {
@@ -23868,26 +23869,29 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
                     // Use ExpertCache::lookup() to check VRAM cache status.
                     // Falls back to expert_ptrs_host table if cache not initialized.
-                    bool on_gpu = false;
+                    bool   on_gpu     = false;
+                    void * cached_ptr = nullptr;
                     if (expert_cache) {
-                        auto lk = expert_cache->lookup(layer_id, i02);
-                        on_gpu  = lk.is_cached;
+                        auto lk   = expert_cache->lookup(layer_id, i02);
+                        on_gpu    = lk.is_cached;
+                        cached_ptr = lk.device_ptr;
                     } else if (expert_ptrs_host && i02 < n_as) {
-                        on_gpu = (expert_ptrs_host[i02] != nullptr);
+                        on_gpu     = (expert_ptrs_host[i02] != nullptr);
+                        cached_ptr = const_cast<void *>(expert_ptrs_host[i02]);
                     }
 
                     if (on_gpu) {
-                        gpu_entries.push_back({ iid1, id, i02 });
+                        gpu_entries.push_back({ iid1, id, i02, cached_ptr });
                     } else {
-                        cpu_entries.push_back({ iid1, id, i02 });
+                        cpu_entries.push_back({ iid1, id, i02, nullptr });
                     }
                 }
             }
 
             // Update access scores for all dispatched experts
             if (expert_cache) {
-                static uint64_t token_counter = 0;
-                token_counter++;
+                static std::atomic<uint64_t> token_counter{0};
+                token_counter.fetch_add(1, std::memory_order_relaxed);
                 for (const auto & e : gpu_entries) {
                     expert_cache->update_score(layer_id, e.expert_id, token_counter);
                 }
@@ -23944,6 +23948,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     stream->wait();
 
                     // Build cpu_expert_task array using mmap host pointers
+                    GGML_ASSERT(use_expert_cache && "hybrid CPU path requires host-accessible weights");
                     cpu_tasks.reserve(n_cpu);
                     for (size_t ci = 0; ci < n_cpu; ci++) {
                         const auto & entry = cpu_entries[ci];
@@ -23969,6 +23974,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             // kernel submissions below.
             std::future<void> cpu_future;
             if (!cpu_tasks.empty()) {
+                // SAFETY: cpu_tasks must not be modified after this point --
+                // tasks_ptr is a raw pointer into the vector's backing storage.
                 auto * tasks_ptr = cpu_tasks.data();
                 int    n_tasks   = static_cast<int>(cpu_tasks.size());
                 cpu_future = std::async(std::launch::async, [tasks_ptr, n_tasks]() {
@@ -23980,25 +23987,16 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             for (const auto & entry : gpu_entries) {
                 const int64_t iid1 = entry.iid1;
                 const int64_t id   = entry.id;
-                const int32_t i02  = entry.expert_id;
                 const int64_t i11  = id % ne11;
                 const int64_t i12  = iid1;
                 const int64_t i1   = id;
                 const int64_t i2   = i12;
 
-                // Get device pointer from ExpertCache (authoritative source)
-                const void * expert_ptr = nullptr;
-                if (expert_cache) {
-                    auto lk    = expert_cache->lookup(layer_id, i02);
-                    expert_ptr = lk.device_ptr;
-                }
-                if (!expert_ptr && expert_ptrs_host) {
-                    expert_ptr = expert_ptrs_host[i02];
-                }
-                GGML_ASSERT(expert_ptr != nullptr);
+                // Use cached device pointer from partition loop (no redundant lookup)
+                GGML_ASSERT(entry.device_ptr != nullptr);
 
-                src0_row.data               = const_cast<void *>(expert_ptr);
-                local_extra.layout.data_ptr = const_cast<void *>(expert_ptr);
+                src0_row.data               = entry.device_ptr;
+                local_extra.layout.data_ptr = entry.device_ptr;
                 src1_row.data               = src1_original + i11 * nb11 + i12 * nb12;
                 dst_row.data                = dst_original + i1 * nb1 + i2 * nb2;
 
