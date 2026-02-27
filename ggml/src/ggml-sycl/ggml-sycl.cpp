@@ -348,7 +348,8 @@ static bool ggml_sycl_persistent_tg_soa_enabled() {
     static int enabled = -1;
     if (enabled < 0) {
         const char * persistent_tg = std::getenv("GGML_SYCL_PERSISTENT_TG");
-        const bool   persistent_on = (persistent_tg && std::atoi(persistent_tg) != 0);
+        // Default ON — set =0 to disable
+        const bool   persistent_on = (persistent_tg == nullptr || std::atoi(persistent_tg) != 0);
         const char * prefer_soa    = std::getenv("GGML_SYCL_PERSISTENT_TG_PREFER_SOA");
         const bool   prefer_on     = (prefer_soa == nullptr || std::atoi(prefer_soa) != 0);
         enabled                    = (persistent_on && prefer_on) ? 1 : 0;
@@ -28484,7 +28485,8 @@ static bool persistent_tg_micro_graph_enabled() {
     static int checked = -1;
     if (checked < 0) {
         const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_MICRO_GRAPH");
-        checked = (env != nullptr && std::strcmp(env, "0") != 0) ? 1 : 0;
+        // Default ON — micro-graph is production-ready; set =0 to disable
+        checked = (env != nullptr && std::strcmp(env, "0") == 0) ? 0 : 1;
     }
     return checked == 1;
 }

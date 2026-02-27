@@ -687,7 +687,8 @@ struct layout_policy {
         }
         if (persistent_tg_soa_enabled < 0) {
             const char * persistent_tg = std::getenv("GGML_SYCL_PERSISTENT_TG");
-            const bool persistent_on = (persistent_tg != nullptr && std::atoi(persistent_tg) != 0);
+            // Default ON — set =0 to disable
+            const bool persistent_on = (persistent_tg == nullptr || std::atoi(persistent_tg) != 0);
             const char * prefer_soa = std::getenv("GGML_SYCL_PERSISTENT_TG_PREFER_SOA");
             const bool prefer_on = (prefer_soa == nullptr || std::atoi(prefer_soa) != 0);
             persistent_tg_soa_enabled = (persistent_on && prefer_on) ? 1 : 0;

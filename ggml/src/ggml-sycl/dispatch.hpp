@@ -155,8 +155,8 @@ inline int get_debug_level() {
 /**
  * Check if persistent TG kernel is enabled via environment variable.
  *
- * Set GGML_SYCL_PERSISTENT_TG=1 to enable persistent token generation kernel.
- * Default: disabled (experimental; ~21 tok/s vs ~72 tok/s standalone MMVQ on Arc B580).
+ * Persistent token generation kernel — fuses entire TG forward pass.
+ * Default: enabled. Set GGML_SYCL_PERSISTENT_TG=0 to disable.
  *
  * @return true if persistent TG kernel is enabled
  */
@@ -164,7 +164,8 @@ inline bool env_persistent_tg_enabled() {
     static int enabled = -1;
     if (enabled < 0) {
         const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG");
-        enabled = (env != nullptr && std::strcmp(env, "1") == 0) ? 1 : 0;  // Default: disabled (experimental)
+        // Default ON — set =0 to disable
+        enabled = (env != nullptr && std::strcmp(env, "0") == 0) ? 0 : 1;
     }
     return enabled != 0;
 }

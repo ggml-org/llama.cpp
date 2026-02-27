@@ -9425,7 +9425,7 @@ static bool micro_graph_mode_enabled() {
     if (checked < 0) {
         const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_MICRO_GRAPH");
         if (env == nullptr) {
-            checked = 0;  // Default OFF (experimental)
+            checked = 1;  // Default ON — micro-graph is production-ready
         } else {
             checked = (std::strcmp(env, "0") == 0) ? 0 : 1;
         }
