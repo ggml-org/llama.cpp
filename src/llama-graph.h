@@ -613,8 +613,9 @@ struct llm_graph_params {
         }
 
         return
-            cparams.embeddings  == other.cparams.embeddings  &&
-            cparams.causal_attn == other.cparams.causal_attn &&
+            cparams.embeddings    == other.cparams.embeddings    &&
+            cparams.causal_attn   == other.cparams.causal_attn   &&
+            cparams.attn_layers   == other.cparams.attn_layers   &&
             arch  == other.arch  &&
             gtype == other.gtype &&
             cvec  == other.cvec  &&
@@ -666,6 +667,10 @@ public:
     std::map<llama_seq_id, ggml_tensor*> t_candidates;
     std::map<llama_seq_id, ggml_tensor*> t_sampled;
     std::map<llama_seq_id, ggml_tensor*> t_sampled_probs;
+
+    // attention weight tensors, keyed by layer index
+    // shape per tensor: [n_kv, n_tokens, n_head, n_stream] (after permute in build_attn_mha)
+    std::map<int, ggml_tensor *> t_attn;
 
     std::vector<llm_graph_input_ptr> inputs;
 
