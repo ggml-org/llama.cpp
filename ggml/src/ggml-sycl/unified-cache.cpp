@@ -844,7 +844,11 @@ bool host_cache_guard_check_all(int device_id, const char * where) {
 
 // atexit handler to prevent SYCL cleanup during static destruction
 static void unified_cache_atexit_handler() {
-    g_sycl_shutting_down.store(true);
+    g_sycl_shutting_down.store(true, std::memory_order_release);
+}
+
+bool ggml_sycl_is_shutting_down() {
+    return g_sycl_shutting_down.load(std::memory_order_acquire);
 }
 
 unified_cache::unified_cache(sycl::queue & queue, size_t budget_bytes, size_t staging_size, size_t dma_reserved_bytes) :

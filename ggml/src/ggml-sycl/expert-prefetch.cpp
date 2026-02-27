@@ -11,6 +11,7 @@
 
 #include "common.hpp"
 #include "cpu-dispatch.hpp"   // expert_miss_precision, burst threshold config
+#include "unified-cache.hpp"  // ggml_sycl_is_shutting_down()
 
 #include <algorithm>
 #include <cstdlib>
@@ -23,8 +24,13 @@ namespace ggml_sycl {
 // ============================================================================
 
 ExpertPrefetcher::~ExpertPrefetcher() {
-    if (initialized_) {
+    if (initialized_ && !ggml_sycl_is_shutting_down()) {
         shutdown();
+    }
+    // During static destruction, intentionally leak the queue handle.
+    // The OS reclaims all process memory at exit.
+    if (ggml_sycl_is_shutting_down() && dma_queue_) {
+        (void) dma_queue_.release();
     }
 }
 
@@ -41,7 +47,7 @@ void ExpertPrefetcher::init(sycl::queue & compute_q, ExpertCache * cache) {
 
     // Create an out-of-order queue on the same device/context for DMA.
     // OOQ allows multiple H2D transfers to overlap and run concurrently.
-    dma_queue_ = sycl::queue(compute_q.get_context(), compute_q.get_device());
+    dma_queue_ = std::make_unique<sycl::queue>(compute_q.get_context(), compute_q.get_device());
 
     // Read prefetch depth from environment
     const char * depth_env = std::getenv("GGML_SYCL_EXPERT_PREFETCH_DEPTH");
@@ -108,7 +114,7 @@ bool ExpertPrefetcher::hint(int layer_idx, int expert_idx) {
     // Submit async H2D DMA on our OOQ via ExpertCache::prefetch_async().
     // This allocates a VRAM slot (evicting if needed) and submits the memcpy
     // on dma_queue_, returning a per-expert sycl::event for granular await.
-    sycl::event ev = cache_->prefetch_async(layer_idx, expert_idx, dma_queue_);
+    sycl::event ev = cache_->prefetch_async(layer_idx, expert_idx, *dma_queue_);
 
     PrefetchRequest req;
     req.key       = key;
@@ -150,7 +156,7 @@ void ExpertPrefetcher::hint_batch(int layer_idx, const std::vector<int> & expert
         }
 
         // Submit async H2D on our OOQ
-        sycl::event ev = cache_->prefetch_async(layer_idx, eidx, dma_queue_);
+        sycl::event ev = cache_->prefetch_async(layer_idx, eidx, *dma_queue_);
 
         PrefetchRequest req;
         req.key       = key;
@@ -266,7 +272,7 @@ void ExpertPrefetcher::cancel_all() {
 
     if (!inflight_.empty()) {
         // Wait for all pending DMAs on our OOQ
-        dma_queue_.wait();
+        dma_queue_->wait();
 
         for (auto & [key, req] : inflight_) {
             if (!req.completed) {

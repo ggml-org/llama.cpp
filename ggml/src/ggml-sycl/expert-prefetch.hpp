@@ -24,6 +24,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <sycl/sycl.hpp>
 #include <unordered_map>
@@ -116,7 +117,7 @@ class ExpertPrefetcher {
     bool is_active() const { return initialized_; }
 
   private:
-    sycl::queue     dma_queue_;                // OOQ for async H2D DMA
+    std::unique_ptr<sycl::queue> dma_queue_;   // OOQ for async H2D DMA (unique_ptr to avoid static init + enable leak-on-exit)
     ExpertCache *   cache_         = nullptr;
     int             prefetch_depth_ = 2;       // Default: 2 layers ahead
     bool            initialized_   = false;

@@ -17,6 +17,7 @@
 #include <sycl/half_type.hpp>
 #include <syclcompat/math.hpp>
 #include <map>
+#include <optional>
 
 // Math library includes for BLAS operations
 // Intel: Uses oneDNN as primary, MKL optional fallback via GGML_SYCL_USE_INTEL_ONEMKL
@@ -1122,10 +1123,12 @@ namespace dpct
         {
             // Enumerate devices directly from platforms to avoid selector failures
             // when ONEAPI_DEVICE_SELECTOR filters available devices.
-            // Selectors (gpu_selector_v, default_selector_v) can throw even when
-            // devices exist if the selector filter doesn't match any device.
-            sycl::device default_device;
-            bool found_device = false;
+            // IMPORTANT: Do NOT use sycl::device() default constructor or
+            // sycl::device(sycl::default_selector_v) here — the default selector
+            // can throw "No device of requested type available" when
+            // ONEAPI_DEVICE_SELECTOR restricts the visible device set.
+            // Instead, enumerate platforms and pick the first GPU (or any device).
+            std::optional<sycl::device> default_device;
 
             auto Platforms = sycl::platform::get_platforms();
             // First pass: try to find any GPU device
@@ -1135,24 +1138,22 @@ namespace dpct
                     for (const auto &device : devices) {
                         if (device.is_gpu()) {
                             default_device = device;
-                            found_device = true;
                             break;
                         }
                     }
-                    if (found_device) break;
+                    if (default_device.has_value()) break;
                 } catch (...) {
                     continue;  // Skip platforms that fail device enumeration
                 }
             }
 
             // Second pass: if no GPU found, accept any device (CPU, accelerator, etc.)
-            if (!found_device) {
+            if (!default_device.has_value()) {
                 for (const auto &Platform : Platforms) {
                     try {
                         auto devices = Platform.get_devices();
                         if (!devices.empty()) {
                             default_device = devices[0];
-                            found_device = true;
                             break;
                         }
                     } catch (...) {
@@ -1162,17 +1163,17 @@ namespace dpct
             }
 
             // Fatal error: no SYCL devices available on any platform
-            if (!found_device) {
+            if (!default_device.has_value()) {
                 fprintf(stderr, "SYCL device manager initialization failed: no devices found on any platform.\n");
                 fprintf(stderr, "Check ONEAPI_DEVICE_SELECTOR environment variable and available SYCL runtimes.\n");
                 GGML_ABORT("No SYCL devices available");
             }
 
-            _devs.push_back(std::make_shared<device_ext>(default_device));
+            _devs.push_back(std::make_shared<device_ext>(*default_device));
 
             std::vector<sycl::device> sycl_all_devs;
             // Collect other devices except for the default device.
-            if (default_device.is_cpu())
+            if (default_device->is_cpu())
                 _cpu_device = 0;
 
             // Re-enumerate platforms for full device list (already have Platforms from above)
@@ -1211,7 +1212,7 @@ namespace dpct
 
             for (auto &dev : sycl_all_devs)
             {
-                if (dev == default_device)
+                if (dev == *default_device)
                 {
                     continue;
                 }

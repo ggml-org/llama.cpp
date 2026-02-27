@@ -1532,6 +1532,10 @@ unified_cache * unified_cache_register_for_queue(int device_id, sycl::queue & qu
 // After calling this, the cache destructors will skip sycl::free() calls
 void shutdown_unified_cache();
 
+// Returns true if SYCL runtime teardown has begun (atexit handler fired).
+// Used by ExpertCache/ExpertPrefetcher to skip sycl::free() during static destruction.
+bool ggml_sycl_is_shutting_down();
+
 }  // namespace ggml_sycl
 
 // === Cross-module Budget Recalculation ===

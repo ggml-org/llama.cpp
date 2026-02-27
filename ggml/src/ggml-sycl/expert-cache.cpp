@@ -127,12 +127,18 @@ void ExpertCache::shutdown() {
     GGML_LOG_INFO("[EXPERT-CACHE] Shutting down: cached=%zu/%d hit_rate=%.1f%% pool=%.1f MB\n",
                   lookup_map_.size(), n_slots_, hr, pool_size_ / (1024.0 * 1024.0));
 
-    // Release budget tracking
-    unified_cache_sub_runtime_bytes(device_id_, pool_size_, runtime_category::EXPERT_CACHE);
+    // Skip SYCL resource cleanup if runtime is shutting down
+    // (static destruction order fiasco — SYCL context may be invalid)
+    if (!ggml_sycl::ggml_sycl_is_shutting_down()) {
+        unified_cache_sub_runtime_bytes(device_id_, pool_size_, runtime_category::EXPERT_CACHE);
 
-    // Free contiguous pool
-    if (queue_) {
-        sycl::free(pool_, *queue_);
+        if (queue_) {
+            try {
+                sycl::free(pool_, *queue_);
+            } catch (...) {
+                // SYCL runtime may be partially torn down
+            }
+        }
     }
 
     pool_      = nullptr;
