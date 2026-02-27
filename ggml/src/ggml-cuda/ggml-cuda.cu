@@ -1235,9 +1235,11 @@ static cublasComputeType_t ggml_cuda_cublas_get_force_compute_type()
         static_assert(CUBLAS_COMPUTE_32F != 0 && CUBLAS_COMPUTE_16F != 0);
         
         if (ggml_cuda_force_cublas_compute_32f_env) {
+            GGML_LOG_INFO("ggml_cuda_cublas_get_force_compute_type: detected GGML_CUDA_FORCE_CUBLAS_COMPUTE_32F\n");
             return CUBLAS_COMPUTE_32F;
         }
         if (ggml_cuda_force_cublas_compute_16f_env) {
+            GGML_LOG_INFO("ggml_cuda_cublas_get_force_compute_type: detected GGML_CUDA_FORCE_CUBLAS_COMPUTE_16F\n");
             return CUBLAS_COMPUTE_16F;
         }
 
