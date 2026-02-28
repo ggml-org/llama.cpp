@@ -2571,10 +2571,46 @@ find_content_type(const std::string &path,
   }
 }
 
+std::string
+extract_media_type(const std::string &content_type,
+                   std::map<std::string, std::string> *params = nullptr) {
+  // Extract type/subtype from Content-Type value (RFC 2045)
+  // e.g. "application/json; charset=utf-8" -> "application/json"
+  auto media_type = content_type;
+  auto semicolon_pos = media_type.find(';');
+  if (semicolon_pos != std::string::npos) {
+    auto param_str = media_type.substr(semicolon_pos + 1);
+    media_type = media_type.substr(0, semicolon_pos);
+
+    if (params) {
+      // Parse parameters: key=value pairs separated by ';'
+      split(param_str.data(), param_str.data() + param_str.size(), ';',
+            [&](const char *b, const char *e) {
+              std::string key;
+              std::string val;
+              split(b, e, '=', [&](const char *b2, const char *e2) {
+                if (key.empty()) {
+                  key.assign(b2, e2);
+                } else {
+                  val.assign(b2, e2);
+                }
+              });
+              if (!key.empty()) {
+                params->emplace(trim_copy(key), trim_double_quotes_copy(val));
+              }
+            });
+    }
+  }
+
+  // Trim whitespace from media type
+  return trim_copy(media_type);
+}
+
 bool can_compress_content_type(const std::string &content_type) {
   using udl::operator""_t;
 
-  auto tag = str2tag(content_type);
+  auto mime_type = extract_media_type(content_type);
+  auto tag = str2tag(mime_type);
 
   switch (tag) {
   case "image/svg+xml"_t:
@@ -2586,7 +2622,7 @@ bool can_compress_content_type(const std::string &content_type) {
 
   case "text/event-stream"_t: return false;
 
-  default: return !content_type.rfind("text/", 0);
+  default: return !mime_type.rfind("text/", 0);
   }
 }
 
@@ -3141,7 +3177,8 @@ bool is_chunked_transfer_encoding(const Headers &headers) {
 template <typename T, typename U>
 bool prepare_content_receiver(T &x, int &status,
                               ContentReceiverWithProgress receiver,
-                              bool decompress, U callback) {
+                              bool decompress, size_t payload_max_length,
+                              bool &exceed_payload_max_length, U callback) {
   if (decompress) {
     std::string encoding = x.get_header_value("Content-Encoding");
     std::unique_ptr<decompressor> decompressor;
@@ -3157,12 +3194,22 @@ bool prepare_content_receiver(T &x, int &status,
 
     if (decompressor) {
       if (decompressor->is_valid()) {
+        size_t decompressed_size = 0;
         ContentReceiverWithProgress out = [&](const char *buf, size_t n,
                                               size_t off, size_t len) {
-          return decompressor->decompress(buf, n,
-                                          [&](const char *buf2, size_t n2) {
-                                            return receiver(buf2, n2, off, len);
-                                          });
+          return decompressor->decompress(
+              buf, n, [&](const char *buf2, size_t n2) {
+                // Guard against zip-bomb: check
+                // decompressed size against limit.
+                if (payload_max_length > 0 &&
+                    (decompressed_size >= payload_max_length ||
+                     n2 > payload_max_length - decompressed_size)) {
+                  exceed_payload_max_length = true;
+                  return false;
+                }
+                decompressed_size += n2;
+                return receiver(buf2, n2, off, len);
+              });
         };
         return callback(std::move(out));
       } else {
@@ -3183,11 +3230,14 @@ template <typename T>
 bool read_content(Stream &strm, T &x, size_t payload_max_length, int &status,
                   DownloadProgress progress,
                   ContentReceiverWithProgress receiver, bool decompress) {
+  bool exceed_payload_max_length = false;
   return prepare_content_receiver(
-      x, status, std::move(receiver), decompress,
-      [&](const ContentReceiverWithProgress &out) {
+      x, status, std::move(receiver), decompress, payload_max_length,
+      exceed_payload_max_length, [&](const ContentReceiverWithProgress &out) {
         auto ret = true;
-        auto exceed_payload_max_length = false;
+        // Note: exceed_payload_max_length may also be set by the decompressor
+        // wrapper in prepare_content_receiver when the decompressed payload
+        // size exceeds the limit.
 
         if (is_chunked_transfer_encoding(x.headers)) {
           auto result = read_content_chunked(strm, x, payload_max_length, out);
@@ -3603,12 +3653,11 @@ std::string normalize_query_string(const std::string &query) {
 
 bool parse_multipart_boundary(const std::string &content_type,
                                      std::string &boundary) {
-  auto boundary_keyword = "boundary=";
-  auto pos = content_type.find(boundary_keyword);
-  if (pos == std::string::npos) { return false; }
-  auto end = content_type.find(';', pos);
-  auto beg = pos + strlen(boundary_keyword);
-  boundary = trim_double_quotes_copy(content_type.substr(beg, end - beg));
+  std::map<std::string, std::string> params;
+  extract_media_type(content_type, &params);
+  auto it = params.find("boundary");
+  if (it == params.end()) { return false; }
+  boundary = it->second;
   return !boundary.empty();
 }
 
@@ -3776,11 +3825,7 @@ bool parse_accept_header(const std::string &s,
     }
 
     // Remove additional parameters from media type
-    auto param_pos = accept_entry.media_type.find(';');
-    if (param_pos != std::string::npos) {
-      accept_entry.media_type =
-          trim_copy(accept_entry.media_type.substr(0, param_pos));
-    }
+    accept_entry.media_type = extract_media_type(accept_entry.media_type);
 
     // Basic validation of media type format
     if (accept_entry.media_type.empty()) {
@@ -5610,7 +5655,7 @@ size_t Request::get_param_value_count(const std::string &key) const {
 
 bool Request::is_multipart_form_data() const {
   const auto &content_type = get_header_value("Content-Type");
-  return !content_type.rfind("multipart/form-data", 0);
+  return detail::extract_media_type(content_type) == "multipart/form-data";
 }
 
 // Multipart FormData implementation
@@ -7092,7 +7137,8 @@ bool Server::read_content(Stream &strm, Request &req, Response &res) {
             return true;
           })) {
     const auto &content_type = req.get_header_value("Content-Type");
-    if (!content_type.find("application/x-www-form-urlencoded")) {
+    if (detail::extract_media_type(content_type) ==
+        "application/x-www-form-urlencoded") {
       if (req.body.size() > CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH) {
         res.status = StatusCode::PayloadTooLarge_413; // NOTE: should be 414?
         output_error_log(Error::ExceedMaxPayloadSize, &req);
@@ -7479,45 +7525,63 @@ bool Server::routing(Request &req, Response &res, Stream &strm) {
   if (detail::expect_content(req)) {
     // Content reader handler
     {
+      // Track whether the ContentReader was aborted due to the decompressed
+      // payload exceeding `payload_max_length_`.
+      // The user handler runs after the lambda returns, so we must restore the
+      // 413 status if the handler overwrites it.
+      bool content_reader_payload_too_large = false;
+
       ContentReader reader(
           [&](ContentReceiver receiver) {
             auto result = read_content_with_content_receiver(
                 strm, req, res, std::move(receiver), nullptr, nullptr);
-            if (!result) { output_error_log(Error::Read, &req); }
+            if (!result) {
+              output_error_log(Error::Read, &req);
+              if (res.status == StatusCode::PayloadTooLarge_413) {
+                content_reader_payload_too_large = true;
+              }
+            }
             return result;
           },
           [&](FormDataHeader header, ContentReceiver receiver) {
             auto result = read_content_with_content_receiver(
                 strm, req, res, nullptr, std::move(header),
                 std::move(receiver));
-            if (!result) { output_error_log(Error::Read, &req); }
+            if (!result) {
+              output_error_log(Error::Read, &req);
+              if (res.status == StatusCode::PayloadTooLarge_413) {
+                content_reader_payload_too_large = true;
+              }
+            }
             return result;
           });
 
+      bool dispatched = false;
       if (req.method == "POST") {
-        if (dispatch_request_for_content_reader(
-                req, res, std::move(reader),
-                post_handlers_for_content_reader_)) {
-          return true;
-        }
+        dispatched = dispatch_request_for_content_reader(
+            req, res, std::move(reader), post_handlers_for_content_reader_);
       } else if (req.method == "PUT") {
-        if (dispatch_request_for_content_reader(
-                req, res, std::move(reader),
-                put_handlers_for_content_reader_)) {
-          return true;
-        }
+        dispatched = dispatch_request_for_content_reader(
+            req, res, std::move(reader), put_handlers_for_content_reader_);
       } else if (req.method == "PATCH") {
-        if (dispatch_request_for_content_reader(
-                req, res, std::move(reader),
-                patch_handlers_for_content_reader_)) {
-          return true;
-        }
+        dispatched = dispatch_request_for_content_reader(
+            req, res, std::move(reader), patch_handlers_for_content_reader_);
       } else if (req.method == "DELETE") {
-        if (dispatch_request_for_content_reader(
-                req, res, std::move(reader),
-                delete_handlers_for_content_reader_)) {
-          return true;
+        dispatched = dispatch_request_for_content_reader(
+            req, res, std::move(reader), delete_handlers_for_content_reader_);
+      }
+
+      if (dispatched) {
+        if (content_reader_payload_too_large) {
+          // Enforce the limit: override any status the handler may have set
+          // and return false so the error path sends a plain 413 response.
+          res.status = StatusCode::PayloadTooLarge_413;
+          res.body.clear();
+          res.content_length_ = 0;
+          res.content_provider_ = nullptr;
+          return false;
         }
+        return true;
       }
     }
 
@@ -7930,16 +7994,6 @@ Server::process_request(Stream &strm, const std::string &remote_addr,
       routed = true;
     } else {
       res.status = StatusCode::InternalServerError_500;
-      std::string val;
-      auto s = e.what();
-      for (size_t i = 0; s[i]; i++) {
-        switch (s[i]) {
-        case '\r': val += "\\r"; break;
-        case '\n': val += "\\n"; break;
-        default: val += s[i]; break;
-        }
-      }
-      res.set_header("EXCEPTION_WHAT", val);
     }
   } catch (...) {
     if (exception_handler_) {
@@ -7948,7 +8002,6 @@ Server::process_request(Stream &strm, const std::string &remote_addr,
       routed = true;
     } else {
       res.status = StatusCode::InternalServerError_500;
-      res.set_header("EXCEPTION_WHAT", "UNKNOWN");
     }
   }
 #endif
@@ -11629,8 +11682,7 @@ void SSLClient::set_session_verifier(
   session_verifier_ = std::move(verifier);
 }
 
-#if defined(_WIN32) &&                                                         \
-    !defined(CPPHTTPLIB_DISABLE_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE)
+#ifdef CPPHTTPLIB_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE
 void SSLClient::enable_windows_certificate_verification(bool enabled) {
   enable_windows_cert_verification_ = enabled;
 }
@@ -11788,8 +11840,7 @@ bool SSLClient::initialize_ssl(Socket &socket, Error &error) {
       }
     }
 
-#if defined(_WIN32) &&                                                         \
-    !defined(CPPHTTPLIB_DISABLE_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE)
+#ifdef CPPHTTPLIB_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE
     // Additional Windows Schannel verification.
     // This provides real-time certificate validation with Windows Update
     // integration, working with both OpenSSL and MbedTLS backends.
@@ -11835,8 +11886,7 @@ void Client::enable_server_hostname_verification(bool enabled) {
   cli_->enable_server_hostname_verification(enabled);
 }
 
-#if defined(_WIN32) &&                                                         \
-    !defined(CPPHTTPLIB_DISABLE_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE)
+#ifdef CPPHTTPLIB_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE
 void Client::enable_windows_certificate_verification(bool enabled) {
   if (is_ssl_) {
     static_cast<SSLClient &>(*cli_).enable_windows_certificate_verification(
@@ -11959,7 +12009,7 @@ bool enumerate_windows_system_certs(Callback cb) {
 }
 #endif
 
-#if defined(__APPLE__) && defined(CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN)
+#ifdef CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN
 // Enumerate macOS Keychain certificates and call callback with DER data
 template <typename Callback>
 bool enumerate_macos_keychain_certs(Callback cb) {
