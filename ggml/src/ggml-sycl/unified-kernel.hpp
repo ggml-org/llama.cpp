@@ -1861,9 +1861,11 @@ SYCL_EXTERNAL inline void dequant_q4_0_to_half(const block_q4_0_unified * block,
  */
 SYCL_EXTERNAL inline float e8m0_to_float_half(uint8_t e) {
     uint32_t bits;
-    if (e == 0) {
-        // Denormal case: return 2^(-127) * 0.5 = 2^(-128)
-        bits = 0x00400000;  // Small positive float
+    if (e < 2) {
+        // Denormal/small exponent cases (matches reference ggml_e8m0_to_fp32_half):
+        // e=0: 0x00200000 = 2^(-128) (denormal: 2^(-127) * 0.5)
+        // e=1: 0x00400000 = 2^(-127) (smallest normal * 0.5)
+        bits = 0x00200000u << e;
     } else {
         // Normal case: scale by 0.5 by subtracting 1 from exponent
         // 2^(e-127) * 0.5 = 2^(e-128)

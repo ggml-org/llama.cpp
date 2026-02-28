@@ -3712,7 +3712,7 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
     // - Each thread: processes K/WARP_SIZE blocks, reduces partial sums
 
     constexpr int DMMV_WARP_SIZE = 32;  // Match GGML_SYCL_WARP_SIZE
-    constexpr int DMMV_BLOCK_SIZE = 32; // Q4_0 block size (UNIFIED_QK4_0)
+    constexpr int DMMV_BLOCK_SIZE = 32; // Block size for both Q4_0 and MXFP4
 
     // Use DMMV path for batch=1 when ESIMD path was not selected
     // (selected_path would be DMMV or we fell through ESIMD checks)
@@ -3721,20 +3721,22 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
         // Each work-group computes the dot product for one output element
         const int grid_n = static_cast<int>(args.N);
         const bool use_soa = (args.layout == LayoutMode::SOA);
+        const bool is_mxfp4 = (args.quant_type == QUANT_TYPE_MXFP4);
 
         if (ggml_sycl_unified_debug_enabled()) {
-            fprintf(stderr, "[unified-kernel] DMMV path: M=%lld N=%lld K=%lld grid_n=%d warp_size=%d layout=%s\n",
+            fprintf(stderr, "[unified-kernel] DMMV path: M=%lld N=%lld K=%lld grid_n=%d warp_size=%d layout=%s type=%s\n",
                     static_cast<long long>(args.M), static_cast<long long>(args.N),
                     static_cast<long long>(args.K), grid_n, DMMV_WARP_SIZE,
-                    use_soa ? "SOA" : "AOS");
+                    use_soa ? "SOA" : "AOS",
+                    is_mxfp4 ? "MXFP4" : "Q4_0");
             fflush(stderr);
         }
 
         // SoA layout calculations (precomputed on host)
-        // SoA layout: [qs: N rows × K/32 blocks × 16 bytes/block] [d: N rows × K/32 blocks × sizeof(half)]
-        // Total sizes: qs = N * K/2 bytes, d = N * K/16 bytes
+        // Q4_0 SoA:  [qs: N*K/2 bytes][d: N*(K/32) * sizeof(half)]
+        // MXFP4 SoA: [qs: N*K/2 bytes][e: N*(K/32) * sizeof(uint8_t)]
         const int64_t total_blocks = args.N * (args.K / DMMV_BLOCK_SIZE);
-        const int64_t d_offset = total_blocks * (DMMV_BLOCK_SIZE / 2);  // Byte offset to scale values
+        const int64_t qs_total_bytes = total_blocks * (DMMV_BLOCK_SIZE / 2);  // Byte offset to scale/exponent values
 
         q.submit([&](sycl::handler & cgh) {
             sycl::nd_range<1> range(
@@ -3760,16 +3762,77 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
                     // Each thread accumulates partial dot product over its assigned blocks
                     float partial_sum = 0.0f;
 
-                    if (use_soa) {
+                    if (is_mxfp4) {
                         // ==============================================
-                        // SoA Layout: Structure of Arrays
+                        // MXFP4 Dequantization
+                        // ==============================================
+                        // MXFP4 block: [e: E8M0 uint8_t][qs: 16 bytes (32 E2M1 nibbles)]
+                        // Dequant: value = kvalues_mxfp4[nibble] * e8m0_to_float_half(e)
+                        // kvalues are doubled, e8m0_to_float_half includes 0.5x correction
+
+                        if (use_soa) {
+                            // MXFP4 SoA: [qs: N*K/2 bytes][e: N*(K/32) bytes]
+                            const uint8_t * qs_base = static_cast<const uint8_t *>(args.weights);
+                            const uint8_t * e_base  = qs_base + qs_total_bytes;
+
+                            const int row_qs_bytes = k_blocks_per_row * (DMMV_BLOCK_SIZE / 2);
+                            const uint8_t * qs_row = qs_base + n * row_qs_bytes;
+                            const uint8_t * e_row  = e_base  + n * k_blocks_per_row;
+
+                            for (int block_idx = tid; block_idx < k_blocks_per_row; block_idx += DMMV_WARP_SIZE) {
+                                // Get E8M0 scale factor
+                                const float scale = e8m0_to_float_half(e_row[block_idx]);
+
+                                const uint8_t * qs = qs_row + block_idx * (DMMV_BLOCK_SIZE / 2);
+                                const int k_offset = block_idx * DMMV_BLOCK_SIZE;
+
+                                float block_sum = 0.0f;
+                                #pragma unroll
+                                for (int i = 0; i < DMMV_BLOCK_SIZE / 2; i++) {
+                                    const uint8_t qs_byte = qs[i];
+                                    const float w0 = static_cast<float>(kvalues_mxfp4_unified[qs_byte & 0x0F]) * scale;
+                                    const float w1 = static_cast<float>(kvalues_mxfp4_unified[qs_byte >> 4]) * scale;
+                                    const float a0 = activations[k_offset + i];
+                                    const float a1 = activations[k_offset + i + 16];
+                                    block_sum += w0 * a0 + w1 * a1;
+                                }
+                                partial_sum += block_sum;
+                            }
+                        } else {
+                            // MXFP4 AoS: contiguous block_mxfp4_unified structs (17 bytes each)
+                            const block_mxfp4_unified * weights_mx =
+                                static_cast<const block_mxfp4_unified *>(args.weights);
+
+                            for (int block_idx = tid; block_idx < k_blocks_per_row; block_idx += DMMV_WARP_SIZE) {
+                                const int global_block_idx = n * k_blocks_per_row + block_idx;
+                                const block_mxfp4_unified * blk = &weights_mx[global_block_idx];
+
+                                const float scale = e8m0_to_float_half(blk->e);
+                                const int k_offset = block_idx * DMMV_BLOCK_SIZE;
+
+                                float block_sum = 0.0f;
+                                #pragma unroll
+                                for (int i = 0; i < DMMV_BLOCK_SIZE / 2; i++) {
+                                    const uint8_t qs_byte = blk->qs[i];
+                                    const float w0 = static_cast<float>(kvalues_mxfp4_unified[qs_byte & 0x0F]) * scale;
+                                    const float w1 = static_cast<float>(kvalues_mxfp4_unified[qs_byte >> 4]) * scale;
+                                    const float a0 = activations[k_offset + i];
+                                    const float a1 = activations[k_offset + i + 16];
+                                    block_sum += w0 * a0 + w1 * a1;
+                                }
+                                partial_sum += block_sum;
+                            }
+                        }
+                    } else if (use_soa) {
+                        // ==============================================
+                        // Q4_0 SoA Layout: Structure of Arrays
                         // ==============================================
                         // Layout: [all qs bytes contiguous][all d values contiguous]
                         // qs: row n starts at qs_base + n * k_blocks_per_row * 16 bytes
                         // d:  row n starts at d_base + n * k_blocks_per_row * sizeof(half)
                         const uint8_t * qs_base = static_cast<const uint8_t *>(args.weights);
                         const sycl::half * d_base = reinterpret_cast<const sycl::half *>(
-                            static_cast<const char *>(args.weights) + d_offset);
+                            static_cast<const char *>(args.weights) + qs_total_bytes);
 
                         // Calculate base pointers for row n
                         const int row_qs_bytes = k_blocks_per_row * (DMMV_BLOCK_SIZE / 2);  // 16 bytes per block
@@ -3802,7 +3865,7 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
                         }
                     } else {
                         // ==============================================
-                        // AoS Layout: Array of Structures (original)
+                        // Q4_0 AoS Layout: Array of Structures (original)
                         // ==============================================
                         // Each block is contiguous: [d: fp16][qs: 16 bytes]
                         const block_q4_0_unified * weights =
