@@ -1632,7 +1632,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         //
 
         const float * imatrix = nullptr;
-        if (imatrix_data) {
+
+        if (imatrix_data && do_quantize) {
             auto it_imatrix = imatrix_data->find(tm.remapped_imatrix_name);
             if (it_imatrix == imatrix_data->end()) {
                 LLAMA_LOG_INFO("\n%s: did not find imatrix data for %s; ", __func__, tensor->name);
@@ -1649,13 +1650,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                     }
                 }
             }
-        }
-        if (!imatrix && tm.requires_imatrix) {
-            LLAMA_LOG_ERROR("\n============================================================\n");
-            LLAMA_LOG_ERROR("Missing importance matrix for tensor %s in a very low-bit quantization\n", tensor->name);
-            LLAMA_LOG_ERROR("The result will be garbage, so bailing out\n");
-            LLAMA_LOG_ERROR("============================================================\n\n");
-            throw std::runtime_error(format("Missing importance matrix for tensor %s in a very low-bit quantization", tensor->name));
         }
 
         //
