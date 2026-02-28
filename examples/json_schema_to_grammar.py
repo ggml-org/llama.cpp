@@ -633,7 +633,7 @@ class SchemaConverter:
             return self._add_rule(rule_name, self._build_object_rule(properties, required, hybrid_name, additional_properties=None))
 
         elif schema_type in (None, 'array') and ('items' in schema or 'prefixItems' in schema):
-            items = schema.get('items') or schema['prefixItems']
+            items = schema['items'] if 'items' in schema or schema['prefixItems']
             if isinstance(items, list):
                 return self._add_rule(
                     rule_name,
