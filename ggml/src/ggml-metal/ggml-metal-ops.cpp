@@ -1970,14 +1970,14 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
            op->src[0]->type == GGML_TYPE_Q8_0 ||
            op->src[0]->type == GGML_TYPE_MXFP4 ||
            op->src[0]->type == GGML_TYPE_IQ4_NL ||
-           false) && (ne11 >= 2 && ne11 <= 8)
+           false) && (ne11 >= 2 && (ne11 <= 8 || !props_dev->has_simdgroup_mm))
          ) ||
          (
           (
            op->src[0]->type == GGML_TYPE_Q4_K ||
            op->src[0]->type == GGML_TYPE_Q5_K ||
            op->src[0]->type == GGML_TYPE_Q6_K ||
-           false) && (ne11 >= 4 && ne11 <= 8)
+           false) && (ne11 >= 4 && (ne11 <= 8 || !props_dev->has_simdgroup_mm))
          )
         )
        ) {
@@ -2019,7 +2019,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
             case 5:
                 r1ptg = 5; break;
             default:
-                GGML_ABORT("unsupported ne11");
+                r1ptg = 4; break;
         };
 
         auto pipeline = ggml_metal_library_get_pipeline_mul_mv_ext(lib, op->src[0]->type, op->src[1]->type, nsg, nxpsg, r1ptg);
