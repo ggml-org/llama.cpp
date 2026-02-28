@@ -3791,6 +3791,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
+    add_opt(common_arg(
+        {"--rerank-bge-default"},
+        string_format("use default BGE Reranker v2 M3 (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.model.hf_repo = "gpustack/bge-reranker-v2-m3-GGUF";
+            params.model.hf_file = "bge-reranker-v2-m3-Q8_0.gguf";
+            params.port = 8015;
+            params.n_ubatch = 512;
+            params.n_batch = 512;
+            params.n_ctx = 512;
+            params.embedding = true;
+            params.pooling_type = LLAMA_POOLING_TYPE_RANK;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+
     return ctx_arg;
 }
 
