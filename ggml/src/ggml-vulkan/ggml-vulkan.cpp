@@ -14670,6 +14670,8 @@ static void ggml_backend_vk_event_record(ggml_backend_t backend, ggml_backend_ev
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
     vk_event *vkev = (vk_event *)event->context;
 
+    ggml_vk_submit_transfer_ctx(ctx);
+
     vk_context compute_ctx = ggml_vk_get_compute_ctx(ctx);
 
     // the backend interface doesn't have an explicit reset, so reset it here
