@@ -58,8 +58,7 @@ bool mmvq_moe_batched_dispatch(
     const int64_t *             gpu_ids,
     int                         n_gpu_entries,
     int                         n_experts,
-    int64_t                     n_ids,
-    int64_t                     ne11);
+    int64_t                     n_ids);
 
 // Convert reordered tensor to coalesced layout for better memory bandwidth
 // Call this AFTER reorder_qw and BEFORE graph recording (at model load time)

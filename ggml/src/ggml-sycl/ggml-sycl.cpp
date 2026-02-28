@@ -24427,7 +24427,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         gpu_id_slots.data(),
                         static_cast<int>(gpu_entries.size()),
                         static_cast<int>(n_as),
-                        n_ids, ne11);
+                        n_ids);
                 }
 
                 // Fallback: per-expert dispatch if batched path unavailable

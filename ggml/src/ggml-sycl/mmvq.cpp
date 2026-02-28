@@ -3593,8 +3593,7 @@ bool mmvq_moe_batched_dispatch(
     const int64_t *             gpu_ids,
     int                         n_gpu_entries,
     int                         n_experts,
-    int64_t                     n_ids,
-    int64_t                     ne11) {
+    int64_t                     n_ids) {
 
     if (n_gpu_entries <= 0 || !expert_ptrs_device) {
         return false;
