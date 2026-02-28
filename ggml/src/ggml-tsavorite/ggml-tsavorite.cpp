@@ -845,9 +845,6 @@ static bool is_op_dtype_consistent_with_src(const struct ggml_tensor *op) {
   return true;
 }
 
-static void anoop_test() {
-	return;
-}
 
 static bool mul_mat_supported_size(const struct ggml_tensor *op) {
     const struct ggml_tensor *a = op->src[0];
