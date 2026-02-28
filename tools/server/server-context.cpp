@@ -671,7 +671,18 @@ private:
             }
 
             params_base.speculative.model_dft = model_dft.get();
+            params_base.speculative.model_tgt = model;
             params_base.speculative.cparams_dft = common_context_params_to_llama(params_dft);
+
+            if (params_base.speculative.eagle3) {
+                // EAGLE3 current limitation: extracted target features are per-context; multiple slots would overwrite each other
+                if (params_base.n_parallel > 1) {
+                    SRV_ERR("%s", "EAGLE3 speculative decoding is not supported with n_parallel > 1\n");
+                    return false;
+                }
+                llama_set_eagle3(ctx, model_dft.get());
+                SRV_INF("%s", "EAGLE3 feature extraction enabled on target model\n");
+            }
         }
 
         std::string & mmproj_path = params_base.mmproj.path;
