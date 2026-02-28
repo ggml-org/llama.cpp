@@ -35022,24 +35022,6 @@ normal_dispatch:
     // The RAII guard handles this for early returns; call explicitly for normal exit.
     suffix_guard.dispatch_suffix();
 
-    // DEBUG: dump logits for comparison with persistent path
-    {
-        sycl::queue * dbg_q = sycl_ctx->stream();
-        for (int gi = cgraph->n_nodes - 1; gi >= 0; gi--) {
-            ggml_tensor * gn = cgraph->nodes[gi];
-            if (gn && gn->op == GGML_OP_MUL_MAT && gn->type == GGML_TYPE_F32 &&
-                gn->ne[0] > 10000) {
-                const void * dst_ptr = (const char *) gn->data + gn->view_offs;
-                float dst_buf[4] = {};
-                dbg_q->memcpy(dst_buf, dst_ptr, sizeof(dst_buf)).wait();
-                GGML_LOG_WARN("[DBG-BASELINE] %s: %.6f %.6f %.6f %.6f (ptr=%p)\n",
-                              gn->name ? gn->name : "?",
-                              dst_buf[0], dst_buf[1], dst_buf[2], dst_buf[3], dst_ptr);
-                break;
-            }
-        }
-    }
-
     record_completion(graph_executed);
     return GGML_STATUS_SUCCESS;
 }
