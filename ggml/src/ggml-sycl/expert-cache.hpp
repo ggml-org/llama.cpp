@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <shared_mutex>
 #include <sycl/sycl.hpp>
 #include <unordered_map>
@@ -279,5 +280,78 @@ private:
 
 // Backward-compatible type alias used by expert-prefetch (Track C).
 using expert_cache = ExpertCache;
+
+// ---------------------------------------------------------------------------
+// PinnedBufferPool: pre-allocated pinned host buffer pool for MoE dispatch.
+//
+// Replaces per-MUL_MAT_ID sycl::malloc_host/free (216 calls/token) with
+// O(1) acquire/release from a pre-allocated pool. Buffers are allocated
+// at moe_hybrid_init_once() time via unified_alloc() with
+// role=EXPERT_STAGING, category=EXPERT_CACHE.
+//
+// Two buffer types:
+//   - activation buffers (K floats per expert dispatch)
+//   - output buffers     (N floats per expert dispatch)
+//
+// Thread-safety: mutex-protected acquire/release. In practice, only one
+// MUL_MAT_ID runs at a time per device, so contention is negligible.
+// ---------------------------------------------------------------------------
+class PinnedBufferPool {
+public:
+    PinnedBufferPool() = default;
+    ~PinnedBufferPool();
+
+    // Non-copyable, non-movable (owns SYCL allocations)
+    PinnedBufferPool(const PinnedBufferPool &)             = delete;
+    PinnedBufferPool & operator=(const PinnedBufferPool &) = delete;
+    PinnedBufferPool(PinnedBufferPool &&)                  = delete;
+    PinnedBufferPool & operator=(PinnedBufferPool &&)      = delete;
+
+    // Initialize the pool with the maximum buffer sizes needed for this model.
+    //   max_cpu_experts: maximum number of CPU experts dispatched per MUL_MAT_ID
+    //   max_K:           maximum input dimension (columns, ne00)
+    //   max_N:           maximum output dimension (rows, ne01)
+    //   device:          SYCL device ordinal (for budget tracking)
+    //   q:               SYCL queue for sycl::malloc_host
+    void init(int max_cpu_experts, int64_t max_K, int64_t max_N,
+              int device, sycl::queue & q);
+
+    // Release all buffers and clean up.
+    void shutdown();
+
+    // Acquire pre-allocated pinned buffers for CPU expert dispatch.
+    // Returns pointers to activation staging and output staging buffers.
+    // Both buffers are guaranteed to hold at least n_cpu * K (or N) floats.
+    // Returns false if pool is not initialized or n_cpu exceeds capacity.
+    struct acquired_buffers {
+        float * activation = nullptr;  // [n_cpu * K] floats, pinned host
+        float * output     = nullptr;  // [n_cpu * N] floats, pinned host
+    };
+    bool acquire(int n_cpu, int64_t K, int64_t N, acquired_buffers & out);
+
+    // Release buffers back to the pool. Must be called after GPU merge is done.
+    void release();
+
+    bool is_initialized() const { return initialized_; }
+
+    // Stats
+    size_t activation_bytes() const { return act_bytes_; }
+    size_t output_bytes() const     { return out_bytes_; }
+    size_t total_bytes() const      { return act_bytes_ + out_bytes_; }
+    int    acquire_count() const    { return acquire_count_; }
+
+private:
+    float *       act_buf_      = nullptr;   // Pre-allocated activation staging
+    float *       out_buf_      = nullptr;   // Pre-allocated output staging
+    size_t        act_bytes_    = 0;
+    size_t        out_bytes_    = 0;
+    int           device_id_    = -1;
+    sycl::queue * queue_        = nullptr;   // Non-owning
+    bool          initialized_  = false;
+    bool          in_use_       = false;     // True between acquire/release
+    int           acquire_count_ = 0;        // Stats counter
+
+    mutable std::mutex mutex_;
+};
 
 } // namespace ggml_sycl

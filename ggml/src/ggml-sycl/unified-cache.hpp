@@ -1111,13 +1111,14 @@ enum class alloc_tier : uint8_t {
 };
 
 enum class alloc_role : uint8_t {
-    WEIGHT    = 0,
-    COMPUTE   = 1,
-    KV        = 2,
-    STAGING   = 3,
-    GRAPH_TMP = 4,
-    TP_TMP    = 5,
-    OTHER     = 6,
+    WEIGHT         = 0,
+    COMPUTE        = 1,
+    KV             = 2,
+    STAGING        = 3,
+    GRAPH_TMP      = 4,
+    TP_TMP         = 5,
+    EXPERT_STAGING = 6,
+    OTHER          = 7,
 };
 
 enum class offload_buffer_role : uint8_t {

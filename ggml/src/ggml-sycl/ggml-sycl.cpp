@@ -242,9 +242,10 @@ static ggml_sycl::ExpertCache * ggml_sycl_get_expert_cache(int device) {
 // Per-device ExpertPrefetcher and ExpertPredictor for MoE hybrid inference.
 // Initialized by moe_hybrid_init_once() on first graph with MUL_MAT_ID nodes.
 // ---------------------------------------------------------------------------
-static ggml_sycl::ExpertPrefetcher g_expert_prefetchers[GGML_SYCL_MAX_DEVICES];
-static ggml_sycl::ExpertPredictor  g_expert_predictors[GGML_SYCL_MAX_DEVICES];
-static std::once_flag              g_moe_hybrid_init_flags[GGML_SYCL_MAX_DEVICES];
+static ggml_sycl::ExpertPrefetcher  g_expert_prefetchers[GGML_SYCL_MAX_DEVICES];
+static ggml_sycl::ExpertPredictor   g_expert_predictors[GGML_SYCL_MAX_DEVICES];
+static ggml_sycl::PinnedBufferPool  g_pinned_buffer_pools[GGML_SYCL_MAX_DEVICES];
+static std::once_flag               g_moe_hybrid_init_flags[GGML_SYCL_MAX_DEVICES];
 // Map hash-based layer_id → sequential index for ExpertPredictor arrays.
 // ExpertCache/ExpertPrefetcher use hash IDs directly (hash-map based),
 // but ExpertPredictor indexes into fixed-size arrays sized by layer count.
@@ -274,10 +275,13 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
     sycl::queue & q  = *ctx.stream();
 
     // Scan graph for MUL_MAT_ID nodes to discover MoE architecture
-    int    n_moe_layers        = 0;
-    int    n_experts_per_layer = 0;
-    int    n_experts_used      = 0;  // top-K from ids tensor
-    size_t expert_weight_bytes = 0;
+    int     n_moe_layers        = 0;
+    int     n_experts_per_layer = 0;
+    int     n_experts_used      = 0;  // top-K from ids tensor
+    size_t  expert_weight_bytes = 0;
+    int64_t max_K               = 0;  // max input dimension (ne00)
+    int64_t max_N               = 0;  // max output dimension (ne01)
+    int     max_dispatch_count  = 0;  // max total expert dispatches per MUL_MAT_ID
 
     struct moe_expert_info {
         int          layer_id;
@@ -326,6 +330,19 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
         }
         if (nb02 > expert_weight_bytes) {
             expert_weight_bytes = nb02;
+        }
+        if (src0->ne[0] > max_K) {
+            max_K = src0->ne[0];
+        }
+        if (src0->ne[1] > max_N) {
+            max_N = src0->ne[1];
+        }
+        // Track max dispatch count (top-K * tokens) for pinned buffer sizing
+        if (ids) {
+            int dispatch = static_cast<int>(ids->ne[0] * std::max(ids->ne[1], (int64_t) 1));
+            if (dispatch > max_dispatch_count) {
+                max_dispatch_count = dispatch;
+            }
         }
         n_moe_layers++;
 
@@ -385,6 +402,13 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
         predictor.init(n_seq_layers, n_experts_per_layer, n_experts_used);
         GGML_LOG_INFO("[MOE-HYBRID] Predictor initialized: %d layers, %d experts, top-%d\n",
                       n_seq_layers, n_experts_per_layer, n_experts_used);
+    }
+
+    // Initialize PinnedBufferPool for O(1) acquire/release of pinned staging
+    // buffers used by CPU expert dispatch (replaces per-call malloc_host/free).
+    if (max_K > 0 && max_N > 0 && max_dispatch_count > 0) {
+        auto & pool = g_pinned_buffer_pools[device];
+        pool.init(max_dispatch_count, max_K, max_N, device, q);
     }
 }
 
@@ -24262,21 +24286,32 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             float *                     cpu_output_pinned = nullptr;
             std::vector<cpu_expert_task> cpu_tasks;
             float *                     src1_host_pinned = nullptr;
+            bool                        used_pinned_pool = false;
 
             const int64_t K = ne00;  // input dimension (columns)
             const int64_t N = ne01;  // output rows per expert
 
             if (!cpu_entries.empty()) {
-                // Allocate pinned host buffers for activation staging and output.
-                // sycl::malloc_host enables GPU zero-copy read via PCIe,
-                // eliminating explicit H2D memcpy for the merge step.
-                const size_t n_cpu       = cpu_entries.size();
-                const size_t act_bytes   = n_cpu * static_cast<size_t>(K) * sizeof(float);
-                const size_t out_bytes   = n_cpu * static_cast<size_t>(N) * sizeof(float);
-                src1_host_pinned = sycl::malloc_host<float>(
-                    n_cpu * static_cast<size_t>(K), stream->get_context());
-                cpu_output_pinned = sycl::malloc_host<float>(
-                    n_cpu * static_cast<size_t>(N), stream->get_context());
+                // Try pre-allocated pinned buffer pool first (O(1) acquire).
+                // Falls back to per-call sycl::malloc_host if pool unavailable.
+                const size_t n_cpu     = cpu_entries.size();
+                const size_t act_bytes = n_cpu * static_cast<size_t>(K) * sizeof(float);
+                const size_t out_bytes = n_cpu * static_cast<size_t>(N) * sizeof(float);
+
+                auto & pool = g_pinned_buffer_pools[ctx.device];
+                ggml_sycl::PinnedBufferPool::acquired_buffers pool_bufs;
+                if (pool.is_initialized() &&
+                    pool.acquire(static_cast<int>(n_cpu), K, N, pool_bufs)) {
+                    src1_host_pinned  = pool_bufs.activation;
+                    cpu_output_pinned = pool_bufs.output;
+                    used_pinned_pool  = true;
+                } else {
+                    // Fallback: per-call allocation (slower but always works)
+                    src1_host_pinned = sycl::malloc_host<float>(
+                        n_cpu * static_cast<size_t>(K), stream->get_context());
+                    cpu_output_pinned = sycl::malloc_host<float>(
+                        n_cpu * static_cast<size_t>(N), stream->get_context());
+                }
 
                 if (!src1_host_pinned || !cpu_output_pinned) {
                     GGML_LOG_ERROR("[MoE-HYBRID] Failed to allocate pinned host memory "
@@ -24379,12 +24414,16 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 stream->wait();
             }
 
-            // Free pinned host buffers
-            if (src1_host_pinned) {
-                sycl::free(src1_host_pinned, stream->get_context());
-            }
-            if (cpu_output_pinned) {
-                sycl::free(cpu_output_pinned, stream->get_context());
+            // Release pinned host buffers (pool or direct free)
+            if (used_pinned_pool) {
+                g_pinned_buffer_pools[ctx.device].release();
+            } else {
+                if (src1_host_pinned) {
+                    sycl::free(src1_host_pinned, stream->get_context());
+                }
+                if (cpu_output_pinned) {
+                    sycl::free(cpu_output_pinned, stream->get_context());
+                }
             }
 
             // --- Record actual expert selections (T6 + T7 integration) ---

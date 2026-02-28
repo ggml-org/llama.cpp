@@ -182,6 +182,8 @@ static runtime_category category_from_role(alloc_role role) {
             return runtime_category::GRAPH;
         case alloc_role::TP_TMP:
             return runtime_category::GRAPH;
+        case alloc_role::EXPERT_STAGING:
+            return runtime_category::EXPERT_CACHE;
         case alloc_role::WEIGHT:
         case alloc_role::OTHER:
         default:
