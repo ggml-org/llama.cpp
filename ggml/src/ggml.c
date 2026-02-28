@@ -6424,7 +6424,7 @@ static void ggml_compute_backward(
             // # now suppose we had the gradient on t from above in the circuit
             // dt = np.random.randn(*t.shape) # same shape as t
             // ds0 = dt.dot(s1.T) #.T gives the transpose of the matrix
-            // ds1 = t.T.dot(dt)
+            // ds1 = s0.T.dot(dt)
 
             // tensor.shape [m,p,qq,rr]
             // src0.shape   [n,m,q1,r1]
