@@ -178,6 +178,14 @@ static int sched_yield (void) {
 }
 #else
 
+// GCC fails to compile ggml on macos
+#if defined(__APPLE__) && !defined(__clang__)
+#undef __restrict
+#define __restrict
+#define _Nullable
+#define _Nonnull
+#endif
+
 #include <pthread.h>
 #include <stdatomic.h>
 #include <sched.h>
