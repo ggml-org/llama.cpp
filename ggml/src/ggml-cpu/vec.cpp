@@ -481,17 +481,31 @@ ggml_float ggml_vec_cvar_f32(const int n, float * y, const float * x, const floa
         sum += (ggml_float)_mm512_reduce_add_ps(_mm512_mul_ps(val, val));
     }
 #elif defined(__AVX2__) && defined(__FMA__)
-    for (; i + 7 < n; i += 8) {
-        __m256 val = _mm256_sub_ps(_mm256_loadu_ps(x + i),
-                                   _mm256_set1_ps(mean));
-        _mm256_storeu_ps(y + i, val);
-        val = _mm256_mul_ps(val,val);
-        __m128 val2 = _mm_add_ps(_mm256_extractf128_ps(val, 1),
-                                 _mm256_castps256_ps128(val));
-        val2 = _mm_add_ps(val2, _mm_movehl_ps(val2, val2));
-        val2 = _mm_add_ss(val2, _mm_movehdup_ps(val2));
-        sum += (ggml_float)_mm_cvtss_f32(val2);
+    __m256 sum_vec0 = _mm256_setzero_ps();
+    __m256 sum_vec1 = _mm256_setzero_ps();
+    __m256 sum_vec2 = _mm256_setzero_ps();
+    __m256 sum_vec3 = _mm256_setzero_ps();
+    const __m256 mean_vec = _mm256_set1_ps(mean);
+    for (; i + 31 < n; i += 32) {
+        __m256 val0 = _mm256_sub_ps(_mm256_loadu_ps(x + i +  0), mean_vec);
+        __m256 val1 = _mm256_sub_ps(_mm256_loadu_ps(x + i +  8), mean_vec);
+        __m256 val2 = _mm256_sub_ps(_mm256_loadu_ps(x + i + 16), mean_vec);
+        __m256 val3 = _mm256_sub_ps(_mm256_loadu_ps(x + i + 24), mean_vec);
+        _mm256_storeu_ps(y + i +  0, val0);
+        _mm256_storeu_ps(y + i +  8, val1);
+        _mm256_storeu_ps(y + i + 16, val2);
+        _mm256_storeu_ps(y + i + 24, val3);
+        sum_vec0 = _mm256_fmadd_ps(val0, val0, sum_vec0);
+        sum_vec1 = _mm256_fmadd_ps(val1, val1, sum_vec1);
+        sum_vec2 = _mm256_fmadd_ps(val2, val2, sum_vec2);
+        sum_vec3 = _mm256_fmadd_ps(val3, val3, sum_vec3);
     }
+    sum_vec0 = _mm256_add_ps(_mm256_add_ps(sum_vec0, sum_vec1), _mm256_add_ps(sum_vec2, sum_vec3));
+    __m128 sum_vec_128 = _mm_add_ps(_mm256_extractf128_ps(sum_vec0, 1),
+                                    _mm256_castps256_ps128(sum_vec0));
+    sum_vec_128 = _mm_add_ps(sum_vec_128, _mm_movehl_ps(sum_vec_128, sum_vec_128));
+    sum_vec_128 = _mm_add_ss(sum_vec_128, _mm_movehdup_ps(sum_vec_128));
+    sum += (ggml_float)_mm_cvtss_f32(sum_vec_128);
 #elif defined(__SSE2__)
     for (; i + 3 < n; i += 4) {
         __m128 val = _mm_sub_ps(_mm_loadu_ps(x + i),
