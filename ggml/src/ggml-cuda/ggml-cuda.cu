@@ -13,6 +13,7 @@
 #include "ggml-cuda/concat.cuh"
 #include "ggml-cuda/conv-transpose-1d.cuh"
 #include "ggml-cuda/conv2d.cuh"
+#include "ggml-cuda/conv2d-mm.cuh"
 #include "ggml-cuda/conv2d-dw.cuh"
 #include "ggml-cuda/conv2d-transpose.cuh"
 #include "ggml-cuda/convert.cuh"
@@ -2680,7 +2681,13 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_im2col_3d(ctx, dst);
             break;
         case GGML_OP_CONV_2D:
-            ggml_cuda_op_conv2d(ctx, dst);
+            if (!getenv("GGML_CUDA_USE_LEGACY_CONV") &&
+                (dst->src[0]->type == GGML_TYPE_F32 && dst->src[1]->type == GGML_TYPE_F32 &&
+                 dst->type == GGML_TYPE_F32)) {
+                ggml_cuda_op_conv2d_mm(ctx, dst);
+            } else {
+                ggml_cuda_op_conv2d(ctx, dst);
+            }
             break;
         case GGML_OP_CONV_2D_DW:
             ggml_cuda_op_conv2d_dw(ctx, dst);
