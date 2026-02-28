@@ -2005,6 +2005,7 @@ struct vk_instance_t {
 
     std::vector<size_t> device_indices;
     std::vector<bool>   device_supports_membudget;
+    bool                instance_get_physical_device_properties2_support = false;
     vk_device devices[GGML_VK_MAX_DEVICES];
 };
 
@@ -5660,6 +5661,14 @@ static void ggml_vk_instance_init() {
 #endif
 
     vk_instance.instance = vk::createInstance(instance_create_info);
+
+    vk_instance.instance_get_physical_device_properties2_support = (api_version >= VK_API_VERSION_1_1);
+    for (const auto & extension : instance_extensions) {
+        if (strcmp(extension.extensionName, VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME) == 0) {
+            vk_instance.instance_get_physical_device_properties2_support = true;
+        }
+    }
+
     vk_instance_initialized = true;
 
     if (debug_utils_ext) {
@@ -14773,6 +14782,7 @@ struct ggml_backend_vk_device_context {
     std::string description;
     bool is_integrated_gpu;
     std::string pci_bus_id;
+    std::string luid;
     int op_offload_min_batch_size;
 };
 
@@ -14788,9 +14798,10 @@ static const char * ggml_backend_vk_device_get_description(ggml_backend_dev_t de
 
 static void ggml_backend_vk_device_get_memory(ggml_backend_dev_t device, size_t * free, size_t * total) {
     ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)device->context;
+    GGML_LOG_DEBUG("ggml_backend_vk_device_get_memory called: luid %s\n", ctx->luid.c_str());
 
     // Check VRAM reporting for Windows IGPU/DGPU using DXGI + PDH (vendor agnostic)
-    if (ggml_dxgi_pdh_init() == 0) {
+    if (!ctx->luid.empty() && ggml_dxgi_pdh_init() == 0) {
         GGML_LOG_DEBUG("DXGI + PDH Initialized. Getting GPU free memory info\n");
         int status = ggml_dxgi_pdh_get_device_memory(ctx->luid.c_str(), free, total, ctx->is_integrated_gpu);
         if (status == 0) {
@@ -15527,6 +15538,27 @@ static ggml_backend_dev_t ggml_backend_vk_reg_get_device(ggml_backend_reg_t reg,
                     /* .reg     = */ reg,
                     /* .context = */ ctx,
                 });
+
+                // Gather additional information about the device
+                int dev_idx = vk_instance.device_indices[i];
+                ctx->luid = "";
+                if (vk_instance.instance_get_physical_device_properties2_support) {
+                    vk::PhysicalDeviceProperties2 props2;
+                    vk::PhysicalDeviceIDProperties device_id_props;
+                    props2.pNext = &device_id_props;
+                    vk_devices[dev_idx].getProperties2(&props2);
+
+                    if (device_id_props.deviceLUIDValid) {
+                        const auto& luid = device_id_props.deviceLUID;
+                        char luid_str[32]; // "0x" + 16 hex digits + null terminator = 19 chars
+                        snprintf(luid_str, sizeof(luid_str), // high part + low part
+                            "0x%02x%02x%02x%02x%02x%02x%02x%02x",
+                            luid[7], luid[6], luid[5], luid[4],
+                            luid[3], luid[2], luid[1], luid[0]
+                        );
+                        ctx->luid = std::string(luid_str);
+                    }
+                }
             }
             initialized = true;
         }
