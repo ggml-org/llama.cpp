@@ -2480,6 +2480,8 @@ static bool ggml_thread_apply_priority(int32_t prio) {
         // Newer Windows 11 versions aggresively park (offline) CPU cores and often place
         // all our threads onto the first 4 cores which results in terrible performance with
         // n_threads > 4
+        #if defined(_MSC_VER)
+
         #if _WIN32_WINNT >= 0x0602
         THREAD_POWER_THROTTLING_STATE t;
         ZeroMemory(&t, sizeof(t));
@@ -2491,6 +2493,7 @@ static bool ggml_thread_apply_priority(int32_t prio) {
             GGML_LOG_DEBUG("failed to disable thread power throttling %d : (%d)\n", prio, (int) GetLastError());
             return false;
         }
+        #endif
         #endif
     }
 
