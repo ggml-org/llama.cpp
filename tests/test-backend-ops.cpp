@@ -8446,6 +8446,51 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         }
     }
 
+
+    // for (ggml_type kernel_type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+    for (ggml_type kernel_type : {GGML_TYPE_F16}) {
+        for (int N : {1}) {
+            for (int IC : {48, 320, 640, 1024}) {
+                for (int OC : {320, 640, 1024, 2048}) {
+                    for (int s0 : {1}) {
+                        for (int p1 : {1}) {
+                            for (int d2 : {1}) {
+                                int64_t IW = 26, IH = 38, ID = 8;
+                                int64_t KW = 3,  KH = 3,  KD = 3;
+                                int s1 = s0, s2 = s0;
+                                int p0 = p1, p2 = p1;
+                                int d0 = d2, d1 = d2;
+                                test_cases.emplace_back(new test_conv_3d(
+                                    N, IC, ID, IH, IW,
+                                    OC, KD, KH, KW,
+                                    s0, s1, s2, p0, p1, p2, d0, d1, d2,
+                                    kernel_type));
+                                IW = 52; IH = 76;
+                                test_cases.emplace_back(new test_conv_3d(
+                                    N, IC, ID, IH, IW,
+                                    OC, KD, KH, KW,
+                                    s0, s1, s2, p0, p1, p2, d0, d1, d2,
+                                    kernel_type));
+                                IW = 104; IH = 158;
+                                test_cases.emplace_back(new test_conv_3d(
+                                    N, IC, ID, IH, IW,
+                                    OC, KD, KH, KW,
+                                    s0, s1, s2, p0, p1, p2, d0, d1, d2,
+                                    kernel_type));
+                                // IW = 208; IH = 316;
+                                // test_cases.emplace_back(new test_conv_3d(
+                                //     N, IC, ID, IH, IW,
+                                //     OC, KD, KH, KW,
+                                //     s0, s1, s2, p0, p1, p2, d0, d1, d2,
+                                //     kernel_type));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     test_cases.emplace_back(new test_bin_bcast(ggml_add, GGML_TYPE_F32, {4096, 1, 1, 1}, {1,   1, 1, 1}));
     test_cases.emplace_back(new test_bin_bcast(ggml_add, GGML_TYPE_F32, {4096, 1, 1, 1}, {1, 512, 1, 1}));
 
