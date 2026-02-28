@@ -200,12 +200,9 @@ private:
         return (sz + ALIGNMENT - 1) & ~(ALIGNMENT - 1);
     }
 
-    // Compute eviction score using Least-Stale policy (SpecMD).
-    // Lower = evict first. Primary: staleness (tokens since last access).
-    // Tiebreaker: layer distance from current processing layer.
-    void recompute_score(ExpertSlot & slot, uint64_t current_token) const;
-
-    // Find the slot with lowest score (eviction candidate).
+    // Find the slot to evict using Least-Stale policy (SpecMD).
+    // Evicts the expert with the oldest last_access (most stale).
+    // Tiebreaker: prefer evicting experts from layers furthest from current compute.
     // Returns index into slots_, or -1 if all empty.
     int find_eviction_candidate() const;
 

@@ -227,13 +227,12 @@ void * ExpertCache::ensure_cached(int layer_idx, int expert_idx, sycl::queue & q
     // Check if already cached
     auto it = lookup_map_.find(key);
     if (it != lookup_map_.end()) {
-        int slot_idx = it->second;
-        // Update stats
-        slots_[slot_idx].frequency++;
-        slots_[slot_idx].last_access = global_token_;
-        recompute_score(slots_[slot_idx], global_token_);
+        auto & slot = slots_[it->second];
+        // Update stats (Least-Stale: only last_access matters for eviction)
+        slot.frequency++;
+        slot.last_access = global_token_;
         hits_++;
-        return slots_[slot_idx].device_ptr;
+        return slot.device_ptr;
     }
 
     // Cache miss
@@ -289,7 +288,6 @@ void * ExpertCache::ensure_cached(int layer_idx, int expert_idx, sycl::queue & q
     slots_[target_slot].size_bytes  = src_bytes;
     slots_[target_slot].frequency   = 1;
     slots_[target_slot].last_access = global_token_;
-    recompute_score(slots_[target_slot], global_token_);
 
     // Register in lookup map
     lookup_map_[key] = target_slot;
@@ -349,7 +347,6 @@ sycl::event ExpertCache::prefetch_async(int layer_idx, int expert_idx, sycl::que
     slots_[target_slot].size_bytes  = src_bytes;
     slots_[target_slot].frequency   = 0;
     slots_[target_slot].last_access = global_token_;
-    recompute_score(slots_[target_slot], global_token_);
 
     lookup_map_[key] = target_slot;
 
@@ -367,10 +364,9 @@ void ExpertCache::update_score(int layer_idx, int expert_idx, uint64_t token_cou
         return;
     }
 
-    int slot_idx = it->second;
-    slots_[slot_idx].frequency++;
-    slots_[slot_idx].last_access = token_counter;
-    recompute_score(slots_[slot_idx], token_counter);
+    auto & slot = slots_[it->second];
+    slot.last_access = token_counter;
+    slot.frequency++;
 }
 
 size_t ExpertCache::cached_count() const {
@@ -563,7 +559,6 @@ void ExpertCache::finish_warmup_locked() {
         slots_[target_slot].size_bytes  = src_bytes;
         slots_[target_slot].frequency   = freq;
         slots_[target_slot].last_access = global_token_;
-        recompute_score(slots_[target_slot], global_token_);
 
         lookup_map_[key] = target_slot;
         n_loaded++;
@@ -579,49 +574,31 @@ void ExpertCache::finish_warmup_locked() {
 // Private helpers
 // ---------------------------------------------------------------------------
 
-void ExpertCache::recompute_score(ExpertSlot & slot, uint64_t current_token) const {
-    // Least-Stale eviction policy (SpecMD):
-    //   score = -staleness + layer_distance_tiebreaker
-    //
-    // Primary factor: staleness (tokens since last access). More negative = staler = evict first.
-    // Tiebreaker: layer distance from current processing layer (small penalty, same sign).
-    //
-    // MoE routing patterns violate temporal locality (SpecMD finding), so simple staleness-based
-    // eviction outperforms multi-factor heuristics by ~85x fewer cache misses.
-    //
-    // Higher score = more valuable (less likely to evict).
-    float staleness = -static_cast<float>(current_token - slot.last_access);
-
-    // Layer-distance tiebreaker: experts far from the current layer get a small penalty.
-    // Scale is 0.001 per layer so it only matters when staleness is equal.
-    float layer_tiebreaker = 0.0f;
-    if (current_layer_ >= 0 && slot.layer_idx >= 0) {
-        int dist = std::abs(slot.layer_idx - current_layer_);
-        layer_tiebreaker = -0.001f * static_cast<float>(dist);
-    }
-
-    slot.score = staleness + layer_tiebreaker;
-}
-
 int ExpertCache::find_eviction_candidate() const {
-    if (n_slots_ == 0) {
-        return -1;
-    }
-
-    int   best_idx   = -1;
-    float best_score = std::numeric_limits<float>::max();
+    // Least-Stale policy: evict the expert with the oldest last_access.
+    // Tiebreaker: prefer evicting experts from layers furthest from current compute.
+    int      best_slot      = -1;
+    uint64_t best_staleness = 0;
 
     for (int i = 0; i < n_slots_; i++) {
-        if (slots_[i].layer_idx == -1) {
-            continue;  // Empty slot, skip
+        if (slots_[i].layer_idx < 0) {
+            continue;  // Empty slot
         }
-        if (slots_[i].score < best_score) {
-            best_score = slots_[i].score;
-            best_idx   = i;
+        const uint64_t staleness = global_token_ - slots_[i].last_access;
+        if (staleness > best_staleness) {
+            best_staleness = staleness;
+            best_slot      = i;
+        } else if (staleness == best_staleness && best_slot >= 0) {
+            // Tiebreaker: prefer slot from a layer further from current compute layer
+            const int dist_new  = std::abs(slots_[i].layer_idx - current_layer_);
+            const int dist_best = std::abs(slots_[best_slot].layer_idx - current_layer_);
+            if (dist_new > dist_best) {
+                best_slot = i;
+            }
         }
     }
 
-    return best_idx;
+    return best_slot;
 }
 
 void ExpertCache::maybe_log_stats() {
