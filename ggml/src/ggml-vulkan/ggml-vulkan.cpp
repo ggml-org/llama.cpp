@@ -15522,6 +15522,7 @@ static ggml_backend_dev_t ggml_backend_vk_reg_get_device(ggml_backend_reg_t reg,
         static std::mutex mutex;
         std::lock_guard<std::mutex> lock(mutex);
         if (!initialized) {
+			std::vector<vk::PhysicalDevice> vk_devices = vk_instance.instance.enumeratePhysicalDevices();
             const int min_batch_size = getenv("GGML_OP_OFFLOAD_MIN_BATCH") ? atoi(getenv("GGML_OP_OFFLOAD_MIN_BATCH")) : 32;
             for (int i = 0; i < ggml_backend_vk_get_device_count(); i++) {
                 ggml_backend_vk_device_context * ctx = new ggml_backend_vk_device_context;
@@ -15542,22 +15543,20 @@ static ggml_backend_dev_t ggml_backend_vk_reg_get_device(ggml_backend_reg_t reg,
                 // Gather additional information about the device
                 int dev_idx = vk_instance.device_indices[i];
                 ctx->luid = "";
-                if (vk_instance.instance_get_physical_device_properties2_support) {
-                    vk::PhysicalDeviceProperties2 props2;
-                    vk::PhysicalDeviceIDProperties device_id_props;
-                    props2.pNext = &device_id_props;
-                    vk_devices[dev_idx].getProperties2(&props2);
+                vk::PhysicalDeviceProperties2 props2;
+                vk::PhysicalDeviceIDProperties device_id_props;
+                props2.pNext = &device_id_props;
+                vk_devices[dev_idx].getProperties2(&props2);
 
-                    if (device_id_props.deviceLUIDValid) {
-                        const auto& luid = device_id_props.deviceLUID;
-                        char luid_str[32]; // "0x" + 16 hex digits + null terminator = 19 chars
-                        snprintf(luid_str, sizeof(luid_str), // high part + low part
-                            "0x%02x%02x%02x%02x%02x%02x%02x%02x",
-                            luid[7], luid[6], luid[5], luid[4],
-                            luid[3], luid[2], luid[1], luid[0]
-                        );
-                        ctx->luid = std::string(luid_str);
-                    }
+                if (device_id_props.deviceLUIDValid) {
+                    const auto& luid = device_id_props.deviceLUID;
+                    char luid_str[32]; // "0x" + 16 hex digits + null terminator = 19 chars
+                    snprintf(luid_str, sizeof(luid_str), // high part + low part
+                        "0x%02x%02x%02x%02x%02x%02x%02x%02x",
+                        luid[7], luid[6], luid[5], luid[4],
+                        luid[3], luid[2], luid[1], luid[0]
+                    );
+                    ctx->luid = std::string(luid_str);
                 }
             }
             initialized = true;
