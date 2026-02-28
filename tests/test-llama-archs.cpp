@@ -238,8 +238,8 @@ static std::vector<float> get_logits(
         const llm_arch arch, const bool moe, const size_t seed, const std::vector<llama_token> & tokens,
         const std::vector<ggml_backend_dev_t> & devs) {
     const uint32_t n_ctx   = 128;
-    const uint32_t n_vocab = 128;
 
+    uint32_t n_vocab = 128;
     uint32_t n_embd  = 256;
     uint32_t n_head  = 2;
     uint32_t n_ff    = 384;
@@ -256,6 +256,8 @@ static std::vector<float> get_logits(
         n_ff   = 192;
     } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
         n_layer = 3;
+    } else if (arch == LLM_ARCH_CHAMELEON) {
+        n_vocab = 10240;
     } else if (arch == LLM_ARCH_GEMMA3N) {
         n_layer = 22; // hparams.n_layer_kv_from_start = 20 is hardcoded
     }
@@ -506,7 +508,7 @@ static int test_backends(const size_t seed, const ggml_log_level log_level) {
         if (arch == LLM_ARCH_RWKV6 || arch == LLM_ARCH_RWKV6QWEN2 || arch == LLM_ARCH_RWKV7 || arch == LLM_ARCH_ARWKV7) {
             continue; // TODO RWKV
         }
-        if (arch == LLM_ARCH_CHAMELEON || arch == LLM_ARCH_PLM) {
+        if (arch == LLM_ARCH_PLM) {
             continue; // TODO tensor shapes
         }
         if (arch == LLM_ARCH_WAVTOKENIZER_DEC) {
