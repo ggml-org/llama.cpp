@@ -4,6 +4,7 @@
 #include "log.h"
 #include "peg-parser.h"
 #include "regex-partial.h"
+#include "unicode.h"
 
 #include <algorithm>
 #include <cctype>
@@ -1615,14 +1616,38 @@ common_chat_msg common_chat_parse(const std::string & input, bool is_partial, co
     return msg;
 }
 
+// Sanitize a UTF-8 string:
+//  - INCOMPLETE at end-of-string: tail truncation from hitting max_tokens, strip it
+//  - INVALID anywhere: garbled byte(s) from the model, skip them
+static std::string sanitize_utf8(const std::string & s) {
+    std::string result;
+    result.reserve(s.size());
+    size_t i = 0;
+    while (i < s.size()) {
+        auto r = parse_utf8_codepoint(s, i);
+        if (r.status == utf8_parse_result::SUCCESS) {
+            result.append(s, i, r.bytes_consumed);
+            i += r.bytes_consumed;
+        } else if (r.status == utf8_parse_result::INCOMPLETE) {
+            LOG_DBG("Stripping incomplete UTF-8 tail (%zu bytes) at pos %zu\n", s.size() - i, i);
+            break;
+        } else { // INVALID
+            LOG_DBG("Skipping invalid UTF-8 byte 0x%02x at pos %zu\n", (unsigned char)s[i], i);
+            ++i;
+        }
+    }
+    return result;
+}
+
 common_chat_msg common_chat_peg_parse(const common_peg_arena & parser, const std::string & input, bool is_partial, const common_chat_parser_params & syntax) {
     if (parser.empty()) {
         throw std::runtime_error("Failed to parse due to missing parser definition.");
     }
 
-    LOG_DBG("Parsing input with format %s: %s\n", common_chat_format_name(syntax.format), input.c_str());
+    const std::string & effective_input = sanitize_utf8(input);
+    LOG_DBG("Parsing input with format %s: %s\n", common_chat_format_name(syntax.format), effective_input.c_str());
 
-    common_peg_parse_context ctx(input, is_partial);
+    common_peg_parse_context ctx(effective_input, is_partial);
     auto result = parser.parse(ctx);
     if (result.fail()) {
         throw std::runtime_error(std::string("Failed to parse input at pos ") + std::to_string(result.end));
