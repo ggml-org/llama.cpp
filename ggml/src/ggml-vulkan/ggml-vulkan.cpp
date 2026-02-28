@@ -13519,8 +13519,7 @@ static bool ggml_backend_vk_cpy_tensor_async(ggml_backend_t backend_src, ggml_ba
     VK_LOG_DEBUG("ggml_backend_vk_cpy_tensor_async()");
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend_dst->context;
 
-    if (dst->buffer->buft != ggml_backend_vk_get_default_buffer_type(backend_dst) &&
-        dst->buffer->buft != ggml_backend_vk_host_buffer_type()) {
+    if (dst->buffer->buft != ggml_backend_vk_get_default_buffer_type(backend_dst)) {
         return false;
     }
 
@@ -13529,6 +13528,11 @@ static bool ggml_backend_vk_cpy_tensor_async(ggml_backend_t backend_src, ggml_ba
 
     if (ggml_backend_buffer_is_vk(src->buffer)) {
         ggml_backend_vk_buffer_context * src_buf_ctx = (ggml_backend_vk_buffer_context *)src->buffer->context;
+
+        // Async copy only works within the same device
+        if (src_buf_ctx->dev_buffer->device != dst_buf->device) {
+            return false;
+        }
 
         vk_context compute_ctx = ggml_vk_get_compute_ctx(ctx);
 
@@ -13559,11 +13563,9 @@ static bool ggml_backend_vk_cpy_tensor_async(ggml_backend_t backend_src, ggml_ba
             cpy_ctx = ggml_vk_get_compute_ctx(ctx);
         }
 
-        bool ret = ggml_vk_buffer_write_async(cpy_ctx, dst_buf,
-                                               vk_tensor_offset(dst) + dst->view_offs,
-                                               src->data, ggml_nbytes(src));
-        GGML_ASSERT(ret);
-        return true;
+        return ggml_vk_buffer_write_async(cpy_ctx, dst_buf,
+                                          vk_tensor_offset(dst) + dst->view_offs,
+                                          src->data, ggml_nbytes(src));
     }
 
     GGML_UNUSED(backend_src);
