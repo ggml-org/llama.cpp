@@ -248,7 +248,7 @@ static std::vector<float> get_logits(
         n_embd = 64;
         n_head = 1;
         n_ff   = 96;
-    } else if (arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_KIMI_LINEAR) {
+    } else if (arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_KIMI_LINEAR) {
         n_embd = 128;
         n_head = 1;
         n_ff   = 192;
@@ -297,7 +297,7 @@ static std::vector<float> get_logits(
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, n_head);
     }
 
-    if (arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_KIMI_LINEAR) {
+    if (arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA  || arch == LLM_ARCH_KIMI_LINEAR) {
         ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH,       uint32_t(576));
         ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH,     uint32_t(512));
         ms.add_kv(LLM_KV_ROPE_DIMENSION_COUNT,       uint32_t(64));
@@ -508,9 +508,6 @@ static int test_backends(const size_t seed, const ggml_log_level log_level) {
         }
         if (arch == LLM_ARCH_APERTUS) {
             continue; // TODO xielu
-        }
-        if (arch == LLM_ARCH_GLM_DSA) {
-            continue; // TODO MLA
         }
         if (arch == LLM_ARCH_LLAMA4) {
             continue; // TODO attn_scale problems
