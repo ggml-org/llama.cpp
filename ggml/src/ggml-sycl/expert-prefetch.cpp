@@ -358,6 +358,29 @@ void ExpertPredictor::init(int n_layers, int n_experts, int n_experts_used) {
                   n_layers, n_experts, n_experts_used);
 }
 
+// ============================================================================
+// argsort_top_k: host-side top-K selection from score array
+// ============================================================================
+
+static std::vector<int> argsort_top_k(const std::vector<float> & scores, int k) {
+    const int n = static_cast<int>(scores.size());
+    if (n == 0 || k <= 0) {
+        return {};
+    }
+    k = std::min(k, n);
+
+    std::vector<int> indices(n);
+    std::iota(indices.begin(), indices.end(), 0);
+    std::partial_sort(indices.begin(), indices.begin() + k, indices.end(),
+                      [&](int a, int b) { return scores[a] > scores[b]; });
+    indices.resize(k);
+    return indices;
+}
+
+// ============================================================================
+// ExpertPredictor: heuristic prediction
+// ============================================================================
+
 std::vector<int> ExpertPredictor::predict(int layer_idx, const float * /*hidden_state*/) {
     if (!initialized_ || layer_idx < 0 || layer_idx >= n_layers_) {
         return {};
@@ -511,6 +534,144 @@ std::vector<int> ExpertPredictor::top_k_by_freq(int layer_idx,
     }
 
     return result;
+}
+
+// ============================================================================
+// ExpertPredictor: pre-gated router prediction via inline SYCL GEMV
+// ============================================================================
+
+std::vector<int> ExpertPredictor::predict_pregate(int           next_layer_idx,
+                                                  const void *  gate_weights,
+                                                  const void *  hidden_state,
+                                                  sycl::queue & compute_q) {
+    if (!initialized_ || next_layer_idx < 0 || next_layer_idx >= n_layers_) {
+        return predict(next_layer_idx);
+    }
+
+    // If gate_weights not provided explicitly, look up from registered pointers
+    if (!gate_weights) {
+        if (next_layer_idx < static_cast<int>(gate_weight_ptrs_.size())) {
+            gate_weights = gate_weight_ptrs_[next_layer_idx];
+        }
+    }
+
+    // Fallback to heuristic if inputs are unavailable
+    if (!gate_weights || !hidden_state) {
+        return predict(next_layer_idx);
+    }
+
+    if (n_embd_ <= 0 || n_experts_ <= 0) {
+        return predict(next_layer_idx);
+    }
+
+    const int    K          = n_embd_;
+    const int    M          = n_experts_;
+    const auto * gate_f32   = static_cast<const float *>(gate_weights);
+    const auto * hidden_f32 = static_cast<const float *>(hidden_state);
+
+    // Allocate host buffer for scores (tiny: n_experts floats, e.g. 512 bytes for 128 experts)
+    std::vector<float> scores_host(M);
+
+    // Allocate a small device buffer for output scores
+    float * scores_dev = sycl::malloc_device<float>(M, compute_q);
+    if (!scores_dev) {
+        GGML_LOG_WARN("[EXPERT-PREDICT] Failed to allocate device scores buffer, falling back to heuristic\n");
+        return predict(next_layer_idx);
+    }
+
+    // Inline SYCL GEMV kernel:
+    //   scores[j] = sum_k(gate_weights[j * K + k] * hidden_state[k])
+    //   n_experts work groups, each computing one output element via
+    //   subgroup reduction + SLM cross-subgroup accumulation.
+    const int wg_size = std::min(256, ((K + 15) / 16) * 16);  // Clamp WG size, round up to 16
+    const int n_wgs   = M;
+
+    try {
+        auto ev = compute_q.submit([&](sycl::handler & cgh) {
+            sycl::local_accessor<float, 1> slm(sycl::range<1>(wg_size / 16 + 1), cgh);
+
+            cgh.parallel_for(sycl::nd_range<1>(n_wgs * wg_size, wg_size), [=](sycl::nd_item<1> item) {
+                const int j     = item.get_group_linear_id();  // expert index
+                const int lid   = item.get_local_linear_id();
+                const int wg_sz = item.get_local_range(0);
+
+                const float * gate_row = gate_f32 + j * K;
+                float         sum      = 0.0f;
+                for (int k = lid; k < K; k += wg_sz) {
+                    sum += gate_row[k] * hidden_f32[k];
+                }
+
+                // Subgroup reduction
+                auto sg = item.get_sub_group();
+                sum     = sycl::reduce_over_group(sg, sum, sycl::plus<float>());
+
+                // Cross-subgroup reduction via SLM
+                const int sg_id  = sg.get_group_linear_id();
+                const int sg_lid = sg.get_local_linear_id();
+                const int n_sgs  = wg_sz / sg.get_local_linear_range();
+
+                if (sg_lid == 0) {
+                    slm[sg_id] = sum;
+                }
+                sycl::group_barrier(item.get_group());
+
+                // Thread 0 accumulates across subgroups
+                if (lid == 0) {
+                    float total = 0.0f;
+                    for (int s = 0; s < n_sgs; s++) {
+                        total += slm[s];
+                    }
+                    scores_dev[j] = total;
+                }
+            });
+        });
+
+        // D2H copy of scores (tiny: M floats, e.g. 512 bytes for 128 experts)
+        compute_q.memcpy(scores_host.data(), scores_dev, M * sizeof(float), ev).wait();
+
+    } catch (const sycl::exception & e) {
+        GGML_LOG_WARN("[EXPERT-PREDICT] Pre-gate GEMV failed: %s, falling back to heuristic\n", e.what());
+        sycl::free(scores_dev, compute_q);
+        return predict(next_layer_idx);
+    }
+
+    sycl::free(scores_dev, compute_q);
+
+    // Top-K selection on host
+    auto result = argsort_top_k(scores_host, n_experts_used_);
+
+    GGML_SYCL_DEBUG("[EXPERT-PREDICT] Pre-gate layer=%d: top-%d experts = [", next_layer_idx, n_experts_used_);
+    for (int i = 0; i < static_cast<int>(result.size()); i++) {
+        GGML_SYCL_DEBUG("%s%d", i > 0 ? "," : "", result[i]);
+    }
+    GGML_SYCL_DEBUG("]\n");
+
+    return result;
+}
+
+void ExpertPredictor::register_gate_weights(int layer_idx, const void * gate_ptr, int n_embd) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (layer_idx < 0) {
+        return;
+    }
+
+    // Grow the gate pointer vector if needed
+    if (layer_idx >= static_cast<int>(gate_weight_ptrs_.size())) {
+        gate_weight_ptrs_.resize(layer_idx + 1, nullptr);
+    }
+
+    gate_weight_ptrs_[layer_idx] = gate_ptr;
+    n_embd_                      = n_embd;
+}
+
+bool ExpertPredictor::has_gate_weights(int layer_idx) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (layer_idx < 0 || layer_idx >= static_cast<int>(gate_weight_ptrs_.size())) {
+        return false;
+    }
+    return gate_weight_ptrs_[layer_idx] != nullptr;
 }
 
 // ============================================================================

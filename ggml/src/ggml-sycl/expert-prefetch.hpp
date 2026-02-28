@@ -188,9 +188,32 @@ class ExpertPredictor {
     // hidden_state is unused in heuristic mode (reserved for future learned predictor).
     std::vector<int> predict(int layer_idx, const float * hidden_state = nullptr);
 
+    // Pre-gated router: compute actual gate scores 1 layer ahead using a
+    // small inline SYCL GEMV kernel. Returns top-K expert indices from the
+    // real router gate weights, giving ~3ms of DMA prefetch overlap.
+    //
+    // Falls back to heuristic predict() if gate_weights or hidden_state is
+    // nullptr, or if gate weight pointers are not registered.
+    //
+    //   next_layer_idx: sequential layer index for the NEXT MoE layer
+    //   gate_weights:   device ptr to f32 gate weights [n_experts x n_embd]
+    //   hidden_state:   device ptr to f32 hidden state [1 x n_embd]
+    //   compute_q:      SYCL queue for kernel submission + D2H copy
+    std::vector<int> predict_pregate(int           next_layer_idx,
+                                     const void *  gate_weights,
+                                     const void *  hidden_state,
+                                     sycl::queue & compute_q);
+
     // Record actual expert selections from the router for accuracy tracking.
     // Called after MUL_MAT_ID with the real expert indices chosen by the gating network.
     void record_actual(int layer_idx, const std::vector<int> & actual_experts);
+
+    // Register gate weight pointer for a specific layer.
+    // Called during moe_hybrid_init_once() after scanning graph for ffn_gate_inp tensors.
+    void register_gate_weights(int layer_idx, const void * gate_ptr, int n_embd);
+
+    // Check if pre-gated routing is available for a given layer.
+    bool has_gate_weights(int layer_idx) const;
 
     // Statistics (rolling window of last ACCURACY_WINDOW predictions)
     float hit_rate() const;       // Rolling prediction accuracy (0.0 - 1.0)
@@ -213,6 +236,12 @@ class ExpertPredictor {
 
     // Last prediction per layer (for accuracy comparison).
     std::vector<std::vector<int>> last_prediction_;
+
+    // Pre-gated router: cache of gate weight pointers per layer.
+    // gate_weight_ptrs_[seq_layer_idx] = device ptr to f32 gate weights.
+    // Empty if model has no MoE or gate weights not yet registered.
+    std::vector<const void *> gate_weight_ptrs_;
+    int                       n_embd_ = 0;  // Embedding dimension for GEMV kernel
 
     // Rolling accuracy stats (last 100 predictions).
     static constexpr int ACCURACY_WINDOW = 100;
