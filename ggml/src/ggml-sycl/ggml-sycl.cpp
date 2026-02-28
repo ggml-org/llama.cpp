@@ -21122,14 +21122,35 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
         // get_layout_ptr_for resolves via the full tensor's cache key and returns the
         // FULL weight buffer pointer (same for every expert), which is wrong.
         // For non-MoE tensors, src0->data and get_layout_ptr_for return the same thing.
+
+        // Determine the data layout: use forced_layout from mul_mat_id if provided,
+        // else check src0->extra->layout.mode, else default to AOS.
+        ggml_sycl_unified::LayoutMode data_layout = ggml_sycl_unified::LayoutMode::AOS;
+        if (forced_layout) {
+            switch (*forced_layout) {
+                case GGML_LAYOUT_SOA:       data_layout = ggml_sycl_unified::LayoutMode::SOA; break;
+                case GGML_LAYOUT_COALESCED: data_layout = ggml_sycl_unified::LayoutMode::COALESCED; break;
+                default:                    data_layout = ggml_sycl_unified::LayoutMode::AOS; break;
+            }
+        } else if (src0->extra) {
+            const auto * extra = static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
+            if (extra) {
+                switch (get_effective_layout_mode(extra)) {
+                    case GGML_LAYOUT_SOA:       data_layout = ggml_sycl_unified::LayoutMode::SOA; break;
+                    case GGML_LAYOUT_COALESCED: data_layout = ggml_sycl_unified::LayoutMode::COALESCED; break;
+                    default:                    data_layout = ggml_sycl_unified::LayoutMode::AOS; break;
+                }
+            }
+        }
+
         const void * src0_data = nullptr;
         if (src0->data) {
             const sycl::usm::alloc alloc = sycl::get_pointer_type(
                 src0->data, ctx.stream()->get_context());
-            GGML_SYCL_DEBUG("[MXFP4-DIRECT] src0=%s src0->data=%p alloc_type=%d ne=[%lld,%lld,%lld,%lld] M=%lld\n",
+            GGML_SYCL_DEBUG("[MXFP4-DIRECT] src0=%s src0->data=%p alloc_type=%d ne=[%lld,%lld,%lld,%lld] M=%lld layout=%d\n",
                     src0->name ? src0->name : "(null)", src0->data, (int)alloc,
                     (long long)src0->ne[0], (long long)src0->ne[1], (long long)src0->ne[2], (long long)src0->ne[3],
-                    (long long)src1->ne[1]);
+                    (long long)src1->ne[1], (int)data_layout);
             // Accept device or host USM pointers. Per-expert MoE dispatch
             // sets src0->data to a per-expert slice. Expert cache may provide
             // host-pinned (sycl::malloc_host) pointers that the GPU can access
@@ -21141,19 +21162,13 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
         if (!src0_data) {
             src0_data = ggml_sycl_get_layout_ptr_for(src0, ctx.device, GGML_LAYOUT_AOS);
             GGML_SYCL_DEBUG("[MXFP4-DIRECT] fallback get_layout_ptr_for -> %p\n", src0_data);
+            // Fallback pointer is always AOS
+            data_layout = ggml_sycl_unified::LayoutMode::AOS;
         }
         if (src0_data) {
-            GGML_SYCL_DEBUG("[MXFP4-DIRECT] DISPATCHING unified kernel: src0_data=%p src1=%p dst=%p M=%lld K=%lld N=%lld\n",
-                    src0_data, (const void*)src1->data, (void*)dst->data,
-                    (long long)src1->ne[1], (long long)src0->ne[0], (long long)src0->ne[1]);
             // Drain any pending merge before dispatch
             split_merge_drain();
 
-            // Use tensor->data directly instead of ggml_sycl_get_data_ptr() because
-            // per-expert row tensors from mul_mat_id have src1_row.data set to the
-            // correct contiguous buffer slice, but extra->data_device[] still points
-            // to the FULL activation tensor. ggml_sycl_get_data_ptr() would return
-            // the stale full-tensor pointer, causing garbage output for PP batches.
             const float * src1_data = static_cast<const float *>(src1->data);
             float *       dst_data  = static_cast<float *>(dst->data);
             if (src1_data && dst_data) {
@@ -21171,10 +21186,12 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                 const int64_t src1_plane_elems = M * K;
                 const int64_t dst_plane_elems  = M * N;
 
-                GGML_SYCL_DEBUG("[MXFP4-DIRECT] M=%lld K=%lld N=%lld n_batch=%lld src0=%p src1=%p dst=%p\n",
+                GGML_SYCL_DEBUG("[MXFP4-DIRECT] M=%lld K=%lld N=%lld n_batch=%lld src0=%p src1=%p dst=%p layout=%d\n",
                                 (long long) M, (long long) K, (long long) N, (long long) n_batch,
-                                src0_data, src1_data, dst_data);
+                                src0_data, src1_data, dst_data, (int)data_layout);
 
+                // Dispatch per-row with M=1 to use the DMMV path.
+                // The scalar tiled kernel (used for M>1) has untested MXFP4 support.
                 for (int64_t i0 = 0; i0 < n_batch; ++i0) {
                     const int64_t src0_batch = i0 / i02_divisor;
                     const char *  src0_batch_ptr =
@@ -21182,9 +21199,14 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                     const float * src1_batch_ptr = src1_data + i0 * src1_plane_elems;
                     float *       dst_batch_ptr  = dst_data  + i0 * dst_plane_elems;
 
-                    ggml_sycl::ggml_sycl_mul_mat_unified_default(
-                        *ctx.stream(), src0_batch_ptr, src1_batch_ptr, dst_batch_ptr,
-                        M, N, K, src0->type, ggml_sycl_unified::LayoutMode::AOS);
+                    for (int64_t m = 0; m < M; ++m) {
+                        ggml_sycl::ggml_sycl_mul_mat_unified_default(
+                            *ctx.stream(),
+                            src0_batch_ptr,
+                            src1_batch_ptr + m * K,
+                            dst_batch_ptr + m * N,
+                            1, N, K, src0->type, data_layout);
+                    }
                 }
                 return;
             }
