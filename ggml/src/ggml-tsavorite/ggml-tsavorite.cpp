@@ -895,10 +895,14 @@ static bool ggml_tsavorite_supports_op(const struct ggml_backend_tsavorite_devic
   case GGML_OP_SOFT_MAX:
 #endif /* GGML_TARGET_POSIX_DEBUG */
     break;
+
+#ifdef GGML_TARGET_POSIX
   case GGML_OP_MUL_MAT:
 	  if (!mul_mat_supported_size(op))
 		  return false;
     break;
+#endif /* GGML_TARGET_POSIX */
+
   case GGML_OP_GLU:
     {
         const ggml_glu_op op_ext = ggml_get_glu_op(op);
@@ -1304,13 +1308,30 @@ static enum ggml_status ggml_tsavorite_run_tmu_mul_mat(
 
     ensure_tmu_pack_buffers();
 
-    // --- buffer to save previous partial C between K buckets ---
+    // -------------------------------------------------------------------------
+    // Host-only buffer to save previous partial C between K buckets.
+    // IMPORTANT: This buffer is NOT passed to the TMU blob, so DO NOT use tsi_alloc
+    // (tsi_alloc comes from CMA and is not freed until tsi_finalize).
+    // Allocate once from normal host heap and reuse.
+    // -------------------------------------------------------------------------
     static float *g_C_prev = nullptr;
     static std::once_flag g_prev_once;
-    std::call_once(g_prev_once, []() {
-        g_C_prev = (float *) tsi_alloc(
-            (size_t)TMU_M_TILE_MAX * (size_t)TMU_N_BLOCK * sizeof(float));
+
+    auto host_alloc_aligned = [](size_t bytes) -> void * {
+        void *p = nullptr;
+        // 64-byte alignment is safe for vector loads; fallback to malloc if needed.
+        if (posix_memalign(&p, 64, bytes) != 0) {
+            p = malloc(bytes);
+        }
+        return p;
+    };
+
+    std::call_once(g_prev_once, [&]() {
+        const size_t bytes = (size_t)TMU_M_TILE_MAX * (size_t)TMU_N_BLOCK * sizeof(float);
+        g_C_prev = (float *) host_alloc_aligned(bytes);
         TSAVORITE_GGML_ASSERT(g_C_prev);
+        // Optional: initialize to zero once (not required, but keeps debuggability clean)
+        memset(g_C_prev, 0, bytes);
     });
 
 #ifdef TMU_DEBUG_VALIDATE
@@ -1323,6 +1344,7 @@ static enum ggml_status ggml_tsavorite_run_tmu_mul_mat(
 
     std::call_once(probe_once, [&]() {
         const size_t bytes = (size_t)TMU_M_TILE_MAX * (size_t)TMU_N_BLOCK * sizeof(float);
+        // NOTE: These ARE passed to the blob in the probe calls, so they MUST be tsi_alloc.
         C_probe  = (float *) tsi_alloc(bytes);
         C_probe2 = (float *) tsi_alloc(bytes);
         C_single = (float *) tsi_alloc(bytes);
@@ -1423,10 +1445,10 @@ static enum ggml_status ggml_tsavorite_run_tmu_mul_mat(
                         ++node->tsi_kernel_runs;
 
 #ifdef TMU_DEBUG_VALIDATE
-                        // Optional probes (only for the very first output tile; helps detect overwrite vs accum)
                         const bool is_first_tile = (m0 == 0 && n0 == 0 && od2 == 0 && od3 == 0);
+
                         if (is_first_tile && np > 1 && pi > 0) {
-                            // Double-call probe: same inputs twice should double output if blob accumulates internally
+                            // Double-call probe
                             memset(C_probe, 0, tile_bytes);
                             bucket->fn(g_A_pack, g_B_pack, C_probe);
                             memcpy(C_single, C_probe, tile_bytes);
@@ -1442,11 +1464,12 @@ static enum ggml_status ggml_tsavorite_run_tmu_mul_mat(
                                 "single=%f second=%f expect=%f diff=%f\n",
                                 pi, K_chunk, (long)k0, s0, s1, expect, diff);
 
-                            // Carry-in probe: if blob truly loads PP from C_tile, passing 1.0 should preserve it when A/B are zero
+                            // Carry-in probe
                             for (int i = 0; i < TMU_M_TILE_MAX * TMU_N_BLOCK; ++i) C_probe2[i] = 1.0f;
 
                             static float A_save[TMU_M_TILE_MAX * 2048];
                             static float B_save[TMU_N_BLOCK    * 2048];
+
                             memcpy(A_save, g_A_pack, (size_t)TMU_M_TILE_MAX * (size_t)K_chunk * sizeof(float));
                             memcpy(B_save, g_B_pack, (size_t)TMU_N_BLOCK    * (size_t)K_chunk * sizeof(float));
                             memset(g_A_pack, 0, (size_t)TMU_M_TILE_MAX * (size_t)K_chunk * sizeof(float));
@@ -1463,7 +1486,7 @@ static enum ggml_status ggml_tsavorite_run_tmu_mul_mat(
                                 pi, K_chunk, (long)k0, C_probe2[0]);
                         }
 
-                        // CPU reference compare up to K_so_far (after host-side accumulation)
+                        // CPU reference compare up to K_so_far
                         memset(C_ref_full, 0, sizeof(C_ref_full));
                         const int64_t K_so_far = k0 + K_chunk;
 
@@ -1495,7 +1518,6 @@ static enum ggml_status ggml_tsavorite_run_tmu_mul_mat(
                             }
                         }
 #endif
-
                         k0 += K_chunk;
                     }
 
@@ -2785,11 +2807,15 @@ static bool ggml_backend_tsavorite_device_offload_op(ggml_backend_dev_t dev,
   case GGML_OP_SOFT_MAX:
 #endif /* GGML_TARGET_POSIX_DEBUG */
     break;
+
+#ifdef GGML_TARGET_POSIX
   case GGML_OP_MUL_MAT:
 	  if (!mul_mat_supported_size(op))
 		  return false;
 
     break;
+#endif /* GGML_TARGET_POSIX */
+
   case GGML_OP_GLU:
     {
         const ggml_glu_op op_ext = ggml_get_glu_op(op);
