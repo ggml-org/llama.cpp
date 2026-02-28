@@ -3238,11 +3238,9 @@ class BitnetModel(TextModel):
         dtype = weight.dtype
         weight = weight.float()
         scale = weight.abs().mean().clamp(min=1e-5)
-        iscale = 1 / scale
-        # TODO: multiply by the scale directly instead of inverting it twice
-        # (this is also unnecessarily doubly inverted upstream)
-        # ref: https://huggingface.co/1bitLLM/bitnet_b1_58-3B/blob/af89e318d78a70802061246bf037199d2fb97020/utils_quant.py#L10
-        result = (weight * iscale).round().clamp(-1, 1) / iscale
+        # Directly use scale instead of inverting it twice
+        # First round and clamp to -1, 1, then multiply by scale to get back to original range
+        result = weight.div(scale).round().clamp(-1, 1).mul(scale)
         return result.type(dtype)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
