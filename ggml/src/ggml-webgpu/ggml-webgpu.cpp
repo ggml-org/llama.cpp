@@ -31,6 +31,7 @@
 #define ROUNDUP_POW2(x, pow2) (((x) + ((pow2) - 1)) & ~((pow2) - 1))
 #define CEIL_DIV(M, N)        (((M) + (N) - 1) / (N))
 
+// TODO: split large sizes into multiple batches to avoid way over-provisioning workgroups
 static inline void compute_2d_workgroups(uint32_t total_wg, uint32_t max_per_dim, uint32_t & wg_x, uint32_t & wg_y) {
     wg_x = std::min(total_wg, max_per_dim);
     wg_y = CEIL_DIV(total_wg, max_per_dim);
