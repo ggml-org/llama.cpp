@@ -8,12 +8,15 @@
 #include <cstring>
 #include <cinttypes>
 #include <fstream>
+
 #include <mutex>
 #include <regex>
 #include <thread>
 #include <memory>
 #include <atomic>
+#include <functional>
 #include <unordered_map>
+#include <condition_variable>
 
 // Quantization types. Changes to this struct must be replicated in quantize.cpp
 struct tensor_quantization {
@@ -21,7 +24,173 @@ struct tensor_quantization {
     ggml_type quant = GGML_TYPE_COUNT;
 };
 
-struct quantization_state_impl {
+// tensor categorization (used to avoid repeated string matching)
+enum class tensor_category {
+    TOKEN_EMBD,
+    ATTENTION_Q,
+    ATTENTION_V,
+    ATTENTION_K,
+    ATTENTION_QKV,
+    ATTENTION_KV_B,
+    ATTENTION_OUTPUT,
+    FFN_UP,
+    FFN_GATE,
+    FFN_DOWN,
+    OUTPUT,
+    OTHER
+};
+
+// cached metadata per tensor
+struct tensor_metadata {
+    tensor_category category;
+    ggml_type target_type;
+    std::string remapped_imatrix_name;
+    bool allows_quantization;
+    bool requires_imatrix;
+};
+
+// persistent thread pool for quantization
+//
+// threads are spawned once and reused for all tensors, avoiding the overhead
+// of repeated thread creation/destruction across hundreds of tensors.
+struct quantize_thread_pool {
+    std::vector<std::thread> workers;
+    int32_t n_workers = 0;
+
+    size_t batch_idx = 0; // incremented each distribute call
+
+    // synchronization
+    std::mutex mutex;
+    std::condition_variable cv_start; // wakes workers when a new batch is ready
+    std::condition_variable cv_done;  // wakes main when all workers are idle
+
+    // current batch parameters
+    int64_t n_items = 0;
+    std::atomic<int64_t> next_item{0};
+    std::function<void(int64_t)> task_fn;
+
+    // barrier state (protected by mutex)
+    int n_ready  = 0; // number of workers currently idle and waiting
+    bool stopping = false;
+
+    void start(int nthread) {
+        n_workers = std::max(0, nthread - 1);
+        workers.reserve(n_workers);
+        for (int i = 0; i < n_workers; i++) {
+            workers.emplace_back([this] { worker(); });
+        }
+        if (n_workers > 0) {
+            // wait for all workers to enter their idle state
+            std::unique_lock<std::mutex> lock(mutex);
+            cv_done.wait(lock, [this] { return n_ready == n_workers; });
+        }
+    }
+
+    void worker() {
+        uint64_t my_batch = 0;
+        std::unique_lock<std::mutex> lock(mutex);
+        while (true) {
+            // signal that this worker is idle
+            n_ready++;
+            if (n_ready == n_workers) {
+                cv_done.notify_one();
+            }
+
+            // wait for new work or shutdown
+            cv_start.wait(lock, [&] { return stopping || batch_idx > my_batch; });
+            if (stopping) {
+                return;
+            }
+
+            // leave idle state and grab batch parameters
+            n_ready--;
+            my_batch = batch_idx;
+            lock.unlock();
+
+            // grab work items until exhausted
+            while (true) {
+                const int64_t idx = next_item.fetch_add(1, std::memory_order_relaxed);
+                if (idx >= n_items) {
+                    break;
+                }
+                task_fn(idx);
+            }
+
+            lock.lock();
+        }
+    }
+
+    // distribute fn(0..n-1) across all pool threads + the calling thread.
+    // blocks until every item has been processed.
+    void distribute(int64_t n, std::function<void(int64_t)> fn) {
+        if (n <= 0) {
+            return;
+        }
+
+        if (n_workers == 0) {
+            // single-threaded fast path: no synchronization overhead
+            for (int64_t i = 0; i < n; i++) {
+                fn(i);
+            }
+            return;
+        }
+
+        {
+            std::unique_lock<std::mutex> lock(mutex);
+            // ensure all workers are idle from previous batch
+            cv_done.wait(lock, [this] { return n_ready == n_workers; });
+
+            // set up the new batch
+            task_fn = std::move(fn);
+            n_items = n;
+            next_item.store(0, std::memory_order_relaxed);
+            batch_idx++;
+        }
+        cv_start.notify_all();
+
+        // main thread participates in the work
+        while (true) {
+            const int64_t idx = next_item.fetch_add(1, std::memory_order_relaxed);
+            if (idx >= n_items) {
+                break;
+            }
+            task_fn(idx);
+        }
+
+        // wait for all workers to finish and return to idle
+        {
+            std::unique_lock<std::mutex> lock(mutex);
+            cv_done.wait(lock, [this] { return n_ready == n_workers; });
+        }
+    }
+
+    void stop() {
+        if (workers.empty()) {
+            return;
+        }
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            stopping = true;
+        }
+        cv_start.notify_all();
+        for (auto & w : workers) {
+            w.join();
+        }
+        workers.clear();
+        n_workers = 0;
+    }
+
+    ~quantize_thread_pool() {
+        stop();
+    }
+
+    // non-copyable, non-movable
+    quantize_thread_pool() = default;
+    quantize_thread_pool(const quantize_thread_pool &) = delete;
+    quantize_thread_pool & operator=(const quantize_thread_pool &) = delete;
+};
+
+struct quantize_state_impl {
     const llama_model                 & model;
     const llama_model_quantize_params * params;
 
@@ -47,7 +216,10 @@ struct quantization_state_impl {
     // tensor type override patterns
     std::vector<std::pair<std::regex, ggml_type>> tensor_type_patterns;
 
-    quantization_state_impl(const llama_model & model, const llama_model_quantize_params * params)
+    // worker thread pool (tensor-level parallelization)
+    quantize_thread_pool pool;
+
+    quantize_state_impl(const llama_model & model, const llama_model_quantize_params * params)
         : model(model)
         , params(params)
     {
@@ -60,31 +232,6 @@ struct quantization_state_impl {
             }
         }
     }
-};
-
-// tensor categorization (used to avoid repeated string matching)
-enum class tensor_category {
-    TOKEN_EMBD,
-    ATTENTION_Q,
-    ATTENTION_V,
-    ATTENTION_K,
-    ATTENTION_QKV,
-    ATTENTION_KV_B,
-    ATTENTION_OUTPUT,
-    FFN_UP,
-    FFN_GATE,
-    FFN_DOWN,
-    OUTPUT,
-    OTHER
-};
-
-// cached metadata per tensor (avoids re-computation / re-checking)
-struct tensor_metadata {
-    ggml_type target_type;
-    tensor_category category;
-    bool allows_quantization;
-    bool requires_imatrix;
-    std::string remapped_imatrix_name;
 };
 
 static void zeros(std::ofstream & file, size_t n) {
@@ -144,7 +291,13 @@ static std::string remap_imatrix(const std::string & orig_name, const std::map<i
     return orig_name;
 }
 
-static void llama_tensor_dequantize_impl(ggml_tensor * tensor, std::vector<no_init<float>> & output, std::vector<std::thread> & workers, const size_t nelements, const int nthread) {
+static void llama_tensor_dequantize_impl(
+                    ggml_tensor * tensor,
+    std::vector<no_init<float>> & output,
+            quantize_state_impl * qs,
+                   const size_t   nelements,
+                      const int   nthread)
+{
     if (output.size() < nelements) {
         output.resize(nelements);
     }
@@ -181,36 +334,32 @@ static void llama_tensor_dequantize_impl(ggml_tensor * tensor, std::vector<no_in
         block_size = (size_t)ggml_blck_size(tensor->type);
     }
 
-    size_t block_size_bytes = ggml_type_size(tensor->type);
+    const size_t block_size_bytes = ggml_type_size(tensor->type);
 
     GGML_ASSERT(nelements % block_size == 0);
-    size_t nblocks = nelements / block_size;
-    size_t blocks_per_thread = nblocks / nthread;
-    size_t spare_blocks = nblocks - (blocks_per_thread * nthread); // if blocks aren't divisible by thread count
+    const size_t nblocks          = nelements / block_size;
+    const size_t blocks_per_chunk = nblocks / nthread;
+    const size_t spare_blocks     = nblocks - (blocks_per_chunk * nthread);
 
-    size_t in_buff_offs = 0;
-    size_t out_buff_offs = 0;
+    const ggml_type ttype = tensor->type;
+    uint8_t * tensor_data = (uint8_t *) tensor->data;
 
-    for (int tnum = 0; tnum < nthread; tnum++) {
-        size_t thr_blocks = blocks_per_thread + (tnum == nthread - 1 ? spare_blocks : 0); // num blocks for this thread
-        size_t thr_elems = thr_blocks * block_size; // number of elements for this thread
-        size_t thr_block_bytes = thr_blocks * block_size_bytes; // number of input bytes for this thread
+    qs->pool.distribute(nthread, [=](int64_t tnum) {
+        const size_t thr_blocks = blocks_per_chunk + ((size_t)tnum == (size_t)(nthread - 1) ? spare_blocks : 0);
+        const size_t thr_elems  = thr_blocks * block_size;
 
-        auto compute = [qtype] (ggml_type typ, uint8_t * inbuf, float * outbuf, int nels) {
-            if (typ == GGML_TYPE_F16) {
-                ggml_fp16_to_fp32_row((ggml_fp16_t *)inbuf, outbuf, nels);
-            } else if (typ == GGML_TYPE_BF16) {
-                ggml_bf16_to_fp32_row((ggml_bf16_t *)inbuf, outbuf, nels);
-            } else {
-                qtype->to_float(inbuf, outbuf, nels);
-            }
-        };
-        workers.emplace_back(compute, tensor->type, (uint8_t *) tensor->data + in_buff_offs, f32_output + out_buff_offs, thr_elems);
-        in_buff_offs += thr_block_bytes;
-        out_buff_offs += thr_elems;
-    }
-    for (auto & w : workers) { w.join(); }
-    workers.clear();
+        const size_t block_offset = (size_t)tnum * blocks_per_chunk;
+        const size_t in_offset    = block_offset * block_size_bytes;
+        const size_t out_offset   = block_offset * block_size;
+
+        if (ttype == GGML_TYPE_F16) {
+            ggml_fp16_to_fp32_row((ggml_fp16_t *)(tensor_data + in_offset), f32_output + out_offset, thr_elems);
+        } else if (ttype == GGML_TYPE_BF16) {
+            ggml_bf16_to_fp32_row((ggml_bf16_t *)(tensor_data + in_offset), f32_output + out_offset, thr_elems);
+        } else {
+            qtype->to_float(tensor_data + in_offset, f32_output + out_offset, thr_elems);
+        }
+    });
 }
 
 static bool tensor_name_match_token_embd(const char * tensor_name) {
@@ -226,67 +375,77 @@ static bool tensor_name_match_output_weight(const char * tensor_name) {
 
 // do we allow this tensor to be quantized?
 static bool tensor_allows_quantization(const llama_model_quantize_params * params, llm_arch arch, const ggml_tensor * tensor) {
-    const std::string name = tensor->name;
-
-    // This used to be a regex, but <regex> has an extreme cost to compile times.
-    bool allowed = name.rfind("weight") == name.size() - 6; // ends with 'weight'?
+    // trivial checks first — no string ops needed
+    if (params->only_copy)       return false;
 
     // quantize only 2D and 3D tensors
-    allowed &= (ggml_n_dims(tensor) >= 2);
+    if (ggml_n_dims(tensor) < 2) return false;
+
+    const std::string_view name_v(tensor->name);
+
+    // must end with "weight"
+    if (name_v.size() < 6 || name_v.compare(name_v.size() - 6, 6, "weight") != 0) {
+        return false;
+    }
+
+    if (!params->quantize_output_tensor && tensor_name_match_output_weight(tensor->name)) {
+        return false;
+    }
 
     // do not quantize norm tensors
-    allowed &= name.find("_norm.weight") == std::string::npos;
-
-    allowed &= params->quantize_output_tensor || !tensor_name_match_output_weight(tensor->name);
-    allowed &= !params->only_copy;
+    if (name_v.find("_norm.weight")          != std::string_view::npos) return false;
 
     // do not quantize expert gating tensors
-    allowed &= name.find("ffn_gate_inp.weight") == std::string::npos;
+    if (name_v.find("ffn_gate_inp.weight")   != std::string_view::npos) return false;
 
     // these are very small (e.g. 4x4)
-    allowed &= name.find("altup")  == std::string::npos;
-    allowed &= name.find("laurel") == std::string::npos;
+    if (name_v.find("altup")                 != std::string_view::npos) return false;
+    if (name_v.find("laurel")                != std::string_view::npos) return false;
 
     // these are not too big so keep them as it is
-    allowed &= name.find("per_layer_model_proj") == std::string::npos;
+    if (name_v.find("per_layer_model_proj")  != std::string_view::npos) return false;
 
-    // do not quantize positional embeddings and token types (BERT)
-    allowed &= name != LLM_TN(arch)(LLM_TENSOR_POS_EMBD,    "weight");
-    allowed &= name != LLM_TN(arch)(LLM_TENSOR_TOKEN_TYPES, "weight");
-
-    // do not quantize Mamba /Kimi's small conv1d weights
-    allowed &= name.find("ssm_conv1d") == std::string::npos;
-    allowed &= name.find("shortconv.conv.weight") == std::string::npos;
-
-    // do not quantize RWKV's small yet 2D weights
-    allowed &= name.find("time_mix_first.weight") == std::string::npos;
-    allowed &= name.find("time_mix_w0.weight") == std::string::npos;
-    allowed &= name.find("time_mix_w1.weight") == std::string::npos;
-    allowed &= name.find("time_mix_w2.weight") == std::string::npos;
-    allowed &= name.find("time_mix_v0.weight") == std::string::npos;
-    allowed &= name.find("time_mix_v1.weight") == std::string::npos;
-    allowed &= name.find("time_mix_v2.weight") == std::string::npos;
-    allowed &= name.find("time_mix_a0.weight") == std::string::npos;
-    allowed &= name.find("time_mix_a1.weight") == std::string::npos;
-    allowed &= name.find("time_mix_a2.weight") == std::string::npos;
-    allowed &= name.find("time_mix_g1.weight") == std::string::npos;
-    allowed &= name.find("time_mix_g2.weight") == std::string::npos;
-    allowed &= name.find("time_mix_decay_w1.weight") == std::string::npos;
-    allowed &= name.find("time_mix_decay_w2.weight") == std::string::npos;
-    allowed &= name.find("time_mix_lerp_fused.weight") == std::string::npos;
+    // do not quantize Mamba/Kimi's small conv1d weights
+    if (name_v.find("ssm_conv1d")            != std::string_view::npos) return false;
+    if (name_v.find("shortconv.conv.weight") != std::string_view::npos) return false;
 
     // do not quantize relative position bias (T5)
-    allowed &= name.find("attn_rel_b.weight") == std::string::npos;
+    if (name_v.find("attn_rel_b.weight")     != std::string_view::npos) return false;
 
     // do not quantize specific multimodal tensors
-    allowed &= name.find(".position_embd.") == std::string::npos;
+    if (name_v.find(".position_embd.")       != std::string_view::npos) return false;
 
-    return allowed;
+    // do not quantize RWKV's small yet 2D weights
+    if (const auto pos = name_v.find("time_mix_"); pos != std::string_view::npos) {
+        const std::string_view rest = name_v.substr(pos + 9); // skip "time_mix_"
+        static constexpr std::string_view blocked_suffixes[] = {
+            "first.weight",
+            "w0.weight",         "w1.weight",       "w2.weight",
+            "v0.weight",         "v1.weight",       "v2.weight",
+            "a0.weight",         "a1.weight",       "a2.weight",
+            "g1.weight",         "g2.weight",
+            "decay_w1.weight",   "decay_w2.weight",
+            "lerp_fused.weight",
+        };
+        for (const auto & suffix : blocked_suffixes) {
+            if (rest.size() >= suffix.size() &&
+                rest.compare(0, suffix.size(), suffix) == 0) {
+                return false;
+            }
+        }
+    }
+
+    const auto name = std::string(name_v); // LLM_TN doesn't play nice with string_view
+
+    // do not quantize positional embeddings and token types (BERT)
+    if (name == LLM_TN(arch)(LLM_TENSOR_POS_EMBD,    "weight")) return false;
+    if (name == LLM_TN(arch)(LLM_TENSOR_TOKEN_TYPES, "weight")) return false;
+
+    return true;
 }
 
 // incompatible tensor shapes are handled here - fallback to a compatible type
-static ggml_type tensor_type_fallback(quantization_state_impl * qs, const ggml_tensor * t, const ggml_type target_type) {
-
+static ggml_type tensor_type_fallback(quantize_state_impl * qs, const ggml_tensor * t, const ggml_type target_type) {
     ggml_type return_type = target_type;
 
     const int64_t ncols = t->ne[0];
@@ -339,13 +498,9 @@ static tensor_category tensor_get_category(const std::string & tensor_name) {
     if (tensor_name_match_output_weight(tensor_name.c_str())) {
         return tensor_category::OUTPUT;
     }
-
     if (tensor_name_match_token_embd(tensor_name.c_str())) {
         return tensor_category::TOKEN_EMBD;
     }
-
-    // attention tensors - order matters, check more specific patterns first
-
     if (tensor_name.find("attn_qkv.weight") != std::string::npos) {
         return tensor_category::ATTENTION_QKV;
     }
@@ -364,22 +519,19 @@ static tensor_category tensor_get_category(const std::string & tensor_name) {
     if (tensor_name.find("attn_output.weight") != std::string::npos) {
         return tensor_category::ATTENTION_OUTPUT;
     }
-
-    // FFN
-    if (tensor_name.find("ffn_down") != std::string::npos) {
-        return tensor_category::FFN_DOWN;
+    if (tensor_name.find("ffn_up") != std::string::npos) {
+        return tensor_category::FFN_UP;
     }
     if (tensor_name.find("ffn_gate") != std::string::npos) {
         return tensor_category::FFN_GATE;
     }
-    if (tensor_name.find("ffn_up") != std::string::npos) {
-        return tensor_category::FFN_UP;
+    if (tensor_name.find("ffn_down") != std::string::npos) {
+        return tensor_category::FFN_DOWN;
     }
-
     return tensor_category::OTHER;
 }
 
-// check if category is an attention-v-like tensor
+// check if category is for attention-v-like tensors (more sensitive to quantization)
 static bool category_is_attn_v(tensor_category cat) {
     return cat == tensor_category::ATTENTION_V ||
            cat == tensor_category::ATTENTION_QKV ||
@@ -388,12 +540,12 @@ static bool category_is_attn_v(tensor_category cat) {
 
 // internal standard logic for selecting the target tensor type for a given tensor, ftype, and model arch
 static ggml_type llama_tensor_get_type_impl(
-    quantization_state_impl * qs,
-                  ggml_type   new_type,
-          const ggml_tensor * tensor,
-                llama_ftype   ftype,
-            tensor_category   category
-) {
+    quantize_state_impl * qs,
+              ggml_type   new_type,
+      const ggml_tensor * tensor,
+            llama_ftype   ftype,
+        tensor_category   category)
+{
     const std::string name = ggml_get_name(tensor);
     const llm_arch arch = qs->model.arch;
 
@@ -642,14 +794,14 @@ static ggml_type llama_tensor_get_type_impl(
 
 // determine the ggml_type that this tensor should be quantized to
 static ggml_type llama_tensor_get_type(
-              quantization_state_impl * qs,
+                  quantize_state_impl * qs,
     const llama_model_quantize_params * params,
                     const ggml_tensor * tensor,
                       const ggml_type   default_type,
-                const tensor_metadata & tm
-) {
+                const tensor_metadata & tm)
+{
     if (!tm.allows_quantization) {
-        return tensor->type; // if quantization not allowed, just return the current type
+        return tensor->type;
     }
 
     if (params->token_embedding_type < GGML_TYPE_COUNT && tm.category == tensor_category::TOKEN_EMBD) {
@@ -690,7 +842,17 @@ static ggml_type llama_tensor_get_type(
     return new_type;
 }
 
-static size_t llama_tensor_quantize_impl(enum ggml_type new_type, const float * f32_data, void * new_data, const int64_t chunk_size, int64_t nrows, int64_t n_per_row, const float * imatrix, std::vector<std::thread> & workers, const int nthread) {
+static size_t llama_tensor_quantize_impl(
+              enum ggml_type   new_type,
+                 const float * f32_data,
+                        void * new_data,
+               const int64_t   chunk_size,
+                     int64_t   nrows,
+                     int64_t   n_per_row,
+                 const float * imatrix,
+         quantize_state_impl * qs,
+                   const int   nthread)
+{
     if (nthread < 2) {
         // single-thread
         size_t new_size = ggml_quantize_chunk(new_type, f32_data, new_data, 0, nrows, n_per_row, imatrix);
@@ -700,48 +862,38 @@ static size_t llama_tensor_quantize_impl(enum ggml_type new_type, const float * 
         return new_size;
     }
 
-    std::mutex mutex;
-    int64_t counter = 0;
-    size_t new_size = 0;
-    bool valid = true;
-    auto compute = [&mutex, &counter, &new_size, &valid, new_type, f32_data, new_data, chunk_size,
-            nrows, n_per_row, imatrix]() {
-        const int64_t nrows_per_chunk = chunk_size / n_per_row;
-        size_t local_size = 0;
-        while (true) {
-            std::unique_lock<std::mutex> lock(mutex);
-            int64_t first_row = counter; counter += nrows_per_chunk;
-            if (first_row >= nrows) {
-                if (local_size > 0) {
-                    new_size += local_size;
-                }
-                break;
-            }
-            lock.unlock();
-            const int64_t this_nrow = std::min(nrows - first_row, nrows_per_chunk);
-            size_t this_size = ggml_quantize_chunk(new_type, f32_data, new_data, first_row * n_per_row, this_nrow, n_per_row, imatrix);
-            local_size += this_size;
+    const int64_t nrows_per_chunk = chunk_size / n_per_row;
+    const int64_t nchunks = (nrows + nrows_per_chunk - 1) / nrows_per_chunk;
 
-            // validate the quantized data
-            const size_t row_size  = ggml_row_size(new_type, n_per_row);
-            void * this_data = (char *) new_data + first_row * row_size;
-            if (!ggml_validate_row_data(new_type, this_data, this_size)) {
-                std::unique_lock<std::mutex> lock(mutex);
-                valid = false;
-                break;
-            }
+    std::atomic<size_t> new_size{0};
+    std::atomic<bool> valid{true};
+
+    qs->pool.distribute(nchunks, [&](int64_t chunk_idx) {
+        if (!valid.load(std::memory_order_relaxed)) {
+            return;
         }
-    };
-    for (int it = 0; it < nthread - 1; ++it) {
-        workers.emplace_back(compute);
-    }
-    compute();
-    for (auto & w : workers) { w.join(); }
-    workers.clear();
-    if (!valid) {
+
+        const int64_t first_row = chunk_idx * nrows_per_chunk;
+        const int64_t this_nrow = std::min(nrows - first_row, nrows_per_chunk);
+
+        size_t this_size = ggml_quantize_chunk(new_type, f32_data, new_data,
+            first_row * n_per_row, this_nrow, n_per_row, imatrix);
+
+        // validate the quantized data
+        const size_t row_size  = ggml_row_size(new_type, n_per_row);
+        void * this_data = (char *) new_data + first_row * row_size;
+        if (!ggml_validate_row_data(new_type, this_data, this_size)) {
+            valid.store(false, std::memory_order_relaxed);
+            return;
+        }
+
+        new_size.fetch_add(this_size, std::memory_order_relaxed);
+    });
+
+    if (!valid.load()) {
         throw std::runtime_error("quantized data validation failed");
     }
-    return new_size;
+    return new_size.load();
 }
 
 static bool ggml_type_static(ggml_type type) {
@@ -761,7 +913,7 @@ static size_t llama_tensor_quantize(
                       const float * f32_data,
                       const float * imatrix,
     std::vector<no_init<uint8_t>> & work,
-         std::vector<std::thread> & workers,
+              quantize_state_impl * qs,
                               int   nthread
 ) {
     const int64_t nelements = ggml_nelements(tensor);
@@ -792,62 +944,41 @@ static size_t llama_tensor_quantize(
 
     // parallelize across experts instead of within them, if it would be more efficient
     //
-    // this launches threads once rather than n_experts times,
-    // which avoids massive thread creation overhead for
-    // MoE models (which can have 256+ experts)
+    // this launches work items per-expert rather than per-chunk,
+    // which avoids inefficiency for MoE models (which can have 256+ experts)
     if (expert_parallel) {
-        std::mutex mutex;
-        std::atomic<int64_t> next_expert{0};
-        size_t new_size = 0;
-        bool valid = true;
+        std::atomic<size_t> new_size{0};
+        std::atomic<bool> valid{true};
 
-        auto compute = [&]() {
-            size_t local_size = 0;
-            while (true) {
-                // grab the next available expert
-                const int64_t expert = next_expert.fetch_add(1);
-                if (expert >= n_experts) {
-                    break;
-                }
-
-                const float * f32_data_expert = f32_data + expert * ne_0_x_1;
-                void        * new_data_expert = (char *)new_data + ggml_row_size(new_type, n_per_row)
-                                                                 * expert * nrows;
-                const float * imatrix_expert  = imatrix ? imatrix + expert * n_per_row : nullptr;
-
-                // quantize this entire expert single-threaded
-                size_t expert_size = ggml_quantize_chunk(
-                    new_type, f32_data_expert, new_data_expert,
-                    0, nrows, n_per_row, imatrix_expert);
-
-                // validate
-                if (!ggml_validate_row_data(new_type, new_data_expert, expert_size)) {
-                    std::lock_guard<std::mutex> lock(mutex);
-                    valid = false;
-                    break;
-                }
-
-                local_size += expert_size;
+        qs->pool.distribute(n_experts, [&](int64_t expert) {
+            if (!valid.load(std::memory_order_relaxed)) {
+                return;
             }
 
-            // accumulate local result
-            std::lock_guard<std::mutex> lock(mutex);
-            new_size += local_size;
-        };
+            const float * f32_data_expert = f32_data + expert * ne_0_x_1;
+            void        * new_data_expert = (char *)new_data + ggml_row_size(new_type, n_per_row)
+                                                             * expert * nrows;
+            const float * imatrix_expert  = imatrix ? imatrix + expert * n_per_row : nullptr;
 
-        for (int i = 0; i < nthread - 1; ++i) {
-            workers.emplace_back(compute);
-        }
-        compute(); // main thread participates too // TODO: is this optimal?
-        for (auto & w : workers) {
-            w.join();
-        }
-        workers.clear();
-        if (!valid) {
+            // quantize this entire expert single-threaded
+            size_t expert_size = ggml_quantize_chunk(
+                new_type, f32_data_expert, new_data_expert,
+                0, nrows, n_per_row, imatrix_expert);
+
+            // validate
+            if (!ggml_validate_row_data(new_type, new_data_expert, expert_size)) {
+                valid.store(false, std::memory_order_relaxed);
+                return;
+            }
+
+            new_size.fetch_add(expert_size, std::memory_order_relaxed);
+        });
+
+        if (!valid.load()) {
             throw std::runtime_error("quantized data validation failed");
         }
 
-        return new_size;
+        return new_size.load();
     } else {
         // parallelize within each expert (original behaviour)
         const int64_t nthread_use = nthread > 1
@@ -863,7 +994,7 @@ static size_t llama_tensor_quantize(
 
             new_size += llama_tensor_quantize_impl(
                 new_type, f32_data_03, new_data_03, chunk_size,
-                nrows, n_per_row, imatrix_03, workers, nthread_use);
+                nrows, n_per_row, imatrix_03, qs, nthread_use);
         }
 
         return new_size;
@@ -980,7 +1111,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     model.load_stats  (ml);
 
     // quantization state
-    auto qs = std::make_unique<quantization_state_impl>(model, params);
+    auto qs = std::make_unique<quantize_state_impl>(model, params);
 
     // these need to be set to n_layer by default
     qs->n_ffn_down = qs->n_ffn_gate = qs->n_ffn_up = (int)model.hparams.n_layer;
@@ -1082,13 +1213,12 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         });
     }
 
-    std::vector<std::thread> workers;
-    workers.reserve(nthread);
+    // create the persistent thread pool - threads are spawned once here
+    // and reused for all dequantize + quantize operations across every tensor
+    qs->pool.start(nthread);
 
     int idx = 0;
-
     uint16_t n_split = 1;
-
     // Assume split index is continuous
     if (params->keep_split) {
         for (const auto * it : weights) {
@@ -1098,7 +1228,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     std::vector<gguf_context_ptr> ctx_outs(n_split);
     ctx_outs[0] = std::move(ctx_out);
 
-    // we compute tensor metadata once and cache it here to avoid re-computation
+    // compute tensor metadata once and cache it here to avoid re-computation
     // between the preliminary and main loops (string matching, etc.)
     std::vector<tensor_metadata> metadata(weights.size());
 
@@ -1338,14 +1468,14 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 } else if (ggml_is_quantized(tensor->type) && !params->allow_requantize) {
                     throw std::runtime_error(format("requantizing from type %s is disabled", ggml_type_name(tensor->type)));
                 } else {
-                    llama_tensor_dequantize_impl(tensor, f32_conv_buf, workers, nelements, nthread);
+                    llama_tensor_dequantize_impl(tensor, f32_conv_buf, qs.get(), nelements, nthread);
                     f32_data = (float *) f32_conv_buf.data();
                 }
 
                 LLAMA_LOG_INFO("quantizing to %7s ... ", ggml_type_name(new_type));
                 fflush(stdout);
 
-                new_size = llama_tensor_quantize(tensor, new_type, f32_data, imatrix, work, workers, nthread);
+                new_size = llama_tensor_quantize(tensor, new_type, f32_data, imatrix, work, qs.get(), nthread);
                 new_data = work.data();
 
                 LLAMA_LOG_INFO("%8.2f MiB -> %8.2f MiB\n", tensor_size/1024.0/1024.0, new_size/1024.0/1024.0);
