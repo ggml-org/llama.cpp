@@ -37,6 +37,7 @@
 #   define NOMINMAX
 #endif
 #include <locale>
+#include <winapifamily.h>
 #include <windows.h>
 #include <string.h>
 #include <fcntl.h>
@@ -377,7 +378,7 @@ std::string common_params_get_system_info(const common_params & params) {
     if (params.cpuparams_batch.n_threads != -1) {
         os << " (n_threads_batch = " << params.cpuparams_batch.n_threads << ")";
     }
-#if defined(_WIN32) && (_WIN32_WINNT >= 0x0601) && !defined(__MINGW64__) // windows 7 and later
+#if defined(_WIN32) && (_WIN32_WINNT >= 0x0601) && !defined(__MINGW64__) && WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_DESKTOP) && !defined(LLAMA_UWP) // windows 7 and later
     // TODO: windows + arm64 + mingw64
     DWORD logicalProcessorCount = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
     os << " / " << logicalProcessorCount << " | " << llama_print_system_info();
