@@ -244,7 +244,9 @@ static std::vector<float> get_logits(
     uint32_t n_head  = 2;
     uint32_t n_ff    = 384;
     uint32_t n_layer = 2;
-    if (arch == LLM_ARCH_GEMMA3N) {
+    if (arch == LLM_ARCH_LLAMA4) {
+        n_layer = 4; // hparams.n_no_rope_layer_step is hard-coded to 4
+    } else if (arch == LLM_ARCH_GEMMA3N) {
         n_embd = 64;
         n_head = 1;
         n_ff   = 96;
@@ -341,6 +343,10 @@ static std::vector<float> get_logits(
         ms.add_kv(LLM_KV_EXPERTS_PER_GROUP,          uint32_t(1));
     }
 
+    ms.add_kv(LLM_KV_XIELU_ALPHA_N,      1.0f);
+    ms.add_kv(LLM_KV_XIELU_ALPHA_P,      1.0f);
+    ms.add_kv(LLM_KV_XIELU_BETA,         1.0f);
+    ms.add_kv(LLM_KV_XIELU_EPS,          1.0e-7f);
     ms.add_kv(LLM_KV_SSM_INNER_SIZE,     arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE ? 64 : 2*n_embd);
     ms.add_kv(LLM_KV_SSM_CONV_KERNEL,    uint32_t(4));
     ms.add_kv(LLM_KV_SSM_STATE_SIZE,     uint32_t(32));
@@ -505,12 +511,6 @@ static int test_backends(const size_t seed, const ggml_log_level log_level) {
         }
         if (arch == LLM_ARCH_WAVTOKENIZER_DEC) {
             continue; // TODO needs special hparams
-        }
-        if (arch == LLM_ARCH_APERTUS) {
-            continue; // TODO xielu
-        }
-        if (arch == LLM_ARCH_LLAMA4) {
-            continue; // TODO attn_scale problems
         }
         for (bool moe : {false, true}) {
             if (moe && !moe_implemented(arch)) {
