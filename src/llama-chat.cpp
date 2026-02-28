@@ -79,14 +79,15 @@ static const std::map<std::string, llm_chat_template> LLM_CHAT_TEMPLATES = {
 };
 
 llm_chat_template llm_chat_template_from_str(const std::string & name) {
-    return LLM_CHAT_TEMPLATES.at(name);
+    if (auto it = LLM_CHAT_TEMPLATES.find(name); it != LLM_CHAT_TEMPLATES.end()) {
+        return it->second;
+    }
+    return LLM_CHAT_TEMPLATE_UNKNOWN;
 }
 
 llm_chat_template llm_chat_detect_template(const std::string & tmpl) {
-    try {
-        return llm_chat_template_from_str(tmpl);
-    } catch (const std::out_of_range &) {
-        // ignore
+    if (auto t = llm_chat_template_from_str(tmpl); t != LLM_CHAT_TEMPLATE_UNKNOWN) {
+        return t;
     }
 
     auto tmpl_contains = [&tmpl](const char * haystack) -> bool {
