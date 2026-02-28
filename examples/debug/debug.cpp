@@ -108,7 +108,7 @@ static void save_output_data(const output_data & output, const std::string & mod
             throw std::runtime_error("failed to open binary output file: " + filepath.string());
         }
         file.write(reinterpret_cast<const char*>(output.data_ptr), output.data_size * sizeof(float));
-        LOG("Data saved to %s\n", filepath.c_str());
+        LOG("Data saved to %ls\n", filepath.c_str());
     }
 
     // Save logits/embeddings to text file.
@@ -121,7 +121,7 @@ static void save_output_data(const output_data & output, const std::string & mod
         for (int i = 0; i < output.data_size; i++) {
             file << i << ": " << output.data_ptr[i] << '\n';
         }
-        LOG("Data saved to %s\n", filepath.c_str());
+        LOG("Data saved to %ls\n", filepath.c_str());
     }
 
     // Save prompt and tokens to text file.
@@ -143,7 +143,7 @@ static void save_output_data(const output_data & output, const std::string & mod
             }
         }
         file << '\n';
-        LOG("Prompt saved to %s\n", filepath.c_str());
+        LOG("Prompt saved to %ls\n", filepath.c_str());
     }
 
     // Save token ids to binary file.
@@ -154,7 +154,7 @@ static void save_output_data(const output_data & output, const std::string & mod
             throw std::runtime_error("failed to open tokens binary file: " + filepath.string());
         }
         file.write(reinterpret_cast<const char*>(output.tokens.data()), output.tokens.size() * sizeof(llama_token));
-        LOG("Tokens saved to %s\n", filepath.c_str());
+        LOG("Tokens saved to %ls\n", filepath.c_str());
     }
 
 }
