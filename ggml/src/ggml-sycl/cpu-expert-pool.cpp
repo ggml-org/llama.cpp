@@ -61,9 +61,10 @@ void CpuExpertPool::init(int n_threads, size_t max_experts,
         req.queue  = &q;
         req.device = -1;  // Host allocation
         req.size   = total;
+        alloc_constraints c;
+        c.must_host_pinned = true;
         req.intent = { alloc_role::EXPERT_STAGING,
-                       runtime_category::EXPERT_CACHE, "cpu_expert_ring",
-                       { .must_host_pinned = true } };
+                       runtime_category::EXPERT_CACHE, "cpu_expert_ring", c };
 
         if (!unified_alloc(req, &ring_alloc_)) {
             GGML_LOG_WARN("[CPU-EXPERT-POOL] Failed to allocate ring buffer "
