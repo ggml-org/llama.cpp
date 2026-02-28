@@ -23734,9 +23734,22 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             }
             layout_mode chosen = GGML_LAYOUT_AOS;
             if (choice_key.valid && ggml_sycl_get_layout_choice(choice_key, ctx.device, &chosen) && chosen != layout) {
-                ggml_sycl_log_layout_mismatch_once(choice_key, ctx.device, layout, chosen, src0->name,
-                                                   "ggml_sycl_mul_mat_id_vec_q");
-                return false;
+                // Allow AOS fallback for MXFP4 MoE when the chosen layout (SOA/COALESCED)
+                // could not be materialized on device (e.g., VRAM exhausted during model load).
+                // The effective layout on the extra struct will be AOS in this case.
+                // The MMVQ AOS kernel + expert pointer table cache handles this correctly.
+                const auto * extra_gpu = static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
+                const layout_mode effective = extra_gpu ? get_effective_layout_mode(extra_gpu) : GGML_LAYOUT_AOS;
+                const bool allow_moe_aos_fallback =
+                    (layout == GGML_LAYOUT_AOS) && (effective == GGML_LAYOUT_AOS) &&
+                    (src0->type == GGML_TYPE_MXFP4);
+                if (!allow_moe_aos_fallback) {
+                    ggml_sycl_log_layout_mismatch_once(choice_key, ctx.device, layout, chosen, src0->name,
+                                                       "ggml_sycl_mul_mat_id_vec_q");
+                    return false;
+                }
+                GGML_SYCL_DEBUG("[MoE] Allowing AoS fallback for MXFP4 (effective AoS, chosen=%d) %s\n",
+                                (int) chosen, src0->name ? src0->name : "?");
             }
         }
         GGML_SYCL_DEBUG("[MoE] Trying MMVQ with layout=%d for %s\n", (int) layout, src0->name ? src0->name : "?");
@@ -28121,6 +28134,27 @@ static bool check_graph_compatibility(ggml_backend_sycl_context & ctx, ggml_cgra
                                 default:
                                     break;
                             }
+                        }
+                    }
+                    // Check for unmaterialized expert weights: the layout registry
+                    // may say SOA/COALESCED but the actual data is still AOS because
+                    // VRAM was exhausted during model load. Graph preloading would
+                    // try to cache all experts and crash on OOM.
+                    if (graph_compatible && src0->type == GGML_TYPE_MXFP4) {
+                        const auto * extra = static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
+                        const layout_mode effective = extra ? get_effective_layout_mode(extra) : GGML_LAYOUT_AOS;
+                        layout_mode chosen = GGML_LAYOUT_AOS;
+                        ggml_sycl_get_layout_choice_for_tensor(src0, ctx.device, &chosen);
+                        if (chosen != GGML_LAYOUT_AOS && effective == GGML_LAYOUT_AOS) {
+                            static bool logged_once = false;
+                            if (!logged_once) {
+                                GGML_LOG_INFO(
+                                    "%s: disabling SYCL graphs for MXFP4 MoE with unmaterialized "
+                                    "layout (chosen=%d effective=%d)\n",
+                                    __func__, (int) chosen, (int) effective);
+                                logged_once = true;
+                            }
+                            graph_compatible = false;
                         }
                     }
                     if (!graph_compatible) {

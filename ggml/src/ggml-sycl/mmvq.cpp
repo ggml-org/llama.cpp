@@ -3615,7 +3615,7 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
         if (ggml_sycl_get_layout_choice_for_tensor(src0, ctx.device, &chosen) && chosen != layout) {
             const bool allow_aos_fallback =
                 forced_layout && layout == GGML_LAYOUT_AOS &&
-                (src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q8_0);
+                (src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q8_0 || src0->type == GGML_TYPE_MXFP4);
             if (!allow_aos_fallback) {
                 GGML_SYCL_DEBUG("[MMVQ] Layout=%d mismatches chosen=%d for %s\n", (int) layout, (int) chosen,
                                 src0->name ? src0->name : "?");
