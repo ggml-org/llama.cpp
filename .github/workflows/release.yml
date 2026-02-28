@@ -231,6 +231,80 @@ jobs:
           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.tar.gz
           name: llama-bin-ubuntu-vulkan-x64.tar.gz
 
+  ubuntu-22-cuda:
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        cuda: ['12.4']
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: ubuntu-22-cmake-cuda-${{ matrix.cuda }}
+          evict-old-files: 1d
+
+      - name: Dependencies
+        id: depends
+        run: |
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.0-1_all.deb
+          sudo dpkg -i cuda-keyring_1.0-1_all.deb
+          sudo apt-get update -y
+          sudo apt-get install -y cuda-toolkit-${{ matrix.cuda }} build-essential libcurl4-openssl-dev
+
+      - name: Build
+        id: cmake_build
+        run: |
+          export PATH=/usr/local/cuda-${{ matrix.cuda }}/bin:$PATH
+          export LD_LIBRARY_PATH=/usr/local/cuda-${{ matrix.cuda }}/lib64:$LD_LIBRARY_PATH
+          cmake -B build \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CPU_ALL_VARIANTS=ON \
+            -DGGML_CUDA=ON \
+            -DCMAKE_CUDA_ARCHITECTURES="60;61;70;75;80;86;89;90" \
+            ${{ env.CMAKE_ARGS }}
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Determine tag name
+        id: tag
+        uses: ./.github/actions/get-tag-name
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        run: |
+          cp LICENSE ./build/bin/
+          zip -r llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.cuda }}-x64.zip ./build/bin/*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.cuda }}-x64.zip
+          name: llama-bin-ubuntu-cuda-${{ matrix.cuda }}-x64.zip
+
+      - name: Copy and pack Cuda runtime
+        run: |
+          cp /usr/local/cuda-${{ matrix.cuda }}/lib64/libcublas.so.12 ./build/bin/
+          cp /usr/local/cuda-${{ matrix.cuda }}/lib64/libcublasLt.so.12 ./build/bin/
+          cp /usr/local/cuda-${{ matrix.cuda }}/lib64/libcudart.so.12 ./build/bin/
+          zip -r cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.cuda }}-x64.zip ./build/bin/*
+          rm ./build/bin/libcublas.so.12
+          rm ./build/bin/libcublasLt.so.12
+          rm ./build/bin/libcudart.so.12
+
+      - name: Upload Cuda runtime
+        uses: actions/upload-artifact@v4
+        with:
+          path: cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.cuda }}-x64.zip
+          name: cudart-llama-bin-ubuntu-cuda-${{ matrix.cuda }}-x64.zip
+
   windows-cpu:
     runs-on: windows-2025
 
