@@ -414,6 +414,9 @@ extern "C" {
     // lora adapter
     struct llama_adapter_lora;
 
+    LLAMA_API const char * llama_ggml_version(void);
+    LLAMA_API const char * llama_ggml_commit(void);
+
     // Helpers for getting default parameters
     // TODO: update API to start accepting pointers to params structs (https://github.com/ggml-org/llama.cpp/discussions/9172)
     LLAMA_API struct llama_model_params          llama_model_default_params(void);
