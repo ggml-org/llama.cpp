@@ -254,6 +254,20 @@ static std::once_flag               g_moe_hybrid_init_flags[GGML_SYCL_MAX_DEVICE
 // but ExpertPredictor indexes into fixed-size arrays sized by layer count.
 static std::unordered_map<int, int> g_moe_layer_seq[GGML_SYCL_MAX_DEVICES];
 
+// Multi-GPU MoE dispatch: when GGML_SYCL_MOE_MULTI_GPU=1 and >1 GPU available,
+// experts can be distributed across B580 (device 0) and B50 (device 1).
+// B50 writes outputs to malloc_host staging, merged via B580 compute queue.
+static bool          g_moe_multi_gpu_active = false;
+// Staging buffer for B50 expert outputs (malloc_host, readable from both GPUs).
+// Allocated once during init, sized for max_dispatch_count * max_N floats.
+static float *       g_gpu1_staging_buffer  = nullptr;
+static size_t        g_gpu1_staging_size    = 0;  // in floats
+static size_t        g_gpu1_staging_max_N   = 0;  // output dimension (N) per expert
+// Dedicated in-order queue for device 1 (B50) compute submissions.
+// Created during moe_hybrid_init_once() when multi-GPU is enabled.
+// MUST be in-order: cross-device OOQ depends_on is broken on Level Zero.
+static sycl::queue * g_gpu1_queue           = nullptr;
+
 // Compute a stable, unique cache layer ID from a tensor name.
 // This ensures each distinct weight tensor (e.g. blk.0.ffn_gate_exps vs
 // blk.0.ffn_up_exps) gets a unique key in the expert cache, even though
@@ -522,6 +536,103 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                       static_cast<size_t>(max_dispatch_count),
                       static_cast<size_t>(max_K),
                       static_cast<size_t>(max_N), q);
+    }
+
+    // -----------------------------------------------------------------------
+    // Multi-GPU MoE: initialize device 1 (B50) ExpertCache when
+    // GGML_SYCL_MOE_MULTI_GPU=1 and >1 GPU is available.
+    // Only the primary device (device 0) triggers this initialization.
+    // -----------------------------------------------------------------------
+    if (device == 0) {
+        const char * multi_gpu_env       = std::getenv("GGML_SYCL_MOE_MULTI_GPU");
+        const bool   multi_gpu_requested = multi_gpu_env && std::atoi(multi_gpu_env) != 0;
+        const int    total_devices       = ggml_sycl_info().device_count;
+
+        if (multi_gpu_requested && total_devices >= 2) {
+            const int gpu1 = 1;
+            GGML_LOG_INFO("[MOE-MULTI-GPU] Initializing device %d for MoE expert dispatch\n", gpu1);
+
+            // Get device 1's in-order queue via dpct device manager.
+            // This is the default_queue() which is in-order -- critical for
+            // cross-device correctness (OOQ depends_on is broken on Level Zero).
+            try {
+                auto & dev1  = ggml_sycl_get_device(gpu1);
+                g_gpu1_queue = &dev1.default_queue();
+
+                // Initialize ExpertCache on device 1 with default budget
+                auto & cache1 = g_expert_caches[gpu1];
+                cache1.init(gpu1, 0 /* default budget */, *g_gpu1_queue);
+
+                // Register the same experts on device 1 (same host pointers,
+                // different device VRAM allocations managed by ExpertCache).
+                for (const auto & info : expert_list) {
+                    cache1.register_expert(info.layer_id, info.expert_idx, info.host_ptr, info.bytes);
+                }
+
+                GGML_LOG_INFO(
+                    "[MOE-MULTI-GPU] Device %d: registered %zu experts, "
+                    "cache slots=%zu, budget=%.1f MB\n",
+                    gpu1, expert_list.size(), cache1.total_slots(), cache1.vram_budget() / (1024.0 * 1024.0));
+
+                // Track budget via unified cache
+                ggml_sycl::unified_cache_add_runtime_bytes(gpu1, cache1.vram_budget(),
+                                                           ggml_sycl::runtime_category::EXPERT_CACHE);
+
+                // Initialize prefetcher and pinned buffer pool on device 1
+                auto & prefetcher1 = g_expert_prefetchers[gpu1];
+                prefetcher1.init(*g_gpu1_queue, &cache1);
+
+                if (max_K > 0 && max_N > 0 && max_dispatch_count > 0) {
+                    auto & pool1 = g_pinned_buffer_pools[gpu1];
+                    pool1.init(*g_gpu1_queue, gpu1, static_cast<size_t>(max_dispatch_count), static_cast<size_t>(max_K),
+                               static_cast<size_t>(max_N));
+                }
+
+                // Allocate malloc_host staging buffer for B50 expert outputs.
+                // Sized for max_dispatch_count experts * max_N output floats.
+                // malloc_host is PCIe zero-copy readable from B580's compute queue.
+                const size_t staging_floats = static_cast<size_t>(max_dispatch_count) * static_cast<size_t>(max_N);
+                const size_t staging_bytes  = staging_floats * sizeof(float);
+                try {
+                    // Use device 0's context for malloc_host so B580 can read it
+                    g_gpu1_staging_buffer = sycl::malloc_host<float>(staging_floats, q.get_context());
+                    g_gpu1_staging_size   = staging_floats;
+                    g_gpu1_staging_max_N  = static_cast<size_t>(max_N);
+                    if (g_gpu1_staging_buffer) {
+                        std::memset(g_gpu1_staging_buffer, 0, staging_bytes);
+                        GGML_LOG_INFO(
+                            "[MOE-MULTI-GPU] Staging buffer: %.1f KB "
+                            "(max_dispatch=%d, N=%ld)\n",
+                            staging_bytes / 1024.0, max_dispatch_count, (long) max_N);
+                    } else {
+                        GGML_LOG_WARN(
+                            "[MOE-MULTI-GPU] malloc_host returned nullptr "
+                            "for staging buffer (%zu bytes)\n",
+                            staging_bytes);
+                    }
+                } catch (const sycl::exception & e) {
+                    GGML_LOG_WARN("[MOE-MULTI-GPU] Failed to allocate staging buffer: %s\n", e.what());
+                    g_gpu1_staging_buffer = nullptr;
+                    g_gpu1_staging_size   = 0;
+                }
+
+                // Only activate multi-GPU if everything initialized successfully
+                if (cache1.is_initialized() && g_gpu1_queue && g_gpu1_staging_buffer) {
+                    g_moe_multi_gpu_active = true;
+                    GGML_LOG_INFO("[MOE-MULTI-GPU] Active: B580 (dev 0) + B50 (dev %d)\n", gpu1);
+                } else {
+                    GGML_LOG_WARN(
+                        "[MOE-MULTI-GPU] Initialization incomplete, "
+                        "falling back to single-GPU\n");
+                }
+            } catch (const sycl::exception & e) {
+                GGML_LOG_WARN("[MOE-MULTI-GPU] Failed to initialize device %d: %s\n", gpu1, e.what());
+            } catch (const std::exception & e) {
+                GGML_LOG_WARN("[MOE-MULTI-GPU] Failed to initialize device %d: %s\n", gpu1, e.what());
+            }
+        } else if (multi_gpu_requested && total_devices < 2) {
+            GGML_LOG_WARN("[MOE-MULTI-GPU] Requested but only %d device(s) available\n", total_devices);
+        }
     }
 }
 
@@ -24367,16 +24478,23 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
             // Partition experts using ExpertCache::lookup() -- the source of
             // truth for whether an expert's weights are in device VRAM.
-            auto * expert_cache = ggml_sycl_get_expert_cache(ctx.device);
+            // Three-tier partition: B580 (gpu0) → B50 (gpu1) → CPU fallback.
+            auto * expert_cache  = ggml_sycl_get_expert_cache(ctx.device);
+            auto * expert_cache1 = g_moe_multi_gpu_active ? ggml_sycl_get_expert_cache(1) : nullptr;
             struct expert_dispatch_entry {
                 int64_t iid1;       // token index
                 int64_t id;         // expert slot index within token
                 int32_t expert_id;  // global expert ID
                 void *  device_ptr; // cached device pointer (GPU entries only)
             };
-            std::vector<expert_dispatch_entry> gpu_entries;
+
+            std::vector<expert_dispatch_entry> gpu_entries;   // B580 (device 0)
+            std::vector<expert_dispatch_entry> gpu1_entries;  // B50 (device 1)
             std::vector<expert_dispatch_entry> cpu_entries;
             gpu_entries.reserve(static_cast<size_t>(ids->ne[1] * n_ids));
+            if (g_moe_multi_gpu_active) {
+                gpu1_entries.reserve(static_cast<size_t>(ids->ne[1] * n_ids));
+            }
             cpu_entries.reserve(static_cast<size_t>(ids->ne[1] * n_ids));
 
             for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
@@ -24384,21 +24502,38 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     const int32_t i02 = ids_host[static_cast<size_t>(iid1 * n_ids + id)];
                     GGML_ASSERT(i02 >= 0 && i02 < n_as);
 
-                    // Use ExpertCache::lookup() to check VRAM cache status.
-                    // Falls back to expert_ptrs_host table if cache not initialized.
-                    bool   on_gpu     = false;
+                    // Three-tier cache check:
+                    // 1. B580 cache (device 0) — fastest path
+                    // 2. B50 cache (device 1) — second GPU, if multi-GPU active
+                    // 3. CPU fallback — host vec_dot
+                    bool   on_gpu0    = false;
+                    bool   on_gpu1    = false;
                     void * cached_ptr = nullptr;
+
+                    // Check B580 cache first
                     if (expert_cache) {
                         auto lk   = expert_cache->lookup(layer_id, i02);
-                        on_gpu    = lk.is_cached;
+                        on_gpu0    = lk.is_cached;
                         cached_ptr = lk.device_ptr;
                     } else if (expert_ptrs_host && i02 < n_as) {
-                        on_gpu     = (expert_ptrs_host[i02] != nullptr);
+                        on_gpu0    = (expert_ptrs_host[i02] != nullptr);
                         cached_ptr = const_cast<void *>(expert_ptrs_host[i02]);
                     }
 
-                    if (on_gpu) {
+                    if (on_gpu0) {
                         gpu_entries.push_back({ iid1, id, i02, cached_ptr });
+                        continue;
+                    }
+
+                    // Check B50 cache (device 1)
+                    if (expert_cache1) {
+                        auto lk1   = expert_cache1->lookup(layer_id, i02);
+                        on_gpu1    = lk1.is_cached;
+                        cached_ptr = lk1.device_ptr;
+                    }
+
+                    if (on_gpu1) {
+                        gpu1_entries.push_back({ iid1, id, i02, cached_ptr });
                     } else {
                         cpu_entries.push_back({ iid1, id, i02, nullptr });
                     }
@@ -24416,9 +24551,14 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     expert_cache->update_score(layer_id, e.expert_id, moe_token_counter);
                 }
             }
+            if (expert_cache1) {
+                for (const auto & e : gpu1_entries) {
+                    expert_cache1->update_score(layer_id, e.expert_id, moe_token_counter);
+                }
+            }
 
-            GGML_SYCL_DEBUG("[MoE-HYBRID] L%d: %zu GPU + %zu CPU experts\n",
-                            layer_id, gpu_entries.size(), cpu_entries.size());
+            GGML_SYCL_DEBUG("[MoE-HYBRID] L%d: %zu GPU0 + %zu GPU1 + %zu CPU experts\n", layer_id, gpu_entries.size(),
+                            gpu1_entries.size(), cpu_entries.size());
 
             // ----- CPU path: dispatch cache-miss experts concurrently -----
             // CPU computes directly from mmap host pointers; outputs go to a
@@ -24519,7 +24659,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 }
             }
 
-            // ----- GPU path: batched MMVQ dispatch -----
+            // ----- GPU0 path (B580): batched MMVQ dispatch -----
             // Instead of calling ggml_sycl_mul_mat() per expert (N kernel
             // submissions for top-K), dispatch a single batched MMVQ kernel.
             // Q8_1 quantization of src1 runs once and is shared.
@@ -24574,7 +24714,120 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 }
             }
 
-            // ----- Merge: wait for CPU, then copy outputs to device dst -----
+            // ----- GPU1 path (B50): dispatch via D2H + CPU vec_dot -----
+            // B50-cached experts: copy weights from B50 VRAM to host staging,
+            // then compute via CPU vec_dot in parallel with B580 GPU work.
+            // Outputs go to malloc_host staging, merged via B580 compute queue.
+            //
+            // For v1, we use D2H + CPU vec_dot (not B50 GPU kernels) because:
+            //   - mmvq_moe_batched_dispatch requires ggml_backend_sycl_context
+            //     which is tied to device 0
+            //   - Inline SYCL kernels with quantized types are fragile
+            //   - D2H from B50 VRAM is still faster than mmap disk I/O
+            //   - CPU vec_dot runs in parallel with B580 GPU work
+            //
+            // Future v2: create B50 backend context for native GPU dispatch.
+            // CRITICAL: B50 D2H uses its own in-order queue (g_gpu1_queue).
+            // Cross-device OOQ depends_on is BROKEN on Level Zero.
+            float *                      gpu1_output_staging = nullptr;
+            float *                      gpu1_act_staging    = nullptr;
+            float *                      gpu1_weight_staging = nullptr;
+            std::vector<cpu_expert_task> gpu1_cpu_tasks;
+            std::future<void>            gpu1_future;
+            bool                         gpu1_has_work = false;
+
+            if (!gpu1_entries.empty() && g_moe_multi_gpu_active && g_gpu1_queue && g_gpu1_staging_buffer) {
+                const size_t n_gpu1 = gpu1_entries.size();
+                GGML_ASSERT(n_gpu1 * static_cast<size_t>(N) <= g_gpu1_staging_size && "GPU1 staging buffer overflow");
+
+                // Allocate per-call staging for activations and B50 weight copies
+                gpu1_act_staging    = sycl::malloc_host<float>(n_gpu1 * static_cast<size_t>(K), stream->get_context());
+                gpu1_output_staging = g_gpu1_staging_buffer;  // Persistent staging
+
+                if (gpu1_act_staging) {
+                    // Stage src1 activations from B580 VRAM to host
+                    for (size_t gi = 0; gi < n_gpu1; gi++) {
+                        const auto &  entry    = gpu1_entries[gi];
+                        const int64_t i11      = entry.id % ne11;
+                        const int64_t i12      = entry.iid1;
+                        const char *  src1_dev = src1_original + i11 * nb11 + i12 * nb12;
+                        float *       dst_host = gpu1_act_staging + gi * static_cast<size_t>(K);
+                        stream->memcpy(dst_host, src1_dev, static_cast<size_t>(K) * sizeof(float));
+                    }
+                    stream->wait();  // Activations ready on host
+
+                    // Zero staging output buffer
+                    std::memset(gpu1_output_staging, 0, n_gpu1 * static_cast<size_t>(N) * sizeof(float));
+
+                    // For each B50-cached expert, copy weight from B50 VRAM to
+                    // host staging, then build CPU task for vec_dot.
+                    // D2H copies use B50's in-order queue.
+                    // Allocate host weight staging for B50 experts.
+                    gpu1_weight_staging = sycl::malloc_host<float>(
+                        n_gpu1 * static_cast<size_t>(nb02 / sizeof(float) + 1), stream->get_context());
+
+                    if (gpu1_weight_staging) {
+                        // D2H copy weights from B50 VRAM to host staging
+                        for (size_t gi = 0; gi < n_gpu1; gi++) {
+                            const auto & entry = gpu1_entries[gi];
+                            GGML_ASSERT(entry.device_ptr != nullptr);
+                            char * w_dst = reinterpret_cast<char *>(gpu1_weight_staging) + gi * nb02;
+                            g_gpu1_queue->memcpy(w_dst, entry.device_ptr, nb02);
+                        }
+                        // Host-side wait: block until all B50 D2H copies complete.
+                        // MUST use .wait() -- OOQ depends_on is broken cross-device.
+                        g_gpu1_queue->wait();
+
+                        // Build CPU tasks from host-staged B50 weights
+                        gpu1_cpu_tasks.reserve(n_gpu1);
+                        for (size_t gi = 0; gi < n_gpu1; gi++) {
+                            cpu_expert_task task;
+                            task.weight_host = reinterpret_cast<const char *>(gpu1_weight_staging) + gi * nb02;
+                            task.act_host    = gpu1_act_staging + gi * static_cast<size_t>(K);
+                            task.output_host = gpu1_output_staging + gi * static_cast<size_t>(N);
+                            task.type        = src0->type;
+                            task.K           = static_cast<int>(K);
+                            task.N           = static_cast<int>(N);
+                            gpu1_cpu_tasks.push_back(task);
+                        }
+
+                        // Launch B50 expert computation on CPU pool (overlaps
+                        // with B580 GPU work happening concurrently above).
+                        auto * tasks_ptr = gpu1_cpu_tasks.data();
+                        int    n_tasks   = static_cast<int>(gpu1_cpu_tasks.size());
+                        auto & cpu_pool  = g_cpu_expert_pools[ctx.device];
+                        if (cpu_pool.is_active()) {
+                            gpu1_future = cpu_pool.submit_batch(tasks_ptr, n_tasks);
+                        } else {
+                            gpu1_future = std::async(std::launch::async, [tasks_ptr, n_tasks]() {
+                                ggml_sycl_cpu_expert_mul_mat_batched(tasks_ptr, n_tasks);
+                            });
+                        }
+                        gpu1_has_work = true;
+                    } else {
+                        GGML_LOG_WARN(
+                            "[MoE-MULTI-GPU] Failed to allocate B50 weight "
+                            "staging, falling back to CPU for %zu experts\n",
+                            n_gpu1);
+                        // Move to CPU entries as fallback
+                        for (auto & e : gpu1_entries) {
+                            cpu_entries.push_back(e);
+                        }
+                        gpu1_entries.clear();
+                    }
+                } else {
+                    GGML_LOG_WARN(
+                        "[MoE-MULTI-GPU] Failed to allocate B50 activation "
+                        "staging, falling back to CPU for %zu experts\n",
+                        n_gpu1);
+                    for (auto & e : gpu1_entries) {
+                        cpu_entries.push_back(e);
+                    }
+                    gpu1_entries.clear();
+                }
+            }
+
+            // ----- Merge: wait for CPU + B50, copy outputs to device dst -----
             if (cpu_future.valid()) {
                 cpu_future.get();  // Block until CPU experts finish
             }
@@ -24595,6 +24848,36 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                    static_cast<size_t>(N) * sizeof(float));
                 }
                 stream->wait();
+            }
+
+            // ----- B50 merge: wait for B50 CPU tasks, copy to B580 dst -----
+            // B50 expert outputs are in malloc_host staging buffer.
+            // Copy to B580's dst via B580's in-order compute queue (stream).
+            if (gpu1_has_work && !gpu1_entries.empty()) {
+                if (gpu1_future.valid()) {
+                    gpu1_future.get();  // Block until B50 CPU tasks finish
+                }
+
+                // Copy B50 staging outputs to B580's dst via B580 compute queue.
+                // gpu1_output_staging is malloc_host → readable from B580.
+                for (size_t gi = 0; gi < gpu1_entries.size(); gi++) {
+                    const auto &  entry    = gpu1_entries[gi];
+                    const int64_t i1       = entry.id;
+                    const int64_t i2       = entry.iid1;
+                    char *        dst_d    = dst_original + i1 * nb1 + i2 * nb2;
+                    const float * gpu1_out = gpu1_output_staging + gi * static_cast<size_t>(N);
+
+                    stream->memcpy(dst_d, gpu1_out, static_cast<size_t>(N) * sizeof(float));
+                }
+                stream->wait();
+            }
+
+            // Free per-call B50 staging allocations
+            if (gpu1_act_staging) {
+                sycl::free(gpu1_act_staging, stream->get_context());
+            }
+            if (gpu1_weight_staging) {
+                sycl::free(gpu1_weight_staging, stream->get_context());
             }
 
             // Release pinned host buffers (pool or direct free)
