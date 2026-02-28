@@ -314,6 +314,7 @@ static std::vector<float> get_logits(
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, n_head);
     }
 
+    ms.add_kv(LLM_KV_ATTENTION_MAX_ALIBI_BIAS, 8.0f);
     if (arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA  || arch == LLM_ARCH_KIMI_LINEAR) {
         ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH,       uint32_t(576));
         ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH,     uint32_t(512));
@@ -547,9 +548,6 @@ static int test_backends(const size_t seed, const ggml_log_level log_level) {
         if (arch == LLM_ARCH_BERT || arch == LLM_ARCH_MODERN_BERT || arch == LLM_ARCH_NOMIC_BERT || arch == LLM_ARCH_NOMIC_BERT_MOE ||
                 arch == LLM_ARCH_NEO_BERT || arch == LLM_ARCH_JINA_BERT_V2 || arch == LLM_ARCH_JINA_BERT_V3) {
             continue; // TODO vocab
-        }
-        if (arch == LLM_ARCH_MPT) {
-            continue; // TODO check whether mpt.cpp is correct
         }
         if (arch == LLM_ARCH_PLM) {
             continue; // TODO tensor shapes
