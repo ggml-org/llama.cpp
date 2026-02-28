@@ -405,13 +405,31 @@ void dequantize_row_q8_0(const block_q8_0 * GGML_RESTRICT x, float * GGML_RESTRI
 
     const int nb = k / qk;
 
-    for (int i = 0; i < nb; i++) {
-        const float d = GGML_FP16_TO_FP32(x[i].d);
+    #if defined(__ARM_FEATURE_SVE)
+        svbool_t pg = svptrue_b32();
+        const svfloat32_t inactive1 = svdup_n_f32(0.0f);
+        const int ggml_f32_epr = svcntw();
 
-        for (int j = 0; j < qk; ++j) {
-            y[i*qk + j] = x[i].qs[j]*d;
+        for (int i = 0; i < nb; i+=1) {
+            const float d1 = GGML_FP16_TO_FP32(x[i].d); // d:0
+
+            const int8_t *x_data1 = x[i].qs;
+            float *y_base = y + i * qk;
+            for (int j = 0; j < qk; j+=ggml_f32_epr) {
+                svint32_t vec0 = svld1sb_s32(pg, x_data1 + j);
+                svfloat32_t fvec0 = svmul_n_f32_m(pg, svcvt_f32_s32_m(inactive1, pg, vec0), d1); // Convert to float and scale
+                svst1_f32(pg, y_base + j, fvec0);
+            }
         }
-    }
+    #else
+        for (int i = 0; i < nb; i++) {
+            const float d = GGML_FP16_TO_FP32(x[i].d);
+
+            for (int j = 0; j < qk; ++j) {
+                y[i*qk + j] = x[i].qs[j]*d;
+            }
+        }
+    #endif
 }
 
 void dequantize_row_mxfp4(const block_mxfp4 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
