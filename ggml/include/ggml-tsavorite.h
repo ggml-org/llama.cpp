@@ -17,12 +17,11 @@
 
 //
 //
-// Note: this description is outdated
 //
-// An interface allowing to compute ggml_cgraph with tSovrite
+// An interface allowing to compute ggml_cgraph with tSavorite
 //
 // This is a fully functional interface that extends ggml with Hardware Accelerator support for
-// tSovrite devices. A similar interface can be created for other GPU backends (e.g. Vulkan, CUDA,
+// tSavorite devices. A similar interface can be created for other GPU backends (e.g. Vulkan, CUDA,
 // etc.)
 //
 // How it works?
@@ -37,9 +36,12 @@
 //
 // Synchronization between device and host memory (for example for input and output tensors)
 // is done with the ggml_tsavorite_set_tensor() and ggml_tsavorite_get_tensor() functions.
+// See TMU MUL_MAT TILE BLOB ABI below for current contract.
 //
 
 #pragma once
+
+
 
 #include "ggml-backend.h"
 #include "ggml.h"
@@ -48,6 +50,9 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -57,35 +62,8 @@ extern "C" {
 #define TSAVORITE_GGML_ASSERT(x) do { if (!(x)) abort(); } while (0)
 #endif
 
-// ============================================================================
-//                           EDIT ONLY THESE #defines
-// ============================================================================
 
-// Max rows per TMU call (MAR window)
-#ifndef TMU_M_TILE_MAX
-#define TMU_M_TILE_MAX    64
-#endif
-
-// TMU FP32 store granularity (floats per output cacheline)
-#ifndef TMU_N_BLOCK
-#define TMU_N_BLOCK       32
-#endif
-
-// K alignment for FP32 streaming
-#ifndef TMU_K_MULTIPLE
-#define TMU_K_MULTIPLE    32
-#endif
-
-
-// Supported static K shapes in this build:
-#define TMU_K_576   576
-#define TMU_K_1536  1536
-#define TMU_K_2048  2048
-
-// ============================================================================
-
-
-#define TSAVORITE_DEVICE_MAX_BUF_LEN 1024 * 1024 * 128
+#define TSAVORITE_DEVICE_MAX_BUF_LEN (1024 * 1024 * 128)
 
 enum ggml_tsavorite_input_tensors_count {
   TSAVORITE_UNARY_INPUT_TENSORS = 1,
@@ -230,13 +208,99 @@ extern void _mlir_ciface_txe_soft_max_host(void *a, void *b, void *res, void *bu
 extern void _mlir_ciface_txe_rms_norm_host(void *a, void *res, void *buf);
 
 
-// -----------------------------------------------------------------------------
-// TMU static MUL_MAT entrypoints generated for Python blobs
-// (These must match the function names produced by TXEBlobBuilderBackend.)
-// -----------------------------------------------------------------------------
-extern void _mlir_ciface_txe_mul_mat_tile_f32_k576_host(void *a, void *b, void *res);
-extern void _mlir_ciface_txe_mul_mat_tile_f32_k1536_host(void *a, void *b, void *res);
-extern void _mlir_ciface_txe_mul_mat_tile_f32_k2048_host(void *a, void *b, void *res);
+// ============================================================================
+// TMU TILE CONSTANTS
+// ============================================================================
+
+// Fixed TMU tile geometry
+// Max rows per TMU call (MAR window)
+#define TMU_M_TILE_MAX   64     // rows
+
+// TMU FP32 store granularity (floats per output cacheline)
+#define TMU_N_BLOCK     32     // columns (PP width)
+
+// K must be multiple of this
+// K alignment for FP32 streaming
+#define TMU_K_MULTIPLE  32
+
+
+#define TMU_NUM_K_BUCKETS 7
+
+
+// ============================================================================
+// TMU MUL_MAT TILE BLOB ABI (STATIC AOT, SINGLE‑PHASE PER‑K)
+// ============================================================================
+//
+// SINGLE‑PHASE CONTRACT (CURRENT DESIGN)
+//
+// FUNCTION SIGNATURE (C ABI):
+//
+//   void tmu_mul_mat_k<K>(
+//       const void * A_tile,   // [1,1,64,K] FP32, packed, zero‑padded
+//       const void * B_tile,   // [1,1,32,K] FP32, packed, zero‑padded
+//       void       * C_tile    // [1,1,64,32] FP32 scratchpad + output
+//   );
+//
+// SEMANTICS (per invocation):
+//
+//   • Blob LOADS PP from C_tile
+//   • Executes PP = A × B + PP for all internal K stripes
+//   • LAST internal update materializes C = A × B + PP
+//   • Blob STORES result back to C_tile
+//
+// IMPORTANT RULES:
+//
+//   • C_tile acts as BOTH scratchpad and final output
+//   • Host MUST zero C_tile before the first K‑chunk
+//   • Host MAY call multiple K‑blobs sequentially:
+//       K = 2048 + 2048 + 2048 + 2048 + 2048 + 512 + 128 + 32
+//   • No BEGIN / ACCUM / FINAL phases exist in this ABI
+//
+// SOFTWARE RESPONSIBILITY:
+//
+//   • Decompose K into supported buckets
+//   • Pack A/B tiles per K‑chunk
+//   • Zero C_tile once per output tile
+//   • Call tmu_mul_mat_k<K>() in K‑decomposition order
+//   • Copy C_tile → GGML output after last K call
+//
+// ============================================================================
+
+typedef void (*tmu_mul_mat_tile_fn)(
+    const void * A_tile,
+    const void * B_tile,
+    void       * C_tile
+);
+
+/* ---- Supported K bucket values ---- */
+#define TMU_K_BUCKET_32   32
+#define TMU_K_BUCKET_64   64
+#define TMU_K_BUCKET_128  128
+#define TMU_K_BUCKET_256  256
+#define TMU_K_BUCKET_512  512
+#define TMU_K_BUCKET_1024 1024
+#define TMU_K_BUCKET_2048 2048
+
+/* ---- Externs generated by AOT blobs (ONE per K) ---- */
+
+void tmu_mul_mat_k32  (const void *A, const void *B, void *C);
+void tmu_mul_mat_k64  (const void *A, const void *B, void *C);
+void tmu_mul_mat_k128 (const void *A, const void *B, void *C);
+void tmu_mul_mat_k256 (const void *A, const void *B, void *C);
+void tmu_mul_mat_k512 (const void *A, const void *B, void *C);
+void tmu_mul_mat_k1024(const void *A, const void *B, void *C);
+void tmu_mul_mat_k2048(const void *A, const void *B, void *C);
+
+
+extern void _mlir_ciface_txe_mul_mat_tile_f32_k32_host  (void *A_tile, void *B_tile, void *C_tile);
+extern void _mlir_ciface_txe_mul_mat_tile_f32_k64_host  (void *A_tile, void *B_tile, void *C_tile);
+extern void _mlir_ciface_txe_mul_mat_tile_f32_k128_host (void *A_tile, void *B_tile, void *C_tile);
+extern void _mlir_ciface_txe_mul_mat_tile_f32_k256_host (void *A_tile, void *B_tile, void *C_tile);
+extern void _mlir_ciface_txe_mul_mat_tile_f32_k512_host (void *A_tile, void *B_tile, void *C_tile);
+extern void _mlir_ciface_txe_mul_mat_tile_f32_k1024_host(void *A_tile, void *B_tile, void *C_tile);
+extern void _mlir_ciface_txe_mul_mat_tile_f32_k2048_host(void *A_tile, void *B_tile, void *C_tile);
+
+
 
 /* 
  * FP16 Kernels 
