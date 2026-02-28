@@ -170,4 +170,27 @@ static inline HVX_Vector hvx_vec_i16_from_hf_rnd_sat(HVX_Vector vin) {
     return Q6_Vh_vround_VwVw_sat(vsf_1, vsf_0);
 }
 
+#if __HVX_ARCH__ < 79
+
+static inline HVX_VectorPair hvx_vec_mpyacc_f32_f16(HVX_VectorPair acc, HVX_Vector x, HVX_Vector y)
+{
+    HVX_Vector a0 = Q6_V_lo_W(acc);
+    HVX_Vector a1 = Q6_V_hi_W(acc);
+
+    HVX_VectorPair m = Q6_Wqf32_vmpy_VhfVhf(x, y);
+    a0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_V_lo_W(m), a0));
+    a1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_V_hi_W(m), a1));
+
+    return Q6_W_vcombine_VV(a0, a1);
+}
+
+#else
+
+static inline HVX_VectorPair hvx_vec_mpyacc_f32_f16(HVX_VectorPair acc, HVX_Vector x, HVX_Vector y)
+{
+    return Q6_Wsf_vmpyacc_WsfVhfVhf(acc, x, y);
+}
+
+#endif
+
 #endif /* HVX_BASE_H */
