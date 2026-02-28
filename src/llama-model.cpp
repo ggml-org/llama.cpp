@@ -2627,9 +2627,10 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     // assign the output layer
     pimpl->dev_output = get_layer_buft_list(n_layer);
 
-    const auto TENSOR_DUPLICATED   = llama_model_loader::TENSOR_DUPLICATED;
-    const auto TENSOR_NOT_REQUIRED = llama_model_loader::TENSOR_NOT_REQUIRED;
-    const auto TENSOR_SKIP         = llama_model_loader::TENSOR_SKIP;
+    const auto TENSOR_DUPLICATED      = llama_model_loader::TENSOR_DUPLICATED;
+    const auto TENSOR_NOT_REQUIRED    = llama_model_loader::TENSOR_NOT_REQUIRED;
+    const auto TENSOR_SKIP            = llama_model_loader::TENSOR_SKIP;
+    const auto TENSOR_SKIP_IF_VIRTUAL = llama_model_loader::TENSOR_SKIP_IF_VIRTUAL;
 
     // create tensors for the weights
     {
@@ -4825,6 +4826,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                     const int64_t n_embd_head_qk_rope = hparams.n_rot;
                     const int64_t n_embd_head_qk_nope = n_embd_head_k_mla - n_embd_head_qk_rope;
+                    GGML_ASSERT(n_embd_head_qk_nope >= 1);
 
                     const int64_t q_lora_rank  = hparams.n_lora_q;
                     const int64_t kv_lora_rank = hparams.n_lora_kv;
@@ -6841,15 +6843,14 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         const int64_t n_embd_head_v_kda = hparams.n_embd_head_kda;
                         const int64_t ssm_d_conv = hparams.ssm_d_conv;
 
-                        // Try loading KDA specific tensors (using SSM_ prefix)
-                        // Conv1d weights: try 4D first, then 3D (quantization may remove trailing 1)
-                        // 4D: [d_conv, 1, d_inner, 1], 3D: [d_conv, 1, d_inner]
-                        layer.ssm_q_conv = create_tensor(tn(LLM_TENSOR_SSM_CONV1D_Q, "weight", i), {ssm_d_conv, 1, n_embd_head_k_kda * n_head, 1}, TENSOR_NOT_REQUIRED);
-                        if (!layer.ssm_q_conv) {
-                            layer.ssm_q_conv = create_tensor(tn(LLM_TENSOR_SSM_CONV1D_Q, "weight", i), {ssm_d_conv, 1, n_embd_head_k_kda * n_head}, TENSOR_NOT_REQUIRED);
-                        }
+                        if (hparams.is_recurrent(i)) {
+                            // Conv1d weights: try 4D first, then 3D (quantization may remove trailing 1)
+                            // 4D: [d_conv, 1, d_inner, 1], 3D: [d_conv, 1, d_inner]
+                            layer.ssm_q_conv = create_tensor(tn(LLM_TENSOR_SSM_CONV1D_Q, "weight", i), {ssm_d_conv, 1, n_embd_head_k_kda * n_head, 1}, TENSOR_NOT_REQUIRED);
+                            if (!layer.ssm_q_conv) {
+                                layer.ssm_q_conv = create_tensor(tn(LLM_TENSOR_SSM_CONV1D_Q, "weight", i), {ssm_d_conv, 1, n_embd_head_k_kda * n_head}, 0);
+                            }
 
-                        if (layer.ssm_q_conv) {
                              // KDA Layer - Conv1d weights may be 3D or 4D
                              layer.ssm_k_conv = create_tensor(tn(LLM_TENSOR_SSM_CONV1D_K, "weight", i), {ssm_d_conv, 1, n_embd_head_k_kda * n_head, 1}, TENSOR_NOT_REQUIRED);
                              if (!layer.ssm_k_conv) {
@@ -6916,7 +6917,8 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                              const int64_t qk_rope_head_dim = hparams.n_rot;  // From config: qk_rope_head_dim
                              layer.wkv_a_mqa = create_tensor(tn(LLM_TENSOR_ATTN_KV_A_MQA, "weight", i), {n_embd, kv_lora_rank + qk_rope_head_dim}, 0);
                              // Support Legacy GGUFs that don't split wkv_b (MLA KV cache disabled)
-                             layer.wkv_b = create_tensor(tn(LLM_TENSOR_ATTN_KV_B, "weight", i), {kv_lora_rank, n_head * (n_embd_head_k_mla - qk_rope_head_dim + n_embd_head_v_mla)}, TENSOR_NOT_REQUIRED);
+                             layer.wkv_b = create_tensor(tn(LLM_TENSOR_ATTN_KV_B, "weight", i),
+                                {kv_lora_rank, n_head * (n_embd_head_k_mla - qk_rope_head_dim + n_embd_head_v_mla)}, TENSOR_NOT_REQUIRED | TENSOR_SKIP_IF_VIRTUAL);
                              if (!layer.wkv_b) { // MLA KV cache enabled
                                  layer.wk_b = create_tensor(tn(LLM_TENSOR_ATTN_K_B, "weight", i), {n_embd_head_k_mla - qk_rope_head_dim, kv_lora_rank, n_head}, 0);
                                  layer.wv_b = create_tensor(tn(LLM_TENSOR_ATTN_V_B, "weight", i), {kv_lora_rank, n_embd_head_v_mla, n_head}, 0);

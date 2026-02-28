@@ -238,12 +238,21 @@ static std::vector<float> get_logits(
         const llm_arch arch, const bool moe, const size_t seed, const std::vector<llama_token> & tokens,
         const std::vector<ggml_backend_dev_t> & devs) {
     const uint32_t n_ctx   = 128;
-    const uint32_t n_embd  = arch == LLM_ARCH_GEMMA3N ? 64 : 256;
-    const uint32_t n_head  = arch == LLM_ARCH_GEMMA3N ? 1 : 2;
-    const uint32_t n_ff    = arch == LLM_ARCH_GEMMA3N ? 96 : 384;
     const uint32_t n_vocab = 128;
-    uint32_t       n_layer = 2;
-    if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
+
+    uint32_t n_embd  = 256;
+    uint32_t n_head  = 2;
+    uint32_t n_ff    = 384;
+    uint32_t n_layer = 2;
+    if (arch == LLM_ARCH_GEMMA3N) {
+        n_embd = 64;
+        n_head = 1;
+        n_ff   = 96;
+    } else if (arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_KIMI_LINEAR) {
+        n_embd = 128;
+        n_head = 1;
+        n_ff   = 192;
+    } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
         n_layer = 3;
     } else if (arch == LLM_ARCH_GEMMA3N) {
         n_layer = 22; // hparams.n_layer_kv_from_start = 20 is hardcoded
@@ -274,7 +283,7 @@ static std::vector<float> get_logits(
     ms.add_kv(LLM_KV_FULL_ATTENTION_INTERVAL, uint32_t(2));
 
     if (arch == LLM_ARCH_PLAMO2 || arch == LLM_ARCH_JAMBA || arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE ||
-            arch == LLM_ARCH_GRANITE_HYBRID || arch == LLM_ARCH_LFM2 || arch == LLM_ARCH_LFM2MOE) {
+            arch == LLM_ARCH_GRANITE_HYBRID || arch == LLM_ARCH_LFM2 || arch == LLM_ARCH_LFM2MOE || arch == LLM_ARCH_KIMI_LINEAR) {
         GGML_ASSERT(n_layer >= 2);
         std::vector<uint32_t> n_head_per_layer;
         n_head_per_layer.reserve(n_layer);
@@ -288,11 +297,18 @@ static std::vector<float> get_logits(
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, n_head);
     }
 
+    if (arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_KIMI_LINEAR) {
+        ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH,       uint32_t(576));
+        ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH,     uint32_t(512));
+        ms.add_kv(LLM_KV_ROPE_DIMENSION_COUNT,       uint32_t(64));
+        ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH_MLA,   uint32_t(192));
+        ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH_MLA, uint32_t(128));
+    }
     ms.add_kv(LLM_KV_ATTENTION_CLAMP_KQV,         1.0f);
     ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_EPS,     1e-5f);
     ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, 1e-5f);
-    ms.add_kv(LLM_KV_ATTENTION_Q_LORA_RANK,       uint32_t(32));
-    ms.add_kv(LLM_KV_ATTENTION_KV_LORA_RANK,      uint32_t(32));
+    ms.add_kv(LLM_KV_ATTENTION_Q_LORA_RANK,       uint32_t(512));
+    ms.add_kv(LLM_KV_ATTENTION_KV_LORA_RANK,      uint32_t(512));
     ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW,    n_ctx/8);
 
     if (arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35) {
@@ -330,6 +346,7 @@ static std::vector<float> get_logits(
     ms.add_kv(LLM_KV_SSM_STATE_SIZE,     uint32_t(32));
     ms.add_kv(LLM_KV_SSM_TIME_STEP_RANK, n_head);
     ms.add_kv(LLM_KV_SSM_GROUP_COUNT,    arch == LLM_ARCH_PLAMO2 ? 0 : uint32_t(2));
+    ms.add_kv(LLM_KV_KDA_HEAD_DIM,       uint32_t(128));
     ms.add_kv(LLM_KV_SHORTCONV_L_CACHE,  uint32_t(3));
 
     std::mt19937 gen(seed);
@@ -408,6 +425,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_RND1:
         case LLM_ARCH_PADDLEOCR:
         case LLM_ARCH_MIMO2:
+        case LLM_ARCH_KIMI_LINEAR:
         case LLM_ARCH_STEP35:
             return true;
         default:
@@ -491,7 +509,7 @@ static int test_backends(const size_t seed, const ggml_log_level log_level) {
         if (arch == LLM_ARCH_APERTUS) {
             continue; // TODO xielu
         }
-        if (arch == LLM_ARCH_KIMI_LINEAR || arch == LLM_ARCH_GLM_DSA) {
+        if (arch == LLM_ARCH_GLM_DSA) {
             continue; // TODO MLA
         }
         if (arch == LLM_ARCH_LLAMA4) {

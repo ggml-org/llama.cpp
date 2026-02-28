@@ -1164,6 +1164,9 @@ struct ggml_tensor * llama_model_loader::create_tensor(
     };
 
     if (files.empty()) {
+        if (flags & TENSOR_SKIP_IF_VIRTUAL) {
+            return nullptr;
+        }
         constexpr ggml_type type = GGML_TYPE_F32; // TODO make configurable
 
         // for tensors that are not required some of the dimensions can be invalid:
@@ -1180,7 +1183,9 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         t_meta.type = type;
         for (size_t dim = 0; dim < GGML_MAX_DIMS; dim++) {
             t_meta.ne[dim] = dim < ne.size() ? ne.begin()[dim] : 1;
+            GGML_ASSERT(t_meta.ne[dim] >= 1);
             t_meta.nb[dim] = dim == 0 ? ggml_type_size(type) : t_meta.ne[dim-1]*t_meta.nb[dim-1];
+            GGML_ASSERT(t_meta.nb[dim] >= 1);
         }
         ggml_set_name(&t_meta, tn.str().c_str());
 
