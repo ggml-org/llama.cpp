@@ -6708,7 +6708,20 @@ struct test_generic_op : public test_case {
             }
         }
 
-        ggml_tensor * out = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
+        // Ops with an inplace flag create a view of src[0] as their output.
+        bool inplace = false;
+        if (op == GGML_OP_SET || op == GGML_OP_ACC) {
+            inplace = op_params[4] != 0;
+        } else if (op == GGML_OP_ADD_REL_POS) {
+            inplace = op_params[0] != 0;
+        }
+
+        ggml_tensor * out;
+        if (inplace && source_count > 0) {
+            out = ggml_view_tensor(ctx, source_tensors[0]);
+        } else {
+            out = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
+        }
         out->op = op;
         for (size_t i = 0; i < source_count; ++i) {
             out->src[i] = source_tensors[i];
