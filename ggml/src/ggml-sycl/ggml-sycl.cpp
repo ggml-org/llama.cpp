@@ -223,6 +223,8 @@ static void ggml_sycl_release_host_weight_extras(ggml_sycl_host_weight_release_m
 #include "ggml-sycl/expert-cache.hpp"
 // MoE expert prefetch DMA engine + prediction
 #include "ggml-sycl/expert-prefetch.hpp"
+// Persistent CPU expert thread pool with ring-buffered staging
+#include "ggml-sycl/cpu-expert-pool.hpp"
 
 // ---------------------------------------------------------------------------
 // Per-device ExpertCache instances for MoE hybrid GPU+CPU inference.
@@ -245,6 +247,7 @@ static ggml_sycl::ExpertCache * ggml_sycl_get_expert_cache(int device) {
 static ggml_sycl::ExpertPrefetcher  g_expert_prefetchers[GGML_SYCL_MAX_DEVICES];
 static ggml_sycl::ExpertPredictor   g_expert_predictors[GGML_SYCL_MAX_DEVICES];
 static ggml_sycl::PinnedBufferPool  g_pinned_buffer_pools[GGML_SYCL_MAX_DEVICES];
+static ggml_sycl::CpuExpertPool    g_cpu_expert_pools[GGML_SYCL_MAX_DEVICES];
 static std::once_flag               g_moe_hybrid_init_flags[GGML_SYCL_MAX_DEVICES];
 // Map hash-based layer_id → sequential index for ExpertPredictor arrays.
 // ExpertCache/ExpertPrefetcher use hash IDs directly (hash-map based),
@@ -411,6 +414,17 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
         auto & pool = g_pinned_buffer_pools[device];
         pool.init(q, device, static_cast<size_t>(max_dispatch_count),
                   static_cast<size_t>(max_K), static_cast<size_t>(max_N));
+    }
+
+    // Initialize CPU expert thread pool for persistent async dispatch.
+    // Thread count auto-detected (hardware_concurrency - 2) or overridden
+    // via GGML_SYCL_CPU_EXPERT_THREADS=N.
+    if (max_K > 0 && max_N > 0 && max_dispatch_count > 0) {
+        auto & cpu_pool = g_cpu_expert_pools[device];
+        cpu_pool.init(0 /* auto thread count */,
+                      static_cast<size_t>(max_dispatch_count),
+                      static_cast<size_t>(max_K),
+                      static_cast<size_t>(max_N), q);
     }
 }
 
@@ -24361,37 +24375,79 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 }
             }
 
-            // Launch CPU experts asynchronously so they overlap with GPU
-            // kernel submissions below.
+            // Launch CPU experts via persistent thread pool (overlaps with
+            // GPU kernel submissions below). Falls back to std::async if
+            // pool not initialized.
             std::future<void> cpu_future;
             if (!cpu_tasks.empty()) {
                 // SAFETY: cpu_tasks must not be modified after this point --
                 // tasks_ptr is a raw pointer into the vector's backing storage.
                 auto * tasks_ptr = cpu_tasks.data();
                 int    n_tasks   = static_cast<int>(cpu_tasks.size());
-                cpu_future = std::async(std::launch::async, [tasks_ptr, n_tasks]() {
-                    ggml_sycl_cpu_expert_mul_mat_batched(tasks_ptr, n_tasks);
-                });
+                auto & cpu_pool  = g_cpu_expert_pools[ctx.device];
+                if (cpu_pool.is_active()) {
+                    cpu_future = cpu_pool.submit_batch(tasks_ptr, n_tasks);
+                } else {
+                    // Fallback: std::async if pool not initialized
+                    cpu_future = std::async(std::launch::async, [tasks_ptr, n_tasks]() {
+                        ggml_sycl_cpu_expert_mul_mat_batched(tasks_ptr, n_tasks);
+                    });
+                }
             }
 
-            // ----- GPU path: dispatch staged (cache-hit) experts -----
-            for (const auto & entry : gpu_entries) {
-                const int64_t iid1 = entry.iid1;
-                const int64_t id   = entry.id;
-                const int64_t i11  = id % ne11;
-                const int64_t i12  = iid1;
-                const int64_t i1   = id;
-                const int64_t i2   = i12;
+            // ----- GPU path: batched MMVQ dispatch -----
+            // Instead of calling ggml_sycl_mul_mat() per expert (N kernel
+            // submissions for top-K), dispatch a single batched MMVQ kernel.
+            // Q8_1 quantization of src1 runs once and is shared.
+            if (!gpu_entries.empty()) {
+                // Build arrays for batched dispatch
+                std::vector<int32_t> gpu_expert_ids(gpu_entries.size());
+                std::vector<int64_t> gpu_iid1s(gpu_entries.size());
+                std::vector<int64_t> gpu_id_slots(gpu_entries.size());
+                for (size_t gi = 0; gi < gpu_entries.size(); gi++) {
+                    gpu_expert_ids[gi] = gpu_entries[gi].expert_id;
+                    gpu_iid1s[gi]      = gpu_entries[gi].iid1;
+                    gpu_id_slots[gi]   = gpu_entries[gi].id;
+                }
 
-                // Use cached device pointer from partition loop (no redundant lookup)
-                GGML_ASSERT(entry.device_ptr != nullptr);
+                // Get device pointer table
+                const void * const * expert_ptrs_dev = nullptr;
+                if (src0_extra && ctx.device >= 0 && ctx.device < GGML_SYCL_MAX_DEVICES) {
+                    expert_ptrs_dev = static_cast<const void * const *>(
+                        src0_extra->moe_expert_ptrs_device[ctx.device]);
+                }
 
-                src0_row.data               = entry.device_ptr;
-                local_extra.layout.data_ptr = entry.device_ptr;
-                src1_row.data               = src1_original + i11 * nb11 + i12 * nb12;
-                dst_row.data                = dst_original + i1 * nb1 + i2 * nb2;
+                bool batched_ok = false;
+                if (expert_ptrs_dev) {
+                    batched_ok = mmvq_moe_batched_dispatch(
+                        ctx, src0, src1, dst,
+                        expert_ptrs_dev,
+                        gpu_expert_ids.data(),
+                        gpu_iid1s.data(),
+                        gpu_id_slots.data(),
+                        static_cast<int>(gpu_entries.size()),
+                        static_cast<int>(n_as),
+                        n_ids, ne11);
+                }
 
-                ggml_sycl_mul_mat(ctx, &src0_row, &src1_row, &dst_row, &route_layout);
+                // Fallback: per-expert dispatch if batched path unavailable
+                if (!batched_ok) {
+                    for (const auto & entry : gpu_entries) {
+                        const int64_t i11 = entry.id % ne11;
+                        const int64_t i12 = entry.iid1;
+                        const int64_t i1  = entry.id;
+                        const int64_t i2  = i12;
+
+                        GGML_ASSERT(entry.device_ptr != nullptr);
+
+                        src0_row.data               = entry.device_ptr;
+                        local_extra.layout.data_ptr = entry.device_ptr;
+                        src1_row.data               = src1_original + i11 * nb11 + i12 * nb12;
+                        dst_row.data                = dst_original + i1 * nb1 + i2 * nb2;
+
+                        ggml_sycl_mul_mat(ctx, &src0_row, &src1_row, &dst_row, &route_layout);
+                    }
+                }
             }
 
             // ----- Merge: wait for CPU, then copy outputs to device dst -----
