@@ -406,9 +406,11 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
 
     // Initialize PinnedBufferPool for O(1) acquire/release of pinned staging
     // buffers used by CPU expert dispatch (replaces per-call malloc_host/free).
+    // max_experts = n_experts_used (top-K per MUL_MAT_ID) for single-token TG.
     if (max_K > 0 && max_N > 0 && max_dispatch_count > 0) {
         auto & pool = g_pinned_buffer_pools[device];
-        pool.init(max_dispatch_count, max_K, max_N, device, q);
+        pool.init(q, device, static_cast<size_t>(max_dispatch_count),
+                  static_cast<size_t>(max_K), static_cast<size_t>(max_N));
     }
 }
 
@@ -24292,18 +24294,17 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             const int64_t N = ne01;  // output rows per expert
 
             if (!cpu_entries.empty()) {
-                // Try pre-allocated pinned buffer pool first (O(1) acquire).
+                // Use pre-allocated pinned buffer pool (O(1) acquire).
                 // Falls back to per-call sycl::malloc_host if pool unavailable.
                 const size_t n_cpu     = cpu_entries.size();
                 const size_t act_bytes = n_cpu * static_cast<size_t>(K) * sizeof(float);
                 const size_t out_bytes = n_cpu * static_cast<size_t>(N) * sizeof(float);
 
                 auto & pool = g_pinned_buffer_pools[ctx.device];
-                ggml_sycl::PinnedBufferPool::acquired_buffers pool_bufs;
-                if (pool.is_initialized() &&
-                    pool.acquire(static_cast<int>(n_cpu), K, N, pool_bufs)) {
-                    src1_host_pinned  = pool_bufs.activation;
-                    cpu_output_pinned = pool_bufs.output;
+                if (pool.is_initialized()) {
+                    auto bp           = pool.acquire(n_cpu);
+                    src1_host_pinned  = bp.act;
+                    cpu_output_pinned = bp.out;
                     used_pinned_pool  = true;
                 } else {
                     // Fallback: per-call allocation (slower but always works)
@@ -24416,7 +24417,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
             // Release pinned host buffers (pool or direct free)
             if (used_pinned_pool) {
-                g_pinned_buffer_pools[ctx.device].release();
+                g_pinned_buffer_pools[ctx.device].release({src1_host_pinned, cpu_output_pinned});
             } else {
                 if (src1_host_pinned) {
                     sycl::free(src1_host_pinned, stream->get_context());

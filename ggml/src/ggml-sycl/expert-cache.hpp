@@ -8,12 +8,15 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <mutex>
 #include <shared_mutex>
 #include <sycl/sycl.hpp>
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
+#include "unified-cache.hpp"
 
 namespace ggml_sycl {
 
@@ -287,71 +290,56 @@ using expert_cache = ExpertCache;
 // Replaces per-MUL_MAT_ID sycl::malloc_host/free (216 calls/token) with
 // O(1) acquire/release from a pre-allocated pool. Buffers are allocated
 // at moe_hybrid_init_once() time via unified_alloc() with
-// role=EXPERT_STAGING, category=EXPERT_CACHE.
+// role=EXPERT_STAGING, category=EXPERT_CACHE, constraints.must_host_pinned.
 //
-// Two buffer types:
-//   - activation buffers (K floats per expert dispatch)
-//   - output buffers     (N floats per expert dispatch)
-//
-// Thread-safety: mutex-protected acquire/release. In practice, only one
-// MUL_MAT_ID runs at a time per device, so contention is negligible.
+// Memory tracked through unified cache (runtime_category::EXPERT_CACHE).
 // ---------------------------------------------------------------------------
 class PinnedBufferPool {
 public:
     PinnedBufferPool() = default;
     ~PinnedBufferPool();
 
-    // Non-copyable, non-movable (owns SYCL allocations)
+    // Non-copyable, non-movable (owns unified_alloc handles)
     PinnedBufferPool(const PinnedBufferPool &)             = delete;
     PinnedBufferPool & operator=(const PinnedBufferPool &) = delete;
     PinnedBufferPool(PinnedBufferPool &&)                  = delete;
     PinnedBufferPool & operator=(PinnedBufferPool &&)      = delete;
 
-    // Initialize the pool with the maximum buffer sizes needed for this model.
-    //   max_cpu_experts: maximum number of CPU experts dispatched per MUL_MAT_ID
-    //   max_K:           maximum input dimension (columns, ne00)
-    //   max_N:           maximum output dimension (rows, ne01)
-    //   device:          SYCL device ordinal (for budget tracking)
-    //   q:               SYCL queue for sycl::malloc_host
-    void init(int max_cpu_experts, int64_t max_K, int64_t max_N,
-              int device, sycl::queue & q);
+    // Initialize the pool. Allocates via unified_alloc() with must_host_pinned.
+    //   q:            SYCL queue for allocation context
+    //   device_id:    SYCL device ordinal
+    //   max_experts:  max CPU experts per MUL_MAT_ID (top-K)
+    //   act_dim:      activation dimension (K = ne00) in floats
+    //   out_dim:      output dimension (N = ne01) in floats
+    void init(sycl::queue & q, int device_id,
+              size_t max_experts, size_t act_dim, size_t out_dim);
 
-    // Release all buffers and clean up.
+    // Release all buffers via unified_free().
     void shutdown();
 
-    // Acquire pre-allocated pinned buffers for CPU expert dispatch.
-    // Returns pointers to activation staging and output staging buffers.
-    // Both buffers are guaranteed to hold at least n_cpu * K (or N) floats.
-    // Returns false if pool is not initialized or n_cpu exceeds capacity.
-    struct acquired_buffers {
-        float * activation = nullptr;  // [n_cpu * K] floats, pinned host
-        float * output     = nullptr;  // [n_cpu * N] floats, pinned host
+    // Acquire buffers for n_experts.
+    // act: n_experts * act_stride_ floats for activation staging (D2H target).
+    // out: n_experts * out_stride_ floats for CPU output (H2D source).
+    struct BufferPair {
+        float * act = nullptr;
+        float * out = nullptr;
     };
-    bool acquire(int n_cpu, int64_t K, int64_t N, acquired_buffers & out);
+    BufferPair acquire(size_t n_experts);
 
-    // Release buffers back to the pool. Must be called after GPU merge is done.
-    void release();
+    // Release buffers back to pool. Zeros the output buffer for next use.
+    void release(BufferPair bp);
 
-    bool is_initialized() const { return initialized_; }
-
-    // Stats
-    size_t activation_bytes() const { return act_bytes_; }
-    size_t output_bytes() const     { return out_bytes_; }
-    size_t total_bytes() const      { return act_bytes_ + out_bytes_; }
-    int    acquire_count() const    { return acquire_count_; }
+    bool is_initialized() const { return act_pool_ != nullptr && out_pool_ != nullptr; }
 
 private:
-    float *       act_buf_      = nullptr;   // Pre-allocated activation staging
-    float *       out_buf_      = nullptr;   // Pre-allocated output staging
-    size_t        act_bytes_    = 0;
-    size_t        out_bytes_    = 0;
-    int           device_id_    = -1;
-    sycl::queue * queue_        = nullptr;   // Non-owning
-    bool          initialized_  = false;
-    bool          in_use_       = false;     // True between acquire/release
-    int           acquire_count_ = 0;        // Stats counter
-
-    mutable std::mutex mutex_;
+    float *      act_pool_     = nullptr;
+    float *      out_pool_     = nullptr;
+    size_t       act_stride_   = 0;  // floats per expert (K)
+    size_t       out_stride_   = 0;  // floats per expert (N)
+    size_t       max_experts_  = 0;
+    int          device_id_    = -1;
+    alloc_handle act_alloc_;
+    alloc_handle out_alloc_;
 };
 
 } // namespace ggml_sycl

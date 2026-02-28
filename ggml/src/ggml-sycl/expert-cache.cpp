@@ -692,116 +692,78 @@ PinnedBufferPool::~PinnedBufferPool() {
     shutdown();
 }
 
-void PinnedBufferPool::init(int max_cpu_experts, int64_t max_K, int64_t max_N,
-                            int device, sycl::queue & q) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (initialized_) {
+void PinnedBufferPool::init(sycl::queue & q, int device_id,
+                            size_t max_experts, size_t act_dim, size_t out_dim) {
+    if (is_initialized()) {
         return;
     }
 
-    if (max_cpu_experts <= 0 || max_K <= 0 || max_N <= 0) {
-        GGML_LOG_WARN("[PINNED-POOL] Invalid dimensions: experts=%d K=%ld N=%ld\n",
-                      max_cpu_experts, (long) max_K, (long) max_N);
+    device_id_   = device_id;
+    act_stride_  = act_dim;
+    out_stride_  = out_dim;
+    max_experts_ = max_experts;
+
+    const size_t act_bytes = max_experts * act_dim * sizeof(float);
+    const size_t out_bytes = max_experts * out_dim * sizeof(float);
+
+    // Allocate activation pool via unified_alloc with pinned host constraint
+    alloc_request req_act;
+    req_act.queue  = &q;
+    req_act.device = device_id;
+    req_act.size   = act_bytes;
+    req_act.intent.role                         = alloc_role::EXPERT_STAGING;
+    req_act.intent.category                     = runtime_category::EXPERT_CACHE;
+    req_act.intent.cohort_id                    = "moe_act_pool";
+    req_act.intent.constraints.must_host_pinned = true;
+
+    if (!unified_alloc(req_act, &act_alloc_)) {
+        GGML_LOG_WARN("[MOE-POOL] Failed to allocate activation pool (%zu bytes)\n", act_bytes);
         return;
     }
+    act_pool_ = static_cast<float *>(act_alloc_.ptr);
 
-    device_id_ = device;
-    queue_     = &q;
+    // Allocate output pool
+    alloc_request req_out = req_act;
+    req_out.size             = out_bytes;
+    req_out.intent.cohort_id = "moe_out_pool";
 
-    act_bytes_ = static_cast<size_t>(max_cpu_experts) * static_cast<size_t>(max_K) * sizeof(float);
-    out_bytes_ = static_cast<size_t>(max_cpu_experts) * static_cast<size_t>(max_N) * sizeof(float);
-
-    // Track host memory via unified cache budget
-    unified_cache_add_runtime_host_bytes(act_bytes_ + out_bytes_);
-
-    // Allocate pinned host buffers
-    act_buf_ = static_cast<float *>(ggml_sycl_malloc_host(act_bytes_, q, "pinned_pool_act"));
-    out_buf_ = static_cast<float *>(ggml_sycl_malloc_host(out_bytes_, q, "pinned_pool_out"));
-
-    if (!act_buf_ || !out_buf_) {
-        GGML_LOG_ERROR("[PINNED-POOL] Failed to allocate pinned buffers "
-                       "(act=%zu + out=%zu bytes)\n", act_bytes_, out_bytes_);
-        // Clean up partial allocation
-        if (act_buf_) {
-            sycl::free(act_buf_, q.get_context());
-            act_buf_ = nullptr;
-        }
-        if (out_buf_) {
-            sycl::free(out_buf_, q.get_context());
-            out_buf_ = nullptr;
-        }
-        unified_cache_sub_runtime_host_bytes(act_bytes_ + out_bytes_);
-        act_bytes_ = 0;
-        out_bytes_ = 0;
+    if (!unified_alloc(req_out, &out_alloc_)) {
+        GGML_LOG_WARN("[MOE-POOL] Failed to allocate output pool (%zu bytes)\n", out_bytes);
+        unified_free(act_alloc_);
+        act_alloc_ = {};
+        act_pool_  = nullptr;
         return;
     }
+    out_pool_ = static_cast<float *>(out_alloc_.ptr);
 
-    initialized_ = true;
-    GGML_LOG_INFO("[PINNED-POOL] Initialized: act=%.1f KB, out=%.1f KB, total=%.1f KB\n",
-                  act_bytes_ / 1024.0, out_bytes_ / 1024.0,
-                  (act_bytes_ + out_bytes_) / 1024.0);
+    GGML_LOG_INFO("[MOE-POOL] Pinned buffer pool: act=%zu KB, out=%zu KB, max_experts=%zu\n",
+                  act_bytes / 1024, out_bytes / 1024, max_experts);
 }
 
 void PinnedBufferPool::shutdown() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!initialized_) {
-        return;
+    if (act_alloc_.ptr) {
+        unified_free(act_alloc_);
+        act_alloc_ = {};
+        act_pool_  = nullptr;
     }
-
-    if (act_buf_ && queue_) {
-        sycl::free(act_buf_, queue_->get_context());
-        act_buf_ = nullptr;
+    if (out_alloc_.ptr) {
+        unified_free(out_alloc_);
+        out_alloc_ = {};
+        out_pool_  = nullptr;
     }
-    if (out_buf_ && queue_) {
-        sycl::free(out_buf_, queue_->get_context());
-        out_buf_ = nullptr;
-    }
-
-    unified_cache_sub_runtime_host_bytes(act_bytes_ + out_bytes_);
-
-    GGML_LOG_INFO("[PINNED-POOL] Shutdown: released %.1f KB, %d acquires total\n",
-                  (act_bytes_ + out_bytes_) / 1024.0, acquire_count_);
-
-    act_bytes_   = 0;
-    out_bytes_   = 0;
-    initialized_ = false;
-    in_use_      = false;
 }
 
-bool PinnedBufferPool::acquire(int n_cpu, int64_t K, int64_t N,
-                               acquired_buffers & out) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    out = {};
-
-    if (!initialized_) {
-        return false;
-    }
-
-    const size_t needed_act = static_cast<size_t>(n_cpu) * static_cast<size_t>(K) * sizeof(float);
-    const size_t needed_out = static_cast<size_t>(n_cpu) * static_cast<size_t>(N) * sizeof(float);
-
-    if (needed_act > act_bytes_ || needed_out > out_bytes_) {
-        GGML_SYCL_DEBUG("[PINNED-POOL] Buffer too small: need act=%zu/%zu, out=%zu/%zu\n",
-                        needed_act, act_bytes_, needed_out, out_bytes_);
-        return false;
-    }
-
-    if (in_use_) {
-        // Should not happen in single-device sequential dispatch
-        GGML_LOG_WARN("[PINNED-POOL] Pool already in use (concurrent acquire)\n");
-        return false;
-    }
-
-    in_use_ = true;
-    acquire_count_++;
-    out.activation = act_buf_;
-    out.output     = out_buf_;
-    return true;
+PinnedBufferPool::BufferPair PinnedBufferPool::acquire(size_t n_experts) {
+    GGML_ASSERT(n_experts <= max_experts_ && "Expert count exceeds pool capacity");
+    GGML_ASSERT(act_pool_ && out_pool_ && "Pool not initialized");
+    return { act_pool_, out_pool_ };
 }
 
-void PinnedBufferPool::release() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    in_use_ = false;
+void PinnedBufferPool::release(BufferPair) {
+    // Zero output buffer for next use (CPU kernels write partial results).
+    if (out_pool_) {
+        std::memset(out_pool_, 0, max_experts_ * out_stride_ * sizeof(float));
+    }
 }
 
 } // namespace ggml_sycl
