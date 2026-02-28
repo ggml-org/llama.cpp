@@ -623,3 +623,62 @@ def do_test_hello_world(server: ServerProcess, **kwargs):
     code = actual_arguments["code"]
     assert isinstance(code, str), f"Expected code to be a string, got {type(code)}: {json.dumps(code)}"
     assert re.match(r'''print\(("[Hh]ello,? [Ww]orld!?"|'[Hh]ello,? [Ww]orld!?')\)''', re.sub(r'#.*\n?', '', code)), f'Expected hello world, got {code}'
+
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("stream", [CompletionMode.NORMAL, CompletionMode.STREAMED])
+@pytest.mark.parametrize("tool,hf_repo,template_override,reasoning_format", [
+    (PYTHON_TOOL, "unsloth/Qwen3-0.6B-GGUF:Q4_K_M", None, 'deepseek'),
+    (TEST_TOOL,   "unsloth/Qwen3-0.6B-GGUF:Q4_K_M", None, 'deepseek'),
+])
+def test_required_tool_with_reasoning(tool: dict, hf_repo: str, template_override: str | Tuple[str, str | None] | None, reasoning_format: Literal['deepseek', 'none'], stream: CompletionMode):
+    global server
+    n_predict = 512
+    
+    # Set the reasoning format
+    server.reasoning_format = reasoning_format
+    
+    server.jinja = True
+    server.n_ctx = 8192
+    server.n_predict = n_predict
+    server.model_hf_repo = hf_repo
+    server.model_hf_file = None
+    
+        
+    server.start(timeout_seconds=TIMEOUT_START_SLOW)
+
+    # Make the request with "tool_choice": "required"
+    body = server.make_any_request("POST", "/v1/chat/completions", data={
+        "max_tokens": n_predict,
+        "messages": [
+            {"role": "system", "content": "You are a coding assistant."},
+            {"role": "user", "content": "Write an example"}, # This prompt will force the tool use
+        ],
+        "tool_choice": "required",
+        "tools": [tool],
+        "parallel_tool_calls": False,
+        "stream": stream == CompletionMode.STREAMED,
+        "temperature": 0.0,
+        "top_k": 1,
+        "top_p": 1.0,
+    }, timeout=TIMEOUT_HTTP_REQUEST)
+    
+    choice = body["choices"][0]
+
+
+    reasoning_content:str = choice["message"].get("reasoning_content")
+    assert reasoning_content is not None, 'Expected reasoning content, but got None'
+    assert len(reasoning_content.strip()) > 3, 'Reasoning content is too small to be credible'
+
+    tool_calls = choice["message"].get("tool_calls")
+    assert tool_calls and len(tool_calls) == 1, f'Expected 1 tool call in {choice["message"]}'
+    tool_call = tool_calls[0]
+    expected_function_name = "python" if tool["type"] == "code_interpreter" else tool["function"]["name"]
+    assert expected_function_name == tool_call["function"]["name"]
+    
+    actual_arguments = json.loads(tool_call["function"]["arguments"])
+    if tool is PYTHON_TOOL:
+         assert "code" in actual_arguments, f"tool arguments: {json.dumps(actual_arguments)}, expected: 'code'"
+    elif tool is TEST_TOOL:
+         assert "success" in actual_arguments, f"tool arguments: {json.dumps(actual_arguments)}, expected: 'success'"

@@ -2396,6 +2396,13 @@ static common_chat_params common_chat_params_init_hermes_2_pro(const common_chat
 
     data.prompt = apply(tmpl, inputs, /* messages_override =*/ std::nullopt, /* tools_override= */ std::nullopt, extra_context);
     data.format = COMMON_CHAT_FORMAT_HERMES_2_PRO;
+    auto supports_thinking = tmpl.source().find("<think>") != std::string::npos;
+
+    // you should not be able to call enable_thinking if <think> is not supported
+    if (!supports_thinking && extra_context["enable_thinking"]) {
+        extra_context["enable_thinking"] = false;
+    }
+
     if (string_ends_with(data.prompt, "<think>\n")) {
         if (!extra_context["enable_thinking"]) {
             data.prompt += "</think>";
@@ -2458,9 +2465,27 @@ static common_chat_params common_chat_params_init_hermes_2_pro(const common_chat
             tool_call_alts.push_back(
                 "( \"```\\n\" | \"```json\\n\" | \"```xml\\n\" ) space " + wrappable_tool_call + " space \"```\" space ");
             auto tool_call = builder.add_rule("tool_call", string_join(tool_call_alts, " | "));
-            builder.add_rule("root",
-                std::string(data.thinking_forced_open ? "( \"</think>\" space )? " : "") +
-                (inputs.parallel_tool_calls ? "(" + tool_call + ")+" : tool_call));
+
+            // thinking grammar logic depending on if thinking_forced_open was to true (so already opened (and maybe closed)) and if thinking is even allowed
+            if (extra_context["enable_thinking"]) {
+                data.grammar_triggers.push_back({
+                    COMMON_GRAMMAR_TRIGGER_TYPE_WORD,
+                    data.thinking_forced_open ? "</think>" : "<think>"
+                });
+                std::string prelude = "";
+                if (!data.thinking_forced_open) {
+                    prelude = builder.add_rule("think-start", "\"<think>\"");
+                }
+                prelude += " ";
+                prelude += builder.add_rule("think-content", "( [^<] | \"<\" [^/] | \"</\" [^t] | \"</t\" [^h] | \"</th\" [^i] | \"</thi\" [^n] | \"</thin\" [^k] | \"</think\" [^>] )*");
+                prelude += " ";
+                prelude += builder.add_rule("think-end", "\"</think>\" space");
+                prelude += " ";
+                builder.add_rule("root", prelude + "(" + tool_call + ")" + (inputs.parallel_tool_calls ? "*" : "?"));
+            } else {
+                builder.add_rule("root", inputs.parallel_tool_calls ? "(" + tool_call + ")+" : tool_call);
+            }
+
             // Trigger on some common known "good bad" outputs (only from the start and with a json that's about a specific argument name to avoid false positives)
             data.grammar_triggers.push_back({
                 COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN,
