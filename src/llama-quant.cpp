@@ -744,6 +744,16 @@ static size_t llama_tensor_quantize_impl(enum ggml_type new_type, const float * 
     return new_size;
 }
 
+static bool ggml_type_static(ggml_type type) {
+    return (
+        type == GGML_TYPE_Q8_0 ||
+        type == GGML_TYPE_Q5_1 ||
+        type == GGML_TYPE_Q5_0 ||
+        type == GGML_TYPE_Q4_1 ||
+        type == GGML_TYPE_Q4_0
+    );
+}
+
 // quantize a single tensor, handling expert parallelism and work buffer management
 static size_t llama_tensor_quantize(
                 const ggml_tensor * tensor,
@@ -774,8 +784,11 @@ static size_t llama_tensor_quantize(
     const int64_t n_experts = tensor->ne[2];
     const int64_t nchunk = (ne_0_x_1 + chunk_size - 1) / chunk_size;
 
-    // enough chunks to feed all threads?
-    const bool expert_parallel = n_experts >= nthread && nthread > 1 && nchunk < nthread;
+    // should we use expert-parallel quantization?
+    const bool expert_parallel = (
+        !ggml_type_static(new_type) && // certain types are fast enough to quantize that it's not worth it
+        (n_experts >= nthread && nthread > 1 && nchunk < nthread) // enough chunks to feed all threads?
+    );
 
     // parallelize across experts instead of within them, if it would be more efficient
     //
