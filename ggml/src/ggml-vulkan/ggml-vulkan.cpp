@@ -792,6 +792,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_rope_neox_f32, pipeline_rope_neox_f16, pipeline_rope_neox_f32_f16;
     vk_pipeline pipeline_rope_multi_f32, pipeline_rope_multi_f16, pipeline_rope_multi_f32_f16;
     vk_pipeline pipeline_rope_vision_f32, pipeline_rope_vision_f16;
+    vk_pipeline pipeline_get_rel_pos_f32, pipeline_get_rel_pos_f16;
     vk_pipeline pipeline_argsort_f32[num_argsort_pipelines];
     vk_pipeline pipeline_argsort_large_f32[num_argsort_pipelines];
     vk_pipeline pipeline_topk_f32[num_topk_pipelines];
@@ -4465,6 +4466,9 @@ static void ggml_vk_load_shaders(vk_device& device) {
         ggml_vk_create_pipeline(device, device->pipeline_rope_neox_f32_f16, "rope_neox_f32_f16", rope_neox_f32_f16_len, rope_neox_f32_f16_data, "main", 5, sizeof(vk_op_rope_push_constants), {1, 512, 1}, {}, 1);
         ggml_vk_create_pipeline(device, device->pipeline_rope_multi_f32_f16, "rope_multi_f32_f16", rope_multi_f32_f16_len, rope_multi_f32_f16_data, "main", 5, sizeof(vk_op_rope_push_constants), {1, 512, 1}, {}, 1);
     }
+
+    ggml_vk_create_pipeline(device, device->pipeline_get_rel_pos_f32, "get_rel_pos_f32", get_rel_pos_f32_len, get_rel_pos_f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_get_rel_pos_f16, "get_rel_pos_f16", get_rel_pos_f16_len, get_rel_pos_f16_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
 
     for (uint32_t i = 0; i < num_argsort_pipelines; ++i) {
         uint32_t BLOCK_SIZE = 1u << std::min(i, device->max_workgroup_size_log2);
@@ -9510,6 +9514,14 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             return ctx->device->pipeline_fill_f32;
         }
         return nullptr;
+    case GGML_OP_GET_REL_POS:
+        if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+            return ctx->device->pipeline_get_rel_pos_f32;
+        }
+        if (src0->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16) {
+            return ctx->device->pipeline_get_rel_pos_f16;
+        }
+        return nullptr;
     default:
         return nullptr;
     }
@@ -9813,6 +9825,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     case GGML_OP_UNARY:
     case GGML_OP_GLU:
     case GGML_OP_CONV_2D_DW:
+    case GGML_OP_GET_REL_POS:
         {
             uint32_t ne = ggml_nelements(dst);
             if (op == GGML_OP_CPY && ggml_is_quantized(src0->type) && ggml_is_quantized(dst->type)) {
@@ -11026,6 +11039,11 @@ static void ggml_vk_rope(ggml_backend_vk_context * ctx, vk_context& subctx, cons
 
     ggml_vk_op_f32<vk_op_rope_push_constants>(ctx, subctx, src0, src1, src2, src3, dst, GGML_OP_ROPE,
         ggml_vk_make_rope_constants(cgraph->nodes[node_idx], src0, src2 != nullptr, backprop, set_rows_stride));
+}
+
+static void ggml_vk_get_rel_pos(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
+    vk_op_unary_push_constants pc = vk_op_unary_push_constants_init(src0, dst, ggml_nelements(dst));
+    ggml_vk_op_f32(ctx, subctx, src0, nullptr, nullptr, nullptr, dst, GGML_OP_GET_REL_POS, pc);
 }
 
 static void ggml_vk_argsort(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
@@ -12849,6 +12867,10 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         break;
     case GGML_OP_ROPE_BACK:
         ggml_vk_rope(ctx, compute_ctx, cgraph, node_idx, true);
+
+        break;
+    case GGML_OP_GET_REL_POS:
+        ggml_vk_get_rel_pos(ctx, compute_ctx, src0, node);
 
         break;
     case GGML_OP_ARGSORT:
@@ -15185,6 +15207,9 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_DIAG:
             return (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
                    op->type == op->src[0]->type;
+        case GGML_OP_GET_REL_POS:
+            return (op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32) ||
+                    (op->src[0]->type == GGML_TYPE_F16 && op->type == GGML_TYPE_F16);
         case GGML_OP_ARGSORT:
             {
                 if (!ggml_is_contiguous(op) || !ggml_is_contiguous(op->src[0])) {

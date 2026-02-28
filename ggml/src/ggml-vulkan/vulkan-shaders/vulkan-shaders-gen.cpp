@@ -948,6 +948,9 @@ void process_shaders() {
     string_to_spv("rope_vision_f16", "rope_vision.comp", {{"A_TYPE", "float16_t"}, {"ROPE_D_TYPE", "float16_t"}});
     string_to_spv("rope_vision_f16_rte", "rope_vision.comp", {{"A_TYPE", "float16_t"}, {"ROPE_D_TYPE", "float16_t"}, {"RTE16", "1"}});
 
+    string_to_spv("get_rel_pos_f32", "get_rel_pos.comp", {{"A_TYPE", "float"}, {"D_TYPE", "float"}});
+    string_to_spv("get_rel_pos_f16", "get_rel_pos.comp", {{"A_TYPE", "float16_t"}, {"D_TYPE", "float16_t"}});
+
     string_to_spv("argsort_f32", "argsort.comp", {{"A_TYPE", "float"}});
     string_to_spv("argsort_large_f32", "argsort_large.comp", {{"A_TYPE", "float"}});
 
