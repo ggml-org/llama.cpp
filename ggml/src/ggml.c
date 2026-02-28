@@ -6626,7 +6626,7 @@ static void ggml_compute_backward(
                 memcpy(&attn_factor, (const float *) tensor->op_params +  8, sizeof(float));
                 memcpy(&beta_fast,   (const float *) tensor->op_params +  9, sizeof(float));
                 memcpy(&beta_slow,   (const float *) tensor->op_params + 10, sizeof(float));
-                memcpy(&sections,                    tensor->op_params + 11, sizeof(sections));
+                memcpy(&sections,    (const int *)   tensor->op_params + 11, sizeof(sections));
 
                 struct ggml_tensor * rope_back = grad->ne[2] == src1->ne[0] ?
                     ggml_rope_ext_back(ctx, grad, src1, src2, n_dims,
