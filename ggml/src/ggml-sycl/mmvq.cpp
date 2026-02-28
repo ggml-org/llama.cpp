@@ -3571,6 +3571,146 @@ void ggml_sycl_moe_pre_allocate_buffers(ggml_backend_sycl_context & ctx, ggml_cg
 }
 #endif
 
+// ---------------------------------------------------------------------------
+// Batched MMVQ dispatch for MoE hybrid GPU path.
+//
+// Replaces per-expert ggml_sycl_mul_mat() loop with a single kernel
+// submission.  Q8_1 quantization of src1 runs once and is shared across
+// all GPU-staged experts.
+//
+// For entries dispatched to CPU (cache misses), we fill the pointer
+// table with a safe dummy pointer so the kernel writes *something* to
+// those dst slots.  The CPU path overwrites those slots afterwards.
+// ---------------------------------------------------------------------------
+bool mmvq_moe_batched_dispatch(
+    ggml_backend_sycl_context & ctx,
+    const ggml_tensor *         src0,
+    const ggml_tensor *         src1,
+    ggml_tensor *               dst,
+    const void * const *        expert_ptrs_device,
+    const int32_t *             gpu_expert_ids,
+    const int64_t *             gpu_iid1s,
+    const int64_t *             gpu_ids,
+    int                         n_gpu_entries,
+    int                         n_experts,
+    int64_t                     n_ids,
+    int64_t                     ne11) {
+
+    if (n_gpu_entries <= 0 || !expert_ptrs_device) {
+        return false;
+    }
+
+    // Only handle quantized types with _id kernels
+    switch (src0->type) {
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q8_0:
+            break;
+        default:
+            return false;
+    }
+
+    GGML_TENSOR_BINARY_OP_LOCALS;
+
+    const queue_ptr stream = ctx.stream();
+
+    // --- Q8_1 quantization (shared across all experts) ---
+    const int64_t ne10_padded   = GGML_PAD(ne10, QK8_1);
+    const int64_t q8_1_row_size = ne10_padded * sizeof(block_q8_1) / QK8_1;
+
+    // For decode (ne12 == 1), there is exactly 1 token row
+    const int64_t total_src1_rows = ne11 * ne12;
+    const size_t  required_size   = total_src1_rows * q8_1_row_size;
+
+    const float * src1_d = (const float *) src1->data;
+    float *       dst_d  = (float *) dst->data;
+
+    ggml_sycl_pool_alloc<int8_t> src1_q8_1_pool(ctx.pool());
+    src1_q8_1_pool.alloc(required_size);
+    void * q8_1_buffer = src1_q8_1_pool.get();
+
+    // AOS layout → use standard Q8_1 quantizer
+    quantize_row_q8_1_sycl<quantize_q8_1>(
+        src1_d, (char *) q8_1_buffer, ne10, total_src1_rows,
+        ne10_padded, stream);
+
+    // --- Build compact pointer table for batched dispatch ---
+    // We dispatch over n_gpu_entries only.  Each entry becomes one
+    // batch_idx in the kernel.  We use compact mode (ids=nullptr) where
+    // expert_ptrs[batch_idx] gives the weight pointer directly.
+    //
+    // To get correct dst offsets we set n_tokens=1 and provide per-entry
+    // id via the ids array (so that batch_idx → id mapping is explicit).
+    const int64_t num_tokens    = ne12;
+    const int64_t total_batches = n_ids * num_tokens;
+
+    // Q8_1 strides (matching ggml_sycl_mul_mat_id_vec_q)
+    const int64_t q8_nb11 = q8_1_row_size;
+    const int64_t q8_nb12 = ne11 * q8_1_row_size;
+
+    // stride between expert weight matrices
+    const int64_t stride_expert_x = nb02;
+
+    // Build full-size expert_id array for all slots.  GPU entries get
+    // their real expert_id; CPU entries get the first GPU entry's
+    // expert_id as sentinel (output is overwritten by CPU memcpy).
+    const int32_t sentinel_id = gpu_expert_ids[0];
+
+    std::vector<int32_t> batch_ids(total_batches, sentinel_id);
+    for (int i = 0; i < n_gpu_entries; i++) {
+        const int64_t slot_idx = gpu_ids[i] * num_tokens + gpu_iid1s[i];
+        if (slot_idx >= 0 && slot_idx < total_batches) {
+            batch_ids[slot_idx] = gpu_expert_ids[i];
+        }
+    }
+
+    // Allocate device buffer for batch ids and upload
+    ggml_sycl_pool_alloc<int32_t> ids_pool(ctx.pool());
+    ids_pool.alloc(total_batches * sizeof(int32_t));
+    int32_t * ids_device = ids_pool.get();
+    stream->memcpy(ids_device, batch_ids.data(), total_batches * sizeof(int32_t));
+
+    // ids strides: linear layout, ids_nb0 = sizeof(int32_t), ids_nb1 = n_ids * sizeof(int32_t)
+    const int64_t ids_nb0 = sizeof(int32_t);
+    const int64_t ids_nb1 = n_ids * sizeof(int32_t);
+
+    switch (src0->type) {
+        case GGML_TYPE_Q4_0:
+            mul_mat_vec_q4_0_q8_1_id_sycl(
+                nullptr,              // vx (unused with expert_ptrs)
+                expert_ptrs_device,   // expert pointer table
+                q8_1_buffer, dst_d, ids_device,
+                ne00,                 // ncols
+                ne01,                 // nrows_per_expert
+                total_batches, n_ids, num_tokens, ne11,
+                stride_expert_x,
+                ids_nb0, ids_nb1,     // ids strides
+                q8_nb11, q8_nb12,     // Q8_1 strides
+                nb1, nb2,             // dst strides
+                stream);
+            break;
+        case GGML_TYPE_Q8_0:
+            mul_mat_vec_q8_0_q8_1_id_sycl(
+                nullptr,
+                expert_ptrs_device,
+                q8_1_buffer, dst_d, ids_device,
+                ne00, ne01,
+                total_batches, n_ids, num_tokens, ne11,
+                stride_expert_x,
+                ids_nb0, ids_nb1,
+                q8_nb11, q8_nb12,
+                nb1, nb2,
+                stream);
+            break;
+        default:
+            return false;
+    }
+
+    GGML_SYCL_DEBUG("[MOE-BATCHED] Dispatched %d GPU experts in single kernel "
+                    "(type=%d, total_batches=%lld)\n",
+                    n_gpu_entries, src0->type, (long long) total_batches);
+    return true;
+}
+
 bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
                                 const ggml_tensor *         src0,
                                 const ggml_tensor *         src1,

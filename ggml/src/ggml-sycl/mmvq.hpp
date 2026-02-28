@@ -38,6 +38,29 @@ bool ggml_sycl_mul_mat_id_vec_q(
 void ggml_sycl_moe_pre_allocate_buffers(ggml_backend_sycl_context & ctx, ggml_cgraph * cgraph);
 #endif
 
+// Batched MMVQ dispatch for MoE hybrid GPU path.
+// Replaces per-expert ggml_sycl_mul_mat() loop with a single kernel submission.
+// expert_ptrs_device: device pointer table (expert_id -> device weight ptr)
+// n_experts: total number of experts in the model
+// gpu_expert_ids: host array of expert IDs that have cached device pointers
+// gpu_iid1s: host array of token indices (parallel to gpu_expert_ids)
+// gpu_ids: host array of expert slot indices (parallel to gpu_expert_ids)
+// n_gpu_entries: number of GPU-dispatched entries
+// Returns true if handled, false to fall back to per-expert loop.
+bool mmvq_moe_batched_dispatch(
+    ggml_backend_sycl_context & ctx,
+    const ggml_tensor *         src0,
+    const ggml_tensor *         src1,
+    ggml_tensor *               dst,
+    const void * const *        expert_ptrs_device,
+    const int32_t *             gpu_expert_ids,
+    const int64_t *             gpu_iid1s,
+    const int64_t *             gpu_ids,
+    int                         n_gpu_entries,
+    int                         n_experts,
+    int64_t                     n_ids,
+    int64_t                     ne11);
+
 // Convert reordered tensor to coalesced layout for better memory bandwidth
 // Call this AFTER reorder_qw and BEFORE graph recording (at model load time)
 // Returns true if conversion was performed, false if not enabled or wrong type
