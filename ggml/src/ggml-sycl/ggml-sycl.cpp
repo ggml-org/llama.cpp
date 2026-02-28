@@ -23734,22 +23734,31 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             }
             layout_mode chosen = GGML_LAYOUT_AOS;
             if (choice_key.valid && ggml_sycl_get_layout_choice(choice_key, ctx.device, &chosen) && chosen != layout) {
-                // Allow AOS fallback for MXFP4 MoE when the chosen layout (SOA/COALESCED)
-                // could not be materialized on device (e.g., VRAM exhausted during model load).
-                // The effective layout on the extra struct will be AOS in this case.
-                // The MMVQ AOS kernel + expert pointer table cache handles this correctly.
                 const auto * extra_gpu = static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
                 const layout_mode effective = extra_gpu ? get_effective_layout_mode(extra_gpu) : GGML_LAYOUT_AOS;
+                // Allow AOS fallback for MXFP4 MoE when the chosen layout (SOA/COALESCED)
+                // could not be materialized on device (e.g., VRAM exhausted during model load).
                 const bool allow_moe_aos_fallback =
                     (layout == GGML_LAYOUT_AOS) && (effective == GGML_LAYOUT_AOS) &&
                     (src0->type == GGML_TYPE_MXFP4);
-                if (!allow_moe_aos_fallback) {
+                // Allow SOA/COALESCED dispatch for MXFP4 MoE even when the base tensor
+                // is stored in AOS. The expert pointer table + unified cache will stage
+                // per-expert data in the requested reordered layout on-the-fly.
+                // Must match chosen layout to satisfy cache layout assertions downstream.
+                const bool allow_moe_reorder_dispatch =
+                    (src0->type == GGML_TYPE_MXFP4) && (effective == GGML_LAYOUT_AOS) && (layout == chosen);
+                if (!allow_moe_aos_fallback && !allow_moe_reorder_dispatch) {
                     ggml_sycl_log_layout_mismatch_once(choice_key, ctx.device, layout, chosen, src0->name,
                                                        "ggml_sycl_mul_mat_id_vec_q");
                     return false;
                 }
-                GGML_SYCL_DEBUG("[MoE] Allowing AoS fallback for MXFP4 (effective AoS, chosen=%d) %s\n",
-                                (int) chosen, src0->name ? src0->name : "?");
+                if (allow_moe_reorder_dispatch) {
+                    GGML_SYCL_DEBUG("[MoE] Allowing reorder dispatch layout=%d for MXFP4 (effective AoS) %s\n",
+                                    (int) layout, src0->name ? src0->name : "?");
+                } else {
+                    GGML_SYCL_DEBUG("[MoE] Allowing AoS fallback for MXFP4 (effective AoS, chosen=%d) %s\n",
+                                    (int) chosen, src0->name ? src0->name : "?");
+                }
             }
         }
         GGML_SYCL_DEBUG("[MoE] Trying MMVQ with layout=%d for %s\n", (int) layout, src0->name ? src0->name : "?");

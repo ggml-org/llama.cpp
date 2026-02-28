@@ -3590,14 +3590,21 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
     const bool        host_weights       = src0->buffer && ggml_backend_buffer_is_host(src0->buffer);
     const layout_mode layout =
         forced_layout ? *forced_layout : ggml_sycl_select_moe_mmvq_layout(src0, ctx.device, host_weights);
-    if (forced_layout) {
+    // For MXFP4 MoE: allow SOA/Coalesced dispatch even when base tensor is AOS.
+    // The expert pointer table + unified cache will stage per-expert data in the
+    // requested reordered layout on-the-fly. This avoids the slow AOS kernel.
+    const bool mxfp4_moe_reorder_dispatch = (src0->type == GGML_TYPE_MXFP4) &&
+                                            (layout == GGML_LAYOUT_SOA || layout == GGML_LAYOUT_COALESCED) &&
+                                            src0_extra && (get_effective_layout_mode(src0_extra) == GGML_LAYOUT_AOS);
+
+    if (forced_layout && !mxfp4_moe_reorder_dispatch) {
         const layout_mode resolved = ggml_sycl_adjust_layout_for_tensor(src0, *forced_layout, ctx.device);
         if (resolved != *forced_layout) {
             GGML_SYCL_DEBUG("[MMVQ] Layout=%d unsupported for %s\n", (int) *forced_layout, src0->name);
             return false;
         }
     }
-    if (!host_weights && src0_extra) {
+    if (!host_weights && src0_extra && !mxfp4_moe_reorder_dispatch) {
         const layout_mode effective          = get_effective_layout_mode(src0_extra);
         const bool        allow_aos_fallback = forced_layout && layout == GGML_LAYOUT_AOS;
         if (effective != layout && !allow_aos_fallback) {
@@ -3610,7 +3617,7 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
             (int) effective);
         }
     }
-    if (ctx.layouts_finalized) {
+    if (ctx.layouts_finalized && !mxfp4_moe_reorder_dispatch) {
         layout_mode chosen = GGML_LAYOUT_AOS;
         if (ggml_sycl_get_layout_choice_for_tensor(src0, ctx.device, &chosen) && chosen != layout) {
             const bool allow_aos_fallback =
@@ -3631,8 +3638,13 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
         return false;
     }
     // MXFP4 MoE supports SoA/Coalesced layouts via unified cache staging + device ptr tables.
-    // Do not force AoS just because weights are host-backed.
-    const bool use_ptr_table = host_weights;
+    // Enable ptr_table when host weights need staging OR when MoE reorder dispatch
+    // needs the expert cache to produce reordered per-expert data from AOS base tensor.
+    const bool use_ptr_table = host_weights || mxfp4_moe_reorder_dispatch;
+    if (mxfp4_moe_reorder_dispatch) {
+        GGML_SYCL_DEBUG("[MMVQ] MXFP4 MoE reorder dispatch: layout=%d use_ptr_table=1 for %s\n", (int) layout,
+                        src0->name ? src0->name : "?");
+    }
 
     // XMX tiled layout is handled by XMX paths, not MMVQ
     if (layout == GGML_LAYOUT_XMX_TILED) {
