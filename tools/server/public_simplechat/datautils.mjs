@@ -125,6 +125,9 @@ export function trim_hist_garbage_at_end(sIn, maxType, maxUniq, maxMatchLenThres
     let iNum = 0;
     let iOth = 0;
     // Learn
+    /**
+     * @type {Object<string, number>}
+     */
     let hist = {};
     let iUniq = 0;
     for(let i=0; i<maxMatchLenThreshold; i++) {
