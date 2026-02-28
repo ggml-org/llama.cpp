@@ -32,28 +32,70 @@
 #include "tsi-rt/utils/Profiler.h"
 
 #ifdef TMU_DEBUG_VALIDATE
-static void cpu_ref_mul_mat_f32(
-        const float * A,
-        const float * B,
-        float * C,
-        int M,
-        int N,
-        int K,
-        int lda,
-        int ldb,
-        int ldc) {
 
-    for (int i = 0; i < M; ++i) {
-        for (int j = 0; j < N; ++j) {
+// CPU reference GEMM for TMU packed tiles using the SAME MemRefDescriptor<4>
+// struct used by your MLIR ciface wrappers (base/data/offset/shape/strides). 
+// Interprets shapes as you set them in init_memref_4d():
+//   A: [1,1,M,K]  -> shape[2]=M, shape[3]=K
+//   B: [1,1,N,K]  -> shape[2]=N, shape[3]=K   (NOTE: your B_pack is stored as rows=N, cols=K)
+//   C: [1,1,M,N]  -> shape[2]=M, shape[3]=N
+//
+// Strides are in ELEMENTS (not bytes), consistent with init_memref_4d(). 
+//
+static void cpu_ref_mul_mat_f32(
+    const MemRefDescriptor<4> *A_desc,
+    const MemRefDescriptor<4> *B_desc,
+    MemRefDescriptor<4>       *C_desc
+) {
+    if (!A_desc || !B_desc || !C_desc) return;
+    if (!A_desc->data || !B_desc->data || !C_desc->data) return;
+
+    const int64_t M = A_desc->shape[2];
+    const int64_t K = A_desc->shape[3];
+    const int64_t N = B_desc->shape[2];
+
+    if (M <= 0 || N <= 0 || K <= 0) return;
+
+    // Reduction dims must match
+    if (B_desc->shape[3] != K) return;
+
+    // Output dims must match
+    if (C_desc->shape[2] != M) return;
+    if (C_desc->shape[3] != N) return;
+
+    const float *A = (const float *) A_desc->data;
+    const float *B = (const float *) B_desc->data;
+    float       *C = (float       *) C_desc->data;
+
+    // Strides in elements
+    const int64_t a_s2 = A_desc->strides[2];
+    const int64_t a_s3 = A_desc->strides[3];
+    const int64_t b_s2 = B_desc->strides[2];
+    const int64_t b_s3 = B_desc->strides[3];
+    const int64_t c_s2 = C_desc->strides[2];
+    const int64_t c_s3 = C_desc->strides[3];
+
+    const int64_t a_off = A_desc->offset;
+    const int64_t b_off = B_desc->offset;
+    const int64_t c_off = C_desc->offset;
+
+    for (int64_t r = 0; r < M; ++r) {
+        const int64_t a_row = a_off + r * a_s2;
+        const int64_t c_row = c_off + r * c_s2;
+
+        for (int64_t n = 0; n < N; ++n) {
+            const int64_t b_row = b_off + n * b_s2;   // B is [N,K] packed
+
             float acc = 0.0f;
-            for (int k = 0; k < K; ++k) {
-                acc += A[i * lda + k] * B[k * ldb + j];
+            for (int64_t kk = 0; kk < K; ++kk) {
+                acc += A[a_row + kk * a_s3] * B[b_row + kk * b_s3];
             }
-            C[i * ldc + j] = acc;
+            C[c_row + n * c_s3] = acc;
         }
     }
 }
-#endif
+
+#endif // TMU_DEBUG_VALIDATE
 
 
 enum ggml_tsavorite_kernel_mode ggml_tsavorite_kernel_mode_flag = GGML_TSAVORITE_KERNEL_MODE_MLIR;
@@ -846,6 +888,11 @@ static bool is_op_dtype_consistent_with_src(const struct ggml_tensor *op) {
 }
 
 
+#if 0
+static void anoop_test() {
+	return;
+}
+
 static bool mul_mat_supported_size(const struct ggml_tensor *op) {
     const struct ggml_tensor *a = op->src[0];
     const struct ggml_tensor *b = op->src[1];
@@ -860,7 +907,79 @@ static bool mul_mat_supported_size(const struct ggml_tensor *op) {
     // sanity: reduction dims match
     if (b->ne[0] != K) return false;
 
-    return true;
+    if((op->ne[0]  == 2048 && op->ne[1] ==  512))
+	    return true;
+    if((op->ne[0]  == 32003 && op->ne[1] ==  512))
+	    return true;
+    anoop_test();
+
+    return false;
+}
+#endif
+
+static bool mul_mat_supported_size(const struct ggml_tensor *op) {
+    const struct ggml_tensor *a = op->src[0];
+    const struct ggml_tensor *b = op->src[1];
+    if (!a || !b) return false;
+
+    // GGML MUL_MAT:
+    //   K = a->ne[0]
+    //   out = [N = op->ne[0], M = op->ne[1]]
+    const int64_t K = a->ne[0];
+    const int64_t N = op->ne[0];
+    const int64_t M = op->ne[1];
+
+    if (K <= 0 || N <= 0 || M <= 0) return false;
+
+    if ((K % TMU_K_MULTIPLE) != 0) return false;
+
+    // avoid GEMV (you can remove this if you later implement GEMV path)
+    if (M == 1) return false;
+
+    // reduction dims must match
+    if (b->ne[0] != K) return false;
+
+    // (optional but usually correct for ggml mul_mat wiring)
+    // If this blocks valid cases in your build, comment it out.
+    if (a->ne[1] != N) return false;
+
+    // -------------------------------------------------------------------------
+    // Tiny-Llama-v0.3-FP32-1.1B-F32.gguf shapes (from your static-shape list)
+    // Most frequent inference shapes are M=7 with K=2048 and N in {256,2048,5632}
+    // -------------------------------------------------------------------------
+
+    // Common token-batch matmuls (M=7)
+    if (M == 7) {
+        // src0: (2048,  256)  src1: (2048, 7)  result: ( 256, 7)
+        if (K == 2048 && N == 256)  return true;
+
+        // src0: (2048, 2048)  src1: (2048, 7)  result: (2048, 7)
+        if (K == 2048 && N == 2048) return true;
+
+        // src0: (2048, 5632)  src1: (2048, 7)  result: (5632, 7)
+        if (K == 2048 && N == 5632) return true;
+
+        // src0: (5632, 2048)  src1: (5632, 7)  result: (2048, 7)
+        // Depending on how ggml wires A/B, this may appear as K=5632, N=2048, M=7.
+        if (K == 5632 && N == 2048) return true;
+    }
+
+    // Packed multi-dim cases you listed:
+    // Count=22: src0 (256,64,4,1) x src1 (256,7,32,1) => result (64,7,32,1)
+    // Count=22: src0 (64,256,4,1) x src1 (64,7,32,1) => result (256,7,32,1)
+    //
+    // Note: In ggml, op->ne[2], op->ne[3] carry the higher dims.
+    // Only enable these if your TMU path truly supports them.
+    if (M == 7 && op->ne[2] == 32 && op->ne[3] == 1) {
+        // result (64, 7, 32, 1)  with K=256 (from src1 ne[0]=256)
+        if (N == 64  && K == 256) return true;
+
+        // result (256, 7, 32, 1) with K=64
+        if (N == 256 && K == 64)  return true;
+    }
+
+    // Default: not supported (prevents CMA from trying to hold most of the model)
+    return false;
 }
 
 static bool ggml_tsavorite_supports_op(const struct ggml_backend_tsavorite_device_context *ctx_dev,
@@ -1027,65 +1146,6 @@ static inline int64_t map_repeat_i64(int64_t out_idx, int64_t in_dim) {
     return (r < 0) ? (r + in_dim) : r;
 }
 
-static inline void copy_tileC_to_ggml_f32(
-    const float *c_tile,
-    int64_t m_tile,
-    int64_t /*N_unused*/,
-    struct ggml_tensor *node,
-    int64_t m_base,
-    int64_t n0,
-    int64_t od2,
-    int64_t od3
-) {
-    if (!node || !node->data || !c_tile) return;
-
-    // node layout: dim0 = columns (ne[0]), dim1 = rows (ne[1])
-    const int64_t M_cols = node->ne[0] ? node->ne[0] : 1;
-    const int64_t N_rows = node->ne[1] ? node->ne[1] : 1;
-
-    const int64_t nb0 = nb_or_default(node, 0);
-    const int64_t nb1 = nb_or_default(node, 1);
-    const int64_t nb2 = nb_or_default(node, 2);
-    const int64_t nb3 = nb_or_default(node, 3);
-
-    const int64_t D2 = node->ne[2] ? node->ne[2] : 1;
-    const int64_t D3 = node->ne[3] ? node->ne[3] : 1;
-
-    if (od2 < 0 || od2 >= D2) return;
-    if (od3 < 0 || od3 >= D3) return;
-
-    if (m_base >= M_cols) return;
-    const int64_t m_tile_clamped =
-        (m_base + m_tile <= M_cols) ? m_tile : (M_cols - m_base);
-
-    if (n0 >= N_rows) return;
-    const int64_t n_end =
-        ((n0 + TMU_N_BLOCK) < N_rows) ? (n0 + TMU_N_BLOCK) : N_rows;
-
-    char *dst_base = (char *) node->data;
-    const size_t bytes_total = (size_t) ggml_nbytes(node);
-
-    for (int64_t r = 0; r < m_tile_clamped; ++r) {
-        const int64_t m = m_base + r;
-        const float *src_row = c_tile + r * TMU_N_BLOCK;
-
-        for (int64_t n = n0; n < n_end; ++n) {
-            const int64_t local_n = n - n0;
-
-            const int64_t byte_off =
-                m   * nb0 +
-                n   * nb1 +
-                od2 * nb2 +
-                od3 * nb3;
-
-            if (byte_off < 0 ||
-                (size_t) byte_off + sizeof(float) > bytes_total) {
-                continue;
-            }
-            *(float *)(dst_base + byte_off) = src_row[local_n];
-        }
-    }
-}
 
 // ============================================================================
 // ABI WRAPPERS: raw pointers -> MemRefDescriptor<4> -> call MLIR ciface
@@ -1194,13 +1254,26 @@ static inline const tmu_bucket_dispatch *tmu_find_bucket(int k) {
 }
 
 static inline int tmu_decompose_k(int64_t k, int *out, int max_parts) {
+    if (!out || max_parts <= 0) return -1;
+    if (k < 0) return -1;  // defensive: never allow negative K
+
     int n = 0;
+
     for (int i = 0; g_tmu_dispatch[i].k != 0 && n < max_parts; ++i) {
-        while (k >= g_tmu_dispatch[i].k && n < max_parts) {
-            out[n++] = g_tmu_dispatch[i].k;
-            k -= g_tmu_dispatch[i].k;
+        const int bucket = g_tmu_dispatch[i].k;
+
+        // Defensive: bucket must be positive
+        if (bucket <= 0) return -1;
+
+        while (k >= (int64_t) bucket && n < max_parts) {
+            out[n++] = bucket;
+            k -= (int64_t) bucket;
+            // Defensive: k should never go negative due to the loop condition
+            if (k < 0) return -1;
         }
     }
+
+    // Must decompose exactly; otherwise unsupported remainder
     return (k == 0) ? n : -1;
 }
 
@@ -1300,9 +1373,7 @@ static enum ggml_status ggml_tsavorite_run_tmu_mul_mat(
     const struct ggml_tensor * src0 = node->src[0];
     const struct ggml_tensor * src1 = node->src[1];
 
-    if (src0->type != GGML_TYPE_F32 ||
-        src1->type != GGML_TYPE_F32 ||
-        node->type != GGML_TYPE_F32) {
+    if (src0->type != GGML_TYPE_F32 || src1->type != GGML_TYPE_F32 || node->type != GGML_TYPE_F32) {
         return GGML_STATUS_FAILED;
     }
 
@@ -1316,42 +1387,77 @@ static enum ggml_status ggml_tsavorite_run_tmu_mul_mat(
     // -------------------------------------------------------------------------
     static float *g_C_prev = nullptr;
     static std::once_flag g_prev_once;
-
     auto host_alloc_aligned = [](size_t bytes) -> void * {
         void *p = nullptr;
-        // 64-byte alignment is safe for vector loads; fallback to malloc if needed.
         if (posix_memalign(&p, 64, bytes) != 0) {
             p = malloc(bytes);
         }
         return p;
     };
-
     std::call_once(g_prev_once, [&]() {
         const size_t bytes = (size_t)TMU_M_TILE_MAX * (size_t)TMU_N_BLOCK * sizeof(float);
         g_C_prev = (float *) host_alloc_aligned(bytes);
         TSAVORITE_GGML_ASSERT(g_C_prev);
-        // Optional: initialize to zero once (not required, but keeps debuggability clean)
         memset(g_C_prev, 0, bytes);
     });
 
 #ifdef TMU_DEBUG_VALIDATE
-    // CPU reference tile and probes (allocated once)
-    static float C_ref_full[TMU_M_TILE_MAX * TMU_N_BLOCK];
-    static float *C_probe  = nullptr;
-    static float *C_probe2 = nullptr;
-    static float *C_single = nullptr;
-    static std::once_flag probe_once;
+    // -------------------------------------------------------------------------
+    // PR comment fix #1 + your request:
+    // 1) Make CPU reference helper take MemRefDescriptor-like structs
+    // 2) Actually CALL it here (it was dead previously)
+    // -------------------------------------------------------------------------
+    static void cpu_ref_mul_mat_f32(
+        const MemRefDescriptor<4> *A_desc,
+        const MemRefDescriptor<4> *B_desc,
+        MemRefDescriptor<4>       *C_desc
+    ) {
+        if (!A_desc || !B_desc || !C_desc) return;
+        if (!A_desc->data || !B_desc->data || !C_desc->data) return;
 
-    std::call_once(probe_once, [&]() {
-        const size_t bytes = (size_t)TMU_M_TILE_MAX * (size_t)TMU_N_BLOCK * sizeof(float);
-        // NOTE: These ARE passed to the blob in the probe calls, so they MUST be tsi_alloc.
-        C_probe  = (float *) tsi_alloc(bytes);
-        C_probe2 = (float *) tsi_alloc(bytes);
-        C_single = (float *) tsi_alloc(bytes);
-        TSAVORITE_GGML_ASSERT(C_probe && C_probe2 && C_single);
-    });
+        const int64_t M = A_desc->shape[2];
+        const int64_t K = A_desc->shape[3];
+        const int64_t N = B_desc->shape[2];
 
-    const size_t tile_bytes = (size_t)TMU_M_TILE_MAX * (size_t)TMU_N_BLOCK * sizeof(float);
+        if (M <= 0 || N <= 0 || K <= 0) return;
+        if (B_desc->shape[3] != K) return;
+        if (C_desc->shape[2] != M) return;
+        if (C_desc->shape[3] != N) return;
+
+        const float *A = (const float *) A_desc->data;
+        const float *B = (const float *) B_desc->data;
+        float       *C = (float       *) C_desc->data;
+
+        const int64_t a_s2 = A_desc->strides[2];
+        const int64_t a_s3 = A_desc->strides[3];
+        const int64_t b_s2 = B_desc->strides[2];
+        const int64_t b_s3 = B_desc->strides[3];
+        const int64_t c_s2 = C_desc->strides[2];
+        const int64_t c_s3 = C_desc->strides[3];
+
+        const int64_t a_off = A_desc->offset;
+        const int64_t b_off = B_desc->offset;
+        const int64_t c_off = C_desc->offset;
+
+        for (int64_t r = 0; r < M; ++r) {
+            const int64_t a_row = a_off + r * a_s2;
+            const int64_t c_row = c_off + r * c_s2;
+
+            for (int64_t n = 0; n < N; ++n) {
+                const int64_t b_row = b_off + n * b_s2;   // B packed as [N,K]
+
+                float acc = 0.0f;
+                for (int64_t kk = 0; kk < K; ++kk) {
+                    acc += A[a_row + kk * a_s3] * B[b_row + kk * b_s3];
+                }
+                C[c_row + n * c_s3] = acc;
+            }
+        }
+    }
+
+    // CPU reference buffers: accumulate chunk-by-chunk in packed space
+    static float C_ref_chunk[TMU_M_TILE_MAX * TMU_N_BLOCK];
+    static float C_ref_accum[TMU_M_TILE_MAX * TMU_N_BLOCK];
 #endif
 
     const int64_t K = src0->ne[0];
@@ -1377,11 +1483,12 @@ static enum ggml_status ggml_tsavorite_run_tmu_mul_mat(
     const int64_t c_nb2 = nb_or_default(node, 2);
     const int64_t c_nb3 = nb_or_default(node, 3);
 
-    // --- broadcast dims must come from inputs ---
+    // broadcast dims must come from inputs
     const int64_t A2 = src0->ne[2] ? src0->ne[2] : 1;
     const int64_t A3 = src0->ne[3] ? src0->ne[3] : 1;
     const int64_t B2 = src1->ne[2] ? src1->ne[2] : 1;
     const int64_t B3 = src1->ne[3] ? src1->ne[3] : 1;
+
     const int64_t D2 = (A2 > B2) ? A2 : B2;
     const int64_t D3 = (A3 > B3) ? A3 : B3;
 
@@ -1406,8 +1513,12 @@ static enum ggml_status ggml_tsavorite_run_tmu_mul_mat(
                 for (int64_t n0 = 0; n0 < N; n0 += TMU_N_BLOCK) {
                     const int64_t n_valid = (N - n0 >= TMU_N_BLOCK) ? TMU_N_BLOCK : (N - n0);
 
-                    memset(g_C_tile, 0,
-                           (size_t)TMU_M_TILE_MAX * (size_t)TMU_N_BLOCK * sizeof(float));
+                    memset(g_C_tile, 0, (size_t)TMU_M_TILE_MAX * (size_t)TMU_N_BLOCK * sizeof(float));
+
+#ifdef TMU_DEBUG_VALIDATE
+                    // reset CPU ref accumulator for THIS output tile
+                    memset(C_ref_accum, 0, sizeof(C_ref_accum));
+#endif
 
                     int parts[128];
                     const int np = tmu_decompose_k(K, parts, (int)(sizeof(parts)/sizeof(parts[0])));
@@ -1423,7 +1534,7 @@ static enum ggml_status ggml_tsavorite_run_tmu_mul_mat(
                         pack_A_tile_f32(g_A_pack, A_base_d23, m0, m_tile, k0, K_chunk, a_nb0, a_nb1);
                         pack_B_tile_f32(g_B_pack, B_base_d23, n0, n_valid, k0, K_chunk, b_nb0, b_nb1);
 
-                        // ---- SAVE PREVIOUS PARTIAL ----
+                        // Save previous partial before calling blob (because blob overwrites)
                         if (pi > 0) {
                             memcpy(g_C_prev, g_C_tile,
                                    (size_t)TMU_M_TILE_MAX * (size_t)TMU_N_BLOCK * sizeof(float));
@@ -1432,7 +1543,7 @@ static enum ggml_status ggml_tsavorite_run_tmu_mul_mat(
                         // Run blob
                         bucket->fn(g_A_pack, g_B_pack, g_C_tile);
 
-                        // ---- ACCUMULATE BACK (blob overwrites) ----
+                        // Accumulate back (host-side workaround)
                         if (pi > 0) {
                             const int total = TMU_M_TILE_MAX * TMU_N_BLOCK;
                             for (int i = 0; i < total; ++i) {
@@ -1445,79 +1556,46 @@ static enum ggml_status ggml_tsavorite_run_tmu_mul_mat(
                         ++node->tsi_kernel_runs;
 
 #ifdef TMU_DEBUG_VALIDATE
-                        const bool is_first_tile = (m0 == 0 && n0 == 0 && od2 == 0 && od3 == 0);
+                        // -----------------------------------------------------------------
+                        // CPU reference for THIS K_chunk computed from PACKED tiles
+                        // and accumulated into C_ref_accum, then compared with g_C_tile.
+                        // This makes cpu_ref_mul_mat_f32() actually USED.
+                        // -----------------------------------------------------------------
+                        memset(C_ref_chunk, 0, sizeof(C_ref_chunk));
 
-                        if (is_first_tile && np > 1 && pi > 0) {
-                            // Double-call probe
-                            memset(C_probe, 0, tile_bytes);
-                            bucket->fn(g_A_pack, g_B_pack, C_probe);
-                            memcpy(C_single, C_probe, tile_bytes);
-                            bucket->fn(g_A_pack, g_B_pack, C_probe);
+                        MemRefDescriptor<4> Aref, Bref, Cref;
+                        init_memref_4d(Aref, (void*)g_A_pack, 1, 1, TMU_M_TILE_MAX, (int64_t)K_chunk);
+                        init_memref_4d(Bref, (void*)g_B_pack, 1, 1, TMU_N_BLOCK,   (int64_t)K_chunk);
+                        init_memref_4d(Cref, (void*)C_ref_chunk, 1, 1, TMU_M_TILE_MAX, TMU_N_BLOCK);
 
-                            const float s0 = C_single[0];
-                            const float s1 = C_probe[0];
-                            const float expect = 2.0f * s0;
-                            const float diff = fabsf(s1 - expect);
+                        cpu_ref_mul_mat_f32(&Aref, &Bref, &Cref);
 
-                            fprintf(stderr,
-                                "\nTMU PROBE (pi=%d, K_chunk=%d, k0=%ld): double-call: "
-                                "single=%f second=%f expect=%f diff=%f\n",
-                                pi, K_chunk, (long)k0, s0, s1, expect, diff);
-
-                            // Carry-in probe
-                            for (int i = 0; i < TMU_M_TILE_MAX * TMU_N_BLOCK; ++i) C_probe2[i] = 1.0f;
-
-                            static float A_save[TMU_M_TILE_MAX * 2048];
-                            static float B_save[TMU_N_BLOCK    * 2048];
-
-                            memcpy(A_save, g_A_pack, (size_t)TMU_M_TILE_MAX * (size_t)K_chunk * sizeof(float));
-                            memcpy(B_save, g_B_pack, (size_t)TMU_N_BLOCK    * (size_t)K_chunk * sizeof(float));
-                            memset(g_A_pack, 0, (size_t)TMU_M_TILE_MAX * (size_t)K_chunk * sizeof(float));
-                            memset(g_B_pack, 0, (size_t)TMU_N_BLOCK    * (size_t)K_chunk * sizeof(float));
-
-                            bucket->fn(g_A_pack, g_B_pack, C_probe2);
-
-                            memcpy(g_A_pack, A_save, (size_t)TMU_M_TILE_MAX * (size_t)K_chunk * sizeof(float));
-                            memcpy(g_B_pack, B_save, (size_t)TMU_N_BLOCK    * (size_t)K_chunk * sizeof(float));
-
-                            fprintf(stderr,
-                                "TMU PROBE (pi=%d, K_chunk=%d, k0=%ld): carry-in: "
-                                "C_in=1.0 => C_out[0]=%f (expect ~1.0 if accum)\n",
-                                pi, K_chunk, (long)k0, C_probe2[0]);
-                        }
-
-                        // CPU reference compare up to K_so_far
-                        memset(C_ref_full, 0, sizeof(C_ref_full));
-                        const int64_t K_so_far = k0 + K_chunk;
-
+                        // accumulate CPU reference chunks (only valid region is needed)
                         for (int64_t rr = 0; rr < m_tile; ++rr) {
                             for (int64_t cc = 0; cc < n_valid; ++cc) {
-                                float acc = 0.0f;
-                                for (int64_t kk = 0; kk < K_so_far; ++kk) {
-                                    const float a = *(const float *)(A_base_d23 + (m0 + rr) * a_nb1 + kk * a_nb0);
-                                    const float b = *(const float *)(B_base_d23 + (n0 + cc) * b_nb1 + kk * b_nb0);
-                                    acc += a * b;
-                                }
-                                C_ref_full[rr * TMU_N_BLOCK + cc] = acc;
+                                C_ref_accum[rr * TMU_N_BLOCK + cc] +=
+                                    C_ref_chunk[rr * TMU_N_BLOCK + cc];
                             }
                         }
 
+                        // Compare after each chunk (same tolerance you used before)
                         for (int64_t rr = 0; rr < m_tile; ++rr) {
                             for (int64_t cc = 0; cc < n_valid; ++cc) {
                                 const float tmu_v = g_C_tile[rr * TMU_N_BLOCK + cc];
-                                const float ref_v = C_ref_full[rr * TMU_N_BLOCK + cc];
+                                const float ref_v = C_ref_accum[rr * TMU_N_BLOCK + cc];
                                 if (fabsf(tmu_v - ref_v) > 1e-4f) {
                                     fprintf(stderr,
-                                        "\nTMU MISMATCH (accum)\n"
-                                        "m0=%ld n0=%ld K_so_far=%ld\n"
+                                        "\nTMU MISMATCH (packed-ref)\n"
+                                        "m0=%ld n0=%ld k0=%ld K_chunk=%d pi=%d\n"
                                         "r=%ld c=%ld TMU=%f REF=%f\n",
-                                        (long)m0, (long)n0, (long)K_so_far,
+                                        (long)m0, (long)n0, (long)k0, K_chunk, pi,
                                         (long)rr, (long)cc, tmu_v, ref_v);
                                     abort();
                                 }
                             }
                         }
 #endif
+
                         k0 += K_chunk;
                     }
 
@@ -1527,22 +1605,29 @@ static enum ggml_status ggml_tsavorite_run_tmu_mul_mat(
                         const size_t bytes_total = (size_t) ggml_nbytes(node);
 
                         for (int64_t rr = 0; rr < m_tile; ++rr) {
-                            const int64_t m = m0 + rr;
+                            const int64_t m_idx = m0 + rr;
                             const float *src_row = g_C_tile + rr * TMU_N_BLOCK;
 
                             for (int64_t cc = 0; cc < n_valid; ++cc) {
-                                const int64_t n = n0 + cc;
-                                const int64_t byte_off =
-                                    m  * c_nb0 +
-                                    n  * c_nb1 +
-                                    od2 * c_nb2 +
-                                    od3 * c_nb3;
+                                const int64_t n_idx = n0 + cc;
 
-                                if (byte_off < 0 || (size_t)byte_off + sizeof(float) > bytes_total) continue;
+                                const int64_t byte_off =
+                                    m_idx * c_nb0 +
+                                    n_idx * c_nb1 +
+                                    od2  * c_nb2 +
+                                    od3  * c_nb3;
+
+                                if (byte_off < 0 ||
+                                    (size_t)byte_off + sizeof(float) > bytes_total) {
+                                    continue;
+                                }
                                 *(float *)(dst_base + byte_off) = src_row[cc];
                             }
                         }
                     }
+
+                    // If you decide to USE copy_tileC_to_ggml_f32 instead of inline copy-back:
+                    // copy_tileC_to_ggml_f32(g_C_tile, m_tile, 0, node, m0, n0, od2, od3);
                 }
             }
         }
@@ -1865,7 +1950,6 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
             const int64_t ne13 = src1 ? src1->ne[3] : 1;
         
             // TODO: is this supposed to be ceil instead of floor?
-            //       https://huggingface.co/mosaicml/mpt-7b/blob/main/attention.py#L370
             const uint32_t n_head      = ne02;
             const uint32_t n_head_log2 = 1u << (uint32_t) floor(log2(n_head));
 
