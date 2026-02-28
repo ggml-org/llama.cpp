@@ -9,12 +9,13 @@
 #include <cinttypes>
 #include <fstream>
 
+// #include <memory>
+// #include <functional>
+
 #include <mutex>
 #include <regex>
-#include <thread>
-#include <memory>
 #include <atomic>
-#include <functional>
+#include <thread>
 #include <unordered_map>
 #include <condition_variable>
 
@@ -49,10 +50,7 @@ struct tensor_metadata {
     bool requires_imatrix;
 };
 
-// persistent thread pool for quantization
-//
-// threads are spawned once and reused for all tensors, avoiding the overhead
-// of repeated thread creation/destruction across hundreds of tensors.
+// threads are spawned once and reused for all tensors, avoiding overhead
 struct quantize_thread_pool {
     std::vector<std::thread> workers;
     int32_t n_workers = 0;
@@ -225,7 +223,7 @@ struct quantize_state_impl {
     {
         // compile regex patterns once - they are expensive, and used twice
         if (params->tensor_types) {
-            const auto & tensor_types =
+            const auto & tensor_types = 
                 *static_cast<const std::vector<tensor_quantization> *>(params->tensor_types);
             for (const auto & [tname, qtype] : tensor_types) {
                 tensor_type_patterns.emplace_back(std::regex(tname), qtype);
@@ -298,11 +296,6 @@ static void llama_tensor_dequantize_impl(
                    const size_t   nelements,
                       const int   nthread)
 {
-    if (output.size() < nelements) {
-        output.resize(nelements);
-    }
-    float * f32_output = (float *) output.data();
-
     const ggml_type_traits * qtype = ggml_get_type_traits(tensor->type);
     if (ggml_is_quantized(tensor->type)) {
         if (qtype->to_float == NULL) {
@@ -312,6 +305,12 @@ static void llama_tensor_dequantize_impl(
                tensor->type != GGML_TYPE_BF16) {
         throw std::runtime_error(format("cannot dequantize/convert tensor type %s", ggml_type_name(tensor->type)));
     }
+
+    if (output.size() < nelements) {
+        output.resize(nelements);
+    }
+
+    float * f32_output = (float *) output.data();
 
     if (nthread < 2) {
         if (tensor->type == GGML_TYPE_F16) {
@@ -326,14 +325,7 @@ static void llama_tensor_dequantize_impl(
         return;
     }
 
-    size_t block_size;
-    if (tensor->type == GGML_TYPE_F16 ||
-        tensor->type == GGML_TYPE_BF16) {
-        block_size = 1;
-    } else {
-        block_size = (size_t)ggml_blck_size(tensor->type);
-    }
-
+    const size_t block_size = (size_t)ggml_blck_size(tensor->type);
     const size_t block_size_bytes = ggml_type_size(tensor->type);
 
     GGML_ASSERT(nelements % block_size == 0);
@@ -363,10 +355,8 @@ static void llama_tensor_dequantize_impl(
 }
 
 static bool tensor_name_match_token_embd(const char * tensor_name) {
-    return (
-        std::strcmp(tensor_name, "token_embd.weight") == 0 ||
-        std::strcmp(tensor_name, "per_layer_token_embd.weight") == 0
-    );
+    return std::strcmp(tensor_name, "token_embd.weight") == 0 ||
+           std::strcmp(tensor_name, "per_layer_token_embd.weight") == 0;
 }
 
 static bool tensor_name_match_output_weight(const char * tensor_name) {
@@ -474,9 +464,8 @@ static ggml_type tensor_type_fallback(quantize_state_impl * qs, const ggml_tenso
             case GGML_TYPE_Q5_K:    return_type = GGML_TYPE_Q5_1;   break;
             case GGML_TYPE_Q6_K:    return_type = GGML_TYPE_Q8_0;   break;
             default:
-                throw std::runtime_error(format(
-                    "no tensor type fallback is defined for type %s",
-                    ggml_type_name(target_type)));
+                throw std::runtime_error(format("no tensor type fallback is defined for type %s",
+                                                ggml_type_name(target_type)));
         }
         if (ncols % ggml_blck_size(return_type) != 0) {
             //
