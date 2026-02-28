@@ -353,6 +353,99 @@ sycl::event ExpertCache::prefetch_async(int layer_idx, int expert_idx, sycl::que
     return evt;
 }
 
+PrefetchResult ExpertCache::prefetch_batch_async(
+    const std::vector<std::pair<int, int>> & experts,
+    sycl::queue & dma_queue)
+{
+    PrefetchResult result;
+    result.n_submitted = 0;
+
+    if (n_slots_ == 0) {
+        return result;
+    }
+
+    // Collect DMA work items under lock, then submit outside lock.
+    struct DmaWork {
+        expert_key   ek;
+        void *       dst;        // device slot pointer
+        const void * src;        // host source pointer
+        size_t       bytes;
+    };
+    std::vector<DmaWork> work;
+    work.reserve(experts.size());
+
+    // ---------------------------------------------------------------
+    // Phase 1: exclusive lock — plan evictions, reserve slots, update metadata.
+    // ---------------------------------------------------------------
+    {
+        std::unique_lock lock(mutex_);
+
+        for (const auto & [layer_idx, expert_idx] : experts) {
+            int64_t key = make_key(layer_idx, expert_idx);
+
+            // Already cached? Skip.
+            if (lookup_map_.find(key) != lookup_map_.end()) {
+                continue;
+            }
+
+            // Get host source.
+            auto host_it = host_entries_.find(key);
+            if (host_it == host_entries_.end()) {
+                continue;
+            }
+
+            const void * host_src  = host_it->second.ptr;
+            size_t       src_bytes = host_it->second.size;
+
+            // Find a free slot or evict.
+            int target_slot = find_empty_slot();
+            if (target_slot == -1) {
+                target_slot = find_eviction_candidate();
+                if (target_slot == -1) {
+                    continue;  // No slots available
+                }
+                // Remove old entry from lookup map.
+                int64_t old_key = make_key(slots_[target_slot].layer_idx,
+                                           slots_[target_slot].expert_idx);
+                lookup_map_.erase(old_key);
+            }
+
+            // Reserve the slot: update metadata NOW so concurrent lookups
+            // see the slot as occupied (prevents double-allocation).
+            slots_[target_slot].layer_idx   = layer_idx;
+            slots_[target_slot].expert_idx  = expert_idx;
+            slots_[target_slot].size_bytes  = src_bytes;
+            slots_[target_slot].frequency   = 0;
+            slots_[target_slot].last_access = global_token_;
+
+            lookup_map_[key] = target_slot;
+
+            // Record DMA work for Phase 2.
+            DmaWork w;
+            w.ek    = { layer_idx, expert_idx };
+            w.dst   = slots_[target_slot].device_ptr;
+            w.src   = host_src;
+            w.bytes = src_bytes;
+            work.push_back(w);
+
+            misses_++;
+        }
+    }
+    // ---------------------------------------------------------------
+    // Phase 2: lock released — submit all H2D DMAs as non-blocking ops.
+    // This avoids blocking concurrent lookup() calls during DMA submission.
+    // ---------------------------------------------------------------
+
+    result.events.reserve(work.size());
+    for (const auto & w : work) {
+        sycl::event ev = dma_queue.memcpy(w.dst, w.src, w.bytes);
+        result.events.push_back({ w.ek, ev });
+        result.n_submitted++;
+    }
+
+    return result;
+}
+
 void ExpertCache::update_score(int layer_idx, int expert_idx, uint64_t token_counter) {
     std::unique_lock lock(mutex_);
 
@@ -626,6 +719,16 @@ void ExpertCache::maybe_log_stats() {
 
     GGML_LOG_INFO("[EXPERT-CACHE] hit_rate=%.1f%% rolling=%.1f%% cached=%zu/%d pool=%.1f MB\n",
                   hr, rhr, lookup_map_.size(), n_slots_, pool_size_ / (1024.0 * 1024.0));
+}
+
+int ExpertCache::find_empty_slot() const {
+    // Called with mutex_ held (shared or unique).
+    for (int i = 0; i < n_slots_; i++) {
+        if (slots_[i].layer_idx == -1) {
+            return i;
+        }
+    }
+    return -1;
 }
 
 int64_t ExpertCache::make_key(int layer, int expert) const {

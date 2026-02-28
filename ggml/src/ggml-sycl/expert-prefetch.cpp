@@ -126,43 +126,45 @@ bool ExpertPrefetcher::hint(int layer_idx, int expert_idx) {
 }
 
 void ExpertPrefetcher::hint_batch(int layer_idx, const std::vector<int> & expert_indices) {
-    if (!initialized_) {
+    if (!cache_ || !dma_queue_ || !initialized_) {
         return;
     }
 
-    std::lock_guard<std::mutex> lock(mutex_);
+    // Build batch request, filtering out already in-flight experts.
+    std::vector<std::pair<int, int>> batch;
+    batch.reserve(expert_indices.size());
 
-    for (int eidx : expert_indices) {
-        expert_key key{ layer_idx, eidx };
-
-        // Skip if already in-flight or already cached
-        if (inflight_.find(key) != inflight_.end()) {
-            continue;
-        }
-
-        ExpertLookup lk = cache_->lookup(layer_idx, eidx);
-        if (lk.is_cached) {
-            continue;
-        }
-        if (!lk.host_ptr) {
-            continue;
-        }
-
-        if (!has_capacity()) {
-            gc_completed();
-            if (!has_capacity()) {
-                break;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (int eid : expert_indices) {
+            expert_key key{ layer_idx, eid };
+            if (inflight_.find(key) != inflight_.end()) {
+                continue;  // Already in-flight
             }
+            batch.push_back({ layer_idx, eid });
         }
+    }
 
-        // Submit async H2D on our OOQ
-        sycl::event ev = cache_->prefetch_async(layer_idx, eidx, *dma_queue_);
+    if (batch.empty()) {
+        return;
+    }
+
+    // Batch prefetch: Phase 1 (eviction planning) and Phase 2 (DMA submission)
+    // happen inside ExpertCache with split-phase locking.
+    PrefetchResult result = cache_->prefetch_batch_async(batch, *dma_queue_);
+
+    // Track per-expert events in inflight_ map for granular await.
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto & [ek, ev] : result.events) {
+        if (inflight_.size() >= static_cast<size_t>(max_inflight_)) {
+            gc_completed();
+        }
 
         PrefetchRequest req;
-        req.key       = key;
+        req.key       = ek;
         req.event     = ev;
         req.completed = false;
-        inflight_[key] = req;
+        inflight_[ek] = req;
     }
 }
 

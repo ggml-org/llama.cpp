@@ -49,6 +49,13 @@ struct ExpertSlot {
     float    score       = 0.0f;    // Combined eviction score
 };
 
+// Result of a batch-async prefetch operation.
+// Each entry maps an expert key to the sycl::event for its H2D DMA.
+struct PrefetchResult {
+    std::vector<std::pair<expert_key, sycl::event>> events;
+    int n_submitted = 0;
+};
+
 // Result of a cache lookup.
 struct ExpertLookup {
     void * device_ptr;  // Non-null if cached in VRAM
@@ -114,6 +121,15 @@ public:
 
     // Async prefetch (non-blocking H2D). Returns event for completion.
     sycl::event prefetch_async(int layer_idx, int expert_idx, sycl::queue & q);
+
+    // Batch async prefetch: submit H2D DMAs for all cache-miss experts.
+    // Phase 1 (exclusive lock): plan evictions and reserve slots for all missing experts.
+    // Phase 2 (lock released): submit all H2D DMAs as non-blocking operations.
+    // Returns per-expert {key, sycl::event} pairs for granular await.
+    // CRITICAL: Lock is released BEFORE DMA submissions to avoid blocking lookup().
+    PrefetchResult prefetch_batch_async(
+        const std::vector<std::pair<int, int>> & experts,
+        sycl::queue & dma_queue);
 
     // Evict lowest-score slot and load a new expert into VRAM.
     // Registers the expert if not already registered, then ensures it is cached.
@@ -205,6 +221,10 @@ private:
     // Tiebreaker: prefer evicting experts from layers furthest from current compute.
     // Returns index into slots_, or -1 if all empty.
     int find_eviction_candidate() const;
+
+    // Find first empty slot (layer_idx == -1).
+    // Returns slot index or -1 if no empty slots.
+    int find_empty_slot() const;
 
     // Make hash key from (layer, expert) pair.
     int64_t make_key(int layer, int expert) const;
