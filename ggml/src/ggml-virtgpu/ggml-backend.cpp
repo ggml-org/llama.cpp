@@ -1,5 +1,5 @@
-#include "ggml-remoting.h"
 #include "../../include/ggml-virtgpu.h"
+#include "ggml-remoting.h"
 
 static const char * ggml_backend_remoting_get_name(ggml_backend_t backend) {
     UNUSED(backend);
