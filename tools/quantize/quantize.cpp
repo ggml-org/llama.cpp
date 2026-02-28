@@ -61,7 +61,7 @@ static const std::vector<quant_option> QUANT_OPTIONS = {
     { "COPY",     LLAMA_FTYPE_ALL_F32,         "only copy tensors, no quantizing",  },
 };
 
-// Quantization types. Changes to this struct must be replicated in llama-quantize.cpp
+// Quantization types. Changes to this struct must be replicated in llama-quant.cpp
 struct tensor_quantization {
     std::string name;
     ggml_type quant = GGML_TYPE_COUNT;
@@ -735,4 +735,3 @@ int main(int argc, char ** argv) {
 
     return 0;
 }
-

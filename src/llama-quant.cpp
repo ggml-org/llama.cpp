@@ -45,7 +45,7 @@ struct tensor_metadata {
     bool requires_imatrix;
 };
 
-// threads are spawned once and reused for all tensors, avoiding overhead
+// threads are spawned once and reused for all work, avoiding overhead
 struct quantize_thread_pool {
     std::vector<std::thread> workers;
     int32_t n_workers = 0;
@@ -886,15 +886,15 @@ static void llama_tensor_dequantize(
 //
 
 static size_t llama_tensor_quantize_impl(
-              enum ggml_type   new_type,
-                 const float * f32_data,
-                        void * new_data,
-               const int64_t   chunk_size,
-                     int64_t   nrows,
-                     int64_t   ne0,
-                 const float * imatrix,
-         quantize_state_impl * qs,
-                   const int   nthread)
+         enum ggml_type   new_type,
+            const float * f32_data,
+                   void * new_data,
+          const int64_t   chunk_size,
+                int64_t   nrows,
+                int64_t   ne0,
+            const float * imatrix,
+    quantize_state_impl * qs,
+              const int   nthread)
 {
     if (nthread < 2) {
         // single-thread
@@ -1087,7 +1087,6 @@ static size_t tensor_dequant_and_quantize_fused_impl(
         }
     };
 
-    // should we use expert-parallel quantization?
     const bool expert_parallel = (
         // static types are fast enough to quantize that it's probably not worth it
         new_type != GGML_TYPE_Q8_0 &&
@@ -1566,7 +1565,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     size_t total_size_new = 0;
 
     //
-    // main loop: iterate over all weights
+    // iterate over all weights (main loop)
     //
 
     for (size_t i = 0; i < weights.size(); ++i) {
@@ -1627,10 +1626,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             continue;
         }
 
-        //
-        // resolve imatrix for this tensor
-        //
-
         const float * imatrix = nullptr;
 
         if (imatrix_data && do_quantize) {
@@ -1651,10 +1646,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 }
             }
         }
-
-        //
-        // process: dequant (if needed) + quantize
-        //
 
         if (do_quantize) {
             LLAMA_LOG_INFO("quantizing to %7s ... ", ggml_type_name(new_type));
