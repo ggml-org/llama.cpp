@@ -3245,6 +3245,14 @@ static void ggml_vk_load_shaders(vk_device& device) {
             l_warptile = { 512, 128, 128, 16, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
             l_warptile_mmq = { 512, 128, 128, 32, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
         }
+#if defined(VK_KHR_cooperative_matrix) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
+        else if ((device->vendor_id == VK_VENDOR_ID_INTEL) &&
+                 (device->architecture != INTEL_XE2) &&
+                 (device->driver_id == vk::DriverId::eIntelProprietaryWindows) &&
+                 device->coopmat_support) {
+            m_warptile_mmq = { 256, 64, 64, 32, 16, 32, 2, tm_m, tn_m, tk_m, 32 };
+        }
+#endif
 
         l_mmq_wg_denoms = l_wg_denoms = {128, 128, 1 };
         m_mmq_wg_denoms = m_wg_denoms = { 64,  64, 1 };
@@ -15617,9 +15625,10 @@ static bool ggml_vk_device_is_supported(const vk::PhysicalDevice & vkdev) {
 static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDeviceProperties& props, const vk::PhysicalDeviceDriverProperties& driver_props, vk_device_architecture arch) {
     switch (props.vendorID) {
     case VK_VENDOR_ID_INTEL:
-        // Only allowing Xe2 GPU at the moment since Xe2 GPU can gain significant performance boost,
-        // while some older hardware (ex. Arc A770) has performance regressions
-        return arch == vk_device_architecture::INTEL_XE2;
+        // Only allowing Xe2 GPU and integrated Xe GPUs at the moment since older hardware (ex. Arc A770) has performance regressions.
+        return arch == vk_device_architecture::INTEL_XE2 ||
+               (driver_props.driverID == vk::DriverId::eIntelProprietaryWindows &&
+                props.deviceType == vk::PhysicalDeviceType::eIntegratedGpu);
     case VK_VENDOR_ID_AMD:
         if (driver_props.driverID == vk::DriverId::eAmdProprietary || driver_props.driverID == vk::DriverId::eAmdOpenSource) {
             // Workaround for AMD proprietary driver reporting support on all GPUs
