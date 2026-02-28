@@ -1218,11 +1218,11 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     // for a real quantization, as a courtesy
     bool will_require_imatrix = false;
 
-    // quantization work buffers (we avoid resizing in the main loop)
+    // quantization scratch buffers (we avoid resizing in the main loop)
 
-    std::vector<no_init<uint8_t>> read_data;
-    std::vector<no_init<uint8_t>> work;
-    std::vector<no_init<float>>   f32_conv_buf;
+    std::vector<no_init<float>>   scratch_dequant_buf;
+    std::vector<no_init<uint8_t>> scratch_read_buf;
+    std::vector<no_init<uint8_t>> scratch_buf;
 
     size_t max_nelements_dequant = 0;
     size_t max_tensor_bytes = 0;
@@ -1282,16 +1282,26 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         }
     }
 
-    // resize work buffers as needed before quantization starts
-    if (!ml.use_mmap) {
-        read_data.resize(max_tensor_bytes);
-    }
-    work.resize(max_nelements * 4);
+    // resize scratch buffers as needed before quantization starts
+
+    scratch_buf.resize(max_nelements * 4);
     if (max_nelements_dequant > 0) {
-        f32_conv_buf.resize(max_nelements_dequant);
+        scratch_dequant_buf.resize(max_nelements_dequant);
     }
 
-    // Set split info if needed
+    const size_t dequant_sz = scratch_dequant_buf.size() * sizeof(decltype(scratch_dequant_buf)::value_type);
+    const size_t scratch_sz = scratch_buf.size()         * sizeof(decltype(scratch_buf)::value_type);
+
+    LLAMA_LOG_INFO("%s: dequant buffer: %8.2f MiB\n", __func__, dequant_sz / (1024.0*1024.0));
+    LLAMA_LOG_INFO("%s: scratch buffer: %8.2f MiB\n", __func__, scratch_sz / (1024.0*1024.0));
+    if (!ml.use_mmap) {
+        scratch_read_buf.resize(max_tensor_bytes);
+        const size_t read_sz = scratch_read_buf.size()   * sizeof(decltype(scratch_read_buf)::value_type);
+        LLAMA_LOG_INFO("%s:    read buffer: %8.2f MiB\n", __func__, read_sz / (1024.0*1024.0));
+    }
+
+    // set split info if needed
+
     if (n_split > 1) {
         for (size_t i = 0; i < ctx_outs.size(); ++i) {
             gguf_set_val_u16(ctx_outs[i].get(), ml.llm_kv(LLM_KV_SPLIT_NO).c_str(), i);
@@ -1356,11 +1366,9 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         const size_t tensor_size = ggml_nbytes(tensor);
 
         if (!params->dry_run) {
+            // load tensor data
             if (!ml.use_mmap) {
-                if (read_data.size() < tensor_size) {
-                    read_data.resize(tensor_size);
-                }
-                tensor->data = read_data.data();
+                tensor->data = scratch_read_buf.data();
             }
             ml.load_data_for(tensor);
         }
@@ -1371,8 +1379,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                        llama_format_tensor_shape(tensor).c_str(),
                        ggml_type_name(tensor->type));
 
-        ggml_type const new_type = tm.target_type;
-        bool do_quantize = (new_type != tensor->type);
+        const ggml_type new_type = tm.target_type;
+        const bool do_quantize = (new_type != tensor->type);
 
         void * new_data;
         size_t new_size;
@@ -1451,15 +1459,15 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 } else if (ggml_is_quantized(tensor->type) && !params->allow_requantize) {
                     throw std::runtime_error(format("requantizing from type %s is disabled", ggml_type_name(tensor->type)));
                 } else {
-                    llama_tensor_dequantize_impl(tensor, f32_conv_buf, qs.get(), nelements, nthread);
-                    f32_data = (float *) f32_conv_buf.data();
+                    llama_tensor_dequantize_impl(tensor, scratch_dequant_buf, qs.get(), nelements, nthread);
+                    f32_data = (float *) scratch_dequant_buf.data();
                 }
 
                 LLAMA_LOG_INFO("quantizing to %7s ... ", ggml_type_name(new_type));
                 fflush(stdout);
 
-                new_size = llama_tensor_quantize(tensor, new_type, f32_data, imatrix, work, qs.get(), nthread);
-                new_data = work.data();
+                new_size = llama_tensor_quantize(tensor, new_type, f32_data, imatrix, scratch_buf, qs.get(), nthread);
+                new_data = scratch_buf.data();
 
                 LLAMA_LOG_INFO("%8.2f MiB -> %8.2f MiB\n", tensor_size/1024.0/1024.0, new_size/1024.0/1024.0);
             } // do_quantize
