@@ -9,7 +9,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <mutex>
 #include <shared_mutex>
 #include <sycl/sycl.hpp>
 #include <unordered_map>
@@ -327,7 +326,7 @@ public:
     BufferPair acquire(size_t n_experts);
 
     // Release buffers back to pool. Zeros the output buffer for next use.
-    void release(BufferPair bp);
+    void release(BufferPair);
 
     bool is_initialized() const { return act_pool_ != nullptr && out_pool_ != nullptr; }
 

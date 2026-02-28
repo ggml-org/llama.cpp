@@ -24319,8 +24319,10 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                    "(%zu + %zu bytes)\n", act_bytes, out_bytes);
                     // Fall through: cpu_tasks stays empty, experts are skipped
                 } else {
-                    // Zero the output buffer
-                    std::memset(cpu_output_pinned, 0, out_bytes);
+                    // Zero the output buffer (pool path: release() handles this)
+                    if (!used_pinned_pool) {
+                        std::memset(cpu_output_pinned, 0, out_bytes);
+                    }
 
                     // Submit all activation D2H copies as async memcpy
                     for (size_t ci = 0; ci < n_cpu; ci++) {
