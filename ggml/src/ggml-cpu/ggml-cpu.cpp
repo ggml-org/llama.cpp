@@ -22,6 +22,14 @@
 #    include "spacemit/ime.h"
 #endif
 
+#if defined(__FreeBSD__)
+#include <sys/types.h>
+#include <sys/sysctl.h>
+#include <errno.h>
+#include <string.h>
+#include <iostream>
+#endif
+
 #if defined(_WIN32)
 #    define WIN32_LEAN_AND_MEAN
 #    ifndef NOMINMAX
@@ -316,6 +324,14 @@ struct ggml_backend_cpu_device_context {
             }
             fclose(f);
         }
+#elif defined(__FreeBSD__)
+        char buf[1024];
+        size_t size = sizeof(buf);
+        int rc = sysctlbyname("hw.model", buf, &size, nullptr, 0);
+        if (rc == 0)
+                description = buf;
+        else
+                std::cerr << "error: sysctlbyname(hw.model) failed: " << strerror(errno) << std::endl;
 #elif defined(_WIN32)
         HKEY hKey;
         if (RegOpenKeyEx(HKEY_LOCAL_MACHINE,
