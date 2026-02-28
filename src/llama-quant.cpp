@@ -3,19 +3,14 @@
 #include "llama-model.h"
 #include "llama-model-loader.h"
 
-#include <algorithm>
 #include <cmath>
-#include <cstring>
-#include <cinttypes>
-#include <fstream>
-
-// #include <memory>
-// #include <functional>
-
 #include <mutex>
 #include <regex>
 #include <atomic>
 #include <thread>
+#include <cstring>
+#include <fstream>
+#include <cinttypes>
 #include <unordered_map>
 #include <condition_variable>
 
