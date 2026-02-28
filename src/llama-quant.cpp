@@ -1365,7 +1365,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             ml.load_data_for(tensor);
         }
 
-        LLAMA_LOG_INFO("[%4d/%4d] %-36s: [%s], type: %7s, ",
+        LLAMA_LOG_INFO("[%4d/%4d] %-36s - [%s], type: %7s, ",
                        ++idx, ml.n_tensors,
                        ggml_get_name(tensor),
                        llama_format_tensor_shape(tensor).c_str(),
@@ -1410,6 +1410,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 const int64_t nelements = ggml_nelements(tensor);
 
                 const float * imatrix = nullptr;
+                // TODO: make this als0 conditional on whether or not the tensor _supports_ imatrix
                 if (imatrix_data) {
                     auto it_imatrix = imatrix_data->find(tm.remapped_imatrix_name);
                     if (it_imatrix == imatrix_data->end()) {
