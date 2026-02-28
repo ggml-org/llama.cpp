@@ -512,9 +512,6 @@ static int test_backends(const size_t seed, const ggml_log_level log_level) {
         if (arch == LLM_ARCH_LLAMA4) {
             continue; // TODO attn_scale problems
         }
-        if (arch == LLM_ARCH_AFMOE) {
-            continue; // TODO segfault
-        }
         for (bool moe : {false, true}) {
             if (moe && !moe_implemented(arch)) {
                 continue;
