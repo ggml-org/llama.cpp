@@ -447,6 +447,11 @@ static_assert(sizeof(block_q3_pt) == 124, "wrong q3_pt block size");
 
 #define Q3PT_N_LEVELS 8
 
+// Q4_DPT: IQ4_NL with learned per-tensor int8 levels (4.125 bpw)
+// Block format: identical to block_iq4_nl (2 + 16 = 18 bytes per 32 elements)
+typedef block_iq4_nl block_q4_dpt;
+#define Q4DPT_N_LEVELS 16
+
 #endif // GGML_COMMON_DECL
 #endif // GGML_COMMON_DECL
 

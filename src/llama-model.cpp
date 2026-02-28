@@ -29,6 +29,13 @@ extern "C" {
     void            q3kpt_clear_tensor_levels(void);
 }
 
+// Q4_DPT levels functions (defined in ggml-quants.c)
+extern "C" {
+    void            q4dpt_set_levels(const int8_t * levels);
+    void            q4dpt_register_tensor_levels(const void * data, size_t nbytes, const int8_t * levels);
+    void            q4dpt_clear_tensor_levels(void);
+}
+
 #include <algorithm>
 #include <cassert>
 #include <cfloat>
@@ -7941,6 +7948,47 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             }
             if (n_registered > 0) {
                 LLAMA_LOG_INFO("%s: registered %d Q3_KPT per-tensor level tables\n", __func__, n_registered);
+            }
+        }
+    }
+
+    // Q4_DPT: load per-tensor int8 levels from GGUF metadata and register them.
+    // Must happen AFTER load_all_data so tensor data pointers are valid.
+    {
+        static const size_t Q4DPT_N_LEVELS = 16;
+        int64_t lv_idx = gguf_find_key(ml.meta.get(), "q4_dpt.levels");
+        if (lv_idx >= 0) {
+            const int8_t * lv_data = (const int8_t *) gguf_get_arr_data(ml.meta.get(), lv_idx);
+            const size_t   lv_len  = gguf_get_arr_n(ml.meta.get(), lv_idx);
+
+            // Build tensor-name to slot index map (GGUF file order = quantizer order)
+            std::unordered_map<std::string, size_t> name_to_slot;
+            {
+                const int64_t n_tensors = gguf_get_n_tensors(ml.meta.get());
+                for (int64_t ti = 0; ti < n_tensors; ++ti) {
+                    name_to_slot[gguf_get_tensor_name(ml.meta.get(), ti)] = (size_t) ti;
+                }
+            }
+
+            q4dpt_clear_tensor_levels();
+            int n_registered = 0;
+
+            for (auto & [ctx, buf_map] : ctx_buf_maps) {
+                for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+                    if (t->type != GGML_TYPE_Q4_DPT || t->data == nullptr) { continue; }
+                    auto it = name_to_slot.find(ggml_get_name(t));
+                    if (it == name_to_slot.end()) { continue; }
+                    const size_t lv_offset = it->second * Q4DPT_N_LEVELS;
+                    if (lv_offset + Q4DPT_N_LEVELS > lv_len) { continue; }
+                    q4dpt_register_tensor_levels(t->data, ggml_nbytes(t), lv_data + lv_offset);
+                    if (n_registered == 0) {
+                        q4dpt_set_levels(lv_data + lv_offset);  // global fallback
+                    }
+                    n_registered++;
+                }
+            }
+            if (n_registered > 0) {
+                LLAMA_LOG_INFO("%s: registered %d Q4_DPT per-tensor level tables\n", __func__, n_registered);
             }
         }
     }

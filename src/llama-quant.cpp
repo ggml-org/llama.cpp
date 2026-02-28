@@ -29,6 +29,13 @@ extern "C" {
     void   q3kpt_set_levels(const float * levels);
 }
 
+// Q4_DPT levels functions (defined in ggml-quants.c)
+extern "C" {
+    void   q4dpt_train_levels(const float * data, int64_t nrow, int64_t n_per_row,
+                               const float * imatrix, int8_t levels_out[16]);
+    void   q4dpt_set_levels(const int8_t * levels);
+}
+
 // Quantization types. Changes to this struct must be replicated in quantize.cpp
 struct tensor_quantization {
     std::string name;
@@ -269,6 +276,9 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             }
             else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_KPT) {
                 new_type = GGML_TYPE_Q4_K;
+            }
+            else if (ftype == LLAMA_FTYPE_MOSTLY_Q4_DPT) {
+                new_type = GGML_TYPE_IQ4_XS;
             }
             else if (ftype == LLAMA_FTYPE_MOSTLY_TQ1_0 || ftype == LLAMA_FTYPE_MOSTLY_TQ2_0) {
                 new_type = GGML_TYPE_Q4_K;
@@ -562,6 +572,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         case LLAMA_FTYPE_MOSTLY_IQ3_M:   default_type = GGML_TYPE_IQ3_S;   break;
         case LLAMA_FTYPE_MOSTLY_Q3_PT:  default_type = GGML_TYPE_Q3_PT;  break;
         case LLAMA_FTYPE_MOSTLY_Q3_KPT:  default_type = GGML_TYPE_Q3_KPT;  break;
+        case LLAMA_FTYPE_MOSTLY_Q4_DPT:  default_type = GGML_TYPE_Q4_DPT;  break;
 
         default: throw std::runtime_error(format("invalid output file type %d\n", ftype));
     }
@@ -938,6 +949,88 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         LLAMA_LOG_INFO("%s: Q3_KPT pass 1 complete.\n", __func__);
     }
 
+    // Q4_DPT two-pass approach: train all per-tensor int8 levels BEFORE opening the output
+    // file, so the levels KV entry is already populated at the time of the metadata placeholder.
+    static const size_t Q4DPT_N_LEVELS = 16;
+    std::vector<int8_t> q4dpt_all_levels;  // indexed by position in tensors[]
+    if (ftype == LLAMA_FTYPE_MOSTLY_Q4_DPT && !params->dry_run) {
+        LLAMA_LOG_INFO("%s: Q4_DPT pass 1: training per-tensor int8 levels...\n", __func__);
+        q4dpt_all_levels.assign(tensors.size() * Q4DPT_N_LEVELS, (int8_t)0);
+
+        std::vector<no_init<uint8_t>> p1_read_data;
+        std::vector<no_init<float>>   p1_f32_buf;
+        std::vector<std::thread>      p1_workers;
+        p1_workers.reserve(nthread);
+
+        for (size_t ti = 0; ti < tensors.size(); ++ti) {
+            ggml_tensor * tensor = tensors[ti]->tensor;
+            const std::string tname = ggml_get_name(tensor);
+
+            bool quantize = tname.rfind("weight") == tname.size() - 6;
+            quantize &= (ggml_n_dims(tensor) >= 2);
+            quantize &= tname.find("_norm.weight")        == std::string::npos;
+            quantize &= tname.find("ffn_gate_inp.weight") == std::string::npos;
+            if (!quantize) { continue; }
+
+            ggml_type new_type = default_type;
+            if (!params->pure) {
+                new_type = llama_tensor_get_type(qs, new_type, tensor, ftype);
+            }
+            if (params->token_embedding_type < GGML_TYPE_COUNT &&
+                (tname == "token_embd.weight" || tname == "per_layer_token_embd.weight")) {
+                new_type = params->token_embedding_type;
+            }
+            if (params->output_tensor_type < GGML_TYPE_COUNT && tname == "output.weight") {
+                new_type = params->output_tensor_type;
+            }
+            if (new_type != GGML_TYPE_Q4_DPT) { continue; }
+
+            // Load tensor data
+            const size_t tsz = ggml_nbytes(tensor);
+            if (!ml.use_mmap) {
+                if (p1_read_data.size() < tsz) { p1_read_data.resize(tsz); }
+                tensor->data = p1_read_data.data();
+            }
+            ml.load_data_for(tensor);
+
+            // Dequantize to f32 if needed
+            const int64_t nelements = ggml_nelements(tensor);
+            float * f32_data;
+            if (tensor->type == GGML_TYPE_F32) {
+                f32_data = (float *) tensor->data;
+            } else {
+                llama_tensor_dequantize_impl(tensor, p1_f32_buf, p1_workers, nelements, nthread);
+                f32_data = (float *) p1_f32_buf.data();
+            }
+
+            // Resolve imatrix
+            const float * imatrix = nullptr;
+            if (imatrix_data) {
+                auto it2 = imatrix_data->find(remap_imatrix(tensor->name, mapped));
+                if (it2 != imatrix_data->end() &&
+                    it2->second.size() == (size_t)tensor->ne[0] * tensor->ne[2]) {
+                    imatrix = it2->second.data();
+                }
+            }
+
+            const int64_t n_per_row = tensor->ne[0];
+            const int64_t nrows     = tensor->ne[1];
+
+            LLAMA_LOG_INFO("%s: Q4_DPT levels for [%zu/%zu] %s\n", __func__, ti+1, tensors.size(), tensor->name);
+            q4dpt_train_levels(f32_data, nrows, n_per_row, imatrix,
+                               q4dpt_all_levels.data() + ti * Q4DPT_N_LEVELS);
+        }
+
+        // Store in GGUF metadata before the file is opened
+        for (auto & ctx : ctx_outs) {
+            if (ctx) {
+                gguf_set_arr_data(ctx.get(), "q4_dpt.levels", GGUF_TYPE_INT8,
+                                  q4dpt_all_levels.data(), q4dpt_all_levels.size());
+            }
+        }
+        LLAMA_LOG_INFO("%s: Q4_DPT pass 1 complete.\n", __func__);
+    }
+
     // no output file for --dry-run
     if (!params->dry_run) {
         new_ofstream(0);
@@ -1212,6 +1305,11 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 // Q3_KPT: set the per-tensor levels (trained in pass 1) as global for quantization
                 if (new_type == GGML_TYPE_Q3_KPT) {
                     q3kpt_set_levels(q3kpt_all_levels.data() + tensor_pass2_idx * Q3KPT_N_LEVELS);
+                }
+
+                // Q4_DPT: set the per-tensor levels (trained in pass 1) as global for quantization
+                if (new_type == GGML_TYPE_Q4_DPT) {
+                    q4dpt_set_levels(q4dpt_all_levels.data() + tensor_pass2_idx * Q4DPT_N_LEVELS);
                 }
 
                 // quantize each expert separately since they have different importance matrices

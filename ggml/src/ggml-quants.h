@@ -129,6 +129,27 @@ GGML_API const float * q3pt_get_tensor_levels(const void * data_ptr);
 GGML_API void          q3pt_train_levels(const float * data, int64_t nrow, int64_t n_per_row,
                                           const float * imatrix, float levels_out[8]);
 
+// Q4_DPT: IQ4_NL with learned per-tensor int8 levels
+GGML_API void dequantize_row_q4_dpt(const block_q4_dpt * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API void quantize_row_q4_dpt_ref(const float * GGML_RESTRICT x, block_q4_dpt * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_q4_dpt(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+
+// Q4_DPT levels management (per-tensor Lloyd-Max int8 levels)
+GGML_API void           q4dpt_set_levels(const int8_t * levels);
+GGML_API const int8_t * q4dpt_get_levels(void);
+GGML_API void           q4dpt_free_levels(void);
+
+// Per-tensor levels registry (inference)
+GGML_API void           q4dpt_register_tensor_levels(const void * data, size_t nbytes, const int8_t * levels);
+GGML_API void           q4dpt_clear_tensor_levels(void);
+GGML_API const int8_t * q4dpt_get_tensor_levels(const void * data_ptr);
+
+// Train 16 Lloyd-Max int8 levels from tensor data.
+// Bins normalized values (x/amax) in [-1,1], runs weighted k-means, rounds to sorted int8[16].
+// Also sets the global levels via q4dpt_set_levels().
+GGML_API void           q4dpt_train_levels(const float * data, int64_t nrow, int64_t n_per_row,
+                                            const float * imatrix, int8_t levels_out[Q4DPT_N_LEVELS]);
+
 GGML_API void iq2xs_init_impl(enum ggml_type type);
 GGML_API void iq2xs_free_impl(enum ggml_type type);
 GGML_API void iq3xs_init_impl(int grid_size);

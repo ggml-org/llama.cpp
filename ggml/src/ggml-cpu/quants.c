@@ -1175,6 +1175,40 @@ void ggml_vec_dot_q3_kpt_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
     ggml_vec_dot_q3_kpt_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
 }
 
+void ggml_vec_dot_q4_dpt_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK4_NL == 0);
+    static_assert(QK4_NL == QK8_0, "QK4_NL and QK8_0 must be the same");
+
+    const block_q4_dpt * GGML_RESTRICT x = vx;
+    const block_q8_0   * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK4_NL;
+
+    const int8_t * values = q4dpt_get_tensor_levels(vx);
+    GGML_ASSERT(values != NULL && "Q4_DPT levels not set for tensor");
+
+    float sumf = 0;
+    for (int ib = 0; ib < nb; ++ib) {
+        const float d = GGML_CPU_FP16_TO_FP32(y[ib].d) * GGML_CPU_FP16_TO_FP32(x[ib].d);
+        int32_t blk = 0;
+        for (int j = 0; j < QK4_NL/2; ++j) {
+            blk += (int32_t)y[ib].qs[j+       0] * (int32_t)values[x[ib].qs[j] & 0xf];
+            blk += (int32_t)y[ib].qs[j+QK4_NL/2] * (int32_t)values[x[ib].qs[j] >>  4];
+        }
+        sumf += d * (float)blk;
+    }
+    *s = sumf;
+}
+
+void ggml_vec_dot_q4_dpt_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    ggml_vec_dot_q4_dpt_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
+}
+
 void ggml_vec_dot_iq1_m_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
