@@ -517,8 +517,8 @@ static tensor_category tensor_get_category(const std::string & tensor_name) {
 
 // check if category is for attention-v-like tensors (more sensitive to quantization)
 static bool category_is_attn_v(tensor_category cat) {
-    return cat == tensor_category::ATTENTION_V ||
-           cat == tensor_category::ATTENTION_QKV ||
+    return cat == tensor_category::ATTENTION_V     ||
+           cat == tensor_category::ATTENTION_QKV   ||
            cat == tensor_category::ATTENTION_KV_B;
 }
 
@@ -559,13 +559,13 @@ static ggml_type llama_tensor_get_type_impl(
         if (qs->params->output_tensor_type < GGML_TYPE_COUNT) {
             new_type = qs->params->output_tensor_type;
         } else {
-            const int64_t nx = tensor->ne[0];
+            const int64_t ncols = tensor->ne[0];
             const int64_t qk_k = ggml_blck_size(new_type);
 
             if (ftype == LLAMA_FTYPE_MOSTLY_MXFP4_MOE) {
                 new_type = GGML_TYPE_Q8_0;
             }
-            else if (arch == LLM_ARCH_FALCON || nx % qk_k != 0) {
+            else if (arch == LLM_ARCH_FALCON || ncols % qk_k != 0) {
                 new_type = GGML_TYPE_Q8_0;
             }
             else if (ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS || ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS || ftype == LLAMA_FTYPE_MOSTLY_IQ3_XXS ||
@@ -880,6 +880,8 @@ static size_t llama_tensor_quantize_impl(
     return new_size.load();
 }
 
+static constexpr int64_t min_chunk_size = 32 * 512;
+
 // quantize a single tensor, handling expert parallelism and work buffer management
 static size_t llama_tensor_quantize(
                 const ggml_tensor * tensor,
@@ -892,16 +894,9 @@ static size_t llama_tensor_quantize(
 ) {
     const int64_t nelements = ggml_nelements(tensor);
 
-    if (work.size() < (size_t)nelements * 4) {
-        work.resize(nelements * 4);
-    }
-
-    void * new_data = work.data();
-
     const int64_t n_per_row = tensor->ne[0];
     const int64_t nrows     = tensor->ne[1];
 
-    static const int64_t min_chunk_size = 32 * 512;
     const int64_t chunk_size = (n_per_row >= min_chunk_size
         ? n_per_row
         : n_per_row * ((min_chunk_size + n_per_row - 1)/n_per_row));
@@ -912,9 +907,15 @@ static size_t llama_tensor_quantize(
 
     const ggml_type type = tensor->type;
 
+    if (work.size() < (size_t)nelements * 4) {
+        work.resize(nelements * 4);
+    }
+
+    void * new_data = work.data();
+
     // should we use expert-parallel quantization?
     const bool expert_parallel = (
-        // certain types are fast enough to quantize that it's not worth it
+        // static types are fast enough to quantize that it's not worth it
         type != GGML_TYPE_Q8_0 &&
         type != GGML_TYPE_Q5_1 &&
         type != GGML_TYPE_Q5_0 &&
