@@ -380,9 +380,6 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
 
             for (size_t i = 0; i < ov_output_names.size(); i++) {
                 auto output_tensor = get_ov_output_tensor(ggml_decoder, ov_output_names[i]);
-                // auto * ggml_tensor = ggml_decoder->get_model_outputs().at(ov_output_names[i]);
-                // ov::Tensor output_tensor(infer_request->get_output_tensor(i).get_element_type(),
-                //                          infer_request->get_output_tensor(i).get_shape(), ggml_tensor->data);
                 infer_request->set_output_tensor(i, output_tensor);
             }
 
@@ -410,9 +407,6 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
 
         for (size_t i = 0; i < ov_output_names.size(); i++) {
             auto output_tensor = get_ov_output_tensor(ggml_decoder, ov_output_names[i]);
-            // auto * ggml_tensor = ggml_decoder->get_model_outputs().at(ov_output_names[i]);
-            // ov::Tensor output_tensor(infer_request->get_output_tensor(i).get_element_type(),
-            //                          infer_request->get_output_tensor(i).get_shape(), ggml_tensor->data);
             infer_request->set_output_tensor(i, output_tensor);
         }
 
