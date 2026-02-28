@@ -23763,16 +23763,15 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     GGML_LOG_INFO("[MoE] Falling back to host-side routing for type %d\n", src0->type);
     // Host-side routing requires synchronization which is incompatible with graph recording.
 
-    // If we reach here during graph recording, we must abort because no graph-compatible
-    // path was available (XMX sorted MoE, fused ESIMD, and MMVQ all returned false).
+    // If we reach here during graph recording, throw so the outer handler can
+    // gracefully disable graphs and fall back to direct execution.
     if (g_ggml_sycl_graph_recording) {
-        GGML_LOG_ERROR(
+        GGML_LOG_WARN(
             "[MoE] No graph-compatible dispatch path for type=%d batch=%ld. "
-            "Host-side routing requires sync incompatible with graph recording.\n",
+            "Auto-disabling graph recording for MoE host routing.\n",
             src0->type, (long) ne12);
-        GGML_ABORT(
-            "MoE operation requires host synchronization, incompatible with SYCL graph recording. "
-            "Set GGML_SYCL_DISABLE_GRAPH=1 to disable graphs or use SoA layout.");
+        throw sycl::exception(sycl::make_error_code(sycl::errc::runtime),
+            "MoE host routing incompatible with graph recording");
     }
     const queue_ptr      stream = ctx.stream();
     const int64_t        n_as   = ne02;
@@ -24602,6 +24601,11 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
         GGML_SYCL_DEBUG("[MOE-UNPIN] Layer %d: Unpinned routed experts\n", layer_id);
     }
 } catch (const sycl::exception & exc) {
+    // During graph recording, re-throw so the outer handler can
+    // gracefully disable graphs and fall back to direct execution.
+    if (g_ggml_sycl_graph_recording) {
+        throw;
+    }
     std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
     std::exit(1);
 }
@@ -34957,7 +34961,7 @@ normal_dispatch:
                 sycl_ctx->fa_graph_ptrs_valid = false;
                 sycl_ctx->fa_graph_ptrs.clear();
                 g_ggml_sycl_graph_recording_depth.fetch_sub(1, std::memory_order_acq_rel);
-                GGML_LOG_ERROR("[SYCL-GRAPH] recording failed, disabling graphs: %s\n", exc.what());
+                GGML_LOG_WARN("[SYCL-GRAPH] recording failed, disabling graphs: %s\n", exc.what());
                 sycl_ctx->graphs_disabled = true;
 
                 sycl_ctx->exec_graph.reset();
