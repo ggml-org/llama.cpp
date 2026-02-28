@@ -3498,9 +3498,16 @@ void unified_cache::pin(const ggml_sycl_cache_id & key_id, ggml_layout_mode layo
     auto entry_it = entries_.find(id_it->second);
     if (entry_it != entries_.end()) {
         if (entry_it->second.layout != layout) {
-            GGML_LOG_ERROR("[UNIFIED-CACHE] layout mismatch in pin model=%llu name_hash=0x%llx have=%d want=%d\n",
-                           (unsigned long long) key_id.model_id, (unsigned long long) key_id.name_hash,
-                           (int) entry_it->second.layout, (int) layout);
+            // Rate-limit: log once, then suppress. Common for MoE models where
+            // MMVQ pins with AOS but unified cache stores SOA/COALESCED for experts.
+            static std::atomic<int> mismatch_count{ 0 };
+            int                     count = mismatch_count.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (count == 1) {
+                GGML_LOG_WARN(
+                    "[UNIFIED-CACHE] layout mismatch in pin: have=%d want=%d "
+                    "(MoE expert layout mismatch, benign — further occurrences suppressed)\n",
+                    (int) entry_it->second.layout, (int) layout);
+            }
             if (cache_assert_enabled()) {
                 GGML_ABORT("unified_cache layout mismatch");
             }
@@ -4311,11 +4318,16 @@ void unified_cache::process_deferred_frees() {
             auto entry_it = entries_.find(id_it->second);
             if (entry_it != entries_.end()) {
                 if (entry_it->second.layout != pin_it->layout) {
-                    GGML_LOG_ERROR(
-                        "[UNIFIED-CACHE] layout mismatch in inflight unpin model=%llu name_hash=0x%llx have=%d "
-                        "want=%d\n",
-                        (unsigned long long) pin_it->key.model_id, (unsigned long long) pin_it->key.name_hash,
-                        (int) entry_it->second.layout, (int) pin_it->layout);
+                    // Rate-limit: log once, then suppress. Common for MoE models where
+                    // MMVQ unpins with AOS but unified cache stores SOA/COALESCED for experts.
+                    static std::atomic<int> unpin_mismatch_count{ 0 };
+                    int                     count = unpin_mismatch_count.fetch_add(1, std::memory_order_relaxed) + 1;
+                    if (count == 1) {
+                        GGML_LOG_WARN(
+                            "[UNIFIED-CACHE] layout mismatch in inflight unpin: have=%d want=%d "
+                            "(MoE expert layout mismatch, benign — further occurrences suppressed)\n",
+                            (int) entry_it->second.layout, (int) pin_it->layout);
+                    }
                     if (cache_assert_enabled()) {
                         GGML_ABORT("unified_cache layout mismatch");
                     }

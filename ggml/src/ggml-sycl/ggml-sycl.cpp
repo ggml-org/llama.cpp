@@ -274,8 +274,9 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
     sycl::queue & q  = *ctx.stream();
 
     // Scan graph for MUL_MAT_ID nodes to discover MoE architecture
-    int    n_moe_layers     = 0;
+    int    n_moe_layers        = 0;
     int    n_experts_per_layer = 0;
+    int    n_experts_used      = 0;  // top-K from ids tensor
     size_t expert_weight_bytes = 0;
 
     struct moe_expert_info {
@@ -308,6 +309,18 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
         const int64_t n_experts = src0->ne[2] > 0 ? src0->ne[2] : 1;
         const size_t  nb02      = src0->nb[2];
 
+        // Extract top-K (n_experts_used) from the ids tensor (src[2]).
+        // Use the minimum across MUL_MAT_ID nodes: warmup graphs may inflate
+        // ids->ne[0] to n_experts (all experts), while normal graphs use the
+        // actual top-K from the model's expert_used_count.
+        const ggml_tensor * ids = node->src[2];
+        if (ids && ids->ne[0] > 0) {
+            int ids_k = static_cast<int>(ids->ne[0]);
+            if (n_experts_used <= 0 || ids_k < n_experts_used) {
+                n_experts_used = ids_k;
+            }
+        }
+
         if (n_experts > n_experts_per_layer) {
             n_experts_per_layer = static_cast<int>(n_experts);
         }
@@ -329,8 +342,20 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
         return;
     }
 
-    GGML_LOG_INFO("[MOE-HYBRID] Detected MoE: %d layers, %d experts/layer, %.1f KB/expert\n",
-                  n_moe_layers, n_experts_per_layer, expert_weight_bytes / 1024.0);
+    // Check how many experts are host-resident (mmap/shared) vs device-resident
+    int n_host_experts = 0;
+    for (const auto & info : expert_list) {
+        sycl::usm::alloc atype = sycl::get_pointer_type(info.host_ptr, q.get_context());
+        if (atype != sycl::usm::alloc::device) {
+            n_host_experts++;
+        }
+    }
+
+    GGML_LOG_INFO(
+        "[MOE-HYBRID] Detected MoE: %d layers, %d experts/layer, top-%d, %.1f KB/expert, "
+        "%d/%zu host-resident\n",
+        n_moe_layers, n_experts_per_layer, n_experts_used, expert_weight_bytes / 1024.0, n_host_experts,
+        expert_list.size());
 
     // Initialize ExpertCache with default budget (50% remaining VRAM)
     cache.init(device, 0 /* default budget */, q);
@@ -348,11 +373,14 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
     auto & prefetcher = g_expert_prefetchers[device];
     prefetcher.init(q, &cache);
 
-    // Initialize ExpertPredictor (estimate n_experts_used from typical MoE top-K)
+    // Initialize ExpertPredictor using top-K detected from graph ids tensor.
+    // During warmup, ids->ne[0] may equal n_experts_per_layer (all experts
+    // activated for JIT compilation). Cap to a sensible max in that case.
     if (ggml_sycl::ggml_sycl_expert_predict_enabled()) {
         auto & predictor = g_expert_predictors[device];
-        // Default top-K = min(8, n_experts) — most MoE models use top-2 to top-8
-        int n_experts_used = std::min(8, n_experts_per_layer);
+        if (n_experts_used <= 0 || n_experts_used >= n_experts_per_layer) {
+            n_experts_used = std::min(8, n_experts_per_layer);
+        }
         const int n_seq_layers = static_cast<int>(g_moe_layer_seq[device].size());
         predictor.init(n_seq_layers, n_experts_per_layer, n_experts_used);
         GGML_LOG_INFO("[MOE-HYBRID] Predictor initialized: %d layers, %d experts, top-%d\n",
@@ -24110,15 +24138,14 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     int                     moe_hybrid_val = moe_hybrid_enabled.load(std::memory_order_acquire);
     if (moe_hybrid_val < 0) {
         const char * env     = getenv("GGML_SYCL_MOE_HYBRID");
-        int          new_val = env ? atoi(env) : 0;  // Default: OFF during development
+        int          new_val = env ? atoi(env) : 1;  // Default: ON (auto-enable for MoE with host-resident experts)
         moe_hybrid_enabled.compare_exchange_strong(moe_hybrid_val, new_val, std::memory_order_release,
                                                     std::memory_order_acquire);
         moe_hybrid_val = moe_hybrid_enabled.load(std::memory_order_acquire);
     }
 
     // MoE hybrid dispatch requires CPU fallback for cache misses.
-    // Only enable for types that have vec_dot CPU support (Q4_0, Q8_0, etc.).
-    // Types like MXFP4 lack CPU vec_dot and produce zero outputs.
+    // Only enable for types that have vec_dot CPU support (Q4_0, Q8_0, MXFP4, etc.).
     const auto * cpu_traits_check = ggml_get_type_traits_cpu(src0->type);
     const bool   cpu_type_ok      = cpu_traits_check && cpu_traits_check->vec_dot;
     const bool moe_hybrid_active = (moe_hybrid_val != 0) && use_expert_cache && (ne12 == 1) && cpu_type_ok;
@@ -26850,7 +26877,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
         int gate_val = moe_hybrid_gate.load(std::memory_order_acquire);
         if (gate_val < 0) {
             const char * env = getenv("GGML_SYCL_MOE_HYBRID");
-            int new_val = env ? atoi(env) : 0;
+            int          new_val = env ? atoi(env) : 1;  // Default: ON (auto for MoE models)
             moe_hybrid_gate.compare_exchange_strong(gate_val, new_val,
                                                      std::memory_order_release,
                                                      std::memory_order_acquire);
