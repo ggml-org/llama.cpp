@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <cinttypes>
+#include <cstdint>
 #include <cstring>
 #include <future>
 #include <regex>
@@ -1167,7 +1168,11 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         if (flags & TENSOR_SKIP_IF_VIRTUAL) {
             return nullptr;
         }
-        constexpr ggml_type type = GGML_TYPE_F32; // TODO make configurable
+        ggml_type type = GGML_TYPE_F32;
+        const int64_t tid = gguf_find_tensor(metadata, tn.str().c_str());
+        if (tid != -1) {
+            type = gguf_get_tensor_type(metadata, tid);
+        }
 
         // for tensors that are not required some of the dimensions can be invalid:
         if (flags & TENSOR_NOT_REQUIRED) {

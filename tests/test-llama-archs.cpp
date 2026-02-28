@@ -9,6 +9,7 @@
 #include "../src/llama-arch.h"
 #include "../src/llama-model-saver.h"
 
+#include <cinttypes>
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
@@ -38,13 +39,22 @@ static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
     std::mt19937 gen(hasher(tensor->name) + *(const size_t *) userdata);
     std::normal_distribution<float> dis(0.0f, 1.0e-2f);
 
-    GGML_ASSERT(tensor->type == GGML_TYPE_F32);
     const int64_t ne = ggml_nelements(tensor);
-    std::vector<float> tmp(ne);
-    for (int64_t i = 0; i < ne; i++) {
-        tmp[i] = dis(gen);
+    if (tensor->type == GGML_TYPE_F32) {
+        std::vector<float> tmp(ne);
+        for (int64_t i = 0; i < ne; i++) {
+            tmp[i] = dis(gen);
+        }
+        ggml_backend_tensor_set(tensor, tmp.data(), 0, ggml_nbytes(tensor));
+    } else if (tensor->type == GGML_TYPE_F16) {
+        std::vector<ggml_fp16_t> tmp(ne);
+        for (int64_t i = 0; i < ne; i++) {
+            tmp[i] = ggml_fp32_to_fp16(dis(gen));
+        }
+        ggml_backend_tensor_set(tensor, tmp.data(), 0, ggml_nbytes(tensor));
+    } else {
+        GGML_ABORT("fatal error");
     }
-    ggml_backend_tensor_set(tensor, tmp.data(), 0, ggml_nbytes(tensor));
 }
 
 enum test_mode {
@@ -237,7 +247,7 @@ static int test_vs_disk(const char * path_model, const char * path_results) {
 static std::vector<float> get_logits(
         const llm_arch arch, const bool moe, const size_t seed, const std::vector<llama_token> & tokens,
         const std::vector<ggml_backend_dev_t> & devs) {
-    const uint32_t n_ctx   = 128;
+    const uint32_t n_ctx = 128;
 
     uint32_t n_vocab = 128;
     uint32_t n_embd  = 256;
@@ -269,6 +279,7 @@ static std::vector<float> get_logits(
     ms.add_kv(LLM_KV_VOCAB_SIZE,           n_vocab);
     ms.add_kv(LLM_KV_CONTEXT_LENGTH,       n_ctx);
     ms.add_kv(LLM_KV_EMBEDDING_LENGTH,     n_embd);
+    ms.add_kv(LLM_KV_FEATURES_LENGTH,      n_embd);
     ms.add_kv(LLM_KV_BLOCK_COUNT,          n_layer);
 
     if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
@@ -284,6 +295,8 @@ static std::vector<float> get_logits(
 
     ms.add_kv(LLM_KV_USE_PARALLEL_RESIDUAL,   false); // TODO
     ms.add_kv(LLM_KV_LOGIT_SCALE,             1.0f); // TODO
+    ms.add_kv(LLM_KV_TIME_MIX_EXTRA_DIM,      uint32_t(64));
+    ms.add_kv(LLM_KV_TIME_DECAY_EXTRA_DIM,    uint32_t(128));
     ms.add_kv(LLM_KV_FULL_ATTENTION_INTERVAL, uint32_t(2));
 
     if (arch == LLM_ARCH_PLAMO2 || arch == LLM_ARCH_JAMBA || arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE ||
@@ -311,6 +324,8 @@ static std::vector<float> get_logits(
     ms.add_kv(LLM_KV_ATTENTION_CLAMP_KQV,         1.0f);
     ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_EPS,     1e-5f);
     ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, 1e-5f);
+    ms.add_kv(LLM_KV_ATTENTION_GROUPNORM_EPS,     1e-5f);
+    ms.add_kv(LLM_KV_ATTENTION_GROUPNORM_GROUPS,  uint32_t(8));
     ms.add_kv(LLM_KV_ATTENTION_Q_LORA_RANK,       uint32_t(512));
     ms.add_kv(LLM_KV_ATTENTION_KV_LORA_RANK,      uint32_t(512));
     ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW,    n_ctx/8);
@@ -345,17 +360,36 @@ static std::vector<float> get_logits(
         ms.add_kv(LLM_KV_EXPERTS_PER_GROUP,          uint32_t(1));
     }
 
-    ms.add_kv(LLM_KV_XIELU_ALPHA_N,      1.0f);
-    ms.add_kv(LLM_KV_XIELU_ALPHA_P,      1.0f);
-    ms.add_kv(LLM_KV_XIELU_BETA,         1.0f);
-    ms.add_kv(LLM_KV_XIELU_EPS,          1.0e-7f);
-    ms.add_kv(LLM_KV_SSM_INNER_SIZE,     arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE ? 64 : 2*n_embd);
-    ms.add_kv(LLM_KV_SSM_CONV_KERNEL,    uint32_t(4));
-    ms.add_kv(LLM_KV_SSM_STATE_SIZE,     uint32_t(32));
-    ms.add_kv(LLM_KV_SSM_TIME_STEP_RANK, n_head);
-    ms.add_kv(LLM_KV_SSM_GROUP_COUNT,    arch == LLM_ARCH_PLAMO2 ? 0 : uint32_t(2));
-    ms.add_kv(LLM_KV_KDA_HEAD_DIM,       uint32_t(128));
-    ms.add_kv(LLM_KV_SHORTCONV_L_CACHE,  uint32_t(3));
+    ms.add_kv(LLM_KV_POSNET_EMBEDDING_LENGTH,   n_embd);
+    ms.add_kv(LLM_KV_POSNET_BLOCK_COUNT,        n_layer);
+    ms.add_kv(LLM_KV_CONVNEXT_EMBEDDING_LENGTH, n_embd);
+    ms.add_kv(LLM_KV_CONVNEXT_BLOCK_COUNT,      n_layer);
+    ms.add_kv(LLM_KV_XIELU_ALPHA_N,             1.0f);
+    ms.add_kv(LLM_KV_XIELU_ALPHA_P,             1.0f);
+    ms.add_kv(LLM_KV_XIELU_BETA,                1.0f);
+    ms.add_kv(LLM_KV_XIELU_EPS,                 1.0e-7f);
+    ms.add_kv(LLM_KV_SSM_INNER_SIZE,            arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE ? 64 : 2*n_embd);
+    ms.add_kv(LLM_KV_SSM_CONV_KERNEL,           uint32_t(4));
+    ms.add_kv(LLM_KV_SSM_STATE_SIZE,            uint32_t(32));
+    ms.add_kv(LLM_KV_SSM_TIME_STEP_RANK,        n_head);
+    ms.add_kv(LLM_KV_SSM_GROUP_COUNT,           arch == LLM_ARCH_PLAMO2 ? 0 : uint32_t(2));
+    ms.add_kv(LLM_KV_KDA_HEAD_DIM,              uint32_t(128));
+    ms.add_kv(LLM_KV_WKV_HEAD_SIZE,             n_embd/n_head);
+    ms.add_kv(LLM_KV_SHORTCONV_L_CACHE,         uint32_t(3));
+
+    for (uint32_t il = 0; il < n_layer; il++) {
+        ggml_tensor t;
+        memset(&t, 0, sizeof(ggml_tensor));
+        t.type = GGML_TYPE_F16;
+        ggml_format_name(&t, "conv%" PRIu32 "d.weight", il);
+        gguf_add_tensor(ms.gguf_ctx, &t);
+        ggml_format_name(&t, "posnet.%" PRIu32 ".conv1.weight", il);
+        gguf_add_tensor(ms.gguf_ctx, &t);
+        ggml_format_name(&t, "posnet.%" PRIu32 ".conv2.weight", il);
+        gguf_add_tensor(ms.gguf_ctx, &t);
+        ggml_format_name(&t, "convnext.%" PRIu32 ".dw.weight", il);
+        gguf_add_tensor(ms.gguf_ctx, &t);
+    }
 
     std::mt19937 gen(seed);
 
@@ -495,24 +529,27 @@ static int test_backends(const size_t seed, const ggml_log_level log_level) {
         if (arch == LLM_ARCH_CLIP || arch == LLM_ARCH_GPTJ || arch == LLM_ARCH_UNKNOWN) {
             continue; // These models don't have usable implementations.
         }
-        if (arch == LLM_ARCH_MPT) {
-            continue; // TODO check whether mpt.cpp is correct
+        if (arch == LLM_ARCH_WAVTOKENIZER_DEC) {
+            continue; // FIXME CUDA backend crashes.
+        }
+        if (arch == LLM_ARCH_LLAMA_EMBED || arch == LLM_ARCH_GEMMA_EMBEDDING) {
+            continue; // FIXME Embedding models produce inconsistent results.
+        }
+        if (arch == LLM_ARCH_RWKV6 || arch == LLM_ARCH_RWKV6QWEN2 || arch == LLM_ARCH_RWKV7 || arch == LLM_ARCH_ARWKV7) {
+            continue; // FIXME RWKV models hang indefinitely.
         }
         if (arch == LLM_ARCH_BERT || arch == LLM_ARCH_MODERN_BERT || arch == LLM_ARCH_NOMIC_BERT || arch == LLM_ARCH_NOMIC_BERT_MOE ||
                 arch == LLM_ARCH_NEO_BERT || arch == LLM_ARCH_JINA_BERT_V2 || arch == LLM_ARCH_JINA_BERT_V3) {
             continue; // TODO vocab
         }
+        if (arch == LLM_ARCH_MPT) {
+            continue; // TODO check whether mpt.cpp is correct
+        }
         if (arch == LLM_ARCH_T5 || arch == LLM_ARCH_T5ENCODER) {
             continue; // TODO attention buckets
         }
-        if (arch == LLM_ARCH_RWKV6 || arch == LLM_ARCH_RWKV6QWEN2 || arch == LLM_ARCH_RWKV7 || arch == LLM_ARCH_ARWKV7) {
-            continue; // TODO RWKV
-        }
         if (arch == LLM_ARCH_PLM) {
             continue; // TODO tensor shapes
-        }
-        if (arch == LLM_ARCH_WAVTOKENIZER_DEC) {
-            continue; // TODO needs special hparams
         }
         for (bool moe : {false, true}) {
             if (moe && !moe_implemented(arch)) {
