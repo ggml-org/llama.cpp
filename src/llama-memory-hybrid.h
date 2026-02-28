@@ -7,6 +7,7 @@
 #include "llama-memory-recurrent.h"
 
 #include <memory>
+#include <unordered_set>
 #include <vector>
 
 //
@@ -82,11 +83,38 @@ public:
     llama_kv_cache * get_mem_attn() const;
     llama_memory_recurrent * get_mem_recr() const;
 
+    //
+    // Hybrid-specific: recurrent state rebuild tracking
+    //
+    // When seq_rm fails for recurrent (partial removal not supported),
+    // we clear the recurrent state and mark it for rebuild. The next
+    // decode pass will rebuild the SSM state while reusing the KV cache.
+    //
+
+    // Check if a sequence needs its recurrent state rebuilt from position 0
+    bool needs_recurrent_rebuild(llama_seq_id seq_id) const;
+
+    // Mark a sequence as needing recurrent state rebuild
+    void mark_recurrent_rebuild(llama_seq_id seq_id);
+
+    // Clear the rebuild flag after rebuild is complete
+    void clear_recurrent_rebuild(llama_seq_id seq_id);
+
+    // Get the attention cache pos_min (for server pos_min checks)
+    // This allows continuing from n_past based on KV cache validity,
+    // independent of recurrent state which will be rebuilt.
+    llama_pos seq_pos_min_attn(llama_seq_id seq_id) const;
+
 private:
     const llama_hparams & hparams;
 
     const std::unique_ptr<llama_kv_cache> mem_attn;
     const std::unique_ptr<llama_memory_recurrent> mem_recr;
+
+    // Track sequences that need recurrent state rebuilt from position 0
+    // This happens when seq_rm fails for recurrent (partial removal not supported)
+    // but succeeds for attention (KV cache can be trimmed)
+    mutable std::unordered_set<llama_seq_id> recr_rebuild_needed;
 };
 
 class llama_memory_hybrid_context : public llama_memory_context_i {
