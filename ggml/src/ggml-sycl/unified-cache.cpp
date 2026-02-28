@@ -1273,7 +1273,12 @@ void * host_cache::ensure_cached_alloc(const ggml_sycl_cache_id &    key_id,
     const bool     host_accessible = is_host_accessible_ptr(src_ptr, queue_);
     const bool     can_hash        = validate_content && host_accessible;
     const uint64_t new_hash        = can_hash ? compute_content_hash(src_ptr, src_size) : 0;
-    const bool     can_alias       = host_accessible && layout == GGML_LAYOUT_AOS && src_size == dst_size;
+    // When the model exceeds VRAM, GPU must DMA weights from host memory every token.
+    // Pinned host memory allows direct DMA; mmap requires an extra staging copy.
+    // Disable aliasing so weights get copied to the pinned pool instead.
+    const bool     model_exceeds   = ggml_backend_sycl_model_exceeds_vram(nullptr);
+    const bool     can_alias       = host_accessible && layout == GGML_LAYOUT_AOS && src_size == dst_size
+                                     && !model_exceeds;
     const bool     prefer_unpinned = host_cache_prefer_unpinned(type);
 
     std::lock_guard<std::mutex> lock(mutex_);
