@@ -293,7 +293,7 @@ static ggml_type tensor_type_fallback(quantization_state_impl * qs, const ggml_t
     const int64_t qk_k = ggml_blck_size(target_type);
 
     if (ncols % qk_k != 0) { // this tensor's shape is incompatible with this quant
-        LLAMA_LOG_WARN("warning: %36s: ncols %6" PRId64 " not divisible by %3" PRId64 " (required for type %7s) ",
+        LLAMA_LOG_WARN("warning: %-36s: ncols %6" PRId64 " not divisible by %3" PRId64 " (required for type %7s) ",
                         t->name, ncols, qk_k, ggml_type_name(target_type));
         ++qs->n_fallback;
 
@@ -924,7 +924,7 @@ static ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_IQ1_S:   return_type = GGML_TYPE_IQ1_S;   break;
         case LLAMA_FTYPE_MOSTLY_IQ1_M:   return_type = GGML_TYPE_IQ1_M;   break;
         case LLAMA_FTYPE_MOSTLY_IQ2_XXS: return_type = GGML_TYPE_IQ2_XXS; break;
-        case LLAMA_FTYPE_MOSTLY_IQ2_XS:  return_type = GGML_TYPE_IQ2_XS;  break;
+        case LLAMA_FTYPE_MOSTLY_IQ2_XS:
         case LLAMA_FTYPE_MOSTLY_IQ2_S:   return_type = GGML_TYPE_IQ2_XS;  break;
         case LLAMA_FTYPE_MOSTLY_IQ2_M:   return_type = GGML_TYPE_IQ2_S;   break;
         case LLAMA_FTYPE_MOSTLY_IQ3_XXS: return_type = GGML_TYPE_IQ3_XXS; break;
@@ -1253,7 +1253,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             ml.load_data_for(tensor);
         }
 
-        LLAMA_LOG_INFO("[%4d/%4d] %36s: [%s], type: %7s, ",
+        LLAMA_LOG_INFO("[%4d/%4d] %-36s: [%s], type: %7s, ",
                        ++idx, ml.n_tensors,
                        ggml_get_name(tensor),
                        llama_format_tensor_shape(tensor).c_str(),
