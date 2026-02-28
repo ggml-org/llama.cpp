@@ -200,8 +200,9 @@ private:
         return (sz + ALIGNMENT - 1) & ~(ALIGNMENT - 1);
     }
 
-    // Compute eviction score. Lower = evict first.
-    // score = alpha*frequency + beta*recency + gamma*layer_distance + delta*co_activation
+    // Compute eviction score using Least-Stale policy (SpecMD).
+    // Lower = evict first. Primary: staleness (tokens since last access).
+    // Tiebreaker: layer distance from current processing layer.
     void recompute_score(ExpertSlot & slot, uint64_t current_token) const;
 
     // Find the slot with lowest score (eviction candidate).

@@ -580,56 +580,27 @@ void ExpertCache::finish_warmup_locked() {
 // ---------------------------------------------------------------------------
 
 void ExpertCache::recompute_score(ExpertSlot & slot, uint64_t current_token) const {
-    // Enhanced scoring formula:
-    //   score = alpha*frequency + beta*recency + gamma*layer_distance + delta*co_activation
+    // Least-Stale eviction policy (SpecMD):
+    //   score = -staleness + layer_distance_tiebreaker
     //
-    // alpha = 1.0   : access frequency (higher = more valuable)
-    // beta  = -0.01 : recency penalty (older = less valuable)
-    // gamma = -0.5  : layer-distance penalty (far from current layer = less valuable)
-    // delta = 0.1   : co-activation bonus (frequently paired experts stay together)
+    // Primary factor: staleness (tokens since last access). More negative = staler = evict first.
+    // Tiebreaker: layer distance from current processing layer (small penalty, same sign).
     //
-    // Higher score = more valuable (less likely to evict)
-    constexpr float alpha = 1.0f;
-    constexpr float beta  = -0.01f;
-    constexpr float gamma = -0.5f;
-    constexpr float delta = 0.1f;
+    // MoE routing patterns violate temporal locality (SpecMD finding), so simple staleness-based
+    // eviction outperforms multi-factor heuristics by ~85x fewer cache misses.
+    //
+    // Higher score = more valuable (less likely to evict).
+    float staleness = -static_cast<float>(current_token - slot.last_access);
 
-    float freq_term    = alpha * static_cast<float>(slot.frequency);
-    float recency_term = beta * static_cast<float>(current_token - slot.last_access);
-
-    // Layer-distance penalty: experts from layers far from the current
-    // processing layer are less likely to be needed soon.
-    float layer_dist_term = 0.0f;
+    // Layer-distance tiebreaker: experts far from the current layer get a small penalty.
+    // Scale is 0.001 per layer so it only matters when staleness is equal.
+    float layer_tiebreaker = 0.0f;
     if (current_layer_ >= 0 && slot.layer_idx >= 0) {
         int dist = std::abs(slot.layer_idx - current_layer_);
-        layer_dist_term = gamma * static_cast<float>(dist);
+        layer_tiebreaker = -0.001f * static_cast<float>(dist);
     }
 
-    // Co-activation bonus: check if this expert is frequently activated
-    // with any currently-cached expert in the same layer.
-    float co_act_term = 0.0f;
-    if (!co_activation_.empty()) {
-        int64_t slot_key = make_key(slot.layer_idx, slot.expert_idx);
-        // O(n) scan over cached experts. Consider per-layer index if n_slots_ > 1000.
-        for (const auto & [cached_key, slot_idx] : lookup_map_) {
-            if (slot_idx == -1) continue;
-            const auto & other = slots_[slot_idx];
-            if (other.layer_idx != slot.layer_idx) continue;
-            if (other.layer_idx == -1) continue;
-
-            int64_t other_key = make_key(other.layer_idx, other.expert_idx);
-            if (other_key == slot_key) continue;
-
-            int64_t pair_key = (std::min(slot_key, other_key) << 32)
-                               | (std::max(slot_key, other_key) & 0xFFFFFFFF);
-            auto co_it = co_activation_.find(pair_key);
-            if (co_it != co_activation_.end()) {
-                co_act_term += delta * static_cast<float>(co_it->second);
-            }
-        }
-    }
-
-    slot.score = freq_term + recency_term + layer_dist_term + co_act_term;
+    slot.score = staleness + layer_tiebreaker;
 }
 
 int ExpertCache::find_eviction_candidate() const {
