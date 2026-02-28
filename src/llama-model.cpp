@@ -8934,6 +8934,11 @@ int32_t llama_model_n_layer(const llama_model * model) {
     return model->hparams.n_layer;
 }
 
+int32_t llama_model_dev_layer(const llama_model * model, int32_t il) {
+    ggml_backend_dev_t dev = model->dev_layer(il);
+    return static_cast<int32_t>(ggml_backend_dev_type(dev));
+}
+
 int32_t llama_model_n_head(const llama_model * model) {
     return model->hparams.n_head();
 }
