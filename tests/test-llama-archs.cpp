@@ -321,14 +321,15 @@ static std::vector<float> get_logits(
         ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH_MLA,   uint32_t(192));
         ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH_MLA, uint32_t(128));
     }
-    ms.add_kv(LLM_KV_ATTENTION_CLAMP_KQV,         1.0f);
-    ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_EPS,     1e-5f);
-    ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, 1e-5f);
-    ms.add_kv(LLM_KV_ATTENTION_GROUPNORM_EPS,     1e-5f);
-    ms.add_kv(LLM_KV_ATTENTION_GROUPNORM_GROUPS,  uint32_t(8));
-    ms.add_kv(LLM_KV_ATTENTION_Q_LORA_RANK,       uint32_t(512));
-    ms.add_kv(LLM_KV_ATTENTION_KV_LORA_RANK,      uint32_t(512));
-    ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW,    n_ctx/8);
+    ms.add_kv(LLM_KV_ATTENTION_CLAMP_KQV,              1.0f);
+    ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_EPS,          1e-5f);
+    ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,      1e-5f);
+    ms.add_kv(LLM_KV_ATTENTION_GROUPNORM_EPS,          1e-5f);
+    ms.add_kv(LLM_KV_ATTENTION_GROUPNORM_GROUPS,       uint32_t(8));
+    ms.add_kv(LLM_KV_ATTENTION_Q_LORA_RANK,            uint32_t(512));
+    ms.add_kv(LLM_KV_ATTENTION_KV_LORA_RANK,           uint32_t(512));
+    ms.add_kv(LLM_KV_ATTENTION_RELATIVE_BUCKETS_COUNT, uint32_t(8));
+    ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW,         n_ctx/8);
 
     if (arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35) {
         std::vector<uint32_t> pattern;
@@ -418,6 +419,11 @@ static std::vector<float> get_logits(
         common_batch_add(batch, tokens[pos], pos, {0}, true);
     }
     batch.n_tokens = n_ctx;
+    if (arch == LLM_ARCH_T5) {
+        if (llama_encode(lctx.get(), batch)) {
+            throw std::runtime_error("failed to encode batch");
+        }
+    }
     if (llama_decode(lctx.get(), batch)) {
         throw std::runtime_error("failed to decode batch");
     }
@@ -532,8 +538,8 @@ static int test_backends(const size_t seed, const ggml_log_level log_level) {
         if (arch == LLM_ARCH_WAVTOKENIZER_DEC) {
             continue; // FIXME CUDA backend crashes.
         }
-        if (arch == LLM_ARCH_LLAMA_EMBED || arch == LLM_ARCH_GEMMA_EMBEDDING) {
-            continue; // FIXME Embedding models produce inconsistent results.
+        if (arch == LLM_ARCH_LLAMA_EMBED || arch == LLM_ARCH_GEMMA_EMBEDDING || arch == LLM_ARCH_T5ENCODER) {
+            continue; // FIXME Embedding (?) models produce inconsistent results.
         }
         if (arch == LLM_ARCH_RWKV6 || arch == LLM_ARCH_RWKV6QWEN2 || arch == LLM_ARCH_RWKV7 || arch == LLM_ARCH_ARWKV7) {
             continue; // FIXME RWKV models hang indefinitely.
@@ -544,9 +550,6 @@ static int test_backends(const size_t seed, const ggml_log_level log_level) {
         }
         if (arch == LLM_ARCH_MPT) {
             continue; // TODO check whether mpt.cpp is correct
-        }
-        if (arch == LLM_ARCH_T5 || arch == LLM_ARCH_T5ENCODER) {
-            continue; // TODO attention buckets
         }
         if (arch == LLM_ARCH_PLM) {
             continue; // TODO tensor shapes

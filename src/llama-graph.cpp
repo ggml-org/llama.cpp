@@ -509,6 +509,7 @@ void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
     float * data = (float *) cross_kq_mask->data;
 
     for (int i = 0; i < n_tokens; ++i) {
+        GGML_ASSERT(!cross->seq_ids_enc.empty() && "llama_encode must be called first");
         for (int j = 0; j < n_enc; ++j) {
             float f = -INFINITY;
 

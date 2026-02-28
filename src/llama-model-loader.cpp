@@ -1048,7 +1048,7 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         // the tensor is duplicated
         // to handle this, we check if the tensor is duplicated, and if so, we assume that it is being loaded as the output tensor
         llm_tensor tn_tensor = tn.tensor;
-        if (tn.tensor == LLM_TENSOR_TOKEN_EMBD && flags & TENSOR_DUPLICATED) {
+        if (tn.tensor == LLM_TENSOR_TOKEN_EMBD && (flags & TENSOR_DUPLICATED)) {
             tn_tensor = LLM_TENSOR_OUTPUT;
         }
 
@@ -1060,7 +1060,7 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         }
 
         // skip unused tensors
-        if (info.op == GGML_OP_NONE || flags & TENSOR_SKIP) {
+        if (info.op == GGML_OP_NONE || (flags & TENSOR_SKIP)) {
             const size_t nbytes = ggml_nbytes(t_meta);
             LLAMA_LOG_WARN("model has unused tensor %s (size = %zu bytes) -- ignoring\n", tn.str().c_str(), nbytes);
 
