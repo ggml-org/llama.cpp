@@ -117,6 +117,13 @@ Block Pool → 按需分配 → 无碎片 → 无 defrag → 稳定运行
 
 **结论**: 性能差异 <3%，Paged 模式不牺牲单次性能
 
+### 实测数据 (Qwen3-30B-A3B MoE, Apple M4)
+
+| KPI | Contiguous | Paged | 结论 |
+|-----|-----------|-------|------|
+| **CAPACITY (pp8192)** | 465 t/s | **497 t/s (+6.8%)** | ✅ Paged 更快 |
+| **OPERABILITY (jitter)** | 6.0% | **0.7%** | ✅ Paged 更稳定 8x |
+
 ### Benchmark Scripts
 
 我们提供了正确 KPI 的测试脚本：
@@ -273,17 +280,26 @@ Block Table:
 - [x] Flash attention support
 - [x] Performance validation
 
-### Phase 2: Optimization (Planned)
-- [ ] Memory pre-allocation strategies
-- [ ] Block defragmentation
-- [ ] Multi-sequence scheduling
-- [ ] Cache eviction policies
+### Phase 2A: Prefix Caching (Copy-on-Write) 🎯 NEXT
+- [ ] Block sharing for common prefixes
+- [ ] Copy-on-Write for diverging suffix
+- [ ] Agent/Tool-chain 场景 TTFT 大幅下降
+- [ ] 参考: vLLM 技术报告 "共享前缀直接复用物理块"
+
+### Phase 2B: Continuous Batching + 多序列调度
+- [ ] 并发序列调度器
+- [ ] 碎片/defrag/分配抖动控制
+- [ ] 吞吐量优势体现
+
+### Phase 2C: Chunked Prefill
+- [ ] 长 prompt 切块处理
+- [ ] 减少 prefill 带宽峰值
+- [ ] P99 延迟改善
 
 ### Phase 3: Advanced Features (Future)
-- [ ] vLLM-style continuous batching
-- [ ] Prefix caching
 - [ ] Speculative decoding integration
 - [ ] Distributed inference support
+- [ ] Cache eviction policies
 
 ### Phase 4: Production Readiness (Future)
 - [ ] Comprehensive test suite
