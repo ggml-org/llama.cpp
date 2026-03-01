@@ -25002,20 +25002,18 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     return;
                 }
 
-                // Ring-buffered host-pinned staging for activations and outputs.
-                // Allocated once, sized for max possible activation and output.
-                static thread_local float * act_staging[MERGE_RING_SIZE] = {};
-                static thread_local float * out_staging[MERGE_RING_SIZE] = {};
-                static thread_local size_t  act_staging_sz               = 0;
-                static thread_local size_t  out_staging_sz               = 0;
-                static thread_local int     ring_slot                    = 0;
-
-                // Device-side buffers on secondary GPU: Q8_1 quantized activation and output.
-                // Shared across calls (one per MERGE_RING_SIZE slot), reallocated on resize.
-                static thread_local void *  dev_q8_1[MERGE_RING_SIZE]   = {};
-                static thread_local float * dev_out[MERGE_RING_SIZE]    = {};
-                static thread_local size_t  dev_q8_1_sz                 = 0;
-                static thread_local size_t  dev_out_sz                  = 0;
+                // Ring-buffered staging: host-pinned for activations/outputs,
+                // device-side for Q8_1 quantized activations and GEMM output.
+                // Per-slot sizes tracked separately to handle K/N changes correctly.
+                static thread_local float * act_staging[MERGE_RING_SIZE]    = {};
+                static thread_local float * out_staging[MERGE_RING_SIZE]    = {};
+                static thread_local size_t  act_staging_sz[MERGE_RING_SIZE] = {};
+                static thread_local size_t  out_staging_sz[MERGE_RING_SIZE] = {};
+                static thread_local void *  dev_q8_1[MERGE_RING_SIZE]       = {};
+                static thread_local float * dev_out[MERGE_RING_SIZE]        = {};
+                static thread_local size_t  dev_q8_1_sz[MERGE_RING_SIZE]    = {};
+                static thread_local size_t  dev_out_sz[MERGE_RING_SIZE]     = {};
+                static thread_local int     ring_slot                       = 0;
 
                 const size_t needed_act = static_cast<size_t>(K) * sizeof(float);
                 const size_t needed_out = static_cast<size_t>(N) * sizeof(float);
@@ -25024,18 +25022,20 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 const int slot = ring_slot % MERGE_RING_SIZE;
                 ring_slot++;
 
+                sycl::context pri_ctx = stream->get_context();
                 sycl::context sec_ctx = g_gpu1_queue->get_context();
 
-                // (Re)allocate host-pinned staging buffers for this slot if needed
-                if (!act_staging[slot] || needed_act > act_staging_sz) {
-                    if (act_staging[slot]) { sycl::free(act_staging[slot], stream->get_context()); }
-                    act_staging[slot] = sycl::malloc_host<float>(K, stream->get_context());
-                    act_staging_sz    = needed_act;
+                // (Re)allocate host-pinned staging buffers for this slot if needed.
+                // Each slot tracks its own size to correctly handle K/N changes.
+                if (!act_staging[slot] || needed_act > act_staging_sz[slot]) {
+                    if (act_staging[slot]) { sycl::free(act_staging[slot], pri_ctx); }
+                    act_staging[slot]    = sycl::malloc_host<float>(K, pri_ctx);
+                    act_staging_sz[slot] = needed_act;
                 }
-                if (!out_staging[slot] || needed_out > out_staging_sz) {
-                    if (out_staging[slot]) { sycl::free(out_staging[slot], stream->get_context()); }
-                    out_staging[slot] = sycl::malloc_host<float>(N, stream->get_context());
-                    out_staging_sz    = needed_out;
+                if (!out_staging[slot] || needed_out > out_staging_sz[slot]) {
+                    if (out_staging[slot]) { sycl::free(out_staging[slot], pri_ctx); }
+                    out_staging[slot]    = sycl::malloc_host<float>(N, pri_ctx);
+                    out_staging_sz[slot] = needed_out;
                 }
 
                 if (!act_staging[slot] || !out_staging[slot]) {
@@ -25047,16 +25047,16 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     return;
                 }
 
-                // (Re)allocate device-side buffers on secondary GPU for this slot
-                if (!dev_q8_1[slot] || needed_q81 > dev_q8_1_sz) {
+                // (Re)allocate device-side buffers on secondary GPU for this slot.
+                if (!dev_q8_1[slot] || needed_q81 > dev_q8_1_sz[slot]) {
                     if (dev_q8_1[slot]) { sycl::free(dev_q8_1[slot], sec_ctx); }
-                    dev_q8_1[slot] = sycl::malloc_device(needed_q81, *g_gpu1_queue);
-                    dev_q8_1_sz    = needed_q81;
+                    dev_q8_1[slot]    = sycl::malloc_device(needed_q81, *g_gpu1_queue);
+                    dev_q8_1_sz[slot] = needed_q81;
                 }
-                if (!dev_out[slot] || needed_out > dev_out_sz) {
+                if (!dev_out[slot] || needed_out > dev_out_sz[slot]) {
                     if (dev_out[slot]) { sycl::free(dev_out[slot], sec_ctx); }
-                    dev_out[slot] = sycl::malloc_device<float>(N, *g_gpu1_queue);
-                    dev_out_sz    = needed_out;
+                    dev_out[slot]    = sycl::malloc_device<float>(N, *g_gpu1_queue);
+                    dev_out_sz[slot] = needed_out;
                 }
 
                 if (!dev_q8_1[slot] || !dev_out[slot]) {
