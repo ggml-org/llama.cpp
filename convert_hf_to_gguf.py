@@ -682,6 +682,14 @@ class ModelBase:
     def prepare_tensors(self):
         # detect NVFP4 quantization (ModelOpt format)
         quant_config = self.hparams.get("quantization_config")
+
+        if not quant_config:
+            try:
+                with open(self.dir_model / "hf_quant_config.json", "r") as f:
+                    quant_config = json.load(f).get("quantization")
+            except (FileNotFoundError, json.JSONDecodeError):
+                pass
+
         self._is_nvfp4 = isinstance(quant_config, dict) and quant_config.get("quant_algo") == "NVFP4"
 
         self.dequant_model()
