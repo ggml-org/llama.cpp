@@ -332,6 +332,20 @@ bool ExpertPrefetcher::has_capacity() const {
 // ExpertPredictor: pre-attention expert prediction
 // ============================================================================
 
+ExpertPredictor::~ExpertPredictor() {
+    // Free pre-allocated device scores buffer.
+    // Skip during static destruction (SYCL context may be invalid).
+    if (scores_dev_ && scores_queue_ && !ggml_sycl_is_shutting_down()) {
+        try {
+            sycl::free(scores_dev_, *scores_queue_);
+        } catch (...) {
+            // SYCL runtime may be partially torn down
+        }
+    }
+    scores_dev_   = nullptr;
+    scores_dev_n_ = 0;
+}
+
 void ExpertPredictor::init(int n_layers, int n_experts, int n_experts_used) {
     if (initialized_) {
         return;
@@ -353,9 +367,18 @@ void ExpertPredictor::init(int n_layers, int n_experts, int n_experts_used) {
     accuracy_hits_     = 0;
     accuracy_total_    = 0;
 
+    // Read prediction depth from environment
+    const char * depth_env = std::getenv("GGML_SYCL_EXPERT_PREDICT_DEPTH");
+    if (depth_env) {
+        int d = std::atoi(depth_env);
+        if (d >= 1 && d <= 8) {
+            predict_depth_ = d;
+        }
+    }
+
     initialized_ = true;
-    GGML_LOG_INFO("[SYCL] Expert predictor initialized (layers=%d, experts=%d, top_k=%d)\n",
-                  n_layers, n_experts, n_experts_used);
+    GGML_LOG_INFO("[SYCL] Expert predictor initialized (layers=%d, experts=%d, top_k=%d, depth=%d)\n",
+                  n_layers, n_experts, n_experts_used, predict_depth_);
 }
 
 // ============================================================================
@@ -572,12 +595,22 @@ std::vector<int> ExpertPredictor::predict_pregate(int           next_layer_idx,
     // Allocate host buffer for scores (tiny: n_experts floats, e.g. 512 bytes for 128 experts)
     std::vector<float> scores_host(M);
 
-    // Allocate a small device buffer for output scores
-    float * scores_dev = sycl::malloc_device<float>(M, compute_q);
-    if (!scores_dev) {
-        GGML_LOG_WARN("[EXPERT-PREDICT] Failed to allocate device scores buffer, falling back to heuristic\n");
-        return predict(next_layer_idx);
+    // Reuse pre-allocated device buffer for output scores, or allocate on first use.
+    // This avoids sycl::malloc_device/free per call (3 calls with 3-layer lookahead).
+    if (!scores_dev_ || scores_dev_n_ < M) {
+        if (scores_dev_ && scores_queue_) {
+            sycl::free(scores_dev_, *scores_queue_);
+        }
+        scores_dev_   = sycl::malloc_device<float>(M, compute_q);
+        scores_dev_n_ = M;
+        scores_queue_ = &compute_q;
+        if (!scores_dev_) {
+            scores_dev_n_ = 0;
+            GGML_LOG_WARN("[EXPERT-PREDICT] Failed to allocate device scores buffer, falling back to heuristic\n");
+            return predict(next_layer_idx);
+        }
     }
+    float * scores_dev = scores_dev_;
 
     // Inline SYCL GEMV kernel:
     //   scores[j] = sum_k(gate_weights[j * K + k] * hidden_state[k])
@@ -631,11 +664,8 @@ std::vector<int> ExpertPredictor::predict_pregate(int           next_layer_idx,
 
     } catch (const sycl::exception & e) {
         GGML_LOG_WARN("[EXPERT-PREDICT] Pre-gate GEMV failed: %s, falling back to heuristic\n", e.what());
-        sycl::free(scores_dev, compute_q);
         return predict(next_layer_idx);
     }
-
-    sycl::free(scores_dev, compute_q);
 
     // Top-K selection on host
     auto result = argsort_top_k(scores_host, n_experts_used_);
@@ -647,6 +677,32 @@ std::vector<int> ExpertPredictor::predict_pregate(int           next_layer_idx,
     GGML_SYCL_DEBUG("]\n");
 
     return result;
+}
+
+// ============================================================================
+// ExpertPredictor: multi-layer lookahead prediction
+// ============================================================================
+
+std::vector<std::pair<int, std::vector<int>>> ExpertPredictor::predict_multi_layer(
+    int current_seq_layer,
+    const void * hidden_state,
+    sycl::queue & compute_q)
+{
+    std::vector<std::pair<int, std::vector<int>>> results;
+
+    for (int depth = 1; depth <= predict_depth_; depth++) {
+        int target = current_seq_layer + depth;
+        if (target >= n_layers_) {
+            break;
+        }
+
+        auto predicted = predict_pregate(target, nullptr, hidden_state, compute_q);
+        if (!predicted.empty()) {
+            results.push_back({ target, std::move(predicted) });
+        }
+    }
+
+    return results;
 }
 
 void ExpertPredictor::register_gate_weights(int layer_idx, const void * gate_ptr, int n_embd) {

@@ -170,6 +170,7 @@ using expert_prefetcher = ExpertPrefetcher;
 class ExpertPredictor {
   public:
     ExpertPredictor() = default;
+    ~ExpertPredictor();
 
     // Non-copyable, non-movable
     ExpertPredictor(const ExpertPredictor &)             = delete;
@@ -215,6 +216,17 @@ class ExpertPredictor {
     // Check if pre-gated routing is available for a given layer.
     bool has_gate_weights(int layer_idx) const;
 
+    // Multi-layer lookahead prediction: predict experts for layers L+1..L+depth.
+    // Returns a vector of (target_layer_idx, predicted_experts) pairs.
+    // Uses predict_pregate() for each target layer with correct gate weights.
+    std::vector<std::pair<int, std::vector<int>>> predict_multi_layer(
+        int current_seq_layer,
+        const void * hidden_state,
+        sycl::queue & compute_q);
+
+    // Return the configured prediction depth (layers ahead to predict).
+    int predict_depth() const { return predict_depth_; }
+
     // Statistics (rolling window of last ACCURACY_WINDOW predictions)
     float hit_rate() const;       // Rolling prediction accuracy (0.0 - 1.0)
     int   window_size() const;    // Current window sample count (up to ACCURACY_WINDOW)
@@ -226,6 +238,7 @@ class ExpertPredictor {
     int  n_layers_      = 0;
     int  n_experts_     = 0;
     int  n_experts_used_ = 0;
+    int  predict_depth_  = 3;  // Number of layers to predict ahead (default: 3)
 
     // Per-layer last-token expert selections.
     // last_experts_[layer] = vector of expert indices used by previous token.
@@ -242,6 +255,12 @@ class ExpertPredictor {
     // Empty if model has no MoE or gate weights not yet registered.
     std::vector<const void *> gate_weight_ptrs_;
     int                       n_embd_ = 0;  // Embedding dimension for GEMV kernel
+
+    // Pre-allocated device buffer for predict_pregate() GEMV output scores.
+    // Avoids sycl::malloc_device/free per call (3 calls per MoE dispatch with 3-layer lookahead).
+    float *      scores_dev_    = nullptr;
+    int          scores_dev_n_  = 0;       // Number of floats allocated
+    sycl::queue * scores_queue_ = nullptr;  // Queue used for allocation (for deallocation)
 
     // Rolling accuracy stats (last 100 predictions).
     static constexpr int ACCURACY_WINDOW = 100;
