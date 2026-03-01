@@ -11,7 +11,9 @@
 #include "unified-cache.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
+#include <limits>
 
 namespace ggml_sycl {
 
@@ -110,8 +112,19 @@ void ExpertCache::init(int device_id, size_t vram_budget_bytes, sycl::queue & q)
     warmup_active_ = (warmup_target_ > 0);
     warmup_done_   = !warmup_active_;
 
-    GGML_LOG_INFO("[EXPERT-CACHE] Initialized: pool=%.1f MB device=%d warmup=%d tokens\n",
-                  pool_size_ / (1024.0 * 1024.0), device_id_, warmup_target_);
+    // Read eviction alpha (LFU vs recency blend)
+    const char * alpha_env = std::getenv("GGML_SYCL_EXPERT_EVICT_ALPHA");
+    if (alpha_env) {
+        float a = static_cast<float>(std::atof(alpha_env));
+        if (a >= 0.0f && a <= 1.0f) {
+            evict_alpha_ = a;
+        }
+    }
+
+    GGML_LOG_INFO("[EXPERT-CACHE] Initialized: pool=%.1f MB device=%d warmup=%d tokens "
+                  "evict_alpha=%.2f (%.0f%% freq, %.0f%% recency)\n",
+                  pool_size_ / (1024.0 * 1024.0), device_id_, warmup_target_,
+                  evict_alpha_, evict_alpha_ * 100.0f, (1.0f - evict_alpha_) * 100.0f);
 }
 
 void ExpertCache::shutdown() {
@@ -150,6 +163,7 @@ void ExpertCache::shutdown() {
     hits_           = 0;
     misses_         = 0;
     global_token_   = 0;
+    evict_alpha_    = 0.7f;
     current_layer_  = -1;
     co_activation_.clear();
     warmup_freq_.clear();
@@ -668,25 +682,35 @@ void ExpertCache::finish_warmup_locked() {
 // ---------------------------------------------------------------------------
 
 int ExpertCache::find_eviction_candidate() const {
-    // Least-Stale policy: evict the expert with the oldest last_access.
+    // Hybrid LFU+Staleness eviction policy.
+    // Combined score = alpha * log2(1 + frequency) + (1 - alpha) * recency
+    // where recency = 1.0 / (1 + staleness).
+    // Evict the slot with the LOWEST combined score.
     // Tiebreaker: prefer evicting experts from layers furthest from current compute.
-    int      best_slot      = -1;
-    uint64_t best_staleness = 0;
+    int   best_slot  = -1;
+    float best_score = std::numeric_limits<float>::max();
 
     for (int i = 0; i < n_slots_; i++) {
         if (slots_[i].layer_idx < 0) {
             continue;  // Empty slot
         }
-        const uint64_t staleness = global_token_ - slots_[i].last_access;
-        if (staleness > best_staleness) {
-            best_staleness = staleness;
-            best_slot      = i;
-        } else if (staleness == best_staleness && best_slot >= 0) {
+
+        const uint64_t staleness        = global_token_ - slots_[i].last_access;
+        const float    recency_score    = 1.0f / (1.0f + static_cast<float>(staleness));
+        const float    frequency_score  = std::log2(1.0f + static_cast<float>(slots_[i].frequency));
+        const float    combined         = evict_alpha_ * frequency_score
+                                        + (1.0f - evict_alpha_) * recency_score;
+
+        if (combined < best_score) {
+            best_score = combined;
+            best_slot  = i;
+        } else if (combined == best_score && best_slot >= 0) {
             // Tiebreaker: prefer slot from a layer further from current compute layer
             const int dist_new  = std::abs(slots_[i].layer_idx - current_layer_);
             const int dist_best = std::abs(slots_[best_slot].layer_idx - current_layer_);
             if (dist_new > dist_best) {
-                best_slot = i;
+                best_slot  = i;
+                best_score = combined;
             }
         }
     }

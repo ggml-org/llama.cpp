@@ -216,8 +216,9 @@ private:
         return (sz + ALIGNMENT - 1) & ~(ALIGNMENT - 1);
     }
 
-    // Find the slot to evict using Least-Stale policy (SpecMD).
-    // Evicts the expert with the oldest last_access (most stale).
+    // Find the slot to evict using hybrid LFU+staleness policy.
+    // Combined score = alpha * log2(1 + frequency) + (1 - alpha) * recency.
+    // Evicts the slot with the LOWEST combined score.
     // Tiebreaker: prefer evicting experts from layers furthest from current compute.
     // Returns index into slots_, or -1 if all empty.
     int find_eviction_candidate() const;
@@ -290,6 +291,9 @@ private:
 
     // Global token counter for scoring
     uint64_t global_token_ = 0;
+
+    // Hybrid LFU+staleness eviction alpha (0.0 = pure recency, 1.0 = pure LFU)
+    float evict_alpha_ = 0.7f;
 
     int         device_id_ = -1;
     sycl::queue * queue_   = nullptr;  // Non-owning ptr to compute queue
