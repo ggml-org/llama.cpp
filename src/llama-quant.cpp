@@ -234,6 +234,83 @@ static void zeros(std::ofstream & file, size_t n) {
     }
 }
 
+// double-buffered writer (overlap computation and I/O)
+struct async_writer {
+    std::vector<uint8_t> bufs[2];
+    int buf_idx = 0;
+    size_t pending_pad = 0;
+
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool busy = false;
+    bool shutting_down = false;
+
+    std::ofstream * fout = nullptr;
+    std::thread worker;
+
+    void start(std::ofstream * f) {
+        fout = f;
+        worker = std::thread([this] { run(); });
+    }
+
+    void run() {
+        std::unique_lock<std::mutex> lock(mutex);
+        while (true) {
+            cv.wait(lock, [this] { return busy || shutting_down; });
+            if (shutting_down && !busy) break;
+
+            auto & buf = bufs[buf_idx ^ 1];
+            size_t pad = pending_pad;
+            lock.unlock();
+
+            fout->write((const char *)buf.data(), buf.size());
+            zeros(*fout, pad);
+
+            lock.lock();
+            busy = false;
+            cv.notify_one();
+        }
+    }
+
+    void flush() {
+        std::unique_lock<std::mutex> lock(mutex);
+        cv.wait(lock, [this] { return !busy; });
+    }
+
+    void write(const void * data, size_t size, size_t pad) {
+        flush();
+
+        bufs[buf_idx].resize(size);
+        std::memcpy(bufs[buf_idx].data(), data, size);
+
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            pending_pad = pad;
+            busy = true;
+        }
+        buf_idx ^= 1;
+        cv.notify_one();
+    }
+
+    void stop() {
+        if (!worker.joinable()) return;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            shutting_down = true;
+        }
+        cv.notify_one();
+        worker.join();
+    }
+
+    ~async_writer() {
+        stop();
+    }
+
+    async_writer() = default;
+    async_writer(const async_writer &) = delete;
+    async_writer & operator=(const async_writer &) = delete;
+};
+
 static std::string remap_layer(const std::string & orig_name, const std::vector<int> & prune, std::map<int, std::string> & mapped, int & next_id) {
     if (prune.empty()) {
         return orig_name;
@@ -372,7 +449,7 @@ static ggml_type tensor_type_fallback(quantize_state_impl * qs, const ggml_tenso
     const int64_t qk_k = ggml_blck_size(target_type);
 
     if (ncols % qk_k != 0) { // this tensor's shape is incompatible with this quant
-        LLAMA_LOG_WARN("warning: %-36s: ncols %6" PRId64 " not divisible by %3" PRId64 " (required for type %7s) ",
+        LLAMA_LOG_WARN("warning: %-36s - ncols %6" PRId64 " not divisible by %3" PRId64 " (required for type %7s) ",
                         t->name, ncols, qk_k, ggml_type_name(target_type));
         ++qs->n_fallback;
 
@@ -1522,6 +1599,9 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             }
     }
 
+    // overlap tensor data IO and computation
+    async_writer writer;
+
     // set split info if needed
 
     if (n_split > 1) {
@@ -1532,8 +1612,9 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         }
     }
 
-    int cur_split = -1;
     std::ofstream fout;
+
+    int cur_split = -1;
     auto close_ofstream = [&]() {
         // Write metadata and close file handler
         if (fout.is_open()) {
@@ -1561,60 +1642,10 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         ::zeros(fout, meta_size);
     };
 
-    //
-    // double-buffered writer (overlap computation and I/O)
-    //
-
-    std::vector<uint8_t> write_bufs[2];
-    int wb_idx = 0;
-    size_t pending_pad = 0;
-
-    std::mutex  io_mutex;
-    std::condition_variable io_cv;
-    bool io_busy = false;
-
-    std::thread io_thread([&]() {
-        std::unique_lock<std::mutex> lock(io_mutex);
-        while (true) {
-            io_cv.wait(lock, [&] { return io_busy || !fout.is_open(); });
-            if (!fout.is_open() && !io_busy) break;
-
-            auto & buf = write_bufs[wb_idx ^ 1]; // the other buffer
-            size_t pad = pending_pad;
-            lock.unlock();
-
-            fout.write((const char *)buf.data(), buf.size());
-            zeros(fout, pad);
-
-            lock.lock();
-            io_busy = false;
-            io_cv.notify_one();
-        }
-    });
-
-    auto flush_pending_write = [&]() {
-        std::unique_lock<std::mutex> lock(io_mutex);
-        io_cv.wait(lock, [&] { return !io_busy; });
-    };
-
-    auto async_write = [&](const void * data, size_t size, size_t pad) {
-        flush_pending_write(); // wait for previous write
-
-        write_bufs[wb_idx].resize(size);
-        std::memcpy(write_bufs[wb_idx].data(), data, size);
-
-        {
-            std::lock_guard<std::mutex> lock(io_mutex);
-            pending_pad = pad;
-            io_busy = true;
-        }
-        wb_idx ^= 1;
-        io_cv.notify_one();
-    };
-
     // no output file for --dry-run
     if (!params->dry_run) {
         new_ofstream(0);
+        writer.start(&fout);
     }
 
     size_t total_size_org = 0;
@@ -1632,9 +1663,10 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         const char * name = tensor->name;
 
         if (!params->dry_run && (weight.idx != cur_split && params->keep_split)) {
-            flush_pending_write();
+            writer.flush();
             close_ofstream();
             new_ofstream(weight.idx);
+            writer.fout = &fout; // point at new stream
         }
 
         const size_t tensor_size = ggml_nbytes(tensor);
@@ -1728,22 +1760,15 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         gguf_set_tensor_data(ctx_outs[cur_split].get(), name, new_data);
 
         // write tensor data + padding
-        async_write(new_data, new_size, GGML_PAD(new_size, align) - new_size);
+        writer.write(new_data, new_size, GGML_PAD(new_size, align) - new_size);
     }
 
+    // after the loop:
     if (!params->dry_run) {
-        flush_pending_write();
+        writer.flush();
+        writer.stop();
         close_ofstream();
-
-        // shut down the I/O thread
-        {
-            std::lock_guard<std::mutex> lock(io_mutex);
-            // fout is already closed; thread will see !fout.is_open()
-        }
     }
-
-    io_cv.notify_one();
-    io_thread.join();
 
     LLAMA_LOG_INFO("%s: model size  = %8.2f MiB (%.2f BPW)\n", __func__, total_size_org/1024.0/1024.0, total_size_org*8.0/ml.n_elements);
     LLAMA_LOG_INFO("%s: quant size  = %8.2f MiB (%.2f BPW)\n", __func__, total_size_new/1024.0/1024.0, total_size_new*8.0/ml.n_elements);
