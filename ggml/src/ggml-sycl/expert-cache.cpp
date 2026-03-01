@@ -828,10 +828,9 @@ PinnedBufferPool::BufferPair PinnedBufferPool::acquire(size_t n_experts) {
 }
 
 void PinnedBufferPool::release(BufferPair) {
-    // Zero output buffer for next use (CPU kernels write partial results).
-    if (out_pool_) {
-        std::memset(out_pool_, 0, max_experts_ * out_stride_ * sizeof(float));
-    }
+    // No-op: CPU vec_dot kernels write every output element that the scatter
+    // loop reads back (n_cpu * N floats), so zeroing is unnecessary.
+    // Stale data in unused pool slots is never accessed.
 }
 
 }  // namespace ggml_sycl

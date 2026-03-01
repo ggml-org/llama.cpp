@@ -2914,6 +2914,33 @@ void ggml_sycl_data_ptr_cache_new_graph() {
     g_data_ptr_cache.clear();
 }
 
+// ---------------------------------------------------------------------------
+// MoE expert IDs D2H cache
+// ---------------------------------------------------------------------------
+// During CPU-TG MUL_MAT_ID dispatch, each call copies expert IDs from device
+// to host with stream->memcpy + stream->wait().  For MoE models this happens
+// ~108 times per token (once per MUL_MAT_ID node), and each wait() drains
+// the entire GPU command queue — accounting for ~30% of CPU-TG time.
+//
+// Solution: cache the D2H result per unique device pointer within a graph.
+// Multiple MUL_MAT_ID nodes within a single MoE layer share the same ids
+// tensor pointer, so only the first call per layer does the host copy.
+// Subsequent calls read from cache with zero GPU sync.
+// Cache is invalidated at graph boundaries via new_graph().
+// ---------------------------------------------------------------------------
+
+struct moe_ids_cache_entry {
+    std::vector<int32_t> host_ids;
+    size_t               n_elements = 0;  // number of int32 elements
+};
+
+// Keyed by the ggml_tensor pointer (avoids unnecessary device round-trips).
+static thread_local std::unordered_map<const ggml_tensor *, moe_ids_cache_entry> g_moe_ids_d2h_cache;
+
+static void ggml_sycl_moe_ids_cache_new_graph() {
+    g_moe_ids_d2h_cache.clear();
+}
+
 // Cold path for ggml_sycl_get_data_ptr: full resolution chain
 // (tiered cache, get_pointer_type, unified cache, staging).
 // Called only when the fast-path data_device[] cache misses.
@@ -24015,22 +24042,62 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                               src0->name ? src0->name : "?", (int)src0->type);
             }
 
+            // --- Phase-level profiling (enabled by GGML_SYCL_CPU_TG_PROFILE=1) ---
+            static int prof_enabled = -1;
+            if (prof_enabled < 0) {
+                const char * pe = getenv("GGML_SYCL_CPU_TG_PROFILE");
+                prof_enabled = (pe && std::atoi(pe) != 0) ? 1 : 0;
+            }
+            struct prof_accum {
+                double ids_d2h_us   = 0;   // IDs copy + wait
+                double act_d2h_us   = 0;   // Activation D2H + wait
+                double pool_us      = 0;   // Buffer pool acquire
+                double build_us     = 0;   // Task vector build
+                double compute_us   = 0;   // CPU vec_dot (submit + wait)
+                double scatter_us   = 0;   // H2D scatter + wait
+                double release_us   = 0;   // Buffer pool release
+                double total_us     = 0;   // End-to-end per call
+                int    n_calls      = 0;
+                int    n_experts    = 0;   // Total expert dispatches
+                int64_t weight_bytes = 0;  // Total weight bytes read
+                int    n_tokens_reported = 0;
+            };
+            static prof_accum g_prof;
+
+            using hrc = std::chrono::high_resolution_clock;
+            hrc::time_point t0, t1, t2, t3, t4, t5, t6, t7;
+            if (prof_enabled) { t0 = hrc::now(); }
+
             const queue_ptr stream = ctx.stream();
             const int64_t   K      = ne00;
             const int64_t   N      = ne01;
             const int64_t   n_ids_f = ids->ne[0];  // top-K experts selected per token
             const int64_t   n_as    = src0->ne[2];
 
-            // Get host-side expert IDs
-            sycl::event     ids_copy_ev;
-            int64_t         ids_nb0_f = ids->nb[0];
-            int64_t         ids_nb1_f = ids->nb[1];
-            const int32_t * ids_d_f   = ggml_sycl_get_moe_ids_device_ptr(
-                ctx, ids, &ids_copy_ev, &ids_nb0_f, &ids_nb1_f);
+            // Get host-side expert IDs with tensor-pointer caching.
+            // For host-resident ids (common case with mmap'd models),
+            // ggml_sycl_copy_ids_to_host does a simple std::memcpy with
+            // zero GPU interaction.  The cache avoids even that memcpy
+            // on subsequent calls for the same ids tensor within a layer.
+            const size_t ids_n_elem = static_cast<size_t>(ids->ne[1] * n_ids_f);
+            std::vector<int32_t> ids_host(ids_n_elem);
 
-            std::vector<int32_t> ids_host(static_cast<size_t>(ids->ne[1] * n_ids_f));
-            stream->memcpy(ids_host.data(), ids_d_f, ids_host.size() * sizeof(int32_t));
-            stream->wait();
+            auto cache_it = g_moe_ids_d2h_cache.find(ids);
+            if (cache_it != g_moe_ids_d2h_cache.end() &&
+                cache_it->second.n_elements == ids_n_elem) {
+                // Cache hit: copy from cached host buffer (no GPU sync)
+                std::memcpy(ids_host.data(), cache_it->second.host_ids.data(),
+                            ids_n_elem * sizeof(int32_t));
+            } else {
+                // Cache miss: copy ids to host (zero GPU sync for host-resident)
+                auto & entry = g_moe_ids_d2h_cache[ids];
+                ggml_sycl_copy_ids_to_host(ctx, ids, entry.host_ids);
+                entry.n_elements = entry.host_ids.size();
+                std::memcpy(ids_host.data(), entry.host_ids.data(),
+                            ids_n_elem * sizeof(int32_t));
+            }
+
+            if (prof_enabled) { t1 = hrc::now(); }
 
             // Disable graphs for this op (host sync is incompatible)
             ctx.moe_graphs_disabled_once = true;
@@ -24055,6 +24122,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     n_cpu * static_cast<size_t>(N), stream->get_context());
             }
 
+            if (prof_enabled) { t2 = hrc::now(); }
+
             if (!act_pinned || !out_pinned) {
                 GGML_LOG_ERROR("[CPU-TG] Failed to allocate pinned host memory\n");
                 if (!from_pool) {
@@ -24063,10 +24132,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 }
                 // Fall through to GPU dispatch below
             } else {
-                if (!from_pool) {
-                    std::memset(out_pinned, 0,
-                                n_cpu * static_cast<size_t>(N) * sizeof(float));
-                }
+                // No memset needed: CPU vec_dot writes every output element
+                // that the scatter loop reads back (n_cpu * N floats).
 
                 // Single D2H: all experts share same src1 activation (batch=1)
                 const char * src1_dev = static_cast<const char *>(
@@ -24074,6 +24141,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 stream->memcpy(act_pinned, src1_dev,
                                static_cast<size_t>(K) * sizeof(float));
                 stream->wait();
+
+                if (prof_enabled) { t3 = hrc::now(); }
 
                 // Build CPU tasks from mmap host weight pointers
                 std::vector<cpu_expert_task> tasks;
@@ -24092,6 +24161,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     tasks.push_back(t);
                 }
 
+                if (prof_enabled) { t4 = hrc::now(); }
+
                 // Submit to CPU thread pool
                 auto & cpu_pool = g_cpu_expert_pools[ctx.device];
                 std::future<void> fut;
@@ -24106,6 +24177,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 }
                 fut.get();
 
+                if (prof_enabled) { t5 = hrc::now(); }
+
                 // Scatter results: H2D copy each expert's output into dst
                 char * dst_d = static_cast<char *>(ggml_sycl_get_data_ptr(dst, ctx.device));
                 for (size_t ci = 0; ci < n_cpu; ci++) {
@@ -24118,6 +24191,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 }
                 stream->wait();
 
+                if (prof_enabled) { t6 = hrc::now(); }
+
                 // Release pinned host buffers
                 if (from_pool) {
                     buf_pool.release({act_pinned, out_pinned});
@@ -24125,6 +24200,63 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     sycl::free(act_pinned, stream->get_context());
                     sycl::free(out_pinned, stream->get_context());
                 }
+
+                if (prof_enabled) { t7 = hrc::now(); }
+
+                // Accumulate profiling stats and print per-token summary
+                if (prof_enabled) {
+                    auto us = [](hrc::time_point a, hrc::time_point b) {
+                        return std::chrono::duration<double, std::micro>(b - a).count();
+                    };
+                    g_prof.ids_d2h_us   += us(t0, t1);
+                    g_prof.pool_us      += us(t1, t2);
+                    g_prof.act_d2h_us   += us(t2, t3);
+                    g_prof.build_us     += us(t3, t4);
+                    g_prof.compute_us   += us(t4, t5);
+                    g_prof.scatter_us   += us(t5, t6);
+                    g_prof.release_us   += us(t6, t7);
+                    g_prof.total_us     += us(t0, t7);
+                    g_prof.n_calls++;
+                    g_prof.n_experts    += static_cast<int>(n_cpu);
+                    g_prof.weight_bytes += static_cast<int64_t>(n_cpu) * nb02;
+
+                    // Print summary every 108 calls (36 layers × 3 MoE tensors)
+                    // or when n_calls matches the detected MoE layer count.
+                    // Use 108 as default; adapt if different model architecture.
+                    const int report_interval = 108;
+                    if (g_prof.n_calls >= report_interval) {
+                        const int nc = g_prof.n_calls;
+                        g_prof.n_tokens_reported++;
+                        GGML_LOG_INFO(
+                            "[CPU-TG-PROF] token #%d | %d calls, %d experts, %.1f MB weights\n"
+                            "  ids_d2h: %7.0f us (%4.1f%%)  pool:    %7.0f us (%4.1f%%)\n"
+                            "  act_d2h: %7.0f us (%4.1f%%)  build:   %7.0f us (%4.1f%%)\n"
+                            "  compute: %7.0f us (%4.1f%%)  scatter: %7.0f us (%4.1f%%)\n"
+                            "  release: %7.0f us (%4.1f%%)  TOTAL:   %7.0f us (%.1f ms)\n"
+                            "  avg/call: %.0f us  avg/expert: %.0f us  "
+                            "weight BW: %.1f GB/s\n",
+                            g_prof.n_tokens_reported, nc, g_prof.n_experts,
+                            g_prof.weight_bytes / (1024.0 * 1024.0),
+                            g_prof.ids_d2h_us,   100.0 * g_prof.ids_d2h_us / g_prof.total_us,
+                            g_prof.pool_us,      100.0 * g_prof.pool_us / g_prof.total_us,
+                            g_prof.act_d2h_us,   100.0 * g_prof.act_d2h_us / g_prof.total_us,
+                            g_prof.build_us,     100.0 * g_prof.build_us / g_prof.total_us,
+                            g_prof.compute_us,   100.0 * g_prof.compute_us / g_prof.total_us,
+                            g_prof.scatter_us,   100.0 * g_prof.scatter_us / g_prof.total_us,
+                            g_prof.release_us,   100.0 * g_prof.release_us / g_prof.total_us,
+                            g_prof.total_us,     g_prof.total_us / 1000.0,
+                            g_prof.total_us / nc,
+                            g_prof.total_us / g_prof.n_experts,
+                            g_prof.weight_bytes / (g_prof.compute_us / 1e6) / (1024.0 * 1024.0 * 1024.0));
+                        // Reset accumulators for next token
+                        g_prof.ids_d2h_us = g_prof.act_d2h_us = g_prof.pool_us = 0;
+                        g_prof.build_us = g_prof.compute_us = g_prof.scatter_us = 0;
+                        g_prof.release_us = g_prof.total_us = 0;
+                        g_prof.n_calls = g_prof.n_experts = 0;
+                        g_prof.weight_bytes = 0;
+                    }
+                }
+
                 return;
             }
         }
@@ -27560,6 +27692,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     // Invalidate per-graph caches.
     ggml_sycl_data_ptr_cache_new_graph();
     ggml_sycl_cpu_quant_cache_new_graph();
+    ggml_sycl_moe_ids_cache_new_graph();
     static std::unordered_map<int, int> g_sycl_rms_seen_per_layer;
     if (g_sycl_tg_dump_rms) {
         g_sycl_rms_seen_per_layer.clear();

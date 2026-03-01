@@ -345,7 +345,7 @@ class PinnedBufferPool {
 
     BufferPair acquire(size_t n_experts);
 
-    // Release buffers back to pool. Zeros the output buffer for next use.
+    // Release buffers back to pool (no zeroing -- CPU kernels write all read elements).
     void release(BufferPair);
 
     bool is_initialized() const { return act_pool_ != nullptr && out_pool_ != nullptr; }
