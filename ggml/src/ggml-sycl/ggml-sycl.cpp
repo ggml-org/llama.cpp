@@ -2965,6 +2965,11 @@ struct pending_cpu_scatter {
     };
     std::vector<scatter_entry> entries;
 
+    // CPU task array: must outlive the async CPU compute future.
+    // submit_batch / std::async capture a raw pointer to tasks.data(),
+    // so the vector must remain alive until future.get() completes.
+    std::vector<cpu_expert_task> tasks;
+
     int    device_id;         // Device index for pool release
     bool   from_pool;         // Whether buffers came from pool
     bool   active;            // Whether there's a pending scatter
@@ -2988,13 +2993,17 @@ static void flush_pending_cpu_scatter() {
         }
 
         // Scatter results H2D
-        const float * src = g_pending_scatter.out_pinned;
-        for (auto & e : g_pending_scatter.entries) {
-            g_pending_scatter.stream->memcpy(
-                e.dst_device, src, static_cast<size_t>(e.N) * sizeof(float));
-            src += e.N;
+        if (g_pending_scatter.stream && g_pending_scatter.out_pinned) {
+            const float * src = g_pending_scatter.out_pinned;
+            for (auto & e : g_pending_scatter.entries) {
+                if (e.dst_device) {
+                    g_pending_scatter.stream->memcpy(
+                        e.dst_device, src, static_cast<size_t>(e.N) * sizeof(float));
+                }
+                src += e.N;
+            }
+            g_pending_scatter.stream->wait();
         }
-        g_pending_scatter.stream->wait();
     } catch (const std::exception & ex) {
         GGML_LOG_ERROR("[CPU-TG] Deferred scatter failed: %s\n", ex.what());
     }
@@ -3013,7 +3022,12 @@ static void flush_pending_cpu_scatter() {
     }
 
     g_pending_scatter.entries.clear();
-    g_pending_scatter.active = false;
+    g_pending_scatter.tasks.clear();
+    g_pending_scatter.out_pinned = nullptr;
+    g_pending_scatter.act_pinned = nullptr;
+    g_pending_scatter.stream     = nullptr;
+    g_pending_scatter.sycl_ctx   = sycl::context();  // release ref
+    g_pending_scatter.active     = false;
 }
 
 // Public entry point for graph boundary flush
@@ -24228,9 +24242,11 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
                 if (prof_enabled) { t3 = hrc::now(); }
 
-                // Build CPU tasks from mmap host weight pointers
-                std::vector<cpu_expert_task> tasks;
-                tasks.reserve(n_cpu);
+                // Build CPU tasks from mmap host weight pointers.
+                // Tasks are stored in g_pending_scatter to keep the array
+                // alive until flush — submit_batch captures a raw pointer.
+                g_pending_scatter.tasks.clear();
+                g_pending_scatter.tasks.reserve(n_cpu);
                 for (size_t ci = 0; ci < n_cpu; ci++) {
                     const int32_t expert_id = ids_host[ci];
                     GGML_ASSERT(expert_id >= 0 && expert_id < n_as);
@@ -24242,19 +24258,19 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     t.type        = src0->type;
                     t.K           = static_cast<int>(K);
                     t.N           = static_cast<int>(N);
-                    tasks.push_back(t);
+                    g_pending_scatter.tasks.push_back(t);
                 }
 
                 if (prof_enabled) { t4 = hrc::now(); }
 
                 // Submit to CPU thread pool
                 auto & cpu_pool = g_cpu_expert_pools[ctx.device];
+                auto * tp = g_pending_scatter.tasks.data();
+                int    nt = static_cast<int>(g_pending_scatter.tasks.size());
                 std::future<void> fut;
                 if (cpu_pool.is_active()) {
-                    fut = cpu_pool.submit_batch(tasks.data(), static_cast<int>(tasks.size()));
+                    fut = cpu_pool.submit_batch(tp, nt);
                 } else {
-                    auto * tp = tasks.data();
-                    int    nt = static_cast<int>(tasks.size());
                     fut = std::async(std::launch::async, [tp, nt]() {
                         ggml_sycl_cpu_expert_mul_mat_batched(tp, nt);
                     });
@@ -24892,10 +24908,12 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 }
                 stream->wait();
 
-                // Build CPU tasks from mmap host weight pointers
+                // Build CPU tasks from mmap host weight pointers.
+                // Tasks are stored in g_pending_scatter to keep the array
+                // alive until flush — submit_batch captures a raw pointer.
                 GGML_ASSERT(use_expert_cache && "CPU dispatch requires host-accessible weights");
-                std::vector<cpu_expert_task> tasks;
-                tasks.reserve(n_cpu);
+                g_pending_scatter.tasks.clear();
+                g_pending_scatter.tasks.reserve(n_cpu);
                 for (size_t ci = 0; ci < n_cpu; ci++) {
                     const auto & entry = entries[ci];
                     const void * host_weight =
@@ -24914,12 +24932,12 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     t.type        = src0->type;
                     t.K           = static_cast<int>(K);
                     t.N           = static_cast<int>(N);
-                    tasks.push_back(t);
+                    g_pending_scatter.tasks.push_back(t);
                 }
 
                 // Submit to CPU thread pool
-                auto * tasks_ptr = tasks.data();
-                int    n_tasks   = static_cast<int>(tasks.size());
+                auto * tasks_ptr = g_pending_scatter.tasks.data();
+                int    n_tasks   = static_cast<int>(g_pending_scatter.tasks.size());
                 auto & cpu_pool  = g_cpu_expert_pools[ctx.device];
 
                 std::future<void> fut;
@@ -26513,6 +26531,11 @@ static const char * ggml_backend_sycl_get_name(ggml_backend_t backend) {
 
 static void ggml_backend_sycl_free(ggml_backend_t backend) {
     ggml_backend_sycl_context * sycl_ctx = (ggml_backend_sycl_context *) backend->context;
+    // Flush any deferred CPU scatter before tearing down SYCL resources.
+    // Without this, the thread_local g_pending_scatter may hold a
+    // sycl::context reference that outlives the SYCL runtime, causing
+    // a crash during static/thread_local destruction.
+    ggml_sycl_cpu_tg_flush_pending();
     // Clean up tensor parallelism resources (including CCL) BEFORE destroying backend
     // This ensures CCL objects are destroyed before MPI finalization starts
     // The function is idempotent - safe to call multiple times
