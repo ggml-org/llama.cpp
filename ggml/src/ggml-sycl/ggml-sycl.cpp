@@ -23977,6 +23977,159 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
         required = ggml_sycl_adjust_layout_for_tensor(src0, required, ctx.device);
         return required == override_layout;
     };
+    // ---------------------------------------------------------------
+    // CPU-primary expert TG fast-path: route ALL experts to CPU for
+    // batch=1 decode.  Must be checked BEFORE GPU dispatch paths
+    // (XMX sorted, fused ESIMD) which would otherwise intercept the op.
+    // Rationale: CPU DRAM BW (70 GB/s) >> PCIe BW (13.4 GB/s) for batch=1.
+    if (ne12 == 1) {
+        static std::atomic<int> cpu_expert_tg_mode_fast{ -1 };
+        int cpu_tg_val_fast = cpu_expert_tg_mode_fast.load(std::memory_order_acquire);
+        if (cpu_tg_val_fast < 0) {
+            const char * env = getenv("GGML_SYCL_CPU_EXPERT_TG");
+            int new_val = env ? std::atoi(env) : 0;  // Default: OFF (opt-in for now)
+            cpu_expert_tg_mode_fast.compare_exchange_strong(cpu_tg_val_fast, new_val,
+                std::memory_order_release, std::memory_order_acquire);
+            cpu_tg_val_fast = cpu_expert_tg_mode_fast.load(std::memory_order_acquire);
+        }
+
+        // Check if weights are host-accessible. The unified cache wraps mmap'd
+        // weights in a SYCL buffer type, so ggml_backend_buffer_is_host() returns
+        // false. Check both: (a) buffer type and (b) actual USM pointer type.
+        bool host_weights_fast = src0->buffer && ggml_backend_buffer_is_host(src0->buffer);
+        if (!host_weights_fast && src0->data) {
+            // Check if the raw data pointer is host or shared USM
+            const queue_ptr qf = ctx.stream();
+            sycl::usm::alloc ptr_type_fast = sycl::get_pointer_type(src0->data, qf->get_context());
+            host_weights_fast = (ptr_type_fast == sycl::usm::alloc::host ||
+                                 ptr_type_fast == sycl::usm::alloc::shared ||
+                                 ptr_type_fast == sycl::usm::alloc::unknown);  // mmap = unknown
+        }
+        const auto * cpu_traits_fast = ggml_get_type_traits_cpu(src0->type);
+        const bool   cpu_type_ok_fast = cpu_traits_fast && cpu_traits_fast->vec_dot;
+
+        if (cpu_tg_val_fast == 1 && host_weights_fast && cpu_type_ok_fast) {
+            static std::atomic<int> cpu_tg_log{0};
+            if (cpu_tg_log.fetch_add(1, std::memory_order_relaxed) < 3) {
+                GGML_LOG_INFO("[CPU-TG] Routing %s (type=%d, ne12=1) to CPU-primary path\n",
+                              src0->name ? src0->name : "?", (int)src0->type);
+            }
+
+            const queue_ptr stream = ctx.stream();
+            const int64_t   K      = ne00;
+            const int64_t   N      = ne01;
+            const int64_t   n_ids_f = ids->ne[0];  // top-K experts selected per token
+            const int64_t   n_as    = src0->ne[2];
+
+            // Get host-side expert IDs
+            sycl::event     ids_copy_ev;
+            int64_t         ids_nb0_f = ids->nb[0];
+            int64_t         ids_nb1_f = ids->nb[1];
+            const int32_t * ids_d_f   = ggml_sycl_get_moe_ids_device_ptr(
+                ctx, ids, &ids_copy_ev, &ids_nb0_f, &ids_nb1_f);
+
+            std::vector<int32_t> ids_host(static_cast<size_t>(ids->ne[1] * n_ids_f));
+            stream->memcpy(ids_host.data(), ids_d_f, ids_host.size() * sizeof(int32_t));
+            stream->wait();
+
+            // Disable graphs for this op (host sync is incompatible)
+            ctx.moe_graphs_disabled_once = true;
+
+            const size_t n_cpu = ids_host.size();
+
+            // Allocate pinned host buffers for activation + output
+            float * act_pinned = nullptr;
+            float * out_pinned = nullptr;
+            bool    from_pool  = false;
+
+            auto & buf_pool = g_pinned_buffer_pools[ctx.device];
+            if (buf_pool.is_initialized()) {
+                auto bp    = buf_pool.acquire(n_cpu);
+                act_pinned = bp.act;
+                out_pinned = bp.out;
+                from_pool  = true;
+            } else {
+                act_pinned = sycl::malloc_host<float>(
+                    n_cpu * static_cast<size_t>(K), stream->get_context());
+                out_pinned = sycl::malloc_host<float>(
+                    n_cpu * static_cast<size_t>(N), stream->get_context());
+            }
+
+            if (!act_pinned || !out_pinned) {
+                GGML_LOG_ERROR("[CPU-TG] Failed to allocate pinned host memory\n");
+                if (!from_pool) {
+                    if (act_pinned) { sycl::free(act_pinned, stream->get_context()); }
+                    if (out_pinned) { sycl::free(out_pinned, stream->get_context()); }
+                }
+                // Fall through to GPU dispatch below
+            } else {
+                if (!from_pool) {
+                    std::memset(out_pinned, 0,
+                                n_cpu * static_cast<size_t>(N) * sizeof(float));
+                }
+
+                // Single D2H: all experts share same src1 activation (batch=1)
+                const char * src1_dev = static_cast<const char *>(
+                    ggml_sycl_get_data_ptr(src1, ctx.device));
+                stream->memcpy(act_pinned, src1_dev,
+                               static_cast<size_t>(K) * sizeof(float));
+                stream->wait();
+
+                // Build CPU tasks from mmap host weight pointers
+                std::vector<cpu_expert_task> tasks;
+                tasks.reserve(n_cpu);
+                for (size_t ci = 0; ci < n_cpu; ci++) {
+                    const int32_t expert_id = ids_host[ci];
+                    GGML_ASSERT(expert_id >= 0 && expert_id < n_as);
+                    cpu_expert_task t;
+                    t.weight_host = static_cast<const char *>(src0->data)
+                                    + static_cast<size_t>(expert_id) * nb02;
+                    t.act_host    = act_pinned;  // All tasks share single activation
+                    t.output_host = out_pinned + ci * static_cast<size_t>(N);
+                    t.type        = src0->type;
+                    t.K           = static_cast<int>(K);
+                    t.N           = static_cast<int>(N);
+                    tasks.push_back(t);
+                }
+
+                // Submit to CPU thread pool
+                auto & cpu_pool = g_cpu_expert_pools[ctx.device];
+                std::future<void> fut;
+                if (cpu_pool.is_active()) {
+                    fut = cpu_pool.submit_batch(tasks.data(), static_cast<int>(tasks.size()));
+                } else {
+                    auto * tp = tasks.data();
+                    int    nt = static_cast<int>(tasks.size());
+                    fut = std::async(std::launch::async, [tp, nt]() {
+                        ggml_sycl_cpu_expert_mul_mat_batched(tp, nt);
+                    });
+                }
+                fut.get();
+
+                // Scatter results: H2D copy each expert's output into dst
+                char * dst_d = static_cast<char *>(ggml_sycl_get_data_ptr(dst, ctx.device));
+                for (size_t ci = 0; ci < n_cpu; ci++) {
+                    const int64_t iid1 = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_f));
+                    const int64_t id   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_f));
+                    char *        dst_slot = dst_d + id * nb1 + iid1 * nb2;
+                    const float * cpu_out  = out_pinned + ci * static_cast<size_t>(N);
+                    stream->memcpy(dst_slot, cpu_out,
+                                   static_cast<size_t>(N) * sizeof(float));
+                }
+                stream->wait();
+
+                // Release pinned host buffers
+                if (from_pool) {
+                    buf_pool.release({act_pinned, out_pinned});
+                } else {
+                    sycl::free(act_pinned, stream->get_context());
+                    sycl::free(out_pinned, stream->get_context());
+                }
+                return;
+            }
+        }
+    }
+
     // Priority order (kernel-first selection):
     // XMX sorted -> fused ESIMD -> MMVQ (coalesced/SoA/AoS) -> host routing.
     if (xmx_layout_allowed() && try_xmx_sorted_moe(ctx, src0, src1, ids, dst)) {
