@@ -282,6 +282,15 @@ bool server_http_context::start() {
         was_bound = srv->bind_to_port(hostname, 8080);
     } else {
         LOG_INF("%s: binding port with default address family\n", __func__);
+
+        // Set linger time to 0 to force close the socket immediately when the server stops
+        srv->set_socket_options([](socket_t sock) {
+            linger sl{};
+            sl.l_onoff  = 1;
+            sl.l_linger = 0;
+            setsockopt(sock, SOL_SOCKET, SO_LINGER, reinterpret_cast<const char *>(&sl), sizeof(sl));
+        });
+
         // bind HTTP listen port
         if (port == 0) {
             int bound_port = srv->bind_to_any_port(hostname);
