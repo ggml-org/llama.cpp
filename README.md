@@ -74,36 +74,67 @@ ThunderLLAMA is a fork of [llama.cpp](https://github.com/ggml-org/llama.cpp) wit
        → computes attention with block strides
 ```
 
-## Performance
+## The Right KPIs for Paged Attention
 
-### Benchmark Results
+> **Paged Attention 的价值不是让单次推理更快，而是让系统更稳定、更可靠**
 
-#### Apple M4 - TinyLlama 1.1B Q4_K_M
+vLLM 的 PagedAttention 把它当成"KV cache 的 OS paging"，核心收益是：
 
-| Mode | Prompt (pp512) | Generation (tg128) |
-|------|----------------|---------------------|
-| Contiguous + FA | 2907 t/s | 239 t/s |
-| **Paged + FA** | 2830 t/s (-2.7%) | **247 t/s (+3.5%)** |
+### 正确的 KPI
 
-#### Apple M4 - Qwen3-30B-A3B MoE (17.28 GiB)
+| KPI | 说明 | Paged Advantage |
+|-----|------|-----------------|
+| **CAPACITY** | 同内存预算下的上下文长度 | 更长 context / 更多并发序列 |
+| **OPERABILITY** | P95/P99 延迟抖动 | 更稳定，无 defrag 飙升 |
+| **RELIABILITY** | 长时间运行稳定性 | **结构性移除 defrag 问题** |
 
-| Mode | Prompt (pp512) | Generation (tg128) |
-|------|----------------|---------------------|
-| Contiguous + FA | 714 t/s | 74.4 t/s |
-| **Paged + FA** | 702 t/s (-1.7%) | 73.5 t/s (-1.2%) |
+### llama.cpp 的 defrag 问题
 
-### Key Findings
+llama.cpp 有真实案例：**defrag 触发后输出乱码直到重启**
 
-1. **Performance Parity**: Paged attention matches contiguous mode (<2% difference)
-2. **Small Models**: Slight generation improvement (+3.5%) on small models
-3. **Large Models**: Near-identical performance on 30B MoE models
+```
+Contiguous KV Cache:
+─────────────────────────────────────────────────────
+时间 → 内存碎片积累 → 触发 defrag → 输出乱码 → 重启
 
-### Advantages of Paged Attention
+Paged KV Cache:
+─────────────────────────────────────────────────────
+Block Pool → 按需分配 → 无碎片 → 无 defrag → 稳定运行
+```
 
-- **Dynamic KV Cache**: Allocate memory on-demand
-- **Multi-Sequence**: Support concurrent requests efficiently
-- **Memory Efficiency**: Better utilization for long contexts
-- **Scalability**: Foundation for advanced serving features
+**Paged Attention 的价值 = 把 defrag 从系统里"结构性移除"**
+
+### Performance Parity (基线验证)
+
+虽然单次速度不是 KPI，但我们验证了性能对等：
+
+| Model | Mode | pp512 | tg128 |
+|-------|------|-------|-------|
+| TinyLlama 1.1B | Contiguous | 2907 t/s | 239 t/s |
+| TinyLlama 1.1B | **Paged** | 2830 t/s | 247 t/s |
+| Qwen3-30B MoE | Contiguous | 714 t/s | 74.4 t/s |
+| Qwen3-30B MoE | **Paged** | 702 t/s | 73.5 t/s |
+
+**结论**: 性能差异 <3%，Paged 模式不牺牲单次性能
+
+### Benchmark Scripts
+
+我们提供了正确 KPI 的测试脚本：
+
+```bash
+# 测试 CAPACITY / OPERABILITY / RELIABILITY
+./benchmarks/paged-attention-kpi-v2.sh /path/to/model.gguf
+```
+
+### When to Use Paged Attention
+
+| 场景 | 推荐 |
+|------|------|
+| 单用户短对话 | Contiguous (更简单) |
+| 长上下文 (>16K) | **Paged** (内存效率) |
+| 多并发请求 | **Paged** (序列隔离) |
+| 生产环境服务 | **Paged** (稳定性) |
+| 长时间运行 | **Paged** (无 defrag 风险) |
 
 ## Build Instructions
 
