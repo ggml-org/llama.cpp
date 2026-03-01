@@ -90,21 +90,26 @@ void ggml_gemv_q4_0_8x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
                 const vint32m1_t sumi_h8 = __riscv_vwadd_vv_i32m1(sumi_h8_0, sumi_h8_1, vl / 4);
                 const vfloat32m1_t facc = __riscv_vfcvt_f_x_v_f32m1(sumi_h8, vl / 4);
 
-                // vector version needs Zvfhmin extension
                 const float a_scale = GGML_CPU_FP16_TO_FP32(a_ptr[l].d);
-                const float b_scales[8] = {
-                    GGML_CPU_FP16_TO_FP32(b_ptr[l].d[0]),
-                    GGML_CPU_FP16_TO_FP32(b_ptr[l].d[1]),
-                    GGML_CPU_FP16_TO_FP32(b_ptr[l].d[2]),
-                    GGML_CPU_FP16_TO_FP32(b_ptr[l].d[3]),
-                    GGML_CPU_FP16_TO_FP32(b_ptr[l].d[4]),
-                    GGML_CPU_FP16_TO_FP32(b_ptr[l].d[5]),
-                    GGML_CPU_FP16_TO_FP32(b_ptr[l].d[6]),
-                    GGML_CPU_FP16_TO_FP32(b_ptr[l].d[7])
-                };
-                const vfloat32m1_t b_scales_vec = __riscv_vle32_v_f32m1(b_scales, vl / 4);
-                const vfloat32m1_t tmp1 = __riscv_vfmul_vf_f32m1(facc, a_scale, vl / 4);
-                sumf = __riscv_vfmacc_vv_f32m1(sumf, tmp1, b_scales_vec, vl / 4);
+                vfloat32m1_t b_scales_vec;
+                #if defined(__riscv_zvfhmin)
+                    vfloat16mf2_t b_scales_f16 = __riscv_vle16_v_f16mf2((const _Float16*)b_ptr[l].d, vl / 4);
+                    b_scales_vec = __riscv_vfwcvt_f_f_v_f32m1(b_scales_f16, vl / 4);
+                #else
+                    const float b_scales[8] = {
+                        GGML_CPU_FP16_TO_FP32(b_ptr[l].d[0]),
+                        GGML_CPU_FP16_TO_FP32(b_ptr[l].d[1]),
+                        GGML_CPU_FP16_TO_FP32(b_ptr[l].d[2]),
+                        GGML_CPU_FP16_TO_FP32(b_ptr[l].d[3]),
+                        GGML_CPU_FP16_TO_FP32(b_ptr[l].d[4]),
+                        GGML_CPU_FP16_TO_FP32(b_ptr[l].d[5]),
+                        GGML_CPU_FP16_TO_FP32(b_ptr[l].d[6]),
+                        GGML_CPU_FP16_TO_FP32(b_ptr[l].d[7])
+                    };
+                    b_scales_vec = __riscv_vle32_v_f32m1(b_scales, vl / 4);
+                #endif
+                const vfloat32m1_t tmp1  = __riscv_vfmul_vf_f32m1(facc, a_scale, vl / 4);
+                sumf                     = __riscv_vfmacc_vv_f32m1(sumf, tmp1, b_scales_vec, vl / 4);
             }
             __riscv_vse32_v_f32m1(s + x * ncols_interleaved, sumf, vl / 4);
         }
@@ -156,13 +161,18 @@ void ggml_gemm_q4_0_8x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
                     const vint8m2_t rhs_vec_hi_0 = __riscv_vget_v_i8m4_i8m2(rhs_vec_hi, 0);
                     const vint8m2_t rhs_vec_hi_1 = __riscv_vget_v_i8m4_i8m2(rhs_vec_hi, 1);
 
-                    // vector version needs Zvfhmin extension
                     const float a_scales[4] = {
                         GGML_CPU_FP16_TO_FP32(a_ptr[l].d[0]),
                         GGML_CPU_FP16_TO_FP32(a_ptr[l].d[1]),
                         GGML_CPU_FP16_TO_FP32(a_ptr[l].d[2]),
                         GGML_CPU_FP16_TO_FP32(a_ptr[l].d[3])
                     };
+
+                    vfloat32m1_t b_scales_vec;
+                #if defined(__riscv_zvfhmin)
+                    vfloat16mf2_t b_scales_f16 = __riscv_vle16_v_f16mf2((const _Float16*)b_ptr[l].d, vl / 4);
+                    b_scales_vec = __riscv_vfwcvt_f_f_v_f32m1(b_scales_f16, vl / 4);
+                #else
                     const float b_scales[8] = {
                         GGML_CPU_FP16_TO_FP32(b_ptr[l].d[0]),
                         GGML_CPU_FP16_TO_FP32(b_ptr[l].d[1]),
@@ -173,7 +183,8 @@ void ggml_gemm_q4_0_8x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
                         GGML_CPU_FP16_TO_FP32(b_ptr[l].d[6]),
                         GGML_CPU_FP16_TO_FP32(b_ptr[l].d[7])
                     };
-                    const vfloat32m1_t b_scales_vec = __riscv_vle32_v_f32m1(b_scales, vl / 4);
+                    b_scales_vec = __riscv_vle32_v_f32m1(b_scales, vl / 4);
+                #endif
 
                     const int64_t A0 = *(const int64_t *)&a_ptr[l].qs[0];
                     const int64_t A4 = *(const int64_t *)&a_ptr[l].qs[32];
