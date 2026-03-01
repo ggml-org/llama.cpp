@@ -3,6 +3,7 @@
 #include "ggml.h" // ggml_op
 
 #include <string>
+#include <set>
 
 //
 // gguf constants (sync with gguf.py)
@@ -23,11 +24,13 @@ enum llm_arch {
     LLM_ARCH_STARCODER,
     LLM_ARCH_REFACT,
     LLM_ARCH_BERT,
+    LLM_ARCH_MODERN_BERT,
     LLM_ARCH_NOMIC_BERT,
     LLM_ARCH_NOMIC_BERT_MOE,
     LLM_ARCH_NEO_BERT,
     LLM_ARCH_JINA_BERT_V2,
     LLM_ARCH_JINA_BERT_V3,
+    LLM_ARCH_EUROBERT,
     LLM_ARCH_BLOOM,
     LLM_ARCH_STABLELM,
     LLM_ARCH_QWEN,
@@ -39,11 +42,14 @@ enum llm_arch {
     LLM_ARCH_QWEN3NEXT,
     LLM_ARCH_QWEN3VL,
     LLM_ARCH_QWEN3VLMOE,
+    LLM_ARCH_QWEN35,
+    LLM_ARCH_QWEN35MOE,
     LLM_ARCH_PHI2,
     LLM_ARCH_PHI3,
     LLM_ARCH_PHIMOE,
     LLM_ARCH_PLAMO,
     LLM_ARCH_PLAMO2,
+    LLM_ARCH_PLAMO3,
     LLM_ARCH_CODESHELL,
     LLM_ARCH_ORION,
     LLM_ARCH_INTERNLM2,
@@ -73,14 +79,18 @@ enum llm_arch {
     LLM_ARCH_CHATGLM,
     LLM_ARCH_GLM4,
     LLM_ARCH_GLM4_MOE,
+    LLM_ARCH_GLM_DSA,
     LLM_ARCH_BITNET,
     LLM_ARCH_T5,
     LLM_ARCH_T5ENCODER,
     LLM_ARCH_JAIS,
+    LLM_ARCH_JAIS2,
     LLM_ARCH_NEMOTRON,
     LLM_ARCH_NEMOTRON_H,
+    LLM_ARCH_NEMOTRON_H_MOE,
     LLM_ARCH_EXAONE,
     LLM_ARCH_EXAONE4,
+    LLM_ARCH_EXAONE_MOE,
     LLM_ARCH_RWKV6,
     LLM_ARCH_RWKV6QWEN2,
     LLM_ARCH_RWKV7,
@@ -116,6 +126,12 @@ enum llm_arch {
     LLM_ARCH_RND1,
     LLM_ARCH_PANGU_EMBED,
     LLM_ARCH_MISTRAL3,
+    LLM_ARCH_PADDLEOCR,
+    LLM_ARCH_MIMO2,
+    LLM_ARCH_STEP35,
+    LLM_ARCH_LLAMA_EMBED,
+    LLM_ARCH_MAINCODER,
+    LLM_ARCH_KIMI_LINEAR,
     LLM_ARCH_UNKNOWN,
 };
 
@@ -149,6 +165,7 @@ enum llm_kv {
     LLM_KV_VOCAB_SIZE,
     LLM_KV_CONTEXT_LENGTH,
     LLM_KV_EMBEDDING_LENGTH,
+    LLM_KV_EMBEDDING_LENGTH_OUT,
     LLM_KV_FEATURES_LENGTH,
     LLM_KV_BLOCK_COUNT,
     LLM_KV_LEADING_DENSE_BLOCK_COUNT,
@@ -156,6 +173,8 @@ enum llm_kv {
     LLM_KV_EXPERT_FEED_FORWARD_LENGTH,
     LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH,
     LLM_KV_EXPERT_CHUNK_FEED_FORWARD_LENGTH,
+    LLM_KV_SWIGLU_CLAMP_EXP,
+    LLM_KV_SWIGLU_CLAMP_SHEXP,
     LLM_KV_USE_PARALLEL_RESIDUAL,
     LLM_KV_TENSOR_DATA_LAYOUT,
     LLM_KV_EXPERT_COUNT,
@@ -186,6 +205,7 @@ enum llm_kv {
     LLM_KV_EMBEDDING_SCALE,
     LLM_KV_TOKEN_SHIFT_COUNT,
     LLM_KV_INTERLEAVE_MOE_LAYER_STEP,
+    LLM_KV_FULL_ATTENTION_INTERVAL,
 
     LLM_KV_ATTENTION_HEAD_COUNT,
     LLM_KV_ATTENTION_HEAD_COUNT_KV,
@@ -206,16 +226,21 @@ enum llm_kv {
     LLM_KV_ATTENTION_GATE_LORA_RANK,
     LLM_KV_ATTENTION_RELATIVE_BUCKETS_COUNT,
     LLM_KV_ATTENTION_SLIDING_WINDOW,
+    LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN,
     LLM_KV_ATTENTION_SCALE,
     LLM_KV_ATTENTION_OUTPUT_SCALE,
     LLM_KV_ATTENTION_TEMPERATURE_LENGTH,
     LLM_KV_ATTENTION_TEMPERATURE_SCALE,
     LLM_KV_ATTENTION_KEY_LENGTH_MLA,
     LLM_KV_ATTENTION_VALUE_LENGTH_MLA,
+    LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,
+    LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,
+    LLM_KV_ATTENTION_INDEXER_TOP_K,
 
     LLM_KV_ROPE_DIMENSION_COUNT,
     LLM_KV_ROPE_DIMENSION_SECTIONS,
     LLM_KV_ROPE_FREQ_BASE,
+    LLM_KV_ROPE_FREQ_BASE_SWA,
     LLM_KV_ROPE_SCALE_LINEAR,
     LLM_KV_ROPE_SCALING_TYPE,
     LLM_KV_ROPE_SCALING_FACTOR,
@@ -238,6 +263,8 @@ enum llm_kv {
     LLM_KV_SSM_TIME_STEP_RANK,
     LLM_KV_SSM_GROUP_COUNT,
     LLM_KV_SSM_DT_B_C_RMS,
+
+    LLM_KV_KDA_HEAD_DIM,
 
     LLM_KV_WKV_HEAD_SIZE,
 
@@ -315,6 +342,7 @@ enum llm_tensor {
     LLM_TENSOR_DENSE_3_OUT,
     LLM_TENSOR_OUTPUT,
     LLM_TENSOR_OUTPUT_NORM,
+    LLM_TENSOR_OUTPUT_NORM_LFM2, // fix for wrong tensor name
     LLM_TENSOR_ROPE_FREQS,
     LLM_TENSOR_ROPE_FACTORS_LONG,
     LLM_TENSOR_ROPE_FACTORS_SHORT,
@@ -345,6 +373,7 @@ enum llm_tensor {
     LLM_TENSOR_FFN_DOWN_EXPS, // merged experts
     LLM_TENSOR_FFN_GATE_EXPS,
     LLM_TENSOR_FFN_UP_EXPS,
+    LLM_TENSOR_FFN_GATE_UP_EXPS,
     LLM_TENSOR_FFN_DOWN_SHEXP,
     LLM_TENSOR_FFN_GATE_SHEXP,
     LLM_TENSOR_FFN_UP_SHEXP,
@@ -386,6 +415,16 @@ enum llm_tensor {
     LLM_TENSOR_SSM_NORM,
     LLM_TENSOR_SSM_OUT,
     LLM_TENSOR_SSM_BETA_ALPHA,      // qwen3next
+    LLM_TENSOR_SSM_ALPHA,           // qwen3.5
+    // Kimi Linear KDA (using SSM_ prefix for consistency)
+    LLM_TENSOR_SSM_CONV1D_Q,        // kimi: Q conv1d weight
+    LLM_TENSOR_SSM_CONV1D_K,        // kimi: K conv1d weight
+    LLM_TENSOR_SSM_CONV1D_V,        // kimi: V conv1d weight
+    LLM_TENSOR_SSM_F_A,             // kimi: forget gate projection A
+    LLM_TENSOR_SSM_F_B,             // kimi: forget gate projection B
+    LLM_TENSOR_SSM_BETA,            // kimi: beta mixing coefficient and qwen3.5
+    LLM_TENSOR_SSM_G_A,             // kimi: output gate projection A
+    LLM_TENSOR_SSM_G_B,             // kimi: output gate projection B
     LLM_TENSOR_TIME_MIX_W0,
     LLM_TENSOR_TIME_MIX_W1,
     LLM_TENSOR_TIME_MIX_W2,
@@ -462,6 +501,7 @@ enum llm_tensor {
     LLM_TENSOR_ENC_OUTPUT_NORM,
     LLM_TENSOR_CLS,
     LLM_TENSOR_CLS_OUT,
+    LLM_TENSOR_CLS_NORM,
     LLM_TENSOR_CONV1D,
     LLM_TENSOR_CONVNEXT_DW,
     LLM_TENSOR_CONVNEXT_NORM,
@@ -486,6 +526,10 @@ enum llm_tensor {
     LLM_TENSOR_VISEXP_FFN_GATE,
     LLM_TENSOR_VISEXP_FFN_DOWN,
     LLM_TENSOR_VISEXP_FFN_UP,
+    LLM_TENSOR_INDEXER_K_NORM,
+    LLM_TENSOR_INDEXER_PROJ,
+    LLM_TENSOR_INDEXER_ATTN_K,
+    LLM_TENSOR_INDEXER_ATTN_Q_B,
     LLM_TENSOR_NEXTN_EH_PROJ,
     LLM_TENSOR_NEXTN_EMBED_TOKENS,
     LLM_TENSOR_NEXTN_ENORM,
@@ -525,6 +569,10 @@ struct LLM_TN_IMPL {
     const int bid;
     const int xid;
 
+    const std::set<llm_tensor> model_tensors;
+
+    LLM_TN_IMPL(llm_arch arch, llm_tensor tensor, const char * suffix, int bid, int xid);
+
     std::string str() const;
 
     operator std::string() const {
@@ -546,11 +594,11 @@ struct LLM_TN {
     llm_arch arch;
 
     LLM_TN_IMPL operator()(llm_tensor tensor, const char * suffix, int bid = -1, int xid = -1) const {
-        return { arch, tensor, suffix, bid, xid };
+        return LLM_TN_IMPL(arch, tensor, suffix, bid, xid);
     }
 
     LLM_TN_IMPL operator()(llm_tensor tensor, int bid = -1, int xid = -1) const {
-        return { arch, tensor, nullptr, bid, xid };
+        return LLM_TN_IMPL(arch, tensor, nullptr, bid, xid);
     }
 };
 

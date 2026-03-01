@@ -1,5 +1,6 @@
 #pragma once
 
+// TODO: use json_fwd.hpp when possible
 #include <nlohmann/json.hpp>
 
 // Healing marker (empty if the JSON was fully parsed / wasn't healed).

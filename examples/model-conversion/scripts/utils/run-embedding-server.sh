@@ -4,6 +4,7 @@ set -e
 #
 # First try command line argument, then environment variable, then file
 CONVERTED_MODEL="${1:-"$CONVERTED_MODEL"}"
+BUILD_DIR="${2:-"$BUILD_DIR"}"
 
 # Final check if we have a model path
 if [ -z "$CONVERTED_MODEL" ]; then
@@ -13,10 +14,14 @@ if [ -z "$CONVERTED_MODEL" ]; then
     exit 1
 fi
 
+if [ -z "$BUILD_DIR" ]; then
+    BUILD_DIR="../../build"
+fi
+
 echo $CONVERTED_MODEL
 
-cmake --build ../../build --target llama-server
+cmake --build $BUILD_DIR --target llama-server
 
-../../build/bin/llama-server -m $CONVERTED_MODEL \
+${BUILD_DIR}/bin/llama-server -m $CONVERTED_MODEL \
     --embedding \
     --pooling none

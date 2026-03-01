@@ -55,7 +55,7 @@ auto parser = build_chat_peg_native_parser([&](common_chat_peg_native_builder & 
 ```
 
 For a more complete example, see `test_example_native()` in
-[tests/test-chat-peg-parser.cpp](tests/test-chat-peg-parser.cpp).
+[tests/test-chat-peg-parser.cpp](/tests/test-chat-peg-parser.cpp).
 
 ## Parsers/Combinators
 
@@ -175,7 +175,7 @@ Most model output can be placed in one of the following categories:
   (Qwen3-Coder, MiniMax M2) or pseudo-function calls (LFM2)
 
 To provide broad coverage,
-[`common/chat-peg-parser.h`](common/chat-peg-parser.h) contains builders and
+[`common/chat-peg-parser.h`](/common/chat-peg-parser.h) contains builders and
 mappers that help create parsers and visitors/extractors for these types. They
 require parsers to tag nodes to conform to an AST "shape". This normalization
 makes it easy to extract information and generalize parsing.

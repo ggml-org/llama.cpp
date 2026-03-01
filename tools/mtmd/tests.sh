@@ -28,6 +28,14 @@ if [ "${1:-}" = "huge" ]; then
     echo "Include BIG and HUGE models..."
 fi
 
+# Check if the second argument is "flash", then enable flash attention
+# This is useful to test if flash attention off works correctly
+FLASH_ATTN="on"
+if [ "${2:-}" = "flash_off" ] || [ "${1:-}" = "flash_off" ]; then
+    FLASH_ATTN="off"
+    echo "Flash attention disabled..."
+fi
+
 ###############
 
 arr_prefix=()
@@ -84,6 +92,7 @@ add_test_vision "ggml-org/LightOnOCR-1B-1025-GGUF:Q8_0"
 add_test_audio  "ggml-org/ultravox-v0_5-llama-3_2-1b-GGUF:Q8_0"
 add_test_audio  "ggml-org/Qwen2.5-Omni-3B-GGUF:Q4_K_M"
 add_test_audio  "ggml-org/Voxtral-Mini-3B-2507-GGUF:Q4_K_M"
+add_test_audio  "ggml-org/LFM2-Audio-1.5B-GGUF:Q8_0"
 
 # to test the big models, run: ./tests.sh big
 if [ "$RUN_BIG_TESTS" = true ]; then
@@ -142,6 +151,7 @@ for i in "${!arr_hf[@]}"; do
         -hf $(printf %q "$hf") \
         --image $(printf %q "$SCRIPT_DIR/$inp_file") \
         --temp 0 -n 128 \
+        --flash-attn $(printf %q "$FLASH_ATTN") \
         ${extra_args}"
 
     # if extra_args does not contain -p, we add a default prompt

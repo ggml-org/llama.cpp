@@ -1,5 +1,6 @@
 <script lang="ts">
 	import '../app.css';
+	import { base } from '$app/paths';
 	import { page } from '$app/state';
 	import { untrack } from 'svelte';
 	import { ChatSidebar, DialogConversationTitleUpdate } from '$lib/components/app';
@@ -14,6 +15,8 @@
 	import { goto } from '$app/navigation';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants/tooltip-config';
+	import { KeyboardKey } from '$lib/enums';
+	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
 
 	let { children } = $props();
 
@@ -21,6 +24,10 @@
 	let isHomeRoute = $derived(page.route.id === '/');
 	let isNewChatMode = $derived(page.url.searchParams.get('new_chat') === 'true');
 	let showSidebarByDefault = $derived(activeMessages().length > 0 || isLoading());
+	let alwaysShowSidebarOnDesktop = $derived(config().alwaysShowSidebarOnDesktop);
+	let autoShowSidebarOnNewChat = $derived(config().autoShowSidebarOnNewChat);
+	let isMobile = new IsMobile();
+	let isDesktop = $derived(!isMobile.current);
 	let sidebarOpen = $state(false);
 	let innerHeight = $state<number | undefined>();
 	let chatSidebar:
@@ -37,7 +44,7 @@
 	function handleKeydown(event: KeyboardEvent) {
 		const isCtrlOrCmd = event.ctrlKey || event.metaKey;
 
-		if (isCtrlOrCmd && event.key === 'k') {
+		if (isCtrlOrCmd && event.key === KeyboardKey.K_LOWER) {
 			event.preventDefault();
 			if (chatSidebar?.activateSearchMode) {
 				chatSidebar.activateSearchMode();
@@ -45,12 +52,12 @@
 			}
 		}
 
-		if (isCtrlOrCmd && event.shiftKey && event.key === 'O') {
+		if (isCtrlOrCmd && event.shiftKey && event.key === KeyboardKey.O_UPPER) {
 			event.preventDefault();
 			goto('?new_chat=true#/');
 		}
 
-		if (event.shiftKey && isCtrlOrCmd && event.key === 'E') {
+		if (event.shiftKey && isCtrlOrCmd && event.key === KeyboardKey.E_UPPER) {
 			event.preventDefault();
 
 			if (chatSidebar?.editActiveConversation) {
@@ -76,6 +83,11 @@
 	}
 
 	$effect(() => {
+		if (alwaysShowSidebarOnDesktop && isDesktop) {
+			sidebarOpen = true;
+			return;
+		}
+
 		if (isHomeRoute && !isNewChatMode) {
 			// Auto-collapse sidebar when navigating to home route (but not in new chat mode)
 			sidebarOpen = false;
@@ -83,8 +95,11 @@
 			// Keep sidebar open in new chat mode
 			sidebarOpen = true;
 		} else if (isChatRoute) {
-			// On chat routes, show sidebar by default
-			sidebarOpen = true;
+			// On chat routes, only auto-show sidebar if setting is enabled
+			if (autoShowSidebarOnNewChat) {
+				sidebarOpen = true;
+			}
+			// If setting is disabled, don't change sidebar state - let user control it manually
 		} else {
 			// Other routes follow default behavior
 			sidebarOpen = showSidebarByDefault;
@@ -105,7 +120,7 @@
 	$effect(() => {
 		const serverProps = serverStore.props;
 
-		if (serverProps?.default_generation_settings?.params) {
+		if (serverProps) {
 			settingsStore.syncWithServerDefaults();
 		}
 	});
@@ -144,7 +159,7 @@
 				headers.Authorization = `Bearer ${apiKey.trim()}`;
 			}
 
-			fetch(`./props`, { headers })
+			fetch(`${base}/props`, { headers })
 				.then((response) => {
 					if (response.status === 401 || response.status === 403) {
 						window.location.reload();
@@ -190,12 +205,14 @@
 				<ChatSidebar bind:this={chatSidebar} />
 			</Sidebar.Root>
 
-			<Sidebar.Trigger
-				class="transition-left absolute left-0 z-[900] h-8 w-8 duration-200 ease-linear {sidebarOpen
-					? 'md:left-[var(--sidebar-width)]'
-					: ''}"
-				style="translate: 1rem 1rem;"
-			/>
+			{#if !(alwaysShowSidebarOnDesktop && isDesktop)}
+				<Sidebar.Trigger
+					class="transition-left absolute left-0 z-[900] h-8 w-8 duration-200 ease-linear {sidebarOpen
+						? 'md:left-[var(--sidebar-width)]'
+						: ''}"
+					style="translate: 1rem 1rem;"
+				/>
+			{/if}
 
 			<Sidebar.Inset class="flex flex-1 flex-col overflow-hidden">
 				{@render children?.()}

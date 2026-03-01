@@ -1,7 +1,7 @@
 #include <sycl/sycl.hpp>
 #include "wkv.hpp"
 
-constexpr int WKV_BLOCK_SIZE = 64;  // Matching CUDA_WKV_BLOCK_SIZE
+constexpr int WKV_BLOCK_SIZE = 64;
 
 // Helper function for the main kernel
 template <int block_size>

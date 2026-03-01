@@ -1,23 +1,31 @@
+import { ColorMode } from '$lib/enums/ui';
+import { Monitor, Moon, Sun } from '@lucide/svelte';
+
 export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> = {
 	// Note: in order not to introduce breaking changes, please keep the same data type (number, string, etc) if you want to change the default value. Do not use null or undefined for default value.
 	// Do not use nested objects, keep it single level. Prefix the key if you need to group them.
 	apiKey: '',
 	systemMessage: '',
 	showSystemMessage: true,
-	theme: 'system',
+	theme: ColorMode.SYSTEM,
 	showThoughtInProgress: false,
-	showToolCalls: false,
-	disableReasoningFormat: false,
+	disableReasoningParsing: false,
+	showRawOutputSwitch: false,
 	keepStatsVisible: false,
 	showMessageStats: true,
 	askForTitleConfirmation: false,
 	pasteLongTextToFileLen: 2500,
+	copyTextAttachmentsAsPlainText: false,
 	pdfAsImage: false,
 	disableAutoScroll: false,
 	renderUserContentAsMarkdown: false,
+	alwaysShowSidebarOnDesktop: false,
+	autoShowSidebarOnNewChat: true,
 	autoMicOnEmpty: false,
+	fullHeightCodeBlocks: false,
 	// make sure these default values are in sync with `common.h`
 	samplers: 'top_k;typ_p;top_p;min_p;temperature',
+	backend_sampling: false,
 	temperature: 0.8,
 	dynatemp_range: 0.0,
 	dynatemp_exponent: 1.0,
@@ -50,8 +58,12 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 		'Choose the color theme for the interface. You can choose between System (follows your device settings), Light, or Dark.',
 	pasteLongTextToFileLen:
 		'On pasting long text, it will be converted to a file. You can control the file length by setting the value of this parameter. Value 0 means disable.',
+	copyTextAttachmentsAsPlainText:
+		'When copying a message with text attachments, combine them into a single plain text string instead of a special format that can be pasted back as attachments.',
 	samplers:
 		'The order at which samplers are applied, in simplified way. Default is "top_k;typ_p;top_p;min_p;temperature": top_k->typ_p->top_p->min_p->temperature',
+	backend_sampling:
+		'Enable backend-based samplers. When enabled, supported samplers run on the accelerator backend for faster sampling.',
 	temperature:
 		'Controls the randomness of the generated text by affecting the probability distribution of the output tokens. Higher = more random, lower = more focused.',
 	dynatemp_range:
@@ -82,10 +94,10 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	max_tokens: 'The maximum number of token per output. Use -1 for infinite (no limit).',
 	custom: 'Custom JSON parameters to send to the API. Must be valid JSON format.',
 	showThoughtInProgress: 'Expand thought process by default when generating messages.',
-	showToolCalls:
-		'Display tool call labels and payloads from Harmony-compatible delta.tool_calls data below assistant messages.',
-	disableReasoningFormat:
-		'Show raw LLM output without backend parsing and frontend Markdown rendering to inspect streaming across different models.',
+	disableReasoningParsing:
+		'Send reasoning_format=none to prevent server-side extraction of reasoning tokens into separate field',
+	showRawOutputSwitch:
+		'Show toggle button to display messages as plain text instead of Markdown-formatted content',
 	keepStatsVisible: 'Keep processing statistics visible after generation finishes.',
 	showMessageStats:
 		'Display generation statistics (tokens/second, token count, duration) below each assistant message.',
@@ -96,10 +108,22 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	disableAutoScroll:
 		'Disable automatic scrolling while messages stream so you can control the viewport position manually.',
 	renderUserContentAsMarkdown: 'Render user messages using markdown formatting in the chat.',
+	alwaysShowSidebarOnDesktop:
+		'Always keep the sidebar visible on desktop instead of auto-hiding it.',
+	autoShowSidebarOnNewChat:
+		'Automatically show sidebar when starting a new chat. Disable to keep the sidebar hidden until you click on it.',
 	autoMicOnEmpty:
 		'Automatically show microphone button instead of send button when textarea is empty for models with audio modality support.',
+	fullHeightCodeBlocks:
+		'Always display code blocks at their full natural height, overriding any height limits.',
 	pyInterpreterEnabled:
 		'Enable Python interpreter using Pyodide. Allows running Python code in markdown code blocks.',
 	enableContinueGeneration:
 		'Enable "Continue" button for assistant messages. Currently works only with non-reasoning models.'
 };
+
+export const SETTINGS_COLOR_MODES_CONFIG = [
+	{ value: ColorMode.SYSTEM, label: 'System', icon: Monitor },
+	{ value: ColorMode.LIGHT, label: 'Light', icon: Sun },
+	{ value: ColorMode.DARK, label: 'Dark', icon: Moon }
+];

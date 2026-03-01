@@ -6,6 +6,7 @@ include(${HEXAGON_SDK_ROOT}/build/cmake/hexagon_fun.cmake)
 include_directories(
     ${HEXAGON_SDK_ROOT}/incs
     ${HEXAGON_SDK_ROOT}/incs/stddef
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../../include
     ${CMAKE_CURRENT_SOURCE_DIR}/../..
     ${CMAKE_CURRENT_SOURCE_DIR}/..
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -17,21 +18,25 @@ add_library(${HTP_LIB} SHARED
     main.c
     htp_iface_skel.c
     worker-pool.c
-    htp-dma.c
-    hvx-sigmoid.c
-    hvx-inverse.c
-    hvx-exp.c
-    hvx-utils.c
+    hex-dma.c
     matmul-ops.c
     binary-ops.c
     unary-ops.c
+    sum-rows-ops.c
     softmax-ops.c
     act-ops.c
     rope-ops.c
+    flash-attn-ops.c
+    set-rows-ops.c
+    get-rows-ops.c
+    cpy-ops.c
+    argsort-ops.c
 )
 
 target_compile_definitions(${HTP_LIB} PRIVATE
-    $<IF:$<BOOL:${HEXAGON_HTP_DEBUG}>,HTP_DEBUG=1,NDEBUG=1>)
+    $<IF:$<BOOL:${HEXAGON_HTP_DEBUG}>,HTP_DEBUG=1,NDEBUG=1>
+    $<IF:$<BOOL:${HEXAGON_HTP_DEBUG}>,FARF_HIGH=1,>
+    FP32_QUANTIZE_GROUP_SIZE=${GGML_HEXAGON_FP32_QUANTIZE_GROUP_SIZE})
 
 build_idl(htp_iface.idl ${HTP_LIB})
 

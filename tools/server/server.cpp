@@ -8,6 +8,7 @@
 #include "log.h"
 
 #include <atomic>
+#include <exception>
 #include <signal.h>
 #include <thread> // for std::thread::hardware_concurrency
 
@@ -65,7 +66,7 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
     };
 }
 
-int main(int argc, char ** argv, char ** envp) {
+int main(int argc, char ** argv) {
     // own arguments required by this example
     common_params params;
 
@@ -73,12 +74,17 @@ int main(int argc, char ** argv, char ** envp) {
         return 1;
     }
 
-    // TODO: should we have a separate n_parallel parameter for the server?
-    //       https://github.com/ggml-org/llama.cpp/pull/16736#discussion_r2483763177
-    // TODO: this is a common configuration that is suitable for most local use cases
-    //       however, overriding the parameters is a bit confusing - figure out something more intuitive
-    if (params.n_parallel == 1 && params.kv_unified == false && !params.has_speculative()) {
-        LOG_WRN("%s: setting n_parallel = 4 and kv_unified = true (add -kvu to disable this)\n", __func__);
+    // validate batch size for embeddings
+    // embeddings require all tokens to be processed in a single ubatch
+    // see https://github.com/ggml-org/llama.cpp/issues/12836
+    if (params.embedding && params.n_batch > params.n_ubatch) {
+        LOG_WRN("%s: embeddings enabled with n_batch (%d) > n_ubatch (%d)\n", __func__, params.n_batch, params.n_ubatch);
+        LOG_WRN("%s: setting n_batch = n_ubatch = %d to avoid assertion failure\n", __func__, params.n_ubatch);
+        params.n_batch = params.n_ubatch;
+    }
+
+    if (params.n_parallel < 0) {
+        LOG_INF("%s: n_parallel is set to auto, using n_parallel = 4 and kv_unified = true\n", __func__);
 
         params.n_parallel = 4;
         params.kv_unified = true;
@@ -86,7 +92,7 @@ int main(int argc, char ** argv, char ** envp) {
 
     // for consistency between server router mode and single-model mode, we set the same model name as alias
     if (params.model_alias.empty() && !params.model.name.empty()) {
-        params.model_alias = params.model.name;
+        params.model_alias.insert(params.model.name);
     }
 
     common_init();
@@ -113,13 +119,18 @@ int main(int argc, char ** argv, char ** envp) {
     //
 
     // register API routes
-    server_routes routes(params, ctx_server, [&ctx_http]() { return ctx_http.is_ready.load(); });
+    server_routes routes(params, ctx_server);
 
     bool is_router_server = params.model.path.empty();
     std::optional<server_models_routes> models_routes{};
     if (is_router_server) {
         // setup server instances manager
-        models_routes.emplace(params, argc, argv, envp);
+        try {
+            models_routes.emplace(params, argc, argv);
+        } catch (const std::exception & e) {
+            LOG_ERR("%s: failed to initialize router models: %s\n", __func__, e.what());
+            return 1;
+        }
 
         // proxy handlers
         // note: routes.get_health stays the same
@@ -129,6 +140,7 @@ int main(int argc, char ** argv, char ** envp) {
         routes.post_completions            = models_routes->proxy_post;
         routes.post_completions_oai        = models_routes->proxy_post;
         routes.post_chat_completions       = models_routes->proxy_post;
+        routes.post_responses_oai          = models_routes->proxy_post;
         routes.post_anthropic_messages     = models_routes->proxy_post;
         routes.post_anthropic_count_tokens = models_routes->proxy_post;
         routes.post_infill                 = models_routes->proxy_post;
@@ -148,7 +160,6 @@ int main(int argc, char ** argv, char ** envp) {
         routes.get_models = models_routes->get_router_models;
         ctx_http.post("/models/load",   ex_wrapper(models_routes->post_router_models_load));
         ctx_http.post("/models/unload", ex_wrapper(models_routes->post_router_models_unload));
-        ctx_http.post("/models/status", ex_wrapper(models_routes->post_router_models_status));
     }
 
     ctx_http.get ("/health",              ex_wrapper(routes.get_health)); // public endpoint (no API key check)
@@ -166,6 +177,8 @@ int main(int argc, char ** argv, char ** envp) {
     ctx_http.post("/chat/completions",    ex_wrapper(routes.post_chat_completions));
     ctx_http.post("/v1/chat/completions", ex_wrapper(routes.post_chat_completions));
     ctx_http.post("/api/chat",            ex_wrapper(routes.post_chat_completions)); // ollama specific endpoint
+    ctx_http.post("/v1/responses",        ex_wrapper(routes.post_responses_oai));
+    ctx_http.post("/responses",           ex_wrapper(routes.post_responses_oai));
     ctx_http.post("/v1/messages",         ex_wrapper(routes.post_anthropic_messages)); // anthropic messages API
     ctx_http.post("/v1/messages/count_tokens", ex_wrapper(routes.post_anthropic_count_tokens)); // anthropic token counting
     ctx_http.post("/infill",              ex_wrapper(routes.post_infill));
@@ -242,7 +255,7 @@ int main(int argc, char ** argv, char ** envp) {
             return 1;
         }
 
-        ctx_server.init();
+        routes.update_meta(ctx_server);
         ctx_http.is_ready.store(true);
 
         LOG_INF("%s: model loaded\n", __func__);
@@ -286,7 +299,7 @@ int main(int argc, char ** argv, char ** envp) {
         const char * router_port = std::getenv("LLAMA_SERVER_ROUTER_PORT");
         std::thread monitor_thread;
         if (router_port != nullptr) {
-            monitor_thread = server_models::setup_child_server(params, std::atoi(router_port), params.model_alias, shutdown_handler);
+            monitor_thread = server_models::setup_child_server(shutdown_handler);
         }
 
         // this call blocks the main thread until queue_tasks.terminate() is called
@@ -299,7 +312,11 @@ int main(int argc, char ** argv, char ** envp) {
         if (monitor_thread.joinable()) {
             monitor_thread.join();
         }
-        llama_memory_breakdown_print(ctx_server.get_llama_context());
+
+        auto * ll_ctx = ctx_server.get_llama_context();
+        if (ll_ctx != nullptr) {
+            llama_memory_breakdown_print(ll_ctx);
+        }
     }
 
     return 0;

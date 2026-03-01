@@ -107,6 +107,8 @@ For detailed instructions, see the [test documentation](./tests/README.md).
 - Large-scale code base split into smaller files: https://github.com/ggml-org/llama.cpp/pull/17362
 - Introduction of router mode: https://github.com/ggml-org/llama.cpp/pull/17470
 - Speculative decoding: https://github.com/ggml-org/llama.cpp/pull/17808 and rework in https://github.com/ggml-org/llama.cpp/pull/17808
+- INI presets: https://github.com/ggml-org/llama.cpp/pull/17859 (+ refactoring: https://github.com/ggml-org/llama.cpp/pull/18169)
+- Sleeping mode: https://github.com/ggml-org/llama.cpp/pull/18228
 
 
 

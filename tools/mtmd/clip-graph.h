@@ -9,6 +9,8 @@
 #include <vector>
 #include <functional>
 
+#define DEFAULT_INTERPOLATION_MODE (GGML_SCALE_MODE_BILINEAR | GGML_SCALE_FLAG_ANTIALIAS)
+
 struct clip_graph {
     const clip_model & model;
     const clip_hparams & hparams;
@@ -30,10 +32,6 @@ struct clip_graph {
     const float kq_scale;
     const clip_flash_attn_type flash_attn_type;
 
-    // for debugging
-    const bool debug_graph;
-    std::vector<ggml_tensor *> & debug_print_tensors;
-
     ggml_context_ptr ctx0_ptr;
     ggml_context * ctx0;
     ggml_cgraph * gf;
@@ -49,7 +47,7 @@ struct clip_graph {
     void cb(ggml_tensor * cur0, const char * name, int il) const;
 
     // siglip2 naflex
-    ggml_tensor * resize_position_embeddings();
+    ggml_tensor * resize_position_embeddings(uint32_t interpolation_mode = DEFAULT_INTERPOLATION_MODE);
 
     // build vision transformer (ViT) cgraph
     // this function should cover most of the models

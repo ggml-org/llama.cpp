@@ -393,12 +393,12 @@ def test_completion_unified(n_ctx, n_slots, n_predict_vals, expected_success):
     for res, n_predict, expect_ok in zip(results, n_predict_vals, expected_success):
         if expect_ok:
             assert res.status_code == 200
+
+        # note: https://github.com/ggml-org/llama.cpp/pull/18700#issuecomment-3728695581
+        if res.status_code == 200:
             assert "content" in res.body
             if "timings" in res.body:
                 assert res.body["timings"]["predicted_n"] == n_predict
-        else:
-            assert res.status_code == 500
-            assert "content" not in res.body
 
 
 @pytest.mark.parametrize(

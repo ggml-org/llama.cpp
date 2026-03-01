@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { base } from '$app/paths';
 	import { AlertTriangle, RefreshCw, Key, CheckCircle, XCircle } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
 	import { Button } from '$lib/components/ui/button';
@@ -7,6 +8,7 @@
 	import { serverStore, serverLoading } from '$lib/stores/server.svelte';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import { fade, fly, scale } from 'svelte/transition';
+	import { KeyboardKey } from '$lib/enums';
 
 	interface Props {
 		class?: string;
@@ -64,7 +66,7 @@
 			settingsStore.updateConfig('apiKey', apiKeyInput.trim());
 
 			// Test the API key by making a real request to the server
-			const response = await fetch('./props', {
+			const response = await fetch(`${base}/props`, {
 				headers: {
 					'Content-Type': 'application/json',
 					Authorization: `Bearer ${apiKeyInput.trim()}`
@@ -116,7 +118,7 @@
 	}
 
 	function handleApiKeyKeydown(event: KeyboardEvent) {
-		if (event.key === 'Enter') {
+		if (event.key === KeyboardKey.ENTER) {
 			handleSaveApiKey();
 		}
 	}

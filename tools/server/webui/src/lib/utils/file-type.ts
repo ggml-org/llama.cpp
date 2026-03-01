@@ -195,9 +195,28 @@ export function getFileTypeByExtension(filename: string): string | null {
 }
 
 export function isFileTypeSupported(filename: string, mimeType?: string): boolean {
-	if (mimeType && getFileTypeCategory(mimeType)) {
+	// Images are detected and handled separately for vision models
+	if (mimeType) {
+		const category = getFileTypeCategory(mimeType);
+		if (
+			category === FileTypeCategory.IMAGE ||
+			category === FileTypeCategory.AUDIO ||
+			category === FileTypeCategory.PDF
+		) {
+			return true;
+		}
+	}
+
+	// Check extension for known types (especially images without MIME)
+	const extCategory = getFileTypeCategoryByExtension(filename);
+	if (
+		extCategory === FileTypeCategory.IMAGE ||
+		extCategory === FileTypeCategory.AUDIO ||
+		extCategory === FileTypeCategory.PDF
+	) {
 		return true;
 	}
 
-	return getFileTypeByExtension(filename) !== null;
+	// Fallback: treat everything else as text (inclusive by default)
+	return true;
 }

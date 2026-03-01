@@ -25,17 +25,22 @@ define quantize_model
 	@echo "Export the quantized model path to $(2) variable in your environment"
 endef
 
+DEVICE ?= auto
+
 ###
 ### Casual Model targets/recipes
 ###
 causal-convert-model-bf16: OUTTYPE=bf16
 causal-convert-model-bf16: causal-convert-model
 
+causal-convert-model-debug: DEBUG=--debug
+causal-convert-model-debug: causal-convert-model
+
 causal-convert-model:
 	$(call validate_model_path,causal-convert-model)
 	@MODEL_NAME="$(MODEL_NAME)" OUTTYPE="$(OUTTYPE)" MODEL_PATH="$(MODEL_PATH)" \
 	METADATA_OVERRIDE="$(METADATA_OVERRIDE)" \
-	./scripts/causal/convert-model.sh
+	./scripts/causal/convert-model.sh $(DEBUG)
 
 causal-convert-mm-model-bf16: OUTTYPE=bf16
 causal-convert-mm-model-bf16: MM_OUTTYPE=f16
@@ -53,13 +58,13 @@ causal-convert-mm-model:
 
 causal-run-original-model:
 	$(call validate_model_path,causal-run-original-model)
-	@MODEL_PATH="$(MODEL_PATH)" ./scripts/causal/run-org-model.py
+	@MODEL_PATH="$(MODEL_PATH)" ./scripts/causal/run-org-model.py --device "$(DEVICE)"
 
 causal-run-converted-model:
 	@CONVERTED_MODEL="$(CONVERTED_MODEL)" ./scripts/causal/run-converted-model.sh
 
 causal-verify-logits: causal-run-original-model causal-run-converted-model
-	@./scripts/causal/compare-logits.py
+	@MODEL_PATH="$(MODEL_PATH)" ./scripts/causal/compare-logits.py
 	@MODEL_PATH="$(MODEL_PATH)" ./scripts/utils/check-nmse.py -m ${MODEL_PATH}
 
 causal-run-original-embeddings:
@@ -72,7 +77,10 @@ causal-verify-embeddings: causal-run-original-embeddings causal-run-converted-em
 	@./scripts/causal/compare-embeddings-logits.sh
 
 causal-inspect-original-model:
-	@./scripts/utils/inspect-org-model.py
+	@./scripts/utils/inspect-org-model.py --list-all -s
+
+causal-list-original-model-tensors:
+	@./scripts/utils/inspect-org-model.py --list-all-short -s
 
 causal-inspect-converted-model:
 	@./scripts/utils/inspect-converted-model.sh
@@ -136,22 +144,19 @@ embedding-run-original-model-st: embedding-run-original-model
 embedding-run-converted-model:
 	@./scripts/embedding/run-converted-model.sh $(CONVERTED_EMBEDDING_MODEL) \
 	$(if $(PROMPTS_FILE),--prompts-file "$(PROMPTS_FILE)") \
-	$(if $(USE_POOLING),--pooling)
-
-embedding-run-converted-model-st: USE_POOLING=1
-embedding-run-converted-model-st: embedding-run-converted-model
+	$(if $(EMBD_NORMALIZE),--embd-normalize "$(EMBD_NORMALIZE)")
 
 embedding-verify-logits: embedding-run-original-model embedding-run-converted-model
 	@./scripts/embedding/compare-embeddings-logits.sh \
 	$(if $(PROMPTS_FILE),--prompts-file "$(PROMPTS_FILE)")
 
-embedding-verify-logits-st: embedding-run-original-model-st embedding-run-converted-model-st
+embedding-verify-logits-st: embedding-run-original-model-st embedding-run-converted-model
 	@./scripts/embedding/compare-embeddings-logits.sh \
 	$(if $(PROMPTS_FILE),--prompts-file "$(PROMPTS_FILE)")
 
 embedding-inspect-original-model:
 	$(call validate_embedding_model_path,embedding-inspect-original-model)
-	@EMBEDDING_MODEL_PATH="$(EMBEDDING_MODEL_PATH)" ./scripts/utils/inspect-org-model.py -m ${EMBEDDING_MODEL_PATH}
+	@EMBEDDING_MODEL_PATH="$(EMBEDDING_MODEL_PATH)" ./scripts/utils/inspect-org-model.py -m ${EMBEDDING_MODEL_PATH} --list-all -s
 
 embedding-inspect-converted-model:
 	@CONVERTED_EMBEDDING_MODEL="$(CONVERTED_EMBEDDING_MODEL)" ./scripts/utils/inspect-converted-model.sh ${CONVERTED_EMBEDDING_MODEL}

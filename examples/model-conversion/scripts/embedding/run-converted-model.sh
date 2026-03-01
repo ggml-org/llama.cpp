@@ -5,7 +5,7 @@ set -e
 # Parse command line arguments
 CONVERTED_MODEL=""
 PROMPTS_FILE=""
-USE_POOLING=""
+EMBD_NORMALIZE="2"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -13,9 +13,9 @@ while [[ $# -gt 0 ]]; do
             PROMPTS_FILE="$2"
             shift 2
             ;;
-        --pooling)
-            USE_POOLING="1"
-            shift
+        --embd-normalize)
+            EMBD_NORMALIZE="$2"
+            shift 2
             ;;
         *)
             if [ -z "$CONVERTED_MODEL" ]; then
@@ -28,6 +28,7 @@ done
 
 # First try command line argument, then environment variable
 CONVERTED_MODEL="${CONVERTED_MODEL:-"$CONVERTED_EMBEDDING_MODEL"}"
+BUILD_DIR="${BUILD_DIR:-"../../build"}"
 
 # Final check if we have a model path
 if [ -z "$CONVERTED_MODEL" ]; then
@@ -50,10 +51,5 @@ fi
 
 echo $CONVERTED_MODEL
 
-cmake --build ../../build --target llama-logits -j8
-# TODO: update logits.cpp to accept a --file/-f option for the prompt
-if [ -n "$USE_POOLING" ]; then
-    ../../build/bin/llama-logits -m "$CONVERTED_MODEL" -embd-mode -pooling "$PROMPT"
-else
-    ../../build/bin/llama-logits -m "$CONVERTED_MODEL" -embd-mode "$PROMPT"
-fi
+cmake --build ${BUILD_DIR} --target llama-debug -j8
+${BUILD_DIR}/bin/llama-debug -m "$CONVERTED_MODEL" --embedding -p "$PROMPT" --save-logits --embd-normalize $EMBD_NORMALIZE

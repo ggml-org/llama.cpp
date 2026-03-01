@@ -1,10 +1,16 @@
 import { activeProcessingState } from '$lib/stores/chat.svelte';
 import { config } from '$lib/stores/settings.svelte';
+import { STATS_UNITS } from '$lib/constants/processing-info';
+import type { ApiProcessingState, LiveProcessingStats, LiveGenerationStats } from '$lib/types';
 
 export interface UseProcessingStateReturn {
 	readonly processingState: ApiProcessingState | null;
 	getProcessingDetails(): string[];
+	getTechnicalDetails(): string[];
 	getProcessingMessage(): string;
+	getPromptProgressText(): string | null;
+	getLiveProcessingStats(): LiveProcessingStats | null;
+	getLiveGenerationStats(): LiveGenerationStats | null;
 	shouldShowDetails(): boolean;
 	startMonitoring(): void;
 	stopMonitoring(): void;
@@ -29,6 +35,7 @@ export interface UseProcessingStateReturn {
 export function useProcessingState(): UseProcessingStateReturn {
 	let isMonitoring = $state(false);
 	let lastKnownState = $state<ApiProcessingState | null>(null);
+	let lastKnownProcessingStats = $state<LiveProcessingStats | null>(null);
 
 	// Derive processing state reactively from chatStore's direct state
 	const processingState = $derived.by(() => {
@@ -46,6 +53,34 @@ export function useProcessingState(): UseProcessingStateReturn {
 		}
 	});
 
+	// Track last known processing stats for when promptProgress disappears
+	$effect(() => {
+		if (processingState?.promptProgress) {
+			const { processed, total, time_ms, cache } = processingState.promptProgress;
+			const actualProcessed = processed - cache;
+			const actualTotal = total - cache;
+
+			if (actualProcessed > 0 && time_ms > 0) {
+				const tokensPerSecond = actualProcessed / (time_ms / 1000);
+				lastKnownProcessingStats = {
+					tokensProcessed: actualProcessed,
+					totalTokens: actualTotal,
+					timeMs: time_ms,
+					tokensPerSecond
+				};
+			}
+		}
+	});
+
+	function getETASecs(done: number, total: number, elapsedMs: number): number | undefined {
+		const elapsedSecs = elapsedMs / 1000;
+		const progressETASecs =
+			done === 0 || elapsedSecs < 0.5
+				? undefined // can be the case for the 0% progress report
+				: elapsedSecs * (total / done - 1);
+		return progressETASecs;
+	}
+
 	function startMonitoring(): void {
 		if (isMonitoring) return;
 		isMonitoring = true;
@@ -59,28 +94,25 @@ export function useProcessingState(): UseProcessingStateReturn {
 		const currentConfig = config();
 		if (!currentConfig.keepStatsVisible) {
 			lastKnownState = null;
+			lastKnownProcessingStats = null;
 		}
 	}
 
 	function getProcessingMessage(): string {
-		const state = processingState;
-		if (!state) {
+		if (!processingState) {
 			return 'Processing...';
 		}
 
-		switch (state.status) {
+		switch (processingState.status) {
 			case 'initializing':
 				return 'Initializing...';
 			case 'preparing':
-				if (state.progressPercent !== undefined) {
-					return `Processing (${state.progressPercent}%)`;
+				if (processingState.progressPercent !== undefined) {
+					return `Processing (${processingState.progressPercent}%)`;
 				}
 				return 'Preparing response...';
 			case 'generating':
-				if (state.tokensDecoded > 0) {
-					return `Generating... (${state.tokensDecoded} tokens)`;
-				}
-				return 'Generating...';
+				return '';
 			default:
 				return 'Processing...';
 		}
@@ -95,8 +127,31 @@ export function useProcessingState(): UseProcessingStateReturn {
 
 		const details: string[] = [];
 
+		// Show prompt processing progress with ETA during preparation phase
+		if (stateToUse.promptProgress) {
+			const { processed, total, time_ms, cache } = stateToUse.promptProgress;
+			const actualProcessed = processed - cache;
+			const actualTotal = total - cache;
+
+			if (actualProcessed < actualTotal && actualProcessed > 0) {
+				const percent = Math.round((actualProcessed / actualTotal) * 100);
+				const eta = getETASecs(actualProcessed, actualTotal, time_ms);
+
+				if (eta !== undefined) {
+					const etaSecs = Math.ceil(eta);
+					details.push(`Processing ${percent}% (ETA: ${etaSecs}s)`);
+				} else {
+					details.push(`Processing ${percent}%`);
+				}
+			}
+		}
+
 		// Always show context info when we have valid data
-		if (stateToUse.contextUsed >= 0 && stateToUse.contextTotal > 0) {
+		if (
+			typeof stateToUse.contextTotal === 'number' &&
+			stateToUse.contextUsed >= 0 &&
+			stateToUse.contextTotal > 0
+		) {
 			const contextPercent = Math.round((stateToUse.contextUsed / stateToUse.contextTotal) * 100);
 
 			details.push(
@@ -120,7 +175,57 @@ export function useProcessingState(): UseProcessingStateReturn {
 		}
 
 		if (stateToUse.tokensPerSecond && stateToUse.tokensPerSecond > 0) {
-			details.push(`${stateToUse.tokensPerSecond.toFixed(1)} tokens/sec`);
+			details.push(`${stateToUse.tokensPerSecond.toFixed(1)} ${STATS_UNITS.TOKENS_PER_SECOND}`);
+		}
+
+		if (stateToUse.speculative) {
+			details.push('Speculative decoding enabled');
+		}
+
+		return details;
+	}
+
+	/**
+	 * Returns technical details without the progress message (for bottom bar)
+	 */
+	function getTechnicalDetails(): string[] {
+		const stateToUse = processingState || lastKnownState;
+		if (!stateToUse) {
+			return [];
+		}
+
+		const details: string[] = [];
+
+		// Always show context info when we have valid data
+		if (
+			typeof stateToUse.contextTotal === 'number' &&
+			stateToUse.contextUsed >= 0 &&
+			stateToUse.contextTotal > 0
+		) {
+			const contextPercent = Math.round((stateToUse.contextUsed / stateToUse.contextTotal) * 100);
+
+			details.push(
+				`Context: ${stateToUse.contextUsed}/${stateToUse.contextTotal} (${contextPercent}%)`
+			);
+		}
+
+		if (stateToUse.outputTokensUsed > 0) {
+			// Handle infinite max_tokens (-1) case
+			if (stateToUse.outputTokensMax <= 0) {
+				details.push(`Output: ${stateToUse.outputTokensUsed}/∞`);
+			} else {
+				const outputPercent = Math.round(
+					(stateToUse.outputTokensUsed / stateToUse.outputTokensMax) * 100
+				);
+
+				details.push(
+					`Output: ${stateToUse.outputTokensUsed}/${stateToUse.outputTokensMax} (${outputPercent}%)`
+				);
+			}
+		}
+
+		if (stateToUse.tokensPerSecond && stateToUse.tokensPerSecond > 0) {
+			details.push(`${stateToUse.tokensPerSecond.toFixed(1)} ${STATS_UNITS.TOKENS_PER_SECOND}`);
 		}
 
 		if (stateToUse.speculative) {
@@ -131,8 +236,76 @@ export function useProcessingState(): UseProcessingStateReturn {
 	}
 
 	function shouldShowDetails(): boolean {
-		const state = processingState;
-		return state !== null && state.status !== 'idle';
+		return processingState !== null && processingState.status !== 'idle';
+	}
+
+	/**
+	 * Returns a short progress message with percent
+	 */
+	function getPromptProgressText(): string | null {
+		if (!processingState?.promptProgress) return null;
+
+		const { processed, total, cache } = processingState.promptProgress;
+
+		const actualProcessed = processed - cache;
+		const actualTotal = total - cache;
+		const percent = Math.round((actualProcessed / actualTotal) * 100);
+		const eta = getETASecs(actualProcessed, actualTotal, processingState.promptProgress.time_ms);
+
+		if (eta !== undefined) {
+			const etaSecs = Math.ceil(eta);
+			return `Processing ${percent}% (ETA: ${etaSecs}s)`;
+		}
+
+		return `Processing ${percent}%`;
+	}
+
+	/**
+	 * Returns live processing statistics for display (prompt processing phase)
+	 * Returns last known stats when promptProgress becomes unavailable
+	 */
+	function getLiveProcessingStats(): LiveProcessingStats | null {
+		if (processingState?.promptProgress) {
+			const { processed, total, time_ms, cache } = processingState.promptProgress;
+
+			const actualProcessed = processed - cache;
+			const actualTotal = total - cache;
+
+			if (actualProcessed > 0 && time_ms > 0) {
+				const tokensPerSecond = actualProcessed / (time_ms / 1000);
+
+				return {
+					tokensProcessed: actualProcessed,
+					totalTokens: actualTotal,
+					timeMs: time_ms,
+					tokensPerSecond
+				};
+			}
+		}
+
+		// Return last known stats if promptProgress is no longer available
+		return lastKnownProcessingStats;
+	}
+
+	/**
+	 * Returns live generation statistics for display (token generation phase)
+	 */
+	function getLiveGenerationStats(): LiveGenerationStats | null {
+		if (!processingState) return null;
+
+		const { tokensDecoded, tokensPerSecond } = processingState;
+
+		if (tokensDecoded <= 0) return null;
+
+		// Calculate time from tokens and speed
+		const timeMs =
+			tokensPerSecond && tokensPerSecond > 0 ? (tokensDecoded / tokensPerSecond) * 1000 : 0;
+
+		return {
+			tokensGenerated: tokensDecoded,
+			timeMs,
+			tokensPerSecond: tokensPerSecond || 0
+		};
 	}
 
 	return {
@@ -140,7 +313,11 @@ export function useProcessingState(): UseProcessingStateReturn {
 			return processingState;
 		},
 		getProcessingDetails,
+		getTechnicalDetails,
 		getProcessingMessage,
+		getPromptProgressText,
+		getLiveProcessingStats,
+		getLiveGenerationStats,
 		shouldShowDetails,
 		startMonitoring,
 		stopMonitoring

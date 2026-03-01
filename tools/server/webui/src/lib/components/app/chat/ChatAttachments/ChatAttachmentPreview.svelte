@@ -8,7 +8,8 @@
 		isImageFile,
 		isPdfFile,
 		isAudioFile,
-		getLanguageFromFilename
+		getLanguageFromFilename,
+		createBase64DataUrl
 	} from '$lib/utils';
 	import { convertPDFToImage } from '$lib/utils/browser-only';
 	import { modelsStore } from '$lib/stores/models.svelte';
@@ -241,7 +242,7 @@
 				</div>
 			{/if}
 		{:else if (isText || (isPdf && pdfViewMode === 'text')) && displayTextContent}
-			<SyntaxHighlightedCode code={displayTextContent} {language} maxWidth="69rem" />
+			<SyntaxHighlightedCode code={displayTextContent} {language} maxWidth="calc(69rem - 2rem)" />
 		{:else if isAudio}
 			<div class="flex items-center justify-center p-8">
 				<div class="w-full max-w-md text-center">
@@ -255,7 +256,7 @@
 						<audio
 							controls
 							class="mb-4 w-full"
-							src={`data:${attachment.mimeType};base64,${attachment.base64Data}`}
+							src={createBase64DataUrl(attachment.mimeType, attachment.base64Data)}
 						>
 							Your browser does not support the audio element.
 						</audio>

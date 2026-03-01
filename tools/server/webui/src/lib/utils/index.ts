@@ -9,13 +9,11 @@
 
 // API utilities
 export { getAuthHeaders, getJsonHeaders } from './api-headers';
+export { apiFetch, apiFetchWithParams, apiPost, type ApiFetchOptions } from './api-fetch';
 export { validateApiKey } from './api-key-validation';
 
 // Attachment utilities
-export {
-	getAttachmentDisplayItems,
-	type AttachmentDisplayItemsOptions
-} from './attachment-display';
+export { getAttachmentDisplayItems } from './attachment-display';
 export { isTextFile, isImageFile, isPdfFile, isAudioFile } from './attachment-type';
 
 // Textarea utilities
@@ -40,7 +38,13 @@ export { setConfigValue, getConfigValue, configToParameterRecord } from './confi
 export { createMessageCountMap, getMessageCount } from './conversation-utils';
 
 // Clipboard utilities
-export { copyToClipboard, copyCodeToClipboard } from './copy';
+export {
+	copyToClipboard,
+	copyCodeToClipboard,
+	formatMessageForClipboard,
+	parseClipboardContent,
+	hasClipboardAttachments
+} from './clipboard';
 
 // File preview utilities
 export { getFileTypeLabel } from './file-preview';
@@ -55,7 +59,15 @@ export {
 } from './file-type';
 
 // Formatting utilities
-export { formatFileSize, formatParameters, formatNumber } from './formatters';
+export {
+	formatFileSize,
+	formatParameters,
+	formatNumber,
+	formatJsonPretty,
+	formatTime,
+	formatPerformanceTime,
+	formatAttachmentText
+} from './formatters';
 
 // IME utilities
 export { isIMEComposing } from './is-ime-composing';
@@ -67,9 +79,7 @@ export { maskInlineLaTeX, preprocessLaTeX } from './latex-protection';
 export {
 	isFileTypeSupportedByModel,
 	filterFilesByModalities,
-	generateModalityErrorMessage,
-	generateModalityAwareAcceptString,
-	type ModalityCapabilities
+	generateModalityErrorMessage
 } from './modality-file-validation';
 
 // Model name utilities
@@ -86,3 +96,24 @@ export { getLanguageFromFilename } from './syntax-highlight-language';
 
 // Text file utilities
 export { isTextFileByName, readFileAsText, isLikelyTextFile } from './text-files';
+
+// Debounce utilities
+export { debounce } from './debounce';
+
+// Image error fallback utilities
+export { getImageErrorFallbackHtml } from './image-error-fallback';
+
+// Data URL utilities
+export { createBase64DataUrl } from './data-url';
+
+// Cache utilities
+export { TTLCache, ReactiveTTLMap, type TTLCacheOptions } from './cache-ttl';
+
+// Abort signal utilities
+export {
+	throwIfAborted,
+	isAbortError,
+	createLinkedController,
+	createTimeoutSignal,
+	withAbortSignal
+} from './abort';
