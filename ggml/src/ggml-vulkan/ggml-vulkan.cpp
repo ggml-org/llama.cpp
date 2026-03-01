@@ -35,6 +35,7 @@ DispatchLoaderDynamic & ggml_vk_default_dispatcher();
 #include <set>
 #include <unordered_map>
 #include <memory>
+#include <atomic>
 #include <mutex>
 #include <future>
 #include <thread>
@@ -595,6 +596,7 @@ struct vk_device_struct {
     uint32_t subgroup_size_log2;
     uint32_t shader_core_count;
     bool uma;
+    bool sparse_binding;
     bool prefer_host_memory;
     bool float_controls_rte_fp16;
     bool subgroup_basic;
@@ -839,6 +841,7 @@ struct vk_device_struct {
 
     vk::Fence fence;
     vk_buffer sync_staging;
+    size_t staging_safe_cap = SIZE_MAX;  // learned cap for staging allocation; reduced on OOM
 
     ggml_backend_buffer_type buffer_type;
 
@@ -892,6 +895,7 @@ void vk_command_pool::destroy(vk::Device& device) {
 struct vk_buffer_struct {
     vk::Buffer buffer = VK_NULL_HANDLE;
     vk::DeviceMemory device_memory = VK_NULL_HANDLE;
+    std::vector<vk::DeviceMemory> sparse_memory;
     vk::MemoryPropertyFlags memory_property_flags;
     void * ptr;
     size_t size = 0;
@@ -905,7 +909,13 @@ struct vk_buffer_struct {
         }
         VK_LOG_DEBUG("~vk_buffer_struct(" << buffer << ", " << size << ")");
 
-        device->device.freeMemory(device_memory);
+        if (!sparse_memory.empty()) {
+            for (auto& mem : sparse_memory) {
+                device->device.freeMemory(mem);
+            }
+        } else {
+            device->device.freeMemory(device_memory);
+        }
         device->device.destroyBuffer(buffer);
     }
 };
@@ -2521,6 +2531,268 @@ static std::vector<uint32_t> ggml_vk_find_memory_properties(const vk::PhysicalDe
     return indices;
 }
 
+// Should we attempt sparse fallback for this allocation?
+static bool ggml_vk_should_try_sparse(bool had_oom, bool sparse_binding, size_t size,
+                                      size_t sparse_threshold, bool import_ptr,
+                                      bool is_device_local, bool is_host_visible) {
+    return had_oom && sparse_binding && size >= sparse_threshold && !import_ptr &&
+           is_device_local && !is_host_visible;
+}
+
+#ifdef GGML_VULKAN_SPARSE_TESTING
+// Test-only counter: incremented on each sparse fallback attempt.
+static std::atomic<int> ggml_vk_sparse_attempt_count{0};
+
+// extern "C" {} block required: GGML_BACKEND_API includes `extern`.
+extern "C" {
+
+GGML_BACKEND_API void ggml_vk_test_sparse_counter_reset(void) {
+    ggml_vk_sparse_attempt_count.store(0);
+}
+
+GGML_BACKEND_API int ggml_vk_test_sparse_counter_read(void) {
+    return ggml_vk_sparse_attempt_count.load();
+}
+
+// Returns current staging_safe_cap (SIZE_MAX = no cap learned).
+GGML_BACKEND_API size_t ggml_vk_test_staging_cap_read(int device_idx) {
+    if (device_idx < 0 || device_idx >= GGML_VK_MAX_DEVICES || vk_instance.devices[device_idx] == nullptr) {
+        return SIZE_MAX;
+    }
+    std::lock_guard<std::recursive_mutex> guard(vk_instance.devices[device_idx]->mutex);
+    return vk_instance.devices[device_idx]->staging_safe_cap;
+}
+
+GGML_BACKEND_API void ggml_vk_test_staging_cap_reset(int device_idx) {
+    if (device_idx >= 0 && device_idx < GGML_VK_MAX_DEVICES && vk_instance.devices[device_idx] != nullptr) {
+        std::lock_guard<std::recursive_mutex> guard(vk_instance.devices[device_idx]->mutex);
+        vk_instance.devices[device_idx]->staging_safe_cap = SIZE_MAX;
+    }
+}
+
+// Destroy sync_staging so next ensure call allocates fresh.
+GGML_BACKEND_API void ggml_vk_test_staging_destroy(int device_idx) {
+    if (device_idx >= 0 && device_idx < GGML_VK_MAX_DEVICES && vk_instance.devices[device_idx] != nullptr) {
+        std::lock_guard<std::recursive_mutex> guard(vk_instance.devices[device_idx]->mutex);
+        ggml_vk_destroy_buffer(vk_instance.devices[device_idx]->sync_staging);
+    }
+}
+
+} // extern "C"
+
+// Test-only counter: incremented on each staging OOM fault injection.
+static std::atomic<int> ggml_vk_staging_oom_count{0};
+
+extern "C" {
+
+GGML_BACKEND_API void ggml_vk_test_staging_oom_counter_reset(void) {
+    ggml_vk_staging_oom_count.store(0);
+}
+
+GGML_BACKEND_API int ggml_vk_test_staging_oom_counter_read(void) {
+    return ggml_vk_staging_oom_count.load();
+}
+
+} // extern "C"
+#endif
+
+// Sparse binding fallback for large allocations on UMA devices.
+// AMDVLK on UMA (e.g. Strix Halo) exposes multiple heaps with per-allocation
+// size limits (~2 GB).  When two models are loaded, the default 1 GB suballocation
+// blocks fail to allocate contiguously.  Sparse binding lets us back a single
+// VkBuffer with many smaller physical allocations (128 MB chunks), bypassing
+// the per-allocation limit without the 3x perf regression of smaller suballoc blocks.
+//
+// Returns true if sparse allocation succeeded, false if it failed.
+// On success, buf is fully initialized (buffer, sparse_memory, bda_addr, size, etc).
+// On failure, buf is cleaned up (sparse_memory freed, buffer destroyed).
+static bool ggml_vk_try_sparse_alloc(vk_device& device, vk_buffer& buf, size_t size,
+                                     vk::BufferUsageFlags usage_flags, vk::MemoryAllocateFlags mem_flags,
+                                     const vk::PhysicalDeviceMemoryProperties& mem_props,
+                                     size_t sparse_chunk_size) {
+    GGML_LOG_INFO("ggml_vulkan: attempting sparse binding for %zu byte buffer\n", size);
+
+#ifdef GGML_VULKAN_SPARSE_TESTING
+    // Test-only fault injection: force sparse failure to exercise fallback chain
+    const char * test_sparse_fail = getenv("GGML_VK_TEST_SPARSE_FORCE_FAIL");
+    if (test_sparse_fail && test_sparse_fail[0]) {
+        GGML_LOG_INFO("ggml_vulkan: test: forcing sparse failure (GGML_VK_TEST_SPARSE_FORCE_FAIL)\n");
+        device->device.destroyBuffer(buf->buffer);
+        buf->buffer = VK_NULL_HANDLE;
+        return false;
+    }
+#endif
+
+    // Destroy the non-sparse buffer and recreate with sparse binding flag
+    device->device.destroyBuffer(buf->buffer);
+    buf->buffer = VK_NULL_HANDLE;
+
+    vk::BufferCreateInfo sparse_bci{
+        vk::BufferCreateFlagBits::eSparseBinding,
+        size,
+        usage_flags,
+        vk::SharingMode::eExclusive,
+        0,
+        nullptr,
+    };
+    try {
+        buf->buffer = device->device.createBuffer(sparse_bci);
+    } catch (const vk::SystemError& e) {
+        GGML_LOG_WARN("ggml_vulkan: sparse buffer creation failed (%s)\n", e.what());
+        return false;
+    }
+
+    vk::MemoryRequirements sparse_mem_req = device->device.getBufferMemoryRequirements(buf->buffer);
+
+    // Collect ALL DEVICE_LOCAL memory types, sorted by heap size (largest first).
+    struct sparse_mem_type { uint32_t idx; vk::DeviceSize heap_size; };
+    std::vector<sparse_mem_type> mem_types;
+    for (uint32_t i = 0; i < mem_props.memoryTypeCount; i++) {
+        if (!(sparse_mem_req.memoryTypeBits & (1u << i))) {
+            continue;
+        }
+        if (!(mem_props.memoryTypes[i].propertyFlags & vk::MemoryPropertyFlagBits::eDeviceLocal)) {
+            continue;
+        }
+        uint32_t heap_idx = mem_props.memoryTypes[i].heapIndex;
+        mem_types.push_back({ i, mem_props.memoryHeaps[heap_idx].size });
+    }
+    std::sort(mem_types.begin(), mem_types.end(),
+              [](const sparse_mem_type& a, const sparse_mem_type& b) { return a.heap_size > b.heap_size; });
+
+    if (mem_types.empty()) {
+        device->device.destroyBuffer(buf->buffer);
+        buf->buffer = VK_NULL_HANDLE;
+        return false;
+    }
+
+    VK_LOG_DEBUG("ggml_vulkan: sparse binding: " << mem_types.size() << " mem types, largest heap "
+                 << (mem_types[0].heap_size / (1024*1024)) << " MB, alignment=" << sparse_mem_req.alignment);
+
+    // Align chunk size to sparse memory alignment requirements.
+    size_t target_chunk = sparse_chunk_size;
+    if (sparse_mem_req.alignment > 1) {
+        target_chunk = (target_chunk + sparse_mem_req.alignment - 1) & ~(sparse_mem_req.alignment - 1);
+    }
+
+    size_t remaining = sparse_mem_req.size;
+    size_t offset = 0;
+    std::vector<vk::SparseMemoryBind> binds;
+
+    while (remaining > 0) {
+        size_t alloc_size = std::min(remaining, target_chunk);
+
+        vk::DeviceMemory mem;
+        bool allocated = false;
+        vk::MemoryAllocateFlagsInfo sparse_mem_flags_info{ mem_flags };
+        for (const auto& mt : mem_types) {
+            try {
+                vk::MemoryAllocateInfo alloc_info{ alloc_size, mt.idx };
+                if (mem_flags) {
+                    alloc_info.setPNext(&sparse_mem_flags_info);
+                }
+                mem = device->device.allocateMemory(alloc_info);
+                allocated = true;
+                break;
+            } catch (const vk::SystemError&) {
+                // This heap is full, try next
+            }
+        }
+        if (!allocated) {
+            // Chunk allocation failed — clean up and report failure
+            for (auto& m : buf->sparse_memory) {
+                device->device.freeMemory(m);
+            }
+            buf->sparse_memory.clear();
+            device->device.destroyBuffer(buf->buffer);
+            buf->buffer = VK_NULL_HANDLE;
+            return false;
+        }
+        buf->sparse_memory.push_back(mem);
+
+        vk::SparseMemoryBind bind;
+        bind.resourceOffset = offset;
+        bind.size            = alloc_size;
+        bind.memory          = mem;
+        bind.memoryOffset    = 0;
+        bind.flags           = {};
+        binds.push_back(bind);
+
+        offset += alloc_size;
+        remaining -= alloc_size;
+    }
+
+    // Submit sparse bind via queue with fence synchronization
+    VkSparseBufferMemoryBindInfo buffer_bind_info{};
+    buffer_bind_info.buffer    = static_cast<VkBuffer>(buf->buffer);
+    buffer_bind_info.bindCount = static_cast<uint32_t>(binds.size());
+    buffer_bind_info.pBinds    = reinterpret_cast<const VkSparseMemoryBind *>(binds.data());
+
+    VkBindSparseInfo bind_info{};
+    bind_info.sType            = VK_STRUCTURE_TYPE_BIND_SPARSE_INFO;
+    bind_info.bufferBindCount  = 1;
+    bind_info.pBufferBinds     = &buffer_bind_info;
+
+    VK_LOG_DEBUG("ggml_vulkan: sparse binding: submitting " << binds.size() << " binds");
+
+    vk::Fence sparse_fence;
+    try {
+        sparse_fence = device->device.createFence(vk::FenceCreateInfo());
+    } catch (const vk::SystemError& e) {
+        GGML_LOG_WARN("ggml_vulkan: sparse fence creation failed (%s)\n", e.what());
+        for (auto& m : buf->sparse_memory) { device->device.freeMemory(m); }
+        buf->sparse_memory.clear();
+        device->device.destroyBuffer(buf->buffer);
+        buf->buffer = VK_NULL_HANDLE;
+        return false;
+    }
+
+    vk::Result bind_result;
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex);
+        bind_result = vk::Result(vkQueueBindSparse(device->compute_queue.queue, 1, &bind_info, static_cast<VkFence>(sparse_fence)));
+    }
+
+    if (bind_result != vk::Result::eSuccess) {
+        GGML_LOG_WARN("ggml_vulkan: vkQueueBindSparse failed (%s)\n", to_string(bind_result).c_str());
+        device->device.destroyFence(sparse_fence);
+        for (auto& m : buf->sparse_memory) { device->device.freeMemory(m); }
+        buf->sparse_memory.clear();
+        device->device.destroyBuffer(buf->buffer);
+        buf->buffer = VK_NULL_HANDLE;
+        return false;
+    }
+
+    vk::Result wait_result = device->device.waitForFences({ sparse_fence }, true, UINT64_MAX);
+    device->device.destroyFence(sparse_fence);
+
+    if (wait_result != vk::Result::eSuccess) {
+        GGML_LOG_WARN("ggml_vulkan: sparse fence wait failed (%s)\n", to_string(wait_result).c_str());
+        for (auto& m : buf->sparse_memory) { device->device.freeMemory(m); }
+        buf->sparse_memory.clear();
+        device->device.destroyBuffer(buf->buffer);
+        buf->buffer = VK_NULL_HANDLE;
+        return false;
+    }
+
+    buf->ptr = nullptr;
+    buf->memory_property_flags = vk::MemoryPropertyFlagBits::eDeviceLocal;
+    buf->device = device;
+    buf->size = size;
+
+    if (device->buffer_device_address) {
+        const vk::BufferDeviceAddressInfo addressInfo(buf->buffer);
+        buf->bda_addr = device->device.getBufferAddress(addressInfo);
+    }
+
+    device->memory_logger->log_allocation(buf, size);
+
+    VK_LOG_DEBUG("ggml_vulkan: sparse binding: " << size << " bytes in "
+                 << buf->sparse_memory.size() << " chunks of ~" << target_chunk << " bytes");
+
+    return true;
+}
+
 static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std::initializer_list<vk::MemoryPropertyFlags> & req_flags_list,
                                        void *import_ptr = nullptr) {
     VK_LOG_DEBUG("ggml_vk_create_buffer(" << device->name << ", " << size << ", " << to_string(req_flags_list.begin()[0]) << ", " << to_string(req_flags_list.begin()[req_flags_list.size()-1]) << ")");
@@ -2562,6 +2834,24 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
     vk::MemoryRequirements mem_req = device->device.getBufferMemoryRequirements(buf->buffer);
 
     vk::PhysicalDeviceMemoryProperties mem_props = device->physical_device.getMemoryProperties();
+
+    // Sparse binding thresholds — used as OOM fallback for large device-local buffers.
+    static constexpr size_t SPARSE_THRESHOLD  = 512ULL * 1024 * 1024;  // 512 MB
+    static constexpr size_t SPARSE_CHUNK_SIZE = 128ULL * 1024 * 1024;  // 128 MB
+
+#ifdef GGML_VULKAN_SPARSE_TESTING
+    // Test-only threshold override for fault injection tests.
+    size_t sparse_threshold = SPARSE_THRESHOLD;
+    {
+        const char * env = getenv("GGML_VK_SPARSE_THRESHOLD");
+        if (env && env[0]) {
+            size_t val = (size_t)strtoull(env, nullptr, 10);
+            if (val > 0) { sparse_threshold = val; }
+        }
+    }
+#else
+    constexpr size_t sparse_threshold = SPARSE_THRESHOLD;
+#endif
 
     const vk::MemoryPriorityAllocateInfoEXT mem_priority_info { 1.0f };
 
@@ -2626,24 +2916,59 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
             buf->memory_property_flags = req_flags;
 
             bool done = false;
+            bool had_oom = false;
 
-            for (auto mtype_it = memory_type_indices.begin(); mtype_it != memory_type_indices.end(); mtype_it++) {
-                try {
-                    buf->device_memory = device->device.allocateMemory({ mem_req.size, *mtype_it, &mem_flags_info });
-                    done = true;
-                    break;
-                } catch (const vk::SystemError& e) {
-                    // loop and retry
-                    // during last attempt throw the exception
-                    if (it + 1 == req_flags_list.end() && mtype_it + 1 == memory_type_indices.end()) {
-                        device->device.destroyBuffer(buf->buffer);
-                        throw e;
+#ifdef GGML_VULKAN_SPARSE_TESTING
+            // Test-only fault injection: simulate device-local OOM to exercise sparse/fallback chain
+            const char * test_force_oom = getenv("GGML_VK_TEST_FORCE_OOM");
+            if (test_force_oom && test_force_oom[0] &&
+                (req_flags & vk::MemoryPropertyFlagBits::eDeviceLocal) &&
+                !(req_flags & vk::MemoryPropertyFlagBits::eHostVisible)) {
+                GGML_LOG_INFO("ggml_vulkan: test: forcing OOM for device-local allocation (GGML_VK_TEST_FORCE_OOM)\n");
+                had_oom = true;
+            } else
+#endif
+            {
+                for (auto mtype_it = memory_type_indices.begin(); mtype_it != memory_type_indices.end(); mtype_it++) {
+                    try {
+                        buf->device_memory = device->device.allocateMemory({ mem_req.size, *mtype_it, &mem_flags_info });
+                        done = true;
+                        break;
+                    } catch (const vk::OutOfDeviceMemoryError&) {
+                        had_oom = true;
+                    } catch (const vk::SystemError&) {
+                        // Non-OOM failure, try next memory type
                     }
                 }
             }
 
             if (done) {
                 break;
+            }
+
+            // All contiguous memory types exhausted for this req_flags entry.
+            // Try sparse binding as a fallback only on OOM and if eligible.
+            bool sparse_eligible = ggml_vk_should_try_sparse(
+                had_oom, device->sparse_binding, size, sparse_threshold, import_ptr != nullptr,
+                (req_flags & vk::MemoryPropertyFlagBits::eDeviceLocal) != vk::MemoryPropertyFlags{},
+                (req_flags & vk::MemoryPropertyFlagBits::eHostVisible) != vk::MemoryPropertyFlags{});
+            if (sparse_eligible) {
+                GGML_LOG_INFO("ggml_vulkan: contiguous allocation failed for %zu bytes, trying sparse fallback\n", size);
+#ifdef GGML_VULKAN_SPARSE_TESTING
+                ggml_vk_sparse_attempt_count.fetch_add(1);
+#endif
+                if (ggml_vk_try_sparse_alloc(device, buf, size, usage_flags, mem_flags, mem_props, SPARSE_CHUNK_SIZE)) {
+                    return buf;
+                }
+                GGML_LOG_INFO("ggml_vulkan: sparse fallback failed for %zu bytes, continuing normal fallback\n", size);
+                // Recreate the non-sparse buffer for subsequent fallback attempts
+                buf->buffer = device->device.createBuffer(buffer_create_info);
+            }
+
+            // If this was the last req_flags entry, all paths are exhausted
+            if (it + 1 == req_flags_list.end()) {
+                device->device.destroyBuffer(buf->buffer);
+                throw vk::OutOfDeviceMemoryError("All memory types and sparse fallback exhausted");
             }
         }
     }
@@ -2684,7 +3009,7 @@ static vk_buffer ggml_vk_create_buffer_check(vk_device& device, size_t size, vk:
     } catch (const vk::SystemError& e) {
         std::cerr << "ggml_vulkan: Memory allocation of size " << size << " failed." << std::endl;
         std::cerr << "ggml_vulkan: " << e.what() << std::endl;
-        throw e;
+        throw;  // preserve original exception type (avoid slicing to vk::SystemError)
     }
 }
 
@@ -5079,6 +5404,13 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         vkGetPhysicalDeviceFeatures2(device->physical_device, &device_features2);
 
+        const bool queue_supports_sparse = !!(queue_family_props[compute_queue_family_index].queueFlags & vk::QueueFlagBits::eSparseBinding);
+        device->sparse_binding = device_features2.features.sparseBinding && device->uma && queue_supports_sparse;
+        if (device_features2.features.sparseBinding && device->uma && !queue_supports_sparse) {
+            GGML_LOG_WARN("ggml_vulkan: sparse binding supported but compute queue family %u lacks VK_QUEUE_SPARSE_BINDING_BIT -- disabled\n",
+                          compute_queue_family_index);
+        }
+
         device->pipeline_executable_properties_support = pipeline_executable_properties_support;
 
         device->fp16 = device->fp16 && vk12_features.shaderFloat16;
@@ -6503,13 +6835,34 @@ static void deferred_memset(void * dst, uint32_t val, size_t size, std::vector<v
 }
 
 static void ggml_vk_ensure_sync_staging_buffer(vk_device& device, size_t size) {
-    if (device->sync_staging == nullptr || device->sync_staging->size < size) {
-        VK_LOG_MEMORY("ggml_vk_ensure_sync_staging_buffer(" << size << ")");
-        ggml_vk_destroy_buffer(device->sync_staging);
-        device->sync_staging = ggml_vk_create_buffer_check(device, size,
-            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eHostCached,
-            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+    std::lock_guard<std::recursive_mutex> guard(device->mutex);
+
+    if (device->sync_staging != nullptr && device->sync_staging->size >= size) {
+        return;
     }
+    VK_LOG_MEMORY("ggml_vk_ensure_sync_staging_buffer(" << size << ")");
+
+#ifdef GGML_VULKAN_SPARSE_TESTING
+    // Test-only fault injection: force staging OOM above threshold.
+    {
+        const char * threshold_str = getenv("GGML_VK_TEST_STAGING_OOM_THRESHOLD");
+        if (threshold_str && threshold_str[0]) {
+            size_t threshold = (size_t)strtoull(threshold_str, nullptr, 10);
+            if (threshold > 0 && size > threshold) {
+                GGML_LOG_INFO("ggml_vulkan: test: forcing staging OOM for size %zu (threshold %zu)\n", size, threshold);
+                ggml_vk_staging_oom_count.fetch_add(1);
+                throw vk::OutOfDeviceMemoryError("test: forced staging OOM");
+            }
+        }
+    }
+#endif
+
+    // Allocate new before destroying old — preserves existing buffer on failure
+    vk_buffer new_buf = ggml_vk_create_buffer_check(device, size,
+        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eHostCached,
+        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+    ggml_vk_destroy_buffer(device->sync_staging);
+    device->sync_staging = std::move(new_buf);
 }
 
 static void ggml_vk_ensure_sync_staging_buffer(ggml_backend_vk_context * ctx, size_t size) {
@@ -6692,6 +7045,83 @@ static void ggml_vk_buffer_write_2d(vk_buffer& dst, size_t offset, const void * 
         for (size_t i = 0; i < height; i++) {
             memcpy((uint8_t *)dst->ptr + offset + i * width, (const uint8_t *) src + i * spitch, width);
         }
+    } else if (height == 1) {
+        static constexpr size_t STAGING_CHUNK_FALLBACK = 32ULL * 1024 * 1024;
+
+        std::lock_guard<std::recursive_mutex> guard(dst->device->mutex);
+
+        // Try single-shot staging at full transfer size (skip if cap already learned)
+        if (width <= dst->device->staging_safe_cap) {
+            try {
+                ggml_vk_ensure_sync_staging_buffer(dst->device, width);
+
+                // Single-shot transfer
+                vk_context subctx = ggml_vk_create_temporary_context(dst->device->transfer_queue.cmd_pool);
+                ggml_vk_ctx_begin(dst->device, subctx);
+                bool ret = ggml_vk_buffer_write_2d_async(subctx, dst, offset, src, 0, width, 1, true);
+                GGML_ASSERT(ret);
+                ggml_vk_ctx_end(subctx);
+
+                for (auto& cpy : subctx->in_memcpys) {
+                    memcpy(cpy.dst, cpy.src, cpy.n);
+                }
+                for (auto& mset : subctx->memsets) {
+                    memset(mset.dst, mset.val, mset.n);
+                }
+
+                ggml_vk_submit(subctx, dst->device->fence);
+                VK_CHECK(dst->device->device.waitForFences({ dst->device->fence }, true, UINT64_MAX), "vk_buffer_write_2d waitForFences");
+                dst->device->device.resetFences({ dst->device->fence });
+                ggml_vk_queue_command_pools_cleanup(dst->device);
+                return;
+            } catch (const vk::OutOfDeviceMemoryError&) {
+                if (dst->device->staging_safe_cap > STAGING_CHUNK_FALLBACK) {
+                    GGML_LOG_WARN("ggml_vulkan: staging alloc of %zu failed, capping at %zu\n", width, STAGING_CHUNK_FALLBACK);
+                    dst->device->staging_safe_cap = STAGING_CHUNK_FALLBACK;
+                }
+            } catch (const vk::OutOfHostMemoryError&) {
+                if (dst->device->staging_safe_cap > STAGING_CHUNK_FALLBACK) {
+                    GGML_LOG_WARN("ggml_vulkan: staging alloc of %zu failed, capping at %zu\n", width, STAGING_CHUNK_FALLBACK);
+                    dst->device->staging_safe_cap = STAGING_CHUNK_FALLBACK;
+                }
+            }
+        }
+
+        // Chunk fallback path
+        ggml_vk_ensure_sync_staging_buffer(dst->device, std::min(width, STAGING_CHUNK_FALLBACK));
+        GGML_ASSERT(dst->device->sync_staging && dst->device->sync_staging->size > 0);
+
+        size_t remaining = width;
+        size_t dst_off   = offset;
+        const uint8_t * src_ptr = (const uint8_t *)src;
+
+        vk_context subctx = ggml_vk_create_temporary_context(dst->device->transfer_queue.cmd_pool);
+        while (remaining > 0) {
+            const size_t chunk = std::min(remaining, dst->device->sync_staging->size);
+
+            ggml_vk_ctx_begin(dst->device, subctx);
+            bool ret = ggml_vk_buffer_write_2d_async(subctx, dst, dst_off, src_ptr, 0, chunk, 1, true);
+            GGML_ASSERT(ret);
+            ggml_vk_ctx_end(subctx);
+
+            for (auto& cpy : subctx->in_memcpys) {
+                memcpy(cpy.dst, cpy.src, cpy.n);
+            }
+            subctx->in_memcpys.clear();
+            for (auto& mset : subctx->memsets) {
+                memset(mset.dst, mset.val, mset.n);
+            }
+            subctx->memsets.clear();
+
+            ggml_vk_submit(subctx, dst->device->fence);
+            VK_CHECK(dst->device->device.waitForFences({ dst->device->fence }, true, UINT64_MAX), "vk_buffer_write_2d waitForFences");
+            dst->device->device.resetFences({ dst->device->fence });
+            ggml_vk_queue_command_pools_cleanup(dst->device);
+
+            dst_off += chunk;
+            src_ptr += chunk;
+            remaining -= chunk;
+        }
     } else {
         std::lock_guard<std::recursive_mutex> guard(dst->device->mutex);
 
@@ -6791,21 +7221,74 @@ static void ggml_vk_buffer_read(vk_buffer& src, size_t offset, void * dst, size_
 
         memcpy(dst, (uint8_t *) src->ptr + offset, size);
     } else {
+        static constexpr size_t STAGING_CHUNK_FALLBACK = 32ULL * 1024 * 1024;
+
         std::lock_guard<std::recursive_mutex> guard(src->device->mutex);
 
+        // Try single-shot staging at full transfer size (skip if cap already learned)
+        if (size <= src->device->staging_safe_cap) {
+            try {
+                ggml_vk_ensure_sync_staging_buffer(src->device, size);
+
+                // Single-shot transfer
+                vk_context subctx = ggml_vk_create_temporary_context(src->device->transfer_queue.cmd_pool);
+                ggml_vk_ctx_begin(src->device, subctx);
+                bool ret = ggml_vk_buffer_read_async(subctx, src, offset, dst, size, true);
+                GGML_ASSERT(ret);
+                ggml_vk_ctx_end(subctx);
+
+                ggml_vk_submit(subctx, src->device->fence);
+                VK_CHECK(src->device->device.waitForFences({ src->device->fence }, true, UINT64_MAX), "vk_buffer_read waitForFences");
+                src->device->device.resetFences({ src->device->fence });
+                ggml_vk_queue_command_pools_cleanup(src->device);
+
+                for (auto& cpy : subctx->out_memcpys) {
+                    memcpy(cpy.dst, cpy.src, cpy.n);
+                }
+                return;
+            } catch (const vk::OutOfDeviceMemoryError&) {
+                if (src->device->staging_safe_cap > STAGING_CHUNK_FALLBACK) {
+                    GGML_LOG_WARN("ggml_vulkan: staging alloc of %zu failed, capping at %zu\n", size, STAGING_CHUNK_FALLBACK);
+                    src->device->staging_safe_cap = STAGING_CHUNK_FALLBACK;
+                }
+            } catch (const vk::OutOfHostMemoryError&) {
+                if (src->device->staging_safe_cap > STAGING_CHUNK_FALLBACK) {
+                    GGML_LOG_WARN("ggml_vulkan: staging alloc of %zu failed, capping at %zu\n", size, STAGING_CHUNK_FALLBACK);
+                    src->device->staging_safe_cap = STAGING_CHUNK_FALLBACK;
+                }
+            }
+        }
+
+        // Chunk fallback path
+        ggml_vk_ensure_sync_staging_buffer(src->device, std::min(size, STAGING_CHUNK_FALLBACK));
+        GGML_ASSERT(src->device->sync_staging && src->device->sync_staging->size > 0);
+
+        size_t remaining = size;
+        size_t src_off   = offset;
+        uint8_t * dst_ptr = (uint8_t *)dst;
+
         vk_context subctx = ggml_vk_create_temporary_context(src->device->transfer_queue.cmd_pool);
-        ggml_vk_ctx_begin(src->device, subctx);
-        bool ret = ggml_vk_buffer_read_async(subctx, src, offset, dst, size, true);
-        GGML_ASSERT(ret);
-        ggml_vk_ctx_end(subctx);
+        while (remaining > 0) {
+            const size_t chunk = std::min(remaining, src->device->sync_staging->size);
 
-        ggml_vk_submit(subctx, src->device->fence);
-        VK_CHECK(src->device->device.waitForFences({ src->device->fence }, true, UINT64_MAX), "vk_buffer_read waitForFences");
-        src->device->device.resetFences({ src->device->fence });
-        ggml_vk_queue_command_pools_cleanup(src->device);
+            ggml_vk_ctx_begin(src->device, subctx);
+            bool ret = ggml_vk_buffer_read_async(subctx, src, src_off, dst_ptr, chunk, true);
+            GGML_ASSERT(ret);
+            ggml_vk_ctx_end(subctx);
 
-        for (auto& cpy : subctx->out_memcpys) {
-            memcpy(cpy.dst, cpy.src, cpy.n);
+            ggml_vk_submit(subctx, src->device->fence);
+            VK_CHECK(src->device->device.waitForFences({ src->device->fence }, true, UINT64_MAX), "vk_buffer_read waitForFences");
+            src->device->device.resetFences({ src->device->fence });
+            ggml_vk_queue_command_pools_cleanup(src->device);
+
+            for (auto& cpy : subctx->out_memcpys) {
+                memcpy(cpy.dst, cpy.src, cpy.n);
+            }
+            subctx->out_memcpys.clear();
+
+            src_off += chunk;
+            dst_ptr += chunk;
+            remaining -= chunk;
         }
     }
 }
@@ -6834,14 +7317,61 @@ static void ggml_vk_buffer_copy(vk_buffer& dst, size_t dst_offset, vk_buffer& sr
         src->device->device.resetFences({ src->device->fence });
         ggml_vk_queue_command_pools_cleanup(src->device);
     } else {
-        VK_LOG_DEBUG("ggml_vk_buffer_copy(MULTI_DEVICE, " << size << ")");
-        // Copy device to device
-        ggml_vk_ensure_sync_staging_buffer(src->device, size);
+        static constexpr size_t STAGING_CHUNK_FALLBACK = 32ULL * 1024 * 1024;
 
-        // Copy to src staging buffer
-        ggml_vk_buffer_copy(src->device->sync_staging, 0, src, src_offset, size);
-        // Copy to dst buffer
-        ggml_vk_buffer_write_2d(dst, dst_offset, src->device->sync_staging->ptr, 0, size, 1);
+        VK_LOG_DEBUG("ggml_vk_buffer_copy(MULTI_DEVICE, " << size << ")");
+
+        // Read cap under lock, then release before cross-device calls to avoid ABBA deadlock
+        // (this thread: src mutex -> dst mutex via buffer_write_2d;
+        //  another thread could do the reverse direction)
+        bool try_large;
+        {
+            std::lock_guard<std::recursive_mutex> guard(src->device->mutex);
+            try_large = size <= src->device->staging_safe_cap;
+        }
+
+        // Try single-shot staging at full transfer size (skip if cap already learned)
+        if (try_large) {
+            try {
+                ggml_vk_ensure_sync_staging_buffer(src->device, size);
+
+                // Single-shot cross-device copy via staging
+                ggml_vk_buffer_copy(src->device->sync_staging, 0, src, src_offset, size);
+                ggml_vk_buffer_write_2d(dst, dst_offset, src->device->sync_staging->ptr, 0, size, 1);
+                return;
+            } catch (const vk::OutOfDeviceMemoryError&) {
+                std::lock_guard<std::recursive_mutex> guard(src->device->mutex);
+                if (src->device->staging_safe_cap > STAGING_CHUNK_FALLBACK) {
+                    GGML_LOG_WARN("ggml_vulkan: staging alloc of %zu failed, capping at %zu\n", size, STAGING_CHUNK_FALLBACK);
+                    src->device->staging_safe_cap = STAGING_CHUNK_FALLBACK;
+                }
+            } catch (const vk::OutOfHostMemoryError&) {
+                std::lock_guard<std::recursive_mutex> guard(src->device->mutex);
+                if (src->device->staging_safe_cap > STAGING_CHUNK_FALLBACK) {
+                    GGML_LOG_WARN("ggml_vulkan: staging alloc of %zu failed, capping at %zu\n", size, STAGING_CHUNK_FALLBACK);
+                    src->device->staging_safe_cap = STAGING_CHUNK_FALLBACK;
+                }
+            }
+        }
+
+        // Chunk fallback path — copy through staging in pieces
+        ggml_vk_ensure_sync_staging_buffer(src->device, std::min(size, STAGING_CHUNK_FALLBACK));
+        GGML_ASSERT(src->device->sync_staging && src->device->sync_staging->size > 0);
+
+        size_t remaining = size;
+        size_t s_off = src_offset;
+        size_t d_off = dst_offset;
+
+        while (remaining > 0) {
+            const size_t chunk = std::min(remaining, src->device->sync_staging->size);
+
+            ggml_vk_buffer_copy(src->device->sync_staging, 0, src, s_off, chunk);
+            ggml_vk_buffer_write_2d(dst, d_off, src->device->sync_staging->ptr, 0, chunk, 1);
+
+            s_off += chunk;
+            d_off += chunk;
+            remaining -= chunk;
+        }
     }
 }
 
