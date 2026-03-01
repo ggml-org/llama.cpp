@@ -1579,7 +1579,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             io_cv.wait(lock, [&] { return io_busy || !fout.is_open(); });
             if (!fout.is_open() && !io_busy) break;
 
-            auto & buf = write_bufs[wb_idx ^ 1]; // the "other" buffer
+            auto & buf = write_bufs[wb_idx ^ 1]; // the other buffer
             size_t pad = pending_pad;
             lock.unlock();
 
@@ -1734,7 +1734,16 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     if (!params->dry_run) {
         flush_pending_write();
         close_ofstream();
+
+        // shut down the I/O thread
+        {
+            std::lock_guard<std::mutex> lock(io_mutex);
+            // fout is already closed; thread will see !fout.is_open()
+        }
     }
+
+    io_cv.notify_one();
+    io_thread.join();
 
     LLAMA_LOG_INFO("%s: model size  = %8.2f MiB (%.2f BPW)\n", __func__, total_size_org/1024.0/1024.0, total_size_org*8.0/ml.n_elements);
     LLAMA_LOG_INFO("%s: quant size  = %8.2f MiB (%.2f BPW)\n", __func__, total_size_new/1024.0/1024.0, total_size_new*8.0/ml.n_elements);
