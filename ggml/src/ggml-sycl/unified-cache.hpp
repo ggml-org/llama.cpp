@@ -281,6 +281,58 @@ struct cache_layout_result {
     cache_location        location      = cache_location::DEVICE;
 };
 
+
+// --- Expert Placement Table (replaces ExpertCache::lookup) ---
+
+struct ExpertPlacement {
+    int    device_id      = -1;      // 0..n_gpu-1 for GPU, -1 = CPU-only
+    void * device_ptr     = nullptr; // SOA device pointer (nullptr if CPU-only)
+    void * host_ptr       = nullptr; // AOS host-pinned pointer (always valid after init)
+    size_t weight_bytes   = 0;       // Per-expert weight size in bytes
+    int    popularity_rank = -1;     // 0 = most popular, -1 = unranked
+    bool   is_valid() const { return host_ptr != nullptr; }
+};
+
+class ExpertPlacementTable {
+public:
+    ExpertPlacementTable() = default;
+
+    // Initialize with model dimensions (called once during moe_hybrid_init_once)
+    void init(int n_layers, int n_experts_per_layer);
+
+    // Set placement for a specific expert (called during registration)
+    void set(int layer_id, int expert_id, const ExpertPlacement & placement);
+
+    // Get placement (hot path — shared lock, O(1))
+    ExpertPlacement get(int layer_id, int expert_id) const;
+
+    // Update device pointer after SOA upload (Task 4)
+    void set_device_ptr(int layer_id, int expert_id, int device_id, void * ptr);
+
+    // Update popularity rank (called after warmup profiling)
+    void set_popularity(int layer_id, int expert_id, int rank);
+
+    // Query dimensions
+    int  n_layers() const { return n_layers_; }
+    int  n_experts() const { return n_experts_; }
+    bool is_initialized() const { return n_layers_ > 0; }
+
+    // Iteration for bulk operations (load, profile, eviction)
+    // Returns all experts for a given layer, sorted by popularity_rank
+    std::vector<std::pair<int, ExpertPlacement>> get_layer_experts(int layer_id) const;
+
+private:
+    // IMPORTANT: layer_id is a FNV-1a 32-bit hash — must use 64-bit key
+    int64_t make_key(int layer_id, int expert_id) const {
+        return (int64_t(layer_id) << 32) | int64_t(uint32_t(expert_id));
+    }
+
+    mutable std::shared_mutex                        mutex_;
+    std::unordered_map<int64_t, ExpertPlacement>     table_;
+    int                                          n_layers_  = 0;
+    int                                          n_experts_ = 0;
+};
+
 // Key for identifying a cached entry
 struct unified_cache_key {
     cache_entry_type   type;
@@ -1443,10 +1495,11 @@ void unpin_all_experts();
 
 // Result of pre-staging operation
 struct prestage_result {
-    int  n_staged;  // Number of experts actually staged (not already cached)
-    int  n_pinned;  // Number of experts pinned (includes already-cached)
-    int  n_unique;  // Number of unique experts in input
-    bool success;   // True if all staging/pinning succeeded
+    int                      n_staged;        // Number of experts actually staged (not already cached)
+    int                      n_pinned;        // Number of experts pinned (includes already-cached)
+    int                      n_unique;        // Number of unique experts in input
+    bool                     success;         // True if all staging/pinning succeeded
+    std::vector<sycl::event> staging_events;  // Async H2D fill events (empty if all hits or sync path)
 };
 
 // Pre-stage only the experts identified by routing indices.
@@ -1536,6 +1589,9 @@ void shutdown_unified_cache();
 // Returns true if SYCL runtime teardown has begun (atexit handler fired).
 // Used by ExpertCache/ExpertPrefetcher to skip sycl::free() during static destruction.
 bool ggml_sycl_is_shutting_down();
+
+// Global expert placement table (one per process, all devices share)
+ExpertPlacementTable & get_expert_placement_table();
 
 }  // namespace ggml_sycl
 

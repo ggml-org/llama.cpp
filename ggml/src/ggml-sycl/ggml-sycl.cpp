@@ -391,6 +391,29 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
         n_moe_layers, n_experts_per_layer, n_experts_used, expert_weight_bytes / 1024.0, n_host_experts,
         expert_list.size());
 
+    // -----------------------------------------------------------------------
+    // Initialize ExpertPlacementTable with discovered dimensions
+    // -----------------------------------------------------------------------
+    auto & placement_table = ggml_sycl::get_expert_placement_table();
+    placement_table.init(n_moe_layers, n_experts_per_layer);
+    GGML_SYCL_DEBUG("[MOE-HYBRID] ExpertPlacementTable initialized: %d layers, %d experts/layer\n",
+                    n_moe_layers, n_experts_per_layer);
+
+    // Populate placement table — initially all experts are CPU-only
+    for (const auto & info : expert_list) {
+        ggml_sycl::ExpertPlacement placement{};
+        placement.device_id       = -1;  // CPU-only initially
+        placement.host_ptr        = const_cast<void *>(info.host_ptr);
+        placement.weight_bytes    = info.bytes;
+        placement.popularity_rank = -1;  // Unranked initially (profiling will update)
+        placement_table.set(info.layer_id, info.expert_idx, placement);
+    }
+    GGML_SYCL_DEBUG("[MOE-HYBRID] ExpertPlacementTable populated with %zu expert entries\n", expert_list.size());
+
+    // -----------------------------------------------------------------------
+    // ExpertCache initialization (will be removed by Task 7)
+    // -----------------------------------------------------------------------
+
     // Initialize ExpertCache with default budget (50% remaining VRAM)
     cache.init(device, 0 /* default budget */, q);
 
@@ -18844,20 +18867,10 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
     sycl::queue * stream = ctx.stream();
     GGML_SYCL_DEBUG("[MOE-PTR] stream=%p data=%p\n", (void *) stream, src0->data);
 
-    // Force queue sync to catch any pending errors from previous operations.
-    // Skip during graph recording - wait() is illegal during recording and dependencies
-    // should already be captured via the event chain mechanism.
-    if (!ggml_sycl_graph_recording_active()) {
-        try {
-            stream->wait();
-            GGML_SYCL_DEBUG("[MOE-PTR] queue sync complete\n");
-        } catch (const sycl::exception & e) {
-            GGML_LOG_ERROR("[MOE-PTR] Pending error in queue: %s\n", e.what());
-            throw;
-        }
-    } else {
-        GGML_SYCL_DEBUG("[MOE-PTR] Skipping wait during graph recording\n");
-    }
+    // Note: we do NOT call stream->wait() here. All data dependencies are tracked
+    // via event chains: ensure_cached_layout() returns events that are collected into
+    // table_deps, and the pointer-table H2D memcpy (below) depends_on those events.
+    // This keeps the staging path fully async and avoids host-device synchronization.
 
     // Determine if src0->data is directly usable by GPU kernels
     // Only host and shared USM types are device-accessible without staging
@@ -22865,10 +22878,10 @@ static bool ggml_sycl_mul_mat_id_fused(ggml_backend_sycl_context & ctx,
     if (g_ggml_sycl_graph_recording && ids->buffer && ggml_backend_buffer_is_host(ids->buffer)) {
         stream->ext_oneapi_submit_barrier({ ids_copy_event });
     }
-    if (host_weights) {
-        GGML_SYCL_DEBUG("[MoE FUSED] Host weights for %s, falling back to MMVQ\n", src0->name);
-        return false;
-    }
+    // Note: host_weights (src0 in host buffer) is NOT an automatic disqualifier.
+    // ggml_sycl_get_layout_ptr_for() resolves through the unified cache and returns
+    // a device USM pointer when weights are cached in VRAM.  If no device copy exists
+    // (cache miss), get_layout_ptr_for returns nullptr and we fall back below.
 
     auto *            src0_extra = (ggml_tensor_extra_gpu *) src0->extra;
     const layout_mode layout     = get_effective_layout_mode(src0_extra);
@@ -22888,12 +22901,16 @@ static bool ggml_sycl_mul_mat_id_fused(ggml_backend_sycl_context & ctx,
 
     const void * src0_weight_ptr = ggml_sycl_get_layout_ptr_for(src0, ctx.device, use_layout);
     if (!src0_weight_ptr) {
+        GGML_SYCL_DEBUG("[MoE FUSED] No device layout ptr for %s (host_weights=%d, layout=%d)\n",
+                        src0->name, (int) host_weights, (int) use_layout);
         return false;
     }
-    // Check if expert weights are in device memory
-    // Fused kernel requires contiguous device memory for all experts
-    // Fall back to MMVQ which has per-expert caching support for non-device memory
-    // CRITICAL: Check for != device due to Level Zero driver bug that reports mmap'd memory as "shared"
+    // Confirm that the resolved pointer is genuinely in device VRAM.
+    // Fused kernel uses base+stride addressing so all expert weights must be
+    // contiguous in device memory.  mmap'd / pinned-host pointers show up as
+    // sycl::usm::alloc::unknown on Level Zero and cannot be used here.
+    // CRITICAL: Check for != device due to Level Zero driver bug that reports
+    //           mmap'd memory as "shared" rather than "unknown" on some builds.
     {
         sycl::usm::alloc ptr_type = sycl::get_pointer_type(src0_weight_ptr, stream->get_context());
         if (ptr_type != sycl::usm::alloc::device) {

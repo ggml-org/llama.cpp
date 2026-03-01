@@ -6117,20 +6117,35 @@ prestage_result prestage_routed_experts(void *          queue_ptr,
     GGML_SYCL_DEBUG("[PRESTAGE] Layer %d: %zu cache hits, %zu to stage\n", layer_id,
                     unique_experts.size() - experts_to_stage.size(), experts_to_stage.size());
 
-    // Step 3: Stage missing experts
-    // NOTE: This is a placeholder - actual staging requires layout decisions and fill callbacks
-    // For now, we just use ensure_cached with AOS layout (passthrough)
+    // Use queue_ptr for async staging — submit H2D transfers without blocking
+    sycl::queue * staging_queue = static_cast<sycl::queue *>(queue_ptr);
+    (void) staging_queue;  // ensure_cached_layout uses the cache's internal queue
+
+    // Step 3: Stage missing experts via ensure_cached_layout to get fill events
     for (int32_t expert_id : experts_to_stage) {
         const void *       expert_ptr = static_cast<const char *>(weight_base_ptr) + expert_id * expert_stride;
         ggml_sycl_cache_id key        = make_expert_cache_id(tensor_name, cache_uuid, model_id, expert_id);
 
-        // Stage expert with AOS layout (passthrough - no reorder)
-        void * cached_ptr = cache->ensure_cached(key, expert_ptr, expert_size, cache_entry_type::MOE_EXPERT, layer_id,
-                                                 expert_id, GGML_LAYOUT_AOS,
-                                                 false);  // No content validation
+        cache_layout_request req{};
+        req.key              = key;
+        req.src_ptr          = expert_ptr;
+        req.src_size         = expert_size;
+        req.dst_size         = expert_size;
+        req.type             = cache_entry_type::MOE_EXPERT;
+        req.layer_id         = layer_id;
+        req.expert_id        = expert_id;
+        req.layout           = GGML_LAYOUT_AOS;
+        req.validate_content = false;
 
-        if (cached_ptr) {
+        cache_layout_result layout_result = cache->ensure_cached_layout(req, {});
+
+        if (layout_result.status == cache_layout_status::READY ||
+            layout_result.status == cache_layout_status::IN_PROGRESS) {
             result.n_staged++;
+            // Collect async fill event so callers can depends_on() it
+            if (layout_result.status == cache_layout_status::IN_PROGRESS) {
+                result.staging_events.push_back(layout_result.event);
+            }
         } else {
             GGML_SYCL_DEBUG("[PRESTAGE] Layer %d: Failed to stage expert %d\n", layer_id, expert_id);
         }
@@ -6138,8 +6153,7 @@ prestage_result prestage_routed_experts(void *          queue_ptr,
 
     // Step 4: Pin all unique experts (including those already cached)
     for (int32_t expert_id : unique_experts) {
-        const void *       expert_ptr = static_cast<const char *>(weight_base_ptr) + expert_id * expert_stride;
-        ggml_sycl_cache_id key        = make_expert_cache_id(tensor_name, cache_uuid, model_id, expert_id);
+        ggml_sycl_cache_id key = make_expert_cache_id(tensor_name, cache_uuid, model_id, expert_id);
 
         cache->pin(key, GGML_LAYOUT_AOS);
         result.n_pinned++;
@@ -6147,11 +6161,8 @@ prestage_result prestage_routed_experts(void *          queue_ptr,
 
     result.success = true;
 
-    GGML_SYCL_DEBUG("[PRESTAGE] Layer %d: Completed - staged=%d, pinned=%d, unique=%d\n", layer_id, result.n_staged,
-                    result.n_pinned, result.n_unique);
-
-    // Unused for now but may be used for async staging
-    (void) queue_ptr;
+    GGML_SYCL_DEBUG("[PRESTAGE] Layer %d: Completed - staged=%d, pinned=%d, unique=%d, async_events=%zu\n",
+                    layer_id, result.n_staged, result.n_pinned, result.n_unique, result.staging_events.size());
 
     return result;
 }
@@ -6197,6 +6208,70 @@ void unpin_routed_experts(const int32_t * expert_ids,
     }
 
     GGML_SYCL_DEBUG("[UNPIN] Layer %d: Unpinned %zu experts\n", layer_id, unique_experts.size());
+}
+
+// --- ExpertPlacementTable implementation ---
+
+void ExpertPlacementTable::init(int n_layers, int n_experts_per_layer) {
+    std::unique_lock lock(mutex_);
+    n_layers_  = n_layers;
+    n_experts_ = n_experts_per_layer;
+    table_.reserve(static_cast<size_t>(n_layers) * n_experts_per_layer);
+}
+
+void ExpertPlacementTable::set(int layer_id, int expert_id,
+                                const ExpertPlacement & placement) {
+    std::unique_lock lock(mutex_);
+    table_[make_key(layer_id, expert_id)] = placement;
+}
+
+ExpertPlacement ExpertPlacementTable::get(int layer_id, int expert_id) const {
+    std::shared_lock lock(mutex_);
+    auto it = table_.find(make_key(layer_id, expert_id));
+    if (it != table_.end()) {
+        return it->second;
+    }
+    return {};  // Invalid placement (device_id = -1, ptrs = nullptr)
+}
+
+void ExpertPlacementTable::set_device_ptr(int layer_id, int expert_id,
+                                           int device_id, void * ptr) {
+    std::unique_lock lock(mutex_);
+    auto it = table_.find(make_key(layer_id, expert_id));
+    if (it != table_.end()) {
+        it->second.device_id  = device_id;
+        it->second.device_ptr = ptr;
+    }
+}
+
+void ExpertPlacementTable::set_popularity(int layer_id, int expert_id, int rank) {
+    std::unique_lock lock(mutex_);
+    auto it = table_.find(make_key(layer_id, expert_id));
+    if (it != table_.end()) {
+        it->second.popularity_rank = rank;
+    }
+}
+
+std::vector<std::pair<int, ExpertPlacement>>
+ExpertPlacementTable::get_layer_experts(int layer_id) const {
+    std::shared_lock lock(mutex_);
+    std::vector<std::pair<int, ExpertPlacement>> result;
+    for (int e = 0; e < n_experts_; e++) {
+        auto it = table_.find(make_key(layer_id, e));
+        if (it != table_.end()) {
+            result.push_back({e, it->second});
+        }
+    }
+    std::sort(result.begin(), result.end(),
+              [](const auto & a, const auto & b) {
+                  return a.second.popularity_rank < b.second.popularity_rank;
+              });
+    return result;
+}
+
+ExpertPlacementTable & get_expert_placement_table() {
+    static ExpertPlacementTable table;
+    return table;
 }
 
 // === OneDNN FP16 Scratch Buffer Implementation ===

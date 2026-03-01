@@ -14,12 +14,14 @@
 #define GGML_SYCL_GEMM_HPP
 
 #include "ggml-sycl.h"
+#include "common.hpp"
 
 #if GGML_SYCL_DNNL
 
 #include "dnnl.hpp"
 #include "dnnl_sycl.hpp"
 #include <cstdio>
+#include <array>
 #include <unordered_map>
 #include <mutex>
 
@@ -216,18 +218,20 @@ public:
     using tag = dnnl::memory::format_tag;
 
     // Serialize oneDNN execution to avoid cross-thread primitive/memory races.
-    // GPU and CPU use separate mutexes so they don't serialize against each other
-    // (they have independent engines and streams).
-    static std::mutex & exec_mutex_gpu() {
-        static std::mutex mutex;
-        return mutex;
-    }
+    // CPU uses a dedicated mutex. Each GPU device gets its own mutex so parallel
+    // multi-GPU dispatch (e.g. B580 + B50) does not serialize against each other.
     static std::mutex & exec_mutex_cpu() {
         static std::mutex mutex;
         return mutex;
     }
     static std::mutex & exec_mutex(const queue_ptr & q) {
-        return (q == ggml_sycl_get_cpu_queue()) ? exec_mutex_cpu() : exec_mutex_gpu();
+        if (q == ggml_sycl_get_cpu_queue()) {
+            return exec_mutex_cpu();
+        }
+        // Per-GPU device mutex (allows parallel B580+B50 GEMM without serialization)
+        static std::array<std::mutex, GGML_SYCL_MAX_DEVICES> gpu_mutexes;
+        int dev_id = ggml_sycl_get_device_id_from_queue(*q);
+        return gpu_mutexes[std::min(dev_id, static_cast<int>(gpu_mutexes.size()) - 1)];
     }
 
     template<typename T>
