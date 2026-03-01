@@ -1659,6 +1659,8 @@ if(GGML_SYCL)
 
     # test-expert-cache: Tests for MoE expert VRAM cache with LRU/frequency eviction
     # Part of tiered memory architecture for MoE models
+    # DISABLED: expert-cache.hpp removed (replaced by unified cache + placement table)
+    if(FALSE)
     add_executable(test-expert-cache test-expert-cache.cpp)
     target_link_libraries(test-expert-cache PRIVATE ggml)
     target_include_directories(test-expert-cache PRIVATE
@@ -1668,6 +1670,7 @@ if(GGML_SYCL)
     target_link_options(test-expert-cache PRIVATE "-fsycl")
     install(TARGETS test-expert-cache RUNTIME)
     add_test(NAME test-expert-cache COMMAND $<TARGET_FILE:test-expert-cache>)
+    endif()
 
     # test-sycl-cpu-dispatch: Tests for T8 mixed-precision cache miss loading
     # INT4 fast-path kernel correctness, adaptive dispatch split, Q6_K fallback
@@ -1759,7 +1762,8 @@ if(GGML_SYCL)
 
     # test-sycl-expert-prefetch: Tests for async expert prefetch DMA engine
     # Part of MoE hybrid inference system (epic llama.cpp-j8eb, Task 3)
-    # Requires SYCL runtime: tests real async H2D DMA via expert_cache
+    # DISABLED: requires GGML_SYCL_LEGACY_EXPERT_CACHE for expert_cache.cpp
+    if(FALSE)
     add_executable(test-sycl-expert-prefetch test-sycl-expert-prefetch.cpp
         ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl/expert-prefetch.cpp
         ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl/expert-cache.cpp)
@@ -1771,6 +1775,7 @@ if(GGML_SYCL)
     target_link_options(test-sycl-expert-prefetch PRIVATE "-fsycl")
     install(TARGETS test-sycl-expert-prefetch RUNTIME)
     add_test(NAME test-sycl-expert-prefetch COMMAND $<TARGET_FILE:test-sycl-expert-prefetch>)
+    endif()
 
     # test-sycl-kv-cache-manager: Unit tests for KV cache manager with per-head granularity
     # Part of unified memory management system (epic llama.cpp-v3n, task llama.cpp-vr5)

@@ -34,16 +34,10 @@ ExpertPrefetcher::~ExpertPrefetcher() {
     }
 }
 
-void ExpertPrefetcher::init(sycl::queue & compute_q, ExpertCache * cache) {
+void ExpertPrefetcher::init(sycl::queue & compute_q) {
     if (initialized_) {
         return;
     }
-    if (!cache) {
-        GGML_LOG_WARN("[SYCL] ExpertPrefetcher::init called with null cache\n");
-        return;
-    }
-
-    cache_ = cache;
 
     // Create an out-of-order queue on the same device/context for DMA.
     // OOQ allows multiple H2D transfers to overlap and run concurrently.
@@ -70,7 +64,6 @@ void ExpertPrefetcher::shutdown() {
 
     cancel_all();
     initialized_ = false;
-    cache_       = nullptr;
     GGML_LOG_INFO("[SYCL] Expert prefetcher shut down (completed=%d)\n", completed_count_);
 }
 
@@ -79,93 +72,18 @@ void ExpertPrefetcher::shutdown() {
 // ============================================================================
 
 bool ExpertPrefetcher::hint(int layer_idx, int expert_idx) {
-    if (!initialized_) {
-        return false;
-    }
-
-    std::lock_guard<std::mutex> lock(mutex_);
-
-    expert_key key{ layer_idx, expert_idx };
-
-    // Already in-flight?
-    if (inflight_.find(key) != inflight_.end()) {
-        return false;
-    }
-
-    // Already cached in VRAM?
-    ExpertLookup lk = cache_->lookup(layer_idx, expert_idx);
-    if (lk.is_cached) {
-        return false;
-    }
-
-    // Not registered in cache (no host pointer)?
-    if (!lk.host_ptr) {
-        return false;
-    }
-
-    // Room for more in-flight?
-    if (!has_capacity()) {
-        gc_completed();
-        if (!has_capacity()) {
-            return false;
-        }
-    }
-
-    // Submit async H2D DMA on our OOQ via ExpertCache::prefetch_async().
-    // This allocates a VRAM slot (evicting if needed) and submits the memcpy
-    // on dma_queue_, returning a per-expert sycl::event for granular await.
-    sycl::event ev = cache_->prefetch_async(layer_idx, expert_idx, *dma_queue_);
-
-    PrefetchRequest req;
-    req.key       = key;
-    req.event     = ev;
-    req.completed = false;
-    inflight_[key] = req;
-
-    return true;
+    // Prefetching disabled after ExpertCache removal.
+    // Weight management is now handled by unified cache.
+    (void) layer_idx;
+    (void) expert_idx;
+    return false;
 }
 
 void ExpertPrefetcher::hint_batch(int layer_idx, const std::vector<int> & expert_indices) {
-    if (!cache_ || !dma_queue_ || !initialized_) {
-        return;
-    }
-
-    // Build batch request, filtering out already in-flight experts.
-    std::vector<std::pair<int, int>> batch;
-    batch.reserve(expert_indices.size());
-
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        for (int eid : expert_indices) {
-            expert_key key{ layer_idx, eid };
-            if (inflight_.find(key) != inflight_.end()) {
-                continue;  // Already in-flight
-            }
-            batch.push_back({ layer_idx, eid });
-        }
-    }
-
-    if (batch.empty()) {
-        return;
-    }
-
-    // Batch prefetch: Phase 1 (eviction planning) and Phase 2 (DMA submission)
-    // happen inside ExpertCache with split-phase locking.
-    PrefetchResult result = cache_->prefetch_batch_async(batch, *dma_queue_);
-
-    // Track per-expert events in inflight_ map for granular await.
-    std::lock_guard<std::mutex> lock(mutex_);
-    for (auto & [ek, ev] : result.events) {
-        if (inflight_.size() >= static_cast<size_t>(max_inflight_)) {
-            gc_completed();
-        }
-
-        PrefetchRequest req;
-        req.key       = ek;
-        req.event     = ev;
-        req.completed = false;
-        inflight_[ek] = req;
-    }
+    // Prefetching disabled after ExpertCache removal.
+    // Weight management is now handled by unified cache.
+    (void) layer_idx;
+    (void) expert_indices;
 }
 
 // ============================================================================
@@ -177,40 +95,14 @@ std::vector<int> ExpertPrefetcher::hint_batch_adaptive(
     const std::vector<int> & expert_indices,
     int n_miss_total)
 {
-    std::vector<int> cpu_indices;
+    // Prefetching disabled after ExpertCache removal.
+    // Weight management is now handled by unified cache.
+    (void) layer_idx;
+    (void) expert_indices;
+    (void) n_miss_total;
 
-    if (!initialized_ || expert_indices.empty()) {
-        return cpu_indices;
-    }
-
-    const expert_miss_precision mode = ggml_sycl_expert_miss_precision_mode();
-    const int threshold = ggml_sycl_expert_miss_burst_threshold();
-
-    // If full precision or below threshold: prefetch all
-    if (mode == expert_miss_precision::FULL || n_miss_total <= threshold) {
-        hint_batch(layer_idx, expert_indices);
-        return cpu_indices;  // empty: all prefetched
-    }
-
-    // Split: first `threshold` experts get prefetch, rest go to CPU
-    const int n_prefetch = std::min(threshold, static_cast<int>(expert_indices.size()));
-
-    std::vector<int> prefetch_indices(expert_indices.begin(),
-                                      expert_indices.begin() + n_prefetch);
-    cpu_indices.assign(expert_indices.begin() + n_prefetch,
-                       expert_indices.end());
-
-    // Schedule DMA for the prefetch batch
-    if (!prefetch_indices.empty()) {
-        hint_batch(layer_idx, prefetch_indices);
-    }
-
-    GGML_SYCL_DEBUG("[PREFETCH] Adaptive: %d prefetch, %d cpu-fallback "
-                    "(threshold=%d, miss=%d)\n",
-                    n_prefetch, (int) cpu_indices.size(),
-                    threshold, n_miss_total);
-
-    return cpu_indices;
+    // Return empty vector (no experts to CPU dispatch)
+    return std::vector<int>();
 }
 
 // ============================================================================
@@ -218,47 +110,12 @@ std::vector<int> ExpertPrefetcher::hint_batch_adaptive(
 // ============================================================================
 
 void * ExpertPrefetcher::await(int layer_idx, int expert_idx) {
-    if (!initialized_) {
-        return nullptr;
-    }
-
-    expert_key key{ layer_idx, expert_idx };
-
-    // Extract event under lock, then release before waiting.
-    // This avoids blocking hint() callers during DMA completion.
-    sycl::event ev_copy;
-    bool found = false;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto it = inflight_.find(key);
-        if (it != inflight_.end() && !it->second.completed) {
-            ev_copy = it->second.event;
-            found = true;
-        }
-    }
-
-    if (found) {
-        // Wait on the per-expert sycl::event (granular, not global queue wait).
-        // This blocks only until THIS expert's H2D DMA completes on dma_queue_.
-        // Mutex is NOT held during the wait, so hint() can proceed concurrently.
-        ev_copy.wait();
-
-        // Re-acquire lock to update state. Re-lookup because the map could
-        // have changed while the lock was released (e.g. cancel_all()).
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto it = inflight_.find(key);
-        if (it != inflight_.end() && !it->second.completed) {
-            it->second.completed = true;
-            completed_count_++;
-        }
-    }
-
-    // Return the expert's VRAM pointer. After the per-expert event completes,
-    // the data is guaranteed visible (BCS H2D to malloc_device completes
-    // before kernel launch because await() is called before submission on
-    // the in-order compute queue).
-    ExpertLookup lk = cache_->lookup(layer_idx, expert_idx);
-    return lk.is_cached ? lk.device_ptr : lk.host_ptr;
+    // Prefetching disabled after ExpertCache removal.
+    // Weight management is now handled by unified cache.
+    // Return nullptr to indicate no prefetch available.
+    (void) layer_idx;
+    (void) expert_idx;
+    return nullptr;
 }
 
 // ============================================================================
@@ -266,24 +123,8 @@ void * ExpertPrefetcher::await(int layer_idx, int expert_idx) {
 // ============================================================================
 
 void ExpertPrefetcher::cancel_all() {
-    if (!initialized_) {
-        return;
-    }
-
-    std::lock_guard<std::mutex> lock(mutex_);
-
-    if (!inflight_.empty()) {
-        // Wait for all pending DMAs on our OOQ
-        dma_queue_->wait();
-
-        for (auto & [key, req] : inflight_) {
-            if (!req.completed) {
-                req.completed = true;
-                completed_count_++;
-            }
-        }
-        inflight_.clear();
-    }
+    // Prefetching disabled after ExpertCache removal.
+    // No in-flight operations to cancel.
 }
 
 // ============================================================================

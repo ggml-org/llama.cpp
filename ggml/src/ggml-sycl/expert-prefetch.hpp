@@ -11,10 +11,9 @@
 // PCIe transfer with GPU compute, hiding latency for cache-miss experts.
 //
 // Uses an out-of-order SYCL queue (dma_queue_) for DMA, separate from the
-// compute queue. hint() submits memcpy on dma_queue_ via
-// ExpertCache::prefetch_async() and stores the returned sycl::event in a
-// PrefetchRequest. await() waits on the per-expert event for granular
-// synchronization.
+// compute queue. hint() submits memcpy on dma_queue_ and stores the returned
+// sycl::event in a PrefetchRequest. await() waits on the per-expert event
+// for granular synchronization.
 //
 // L2 coherency: BCS H2D to malloc_device completes BEFORE the kernel
 // launches because await() is called before kernel submission, and the
@@ -30,7 +29,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "expert-cache.hpp"
+#include "expert-key.hpp"
 
 namespace ggml_sycl {
 
@@ -69,17 +68,16 @@ class ExpertPrefetcher {
 
     // Initialize the prefetcher.
     // compute_q: the primary in-order compute queue (used to derive context/device)
-    // cache: the expert VRAM cache (for slot allocation + host pointer lookup)
-    void init(sycl::queue & compute_q, ExpertCache * cache);
+    void init(sycl::queue & compute_q);
 
     // Shut down: cancel all in-flight prefetches, wait for completion.
     void shutdown();
 
     // Schedule async prefetch of a single expert (non-blocking).
-    // Submits H2D memcpy on dma_queue_ via ExpertCache::prefetch_async().
+    // Submits H2D memcpy on dma_queue_.
     // Returns true if a new prefetch was scheduled.
     // Returns false if: already cached in VRAM, already in-flight, no capacity,
-    //                   cache is null, or expert is not registered.
+    //                   or expert is not registered.
     bool hint(int layer_idx, int expert_idx);
 
     // Schedule async prefetch of multiple experts for a layer (non-blocking).
@@ -102,7 +100,7 @@ class ExpertPrefetcher {
     // Wait for a specific expert's prefetch to complete and return its VRAM ptr.
     // Waits on the per-expert sycl::event (not a global queue wait).
     // If the expert is already cached (no in-flight prefetch), returns the
-    // cached ptr via ExpertCache::lookup(). Returns nullptr if not registered.
+    // cached ptr from the unified cache. Returns nullptr if not registered.
     void * await(int layer_idx, int expert_idx);
 
     // Cancel all pending prefetches and wait for in-flight DMAs to complete.
@@ -117,10 +115,9 @@ class ExpertPrefetcher {
     bool is_active() const { return initialized_; }
 
   private:
-    std::unique_ptr<sycl::queue> dma_queue_;   // OOQ for async H2D DMA (unique_ptr to avoid static init + enable leak-on-exit)
-    ExpertCache *   cache_         = nullptr;
-    int             prefetch_depth_ = 2;       // Default: 2 layers ahead
-    bool            initialized_   = false;
+    std::unique_ptr<sycl::queue> dma_queue_;    // OOQ for async H2D DMA (unique_ptr to avoid static init + enable leak-on-exit)
+    int                          prefetch_depth_ = 2;  // Default: 2 layers ahead
+    bool                         initialized_   = false;
 
     // Max concurrent DMA operations. MoE models activate up to 8 experts
     // per layer, so 8 in-flight requests covers a full layer's worth of misses.
