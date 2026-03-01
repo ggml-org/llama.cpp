@@ -227,19 +227,6 @@ static void ggml_sycl_release_host_weight_extras(ggml_sycl_host_weight_release_m
 #include "ggml-sycl/cpu-expert-pool.hpp"
 
 // ---------------------------------------------------------------------------
-// Per-device ExpertCache instances for MoE hybrid GPU+CPU inference.
-// Initialized lazily when GGML_SYCL_MOE_HYBRID=1 and first MUL_MAT_ID runs.
-// ---------------------------------------------------------------------------
-static ggml_sycl::ExpertCache g_expert_caches[GGML_SYCL_MAX_DEVICES];
-
-static ggml_sycl::ExpertCache * ggml_sycl_get_expert_cache(int device) {
-    if (device < 0 || device >= GGML_SYCL_MAX_DEVICES) {
-        return nullptr;
-    }
-    auto * cache = &g_expert_caches[device];
-    return cache->is_initialized() ? cache : nullptr;
-}
-
 // ---------------------------------------------------------------------------
 // Per-device ExpertPrefetcher and ExpertPredictor for MoE hybrid inference.
 // Initialized by moe_hybrid_init_once() on first graph with MUL_MAT_ID nodes.
@@ -22905,18 +22892,51 @@ static bool ggml_sycl_mul_mat_id_fused(ggml_backend_sycl_context & ctx,
                         src0->name, (int) host_weights, (int) use_layout);
         return false;
     }
-    // Confirm that the resolved pointer is genuinely in device VRAM.
-    // Fused kernel uses base+stride addressing so all expert weights must be
-    // contiguous in device memory.  mmap'd / pinned-host pointers show up as
-    // sycl::usm::alloc::unknown on Level Zero and cannot be used here.
-    // CRITICAL: Check for != device due to Level Zero driver bug that reports
-    //           mmap'd memory as "shared" rather than "unknown" on some builds.
+    // Verify that all routed experts are device-resident before committing to
+    // the fused kernel, which uses contiguous base+stride addressing.
+    //
+    // Two paths depending on whether the placement table is populated:
+    //
+    // Path A (placement table available): check each routed expert's device_ptr
+    //   in the placement table.  This is exact and O(n_ids * n_tokens).
+    //
+    // Path B (placement table absent): fall back to a single USM pointer-type
+    //   check on the base weight pointer returned by get_layout_ptr_for.
+    //   CRITICAL: check for != device due to Level Zero driver bug that reports
+    //   mmap'd memory as "shared" rather than "unknown" on some builds.
     {
-        sycl::usm::alloc ptr_type = sycl::get_pointer_type(src0_weight_ptr, stream->get_context());
-        if (ptr_type != sycl::usm::alloc::device) {
-            GGML_SYCL_DEBUG("[MoE FUSED] Weights not in device memory (type=%d), falling back to MMVQ for caching\n",
-                            (int) ptr_type);
-            return false;  // Let MMVQ handle with expert caching
+        const int layer_id = moe_cache_layer_id(src0->name);
+        auto &    ptable   = ggml_sycl::get_expert_placement_table();
+
+        if (ptable.is_initialized()) {
+            // Path A: per-expert device-residency check via placement table.
+            // Get host-side ids — cheap memcpy for host-resident ids tensor.
+            std::vector<int32_t> ids_host_vec;
+            if (!ggml_sycl_copy_ids_to_host(ctx, ids, ids_host_vec)) {
+                GGML_SYCL_DEBUG("[MoE FUSED] Failed to read ids host data for %s\n", src0->name);
+                return false;
+            }
+            const int64_t n_ids_local = ids->ne[0];
+            for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
+                for (int64_t id = 0; id < n_ids_local; id++) {
+                    const int32_t expert_id = ids_host_vec[static_cast<size_t>(iid1 * n_ids_local + id)];
+                    auto          placement = ptable.get(layer_id, expert_id);
+                    if (!placement.device_ptr) {
+                        GGML_SYCL_DEBUG("[MoE FUSED] Expert %d not in VRAM (layer=%d), fallback to MMVQ\n",
+                                        expert_id, layer_id);
+                        return false;
+                    }
+                }
+            }
+            // All routed experts are device-resident — proceed with fused kernel.
+        } else {
+            // Path B: single pointer-type check on the contiguous weight block.
+            sycl::usm::alloc ptr_type = sycl::get_pointer_type(src0_weight_ptr, stream->get_context());
+            if (ptr_type != sycl::usm::alloc::device) {
+                GGML_SYCL_DEBUG("[MoE FUSED] Weights not in device memory (type=%d), falling back to MMVQ\n",
+                                (int) ptr_type);
+                return false;  // Let MMVQ handle with expert caching
+            }
         }
     }
     // Calculate parameters
@@ -25073,12 +25093,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 }
             }
 
-            // Partition experts using ExpertCache::lookup() -- the source of
-            // truth for whether an expert's weights are in device VRAM.
             // Three-tier partition: B580 (gpu0) → B50 (gpu1) → CPU fallback.
-            auto * expert_cache  = ggml_sycl_get_expert_cache(ctx.device);
-            auto * expert_cache1 = g_moe_multi_gpu_active ? ggml_sycl_get_expert_cache(1) : nullptr;
-
             gpu_entries.reserve(static_cast<size_t>(ids->ne[1] * n_ids));
             if (g_moe_multi_gpu_active) {
                 gpu1_entries.reserve(static_cast<size_t>(ids->ne[1] * n_ids));
@@ -25383,14 +25398,6 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     predictor_rec.record_actual(seq_layer_rec, actual_experts);
                 }
 
-                // Record for cache co-activation scoring and warm-start
-                auto * expert_cache_rec = ggml_sycl_get_expert_cache(ctx.device);
-                if (expert_cache_rec && !actual_experts.empty()) {
-                    expert_cache_rec->record_access_batch(
-                        layer_id, actual_experts.data(),
-                        static_cast<int>(actual_experts.size()),
-                        moe_token_counter.load(std::memory_order_relaxed));
-                }
             }
 
         } else {
