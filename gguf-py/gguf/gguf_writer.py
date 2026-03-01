@@ -271,9 +271,36 @@ class GGUFWriter:
             fout.flush()
         self.state = WriterState.TI_DATA
 
+    # Expected Python types for each GGUFValueType, used for early validation.
+    _expected_types: dict[GGUFValueType, tuple[type, ...]] = {
+        GGUFValueType.UINT8:   (int,),
+        GGUFValueType.INT8:    (int,),
+        GGUFValueType.UINT16:  (int,),
+        GGUFValueType.INT16:   (int,),
+        GGUFValueType.UINT32:  (int,),
+        GGUFValueType.INT32:   (int,),
+        GGUFValueType.FLOAT32: (float, int),
+        GGUFValueType.UINT64:  (int,),
+        GGUFValueType.INT64:   (int,),
+        GGUFValueType.FLOAT64: (float, int),
+        GGUFValueType.BOOL:    (bool,),
+        GGUFValueType.STRING:  (str, bytes, bytearray),
+        GGUFValueType.ARRAY:   (list, tuple, bytes, bytearray),
+    }
+
     def add_key_value(self, key: str, val: Any, vtype: GGUFValueType, sub_type: GGUFValueType | None = None) -> None:
         if any(key in kv_data for kv_data in self.kv_data):
             logger.warning(f'Duplicated key name {key!r}, overwriting it with new value {val!r} of type {vtype.name}')
+
+        # Validate that the Python type of val is compatible with the declared vtype.
+        # This catches mismatches early with a clear error message instead of letting
+        # them fail deep inside _pack_val() with opaque TypeErrors.
+        expected = self._expected_types.get(vtype)
+        if expected is not None and not isinstance(val, expected):
+            raise TypeError(
+                f"Expected {' or '.join(t.__name__ for t in expected)} for key {key!r} "
+                f"(GGUF type {vtype.name}), but got {type(val).__name__}: {val!r}"
+            )
 
         self.kv_data[0][key] = GGUFValue(value=val, type=vtype, sub_type=sub_type)
 
