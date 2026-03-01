@@ -24398,6 +24398,24 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     const bool   cpu_type_ok      = cpu_traits_check && cpu_traits_check->vec_dot;
     const bool moe_hybrid_active = (moe_hybrid_val != 0) && use_expert_cache && (ne12 == 1) && cpu_type_ok;
 
+    // CPU-primary expert routing for TG (batch=1 decode).
+    // Routes ALL expert FFNs to CPU, bypassing GPU cache entirely.
+    // Rationale: CPU DRAM BW (70 GB/s) >> PCIe BW (13.4 GB/s) for batch=1.
+    static std::atomic<int> cpu_expert_tg_mode{ -1 };
+    int cpu_tg_val = cpu_expert_tg_mode.load(std::memory_order_acquire);
+    if (cpu_tg_val < 0) {
+        const char * env = getenv("GGML_SYCL_CPU_EXPERT_TG");
+        int new_val = env ? std::atoi(env) : -2;  // -2 = auto
+        cpu_expert_tg_mode.compare_exchange_strong(cpu_tg_val, new_val,
+            std::memory_order_release, std::memory_order_acquire);
+        cpu_tg_val = cpu_expert_tg_mode.load(std::memory_order_acquire);
+    }
+
+    // Auto-detect: enable CPU expert TG when moe_hybrid is active
+    // (moe_hybrid_active already requires ne12 == 1, use_expert_cache, cpu_type_ok)
+    const bool cpu_expert_tg_active = moe_hybrid_active &&
+        (cpu_tg_val == 1 || cpu_tg_val == -2);
+
     // Expert cache stores raw AOS bytes (no layout conversion during H2D).
     // Force AOS layout so the GPU kernel interprets the data correctly.
     if (moe_hybrid_active && route_layout != GGML_LAYOUT_AOS) {
@@ -24414,6 +24432,146 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             // Hybrid dispatch uses host sync (future.get, stream.wait) which
             // is incompatible with SYCL graph recording.
             ctx.moe_graphs_disabled_once = true;
+
+            // ---------------------------------------------------------------
+            // CPU-primary expert TG: route ALL experts to CPU, skip GPU cache
+            // ---------------------------------------------------------------
+            if (cpu_expert_tg_active) {
+                const int64_t K = ne00;  // input dimension (columns)
+                const int64_t N = ne01;  // output rows per expert
+
+                // Build cpu_entries directly from ids tensor -- no cache lookup
+                struct expert_dispatch_entry {
+                    int64_t iid1;
+                    int64_t id;
+                    int32_t expert_id;
+                    void *  device_ptr;
+                };
+                std::vector<expert_dispatch_entry> cpu_entries;
+                const size_t n_cpu = static_cast<size_t>(ids->ne[1] * n_ids);
+                cpu_entries.reserve(n_cpu);
+
+                for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
+                    for (int64_t id = 0; id < n_ids; id++) {
+                        const int32_t i02 = ids_host[static_cast<size_t>(iid1 * n_ids + id)];
+                        GGML_ASSERT(i02 >= 0 && i02 < n_as);
+                        cpu_entries.push_back({ iid1, id, i02, nullptr });
+                    }
+                }
+
+                GGML_SYCL_DEBUG("[MoE-CPU-TG] L%d: %zu experts -> CPU (bypassing cache)\n",
+                                layer_id, cpu_entries.size());
+
+                // Allocate pinned host buffers for activation D2H and CPU output
+                float * cpu_output_pinned = nullptr;
+                float * src1_host_pinned  = nullptr;
+                bool    used_pinned_pool  = false;
+
+                const size_t act_bytes = n_cpu * static_cast<size_t>(K) * sizeof(float);
+                const size_t out_bytes = n_cpu * static_cast<size_t>(N) * sizeof(float);
+
+                auto & pool = g_pinned_buffer_pools[ctx.device];
+                if (pool.is_initialized()) {
+                    auto bp          = pool.acquire(n_cpu);
+                    src1_host_pinned  = bp.act;
+                    cpu_output_pinned = bp.out;
+                    used_pinned_pool  = true;
+                } else {
+                    src1_host_pinned = sycl::malloc_host<float>(
+                        n_cpu * static_cast<size_t>(K), stream->get_context());
+                    cpu_output_pinned = sycl::malloc_host<float>(
+                        n_cpu * static_cast<size_t>(N), stream->get_context());
+                }
+
+                if (!src1_host_pinned || !cpu_output_pinned) {
+                    GGML_LOG_ERROR("[MoE-CPU-TG] Failed to allocate pinned host memory "
+                                   "(%zu + %zu bytes)\n", act_bytes, out_bytes);
+                } else {
+                    // Zero the output buffer
+                    if (!used_pinned_pool) {
+                        std::memset(cpu_output_pinned, 0, out_bytes);
+                    }
+
+                    // D2H copy activations for each expert dispatch
+                    for (size_t ci = 0; ci < n_cpu; ci++) {
+                        const auto &  entry    = cpu_entries[ci];
+                        const int64_t i11      = entry.id % ne11;
+                        const int64_t i12      = entry.iid1;
+                        const char *  src1_dev = src1_original + i11 * nb11 + i12 * nb12;
+                        float *       dst_host = src1_host_pinned
+                                                 + ci * static_cast<size_t>(K);
+                        stream->memcpy(dst_host, src1_dev,
+                                       static_cast<size_t>(K) * sizeof(float));
+                    }
+                    stream->wait();
+
+                    // Build CPU tasks from mmap host weight pointers
+                    GGML_ASSERT(use_expert_cache && "CPU-TG path requires host-accessible weights");
+                    std::vector<cpu_expert_task> cpu_tasks;
+                    cpu_tasks.reserve(n_cpu);
+                    for (size_t ci = 0; ci < n_cpu; ci++) {
+                        const auto & entry = cpu_entries[ci];
+                        const void * host_weight =
+                            static_cast<const char *>(src0->data)
+                            + static_cast<size_t>(entry.expert_id) * nb02;
+
+                        cpu_expert_task task;
+                        task.weight_host = host_weight;
+                        task.act_host    = src1_host_pinned
+                                           + ci * static_cast<size_t>(K);
+                        task.output_host = cpu_output_pinned
+                                           + ci * static_cast<size_t>(N);
+                        task.type        = src0->type;
+                        task.K           = static_cast<int>(K);
+                        task.N           = static_cast<int>(N);
+                        cpu_tasks.push_back(task);
+                    }
+
+                    // Submit to CPU thread pool
+                    std::future<void> cpu_future;
+                    auto * tasks_ptr = cpu_tasks.data();
+                    int    n_tasks   = static_cast<int>(cpu_tasks.size());
+                    auto & cpu_pool  = g_cpu_expert_pools[ctx.device];
+                    if (cpu_pool.is_active()) {
+                        cpu_future = cpu_pool.submit_batch(tasks_ptr, n_tasks);
+                    } else {
+                        cpu_future = std::async(std::launch::async, [tasks_ptr, n_tasks]() {
+                            ggml_sycl_cpu_expert_mul_mat_batched(tasks_ptr, n_tasks);
+                        });
+                    }
+
+                    // Wait for CPU completion
+                    cpu_future.get();
+
+                    // Scatter CPU results into device dst
+                    for (size_t ci = 0; ci < cpu_entries.size(); ci++) {
+                        const auto &  entry   = cpu_entries[ci];
+                        const int64_t i1      = entry.id;
+                        const int64_t i2      = entry.iid1;
+                        char *        dst_d   = dst_original + i1 * nb1 + i2 * nb2;
+                        const float * cpu_out = cpu_output_pinned
+                                                + ci * static_cast<size_t>(N);
+                        stream->memcpy(dst_d, cpu_out,
+                                       static_cast<size_t>(N) * sizeof(float));
+                    }
+                    stream->wait();
+                }
+
+                // Release pinned host buffers
+                if (used_pinned_pool) {
+                    g_pinned_buffer_pools[ctx.device].release({src1_host_pinned, cpu_output_pinned});
+                } else {
+                    if (src1_host_pinned) {
+                        sycl::free(src1_host_pinned, stream->get_context());
+                    }
+                    if (cpu_output_pinned) {
+                        sycl::free(cpu_output_pinned, stream->get_context());
+                    }
+                }
+
+                // Skip GPU dispatch entirely -- all work done on CPU
+                return;
+            }
 
             // --- Expert prediction + prefetch (T6 + T3 integration) ---
             // Predict which experts will be needed and prefetch cache misses
