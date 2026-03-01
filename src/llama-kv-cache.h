@@ -4,9 +4,11 @@
 #include "llama-graph.h"
 #include "llama-kv-cells.h"
 #include "llama-memory.h"
+#include "llama-block-pool.h"
 
 #include <unordered_map>
 #include <vector>
+#include <memory>
 
 struct llama_cparams;
 struct llama_hparams;
@@ -106,7 +108,10 @@ public:
                      uint32_t   n_swa,
                llama_swa_type   swa_type,
         const layer_filter_cb & filter,
-        const  layer_reuse_cb & reuse);
+        const  layer_reuse_cb & reuse,
+                         bool   use_paged_attention = false,
+                     uint32_t   block_size = 16,
+                     uint32_t   n_blocks = 0);
 
     ~llama_kv_cache() = default;
 
@@ -199,6 +204,20 @@ public:
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
+    // Paged attention API
+    bool get_use_paged_attention() const { return use_paged_attention; }
+    void set_use_paged_attention(bool use_paged) { use_paged_attention = use_paged; }
+
+    llama_block_pool * get_block_pool() { return block_pool.get(); }
+    const llama_block_pool * get_block_pool() const { return block_pool.get(); }
+
+    // Get the GPU-resident block table tensor
+    ggml_tensor * get_block_table_gpu() { return block_table_gpu; }
+    const ggml_tensor * get_block_table_gpu() const { return block_table_gpu; }
+
+    // Get block table tensor for paged attention (creates if needed)
+    ggml_tensor * get_block_table(ggml_context * ctx, uint32_t n_seq, uint32_t n_blocks_per_seq);
+
 private:
     const llama_model & model;
     const llama_hparams & hparams;
@@ -216,6 +235,18 @@ private:
     };
 
     bool v_trans = true;  // the value tensor is transposed
+
+    // Paged attention support
+    bool use_paged_attention = false;
+    std::shared_ptr<llama_block_pool> block_pool;
+
+    // GPU-resident block table for paged attention
+    // Shape: [n_seq_max, max_blocks_per_seq]
+    // Value: physical_block_id or -1 if not allocated
+    ggml_tensor * block_table_gpu = nullptr;
+
+    // Maximum number of blocks per sequence
+    uint32_t max_blocks_per_seq = 0;
 
     const uint32_t n_seq_max = 1;
     const uint32_t n_stream  = 1;
@@ -281,6 +312,16 @@ private:
 
     bool state_read_meta(llama_io_read_i & io, uint32_t strm, uint32_t cell_count,       slot_info & sinfo, llama_seq_id dest_seq_id = -1);
     bool state_read_data(llama_io_read_i & io, uint32_t strm, uint32_t cell_count, const slot_info & sinfo);
+
+    // Paged attention private methods
+    slot_info find_slot_paged(const llama_ubatch & ubatch) const;
+    void apply_ubatch_paged(const slot_info & sinfo, const llama_ubatch & ubatch);
+
+    // Initialize GPU block table tensor
+    void init_block_table_gpu(ggml_context * ctx, ggml_backend_buffer_type_t buft);
+
+    // Update GPU block table: set physical block for a logical block
+    void update_block_table_gpu(llama_seq_id seq_id, uint32_t logical_block, int32_t physical_block);
 };
 
 class llama_kv_cache_context : public llama_memory_context_i {
@@ -352,6 +393,14 @@ public:
     void set_input_k_shift   (ggml_tensor * dst) const;
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
+
+    // Paged attention accessors
+    bool                     get_use_paged_attention() const;
+    llama_block_pool       * get_block_pool();
+    const llama_block_pool * get_block_pool() const;
+
+    // Get block table tensor for GPU
+    ggml_tensor            * get_block_table() const;
 
 private:
     llama_memory_status status;

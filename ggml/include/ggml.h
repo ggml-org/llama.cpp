@@ -2340,6 +2340,28 @@ extern "C" {
             struct ggml_tensor * a,
             struct ggml_tensor * sinks);
 
+    // Paged attention support
+    // block_table: [n_seq, max_blocks_per_seq] mapping logical to physical blocks
+    GGML_API void ggml_flash_attn_ext_set_paged(
+            struct ggml_tensor * a,
+            struct ggml_tensor * block_table,
+            int32_t              use_paged,
+            uint32_t             block_size,
+            uint64_t             block_stride_k,
+            uint64_t             block_stride_v,
+            uint64_t             token_stride_k,
+            uint64_t             token_stride_v);
+
+    GGML_API bool ggml_flash_attn_ext_get_paged(
+            const struct ggml_tensor  * a,
+            struct ggml_tensor       ** block_table,
+            int32_t                   * use_paged,
+            uint32_t                  * block_size,
+            uint64_t                  * block_stride_k,
+            uint64_t                  * block_stride_v,
+            uint64_t                  * token_stride_k,
+            uint64_t                  * token_stride_v);
+
     // TODO: needs to be adapted to ggml_flash_attn_ext
     GGML_API struct ggml_tensor * ggml_flash_attn_back(
            struct ggml_context * ctx,

@@ -1741,6 +1741,26 @@ ggml_tensor * llm_graph_context::build_attn_mha(
                  int   il) const {
     const bool v_trans = v->nb[1] > v->nb[2];
 
+    // Check if paged attention is enabled
+    const auto * kv_ctx = static_cast<const llama_kv_cache_context *>(mctx);
+    const bool use_paged = kv_ctx && kv_ctx->get_use_paged_attention() && kv_ctx->get_block_pool();
+
+    // For paged attention, we need to handle k/v differently
+    // k_pool/v_pool have shape [n_embd_k_gqa, n_layer, block_size, num_blocks]
+    // Traditional k/v have shape [head_dim, n_head, n_ctx, n_stream]
+    //
+    // IMPORTANT: Paged mode currently requires the standard k/v path because
+    // the Metal Flash Attention kernel expects k/v with standard layout.
+    // The paged parameters (block_stride, token_stride) tell the kernel how
+    // to calculate physical offsets, but the logical tensor shape must be correct.
+    //
+    // TODO: Implement proper paged attention by either:
+    // 1. Reorganizing block_pool layout to match Flash Attention expectations
+    // 2. Creating a view tensor with correct shape that maps to paged storage
+    //
+    // For now, paged mode falls through to the standard path.
+
+    // Non-paged mode: original logic
     // split the batch into streams if needed
     const auto n_stream = k->ne[3];
 
@@ -1775,6 +1795,31 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 
         ggml_flash_attn_ext_add_sinks(cur, sinks);
         ggml_flash_attn_ext_set_prec (cur, GGML_PREC_F32);
+
+        // Paged attention: Set block table and strides for the kernel
+        if (use_paged) {
+            const auto * block_pool = kv_ctx->get_block_pool();
+            if (block_pool && !block_pool->k_pool.empty()) {
+                // Get strides from first layer's tensor (all layers have same layout)
+                // New structure: k_pool[layer] is 2D: [n_embd_k_gqa, block_size * num_blocks]
+                ggml_tensor * k_pool_0 = block_pool->k_pool[0];
+                ggml_tensor * v_pool_0 = block_pool->v_pool[0];
+
+                // Token stride = nb[1] (stride in dimension 1 = block_size * num_blocks)
+                const uint64_t token_stride_k = k_pool_0->nb[1];
+                const uint64_t token_stride_v = v_pool_0->nb[1];
+
+                // Block stride = block_size * token_stride
+                const uint64_t block_stride_k = block_pool->block_size * token_stride_k;
+                const uint64_t block_stride_v = block_pool->block_size * token_stride_v;
+
+                // Get the block table tensor from KV cache
+                ggml_tensor * block_table = kv_ctx->get_block_table();
+                ggml_flash_attn_ext_set_paged(cur, block_table, 1, block_pool->block_size,
+                                                block_stride_k, block_stride_v,
+                                                token_stride_k, token_stride_v);
+            }
+        }
 
         if (v_mla) {
 #if 0

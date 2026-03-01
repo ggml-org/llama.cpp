@@ -267,10 +267,55 @@ llama_context::llama_context(
 
     // init the memory module
     if (!hparams.vocab_only) {
+        // Auto-detect paged attention mode
+        // TODO: Paged attention is currently experimental. Enable via environment variable.
+        // Enable paged mode for large contexts or multi-sequence scenarios
+        // IMPORTANT: Paged attention REQUIRES Flash Attention because the Metal kernel
+        // handles paged tensor access via block_table indirection.
+        const char * paged_env = getenv("LLAMA_PAGED_ATTENTION");
+        bool use_paged = false;
+        fprintf(stderr, "[DEBUG-PAGED] paged_env=%s\n", paged_env ? paged_env : "NULL");
+        if (paged_env != nullptr) {
+            use_paged = atoi(paged_env) != 0;
+            fprintf(stderr, "[DEBUG-PAGED] use_paged=%d, flash_attn=%d\n", use_paged, cparams.flash_attn);
+            LLAMA_LOG_INFO("%s: LLAMA_PAGED_ATTENTION=%s, use_paged=%d\n", __func__, paged_env, use_paged);
+        } else {
+            // Auto-enable only if explicitly needed (disabled for now)
+            use_paged = false; // (cparams.n_ctx > 32768) || (cparams.n_seq_max > 1);
+        }
+
+        // Paged attention requires Flash Attention
+        // Without Flash Attention, the CPU-side operations (like LoRA matrix multiply)
+        // will fail dimension checks because k_pool/v_pool have non-standard shapes
+        if (use_paged && !cparams.flash_attn) {
+            LLAMA_LOG_WARN("%s: paged attention requires flash attention (flash_attn=%d), disabling paged mode\n",
+                          __func__, cparams.flash_attn);
+            use_paged = false;
+        } else if (use_paged) {
+            LLAMA_LOG_INFO("%s: paged attention enabled with flash_attn=%d\n", __func__, cparams.flash_attn);
+        }
+
+        // Calculate block pool size if paged mode is enabled
+        uint32_t block_size = 16;  // Default: 16 tokens per block
+        uint32_t n_blocks = 0;
+        if (use_paged) {
+            // Estimate number of blocks needed
+            // For each sequence, we need at most ceil(n_ctx / block_size) blocks
+            // Add some extra blocks for fragmentation and overhead
+            n_blocks = ((cparams.n_ctx + block_size - 1) / block_size) * cparams.n_seq_max;
+            n_blocks = n_blocks + (n_blocks / 4);  // Add 25% overhead
+
+            LLAMA_LOG_INFO("%s: enabling paged attention mode: n_ctx = %u, n_seq_max = %u, block_size = %u, n_blocks = %u\n",
+                           __func__, cparams.n_ctx, cparams.n_seq_max, block_size, n_blocks);
+        }
+
         llama_memory_params params_mem = {
-            /*.type_k   =*/ params.type_k,
-            /*.type_v   =*/ params.type_v,
-            /*.swa_full =*/ params.swa_full,
+            /*.type_k             =*/ params.type_k,
+            /*.type_v             =*/ params.type_v,
+            /*.swa_full           =*/ params.swa_full,
+            /*.use_paged_attention =*/ use_paged,
+            /*.block_size          =*/ block_size,
+            /*.n_blocks            =*/ n_blocks,
         };
 
         memory.reset(model.create_memory(params_mem, cparams));

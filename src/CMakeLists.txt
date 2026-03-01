@@ -20,6 +20,7 @@ add_library(llama
             llama-hparams.cpp
             llama-impl.cpp
             llama-io.cpp
+            llama-block-pool.cpp
             llama-kv-cache.cpp
             llama-kv-cache-iswa.cpp
             llama-memory.cpp

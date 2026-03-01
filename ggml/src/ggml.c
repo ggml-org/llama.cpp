@@ -5285,11 +5285,16 @@ struct ggml_tensor * ggml_flash_attn_ext(
         float                 scale,
         float                 max_bias,
         float                 logit_softcap) {
-    GGML_ASSERT(ggml_can_mul_mat(k, q));
-    // TODO: check if vT can be multiplied by (k*qT)
+    // Paged attention: k/v tensors have different layout (block_pool_*)
+    // Skip dimension checks for paged mode - Metal kernel handles indirection
+    bool is_paged = (k->name && strstr(k->name, "block_pool") != NULL);
 
-    GGML_ASSERT(q->ne[3] == k->ne[3]);
-    GGML_ASSERT(q->ne[3] == v->ne[3]);
+    if (!is_paged) {
+        GGML_ASSERT(ggml_can_mul_mat(k, q));
+        // TODO: check if vT can be multiplied by (k*qT)
+        GGML_ASSERT(q->ne[3] == k->ne[3]);
+        GGML_ASSERT(q->ne[3] == v->ne[3]);
+    }
 
     if (mask) {
         GGML_ASSERT(ggml_is_contiguous(mask));
@@ -5304,7 +5309,10 @@ struct ggml_tensor * ggml_flash_attn_ext(
     }
 
     // permute(0, 2, 1, 3)
-    int64_t ne[4] = { v->ne[0], q->ne[2], q->ne[1], q->ne[3] };
+    // For paged attention, v->ne[0] is n_embd_v_gqa, not head_dim
+    // We need to use q->ne[0] (head_dim) as the output head dimension
+    int64_t out_ne0 = is_paged ? q->ne[0] : v->ne[0];
+    int64_t ne[4] = { out_ne0, q->ne[2], q->ne[1], q->ne[3] };
     struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
 
     float params[] = { scale, max_bias, logit_softcap };
@@ -5352,6 +5360,81 @@ void ggml_flash_attn_ext_add_sinks(
     GGML_ASSERT(sinks->type == GGML_TYPE_F32);
 
     a->src[4] = sinks;
+}
+
+// Paged attention parameter layout in op_params:
+// [0] = scale (float)
+// [1] = max_bias (float)
+// [2] = logit_softcap (float)
+// [3] = prec (int32_t)
+// [4] = use_paged (int32_t)
+// [5] = block_size (int32_t)
+// [6-7] = block_stride_k (uint64_t, stored as 2 x int32_t)
+// [8-9] = block_stride_v (uint64_t, stored as 2 x int32_t)
+// [10-11] = token_stride_k (uint64_t, stored as 2 x int32_t)
+// [12-13] = token_stride_v (uint64_t, stored as 2 x int32_t)
+
+void ggml_flash_attn_ext_set_paged(
+        struct ggml_tensor * a,
+        struct ggml_tensor * block_table,
+        int32_t              use_paged,
+        uint32_t             block_size,
+        uint64_t             block_stride_k,
+        uint64_t             block_stride_v,
+        uint64_t             token_stride_k,
+        uint64_t             token_stride_v) {
+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
+
+    // Store paged parameters in op_params
+    ggml_set_op_params_i32(a, 4, use_paged);
+    ggml_set_op_params_i32(a, 5, (int32_t)block_size);
+
+    // Store 64-bit strides as two 32-bit values
+    ggml_set_op_params_i32(a, 6,  (int32_t)(block_stride_k & 0xFFFFFFFF));
+    ggml_set_op_params_i32(a, 7,  (int32_t)(block_stride_k >> 32));
+    ggml_set_op_params_i32(a, 8,  (int32_t)(block_stride_v & 0xFFFFFFFF));
+    ggml_set_op_params_i32(a, 9,  (int32_t)(block_stride_v >> 32));
+    ggml_set_op_params_i32(a, 10, (int32_t)(token_stride_k & 0xFFFFFFFF));
+    ggml_set_op_params_i32(a, 11, (int32_t)(token_stride_k >> 32));
+    ggml_set_op_params_i32(a, 12, (int32_t)(token_stride_v & 0xFFFFFFFF));
+    ggml_set_op_params_i32(a, 13, (int32_t)(token_stride_v >> 32));
+
+    // Store block_table tensor pointer
+    a->src[5] = block_table;
+}
+
+bool ggml_flash_attn_ext_get_paged(
+        const struct ggml_tensor  * a,
+        struct ggml_tensor       ** block_table,
+        int32_t                   * use_paged,
+        uint32_t                  * block_size,
+        uint64_t                  * block_stride_k,
+        uint64_t                  * block_stride_v,
+        uint64_t                  * token_stride_k,
+        uint64_t                  * token_stride_v) {
+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
+
+    *use_paged = ggml_get_op_params_i32(a, 4);
+
+    if (*use_paged == 0) {
+        return false;
+    }
+
+    *block_size = (uint32_t)ggml_get_op_params_i32(a, 5);
+
+    // Reconstruct 64-bit strides from two 32-bit values
+    *block_stride_k = ((uint64_t)(uint32_t)ggml_get_op_params_i32(a, 7) << 32) |
+                       (uint64_t)(uint32_t)ggml_get_op_params_i32(a, 6);
+    *block_stride_v = ((uint64_t)(uint32_t)ggml_get_op_params_i32(a, 9) << 32) |
+                       (uint64_t)(uint32_t)ggml_get_op_params_i32(a, 8);
+    *token_stride_k = ((uint64_t)(uint32_t)ggml_get_op_params_i32(a, 11) << 32) |
+                       (uint64_t)(uint32_t)ggml_get_op_params_i32(a, 10);
+    *token_stride_v = ((uint64_t)(uint32_t)ggml_get_op_params_i32(a, 13) << 32) |
+                       (uint64_t)(uint32_t)ggml_get_op_params_i32(a, 12);
+
+    *block_table = a->src[5];
+
+    return true;
 }
 
 // ggml_flash_attn_back
