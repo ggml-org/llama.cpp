@@ -1,0 +1,101 @@
+<?xml version='1.0' encoding='UTF-8'?>
+
+<bag>
+ <grouper name="dd_gpu_node" axis="dd_gpu_node" recommendedStorage="container">
+  <entries>
+   <entry instanceTable="gpu_data" correlationType="byPrimaryAxis">
+    <groupings>
+     <grouping path="attr.uncore_event_type"/>
+    </groupings>
+    <standardMetrics>
+     <metric>count</metric>
+     <metric>instanceCount</metric>
+    </standardMetrics>
+    <customMetrics/>
+   </entry>
+   <entry instanceTable="gpu_elapsed_time_data" correlationType="byPrimaryAxis" pathToAxis="attr">
+    <standardMetrics>
+     <metric>time</metric>
+    </standardMetrics>
+    <customMetrics/>
+   </entry>
+   <entry instanceTable="gpu_freq_data" correlationType="byPrimaryAxis">
+    <standardMetrics>
+     <metric>instanceCount</metric>
+    </standardMetrics>
+    <customMetrics/>
+   </entry>
+  </entries>
+ </grouper>
+ <grouper name="dd_thread" axis="dd_thread" recommendedStorage="container">
+  <entries>
+   <entry instanceTable="marker_global_data" correlationType="global">
+    <groupings>
+     <grouping path="attr"/>
+    </groupings>
+   </entry>
+  </entries>
+ </grouper>
+ <grouper name="draw_call" axis="dd_gpu_node" recommendedStorage="container">
+  <entries>
+   <entry instanceTable="gpu_data" correlationType="byPrimaryAxis">
+    <groupings>
+     <grouping path="attr.uncore_event_type"/>
+    </groupings>
+    <standardMetrics>
+     <metric>count</metric>
+     <metric>instanceCount</metric>
+    </standardMetrics>
+    <customMetrics/>
+   </entry>
+  </entries>
+ </grouper>
+ <grouper name="global_time_interval_metrics" recommendedStorage="container">
+  <entries>
+   <entry instanceTable="conditional_gpu_data" correlationType="global">
+    <groupings>
+     <grouping path="attr"/>
+    </groupings>
+    <standardMetrics>
+     <metric>time</metric>
+    </standardMetrics>
+    <customMetrics/>
+   </entry>
+   <entry instanceTable="global_elapsed_time_data" correlationType="global">
+    <standardMetrics>
+     <metric>time</metric>
+    </standardMetrics>
+    <customMetrics/>
+   </entry>
+  </entries>
+ </grouper>
+ <grouper name="gpu_conditional_metrics" axis="dd_gpu_node" recommendedStorage="container">
+  <entries>
+   <entry instanceTable="conditional_gpu_data" correlationType="byPrimaryAxis">
+    <groupings>
+     <grouping path="attr"/>
+    </groupings>
+    <standardMetrics>
+     <metric>time</metric>
+    </standardMetrics>
+    <customMetrics/>
+   </entry>
+   <entry instanceTable="gpu_data" correlationType="byPrimaryAxis">
+    <groupings>
+     <grouping path="attr.uncore_event_type"/>
+    </groupings>
+    <standardMetrics>
+     <metric>count</metric>
+     <metric>instanceCount</metric>
+    </standardMetrics>
+    <customMetrics/>
+   </entry>
+   <entry instanceTable="gpu_elapsed_time_data" correlationType="byPrimaryAxis" pathToAxis="attr">
+    <standardMetrics>
+     <metric>time</metric>
+    </standardMetrics>
+    <customMetrics/>
+   </entry>
+  </entries>
+ </grouper>
+</bag>

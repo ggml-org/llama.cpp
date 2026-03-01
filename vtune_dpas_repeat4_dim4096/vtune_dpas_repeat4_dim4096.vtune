@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root>
+ <rdmgr>
+  <timestamp type="u64_t">1769106898</timestamp>
+  <hostname type="string">kainlan-server</hostname>
+  <os type="string">linux</os>
+  <product type="string">Intel® VTune™ Profiler 2025.8.0</product>
+  <buildNumber type="s32_t">631311</buildNumber>
+  <logicalCPUCount type="s32_t">20</logicalCPUCount>
+  <physicalCoreCount type="s32_t">20</physicalCoreCount>
+  <processorPackageCount type="s32_t">1</processorPackageCount>
+  <CPUFrequency type="s64_t">800000000</CPUFrequency>
+  <CPUFamily type="s32_t">6</CPUFamily>
+  <CPUModel type="s32_t">198</CPUModel>
+  <CPUStepping type="s32_t">2</CPUStepping>
+  <CPUBrandName type="string">Intel(R) Core(TM) Ultra 7 265K</CPUBrandName>
+  <isa type="string">avx2</isa>
+  <collectionTimeBegin type="u64_t">1769106898</collectionTimeBegin>
+  <collectionTimeEnd type="u64_t">1769106902</collectionTimeEnd>
+  <variables>
+   <at type="string">gh</at>
+  </variables>
+ </rdmgr>
+</root>

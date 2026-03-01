@@ -1,0 +1,6 @@
+<?xml version='1.0' encoding='UTF-8'?>
+
+<bag xmlns:int="http://www.w3.org/2001/XMLSchema#int" int:version="11" int:type="2">
+ <dbEntry key="GROUP_DEF(type:0 gpu_data /dd_band::dd_gpu_node.tile/gpu_data::dd_sample.uncore_event_type)" value="dbint-407386853"/>
+ <dbEntry key="GROUP_DEF(type:0 gpu_data /gpu_data::dd_sample.uncore_event_type)" value="dbint-2039360383"/>
+</bag>

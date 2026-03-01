@@ -1,0 +1,49 @@
+Instruction / Operand / Region Errors:
+in instruction     lsc_load.ugm.ca.ca (M1, 1)  V33516:d64x64t  flat[V19211]:a64                 /// $13205
+ * this message accesses more than 8 registers
+
+in instruction     lsc_load.ugm.ca.ca (M1, 1)  V33517:d64x64t  flat[V20999]:a64                 /// $13207
+ * this message accesses more than 8 registers
+
+in instruction     lsc_load.ugm.ca.ca (M1, 1)  V33518:d64x64t  flat[V22787]:a64                 /// $13209
+ * this message accesses more than 8 registers
+
+in instruction     lsc_load.ugm.ca.ca (M1, 1)  V33519:d64x64t  flat[V24575]:a64                 /// $13211
+ * this message accesses more than 8 registers
+
+in instruction     lsc_load.ugm.ca.ca (M1, 1)  V33520:d64x64t  flat[V26363]:a64                 /// $13213
+ * this message accesses more than 8 registers
+
+in instruction     lsc_load.ugm.ca.ca (M1, 1)  V33521:d64x64t  flat[V28151]:a64                 /// $13215
+ * this message accesses more than 8 registers
+
+in instruction     lsc_load.ugm.ca.ca (M1, 1)  V33522:d64x64t  flat[V29939]:a64                 /// $13217
+ * this message accesses more than 8 registers
+
+in instruction     lsc_load.ugm.ca.ca (M1, 1)  V33523:d64x64t  flat[V31727]:a64                 /// $13219
+ * this message accesses more than 8 registers
+
+in instruction     lsc_load.ugm.ca.ca (M1, 1)  V41796:d64x64t  flat[V34643]:a64                 /// $20350
+ * this message accesses more than 8 registers
+
+in instruction     lsc_load.ugm.ca.ca (M1, 1)  V41797:d64x64t  flat[V36431]:a64                 /// $20352
+ * this message accesses more than 8 registers
+
+in instruction     lsc_load.ugm.ca.ca (M1, 1)  V41798:d64x64t  flat[V38219]:a64                 /// $20354
+ * this message accesses more than 8 registers
+
+in instruction     lsc_load.ugm.ca.ca (M1, 1)  V41799:d64x64t  flat[V40007]:a64                 /// $20356
+ * this message accesses more than 8 registers
+
+in instruction     lsc_load.ugm.ca.ca (M1, 1)  V46677:d64x64t  flat[V43100]:a64                 /// $24528
+ * this message accesses more than 8 registers
+
+in instruction     lsc_load.ugm.ca.ca (M1, 1)  V46678:d64x64t  flat[V44888]:a64                 /// $24530
+ * this message accesses more than 8 registers
+
+in instruction     lsc_load.ugm.ca.ca (M1, 1)  V49642:d64x64t  flat[V47853]:a64                 /// $27076
+ * this message accesses more than 8 registers
+
+
+
+

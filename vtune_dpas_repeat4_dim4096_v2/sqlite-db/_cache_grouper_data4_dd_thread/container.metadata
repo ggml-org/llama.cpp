@@ -1,0 +1,15 @@
+<?xml version='1.0' encoding='UTF-8'?>
+
+<bag xmlns:int="http://www.w3.org/2001/XMLSchema#int" xmlns:null="http://www.intel.com/2009/BagSchema#null" xmlns:unsignedLong="http://www.w3.org/2001/XMLSchema#unsignedLong">
+ <entry path="grouper" unsignedLong:size="0">
+  <indexFields>
+   <field path="dd_thread"/>
+   <field path="marker_global_data_scale"/>
+   <emptyField path="marker_global_data_attr" int:defaultValue="-1"/>
+   <emptyField path="marker_global_data_attr" null:defaultValue=""/>
+   <emptyField path="marker_global_data_scale" int:defaultValue="1"/>
+  </indexFields>
+  <int64Fields/>
+  <doubleFields/>
+ </entry>
+</bag>
