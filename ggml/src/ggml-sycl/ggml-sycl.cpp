@@ -36282,6 +36282,14 @@ int ggml_backend_sycl_get_device_count() {
     return ggml_sycl_info().device_count;
 }
 
+bool ggml_backend_sycl_moe_multi_gpu_requested() {
+    const char * env = std::getenv("GGML_SYCL_MOE_MULTI_GPU");
+    if (!env || std::atoi(env) == 0) {
+        return false;
+    }
+    return ggml_sycl_info().device_count >= 2;
+}
+
 // backend device
 struct ggml_backend_sycl_device_context {
     int         device;

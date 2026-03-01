@@ -13,6 +13,10 @@
 #include "ggml.h"
 #include "ggml-backend.h"
 
+#ifdef GGML_USE_SYCL
+#  include "ggml-sycl.h"
+#endif
+
 #include <algorithm>
 #include <cassert>
 #include <cinttypes>
@@ -952,6 +956,23 @@ static struct llama_model * llama_model_load_from_file_impl(
             // Keep all devices - don't clear the list
         }
     }
+
+#ifdef GGML_USE_SYCL
+    // When SYCL MoE multi-GPU mode is requested (GGML_SYCL_MOE_MULTI_GPU=1),
+    // expose only the primary GPU to the backend scheduler. The SYCL backend
+    // handles multi-device MoE expert dispatch internally. If the scheduler
+    // sees multiple SYCL devices, it will split the graph via layer-split,
+    // which removes MUL_MAT_ID nodes from device 0's subgraph and breaks
+    // MoE expert parallelism.
+    if (ggml_backend_sycl_moe_multi_gpu_requested() && model->devices.size() > 1) {
+        ggml_backend_dev_t primary = model->devices[0];
+        LLAMA_LOG_INFO("%s: MoE multi-GPU mode - hiding %zu secondary GPU(s) from scheduler, "
+                       "primary device: %s\n",
+                       __func__, model->devices.size() - 1, ggml_backend_dev_name(primary));
+        model->devices.clear();
+        model->devices.push_back(primary);
+    }
+#endif
 
     for (auto * dev : model->devices) {
         ggml_backend_dev_props props;

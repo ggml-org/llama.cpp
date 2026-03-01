@@ -198,6 +198,13 @@ GGML_BACKEND_API void ggml_backend_sycl_get_gpu_list(int * id_list, int max_len)
 GGML_BACKEND_API void ggml_backend_sycl_get_device_description(int device, char * description, size_t description_size);
 GGML_BACKEND_API int  ggml_backend_sycl_get_device_count();
 GGML_BACKEND_API void ggml_backend_sycl_get_device_memory(int device, size_t * free, size_t * total);
+
+// Check if MoE multi-GPU mode is requested via GGML_SYCL_MOE_MULTI_GPU=1.
+// When true, the SYCL backend handles multi-device MoE dispatch internally,
+// and secondary GPUs should NOT be exposed to the backend scheduler.
+// The scheduler must see only the primary GPU to avoid splitting MUL_MAT_ID
+// nodes across devices, which would break MoE expert parallelism.
+GGML_BACKEND_API bool ggml_backend_sycl_moe_multi_gpu_requested(void);
 GGML_BACKEND_API void ggml_backend_sycl_set_debug(int level);
 
 // Device-to-host memcpy using the SYCL backend queue for the tensor's buffer.
