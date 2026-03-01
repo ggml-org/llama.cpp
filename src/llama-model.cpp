@@ -22,6 +22,7 @@ extern "C" {
     void q3pt_set_levels(const float * levels);
     void q3kpt_set_levels(const float * levels);
     void q4dpt_set_levels(const int8_t * levels);
+    void ggml_quant_set_tensor_aux_data(const void * tensor_data, const void * aux_data, size_t aux_size);
 }
 
 #include <algorithm>
@@ -7859,15 +7860,14 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         }
     }
 
-    // Load per-tensor quantization levels from GGUF metadata into model fields.
-    // These will be used as graph inputs (see llm_graph_input_quant_levels).
+    // Load per-tensor quantization auxiliary data (levels/kvalues) from GGUF metadata.
+    // Indexed by weight tensor pointer for direct lookup during inference.
     {
-        // Build tensor-name to GGUF-order slot index map (shared across all types)
-        std::unordered_map<std::string, size_t> gguf_name_to_idx;
-        {
-            const int64_t n_tensors = gguf_get_n_tensors(ml.meta.get());
-            for (int64_t ti = 0; ti < n_tensors; ++ti) {
-                gguf_name_to_idx[gguf_get_tensor_name(ml.meta.get(), ti)] = (size_t)ti;
+        // Build tensor name to tensor pointer map
+        std::unordered_map<std::string, ggml_tensor*> name_to_tensor;
+        for (auto & [ctx, buf_map] : ctx_buf_maps) {
+            for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+                name_to_tensor[ggml_get_name(t)] = t;
             }
         }
 
@@ -7891,47 +7891,50 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             const uint8_t * lv_raw = (const uint8_t *)gguf_get_arr_data(ml.meta.get(), lv_idx);
             const size_t    lv_arr_n = gguf_get_arr_n(ml.meta.get(), lv_idx);
 
-            // Single pass: assign sequential slot indices and copy levels data
-            const size_t bytes_per_tensor = lt.n_levels * lt.elem_bytes;
-            auto & data = quant_levels_data[lt.type];
-            size_t slot = 0;
+            size_t tensor_count = 0;
             bool global_set = false;
 
-            for (auto & [ctx, buf_map] : ctx_buf_maps) {
-                for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
-                    if (t->type != lt.type) { continue; }
+            // Iterate over GGUF slots to find matching tensors
+            for (size_t gguf_slot = 0; gguf_slot < lv_arr_n / lt.n_levels; ++gguf_slot) {
+                std::string tensor_name = gguf_get_tensor_name(ml.meta.get(), gguf_slot);
+                auto it = name_to_tensor.find(tensor_name);
+                if (it == name_to_tensor.end()) { continue; }
 
-                    auto it = gguf_name_to_idx.find(ggml_get_name(t));
-                    if (it == gguf_name_to_idx.end()) { continue; }
+                ggml_tensor* t = it->second;
+                if (t->type != lt.type) { continue; }
 
-                    const size_t gguf_offset = it->second * lt.n_levels;
-                    if (gguf_offset + lt.n_levels > lv_arr_n) { continue; }
+                const size_t gguf_offset = gguf_slot * lt.n_levels;
 
-                    // Record slot index and append levels data
-                    quant_level_index[ggml_get_name(t)] = slot;
-                    data.resize((slot + 1) * bytes_per_tensor);
-                    memcpy(data.data() + slot * bytes_per_tensor,
-                           lv_raw + gguf_offset * lt.elem_bytes,
-                           bytes_per_tensor);
-                    slot++;
+                // Store directly indexed by tensor pointer
+                auto & aux = tensor_aux_data[t];
+                aux.type = lt.type;
+                aux.host_data.assign(
+                    lv_raw + gguf_offset * lt.elem_bytes,
+                    lv_raw + (gguf_offset + lt.n_levels) * lt.elem_bytes
+                );
+                aux.aux_tensor = nullptr;  // Will be created during graph build
 
-                    // Set the global fallback from the first tensor's levels
-                    if (!global_set) {
-                        if (lt.type == GGML_TYPE_Q4_DPT) {
-                            q4dpt_set_levels((const int8_t *)(lv_raw + gguf_offset * lt.elem_bytes));
-                        } else if (lt.type == GGML_TYPE_Q3_PT) {
-                            q3pt_set_levels((const float *)(lv_raw + gguf_offset * lt.elem_bytes));
-                        } else if (lt.type == GGML_TYPE_Q3_KPT) {
-                            q3kpt_set_levels((const float *)(lv_raw + gguf_offset * lt.elem_bytes));
-                        }
-                        global_set = true;
+                // Register in global registry for backend access
+                ggml_quant_set_tensor_aux_data(t, aux.host_data.data(), aux.host_data.size());
+
+                tensor_count++;
+
+                // Set the global fallback from the first tensor's levels
+                if (!global_set) {
+                    if (lt.type == GGML_TYPE_Q4_DPT) {
+                        q4dpt_set_levels((const int8_t *)(lv_raw + gguf_offset * lt.elem_bytes));
+                    } else if (lt.type == GGML_TYPE_Q3_PT) {
+                        q3pt_set_levels((const float *)(lv_raw + gguf_offset * lt.elem_bytes));
+                    } else if (lt.type == GGML_TYPE_Q3_KPT) {
+                        q3kpt_set_levels((const float *)(lv_raw + gguf_offset * lt.elem_bytes));
                     }
+                    global_set = true;
                 }
             }
 
-            if (slot > 0) {
+            if (tensor_count > 0) {
                 LLAMA_LOG_INFO("%s: loaded %zu %s per-tensor level tables\n",
-                               __func__, slot, lt.gguf_key);
+                               __func__, tensor_count, lt.gguf_key);
             }
         }
     }
@@ -8955,8 +8958,6 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
     llm->build_dense_out(dense_2_out_layers, dense_2_out_layers_b, dense_3_out_layers);
 
     llm->res->set_outputs();
-
-    llm->attach_quant_levels();
 
     return llm->res->get_gf();
 }

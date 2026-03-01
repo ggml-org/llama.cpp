@@ -6559,3 +6559,38 @@ const void * ggml_quant_get_current_levels(enum ggml_type type) {
     return ggml_quant_current_levels[type];
 }
 
+// Per-tensor auxiliary data registry (indexed by tensor struct pointer)
+// Allows backends to look up aux data for a specific weight tensor
+// Key is tensor struct pointer (stable), value is aux data pointer
+#define GGML_QUANT_AUX_HASH_SIZE 1024
+
+static struct {
+    const void * tensor_ptr;   // ggml_tensor struct pointer (key)
+    const void * aux_data;     // aux data pointer (levels, kvalues, etc.)
+    size_t       aux_size;     // aux data size in bytes
+} ggml_quant_aux_registry[GGML_QUANT_AUX_HASH_SIZE];
+
+static size_t ggml_quant_aux_hash(const void * ptr) {
+    return (size_t)((uintptr_t)ptr >> 4) % GGML_QUANT_AUX_HASH_SIZE;
+}
+
+void ggml_quant_set_tensor_aux_data(const void * tensor_ptr, const void * aux_data, size_t aux_size) {
+    size_t h = ggml_quant_aux_hash(tensor_ptr);
+    ggml_quant_aux_registry[h].tensor_ptr = tensor_ptr;
+    ggml_quant_aux_registry[h].aux_data = aux_data;
+    ggml_quant_aux_registry[h].aux_size = aux_size;
+}
+
+const void * ggml_quant_get_tensor_aux_data(const void * tensor_ptr, size_t * out_size) {
+    size_t h = ggml_quant_aux_hash(tensor_ptr);
+    if (ggml_quant_aux_registry[h].tensor_ptr == tensor_ptr) {
+        if (out_size) *out_size = ggml_quant_aux_registry[h].aux_size;
+        return ggml_quant_aux_registry[h].aux_data;
+    }
+    return NULL;
+}
+
+void ggml_quant_clear_aux_registry(void) {
+    memset(ggml_quant_aux_registry, 0, sizeof(ggml_quant_aux_registry));
+}
+

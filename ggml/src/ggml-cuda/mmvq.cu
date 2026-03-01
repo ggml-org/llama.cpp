@@ -3,6 +3,7 @@
 #include "unary.cuh"
 #include "vecdotq.cuh"
 #include "convert.cuh"
+#include "ggml-quants.h"
 
 #include <cstdint>
 
@@ -655,14 +656,14 @@ void ggml_cuda_mul_mat_vec_q(
 
     cudaStream_t stream = ctx.stream();
 
-    // Set Q4_DPT lookup table from graph input levels
-    // MUL_MAT: levels in src[2], MUL_MAT_ID: levels in src[3] (src[2] is expert IDs)
+    // Set Q4_DPT lookup table from per-tensor registry
     if (src0->type == GGML_TYPE_Q4_DPT) {
-        const int levels_src = (dst->op == GGML_OP_MUL_MAT_ID) ? 3 : 2;
-        GGML_ASSERT(dst->src[levels_src] && dst->src[levels_src]->data && "Q4_DPT MUL_MAT requires levels");
+        size_t levels_size;
+        const void * levels = ggml_quant_get_tensor_aux_data(src0, &levels_size);
+        GGML_ASSERT(levels && "Q4_DPT MUL_MAT requires levels (register with ggml_quant_set_tensor_aux_data)");
         int8_t * d_q4dpt_levels;
         CUDA_CHECK(cudaGetSymbolAddress((void **)&d_q4dpt_levels, q4dpt_levels_cuda));
-        CUDA_CHECK(cudaMemcpyAsync(d_q4dpt_levels, dst->src[levels_src]->data, 16, cudaMemcpyDeviceToDevice, stream));
+        CUDA_CHECK(cudaMemcpyAsync(d_q4dpt_levels, levels, levels_size, cudaMemcpyHostToDevice, stream));
     }
 
     const size_t ts_src0 = ggml_type_size(src0->type);

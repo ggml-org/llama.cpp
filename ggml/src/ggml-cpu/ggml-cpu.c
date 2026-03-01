@@ -1279,11 +1279,12 @@ void ggml_compute_forward_mul_mat(
     // nb01 >= nb00 - src0 is not transposed
     //   compute by src0 rows
 
-    // Set current per-tensor quantization levels from graph input (src[2] or src[3])
+    // Set current per-tensor quantization levels from registry
     {
-        const int levels_src = (dst->op == GGML_OP_MUL_MAT_ID) ? 3 : 2;
-        if (dst->src[levels_src] && dst->src[levels_src]->data) {
-            ggml_quant_set_current_levels(src0->type, dst->src[levels_src]->data);
+        size_t levels_size;
+        const void * levels = ggml_quant_get_tensor_aux_data(src0, &levels_size);
+        if (levels) {
+            ggml_quant_set_current_levels(src0->type, levels);
         }
     }
 

@@ -137,6 +137,12 @@ GGML_API void           q4dpt_free_levels(void);
 GGML_API void         ggml_quant_set_current_levels(enum ggml_type type, const void * data);
 GGML_API const void * ggml_quant_get_current_levels(enum ggml_type type);
 
+// Per-tensor auxiliary data registry (indexed by tensor pointer)
+// Allows backends to look up aux data for a specific weight tensor
+GGML_API void         ggml_quant_set_tensor_aux_data(const void * tensor_data, const void * aux_data, size_t aux_size);
+GGML_API const void * ggml_quant_get_tensor_aux_data(const void * tensor_data, size_t * out_size);
+GGML_API void         ggml_quant_clear_aux_registry(void);
+
 // Train 16 Lloyd-Max int8 levels from tensor data.
 // Bins normalized values (x/amax) in [-1,1], runs weighted k-means, rounds to sorted int8[16].
 // Also sets the global levels via q4dpt_set_levels().

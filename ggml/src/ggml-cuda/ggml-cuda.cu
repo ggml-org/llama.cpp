@@ -3,6 +3,7 @@
 #include "ggml-backend-impl.h"
 
 #include "ggml-cuda/common.cuh"
+#include "ggml-quants.h"
 #include "ggml-cuda/acc.cuh"
 #include "ggml-cuda/add-id.cuh"
 #include "ggml-cuda/arange.cuh"
@@ -1343,9 +1344,10 @@ static void ggml_cuda_op_mul_mat_cublas(
         if (src0->type != GGML_TYPE_F32) {
             // Set Q4_DPT levels in convert.cu's TU before dequantize
             if (src0->type == GGML_TYPE_Q4_DPT) {
-                const int levels_src = (dst->op == GGML_OP_MUL_MAT_ID) ? 3 : 2;
-                GGML_ASSERT(dst->src[levels_src] && dst->src[levels_src]->data);
-                ggml_cuda_set_q4dpt_levels((const int8_t *)dst->src[levels_src]->data, stream);
+                size_t levels_size;
+                const void * levels = ggml_quant_get_tensor_aux_data(src0, &levels_size);
+                GGML_ASSERT(levels && "Q4_DPT MUL_MAT requires levels");
+                ggml_cuda_set_q4dpt_levels((const int8_t *)levels, stream);
             }
             const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(src0->type);
             GGML_ASSERT(to_fp32_cuda != nullptr);

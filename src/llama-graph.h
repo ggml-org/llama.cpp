@@ -501,33 +501,6 @@ public:
     std::map<llama_seq_id, llama_sampler *> samplers;
 };
 
-class llm_graph_input_quant_levels : public llm_graph_input_i {
-public:
-    llm_graph_input_quant_levels(
-        const std::unordered_map<ggml_type, std::vector<uint8_t>> & data)
-        : levels_data(data) {}
-    virtual ~llm_graph_input_quant_levels() = default;
-
-    void set_input(const llama_ubatch * ubatch) override {
-        GGML_UNUSED(ubatch);
-        for (const auto & [type, data] : levels_data) {
-            if (levels[type] && !data.empty()) {
-                ggml_backend_tensor_set(levels[type], data.data(), 0, data.size());
-            }
-        }
-    }
-
-    bool can_reuse(const llm_graph_params & params) override {
-        GGML_UNUSED(params);
-        return true; // levels don't change between batches
-    }
-
-    // per-type input tensors, created during graph build
-    ggml_tensor * levels[GGML_TYPE_COUNT] = {};
-
-    // reference to model's host-side level data for populating
-    const std::unordered_map<ggml_type, std::vector<uint8_t>> & levels_data;
-};
 
 //
 // llm_graph_result
@@ -561,10 +534,6 @@ struct llm_graph_params {
     const llama_adapter_loras    * loras;
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
-
-    // per-tensor quantization levels (Q4_DPT, Q3_PT, Q3_KPT)
-    const std::unordered_map<ggml_type, std::vector<uint8_t>> * quant_levels_data  = nullptr;
-    const std::unordered_map<std::string, size_t>             * quant_level_index  = nullptr;
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 
@@ -774,11 +743,6 @@ struct llm_graph_context {
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
 
-    // per-tensor quantization levels
-    const std::unordered_map<ggml_type, std::vector<uint8_t>> * quant_levels_data  = nullptr;
-    const std::unordered_map<std::string, size_t>             * quant_level_index  = nullptr;
-    llm_graph_input_quant_levels                              * quant_levels_inp   = nullptr;
-
     std::map<llama_seq_id, llama_sampler *> samplers;
 
     const llm_graph_cb & cb_func;
@@ -889,8 +853,6 @@ struct llm_graph_context {
     ggml_tensor * build_inp_cls() const;
 
     ggml_tensor * build_inp_cross_embd() const;
-    void          build_inp_quant_levels();
-    void          attach_quant_levels();
     ggml_tensor * build_inp_pos_bucket_enc() const;
     ggml_tensor * build_inp_pos_bucket_dec() const;
     ggml_tensor * build_pos_bias(ggml_tensor * pos_bucket, ggml_tensor * attn_rel_b) const;
