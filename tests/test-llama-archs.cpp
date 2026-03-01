@@ -20,11 +20,12 @@
 #include <vector>
 
 // normalized mean squared error = mse(a, b) / mse(a, 0)
-static double nmse(const float * a, const float * b, size_t n) {
+static double nmse(const std::vector<float> & a, const std::vector<float> & b) {
+    GGML_ASSERT(a.size() == b.size());
     double mse_a_b = 0.0;
     double mse_a_0 = 0.0;
 
-    for (size_t i = 0; i < n; i++) {
+    for (size_t i = 0; i < a.size(); i++) {
         float a_i = a[i];
         float b_i = b[i];
 
@@ -404,7 +405,7 @@ static int test_backends(const size_t seed, const ggml_log_level log_level) {
                 }
                 auto model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), seed, {dev});
                 const std::vector<float> logits_dev = get_logits(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens, encode);
-                const double nmse_val = nmse(logits_cpu.data(), logits_dev.data(), logits_cpu.size());
+                const double nmse_val = nmse(logits_cpu, logits_dev);
                 const bool ok = nmse_val <= 1e-6;
                 all_ok = all_ok && ok;
                 char nmse_str[10];
