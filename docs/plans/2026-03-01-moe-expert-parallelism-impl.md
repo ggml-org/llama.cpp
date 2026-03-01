@@ -64,7 +64,7 @@ digraph dependencies {
 | `expert-cache.cpp/hpp` | 7 | None (deletion task) |
 | `expert-prefetch.cpp/hpp` | 7 | None (refactor task) |
 | `ggml-sycl.cpp:globals` (lines 229-284) | 2, 7 | Low (2 reads, 7 removes) |
-| `CMakeLists.txt` | 7 | None (single task) |
+| `CMakeLists.txt` | — | No edit needed (uses glob) |
 | `tests/` | 8 | None (new files) |
 
 ---
@@ -140,10 +140,13 @@ public:
     std::vector<std::pair<int, ExpertPlacement>> get_layer_experts(int layer_id) const;
 
 private:
-    int make_key(int layer_id, int expert_id) const { return layer_id * 65536 + expert_id; }
+    // IMPORTANT: layer_id is a FNV-1a 32-bit hash — must use 64-bit key
+    int64_t make_key(int layer_id, int expert_id) const {
+        return (int64_t(layer_id) << 32) | int64_t(uint32_t(expert_id));
+    }
 
-    mutable std::shared_mutex                    mutex_;
-    std::unordered_map<int, ExpertPlacement>     table_;
+    mutable std::shared_mutex                        mutex_;
+    std::unordered_map<int64_t, ExpertPlacement>     table_;
     int                                          n_layers_  = 0;
     int                                          n_experts_ = 0;
 };
@@ -287,8 +290,8 @@ auto & placement_table = get_expert_placement_table();
 const int n_gpu = ggml_sycl_info().device_count;
 
 // Per-device work lists (generic N-device, not hardcoded 2)
-std::vector<std::vector<moe_expert_entry>> per_gpu_entries(n_gpu);
-std::vector<moe_expert_entry> cpu_entries;
+std::vector<std::vector<expert_dispatch_entry>> per_gpu_entries(n_gpu);
+std::vector<expert_dispatch_entry> cpu_entries;
 
 for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
     for (int64_t id = 0; id < n_ids; id++) {
@@ -343,7 +346,7 @@ git commit -m "sycl: replace ExpertCache partition with placement-table-driven N
 ```
 
 **Notes for implementer:**
-- The existing `gpu_entries` variable at line 25065 uses `moe_expert_entry { iid1, id, expert_id, cached_ptr }`. Reuse this struct.
+- The existing `gpu_entries` variable at line 25065 uses `expert_dispatch_entry { iid1, id, expert_id, cached_ptr }`. Reuse this struct.
 - Keep `g_expert_caches` reads as a fallback path under `#ifdef GGML_SYCL_LEGACY_EXPERT_CACHE` (this ifdef is added in Task 7).
 - The FNV-hash `layer_id` is already computed at line 24535. Pass it directly to `placement_table.get()`.
 - Don't remove the `expert_cache->update_score()` calls yet — Task 7 handles that.
@@ -407,7 +410,7 @@ static std::mutex & exec_mutex(const queue_ptr & q) {
     if (q == ggml_sycl_get_cpu_queue()) return exec_mutex_cpu();
     // Per-GPU device mutex (allows parallel B580+B50 GEMM)
     static std::array<std::mutex, GGML_SYCL_MAX_DEVICES> gpu_mutexes;
-    int dev_id = dpct::dev_mgr::instance().get_device_id(q->get_device());
+    int dev_id = ggml_sycl_get_device_id_from_queue(q);
     return gpu_mutexes[std::min(dev_id, (int)gpu_mutexes.size() - 1)];
 }
 ```
@@ -424,7 +427,7 @@ git commit -m "sycl: make prestaging async and oneDNN mutex per-device for MoE p
 - `ensure_cached_layout()` already returns a `cache_layout_result` with an `event` field (unified-cache.hpp:274). Currently the event is `.wait()`'d synchronously inside the function at line 3068 of unified-cache.cpp. Making this truly async requires also making the fill execution async — may need a new `ensure_cached_layout_async()` variant, or a `bool async` parameter.
 - For `update_moe_ptr_table()`: replace the `stream->wait()` at line 18852 with collecting events from `ensure_cached_layout()` and using `depends_on(events)` on the subsequent kernel submission. The pointer table H2D copy (line 19068) must depend on all staging events.
 - Do NOT use `ext_oneapi_submit_barrier()` — known to corrupt Level Zero event state. Use `depends_on(event)` on the H2D memcpy submission instead.
-- `dpct::dev_mgr::instance().get_device_id()` may not exist — check. Alternative: hash the `sycl::device` object or maintain a static `map<sycl::device, int>`.
+- `dpct::dev_mgr::instance().get_device_id()` does NOT exist in this codebase (no DPCT). Use `ggml_sycl_get_device_id_from_queue()` from compute-buffer-manager.cpp:22, or hash the `sycl::device` object.
 
 ---
 
@@ -468,7 +471,7 @@ auto & placement_table = get_expert_placement_table();
 placement_table.init(n_moe_layers, n_experts);
 
 // Step 2: Register all experts in host cache (pinned AOS)
-auto * host_cache = get_shared_host_cache();
+auto * cache = get_unified_cache_for_device(0);  // Primary device cache
 for (int layer = 0; layer < n_moe_layers; layer++) {
     int hash_layer_id = moe_layer_ids[layer];  // FNV hash from existing scan
     for (int e = 0; e < n_experts; e++) {
@@ -481,7 +484,7 @@ for (int layer = 0; layer < n_moe_layers; layer++) {
         bool needs_fill = false;
         bool pinned = false;
         cache_location location;
-        void * host_ptr = host_cache->ensure_cached_alloc(
+        void * host_ptr = cache->ensure_cached_alloc(
             key, mmap_ptr, expert_bytes, expert_bytes,
             cache_entry_type::MOE_EXPERT, hash_layer_id, e,
             GGML_LAYOUT_AOS, false, &needs_fill, &pinned, &location, nullptr);
@@ -541,8 +544,8 @@ git commit -m "sycl: register MoE experts via unified cache and populate placeme
 
 **Notes for implementer:**
 - Keep the existing `ExpertCache::register_expert()` calls under `#ifdef GGML_SYCL_LEGACY_EXPERT_CACHE` for now (Task 7 removes them).
-- `ggml_sycl_get_moe_expert_cache_key_from_parts()` may not exist yet — check `ggml_sycl_get_moe_expert_cache_key()` at line ~18930 for the existing key construction pattern. May need a new helper that doesn't require a `ggml_tensor*`.
-- The `host_cache` shared instance is obtained via `get_shared_host_cache()` or similar — check how `create_host_cache_for_device()` is called.
+- `ggml_sycl_get_moe_expert_cache_key()` exists at lines 3229-3276. Uses `name_hash + cache_uuid + expert_id` via `ggml_sycl_hash_combine()`. May need a variant that doesn't require a `ggml_tensor*`.
+- `get_shared_host_cache()` does NOT exist. Access the host cache through `get_unified_cache_for_device(dev)` (unified-cache.hpp:1069) or follow the existing pattern in `moe_hybrid_init_once()` which uses `ExpertCache::register_expert()` (to be replaced).
 - The `expert_host_ptrs[layer][e]` and `expert_sizes[layer]` arrays are already computed in the existing `moe_hybrid_init_once()` loop at lines 351-495. Reuse those.
 - Initial popularity is uniform (expert 0 = rank 0, expert 127 = rank 127). The existing `ExpertPredictor::record_access_batch()` will provide actual frequency data after warmup.
 
@@ -585,7 +588,7 @@ Use the existing ring-buffered staging pattern from tensor split (`g_split_stagi
 static void dispatch_experts_secondary_gpu(
     ggml_backend_sycl_context & ctx,
     int                         target_device,
-    const std::vector<moe_expert_entry> & entries,
+    const std::vector<expert_dispatch_entry> & entries,
     const ggml_tensor * src0,
     const ggml_tensor * src1,
     ggml_tensor *       dst,
@@ -802,7 +805,7 @@ Build: `ninja -C build` (must succeed without define).
 rm ggml/src/ggml-sycl/expert-cache.cpp ggml/src/ggml-sycl/expert-cache.hpp
 ```
 
-Remove `expert-cache.cpp` from `ggml/src/ggml-sycl/CMakeLists.txt`.
+CMakeLists.txt uses `file(GLOB GGML_SOURCES_SYCL "*.cpp")` — deleting the .cpp file is sufficient, no CMakeLists.txt edit needed.
 
 Remove all `#ifdef GGML_SYCL_LEGACY_EXPERT_CACHE` blocks (they're dead code now).
 
@@ -828,8 +831,8 @@ git commit -m "sycl: remove ExpertCache, refactor ExpertPrefetcher to unified ca
 - There are 6+ locations in ggml-sycl.cpp referencing ExpertCache globals. Use `grep -n 'expert_cache' ggml/src/ggml-sycl/ggml-sycl.cpp` to find them all. The plan doc (Phase 2e) lists exact line numbers.
 - The `ExpertPrefetcher::hint()` method currently calls `cache_->prefetch_async(layer, expert, *dma_queue_)`. The unified cache equivalent is `ensure_cached_layout(request, deps)` where `request.layout = GGML_LAYOUT_SOA` and the fill_fn does AOS→SOA reorder.
 - `ExpertPredictor` does NOT depend on ExpertCache at all — its `predict()`, `record_actual()`, and `predict_pregate()` methods use only internal state (`last_experts_`, `freq_table_`, `gate_weight_ptrs_`). Leave it completely unchanged.
-- The `PinnedBufferPool` class (in expert-cache.hpp) is also used by the CPU dispatch path for activation/output staging. Check if it should be moved to a separate file or if there's an equivalent in the unified cache infrastructure.
-- `CpuExpertPool` (in expert-cache.hpp:350) manages the TBB thread pool for CPU experts. This must NOT be deleted — move it to cpu-dispatch.hpp or ggml-sycl.cpp if it's currently in expert-cache.hpp.
+- `PinnedBufferPool` (expert-cache.hpp:316-362) IS used by dispatch_cpu_and_scatter for activation/output staging. Must be moved to a separate header (e.g. `pinned-buffer-pool.hpp`) before deleting expert-cache.hpp.
+- `CpuExpertPool` is ALREADY in its own file `cpu-expert-pool.hpp:32` (NOT in expert-cache.hpp). No need to move it.
 
 ---
 
