@@ -25024,7 +25024,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     bool          valid                        = false;
 
                     ~gpu1_ring_buffers() {
-                        if (!valid) { return; }
+                        if (!valid || ggml_sycl::ggml_sycl_is_shutting_down()) { return; }
                         for (int s = 0; s < MERGE_RING_SIZE; s++) {
                             if (act_staging[s]) { sycl::free(act_staging[s], pri_ctx); }
                             if (out_staging[s]) { sycl::free(out_staging[s], pri_ctx); }
