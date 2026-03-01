@@ -740,6 +740,7 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_XIAOMI_MIMO: return "Xiaomi MiMo";
         case COMMON_CHAT_FORMAT_SOLAR_OPEN: return "Solar Open";
         case COMMON_CHAT_FORMAT_EXAONE_MOE: return "EXAONE MoE";
+        case COMMON_CHAT_FORMAT_FUNCTION_GEMMA: return "FunctionGemma";
         case COMMON_CHAT_FORMAT_PEG_SIMPLE: return "peg-simple";
         case COMMON_CHAT_FORMAT_PEG_NATIVE: return "peg-native";
         case COMMON_CHAT_FORMAT_PEG_CONSTRUCTED: return "peg-constructed";
@@ -2923,6 +2924,43 @@ static common_chat_params common_chat_params_init_seed_oss(
     return data;
 }
 
+static common_chat_params common_chat_params_init_function_gemma(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    common_chat_params data;
+    data.prompt = apply(tmpl, inputs);
+    data.format = COMMON_CHAT_FORMAT_FUNCTION_GEMMA;
+
+    if (inputs.tools.is_array() && !inputs.tools.empty()) {
+        data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+        data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
+            std::vector<std::string> tool_rules;
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function   = tool.at("function");
+                std::string  name       = function.at("name");
+                auto         parameters = function.at("parameters");
+                builder.resolve_refs(parameters);
+
+                // Create rule for FunctionGemma function call format
+                std::string param_rules = builder.add_schema(name + "-args", parameters);
+
+                tool_rules.push_back(builder.add_rule(name + "-call",
+                                                      "\"<start_function_call>call:" + name + "{\" " +
+                                                          param_rules +
+                                                          " \"}<end_function_call>\""));
+            });
+
+            data.grammar_triggers.push_back({ COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<start_function_call>" });
+
+            data.preserved_tokens = {
+                "<start_function_call>", "<end_function_call>",
+            };
+            builder.add_rule("root", string_join(tool_rules, " | "));
+        });
+    } else {
+        data.format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
+    }
+    return data;
+}
+
 // various workarounds for known issues with certain templates or model behaviors
 // TODO @ngxson : improve this (how?)
 namespace workaround {
@@ -3193,6 +3231,11 @@ static common_chat_params common_chat_templates_apply_jinja(
         src.find("<tool_calls>[") != std::string::npos &&
         src.find("]</tool_calls>") != std::string::npos) {
         return common_chat_params_init_apriel_1_5(tmpl, params);
+    }
+
+    // FunctionGemma format detection
+    if (src.find("<start_function_call>") != std::string::npos) {
+        return common_chat_params_init_function_gemma(tmpl, params);
     }
 
     // Solar Open
