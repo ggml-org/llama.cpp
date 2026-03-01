@@ -1455,6 +1455,18 @@ if(GGML_SYCL)
     install(TARGETS test-sycl-moe-identity-hash RUNTIME)
     add_test(NAME test-sycl-moe-identity-hash COMMAND $<TARGET_FILE:test-sycl-moe-identity-hash>)
 
+    # test-sycl-moe-expert-parallelism: ExpertPlacementTable unit tests, key uniqueness, N-device routing.
+    add_executable(test-sycl-moe-expert-parallelism test-sycl-moe-expert-parallelism.cpp)
+    target_link_libraries(test-sycl-moe-expert-parallelism PRIVATE ggml)
+    target_include_directories(test-sycl-moe-expert-parallelism PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-sycl-moe-expert-parallelism PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-sycl-moe-expert-parallelism PRIVATE "-fsycl")
+    install(TARGETS test-sycl-moe-expert-parallelism RUNTIME)
+    add_test(NAME test-sycl-moe-expert-parallelism COMMAND $<TARGET_FILE:test-sycl-moe-expert-parallelism>)
+
     # test-sycl-weight-cache-guard: stress weight cache guard + host reorders.
     add_executable(test-sycl-weight-cache-guard test-sycl-weight-cache-guard.cpp)
     target_link_libraries(test-sycl-weight-cache-guard PRIVATE ggml)

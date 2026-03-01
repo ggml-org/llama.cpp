@@ -623,8 +623,11 @@ class unified_cache {
                                bool *                     needs_fill);
 
     // Ensure a weight is cached in a specific layout with graph-safe async fill.
+    // When override_queue is non-null, H2D transfers use that queue instead of
+    // the cache's internal queue, allowing callers to drive async staging.
     cache_layout_result ensure_cached_layout(const cache_layout_request &     request,
-                                             const std::vector<sycl::event> & deps);
+                                             const std::vector<sycl::event> & deps,
+                                             sycl::queue * override_queue = nullptr);
 
     // === Multi-Device Partial Row Loading ===
 

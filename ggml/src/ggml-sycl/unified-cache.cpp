@@ -2402,7 +2402,8 @@ void * unified_cache::ensure_cached_alloc(const ggml_sycl_cache_id & key_id,
 }
 
 cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_request &     request,
-                                                        const std::vector<sycl::event> & deps) {
+                                                        const std::vector<sycl::event> & deps,
+                                                        sycl::queue * override_queue) {
     cache_layout_result result{};
     result.layout        = request.layout;
     result.onednn_pack_m = request.onednn_pack_m;
@@ -3052,14 +3053,22 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             fflush(stderr);
         }
 
+        // Use override_queue when provided to drive H2D transfers on the
+        // caller's queue instead of the cache's internal queue_.
+        sycl::queue & fill_queue = override_queue ? *override_queue : queue_;
         if (request.fill_fn) {
             GGML_SYCL_DEBUG("[DEBUG-FILL] Calling fill_fn...\n");
-            fill_event = request.fill_fn(queue_, device_ptr, request.dst_size, request.src_ptr, request.src_size,
+            fill_event = request.fill_fn(fill_queue, device_ptr, request.dst_size, request.src_ptr, request.src_size,
                                          request.fill_ctx, deps);
             GGML_SYCL_DEBUG("[DEBUG-FILL] fill_fn returned\n");
         } else {
             GGML_SYCL_DEBUG("[DEBUG-FILL] Calling copy_to_device_async...\n");
-            fill_event = copy_to_device_async(device_ptr, request.src_ptr, request.src_size, deps);
+            if (override_queue) {
+                // Use caller's queue for the H2D transfer
+                fill_event = override_queue->memcpy(device_ptr, request.src_ptr, request.src_size);
+            } else {
+                fill_event = copy_to_device_async(device_ptr, request.src_ptr, request.src_size, deps);
+            }
             GGML_SYCL_DEBUG("[DEBUG-FILL] copy_to_device_async returned\n");
         }
 
@@ -6117,9 +6126,9 @@ prestage_result prestage_routed_experts(void *          queue_ptr,
     GGML_SYCL_DEBUG("[PRESTAGE] Layer %d: %zu cache hits, %zu to stage\n", layer_id,
                     unique_experts.size() - experts_to_stage.size(), experts_to_stage.size());
 
-    // Use queue_ptr for async staging — submit H2D transfers without blocking
+    // Use queue_ptr for async staging — submit H2D transfers on the caller's
+    // queue instead of the cache's internal queue for better pipelining.
     sycl::queue * staging_queue = static_cast<sycl::queue *>(queue_ptr);
-    (void) staging_queue;  // ensure_cached_layout uses the cache's internal queue
 
     // Step 3: Stage missing experts via ensure_cached_layout to get fill events
     for (int32_t expert_id : experts_to_stage) {
@@ -6137,7 +6146,7 @@ prestage_result prestage_routed_experts(void *          queue_ptr,
         req.layout           = GGML_LAYOUT_AOS;
         req.validate_content = false;
 
-        cache_layout_result layout_result = cache->ensure_cached_layout(req, {});
+        cache_layout_result layout_result = cache->ensure_cached_layout(req, {}, staging_queue);
 
         if (layout_result.status == cache_layout_status::READY ||
             layout_result.status == cache_layout_status::IN_PROGRESS) {
