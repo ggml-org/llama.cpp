@@ -1003,8 +1003,7 @@ void ggml_vec_dot_q5_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
         const int16x8_t v_minsh = (int16x8_t)vec_unpackh(v_mins8);
 
         const int32x4_t v_minsho = vec_mulo(v_ysums, v_minsh);
-        const int32x4_t v_minshe = vec_mule(v_ysums, v_minsh);
-        const int32x4_t v_mins = vec_add(v_minsho, v_minshe);
+        const int32x4_t v_mins = vec_meadd(v_ysums, v_minsh, v_minsho);
         const int32_t mins = vec_hsum_i32x4(v_mins);
 
         const uint8_t * scales = (const uint8_t *)utmp;
