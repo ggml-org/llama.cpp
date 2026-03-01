@@ -784,6 +784,24 @@ static void test_quantifiers() {
             "0xFF 0x12 0xAB 0x00 0x00 0x00",
         }
     );
+    test_grammar(
+        "segfault",
+        // Grammar
+        R"""(
+            root ::= ( [x]* )*
+        )""",
+        // Passing strings
+        {
+		"",
+		"x",
+		"xx"
+        },
+        // Failing strings
+        {
+		"y",
+		"yy"
+        }
+    );
 }
 
 static void test_failure_missing_root() {
