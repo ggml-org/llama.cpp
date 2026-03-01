@@ -90,8 +90,8 @@ void ExpertCache::init(int device_id, size_t vram_budget_bytes, sycl::queue & q)
     try {
         pool_ = sycl::malloc_device(pool_size_, q);
     } catch (const sycl::exception & e) {
-        GGML_LOG_ERROR("[EXPERT-CACHE] Failed to allocate %.1f MB VRAM pool: %s\n",
-                       pool_size_ / (1024.0 * 1024.0), e.what());
+        GGML_LOG_ERROR("[EXPERT-CACHE] Failed to allocate %.1f MB VRAM pool: %s\n", pool_size_ / (1024.0 * 1024.0),
+                       e.what());
         pool_      = nullptr;
         pool_size_ = 0;
         return;
@@ -121,10 +121,11 @@ void ExpertCache::init(int device_id, size_t vram_budget_bytes, sycl::queue & q)
         }
     }
 
-    GGML_LOG_INFO("[EXPERT-CACHE] Initialized: pool=%.1f MB device=%d warmup=%d tokens "
-                  "evict_alpha=%.2f (%.0f%% freq, %.0f%% recency)\n",
-                  pool_size_ / (1024.0 * 1024.0), device_id_, warmup_target_,
-                  evict_alpha_, evict_alpha_ * 100.0f, (1.0f - evict_alpha_) * 100.0f);
+    GGML_LOG_INFO(
+        "[EXPERT-CACHE] Initialized: pool=%.1f MB device=%d warmup=%d tokens "
+        "evict_alpha=%.2f (%.0f%% freq, %.0f%% recency)\n",
+        pool_size_ / (1024.0 * 1024.0), device_id_, warmup_target_, evict_alpha_, evict_alpha_ * 100.0f,
+        (1.0f - evict_alpha_) * 100.0f);
 }
 
 void ExpertCache::shutdown() {
@@ -135,10 +136,10 @@ void ExpertCache::shutdown() {
     }
 
     // Report final statistics
-    uint64_t total    = hits_ + misses_;
-    float    hr       = total > 0 ? 100.0f * hits_ / total : 0.0f;
-    GGML_LOG_INFO("[EXPERT-CACHE] Shutting down: cached=%zu/%d hit_rate=%.1f%% pool=%.1f MB\n",
-                  lookup_map_.size(), n_slots_, hr, pool_size_ / (1024.0 * 1024.0));
+    uint64_t total = hits_ + misses_;
+    float    hr    = total > 0 ? 100.0f * hits_ / total : 0.0f;
+    GGML_LOG_INFO("[EXPERT-CACHE] Shutting down: cached=%zu/%d hit_rate=%.1f%% pool=%.1f MB\n", lookup_map_.size(),
+                  n_slots_, hr, pool_size_ / (1024.0 * 1024.0));
 
     // Skip SYCL resource cleanup if runtime is shutting down
     // (static destruction order fiasco — SYCL context may be invalid)
@@ -160,11 +161,11 @@ void ExpertCache::shutdown() {
     slot_size_ = 0;
     slots_.clear();
     lookup_map_.clear();
-    hits_           = 0;
-    misses_         = 0;
-    global_token_   = 0;
-    evict_alpha_    = 0.7f;
-    current_layer_  = -1;
+    hits_          = 0;
+    misses_        = 0;
+    global_token_  = 0;
+    evict_alpha_   = 0.7f;
+    current_layer_ = -1;
     co_activation_.clear();
     warmup_freq_.clear();
     warmup_tokens_  = 0;
@@ -179,11 +180,10 @@ ExpertCache::~ExpertCache() {
     shutdown();
 }
 
-void ExpertCache::register_expert(int layer_idx, int expert_idx,
-                                  const void * host_ptr, size_t bytes) {
+void ExpertCache::register_expert(int layer_idx, int expert_idx, const void * host_ptr, size_t bytes) {
     std::unique_lock lock(mutex_);
 
-    int64_t key = make_key(layer_idx, expert_idx);
+    int64_t key        = make_key(layer_idx, expert_idx);
     host_entries_[key] = { host_ptr, bytes };
 
     // On first registration, determine slot size.
@@ -200,8 +200,7 @@ void ExpertCache::register_expert(int layer_idx, int expert_idx,
             for (int i = 0; i < n_slots_; i++) {
                 slots_[i].device_ptr = base + static_cast<size_t>(i) * slot_size_;
             }
-            GGML_LOG_INFO("[EXPERT-CACHE] Slot size=%.1f KB, total_slots=%d\n",
-                          slot_size_ / 1024.0, n_slots_);
+            GGML_LOG_INFO("[EXPERT-CACHE] Slot size=%.1f KB, total_slots=%d\n", slot_size_ / 1024.0, n_slots_);
         }
     }
 }
@@ -225,7 +224,7 @@ ExpertLookup ExpertCache::lookup(int layer_idx, int expert_idx) const {
     // Check VRAM cache
     auto it = lookup_map_.find(key);
     if (it != lookup_map_.end()) {
-        int slot_idx = it->second;
+        int slot_idx      = it->second;
         result.device_ptr = slots_[slot_idx].device_ptr;
         result.is_cached  = true;
     }
@@ -255,8 +254,7 @@ void * ExpertCache::ensure_cached(int layer_idx, int expert_idx, sycl::queue & q
     // Get host source
     auto host_it = host_entries_.find(key);
     if (host_it == host_entries_.end()) {
-        GGML_LOG_ERROR("[EXPERT-CACHE] Expert not registered: layer=%d expert=%d\n",
-                       layer_idx, expert_idx);
+        GGML_LOG_ERROR("[EXPERT-CACHE] Expert not registered: layer=%d expert=%d\n", layer_idx, expert_idx);
         return nullptr;
     }
 
@@ -288,8 +286,7 @@ void * ExpertCache::ensure_cached(int layer_idx, int expert_idx, sycl::queue & q
         }
 
         // Remove old entry from lookup map
-        int64_t old_key = make_key(slots_[target_slot].layer_idx,
-                                   slots_[target_slot].expert_idx);
+        int64_t old_key = make_key(slots_[target_slot].layer_idx, slots_[target_slot].expert_idx);
         lookup_map_.erase(old_key);
     }
 
@@ -347,8 +344,7 @@ sycl::event ExpertCache::prefetch_async(int layer_idx, int expert_idx, sycl::que
         if (target_slot == -1) {
             return sycl::event();
         }
-        int64_t old_key = make_key(slots_[target_slot].layer_idx,
-                                   slots_[target_slot].expert_idx);
+        int64_t old_key = make_key(slots_[target_slot].layer_idx, slots_[target_slot].expert_idx);
         lookup_map_.erase(old_key);
     }
 
@@ -367,10 +363,8 @@ sycl::event ExpertCache::prefetch_async(int layer_idx, int expert_idx, sycl::que
     return evt;
 }
 
-PrefetchResult ExpertCache::prefetch_batch_async(
-    const std::vector<std::pair<int, int>> & experts,
-    sycl::queue & dma_queue)
-{
+PrefetchResult ExpertCache::prefetch_batch_async(const std::vector<std::pair<int, int>> & experts,
+                                                 sycl::queue &                            dma_queue) {
     PrefetchResult result;
     result.n_submitted = 0;
 
@@ -381,10 +375,11 @@ PrefetchResult ExpertCache::prefetch_batch_async(
     // Collect DMA work items under lock, then submit outside lock.
     struct DmaWork {
         expert_key   ek;
-        void *       dst;        // device slot pointer
-        const void * src;        // host source pointer
+        void *       dst;  // device slot pointer
+        const void * src;  // host source pointer
         size_t       bytes;
     };
+
     std::vector<DmaWork> work;
     work.reserve(experts.size());
 
@@ -419,8 +414,7 @@ PrefetchResult ExpertCache::prefetch_batch_async(
                     continue;  // No slots available
                 }
                 // Remove old entry from lookup map.
-                int64_t old_key = make_key(slots_[target_slot].layer_idx,
-                                           slots_[target_slot].expert_idx);
+                int64_t old_key = make_key(slots_[target_slot].layer_idx, slots_[target_slot].expert_idx);
                 lookup_map_.erase(old_key);
             }
 
@@ -466,12 +460,12 @@ void ExpertCache::update_score(int layer_idx, int expert_idx, uint64_t token_cou
     global_token_ = token_counter;
 
     int64_t key = make_key(layer_idx, expert_idx);
-    auto it = lookup_map_.find(key);
+    auto    it  = lookup_map_.find(key);
     if (it == lookup_map_.end()) {
         return;
     }
 
-    auto & slot = slots_[it->second];
+    auto & slot      = slots_[it->second];
     slot.last_access = token_counter;
     slot.frequency++;
 }
@@ -488,7 +482,7 @@ size_t ExpertCache::total_slots() const {
 
 float ExpertCache::hit_rate() const {
     std::shared_lock lock(mutex_);
-    uint64_t total = hits_ + misses_;
+    uint64_t         total = hits_ + misses_;
     if (total == 0) {
         return 0.0f;
     }
@@ -527,9 +521,9 @@ float ExpertCache::rolling_hit_rate() const {
     }
     int total_hits   = 0;
     int total_misses = 0;
-    int n = std::min(rolling_count_, ROLLING_WINDOW);
+    int n            = std::min(rolling_count_, ROLLING_WINDOW);
     for (int i = 0; i < n; i++) {
-        total_hits   += rolling_buf_[i].hits;
+        total_hits += rolling_buf_[i].hits;
         total_misses += rolling_buf_[i].misses;
     }
     int total = total_hits + total_misses;
@@ -541,8 +535,10 @@ bool ExpertCache::is_warmup_phase() const {
     return warmup_active_;
 }
 
-void ExpertCache::record_access_batch(int current_layer, const int * expert_ids,
-                                       int n_experts, uint64_t token_counter) {
+void ExpertCache::record_access_batch(int         current_layer,
+                                      const int * expert_ids,
+                                      int         n_experts,
+                                      uint64_t    token_counter) {
     std::unique_lock lock(mutex_);
 
     current_layer_ = current_layer;
@@ -571,7 +567,7 @@ void ExpertCache::record_access_batch(int current_layer, const int * expert_ids,
         // Track co-activation: for each pair (i, j) where i < j,
         // record that these experts were activated together.
         for (int j = i + 1; j < n_experts; j++) {
-            int64_t key_j = make_key(current_layer, expert_ids[j]);
+            int64_t key_j    = make_key(current_layer, expert_ids[j]);
             // Encode pair as sorted (min, max) key
             int64_t pair_key = (std::min(key, key_j) << 32) | (std::max(key, key_j) & 0xFFFFFFFF);
             co_activation_[pair_key]++;
@@ -580,7 +576,7 @@ void ExpertCache::record_access_batch(int current_layer, const int * expert_ids,
 
     // Update rolling window
     rolling_buf_[rolling_idx_] = { token_hits, token_misses };
-    rolling_idx_ = (rolling_idx_ + 1) % ROLLING_WINDOW;
+    rolling_idx_               = (rolling_idx_ + 1) % ROLLING_WINDOW;
     if (rolling_count_ < ROLLING_WINDOW) {
         rolling_count_++;
     }
@@ -618,8 +614,7 @@ void ExpertCache::finish_warmup_locked() {
     }
 
     // Sort experts by frequency (descending) and bulk-load top-N into VRAM
-    std::vector<std::pair<int64_t, uint32_t>> sorted_freq(warmup_freq_.begin(),
-                                                           warmup_freq_.end());
+    std::vector<std::pair<int64_t, uint32_t>> sorted_freq(warmup_freq_.begin(), warmup_freq_.end());
     std::sort(sorted_freq.begin(), sorted_freq.end(),
               [](const auto & a, const auto & b) { return a.second > b.second; });
 
@@ -671,8 +666,8 @@ void ExpertCache::finish_warmup_locked() {
         n_loaded++;
     }
 
-    GGML_LOG_INFO("[EXPERT-CACHE] Warm-start complete: loaded %d/%d experts after %d tokens\n",
-                  n_loaded, n_slots_, warmup_tokens_);
+    GGML_LOG_INFO("[EXPERT-CACHE] Warm-start complete: loaded %d/%d experts after %d tokens\n", n_loaded, n_slots_,
+                  warmup_tokens_);
 
     warmup_freq_.clear();
 }
@@ -695,11 +690,10 @@ int ExpertCache::find_eviction_candidate() const {
             continue;  // Empty slot
         }
 
-        const uint64_t staleness        = global_token_ - slots_[i].last_access;
-        const float    recency_score    = 1.0f / (1.0f + static_cast<float>(staleness));
-        const float    frequency_score  = std::log2(1.0f + static_cast<float>(slots_[i].frequency));
-        const float    combined         = evict_alpha_ * frequency_score
-                                        + (1.0f - evict_alpha_) * recency_score;
+        const uint64_t staleness       = global_token_ - slots_[i].last_access;
+        const float    recency_score   = 1.0f / (1.0f + static_cast<float>(staleness));
+        const float    frequency_score = std::log2(1.0f + static_cast<float>(slots_[i].frequency));
+        const float    combined        = evict_alpha_ * frequency_score + (1.0f - evict_alpha_) * recency_score;
 
         if (combined < best_score) {
             best_score = combined;
@@ -738,11 +732,11 @@ void ExpertCache::maybe_log_stats() {
             rm += rolling_buf_[i].misses;
         }
         int rt = rh + rm;
-        rhr = rt > 0 ? 100.0f * static_cast<float>(rh) / static_cast<float>(rt) : 0.0f;
+        rhr    = rt > 0 ? 100.0f * static_cast<float>(rh) / static_cast<float>(rt) : 0.0f;
     }
 
-    GGML_LOG_INFO("[EXPERT-CACHE] hit_rate=%.1f%% rolling=%.1f%% cached=%zu/%d pool=%.1f MB\n",
-                  hr, rhr, lookup_map_.size(), n_slots_, pool_size_ / (1024.0 * 1024.0));
+    GGML_LOG_INFO("[EXPERT-CACHE] hit_rate=%.1f%% rolling=%.1f%% cached=%zu/%d pool=%.1f MB\n", hr, rhr,
+                  lookup_map_.size(), n_slots_, pool_size_ / (1024.0 * 1024.0));
 }
 
 int ExpertCache::find_empty_slot() const {
@@ -767,8 +761,7 @@ PinnedBufferPool::~PinnedBufferPool() {
     shutdown();
 }
 
-void PinnedBufferPool::init(sycl::queue & q, int device_id,
-                            size_t max_experts, size_t act_dim, size_t out_dim) {
+void PinnedBufferPool::init(sycl::queue & q, int device_id, size_t max_experts, size_t act_dim, size_t out_dim) {
     if (is_initialized()) {
         return;
     }
@@ -783,9 +776,9 @@ void PinnedBufferPool::init(sycl::queue & q, int device_id,
 
     // Allocate activation pool via unified_alloc with pinned host constraint
     alloc_request req_act;
-    req_act.queue  = &q;
-    req_act.device = device_id;
-    req_act.size   = act_bytes;
+    req_act.queue                               = &q;
+    req_act.device                              = device_id;
+    req_act.size                                = act_bytes;
     req_act.intent.role                         = alloc_role::EXPERT_STAGING;
     req_act.intent.category                     = runtime_category::EXPERT_CACHE;
     req_act.intent.cohort_id                    = "moe_act_pool";
@@ -798,7 +791,7 @@ void PinnedBufferPool::init(sycl::queue & q, int device_id,
     act_pool_ = static_cast<float *>(act_alloc_.ptr);
 
     // Allocate output pool
-    alloc_request req_out = req_act;
+    alloc_request req_out    = req_act;
     req_out.size             = out_bytes;
     req_out.intent.cohort_id = "moe_out_pool";
 
@@ -811,8 +804,8 @@ void PinnedBufferPool::init(sycl::queue & q, int device_id,
     }
     out_pool_ = static_cast<float *>(out_alloc_.ptr);
 
-    GGML_LOG_INFO("[MOE-POOL] Pinned buffer pool: act=%zu KB, out=%zu KB, max_experts=%zu\n",
-                  act_bytes / 1024, out_bytes / 1024, max_experts);
+    GGML_LOG_INFO("[MOE-POOL] Pinned buffer pool: act=%zu KB, out=%zu KB, max_experts=%zu\n", act_bytes / 1024,
+                  out_bytes / 1024, max_experts);
 }
 
 void PinnedBufferPool::shutdown() {
@@ -841,4 +834,4 @@ void PinnedBufferPool::release(BufferPair) {
     }
 }
 
-} // namespace ggml_sycl
+}  // namespace ggml_sycl

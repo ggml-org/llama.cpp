@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include "unified-cache.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -15,8 +17,6 @@
 #include <utility>
 #include <vector>
 
-#include "unified-cache.hpp"
-
 namespace ggml_sycl {
 
 // Key identifying a unique MoE expert (layer, expert_id pair).
@@ -25,9 +25,7 @@ struct expert_key {
     int layer;
     int expert_id;
 
-    bool operator==(const expert_key & o) const {
-        return layer == o.layer && expert_id == o.expert_id;
-    }
+    bool operator==(const expert_key & o) const { return layer == o.layer && expert_id == o.expert_id; }
 };
 
 // Hash function for expert_key.
@@ -44,16 +42,16 @@ struct ExpertSlot {
     int      expert_idx  = -1;
     void *   device_ptr  = nullptr;  // Points into contiguous pool
     size_t   size_bytes  = 0;
-    uint64_t frequency   = 0;       // Access count
-    uint64_t last_access = 0;       // Token counter value at last access
-    float    score       = 0.0f;    // Combined eviction score
+    uint64_t frequency   = 0;        // Access count
+    uint64_t last_access = 0;        // Token counter value at last access
+    float    score       = 0.0f;     // Combined eviction score
 };
 
 // Result of a batch-async prefetch operation.
 // Each entry maps an expert key to the sycl::event for its H2D DMA.
 struct PrefetchResult {
     std::vector<std::pair<expert_key, sycl::event>> events;
-    int n_submitted = 0;
+    int                                             n_submitted = 0;
 };
 
 // Result of a cache lookup.
@@ -85,7 +83,7 @@ struct ExpertLookup {
 // Default: 50% of remaining VRAM after dense layers.
 //
 class ExpertCache {
-public:
+  public:
     // Initialize the cache. Must be called after model loading so remaining
     // VRAM budget is known.
     //   device_id:         SYCL device ordinal
@@ -99,7 +97,7 @@ public:
     ~ExpertCache();
 
     // Non-copyable, non-movable (owns SYCL allocations)
-    ExpertCache() = default;
+    ExpertCache()                                = default;
     ExpertCache(const ExpertCache &)             = delete;
     ExpertCache & operator=(const ExpertCache &) = delete;
     ExpertCache(ExpertCache &&)                  = delete;
@@ -107,8 +105,7 @@ public:
 
     // Register all experts at model load time (host pointers).
     // Must be called before lookup/ensure_cached for each expert.
-    void register_expert(int layer_idx, int expert_idx,
-                         const void * host_ptr, size_t bytes);
+    void register_expert(int layer_idx, int expert_idx, const void * host_ptr, size_t bytes);
 
     // Fast lookup: is this expert in VRAM? O(1).
     // Returns {device_ptr, host_ptr, is_cached}.
@@ -127,15 +124,12 @@ public:
     // Phase 2 (lock released): submit all H2D DMAs as non-blocking operations.
     // Returns per-expert {key, sycl::event} pairs for granular await.
     // CRITICAL: Lock is released BEFORE DMA submissions to avoid blocking lookup().
-    PrefetchResult prefetch_batch_async(
-        const std::vector<std::pair<int, int>> & experts,
-        sycl::queue & dma_queue);
+    PrefetchResult prefetch_batch_async(const std::vector<std::pair<int, int>> & experts, sycl::queue & dma_queue);
 
     // Evict lowest-score slot and load a new expert into VRAM.
     // Registers the expert if not already registered, then ensures it is cached.
     // Returns device pointer, or nullptr on failure.
-    void * evict_and_load(int layer_idx, int expert_idx,
-                          const void * host_src, size_t bytes, sycl::queue & q) {
+    void * evict_and_load(int layer_idx, int expert_idx, const void * host_src, size_t bytes, sycl::queue & q) {
         register_expert(layer_idx, expert_idx, host_src, bytes);
         return ensure_cached(layer_idx, expert_idx, q);
     }
@@ -151,8 +145,7 @@ public:
     // Used to track co-activation patterns and warm-start profiling.
     // current_layer is the layer being processed; expert_ids are the
     // router-selected expert indices for this token.
-    void record_access_batch(int current_layer, const int * expert_ids, int n_experts,
-                             uint64_t token_counter);
+    void record_access_batch(int current_layer, const int * expert_ids, int n_experts, uint64_t token_counter);
 
     // Trigger warm-start bulk-load after profiling phase completes.
     // Loads the top-N most-frequent experts into VRAM. Called automatically
@@ -162,8 +155,8 @@ public:
     // Stats
     size_t cached_count() const;
     size_t total_slots() const;
-    float  hit_rate() const;         // All-time hits / (hits + misses)
-    float  rolling_hit_rate() const; // Rolling window (last 100 tokens)
+    float  hit_rate() const;          // All-time hits / (hits + misses)
+    float  rolling_hit_rate() const;  // Rolling window (last 100 tokens)
 
     size_t vram_budget() const;
     size_t vram_used() const;
@@ -183,21 +176,23 @@ public:
     // -----------------------------------------------------------------
 
     // Check if expert is currently cached in VRAM.
-    bool is_cached_in_vram(int layer_idx, int expert_idx) const {
-        return lookup(layer_idx, expert_idx).is_cached;
-    }
+    bool is_cached_in_vram(int layer_idx, int expert_idx) const { return lookup(layer_idx, expert_idx).is_cached; }
 
     // Synchronous get: ensure cached and return pointer.
     // size parameter is unused (slot_size_ is authoritative).
     void * get_expert(int layer_idx, int expert_idx, size_t /*size*/) {
-        if (!queue_) { return nullptr; }
+        if (!queue_) {
+            return nullptr;
+        }
         return ensure_cached(layer_idx, expert_idx, *queue_);
     }
 
     // Batch prefetch using expert_key vector (compat with prefetcher).
     // expert_size parameter is unused (slot_size_ is authoritative).
     void prefetch(const std::vector<expert_key> & experts, size_t /*expert_size*/) {
-        if (!queue_) { return; }
+        if (!queue_) {
+            return;
+        }
         for (const auto & ek : experts) {
             prefetch_async(ek.layer, ek.expert_id, *queue_);
         }
@@ -205,16 +200,16 @@ public:
 
     // Wait for all async prefetches on the compute queue.
     void wait_prefetch() {
-        if (queue_) { queue_->wait(); }
+        if (queue_) {
+            queue_->wait();
+        }
     }
 
-private:
+  private:
     static constexpr size_t ALIGNMENT = 256;
 
     // Align size up to ALIGNMENT boundary.
-    static size_t align_up(size_t sz) {
-        return (sz + ALIGNMENT - 1) & ~(ALIGNMENT - 1);
-    }
+    static size_t align_up(size_t sz) { return (sz + ALIGNMENT - 1) & ~(ALIGNMENT - 1); }
 
     // Find the slot to evict using hybrid LFU+staleness policy.
     // Combined score = alpha * log2(1 + frequency) + (1 - alpha) * recency.
@@ -237,9 +232,9 @@ private:
     void finish_warmup_locked();
 
     void * pool_      = nullptr;  // sycl::malloc_device contiguous pool
-    size_t pool_size_  = 0;
-    size_t slot_size_  = 0;       // Max expert size (aligned to 256)
-    int    n_slots_    = 0;
+    size_t pool_size_ = 0;
+    size_t slot_size_ = 0;        // Max expert size (aligned to 256)
+    int    n_slots_   = 0;
 
     std::vector<ExpertSlot> slots_;
 
@@ -251,6 +246,7 @@ private:
         const void * ptr  = nullptr;
         size_t       size = 0;
     };
+
     std::unordered_map<int64_t, HostEntry> host_entries_;
 
     mutable std::shared_mutex mutex_;
@@ -261,13 +257,15 @@ private:
 
     // Rolling hit rate tracking (window of last ROLLING_WINDOW tokens)
     static constexpr int ROLLING_WINDOW = 100;
+
     struct RollingEntry {
         int hits   = 0;
         int misses = 0;
     };
+
     RollingEntry rolling_buf_[ROLLING_WINDOW] = {};
-    int          rolling_idx_   = 0;   // Current write index (circular)
-    int          rolling_count_ = 0;   // Total entries written (capped at ROLLING_WINDOW)
+    int          rolling_idx_                 = 0;  // Current write index (circular)
+    int          rolling_count_               = 0;  // Total entries written (capped at ROLLING_WINDOW)
 
     // Current layer being processed (set by record_access_batch)
     int current_layer_ = -1;
@@ -278,16 +276,16 @@ private:
     std::unordered_map<int64_t, uint32_t> co_activation_;
 
     // Warm-start profiling state
-    int      warmup_target_   = 32;   // Default: profile first 32 tokens
-    int      warmup_tokens_   = 0;    // Tokens seen so far during warmup
-    bool     warmup_active_   = true; // True during warmup phase
-    bool     warmup_done_     = false; // True after warmup bulk-load completed
+    int                                   warmup_target_ = 32;     // Default: profile first 32 tokens
+    int                                   warmup_tokens_ = 0;      // Tokens seen so far during warmup
+    bool                                  warmup_active_ = true;   // True during warmup phase
+    bool                                  warmup_done_   = false;  // True after warmup bulk-load completed
     // Expert access frequency during warmup: key -> count
     std::unordered_map<int64_t, uint32_t> warmup_freq_;
 
     // Periodic logging
-    uint64_t log_interval_     = 100;  // Log every N tokens
-    uint64_t last_log_token_   = 0;
+    uint64_t log_interval_   = 100;  // Log every N tokens
+    uint64_t last_log_token_ = 0;
 
     // Global token counter for scoring
     uint64_t global_token_ = 0;
@@ -295,8 +293,8 @@ private:
     // Hybrid LFU+staleness eviction alpha (0.0 = pure recency, 1.0 = pure LFU)
     float evict_alpha_ = 0.7f;
 
-    int         device_id_ = -1;
-    sycl::queue * queue_   = nullptr;  // Non-owning ptr to compute queue
+    int           device_id_ = -1;
+    sycl::queue * queue_     = nullptr;  // Non-owning ptr to compute queue
 
     // Max expert count for key computation
     static constexpr int MAX_EXPERTS_PER_LAYER = 256;
@@ -316,7 +314,7 @@ using expert_cache = ExpertCache;
 // Memory tracked through unified cache (runtime_category::EXPERT_CACHE).
 // ---------------------------------------------------------------------------
 class PinnedBufferPool {
-public:
+  public:
     PinnedBufferPool() = default;
     ~PinnedBufferPool();
 
@@ -332,8 +330,7 @@ public:
     //   max_experts:  max CPU experts per MUL_MAT_ID (top-K)
     //   act_dim:      activation dimension (K = ne00) in floats
     //   out_dim:      output dimension (N = ne01) in floats
-    void init(sycl::queue & q, int device_id,
-              size_t max_experts, size_t act_dim, size_t out_dim);
+    void init(sycl::queue & q, int device_id, size_t max_experts, size_t act_dim, size_t out_dim);
 
     // Release all buffers via unified_free().
     void shutdown();
@@ -345,6 +342,7 @@ public:
         float * act = nullptr;
         float * out = nullptr;
     };
+
     BufferPair acquire(size_t n_experts);
 
     // Release buffers back to pool. Zeros the output buffer for next use.
@@ -352,15 +350,15 @@ public:
 
     bool is_initialized() const { return act_pool_ != nullptr && out_pool_ != nullptr; }
 
-private:
-    float *      act_pool_     = nullptr;
-    float *      out_pool_     = nullptr;
-    size_t       act_stride_   = 0;  // floats per expert (K)
-    size_t       out_stride_   = 0;  // floats per expert (N)
-    size_t       max_experts_  = 0;
-    int          device_id_    = -1;
+  private:
+    float *      act_pool_    = nullptr;
+    float *      out_pool_    = nullptr;
+    size_t       act_stride_  = 0;  // floats per expert (K)
+    size_t       out_stride_  = 0;  // floats per expert (N)
+    size_t       max_experts_ = 0;
+    int          device_id_   = -1;
     alloc_handle act_alloc_;
     alloc_handle out_alloc_;
 };
 
-} // namespace ggml_sycl
+}  // namespace ggml_sycl
