@@ -6647,6 +6647,21 @@ static bool ggml_vk_buffer_write_2d_async(vk_context subctx, vk_buffer& dst, siz
         subctx->s->buffer.copyBuffer(buf->buffer, dst->buffer, slices);
         return true;
     }
+
+    // UMA zero-copy: destination is directly mapped, skip staging buffer
+    if (dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible &&
+        dst->device->uma) {
+        if (width == spitch) {
+            deferred_memcpy((uint8_t *)dst->ptr + offset, src, width * height, &subctx->in_memcpys);
+        } else {
+            for (size_t i = 0; i < height; i++) {
+                deferred_memcpy((uint8_t *)dst->ptr + offset + i * width,
+                                (const uint8_t *)src + i * spitch, width, &subctx->in_memcpys);
+            }
+        }
+        return true;
+    }
+
     VK_LOG_DEBUG("STAGING");
 
     if (!sync_staging) {
@@ -6756,6 +6771,21 @@ static bool ggml_vk_buffer_read_2d_async(vk_context subctx, vk_buffer& src, size
 
         return true;
     }
+
+    // UMA zero-copy: source is directly mapped, skip staging buffer
+    if (src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible &&
+        src->device->uma) {
+        if (width == spitch && width == dpitch) {
+            deferred_memcpy(dst, (const uint8_t *)src->ptr + offset, width * height, &subctx->out_memcpys);
+        } else {
+            for (size_t i = 0; i < height; i++) {
+                deferred_memcpy((uint8_t *)dst + i * dpitch,
+                                (const uint8_t *)src->ptr + offset + i * spitch, width, &subctx->out_memcpys);
+            }
+        }
+        return true;
+    }
+
     VK_LOG_DEBUG("STAGING");
 
     if (!sync_staging) {
@@ -14685,9 +14715,28 @@ static void ggml_backend_vk_event_record(ggml_backend_t backend, ggml_backend_ev
 
     ggml_vk_ctx_end(compute_ctx);
 
+    // Drain deferred H2D copies before submit (UMA zero-copy queues them here).
+    for (auto& cpy : compute_ctx->in_memcpys) {
+        memcpy(cpy.dst, cpy.src, cpy.n);
+    }
+    compute_ctx->in_memcpys.clear();
+
+    // Preserve D2H copies across context reset (drained by synchronize after fence).
+    auto preserved_out_memcpys = std::move(compute_ctx->out_memcpys);
+    const size_t preserved_count = preserved_out_memcpys.size();
+
     ggml_vk_submit(compute_ctx, {vkev->fence});
     ctx->submit_pending = true;
     ctx->compute_ctx.reset();
+
+    // Restore D2H copies into fresh context for synchronize to drain.
+    if (!preserved_out_memcpys.empty()) {
+        compute_ctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
+        ctx->compute_ctx = compute_ctx;
+        ggml_vk_ctx_begin(ctx->device, compute_ctx);
+        compute_ctx->out_memcpys = std::move(preserved_out_memcpys);
+        GGML_ASSERT(compute_ctx->out_memcpys.size() == preserved_count);
+    }
 }
 
 static void ggml_backend_vk_event_wait(ggml_backend_t backend, ggml_backend_event_t event) {
