@@ -61,9 +61,6 @@ struct common_speculative_callback {
     // Add a token to the draft sequence.
     virtual void batch_add_token(const llama_token token, bool logits) = 0;
 
-    // Clears the batch context.
-    virtual void batch_clear() = 0;
-
     // Sample and accept tokens from the main model.
     virtual llama_tokens sampler_sample_and_accept_n(const llama_tokens & drafted) = 0;
 
