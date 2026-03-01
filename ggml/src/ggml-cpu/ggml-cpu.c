@@ -1379,7 +1379,14 @@ UseGgmlGemm2:;
     // If the chunking is poor for the number of threads on this setup, scrap the whole plan.  Re-chunk it by thread.
     //   Also, chunking by thread was measured to have perform better on NUMA systems.  See https://github.com/ggml-org/llama.cpp/pull/6915
     //   In theory, chunking should be just as useful on NUMA and non NUMA systems, but testing disagreed with that.
-    if (nchunk0 * nchunk1 < nth * 4 || ggml_is_numa()) {
+    // If the current chunking plan is inefficient for the available threads, re-chunk it by thread.
+    //   - Original observation: For low-core NUMA machines, re-chunking improves performance
+    //     when there are too few chunks per thread (see https://github.com/ggml-org/llama.cpp/pull/6915).
+    //   - Our observation on AWS Graviton4 (high-core, high-memory bandwidth) shows that
+    //     disabling this re-chunking for nth >= 128 can actually improve performance.
+    //   - Therefore, we only apply re-chunking when nth <= 128 and the chunking is poor
+    //     or on NUMA machines.
+    if (nth <= 128 && (nchunk0 * nchunk1 < nth * 4 || ggml_is_numa())) {
         // distribute the thread work across the inner or outer loop based on which one is larger
         nchunk0 = nr0 > nr1 ? nth : 1; // parallelize by src0 rows
         nchunk1 = nr0 > nr1 ? 1 : nth; // parallelize by src1 rows
