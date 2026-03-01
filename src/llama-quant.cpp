@@ -113,7 +113,8 @@ struct quantize_thread_pool {
         }
     }
 
-    // distribute fn(0..n-1) across all pool threads + the calling thread.
+    // distribute `fn(int64_t 0) ... fn(int64_t n-1)` across all pool threads
+    // and the calling thread.
     // blocks until every item has been processed.
     void distribute(int64_t n, std::function<void(int64_t)> fn) {
         if (n <= 0) {
@@ -203,8 +204,8 @@ struct quantize_state_impl {
     int32_t n_fallback = 0;
 
     // flags
-    bool has_imatrix = false; // do we have imatrix data?
-    bool has_output  = false; // used to figure out if a model shares tok_embd with the output weight
+    bool has_imatrix         = false; // do we have imatrix data?
+    bool has_tied_embeddings = false; // used to figure out if a model shares tok_embd with the output weight
 
     // tensor type override patterns
     std::vector<std::pair<std::regex, ggml_type>> tensor_type_patterns;
@@ -490,7 +491,7 @@ static ggml_type llama_tensor_get_type_impl(
 
     // for arches that share the same tensor between the token embeddings and the output, we quantize the token embeddings
     // with the quantization of the output tensor
-    if (category == tensor_category::OUTPUT || (!qs->has_output && category == tensor_category::TOKEN_EMBD)) {
+    if (category == tensor_category::OUTPUT || (!qs->has_tied_embeddings && category == tensor_category::TOKEN_EMBD)) {
         if (qs->params->output_tensor_type < GGML_TYPE_COUNT) {
             new_type = qs->params->output_tensor_type;
         } else {
@@ -1440,81 +1441,85 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     qs->pool.start(nthread);
 
     // scratch buffers
+
     std::vector<no_init<float>>   scratch_dequant_buf;
     std::vector<no_init<uint8_t>> scratch_read_buf;
     std::vector<no_init<uint8_t>> scratch_buf;
-
-    size_t max_nelements_dequant = 0;
-    size_t max_tensor_bytes = 0;
-    size_t max_nelements = 0;
 
     //
     // preliminary iteration over all weights
     //
 
-    for (size_t i = 0; i < weights.size(); ++i) {
-        const auto * it = weights[i];
-        const ggml_tensor * tensor = it->tensor;
-        const char * name = tensor->name;
+    {
+        size_t max_nelements_dequant = 0;
+        size_t max_tensor_bytes = 0;
+        size_t max_nelements = 0;
 
-        metadata[i].category = tensor_get_category(name);
+        for (size_t i = 0; i < weights.size(); ++i) {
+            const auto * it = weights[i];
+            const ggml_tensor * tensor = it->tensor;
+            const char * name = tensor->name;
 
-        if (category_is_attn_v(metadata[i].category)) {
-            ++qs->n_attention_wv;
-        }
+            metadata[i].category = tensor_get_category(name);
 
-        if (tensor_name_match_output_weight(name)) {
-            qs->has_output = true;
-        }
+            if (category_is_attn_v(metadata[i].category)) {
+                ++qs->n_attention_wv;
+            }
 
-        uint16_t i_split = params->keep_split ? it->idx : 0;
-        if (!ctx_outs[i_split]) {
-            ctx_outs[i_split].reset(gguf_init_empty());
-        }
-        gguf_add_tensor(ctx_outs[i_split].get(), tensor);
+            if (tensor_name_match_output_weight(name)) {
+                // if the output.weight tensor exists, the embeddings are not tied
+                qs->has_tied_embeddings = false;
+            }
 
-        metadata[i].allows_quantization = tensor_allows_quantization(params, model.arch, tensor);
-        metadata[i].target_type = llama_tensor_get_type(qs.get(), params, tensor, default_type, metadata[i]);
-        metadata[i].requires_imatrix = tensor_requires_imatrix(tensor->name, metadata[i].target_type, ftype);
+            uint16_t i_split = params->keep_split ? it->idx : 0;
+            if (!ctx_outs[i_split]) {
+                ctx_outs[i_split].reset(gguf_init_empty());
+            }
+            gguf_add_tensor(ctx_outs[i_split].get(), tensor);
 
-        if (params->imatrix) {
-            metadata[i].remapped_imatrix_name = remap_imatrix(tensor->name, mapped);
-        } else if (metadata[i].allows_quantization && metadata[i].requires_imatrix) {
-            if (params->dry_run) {
-                will_require_imatrix = true;
-            } else {
-                LLAMA_LOG_ERROR("\n============================================================================\n"
-                                  " ERROR: this quantization requires an importance matrix!\n"
-                                  "        - offending tensor: %s\n"
-                                  "        - target type: %s\n"
-                                  "============================================================================\n\n",
-                                  name, ggml_type_name(metadata[i].target_type));
-                throw std::runtime_error("this quantization requires an imatrix!");
+            metadata[i].allows_quantization = tensor_allows_quantization(params, model.arch, tensor);
+            metadata[i].target_type = llama_tensor_get_type(qs.get(), params, tensor, default_type, metadata[i]);
+            metadata[i].requires_imatrix = tensor_requires_imatrix(tensor->name, metadata[i].target_type, ftype);
+
+            if (params->imatrix) {
+                metadata[i].remapped_imatrix_name = remap_imatrix(tensor->name, mapped);
+            } else if (metadata[i].allows_quantization && metadata[i].requires_imatrix) {
+                if (params->dry_run) {
+                    will_require_imatrix = true;
+                } else {
+                    LLAMA_LOG_ERROR("\n============================================================================\n"
+                                    " ERROR: this quantization requires an importance matrix!\n"
+                                    "        - offending tensor: %s\n"
+                                    "        - target type: %s\n"
+                                    "============================================================================\n\n",
+                                    name, ggml_type_name(metadata[i].target_type));
+                    throw std::runtime_error("this quantization requires an imatrix!");
+                }
+            }
+            max_tensor_bytes = std::max(max_tensor_bytes, ggml_nbytes(tensor));
+            max_nelements    = std::max(max_nelements,    (size_t)ggml_nelements(tensor));
+            if (tensor->type != GGML_TYPE_F32) {
+                max_nelements_dequant = std::max(max_nelements_dequant, (size_t)ggml_nelements(tensor));
             }
         }
-        max_tensor_bytes = std::max(max_tensor_bytes, ggml_nbytes(tensor));
-        max_nelements    = std::max(max_nelements,    (size_t)ggml_nelements(tensor));
-        if (tensor->type != GGML_TYPE_F32) {
-            max_nelements_dequant = std::max(max_nelements_dequant, (size_t)ggml_nelements(tensor));
+
+        // resize scratch buffers
+
+        scratch_buf.resize(max_nelements * 4);
+        if (max_nelements_dequant > 0) {
+            scratch_dequant_buf.resize(max_nelements_dequant);
         }
-    }
 
-    // resize scratch buffers
+            const size_t dequant_sz = scratch_dequant_buf.size() * sizeof(decltype(scratch_dequant_buf)::value_type);
+            const size_t scratch_sz = scratch_buf.size()         * sizeof(decltype(scratch_buf)::value_type);
 
-    scratch_buf.resize(max_nelements * 4);
-    if (max_nelements_dequant > 0) {
-        scratch_dequant_buf.resize(max_nelements_dequant);
-    }
-
-    const size_t dequant_sz = scratch_dequant_buf.size() * sizeof(decltype(scratch_dequant_buf)::value_type);
-    const size_t scratch_sz = scratch_buf.size()         * sizeof(decltype(scratch_buf)::value_type);
-
-    LLAMA_LOG_INFO("%s: dequant buffer: %8.2f MiB\n", __func__, dequant_sz / (1024.0*1024.0));
-    LLAMA_LOG_INFO("%s: scratch buffer: %8.2f MiB\n", __func__, scratch_sz / (1024.0*1024.0));
-    if (!ml.use_mmap) {
-        scratch_read_buf.resize(max_tensor_bytes);
-        const size_t read_sz = scratch_read_buf.size() * sizeof(decltype(scratch_read_buf)::value_type);
-        LLAMA_LOG_INFO("%s:    read buffer: %8.2f MiB\n", __func__, read_sz / (1024.0*1024.0));
+            LLAMA_LOG_INFO("%s: dequant buffer: %8.2f MiB\n", __func__, dequant_sz / (1024.0*1024.0));
+            LLAMA_LOG_INFO("%s: scratch buffer: %8.2f MiB\n", __func__, scratch_sz / (1024.0*1024.0));
+            if (!ml.use_mmap) {
+                scratch_read_buf.resize(max_tensor_bytes);
+                const size_t read_sz = scratch_read_buf.size() * sizeof(decltype(scratch_read_buf)::value_type);
+                LLAMA_LOG_INFO("%s:    read buffer: %8.2f MiB\n", __func__, read_sz / (1024.0*1024.0));
+            }
     }
 
     // set split info if needed
@@ -1556,6 +1561,57 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         ::zeros(fout, meta_size);
     };
 
+    //
+    // double-buffered writer (overlap computation and I/O)
+    //
+
+    std::vector<uint8_t> write_bufs[2];
+    int wb_idx = 0;
+    size_t pending_pad = 0;
+
+    std::mutex  io_mutex;
+    std::condition_variable io_cv;
+    bool io_busy = false;
+
+    std::thread io_thread([&]() {
+        std::unique_lock<std::mutex> lock(io_mutex);
+        while (true) {
+            io_cv.wait(lock, [&] { return io_busy || !fout.is_open(); });
+            if (!fout.is_open() && !io_busy) break;
+
+            auto & buf = write_bufs[wb_idx ^ 1]; // the "other" buffer
+            size_t pad = pending_pad;
+            lock.unlock();
+
+            fout.write((const char *)buf.data(), buf.size());
+            zeros(fout, pad);
+
+            lock.lock();
+            io_busy = false;
+            io_cv.notify_one();
+        }
+    });
+
+    auto flush_pending_write = [&]() {
+        std::unique_lock<std::mutex> lock(io_mutex);
+        io_cv.wait(lock, [&] { return !io_busy; });
+    };
+
+    auto async_write = [&](const void * data, size_t size, size_t pad) {
+        flush_pending_write(); // wait for previous write
+
+        write_bufs[wb_idx].resize(size);
+        std::memcpy(write_bufs[wb_idx].data(), data, size);
+
+        {
+            std::lock_guard<std::mutex> lock(io_mutex);
+            pending_pad = pad;
+            io_busy = true;
+        }
+        wb_idx ^= 1;
+        io_cv.notify_one();
+    };
+
     // no output file for --dry-run
     if (!params->dry_run) {
         new_ofstream(0);
@@ -1571,11 +1627,12 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     for (size_t i = 0; i < weights.size(); ++i) {
         const auto * it = weights[i];
         const auto & weight = *it;
-        ggml_tensor * tensor = weight.tensor;
-
         const auto & tm = metadata[i];
+        ggml_tensor * tensor = weight.tensor;
+        const char * name = tensor->name;
 
         if (!params->dry_run && (weight.idx != cur_split && params->keep_split)) {
+            flush_pending_write();
             close_ofstream();
             new_ofstream(weight.idx);
         }
@@ -1631,18 +1688,18 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         if (imatrix_data && do_quantize) {
             auto it_imatrix = imatrix_data->find(tm.remapped_imatrix_name);
             if (it_imatrix == imatrix_data->end()) {
-                LLAMA_LOG_INFO("\n%s: did not find imatrix data for %s; ", __func__, tensor->name);
+                if (!tensor_name_match_token_embd(name) && !tensor_name_match_output_weight(name)) {
+                    // these don't typically get imatrix data, so don't warn about them
+                    LLAMA_LOG_WARN("\n%s: did not find imatrix data for %s; ", __func__, name);
+                }
             } else {
                 if (it_imatrix->second.size() == (size_t)tensor->ne[0]*tensor->ne[2]) {
                     imatrix = it_imatrix->second.data();
                 } else {
                     LLAMA_LOG_INFO("\n%s: imatrix size %d is different from tensor size %d for %s\n",
                                    __func__, int(it_imatrix->second.size()), int(tensor->ne[0]*tensor->ne[2]), tensor->name);
-
-                    if (tm.category != tensor_category::TOKEN_EMBD) {
-                        throw std::runtime_error(format("imatrix size %d is different from tensor size %d for %s",
-                                int(it_imatrix->second.size()), int(tensor->ne[0]*tensor->ne[2]), tensor->name));
-                    }
+                    throw std::runtime_error(format("imatrix size %d is different from tensor size %d for %s",
+                        int(it_imatrix->second.size()), int(tensor->ne[0]*tensor->ne[2]), name));
                 }
             }
         }
@@ -1666,17 +1723,16 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         total_size_new += new_size;
 
         // update the gguf meta data as we go
-        const char * name = tensor->name;
         gguf_set_tensor_type(ctx_outs[cur_split].get(), name, new_type);
         GGML_ASSERT(gguf_get_tensor_size(ctx_outs[cur_split].get(), gguf_find_tensor(ctx_outs[cur_split].get(), name)) == new_size);
         gguf_set_tensor_data(ctx_outs[cur_split].get(), name, new_data);
 
         // write tensor data + padding
-        fout.write((const char *) new_data, new_size);
-        zeros(fout, GGML_PAD(new_size, align) - new_size);
+        async_write(new_data, new_size, GGML_PAD(new_size, align) - new_size);
     }
 
     if (!params->dry_run) {
+        flush_pending_write();
         close_ofstream();
     }
 
