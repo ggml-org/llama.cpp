@@ -248,6 +248,9 @@ struct async_writer {
     std::ofstream * fout = nullptr;
     std::thread worker;
 
+    int pending_pad = 0;
+    int pending_buf = 0;
+
     void start(std::ofstream * f) {
         fout = f;
         worker = std::thread([this] { run(); });
@@ -259,7 +262,7 @@ struct async_writer {
             cv.wait(lock, [this] { return busy || shutting_down; });
             if (shutting_down && !busy) break;
 
-            auto & buf = bufs[buf_idx ^ 1];
+            auto & buf = bufs[pending_buf];  // use the snapshot, not buf_idx ^ 1
             size_t pad = pending_pad;
             lock.unlock();
 
@@ -286,9 +289,11 @@ struct async_writer {
         {
             std::lock_guard<std::mutex> lock(mutex);
             pending_pad = pad;
+            pending_buf = buf_idx;
             busy = true;
         }
-        buf_idx ^= 1;
+        buf_idx ^= 1;  // still flip here for the main thread's bookkeeping,
+                       // but the writer doesn't look at buf_idx anymore
         cv.notify_one();
     }
 
