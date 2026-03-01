@@ -28111,7 +28111,8 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
         auto is_supported_buft = [&](ggml_backend_buffer_type_t buft) {
             return buft == ggml_backend_sycl_buffer_type(sycl_ctx->device) ||
                    buft == ggml_backend_sycl_host_buffer_type() ||
-                   buft == ggml_backend_sycl_cpu_offload_compute_buffer_type(sycl_ctx->device);
+                   buft == ggml_backend_sycl_cpu_offload_compute_buffer_type(sycl_ctx->device) ||
+                   buft == ggml_backend_sycl_tiered_kv_buffer_type(sycl_ctx->device);
         };
         if (!is_supported_buft(node->buffer->buft)) {
             fprintf(stderr,
