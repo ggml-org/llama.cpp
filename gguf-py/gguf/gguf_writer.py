@@ -501,6 +501,8 @@ class GGUFWriter:
         self.add_uint32(Keys.General.QUANTIZATION_VERSION, quantization_version)
 
     def add_custom_alignment(self, alignment: int) -> None:
+        if alignment <= 0 or (alignment & (alignment - 1)) != 0:
+            raise ValueError('Invalid alignment: must be a non-zero power of two')
         self.data_alignment = alignment
         self.add_uint32(Keys.General.ALIGNMENT, alignment)
 

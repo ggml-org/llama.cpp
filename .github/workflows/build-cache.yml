@@ -68,7 +68,7 @@ jobs:
 
     env:
       # Make sure this is in sync with build.yml
-      HIPSDK_INSTALLER_VERSION: "25.Q3"
+      HIPSDK_INSTALLER_VERSION: "26.Q1"
 
     steps:
       - name: Clone
