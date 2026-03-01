@@ -34,8 +34,12 @@ bool kv_tier_manager::configure(int device, size_t hot_bytes, size_t total_bytes
                         : static_cast<uint32_t>(std::min(hot_bytes, static_cast<size_t>(UINT32_MAX)));
     }
 
-    // Minimum hot window: 1024 tokens
-    hot_tokens_ = std::max(hot_tokens_, uint32_t(1024));
+    // When VRAM is available, enforce minimum hot window of 1024 tokens.
+    // When VRAM is exhausted (hot_bytes == 0), allow fully cold KV cache
+    // to avoid device allocation failures on memory-constrained GPUs.
+    if (hot_bytes > 0) {
+        hot_tokens_ = std::max(hot_tokens_, uint32_t(1024));
+    }
 
     // If hot window >= total, no tiering needed — everything fits in VRAM
     if (hot_tokens_ >= total_tokens_) {
@@ -44,8 +48,13 @@ bool kv_tier_manager::configure(int device, size_t hot_bytes, size_t total_bytes
     }
 
     active_ = true;
-    GGML_LOG_INFO("[KV-TIER] Device %d: hot=%u tokens (VRAM), cold=%u tokens (host pinned), total=%u\n",
-                  device_, hot_tokens_, total_tokens_ - hot_tokens_, total_tokens_);
+    if (hot_tokens_ == 0) {
+        GGML_LOG_WARN("[KV-TIER] Device %d: VRAM exhausted — entire KV cache (%u tokens) in host pinned memory\n",
+                      device_, total_tokens_);
+    } else {
+        GGML_LOG_INFO("[KV-TIER] Device %d: hot=%u tokens (VRAM), cold=%u tokens (host pinned), total=%u\n", device_,
+                      hot_tokens_, total_tokens_ - hot_tokens_, total_tokens_);
+    }
     return true;
 }
 

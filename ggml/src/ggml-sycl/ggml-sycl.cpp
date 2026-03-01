@@ -7244,15 +7244,21 @@ static void tiered_kv_buffer_free(ggml_backend_buffer_t buffer) {
 }
 
 static void * tiered_kv_buffer_get_base(ggml_backend_buffer_t buffer) {
-    // Return device base — allocator uses this for offset calculation.
+    // Return base pointer for allocator offset calculation.
     // init_tensor remaps cold tensors to host base.
+    // When VRAM is exhausted (all-cold mode), hot_base is null — use cold_base.
     auto * ctx = static_cast<tiered_kv_buffer_context *>(buffer->context);
-    return ctx->hot_base;
+    return ctx->hot_base ? ctx->hot_base : ctx->cold_base;
 }
 
 static enum ggml_status tiered_kv_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
     auto * ctx = static_cast<tiered_kv_buffer_context *>(buffer->context);
     if (tensor->view_src != nullptr) {
+        return GGML_STATUS_SUCCESS;
+    }
+
+    // All-cold mode: allocator used cold_base as base, pointers already correct
+    if (!ctx->hot_base || ctx->hot_size == 0) {
         return GGML_STATUS_SUCCESS;
     }
 
@@ -7345,18 +7351,37 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
 
     size = std::max(size, size_t(1));
 
-    // Compute available VRAM for KV from unified cache budget.
-    auto   info            = ggml_sycl::unified_cache_get_budget_info(device);
-    size_t used            = info.weight_bytes + info.runtime_bytes;
-    size_t available       = (info.budget_bytes > used) ? info.budget_bytes - used : 0;
-    size_t compute_reserve = std::max(size_t(256) << 20, info.budget_bytes / 10);
-    size_t kv_vram_cap     = (available > compute_reserve) ? available - compute_reserve : 0;
+    // Check env var override: GGML_SYCL_KV_HOST=1 forces all-host KV cache
+    static std::atomic<int> cached_kv_host{ -1 };
+    int                     kv_host_val = cached_kv_host.load(std::memory_order_acquire);
+    if (kv_host_val == -1) {
+        const char * env_kv = std::getenv("GGML_SYCL_KV_HOST");
+        kv_host_val         = (env_kv && std::atoi(env_kv) == 1) ? 1 : 0;
+        cached_kv_host.store(kv_host_val, std::memory_order_release);
+    }
+
+    // Determine VRAM available for KV cache using actual free device memory.
+    // The budget-based calculation (budget - weights - runtime) can underestimate
+    // available VRAM because runtime_bytes may over-account shared/transient
+    // allocations.  Querying actual free VRAM gives a ground-truth measurement.
+    size_t free_mem = 0, total_mem = 0;
+    ggml_backend_sycl_get_device_memory(device, &free_mem, &total_mem);
+
+    // Reserve headroom for compute scratch, graph replay, etc.
+    size_t compute_reserve = std::max(size_t(256) << 20, total_mem / 10);
+    size_t kv_vram_cap     = 0;
+    if (kv_host_val == 1) {
+        // User explicitly requested host KV — force all-cold
+        kv_vram_cap = 0;
+    } else {
+        kv_vram_cap = (free_mem > compute_reserve) ? free_mem - compute_reserve : 0;
+    }
 
     GGML_LOG_DEBUG(
-        "[KV-TIER] budget=%.0f MB, weights=%.0f MB, runtime=%.0f MB, "
+        "[KV-TIER] free_vram=%.0f MB, total=%.0f MB, reserve=%.0f MB, "
         "kv_cap=%.0f MB, requested=%.0f MB\n",
-        info.budget_bytes / (1024.0 * 1024.0), info.weight_bytes / (1024.0 * 1024.0),
-        info.runtime_bytes / (1024.0 * 1024.0), kv_vram_cap / (1024.0 * 1024.0), size / (1024.0 * 1024.0));
+        free_mem / (1024.0 * 1024.0), total_mem / (1024.0 * 1024.0), compute_reserve / (1024.0 * 1024.0),
+        kv_vram_cap / (1024.0 * 1024.0), size / (1024.0 * 1024.0));
 
     // Use kv_tier_manager as the authority for the hot/cold split.
     // Estimate kv_bytes_per_token so the manager can work in token units
@@ -7386,20 +7411,16 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
     }
 
     // Align hot_size to 512 bytes (device allocation alignment)
-    hot_size = (hot_size + 511) & ~size_t(511);
-    if (hot_size > size) {
-        hot_size = size;
+    if (hot_size > 0) {
+        hot_size = (hot_size + 511) & ~size_t(511);
+        if (hot_size > size) {
+            hot_size = size;
+        }
     }
     cold_size = size - hot_size;
 
-    // Ensure hot_size > 0 — the allocator requires a non-NULL base pointer
-    if (hot_size == 0 && size > 0) {
-        hot_size  = 512;  // Minimal device allocation for base pointer
-        cold_size = size - hot_size;
-    }
-
     // If everything fits in VRAM, no tiering needed
-    if (cold_size == 0) {
+    if (cold_size == 0 && hot_size > 0) {
         GGML_LOG_INFO("[KV-TIER] Device %d: entire KV (%.1f MB) fits in VRAM, no tiering\n", device,
                       size / (1024.0 * 1024.0));
     }
@@ -7409,15 +7430,24 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
 
     // Allocate hot region (device memory)
     if (hot_size > 0) {
-        SYCL_CHECK(CHECK_TRY_ERROR(hot_base = sycl::malloc_device(hot_size, *buft_ctx->stream)));
-        if (!hot_base) {
-            GGML_LOG_ERROR("[KV-TIER] Failed to allocate %zu bytes device memory for hot region\n", hot_size);
-            return nullptr;
+        auto err = CHECK_TRY_ERROR(hot_base = sycl::malloc_device(hot_size, *buft_ctx->stream));
+        if (err != 0 || !hot_base) {
+            // Device allocation failed — fall back to all-cold (host pinned) mode.
+            // This happens when VRAM is exhausted (e.g. 120B MoE on 12GB GPU).
+            GGML_LOG_WARN(
+                "[KV-TIER] Device %d: failed to allocate %.1f MB device memory for hot region, "
+                "falling back to host-only KV cache\n",
+                device, hot_size / (1024.0 * 1024.0));
+            hot_base  = nullptr;
+            cold_size = size;
+            hot_size  = 0;
+        } else {
+            ggml_sycl::unified_cache_add_runtime_bytes(device, hot_size, ggml_sycl::runtime_category::KV_CACHE);
         }
-        ggml_sycl::unified_cache_add_runtime_bytes(device, hot_size, ggml_sycl::runtime_category::KV_CACHE);
     }
 
     // Allocate cold region (host pinned memory)
+    // In all-cold mode (hot_size == 0), this holds the entire KV cache.
     if (cold_size > 0) {
         SYCL_CHECK(CHECK_TRY_ERROR(cold_base = sycl::malloc_host(cold_size, *buft_ctx->stream)));
         if (!cold_base) {
@@ -7432,9 +7462,20 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
         ggml_sycl::unified_cache_add_runtime_host_bytes(cold_size);
     }
 
-    GGML_LOG_INFO(
-        "[KV-TIER] Device %d: tiered KV buffer %.1f MB total — hot=%.1f MB (device), cold=%.1f MB (host pinned)\n",
-        device, size / (1024.0 * 1024.0), hot_size / (1024.0 * 1024.0), cold_size / (1024.0 * 1024.0));
+    if (hot_size == 0) {
+        if (kv_host_val == 1) {
+            GGML_LOG_INFO("[KV-TIER] Device %d: KV_HOST=1 — entire KV cache (%.1f MB) in host pinned memory\n", device,
+                          size / (1024.0 * 1024.0));
+        } else {
+            GGML_LOG_WARN("[KV-TIER] Device %d: VRAM exhausted — entire KV cache (%.1f MB) in host pinned memory\n",
+                          device, size / (1024.0 * 1024.0));
+        }
+    } else {
+        GGML_LOG_INFO(
+            "[KV-TIER] Device %d: tiered KV buffer %.1f MB total — "
+            "hot=%.1f MB (device), cold=%.1f MB (host pinned)\n",
+            device, size / (1024.0 * 1024.0), hot_size / (1024.0 * 1024.0), cold_size / (1024.0 * 1024.0));
+    }
 
     auto * ctx    = new tiered_kv_buffer_context{ hot_base, cold_base, hot_size, cold_size, device, buft_ctx->stream };
     auto * buffer = ggml_backend_buffer_init(buft, tiered_kv_buffer_interface, ctx, size);
@@ -7484,65 +7525,21 @@ static ggml_backend_buffer_type_t ggml_backend_sycl_tiered_kv_buffer_type(int de
 // === End Tiered KV Buffer Type ===
 
 ggml_backend_buffer_type_t ggml_backend_sycl_kv_buffer_type(int device) {
-    // Cache the offload decision per device.  This function is called once per KV
-    // layer (e.g. 32 times for Mistral-7B).  Between calls the unified cache loads
-    // weight tensors, shrinking the apparent VRAM margin.  By caching the result of
-    // the *first* call (before weights are loaded) we get the true margin and avoid
-    // false-positive offload triggers on late layers.
-    struct kv_offload_decision {
-        bool decided = false;
-        bool offload = false;
-    };
-
-    static kv_offload_decision cache[GGML_SYCL_MAX_DEVICES];
-
-    if (!cache[device].decided) {
-        static constexpr size_t kv_estimate = 256ull << 20;  // 256 MB
-        cache[device].offload               = ggml_sycl::unified_cache_should_offload_kv(device, kv_estimate);
-        cache[device].decided               = true;
-        if (cache[device].offload) {
-            GGML_LOG_INFO(
-                "[SYCL-BUDGET] KV cache offloaded to host pinned memory "
-                "(%.1f MB estimate, preserving full context)\n",
-                kv_estimate / (1024.0 * 1024.0));
-        }
-    }
-    if (cache[device].offload) {
-        return ggml_backend_sycl_tiered_kv_buffer_type(device);
-    }
-
-    static std::mutex           mutex;
-    std::lock_guard<std::mutex> lock(mutex);
-    auto                        dev_count = ggml_backend_sycl_get_device_count();
-    if (device >= dev_count || device < 0) {
-        GGML_LOG_ERROR("ggml_backend_sycl_kv_buffer_type error: device_index:%d is out of range [0, %d]\n", device,
-                       dev_count - 1);
-        GGML_ASSERT(device < dev_count);
-    }
-    static struct ggml_backend_buffer_type ggml_backend_sycl_kv_buffer_types[GGML_SYCL_MAX_DEVICES];
-    static bool                            initialized = false;
-    if (!initialized) {
-        for (int i = 0; i < dev_count; i++) {
-            auto &    device_i = ggml_sycl_get_device(i);
-            queue_ptr stream   = &(device_i.default_queue());
-
-            size_t safe_max = ggml_sycl_get_safe_max_alloc_size(i);
-            if (safe_max == 0) {
-                safe_max = ggml_sycl_info().devices[i].max_alloc_size;
-            }
-            ggml_backend_sycl_kv_buffer_types[i] = {
-                /* .iface    = */ ggml_backend_sycl_buffer_type_interface,
-                /* .device   = */ ggml_backend_reg_dev_get(ggml_backend_sycl_reg(), i),
-
-                /* .context  = */
-                new ggml_backend_sycl_buffer_type_context{ i, GGML_SYCL_NAME "_KV" + std::to_string(i),
-                                                          GGML_SYCL_MEM_DEVICE, GGML_SYCL_MEM_POLICY_KV_AUTO, true,
-                                                          true, safe_max, stream },
-            };
-        }
-        initialized = true;
-    }
-    return &ggml_backend_sycl_kv_buffer_types[device];
+    // Always use the tiered KV buffer type.  The tiered allocator dynamically
+    // determines how much VRAM is available at allocation time and splits the
+    // KV cache between device memory (hot) and host-pinned memory (cold).
+    //
+    // This handles all scenarios automatically:
+    //   - Model fits in VRAM: entire KV cache placed on device (hot=100%)
+    //   - VRAM partially available: KV split across device + host
+    //   - VRAM exhausted: entire KV cache in host-pinned memory (cold=100%)
+    //
+    // Previously, this function tried to predict at buffer-type-selection time
+    // whether KV offload was needed.  That prediction used a hardcoded 256 MB
+    // KV estimate and MoE-adjusted model size, which could underestimate the
+    // actual KV size for large-context models (e.g. 120B MoE with 131K ctx),
+    // leading to device allocation failures and crashes.
+    return ggml_backend_sycl_tiered_kv_buffer_type(device);
 }
 
 // sycl split buffer
