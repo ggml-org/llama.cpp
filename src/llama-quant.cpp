@@ -236,9 +236,11 @@ static void zeros(std::ofstream & file, size_t n) {
 
 // double-buffered writer (overlap computation and I/O)
 struct async_writer {
+
     std::vector<uint8_t> bufs[2];
+    int pending_pad = 0;
+    int pending_buf = 0;
     int buf_idx = 0;
-    size_t pending_pad = 0;
 
     std::mutex mutex;
     std::condition_variable cv;
@@ -247,9 +249,6 @@ struct async_writer {
 
     std::ofstream * fout = nullptr;
     std::thread worker;
-
-    int pending_pad = 0;
-    int pending_buf = 0;
 
     void start(std::ofstream * f) {
         fout = f;
