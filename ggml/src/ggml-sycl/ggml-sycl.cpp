@@ -24446,6 +24446,10 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             std::vector<expert_dispatch_entry> gpu1_entries;  // B50 (device 1)
             std::vector<expert_dispatch_entry> cpu_entries;
 
+            // Global token counter for access scoring — shared between
+            // CPU-TG path (recording only) and hybrid path (scoring + recording).
+            static std::atomic<uint64_t> moe_token_counter{0};
+
             // ---------------------------------------------------------------
             // CPU-primary expert TG: route ALL experts to CPU, skip GPU cache
             // ---------------------------------------------------------------
@@ -24587,7 +24591,6 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             }
 
             // Update access scores for all dispatched experts
-            static std::atomic<uint64_t> moe_token_counter{0};
             moe_token_counter.fetch_add(1, std::memory_order_relaxed);
             if (expert_cache) {
                 for (const auto & e : gpu_entries) {
@@ -24971,12 +24974,11 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
                 // Record for cache co-activation scoring and warm-start
                 auto * expert_cache_rec = ggml_sycl_get_expert_cache(ctx.device);
-                static std::atomic<uint64_t> moe_token_counter_rec{0};
                 if (expert_cache_rec && !actual_experts.empty()) {
                     expert_cache_rec->record_access_batch(
                         layer_id, actual_experts.data(),
                         static_cast<int>(actual_experts.size()),
-                        moe_token_counter_rec.load(std::memory_order_relaxed));
+                        moe_token_counter.load(std::memory_order_relaxed));
                 }
             }
 
