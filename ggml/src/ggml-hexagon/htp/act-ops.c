@@ -69,27 +69,45 @@
     const uint32_t nb2 = dst->nb[2];   \
     const uint32_t nb3 = dst->nb[3];
 
-static void glu_swiglu_f32_per_thread(const struct htp_tensor * src0,
-                                       const struct htp_tensor * src1,
-                                       struct htp_tensor *       dst,
-                                       const int32_t *           op_params,
-                                       struct htp_spad *         src0_spad,
-                                       struct htp_spad *         src1_spad,
-                                       struct htp_spad *         dst_spad,
-                                       uint32_t                  nth,
-                                       uint32_t                  ith,
-                                       uint32_t                  src0_nrows_per_thread,
-                                       dma_queue *               dma_queue) {
+struct htp_act_context {
+    struct htp_ops_context *  octx;
+
+    // Precomputed values
+    const uint8_t *           data_src0;
+    const uint8_t *           data_src1;
+    uint8_t *                 data_dst;
+
+    size_t                    src0_row_size;
+    size_t                    src1_row_size;
+    size_t                    dst_row_size;
+
+    size_t                    src0_row_size_aligned;
+    size_t                    src1_row_size_aligned;
+    size_t                    dst_row_size_aligned;
+
+    size_t                    src0_spad_half_size;
+    size_t                    src1_spad_half_size;
+    size_t                    dst_spad_half_size;
+
+    uint32_t                  block;
+    uint32_t                  src0_nrows;
+    uint32_t                  src0_nrows_per_thread;
+    int                       nc;
+};
+
+static void glu_swiglu_f32_per_thread(unsigned int nth, unsigned int ith, void * data) {
+    struct htp_act_context * actx = (struct htp_act_context *) data;
+    const struct htp_tensor * src0 = &actx->octx->src0;
+    const struct htp_tensor * src1 = &actx->octx->src1;
+    const struct htp_tensor * dst  = &actx->octx->dst;
     htp_act_preamble3;
 
-    size_t src0_row_size = nb01;
-    size_t src1_row_size = nb11;
-    size_t dst_row_size  = nb1;
+    size_t src0_row_size = actx->src0_row_size;
+    size_t src1_row_size = actx->src1_row_size;
+    size_t dst_row_size  = actx->dst_row_size;
 
-
-
-    const uint32_t src0_nrows = ne01 * ne02 * ne03;  // src0 rows
-
+    const uint32_t src0_nrows = actx->src0_nrows;
+    const uint32_t src0_nrows_per_thread = actx->src0_nrows_per_thread;
     const uint32_t src0_start_row = src0_nrows_per_thread * ith;
     const uint32_t src0_end_row   = MIN(src0_start_row + src0_nrows_per_thread, src0_nrows);
 
@@ -101,42 +119,33 @@ static void glu_swiglu_f32_per_thread(const struct htp_tensor * src0,
     uint64_t t1, t2;
     t1 = HAP_perf_get_qtimer_count();
 
-    const uint8_t * restrict data_src0 = (const uint8_t *) src0->data;
-    const uint8_t * restrict data_src1 = (const uint8_t *) src1->data;
-    uint8_t * restrict data_dst        = (uint8_t *) dst->data;
+    const uint8_t * restrict data_src0 = actx->data_src0;
+    const uint8_t * restrict data_src1 = actx->data_src1;
+    uint8_t * restrict data_dst        = actx->data_dst;
 
-    const bool src1_valid = src1->ne[0];
-    const int  nc         = (src1_valid) ? ne00 : ne00 / 2;
-    if (!src1_valid) {
-        const int32_t swapped = op_params[1];
-        data_src1             = data_src0;
-        src1_row_size         = src0_row_size;
+    const int  nc = actx->nc;
 
-        const size_t nc_in_bytes = nc * SIZEOF_FP32;
-        data_src0 += swapped ? nc_in_bytes : 0;
-        data_src1 += swapped ? 0 : nc_in_bytes;
-    }
+    const size_t src0_row_size_aligned = actx->src0_row_size_aligned;
+    const size_t src1_row_size_aligned = actx->src1_row_size_aligned;
+    const size_t dst_row_size_aligned  = actx->dst_row_size_aligned;
 
-    const size_t src0_row_size_aligned = hex_round_up(src0_row_size, VLEN);
-    const size_t src1_row_size_aligned = hex_round_up(src1_row_size, VLEN);
-    const size_t dst_row_size_aligned  = hex_round_up(dst_row_size, VLEN);
+    uint8_t * restrict src0_spad_data = actx->octx->src0_spad.data + (ith * actx->octx->src0_spad.size_per_thread);
+    uint8_t * restrict src1_spad_data = actx->octx->src1_spad.data + (ith * actx->octx->src1_spad.size_per_thread);
+    uint8_t * restrict dst_spad_data  = actx->octx->dst_spad.data + (ith * actx->octx->dst_spad.size_per_thread);
 
-    uint8_t * restrict src0_spad_data = src0_spad->data + (ith * src0_spad->size_per_thread);
-    uint8_t * restrict src1_spad_data = src1_spad->data + (ith * src1_spad->size_per_thread);
-    uint8_t * restrict dst_spad_data  = dst_spad->data + (ith * dst_spad->size_per_thread);
+    size_t src0_spad_half_size = actx->src0_spad_half_size;
+    size_t src1_spad_half_size = actx->src1_spad_half_size;
+    size_t dst_spad_half_size  = actx->dst_spad_half_size;
 
-    // While given src0_spad->size_per_thread, divide it to two ping-pong buffer for src0
-    size_t src0_spad_half_size = src0_spad->size_per_thread / 2;
-    size_t src1_spad_half_size = src1_spad->size_per_thread / 2;
-    size_t dst_spad_half_size  = dst_spad->size_per_thread / 2;
-
-    const int BLOCK = src0_spad_half_size / src0_row_size_aligned;  // How many rows can we process in one block
+    const int BLOCK = actx->block;
     if (BLOCK == 0) {
         FARF(ERROR,
              "swiglu-f32 : current VTCM reservation %zu is too small for even 1 row per thread, needed at least %zu\n",
-             src0_spad->size_per_thread, src0_row_size_aligned);
+             actx->octx->src0_spad.size_per_thread, src0_row_size_aligned);
         return;
     }
+
+    dma_queue * dma_queue = actx->octx->ctx->dma[ith];
 
     // See discussion: https://github.com/ggml-org/llama.cpp/pull/18151#issuecomment-3678235379
     for (uint32_t ir = src0_start_row, spad_idx = 0; ir < src0_end_row && spad_idx < 2; ir += BLOCK, spad_idx++) {
@@ -196,27 +205,22 @@ static void glu_swiglu_f32_per_thread(const struct htp_tensor * src0,
          (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
 }
 
-static void glu_swiglu_oai_f32_per_thread(const struct htp_tensor * src0,
-                                           const struct htp_tensor * src1,
-                                           struct htp_tensor *       dst,
-                                           const int32_t *           op_params,
-                                           struct htp_spad *         src0_spad,
-                                           struct htp_spad *         src1_spad,
-                                           struct htp_spad *         dst_spad,
-                                           uint32_t                  nth,
-                                           uint32_t                  ith,
-                                           uint32_t                  src0_nrows_per_thread,
-                                           dma_queue *               dma_queue) {
+static void glu_swiglu_oai_f32_per_thread(unsigned int nth, unsigned int ith, void * data) {
+    struct htp_act_context * actx = (struct htp_act_context *) data;
+    const struct htp_tensor * src0 = &actx->octx->src0;
+    const struct htp_tensor * src1 = &actx->octx->src1;
+    const struct htp_tensor * dst  = &actx->octx->dst;
     htp_act_preamble3;
 
     uint64_t t1, t2;
     t1 = HAP_perf_get_qtimer_count();
 
-    size_t src0_row_size = nb01;
-    size_t src1_row_size = nb11;
-    size_t dst_row_size  = nb1;
+    size_t src0_row_size = actx->src0_row_size;
+    size_t src1_row_size = actx->src1_row_size;
+    size_t dst_row_size  = actx->dst_row_size;
 
-    const uint32_t src0_nrows = ne01 * ne02 * ne03;  // src0 rows
+    const uint32_t src0_nrows = actx->src0_nrows;
+    const uint32_t src0_nrows_per_thread = actx->src0_nrows_per_thread;
 
     const uint32_t src0_start_row = src0_nrows_per_thread * ith;
     const uint32_t src0_end_row   = MIN(src0_start_row + src0_nrows_per_thread, src0_nrows);
@@ -226,45 +230,36 @@ static void glu_swiglu_oai_f32_per_thread(const struct htp_tensor * src0,
         return;
     }
 
-    const uint8_t * restrict data_src0 = (const uint8_t *) src0->data;
-    const uint8_t * restrict data_src1 = (const uint8_t *) src1->data;
-    uint8_t * restrict data_dst        = (uint8_t *) dst->data;
+    const uint8_t * restrict data_src0 = actx->data_src0;
+    const uint8_t * restrict data_src1 = actx->data_src1;
+    uint8_t * restrict data_dst        = actx->data_dst;
 
-    const bool src1_valid = src1->ne[0];
-    const int  nc         = (src1_valid) ? ne00 : ne00 / 2;
-    if (!src1_valid) {
-        const int32_t swapped = op_params[1];
-        data_src1             = data_src0;
-        src1_row_size         = src0_row_size;
+    const int nc = actx->nc;
 
-        const size_t nc_in_bytes = nc * SIZEOF_FP32;
-        data_src0 += swapped ? nc_in_bytes : 0;
-        data_src1 += swapped ? 0 : nc_in_bytes;
-    }
+    const size_t src0_row_size_aligned = actx->src0_row_size_aligned;
+    const size_t src1_row_size_aligned = actx->src1_row_size_aligned;
+    const size_t dst_row_size_aligned  = actx->dst_row_size_aligned;
 
-    const size_t src0_row_size_aligned = hex_round_up(src0_row_size, VLEN);
-    const size_t src1_row_size_aligned = hex_round_up(src1_row_size, VLEN);
-    const size_t dst_row_size_aligned  = hex_round_up(dst_row_size, VLEN);
+    uint8_t * restrict src0_spad_data = actx->octx->src0_spad.data + (ith * actx->octx->src0_spad.size_per_thread);
+    uint8_t * restrict src1_spad_data = actx->octx->src1_spad.data + (ith * actx->octx->src1_spad.size_per_thread);
+    uint8_t * restrict dst_spad_data  = actx->octx->dst_spad.data + (ith * actx->octx->dst_spad.size_per_thread);
 
-    uint8_t * restrict src0_spad_data = src0_spad->data + (ith * src0_spad->size_per_thread);
-    uint8_t * restrict src1_spad_data = src1_spad->data + (ith * src1_spad->size_per_thread);
-    uint8_t * restrict dst_spad_data  = dst_spad->data + (ith * dst_spad->size_per_thread);
+    size_t src0_spad_half_size = actx->src0_spad_half_size;
+    size_t src1_spad_half_size = actx->src1_spad_half_size;
+    size_t dst_spad_half_size  = actx->dst_spad_half_size;
 
-    // While given src0_spad->size_per_thread, divide it to two ping-pong buffer for src0
-    size_t src0_spad_half_size = src0_spad->size_per_thread / 2;
-    size_t src1_spad_half_size = src1_spad->size_per_thread / 2;
-    size_t dst_spad_half_size  = dst_spad->size_per_thread / 2;
-
-    const int BLOCK = src0_spad_half_size / src0_row_size_aligned;  // How many rows can we process in one block
+    const int BLOCK = actx->block;
     if (BLOCK == 0) {
         FARF(ERROR,
              "swiglu-oai-f32 : current VTCM reservation %zu is too small for even 1 row per thread, needed at least "
              "%zu\n",
-             src0_spad->size_per_thread, src0_row_size_aligned);
+             actx->octx->src0_spad.size_per_thread, src0_row_size_aligned);
         return;
     }
-    const float alpha = ((const float *) (op_params))[2];
-    const float limit = ((const float *) (op_params))[3];
+    const float alpha = ((const float *) (actx->octx->op_params))[2];
+    const float limit = ((const float *) (actx->octx->op_params))[3];
+
+    dma_queue * dma_queue = actx->octx->ctx->dma[ith];
 
     // See discussion: https://github.com/ggml-org/llama.cpp/pull/18151#issuecomment-3678235379
     for (uint32_t ir = src0_start_row, spad_idx = 0; ir < src0_end_row && spad_idx < 2; ir += BLOCK, spad_idx++) {
@@ -335,26 +330,22 @@ static void glu_swiglu_oai_f32_per_thread(const struct htp_tensor * src0,
 }
 
 
-static void unary_gelu_f32_per_thread(const struct htp_tensor * src0,
-                                       struct htp_tensor *       dst,
-                                       const int32_t *           op_params,
-                                       struct htp_spad *         src0_spad,
-                                       struct htp_spad *         dst_spad,
-                                       uint32_t                  nth,
-                                       uint32_t                  ith,
-                                       uint32_t                  src0_nrows_per_thread,
-                                       dma_queue *               dma_queue) {
+static void unary_gelu_f32_per_thread(unsigned int nth, unsigned int ith, void * data) {
+    struct htp_act_context * actx = (struct htp_act_context *) data;
+    const struct htp_tensor * src0 = &actx->octx->src0;
+    const struct htp_tensor * dst  = &actx->octx->dst;
     htp_act_preamble2;
 
     uint64_t t1, t2;
     t1 = HAP_perf_get_qtimer_count();
 
-    const size_t src0_row_size = nb01;
-    const size_t dst_row_size  = nb1;
-    const size_t src0_row_size_aligned = hex_round_up(src0_row_size, VLEN);
-    const size_t dst_row_size_aligned  = hex_round_up(dst_row_size, VLEN);
+    const size_t src0_row_size = actx->src0_row_size;
+    const size_t dst_row_size  = actx->dst_row_size;
+    const size_t src0_row_size_aligned = actx->src0_row_size_aligned;
+    const size_t dst_row_size_aligned  = actx->dst_row_size_aligned;
 
-    const uint32_t src0_nrows = ne01 * ne02 * ne03;
+    const uint32_t src0_nrows = actx->src0_nrows;
+    const uint32_t src0_nrows_per_thread = actx->src0_nrows_per_thread;
 
     const uint32_t src0_start_row = src0_nrows_per_thread * ith;
     const uint32_t src0_end_row   = MIN(src0_start_row + src0_nrows_per_thread, src0_nrows);
@@ -364,24 +355,28 @@ static void unary_gelu_f32_per_thread(const struct htp_tensor * src0,
         return;
     }
 
-    const uint8_t * data_src0 = (const uint8_t *) src0->data;
-    uint8_t * data_dst        = (uint8_t *) dst->data;
+    const uint8_t * data_src0 = actx->data_src0;
+    uint8_t * data_dst        = actx->data_dst;
 
-    uint8_t * src0_spad_data = src0_spad->data + (ith * src0_spad->size_per_thread);
-    uint8_t * dst_spad_data  = dst_spad->data  + (ith * dst_spad->size_per_thread);
+    // nc/ne0 matches.
+    const int ne0_val = actx->nc; // == dst->ne[0]
 
-    // While given src0_spad->size_per_thread, divide it to two ping-pong buffer for src0
-    size_t src0_spad_half_size = src0_spad->size_per_thread / 2;
-    size_t dst_spad_half_size  = dst_spad->size_per_thread  / 2;
+    uint8_t * src0_spad_data = actx->octx->src0_spad.data + (ith * actx->octx->src0_spad.size_per_thread);
+    uint8_t * dst_spad_data  = actx->octx->dst_spad.data  + (ith * actx->octx->dst_spad.size_per_thread);
+
+    size_t src0_spad_half_size = actx->src0_spad_half_size;
+    size_t dst_spad_half_size  = actx->dst_spad_half_size;
 
     // In gelu = x*sigmoid(x*1.702)
-    const int BLOCK = src0_spad_half_size / src0_row_size_aligned; // How many rows can we process in one block
+    const int BLOCK = actx->block;
 
     if (BLOCK == 0) {
         FARF(ERROR, "gelu-f32 : current VTCM reservation %zu is too small for even 1 row per thread, needed at least %zu\n",
-                src0_spad->size_per_thread, src0_row_size_aligned);
+                actx->octx->src0_spad.size_per_thread, src0_row_size_aligned);
         return;
     }
+
+    dma_queue * dma_queue = actx->octx->ctx->dma[ith];
 
     // See discussion: https://github.com/ggml-org/llama.cpp/pull/18151#issuecomment-3678235379
     for (uint32_t ir = src0_start_row, spad_idx = 0; ir < src0_end_row && spad_idx < 2; ir += BLOCK, spad_idx++) {
@@ -408,9 +403,9 @@ static void unary_gelu_f32_per_thread(const struct htp_tensor * src0,
             float* dst_spad_ptr        = dst_spad  + ib * (dst_row_size_aligned  / sizeof(float));
 
             // gelu = x * sigmoid(1.702 * x) // current implementation
-            hvx_mul_scalar_f32((uint8_t *) dst_spad_ptr, (const uint8_t *) src0_spad_ptr, (float) 1.702, ne0);
-            hvx_sigmoid_f32_aa((uint8_t *) dst_spad_ptr, (const uint8_t *) dst_spad_ptr, ne0);
-            hvx_mul_f32_aaa((uint8_t *) dst_spad_ptr, (const uint8_t *) src0_spad_ptr, (const uint8_t *) dst_spad_ptr, ne0);
+            hvx_mul_scalar_f32((uint8_t *) dst_spad_ptr, (const uint8_t *) src0_spad_ptr, (float) 1.702, ne0_val);
+            hvx_sigmoid_f32_aa((uint8_t *) dst_spad_ptr, (const uint8_t *) dst_spad_ptr, ne0_val);
+            hvx_mul_f32_aaa((uint8_t *) dst_spad_ptr, (const uint8_t *) src0_spad_ptr, (const uint8_t *) dst_spad_ptr, ne0_val);
         }
 
         dma_queue_push_vtcm_to_ddr(dma_queue,
@@ -435,34 +430,23 @@ static void unary_gelu_f32_per_thread(const struct htp_tensor * src0,
          ne03, src0_start_row, src0_end_row, ne0, ne1, ne2, ne3, (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
 }
 
-static void unary_gelu_f32(unsigned int n, unsigned int i, void * data) {
-    struct htp_ops_context * octx = (struct htp_ops_context *) data;
-    unary_gelu_f32_per_thread(&octx->src0, &octx->dst, octx->op_params, &octx->src0_spad, &octx->dst_spad, n, i,
-                               octx->src0_nrows_per_thread, octx->ctx->dma[i]);
-}
 
-
-
-static void unary_silu_f32_per_thread(const struct htp_tensor * src0,
-                                       struct htp_tensor *       dst,
-                                       const int32_t *           op_params,
-                                       struct htp_spad *         src0_spad,
-                                       struct htp_spad *         dst_spad,
-                                       uint32_t                  nth,
-                                       uint32_t                  ith,
-                                       uint32_t                  src0_nrows_per_thread,
-                                       dma_queue *               dma_queue) {
+static void unary_silu_f32_per_thread(unsigned int nth, unsigned int ith, void * data) {
+    struct htp_act_context * actx = (struct htp_act_context *) data;
+    const struct htp_tensor * src0 = &actx->octx->src0;
+    const struct htp_tensor * dst  = &actx->octx->dst;
     htp_act_preamble2;
 
     uint64_t t1, t2;
     t1 = HAP_perf_get_qtimer_count();
 
-    const size_t src0_row_size = nb01;
-    const size_t dst_row_size  = nb1;
-    const size_t src0_row_size_aligned = hex_round_up(src0_row_size, VLEN);
-    const size_t dst_row_size_aligned  = hex_round_up(dst_row_size, VLEN);
+    const size_t src0_row_size = actx->src0_row_size;
+    const size_t dst_row_size  = actx->dst_row_size;
+    const size_t src0_row_size_aligned = actx->src0_row_size_aligned;
+    const size_t dst_row_size_aligned  = actx->dst_row_size_aligned;
 
-    const uint32_t src0_nrows = ne01 * ne02 * ne03;
+    const uint32_t src0_nrows = actx->src0_nrows;
+    const uint32_t src0_nrows_per_thread = actx->src0_nrows_per_thread;
 
     const uint32_t src0_start_row = src0_nrows_per_thread * ith;
     const uint32_t src0_end_row   = MIN(src0_start_row + src0_nrows_per_thread, src0_nrows);
@@ -472,23 +456,26 @@ static void unary_silu_f32_per_thread(const struct htp_tensor * src0,
         return;
     }
 
-    const uint8_t * data_src0 = (const uint8_t *) src0->data;
-    uint8_t * data_dst        = (uint8_t *) dst->data;
+    const uint8_t * data_src0 = actx->data_src0;
+    uint8_t * data_dst        = actx->data_dst;
 
-    uint8_t * src0_spad_data = src0_spad->data + (ith * src0_spad->size_per_thread);
-    uint8_t * dst_spad_data  = dst_spad->data  + (ith * dst_spad->size_per_thread);
+    const int ne0_val = actx->nc; // == dst->ne[0]
 
-    // While given src0_spad->size_per_thread, divide it to two ping-pong buffer for src0
-    size_t src0_spad_half_size = src0_spad->size_per_thread / 2;
-    size_t dst_spad_half_size  = dst_spad->size_per_thread  / 2;
+    uint8_t * src0_spad_data = actx->octx->src0_spad.data + (ith * actx->octx->src0_spad.size_per_thread);
+    uint8_t * dst_spad_data  = actx->octx->dst_spad.data  + (ith * actx->octx->dst_spad.size_per_thread);
 
-    const int BLOCK = src0_spad_half_size / src0_row_size_aligned; // How many rows can we process in one block
+    size_t src0_spad_half_size = actx->src0_spad_half_size;
+    size_t dst_spad_half_size  = actx->dst_spad_half_size;
+
+    const int BLOCK = actx->block;
 
     if (BLOCK == 0) {
         FARF(ERROR, "silu-f32 : current VTCM reservation %zu is too small for even 1 row per thread, needed at least %zu\n",
-                src0_spad->size_per_thread, src0_row_size_aligned);
+                actx->octx->src0_spad.size_per_thread, src0_row_size_aligned);
         return;
     }
+
+    dma_queue * dma_queue = actx->octx->ctx->dma[ith];
 
     // See discussion: https://github.com/ggml-org/llama.cpp/pull/18151#issuecomment-3678235379
     for (uint32_t ir = src0_start_row, spad_idx = 0; ir < src0_end_row && spad_idx < 2; ir += BLOCK, spad_idx++) {
@@ -515,8 +502,8 @@ static void unary_silu_f32_per_thread(const struct htp_tensor * src0,
             float* dst_spad_ptr        = dst_spad  + ib * (dst_row_size_aligned  / sizeof(float));
 
             // silu = x * sigmoid(x)
-            hvx_sigmoid_f32_aa((uint8_t *) dst_spad_ptr, (const uint8_t *) src0_spad_ptr, ne0);
-            hvx_mul_f32_aaa((uint8_t *) dst_spad_ptr, (const uint8_t *) src0_spad_ptr, (const uint8_t *) dst_spad_ptr, ne0);
+            hvx_sigmoid_f32_aa((uint8_t *) dst_spad_ptr, (const uint8_t *) src0_spad_ptr, ne0_val);
+            hvx_mul_f32_aaa((uint8_t *) dst_spad_ptr, (const uint8_t *) src0_spad_ptr, (const uint8_t *) dst_spad_ptr, ne0_val);
         }
 
         dma_queue_push_vtcm_to_ddr(dma_queue,
@@ -544,27 +531,22 @@ static void unary_silu_f32_per_thread(const struct htp_tensor * src0,
 static const float GELU_COEF_A     = 0.044715f;
 static const float SQRT_2_OVER_PI  = 0.79788456080286535587989211986876f;
 
-static void glu_geglu_f32_per_thread(const struct htp_tensor * src0,
-                                       const struct htp_tensor * src1,
-                                       struct htp_tensor *       dst,
-                                       const int32_t *           op_params,
-                                       struct htp_spad *         src0_spad,
-                                       struct htp_spad *         src1_spad,
-                                       struct htp_spad *         dst_spad,
-                                       uint32_t                  nth,
-                                       uint32_t                  ith,
-                                       uint32_t                  src0_nrows_per_thread,
-                                       dma_queue *               dma_queue) {
+static void glu_geglu_f32_per_thread(unsigned int nth, unsigned int ith, void * data) {
+    struct htp_act_context * actx = (struct htp_act_context *) data;
+    const struct htp_tensor * src0 = &actx->octx->src0;
+    const struct htp_tensor * src1 = &actx->octx->src1;
+    const struct htp_tensor * dst  = &actx->octx->dst;
     htp_act_preamble3;
 
-    size_t src0_row_size = nb01;
-    size_t src1_row_size = nb11;
-    size_t dst_row_size  = nb1;
+    size_t src0_row_size = actx->src0_row_size;
+    size_t src1_row_size = actx->src1_row_size;
+    size_t dst_row_size  = actx->dst_row_size;
 
     uint64_t t1, t2;
     t1 = HAP_perf_get_qtimer_count();
 
-    const uint32_t src0_nrows = ne01 * ne02 * ne03;  // src0 rows
+    const uint32_t src0_nrows = actx->src0_nrows;
+    const uint32_t src0_nrows_per_thread = actx->src0_nrows_per_thread;
 
     const uint32_t src0_start_row = src0_nrows_per_thread * ith;
     const uint32_t src0_end_row   = MIN(src0_start_row + src0_nrows_per_thread, src0_nrows);
@@ -574,42 +556,33 @@ static void glu_geglu_f32_per_thread(const struct htp_tensor * src0,
         return;
     }
 
-    const uint8_t * restrict data_src0 = (const uint8_t *) src0->data;
-    const uint8_t * restrict data_src1 = (const uint8_t *) src1->data;
-    uint8_t * restrict data_dst        = (uint8_t *) dst->data;
+    const uint8_t * restrict data_src0 = actx->data_src0;
+    const uint8_t * restrict data_src1 = actx->data_src1;
+    uint8_t * restrict data_dst        = actx->data_dst;
 
-    const bool src1_valid = src1->ne[0];
-    const int  nc         = (src1_valid) ? ne00 : ne00 / 2;
-    if (!src1_valid) {
-        const int32_t swapped = op_params[1];
-        data_src1             = data_src0;
-        src1_row_size         = src0_row_size;
+    const int nc = actx->nc;
 
-        const size_t nc_in_bytes = nc * SIZEOF_FP32;
-        data_src0 += swapped ? nc_in_bytes : 0;
-        data_src1 += swapped ? 0 : nc_in_bytes;
-    }
+    const size_t src0_row_size_aligned = actx->src0_row_size_aligned;
+    const size_t src1_row_size_aligned = actx->src1_row_size_aligned;
+    const size_t dst_row_size_aligned  = actx->dst_row_size_aligned;
 
-    const size_t src0_row_size_aligned = hex_round_up(src0_row_size, VLEN);
-    const size_t src1_row_size_aligned = hex_round_up(src1_row_size, VLEN);
-    const size_t dst_row_size_aligned  = hex_round_up(dst_row_size, VLEN);
+    uint8_t * restrict src0_spad_data = actx->octx->src0_spad.data + (ith * actx->octx->src0_spad.size_per_thread);
+    uint8_t * restrict src1_spad_data = actx->octx->src1_spad.data + (ith * actx->octx->src1_spad.size_per_thread);
+    uint8_t * restrict dst_spad_data  = actx->octx->dst_spad.data + (ith * actx->octx->dst_spad.size_per_thread);
 
-    uint8_t * restrict src0_spad_data = src0_spad->data + (ith * src0_spad->size_per_thread);
-    uint8_t * restrict src1_spad_data = src1_spad->data + (ith * src1_spad->size_per_thread);
-    uint8_t * restrict dst_spad_data  = dst_spad->data + (ith * dst_spad->size_per_thread);
+    size_t src0_spad_half_size = actx->src0_spad_half_size;
+    size_t src1_spad_half_size = actx->src1_spad_half_size;
+    size_t dst_spad_half_size  = actx->dst_spad_half_size;
 
-    // While given src0_spad->size_per_thread, divide it to two ping-pong buffer for src0
-    size_t src0_spad_half_size = src0_spad->size_per_thread / 2;
-    size_t src1_spad_half_size = src1_spad->size_per_thread / 2;
-    size_t dst_spad_half_size  = dst_spad->size_per_thread / 2;
-
-    const int BLOCK = src0_spad_half_size / src0_row_size_aligned;  // How many rows can we process in one block
+    const int BLOCK = actx->block;
     if (BLOCK == 0) {
         FARF(ERROR,
              "geglu-f32 : current VTCM reservation %zu is too small for even 1 row per thread, needed at least %zu\n",
-             src0_spad->size_per_thread, src0_row_size_aligned);
+             actx->octx->src0_spad.size_per_thread, src0_row_size_aligned);
         return;
     }
+
+    dma_queue * dma_queue = actx->octx->ctx->dma[ith];
 
     // See discussion: https://github.com/ggml-org/llama.cpp/pull/18151#issuecomment-3678235379
     for (uint32_t ir = src0_start_row, spad_idx = 0; ir < src0_end_row && spad_idx < 2; ir += BLOCK, spad_idx++) {
@@ -678,33 +651,7 @@ static void glu_geglu_f32_per_thread(const struct htp_tensor * src0,
          (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
 }
 
-static void unary_silu_f32(unsigned int n, unsigned int i, void * data) {
-    struct htp_ops_context * octx = (struct htp_ops_context *) data;
-    unary_silu_f32_per_thread(&octx->src0, &octx->dst, octx->op_params, &octx->src0_spad, &octx->dst_spad, n, i,
-                               octx->src0_nrows_per_thread, octx->ctx->dma[i]);
-}
-
-static void glu_swiglu_f32(unsigned int n, unsigned int i, void * data) {
-    struct htp_ops_context * octx = (struct htp_ops_context *) data;
-    glu_swiglu_f32_per_thread(&octx->src0, &octx->src1, &octx->dst, octx->op_params, &octx->src0_spad,
-                               &octx->src1_spad, &octx->dst_spad, n, i, octx->src0_nrows_per_thread, octx->ctx->dma[i]);
-}
-
-static void glu_swiglu_oai_f32(unsigned int n, unsigned int i, void * data) {
-    struct htp_ops_context * octx = (struct htp_ops_context *) data;
-    glu_swiglu_oai_f32_per_thread(&octx->src0, &octx->src1, &octx->dst, octx->op_params, &octx->src0_spad,
-                                   &octx->src1_spad, &octx->dst_spad, n, i, octx->src0_nrows_per_thread, octx->ctx->dma[i]);
-}
-
-static void glu_geglu_f32(unsigned int n, unsigned int i, void * data) {
-    struct htp_ops_context * octx = (struct htp_ops_context *) data;
-    glu_geglu_f32_per_thread(&octx->src0, &octx->src1, &octx->dst, octx->op_params, &octx->src0_spad,
-                               &octx->src1_spad, &octx->dst_spad, n, i, octx->src0_nrows_per_thread, octx->ctx->dma[i]);
-}
-
 static int execute_op_activations_f32(struct htp_ops_context * octx) {
-    int err = HTP_STATUS_OK;
-
     const struct htp_tensor * src0 = &octx->src0;
     const struct htp_tensor * src1 = &octx->src1;
     struct htp_tensor *       dst  = &octx->dst;
@@ -719,26 +666,26 @@ static int execute_op_activations_f32(struct htp_ops_context * octx) {
 
     switch (octx->op) {
         case HTP_OP_UNARY_SILU:
-            act_op_func = unary_silu_f32;
+            act_op_func = (worker_callback_t)unary_silu_f32_per_thread;
             op_type     = "silu-f32";
             break;
 
         case HTP_OP_GLU_SWIGLU:
-            act_op_func = glu_swiglu_f32;
+            act_op_func = (worker_callback_t)glu_swiglu_f32_per_thread;
             op_type     = "swiglu-f32";
             break;
 
         case HTP_OP_GLU_SWIGLU_OAI:
-            act_op_func = glu_swiglu_oai_f32;
+            act_op_func = (worker_callback_t)glu_swiglu_oai_f32_per_thread;
             op_type     = "swiglu-oai-f32";
             break;
         case HTP_OP_UNARY_GELU:
-            act_op_func = unary_gelu_f32;
+            act_op_func = (worker_callback_t)unary_gelu_f32_per_thread;
             op_type     = "gelu-f32";
             break;
 
         case HTP_OP_GLU_GEGLU:
-            act_op_func = glu_geglu_f32;
+            act_op_func = (worker_callback_t)glu_geglu_f32_per_thread;
             op_type     = "geglu-f32";
             break;
         default:
@@ -797,13 +744,58 @@ static int execute_op_activations_f32(struct htp_ops_context * octx) {
              octx->src0_spad.size, octx->src1_spad.size, octx->dst_spad.size);
     }
 
-    if (!(octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)) {
-        uint32_t n_jobs = MIN(n_threads, src0_nrows);
-        octx->src0_nrows_per_thread = (src0_nrows + n_jobs - 1) / n_jobs;
-        worker_pool_run_func(octx->ctx->worker_pool, act_op_func, octx, n_jobs);
+    if ((octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)) {
+        return HTP_STATUS_OK;
     }
 
-    return err;
+    uint32_t n_jobs = MIN(n_threads, src0_nrows);
+
+    // Prepare context
+    struct htp_act_context actx;
+    actx.octx = octx;
+
+    actx.src0_nrows_per_thread = (src0_nrows + n_jobs - 1) / n_jobs;
+
+    actx.src0_row_size = src0_row_size;
+    actx.src1_row_size = src1_row_size;
+    actx.dst_row_size  = dst_row_size;
+
+    actx.src0_row_size_aligned = src0_row_size_aligned;
+    actx.src1_row_size_aligned = src1_row_size_aligned;
+    actx.dst_row_size_aligned  = dst_row_size_aligned;
+
+    actx.src0_spad_half_size = octx->src0_spad.size_per_thread / 2;
+    actx.src1_spad_half_size = octx->src1_spad.size_per_thread / 2;
+    actx.dst_spad_half_size  = octx->dst_spad.size_per_thread / 2;
+
+    actx.block = actx.src0_spad_half_size / actx.src0_row_size_aligned;
+    actx.src0_nrows = src0_nrows;
+
+    actx.nc = dst->ne[0];
+
+    // Pointers and GLU logic
+    const uint8_t * data_src0 = (const uint8_t *) src0->data;
+    const uint8_t * data_src1 = (const uint8_t *) src1->data;
+
+    if (!src1_valid && (octx->op == HTP_OP_GLU_SWIGLU || octx->op == HTP_OP_GLU_SWIGLU_OAI || octx->op == HTP_OP_GLU_GEGLU)) {
+         const int32_t swapped = octx->op_params[1];
+         data_src1 = data_src0;
+         actx.src1_row_size = actx.src0_row_size;
+
+         size_t nc_in_bytes = actx.nc * SIZEOF_FP32;
+         if (swapped) {
+             data_src0 += nc_in_bytes;
+         } else {
+             data_src1 += nc_in_bytes;
+         }
+    }
+
+    actx.data_src0 = data_src0;
+    actx.data_src1 = data_src1;
+    actx.data_dst  = (uint8_t *) dst->data;
+
+    worker_pool_run_func(octx->ctx->worker_pool, act_op_func, &actx, n_jobs);
+    return HTP_STATUS_OK;
 }
 
 int op_activations(struct htp_ops_context * octx) {

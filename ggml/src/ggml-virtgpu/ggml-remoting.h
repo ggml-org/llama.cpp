@@ -9,7 +9,7 @@
 #include <string>
 
 #define GGML_VIRTGPU_NAME "ggml-virtgpu"
-#define GGML_VIRTGPU "ggml-virtgpu: "
+#define GGML_VIRTGPU      "ggml-virtgpu: "
 
 // USE_ALWAYS_TRUE_SUPPORTS_OP: 1 is fast, 0 avoid micro-benchmark crashes
 

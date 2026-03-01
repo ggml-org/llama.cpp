@@ -116,6 +116,7 @@ enum llm_type {
     LLM_TYPE_8B_A1B, // lfm2moe
     LLM_TYPE_16B_A1B,
     LLM_TYPE_21B_A3B, // Ernie MoE small
+    LLM_TYPE_24B_A2B, // lfm2moe
     LLM_TYPE_30B_A3B,
     LLM_TYPE_31B_A3_5B,
     LLM_TYPE_35B_A3B, // Qwen3.5
@@ -279,14 +280,16 @@ struct llama_layer {
     struct ggml_tensor * ffn_up_enc   = nullptr;
 
     // ff MoE
-    struct ggml_tensor * ffn_gate_inp    = nullptr;
-    struct ggml_tensor * ffn_gate_exps   = nullptr;
-    struct ggml_tensor * ffn_down_exps   = nullptr;
-    struct ggml_tensor * ffn_up_exps     = nullptr;
-    struct ggml_tensor * ffn_gate_inp_b  = nullptr;
-    struct ggml_tensor * ffn_gate_exps_b = nullptr;
-    struct ggml_tensor * ffn_down_exps_b = nullptr;
-    struct ggml_tensor * ffn_up_exps_b   = nullptr;
+    struct ggml_tensor * ffn_gate_inp      = nullptr;
+    struct ggml_tensor * ffn_gate_exps     = nullptr;
+    struct ggml_tensor * ffn_down_exps     = nullptr;
+    struct ggml_tensor * ffn_up_exps       = nullptr;
+    struct ggml_tensor * ffn_gate_up_exps  = nullptr;
+    struct ggml_tensor * ffn_gate_inp_b    = nullptr;
+    struct ggml_tensor * ffn_gate_exps_b   = nullptr;
+    struct ggml_tensor * ffn_down_exps_b   = nullptr;
+    struct ggml_tensor * ffn_up_exps_b     = nullptr;
+    struct ggml_tensor * ffn_gate_up_exps_b = nullptr;
 
     // ff shared expert (shexp)
     struct ggml_tensor * ffn_gate_inp_shexp = nullptr;
