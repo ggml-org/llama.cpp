@@ -134,7 +134,6 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
         for (int64_t j = 0; j < n_blocks; ++j) {
             ggml_tensor * kb_row = nullptr;
             ggml_tensor * kq_row = nullptr;
-
             ggml_tensor * k_j_block = ggml_reshape_4d(ctx0, k_block[j], S_k, 1, block_size, CHB);
             for (int64_t i = 0; i <= j; ++i) {
                 ggml_tensor * decay_mask = ggml_sub(ctx0, gk_block_bc[j], gk_block[i]);
@@ -163,12 +162,11 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
                     Akk_block = ggml_tri(ctx0, Akk_block, GGML_TRI_TYPE_LOWER);
                 }
 
-                // Build row by concatenating blocks along dim 0
+
                 kb_row = (kb_row == nullptr) ? Akk_block : ggml_concat(ctx0, kb_row, Akk_block, 0);
                 kq_row = (kq_row == nullptr) ? Aqk_block : ggml_concat(ctx0, kq_row, Aqk_block, 0);
             }
 
-            // Pad upper-triangle portion with zeros along dim 0
             int64_t pad_cols = (n_blocks - j - 1) * block_size;
             if (pad_cols > 0) {
                 kb_row = ggml_pad(ctx0, kb_row, pad_cols, 0, 0, 0);
@@ -179,13 +177,30 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
             kq_rows[j] = kq_row;
         }
 
-        // Assemble full matrix by concatenating rows along dim 1
+        // O(n*log(n)) for binary concat vs O(n^2) for linear concat
+        // number of blocks must be power of 2
+        // GGML_ASSERT(n_blocks > 0 && (n_blocks & (n_blocks - 1)) == 0);
+        // Binary concat rows along dim 1
+        {
+            int64_t count = n_blocks;
+            while (count > 1) {
+                int64_t next = 0;
+                for (int64_t i = 0; i + 1 < count; i += 2) {
+                    kb_rows[next] = ggml_concat(ctx0, kb_rows[i], kb_rows[i + 1], 1);
+                    kq_rows[next] = ggml_concat(ctx0, kq_rows[i], kq_rows[i + 1], 1);
+                    next++;
+                }
+                if (count % 2 == 1) {
+                    kb_rows[next] = kb_rows[count - 1];
+                    kq_rows[next] = kq_rows[count - 1];
+                    next++;
+                }
+                count = next;
+            }
+        }
+
         kb = kb_rows[0];
         kq = kq_rows[0];
-        for (int64_t j = 1; j < n_blocks; ++j) {
-            kb = ggml_concat(ctx0, kb, kb_rows[j], 1);
-            kq = ggml_concat(ctx0, kq, kq_rows[j], 1);
-        }
         kb = ggml_mul(ctx0, kb, b);
         cb(kq, "kq", il);
     } else {
@@ -204,18 +219,17 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
         // [CS, CS, n_chunks, H_k * n_seqs]
         kb = ggml_mul_mat(ctx0, k,  k_b);
         kb = ggml_mul    (ctx0, kb, decay_mask);
+        kb = ggml_tri(ctx0, kb, GGML_TRI_TYPE_LOWER);
 
         // [CS, CS, n_chunks, H_k * n_seqs]
         kq = ggml_mul_mat(ctx0, k, q);
         kq = ggml_mul(ctx0, kq, decay_mask);
+        kq = ggml_tri(ctx0, kq, GGML_TRI_TYPE_LOWER_DIAG);
+        cb(kq, "kq", il);
     }
 
-    kq = ggml_tri(ctx0, kq, GGML_TRI_TYPE_LOWER_DIAG);
-    cb(kq, "kq", il);
-
     // [CS, CS, n_chunks, H_k * n_seqs]
-    ggml_tensor * attn;
-    attn = ggml_tri(ctx0, kb, GGML_TRI_TYPE_LOWER);
+    ggml_tensor * attn = kb;
     cb(attn, "attn", il);
 
     ggml_tensor * identity;
