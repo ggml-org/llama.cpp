@@ -154,9 +154,8 @@ class GGUFReader:
             # This handles old big-endian files created before FUGG magic support.
             self.byte_order = 'S'
             temp_version = temp_version.view(temp_version.dtype.newbyteorder(self.byte_order))
-        elif self.byte_order == 'S':
-            # Already detected as swapped via FUGG magic - fix version byte order
-            temp_version = temp_version.view(temp_version.dtype.newbyteorder(self.byte_order))
+        # Note: when byte_order is already 'S' (from FUGG magic detection above),
+        # _get() already returns the correctly swapped value - no extra view needed.
         version = temp_version[0]
         if version not in READER_SUPPORTED_VERSIONS:
             raise ValueError(f'Sorry, file appears to be version {version} which we cannot handle')
