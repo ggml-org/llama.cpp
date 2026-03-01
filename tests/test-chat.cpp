@@ -3833,6 +3833,8 @@ static void test_msg_diffs_compute() {
 }
 
 int main(int argc, char ** argv) {
+    (void)argc;
+    (void)argv;
     common_log_set_verbosity_thold(999);
 
     // try {
