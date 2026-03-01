@@ -792,6 +792,9 @@ struct mtmd_tokenizer {
         int n_tokens = text.length() + 2 * add_special;
         std::vector<llama_token> result(n_tokens);
         n_tokens = llama_tokenize(vocab, text.data(), text.length(), result.data(), result.size(), add_special, parse_special);
+        if (n_tokens == std::numeric_limits<int32_t>::min()) {
+            throw std::runtime_error("Tokenization failed: input text too large, tokenization result exceeds int32_t limit");
+        }
         if (n_tokens < 0) {
             result.resize(-n_tokens);
             int check = llama_tokenize(vocab, text.data(), text.length(), result.data(), result.size(), add_special, parse_special);
