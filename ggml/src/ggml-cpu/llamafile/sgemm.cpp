@@ -1349,16 +1349,20 @@ class tinyBLAS_Q0_AVX {
                     const TA *A, int64_t lda,
                     const TB *B, int64_t ldb,
                     TC *C, int64_t ldc,
-                    int ith, int nth)
+                    int ith, int nth,
+                    const int8_t * custom_table = nullptr)
         : A(A), B(B), C(C), k(k), lda(lda), ldb(ldb), ldc(ldc), ith(ith), nth(nth) {
-        const int8_t kvalues_iq4nl[16] = {
-            -127, -104, -83, -65,
-            -49,  -35,  -22, -10,
-              1,   13,   25,  38,
-             53,   69,   89, 113
-        };
-
-        iq4nlt = _mm_loadu_si128((const __m128i *)kvalues_iq4nl);
+        if (custom_table) {
+            iq4nlt = _mm_loadu_si128((const __m128i *)custom_table);
+        } else {
+            const int8_t kvalues_iq4nl[16] = {
+                -127, -104, -83, -65,
+                -49,  -35,  -22, -10,
+                  1,   13,   25,  38,
+                 53,   69,   89, 113
+            };
+            iq4nlt = _mm_loadu_si128((const __m128i *)kvalues_iq4nl);
+        }
     }
 
     void matmul(int64_t m, int64_t n) {
@@ -4006,6 +4010,26 @@ bool llamafile_sgemm(const struct ggml_compute_params * params, int64_t m, int64
             (const block_q8_0 *)B, ldb,
             (float *)C, ldc,
             params->ith, params->nth};
+        tb.matmul(m, n);
+        return true;
+#else
+        return false;
+#endif
+    }
+
+    case GGML_TYPE_Q4_DPT: {
+        if (Btype != GGML_TYPE_Q8_0)
+            return false;
+#if defined(__AVX2__) || defined(__AVX512F__) || defined(__AVX__)
+        // Q4_DPT has identical block layout to IQ4_NL (block_q4_dpt = block_iq4_nl)
+        // but uses a per-tensor lookup table instead of the fixed IQ4_NL values.
+        const int8_t * levels = q4dpt_get_tensor_levels(A);
+        if (!levels) return false;
+        tinyBLAS_Q0_AVX<block_iq4_nl, block_q8_0, float> tb{
+            k, (const block_iq4_nl *)A, lda,
+            (const block_q8_0 *)B, ldb,
+            (float *)C, ldc,
+            params->ith, params->nth, levels};
         tb.matmul(m, n);
         return true;
 #else
