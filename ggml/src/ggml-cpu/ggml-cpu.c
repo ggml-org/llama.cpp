@@ -3,6 +3,7 @@
 
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
+#include "ggml-quants.h"
 #include "traits.h"
 #include "ggml-cpu-impl.h"
 #include "ggml-impl.h"
@@ -1277,6 +1278,14 @@ void ggml_compute_forward_mul_mat(
 
     // nb01 >= nb00 - src0 is not transposed
     //   compute by src0 rows
+
+    // Set current per-tensor quantization levels from graph input (src[2] or src[3])
+    {
+        const int levels_src = (dst->op == GGML_OP_MUL_MAT_ID) ? 3 : 2;
+        if (dst->src[levels_src] && dst->src[levels_src]->data) {
+            ggml_quant_set_current_levels(src0->type, dst->src[levels_src]->data);
+        }
+    }
 
     // TODO: extract to "extra_op"
 #if GGML_USE_LLAMAFILE

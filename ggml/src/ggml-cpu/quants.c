@@ -1014,7 +1014,7 @@ void ggml_vec_dot_q3_pt_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
 
     const int nb = n / QK_K;
 
-    const float * levels = q3pt_get_tensor_levels(vx);
+    const float * levels = (const float *)ggml_quant_get_current_levels(GGML_TYPE_Q3_PT);
     GGML_ASSERT(levels != NULL && "Q3_PT levels not set for tensor");
 
     float sumf = 0.f;
@@ -1114,7 +1114,7 @@ void ggml_vec_dot_q3_kpt_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs,
 
     const int nb = n / QK_K;
 
-    const float * levels = q3kpt_get_tensor_levels(vx);
+    const float * levels = (const float *)ggml_quant_get_current_levels(GGML_TYPE_Q3_KPT);
     GGML_ASSERT(levels != NULL && "Q3_KPT levels not set for tensor");
 
     const uint32_t kmask1 = 0x03030303;
@@ -1189,7 +1189,7 @@ void ggml_vec_dot_q4_dpt_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs,
 
     const int nb = n / QK4_NL;
 
-    const int8_t * values = q4dpt_get_tensor_levels(vx);
+    const int8_t * values = (const int8_t *)ggml_quant_get_current_levels(GGML_TYPE_Q4_DPT);
     GGML_ASSERT(values != NULL && "Q4_DPT levels not set for tensor");
 
     float sumf = 0;

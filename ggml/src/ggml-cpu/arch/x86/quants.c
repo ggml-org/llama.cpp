@@ -3731,8 +3731,7 @@ void ggml_vec_dot_q4_dpt_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const v
 
     const int nb = n / QK4_NL;
 
-    // Per-tensor levels — looked up from the CPU-side registry once per call.
-    const int8_t * values = q4dpt_get_tensor_levels(vx);
+    const int8_t * values = (const int8_t *)ggml_quant_get_current_levels(GGML_TYPE_Q4_DPT);
     GGML_ASSERT(values != NULL && "Q4_DPT levels not set for tensor");
 
     int ib = 0;

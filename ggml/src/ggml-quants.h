@@ -86,9 +86,6 @@ GGML_API size_t quantize_q3_kpt(const float * GGML_RESTRICT src, void * GGML_RES
 GGML_API void q3kpt_set_levels(const float * levels);
 GGML_API const float * q3kpt_get_levels(void);
 GGML_API void q3kpt_free_levels(void);
-GGML_API void q3kpt_register_tensor_levels(const void * data, size_t nbytes, const float * levels);
-GGML_API void q3kpt_clear_tensor_levels(void);
-GGML_API const float * q3kpt_get_tensor_levels(const void * data_ptr);
 GGML_API void q3kpt_train_levels(const float * data, int64_t nrow, int64_t n_per_row,
                                   const float * imatrix, float levels_out[Q3KPT_N_LEVELS]);
 GGML_API size_t quantize_iq3_s  (const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
@@ -119,9 +116,6 @@ GGML_API const float * q3pt_get_levels(void);
 GGML_API void          q3pt_free_levels(void);
 
 // Per-tensor levels registry (inference — range-based lookup by data address)
-GGML_API void          q3pt_register_tensor_levels(const void * data, size_t nbytes, const float * levels);
-GGML_API void          q3pt_clear_tensor_levels(void);
-GGML_API const float * q3pt_get_tensor_levels(const void * data_ptr);
 
 // Train 8 Lloyd-Max levels from tensor data via weighted k-means on affine-normalized
 // 16-element sub-block values. Also sets the global levels via q3pt_set_levels().
@@ -139,10 +133,9 @@ GGML_API void           q4dpt_set_levels(const int8_t * levels);
 GGML_API const int8_t * q4dpt_get_levels(void);
 GGML_API void           q4dpt_free_levels(void);
 
-// Per-tensor levels registry (inference)
-GGML_API void           q4dpt_register_tensor_levels(const void * data, size_t nbytes, const int8_t * levels);
-GGML_API void           q4dpt_clear_tensor_levels(void);
-GGML_API const int8_t * q4dpt_get_tensor_levels(const void * data_ptr);
+// Unified per-type current-levels pointer (set by CPU MUL_MAT dispatch from graph input src[2])
+GGML_API void         ggml_quant_set_current_levels(enum ggml_type type, const void * data);
+GGML_API const void * ggml_quant_get_current_levels(enum ggml_type type);
 
 // Train 16 Lloyd-Max int8 levels from tensor data.
 // Bins normalized values (x/amax) in [-1,1], runs weighted k-means, rounds to sorted int8[16].

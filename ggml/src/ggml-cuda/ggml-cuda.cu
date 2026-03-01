@@ -1341,6 +1341,12 @@ static void ggml_cuda_op_mul_mat_cublas(
         ggml_cuda_pool_alloc<float> src1_ddq_as_f32(ctx.pool(id));
 
         if (src0->type != GGML_TYPE_F32) {
+            // Set Q4_DPT levels in convert.cu's TU before dequantize
+            if (src0->type == GGML_TYPE_Q4_DPT) {
+                const int levels_src = (dst->op == GGML_OP_MUL_MAT_ID) ? 3 : 2;
+                GGML_ASSERT(dst->src[levels_src] && dst->src[levels_src]->data);
+                ggml_cuda_set_q4dpt_levels((const int8_t *)dst->src[levels_src]->data, stream);
+            }
             const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(src0->type);
             GGML_ASSERT(to_fp32_cuda != nullptr);
             src0_ddq_as_f32.alloc(row_diff*ne00);

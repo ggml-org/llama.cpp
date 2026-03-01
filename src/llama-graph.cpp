@@ -877,12 +877,15 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     loras            (params.loras),
     mctx             (params.mctx),
     cross            (params.cross),
+    quant_levels_data(params.quant_levels_data),
+    quant_level_index(params.quant_level_index),
     samplers         (params.samplers),
     cb_func          (params.cb),
     res              (params.res),
     ctx0             (res->get_ctx()),
     gf               (res->get_gf()) {
         res->set_params(params);
+        build_inp_quant_levels();
     }
 
 void llm_graph_context::cb(ggml_tensor * cur, const char * name, int il) const {
@@ -1682,6 +1685,60 @@ ggml_tensor * llm_graph_context::build_inp_cross_embd() const {
     res->add_input(std::move(inp));
 
     return cur;
+}
+
+void llm_graph_context::build_inp_quant_levels() {
+    if (!quant_levels_data || quant_levels_data->empty()) { return; }
+
+    auto inp = std::make_unique<llm_graph_input_quant_levels>(*quant_levels_data);
+
+    for (const auto & [type, data] : *quant_levels_data) {
+        if (data.empty()) { continue; }
+        ggml_type tensor_type;
+        int64_t n_elem;
+        if (type == GGML_TYPE_Q4_DPT) {
+            tensor_type = GGML_TYPE_I8;
+            n_elem = (int64_t)data.size();
+        } else { // Q3_PT, Q3_KPT
+            tensor_type = GGML_TYPE_F32;
+            n_elem = (int64_t)(data.size() / sizeof(float));
+        }
+        inp->levels[type] = ggml_new_tensor_1d(ctx0, tensor_type, n_elem);
+        ggml_set_input(inp->levels[type]);
+    }
+
+    quant_levels_inp = inp.get();
+    res->add_input(std::move(inp));
+}
+
+void llm_graph_context::attach_quant_levels() {
+    if (!quant_levels_inp || !quant_level_index) { return; }
+
+    const int n_nodes = ggml_graph_n_nodes(gf);
+    for (int i = 0; i < n_nodes; i++) {
+        ggml_tensor * node = ggml_graph_node(gf, i);
+        if (node->op != GGML_OP_MUL_MAT && node->op != GGML_OP_MUL_MAT_ID) { continue; }
+
+        ggml_tensor * w = node->src[0];
+        ggml_tensor * levels_all = quant_levels_inp->levels[w->type];
+        if (!levels_all) { continue; }
+
+        auto it = quant_level_index->find(ggml_get_name(w));
+        if (it == quant_level_index->end()) { continue; }
+
+        const int64_t n_levels = (w->type == GGML_TYPE_Q4_DPT) ? 16 : 8;
+        const size_t elem_size = ggml_type_size(levels_all->type);
+        ggml_tensor * lv = ggml_view_1d(ctx0, levels_all,
+            n_levels, (int64_t)(it->second * (size_t)n_levels * elem_size));
+
+        // MUL_MAT: src[0]=weights, src[1]=input, src[2] is free
+        // MUL_MAT_ID: src[0]=weights, src[1]=input, src[2]=expert_ids, src[3] is free
+        if (node->op == GGML_OP_MUL_MAT) {
+            node->src[2] = lv;
+        } else {
+            node->src[3] = lv;
+        }
+    }
 }
 
 ggml_tensor * llm_graph_context::build_inp_pos_bucket_enc() const {

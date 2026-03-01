@@ -4092,6 +4092,7 @@ static bool  q3kpt_levels_set = false;
 GGML_API void q3kpt_set_levels(const float * levels) {
     memcpy(q3kpt_levels, levels, Q3KPT_N_LEVELS * sizeof(float));
     q3kpt_levels_set = true;
+    ggml_quant_set_current_levels(GGML_TYPE_Q3_KPT, q3kpt_levels);
 }
 
 GGML_API const float * q3kpt_get_levels(void) {
@@ -4102,47 +4103,6 @@ GGML_API void q3kpt_free_levels(void) {
     q3kpt_levels_set = false;
 }
 
-// Per-tensor levels registry for inference
-#define Q3KPT_MAX_TENSORS 1024
-
-typedef struct {
-    const void * data;
-    size_t nbytes;
-    float levels[Q3KPT_N_LEVELS];
-} q3kpt_tensor_entry;
-
-static q3kpt_tensor_entry q3kpt_tensor_registry[Q3KPT_MAX_TENSORS];
-static int q3kpt_tensor_registry_count = 0;
-
-GGML_API void q3kpt_register_tensor_levels(const void * data, size_t nbytes, const float * levels) {
-    if (q3kpt_tensor_registry_count >= Q3KPT_MAX_TENSORS) { return; }
-    for (int i = 0; i < q3kpt_tensor_registry_count; ++i) {
-        if (q3kpt_tensor_registry[i].data == data) {
-            q3kpt_tensor_registry[i].nbytes = nbytes;
-            memcpy(q3kpt_tensor_registry[i].levels, levels, Q3KPT_N_LEVELS * sizeof(float));
-            return;
-        }
-    }
-    q3kpt_tensor_registry[q3kpt_tensor_registry_count].data   = data;
-    q3kpt_tensor_registry[q3kpt_tensor_registry_count].nbytes = nbytes;
-    memcpy(q3kpt_tensor_registry[q3kpt_tensor_registry_count].levels, levels, Q3KPT_N_LEVELS * sizeof(float));
-    q3kpt_tensor_registry_count++;
-}
-
-GGML_API void q3kpt_clear_tensor_levels(void) {
-    q3kpt_tensor_registry_count = 0;
-}
-
-GGML_API const float * q3kpt_get_tensor_levels(const void * data_ptr) {
-    const uint8_t * p = (const uint8_t *)data_ptr;
-    for (int i = 0; i < q3kpt_tensor_registry_count; ++i) {
-        const uint8_t * base = (const uint8_t *)q3kpt_tensor_registry[i].data;
-        if (p >= base && p < base + q3kpt_tensor_registry[i].nbytes) {
-            return q3kpt_tensor_registry[i].levels;
-        }
-    }
-    return q3kpt_get_levels();
-}
 
 // Train levels in the symmetric quantization space
 GGML_API void q3kpt_train_levels(const float * data,
@@ -4274,7 +4234,7 @@ GGML_API void q3kpt_train_levels(const float * data,
 void dequantize_row_q3_kpt(const block_q3_kpt * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
     assert(k % QK_K == 0);
     const int64_t nb     = k / QK_K;
-    const float * levels = q3kpt_get_tensor_levels(x);
+    const float * levels = (const float *)ggml_quant_get_current_levels(GGML_TYPE_Q3_KPT);
     GGML_ASSERT(levels != NULL && "Q3_KPT levels not set for tensor");
 
     // levels are in [0,1], map to approximate [-4, 3] range for Q3_K compatibility
@@ -4587,6 +4547,7 @@ static bool   q4dpt_levels_set = false;
 void q4dpt_set_levels(const int8_t * levels) {
     memcpy(q4dpt_levels, levels, Q4DPT_N_LEVELS * sizeof(int8_t));
     q4dpt_levels_set = true;
+    ggml_quant_set_current_levels(GGML_TYPE_Q4_DPT, q4dpt_levels);
 }
 
 const int8_t * q4dpt_get_levels(void) {
@@ -4597,47 +4558,6 @@ void q4dpt_free_levels(void) {
     q4dpt_levels_set = false;
 }
 
-// Per-tensor levels registry (inference — range-based lookup by data address)
-#define Q4DPT_MAX_TENSORS 1024
-
-typedef struct {
-    const void * data;
-    size_t       nbytes;
-    int8_t       levels[Q4DPT_N_LEVELS];
-} q4dpt_tensor_entry;
-
-static q4dpt_tensor_entry q4dpt_tensor_registry[Q4DPT_MAX_TENSORS];
-static int                q4dpt_tensor_registry_count = 0;
-
-void q4dpt_register_tensor_levels(const void * data, size_t nbytes, const int8_t * levels) {
-    if (q4dpt_tensor_registry_count >= Q4DPT_MAX_TENSORS) { return; }
-    for (int i = 0; i < q4dpt_tensor_registry_count; ++i) {
-        if (q4dpt_tensor_registry[i].data == data) {
-            q4dpt_tensor_registry[i].nbytes = nbytes;
-            memcpy(q4dpt_tensor_registry[i].levels, levels, Q4DPT_N_LEVELS * sizeof(int8_t));
-            return;
-        }
-    }
-    q4dpt_tensor_registry[q4dpt_tensor_registry_count].data   = data;
-    q4dpt_tensor_registry[q4dpt_tensor_registry_count].nbytes = nbytes;
-    memcpy(q4dpt_tensor_registry[q4dpt_tensor_registry_count].levels, levels, Q4DPT_N_LEVELS * sizeof(int8_t));
-    q4dpt_tensor_registry_count++;
-}
-
-void q4dpt_clear_tensor_levels(void) {
-    q4dpt_tensor_registry_count = 0;
-}
-
-const int8_t * q4dpt_get_tensor_levels(const void * data_ptr) {
-    const uint8_t * p = (const uint8_t *) data_ptr;
-    for (int i = 0; i < q4dpt_tensor_registry_count; ++i) {
-        const uint8_t * base = (const uint8_t *) q4dpt_tensor_registry[i].data;
-        if (p >= base && p < base + q4dpt_tensor_registry[i].nbytes) {
-            return q4dpt_tensor_registry[i].levels;
-        }
-    }
-    return q4dpt_get_levels();
-}
 
 // Run Lloyd-Max iterations on a pre-built histogram.
 // levels[] is updated in-place (and kept sorted).
@@ -4799,7 +4719,7 @@ void q4dpt_train_levels(const float * data, int64_t nrow, int64_t n_per_row,
 void dequantize_row_q4_dpt(const block_q4_dpt * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
     assert(k % QK4_NL == 0);
     const int64_t nb      = k / QK4_NL;
-    const int8_t * values  = q4dpt_get_tensor_levels(x);
+    const int8_t * values  = (const int8_t *)ggml_quant_get_current_levels(GGML_TYPE_Q4_DPT);
     GGML_ASSERT(values != NULL && "Q4_DPT levels not set for tensor");
 
     for (int i = 0; i < nb; i++) {
@@ -4933,6 +4853,7 @@ static bool  q3pt_levels_set = false;
 void q3pt_set_levels(const float * levels) {
     memcpy(q3pt_levels, levels, Q3PT_N_LEVELS * sizeof(float));
     q3pt_levels_set = true;
+    ggml_quant_set_current_levels(GGML_TYPE_Q3_PT, q3pt_levels);
 }
 
 const float * q3pt_get_levels(void) {
@@ -4943,47 +4864,6 @@ void q3pt_free_levels(void) {
     q3pt_levels_set = false;
 }
 
-// Per-tensor levels registry for inference (range-based lookup by data address)
-#define Q3PT_MAX_TENSORS 1024
-
-typedef struct {
-    const void * data;
-    size_t nbytes;
-    float levels[Q3PT_N_LEVELS];
-} q3pt_tensor_entry;
-
-static q3pt_tensor_entry q3pt_tensor_registry[Q3PT_MAX_TENSORS];
-static int q3pt_tensor_registry_count = 0;
-
-GGML_API void q3pt_register_tensor_levels(const void * data, size_t nbytes, const float * levels) {
-    if (q3pt_tensor_registry_count >= Q3PT_MAX_TENSORS) { return; }
-    for (int i = 0; i < q3pt_tensor_registry_count; ++i) {
-        if (q3pt_tensor_registry[i].data == data) {
-            q3pt_tensor_registry[i].nbytes = nbytes;
-            memcpy(q3pt_tensor_registry[i].levels, levels, Q3PT_N_LEVELS * sizeof(float));
-            return;
-        }
-    }
-    q3pt_tensor_registry[q3pt_tensor_registry_count].data   = data;
-    q3pt_tensor_registry[q3pt_tensor_registry_count].nbytes = nbytes;
-    memcpy(q3pt_tensor_registry[q3pt_tensor_registry_count].levels, levels, Q3PT_N_LEVELS * sizeof(float));
-    q3pt_tensor_registry_count++;
-}
-
-GGML_API void q3pt_clear_tensor_levels(void) {
-    q3pt_tensor_registry_count = 0;
-}
-
-GGML_API const float * q3pt_get_tensor_levels(const void * data_ptr) {
-    const uint8_t * p = (const uint8_t *)data_ptr;
-    for (int i = 0; i < q3pt_tensor_registry_count; ++i) {
-        const uint8_t * base = (const uint8_t *)q3pt_tensor_registry[i].data;
-        if (p >= base && p < base + q3pt_tensor_registry[i].nbytes) {
-            return q3pt_tensor_registry[i].levels;
-        }
-    }
-    return q3pt_get_levels();
-}
 
 void q3pt_train_levels(const float * data, int64_t nrow, int64_t n_per_row,
                         const float * imatrix, float levels_out[Q3PT_N_LEVELS]) {
@@ -5119,7 +4999,7 @@ static inline void q3pt_pack3(uint8_t * GGML_RESTRICT qs, int k, int v) {
 void dequantize_row_q3_pt(const block_q3_pt * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
     assert(k % QK_K == 0);
     const int nb = k / QK_K;
-    const float * L = q3pt_get_tensor_levels(x);
+    const float * L = (const float *)ggml_quant_get_current_levels(GGML_TYPE_Q3_PT);
     GGML_ASSERT(L != NULL && "Q3_PT levels not set for tensor");
 
     for (int i = 0; i < nb; i++) {
@@ -6666,5 +6546,16 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
     }
 
     return true;
+}
+
+// Unified per-type current-levels pointer (set by CPU MUL_MAT dispatch from graph input)
+static const void * ggml_quant_current_levels[GGML_TYPE_COUNT] = { NULL };
+
+void ggml_quant_set_current_levels(enum ggml_type type, const void * data) {
+    ggml_quant_current_levels[type] = data;
+}
+
+const void * ggml_quant_get_current_levels(enum ggml_type type) {
+    return ggml_quant_current_levels[type];
 }
 

@@ -4023,7 +4023,7 @@ bool llamafile_sgemm(const struct ggml_compute_params * params, int64_t m, int64
 #if defined(__AVX2__) || defined(__AVX512F__) || defined(__AVX__)
         // Q4_DPT has identical block layout to IQ4_NL (block_q4_dpt = block_iq4_nl)
         // but uses a per-tensor lookup table instead of the fixed IQ4_NL values.
-        const int8_t * levels = q4dpt_get_tensor_levels(A);
+        const int8_t * levels = (const int8_t *)ggml_quant_get_current_levels(GGML_TYPE_Q4_DPT);
         if (!levels) return false;
         tinyBLAS_Q0_AVX<block_iq4_nl, block_q8_0, float> tb{
             k, (const block_iq4_nl *)A, lda,

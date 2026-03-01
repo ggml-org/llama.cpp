@@ -511,6 +511,13 @@ struct llama_model {
     // for keeping track of associated LoRA adapters
     std::unordered_set<llama_adapter_lora *> loras;
 
+    // host-side levels data for dynamic quantization types (Q4_DPT, Q3_PT, Q3_KPT)
+    // indexed by ggml_type, raw bytes (int8 for Q4_DPT, float for Q3_PT/Q3_KPT)
+    std::unordered_map<ggml_type, std::vector<uint8_t>> quant_levels_data;
+
+    // maps tensor name → slot index within quant_levels_data for that type
+    std::unordered_map<std::string, size_t> quant_level_index;
+
     int64_t t_load_us  = 0;
     int64_t t_start_us = 0;
 
