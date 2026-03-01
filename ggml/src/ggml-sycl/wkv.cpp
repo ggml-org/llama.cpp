@@ -96,7 +96,9 @@ static void rwkv_wkv6_f32_kernel(
     }
 }
 
-template <int block_size>
+constexpr float w_scale = -0.6065306597f; // -exp(-0.5)
+
+template <int block_size, bool fuse_exp>
 static void rwkv_wkv7_f32_kernel(
     const int B, const int T, const int C, const int H,
     const float* r, const float* w, const float* k, const float* v,
@@ -132,7 +134,7 @@ static void rwkv_wkv7_f32_kernel(
         item_ct1.barrier(sycl::access::fence_space::local_space);
 
         _r[tid] = r[t];
-        _w[tid] = w[t];
+        _w[tid] = fuse_exp ? sycl::native::exp(w_scale / (1.0f + sycl::native::exp(-w[t]))) : w[t];
         _k[tid] = k[t];
         _a[tid] = a[t];
         _b[tid] = b[t];
@@ -247,9 +249,11 @@ void ggml_sycl_op_rwkv_wkv7(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
     float* dst_d = (float*)dst->data;
 
     const int64_t B = dst->src[6]->ne[1];
-    const int64_t T = dst->src[0]->ne[2];
+    const int64_t T = dst->src[4]->ne[2];
     const int64_t C = dst->ne[0];
-    const int64_t H = dst->src[0]->ne[1];
+    const int64_t H = dst->src[4]->ne[1];
+
+    const bool fuse_exp = (bool) ((int32_t *) dst->op_params)[0];
 
     GGML_ASSERT(dst->src[6]->type == GGML_TYPE_F32);
     GGML_ASSERT(C % H == 0);
@@ -264,30 +268,61 @@ void ggml_sycl_op_rwkv_wkv7(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
 
     // Submit kernel
     if (C / H == WKV_BLOCK_SIZE) {
-        stream->submit([&](sycl::handler& cgh) {
-            sycl::local_accessor<float, 1> shared_mem_acc(shared_mem_size, cgh);
+        if (fuse_exp) {
+            stream->submit([&](sycl::handler& cgh) {
+                sycl::local_accessor<float, 1> shared_mem_acc(shared_mem_size, cgh);
 
-            cgh.parallel_for(
-                sycl::nd_range<3>(grid_dims * block_dims, block_dims),
-                [=](sycl::nd_item<3> item_ct1) {
-                    rwkv_wkv7_f32_kernel<WKV_BLOCK_SIZE>(
-                        B, T, C, H, r_d, w_d, k_d, v_d, a_d, b_d, s_d, dst_d,
-                        item_ct1, (float*)shared_mem_acc.get_multi_ptr<sycl::access::decorated::no>().get()
-                    );
+                cgh.parallel_for(
+                    sycl::nd_range<3>(grid_dims * block_dims, block_dims),
+                    [=](sycl::nd_item<3> item_ct1) {
+                        rwkv_wkv7_f32_kernel<WKV_BLOCK_SIZE, true>(
+                            B, T, C, H, r_d, w_d, k_d, v_d, a_d, b_d, s_d, dst_d,
+                            item_ct1, (float*)shared_mem_acc.get_multi_ptr<sycl::access::decorated::no>().get()
+                        );
+                    });
+            });
+        } else {
+            stream->submit([&](sycl::handler& cgh) {
+                sycl::local_accessor<float, 1> shared_mem_acc(shared_mem_size, cgh);
+
+                cgh.parallel_for(
+                    sycl::nd_range<3>(grid_dims * block_dims, block_dims),
+                    [=](sycl::nd_item<3> item_ct1) {
+                        rwkv_wkv7_f32_kernel<WKV_BLOCK_SIZE, false>(
+                            B, T, C, H, r_d, w_d, k_d, v_d, a_d, b_d, s_d, dst_d,
+                            item_ct1, (float*)shared_mem_acc.get_multi_ptr<sycl::access::decorated::no>().get()
+                        );
+                    });
                 });
-        });
+            });
+        }
     } else {
-        stream->submit([&](sycl::handler& cgh) {
-            sycl::local_accessor<float, 1> shared_mem_acc(shared_mem_size, cgh);
+        if (fuse_exp) {
+            stream->submit([&](sycl::handler& cgh) {
+                sycl::local_accessor<float, 1> shared_mem_acc(shared_mem_size, cgh);
 
-            cgh.parallel_for(
-                sycl::nd_range<3>(grid_dims * block_dims, block_dims),
-                [=](sycl::nd_item<3> item_ct1) {
-                    rwkv_wkv7_f32_kernel<WKV_BLOCK_SIZE * 2>(
-                        B, T, C, H, r_d, w_d, k_d, v_d, a_d, b_d, s_d, dst_d,
-                        item_ct1, (float*)shared_mem_acc.get_multi_ptr<sycl::access::decorated::no>().get()
-                    );
-                });
-        });
+                cgh.parallel_for(
+                    sycl::nd_range<3>(grid_dims * block_dims, block_dims),
+                    [=](sycl::nd_item<3> item_ct1) {
+                        rwkv_wkv7_f32_kernel<WKV_BLOCK_SIZE * 2, true>(
+                            B, T, C, H, r_d, w_d, k_d, v_d, a_d, b_d, s_d, dst_d,
+                            item_ct1, (float*)shared_mem_acc.get_multi_ptr<sycl::access::decorated::no>().get()
+                        );
+                    });
+            });
+        } else {
+            stream->submit([&](sycl::handler& cgh) {
+                sycl::local_accessor<float, 1> shared_mem_acc(shared_mem_size, cgh);
+
+                cgh.parallel_for(
+                    sycl::nd_range<3>(grid_dims * block_dims, block_dims),
+                    [=](sycl::nd_item<3> item_ct1) {
+                        rwkv_wkv7_f32_kernel<WKV_BLOCK_SIZE * 2, false>(
+                            B, T, C, H, r_d, w_d, k_d, v_d, a_d, b_d, s_d, dst_d,
+                            item_ct1, (float*)shared_mem_acc.get_multi_ptr<sycl::access::decorated::no>().get()
+                        );
+                    });
+            });
+        }
     }
 }

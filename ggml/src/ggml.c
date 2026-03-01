@@ -1031,6 +1031,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GATED_LINEAR_ATTN",
     "RWKV_WKV7",
     "SOLVE_TRI",
+    "LERP",
 
     "UNARY",
 
@@ -1048,7 +1049,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 95, "GGML_OP_COUNT != 95");
+static_assert(GGML_OP_COUNT == 96, "GGML_OP_COUNT != 96");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1140,6 +1141,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "gated_linear_attn(k, v, q, gate, s)",
     "rwkv_wkv7(r, w, k, v, a, b, s)",
     "A X = B, A triangular, solve X",
+    "x+(y-x)*t",
 
     "unary(x)",
 
@@ -1157,7 +1159,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 95, "GGML_OP_COUNT != 95");
+static_assert(GGML_OP_COUNT == 96, "GGML_OP_COUNT != 96");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -1169,6 +1171,7 @@ static const char * GGML_UNARY_OP_NAME[GGML_UNARY_OP_COUNT] = {
     "TANH",
     "ELU",
     "RELU",
+    "RELU_SQR",
     "SIGMOID",
     "GELU",
     "GELU_QUICK",
@@ -1186,7 +1189,7 @@ static const char * GGML_UNARY_OP_NAME[GGML_UNARY_OP_COUNT] = {
     "TRUNC",
 };
 
-static_assert(GGML_UNARY_OP_COUNT == 22, "GGML_UNARY_OP_COUNT != 22");
+static_assert(GGML_UNARY_OP_COUNT == 23, "GGML_UNARY_OP_COUNT != 23");
 
 static const char * GGML_GLU_OP_NAME[GGML_GLU_OP_COUNT] = {
     "REGLU",
@@ -2666,6 +2669,20 @@ struct ggml_tensor * ggml_relu_inplace(
         struct ggml_context * ctx,
         struct ggml_tensor  * a) {
     return ggml_unary_inplace(ctx, a, GGML_UNARY_OP_RELU);
+}
+
+// ggml_relu_sqr
+
+struct ggml_tensor * ggml_relu_sqr(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary(ctx, a, GGML_UNARY_OP_RELU_SQR);
+}
+
+struct ggml_tensor * ggml_relu_sqr_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary_inplace(ctx, a, GGML_UNARY_OP_RELU_SQR);
 }
 
 // ggml_leaky_relu
@@ -5729,7 +5746,8 @@ struct ggml_tensor * ggml_rwkv_wkv7(
         struct ggml_tensor  * v,
         struct ggml_tensor  * a,
         struct ggml_tensor  * b,
-        struct ggml_tensor  * state) {
+        struct ggml_tensor  * state,
+        bool                  fuse_exp) {
     GGML_ASSERT(ggml_is_contiguous(r));
     GGML_ASSERT(ggml_is_contiguous(w));
     GGML_ASSERT(ggml_is_contiguous(k));
@@ -5738,14 +5756,16 @@ struct ggml_tensor * ggml_rwkv_wkv7(
     GGML_ASSERT(ggml_is_contiguous(b));
     GGML_ASSERT(ggml_is_contiguous(state));
 
-    const int64_t S = k->ne[0];
-    const int64_t H = k->ne[1];
-    const int64_t n_tokens = k->ne[2];
+    const int64_t S = a->ne[0];
+    const int64_t H = a->ne[1];
+    const int64_t n_tokens = a->ne[2];
     const int64_t n_seqs = state->ne[1];
+    const int64_t n_embd = S * H;
     {
-        GGML_ASSERT(w->ne[0] == S && w->ne[1] == H && w->ne[2] == n_tokens);
+        GGML_ASSERT(r->ne[0] == S && r->ne[1] == H && r->ne[2] == n_tokens);
+        GGML_ASSERT(w->ne[0] == n_embd && w->ne[1] == n_tokens);
         GGML_ASSERT(k->ne[0] == S && k->ne[1] == H && k->ne[2] == n_tokens);
-        GGML_ASSERT(v->ne[0] == S && v->ne[1] == H && v->ne[2] == n_tokens);
+        GGML_ASSERT(v->ne[0] == n_embd && v->ne[1] == n_tokens);
         GGML_ASSERT(a->ne[0] == S && a->ne[1] == H && a->ne[2] == n_tokens);
         GGML_ASSERT(b->ne[0] == S && b->ne[1] == H && b->ne[2] == n_tokens);
         GGML_ASSERT(ggml_nelements(state) == S * S * H * n_seqs);
@@ -5755,6 +5775,9 @@ struct ggml_tensor * ggml_rwkv_wkv7(
     const int64_t ne[4] = { S * H, n_tokens + S * n_seqs, 1, 1 };
     struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
 
+    int32_t fuse_exp_i = fuse_exp ? 1 : 0;
+    ggml_set_op_params(result, &fuse_exp_i, sizeof(fuse_exp_i));
+
     result->op     = GGML_OP_RWKV_WKV7;
     result->src[0] = r;
     result->src[1] = w;
@@ -5763,6 +5786,34 @@ struct ggml_tensor * ggml_rwkv_wkv7(
     result->src[4] = a;
     result->src[5] = b;
     result->src[6] = state;
+
+    return result;
+}
+
+// ggml_lerp
+
+struct ggml_tensor * ggml_lerp(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        struct ggml_tensor  * t) {
+    // assume a and b are the same shape for now
+    GGML_ASSERT(ggml_are_same_shape(a, b));
+
+    GGML_ASSERT(t->ne[0] == a->ne[0]);
+    GGML_ASSERT(a->ne[1] % t->ne[1] == 0);
+    GGML_ASSERT(a->ne[2] % t->ne[2] == 0);
+
+    // a/b can broadcast to t at dim3 for rwkv7
+    GGML_ASSERT(t->ne[3] % a->ne[3] == 0);
+
+    const int64_t ne[4] = { a->ne[0], a->ne[1], a->ne[2], t->ne[3] };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+
+    result->op     = GGML_OP_LERP;
+    result->src[0] = a;
+    result->src[1] = b;
+    result->src[2] = t;
 
     return result;
 }

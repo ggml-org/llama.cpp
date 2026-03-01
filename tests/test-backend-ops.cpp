@@ -3704,17 +3704,47 @@ struct test_rwkv_wkv7 : public test_case {
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         const int64_t n_tokens = n_seq_tokens * n_seqs;
+        const int64_t n_embd = head_count * head_size;
         ggml_tensor * r   = ggml_new_tensor(ctx, type, 3, std::vector<int64_t>{ head_size, head_count, n_tokens }.data());
-        ggml_tensor * w   = ggml_new_tensor(ctx, type, 3, std::vector<int64_t>{ head_size, head_count, n_tokens }.data());
+        ggml_tensor * w   = ggml_new_tensor(ctx, type, 2, std::vector<int64_t>{ n_embd, n_tokens }.data());
         ggml_tensor * k   = ggml_new_tensor(ctx, type, 3, std::vector<int64_t>{ head_size, head_count, n_tokens }.data());
-        ggml_tensor * v   = ggml_new_tensor(ctx, type, 3, std::vector<int64_t>{ head_size, head_count, n_tokens }.data());
+        ggml_tensor * v   = ggml_new_tensor(ctx, type, 2, std::vector<int64_t>{ n_embd, n_tokens }.data());
         ggml_tensor * a   = ggml_new_tensor(ctx, type, 3, std::vector<int64_t>{ head_size, head_count, n_tokens }.data());
         ggml_tensor * b   = ggml_new_tensor(ctx, type, 3, std::vector<int64_t>{ head_size, head_count, n_tokens }.data());
         // Outputs may become NaN with long seqlen without these normalization
         a = ggml_l2_norm(ctx, a, 1e-7F);
         b = ggml_l2_norm(ctx, b, 1e-7F);
         ggml_tensor * s   = ggml_new_tensor(ctx, type, 2, std::vector<int64_t>{ head_size * head_size * head_count, n_seqs }.data());
-        ggml_tensor * out = ggml_rwkv_wkv7(ctx, r, w, k, v, a, b, s);
+        ggml_tensor * out = ggml_rwkv_wkv7(ctx, r, w, k, v, a, b, s, true);
+        return out;
+    }
+};
+
+// GGML_OP_LERP
+struct test_lerp : public test_case {
+    const ggml_type type_t;
+    const ggml_type type_a;
+    const ggml_type type_b;
+    const std::array<int64_t, 4> ne0;
+    const std::array<int64_t, 4> ne1;
+    const std::array<int64_t, 4> ne2;
+
+    std::string vars() override {
+        return VARS_TO_STR6(type_a, type_b, type_t, ne0, ne1, ne2);
+    }
+
+    test_lerp(ggml_type type_a = GGML_TYPE_F32, ggml_type type_b = GGML_TYPE_F32,
+            ggml_type type_t = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne0 = {10, 10, 1, 1},
+            std::array<int64_t, 4> ne1 = {10, 10, 1, 1},
+            std::array<int64_t, 4> ne2 = {10, 10, 1, 1})
+        : type_a(type_a), type_b(type_b), type_t(type_t), ne0(ne0), ne1(ne1), ne2(ne2) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, type_a, 4, ne0.data());
+        ggml_tensor * b = ggml_new_tensor(ctx, type_b, 4, ne1.data());
+        ggml_tensor * c = ggml_new_tensor(ctx, type_t, 4, ne2.data());
+        ggml_tensor * out = ggml_lerp(ctx, a, b, c);
         return out;
     }
 };
@@ -7669,6 +7699,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_gla(GGML_TYPE_F32, 32, 64, 32, 1));
     test_cases.emplace_back(new test_gla(GGML_TYPE_F32, 32, 64, 32, 4));
     test_cases.emplace_back(new test_gla(GGML_TYPE_F32, 32, 64, 128, 4));
+
+    test_cases.emplace_back(new test_lerp(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_F32, {256, 16, 1, 1}, {256, 16, 1, 1}, {256, 16, 1, 1}));
+    test_cases.emplace_back(new test_lerp(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_F32, {256, 16, 1, 1}, {256, 16, 1, 1}, {256, 16, 1, 6}));
+    test_cases.emplace_back(new test_lerp(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_F16, {256, 16, 1, 1}, {256, 16, 1, 1}, {256, 16, 1, 1}));
+    test_cases.emplace_back(new test_lerp(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_F16, {256, 16, 1, 1}, {256, 16, 1, 1}, {256, 16, 1, 6}));
 
 #if 0
     // > 4GB A matrix. Too slow to be enabled by default.

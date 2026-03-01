@@ -10,6 +10,7 @@ layout(push_constant) uniform Parameters {
     uint T;
     uint C;
     uint H;
+    uint fuse_exp;
 };
 
 layout(binding = 0) readonly buffer RBuf { A_TYPE r[]; };
@@ -45,10 +46,18 @@ void main() {
     const uint start_t = batch_id * n_seq_tokens * C + head_id * head_size + tid;
     const uint end_t = (batch_id + 1) * n_seq_tokens * C + head_id * head_size + tid;
 
+#if FUSE_EXP
+    const float w_scale = -0.6065306597f; // -exp(-0.5)
+#endif
+
     for (uint t = start_t; t < end_t; t += C) {
         barrier();
         _r[tid] = r[t];
+#if FUSE_EXP
+        _w[tid] = exp(w_scale / (1 + exp(-w[t])));
+#else
         _w[tid] = w[t];
+#endif
         _k[tid] = k[t];
         _a[tid] = a[t];
         _b[tid] = b[t];
