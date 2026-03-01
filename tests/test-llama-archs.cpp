@@ -212,14 +212,13 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
 }
 
 static std::vector<float> get_logits(
-        const llm_arch arch, const bool moe, const size_t seed, const std::vector<llama_token> & tokens,
+        struct gguf_context * gguf_ctx, const size_t seed, const std::vector<llama_token> & tokens,
         const std::vector<ggml_backend_dev_t> & devs) {
-    gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe);
+    const llm_arch arch = llm_arch_from_string(gguf_get_val_str(gguf_ctx, gguf_find_key(gguf_ctx, "general.architecture")));
     LLM_KV kv(arch);
-    const uint32_t n_ctx   = gguf_get_val_u32(gguf_ctx.get(), gguf_find_key(gguf_ctx.get(), kv(LLM_KV_CONTEXT_LENGTH).c_str()));
-    const uint32_t n_vocab = gguf_get_val_u32(gguf_ctx.get(), gguf_find_key(gguf_ctx.get(), kv(LLM_KV_VOCAB_SIZE).c_str()));
 
-    std::mt19937 gen(seed);
+    const uint32_t n_ctx   = gguf_get_val_u32(gguf_ctx, gguf_find_key(gguf_ctx, kv(LLM_KV_CONTEXT_LENGTH).c_str()));
+    const uint32_t n_vocab = gguf_get_val_u32(gguf_ctx, gguf_find_key(gguf_ctx, kv(LLM_KV_VOCAB_SIZE).c_str()));
 
     llama_model_params model_params = llama_model_default_params();
     std::vector<ggml_backend_dev_t> devs_copy = devs;
@@ -231,7 +230,7 @@ static std::vector<float> get_logits(
     ctx_params.n_threads_batch = 4;
 
     size_t tmp = seed;
-    llama_model_ptr model(llama_model_init_from_user(gguf_ctx.get(), set_tensor_data, &tmp, model_params));
+    llama_model_ptr model(llama_model_init_from_user(gguf_ctx, set_tensor_data, &tmp, model_params));
     if (!model) {
         throw std::runtime_error("failed to create llama model");
     }
@@ -385,13 +384,15 @@ static int test_backends(const size_t seed, const ggml_log_level log_level) {
             if (!moe && moe_mandatory(arch)) {
                 continue;
             }
-            const std::vector<float> logits_cpu = get_logits(arch, moe, seed, tokens, {});
+            gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe);
+
+            const std::vector<float> logits_cpu = get_logits(gguf_ctx.get(), seed, tokens, {});
             for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
                 ggml_backend_dev_t dev = ggml_backend_dev_get(i);
                 if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
                     continue;
                 }
-                const std::vector<float> logits_dev = get_logits(arch, moe, seed, tokens, {dev});
+                const std::vector<float> logits_dev = get_logits(gguf_ctx.get(), seed, tokens, {dev});
                 const double nmse_val = nmse(logits_cpu.data(), logits_dev.data(), logits_cpu.size());
                 const bool ok = nmse_val <= 1e-6;
                 all_ok = all_ok && ok;
