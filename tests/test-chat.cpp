@@ -3746,6 +3746,62 @@ static void test_template_output_peg_parsers() {
             t.expect.content =R"({"amount": 123.45, "date": "2025-12-03"})";
         });
     }
+
+    {
+        // GigaChat V3
+        auto tmpls = read_templates("models/templates/GigaChat3-10B-A1.8B.jinja");
+
+        // Test basic message
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "Hello, world!\nWhat's up?";
+            t.expect = message_assist;
+        });
+
+        // Test tool call
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "<|message_sep|>\n\nfunction call<|role_sep|>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}";
+            t.params.tools = {special_function_tool};
+
+            t.expect = message_assist_call;
+        });
+
+        // Test tool call with content before
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "Hello, world!\nWhat's up?"
+                      "<|message_sep|>\n\nfunction call<|role_sep|>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}";
+            t.params.tools = {special_function_tool};
+
+            t.expect = message_assist_call_content;
+        });
+    }
+
+    {
+        // GigaChat V3.1
+        auto tmpls = read_templates("models/templates/GigaChat3.1-10B-A1.8B.jinja");
+
+        // Test basic message
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "Hello, world!\nWhat's up?";
+            t.expect = message_assist;
+        });
+
+        // Test tool call
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "<|function_call|>{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}";
+            t.params.tools = {special_function_tool};
+
+            t.expect = message_assist_call;
+        });
+
+        // Test tool call with content before
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "Hello, world!\nWhat's up?"
+                      "<|function_call|>{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}";
+            t.params.tools = {special_function_tool};
+
+            t.expect = message_assist_call_content;
+        });
+    }
 }
 
 static void test_msg_diffs_compute() {
