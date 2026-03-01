@@ -2,9 +2,16 @@
 # Safe to source: does not leak -e/-u into the interactive shell.
 #
 # Build modes:
-#   Release build:  source tsi-pkg-build.sh release
-#   Debug build:    source tsi-pkg-build.sh debug
-#   Default build:  source tsi-pkg-build.sh
+#   Release build:   source tsi-pkg-build.sh release
+#   Debug build:     source tsi-pkg-build.sh debug
+#                   (enables GGML_PERF_DETAIL)
+#   Debug build:     source tsi-pkg-build.sh debug-detail
+#                   (enables GGML_PERF_DETAIL + TMU blob validation)
+#   Default build:   source tsi-pkg-build.sh
+#
+# Optional flags:
+#   git-submodule-pull   : run "git submodule update --recursive --init" (default OFF)
+#   enable_coverage      : adds -DENABLE_COVERAGE=ON
 
 log_error(){ echo "ERROR: $*" >&2; }
 log_info(){  echo "INFO:  $*"; }
@@ -51,18 +58,43 @@ select_arch() {
 }
 
 parse_args() {
-  BUILD_TYPE="${1:-}"
-  MLIR_COMPILER_DIR_IN="${2:-${MLIR_COMPILER_DIR:-}}"
-  TOOLBOX_DIR_IN="${3:-${TOOLBOX_DIR:-}}"
+  # Defaults come from env (same semantics as your backup)
+  BUILD_TYPE=""
+  MLIR_COMPILER_DIR_IN="${MLIR_COMPILER_DIR:-}"
+  TOOLBOX_DIR_IN="${TOOLBOX_DIR:-}"
 
   ENABLE_COVERAGE_FLAG=""
+  GIT_SUBMODULE_PULL=0
+
+  # Robust parsing so: source tsi-pkg-build.sh debug git-submodule-pull
+  # does NOT treat "git-submodule-pull" as MLIR_COMPILER_DIR.
   local a
   for a in "$@"; do
-    if [ "$(tolower "$a")" = "enable_coverage" ]; then
-      ENABLE_COVERAGE_FLAG="-DENABLE_COVERAGE=ON"
-      log_info "enable_coverage detected"
-      break
-    fi
+    case "$(tolower "$a")" in
+      release|debug|debug-detail)
+        # first recognized build-type wins
+        if [ -z "${BUILD_TYPE}" ]; then
+          BUILD_TYPE="$a"
+        fi
+        ;;
+      enable_coverage)
+        ENABLE_COVERAGE_FLAG="-DENABLE_COVERAGE=ON"
+        log_info "enable_coverage detected"
+        ;;
+      git-submodule-pull)
+        GIT_SUBMODULE_PULL=1
+        log_info "git-submodule-pull detected (will update submodules)"
+        ;;
+      *)
+        # If user provides explicit paths, accept them in order:
+        # MLIR_COMPILER_DIR then TOOLBOX_DIR (only if not already set explicitly)
+        if [ -z "${MLIR_COMPILER_DIR_IN}" ]; then
+          MLIR_COMPILER_DIR_IN="$a"
+        elif [ -z "${TOOLBOX_DIR_IN}" ]; then
+          TOOLBOX_DIR_IN="$a"
+        fi
+        ;;
+    esac
   done
 }
 
@@ -104,6 +136,17 @@ setup_python() {
   log_info "creating python virtual env"
   __OLD_VIRTUAL_ENV="${VIRTUAL_ENV:-}"
 
+  # If venv already exists, just activate and return
+  if [ -d "blob-creation" ] && [ -f "blob-creation/bin/activate" ]; then
+    log_info "blob-creation virtual env already exists; activating"
+    # shellcheck disable=SC1091
+    run bash -c 'source blob-creation/bin/activate && python -V >/dev/null' || return 1
+    # shellcheck disable=SC1091
+    source blob-creation/bin/activate || return 1
+    return 0
+  fi
+
+  # Otherwise create it and install deps
   run /proj/local/Python-3.11.12/bin/python3 -m venv blob-creation || return 1
   # shellcheck disable=SC1091
   run bash -c 'source blob-creation/bin/activate && python -V >/dev/null' || return 1
@@ -141,13 +184,20 @@ build_posix() {
   local common="-DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix -DGGML_NATIVE=ON -DGGML_AMX_TILE=OFF -DGGML_AMX_INT8=OFF -DGGML_AMX_BF16=OFF -DGGML_AVX512_BF16=OFF -DGGML_AVX_VNNI=OFF"
   local cflags_base="-DGGML_TARGET_POSIX -DGGML_TSAVORITE -mno-amx-tile -mno-amx-int8 -mno-amx-bf16 -mno-avx512bf16 -mno-avxvnni"
   local perf="-DGGML_PERF"
+  local tmu_debug=""
+
   [ "$bt" = "release" ] && perf="-DGGML_PERF_RELEASE"
-  [ "$bt" = "debug" ]   && perf="-DGGML_PERF_DETAIL"
+  [ "$bt" = "debug" ] && perf="-DGGML_PERF_DETAIL"
+  if [ "$bt" = "debug-detail" ]; then
+    perf="-DGGML_PERF_DETAIL"
+    tmu_debug="-DTMU_DEBUG_VALIDATE"
+    log_info "TMU_DEBUG_VALIDATE ENABLED (debug-detail build)"
+  fi
 
   run cmake -B build-posix ${common} \
     -DCMAKE_C_COMPILER="${CC}" -DCMAKE_CXX_COMPILER="${CXX}" \
-    -DCMAKE_C_FLAGS="${perf} ${cflags_base}" \
-    -DCMAKE_CXX_FLAGS="${perf} ${cflags_base}" \
+    -DCMAKE_C_FLAGS="${perf} ${tmu_debug} ${cflags_base}" \
+    -DCMAKE_CXX_FLAGS="${perf} ${tmu_debug} ${cflags_base}" \
     ${ENABLE_COVERAGE_FLAG} || return 1
 
   run cmake --build build-posix --config Release || return 1
@@ -179,7 +229,8 @@ build_fpga() {
   local ARM_TOOLCHAIN_FILE="${TOOLBOX_DIR}/lib/cmake/toolchains/arm.cmake"
   local perf="-DGGML_PERF"
   [ "$bt" = "release" ] && perf="-DGGML_PERF_RELEASE"
-  [ "$bt" = "debug" ]   && perf="-DGGML_PERF_DETAIL"
+  [ "$bt" = "debug" ] && perf="-DGGML_PERF_DETAIL"
+  [ "$bt" = "debug-detail" ] && perf="-DGGML_PERF_DETAIL"
 
   run cmake -B build-fpga \
     -DCMAKE_TOOLCHAIN_FILE="${ARM_TOOLCHAIN_FILE}" \
@@ -246,7 +297,12 @@ main() {
   parse_args "$@"
   resolve_paths "$arch" || return $?
 
-  run git submodule update --recursive --init || return 1
+  # Optional submodule update (default OFF)
+  if [ "${GIT_SUBMODULE_PULL}" -eq 1 ]; then
+    run git submodule update --recursive --init || return 1
+  else
+    log_info "Skipping git submodule update (default). Use git-submodule-pull to enable."
+  fi
 
   cd ggml-tsi-kernel/ || return 1
   setup_toolchain || return 1
