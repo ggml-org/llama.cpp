@@ -367,5 +367,6 @@ server_tokens format_prompt_rerank(
         const struct llama_model * model,
         const struct llama_vocab * vocab,
         mtmd_context * mctx,
+        const std::string & instruction,
         const std::string & query,
         const std::string & doc);

@@ -3803,6 +3803,15 @@ void server_routes::init_routes() {
             res->error(format_error_response("\"query\" must be provided", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
+        
+        json instruction = "";
+        if (body.count("instruction") == 1) {
+            instruction = body.at("instruction");
+            if (!instruction.is_string()) {
+                res->error(format_error_response("\"instruction\" must be a string", ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
+        }
 
         std::vector<std::string> documents = json_value(body, "documents",
                                              json_value(body, "texts", std::vector<std::string>()));
@@ -3820,7 +3829,7 @@ void server_routes::init_routes() {
             std::vector<server_task> tasks;
             tasks.reserve(documents.size());
             for (size_t i = 0; i < documents.size(); i++) {
-                auto tmp = format_prompt_rerank(ctx_server.model, ctx_server.vocab, ctx_server.mctx, query, documents[i]);
+                auto tmp = format_prompt_rerank(ctx_server.model, ctx_server.vocab, ctx_server.mctx, instruction, query, documents[i]);
                 server_task task = server_task(SERVER_TASK_TYPE_RERANK);
                 task.id     = rd.get_new_id();
                 task.tokens = std::move(tmp);
