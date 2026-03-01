@@ -230,6 +230,34 @@ void llm_graph_input_mean::set_input(const llama_ubatch * ubatch) {
     }
 }
 
+void llm_graph_input_max::set_input(const llama_ubatch * ubatch) {
+    if (cparams.embeddings && cparams.pooling_type == LLAMA_POOLING_TYPE_MAX) {
+        const int64_t n_tokens     = ubatch->n_tokens;
+        const int64_t n_seq_tokens = ubatch->n_seq_tokens;
+        const int64_t n_seqs_unq   = ubatch->n_seqs_unq;
+
+        GGML_ASSERT(mask);
+        GGML_ASSERT(ggml_backend_buffer_is_host(mask->buffer));
+
+        float * data = (float *) mask->data;
+
+        for (int64_t i = 0; i < n_tokens * n_seqs_unq; i++) {
+            data[i] = -INFINITY;
+        }
+
+        for (int i = 0; i < n_tokens; i += n_seq_tokens) {
+            for (int s = 0; s < ubatch->n_seq_id[i]; ++s) {
+                const llama_seq_id seq_id  = ubatch->seq_id[i][s];
+                const int32_t      seq_idx = ubatch->seq_idx[seq_id];
+
+                for (int j = 0; j < n_seq_tokens; ++j) {
+                    data[seq_idx*n_tokens + i + j] = 0.0f;
+                }
+            }
+        }
+    }
+}
+
 void llm_graph_input_cls::set_input(const llama_ubatch * ubatch) {
     const int64_t n_tokens     = ubatch->n_tokens;
     const int64_t n_seqs_unq   = ubatch->n_seqs_unq;
@@ -1647,6 +1675,19 @@ ggml_tensor * llm_graph_context::build_inp_mean() const {
     return cur;
 }
 
+ggml_tensor * llm_graph_context::build_inp_max() const {
+    auto inp = std::make_unique<llm_graph_input_max>(cparams);
+
+    auto & cur = inp->mask;
+
+    cur = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_tokens, ubatch.n_seqs_unq);
+    ggml_set_input(cur);
+
+    res->add_input(std::move(inp));
+
+    return cur;
+}
+
 ggml_tensor * llm_graph_context::build_inp_cls() const {
     auto inp = std::make_unique<llm_graph_input_cls>(cparams, arch);
 
@@ -2556,6 +2597,29 @@ void llm_graph_context::build_pooling(
                 if (arch == LLM_ARCH_QWEN3) {
                     cur = ggml_soft_max(ctx0, cur);
                 }
+            } break;
+        case LLAMA_POOLING_TYPE_MAX:
+            {
+                // [n_embd, n_tokens] -> [n_embd, n_tokens, n_seqs_unq]
+                ggml_tensor * inp_3d = ggml_reshape_3d(ctx0, inp, n_embd, n_tokens, 1);
+                ggml_tensor * inp_expanded = ggml_repeat(ctx0, inp_3d,
+                    ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_embd, n_tokens, ubatch.n_seqs_unq));
+
+                ggml_tensor * inp_max_mask = build_inp_max();
+                // [n_tokens, n_seqs_unq] -> reshape to [1, n_tokens, n_seqs_unq]
+                ggml_tensor * mask_3d = ggml_reshape_3d(ctx0, inp_max_mask, 1, n_tokens, ubatch.n_seqs_unq);
+
+                // broadcast
+                ggml_tensor * inp_masked = ggml_add(ctx0, inp_expanded, mask_3d);
+
+                // Permute to [n_tokens, n_embd, n_seqs_unq, 1] for pooling along dim 0
+                ggml_tensor * inp_perm = ggml_cont(ctx0, ggml_permute(ctx0, inp_masked, 1, 0, 2, 3));
+
+                // Global max pool over the full token dimension -> [1, n_embd, n_seqs_unq, 1]
+                cur = ggml_pool_2d(ctx0, inp_perm, GGML_OP_POOL_MAX, n_tokens, 1, n_tokens, 1, 0, 0);
+
+                // Reshape to [n_embd, n_seqs_unq]
+                cur = ggml_reshape_2d(ctx0, cur, n_embd, ubatch.n_seqs_unq);
             } break;
         default:
             {
