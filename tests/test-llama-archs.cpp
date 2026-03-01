@@ -62,6 +62,17 @@ static void usage(char ** argv) {
     printf("Usage: %s [--save dir]\n", argv[0]);
 }
 
+static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32_t n_vocab, const size_t seed){
+    std::mt19937 gen(seed);
+    std::uniform_int_distribution<> dis(0, n_vocab - 1);
+    std::vector<llama_token> ret;
+    ret.reserve(n_tokens);
+    for (uint32_t i = 0; i < n_tokens; i++) {
+        ret.push_back(dis(gen));
+    }
+    return ret;
+}
+
 static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     gguf_context_ptr ret(gguf_init_empty());
     llama_model_saver ms(arch, ret.get());
@@ -348,15 +359,7 @@ static int test_backends(const size_t seed, const ggml_log_level log_level) {
         ud->original_logger.callback(level_eff, text, ud->original_logger.user_data);
     }, &ud);
 
-    const uint32_t n_ctx   = 128;
-    const uint32_t n_vocab = 128;
-    std::mt19937 gen(seed);
-    std::uniform_int_distribution<> dis(0, n_vocab - 1);
-    std::vector<llama_token> tokens;
-    tokens.reserve(n_ctx);
-    for (uint32_t i = 0; i < n_ctx; i++) {
-        tokens.push_back(dis(gen));
-    }
+    const std::vector<llama_token> tokens = get_tokens(128, 128, seed);
 
     bool all_ok = true;
     common_log_flush(common_log_main());
