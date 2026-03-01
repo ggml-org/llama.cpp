@@ -11,7 +11,6 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <future>
 #include <vector>
 
@@ -127,8 +126,8 @@ int main() {
     }
 
     // Throughput benchmark across thread counts
-    int thread_counts[] = { 1, 2, 4, 8, 12, 16, 20 };
-    int n_iters         = 50;
+    const int thread_counts[] = { 1, 2, 4, 8, 12, 16, 20 };
+    const int n_iters         = 50;
 
     printf("%-10s  %-12s  %-12s  %-12s  %-15s\n", "Threads", "Matmul(ms)", "Expert(ms)", "GFLOPS", "vs PCIe");
     printf("%-10s  %-12s  %-12s  %-12s  %-15s\n", "-------", "----------", "----------", "------", "-------");
