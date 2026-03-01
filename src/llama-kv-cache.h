@@ -218,6 +218,27 @@ public:
     // Get block table tensor for paged attention (creates if needed)
     ggml_tensor * get_block_table(ggml_context * ctx, uint32_t n_seq, uint32_t n_blocks_per_seq);
 
+    // ========================================
+    // Prefix Caching API (Phase 2A)
+    // ========================================
+
+    // Enable/disable prefix caching
+    void set_prefix_caching(bool enable);
+    bool get_prefix_caching() const;
+
+    // Try to reuse prefix blocks for a sequence
+    // Returns number of blocks reused (0 if no match or disabled)
+    // This should be called before processing new tokens
+    size_t try_reuse_prefix(llama_seq_id seq_id, const llama_token * tokens, size_t n_tokens);
+
+    // Register prefix blocks after they are filled
+    // This should be called after prefill completes
+    void register_prefix_blocks(llama_seq_id seq_id, const llama_token * tokens, size_t n_tokens);
+
+    // Copy-on-Write a block if needed (before writing to shared block)
+    // Returns true if CoW was performed, false if no copy needed
+    bool cow_block_if_needed(llama_seq_id seq_id, int32_t logical_block);
+
 private:
     const llama_model & model;
     const llama_hparams & hparams;

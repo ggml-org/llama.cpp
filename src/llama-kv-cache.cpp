@@ -2653,3 +2653,136 @@ const llama_block_pool * llama_kv_cache_context::get_block_pool() const {
 ggml_tensor * llama_kv_cache_context::get_block_table() const {
     return kv ? kv->get_block_table_gpu() : nullptr;
 }
+
+// ========================================
+// Prefix Caching Implementation (Phase 2A)
+// ========================================
+
+void llama_kv_cache::set_prefix_caching(bool enable) {
+    if (!use_paged_attention) {
+        LLAMA_LOG_WARN("%s: prefix caching requires paged attention to be enabled\n", __func__);
+        return;
+    }
+
+    if (block_pool) {
+        block_pool->set_prefix_caching(enable);
+    }
+}
+
+bool llama_kv_cache::get_prefix_caching() const {
+    return block_pool ? block_pool->get_prefix_caching() : false;
+}
+
+size_t llama_kv_cache::try_reuse_prefix(llama_seq_id seq_id, const llama_token * tokens, size_t n_tokens) {
+    if (!use_paged_attention || !block_pool || !block_pool->get_prefix_caching()) {
+        return 0;
+    }
+
+    if (tokens == nullptr || n_tokens == 0) {
+        return 0;
+    }
+
+    const uint32_t block_size = block_pool->block_size;
+    size_t blocks_reused = 0;
+
+    // Try to find matching prefix blocks
+    for (size_t offset = 0; offset + block_size <= n_tokens; offset += block_size) {
+        // Compute hash for this block's tokens
+        token_hash_t hash = compute_token_hash(tokens + offset, block_size);
+
+        // Try to find existing block with same hash
+        int32_t existing_block = block_pool->find_block_by_hash(hash);
+
+        if (existing_block >= 0) {
+            // Found matching block, share it with this sequence
+            int32_t logical_block = offset / block_size;
+
+            if (block_pool->share_block(existing_block, seq_id, logical_block)) {
+                blocks_reused++;
+
+                // Update GPU block table
+                update_block_table_gpu(seq_id, logical_block, existing_block);
+
+                LLAMA_LOG_DEBUG("%s: reused block %d for seq %d logical_block %d (hash=%016llx)\n",
+                    __func__, existing_block, seq_id, logical_block, (unsigned long long)hash);
+            } else {
+                // Failed to share, stop reusing
+                break;
+            }
+        } else {
+            // No matching block, stop reusing
+            break;
+        }
+    }
+
+    if (blocks_reused > 0) {
+        LLAMA_LOG_INFO("%s: reused %zu prefix blocks for seq %d (%zu tokens)\n",
+            __func__, blocks_reused, seq_id, blocks_reused * block_size);
+    }
+
+    return blocks_reused;
+}
+
+void llama_kv_cache::register_prefix_blocks(llama_seq_id seq_id, const llama_token * tokens, size_t n_tokens) {
+    if (!use_paged_attention || !block_pool || !block_pool->get_prefix_caching()) {
+        return;
+    }
+
+    if (tokens == nullptr || n_tokens == 0) {
+        return;
+    }
+
+    const uint32_t block_size = block_pool->block_size;
+
+    // Register hashes for newly filled blocks
+    for (size_t offset = 0; offset + block_size <= n_tokens; offset += block_size) {
+        int32_t logical_block = offset / block_size;
+
+        // Get physical block for this logical block
+        int32_t physical_block = block_pool->get_physical_block(seq_id, logical_block);
+
+        if (physical_block >= 0) {
+            // Compute and register hash
+            token_hash_t hash = compute_token_hash(tokens + offset, block_size);
+            block_pool->register_block_hash(physical_block, hash);
+
+            LLAMA_LOG_DEBUG("%s: registered block %d for seq %d logical_block %d (hash=%016llx)\n",
+                __func__, physical_block, seq_id, logical_block, (unsigned long long)hash);
+        }
+    }
+}
+
+bool llama_kv_cache::cow_block_if_needed(llama_seq_id seq_id, int32_t logical_block) {
+    if (!use_paged_attention || !block_pool) {
+        return false;
+    }
+
+    // Get current physical block
+    int32_t physical_block = block_pool->get_physical_block(seq_id, logical_block);
+    if (physical_block < 0) {
+        return false;
+    }
+
+    // Try CoW - if ref_count > 1, will allocate new block
+    int32_t new_block = block_pool->cow_block(physical_block, seq_id, logical_block);
+
+    if (new_block < 0) {
+        // Allocation failed
+        LLAMA_LOG_WARN("%s: CoW allocation failed for seq %d logical_block %d\n",
+            __func__, seq_id, logical_block);
+        return false;
+    }
+
+    if (new_block != physical_block) {
+        // CoW was performed, update block table
+        update_block_table_gpu(seq_id, logical_block, new_block);
+
+        LLAMA_LOG_DEBUG("%s: CoW seq %d logical_block %d: old=%d -> new=%d\n",
+            __func__, seq_id, logical_block, physical_block, new_block);
+
+        return true;
+    }
+
+    // No copy needed (exclusive ownership)
+    return false;
+}

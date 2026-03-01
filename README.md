@@ -280,11 +280,16 @@ Block Table:
 - [x] Flash attention support
 - [x] Performance validation
 
-### Phase 2A: Prefix Caching (Copy-on-Write) 🎯 NEXT
-- [ ] Block sharing for common prefixes
-- [ ] Copy-on-Write for diverging suffix
-- [ ] Agent/Tool-chain 场景 TTFT 大幅下降
-- [ ] 参考: vLLM 技术报告 "共享前缀直接复用物理块"
+### Phase 2A: Prefix Caching (Copy-on-Write) 🚧 IN PROGRESS
+- [x] Token hash infrastructure (FNV-1a 64-bit)
+- [x] Block metadata extension (token_hash, is_prefix_block)
+- [x] Hash index for block lookup (hash_to_block)
+- [x] Block sharing API (share_block)
+- [x] Copy-on-Write API (cow_block)
+- [x] KV cache integration (try_reuse_prefix, register_prefix_blocks)
+- [ ] Integration testing with Agent/Tool-chain scenarios
+- [ ] TTFT benchmark validation
+- 📄 See: [docs/phase2a-prefix-caching-design.md](docs/phase2a-prefix-caching-design.md)
 
 ### Phase 2B: Continuous Batching + 多序列调度
 - [ ] 并发序列调度器

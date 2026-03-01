@@ -8,9 +8,17 @@
 #include <vector>
 #include <set>
 #include <map>
+#include <unordered_map>
 
 struct llama_context;
 struct llama_hparams;
+
+// Token hash type for prefix caching
+using token_hash_t = uint64_t;
+
+// Compute FNV-1a 64-bit hash for a token sequence
+// Used for prefix block identification
+token_hash_t compute_token_hash(const llama_token * tokens, size_t n_tokens);
 
 // Block pool for paged attention
 // Manages a pool of fixed-size blocks that can be dynamically allocated to sequences
@@ -19,8 +27,12 @@ struct llama_block_pool {
     struct block_info {
         int32_t ref_count = 0;     // Reference count for Copy-on-Write
         bool is_free = true;       // Whether block is available
-        int32_t seq_id = -1;       // Sequence ID that owns this block (-1 if free)
+        int32_t seq_id = -1;       // Sequence ID that owns this block (-1 if free or shared)
         int32_t logical_block = -1; // Logical block index within the sequence
+
+        // Prefix caching fields
+        token_hash_t token_hash = 0; // Hash of tokens in this block (for prefix reuse)
+        bool is_prefix_block = false; // True if this block is a shared prefix block
     };
 
     // Block table entry per sequence
@@ -49,6 +61,13 @@ struct llama_block_pool {
 
     // Block tables per sequence
     std::map<llama_seq_id, block_table_entry> block_tables;
+
+    // Prefix caching: Hash index for block reuse
+    // Maps token hash to physical block ID
+    std::unordered_map<token_hash_t, int32_t> hash_to_block;
+
+    // Prefix caching enable flag
+    bool prefix_caching_enabled = false;
 
     // GGML context for tensor management
     ggml_context * ctx = nullptr;
@@ -93,4 +112,35 @@ struct llama_block_pool {
 
     // Defragmentation (compact blocks to reduce fragmentation)
     void defragment();
+
+    // ========================================
+    // Prefix Caching API (Phase 2A)
+    // ========================================
+
+    // Enable/disable prefix caching
+    void set_prefix_caching(bool enable) { prefix_caching_enabled = enable; }
+    bool get_prefix_caching() const { return prefix_caching_enabled; }
+
+    // Find an existing block by token hash (for prefix reuse)
+    // Returns block ID on success, -1 if not found
+    int32_t find_block_by_hash(token_hash_t hash) const;
+
+    // Share an existing block with another sequence
+    // Increments ref_count, does not allocate new physical block
+    // Returns true on success, false if block_id invalid
+    bool share_block(int32_t block_id, llama_seq_id seq_id, int32_t logical_block);
+
+    // Copy-on-Write: copy block if ref_count > 1
+    // Returns new block ID if copied, same block_id if no copy needed
+    // Returns -1 on allocation failure
+    int32_t cow_block(int32_t block_id, llama_seq_id new_seq_id, int32_t new_logical_block);
+
+    // Register a block's token hash (called when block is filled)
+    void register_block_hash(int32_t block_id, token_hash_t hash);
+
+    // Get block's token hash
+    token_hash_t get_block_hash(int32_t block_id) const;
+
+    // Clear all prefix caching state (keep block data, remove sharing)
+    void clear_prefix_caching();
 };
