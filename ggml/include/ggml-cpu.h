@@ -55,6 +55,10 @@ extern "C" {
     GGML_BACKEND_API float   ggml_get_f32_nd(const struct ggml_tensor * tensor, int i0, int i1, int i2, int i3);
     GGML_BACKEND_API void    ggml_set_f32_nd(const struct ggml_tensor * tensor, int i0, int i1, int i2, int i3, float value);
 
+    // parallel repack threads
+    GGML_BACKEND_API void    ggml_cpu_set_repack_n_threads(int n_threads);
+    GGML_BACKEND_API int     ggml_cpu_get_repack_n_threads(void);
+
     GGML_BACKEND_API struct ggml_threadpool *      ggml_threadpool_new           (struct ggml_threadpool_params  * params);
     GGML_BACKEND_API void                          ggml_threadpool_free          (struct ggml_threadpool * threadpool);
     GGML_BACKEND_API int                           ggml_threadpool_get_n_threads (struct ggml_threadpool * threadpool);

@@ -1082,12 +1082,13 @@ struct cmd_params_instance {
         if (!devices.empty()) {
             mparams.devices = const_cast<ggml_backend_dev_t *>(devices.data());
         }
-        mparams.split_mode    = split_mode;
-        mparams.main_gpu      = main_gpu;
-        mparams.tensor_split  = tensor_split.data();
-        mparams.use_mmap      = use_mmap;
+        mparams.split_mode   = split_mode;
+        mparams.main_gpu     = main_gpu;
+        mparams.tensor_split = tensor_split.data();
+        mparams.use_mmap     = use_mmap;
         mparams.use_direct_io = use_direct_io;
-        mparams.no_host       = no_host;
+        mparams.no_host      = no_host;
+        mparams.repack_n_threads = n_threads;
 
         if (n_cpu_moe <= 0) {
             if (tensor_buft_overrides.empty()) {
