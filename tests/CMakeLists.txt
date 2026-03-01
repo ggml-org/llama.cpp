@@ -402,6 +402,16 @@ target_include_directories(test-edge-cases PRIVATE
 install(TARGETS test-edge-cases RUNTIME)
 add_test(NAME test-edge-cases COMMAND $<TARGET_FILE:test-edge-cases>)
 
+# test-mxfp4-cpu-bench: MXFP4 CPU vec_dot throughput benchmark
+# Validates CPU-primary expert routing assumption for MoE inference
+# Pure CPU test (no SYCL required), links against ggml for vec_dot
+add_executable(test-mxfp4-cpu-bench test-mxfp4-cpu-bench.cpp)
+target_link_libraries(test-mxfp4-cpu-bench PRIVATE ggml)
+target_include_directories(test-mxfp4-cpu-bench PRIVATE
+    ${PROJECT_SOURCE_DIR}/ggml/include)
+install(TARGETS test-mxfp4-cpu-bench RUNTIME)
+add_test(NAME test-mxfp4-cpu-bench COMMAND $<TARGET_FILE:test-mxfp4-cpu-bench>)
+
 # test-scalar-fallback: unit tests for scalar fallback path in unified kernel
 # Tests should_use_scalar_fallback, is_partial_tile, reference matmul
 # Requires SYCL headers for unified-kernel.hpp types (sycl::half, etc.)
