@@ -411,16 +411,32 @@ struct gguf_context * gguf_init_from_file_impl(FILE * file, struct gguf_init_par
             return nullptr;
         }
 
-        for (uint32_t i = 0; i < magic.size(); i++) {
-            if (magic[i] != GGUF_MAGIC[i]) {
-                char c0 = isprint(magic[0]) ? magic[0] : '?';
-                char c1 = isprint(magic[1]) ? magic[1] : '?';
-                char c2 = isprint(magic[2]) ? magic[2] : '?';
-                char c3 = isprint(magic[3]) ? magic[3] : '?';
-                GGML_LOG_ERROR("%s: invalid magic characters: '%c%c%c%c', expected 'GGUF'\n", __func__, c0, c1, c2, c3);
+        const bool is_le_magic = memcmp(magic.data(), GGUF_MAGIC,    4) == 0;
+        const bool is_be_magic = memcmp(magic.data(), GGUF_MAGIC_BE, 4) == 0;
+
+        if (!is_le_magic && !is_be_magic) {
+            char c0 = isprint(magic[0]) ? magic[0] : '?';
+            char c1 = isprint(magic[1]) ? magic[1] : '?';
+            char c2 = isprint(magic[2]) ? magic[2] : '?';
+            char c3 = isprint(magic[3]) ? magic[3] : '?';
+            GGML_LOG_ERROR("%s: invalid magic characters: '%c%c%c%c', expected 'GGUF' or 'FUGG'\n", __func__, c0, c1, c2, c3);
+            gguf_free(ctx);
+            return nullptr;
+        }
+
+        if (is_be_magic) {
+            // FUGG magic means the file contains big-endian data.
+            // Check if host can read it natively.
+            const uint32_t endian_check = 1;
+            const bool host_is_le = (*(const uint8_t *)&endian_check == 1);
+
+            if (host_is_le) {
+                GGML_LOG_ERROR("%s: big-endian GGUF file (magic 'FUGG') cannot be loaded on a little-endian host\n", __func__);
+                GGML_LOG_ERROR("%s: convert it first: python -m gguf.scripts.gguf_convert_endian <file> little\n", __func__);
                 gguf_free(ctx);
                 return nullptr;
             }
+            // Host is big-endian and file is big-endian: proceed normally.
         }
     }
 
@@ -435,14 +451,16 @@ struct gguf_context * gguf_init_from_file_impl(FILE * file, struct gguf_init_par
         }
 
         /*
-         * bit layout is different when reading non-native endian models.
-         * assuming that the GGUF version is 3, the non-native endian model
-         * would read it as 0x30000000. we can use the AND operation against
-         * the last 4 hexadecimal digits to check if the model is the same
-         * endianness as the host system.
+         * Endianness mismatch detection via version field (fallback for legacy files).
+         * New files use FUGG magic for big-endian detection (handled above).
+         * Legacy big-endian files still use GGUF magic, so we detect them here:
+         * if the GGUF version is 3, a non-native endian file would read as
+         * 0x03000000, and (0x03000000 & 0x0000FFFF) == 0.
         */
         if (ok && (ctx->version & 0x0000FFFF) == 0x00000000) {
-            GGML_LOG_ERROR("%s: failed to load model: this GGUF file version %" PRIu32 " is extremely large, is there a mismatch between the host and model endianness?\n", __func__, ctx->version);
+            GGML_LOG_ERROR("%s: endianness mismatch: this GGUF file was created for a different byte order\n", __func__);
+            GGML_LOG_ERROR("%s: convert it first: python -m gguf.scripts.gguf_convert_endian <file> %s\n",
+                __func__, "little");
             ok = false;
         }
 
@@ -1469,11 +1487,15 @@ static void gguf_write_out(const struct gguf_context * ctx, writer_t & gw, bool 
     const int64_t n_kv      = gguf_get_n_kv(ctx);
     const int64_t n_tensors = gguf_get_n_tensors(ctx);
 
-    // write header
-    gw.write(GGUF_MAGIC[0]);
-    gw.write(GGUF_MAGIC[1]);
-    gw.write(GGUF_MAGIC[2]);
-    gw.write(GGUF_MAGIC[3]);
+    // write header - use FUGG magic on big-endian hosts so readers can detect endianness
+    {
+        const uint32_t endian_check = 1;
+        const char * magic = (*(const uint8_t *)&endian_check == 1) ? GGUF_MAGIC : GGUF_MAGIC_BE;
+        gw.write(magic[0]);
+        gw.write(magic[1]);
+        gw.write(magic[2]);
+        gw.write(magic[3]);
+    }
     gw.write(ctx->version);
     gw.write(n_tensors);
     gw.write(n_kv);

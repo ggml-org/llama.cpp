@@ -38,7 +38,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define GGUF_MAGIC   "GGUF"
+#define GGUF_MAGIC    "GGUF"
+#define GGUF_MAGIC_BE "FUGG"
 #define GGUF_VERSION 3
 
 #define GGUF_KEY_GENERAL_ALIGNMENT "general.alignment"

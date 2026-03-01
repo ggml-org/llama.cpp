@@ -173,7 +173,8 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
     uint32_t alignment = GGUF_DEFAULT_ALIGNMENT;
 
     if (hft == HANDCRAFTED_HEADER_BAD_MAGIC) {
-        const char bad_magic[4] = {'F', 'U', 'G', 'G'};
+        // Use truly invalid magic (not "FUGG" which is now valid big-endian magic)
+        const char bad_magic[4] = {'X', 'X', 'X', 'X'};
         helper_write(file, bad_magic, sizeof(bad_magic));
     } else {
         helper_write(file, GGUF_MAGIC, 4);

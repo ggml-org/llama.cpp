@@ -101,6 +101,16 @@ def convert_byteorder(reader: gguf.GGUFReader, args: argparse.Namespace) -> None
     if response != "YES":
         logger.warning("You didn't enter YES. Okay then, see ya!")
         sys.exit(0)
+    # Update the magic bytes to reflect the new endianness.
+    # GGUF magic ("GGUF" = 0x46554747) indicates little-endian data.
+    # FUGG magic ("FUGG" = 0x47475546) indicates big-endian data.
+    logger.info(f"* Updating magic for {order} endian")
+    magic_field = reader.fields.get('GGUF.version')
+    if magic_field is not None:
+        # The magic is stored at offset 0, 4 bytes before the version field
+        new_magic = gguf.constants.GGUF_MAGIC_BE if order == 'BIG' else gguf.constants.GGUF_MAGIC
+        reader.data[0:4] = np.frombuffer(new_magic.to_bytes(4, byteorder='little'), dtype=np.uint8)
+
     logger.info(f"* Converting fields ({len(reader.fields)})")
     for idx, field in enumerate(reader.fields.values()):
         logger.info(f"- {idx:4}: Converting field {repr(field.name)}, part count: {len(field.parts)}")

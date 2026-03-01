@@ -19,6 +19,7 @@ import numpy as np
 from .constants import (
     GGUF_DEFAULT_ALIGNMENT,
     GGUF_MAGIC,
+    GGUF_MAGIC_BE,
     GGUF_VERSION,
     GGMLQuantizationType,
     GGUFEndian,
@@ -224,7 +225,8 @@ class GGUFWriter:
         self.add_shard_kv_data()
 
         for fout, tensors, kv_data in zip(self.fout, self.tensors, self.kv_data):
-            fout.write(self._pack("<I", GGUF_MAGIC, skip_pack_prefix = True))
+            magic = GGUF_MAGIC_BE if self.endianess == GGUFEndian.BIG else GGUF_MAGIC
+            fout.write(self._pack("<I", magic, skip_pack_prefix = True))
             fout.write(self._pack("I", GGUF_VERSION))
             fout.write(self._pack("Q", len(tensors)))
             fout.write(self._pack("Q", len(kv_data)))

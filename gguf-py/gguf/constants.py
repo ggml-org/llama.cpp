@@ -7,7 +7,8 @@ from typing import Any
 # constants
 #
 
-GGUF_MAGIC             = 0x46554747  # "GGUF"
+GGUF_MAGIC             = 0x46554747  # "GGUF" (little-endian)
+GGUF_MAGIC_BE          = 0x47475546  # "FUGG" (big-endian)
 GGUF_VERSION           = 3
 GGUF_DEFAULT_ALIGNMENT = 32
 GGML_QUANT_VERSION     = 2  # GGML_QNT_VERSION from ggml.h

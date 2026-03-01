@@ -25,6 +25,7 @@ from gguf.constants import (
     GGML_QUANT_SIZES,
     GGUF_DEFAULT_ALIGNMENT,
     GGUF_MAGIC,
+    GGUF_MAGIC_BE,
     GGUF_VERSION,
     GGMLQuantizationType,
     GGUFValueType,
@@ -133,17 +134,28 @@ class GGUFReader:
         self.data = np.memmap(path, mode = mode)
         offs = 0
 
-        # Check for GGUF magic
-        if self._get(offs, np.uint32, override_order = '<')[0] != GGUF_MAGIC:
+        # Check for GGUF magic - accept both LE ("GGUF") and BE ("FUGG") magic
+        magic_val = self._get(offs, np.uint32, override_order = '<')[0]
+        if magic_val == GGUF_MAGIC:
+            # Little-endian file
+            pass
+        elif magic_val == GGUF_MAGIC_BE:
+            # Big-endian file (FUGG magic) - set byte order to swapped if host is LE
+            if sys.byteorder == 'little':
+                self.byte_order = 'S'
+        else:
             raise ValueError('GGUF magic invalid')
         offs += 4
 
         # Check GGUF version
         temp_version = self._get(offs, np.uint32)
-        if temp_version[0] & 65535 == 0:
-            # If we get 0 here that means it's (probably) a GGUF file created for
-            # the opposite byte order of the machine this script is running on.
+        if self.byte_order == 'I' and temp_version[0] & 65535 == 0:
+            # Legacy fallback: file has GGUF magic but version looks byte-swapped.
+            # This handles old big-endian files created before FUGG magic support.
             self.byte_order = 'S'
+            temp_version = temp_version.view(temp_version.dtype.newbyteorder(self.byte_order))
+        elif self.byte_order == 'S':
+            # Already detected as swapped via FUGG magic - fix version byte order
             temp_version = temp_version.view(temp_version.dtype.newbyteorder(self.byte_order))
         version = temp_version[0]
         if version not in READER_SUPPORTED_VERSIONS:
