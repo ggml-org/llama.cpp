@@ -114,7 +114,7 @@ struct quantize_thread_pool {
     }
 
     // distribute `fn(int64_t 0) ... fn(int64_t n-1)` across all pool threads
-    // and the calling thread.
+    // and the calling thread
     // blocks until every item has been processed.
     void distribute(int64_t n, std::function<void(int64_t)> fn) {
         if (n <= 0) {
@@ -205,7 +205,7 @@ struct quantize_state_impl {
 
     // flags
     bool has_imatrix         = false; // do we have imatrix data?
-    bool has_tied_embeddings = false; // used to figure out if a model shares tok_embd with the output weight
+    bool has_tied_embeddings = false; // token_embd shares weights with output.weight (transposed)
 
     // tensor type override patterns
     std::vector<std::pair<std::regex, ggml_type>> tensor_type_patterns;
@@ -572,7 +572,7 @@ static ggml_type llama_tensor_get_type_impl(
 
     // for arches that share the same tensor between the token embeddings and the output, we quantize the token embeddings
     // with the quantization of the output tensor
-    if (category == tensor_category::OUTPUT || (!qs->has_tied_embeddings && category == tensor_category::TOKEN_EMBD)) {
+    if (category == tensor_category::OUTPUT || (qs->has_tied_embeddings && category == tensor_category::TOKEN_EMBD)) {
         if (qs->params->output_tensor_type < GGML_TYPE_COUNT) {
             new_type = qs->params->output_tensor_type;
         } else {
@@ -844,129 +844,13 @@ static ggml_type llama_tensor_get_type(
 }
 
 //
-// dequantization
+// quantization
 //
 
 static constexpr int64_t MIN_CHUNK_SIZE = 32 * 512;
 
-// low-level: dequantize a contiguous slab of elements (src -> f32).
-// parallelizes across chunks within the slab using qs->pool.
-static void llama_tensor_dequantize_impl(
-              ggml_type   src_type,
-             const void * src_data,
-                  float * f32_output,
-                int64_t   nelements,
-    quantize_state_impl * qs,
-                   int    nthread)
-{
-    const ggml_type_traits * qtype = ggml_get_type_traits(src_type);
-    if (ggml_is_quantized(src_type)) {
-        if (qtype->to_float == NULL) {
-            throw std::runtime_error(format("type %s unsupported for integer quantization: no dequantization available", ggml_type_name(src_type)));
-        }
-    } else if (src_type != GGML_TYPE_F16 &&
-               src_type != GGML_TYPE_BF16) {
-        throw std::runtime_error(format("cannot dequantize/convert tensor type %s", ggml_type_name(src_type)));
-    }
-
-    if (nthread < 2) {
-        if (src_type == GGML_TYPE_F16) {
-            ggml_fp16_to_fp32_row((const ggml_fp16_t *)src_data, f32_output, nelements);
-        } else if (src_type == GGML_TYPE_BF16) {
-            ggml_bf16_to_fp32_row((const ggml_bf16_t *)src_data, f32_output, nelements);
-        } else if (ggml_is_quantized(src_type)) {
-            qtype->to_float(src_data, f32_output, nelements);
-        } else {
-            GGML_ABORT("fatal error"); // unreachable
-        }
-        return;
-    }
-
-    const size_t block_size       = (size_t)ggml_blck_size(src_type);
-    const size_t block_size_bytes = ggml_type_size(src_type);
-
-    GGML_ASSERT(nelements % block_size == 0);
-    const size_t nblocks          = nelements / block_size;
-    const size_t blocks_per_chunk = nblocks / nthread;
-    const size_t spare_blocks     = nblocks - (blocks_per_chunk * nthread);
-
-    const uint8_t * src_bytes = (const uint8_t *)src_data;
-
-    qs->pool.distribute(nthread, [=](int64_t tnum) {
-        const size_t thr_blocks = blocks_per_chunk + ((size_t)tnum == (size_t)(nthread - 1) ? spare_blocks : 0);
-        const size_t thr_elems  = thr_blocks * block_size;
-
-        const size_t block_offset = (size_t)tnum * blocks_per_chunk;
-        const size_t in_offset    = block_offset * block_size_bytes;
-        const size_t out_offset   = block_offset * block_size;
-
-        if (src_type == GGML_TYPE_F16) {
-            ggml_fp16_to_fp32_row((const ggml_fp16_t *)(src_bytes + in_offset), f32_output + out_offset, thr_elems);
-        } else if (src_type == GGML_TYPE_BF16) {
-            ggml_bf16_to_fp32_row((const ggml_bf16_t *)(src_bytes + in_offset), f32_output + out_offset, thr_elems);
-        } else {
-            qtype->to_float(src_bytes + in_offset, f32_output + out_offset, thr_elems);
-        }
-    });
-}
-
-// dequantize an entire tensor to f32
-// supports parallelism for 3D tensors (such as MoE experts)
-static void llama_tensor_dequantize(
-                const ggml_tensor * tensor,
-    std::vector<no_init<float>>   & output,
-              quantize_state_impl * qs,
-                              int   nthread)
-{
-    const int64_t ne = ggml_nelements(tensor);
-    const int64_t ne0 = tensor->ne[0]; // ncols
-    const int64_t ne1 = tensor->ne[1]; // nrows
-    const int64_t ne2 = tensor->ne[2]; // n_expert (or any 3rd tensor dimension)
-    const int64_t ne0_x_1 = ne0 * ne1;
-
-    if ((size_t)ne > output.size()) {
-        output.resize(ne);
-    }
-
-    const ggml_type src_type      = tensor->type;
-    const size_t    src_blk_size  = ggml_blck_size(src_type);
-    const size_t    src_blk_bytes = ggml_type_size(src_type);
-
-    const uint8_t * src_data  = (const uint8_t *)tensor->data;
-    float         * f32_data  = (float *)output.data();
-
-    // same chunk-sizing logic as llama_tensor_quantize
-    const int64_t chunk_size = (ne0 >= MIN_CHUNK_SIZE
-        ? ne0
-        : ne1 * ((MIN_CHUNK_SIZE + ne1 - 1) / ne0));
-    const int64_t nchunk = (ne0_x_1 + chunk_size - 1) / chunk_size;
-
-    // enough chunks to feed all threads?
-    const bool expert_parallel = ne2 >= nthread && nthread > 1 && nchunk < nthread;
-
-    if (expert_parallel) {
-        qs->pool.distribute(ne2, [&](int64_t expert) {
-            const size_t src_expert_blocks = ne0_x_1 / src_blk_size;
-            const void * esrc = src_data + expert * src_expert_blocks * src_blk_bytes;
-            float      * ef32 = f32_data + expert * ne0_x_1;
-
-            // dequant entire expert single-threaded
-            llama_tensor_dequantize_impl(src_type, esrc, ef32, ne0_x_1, qs, 1);
-        });
-    } else {
-        for (int64_t i03 = 0; i03 < ne2; ++i03) {
-            const size_t src_expert_blocks = ne0_x_1 / src_blk_size;
-            const void * esrc = src_data + i03 * src_expert_blocks * src_blk_bytes;
-            float      * ef32 = f32_data + i03 * ne0_x_1;
-            llama_tensor_dequantize_impl(src_type, esrc, ef32, ne0_x_1, qs, nthread);
-        }
-    }
-}
-
-//
-// quantization
-//
-
+// f32 data -> quantized data
+// return total size of quantized data
 static size_t llama_tensor_quantize_impl(
          enum ggml_type   new_type,
             const float * f32_data,
@@ -1021,8 +905,9 @@ static size_t llama_tensor_quantize_impl(
     return new_size.load();
 }
 
-// quantize a tensor from f32
-// supports parallelism for 3D tensors (such as MoE experts)
+// quantize a tensor from f32 using the thread pool
+// supports conditional parallelism for 3D tensors (such as MoE experts)
+// return total size of quantized data
 static size_t llama_tensor_quantize(
                 const ggml_tensor * tensor,
                         ggml_type   new_type,
@@ -1036,12 +921,10 @@ static size_t llama_tensor_quantize(
     const int64_t ne0 = tensor->ne[0]; // n_cols
     const int64_t ne1 = tensor->ne[1]; // n_rows
     const int64_t ne2 = tensor->ne[2]; // n_experts (or any 3rd tensor dimension)
-
+    const int64_t ne0_x_1 = ne0 * ne1;
     const int64_t chunk_size = (ne0 >= MIN_CHUNK_SIZE
         ? ne0
         : ne0 * ((MIN_CHUNK_SIZE + ne0 - 1)/ne0));
-
-    const int64_t ne0_x_1  = tensor->ne[0] * tensor->ne[1];
     const int64_t nchunk = (ne0_x_1 + chunk_size - 1) / chunk_size;
 
     const ggml_type type = tensor->type;
@@ -1112,11 +995,15 @@ static size_t llama_tensor_quantize(
     }
 }
 
-// fused dequant + quantize
+// fused dequantize-and-quantize using the thread pool
 //
 // dequantize and quantize a non-f32 tensor in a single distribute() call,
 // so that f32 intermediate data stays cache-hot between the two operations.
-// handles both expert-parallel and chunk-parallel strategies.
+//
+// supports conditional parallelism for 3D tensors (such as MoE experts)
+// return total size of quantized data
+//
+// return total size of quantized data
 static size_t tensor_dequant_and_quantize_fused_impl(
                 const ggml_tensor * tensor,
                         ggml_type   new_type,
@@ -1272,8 +1159,7 @@ static size_t llama_tensor_process(
 
     // source is already f32
     if (tensor->type == GGML_TYPE_F32) {
-        size_t sz = llama_tensor_quantize(
-            tensor, new_type, (float *)tensor->data, imatrix, work_buf, qs, nthread);
+        size_t sz = llama_tensor_quantize(tensor, new_type, (float *)tensor->data, imatrix, work_buf, qs, nthread);
         *out_data = work_buf.data();
         return sz;
     }
@@ -1284,8 +1170,7 @@ static size_t llama_tensor_process(
     }
 
     // non-f32 source: fused dequant -> quant in a single pass
-    size_t sz = tensor_dequant_and_quantize_fused_impl(
-        tensor, new_type, imatrix, dequant_buf, work_buf, qs, nthread);
+    size_t sz = tensor_dequant_and_quantize_fused_impl(tensor, new_type, imatrix, dequant_buf, work_buf, qs, nthread);
     *out_data = work_buf.data();
     return sz;
 }
@@ -1367,7 +1252,10 @@ static ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
     return return_type;
 }
 
+//
 // main quantization driver
+//
+
 static void llama_model_quantize_impl(const std::string & fname_inp, const std::string & fname_out, const llama_model_quantize_params * params) {
     ggml_type default_type;
     llama_ftype ftype = params->ftype;
@@ -1518,9 +1406,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     // for a real quantization, as a courtesy
     bool will_require_imatrix = false;
 
-    // create the persistent thread pool
-    qs->pool.start(nthread);
-
     // scratch buffers
 
     std::vector<no_init<float>>   scratch_dequant_buf;
@@ -1655,6 +1540,9 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     size_t total_size_org = 0;
     size_t total_size_new = 0;
 
+    // create the persistent thread pool
+    qs->pool.start(nthread);
+
     //
     // iterate over all weights (main loop)
     //
@@ -1719,6 +1607,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             continue;
         }
 
+        // prepare imatrix data for this tensor
+
         const float * imatrix = nullptr;
 
         if (imatrix_data && do_quantize) {
@@ -1765,9 +1655,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
         // write tensor data + padding
         writer.write(new_data, new_size, GGML_PAD(new_size, align) - new_size);
-    }
+    } // main loop
 
-    // after the loop:
     if (!params->dry_run) {
         writer.flush();
         writer.stop();
