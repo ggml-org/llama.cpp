@@ -887,36 +887,6 @@ static bool is_op_dtype_consistent_with_src(const struct ggml_tensor *op) {
   return true;
 }
 
-
-#if 0
-static void anoop_test() {
-	return;
-}
-
-static bool mul_mat_supported_size(const struct ggml_tensor *op) {
-    const struct ggml_tensor *a = op->src[0];
-    const struct ggml_tensor *b = op->src[1];
-    if (!a || !b) return false;
-
-    const int64_t K = a->ne[0];
-    if ((K % TMU_K_MULTIPLE) != 0) return false;
-
-    // avoid GEMV
-    if (b->ne[1] == 1) return false;
-
-    // sanity: reduction dims match
-    if (b->ne[0] != K) return false;
-
-    if((op->ne[0]  == 2048 && op->ne[1] ==  512))
-	    return true;
-    if((op->ne[0]  == 32003 && op->ne[1] ==  512))
-	    return true;
-    anoop_test();
-
-    return false;
-}
-#endif
-
 static bool mul_mat_supported_size(const struct ggml_tensor *op) {
     const struct ggml_tensor *a = op->src[0];
     const struct ggml_tensor *b = op->src[1];
@@ -938,6 +908,9 @@ static bool mul_mat_supported_size(const struct ggml_tensor *op) {
 
     // reduction dims must match
     if (b->ne[0] != K) return false;
+
+    if (K == 64 || K == 576 || K == 1536 || K == 256)
+	    return true;
 
     // (optional but usually correct for ggml mul_mat wiring)
     // If this blocks valid cases in your build, comment it out.
