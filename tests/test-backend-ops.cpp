@@ -3003,7 +3003,6 @@ struct test_bin_bcast : public test_case {
         ggml_set_name(a, "a");
 
         ggml_tensor * b[16];
-
         for (int i = 0; i < nf; ++i) {
             if (perm1) {
                 const int p[4] = { 1, 2, 0, 3 }; // hardcoded for now
