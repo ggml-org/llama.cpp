@@ -721,6 +721,34 @@ void ggml_sycl_cpu_expert_mul_mat_batched(
 
                     const void * row =
                         (const char *) t.weight_host + (size_t) local_r * m.row_stride;
+
+                    // Prefetch next row's weight data into L2 while computing current row.
+                    // Weight rows are large (e.g. 2176 bytes for MXFP4 K=4096), so
+                    // prefetching the first few cache lines hides DRAM latency.
+                    if (flat_r + 1 < range.end()) {
+                        // Determine next row within same or next task
+                        int next_task = cur_task;
+                        int next_local_r = local_r + 1;
+                        if (flat_r + 1 >= meta_ptr[cur_task].prefix_rows + tasks_ptr[cur_task].N) {
+                            // Next row is in a different task
+                            next_task = cur_task + 1;
+                            while (next_task < n_tasks && !meta_ptr[next_task].cpu_traits) {
+                                next_task++;
+                            }
+                            next_local_r = 0;
+                        }
+                        if (next_task < n_tasks && meta_ptr[next_task].cpu_traits) {
+                            const char * next_row =
+                                (const char *) tasks_ptr[next_task].weight_host
+                                + (size_t) next_local_r * meta_ptr[next_task].row_stride;
+                            // Prefetch first 4 cache lines (256 bytes) of next weight row
+                            __builtin_prefetch(next_row,        0, 1);
+                            __builtin_prefetch(next_row + 64,   0, 1);
+                            __builtin_prefetch(next_row + 128,  0, 1);
+                            __builtin_prefetch(next_row + 192,  0, 1);
+                        }
+                    }
+
                     float dot = 0.0f;
                     m.cpu_traits->vec_dot(t.K, &dot, sizeof(float),
                                           row, 0, q8_ptrs[cur_task], 0, 1);
@@ -745,6 +773,29 @@ void ggml_sycl_cpu_expert_mul_mat_batched(
 
         const void * row =
             (const char *) t.weight_host + (size_t) local_r * m.row_stride;
+
+        // Prefetch next row's weight data into L2 while computing current row.
+        if (flat_r + 1 < total_rows) {
+            int next_task = cur_task;
+            int next_local_r = local_r + 1;
+            if (flat_r + 1 >= meta[cur_task].prefix_rows + tasks_ptr[cur_task].N) {
+                next_task = cur_task + 1;
+                while (next_task < n_tasks && !meta[next_task].cpu_traits) {
+                    next_task++;
+                }
+                next_local_r = 0;
+            }
+            if (next_task < n_tasks && meta[next_task].cpu_traits) {
+                const char * next_row =
+                    (const char *) tasks_ptr[next_task].weight_host
+                    + (size_t) next_local_r * meta[next_task].row_stride;
+                __builtin_prefetch(next_row,        0, 1);
+                __builtin_prefetch(next_row + 64,   0, 1);
+                __builtin_prefetch(next_row + 128,  0, 1);
+                __builtin_prefetch(next_row + 192,  0, 1);
+            }
+        }
+
         float dot = 0.0f;
         m.cpu_traits->vec_dot(t.K, &dot, sizeof(float),
                               row, 0, q8_ptrs[cur_task], 0, 1);

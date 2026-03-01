@@ -790,7 +790,41 @@ void ggml_vec_dot_mxfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
     int ib = 0;
     float sumf = 0;
 
-#if defined __AVX2__
+#if defined __AVXVNNIINT8__
+
+    // AVX-VNNI path: _mm256_dpbssd_epi32 does signed*signed int8 dot product
+    // accumulate, replacing the sign trick + maddubs + madd chain with a single
+    // instruction per 32 elements.
+    const __m128i values128 = _mm_loadu_si128((const __m128i*)kvalues_mxfp4);
+    const __m128i m4b  = _mm_set1_epi8(0x0f);
+
+    __m256 accum1 = _mm256_setzero_ps();
+    __m256 accum2 = _mm256_setzero_ps();
+    for (; ib + 1 < nb; ib += 2) {
+        if (ib + 2 < nb) {
+            _mm_prefetch((const char *)&x[ib + 2], _MM_HINT_T0);
+            _mm_prefetch((const char *)&y[ib + 2], _MM_HINT_T0);
+        }
+        const __m128i q4bits_1 = _mm_loadu_si128((const __m128i*)x[ib + 0].qs);
+        const __m128i q4bits_2 = _mm_loadu_si128((const __m128i*)x[ib + 1].qs);
+        const __m256i q8b_1 = _mm256_loadu_si256((const __m256i *)y[ib + 0].qs);
+        const __m256i q8b_2 = _mm256_loadu_si256((const __m256i *)y[ib + 1].qs);
+        const __m256i q4b_1 = MM256_SET_M128I(_mm_shuffle_epi8(values128, _mm_and_si128(_mm_srli_epi16(q4bits_1, 4), m4b)),
+                                              _mm_shuffle_epi8(values128, _mm_and_si128(q4bits_1, m4b)));
+        const __m256i q4b_2 = MM256_SET_M128I(_mm_shuffle_epi8(values128, _mm_and_si128(_mm_srli_epi16(q4bits_2, 4), m4b)),
+                                              _mm_shuffle_epi8(values128, _mm_and_si128(q4bits_2, m4b)));
+        // dpbssd: signed*signed dot product of 4-byte groups, accumulate into int32
+        const __m256i p_1 = _mm256_dpbssd_epi32(_mm256_setzero_si256(), q4b_1, q8b_1);
+        const __m256i p_2 = _mm256_dpbssd_epi32(_mm256_setzero_si256(), q4b_2, q8b_2);
+        accum1 = _mm256_fmadd_ps(_mm256_set1_ps(GGML_CPU_FP16_TO_FP32(y[ib + 0].d)*GGML_E8M0_TO_FP32_HALF(x[ib + 0].e)),
+                _mm256_cvtepi32_ps(p_1), accum1);
+        accum2 = _mm256_fmadd_ps(_mm256_set1_ps(GGML_CPU_FP16_TO_FP32(y[ib + 1].d)*GGML_E8M0_TO_FP32_HALF(x[ib + 1].e)),
+                _mm256_cvtepi32_ps(p_2), accum2);
+    }
+
+    sumf = hsum_float_8(_mm256_add_ps(accum1, accum2));
+
+#elif defined __AVX2__
 
     const __m128i values128 = _mm_loadu_si128((const __m128i*)kvalues_mxfp4);
     const __m128i m4b  = _mm_set1_epi8(0x0f);
@@ -799,6 +833,11 @@ void ggml_vec_dot_mxfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
     __m256 accum1 = _mm256_setzero_ps();
     __m256 accum2 = _mm256_setzero_ps();
     for (; ib + 1 < nb; ib += 2) {
+        // Prefetch next weight and activation blocks into L1 cache
+        if (ib + 2 < nb) {
+            _mm_prefetch((const char *)&x[ib + 2], _MM_HINT_T0);
+            _mm_prefetch((const char *)&y[ib + 2], _MM_HINT_T0);
+        }
         const __m128i q4bits_1 = _mm_loadu_si128((const __m128i*)x[ib + 0].qs);
         const __m128i q4bits_2 = _mm_loadu_si128((const __m128i*)x[ib + 1].qs);
         const __m256i q8b_1 = _mm256_loadu_si256((const __m256i *)y[ib + 0].qs);
