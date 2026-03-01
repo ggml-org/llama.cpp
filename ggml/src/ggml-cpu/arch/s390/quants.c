@@ -890,8 +890,7 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
         const int16x8_t v_minsh = (int16x8_t)vec_unpackh((uint8x16_t)v_mins8);
 
         const int32x4_t v_minso = vec_mulo(v_ysums, v_minsh);
-        const int32x4_t v_minse = vec_mule(v_ysums, v_minsh);
-        const int32x4_t v_mins = v_minso + v_minse;
+        const int32x4_t v_mins = vec_meadd(v_ysums, v_minsh, v_minso);
         sumf -= dmin * (v_mins[0] + v_mins[1] + v_mins[2] + v_mins[3]);
 
         const uint8_t * scales = (const uint8_t *)utmp;
