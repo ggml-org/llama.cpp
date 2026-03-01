@@ -7,6 +7,7 @@
 #include <cctype>
 #include <cwctype>
 #include <cstdint>
+#include <clocale>
 #include <condition_variable>
 #include <mutex>
 #include <thread>
@@ -143,6 +144,10 @@ namespace console {
         }
 
         setlocale(LC_ALL, "");
+        // Override LC_NUMERIC to ensure decimal points (not commas) in output.
+        // Without this, locales like de_DE format 10000.0 as "10000,0" which
+        // breaks machine-readable output and causes inconsistency across tools.
+        setlocale(LC_NUMERIC, "C");
 #endif
     }
 

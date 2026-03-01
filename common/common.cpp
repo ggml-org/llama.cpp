@@ -13,6 +13,7 @@
 #include <cmath>
 #include <chrono>
 #include <cstdarg>
+#include <clocale>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
@@ -360,6 +361,10 @@ bool parse_cpu_mask(const std::string & mask, bool (&boolmask)[GGML_MAX_N_THREAD
 
 void common_init() {
     llama_log_set(common_log_default_callback, NULL);
+
+    // Force C locale for numeric formatting to ensure consistent decimal points
+    // across all tools regardless of user locale settings (e.g. de_DE uses comma).
+    std::setlocale(LC_NUMERIC, "C");
 
 #ifdef NDEBUG
     const char * build_type = "";
