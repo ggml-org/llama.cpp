@@ -1136,13 +1136,15 @@ struct common_speculative_session::impl {
             clear_draft();
             return draft;
         }
-        if (params_spec.use_checkpoints
-                && spec_ckpt_n_denials > 0) {
+        if (params_spec.use_checkpoints && spec_ckpt_n_denials > 1) {
+            // We shouldn't get two denials.
+            LOG_WRN("%s: #tokens=%zu, spec_ckpt_n_denials=%d, id_last=%d, #draft=%zu\n", __func__,
+                    cached_text_tokens.size(), spec_ckpt_n_denials, id_last, draft.size());
             clear_draft();
             return draft;
         }
 
-        if (spec_ckpt_n_denials > 0) {
+        if (spec_ckpt_n_denials == 1) {
             // there is a previous speculation which wasn't accepted in full length
             if (draft.empty()) {
                 LOG_WRN("%s: draft of length 0 after denied checkpoint\n", __func__);
@@ -1150,7 +1152,8 @@ struct common_speculative_session::impl {
                 return draft;
             }
             // we use the shortened draft of previous speculation
-            LOG_INF("%s: resuse shortened draft, size=%zu\n", __func__, draft.size());
+            LOG_DBG("%s: reuse shortened draft, #tokens=%zu, id_last=%d, size=%zu\n", __func__,
+                    cached_text_tokens.size(), id_last, draft.size());
         } else {
             // call the speculative implementation to create a draft
             draft = common_speculative_draft(spec, params_spec, cached_text_tokens, id_last);
@@ -1167,30 +1170,33 @@ struct common_speculative_session::impl {
         }
 
         bool do_checkpoint = !draft.empty() && params_spec.use_checkpoints;
-        if (do_checkpoint && cached_text_tokens.size() > 5) {
-            LOG_DBG("draft.size = %zu, n_spec_denials = %d, do_checkpoint = %s, tokens=[..., %d, %d, %d]\n",
+        if (do_checkpoint && cached_text_tokens.size() > 5 && draft.size() >= 3) {
+            LOG_DBG("%s: #tokens=%zu, draft.size=%zu, n_spec_denials=%d, do_checkpoint=%s, id_last=%d, tokens=[..., %d, %d, %d], draft=[%d, %d, %d, ...]\n",
+                __func__,
+                cached_text_tokens.size(),
                 draft.size(), spec_ckpt_n_denials,
-                do_checkpoint ? "yes" : "no",
+                do_checkpoint ? "yes" : "no", id_last,
                 cached_text_tokens[cached_text_tokens.size() - 3],
                 cached_text_tokens[cached_text_tokens.size() - 2],
-                cached_text_tokens[cached_text_tokens.size() - 1]);
-        }
-
-        if (do_checkpoint) {
-            const size_t n = callback.create_checkpoint();
-            if (n == 0) {
-                LOG_WRN("checkpoint creation failed");
-                clear_draft();
-                return draft;
-            }
-            spec_ckpt_size_part = n;
-            spec_has_ckpt = true;
+                cached_text_tokens[cached_text_tokens.size() - 1],
+                draft[0], draft[1], draft[2]);
         }
 
         if (params_spec.n_min > (int) draft.size()) {
             LOG_DBG("ignoring small draft: %d < %d\n", (int) draft.size(), params_spec.n_min);
             clear_draft();
             return draft;
+        }
+
+        if (do_checkpoint) {
+            const size_t n = callback.create_checkpoint();
+            if (n == 0) {
+                LOG_WRN("%s: checkpoint creation failed (#tokens=%zu)\n", __func__, cached_text_tokens.size());
+                clear_draft();
+                return draft;
+            }
+            spec_ckpt_size_part = n;
+            spec_has_ckpt = true;
         }
 
         // add last sampled token to the batch
@@ -1219,27 +1225,31 @@ struct common_speculative_session::impl {
             if (spec_has_ckpt) {
                 // we need to rollback to the state before sampling the draft tokens
                 const size_t n = callback.restore_checkpoint(spec_ckpt_size_part);
-                LOG_INF("partial acceptance: %zu < %zu, restored checkpoint: got %zu bytes\n",
-                        ids.size() -1 , n_draft, n);
+                LOG_DBG("%s: partial acceptance: %zu < %zu, restored checkpoint: got %zu bytes\n",
+                        __func__,
+                        ids.size() - 1, n_draft, n);
 
-                // rollback to the state before sampling the draft tokens
-
-                // Delete Checkpoint
+                // delete Checkpoint
                 callback.delete_checkpoint();
                 spec_has_ckpt = false;
 
-                if (n_draft > 0 && spec_ckpt_n_denials == 0) {
+                spec_ckpt_n_denials++;
+                if (ids.size() > 1u + static_cast<std::size_t>(params_spec.n_min) && spec_ckpt_n_denials == 1) {
                     // we will do the batch again but with the shortened draft
-                    spec_ckpt_n_denials++;
-
                     return common_speculative_accept_response(std::move(ids), n_draft, true);
                 }
 
-                callback.batch_clear();
+                LOG_DBG("%s: don't accept partial draft, n_draft=%zu, ids.size=%zu\n", __func__, n_draft, ids.size());
+                draft.clear();
+
+                // use the sampled token only
+                ids.resize(1);
+                // drafted tokens in prompt have been deleted in restore_checkpoint(...).
+                return common_speculative_accept_response{std::move(ids), 0, false};
             }
         }
         const size_t draft_size_accepted = draft.size();
-        LOG_DBG("%s: draft.size=%zu\n", __func__, draft_size_accepted);
+        LOG_DBG("%s: draft.size=%zu, ids.size=%zu\n", __func__, draft_size_accepted, ids.size());
         common_speculative_accept(spec, draft_size_accepted);
         draft.clear();
 
