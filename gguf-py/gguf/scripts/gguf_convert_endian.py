@@ -65,7 +65,7 @@ byteswap_tensors = {
     gguf.GGMLQuantizationType.Q4_K:  byteswap_q4_k,
     gguf.GGMLQuantizationType.Q6_K:  byteswap_q6_k,
     gguf.GGMLQuantizationType.MXFP4: byteswap_noop,
-    gguf.GGMLQuantizationType.NVFP4: byteswap_q8_0,
+    gguf.GGMLQuantizationType.NVFP4: byteswap_noop,
 }
 
 
