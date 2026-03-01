@@ -10,16 +10,16 @@
 #include <cstdint>
 #include <string>
 
-llama_model_saver::llama_model_saver(const struct llama_model * model) : model(model), llm_kv(model->arch) {
-    gguf_ctx = gguf_init_empty();
-}
+llama_model_saver::llama_model_saver(const struct llama_model * model) :
+    gguf_ctx(gguf_init_empty()), gguf_ctx_owned(true), model(model), llm_kv(model->arch) {}
 
-llama_model_saver::llama_model_saver(enum llm_arch arch) : model(nullptr), llm_kv(arch) {
-    gguf_ctx = gguf_init_empty();
-}
+llama_model_saver::llama_model_saver(enum llm_arch arch, struct gguf_context * gguf_ctx) :
+        gguf_ctx(gguf_ctx == nullptr ? gguf_init_empty() : gguf_ctx), gguf_ctx_owned(gguf_ctx == nullptr), model(nullptr), llm_kv(arch) {}
 
 llama_model_saver::~llama_model_saver() {
-    gguf_free(gguf_ctx);
+    if (gguf_ctx_owned) {
+        gguf_free(gguf_ctx);
+    }
 }
 
 void llama_model_saver::add_kv(const enum llm_kv key, const uint32_t value) {
