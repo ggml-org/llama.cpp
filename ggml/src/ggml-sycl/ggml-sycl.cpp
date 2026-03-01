@@ -2941,6 +2941,86 @@ static void ggml_sycl_moe_ids_cache_new_graph() {
     g_moe_ids_d2h_cache.clear();
 }
 
+// ---------------------------------------------------------------------------
+// Deferred CPU scatter: pipeline CPU expert compute with GPU work
+// ---------------------------------------------------------------------------
+// Instead of waiting for CPU compute to finish and scattering results
+// immediately after each MUL_MAT_ID, we defer the scatter.  The next
+// MUL_MAT_ID entry (or graph boundary) flushes the pending scatter.
+// This overlaps CPU compute with the GPU attention/normalization ops
+// that run between MoE layers, hiding CPU latency.
+// ---------------------------------------------------------------------------
+
+struct pending_cpu_scatter {
+    std::future<void>  future;          // CPU compute completion
+    float *            out_pinned;      // Output buffer to scatter from
+    float *            act_pinned;      // Activation buffer (for deferred release)
+    sycl::queue *      stream;          // GPU queue for H2D copies
+    sycl::context      sycl_ctx;        // SYCL context for deferred sycl::free
+
+    // Per-expert scatter metadata
+    struct scatter_entry {
+        char * dst_device;    // Device destination for this expert's output
+        int    N;             // Output elements (floats) per expert
+    };
+    std::vector<scatter_entry> entries;
+
+    int    device_id;         // Device index for pool release
+    bool   from_pool;         // Whether buffers came from pool
+    bool   active;            // Whether there's a pending scatter
+
+    pending_cpu_scatter() : out_pinned(nullptr), act_pinned(nullptr),
+        stream(nullptr), sycl_ctx(), device_id(-1), from_pool(false), active(false) {}
+};
+
+static thread_local pending_cpu_scatter g_pending_scatter = {};
+
+// Flush any pending deferred CPU scatter.  Called:
+//  - At the start of each CPU-TG MUL_MAT_ID entry
+//  - At graph boundaries (graph_compute_impl)
+static void flush_pending_cpu_scatter() {
+    if (!g_pending_scatter.active) return;
+
+    try {
+        // Wait for CPU compute to finish
+        if (g_pending_scatter.future.valid()) {
+            g_pending_scatter.future.get();
+        }
+
+        // Scatter results H2D
+        const float * src = g_pending_scatter.out_pinned;
+        for (auto & e : g_pending_scatter.entries) {
+            g_pending_scatter.stream->memcpy(
+                e.dst_device, src, static_cast<size_t>(e.N) * sizeof(float));
+            src += e.N;
+        }
+        g_pending_scatter.stream->wait();
+    } catch (const std::exception & ex) {
+        GGML_LOG_ERROR("[CPU-TG] Deferred scatter failed: %s\n", ex.what());
+    }
+
+    // Release pinned host buffers
+    if (g_pending_scatter.from_pool) {
+        g_pinned_buffer_pools[g_pending_scatter.device_id].release(
+            {g_pending_scatter.act_pinned, g_pending_scatter.out_pinned});
+    } else {
+        if (g_pending_scatter.act_pinned) {
+            sycl::free(g_pending_scatter.act_pinned, g_pending_scatter.sycl_ctx);
+        }
+        if (g_pending_scatter.out_pinned) {
+            sycl::free(g_pending_scatter.out_pinned, g_pending_scatter.sycl_ctx);
+        }
+    }
+
+    g_pending_scatter.entries.clear();
+    g_pending_scatter.active = false;
+}
+
+// Public entry point for graph boundary flush
+void ggml_sycl_cpu_tg_flush_pending() {
+    flush_pending_cpu_scatter();
+}
+
 // Cold path for ggml_sycl_get_data_ptr: full resolution chain
 // (tiered cache, get_pointer_type, unified cache, staging).
 // Called only when the fast-path data_device[] cache misses.
@@ -24042,6 +24122,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                               src0->name ? src0->name : "?", (int)src0->type);
             }
 
+            // Flush any deferred scatter from the previous MUL_MAT_ID
+            flush_pending_cpu_scatter();
+
             // --- Phase-level profiling (enabled by GGML_SYCL_CPU_TG_PROFILE=1) ---
             static int prof_enabled = -1;
             if (prof_enabled < 0) {
@@ -24061,6 +24144,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 int    n_experts    = 0;   // Total expert dispatches
                 int64_t weight_bytes = 0;  // Total weight bytes read
                 int    n_tokens_reported = 0;
+                int    n_deferred   = 0;   // Deferred scatter count
             };
             static prof_accum g_prof;
 
@@ -24175,33 +24259,32 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         ggml_sycl_cpu_expert_mul_mat_batched(tp, nt);
                     });
                 }
-                fut.get();
-
+                // Defer scatter: build scatter metadata and store future
+                // for later flush.  The next MUL_MAT_ID entry (or graph
+                // boundary) will wait for CPU completion and scatter.
                 if (prof_enabled) { t5 = hrc::now(); }
 
-                // Scatter results: H2D copy each expert's output into dst
                 char * dst_d = static_cast<char *>(ggml_sycl_get_data_ptr(dst, ctx.device));
+                g_pending_scatter.future     = std::move(fut);
+                g_pending_scatter.out_pinned = out_pinned;
+                g_pending_scatter.act_pinned = act_pinned;
+                g_pending_scatter.stream     = stream;
+                g_pending_scatter.sycl_ctx   = stream->get_context();
+                g_pending_scatter.device_id  = ctx.device;
+                g_pending_scatter.from_pool  = from_pool;
+                g_pending_scatter.active     = true;
+
+                g_pending_scatter.entries.clear();
+                g_pending_scatter.entries.reserve(n_cpu);
                 for (size_t ci = 0; ci < n_cpu; ci++) {
                     const int64_t iid1 = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_f));
                     const int64_t id   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_f));
                     char *        dst_slot = dst_d + id * nb1 + iid1 * nb2;
-                    const float * cpu_out  = out_pinned + ci * static_cast<size_t>(N);
-                    stream->memcpy(dst_slot, cpu_out,
-                                   static_cast<size_t>(N) * sizeof(float));
-                }
-                stream->wait();
-
-                if (prof_enabled) { t6 = hrc::now(); }
-
-                // Release pinned host buffers
-                if (from_pool) {
-                    buf_pool.release({act_pinned, out_pinned});
-                } else {
-                    sycl::free(act_pinned, stream->get_context());
-                    sycl::free(out_pinned, stream->get_context());
+                    g_pending_scatter.entries.push_back(
+                        { dst_slot, static_cast<int>(N) });
                 }
 
-                if (prof_enabled) { t7 = hrc::now(); }
+                if (prof_enabled) { t6 = t7 = hrc::now(); }
 
                 // Accumulate profiling stats and print per-token summary
                 if (prof_enabled) {
@@ -24214,13 +24297,14 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     g_prof.build_us     += us(t3, t4);
                     g_prof.compute_us   += us(t4, t5);
                     g_prof.scatter_us   += us(t5, t6);
-                    g_prof.release_us   += us(t6, t7);
+                    g_prof.release_us   += 0;  // deferred
                     g_prof.total_us     += us(t0, t7);
                     g_prof.n_calls++;
                     g_prof.n_experts    += static_cast<int>(n_cpu);
                     g_prof.weight_bytes += static_cast<int64_t>(n_cpu) * nb02;
+                    g_prof.n_deferred++;
 
-                    // Print summary every 108 calls (36 layers × 3 MoE tensors)
+                    // Print summary every 108 calls (36 layers x 3 MoE tensors)
                     // or when n_calls matches the detected MoE layer count.
                     // Use 108 as default; adapt if different model architecture.
                     const int report_interval = 108;
@@ -24228,7 +24312,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         const int nc = g_prof.n_calls;
                         g_prof.n_tokens_reported++;
                         GGML_LOG_INFO(
-                            "[CPU-TG-PROF] token #%d | %d calls, %d experts, %.1f MB weights\n"
+                            "[CPU-TG-PROF] token #%d | %d calls, %d experts, %.1f MB weights"
+                            " (%d deferred)\n"
                             "  ids_d2h: %7.0f us (%4.1f%%)  pool:    %7.0f us (%4.1f%%)\n"
                             "  act_d2h: %7.0f us (%4.1f%%)  build:   %7.0f us (%4.1f%%)\n"
                             "  compute: %7.0f us (%4.1f%%)  scatter: %7.0f us (%4.1f%%)\n"
@@ -24237,6 +24322,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                             "weight BW: %.1f GB/s\n",
                             g_prof.n_tokens_reported, nc, g_prof.n_experts,
                             g_prof.weight_bytes / (1024.0 * 1024.0),
+                            g_prof.n_deferred,
                             g_prof.ids_d2h_us,   100.0 * g_prof.ids_d2h_us / g_prof.total_us,
                             g_prof.pool_us,      100.0 * g_prof.pool_us / g_prof.total_us,
                             g_prof.act_d2h_us,   100.0 * g_prof.act_d2h_us / g_prof.total_us,
@@ -24252,7 +24338,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         g_prof.ids_d2h_us = g_prof.act_d2h_us = g_prof.pool_us = 0;
                         g_prof.build_us = g_prof.compute_us = g_prof.scatter_us = 0;
                         g_prof.release_us = g_prof.total_us = 0;
-                        g_prof.n_calls = g_prof.n_experts = 0;
+                        g_prof.n_calls = g_prof.n_experts = g_prof.n_deferred = 0;
                         g_prof.weight_bytes = 0;
                     }
                 }
@@ -24715,6 +24801,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             // is incompatible with SYCL graph recording.
             ctx.moe_graphs_disabled_once = true;
 
+            // Flush any deferred scatter from the previous MUL_MAT_ID
+            flush_pending_cpu_scatter();
+
             // Declare expert dispatch entry struct and partition vectors
             // before the CPU-TG / hybrid branch point so both paths share them.
             struct expert_dispatch_entry {
@@ -24842,27 +24931,27 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     });
                 }
 
-                // Wait for CPU completion
-                fut.get();
+                // Defer scatter: store future + metadata for later flush.
+                // The next MUL_MAT_ID entry (or graph boundary) will wait
+                // for CPU completion and scatter results H2D.
+                g_pending_scatter.future     = std::move(fut);
+                g_pending_scatter.out_pinned = out_pinned;
+                g_pending_scatter.act_pinned = act_pinned;
+                g_pending_scatter.stream     = stream;
+                g_pending_scatter.sycl_ctx   = stream->get_context();
+                g_pending_scatter.device_id  = ctx.device;
+                g_pending_scatter.from_pool  = from_pool;
+                g_pending_scatter.active     = true;
 
-                // Scatter results: H2D copy each expert's output into dst
+                g_pending_scatter.entries.clear();
+                g_pending_scatter.entries.reserve(entries.size());
                 for (size_t ci = 0; ci < entries.size(); ci++) {
-                    const auto &  entry   = entries[ci];
-                    const int64_t i1      = entry.id;
-                    const int64_t i2      = entry.iid1;
-                    char *        dst_d   = dst_original + i1 * nb1 + i2 * nb2;
-                    const float * cpu_out = out_pinned + ci * static_cast<size_t>(N);
-                    stream->memcpy(dst_d, cpu_out,
-                                   static_cast<size_t>(N) * sizeof(float));
-                }
-                stream->wait();
-
-                // Release pinned host buffers
-                if (from_pool) {
-                    g_pinned_buffer_pools[ctx.device].release({act_pinned, out_pinned});
-                } else {
-                    sycl::free(act_pinned, stream->get_context());
-                    sycl::free(out_pinned, stream->get_context());
+                    const auto &  entry = entries[ci];
+                    const int64_t i1    = entry.id;
+                    const int64_t i2    = entry.iid1;
+                    char *        dst_d = dst_original + i1 * nb1 + i2 * nb2;
+                    g_pending_scatter.entries.push_back(
+                        { dst_d, static_cast<int>(N) });
                 }
             };
 
@@ -25977,6 +26066,13 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
     if (!g_sycl_loaded) {
         return false;
     }
+
+    // Flush any deferred CPU scatter from a previous MUL_MAT_ID.
+    // Must happen before dispatching any op that might read from a
+    // MUL_MAT_ID output tensor.  The in-order queue serializes the
+    // scatter memcpy before subsequent GPU kernels.
+    flush_pending_cpu_scatter();
+
     // Debug: trace operations in multi-process mode
     if (g_sycl_tp_config.is_multiprocess && g_ggml_sycl_tp_debug) {
         static int op_trace = 0;
@@ -27693,6 +27789,10 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     ggml_sycl_data_ptr_cache_new_graph();
     ggml_sycl_cpu_quant_cache_new_graph();
     ggml_sycl_moe_ids_cache_new_graph();
+
+    // Flush any deferred CPU scatter from the previous graph.
+    ggml_sycl_cpu_tg_flush_pending();
+
     static std::unordered_map<int, int> g_sycl_rms_seen_per_layer;
     if (g_sycl_tg_dump_rms) {
         g_sycl_rms_seen_per_layer.clear();
