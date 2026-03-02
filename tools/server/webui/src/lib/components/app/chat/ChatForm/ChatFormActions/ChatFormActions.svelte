@@ -56,7 +56,10 @@
 	$effect(() => {
 		if (conversationModel && conversationModel !== previousConversationModel) {
 			previousConversationModel = conversationModel;
-			modelsStore.selectModelByName(conversationModel);
+
+			if (!isRouter || modelsStore.isModelLoaded(conversationModel)) {
+				modelsStore.selectModelByName(conversationModel);
+			}
 		}
 	});
 
