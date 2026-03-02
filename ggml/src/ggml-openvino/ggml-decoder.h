@@ -268,7 +268,7 @@ public:
 private:
     void set_input_output(ggml_tensor * node);
     int compute_op_case(const ggml_tensor * node) const;
-    std::map<std::string, ggml_tensor *> & compute_model_outputs();
+    void compute_model_outputs();
 
     void validate_cgraph() const;
 

@@ -454,40 +454,37 @@ void GgmlOvDecoder::add_extra_inputs() {
     // create_1d_input("token_len", m_token_len_per_seq * m_n_seq_active);
 }
 
-std::map<std::string, ggml_tensor *> & GgmlOvDecoder::compute_model_outputs() {
-    if (!m_naive) {
-        m_model_outputs.clear();
-        m_model_output_names.clear();
-        for (int node_n = 0; node_n < m_cgraph->n_nodes; node_n++) {
-            auto * cur_node = m_cgraph->nodes[node_n];
-            auto cur_node_use_count = m_cgraph->use_counts[ggml_hash_find(&m_cgraph->visited_hash_set, cur_node)];
-            if (cur_node_use_count == 0) {
-                if (cur_node->op == GGML_OP_SET_ROWS) {
-                    // The output of SET_ROWS is the view_src tensor, which is updated in place. We should use the view_src name as the output name to make sure it can be correctly matched with the later ops that use the view_src.
-                    cur_node = cur_node->view_src;
-                }
-            } else {
-                int input_use_count = 0;
-                for (int i = 0; i < m_cgraph->n_nodes; i++) {
-                    ggml_tensor * node = m_cgraph->nodes[i];
-                    for (int j = 0; j < GGML_MAX_SRC; j++) {
-                        if (node->src[j] != NULL && node->src[j] == cur_node) {
-                            input_use_count++;
-                        }
+void GgmlOvDecoder::compute_model_outputs() {
+    m_model_outputs.clear();
+    m_model_output_names.clear();
+    for (int node_n = 0; node_n < m_cgraph->n_nodes; node_n++) {
+        auto * cur_node = m_cgraph->nodes[node_n];
+        auto cur_node_use_count = m_cgraph->use_counts[ggml_hash_find(&m_cgraph->visited_hash_set, cur_node)];
+        if (cur_node_use_count == 0) {
+            if (cur_node->op == GGML_OP_SET_ROWS) {
+                // The output of SET_ROWS is the view_src tensor, which is updated in place. We should use the view_src name as the output name to make sure it can be correctly matched with the later ops that use the view_src.
+                cur_node = cur_node->view_src;
+            }
+        } else {
+            int input_use_count = 0;
+            for (int i = 0; i < m_cgraph->n_nodes; i++) {
+                ggml_tensor * node = m_cgraph->nodes[i];
+                for (int j = 0; j < GGML_MAX_SRC; j++) {
+                    if (node->src[j] != NULL && node->src[j] == cur_node) {
+                        input_use_count++;
                     }
                 }
-                if (input_use_count == cur_node_use_count) {
-                    cur_node = nullptr;
-                }
             }
-            if (cur_node != nullptr) {
-                std::string node_output_name(cur_node->name);
-                m_model_outputs[node_output_name] = cur_node;
-                m_model_output_names.push_back(node_output_name);
+            if (input_use_count == cur_node_use_count) {
+                cur_node = nullptr;
             }
         }
+        if (cur_node != nullptr) {
+            std::string node_output_name(cur_node->name);
+            m_model_outputs[node_output_name] = cur_node;
+            m_model_output_names.push_back(node_output_name);
+        }
     }
-    return m_model_outputs;
 }
 
 const ggml_tensor * GgmlOvDecoder::get_tensor_used_op(const ggml_tensor * tensor) const {
