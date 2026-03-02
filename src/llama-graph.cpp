@@ -2500,6 +2500,17 @@ void llm_graph_context::build_pooling(
             {
                 cur = inp;
             } break;
+        case LLAMA_POOLING_TYPE_TOKEN_CLS:
+            {
+                cur = inp;
+
+                if (cls_out) {
+                    cur = ggml_mul_mat(ctx0, cls_out, cur);
+                    if (cls_out_b) {
+                        cur = ggml_add(ctx0, cur, cls_out_b);
+                    }
+                }
+            } break;
         case LLAMA_POOLING_TYPE_MEAN:
             {
                 ggml_tensor * inp_mean = build_inp_mean();

@@ -268,8 +268,8 @@ private:
     // decode output (2-dimensional array: [n_outputs][n_vocab])
     buffer_view<float> logits = {nullptr, 0};
 
-    // embeddings output (2-dimensional array: [n_outputs][n_embd])
-    // populated only when pooling_type == LLAMA_POOLING_TYPE_NONE
+    // embeddings output (2-dimensional array: [n_outputs][n_embd_out])
+    // populated only when pooling_type == LLAMA_POOLING_TYPE_NONE || pooling_type == LLAMA_POOLING_TYPE_TOKEN_CLS
     buffer_view<float> embd = {nullptr, 0};
 
     struct sampling_info {
@@ -291,7 +291,7 @@ private:
 
     sampling_info sampling;
 
-    // sequence embeddings output (map of [n_embd] vectors)
+    // sequence embeddings output (map of [n_embd_out] vectors)
     // populated only when pooling_type != LLAMA_POOLING_TYPE_NONE
     std::map<llama_seq_id, std::vector<float>> embd_seq;
 

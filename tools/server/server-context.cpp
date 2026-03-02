@@ -1510,13 +1510,16 @@ private:
 
         std::vector<float> embd_res(n_embd_out, 0.0f);
 
+        const auto pooling_type = llama_pooling_type(slot.ctx);
+        const bool token_level_pooling = pooling_type == LLAMA_POOLING_TYPE_NONE || pooling_type == LLAMA_POOLING_TYPE_TOKEN_CLS;
+
         for (int i = 0; i < batch.n_tokens; ++i) {
             if (!batch.logits[i] || batch.seq_id[i][0] != slot.id) {
                 continue;
             }
 
             const float * embd = nullptr;
-            if (llama_pooling_type(slot.ctx) == LLAMA_POOLING_TYPE_NONE) {
+            if (token_level_pooling) {
                 embd = llama_get_embeddings_ith(ctx, i);
             } else {
                 embd = llama_get_embeddings_seq(ctx, batch.seq_id[i][0]);
@@ -1530,7 +1533,7 @@ private:
             }
 
             // normalize only when there is pooling
-            if (llama_pooling_type(slot.ctx) != LLAMA_POOLING_TYPE_NONE) {
+            if (!token_level_pooling) {
                 common_embd_normalize(embd, embd_res.data(), n_embd_out, slot.task->params.embd_normalize);
                 res->embedding.push_back(embd_res);
                 break;
@@ -4032,6 +4035,10 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
         res->error(format_error_response("Pooling type 'none' is not OAI compatible. Please use a different pooling type", ERROR_TYPE_INVALID_REQUEST));
         return res;
     }
+    if (res_type != TASK_RESPONSE_TYPE_NONE && meta->pooling_type == LLAMA_POOLING_TYPE_TOKEN_CLS) {
+        res->error(format_error_response("Pooling type 'token-cls' is not OAI compatible. Please use a different pooling type", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
 
     const json body = json::parse(req.body);
 
@@ -4070,7 +4077,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
     int embd_normalize = 2; // default to Euclidean/L2 norm
     if (body.count("embd_normalize") != 0) {
         embd_normalize = body.at("embd_normalize");
-        if (meta->pooling_type == LLAMA_POOLING_TYPE_NONE) {
+        if (meta->pooling_type == LLAMA_POOLING_TYPE_NONE || meta->pooling_type == LLAMA_POOLING_TYPE_TOKEN_CLS) {
             SRV_DBG("embd_normalize is not supported by pooling type %d, ignoring it\n", meta->pooling_type);
         }
     }

@@ -1009,6 +1009,9 @@ class GGUFWriter:
     def add_tokenizer_pre(self, pre: str) -> None:
         self.add_string(Keys.Tokenizer.PRE, pre)
 
+    def add_tokenizer_wpm_do_lower_case(self, value: bool) -> None:
+        self.add_bool(Keys.Tokenizer.WPM_DO_LOWER_CASE, value)
+
     def add_token_list(self, tokens: Sequence[str] | Sequence[bytes] | Sequence[bytearray]) -> None:
         self.add_array(Keys.Tokenizer.LIST, tokens)
 
