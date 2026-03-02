@@ -968,7 +968,7 @@ static void test_backend_cpu_mixed_batch(const test_params & params) {
     printf("backend-cpu mixed batch test PASSED\n");
 }
 
-static void test_backend_max_outputs(const test_params & params) {
+static void test_backend_multiple_outputs(const test_params & params) {
     const int seq_id = 0;
     const int32_t seed = 88;
 
@@ -994,17 +994,32 @@ static void test_backend_max_outputs(const test_params & params) {
     }
 
     for (size_t i = 0; i < tokens.size(); i++) {
-        // set all tokens as output to trigger error
+        // set all tokens as output to get multiple outputs for a single sequence.
         common_batch_add(batch, tokens[i], i, { seq_id }, true);
     }
 
-    printf(">>> test_max_outputs expected error start:\n");
     const int ret = llama_decode(test_ctx.ctx.get(), batch);
-    GGML_ASSERT(ret != 0 && "llama_decode should not succeed multiple outputs per sequence");
-    printf("<<< test_max_outputs expected error end.\n");
+    if (ret != 0) {
+        GGML_ASSERT(false && "Failed to decode sequence with multiple outputs");
+    }
+
+    std::vector<llama_token> sampled_tokens;
+    for (int i = 0; i < batch.n_tokens; i++) {
+        if (batch.logits[i]) {
+            llama_token token = llama_get_sampled_token_ith(test_ctx.ctx.get(), i);
+            const std::string token_str = test_ctx.token_to_piece(token, false);
+            //printf("Position %d: token id=%d, string='%s'\n", i, token, token_str.c_str());
+            GGML_ASSERT(token >= 0 && token < test_ctx.n_vocab);
+            sampled_tokens.push_back(token);
+        }
+    }
+
+    GGML_ASSERT((int)sampled_tokens.size() == batch.n_tokens);
+    printf("Sampled %zu tokens for sequence %d\n", sampled_tokens.size(), seq_id);
+
     llama_batch_free(batch);
 
-    printf("backend max outputs test PASSED\n");
+    printf("backend multiple outputs test PASSED\n");
 }
 
 struct backend_test_case {
@@ -1023,7 +1038,7 @@ static const backend_test_case BACKEND_TESTS[] = {
     { "dist",            test_backend_dist_sampling,           true  },
     { "dist_and_cpu",    test_backend_dist_sampling_and_cpu,   true  },
     { "set_sampler",     test_backend_set_sampler,             true  },
-    { "max_outputs",     test_backend_max_outputs,             true  },
+    { "multiple_outputs",test_backend_multiple_outputs,        true  },
     { "mixed",           test_backend_mixed_sampling,          true  },
     { "min_p",           test_backend_min_p_sampling,          true  },
     { "cpu_mixed",       test_backend_cpu_mixed_batch,         true  },

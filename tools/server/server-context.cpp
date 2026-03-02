@@ -1153,9 +1153,6 @@ private:
 
             backend_sampling &= task.params.sampling.backend_sampling;
 
-            // TODO: speculative decoding requires multiple samples per batch - not supported yet
-            backend_sampling &= !(slot.spec && task.params.speculative.n_max > 0);
-
             // TODO: getting post/pre sampling logits is not yet supported with backend sampling
             backend_sampling &= !need_logits;
 
