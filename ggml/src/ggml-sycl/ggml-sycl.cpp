@@ -1312,8 +1312,18 @@ struct routing_indices_cache {
     int                  nrows;        // Number of rows (e.g., n_tokens)
     std::string          tensor_name;  // Name of the argsort output tensor
     std::mutex           mutex;        // Thread-safe access
+    sycl::event          pending_event;  // Deferred D2H copy event (waited lazily on access)
+    bool                 has_pending;    // True if pending_event needs waiting
 
-    routing_indices_cache() : ncols(0), nrows(0) {}
+    routing_indices_cache() : ncols(0), nrows(0), has_pending(false) {}
+
+    // Complete any pending async copy. Caller must hold mutex.
+    void wait_pending() {
+        if (has_pending) {
+            pending_event.wait();
+            has_pending = false;
+        }
+    }
 };
 
 static routing_indices_cache g_routing_indices_cache;
@@ -1353,23 +1363,25 @@ static void store_routing_indices(const char *    tensor_name,
     // Allocate host buffer for async copy
     std::vector<int32_t> host_indices(count);
 
-    // Async copy from device to host
+    // Async D2H copy — deferred wait on consumer access (get_routing_indices).
+    // The in-order stream guarantees this memcpy completes before any subsequent
+    // kernels on the same stream, so we only need to wait when the HOST reads it.
     auto copy_event = stream->memcpy(host_indices.data(), indices, count * sizeof(int32_t));
 
-    // Wait for copy to complete (needed for cache storage)
-    // TODO: For better performance, use an event callback instead of blocking wait
-    copy_event.wait();
-
-    // Store in cache with lock
+    // Store in cache with deferred event — no blocking wait here
     {
         std::lock_guard<std::mutex> lock(g_routing_indices_cache.mutex);
-        g_routing_indices_cache.indices     = std::move(host_indices);
-        g_routing_indices_cache.ncols       = ncols;
-        g_routing_indices_cache.nrows       = nrows;
-        g_routing_indices_cache.tensor_name = tensor_name;
+        // Complete any prior pending copy before overwriting buffer
+        g_routing_indices_cache.wait_pending();
+        g_routing_indices_cache.indices       = std::move(host_indices);
+        g_routing_indices_cache.ncols         = ncols;
+        g_routing_indices_cache.nrows         = nrows;
+        g_routing_indices_cache.tensor_name   = tensor_name;
+        g_routing_indices_cache.pending_event = copy_event;
+        g_routing_indices_cache.has_pending   = true;
     }
 
-    GGML_SYCL_DEBUG("[ROUTING] Cached %d x %d indices for tensor '%s'\n", ncols, nrows, tensor_name);
+    GGML_SYCL_DEBUG("[ROUTING] Submitted async %d x %d indices for tensor '%s'\n", ncols, nrows, tensor_name);
 }
 
 // Public API: Get routing indices from cache
@@ -1392,6 +1404,9 @@ bool ggml_sycl_get_routing_indices(const char *           tensor_name,
         }
     }
 
+    // Complete deferred D2H copy before reading host buffer
+    g_routing_indices_cache.wait_pending();
+
     // Return cached data
     out_indices   = g_routing_indices_cache.indices;
     n_expert_used = g_routing_indices_cache.ncols;  // ncols = n_experts (sorted)
@@ -1403,6 +1418,7 @@ bool ggml_sycl_get_routing_indices(const char *           tensor_name,
 // Public API: Clear routing indices cache
 void ggml_sycl_clear_routing_indices_cache() {
     std::lock_guard<std::mutex> lock(g_routing_indices_cache.mutex);
+    g_routing_indices_cache.wait_pending();
     g_routing_indices_cache.indices.clear();
     g_routing_indices_cache.ncols = 0;
     g_routing_indices_cache.nrows = 0;
@@ -24117,8 +24133,10 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
     // Read counts/offsets to host (needed for sorted path that iterates per-expert)
     h_counts.resize(n_experts);
     h_offsets.resize(n_experts + 1);
-    stream->memcpy(h_counts.data(), expert_counts, n_experts * sizeof(int32_t)).wait();
-    // Read n_experts+1 offsets to get the total valid pairs at the end
+    stream->memcpy(h_counts.data(), expert_counts, n_experts * sizeof(int32_t));
+    // Read n_experts+1 offsets to get the total valid pairs at the end.
+    // Single wait: in-order stream guarantees first memcpy completes before second,
+    // and .wait() on second ensures both are done.
     stream->memcpy(h_offsets.data(), expert_offsets, (n_experts + 1) * sizeof(int32_t)).wait();
     // actual_pairs = sum of all expert counts = h_offsets[n_experts]
     // This is the number of VALID (token, expert) pairs, not total_pairs which includes empty slots
@@ -25225,19 +25243,23 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             // Secondary GPU expert dispatch: activation shipping via host-pinned
             // ring buffers, GEMM on secondary GPU's in-order queue.
             //
-            // Flow for each entry:
-            //   1. D2H: activation float[K] from primary GPU → host-pinned act_staging
-            //      (via stream, then stream->wait())
-            //   2. Quantize: act_staging → Q8_1 SOA device buffer on secondary GPU
-            //      (mmvq_submit_quantize_q8_1_soa on target queue; reads malloc_host via PCIe)
-            //   3. GEMM: Q4_0/Q6_K SOA weights × Q8_1 act → device output buffer
-            //      (mmvq_submit_q4_0_soa / mmvq_submit_q6_k_soa on target queue)
-            //   4. D2H: device output → host-pinned out_staging (target queue + wait)
-            //   5. H2D: out_staging → primary GPU dst (stream)
+            // Batched activation shipping: instead of per-expert synchronization,
+            // process experts in chunks of MERGE_RING_SIZE with only 2 queue drains
+            // per chunk (one primary, one secondary) instead of 2 per expert.
             //
-            // Ring buffers (MERGE_RING_SIZE slots) prevent data races between
-            // consecutive MoE layers that may overlap in time.
-            // Device-side buffers (Q8_1 + output) are lazily allocated and reused.
+            // Flow per chunk of up to MERGE_RING_SIZE experts:
+            //   Phase 1: Submit ALL D2H activation copies (each to its own staging slot)
+            //   Phase 2: Single stream->wait() — all activations now on host
+            //   Phase 3: Submit ALL quantize + GEMM kernels on secondary queue
+            //            (in-order queue handles sequencing; each uses its own dev buffers)
+            //   Phase 4: Submit ALL D2H result copies from secondary GPU
+            //   Phase 5: Single target_queue->wait() — all results now on host
+            //   Phase 6: Submit ALL H2D scatter copies back to primary GPU
+            //
+            // This reduces 2*N queue drains to 2 per chunk (or 2 total when N <= 8).
+            //
+            // Ring buffers (MERGE_RING_SIZE slots) give each expert its own staging
+            // to prevent data races. Device-side buffers are lazily allocated per slot.
             //
             // CRITICAL: Never use cross-device depends_on on OOQ (broken on Level Zero).
             // Use stream->wait() and target_queue->wait() for cross-device synchronization.
@@ -25262,8 +25284,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     void *        dev_q8_1[MERGE_RING_SIZE]    = {};
                     float *       dev_out[MERGE_RING_SIZE]     = {};
                     size_t        dev_q8_1_sz[MERGE_RING_SIZE] = {};
-                    size_t        dev_out_sz[MERGE_RING_SIZE]  = {};
-                    int           ring_slot                    = 0;
+                    size_t        dev_out_sz[MERGE_RING_SIZE]     = {};
                     sycl::context pri_ctx{};
                     sycl::context sec_ctx{};
                     bool          valid                        = false;
@@ -25304,124 +25325,171 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 const size_t needed_out = static_cast<size_t>(N) * sizeof(float);
                 const size_t needed_q81 = mmvq_q8_1_soa_size(static_cast<int>(K));
 
-                const int slot = ring.ring_slot % MERGE_RING_SIZE;
-                ring.ring_slot++;
-
-                // (Re)allocate host-pinned staging buffers for this slot if needed.
-                // Each slot tracks its own size to correctly handle K/N changes.
-                if (!act_staging[slot] || needed_act > act_staging_sz[slot]) {
-                    if (act_staging[slot]) { sycl::free(act_staging[slot], pri_ctx); }
-                    act_staging[slot]    = sycl::malloc_host<float>(K, pri_ctx);
-                    act_staging_sz[slot] = needed_act;
-                }
-                if (!out_staging[slot] || needed_out > out_staging_sz[slot]) {
-                    if (out_staging[slot]) { sycl::free(out_staging[slot], pri_ctx); }
-                    out_staging[slot]    = sycl::malloc_host<float>(N, pri_ctx);
-                    out_staging_sz[slot] = needed_out;
-                }
-
-                if (!act_staging[slot] || !out_staging[slot]) {
-                    GGML_LOG_WARN("[MoE-GPU1] Failed to allocate host-pinned staging, "
-                                  "falling back to CPU for %zu experts\n", entries.size());
-                    for (const auto & e : entries) {
-                        cpu_entries.push_back(e);
+                // Ensure ALL slots have sufficient staging buffers for the current K/N.
+                // We need one slot per expert in each chunk, so pre-allocate all slots.
+                for (int s = 0; s < MERGE_RING_SIZE; s++) {
+                    if (!act_staging[s] || needed_act > act_staging_sz[s]) {
+                        if (act_staging[s]) {
+                            sycl::free(act_staging[s], pri_ctx);
+                        }
+                        act_staging[s]    = sycl::malloc_host<float>(K, pri_ctx);
+                        act_staging_sz[s] = needed_act;
                     }
-                    return;
-                }
-
-                // (Re)allocate device-side buffers on secondary GPU for this slot.
-                if (!dev_q8_1[slot] || needed_q81 > dev_q8_1_sz[slot]) {
-                    if (dev_q8_1[slot]) { sycl::free(dev_q8_1[slot], sec_ctx); }
-                    dev_q8_1[slot]    = sycl::malloc_device(needed_q81, *target_queue);
-                    dev_q8_1_sz[slot] = needed_q81;
-                }
-                if (!dev_out[slot] || needed_out > dev_out_sz[slot]) {
-                    if (dev_out[slot]) { sycl::free(dev_out[slot], sec_ctx); }
-                    dev_out[slot]    = sycl::malloc_device<float>(N, *target_queue);
-                    dev_out_sz[slot] = needed_out;
-                }
-
-                if (!dev_q8_1[slot] || !dev_out[slot]) {
-                    GGML_LOG_WARN("[MoE-GPU1] Failed to allocate secondary GPU device buffers, "
-                                  "falling back to CPU for %zu experts\n", entries.size());
-                    if (dev_q8_1[slot]) { sycl::free(dev_q8_1[slot], sec_ctx); dev_q8_1[slot] = nullptr; }
-                    if (dev_out[slot])  { sycl::free(dev_out[slot],  sec_ctx); dev_out[slot]  = nullptr; }
-                    for (const auto & e : entries) {
-                        cpu_entries.push_back(e);
+                    if (!out_staging[s] || needed_out > out_staging_sz[s]) {
+                        if (out_staging[s]) {
+                            sycl::free(out_staging[s], pri_ctx);
+                        }
+                        out_staging[s]    = sycl::malloc_host<float>(N, pri_ctx);
+                        out_staging_sz[s] = needed_out;
                     }
-                    return;
+                    if (!act_staging[s] || !out_staging[s]) {
+                        GGML_LOG_WARN(
+                            "[MoE-GPU1] Failed to allocate host-pinned staging, "
+                            "falling back to CPU for %zu experts\n",
+                            entries.size());
+                        for (const auto & e : entries) {
+                            cpu_entries.push_back(e);
+                        }
+                        return;
+                    }
+                    if (!dev_q8_1[s] || needed_q81 > dev_q8_1_sz[s]) {
+                        if (dev_q8_1[s]) {
+                            sycl::free(dev_q8_1[s], sec_ctx);
+                        }
+                        dev_q8_1[s]    = sycl::malloc_device(needed_q81, *target_queue);
+                        dev_q8_1_sz[s] = needed_q81;
+                    }
+                    if (!dev_out[s] || needed_out > dev_out_sz[s]) {
+                        if (dev_out[s]) {
+                            sycl::free(dev_out[s], sec_ctx);
+                        }
+                        dev_out[s]    = sycl::malloc_device<float>(N, *target_queue);
+                        dev_out_sz[s] = needed_out;
+                    }
+                    if (!dev_q8_1[s] || !dev_out[s]) {
+                        GGML_LOG_WARN(
+                            "[MoE-GPU1] Failed to allocate secondary GPU device buffers, "
+                            "falling back to CPU for %zu experts\n",
+                            entries.size());
+                        // Clean up partially allocated device buffers
+                        for (int j = 0; j <= s; j++) {
+                            if (dev_q8_1[j]) {
+                                sycl::free(dev_q8_1[j], sec_ctx);
+                                dev_q8_1[j] = nullptr;
+                            }
+                            if (dev_out[j]) {
+                                sycl::free(dev_out[j], sec_ctx);
+                                dev_out[j] = nullptr;
+                            }
+                        }
+                        for (const auto & e : entries) {
+                            cpu_entries.push_back(e);
+                        }
+                        return;
+                    }
                 }
 
-                for (const auto & entry : entries) {
-                    // Step 1: D2H activation from primary GPU → host-pinned staging.
-                    // Wait ensures activation is ready on host before secondary GPU reads it.
-                    const int64_t i11      = entry.id % ne11;
-                    const int64_t i12      = entry.iid1;
-                    const char *  src1_dev = src1_original + i11 * nb11 + i12 * nb12;
-                    stream->memcpy(act_staging[slot], src1_dev, needed_act);
-                    stream->wait();
-
-                    // Step 2: Quantize activation on secondary GPU queue.
-                    // act_staging[slot] is malloc_host — secondary GPU reads via PCIe zero-copy.
-                    // Output: SOA Q8_1 in dev_q8_1[slot] on secondary GPU device memory.
-                    mmvq_submit_quantize_q8_1_soa(*target_queue,
-                                                  act_staging[slot],
-                                                  dev_q8_1[slot],
-                                                  static_cast<int>(K));
-
-                    // Step 3: GEMM on secondary GPU queue.
-                    // Weights (entry.device_ptr) are already in SOA layout in secondary GPU VRAM.
-                    // Dispatch appropriate kernel based on weight type.
+                // Pre-filter: separate supported entries from unsupported (CPU fallback).
+                // This avoids branching inside the batched pipeline.
+                std::vector<size_t> gpu_indices;
+                gpu_indices.reserve(entries.size());
+                for (size_t i = 0; i < entries.size(); i++) {
                     switch (src0->type) {
                         case GGML_TYPE_Q4_0:
-                            mmvq_submit_q4_0_soa(*target_queue,
-                                                 entry.device_ptr,
-                                                 dev_q8_1[slot],
-                                                 dev_out[slot],
-                                                 static_cast<int>(K),
-                                                 static_cast<int>(N),
-                                                 static_cast<int>(N),
-                                                 0);
-                            break;
                         case GGML_TYPE_Q6_K:
-                            mmvq_submit_q6_k_soa(*target_queue,
-                                                 entry.device_ptr,
-                                                 dev_q8_1[slot],
-                                                 dev_out[slot],
-                                                 static_cast<int>(K),
-                                                 static_cast<int>(N),
-                                                 static_cast<int>(N),
-                                                 0);
+                            gpu_indices.push_back(i);
                             break;
                         default:
-                            // Unsupported type: fall back to CPU for this entry.
-                            // (Build a CPU task and submit it synchronously.)
-                            GGML_LOG_WARN("[MoE-GPU1] Unsupported weight type %d, "
-                                          "routing expert %d to CPU\n",
-                                          static_cast<int>(src0->type), entry.expert_id);
-                            target_queue->wait();  // Drain any pending secondary GPU work
-                            cpu_entries.push_back(entry);
-                            continue;
+                            GGML_LOG_WARN(
+                                "[MoE-GPU1] Unsupported weight type %d, "
+                                "routing expert %d to CPU\n",
+                                static_cast<int>(src0->type), entries[i].expert_id);
+                            cpu_entries.push_back(entries[i]);
+                            break;
                     }
-
-                    // Step 4: D2H result from secondary GPU → host-pinned out_staging.
-                    // MUST wait before primary GPU reads from out_staging.
-                    // Use secondary queue's in-order wait (OOQ depends_on is broken).
-                    target_queue->memcpy(out_staging[slot], dev_out[slot], needed_out);
-                    target_queue->wait();
-
-                    // Step 5: H2D scatter from host-pinned → primary GPU dst.
-                    // out_staging[slot] is malloc_host — primary GPU reads via PCIe zero-copy.
-                    const int64_t i1   = entry.id;
-                    const int64_t i2   = entry.iid1;
-                    char *        d_d  = dst_original + i1 * nb1 + i2 * nb2;
-                    stream->memcpy(d_d, out_staging[slot], needed_out);
                 }
 
-                // Wait for all scatter H2D copies to complete on primary queue.
-                // This ensures dst is fully written before any downstream consumer
-                // submits operations that depend on it.
-                if (!entries.empty()) {
+                if (gpu_indices.empty()) {
+                    return;
+                }
+
+                // Process GPU-eligible experts in chunks of MERGE_RING_SIZE.
+                // Each expert in a chunk gets its own staging slot to enable
+                // fully parallel D2H/compute/H2D without per-expert waits.
+                const size_t n_gpu = gpu_indices.size();
+                for (size_t chunk_start = 0; chunk_start < n_gpu; chunk_start += MERGE_RING_SIZE) {
+                    const size_t chunk_end = std::min(chunk_start + MERGE_RING_SIZE, n_gpu);
+                    const size_t chunk_sz  = chunk_end - chunk_start;
+
+                    // Phase 1: Submit ALL D2H activation copies on primary queue.
+                    // Each expert gets its own act_staging slot — no data races.
+                    for (size_t ci = 0; ci < chunk_sz; ci++) {
+                        const auto &  entry    = entries[gpu_indices[chunk_start + ci]];
+                        const int     slot     = static_cast<int>(ci);
+                        const int64_t i11      = entry.id % ne11;
+                        const int64_t i12      = entry.iid1;
+                        const char *  src1_dev = src1_original + i11 * nb11 + i12 * nb12;
+                        stream->memcpy(act_staging[slot], src1_dev, needed_act);
+                    }
+
+                    // Phase 2: Single primary queue drain — all activations now on host.
+                    // In-order stream guarantees all memcpys complete in submission order.
+                    stream->wait();
+
+                    // Phase 3: Submit ALL quantize + GEMM kernels on secondary queue.
+                    // Target queue is in-order, so quantize completes before GEMM for
+                    // each slot. Different slots use different device buffers, so
+                    // kernels for different experts can overlap on the GPU.
+                    for (size_t ci = 0; ci < chunk_sz; ci++) {
+                        const auto & entry = entries[gpu_indices[chunk_start + ci]];
+                        const int    slot  = static_cast<int>(ci);
+
+                        // Quantize: act_staging[slot] (malloc_host, PCIe zero-copy)
+                        //         → dev_q8_1[slot] (device memory on secondary GPU)
+                        mmvq_submit_quantize_q8_1_soa(*target_queue, act_staging[slot], dev_q8_1[slot],
+                                                      static_cast<int>(K));
+
+                        // GEMM: weights (SOA, secondary VRAM) × Q8_1 act → dev_out[slot]
+                        switch (src0->type) {
+                            case GGML_TYPE_Q4_0:
+                                mmvq_submit_q4_0_soa(*target_queue, entry.device_ptr, dev_q8_1[slot], dev_out[slot],
+                                                     static_cast<int>(K), static_cast<int>(N), static_cast<int>(N), 0);
+                                break;
+                            case GGML_TYPE_Q6_K:
+                                mmvq_submit_q6_k_soa(*target_queue, entry.device_ptr, dev_q8_1[slot], dev_out[slot],
+                                                     static_cast<int>(K), static_cast<int>(N), static_cast<int>(N), 0);
+                                break;
+                            default:
+                                GGML_ASSERT(false && "unreachable: pre-filtered above");
+                                break;
+                        }
+                    }
+
+                    // Phase 4: Submit ALL D2H result copies from secondary GPU.
+                    // Each expert reads from its own dev_out[slot] → out_staging[slot].
+                    for (size_t ci = 0; ci < chunk_sz; ci++) {
+                        const int slot = static_cast<int>(ci);
+                        target_queue->memcpy(out_staging[slot], dev_out[slot], needed_out);
+                    }
+
+                    // Phase 5: Single secondary queue drain — all results now on host.
+                    target_queue->wait();
+
+                    // Phase 6: Submit ALL H2D scatter copies back to primary GPU.
+                    // out_staging[slot] is malloc_host — primary GPU reads via PCIe.
+                    for (size_t ci = 0; ci < chunk_sz; ci++) {
+                        const auto &  entry = entries[gpu_indices[chunk_start + ci]];
+                        const int     slot  = static_cast<int>(ci);
+                        const int64_t i1    = entry.id;
+                        const int64_t i2    = entry.iid1;
+                        char *        d_d   = dst_original + i1 * nb1 + i2 * nb2;
+                        stream->memcpy(d_d, out_staging[slot], needed_out);
+                    }
+                }
+
+                // Final primary queue drain: ensures ALL scatter H2D copies are complete
+                // before any downstream consumer reads dst.
+                if (!gpu_indices.empty()) {
                     stream->wait();
                 }
             };
