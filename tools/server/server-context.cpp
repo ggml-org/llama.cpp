@@ -641,7 +641,8 @@ private:
 
         add_bos_token = llama_vocab_get_add_bos(vocab);
 
-        if (params_base.speculative.has_dft()) {
+        //if (params_base.speculative.has_dft()) {
+        {
             SRV_INF("loading draft model '%s'\n", params_base.speculative.mparams_dft.path.c_str());
 
             const auto & params_spec = params_base.speculative;
@@ -664,6 +665,7 @@ private:
 
             params_dft.tensor_buft_overrides = params_spec.tensor_buft_overrides;
 
+            /*
             auto mparams_dft = common_model_params_to_llama(params_dft);
 
             model_dft.reset(llama_model_load_from_file(params_dft.model.path.c_str(), mparams_dft));
@@ -674,6 +676,13 @@ private:
 
             params_base.speculative.model_dft = model_dft.get();
             params_base.speculative.cparams_dft = common_context_params_to_llama(params_dft);
+            */
+
+            // FOR TESTING ONLY!!!!!!
+            params_base.speculative.type = COMMON_SPECULATIVE_TYPE_NEXTN;
+            params_base.speculative.model_dft = model;
+            params_base.speculative.cparams_dft = common_context_params_to_llama(params_dft);
+            params_base.speculative.cparams_dft.graph_type = LLAMA_GRAPH_TYPE_DECODER_MTP;
         }
 
         std::string & mmproj_path = params_base.mmproj.path;

@@ -323,6 +323,17 @@ void llm_graph_input_cross_embd::set_input(const llama_ubatch * ubatch) {
     }
 }
 
+void llm_graph_input_cross_mtp::set_input(const llama_ubatch * ubatch) {
+    GGML_UNUSED(ubatch);
+
+    if (cross_mtp && !cross->mtp_embd.empty()) {
+        assert(cross_mtp->type == GGML_TYPE_F32);
+        assert(ggml_nelements(cross_mtp) == (int64_t)cross->mtp_embd.size());
+
+        ggml_backend_tensor_set(cross_mtp, cross->mtp_embd.data(), 0, ggml_nbytes(cross_mtp));
+    }
+}
+
 static void print_mask(const float * data, int64_t n_tokens, int64_t n_kv, int64_t n_swa, llama_swa_type swa_type) {
     LLAMA_LOG_DEBUG("%s: === Attention mask ===\n", __func__);
     const char * swa_type_str = "unknown";
@@ -1677,6 +1688,20 @@ ggml_tensor * llm_graph_context::build_inp_cross_embd() const {
     const auto n_enc  = !cross->v_embd.empty() ? cross->n_enc  : hparams.n_ctx_train;
 
     cur = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_enc);
+    ggml_set_input(cur);
+
+    res->add_input(std::move(inp));
+
+    return cur;
+}
+
+ggml_tensor * llm_graph_context::build_inp_cross_mtp() const {
+    auto inp = std::make_unique<llm_graph_input_cross_mtp>(cross);
+
+    auto & cur = inp->cross_mtp;
+
+    GGML_ASSERT(cross != nullptr);
+    cur = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, cross->n_embd, cross->n_token);
     ggml_set_input(cur);
 
     res->add_input(std::move(inp));

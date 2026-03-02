@@ -253,6 +253,9 @@ struct llama_hparams {
     // dimension of output embeddings
     uint32_t n_embd_out() const;
 
+    // dimension of cross embeddings between main LLM and MTP
+    uint32_t get_n_embd_mtp() const;
+
     // dimension of key embeddings across all k-v heads
     uint32_t n_embd_k_gqa(uint32_t il = 0) const;
 

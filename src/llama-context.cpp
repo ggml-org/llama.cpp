@@ -189,6 +189,23 @@ llama_context::llama_context(
         }
     }
 
+    switch (params.graph_type) {
+        case LLAMA_GRAPH_TYPE_DEFAULT:
+            gtype = LLM_GRAPH_TYPE_DEFAULT;
+             break;
+        case LLAMA_GRAPH_TYPE_ENCODER:
+            gtype = LLM_GRAPH_TYPE_ENCODER;
+            break;
+        case LLAMA_GRAPH_TYPE_DECODER:
+            gtype = LLM_GRAPH_TYPE_DECODER;
+            break;
+        case LLAMA_GRAPH_TYPE_DECODER_MTP:
+            gtype = LLM_GRAPH_TYPE_DECODER_MTP;
+            break;
+        default:
+            throw std::runtime_error("invalid graph type");
+    }
+
     LLAMA_LOG_INFO("%s: n_seq_max     = %u\n",   __func__, cparams.n_seq_max);
     LLAMA_LOG_INFO("%s: n_ctx         = %u\n",   __func__, cparams.n_ctx);
     LLAMA_LOG_INFO("%s: n_ctx_seq     = %u\n",   __func__, cparams.n_ctx_seq);
@@ -769,6 +786,24 @@ float * llama_context::get_embeddings_seq(llama_seq_id seq_id) {
     }
 
     return it->second.data();
+}
+
+int32_t llama_context::cpy_mtp_state(llama_context & ctx_mtp) {
+    if (ctx_mtp.gtype != LLM_GRAPH_TYPE_DECODER_MTP) {
+        LLAMA_LOG_ERROR("%s: target context is not MTP\n", __func__);
+        return -1;
+    }
+
+    if (cross.n_token == 0 || cross.n_embd == 0) {
+        LLAMA_LOG_ERROR("%s: no state to copy\n", __func__);
+        return -1;
+    }
+
+    // TODO: maybe std::move is better?
+    LLAMA_LOG_DEBUG("%s: copying MTP state (n_token = %lld, n_embd = %lld)\n", __func__, cross.n_token, cross.n_embd);
+    ctx_mtp.cross = cross;
+
+    return 0;
 }
 
 llama_token llama_context::get_sampled_token_ith(int32_t idx) {
@@ -1421,6 +1456,18 @@ static bool needs_raw_logits(const llama_ubatch & ubatch, const std::map<llama_s
 int llama_context::decode(const llama_batch & batch_inp) {
     GGML_ASSERT((!batch_inp.token && batch_inp.embd) || (batch_inp.token && !batch_inp.embd)); // NOLINT
 
+    if (gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
+        if (model.hparams.nextn_predict_layers == 0) {
+            LLAMA_LOG_ERROR("%s: MTP decode called but model does not support MTP\n", __func__);
+            return -1;
+        }
+        if ((uint32_t)batch_inp.n_tokens > n_ubatch()) {
+            // TODO @ngxson : n_tokens > ubatch will mess up the llama_cross state, may need to fix it later
+            LLAMA_LOG_ERROR("%s: MTP decode requires n_ubatch >= n_tokens\n", __func__);
+            return -1;
+        }
+    }
+
     if (!memory) {
         LLAMA_LOG_DEBUG("%s: cannot decode batches with this context (calling encode() instead)\n", __func__);
         return encode(batch_inp);
@@ -1549,6 +1596,17 @@ int llama_context::decode(const llama_batch & batch_inp) {
         break;
     }
 
+    const bool update_mtp_state = gtype == LLM_GRAPH_TYPE_DECODER_MTP // this is MTP layer
+        || (hparams.nextn_predict_layers > 0 && n_outputs_all > 0); // or, this is the main LLM, we need to forward state to MTP layer
+
+    // set MTP state if needed
+    if (update_mtp_state) {
+        // printf("\n\nupdate MTP state: gtype = %d, n_outputs_all = %d\n", (int) gtype, n_outputs_all);
+        cross.n_embd  = hparams.get_n_embd_mtp();
+        cross.n_token = n_outputs_all;
+        cross.mtp_embd.resize(cross.n_embd*cross.n_token);
+    }
+
     // reserve output buffer
     if (output_reserve(n_outputs_all) < n_outputs_all) {
         LLAMA_LOG_ERROR("%s: could not reserve space for batch with %d outputs\n", __func__, n_outputs_all);
@@ -1577,7 +1635,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
 
         ggml_status status;
-        const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status);
+        const auto * res = process_ubatch(ubatch, gtype, mctx.get(), status);
 
         if (!res) {
             // the last ubatch failed or was aborted -> remove all positions of that ubatch from the memory module
@@ -1641,6 +1699,14 @@ int llama_context::decode(const llama_batch & batch_inp) {
         if (embd.data && t_embd && n_outputs > 0) {
             ggml_backend_t backend_embd = ggml_backend_sched_get_tensor_backend(sched.get(), t_embd);
             GGML_ASSERT(backend_embd != nullptr);
+
+            // set MTP state if needed
+            if (update_mtp_state) {
+                const int64_t n_embd_mtp = cross.n_embd;
+                GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
+                GGML_ASSERT((n_outputs_prev + n_outputs)*n_embd_mtp <= (int64_t)cross.mtp_embd.size());
+                ggml_backend_tensor_get_async(backend_embd, t_embd, cross.mtp_embd.data(), 0, n_outputs*n_embd_mtp*sizeof(float));
+            }
 
             switch (cparams.pooling_type) {
                 case LLAMA_POOLING_TYPE_NONE:
@@ -2801,6 +2867,7 @@ llama_context_params llama_context_default_params() {
         /*.kv_unified                  =*/ false,
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
+        /*.graph_type                  =*/ LLAMA_GRAPH_TYPE_DEFAULT,
     };
 
     return result;
@@ -2987,6 +3054,12 @@ float * llama_get_embeddings_seq(llama_context * ctx, llama_seq_id seq_id) {
     ctx->synchronize();
 
     return ctx->get_embeddings_seq(seq_id);
+}
+
+int32_t llama_mtp_start(llama_context * ctx_llm, llama_context * ctx_mtp) {
+    ctx_llm->synchronize();
+
+    return ctx_llm->cpy_mtp_state(*ctx_mtp);
 }
 
 bool llama_set_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler * smpl) {

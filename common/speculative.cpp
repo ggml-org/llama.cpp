@@ -21,6 +21,7 @@ const std::vector<enum common_speculative_type> common_speculative_types = {
     COMMON_SPECULATIVE_TYPE_NONE,
     COMMON_SPECULATIVE_TYPE_DRAFT,
     COMMON_SPECULATIVE_TYPE_EAGLE3,
+    COMMON_SPECULATIVE_TYPE_NEXTN,
     COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V,
@@ -32,6 +33,7 @@ const std::map<std::string, enum common_speculative_type> common_speculative_typ
     {"none",          COMMON_SPECULATIVE_TYPE_NONE},
     {"draft",         COMMON_SPECULATIVE_TYPE_DRAFT},
     {"eagle3",        COMMON_SPECULATIVE_TYPE_EAGLE3},
+    {"nextn",         COMMON_SPECULATIVE_TYPE_NEXTN},
     {"ngram_simple",  COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE},
     {"ngram_map_k",   COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K},
     {"ngram_map_k4v", COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V},
@@ -462,6 +464,127 @@ struct common_speculative_state_eagle3 : public common_speculative_state {
     }
 };
 
+struct common_speculative_state_nextn : public common_speculative_state {
+    llama_context * ctx_tgt; // used for copying state from tgt --> dft
+    llama_context * ctx_dft;
+
+    common_sampler * smpl;
+
+    llama_batch  batch;
+    llama_tokens prompt_dft;
+
+    bool vocab_cmpt = true; // whether retokenization is needed
+    std::unordered_map<std::string, std::string> vocab_map;
+
+    common_speculative_state_nextn(
+            enum common_speculative_type type,
+            llama_context * ctx_tgt,
+            llama_context * ctx_dft)
+        : common_speculative_state(type)
+        , ctx_tgt(ctx_tgt)
+        , ctx_dft(ctx_dft)
+    {
+        batch = llama_batch_init(llama_n_batch(ctx_dft), 0, 1);
+
+        {
+            common_params_sampling params;
+            params.no_perf = false;
+            params.top_k = 10;
+            params.samplers = {
+                COMMON_SAMPLER_TYPE_TOP_K,
+            };
+
+            smpl = common_sampler_init(llama_get_model(ctx_dft), params);
+        }
+    }
+
+    ~common_speculative_state_nextn() override {
+        llama_perf_context_print(ctx_dft);
+
+        common_sampler_free(smpl);
+
+        llama_batch_free(batch);
+    }
+
+    void begin(const llama_tokens & prompt) override {
+        GGML_UNUSED(prompt);
+    }
+
+    void draft(
+            const common_params_speculative & params,
+            const llama_tokens & prompt_tgt,
+            llama_token id_last,
+            llama_tokens & result) override {
+        auto * spec = this;
+
+        auto & batch      = spec->batch;
+        auto & ctx_tgt    = spec->ctx_tgt;
+        auto & ctx_dft    = spec->ctx_dft;
+        auto & smpl       = spec->smpl;
+        auto & prompt_dft = spec->prompt_dft;
+
+        auto * mem_dft = llama_get_memory(ctx_dft);
+
+        result.clear();
+        result.reserve(params.n_max);
+
+        llama_memory_clear(mem_dft, false);
+        common_sampler_reset(smpl);
+
+        llama_mtp_start(ctx_tgt, ctx_dft); // copy state from main LLM to draft
+
+        // decode first token
+        int n_past = 0;
+        common_batch_clear(batch);
+        common_batch_add(batch, id_last, n_past++, { 0 }, true);
+        llama_decode(ctx_dft, batch);
+        common_sampler_accept(smpl, id_last, true);
+
+        // sample n_draft tokens from the draft model
+        for (int i = 0; i < params.n_max; ++i) {
+            // printf("drafting token %d\n", i);
+            common_batch_clear(batch);
+            common_sampler_sample(smpl, ctx_dft, 0, true);
+
+            const auto * cur_p = common_sampler_get_candidates(smpl, true);
+
+            for (int k = 0; k < std::min(3, (int) cur_p->size); ++k) {
+                LOG_DBG(" - draft candidate %3d, pos %3d: %6d (%8.3f) '%s'\n",
+                        k, i, cur_p->data[k].id, cur_p->data[k].p, common_token_to_piece(ctx_dft, cur_p->data[k].id).c_str());
+            }
+
+            // add drafted token for each sequence
+            const llama_token id = cur_p->data[0].id;
+
+            common_sampler_accept(smpl, id, true);
+
+            result.push_back(id);
+
+            if (params.n_max <= (int) result.size()) {
+                break;
+            }
+
+            // only collect very high-confidence draft tokens
+            if (cur_p->data[0].p < params.p_min) {
+                break;
+            }
+
+            common_batch_add(batch, id, n_past++, { 0 }, true);
+
+            // evaluate the drafted tokens on the draft model
+            llama_decode(ctx_dft, batch);
+
+            prompt_dft.push_back(id);
+        }
+    }
+
+    void accept(uint16_t n_accepted) override {
+        // noop
+        GGML_UNUSED(n_accepted);
+        // printf("\n\n%s: accepted %d tokens\n\n", __func__, n_accepted);
+    }
+};
+
 // state of self-speculation (simple implementation, not ngram-map)
 struct common_speculative_state_ngram_simple : public common_speculative_state {
     common_ngram_simple_config config;
@@ -853,6 +976,7 @@ common_speculative * common_speculative_init(
     {
         bool has_draft = !params.mparams_dft.path.empty();
         bool has_draft_eagle3 = false; // TODO PR-18039: if params.speculative.eagle3
+        bool has_draft_nextn   = (params.type == COMMON_SPECULATIVE_TYPE_NEXTN);
 
         bool has_ngram_cache   = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_CACHE);
         bool has_ngram_simple  = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE);
@@ -898,6 +1022,9 @@ common_speculative * common_speculative_init(
         if (has_draft_eagle3) {
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_EAGLE3, params));
         }
+        if (has_draft_nextn) {
+            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NEXTN, params));
+        }
     }
 
     std::vector<std::unique_ptr<common_speculative_state>> impls = {};
@@ -917,6 +1044,13 @@ common_speculative * common_speculative_init(
             }
             case COMMON_SPECULATIVE_TYPE_EAGLE3: {
                 impls.push_back(std::make_unique<common_speculative_state_eagle3>(config.type));
+                break;
+            }
+            case COMMON_SPECULATIVE_TYPE_NEXTN: {
+                impls.push_back(std::make_unique<common_speculative_state_nextn>(config.type,
+                    /* .ctx_tgt      = */ ctx_tgt,
+                    /* .ctx_dft      = */ ctx_dft
+                ));
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE: {
