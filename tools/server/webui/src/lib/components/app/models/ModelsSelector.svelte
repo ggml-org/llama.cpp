@@ -78,32 +78,56 @@
 	let searchTerm = $state('');
 	let highlightedIndex = $state<number>(-1);
 
-	let filteredOptions: ModelOption[] = $derived(
-		(() => {
-			const term = searchTerm.trim().toLowerCase();
-			if (!term) return options;
+	let filteredOptions: ModelOption[] = $derived.by(() => {
+		const term = searchTerm.trim().toLowerCase();
+		if (!term) return options;
 
-			return options.filter(
-				(option) =>
-					option.model.toLowerCase().includes(term) || option.name?.toLowerCase().includes(term)
-			);
-		})()
-	);
+		return options.filter(
+			(option) =>
+				option.model.toLowerCase().includes(term) ||
+				option.name?.toLowerCase().includes(term) ||
+				option.aliases?.some((alias: string) => alias.toLowerCase().includes(term)) ||
+				option.tags?.some((tag: string) => tag.toLowerCase().includes(term))
+		);
+	});
 
-	// Group filteredOptions by orgName, preserving flat indices for keyboard navigation
-	let groupedFilteredOptions = $derived(
-		(() => {
-			const groups = new Map<string, { option: ModelOption; flatIndex: number }[]>();
-			for (let i = 0; i < filteredOptions.length; i++) {
-				const option = filteredOptions[i];
-				const orgName = option.parsedId?.orgName ?? null;
-				const key = orgName ?? '';
-				if (!groups.has(key)) groups.set(key, []);
-				groups.get(key)!.push({ option, flatIndex: i });
+	let groupedFilteredOptions = $derived.by(() => {
+		const favIds = modelsStore.favouriteModelIds;
+		const result: { orgName: string | null; isFavouritesGroup: boolean; items: { option: ModelOption; flatIndex: number }[] }[] = [];
+
+		// Favourites group
+		const favItems: { option: ModelOption; flatIndex: number }[] = [];
+		for (let i = 0; i < filteredOptions.length; i++) {
+			if (favIds.has(filteredOptions[i].model)) {
+				favItems.push({ option: filteredOptions[i], flatIndex: i });
 			}
-			return Array.from(groups.entries()).map(([orgName, items]) => ({ orgName, items }));
-		})()
-	);
+		}
+
+		if (favItems.length > 0) {
+			result.push({ orgName: null, isFavouritesGroup: true, items: favItems });
+		}
+
+		// Org-scoped groups — exclude models already shown in Favourites
+		const orgGroups = new Map<string, { option: ModelOption; flatIndex: number }[]>();
+		for (let i = 0; i < filteredOptions.length; i++) {
+			const option = filteredOptions[i];
+
+			if (favIds.has(option.model)) continue;
+
+			const orgName = option.parsedId?.orgName ?? null;
+			const key = orgName ?? '';
+
+			if (!orgGroups.has(key)) orgGroups.set(key, []);
+
+			orgGroups.get(key)!.push({ option, flatIndex: i });
+		}
+
+		for (const [orgName, items] of orgGroups) {
+			result.push({ orgName: orgName || null, isFavouritesGroup: false, items });
+		}
+
+		return result;
+	});
 
 	// Reset highlighted index when search term changes
 	$effect(() => {
@@ -245,7 +269,7 @@
 
 		// Show currentModel (from message payload or conversation)
 		if (currentModel) {
-			if (!isCurrentModelInCache()) {
+			if (!isCurrentModelInCache) {
 				return {
 					id: 'not-in-cache',
 					model: currentModel,
@@ -283,6 +307,7 @@
 				style="max-width: min(calc(100cqw - 9rem), 20rem)"
 			>
 				<Package class="h-3.5 w-3.5" />
+
 				<ModelId modelId={currentModel} class="min-w-0" />
 			</span>
 		{:else}
@@ -304,7 +329,7 @@
 						type="button"
 						class={cn(
 							`inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs transition hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60`,
-							!isCurrentModelInCache()
+							!isCurrentModelInCache
 								? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
 								: forceForegroundText
 									? 'text-foreground'
@@ -348,10 +373,10 @@
 						placeholder="Search models..."
 						onSearchKeyDown={handleSearchKeyDown}
 						emptyMessage="No models found."
-						isEmpty={filteredOptions.length === 0 && isCurrentModelInCache()}
+						isEmpty={filteredOptions.length === 0 && isCurrentModelInCache}
 					>
 						<div class="models-list">
-							{#if !isCurrentModelInCache() && currentModel}
+							{#if !isCurrentModelInCache && currentModel}
 								<!-- Show unavailable model as first option (disabled) -->
 								<button
 									type="button"
@@ -411,7 +436,7 @@
 			<button
 				class={cn(
 					`inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs transition hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60`,
-					!isCurrentModelInCache()
+					!isCurrentModelInCache
 						? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
 						: forceForegroundText
 							? 'text-foreground'
