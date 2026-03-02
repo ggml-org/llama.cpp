@@ -3703,14 +3703,30 @@ static ggml_sycl_device_info ggml_sycl_init() {
     for (int id = 0; id < info.device_count; ++id) {
         info.default_tensor_split[id] /= total_vram;
     }
-    // Set per-allocation host malloc limit based on known driver constraints
-    // Intel Level Zero has a per-allocation limit of ~11GB for malloc_host
-    // Note: The pinned_chunk_pool works around this by using 8GB chunks,
-    // so total host memory usage can exceed this limit.
-    // This is only used as a per-allocation check in ggml_sycl_host_malloc().
-    info.host_max_alloc_size = 8ULL * 1024 * 1024 * 1024;  // 8GB per-allocation limit
+    // Compute per-allocation host malloc limit from device VRAM sizes.
+    // Intel Level Zero limits sycl::malloc_host to roughly the smallest device's
+    // total VRAM (empirically verified: 11605 MB = B580's VRAM on this platform).
+    // The pinned_chunk_pool works around this by using multiple smaller chunks,
+    // so total host memory can exceed the per-allocation ceiling.  This value
+    // is used as a per-allocation guard in ggml_sycl_host_malloc() and, critically,
+    // to cap get_max_size() so the tensor allocator never creates a chunk that
+    // would exceed the host-pinned fallback limit.
+    {
+        size_t min_vram = SIZE_MAX;
+        for (int i = 0; i < info.device_count; i++) {
+            if (info.devices[i].total_vram > 0 && info.devices[i].total_vram < min_vram) {
+                min_vram = info.devices[i].total_vram;
+            }
+        }
+        if (min_vram == SIZE_MAX || min_vram == 0) {
+            info.host_max_alloc_size = 8ULL * 1024 * 1024 * 1024;  // conservative 8 GB fallback
+        } else {
+            // Apply 95% safety margin to avoid edge-case failures
+            info.host_max_alloc_size = static_cast<size_t>(min_vram * 0.95);
+        }
+    }
 
-    GGML_LOG_INFO("[SYCL] Host malloc per-allocation limit: %.1f GB (Level Zero constraint)\n",
+    GGML_LOG_INFO("[SYCL] Host malloc per-allocation limit: %.1f GB (smallest-device VRAM based)\n",
                   info.host_max_alloc_size / (1024.0 * 1024.0 * 1024.0));
 
     // Create CPU SYCL device for data-local compute.
@@ -4298,8 +4314,23 @@ static enum ggml_status ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer
         size_t original_size = ggml_nbytes(tensor);
         size_t padded_size   = ggml_backend_buft_get_alloc_size(buffer->buft, tensor);
         if (padded_size > original_size && tensor->view_src == nullptr) {
-            SYCL_CHECK(CHECK_TRY_ERROR(
-                ctx->stream->memset((char *) tensor->data + original_size, 0, padded_size - original_size).wait()));
+            size_t pad_bytes = padded_size - original_size;
+            if (ctx->managed_alloc.tier == ggml_sycl::alloc_tier::DEVICE_VRAM) {
+                dpct::err0 err =
+                    CHECK_TRY_ERROR(ctx->stream->memset((char *) tensor->data + original_size, 0, pad_bytes).wait());
+                if (err != 0) {
+                    GGML_LOG_ERROR(
+                        "[SYCL] memset FAILED for tensor %s (dev=%d, tier=VRAM, "
+                        "data=%p, offset=%zu, pad=%zu)\n",
+                        tensor->name, ctx->device, tensor->data, original_size, pad_bytes);
+                    return GGML_STATUS_ALLOC_FAILED;
+                }
+            } else {
+                // Host-pinned / shared buffer: use CPU memset directly.
+                // Device stream memset on host-pinned memory can trigger
+                // DEVICE_LOST on some Level Zero driver versions.
+                std::memset((char *) tensor->data + original_size, 0, pad_bytes);
+            }
         }
     }
 
@@ -7328,27 +7359,47 @@ static ggml_backend_buffer_t ggml_backend_sycl_buffer_type_alloc_buffer(ggml_bac
     req.intent.role                         = alloc_role;
     req.intent.category                     = alloc_cat;
     req.intent.constraints.use_pinned_pool  = buft_ctx->use_pinned_pool;
-    req.intent.constraints.must_device      = (effective_mem_type == GGML_SYCL_MEM_DEVICE);
     req.intent.constraints.must_host_pinned = (effective_mem_type == GGML_SYCL_MEM_HOST);
 
     if (effective_mem_type == GGML_SYCL_MEM_DEVICE) {
         const size_t safe_alloc = ggml_sycl_get_safe_max_alloc_size(buft_ctx->device);
         if (safe_alloc > 0 && size > safe_alloc) {
+            // Single allocation exceeds probed device limit -- force host-pinned.
             if (!buft_ctx->allow_shared_fallback) {
                 return nullptr;
             }
             GGML_LOG_INFO("SYCL: Large buffer (%zu MB) exceeds safe alloc (%zu MB), using host-pinned fallback\n",
                           size / (1024 * 1024), safe_alloc / (1024 * 1024));
-            req.intent.constraints.must_device      = false;
             req.intent.constraints.must_host_pinned = true;
+        } else if (buft_ctx->allow_shared_fallback) {
+            // Model weight loading: let unified_select_tier() decide the tier
+            // based on available VRAM budget.  This prevents over-committing
+            // device memory when cumulative allocations exceed VRAM capacity.
+            // The allocator checks cache->available() and routes to HOST_PINNED
+            // automatically when VRAM is insufficient.
+            req.intent.constraints.must_device = false;
+        } else {
+            // Non-fallback path (compute buffers, KV cache): force device VRAM.
+            req.intent.constraints.must_device = true;
         }
     }
 
     ggml_sycl::alloc_handle main_alloc{};
     if (!ggml_sycl::unified_alloc(req, &main_alloc) || main_alloc.ptr == nullptr) {
+        // Allocation failed.  If we allowed tier selection and it chose device
+        // but the driver rejected it, retry with explicit host-pinned.
+        if (!req.intent.constraints.must_host_pinned && buft_ctx->allow_shared_fallback) {
+            GGML_LOG_INFO("SYCL: Alloc failed (%zu MB), retrying with host-pinned fallback\n", size / (1024 * 1024));
+            req.intent.constraints.must_device      = false;
+            req.intent.constraints.must_host_pinned = true;
+            if (ggml_sycl::unified_alloc(req, &main_alloc) && main_alloc.ptr != nullptr) {
+                goto alloc_succeeded;
+            }
+        }
         GGML_LOG_ERROR("%s: can't allocate %lu Bytes of memory on device\n", __func__, size);
         return nullptr;
     }
+alloc_succeeded:
     dev_ptr              = main_alloc.ptr;
     // In TP mode, use the shared-context queue for the buffer context
     queue_ptr ctx_stream = buft_ctx->stream;
@@ -7443,8 +7494,24 @@ static size_t ggml_backend_sycl_buffer_type_get_max_size(ggml_backend_buffer_typ
         return cache_avail;
     }
 
-    // Fallback: device hardware limit (cache not yet initialized or VRAM fully consumed)
-    return ggml_sycl_info().devices[ctx->device].max_alloc_size;
+    // Use the safe (probed) allocation limit rather than the raw hardware
+    // limit.  This ensures each chunk fits in a single device VRAM allocation.
+    // When the buffer type allows host-pinned fallback (model weight loading),
+    // also cap at the host malloc per-allocation limit so that chunks that
+    // spill from VRAM can be served by a single sycl::malloc_host call.
+    size_t limit = ggml_sycl_info().devices[ctx->device].safe_max_alloc_size;
+    if (limit == 0) {
+        limit = ggml_sycl_info().devices[ctx->device].max_alloc_size;
+    }
+
+    if (ctx->allow_shared_fallback) {
+        size_t host_limit = ggml_sycl_info().host_max_alloc_size;
+        if (host_limit > 0 && host_limit < limit) {
+            limit = host_limit;
+        }
+    }
+
+    return limit;
 }
 
 static size_t ggml_backend_sycl_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft,
