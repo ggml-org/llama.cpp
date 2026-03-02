@@ -861,6 +861,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 builder = std::make_unique<clip_graph_llava>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_DEEPSEEKOCR:
+            {
+                builder = std::make_unique<clip_graph_deepseekocr>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_LFM2A:
             {
                 builder = std::make_unique<clip_graph_conformer>(ctx, img);
@@ -1268,6 +1272,17 @@ struct clip_model_loader {
 
                         hparams.set_warmup_n_tokens(28*28); // avoid OOM on warmup
                     } break;
+                case PROJECTOR_TYPE_DEEPSEEKOCR:
+                    {
+                        hparams.patch_size = 16;
+                        hparams.image_size = 1024;
+                        hparams.warmup_image_size = 1024;
+
+                        get_u32(KEY_SAM_N_BLOCK, hparams.sam_n_layer, true);
+                        get_u32(KEY_SAM_N_HEAD, hparams.sam_n_head, true);
+                        get_u32(KEY_SAM_N_EMBD, hparams.sam_n_embd, true);
+                        get_u32(KEY_ATTN_WINDOW_SIZE, hparams.attn_window_size, true);
+                     } break;
                 case PROJECTOR_TYPE_LFM2A:
                     {
                         // audio preprocessing params
@@ -1592,7 +1607,7 @@ struct clip_model_loader {
                 } break;
             case PROJECTOR_TYPE_GLM4V:
                 {
-                    model.projection     = get_tensor(TN_MM_PROJECTOR);
+                    model.fc_w           = get_tensor(string_format(TN_MM_PROJECTOR, "weight"));
                     model.mm_ffn_up_w    = get_tensor(string_format(TN_MM_UP,        "weight"));
                     model.mm_ffn_up_b    = get_tensor(string_format(TN_MM_UP,        "bias"), false);
                     model.mm_ffn_gate_w  = get_tensor(string_format(TN_MM_GATE,      "weight"));
@@ -1704,7 +1719,7 @@ struct clip_model_loader {
                 } break;
             case PROJECTOR_TYPE_IDEFICS3:
                 {
-                    model.projection = get_tensor(TN_MM_PROJECTOR);
+                    model.fc_w = get_tensor(string_format(TN_MM_PROJECTOR, "weight"));
                 } break;
             case PROJECTOR_TYPE_LFM2:
                 {
@@ -1819,13 +1834,13 @@ struct clip_model_loader {
                 } break;
             case PROJECTOR_TYPE_LLAMA4:
                 {
-                    model.mm_model_proj    = get_tensor(TN_MM_PROJECTOR);
+                    model.mm_model_proj    = get_tensor(string_format(TN_MM_PROJECTOR, "weight"));
                     model.mm_model_mlp_1_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 1, "weight"));
                     model.mm_model_mlp_2_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 2, "weight"));
                 } break;
             case PROJECTOR_TYPE_COGVLM:
                 {
-                    model.mm_model_proj     = get_tensor(TN_MM_PROJECTOR);
+                    model.mm_model_proj     = get_tensor(string_format(TN_MM_PROJECTOR, "weight"));
                     model.mm_post_fc_norm_w = get_tensor(string_format(TN_MM_POST_FC_NORM, "weight"));
                     model.mm_post_fc_norm_b = get_tensor(string_format(TN_MM_POST_FC_NORM, "bias"));
                     model.mm_h_to_4h_w      = get_tensor(string_format(TN_MM_H_TO_4H,      "weight"));
@@ -1841,6 +1856,42 @@ struct clip_model_loader {
                     model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
                     model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"));
                 } break;
+            case PROJECTOR_TYPE_DEEPSEEKOCR:
+                {
+                    model.pos_embed          = get_tensor(TN_SAM_POS_EMBD);
+                    model.patch_embed_proj_w = get_tensor(string_format(TN_SAM_PATCH_EMBD, "weight"));
+                    model.patch_embed_proj_b = get_tensor(string_format(TN_SAM_PATCH_EMBD, "bias"));
+                    model.sam_layers.resize(model.n_sam_layers);
+                    for (int il = 0; il < model.n_sam_layers; ++il) {
+                        auto & layer    = model.sam_layers[il];
+                        layer.qkv_w     = get_tensor(string_format(TN_SAM_ATTN_QKV, il, "weight"));
+                        layer.qkv_b     = get_tensor(string_format(TN_SAM_ATTN_QKV, il, "bias"));
+                        layer.o_w       = get_tensor(string_format(TN_SAM_ATTN_OUT, il, "weight"));
+                        layer.o_b       = get_tensor(string_format(TN_SAM_ATTN_OUT, il, "bias"));
+                        layer.ln_1_w    = get_tensor(string_format(TN_SAM_PRE_NORM, il, "weight"));
+                        layer.ln_1_b    = get_tensor(string_format(TN_SAM_PRE_NORM, il, "bias"));
+                        layer.ln_2_w    = get_tensor(string_format(TN_SAM_POST_NORM, il, "weight"));
+                        layer.ln_2_b    = get_tensor(string_format(TN_SAM_POST_NORM, il, "bias"));
+                        layer.rel_pos_h = get_tensor(string_format(TN_SAM_ATTN_POS_H, il));
+                        layer.rel_pos_w = get_tensor(string_format(TN_SAM_ATTN_POS_W, il));
+                        layer.ff_up_w   = get_tensor(string_format(TN_SAM_FFN_UP, il, "weight"));
+                        layer.ff_up_b   = get_tensor(string_format(TN_SAM_FFN_UP, il, "bias"));
+                        layer.ff_down_w = get_tensor(string_format(TN_SAM_FFN_DOWN, il, "weight"));
+                        layer.ff_down_b = get_tensor(string_format(TN_SAM_FFN_DOWN, il, "bias"));
+                    }
+                    model.neck_0_w       = get_tensor(string_format(TN_SAM_NECK, 0, "weight"));
+                    model.neck_1_b       = get_tensor(string_format(TN_SAM_NECK, 1, "bias"));
+                    model.neck_1_w       = get_tensor(string_format(TN_SAM_NECK, 1, "weight"));
+                    model.neck_2_w       = get_tensor(string_format(TN_SAM_NECK, 2, "weight"));
+                    model.neck_3_b       = get_tensor(string_format(TN_SAM_NECK, 3, "bias"));
+                    model.neck_3_w       = get_tensor(string_format(TN_SAM_NECK, 3, "weight"));
+                    model.net_2          = get_tensor(string_format(TN_SAM_NET, 2, "weight"));
+                    model.net_3          = get_tensor(string_format(TN_SAM_NET, 3, "weight"));
+                    model.image_newline  = get_tensor(TN_IMAGE_NEWLINE);
+                    model.view_seperator = get_tensor(TN_IMAGE_SEPERATOR);
+                    model.fc_w           = get_tensor(string_format(TN_MM_PROJECTOR, "weight"));
+                    model.fc_b           = get_tensor(string_format(TN_MM_PROJECTOR, "bias"));
+                 } break;
             case PROJECTOR_TYPE_LFM2A:
                 {
                     for (int i : {0, 2, 3, 5, 6}) {
@@ -2293,6 +2344,7 @@ struct img_tool {
     enum resize_algo {
         RESIZE_ALGO_BILINEAR,
         RESIZE_ALGO_BICUBIC,
+        RESIZE_ALGO_BICUBIC_PILLOW,
         // RESIZE_ALGO_LANCZOS, // TODO
     };
 
@@ -2322,6 +2374,9 @@ struct img_tool {
                 case RESIZE_ALGO_BICUBIC:
                     resize_bicubic(src, dst, target_resolution.width, target_resolution.height);
                     break;
+                case RESIZE_ALGO_BICUBIC_PILLOW:
+                    resize_bicubic_pillow(src, dst, target_resolution.width, target_resolution.height);
+                    break;
                 default:
                     throw std::runtime_error("Unsupported resize algorithm");
             }
@@ -2340,6 +2395,9 @@ struct img_tool {
                     break;
                 case RESIZE_ALGO_BICUBIC:
                     resize_bicubic(src, resized_image, new_width, new_height);
+                    break;
+                case RESIZE_ALGO_BICUBIC_PILLOW:
+                    resize_bicubic_pillow(src, resized_image, new_width, new_height);
                     break;
                 default:
                     throw std::runtime_error("Unsupported resize algorithm");
@@ -2546,6 +2604,255 @@ private:
                     }
                 }
             }
+        }
+
+        return true;
+    }
+
+    // Bicubic resize function using Pillow's ImagingResample algorithm
+    // Adapted from https://github.com/python-pillow/Pillow/blob/main/src/libImaging/Resample.c
+    //
+    // Key Difference with resize_bicubic:
+    // 1. Uses separable filtering: horizontal pass followed by vertical pass
+    // 2. Pre-computes normalized filter coefficients for each output pixel
+    // 3. Applies convolution using fixed-point integer arithmetic for performance
+    static bool resize_bicubic_pillow(const clip_image_u8 & img, clip_image_u8 & dst, int target_width, int target_height) {
+        // Fixed-point precision: 22 bits = 32 (int32_t) - 8 (uint8_t pixels) - 2 (headroom for accumulation)
+        // This allows encoding fractional weights as integers: weight * 2^22
+        const int PRECISION_BITS = 32 - 8 - 2;
+
+        // Bicubic filter function with a = -0.5 (Note that GGML/PyTorch takes a = -0.75)
+        // Returns filter weight for distance x from pixel center
+        // Support: [-2, 2], meaning the filter influences pixels within 2 units of distance
+        auto bicubic_filter = [](double x) -> double {
+            constexpr double a = -0.5;
+            if (x < 0.0) {
+                x = -x;
+            }
+            if (x < 1.0) {
+                return ((a + 2.0) * x - (a + 3.0)) * x * x + 1;
+            }
+            if (x < 2.0) {
+                return (((x - 5) * x + 8) * x - 4) * a;
+            }
+            return 0.0;  // Zero outside [-2, 2]
+        };
+
+        // Filter support radius: bicubic extends 2 pixels in each direction
+        constexpr double filter_support = 2.0;
+
+        // Clipping function for 8-bit values
+        auto clip8 = [](int val) -> uint8_t {
+            if (val < 0) return 0;
+            if (val > 255) return 255;
+            return static_cast<uint8_t>(val);
+        };
+
+        // Precompute filter coefficients for ONE dimension (horizontal or vertical)
+        //
+        // Parameters:
+        //   inSize  - Number of pixels in input dimension (e.g., src_width or src_height)
+        //   outSize - Number of pixels in output dimension (e.g., target_width or target_height)
+        //   bounds  - [OUTPUT] Array of size outSize*2 storing input pixel ranges:
+        //             bounds[xx*2+0] = first input pixel index for output pixel xx (xmin)
+        //             bounds[xx*2+1] = number of input pixels for output pixel xx (xcnt)
+        //   weights - [OUTPUT] Array of size outSize*ksize storing fixed-point filter weights:
+        //             kk[xx*ksize + x] = weight for input pixel x contributing to output pixel xx
+        //
+        // Returns: kernel size (ksize) - number of input pixels that contribute to each output pixel
+        auto precompute_weights = [&](int inSize, int outSize,
+                                     std::vector<int> & bounds, std::vector<int32_t> & weights) -> int {
+            double support, scale, filterscale;
+            double center, ww, ss;
+            int xx, x, ksize, xmin, xmax, xcnt;
+
+            // Calculate scaling factor: ratio of input range to output size
+            filterscale = scale = (double)inSize / outSize;
+            // For upsampling (scale < 1), keep filterscale = 1 to maintain filter sharpness
+            // For downsampling (scale > 1), widen filter to prevent aliasing
+            if (filterscale < 1.0) {
+                filterscale = 1.0;
+            }
+
+            // Determine filter support radius and kernel size
+            support = filter_support * filterscale;  // Widen filter when downsampling
+            ksize = static_cast<int>(std::ceil(support)) * 2 + 1;  // Total pixels in kernel
+
+            std::vector<double> pre_weights(outSize * ksize);  // Temporary weights
+            bounds.resize(outSize * 2);
+
+            // For each output pixel, compute its filter coefficients
+            for (xx = 0; xx < outSize; xx++) {
+                // Calculate the center position in input space (pixel-center convention: +0.5)
+                center = (xx + 0.5) * scale;
+                ww = 0.0;  // Sum of weights for normalization
+                ss = 1.0 / filterscale;  // Scale factor for filter function
+
+                // Determine the range of input pixels that contribute to this output pixel
+                xmin = static_cast<int>(center - support + 0.5);
+                if (xmin < 0) {
+                    xmin = 0;
+                }
+
+                xmax = static_cast<int>(center + support + 0.5);
+                if (xmax > inSize) {
+                    xmax = inSize;
+                }
+
+                xcnt = xmax - xmin;
+
+                // Compute filter weights for each contributing input pixel
+                for (x = 0; x < xcnt; x++) {
+                    // Distance from input pixel center to output pixel center in input space
+                    double w = bicubic_filter((x + xmin - center + 0.5) * ss);
+                    pre_weights[xx * ksize + x] = w;
+                    ww += w;  // Accumulate for normalization
+                }
+
+                // Normalize weights to sum to 1.0 (preserves brightness)
+                for (x = 0; x < xcnt; x++) {
+                    if (ww != 0.0) {
+                        pre_weights[xx * ksize + x] /= ww;
+                    }
+                }
+
+                // Zero-pad remaining kernel positions
+                for (; x < ksize; x++) {
+                    pre_weights[xx * ksize + x] = 0;
+                }
+
+                // Store input pixel range for this output pixel
+                bounds[xx * 2 + 0] = xmin;
+                bounds[xx * 2 + 1] = xcnt;
+            }
+
+            // Convert floating-point coefficients to fixed-point integers
+            // Formula: int32 = round(float * 2^PRECISION_BITS)
+            weights.resize(outSize * ksize);
+            for (int i = 0; i < outSize * ksize; i++) {
+                if (pre_weights[i] < 0) {
+                    weights[i] = static_cast<int32_t>(-0.5 + pre_weights[i] * (1 << PRECISION_BITS));
+                } else {
+                    weights[i] = static_cast<int32_t>(0.5 + pre_weights[i] * (1 << PRECISION_BITS));
+                }
+            }
+
+            return ksize;
+        };
+
+        // Horizontal resampling pass
+        // Resizes width from imIn.nx to imOut.nx, preserving height
+        auto resample_horizontal = [&](const clip_image_u8 & imIn, clip_image_u8 & imOut,
+                                       int ksize, const std::vector<int> & bounds, const std::vector<int32_t> & weights) {
+            imOut.ny = imIn.ny;
+            imOut.buf.resize(3 * imOut.nx * imOut.ny);
+
+            // Process each row independently
+            for (int yy = 0; yy < imOut.ny; yy++) {
+                // For each output pixel in this row
+                for (int xx = 0; xx < imOut.nx; xx++) {
+                    // Get the range of input pixels and filter coefficients
+                    int xmin = bounds[xx * 2 + 0];  // First input pixel index
+                    int xcnt = bounds[xx * 2 + 1];  // Number of input pixels
+
+                    // Initialize accumulators for RGB channels with rounding bias (0.5 in fixed-point)
+                    int32_t ss0 = 1 << (PRECISION_BITS - 1);
+                    int32_t ss1 = 1 << (PRECISION_BITS - 1);
+                    int32_t ss2 = 1 << (PRECISION_BITS - 1);
+
+                    // Convolve: sum weighted input pixels
+                    for (int x = 0; x < xcnt; x++) {
+                        int src_idx = ((yy * imIn.nx) + (x + xmin)) * 3;
+                        ss0 += static_cast<uint8_t>(imIn.buf[src_idx + 0]) * weights[xx * ksize + x];  // R channel
+                        ss1 += static_cast<uint8_t>(imIn.buf[src_idx + 1]) * weights[xx * ksize + x];  // G channel
+                        ss2 += static_cast<uint8_t>(imIn.buf[src_idx + 2]) * weights[xx * ksize + x];  // B channel
+                    }
+
+                    // Convert back from fixed-point (divide by 2^PRECISION_BITS) and clamp to [0,255]
+                    int dst_idx = (yy * imOut.nx + xx) * 3;
+                    imOut.buf[dst_idx + 0] = clip8(ss0 >> PRECISION_BITS);
+                    imOut.buf[dst_idx + 1] = clip8(ss1 >> PRECISION_BITS);
+                    imOut.buf[dst_idx + 2] = clip8(ss2 >> PRECISION_BITS);
+                }
+            }
+        };
+
+        // Vertical resampling pass
+        // Resizes height from imIn.ny to imOut.ny, preserving width
+        auto resample_vertical = [&](const clip_image_u8 & imIn, clip_image_u8 & imOut,
+                                     int ksize, const std::vector<int> & bounds, const std::vector<int32_t> & weight) {
+            imOut.nx = imIn.nx;
+            imOut.buf.resize(3 * imOut.nx * imOut.ny);
+
+            // For each output row
+            for (int yy = 0; yy < imOut.ny; yy++) {
+                // Get the range of input rows and filter coefficients
+                int ymin = bounds[yy * 2 + 0];  // First input row index
+                int ycnt = bounds[yy * 2 + 1];  // Number of input rows
+
+                // Process each column in this output row
+                for (int xx = 0; xx < imOut.nx; xx++) {
+                    // Initialize accumulators for RGB channels with rounding bias
+                    int32_t ss0 = 1 << (PRECISION_BITS - 1);
+                    int32_t ss1 = 1 << (PRECISION_BITS - 1);
+                    int32_t ss2 = 1 << (PRECISION_BITS - 1);
+
+                    // Convolve: sum weighted input pixels vertically
+                    for (int y = 0; y < ycnt; y++) {
+                        int src_idx = ((y + ymin) * imIn.nx + xx) * 3;
+                        ss0 += static_cast<uint8_t>(imIn.buf[src_idx + 0]) * weight[yy * ksize + y];  // R channel
+                        ss1 += static_cast<uint8_t>(imIn.buf[src_idx + 1]) * weight[yy * ksize + y];  // G channel
+                        ss2 += static_cast<uint8_t>(imIn.buf[src_idx + 2]) * weight[yy * ksize + y];  // B channel
+                    }
+
+                    // Convert back from fixed-point and clamp to [0,255]
+                    int dst_idx = (yy * imOut.nx + xx) * 3;
+                    imOut.buf[dst_idx + 0] = clip8(ss0 >> PRECISION_BITS);
+                    imOut.buf[dst_idx + 1] = clip8(ss1 >> PRECISION_BITS);
+                    imOut.buf[dst_idx + 2] = clip8(ss2 >> PRECISION_BITS);
+                }
+            }
+        };
+
+        // Main resampling logic using separable two-pass approach
+        const int src_width = img.nx;
+        const int src_height = img.ny;
+
+        dst.nx = target_width;
+        dst.ny = target_height;
+
+        bool need_horizontal = (target_width != src_width);
+        bool need_vertical = (target_height != src_height);
+
+        // Precompute filter coefficients for both dimensions
+        std::vector<int> bounds_horiz, bounds_vert;
+        std::vector<int32_t> weights_horiz, weights_vert;
+        int ksize_horiz = 0, ksize_vert = 0;
+
+        if (need_horizontal) {
+            ksize_horiz = precompute_weights(src_width, target_width, bounds_horiz, weights_horiz);
+        }
+
+        if (need_vertical) {
+            ksize_vert = precompute_weights(src_height, target_height, bounds_vert, weights_vert);
+        }
+
+        // Perform two-pass resampling
+        if (need_horizontal && need_vertical) {
+            // Both horizontal and vertical
+            clip_image_u8 temp;
+            temp.nx = target_width;
+            resample_horizontal(img, temp, ksize_horiz, bounds_horiz, weights_horiz);
+            resample_vertical(temp, dst, ksize_vert, bounds_vert, weights_vert);
+        } else if (need_horizontal) {
+            // Only horizontal
+            resample_horizontal(img, dst, ksize_horiz, bounds_horiz, weights_horiz);
+        } else if (need_vertical) {
+            // Only vertical
+            resample_vertical(img, dst, ksize_vert, bounds_vert, weights_vert);
+        } else {
+            // No resizing needed - direct copy
+            dst.buf = img.buf;
         }
 
         return true;
@@ -3285,6 +3592,89 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                     }
                 }
             } break;
+        case PROJECTOR_TYPE_DEEPSEEKOCR:
+            {
+                const std::vector native_resolutions = {
+                    /*512 tiny , 640 small, */ 1024 /* base */, 1280 /* large */
+                };
+                // original image size
+                const int orig_w = original_size.width;
+                const int orig_h = original_size.height;
+                const int orig_area = orig_h * orig_w;
+                std::array<uint8_t, 3u> color;
+
+                for (int i = 0; i < 3; i++) {
+                    color[i] = static_cast<unsigned char>(params.image_mean[i] * 255.0f);
+                }
+
+                size_t mode_i = 0;
+                int min_diff = orig_area;
+
+                for (size_t i = 0; i < native_resolutions.size(); i++) {
+                    int r = native_resolutions[i];
+                    if (std::abs(orig_area - r * r) < min_diff) {
+                        mode_i = i;
+                        min_diff = std::abs(orig_area - r * r);
+                    }
+                }
+
+                /* Native Resolution (Base/Large) */
+                const int image_size = native_resolutions[mode_i];
+
+                // Resize maintaining an aspect ratio, then pad to square
+                float scale = std::min(
+                    static_cast<float>(image_size) / orig_w,
+                    static_cast<float>(image_size) / orig_h
+                );
+                int new_w = static_cast<int>(orig_w * scale);
+                int new_h = static_cast<int>(orig_h * scale);
+
+                clip_image_u8_ptr scaled_img(clip_image_u8_init());
+                img_tool::resize(*img, *scaled_img, clip_image_size{new_w, new_h},
+                                img_tool::RESIZE_ALGO_BICUBIC_PILLOW, true, color);
+
+                // Use mean color for padding
+                unsigned char pad_r = static_cast<unsigned char>(params.image_mean[0] * 255.0f);
+                unsigned char pad_g = static_cast<unsigned char>(params.image_mean[1] * 255.0f);
+                unsigned char pad_b = static_cast<unsigned char>(params.image_mean[2] * 255.0f);
+
+                // Pad to image_size × image_size (center padding)
+                clip_image_u8_ptr padded_img(clip_image_u8_init());
+                padded_img->nx = image_size;
+                padded_img->ny = image_size;
+                padded_img->buf.resize(image_size * image_size * 3); // black padding
+
+                // Fill with mean color
+                for (int i = 0; i < image_size * image_size; ++i)
+                {
+                    padded_img->buf[i * 3 + 0] = pad_r;
+                    padded_img->buf[i * 3 + 1] = pad_g;
+                    padded_img->buf[i * 3 + 2] = pad_b;
+                }
+
+                // Calculate padding offsets (center the image)
+                int pad_x = (image_size - new_w) / 2;
+                int pad_y = (image_size - new_h) / 2;
+
+                // Copy scaled image into padded canvas
+                for (int y = 0; y < new_h; ++y){
+                    for (int x = 0; x < new_w; ++x){
+                        int src_idx = (y * new_w + x) * 3;
+                        int dst_idx = ((y + pad_y) * image_size + (x + pad_x)) * 3;
+                        padded_img->buf[dst_idx + 0] = scaled_img->buf[src_idx + 0];
+                        padded_img->buf[dst_idx + 1] = scaled_img->buf[src_idx + 1];
+                        padded_img->buf[dst_idx + 2] = scaled_img->buf[src_idx + 2];
+                    }
+                }
+
+                // Normalize and output
+                clip_image_f32_ptr res(clip_image_f32_init());
+                normalize_image_u8_to_f32(*padded_img, *res, params.image_mean, params.image_std);
+                res_imgs->entries.push_back(std::move(res));
+
+                res_imgs->grid_x = 1;
+                res_imgs->grid_y = 1;
+            } break;
 
         default:
             LOG_ERR("%s: unsupported projector type %d\n", __func__, ctx->proj_type());
@@ -3515,6 +3905,18 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
             {
                 n_patches += 2; // for BOI and EOI token embeddings
             } break;
+        case PROJECTOR_TYPE_DEEPSEEKOCR:
+        {
+            // SAM encoder applies two stride-2 convolutions (net_2 and net_3)
+            // which reduces spatial dimensions by 4x in each direction (16x total)
+            // E.g., 64x64 -> 16x16 patches
+            n_patches /= 16;
+
+            // build_global_local_features adds image newlines and view separator
+            // Formula: h*(w+1) + 1 where h = w = sqrt(n_patches)
+            int h = static_cast<int>(std::sqrt(static_cast<float>(n_patches)));
+            n_patches = h * (h + 1) + 1;
+        } break;
         case PROJECTOR_TYPE_LFM2A:
             {
                 n_patches = ((((img->nx + 1) / 2) + 1) / 2 + 1) / 2;
@@ -3872,6 +4274,30 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 }
                 set_input_i32("patches", patches);
             } break;
+        case PROJECTOR_TYPE_DEEPSEEKOCR:
+            {
+                GGML_ASSERT(pos_w == pos_h);
+
+                const int window = hparams.attn_window_size;
+                const int pos = pos_w;
+                std::vector<int32_t> rel_pos_indices_local(window * window);
+                std::vector<int32_t> rel_pos_indices_global(pos * pos);
+
+                for (int q = 0; q < window; q++) {
+                    for (int k = 0; k < window; k++) {
+                        rel_pos_indices_local[q * window + k] = q - k + window - 1;
+                    }
+                }
+
+                for (int q = 0; q < pos; q++) {
+                    for (int k = 0; k < pos; k++) {
+                        rel_pos_indices_global[q * pos + k] = q - k + pos - 1;
+                    }
+                }
+
+                set_input_i32("rel_pos_indices_local", rel_pos_indices_local);
+                set_input_i32("rel_pos_indices_global", rel_pos_indices_global);
+            } break;
         case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_GEMMA3NV:
         case PROJECTOR_TYPE_IDEFICS3:
@@ -4034,7 +4460,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_GEMMA3NV:
             return ctx->model.mm_input_proj_w->ne[0];
         case PROJECTOR_TYPE_IDEFICS3:
-            return ctx->model.projection->ne[1];
+            return ctx->model.fc_w->ne[1];
         case PROJECTOR_TYPE_ULTRAVOX:
         case PROJECTOR_TYPE_VOXTRAL:
         case PROJECTOR_TYPE_MUSIC_FLAMINGO:
@@ -4055,6 +4481,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.mm_2_w->ne[1];
         case PROJECTOR_TYPE_COGVLM:
             return ctx->model.mm_4h_to_h_w->ne[1];
+        case PROJECTOR_TYPE_DEEPSEEKOCR:
+            return ctx->model.fc_w->ne[1];
         case PROJECTOR_TYPE_LFM2A:
             return ctx->model.position_embeddings->ne[0];
         case PROJECTOR_TYPE_GLM4V:

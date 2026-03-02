@@ -55,7 +55,9 @@
 #define KEY_ATTN_WINDOW_SIZE       "clip.vision.window_size"
 #define KEY_MINICPMV_VERSION       "clip.minicpmv_version"
 #define KEY_MINICPMV_QUERY_NUM     "clip.minicpmv_query_num"
-
+#define KEY_SAM_N_HEAD             "clip.vision.sam.head_count"
+#define KEY_SAM_N_BLOCK            "clip.vision.sam.block_count"
+#define KEY_SAM_N_EMBD             "clip.vision.sam.embedding_length"
 // audio-specific
 #define KEY_AUDIO_PROJ_TYPE     "clip.audio.projector_type" // for models with mixed modalities
 #define KEY_A_NUM_MEL_BINS      "clip.audio.num_mel_bins"
@@ -97,12 +99,13 @@
 #define TN_MVLM_PROJ_MLP   "mm.model.mlp.%d.%s"
 #define TN_MVLM_PROJ_BLOCK "mm.model.mb_block.%d.block.%d.%s"
 #define TN_MVLM_PROJ_PEG   "mm.model.peg.%d.%s"
-#define TN_IMAGE_NEWLINE   "model.image_newline"
+#define TN_IMAGE_NEWLINE   "v.image_newline"
+#define TN_IMAGE_SEPERATOR "v.view_seperator"
 #define TN_MM_INP_NORM     "mm.input_norm.weight"
 #define TN_MM_INP_NORM_B   "mm.input_norm.bias"
 #define TN_MM_INP_PROJ     "mm.input_projection.weight" // gemma3
 #define TN_MM_SOFT_EMB_N   "mm.soft_emb_norm.weight"    // gemma3
-#define TN_MM_PROJECTOR    "mm.model.fc.weight"         // idefics3
+#define TN_MM_PROJECTOR    "mm.model.fc.%s"             // idefics3, deepseekocr
 #define TN_MM_PATCH_MERGER "mm.patch_merger.%s"         // mistral small 3.1, glm4v
 #define TN_TOK_IMG_BREAK   "v.token_embd.img_break"     // pixtral
 #define TN_TOK_GLM_BOI     "adapter.boi"                // glm-edge (these embeddings are not in text model)
@@ -141,6 +144,19 @@
 #define TN_TOK_BOI         "v.boi"
 #define TN_TOK_EOI         "v.eoi"
 
+// deepseek-ocr
+#define TN_SAM_POS_EMBD   "v.sam.pos_embd"
+#define TN_SAM_PATCH_EMBD "v.sam.patch_embd.%s"
+#define TN_SAM_PRE_NORM   "v.sam.blk.%d.pre_ln.%s"
+#define TN_SAM_POST_NORM  "v.sam.blk.%d.post_ln.%s"
+#define TN_SAM_ATTN_POS_H "v.sam.blk.%d.attn.pos_h"
+#define TN_SAM_ATTN_POS_W "v.sam.blk.%d.attn.pos_w"
+#define TN_SAM_ATTN_QKV   "v.sam.blk.%d.attn.qkv.%s"
+#define TN_SAM_ATTN_OUT   "v.sam.blk.%d.attn.out.%s"
+#define TN_SAM_FFN_UP     "v.sam.blk.%d.mlp.lin1.%s"
+#define TN_SAM_FFN_DOWN   "v.sam.blk.%d.mlp.lin2.%s"
+#define TN_SAM_NECK       "v.sam.neck.%d.%s"
+#define TN_SAM_NET        "v.sam.net_%d.%s"
 // (conformer) lfm2
 #define TN_PRE_ENCODE_OUT  "a.pre_encode.out.%s"
 #define TN_FFN_NORM        "%s.blk.%d.ffn_norm.%s"
@@ -233,6 +249,7 @@ enum projector_type {
     PROJECTOR_TYPE_LIGHTONOCR,
     PROJECTOR_TYPE_COGVLM,
     PROJECTOR_TYPE_JANUS_PRO,
+    PROJECTOR_TYPE_DEEPSEEKOCR,
     PROJECTOR_TYPE_LFM2A,
     PROJECTOR_TYPE_GLM4V,
     PROJECTOR_TYPE_YOUTUVL,
@@ -269,6 +286,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_LIGHTONOCR,"lightonocr"},
     { PROJECTOR_TYPE_COGVLM,    "cogvlm"},
     { PROJECTOR_TYPE_JANUS_PRO, "janus_pro"},
+    { PROJECTOR_TYPE_DEEPSEEKOCR,"deepseekocr"},
     { PROJECTOR_TYPE_LFM2A,     "lfm2a"},
     { PROJECTOR_TYPE_GLM4V,     "glm4v"},
     { PROJECTOR_TYPE_YOUTUVL,   "youtuvl"},

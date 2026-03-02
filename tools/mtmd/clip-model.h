@@ -64,6 +64,11 @@ struct clip_hparams {
     int32_t n_wa_pattern = 0;
     std::unordered_set<int32_t> wa_layer_indexes; // explicit layer indexes that use full attention (for irregular patterns like YoutuVL)
 
+    // deepseek-ocr (sam)
+    int32_t sam_n_layer = 0;
+    int32_t sam_n_head  = 0;
+    int32_t sam_n_embd  = 0;
+
     // audio
     int32_t n_mel_bins = 0; // whisper preprocessor
     int32_t proj_stack_factor = 0; // ultravox
@@ -98,6 +103,21 @@ struct clip_hparams {
         const int cur_merge = n_merge == 0 ? 1 : n_merge;
         warmup_image_size = n_tok_per_side * patch_size * cur_merge;
         // TODO: support warmup size for custom token numbers
+    }
+    // sam vit deepseek-ocr
+    std::vector<int32_t> global_attn_indices() const {
+        return {  2,  5,  8, 11 };
+    }
+    bool is_global_attn(int32_t layer) const {
+        const auto indices = global_attn_indices();
+
+        for (const auto & idx : indices) {
+            if (layer == idx) {
+                return true;
+            }
+        }
+
+        return false;
     }
 };
 
@@ -145,6 +165,9 @@ struct clip_layer {
     ggml_tensor * deepstack_fc2_w = nullptr;
     ggml_tensor * deepstack_fc2_b = nullptr;
 
+    // sam rel_pos
+    ggml_tensor * rel_pos_w = nullptr;
+    ggml_tensor * rel_pos_h = nullptr;
     // lfm2
     ggml_tensor * ff_norm_w     = nullptr;
     ggml_tensor * ff_norm_b     = nullptr;
@@ -237,7 +260,8 @@ struct clip_model {
     ggml_tensor * post_ln_w;
     ggml_tensor * post_ln_b;
 
-    ggml_tensor * projection; // TODO: rename it to fc (fully connected layer)
+    ggml_tensor * fc_w;
+    ggml_tensor * fc_b;
     ggml_tensor * mm_fc_w;
     ggml_tensor * mm_fc_b;
     ggml_tensor * mm_ffn_up_w = nullptr;
@@ -258,6 +282,8 @@ struct clip_model {
     ggml_tensor * mm_2_b = nullptr;
 
     ggml_tensor * image_newline = nullptr;
+    ggml_tensor * view_seperator = nullptr;
+
 
     // Yi type models with mlp+normalization projection
     ggml_tensor * mm_1_w = nullptr; // Yi type models have 0, 1, 3, 4
@@ -369,6 +395,23 @@ struct clip_model {
     ggml_tensor * mm_boi = nullptr;
     ggml_tensor * mm_eoi = nullptr;
 
+    // deepseek ocr sam
+    ggml_tensor * patch_embed_proj_w = nullptr;
+    ggml_tensor * patch_embed_proj_b = nullptr;
+    ggml_tensor * pos_embed          = nullptr;
+
+    ggml_tensor * neck_0_w;
+    ggml_tensor * neck_1_w;
+    ggml_tensor * neck_1_b;
+    ggml_tensor * neck_2_w;
+    ggml_tensor * neck_3_w;
+    ggml_tensor * neck_3_b;
+    ggml_tensor * net_2;
+    ggml_tensor * net_3;
+
+    int32_t n_sam_layers = 12; // used by deepseek-ocr sam encoder
+
+    std::vector<clip_layer> sam_layers;
     // lfm2 audio
     std::array<ggml_tensor *, 7> pre_encode_conv_X_w = {nullptr};
     std::array<ggml_tensor *, 7> pre_encode_conv_X_b = {nullptr};
