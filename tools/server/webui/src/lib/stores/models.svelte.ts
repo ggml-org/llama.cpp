@@ -1,4 +1,4 @@
-import { SvelteSet } from 'svelte/reactivity';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
 import { ServerModelStatus, ModelModality } from '$lib/enums';
 import { ModelsService, PropsService } from '$lib/services';
@@ -51,7 +51,7 @@ class ModelsStore {
 	selectedModelName = $state<string | null>(null);
 
 	private modelUsage = $state<Map<string, SvelteSet<string>>>(new Map());
-	private modelLoadingStates = $state<Map<string, boolean>>(new Map());
+	private modelLoadingStates = new SvelteMap<string, boolean>();
 
 	favouriteModelIds = $state<Set<string>>(this.loadFavouritesFromStorage());
 
