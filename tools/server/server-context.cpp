@@ -2677,7 +2677,7 @@ private:
                     SRV_WRN("reducing batch size to %d after %d retries (cleared_slot = %d)\n", n_batch, n_retries, cleared_slot);
                 }
 
-                SRV_WRN("failed to find free space in the KV cache, retrying (attempt %d/%d), i = %d, n_batch = %d, ret = %d\n", 
+                SRV_WRN("failed to find free space in the KV cache, retrying (attempt %d/%d), i = %d, n_batch = %d, ret = %d\n",
                         n_retries, max_retries, i, n_batch, ret);
 
                 continue; // continue loop of n_batch
