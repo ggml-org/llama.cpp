@@ -37,6 +37,9 @@ static const std::vector<quant_option> QUANT_OPTIONS = {
     { "Q2_K",     LLAMA_FTYPE_MOSTLY_Q2_K,     " 2.96G, +3.5199 ppl @ Llama-3-8B",  },
     { "Q2_K_S",   LLAMA_FTYPE_MOSTLY_Q2_K_S,   " 2.96G, +3.1836 ppl @ Llama-3-8B",  },
     { "IQ3_XXS",  LLAMA_FTYPE_MOSTLY_IQ3_XXS,  " 3.06 bpw quantization",            },
+    { "Q3_PT",    LLAMA_FTYPE_MOSTLY_Q3_PT,  " 3.25 bpw quantization",            },
+    { "Q3_KPT",   LLAMA_FTYPE_MOSTLY_Q3_KPT,   " Q3_K with learned per-tensor levels" },
+    { "Q4_DPT",   LLAMA_FTYPE_MOSTLY_Q4_DPT,   " IQ4_NL with learned per-tensor int8 levels" },
     { "IQ3_S",    LLAMA_FTYPE_MOSTLY_IQ3_S,    " 3.44 bpw quantization",            },
     { "IQ3_M",    LLAMA_FTYPE_MOSTLY_IQ3_M,    " 3.66 bpw quantization mix",        },
     { "Q3_K",     LLAMA_FTYPE_MOSTLY_Q3_K_M,   "alias for Q3_K_M"                   },
@@ -159,6 +162,9 @@ static void usage(const char * executable) {
     printf("                                      WARNING: this is an advanced option, use with care.\n");
     printf("  --dry-run\n");
     printf("                                      calculate and show the final quantization size without performing quantization\n");
+    printf("  --threads n\n");
+    printf("                                      number of threads to use for cross-tensor parallelization (default: 0, use same as within-tensor)\n");
+    printf("                                      when n > 0, enables parallel quantization of multiple tensors simultaneously\n");
     printf("                                      example: llama-quantize --dry-run model-f32.gguf Q4_K\n\n");
     printf("note: --include-weights and --exclude-weights cannot be used together\n\n");
     printf("-----------------------------------------------------------------------------\n");
@@ -559,6 +565,8 @@ int main(int argc, char ** argv) {
             } else {
                 usage(argv[0]);
             }
+        } else if (strcmp(argv[arg_idx], "--keep-split") == 0) {
+            params.keep_split = true;
         } else if (strcmp(argv[arg_idx], "--keep-split") == 0) {
             params.keep_split = true;
         } else {

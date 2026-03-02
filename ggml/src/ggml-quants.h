@@ -25,6 +25,7 @@ GGML_API void quantize_row_mxfp4_ref(const float * GGML_RESTRICT x, block_mxfp4 
 
 GGML_API void quantize_row_q2_K_ref(const float * GGML_RESTRICT x, block_q2_K * GGML_RESTRICT y, int64_t k);
 GGML_API void quantize_row_q3_K_ref(const float * GGML_RESTRICT x, block_q3_K * GGML_RESTRICT y, int64_t k);
+GGML_API void quantize_row_q3_kpt_ref(const float * GGML_RESTRICT x, block_q3_kpt * GGML_RESTRICT y, int64_t k);
 GGML_API void quantize_row_q4_K_ref(const float * GGML_RESTRICT x, block_q4_K * GGML_RESTRICT y, int64_t k);
 GGML_API void quantize_row_q5_K_ref(const float * GGML_RESTRICT x, block_q5_K * GGML_RESTRICT y, int64_t k);
 GGML_API void quantize_row_q6_K_ref(const float * GGML_RESTRICT x, block_q6_K * GGML_RESTRICT y, int64_t k);
@@ -51,6 +52,7 @@ GGML_API void dequantize_row_mxfp4(const block_mxfp4 * GGML_RESTRICT x, float * 
 
 GGML_API void dequantize_row_q2_K(const block_q2_K * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 GGML_API void dequantize_row_q3_K(const block_q3_K * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_q3_kpt(const block_q3_kpt * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 GGML_API void dequantize_row_q4_K(const block_q4_K * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 GGML_API void dequantize_row_q5_K(const block_q5_K * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 GGML_API void dequantize_row_q6_K(const block_q6_K * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
@@ -78,6 +80,14 @@ GGML_API size_t quantize_iq1_s  (const float * GGML_RESTRICT src, void * GGML_RE
 GGML_API size_t quantize_iq1_m  (const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 GGML_API size_t quantize_iq4_nl (const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 GGML_API size_t quantize_iq4_xs (const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+GGML_API size_t quantize_q3_kpt(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+
+// Q3_KPT level management
+GGML_API void q3kpt_set_levels(const float * levels);
+GGML_API const float * q3kpt_get_levels(void);
+GGML_API void q3kpt_free_levels(void);
+GGML_API void q3kpt_train_levels(const float * data, int64_t nrow, int64_t n_per_row,
+                                  const float * imatrix, float levels_out[Q3KPT_N_LEVELS]);
 GGML_API size_t quantize_iq3_s  (const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 
 GGML_API size_t quantize_tq1_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
@@ -95,6 +105,49 @@ GGML_API size_t quantize_q5_1(const float * GGML_RESTRICT src, void * GGML_RESTR
 GGML_API size_t quantize_q8_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 
 GGML_API size_t quantize_mxfp4(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+
+GGML_API void quantize_row_q3_pt_ref(const float * GGML_RESTRICT x, block_q3_pt * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_q3_pt(const block_q3_pt * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_q3_pt(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+
+// Q3_PT levels management (per-tensor Lloyd-Max levels in [0,1])
+GGML_API void          q3pt_set_levels(const float * levels);   // set global levels (quantization)
+GGML_API const float * q3pt_get_levels(void);
+GGML_API void          q3pt_free_levels(void);
+
+// Per-tensor levels registry (inference — range-based lookup by data address)
+
+// Train 8 Lloyd-Max levels from tensor data via weighted k-means on affine-normalized
+// 16-element sub-block values. Also sets the global levels via q3pt_set_levels().
+// data: float array [nrow * n_per_row], imatrix: importance weights [n_per_row] or NULL.
+GGML_API void          q3pt_train_levels(const float * data, int64_t nrow, int64_t n_per_row,
+                                          const float * imatrix, float levels_out[8]);
+
+// Q4_DPT: IQ4_NL with learned per-tensor int8 levels
+GGML_API void dequantize_row_q4_dpt(const block_q4_dpt * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API void quantize_row_q4_dpt_ref(const float * GGML_RESTRICT x, block_q4_dpt * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_q4_dpt(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+
+// Q4_DPT levels management (per-tensor Lloyd-Max int8 levels)
+GGML_API void           q4dpt_set_levels(const int8_t * levels);
+GGML_API const int8_t * q4dpt_get_levels(void);
+GGML_API void           q4dpt_free_levels(void);
+
+// Unified per-type current-levels pointer (set by CPU MUL_MAT dispatch from graph input src[2])
+GGML_API void         ggml_quant_set_current_levels(enum ggml_type type, const void * data);
+GGML_API const void * ggml_quant_get_current_levels(enum ggml_type type);
+
+// Per-tensor auxiliary data registry (indexed by tensor pointer)
+// Allows backends to look up aux data for a specific weight tensor
+GGML_API void         ggml_quant_set_tensor_aux_data(const void * tensor_data, const void * aux_data, size_t aux_size);
+GGML_API const void * ggml_quant_get_tensor_aux_data(const void * tensor_data, size_t * out_size);
+GGML_API void         ggml_quant_clear_aux_registry(void);
+
+// Train 16 Lloyd-Max int8 levels from tensor data.
+// Bins normalized values (x/amax) in [-1,1], runs weighted k-means, rounds to sorted int8[16].
+// Also sets the global levels via q4dpt_set_levels().
+GGML_API void           q4dpt_train_levels(const float * data, int64_t nrow, int64_t n_per_row,
+                                            const float * imatrix, int8_t levels_out[Q4DPT_N_LEVELS]);
 
 GGML_API void iq2xs_init_impl(enum ggml_type type);
 GGML_API void iq2xs_free_impl(enum ggml_type type);

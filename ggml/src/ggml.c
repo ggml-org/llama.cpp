@@ -896,6 +896,30 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .type_size                = 0,
         .is_quantized             = false,
     },
+    [GGML_TYPE_Q3_PT] = {
+        .type_name                = "q3_pt",
+        .blck_size                = QK_K,
+        .type_size                = sizeof(block_q3_pt),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_q3_pt,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_q3_pt_ref,
+    },
+    [GGML_TYPE_Q3_KPT] = {
+        .type_name                = "q3_kpt",
+        .blck_size                = QK_K,
+        .type_size                = sizeof(block_q3_kpt),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_q3_kpt,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_q3_kpt_ref,
+    },
+    [GGML_TYPE_Q4_DPT] = {
+        .type_name                = "q4_dpt",
+        .blck_size                = QK4_NL,
+        .type_size                = sizeof(block_q4_dpt),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_q4_dpt,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_q4_dpt_ref,
+    },
 };
 
 const struct ggml_type_traits * ggml_get_type_traits(enum ggml_type type) {
@@ -1386,6 +1410,9 @@ enum ggml_type ggml_ftype_to_ggml_type(enum ggml_ftype ftype) {
         case GGML_FTYPE_MOSTLY_IQ4_XS:        wtype = GGML_TYPE_IQ4_XS;   break;
         case GGML_FTYPE_MOSTLY_IQ3_S:         wtype = GGML_TYPE_IQ3_S;    break;
         case GGML_FTYPE_MOSTLY_IQ2_S:         wtype = GGML_TYPE_IQ2_S;    break;
+        case GGML_FTYPE_MOSTLY_Q3_PT:        wtype = GGML_TYPE_Q3_PT;   break;
+        case GGML_FTYPE_MOSTLY_Q3_KPT:        wtype = GGML_TYPE_Q3_KPT;   break;
+        case GGML_FTYPE_MOSTLY_Q4_DPT:        wtype = GGML_TYPE_Q4_DPT;   break;
         case GGML_FTYPE_UNKNOWN:              wtype = GGML_TYPE_COUNT; break;
         case GGML_FTYPE_MOSTLY_Q4_1_SOME_F16: wtype = GGML_TYPE_COUNT; break;
     }
@@ -7530,6 +7557,9 @@ void ggml_quantize_init(enum ggml_type type) {
         case GGML_TYPE_IQ1_M:   iq2xs_init_impl(type); break;
         case GGML_TYPE_IQ3_XXS: iq3xs_init_impl(256); break;
         case GGML_TYPE_IQ3_S:   iq3xs_init_impl(512); break;
+        case GGML_TYPE_Q3_PT:  break; // levels set externally via q3pt_set_levels()
+        case GGML_TYPE_Q3_KPT:  break; // levels set externally via q3kpt_set_levels()
+        case GGML_TYPE_Q4_DPT:  break; // levels set externally via q4dpt_set_levels()
         default: // nothing
             break;
     }
@@ -7606,6 +7636,9 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_IQ1_M:   result = quantize_iq1_m  (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ4_NL:  result = quantize_iq4_nl (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ4_XS:  result = quantize_iq4_xs (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_Q3_PT:  result = quantize_q3_pt (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_Q3_KPT:  result = quantize_q3_kpt (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_Q4_DPT:  result = quantize_q4_dpt (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_F16:
             {
                 size_t elemsize = sizeof(ggml_fp16_t);

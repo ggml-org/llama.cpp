@@ -276,6 +276,7 @@ typedef struct {
 } block_q2_K;
 static_assert(sizeof(block_q2_K) == 2*sizeof(ggml_half) + QK_K/16 + QK_K/4, "wrong q2_K block size/padding");
 
+
 // 3-bit quantization
 // weight is represented as x = a * q
 // 16 blocks of 16 elements each
@@ -304,6 +305,12 @@ typedef struct {
     uint8_t qs[QK_K/2];           // 4--bit quants
 } block_q4_K;
 static_assert(sizeof(block_q4_K) == 2*sizeof(ggml_half) + K_SCALE_SIZE + QK_K/2, "wrong q4_K block size/padding");
+
+// Q3_KPT: Q3_K with learned per-tensor levels
+// Reuses block_q3_K structure but maps 3-bit indices through learned level table
+typedef block_q3_K block_q3_kpt;
+#define Q3KPT_N_LEVELS 8
+
 
 // 5-bit quantization
 // 8 blocks of 32 elements each
@@ -426,6 +433,24 @@ typedef struct {
     uint8_t  qs[QK_K/2];
 } block_iq4_xs;
 static_assert(sizeof(block_iq4_xs) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K/64 + QK_K/2, "wrong iq4_xs block size/padding");
+
+// 3.875 bpw - per-tensor Lloyd-Max scalar quantization
+// 256 elements = 16 sub-blocks of 16, 8-entry level table trained per tensor
+// Layout: 2 (d) + 2 (dmin) + 24 (scales: 32x6-bit) + 96 (qs: 256x3-bit) = 124 bytes
+typedef struct {
+    ggml_half d;                  //  2 bytes: global scale for 16-elem sub-block ranges
+    ggml_half dmin;               //  2 bytes: global scale for sub-block neg_mins
+    uint8_t scales[3*QK_K/32];   // 24 bytes: 32 x 6-bit (indices 0..15 = ranges, 16..31 = neg_mins)
+    uint8_t qs[3*QK_K/8];        // 96 bytes: 256 x 3-bit Lloyd-Max level index, sequential
+} block_q3_pt;
+static_assert(sizeof(block_q3_pt) == 124, "wrong q3_pt block size");
+
+#define Q3PT_N_LEVELS 8
+
+// Q4_DPT: IQ4_NL with learned per-tensor int8 levels (4.125 bpw)
+// Block format: identical to block_iq4_nl (2 + 16 = 18 bytes per 32 elements)
+typedef block_iq4_nl block_q4_dpt;
+#define Q4DPT_N_LEVELS 16
 
 #endif // GGML_COMMON_DECL
 #endif // GGML_COMMON_DECL

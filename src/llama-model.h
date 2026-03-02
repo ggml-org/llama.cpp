@@ -511,6 +511,24 @@ struct llama_model {
     // for keeping track of associated LoRA adapters
     std::unordered_set<llama_adapter_lora *> loras;
 
+    // host-side auxiliary data for dynamic quantization types (Q4_DPT, Q3_PT, Q3_KPT)
+    // indexed by weight tensor pointer, allows separate GPU placement of aux data
+    struct tensor_auxiliary {
+        ggml_type type;                    // Quantization type this aux data is for
+        std::vector<uint8_t> host_data;    // Host copy of aux data (levels or kvalues)
+        struct ggml_tensor * aux_tensor;   // Separate ggml tensor for backend placement
+    };
+
+    // Hash function for ggml_tensor pointers (reuse existing ggml_hash pattern)
+    struct ggml_tensor_ptr_hash {
+        size_t operator()(const ggml_tensor* t) const noexcept {
+            return (size_t)(uintptr_t)t >> 4;  // Same as ggml_hash()
+        }
+    };
+
+    // Per-tensor auxiliary data lookup - indexed by WEIGHT tensor pointer
+    std::unordered_map<const ggml_tensor*, tensor_auxiliary, ggml_tensor_ptr_hash> tensor_aux_data;
+
     int64_t t_load_us  = 0;
     int64_t t_start_us = 0;
 

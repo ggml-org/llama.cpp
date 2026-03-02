@@ -1016,6 +1016,17 @@ struct ggml_cuda_type_traits<GGML_TYPE_IQ4_NL> {
 };
 
 template<>
+struct ggml_cuda_type_traits<GGML_TYPE_Q4_DPT> {
+    static constexpr int qk = QK4_NL;
+    static constexpr int qr = QR4_NL;
+    static constexpr int qi = QI4_NL;
+};
+
+// Per-tensor lookup table for Q4_DPT (device global memory).
+// Each TU gets its own copy; initialized via cudaGetSymbolAddress + cudaMemcpyAsync before use.
+__device__ int8_t q4dpt_levels_cuda[16];
+
+template<>
 struct ggml_cuda_type_traits<GGML_TYPE_IQ4_XS> {
     static constexpr int qk = QK_K;
     static constexpr int qr = QR4_XS;

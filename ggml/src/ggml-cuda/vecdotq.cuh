@@ -1208,6 +1208,30 @@ static __device__ __forceinline__ float vec_dot_iq4_nl_q8_1(
     return d * sumi;
 }
 
+#define VDR_Q4_DPT_Q8_1_MMVQ 2
+#define VDR_Q4_DPT_Q8_1_MMQ  4
+
+static __device__ __forceinline__ float vec_dot_q4_dpt_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_q4_dpt * bq4 = (const block_q4_dpt *) vbq + kbx;
+
+    const int * q8 = (const int *) bq8_1->qs + iqs;
+
+    int sumi = 0;
+#pragma unroll
+    for (int l = 0; l < VDR_Q4_DPT_Q8_1_MMVQ; ++l) {
+        const int aux_q4 = get_int_b2(bq4->qs, iqs + l);
+        const int2 v = get_int_from_table_16(aux_q4, q4dpt_levels_cuda);
+
+        sumi = ggml_cuda_dp4a(v.x, q8[l + 0], sumi);
+        sumi = ggml_cuda_dp4a(v.y, q8[l + 4], sumi);
+    }
+
+    const float d = __half2float(bq4->d) * __low2float(bq8_1->ds);
+    return d * sumi;
+}
+
 #define VDR_IQ4_XS_Q8_1_MMVQ 4
 #define VDR_IQ4_XS_Q8_1_MMQ  4
 
