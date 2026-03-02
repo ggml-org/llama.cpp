@@ -12,6 +12,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
@@ -28,12 +29,166 @@
 
 // debug & profile
 #include <HAP_farf.h>
-#include <HAP_perf.h>
+#include "hmx-profile.h"
 
 #define WEIGHT_AREA_SIZE     (1 * 1024 * 1024)
 #define ACTIVATION_AREA_SIZE (1 * 1024 * 1024)
 #define OUTPUT_AREA_SIZE     (1 * 1024 * 1024)
 #define SCRATCH_AREA_SIZE    (1 * 1024 * 1024)
+
+// ---------- Debug: check fp16/fp32 buffers for NaN / Inf / near-overflow ----------
+// Set to 1 to enable runtime anomaly checks (adds overhead, use for debugging only).
+#define HMX_DEBUG_CHECK_VALUES 0
+
+// Set to 1 to enable lightweight sample-value tracing via FARF(ALWAYS, ...).
+#define HMX_DEBUG_TRACE_VALUES 1
+
+#if HMX_DEBUG_CHECK_VALUES
+
+#include <math.h>
+
+// Scan n_elms fp16 values; report NaN, Inf, and near-overflow (|v| > 60000).
+static void hmx_check_fp16(const __fp16 *buf, int n_elms, const char *label,
+                            int chunk_mr, int chunk_nc) {
+  int n_nan = 0, n_inf = 0, n_large = 0;
+  int first_nan = -1, first_inf = -1;
+  float max_abs = 0.0f;
+
+  const uint16_t *bits = (const uint16_t *)buf;
+  for (int i = 0; i < n_elms; ++i) {
+    uint16_t exp  = (bits[i] >> 10) & 0x1F;
+    uint16_t mant = bits[i] & 0x3FF;
+    if (exp == 0x1F) {
+      if (mant != 0) { if (first_nan < 0) first_nan = i; ++n_nan; }
+      else            { if (first_inf < 0) first_inf = i; ++n_inf; }
+      continue;
+    }
+    float v = (float)buf[i];
+    float a = v < 0 ? -v : v;
+    if (a > max_abs) max_abs = a;
+    if (a > 60000.0f) ++n_large;
+  }
+
+  if (n_nan || n_inf || n_large) {
+    FARF(ALWAYS, "HMX CHECK [%s] mr=%d nc=%d : nan=%d(first@%d) inf=%d(first@%d) "
+                 "near_ovf=%d max_abs=%.1f  n_elms=%d",
+         label, chunk_mr, chunk_nc,
+         n_nan, first_nan, n_inf, first_inf, n_large, max_abs, n_elms);
+  }
+}
+
+// Scan n_elms fp32 values; report NaN and Inf.
+static void hmx_check_fp32(const float *buf, int n_elms, int stride,
+                            int n_rows, int n_cols, const char *label,
+                            int chunk_mr, int chunk_nc) {
+  int n_nan = 0, n_inf = 0;
+  int first_nan = -1, first_inf = -1;
+  float max_abs = 0.0f;
+
+  for (int r = 0; r < n_rows; ++r) {
+    const float *row = buf + r * stride;
+    for (int c = 0; c < n_cols; ++c) {
+      float v = row[c];
+      if (isnan(v))      { if (first_nan < 0) first_nan = r * n_cols + c; ++n_nan; }
+      else if (isinf(v)) { if (first_inf < 0) first_inf = r * n_cols + c; ++n_inf; }
+      else {
+        float a = v < 0 ? -v : v;
+        if (a > max_abs) max_abs = a;
+      }
+    }
+  }
+
+  if (n_nan || n_inf) {
+    FARF(ALWAYS, "HMX CHECK [%s] mr=%d nc=%d : nan=%d(first@%d) inf=%d(first@%d) "
+                 "max_abs=%.4f  rows=%d cols=%d",
+         label, chunk_mr, chunk_nc,
+         n_nan, first_nan, n_inf, first_inf, max_abs, n_rows, n_cols);
+  }
+}
+
+// Print first few values for visual inspection.
+static void hmx_dump_fp16_head(const __fp16 *buf, int n_elms, const char *label,
+                                int chunk_mr, int chunk_nc) {
+  int n = n_elms < 8 ? n_elms : 8;
+  float v[8];
+  for (int i = 0; i < n; ++i) v[i] = (float)buf[i];
+  FARF(ALWAYS, "HMX DUMP [%s] mr=%d nc=%d first %d: %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f",
+       label, chunk_mr, chunk_nc, n,
+       n > 0 ? v[0] : 0, n > 1 ? v[1] : 0, n > 2 ? v[2] : 0, n > 3 ? v[3] : 0,
+       n > 4 ? v[4] : 0, n > 5 ? v[5] : 0, n > 6 ? v[6] : 0, n > 7 ? v[7] : 0);
+}
+
+#define HMX_CHECK_FP16(buf, n, label, mr, nc)       hmx_check_fp16((buf), (n), (label), (mr), (nc))
+#define HMX_CHECK_FP32(buf, n, s, nr, ncols, l, mr, nc) hmx_check_fp32((buf), (n), (s), (nr), (ncols), (l), (mr), (nc))
+#define HMX_DUMP_FP16(buf, n, label, mr, nc)        hmx_dump_fp16_head((buf), (n), (label), (mr), (nc))
+
+
+// Dump first n_vecs vectors of a tile in raw memory-contiguous order.
+// Each HVX vector = 64 fp16 values; prints first 8 of each.
+static void hmx_dump_tile_mem(const __fp16 *tile, const char *label,
+                               int tile_row, int tile_col, int n_vecs) {
+    if (n_vecs > 16) n_vecs = 16;
+    for (int v = 0; v < n_vecs; ++v) {
+        const __fp16 *p = tile + v * 64;
+        FARF(ALWAYS, "TILE_MEM [%s] tr=%d tc=%d v%02d: %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f",
+             label, tile_row, tile_col, v,
+             (float)p[0], (float)p[1], (float)p[2], (float)p[3],
+             (float)p[4], (float)p[5], (float)p[6], (float)p[7]);
+    }
+}
+
+// Dump fp32 values in row-major layout for a tile region.
+// Prints n_rows rows of 8 values starting at column = tile_col * 32.
+static void hmx_dump_fp32_tile_region(const float *data, int stride,
+                                       const char *label, int tile_row, int tile_col,
+                                       int n_rows) {
+    int col_off = tile_col * 32;
+    if (n_rows > 32) n_rows = 32;
+    for (int r = 0; r < n_rows; ++r) {
+        const float *p = data + r * stride + col_off;
+        FARF(ALWAYS, "FP32_MEM [%s] tr=%d tc=%d row%d: %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f",
+             label, tile_row, tile_col, r,
+             p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
+    }
+}
+
+// Dump first 8 fp16 values from an HVX vector (spill to aligned stack buffer).
+// Implemented as macro to avoid HVX_Vector in function signature (IDE-friendly).
+#define HMX_DUMP_HVX_FP16(v, label, t, r) do { \
+    __fp16 _dbg_h16[64] __attribute__((aligned(128))); \
+    *(HVX_Vector *)_dbg_h16 = (v); \
+    FARF(ALWAYS, "HVX_FP16 [%s] t=%d r=%d: %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f", \
+         (label), (t), (r), \
+         (float)_dbg_h16[0], (float)_dbg_h16[1], (float)_dbg_h16[2], (float)_dbg_h16[3], \
+         (float)_dbg_h16[4], (float)_dbg_h16[5], (float)_dbg_h16[6], (float)_dbg_h16[7]); \
+} while (0)
+
+// Dump first 8 fp32 values from an HVX vector.
+#define HMX_DUMP_HVX_FP32(v, label, t, r) do { \
+    float _dbg_f32[32] __attribute__((aligned(128))); \
+    *(HVX_Vector *)_dbg_f32 = (v); \
+    FARF(ALWAYS, "HVX_FP32 [%s] t=%d r=%d: %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f", \
+         (label), (t), (r), \
+         _dbg_f32[0], _dbg_f32[1], _dbg_f32[2], _dbg_f32[3], \
+         _dbg_f32[4], _dbg_f32[5], _dbg_f32[6], _dbg_f32[7]); \
+} while (0)
+#define HMX_DUMP_TILE_MEM(tile, label, tr, tc, nv) hmx_dump_tile_mem((tile), (label), (tr), (tc), (nv))
+#define HMX_DUMP_FP32_TILE(data, stride, label, tr, tc, nr) hmx_dump_fp32_tile_region((data), (stride), (label), (tr), (tc), (nr))
+#define HMX_DUMP_TILE_ROWS(tile, label, r, c) hmx_dump_tile_rows((tile), (label), (r), (c))
+
+#else
+
+#define HMX_CHECK_FP16(buf, n, label, mr, nc)            ((void)0)
+#define HMX_CHECK_FP32(buf, n, s, nr, ncols, l, mr, nc) ((void)0)
+#define HMX_DUMP_FP16(buf, n, label, mr, nc)             ((void)0)
+#define HMX_DUMP_HVX_FP16(v, label, t, r)               ((void)0)
+#define HMX_DUMP_HVX_FP32(v, label, t, r)               ((void)0)
+#define HMX_DUMP_TILE_MEM(tile, label, tr, tc, nv)       ((void)0)
+#define HMX_DUMP_FP32_TILE(data, stride, label, tr, tc, nr) ((void)0)
+#define HMX_DUMP_TILE_ROWS(tile, label, r, c)            ((void)0)
+
+#endif // HMX_DEBUG_CHECK_VALUES
+// ---------- End debug utilities ----------
 
 static const __fp16 q4_0_to_fp16_lut[64] __attribute__((aligned(HMX_VLEN))) = {
   -8, 0, -7, 0, -6, 0, -5, 0, -4, 0, -3, 0, -2, 0, -1, 0, 0, 0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0,
@@ -44,6 +199,14 @@ static const __fp16 iq4_nl_to_fp16_lut[64] __attribute__((aligned(HMX_VLEN))) = 
   1,    0, 13,   0, 25,  0, 38,  0, 53,  0, 69,  0, 89,  0, 113, 0,
 };
 
+// vscatter offsets for fused dequant+transpose: write K-values directly to [K][N] tile.
+// word[i] = i*128 maps K-row-pair i to byte offset i*128 in the tile.
+// Column offset (n*4) is added at runtime.  Only entries 0..15 are used (masked by predicate).
+static const int32_t weight_transpose_scatter_offsets[32] __attribute__((aligned(HMX_VLEN))) = {
+    0*128,  1*128,  2*128,  3*128,  4*128,  5*128,  6*128,  7*128,
+    8*128,  9*128, 10*128, 11*128, 12*128, 13*128, 14*128, 15*128,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+};
 
 static inline void swap_ptr(void **p1, void **p2) {
   void *t = *p1;
@@ -70,10 +233,6 @@ static inline size_t get_x4x2_row_stride(int weight_type, int k) {
   }
 }
 
-static inline void hmx_dma_load_sync(dma_queue *dma, void *vtcm_dst, const void *src, size_t size) {
-    dma_queue_push(dma, dma_make_ptr(vtcm_dst, src), size, size, size, 1);
-    dma_queue_pop(dma);
-}
 
 static void find_chunk_size(size_t x_max, size_t y_max, size_t xy_max, size_t x_unit, size_t y_unit, size_t *x_out,
                             size_t *y_out) {
@@ -121,6 +280,15 @@ static void transfer_activation_chunk_fp32_to_fp16(__fp16 *restrict vtcm_dst, co
       // compute output position
       int c0       = c / HMX_FP16_TILE_N_COLS;  // tile column index
       int tile_idx = r0 * (k_block / HMX_FP16_TILE_N_COLS) + c0;
+
+#if HMX_DEBUG_CHECK_VALUES
+      if (r == 0 && (tile_idx == 0 || tile_idx == 7)) {
+        FARF(ALWAYS, "=== ACT shuffle tile(%d) r=%d  wsf_to_vhf ===", tile_idx, r);
+        HMX_DUMP_HVX_FP32(v0, "act_row0_pre_shuf", tile_idx, r);
+        HMX_DUMP_HVX_FP32(v1, "act_row1_pre_shuf", tile_idx, r);
+        HMX_DUMP_HVX_FP16(v_out, "act_post_shuf", tile_idx, r);
+      }
+#endif
 
       HVX_Vector *tile = (HVX_Vector *) (vtcm_dst + tile_idx * HMX_FP16_TILE_N_ELMS);
       tile[r1 / 2]     = v_out;
@@ -189,6 +357,29 @@ static inline HVX_Vector dequantize_x4x2_q4_0_group_hvx(
   // vlut16 produces interleaved output: even-indexed byte results in lo,
   // odd-indexed in hi.  Deinterleave with vshuff to restore linear order.
   HVX_Vector v_hf = Q6_V_lo_W(Q6_W_vshuff_VVR(Q6_V_hi_W(vp), Q6_V_lo_W(vp), -2));
+
+#if HMX_DEBUG_TRACE_VALUES
+  // Check for anomalous values AFTER vlut16 (before multiply).
+  // Valid LUT outputs are -8..+7 (max exp=0x13 in fp16).  Any exp >= 0x18 is corrupt.
+  {
+    __attribute__((aligned(128))) uint16_t _vhf_buf[64];
+    *(HVX_Vector *)_vhf_buf = v_hf;
+    int _bad = 0;
+    for (int _j = 0; _j < 32; ++_j) {
+      uint16_t _e = (_vhf_buf[_j] >> 10) & 0x1F;
+      if (_e >= 0x18) _bad++;
+    }
+    if (_bad > 0) {
+      uint16_t _sc = *(const uint16_t *)scale;
+      FARF(ALWAYS, "  DBG DEQUANT-INNER: %d bad values AFTER vlut16 (before vmpy), scale=0x%04x, "
+           "vlut[0..7]=%04x %04x %04x %04x %04x %04x %04x %04x",
+           _bad, _sc,
+           _vhf_buf[0], _vhf_buf[1], _vhf_buf[2], _vhf_buf[3],
+           _vhf_buf[4], _vhf_buf[5], _vhf_buf[6], _vhf_buf[7]);
+    }
+  }
+#endif
+
   return Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_hf, v_scales));
 }
 
@@ -230,7 +421,7 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(
     int ct = t / n_k_tiles;  // column tile index
     int kt = t % n_k_tiles;  // K tile index
 
-    HVX_Vector *pv_out = (HVX_Vector *)(vtcm_dst + t * HMX_FP16_TILE_N_ELMS);
+    __fp16 *tile_base = vtcm_dst + t * HMX_FP16_TILE_N_ELMS;
 
     if (is_q4) {
       int blk_idx  = (kt * 32) / HMX_QK_Q4x4x2;
@@ -254,8 +445,55 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(
                 r1 + byte_off, upper, (const __fp16 *)(r1 + scale_off), vlut_cvt)
             : Q6_V_vzero();
 
-        *pv_out++ = Q6_V_lo_W(Q6_W_vshuff_VVR(v1, v0, -2));
+#if HMX_DEBUG_TRACE_VALUES
+        // Check dequant output BEFORE scatter — show scale value and offset for DMA correlation
+        if (t == start_tile) {
+          __attribute__((aligned(128))) uint16_t _dq[64];
+          *(HVX_Vector *)_dq = v0;
+          int _nq0 = 0;
+          for (int _j = 0; _j < 32; ++_j) { if (_dq[_j] == 0xFFFF) _nq0++; }
+          if (_nq0 > 0) {
+            uint16_t _sc = *(const uint16_t *)(r0 + scale_off);
+            FARF(ALWAYS, "  DBG DEQUANT-PRE-SCATTER: tile %d r=%d row0=%d v0 has %d NaN, scale=0x%04x byte_off=%d scale_off=%d blk=%d sub=%d",
+                 t, r, (int)(ct * HMX_FP16_TILE_N_COLS + r), _nq0, _sc, byte_off, scale_off, blk_idx, sub_blk);
+          }
+          *(HVX_Vector *)_dq = v1;
+          int _nq1 = 0;
+          for (int _j = 0; _j < 32; ++_j) { if (_dq[_j] == 0xFFFF) _nq1++; }
+          if (_nq1 > 0) {
+            uint16_t _sc = *(const uint16_t *)(r1 + scale_off);
+            FARF(ALWAYS, "  DBG DEQUANT-PRE-SCATTER: tile %d r=%d row1=%d v1 has %d NaN, scale=0x%04x byte_off=%d scale_off=%d blk=%d sub=%d",
+                 t, r, (int)(ct * HMX_FP16_TILE_N_COLS + r + 1), _nq1, _sc, byte_off, scale_off, blk_idx, sub_blk);
+          }
+        }
+#endif
+
+        // Scatter each row's 32 K-values directly to transposed [K][N] positions.
+        // word[i] = {k=2i, k=2i+1} written to K-row-pair i, N-column r / r+1.
+        Q6_vscatter_QRMVwV(q_mask64, (size_t)tile_base, HMX_FP16_TILE_SIZE - 1, v_off, v0);
+        v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);
+        Q6_vscatter_QRMVwV(q_mask64, (size_t)tile_base, HMX_FP16_TILE_SIZE - 1, v_off, v1);
+        v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);
       }
+      // Drain scatter buffer after each tile to prevent HVX scatter FIFO overflow.
+      // 32 scatter ops per tile; without periodic drains the buffer overflows for
+      // large matrices (e.g. 128 tiles = 4096 scatters) and early writes are lost.
+      (void) *(volatile HVX_Vector *)(tile_base);
+
+#if HMX_DEBUG_TRACE_VALUES
+      // Verify tile data immediately after scatter+drain
+      if (t == start_tile) {
+        const uint16_t *_tr = (const uint16_t *)tile_base;
+        int _nan_scat = 0;
+        for (int _j = 0; _j < 1024; ++_j) { if (_tr[_j] == 0xFFFF) _nan_scat++; }
+        if (_nan_scat > 0) {
+          FARF(ALWAYS, "  DBG SCATTER-READBACK: tile %d has %d NaN AFTER scatter+drain, [6..9]=%04x %04x %04x %04x",
+               t, _nan_scat, _tr[6], _tr[7], _tr[8], _tr[9]);
+        } else {
+          FARF(ALWAYS, "  DBG SCATTER-READBACK: tile %d OK (0 NaN after scatter+drain)", t);
+        }
+      }
+#endif
     } else {
       // Q8_0
       int blk_idx  = (kt * 32) / HMX_QK_Q8x4x2;
@@ -263,7 +501,6 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(
       int byte_off  = blk_idx * HMX_QK_Q8x4x2 + sub_blk * 32;
       int scale_off = qrow_size + blk_idx * HMX_X4X2_DBLK_SIZE + sub_blk * (int)sizeof(__fp16);
 
-      __fp16 *tile_base = vtcm_dst + t * HMX_FP16_TILE_N_ELMS;
       HVX_Vector v_off = v_scat_base;  // reset to column 0
       for (int r = 0; r < HMX_FP16_TILE_N_ROWS; r += 2) {
         int row0 = ct * HMX_FP16_TILE_N_COLS + r;
@@ -353,6 +590,83 @@ static void dequantize_x4x2_weight_chunk_to_fp16_tiles(
 
 // --- End x4x2 dequantizers ---
 
+#if HMX_DEBUG_CHECK_VALUES
+// Reference matmul verifier: computes expected output from tile-major fp16 buffers
+// in scalar fp32, then dumps both reference and HMX results row by row via FARF.
+//
+// Tile interleave layout (activation, weight, output all share the same format):
+//   element(row, col) = tile[(row>>1)*64 + col*2 + (row&1)]
+//   Each HVX vector (128 B = 64 fp16) holds two interleaved adjacent rows:
+//     even fp16 slots → row_r, odd fp16 slots → row_r+1.
+static void hmx_dump_ref_vs_hmx(
+    const __fp16 *activation,  // [n_row_tiles][n_dot_tiles][TILE_ELMS] tile-major fp16
+    const __fp16 *weight,      // [n_col_tiles][n_dot_tiles][TILE_ELMS] tile-major fp16
+    const __fp16 *hmx_out,     // [n_row_tiles][n_col_tiles][TILE_ELMS] tile-major fp16
+    int n_row_tiles, int n_col_tiles, int n_dot_tiles)
+{
+  const int TC = HMX_FP16_TILE_N_COLS;  // 32
+  const int TR = HMX_FP16_TILE_N_ROWS;  // 32
+  const int VL = TC * 2;                 // 64 fp16 per HVX vector (two interleaved rows)
+
+  // Access element (row, col) inside a tile pointer.
+#define TELEM(tile, row, col) \
+  ((tile)[((row) >> 1) * VL + (col) * 2 + ((row) & 1)])
+
+  FARF(ALWAYS, "=== hmx_dump_ref_vs_hmx n_rt=%d n_ct=%d n_kt=%d ===",
+       n_row_tiles, n_col_tiles, n_dot_tiles);
+
+  // --- Pass 1: all REF rows (scalar fp32) ---
+  FARF(ALWAYS, "--- REF (scalar fp32) ---");
+  for (int rt = 0; rt < n_row_tiles; ++rt) {
+    for (int ri = 0; ri < TR; ++ri) {
+      int global_row = rt * TR + ri;
+      for (int ct = 0; ct < n_col_tiles; ++ct) {
+        int c_base = ct * TC;
+        char buf[320];
+        int p = 0;
+        for (int ci = 0; ci < TC; ++ci) {
+          float acc = 0.0f;
+          for (int kt = 0; kt < n_dot_tiles; ++kt) {
+            const __fp16 *at =
+                activation + (rt * n_dot_tiles + kt) * HMX_FP16_TILE_N_ELMS;
+            const __fp16 *wt =
+                weight + (ct * n_dot_tiles + kt) * HMX_FP16_TILE_N_ELMS;
+            for (int ki = 0; ki < TC; ++ki) {
+              // Weight tile is now [K][N]: ki=K-row, ci=N-col.
+              acc += (float)TELEM(at, ri, ki) * (float)TELEM(wt, ki, ci);
+            }
+          }
+          p += snprintf(buf + p, (int)sizeof(buf) - p, " %7.3f", acc);
+        }
+        FARF(ALWAYS, "REF[%d][c%d-%d]:%s", global_row, c_base, c_base + TC - 1, buf);
+      }
+    }
+  }
+
+  // --- Pass 2: all HMX rows (core_dot_chunk_fp16 output) ---
+  FARF(ALWAYS, "--- HMX (core_dot_chunk_fp16) ---");
+  for (int rt = 0; rt < n_row_tiles; ++rt) {
+    for (int ri = 0; ri < TR; ++ri) {
+      int global_row = rt * TR + ri;
+      for (int ct = 0; ct < n_col_tiles; ++ct) {
+        const __fp16 *out_tile =
+            hmx_out + (rt * n_col_tiles + ct) * HMX_FP16_TILE_N_ELMS;
+        int c_base = ct * TC;
+        char buf[320];
+        int p = 0;
+        for (int ci = 0; ci < TC; ++ci) {
+          p += snprintf(buf + p, (int)sizeof(buf) - p,
+                        " %7.3f", (float)TELEM(out_tile, ri, ci));
+        }
+        FARF(ALWAYS, "HMX[%d][c%d-%d]:%s", global_row, c_base, c_base + TC - 1, buf);
+      }
+    }
+  }
+
+#undef TELEM
+}
+#endif // HMX_DEBUG_CHECK_VALUES
+
 static void core_dot_chunk_fp16(__fp16 *output, const __fp16 *activation, const __fp16 *weight, const __fp16 *scales,
                                 int n_row_tiles, int n_col_tiles, int n_dot_tiles, uint32_t vtcm_rctx) {
   HAP_compute_res_hmx_lock(vtcm_rctx);
@@ -367,10 +681,9 @@ static void core_dot_chunk_fp16(__fp16 *output, const __fp16 *activation, const 
       const __fp16 *row_tiles = activation + r * n_dot_tiles * HMX_FP16_TILE_N_ELMS;
       const __fp16 *col_tiles = weight + c * n_dot_tiles * HMX_FP16_TILE_N_ELMS;
 
-      for (int k = 0; k < n_dot_tiles; k += 32) {
-        int    offset  = k * HMX_FP16_TILE_N_ELMS;
-        size_t n_tiles = hmx_smin(n_dot_tiles - k, 32);
-        hmx_load_tiles_fp16(row_tiles + offset, col_tiles + offset, n_tiles);
+      for (int k = 0; k < n_dot_tiles; ++k) {
+        int offset = k * HMX_FP16_TILE_N_ELMS;
+        hmx_load_tile_pair_fp16(row_tiles + offset, col_tiles + offset);
       }
 
       __fp16 *out_tile = output + (r * n_col_tiles + c) * HMX_FP16_TILE_N_ELMS;
@@ -399,6 +712,15 @@ static void transfer_output_chunk_fp16_to_fp32(float *restrict dst, const __fp16
       HVX_Vector v_src = ((const HVX_Vector *) tile)[r1 / 2];
 
       HVX_VectorPair vp = hmx_hvx_vhf_to_wsf(v_src);
+
+#if HMX_DEBUG_CHECK_VALUES
+      if (r == 0 && (c0 == 0 || c0 == 7)) {
+        FARF(ALWAYS, "=== OUT de-shuffle tile(0,%d) r=%d  vhf_to_wsf ===", c0, r);
+        HMX_DUMP_HVX_FP16(v_src, "out_pre_deshuf", c0, r);
+        HMX_DUMP_HVX_FP32(Q6_V_lo_W(vp), "out_row0_post_deshuf", c0, r);
+        HMX_DUMP_HVX_FP32(Q6_V_hi_W(vp), "out_row1_post_deshuf", c0, r);
+      }
+#endif
 
       HVX_Vector *pv_out0 = (HVX_Vector *) (dst + (r * n + c + 0));
       HVX_Vector *pv_out1 = (HVX_Vector *) (dst + (r * n + c + n));  // next row in global memory
@@ -449,24 +771,26 @@ int hmx_mat_mul_permuted_w16a32(struct htp_context *ctx, float *restrict dst, co
   find_chunk_size(m_chunk_max_n_rows, n_chunk_max_n_cols, output_area_size / sizeof(__fp16), HMX_FP16_TILE_N_ROWS,
                   HMX_FP16_TILE_N_COLS, &m_chunk_n_rows, &n_chunk_n_cols);
 
-  // FARF(ALWAYS, "computed chunk size: %d, %d", m_chunk_n_rows, n_chunk_n_cols);
   assert(m_chunk_n_rows > 0 && n_chunk_n_cols > 0);
 
-  // int64_t activation_load_time, weight_load_time, hmx_core_time, output_store_time;
-  // activation_load_time = weight_load_time = hmx_core_time = output_store_time = 0;
+  TIMER_DEFINE(activation_load);
+  TIMER_DEFINE(weight_load);
+  TIMER_DEFINE(hmx_core);
+  TIMER_DEFINE(output_store);
+
+  TIMER_DEFINE(total);
+  TIMER_START(total);
 
   for (size_t mr = 0; mr < m; mr += m_chunk_n_rows) {
     // transfer activation matrix chunk into VTCM
     size_t n_rows = hmx_smin(m - mr, m_chunk_n_rows);
 
-    // int64_t act_t0 = HAP_perf_get_qtimer_count();
+    TIMER_START(activation_load);
     {
       const float *activation_chunk = activation + mr * k;
       transfer_activation_chunk_fp32_to_fp16(vtcm_activation, activation_chunk, n_rows, k, k);
     }
-    // activation_load_time += HAP_perf_get_qtimer_count() - act_t0;
-
-    // FARF(ALWAYS, "transfer activation ok, mr = %d, n_rows = %d", mr, n_rows);
+    TIMER_STOP(activation_load);
 
     const size_t fp16_row_stride = k * sizeof(__fp16);
 
@@ -474,30 +798,29 @@ int hmx_mat_mul_permuted_w16a32(struct htp_context *ctx, float *restrict dst, co
     void *buf_next = vtcm_scratch1;
 
     // issue async DMA for the first weight chunk
+    // NOTE: use 2D DMA (n_cols rows × fp16_row_stride) to avoid 16-bit roiwidth overflow.
     {
-      const size_t n_cols_first            = hmx_smin(n, n_chunk_n_cols);
-      const size_t first_weight_chunk_size = n_cols_first * fp16_row_stride;
+      const size_t n_cols_first = hmx_smin(n, n_chunk_n_cols);
 
       dma_queue_push(ctx->dma[0], dma_make_ptr(buf_curr, permuted_weight),
-                     first_weight_chunk_size, first_weight_chunk_size, first_weight_chunk_size, 1);
+                     fp16_row_stride, fp16_row_stride, fp16_row_stride, n_cols_first);
     }
 
     for (size_t nc = 0; nc < n; nc += n_chunk_n_cols) {
       size_t n_cols = hmx_smin(n - nc, n_chunk_n_cols);
 
-      // int64_t wei_t0 = HAP_perf_get_qtimer_count();
+      TIMER_START(weight_load);
       {
         dma_queue_pop(ctx->dma[0]);  // wait until current weight chunk is ready
 
         // issue async DMA for the next weight chunk (double buffering)
         const size_t nc_next = nc + n_chunk_n_cols;
         if (nc_next < n) {
-          const size_t n_cols_next             = hmx_smin(n - nc_next, n_chunk_n_cols);
-          const size_t next_weight_chunk_size   = n_cols_next * fp16_row_stride;
-          const __fp16 *next_weight_chunk       = permuted_weight + nc_next * k;
+          const size_t n_cols_next       = hmx_smin(n - nc_next, n_chunk_n_cols);
+          const __fp16 *next_weight_chunk = permuted_weight + nc_next * k;
 
           dma_queue_push(ctx->dma[0], dma_make_ptr(buf_next, next_weight_chunk),
-                         next_weight_chunk_size, next_weight_chunk_size, next_weight_chunk_size, 1);
+                         fp16_row_stride, fp16_row_stride, fp16_row_stride, n_cols_next);
         }
 
         // interleave row-major fp16 from scratch into tile-major in vtcm_weight
@@ -505,40 +828,46 @@ int hmx_mat_mul_permuted_w16a32(struct htp_context *ctx, float *restrict dst, co
 
         swap_ptr(&buf_curr, &buf_next);
       }
-      // weight_load_time += HAP_perf_get_qtimer_count() - wei_t0;
+      TIMER_STOP(weight_load);
 
-      // FARF(ALWAYS, "transfer weight ok, nc = %d, n_cols = %d", nc, n_cols);
-
-      // int64_t core_t0 = HAP_perf_get_qtimer_count();
+      TIMER_START(hmx_core);
       {
         const int n_row_tiles = hmx_ceil_div(n_rows, HMX_FP16_TILE_N_ROWS);
         const int n_col_tiles = hmx_ceil_div(n_cols, HMX_FP16_TILE_N_COLS);
         core_dot_chunk_fp16(vtcm_output, vtcm_activation, vtcm_weight, vtcm_scales, n_row_tiles, n_col_tiles, k / 32, ctx->vtcm_rctx);
       }
-      // hmx_core_time += HAP_perf_get_qtimer_count() - core_t0;
+      TIMER_STOP(hmx_core);
 
-      // FARF(ALWAYS, "core compute ok, (%d, %d) tiles", n_row_tiles, n_col_tiles);
+#if HMX_DEBUG_CHECK_VALUES
+      {
+        int _nrt = hmx_ceil_div((int)n_rows, HMX_FP16_TILE_N_ROWS);
+        int _nct = hmx_ceil_div((int)n_cols, HMX_FP16_TILE_N_COLS);
+        hmx_dump_ref_vs_hmx(vtcm_activation, vtcm_weight, vtcm_output,
+                            _nrt, _nct, (int)(k / 32));
+      }
+#endif
 
-      // int64_t out_t0 = HAP_perf_get_qtimer_count();
+      TIMER_START(output_store);
       {
         float *output = dst + (mr * n + nc);
         transfer_output_chunk_fp16_to_fp32(output, vtcm_output, n_rows, n_cols, n);
       }
-      // output_store_time += HAP_perf_get_qtimer_count() - out_t0;
-
-      // FARF(ALWAYS, "transfer output ok, (%d, %d)", mr, nc);
+      TIMER_STOP(output_store);
     }
   }
 
-  // FARF(ALWAYS, "%s: m = %d, k = %d, n = %d", __func__, m, k, n);
-  // FARF(ALWAYS, "    activation load: %lld us", HAP_perf_qtimer_count_to_us(activation_load_time));
-  // FARF(ALWAYS, "    weight     load: %lld us", HAP_perf_qtimer_count_to_us(weight_load_time));
-  // FARF(ALWAYS, "    core     matmul: %lld us", HAP_perf_qtimer_count_to_us(hmx_core_time));
-  // FARF(ALWAYS, "    output    store: %lld us", HAP_perf_qtimer_count_to_us(output_store_time));
+  TIMER_STOP(total);
+  FARF(ALWAYS, "%s: %lld us, m=%d k=%d n=%d", __func__, TIMER_US(total), m, k, n);
 
-  // size_t weight_size = k * n * sizeof(__fp16);
-  // float  bandwidth   = 1e-3 * weight_size / HAP_perf_qtimer_count_to_us(weight_load_time);
-  // FARF(ALWAYS, "    weight load bandwidth: %.2f GB/s", bandwidth);
+#if defined(ENABLE_PROFILE_TIMERS)
+  FARF(ALWAYS, "  activation_load: %lld us, weight_load: %lld us, hmx_core: %lld us, output_store: %lld us",
+       TIMER_US(activation_load), TIMER_US(weight_load), TIMER_US(hmx_core), TIMER_US(output_store));
+  {
+    size_t weight_size = (size_t)k * n * sizeof(__fp16);
+    float  bandwidth   = 1e-3f * weight_size / (float)TIMER_US(weight_load);
+    FARF(ALWAYS, "  weight load bandwidth: %.2f GB/s", bandwidth);
+  }
+#endif
 
   return 0;
 }
@@ -610,14 +939,23 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
   find_chunk_size(m_chunk_max_n_rows, n_chunk_max_n_cols, output_area_size / sizeof(__fp16), HMX_FP16_TILE_N_ROWS,
                   HMX_FP16_TILE_N_COLS, &m_chunk_n_rows, &n_chunk_n_cols);
 
-  // FARF(ALWAYS, "computed chunk size: %d, %d", m_chunk_n_rows, n_chunk_n_cols);
   assert(m_chunk_n_rows > 0 && n_chunk_n_cols > 0);
 
-  // int64_t activation_load_time, weight_load_time, hmx_core_time, output_store_time;
-  // activation_load_time = weight_load_time = hmx_core_time = output_store_time = 0;
+#if HMX_DEBUG_TRACE_VALUES
+  FARF(ALWAYS, "%s: m=%d k=%d n=%d wtype=%d m_chunk=%zu n_chunk=%zu vec_dot_sz=%zu row_stride=%zu",
+       __func__, m, k, n, weight_type, m_chunk_n_rows, n_chunk_n_cols, vec_dot_size, row_stride);
+#endif
 
-  const bool use_pipeline = (m >= 128) && (k <= n);
-  // const bool use_pipeline = false;
+  // const bool use_pipeline = (m >= 128) && (k <= n);
+  const bool use_pipeline = false;
+
+  TIMER_DEFINE(activation_load);
+  TIMER_DEFINE(weight_load);
+  TIMER_DEFINE(hmx_core);
+  TIMER_DEFINE(output_store);
+
+  TIMER_DEFINE(total);
+  TIMER_START(total);
 
   if (!use_pipeline) {
     // NOTE(hzx): In this simple implementation, load-matmul-store are executed sequentially
@@ -627,30 +965,71 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
       // transfer activation matrix chunk into VTCM
       size_t n_rows = hmx_smin(m - mr, m_chunk_n_rows);
 
-      // int64_t act_t0 = HAP_perf_get_qtimer_count();
+      TIMER_START(activation_load);
       {
         const float *activation_chunk = activation + mr * k;
         transfer_activation_chunk_fp32_to_fp16(vtcm_activation, activation_chunk, n_rows, k, k);
       }
-      // activation_load_time += HAP_perf_get_qtimer_count() - act_t0;
+      TIMER_STOP(activation_load);
 
-      // FARF(ALWAYS, "transfer activation ok, mr = %d, n_rows = %d", mr, n_rows);
+#if HMX_DEBUG_TRACE_VALUES
+      // DBG: sample activation src (fp32 DDR) and tile (fp16 VTCM) after first chunk
+      if (mr == 0) {
+        const float *act_src = activation;
+        FARF(ALWAYS, "  DBG act_src[0..3] = %.6f %.6f %.6f %.6f  act_src[%d] = %.6f",
+             act_src[0], act_src[1], act_src[2], act_src[3], k - 1, act_src[k - 1]);
+        // Sample first tile raw fp16 (interleaved pair rows 0,1 cols 0,1)
+        FARF(ALWAYS, "  DBG vtcm_act[0..3] = %.6f %.6f %.6f %.6f",
+             (float)vtcm_activation[0], (float)vtcm_activation[1],
+             (float)vtcm_activation[2], (float)vtcm_activation[3]);
+      }
+#endif
+
+      // checkpoint 1: activation tiles (tile-major fp16 in VTCM)
+      {
+        int act_row_tiles = hmx_ceil_div(n_rows, HMX_FP16_TILE_N_ROWS);
+        int act_col_tiles = (int)(k / HMX_FP16_TILE_N_COLS);
+        int act_n_tiles   = act_row_tiles * act_col_tiles;
+        (void)act_n_tiles;
+        // HMX_CHECK_FP16(vtcm_activation, act_n_tiles * HMX_FP16_TILE_N_ELMS,
+        //                 "act_tile_fp16", (int)mr, 0);
+        // HMX_DUMP_FP16(vtcm_activation, act_n_tiles * HMX_FP16_TILE_N_ELMS,
+        //                "act_tile_fp16", (int)mr, 0);
+      }
+
+#if HMX_DEBUG_CHECK_VALUES
+      if (mr == 0) {
+        const float *act_raw = activation;
+        int n_k_tiles_act = k / HMX_FP16_TILE_N_COLS;
+        FARF(ALWAYS, "=== ACT tile(0,0) pre-shuffle (fp32 row-major) ===");
+        HMX_DUMP_FP32_TILE(act_raw, k, "act_pre_shuf", 0, 0, 8);
+        FARF(ALWAYS, "=== ACT tile(0,0) post-shuffle (tile fp16 interleaved) ===");
+        HMX_DUMP_TILE_MEM(vtcm_activation, "act_post_shuf", 0, 0, 16);
+        if (n_k_tiles_act > 7) {
+          FARF(ALWAYS, "=== ACT tile(0,7) pre-shuffle (fp32 row-major) ===");
+          HMX_DUMP_FP32_TILE(act_raw, k, "act_pre_shuf", 0, 7, 8);
+          FARF(ALWAYS, "=== ACT tile(0,7) post-shuffle (tile fp16 interleaved) ===");
+          HMX_DUMP_TILE_MEM(vtcm_activation + 7 * HMX_FP16_TILE_N_ELMS, "act_post_shuf", 0, 7, 16);
+        }
+      }
+#endif
 
       void *buf_curr = vtcm_scratch0;
       void *buf_next = vtcm_scratch1;
 
       // issue async DDR data transfer for the first weight chunk
+      // NOTE: use 2D DMA (n_cols rows × row_stride bytes) instead of 1D
+      // because UDMA roiwidth is 16-bit and total size can exceed 65535.
       {
-        const size_t n_cols_first            = hmx_smin(n, n_chunk_n_cols);
-        const size_t first_weight_chunk_size = n_cols_first * row_stride;
+        const size_t n_cols_first = hmx_smin(n, n_chunk_n_cols);
 
-        dma_queue_push(ctx->dma[0], dma_make_ptr(buf_curr, permuted_weight), first_weight_chunk_size, first_weight_chunk_size, first_weight_chunk_size, 1);
+        dma_queue_push(ctx->dma[0], dma_make_ptr(buf_curr, permuted_weight), row_stride, row_stride, row_stride, n_cols_first);
       }
 
       for (size_t nc = 0; nc < n; nc += n_chunk_n_cols) {
         size_t n_cols = hmx_smin(n - nc, n_chunk_n_cols);
 
-        // int64_t wei_t0 = HAP_perf_get_qtimer_count();
+        TIMER_START(weight_load);
         {
           dma_queue_pop(ctx->dma[0]);  // wait until current weight chunk become ready
 
@@ -658,39 +1037,301 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
           if (nc_next < n) {
             const size_t n_cols_next = hmx_smin(n - nc_next, n_chunk_n_cols);
 
-            const size_t   next_weight_chunk_size = n_cols_next * row_stride;
-            const uint8_t *next_weight_chunk      = permuted_weight + nc_next * row_stride;
+            const uint8_t *next_weight_chunk = permuted_weight + nc_next * row_stride;
 
-            dma_queue_push(ctx->dma[0], dma_make_ptr(buf_next, next_weight_chunk), next_weight_chunk_size, next_weight_chunk_size, next_weight_chunk_size, 1);
+            dma_queue_push(ctx->dma[0], dma_make_ptr(buf_next, next_weight_chunk), row_stride, row_stride, row_stride, n_cols_next);
           }
 
+#if HMX_DEBUG_TRACE_VALUES
+          // DBG: DMA integrity check — compare VTCM buffer with DDR source at scale region.
+          // This determines whether DMA corrupts the data or the DDR source is already wrong.
+          if (mr == 0 && nc == 0) {
+            const bool _is_q4 = (weight_type == HMX_TYPE_Q4_0 || weight_type == HMX_TYPE_IQ4_NL);
+            const int _qrow_sz = _is_q4 ? ((int)k / 2) : (int)k;
+            const uint8_t *_vtcm_buf = (const uint8_t *)buf_curr;
+            const uint8_t *_ddr_buf  = permuted_weight;  // DDR source (nc==0, so no offset)
+
+            // Check scale region for rows 0, 13, 26 (row 26 was where NaN was seen before)
+            int _check_rows[] = { 0, 13, 26 };
+            for (int _ri = 0; _ri < 3; _ri++) {
+              int _row = _check_rows[_ri];
+              if (_row >= (int)n_cols) break;
+
+              const uint8_t *_vtcm_row = _vtcm_buf + _row * row_stride;
+              const uint8_t *_ddr_row  = _ddr_buf  + _row * row_stride;
+
+              // Dump first 8 scale bytes (4 fp16 scales = first half of block 0's scales)
+              const uint16_t *_vs = (const uint16_t *)(_vtcm_row + _qrow_sz);  // VTCM scale region
+              const uint16_t *_ds = (const uint16_t *)(_ddr_row  + _qrow_sz);  // DDR scale region
+              FARF(ALWAYS, "  DBG DMA-CHECK row %d: VTCM scales[0..3]=0x%04x %04x %04x %04x  DDR scales[0..3]=0x%04x %04x %04x %04x",
+                   _row, _vs[0], _vs[1], _vs[2], _vs[3], _ds[0], _ds[1], _ds[2], _ds[3]);
+
+              // Also compare packed data region (first 8 bytes) to verify DMA works at all
+              const uint16_t *_vq = (const uint16_t *)(_vtcm_row);
+              const uint16_t *_dq = (const uint16_t *)(_ddr_row);
+              int _scale_match = (_vs[0]==_ds[0] && _vs[1]==_ds[1] && _vs[2]==_ds[2] && _vs[3]==_ds[3]);
+              int _quant_match = (_vq[0]==_dq[0] && _vq[1]==_dq[1] && _vq[2]==_dq[2] && _vq[3]==_dq[3]);
+              FARF(ALWAYS, "  DBG DMA-CHECK row %d: quants %s, scales %s | VTCM quants[0..3]=0x%04x %04x %04x %04x  DDR quants[0..3]=0x%04x %04x %04x %04x",
+                   _row, _quant_match ? "MATCH" : "MISMATCH", _scale_match ? "MATCH" : "MISMATCH",
+                   _vq[0], _vq[1], _vq[2], _vq[3], _dq[0], _dq[1], _dq[2], _dq[3]);
+
+              // Full byte-by-byte comparison of scale region for this row
+              int _nbytes_scales = (int)row_stride - _qrow_sz;
+              int _n_mismatch = 0;
+              int _first_mismatch_off = -1;
+              for (int _bi = 0; _bi < _nbytes_scales; _bi++) {
+                if (_vtcm_row[_qrow_sz + _bi] != _ddr_row[_qrow_sz + _bi]) {
+                  if (_first_mismatch_off < 0) _first_mismatch_off = _bi;
+                  _n_mismatch++;
+                }
+              }
+              if (_n_mismatch > 0) {
+                FARF(ALWAYS, "  DBG DMA-CHECK row %d: %d/%d scale bytes MISMATCH (first at offset +%d)",
+                     _row, _n_mismatch, _nbytes_scales, _first_mismatch_off);
+              } else {
+                FARF(ALWAYS, "  DBG DMA-CHECK row %d: all %d scale bytes MATCH between VTCM and DDR", _row, _nbytes_scales);
+              }
+            }
+          }
+#endif
+          // Dequant + vscatter writes directly to [K, N] transposed tiles.
+          // HMX computes C = A × B, where A=[M,K] activation, B=[K,N] weight.
           dequantize_x4x2_weight_chunk_to_fp16_tiles(ctx, vtcm_weight, buf_curr,
                                                       n_cols, k, row_stride, weight_type);
 
+#if HMX_DEBUG_CHECK_VALUES
+          if (mr == 0 && nc == 0) {
+            int n_wt_tiles_dbg = hmx_ceil_div(n_cols, HMX_FP16_TILE_N_COLS) * (k / HMX_FP16_TILE_N_COLS);
+            FARF(ALWAYS, "=== WT tile(0,0) dequant n_wt_tiles=%d ===", n_wt_tiles_dbg);
+            HMX_DUMP_TILE_MEM(vtcm_weight, "wt_dequant", 0, 0, 16);
+            if (n_wt_tiles_dbg > 7) {
+              FARF(ALWAYS, "=== WT tile(0,7) dequant ===");
+              HMX_DUMP_TILE_MEM(vtcm_weight + 7 * HMX_FP16_TILE_N_ELMS, "wt_dequant", 0, 7, 16);
+            }
+          }
+#endif
+
           swap_ptr(&buf_curr, &buf_next);
         }
-        // weight_load_time += HAP_perf_get_qtimer_count() - wei_t0;
+        TIMER_STOP(weight_load);
 
-        // FARF(ALWAYS, "transfer weight ok, nc = %d, n_cols = %d", nc, n_cols);
+#if HMX_DEBUG_TRACE_VALUES
+        // DBG: sample weight tile (fp16 VTCM) after first dequant
+        // Tile layout: elem(k_row, n_col) = tile[(k_row>>1)*64 + n_col*2 + (k_row&1)]
+        // tile[0..7] = (k0,n0)(k1,n0)(k0,n1)(k1,n1)(k0,n2)(k1,n2)(k0,n3)(k1,n3)
+        if (mr == 0 && nc == 0) {
+          const uint16_t *wt_raw = (const uint16_t *)vtcm_weight;
+          FARF(ALWAYS, "  DBG vtcm_wt[0..7] fp16 = %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f",
+               (float)vtcm_weight[0], (float)vtcm_weight[1],
+               (float)vtcm_weight[2], (float)vtcm_weight[3],
+               (float)vtcm_weight[4], (float)vtcm_weight[5],
+               (float)vtcm_weight[6], (float)vtcm_weight[7]);
+          FARF(ALWAYS, "  DBG vtcm_wt[0..7] raw  = %04x %04x %04x %04x | %04x %04x %04x %04x",
+               wt_raw[0], wt_raw[1], wt_raw[2], wt_raw[3],
+               wt_raw[4], wt_raw[5], wt_raw[6], wt_raw[7]);
+          // Also check weight tile 1 (K-tile 1, same N-cols) at offset HMX_FP16_TILE_N_ELMS
+          const uint16_t *wt1_raw = (const uint16_t *)(vtcm_weight + HMX_FP16_TILE_N_ELMS);
+          FARF(ALWAYS, "  DBG vtcm_wt_tile1[0..7] raw = %04x %04x %04x %04x | %04x %04x %04x %04x",
+               wt1_raw[0], wt1_raw[1], wt1_raw[2], wt1_raw[3],
+               wt1_raw[4], wt1_raw[5], wt1_raw[6], wt1_raw[7]);
+          // Check N-col 16 area: tile[(0>>1)*64 + 16*2 + 0] = tile[32]
+          FARF(ALWAYS, "  DBG vtcm_wt[32..39] raw (n16-n19) = %04x %04x %04x %04x | %04x %04x %04x %04x",
+               wt_raw[32], wt_raw[33], wt_raw[34], wt_raw[35],
+               wt_raw[36], wt_raw[37], wt_raw[38], wt_raw[39]);
+          // Count how many 0xFFFF (NaN) in first tile AFTER dequant
+          int nan_post = 0;
+          int n_wt_tiles_total = hmx_ceil_div(n_cols, HMX_FP16_TILE_N_COLS) * (k / HMX_FP16_TILE_N_COLS);
+          for (int _i = 0; _i < 1024; ++_i) {
+            if (wt_raw[_i] == 0xFFFF) nan_post++;
+          }
+          FARF(ALWAYS, "  DBG vtcm_wt POST-dequant: %d/1024 values are 0xFFFF in tile 0 (total tiles=%d)",
+               nan_post, n_wt_tiles_total);
+          // Also check last tile for stale data
+          if (n_wt_tiles_total > 1) {
+            const uint16_t *last_tile = (const uint16_t *)(vtcm_weight + (n_wt_tiles_total - 1) * HMX_FP16_TILE_N_ELMS);
+            int nan_last = 0;
+            for (int _i = 0; _i < 1024; ++_i) {
+              if (last_tile[_i] == 0xFFFF) nan_last++;
+            }
+            FARF(ALWAYS, "  DBG vtcm_wt POST-dequant: %d/1024 values are 0xFFFF in last tile (%d)",
+                 nan_last, n_wt_tiles_total - 1);
+          }
 
-        // int64_t core_t0 = HAP_perf_get_qtimer_count();
+          // === SCALAR REFERENCE DEQUANT: manually dequant a few positions ===
+          // Find first NaN position in tile 0 and trace back to DDR input data
+          {
+            // For kt=0, ct=0: blk_idx=0, sub_blk=0, upper=false, byte_off=0, scale_off=qrow_size
+            int _qrow_size = k / 2;  // 2048 for k=4096
+            // Find first NaN in tile 0
+            int nan_pos = -1;
+            for (int _i = 0; _i < 1024; ++_i) {
+              if (wt_raw[_i] == 0xFFFF) { nan_pos = _i; break; }
+            }
+            if (nan_pos >= 0) {
+              // Decode tile position: elem(k_row, n_col) = tile[(k_row>>1)*64 + n_col*2 + (k_row&1)]
+              int _vec_idx = nan_pos / 64;  // k_row >> 1
+              int _within  = nan_pos % 64;
+              int _n_col   = _within / 2;
+              int _k_parity = _within & 1;
+              int _k_row   = _vec_idx * 2 + _k_parity;
+              FARF(ALWAYS, "  DBG SCALAR: first NaN at tile[%d] = k_row=%d n_col=%d", nan_pos, _k_row, _n_col);
+
+              // The NaN was written by vscatter for weight column _n_col at K-row _k_row.
+              // In the dequant loop: r = _n_col & ~1, row0 = _n_col & ~1, row1 = row0+1
+              // The specific row is _n_col (for N-col mapping).
+              // Input data: vtcm_src + _n_col * row_stride + byte_off (=0 for kt=0)
+              // Scale: vtcm_src + _n_col * row_stride + _qrow_size (for kt=0, sub_blk=0)
+              // The byte at position _k_row/2 in the 32-byte group contains the nibble.
+
+              // Read from the ORIGINAL weight data in DDR (not DMA buffer)
+              const uint8_t *wt_row = permuted_weight + _n_col * row_stride;
+              // K-row i maps to byte[i] in the 32-byte group (byte_off=0 for kt=0)
+              uint8_t raw_byte = wt_row[_k_row];
+              int nibble = raw_byte & 0x0F;  // upper=false for sub_blk=0
+              __fp16 scale_val = *(const __fp16 *)(wt_row + _qrow_size);
+              uint16_t scale_raw = *(const uint16_t *)(wt_row + _qrow_size);
+
+              // Scalar dequant: q4_0_to_fp16_lut layout: entries at even positions
+              // LUT[nibble*2] = the fp16 integer value
+              __fp16 lut_val = q4_0_to_fp16_lut[nibble * 2];
+              __fp16 scalar_result = (__fp16)((float)lut_val * (float)scale_val);
+              uint16_t scalar_raw = *(const uint16_t *)&scalar_result;
+
+              FARF(ALWAYS, "  DBG SCALAR: row=%d byte[%d]=0x%02x nibble=%d lut=%.1f scale=%.6f(0x%04x) result=%.4f(0x%04x)",
+                   _n_col, _k_row, raw_byte, nibble,
+                   (float)lut_val, (float)scale_val, scale_raw,
+                   (float)scalar_result, scalar_raw);
+
+              // Also check the paired K-row element
+              int pair_pos = (_k_parity == 0) ? nan_pos + 1 : nan_pos - 1;
+              if (pair_pos >= 0 && pair_pos < 1024) {
+                uint16_t pair_val = wt_raw[pair_pos];
+                int _k_row2 = _k_parity == 0 ? _k_row + 1 : _k_row - 1;
+                uint8_t raw_byte2 = wt_row[_k_row2];
+                int nibble2 = raw_byte2 & 0x0F;
+                __fp16 lut_val2 = q4_0_to_fp16_lut[nibble2 * 2];
+                __fp16 scalar_res2 = (__fp16)((float)lut_val2 * (float)scale_val);
+                uint16_t scalar_raw2 = *(const uint16_t *)&scalar_res2;
+                FARF(ALWAYS, "  DBG SCALAR: pair tile[%d]=0x%04x k_row=%d byte=0x%02x nib=%d lut=%.1f scalar=%.4f(0x%04x)",
+                     pair_pos, pair_val, _k_row2, raw_byte2, nibble2,
+                     (float)lut_val2, (float)scalar_res2, scalar_raw2);
+              }
+
+              // Print first 4 raw bytes and scale for rows 0..3 (N-cols 0..3)
+              for (int _r = 0; _r < 4 && _r < (int)n_cols; ++_r) {
+                const uint8_t *_wr = permuted_weight + _r * row_stride;
+                uint16_t _sc_raw = *(const uint16_t *)(_wr + _qrow_size);
+                FARF(ALWAYS, "  DBG SCALAR: N-col %d: bytes[0..3]=0x%02x 0x%02x 0x%02x 0x%02x scale=0x%04x",
+                     _r, _wr[0], _wr[1], _wr[2], _wr[3], _sc_raw);
+              }
+            } else {
+              FARF(ALWAYS, "  DBG SCALAR: no NaN found in tile 0");
+            }
+          }
+        }
+#endif
+
+        TIMER_START(hmx_core);
         {
           const int n_row_tiles = hmx_ceil_div(n_rows, HMX_FP16_TILE_N_ROWS);
           const int n_col_tiles = hmx_ceil_div(n_cols, HMX_FP16_TILE_N_COLS);
           core_dot_chunk_fp16(vtcm_output, vtcm_activation, vtcm_weight, vtcm_scales, n_row_tiles, n_col_tiles, k / 32, ctx->vtcm_rctx);
         }
-        // hmx_core_time += HAP_perf_get_qtimer_count() - core_t0;
+        TIMER_STOP(hmx_core);
 
-        // FARF(ALWAYS, "core compute ok, (%d, %d) tiles", n_row_tiles, n_col_tiles);
+#if HMX_DEBUG_TRACE_VALUES
+        // DBG: sample HMX output tile (fp16 VTCM) after first compute
+        // Tile layout: elem(row, col) = tile[(row>>1)*64 + col*2 + (row&1)]
+        // So tile[0]=e(0,0) tile[1]=e(1,0) tile[2]=e(0,1) tile[3]=e(1,1) tile[4]=e(0,2) ...
+        if (mr == 0 && nc == 0) {
+          const uint16_t *raw = (const uint16_t *)vtcm_output;
+          FARF(ALWAYS, "  DBG vtcm_out[0..7] fp16 = %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f",
+               (float)vtcm_output[0], (float)vtcm_output[1],
+               (float)vtcm_output[2], (float)vtcm_output[3],
+               (float)vtcm_output[4], (float)vtcm_output[5],
+               (float)vtcm_output[6], (float)vtcm_output[7]);
+          FARF(ALWAYS, "  DBG vtcm_out[0..7] raw  = %04x %04x %04x %04x | %04x %04x %04x %04x",
+               raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7]);
+          // Print more columns: [8..15] = cols 4-7
+          FARF(ALWAYS, "  DBG vtcm_out[8..15] raw = %04x %04x %04x %04x | %04x %04x %04x %04x",
+               raw[8], raw[9], raw[10], raw[11], raw[12], raw[13], raw[14], raw[15]);
+          // Count NaN in entire output tile
+          int out_nan = 0;
+          for (int _i = 0; _i < 1024; ++_i) {
+            if ((raw[_i] & 0x7C00) == 0x7C00 && (raw[_i] & 0x03FF) != 0) out_nan++;
+          }
+          FARF(ALWAYS, "  DBG vtcm_out: %d/1024 NaN values in output tile 0", out_nan);
+        }
+#endif
 
-        // int64_t out_t0 = HAP_perf_get_qtimer_count();
+#if HMX_DEBUG_CHECK_VALUES
+        {
+          int _nrt = hmx_ceil_div((int)n_rows, HMX_FP16_TILE_N_ROWS);
+          int _nct = hmx_ceil_div((int)n_cols, HMX_FP16_TILE_N_COLS);
+          hmx_dump_ref_vs_hmx(vtcm_activation, vtcm_weight, vtcm_output,
+                              _nrt, _nct, (int)(k / 32));
+        }
+        {
+          int out_n_tiles = hmx_ceil_div(n_rows, HMX_FP16_TILE_N_ROWS)
+                          * hmx_ceil_div(n_cols, HMX_FP16_TILE_N_COLS);
+          HMX_CHECK_FP16(vtcm_output, out_n_tiles * HMX_FP16_TILE_N_ELMS,
+                          "hmx_out_fp16", (int)mr, (int)nc);
+          HMX_DUMP_FP16(vtcm_output, out_n_tiles * HMX_FP16_TILE_N_ELMS,
+                         "hmx_out_fp16", (int)mr, (int)nc);
+        }
+#endif
+
+#if HMX_DEBUG_CHECK_VALUES
+        if (mr == 0 && nc == 0) {
+          int n_out_ct = hmx_ceil_div(n_cols, HMX_FP16_TILE_N_COLS);
+          FARF(ALWAYS, "=== OUT tile(0,0) pre-deshuffle (tile fp16) n_out_ct=%d ===", n_out_ct);
+          HMX_DUMP_TILE_MEM(vtcm_output, "out_pre_shuf", 0, 0, 16);
+          if (n_out_ct > 7) {
+            FARF(ALWAYS, "=== OUT tile(0,7) pre-deshuffle (tile fp16) ===");
+            HMX_DUMP_TILE_MEM(vtcm_output + 7 * HMX_FP16_TILE_N_ELMS, "out_pre_shuf", 0, 7, 16);
+          }
+        }
+#endif
+
+        TIMER_START(output_store);
         {
           float *output = dst + (mr * n + nc);
           transfer_output_chunk_fp16_to_fp32(output, vtcm_output, n_rows, n_cols, n);
-        }
-        // output_store_time += HAP_perf_get_qtimer_count() - out_t0;
 
-        // FARF(ALWAYS, "transfer output ok, (%d, %d)", mr, nc);
+#if HMX_DEBUG_TRACE_VALUES
+          // DBG: sample DDR output (fp32) after first store
+          if (mr == 0 && nc == 0) {
+            const uint32_t *raw32 = (const uint32_t *)output;
+            FARF(ALWAYS, "  DBG ddr_out[0..7] = %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f",
+                 output[0], output[1], output[2], output[3],
+                 output[4], output[5], output[6], output[7]);
+            FARF(ALWAYS, "  DBG ddr_out[0..7] raw = %08x %08x %08x %08x %08x %08x %08x %08x",
+                 raw32[0], raw32[1], raw32[2], raw32[3],
+                 raw32[4], raw32[5], raw32[6], raw32[7]);
+            // Also print row 1 (starts at output[n])
+            FARF(ALWAYS, "  DBG ddr_row1[0..7] = %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f",
+                 output[n], output[n+1], output[n+2], output[n+3],
+                 output[n+4], output[n+5], output[n+6], output[n+7]);
+          }
+#endif
+
+#if HMX_DEBUG_CHECK_VALUES
+          HMX_CHECK_FP32(output, n_rows * n_cols, n, n_rows, n_cols,
+                          "out_fp32", (int)mr, (int)nc);
+
+          if (mr == 0 && nc == 0) {
+            int n_out_ct2 = hmx_ceil_div(n_cols, HMX_FP16_TILE_N_COLS);
+            FARF(ALWAYS, "=== OUT tile(0,0) post-deshuffle (fp32 row-major) ===");
+            HMX_DUMP_FP32_TILE(output, n, "out_post_shuf", 0, 0, 8);
+            if (n_out_ct2 > 7) {
+              FARF(ALWAYS, "=== OUT tile(0,7) post-deshuffle (fp32 row-major) ===");
+              HMX_DUMP_FP32_TILE(output, n, "out_post_shuf", 0, 7, 8);
+            }
+          }
+#endif
+
+        }
+        TIMER_STOP(output_store);
       }
     }
   } else {
@@ -823,11 +1464,15 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
     }
   }
 
-  // FARF(ALWAYS, "%s: m = %d, k = %d, n = %d", __func__, m, k, n);
-  // FARF(ALWAYS, "    activation load: %lld us", HAP_perf_qtimer_count_to_us(activation_load_time));
-  // FARF(ALWAYS, "    weight     load: %lld us", HAP_perf_qtimer_count_to_us(weight_load_time));
-  // FARF(ALWAYS, "    core     matmul: %lld us", HAP_perf_qtimer_count_to_us(hmx_core_time));
-  // FARF(ALWAYS, "    output    store: %lld us", HAP_perf_qtimer_count_to_us(output_store_time));
+  TIMER_STOP(total);
+
+#if HMX_DEBUG_TRACE_VALUES
+  // DBG: sample final output from DDR
+  FARF(ALWAYS, "  DBG final dst[0..3] = %.6f %.6f %.6f %.6f  dst[%d] = %.6f",
+       dst[0], dst[1], dst[2], dst[3], m * n - 1, dst[m * n - 1]);
+#endif
+
+  FARF(ALWAYS, "%s: %lld us, m=%d k=%d n=%d pipeline=%d", __func__, TIMER_US(total), m, k, n, use_pipeline);
 
 #if defined(ENABLE_PROFILE_TIMERS)
   if (!use_pipeline) {
@@ -1010,8 +1655,9 @@ int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx, float *restrict 
 
   qweight_fetch_task_state_t fetch_task_state;
 
-  int64_t t_a, t_b, t_c;
-  t_a = t_b = t_c = 0;
+  TIMER_DEFINE(fetch);
+  TIMER_DEFINE(load);
+  TIMER_DEFINE(core);
 
   for (size_t mr = 0; mr < m; mr += M_BLOCK_SIZE) {
     size_t m_blk_sz = hmx_smin(m - mr, M_BLOCK_SIZE);
@@ -1025,7 +1671,7 @@ int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx, float *restrict 
       for (size_t kk = 0; kk < k; kk += K_BLOCK_SIZE) {
         size_t k_blk_sz = hmx_smin(k - kk, K_BLOCK_SIZE);
 
-        int64_t t0 = HAP_perf_get_qtimer_count();
+        TIMER_START(fetch);
         // fetch activation block into VTCM
         {
           const float *activation_block = x + mr * k + kk;
@@ -1062,9 +1708,9 @@ int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx, float *restrict 
 
           worker_pool_run_func(ctx->worker_pool, qweight_fetch_worker_fn, s, 1);
         }
-        t_a += HAP_perf_get_qtimer_count() - t0;
+        TIMER_STOP(fetch);
 
-        int64_t t1 = HAP_perf_get_qtimer_count();
+        TIMER_START(load);
         // load activation block
         {
           // const float *activation_block = x + mr * k + kk;
@@ -1084,15 +1730,15 @@ int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx, float *restrict 
           dequantize_x4x2_weight_chunk_to_fp16_tiles(ctx, vtcm_weight, vtcm_scratch0,
                                                       n_blk_sz, k_blk_sz, sub_row_stride, weight_type);
         }
-        t_b += HAP_perf_get_qtimer_count() - t1;
+        TIMER_STOP(load);
 
         // core mma
-        int64_t t2 = HAP_perf_get_qtimer_count();
+        TIMER_START(core);
         {
           core_mma_chunk_fp16(vtcm_output, vtcm_activation, vtcm_weight, vtcm_scales, vtcm_eye_tile, n_row_tiles,
                               n_col_tiles, k_blk_sz / HMX_FP16_TILE_N_COLS, kk == 0, ctx->vtcm_rctx);
         }
-        t_c += HAP_perf_get_qtimer_count() - t2;
+        TIMER_STOP(core);
       }
 
       // store output block
@@ -1103,8 +1749,8 @@ int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx, float *restrict 
     }
   }
 
-  FARF(ALWAYS, "t_a: %lld us, t_b: %lld us, t_c: %lld us", HAP_perf_qtimer_count_to_us(t_a),
-       HAP_perf_qtimer_count_to_us(t_b), HAP_perf_qtimer_count_to_us(t_c));
+  FARF(ALWAYS, "fetch: %lld us, load: %lld us, core: %lld us", TIMER_US(fetch),
+       TIMER_US(load), TIMER_US(core));
 
   return 0;
 }
