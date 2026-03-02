@@ -412,68 +412,108 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
     GGML_SYCL_DEBUG("[MOE-HYBRID] ExpertPlacementTable populated with %zu expert entries\n", expert_list.size());
 
     // -----------------------------------------------------------------------
-    // Eager VRAM upload: pre-upload as many experts as fit in available VRAM.
+    // Eager VRAM upload: pre-upload experts across ALL available GPUs.
+    // Each device gets experts proportional to its available VRAM.
     // Since we have no popularity data yet, distribute round-robin across
-    // experts. This ensures the most commonly used experts are already on
-    // GPU before the first inference pass.
+    // experts by filling the device with the most remaining capacity first.
     // -----------------------------------------------------------------------
     {
         using namespace ggml_sycl;
-        size_t vram_available = unified_cache_available_for_compute(device);
-        if (expert_weight_bytes > 0 && vram_available > expert_weight_bytes) {
-            const size_t max_experts_in_vram = vram_available / expert_weight_bytes;
-            size_t       n_uploaded          = 0;
-            unified_cache * cache = get_unified_cache_for_device(device);
 
-            if (cache) {
-                for (const auto & info : expert_list) {
-                    if (n_uploaded >= max_experts_in_vram) {
-                        break;
-                    }
-                    if (!info.extra) {
-                        continue;
-                    }
+        // Query per-device VRAM budgets
+        const int n_gpu = g_moe_multi_gpu_active.load(std::memory_order_acquire)
+                              ? ggml_sycl_info().device_count
+                              : 1;
 
-                    // Generate cache key and upload via ensure_cached_layout
-                    ggml_sycl_cache_id key = ggml_sycl_get_moe_expert_cache_key(
-                        info.tensor, info.extra, info.expert_idx);
-                    if (!key.valid) {
-                        continue;
-                    }
+        struct device_budget {
+            int             dev;
+            size_t          available;
+            size_t          n_slots;
+            size_t          n_uploaded;
+            unified_cache * cache;
+        };
+        std::vector<device_budget> budgets;
 
-                    cache_layout_request req{};
-                    req.key              = key;
-                    req.src_ptr          = info.host_ptr;
-                    req.src_size         = info.bytes;
-                    req.dst_size         = info.bytes;
-                    req.type             = cache_entry_type::MOE_EXPERT;
-                    req.layer_id         = info.layer_id;
-                    req.expert_id        = info.expert_idx;
-                    req.layout           = GGML_LAYOUT_AOS;
-                    req.validate_content = false;
+        for (int d = 0; d < n_gpu && d < GGML_SYCL_MAX_DEVICES; d++) {
+            size_t avail = unified_cache_available_for_compute(d);
+            unified_cache * cache_d = get_unified_cache_for_device(d);
+            if (!cache_d || expert_weight_bytes == 0) {
+                continue;
+            }
+            size_t slots = avail / expert_weight_bytes;
+            if (slots > 0) {
+                budgets.push_back({ d, avail, slots, 0, cache_d });
+            }
+        }
 
-                    cache_layout_result result = cache->ensure_cached_layout(req, {});
-                    if (result.status == cache_layout_status::READY
-                        || result.status == cache_layout_status::IN_PROGRESS) {
-                        // Update placement table with device pointer
-                        placement_table.set_device_ptr(
-                            info.layer_id, info.expert_idx, device, result.device_ptr);
-                        placement_table.set_popularity(
-                            info.layer_id, info.expert_idx, static_cast<int>(n_uploaded));
-                        n_uploaded++;
-                    }
+        if (!budgets.empty()) {
+            size_t total_uploaded = 0;
+
+            for (const auto & info : expert_list) {
+                if (!info.extra) {
+                    continue;
                 }
 
-                GGML_LOG_INFO("[MOE-HYBRID] Eager VRAM upload: %zu/%zu experts uploaded "
-                              "(%.1f MB available, %.1f KB/expert)\n",
-                              n_uploaded, expert_list.size(),
-                              vram_available / (1024.0 * 1024.0),
-                              expert_weight_bytes / 1024.0);
+                // Find device with most remaining slots
+                int    best_idx   = -1;
+                size_t best_slots = 0;
+                for (int i = 0; i < static_cast<int>(budgets.size()); i++) {
+                    if (budgets[i].n_slots > best_slots) {
+                        best_idx   = i;
+                        best_slots = budgets[i].n_slots;
+                    }
+                }
+                if (best_idx < 0) {
+                    break;  // All devices full
+                }
+
+                // Generate cache key and upload via ensure_cached_layout
+                ggml_sycl_cache_id key = ggml_sycl_get_moe_expert_cache_key(
+                    info.tensor, info.extra, info.expert_idx);
+                if (!key.valid) {
+                    continue;
+                }
+
+                cache_layout_request req{};
+                req.key              = key;
+                req.src_ptr          = info.host_ptr;
+                req.src_size         = info.bytes;
+                req.dst_size         = info.bytes;
+                req.type             = cache_entry_type::MOE_EXPERT;
+                req.layer_id         = info.layer_id;
+                req.expert_id        = info.expert_idx;
+                req.layout           = GGML_LAYOUT_AOS;
+                req.validate_content = false;
+
+                auto & budget = budgets[best_idx];
+                cache_layout_result result = budget.cache->ensure_cached_layout(req, {});
+                if (result.status == cache_layout_status::READY
+                    || result.status == cache_layout_status::IN_PROGRESS) {
+                    // Update placement table with device pointer and target device
+                    placement_table.set_device_ptr(
+                        info.layer_id, info.expert_idx, budget.dev, result.device_ptr);
+                    placement_table.set_popularity(
+                        info.layer_id, info.expert_idx, static_cast<int>(total_uploaded));
+                    budget.n_slots--;
+                    budget.n_uploaded++;
+                    total_uploaded++;
+                }
             }
+
+            // Log distribution summary
+            std::string dist_summary;
+            for (const auto & b : budgets) {
+                if (!dist_summary.empty()) { dist_summary += " "; }
+                dist_summary += "GPU" + std::to_string(b.dev) + "=" + std::to_string(b.n_uploaded);
+            }
+            size_t n_cpu = expert_list.size() > total_uploaded
+                               ? expert_list.size() - total_uploaded : 0;
+            GGML_LOG_INFO("[MOE-HYBRID] Expert distribution: %s CPU=%zu (%zu total, %.1f KB/expert)\n",
+                          dist_summary.c_str(), n_cpu, expert_list.size(),
+                          expert_weight_bytes / 1024.0);
         } else {
-            GGML_SYCL_DEBUG("[MOE-HYBRID] Eager upload skipped: insufficient VRAM "
-                            "(%.1f MB available, %.1f KB/expert)\n",
-                            vram_available / (1024.0 * 1024.0),
+            GGML_SYCL_DEBUG("[MOE-HYBRID] Eager upload skipped: no devices with sufficient VRAM "
+                            "(%.1f KB/expert)\n",
                             expert_weight_bytes / 1024.0);
         }
     }
@@ -671,6 +711,14 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                                       gpu_d, e.what());
                         g_secondary_staging_buffer[gpu_d] = nullptr;
                         g_secondary_staging_size[gpu_d]   = 0;
+                    }
+
+                    // Register unified cache for this secondary GPU so
+                    // ensure_cached_layout() can materialize expert weights
+                    // on this device. Without this, layout choice lookups
+                    // fail with "missing layout choice" for device > 0.
+                    if (g_secondary_queues[gpu_d]) {
+                        ggml_sycl::unified_cache_register_for_queue(gpu_d, *g_secondary_queues[gpu_d]);
                     }
 
                     if (g_secondary_queues[gpu_d] && g_secondary_staging_buffer[gpu_d]) {
@@ -7471,8 +7519,17 @@ static void tiered_kv_buffer_memset_tensor(ggml_backend_buffer_t buffer,
                                            size_t                size) {
     auto * ctx = static_cast<tiered_kv_buffer_context *>(buffer->context);
     ggml_sycl_set_device(ctx->device);
-    // queue.memset works for both device and host USM pointers
-    SYCL_CHECK(CHECK_TRY_ERROR(ctx->stream->memset(static_cast<char *>(tensor->data) + offset, value, size).wait()));
+    void * dst = static_cast<char *>(tensor->data) + offset;
+    // Detect whether this tensor lives in the cold (host-pinned) region.
+    // Level Zero GPU queue cannot memset host USM pointers (UR_RESULT_ERROR_DEVICE_LOST).
+    const bool in_cold = ctx->cold_base && ctx->cold_size > 0
+                         && dst >= ctx->cold_base
+                         && dst < static_cast<char *>(ctx->cold_base) + ctx->cold_size;
+    if (in_cold) {
+        ::memset(dst, value, size);
+    } else {
+        SYCL_CHECK(CHECK_TRY_ERROR(ctx->stream->memset(dst, value, size).wait()));
+    }
 }
 
 static void tiered_kv_buffer_set_tensor(ggml_backend_buffer_t buffer,
@@ -7500,12 +7557,14 @@ static void tiered_kv_buffer_get_tensor(ggml_backend_buffer_t buffer,
 static void tiered_kv_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
     auto * ctx = static_cast<tiered_kv_buffer_context *>(buffer->context);
     ggml_sycl_set_device(ctx->device);
-    // Clear both regions
+    // Clear hot region (device memory) via GPU queue
     if (ctx->hot_base && ctx->hot_size > 0) {
         SYCL_CHECK(CHECK_TRY_ERROR(ctx->stream->memset(ctx->hot_base, value, ctx->hot_size).wait()));
     }
+    // Clear cold region (host-pinned memory) via CPU memset.
+    // Level Zero GPU queue cannot memset host USM pointers (UR_RESULT_ERROR_DEVICE_LOST).
     if (ctx->cold_base && ctx->cold_size > 0) {
-        SYCL_CHECK(CHECK_TRY_ERROR(ctx->stream->memset(ctx->cold_base, value, ctx->cold_size).wait()));
+        ::memset(ctx->cold_base, value, ctx->cold_size);
     }
 }
 
@@ -19055,6 +19114,18 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
         // for host-resident weights that may have a different finalized layout choice.
         // This happens when model exceeds VRAM and weights fall to host memory.
         if (!force_cache_aos) {
+            // When MoE multi-GPU is active, secondary devices may not have had
+            // layout choices registered during finalize_layouts() (which only
+            // runs for the primary device). Register on-the-fly instead of
+            // asserting, since the placement table controls device->layout mapping.
+            if (g_moe_multi_gpu_active.load(std::memory_order_acquire) &&
+                ggml_sycl_layout_choices_finalized_for_device(device)) {
+                layout_mode existing = GGML_LAYOUT_AOS;
+                if (!ggml_sycl_get_layout_choice(expert_cache_key, device, &existing)) {
+                    ggml_sycl_register_layout_choice(expert_cache_key, device, layout,
+                                                     src0->type, src0->name);
+                }
+            }
             ggml_sycl_assert_layout_choice(expert_cache_key, device, layout, src0->name,
                                            "ggml_sycl_update_moe_ptr_table");
         } else {
