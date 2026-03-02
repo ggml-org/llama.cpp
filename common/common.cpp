@@ -885,16 +885,6 @@ std::string fs_get_cache_directory() {
     return ensure_trailing_slash(cache_directory);
 }
 
-std::string fs_get_cache_file(const std::string & filename) {
-    GGML_ASSERT(filename.find(DIRECTORY_SEPARATOR) == std::string::npos);
-    std::string cache_directory = fs_get_cache_directory();
-    const bool success = fs_create_directory_with_parents(cache_directory);
-    if (!success) {
-        throw std::runtime_error("failed to create cache directory: " + cache_directory);
-    }
-    return cache_directory + filename;
-}
-
 std::vector<common_file_info> fs_list(const std::string & path, bool include_directories) {
     std::vector<common_file_info> files;
     if (path.empty()) return files;
