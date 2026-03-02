@@ -104,6 +104,12 @@ void quantize_row_tq2_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, 
     quantize_row_tq2_0_ref(x, y, k);
 }
 
+void quantize_row_q2_0c(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    assert(k % QKQ2_0C == 0);
+    block_q2_0c * GGML_RESTRICT y = vy;
+    quantize_row_q2_0c_ref(x, y, k);
+}
+
 //===================================== Q8_K ==============================================
 
 void quantize_row_q8_K_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
@@ -411,6 +417,68 @@ void ggml_vec_dot_tq2_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
         const float d = y[i].d * GGML_CPU_FP16_TO_FP32(x[i].d);
 
         sumf += (float) sumi * d;
+    }
+
+    *s = sumf;
+}
+
+void ggml_vec_dot_q2_0c_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q2_0c * GGML_RESTRICT x = vx;
+    const block_q8_K  * GGML_RESTRICT y = vy;
+
+    GGML_ASSERT(n % QKQ2_0C == 0);
+    const int nb = n / QKQ2_0C;
+
+    float sumf = 0.0f;
+
+    static const int8_t q2_0c_vals[4] = { -3, -1, 1, 3 };
+    const int bytes_per_block = QKQ2_0C / 4;
+    const int bytes_per_half  = QK_K / 4;
+
+    for (int i = 0; i < nb; ++i) {
+        const block_q2_0c * xb = x + i;
+        const block_q8_K  * y0 = y + (i * 2 + 0);
+        const block_q8_K  * y1 = y + (i * 2 + 1);
+
+        int32_t sum0 = 0;
+        int32_t sum1 = 0;
+
+        for (int j = 0; j < bytes_per_half; ++j) {
+            const uint8_t byte = xb->qs[j];
+            const int8_t q0 = q2_0c_vals[(byte >> 0) & 0x03];
+            const int8_t q1 = q2_0c_vals[(byte >> 2) & 0x03];
+            const int8_t q2 = q2_0c_vals[(byte >> 4) & 0x03];
+            const int8_t q3 = q2_0c_vals[(byte >> 6) & 0x03];
+
+            const int base = j * 4;
+            sum0 += q0 * y0->qs[base + 0];
+            sum0 += q1 * y0->qs[base + 1];
+            sum0 += q2 * y0->qs[base + 2];
+            sum0 += q3 * y0->qs[base + 3];
+        }
+
+        for (int j = bytes_per_half; j < bytes_per_block; ++j) {
+            const uint8_t byte = xb->qs[j];
+            const int8_t q0 = q2_0c_vals[(byte >> 0) & 0x03];
+            const int8_t q1 = q2_0c_vals[(byte >> 2) & 0x03];
+            const int8_t q2 = q2_0c_vals[(byte >> 4) & 0x03];
+            const int8_t q3 = q2_0c_vals[(byte >> 6) & 0x03];
+
+            const int base = (j - bytes_per_half) * 4;
+            sum1 += q0 * y1->qs[base + 0];
+            sum1 += q1 * y1->qs[base + 1];
+            sum1 += q2 * y1->qs[base + 2];
+            sum1 += q3 * y1->qs[base + 3];
+        }
+
+        const float d = GGML_CPU_FP16_TO_FP32(xb->d);
+        sumf += d * ((float) sum0 * y0->d + (float) sum1 * y1->d);
     }
 
     *s = sumf;
