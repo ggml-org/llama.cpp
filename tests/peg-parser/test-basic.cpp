@@ -1,3 +1,4 @@
+#include "peg-parser.h"
 #include "tests.h"
 
 void test_basic(testing & t) {
@@ -449,6 +450,22 @@ void test_basic(testing & t) {
             auto           result = value_parser.parse(ctx);
 
             t.assert_equal("result_is_fail", true, result.fail());
+        });
+
+        // Test markers
+        t.test("marker", [](testing &t) {
+            auto bracket_parser = build_peg_parser([](common_peg_parser_builder & p) {
+                return p.marker();
+            });
+
+            common_peg_parse_context ctx_square("[marker]", false);
+            common_peg_parse_context ctx_sharp("<marker>", false);
+
+            auto result_square = bracket_parser.parse(ctx_square);
+            auto result_sharp = bracket_parser.parse(ctx_sharp);
+
+            t.assert_true("result_square_is_success", result_square.success());
+            t.assert_true("result_sharp_is_success", result_sharp.success());
         });
     });
 }

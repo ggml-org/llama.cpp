@@ -22,3 +22,4 @@ void test_json_parser(testing &t);
 void test_gbnf_generation(testing &t);
 void test_unicode(testing &t);
 void test_json_serialization(testing &t);
+void test_python_dict_parser(testing &t);

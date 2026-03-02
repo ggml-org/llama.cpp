@@ -98,6 +98,7 @@ struct task_result_state {
     common_chat_msg chat_msg;
     std::string generated_text; // append new chunks of generated text here
     std::vector<std::string> generated_tool_call_ids;
+    std::unordered_set<size_t> sent_tool_call_names;
 
     // for OpenAI Responses and Anthropic streaming API:
     // track output item / content block state across chunks
@@ -120,7 +121,8 @@ struct task_result_state {
     common_chat_msg update_chat_msg(
         const std::string & text_added,
         bool is_partial,
-        std::vector<common_chat_msg_diff> & diffs);
+        std::vector<common_chat_msg_diff> & diffs,
+        bool filter_tool_calls = false);
 };
 
 struct server_task {
