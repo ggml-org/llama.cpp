@@ -143,15 +143,11 @@ bool ggml_et_launch_kernel(ggml_backend_et_device_context* dev_ctx, const std::s
         runtime->kernelLaunch(dev_ctx->default_stream, kernel_id,
                              reinterpret_cast<std::byte*>(params), params_size, k_opts);
 
-        // Wait for completion (synchronous execution)
-        runtime->waitForStream(dev_ctx->default_stream);
-
-        std::vector<std::byte> hostTraceBuf(ET_TRACE_BUFFER_SIZE);
-        runtime->memcpyDeviceToHost(
-            dev_ctx->default_stream, dev_ctx->trace_buffer, hostTraceBuf.data(), ET_TRACE_BUFFER_SIZE);
-        runtime->waitForStream(dev_ctx->default_stream);
-
         if(enable_print) {
+            std::vector<std::byte> hostTraceBuf(ET_TRACE_BUFFER_SIZE);
+            runtime->memcpyDeviceToHost(
+                dev_ctx->default_stream, dev_ctx->trace_buffer, hostTraceBuf.data(), ET_TRACE_BUFFER_SIZE);
+            runtime->waitForStream(dev_ctx->default_stream);
             const auto* traceHeader = reinterpret_cast<const trace_buffer_std_header_t*>(hostTraceBuf.data());
             const trace_entry_header_t* entry = nullptr;
             while ((entry = Trace_Decode(traceHeader, entry))) {
