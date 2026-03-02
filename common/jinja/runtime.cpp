@@ -721,6 +721,8 @@ value member_expression::execute_impl(context & ctx) {
         int64_t arr_size = 0;
         if (is_val<value_array>(object)) {
             arr_size = object->as_array().size();
+        } else if (is_val<value_string>(object)) {
+            arr_size = object->as_string().length();
         }
 
         if (is_stmt<slice_expression>(this->property)) {

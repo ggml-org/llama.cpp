@@ -8,8 +8,8 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.33.1"
-#define CPPHTTPLIB_VERSION_NUM "0x002101"
+#define CPPHTTPLIB_VERSION "0.35.0"
+#define CPPHTTPLIB_VERSION_NUM "0x002300"
 
 /*
  * Platform compatibility check
@@ -357,14 +357,32 @@ using socket_t = int;
 #include <any>
 #endif
 
+// On macOS with a TLS backend, enable Keychain root certificates by default
+// unless the user explicitly opts out.
+#if defined(__APPLE__) &&                                                      \
+    !defined(CPPHTTPLIB_DISABLE_MACOSX_AUTOMATIC_ROOT_CERTIFICATES) &&         \
+    (defined(CPPHTTPLIB_OPENSSL_SUPPORT) ||                                    \
+     defined(CPPHTTPLIB_MBEDTLS_SUPPORT) ||                                    \
+     defined(CPPHTTPLIB_WOLFSSL_SUPPORT))
+#ifndef CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN
+#define CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN
+#endif
+#endif
+
+// On Windows, enable Schannel certificate verification by default
+// unless the user explicitly opts out.
+#if defined(_WIN32) &&                                                         \
+    !defined(CPPHTTPLIB_DISABLE_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE)
+#define CPPHTTPLIB_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE
+#endif
+
 #if defined(CPPHTTPLIB_USE_NON_BLOCKING_GETADDRINFO) ||                        \
     defined(CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN)
 #if TARGET_OS_MAC
 #include <CFNetwork/CFHost.h>
 #include <CoreFoundation/CoreFoundation.h>
 #endif
-#endif // CPPHTTPLIB_USE_NON_BLOCKING_GETADDRINFO or
-       // CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN
+#endif
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
 #ifdef _WIN32
@@ -382,11 +400,11 @@ using socket_t = int;
 #endif
 #endif // _WIN32
 
-#if defined(CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN)
+#ifdef CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN
 #if TARGET_OS_MAC
 #include <Security/Security.h>
 #endif
-#endif // CPPHTTPLIB_USE_NON_BLOCKING_GETADDRINFO
+#endif
 
 #include <openssl/err.h>
 #include <openssl/evp.h>
@@ -430,11 +448,11 @@ using socket_t = int;
 #pragma comment(lib, "crypt32.lib")
 #endif
 #endif // _WIN32
-#if defined(CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN)
+#ifdef CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN
 #if TARGET_OS_MAC
 #include <Security/Security.h>
 #endif
-#endif // CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN
+#endif
 
 // Mbed TLS 3.x API compatibility
 #if MBEDTLS_VERSION_MAJOR >= 3
@@ -473,11 +491,11 @@ using socket_t = int;
 #pragma comment(lib, "crypt32.lib")
 #endif
 #endif // _WIN32
-#if defined(CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN)
+#ifdef CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN
 #if TARGET_OS_MAC
 #include <Security/Security.h>
 #endif
-#endif // CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN
+#endif
 #endif // CPPHTTPLIB_WOLFSSL_SUPPORT
 
 // Define CPPHTTPLIB_SSL_ENABLED if any SSL backend is available
@@ -1038,6 +1056,32 @@ make_file_provider(const std::string &name, const std::string &filepath,
   return fdp;
 }
 
+inline std::pair<size_t, ContentProvider>
+make_file_body(const std::string &filepath) {
+  std::ifstream f(filepath, std::ios::binary | std::ios::ate);
+  if (!f) { return {0, ContentProvider{}}; }
+  auto size = static_cast<size_t>(f.tellg());
+
+  ContentProvider provider = [filepath](size_t offset, size_t length,
+                                        DataSink &sink) -> bool {
+    std::ifstream f(filepath, std::ios::binary);
+    if (!f) { return false; }
+    f.seekg(static_cast<std::streamoff>(offset));
+    if (!f.good()) { return false; }
+    char buf[8192];
+    while (length > 0) {
+      auto to_read = (std::min)(sizeof(buf), length);
+      f.read(buf, static_cast<std::streamsize>(to_read));
+      auto n = static_cast<size_t>(f.gcount());
+      if (n == 0) { break; }
+      if (!sink.write(buf, n)) { return false; }
+      length -= n;
+    }
+    return true;
+  };
+  return {size, std::move(provider)};
+}
+
 using ContentReceiverWithProgress = std::function<bool(
     const char *data, size_t data_length, size_t offset, size_t total_length)>;
 
@@ -1352,6 +1396,7 @@ public:
   virtual bool is_readable() const = 0;
   virtual bool wait_readable() const = 0;
   virtual bool wait_writable() const = 0;
+  virtual bool is_peer_alive() const { return wait_writable(); }
 
   virtual ssize_t read(char *ptr, size_t size) = 0;
   virtual ssize_t write(const char *ptr, size_t size) = 0;
@@ -2530,8 +2575,7 @@ public:
 
   tls::ctx_t tls_context() const;
 
-#if defined(_WIN32) &&                                                         \
-    !defined(CPPHTTPLIB_DISABLE_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE)
+#ifdef CPPHTTPLIB_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE
   void enable_windows_certificate_verification(bool enabled);
 #endif
 
@@ -2652,8 +2696,7 @@ public:
 
   tls::ctx_t tls_context() const { return ctx_; }
 
-#if defined(_WIN32) &&                                                         \
-    !defined(CPPHTTPLIB_DISABLE_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE)
+#ifdef CPPHTTPLIB_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE
   void enable_windows_certificate_verification(bool enabled);
 #endif
 
@@ -2685,8 +2728,7 @@ private:
 
   std::function<SSLVerifierResponse(tls::session_t)> session_verifier_;
 
-#if defined(_WIN32) &&                                                         \
-    !defined(CPPHTTPLIB_DISABLE_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE)
+#ifdef CPPHTTPLIB_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE
   bool enable_windows_cert_verification_ = true;
 #endif
 
