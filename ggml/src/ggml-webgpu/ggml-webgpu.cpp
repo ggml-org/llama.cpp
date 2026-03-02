@@ -76,8 +76,8 @@ static inline void compute_2d_workgroups(uint32_t total_wg, uint32_t max_per_dim
 
 /* Constants */
 
-#define WEBGPU_NUM_PARAM_BUFS                16u
-#define WEBGPU_COMMAND_SUBMIT_BATCH_SIZE     8u
+#define WEBGPU_NUM_PARAM_BUFS                48u
+#define WEBGPU_COMMAND_SUBMIT_BATCH_SIZE     16u
 #define WEBGPU_WAIT_ANY_TIMEOUT_MS           0
 // Maximum number of in-flight submissions per-thread, to avoid exhausting the
 // parameter buffer pool
