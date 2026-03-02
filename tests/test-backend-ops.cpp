@@ -6997,7 +6997,8 @@ static const ggml_type all_types[] = {
     GGML_TYPE_Q2_K, GGML_TYPE_Q3_K,
     GGML_TYPE_Q4_K, GGML_TYPE_Q5_K,
     GGML_TYPE_Q6_K,
-    // GGML_TYPE_TQ1_0, GGML_TYPE_TQ2_0, // TODO: implement for all backends
+    GGML_TYPE_TQ2_0, // sparse-ternary-fma integration
+    // GGML_TYPE_TQ1_0, // TODO: implement for all backends
     GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ2_S,
     GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ1_S, GGML_TYPE_IQ1_M,
     GGML_TYPE_IQ4_NL, GGML_TYPE_IQ3_S, GGML_TYPE_IQ4_XS,
@@ -7020,7 +7021,8 @@ static const ggml_type other_types[] = {
     GGML_TYPE_Q2_K, GGML_TYPE_Q3_K,
     GGML_TYPE_Q5_K,
     GGML_TYPE_Q6_K,
-    // GGML_TYPE_TQ1_0, GGML_TYPE_TQ2_0, // TODO: implement for all backends
+    GGML_TYPE_TQ2_0, // sparse-ternary-fma integration
+    // GGML_TYPE_TQ1_0, // TODO: implement for all backends
     GGML_TYPE_IQ2_XS, GGML_TYPE_IQ2_S,
     GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ1_S, GGML_TYPE_IQ1_M,
     GGML_TYPE_IQ4_NL, GGML_TYPE_IQ3_S, GGML_TYPE_IQ4_XS,
@@ -7801,6 +7803,17 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (ggml_type type_a : all_types) {
         test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 1, 64, 256, {1,  1}, {1, 1}));
     }
+
+    // TQ2_0 specific test cases for sparse-ternary-fma integration
+    // Test various sizes to verify threshold-based dispatch and correctness
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_TQ2_0, GGML_TYPE_F32, 16, 1, 256, {1, 1}, {1, 1}));   // Small (below threshold)
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_TQ2_0, GGML_TYPE_F32, 16, 1, 512, {1, 1}, {1, 1}));   // Medium
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_TQ2_0, GGML_TYPE_F32, 16, 1, 1024, {1, 1}, {1, 1}));  // At threshold
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_TQ2_0, GGML_TYPE_F32, 16, 1, 2048, {1, 1}, {1, 1}));  // Above threshold
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_TQ2_0, GGML_TYPE_F32, 16, 8, 1024, {1, 1}, {1, 1}));  // Mat-vec above threshold
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_TQ2_0, GGML_TYPE_F32, 64, 64, 1024, {1, 1}, {1, 1})); // Mat-mat above threshold
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_TQ2_0, GGML_TYPE_F32, 16, 1, 4096, {2, 3}, {1, 1}));  // Batched
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_TQ2_0, GGML_TYPE_F32, 32, 32, 2048, {1, 1}, {1, 1})); // Large mat-mat
 
 #if 0
     // test the mat-mat path for Metal
