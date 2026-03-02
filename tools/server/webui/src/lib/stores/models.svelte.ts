@@ -509,11 +509,11 @@ class ModelsStore {
 
 	/**
 	 * Poll for expected model status after load/unload operation.
-	 * Keeps polling until the model reaches the expected status or max attempts reached.
+	 * Keeps polling until the model reaches the expected status, fails, or times out.
 	 *
 	 * @param modelId - Model identifier to check
 	 * @param expectedStatus - Expected status to wait for
-	 * @returns Promise that resolves when expected status is reached
+	 * @throws Error if model reaches FAILED status or polling times out
 	 */
 	private async pollForModelStatus(
 		modelId: string,
@@ -527,11 +527,21 @@ class ModelsStore {
 				return;
 			}
 
+			// If the model reached a terminal failure state, stop polling
+			if (currentStatus === ServerModelStatus.FAILED) {
+				throw new Error(`Model failed to ${expectedStatus === ServerModelStatus.LOADED ? 'load' : 'unload'}`);
+			}
+
+			// If the model unexpectedly became unloaded while we expected it to load, stop
+			if (expectedStatus === ServerModelStatus.LOADED && currentStatus === ServerModelStatus.UNLOADED && attempt > 2) {
+				throw new Error('Model was unloaded unexpectedly during loading');
+			}
+
 			await new Promise((resolve) => setTimeout(resolve, ModelsStore.STATUS_POLL_INTERVAL));
 		}
 
-		console.warn(
-			`Model ${modelId} did not reach expected status ${expectedStatus} after ${ModelsStore.STATUS_POLL_MAX_ATTEMPTS} attempts`
+		throw new Error(
+			`Model did not reach expected status '${expectedStatus}' within ${(ModelsStore.STATUS_POLL_MAX_ATTEMPTS * ModelsStore.STATUS_POLL_INTERVAL / 1000).toFixed(0)}s`
 		);
 	}
 
