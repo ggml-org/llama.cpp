@@ -2538,6 +2538,12 @@ void ggml_sycl_enforce_layout_choice(const ggml_tensor * tensor, int device, lay
     if (!ggml_sycl_layout_choices_finalized_for_device(device)) {
         return;
     }
+    // Skip assertion for host-pinned buffers.  Budget-aware allocation may route
+    // weight chunks to HOST_PINNED while the layout registry holds SOA/COALESCED.
+    // The unified cache materializes the correct layout on-demand at dispatch time.
+    if (!ggml_sycl_is_device_vram_buffer(tensor)) {
+        return;
+    }
     ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
     ggml_sycl_assert_layout_choice(key, device, target, tensor->name, context);
 }
@@ -13081,7 +13087,10 @@ static bool ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx,
                     ggml_sycl::unified_cache * cache = ggml_sycl::get_unified_cache(*stream);
                     ggml_sycl_cache_id         cache_key =
                         cache ? ggml_backend_sycl_get_weight_cache_key(src0, i) : ggml_sycl_cache_id{};
-                    if (cache_key.valid) {
+                    // Only assert layout for DEVICE_VRAM buffers.  HOST_PINNED
+                    // buffers store AOS but the layout registry may hold SOA/COALESCED;
+                    // the unified cache materializes the correct layout on demand.
+                    if (cache_key.valid && ggml_sycl_is_device_vram_buffer(src0)) {
                         ggml_sycl_assert_layout_choice(cache_key, i, src0_layout, src0->name, "mul_mat streaming");
                     }
                     size_t  stream_unit_bytes  = src0_row_bytes;
@@ -19183,7 +19192,15 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
             }
         }
     }
-    const bool host_weights = src0->buffer && ggml_backend_buffer_is_host(src0->buffer);
+    // Detect host-resident weights: includes both ggml host buffers and SYCL HOST_PINNED
+    // buffers.  Budget-aware allocation routes some weight chunks to HOST_PINNED, which
+    // are SYCL-managed but NOT DEVICE_VRAM.  These need the same cache staging path as
+    // regular host buffers.  Uses USM pointer type (consistent with finalize_layouts).
+    bool host_weights = src0->buffer && ggml_backend_buffer_is_host(src0->buffer);
+    if (!host_weights && !src0_is_device && src0_is_usm_accessible) {
+        // USM host/shared pointer → host-resident weight (HOST_PINNED tier)
+        host_weights = true;
+    }
     void *     direct_base  = nullptr;
     if (layout == GGML_LAYOUT_AOS && !force_cache_aos) {
         direct_base = ggml_sycl_get_layout_ptr_for(src0, device, GGML_LAYOUT_AOS);
@@ -19259,22 +19276,23 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
             GGML_ASSERT(expert_cache_key.valid && "missing MoE cache key");
             return false;
         }
+        // When MoE multi-GPU is active, secondary devices may not have had
+        // layout choices registered during finalize_layouts() (which only
+        // runs for the primary device).  Register on-the-fly ALWAYS — even
+        // when force_cache_aos is set — so that subsequent dispatch paths on
+        // the secondary device can find a valid layout choice and avoid the
+        // "missing layout choice" assertion.
+        if (ggml_sycl_layout_choices_finalized_for_device(device)) {
+            layout_mode existing = GGML_LAYOUT_AOS;
+            if (!ggml_sycl_get_layout_choice(expert_cache_key, device, &existing)) {
+                ggml_sycl_register_layout_choice(expert_cache_key, device, layout, src0->type, src0->name);
+            }
+        }
         // When force_cache_aos is set, the caller is explicitly overriding the layout
         // for host-resident weights that may have a different finalized layout choice.
         // This happens when model exceeds VRAM and weights fall to host memory.
+        // Skip the assertion but log the override.
         if (!force_cache_aos) {
-            // When MoE multi-GPU is active, secondary devices may not have had
-            // layout choices registered during finalize_layouts() (which only
-            // runs for the primary device). Register on-the-fly instead of
-            // asserting, since the placement table controls device->layout mapping.
-            if (g_moe_multi_gpu_active.load(std::memory_order_acquire) &&
-                ggml_sycl_layout_choices_finalized_for_device(device)) {
-                layout_mode existing = GGML_LAYOUT_AOS;
-                if (!ggml_sycl_get_layout_choice(expert_cache_key, device, &existing)) {
-                    ggml_sycl_register_layout_choice(expert_cache_key, device, layout,
-                                                     src0->type, src0->name);
-                }
-            }
             ggml_sycl_assert_layout_choice(expert_cache_key, device, layout, src0->name,
                                            "ggml_sycl_update_moe_ptr_table");
         } else {
@@ -19447,6 +19465,13 @@ static bool graph_preload_moe_experts(ggml_backend_sycl_context & ctx, ggml_cgra
         any_moe = true;
 
         bool host_weights = src0->buffer && ggml_backend_buffer_is_host(src0->buffer);
+        // Also detect SYCL HOST_PINNED buffers via USM pointer type
+        if (!host_weights && src0->data && ctx.stream()) {
+            const auto alloc = sycl::get_pointer_type(src0->data, ctx.stream()->get_context());
+            if (alloc != sycl::usm::alloc::device) {
+                host_weights = true;
+            }
+        }
 
         // Check if this MoE layer has too many experts for blind preload
         const int64_t     n_experts          = src0->ne[2];
@@ -23147,7 +23172,14 @@ static bool ggml_sycl_mul_mat_id_fused(ggml_backend_sycl_context & ctx,
         return false;
     }
     const queue_ptr stream       = ctx.stream();
-    const bool      host_weights = src0->buffer && ggml_backend_buffer_is_host(src0->buffer);
+    // Detect host-resident weights including SYCL HOST_PINNED buffers
+    bool            host_weights = src0->buffer && ggml_backend_buffer_is_host(src0->buffer);
+    if (!host_weights && src0->data && stream) {
+        const auto alloc = sycl::get_pointer_type(src0->data, stream->get_context());
+        if (alloc != sycl::usm::alloc::device) {
+            host_weights = true;
+        }
+    }
     sycl::event     ids_copy_event;
     int64_t         ids_nb0 = ids->nb[0];
     int64_t         ids_nb1 = ids->nb[1];
@@ -23472,8 +23504,15 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
     ggml_sycl_ensure_weight_on_device(src0, ctx.device);
     // Select the required layout for XMX sorted path (single optimal layout per kernel)
     ggml_tensor_extra_gpu * src0_extra   = (ggml_tensor_extra_gpu *) src0->extra;
-    const bool              host_weights = src0->buffer && ggml_backend_buffer_is_host(src0->buffer);
-    // Host weights (mmap'd memory) cannot be accessed directly by GPU kernels.
+    // Detect host-resident weights including SYCL HOST_PINNED buffers
+    bool                    host_weights = src0->buffer && ggml_backend_buffer_is_host(src0->buffer);
+    if (!host_weights && src0->data && ctx.stream()) {
+        const auto alloc = sycl::get_pointer_type(src0->data, ctx.stream()->get_context());
+        if (alloc != sycl::usm::alloc::device) {
+            host_weights = true;
+        }
+    }
+    // Host weights (mmap'd/HOST_PINNED) cannot be accessed directly by GPU kernels.
     // Use unified cache staging (per-expert) when available; otherwise fall back.
     if (host_weights && !ggml_sycl::unified_cache_enabled()) {
         GGML_SYCL_DEBUG("[XMX MoE] Host weights detected for %s but unified cache disabled; falling back\n",
@@ -24841,7 +24880,14 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     src1_row.layout             = nullptr;
     dst_row.layout              = nullptr;
     auto *      src0_extra      = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
-    const bool  host_weights    = src0->buffer && ggml_backend_buffer_is_host(src0->buffer);
+    // Detect host-resident weights including SYCL HOST_PINNED buffers
+    bool        host_weights    = src0->buffer && ggml_backend_buffer_is_host(src0->buffer);
+    if (!host_weights && src0->data && ctx.stream()) {
+        const auto alloc = sycl::get_pointer_type(src0->data, ctx.stream()->get_context());
+        if (alloc != sycl::usm::alloc::device) {
+            host_weights = true;
+        }
+    }
     layout_mode src0_layout     = GGML_LAYOUT_AOS;
     bool        src0_layout_aos = true;
     void *      src0_layout_ptr = nullptr;
@@ -29496,7 +29542,14 @@ static bool check_graph_compatibility(ggml_backend_sycl_context & ctx, ggml_cgra
         if (!src0 || !src0->buffer) {
             continue;
         }
-        const bool host_weights = ggml_backend_buffer_is_host(src0->buffer);
+        // Detect host-resident weights including SYCL HOST_PINNED buffers
+        bool host_weights = ggml_backend_buffer_is_host(src0->buffer);
+        if (!host_weights && src0->data && ctx.stream()) {
+            const auto alloc = sycl::get_pointer_type(src0->data, ctx.stream()->get_context());
+            if (alloc != sycl::usm::alloc::device) {
+                host_weights = true;
+            }
+        }
         if (host_weights) {
             total_experts_needed += static_cast<size_t>(src0->ne[2]);
             moe_node_count++;

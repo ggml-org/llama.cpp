@@ -3726,7 +3726,23 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
     constexpr int64_t MMVQ_MOE_MAX_BATCH = 32;
     const int64_t     batch_size         = src1->ne[2];  // ne12 - number of tokens
     const auto *      src0_extra         = static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
-    const bool        host_weights       = src0->buffer && ggml_backend_buffer_is_host(src0->buffer);
+    // Detect host-resident weights: includes both ggml host buffers and SYCL HOST_PINNED
+    // buffers (budget-aware allocation routes some chunks to HOST_PINNED, which are
+    // SYCL-managed but not DEVICE_VRAM — need same staging path as host buffers).
+    // Use USM pointer type check (consistent with finalize_layouts) since
+    // ggml_backend_buffer_is_host() returns false for SYCL-managed HOST_PINNED buffers.
+    bool              host_weights       = src0->buffer && ggml_backend_buffer_is_host(src0->buffer);
+    if (!host_weights && src0->data && ctx.stream()) {
+        try {
+            const auto alloc = sycl::get_pointer_type(src0->data, ctx.stream()->get_context());
+            if (alloc != sycl::usm::alloc::device) {
+                host_weights = true;
+            }
+        } catch (...) {
+            // If pointer type query fails, assume host-resident for safety
+            host_weights = true;
+        }
+    }
     const layout_mode layout =
         forced_layout ? *forced_layout : ggml_sycl_select_moe_mmvq_layout(src0, ctx.device, host_weights);
     // For MXFP4 MoE: allow SOA/Coalesced dispatch even when base tensor is AOS.
@@ -3736,10 +3752,15 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
                                             (layout == GGML_LAYOUT_SOA || layout == GGML_LAYOUT_COALESCED) &&
                                             src0_extra && (get_effective_layout_mode(src0_extra) == GGML_LAYOUT_AOS);
 
-    if (forced_layout && !mxfp4_moe_reorder_dispatch) {
+    // Always validate that the forced layout is actually supported by the tensor
+    // dimensions.  COALESCED requires blocks_per_row % 32 == 0 — reject if not met,
+    // even for mxfp4_moe_reorder_dispatch (the cache cannot produce a valid coalesced
+    // reorder for non-aligned tensors).
+    if (forced_layout) {
         const layout_mode resolved = ggml_sycl_adjust_layout_for_tensor(src0, *forced_layout, ctx.device);
         if (resolved != *forced_layout) {
-            GGML_SYCL_DEBUG("[MMVQ] Layout=%d unsupported for %s\n", (int) *forced_layout, src0->name);
+            GGML_SYCL_DEBUG("[MMVQ] Layout=%d unsupported for %s (resolved=%d)\n", (int) *forced_layout, src0->name,
+                            (int) resolved);
             return false;
         }
     }
