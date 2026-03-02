@@ -56,8 +56,13 @@ Options:
 * `--keep-split` will generate the quantized model in the same shards as the input file otherwise it will produce a single quantized file
 
 Advanced options:
-* `--tensor-type` quantize specific tensor(s) to specific quant types. Supports regex syntax. May be specified multiple times.
+* `--tensor-type` quantize specific tensor(s) to specific quant types. Supports regex syntax. May be specified multiple times
 * `--prune-layers` prune (remove) the layers in the list
+* `--target-bpw` automatically choose quant types to meet an overall bits per weight (bpw) target
+* `--target-size` automatically choose quant types to meet a file size target
+* `--ignore-tensor-importance` during target computation, treat each tensor equally instead of prioritizing some. It may yield better quality for some models
+* `--save-state` save the target computation to a file. By default, it saves to `<model name>-<model hash>-mse.bpw_state` unless `--state-file` is also specified
+* `--state-file` file name to load from / save to target computations
 * `--override-kv` option to override model metadata by key in the quantized model. May be specified multiple times
 
 Examples:
@@ -97,17 +102,31 @@ Examples:
 ./llama-quantize --imatrix imatrix.gguf --override-kv qwen3moe.expert_used_count=int:16 --prune-layers 20,21,22 input-model-f32.gguf pruned-model-f32.gguf copy 8
 ```
 
+```bash
+# quantize model targeting a specific bpw average and save the target computations to the default file. Model type is optional and can be omitted
+./llama-quantize --target-bpw 4.5678 --save-state --imatrix imatrix.gguf input-model-f32.gguf 8
+```
+
+```bash
+# quantize model targeting a specific file size and save the target computations to a custom file. Model type is optional and can be omitted
+./llama-quantize --target-size 1.5gb --save-state --state-file my-state-file.dat --imatrix imatrix.gguf input-model-f32.gguf 8
+```
+
+```bash
+# quantize model targeting a specific bpw average reusing previous target computations
+./llama-quantize --target-bpw 2.5 ---state-file my-state-file.dat --imatrix imatrix.gguf input-model-f32.gguf 8
+```
+
 ## Memory/Disk Requirements
 
 When running the larger models, make sure you have enough disk space to store all the intermediate files.
 As the models are currently fully loaded into memory, you will need adequate disk space to save them and sufficient RAM to load them. At the moment, memory and disk requirements are the same. For exmaple (Llama 3.1):
 
 | Model | Original size | Quantized size (Q4_K_M) |
-| ----: | ------------: | ----------------------: |
+|------:|--------------:|------------------------:|
 |    8B |       32.1 GB |                  4.9 GB |
 |   70B |      280.9 GB |                 43.1 GB |
 |  405B |    1,625.1 GB |                249.1 GB |
-
 
 ## Quantization
 
@@ -115,41 +134,32 @@ Several quantization methods are supported. They differ in the resulting model d
 
 ### [meta-llama/Llama-3.1-8B](https://huggingface.co/meta-llama/Llama-3.1-8B)
 
-| Measure                     | IQ1_S        | IQ1_M        | IQ2_XXS      | IQ2_XS        | IQ2_S         | IQ2_M        |
-| --------------------------- | ------------ | ------------ | ------------ | ------------- | ------------- | ------------ |
-| bits/weight                 |       2.0042 |       2.1460 |       2.3824 |        2.5882 |        2.7403 |       2.9294 |
-| size (GiB)                  |       1.87   |       2.01   |       2.23   |        2.42   |        2.56   |       2.74   |
-| prompt processing t/s @ 512 | 858.88 ±1.22 | 847.99 ±0.47 | 852.39 ±0.85 | 826.99 ±12.51 | 783.55 ±13.73 | 787.68 ±7.00 |
-| text generation t/s @ 128   |  79.73 ±0.79 |  72.92 ±0.14 |  79.86 ±0.22 |  78.04 ±0.46  |  77.30 ±2.47  |  74.44 ±0.15 |
-
-| Measure                     | IQ3_XXS      | IQ3_XS       | IQ3_S        | IQ3_M         | IQ4_XS        | IQ4_NL       |
-| --------------------------- | ------------ | ------------ | ------------ | ------------- | ------------- | ------------ |
-| bits/weight                 |       3.2548 |       3.4977 |       3.6606 |        3.7628 |        4.4597 |       4.6818 |
-| size (GiB)                  |       3.04   |       3.27   |       3.42   |        3.52   |        4.17   |       4.38   |
-| prompt processing t/s @ 512 | 813.88 ±6.53 | 708.71 ±1.26 | 798.78 ±8.81 | 768.70 ±13.73 | 771.80 ±11.38 | 806.03 ±7.07 |
-| text generation t/s @ 128   |  73.95 ±0.20 |  71.67 ±0.54 |  69.31 ±0.63 |  70.15 ±0.33  |  77.51 ±0.20  |  76.63 ±0.28 |
-
-
-| Measure                     | Q2_K_S       | Q2_K         | Q3_K_S       | Q3_K_M       | Q3_K_L       | Q4_K_S       |
-| --------------------------- | ------------ | ------------ | ------------ | ------------ | ------------ | ------------ |
-| bits/weight                 |       2.9697 |       3.1593 |       3.6429 |       3.9960 |       4.2979 |       4.6672 |
-| size (GiB)                  |       2.78   |       2.95   |       3.41   |       3.74   |       4.02   |       4.36   |
-| prompt processing t/s @ 512 | 798.91 ±6.40 | 784.45 ±7.85 | 752.17 ±7.94 | 783.44 ±9.92 | 761.17 ±7.55 | 818.55 ±9.58 |
-| text generation t/s @ 128   |  90.01 ±0.12 |  79.85 ±0.20 |  69.84 ±0.18 |  71.68 ±0.22 |  69.38 ±0.49 |  76.71 ±0.20 |
-
-| Measure                     | Q4_K_S       | Q4_K_M        | Q5_K_S       | Q5_K_M       | Q6_K          | Q8_0         |
-| --------------------------- | ------------ | ------------- | ------------ | ------------ | ------------- | ------------ |
-| bits/weight                 |       4.6672 |        4.8944 |       5.5704 |       5.7036 |        6.5633 |       8.5008 |
-| size (GiB)                  |       4.36   |        4.58   |       5.21   |       5.33   |        6.14   |       7.95   |
-| prompt processing t/s @ 512 | 818.55 ±9.58 | 821.81 ±21.44 | 752.52 ±0.99 | 758.69 ±7.43 | 812.01 ±10.82 | 865.09 ±8.30 |
-| text generation t/s @ 128   |  76.71 ±0.20 |  71.93 ±1.52  |  69.53 ±0.18 |  67.23 ±1.08 |  58.67 ±3.13  |  50.93 ±0.08 |
-
-| Measure                     | F16          |
-| --------------------------- | ------------ |
-| bits/weight                 |      16.0005 |
-| size (GiB)                  |      14.96   |
-| prompt processing t/s @ 512 | 923.49 ±0.53 |
-| text generation t/s @ 128   |  29.17 ±0.04 |
+| Quant Type | bits/weight | size (GiB) | prompt processing t/s @ 512 | text generation t/s @ 128 |
+|:----------:|------------:|-----------:|----------------------------:|--------------------------:|
+|   IQ1_S    |      2.0042 |       1.87 |                858.88 ±1.22 |               79.73 ±0.79 |
+|   IQ1_M    |      2.1460 |       2.01 |                847.99 ±0.47 |               72.92 ±0.14 |
+|  IQ2_XXS   |      2.3824 |       2.23 |                852.39 ±0.85 |               79.86 ±0.22 |
+|   IQ2_XS   |      2.5882 |       2.42 |               826.99 ±12.51 |               78.04 ±0.46 |
+|   IQ2_S    |      2.7403 |       2.56 |               783.55 ±13.73 |               77.30 ±2.47 |
+|   IQ2_M    |      2.9294 |       2.74 |                787.68 ±7.00 |               74.44 ±0.15 |
+|  IQ3_XXS   |      3.2548 |       3.04 |                813.88 ±6.53 |               73.95 ±0.20 |
+|   IQ3_XS   |      3.4977 |       3.27 |                708.71 ±1.26 |               71.67 ±0.54 |
+|   IQ3_S    |      3.6606 |       3.42 |                798.78 ±8.81 |               69.31 ±0.63 |
+|   IQ3_M    |      3.7628 |       3.52 |               768.70 ±13.73 |               70.15 ±0.33 |
+|   IQ4_XS   |      4.4597 |       4.17 |               771.80 ±11.38 |               77.51 ±0.20 |
+|   IQ4_NL   |      4.6818 |       4.38 |                818.55 ±9.58 |               76.71 ±0.20 |
+|   Q2_K_S   |      2.9697 |       2.78 |                798.91 ±6.40 |               90.01 ±0.12 |
+|    Q2_K    |      3.1593 |       2.95 |                784.45 ±7.85 |               79.85 ±0.20 |
+|   Q3_K_S   |      3.6429 |       3.41 |                752.17 ±7.94 |               71.68 ±0.22 |
+|   Q3_K_L   |      4.2979 |       4.02 |                761.17 ±7.55 |               69.38 ±0.49 |
+|   Q4_K_S   |      4.6672 |       4.36 |                818.55 ±9.58 |               76.71 ±0.20 |
+|   Q4_K_S   |      4.6672 |       4.36 |                818.55 ±9.58 |               76.71 ±0.20 |
+|   Q4_K_M   |      4.8944 |       4.58 |               821.81 ±21.44 |               71.93 ±1.52 |
+|   Q5_K_S   |      5.5704 |       5.21 |                752.52 ±0.99 |               69.53 ±0.18 |
+|   Q5_K_M   |      5.7036 |       5.33 |                758.69 ±7.43 |               67.23 ±1.08 |
+|    Q6_K    |      6.5633 |       6.14 |               812.01 ±10.82 |               58.67 ±3.13 |
+|    Q8_0    |      8.5008 |       7.95 |                865.09 ±8.30 |               50.93 ±0.08 |
+|    F16     |     16.0005 |      14.96 |                923.49 ±0.53 |               29.17 ±0.04 |
 
 ## Background information on llama-quantize
 

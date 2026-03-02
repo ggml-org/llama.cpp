@@ -391,9 +391,17 @@ extern "C" {
         bool keep_split;                      // quantize to the same number of shards
         bool dry_run;                         // calculate and show the final quantization size without performing quantization
         void * imatrix;                       // pointer to importance matrix data
+        void * activations;                   // pointer to activations data
+        void * statistics;                    // pointer to statistics data
         void * kv_overrides;                  // pointer to vector containing overrides
         void * tensor_types;                  // pointer to vector containing tensor types
         void * prune_layers;                  // pointer to vector containing layer indices to prune
+        float target_bpw;                     // target bits per weight (bpw)
+        int64_t target_size;                  // target file size in bytes
+        bool save_state;                      // keep bpw state file
+        void * state_file;                    // pointer to bpw state file
+        float importance_pct;                 // identify up to pct% of tensors as important
+        bool use_wce;                         // optimize for WCE instead of MSE
     } llama_model_quantize_params;
 
     typedef struct llama_logit_bias {
