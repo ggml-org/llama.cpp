@@ -31,10 +31,11 @@
 #define ROUNDUP_POW2(x, pow2) (((x) + ((pow2) - 1)) & ~((pow2) - 1))
 #define CEIL_DIV(M, N)        (((M) + (N) - 1) / (N))
 
-// TODO: split large sizes into multiple batches to avoid way over-provisioning workgroups
+// Return a rectangular grid of workgroups with minimal over-provisioned workgroups.
+// Assumes that the total number of workgroups does not exceed max_per_dim^2.
 static inline void compute_2d_workgroups(uint32_t total_wg, uint32_t max_per_dim, uint32_t & wg_x, uint32_t & wg_y) {
-    wg_x = std::min(total_wg, max_per_dim);
-    wg_y = CEIL_DIV(total_wg, max_per_dim);
+    wg_y = std::max(1u, CEIL_DIV(total_wg, max_per_dim));
+    wg_x = CEIL_DIV(total_wg, wg_y);
 }
 
 #ifdef GGML_WEBGPU_DEBUG
