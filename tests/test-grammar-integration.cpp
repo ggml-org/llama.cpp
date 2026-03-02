@@ -784,6 +784,23 @@ static void test_quantifiers() {
             "0xFF 0x12 0xAB 0x00 0x00 0x00",
         }
     );
+    test_grammar(
+        "nested repetition",
+        // Grammar
+        R"""(root ::= ("a"* )*)""",
+        // Passing strings
+        {
+            "",
+            "a",
+            "aa",
+            "aaa",
+        },
+        // Failing strings
+        {
+            "b",
+            "ab",
+        }
+    );
 }
 
 static void test_failure_missing_root() {
