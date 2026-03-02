@@ -5,15 +5,22 @@ endif()
 #    set(BLA_SIZEOF_INTEGER 8)
 #endif()
 
+ggml_add_backend_library(ggml-blas
+                         ggml-blas.cpp
+                        )
+
+if (GGML_OPENMP)
+    find_package(OpenMP REQUIRED)
+    add_compile_definitions(GGML_USE_OPENMP)
+    target_link_libraries(ggml-blas PRIVATE OpenMP::OpenMP_C OpenMP::OpenMP_CXX)
+    set(BLA_THREAD OMP)
+endif()
+
 set(BLA_VENDOR ${GGML_BLAS_VENDOR})
 find_package(BLAS)
 
 if (BLAS_FOUND)
     message(STATUS "BLAS found, Libraries: ${BLAS_LIBRARIES}")
-
-    ggml_add_backend_library(ggml-blas
-                             ggml-blas.cpp
-                            )
 
     if (${GGML_BLAS_VENDOR} MATCHES "Apple")
         add_compile_definitions(ACCELERATE_NEW_LAPACK)
@@ -68,7 +75,8 @@ if (BLAS_FOUND)
         endif()
     endif()
 
-    message(STATUS "BLAS found, Includes: ${BLAS_INCLUDE_DIRS}")
+    message(STATUS "BLAS found, Includes dirs : ${BLAS_INCLUDE_DIRS}")
+    message(STATUS "BLAS found, Includes flags: ${BLAS_LINKER_FLAGS}")
 
     target_compile_options(ggml-blas PRIVATE ${BLAS_LINKER_FLAGS})
 
@@ -84,6 +92,10 @@ if (BLAS_FOUND)
         add_compile_definitions(GGML_BLAS_USE_OPENBLAS)
     endif()
 
+    if ("${GGML_BLAS_VENDOR}" MATCHES "FlexiBLAS")
+        add_compile_definitions(GGML_BLAS_USE_FLEXIBLAS)
+    endif()
+
     if ("${GGML_BLAS_VENDOR}" MATCHES "FLAME" OR "${GGML_BLAS_VENDOR}" MATCHES "AOCL" OR "${GGML_BLAS_VENDOR}" MATCHES "AOCL_mt")
         add_compile_definitions(GGML_BLAS_USE_BLIS)
     endif()
@@ -92,8 +104,59 @@ if (BLAS_FOUND)
         add_compile_definitions(GGML_BLAS_USE_NVPL)
     endif()
 
-    target_link_libraries     (ggml-blas PRIVATE ${BLAS_LIBRARIES})
+    target_compile_features   (ggml-blas PRIVATE c_std_11 cxx_std_20)
+    #target_link_libraries     (ggml-blas PRIVATE ${BLAS_LIBRARIES})
+    target_link_libraries     (ggml-blas PRIVATE BLAS::BLAS)
     target_include_directories(ggml-blas SYSTEM PRIVATE ${BLAS_INCLUDE_DIRS})
+
+elseif (${GGML_BLAS_VENDOR} MATCHES "OpenBLAS_BUILD")
+    # let build from source
+    message(STATUS "OpenBLAS build")
+
+    add_compile_definitions(GGML_BLAS_USE_OPENBLAS)
+
+    include(FetchContent)
+    FetchContent_Declare(
+            openblas
+            GIT_REPOSITORY https://github.com/OpenMathLib/OpenBLAS.git
+            GIT_TAG        v0.3.31
+    )
+
+    # https://www.openmathlib.org/OpenBLAS/docs/build_system/
+    # https://github.com/OpenMathLib/OpenBLAS/blob/develop/CMakeLists.txt
+    set(BUILD_WITHOUT_LAPACK  ON)
+    set(BUILD_TESTING        OFF)
+    set(BUILD_STATIC_LIBS     ON)
+    set(BUILD_SHARED_LIBS    OFF)
+if (GGML_OPENMP)
+    set(USE_OPENMP             1)
+    set(USE_THREAD             1)
+else()
+    set(USE_OPENMP             0)
+    set(USE_THREAD             1)
+endif()
+    set(BUILD_BFLOAT16         1)
+    set(BUILD_HFLOAT16         0)
+    set(BUILD_SINGLE           1)
+    set(ONLY_CBLAS             1)
+    #set(BUILD_DOUBLE           0)
+    #set(BUILD_COMPLEX          0)
+    #set(BUILD_COMPLEX16        0)
+    FetchContent_MakeAvailable(openblas)
+    FetchContent_GetProperties(openblas)
+
+    add_compile_definitions(GGML_BLAS_USE_SBGEMM)
+    #add_compile_definitions(GGML_BLAS_USE_SHGEMM)
+    #add_compile_definitions(GGML_BLAS_USE_SGEMM_BATCHED)
+    #add_compile_definitions(GGML_BLAS_USE_SBGEMM_BATCHED)
+    #[...]
+
+    target_compile_features   (ggml-blas PRIVATE c_std_11 cxx_std_17)
+    target_link_directories   (ggml-blas PRIVATE ${openblas_BINARY_DIR}/lib)
+    target_link_libraries     (ggml-blas PRIVATE openblas)
+
+    target_include_directories(ggml-blas SYSTEM PRIVATE ${openblas_SOURCE_DIR} ${openblas_BINARY_DIR})
+
 else()
     message(FATAL_ERROR "BLAS not found, please refer to "
                         "https://cmake.org/cmake/help/latest/module/FindBLAS.html#blas-lapack-vendors"
