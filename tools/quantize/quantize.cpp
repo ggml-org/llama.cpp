@@ -243,6 +243,16 @@ static int load_legacy_imatrix(const std::string & imatrix_file, std::vector<std
 
 static int load_imatrix(const std::string & imatrix_file, std::vector<std::string> & imatrix_datasets, std::unordered_map<std::string, std::vector<float>> & imatrix_data) {
 
+    // Check if the imatrix file exists and it is a regular file
+    if (!std::filesystem::exists(imatrix_file)) {
+        fprintf(stderr, "%s: imatrix file '%s' not found\n", __func__, imatrix_file.c_str());
+        exit(1);
+    }
+    if (!std::filesystem::is_regular_file(imatrix_file)) {
+        fprintf(stderr, "%s: imatrix path '%s' is not a regular file\n", __func__, imatrix_file.c_str());
+        exit(1);
+    }
+
     struct ggml_context * ctx = nullptr;
     struct gguf_init_params meta_gguf_params = {
         /* .no_alloc = */ false, // the data is needed
