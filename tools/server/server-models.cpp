@@ -306,6 +306,16 @@ void server_models::load_models() {
         add_model(std::move(meta));
     }
 
+    // determine default model if any
+    for (const auto & [name, inst] : mapping) {
+        std::string val;
+        if (inst.meta.preset.get_option(COMMON_ARG_PRESET_DEFAULT_MODEL, val)) {
+            default_model_name = name;
+            SRV_INF("default preset model: %s\n", name.c_str());
+            break;
+        }
+    }
+
     // log available models
     {
         std::unordered_set<std::string> custom_names;
@@ -372,6 +382,15 @@ void server_models::load_models() {
         SRV_INF("(startup) loading model %s\n", name.c_str());
         load(name);
     }
+}
+
+std::string server_models::resolve_model_name(const std::string & requested) {
+    // If a non‑empty request matches a known model, use it.
+    if (!requested.empty() && has_model(requested)) {
+        return requested;
+    }
+    // Otherwise fall back to the default model if one is set.
+    return default_model_name.empty() ? requested : default_model_name;
 }
 
 void server_models::update_meta(const std::string & name, const server_model_meta & meta) {
@@ -903,6 +922,7 @@ void server_models_routes::init_routes() {
     this->proxy_get = [this](const server_http_req & req) {
         std::string method = "GET";
         std::string name = req.get_param("model");
+        name = models.resolve_model_name(name);
         bool autoload = is_autoload(params, req);
         auto error_res = std::make_unique<server_http_res>();
         if (!router_validate_model(name, models, autoload, error_res)) {
@@ -915,6 +935,7 @@ void server_models_routes::init_routes() {
         std::string method = "POST";
         json body = json::parse(req.body);
         std::string name = json_value(body, "model", std::string());
+        name = models.resolve_model_name(name);
         bool autoload = is_autoload(params, req);
         auto error_res = std::make_unique<server_http_res>();
         if (!router_validate_model(name, models, autoload, error_res)) {
