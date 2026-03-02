@@ -272,7 +272,9 @@ class ModelsStore {
 					capabilities: rawCapabilities.filter((value: unknown): value is string => Boolean(value)),
 					details: details?.details,
 					meta: item.meta ?? null,
-					parsedId: ModelsService.parseModelId(modelId)
+					parsedId: ModelsService.parseModelId(modelId),
+					aliases: item.aliases ?? [],
+					tags: item.tags ?? []
 				} satisfies ModelOption;
 			});
 
