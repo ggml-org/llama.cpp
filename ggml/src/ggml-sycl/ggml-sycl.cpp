@@ -284,6 +284,8 @@ static uint64_t ggml_sycl_assign_cache_uuid(ggml_tensor_extra_gpu * extra);
 
 // Forward declaration: check if tensor's buffer is in device VRAM (defined after buffer context struct).
 static bool ggml_sycl_is_device_vram_buffer(const ggml_tensor * t);
+// Forward declaration: check if tensor's weights are host-resident (defined after buffer context struct).
+static bool ggml_sycl_is_host_resident_weight(const ggml_tensor * src0, sycl::queue * stream);
 
 // Scan a compute graph for MUL_MAT_ID nodes, register experts with the unified cache,
 // and set up prefetcher + predictor.
@@ -4127,6 +4129,31 @@ static bool ggml_sycl_is_device_vram_buffer(const ggml_tensor * t) {
     }
     auto * buf_ctx = static_cast<ggml_backend_sycl_buffer_context *>(t->buffer->context);
     return buf_ctx->managed_alloc.tier == ggml_sycl::alloc_tier::DEVICE_VRAM;
+}
+
+// Returns true if the tensor's weights are host-resident (not in device VRAM).
+// Uses managed_alloc.tier as primary detection (ground truth from allocator,
+// immune to Level Zero get_pointer_type bugs in multi-device contexts).
+// Falls back to USM pointer type query when buffer context is unavailable.
+static bool ggml_sycl_is_host_resident_weight(const ggml_tensor * src0, sycl::queue * stream) {
+    // Check 1: ggml backend buffer host flag
+    if (src0->buffer && ggml_backend_buffer_is_host(src0->buffer)) {
+        return true;
+    }
+    // Check 2: managed_alloc.tier (primary -- always correct)
+    if (src0->buffer && src0->buffer->context) {
+        return !ggml_sycl_is_device_vram_buffer(src0);
+    }
+    // Check 3: USM pointer type query (fallback -- may return unknown on multi-device L0)
+    if (src0->data && stream) {
+        try {
+            const auto alloc = sycl::get_pointer_type(src0->data, stream->get_context());
+            return alloc != sycl::usm::alloc::device;
+        } catch (...) {
+            return true;  // Assume host for safety
+        }
+    }
+    return false;
 }
 
 GGML_API void ggml_backend_sycl_memcpy_d2h(const ggml_tensor * tensor, void * dst, size_t size) try {
@@ -19195,12 +19222,8 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
     // Detect host-resident weights: includes both ggml host buffers and SYCL HOST_PINNED
     // buffers.  Budget-aware allocation routes some weight chunks to HOST_PINNED, which
     // are SYCL-managed but NOT DEVICE_VRAM.  These need the same cache staging path as
-    // regular host buffers.  Uses USM pointer type (consistent with finalize_layouts).
-    bool host_weights = src0->buffer && ggml_backend_buffer_is_host(src0->buffer);
-    if (!host_weights && !src0_is_device && src0_is_usm_accessible) {
-        // USM host/shared pointer → host-resident weight (HOST_PINNED tier)
-        host_weights = true;
-    }
+    // regular host buffers.
+    bool       host_weights = ggml_sycl_is_host_resident_weight(src0, stream);
     void *     direct_base  = nullptr;
     if (layout == GGML_LAYOUT_AOS && !force_cache_aos) {
         direct_base = ggml_sycl_get_layout_ptr_for(src0, device, GGML_LAYOUT_AOS);
@@ -19285,7 +19308,8 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
         if (ggml_sycl_layout_choices_finalized_for_device(device)) {
             layout_mode existing = GGML_LAYOUT_AOS;
             if (!ggml_sycl_get_layout_choice(expert_cache_key, device, &existing)) {
-                ggml_sycl_register_layout_choice(expert_cache_key, device, layout, src0->type, src0->name);
+                const layout_mode reg_layout = force_cache_aos ? GGML_LAYOUT_AOS : layout;
+                ggml_sycl_register_layout_choice(expert_cache_key, device, reg_layout, src0->type, src0->name);
             }
         }
         // When force_cache_aos is set, the caller is explicitly overriding the layout
@@ -19464,14 +19488,7 @@ static bool graph_preload_moe_experts(ggml_backend_sycl_context & ctx, ggml_cgra
         }
         any_moe = true;
 
-        bool host_weights = src0->buffer && ggml_backend_buffer_is_host(src0->buffer);
-        // Also detect SYCL HOST_PINNED buffers via USM pointer type
-        if (!host_weights && src0->data && ctx.stream()) {
-            const auto alloc = sycl::get_pointer_type(src0->data, ctx.stream()->get_context());
-            if (alloc != sycl::usm::alloc::device) {
-                host_weights = true;
-            }
-        }
+        bool host_weights = ggml_sycl_is_host_resident_weight(src0, ctx.stream());
 
         // Check if this MoE layer has too many experts for blind preload
         const int64_t     n_experts          = src0->ne[2];
@@ -19509,12 +19526,7 @@ static bool graph_preload_moe_experts(ggml_backend_sycl_context & ctx, ggml_cgra
             ggml_sycl::unpin_all_experts();
             unpinned = true;
         }
-        if (!host_weights && src0->data && ctx.stream()) {
-            const auto alloc = sycl::get_pointer_type(src0->data, ctx.stream()->get_context());
-            if (alloc != sycl::usm::alloc::device) {
-                host_weights = true;
-            }
-        }
+        host_weights           = ggml_sycl_is_host_resident_weight(src0, ctx.stream());
         const int64_t n_ids    = ids->ne[0];
         const int64_t n_tokens = ids->ne[1];
 
@@ -23173,13 +23185,7 @@ static bool ggml_sycl_mul_mat_id_fused(ggml_backend_sycl_context & ctx,
     }
     const queue_ptr stream       = ctx.stream();
     // Detect host-resident weights including SYCL HOST_PINNED buffers
-    bool            host_weights = src0->buffer && ggml_backend_buffer_is_host(src0->buffer);
-    if (!host_weights && src0->data && stream) {
-        const auto alloc = sycl::get_pointer_type(src0->data, stream->get_context());
-        if (alloc != sycl::usm::alloc::device) {
-            host_weights = true;
-        }
-    }
+    bool            host_weights = ggml_sycl_is_host_resident_weight(src0, stream);
     sycl::event     ids_copy_event;
     int64_t         ids_nb0 = ids->nb[0];
     int64_t         ids_nb1 = ids->nb[1];
@@ -23505,13 +23511,7 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
     // Select the required layout for XMX sorted path (single optimal layout per kernel)
     ggml_tensor_extra_gpu * src0_extra   = (ggml_tensor_extra_gpu *) src0->extra;
     // Detect host-resident weights including SYCL HOST_PINNED buffers
-    bool                    host_weights = src0->buffer && ggml_backend_buffer_is_host(src0->buffer);
-    if (!host_weights && src0->data && ctx.stream()) {
-        const auto alloc = sycl::get_pointer_type(src0->data, ctx.stream()->get_context());
-        if (alloc != sycl::usm::alloc::device) {
-            host_weights = true;
-        }
-    }
+    bool                    host_weights = ggml_sycl_is_host_resident_weight(src0, ctx.stream());
     // Host weights (mmap'd/HOST_PINNED) cannot be accessed directly by GPU kernels.
     // Use unified cache staging (per-expert) when available; otherwise fall back.
     if (host_weights && !ggml_sycl::unified_cache_enabled()) {
@@ -24881,13 +24881,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     dst_row.layout              = nullptr;
     auto *      src0_extra      = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
     // Detect host-resident weights including SYCL HOST_PINNED buffers
-    bool        host_weights    = src0->buffer && ggml_backend_buffer_is_host(src0->buffer);
-    if (!host_weights && src0->data && ctx.stream()) {
-        const auto alloc = sycl::get_pointer_type(src0->data, ctx.stream()->get_context());
-        if (alloc != sycl::usm::alloc::device) {
-            host_weights = true;
-        }
-    }
+    bool        host_weights    = ggml_sycl_is_host_resident_weight(src0, ctx.stream());
     layout_mode src0_layout     = GGML_LAYOUT_AOS;
     bool        src0_layout_aos = true;
     void *      src0_layout_ptr = nullptr;
@@ -29543,13 +29537,7 @@ static bool check_graph_compatibility(ggml_backend_sycl_context & ctx, ggml_cgra
             continue;
         }
         // Detect host-resident weights including SYCL HOST_PINNED buffers
-        bool host_weights = ggml_backend_buffer_is_host(src0->buffer);
-        if (!host_weights && src0->data && ctx.stream()) {
-            const auto alloc = sycl::get_pointer_type(src0->data, ctx.stream()->get_context());
-            if (alloc != sycl::usm::alloc::device) {
-                host_weights = true;
-            }
-        }
+        bool host_weights = ggml_sycl_is_host_resident_weight(src0, ctx.stream());
         if (host_weights) {
             total_experts_needed += static_cast<size_t>(src0->ne[2]);
             moe_node_count++;

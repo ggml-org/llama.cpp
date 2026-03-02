@@ -10,6 +10,27 @@
 #include "unified-kernel.hpp"  // For split barrier support
 #include "vecdotq.hpp"
 
+// Returns true if the tensor's weights are host-resident (not in device VRAM).
+// Simplified version for mmvq.cpp — ggml_backend_sycl_buffer_context is not
+// accessible here, so we skip the tier-based check and rely on buffer host flag
+// + USM pointer type query with try/catch for driver exception safety.
+static bool ggml_sycl_is_host_resident_weight(const ggml_tensor * src0, sycl::queue * stream) {
+    // Check 1: ggml backend buffer host flag
+    if (src0->buffer && ggml_backend_buffer_is_host(src0->buffer)) {
+        return true;
+    }
+    // Check 2: USM pointer type query (may return unknown on multi-device L0)
+    if (src0->data && stream) {
+        try {
+            const auto alloc = sycl::get_pointer_type(src0->data, stream->get_context());
+            return alloc != sycl::usm::alloc::device;
+        } catch (...) {
+            return true;  // Assume host for safety
+        }
+    }
+    return false;
+}
+
 // Kernel name classes for VTune/profiler visibility
 // Note: Using int instead of ggml_type because SYCL kernel names require fixed underlying types
 template <int qtype> class mmvq_kernel_name;
@@ -3726,23 +3747,8 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
     constexpr int64_t MMVQ_MOE_MAX_BATCH = 32;
     const int64_t     batch_size         = src1->ne[2];  // ne12 - number of tokens
     const auto *      src0_extra         = static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
-    // Detect host-resident weights: includes both ggml host buffers and SYCL HOST_PINNED
-    // buffers (budget-aware allocation routes some chunks to HOST_PINNED, which are
-    // SYCL-managed but not DEVICE_VRAM — need same staging path as host buffers).
-    // Use USM pointer type check (consistent with finalize_layouts) since
-    // ggml_backend_buffer_is_host() returns false for SYCL-managed HOST_PINNED buffers.
-    bool              host_weights       = src0->buffer && ggml_backend_buffer_is_host(src0->buffer);
-    if (!host_weights && src0->data && ctx.stream()) {
-        try {
-            const auto alloc = sycl::get_pointer_type(src0->data, ctx.stream()->get_context());
-            if (alloc != sycl::usm::alloc::device) {
-                host_weights = true;
-            }
-        } catch (...) {
-            // If pointer type query fails, assume host-resident for safety
-            host_weights = true;
-        }
-    }
+    // Detect host-resident weights including SYCL HOST_PINNED buffers
+    bool              host_weights       = ggml_sycl_is_host_resident_weight(src0, ctx.stream());
     const layout_mode layout =
         forced_layout ? *forced_layout : ggml_sycl_select_moe_mmvq_layout(src0, ctx.device, host_weights);
     // For MXFP4 MoE: allow SOA/Coalesced dispatch even when base tensor is AOS.
