@@ -916,6 +916,13 @@ extern "C" {
             struct llama_context * ctx,
               struct llama_batch   batch);
 
+    // Clear stored encoder output for a specific sequence.
+    // Should be called when a sequence is no longer needed (e.g. slot released)
+    // to free the associated cross-attention embedding memory.
+    LLAMA_API void llama_encode_clear_seq(
+            struct llama_context * ctx,
+                  llama_seq_id     seq_id);
+
     // Process a batch of tokens.
     // Requires the context to have a memory.
     // For encode-decoder contexts, processes the batch using the decoder.

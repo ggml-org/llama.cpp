@@ -435,6 +435,7 @@ class MODEL_ARCH(IntEnum):
     BITNET           = auto()
     T5               = auto()
     T5ENCODER        = auto()
+    AYA              = auto()
     JAIS             = auto()
     JAIS2            = auto()
     NEMOTRON         = auto()
@@ -878,6 +879,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.BITNET:           "bitnet",
     MODEL_ARCH.T5:               "t5",
     MODEL_ARCH.T5ENCODER:        "t5encoder",
+    MODEL_ARCH.AYA:              "aya",
     MODEL_ARCH.JAIS:             "jais",
     MODEL_ARCH.JAIS2:            "jais2",
     MODEL_ARCH.NEMOTRON:         "nemotron",
@@ -2817,6 +2819,38 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
     MODEL_ARCH.T5ENCODER: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ENC_ATTN_NORM,
+        MODEL_TENSOR.ENC_ATTN_Q,
+        MODEL_TENSOR.ENC_ATTN_K,
+        MODEL_TENSOR.ENC_ATTN_V,
+        MODEL_TENSOR.ENC_ATTN_OUT,
+        MODEL_TENSOR.ENC_ATTN_REL_B,
+        MODEL_TENSOR.ENC_FFN_NORM,
+        MODEL_TENSOR.ENC_FFN_GATE,
+        MODEL_TENSOR.ENC_FFN_DOWN,
+        MODEL_TENSOR.ENC_FFN_UP,
+        MODEL_TENSOR.ENC_OUTPUT_NORM,
+    ],
+    MODEL_ARCH.AYA: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.DEC_ATTN_NORM,
+        MODEL_TENSOR.DEC_ATTN_Q,
+        MODEL_TENSOR.DEC_ATTN_K,
+        MODEL_TENSOR.DEC_ATTN_V,
+        MODEL_TENSOR.DEC_ATTN_OUT,
+        MODEL_TENSOR.DEC_ATTN_REL_B,
+        MODEL_TENSOR.DEC_CROSS_ATTN_NORM,
+        MODEL_TENSOR.DEC_CROSS_ATTN_Q,
+        MODEL_TENSOR.DEC_CROSS_ATTN_K,
+        MODEL_TENSOR.DEC_CROSS_ATTN_V,
+        MODEL_TENSOR.DEC_CROSS_ATTN_OUT,
+        MODEL_TENSOR.DEC_CROSS_ATTN_REL_B,
+        MODEL_TENSOR.DEC_FFN_NORM,
+        MODEL_TENSOR.DEC_FFN_GATE,
+        MODEL_TENSOR.DEC_FFN_DOWN,
+        MODEL_TENSOR.DEC_FFN_UP,
+        MODEL_TENSOR.DEC_OUTPUT_NORM,
         MODEL_TENSOR.ENC_ATTN_NORM,
         MODEL_TENSOR.ENC_ATTN_Q,
         MODEL_TENSOR.ENC_ATTN_K,
