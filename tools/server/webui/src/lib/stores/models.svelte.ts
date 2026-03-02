@@ -4,7 +4,7 @@ import { ServerModelStatus, ModelModality } from '$lib/enums';
 import { ModelsService, PropsService } from '$lib/services';
 import { serverStore } from '$lib/stores/server.svelte';
 import { TTLCache } from '$lib/utils';
-import { MODEL_PROPS_CACHE_TTL_MS, MODEL_PROPS_CACHE_MAX_ENTRIES } from '$lib/constants';
+import { MODEL_PROPS_CACHE_TTL_MS, MODEL_PROPS_CACHE_MAX_ENTRIES, FAVOURITE_MODELS_LOCALSTORAGE_KEY } from '$lib/constants';
 
 /**
  * modelsStore - Reactive store for model management in both MODEL and ROUTER modes
@@ -52,6 +52,8 @@ class ModelsStore {
 
 	private modelUsage = $state<Map<string, SvelteSet<string>>>(new Map());
 	private modelLoadingStates = $state<Map<string, boolean>>(new Map());
+
+	favouriteModelIds = $state<Set<string>>(this.loadFavouritesFromStorage());
 
 	/**
 	 * Model-specific props cache with TTL
@@ -605,6 +607,42 @@ class ModelsStore {
 	/**
 	 *
 	 *
+	 * Favourites
+	 *
+	 *
+	 */
+
+	isFavourite(modelId: string): boolean {
+		return this.favouriteModelIds.has(modelId);
+	}
+
+	toggleFavourite(modelId: string): void {
+		const next = new Set(this.favouriteModelIds);
+		if (next.has(modelId)) {
+			next.delete(modelId);
+		} else {
+			next.add(modelId);
+		}
+		this.favouriteModelIds = next;
+		try {
+			localStorage.setItem(FAVOURITE_MODELS_LOCALSTORAGE_KEY, JSON.stringify([...next]));
+		} catch {
+			// ignore storage errors
+		}
+	}
+
+	private loadFavouritesFromStorage(): Set<string> {
+		try {
+			const raw = localStorage.getItem(FAVOURITE_MODELS_LOCALSTORAGE_KEY);
+			return raw ? new Set(JSON.parse(raw) as string[]) : new Set();
+		} catch {
+			return new Set();
+		}
+	}
+
+	/**
+	 *
+	 *
 	 * Utilities
 	 *
 	 *
@@ -655,3 +693,4 @@ export const loadingModelIds = () => modelsStore.loadingModelIds;
 export const propsCacheVersion = () => modelsStore.propsCacheVersion;
 export const singleModelName = () => modelsStore.singleModelName;
 export const selectedModelContextSize = () => modelsStore.selectedModelContextSize;
+export const favouriteModelIds = () => modelsStore.favouriteModelIds;
