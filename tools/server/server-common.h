@@ -44,6 +44,18 @@ static T json_value(const json & body, const std::string & key, const T & defaul
     }
 }
 
+// Resolves the requested number of tokens to predict from a request body.
+// "n_predict" takes priority over "max_completion_tokens" (OAI alias); falls back to fallback_n_predict.
+static inline int32_t get_n_predict(const json & body, int32_t fallback_n_predict) {
+    return json_value(body, "n_predict", json_value(body, "max_completion_tokens", fallback_n_predict));
+}
+
+// Get n_predict by prioritizing server value if body is missing or negative
+static inline int32_t get_n_predict_with_server_priority(const json & body, int32_t server_default) {
+    const int32_t n_predict = get_n_predict(body, server_default);
+    return (n_predict > 0) ? n_predict : server_default;
+}
+
 // https://community.openai.com/t/openai-chat-list-of-error-codes-and-types/357791/11
 enum error_type {
     ERROR_TYPE_INVALID_REQUEST,
@@ -288,6 +300,10 @@ struct server_chat_params {
     bool allow_audio;
     bool enable_thinking = true;
     std::string media_path;
+    int32_t n_ctx_seq;
+    int32_t n_predict = -1;
+    float chat_truncate = -1.0f;
+    const llama_vocab * vocab = nullptr;
 };
 
 // used by /completions endpoint
@@ -369,3 +385,33 @@ server_tokens format_prompt_rerank(
         mtmd_context * mctx,
         const std::string & query,
         const std::string & doc);
+
+//
+// Chat truncation utils
+//
+
+// Calculate the target number of tokens to keep in the chat history as the floor of context size * the chat_truncate fraction.
+// If n_predict is provided and positive, ensure that target_tokens does not exceed the budget n_ctx - n_predict.
+int32_t chat_truncate_target_tokens(int32_t n_ctx, float chat_truncate, int32_t n_predict);
+
+// Count number of tokens in the chat history, based on the provided templates and vocab.
+int32_t chat_n_tokens(
+    const common_chat_templates_inputs & inputs,
+    const common_chat_templates        * tmpls,
+    const struct llama_vocab           * vocab);
+
+// Determine if the chat history needs truncation by checking if the number of tokens exceeds a threshold, which is either:
+// - `n_predict > 0`: `n_ctx - n_predict`
+// - `n_predict <= 0`: fraction of `n_ctx` using the chat_truncate param
+bool chat_needs_truncation(
+    int32_t n_tokens, int32_t n_ctx, int32_t n_predict, float fraction);
+
+// Remove oldest "turns" from the chat history until the number of tokens is within the target_tokens limit
+// Each "turn" is a sequence of messages starting with `user` and ending just before the next `user` message.
+// The most recent turn is always kept.
+// This guarantees we do not break/pollute the chat template
+void chat_truncate_messages(
+    common_chat_templates_inputs & inputs,
+    const common_chat_templates  * tmpls,
+    const struct llama_vocab     * vocab,
+    int32_t                        target_tokens);

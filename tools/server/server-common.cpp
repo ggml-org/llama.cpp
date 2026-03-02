@@ -1043,6 +1043,22 @@ json oaicompat_chat_params_parse(
         throw std::invalid_argument("invalid type for \"enable_thinking\" (expected boolean, got string)");
     }
 
+    // Chat truncation: drop oldest turns until prompt fits in context
+    if (opt.chat_truncate > 0.0f) {
+        int32_t n_predict_with_server_priority = get_n_predict_with_server_priority(body, opt.n_predict);
+        if (
+            chat_needs_truncation(
+                chat_n_tokens(inputs, opt.tmpls.get(), opt.vocab),
+                opt.n_ctx_seq,
+                n_predict_with_server_priority,
+                opt.chat_truncate
+            )
+        ) {
+            int32_t target_tokens = chat_truncate_target_tokens(opt.n_ctx_seq, opt.chat_truncate, n_predict_with_server_priority);
+            chat_truncate_messages(inputs, opt.tmpls.get(), opt.vocab, target_tokens);
+        }
+    }
+
     // if the assistant message appears at the end of list, we do not add end-of-turn token
     // for ex. this can be useful to modify the reasoning process in reasoning models
     bool prefill_assistant_message = !inputs.messages.empty() && inputs.messages.back().role == "assistant" && opt.prefill_assistant;
@@ -2037,4 +2053,70 @@ server_tokens format_prompt_rerank(
     }
 
     return result;
+}
+
+//
+// Chat truncation helpers
+//
+
+int32_t chat_truncate_target_tokens(int32_t n_ctx, float chat_truncate, int32_t n_predict = -1) {
+    int32_t target_tokens = (int32_t)(chat_truncate * (float)n_ctx);
+    int32_t budget_tokens = n_ctx - n_predict;
+    if (n_predict > 0 && target_tokens > budget_tokens) {
+        target_tokens = budget_tokens;
+    }
+    return target_tokens;
+}
+
+int32_t chat_n_tokens(
+    const common_chat_templates_inputs & inputs,
+    const common_chat_templates        * tmpls,
+    const struct llama_vocab           * vocab)
+{
+    common_chat_params chat_params = common_chat_templates_apply(tmpls, inputs);
+    auto tokens = common_tokenize(vocab, chat_params.prompt, true, true);
+    return (int32_t)tokens.size();
+}
+
+bool chat_needs_truncation(
+    int32_t n_tokens, int32_t n_ctx, int32_t n_predict, float chat_truncate)
+{
+    const int32_t threshold = (n_predict > 0) ? n_ctx - n_predict : chat_truncate_target_tokens(n_ctx, chat_truncate);
+    return n_tokens >= threshold;
+}
+
+void chat_truncate_messages(
+    common_chat_templates_inputs & inputs,
+    const common_chat_templates  * tmpls,
+    const struct llama_vocab     * vocab,
+    int32_t                        target_tokens)
+{
+    int32_t n_tokens = chat_n_tokens(inputs, tmpls, vocab);
+
+    while (n_tokens >= target_tokens) {
+        // Find the first user message index and check if there's more than 1 user message
+        size_t first_user_msg = -1;
+        bool one_or_less_user_messages = true;
+        for (size_t index = 0; index < inputs.messages.size(); ++index) {
+            if (inputs.messages[index].role == "user") {
+                if (first_user_msg != (size_t)-1) {
+                    one_or_less_user_messages = false;
+                    break;
+                }
+                first_user_msg = index;
+            }
+        }
+
+        if (one_or_less_user_messages) {
+            break;
+        }
+
+        // Remove all messages until we meet another user message
+        inputs.messages.erase(inputs.messages.begin() + (ptrdiff_t)first_user_msg);
+        while (inputs.messages[first_user_msg].role != "user" && first_user_msg < inputs.messages.size()) {
+            inputs.messages.erase(inputs.messages.begin() + (ptrdiff_t)first_user_msg);
+        }
+
+        n_tokens = chat_n_tokens(inputs, tmpls, vocab);
+    }
 }
