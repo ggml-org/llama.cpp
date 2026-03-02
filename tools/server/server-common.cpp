@@ -1999,13 +1999,22 @@ server_tokens format_prompt_rerank(
         const struct llama_model * model,
         const struct llama_vocab * vocab,
         mtmd_context * mctx,
+        const std::string & instruction,
         const std::string & query,
         const std::string & doc) {
     server_tokens result = {};
 
     const char * rerank_prompt = llama_model_chat_template(model, "rerank");
+    const char * rerank_prompt_instruct = llama_model_chat_template(model, "rerank_instruct");
 
-    if (rerank_prompt != nullptr) {
+    if ( (rerank_prompt_instruct != nullptr) && !instruction.empty() ) {
+        std::string prompt = rerank_prompt_instruct;
+        string_replace_all(prompt, "{instruction}", instruction);
+        string_replace_all(prompt, "{query}"      , query);
+        string_replace_all(prompt, "{document}"   , doc  );
+        server_tokens tokens = tokenize_input_subprompt(vocab, mctx, prompt, false, true);
+        result.push_back(tokens);
+    } else if (rerank_prompt != nullptr) {
         std::string prompt = rerank_prompt;
         string_replace_all(prompt, "{query}"   , query);
         string_replace_all(prompt, "{document}", doc  );
