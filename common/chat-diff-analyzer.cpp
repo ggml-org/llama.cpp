@@ -30,6 +30,7 @@ static std::vector<std::function<void(const common_chat_template & tmpl, autopar
       // support reasoning on them
       [](const common_chat_template & tmpl, autoparser & analysis) -> void {
           if (tmpl.src.find("content.split('</think>')") != std::string::npos &&
+              tmpl.src.find("reasoning_content") == std::string::npos &&
               analysis.reasoning.mode == reasoning_mode::NONE) {
               analysis.reasoning.mode  = reasoning_mode::FORCED_OPEN;
               analysis.reasoning.start = "<think>";
