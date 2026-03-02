@@ -120,6 +120,11 @@ bool common_json_parse(
         auto temptative_end = it + err_loc.position;
         // LOG_DBG("Error at position %zu (is_end = %s): %s\n", err_loc.position, temptative_end == end ? "true" : "false", err_loc.exception_message.c_str());
 
+        // Avoid parsing and logging "empty input" when error is at position 0 (e.g. streaming partial/invalid JSON)
+        if (temptative_end == it) {
+            return false;
+        }
+
         auto input = std::string(it, temptative_end);
         try {
             out.json = json::parse(input);

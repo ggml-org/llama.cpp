@@ -2755,7 +2755,17 @@ private:
 
                 slot.i_batch = -1;
 
-                common_sampler_accept(slot.smpl.get(), id, true);
+                try {
+                    common_sampler_accept(slot.smpl.get(), id, true);
+                } catch (const std::runtime_error & e) {
+                    // Grammar constraint violation (e.g. "Unexpected empty grammar stack") - return 500 instead of aborting
+                    SRV_ERR("slot %d: grammar error, releasing slot: %s\n", slot.id, e.what());
+                    send_error(slot, std::string("Grammar constraint violation: ") + e.what(), ERROR_TYPE_SERVER);
+                    slot.print_timings();
+                    metrics.on_prediction(slot);
+                    slot.release();
+                    continue;
+                }
 
                 // here we have synchronized the llama_context (due to the sampling above), so we can do time measurement
                 const int64_t t_current = ggml_time_us();
@@ -2799,7 +2809,17 @@ private:
                 const size_t n_draft = slot.drafted.size();
 
                 // the accepted tokens from the speculation
-                const auto ids = common_sampler_sample_and_accept_n(slot.smpl.get(), ctx, slot.i_batch_dft, slot.drafted);
+                std::vector<llama_token> ids;
+                try {
+                    ids = common_sampler_sample_and_accept_n(slot.smpl.get(), ctx, slot.i_batch_dft, slot.drafted);
+                } catch (const std::runtime_error & e) {
+                    SRV_ERR("slot %d: grammar error during speculative decoding, releasing slot: %s\n", slot.id, e.what());
+                    send_error(slot, std::string("Grammar constraint violation: ") + e.what(), ERROR_TYPE_SERVER);
+                    slot.print_timings();
+                    metrics.on_prediction(slot);
+                    slot.release();
+                    continue;
+                }
                 slot.i_batch_dft.clear();
                 slot.drafted.clear();
 

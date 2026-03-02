@@ -498,9 +498,42 @@ inline bool parse_xml_tool_calls(common_chat_msg_parser & builder, const struct 
             }
             auto val_start = builder.pos();
 
-            // Test if arg_val is a partial JSON
+            // vLLM-style: only try to parse value when there is content; empty/whitespace = incomplete (avoids "parse empty input" log).
+            // When remainder does not look like JSON start, skip try_consume_json and fall through to plain-text path (e.g. "explore").
+            bool looks_like_json = true;
+            {
+                const auto & inp = builder.input();
+                const size_t rem_len = (val_start < inp.size()) ? (inp.size() - val_start) : 0;
+                std::string_view rest_sv(inp.data() + val_start, rem_len);
+                if (rest_sv.empty() || all_space(rest_sv)) {
+                    gen_partial_args([&](auto & rest, auto & needle) { arguments[key] = (form.trim_raw_argval ? string_strip(rest) : rest) + needle; });
+                    throw common_chat_msg_partial_exception(
+                        "Expected " + gbnf_format_literal(form.val_end) +
+                        " after " + gbnf_format_literal(form.key_val_sep) +
+                        (form.key_val_sep2 ? " " + gbnf_format_literal(*form.key_val_sep2) : "")
+                    );
+                }
+                // Only call try_consume_json when remainder looks like start of a JSON value (avoids SAX error-at-position-0 → "empty input" log).
+                // Otherwise fall through to plain-text path (e.g. subagent_type=explore).
+                size_t pos = 0;
+                while (pos < rest_sv.size() && std::isspace(static_cast<unsigned char>(rest_sv[pos]))) { ++pos; }
+                if (pos >= rest_sv.size()) {
+                    looks_like_json = false;
+                } else {
+                    std::string_view rest_trim = rest_sv.substr(pos);
+                    char c = rest_trim[0];
+                    looks_like_json = (c == '"' || c == '{' || c == '[' || (c >= '0' && c <= '9') || c == '-');
+                    if (!looks_like_json) {
+                        if (c == 't') looks_like_json = (rest_trim.size() <= 4 && std::string_view("true").substr(0, rest_trim.size()) == rest_trim);
+                        else if (c == 'f') looks_like_json = (rest_trim.size() <= 5 && std::string_view("false").substr(0, rest_trim.size()) == rest_trim);
+                        else if (c == 'n') looks_like_json = (rest_trim.size() <= 4 && std::string_view("null").substr(0, rest_trim.size()) == rest_trim);
+                    }
+                }
+            }
+
+            // Test if arg_val is a partial JSON (only when remainder looks like JSON; else plain-text path below)
             std::optional<common_json> value_json = std::nullopt;
-            if (!form.raw_argval || !*form.raw_argval) {
+            if ((!form.raw_argval || !*form.raw_argval) && looks_like_json) {
                 try { value_json = builder.try_consume_json(); }
                 catch (const std::runtime_error&) { builder.move_to(val_start); }
                 // TODO: Delete this when json_partial adds top-level support for null/true/false

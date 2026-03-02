@@ -2153,7 +2153,9 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
 
 static common_chat_params common_chat_params_init_glm_4_5(const common_chat_template & tmpl, const struct templates_params & inputs) {
     common_chat_params data;
-    data.grammar_lazy = inputs.tools.is_array() && !inputs.tools.empty() && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+    // vLLM-style for AUTO: no grammar/trigger during generation; tool calls are parsed from decoded text (common_chat_parse_glm_4_5).
+    // Only use grammar when tool_choice == REQUIRED (force tool call from first token).
+    data.grammar_lazy = false;
 
     std::string prompt = apply(tmpl, inputs);
 
@@ -2212,18 +2214,22 @@ static common_chat_params common_chat_params_init_glm_4_5(const common_chat_temp
         "<|observation|>"
     });
 
-    // build grammar for tool call
-    static const xml_tool_call_format form {
-        /* form.scope_start = */ "",
-        /* form.tool_start  = */ "\n<tool_call>",
-        /* form.tool_sep    = */ "\n",
-        /* form.key_start   = */ "<arg_key>",
-        /* form.key_val_sep = */ "</arg_key>\n<arg_value>",
-        /* form.val_end     = */ "</arg_value>\n",
-        /* form.tool_end    = */ "</tool_call>\n",
-        /* form.scope_end   = */ "",
-    };
-    build_grammar_xml_tool_call(data, inputs.tools, form);
+    // Build grammar only for tool_choice == REQUIRED (force tool call from first token).
+    // For AUTO, generate freely and parse tool calls from decoded text (common_chat_parse_glm_4_5).
+    const bool has_tools = inputs.tools.is_array() && !inputs.tools.empty();
+    if (has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED) {
+        static const xml_tool_call_format form {
+            /* form.scope_start = */ "",
+            /* form.tool_start  = */ "\n<tool_call>",
+            /* form.tool_sep    = */ "\n",
+            /* form.key_start   = */ "<arg_key>",
+            /* form.key_val_sep = */ "</arg_key>\n<arg_value>",
+            /* form.val_end     = */ "</arg_value>\n",
+            /* form.tool_end    = */ "</tool_call>\n",
+            /* form.scope_end   = */ "",
+        };
+        build_grammar_xml_tool_call(data, inputs.tools, form);
+    }
 
     data.prompt = prompt;
     data.format = COMMON_CHAT_FORMAT_GLM_4_5;
