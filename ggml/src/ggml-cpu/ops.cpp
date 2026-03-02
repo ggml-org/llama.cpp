@@ -4824,6 +4824,8 @@ void ggml_compute_forward_get_rows(
     const ggml_tensor * src0 = dst->src[0];
 
     switch (src0->type) {
+        case GGML_TYPE_Q1_0:
+        case GGML_TYPE_Q1_0_g128:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:
@@ -5548,6 +5550,8 @@ void ggml_compute_forward_clamp(
                 ggml_compute_forward_clamp_f16(params, dst);
             } break;
         case GGML_TYPE_BF16:
+        case GGML_TYPE_Q1_0:
+        case GGML_TYPE_Q1_0_g128:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:
