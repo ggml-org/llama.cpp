@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { ChevronDown, HardDriveDownload, HardDriveUpload, Loader2, Package, Power, PowerOff } from '@lucide/svelte';
+	import { ChevronDown, Loader2, Package } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { cn } from '$lib/components/ui/utils';
@@ -16,30 +16,28 @@
 	import { KeyboardKey, ServerModelStatus } from '$lib/enums';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import {
-		ActionIcon,
 		DialogModelInformation,
 		DropdownMenuSearchable,
-		ModelId
+		ModelId,
+		ModelsSelectorOption
 	} from '$lib/components/app';
 	import type { ModelOption } from '$lib/types/models';
 
 	interface Props {
 		class?: string;
 		currentModel?: string | null;
-		/** Callback when model changes. Return false to keep menu open (e.g., for validation failures) */
-		onModelChange?: (modelId: string, modelName: string) => Promise<boolean> | boolean | void;
 		disabled?: boolean;
 		forceForegroundText?: boolean;
-		/** When true, user's global selection takes priority over currentModel (for form selector) */
+		onModelChange?: (modelId: string, modelName: string) => Promise<boolean> | boolean | void;
 		useGlobalSelection?: boolean;
 	}
 
 	let {
 		class: className = '',
 		currentModel = null,
-		onModelChange,
 		disabled = false,
 		forceForegroundText = false,
+		onModelChange,
 		useGlobalSelection = false
 	}: Props = $props();
 
@@ -368,91 +366,41 @@
 									>
 										{selectedOption?.name || currentModel}
 									</span>
+
 									<span class="ml-2 text-xs whitespace-nowrap opacity-70">(not available)</span>
 								</button>
-								<div class="my-1 h-px bg-border"></div>
 							{/if}
 							{#if filteredOptions.length === 0}
 								<p class="px-4 py-3 text-sm text-muted-foreground">No models found.</p>
 							{/if}
-						{#each groupedFilteredOptions as group (group.orgName)}
-							{#if group.orgName}
-								<p class="px-2 pt-2 pb-0.5 text-xs font-semibold text-muted-foreground/60 select-none">{group.orgName}</p>
-							{/if}
-							{#each group.items as { option, flatIndex } (option.id)}
+						{#each groupedFilteredOptions as group (group.isFavouritesGroup ? '__favourites__' : group.orgName)}
+						{#if !group.isFavouritesGroup && group.orgName}
+							<p class="px-2 mt-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none">{group.orgName}</p>
+						{/if}
+							{#each group.items as { option, flatIndex } (group.isFavouritesGroup ? `fav-${option.id}` : option.id)}
 								{@const status = getModelStatus(option.model)}
 								{@const isLoaded = status === ServerModelStatus.LOADED}
 								{@const isLoading = status === ServerModelStatus.LOADING}
 								{@const isSelected = currentModel === option.model || activeId === option.id}
 								{@const isHighlighted = flatIndex === highlightedIndex}
+								{@const isFav = modelsStore.favouriteModelIds.has(option.model)}
 
-
-								<div
-									class={cn(
-										'group flex w-full items-center gap-2 rounded-sm p-2 text-left text-sm transition focus:outline-none',
-										'cursor-pointer hover:bg-muted focus:bg-muted',
-										isSelected || isHighlighted
-											? 'bg-accent text-accent-foreground'
-											: 'hover:bg-accent hover:text-accent-foreground',
-										isLoaded ? 'text-popover-foreground' : 'text-muted-foreground'
-									)}
-									role="option"
-									aria-selected={isSelected || isHighlighted}
-									tabindex="0"
-									onclick={() => handleSelect(option.id)}
-									onmouseenter={() => (highlightedIndex = flatIndex)}
-									onkeydown={(e) => {
-										if (e.key === 'Enter' || e.key === ' ') {
+								<ModelsSelectorOption
+									{option}
+									{isLoaded}
+									{isLoading}
+									{isSelected}
+									{isHighlighted}
+									{isFav}
+									{highlightedIndex}								showOrgName={group.isFavouritesGroup}									onSelect={handleSelect}
+									onMouseEnter={() => (highlightedIndex = flatIndex)}
+									onKeyDown={(e) => {
+										if (e.key === KeyboardKey.ENTER || e.key === KeyboardKey.SPACE) {
 											e.preventDefault();
 											handleSelect(option.id);
 										}
 									}}
-								>
-									<ModelId modelId={option.model} class="flex-1" />
-
-									<div class="flex shrink-0 items-center gap-1.5">
-										{#if isLoading}
-											<Tooltip.Root>
-												<Tooltip.Trigger>
-													<Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
-												</Tooltip.Trigger>
-												<Tooltip.Content class="z-[9999]">
-													<p>Loading model...</p>
-												</Tooltip.Content>
-											</Tooltip.Root>
-										{:else if isLoaded}
-											<div class="flex items-center justify-center w-4">
-												<span class="h-2 w-2 rounded-full bg-green-500 group-hover:hidden"></span>
-
-												<!-- svelte-ignore a11y_no_static_element_interactions -->
-												<!-- svelte-ignore a11y_click_events_have_key_events -->
-												<div class="hidden group-hover:flex" onclick={(e) => e.stopPropagation()}>
-													<ActionIcon
-														icon={PowerOff}
-														tooltip="Unload model"
-														class="text-red-500 hover:text-red-600 h-3 w-3"
-														onclick={() => modelsStore.unloadModel(option.model)}
-													/>
-												</div>
-											</div>
-										{:else}
-											<div class="flex items-center justify-center w-4">
-												<span class="h-2 w-2 rounded-full bg-muted-foreground/50 group-hover:hidden"></span>
-
-												<!-- svelte-ignore a11y_no_static_element_interactions -->
-												<!-- svelte-ignore a11y_click_events_have_key_events -->
-												<div class="hidden group-hover:flex" onclick={(e) => e.stopPropagation()}>
-													<ActionIcon
-														icon={Power}
-														tooltip="Load model"
-														class="h-3 w-3"
-														onclick={() => modelsStore.loadModel(option.model)}
-													/>
-												</div>
-											</div>
-										{/if}
-									</div>
-								</div>
+								/>
 							{/each}
 						{/each}
 						</div>
