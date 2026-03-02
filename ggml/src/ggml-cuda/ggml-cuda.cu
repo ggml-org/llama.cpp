@@ -1225,8 +1225,7 @@ static cudaError_t ggml_cuda_cpy_tensor_2d(
     }
 }
 
-static cublasComputeType_t ggml_cuda_cublas_get_force_compute_type()
-{
+static cublasComputeType_t ggml_cuda_cublas_get_force_compute_type() {
     static const cublasComputeType_t force_compute_type = [] {
         const bool ggml_cuda_force_cublas_compute_32f_env = getenv("GGML_CUDA_FORCE_CUBLAS_COMPUTE_32F") != nullptr;
         const bool ggml_cuda_force_cublas_compute_16f_env = getenv("GGML_CUDA_FORCE_CUBLAS_COMPUTE_16F") != nullptr;
