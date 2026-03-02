@@ -2353,6 +2353,44 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_SPLIT_MODE"));
     add_opt(common_arg(
+        {"-tl", "--threads-load"}, "N",
+        string_format("number of parallel threads for model loading (default: %d, -1 = unlimited, 1 = sequential)", params.n_threads_load),
+        [](common_params & params, int value) {
+            params.n_threads_load = value;
+            if (params.n_threads_load <= 0) {
+                params.n_threads_load = -1; // unlimited
+            }
+            // Also set env var so llama-model.cpp and ggml-cuda.cu can read it
+#ifdef _WIN32
+            _putenv_s("LLAMA_ARG_THREADS_LOAD", std::to_string(params.n_threads_load).c_str());
+#else
+            setenv("LLAMA_ARG_THREADS_LOAD", std::to_string(params.n_threads_load).c_str(), 1);
+#endif
+        }
+    ).set_env("LLAMA_ARG_THREADS_LOAD"));
+    add_opt(common_arg(
+        {"-hs", "--host-stage"}, "{auto,0,1}",
+        "cross-device transfer mode: auto (default), 0 = force direct P2P, 1 = force host-staged",
+        [](common_params &, const std::string & value) {
+            if (value != "auto" && value != "0" && value != "1") {
+                throw std::invalid_argument("invalid value");
+            }
+#ifdef _WIN32
+            if (value == "auto") {
+                _putenv("GGML_CUDA_HOST_STAGE=");
+            } else {
+                _putenv_s("GGML_CUDA_HOST_STAGE", value.c_str());
+            }
+#else
+            if (value == "auto") {
+                unsetenv("GGML_CUDA_HOST_STAGE");
+            } else {
+                setenv("GGML_CUDA_HOST_STAGE", value.c_str(), 1);
+            }
+#endif
+        }
+    ).set_env("GGML_CUDA_HOST_STAGE"));
+    add_opt(common_arg(
         {"-ts", "--tensor-split"}, "N0,N1,N2,...",
         "fraction of the model to offload to each GPU, comma-separated list of proportions, e.g. 3,1",
         [](common_params & params, const std::string & value) {
