@@ -4,8 +4,6 @@
 #include "llama.h"
 #include "ggml.h"
 
-#include "nlohmann/json.hpp"
-
 #include <array>
 #include <vector>
 #include <set>
@@ -26,6 +24,16 @@ struct input_tensor {
         return std::tie(type, ne, nb) <
                std::tie(b.type, b.ne, b.nb);
     }
+
+    void serialize(std::ostream& out) const {
+        out << type << ' ';
+        for (size_t i = 0; i < 4; i++) {
+            out << ne[i] << ' ';
+        }
+        for (size_t i = 0; i < 4; i++) {
+            out << nb[i] << ' ';
+        }
+    }
 };
 
 struct test_object {
@@ -36,36 +44,29 @@ struct test_object {
     std::vector<input_tensor> sources;
     std::string name;
 
-    nlohmann::json to_json() const {
-        nlohmann::json test;
+    void serialize(std::ostream& out) const {
+        out << op << ' ' << type << ' ';
+        for (size_t i = 0; i < 4; i++) {
+            out << ne[i] << ' ';
+        }
 
-        test["op"] = op;
-        test["op_name"] = ggml_op_name(op);
+        out << op_params.size() << ' ';
+        for (size_t i = 0; i < op_params.size(); i++) {
+            out << op_params[i] << ' ';
+        }
 
-        test["type"] = type;
-        test["type_name"] = ggml_type_name(type);
-
-        test["ne"] = { ne[0], ne[1], ne[2], ne[3] };
-
-        test["op_params"] = op_params;
+        out << sources.size() << ' ';
+        for (size_t s = 0; s < sources.size(); s++) {
+            sources[s].serialize(out);
+        }
 
         if (!name.empty()) {
-            test["name"] = name;
+            out << name;
+        } else {
+            out << '-';
         }
 
-        nlohmann::json j_sources = nlohmann::json::array();
-        for (size_t s = 0; s < sources.size(); s++) {
-            j_sources.push_back({
-                {"type", sources[s].type},
-                {"type_name", ggml_type_name(sources[s].type)},
-                {"ne", { sources[s].ne[0], sources[s].ne[1], sources[s].ne[2], sources[s].ne[3] }},
-                {"nb", { sources[s].nb[0], sources[s].nb[1], sources[s].nb[2], sources[s].nb[3] }},
-            });
-        }
-
-        test["sources"] = j_sources;
-
-        return test;
+        out << '\n';
     }
 
     bool operator<(const test_object &b) const {
@@ -114,8 +115,9 @@ static void extract_graph_ops(ggml_cgraph * cgraph, const char * label, std::set
 
 int main(int argc, char ** argv) {
     common_params params;
+    params.out_file = "tests.txt";
 
-    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_EXPORT_GRAPH_JSON)) {
+    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_EXPORT_GRAPH_OPS)) {
         return 1;
     }
 
@@ -152,21 +154,14 @@ int main(int argc, char ** argv) {
 
     LOG_INF("%d unique ops total\n", (int) tests.size());
 
-    nlohmann::json output_list = nlohmann::json::array();
-    for (const auto& test : tests) {
-        output_list.push_back(test.to_json());
+    std::ofstream f(params.out_file);
+
+    if (!f.is_open()) {
+        throw std::runtime_error("Unable to open output file");
     }
 
-    if (!params.out_file.empty()) {
-        std::ofstream f(params.out_file);
-
-        if (!f.is_open()) {
-            throw std::runtime_error("Unable to open output file");
-        }
-
-        f << output_list.dump(2) << std::endl;
-    } else {
-        std::cout << output_list.dump(2) << std::endl;
+    for (const auto& test : tests) {
+        test.serialize(f);
     }
 
     return 0;
