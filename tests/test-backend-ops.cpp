@@ -2977,6 +2977,7 @@ struct test_bin_bcast : public test_case {
     const std::array<int, 4> nr;
     int nf; // number of fused ops, nf == 1 -> single op (no fusion)
     bool perm1; // permute src1?
+    bool src_overlap; // src0 and src1 are overlapping views of the same buffer
 
     bool run_whole_graph() override { return nf > 1; }
 
@@ -2992,8 +2993,8 @@ struct test_bin_bcast : public test_case {
             std::array<int64_t, 4> ne = {10, 10, 1, 1},
             std::array<int, 4> nr = {1, 2, 1, 1},
             int nf = 1,
-            bool perm1 = false)
-        : op(op), type(type), ne(ne), nr(nr), nf(nf), perm1(perm1) {}
+            bool perm1 = false, bool src_overlap = false)
+        : op(op), type(type), ne(ne), nr(nr), nf(nf), perm1(perm1), src_overlap(src_overlap) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         GGML_ASSERT(nf <= 16);
@@ -3008,6 +3009,8 @@ struct test_bin_bcast : public test_case {
 
                 b[i] = ggml_new_tensor_4d(ctx, type, ne[p[0]], ne[p[1]], ne[p[2]], ne[p[3]]);
                 b[i] = ggml_permute(ctx, b[i], p[0], p[1], p[2], p[3]);
+            } else if (src_overlap) {
+                b[i] = ggml_view_4d(ctx, a, ne[0], ne[1], ne[2], 2 * (ne[3] / 3), a->nb[1], a->nb[2], a->nb[3], (ne[3] / 3) * a->nb[3]);
             } else {
                 b[i] = ggml_new_tensor(ctx, type, 4, ne.data());
             }
@@ -3021,7 +3024,13 @@ struct test_bin_bcast : public test_case {
             ggml_set_param(b[0]);
         }
 
-        ggml_tensor * out = a;
+        ggml_tensor *out;
+
+        if (src_overlap) {
+            out = ggml_view_4d(ctx, a, ne[0], ne[1], ne[2], 2 * (ne[3] / 3), a->nb[1], a->nb[2], a->nb[3], 0);
+        } else {
+            out = a;
+        }
 
         for (int i = 0; i < nf; ++i) {
             out = op(ctx, out, b[i]);
@@ -7527,9 +7536,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
-    auto add_test_bin_bcast = [&](ggml_type type, std::array<int64_t, 4> ne, std::array<int, 4> nr, bool perm1 = false) {
+    auto add_test_bin_bcast = [&](ggml_type type, std::array<int64_t, 4> ne, std::array<int, 4> nr, bool perm1 = false, bool src_overlap = false) {
         for (auto op : {ggml_add, ggml_sub, ggml_mul, ggml_div}) {
-            test_cases.emplace_back(new test_bin_bcast(op, type, ne, nr, 1, perm1));
+            test_cases.emplace_back(new test_bin_bcast(op, type, ne, nr, 1, perm1, src_overlap));
         }
     };
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
@@ -7548,6 +7557,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             add_test_bin_bcast(type, {10, 5,   4,   3}, {1,  2, 2, 2}, perm1);
             add_test_bin_bcast(type, {10, 5,   4,   3}, {2,  2, 2, 2}, perm1);
         }
+
+        // src_overlap
+        add_test_bin_bcast(type, {10, 5, 4, 6}, {1, 1, 1, 1}, false, true);
+        add_test_bin_bcast(type, {10, 5, 4, 5}, {1, 1, 1, 1}, false, true);
+        add_test_bin_bcast(type, {1, 1, 120, 120}, {1, 1, 1, 1}, false, true);
+        add_test_bin_bcast(type, {1, 1, 4, 320}, {1, 1, 1, 1}, false, true);
 
         // test case for k_bin_bcast_unravel in CUDA backend
         add_test_bin_bcast(type, {1, 1, 65536, 1}, {256, 1, 1, 1});
