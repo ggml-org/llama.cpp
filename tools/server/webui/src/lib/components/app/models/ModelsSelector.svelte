@@ -377,11 +377,7 @@
 									aria-disabled="true"
 									disabled
 								>
-									<span
-										class="min-w-0 flex-1 truncate text-left sm:overflow-visible sm:text-clip sm:whitespace-nowrap"
-									>
-										{selectedOption?.name || currentModel}
-									</span>
+									<ModelId modelId={currentModel} class="flex-1" />
 
 									<span class="ml-2 text-xs whitespace-nowrap opacity-70">(not available)</span>
 								</button>

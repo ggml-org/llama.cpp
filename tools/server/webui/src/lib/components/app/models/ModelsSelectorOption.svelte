@@ -85,15 +85,34 @@
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<!-- svelte-ignore a11y_click_events_have_key_events -->
 		<div
-			class={cn('flex items-center justify-center w-4 pl-2', isFav ? 'flex' : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto')}
+			class="flex items-center justify-center w-4 pl-2 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto"
 			onclick={(e) => e.stopPropagation()}
 		>
-			<ActionIcon
-				icon={Heart}
-				tooltip={isFav ? 'Remove from favourites' : 'Add to favourites'}
-				class={cn('h-2 w-2', isFav ? 'fill-red-400 text-red-400 hover:fill-red-500 hover:text-red-500' : 'hover:fill-current hover:text-foreground')}
-				onclick={() => modelsStore.toggleFavourite(option.model)}
-			/>
+			{#if isFav}
+				<Tooltip.Root>
+					<Tooltip.Trigger>
+						<button
+							type="button"
+							class="fav-icon-btn inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-md p-0"
+							aria-label="Remove from favourites"
+							onclick={() => modelsStore.toggleFavourite(option.model)}
+						>
+							<HeartOff class="fav-icon h-4 w-4 hover:text-foreground" />
+						</button>
+					</Tooltip.Trigger>
+					<Tooltip.Content>
+						<p>Remove from favourites</p>
+					</Tooltip.Content>
+				</Tooltip.Root>
+			{:else}
+				<ActionIcon
+					iconSize="h-2.5 w-2.5"
+					icon={Heart}
+					tooltip="Add to favourites"
+					class="h-3 w-3 hover:text-foreground"
+					onclick={() => modelsStore.toggleFavourite(option.model)}
+				/>
+			{/if}
 		</div>
 		{#if isLoading}
 			<Tooltip.Root>
@@ -104,6 +123,22 @@
 					<p>Loading model...</p>
 				</Tooltip.Content>
 			</Tooltip.Root>
+		{:else if isFailed}
+			<div class="flex items-center justify-center w-4">
+				<CircleAlert class="h-3.5 w-3.5 text-red-500 group-hover:hidden" />
+
+				<!-- svelte-ignore a11y_no_static_element_interactions -->
+				<!-- svelte-ignore a11y_click_events_have_key_events -->
+				<div class="hidden group-hover:flex" onclick={(e) => e.stopPropagation()}>
+					<ActionIcon
+						iconSize="h-2.5 w-2.5"
+						icon={RotateCw}
+						tooltip="Retry loading model"
+						class="h-3 w-3 text-red-500 hover:text-foreground"
+						onclick={() => modelsStore.loadModel(option.model)}
+					/>
+				</div>
+			</div>
 		{:else if isLoaded}
 			<div class="flex items-center justify-center w-4">
 				<span class="h-2 w-2 rounded-full bg-green-500 group-hover:hidden"></span>
@@ -112,6 +147,7 @@
 				<!-- svelte-ignore a11y_click_events_have_key_events -->
 				<div class="hidden group-hover:flex" onclick={(e) => e.stopPropagation()}>
 					<ActionIcon
+						iconSize="h-2.5 w-2.5"
 						icon={PowerOff}
 						tooltip="Unload model"
 						class="text-red-500 hover:text-red-600 h-3 w-3"
@@ -127,6 +163,7 @@
 				<!-- svelte-ignore a11y_click_events_have_key_events -->
 				<div class="hidden group-hover:flex" onclick={(e) => e.stopPropagation()}>
 					<ActionIcon
+						iconSize="h-2.5 w-2.5"
 						icon={Power}
 						tooltip="Load model"
 						class="h-3 w-3"
