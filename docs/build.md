@@ -595,7 +595,7 @@ You can verify that KleidiAI is being used by running
 ```bash
 ./build/bin/llama-cli -m PATH_TO_MODEL -p "What is a car?"
 ```
-If KleidiAI is enabled, the ouput will contain a line similar to:
+If KleidiAI is enabled, the output will contain a line similar to:
 ```
 load_tensors: CPU_KLEIDIAI model buffer size =  3474.00 MiB
 ```
@@ -699,7 +699,7 @@ To read documentation for how to build on Android, [click here](./android.md)
 
 ## WebGPU [In Progress]
 
-The WebGPU backend relies on [Dawn](https://dawn.googlesource.com/dawn). Follow the instructions [here](https://dawn.googlesource.com/dawn/+/refs/heads/main/docs/quickstart-cmake.md) to install Dawn locally so that llama.cpp can find it using CMake. The currrent implementation is up-to-date with Dawn commit `bed1a61`.
+The WebGPU backend relies on [Dawn](https://dawn.googlesource.com/dawn). Follow the instructions [here](https://dawn.googlesource.com/dawn/+/refs/heads/main/docs/quickstart-cmake.md) to install Dawn locally so that llama.cpp can find it using CMake. The current implementation is up-to-date with Dawn commit `bed1a61`.
 
 In the llama.cpp directory, build with CMake:
 
