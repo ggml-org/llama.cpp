@@ -1,7 +1,5 @@
 #include "models.h"
 
-#define CHUNK_SIZE 64
-
 // utility to get one slice from the third dimension
 // input dim:  [x, y, c, b]
 // output dim: [x, y, 1, b]
@@ -57,7 +55,7 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
     g = ggml_permute(ctx0, g, 0, 2, 1, 3); // [g_0, n_tokens, H_v, n_seqs]
     b = ggml_permute(ctx0, b, 0, 2, 1, 3); // [  1, n_tokens, H_v, n_seqs]
 
-    const int CS = CHUNK_SIZE;
+    const int CS = kda ? 16 : 64; // chunk size
 
     const int pad = (CS - n_tokens % CS) % CS;
     const int n_chunks = (n_tokens + pad) / CS;
