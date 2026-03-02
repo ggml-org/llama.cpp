@@ -43,8 +43,6 @@
 #include <vector>
 #include <unordered_map>
 
-#include <nlohmann/json.hpp>
-
 #ifdef __EMSCRIPTEN__
 #   define N_THREADS 1
 #else
@@ -8967,46 +8965,62 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     return test_cases;
 }
 
-static std::vector<std::unique_ptr<test_case>> make_test_cases_from_json(const char * path) {
+static std::vector<std::unique_ptr<test_case>> make_test_cases_from_file(const char * path) {
     std::ifstream f(path);
 
     if (!f.is_open()) {
-        throw std::runtime_error("Unable to read JSON file");
+        throw std::runtime_error("Unable to read test file");
     }
-
-    nlohmann::json data = nlohmann::json::parse(f);
-
-    GGML_ASSERT(data.is_array());
 
     std::vector<std::unique_ptr<test_case>> test_cases;
 
-    for (const auto& input_case : data) {
-        const ggml_op op = input_case["op"];
-        const ggml_type type = input_case["type"];
-        auto ne_arr = input_case["ne"];
-        const std::array<int64_t, 4> ne = {ne_arr[0], ne_arr[1], ne_arr[2], ne_arr[3]};
+    std::string line;
 
-        auto op_arr = input_case["op_params"];
+    while (std::getline(f, line)) {
+        std::istringstream iss(line);
+
+        ggml_op op;
+        ggml_type type;
+        std::array<int64_t, 4> ne;
         std::array<int32_t, GGML_MAX_OP_PARAMS / sizeof(int32_t)> op_params = {};
-        for (size_t i = 0; i < op_arr.size() && i < op_params.size(); i++) {
-            op_params[i] = op_arr[i];
-        }
-
-        std::vector<input_tensor> sources;
-        for (const auto& src : input_case["sources"]) {
-            auto ne_arr = src["ne"];
-            const std::array<int64_t, 4> src_ne = {ne_arr[0], ne_arr[1], ne_arr[2], ne_arr[3]};
-            std::array<size_t, 4> src_nb = {};
-            if (src.contains("nb")) {
-                auto nb_arr = src["nb"];
-                src_nb = {nb_arr[0], nb_arr[1], nb_arr[2], nb_arr[3]};
-            }
-            sources.push_back({(ggml_type)src["type"], src_ne, src_nb});
-        }
-
         std::string name;
-        if (input_case.contains("name")) {
-            name = input_case["name"];
+        uint64_t tmp;
+
+        iss >> tmp;
+        op = (ggml_op)tmp;
+        iss >> tmp;
+        type = (ggml_type)tmp;
+
+        for (size_t i = 0; i < 4; i++) {
+            iss >> ne[i];
+        }
+
+        iss >> tmp;
+        for (size_t i = 0; i < tmp && i < op_params.size(); i++) {
+            iss >> op_params[i];
+        }
+
+        iss >> tmp;
+
+        size_t num_src = std::min((uint64_t)GGML_MAX_SRC, tmp);
+        std::vector<input_tensor> sources(num_src);
+        for (size_t i = 0; i < num_src; i++) {
+            input_tensor& src = sources[i];
+            iss >> tmp;
+            src.type = (ggml_type)tmp;
+
+            for (size_t i = 0; i < 4; i++) {
+                iss >> src.ne[i];
+            }
+            for (size_t i = 0; i < 4; i++) {
+                iss >> src.nb[i];
+            }
+        }
+
+        iss >> name;
+
+        if (name.length() == 1 && name[0] == '-') {
+            name = "";
         }
 
         test_cases.emplace_back(new test_generic_op(op, type, ne, op_params, sources, std::move(name)));
@@ -9016,7 +9030,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_from_json(const c
 }
 
 static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op_names_filter, const char * params_filter,
-                         printer * output_printer, const char * test_json_path) {
+                         printer * output_printer, const char * test_file_path) {
     auto filter_test_cases = [](std::vector<std::unique_ptr<test_case>> & test_cases, const char * params_filter) {
         if (params_filter == nullptr) {
             return;
@@ -9036,7 +9050,7 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
 
     std::vector<std::unique_ptr<test_case>> test_cases;
 
-    if (test_json_path == nullptr) {
+    if (test_file_path == nullptr) {
         switch (mode) {
         case MODE_TEST:
         case MODE_GRAD:
@@ -9048,7 +9062,7 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
             break;
         }
     } else {
-        test_cases = make_test_cases_from_json(test_json_path);
+        test_cases = make_test_cases_from_file(test_file_path);
     }
 
     filter_test_cases(test_cases, params_filter);
@@ -9231,7 +9245,7 @@ static void show_test_coverage() {
 
 static void usage(char ** argv) {
     printf("Usage: %s [mode] [-o <op,..>] [-b <backend>] [-p <params regex>] [--output <console|sql|csv>] [--list-ops]", argv[0]);
-    printf(" [--show-coverage] [--test-json <path>]\n");
+    printf(" [--show-coverage] [--test-file <path>]\n");
     printf("    valid modes:\n");
     printf("      - test (default, compare with CPU backend for correctness)\n");
     printf("      - grad (compare gradients from backpropagation with method of finite differences)\n");
@@ -9242,7 +9256,7 @@ static void usage(char ** argv) {
     printf("    --output specifies output format (default: console, options: console, sql, csv)\n");
     printf("    --list-ops lists all available GGML operations\n");
     printf("    --show-coverage shows test coverage\n");
-    printf("    --test-json reads test operators from a json\n");
+    printf("    --test-file reads test operators from a test file generated by llama-export-graph-ops\n");
 }
 
 int main(int argc, char ** argv) {
@@ -9251,7 +9265,7 @@ int main(int argc, char ** argv) {
     const char * op_names_filter = nullptr;
     const char * backend_filter = nullptr;
     const char * params_filter = nullptr;
-    const char * test_json_path = nullptr;
+    const char * test_file_path = nullptr;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "test") == 0) {
@@ -9299,9 +9313,9 @@ int main(int argc, char ** argv) {
         } else if (strcmp(argv[i], "--show-coverage") == 0) {
             show_test_coverage();
             return 0;
-        } else if (strcmp(argv[i], "--test-json") == 0) {
+        } else if (strcmp(argv[i], "--test-file") == 0) {
             if (i + 1 < argc) {
-                test_json_path = argv[++i];
+                test_file_path = argv[++i];
             } else {
                 usage(argv);
                 return 1;
@@ -9358,7 +9372,7 @@ int main(int argc, char ** argv) {
                                                              false, "", ggml_backend_dev_description(dev),
                                                              total / 1024 / 1024, free / 1024 / 1024, true));
 
-        bool ok = test_backend(backend, mode, op_names_filter, params_filter, output_printer.get(), test_json_path);
+        bool ok = test_backend(backend, mode, op_names_filter, params_filter, output_printer.get(), test_file_path);
 
         if (ok) {
             n_ok++;
