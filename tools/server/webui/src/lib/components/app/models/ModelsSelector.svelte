@@ -10,10 +10,9 @@
 		modelsLoading,
 		modelsUpdating,
 		selectedModelId,
-		routerModels,
 		singleModelName
 	} from '$lib/stores/models.svelte';
-	import { KeyboardKey, ServerModelStatus } from '$lib/enums';
+	import { KeyboardKey } from '$lib/enums';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import {
 		DialogModelInformation,
@@ -53,14 +52,6 @@
 	let activeId = $derived(selectedModelId());
 	let isRouter = $derived(isRouterMode());
 	let serverModel = $derived(singleModelName());
-
-	// Reactive router models state - needed for proper reactivity of status checks
-	let currentRouterModels = $derived(routerModels());
-
-	function getModelStatus(modelId: string): ServerModelStatus | null {
-		const model = currentRouterModels.find((m) => m.id === modelId);
-		return (model?.status?.value as ServerModelStatus) ?? null;
-	}
 
 	let isHighlightedCurrentModelActive = $derived.by(() => {
 		if (!isRouter || !currentModel) return false;
@@ -236,7 +227,7 @@
 			});
 		}
 
-		if (!onModelChange && isRouter && getModelStatus(option.model) !== ServerModelStatus.LOADED) {
+		if (!onModelChange && isRouter && !modelsStore.isModelLoaded(option.model)) {
 			isLoadingModel = true;
 			modelsStore
 				.loadModel(option.model)
@@ -399,21 +390,18 @@
 								<p class="px-4 py-3 text-sm text-muted-foreground">No models found.</p>
 							{/if}
 						{#each groupedFilteredOptions as group (group.isFavouritesGroup ? '__favourites__' : group.orgName)}
-						{#if !group.isFavouritesGroup && group.orgName}
+						{#if group.isFavouritesGroup}
+							<p class="px-2 mt-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none">Favourites</p>
+						{:else if group.orgName}
 							<p class="px-2 mt-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none">{group.orgName}</p>
 						{/if}
 							{#each group.items as { option, flatIndex } (group.isFavouritesGroup ? `fav-${option.id}` : option.id)}
-								{@const status = getModelStatus(option.model)}
-								{@const isLoaded = status === ServerModelStatus.LOADED}
-								{@const isLoading = status === ServerModelStatus.LOADING}
 								{@const isSelected = currentModel === option.model || activeId === option.id}
 								{@const isHighlighted = flatIndex === highlightedIndex}
 								{@const isFav = modelsStore.favouriteModelIds.has(option.model)}
 
 								<ModelsSelectorOption
 									{option}
-									{isLoaded}
-									{isLoading}
 									{isSelected}
 									{isHighlighted}
 									{isFav}

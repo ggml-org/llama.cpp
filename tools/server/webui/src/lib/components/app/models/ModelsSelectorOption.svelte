@@ -1,16 +1,15 @@
 <script lang="ts">
-	import { Heart, Loader2, Power, PowerOff } from '@lucide/svelte';
+	import { CircleAlert, Heart, HeartOff, Loader2, Power, PowerOff, RotateCw } from '@lucide/svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { cn } from '$lib/components/ui/utils';
 	import { Badge } from '$lib/components/ui/badge';
 	import { ActionIcon, ModelId } from '$lib/components/app';
 	import type { ModelOption } from '$lib/types/models';
-	import { modelsStore } from '$lib/stores/models.svelte';
+	import { ServerModelStatus } from '$lib/enums';
+	import { modelsStore, routerModels } from '$lib/stores/models.svelte';
 
 	interface Props {
 		option: ModelOption;
-		isLoaded: boolean;
-		isLoading: boolean;
 		isSelected: boolean;
 		isHighlighted: boolean;
 		isFav: boolean;
@@ -23,8 +22,6 @@
 
 	let {
 		option,
-		isLoaded,
-		isLoading,
 		isSelected,
 		isHighlighted,
 		isFav,
@@ -33,6 +30,17 @@
 		onMouseEnter,
 		onKeyDown
 	}: Props = $props();
+
+	// Read status reactively from the store so it updates in real-time
+	let currentRouterModels = $derived(routerModels());
+	let serverStatus = $derived.by(() => {
+		const model = currentRouterModels.find((m) => m.id === option.model);
+		return (model?.status?.value as ServerModelStatus) ?? null;
+	});
+	let isOperationInProgress = $derived(modelsStore.isModelOperationInProgress(option.model));
+	let isFailed = $derived(serverStatus === ServerModelStatus.FAILED);
+	let isLoaded = $derived(serverStatus === ServerModelStatus.LOADED && !isOperationInProgress);
+	let isLoading = $derived(serverStatus === ServerModelStatus.LOADING || isOperationInProgress);
 </script>
 
 <div
