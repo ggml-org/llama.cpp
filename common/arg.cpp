@@ -291,13 +291,14 @@ static bool common_params_handle_remote_preset(common_params & params, llama_exa
     }
 
     const bool offline = params.offline;
+    const bool cache_only = params.cache_only;
     std::string model_endpoint = get_model_endpoint();
     auto preset_url = model_endpoint + hf_repo + "/resolve/main/preset.ini";
 
     // prepare local path for caching
     auto preset_fname = clean_file_name(hf_repo + "_preset.ini");
     auto preset_path = fs_get_cache_file(preset_fname);
-    const int status = common_download_file_single(preset_url, preset_path, params.hf_token, offline);
+    const int status = common_download_file_single(preset_url, preset_path, params.hf_token, offline, cache_only);
     const bool has_preset = status >= 200 && status < 400;
 
     // remote preset is optional, so we don't error out if not found
@@ -378,7 +379,7 @@ static handle_model_result common_params_handle_model(
 
     // then, download it if needed
     if (!model.url.empty()) {
-        bool ok = common_download_model(model, bearer_token, offline);
+        bool ok = common_download_model(model, bearer_token, offline, cache_only);
         if (!ok) {
             LOG_ERR("error: failed to download model from %s\n", model.url.c_str());
             exit(1);
@@ -3198,6 +3199,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.offline = true;
         }
     ).set_env("LLAMA_OFFLINE"));
+    add_opt(common_arg(
+        {"--cache-only"},
+        "Cache-only mode: download models if not cached, but never re-download or update cached models",
+        [](common_params & params) {
+            params.cache_only = true;
+        }
+    ).set_env("LLAMA_CACHE_ONLY"));
     add_opt(common_arg(
         {"-lv", "--verbosity", "--log-verbosity"}, "N",
         string_format("Set the verbosity threshold. Messages with a higher verbosity will be ignored. Values:\n"
