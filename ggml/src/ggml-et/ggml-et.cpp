@@ -272,15 +272,14 @@ static enum ggml_status ggml_backend_et_buffer_init_tensor(ggml_backend_buffer_t
 }
 
 static void ggml_backend_et_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
-    ggml_backend_et_buffer_context * ctx = (ggml_backend_et_buffer_context *)buffer->context;
-
     std::shared_ptr<rt::IRuntime> runtime = ggml_et_runtime();
     if (!runtime) {
         return;
     }
 
     // Create short-lived stream for this transfer
-    rt::StreamId stream = runtime->createStream(ctx->rtid);
+    ggml_backend_et_device_context * dev_ctx = (ggml_backend_et_device_context *)buffer->buft->device->context;
+    rt::StreamId stream = dev_ctx->default_stream;
 
     std::byte * dst_ptr = static_cast<std::byte*>(tensor->data) + offset;
     const std::byte * src_ptr = static_cast<const std::byte*>(data);
@@ -291,14 +290,13 @@ static void ggml_backend_et_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml
 }
 
 static void ggml_backend_et_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
-    ggml_backend_et_buffer_context * ctx = (ggml_backend_et_buffer_context *)buffer->context;
-
     std::shared_ptr<rt::IRuntime> runtime = ggml_et_runtime();
     if (!runtime) {
         return;
     }
 
-    rt::StreamId stream = runtime->createStream(ctx->rtid);
+    ggml_backend_et_device_context * dev_ctx = (ggml_backend_et_device_context *)buffer->buft->device->context;
+    rt::StreamId stream = dev_ctx->default_stream;
 
     const std::byte * src_ptr = static_cast<const std::byte*>(tensor->data) + offset;
     std::byte * dst_ptr = static_cast<std::byte*>(data);
@@ -439,19 +437,33 @@ static ggml_backend_buffer_type_t ggml_backend_et_get_default_buffer_type(ggml_b
 }
 
 static void ggml_backend_et_set_tensor_async(ggml_backend_t backend, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
-    GGML_UNUSED(backend);
-    GGML_UNUSED(tensor);
-    GGML_UNUSED(data);
-    GGML_UNUSED(offset);
-    GGML_UNUSED(size);
+    std::shared_ptr<rt::IRuntime> runtime = ggml_et_runtime();
+    if (!runtime) {
+        return;
+    }
+
+    ggml_backend_et_device_context * dev_ctx = (ggml_backend_et_device_context *)backend->device->context;
+    rt::StreamId stream = dev_ctx->default_stream;
+
+    std::byte * dst_ptr = static_cast<std::byte*>(tensor->data) + offset;
+    const std::byte * src_ptr = static_cast<const std::byte*>(data);
+
+    runtime->memcpyHostToDevice(stream, src_ptr, dst_ptr, size, true /*barrier*/);
 }
 
 static void ggml_backend_et_get_tensor_async(ggml_backend_t backend, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
-    GGML_UNUSED(backend);
-    GGML_UNUSED(tensor);
-    GGML_UNUSED(data);
-    GGML_UNUSED(offset);
-    GGML_UNUSED(size);
+    std::shared_ptr<rt::IRuntime> runtime = ggml_et_runtime();
+    if (!runtime) {
+        return;
+    }
+
+    ggml_backend_et_device_context * dev_ctx = (ggml_backend_et_device_context *)backend->device->context;
+    rt::StreamId stream = dev_ctx->default_stream;
+
+    const std::byte * src_ptr = static_cast<const std::byte*>(tensor->data) + offset;
+    std::byte * dst_ptr = static_cast<std::byte*>(data);
+
+    runtime->memcpyDeviceToHost(stream, src_ptr, dst_ptr, size, true /*barrier*/);
 }
 
 static bool ggml_backend_et_cpy_tensor_async(ggml_backend_t backend_src, ggml_backend_t backend_dst, const ggml_tensor * src, ggml_tensor * dst) {
@@ -460,6 +472,29 @@ static bool ggml_backend_et_cpy_tensor_async(ggml_backend_t backend_src, ggml_ba
     GGML_UNUSED(src);
     GGML_UNUSED(dst);
     return false;
+}
+
+static void ggml_backend_et_synchronize(ggml_backend_t backend) {
+    std::shared_ptr<rt::IRuntime> runtime = ggml_et_runtime();
+    if (!runtime) {
+        return;
+    }
+
+    ggml_backend_et_device_context * dev_ctx = (ggml_backend_et_device_context *)backend->device->context;
+    runtime->waitForStream(dev_ctx->default_stream);
+
+    // Current code works but errors for some reason we fail to detect.
+    // FIXME: Track down the error
+#if 0
+    auto errors = runtime->retrieveStreamErrors(dev_ctx->default_stream);
+    if(errors.empty()) {
+        return;
+    }
+    for(const auto& err : errors) {
+        GGML_LOG_ERROR("ET: stream error detected at synchronization point. Code: %d\n", (int)err.errorCode_);
+    }
+    abort();
+#endif
 }
 
 static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
@@ -792,10 +827,10 @@ static bool ggml_backend_et_device_offload_op(ggml_backend_dev_t dev, const ggml
 static const struct ggml_backend_i ggml_backend_et_i = {
     /* .get_name                = */ ggml_backend_et_get_name,
     /* .free                    = */ ggml_backend_et_free,
-    /* .set_tensor_async        = */ NULL, // ggml checks for presence of these
-    /* .get_tensor_async        = */ NULL,
+    /* .set_tensor_async        = */ ggml_backend_et_set_tensor_async,
+    /* .get_tensor_async        = */ ggml_backend_et_get_tensor_async,
     /* .cpy_tensor_async        = */ NULL,
-    /* .synchronize             = */ NULL,
+    /* .synchronize             = */ ggml_backend_et_synchronize,
     /* .graph_plan_create       = */ NULL,
     /* .graph_plan_free         = */ NULL,
     /* .graph_plan_update       = */ NULL,
@@ -837,7 +872,7 @@ static void ggml_backend_et_device_get_props(ggml_backend_dev_t dev, struct ggml
     ggml_backend_et_device_get_memory(dev, &props->memory_free, &props->memory_total);
     props->device_id   = NULL;  // No PCI device ID available
     props->caps = {
-        /* .async                 = */ false,
+        /* .async                 = */ true,
         /* .host_buffer           = */ false,
         /* .buffer_from_host_ptr  = */ false,
         /* .events                = */ false,
