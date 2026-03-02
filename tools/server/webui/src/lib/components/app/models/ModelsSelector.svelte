@@ -64,19 +64,14 @@
 		return (model?.status?.value as ServerModelStatus) ?? null;
 	}
 
-	let isHighlightedCurrentModelActive = $derived(
-		!isRouter || !currentModel
-			? false
-			: (() => {
-					const currentOption = options.find((option) => option.model === currentModel);
+	let isHighlightedCurrentModelActive = $derived.by(() => {
+		if (!isRouter || !currentModel) return false;
+		const currentOption = options.find((option) => option.model === currentModel);
+		return currentOption ? currentOption.id === activeId : false;
+	});
 
-					return currentOption ? currentOption.id === activeId : false;
-				})()
-	);
-
-	let isCurrentModelInCache = $derived(() => {
+	let isCurrentModelInCache = $derived.by(() => {
 		if (!isRouter || !currentModel) return true;
-
 		return options.some((option) => option.model === currentModel);
 	});
 
