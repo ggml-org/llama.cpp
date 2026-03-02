@@ -933,8 +933,20 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & 
 
             if (ubatch.is_pos_2d()) {
                 llama_kv_cell_ext ext {
-                    /*.x =*/ ubatch.pos[i + ubatch.n_tokens*2],
-                    /*.y =*/ ubatch.pos[i + ubatch.n_tokens],
+                    /*.x  =*/ ubatch.pos[i + ubatch.n_tokens*2],
+                    /*.y  =*/ ubatch.pos[i + ubatch.n_tokens],
+                    /*.id =*/ 0, // unused
+                };
+                cells.ext_set(idx, ext);
+            }
+
+            if (ubatch.token) {
+                // save token id for ngram embeddings
+                GGML_ASSERT(!ubatch.embd);
+                llama_kv_cell_ext ext {
+                    /*.x  =*/ 0, // unused
+                    /*.y  =*/ 0, // unused
+                    /*.id =*/ ubatch.token[i],
                 };
                 cells.ext_set(idx, ext);
             }
@@ -1505,6 +1517,40 @@ void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch 
             }
         }
     }
+}
+
+std::vector<llama_token> llama_kv_cache::get_last_n_tokens(size_t n, llama_pos pos, llama_seq_id seq_id) const {
+    std::vector<llama_token> result;
+    result.resize(n, 0);
+
+    for (uint32_t s = 0; s < n_stream; ++s) {
+        const auto & cell = v_cells[s];
+
+        // TODO: linear scan is inefficient, optimize this later
+        for (uint32_t i = 0; i < cell.size(); ++i) {
+            if (!cell.seq_has(i, seq_id)) {
+                continue;
+            }
+
+            const llama_pos p = cell.pos_get(i);
+            const llama_token tok = cell.ext_get(i).id;
+
+            // check distance: (pos - n) <= p < pos
+            if (pos - (llama_pos) n <= p && p < pos) {
+                // make sure last token goes last
+                size_t insert_pos = n - (size_t)(pos - p);
+                // this assert should mathematically hold, but added for clarity
+                GGML_ASSERT(insert_pos < n);
+                result[insert_pos] = tok;
+            }
+        }
+
+        if (result.size() >= n) {
+            break;
+        }
+    }
+
+    return result;
 }
 
 size_t llama_kv_cache::total_size() const {
@@ -2268,4 +2314,8 @@ void llama_kv_cache_context::set_input_kq_mask(ggml_tensor * dst, const llama_ub
 
 void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const {
     kv->set_input_pos_bucket(dst, ubatch);
+}
+
+std::vector<llama_token> llama_kv_cache_context::get_last_n_tokens(size_t n, llama_pos pos, llama_seq_id seq_id) const {
+    return kv->get_last_n_tokens(n, pos, seq_id);
 }

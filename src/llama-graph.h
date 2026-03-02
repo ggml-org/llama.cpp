@@ -119,6 +119,21 @@ public:
     const int64_t n_embd = 0;
 };
 
+class llm_graph_input_ngram_ids : public llm_graph_input_i {
+public:
+    llm_graph_input_ngram_ids(uint32_t ngram_n, uint32_t ngram_k, const llama_kv_cache_context * mctx)
+        : ngram_n(ngram_n), ngram_k(ngram_k), mctx(mctx) {}
+    virtual ~llm_graph_input_ngram_ids() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    ggml_tensor * pos_ngram = nullptr; // I32 [n_batch, ngram_k]
+    
+    uint32_t ngram_n = 0;
+    uint32_t ngram_k = 0;
+    const llama_kv_cache_context * mctx;
+};
+
 class llm_graph_input_pos : public llm_graph_input_i {
 public:
     llm_graph_input_pos(uint32_t n_pos_per_embd) : n_pos_per_embd(n_pos_per_embd) {}
@@ -847,6 +862,7 @@ struct llm_graph_context {
     ggml_tensor * build_inp_embd(ggml_tensor * tok_embd) const;
     ggml_tensor * build_inp_pos() const;
     ggml_tensor * build_inp_attn_scale() const;
+    ggml_tensor * build_inp_ngram_ids() const;
     ggml_tensor * build_inp_out_ids() const;
     ggml_tensor * build_inp_mean() const;
     ggml_tensor * build_inp_cls() const;
