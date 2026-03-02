@@ -210,7 +210,7 @@ docker run --name llamacpp --device /dev/davinci0  --device /dev/davinci_manager
     # and install driver.
     sudo sh Ascend-hdk-910b-npu-firmware_x.x.x.x.X.run --full
     ```
-    If the following messaage appears, firmware is installed successfully.
+    If the following message appears, firmware is installed successfully.
     ```sh
     Firmware package installed successfully!
     ```
