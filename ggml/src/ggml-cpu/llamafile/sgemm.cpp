@@ -591,10 +591,7 @@ class tinyBLAS {
             ggml_threadpool_chunk_set(params->threadpool, params->nth);
         }
 
-        ggml_barrier(params->threadpool);
-
-        int64_t job = params->ith;
-        while (job < nb_job) {
+        for (int64_t job = params->ith; job < nb_job; job += params->nth) {
             const int64_t ii = (job % ytiles) * RM * BM;
             const int64_t jb =  job / ytiles;
             const int64_t jr0 = BLOC_POS(jb  , jj_BN, SIZE_BN);
@@ -617,7 +614,6 @@ class tinyBLAS {
                 GGML_ASSERT(jj == jj2);
             }
 
-            job = ggml_threadpool_chunk_add(params->threadpool, 1);
         }
 
         ggml_barrier(params->threadpool);
