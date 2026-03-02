@@ -128,82 +128,43 @@ static void transfer_activation_chunk_fp32_to_fp16(__fp16 *restrict vtcm_dst, co
   }
 }
 
-typedef struct {
-  int                    n_tasks;
-  int                    n_tot_chunks;
-  int                    n_chunks_per_task;
-  int           k;
-  __fp16       *dst;
-  const __fp16 *src;
-} permuted_weight_transfer_fp16_task_state_t;
-
-static void transfer_permuted_weight_fp16_task(__fp16 *restrict vtcm_dst, const __fp16 *restrict src, int k,
-                                               int n_col_tiles) {
-  // transfer logical K*(32*n_col_tiles) weight block, direct copy, no extra computation
-  size_t size   = k * n_col_tiles * HMX_FP16_TILE_N_COLS * sizeof(__fp16);
-  int    n_vecs = size / HMX_VLEN;
-
-  const size_t PREFETCH_SIZE   = 4096;
-  const int    PREFETCH_N_VECS = PREFETCH_SIZE / HMX_VLEN;
-
-  const HVX_Vector *pv_in  = (const HVX_Vector *) src;
-  HVX_Vector       *pv_out = (HVX_Vector *) vtcm_dst;
-
-  for (int i = 0; i < n_vecs; ++i) {
-    if (i % PREFETCH_N_VECS == 0) {
-      int prefetch_idx = i + PREFETCH_N_VECS;
-      if (prefetch_idx < n_vecs) {
-        size_t prefetch_n_vecs = hmx_smin(n_vecs - prefetch_idx, PREFETCH_N_VECS);
-        hmx_l2fetch(pv_in + PREFETCH_N_VECS, HMX_VLEN, HMX_VLEN, prefetch_n_vecs, 0);
-      }
-    }
-
-    *pv_out++ = *pv_in++;
-  }
-}
-
-static void transfer_permuted_weight_fp16_worker_loop(unsigned int n, unsigned int i, void *data) {
-  permuted_weight_transfer_fp16_task_state_t *state = (permuted_weight_transfer_fp16_task_state_t *) data;
-
-  int k = state->k;
-
-  for (unsigned int task_id = i; task_id < (unsigned int)state->n_tasks; task_id += n) {
-    int    chunk_idx  = task_id * state->n_chunks_per_task;
-    size_t chunk_size = hmx_smin(state->n_tot_chunks - chunk_idx, state->n_chunks_per_task);
-
-    int           c        = chunk_idx * HMX_FP16_TILE_N_COLS;
-    __fp16       *vtcm_dst = state->dst + c * k;
-    const __fp16 *src      = state->src + c * k;
-    transfer_permuted_weight_fp16_task(vtcm_dst, src, k, chunk_size);
-  }
-}
-
-static void transfer_permuted_weight_chunk_fp16(struct htp_context *ctx, __fp16 *vtcm_dst, const __fp16 *src, int n_cols, int k) {
-  // NOTE(hzx): weight matrix is already transposed. n_cols actually turns into n_rows
+// Scatter row-major FP16 weight (already in VTCM scratch) directly into transposed [K][N] tiles.
+// vtcm_src: [n_cols][k] row-major fp16 in VTCM scratch buffer
+// vtcm_dst: [n_col_tiles][n_k_tiles][HMX_FP16_TILE_N_ELMS] tile-major interleaved fp16
+static void interleave_fp16_weight_chunk_to_tiles(__fp16 *restrict vtcm_dst,
+                                                   const __fp16 *restrict vtcm_src,
+                                                   int n_cols, int k) {
   assert(n_cols % HMX_FP16_TILE_N_COLS == 0);
+  assert(k % HMX_FP16_TILE_N_COLS == 0);
 
-  const bool use_dma = true;
+  const int n_k_tiles = k / HMX_FP16_TILE_N_COLS;
+  const HVX_Vector v_scat_base = hmx_vmem(weight_transpose_scatter_offsets);
+  const HVX_Vector v_scat_step = Q6_V_vsplat_R(4);
+  const HVX_VectorPred q_mask64 = Q6_Q_vsetq_R(64);
 
-  if (use_dma) {
-    size_t size = n_cols * k * sizeof(__fp16);
+  for (int r = 0; r < n_cols; r += 2) {
+    int ct = r / HMX_FP16_TILE_N_ROWS;       // N-dimension tile index
+    int local_r = r % HMX_FP16_TILE_N_ROWS;  // intra-tile row index
+    const bool next_row_valid = (r + 1) < n_cols;
 
-    hmx_dma_load_sync(ctx->dma[0], vtcm_dst, src, size);
+    // Offset vectors for N-columns local_r and local_r+1, reused across K-tiles.
+    HVX_Vector v_off0 = Q6_Vw_vadd_VwVw(v_scat_base, Q6_V_vsplat_R(local_r * 4));
+    HVX_Vector v_off1 = Q6_Vw_vadd_VwVw(v_off0, v_scat_step);
 
-    return;
+    for (int c = 0; c < k; c += HMX_FP16_TILE_N_COLS) {
+      int kt       = c / HMX_FP16_TILE_N_COLS;
+      int tile_idx = ct * n_k_tiles + kt;
+      __fp16 *tile_base = vtcm_dst + tile_idx * HMX_FP16_TILE_N_ELMS;
+
+      HVX_Vector v0 = hmx_vmemu(vtcm_src + r * k + c);
+      HVX_Vector v1 = next_row_valid
+          ? hmx_vmemu(vtcm_src + (r + 1) * k + c)
+          : Q6_V_vzero();
+
+      Q6_vscatter_QRMVwV(q_mask64, (size_t)tile_base, HMX_FP16_TILE_SIZE - 1, v_off0, v0);
+      Q6_vscatter_QRMVwV(q_mask64, (size_t)tile_base, HMX_FP16_TILE_SIZE - 1, v_off1, v1);
+    }
   }
-
-  size_t n_tot_chunks      = n_cols / HMX_FP16_TILE_N_COLS;
-  size_t n_chunks_per_task = hmx_ceil_div(n_tot_chunks, ctx->n_threads);
-
-  permuted_weight_transfer_fp16_task_state_t state;
-  state.n_tasks           = (n_tot_chunks + n_chunks_per_task - 1) / n_chunks_per_task;
-  state.n_tot_chunks      = n_tot_chunks;
-  state.n_chunks_per_task = n_chunks_per_task;
-  state.k   = k;
-  state.dst = vtcm_dst;
-  state.src = src;
-
-  worker_pool_run_func(ctx->worker_pool, transfer_permuted_weight_fp16_worker_loop, &state, ctx->n_threads);
 }
 
 // --- x4x2 format dequantizers ---
@@ -215,14 +176,19 @@ static inline HVX_Vector dequantize_x4x2_q4_0_group_hvx(
     const uint8_t *packed_32, bool upper_nibbles,
     const __fp16 *scale, const HVX_Vector vlut_cvt) {
   HVX_Vector vq = hmx_vmemu(packed_32);
+  const HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
   HVX_Vector v_scales = Q6_Vh_vsplat_R(hmx_fp16_to_bits((__fp16 *)scale));
+  // q4x4x2 stores two int4 values per byte. Keep only the selected nibble.
   HVX_Vector v_quants = upper_nibbles ? Q6_Vub_vlsr_VubR(vq, 4) : vq;
-  HVX_VectorPair vp = Q6_Wh_vlut16_VbVhR_nomatch(v_quants, vlut_cvt, 0);
-  // vlut16 set 0 uses even-halfword LUT entries (h[0],h[2],...,h[30]).
-  // Output for input bytes 0..31 goes to vp.lo.h[0..31] — already contiguous.
-  // No vshuff needed; the previous interleave with vp.hi was polluting odd
-  // halfword positions with lookups from unrelated bytes 64..95.
-  HVX_Vector v_hf = Q6_V_lo_W(vp);
+  v_quants = Q6_V_vand_VV(v_quants, mask_h4);
+  // Use standard vlut16 (not _nomatch) to avoid stale-register NaN.
+  // _nomatch retains the previous destination-register value for colliding
+  // indices, but the C intrinsic doesn't model the implicit read so the
+  // compiler may allocate a register containing garbage/NaN.
+  HVX_VectorPair vp = Q6_Wh_vlut16_VbVhR(v_quants, vlut_cvt, 0);
+  // vlut16 produces interleaved output: even-indexed byte results in lo,
+  // odd-indexed in hi.  Deinterleave with vshuff to restore linear order.
+  HVX_Vector v_hf = Q6_V_lo_W(Q6_W_vshuff_VVR(Q6_V_hi_W(vp), Q6_V_lo_W(vp), -2));
   return Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_hf, v_scales));
 }
 
@@ -253,6 +219,13 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(
   const HVX_Vector vlut_cvt = (weight_type == HMX_TYPE_IQ4_NL)
       ? hmx_vmem(iq4_nl_to_fp16_lut) : hmx_vmem(q4_0_to_fp16_lut);
 
+  // vscatter setup: write dequantized K-values directly to transposed [K][N] tile positions.
+  // Each int32 element holds a K-row-pair (2 adjacent fp16 values).  word[i] at offset i*128
+  // maps to K-rows 2i and 2i+1.  Column offset (n*4) added per row.
+  const HVX_Vector v_scat_base = hmx_vmem(weight_transpose_scatter_offsets);
+  const HVX_Vector v_scat_step = Q6_V_vsplat_R(4);  // 4 bytes = 1 column step
+  const HVX_VectorPred q_mask64 = Q6_Q_vsetq_R(64);  // first 16 words (64 bytes)
+
   for (int t = start_tile; t < end_tile; ++t) {
     int ct = t / n_k_tiles;  // column tile index
     int kt = t % n_k_tiles;  // K tile index
@@ -266,6 +239,7 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(
       int byte_off  = blk_idx * (HMX_QK_Q4x4x2 / 2) + (upper ? (sub_blk - 4) : sub_blk) * 32;
       int scale_off = qrow_size + blk_idx * HMX_X4X2_DBLK_SIZE + sub_blk * (int)sizeof(__fp16);
 
+      HVX_Vector v_off = v_scat_base;  // reset to column 0
       for (int r = 0; r < HMX_FP16_TILE_N_ROWS; r += 2) {
         int row0 = ct * HMX_FP16_TILE_N_COLS + r;
         int row1 = row0 + 1;
@@ -289,6 +263,8 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(
       int byte_off  = blk_idx * HMX_QK_Q8x4x2 + sub_blk * 32;
       int scale_off = qrow_size + blk_idx * HMX_X4X2_DBLK_SIZE + sub_blk * (int)sizeof(__fp16);
 
+      __fp16 *tile_base = vtcm_dst + t * HMX_FP16_TILE_N_ELMS;
+      HVX_Vector v_off = v_scat_base;  // reset to column 0
       for (int r = 0; r < HMX_FP16_TILE_N_ROWS; r += 2) {
         int row0 = ct * HMX_FP16_TILE_N_COLS + r;
         int row1 = row0 + 1;
@@ -303,9 +279,22 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(
                 (const int8_t *)(r1 + byte_off), (const __fp16 *)(r1 + scale_off))
             : Q6_V_vzero();
 
-        *pv_out++ = Q6_V_lo_W(Q6_W_vshuff_VVR(v1, v0, -2));
+        Q6_vscatter_QRMVwV(q_mask64, (size_t)tile_base, HMX_FP16_TILE_SIZE - 1, v_off, v0);
+        v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);
+        Q6_vscatter_QRMVwV(q_mask64, (size_t)tile_base, HMX_FP16_TILE_SIZE - 1, v_off, v1);
+        v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);
       }
+      // Drain scatter buffer after each tile (same reason as Q4_0 path above)
+      (void) *(volatile HVX_Vector *)(tile_base);
     }
+  }
+
+  // Drain HVX scatter write buffer: a vmem load on the same HW thread retires
+  // all pending scatter entries to VTCM.  Without this, the main thread's HMX
+  // reads may see stale data because atomic_fetch_sub (release) only orders
+  // regular stores, not the HVX scatter buffer.
+  if (start_tile < end_tile) {
+    (void) *(volatile HVX_Vector *)(vtcm_dst + (end_tile - 1) * HMX_FP16_TILE_N_ELMS);
   }
 }
 
@@ -438,12 +427,15 @@ int hmx_mat_mul_permuted_w16a32(struct htp_context *ctx, float *restrict dst, co
   const size_t weight_area_size     = WEIGHT_AREA_SIZE;
   const size_t activation_area_size = ACTIVATION_AREA_SIZE;
   const size_t output_area_size     = OUTPUT_AREA_SIZE;
+  const size_t scratch_area_size    = SCRATCH_AREA_SIZE;
 
-  // VTCM layout: weight | activation | output | scales
+  // VTCM layout: weight | activation | output | scratch0 | scratch1 | scales
   uint8_t *vtcm_ptr        = (uint8_t *) ctx->vtcm_base;
   __fp16  *vtcm_weight     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, weight_area_size);
   __fp16  *vtcm_activation = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, activation_area_size);
   __fp16  *vtcm_output     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, output_area_size);
+  void    *vtcm_scratch0   = vtcm_seq_alloc(&vtcm_ptr, scratch_area_size);
+  void    *vtcm_scratch1   = vtcm_seq_alloc(&vtcm_ptr, scratch_area_size);
   __fp16  *vtcm_scales     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, 256);
   assert((size_t)(vtcm_ptr - ctx->vtcm_base) <= ctx->vtcm_scratch_size);
 
@@ -476,13 +468,42 @@ int hmx_mat_mul_permuted_w16a32(struct htp_context *ctx, float *restrict dst, co
 
     // FARF(ALWAYS, "transfer activation ok, mr = %d, n_rows = %d", mr, n_rows);
 
+    const size_t fp16_row_stride = k * sizeof(__fp16);
+
+    void *buf_curr = vtcm_scratch0;
+    void *buf_next = vtcm_scratch1;
+
+    // issue async DMA for the first weight chunk
+    {
+      const size_t n_cols_first            = hmx_smin(n, n_chunk_n_cols);
+      const size_t first_weight_chunk_size = n_cols_first * fp16_row_stride;
+
+      dma_queue_push(ctx->dma[0], dma_make_ptr(buf_curr, permuted_weight),
+                     first_weight_chunk_size, first_weight_chunk_size, first_weight_chunk_size, 1);
+    }
+
     for (size_t nc = 0; nc < n; nc += n_chunk_n_cols) {
       size_t n_cols = hmx_smin(n - nc, n_chunk_n_cols);
 
       // int64_t wei_t0 = HAP_perf_get_qtimer_count();
       {
-        const __fp16 *permuted_weight_chunk = permuted_weight + nc * k;
-        transfer_permuted_weight_chunk_fp16(ctx, vtcm_weight, permuted_weight_chunk, n_cols, k);
+        dma_queue_pop(ctx->dma[0]);  // wait until current weight chunk is ready
+
+        // issue async DMA for the next weight chunk (double buffering)
+        const size_t nc_next = nc + n_chunk_n_cols;
+        if (nc_next < n) {
+          const size_t n_cols_next             = hmx_smin(n - nc_next, n_chunk_n_cols);
+          const size_t next_weight_chunk_size   = n_cols_next * fp16_row_stride;
+          const __fp16 *next_weight_chunk       = permuted_weight + nc_next * k;
+
+          dma_queue_push(ctx->dma[0], dma_make_ptr(buf_next, next_weight_chunk),
+                         next_weight_chunk_size, next_weight_chunk_size, next_weight_chunk_size, 1);
+        }
+
+        // interleave row-major fp16 from scratch into tile-major in vtcm_weight
+        interleave_fp16_weight_chunk_to_tiles(vtcm_weight, (const __fp16 *)buf_curr, n_cols, k);
+
+        swap_ptr(&buf_curr, &buf_next);
       }
       // weight_load_time += HAP_perf_get_qtimer_count() - wei_t0;
 
