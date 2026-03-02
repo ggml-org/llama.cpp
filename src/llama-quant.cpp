@@ -1425,13 +1425,10 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         type_choice ch;
         ch.w = tw;
         ch.n_elements = ggml_nelements(tensor);
-        bool bias_needed = false;
 
         for (const auto & ev : evaluations) {
             if (ev.bytes == 0) { continue; }
-            type_scores ts = ev;
-            if (!valid_wce && !bias_needed) { ts.error = ts.mse; }
-            ch.candidates.push_back(ts);
+            ch.candidates.push_back(ev);
         }
 
         if (ch.candidates.empty()) {
