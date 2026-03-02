@@ -1,5 +1,5 @@
-# Server build and tests
-name: Server
+# Server windows build and tests
+name: Server-windodows
 
 on:
   workflow_dispatch: # allows manual triggering
