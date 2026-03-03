@@ -1054,8 +1054,11 @@ json oaicompat_chat_params_parse(
         else if (reasoning.is_object()) {
             bool enabled = reasoning.value("enabled", true);
             inputs.enable_thinking = enabled;
-            //auto budget = ...
-            //auto effort = ...
+
+            auto effort = reasoning.value("effort", "auto");
+            if (effort != "auto") {
+                inputs.enable_thinking = effort != "none";
+            }
         }
     }
 
