@@ -459,10 +459,14 @@ void GgmlOvDecoder::compute_model_outputs() {
     m_model_output_names.clear();
     for (int node_n = 0; node_n < m_cgraph->n_nodes; node_n++) {
         auto * cur_node = m_cgraph->nodes[node_n];
+        // if the node op is NONE means this node is not used at all, we can skip it directly without adding to model outputs.
+        if (cur_node->op == GGML_OP_NONE) {
+            continue;
+        }
         auto cur_node_use_count = m_cgraph->use_counts[ggml_hash_find(&m_cgraph->visited_hash_set, cur_node)];
         if (cur_node_use_count == 0) {
-            if (cur_node->op == GGML_OP_SET_ROWS) {
-                // The output of SET_ROWS is the view_src tensor, which is updated in place. We should use the view_src name as the output name to make sure it can be correctly matched with the later ops that use the view_src.
+            // The output of SET_ROWS is the view_src tensor, which is updated in place. We should use the view_src name as the output name to make sure it can be correctly matched with the later ops that use the view_src.
+            if (cur_node != nullptr && cur_node->op == GGML_OP_SET_ROWS) {
                 cur_node = cur_node->view_src;
             }
         } else {
