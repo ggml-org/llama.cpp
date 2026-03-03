@@ -148,12 +148,28 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                     message(STATUS "ARM detected flags: ${ARM_NATIVE_FLAG}")
                 endif()
 
+                include(CheckCXXSourceCompiles)
                 include(CheckCXXSourceRuns)
 
                 macro(check_arm_feature tag feature code)
                     set(CMAKE_REQUIRED_FLAGS_SAVE ${CMAKE_REQUIRED_FLAGS})
-                    set(CMAKE_REQUIRED_FLAGS "${ARM_NATIVE_FLAG}+${tag}")
-                    check_cxx_source_runs("${code}" GGML_MACHINE_SUPPORTS_${tag})
+                    # check if the feature is available natively before running the
+                    # test binary — avoids hangs when the runtime test traps (e.g. SVE on macOS)
+                    set(CMAKE_REQUIRED_FLAGS "${ARM_NATIVE_FLAG}")
+                    check_cxx_source_compiles(
+                        "
+                        #if !defined(__ARM_FEATURE_${feature})
+                        #  error \"${feature} not supported\"
+                        #endif
+                        int main() { return 0; }
+                        "
+                        GGML_COMPILER_SUPPORTS_${tag}
+                    )
+                    if (GGML_COMPILER_SUPPORTS_${tag})
+                        # feature is supported, override CMAKE_REQUIRED_FLAGS to include +tag
+                        set(CMAKE_REQUIRED_FLAGS "${ARM_NATIVE_FLAG}+${tag}")
+                        check_cxx_source_runs("${code}" GGML_MACHINE_SUPPORTS_${tag})
+                    endif()
                     if (GGML_MACHINE_SUPPORTS_${tag})
                         set(ARM_NATIVE_FLAG_FIX "${ARM_NATIVE_FLAG_FIX}+${tag}")
                     else()
