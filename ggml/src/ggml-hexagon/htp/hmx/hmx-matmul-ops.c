@@ -214,6 +214,92 @@ static inline void swap_ptr(void **p1, void **p2) {
   *p2     = t;
 }
 
+// ---------------------------------------------------------------------------
+// Overflow-safe DMA push: all UDMA type1 descriptor fields (roiwidth,
+// roiheight, srcstride, dststride) are 16-bit, max 65535.  This helper
+// transparently handles values that exceed the 16-bit limit.
+//
+// Case 1 (fast path): all params fit in 16 bits -> direct dma_queue_push.
+// Case 2 (contiguous block): width == srcstride == dststride.  Reshape the
+//   flat transfer into a 2D descriptor with sub_width <= 65535.  Produces a
+//   single descriptor, preserving async DMA behavior.
+// Case 3 (stride overflow): srcstride or dststride > 65535.  Issue rows
+//   one at a time.  The first N-1 rows are pushed+popped synchronously;
+//   the last row is left async so the caller can pop it.
+// ---------------------------------------------------------------------------
+#define UDMA_MAX_FIELD_VAL 65535u
+
+static inline bool hmx_dma_push_safe(dma_queue *q,
+                                     dma_ptr    dptr,
+                                     size_t     dst_stride,
+                                     size_t     src_stride,
+                                     size_t     width,
+                                     size_t     nrows) {
+  // Fast path: everything fits in 16 bits.
+  if (__builtin_expect(
+        width     <= UDMA_MAX_FIELD_VAL &&
+        nrows     <= UDMA_MAX_FIELD_VAL &&
+        src_stride <= UDMA_MAX_FIELD_VAL &&
+        dst_stride <= UDMA_MAX_FIELD_VAL, 1)) {
+    return dma_queue_push(q, dptr, dst_stride, src_stride, width, nrows);
+  }
+
+  // Case 2: contiguous block (width == src_stride == dst_stride).
+  // Reshape total bytes into sub_width * sub_nrows where sub_width <= 65535.
+  if (width == src_stride && width == dst_stride) {
+    size_t total = width * nrows;
+
+    // Pick the largest 128-byte-aligned sub_width that divides total evenly.
+    size_t sub_width = UDMA_MAX_FIELD_VAL & ~(size_t)127;  // 65408
+    while (sub_width > 0 && total % sub_width != 0) {
+      sub_width -= 128;
+    }
+    if (sub_width == 0) {
+      // Fallback: use original width (must fit) with adjusted nrows.
+      // This shouldn't happen for 128-aligned DMA sizes.
+      sub_width = width;
+    }
+    size_t sub_nrows = total / sub_width;
+
+    // Handle sub_nrows > 65535 by issuing chunked descriptors.
+    const uint8_t *src = (const uint8_t *)dptr.src;
+    uint8_t       *dst = (uint8_t *)dptr.dst;
+    size_t rows_done = 0;
+    while (rows_done < sub_nrows) {
+      size_t chunk = sub_nrows - rows_done;
+      if (chunk > UDMA_MAX_FIELD_VAL) chunk = UDMA_MAX_FIELD_VAL;
+
+      dma_ptr p = dma_make_ptr(dst + rows_done * sub_width,
+                               src + rows_done * sub_width);
+      if (!dma_queue_push(q, p, sub_width, sub_width, sub_width, chunk))
+        return false;
+
+      rows_done += chunk;
+      // Synchronously complete all chunks except the last one, so the
+      // caller's single dma_queue_pop drains the final descriptor.
+      if (rows_done < sub_nrows)
+        dma_queue_pop(q);
+    }
+    return true;
+  }
+
+  // Case 3: stride overflow — fall back to row-by-row.
+  // Push+pop each row synchronously except the last, which stays async.
+  {
+    const uint8_t *src = (const uint8_t *)dptr.src;
+    uint8_t       *dst = (uint8_t *)dptr.dst;
+    for (size_t r = 0; r < nrows; ++r) {
+      dma_ptr p = dma_make_ptr(dst + r * dst_stride,
+                               src + r * src_stride);
+      if (!dma_queue_push(q, p, 0, 0, width, 1))
+        return false;
+      if (r + 1 < nrows)
+        dma_queue_pop(q);
+    }
+    return true;
+  }
+}
+
 // Compute the byte stride of one row in x4x2 format.
 // Numerically equals ggml_row_size(type, k) when k is 256-aligned, because
 // x4x2 packing has the same density as block_q4_0 / block_q8_0.
@@ -802,8 +888,8 @@ int hmx_mat_mul_permuted_w16a32(struct htp_context *ctx, float *restrict dst, co
     {
       const size_t n_cols_first = hmx_smin(n, n_chunk_n_cols);
 
-      dma_queue_push(ctx->dma[0], dma_make_ptr(buf_curr, permuted_weight),
-                     fp16_row_stride, fp16_row_stride, fp16_row_stride, n_cols_first);
+      hmx_dma_push_safe(ctx->dma[0], dma_make_ptr(buf_curr, permuted_weight),
+                        fp16_row_stride, fp16_row_stride, fp16_row_stride, n_cols_first);
     }
 
     for (size_t nc = 0; nc < n; nc += n_chunk_n_cols) {
@@ -819,8 +905,8 @@ int hmx_mat_mul_permuted_w16a32(struct htp_context *ctx, float *restrict dst, co
           const size_t n_cols_next       = hmx_smin(n - nc_next, n_chunk_n_cols);
           const __fp16 *next_weight_chunk = permuted_weight + nc_next * k;
 
-          dma_queue_push(ctx->dma[0], dma_make_ptr(buf_next, next_weight_chunk),
-                         fp16_row_stride, fp16_row_stride, fp16_row_stride, n_cols_next);
+          hmx_dma_push_safe(ctx->dma[0], dma_make_ptr(buf_next, next_weight_chunk),
+                            fp16_row_stride, fp16_row_stride, fp16_row_stride, n_cols_next);
         }
 
         // interleave row-major fp16 from scratch into tile-major in vtcm_weight
@@ -1023,7 +1109,7 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
       {
         const size_t n_cols_first = hmx_smin(n, n_chunk_n_cols);
 
-        dma_queue_push(ctx->dma[0], dma_make_ptr(buf_curr, permuted_weight), row_stride, row_stride, row_stride, n_cols_first);
+        hmx_dma_push_safe(ctx->dma[0], dma_make_ptr(buf_curr, permuted_weight), row_stride, row_stride, row_stride, n_cols_first);
       }
 
       for (size_t nc = 0; nc < n; nc += n_chunk_n_cols) {
@@ -1039,7 +1125,7 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
 
             const uint8_t *next_weight_chunk = permuted_weight + nc_next * row_stride;
 
-            dma_queue_push(ctx->dma[0], dma_make_ptr(buf_next, next_weight_chunk), row_stride, row_stride, row_stride, n_cols_next);
+            hmx_dma_push_safe(ctx->dma[0], dma_make_ptr(buf_next, next_weight_chunk), row_stride, row_stride, row_stride, n_cols_next);
           }
 
 #if HMX_DEBUG_TRACE_VALUES
@@ -1360,10 +1446,9 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
       // prologue: A0
       const size_t n_cols_A0 = hmx_smin(n - 0 * n_chunk_n_cols, n_chunk_n_cols);
       {
-        const size_t chunk_size_A0 = n_cols_A0 * row_stride;
-
+        // Use 2D DMA (n_cols rows x row_stride) to avoid 16-bit roiwidth overflow.
         const uint8_t *qweight_chunk_A0 = permuted_weight;
-        dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_qweight, qweight_chunk_A0), chunk_size_A0, chunk_size_A0, chunk_size_A0, 1);
+        hmx_dma_push_safe(ctx->dma[0], dma_make_ptr(vtcm_qweight, qweight_chunk_A0), row_stride, row_stride, row_stride, n_cols_A0);
       }
 
       {
@@ -1381,10 +1466,8 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
         // A1
         const size_t n_cols_A1 = hmx_smin(n - 1 * n_chunk_n_cols, n_chunk_n_cols);
         if (1 < n_chunk_cnt) {
-          const size_t chunk_size_A1 = n_cols_A1 * row_stride;
-
           const uint8_t *qweight_chunk_A1 = permuted_weight + n_chunk_n_cols * row_stride;
-          dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_qweight, qweight_chunk_A1), chunk_size_A1, chunk_size_A1, chunk_size_A1, 1);
+          hmx_dma_push_safe(ctx->dma[0], dma_make_ptr(vtcm_qweight, qweight_chunk_A1), row_stride, row_stride, row_stride, n_cols_A1);
         }
 
         // C0
@@ -1424,9 +1507,8 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
 
         // issue A_{i+2}
         if (i + 2 < n_chunk_cnt) {
-          const size_t   chunk_size_p2    = n_cols_p2 * row_stride;
           const uint8_t *qweight_chunk_p2 = permuted_weight + nc_p2 * row_stride;
-          dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_qweight, qweight_chunk_p2), chunk_size_p2, chunk_size_p2, chunk_size_p2, 1);
+          hmx_dma_push_safe(ctx->dma[0], dma_make_ptr(vtcm_qweight, qweight_chunk_p2), row_stride, row_stride, row_stride, n_cols_p2);
         }
 
         // wait for HMX (C_{i}) — worker_pool_run_func already returned, so C_{i} is done
@@ -1536,14 +1618,14 @@ static void qweight_fetch_worker_fn(unsigned int n, unsigned int i, void *data) 
   qweight_fetch_task_state_t *st = (qweight_fetch_task_state_t *) data;
 
   // 2D DMA: quants sub-range
-  dma_queue_push(st->dma,
-                 dma_make_ptr(st->dst, st->src + st->quant_off),
-                 st->dst_stride, st->src_stride, st->quant_width, st->n_rows);
+  hmx_dma_push_safe(st->dma,
+                    dma_make_ptr(st->dst, st->src + st->quant_off),
+                    st->dst_stride, st->src_stride, st->quant_width, st->n_rows);
   dma_queue_pop(st->dma);
   // 2D DMA: scales sub-range
-  dma_queue_push(st->dma,
-                 dma_make_ptr(st->dst + st->quant_width, st->src + st->scale_off),
-                 st->dst_stride, st->src_stride, st->scale_width, st->n_rows);
+  hmx_dma_push_safe(st->dma,
+                    dma_make_ptr(st->dst + st->quant_width, st->src + st->scale_off),
+                    st->dst_stride, st->src_stride, st->scale_width, st->n_rows);
   dma_queue_pop(st->dma);
 }
 
@@ -1676,12 +1758,12 @@ int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx, float *restrict 
         {
           const float *activation_block = x + mr * k + kk;
 
-          dma_queue_push(ctx->dma[0],
-                         dma_make_ptr(vtcm_scratch1, activation_block),
-                         k_blk_sz * sizeof(float),
-                         k * sizeof(float),
-                         k_blk_sz * sizeof(float),
-                         m_blk_sz);
+          hmx_dma_push_safe(ctx->dma[0],
+                           dma_make_ptr(vtcm_scratch1, activation_block),
+                           k_blk_sz * sizeof(float),
+                           k * sizeof(float),
+                           k_blk_sz * sizeof(float),
+                           m_blk_sz);
           dma_queue_pop(ctx->dma[0]);
         }
 
