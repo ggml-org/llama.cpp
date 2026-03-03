@@ -10,7 +10,12 @@
 		class?: string;
 	}
 
-	let { modelId, showOrgName = false, showRaw = undefined, class: className = '' }: Props = $props();
+	let {
+		modelId,
+		showOrgName = false,
+		showRaw = undefined,
+		class: className = ''
+	}: Props = $props();
 
 	let parsed = $derived(ModelsService.parseModelId(modelId));
 	let resolvedShowRaw = $derived(showRaw ?? (config().showRawModelNames as boolean) ?? false);

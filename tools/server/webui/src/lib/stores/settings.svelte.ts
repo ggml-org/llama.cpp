@@ -41,10 +41,7 @@ import {
 	getConfigValue,
 	setConfigValue
 } from '$lib/utils';
-import {
-	CONFIG_LOCALSTORAGE_KEY,
-	USER_OVERRIDES_LOCALSTORAGE_KEY
-} from '$lib/constants';
+import { CONFIG_LOCALSTORAGE_KEY, USER_OVERRIDES_LOCALSTORAGE_KEY } from '$lib/constants';
 
 class SettingsStore {
 	/**

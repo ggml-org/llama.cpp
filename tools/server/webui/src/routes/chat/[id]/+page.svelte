@@ -102,7 +102,9 @@
 		if (matchingModel && modelsStore.isModelLoaded(matchingModel.model)) {
 			try {
 				await modelsStore.selectModelById(matchingModel.id);
-				console.log(`Automatically selected model: ${lastMessageWithModel.model} from last message`);
+				console.log(
+					`Automatically selected model: ${lastMessageWithModel.model} from last message`
+				);
 			} catch (error) {
 				console.warn('Failed to automatically select model from last message:', error);
 			}

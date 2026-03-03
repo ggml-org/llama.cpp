@@ -72,7 +72,11 @@
 		conversationsStore.clearActiveConversation();
 		chatStore.clearUIState();
 
-		if (isRouterMode() && modelsStore.selectedModelName && !modelsStore.isModelLoaded(modelsStore.selectedModelName)) {
+		if (
+			isRouterMode() &&
+			modelsStore.selectedModelName &&
+			!modelsStore.isModelLoaded(modelsStore.selectedModelName)
+		) {
 			modelsStore.clearSelection();
 		}
 

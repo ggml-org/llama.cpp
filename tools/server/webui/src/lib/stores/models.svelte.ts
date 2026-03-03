@@ -4,7 +4,11 @@ import { ServerModelStatus, ModelModality } from '$lib/enums';
 import { ModelsService, PropsService } from '$lib/services';
 import { serverStore } from '$lib/stores/server.svelte';
 import { TTLCache } from '$lib/utils';
-import { MODEL_PROPS_CACHE_TTL_MS, MODEL_PROPS_CACHE_MAX_ENTRIES, FAVOURITE_MODELS_LOCALSTORAGE_KEY } from '$lib/constants';
+import {
+	MODEL_PROPS_CACHE_TTL_MS,
+	MODEL_PROPS_CACHE_MAX_ENTRIES,
+	FAVOURITE_MODELS_LOCALSTORAGE_KEY
+} from '$lib/constants';
 
 /**
  * modelsStore - Reactive store for model management in both MODEL and ROUTER modes

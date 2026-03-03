@@ -84,7 +84,11 @@
 
 	let groupedFilteredOptions = $derived.by(() => {
 		const favIds = modelsStore.favouriteModelIds;
-		const result: { orgName: string | null; isFavouritesGroup: boolean; items: { option: ModelOption; flatIndex: number }[] }[] = [];
+		const result: {
+			orgName: string | null;
+			isFavouritesGroup: boolean;
+			items: { option: ModelOption; flatIndex: number }[];
+		}[] = [];
 
 		// Favourites group
 		const favItems: { option: ModelOption; flatIndex: number }[] = [];
