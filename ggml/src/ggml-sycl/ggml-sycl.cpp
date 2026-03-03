@@ -4447,8 +4447,6 @@ static bool ggml_sycl_xmx_tiled_enabled_for_device(int device_id) {
 #endif
 }
 
-// ggml_sycl_reorder_fill_ctx defined earlier (before moe_hybrid_init_once)
-
 struct ggml_sycl_onednn_packed_fill_ctx {
     ggml_type type;
     int64_t   ncols;
@@ -25706,26 +25704,50 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             };
 
             // ---------------------------------------------------------------
-            // CPU-primary expert TG: route ALL experts to CPU, skip GPU cache
+            // CPU-primary expert TG: hybrid GPU+CPU dispatch.
+            // VRAM-resident experts → GPU (380 GB/s), host-resident → CPU
+            // (70 GB/s). Skips prediction/prefetch overhead for batch=1 TG.
             // ---------------------------------------------------------------
             if (cpu_expert_tg_active) {
-                // Build cpu_entries directly from ids tensor -- no cache
-                // lookup, prediction, prefetch, or score updates needed.
+                auto & placement_table = ggml_sycl::get_expert_placement_table();
+
+                gpu_entries.reserve(static_cast<size_t>(ids->ne[1] * n_ids));
                 cpu_entries.reserve(static_cast<size_t>(ids->ne[1] * n_ids));
+
                 for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
                     for (int64_t id = 0; id < n_ids; id++) {
                         const int32_t i02 = ids_host[static_cast<size_t>(iid1 * n_ids + id)];
                         GGML_ASSERT(i02 >= 0 && i02 < n_as);
-                        cpu_entries.push_back({ iid1, id, i02, nullptr });
+
+                        // Check placement table for VRAM-resident experts
+                        bool dispatched_gpu = false;
+                        if (placement_table.is_initialized()) {
+                            auto placement = placement_table.get(layer_id, i02);
+                            if (placement.device_id == 0 && placement.device_ptr) {
+                                gpu_entries.push_back({ iid1, id, i02, placement.device_ptr });
+                                dispatched_gpu = true;
+                            }
+                        }
+
+                        // Fallback: check cache-resolved pointer table
+                        if (!dispatched_gpu && expert_ptrs_host && i02 < n_as
+                            && expert_ptrs_host[i02] != nullptr) {
+                            gpu_entries.push_back(
+                                { iid1, id, i02, const_cast<void *>(expert_ptrs_host[i02]) });
+                            dispatched_gpu = true;
+                        }
+
+                        // Host-resident: route to CPU
+                        if (!dispatched_gpu) {
+                            cpu_entries.push_back({ iid1, id, i02, nullptr });
+                        }
                     }
                 }
 
-                GGML_SYCL_DEBUG("[MoE-CPU-TG] L%d: %zu experts -> CPU (bypassing cache)\n",
-                                layer_id, cpu_entries.size());
+                GGML_SYCL_DEBUG("[MoE-CPU-TG] L%d: GPU=%zu CPU=%zu (hybrid dispatch)\n",
+                                layer_id, gpu_entries.size(), cpu_entries.size());
 
-                // Dispatch all experts to CPU and scatter results to dst
-                dispatch_cpu_and_scatter(cpu_entries);
-                return;
+                // Fall through to shared GPU + CPU dispatch below
             } else {
             // ---------------------------------------------------------------
             // Standard hybrid path: prediction, cache lookup, partitioning
