@@ -25,6 +25,8 @@
 #include "platform.h"
 #include "quants.h"
 
+#define CACHE_LINE_SIZE_BYTES 64
+
 struct ggml_et_get_rows_params {
     struct ggml_tensor src0;     // Data tensor (F32 or Q8_0)
     struct ggml_tensor src1;     // Row indices tensor (I32)
