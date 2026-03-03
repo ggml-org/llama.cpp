@@ -21976,6 +21976,69 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
     }
 
     // =====================================================================
+    // CPU host-pinned MUL_MAT: batch=1, host-resident weights -> CPU vec_dot
+    // For 120B+ models where Q8_0 attention weights overflow to host-pinned
+    // memory, CPU reads from DDR5 at 60-70 GB/s vs GPU PCIe at 12-25 GB/s.
+    // Only for TG (batch=1). Gated behind GGML_SYCL_CPU_HOST_MAT=1.
+    // =====================================================================
+    {
+        static const bool cpu_host_mat_enabled = []() {
+            const char * env = std::getenv("GGML_SYCL_CPU_HOST_MAT");
+            return env && std::atoi(env) != 0;
+        }();
+
+        if (cpu_host_mat_enabled &&
+            src1->ne[1] == 1 &&                    // batch=1 (TG only)
+            ggml_is_quantized(src0->type) &&        // quantized weights
+            src1->type == GGML_TYPE_F32 &&
+            dst->type == GGML_TYPE_F32 &&
+            ggml_sycl_is_host_resident_weight(src0, ctx.stream())) {
+
+            const int64_t K     = src0->ne[0];
+            const int64_t N     = src0->ne[1];
+            const size_t  src1_bytes = static_cast<size_t>(K) * sizeof(float);
+            const size_t  dst_bytes  = static_cast<size_t>(N) * sizeof(float);
+
+            // Check that CPU vec_dot is available for this type
+            const auto * cpu_traits = ggml_get_type_traits_cpu(src0->type);
+            if (cpu_traits && cpu_traits->vec_dot) {
+                // Thread-local staging buffers for D2H(src1) and H2D(dst)
+                static thread_local std::vector<float> tl_src1_host;
+                static thread_local std::vector<float> tl_dst_host;
+                tl_src1_host.resize(K);
+                tl_dst_host.resize(N);
+
+                sycl::queue * stream = ctx.stream();
+
+                // D2H: copy activations from GPU to host
+                stream->memcpy(tl_src1_host.data(), src1->data, src1_bytes).wait();
+
+                // Get host pointer to weight data (already host-accessible)
+                const void * src0_host = src0->data;
+                if (!src0_host) {
+                    // Fallback: try get_data_ptr which may return a host pointer
+                    src0_host = ggml_sycl_get_data_ptr(src0, ctx.device);
+                }
+
+                if (src0_host) {
+                    GGML_SYCL_DEBUG("[CPU-HOST-MAT] type=%d K=%lld N=%lld tensor=%s\n",
+                                    (int) src0->type, (long long) K, (long long) N,
+                                    src0->name ? src0->name : "?");
+
+                    // CPU vec_dot for all output rows
+                    ggml_sycl_cpu_vec_dot_rows(src0->type, static_cast<int>(K),
+                                               src0_host, tl_src1_host.data(),
+                                               tl_dst_host.data(), static_cast<int>(N));
+
+                    // H2D: copy result back to GPU
+                    stream->memcpy(dst->data, tl_dst_host.data(), dst_bytes).wait();
+                    return;
+                }
+            }
+        }
+    }
+
+    // =====================================================================
     // TG fast-path: batch=1, single-device, quantized -> MMVQ (same as master)
     // Bypasses orchestrator, name parsing, prefetch, TP checks for maximum speed.
     // With SOA layout enabled by default, MMVQ+SOA is ~30% faster than unified DMMV+SOA.
