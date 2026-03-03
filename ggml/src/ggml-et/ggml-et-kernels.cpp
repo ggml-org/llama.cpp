@@ -173,7 +173,10 @@ bool ggml_et_launch_kernel(ggml_backend_et_device_context* dev_ctx, const std::s
         }
 
         if(sync_error_check) {
-            runtime->waitForStream(dev_ctx->default_stream);
+            // Already triggered. No need to retrigger
+            if(!enable_print) {
+                runtime->waitForStream(dev_ctx->default_stream);
+            }
             auto errors = runtime->retrieveStreamErrors(dev_ctx->default_stream);
             if(!errors.empty()) {
                 GGML_LOG_ERROR("ET: Errors detected during kernel \"%s\" execution\n", kernel_name.c_str());
