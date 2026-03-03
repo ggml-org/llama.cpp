@@ -158,6 +158,224 @@ static std::atomic<int>  g_ggml_sycl_force_vram{ -1 };  // -1 = not initialized,
 // Forward declaration - defined later in tensor inventory section
 extern std::atomic<bool> g_model_exceeds_vram;
 
+// ============================================================================
+// FP16 Weight Cache: Persistent pre-dequantized FP16 weights in VRAM
+//
+// When GGML_SYCL_FP16_CACHE=1, the first PP pass dequantizes quantized weights
+// to FP16 and stores the result in a persistent VRAM buffer. Subsequent PP
+// passes skip the dequantization kernel entirely, reading cached FP16 directly.
+//
+// GGML_SYCL_FP16_CACHE_MB=N sets the VRAM limit (default 512MB).
+// Only device-resident weights are eligible (no VRAM expansion for host weights).
+// ============================================================================
+struct fp16_cache_entry {
+    sycl::half * ptr = nullptr;
+};
+
+struct fp16_weight_cache {
+    std::unordered_map<uint64_t, fp16_cache_entry> entries;
+    std::mutex                                     mtx;
+    size_t                                         total_bytes = 0;
+    size_t                                         limit_bytes = 0;
+    bool                                           enabled     = false;
+
+    // Slab allocator: single large VRAM block, sub-allocated linearly
+    char *  slab_ptr    = nullptr;
+    size_t  slab_size   = 0;
+    size_t  slab_offset = 0;
+    bool    slab_ready  = false;
+
+    std::once_flag init_flag_;
+
+    void init_once() {
+        std::call_once(init_flag_, [this]() {
+            const char * env     = std::getenv("GGML_SYCL_FP16_CACHE");
+            enabled              = (env != nullptr && std::atoi(env) != 0);
+            const char * lim_env = std::getenv("GGML_SYCL_FP16_CACHE_MB");
+            size_t       lim_mb  = lim_env ? static_cast<size_t>(std::atoi(lim_env)) : 512;
+            if (lim_mb < 1) {
+                lim_mb = 512;
+            }
+            limit_bytes = lim_mb * 1024 * 1024;
+            if (enabled) {
+                GGML_LOG_INFO("[SYCL] FP16 weight cache enabled (limit=%zuMB)\n", lim_mb);
+            }
+        });
+    }
+
+    // Lazily allocate the VRAM slab on first store attempt.
+    // Called under lock.
+    bool ensure_slab(sycl::queue & queue) {
+        if (slab_ready) {
+            return slab_ptr != nullptr;
+        }
+        slab_ready = true;
+        try {
+            slab_ptr = static_cast<char *>(sycl::malloc_device(limit_bytes, queue));
+        } catch (...) {
+            slab_ptr = nullptr;
+        }
+        if (slab_ptr) {
+            slab_size = limit_bytes;
+            GGML_LOG_INFO("[SYCL] FP16 weight cache: allocated %.1fMB VRAM slab\n",
+                          limit_bytes / (1024.0f * 1024.0f));
+        } else {
+            GGML_LOG_WARN("[SYCL] FP16 weight cache: failed to allocate %.1fMB slab\n",
+                          limit_bytes / (1024.0f * 1024.0f));
+        }
+        return slab_ptr != nullptr;
+    }
+
+    // Returns cached FP16 pointer or nullptr if not cached
+    sycl::half * lookup(uint64_t name_hash) {
+        std::lock_guard<std::mutex> lock(mtx);
+        auto it = entries.find(name_hash);
+        if (it != entries.end()) {
+            return it->second.ptr;
+        }
+        return nullptr;
+    }
+
+    // Store a new FP16 weight in VRAM (sub-allocated from slab).
+    // The copy is submitted on the in-order queue without .wait() -- it
+    // completes before any subsequent kernel on the same queue touches the
+    // scratch buffer that holds `src`.
+    bool store(uint64_t name_hash, const sycl::half * src, size_t bytes,
+               sycl::queue & queue) {
+        std::lock_guard<std::mutex> lock(mtx);
+        if (!ensure_slab(queue)) {
+            return false;
+        }
+        // Align to 256 bytes for GPU cache line alignment
+        const size_t aligned_bytes = (bytes + 255) & ~size_t(255);
+        if (slab_offset + aligned_bytes > slab_size) {
+            return false;  // Slab exhausted
+        }
+        sycl::half * buf = reinterpret_cast<sycl::half *>(slab_ptr + slab_offset);
+        // Async copy on in-order queue: completes before next kernel reads scratch
+        queue.memcpy(buf, src, bytes);
+        entries[name_hash] = { buf };
+        slab_offset += aligned_bytes;
+        total_bytes += bytes;
+        return true;
+    }
+
+    void clear(sycl::queue & queue) {
+        std::lock_guard<std::mutex> lock(mtx);
+        if (slab_ptr) {
+            queue.wait();  // Drain any pending copies
+            sycl::free(slab_ptr, queue);
+            slab_ptr  = nullptr;
+            slab_size = 0;
+        }
+        entries.clear();
+        slab_offset = 0;
+        total_bytes = 0;
+        slab_ready  = false;
+    }
+
+    bool has_entries() {
+        std::lock_guard<std::mutex> lock(mtx);
+        return !entries.empty();
+    }
+};
+
+static fp16_weight_cache g_fp16_cache;
+
+// ============================================================================
+// PP Pipeline: Double-buffered PCIe pipelining for oneDNN FP16 weight prefetch
+// ============================================================================
+// When GGML_SYCL_PP_PIPELINE=1, overlaps the dequant (PCIe read + FP16 convert)
+// of the next weight matrix with the GEMM of the current weight matrix.
+// Two scratch buffers alternate: while GEMM runs on buffer A, dequant for the
+// next MUL_MAT fills buffer B on a separate in-order DMA queue.
+//
+// Pre-scan: at graph_compute start, build a schedule of oneDNN-PP-eligible
+// MUL_MAT nodes. During execution, the pipeline uses this schedule for
+// look-ahead prefetch.
+// ============================================================================
+
+struct pp_pipeline_entry {
+    const void *      src0_data      = nullptr;  // Host-pinned weight pointer
+    to_fp16_sycl_t    dequant_fn     = nullptr;  // Dequant function for this weight type
+    int64_t           n_elems        = 0;         // N * K elements to dequant
+    size_t            weight_bytes   = 0;         // n_elems * sizeof(half)
+};
+
+struct pp_pipeline_state {
+    bool                              enabled          = false;
+    std::unique_ptr<sycl::queue>      dma_queue;       // In-order queue for async dequant (OOQ cross-queue deps broken on L0)
+    void *                            scratch_buf[2]   = { nullptr, nullptr };  // Double-buffered weights
+    size_t                            scratch_size[2]  = { 0, 0 };
+    int                               prefetch_buf     = -1;     // Buffer index with prefetched data (-1 = none)
+    const void *                      prefetch_src0    = nullptr; // src0_data that was prefetched
+    int64_t                           prefetch_elems   = 0;      // Elements that were prefetched
+    std::vector<pp_pipeline_entry>    schedule;                  // Pre-scanned MUL_MAT schedule
+    int                               schedule_idx     = 0;      // Current position in schedule
+    int                               device_id        = -1;
+
+    ~pp_pipeline_state() {
+        if (dma_queue) {
+            dma_queue->wait();
+            for (int b = 0; b < 2; b++) {
+                if (scratch_buf[b]) {
+                    sycl::free(scratch_buf[b], *dma_queue);
+                    scratch_buf[b]  = nullptr;
+                    scratch_size[b] = 0;
+                }
+            }
+        }
+    }
+
+    void reset_graph() {
+        schedule.clear();
+        schedule_idx   = 0;
+        prefetch_buf   = -1;
+        prefetch_src0  = nullptr;
+        prefetch_elems = 0;
+    }
+};
+
+static bool pp_pipeline_env_enabled() {
+    static int val = -1;
+    if (val < 0) {
+        const char * env = std::getenv("GGML_SYCL_PP_PIPELINE");
+        val = (env && std::atoi(env) != 0) ? 1 : 0;
+        if (val) {
+            GGML_LOG_INFO("[SYCL] PP pipeline: double-buffered PCIe prefetch ENABLED\n");
+        }
+    }
+    return val != 0;
+}
+
+static thread_local pp_pipeline_state g_pp_pipeline;
+
+// Submit async dequant for the next scheduled entry on the DMA queue.
+// Writes dequantized FP16 weights into scratch_buf[buf_idx].
+// Returns true if prefetch was submitted.
+static bool pp_pipeline_submit_prefetch(pp_pipeline_state & pipe, int buf_idx) {
+    if (pipe.schedule_idx >= (int) pipe.schedule.size()) {
+        return false;  // No more entries to prefetch
+    }
+    const auto & entry = pipe.schedule[pipe.schedule_idx];
+    if (!entry.src0_data || !entry.dequant_fn || entry.n_elems == 0) {
+        return false;
+    }
+    // Ensure scratch buffer is large enough
+    if (entry.weight_bytes > pipe.scratch_size[buf_idx]) {
+        return false;
+    }
+    // Submit dequant kernel on the in-order DMA queue
+    sycl::half * dst = static_cast<sycl::half *>(pipe.scratch_buf[buf_idx]);
+    entry.dequant_fn(entry.src0_data, dst, entry.n_elems, pipe.dma_queue.get());
+    // Completion tracked via dma_queue->wait() at consumption time
+    // (ext_oneapi_submit_barrier can corrupt L0 event state — avoid it)
+    pipe.prefetch_buf   = buf_idx;
+    pipe.prefetch_src0  = entry.src0_data;
+    pipe.prefetch_elems = entry.n_elems;
+    return true;
+}
+
 int ggml_sycl_graph_inflight_count() {
     return g_sycl_graph_inflight.load(std::memory_order_acquire);
 }
@@ -22625,6 +22843,25 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                             // Note: oneDNN s4 WoQ is NOT supported on Arc B580 (Xe2).
                             // =============================================================
 #    if GGML_SYCL_DNNL
+                            // =============================================================
+                            // FP16 Weight Cache: Pre-dequantized FP16 weights in VRAM
+                            //
+                            // When GGML_SYCL_FP16_CACHE=1, the first PP pass dequantizes
+                            // quantized weights to FP16 and stores the result in a persistent
+                            // VRAM buffer. Subsequent PP passes skip the dequantization
+                            // kernel entirely, using the cached FP16 data directly.
+                            //
+                            // This trades VRAM for PP speed. MXFP4->FP16 is a 3.8x expansion
+                            // (8.5MB -> 32MB per 4096x4096 weight). A configurable VRAM limit
+                            // (GGML_SYCL_FP16_CACHE_MB, default 512MB) caps total usage.
+                            //
+                            // Only weights that are device-resident (already cached in VRAM
+                            // by the unified cache) are eligible for FP16 caching, since
+                            // host-resident weights would need VRAM allocation for something
+                            // not already occupying VRAM.
+                            // =============================================================
+                            g_fp16_cache.init_once();
+
                             // Check if we should use oneDNN FP16 for large batches
                             // Default threshold: M >= 64 (can be tuned via env var)
                             static int onednn_pp_threshold = -1;
@@ -22703,13 +22940,94 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                                     }
 
                                     if (weights_scratch && activations_scratch) {
-                                        // Dequantize weights (Q4_0 etc.) to FP16
-                                        dequant_to_fp16(src0_data, weights_scratch, src0_elems, ctx.stream());
+                                        // FP16 weight cache: check if we already have a cached
+                                        // dequantized FP16 copy of this weight in VRAM
+                                        const sycl::half * fp16_weights_ptr = nullptr;
+                                        bool               fp16_cache_hit   = false;
+                                        bool               pp_pipeline_hit  = false;
+
+                                        // PP Pipeline: check if prefetched dequant matches
+                                        auto & pipe = g_pp_pipeline;
+                                        if (pipe.enabled && pipe.prefetch_buf >= 0 &&
+                                            pipe.prefetch_src0 == src0_data &&
+                                            pipe.prefetch_elems == (int64_t) src0_elems) {
+                                            // Wait for prefetch dequant to complete on DMA queue
+                                            pipe.dma_queue->wait();
+                                            fp16_weights_ptr = static_cast<const sycl::half *>(
+                                                pipe.scratch_buf[pipe.prefetch_buf]);
+                                            pp_pipeline_hit  = true;
+                                            // Advance schedule past the consumed entry
+                                            pipe.schedule_idx++;
+                                            int used_buf       = pipe.prefetch_buf;
+                                            pipe.prefetch_buf  = -1;
+                                            pipe.prefetch_src0 = nullptr;
+                                            // Submit prefetch for next entry into OTHER buffer
+                                            int next_buf = 1 - used_buf;
+                                            pp_pipeline_submit_prefetch(pipe, next_buf);
+                                        } else
+                                        if (g_fp16_cache.enabled && ggml_sycl_tensor_is_weight(src0) &&
+                                            src0->name) {
+                                            // Drain any in-flight pipeline prefetch on miss
+                                            if (pipe.enabled && pipe.prefetch_buf >= 0) {
+                                                pipe.dma_queue->wait();
+                                                pipe.prefetch_buf  = -1;
+                                                pipe.prefetch_src0 = nullptr;
+                                            }
+                                            const uint64_t wt_hash =
+                                                static_cast<uint64_t>(std::hash<std::string>()(src0->name));
+                                            sycl::half * cached = g_fp16_cache.lookup(wt_hash);
+                                            if (cached) {
+                                                // Cache hit: use persistent FP16 buffer directly
+                                                fp16_weights_ptr = cached;
+                                                fp16_cache_hit   = true;
+                                            } else {
+                                                // Cache miss: dequantize to scratch first
+                                                dequant_to_fp16(src0_data, weights_scratch, src0_elems,
+                                                                ctx.stream());
+                                                fp16_weights_ptr = weights_scratch;
+
+                                                // Only cache device-resident weights to avoid
+                                                // expanding VRAM usage for host-resident weights
+                                                bool src_is_device = false;
+                                                try {
+                                                    sycl::usm::alloc atype = sycl::get_pointer_type(
+                                                        src0_data, ctx.stream()->get_context());
+                                                    src_is_device = (atype == sycl::usm::alloc::device);
+                                                } catch (...) {
+                                                }
+
+                                                if (src_is_device) {
+                                                    if (g_fp16_cache.store(wt_hash, weights_scratch,
+                                                                           weights_bytes, *ctx.stream())) {
+                                                        GGML_SYCL_DEBUG(
+                                                            "[FP16-CACHE] Cached %s: %.1fMB "
+                                                            "(total=%.1fMB/%.1fMB)\n",
+                                                            src0->name,
+                                                            weights_bytes / (1024.0f * 1024.0f),
+                                                            g_fp16_cache.total_bytes / (1024.0f * 1024.0f),
+                                                            g_fp16_cache.limit_bytes / (1024.0f * 1024.0f));
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            // FP16 cache disabled or non-weight: always dequantize
+                                            // Drain any in-flight pipeline prefetch first
+                                            if (pipe.enabled && pipe.prefetch_buf >= 0) {
+                                                pipe.dma_queue->wait();
+                                                pipe.prefetch_buf  = -1;
+                                                pipe.prefetch_src0 = nullptr;
+                                            }
+                                            dequant_to_fp16(src0_data, weights_scratch, src0_elems,
+                                                            ctx.stream());
+                                            fp16_weights_ptr = weights_scratch;
+                                        }
 
                                         // Convert activations (F32) to FP16
-                                        const to_fp16_sycl_t f32_to_fp16 = ggml_get_to_fp16_sycl(GGML_TYPE_F32, dst);
+                                        const to_fp16_sycl_t f32_to_fp16 =
+                                            ggml_get_to_fp16_sycl(GGML_TYPE_F32, dst);
                                         if (f32_to_fp16) {
-                                            f32_to_fp16(src1_data, activations_scratch, src1_elems, ctx.stream());
+                                            f32_to_fp16(src1_data, activations_scratch, src1_elems,
+                                                        ctx.stream());
 
                                             // OneDNN FP16 GEMM: C[M,N] = A[M,K] * B[K,N]^T
                                             // A = src1 (activations) [M, K]
@@ -22721,15 +23039,18 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                                                 static_cast<int>(N),  // row_diff = N (output cols)
                                                 static_cast<int>(M),  // src1_ncols = M (batch)
                                                 static_cast<int>(K),  // ne10 = K (reduction)
-                                                weights_scratch, DnnlGemmWrapper::to_dt<sycl::half>(),
-                                                activations_scratch, DnnlGemmWrapper::to_dt<sycl::half>(), dst_data,
-                                                DnnlGemmWrapper::to_dt<float>(), ctx.stream());
+                                                fp16_weights_ptr, DnnlGemmWrapper::to_dt<sycl::half>(),
+                                                activations_scratch, DnnlGemmWrapper::to_dt<sycl::half>(),
+                                                dst_data, DnnlGemmWrapper::to_dt<float>(), ctx.stream());
 
                                             used_onednn_fp16 = true;
                                             GGML_SYCL_DEBUG(
-                                                "[UNIFIED] OneDNN FP16: M=%lld K=%lld N=%lld type=%d scratch=%s\n",
-                                                (long long) M, (long long) K, (long long) N, src0->type,
-                                                using_scratch ? "yes" : "no");
+                                                "[UNIFIED] OneDNN FP16: M=%lld K=%lld N=%lld type=%d "
+                                                "scratch=%s fp16_cache=%s pipeline=%s\n",
+                                                (long long) M, (long long) K, (long long) N,
+                                                src0->type, using_scratch ? "yes" : "no",
+                                                fp16_cache_hit ? "hit" : "miss",
+                                                pp_pipeline_hit ? "hit" : "miss");
                                         }
                                     }
 
@@ -27322,6 +27643,12 @@ static void ggml_backend_sycl_free(ggml_backend_t backend) {
     }
     g_split_merge_queue  = nullptr;
     g_sycl_backend_refcount.fetch_sub(1, std::memory_order_acq_rel);
+    // Clean up FP16 weight cache VRAM allocations
+    if (g_fp16_cache.has_entries()) {
+        GGML_LOG_INFO("[SYCL] FP16 weight cache: freeing (%.1fMB)\n",
+                      g_fp16_cache.total_bytes / (1024.0f * 1024.0f));
+        g_fp16_cache.clear(*sycl_ctx->stream(sycl_ctx->device, 0));
+    }
     // L2 prefetch manager is owned by context via unique_ptr, cleaned up automatically
     // NOTE: We intentionally do NOT release host weight extras when refcount reaches 0.
     // Reason: Extras are associated with tensors, not backends. Tensors may outlive
@@ -28774,6 +29101,124 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
         }
     } preclassify_guard_;
 
+    // ========================================================================
+    // PP Pipeline pre-scan: build schedule of oneDNN-PP-eligible MUL_MAT nodes
+    // ========================================================================
+#if GGML_SYCL_DNNL
+    if (pp_pipeline_env_enabled()) {
+        auto & pipe = g_pp_pipeline;
+        pipe.reset_graph();
+        pipe.device_id = sycl_ctx->device;
+
+        // Read the PP threshold (mirrors the static check inside the PP path)
+        static int pp_threshold = -1;
+        if (pp_threshold < 0) {
+            const char * env = std::getenv("GGML_SYCL_ONEDNN_PP_MIN_BATCH");
+            pp_threshold     = env ? std::atoi(env) : 64;
+            if (pp_threshold < 1) pp_threshold = 64;
+        }
+
+        // Scan graph for PP-eligible MUL_MAT nodes
+        for (int i = 0; i < cgraph->n_nodes; i++) {
+            const ggml_tensor * node = cgraph->nodes[i];
+            if (!node || node->op != GGML_OP_MUL_MAT) {
+                continue;
+            }
+            const ggml_tensor * src0 = node->src[0];
+            const ggml_tensor * src1 = node->src[1];
+            if (!src0 || !src1) {
+                continue;
+            }
+            const int64_t M = src1->ne[1];
+            if (M < pp_threshold) {
+                continue;
+            }
+            if (!ggml_is_quantized(src0->type) || !ggml_is_contiguous(src0)) {
+                continue;
+            }
+            // Check if dequant function exists for this type.
+            // Pass full_tensor=false to get the AOS (non-reorder) dequant kernel,
+            // matching the AOS layout pointer resolved for the PP path.
+            const to_fp16_sycl_t dequant_fn = ggml_get_to_fp16_sycl(
+                src0->type, const_cast<ggml_tensor *>(node), /*full_tensor=*/false);
+            if (!dequant_fn) {
+                continue;
+            }
+            // Resolve the weight data pointer (host-pinned for large models)
+            const void * src0_data = ggml_sycl_get_layout_ptr_for(src0, sycl_ctx->device, GGML_LAYOUT_AOS);
+            if (!src0_data) {
+                continue;
+            }
+            const int64_t N         = src0->ne[1];
+            const int64_t K         = src0->ne[0];
+            const int64_t n_elems   = N * K;
+            const size_t  wt_bytes  = static_cast<size_t>(n_elems) * sizeof(sycl::half);
+
+            pp_pipeline_entry entry;
+            entry.src0_data    = src0_data;
+            entry.dequant_fn   = dequant_fn;
+            entry.n_elems      = n_elems;
+            entry.weight_bytes = wt_bytes;
+            pipe.schedule.push_back(entry);
+        }
+
+        // Initialize pipeline resources if we have a non-trivial schedule
+        if (pipe.schedule.size() >= 2) {
+            pipe.enabled = true;
+
+            // Create DMA queue on first use (in-order for L0 cross-queue deps)
+            if (!pipe.dma_queue) {
+                auto & compute_q = *sycl_ctx->stream(sycl_ctx->device, 0);
+                pipe.dma_queue = std::make_unique<sycl::queue>(
+                    compute_q.get_context(), compute_q.get_device(),
+                    sycl::property_list{ sycl::property::queue::in_order{} });
+            }
+
+            // Determine max weight size across schedule for scratch allocation
+            size_t max_weight_bytes = 0;
+            for (const auto & e : pipe.schedule) {
+                max_weight_bytes = std::max(max_weight_bytes, e.weight_bytes);
+            }
+
+            // Ensure double-buffer scratch is allocated (reuse across graphs)
+            for (int b = 0; b < 2; b++) {
+                if (pipe.scratch_size[b] < max_weight_bytes) {
+                    // Free old buffer
+                    if (pipe.scratch_buf[b]) {
+                        sycl::free(pipe.scratch_buf[b], *pipe.dma_queue);
+                        pipe.scratch_buf[b]  = nullptr;
+                        pipe.scratch_size[b] = 0;
+                    }
+                    // Allocate new buffer
+                    try {
+                        pipe.scratch_buf[b]  = sycl::malloc_device(max_weight_bytes, *pipe.dma_queue);
+                        pipe.scratch_size[b] = max_weight_bytes;
+                    } catch (const sycl::exception & e) {
+                        GGML_LOG_WARN("[SYCL] PP pipeline: scratch buf[%d] alloc failed (%.1f MB): %s\n",
+                                      b, max_weight_bytes / (1024.0 * 1024.0), e.what());
+                        pipe.enabled = false;
+                        break;
+                    }
+                }
+            }
+
+            if (pipe.enabled) {
+                // Submit prefetch for the first entry into buffer 0
+                pp_pipeline_submit_prefetch(pipe, 0);
+
+                static bool logged = false;
+                if (!logged) {
+                    GGML_LOG_INFO("[SYCL] PP pipeline: schedule=%zu entries, scratch=%.1f MB x2\n",
+                                  pipe.schedule.size(), max_weight_bytes / (1024.0 * 1024.0));
+                    logged = true;
+                }
+            }
+        } else {
+            pipe.enabled = false;
+        }
+    }
+#endif  // GGML_SYCL_DNNL
+
     for (int i = 0; i < cgraph->n_nodes; i++) {
         GGML_SYCL_DEBUG("[DEBUG-IMPL] Node %d/%d: ", i, cgraph->n_nodes);
         g_preclassified_node_idx = i;
@@ -29740,6 +30185,20 @@ gpu_dispatch:
         ggml_sycl_cpu_retained_deactivate();
         GGML_SYCL_DEBUG("[RETAINED] Flushed + deactivated at end of graph\n");
     }
+
+    // PP Pipeline: drain any in-flight prefetch at end of graph
+#if GGML_SYCL_DNNL
+    {
+        auto & pipe = g_pp_pipeline;
+        if (pipe.enabled && pipe.prefetch_buf >= 0) {
+            pipe.dma_queue->wait();
+            pipe.prefetch_buf  = -1;
+            pipe.prefetch_src0 = nullptr;
+        }
+        pipe.reset_graph();
+    }
+#endif
+
     // DEBUG: Check L31 weight at END of graph compute (disabled - TP working correctly)
     static int end_pass_dbg = 0;
     if (end_pass_dbg++ < 0 && g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1) {
