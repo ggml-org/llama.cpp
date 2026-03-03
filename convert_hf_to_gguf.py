@@ -4733,34 +4733,35 @@ class Qwen3VLMoeTextModel(Qwen3MoeModel):
         if name.startswith("model.visual."):
             return
 
-        # Qwen3VL has transposed packed tensors, so we treat it differently from general Qwen2MoE packed tensors
-        if name.endswith("mlp.experts.down_proj") or name.endswith("mlp.experts.down_proj.weight"):
-            name = name.replace("language_model.", "")
-            mapped = f"{name}.weight" if not name.endswith(".weight") else name
-            permuted = data_torch.permute(0, 2, 1).contiguous()
-            yield from ModelBase.modify_tensors(self, permuted, mapped, bid)
-            return
+        # Qwen3VLMoe stores expert tensors TRANSPOSED compared to Qwen2Moe.
+        # The parent Qwen2MoeModel expects:
+        #   gate_up_proj: [n_expert, 2*n_ff, n_embd]  e.g. [128, 1536, 2048]
+        #   down_proj:    [n_expert, n_embd, n_ff]     e.g. [128, 2048, 768]
+        # But Qwen3VLMoe HF stores them transposed (dims 1,2 swapped):
+        #   gate_up_proj: [n_expert, n_embd, 2*n_ff]   e.g. [128, 2048, 1536]
+        #   down_proj:    [n_expert, n_ff, n_embd]      e.g. [128, 768, 2048]
+        #
+        # Detect by name + validate by shape to be safe.
+        if data_torch.ndim == 3 and "experts" in name:
+            n_embd = self.hparams["hidden_size"]  # 2048
+            n_ff = self.hparams.get("moe_intermediate_size",
+                   self.hparams.get("expert_intermediate_size",
+                   self.hparams.get("shared_expert_intermediate_size", 0)))
 
-        if name.endswith("mlp.experts.gate_up_proj") or name.endswith("mlp.experts.gate_up_proj.weight"):
-            name = name.replace("language_model.", "")
-            if data_torch.ndim < 3 or data_torch.shape[-1] % 2 != 0:
-                raise ValueError(f"Unexpected gate_up_proj shape for {name}: {tuple(data_torch.shape)}")
-            split_dim = data_torch.shape[-1] // 2
-            gate = data_torch[..., :split_dim].contiguous()
-            up = data_torch[..., split_dim:].contiguous()
-            # Input gate/up: (n_expert=128, n_embd=2048, n_ff_exp=768)
-            # Want GGML ne: {n_embd, n_ff_exp, n_expert} = {2048, 768, 128}
-            # Need PyTorch: (128, 768, 2048) [reversed of GGML]
-            # So: permute(0, 2, 1): (128, 2048, 768) -> (128, 768, 2048)
-            base_name = name.removesuffix(".weight")
-            base = base_name.rsplit('.', 1)[0]
-            mapped_gate = f"{base}.gate_proj.weight"
-            mapped_up = f"{base}.up_proj.weight"
-            perm_gate = gate.permute(0, 2, 1).contiguous()
-            perm_up = up.permute(0, 2, 1).contiguous()
-            yield from ModelBase.modify_tensors(self, perm_gate, mapped_gate, bid)
-            yield from ModelBase.modify_tensors(self, perm_up, mapped_up, bid)
-            return
+            is_gate_up = "gate_up_proj" in name
+            is_down = "down_proj" in name and "gate" not in name
+
+            needs_transpose = False
+            if is_gate_up and data_torch.shape[1] == n_embd and data_torch.shape[2] == 2 * n_ff:
+                # HF: [n_expert, n_embd, 2*n_ff] → need [n_expert, 2*n_ff, n_embd]
+                needs_transpose = True
+            elif is_down and data_torch.shape[1] == n_ff and data_torch.shape[2] == n_embd:
+                # HF: [n_expert, n_ff, n_embd] → need [n_expert, n_embd, n_ff]
+                needs_transpose = True
+
+            if needs_transpose:
+                logger.info(f"Qwen3VLMoe: transposing {name} from {list(data_torch.shape)} to {[data_torch.shape[0], data_torch.shape[2], data_torch.shape[1]]}")
+                data_torch = data_torch.permute(0, 2, 1).contiguous()
 
         yield from super().modify_tensors(data_torch, name, bid)
 
