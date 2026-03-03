@@ -631,7 +631,7 @@ class ModelsStore {
 	}
 
 	toggleFavourite(modelId: string): void {
-		const next = new Set(this.favouriteModelIds);
+		const next = new SvelteSet(this.favouriteModelIds);
 		if (next.has(modelId)) {
 			next.delete(modelId);
 		} else {

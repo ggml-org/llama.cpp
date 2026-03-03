@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { SvelteMap } from 'svelte/reactivity';
 	import { ChevronDown, Loader2, Package } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -103,7 +104,7 @@
 		}
 
 		// Org-scoped groups — exclude models already shown in Favourites
-		const orgGroups = new Map<string, { option: ModelOption; flatIndex: number }[]>();
+		const orgGroups = new SvelteMap<string, { option: ModelOption; flatIndex: number }[]>();
 		for (let i = 0; i < filteredOptions.length; i++) {
 			const option = filteredOptions[i];
 

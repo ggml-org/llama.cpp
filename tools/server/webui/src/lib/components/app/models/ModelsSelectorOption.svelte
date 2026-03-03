@@ -13,7 +13,6 @@
 		isSelected: boolean;
 		isHighlighted: boolean;
 		isFav: boolean;
-		highlightedIndex: number;
 		showOrgName?: boolean;
 		onSelect: (modelId: string) => void;
 		onMouseEnter: () => void;
@@ -63,7 +62,7 @@
 
 	{#if option.aliases && option.aliases.length > 0}
 		<div class="flex items-center gap-1">
-			{#each option.aliases as alias}
+			{#each option.aliases as alias (alias)}
 				<Badge variant="tertiary" class="px-1 py-0 font-mono text-[10px]">
 					{alias}
 				</Badge>
@@ -73,7 +72,7 @@
 
 	{#if option.tags && option.tags.length > 0}
 		<div class="flex items-center gap-1">
-			{#each option.tags as tag}
+			{#each option.tags as tag (tag)}
 				<Badge variant="outline" class="px-1 py-0 font-mono text-[10px]">
 					{tag}
 				</Badge>
@@ -85,7 +84,7 @@
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<!-- svelte-ignore a11y_click_events_have_key_events -->
 		<div
-			class="flex items-center justify-center w-4 pl-2 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto"
+			class="pointer-events-none flex w-4 items-center justify-center pl-2 opacity-0 group-hover:pointer-events-auto group-hover:opacity-100"
 			onclick={(e) => e.stopPropagation()}
 		>
 			{#if isFav}
@@ -124,7 +123,7 @@
 				</Tooltip.Content>
 			</Tooltip.Root>
 		{:else if isFailed}
-			<div class="flex items-center justify-center w-4">
+			<div class="flex w-4 items-center justify-center">
 				<CircleAlert class="h-3.5 w-3.5 text-red-500 group-hover:hidden" />
 
 				<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -140,7 +139,7 @@
 				</div>
 			</div>
 		{:else if isLoaded}
-			<div class="flex items-center justify-center w-4">
+			<div class="flex w-4 items-center justify-center">
 				<span class="h-2 w-2 rounded-full bg-green-500 group-hover:hidden"></span>
 
 				<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -150,13 +149,13 @@
 						iconSize="h-2.5 w-2.5"
 						icon={PowerOff}
 						tooltip="Unload model"
-						class="text-red-500 hover:text-red-600 h-3 w-3"
+						class="h-3 w-3 text-red-500 hover:text-red-600"
 						onclick={() => modelsStore.unloadModel(option.model)}
 					/>
 				</div>
 			</div>
 		{:else}
-			<div class="flex items-center justify-center w-4">
+			<div class="flex w-4 items-center justify-center">
 				<span class="h-2 w-2 rounded-full bg-muted-foreground/50 group-hover:hidden"></span>
 
 				<!-- svelte-ignore a11y_no_static_element_interactions -->
