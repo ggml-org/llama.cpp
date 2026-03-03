@@ -508,22 +508,21 @@ class ModelsStore {
 
 	/** Polling interval in ms for checking model status */
 	private static readonly STATUS_POLL_INTERVAL = 500;
-	/** Maximum polling attempts before giving up */
-	private static readonly STATUS_POLL_MAX_ATTEMPTS = 60; // 30 seconds max
 
 	/**
 	 * Poll for expected model status after load/unload operation.
-	 * Keeps polling until the model reaches the expected status, fails, or times out.
+	 * Keeps polling indefinitely until the model reaches the expected status or fails.
 	 *
 	 * @param modelId - Model identifier to check
 	 * @param expectedStatus - Expected status to wait for
-	 * @throws Error if model reaches FAILED status or polling times out
+	 * @throws Error if model reaches FAILED status
 	 */
 	private async pollForModelStatus(
 		modelId: string,
 		expectedStatus: ServerModelStatus
 	): Promise<void> {
-		for (let attempt = 0; attempt < ModelsStore.STATUS_POLL_MAX_ATTEMPTS; attempt++) {
+		let attempt = 0;
+		while (true) {
 			await this.fetchRouterModels();
 
 			const currentStatus = this.getModelStatus(modelId);
@@ -547,12 +546,9 @@ class ModelsStore {
 				throw new Error('Model was unloaded unexpectedly during loading');
 			}
 
+			attempt++;
 			await new Promise((resolve) => setTimeout(resolve, ModelsStore.STATUS_POLL_INTERVAL));
 		}
-
-		throw new Error(
-			`Model did not reach expected status '${expectedStatus}' within ${((ModelsStore.STATUS_POLL_MAX_ATTEMPTS * ModelsStore.STATUS_POLL_INTERVAL) / 1000).toFixed(0)}s`
-		);
 	}
 
 	/**
