@@ -68,6 +68,7 @@ struct ggml_webgpu_shader_lib_context {
     size_t   wg_mem_limit_bytes       = 0;
     bool     inplace                  = false;
     bool     overlap                  = false;
+    bool     src_overlap              = false;
     bool     supports_subgroup_matrix = false;
     uint32_t sg_mat_m                 = 0;
     uint32_t sg_mat_n                 = 0;
@@ -179,9 +180,10 @@ struct ggml_webgpu_binary_pipeline_key {
     int  op;
     bool inplace;
     bool overlap;
+    bool src_overlap;
 
     bool operator==(const ggml_webgpu_binary_pipeline_key & other) const {
-        return type == other.type && op == other.op && inplace == other.inplace && overlap == other.overlap;
+        return type == other.type && op == other.op && inplace == other.inplace && overlap == other.overlap && src_overlap == other.src_overlap;
     }
 };
 
@@ -192,6 +194,7 @@ struct ggml_webgpu_binary_pipeline_key_hash {
         ggml_webgpu_hash_combine(seed, key.op);
         ggml_webgpu_hash_combine(seed, key.inplace);
         ggml_webgpu_hash_combine(seed, key.overlap);
+        ggml_webgpu_hash_combine(seed, key.src_overlap);
         return seed;
     }
 };
@@ -1044,6 +1047,7 @@ class ggml_webgpu_shader_lib {
             .op      = context.dst->op,
             .inplace = context.inplace,
             .overlap = context.overlap,
+            .src_overlap = context.src_overlap,
         };
 
         auto it = binary_pipelines.find(key);
@@ -1076,6 +1080,9 @@ class ggml_webgpu_shader_lib {
         } else if (key.overlap) {
             defines.push_back("OVERLAP");
             variant += "_overlap";
+        } else if (key.src_overlap) {
+            defines.push_back("SRC_OVERLAP");
+            variant += "_src_overlap";
         }
 
         defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));

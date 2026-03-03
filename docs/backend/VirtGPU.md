@@ -152,7 +152,9 @@ Commands and data are serialized using a custom binary protocol with:
 - **VM-specific**: Only works in virtual machines with virtio-gpu support
 - **Host dependency**: Requires properly configured host-side backend
 - **Latency**: Small overhead from VM escaping for each operation
-
+- **Shared-memory size**: with the `libkrun` hypervisor, the RAM + VRAM
+  addressable memory is limited to 64 GB. So the maximum GPU memory
+  will be `64GB - RAM`, regardless of the hardware VRAM size.
 
 * This work is pending upstream changes in the VirglRenderer
   project.

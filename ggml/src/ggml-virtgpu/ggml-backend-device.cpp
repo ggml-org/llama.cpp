@@ -3,6 +3,7 @@
 static const char * ggml_backend_remoting_device_get_name(ggml_backend_dev_t dev) {
     virtgpu * gpu = DEV_TO_GPU(dev);
 
+    // Return the prefixed name that was built once during initialization
     return gpu->cached_device_info.name;
 }
 
@@ -22,7 +23,7 @@ static enum ggml_backend_dev_type ggml_backend_remoting_device_get_type(ggml_bac
 static void ggml_backend_remoting_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
     virtgpu * gpu = DEV_TO_GPU(dev);
 
-    *free = gpu->cached_device_info.memory_free;
+    *free  = gpu->cached_device_info.memory_free;
     *total = gpu->cached_device_info.memory_total;
 }
 
@@ -72,7 +73,7 @@ static void ggml_backend_remoting_device_get_props(ggml_backend_dev_t dev, ggml_
 ggml_backend_buffer_type_t ggml_backend_remoting_device_get_buffer_type(ggml_backend_dev_t dev) {
     virtgpu * gpu = DEV_TO_GPU(dev);
 
-    static std::atomic<bool> initialized = false;
+    static std::atomic<bool>        initialized = false;
     static ggml_backend_buffer_type buft;
 
     if (!initialized) {
@@ -95,7 +96,7 @@ ggml_backend_buffer_type_t ggml_backend_remoting_device_get_buffer_type(ggml_bac
 static ggml_backend_buffer_type_t ggml_backend_remoting_device_get_buffer_from_ptr_type(ggml_backend_dev_t dev) {
     virtgpu * gpu = DEV_TO_GPU(dev);
 
-    static std::atomic<bool> initialized = false;
+    static std::atomic<bool>        initialized = false;
     static ggml_backend_buffer_type buft;
 
     if (!initialized) {
