@@ -1532,7 +1532,12 @@ void * host_cache::ensure_cached_alloc(const ggml_sycl_cache_id &    key_id,
         pooled_alloc = false;
     }
     if (!host_ptr) {
-        if (can_alias) {
+        // Last resort: alias the source pointer directly (mmap or heap).
+        // For AOS layout (no reorder needed), the source data can be read as-is by CPU
+        // dispatch.  Allow aliasing even for non-USM mmap pointers when layout is AOS
+        // and sizes match — the pointer is only used on the CPU side.
+        const bool can_mmap_alias = (layout == GGML_LAYOUT_AOS && src_ptr && src_size == dst_size);
+        if (can_alias || can_mmap_alias) {
             host_cache_entry entry{};
             entry.host_ptr     = const_cast<void *>(src_ptr);
             entry.src_ptr      = src_ptr;
@@ -2943,14 +2948,39 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                 }
 
                 if (!new_device_ptr) {
-                    // Only fail if no host fallback available
-                    if (force_host) {
-                        GGML_LOG_ERROR("[UNIFIED-CACHE] layout fallback failed (budget exhausted)\n");
-                    } else {
-                        GGML_LOG_ERROR("[UNIFIED-CACHE] layout allocation failed, no host fallback available\n");
+                    // Last resort: alias the mmap source pointer directly for host-side
+                    // routing.  For AOS layout, the source data matches directly.  For
+                    // non-AOS layouts (SOA, COALESCED), we degrade to AOS — the caller
+                    // will use host-side routing with the original AOS data, losing the
+                    // layout optimization but avoiding a complete cache failure.
+                    if (request.src_ptr && request.src_size > 0) {
+                        const bool is_aos = (request.layout == GGML_LAYOUT_AOS && !request.fill_fn);
+                        const bool can_degrade = (request.layout != GGML_LAYOUT_AOS &&
+                                                  request.src_size <= request.dst_size);
+                        if (is_aos || can_degrade) {
+                            GGML_SYCL_DEBUG(
+                                "[UNIFIED-CACHE] Aliasing mmap src%s: model=%llu name_hash=0x%llx "
+                                "layout=%d->AOS size=%zu\n",
+                                can_degrade ? " (AOS degraded)" : "",
+                                (unsigned long long) request.key.model_id,
+                                (unsigned long long) request.key.name_hash,
+                                (int) request.layout, request.src_size);
+                            new_device_ptr   = const_cast<void *>(request.src_ptr);
+                            is_host_resident = true;
+                            host_location    = cache_location::HOST_MMAP;
+                        }
                     }
-                    result.status = cache_layout_status::FAILED;
-                    return result;
+
+                    if (!new_device_ptr) {
+                        // Only fail if no host fallback available
+                        if (force_host) {
+                            GGML_LOG_ERROR("[UNIFIED-CACHE] layout fallback failed (budget exhausted)\n");
+                        } else {
+                            GGML_LOG_ERROR("[UNIFIED-CACHE] layout allocation failed, no host fallback available\n");
+                        }
+                        result.status = cache_layout_status::FAILED;
+                        return result;
+                    }
                 }
             }
 

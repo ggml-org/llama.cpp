@@ -19365,18 +19365,20 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
         GGML_SYCL_DEBUG("[MOE] Caching expert %ld layout=%d src=%p size=%zu\n", (long) e, (int) layout, req.src_ptr,
                         req.src_size);
         ggml_sycl::cache_layout_result result = cache->ensure_cached_layout(req, {});
-        GGML_SYCL_DEBUG("[MOE] Expert %ld cache result: status=%d device_ptr=%p\n", (long) e, (int) result.status,
-                        result.device_ptr);
+        GGML_SYCL_DEBUG("[MOE] Expert %ld cache result: status=%d device_ptr=%p host_resident=%d\n", (long) e,
+                        (int) result.status, result.device_ptr, result.host_resident ? 1 : 0);
         if (result.status != ggml_sycl::cache_layout_status::READY &&
             result.status != ggml_sycl::cache_layout_status::IN_PROGRESS) {
-            GGML_LOG_ERROR("[MOE] Failed to cache expert %ld layout=%d status=%d\n", (long) e, (int) layout,
-                           (int) result.status);
-            return false;
+            // Cache miss: leave pointer as nullptr so hybrid dispatch can route to CPU.
+            // Log at debug level (not error) since this is expected for large MoE models.
+            GGML_SYCL_DEBUG("[MOE] Cache miss for expert %ld layout=%d status=%d (host fallback)\n", (long) e,
+                            (int) layout, (int) result.status);
+            continue;
         }
 
         if (result.device_ptr == nullptr) {
-            GGML_LOG_ERROR("[MOE] Failed to cache expert %ld layout=%d (null ptr)\n", (long) e, (int) layout);
-            return false;
+            GGML_SYCL_DEBUG("[MOE] Null ptr for expert %ld layout=%d (host fallback)\n", (long) e, (int) layout);
+            continue;
         }
         if (result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
             table_deps.push_back(result.event);
