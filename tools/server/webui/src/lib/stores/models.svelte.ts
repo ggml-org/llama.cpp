@@ -533,11 +533,17 @@ class ModelsStore {
 
 			// If the model reached a terminal failure state, stop polling
 			if (currentStatus === ServerModelStatus.FAILED) {
-				throw new Error(`Model failed to ${expectedStatus === ServerModelStatus.LOADED ? 'load' : 'unload'}`);
+				throw new Error(
+					`Model failed to ${expectedStatus === ServerModelStatus.LOADED ? 'load' : 'unload'}`
+				);
 			}
 
 			// If the model unexpectedly became unloaded while we expected it to load, stop
-			if (expectedStatus === ServerModelStatus.LOADED && currentStatus === ServerModelStatus.UNLOADED && attempt > 2) {
+			if (
+				expectedStatus === ServerModelStatus.LOADED &&
+				currentStatus === ServerModelStatus.UNLOADED &&
+				attempt > 2
+			) {
 				throw new Error('Model was unloaded unexpectedly during loading');
 			}
 
@@ -545,7 +551,7 @@ class ModelsStore {
 		}
 
 		throw new Error(
-			`Model did not reach expected status '${expectedStatus}' within ${(ModelsStore.STATUS_POLL_MAX_ATTEMPTS * ModelsStore.STATUS_POLL_INTERVAL / 1000).toFixed(0)}s`
+			`Model did not reach expected status '${expectedStatus}' within ${((ModelsStore.STATUS_POLL_MAX_ATTEMPTS * ModelsStore.STATUS_POLL_INTERVAL) / 1000).toFixed(0)}s`
 		);
 	}
 
