@@ -39,3 +39,12 @@ void common_speculative_accept(common_speculative * spec, uint16_t n_accepted);
 
 // print statistics about the speculative decoding
 void common_speculative_print_stats(const common_speculative * spec);
+
+// checkpoint/restore for hybrid/recurrent models during speculative verification
+bool common_speculative_needs_checkpoint(const common_speculative * spec);
+
+void common_speculative_checkpoint_save(
+    common_speculative * spec, llama_context * ctx, llama_seq_id seq_id);
+
+void common_speculative_checkpoint_restore(
+    common_speculative * spec, llama_context * ctx, llama_seq_id seq_id);

@@ -2602,6 +2602,13 @@ private:
             llama_set_embeddings(ctx, slot_batched->task->need_embd());
         }
 
+        // save recurrent state checkpoint for slots with draft tokens (before decode)
+        for (auto & slot : slots) {
+            if (slot.state == SLOT_STATE_GENERATING && !slot.drafted.empty()) {
+                common_speculative_checkpoint_save(slot.spec, ctx, slot.id);
+            }
+        }
+
         if (batch.n_tokens == 0) {
             SRV_WRN("%s", "no tokens to decode\n");
         }
@@ -2821,7 +2828,29 @@ private:
                 slot.prompt.tokens.insert({ids.begin(), ids.end() - 1});
                 slot.sampled = ids.back(); // last accepted token
 
-                llama_memory_seq_rm(llama_get_memory(ctx), slot.id, slot.prompt.n_tokens(), -1);
+                if (common_speculative_needs_checkpoint(slot.spec) && ids.size() <= n_draft) {
+                    // some draft tokens were rejected -- checkpoint-based rollback for hybrid/recurrent
+                    common_speculative_checkpoint_restore(slot.spec, ctx, slot.id);
+
+                    // clear KV entries for sampled + draft tokens (recurrent state already restored)
+                    const int n_redo  = (int) ids.size();
+                    const int pos_start = (int) slot.prompt.n_tokens() - n_redo;
+                    llama_memory_seq_rm(llama_get_memory(ctx), slot.id, pos_start, -1);
+
+                    // re-decode accepted tokens to rebuild KV + advance recurrent state
+                    llama_batch batch_redo = llama_batch_init(n_redo, 0, 1);
+                    common_batch_clear(batch_redo);
+                    for (int i = 0; i < n_redo; ++i) {
+                        common_batch_add(batch_redo, slot.prompt.tokens[pos_start + i],
+                                         pos_start + i, { slot.id }, false);
+                    }
+                    llama_decode(ctx, batch_redo);
+                    llama_batch_free(batch_redo);
+
+                    SLT_DBG(slot, "checkpoint rollback: restored and re-decoded %d tokens\n", n_redo);
+                } else {
+                    llama_memory_seq_rm(llama_get_memory(ctx), slot.id, slot.prompt.n_tokens(), -1);
+                }
 
                 for (size_t i = 0; i < ids.size(); ++i) {
                     completion_token_output result;

@@ -740,6 +740,10 @@ struct common_speculative_state_ngram_cache : public common_speculative_state {
 struct common_speculative {
     std::vector<std::unique_ptr<common_speculative_state>> impls; // list of implementations to use and their states
     common_speculative_state * curr_impl = nullptr; // current implementation in use (for stats)
+
+    // checkpoint-based rollback for hybrid/recurrent models
+    bool needs_checkpoint = false;
+    std::vector<uint8_t> checkpoint_buf;
 };
 
 static common_ngram_map get_common_ngram_map(const common_speculative_config & config) {
@@ -822,9 +826,14 @@ bool common_speculative_is_compat(llama_context * ctx_tgt) {
 
     // try to remove the last tokens
     if (!llama_memory_seq_rm(mem, 0, 1, -1)) {
-        LOG_WRN("%s: the target context does not support partial sequence removal\n", __func__);
-        res = false;
-        goto done;
+        const auto * model = llama_get_model(ctx_tgt);
+        if (llama_model_is_hybrid(model) || llama_model_is_recurrent(model)) {
+            LOG_INF("%s: hybrid/recurrent model -- will use checkpoint-based rollback\n", __func__);
+        } else {
+            LOG_WRN("%s: the target context does not support partial sequence removal\n", __func__);
+            res = false;
+            goto done;
+        }
     }
 
 done:
@@ -966,8 +975,15 @@ common_speculative * common_speculative_init(
     }
 
     auto * result = new common_speculative {
-        /* .impls = */ std::move(impls)
+        /* .impls            = */ std::move(impls),
+        /* .curr_impl        = */ nullptr,
+        /* .needs_checkpoint = */ false,
+        /* .checkpoint_buf   = */ {},
     };
+
+    const auto * model = llama_get_model(ctx_tgt);
+    result->needs_checkpoint = llama_model_is_hybrid(model)
+                            || llama_model_is_recurrent(model);
 
     return result;
 }
@@ -1043,6 +1059,35 @@ void common_speculative_accept(common_speculative * spec, uint16_t n_accepted) {
         impl->accept(n_accepted);
         impl->n_call_accept++;
     }
+}
+
+bool common_speculative_needs_checkpoint(const common_speculative * spec) {
+    return spec && spec->needs_checkpoint;
+}
+
+void common_speculative_checkpoint_save(
+        common_speculative * spec, llama_context * ctx, llama_seq_id seq_id) {
+    if (!spec || !spec->needs_checkpoint) {
+        return;
+    }
+
+    const size_t size = llama_state_seq_get_size_ext(
+        ctx, seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+    spec->checkpoint_buf.resize(size);
+    llama_state_seq_get_data_ext(
+        ctx, spec->checkpoint_buf.data(), size,
+        seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+}
+
+void common_speculative_checkpoint_restore(
+        common_speculative * spec, llama_context * ctx, llama_seq_id seq_id) {
+    if (!spec || !spec->needs_checkpoint || spec->checkpoint_buf.empty()) {
+        return;
+    }
+
+    llama_state_seq_set_data_ext(
+        ctx, spec->checkpoint_buf.data(), spec->checkpoint_buf.size(),
+        seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
 }
 
 void common_speculative_print_stats(const common_speculative * spec) {

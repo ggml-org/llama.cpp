@@ -156,6 +156,8 @@ int main(int argc, char ** argv) {
         //LOG_DBG("draft: %s\n", string_from(ctx_dft, draft).c_str());
 
         // always have a token to evaluate from before - id_last
+        const int n_past_before = n_past;
+
         common_batch_clear(batch_tgt);
         common_batch_add  (batch_tgt, id_last, n_past++, { 0 }, true);
 
@@ -168,6 +170,11 @@ int main(int argc, char ** argv) {
 
             for (size_t i = 0; i < draft.size(); ++i) {
                 common_batch_add(batch_tgt, draft[i], n_past + i, { 0 }, true);
+            }
+
+            // save recurrent state checkpoint before verification decode
+            if (!draft.empty()) {
+                common_speculative_checkpoint_save(spec, ctx_tgt, 0);
             }
 
             //LOG_DBG("target batch: %s\n", string_from(ctx_tgt, batch_tgt).c_str());
@@ -222,7 +229,26 @@ int main(int argc, char ** argv) {
         {
             LOG_DBG("clear kv cache from any extra tokens, n_past = %d\n", n_past);
 
-            llama_memory_seq_rm(llama_get_memory(ctx_tgt), 0, n_past, -1);
+            if (common_speculative_needs_checkpoint(spec) && !draft.empty() && (int) ids.size() <= (int) draft.size()) {
+                // some draft tokens were rejected -- checkpoint-based rollback for hybrid/recurrent models
+                common_speculative_checkpoint_restore(spec, ctx_tgt, 0);
+                llama_memory_seq_rm(llama_get_memory(ctx_tgt), 0, n_past_before, -1);
+
+                // re-decode accepted tokens to rebuild KV + advance recurrent state
+                const int n_redo = (int) ids.size();
+                llama_batch batch_redo = llama_batch_init(n_redo, 0, 1);
+                common_batch_clear(batch_redo);
+                for (int i = 0; i < n_redo; ++i) {
+                    common_batch_add(batch_redo, prompt_tgt[prompt_tgt.size() - n_redo + i],
+                                     n_past_before + i, { 0 }, false);
+                }
+                llama_decode(ctx_tgt, batch_redo);
+                llama_batch_free(batch_redo);
+
+                LOG_DBG("checkpoint rollback: restored and re-decoded %d tokens\n", n_redo);
+            } else {
+                llama_memory_seq_rm(llama_get_memory(ctx_tgt), 0, n_past, -1);
+            }
         }
 
         if ((params.n_predict >= 0 && n_predict > params.n_predict) || has_eos) {
