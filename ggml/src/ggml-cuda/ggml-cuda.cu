@@ -1283,6 +1283,38 @@ static void ggml_cuda_op_mul_mat_cublas(
 
         const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(GGML_TYPE_BF16);
         to_fp32_cuda(dst_bf16.get(), dst_dd_i, row_diff*src1_ncols, stream);
+    } else if (bf16_mma_hardware_available(cc) && use_fp16) {
+        // bf16 is numerically more stable than fp16, so it's the preferable option if available (requires Ampere or RDNA3 or newer)
+        // convert src0 and src1 to bf16, multiply as bf16, convert dst to fp32
+        ggml_cuda_pool_alloc<nv_bfloat16> src0_as_bf16(ctx.pool(id));
+        if (src0->type != GGML_TYPE_BF16) {
+            const to_bf16_cuda_t to_bf16_cuda = ggml_get_to_bf16_cuda(src0->type);
+            GGML_ASSERT(to_bf16_cuda != nullptr);
+            size_t ne = row_diff * ne00;
+            src0_as_bf16.alloc(ne);
+            to_bf16_cuda(src0_dd_i, src0_as_bf16.get(), ne, stream);
+        }
+        const nv_bfloat16 * src0_ptr =
+            src0->type == GGML_TYPE_BF16 ? (const nv_bfloat16 *) src0_dd_i : src0_as_bf16.get();
+
+        ggml_cuda_pool_alloc<nv_bfloat16> src1_as_bf16(ctx.pool(id));
+        if (src1->type != GGML_TYPE_BF16) {
+            const to_bf16_cuda_t to_bf16_cuda = ggml_get_to_bf16_cuda(src1->type);
+            GGML_ASSERT(to_bf16_cuda != nullptr);
+            size_t ne = src1_ncols * ne10;
+            src1_as_bf16.alloc(ne);
+            to_bf16_cuda(src1_ddf_i, src1_as_bf16.get(), ne, stream);
+        }
+        const nv_bfloat16 * src1_ptr =
+            src1->type == GGML_TYPE_BF16 ? (const nv_bfloat16 *) src1_ddf_i : src1_as_bf16.get();
+
+        const float alpha_f32 = 1.0f;
+        const float beta_f32  = 0.0f;
+
+        CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(id), stream));
+        CUBLAS_CHECK(cublasGemmEx(ctx.cublas_handle(id), CUBLAS_OP_T, CUBLAS_OP_N, row_diff, src1_ncols, ne10,
+                                  &alpha_f32, src0_ptr, CUDA_R_16BF, ne00, src1_ptr, CUDA_R_16BF, ne10, &beta_f32,
+                                  dst_dd_i, CUDA_R_32F, ldc, CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT));
     } else if (fast_fp16_hardware_available(cc) && use_fp16) {
         // convert src0 and src1 to fp16, multiply as fp16, convert dst to fp32
         ggml_cuda_pool_alloc<half> src0_as_f16(ctx.pool(id));

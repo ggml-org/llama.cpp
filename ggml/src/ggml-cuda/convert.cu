@@ -81,6 +81,52 @@ static __global__ void dequantize_block_q8_0_f16(const void * __restrict__ vx, h
 #endif // __CUDA_ARCH__ >= GGML_CUDA_CC_PASCAL
 }
 
+template <bool need_check>
+static __global__ void dequantize_block_q8_0_bf16(const void * __restrict__ vx,
+                                                  nv_bfloat16 * __restrict__ y,
+                                                  const int64_t k) {
+#if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+    constexpr int nint = CUDA_Q8_0_NE_ALIGN / sizeof(int) + WARP_SIZE;
+
+    const int64_t    i0 = CUDA_Q8_0_NE_ALIGN * blockIdx.x;
+    const int *      x0 = ((int *) vx) + blockIdx.x * nint;
+    __nv_bfloat162 * y2 = (__nv_bfloat162 *) (y + i0);
+
+    __shared__ int vals[nint];
+
+#    pragma unroll
+    for (int ix0 = 0; ix0 < nint; ix0 += WARP_SIZE) {
+        if (need_check &&
+            i0 * sizeof(block_q8_0) / QK8_0 + sizeof(int) * (ix0 + threadIdx.x) >= k * sizeof(block_q8_0) / QK8_0) {
+            break;
+        }
+
+        const int ix = ix0 + threadIdx.x;
+        vals[ix]     = x0[ix];
+    }
+
+    __syncthreads();
+
+#    pragma unroll
+    for (int iy = 0; iy < CUDA_Q8_0_NE_ALIGN; iy += 2 * WARP_SIZE) {
+        if (need_check && i0 + iy + 2 * threadIdx.x >= k) {
+            return;
+        }
+
+        const half * b0 =
+            ((const half *) vals) + (sizeof(block_q8_0) / sizeof(half)) * ((iy + 2 * threadIdx.x) / QK8_0);
+        const half        d     = *b0;
+        const nv_bfloat16 d_b16 = nv_bfloat16(d);
+        const char2       qs    = ((const char2 *) (b0 + 1))[threadIdx.x % (QK8_0 / 2)];
+
+        y2[iy / 2 + threadIdx.x] = __hmul2(make_bfloat162(qs.x, qs.y), __bfloat162bfloat162(d_b16));
+    }
+#else
+    GGML_UNUSED_VARS(vx, y, k);
+    NO_DEVICE_CODE;
+#endif  // __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+}
+
 template<typename dst_t>
 static __global__ void dequantize_block_q4_0(const void * __restrict__ vx, dst_t * __restrict__ yy, int nb32) {
 
@@ -513,6 +559,20 @@ static void dequantize_block_q8_0_f16_cuda(const void * __restrict__ vx, half * 
     }
 }
 
+static void dequantize_block_q8_0_bf16_cuda(const void * __restrict__ vx,
+                                            nv_bfloat16 * __restrict__ y,
+                                            const int64_t k,
+                                            cudaStream_t  stream) {
+    const int num_blocks = (k + CUDA_Q8_0_NE_ALIGN - 1) / CUDA_Q8_0_NE_ALIGN;
+    if (k % CUDA_Q8_0_NE_ALIGN == 0) {
+        const bool need_check = false;
+        dequantize_block_q8_0_bf16<need_check><<<num_blocks, WARP_SIZE, 0, stream>>>(vx, y, k);
+    } else {
+        const bool need_check = true;
+        dequantize_block_q8_0_bf16<need_check><<<num_blocks, WARP_SIZE, 0, stream>>>(vx, y, k);
+    }
+}
+
 template<typename dst_t>
 static void dequantize_row_q2_K_cuda(const void * vx, dst_t * y, const int64_t k, cudaStream_t stream) {
     const int nb = k / QK_K;
@@ -665,6 +725,49 @@ to_bf16_cuda_t ggml_get_to_bf16_cuda(ggml_type type) {
             return convert_unary_cont_cuda<float>;
         case GGML_TYPE_F16:
             return convert_unary_cont_cuda<half>;
+        case GGML_TYPE_Q8_0:
+            if (bf16_mma_hardware_available(ggml_cuda_info().devices[ggml_cuda_get_device()].cc)) {
+                return dequantize_block_q8_0_bf16_cuda;
+            }
+            return dequantize_block_cont_cuda<QK8_0, QR8_0, dequantize_q8_0>;
+        case GGML_TYPE_Q4_0:
+            return dequantize_row_q4_0_cuda;
+        case GGML_TYPE_Q4_1:
+            return dequantize_row_q4_1_cuda;
+        case GGML_TYPE_Q5_0:
+            return dequantize_block_cont_cuda<QK5_0, QR5_0, dequantize_q5_0>;
+        case GGML_TYPE_Q5_1:
+            return dequantize_block_cont_cuda<QK5_1, QR5_1, dequantize_q5_1>;
+        case GGML_TYPE_Q2_K:
+            return dequantize_row_q2_K_cuda;
+        case GGML_TYPE_Q3_K:
+            return dequantize_row_q3_K_cuda;
+        case GGML_TYPE_Q4_K:
+            return dequantize_row_q4_K_cuda;
+        case GGML_TYPE_Q5_K:
+            return dequantize_row_q5_K_cuda;
+        case GGML_TYPE_Q6_K:
+            return dequantize_row_q6_K_cuda;
+        case GGML_TYPE_IQ2_XXS:
+            return dequantize_row_iq2_xxs_cuda;
+        case GGML_TYPE_IQ2_XS:
+            return dequantize_row_iq2_xs_cuda;
+        case GGML_TYPE_IQ2_S:
+            return dequantize_row_iq2_s_cuda;
+        case GGML_TYPE_IQ3_XXS:
+            return dequantize_row_iq3_xxs_cuda;
+        case GGML_TYPE_IQ1_S:
+            return dequantize_row_iq1_s_cuda;
+        case GGML_TYPE_IQ1_M:
+            return dequantize_row_iq1_m_cuda;
+        case GGML_TYPE_IQ4_NL:
+            return dequantize_row_iq4_nl_cuda;
+        case GGML_TYPE_IQ4_XS:
+            return dequantize_row_iq4_xs_cuda;
+        case GGML_TYPE_IQ3_S:
+            return dequantize_row_iq3_s_cuda;
+        case GGML_TYPE_MXFP4:
+            return dequantize_row_mxfp4_cuda;
         default:
             return nullptr;
     }
