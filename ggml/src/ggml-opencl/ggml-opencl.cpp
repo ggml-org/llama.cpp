@@ -4888,49 +4888,34 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
             "Incorrect tensor size");
 
         cl_int err;
-        cl_mem data_device = clCreateBuffer(context, CL_MEM_READ_WRITE,
-            ggml_nbytes(tensor), NULL, &err);
-        CL_CHECK(err);
-        CL_CHECK(clEnqueueWriteBuffer(
-            queue, data_device, CL_TRUE, 0,
-            ggml_nbytes(tensor), data, 0, NULL, NULL));
+        cl_mem data_device;
+        CL_CHECK((data_device = clCreateBuffer(context, CL_MEM_READ_WRITE, ggml_nbytes(tensor), NULL, &err), err));
+        CL_CHECK(clEnqueueWriteBuffer(queue, data_device, CL_TRUE, 0, ggml_nbytes(tensor), data, 0, NULL, NULL));
 
         cl_buffer_region region;
 
         // Subbuffer for ql
         region.origin = align_to(extra_orig->offset + tensor->view_offs + offset, backend_ctx->alignment);
         region.size = size_ql;
-        extra->ql = clCreateSubBuffer(
-            extra_orig->data_device, CL_MEM_READ_WRITE,
-            CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
-        CL_CHECK(err);
+        CL_CHECK((extra->ql = clCreateSubBuffer(extra_orig->data_device, CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
         auto previous_origin = region.origin;
 
         // Subbuffer for qh
         region.origin = align_to(previous_origin + size_ql, backend_ctx->alignment);
         region.size = size_qh;
-        extra->qh = clCreateSubBuffer(
-            extra_orig->data_device, CL_MEM_READ_WRITE,
-            CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
-        CL_CHECK(err);
+        CL_CHECK((extra->qh = clCreateSubBuffer(extra_orig->data_device, CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
         previous_origin = region.origin;
 
         // Subbuffer for scales
         region.origin = align_to(previous_origin + size_qh, backend_ctx->alignment);
         region.size = size_s;
-        extra->s = clCreateSubBuffer(
-            extra_orig->data_device, CL_MEM_READ_WRITE,
-            CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
-        CL_CHECK(err);
+        CL_CHECK((extra->s = clCreateSubBuffer(extra_orig->data_device, CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
         previous_origin = region.origin;
 
         // Create subbuffer for d.
         region.origin = align_to(previous_origin + size_s, backend_ctx->alignment);
         region.size = size_d;
-        extra->d = clCreateSubBuffer(
-            extra_orig->data_device, CL_MEM_READ_WRITE,
-            CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
-        CL_CHECK(err);
+        CL_CHECK((extra->d = clCreateSubBuffer(extra_orig->data_device, CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
         previous_origin = region.origin;
 
         // Flatten the weights
@@ -4944,19 +4929,17 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
         kernel = backend_ctx->kernel_convert_block_q6_K;
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
 
-        CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &data_device));
-        CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &extra->ql));
-        CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &extra->qh));
-        CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem), &extra->s));
-        CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem), &extra->d));
-#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
-        if (use_adreno_kernels(backend_ctx, tensor)) {
-            cl_uchar mask = 0xff;
-            CL_CHECK(clSetKernelArg(kernel, 5, sizeof(cl_uchar), &mask));
-        }
-#endif // GGML_OPENCL_USE_ADRENO_KERNELS
+        cl_uchar mask = 0xff;
+        cl_ulong n_blk = ggml_nelements(tensor)/ggml_blck_size(tensor->type);
+        CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &data_device));
+        CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem),   &extra->ql));
+        CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &extra->qh));
+        CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem),   &extra->s));
+        CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem),   &extra->d));
+        CL_CHECK(clSetKernelArg(kernel, 5, sizeof(cl_uchar), &mask));
+        CL_CHECK(clSetKernelArg(kernel, 6, sizeof(cl_ulong), &n_blk));
 
-        size_t global_work_size[] = {(size_t)ggml_nelements(tensor)/ggml_blck_size(tensor->type), 1, 1};
+        size_t global_work_size[] = {(size_t)CEIL_DIV(n_blk, 64)*64, 1, 1};
         size_t local_work_size[] = {64, 1, 1};
 
         cl_event evt;
@@ -5355,15 +5338,17 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, 
 
             // unpack
             cl_uchar mask = 0xFF;
+            cl_ulong n_blk = ggml_nelements(tensor)/ggml_blck_size(tensor->type);
             cl_kernel kernel = backend_ctx->kernel_restore_block_q6_K_noshuffle;
-            CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &buf_trans_ql.buffer));
-            CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &buf_trans_qh.buffer));
-            CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &buf_trans_s.buffer));
-            CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem), &buf_trans_d.buffer));
-            CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem), &buf_unpacked.buffer));
+            CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &buf_trans_ql.buffer));
+            CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem),   &buf_trans_qh.buffer));
+            CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &buf_trans_s.buffer));
+            CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem),   &buf_trans_d.buffer));
+            CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem),   &buf_unpacked.buffer));
             CL_CHECK(clSetKernelArg(kernel, 5, sizeof(cl_uchar), &mask));
+            CL_CHECK(clSetKernelArg(kernel, 6, sizeof(cl_ulong), &n_blk));
 
-            size_t global_work_size[] = {(size_t)ggml_nelements(tensor)/ggml_blck_size(tensor->type), 1, 1};
+            size_t global_work_size[] = {(size_t)n_blk, 1, 1};
             size_t local_work_size[] = {1, 1, 1};
 
             cl_event evt;
@@ -5380,14 +5365,18 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, 
             ggml_nbytes(tensor), NULL, &err);
         CL_CHECK(err);
 
+        cl_uchar mask = 0xFF;
+        cl_ulong n_blk = ggml_nelements(tensor)/ggml_blck_size(tensor->type);
         cl_kernel kernel = backend_ctx->kernel_restore_block_q6_K;
-        CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &extra->ql));
-        CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &extra->qh));
-        CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &extra->s));
-        CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem), &extra->d));
-        CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem), &data_device));
+        CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra->ql));
+        CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem),   &extra->qh));
+        CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &extra->s));
+        CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem),   &extra->d));
+        CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem),   &data_device));
+        CL_CHECK(clSetKernelArg(kernel, 5, sizeof(cl_uchar), &mask));
+        CL_CHECK(clSetKernelArg(kernel, 6, sizeof(cl_ulong), &n_blk));
 
-        size_t global_work_size[] = {(size_t)ggml_nelements(tensor)/ggml_blck_size(tensor->type), 1, 1};
+        size_t global_work_size[] = {(size_t)n_blk, 1, 1};
         size_t local_work_size[] = {1, 1, 1};
 
         cl_event evt;
@@ -9532,15 +9521,15 @@ static void ggml_cl_mul_mat_q6_K_f32_adreno(ggml_backend_t backend, const ggml_t
 
         kernel = backend_ctx->kernel_gemv_noshuffle_q6_K_f32;
 
-        CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),      &ql_img));
-        CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem),      &qh_img));
-        CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),      &extra0_q6_K->s));
-        CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem),      &extra0_q6_K->d));
-        CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem),      &b_img));
-        CL_CHECK(clSetKernelArg(kernel, 5, sizeof(cl_mem),      &extrad->data_device));
-        CL_CHECK(clSetKernelArg(kernel, 6, sizeof(cl_ulong),    &offsetd));
-        CL_CHECK(clSetKernelArg(kernel, 7, sizeof(cl_int),      &ne00));
-        CL_CHECK(clSetKernelArg(kernel, 8, sizeof(cl_int),      &ne01));
+        CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &ql_img));
+        CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem),   &qh_img));
+        CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &extra0_q6_K->s));
+        CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem),   &extra0_q6_K->d));
+        CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem),   &b_img));
+        CL_CHECK(clSetKernelArg(kernel, 5, sizeof(cl_mem),   &extrad->data_device));
+        CL_CHECK(clSetKernelArg(kernel, 6, sizeof(cl_ulong), &offsetd));
+        CL_CHECK(clSetKernelArg(kernel, 7, sizeof(cl_int),   &ne00));
+        CL_CHECK(clSetKernelArg(kernel, 8, sizeof(cl_int),   &ne01));
 
         size_t local_work_size[3] = {64, 4, 1};
         size_t global_work_size[3] = {(size_t)CEIL_DIV(ne01/2, 64)*64, 4, 1};
