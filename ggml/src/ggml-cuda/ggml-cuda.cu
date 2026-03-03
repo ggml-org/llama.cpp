@@ -1225,27 +1225,33 @@ static cudaError_t ggml_cuda_cpy_tensor_2d(
     }
 }
 
-static cublasComputeType_t ggml_cuda_cublas_get_force_compute_type() {
-    static const cublasComputeType_t force_compute_type = [] {
+struct cublas_force_compute_type
+{
+    bool fp32 = false;
+    bool fp16 = false;
+};
+
+static const cublas_force_compute_type & ggml_cuda_cublas_get_force_compute_type() {
+    static const cublas_force_compute_type compute_type = [] {
+        cublas_force_compute_type result;
+
         const bool ggml_cuda_force_cublas_compute_32f_env = getenv("GGML_CUDA_FORCE_CUBLAS_COMPUTE_32F") != nullptr;
         const bool ggml_cuda_force_cublas_compute_16f_env = getenv("GGML_CUDA_FORCE_CUBLAS_COMPUTE_16F") != nullptr;
         
         GGML_ASSERT(ggml_cuda_force_cublas_compute_16f_env == false || ggml_cuda_force_cublas_compute_32f_env == false);
-        static_assert(CUBLAS_COMPUTE_32F != 0 && CUBLAS_COMPUTE_16F != 0);
         
         if (ggml_cuda_force_cublas_compute_32f_env) {
-            GGML_LOG_INFO("ggml_cuda_cublas_get_force_compute_type: detected GGML_CUDA_FORCE_CUBLAS_COMPUTE_32F\n");
-            return CUBLAS_COMPUTE_32F;
-        }
-        if (ggml_cuda_force_cublas_compute_16f_env) {
-            GGML_LOG_INFO("ggml_cuda_cublas_get_force_compute_type: detected GGML_CUDA_FORCE_CUBLAS_COMPUTE_16F\n");
-            return CUBLAS_COMPUTE_16F;
+            GGML_LOG_INFO("Detected GGML_CUDA_FORCE_CUBLAS_COMPUTE_32F\n");
+            result.fp32 = true;
+        } else if (ggml_cuda_force_cublas_compute_16f_env) {
+            GGML_LOG_INFO("Detected GGML_CUDA_FORCE_CUBLAS_COMPUTE_16F\n");
+            result.fp16 = true;
         }
 
-        return cublasComputeType_t(0);
+        return result;
     }();
 
-    return force_compute_type;
+    return compute_type;
 }
 
 static void ggml_cuda_op_mul_mat_cublas(
@@ -1330,12 +1336,12 @@ static void ggml_cuda_op_mul_mat_cublas(
 
         CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(id), stream));
 
-        const auto force_compute_type = ggml_cuda_cublas_get_force_compute_type();
+        const auto & force_compute_type = ggml_cuda_cublas_get_force_compute_type();
 
-        if (force_compute_type != CUBLAS_COMPUTE_16F && (GGML_CUDA_CC_IS_CDNA(cc)
-                                                        || GGML_CUDA_CC_IS_RDNA4(cc)
-                                                        || cc == GGML_CUDA_CC_VOLTA
-                                                        || force_compute_type == CUBLAS_COMPUTE_32F)) 
+        if (!force_compute_type.fp16 && (GGML_CUDA_CC_IS_CDNA(cc)
+                                        || GGML_CUDA_CC_IS_RDNA4(cc)
+                                        || cc == GGML_CUDA_CC_VOLTA
+                                        || force_compute_type.fp32)) 
         {
             const float alpha = 1.0f;
             const float beta = 0.0f;
@@ -1936,7 +1942,7 @@ static void ggml_cuda_mul_mat_batched_cublas_impl(ggml_backend_cuda_context & ct
     const void * alpha = traits::get_alpha();
     const void * beta = traits::get_beta();
 
-    const auto force_compute_type = ggml_cuda_cublas_get_force_compute_type();
+    const auto & force_compute_type = ggml_cuda_cublas_get_force_compute_type();
     
     int id = ggml_cuda_get_device();
     const int cc = ggml_cuda_info().devices[id].cc;
@@ -1946,10 +1952,10 @@ static void ggml_cuda_mul_mat_batched_cublas_impl(ggml_backend_cuda_context & ct
     // so checking necessity of forced fp32 only for fp16 src0_type
     static_assert(is_src0_type_f16 || traits::compute_type == CUBLAS_COMPUTE_32F);
 
-    const bool need_compute_32f = is_src0_type_f16 && force_compute_type != CUBLAS_COMPUTE_16F && (GGML_CUDA_CC_IS_CDNA(cc)
-                                                                                                  || GGML_CUDA_CC_IS_RDNA4(cc)
-                                                                                                  || cc == GGML_CUDA_CC_VOLTA
-                                                                                                  || force_compute_type == CUBLAS_COMPUTE_32F);
+    const bool need_compute_32f = is_src0_type_f16 && !force_compute_type.fp16 && (GGML_CUDA_CC_IS_CDNA(cc)
+                                                                                  || GGML_CUDA_CC_IS_RDNA4(cc)
+                                                                                  || cc == GGML_CUDA_CC_VOLTA
+                                                                                  || force_compute_type.fp32);
 
 
     if (dst->op_params[0] == GGML_PREC_DEFAULT && !need_compute_32f) {
