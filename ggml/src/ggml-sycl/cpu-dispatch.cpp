@@ -4227,6 +4227,119 @@ bool ggml_sycl_compute_fused_add_rms_norm(ggml_backend_sycl_context & ctx,
 }
 
 // ---------------------------------------------------------------------------
+// CPU PP GEMM — dequant + sgemm for prompt processing on host-resident weights
+// ---------------------------------------------------------------------------
+
+bool ggml_sycl_cpu_pp_gemm(ggml_type weight_type,
+                            const void * weight_host, int64_t N, int64_t K,
+                            const float * src1_host, int64_t M,
+                            float * dst_host, int64_t ldc) {
+    const int64_t nb01 = static_cast<int64_t>(ggml_row_size(weight_type, K));
+    const char *  weight_bytes = static_cast<const char *>(weight_host);
+
+    // Primary path: quantized vec_dot (avoids dequantizing all N*K weights to F32).
+    // Quantize M activation rows to vec_dot input type (e.g. Q8_0), then
+    // compute C[m,n] = vec_dot(weight_row[n], src1_q[m]) for all m,n.
+    const auto * cpu_traits = ggml_get_type_traits_cpu(weight_type);
+    if (cpu_traits && cpu_traits->vec_dot) {
+        const ggml_type   vec_dot_type   = cpu_traits->vec_dot_type;
+        const auto *      vdt_cpu_traits = ggml_get_type_traits_cpu(vec_dot_type);
+        ggml_from_float_t from_float_fn  = vdt_cpu_traits ? vdt_cpu_traits->from_float : nullptr;
+
+        if (from_float_fn) {
+            const size_t q_row_size = ggml_row_size(vec_dot_type, K);
+
+            // Allocate quantized activation buffer (reused across calls)
+            static thread_local std::vector<uint8_t> tl_src1_q;
+            tl_src1_q.resize(static_cast<size_t>(M) * q_row_size);
+
+            // Quantize all M activation rows: F32 -> Q8_0
+            for (int64_t m = 0; m < M; m++) {
+                from_float_fn(src1_host + m * K, tl_src1_q.data() + m * q_row_size, K);
+            }
+
+            // Extract raw pointer BEFORE entering TBB parallel_for.
+            // tl_src1_q is thread_local — TBB workers would see their own
+            // (empty) copy if we referenced the vector inside the lambda.
+            const uint8_t * src1_q_ptr = tl_src1_q.data();
+            const int       K_int      = static_cast<int>(K);
+
+#if GGML_SYCL_HAS_TBB
+            // Parallelize over N output rows; each row is independent.
+            // Inner loop over M activation rows is sequential per row.
+            const int n_threads_hint = ggml_sycl_cpu_threads_hint();
+            const int target_tasks   = std::max(1, n_threads_hint * 2);
+            const int grain          = std::max(1, static_cast<int>(N) / target_tasks);
+            ggml_sycl_cpu_arena().execute([&, src1_q_ptr, K_int] {
+                ggml_sycl_tbb::parallel_for(
+                    ggml_sycl_tbb::blocked_range<int>(0, static_cast<int>(N), grain),
+                    [&, src1_q_ptr, K_int](const ggml_sycl_tbb::blocked_range<int> & r) {
+                        for (int n = r.begin(); n < r.end(); n++) {
+                            const void * weight_row = weight_bytes + static_cast<int64_t>(n) * nb01;
+                            for (int64_t m = 0; m < M; m++) {
+                                float dot_result = 0.0f;
+                                cpu_traits->vec_dot(K_int, &dot_result, sizeof(float),
+                                                    weight_row, 0,
+                                                    src1_q_ptr + m * q_row_size, 0, 1);
+                                dst_host[m * ldc + n] = dot_result;
+                            }
+                        }
+                    });
+            });
+#else
+            // Serial fallback when TBB is unavailable
+            for (int64_t n = 0; n < N; n++) {
+                const void * weight_row = weight_bytes + n * nb01;
+                for (int64_t m = 0; m < M; m++) {
+                    float dot_result = 0.0f;
+                    cpu_traits->vec_dot(K_int, &dot_result, sizeof(float),
+                                        weight_row, 0,
+                                        src1_q_ptr + m * q_row_size, 0, 1);
+                    dst_host[m * ldc + n] = dot_result;
+                }
+            }
+#endif
+            return true;
+        }
+    }
+
+    // Fallback: dequantize weights to F32, then dnnl_sgemm.
+    // Useful for types with to_float but no vec_dot (rare).
+#if GGML_SYCL_DNNL
+    {
+        const auto * type_traits = ggml_get_type_traits(weight_type);
+        if (!type_traits || !type_traits->to_float) {
+            return false;
+        }
+
+        static thread_local std::vector<float> tl_weight_f32;
+        tl_weight_f32.resize(static_cast<size_t>(N) * K);
+
+        for (int64_t row = 0; row < N; row++) {
+            const void * row_data = weight_bytes + row * nb01;
+            type_traits->to_float(row_data, tl_weight_f32.data() + row * K, K);
+        }
+
+        dnnl_status_t status = dnnl_sgemm('T', 'N',
+                                           static_cast<dnnl_dim_t>(N),
+                                           static_cast<dnnl_dim_t>(M),
+                                           static_cast<dnnl_dim_t>(K),
+                                           1.0f,
+                                           tl_weight_f32.data(), static_cast<dnnl_dim_t>(K),
+                                           src1_host, static_cast<dnnl_dim_t>(K),
+                                           0.0f,
+                                           dst_host, static_cast<dnnl_dim_t>(ldc));
+        if (status != dnnl_success) {
+            return false;
+        }
+    }
+#else
+    return false;
+#endif
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // Main dispatch entry point
 // ---------------------------------------------------------------------------
 

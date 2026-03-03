@@ -130,6 +130,23 @@ void ggml_sycl_cpu_expert_mul_mat_batched(
     int n_threads = 0);
 
 // ---------------------------------------------------------------------------
+// CPU PP GEMM — batched GEMM on host-resident quantized weights for PP
+// ---------------------------------------------------------------------------
+
+// Compute batched GEMM on host-resident quantized weights for PP (large M).
+// Primary path: quantize activations (F32 -> Q8_0), then parallel vec_dot
+// per output element.  Falls back to dequant-to-F32 + dnnl_sgemm if vec_dot
+// is unavailable for the weight type.
+// weight_host: raw pointer to quantized weight rows [N rows, each ggml_row_size bytes]
+// src1_host:   F32 activation matrix [M, K] row-major
+// dst_host:    F32 output matrix [M, N] row-major
+// Returns true on success, false if unsupported (no vec_dot or dequant function)
+bool ggml_sycl_cpu_pp_gemm(ggml_type weight_type,
+                            const void * weight_host, int64_t N, int64_t K,
+                            const float * src1_host, int64_t M,
+                            float * dst_host, int64_t ldc);
+
+// ---------------------------------------------------------------------------
 // Mixed-Precision Cache Miss Loading (HOBBIT-style)
 // ---------------------------------------------------------------------------
 

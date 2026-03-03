@@ -22034,6 +22034,118 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
     }
 
     // =====================================================================
+    // CPU batched GEMM for PP on host-resident weights.
+    // For 120B+ models where weights overflow to host-pinned memory, CPU
+    // reads DDR5 at 60-70 GB/s vs GPU PCIe at 12-25 GB/s.  For PP (M>=64),
+    // quantize activations and use parallel vec_dot — avoids GPU dequant +
+    // FP16 GEMM entirely, which is PCIe bottlenecked.
+    // Gated behind GGML_SYCL_CPU_PP=1 (opt-in).
+    // =====================================================================
+    {
+        static const bool cpu_pp_enabled = []() {
+            const char * env = std::getenv("GGML_SYCL_CPU_PP");
+            return env && std::atoi(env) != 0;
+        }();
+
+        static const int cpu_pp_threshold = []() {
+            const char * env = std::getenv("GGML_SYCL_CPU_PP_MIN_BATCH");
+            int val = env ? std::atoi(env) : 64;
+            return val > 0 ? val : 64;
+        }();
+
+        const int64_t M_pp = src1->ne[1];  // batch size
+
+        if (cpu_pp_enabled &&
+            M_pp >= cpu_pp_threshold &&            // PP workload (large batch)
+            ggml_is_quantized(src0->type) &&       // quantized weights
+            src1->type == GGML_TYPE_F32 &&
+            dst->type == GGML_TYPE_F32 &&
+            ggml_sycl_is_host_resident_weight(src0, ctx.stream())) {
+
+            // Check that we have a CPU dequant function
+            const auto * type_traits = ggml_get_type_traits(src0->type);
+            if (type_traits && type_traits->to_float) {
+                // ggml MUL_MAT convention:  C^T = A * B^T  =>  C = B * A^T
+                //   src0 = A  (weights)     [ne00 x ne01]  (ne00 = K, ne01 = N)
+                //   src1 = B  (activations) [ne10 x ne11]  (ne10 = K, ne11 = M)
+                //   dst  = C  (output)      [ne0  x ne1 ]  (ne0  = N, ne1  = M)
+                const int64_t K = src0->ne[0];
+                const int64_t N = src0->ne[1];
+                const int64_t M = M_pp;
+
+                // Host-resident weights: direct access via src0->data (host-pinned or mmap)
+                GGML_ASSERT(src0->data && "host-resident weight must have valid host pointer");
+                const void * weight_host = src0->data;
+
+                // AOS stride for host data
+                const int64_t nb01 = static_cast<int64_t>(ggml_row_size(src0->type, K));
+
+                // Batch dimensions (broadcast src0 if ne02/ne03 < ne12/ne13)
+                const int64_t ne02 = src0->ne[2];
+                const int64_t ne03 = src0->ne[3];
+                const int64_t ne12 = src1->ne[2];
+                const int64_t ne13 = src1->ne[3];
+                const int64_t nb02 = nb01 * N;
+                const int64_t nb03 = nb02 * ne02;
+
+                // Staging buffers for D2H(src1) and H2D(dst)
+                const size_t src1_total_bytes = ggml_nbytes(src1);
+                const size_t dst_total_bytes  = ggml_nbytes(dst);
+
+                sycl::queue * stream = ctx.stream();
+
+                GGML_SYCL_DEBUG("[CPU-PP] type=%d M=%lld K=%lld N=%lld tensor=%s\n",
+                                (int) src0->type, (long long) M, (long long) K, (long long) N,
+                                src0->name ? src0->name : "?");
+
+                // Thread-local staging to avoid per-call allocation
+                static thread_local std::vector<float> tl_src1_host;
+                static thread_local std::vector<float> tl_dst_host;
+
+                tl_src1_host.resize(src1_total_bytes / sizeof(float));
+                tl_dst_host.resize(dst_total_bytes / sizeof(float));
+
+                // D2H: copy all activations from GPU to host
+                stream->memcpy(tl_src1_host.data(), src1->data, src1_total_bytes).wait();
+
+                // Process each batch
+                const int64_t ldc = N;  // dst is [M, N] row-major, stride = N
+                bool gemm_ok = true;
+
+                for (int64_t i13 = 0; i13 < ne13 && gemm_ok; i13++) {
+                    for (int64_t i12 = 0; i12 < ne12 && gemm_ok; i12++) {
+                        const int64_t i02 = i12 % ne02;
+                        const int64_t i03 = i13 % ne03;
+
+                        const char * src0_batch =
+                            static_cast<const char *>(weight_host) + i02 * nb02 + i03 * nb03;
+
+                        // src1 batch offset: src1 is contiguous F32 [K, M, ne12, ne13]
+                        const float * src1_batch =
+                            tl_src1_host.data() + (i13 * ne12 + i12) * M * K;
+
+                        // dst batch offset: dst is contiguous F32 [N, M, ne12, ne13]
+                        float * dst_batch =
+                            tl_dst_host.data() + (i13 * ne12 + i12) * M * N;
+
+                        // Quantized vec_dot GEMM via cpu-dispatch wrapper
+                        gemm_ok = ggml_sycl_cpu_pp_gemm(
+                            src0->type, src0_batch, N, K,
+                            src1_batch, M, dst_batch, ldc);
+                    }
+                }
+
+                if (gemm_ok) {
+                    // H2D: copy result back to GPU
+                    stream->memcpy(dst->data, tl_dst_host.data(), dst_total_bytes).wait();
+                    return;
+                }
+                // Fall through to GPU path if GEMM failed
+            }
+        }
+    }
+
+    // =====================================================================
     // TG fast-path: batch=1, single-device, quantized -> MMVQ (same as master)
     // Bypasses orchestrator, name parsing, prefetch, TP checks for maximum speed.
     // With SOA layout enabled by default, MMVQ+SOA is ~30% faster than unified DMMV+SOA.
