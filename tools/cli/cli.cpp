@@ -54,6 +54,8 @@ struct cli_context {
     task_params defaults;
     bool verbose_prompt;
 
+    bool enable_thinking;
+
     // thread for showing "loading" animation
     std::atomic<bool> loading_show;
 
@@ -69,6 +71,7 @@ struct cli_context {
         // defaults.return_progress = true; // TODO: show progress
 
         verbose_prompt = params.verbose_prompt;
+        enable_thinking = true;
     }
 
     std::string generate_completion(result_timings & out_timings) {
@@ -188,7 +191,7 @@ struct cli_context {
         inputs.use_jinja             = chat_params.use_jinja;
         inputs.parallel_tool_calls   = false;
         inputs.add_generation_prompt = true;
-        inputs.enable_thinking       = chat_params.enable_thinking;
+        inputs.enable_thinking       = chat_params.enable_thinking && enable_thinking;
 
         // Apply chat template to the list of messages
         return common_chat_templates_apply(chat_params.tmpls.get(), inputs);
@@ -283,6 +286,9 @@ int main(int argc, char ** argv) {
     console::log("  /regen              regenerate the last response\n");
     console::log("  /clear              clear the chat history\n");
     console::log("  /read               add a text file\n");
+    if (inf.chat_params.enable_thinking) {
+        console::log("  /think [on/off]     toggle think on supported model\n");
+    }
     if (inf.has_inp_image) {
         console::log("  /image <file>       add an image file\n");
     }
@@ -346,6 +352,13 @@ int main(int argc, char ** argv) {
         // process commands
         if (string_starts_with(buffer, "/exit")) {
             break;
+        } else if (string_starts_with(buffer, "/think") && inf.chat_params.enable_thinking) {
+            std::string think_str = string_strip(buffer.substr(6));
+            if (think_str != "") {
+                ctx_cli.enable_thinking = think_str == "on";
+            }
+            console::log("Thinking is %s now.\n", ctx_cli.enable_thinking ? "on" : "off");
+            continue;
         } else if (string_starts_with(buffer, "/regen")) {
             if (ctx_cli.messages.size() >= 2) {
                 size_t last_idx = ctx_cli.messages.size() - 1;
