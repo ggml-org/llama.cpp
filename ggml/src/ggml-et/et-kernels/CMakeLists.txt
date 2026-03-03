@@ -101,9 +101,9 @@ set(EMBED_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/scripts/embed_kernels.py)
 set(EMBED_HPP ${CMAKE_CURRENT_BINARY_DIR}/ggml-et-kernels-embed.hpp)
 set(EMBED_CPP ${CMAKE_CURRENT_BINARY_DIR}/ggml-et-kernels-embed.cpp)
 
-set(KERNEL_ELF_FILES)
+set(KERNEL_ELF_TARGETS)
 foreach(KERNEL ${KERNELS})
-    list(APPEND KERNEL_ELF_FILES ${CMAKE_CURRENT_BINARY_DIR}/${KERNEL}.elf)
+    list(APPEND KERNEL_ELF_TARGETS ${KERNEL}.elf)
 endforeach()
 
 add_custom_command(
@@ -112,7 +112,8 @@ add_custom_command(
         --input-dir ${CMAKE_CURRENT_BINARY_DIR}
         --output-hpp ${EMBED_HPP}
         --output-cpp ${EMBED_CPP}
-    DEPENDS ${KERNEL_ELF_FILES} ${EMBED_SCRIPT}
+        --kernels ${KERNELS}
+    DEPENDS ${KERNEL_ELF_TARGETS} ${EMBED_SCRIPT}
     COMMENT "Embedding ET kernels into source code"
     VERBATIM
 )

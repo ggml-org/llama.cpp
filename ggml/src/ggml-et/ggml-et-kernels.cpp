@@ -96,7 +96,8 @@ bool ggml_et_load_kernel(ggml_backend_et_device_context* dev_ctx, const std::str
 }
 
 bool ggml_et_launch_kernel(ggml_backend_et_device_context* dev_ctx, const std::string& kernel_name,
-                          void* params, size_t params_size, uint64_t shire_mask, bool enable_print) {
+                          void* params, size_t params_size, uint64_t shire_mask, bool enable_print,
+                          bool sync_error_check) {
     std::shared_ptr<rt::IRuntime> runtime = ggml_et_runtime();
     if (!runtime) {
         GGML_LOG_ERROR("ET: Runtime not available for kernel launch\n");
@@ -140,6 +141,18 @@ bool ggml_et_launch_kernel(ggml_backend_et_device_context* dev_ctx, const std::s
             );
         }
 
+        if(sync_error_check) {
+            runtime->waitForStream(dev_ctx->default_stream);
+            auto errors = runtime->retrieveStreamErrors(dev_ctx->default_stream);
+            if(!errors.empty()) {
+                GGML_LOG_ERROR("ET: Errors detected before kernel \"%s\" launch\n", kernel_name.c_str());
+                for(const auto& error : errors) {
+                    GGML_LOG_ERROR("ET: Error code: %d\n", (int)error.errorCode_);
+                }
+                abort();
+            }
+        }
+
         runtime->kernelLaunch(dev_ctx->default_stream, kernel_id,
                              reinterpret_cast<std::byte*>(params), params_size, k_opts);
 
@@ -156,6 +169,18 @@ bool ggml_et_launch_kernel(ggml_backend_et_device_context* dev_ctx, const std::s
                 }
                 const auto* strEntry = reinterpret_cast<const trace_string_t*>(entry);
                 printf("[hart %d] %s", entry->hart_id, strEntry->string);
+            }
+        }
+
+        if(sync_error_check) {
+            runtime->waitForStream(dev_ctx->default_stream);
+            auto errors = runtime->retrieveStreamErrors(dev_ctx->default_stream);
+            if(!errors.empty()) {
+                GGML_LOG_ERROR("ET: Errors detected during kernel \"%s\" execution\n", kernel_name.c_str());
+                for(const auto& error : errors) {
+                    GGML_LOG_ERROR("ET: Error code: %d\n", (int)error.errorCode_);
+                }
+                abort();
             }
         }
 
