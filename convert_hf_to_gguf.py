@@ -4753,14 +4753,14 @@ class Qwen3VLMoeTextModel(Qwen3MoeModel):
 
             needs_transpose = False
             if is_gate_up and data_torch.shape[1] == n_embd and data_torch.shape[2] == 2 * n_ff:
-                # HF: [n_expert, n_embd, 2*n_ff] → need [n_expert, 2*n_ff, n_embd]
+                # Transposed shape: [n_expert, n_embd, 2*n_ff] → needs fixing to HF native [n_expert, 2*n_ff, n_embd]
                 needs_transpose = True
             elif is_down and data_torch.shape[1] == n_ff and data_torch.shape[2] == n_embd:
-                # HF: [n_expert, n_ff, n_embd] → need [n_expert, n_embd, n_ff]
+                # Transposed shape: [n_expert, n_ff, n_embd] → needs fixing to HF native [n_expert, n_embd, n_ff]
                 needs_transpose = True
 
             if needs_transpose:
-                logger.info(f"Qwen3VLMoe: transposing {name} from {list(data_torch.shape)} to {[data_torch.shape[0], data_torch.shape[2], data_torch.shape[1]]}")
+                logger.warning(f"Qwen3VLMoe: Detected incorrectly transposed {name} {list(data_torch.shape)}. Re-transposing to {[data_torch.shape[0], data_torch.shape[2], data_torch.shape[1]]}")
                 data_torch = data_torch.permute(0, 2, 1).contiguous()
 
         yield from super().modify_tensors(data_torch, name, bid)
