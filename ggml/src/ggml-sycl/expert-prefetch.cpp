@@ -27,7 +27,16 @@ ExpertPrefetcher::~ExpertPrefetcher() {
     if (initialized_ && !ggml_sycl_is_shutting_down()) {
         shutdown();
     }
-    // During static destruction, intentionally leak the queue handle.
+    // Free VRAM pool slots.
+    if (!ggml_sycl_is_shutting_down() && dma_queue_) {
+        for (auto & slot : vram_pool_) {
+            if (slot.ptr) {
+                sycl::free(slot.ptr, *dma_queue_);
+                slot.ptr = nullptr;
+            }
+        }
+    }
+    // During static destruction, intentionally leak the queue handle + VRAM pool.
     // The OS reclaims all process memory at exit.
     if (ggml_sycl_is_shutting_down() && dma_queue_) {
         (void) dma_queue_.release();
@@ -64,7 +73,8 @@ void ExpertPrefetcher::shutdown() {
 
     cancel_all();
     initialized_ = false;
-    GGML_LOG_INFO("[SYCL] Expert prefetcher shut down (completed=%d)\n", completed_count_);
+    GGML_LOG_INFO("[SYCL] Expert prefetcher shut down (prefetched=%d, already_cached=%d)\n",
+                  completed_count_, prefetch_hits_);
 }
 
 // ============================================================================
@@ -72,18 +82,104 @@ void ExpertPrefetcher::shutdown() {
 // ============================================================================
 
 bool ExpertPrefetcher::hint(int layer_idx, int expert_idx) {
-    // Prefetching disabled after ExpertCache removal.
-    // Weight management is now handled by unified cache.
-    (void) layer_idx;
-    (void) expert_idx;
-    return false;
+    if (!initialized_ || !dma_queue_) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    expert_key key{ layer_idx, expert_idx };
+
+    // Already in-flight or completed — skip.
+    if (inflight_.count(key)) {
+        return false;
+    }
+
+    // Check capacity (GC first to free completed slots).
+    gc_completed();
+    if (!has_capacity()) {
+        return false;
+    }
+
+    // Look up expert in placement table.
+    auto & ptable = get_expert_placement_table();
+    if (!ptable.is_initialized()) {
+        return false;
+    }
+
+    auto placement = ptable.get(layer_idx, expert_idx);
+
+    // Already in VRAM — nothing to prefetch.
+    if (placement.device_ptr) {
+        prefetch_hits_++;
+        return false;
+    }
+
+    // No host pointer — cannot prefetch.
+    if (!placement.host_ptr || placement.weight_bytes == 0) {
+        return false;
+    }
+
+    // Lazily allocate VRAM pool on first use, sized to this expert's weight_bytes.
+    if (vram_pool_.empty()) {
+        vram_slot_bytes_ = placement.weight_bytes;
+        vram_pool_.resize(max_inflight_);
+        for (auto & slot : vram_pool_) {
+            try {
+                slot.ptr  = sycl::malloc_device(vram_slot_bytes_, *dma_queue_);
+                slot.free = (slot.ptr != nullptr);
+            } catch (const sycl::exception &) {
+                slot.ptr  = nullptr;
+                slot.free = false;
+            }
+        }
+        size_t allocated = 0;
+        for (const auto & slot : vram_pool_) {
+            if (slot.ptr) { allocated++; }
+        }
+        GGML_LOG_INFO("[SYCL] Expert prefetch VRAM pool: %zu/%d slots (%.1f MB each)\n",
+                      allocated, max_inflight_, vram_slot_bytes_ / (1024.0 * 1024.0));
+    }
+
+    // Skip if expert is larger than pool slots (model changed mid-run).
+    if (placement.weight_bytes > vram_slot_bytes_) {
+        return false;
+    }
+
+    // Acquire a VRAM slot.
+    int slot = acquire_vram_slot();
+    if (slot < 0) {
+        return false;
+    }
+
+    // Submit async H2D DMA on the OOQ.
+    void * dst = vram_pool_[slot].ptr;
+    try {
+        sycl::event ev = dma_queue_->memcpy(dst, placement.host_ptr, placement.weight_bytes);
+
+        PrefetchRequest req;
+        req.key        = key;
+        req.event      = ev;
+        req.device_ptr = dst;
+        req.pool_slot  = slot;
+        req.completed  = false;
+        inflight_[key] = std::move(req);
+
+        GGML_SYCL_DEBUG("[PREFETCH] hint L%d E%d: H2D %.1f KB -> slot %d\n",
+                        layer_idx, expert_idx, placement.weight_bytes / 1024.0, slot);
+        return true;
+    } catch (const sycl::exception & e) {
+        release_vram_slot(slot);
+        GGML_LOG_WARN("[SYCL] Prefetch H2D failed for L%d E%d: %s\n",
+                      layer_idx, expert_idx, e.what());
+        return false;
+    }
 }
 
 void ExpertPrefetcher::hint_batch(int layer_idx, const std::vector<int> & expert_indices) {
-    // Prefetching disabled after ExpertCache removal.
-    // Weight management is now handled by unified cache.
-    (void) layer_idx;
-    (void) expert_indices;
+    for (int eid : expert_indices) {
+        hint(layer_idx, eid);
+    }
 }
 
 // ============================================================================
@@ -95,14 +191,27 @@ std::vector<int> ExpertPrefetcher::hint_batch_adaptive(
     const std::vector<int> & expert_indices,
     int n_miss_total)
 {
-    // Prefetching disabled after ExpertCache removal.
-    // Weight management is now handled by unified cache.
-    (void) layer_idx;
-    (void) expert_indices;
-    (void) n_miss_total;
+    std::vector<int> cpu_dispatch;
 
-    // Return empty vector (no experts to CPU dispatch)
-    return std::vector<int>();
+    // When miss count exceeds capacity, overflow experts go to CPU.
+    int budget = max_inflight_;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        gc_completed();
+        budget = max_inflight_ - static_cast<int>(inflight_.size());
+    }
+
+    int scheduled = 0;
+    for (int eid : expert_indices) {
+        if (scheduled < budget && n_miss_total <= max_inflight_) {
+            hint(layer_idx, eid);
+            scheduled++;
+        } else {
+            cpu_dispatch.push_back(eid);
+        }
+    }
+
+    return cpu_dispatch;
 }
 
 // ============================================================================
@@ -110,12 +219,45 @@ std::vector<int> ExpertPrefetcher::hint_batch_adaptive(
 // ============================================================================
 
 void * ExpertPrefetcher::await(int layer_idx, int expert_idx) {
-    // Prefetching disabled after ExpertCache removal.
-    // Weight management is now handled by unified cache.
-    // Return nullptr to indicate no prefetch available.
-    (void) layer_idx;
-    (void) expert_idx;
-    return nullptr;
+    if (!initialized_) {
+        return nullptr;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    expert_key key{ layer_idx, expert_idx };
+    auto it = inflight_.find(key);
+    if (it == inflight_.end()) {
+        // No in-flight prefetch for this expert.
+        return nullptr;
+    }
+
+    auto & req = it->second;
+    if (!req.completed) {
+        // Wait for the specific DMA event to complete.
+        try {
+            req.event.wait();
+        } catch (const sycl::exception & e) {
+            GGML_LOG_WARN("[SYCL] Prefetch await failed for L%d E%d: %s\n",
+                          layer_idx, expert_idx, e.what());
+            release_vram_slot(req.pool_slot);
+            inflight_.erase(it);
+            return nullptr;
+        }
+        req.completed = true;
+        completed_count_++;
+
+        // Update placement table so the dispatch path finds device_ptr.
+        auto & ptable = get_expert_placement_table();
+        if (ptable.is_initialized()) {
+            ptable.set_device_ptr(layer_idx, expert_idx, 0, req.device_ptr);
+        }
+
+        GGML_SYCL_DEBUG("[PREFETCH] await L%d E%d: DMA complete, device_ptr=%p\n",
+                        layer_idx, expert_idx, req.device_ptr);
+    }
+
+    return req.device_ptr;
 }
 
 // ============================================================================
@@ -123,8 +265,22 @@ void * ExpertPrefetcher::await(int layer_idx, int expert_idx) {
 // ============================================================================
 
 void ExpertPrefetcher::cancel_all() {
-    // Prefetching disabled after ExpertCache removal.
-    // No in-flight operations to cancel.
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    // Wait for all in-flight DMAs.
+    if (dma_queue_) {
+        try {
+            dma_queue_->wait();
+        } catch (const sycl::exception &) {
+            // Best effort during shutdown.
+        }
+    }
+
+    // Release all pool slots and clear tracking.
+    for (auto & [key, req] : inflight_) {
+        release_vram_slot(req.pool_slot);
+    }
+    inflight_.clear();
 }
 
 // ============================================================================
@@ -153,10 +309,28 @@ int ExpertPrefetcher::completed_count() const {
 
 void ExpertPrefetcher::gc_completed() {
     // Called with mutex_ held.
-    // Remove entries that have been completed and consumed by await().
+    // Remove completed tracking entries and release their VRAM pool slots.
+    //
+    // Safety: gc_completed() is called from hint(), which runs for future
+    // layers (L+1..L+depth). By the time hint(L+1) runs, layer L-1's GPU
+    // dispatch has completed (ggml_sycl_mul_mat_id runs synchronously, and
+    // dispatch_cpu_and_scatter includes stream->wait()). So completed
+    // entries from layer L-1 are safe to gc because the GPU has consumed
+    // their pool slot data.
+    //
+    // Note: entries become completed in await() for layer L, and are gc'd
+    // by hint() for layer L+1 or later. Since hint() runs 1+ layers ahead,
+    // there's at least one full dispatch cycle between completed and gc.
     auto it = inflight_.begin();
     while (it != inflight_.end()) {
         if (it->second.completed) {
+            // Clear placement table device_ptr since the pool slot
+            // will be recycled for a different expert.
+            auto & ptable = get_expert_placement_table();
+            if (ptable.is_initialized()) {
+                ptable.set_device_ptr(it->second.key.layer, it->second.key.expert_id, 0, nullptr);
+            }
+            release_vram_slot(it->second.pool_slot);
             it = inflight_.erase(it);
         } else {
             ++it;
@@ -167,6 +341,24 @@ void ExpertPrefetcher::gc_completed() {
 bool ExpertPrefetcher::has_capacity() const {
     // Called with mutex_ held.
     return static_cast<int>(inflight_.size()) < max_inflight_;
+}
+
+int ExpertPrefetcher::acquire_vram_slot() {
+    // Called with mutex_ held.
+    for (int i = 0; i < static_cast<int>(vram_pool_.size()); i++) {
+        if (vram_pool_[i].free && vram_pool_[i].ptr) {
+            vram_pool_[i].free = false;
+            return i;
+        }
+    }
+    return -1;
+}
+
+void ExpertPrefetcher::release_vram_slot(int slot) {
+    // Called with mutex_ held.
+    if (slot >= 0 && slot < static_cast<int>(vram_pool_.size())) {
+        vram_pool_[slot].free = true;
+    }
 }
 
 // ============================================================================

@@ -37,7 +37,9 @@ namespace ggml_sycl {
 struct PrefetchRequest {
     expert_key  key;
     sycl::event event;                 // DMA completion event from dma_queue_
-    bool        completed = false;
+    void *      device_ptr = nullptr;  // VRAM destination of the H2D DMA
+    int         pool_slot  = -1;       // Index into vram_pool_ (-1 = no slot)
+    bool        completed  = false;
 };
 
 // Async DMA engine for prefetching MoE expert weights from host RAM to VRAM.
@@ -126,10 +128,26 @@ class ExpertPrefetcher {
     // In-flight prefetch tracking. Key = expert_key.
     std::unordered_map<expert_key, PrefetchRequest, expert_key_hash> inflight_;
 
+    // VRAM prefetch pool: ring buffer of pre-allocated device memory slots.
+    // Each slot holds one expert's worth of weight data.
+    // Allocated lazily on first hint() with weight_bytes > 0.
+    struct vram_slot {
+        void * ptr  = nullptr;
+        bool   free = true;
+    };
+    std::vector<vram_slot> vram_pool_;
+    size_t                 vram_slot_bytes_ = 0;  // Size of each pool slot
+
+    // Acquire a free VRAM slot. Returns slot index or -1 if none available.
+    int acquire_vram_slot();
+    // Release a VRAM slot back to the pool.
+    void release_vram_slot(int slot);
+
     mutable std::mutex mutex_;
 
     // Stats
     int completed_count_ = 0;
+    int prefetch_hits_   = 0;  // Experts found already in VRAM (no DMA needed)
 
     // Garbage-collect completed requests to free tracking slots.
     void gc_completed();
