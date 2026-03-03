@@ -419,8 +419,13 @@ kernel void kernel_convert_block_q6_K(
     global uchar * dst_ql,
     global uchar * dst_qh,
     global char  * dst_s,
-    global half  * dst_d
+    global half  * dst_d,
+    uchar          mask_lsb_8,
+    ulong          n_blk
 ) {
+    if (get_global_id(0) >= n_blk) {
+        return;
+    }
     global struct block_q6_K * b = (global struct block_q6_K *) src0 + get_global_id(0);
     global uchar * ql = (global uchar *) dst_ql + QK_K/2*get_global_id(0);
     global uchar * qh = (global uchar *) dst_qh + QK_K/4*get_global_id(0);
@@ -447,8 +452,13 @@ kernel void kernel_restore_block_q6_K(
     global uchar * dst_qh,
     global char  * dst_s,
     global half  * dst_d,
-    global struct block_q6_K * dst
+    global struct block_q6_K * dst,
+    uchar mask_lsb_8,
+    ulong n_blk
 ) {
+    if (get_global_id(0) >= n_blk) {
+        return;
+    }
     global struct block_q6_K * b = (global struct block_q6_K *) dst + get_global_id(0);
     global uchar * ql = (global uchar *) dst_ql + QK_K/2*get_global_id(0);
     global uchar * qh = (global uchar *) dst_qh + QK_K/4*get_global_id(0);
@@ -474,8 +484,12 @@ kernel void kernel_convert_block_q6_K_noshuffle(
     global uchar * dst_qh,
     global char  * dst_s,
     global half  * dst_d,
-    uchar          mask_lsb_8
+    uchar          mask_lsb_8,
+    ulong          n_blk
 ) {
+    if (get_global_id(0) >= n_blk) {
+        return;
+    }
     global struct block_q6_K * b = (global struct block_q6_K *) src0 + get_global_id(0);
     global uchar * ql = (global uchar *) dst_ql + QK_K/2*get_global_id(0);
     global uchar * qh = (global uchar *) dst_qh + QK_K/4*get_global_id(0);
@@ -527,8 +541,12 @@ kernel void kernel_restore_block_q6_K_noshuffle(
     global char  * src_s,
     global half  * src_d,
     global struct block_q6_K * dst,
-    uchar          mask_lsb_8
+    uchar          mask_lsb_8,
+    ulong          n_blk
 ) {
+    if (get_global_id(0) >= n_blk) {
+        return;
+    }
     global struct block_q6_K * b = (global struct block_q6_K *) dst + get_global_id(0);
     global uchar * ql = (global uchar *) src_ql + QK_K/2*get_global_id(0);
     global uchar * qh = (global uchar *) src_qh + QK_K/4*get_global_id(0);
