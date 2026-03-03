@@ -530,14 +530,12 @@ class ModelsStore {
 				return;
 			}
 
-			// If the model reached a terminal failure state, stop polling
 			if (currentStatus === ServerModelStatus.FAILED) {
 				throw new Error(
 					`Model failed to ${expectedStatus === ServerModelStatus.LOADED ? 'load' : 'unload'}`
 				);
 			}
 
-			// If the model unexpectedly became unloaded while we expected it to load, stop
 			if (
 				expectedStatus === ServerModelStatus.LOADED &&
 				currentStatus === ServerModelStatus.UNLOADED &&
@@ -634,24 +632,30 @@ class ModelsStore {
 
 	toggleFavourite(modelId: string): void {
 		const next = new SvelteSet(this.favouriteModelIds);
+
 		if (next.has(modelId)) {
 			next.delete(modelId);
 		} else {
 			next.add(modelId);
 		}
+
 		this.favouriteModelIds = next;
+
 		try {
 			localStorage.setItem(FAVOURITE_MODELS_LOCALSTORAGE_KEY, JSON.stringify([...next]));
 		} catch {
-			// ignore storage errors
+			toast.error('Failed to save favourite models to local storage');
 		}
 	}
 
 	private loadFavouritesFromStorage(): Set<string> {
 		try {
 			const raw = localStorage.getItem(FAVOURITE_MODELS_LOCALSTORAGE_KEY);
+
 			return raw ? new Set(JSON.parse(raw) as string[]) : new Set();
 		} catch {
+			toast.error('Failed to load favourite models from local storage');
+
 			return new Set();
 		}
 	}

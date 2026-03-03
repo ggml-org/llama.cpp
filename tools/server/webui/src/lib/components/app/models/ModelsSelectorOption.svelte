@@ -30,7 +30,6 @@
 		onKeyDown
 	}: Props = $props();
 
-	// Read status reactively from the store so it updates in real-time
 	let currentRouterModels = $derived(routerModels());
 	let serverStatus = $derived.by(() => {
 		const model = currentRouterModels.find((m) => m.id === option.model);

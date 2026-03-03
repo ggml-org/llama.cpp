@@ -9,9 +9,7 @@ import {
 	MODEL_ID_ORG_SEPARATOR,
 	MODEL_ID_SEGMENT_SEPARATOR,
 	MODEL_ID_QUANTIZATION_SEPARATOR,
-	API_MODELS_LIST,
-	API_MODELS_LOAD,
-	API_MODELS_UNLOAD
+	API_MODELS
 } from '$lib/constants';
 
 export class ModelsService {
@@ -30,7 +28,7 @@ export class ModelsService {
 	 * @returns List of available models with basic metadata
 	 */
 	static async list(): Promise<ApiModelListResponse> {
-		return apiFetch<ApiModelListResponse>(API_MODELS_LIST);
+		return apiFetch<ApiModelListResponse>(API_MODELS.LIST);
 	}
 
 	/**
@@ -41,7 +39,7 @@ export class ModelsService {
 	 * @returns List of models with detailed status and configuration info
 	 */
 	static async listRouter(): Promise<ApiRouterModelsListResponse> {
-		return apiFetch<ApiRouterModelsListResponse>(API_MODELS_LIST);
+		return apiFetch<ApiRouterModelsListResponse>(API_MODELS.LIST);
 	}
 
 	/**
@@ -67,7 +65,7 @@ export class ModelsService {
 			payload.extra_args = extraArgs;
 		}
 
-		return apiPost<ApiRouterModelsLoadResponse>(API_MODELS_LOAD, payload);
+		return apiPost<ApiRouterModelsLoadResponse>(API_MODELS.LOAD, payload);
 	}
 
 	/**
@@ -79,7 +77,7 @@ export class ModelsService {
 	 * @returns Unload response from the server
 	 */
 	static async unload(modelId: string): Promise<ApiRouterModelsUnloadResponse> {
-		return apiPost<ApiRouterModelsUnloadResponse>(API_MODELS_UNLOAD, { model: modelId });
+		return apiPost<ApiRouterModelsUnloadResponse>(API_MODELS.UNLOAD, { model: modelId });
 	}
 
 	/**

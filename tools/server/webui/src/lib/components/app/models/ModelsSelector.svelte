@@ -56,12 +56,15 @@
 
 	let isHighlightedCurrentModelActive = $derived.by(() => {
 		if (!isRouter || !currentModel) return false;
+
 		const currentOption = options.find((option) => option.model === currentModel);
+
 		return currentOption ? currentOption.id === activeId : false;
 	});
 
 	let isCurrentModelInCache = $derived.by(() => {
 		if (!isRouter || !currentModel) return true;
+
 		return options.some((option) => option.model === currentModel);
 	});
 
@@ -91,7 +94,6 @@
 			items: { option: ModelOption; flatIndex: number }[];
 		}[] = [];
 
-		// Favourites group
 		const favItems: { option: ModelOption; flatIndex: number }[] = [];
 		for (let i = 0; i < filteredOptions.length; i++) {
 			if (favIds.has(filteredOptions[i].model)) {
@@ -103,7 +105,6 @@
 			result.push({ orgName: null, isFavouritesGroup: true, items: favItems });
 		}
 
-		// Org-scoped groups — exclude models already shown in Favourites
 		const orgGroups = new SvelteMap<string, { option: ModelOption; flatIndex: number }[]>();
 		for (let i = 0; i < filteredOptions.length; i++) {
 			const option = filteredOptions[i];
@@ -125,7 +126,6 @@
 		return result;
 	});
 
-	// Reset highlighted index when search term changes
 	$effect(() => {
 		void searchTerm;
 		highlightedIndex = -1;
@@ -140,8 +140,6 @@
 		});
 	});
 
-	// Handle changes to the model selector dropdown or the model dialog, depending on if the server is in
-	// router mode or not.
 	function handleOpenChange(open: boolean) {
 		if (loading || updating) return;
 
@@ -173,6 +171,7 @@
 
 		if (event.key === KeyboardKey.ARROW_DOWN) {
 			event.preventDefault();
+
 			if (filteredOptions.length === 0) return;
 
 			if (highlightedIndex === -1 || highlightedIndex === filteredOptions.length - 1) {
@@ -182,6 +181,7 @@
 			}
 		} else if (event.key === KeyboardKey.ARROW_UP) {
 			event.preventDefault();
+
 			if (filteredOptions.length === 0) return;
 
 			if (highlightedIndex === -1 || highlightedIndex === 0) {
@@ -191,11 +191,12 @@
 			}
 		} else if (event.key === KeyboardKey.ENTER) {
 			event.preventDefault();
+
 			if (highlightedIndex >= 0 && highlightedIndex < filteredOptions.length) {
 				const option = filteredOptions[highlightedIndex];
+
 				handleSelect(option.id);
 			} else if (filteredOptions.length > 0) {
-				// No selection - highlight first option
 				highlightedIndex = 0;
 			}
 		}
@@ -208,22 +209,18 @@
 		let shouldCloseMenu = true;
 
 		if (onModelChange) {
-			// If callback provided, use it (for regenerate functionality)
 			const result = await onModelChange(option.id, option.model);
 
-			// If callback returns false, keep menu open (validation failed)
 			if (result === false) {
 				shouldCloseMenu = false;
 			}
 		} else {
-			// Update global selection
 			await modelsStore.selectModelById(option.id);
 		}
 
 		if (shouldCloseMenu) {
 			handleOpenChange(false);
 
-			// Focus the chat textarea after model selection
 			requestAnimationFrame(() => {
 				const textarea = document.querySelector<HTMLTextAreaElement>(
 					'[data-slot="chat-form"] textarea'
@@ -256,14 +253,12 @@
 			return undefined;
 		}
 
-		// When useGlobalSelection is true (form selector), prioritize user selection
-		// Otherwise (message display), prioritize currentModel
 		if (useGlobalSelection && activeId) {
 			const selected = options.find((option) => option.id === activeId);
+
 			if (selected) return selected;
 		}
 
-		// Show currentModel (from message payload or conversation)
 		if (currentModel) {
 			if (!isCurrentModelInCache) {
 				return {
@@ -277,12 +272,10 @@
 			return options.find((option) => option.model === currentModel);
 		}
 
-		// Fallback to user selection (for new chats before first message)
 		if (activeId) {
 			return options.find((option) => option.id === activeId);
 		}
 
-		// No selection - return undefined to show "Select model"
 		return undefined;
 	}
 </script>
