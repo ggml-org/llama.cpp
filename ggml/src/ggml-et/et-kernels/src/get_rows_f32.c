@@ -222,7 +222,6 @@ static int get_row_f32_mc_row_cache_aligned(struct ggml_et_get_rows_params* para
 
 int entry_point(struct ggml_et_get_rows_params* params, void* env) {
     kernel_environment_t* kernel_env = (kernel_environment_t*)env;
-
     if (!kernel_env) {
         return -1;
     }
@@ -231,6 +230,7 @@ int entry_point(struct ggml_et_get_rows_params* params, void* env) {
     struct ggml_tensor* src1 = &params->src1;  // Row indices tensor (I32)
     struct ggml_tensor* dst = &params->dst;    // Output tensor (F32)
 
+    // Fast path - we know how to deal with them multi-core
     if((src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_Q8_0) && src1->type == GGML_TYPE_I32 && dst->type == GGML_TYPE_F32
         && dst->ne[0] % CACHE_ELEMENTS(sizeof(float)) == 0) {
         return get_row_f32_mc_row_cache_aligned(params, env);

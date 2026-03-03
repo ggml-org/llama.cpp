@@ -483,9 +483,6 @@ static void ggml_backend_et_synchronize(ggml_backend_t backend) {
     ggml_backend_et_device_context * dev_ctx = (ggml_backend_et_device_context *)backend->device->context;
     runtime->waitForStream(dev_ctx->default_stream);
 
-    // Current code works but errors for some reason we fail to detect.
-    // FIXME: Track down the error
-#if 0
     auto errors = runtime->retrieveStreamErrors(dev_ctx->default_stream);
     if(errors.empty()) {
         return;
@@ -494,7 +491,6 @@ static void ggml_backend_et_synchronize(ggml_backend_t backend) {
         GGML_LOG_ERROR("ET: stream error detected at synchronization point. Code: %d\n", (int)err.errorCode_);
     }
     abort();
-#endif
 }
 
 static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {

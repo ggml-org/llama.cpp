@@ -29,7 +29,7 @@ bool ggml_et_launch_kernel(ggml_backend_et_device_context* dev_ctx,
                            size_t params_size,
                            uint64_t shire_mask = 0xFFFFFFFF,
                            bool enable_print = false,
-                           bool sync_error_check = true);
+                           bool sync_error_check = false);
 
 // Unload kernel from device and free resources
 // Safe to call even if kernel not loaded
