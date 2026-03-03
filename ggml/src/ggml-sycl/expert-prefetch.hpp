@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -160,7 +161,7 @@ class ExpertPrefetcher {
     bool hint_locked(int layer_idx, int expert_idx);
 
     // Set when prediction hit rate drops below threshold; disables prefetching.
-    bool prefetch_disabled_ = false;
+    std::atomic<bool> prefetch_disabled_{false};
 };
 
 // ============================================================================
@@ -291,7 +292,7 @@ class ExpertPredictor {
     int window_total_    = 0;  // Number of samples in the rolling accuracy window (up to ACCURACY_WINDOW)
 
     // Set when hit rate drops below threshold; signals prefetcher to disable.
-    bool prefetch_disabled_ = false;
+    std::atomic<bool> prefetch_disabled_{false};
 
     // Circular buffer for rolling window eviction.
     // uint8_t avoids std::vector<bool> specialization issues.
