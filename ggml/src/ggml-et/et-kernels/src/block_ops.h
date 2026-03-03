@@ -13,43 +13,47 @@
 //******************************************************************************
 // Block Dot Product Operations
 //******************************************************************************
+inline void __attribute__((always_inline)) excl_mode(uint64_t val)
+{
+    __asm__ __volatile__("csrw 0x7d3, %[csr_enc]\n" : : [csr_enc] "r"(val) : "x31");
+}
 
 // Compute dot product between dequantized q8_0 block and f32 column vector
 // Vectorized: processes 8 elements at a time using ET vector instructions
 // Block size: 32 int8 values (QK8_0)
 static inline float compute_block_dot_product_q8_0(const block_q8_0* a_block, const float* b_col_start) {
-    const float scale = fp16_to_fp32(a_block->d);
-
+    // float acc_vec[8] __attribute__ ((aligned (4))); 
     float acc_vec[8] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f}; // Accumulator vector
 
     // Set mask register to enable all 8 vector elements
     unsigned long temp_mask;
     __asm__ volatile("mova.x.m %0" : "=r"(temp_mask));  // Save current mask
     __asm__ volatile("mov.m.x m0, x0, 0xFF");           // Enable all 8 elements
+    
+    static const int32_t gather_pattern[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+
+    __asm__ volatile("flw.ps f31, %[gather]\n" : : [gather] "m"(*(const int32_t(*)[8])gather_pattern) : "f31");
 
     // Process 32 elements in 4 chunks of 8 elements each
     for (int chunk = 0; chunk < 4; chunk++) {
-        int offset = chunk * 8;
-
-        // Vectorized int8->float conversion + multiply-accumulate
-        // Using gather pattern for byte loading and vector conversion
-        static const int32_t gather_pattern[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+        int offset = chunk << 3; // chunk * 8
 
         __asm__ volatile(
             "flw.ps f10, %[acc]\n"                   // Load current accumulator (8 floats)
-            "flw.ps f31, %[gather]\n"                // Load gather pattern into f31
+            "flw.ps f12, %[b_vec]\n"                 // Load 8 B values (floats)
+            // "csrwi 0x7d3, 1\n"
             "fgb.ps f11, f31(%[a_ptr])\n"            // Gather 8 int8 bytes from A using pattern
             "fcvt.ps.pw f11, f11\n"                  // Convert int8 vector to float vector
-            "flw.ps f12, %[b_vec]\n"                 // Load 8 B values (floats)
             "fmadd.ps f10, f11, f12, f10\n"          // acc += a_vec * b_vec (8-wide)
+            // "csrwi 0x7d3, 0\n"
             "fsw.ps f10, %[result]\n"                // Store back to accumulator
 
             : [result] "=m"(*(float(*)[8])acc_vec)
             : [acc] "m"(*(const float(*)[8])acc_vec),
               [a_ptr] "r"(&a_block->qs[offset]),
               [b_vec] "m"(*(const float(*)[8])&b_col_start[offset]),
-              [gather] "m"(*(const int32_t(*)[8])gather_pattern)
-            : "f10", "f11", "f12", "f31"
+              [scale] "m"(a_block->d)
+            : "f10", "f11", "f12"
         );
     }
 
@@ -57,29 +61,64 @@ static inline float compute_block_dot_product_q8_0(const block_q8_0* a_block, co
     __asm__ volatile("mova.m.x %0" :: "r"(temp_mask));
 
     // Horizontal sum: reduce 8 accumulator elements to single scalar
-    float final_sum = 0.0f;
-    for (int i = 0; i < 8; i++) {
-        final_sum += acc_vec[i];
-    }
+    float final_sum;
+    // for (int i = 0; i < 8; i++) {
+    //     final_sum += acc_vec[i];
+    // }
+    final_sum = acc_vec[0] + acc_vec[1] + acc_vec[2] + acc_vec[3] +
+           acc_vec[4] + acc_vec[5] + acc_vec[6] + acc_vec[7];
 
+    const float scale = fp16_to_fp32(a_block->d);
     return final_sum * scale;
+
+    
 }
+
 
 // Compute dot product between f16 block and f32 column vector (NAIVE VERSION)
 // Scalar implementation for debugging - no vectorization
 // Block size: 32 f16 values (64 bytes = 1 cache line)
 static inline float compute_block_dot_product_f16_naive(const uint16_t* a_block, const float* b_col_start) {
-    float sum = 0.0f;
+    float acc_vec[8] __attribute__ ((aligned (32))) = {0.0f};
+    // Byte offsets for 16-bit (half-word) elements
+    static const int32_t gather_pattern[8] = {0, 2, 4, 6, 8, 10, 12, 14};
+    unsigned long temp_mask;
 
-    // Simple scalar loop - convert each f16 to f32 and multiply
-    for (int i = 0; i < QK_F16; i++) {
-        float a_val = fp16_to_fp32(a_block[i]);
-        float b_val = b_col_start[i];
-        sum += a_val * b_val;
+    __asm__ volatile("mova.x.m %0" : "=r"(temp_mask));
+    __asm__ volatile("mov.m.x m0, x0, 0xFF");
+    
+    // Load the pattern once into f31 for the duration of all 4 chunks
+    __asm__ volatile("flw.ps f31, %[gather]\n" : : [gather] "m"(*(const int32_t(*)[8])gather_pattern) : "f31");
+
+    for (int chunk = 0; chunk < 4; chunk++) {
+        // Correct pointers: 
+        // a_block elements are 2 bytes, b_col elements are 4 bytes
+        const uint16_t* a_ptr = &a_block[chunk << 3]; // chunk * 8
+        const float* b_ptr = &b_col_start[chunk << 3]; // chunk * 8
+
+        __asm__ volatile(
+            "flw.ps f10, %[acc]\n"           
+            "fgh.ps f11, f31(%[a_p])\n"      // Uses {0,2,4,6,8,10,12,14} byte offsets
+            "fcvt.ps.f16 f11, f11\n"         
+            "flw.ps f12, (%[b_p])\n"         // Standard vector load (32-bit floats)
+            "fmadd.ps f10, f11, f12, f10\n"  
+            "fsw.ps f10, %[result]\n"        
+
+            : [result] "=m"(*(float(*)[8])acc_vec)
+            : [acc] "m"(*(const float(*)[8])acc_vec),
+              [a_p] "r"(a_ptr),
+              [b_p] "r"(b_ptr)
+            : "f10", "f11", "f12"
+        );
     }
+   
+    __asm__ volatile("mova.m.x %0" :: "r"(temp_mask));
 
-    return sum;
+    return acc_vec[0] + acc_vec[1] + acc_vec[2] + acc_vec[3] +
+           acc_vec[4] + acc_vec[5] + acc_vec[6] + acc_vec[7];
+  
 }
+
 
 // Compute dot product between f16 block and f32 column vector
 // SCALAR implementation for partial blocks
@@ -155,11 +194,43 @@ static inline float compute_block_dot_product_f32_partial(const float* a_block, 
     return final_sum;
 }
 
+
+
+
+
+
+
 // Compute dot product between f32 block and f32 column vector
 // Vectorized: processes 8 elements at a time using ET vector instructions
 // Block size: 16 f32 values (64 bytes = 1 cache line)
 static inline float compute_block_dot_product_f32(const float* a_block, const float* b_col_start) {
     return compute_block_dot_product_f32_partial(a_block, b_col_start, QK_F32);
+    
+    // float acc_vec[8];
+    // unsigned long old_mask;
+    // __asm__ volatile(
+    //     // Save current mask
+    //     "mova.x.m %[old_mask]\n"
+    //     // Enable all 8 lanes
+    //     "mov.m.x m0, x0, 0xFF\n"
+ 
+    //     "flw.ps  f11, %[a]\n"
+    //     "flw.ps  f12, %[b]\n"
+    //     "fmadd.ps f10, f11, f12, f10\n"
+    //     "fsw.ps  f10, %[out]\n"
+    //     "mova.m.x %[old_mask]\n"
+
+    //     : [out] "=m" (*(float(*)[8])acc_vec),
+    //       [old_mask] "=r"(old_mask)
+    //     : [a] "m" (*(const float(*)[8])a_block),
+    //       [b] "m" (*(const float(*)[8])b_col_start)
+    //     : "f10", "f11", "f12"
+    // );
+
+    // // Horizontal reduction
+    // return acc_vec[0] + acc_vec[1] + acc_vec[2] + acc_vec[3] +
+    //        acc_vec[4] + acc_vec[5] + acc_vec[6] + acc_vec[7];
+
 }
 
 #endif // BLOCK_OPS_H
