@@ -282,7 +282,6 @@ struct ggml_webgpu_flash_attn_pipeline_key {
     bool      has_sinks;
     bool      uses_logit_softcap;
     bool      use_vec;
-    bool      use_pad;
     bool      use_vec_split;
     bool      use_blk;
 
@@ -290,7 +289,7 @@ struct ggml_webgpu_flash_attn_pipeline_key {
         return kv_type == other.kv_type && head_dim_qk == other.head_dim_qk && head_dim_v == other.head_dim_v &&
                kv_direct == other.kv_direct && has_mask == other.has_mask && has_sinks == other.has_sinks &&
                uses_logit_softcap == other.uses_logit_softcap && use_vec == other.use_vec &&
-               use_pad == other.use_pad && use_vec_split == other.use_vec_split && use_blk == other.use_blk;
+               use_vec_split == other.use_vec_split && use_blk == other.use_blk;
     }
 };
 
@@ -305,7 +304,6 @@ struct ggml_webgpu_flash_attn_pipeline_key_hash {
         ggml_webgpu_hash_combine(seed, key.has_sinks);
         ggml_webgpu_hash_combine(seed, key.uses_logit_softcap);
         ggml_webgpu_hash_combine(seed, key.use_vec);
-        ggml_webgpu_hash_combine(seed, key.use_pad);
         ggml_webgpu_hash_combine(seed, key.use_vec_split);
         ggml_webgpu_hash_combine(seed, key.use_blk);
         return seed;
@@ -504,10 +502,6 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_flash_attn_shader(
     if (context.key.kv_direct) {
         defines.push_back("KV_DIRECT");
         variant += "_kvdirect";
-    }
-    if (context.key.use_pad) {
-        defines.push_back("PAD");
-        variant += "_pad";
     }
     if (context.key.use_blk) {
         defines.push_back("BLK");

@@ -1638,51 +1638,6 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
     const bool use_vec_split = use_vec && vec_nwg_cap > 1u;
     const bool use_blk = use_vec_split && has_mask;
 
-    // Compute vec KV tile (same logic as shader preprocessing) to decide whether tail padding is needed.
-    uint32_t kv_tile_for_vec = 0;
-    if (use_vec) {
-        ggml_webgpu_flash_attn_pipeline_key probe_key = {
-            .kv_type            = K->type,
-            .head_dim_qk        = (uint32_t) Q->ne[0],
-            .head_dim_v         = (uint32_t) V->ne[0],
-            .kv_direct          = kv_direct,
-            .has_mask           = static_cast<bool>(has_mask),
-            .has_sinks          = static_cast<bool>(has_sinks),
-            .uses_logit_softcap = logit_softcap != 0.0f,
-            .use_vec            = true,
-            .use_pad            = false,
-            .use_vec_split      = use_vec_split,
-            .use_blk            = false,
-        };
-        ggml_webgpu_flash_attn_shader_lib_context probe_ctx = {
-            .key                = probe_key,
-            .sg_mat_m           = ctx->global_ctx->capabilities.sg_mat_m,
-            .sg_mat_n           = ctx->global_ctx->capabilities.sg_mat_n,
-            .sg_mat_k           = ctx->global_ctx->capabilities.sg_mat_k,
-            .wg_mem_limit_bytes = ctx->global_ctx->capabilities.limits.maxComputeWorkgroupStorageSize,
-            .max_subgroup_size  = ctx->global_ctx->capabilities.max_subgroup_size
-        };
-        kv_tile_for_vec = std::min(ggml_webgpu_flash_attn_max_kv_tile(probe_ctx),
-                                   probe_ctx.sg_mat_n * GGML_WEBGPU_FLASH_ATTN_PREFERRED_KV_SG_TILES);
-        if (probe_key.kv_direct) {
-            while (GGML_WEBGPU_KV_SEQ_PAD % kv_tile_for_vec != 0) {
-                kv_tile_for_vec -= probe_ctx.sg_mat_n;
-            }
-        }
-    }
-
-    const uint32_t tail_for_vec = (use_vec && kv_tile_for_vec > 0) ? (uint32_t) (K->ne[1] % kv_tile_for_vec) : 0u;
-    const bool     copy_alignment_ok =
-        (ggml_webgpu_tensor_offset(K) % 4 == 0) &&
-        (ggml_webgpu_tensor_offset(V) % 4 == 0) &&
-        (K->nb[1] % 4 == 0) &&
-        (V->nb[1] % 4 == 0) &&
-        (!has_mask || ((ggml_webgpu_tensor_offset(mask) % 4 == 0) &&
-                       ((((uint64_t) K->ne[1]) * ggml_type_size(mask->type) % 4) == 0) &&
-                       ((((uint64_t) mask->nb[3]) % 4) == 0) &&
-                       (((uint64_t) tail_for_vec * ggml_type_size(mask->type)) % 4 == 0)));
-    const bool use_pad = use_vec && tail_for_vec != 0 && copy_alignment_ok;
-
     ggml_webgpu_flash_attn_pipeline_key key = {
         .kv_type            = K->type,
         .head_dim_qk        = (uint32_t) Q->ne[0],
@@ -1692,7 +1647,6 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
         .has_sinks          = static_cast<bool>(has_sinks),
         .uses_logit_softcap = logit_softcap != 0.0f,
         .use_vec            = use_vec,
-        .use_pad            = use_pad,
         .use_vec_split      = use_vec_split,
         .use_blk            = use_blk,
     };
@@ -1714,10 +1668,6 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
         ggml_webgpu_processed_shader processed;
         if (use_vec_split) {
             processed = ggml_webgpu_preprocess_flash_attn_shader(ctx->p, wgsl_flash_attn_vec_split, shader_lib_ctx);
-        } else if (use_vec && use_pad) {
-            processed = ggml_webgpu_preprocess_flash_attn_shader(ctx->p, wgsl_flash_attn_pad, shader_lib_ctx);
-        } else if (use_vec) {
-            processed = ggml_webgpu_preprocess_flash_attn_shader(ctx->p, wgsl_flash_attn_vec, shader_lib_ctx);
         } else {
             processed = ggml_webgpu_preprocess_flash_attn_shader(ctx->p, wgsl_flash_attn, shader_lib_ctx);
         }
@@ -1741,163 +1691,12 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
         vec_nwg = std::min(vec_nwg, vec_nwg_cap);
     }
 
-    bool                              have_pad_buf  = false;
-    wgpu::Buffer                      pad_buf       = {};
-    uint64_t                          pad_size_bytes = 0;
-    uint32_t                          pad_k_base_u32 = 0;
-    uint32_t                          pad_v_base_u32 = 0;
-    uint32_t                          pad_m_base_u32 = 0;
-    uint32_t                          pad_ncpsg      = 0;
-    std::vector<webgpu_buffer_clear_op> pad_clear_ops;
-    std::vector<webgpu_buffer_copy_op>  pad_copy_ops;
-
     bool         have_blk_buf    = false;
     wgpu::Buffer blk_buf         = {};
     uint64_t     blk_size_bytes  = 0;
     uint32_t     blk_nblk0       = 0;
     uint32_t     blk_nblk1       = 0;
     uint32_t     blk_batch_count = 0;
-
-    if (use_pad) {
-        const uint32_t ncpsg      = decisions->kv_tile;
-        const uint32_t tail       = (uint32_t) (K->ne[1] % ncpsg);
-        const uint32_t tail_start = (uint32_t) K->ne[1] - tail;
-        GGML_ASSERT(tail > 0);
-
-        const uint32_t stride_k1  = (uint32_t) (K->nb[1] / ggml_type_size(K->type));
-        const uint32_t stride_v1  = (uint32_t) (V->nb[1] / ggml_type_size(V->type));
-        const uint32_t kv_heads   = (uint32_t) K->ne[2];
-        const uint32_t kv_batches = (uint32_t) K->ne[3];
-        const uint64_t kv_planes  = (uint64_t) kv_heads * kv_batches;
-        const uint32_t stride_mask3 = has_mask ? (uint32_t) (mask->nb[3] / ggml_type_size(mask->type)) : 0u;
-        const uint32_t mask_batch_planes = has_mask ? (stride_mask3 > 0 ? (uint32_t) Q->ne[3] : 1u) : 0u;
-
-        const uint64_t pad_k_base = 0;
-        const uint64_t pad_v_base = pad_k_base + (uint64_t) stride_k1 * ncpsg * kv_planes;
-        const uint64_t pad_m_base = pad_v_base + (uint64_t) stride_v1 * ncpsg * kv_planes;
-        const uint64_t pad_m_elems = has_mask ? ((uint64_t) Q->ne[1] * ncpsg * mask_batch_planes) : 0u;
-        const uint64_t pad_total_elems = pad_m_base + pad_m_elems;
-        pad_size_bytes =
-            ROUNDUP_POW2(pad_total_elems * ggml_type_size(K->type), WEBGPU_STORAGE_BUF_BINDING_MULT);
-
-        GGML_ASSERT(pad_k_base <= UINT32_MAX);
-        GGML_ASSERT(pad_v_base <= UINT32_MAX);
-        GGML_ASSERT(pad_m_base <= UINT32_MAX);
-        pad_k_base_u32 = (uint32_t) pad_k_base;
-        pad_v_base_u32 = (uint32_t) pad_v_base;
-        pad_m_base_u32 = (uint32_t) pad_m_base;
-        pad_ncpsg      = ncpsg;
-
-        ggml_webgpu_create_buffer(ctx->global_ctx->device, pad_buf, pad_size_bytes,
-                                  wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst,
-                                  "flash_attn_pad_buf");
-        have_pad_buf = true;
-
-        pad_clear_ops = {
-            { .buffer = pad_buf, .offset = 0, .size = pad_size_bytes },
-        };
-        pad_copy_ops.clear();
-
-        const uint64_t k_tensor_off = ggml_webgpu_tensor_offset(K);
-        const uint64_t v_tensor_off = ggml_webgpu_tensor_offset(V);
-        const auto     k_buf        = ggml_webgpu_tensor_buf(K);
-        const auto     v_buf        = ggml_webgpu_tensor_buf(V);
-
-        for (uint32_t b = 0; b < kv_batches; b++) {
-            for (uint32_t h = 0; h < kv_heads; h++) {
-                const uint64_t plane = (uint64_t) h + (uint64_t) b * kv_heads;
-                for (uint32_t r = 0; r < tail; r++) {
-                    const uint64_t src_row_k =
-                        k_tensor_off + (uint64_t) b * K->nb[3] + (uint64_t) h * K->nb[2] + (uint64_t) (tail_start + r) * K->nb[1];
-                    const uint64_t dst_row_k =
-                        (pad_k_base + plane * stride_k1 * ncpsg + (uint64_t) r * stride_k1) * ggml_type_size(K->type);
-                    pad_copy_ops.push_back({ .src        = k_buf,
-                                             .src_offset = src_row_k,
-                                             .dst        = pad_buf,
-                                             .dst_offset = dst_row_k,
-                                             .size       = K->nb[1] });
-
-                    const uint64_t src_row_v =
-                        v_tensor_off + (uint64_t) b * V->nb[3] + (uint64_t) h * V->nb[2] + (uint64_t) (tail_start + r) * V->nb[1];
-                    const uint64_t dst_row_v =
-                        (pad_v_base + plane * stride_v1 * ncpsg + (uint64_t) r * stride_v1) * ggml_type_size(V->type);
-                    pad_copy_ops.push_back({ .src        = v_buf,
-                                             .src_offset = src_row_v,
-                                             .dst        = pad_buf,
-                                             .dst_offset = dst_row_v,
-                                             .size       = V->nb[1] });
-                }
-            }
-        }
-
-        if (has_mask) {
-            const uint64_t mask_tensor_off = ggml_webgpu_tensor_offset(mask);
-            const auto     mask_buf        = ggml_webgpu_tensor_buf(mask);
-            const uint64_t mask_copy_size  = (uint64_t) tail * ggml_type_size(mask->type);
-            for (uint32_t mb = 0; mb < mask_batch_planes; mb++) {
-                const uint32_t src_batch =
-                    (stride_mask3 > 0 && mb >= (uint32_t) mask->ne[3]) ? (uint32_t) mask->ne[3] - 1 : mb;
-                for (uint32_t q = 0; q < (uint32_t) Q->ne[1]; q++) {
-                    const uint64_t src_mask_elem =
-                        (uint64_t) src_batch * stride_mask3 + (uint64_t) q * (uint32_t) K->ne[1] + tail_start;
-                    const uint64_t dst_mask_elem =
-                        pad_m_base + (uint64_t) mb * (uint32_t) Q->ne[1] * ncpsg + (uint64_t) q * ncpsg;
-                    pad_copy_ops.push_back({ .src        = mask_buf,
-                                             .src_offset = mask_tensor_off + src_mask_elem * ggml_type_size(mask->type),
-                                             .dst        = pad_buf,
-                                             .dst_offset = dst_mask_elem * ggml_type_size(K->type),
-                                             .size       = mask_copy_size });
-                }
-            }
-        }
-
-        if (!use_vec_split) {
-            std::vector<uint32_t> pad_params = params;
-            pad_params.push_back(0u);           // offset_pad
-            pad_params.push_back(pad_k_base_u32); // pad_k_base
-            pad_params.push_back(pad_v_base_u32); // pad_v_base
-            pad_params.push_back(pad_m_base_u32); // pad_m_base
-            pad_params.push_back(pad_ncpsg);      // ncpsg
-            pad_params.push_back(1u);             // nqptg
-            pad_params.push_back(1u);             // nwg
-
-            std::vector<wgpu::BindGroupEntry> pad_entries = {
-                { .binding = 0,
-                 .buffer  = ggml_webgpu_tensor_buf(Q),
-                 .offset  = ggml_webgpu_tensor_align_offset(ctx, Q),
-                 .size    = ggml_webgpu_tensor_binding_size(ctx, Q) },
-                { .binding = 1,
-                 .buffer  = ggml_webgpu_tensor_buf(K),
-                 .offset  = ggml_webgpu_tensor_align_offset(ctx, K),
-                 .size    = ggml_webgpu_tensor_binding_size(ctx, K) },
-                { .binding = 2,
-                 .buffer  = ggml_webgpu_tensor_buf(V),
-                 .offset  = ggml_webgpu_tensor_align_offset(ctx, V),
-                 .size    = ggml_webgpu_tensor_binding_size(ctx, V) },
-                { .binding = 3, .buffer = pad_buf, .offset = 0, .size = pad_size_bytes },
-            };
-            uint32_t pad_binding_index = 4;
-            if (has_mask) {
-                pad_entries.push_back({ .binding = pad_binding_index++,
-                                        .buffer  = ggml_webgpu_tensor_buf(mask),
-                                        .offset  = ggml_webgpu_tensor_align_offset(ctx, mask),
-                                        .size    = ggml_webgpu_tensor_binding_size(ctx, mask) });
-            }
-            if (has_sinks) {
-                pad_entries.push_back({ .binding = pad_binding_index++,
-                                        .buffer  = ggml_webgpu_tensor_buf(sinks),
-                                        .offset  = ggml_webgpu_tensor_align_offset(ctx, sinks),
-                                        .size    = ggml_webgpu_tensor_binding_size(ctx, sinks) });
-            }
-            pad_entries.push_back({ .binding = pad_binding_index++,
-                                    .buffer  = ggml_webgpu_tensor_buf(dst),
-                                    .offset  = ggml_webgpu_tensor_align_offset(ctx, dst),
-                                    .size    = ggml_webgpu_tensor_binding_size(ctx, dst) });
-
-            return ggml_backend_webgpu_build_with_pre_ops(ctx->global_ctx, ctx->param_buf_pool, pipeline, pad_params,
-                                                          pad_entries, pad_clear_ops, pad_copy_ops, { pad_buf }, wg_x);
-        }
-    }
 
     if (use_vec_split) {
         const uint32_t nwg = vec_nwg;
@@ -1972,15 +1771,6 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
         }
 
         std::vector<uint32_t> split_params = params;
-        if (use_pad) {
-            GGML_ASSERT(have_pad_buf);
-            split_params.push_back(0u);             // offset_pad
-            split_params.push_back(pad_k_base_u32); // pad_k_base
-            split_params.push_back(pad_v_base_u32); // pad_v_base
-            split_params.push_back(pad_m_base_u32); // pad_m_base
-            split_params.push_back(pad_ncpsg);      // ncpsg
-            split_params.push_back(1u);             // nqptg
-        }
         if (use_blk) {
             split_params.push_back(0u);       // blk_base
             split_params.push_back(blk_nblk0);  // blk_nblk0
@@ -2005,12 +1795,6 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
              .size    = ggml_webgpu_tensor_binding_size(ctx, V) },
         };
         uint32_t split_binding_index = 3;
-        if (use_pad) {
-            split_entries.push_back({ .binding = split_binding_index++,
-                                      .buffer  = pad_buf,
-                                      .offset  = 0,
-                                      .size    = pad_size_bytes });
-        }
         if (has_mask) {
             split_entries.push_back({ .binding = split_binding_index++,
                                       .buffer  = ggml_webgpu_tensor_buf(mask),
@@ -2103,24 +1887,15 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
         const bool split_passes = use_blk;
 
         std::vector<wgpu::Buffer> retained_buffers = { tmp_buf };
-        if (use_pad) {
-            retained_buffers.push_back(pad_buf);
-        }
         if (use_blk) {
             retained_buffers.push_back(blk_buf);
         }
 
         webgpu_command cmd;
-        if (use_pad) {
-            cmd = ggml_backend_webgpu_build_multi_with_pre_ops(
-                ctx->global_ctx, ctx->param_buf_pool, pipelines, params_list, entries_list, workgroups_list,
-                pad_clear_ops, pad_copy_ops, std::move(retained_buffers), std::nullopt, split_passes);
-        } else {
-            cmd = ggml_backend_webgpu_build_multi(
-                ctx->global_ctx, ctx->param_buf_pool, pipelines, params_list, entries_list, workgroups_list,
-                std::nullopt, split_passes);
-            cmd.retained_buffers = std::move(retained_buffers);
-        }
+        cmd = ggml_backend_webgpu_build_multi(
+            ctx->global_ctx, ctx->param_buf_pool, pipelines, params_list, entries_list, workgroups_list,
+            std::nullopt, split_passes);
+        cmd.retained_buffers = std::move(retained_buffers);
         return cmd;
     }
 
