@@ -25102,18 +25102,22 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     }
 
     // Routing-aware pre-staging: stage only needed experts for large MoE models (>64 experts)
-    // This avoids blind preloading all experts which is wasteful for 128+ expert models
-    const bool use_routing_prestage = (n_experts > 64);  // Enable for large MoE models
+    // This avoids blind preloading all experts which is wasteful for 128+ expert models.
+    // Only valid when use_expert_cache is true — src0->data is a host (mmap) pointer.
+    // When use_expert_cache is false, src0->data is a device pointer and cannot be
+    // dereferenced on the host.
+    const bool use_routing_prestage = use_expert_cache && (n_experts > 64);
     if (use_routing_prestage) {
         // Get expert indices from IDs tensor (already copied to ids_host)
         const int32_t * expert_ids_ptr = ids_host.data();
         const int       n_expert_used  = static_cast<int>(ids->ne[0]);  // experts per token (typically 4)
         const int       n_tokens_ids   = static_cast<int>(ids->ne[1]);  // batch size
 
-        // Expert stride and size
-        const size_t expert_stride = src0->nb[2];  // bytes between experts
-        const size_t expert_size_prestage =
-            static_cast<size_t>(src0->ne[0]) * static_cast<size_t>(src0->ne[1]) * ggml_type_size(src0->type);
+        // Expert stride and size — nb[2] is the true byte count per expert,
+        // correctly accounting for block-quantized types (e.g. MXFP4 where
+        // ggml_type_size returns sizeof(block), not per-element size).
+        const size_t expert_stride        = src0->nb[2];  // bytes between experts
+        const size_t expert_size_prestage = expert_stride;
 
         // Get cache key info from tensor extra to match dispatch path keys
         const uint64_t uuid     = src0_extra ? ggml_sycl_assign_cache_uuid(src0_extra) : 0;
@@ -25121,20 +25125,20 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
         const char *   ten_name = ggml_get_name(src0);
 
         // Pre-stage only needed experts
-        ggml_sycl::prestage_result prestage_res =
-            ggml_sycl::prestage_routed_experts(stream,                       // SYCL queue
-                                               expert_ids_ptr,               // Routing indices
-                                               n_expert_used,                // Experts per token
-                                               n_tokens_ids,                 // Batch size
-                                               src0->data,                   // mmap base pointer
-                                               expert_stride,                // Bytes between experts
-                                               expert_size_prestage,         // Size of each expert
-                                               layer_id,                     // Layer ID
-                                               static_cast<int>(n_experts),  // Total experts for bounds checking
-                                               ctx.device,                   // Device ID
-                                               ten_name,                     // Tensor name (for key matching)
-                                               uuid,                         // Cache UUID (for key matching)
-                                               mod_id);                      // Model ID (for key matching)
+        ggml_sycl::prestage_result prestage_res = ggml_sycl::prestage_routed_experts(
+            stream,                       // SYCL queue
+            expert_ids_ptr,               // Routing indices
+            n_expert_used,                // Experts per token
+            n_tokens_ids,                 // Batch size
+            src0->data,                   // host mmap base (use_expert_cache guarantees host-resident)
+            expert_stride,                // Bytes between experts
+            expert_size_prestage,         // Size of each expert
+            layer_id,                     // Layer ID
+            static_cast<int>(n_experts),  // Total experts for bounds checking
+            ctx.device,                   // Device ID
+            ten_name,                     // Tensor name (for key matching)
+            uuid,                         // Cache UUID (for key matching)
+            mod_id);                      // Model ID (for key matching)
 
         GGML_SYCL_DEBUG(
             "[MOE-PRESTAGE] Layer %d: %d unique experts, %d staged, %d pinned (threshold=%d, n_experts=%ld)\n",
