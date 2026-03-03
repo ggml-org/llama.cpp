@@ -303,7 +303,7 @@
 			>
 				<Package class="h-3.5 w-3.5" />
 
-				<ModelId modelId={currentModel} class="min-w-0" />
+				<ModelId modelId={currentModel} class="min-w-0" showOrgName />
 			</span>
 		{:else}
 			<p class="text-xs text-muted-foreground">No models available.</p>
@@ -341,7 +341,7 @@
 						{#if selectedOption}
 							<Tooltip.Root>
 								<Tooltip.Trigger class="min-w-0 overflow-hidden">
-									<ModelId modelId={selectedOption.model} class="min-w-0" />
+									<ModelId modelId={selectedOption.model} class="min-w-0" showOrgName />
 								</Tooltip.Trigger>
 								<Tooltip.Content>
 									<p class="font-mono">{selectedOption.model}</p>
@@ -381,7 +381,7 @@
 									aria-disabled="true"
 									disabled
 								>
-									<ModelId modelId={currentModel} class="flex-1" />
+									<ModelId modelId={currentModel} class="flex-1" showOrgName />
 
 									<span class="ml-2 text-xs whitespace-nowrap opacity-70">(not available)</span>
 								</button>
@@ -442,7 +442,7 @@
 				{#if selectedOption}
 					<Tooltip.Root>
 						<Tooltip.Trigger class="min-w-0 overflow-hidden">
-							<ModelId modelId={selectedOption.model} class="min-w-0" />
+							<ModelId modelId={selectedOption.model} class="min-w-0" showOrgName />
 						</Tooltip.Trigger>
 						<Tooltip.Content>
 							<p class="font-mono">{selectedOption.model}</p>
