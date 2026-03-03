@@ -389,7 +389,6 @@ struct webgpu_context_struct {
     std::unordered_map<ggml_webgpu_flash_attn_blk_pipeline_key, webgpu_pipeline,
                        ggml_webgpu_flash_attn_blk_pipeline_key_hash>
         flash_attn_blk_pipelines;
-
     std::map<int, webgpu_pipeline>                               rms_norm_pipelines;  // inplace
     std::map<int, std::map<int, std::map<int, webgpu_pipeline>>> rope_pipelines;      // type, ff, inplace
     std::map<int, std::map<int, std::map<int, webgpu_pipeline>>> glu_pipelines;       // glu_op, type, split
