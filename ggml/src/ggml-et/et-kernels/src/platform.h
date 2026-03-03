@@ -150,6 +150,87 @@ static inline void atomic_store_f16(volatile uint16_t * addr, uint16_t value) {
     et_global_store_hw(addr, value);
 }
 
+// Atomic add for F32 values to global memory
+// Uses ET hardware's custom amoaddg.w instruction for global atomic add
+// This ensures correct accumulation when multiple threads contribute to the same output
+static inline void atomic_add_f32(volatile float* addr, float value) {
+    uint32_t value_bits = *(uint32_t*)&value;
+    __asm__ volatile(
+        "amoaddg.w zero, %1, (%0)"
+        :
+        : "r"(addr), "r"(value_bits)
+        : "memory"
+    );
+}
+
+// static inline void atomic_add_f32(volatile float* addr, float value) {
+//     // We use the "f" constraint to ensure 'value' is in a floating-point register (fs1)
+//     // and "r" for the address in an integer register (rs2)
+//     __asm__ volatile(
+//         "famoaddg.pi zero, %1, (%0)"
+//         :
+//         : "r"(addr), "f"(value)
+//         : "memory"
+//     );
+// }
+
+// // Atomic Floating Point Swap/Store Global
+// static inline void atomic_store_f32(volatile float* addr, float value) {
+//     uint32_t value_bits = *(uint32_t*)&value;
+//     __asm__ volatile(
+//         "famoswapg.pi zero, %1, (%0)"
+//         :
+//         : "r"(addr), "f"(value)
+//         : "memory"
+//     );
+// }
+
+// static inline void atomic_add_f32(float *addr, float value) {
+//     uint32_t old_bits;
+//     uint32_t expected;
+//     uint32_t desired;
+
+//     do {
+//         // Load current value
+//         __asm__ volatile (
+//             "lw %0, 0(%1)"
+//             : "=r"(old_bits)
+//             : "r"(addr)
+//             : "memory"
+//         );
+
+//         float old_f;
+//         __builtin_memcpy(&old_f, &old_bits, sizeof(old_f));
+//         float new_f = old_f + value;
+//         __builtin_memcpy(&desired, &new_f, sizeof(desired));
+
+//         expected = old_bits;
+
+//         // CAS: rd, expected, desired, (addr)
+//         __asm__ volatile (
+//             "amocmpswapg.w %0, %1, %2, (%3)"
+//             : "=r"(old_bits)
+//             : "r"(expected), "r"(desired), "r"(addr)
+//             : "memory"
+//         );
+
+//     } while (old_bits != expected);
+// }
+
+
+// static inline void atomic_store_f32(float *addr, float value) {
+//     uint32_t bits;
+//     __builtin_memcpy(&bits, &value, sizeof(bits));
+
+//     __asm__ volatile (
+//         "amoswapg.w zero, %1, (%0)"
+//         :
+//         : "r"(addr), "r"(bits)
+//         : "memory"
+//     );
+// }
+
+
 // Atomic store for F16 values to global memory
 // Uses ET hardware's custom shg instruction (store halfword global)
 // This ensures cache coherency when multiple threads write to nearby addresses
