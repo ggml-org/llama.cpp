@@ -152,6 +152,10 @@ static inline float et_expf(float x) {
 // Trigonometric Functions
 //******************************************************************************
 
+
+// FSIN.PS
+
+
 // Sine function using Taylor series
 static inline float et_sinf(float x) {
     const float pi = 3.14159265358979323846f;

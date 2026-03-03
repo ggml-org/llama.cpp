@@ -238,14 +238,14 @@ bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tens
         node->src[0]->type == GGML_TYPE_Q8_0 &&
         node->src[1]->type == GGML_TYPE_F32) {
 
-        kernel_name = "mul_mat_f32";
+        kernel_name = "mul_mat_Q8_0";
         src0_type_name = "Q8_0";
 
     } else if (node->type == GGML_TYPE_F32 &&
                node->src[0]->type == GGML_TYPE_F16 &&
                node->src[1]->type == GGML_TYPE_F32) {
 
-        kernel_name = "mul_mat_f32";
+        kernel_name = "mul_mat_f16";
         src0_type_name = "F16";
 
     } else if (node->type == GGML_TYPE_F32 &&
@@ -281,11 +281,33 @@ bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tens
 
     bool kernel_result = ggml_et_launch_kernel(dev_ctx, kernel_name, &params, sizeof(params), 0xFFFFFFFF);
 
+        // printf("Tensor error:");
+    // if (params.src0.data != NULL)
+    // {
+    //     printf("Ptr OK\n");
+    //     printf("node->data ptr = %p\n", node->data);
+    //     // if (once < 100){
+    //     //     // uint64_t * host_data = (uint64_t *) node->data;
+    //     //     // printf("Tensor error: %lu\n", host_data[0]);
+
+    //     //     // printf("Tensor error:");
+    //     //     once++;
+    //     // }
+    // }
+
+
+
     // Phase 2: Execute CPU computation and compare with ET result (after ET kernel)
     if (cpu_comparison_active) {
         if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &mul_mat_cpu_compare_config)) {
             GGML_LOG_WARN("ET: CPU comparison failed for MUL_MAT operation\n");
         }
+        // if (params.src0.data != NULL)
+        // {
+        //     printf("Ptr OK\n");
+        //     printf("node->data ptr = %p\n", node->data);
+        // }
+
         ggml_et_cpu_compare_free(&cpu_cmp_ctx);
     }
 

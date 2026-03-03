@@ -31,6 +31,8 @@ set(KERNELS
     glu_f32
     mul_mat_f32
     mul_mat_id_f32
+    mul_mat_Q8_0
+    mul_mat_f16
     rope_f32
     rms_norm_f32
     softmax_f32
