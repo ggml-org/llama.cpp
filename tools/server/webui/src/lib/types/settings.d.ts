@@ -1,7 +1,7 @@
 import type { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
 import type { ChatMessagePromptProgress, ChatMessageTimings } from './chat';
-import type { ParameterSource, SyncableParameterType, SettingsFieldType } from '$lib/enums';
 import type { DatabaseMessageExtra } from './database';
+import type { ParameterSource, SyncableParameterType, SettingsFieldType } from '$lib/enums';
 
 export type SettingsConfigValue = string | number | boolean;
 
@@ -69,14 +69,18 @@ export type SettingsConfigType = typeof SETTING_CONFIG_DEFAULT & {
 	[key: string]: SettingsConfigValue;
 };
 
+/**
+ * Parameter synchronization types for server defaults and user overrides
+ * Note: ParameterSource and SyncableParameterType enums are imported from '$lib/enums'
+ */
 export type ParameterValue = string | number | boolean;
 export type ParameterRecord = Record<string, ParameterValue>;
 
 export interface ParameterInfo {
-	value: ParameterValue;
+	value: string | number | boolean;
 	source: ParameterSource;
-	serverDefault?: ParameterValue;
-	userOverride?: ParameterValue;
+	serverDefault?: string | number | boolean;
+	userOverride?: string | number | boolean;
 }
 
 export interface SyncableParameter {

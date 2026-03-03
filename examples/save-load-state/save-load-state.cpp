@@ -5,11 +5,14 @@
 #include <vector>
 #include <cstdio>
 
+
 int main(int argc, char ** argv) {
     common_params params;
 
     params.prompt = "The quick brown fox";
     params.sampling.seed = 1234;
+
+    const std::string_view state_file = "dump_state.bin";
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
         return 1;
@@ -53,34 +56,15 @@ int main(int argc, char ** argv) {
     // tokenize prompt
     auto tokens = common_tokenize(ctx, params.prompt, true);
 
-    // prepare the batch
-    llama_batch batch = llama_batch_init(tokens.size(), 0, 1);
-    for (size_t i = 0; i < tokens.size(); i++) {
-        common_batch_add(batch, tokens[i], i, {0}, false);
+    const bool save_state = true;
+    if (!common_prompt_batch_decode(ctx, tokens, n_past, params.n_batch, state_file, save_state)) {
+        return 1;
     }
-    batch.logits[batch.n_tokens - 1] = true; // generate next token
-
-    // evaluate prompt
-    llama_decode(ctx, batch);
-    n_past += batch.n_tokens;
-
-    // save state (rng, logits, embedding and kv_cache) to file
-    {
-        std::vector<uint8_t> state_mem(llama_state_get_size(ctx));
-        const size_t written = llama_state_get_data(ctx, state_mem.data(), state_mem.size());
-
-        FILE *fp_write = fopen("dump_state.bin", "wb");
-        fwrite(state_mem.data(), 1, written, fp_write);
-        fclose(fp_write);
-
-        fprintf(stderr, "%s : serialized state into %zd out of a maximum of %zd bytes\n", __func__, written, state_mem.size());
-    }
-
-    // save state (last tokens)
-    const auto n_past_saved = n_past;
 
     // first run
     printf("\nfirst run: %s", params.prompt.c_str());
+
+    llama_batch batch = llama_batch_init(1, 0, 1);
 
     for (auto i = 0; i < params.n_predict; i++) {
         auto next_token     = llama_sampler_sample(smpl, ctx, -1);
@@ -111,27 +95,23 @@ int main(int argc, char ** argv) {
 
     printf("\nsecond run: %s", params.prompt.c_str());
 
-    // load state (rng, logits, embedding and kv_cache) from file
-    {
-        std::vector<uint8_t> state_mem;
+    // load state from file
+    std::vector<llama_token> unused_sts(tokens.size()); // unused session tokens.
+    size_t n_token_count_out = 0;
 
-        FILE * fp_read = fopen("dump_state.bin", "rb");
-        fseek(fp_read, 0, SEEK_END);
-        state_mem.resize(ftell(fp_read));
-        fseek(fp_read, 0, SEEK_SET);
-        const size_t read = fread(state_mem.data(), 1, state_mem.size(), fp_read);
-        fclose(fp_read);
-
-        if (read != llama_state_set_data(ctx2, state_mem.data(), state_mem.size())) {
-            fprintf(stderr, "\n%s : failed to read state\n", __func__);
-            return 1;
-        }
-
-        fprintf(stderr, "%s : deserialized state from %zd out of a maximum of %zd bytes\n", __func__, read, state_mem.size());
+    if (!llama_state_load_file(ctx2, state_file.data(), unused_sts.data(), unused_sts.size(), &n_token_count_out)) {
+        fprintf(stderr, "\n%s : failed to load state\n", __func__);
+        return 1;
     }
 
+    fprintf(stderr, "%s : loaded state with %zu tokens\n", __func__, n_token_count_out);
+
     // restore state (last tokens)
-    n_past = n_past_saved;
+    n_past = n_token_count_out;
+    if (!common_replay_last_token(ctx2, tokens.back(), n_past)) {
+        return 1;
+    }
+    ++n_past;
 
     // second run
     for (auto i = 0; i < params.n_predict; i++) {
@@ -160,7 +140,9 @@ int main(int argc, char ** argv) {
     }
 
     // make new context
-    llama_context * ctx3 = llama_init_from_model(model, common_context_params_to_llama(params));
+    auto params_ctx3 = common_context_params_to_llama(params);
+    params_ctx3.n_seq_max = 2;
+    llama_context * ctx3 = llama_init_from_model(model, params_ctx3);
 
     llama_sampler * smpl3 = llama_sampler_chain_init(sparams);
 
@@ -169,26 +151,21 @@ int main(int argc, char ** argv) {
     printf("\nsingle seq run: %s", params.prompt.c_str());
 
     // load state (rng, logits, embedding and kv_cache) from file
-    {
-        std::vector<uint8_t> state_mem;
+    n_token_count_out = 0;
 
-        FILE * fp_read = fopen("dump_state.bin", "rb");
-        fseek(fp_read, 0, SEEK_END);
-        state_mem.resize(ftell(fp_read));
-        fseek(fp_read, 0, SEEK_SET);
-        const size_t read = fread(state_mem.data(), 1, state_mem.size(), fp_read);
-        fclose(fp_read);
-
-        if (read != llama_state_set_data(ctx3, state_mem.data(), state_mem.size())) {
-            fprintf(stderr, "\n%s : failed to read state\n", __func__);
-            return 1;
-        }
-
-        fprintf(stderr, "%s : deserialized state from %zd out of a maximum of %zd bytes\n", __func__, read, state_mem.size());
+    if (!llama_state_load_file(ctx3, state_file.data(), unused_sts.data(), unused_sts.size(), &n_token_count_out)) {
+        fprintf(stderr, "\n%s : failed to load state\n", __func__);
+        return 1;
     }
 
+    fprintf(stderr, "%s : loaded state with %zu tokens\n", __func__, n_token_count_out);
+
     // restore state (last tokens)
-    n_past = n_past_saved;
+    n_past = n_token_count_out;
+    if (!common_replay_last_token(ctx3, tokens.back(), n_past)) {
+        return 1;
+    }
+    ++n_past;
 
     // save seq 0 and load into seq 1
     {

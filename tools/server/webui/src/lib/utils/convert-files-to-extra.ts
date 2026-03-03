@@ -7,6 +7,7 @@ import { modelsStore } from '$lib/stores/models.svelte';
 import { getFileTypeCategory } from '$lib/utils';
 import { readFileAsText, isLikelyTextFile } from './text-files';
 import { toast } from 'svelte-sonner';
+import type { FileProcessingResult, ChatUploadedFile, DatabaseMessageExtra } from '$lib/types';
 
 function readFileAsBase64(file: File): Promise<string> {
 	return new Promise((resolve, reject) => {
@@ -23,11 +24,6 @@ function readFileAsBase64(file: File): Promise<string> {
 
 		reader.readAsDataURL(file);
 	});
-}
-
-export interface FileProcessingResult {
-	extras: DatabaseMessageExtra[];
-	emptyFiles: string[];
 }
 
 export async function parseFilesToMessageExtras(

@@ -803,7 +803,7 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
         }
 
         // remove potential partial suffix
-        if (builder.pos() == builder.input().size()) {
+        if (builder.pos() == builder.input().size() && builder.is_partial()) {
             if (unclosed_reasoning_content.empty()) {
                 rstrip(content);
                 trim_potential_partial_word(content);

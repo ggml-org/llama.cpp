@@ -34,8 +34,6 @@ export type {
 
 // Chat types
 export type {
-	ChatMessageType,
-	ChatRole,
 	ChatUploadedFile,
 	ChatAttachmentDisplayItem,
 	ChatAttachmentPreviewItem,
@@ -48,7 +46,7 @@ export type {
 	LiveGenerationStats,
 	AttachmentDisplayItemsOptions,
 	FileProcessingResult
-} from './chat';
+} from './chat.d';
 
 // Database types
 export type {

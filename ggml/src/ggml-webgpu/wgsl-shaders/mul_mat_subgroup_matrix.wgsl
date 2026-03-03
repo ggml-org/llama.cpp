@@ -1,100 +1,12 @@
-#define(VARIANTS)
-[
-  {
-    "SHADER_SUFFIX": "f32_f32_vec",
-    "REPLS": {
-      "SRC0_TYPE" : "vec4<f32>",
-      "SRC1_TYPE" : "vec4<f32>",
-      "DST_TYPE" : "vec4<f32>",
-      "SHMEM_TYPE" : "vec4<f16>",
-      "VEC_SIZE" : 4,
-    },
-    "DECLS": ["VEC", "SHMEM_VEC", "INIT_SRC0_SHMEM_FLOAT", "INIT_SRC1_SHMEM"]
-  },
-  {
-    "SHADER_SUFFIX": "f32_f32",
-    "REPLS": {
-      "SRC0_TYPE" : "f32",
-      "SRC1_TYPE" : "f32",
-      "DST_TYPE" : "f32",
-      "SHMEM_TYPE" : "f16",
-      "VEC_SIZE" : 1,
-    },
-    "DECLS": ["SCALAR", "SHMEM_SCALAR", "INIT_SRC0_SHMEM_FLOAT", "INIT_SRC1_SHMEM"]
-  },
-  {
-    "SHADER_SUFFIX": "f16_f32_vec",
-    "REPLS": {
-      "SRC0_TYPE" : "vec4<f16>",
-      "SRC1_TYPE" : "vec4<f32>",
-      "DST_TYPE" : "vec4<f32>",
-      "SHMEM_TYPE" : "vec4<f16>",
-      "VEC_SIZE" : 4,
-    },
-    "DECLS": ["VEC", "SHMEM_VEC", "INIT_SRC0_SHMEM_FLOAT", "INIT_SRC1_SHMEM"]
-  },
-  {
-    "SHADER_SUFFIX": "f16_f32",
-    "REPLS": {
-      "SRC0_TYPE" : "f16",
-      "SRC1_TYPE" : "f32",
-      "DST_TYPE" : "f32",
-      "SHMEM_TYPE" : "f16",
-      "VEC_SIZE" : 1,
-    },
-    "DECLS": ["SCALAR", "SHMEM_SCALAR", "INIT_SRC0_SHMEM_FLOAT", "INIT_SRC1_SHMEM"]
-  },
-  {
-    "SHADER_SUFFIX": "f16_f16_vec",
-    "REPLS": {
-      "SRC0_TYPE" : "vec4<f16>",
-      "SRC1_TYPE" : "vec4<f16>",
-      "DST_TYPE" : "vec4<f32>",
-      "SHMEM_TYPE" : "vec4<f16>",
-      "VEC_SIZE" : 4,
-    },
-    "DECLS": ["VEC", "SHMEM_VEC", "INIT_SRC0_SHMEM_FLOAT", "INIT_SRC1_SHMEM"]
-  },
-  {
-    "SHADER_SUFFIX": "f16_f16",
-    "REPLS": {
-      "SRC0_TYPE" : "f16",
-      "SRC1_TYPE" : "f16",
-      "DST_TYPE" : "f32",
-      "SHMEM_TYPE" : "f16",
-      "VEC_SIZE" : 1,
-    },
-    "DECLS": ["SCALAR", "SHMEM_SCALAR", "INIT_SRC0_SHMEM_FLOAT", "INIT_SRC1_SHMEM"]
-  },
-  {
-    "SHADER_SUFFIX": "q4_0_f32_vec",
-    "REPLS": {
-      "SRC0_TYPE" : "f16",
-      "SRC1_TYPE" : "vec4<f32>",
-      "DST_TYPE" : "vec4<f32>",
-      "SHMEM_TYPE" : "vec4<f16>",
-      "VEC_SIZE" : 4,
-    },
-    "DECLS": ["BYTE_HELPERS", "VEC", "SHMEM_VEC", "INIT_SRC0_SHMEM_Q4_0", "INIT_SRC1_SHMEM"]
-  },
-  {
-    "SHADER_SUFFIX": "q4_0_f32",
-    "REPLS": {
-      "SRC0_TYPE" : "f16",
-      "SRC1_TYPE" : "f32",
-      "DST_TYPE" : "f32",
-      "SHMEM_TYPE" : "f16",
-      "VEC_SIZE" : 1,
-    },
-    "DECLS": ["BYTE_HELPERS", "SCALAR", "SHMEM_SCALAR", "INIT_SRC0_SHMEM_Q4_0", "INIT_SRC1_SHMEM"]
-  }
-]
+diagnostic(off, chromium.subgroup_matrix_uniformity);
+enable f16;
+enable subgroups;
+enable chromium_experimental_subgroup_matrix;
 
-#end(VARIANTS)
+#include "common_decls.tmpl"
+#include "mul_mat_decls.tmpl"
 
-#define(DECLS)
-
-#decl(VEC)
+#ifdef VEC
 fn store_dst(shmem_idx: u32, dst_idx: u32) {
     dst[dst_idx] = vec4<f32>(
         f32(shmem[shmem_idx]),
@@ -103,21 +15,13 @@ fn store_dst(shmem_idx: u32, dst_idx: u32) {
         f32(shmem[shmem_idx + 3])
     );
 }
-#enddecl(VEC)
+#endif
 
-#decl(SCALAR)
+#ifdef SCALAR
 fn store_dst(shmem_idx: u32, dst_idx: u32) {
     dst[dst_idx] = f32(shmem[shmem_idx]);
 }
-#enddecl(SCALAR)
-
-#end(DECLS)
-
-#define(SHADER)
-diagnostic(off, chromium.subgroup_matrix_uniformity);
-enable f16;
-enable subgroups;
-enable chromium_experimental_subgroup_matrix;
+#endif
 
 struct MulMatParams {
     offset_src0: u32,
@@ -138,36 +42,19 @@ struct MulMatParams {
     broadcast3: u32
 };
 
-@group(0) @binding(0) var<storage, read_write> src0: array<{{SRC0_TYPE}}>; // M rows, K columns
-@group(0) @binding(1) var<storage, read_write> src1: array<{{SRC1_TYPE}}>; // K rows, N columns (transposed)
-@group(0) @binding(2) var<storage, read_write> dst: array<{{DST_TYPE}}>; // M rows, N columns (transposed)
+// SRC0_TYPE and SRC1_TYPE are defined in mul_mat_decls, which is included
+@group(0) @binding(0) var<storage, read_write> src0: array<SRC0_TYPE>; // M rows, K columns
+@group(0) @binding(1) var<storage, read_write> src1: array<SRC1_TYPE>; // K rows, N columns (transposed)
+@group(0) @binding(2) var<storage, read_write> dst: array<DST_TYPE>; // M rows, N columns (transposed)
 
 @group(0) @binding(3) var<uniform> params: MulMatParams;
-
-DECLS
-
-// Note: These are string interpolated at build time, cannot use override constants due to limitations in
-// current Dawn version type definitions/matrix load requirements for constant memory sizes.
-const SUBGROUP_M = {{WEBGPU_SUBGROUP_M}}u;
-const SUBGROUP_N = {{WEBGPU_SUBGROUP_N}}u;
-// For portability we assume the max subgroup size, meaning some subgroups will be masked out if the
-// runtime subgroup size is smaller.
-const MAX_SUBGROUP_SIZE = {{WEBGPU_MAX_SUBGROUP_SIZE}}u;
-
-const EXPECTED_SUBGROUPS = SUBGROUP_M * SUBGROUP_N;
-
-const SUBGROUP_MATRIX_M_SIZE = {{WEBGPU_SG_MAT_M_SIZE}}u;
-const SUBGROUP_MATRIX_N_SIZE = {{WEBGPU_SG_MAT_N_SIZE}}u;
-const SUBGROUP_MATRIX_K_SIZE = {{WEBGPU_SG_MAT_K_SIZE}}u;
-
-const SUBGROUP_MATRIX_M = {{WEBGPU_SUBGROUP_MATRIX_M}}u;
-const SUBGROUP_MATRIX_N = {{WEBGPU_SUBGROUP_MATRIX_N}}u;
-
-const TILE_K = {{WEBGPU_TILE_K}}u;
 
 const WG_M_SG_TILE_SIZE = SUBGROUP_M * SUBGROUP_MATRIX_M * SUBGROUP_MATRIX_M_SIZE;
 const WG_N_SG_TILE_SIZE = SUBGROUP_N * SUBGROUP_MATRIX_N * SUBGROUP_MATRIX_N_SIZE;
 
+// For portability we assume the max subgroup size, meaning some subgroups will be masked out if the
+// runtime subgroup size is smaller.
+const EXPECTED_SUBGROUPS = SUBGROUP_M * SUBGROUP_N;
 const TOTAL_WORKGROUP_SIZE = SUBGROUP_M * SUBGROUP_N * MAX_SUBGROUP_SIZE;
 const TILE_SRC0_SHMEM = TILE_K * SUBGROUP_M * SUBGROUP_MATRIX_M * SUBGROUP_MATRIX_M_SIZE;
 const TILE_SRC1_SHMEM = TILE_K * SUBGROUP_N * SUBGROUP_MATRIX_N * SUBGROUP_MATRIX_N_SIZE;
@@ -182,7 +69,8 @@ var<workgroup> shmem: array<f16, SHMEM_SIZE>;
 @compute @workgroup_size(TOTAL_WORKGROUP_SIZE)
 fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
         @builtin(local_invocation_id) local_id: vec3<u32>,
-        @builtin(subgroup_id) subgroup_id: u32) {
+        @builtin(subgroup_id) subgroup_id: u32,
+        @builtin(num_workgroups) num_wg: vec3<u32>) {
 
     let thread_id = local_id.x;
     let subgroup_m = subgroup_id % SUBGROUP_M;
@@ -192,9 +80,16 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     let wg_n_count = (params.n + WG_N_SG_TILE_SIZE - 1) / WG_N_SG_TILE_SIZE;
     let wg_per_matrix = wg_m_count * wg_n_count;
 
-    let batch_idx = wg_id.x / wg_per_matrix;
+    let wg_linear = wg_id.y * num_wg.x + wg_id.x;
 
-    let wg_in_batch = wg_id.x % wg_per_matrix;
+    let batch_idx = wg_linear / wg_per_matrix;
+
+    let total_batches = params.bs02 * params.broadcast2 * params.bs03 * params.broadcast3;
+    if (batch_idx >= total_batches) {
+        return;
+    }
+
+    let wg_in_batch = wg_linear % wg_per_matrix;
     let wg_m = wg_in_batch % wg_m_count;
     let wg_n = wg_in_batch / wg_m_count;
 
@@ -285,7 +180,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     let tile_dst_row_base = wg_m * SUBGROUP_M * SUBGROUP_MATRIX_M * SUBGROUP_MATRIX_M_SIZE;
     let tile_dst_col_base = wg_n * SUBGROUP_N * SUBGROUP_MATRIX_N * SUBGROUP_MATRIX_N_SIZE;
 
-    for (var idx = thread_id * {{VEC_SIZE}}; idx < total_tile_elems; idx += TOTAL_WORKGROUP_SIZE * {{VEC_SIZE}}) {
+    for (var idx = thread_id * VEC_SIZE; idx < total_tile_elems; idx += TOTAL_WORKGROUP_SIZE * VEC_SIZE) {
         let local_row = idx % WG_TILE_STRIDE;
         let local_col = idx / WG_TILE_STRIDE;
 
@@ -294,9 +189,8 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
         if (global_col < params.n && global_row < params.m) {
             let dst_idx = dst_batch_offset + global_col * params.m + global_row;
-            store_dst(idx, dst_idx/{{VEC_SIZE}});
+            store_dst(idx, dst_idx/VEC_SIZE);
         }
     }
 }
 
-#end(SHADER)

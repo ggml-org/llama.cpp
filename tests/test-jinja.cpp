@@ -32,6 +32,7 @@ static void test_string_methods(testing & t);
 static void test_array_methods(testing & t);
 static void test_object_methods(testing & t);
 static void test_hasher(testing & t);
+static void test_stats(testing & t);
 static void test_fuzzing(testing & t);
 
 static bool g_python_mode = false;
@@ -70,6 +71,7 @@ int main(int argc, char *argv[]) {
     t.test("object methods", test_object_methods);
     if (!g_python_mode) {
         t.test("hasher", test_hasher);
+        t.test("stats", test_stats);
         t.test("fuzzing", test_fuzzing);
     }
 
@@ -689,6 +691,48 @@ static void test_filters(testing & t) {
         "{{ data|tojson(separators=(',',': '), indent=2) }}",
         {{"data", {{"a", 1}, {"b", json::array({1, 2})}}}},
         "{\n  \"a\": 1,\n  \"b\": [\n    1,\n    2\n  ]\n}"
+    );
+
+    test_template(t, "indent",
+        "{{ data|indent(2) }}",
+        {{ "data", "foo\nbar" }},
+        "foo\n  bar"
+    );
+
+    test_template(t, "indent first only",
+        "{{ data|indent(width=3,first=true) }}",
+        {{ "data", "foo\nbar" }},
+        "   foo\n   bar"
+    );
+
+    test_template(t, "indent blank lines and first line",
+        "{{ data|indent(width=5,blank=true,first=true) }}",
+        {{ "data", "foo\n\nbar" }},
+        "     foo\n     \n     bar"
+    );
+
+    test_template(t, "indent with default width",
+        "{{ data|indent() }}",
+        {{ "data", "foo\nbar" }},
+        "foo\n    bar"
+    );
+
+    test_template(t, "indent with no newline",
+        "{{ data|indent }}",
+        {{ "data", "foo" }},
+        "foo"
+    );
+
+    test_template(t, "indent with trailing newline",
+        "{{ data|indent(blank=true) }}",
+        {{ "data", "foo\n" }},
+        "foo\n    "
+    );
+
+    test_template(t, "indent with string",
+        "{{ data|indent(width='>>>>') }}",
+        {{ "data", "foo\nbar" }},
+        "foo\n>>>>bar"
     );
 
     test_template(t, "chained filters",
@@ -1750,6 +1794,63 @@ static void test_hasher(testing & t) {
 
             hash1 = hash2;
         }
+    });
+}
+
+static void test_stats(testing & t) {
+    static auto get_stats = [](const std::string & tmpl, const json & vars) -> jinja::value {
+        jinja::lexer lexer;
+        auto lexer_res = lexer.tokenize(tmpl);
+
+        jinja::program prog = jinja::parse_from_tokens(lexer_res);
+
+        jinja::context ctx(tmpl);
+        jinja::global_from_json(ctx, json{{ "val", vars }}, true);
+        ctx.is_get_stats = true;
+
+        jinja::runtime runtime(ctx);
+        runtime.execute(prog);
+
+        return ctx.get_val("val");
+    };
+
+    t.test("stats", [](testing & t) {
+        jinja::value val = get_stats(
+            "{{val.num}} "
+            "{{val.str}} "
+            "{{val.arr[0]}} "
+            "{{val.obj.key1}} "
+            "{{val.nested | tojson}}",
+            // Note: the json below will be wrapped inside "val" in the context
+            json{
+                {"num", 1},
+                {"str", "abc"},
+                {"arr", json::array({1, 2, 3})},
+                {"obj", json::object({{"key1", 1}, {"key2", 2}, {"key3", 3}})},
+                {"nested", json::object({
+                    {"inner_key1", json::array({1, 2})},
+                    {"inner_key2", json::object({{"a", "x"}, {"b", "y"}})}
+                })},
+                {"mixed", json::object({
+                    {"used", 1},
+                    {"unused", 2},
+                })},
+            }
+        );
+
+        t.assert_true("num is used", val->at("num")->stats.used);
+        t.assert_true("str is used", val->at("str")->stats.used);
+
+        t.assert_true("arr is used", val->at("arr")->stats.used);
+        t.assert_true("arr[0] is used", val->at("arr")->at(0)->stats.used);
+        t.assert_true("arr[1] is not used", !val->at("arr")->at(1)->stats.used);
+
+        t.assert_true("obj is used", val->at("obj")->stats.used);
+        t.assert_true("obj.key1 is used", val->at("obj")->at("key1")->stats.used);
+        t.assert_true("obj.key2 is not used", !val->at("obj")->at("key2")->stats.used);
+
+        t.assert_true("inner_key1[0] is used", val->at("nested")->at("inner_key1")->at(0)->stats.used);
+        t.assert_true("inner_key2.a is used", val->at("nested")->at("inner_key2")->at("a")->stats.used);
     });
 }
 

@@ -15,6 +15,7 @@
 	import { goto } from '$app/navigation';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants/tooltip-config';
+	import { KeyboardKey } from '$lib/enums';
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
 
 	let { children } = $props();
@@ -43,7 +44,7 @@
 	function handleKeydown(event: KeyboardEvent) {
 		const isCtrlOrCmd = event.ctrlKey || event.metaKey;
 
-		if (isCtrlOrCmd && event.key === 'k') {
+		if (isCtrlOrCmd && event.key === KeyboardKey.K_LOWER) {
 			event.preventDefault();
 			if (chatSidebar?.activateSearchMode) {
 				chatSidebar.activateSearchMode();
@@ -51,12 +52,12 @@
 			}
 		}
 
-		if (isCtrlOrCmd && event.shiftKey && event.key === 'O') {
+		if (isCtrlOrCmd && event.shiftKey && event.key === KeyboardKey.O_UPPER) {
 			event.preventDefault();
 			goto('?new_chat=true#/');
 		}
 
-		if (event.shiftKey && isCtrlOrCmd && event.key === 'E') {
+		if (event.shiftKey && isCtrlOrCmd && event.key === KeyboardKey.E_UPPER) {
 			event.preventDefault();
 
 			if (chatSidebar?.editActiveConversation) {
