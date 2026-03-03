@@ -31,10 +31,6 @@
 #include <HAP_farf.h>
 #include "hmx-profile.h"
 
-#define WEIGHT_AREA_SIZE     (1 * 1024 * 1024)
-#define ACTIVATION_AREA_SIZE (1 * 1024 * 1024)
-#define OUTPUT_AREA_SIZE     (1 * 1024 * 1024)
-#define SCRATCH_AREA_SIZE    (1 * 1024 * 1024)
 
 // ---------- Debug: check fp16/fp32 buffers for NaN / Inf / near-overflow ----------
 // Set to 1 to enable runtime anomaly checks (adds overhead, use for debugging only).
@@ -320,20 +316,90 @@ static inline size_t get_x4x2_row_stride(int weight_type, int k) {
 }
 
 
-static void find_chunk_size(size_t x_max, size_t y_max, size_t xy_max, size_t x_unit, size_t y_unit, size_t *x_out,
-                            size_t *y_out) {
-  int64_t best_xy = 0;
-  size_t  best_x = 0, best_y = 0;
+// --- Overflow-safe arithmetic for VTCM budget calculation ---
 
-  for (size_t x = x_max; x > 0; x -= x_unit) {
-    size_t  y  = hmx_smin(hmx_align_down(xy_max / x, y_unit), y_max);
-    int64_t xy = x * y;
-    if (best_xy < xy) {
-      best_xy = xy;
-      best_x = x, best_y = y;
+static inline bool hmx_mul_overflow(size_t a, size_t b, size_t *out) {
+    if (a != 0 && b > SIZE_MAX / a) return true;
+    *out = a * b;
+    return false;
+}
+
+static inline bool hmx_add_overflow(size_t a, size_t b, size_t *out) {
+    if (a > SIZE_MAX - b) return true;
+    *out = a + b;
+    return false;
+}
+
+// Search for optimal (mc, nc) chunk sizes that maximize mc * nc within VTCM budget.
+//
+// Cost model: total = nc * per_n_cost + mc * per_m_cost + mc * nc * per_mn_cost + overhead
+//   per_n_cost:  bytes per nc column (weight + scratch buffers)
+//   per_m_cost:  bytes per mc row (activation)
+//   per_mn_cost: bytes per mc*nc element (output)
+//   overhead:    fixed bytes (scales 256B, eye_tile 2048B, etc.)
+//
+// Algorithm: nc sweeps from n_max down by 32, analytically solving for mc_max.
+// Returns 0 on success, -1 if VTCM is insufficient.
+static int hmx_compute_chunks(
+    size_t vtcm_total, size_t overhead,
+    size_t per_n_cost, size_t per_m_cost, size_t per_mn_cost,
+    int m, int n,
+    size_t *m_chunk_out, size_t *n_chunk_out,
+    size_t *total_out)
+{
+    if (m <= 0 || n <= 0) return -1;
+    if (vtcm_total <= overhead) return -1;
+    if (per_n_cost == 0 || per_m_cost == 0 || per_mn_cost == 0) return -1;
+
+    const size_t usable = vtcm_total - overhead;
+    size_t best_mn = 0, best_m = 0, best_n = 0;
+
+    const size_t n_max = hmx_align_down((size_t)n, HMX_FP16_TILE_N_COLS);
+    for (size_t nc = n_max; nc >= HMX_FP16_TILE_N_COLS; nc -= HMX_FP16_TILE_N_COLS) {
+        // Early exit: if nc * m_max cannot beat best, smaller nc won't either
+        if (nc * hmx_align_down((size_t)m, HMX_FP16_TILE_N_ROWS) <= best_mn)
+            break;
+
+        size_t n_fixed = 0, ncmn = 0, mc_denom = 0;
+        if (hmx_mul_overflow(nc, per_n_cost, &n_fixed)) continue;
+        if (n_fixed >= usable) goto next_nc;
+
+        if (hmx_mul_overflow(nc, per_mn_cost, &ncmn)) goto next_nc;
+        if (hmx_add_overflow(per_m_cost, ncmn, &mc_denom) || mc_denom == 0) goto next_nc;
+
+        {
+            size_t remain = usable - n_fixed;
+            size_t mc = remain / mc_denom;
+            mc = hmx_align_down(mc, HMX_FP16_TILE_N_ROWS);
+            mc = hmx_smin(mc, (size_t)m);
+
+            if (mc > 0 && mc * nc > best_mn) {
+                best_mn = mc * nc;
+                best_m  = mc;
+                best_n  = nc;
+            }
+        }
+
+next_nc:
+        if (nc == HMX_FP16_TILE_N_COLS) break;  // avoid size_t underflow
     }
-  }
-  *x_out = best_x, *y_out = best_y;
+
+    if (best_m == 0 || best_n == 0) return -1;
+
+    // Compute exact total (with overflow checks)
+    size_t t0 = 0, t1 = 0, t2 = 0, mn = 0, total = 0;
+    if (hmx_mul_overflow(best_n, per_n_cost, &t0)) return -1;
+    if (hmx_mul_overflow(best_m, per_m_cost, &t1)) return -1;
+    if (hmx_mul_overflow(best_m, best_n, &mn)) return -1;
+    if (hmx_mul_overflow(mn, per_mn_cost, &t2)) return -1;
+    if (hmx_add_overflow(t0, t1, &total)) return -1;
+    if (hmx_add_overflow(total, t2, &total)) return -1;
+    if (hmx_add_overflow(total, overhead, &total)) return -1;
+
+    *m_chunk_out = best_m;
+    *n_chunk_out = best_n;
+    *total_out   = total;
+    return 0;
 }
 
 // forward declaration – defined after transfer_activation_chunk_fp32_to_fp16
@@ -830,10 +896,25 @@ int hmx_mat_mul_permuted_w16a32(struct htp_context *ctx, float *restrict dst, co
     return -1;
   }
 
-  const size_t weight_area_size     = WEIGHT_AREA_SIZE;
-  const size_t activation_area_size = ACTIVATION_AREA_SIZE;
-  const size_t output_area_size     = OUTPUT_AREA_SIZE;
-  const size_t scratch_area_size    = SCRATCH_AREA_SIZE;
+  // --- Dynamic VTCM layout ---
+  const size_t vtcm_budget  = ctx->vtcm_scratch_size;
+  const size_t vec_dot_size = k * sizeof(__fp16);
+
+  size_t m_chunk_n_rows = 0, n_chunk_n_cols = 0, vtcm_used = 0;
+  if (hmx_compute_chunks(vtcm_budget, /*overhead=*/256,
+                          /*per_n=*/3 * vec_dot_size,  // W + S0 + S1
+                          /*per_m=*/vec_dot_size,       // A
+                          /*per_mn=*/sizeof(__fp16),     // O
+                          m, n,
+                          &m_chunk_n_rows, &n_chunk_n_cols, &vtcm_used) != 0) {
+    FARF(HIGH, "%s: VTCM too small (m=%d k=%d n=%d budget=%zu)", __func__, m, k, n, vtcm_budget);
+    return -1;
+  }
+
+  const size_t weight_area_size     = hmx_align_up(n_chunk_n_cols * vec_dot_size, HMX_FP16_TILE_SIZE);
+  const size_t activation_area_size = hmx_align_up(m_chunk_n_rows * vec_dot_size, HMX_FP16_TILE_SIZE);
+  const size_t output_area_size     = hmx_align_up(m_chunk_n_rows * n_chunk_n_cols * sizeof(__fp16), HMX_FP16_TILE_SIZE);
+  const size_t scratch_area_size    = hmx_align_up(n_chunk_n_cols * vec_dot_size, HMX_FP16_TILE_SIZE);
 
   // VTCM layout: weight | activation | output | scratch0 | scratch1 | scales
   uint8_t *vtcm_ptr        = (uint8_t *) ctx->vtcm_base;
@@ -843,19 +924,17 @@ int hmx_mat_mul_permuted_w16a32(struct htp_context *ctx, float *restrict dst, co
   void    *vtcm_scratch0   = vtcm_seq_alloc(&vtcm_ptr, scratch_area_size);
   void    *vtcm_scratch1   = vtcm_seq_alloc(&vtcm_ptr, scratch_area_size);
   __fp16  *vtcm_scales     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, 256);
-  assert((size_t)(vtcm_ptr - ctx->vtcm_base) <= ctx->vtcm_scratch_size);
+  if ((size_t)(vtcm_ptr - (uint8_t *)ctx->vtcm_base) > vtcm_budget) {
+    FARF(ERROR, "%s: vtcm overflow: used=%zu limit=%zu", __func__,
+         (size_t)(vtcm_ptr - (uint8_t *)ctx->vtcm_base), vtcm_budget);
+    return -1;
+  }
 
   hmx_init_column_scales(vtcm_scales, Q6_V_vsplat_R(0x3c00));  // fp16: 1.0
 
-  size_t vec_dot_size       = k * sizeof(__fp16);
-  size_t m_chunk_max_n_rows = hmx_align_down(activation_area_size / vec_dot_size, HMX_FP16_TILE_N_ROWS);
-  size_t n_chunk_max_n_cols = hmx_align_down(weight_area_size / vec_dot_size, HMX_FP16_TILE_N_COLS);
-
-  size_t m_chunk_n_rows = 0, n_chunk_n_cols = 0;
-  find_chunk_size(m_chunk_max_n_rows, n_chunk_max_n_cols, output_area_size / sizeof(__fp16), HMX_FP16_TILE_N_ROWS,
-                  HMX_FP16_TILE_N_COLS, &m_chunk_n_rows, &n_chunk_n_cols);
-
-  assert(m_chunk_n_rows > 0 && n_chunk_n_cols > 0);
+  FARF(MEDIUM, "%s: m=%d k=%d n=%d mc=%zu nc=%zu vtcm=%zu/%zu",
+       __func__, m, k, n, m_chunk_n_rows, n_chunk_n_cols,
+       (size_t)(vtcm_ptr - (uint8_t *)ctx->vtcm_base), vtcm_budget);
 
   TIMER_DEFINE(activation_load);
   TIMER_DEFINE(weight_load);
@@ -997,41 +1076,68 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
     return -1;
   }
 
-  const size_t weight_area_size     = WEIGHT_AREA_SIZE;
-  const size_t activation_area_size = ACTIVATION_AREA_SIZE;
-  const size_t output_area_size     = OUTPUT_AREA_SIZE;
-  const size_t scratch_area_size    = SCRATCH_AREA_SIZE;
+  // --- Dynamic VTCM layout ---
+  const size_t vtcm_budget   = ctx->vtcm_scratch_size;
+  const size_t vec_dot_size  = k * sizeof(__fp16);
+  const bool   use_pipeline  = (m >= 128) && (k <= n);
 
-  // VTCM layout: weight | activation | output | scratch (x4x2 DMA) | scales
+  // Select cost parameters based on execution path
+  size_t per_n_cost, per_mn_cost;
+  if (use_pipeline) {
+    per_n_cost  = row_stride + 2 * vec_dot_size;  // Q + S0 + S1 (dequant bufs)
+    per_mn_cost = 2 * sizeof(__fp16);              // O x 2 (output double buffer)
+  } else {
+    per_n_cost  = vec_dot_size + 2 * row_stride;   // W + S0 + S1 (x4x2 DMA bufs)
+    per_mn_cost = sizeof(__fp16);                   // O x 1
+  }
+
+  size_t m_chunk_n_rows = 0, n_chunk_n_cols = 0, vtcm_used = 0;
+  if (hmx_compute_chunks(vtcm_budget, /*overhead=*/256,
+                          per_n_cost, /*per_m=*/vec_dot_size, per_mn_cost,
+                          m, n, &m_chunk_n_rows, &n_chunk_n_cols, &vtcm_used) != 0) {
+    FARF(HIGH, "%s: VTCM too small (m=%d k=%d n=%d pipe=%d budget=%zu)",
+         __func__, m, k, n, use_pipeline, vtcm_budget);
+    return -1;
+  }
+
+  // Compute precise buffer sizes per execution path
+  const size_t weight_area_size = hmx_align_up(
+      n_chunk_n_cols * (use_pipeline ? row_stride : vec_dot_size), HMX_FP16_TILE_SIZE);
+  const size_t activation_area_size = hmx_align_up(m_chunk_n_rows * vec_dot_size, HMX_FP16_TILE_SIZE);
+  const size_t output_area_size = hmx_align_up(
+      m_chunk_n_rows * n_chunk_n_cols * sizeof(__fp16), HMX_FP16_TILE_SIZE);
+
+  size_t scratch0_size, scratch1_size, scratch2_size;
+  if (use_pipeline) {
+    scratch0_size = hmx_align_up(n_chunk_n_cols * vec_dot_size, HMX_FP16_TILE_SIZE);  // dequant buf 0
+    scratch1_size = scratch0_size;                                                      // dequant buf 1
+    scratch2_size = output_area_size;                                                   // output buf 1
+  } else {
+    scratch0_size = hmx_align_up(n_chunk_n_cols * row_stride, HMX_FP16_TILE_SIZE);     // x4x2 DMA buf 0
+    scratch1_size = scratch0_size;                                                      // x4x2 DMA buf 1
+    scratch2_size = 0;                                                                  // unused
+  }
+
   uint8_t *vtcm_ptr        = (uint8_t *) ctx->vtcm_base;
   __fp16  *vtcm_weight     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, weight_area_size);
   __fp16  *vtcm_activation = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, activation_area_size);
   __fp16  *vtcm_output     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, output_area_size);
-  void    *vtcm_scratch0   = vtcm_seq_alloc(&vtcm_ptr, scratch_area_size);
-  void    *vtcm_scratch1   = vtcm_seq_alloc(&vtcm_ptr, scratch_area_size);
-  void    *vtcm_scratch2   = vtcm_seq_alloc(&vtcm_ptr, scratch_area_size);
+  void    *vtcm_scratch0   = vtcm_seq_alloc(&vtcm_ptr, scratch0_size);
+  void    *vtcm_scratch1   = vtcm_seq_alloc(&vtcm_ptr, scratch1_size);
+  void    *vtcm_scratch2   = scratch2_size ? vtcm_seq_alloc(&vtcm_ptr, scratch2_size) : NULL;
   __fp16  *vtcm_scales     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, 256);
-  assert((size_t)(vtcm_ptr - ctx->vtcm_base) <= ctx->vtcm_scratch_size);
+  if ((size_t)(vtcm_ptr - (uint8_t *)ctx->vtcm_base) > vtcm_budget) {
+    FARF(ERROR, "%s: vtcm overflow: used=%zu limit=%zu", __func__,
+         (size_t)(vtcm_ptr - (uint8_t *)ctx->vtcm_base), vtcm_budget);
+    return -1;
+  }
 
   hmx_init_column_scales(vtcm_scales, Q6_V_vsplat_R(0x3c00));  // fp16: 1.0
 
-  size_t vec_dot_size       = k * sizeof(__fp16);
-  size_t m_chunk_max_n_rows = hmx_align_down(activation_area_size / vec_dot_size, HMX_FP16_TILE_N_ROWS);
-  size_t n_chunk_max_n_cols = hmx_align_down(weight_area_size / vec_dot_size, HMX_FP16_TILE_N_COLS);
-
-  size_t m_chunk_n_rows = 0, n_chunk_n_cols = 0;
-  find_chunk_size(m_chunk_max_n_rows, n_chunk_max_n_cols, output_area_size / sizeof(__fp16), HMX_FP16_TILE_N_ROWS,
-                  HMX_FP16_TILE_N_COLS, &m_chunk_n_rows, &n_chunk_n_cols);
-
-  assert(m_chunk_n_rows > 0 && n_chunk_n_cols > 0);
-
-#if HMX_DEBUG_TRACE_VALUES
-  FARF(ALWAYS, "%s: m=%d k=%d n=%d wtype=%d m_chunk=%zu n_chunk=%zu vec_dot_sz=%zu row_stride=%zu",
-       __func__, m, k, n, weight_type, m_chunk_n_rows, n_chunk_n_cols, vec_dot_size, row_stride);
-#endif
-
-  const bool use_pipeline = (m >= 128) && (k <= n);
-  // const bool use_pipeline = false;
+  FARF(MEDIUM, "%s: m=%d k=%d n=%d wtype=%d pipe=%d mc=%zu nc=%zu vtcm=%zu/%zu",
+       __func__, m, k, n, weight_type, use_pipeline,
+       m_chunk_n_rows, n_chunk_n_cols,
+       (size_t)(vtcm_ptr - (uint8_t *)ctx->vtcm_base), vtcm_budget);
 
   TIMER_DEFINE(activation_load);
   TIMER_DEFINE(weight_load);
@@ -1697,23 +1803,53 @@ void transfer_activation_chunk_multithread(struct htp_context *ctx, __fp16 *dst,
 
 int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx, float *restrict out, const float *restrict x, const uint8_t *restrict w, int m,
                                        int k, int n, int weight_type) {
-  // NOTE(hzx): this constraint on k originates from 2D DMA, consider alternative ways to load activation
-  assert(k < 16384);
+  // Runtime check (was assert) – k >= 16384 exceeds 2D DMA limit
+  if (k >= 16384) {
+    FARF(HIGH, "%s: k=%d exceeds 2D DMA limit", __func__, k);
+    return -1;
+  }
   // assume k % 32 == 0 && n % 32 == 0
   const size_t row_stride = get_x4x2_row_stride(weight_type, k);
   if (row_stride == 0) {
     return -1;
   }
 
+  const size_t vtcm_budget = ctx->vtcm_scratch_size;
+
+  const size_t M_BLOCK_SIZE = 512;
+  const size_t N_BLOCK_SIZE = 512;
+  const size_t K_BLOCK_SIZE = 512;
+
+  // Compute precise buffer sizes
+  const size_t sub_row_stride_alloc = get_x4x2_row_stride(weight_type, K_BLOCK_SIZE);
+  const size_t weight_size  = hmx_align_up(N_BLOCK_SIZE * K_BLOCK_SIZE * sizeof(__fp16), HMX_FP16_TILE_SIZE);
+  const size_t act_size     = hmx_align_up(M_BLOCK_SIZE * K_BLOCK_SIZE * sizeof(__fp16), HMX_FP16_TILE_SIZE);
+  const size_t out_size     = hmx_align_up(M_BLOCK_SIZE * N_BLOCK_SIZE * sizeof(__fp16), HMX_FP16_TILE_SIZE);
+  const size_t scratch0_sz  = hmx_align_up(N_BLOCK_SIZE * sub_row_stride_alloc, HMX_FP16_TILE_SIZE);
+  const size_t scratch1_sz  = hmx_align_up(M_BLOCK_SIZE * K_BLOCK_SIZE * sizeof(float), HMX_FP16_TILE_SIZE);
+
+  const size_t total_vtcm = weight_size + act_size + out_size
+                           + scratch0_sz + scratch1_sz
+                           + HMX_FP16_TILE_SIZE + 256;
+  if (total_vtcm > vtcm_budget) {
+    FARF(HIGH, "%s: VTCM too small: need %zu have %zu (m=%d k=%d n=%d)",
+         __func__, total_vtcm, vtcm_budget, m, k, n);
+    return -1;
+  }
+
   uint8_t *vtcm_ptr        = (uint8_t *) ctx->vtcm_base;
-  __fp16  *vtcm_weight     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, WEIGHT_AREA_SIZE);
-  __fp16  *vtcm_activation = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, ACTIVATION_AREA_SIZE);
-  __fp16  *vtcm_output     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, OUTPUT_AREA_SIZE);
-  uint8_t *vtcm_scratch0   = vtcm_seq_alloc(&vtcm_ptr, SCRATCH_AREA_SIZE);
-  uint8_t *vtcm_scratch1   = vtcm_seq_alloc(&vtcm_ptr, SCRATCH_AREA_SIZE * 2);
+  __fp16  *vtcm_weight     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, weight_size);
+  __fp16  *vtcm_activation = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, act_size);
+  __fp16  *vtcm_output     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, out_size);
+  uint8_t *vtcm_scratch0   = vtcm_seq_alloc(&vtcm_ptr, scratch0_sz);
+  uint8_t *vtcm_scratch1   = vtcm_seq_alloc(&vtcm_ptr, scratch1_sz);
   __fp16  *vtcm_eye_tile   = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, HMX_FP16_TILE_SIZE);
   __fp16  *vtcm_scales     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, 256);
-  assert((size_t)(vtcm_ptr - ctx->vtcm_base) <= ctx->vtcm_scratch_size);
+  assert((size_t)(vtcm_ptr - (uint8_t *)ctx->vtcm_base) <= vtcm_budget);
+
+  FARF(MEDIUM, "%s: m=%d k=%d n=%d wtype=%d vtcm=%zu/%zu",
+       __func__, m, k, n, weight_type,
+       (size_t)(vtcm_ptr - (uint8_t *)ctx->vtcm_base), vtcm_budget);
 
   // initialize eye tile (32x32 identity matrix)
   {
@@ -1729,11 +1865,6 @@ int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx, float *restrict 
     }
   }
   hmx_init_column_scales(vtcm_scales, Q6_V_vsplat_R(0x3c00));  // fp16: 1.0
-
-  // 704, 512
-  const size_t M_BLOCK_SIZE = 512;
-  const size_t N_BLOCK_SIZE = 512;
-  const size_t K_BLOCK_SIZE = 512;
 
   qweight_fetch_task_state_t fetch_task_state;
 
