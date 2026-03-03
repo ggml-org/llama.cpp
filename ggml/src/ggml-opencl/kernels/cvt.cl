@@ -199,6 +199,58 @@ kernel void kernel_restore_block_q4_1(
     }
 }
 
+kernel void kernel_convert_block_q4_1_noshuffle(
+    global struct block_q4_1 * src0,
+    global uchar * dst_q,
+    global half  * dst_d,
+    global half  * dst_m
+) {
+    global struct block_q4_1 * b = (global struct block_q4_1 *) src0 + get_global_id(0);
+    global uchar * q = (global uchar *) dst_q + QK4_1/2*get_global_id(0);
+    global half  * d = (global half *) dst_d + get_global_id(0);
+    global half  * m = (global half *) dst_m + get_global_id(0);
+
+    *d = b->d;
+    *m = b->m;
+    for (int i = 0; i < QK4_1/4; ++i) {
+        uchar x0 = b->qs[2*i + 0];
+        uchar x1 = b->qs[2*i + 1];
+
+        q[i + 0      ] = convert_uchar(x0 & 0x0F) | convert_uchar((x1 & 0x0F) << 4);
+        q[i + QK4_1/4] = convert_uchar((x0 & 0xF0) >> 4) | convert_uchar(x1 & 0xF0);
+
+#ifdef ADRENO_GPU
+        if (get_global_id(0) == 65536*4096) {
+            printf("%04x - %02x\n", *(global ushort*)d, ((x0 & 0xF0) >> 4) | (x1 & 0xF0));
+        }
+#endif
+    }
+}
+
+kernel void kernel_restore_block_q4_1_noshuffle(
+    global uchar * src_q,
+    global half  * src_d,
+    global half  * src_m,
+    global struct block_q4_1 * dst,
+    uchar mask_0F,
+    uchar mask_F0
+) {
+    global struct block_q4_1 * b = (global struct block_q4_1 *) dst + get_global_id(0);
+    global uchar * q = (global uchar *) src_q + QK4_1/2*get_global_id(0);
+    global half  * d = (global half *) src_d + get_global_id(0);
+    global half  * m = (global half *) src_m + get_global_id(0);
+
+    b->d = *d;
+    b->m = *m;
+    for (int i = 0; i < QK4_1/4; ++i) {
+        uchar x0 = q[i + 0      ] ;
+        uchar x1 = q[i + QK4_1/4];
+
+        b->qs[2*i + 0] = convert_uchar((x0 & mask_0F) | ((x1 & mask_0F) << 4));
+        b->qs[2*i + 1] = convert_uchar(((x0 & mask_F0) >> 4) | (x1 & mask_F0));
+    }
+}
+
 //------------------------------------------------------------------------------
 // block_mxfp4
 //------------------------------------------------------------------------------
