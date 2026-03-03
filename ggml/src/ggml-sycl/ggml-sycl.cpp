@@ -21871,6 +21871,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
     // -- that resolves via the full tensor's cache key and returns the FULL
     // weight buffer pointer for every expert. Per-expert slicing is lost.
     if (src0->type == GGML_TYPE_MXFP4 &&
+        src1->ne[1] == 1 &&  // TG only — PP falls through to oneDNN FP16 path
         ggml_sycl::should_use_unified(src0->type) &&
         ggml_sycl_unified_dispatch_enabled() &&
         src1->type == GGML_TYPE_F32 &&
