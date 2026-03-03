@@ -25,8 +25,52 @@ message("Using ET Platform at ${ET_PLATFORM_PATH}")
 
 find_package(runtime REQUIRED)
 
+# --- Kernel list (single source of truth, shared with et-kernels) ---
+set(KERNELS
+    el_map_f32
+    glu_f32
+    mul_mat_f32
+    mul_mat_id_f32
+    rope_f32
+    rms_norm_f32
+    softmax_f32
+    get_rows_f32
+    cont_f32
+    cont_f16
+    set_rows_f32
+    memops
+)
+
 # Build ET kernels (cross-compiled in subdirectory scope)
 add_subdirectory(et-kernels)
+
+# --- Embed kernels into C++ source for the host library ---
+find_package(Python3 REQUIRED)
+
+set(EMBED_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/et-kernels/scripts/embed_kernels.py)
+set(EMBED_HPP ${CMAKE_CURRENT_BINARY_DIR}/et-kernels/ggml-et-kernels-embed.hpp)
+set(EMBED_CPP ${CMAKE_CURRENT_BINARY_DIR}/et-kernels/ggml-et-kernels-embed.cpp)
+
+set(KERNEL_ELF_TARGETS)
+foreach(KERNEL ${KERNELS})
+    list(APPEND KERNEL_ELF_TARGETS ${KERNEL}.elf)
+endforeach()
+
+add_custom_command(
+    OUTPUT ${EMBED_HPP} ${EMBED_CPP}
+    COMMAND ${Python3_EXECUTABLE} ${EMBED_SCRIPT}
+        --input-dir ${CMAKE_CURRENT_BINARY_DIR}/et-kernels
+        --output-hpp ${EMBED_HPP}
+        --output-cpp ${EMBED_CPP}
+        --kernels ${KERNELS}
+    DEPENDS ${KERNEL_ELF_TARGETS} ${EMBED_SCRIPT}
+    COMMENT "Embedding ET kernels into source code"
+    VERBATIM
+)
+
+add_custom_target(et-kernels-embed ALL
+    DEPENDS ${EMBED_HPP} ${EMBED_CPP}
+)
 
 # --- Host backend library ---
 ggml_add_backend_library(ggml-et

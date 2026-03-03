@@ -31,8 +31,8 @@ struct ggml_et_get_rows_params {
     struct ggml_tensor dst;      // Output tensor (F32)
 };
 
-#define CACHE_LINE_SIZE 64
-#define CACHE_ELEMENTS(elem_size) (CACHE_LINE_SIZE / (elem_size))
+#define CACHE_LINE_SIZE_BYTES 64
+#define CACHE_ELEMENTS(elem_size) (CACHE_LINE_SIZE_BYTES / (elem_size))
 
 // Copy a row of F32 data from source to destination
 static void copy_f32_row(float* dst, const float* src, int64_t num_elements) {
@@ -96,7 +96,7 @@ static void copy_q8_0_row(float* dst, const block_q8_0* src_blocks, int64_t num_
     }
 }
 
-void dequantize_q8_0_block_cache_aligned(const block_q8_0* block, float* dst) {
+static void dequantize_q8_0_block_cache_aligned(const block_q8_0* block, float* dst) {
     const int8_t* qs_ptr = block->qs;
 
     uint64_t temp_mask;
@@ -217,7 +217,7 @@ static int get_row_f32_mc_row_cache_aligned(struct ggml_et_get_rows_params* para
         }
     }
 
-    return -1;
+    return 0;
 }
 
 int entry_point(struct ggml_et_get_rows_params* params, void* env) {
@@ -226,9 +226,6 @@ int entry_point(struct ggml_et_get_rows_params* params, void* env) {
     if (!kernel_env) {
         return -1;
     }
-
-    int thread_id = get_relative_thread_id(kernel_env->shire_mask);
-    int num_threads = get_num_threads(kernel_env->shire_mask);
 
     struct ggml_tensor* src0 = &params->src0;  // Data tensor (F32 or Q8_0)
     struct ggml_tensor* src1 = &params->src1;  // Row indices tensor (I32)
@@ -239,6 +236,7 @@ int entry_point(struct ggml_et_get_rows_params* params, void* env) {
         return get_row_f32_mc_row_cache_aligned(params, env);
     }
 
+    int thread_id = get_relative_thread_id(kernel_env->shire_mask);
     if (thread_id < 0) {
         return 0;
     }
@@ -278,17 +276,6 @@ int entry_point(struct ggml_et_get_rows_params* params, void* env) {
     const int64_t ne13 = src1->ne[3];  // Outer batch dimension for indices
 
     const int64_t total_rows_to_extract = ne10 * ne11 * ne12 * ne13;
-
-    int64_t src_row_size_bytes;
-    if (src0->type == GGML_TYPE_F32) {
-        src_row_size_bytes = ne00 * sizeof(float);
-    } else if (src0->type == GGML_TYPE_Q8_0) {
-        // Q8_0: each block contains QK8_0 values, each block is sizeof(block_q8_0)
-        const int64_t blocks_per_row = (ne00 + QK8_0 - 1) / QK8_0;
-        src_row_size_bytes = blocks_per_row * sizeof(block_q8_0);
-    } else {
-        return -1; // Unsupported type
-    }
 
     // Naive single-threaded implementation - process all rows sequentially
     for (int64_t i = 0; i < total_rows_to_extract; i++) {
