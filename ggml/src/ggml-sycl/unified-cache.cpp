@@ -1536,7 +1536,12 @@ void * host_cache::ensure_cached_alloc(const ggml_sycl_cache_id &    key_id,
         // For AOS layout (no reorder needed), the source data can be read as-is by CPU
         // dispatch.  Allow aliasing even for non-USM mmap pointers when layout is AOS
         // and sizes match — the pointer is only used on the CPU side.
-        const bool can_mmap_alias = (layout == GGML_LAYOUT_AOS && src_ptr && src_size == dst_size);
+        // Allow mmap alias when layout is AOS and source data is at least as large as
+        // needed.  Padded dst_size > src_size is safe because AOS padding bytes at the
+        // end of a weight tensor are never accessed by compute kernels (the kernel
+        // operates on aligned blocks within the valid data range).
+        const bool can_mmap_alias = (layout == GGML_LAYOUT_AOS && src_ptr &&
+                                     src_size > 0 && src_size <= dst_size);
         if (can_alias || can_mmap_alias) {
             host_cache_entry entry{};
             entry.host_ptr     = const_cast<void *>(src_ptr);
