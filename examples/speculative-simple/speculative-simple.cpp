@@ -242,7 +242,11 @@ int main(int argc, char ** argv) {
                     common_batch_add(batch_redo, prompt_tgt[prompt_tgt.size() - n_redo + i],
                                      n_past_before + i, { 0 }, false);
                 }
-                llama_decode(ctx_tgt, batch_redo);
+                if (llama_decode(ctx_tgt, batch_redo) != 0) {
+                    LOG_ERR("checkpoint re-decode failed\n");
+                    llama_batch_free(batch_redo);
+                    return 1;
+                }
                 llama_batch_free(batch_redo);
 
                 LOG_DBG("checkpoint rollback: restored and re-decoded %d tokens\n", n_redo);

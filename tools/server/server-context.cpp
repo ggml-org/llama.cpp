@@ -2828,7 +2828,7 @@ private:
                 slot.prompt.tokens.insert({ids.begin(), ids.end() - 1});
                 slot.sampled = ids.back(); // last accepted token
 
-                if (common_speculative_needs_checkpoint(slot.spec) && ids.size() <= n_draft) {
+                if (common_speculative_needs_checkpoint(slot.spec) && !slot.drafted.empty() && ids.size() <= n_draft) {
                     // some draft tokens were rejected -- checkpoint-based rollback for hybrid/recurrent
                     common_speculative_checkpoint_restore(slot.spec, ctx, slot.id);
 
@@ -2844,7 +2844,11 @@ private:
                         common_batch_add(batch_redo, slot.prompt.tokens[pos_start + i],
                                          pos_start + i, { slot.id }, false);
                     }
-                    llama_decode(ctx, batch_redo);
+                    if (llama_decode(ctx, batch_redo) != 0) {
+                        SLT_ERR(slot, "%s", "checkpoint re-decode failed\n");
+                        llama_batch_free(batch_redo);
+                        break;
+                    }
                     llama_batch_free(batch_redo);
 
                     SLT_DBG(slot, "checkpoint rollback: restored and re-decoded %d tokens\n", n_redo);
