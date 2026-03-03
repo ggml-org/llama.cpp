@@ -3818,14 +3818,10 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
         return false;
     }
 
-    if (batch_size > MMVQ_MOE_MAX_BATCH && layout == GGML_LAYOUT_AOS) {
-        GGML_SYCL_DEBUG("[MMVQ] Batch %ld > %d, using host-side oneDNN batching\n", (long) batch_size,
-                        MMVQ_MOE_MAX_BATCH);
-        return false;  // Fall back to host-side routing with oneDNN batching
-    }
     if (batch_size > MMVQ_MOE_MAX_BATCH) {
-        GGML_SYCL_DEBUG("[MMVQ] Batch %ld > %d, using MMVQ due to layout=%d\n", (long) batch_size, MMVQ_MOE_MAX_BATCH,
-                        (int) layout);
+        GGML_SYCL_DEBUG("[MMVQ] Batch %ld > %d, falling back to oneDNN batching\n",
+                        (long) batch_size, MMVQ_MOE_MAX_BATCH);
+        return false;
     }
 
     GGML_TENSOR_BINARY_OP_LOCALS;
