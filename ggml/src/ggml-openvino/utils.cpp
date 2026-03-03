@@ -63,6 +63,22 @@ enum ggml_status ov_graph_compute(ggml_cgraph * cgraph, ggml_backend_t backend) 
     }
 }
 
+ov::Tensor create_ov_output_tensor(std::shared_ptr<ov::InferRequest> infer_request,
+                                   const int output_index,
+                                   const ggml_tensor * ggml_tensor) {
+    auto output_type = infer_request->get_output_tensor(output_index).get_element_type();
+    auto output_shape = infer_request->get_output_tensor(output_index).get_shape();
+    // if the output shape is dynamic, we need to update it with the actual shape of the ggml tensor
+    for (size_t i = 0; i < output_shape.size(); i++) {
+        if (output_shape[i] == 0) {
+            output_shape[i] = ggml_tensor->ne[3-i];
+        }
+    }
+
+    ov::Tensor output_tensor(output_type, output_shape, ggml_tensor->data);
+    return output_tensor;
+}
+
 enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<ov_runtime_context> r_ctx) {
     auto & core = ov_singleton_core();
     const auto & config = ggml_openvino_get_compile_config();
@@ -202,7 +218,8 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
         }
 
         for (size_t i = 0; i < ov_output_names.size(); i++) {
-            auto output_tensor = get_ov_output_tensor(ggml_decoder, ov_output_names[i]);
+            auto * ggml_tensor = ggml_decoder->get_model_outputs().at(ov_output_names[i]);
+            auto output_tensor = create_ov_output_tensor(infer_request, i, ggml_tensor);
             infer_request->set_output_tensor(i, output_tensor);
         }
 
@@ -380,8 +397,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
 
             for (size_t i = 0; i < ov_output_names.size(); i++) {
                 auto * ggml_tensor = ggml_decoder->get_model_outputs().at(ov_output_names[i]);
-                ov::Tensor output_tensor(infer_request->get_output_tensor(i).get_element_type(),
-                                         infer_request->get_output_tensor(i).get_shape(), ggml_tensor->data);
+                auto output_tensor = create_ov_output_tensor(infer_request, i, ggml_tensor);
                 infer_request->set_output_tensor(i, output_tensor);
             }
 
@@ -409,8 +425,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
 
         for (size_t i = 0; i < ov_output_names.size(); i++) {
             auto * ggml_tensor = ggml_decoder->get_model_outputs().at(ov_output_names[i]);
-            ov::Tensor output_tensor(infer_request->get_output_tensor(i).get_element_type(),
-                                     infer_request->get_output_tensor(i).get_shape(), ggml_tensor->data);
+            auto output_tensor = create_ov_output_tensor(infer_request, i, ggml_tensor);
             infer_request->set_output_tensor(i, output_tensor);
         }
 
@@ -466,30 +481,30 @@ enum ggml_status naive_compute(ggml_cgraph * cgraph,
         ov::serialize(model, "IR_naive.xml");
     }
 
-    ov::InferRequest infer_request;
+    std::shared_ptr<ov::InferRequest> infer_request;
     auto remote_context = ggml_openvino_get_remote_context();
     core.set_property(device, ov::hint::execution_mode(ov::hint::ExecutionMode::ACCURACY));
     if (remote_context.has_value()) {
-        infer_request = core.compile_model(model, remote_context.value(), config).create_infer_request();
+        infer_request = std::make_shared<ov::InferRequest>(core.compile_model(model, remote_context.value(), config).create_infer_request());
     } else {
-        infer_request = core.compile_model(model, device, config).create_infer_request();
+        infer_request = std::make_shared<ov::InferRequest>(core.compile_model(model, device, config).create_infer_request());
     }
 
     auto ov_params = model->get_parameters();
     for (size_t i = 0; i < ov_params.size(); i++) {
         auto param_name = ov_params[i]->get_friendly_name();
         auto input_tensor = get_ov_input_tensor(decoder, param_name);
-        infer_request.set_input_tensor(i, input_tensor);
+        infer_request->set_input_tensor(i, input_tensor);
     }
 
     auto ov_results = model->get_results();
     for (size_t i = 0; i < ov_results.size(); i++) {
-        auto result_name = ov_results[i]->get_friendly_name();
-        auto output_tensor = get_ov_output_tensor(decoder, result_name);
-        infer_request.set_output_tensor(i, output_tensor);
+        auto * ggml_tensor = decoder->get_model_outputs().at(ov_results[i]->get_friendly_name());
+        auto output_tensor = create_ov_output_tensor(infer_request, i, ggml_tensor);
+        infer_request->set_output_tensor(i, output_tensor);
     }
 
-    infer_request.infer();
+    infer_request->infer();
     return GGML_STATUS_SUCCESS;
 }
 
@@ -645,15 +660,6 @@ ov::Tensor get_ov_input_tensor_static_prefill(std::shared_ptr<GgmlOvDecoder> ggm
     }
 
     return get_ov_input_tensor(ggml_decoder, param_name);
-}
-
-ov::Tensor get_ov_output_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string & result_name) {
-    auto * ggml_tensor = ggml_decoder->get_model_outputs().at(result_name);
-    auto output_type = ggml_decoder->get_ov_type(ggml_tensor);
-    auto output_shape = ggml_decoder->get_shape(ggml_tensor);
-
-    ov::Tensor output_tensor(output_type, output_shape, ggml_tensor->data);
-    return output_tensor;
 }
 
 size_t checksum(const void * data, size_t size) {
