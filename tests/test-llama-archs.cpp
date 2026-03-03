@@ -422,7 +422,7 @@ static int test_backends(const size_t seed, const ggml_log_level log_level) {
             continue; // FIXME RWKV models hang indefinitely.
         }
         if (arch == LLM_ARCH_BERT || arch == LLM_ARCH_MODERN_BERT || arch == LLM_ARCH_NOMIC_BERT || arch == LLM_ARCH_NOMIC_BERT_MOE ||
-                arch == LLM_ARCH_NEO_BERT || arch == LLM_ARCH_JINA_BERT_V2 || arch == LLM_ARCH_JINA_BERT_V3) {
+                arch == LLM_ARCH_NEO_BERT || arch == LLM_ARCH_JINA_BERT_V2 || arch == LLM_ARCH_JINA_BERT_V3 || arch == LLM_ARCH_EUROBERT) {
             continue; // TODO vocab
         }
         if (arch == LLM_ARCH_PLM) {
