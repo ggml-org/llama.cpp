@@ -20,6 +20,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
+#include <iomanip>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -776,7 +777,8 @@ static void ggml_backend_webgpu_free(ggml_backend_t backend) {
     std::cout << "\nggml_webgpu: gpu breakdown:\n";
     for (const auto & kv : ctx->webgpu_ctx->global_ctx->shader_gpu_time_ms) {
         double pct = (total_gpu > 0.0) ? (kv.second / total_gpu * 100.0) : 0.0;
-        std::cout << "ggml_webgpu:  " << kv.first << ": " << kv.second << " ms (" << pct << "%)\n";
+        std::cout << "ggml_webgpu:  " << kv.first << ": " << kv.second << " ms (" << std::fixed << std::setprecision(2)
+                  << pct << "%)\n";
     }
 #endif
 
@@ -836,7 +838,7 @@ static binary_overlap_flags ggml_webgpu_detect_binary_overlap(ggml_tensor * src0
     binary_overlap_flags flags = {};
     flags.inplace              = ggml_webgpu_tensor_equal(src0, dst);
     flags.overlap              = ggml_webgpu_tensor_overlap(src1, dst);
-    flags.src_overlap = ggml_webgpu_tensor_overlap(src0, src1);
+    flags.src_overlap          = ggml_webgpu_tensor_overlap(src0, src1);
 
     return flags;
 }
@@ -1079,11 +1081,25 @@ static webgpu_command ggml_webgpu_mul_mat(webgpu_context & ctx,
             use_fast = (src0->type == GGML_TYPE_F16);
             break;
         case GGML_TYPE_F32:
+            // TODO: implement better mat-mat for k-quants, mat-vec for all k-quants except q6_K
             switch (src0->type) {
                 case GGML_TYPE_F32:
                 case GGML_TYPE_F16:
                 case GGML_TYPE_Q4_0:
+                case GGML_TYPE_Q4_1:
+                case GGML_TYPE_Q5_0:
+                case GGML_TYPE_Q5_1:
+                case GGML_TYPE_Q8_0:
+                case GGML_TYPE_Q8_1:
+                case GGML_TYPE_Q6_K:
                     use_fast = true;
+                    break;
+                case GGML_TYPE_Q2_K:
+                case GGML_TYPE_Q3_K:
+                case GGML_TYPE_Q4_K:
+                case GGML_TYPE_Q5_K:
+                    // we don't have fast mat-vec for these types, but we do have (semi) fast mat-mat
+                    use_fast = !is_vec;
                     break;
                 default:
                     break;
@@ -1153,8 +1169,8 @@ static webgpu_command ggml_webgpu_mul_mat(webgpu_context & ctx,
     };
 
     // Calculate workgroup dimensions
-    uint32_t       wg_x = 1;
-    uint32_t       wg_y = 1;
+    uint32_t       wg_x           = 1;
+    uint32_t       wg_y           = 1;
     const uint32_t max_wg_per_dim = ctx->global_ctx->capabilities.limits.maxComputeWorkgroupsPerDimension;
 
     if (use_fast && is_vec) {
@@ -1410,7 +1426,7 @@ static webgpu_command ggml_webgpu_binary_op(webgpu_context & ctx,
     uint32_t offset_merged_src0 = 0;
     uint32_t offset_merged_src1 = 0;
     if (flags.src_overlap) {
-        size_t min_off = std::min(src0_webgpu_tensor_align_offset, src1_webgpu_tensor_align_offset);
+        size_t min_off     = std::min(src0_webgpu_tensor_align_offset, src1_webgpu_tensor_align_offset);
         offset_merged_src0 = (uint32_t) ((src0_webgpu_tensor_align_offset - min_off) / ggml_type_size(src0->type));
         offset_merged_src1 = (uint32_t) ((src1_webgpu_tensor_align_offset - min_off) / ggml_type_size(src0->type));
     }
@@ -1419,7 +1435,7 @@ static webgpu_command ggml_webgpu_binary_op(webgpu_context & ctx,
         ne,
         (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src0) / ggml_type_size(src0->type)),
         (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src1) / ggml_type_size(src1->type)),
-        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst)  / ggml_type_size(dst->type)),
+        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / ggml_type_size(dst->type)),
         offset_merged_src0,
         offset_merged_src1,
         (uint32_t) (src0->nb[0] / ggml_type_size(src0->type)),
