@@ -82,12 +82,16 @@ void ExpertPrefetcher::shutdown() {
 // ============================================================================
 
 bool ExpertPrefetcher::hint(int layer_idx, int expert_idx) {
-    if (!initialized_ || !dma_queue_) {
+    if (!initialized_ || !dma_queue_ || prefetch_disabled_) {
         return false;
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
+    return hint_locked(layer_idx, expert_idx);
+}
 
+// Internal implementation of hint(). Caller must hold mutex_.
+bool ExpertPrefetcher::hint_locked(int layer_idx, int expert_idx) {
     expert_key key{ layer_idx, expert_idx };
 
     // Already in-flight or completed — skip.
@@ -124,21 +128,25 @@ bool ExpertPrefetcher::hint(int layer_idx, int expert_idx) {
     if (vram_pool_.empty()) {
         vram_slot_bytes_ = placement.weight_bytes;
         vram_pool_.resize(max_inflight_);
+        size_t allocated = 0;
         for (auto & slot : vram_pool_) {
             try {
                 slot.ptr  = sycl::malloc_device(vram_slot_bytes_, *dma_queue_);
                 slot.free = (slot.ptr != nullptr);
+                if (slot.ptr) { allocated++; }
             } catch (const sycl::exception &) {
                 slot.ptr  = nullptr;
                 slot.free = false;
             }
         }
-        size_t allocated = 0;
-        for (const auto & slot : vram_pool_) {
-            if (slot.ptr) { allocated++; }
-        }
         GGML_LOG_INFO("[SYCL] Expert prefetch VRAM pool: %zu/%d slots (%.1f MB each)\n",
                       allocated, max_inflight_, vram_slot_bytes_ / (1024.0 * 1024.0));
+        if (allocated == 0) {
+            GGML_LOG_WARN("[SYCL] Expert prefetch VRAM pool: ALL slots failed to allocate — "
+                          "prefetching permanently disabled\n");
+            prefetch_disabled_ = true;
+            return false;
+        }
     }
 
     // Skip if expert is larger than pool slots (model changed mid-run).
@@ -157,7 +165,7 @@ bool ExpertPrefetcher::hint(int layer_idx, int expert_idx) {
     try {
         sycl::event ev = dma_queue_->memcpy(dst, placement.host_ptr, placement.weight_bytes);
 
-        PrefetchRequest req;
+        prefetch_request req;
         req.key        = key;
         req.event      = ev;
         req.device_ptr = dst;
@@ -177,8 +185,13 @@ bool ExpertPrefetcher::hint(int layer_idx, int expert_idx) {
 }
 
 void ExpertPrefetcher::hint_batch(int layer_idx, const std::vector<int> & expert_indices) {
+    if (!initialized_ || !dma_queue_ || prefetch_disabled_) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
     for (int eid : expert_indices) {
-        hint(layer_idx, eid);
+        hint_locked(layer_idx, eid);
     }
 }
 
@@ -193,19 +206,27 @@ std::vector<int> ExpertPrefetcher::hint_batch_adaptive(
 {
     std::vector<int> cpu_dispatch;
 
-    // When miss count exceeds capacity, overflow experts go to CPU.
-    int budget = max_inflight_;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        gc_completed();
-        budget = max_inflight_ - static_cast<int>(inflight_.size());
+    if (!initialized_ || !dma_queue_ || prefetch_disabled_) {
+        return cpu_dispatch;
     }
+
+    // Hold the lock across the entire function to prevent TOCTOU races:
+    // budget is computed and consumed atomically within a single critical section.
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    gc_completed();
+    int budget = max_inflight_ - static_cast<int>(inflight_.size());
 
     int scheduled = 0;
     for (int eid : expert_indices) {
+        // Schedule prefetch when: (1) we have remaining DMA budget, AND
+        // (2) the total miss count across all experts is within our capacity.
+        // When n_miss_total > max_inflight_, even the first batch of experts
+        // would saturate DMA bandwidth, so overflow to CPU instead.
         if (scheduled < budget && n_miss_total <= max_inflight_) {
-            hint(layer_idx, eid);
-            scheduled++;
+            if (hint_locked(layer_idx, eid)) {
+                scheduled++;
+            }
         } else {
             cpu_dispatch.push_back(eid);
         }
@@ -223,41 +244,65 @@ void * ExpertPrefetcher::await(int layer_idx, int expert_idx) {
         return nullptr;
     }
 
-    std::lock_guard<std::mutex> lock(mutex_);
-
     expert_key key{ layer_idx, expert_idx };
-    auto it = inflight_.find(key);
-    if (it == inflight_.end()) {
-        // No in-flight prefetch for this expert.
-        return nullptr;
+
+    // Phase 1: Check if already completed or extract event for waiting.
+    // Release mutex before blocking on event.wait() to avoid deadlock
+    // (another thread calling hint() needs the lock).
+    sycl::event ev_copy;
+    bool        need_wait = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = inflight_.find(key);
+        if (it == inflight_.end()) {
+            return nullptr;
+        }
+        if (it->second.completed) {
+            return it->second.device_ptr;
+        }
+        ev_copy   = it->second.event;
+        need_wait = true;
     }
 
-    auto & req = it->second;
-    if (!req.completed) {
-        // Wait for the specific DMA event to complete.
+    // Phase 2: Wait on event WITHOUT holding the lock.
+    if (need_wait) {
         try {
-            req.event.wait();
+            ev_copy.wait();
         } catch (const sycl::exception & e) {
             GGML_LOG_WARN("[SYCL] Prefetch await failed for L%d E%d: %s\n",
                           layer_idx, expert_idx, e.what());
-            release_vram_slot(req.pool_slot);
-            inflight_.erase(it);
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto it = inflight_.find(key);
+            if (it != inflight_.end()) {
+                release_vram_slot(it->second.pool_slot);
+                inflight_.erase(it);
+            }
             return nullptr;
         }
-        req.completed = true;
+    }
+
+    // Phase 3: Re-acquire lock and update state.
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = inflight_.find(key);
+    if (it == inflight_.end()) {
+        return nullptr;
+    }
+
+    if (!it->second.completed) {
+        it->second.completed = true;
         completed_count_++;
 
         // Update placement table so the dispatch path finds device_ptr.
         auto & ptable = get_expert_placement_table();
         if (ptable.is_initialized()) {
-            ptable.set_device_ptr(layer_idx, expert_idx, 0, req.device_ptr);
+            ptable.set_device_ptr(layer_idx, expert_idx, 0, it->second.device_ptr);
         }
 
         GGML_SYCL_DEBUG("[PREFETCH] await L%d E%d: DMA complete, device_ptr=%p\n",
-                        layer_idx, expert_idx, req.device_ptr);
+                        layer_idx, expert_idx, it->second.device_ptr);
     }
 
-    return req.device_ptr;
+    return it->second.device_ptr;
 }
 
 // ============================================================================
@@ -311,16 +356,24 @@ void ExpertPrefetcher::gc_completed() {
     // Called with mutex_ held.
     // Remove completed tracking entries and release their VRAM pool slots.
     //
-    // Safety: gc_completed() is called from hint(), which runs for future
-    // layers (L+1..L+depth). By the time hint(L+1) runs, layer L-1's GPU
-    // dispatch has completed (ggml_sycl_mul_mat_id runs synchronously, and
-    // dispatch_cpu_and_scatter includes stream->wait()). So completed
-    // entries from layer L-1 are safe to gc because the GPU has consumed
-    // their pool slot data.
+    // Safety: gc_completed() is called from hint_locked(), which runs for
+    // future layers (L+1..L+depth). By the time hint_locked(L+1) runs,
+    // layer L-1's GPU dispatch has completed because:
+    //   1. ggml_sycl_mul_mat_id() runs synchronously per layer
+    //   2. dispatch_cpu_and_scatter() includes stream->wait() before return
+    //   3. await() is called before kernel submission in ggml_sycl_mul_mat_id()
+    // So completed entries from layer L-1 are safe to gc because the GPU
+    // has consumed their pool slot data.
     //
     // Note: entries become completed in await() for layer L, and are gc'd
-    // by hint() for layer L+1 or later. Since hint() runs 1+ layers ahead,
-    // there's at least one full dispatch cycle between completed and gc.
+    // by hint_locked() for layer L+1 or later. Since hint runs 1+ layers
+    // ahead, there's at least one full dispatch cycle between completed and gc.
+    //
+    // SAFETY INVARIANT: This guarantee depends on the synchronous call chain:
+    //   ggml_sycl_mul_mat_id() -> await() -> [kernel dispatch] -> stream->wait()
+    // If this call chain becomes async, gc_completed() must be revisited.
+    //
+    // Callers: hint_locked(), hint_batch_adaptive() — all hold mutex_ before calling.
     auto it = inflight_.begin();
     while (it != inflight_.end()) {
         if (it->second.completed) {
@@ -340,7 +393,15 @@ void ExpertPrefetcher::gc_completed() {
 
 bool ExpertPrefetcher::has_capacity() const {
     // Called with mutex_ held.
-    return static_cast<int>(inflight_.size()) < max_inflight_;
+    // Count only active (non-completed) entries. Completed-but-not-gc'd entries
+    // should not count against capacity since their DMA slots are reclaimable.
+    int active = 0;
+    for (const auto & [k, req] : inflight_) {
+        if (!req.completed) {
+            active++;
+        }
+    }
+    return active < max_inflight_;
 }
 
 int ExpertPrefetcher::acquire_vram_slot() {
@@ -398,7 +459,7 @@ void ExpertPredictor::init(int n_layers, int n_experts, int n_experts_used) {
     accuracy_ring_.resize(ACCURACY_WINDOW);
     accuracy_ring_pos_ = 0;
     accuracy_hits_     = 0;
-    accuracy_total_    = 0;
+    window_total_    = 0;
 
     // Read prediction depth from environment
     const char * depth_env = std::getenv("GGML_SYCL_EXPERT_PREDICT_DEPTH");
@@ -509,13 +570,13 @@ void ExpertPredictor::record_actual(int layer_idx, const std::vector<int> & actu
                            hits >= static_cast<int>(actual_experts.size()) / 2);
 
         // Update rolling window
-        if (accuracy_total_ >= ACCURACY_WINDOW) {
+        if (window_total_ >= ACCURACY_WINDOW) {
             // Evict oldest sample
             if (accuracy_ring_[accuracy_ring_pos_]) {
                 accuracy_hits_--;
             }
         } else {
-            accuracy_total_++;
+            window_total_++;
         }
 
         accuracy_ring_[accuracy_ring_pos_] = sample_hit ? 1 : 0;
@@ -525,30 +586,45 @@ void ExpertPredictor::record_actual(int layer_idx, const std::vector<int> & actu
         accuracy_ring_pos_ = (accuracy_ring_pos_ + 1) % ACCURACY_WINDOW;
 
         // Periodic logging every ACCURACY_WINDOW predictions
-        if (accuracy_total_ >= ACCURACY_WINDOW && accuracy_ring_pos_ == 0) {
-            float rate = static_cast<float>(accuracy_hits_) / static_cast<float>(accuracy_total_);
+        if (window_total_ >= ACCURACY_WINDOW && accuracy_ring_pos_ == 0) {
+            float rate = static_cast<float>(accuracy_hits_) / static_cast<float>(window_total_);
             GGML_LOG_INFO("[EXPERT-PREDICT] accuracy=%.1f%% (hits=%d, window=%d)\n",
-                          rate * 100.0f, accuracy_hits_, accuracy_total_);
+                          rate * 100.0f, accuracy_hits_, window_total_);
+
+            // Disable prefetching when prediction accuracy drops below 30%.
+            // At this accuracy, most prefetches are wasted DMA bandwidth.
+            static constexpr float DISABLE_THRESHOLD = 0.3f;
+            if (!prefetch_disabled_ && rate < DISABLE_THRESHOLD) {
+                prefetch_disabled_ = true;
+                GGML_LOG_WARN("[EXPERT-PREDICT] hit rate %.1f%% below threshold %.0f%% — "
+                              "prefetching disabled\n",
+                              rate * 100.0f, DISABLE_THRESHOLD * 100.0f);
+            }
         }
     }
 }
 
 float ExpertPredictor::hit_rate() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (accuracy_total_ == 0) {
+    if (window_total_ == 0) {
         return 0.0f;
     }
-    return static_cast<float>(accuracy_hits_) / static_cast<float>(accuracy_total_);
+    return static_cast<float>(accuracy_hits_) / static_cast<float>(window_total_);
 }
 
 int ExpertPredictor::window_size() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    return accuracy_total_;
+    return window_total_;
 }
 
 int ExpertPredictor::window_hits() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return accuracy_hits_;
+}
+
+bool ExpertPredictor::is_prefetch_disabled() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return prefetch_disabled_;
 }
 
 std::vector<int> ExpertPredictor::top_k_by_freq(int layer_idx,

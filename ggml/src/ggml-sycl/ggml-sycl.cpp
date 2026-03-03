@@ -25750,8 +25750,18 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             // ---------------------------------------------------------------
 
             // --- Expert prediction + prefetch (T6 + T3 integration) ---
-            // Predict which experts will be needed and prefetch cache misses
-            // while GPU is still computing attention for this layer.
+            //
+            // Design decision: hint() is called here at MoE dispatch time
+            // (inside ggml_sycl_mul_mat_id), AFTER attention completes for
+            // this layer. The spec originally called for pre-attention
+            // hint(), but hooking into the graph before attention is complex
+            // and fragile (requires graph-level insertion points).
+            //
+            // Instead, we use multi-layer lookahead: hint() for layers
+            // L+1..L+depth runs during layer L's MoE dispatch. This gives
+            // L+1's full attention window (~17ms) for DMA to complete,
+            // providing equivalent overlap to the pre-attention approach.
+            // With depth=3, we get ~9ms of prefetch overlap time.
             auto & prefetcher = g_expert_prefetchers[ctx.device];
             auto & predictor  = g_expert_predictors[ctx.device];
 
@@ -25767,7 +25777,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 }
             }
 
-            if (predictor.is_active() && prefetcher.is_active() && seq_layer_id >= 0) {
+            if (predictor.is_active() && prefetcher.is_active() && seq_layer_id >= 0
+                && !predictor.is_prefetch_disabled()) {
                 // Multi-layer lookahead: predict experts for L+1..L+depth
                 // using pre-gated routing (actual router scores via inline GEMV).
                 // 3-layer lookahead gives ~9ms of DMA prefetch overlap time,

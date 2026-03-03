@@ -12,7 +12,7 @@
 //
 // Uses an out-of-order SYCL queue (dma_queue_) for DMA, separate from the
 // compute queue. hint() submits memcpy on dma_queue_ and stores the returned
-// sycl::event in a PrefetchRequest. await() waits on the per-expert event
+// sycl::event in a prefetch_request. await() waits on the per-expert event
 // for granular synchronization.
 //
 // L2 coherency: BCS H2D to malloc_device completes BEFORE the kernel
@@ -34,7 +34,7 @@
 namespace ggml_sycl {
 
 // Tracks a single in-flight DMA prefetch operation.
-struct PrefetchRequest {
+struct prefetch_request {
     expert_key  key;
     sycl::event event;                 // DMA completion event from dma_queue_
     void *      device_ptr = nullptr;  // VRAM destination of the H2D DMA
@@ -126,7 +126,7 @@ class ExpertPrefetcher {
     static constexpr int max_inflight_ = 8;
 
     // In-flight prefetch tracking. Key = expert_key.
-    std::unordered_map<expert_key, PrefetchRequest, expert_key_hash> inflight_;
+    std::unordered_map<expert_key, prefetch_request, expert_key_hash> inflight_;
 
     // VRAM prefetch pool: ring buffer of pre-allocated device memory slots.
     // Each slot holds one expert's worth of weight data.
@@ -153,11 +153,15 @@ class ExpertPrefetcher {
     void gc_completed();
 
     // Check if we have room for more in-flight requests.
+    // Counts only active (non-completed) entries.
     bool has_capacity() const;
-};
 
-// Backward-compatible type alias.
-using expert_prefetcher = ExpertPrefetcher;
+    // Internal locked implementation of hint(). Caller must hold mutex_.
+    bool hint_locked(int layer_idx, int expert_idx);
+
+    // Set when prediction hit rate drops below threshold; disables prefetching.
+    bool prefetch_disabled_ = false;
+};
 
 // ============================================================================
 // ExpertPredictor: pre-attention expert prediction for MoE prefetching
@@ -248,6 +252,10 @@ class ExpertPredictor {
     int   window_hits() const;    // Hits within current window
     bool  is_active() const { return initialized_; }
 
+    // Returns true when prediction accuracy is too low for useful prefetching.
+    // Checked by ExpertPrefetcher to short-circuit hint().
+    bool is_prefetch_disabled() const;
+
   private:
     bool initialized_ = false;
     int  n_layers_      = 0;
@@ -277,10 +285,13 @@ class ExpertPredictor {
     int          scores_dev_n_  = 0;       // Number of floats allocated
     sycl::queue * scores_queue_ = nullptr;  // Queue used for allocation (for deallocation)
 
-    // Rolling accuracy stats (last 100 predictions).
+    // Rolling accuracy stats (last ACCURACY_WINDOW predictions).
     static constexpr int ACCURACY_WINDOW = 100;
-    int accuracy_hits_  = 0;
-    int accuracy_total_ = 0;
+    int accuracy_hits_   = 0;
+    int window_total_    = 0;  // Number of samples in the rolling accuracy window (up to ACCURACY_WINDOW)
+
+    // Set when hit rate drops below threshold; signals prefetcher to disable.
+    bool prefetch_disabled_ = false;
 
     // Circular buffer for rolling window eviction.
     // uint8_t avoids std::vector<bool> specialization issues.
