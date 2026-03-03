@@ -286,6 +286,27 @@ static uint64_t ggml_sycl_assign_cache_uuid(ggml_tensor_extra_gpu * extra);
 static bool ggml_sycl_is_device_vram_buffer(const ggml_tensor * t);
 // Forward declaration: check if tensor's weights are host-resident (defined after buffer context struct).
 static bool ggml_sycl_is_host_resident_weight(const ggml_tensor * src0, sycl::queue * stream);
+// SOA reorder fill context: passed to ggml_sycl_fill_reordered_host for AOS→SOA reordering.
+// Defined here (before moe_hybrid_init_once) so Phase 2 distribution can use it for
+// secondary GPU expert caching with SOA layout.
+struct ggml_sycl_reorder_fill_ctx {
+    ggml_type type;
+
+    int64_t ncols;
+    int64_t nrows;
+
+    size_t      nbytes;
+    size_t      dst_bytes;
+    layout_mode layout;
+    bool        src_is_device;
+    int         device_id;
+};
+// Forward declarations for secondary GPU expert caching.
+static sycl::event ggml_sycl_fill_reordered_host(sycl::queue & queue, void * dst, size_t dst_size,
+                                                  const void * src, size_t src_size, const void * ctx_void,
+                                                  const std::vector<sycl::event> & deps);
+static size_t ggml_sycl_layout_bytes_for_dims(ggml_type type, int64_t ncols, int64_t nrows,
+                                              layout_mode layout, int device_id);
 
 // Scan a compute graph for MUL_MAT_ID nodes, register experts with the unified cache,
 // and set up prefetcher + predictor.
@@ -528,6 +549,10 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
         }
 
         if (!budgets.empty()) {
+            // Secondary GPU dispatch uses SOA MMVQ kernels, so experts must be
+            // cached in SOA layout with proper AOS→SOA reordering.
+            ggml_sycl_reorder_fill_ctx reorder_ctx{};
+
             for (size_t ei = 0; ei < expert_list.size(); ei++) {
                 if (placed[ei]) {
                     continue;
@@ -556,18 +581,38 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                     continue;
                 }
 
+                // Compute SOA layout size for this expert type
+                const int64_t ncols       = info.tensor->ne[0];
+                const int64_t nrows       = info.tensor->ne[1];
+                auto &        budget      = budgets[best_idx];
+                const size_t  soa_bytes   = ggml_sycl_layout_bytes_for_dims(
+                    info.tensor->type, ncols, nrows, GGML_LAYOUT_SOA, budget.dev);
+                const size_t  dst_bytes   = (soa_bytes > 0) ? soa_bytes : info.bytes;
+
+                // Set up reorder context for AOS→SOA conversion
+                reorder_ctx             = {};
+                reorder_ctx.type        = info.tensor->type;
+                reorder_ctx.ncols       = ncols;
+                reorder_ctx.nrows       = nrows;
+                reorder_ctx.nbytes      = info.bytes;
+                reorder_ctx.dst_bytes   = dst_bytes;
+                reorder_ctx.layout      = GGML_LAYOUT_SOA;
+                reorder_ctx.src_is_device = false;  // src is mmap'd host pointer
+                reorder_ctx.device_id   = budget.dev;
+
                 cache_layout_request req{};
                 req.key              = key;
                 req.src_ptr          = info.host_ptr;
                 req.src_size         = info.bytes;
-                req.dst_size         = info.bytes;
+                req.dst_size         = dst_bytes;
                 req.type             = cache_entry_type::MOE_EXPERT;
                 req.layer_id         = info.layer_id;
                 req.expert_id        = info.expert_idx;
-                req.layout           = GGML_LAYOUT_AOS;
+                req.layout           = GGML_LAYOUT_SOA;
                 req.validate_content = false;
+                req.fill_fn          = ggml_sycl_fill_reordered_host;
+                req.fill_ctx         = &reorder_ctx;
 
-                auto & budget = budgets[best_idx];
                 cache_layout_result result = budget.cache->ensure_cached_layout(req, {});
                 if (result.status == cache_layout_status::READY
                     || result.status == cache_layout_status::IN_PROGRESS) {
@@ -4402,18 +4447,7 @@ static bool ggml_sycl_xmx_tiled_enabled_for_device(int device_id) {
 #endif
 }
 
-struct ggml_sycl_reorder_fill_ctx {
-    ggml_type type;
-
-    int64_t ncols;
-    int64_t nrows;
-
-    size_t      nbytes;
-    size_t      dst_bytes;
-    layout_mode layout;
-    bool        src_is_device;
-    int         device_id;
-};
+// ggml_sycl_reorder_fill_ctx defined earlier (before moe_hybrid_init_once)
 
 struct ggml_sycl_onednn_packed_fill_ctx {
     ggml_type type;
@@ -25506,6 +25540,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     switch (src0->type) {
                         case GGML_TYPE_Q4_0:
                         case GGML_TYPE_Q6_K:
+                        case GGML_TYPE_MXFP4:
                             gpu_indices.push_back(i);
                             break;
                         default:
@@ -25567,6 +25602,10 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                             case GGML_TYPE_Q6_K:
                                 mmvq_submit_q6_k_soa(*target_queue, entry.device_ptr, dev_q8_1[slot], dev_out[slot],
                                                      static_cast<int>(K), static_cast<int>(N), static_cast<int>(N), 0);
+                                break;
+                            case GGML_TYPE_MXFP4:
+                                mmvq_submit_mxfp4_soa(*target_queue, entry.device_ptr, dev_q8_1[slot], dev_out[slot],
+                                                      static_cast<int>(K), static_cast<int>(N), static_cast<int>(N), 0);
                                 break;
                             default:
                                 GGML_ASSERT(false && "unreachable: pre-filtered above");

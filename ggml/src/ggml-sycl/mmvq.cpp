@@ -4915,6 +4915,33 @@ void mmvq_submit_q6_k_soa(sycl::queue & q,
     });
 }
 
+class mmvq_persistent_mxfp4_tag;
+
+void mmvq_submit_mxfp4_soa(sycl::queue & q,
+                            const void * weights_soa,
+                            const void * y_q8_soa,
+                            float *      dst,
+                            int          ncols,
+                            int          nrows,
+                            int          total_nrows,
+                            int          row_low) {
+    GGML_ASSERT(ncols % QK_MXFP4 == 0);
+    const int        block_num_y   = ceil_div(nrows, GGML_SYCL_MMV_Y);
+    constexpr size_t num_subgroups = 16;
+
+    const sycl::range<3> global_size(1, GGML_SYCL_MMV_Y, block_num_y * WARP_SIZE);
+    const sycl::range<3> workgroup_size(1, GGML_SYCL_MMV_Y, num_subgroups * WARP_SIZE);
+
+    q.submit([&](sycl::handler & cgh) {
+        cgh.parallel_for<mmvq_persistent_mxfp4_tag>(
+            sycl::nd_range<3>(global_size, workgroup_size),
+            [=](sycl::nd_item<3> nd_item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                mul_mat_vec_q_reorder<reorder_vec_dot_q_sycl<GGML_TYPE_MXFP4>>(
+                    weights_soa, y_q8_soa, dst, ncols, nrows, total_nrows, row_low, nd_item);
+            });
+    });
+}
+
 void mmvq_submit_quantize_q8_1_soa(sycl::queue & q,
                                      const float * x,
                                      void *        y_q8_soa,

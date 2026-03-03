@@ -100,6 +100,16 @@ void mmvq_submit_q6_k_soa(sycl::queue & q,
                             int          total_nrows,
                             int          row_low);
 
+// MXFP4 SOA MMVQ: weights in SOA layout, activations in SOA Q8_1
+void mmvq_submit_mxfp4_soa(sycl::queue & q,
+                            const void * weights_soa,
+                            const void * y_q8_soa,
+                            float *      dst,
+                            int          ncols,
+                            int          nrows,
+                            int          total_nrows,
+                            int          row_low);
+
 // Float-to-Q8_1 SOA quantization kernel submission for micro-graph
 // Input:  x[ncols] float activations
 // Output: y_q8[ncols + ncols/QK8_1 * 4] SOA Q8_1
