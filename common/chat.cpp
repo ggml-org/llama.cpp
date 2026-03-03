@@ -317,6 +317,11 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
                 throw std::invalid_argument("Missing 'role' in message: " + message.dump());
             }
             msg.role = message.at("role");
+            // OpenAI uses "developer" as an alias for "system" in the Responses API;
+            // remap it so chat templates that only handle "system" don't break.
+            if (msg.role == "developer") {
+                msg.role = "system";
+            }
 
             auto has_content = message.contains("content");
             auto has_tool_calls = message.contains("tool_calls");

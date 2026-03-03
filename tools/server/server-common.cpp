@@ -944,6 +944,11 @@ json oaicompat_chat_params_parse(
     }
     for (auto & msg : messages) {
         std::string role = json_value(msg, "role", std::string());
+        // Remap "developer" → "system" for chat template compatibility
+        if (role == "developer") {
+            msg["role"] = "system";
+            role = "system";
+        }
         if (role != "assistant" && !msg.contains("content")) {
             throw std::invalid_argument("All non-assistant messages must contain 'content'");
         }
@@ -1239,8 +1244,39 @@ json convert_responses_to_chatcmpl(const json & response_body) {
                     item.erase("status");
                 }
                 item["content"] = chatcmpl_content;
-
-                chatcmpl_messages.push_back(item);
+                // Remap "developer" → "system" for chat template compatibility.
+                // Also ensure system messages end up at position 0 (merge with
+                // any existing system message created from the "instructions" field).
+                if (item.at("role") == "developer" || item.at("role") == "system") {
+                    item["role"] = "system";
+                    // Extract plain text from the content parts
+                    std::string sys_text;
+                    for (const auto & part : chatcmpl_content) {
+                        if (part.value("type", "") == "text" && part.contains("text")) {
+                            if (!sys_text.empty()) {
+                                sys_text += "\n";
+                            }
+                            sys_text += part.at("text").get<std::string>();
+                        }
+                    }
+                    if (!chatcmpl_messages.empty() && chatcmpl_messages.front().value("role", "") == "system") {
+                        // Merge into existing system message
+                        std::string existing = chatcmpl_messages.front().value("content", "");
+                        if (!existing.empty() && !sys_text.empty()) {
+                            existing += "\n\n";
+                        }
+                        existing += sys_text;
+                        chatcmpl_messages.front()["content"] = existing;
+                    } else {
+                        // Insert system message at position 0
+                        chatcmpl_messages.insert(chatcmpl_messages.begin(), {
+                            {"role", "system"},
+                            {"content", sys_text},
+                        });
+                    }
+                } else {
+                    chatcmpl_messages.push_back(item);
+                }
             } else if (exists_and_is_array(item, "content") &&
                 exists_and_is_string(item, "role") &&
                 item.at("role") == "assistant" &&
