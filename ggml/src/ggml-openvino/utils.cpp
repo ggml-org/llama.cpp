@@ -68,6 +68,12 @@ ov::Tensor create_ov_output_tensor(std::shared_ptr<ov::InferRequest> infer_reque
                                    const ggml_tensor * ggml_tensor) {
     auto output_type = infer_request->get_output_tensor(output_index).get_element_type();
     auto output_shape = infer_request->get_output_tensor(output_index).get_shape();
+    // if the output shape is dynamic, we need to update it with the actual shape of the ggml tensor
+    for (size_t i = 0; i < output_shape.size(); i++) {
+        if (output_shape[i] == 0) {
+            output_shape[i] = ggml_tensor->ne[3-i];
+        }
+    }
 
     ov::Tensor output_tensor(output_type, output_shape, ggml_tensor->data);
     return output_tensor;
