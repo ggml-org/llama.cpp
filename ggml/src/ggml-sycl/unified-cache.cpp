@@ -2906,6 +2906,7 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                 }
             }
 
+            bool layout_degraded_to_aos = false;
             if (!new_device_ptr) {
                 // Try host_cache fallback when device allocation fails
                 if (!hcache) {
@@ -2959,20 +2960,22 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                     // will use host-side routing with the original AOS data, losing the
                     // layout optimization but avoiding a complete cache failure.
                     if (request.src_ptr && request.src_size > 0) {
-                        const bool is_aos = (request.layout == GGML_LAYOUT_AOS && !request.fill_fn);
+                        const bool is_aos = (request.layout == GGML_LAYOUT_AOS);
                         const bool can_degrade = (request.layout != GGML_LAYOUT_AOS &&
                                                   request.src_size <= request.dst_size);
                         if (is_aos || can_degrade) {
+                            const char * degrade_label = can_degrade ? " (AOS degraded)" : "";
                             GGML_SYCL_DEBUG(
                                 "[UNIFIED-CACHE] Aliasing mmap src%s: model=%llu name_hash=0x%llx "
                                 "layout=%d->AOS size=%zu\n",
-                                can_degrade ? " (AOS degraded)" : "",
+                                degrade_label,
                                 (unsigned long long) request.key.model_id,
                                 (unsigned long long) request.key.name_hash,
                                 (int) request.layout, request.src_size);
-                            new_device_ptr   = const_cast<void *>(request.src_ptr);
-                            is_host_resident = true;
-                            host_location    = cache_location::HOST_MMAP;
+                            new_device_ptr          = const_cast<void *>(request.src_ptr);
+                            is_host_resident        = true;
+                            host_location           = cache_location::HOST_MMAP;
+                            layout_degraded_to_aos  = can_degrade;
                         }
                     }
 
@@ -2999,11 +3002,11 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             entry.device_ptr      = new_device_ptr;
             entry.src_ptr         = request.src_ptr;
             entry.content_hash    = can_hash ? new_hash : 0;
-            entry.size            = request.dst_size;
+            entry.size            = layout_degraded_to_aos ? request.src_size : request.dst_size;
             entry.type            = request.type;
             entry.layer_id        = request.layer_id;
             entry.expert_id       = request.expert_id;
-            entry.layout          = request.layout;
+            entry.layout          = layout_degraded_to_aos ? GGML_LAYOUT_AOS : request.layout;
             entry.onednn_pack_m   = request.onednn_pack_m;
             entry.xmx_info        = request.xmx_info;
             entry.access_count    = 1;
