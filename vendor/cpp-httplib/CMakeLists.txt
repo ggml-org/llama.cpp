@@ -5,24 +5,32 @@ find_package(Threads REQUIRED)
 
 llama_add_compile_flags()
 
-add_library(${TARGET} STATIC httplib.cpp httplib.h)
+# ---------------------------------------------------------------------------
+# cpp-httplib (this vendored variant is header-only in practice)
+# Do NOT compile httplib.cpp, otherwise you'll get "redefinition of ..." errors,
+# because implementations are already inline in httplib.h.
+# ---------------------------------------------------------------------------
+add_library(${TARGET} INTERFACE)
 
-# disable warnings in 3rd party code
+# Make the header visible to consumers: #include "httplib.h"
+target_include_directories(${TARGET} INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# disable warnings in 3rd party code (propagate to consumers)
 if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
-    target_compile_options(${TARGET} PRIVATE /w)
+    target_compile_options(${TARGET} INTERFACE /w)
 else()
-    target_compile_options(${TARGET} PRIVATE -w)
+    target_compile_options(${TARGET} INTERFACE -w)
 endif()
 
-target_link_libraries(${TARGET} PRIVATE Threads::Threads)
+target_link_libraries(${TARGET} INTERFACE Threads::Threads)
 
 if (WIN32 AND NOT MSVC)
-    target_link_libraries(${TARGET} PUBLIC ws2_32)
+    target_link_libraries(${TARGET} INTERFACE ws2_32)
 endif()
 
-target_compile_features(${TARGET} PRIVATE cxx_std_17)
+target_compile_features(${TARGET} INTERFACE cxx_std_17)
 
-target_compile_definitions(${TARGET} PRIVATE
+target_compile_definitions(${TARGET} INTERFACE
     # increase max payload length to allow use of larger context size
     CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH=1048576
     # increase backlog size to avoid connection resets for >> 1 slots
@@ -35,6 +43,8 @@ target_compile_definitions(${TARGET} PRIVATE
 
 set(OPENSSL_NO_ASM ON CACHE BOOL "Disable OpenSSL ASM code when building BoringSSL or LibreSSL")
 
+# NOTE: CPPHTTPLIB_OPENSSL_SUPPORT must be visible to consumers (used in server.cpp),
+# so it's INTERFACE here.
 if (LLAMA_BUILD_BORINGSSL)
     set(FIPS OFF CACHE BOOL "Enable FIPS (BoringSSL)")
 
@@ -76,7 +86,8 @@ if (LLAMA_BUILD_BORINGSSL)
     license_add_file("BoringSSL" "${boringssl_SOURCE_DIR}/LICENSE")
 
     set(CPPHTTPLIB_OPENSSL_SUPPORT TRUE)
-    target_link_libraries(${TARGET} PUBLIC ssl crypto)
+    target_compile_definitions(${TARGET} INTERFACE CPPHTTPLIB_OPENSSL_SUPPORT)
+    target_link_libraries(${TARGET} INTERFACE ssl crypto)
 
 elseif (LLAMA_BUILD_LIBRESSL)
     set(LIBRESSL_VERSION "4.2.1" CACHE STRING "LibreSSL version")
@@ -119,7 +130,8 @@ elseif (LLAMA_BUILD_LIBRESSL)
     license_add_file("LibreSSL" "${libressl_SOURCE_DIR}/COPYING")
 
     set(CPPHTTPLIB_OPENSSL_SUPPORT TRUE)
-    target_link_libraries(${TARGET} PUBLIC ssl crypto)
+    target_compile_definitions(${TARGET} INTERFACE CPPHTTPLIB_OPENSSL_SUPPORT)
+    target_link_libraries(${TARGET} INTERFACE ssl crypto)
 
 elseif (LLAMA_OPENSSL)
     find_package(OpenSSL)
@@ -144,14 +156,15 @@ elseif (LLAMA_OPENSSL)
         if (OPENSSL_VERSION_SUPPORTED)
             message(STATUS "OpenSSL found: ${OPENSSL_VERSION}")
             set(CPPHTTPLIB_OPENSSL_SUPPORT TRUE)
-            target_link_libraries(${TARGET} PUBLIC OpenSSL::SSL OpenSSL::Crypto)
+            target_compile_definitions(${TARGET} INTERFACE CPPHTTPLIB_OPENSSL_SUPPORT)
+            target_link_libraries(${TARGET} INTERFACE OpenSSL::SSL OpenSSL::Crypto)
         endif()
     else()
         message(WARNING "OpenSSL not found, HTTPS support disabled")
     endif()
 endif()
 
-# disable warnings in 3rd party code
+# disable warnings in 3rd party SSL code
 if(LLAMA_BUILD_BORINGSSL OR LLAMA_BUILD_LIBRESSL)
     if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
         target_compile_options(ssl PRIVATE /w)
@@ -169,13 +182,12 @@ if(LLAMA_BUILD_BORINGSSL OR LLAMA_BUILD_LIBRESSL)
 endif()
 
 if (CPPHTTPLIB_OPENSSL_SUPPORT)
-    target_compile_definitions(${TARGET} PUBLIC CPPHTTPLIB_OPENSSL_SUPPORT) # used in server.cpp
     if (APPLE AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
         find_library(CORE_FOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
         find_library(SECURITY_FRAMEWORK Security REQUIRED)
-        target_link_libraries(${TARGET} PUBLIC ${CORE_FOUNDATION_FRAMEWORK} ${SECURITY_FRAMEWORK})
+        target_link_libraries(${TARGET} INTERFACE ${CORE_FOUNDATION_FRAMEWORK} ${SECURITY_FRAMEWORK})
     endif()
     if (WIN32 AND NOT MSVC)
-        target_link_libraries(${TARGET} PUBLIC crypt32)
+        target_link_libraries(${TARGET} INTERFACE crypt32)
     endif()
 endif()
