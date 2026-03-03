@@ -946,8 +946,8 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
        __func__, m, k, n, weight_type, m_chunk_n_rows, n_chunk_n_cols, vec_dot_size, row_stride);
 #endif
 
-  // const bool use_pipeline = (m >= 128) && (k <= n);
-  const bool use_pipeline = false;
+  const bool use_pipeline = (m >= 128) && (k <= n);
+  // const bool use_pipeline = false;
 
   TIMER_DEFINE(activation_load);
   TIMER_DEFINE(weight_load);

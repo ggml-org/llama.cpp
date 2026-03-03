@@ -1213,41 +1213,6 @@ static void proc_hmx_flash_attn_req(struct htp_context *     ctx,
     send_htp_rsp(ctx, req->op, rsp_status, &rsp_buf, 1, &prof);
 }
 
-static void proc_hmx_rms_norm_req(struct htp_context *     ctx,
-                                   struct htp_general_req * req,
-                                   struct dspqueue_buffer * bufs,
-                                   size_t                   n_bufs) {
-    (void) n_bufs;
-
-    struct dspqueue_buffer rsp_bufs[1];
-    rsp_bufs[0].fd     = bufs[1].fd;
-    rsp_bufs[0].ptr    = bufs[1].ptr;
-    rsp_bufs[0].size   = bufs[1].size;
-    rsp_bufs[0].offset = bufs[1].offset;
-    rsp_bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |
-                          DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);
-
-    float * src = (float *) bufs[0].ptr;
-    float * dst = (float *) bufs[1].ptr;
-    int ne0 = (int) req->src0.ne[0];
-    int ne1 = (int) req->src0.ne[1];
-    if (ne1 == 0) { ne1 = 1; }
-
-    struct profile_data prof;
-    profile_start(&prof);
-
-    uint32_t rsp_status = HTP_STATUS_INTERNAL_ERR;
-    if (vtcm_acquire(ctx) == AEE_SUCCESS) {
-        int ret = hvx_rms_norm_f32(dst, src, ne0, ne1);
-        if (ret == 0) {
-            rsp_status = HTP_STATUS_OK;
-        }
-        vtcm_release(ctx);
-    }
-
-    profile_stop(&prof);
-    send_htp_rsp(ctx, req->op, rsp_status, rsp_bufs, 1, &prof);
-}
 #endif // HTP_HAS_HMX
 
 static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
@@ -1336,14 +1301,7 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
                     FARF(ERROR, "Bad unary-req buffer list");
                     continue;
                 }
-#ifdef HTP_HAS_HMX
-                if (ctx->hmx_enabled) {
-                    proc_hmx_rms_norm_req(ctx, &req, bufs, n_bufs);
-                } else
-#endif
-                {
-                    proc_unary_req(ctx, &req, bufs);
-                }
+                proc_unary_req(ctx, &req, bufs);
                 break;
 
             case HTP_OP_SCALE:
