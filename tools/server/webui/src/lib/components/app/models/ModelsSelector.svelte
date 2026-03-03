@@ -390,33 +390,42 @@
 							{#if filteredOptions.length === 0}
 								<p class="px-4 py-3 text-sm text-muted-foreground">No models found.</p>
 							{/if}
-						{#each groupedFilteredOptions as group (group.isFavouritesGroup ? '__favourites__' : group.orgName)}
-						{#if group.isFavouritesGroup}
-							<p class="px-2 mt-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none">Favourites</p>
-						{:else if group.orgName}
-							<p class="px-2 mt-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none">{group.orgName}</p>
-						{/if}
-							{#each group.items as { option, flatIndex } (group.isFavouritesGroup ? `fav-${option.id}` : option.id)}
-								{@const isSelected = currentModel === option.model || activeId === option.id}
-								{@const isHighlighted = flatIndex === highlightedIndex}
-								{@const isFav = modelsStore.favouriteModelIds.has(option.model)}
+							{#each groupedFilteredOptions as group (group.isFavouritesGroup ? '__favourites__' : group.orgName)}
+								{#if group.isFavouritesGroup}
+									<p
+										class="mt-2 px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none"
+									>
+										Favourites
+									</p>
+								{:else if group.orgName}
+									<p
+										class="mt-2 px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none"
+									>
+										{group.orgName}
+									</p>
+								{/if}
+								{#each group.items as { option, flatIndex } (group.isFavouritesGroup ? `fav-${option.id}` : option.id)}
+									{@const isSelected = currentModel === option.model || activeId === option.id}
+									{@const isHighlighted = flatIndex === highlightedIndex}
+									{@const isFav = modelsStore.favouriteModelIds.has(option.model)}
 
-								<ModelsSelectorOption
-									{option}
-									{isSelected}
-									{isHighlighted}
-									{isFav}
-									{highlightedIndex}								showOrgName={group.isFavouritesGroup}									onSelect={handleSelect}
-									onMouseEnter={() => (highlightedIndex = flatIndex)}
-									onKeyDown={(e) => {
-										if (e.key === KeyboardKey.ENTER || e.key === KeyboardKey.SPACE) {
-											e.preventDefault();
-											handleSelect(option.id);
-										}
-									}}
-								/>
+									<ModelsSelectorOption
+										{option}
+										{isSelected}
+										{isHighlighted}
+										{isFav}
+										showOrgName={group.isFavouritesGroup}
+										onSelect={handleSelect}
+										onMouseEnter={() => (highlightedIndex = flatIndex)}
+										onKeyDown={(e) => {
+											if (e.key === KeyboardKey.ENTER || e.key === KeyboardKey.SPACE) {
+												e.preventDefault();
+												handleSelect(option.id);
+											}
+										}}
+									/>
+								{/each}
 							{/each}
-						{/each}
 						</div>
 					</DropdownMenuSearchable>
 				</DropdownMenu.Content>
