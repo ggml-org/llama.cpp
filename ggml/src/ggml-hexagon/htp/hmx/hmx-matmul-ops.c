@@ -336,51 +336,8 @@ static void find_chunk_size(size_t x_max, size_t y_max, size_t xy_max, size_t x_
   *x_out = best_x, *y_out = best_y;
 }
 
-// TODO(hzx): current implementation only use one thread. Use multiple threads to improve prefill performance
-static void transfer_activation_chunk_fp32_to_fp16(__fp16 *restrict vtcm_dst, const float *restrict src, int n_rows,
-                                                   int k_block, int k_stride) {
-  assert(k_block % HMX_FP16_TILE_N_COLS == 0 && k_stride % HMX_FP16_TILE_N_COLS == 0);
-  assert(HMX_VLEN == 32 * sizeof(float));
-
-  for (int r = 0; r < n_rows; r += 2) {
-    int prefetch_row_idx = r + 2;
-    if (prefetch_row_idx < n_rows) {
-      const float *prefetch_addr = src + prefetch_row_idx * k_stride;
-      // NOTE(hzx): prefetch 2 rows at a time
-      hmx_l2fetch(prefetch_addr, k_stride * sizeof(float), k_block * sizeof(float), 2, 0);
-    }
-
-    int r0 = r / HMX_FP16_TILE_N_ROWS;  // tile row index
-    int r1 = r % HMX_FP16_TILE_N_ROWS;  // intra-tile row idx
-
-    const bool next_row_valid = (r + 1) < n_rows;
-
-    const HVX_Vector *pv_in0 = (const HVX_Vector *) (src + (r + 0) * k_stride);
-    const HVX_Vector *pv_in1 = (const HVX_Vector *) (src + (r + 1) * k_stride);
-    for (int c = 0; c < k_block; c += 32) {
-      HVX_Vector v0 = *pv_in0++;
-      HVX_Vector v1 = next_row_valid ? *pv_in1++ : Q6_V_vzero();
-
-      HVX_Vector v_out = hmx_hvx_wsf_to_vhf(v1, v0);
-
-      // compute output position
-      int c0       = c / HMX_FP16_TILE_N_COLS;  // tile column index
-      int tile_idx = r0 * (k_block / HMX_FP16_TILE_N_COLS) + c0;
-
-#if HMX_DEBUG_CHECK_VALUES
-      if (r == 0 && (tile_idx == 0 || tile_idx == 7)) {
-        FARF(ALWAYS, "=== ACT shuffle tile(%d) r=%d  wsf_to_vhf ===", tile_idx, r);
-        HMX_DUMP_HVX_FP32(v0, "act_row0_pre_shuf", tile_idx, r);
-        HMX_DUMP_HVX_FP32(v1, "act_row1_pre_shuf", tile_idx, r);
-        HMX_DUMP_HVX_FP16(v_out, "act_post_shuf", tile_idx, r);
-      }
-#endif
-
-      HVX_Vector *tile = (HVX_Vector *) (vtcm_dst + tile_idx * HMX_FP16_TILE_N_ELMS);
-      tile[r1 / 2]     = v_out;
-    }
-  }
-}
+// forward declaration – defined after transfer_activation_chunk_fp32_to_fp16
+void transfer_activation_chunk_multithread(struct htp_context *ctx, __fp16 *dst, const float *src, int n_rows, int k_block, int k_stride);
 
 // Scatter row-major FP16 weight (already in VTCM scratch) directly into transposed [K][N] tiles.
 // vtcm_src: [n_cols][k] row-major fp16 in VTCM scratch buffer
@@ -780,7 +737,6 @@ static void core_dot_chunk_fp16(__fp16 *output, const __fp16 *activation, const 
   HAP_compute_res_hmx_unlock(vtcm_rctx);
 }
 
-// TODO(hzx): current implementation only use one thread. Use multiple threads to improve prefill performance
 static void transfer_output_chunk_fp16_to_fp32(float *restrict dst, const __fp16 *restrict vtcm_src, int n_rows,
                                                int n_cols, int n) {
   assert(n_cols % HMX_FP16_TILE_N_COLS == 0);
@@ -817,6 +773,48 @@ static void transfer_output_chunk_fp16_to_fp32(float *restrict dst, const __fp16
       }
     }
   }
+}
+
+typedef struct {
+  int            n_tasks;
+  int            n_tot_chunks;
+  int            n_chunks_per_task;
+  float         *dst;
+  const __fp16  *vtcm_src;
+  int            n_cols;
+  int            n;  // DDR row stride (total output columns)
+} output_transfer_task_state_t;
+
+static void transfer_output_chunk_worker_fn(unsigned int n, unsigned int i, void *data) {
+  output_transfer_task_state_t *st = (output_transfer_task_state_t *) data;
+
+  for (unsigned int task_id = i; task_id < (unsigned int)st->n_tasks; task_id += n) {
+    int    chunk_idx  = task_id * st->n_chunks_per_task;
+    size_t chunk_size = hmx_smin(st->n_tot_chunks - chunk_idx, st->n_chunks_per_task);
+
+    float        *dst     = st->dst     + chunk_idx * st->n;
+    const __fp16 *vtcm_src = st->vtcm_src + chunk_idx * st->n_cols;
+    transfer_output_chunk_fp16_to_fp32(dst, vtcm_src, chunk_size, st->n_cols, st->n);
+  }
+}
+
+static void transfer_output_chunk_multithread(struct htp_context *ctx, float *dst, const __fp16 *vtcm_src,
+                                              int n_rows, int n_cols, int n) {
+  assert(n_cols % HMX_FP16_TILE_N_COLS == 0);
+
+  size_t n_tot_chunks      = n_rows;
+  size_t n_chunks_per_task = 32;  // must be multiple of HMX_FP16_TILE_N_ROWS (32)
+
+  output_transfer_task_state_t state;
+  state.n_tasks           = (n_tot_chunks + n_chunks_per_task - 1) / n_chunks_per_task;
+  state.n_tot_chunks      = n_tot_chunks;
+  state.n_chunks_per_task = n_chunks_per_task;
+  state.dst      = dst;
+  state.vtcm_src = vtcm_src;
+  state.n_cols   = n_cols;
+  state.n        = n;
+
+  worker_pool_run_func(ctx->worker_pool, transfer_output_chunk_worker_fn, &state, ctx->n_threads);
 }
 
 int hmx_mat_mul_permuted_w16a32(struct htp_context *ctx, float *restrict dst, const float *restrict activation,
@@ -874,7 +872,7 @@ int hmx_mat_mul_permuted_w16a32(struct htp_context *ctx, float *restrict dst, co
     TIMER_START(activation_load);
     {
       const float *activation_chunk = activation + mr * k;
-      transfer_activation_chunk_fp32_to_fp16(vtcm_activation, activation_chunk, n_rows, k, k);
+      transfer_activation_chunk_multithread(ctx, vtcm_activation, activation_chunk, n_rows, k, k);
     }
     TIMER_STOP(activation_load);
 
@@ -936,7 +934,7 @@ int hmx_mat_mul_permuted_w16a32(struct htp_context *ctx, float *restrict dst, co
       TIMER_START(output_store);
       {
         float *output = dst + (mr * n + nc);
-        transfer_output_chunk_fp16_to_fp32(output, vtcm_output, n_rows, n_cols, n);
+        transfer_output_chunk_multithread(ctx, output, vtcm_output, n_rows, n_cols, n);
       }
       TIMER_STOP(output_store);
     }
@@ -1054,7 +1052,7 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
       TIMER_START(activation_load);
       {
         const float *activation_chunk = activation + mr * k;
-        transfer_activation_chunk_fp32_to_fp16(vtcm_activation, activation_chunk, n_rows, k, k);
+        transfer_activation_chunk_multithread(ctx, vtcm_activation, activation_chunk, n_rows, k, k);
       }
       TIMER_STOP(activation_load);
 
@@ -1382,7 +1380,7 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
         TIMER_START(output_store);
         {
           float *output = dst + (mr * n + nc);
-          transfer_output_chunk_fp16_to_fp32(output, vtcm_output, n_rows, n_cols, n);
+          transfer_output_chunk_multithread(ctx, output, vtcm_output, n_rows, n_cols, n);
 
 #if HMX_DEBUG_TRACE_VALUES
           // DBG: sample DDR output (fp32) after first store
@@ -1453,7 +1451,7 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
 
       {
         const float *activation_chunk = activation + mr * k;
-        transfer_activation_chunk_fp32_to_fp16(vtcm_activation, activation_chunk, n_rows, k, k);
+        transfer_activation_chunk_multithread(ctx, vtcm_activation, activation_chunk, n_rows, k, k);
       }
 
       // prologue: B0, A1, C0, B1
@@ -1534,7 +1532,7 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
 
         // compute D_{i}
         float *output_chunk = dst + (mr * n + nc);
-        transfer_output_chunk_fp16_to_fp32(output_chunk, vtcm_output_bufs[i % 2], n_rows, n_cols, n);
+        transfer_output_chunk_multithread(ctx, output_chunk, vtcm_output_bufs[i % 2], n_rows, n_cols, n);
 
         // wait for DMA (A_{i+2}), compute B_{i+2}
         if (i + 2 < n_chunk_cnt) {
@@ -1629,8 +1627,7 @@ static void qweight_fetch_worker_fn(unsigned int n, unsigned int i, void *data) 
   dma_queue_pop(st->dma);
 }
 
-// Only slightly faster than the common version (with L2 prefetch enabled) when doing VTCM to VTCM transfer
-void transfer_activation_chunk_no_prefetch(__fp16 *restrict vtcm_dst, const float *restrict src, int n_rows,
+static void transfer_activation_chunk_fp32_to_fp16(__fp16 *restrict vtcm_dst, const float *restrict src, int n_rows,
                                            int k_block, int k_stride) {
   for (int r = 0; r < n_rows; r += 2) {
     int r0 = r / HMX_FP16_TILE_N_ROWS;  // tile row index
@@ -1675,11 +1672,14 @@ static void transfer_activation_chunk_worker_fn(unsigned int n, unsigned int i, 
 
     __fp16      *dst = st->dst + chunk_idx * st->k_block;
     const float *src = st->src + chunk_idx * st->k_stride;
-    transfer_activation_chunk_no_prefetch(dst, src, chunk_size, st->k_block, st->k_stride);
+    transfer_activation_chunk_fp32_to_fp16(dst, src, chunk_size, st->k_block, st->k_stride);
   }
 }
 
 void transfer_activation_chunk_multithread(struct htp_context *ctx, __fp16 *dst, const float *src, int n_rows, int k_block, int k_stride) {
+  assert(k_block % HMX_FP16_TILE_N_COLS == 0 && k_stride % HMX_FP16_TILE_N_COLS == 0);
+  assert(HMX_VLEN == 32 * sizeof(float));
+
   size_t n_tot_chunks      = n_rows;
   size_t n_chunks_per_task = 32;  // NOTE(hzx): must be multiple of 32 to ensure correct destination address
 
@@ -1795,12 +1795,7 @@ int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx, float *restrict 
         TIMER_START(load);
         // load activation block
         {
-          // const float *activation_block = x + mr * k + kk;
-          // transfer_activation_chunk_fp32_to_fp16(vtcm_activation, activation_block, m_blk_sz, k_blk_sz, k);
-          // transfer_activation_chunk_multithread(vtcm_activation, activation_block, m_blk_sz, k_blk_sz, k);
-
           // NOTE(hzx): This code assumes that the activation block already resides in VTCM
-          // transfer_activation_chunk_no_prefetch(vtcm_activation, (float *) vtcm_scratch1, m_blk_sz, k_blk_sz, k_blk_sz);
           transfer_activation_chunk_multithread(ctx, vtcm_activation, (float *) vtcm_scratch1, m_blk_sz, k_blk_sz, k_blk_sz);
         }
 
@@ -1826,7 +1821,7 @@ int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx, float *restrict 
       // store output block
       {
         float *output_block = out + (mr * n + nc);
-        transfer_output_chunk_fp16_to_fp32(output_block, vtcm_output, m_blk_sz, n_blk_sz, n);
+        transfer_output_chunk_multithread(ctx, output_block, vtcm_output, m_blk_sz, n_blk_sz, n);
       }
     }
   }

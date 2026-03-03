@@ -1152,6 +1152,11 @@ static void proc_hmx_matmul_req(struct htp_context *     ctx,
         }
         if (ret == 0) {
             rsp_status = HTP_STATUS_OK;
+        } else {
+            FARF(HIGH, "HMX matmul failed (ret=%d), falling back to HVX", ret);
+            vtcm_release(ctx);
+            proc_matmul_req(ctx, req, bufs, n_bufs);
+            return;
         }
         vtcm_release(ctx);
     }
