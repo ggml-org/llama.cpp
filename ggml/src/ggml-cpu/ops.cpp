@@ -10305,6 +10305,123 @@ void ggml_compute_forward_gla(
     }
 }
 
+// ggml_compute_forward_delta_net
+// TODO: add SIMD vectorization (AVX/NEON) matching GLA's pattern
+
+static void ggml_compute_forward_delta_net_f32(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const int64_t T     = dst->src[0]->ne[2]; // total tokens = n_seq_tokens * n_seqs
+    const int64_t C     = dst->ne[0];          // S * H
+    const int64_t H     = dst->src[0]->ne[1];  // num heads
+    const int64_t n_seqs = dst->src[5]->ne[1];
+    const int64_t S     = C / H;               // head_size
+    GGML_ASSERT(S == 64 || S == 128);         // must match Metal kernel array sizes
+    const float   scale = ggml_get_op_params_f32(dst, 0);
+    const int32_t gate_ne0 = ggml_get_op_params_i32(dst, 1); // 1=GDA, S=KDA
+
+    float * dst_data = (float *) dst->data;
+    float * state_out = dst_data + C * T;
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    if (ith >= H) {
+        return;
+    }
+
+    const int h_start = (H * ith) / nth;
+    const int h_end   = ((H * (ith + 1)) / nth < H) ?
+                (H * (ith + 1)) / nth : H;
+
+    const float * k_data    = (const float *) dst->src[0]->data;
+    const float * v_data    = (const float *) dst->src[1]->data;
+    const float * q_data    = (const float *) dst->src[2]->data;
+    const float * gate_data = (const float *) dst->src[3]->data;
+    const float * beta_data = (const float *) dst->src[4]->data;
+
+    const int64_t n_seq_tokens = T / n_seqs;
+
+    for (int64_t h = h_start; h < h_end; h++) {
+        for (int64_t seq = 0; seq < n_seqs; seq++) {
+            const int64_t state_offset = seq * S * S * H + h * S * S;
+            float * state_cur = state_out + state_offset;
+
+            // Initialize state from input
+            const float * state_in = (const float *) dst->src[5]->data + state_offset;
+            memcpy(state_cur, state_in, S * S * sizeof(float));
+
+            for (int64_t t = 0; t < n_seq_tokens; t++) {
+                const int64_t t_abs = seq * n_seq_tokens + t;
+                const int64_t kv_offset = t_abs * C + h * S;
+                const int64_t gb_offset = t_abs * H + h;
+
+                const float beta_val = beta_data[gb_offset];
+
+                const float * k_ptr = k_data + kv_offset;
+                const float * v_ptr = v_data + kv_offset;
+                const float * q_ptr = q_data + kv_offset;
+
+                // ggml column-major: M[row=i][col=j] at offset j*S+i
+                // Thread processes one row i at a time.
+                // Row i elements: state[0*S+i], state[1*S+i], ..., state[(S-1)*S+i]
+                float output[128]; // max head_size is 128
+
+                for (int64_t i = 0; i < S; i++) {
+                    // Gate: GDA uses same scalar for all rows, KDA uses per-row scalar
+                    const float g_raw = (gate_ne0 == 1)
+                        ? gate_data[gb_offset]
+                        : gate_data[t_abs * H * S + h * S + i];
+                    const float g_exp = expf(fminf(g_raw, 88.0f));
+
+                    // Decay row i and compute sk[i] = sum_j M[i][j] * k[j]
+                    float sk_i = 0.0f;
+                    for (int64_t j = 0; j < S; j++) {
+                        state_cur[j * S + i] *= g_exp;
+                        sk_i += state_cur[j * S + i] * k_ptr[j];
+                    }
+
+                    // Delta and state update for row i
+                    float d_i = (v_ptr[i] - sk_i) * beta_val;
+                    for (int64_t j = 0; j < S; j++) {
+                        state_cur[j * S + i] += k_ptr[j] * d_i;
+                    }
+
+                    // Output: o[i] = sum_j M_updated[i][j] * q[j] * scale
+                    float o_i = 0.0f;
+                    for (int64_t j = 0; j < S; j++) {
+                        o_i += state_cur[j * S + i] * q_ptr[j];
+                    }
+                    output[i] = o_i * scale;
+                }
+
+                // Write output
+                for (int64_t i = 0; i < S; i++) {
+                    dst_data[t_abs * C + h * S + i] = output[i];
+                }
+            }
+        }
+    }
+}
+
+void ggml_compute_forward_delta_net(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_delta_net_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
 static void ggml_compute_forward_solve_tri_f32(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
     const struct ggml_tensor * src0 = dst->src[0];  // A (lower triangular)
     const struct ggml_tensor * src1 = dst->src[1];  // B (RHS)

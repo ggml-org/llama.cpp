@@ -3728,6 +3728,39 @@ struct test_rwkv_wkv7 : public test_case {
     }
 };
 
+// GGML_OP_DELTA_NET
+struct test_delta_net : public test_case {
+    const ggml_type type;
+
+    const int64_t head_count;
+    const int64_t head_size;
+    const int64_t n_seq_tokens;
+    const int64_t n_seqs;
+    const int64_t gate_size; // 1=GDA, head_size=KDA
+
+    std::string vars() override {
+        return VARS_TO_STR6(type, head_count, head_size, n_seq_tokens, n_seqs, gate_size);
+    }
+
+    test_delta_net(ggml_type type = GGML_TYPE_F32,
+            int64_t head_count = 32, int64_t head_size = 64, int64_t n_seq_tokens = 1, int64_t n_seqs = 1,
+            int64_t gate_size = 1)
+        : type(type), head_count(head_count), head_size(head_size), n_seq_tokens(n_seq_tokens), n_seqs(n_seqs),
+          gate_size(gate_size) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        const int64_t n_tokens = n_seq_tokens * n_seqs;
+        ggml_tensor * k    = ggml_new_tensor(ctx, type, 3, std::vector<int64_t>{ head_size, head_count, n_tokens }.data());
+        ggml_tensor * v    = ggml_new_tensor(ctx, type, 3, std::vector<int64_t>{ head_size, head_count, n_tokens }.data());
+        ggml_tensor * q    = ggml_new_tensor(ctx, type, 3, std::vector<int64_t>{ head_size, head_count, n_tokens }.data());
+        ggml_tensor * gate = ggml_new_tensor(ctx, type, 3, std::vector<int64_t>{ gate_size, head_count, n_tokens }.data());
+        ggml_tensor * beta = ggml_new_tensor(ctx, type, 3, std::vector<int64_t>{ 1,         head_count, n_tokens }.data());
+        ggml_tensor * s    = ggml_new_tensor(ctx, type, 2, std::vector<int64_t>{ head_size * head_size * head_count, n_seqs }.data());
+        ggml_tensor * out  = ggml_delta_net(ctx, k, v, q, gate, beta, s, 1.0f / sqrtf((float) head_size));
+        return out;
+    }
+};
+
 // GGML_OP_MUL_MAT
 struct test_mul_mat : public test_case {
     const ggml_type type_a;
@@ -7684,6 +7717,20 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_gla(GGML_TYPE_F32, 32, 64, 32, 1));
     test_cases.emplace_back(new test_gla(GGML_TYPE_F32, 32, 64, 32, 4));
     test_cases.emplace_back(new test_gla(GGML_TYPE_F32, 32, 64, 128, 4));
+
+    // GDA mode (gate_size=1)
+    test_cases.emplace_back(new test_delta_net(GGML_TYPE_F32, 32, 64, 1,  1));
+    test_cases.emplace_back(new test_delta_net(GGML_TYPE_F32, 32, 64, 1,  4));
+    test_cases.emplace_back(new test_delta_net(GGML_TYPE_F32, 32, 64, 32, 1));
+    test_cases.emplace_back(new test_delta_net(GGML_TYPE_F32, 32, 64, 32, 4));
+    // KDA mode (gate_size=head_size)
+    test_cases.emplace_back(new test_delta_net(GGML_TYPE_F32, 32, 64, 1,  1, 64));
+    test_cases.emplace_back(new test_delta_net(GGML_TYPE_F32, 32, 64, 1,  4, 64));
+    test_cases.emplace_back(new test_delta_net(GGML_TYPE_F32, 32, 64, 32, 1, 64));
+    test_cases.emplace_back(new test_delta_net(GGML_TYPE_F32, 32, 64, 32, 4, 64));
+    // KDA mode at head_size=128 (full register pressure)
+    test_cases.emplace_back(new test_delta_net(GGML_TYPE_F32, 4, 128, 1, 1, 128));
+    test_cases.emplace_back(new test_delta_net(GGML_TYPE_F32, 4, 128, 1, 4, 128));
 
 #if 0
     // > 4GB A matrix. Too slow to be enabled by default.

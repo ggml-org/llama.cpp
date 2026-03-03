@@ -319,58 +319,28 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
     GGML_ASSERT(s->ne[0] == S_v && s->ne[1] == S_v && s->ne[2] == H_v      && s->ne[3] == n_seqs);
 
     const float scale = 1.0f / sqrtf(S_k);
+    const int64_t T = n_tokens * n_seqs;
+    const int64_t C = S_v * H_v;
 
-    q = ggml_scale(ctx0, q, scale);
+    // Fused kernel: CPU + Metal. CUDA/Vulkan/SYCL fall back to CPU via scheduler.
+    // TODO: add CUDA/Vulkan kernels for native GPU execution
+    ggml_tensor * q_3d = ggml_reshape_3d(ctx0, q, S_k, H_k, T);
+    ggml_tensor * k_3d = ggml_reshape_3d(ctx0, k, S_k, H_k, T);
+    ggml_tensor * v_3d = ggml_reshape_3d(ctx0, v, S_v, H_v, T);
+    ggml_tensor * g_3d = ggml_reshape_3d(ctx0, g, g->ne[0], H_v, T); // [1,H,T] or [S,H,T]
+    ggml_tensor * b_3d = ggml_reshape_3d(ctx0, b, 1, H_v, T);
+    ggml_tensor * s_2d = ggml_reshape_2d(ctx0, s, S_v * S_v * H_v, n_seqs);
 
-    q = ggml_permute(ctx0, q, 0, 2, 1, 3); // [S_k, n_tokens, H_k, n_seqs]
-    k = ggml_permute(ctx0, k, 0, 2, 1, 3); // [S_k, n_tokens, H_k, n_seqs]
-    v = ggml_permute(ctx0, v, 0, 2, 1, 3); // [S_v, n_tokens, H_v, n_seqs]
+    ggml_tensor * result = ggml_delta_net(ctx0, k_3d, v_3d, q_3d, g_3d, b_3d, s_2d, scale);
 
-    cb(q, "q_in", il);
-    cb(k, "k_in", il);
-    cb(v, "v_in", il);
-    cb(b, "b_in", il);
-    cb(g, "g_in", il);
+    ggml_tensor * o = ggml_view_1d(ctx0, result, C * T, 0);
+    o = ggml_reshape_4d(ctx0, o, S_v, H_v, n_tokens, n_seqs);
+    cb(o, "dnet_ar_output", il);
 
-    // GDA: [1,  1,  H_v, n_seqs]
-    // KDA: [1, S_k, H_v, n_seqs]
-    g = ggml_reshape_4d(ctx0, g, 1, g->ne[0], H_v, n_seqs);
-    b = ggml_reshape_4d(ctx0, b, 1,        1, H_v, n_seqs);
+    ggml_tensor * new_state = ggml_view_1d(ctx0, result,
+        S_v * S_v * H_v * n_seqs,
+        C * T * ggml_element_size(result));
+    new_state = ggml_reshape_4d(ctx0, new_state, S_v, S_v, H_v, n_seqs);
 
-    // [S_v, S_v, H_v, n_seqs]
-    g = ggml_exp(ctx0, g);
-    s = ggml_mul(ctx0, s, g);
-
-    ggml_tensor * s_t = ggml_cont(ctx0, ggml_transpose(ctx0, s));
-
-    // [1, S_v, H_v, n_seqs]
-    ggml_tensor * sk;
-    sk = ggml_mul     (ctx0, s_t, k);
-    sk = ggml_sum_rows(ctx0, sk);
-
-    // [S_v, 1, H_v, n_seqs]
-    ggml_tensor * d;
-    d = ggml_sub(ctx0, v, ggml_transpose(ctx0, sk));
-    d = ggml_mul(ctx0, d, b);
-
-    // [1, S_v, H_v, n_seqs]
-    ggml_tensor * d_t;
-    d_t = ggml_transpose(ctx0, d);
-
-    // [S_v, S_v, H_v, n_seqs]
-    ggml_tensor * kd;
-    k  = ggml_repeat(ctx0, k, s);
-    kd = ggml_mul   (ctx0, k, d_t);
-
-    s_t = ggml_add(ctx0, s_t, kd);
-
-    cb(s_t, "dnet_add_ar_state", il);
-
-    ggml_tensor * s_q = ggml_mul     (ctx0, s_t, q);
-    ggml_tensor * o   = ggml_sum_rows(ctx0, s_q);
-
-    o = ggml_permute  (ctx0, o, 2, 0, 1, 3); // [S_v, H_v, n_tokens, n_seqs]
-    s = ggml_transpose(ctx0, s_t);           // [S_v, S_v, H_v, n_seqs]
-
-    return {o, s};
+    return {o, new_state};
 }
