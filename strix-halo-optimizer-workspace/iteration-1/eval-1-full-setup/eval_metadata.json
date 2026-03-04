@@ -1,0 +1,13 @@
+{
+  "eval_id": 1,
+  "eval_name": "full-setup-guide",
+  "prompt": "I just got a Framework Desktop with the AMD Ryzen AI Max+ 395 and 128GB of RAM running Ubuntu 24.04. I want to run Llama 3.1 70B on it with llama.cpp. How do I build it and what settings should I use for the best token generation speed? I've already installed ROCm 6.3.",
+  "assertions": [
+    {"name": "ttm_memory_fix", "description": "Mentions TTM pages_limit configuration for Linux", "type": "contains_concept"},
+    {"name": "correct_gpu_target", "description": "Specifies GPU_TARGETS=gfx1150 (or gfx1151) in the build command", "type": "contains_concept"},
+    {"name": "hipblaslt_env", "description": "Includes ROCBLAS_USE_HIPBLASLT=1 environment variable", "type": "contains_concept"},
+    {"name": "no_mmap_flag", "description": "Recommends --no-mmap for the 70B model", "type": "contains_concept"},
+    {"name": "full_gpu_offload", "description": "Uses -ngl 99 to offload all layers to GPU", "type": "contains_concept"},
+    {"name": "quantization_recommendation", "description": "Recommends an appropriate quantization (Q4_K_M or similar) for fitting 70B in 128GB", "type": "contains_concept"}
+  ]
+}
