@@ -281,6 +281,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
 
     { LLM_KV_TOKENIZER_MODEL,                "tokenizer.ggml.model"                    },
     { LLM_KV_TOKENIZER_PRE,                  "tokenizer.ggml.pre"                      },
+    { LLM_KV_TOKENIZER_WPM_DO_LOWER_CASE,    "tokenizer.wpm.do_lower_case"             },
     { LLM_KV_TOKENIZER_LIST,                 "tokenizer.ggml.tokens"                   },
     { LLM_KV_TOKENIZER_TOKEN_TYPE,           "tokenizer.ggml.token_type"               },
     { LLM_KV_TOKENIZER_TOKEN_TYPE_COUNT,     "tokenizer.ggml.token_type_count"         },

@@ -1230,6 +1230,17 @@ int llama_context::encode(const llama_batch & batch_inp) {
                     GGML_ASSERT(n_tokens*n_embd_out <= (int64_t) embd.size);
                     ggml_backend_tensor_get_async(backend_embd, t_embd, embd.data, 0, n_tokens*n_embd_out*sizeof(float));
                 } break;
+            case LLAMA_POOLING_TYPE_TOKEN_CLS:
+                {
+                    // extract token classification outputs
+                    GGML_ASSERT(embd.data != nullptr);
+                    GGML_ASSERT(hparams.n_cls_out > 0);
+                    GGML_ASSERT(hparams.n_embd_out() == hparams.n_cls_out);
+
+                    const uint32_t n_cls_out = hparams.n_cls_out;
+                    GGML_ASSERT(n_tokens*n_cls_out <= (int64_t) embd.size);
+                    ggml_backend_tensor_get_async(backend_embd, t_embd, embd.data, 0, n_tokens*n_cls_out*sizeof(float));
+                } break;
             case LLAMA_POOLING_TYPE_MEAN:
             case LLAMA_POOLING_TYPE_CLS:
             case LLAMA_POOLING_TYPE_LAST:
@@ -1654,6 +1665,22 @@ int llama_context::decode(const llama_batch & batch_inp) {
                             GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
                             GGML_ASSERT((n_outputs_prev + n_outputs)*n_embd_out <= (int64_t) embd.size);
                             ggml_backend_tensor_get_async(backend_embd, t_embd, embd_out, 0, n_outputs*n_embd_out*sizeof(float));
+                        }
+                    } break;
+                case LLAMA_POOLING_TYPE_TOKEN_CLS:
+                    {
+                        // extract token classification outputs
+                        GGML_ASSERT(embd.data != nullptr);
+                        GGML_ASSERT(hparams.n_cls_out > 0);
+                        GGML_ASSERT(hparams.n_embd_out() == hparams.n_cls_out);
+
+                        const uint32_t n_cls_out = hparams.n_cls_out;
+                        float * embd_out = embd.data + n_outputs_prev*n_cls_out;
+
+                        if (n_outputs) {
+                            GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
+                            GGML_ASSERT((n_outputs_prev + n_outputs)*n_cls_out <= (int64_t) embd.size);
+                            ggml_backend_tensor_get_async(backend_embd, t_embd, embd_out, 0, n_outputs*n_cls_out*sizeof(float));
                         }
                     } break;
                 case LLAMA_POOLING_TYPE_MEAN:

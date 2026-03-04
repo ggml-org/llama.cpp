@@ -5764,27 +5764,104 @@ class InternLM3Model(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("BertModel", "BertForMaskedLM", "CamembertModel", "BertForSequenceClassification")
+@ModelBase.register("BertModel", "BertForMaskedLM", "CamembertModel", "BertForSequenceClassification", "BertForTokenClassification")
 class BertModel(TextModel):
     model_arch = gguf.MODEL_ARCH.BERT
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.vocab_size = None
+        self.origin_hf_arch = self.hparams.get("architectures", [None])[0]
+        self.is_token_classification = self.origin_hf_arch in (
+            "BertForTokenClassification",
+            "ModernBertForTokenClassification",
+        )
+        self.is_classifier_model = self.is_token_classification or self.origin_hf_arch in (
+            "BertForSequenceClassification",
+            "ModernBertForSequenceClassification",
+        )
 
-        if cls_out_labels := self.hparams.get("id2label"):
-            if len(cls_out_labels) == 2 and cls_out_labels[0] == "LABEL_0":
-                # Remove dummy labels added by AutoConfig
-                cls_out_labels = None
+        cls_out_labels = self._normalize_id2label(self.hparams.get("id2label"))
+        if cls_out_labels is None and self.is_classifier_model and (num_labels := self.hparams.get("num_labels")) is not None:
+            cls_out_labels = [f"LABEL_{i}" for i in range(int(num_labels))]
         self.cls_out_labels = cls_out_labels
+
+    @staticmethod
+    def _normalize_id2label(id2label: Any) -> list[str] | None:
+        if not id2label:
+            return None
+
+        labels: list[str]
+        if isinstance(id2label, list):
+            labels = [str(val) for val in id2label]
+        elif isinstance(id2label, dict):
+            labels = [val for val in id2label.values()]
+        else:
+            return None
+
+        if len(labels) == 0:
+            return None
+
+        if len(labels) == 2 and labels[0] == "LABEL_0":
+            # Remove dummy labels added by AutoConfig
+            return None
+
+        return labels
+
+    def get_vocab_base_pre(self, tokenizer) -> str:
+        from transformers import BertTokenizer, BertTokenizerFast
+        is_wordpiece = isinstance(tokenizer, (BertTokenizer, BertTokenizerFast))
+        if not is_wordpiece:
+            is_wordpiece = hasattr(tokenizer, "wordpiece_tokenizer")
+
+        if is_wordpiece:
+            return "bert-bge"
+
+        return super().get_vocab_base_pre(tokenizer)
+
+    def _get_wpm_do_lower_case(self) -> bool | None:
+        if not (self.dir_model / "vocab.txt").is_file():
+            return None
+
+        do_lower_case = self.hparams.get("do_lower_case")
+        if isinstance(do_lower_case, bool):
+            return do_lower_case
+
+        tokenizer_config_path = self.dir_model / "tokenizer_config.json"
+        if tokenizer_config_path.is_file():
+            with open(tokenizer_config_path, "r", encoding="utf-8") as f:
+                tokenizer_config = json.load(f)
+
+            do_lower_case = tokenizer_config.get("do_lower_case")
+            if isinstance(do_lower_case, bool):
+                return do_lower_case
+
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+        do_lower_case = getattr(tokenizer, "do_lower_case", None)
+        if isinstance(do_lower_case, bool):
+            return do_lower_case
+
+        return None
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         self.gguf_writer.add_causal_attention(False)
-        self._try_set_pooling_type()
+
+        if (wpm_do_lower_case := self._get_wpm_do_lower_case()) is not None:
+            self.gguf_writer.add_tokenizer_wpm_do_lower_case(wpm_do_lower_case)
+
+        if self.is_token_classification:
+            self.gguf_writer.add_pooling_type(gguf.PoolingType.TOKEN_CLS)
+        else:
+            self._try_set_pooling_type()
 
         if self.cls_out_labels:
-            self.gguf_writer.add_classifier_output_labels([v for k, v in sorted(self.cls_out_labels.items())])
+            self.gguf_writer.add_classifier_output_labels(self.cls_out_labels)
+            if self.is_token_classification:
+                self.gguf_writer.add_embedding_length_out(len(self.cls_out_labels))
+        elif self.is_token_classification and (num_labels := self.hparams.get("num_labels")) is not None:
+            self.gguf_writer.add_embedding_length_out(int(num_labels))
 
     def set_vocab(self):
         tokens, toktypes, tokpre = self.get_vocab_base()
@@ -5835,8 +5912,8 @@ class BertModel(TextModel):
         if name.startswith("cls.seq_relationship"):
             return
 
-        if self.cls_out_labels:
-            # For BertForSequenceClassification (direct projection layer)
+        if self.is_classifier_model:
+            # For direct projection classifier heads
             if name == "classifier.weight":
                 name = "classifier.out_proj.weight"
 
@@ -11132,7 +11209,7 @@ class SmallThinkerModel(TextModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
-@ModelBase.register("ModernBertModel", "ModernBertForMaskedLM", "ModernBertForSequenceClassification")
+@ModelBase.register("ModernBertModel", "ModernBertForMaskedLM", "ModernBertForSequenceClassification", "ModernBertForTokenClassification")
 class ModernBertModel(BertModel):
     model_arch = gguf.MODEL_ARCH.MODERN_BERT
 
@@ -11151,6 +11228,13 @@ class ModernBertModel(BertModel):
         self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # these layers act as MLM head, so we don't need them
+        if name.startswith("decoder."):
+            return
+
+        if self.is_token_classification and name.startswith("head."):
+            return
+
         if name.startswith("model."):
             name = name[6:]
 

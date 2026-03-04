@@ -238,6 +238,7 @@ class Keys:
     class Tokenizer:
         MODEL                = "tokenizer.ggml.model"
         PRE                  = "tokenizer.ggml.pre"
+        WPM_DO_LOWER_CASE    = "tokenizer.wpm.do_lower_case"
         LIST                 = "tokenizer.ggml.tokens"
         TOKEN_TYPE           = "tokenizer.ggml.token_type"
         TOKEN_TYPE_COUNT     = "tokenizer.ggml.token_type_count"  # for BERT-style token types
@@ -3738,6 +3739,7 @@ class PoolingType(IntEnum):
     CLS  = 2
     LAST = 3
     RANK = 4
+    TOKEN_CLS = 5
 
 
 class GGMLQuantizationType(IntEnum):
@@ -3984,22 +3986,23 @@ KEY_SSM_DT_B_C_RMS     = Keys.SSM.DT_B_C_RMS
 KEY_KDA_HEAD_DIM       = Keys.KDA.HEAD_DIM
 
 # tokenization
-KEY_TOKENIZER_MODEL      = Keys.Tokenizer.MODEL
-KEY_TOKENIZER_PRE        = Keys.Tokenizer.PRE
-KEY_TOKENIZER_LIST       = Keys.Tokenizer.LIST
-KEY_TOKENIZER_TOKEN_TYPE = Keys.Tokenizer.TOKEN_TYPE
-KEY_TOKENIZER_SCORES     = Keys.Tokenizer.SCORES
-KEY_TOKENIZER_MERGES     = Keys.Tokenizer.MERGES
-KEY_TOKENIZER_BOS_ID     = Keys.Tokenizer.BOS_ID
-KEY_TOKENIZER_EOS_ID     = Keys.Tokenizer.EOS_ID
-KEY_TOKENIZER_EOT_ID     = Keys.Tokenizer.EOT_ID
-KEY_TOKENIZER_EOM_ID     = Keys.Tokenizer.EOM_ID
-KEY_TOKENIZER_UNK_ID     = Keys.Tokenizer.UNK_ID
-KEY_TOKENIZER_SEP_ID     = Keys.Tokenizer.SEP_ID
-KEY_TOKENIZER_PAD_ID     = Keys.Tokenizer.PAD_ID
-KEY_TOKENIZER_MASK_ID    = Keys.Tokenizer.MASK_ID
-KEY_TOKENIZER_HF_JSON    = Keys.Tokenizer.HF_JSON
-KEY_TOKENIZER_RWKV       = Keys.Tokenizer.RWKV
+KEY_TOKENIZER_MODEL             = Keys.Tokenizer.MODEL
+KEY_TOKENIZER_PRE               = Keys.Tokenizer.PRE
+KEY_TOKENIZER_WPM_DO_LOWER_CASE = Keys.Tokenizer.WPM_DO_LOWER_CASE
+KEY_TOKENIZER_LIST              = Keys.Tokenizer.LIST
+KEY_TOKENIZER_TOKEN_TYPE        = Keys.Tokenizer.TOKEN_TYPE
+KEY_TOKENIZER_SCORES            = Keys.Tokenizer.SCORES
+KEY_TOKENIZER_MERGES            = Keys.Tokenizer.MERGES
+KEY_TOKENIZER_BOS_ID            = Keys.Tokenizer.BOS_ID
+KEY_TOKENIZER_EOS_ID            = Keys.Tokenizer.EOS_ID
+KEY_TOKENIZER_EOT_ID            = Keys.Tokenizer.EOT_ID
+KEY_TOKENIZER_EOM_ID            = Keys.Tokenizer.EOM_ID
+KEY_TOKENIZER_UNK_ID            = Keys.Tokenizer.UNK_ID
+KEY_TOKENIZER_SEP_ID            = Keys.Tokenizer.SEP_ID
+KEY_TOKENIZER_PAD_ID            = Keys.Tokenizer.PAD_ID
+KEY_TOKENIZER_MASK_ID           = Keys.Tokenizer.MASK_ID
+KEY_TOKENIZER_HF_JSON           = Keys.Tokenizer.HF_JSON
+KEY_TOKENIZER_RWKV              = Keys.Tokenizer.RWKV
 
 KEY_TOKENIZER_FIM_PRE_ID = Keys.Tokenizer.FIM_PRE_ID
 KEY_TOKENIZER_FIM_SUF_ID = Keys.Tokenizer.FIM_SUF_ID
