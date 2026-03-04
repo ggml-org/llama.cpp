@@ -151,6 +151,7 @@ static bool gguf_read_uint32_val(gguf_buf_reader & r, int32_t vtype, uint32_t & 
                 return false;
             }
         }
+        return true;
     }
     if (vtype == GGUF_TYPE_UINT8) {
         uint8_t v;
