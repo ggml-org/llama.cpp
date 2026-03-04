@@ -1,7 +1,7 @@
+#include "common.cuh"
 #include "mmq.cuh"
 #include "quantize.cuh"
-
-#include <vector>
+#include "mmid.cuh"
 
 static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) {
     switch (args.type_x) {
@@ -115,6 +115,9 @@ void ggml_cuda_mul_mat_q(
     const bool use_stream_k = (GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA)
                             || GGML_CUDA_CC_IS_CDNA(cc);
 
+    // TODO: tighter pool buffer size vs q8 path
+    const bool use_native_mxfp4 = blackwell_mma_available(cc) && src0->type == GGML_TYPE_MXFP4;
+
     if (!ids) {
         const size_t nbytes_src1_q8_1 = ne13*ne12 * ne11*ne10_padded * sizeof(block_q8_1)/QK8_1 +
             get_mmq_x_max_host(cc)*sizeof(block_q8_1_mmq);
@@ -124,12 +127,24 @@ void ggml_cuda_mul_mat_q(
             const int64_t s11 = src1->nb[1] / ts_src1;
             const int64_t s12 = src1->nb[2] / ts_src1;
             const int64_t s13 = src1->nb[3] / ts_src1;
-            quantize_mmq_q8_1_cuda(src1_d, nullptr, src1_q8_1.get(), src0->type,
-                ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
+            if (use_native_mxfp4) {
+                static_assert(sizeof(block_fp4_mmq) == 4 * sizeof(block_q8_1));
+                quantize_mmq_mxfp4_cuda(src1_d, nullptr, src1_q8_1.get(), src0->type, ne10, s11, s12, s13, ne10_padded,
+                                        ne11, ne12, ne13, stream);
+
+            } else {
+                quantize_mmq_q8_1_cuda(src1_d, nullptr, src1_q8_1.get(), src0->type, ne10, s11, s12, s13, ne10_padded,
+                                       ne11, ne12, ne13, stream);
+            }
             CUDA_CHECK(cudaGetLastError());
         }
 
-        const int64_t s12 = ne11*ne10_padded * sizeof(block_q8_1)/(QK8_1*sizeof(int));
+        // Stride depends on quantization format
+        const int64_t s12 = use_native_mxfp4 ?
+                                ne11 * ne10_padded * sizeof(block_fp4_mmq) /
+                                    (8 * QK_MXFP4 * sizeof(int))  // block_fp4_mmq holds 256 values (8 blocks of 32)
+                                :
+                                ne11 * ne10_padded * sizeof(block_q8_1) / (QK8_1 * sizeof(int));
         const int64_t s13 = ne12*s12;
 
         const mmq_args args = {
@@ -137,7 +152,7 @@ void ggml_cuda_mul_mat_q(
             ne00, ne01, ne1, s01, ne11, s1,
             ne02, ne12, s02, s12, s2,
             ne03, ne13, s03, s13, s3,
-            use_stream_k};
+            use_stream_k, ne1};
         ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
         return;
     }
@@ -148,53 +163,21 @@ void ggml_cuda_mul_mat_q(
 
     const int64_t n_expert_used = ids->ne[0];
     const int64_t ne_get_rows = ne12 * n_expert_used;
+    GGML_ASSERT(ne1 == n_expert_used);
 
-    std::vector<char> ids_host(ggml_nbytes(ids));
-    std::vector<int32_t> ids_src1_host;
-    ids_src1_host.reserve(ne_get_rows);
-    std::vector<int32_t> ids_dst_host;
-    ids_dst_host.reserve(ne_get_rows);
-    std::vector<int32_t> tokens_per_expert_host(ne02);
-    std::vector<int32_t> expert_bounds_host(ne02 + 1);
-    ggml_cuda_pool_alloc<int32_t> ids_buf_dev(ctx.pool());
+    ggml_cuda_pool_alloc<int32_t> ids_src1(ctx.pool(), ne_get_rows);
+    ggml_cuda_pool_alloc<int32_t> ids_dst(ctx.pool(), ne_get_rows);
+    ggml_cuda_pool_alloc<int32_t> expert_bounds(ctx.pool(), ne02 + 1);
 
-    CUDA_CHECK(cudaMemcpyAsync(ids_host.data(), ids->data, ggml_nbytes(ids), cudaMemcpyDeviceToHost, stream));
-    CUDA_CHECK(cudaStreamSynchronize(stream));
+    {
+        GGML_ASSERT(ids->nb[0] == ggml_element_size(ids));
+        const int si1  = ids->nb[1] / ggml_element_size(ids);
+        const int sis1 = nb12 / nb11;
 
-    for (int64_t i02 = 0; i02 < ne02; ++i02) { // expert matrices
-        for (int64_t i12 = 0; i12 < ne12; ++i12) { // tokens
-            for (int64_t iex = 0; iex < n_expert_used; ++iex) {
-                const int32_t expert_to_use = *(const int32_t *)(ids_host.data() + i12*ids->nb[1] + iex*ids->nb[0]);
-                assert(expert_to_use >= 0 && expert_to_use < ne02);
-                if (expert_to_use == i02) {
-                    ids_src1_host.push_back(i12*(nb12/nb11) + iex % ne11);
-                    ids_dst_host.push_back(i12*ne1 + iex);
-                    tokens_per_expert_host[i02]++;
-                    break;
-                }
-            }
-        }
+        ggml_cuda_launch_mm_ids_helper((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(),
+            ne02, ne12, n_expert_used, ne11, si1, sis1, stream);
+        CUDA_CHECK(cudaGetLastError());
     }
-
-    int32_t cumsum = 0;
-    for (int64_t i = 0; i < ne02; ++i) {
-        expert_bounds_host[i] = cumsum;
-        cumsum += tokens_per_expert_host[i];
-    }
-    expert_bounds_host[ne02] = cumsum;
-
-    std::vector<int32_t> ids_buf_host;
-    ids_buf_host.reserve(ids_src1_host.size() + ids_dst_host.size() + expert_bounds_host.size());
-    ids_buf_host.insert(ids_buf_host.end(), ids_src1_host.begin(), ids_src1_host.end());
-    ids_buf_host.insert(ids_buf_host.end(), ids_dst_host.begin(), ids_dst_host.end());
-    ids_buf_host.insert(ids_buf_host.end(), expert_bounds_host.begin(), expert_bounds_host.end());
-    ids_buf_dev.alloc(ids_buf_host.size() + get_mmq_x_max_host(cc)); // Expert bounds are padded on device.
-    CUDA_CHECK(cudaMemcpyAsync(ids_buf_dev.ptr, ids_buf_host.data(), ids_buf_host.size()*sizeof(int32_t), cudaMemcpyHostToDevice, stream));
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-
-    const int32_t * ids_src1_dev      = ids_buf_dev.ptr;
-    const int32_t * ids_dst_dev       = ids_src1_dev + ids_src1_host.size();
-    const int32_t * expert_bounds_dev = ids_dst_dev + ids_dst_host.size();
 
     const size_t nbytes_src1_q8_1 = ne12*n_expert_used*ne10_padded * sizeof(block_q8_1)/QK8_1 +
         get_mmq_x_max_host(cc)*sizeof(block_q8_1_mmq);
@@ -207,22 +190,29 @@ void ggml_cuda_mul_mat_q(
     {
         const int64_t s11 = src1->nb[1] / ts_src1;
         const int64_t s12 = src1->nb[2] / ts_src1;
-        const int64_t s13 = src1->nb[2] / ts_src1;
-        quantize_mmq_q8_1_cuda(src1_d, ids_src1_dev, src1_q8_1.get(), src0->type,
-            ne10, s11, s12, s13, ne10_padded, ne11_flat, ne12_flat, ne13_flat, stream);
+        const int64_t s13 = src1->nb[3] / ts_src1;
+
+        if (use_native_mxfp4) {
+            quantize_mmq_mxfp4_cuda(src1_d, ids_src1.get(), src1_q8_1.get(), src0->type, ne10, s11, s12, s13,
+                                    ne10_padded, ne11_flat, ne12_flat, ne13_flat, stream);
+        } else {
+            quantize_mmq_q8_1_cuda(src1_d, ids_src1.get(), src1_q8_1.get(), src0->type, ne10, s11, s12, s13,
+                                   ne10_padded, ne11_flat, ne12_flat, ne13_flat, stream);
+        }
         CUDA_CHECK(cudaGetLastError());
     }
 
-    const int64_t s12 = ne11*ne10_padded * sizeof(block_q8_1)/(QK8_1*sizeof(int));
+    const int64_t s12 = use_native_mxfp4 ? ne11 * ne10_padded * sizeof(block_fp4_mmq) / (8 * QK_MXFP4 * sizeof(int)) :
+                                           ne11 * ne10_padded * sizeof(block_q8_1) / (QK8_1 * sizeof(int));
     const int64_t s13 = ne12*s12;
 
     // Note that ne02 is used instead of ne12 because the number of y channels determines the z dimension of the CUDA grid.
     const mmq_args args = {
-        src0_d, src0->type, (const int *) src1_q8_1.ptr, ids_dst_dev, expert_bounds_dev, dst_d,
+        src0_d, src0->type, (const int *) src1_q8_1.get(), ids_dst.get(), expert_bounds.get(), dst_d,
         ne00, ne01, ne_get_rows, s01, ne_get_rows, s1,
         ne02, ne02, s02, s12, s2,
         ne03, ne13, s03, s13, s3,
-        use_stream_k};
+        use_stream_k, ne12};
 
     ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
 }
@@ -262,17 +252,14 @@ void ggml_cuda_op_mul_mat_q(
         ne00, row_diff, src1_ncols, stride01, ne11, nrows_dst,
         1, 1, 0, 0, 0,
         1, 1, 0, 0, 0,
-        use_stream_k};
+        use_stream_k, src1_ncols};
 
     ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
 
-    GGML_UNUSED(src1);
-    GGML_UNUSED(dst);
-    GGML_UNUSED(src1_ddf_i);
-    GGML_UNUSED(src1_padded_row_size);
+    GGML_UNUSED_VARS(src1, dst, src1_ddf_i, src1_padded_row_size);
 }
 
-bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11) {
+bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t n_experts) {
 #ifdef GGML_CUDA_FORCE_CUBLAS
     return false;
 #endif // GGML_CUDA_FORCE_CUBLAS
@@ -310,7 +297,7 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11) {
         return false;
     }
 
-    if (new_mma_available(cc)) {
+    if (turing_mma_available(cc)) {
         return true;
     }
 
@@ -333,7 +320,10 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11) {
         if (GGML_CUDA_CC_IS_CDNA3(cc)) {
             return true;
         }
-        if (ne11 <= 128 || type == GGML_TYPE_Q4_0 || type == GGML_TYPE_Q4_1 || type == GGML_TYPE_Q5_0 || type == GGML_TYPE_Q5_1) {
+        if (n_experts > 64 || ne11 <= 128) {
+            return true;
+        }
+        if (type == GGML_TYPE_Q4_0 || type == GGML_TYPE_Q4_1 || type == GGML_TYPE_Q5_0 || type == GGML_TYPE_Q5_1) {
             return true;
         }
         if (ne11 <= 256 && (type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q5_K)) {
@@ -342,5 +332,35 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11) {
         return false;
     }
 
-    return (!GGML_CUDA_CC_IS_RDNA4(cc) && !GGML_CUDA_CC_IS_RDNA3(cc) && !GGML_CUDA_CC_IS_CDNA(cc)) || ne11 < MMQ_DP4A_MAX_BATCH_SIZE;
+    if (amd_wmma_available(cc)) {
+        if (GGML_CUDA_CC_IS_RDNA3(cc)) {
+            // High expert counts are almost always better on MMQ due to
+            //     the synchronization overhead in the cuBLAS/hipBLAS path:
+            // https://github.com/ggml-org/llama.cpp/pull/18202
+            if (n_experts >= 64) {
+                return true;
+            }
+
+            // For some quantization types MMQ can have lower peak TOPS than hipBLAS
+            //     so it's only faster for sufficiently small batch sizes:
+            switch (type) {
+                case GGML_TYPE_Q2_K:
+                    return ne11 <= 128;
+                case GGML_TYPE_Q6_K:
+                    return ne11 <= (GGML_CUDA_CC_IS_RDNA3_0(cc) ? 128 : 256);
+                case GGML_TYPE_IQ2_XS:
+                case GGML_TYPE_IQ2_S:
+                    return GGML_CUDA_CC_IS_RDNA3_5(cc) || ne11 <= 128;
+                default:
+                    return true;
+            }
+        }
+
+        // For RDNA4 MMQ is consistently faster than dequantization + hipBLAS:
+        // https://github.com/ggml-org/llama.cpp/pull/18537#issuecomment-3706422301
+        return true;
+    }
+
+    return (!GGML_CUDA_CC_IS_CDNA(cc)) || ne11 < MMQ_DP4A_MAX_BATCH_SIZE;
+
 }

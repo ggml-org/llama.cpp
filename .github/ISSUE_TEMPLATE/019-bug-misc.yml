@@ -85,7 +85,19 @@ body:
       label: Relevant log output
       description: >
           If applicable, please copy and paste any relevant log output, including any generated text.
-          This will be automatically formatted into code, so no need for backticks.
-      render: shell
+          If you are encountering problems specifically with the `llama_params_fit` module, always upload `--verbose` logs as well.
+          For very long logs (thousands of lines), please upload them as files instead.
+          On Linux you can redirect console output into a file by appending ` > llama.log 2>&1` to your command.
+      value: |
+        <details>
+        <summary>Logs</summary>
+        <!-- Copy-pasted short logs go into the "console" area here -->
+
+        ```console
+
+        ```
+        </details>
+
+        <!-- Long logs that you upload as files go here, outside the "console" area -->
     validations:
       required: false

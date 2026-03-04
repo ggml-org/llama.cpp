@@ -28,9 +28,8 @@ LLAMA_BENCH_DB_FIELDS = [
     "model_type",   "model_size",   "model_n_params", "n_batch",    "n_ubatch",     "n_threads",
     "cpu_mask",     "cpu_strict",   "poll",           "type_k",     "type_v",       "n_gpu_layers",
     "split_mode",   "main_gpu",     "no_kv_offload",  "flash_attn", "tensor_split", "tensor_buft_overrides",
-    "defrag_thold",
     "use_mmap",     "embeddings",   "no_op_offload",  "n_prompt",   "n_gen",        "n_depth",
-    "test_time",    "avg_ns",       "stddev_ns",      "avg_ts",     "stddev_ts",
+    "test_time",    "avg_ns",       "stddev_ns",      "avg_ts",     "stddev_ts",    "n_cpu_moe"
 ]
 
 LLAMA_BENCH_DB_TYPES = [
@@ -38,9 +37,8 @@ LLAMA_BENCH_DB_TYPES = [
     "TEXT",    "INTEGER", "INTEGER", "INTEGER", "INTEGER", "INTEGER",
     "TEXT",    "INTEGER", "INTEGER", "TEXT",    "TEXT",    "INTEGER",
     "TEXT",    "INTEGER", "INTEGER", "INTEGER", "TEXT",    "TEXT",
-    "REAL",
     "INTEGER", "INTEGER", "INTEGER", "INTEGER", "INTEGER", "INTEGER",
-    "TEXT",    "INTEGER", "INTEGER", "REAL",    "REAL",
+    "TEXT",    "INTEGER", "INTEGER", "REAL",    "REAL",    "INTEGER",
 ]
 
 # All test-backend-ops SQL fields
@@ -61,7 +59,7 @@ assert len(TEST_BACKEND_OPS_DB_FIELDS) == len(TEST_BACKEND_OPS_DB_TYPES)
 
 # Properties by which to differentiate results per commit for llama-bench:
 LLAMA_BENCH_KEY_PROPERTIES = [
-    "cpu_info", "gpu_info", "backends", "n_gpu_layers", "tensor_buft_overrides", "model_filename", "model_type",
+    "cpu_info", "gpu_info", "backends", "n_gpu_layers", "n_cpu_moe", "tensor_buft_overrides", "model_filename", "model_type",
     "n_batch", "n_ubatch", "embeddings", "cpu_mask", "cpu_strict", "poll", "n_threads", "type_k", "type_v",
     "use_mmap", "no_kv_offload", "split_mode", "main_gpu", "tensor_split", "flash_attn", "n_prompt", "n_gen", "n_depth"
 ]
@@ -98,7 +96,7 @@ DEFAULT_HIDE_LLAMA_BENCH = ["model_filename"]  # Always hide these properties by
 DEFAULT_SHOW_TEST_BACKEND_OPS = ["backend_name", "op_name"]  # Always show these properties by default.
 DEFAULT_HIDE_TEST_BACKEND_OPS = ["error_message"]  # Always hide these properties by default.
 
-GPU_NAME_STRIP = ["NVIDIA GeForce ", "Tesla ", "AMD Radeon "]  # Strip prefixes for smaller tables.
+GPU_NAME_STRIP = ["NVIDIA GeForce ", "Tesla ", "AMD Radeon ", "AMD Instinct "]  # Strip prefixes for smaller tables.
 MODEL_SUFFIX_REPLACE = {" - Small": "_S", " - Medium": "_M", " - Large": "_L"}
 
 DESCRIPTION = """Creates tables from llama-bench or test-backend-ops data written to multiple JSON/CSV files, a single JSONL file or SQLite database. Example usage (Linux):
@@ -315,28 +313,29 @@ class LlamaBenchData:
 
 
 class LlamaBenchDataSQLite3(LlamaBenchData):
-    connection: sqlite3.Connection
+    connection: Optional[sqlite3.Connection] = None
     cursor: sqlite3.Cursor
     table_name: str
 
     def __init__(self, tool: str = "llama-bench"):
         super().__init__(tool)
-        self.connection = sqlite3.connect(":memory:")
-        self.cursor = self.connection.cursor()
+        if self.connection is None:
+            self.connection = sqlite3.connect(":memory:")
+            self.cursor = self.connection.cursor()
 
-        # Set table name and schema based on tool
-        if self.tool == "llama-bench":
-            self.table_name = "llama_bench"
-            db_fields = LLAMA_BENCH_DB_FIELDS
-            db_types = LLAMA_BENCH_DB_TYPES
-        elif self.tool == "test-backend-ops":
-            self.table_name = "test_backend_ops"
-            db_fields = TEST_BACKEND_OPS_DB_FIELDS
-            db_types = TEST_BACKEND_OPS_DB_TYPES
-        else:
-            assert False
+            # Set table name and schema based on tool
+            if self.tool == "llama-bench":
+                self.table_name = "llama_bench"
+                db_fields = LLAMA_BENCH_DB_FIELDS
+                db_types = LLAMA_BENCH_DB_TYPES
+            elif self.tool == "test-backend-ops":
+                self.table_name = "test_backend_ops"
+                db_fields = TEST_BACKEND_OPS_DB_FIELDS
+                db_types = TEST_BACKEND_OPS_DB_TYPES
+            else:
+                assert False
 
-        self.cursor.execute(f"CREATE TABLE {self.table_name}({', '.join(' '.join(x) for x in zip(db_fields, db_types))});")
+            self.cursor.execute(f"CREATE TABLE {self.table_name}({', '.join(' '.join(x) for x in zip(db_fields, db_types))});")
 
     def _builds_init(self):
         if self.connection:
@@ -397,9 +396,6 @@ class LlamaBenchDataSQLite3(LlamaBenchData):
 
 class LlamaBenchDataSQLite3File(LlamaBenchDataSQLite3):
     def __init__(self, data_file: str, tool: Any):
-        super().__init__(tool)
-
-        self.connection.close()
         self.connection = sqlite3.connect(data_file)
         self.cursor = self.connection.cursor()
 
@@ -411,27 +407,28 @@ class LlamaBenchDataSQLite3File(LlamaBenchDataSQLite3):
         if tool is None:
             if "llama_bench" in table_names:
                 self.table_name = "llama_bench"
-                self.tool = "llama-bench"
+                tool = "llama-bench"
             elif "test_backend_ops" in table_names:
                 self.table_name = "test_backend_ops"
-                self.tool = "test-backend-ops"
+                tool = "test-backend-ops"
             else:
                 raise RuntimeError(f"No suitable table found in database. Available tables: {table_names}")
         elif tool == "llama-bench":
             if "llama_bench" in table_names:
                 self.table_name = "llama_bench"
-                self.tool = "llama-bench"
+                tool = "llama-bench"
             else:
                 raise RuntimeError(f"Table 'test' not found for tool 'llama-bench'. Available tables: {table_names}")
         elif tool == "test-backend-ops":
             if "test_backend_ops" in table_names:
                 self.table_name = "test_backend_ops"
-                self.tool = "test-backend-ops"
+                tool = "test-backend-ops"
             else:
                 raise RuntimeError(f"Table 'test_backend_ops' not found for tool 'test-backend-ops'. Available tables: {table_names}")
         else:
             raise RuntimeError(f"Unknown tool: {tool}")
 
+        super().__init__(tool)
         self._builds_init()
 
     @staticmethod
@@ -652,6 +649,8 @@ if not bench_data:
 
 if not bench_data.builds:
     raise RuntimeError(f"{input_file} does not contain any builds.")
+
+tool = bench_data.tool  # May have chosen a default if tool was None.
 
 
 hexsha8_baseline = name_baseline = None

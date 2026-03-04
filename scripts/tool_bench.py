@@ -7,7 +7,7 @@
 
     Simple usage example:
 
-        cmake -B build -DLLAMA_CURL=1 && cmake --build build --config Release -j -t llama-server
+        cmake -B build && cmake --build build --config Release -j -t llama-server
 
         export LLAMA_SERVER_BIN_PATH=$PWD/build/bin/llama-server
         export LLAMA_CACHE=${LLAMA_CACHE:-$HOME/Library/Caches/llama.cpp}
@@ -53,7 +53,7 @@ import typer
 sys.path.insert(0, Path(__file__).parent.parent.as_posix())
 if True:
     from tools.server.tests.utils import ServerProcess
-    from tools.server.tests.unit.test_tool_call import TIMEOUT_SERVER_START, do_test_calc_result, do_test_hello_world, do_test_weather
+    from tools.server.tests.unit.test_tool_call import do_test_calc_result, do_test_hello_world, do_test_weather
 
 
 @contextmanager
@@ -323,7 +323,7 @@ def run(
                     server.jinja = True
                     server.ctk = ctk
                     server.ctv = ctv
-                    server.fa = fa
+                    server.fa = "on" if fa else "off"
                     server.n_predict = n_predict
                     server.model_hf_repo = hf
                     server.model_hf_file = None
@@ -335,7 +335,7 @@ def run(
                     # server.debug = True
 
                     with scoped_server(server):
-                        server.start(timeout_seconds=TIMEOUT_SERVER_START)
+                        server.start(timeout_seconds=15 * 60)
                         for ignore_chat_grammar in [False]:
                             run(
                                 server,

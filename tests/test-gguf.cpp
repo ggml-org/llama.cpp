@@ -1,9 +1,11 @@
 #include "ggml.h"
 #include "ggml-backend.h"
 #include "../ggml/src/ggml-impl.h"
+#include "gguf.h"
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <random>
@@ -34,6 +36,7 @@ enum handcrafted_file_type {
     HANDCRAFTED_TENSORS_BAD_N_DIMS         =  20 + offset_has_tensors,
     HANDCRAFTED_TENSORS_BAD_SHAPE          =  30 + offset_has_tensors,
     HANDCRAFTED_TENSORS_NE_TOO_BIG         =  40 + offset_has_tensors,
+    HANDCRAFTED_TENSORS_NBYTES_TOO_BIG     =  45 + offset_has_tensors,
     HANDCRAFTED_TENSORS_BAD_TYPE           =  50 + offset_has_tensors,
     HANDCRAFTED_TENSORS_BAD_OFFSET         =  60 + offset_has_tensors,
     HANDCRAFTED_TENSORS_DUPLICATE_NAME     =  70 + offset_has_tensors,
@@ -45,6 +48,7 @@ enum handcrafted_file_type {
     HANDCRAFTED_DATA_NOT_ENOUGH_DATA       =  10 + offset_has_data,
     HANDCRAFTED_DATA_BAD_ALIGN             =  15 + offset_has_data,
     HANDCRAFTED_DATA_INCONSISTENT_ALIGN    =  20 + offset_has_data,
+    HANDCRAFTED_DATA_MEM_SIZE_OVERFLOW     =  30 + offset_has_data,
     HANDCRAFTED_DATA_SUCCESS               = 800 + offset_has_data,
     HANDCRAFTED_DATA_CUSTOM_ALIGN          = 810 + offset_has_data,
 };
@@ -69,6 +73,7 @@ static std::string handcrafted_file_type_name(const enum handcrafted_file_type h
         case HANDCRAFTED_TENSORS_BAD_N_DIMS:         return "TENSORS_BAD_N_DIMS";
         case HANDCRAFTED_TENSORS_BAD_SHAPE:          return "TENSORS_BAD_SHAPE";
         case HANDCRAFTED_TENSORS_NE_TOO_BIG:         return "TENSORS_NE_TOO_BIG";
+        case HANDCRAFTED_TENSORS_NBYTES_TOO_BIG:     return "TENSORS_NBYTES_TOO_BIG";
         case HANDCRAFTED_TENSORS_BAD_TYPE:           return "TENSORS_BAD_TYPE";
         case HANDCRAFTED_TENSORS_BAD_OFFSET:         return "TENSORS_BAD_OFFSET";
         case HANDCRAFTED_TENSORS_DUPLICATE_NAME:     return "TENSORS_DUPLICATE_NAME";
@@ -80,6 +85,7 @@ static std::string handcrafted_file_type_name(const enum handcrafted_file_type h
         case HANDCRAFTED_DATA_NOT_ENOUGH_DATA:       return "DATA_NOT_ENOUGH_DATA";
         case HANDCRAFTED_DATA_BAD_ALIGN:             return "DATA_BAD_ALIGN";
         case HANDCRAFTED_DATA_INCONSISTENT_ALIGN:    return "DATA_INCONSISTENT_ALIGN";
+        case HANDCRAFTED_DATA_MEM_SIZE_OVERFLOW:     return "DATA_MEM_SIZE_OVERFLOW";
         case HANDCRAFTED_DATA_SUCCESS:               return "DATA_SUCCESS";
         case HANDCRAFTED_DATA_CUSTOM_ALIGN:          return "DATA_CUSTOM_ALIGN";
     }
@@ -190,6 +196,13 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
     std::vector<tensor_config_t> tensor_configs;
     if (hft >= offset_has_tensors) {
         tensor_configs = get_tensor_configs(rng);
+    }
+
+    if (hft == HANDCRAFTED_DATA_MEM_SIZE_OVERFLOW) {
+        tensor_configs.resize(2);
+
+        tensor_configs[0] = { GGML_TYPE_I8, { 0x7FFFFFFFFFFFFFC0, 1, 1, 1 } };
+        tensor_configs[1] = { GGML_TYPE_I8, { 0x7FFFFFFFFFFFFFC0, 1, 1, 1 } };
     }
 
     if (hft == HANDCRAFTED_HEADER_BAD_N_TENSORS) {
@@ -326,7 +339,7 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
 
     uint64_t offset = 0;
     for (int i = 0; i < int(tensor_configs.size()); ++i) {
-        const ggml_type                          type  = tensor_configs[i].first;
+        const ggml_type                          type  = hft == HANDCRAFTED_TENSORS_NBYTES_TOO_BIG ? GGML_TYPE_I64 : tensor_configs[i].first;
         const std::array<int64_t, GGML_MAX_DIMS> shape = tensor_configs[i].second;
 
         std::string name = "my_tensor";
@@ -343,7 +356,7 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
         }
         helper_write(file, name.data(), name.length());
 
-        uint32_t n_dims = hft == HANDCRAFTED_TENSORS_NE_TOO_BIG ? 2 : 1;
+        uint32_t n_dims = (hft == HANDCRAFTED_TENSORS_NE_TOO_BIG || hft == HANDCRAFTED_TENSORS_NBYTES_TOO_BIG) ? 2 : 1;
         for (int i = GGML_MAX_DIMS-1; i >= 1; --i) {
             if (shape[i] != 1) {
                 n_dims = i + 1;
@@ -358,13 +371,19 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
         }
 
         if (hft == HANDCRAFTED_TENSORS_BAD_SHAPE) {
+            const int64_t bad_dim = -1;
             for (uint32_t j = 0; j < n_dims; ++j) {
-                const int64_t bad_dim = -1;
                 helper_write(file, bad_dim);
             }
         } else if (hft == HANDCRAFTED_TENSORS_NE_TOO_BIG){
+            const int64_t big_dim = 4*int64_t(INT32_MAX);
             for (uint32_t j = 0; j < n_dims; ++j) {
-                const int64_t big_dim = 4*int64_t(INT32_MAX);
+                helper_write(file, big_dim);
+            }
+        } else if (hft == HANDCRAFTED_TENSORS_NBYTES_TOO_BIG){
+            const size_t  big_ne  = SIZE_MAX/ggml_type_size(type);
+            const int64_t big_dim = GGML_PAD(int64_t(1.01f*std::pow(big_ne, 1.0f/n_dims)) + 1, ggml_blck_size(type));
+            for (uint32_t j = 0; j < n_dims; ++j) {
                 helper_write(file, big_dim);
             }
         } else {
@@ -387,7 +406,8 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
         for (uint32_t i = 1; i < n_dims; ++i) {
             ne *= shape[i];
         }
-        offset += GGML_PAD(ggml_row_size(type, ne), alignment);
+
+        offset += GGML_PAD(ggml_row_size(type, ne), (uint64_t) alignment);
     }
 
     while (ftell(file) % alignment != 0) {
@@ -400,6 +420,9 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
         uint64_t nbytes = offset;
         if (hft == HANDCRAFTED_DATA_NOT_ENOUGH_DATA) {
             nbytes -= 1;
+        }
+        if (hft == HANDCRAFTED_DATA_MEM_SIZE_OVERFLOW) {
+            nbytes = 32;
         }
         for (uint64_t i = 0; i < nbytes; ++i) {
             const uint8_t random_byte = i % 256;
@@ -682,6 +705,7 @@ static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
         HANDCRAFTED_TENSORS_BAD_N_DIMS,
         HANDCRAFTED_TENSORS_BAD_SHAPE,
         HANDCRAFTED_TENSORS_NE_TOO_BIG,
+        HANDCRAFTED_TENSORS_NBYTES_TOO_BIG,
         HANDCRAFTED_TENSORS_BAD_TYPE,
         HANDCRAFTED_TENSORS_BAD_OFFSET,
         HANDCRAFTED_TENSORS_DUPLICATE_NAME,
@@ -693,6 +717,7 @@ static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
         HANDCRAFTED_DATA_NOT_ENOUGH_DATA,
         HANDCRAFTED_DATA_BAD_ALIGN,
         HANDCRAFTED_DATA_INCONSISTENT_ALIGN,
+        HANDCRAFTED_DATA_MEM_SIZE_OVERFLOW,
         HANDCRAFTED_DATA_SUCCESS,
         HANDCRAFTED_DATA_CUSTOM_ALIGN,
     };

@@ -79,19 +79,19 @@ run_conversion_and_inference_lora() {
 
     # Run inference
     echo -e "\n\n---------------------------\n\n"
-    echo "Running llama-cli without lora for $model_name with hidden_size $hidden_size..."
-    OUTPUT_BASE=$(./llama-cli -no-cnv -m $MODELS_REPO/$model_name/hidden_size=$hidden_size/base/Base-F32.gguf \
+    echo "Running llama-completion without lora for $model_name with hidden_size $hidden_size..."
+    OUTPUT_BASE=$(./llama-completion -no-cnv -m $MODELS_REPO/$model_name/hidden_size=$hidden_size/base/Base-F32.gguf \
         -p "$EXPECTED_BASE_FIRST_WORD" -n 50 --seed 42 --temp 0)
 
     echo -e "\n\n---------------------------\n\n"
-    echo "Running llama-cli with hot lora for $model_name with hidden_size $hidden_size..."
-    OUTPUT_LORA_HOT=$(./llama-cli -no-cnv -m $MODELS_REPO/$model_name/hidden_size=$hidden_size/base/Base-F32.gguf \
+    echo "Running llama-completion with hot lora for $model_name with hidden_size $hidden_size..."
+    OUTPUT_LORA_HOT=$(./llama-completion -no-cnv -m $MODELS_REPO/$model_name/hidden_size=$hidden_size/base/Base-F32.gguf \
         --lora $MODELS_REPO/$model_name/hidden_size=$hidden_size/lora/Lora-F32-LoRA.gguf \
         -p "$EXPECTED_LORA_FIRST_WORD" -n 50 --seed 42 --temp 0)
 
     echo -e "\n\n---------------------------\n\n"
-    echo "Running llama-cli with merged lora for $model_name with hidden_size $hidden_size..."
-    OUTPUT_LORA_MERGED=$(./llama-cli -no-cnv -m $MODELS_REPO/$model_name/hidden_size=$hidden_size/base/Base-F32-lora-merged.gguf \
+    echo "Running llama-completion with merged lora for $model_name with hidden_size $hidden_size..."
+    OUTPUT_LORA_MERGED=$(./llama-completion -no-cnv -m $MODELS_REPO/$model_name/hidden_size=$hidden_size/base/Base-F32-lora-merged.gguf \
         -p "$EXPECTED_LORA_FIRST_WORD" -n 50 --seed 42 --temp 0)
 
     # Remove any initial white space

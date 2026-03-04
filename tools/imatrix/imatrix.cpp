@@ -912,7 +912,9 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params, c
 
     const bool add_bos = llama_vocab_get_add_bos(vocab);
 
-    GGML_ASSERT(!llama_vocab_get_add_eos(vocab));
+    if (llama_pooling_type(ctx) != LLAMA_POOLING_TYPE_LAST) {
+        GGML_ASSERT(!llama_vocab_get_add_eos(vocab));
+    }
 
     auto tim1 = std::chrono::high_resolution_clock::now();
     LOG_INF("%s: tokenizing the input ..\n", __func__);
@@ -1265,10 +1267,10 @@ int main(int argc, char ** argv) {
     params.warmup = false;
 
     // init
-    common_init_result llama_init = common_init_from_params(params);
+    auto llama_init = common_init_from_params(params);
 
-    llama_model * model = llama_init.model.get();
-    llama_context * ctx = llama_init.context.get();
+    auto * model = llama_init->model();
+    auto * ctx   = llama_init->context();
 
     if (model == nullptr || ctx == nullptr) {
         LOG_ERR("%s : failed to init\n", __func__);

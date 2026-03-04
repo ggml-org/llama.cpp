@@ -28,13 +28,13 @@ int main(int argc, char ** argv){
     llama_numa_init(params.numa);
 
     // load the model
-    common_init_result llama_init = common_init_from_params(params);
+    auto llama_init = common_init_from_params(params);
 
-    llama_context_ptr & ctx = llama_init.context;
+    llama_context * ctx = llama_init->context();
 
     // tokenize the prompt
     std::vector<llama_token> inp;
-    inp = common_tokenize(ctx.get(), params.prompt, true, true);
+    inp = common_tokenize(ctx, params.prompt, true, true);
 
     common_ngram_cache ngram_cache_context;
     common_ngram_cache ngram_cache_dynamic;
@@ -46,18 +46,18 @@ int main(int argc, char ** argv){
     {
         const int64_t t_start_draft_us = ggml_time_us();
 
-        if (!params.lookup_cache_static.empty()) {
+        if (!params.speculative.lookup_cache_static.empty()) {
             try {
-                ngram_cache_static = common_ngram_cache_load(params.lookup_cache_static);
+                ngram_cache_static = common_ngram_cache_load(params.speculative.lookup_cache_static);
             } catch (std::ifstream::failure const &) {
-                LOG_ERR("failed to open static lookup cache: %s", params.lookup_cache_static.c_str());
+                LOG_ERR("failed to open static lookup cache: %s", params.speculative.lookup_cache_static.c_str());
                 exit(1);
             }
         }
 
-        if (!params.lookup_cache_dynamic.empty()) {
+        if (!params.speculative.lookup_cache_dynamic.empty()) {
             try {
-                ngram_cache_dynamic = common_ngram_cache_load(params.lookup_cache_dynamic);
+                ngram_cache_dynamic = common_ngram_cache_load(params.speculative.lookup_cache_dynamic);
             } catch (std::ifstream::failure const &) {} // if the file does not exist it will simply be created at the end of the program
         }
 
@@ -65,7 +65,7 @@ int main(int argc, char ** argv){
     }
 
     const int n_input = inp.size();
-    const int n_ctx = llama_n_ctx(ctx.get());
+    const int n_ctx = llama_n_ctx(ctx);
 
     int n_drafted = 0;
     int n_accept  = 0;

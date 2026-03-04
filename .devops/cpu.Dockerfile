@@ -4,19 +4,15 @@ FROM ubuntu:$UBUNTU_VERSION AS build
 
 ARG TARGETARCH
 
-ARG GGML_CPU_ARM_ARCH=armv8-a
-
 RUN apt-get update && \
-    apt-get install -y build-essential git cmake libcurl4-openssl-dev
+    apt-get install -y build-essential git cmake libssl-dev
 
 WORKDIR /app
 
 COPY . .
 
-RUN if [ "$TARGETARCH" = "amd64" ]; then \
+RUN if [ "$TARGETARCH" = "amd64" ] || [ "$TARGETARCH" = "arm64" ]; then \
         cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DLLAMA_BUILD_TESTS=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON; \
-    elif [ "$TARGETARCH" = "arm64" ]; then \
-        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DLLAMA_BUILD_TESTS=OFF -DGGML_CPU_ARM_ARCH=${GGML_CPU_ARM_ARCH}; \
     else \
         echo "Unsupported architecture"; \
         exit 1; \
@@ -24,7 +20,7 @@ RUN if [ "$TARGETARCH" = "amd64" ]; then \
     cmake --build build -j $(nproc)
 
 RUN mkdir -p /app/lib && \
-    find build -name "*.so" -exec cp {} /app/lib \;
+    find build -name "*.so*" -exec cp -P {} /app/lib \;
 
 RUN mkdir -p /app/full \
     && cp build/bin/* /app/full \
@@ -72,7 +68,7 @@ ENTRYPOINT ["/app/tools.sh"]
 ### Light, CLI only
 FROM base AS light
 
-COPY --from=build /app/full/llama-cli /app
+COPY --from=build /app/full/llama-cli /app/full/llama-completion /app
 
 WORKDIR /app
 

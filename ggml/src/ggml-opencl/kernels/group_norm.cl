@@ -70,3 +70,52 @@ kernel void kernel_group_norm(
         dst[j] *= scale;
     }
 }
+
+//------------------------------------------------------------------------------
+// group_norm_mul_add
+//------------------------------------------------------------------------------
+#ifdef INTEL_GPU
+REQD_SUBGROUP_SIZE_32
+#elif defined (ADRENO_GPU)
+REQD_SUBGROUP_SIZE_64
+#endif
+kernel void kernel_group_norm_mul_add(
+        global float * src0, ulong offset0,
+        global float * src1, ulong offset1,
+        global float * src2, ulong offset2,
+        global float * dst, ulong offsetd,
+        int ne,
+        int group_size,
+        float eps
+) {
+    src0 = (global float *)((global char *)src0 + offset0);
+    src1 = (global float *)((global char *)src1 + offset1);
+    src2 = (global float *)((global char *)src2 + offset2);
+    dst  = (global float *)((global char *)dst  + offsetd);
+
+    int start = get_group_id(0) * group_size;
+    int end = start + group_size;
+    if (end > ne) {
+        end = ne;
+    }
+
+    float sum = 0.0f;
+    float sum_sq = 0.0f;
+
+    for (int j = start + get_local_id(0); j < end; j += get_local_size(0)) {
+        float val = src0[j];
+        sum += val;
+        sum_sq += val*val;
+    }
+
+    sum = sub_group_reduce_add(sum);
+    sum_sq = sub_group_reduce_add(sum_sq);
+
+    const float mean = sum / group_size;
+    const float var = sum_sq / group_size - mean * mean;
+    const float scale = rsqrt(var + eps);
+
+    for (int j = start + get_local_id(0); j < end; j += get_local_size(0)) {
+        dst[j] = ((src0[j] - mean) * scale) * src1[j] + src2[j];
+    }
+}

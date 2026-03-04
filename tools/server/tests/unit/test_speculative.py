@@ -14,9 +14,10 @@ def create_server():
     server.model_draft = download_file(MODEL_DRAFT_FILE_URL)
     server.draft_min = 4
     server.draft_max = 8
+    server.fa = "off"
 
 
-@pytest.fixture(scope="module", autouse=True)
+@pytest.fixture(autouse=True)
 def fixture_create_server():
     return create_server()
 
@@ -29,6 +30,7 @@ def test_with_and_without_draft():
         "prompt": "I believe the meaning of life is",
         "temperature": 0.0,
         "top_k": 1,
+        "n_predict": 16,
     })
     assert res.status_code == 200
     content_no_draft = res.body["content"]
@@ -41,6 +43,7 @@ def test_with_and_without_draft():
         "prompt": "I believe the meaning of life is",
         "temperature": 0.0,
         "top_k": 1,
+        "n_predict": 16,
     })
     assert res.status_code == 200
     content_draft = res.body["content"]
@@ -67,6 +70,7 @@ def test_different_draft_min_draft_max():
             "prompt": "I believe the meaning of life is",
             "temperature": 0.0,
             "top_k": 1,
+            "n_predict": 16,
         })
         assert res.status_code == 200
         if last_content is not None:
@@ -76,10 +80,10 @@ def test_different_draft_min_draft_max():
 
 def test_slot_ctx_not_exceeded():
     global server
-    server.n_ctx = 64
+    server.n_ctx = 256
     server.start()
     res = server.make_request("POST", "/completion", data={
-        "prompt": "Hello " * 56,
+        "prompt": "Hello " * 248,
         "temperature": 0.0,
         "top_k": 1,
         "speculative.p_min": 0.0,
@@ -90,18 +94,19 @@ def test_slot_ctx_not_exceeded():
 
 def test_with_ctx_shift():
     global server
-    server.n_ctx = 64
+    server.n_ctx = 256
+    server.enable_ctx_shift = True
     server.start()
     res = server.make_request("POST", "/completion", data={
-        "prompt": "Hello " * 56,
+        "prompt": "Hello " * 248,
         "temperature": 0.0,
         "top_k": 1,
-        "n_predict": 64,
+        "n_predict": 256,
         "speculative.p_min": 0.0,
     })
     assert res.status_code == 200
     assert len(res.body["content"]) > 0
-    assert res.body["tokens_predicted"] == 64
+    assert res.body["tokens_predicted"] == 256
     assert res.body["truncated"] == True
 
 

@@ -18,6 +18,7 @@
 #include "concat.hpp"
 #include "conv.hpp"
 #include "convert.hpp"
+#include "count-equal.hpp"
 #include "cpy.hpp"
 #include "dequantize.hpp"
 #include "dmmv.hpp"
@@ -28,12 +29,17 @@
 #include "mmvq.hpp"
 #include "norm.hpp"
 #include "outprod.hpp"
+#include "pad.hpp"
 #include "quantize.hpp"
 #include "quants.hpp"
+#include "roll.hpp"
 #include "rope.hpp"
 #include "set_rows.hpp"
+#include "ssm_conv.hpp"
 #include "softmax.hpp"
 #include "tsembd.hpp"
 #include "wkv.hpp"
+#include "pad_reflect_1d.hpp"
+
 
 #endif  // GGML_SYCL_BACKEND_HPP

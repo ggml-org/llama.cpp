@@ -290,7 +290,7 @@ static void power_iteration(
     ggml_gallocr_free(allocr);
 
     // TODO @ngxson : The output vector is randomly inverted
-    // Solution: https://github.com/ggerganov/llama.cpp/pull/8069#issuecomment-2185328171
+    // Solution: https://github.com/ggml-org/llama.cpp/pull/8069#issuecomment-2185328171
 }
 
 static void run_pca(

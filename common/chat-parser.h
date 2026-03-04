@@ -1,10 +1,11 @@
 #pragma once
 
 #include "chat.h"
+#include "chat-parser-xml-toolcall.h"
 #include "json-partial.h"
 #include "regex-partial.h"
 
-#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
 
 #include <optional>
 #include <string>
@@ -18,20 +19,20 @@ class common_chat_msg_partial_exception : public std::runtime_error {
 class common_chat_msg_parser {
     std::string input_;
     bool is_partial_;
-    common_chat_syntax syntax_;
+    common_chat_parser_params syntax_; // TODO: rename to params
     std::string healing_marker_;
 
     size_t pos_ = 0;
     common_chat_msg result_;
 
   public:
-    common_chat_msg_parser(const std::string & input, bool is_partial, const common_chat_syntax & syntax);
+    common_chat_msg_parser(const std::string & input, bool is_partial, const common_chat_parser_params & syntax);
     const std::string & input() const { return input_; }
     size_t pos() const { return pos_; }
     const std::string & healing_marker() const { return healing_marker_; }
     const bool & is_partial() const { return is_partial_; }
     const common_chat_msg & result() const { return result_; }
-    const common_chat_syntax & syntax() const { return syntax_; }
+    const common_chat_parser_params & syntax() const { return syntax_; }
 
     void move_to(size_t pos) {
         if (pos > input_.size()) {
@@ -63,6 +64,9 @@ class common_chat_msg_parser {
 
     // Adds an array of tool calls using their "name", "id" and "arguments" fields.
     bool add_tool_calls(const nlohmann::ordered_json & arr);
+
+    // Adds a tool call using the short form: { "tool_name": { "arg1": val, "arg2": val } }
+    bool add_tool_call_short_form(const nlohmann::ordered_json & tool_call);
 
     void finish();
 
@@ -115,6 +119,15 @@ class common_chat_msg_parser {
         const std::vector<std::vector<std::string>> & args_paths = {},
         const std::vector<std::vector<std::string>> & content_paths = {}
     );
+
+    /**
+     * Parse XML-Style tool call for given xml_tool_call_format. Return false for invalid syntax and get the position untouched.
+     * form.scope_start, form.tool_sep and form.scope_end can be empty.
+     */
+    bool try_consume_xml_tool_calls(const struct xml_tool_call_format & form);
+
+    // Parse content uses reasoning and XML-Style tool call
+    void consume_reasoning_with_xml_tool_calls(const struct xml_tool_call_format & form, const std::string & start_think = "<think>", const std::string & end_think = "</think>");
 
     void clear_tools();
 };

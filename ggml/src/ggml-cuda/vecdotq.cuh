@@ -28,7 +28,58 @@ static __device__ __forceinline__ int get_int_b4(const void * x, const int & i32
     return ((const int *) x)[i32]; // assume at least 4 byte alignment
 }
 
+// q4 contains 8 indices with 4 bit each.
+// This function selects those bytes from table that are at those indices and returns them as int2.
+// The first int contains the bytes with even indices in q4, the second int contains the bytes with odd indices in q4.
 static __device__ __forceinline__ int2 get_int_from_table_16(const int & q4, const int8_t * table) {
+#if defined(GGML_USE_HIP)
+    // Load the 16-byte table into four 32-bit unsigned integers.
+    const uint32_t *values = (const uint32_t *)table;
+
+    const uint32_t q_even = q4;
+    const uint32_t q_odd  = (q4 >> 4);
+
+    // Perform lookups in the lower half of the table (indices 0-7).
+    uint32_t v_even_low = __builtin_amdgcn_perm(values[1], values[0], q_even & 0x07070707);
+    uint32_t v_odd_low = __builtin_amdgcn_perm(values[1], values[0], q_odd & 0x07070707);
+
+    // Perform lookups in the upper half of the table (indices 8-15).
+    uint32_t v_even_high = __builtin_amdgcn_perm(values[3], values[2], q_even & 0x07070707);
+    uint32_t v_odd_high = __builtin_amdgcn_perm(values[3], values[2], q_odd & 0x07070707);
+
+    // Select between the low and high results based on the MSB of each index nibble.
+    uint32_t mask_even = 0x03020100 | ((q_even & 0x08080808) >> 1);
+    uint32_t res_x = __builtin_amdgcn_perm(v_even_high, v_even_low, mask_even);
+    uint32_t mask_odd = 0x03020100 | ((q_odd & 0x08080808) >> 1);
+    uint32_t res_y = __builtin_amdgcn_perm(v_odd_high, v_odd_low, mask_odd);
+
+    return make_int2(res_x, res_y);
+#elif !defined(GGML_USE_MUSA)
+    // CUDA does not have an instruction for selecting bytes with 4 bit indices.
+    // However, __byte_perm is an instruction that selects bytes with 3 bit indices that can be used instead.
+    const uint32_t * table32 = (const uint32_t *) table;
+
+    // __byte_perm selects bytes based on the lower 16 bits in its third argument.
+    // Therefore, do 2 iterations over the 32 bits in q4 with 0 and 16 shift.
+    // To handle the fourth bit, first call _byte_perm both for the low and the high 64 bit of table, using the low 3 bits.
+    // Then, call __byte_perm again to select from the low and high bytes based on the fourth bit.
+    uint32_t tmp[2];
+    const uint32_t low_high_selection_indices = (0x32103210 | ((q4 & 0x88888888) >> 1));
+#pragma unroll
+    for (uint32_t i = 0; i < 2; ++i) {
+        const uint32_t shift = 16 * i;
+
+        const uint32_t low  = __byte_perm(table32[0], table32[1], q4 >> shift);
+        const uint32_t high = __byte_perm(table32[2], table32[3], q4 >> shift);
+        tmp[i] = __byte_perm(low, high, low_high_selection_indices >> shift);
+    }
+
+    // tmp contains the bytes from tyble in the same order as the 4 bit indices in q4.
+    // However, for the result we need ints with all even/odd 4 bit indices in q4.
+    // Therefore, 2 more calls to __byte_perm to put the bytes in the correct order.
+    return make_int2(__byte_perm(tmp[0], tmp[1], 0x6420), __byte_perm(tmp[0], tmp[1], 0x7531));
+#else
+    // Generic implementation.
     const int      q0_32  = (q4 >> 0) & 0x0F0F0F0F;
     const int8_t * q0_8   = (const int8_t *) &q0_32;
     const char4    val0_8 = make_char4(
@@ -40,6 +91,16 @@ static __device__ __forceinline__ int2 get_int_from_table_16(const int & q4, con
         table[q1_8[0]], table[q1_8[1]], table[q1_8[2]], table[q1_8[3]]);
 
     return make_int2(*((const int *) &val0_8), *((const int *) &val1_8));
+#endif
+}
+
+static __device__ __forceinline__ uint32_t unpack_ksigns(const uint8_t v) {
+    // v is a 7 bit int, with the 8th sign being encodable as popcnt
+    // with xor we can "correct" the bit instead of having to mask
+    const uint32_t p = __popc(v) & 1;
+    const uint32_t s = v ^ p << 7;
+    // broadcast over uint to allow for 0x08040201 / 0x80402010 as selectors
+    return s * 0x01010101;
 }
 
 // VDR = vec dot ratio, how many contiguous integers each thread processes when the vec dot kernel is called
@@ -87,7 +148,7 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_q4_1_q8_1_imp
         sumi = ggml_cuda_dp4a(vi1, u[2*i+1], sumi);
     }
 
-#ifdef GGML_CUDA_F16
+#ifdef FAST_FP16_AVAILABLE
     const float2 tmp = __half22float2(__hmul2(dm4, ds8));
     const float d4d8 = tmp.x;
     const float m4s8 = tmp.y;
@@ -96,7 +157,7 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_q4_1_q8_1_imp
     const float2 ds8f = __half22float2(ds8);
     const float d4d8 = dm4f.x * ds8f.x;
     const float m4s8 = dm4f.y * ds8f.y;
-#endif // GGML_CUDA_F16
+#endif // FAST_FP16_AVAILABLE
 
     // scale second part of sum by QI8_1/(vdr * QR4_1) to compensate for multiple threads adding it
     return sumi * d4d8 + m4s8 / (QI8_1 / (vdr * QR4_1));
@@ -158,7 +219,7 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_q5_1_q8_1_imp
         sumi = ggml_cuda_dp4a(vi1, u[2*i+1], sumi); // SIMD dot product of quantized values
     }
 
-#ifdef GGML_CUDA_F16
+#ifdef FAST_FP16_AVAILABLE
     const float2 tmp = __half22float2(__hmul2(dm5, ds8));
     const float d5d8 = tmp.x;
     const float m5s8 = tmp.y;
@@ -167,7 +228,7 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_q5_1_q8_1_imp
     const float2 ds8f = __half22float2(ds8);
     const float d5d8 = dm5f.x * ds8f.x;
     const float m5s8 = dm5f.y * ds8f.y;
-#endif // GGML_CUDA_F16
+#endif // FAST_FP16_AVAILABLE
 
     // scale second part of sum by QI5_1 / vdr to compensate for multiple threads adding it
     return sumi*d5d8 + m5s8 / (QI5_1 / vdr);
@@ -201,7 +262,7 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_q8_1_q8_1_imp
         sumi = ggml_cuda_dp4a(v[i], u[i], sumi);
     }
 
-#ifdef GGML_CUDA_F16
+#ifdef FAST_FP16_AVAILABLE
     const float2 tmp = __half22float2(__hmul2(dm8, ds8));
     const float d8d8 = tmp.x;
     const float m8s8 = tmp.y;
@@ -210,7 +271,7 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_q8_1_q8_1_imp
     const float2 ds8f = __half22float2(ds8);
     const float d8d8 = dm8f.x * ds8f.x;
     const float m8s8 = dm8f.y * ds8f.y;
-#endif // GGML_CUDA_F16
+#endif // FAST_FP16_AVAILABLE
 
     // scale second part of sum by QI8_1/ vdr to compensate for multiple threads adding it
     return sumi*d8d8 + m8s8 / (QI8_1 / vdr);
@@ -853,22 +914,22 @@ static __device__ __forceinline__ float vec_dot_iq2_xxs_q8_1(
     int sumi = 0;
 #pragma unroll
     for (int k0 = 0; k0 < 8; k0 += 2) {
-        const int * grid_pos = (const int *) (iq2xxs_grid + aux8[k0/2]);
-        const int signs_packed = ksigns_iq2xs[(aux32 >> (7*k0/2)) & 0x7F];
+        const uint2 grid_pos = ((const uint2*)iq2xxs_grid)[aux8[k0/2]];
+        const uint32_t signs = unpack_ksigns(aux32 >> (7 * k0 / 2));
 
-        const int signs0 = __vcmpne4(((signs_packed & 0x03) << 7) | ((signs_packed & 0x0C) << 21), 0x00000000);
-        const int grid0 = __vsub4(grid_pos[0] ^ signs0, signs0);
+        const int signs0 = __vcmpne4(signs & 0x08040201, 0);
+        const int grid0 = __vsub4(grid_pos.x ^ signs0, signs0);
         const int u0 = get_int_b4(bq8_1[iqs/2].qs, k0 + 0);
         sumi = ggml_cuda_dp4a(grid0, u0, sumi);
 
-        const int signs1 = __vcmpne4(((signs_packed & 0x30) << 3) | ((signs_packed & 0xC0) << 17), 0x00000000);
-        const int grid1 = __vsub4(grid_pos[1] ^ signs1, signs1);
+        const int signs1 = __vcmpne4(signs & 0x80402010, 0);
+        const int grid1 = __vsub4(grid_pos.y ^ signs1, signs1);
         const int u1 = get_int_b4(bq8_1[iqs/2].qs, k0 + 1);
         sumi = ggml_cuda_dp4a(grid1, u1, sumi);
     }
 
-    const int ls = aux32 >> 28;
-    sumi = (ls*sumi + sumi/2)/4;
+    const int ls = aux32 >> 27 | 1; // (scale * 2 + 1)
+    sumi = sumi * ls / 8;           // (sumi * scale + sumi / 2) / 4
     const float d = __half2float(bq2->d) * __low2float(bq8_1[iqs/2].ds);
     return d * sumi;
 }
@@ -890,13 +951,15 @@ static __device__ __forceinline__ float vec_dot_iq2_xs_q8_1(
     int sumi1 = 0;
 #pragma unroll
     for (int l0 = 0; l0 < 8; l0 += 2) {
-        const uint32_t * grid_pos = (const uint32_t *)(iq2xs_grid + (q2[l0/2] & 0x000001FF));
-        const uint32_t * signs    = (const uint32_t *)(ksigns64   + (q2[l0/2] >> 9));
+        const uint2 grid_pos = ((const uint2*)iq2xs_grid)[q2[l0/2] & 0x1FF];
+        const uint32_t signs = unpack_ksigns(q2[l0/2] >> 9);
 
-        const int grid_l = __vsub4(grid_pos[0] ^ signs[0], signs[0]);
-        const int grid_h = __vsub4(grid_pos[1] ^ signs[1], signs[1]);
-
+        const int signs0 = __vcmpne4(signs & 0x08040201, 0);
+        const int grid_l = __vsub4(grid_pos.x ^ signs0, signs0);
         const int u0 = get_int_b4(bq8_1[iqs/2].qs, l0 + 0);
+
+        const int signs1 = __vcmpne4(signs & 0x80402010, 0);
+        const int grid_h = __vsub4(grid_pos.y ^ signs1, signs1);
         const int u1 = get_int_b4(bq8_1[iqs/2].qs, l0 + 1);
 
         if (l0 < 4) {
@@ -976,13 +1039,16 @@ static __device__ __forceinline__ float vec_dot_iq3_xxs_q8_1(
 #pragma unroll
     for (int l0 = 0; l0 < 8; l0 += 2) {
         const int2 grid_pos = make_int2(iq3xxs_grid[q3[l0 + 0]], iq3xxs_grid[q3[l0 + 1]]);
+        const uint32_t signs = unpack_ksigns(aux32 >> (7*l0/2));
 
-        const int * signs = (const int *)(ksigns64 + ((aux32 >> (7*l0/2)) & 0x7F));
-
-        const int grid_l = __vsub4(grid_pos.x ^ signs[0], signs[0]);
-        const int grid_h = __vsub4(grid_pos.y ^ signs[1], signs[1]);
+        const int signs0 = __vcmpne4(signs & 0x08040201, 0);
+        const int grid_l = __vsub4(grid_pos.x ^ signs0, signs0);
 
         const int u0 = get_int_b4(bq8_1[iqs/2].qs, l0 + 0);
+
+        const int signs1 = __vcmpne4(signs & 0x80402010, 0);
+        const int grid_h = __vsub4(grid_pos.y ^ signs1, signs1);
+
         const int u1 = get_int_b4(bq8_1[iqs/2].qs, l0 + 1);
 
         sumi = ggml_cuda_dp4a(grid_l, u0, sumi);

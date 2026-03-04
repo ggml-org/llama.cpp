@@ -21,11 +21,12 @@ static void timestep_embedding_f32(
     int j = item_ct1.get_local_id(2) + item_ct1.get_group(2) * item_ct1.get_local_range(2);
     float * embed_data = (float *)((char *)dst +  i*nb1);
 
-    if (dim % 2 != 0 && j == ((dim + 1) / 2)) {
-        embed_data[dim] = 0.f;
+    int half = dim / 2;
+
+    if (dim % 2 != 0 && j == half) {
+        embed_data[2 * half] = 0.f;
     }
 
-    int half = dim / 2;
     if (j >= half) {
         return;
     }
@@ -45,9 +46,14 @@ static void timestep_embedding_f32_sycl(
     int num_blocks = (half_ceil + SYCL_TIMESTEP_EMBEDDING_BLOCK_SIZE - 1) / SYCL_TIMESTEP_EMBEDDING_BLOCK_SIZE;
     sycl::range<3> block_dims(1, 1, SYCL_TIMESTEP_EMBEDDING_BLOCK_SIZE);
     sycl::range<3> gridDim(1, ne00, num_blocks);
-    sycl_parallel_for(stream, sycl::nd_range<3>(gridDim * block_dims, block_dims), [=](sycl::nd_item<3> item_ct1) {
-        timestep_embedding_f32(x, dst, nb1, dim, max_period, item_ct1);
-    });
+    stream->parallel_for(
+        sycl::nd_range<3>(
+            gridDim * block_dims, block_dims),
+        [=](sycl::nd_item<3> item_ct1) {
+            timestep_embedding_f32(
+                x, dst, nb1, dim, max_period, item_ct1
+            );
+        });
 }
 
 void ggml_sycl_op_timestep_embedding(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
