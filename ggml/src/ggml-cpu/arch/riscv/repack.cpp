@@ -271,7 +271,7 @@ void ggml_gemv_q4_0_64x1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const v
 }
 
 template<int ncols_interleaved>
-void ggml_gemv_q8_0_Mx1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+static inline void ggml_gemv_q8_0_Mx1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK8_0;
     const int nb = n / qk;
     const int blocklen = 1;
@@ -334,12 +334,13 @@ void ggml_gemv_q8_0_64x1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const v
 }
 
 template<int ncols_interleaved>
-static void inline ggml_gemv_q2_K_Mx1_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+static inline void ggml_gemv_q2_K_Mx1_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     assert(n % QK_K == 0);
     assert(nr == 1);
     assert(nc % ncols_interleaved == 0);
 
     UNUSED(bs);
+    UNUSED(nr);
 
     const int num_k_blocks = n / QK_K;
 
@@ -507,7 +508,6 @@ static void inline ggml_gemv_q2_K_Mx1_q8_K(int n, float * GGML_RESTRICT s, size_
     }
 }
 
-
 void ggml_gemv_q2_K_8x1_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     ggml_gemv_q2_K_Mx1_q8_K<8>(n, s, bs, vx, vy, nr, nc);
 }
@@ -522,7 +522,7 @@ void ggml_gemv_q2_K_64x1_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
 }
 
 template<int ncols_interleaved>
-void ggml_gemv_q4_K_Mx1_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+static inline void ggml_gemv_q4_K_Mx1_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK_K;
     const int nb = n / qk;
     const int blocklen = 1;
@@ -550,6 +550,10 @@ void ggml_gemv_q4_K_Mx1_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
         for (int l = 0; l < nb; l++) {
             vint32m2_t sumi = __riscv_vmv_v_x_i32m2(0, ncols_interleaved);
+
+            // Load `dmins`.
+            const vfloat32m2_t dmins_d = __riscv_vfmul_vf_f32m2(
+                __riscv_vfwcvt_f_f_v_f32m2(__riscv_vle16_v_f16m1((const _Float16 *)b_ptr[l].dmin, ncols_interleaved), ncols_interleaved), a_ptr[l].d, ncols_interleaved);
 
             // We process 4 sub-blocks at once.
             const int vl = ncols_interleaved * 4;
@@ -584,8 +588,6 @@ void ggml_gemv_q4_K_Mx1_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                 bsums = __riscv_vwmacc_vx_i32m2(bsums, a_ptr[l].bsums[j * 8 + 4] + a_ptr[l].bsums[j * 8 + 5], __riscv_vget_v_i16m4_i16m1(mins, 2), ncols_interleaved);
                 bsums = __riscv_vwmacc_vx_i32m2(bsums, a_ptr[l].bsums[j * 8 + 6] + a_ptr[l].bsums[j * 8 + 7], __riscv_vget_v_i16m4_i16m1(mins, 3), ncols_interleaved);
 
-                const vfloat32m2_t dmins_d = __riscv_vfmul_vf_f32m2(
-                    __riscv_vfwcvt_f_f_v_f32m2(__riscv_vle16_v_f16m1((const _Float16 *)b_ptr[l].dmin, ncols_interleaved), ncols_interleaved), a_ptr[l].d, ncols_interleaved);
                 sumf = __riscv_vfsub_vv_f32m2(sumf, __riscv_vfmul_vv_f32m2(dmins_d, __riscv_vfcvt_f_x_v_f32m2(bsums, ncols_interleaved), ncols_interleaved), ncols_interleaved);
 
                 // Accumulation for 2 sub-blocks.
@@ -668,7 +670,7 @@ void ggml_gemv_q4_K_64x1_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
 }
 
 template<int ncols_interleaved>
-void ggml_gemv_q5_K_Mx1_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+static inline void ggml_gemv_q5_K_Mx1_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK_K;
     const int nb = n / qk;
     const int blocklen = 1;
@@ -696,6 +698,10 @@ void ggml_gemv_q5_K_Mx1_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
         for (int l = 0; l < nb; l++) {
             vint32m2_t sumi = __riscv_vmv_v_x_i32m2(0, ncols_interleaved);
+
+            // Load `dmins`.
+            const vfloat32m2_t dmins_d = __riscv_vfmul_vf_f32m2(
+                __riscv_vfwcvt_f_f_v_f32m2(__riscv_vle16_v_f16m1((const _Float16 *)b_ptr[l].dmin, ncols_interleaved), ncols_interleaved), a_ptr[l].d, ncols_interleaved);
 
             // We process 4 sub-blocks at once.
             const int vl = ncols_interleaved * 4;
@@ -730,8 +736,6 @@ void ggml_gemv_q5_K_Mx1_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                 bsums = __riscv_vwmacc_vx_i32m2(bsums, a_ptr[l].bsums[j * 8 + 4] + a_ptr[l].bsums[j * 8 + 5], __riscv_vget_v_i16m4_i16m1(mins, 2), ncols_interleaved);
                 bsums = __riscv_vwmacc_vx_i32m2(bsums, a_ptr[l].bsums[j * 8 + 6] + a_ptr[l].bsums[j * 8 + 7], __riscv_vget_v_i16m4_i16m1(mins, 3), ncols_interleaved);
 
-                const vfloat32m2_t dmins_d = __riscv_vfmul_vf_f32m2(
-                    __riscv_vfwcvt_f_f_v_f32m2(__riscv_vle16_v_f16m1((const _Float16 *)b_ptr[l].dmin, ncols_interleaved), ncols_interleaved), a_ptr[l].d, ncols_interleaved);
                 sumf = __riscv_vfsub_vv_f32m2(sumf, __riscv_vfmul_vv_f32m2(dmins_d, __riscv_vfcvt_f_x_v_f32m2(bsums, ncols_interleaved), ncols_interleaved), ncols_interleaved);
 
                 // Accumulation for 2 sub-blocks.
@@ -891,6 +895,78 @@ void ggml_gemv_iq4_nl_32x1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const
 }
 void ggml_gemv_iq4_nl_64x1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     ggml_gemv_iq4_nl_Mx1_q8_0<64>(n, s, bs, vx, vy, nr, nc);
+}
+
+template<int ncols_interleaved>
+static inline void ggml_gemv_mxfp4_Mx1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    const int qk = QK8_0;
+    const int nb = n / qk;
+    const int blocklen = 1;
+
+    assert (n % qk == 0);
+    assert (nc % ncols_interleaved == 0);
+
+    UNUSED(s);
+    UNUSED(bs);
+    UNUSED(vx);
+    UNUSED(vy);
+    UNUSED(nr);
+    UNUSED(nc);
+    UNUSED(nb);
+    UNUSED(ncols_interleaved);
+    UNUSED(blocklen);
+
+    const vint8m1_t values = __riscv_vle8_v_i8m1(kvalues_mxfp4, 16);
+    const block_q8_0 * a_ptr = (const block_q8_0 *) vy;
+    for (int x = 0; x < nc / ncols_interleaved; x++) {
+        const block_mxfp4x<ncols_interleaved> * b_ptr = (const block_mxfp4x<ncols_interleaved> *) vx + (x * nb);
+
+        // 1xM Accumulator
+        vfloat32m2_t sumf = __riscv_vfmv_v_f_f32m2(0.0f, ncols_interleaved);
+
+        for (int l = 0; l < nb; l++) {
+            // 1xM integer accumulator
+            vint16m1_t sumi_0_lo_16 = __riscv_vmv_v_x_i16m1(0.0f, ncols_interleaved);
+            vint16m1_t sumi_0_hi_16 = __riscv_vmv_v_x_i16m1(0.0f, ncols_interleaved);
+
+            // Accumulation loop.
+            for (int i = 0; i < QK_MXFP4 / 2; i++) {
+                // Load `b_ptr`.
+                const vuint8m1_t b_0_packed = __riscv_vle8_v_u8m1((const uint8_t *)&b_ptr[l].qs[i * ncols_interleaved], ncols_interleaved);
+                const vint8m1_t b_0_lo = __riscv_vrgather_vv_i8m1(values, __riscv_vand_vx_u8m1(b_0_packed, 0xf, ncols_interleaved), ncols_interleaved);
+                const vint8m1_t b_0_hi = __riscv_vrgather_vv_i8m1(values, __riscv_vsrl_vx_u8m1(b_0_packed, 4, ncols_interleaved), ncols_interleaved);
+
+                sumi_0_lo_16 = __riscv_vwmacc_vx_i16m1(sumi_0_lo_16, a_ptr[l].qs[i],      __riscv_vlmul_trunc_v_i8m1_i8mf2(b_0_lo), ncols_interleaved);
+                sumi_0_hi_16 = __riscv_vwmacc_vx_i16m1(sumi_0_hi_16, a_ptr[l].qs[16 + i], __riscv_vlmul_trunc_v_i8m1_i8mf2(b_0_hi), ncols_interleaved);
+            }
+
+            const vint32m2_t sumi = __riscv_vwadd_vv_i32m2(sumi_0_lo_16, sumi_0_hi_16, ncols_interleaved);
+
+            float b_scales[ncols_interleaved];
+            for (int i = 0; i < ncols_interleaved; i++) {
+                b_scales[i] = GGML_E8M0_TO_FP32_HALF(b_ptr[l].e[i]);
+            }
+            const vfloat32m2_t b_e = __riscv_vle32_v_f32m2((const float *)&b_scales[0], ncols_interleaved);
+            const vfloat32m2_t d_0 = __riscv_vfmul_vf_f32m2(b_e, GGML_FP16_TO_FP32(a_ptr[l].d), ncols_interleaved);
+
+            sumf = __riscv_vfmacc_vv_f32m2(sumf, __riscv_vfcvt_f_x_v_f32m2(sumi, ncols_interleaved), d_0, ncols_interleaved);
+        }
+
+        __riscv_vse32_v_f32m2(s + x * ncols_interleaved, sumf, ncols_interleaved);
+    }
+}
+
+void ggml_gemv_mxfp4_8x1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    ggml_gemv_mxfp4_Mx1_q8_0<8>(n, s, bs, vx, vy, nr, nc);
+}
+void ggml_gemv_mxfp4_16x1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    ggml_gemv_mxfp4_Mx1_q8_0<16>(n, s, bs, vx, vy, nr, nc);
+}
+void ggml_gemv_mxfp4_32x1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    ggml_gemv_mxfp4_Mx1_q8_0<32>(n, s, bs, vx, vy, nr, nc);
+}
+void ggml_gemv_mxfp4_64x1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    ggml_gemv_mxfp4_Mx1_q8_0<64>(n, s, bs, vx, vy, nr, nc);
 }
 #endif
 
@@ -1122,7 +1198,7 @@ void ggml_gemm_q4_0_8x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
 #if defined __riscv_zvfh
 template<int ncols_interleaved>
-void ggml_gemm_q4_0_Mx1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+static inline void ggml_gemm_q4_0_Mx1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK8_0;
     const int nb = n / qk;
     const int blocklen = 1;
@@ -1221,7 +1297,7 @@ void ggml_gemm_q4_0_64x1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const v
 }
 
 template<int ncols_interleaved>
-void ggml_gemm_q8_0_Mx1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+static inline void ggml_gemm_q8_0_Mx1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK8_0;
     const int nb = n / qk;
     const int blocklen = 1;
@@ -1303,7 +1379,7 @@ void ggml_gemm_q8_0_64x1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const v
 }
 
 template<int ncols_interleaved>
-static void ggml_gemm_q2_K_Mx1_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+static inline void ggml_gemm_q2_K_Mx1_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     assert(n % QK_K == 0);
     const int num_k_blocks = n / QK_K;
     const int N_ROWS_TILE = 4;
@@ -1652,6 +1728,9 @@ void ggml_gemm_q4_K_Mx1_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                 vint32m2_t sumi_2 = __riscv_vmv_v_x_i32m2(0, ncols_interleaved);
                 vint32m2_t sumi_3 = __riscv_vmv_v_x_i32m2(0, ncols_interleaved);
 
+                // Load `dmins`.
+                const vfloat32m2_t dmins = __riscv_vfwcvt_f_f_v_f32m2(__riscv_vle16_v_f16m1((const _Float16 *)b_ptr[l].dmin, ncols_interleaved), ncols_interleaved);
+
                 // We process 4 sub-blocks at once.
                 const int vl = ncols_interleaved * 4;
                 for (int j = 0; j < QK_K / 128; j++) {
@@ -1733,14 +1812,10 @@ void ggml_gemm_q4_K_Mx1_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                                 a_ptr[l].bsums[j * 32 + 24 + 3] + a_ptr[l].bsums[j * 32 + 24 + 7],
                                 __riscv_vget_v_i16m4_i16m1(mins, 3), ncols_interleaved);
 
-                    const vfloat32m2_t dmins_d_0 = __riscv_vfmul_vf_f32m2(
-                            __riscv_vfwcvt_f_f_v_f32m2(__riscv_vle16_v_f16m1((const _Float16 *)b_ptr[l].dmin, ncols_interleaved), ncols_interleaved), a_ptr[l].d[0], ncols_interleaved);
-                    const vfloat32m2_t dmins_d_1 = __riscv_vfmul_vf_f32m2(
-                        __riscv_vfwcvt_f_f_v_f32m2(__riscv_vle16_v_f16m1((const _Float16 *)b_ptr[l].dmin, ncols_interleaved), ncols_interleaved), a_ptr[l].d[1], ncols_interleaved);
-                    const vfloat32m2_t dmins_d_2 = __riscv_vfmul_vf_f32m2(
-                        __riscv_vfwcvt_f_f_v_f32m2(__riscv_vle16_v_f16m1((const _Float16 *)b_ptr[l].dmin, ncols_interleaved), ncols_interleaved), a_ptr[l].d[2], ncols_interleaved);
-                    const vfloat32m2_t dmins_d_3 = __riscv_vfmul_vf_f32m2(
-                        __riscv_vfwcvt_f_f_v_f32m2(__riscv_vle16_v_f16m1((const _Float16 *)b_ptr[l].dmin, ncols_interleaved), ncols_interleaved), a_ptr[l].d[3], ncols_interleaved);
+                    const vfloat32m2_t dmins_d_0 = __riscv_vfmul_vf_f32m2(dmins, a_ptr[l].d[0], ncols_interleaved);
+                    const vfloat32m2_t dmins_d_1 = __riscv_vfmul_vf_f32m2(dmins, a_ptr[l].d[1], ncols_interleaved);
+                    const vfloat32m2_t dmins_d_2 = __riscv_vfmul_vf_f32m2(dmins, a_ptr[l].d[2], ncols_interleaved);
+                    const vfloat32m2_t dmins_d_3 = __riscv_vfmul_vf_f32m2(dmins, a_ptr[l].d[3], ncols_interleaved);
 
                     sumf_0 = __riscv_vfsub_vv_f32m2(sumf_0, __riscv_vfmul_vv_f32m2(dmins_d_0, __riscv_vfcvt_f_x_v_f32m2(bsums_0, ncols_interleaved), ncols_interleaved), ncols_interleaved);
                     sumf_1 = __riscv_vfsub_vv_f32m2(sumf_1, __riscv_vfmul_vv_f32m2(dmins_d_1, __riscv_vfcvt_f_x_v_f32m2(bsums_1, ncols_interleaved), ncols_interleaved), ncols_interleaved);
@@ -1900,7 +1975,7 @@ void ggml_gemm_q4_K_64x1_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
 }
 
 template<int ncols_interleaved>
-void ggml_gemm_q5_K_Mx1_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+static inline void ggml_gemm_q5_K_Mx1_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK_K;
     const int nb = n / qk;
     const int blocklen = 1;
@@ -1935,6 +2010,9 @@ void ggml_gemm_q5_K_Mx1_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                 vint32m2_t sumi_1 = __riscv_vmv_v_x_i32m2(0, ncols_interleaved);
                 vint32m2_t sumi_2 = __riscv_vmv_v_x_i32m2(0, ncols_interleaved);
                 vint32m2_t sumi_3 = __riscv_vmv_v_x_i32m2(0, ncols_interleaved);
+
+                // Load `dmins`.
+                const vfloat32m2_t dmins = __riscv_vfwcvt_f_f_v_f32m2(__riscv_vle16_v_f16m1((const _Float16 *)b_ptr[l].dmin, ncols_interleaved), ncols_interleaved);
 
                 // We process 4 sub-blocks at once.
                 const int vl = ncols_interleaved * 4;
@@ -2017,14 +2095,10 @@ void ggml_gemm_q5_K_Mx1_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                                 a_ptr[l].bsums[j * 32 + 24 + 3] + a_ptr[l].bsums[j * 32 + 24 + 7],
                                 __riscv_vget_v_i16m4_i16m1(mins, 3), ncols_interleaved);
 
-                    const vfloat32m2_t dmins_d_0 = __riscv_vfmul_vf_f32m2(
-                            __riscv_vfwcvt_f_f_v_f32m2(__riscv_vle16_v_f16m1((const _Float16 *)b_ptr[l].dmin, ncols_interleaved), ncols_interleaved), a_ptr[l].d[0], ncols_interleaved);
-                    const vfloat32m2_t dmins_d_1 = __riscv_vfmul_vf_f32m2(
-                        __riscv_vfwcvt_f_f_v_f32m2(__riscv_vle16_v_f16m1((const _Float16 *)b_ptr[l].dmin, ncols_interleaved), ncols_interleaved), a_ptr[l].d[1], ncols_interleaved);
-                    const vfloat32m2_t dmins_d_2 = __riscv_vfmul_vf_f32m2(
-                        __riscv_vfwcvt_f_f_v_f32m2(__riscv_vle16_v_f16m1((const _Float16 *)b_ptr[l].dmin, ncols_interleaved), ncols_interleaved), a_ptr[l].d[2], ncols_interleaved);
-                    const vfloat32m2_t dmins_d_3 = __riscv_vfmul_vf_f32m2(
-                        __riscv_vfwcvt_f_f_v_f32m2(__riscv_vle16_v_f16m1((const _Float16 *)b_ptr[l].dmin, ncols_interleaved), ncols_interleaved), a_ptr[l].d[3], ncols_interleaved);
+                    const vfloat32m2_t dmins_d_0 = __riscv_vfmul_vf_f32m2(dmins, a_ptr[l].d[0], ncols_interleaved);
+                    const vfloat32m2_t dmins_d_1 = __riscv_vfmul_vf_f32m2(dmins, a_ptr[l].d[1], ncols_interleaved);
+                    const vfloat32m2_t dmins_d_2 = __riscv_vfmul_vf_f32m2(dmins, a_ptr[l].d[2], ncols_interleaved);
+                    const vfloat32m2_t dmins_d_3 = __riscv_vfmul_vf_f32m2(dmins, a_ptr[l].d[3], ncols_interleaved);
 
                     sumf_0 = __riscv_vfsub_vv_f32m2(sumf_0, __riscv_vfmul_vv_f32m2(dmins_d_0, __riscv_vfcvt_f_x_v_f32m2(bsums_0, ncols_interleaved), ncols_interleaved), ncols_interleaved);
                     sumf_1 = __riscv_vfsub_vv_f32m2(sumf_1, __riscv_vfmul_vv_f32m2(dmins_d_1, __riscv_vfcvt_f_x_v_f32m2(bsums_1, ncols_interleaved), ncols_interleaved), ncols_interleaved);
@@ -2185,32 +2259,16 @@ void ggml_gemm_q5_K_Mx1_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 }
 
 void ggml_gemm_q5_K_8x1_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
-#if defined __riscv_zvfh
     ggml_gemm_q5_K_Mx1_q8_K<8>(n, s, bs, vx, vy, nr, nc);
-#else
-    ggml_gemm_q5_K_8x1_q8_K_generic(n, s, bs, vx, vy, nr, nc);
-#endif
 }
 void ggml_gemm_q5_K_16x1_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
-#if defined __riscv_zvfh
     ggml_gemm_q5_K_Mx1_q8_K<16>(n, s, bs, vx, vy, nr, nc);
-#else
-    ggml_gemm_q5_K_16x1_q8_K_generic(n, s, bs, vx, vy, nr, nc);
-#endif
 }
 void ggml_gemm_q5_K_32x1_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
-#if defined __riscv_zvfh
     ggml_gemm_q5_K_Mx1_q8_K<32>(n, s, bs, vx, vy, nr, nc);
-#else
-    ggml_gemm_q5_K_32x1_q8_K_generic(n, s, bs, vx, vy, nr, nc);
-#endif
 }
 void ggml_gemm_q5_K_64x1_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
-#if defined __riscv_zvfh
     ggml_gemm_q5_K_Mx1_q8_K<64>(n, s, bs, vx, vy, nr, nc);
-#else
-    ggml_gemm_q5_K_64x1_q8_K_generic(n, s, bs, vx, vy, nr, nc);
-#endif
 }
 
 template<int ncols_interleaved>
@@ -2233,7 +2291,6 @@ void ggml_gemm_iq4_nl_Mx1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const 
     UNUSED(ncols_interleaved);
     UNUSED(blocklen);
 
-#if defined __riscv_v_intrinsic
     const vint8m1_t values = __riscv_vle8_v_i8m1(kvalues_iq4nl, 16);
 
     for (int y = 0; y < nr / 4; y++) {
@@ -2260,8 +2317,6 @@ void ggml_gemm_iq4_nl_Mx1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const 
                     const vuint8m1_t b_0_packed = __riscv_vle8_v_u8m1((const uint8_t *)&b_ptr[l].qs[i * ncols_interleaved], ncols_interleaved);
                     const vint8m1_t b_0_lo = __riscv_vrgather_vv_i8m1(values, __riscv_vand_vx_u8m1(b_0_packed, 0xf, ncols_interleaved), ncols_interleaved);
                     const vint8m1_t b_0_hi = __riscv_vrgather_vv_i8m1(values, __riscv_vsrl_vx_u8m1(b_0_packed, 4, ncols_interleaved), ncols_interleaved);
-                    // const vint16m1_t b_0_lo_16 = __riscv_vwcvt_x_x_v_i16m1(b_0_lo, 16);
-                    // const vint16m1_t b_0_hi_16 = __riscv_vwcvt_x_x_v_i16m1(b_0_hi, 16);
 
                     const vint16m1_t sumi_0_lo = __riscv_vwmul_vx_i16m1(__riscv_vlmul_trunc_v_i8m1_i8mf2(b_0_lo), a_ptr[l].qs[i * 4], ncols_interleaved);
                     const vint16m1_t sumi_1_lo = __riscv_vwmul_vx_i16m1(__riscv_vlmul_trunc_v_i8m1_i8mf2(b_0_lo), a_ptr[l].qs[i * 4 + 1], ncols_interleaved);
@@ -2297,9 +2352,6 @@ void ggml_gemm_iq4_nl_Mx1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const 
             __riscv_vse32_v_f32m2(s + (y * 4 + 3) * bs + x * ncols_interleaved, sumf_3, ncols_interleaved);
         }
     }
-    return;
-#endif
-    ggml_gemm_iq4_nl_16x1_q8_0_generic(n, s, bs, vx, vy, nr, nc);
 }
 
 void ggml_gemm_iq4_nl_8x1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
@@ -2313,5 +2365,111 @@ void ggml_gemm_iq4_nl_32x1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const
 }
 void ggml_gemm_iq4_nl_64x1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     ggml_gemm_iq4_nl_Mx1_q8_0<64>(n, s, bs, vx, vy, nr, nc);
+}
+
+template<int ncols_interleaved>
+static inline void ggml_gemm_mxfp4_Mx1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    const int qk = QK8_0;
+    const int nb = n / qk;
+    const int blocklen = 1;
+
+    assert (n % qk == 0);
+    assert (nr % 4 == 0);
+    assert (nc % ncols_interleaved == 0);
+
+    UNUSED(s);
+    UNUSED(bs);
+    UNUSED(vx);
+    UNUSED(vy);
+    UNUSED(nr);
+    UNUSED(nc);
+    UNUSED(nb);
+    UNUSED(ncols_interleaved);
+    UNUSED(blocklen);
+
+    const vint8m1_t values = __riscv_vle8_v_i8m1(kvalues_mxfp4, 16);
+
+    for (int y = 0; y < nr / 4; y++) {
+        const block_q8_0x4 * a_ptr = (const block_q8_0x4 *) vy + (y * nb);
+        for (int x = 0; x < nc / ncols_interleaved; x++) {
+            const block_mxfp4x<ncols_interleaved> * b_ptr = (const block_mxfp4x<ncols_interleaved> *) vx + (x * nb);
+
+            // 4xM Accumulators
+            vfloat32m2_t sumf_0 = __riscv_vfmv_v_f_f32m2(0.0f, ncols_interleaved);
+            vfloat32m2_t sumf_1 = __riscv_vfmv_v_f_f32m2(0.0f, ncols_interleaved);
+            vfloat32m2_t sumf_2 = __riscv_vfmv_v_f_f32m2(0.0f, ncols_interleaved);
+            vfloat32m2_t sumf_3 = __riscv_vfmv_v_f_f32m2(0.0f, ncols_interleaved);
+
+            for (int l = 0; l < nb; l++) {
+                // 4xM integer accumulators
+                vint16m1_t sumi_0_lo_16 = __riscv_vmv_v_x_i16m1(0.0f, ncols_interleaved);
+                vint16m1_t sumi_1_lo_16 = __riscv_vmv_v_x_i16m1(0.0f, ncols_interleaved);
+                vint16m1_t sumi_2_lo_16 = __riscv_vmv_v_x_i16m1(0.0f, ncols_interleaved);
+                vint16m1_t sumi_3_lo_16 = __riscv_vmv_v_x_i16m1(0.0f, ncols_interleaved);
+                vint16m1_t sumi_0_hi_16 = __riscv_vmv_v_x_i16m1(0.0f, ncols_interleaved);
+                vint16m1_t sumi_1_hi_16 = __riscv_vmv_v_x_i16m1(0.0f, ncols_interleaved);
+                vint16m1_t sumi_2_hi_16 = __riscv_vmv_v_x_i16m1(0.0f, ncols_interleaved);
+                vint16m1_t sumi_3_hi_16 = __riscv_vmv_v_x_i16m1(0.0f, ncols_interleaved);
+
+                // Accumulation loop.
+                for (int i = 0; i < QK_MXFP4 / 2; i++) {
+                    // Load `b_ptr`.
+                    const vuint8m1_t b_0_packed = __riscv_vle8_v_u8m1((const uint8_t *)&b_ptr[l].qs[i * ncols_interleaved], ncols_interleaved);
+                    const vint8m1_t b_0_lo = __riscv_vrgather_vv_i8m1(values, __riscv_vand_vx_u8m1(b_0_packed, 0xf, ncols_interleaved), ncols_interleaved);
+                    const vint8m1_t b_0_hi = __riscv_vrgather_vv_i8m1(values, __riscv_vsrl_vx_u8m1(b_0_packed, 4, ncols_interleaved), ncols_interleaved);
+
+                    sumi_0_lo_16 = __riscv_vwmacc_vx_i16m1(sumi_0_lo_16, a_ptr[l].qs[i * 4],     __riscv_vlmul_trunc_v_i8m1_i8mf2(b_0_lo), ncols_interleaved);
+                    sumi_1_lo_16 = __riscv_vwmacc_vx_i16m1(sumi_1_lo_16, a_ptr[l].qs[i * 4 + 1], __riscv_vlmul_trunc_v_i8m1_i8mf2(b_0_lo), ncols_interleaved);
+                    sumi_2_lo_16 = __riscv_vwmacc_vx_i16m1(sumi_2_lo_16, a_ptr[l].qs[i * 4 + 2], __riscv_vlmul_trunc_v_i8m1_i8mf2(b_0_lo), ncols_interleaved);
+                    sumi_3_lo_16 = __riscv_vwmacc_vx_i16m1(sumi_3_lo_16, a_ptr[l].qs[i * 4 + 3], __riscv_vlmul_trunc_v_i8m1_i8mf2(b_0_lo), ncols_interleaved);
+
+                    sumi_0_hi_16 = __riscv_vwmacc_vx_i16m1(sumi_0_hi_16, a_ptr[l].qs[64 + i * 4],     __riscv_vlmul_trunc_v_i8m1_i8mf2(b_0_hi), ncols_interleaved);
+                    sumi_1_hi_16 = __riscv_vwmacc_vx_i16m1(sumi_1_hi_16, a_ptr[l].qs[64 + i * 4 + 1], __riscv_vlmul_trunc_v_i8m1_i8mf2(b_0_hi), ncols_interleaved);
+                    sumi_2_hi_16 = __riscv_vwmacc_vx_i16m1(sumi_2_hi_16, a_ptr[l].qs[64 + i * 4 + 2], __riscv_vlmul_trunc_v_i8m1_i8mf2(b_0_hi), ncols_interleaved);
+                    sumi_3_hi_16 = __riscv_vwmacc_vx_i16m1(sumi_3_hi_16, a_ptr[l].qs[64 + i * 4 + 3], __riscv_vlmul_trunc_v_i8m1_i8mf2(b_0_hi), ncols_interleaved);
+                }
+
+                // Do the final accumulation in i32 to prevent overflow.
+                const vint32m2_t sumi_0 = __riscv_vwadd_vv_i32m2(sumi_0_lo_16, sumi_0_hi_16, ncols_interleaved);
+                const vint32m2_t sumi_1 = __riscv_vwadd_vv_i32m2(sumi_1_lo_16, sumi_1_hi_16, ncols_interleaved);
+                const vint32m2_t sumi_2 = __riscv_vwadd_vv_i32m2(sumi_2_lo_16, sumi_2_hi_16, ncols_interleaved);
+                const vint32m2_t sumi_3 = __riscv_vwadd_vv_i32m2(sumi_3_lo_16, sumi_3_hi_16, ncols_interleaved);
+
+                float b_scales[ncols_interleaved];
+                for (int i = 0; i < ncols_interleaved; i++) {
+                    b_scales[i] = GGML_E8M0_TO_FP32_HALF(b_ptr[l].e[i]);
+                }
+                const vfloat32m2_t b_e = __riscv_vle32_v_f32m2((const float *)&b_scales[0], ncols_interleaved);
+
+                const vfloat32m2_t d_0 = __riscv_vfmul_vf_f32m2(b_e, GGML_FP16_TO_FP32(a_ptr[l].d[0]), ncols_interleaved);
+                const vfloat32m2_t d_1 = __riscv_vfmul_vf_f32m2(b_e, GGML_FP16_TO_FP32(a_ptr[l].d[1]), ncols_interleaved);
+                const vfloat32m2_t d_2 = __riscv_vfmul_vf_f32m2(b_e, GGML_FP16_TO_FP32(a_ptr[l].d[2]), ncols_interleaved);
+                const vfloat32m2_t d_3 = __riscv_vfmul_vf_f32m2(b_e, GGML_FP16_TO_FP32(a_ptr[l].d[3]), ncols_interleaved);
+
+                sumf_0 = __riscv_vfmacc_vv_f32m2(sumf_0, __riscv_vfcvt_f_x_v_f32m2(sumi_0, ncols_interleaved), d_0, ncols_interleaved);
+                sumf_1 = __riscv_vfmacc_vv_f32m2(sumf_1, __riscv_vfcvt_f_x_v_f32m2(sumi_1, ncols_interleaved), d_1, ncols_interleaved);
+                sumf_2 = __riscv_vfmacc_vv_f32m2(sumf_2, __riscv_vfcvt_f_x_v_f32m2(sumi_2, ncols_interleaved), d_2, ncols_interleaved);
+                sumf_3 = __riscv_vfmacc_vv_f32m2(sumf_3, __riscv_vfcvt_f_x_v_f32m2(sumi_3, ncols_interleaved), d_3, ncols_interleaved);
+            }
+
+            __riscv_vse32_v_f32m2(s + (y * 4 + 0) * bs + x * ncols_interleaved, sumf_0, ncols_interleaved);
+            __riscv_vse32_v_f32m2(s + (y * 4 + 1) * bs + x * ncols_interleaved, sumf_1, ncols_interleaved);
+            __riscv_vse32_v_f32m2(s + (y * 4 + 2) * bs + x * ncols_interleaved, sumf_2, ncols_interleaved);
+            __riscv_vse32_v_f32m2(s + (y * 4 + 3) * bs + x * ncols_interleaved, sumf_3, ncols_interleaved);
+        }
+    }
+}
+
+void ggml_gemm_mxfp4_8x1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    ggml_gemm_mxfp4_Mx1_q8_0<8>(n, s, bs, vx, vy, nr, nc);
+}
+void ggml_gemm_mxfp4_16x1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    ggml_gemm_mxfp4_Mx1_q8_0<16>(n, s, bs, vx, vy, nr, nc);
+}
+void ggml_gemm_mxfp4_32x1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    ggml_gemm_mxfp4_Mx1_q8_0<32>(n, s, bs, vx, vy, nr, nc);
+}
+void ggml_gemm_mxfp4_64x1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    ggml_gemm_mxfp4_Mx1_q8_0<64>(n, s, bs, vx, vy, nr, nc);
 }
 #endif
