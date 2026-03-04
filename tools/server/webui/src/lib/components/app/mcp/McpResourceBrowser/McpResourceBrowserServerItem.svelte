@@ -155,7 +155,7 @@
 		{/if}
 
 		<span class="inline-flex flex-col items-start text-left">
-			<span class="font-medium inline-flex items-center justify-start gap-1.5">
+			<span class="inline-flex items-center justify-start gap-1.5 font-medium">
 				{#if favicon}
 					<img
 						src={favicon}
@@ -170,9 +170,14 @@
 				{displayName}
 			</span>
 
-		<span class="text-xs text-muted-foreground">
-			({serverRes.resources.length} resource{serverRes.resources.length !== 1 ? 's' : ''}{#if hasTemplates}, {serverRes.templates.length} template{serverRes.templates.length !== 1 ? 's' : ''}{/if})
-		</span>
+			<span class="text-xs text-muted-foreground">
+				({serverRes.resources.length} resource{serverRes.resources.length !== 1
+					? 's'
+					: ''}{#if hasTemplates}, {serverRes.templates.length} template{serverRes.templates
+						.length !== 1
+						? 's'
+						: ''}{/if})
+			</span>
 		</span>
 
 		{#if serverRes.loading}
@@ -200,7 +205,9 @@
 						<div class="my-1 border-t border-border/30"></div>
 					{/if}
 
-					<div class="py-0.5 text-[11px] font-medium tracking-wide text-muted-foreground/70 uppercase">
+					<div
+						class="py-0.5 text-[11px] font-medium tracking-wide text-muted-foreground/70 uppercase"
+					>
 						Templates
 					</div>
 

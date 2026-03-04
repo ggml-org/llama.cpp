@@ -20,7 +20,6 @@
  */
 export { default as InputWithSuggestions } from './InputWithSuggestions.svelte';
 
-
 /**
  * **KeyValuePairs** - Editable key-value list
  *
@@ -35,8 +34,6 @@ export { default as InputWithSuggestions } from './InputWithSuggestions.svelte';
  * - Auto-resize value textarea
  */
 export { default as KeyValuePairs } from './KeyValuePairs.svelte';
-
-
 
 /**
  * **SearchInput** - Search field with clear button

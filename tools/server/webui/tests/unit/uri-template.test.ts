@@ -135,41 +135,31 @@ describe('isTemplateComplete', () => {
 	});
 
 	it('returns true when all multiple variables are filled', () => {
-		expect(
-			isTemplateComplete('db://{schema}/{table}', { schema: 'public', table: 'users' })
-		).toBe(true);
+		expect(isTemplateComplete('db://{schema}/{table}', { schema: 'public', table: 'users' })).toBe(
+			true
+		);
 	});
 });
 
 describe('normalizeResourceUri', () => {
 	it('passes through a normal URI unchanged', () => {
-		expect(normalizeResourceUri('svelte://svelte/$effect.md')).toBe(
-			'svelte://svelte/$effect.md'
-		);
+		expect(normalizeResourceUri('svelte://svelte/$effect.md')).toBe('svelte://svelte/$effect.md');
 	});
 
 	it('normalizes triple-slash URIs from path-style template expansion', () => {
-		expect(normalizeResourceUri('svelte:///svelte/$effect.md')).toBe(
-			'svelte://svelte/$effect.md'
-		);
+		expect(normalizeResourceUri('svelte:///svelte/$effect.md')).toBe('svelte://svelte/$effect.md');
 	});
 
 	it('normalizes quadruple-slash URIs', () => {
-		expect(normalizeResourceUri('svelte:////svelte/$effect.md')).toBe(
-			'svelte://svelte/$effect.md'
-		);
+		expect(normalizeResourceUri('svelte:////svelte/$effect.md')).toBe('svelte://svelte/$effect.md');
 	});
 
 	it('handles file:// URIs', () => {
-		expect(normalizeResourceUri('file:///home/user/doc.txt')).toBe(
-			'file://home/user/doc.txt'
-		);
+		expect(normalizeResourceUri('file:///home/user/doc.txt')).toBe('file://home/user/doc.txt');
 	});
 
 	it('handles http URIs unchanged', () => {
-		expect(normalizeResourceUri('http://example.com/path')).toBe(
-			'http://example.com/path'
-		);
+		expect(normalizeResourceUri('http://example.com/path')).toBe('http://example.com/path');
 	});
 
 	it('returns non-URI strings unchanged', () => {

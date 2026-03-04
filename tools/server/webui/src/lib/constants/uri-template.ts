@@ -25,7 +25,7 @@ export const URI_TEMPLATE_OPERATORS = {
 	/** Form-style query */
 	FORM_QUERY: '?',
 	/** Form-style query continuation */
-	FORM_CONTINUATION: '&',
+	FORM_CONTINUATION: '&'
 } as const;
 
 /** URI template separators used in expansion */
@@ -41,7 +41,7 @@ export const URI_TEMPLATE_SEPARATORS = {
 	/** Question mark prefix for query string */
 	QUERY_PREFIX: '?',
 	/** Ampersand prefix for query continuation */
-	QUERY_CONTINUATION: '&',
+	QUERY_CONTINUATION: '&'
 } as const;
 
 /** Maximum number of leading slashes to strip during URI normalization */

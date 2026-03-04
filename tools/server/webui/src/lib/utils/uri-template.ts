@@ -5,7 +5,7 @@ import {
 	URI_TEMPLATE_SEPARATORS,
 	VARIABLE_EXPLODE_MODIFIER_REGEX,
 	VARIABLE_PREFIX_MODIFIER_REGEX,
-	LEADING_SLASHES_REGEX,
+	LEADING_SLASHES_REGEX
 } from '../constants/uri-template';
 
 /**
@@ -28,7 +28,9 @@ export function normalizeResourceUri(uri: string): string {
 	if (schemeEnd === -1) return uri;
 
 	const scheme = uri.substring(0, schemeEnd);
-	const rest = uri.substring(schemeEnd + URI_SCHEME_SEPARATOR.length).replace(LEADING_SLASHES_REGEX, '');
+	const rest = uri
+		.substring(schemeEnd + URI_SCHEME_SEPARATOR.length)
+		.replace(LEADING_SLASHES_REGEX, '');
 
 	return `${scheme}${URI_SCHEME_SEPARATOR}${rest}`;
 }
@@ -104,56 +106,82 @@ export function extractTemplateVariables(template: string): UriTemplateVariable[
 export function expandTemplate(template: string, values: Record<string, string>): string {
 	TEMPLATE_EXPRESSION_REGEX.lastIndex = 0;
 
-	return template.replace(TEMPLATE_EXPRESSION_REGEX, (_match, operator: string, varList: string) => {
-		const varNames = varList.split(',').map((v: string) =>
-			v
-				.replace(VARIABLE_EXPLODE_MODIFIER_REGEX, '')
-				.replace(VARIABLE_PREFIX_MODIFIER_REGEX, '')
-				.trim()
-		);
+	return template.replace(
+		TEMPLATE_EXPRESSION_REGEX,
+		(_match, operator: string, varList: string) => {
+			const varNames = varList
+				.split(',')
+				.map((v: string) =>
+					v
+						.replace(VARIABLE_EXPLODE_MODIFIER_REGEX, '')
+						.replace(VARIABLE_PREFIX_MODIFIER_REGEX, '')
+						.trim()
+				);
 
-		const expandedParts = varNames
-			.map((name: string) => values[name] ?? '')
-			.filter((v: string) => v !== '');
+			const expandedParts = varNames
+				.map((name: string) => values[name] ?? '')
+				.filter((v: string) => v !== '');
 
-		if (expandedParts.length === 0) return '';
+			if (expandedParts.length === 0) return '';
 
-		switch (operator) {
-			case URI_TEMPLATE_OPERATORS.RESERVED:
-				// Reserved expansion: no encoding
-				return expandedParts.join(URI_TEMPLATE_SEPARATORS.COMMA);
-			case URI_TEMPLATE_OPERATORS.FRAGMENT:
-				// Fragment expansion
-				return URI_TEMPLATE_OPERATORS.FRAGMENT + expandedParts.join(URI_TEMPLATE_SEPARATORS.COMMA);
-			case URI_TEMPLATE_OPERATORS.PATH_SEGMENT:
-				// Path segments
-				return URI_TEMPLATE_SEPARATORS.SLASH + expandedParts.join(URI_TEMPLATE_SEPARATORS.SLASH);
-			case URI_TEMPLATE_OPERATORS.LABEL:
-				// Label expansion
-				return URI_TEMPLATE_SEPARATORS.PERIOD + expandedParts.join(URI_TEMPLATE_SEPARATORS.PERIOD);
-			case URI_TEMPLATE_OPERATORS.PATH_PARAM:
-				// Path-style parameters
-				return varNames
-					.filter((_: string, i: number) => expandedParts[i])
-					.map((name: string, i: number) => `${URI_TEMPLATE_SEPARATORS.SEMICOLON}${name}=${expandedParts[i]}`)
-					.join('');
-			case URI_TEMPLATE_OPERATORS.FORM_QUERY:
-				// Form-style query
-				return URI_TEMPLATE_SEPARATORS.QUERY_PREFIX + varNames
-					.filter((_: string, i: number) => expandedParts[i])
-					.map((name: string, i: number) => `${encodeURIComponent(name)}=${encodeURIComponent(expandedParts[i])}`)
-					.join(URI_TEMPLATE_SEPARATORS.COMMA);
-			case URI_TEMPLATE_OPERATORS.FORM_CONTINUATION:
-				// Form-style query continuation
-				return URI_TEMPLATE_SEPARATORS.QUERY_CONTINUATION + varNames
-					.filter((_: string, i: number) => expandedParts[i])
-					.map((name: string, i: number) => `${encodeURIComponent(name)}=${encodeURIComponent(expandedParts[i])}`)
-					.join(URI_TEMPLATE_SEPARATORS.COMMA);
-			default:
-				// Simple string expansion (default operator)
-				return expandedParts.map((v: string) => encodeURIComponent(v)).join(URI_TEMPLATE_SEPARATORS.COMMA);
+			switch (operator) {
+				case URI_TEMPLATE_OPERATORS.RESERVED:
+					// Reserved expansion: no encoding
+					return expandedParts.join(URI_TEMPLATE_SEPARATORS.COMMA);
+				case URI_TEMPLATE_OPERATORS.FRAGMENT:
+					// Fragment expansion
+					return (
+						URI_TEMPLATE_OPERATORS.FRAGMENT + expandedParts.join(URI_TEMPLATE_SEPARATORS.COMMA)
+					);
+				case URI_TEMPLATE_OPERATORS.PATH_SEGMENT:
+					// Path segments
+					return URI_TEMPLATE_SEPARATORS.SLASH + expandedParts.join(URI_TEMPLATE_SEPARATORS.SLASH);
+				case URI_TEMPLATE_OPERATORS.LABEL:
+					// Label expansion
+					return (
+						URI_TEMPLATE_SEPARATORS.PERIOD + expandedParts.join(URI_TEMPLATE_SEPARATORS.PERIOD)
+					);
+				case URI_TEMPLATE_OPERATORS.PATH_PARAM:
+					// Path-style parameters
+					return varNames
+						.filter((_: string, i: number) => expandedParts[i])
+						.map(
+							(name: string, i: number) =>
+								`${URI_TEMPLATE_SEPARATORS.SEMICOLON}${name}=${expandedParts[i]}`
+						)
+						.join('');
+				case URI_TEMPLATE_OPERATORS.FORM_QUERY:
+					// Form-style query
+					return (
+						URI_TEMPLATE_SEPARATORS.QUERY_PREFIX +
+						varNames
+							.filter((_: string, i: number) => expandedParts[i])
+							.map(
+								(name: string, i: number) =>
+									`${encodeURIComponent(name)}=${encodeURIComponent(expandedParts[i])}`
+							)
+							.join(URI_TEMPLATE_SEPARATORS.COMMA)
+					);
+				case URI_TEMPLATE_OPERATORS.FORM_CONTINUATION:
+					// Form-style query continuation
+					return (
+						URI_TEMPLATE_SEPARATORS.QUERY_CONTINUATION +
+						varNames
+							.filter((_: string, i: number) => expandedParts[i])
+							.map(
+								(name: string, i: number) =>
+									`${encodeURIComponent(name)}=${encodeURIComponent(expandedParts[i])}`
+							)
+							.join(URI_TEMPLATE_SEPARATORS.COMMA)
+					);
+				default:
+					// Simple string expansion (default operator)
+					return expandedParts
+						.map((v: string) => encodeURIComponent(v))
+						.join(URI_TEMPLATE_SEPARATORS.COMMA);
+			}
 		}
-	});
+	);
 }
 
 /**

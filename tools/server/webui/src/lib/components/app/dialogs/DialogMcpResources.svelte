@@ -10,7 +10,11 @@
 		mcpTotalResourceCount,
 		mcpResourceStore
 	} from '$lib/stores/mcp-resources.svelte';
-	import { McpResourceBrowser, McpResourcePreview, McpResourceTemplateForm } from '$lib/components/app';
+	import {
+		McpResourceBrowser,
+		McpResourcePreview,
+		McpResourceTemplateForm
+	} from '$lib/components/app';
 	import { getResourceDisplayName } from '$lib/utils';
 	import type { MCPResourceInfo, MCPResourceContent, MCPResourceTemplateInfo } from '$lib/types';
 	import { SvelteSet } from 'svelte/reactivity';
@@ -80,7 +84,10 @@
 		selectedResources.clear();
 		lastSelectedUri = null;
 
-		if (selectedTemplate?.uriTemplate === template.uriTemplate && selectedTemplate?.serverName === template.serverName) {
+		if (
+			selectedTemplate?.uriTemplate === template.uriTemplate &&
+			selectedTemplate?.serverName === template.serverName
+		) {
 			clearTemplateState();
 
 			return;
@@ -295,8 +302,8 @@
 							</p>
 						{/if}
 
-						<div class="rounded-md border border-border/50 bg-muted/30 px-3 py-2 mb-4">
-							<p class="font-mono text-xs text-muted-foreground break-all">
+						<div class="mb-4 rounded-md border border-border/50 bg-muted/30 px-3 py-2">
+							<p class="font-mono text-xs break-all text-muted-foreground">
 								{selectedTemplate.uriTemplate}
 							</p>
 						</div>
@@ -312,7 +319,9 @@
 								<Button
 									size="sm"
 									variant="outline"
-									onclick={() => { templatePreviewError = null; }}
+									onclick={() => {
+										templatePreviewError = null;
+									}}
 								>
 									Try again
 								</Button>
@@ -344,7 +353,7 @@
 					<div class="flex flex-col gap-10">
 						{#each getAllResourcesFlatInTreeOrder() as resource (resource.uri)}
 							{#if selectedResources.has(resource.uri)}
-								<McpResourcePreview resource={resource} />
+								<McpResourcePreview {resource} />
 							{/if}
 						{/each}
 					</div>

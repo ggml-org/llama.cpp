@@ -1360,7 +1360,6 @@ class MCPStore {
 		}
 
 		if (!connection.serverCapabilities?.completions) {
-		
 			return null;
 		}
 
@@ -1375,10 +1374,7 @@ class MCPStore {
 	 * Read a resource by an arbitrary URI (e.g., one expanded from a template).
 	 * Unlike readResource(), this does not require the URI to be in the resources list.
 	 */
-	async readResourceByUri(
-		serverName: string,
-		uri: string
-	): Promise<MCPResourceContent[] | null> {
+	async readResourceByUri(serverName: string, uri: string): Promise<MCPResourceContent[] | null> {
 		const connection = this.connections.get(serverName);
 
 		if (!connection) {

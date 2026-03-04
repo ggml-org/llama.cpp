@@ -4,7 +4,12 @@
 	import { KeyboardKey } from '$lib/enums';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import type { MCPResourceTemplateInfo } from '$lib/types';
-	import { debounce, extractTemplateVariables, expandTemplate, isTemplateComplete } from '$lib/utils';
+	import {
+		debounce,
+		extractTemplateVariables,
+		expandTemplate,
+		isTemplateComplete
+	} from '$lib/utils';
 
 	interface Props {
 		template: MCPResourceTemplateInfo;
@@ -153,7 +158,7 @@
 		<div class="rounded-md bg-muted/50 px-3 py-2">
 			<p class="text-xs text-muted-foreground">Resolved URI:</p>
 
-			<p class="mt-0.5 break-all font-mono text-xs">{expandedUri}</p>
+			<p class="mt-0.5 font-mono text-xs break-all">{expandedUri}</p>
 		</div>
 	{/if}
 
