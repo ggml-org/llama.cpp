@@ -37,6 +37,7 @@ std::vector<std::pair<std::string, std::string>> shader_fnames;
 std::locale c_locale("C");
 
 std::string GLSLC = "glslc";
+std::string SLANGC = "slangc";
 std::string input_filepath = "";
 std::string output_dir = "/tmp";
 std::string target_hpp = "";
@@ -397,6 +398,79 @@ void string_to_spv_func(std::string name, std::string in_path, std::string out_p
     }
 }
 
+void string_to_spv_slang_func(std::string name, std::string in_path, std::string out_path, std::map<std::string, std::string> defines, bool coopmat, bool dep_file, compile_count_guard slot) {
+    #ifdef _WIN32
+        std::vector<std::string> cmd = {SLANGC, "-target", "spirv", "-Wno-39001", ""\"" + in_path + "\"", "-o", "\"" + out_path + "\""};
+    #else
+        std::vector<std::string> cmd = {SLANGC, "-target", "spirv", "-Wno-39001", in_path, "-o", out_path};
+    #endif
+
+    // disable spirv-opt for coopmat shaders for https://github.com/ggml-org/llama.cpp/issues/10734
+    // disable spirv-opt for bf16 shaders for https://github.com/ggml-org/llama.cpp/issues/15344
+    // disable spirv-opt for rope shaders for https://github.com/ggml-org/llama.cpp/issues/16860
+    if (!coopmat && name.find("bf16") == std::string::npos && name.find("rope") == std::string::npos) {
+        cmd.push_back("-O2");
+    }
+
+    if (dep_file) {
+        cmd.push_back("-depfile");
+#ifdef _WIN32
+        cmd.push_back("\"" + target_cpp + ".d\"");
+#else
+        cmd.push_back(target_cpp + ".d");
+#endif
+    }
+
+    #ifdef GGML_VULKAN_SHADER_DEBUG_INFO
+        cmd.push_back("-g");
+    #endif
+
+    for (const auto& define : defines) {
+        cmd.push_back("-D" + define.first + "=" + define.second);
+    }
+
+    std::string command;
+    for (const auto& part : cmd) {
+        command += part + " ";
+    }
+
+    std::string stdout_str, stderr_str;
+    try {
+        // std::cout << "Executing command: ";
+        // for (const auto& part : cmd) {
+        //     std::cout << part << " ";
+        // }
+        // std::cout << std::endl;
+
+        execute_command(cmd, stdout_str, stderr_str);
+        if (!stderr_str.empty()) {
+            std::cerr << "cannot compile " << name << "\n\n";
+            for (const auto& part : cmd) {
+                std::cerr << part << " ";
+            }
+            std::cerr << "\n\n" << stderr_str << std::endl;
+            return;
+        }
+
+        if (dep_file) {
+            // replace .spv output path with the embed .cpp path which is used as output in CMakeLists.txt
+            std::string dep = read_binary_file(target_cpp + ".d", true);
+            if (!dep.empty()) {
+                size_t pos = dep.find(out_path);
+                if (pos != std::string::npos) {
+                    dep.replace(pos, out_path.length(), target_cpp);
+                }
+                write_binary_file(target_cpp + ".d", dep);
+            }
+        }
+
+        std::lock_guard<std::mutex> guard(lock);
+        shader_fnames.push_back(std::make_pair(name, out_path));
+    } catch (const std::exception& e) {
+        std::cerr << "Error executing command for " << name << ": " << e.what() << std::endl;
+    }
+}
+
 std::map<std::string, std::string> merge_maps(const std::map<std::string, std::string>& a, const std::map<std::string, std::string>& b) {
     std::map<std::string, std::string> result = a;
     result.insert(b.begin(), b.end());
@@ -420,6 +494,25 @@ void string_to_spv(std::string name, const std::string& source, const std::map<s
     compile_count_guard slot = acquire_compile_slot();
     compiles.push_back(std::async(
         string_to_spv_func, name, input_filepath, out_path, defines, coopmat, generate_dep_file, std::move(slot)));
+    // Don't write the same dep file from multiple processes
+    generate_dep_file = false;
+}
+void string_to_spv_slang(std::string name, const std::string& source, const std::map<std::string, std::string>& defines, bool fp16 = true, bool coopmat = false, bool coopmat2 = false, bool f16acc = false) {
+    name = name + (f16acc ? "_f16acc" : "") + (coopmat ? "_cm1" : "") + (coopmat2 ? "_cm2" : (fp16 ? "" : "_fp32"));
+    std::string out_path = join_paths(output_dir, name + ".spv");
+
+    if (input_filepath == "") {
+        // No input source to compile, only generate header for all shaders
+        shader_fnames.push_back(std::pair(name, out_path));
+        return;
+    } else if (basename(input_filepath) != source) {
+        // Only compile shader variants matching the input filename
+        return;
+    }
+
+    compile_count_guard slot = acquire_compile_slot();
+    compiles.push_back(std::async(
+        string_to_spv_slang_func, name, input_filepath, out_path, defines, coopmat, generate_dep_file, std::move(slot)));
     // Don't write the same dep file from multiple processes
     generate_dep_file = false;
 }
@@ -663,6 +756,7 @@ void process_shaders() {
 #endif
                 }
 
+#ifndef GGML_VULKAN_ENABLE_SLANG
                 if (tname == "f16") {
                     string_to_spv("flash_attn_f32_f16_" + tname, "flash_attn.comp",
                         merge_maps(fa_base_dict, {{"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}}), fp16, false, false, f16acc);
@@ -671,6 +765,16 @@ void process_shaders() {
                     string_to_spv("flash_attn_f32_f16_" + tname, "flash_attn.comp",
                         merge_maps(fa_base_dict, {{data_a_key, "1"}, {"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}, {"BLOCK_SIZE", "QUANT_K_"+to_uppercase(tname) }}), fp16, false, false, f16acc);
                 }
+#else
+                if (tname == "f16") {
+                    string_to_spv_slang("flash_attn_f32_f16_" + tname, "flash_attn.slang",
+                        merge_maps(fa_base_dict, {{"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}}), fp16, false, false, f16acc);
+                } else if (tname == "q4_0" || tname == "q8_0" || tname == "f32") {
+                    std::string data_a_key = "DATA_A_" + to_uppercase(tname);
+                    string_to_spv_slang("flash_attn_f32_f16_" + tname, "flash_attn.slang",
+                        merge_maps(fa_base_dict, {{data_a_key, "1"}, {"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}, {"BLOCK_SIZE", "QUANT_K_"+to_uppercase(tname) }}), fp16, false, false, f16acc);
+                }
+#endif
             }
         }
     }
@@ -1193,6 +1297,9 @@ int main(int argc, char** argv) {
 
     if (args.find("--glslc") != args.end()) {
         GLSLC = args["--glslc"]; // Path to glslc
+    }
+    if (args.find("--slangc") != args.end()) {
+        SLANGC = args["--slangc"];
     }
     if (args.find("--source") != args.end()) {
         input_filepath = args["--source"]; // The shader source file to compile
