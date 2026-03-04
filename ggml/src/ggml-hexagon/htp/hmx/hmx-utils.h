@@ -25,6 +25,11 @@ static HMX_INLINE_ALWAYS void hmx_init_column_scales(void *out_scales, HVX_Vecto
     *pv   = Q6_V_vzero();
 }
 
+// Load multiple contiguous tiles with :deep streaming.
+// Rt = total region size - 1; the hardware streams through [Rs, Rs + Rt].
+// IMPORTANT: the tile region [Rs, Rs + Rt] must NOT cross a VTCM 4 MB bank
+// boundary, otherwise the mxmem instruction will raise a precise bus error.
+// Callers must ensure their VTCM layout satisfies this constraint.
 static HMX_INLINE_ALWAYS void hmx_load_tiles_fp16(const __fp16 *row_tiles,
                                                    const __fp16 *col_tiles,
                                                    size_t n_tiles) {
@@ -37,16 +42,19 @@ static HMX_INLINE_ALWAYS void hmx_load_tiles_fp16(const __fp16 *row_tiles,
 }
 
 // Load a single activation+weight tile pair (no :deep streaming).
-// Matches the reference pattern: Q6_activation_hf_mxmem_RR / Q6_weight_hf_mxmem_RR.
+// Rt defines the accessible region [Rs, Rs+Rt].  Following the reference formula
+// (limit = n_tiles * HMX_FP16_TILE_SIZE - 1), for a single tile Rt = 2047.
+// The original code used Rt=0x7FFF (32 KB region); when dynamic VTCM allocation
+// places a tile near a 4 MB bank boundary, the oversized region crosses it and
+// triggers a precise bus error (0x2601).  Rt=2047 confines accesses to exactly
+// one 2048-byte tile while covering all 16 HVX vectors (offsets 0..2047).
 static HMX_INLINE_ALWAYS void hmx_load_tile_pair_fp16(const __fp16 *act_tile,
                                                        const __fp16 *wt_tile) {
-    // Rt values from the reference (test_aizip_mm2.c):
-    //   activation Rt = 0x7FFF (single tile, large safe limit)
-    //   weight     Rt = 1920  (offset to last 128-byte vector in tile: 15*128)
     asm volatile(
         "{ activation.hf = mxmem(%0, %1)\n"
         "weight.hf = mxmem(%2, %3) }\n"
-        :: "r"(act_tile), "r"(0x7FFF), "r"(wt_tile), "r"(1920)
+        :: "r"(act_tile), "r"(2047),
+           "r"(wt_tile),  "r"(2047)
         : "memory");
 }
 
