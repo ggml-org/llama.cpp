@@ -1498,6 +1498,39 @@ static void common_chat_parse_exaone_moe(common_chat_msg_parser & builder) {
     }
 }
 
+static void common_chat_parse_function_gemma(common_chat_msg_parser & builder) {
+    if (!builder.syntax().parse_tool_calls) {
+        builder.add_content(builder.consume_rest());
+        return;
+    }
+
+    static const common_regex tool_call_start_regex(regex_escape("<start_function_call>call:"));
+    static const common_regex tool_call_end_regex(regex_escape("}<end_function_call>"));
+
+    // Loop through all tool calls
+    while (auto res = builder.try_find_regex(tool_call_start_regex, std::string::npos, /* add_prelude_to_content= */ true)) {
+        builder.move_to(res->groups[0].end);
+        static const common_regex function_name_regex("[^{]*");
+        auto fun_res = builder.consume_regex(function_name_regex);
+        auto function_name = builder.str(fun_res.groups[0]);
+        builder.consume_literal("{");
+        builder.consume_spaces();
+        auto arguments = builder.consume_json();
+        builder.consume_spaces();
+        if (!builder.try_consume_regex(tool_call_end_regex)) {
+            throw common_chat_msg_partial_exception("incomplete tool call");
+        }
+        if (!arguments.json.is_object()){
+            throw common_chat_msg_partial_exception("arguments must be an object");
+        }
+        if (!builder.add_tool_call(function_name, "", arguments.json.dump())) {
+            throw common_chat_msg_partial_exception("incomplete tool call");
+        }
+    }
+
+    builder.add_content(builder.consume_rest());
+}
+
 static void common_chat_parse_content_only(common_chat_msg_parser & builder) {
     builder.try_parse_reasoning("<think>", "</think>");
     builder.add_content(builder.consume_rest());
@@ -1584,6 +1617,9 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
             break;
         case COMMON_CHAT_FORMAT_EXAONE_MOE:
             common_chat_parse_exaone_moe(builder);
+            break;
+        case COMMON_CHAT_FORMAT_FUNCTION_GEMMA:
+            common_chat_parse_function_gemma(builder);
             break;
         default:
             throw std::runtime_error(std::string("Unsupported format: ") + common_chat_format_name(builder.syntax().format));
