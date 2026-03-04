@@ -731,8 +731,8 @@ static int execute_op_binary(struct htp_ops_context * octx) {
     const struct htp_tensor * src1 = &octx->src1;
     struct htp_tensor *       dst  = &octx->dst;
 
-    const uint32_t n_threads  = octx->n_threads;
     const uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
+    const uint32_t n_threads  = MIN(octx->n_threads, src0_nrows);
 
     // Use packed row sizes for VTCM allocation
     const uint32_t src0_type = octx->src0.type;
@@ -817,8 +817,6 @@ static int execute_op_binary(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
-    uint32_t n_jobs = MIN(n_threads, src0_nrows);
-
     dma_queue * q = octx->ctx->dma[0];
     if (is_row_bcast) {
         dma_queue_push(q, dma_make_ptr(octx->src1_spad.data, (const void *) src1->data), src1_row_size_aligned, 0, src1->ne[0] * elem_size, 1);
@@ -826,7 +824,7 @@ static int execute_op_binary(struct htp_ops_context * octx) {
 
     struct htp_binary_context bctx;
     bctx.octx = octx;
-    bctx.nrows_per_thread = (src0_nrows + n_jobs - 1) / n_jobs;
+    bctx.nrows_per_thread = (src0_nrows + n_threads - 1) / n_threads;
     bctx.block_max = rows_per_buffer;
     bctx.src0_row_size_aligned = src0_row_size_aligned;
     bctx.src1_row_size_aligned = src1_row_size_aligned;
@@ -870,7 +868,7 @@ static int execute_op_binary(struct htp_ops_context * octx) {
         dma_queue_pop(q);
     }
 
-    worker_pool_run_func(octx->ctx->worker_pool, worker_func, &bctx, n_jobs);
+    worker_pool_run_func(octx->ctx->worker_pool, worker_func, &bctx, n_threads);
 
     return HTP_STATUS_OK;
 }
