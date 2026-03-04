@@ -717,9 +717,9 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             }
             break;
         case GGML_OP_GET_ROWS:
-            // Support F32/Q8_0 data with I32 indices -> F32 output
+            // Support F32/Q4_0/Q8_0 data with I32 indices -> F32 output
             if (op->type == GGML_TYPE_F32 &&
-                op->src[0] && (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_Q8_0) &&
+                op->src[0] && (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_Q4_0 || op->src[0]->type == GGML_TYPE_Q8_0) &&
                 op->src[1] && op->src[1]->type == GGML_TYPE_I32 &&
                 ggml_is_contiguous(op) &&
                 ggml_is_contiguous(op->src[0]) &&

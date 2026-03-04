@@ -6,12 +6,13 @@
 // 1. Read row indices from src1 (int32 tensor)
 // 2. For each index, extract the corresponding row from src0
 // 3. Copy the row data to the output tensor dst
-// 4. Handle different input types: F32 and Q8_0 (quantized)
+// 4. Handle different input types: F32, Q8_0, and Q4_0 (quantized)
 //
 // Operation: dst[i] = src0[indices[i]] for i = 0..num_indices
 //
 // Features supported:
 // - F32 input data (direct copy)
+// - Q4_0 quantized input data (dequantized to F32)
 // - Q8_0 quantized input data (dequantized to F32)
 // - Int32 row indices
 // - Multi-dimensional tensor support
@@ -28,7 +29,7 @@
 #define CACHE_LINE_SIZE_BYTES 64
 
 struct ggml_et_get_rows_params {
-    struct ggml_tensor src0;     // Data tensor (F32 or Q8_0)
+    struct ggml_tensor src0;     // Data tensor (F32, Q4_0, or Q8_0)
     struct ggml_tensor src1;     // Row indices tensor (I32)
     struct ggml_tensor dst;      // Output tensor (F32)
 };
@@ -76,6 +77,23 @@ static void copy_row_cache_align(float* dst, const float* src, int64_t n_bytes) 
         : [stride_count] "r" (16L)
         : "f0", "f1", "memory"
     );
+}
+
+// Copied from GGML: copy a row of Q4_0 data to F32 destination (with dequantization)
+static void copy_q4_0_row(float* dst, const block_q4_0* src_blocks, int64_t num_elements) {
+    const int64_t num_blocks = (num_elements + QK4_0 - 1) / QK4_0;
+
+    for (int64_t block_idx = 0; block_idx < num_blocks; block_idx++) {
+        const int64_t elements_in_block = (block_idx == num_blocks - 1) ?
+            (num_elements - block_idx * QK4_0) : QK4_0;
+
+        float temp_buffer[QK4_0];
+        dequantize_q4_0_block(&src_blocks[block_idx], temp_buffer);
+
+        for (int64_t i = 0; i < elements_in_block; i++) {
+            dst[block_idx * QK4_0 + i] = temp_buffer[i];
+        }
+    }
 }
 
 // Copy a row of Q8_0 data to F32 destination (with dequantization)
@@ -130,6 +148,75 @@ static void dequantize_q8_0_block_cache_aligned(const block_q8_0* block, float* 
         dst += 8;
     }
     __asm__ volatile("mova.m.x %0" :: "r"(temp_mask));
+}
+
+// Copy a row of Q4_0 data to F32 destination (with dequantization), cache-aligned
+static void copy_q4_0_row_cache_aligned(float* dst, const block_q4_0* src_blocks, int64_t num_elements) {
+    const int64_t num_blocks = (num_elements + QK4_0 - 1) / QK4_0;
+
+    // Scatter byte offsets: even lanes -> dst[j], odd lanes -> dst[j + QK4_0/2]
+    // For 4 consecutive packed bytes producing [low0, high0, low1, high1, low2, high2, low3, high3]:
+    //   low_i  -> byte offset i*4       (positions 0,1,2,3 in first half)
+    //   high_i -> byte offset (16+i)*4  (positions 16,17,18,19 in second half)
+    const int32_t __attribute__((aligned(32))) scatter_offsets[8] = {
+        0*4, 16*4, 1*4, 17*4, 2*4, 18*4, 3*4, 19*4
+    };
+
+    // Gather indices: each byte loaded twice for low/high nibble extraction
+    const int32_t __attribute__((aligned(32))) gather_indices[8] = {0, 0, 1, 1, 2, 2, 3, 3};
+
+    uint64_t temp_mask;
+    __asm__ volatile("mova.x.m %0" : "=r"(temp_mask));  // Save current mask
+    __asm__ volatile ("mov.m.x m0, x0, 0xFF");          // Enable all 8 elements
+
+    // Load constant vectors once — shared across all blocks and iterations
+    __asm__ volatile (
+        "flq2        f4, 0(%0)    \n\t" // f4 = scatter offsets
+        "flq2        f1, 0(%1)    \n\t" // f1 = gather indices {0,0,1,1,2,2,3,3}
+        :: "r"(scatter_offsets), "r"(gather_indices)
+        : "f1", "f4"
+    );
+
+    for (int64_t block_idx = 0; block_idx < num_blocks; block_idx++) {
+        const block_q4_0* block = &src_blocks[block_idx];
+        const uint8_t* qs = block->qs;
+        float* block_dst = dst + block_idx * QK4_0;
+
+        float scale = fp16_to_fp32(block->d);
+        float bias = -8.0f * scale;
+
+        // Per-block: broadcast scale and bias
+        __asm__ volatile (
+            "fbcx.ps     f0, %0       \n\t" // f0 = broadcast(scale)
+            "fbcx.ps     f3, %1       \n\t" // f3 = broadcast(-8 * scale)
+            :: "r"(scale), "r"(bias)
+            : "f0", "f3"
+        );
+
+        // 4 iterations x 4 packed bytes = 16 bytes = full block -> 32 floats
+        for (int i = 0; i < 4; i++) {
+            __asm__ volatile (
+                "fgb.ps      f2, f1(%0)    \n\t" // Gather: [b0,b0,b1,b1,b2,b2,b3,b3]
+                "mov.m.x     m0, x0, 0xAA  \n\t" // Odd lanes only (fills gather latency)
+                "fsrli.pi    f2, f2, 4     \n\t" // Odd lanes: byte >> 4 (high nibble)
+                "mov.m.x     m0, x0, 0xFF  \n\t" // Restore full mask
+                "fslli.pi    f2, f2, 28    \n\t" // Isolate low 4 bits: shift left 28
+                "fsrli.pi    f2, f2, 28    \n\t" //   then right 28 -> nibble in [3:0]
+                "fcvt.ps.pw  f2, f2, rne   \n\t" // Int32 -> Float32
+                "fmul.ps     f2, f2, f0    \n\t" // * scale
+                "fadd.ps     f2, f2, f3    \n\t" // + bias -> (nibble - 8) * scale
+                "fscw.ps     f2, f4(%1)    \n\t" // Scatter to GGML positions
+
+                :: "r"(qs), "r"(block_dst)
+                : "f2", "memory"
+            );
+
+            qs += 4;         // 4 packed bytes consumed
+            block_dst += 4;  // Advance base by 4 float positions
+        }
+    }
+
+    __asm__ volatile("mova.m.x %0" :: "r"(temp_mask));  // Restore mask
 }
 
 // Copy a row of Q8_0 data to F32 destination (with dequantization)
@@ -217,6 +304,15 @@ static int get_row_f32_mc_row_cache_aligned(struct ggml_et_get_rows_params* para
             float* dst_row = dst_data + dst_offset * ne00;
             copy_q8_0_row_cache_aligned(dst_row, src_blocks, ne00);
         }
+        else if (src0->type == GGML_TYPE_Q4_0) {
+            // Q4_0 source: dequantize while copying
+            const int64_t blocks_per_row = (ne00 + QK4_0 - 1) / QK4_0;
+            const int64_t src_block_offset = (row_index * blocks_per_row) +
+                                           (batch_offset / ne00) * blocks_per_row;
+            const block_q4_0* src_blocks = (const block_q4_0*)src0_data + src_block_offset;
+            float* dst_row = dst_data + dst_offset * ne00;
+            copy_q4_0_row_cache_aligned(dst_row, src_blocks, ne00);
+        }
     }
 
     return 0;
@@ -233,7 +329,7 @@ int entry_point(struct ggml_et_get_rows_params* params, void* env) {
     struct ggml_tensor* dst = &params->dst;    // Output tensor (F32)
 
     // Fast path - we know how to deal with them multi-core
-    if((src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_Q8_0) && src1->type == GGML_TYPE_I32 && dst->type == GGML_TYPE_F32
+    if((src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_Q8_0 || src0->type == GGML_TYPE_Q4_0) && src1->type == GGML_TYPE_I32 && dst->type == GGML_TYPE_F32
         && dst->ne[0] % CACHE_ELEMENTS(sizeof(float)) == 0) {
         return get_row_f32_mc_row_cache_aligned(params, env);
     }
@@ -255,7 +351,7 @@ int entry_point(struct ggml_et_get_rows_params* params, void* env) {
         return -1; // Invalid output or index type
     }
 
-    if (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_Q8_0) {
+    if (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_Q8_0 && src0->type != GGML_TYPE_Q4_0) {
         return -1; // Unsupported input type
     }
 
@@ -318,6 +414,14 @@ int entry_point(struct ggml_et_get_rows_params* params, void* env) {
             const block_q8_0* src_blocks = (const block_q8_0*)src0_data + src_block_offset;
             float* dst_row = dst_data + dst_offset * ne00;
             copy_q8_0_row(dst_row, src_blocks, ne00);
+        } else if (src0->type == GGML_TYPE_Q4_0) {
+            // Q4_0 source: dequantize while copying
+            const int64_t blocks_per_row = (ne00 + QK4_0 - 1) / QK4_0;
+            const int64_t src_block_offset = (row_index * blocks_per_row) +
+                                           (batch_offset / ne00) * blocks_per_row;
+            const block_q4_0* src_blocks = (const block_q4_0*)src0_data + src_block_offset;
+            float* dst_row = dst_data + dst_offset * ne00;
+            copy_q4_0_row(dst_row, src_blocks, ne00);
         }
     }
 
