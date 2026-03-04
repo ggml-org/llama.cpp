@@ -1225,8 +1225,7 @@ static cudaError_t ggml_cuda_cpy_tensor_2d(
     }
 }
 
-struct cublas_force_compute_type
-{
+struct cublas_force_compute_type {
     bool fp32 = false;
     bool fp16 = false;
 };
