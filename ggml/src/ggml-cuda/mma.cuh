@@ -485,6 +485,30 @@ namespace ggml_cuda_mma {
 #endif  // defined(AMD_WMMA_AVAILABLE)
     };
 
+    template <int I_, int J_>
+    struct tile<I_, J_, float2, DATA_LAYOUT_I_MAJOR> {
+        static constexpr int         I  = I_;
+        static constexpr int         J  = J_;
+        static constexpr data_layout dl = DATA_LAYOUT_I_MAJOR;
+
+#if defined(AMD_MFMA_AVAILABLE)
+        static constexpr int ne = tile<I_, J_, half2, DATA_LAYOUT_I_MAJOR>::ne;
+        float2 x[ne] = {{0.0f, 0.0f}};
+
+        static constexpr __device__ bool supported() {
+            return tile<I_, J_, half2, DATA_LAYOUT_I_MAJOR>::supported();
+        }
+
+        static __device__ __forceinline__ int get_i(const int l) {
+            return tile<I_, J_, half2, DATA_LAYOUT_I_MAJOR>::get_i(l);
+        }
+
+        static __device__ __forceinline__ int get_j(const int l) {
+            return tile<I_, J_, half2, DATA_LAYOUT_I_MAJOR>::get_j(l);
+        }
+#endif  // defined(AMD_MFMA_AVAILABLE)
+    };
+
     template <int I_, int J_, typename T>
     struct tile<I_, J_, T, DATA_LAYOUT_J_MAJOR> {
         static constexpr int         I  = I_;
@@ -1208,6 +1232,12 @@ namespace ggml_cuda_mma {
         GGML_UNUSED_VARS(D, A, B);
         NO_DEVICE_CODE;
 #endif // defined(AMD_WMMA_AVAILABLE)
+    }
+
+    template <data_layout dl_ab, data_layout dl_d>
+    static __device__ __forceinline__ void mma(
+            tile<16, 8, float2, dl_d> & D, const tile<16, 8, half2, dl_ab> & A, const tile<16, 8, half2, dl_ab> & B) {
+        return mma<dl_ab, dl_d>(reinterpret_cast<tile<16, 16, float, dl_d> &>(D), A, B);
     }
 
     template <data_layout dl_d, data_layout dl_ab>
