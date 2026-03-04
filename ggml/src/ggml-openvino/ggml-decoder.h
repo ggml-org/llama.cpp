@@ -143,12 +143,7 @@ public:
     }
 
     virtual std::vector<std::string> get_model_output_names() const override {
-        std::vector<std::string> output_names;
-        output_names.reserve(m_model_outputs.size());
-        for (const auto & [name, tensor] : m_model_outputs) {
-            output_names.push_back(name);
-        }
-        return output_names;
+        return m_model_output_names;
     }
 
     const std::map<std::string, ggml_tensor *> & get_model_outputs() const { return m_model_outputs; }
@@ -273,6 +268,7 @@ public:
 private:
     void set_input_output(ggml_tensor * node);
     int compute_op_case(const ggml_tensor * node) const;
+    void compute_model_outputs();
 
     void validate_cgraph() const;
 
@@ -284,6 +280,7 @@ private:
     std::map<std::string, std::shared_ptr<ov::Tensor>> m_model_extra_input_values;
     std::map<std::string, std::shared_ptr<ov::Node>> m_model_weights;
     std::map<std::string, ggml_tensor *> m_model_outputs;
+    std::vector<std::string> m_model_output_names;
     std::vector<NodeInfo> m_node_info_list;
 
     ModelParams m_model_params;
