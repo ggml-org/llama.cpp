@@ -1,6 +1,7 @@
 #include "common.h"
 #include "llama.h"
 #include "gguf.h"
+#include "../src/llama-quant.h"
 
 #include <cstdio>
 #include <cstring>
@@ -59,12 +60,6 @@ static const std::vector<quant_option> QUANT_OPTIONS = {
     { "F32",      LLAMA_FTYPE_ALL_F32,         "26.00G              @ 7B",          },
     // Note: Ensure COPY comes after F32 to avoid ftype 0 from matching.
     { "COPY",     LLAMA_FTYPE_ALL_F32,         "only copy tensors, no quantizing",  },
-};
-
-// Quantization types. Changes to this struct must be replicated in llama-quantize.cpp
-struct tensor_quantization {
-    std::string name;
-    ggml_type quant = GGML_TYPE_COUNT;
 };
 
 static const char * const LLM_KV_QUANTIZE_IMATRIX_FILE       = "quantize.imatrix.file";
@@ -684,18 +679,6 @@ int main(int argc, char ** argv) {
             fprintf(stderr, "%s: invalid nthread '%s' (%s)\n", __func__, argv[arg_idx], e.what());
             return 1;
         }
-    }
-
-    if (!params.dry_run &&
-        (
-            params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS  || params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS ||
-            params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_S   || params.ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S  ||
-            params.ftype == LLAMA_FTYPE_MOSTLY_IQ1_S   || params.ftype == LLAMA_FTYPE_MOSTLY_IQ1_M
-        ) && imatrix_data.empty()) {
-        fprintf(stderr, "\n==========================================================================================================\n");
-        fprintf(stderr, "Please do not use IQ1_S, IQ1_M, IQ2_S, IQ2_XXS, IQ2_XS or Q2_K_S quantization without an importance matrix\n");
-        fprintf(stderr, "==========================================================================================================\n\n\n");
-        return 1;
     }
 
     if (!params.dry_run) {
