@@ -1,0 +1,32 @@
+{
+  "eval_id": 1,
+  "variant": "without_skill",
+  "assertions": {
+    "ttm_memory_fix": {
+      "pass": false,
+      "evidence": "No mention of TTM pages_limit at all. OOM troubleshooting only suggests reducing context size or using smaller quantization."
+    },
+    "correct_gpu_target": {
+      "pass": true,
+      "evidence": "Uses AMDGPU_TARGETS=\"gfx1151\" (slightly different flag name but correct concept). Note: says gfx1151 not gfx1150."
+    },
+    "hipblaslt_env": {
+      "pass": false,
+      "evidence": "No mention of ROCBLAS_USE_HIPBLASLT=1. Environment variables section suggests HIP_VISIBLE_DEVICES, GPU_MAX_HW_QUEUES, AMD_SERIALIZE_KERNEL instead."
+    },
+    "no_mmap_flag": {
+      "pass": false,
+      "evidence": "Does not recommend --no-mmap. No mention of mmap-related issues for large models."
+    },
+    "full_gpu_offload": {
+      "pass": true,
+      "evidence": "-ngl 99 recommended with explanation about offloading all 80 layers"
+    },
+    "quantization_recommendation": {
+      "pass": true,
+      "evidence": "Recommends Q4_K_M for speed, also mentions Q8_0 as option with 128GB RAM"
+    }
+  },
+  "score": 3,
+  "max_score": 6
+}

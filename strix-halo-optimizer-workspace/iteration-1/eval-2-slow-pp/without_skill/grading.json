@@ -1,0 +1,20 @@
+{
+  "eval_id": 2,
+  "variant": "without_skill",
+  "assertions": {
+    "identifies_rocblas_issue": {
+      "pass": false,
+      "evidence": "Does NOT identify rocBLAS kernel issue. Misdiagnoses as memory bandwidth bottleneck, small ubatch, missing flash attention, architecture mismatch, thermal throttling. Mentions ROCBLAS_GEMM_TYPE in passing but never identifies the actual root cause."
+    },
+    "hipblaslt_solution": {
+      "pass": false,
+      "evidence": "Never mentions ROCBLAS_USE_HIPBLASLT=1. Instead recommends the counterproductive HSA_OVERRIDE_GFX_VERSION=11.5.1."
+    },
+    "expected_improvement": {
+      "pass": false,
+      "evidence": "Claims expected PP should be '1500-4000+ t/s' which is wildly inaccurate. Real expected is ~880 t/s with hipBLASLt. Does not mention the 2.5x improvement."
+    }
+  },
+  "score": 0,
+  "max_score": 3
+}

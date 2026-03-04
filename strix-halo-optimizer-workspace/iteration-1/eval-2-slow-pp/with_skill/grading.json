@@ -1,0 +1,20 @@
+{
+  "eval_id": 2,
+  "variant": "with_skill",
+  "assertions": {
+    "identifies_rocblas_issue": {
+      "pass": true,
+      "evidence": "Correctly identifies: 'The default rocBLAS kernels for the gfx1150/gfx1151 architecture (RDNA 3.5) are poorly optimized for prompt processing workloads' and explains Tensile vs TensileLt difference"
+    },
+    "hipblaslt_solution": {
+      "pass": true,
+      "evidence": "export ROCBLAS_USE_HIPBLASLT=1 prominently featured as the fix, with permanent .bashrc suggestion"
+    },
+    "expected_improvement": {
+      "pass": true,
+      "evidence": "Exact numbers: Without fix: ~348 t/s, With fix: ~882 t/s (~2.5x improvement), TG unaffected at ~48 t/s"
+    }
+  },
+  "score": 3,
+  "max_score": 3
+}

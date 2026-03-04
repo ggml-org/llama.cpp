@@ -1,0 +1,20 @@
+{
+  "eval_id": 3,
+  "variant": "with_skill",
+  "assertions": {
+    "explains_unified_memory": {
+      "pass": true,
+      "evidence": "Explains 'no dedicated VRAM', 'CPU and GPU share the same 128GB LPDDR5X pool', rocm-smi reports 'small dedicated chunk configured in BIOS firmware'"
+    },
+    "ttm_fix": {
+      "pass": true,
+      "evidence": "Full TTM fix: /etc/modprobe.d/increase_amd_memory.conf with pages_limit=25600000 and page_pool_size=25600000, plus temporary fix via /sys/module/ttm/parameters/pages_limit"
+    },
+    "reboot_required": {
+      "pass": true,
+      "evidence": "sudo update-initramfs -u -k all followed by sudo reboot, plus verification step"
+    }
+  },
+  "score": 3,
+  "max_score": 3
+}

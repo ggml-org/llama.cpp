@@ -1,0 +1,32 @@
+{
+  "eval_id": 1,
+  "variant": "with_skill",
+  "assertions": {
+    "ttm_memory_fix": {
+      "pass": true,
+      "evidence": "Mentions TTM pages_limit=25600000, /etc/modprobe.d/increase_amd_memory.conf, update-initramfs -u -k all, reboot, and verification via /sys/module/ttm/parameters/pages_limit"
+    },
+    "correct_gpu_target": {
+      "pass": true,
+      "evidence": "GPU_TARGETS=\"gfx1150\" in build command, explains it compiles specifically for RDNA 3.5"
+    },
+    "hipblaslt_env": {
+      "pass": true,
+      "evidence": "export ROCBLAS_USE_HIPBLASLT=1 with detailed explanation of 2.5x pp improvement and suggestion to add to .bashrc"
+    },
+    "no_mmap_flag": {
+      "pass": true,
+      "evidence": "--no-mmap flag included with explanation: HIP's hipMemcpy() must lock/unlock mmap'd pages, causing severe slowdown for models >64GB"
+    },
+    "full_gpu_offload": {
+      "pass": true,
+      "evidence": "-ngl 99 with explanation about unified memory zero PCIe penalty"
+    },
+    "quantization_recommendation": {
+      "pass": true,
+      "evidence": "Recommends Q4_K_M as best balance of quality and speed, ~40GB file size"
+    }
+  },
+  "score": 6,
+  "max_score": 6
+}

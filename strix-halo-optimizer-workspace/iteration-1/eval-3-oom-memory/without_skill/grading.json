@@ -1,0 +1,20 @@
+{
+  "eval_id": 3,
+  "variant": "without_skill",
+  "assertions": {
+    "explains_unified_memory": {
+      "pass": true,
+      "evidence": "Correctly explains UMA: 'no discrete VRAM', 'CPU and integrated GPU share the same physical 128GB LPDDR5X memory pool', 'BIOS-reserved segment, commonly defaulting to 4GB'"
+    },
+    "ttm_fix": {
+      "pass": false,
+      "evidence": "Does NOT mention TTM pages_limit fix. Instead recommends increasing BIOS UMA Frame Buffer Size, which is a different and less reliable approach. Also suggests various ROCm environment variables (GPU_MAX_HEAP_SIZE etc.) that are not the correct fix."
+    },
+    "reboot_required": {
+      "pass": false,
+      "evidence": "Mentions rebooting for BIOS changes, but since the actual TTM fix is not mentioned, the reboot context is irrelevant. No mention of update-initramfs."
+    }
+  },
+  "score": 1,
+  "max_score": 3
+}
