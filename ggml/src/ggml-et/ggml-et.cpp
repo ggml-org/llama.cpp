@@ -42,13 +42,13 @@ static void ggml_et_dump_tensor_metadata(const ggml_tensor* ggtensor, size_t ind
     char* spaces = (char*)alloca(indent_level+1);
     memset(spaces, ' ', indent_level);
     spaces[indent_level] = '\0';
-    fprintf(stderr, "%s%s: %s"
-        "%s  type: %s"
-        "%s  ne: %lld %lld %lld %lld"
-        "%s  nb: %zu %zu %zu %zu"
-        "%s  op: %s"
-        "%s  data: %p"
-        "%s  src0: %p",
+    fprintf(stderr, "%s%s: %s\n"
+        "%s  type: %s\n"
+        "%s  ne: %lld %lld %lld %lld\n"
+        "%s  nb: %zu %zu %zu %zu\n"
+        "%s  op: %s\n"
+        "%s  data: %p\n"
+        "%s  src0: %p\n",
         spaces, title, ggtensor->name,
         spaces, ggml_type_name(ggtensor->type),
         spaces, (long long)ggtensor->ne[0], (long long)ggtensor->ne[1], (long long)ggtensor->ne[2], (long long)ggtensor->ne[3],
