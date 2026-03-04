@@ -507,8 +507,30 @@ if (GGML_SYCL_BUILD_XMX_TESTS AND GGML_SYCL_TARGET STREQUAL "INTEL")
     # add_test(NAME xmx-esimd-q4-gemm COMMAND test-xmx-esimd-q4-gemm)  # DISABLED - old API
     add_test(NAME xmx-moe-mxfp4 COMMAND test-xmx-moe-mxfp4)
 
+    # Test: MoE MXFP4 DP4A vs Scalar Correctness
+    # Verifies that DP4A-accelerated MXFP4 dot product matches scalar FP32 reference
+    # within Q8_1 quantization tolerance bounds
+    add_executable(test-moe-mxfp4-dp4a
+        tests/test-moe-mxfp4-dp4a.cpp
+    )
+    target_include_directories(test-moe-mxfp4-dp4a PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+    )
+    target_compile_options(test-moe-mxfp4-dp4a PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_link_options(test-moe-mxfp4-dp4a PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_compile_definitions(test-moe-mxfp4-dp4a PRIVATE
+        GGML_SYCL_WARP_SIZE=32
+        GGML_SYCL_DNNL=${GGML_SYCL_DNNL}
+    )
+    if (IntelSYCL_FOUND)
+        target_link_libraries(test-moe-mxfp4-dp4a PRIVATE IntelSYCL::SYCL_CXX)
+    endif()
+    add_test(NAME moe-mxfp4-dp4a COMMAND test-moe-mxfp4-dp4a)
+
     # Set test properties
-    set_tests_properties(xmx-hardware-detect xmx-esimd-basic xmx-moe-mxfp4 PROPERTIES
+    set_tests_properties(xmx-hardware-detect xmx-esimd-basic xmx-moe-mxfp4 moe-mxfp4-dp4a PROPERTIES
         LABELS "sycl;xmx"
         TIMEOUT 120
     )
