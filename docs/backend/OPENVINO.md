@@ -298,7 +298,7 @@ GGML_OPENVINO_DEVICE=GPU ./llama-bench -fa 1
 
 ## Llama.cpp Tools
 
-The following tools work with the OpenVINO backend on CPU, GPU, NPU: 
+The following tools work with the OpenVINO backend on CPU, GPU, NPU:
 - llama-simple
 - llama-run
 - llama-cli
