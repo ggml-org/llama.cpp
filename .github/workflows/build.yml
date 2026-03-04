@@ -744,7 +744,18 @@ jobs:
           cmake --build build --config Release -j $(nproc)
 
   ubuntu-24-cmake-openvino:
-      runs-on: ubuntu-24.04
+      name: ubuntu-24-cmake-openvino-${{ matrix.openvino_device }}
+      strategy:
+        matrix:
+          include:
+            - variant: cpu
+              runner: '"ubuntu-24.04"'
+              openvino_device: "CPU"
+            - variant: gpu
+              runner: '["self-hosted","Linux","X64","Intel"]'
+              openvino_device: "GPU"
+
+      runs-on: ${{ fromJSON(matrix.runner) }}
 
       env:
         # Sync versions in build.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
@@ -759,7 +770,7 @@ jobs:
         - name: ccache
           uses: ggml-org/ccache-action@v1.2.16
           with:
-            key: ubuntu-24-cmake-openvino-no-preset-v1
+            key: ubuntu-24-cmake-openvino-${{ matrix.variant }}-no-preset-v1
             evict-old-files: 1d
 
         - name: Dependencies
@@ -803,6 +814,9 @@ jobs:
           id: cmake_test
           run: |
             cd ${{ github.workspace }}
+            if [ "${{ matrix.openvino_device }}" = "GPU" ]; then
+              export GGML_OPENVINO_DEVICE=GPU
+            fi
             ctest --test-dir build/ReleaseOV -L main --verbose --timeout 2000
 
   build-linux-cross:
