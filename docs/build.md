@@ -256,7 +256,7 @@ Consider setting `CUDA_SCALE_LAUNCH_QUEUES=4x`, which increases the CUDA command
 
 #### GGML_CUDA_FORCE_CUBLAS_COMPUTE_32F
 
-Use `GGML_CUDA_FORCE_CUBLAS_COMPUTE_32F` environment variable to use FP32 compute type on all GPUs in FP16 cuBLAS for preventing possible numerical overflows in exchange for slightly slower prompt processing.
+Use `GGML_CUDA_FORCE_CUBLAS_COMPUTE_32F` environment variable to use FP32 compute type on all GPUs in FP16 cuBLAS for preventing possible numerical overflows in exchange for slower prompt processing (small impact on RTX PRO/Datacenter products and significant on GeForce products).
 
 #### GGML_CUDA_FORCE_CUBLAS_COMPUTE_16F
 
