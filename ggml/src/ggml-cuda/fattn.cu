@@ -4,6 +4,7 @@
 #include "fattn-tile.cuh"
 #include "fattn-vec.cuh"
 #include "fattn-wmma-f16.cuh"
+#include "fattn-sage-splitk.cuh"
 #include "fattn.cuh"
 
 template <int DKQ, int DV, int ncols2>
@@ -275,6 +276,7 @@ enum best_fattn_kernel {
     BEST_FATTN_KERNEL_VEC      = 100,
     BEST_FATTN_KERNEL_WMMA_F16 = 300,
     BEST_FATTN_KERNEL_MMA_F16  = 400,
+    BEST_FATTN_KERNEL_SAGE_SPLITK = 500,
 };
 
 static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const ggml_tensor * dst) {
@@ -311,6 +313,25 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     }
 
     const int cc = ggml_cuda_info().devices[device].cc;
+
+    // gfx906 (MI50): Sage attention for decode (split-K, sdot4/sdot8 integer kernels)
+    // For prefill (n>1), fall through to tile kernel which uses FP16 compute with dequant K
+    // (FP16 has 2x compute throughput vs sdot4 on MI50, prefill is compute-bound)
+#if defined(GGML_USE_HIP)
+    if (cc == GGML_CUDA_CC_VEGA20 && (Q->ne[0] == 128 || Q->ne[0] == 256) &&
+        Q->ne[1] == 1 &&
+        (K->type == GGML_TYPE_F16 || K->type == GGML_TYPE_Q8_0 || K->type == GGML_TYPE_Q4_0) &&
+        K->ne[1] > 0) {
+        return BEST_FATTN_KERNEL_SAGE_SPLITK;
+    }
+    // gfx906: bypass K!=V type check for quantized K with FP16 or Q8_0 V (tile kernel handles dequant)
+    if (cc == GGML_CUDA_CC_VEGA20 && (Q->ne[0] == 128 || Q->ne[0] == 256) &&
+        (K->type == GGML_TYPE_Q8_0 || K->type == GGML_TYPE_Q4_0) &&
+        (V->type == GGML_TYPE_F16 || V->type == GGML_TYPE_Q8_0) &&
+        Q->ne[1] > 1) {
+        return BEST_FATTN_KERNEL_TILE;
+    }
+#endif
 
     switch (K->ne[0]) {
         case  40:
@@ -473,6 +494,9 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
             break;
         case BEST_FATTN_KERNEL_MMA_F16:
             ggml_cuda_flash_attn_ext_mma_f16(ctx, dst);
+            break;
+        case BEST_FATTN_KERNEL_SAGE_SPLITK:
+            ggml_cuda_flash_attn_ext_sage_splitk(ctx, dst);
             break;
     }
 }
