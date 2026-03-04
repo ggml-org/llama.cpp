@@ -22,6 +22,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	alwaysShowSidebarOnDesktop: false,
 	autoShowSidebarOnNewChat: true,
 	autoMicOnEmpty: false,
+	fullHeightCodeBlocks: false,
 	mcpServers: '[]',
 	mcpServerUsageStats: '{}', // JSON object: { [serverId]: usageCount }
 	agenticMaxTurns: 10,
@@ -119,6 +120,8 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 		'Automatically show sidebar when starting a new chat. Disable to keep the sidebar hidden until you click on it.',
 	autoMicOnEmpty:
 		'Automatically show microphone button instead of send button when textarea is empty for models with audio modality support.',
+	fullHeightCodeBlocks:
+		'Always display code blocks at their full natural height, overriding any height limits.',
 	mcpServers:
 		'Configure MCP servers as a JSON list. Use the form in the MCP Client settings section to edit.',
 	mcpServerUsageStats:

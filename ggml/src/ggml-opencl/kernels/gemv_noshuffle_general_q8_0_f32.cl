@@ -121,7 +121,7 @@
 #ifdef ADRENO_GPU
 REQD_SUBGROUP_SIZE_64
 #endif
-__kernel void kernel_gemv_noshuffle(
+__kernel void kernel_gemv_noshuffle_q8_0_f32(
         __read_only  image1d_buffer_t src0_q,  // quantized A
         global half  * src0_d,  // A scales
         __read_only  image1d_buffer_t src1,    // B

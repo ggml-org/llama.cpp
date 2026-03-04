@@ -10,6 +10,7 @@
 
 #include "hex-dma.h"
 #include "hvx-utils.h"
+#include "hex-fastdiv.h"
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
@@ -20,6 +21,9 @@
 // Redefined the types GGML_ROPE_TYPE_NORMAL & GGML_ROPE_TYPE_NEOX as we cant include ggml.h
 #define HTP_ROPE_TYPE_NORMAL 0
 #define HTP_ROPE_TYPE_NEOX   2
+
+#define HTP_ROPE_SPAD_NROWS  16
+#define HTP_ROPE_SPAD_BLOCK  (HTP_ROPE_SPAD_NROWS/2)
 
 #define htp_rope_preamble              \
     const uint32_t ne00 = src0->ne[0]; \
@@ -42,7 +46,7 @@
     const uint32_t nb2 = dst->nb[2];   \
     const uint32_t nb3 = dst->nb[3];
 
-struct rope_th_ctx {
+struct htp_rope_context {
     int32_t n_dims;
     int32_t mode;
     int32_t n_ctx_orig;
@@ -57,7 +61,19 @@ struct rope_th_ctx {
     float theta_scale;
     float corr_dims[2];
 
+    uint32_t src0_nrows_per_thread;
+    size_t spad_stride;
+
     struct htp_ops_context * octx;
+
+    size_t src0_row_size;
+    size_t dst_row_size;
+    size_t src0_row_size_aligned;
+    size_t dst_row_size_aligned;
+    size_t theta_cache_offset;
+    uint32_t src0_nrows;
+
+    uint64_t t_start;
 };
 
 static float rope_yarn_ramp(const float low, const float high, const int i0) {
@@ -117,64 +133,23 @@ static void rope_corr_dims(int     n_dims,
     dims[1]     = MIN(n_dims - 1, end);
 }
 
-static void init_rope_ctx(struct rope_th_ctx * rope_ctx, struct htp_ops_context * octx) {
-    memset(rope_ctx, 0, sizeof(struct rope_th_ctx));
+static inline void hvx_rope_neox_f32_aa(float * restrict dst, const float * restrict src0, uint32_t ne, const float * restrict theta_cache) {
+    const HVX_Vector * restrict vsrc   = (const HVX_Vector *) src0;
+    const HVX_Vector * restrict vtheta = (const HVX_Vector *) theta_cache;
+    HVX_Vector       * restrict vdst   = (HVX_Vector *) dst;
 
-    const int32_t * op_params = &octx->op_params[0];
+    uint32_t nvec = (ne / (VLEN_FP32 * 2) * 2); // 2 vecs per loop, step of 2
 
-    rope_ctx->n_dims     = ((const int32_t *) op_params)[1];
-    rope_ctx->mode       = ((const int32_t *) op_params)[2];
-    rope_ctx->n_ctx_orig = ((const int32_t *) op_params)[4];
+    uint32_t he = ne / 2;         // half_dims offset in elements
+    uint32_t hv = he / VLEN_FP32; // half_dims offset in vectors
 
-    memcpy(&rope_ctx->freq_base, (int32_t *) op_params + 5, sizeof(float));
-    memcpy(&rope_ctx->freq_scale, (int32_t *) op_params + 6, sizeof(float));
-    memcpy(&rope_ctx->ext_factor, (int32_t *) op_params + 7, sizeof(float));
-    memcpy(&rope_ctx->attn_factor, (int32_t *) op_params + 8, sizeof(float));
-    memcpy(&rope_ctx->beta_fast, (int32_t *) op_params + 9, sizeof(float));
-    memcpy(&rope_ctx->beta_slow, (int32_t *) op_params + 10, sizeof(float));
-    memcpy(&rope_ctx->sections, (int32_t *) op_params + 11, sizeof(int) * 4);
+    #pragma unroll(2)
+    for (uint32_t i = 0; i < nvec; i += 2) {
+        HVX_Vector v0 = vsrc[i/2+0];
+        HVX_Vector v1 = vsrc[i/2+hv];
 
-    rope_ctx->theta_scale = powf(rope_ctx->freq_base, -2.0f / rope_ctx->n_dims);
-
-    rope_corr_dims(rope_ctx->n_dims, rope_ctx->n_ctx_orig, rope_ctx->freq_base, rope_ctx->beta_fast,
-                   rope_ctx->beta_slow, rope_ctx->corr_dims);
-
-    rope_ctx->octx = octx;
-    FARF(HIGH, "rope-f32 n_dims:%d, ext_factor:%.6f, theta_scale:%.6f, attn_factor:%.6f\n", rope_ctx->n_dims,
-         rope_ctx->ext_factor, rope_ctx->theta_scale, rope_ctx->attn_factor);
-}
-
-static void hvx_calc_rope_neox_f32(const float * restrict src0,
-                                   float * restrict dst,
-                                   const int num_elems,
-                                   const float * restrict theta_cache) {
-    // for (int i = 0; i < num_elems; i += 2) {
-    //const float cos_theta = theta_cache[i + 0];
-    //const float sin_theta = theta_cache[i + 1];
-
-    //const float x0 = src[0];
-    //const float x1 = src[num_elems/2];
-
-    //dst[0] = x0*cos_theta - x1*sin_theta;
-    //dst[num_elems/2] = x0*sin_theta + x1*cos_theta;
-
-    //src += 1;
-    //dst += 1;
-    // }
-
-    const uint8_t * restrict src0_curr  = (const uint8_t *) src0;
-    const uint8_t * restrict theta_curr = (const uint8_t *) theta_cache;
-    uint8_t * restrict dst_curr         = (uint8_t *) dst;
-
-    int step_of_1 = num_elems >> 6;  // 6 because we process two vectors at once
-    int half_size = (sizeof(float) * (num_elems / 2));
-
-    for (int i = 0; i < step_of_1; i++) {
-        HVX_Vector v0 = *(HVX_Vector *) src0_curr;
-        HVX_Vector v1 = *(HVX_Vector *) (src0_curr + half_size);
-
-        HVX_Vector v2 = *(HVX_Vector *) theta_curr;
-        HVX_Vector v3 = *(HVX_Vector *) (theta_curr + VLEN);
+        HVX_Vector v2 = vtheta[i+0];
+        HVX_Vector v3 = vtheta[i+1];
 
         HVX_VectorPair vcos_sin = Q6_W_vdeal_VVR(v3, v2, -4);  // vcos_sin[0] = cos_theta, vcos_sin[1] = sin_theta
 
@@ -186,45 +161,34 @@ static void hvx_calc_rope_neox_f32(const float * restrict src0,
         HVX_Vector v4 = Q6_Vqf32_vsub_Vqf32Vqf32(vx0_c, vx1_s);
         HVX_Vector v5 = Q6_Vqf32_vadd_Vqf32Vqf32(vx0_s, vx1_c);
 
-        *(HVX_Vector *) dst_curr               = Q6_Vsf_equals_Vqf32(v4);
-        *(HVX_Vector *) (dst_curr + half_size) = Q6_Vsf_equals_Vqf32(v5);
+        vdst[i/2+0]  = Q6_Vsf_equals_Vqf32(v4);
+        vdst[i/2+hv] = Q6_Vsf_equals_Vqf32(v5);
+    }
 
-        src0_curr += VLEN;
-        theta_curr += 2 * VLEN;
-        dst_curr += VLEN;
+    for (uint32_t i = nvec * VLEN_FP32; i < ne; i += 2) {
+        const float cos_theta = theta_cache[i+0];
+        const float sin_theta = theta_cache[i+1];
+        float x0 = src0[i/2];
+        float x1 = src0[i/2 + he];
+        dst[i/2]      = x0 * cos_theta - x1 * sin_theta;
+        dst[i/2 + he] = x0 * sin_theta + x1 * cos_theta;
     }
 }
 
-static void hvx_calc_rope_f32(const float * restrict src0,
-                              float * restrict dst,
-                              const int num_elems,
-                              const float * restrict theta_cache) {
-    // for (int i = 0; i < num_elems; i += 2) {
-    //const float cos_theta = theta_cache[i + 0];
-    //const float sin_theta = theta_cache[i + 1];
+static inline void hvx_rope_f32_aa(float * restrict dst, const float * restrict src0, uint32_t ne, const float * restrict theta_cache) {
+    const HVX_Vector * restrict vsrc   = (const HVX_Vector *) src0;
+    const HVX_Vector * restrict vtheta = (const HVX_Vector *) theta_cache;
+    HVX_Vector       * restrict vdst   = (HVX_Vector *) dst;
 
-    //const float x0 = src[0];
-    //const float x1 = src[1];
+    uint32_t nvec = (ne / (VLEN_FP32 * 2)) * 2; // 2 vecs per loop, step of two
 
-    //dst[0] = x0*cos_theta - x1*sin_theta;
-    //dst[1] = x0*sin_theta + x1*cos_theta;
+    #pragma unroll(2)
+    for (uint32_t i = 0; i < nvec; i+=2) {
+        HVX_Vector v0 = vsrc[i+0];
+        HVX_Vector v1 = vsrc[i+1];
 
-    //src += 2;
-    //dst += 2;
-    // }
-
-    const uint8_t * restrict src0_curr  = (const uint8_t *) src0;
-    const uint8_t * restrict theta_curr = (const uint8_t *) theta_cache;
-    uint8_t * restrict dst_curr         = (uint8_t *) dst;
-
-    int step_of_1 = num_elems >> 6;  // 6 because we process two vectors at once
-
-    for (int i = 0; i < step_of_1; i++) {
-        HVX_Vector v0 = *(HVX_Vector *) src0_curr;
-        HVX_Vector v1 = *(HVX_Vector *) (src0_curr + VLEN);
-
-        HVX_Vector v2 = *(HVX_Vector *) theta_curr;
-        HVX_Vector v3 = *(HVX_Vector *) (theta_curr + VLEN);
+        HVX_Vector v2 = vtheta[i+0];
+        HVX_Vector v3 = vtheta[i+1];
 
         HVX_VectorPair vx0_x1   = Q6_W_vdeal_VVR(v1, v0, -4);  // vx0_x1[0] = x0, vx0_x1[1] = x1
         HVX_VectorPair vcos_sin = Q6_W_vdeal_VVR(v3, v2, -4);  // vcos_sin[0] = cos_theta, vcos_sin[1] = sin_theta
@@ -239,116 +203,65 @@ static void hvx_calc_rope_f32(const float * restrict src0,
 
         HVX_VectorPair vstore = Q6_W_vshuff_VVR(Q6_Vsf_equals_Vqf32(v5), Q6_Vsf_equals_Vqf32(v4), -4);
 
-        *(HVX_Vector *) dst_curr          = Q6_V_lo_W(vstore);
-        *(HVX_Vector *) (dst_curr + VLEN) = Q6_V_hi_W(vstore);
+        vdst[i+0] = Q6_V_lo_W(vstore);
+        vdst[i+1] = Q6_V_hi_W(vstore);
+    }
 
-        src0_curr += 2 * VLEN;
-        theta_curr += 2 * VLEN;
-        dst_curr += 2 * VLEN;
+    for (uint32_t i = nvec * VLEN_FP32; i < ne; i += 2) {
+        const float cos_theta = theta_cache[i+0];
+        const float sin_theta = theta_cache[i+1];
+        float x0 = src0[i+0];
+        float x1 = src0[i+1];
+        dst[i+0] = x0 * cos_theta - x1 * sin_theta;
+        dst[i+1] = x0 * sin_theta + x1 * cos_theta;
     }
 }
 
-static void rope_hex_f32(struct rope_th_ctx * rope_ctx,
-                         const uint32_t       ir0,
-                         const uint32_t       ir1,
-                         int                  nth,
-                         int                  ith,
-                         const int            opt_path) {
-    struct htp_ops_context * octx = rope_ctx->octx;
+static void inline rope_basic_f32(struct htp_rope_context * rctx, uint8_t * restrict dst, uint8_t * restrict src,
+                   uint32_t nr, uint32_t ne0, const float * restrict theta_cache) {
+    #pragma unroll(4)
+    for (uint32_t i = 0; i < nr; i++) {
+        float * d = (float *) (dst + i * rctx->dst_row_size_aligned);
+        float * s = (float *) (src + i * rctx->src0_row_size_aligned);
+
+        hvx_rope_f32_aa(d, s, rctx->n_dims, theta_cache);
+
+        // fill the remain channels with data from src tensor
+        if (rctx->n_dims < ne0) {
+            hvx_copy_f32_uu((uint8_t *)(d + rctx->n_dims), (uint8_t *)(s + rctx->n_dims), ne0 - rctx->n_dims);
+        }
+    }
+}
+
+static void inline rope_neox_f32(struct htp_rope_context * rctx, uint8_t * restrict dst, uint8_t * restrict src,
+                   uint32_t nr, uint32_t ne0, const float * restrict theta_cache) {
+    #pragma unroll(4)
+    for (uint32_t i = 0; i < nr; i++) {
+        float * d = (float *) (dst + i * rctx->dst_row_size_aligned);
+        float * s = (float *) (src + i * rctx->src0_row_size_aligned);
+
+        hvx_rope_neox_f32_aa(d, s, rctx->n_dims, theta_cache);
+
+        // fill the remain channels with data from src tensor
+        if (rctx->n_dims < ne0) {
+            hvx_copy_f32_uu((uint8_t *)(d + rctx->n_dims), (uint8_t *)(s + rctx->n_dims), ne0 - rctx->n_dims);
+        }
+    }
+}
+
+static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
+    struct htp_rope_context * rctx = (struct htp_rope_context *) data;
+    struct htp_ops_context * octx = rctx->octx;
 
     const struct htp_tensor * src0 = &octx->src0;
     const struct htp_tensor * src1 = &octx->src1;
     const struct htp_tensor * src2 = &octx->src2;
     struct htp_tensor *       dst  = &octx->dst;
 
-    const int32_t mode    = rope_ctx->mode;
-    const bool    is_neox = mode & HTP_ROPE_TYPE_NEOX;
-
     htp_rope_preamble;
 
-    const int32_t * pos = (const int32_t *) src1->data;
-
-    float * wp0 = (float *) (octx->src0_spad.data + (ith * nb01));
-
-    const float * freq_factors = NULL;
-    if (src2 != NULL) {
-        freq_factors = (const float *) src2->data;
-    }
-
-    const uint32_t i1_end       = MIN(ir1, ne1);
-    const int32_t  half_dims    = rope_ctx->n_dims / 2;
-    const size_t   remain_bytes = (ne0 - rope_ctx->n_dims) * sizeof(float);
-    for (uint32_t i3 = 0; i3 < ne3; i3++) {      // batch
-        for (uint32_t i2 = 0; i2 < ne2; i2++) {  // seq-len
-            const int32_t p = pos[i2];
-
-            rope_cache_init(p, rope_ctx->freq_scale, freq_factors, rope_ctx->corr_dims, ne0, rope_ctx->ext_factor,
-                            rope_ctx->attn_factor, wp0, rope_ctx->theta_scale);
-
-            for (uint32_t i1 = ir0; i1 < i1_end; i1++) {  // attn-heads
-                const float * src      = (float *) ((char *) src0->data + i3 * nb03 + i2 * nb02 + i1 * nb01);
-                float *       dst_data = (float *) ((char *) dst->data + i3 * nb3 + i2 * nb2 + i1 * nb1);
-
-                const float * src_loc      = src;
-                float *       dst_data_loc = dst_data;
-
-                if (1 == opt_path) {
-                    if (is_neox) {
-                        hvx_calc_rope_neox_f32(src_loc, dst_data_loc, rope_ctx->n_dims, wp0);
-                    } else {
-                        hvx_calc_rope_f32(src_loc, dst_data_loc, rope_ctx->n_dims, wp0);
-                    }
-
-                    src_loc += rope_ctx->n_dims;
-                    dst_data_loc += rope_ctx->n_dims;
-                } else {
-                    for (uint32_t i0 = 0; i0 < rope_ctx->n_dims; i0 += 2) {
-                        const float cos_theta = wp0[i0 + 0];
-                        const float sin_theta = wp0[i0 + 1];
-
-                        if (is_neox) {
-                            const float x0 = src_loc[0];
-                            const float x1 = src_loc[half_dims];
-
-                            dst_data_loc[0]         = x0 * cos_theta - x1 * sin_theta;
-                            dst_data_loc[half_dims] = x0 * sin_theta + x1 * cos_theta;
-
-                            src_loc += 1;
-                            dst_data_loc += 1;
-                        } else {
-                            const float x0 = src_loc[0];
-                            const float x1 = src_loc[1];
-
-                            dst_data_loc[0] = x0 * cos_theta - x1 * sin_theta;
-                            dst_data_loc[1] = x0 * sin_theta + x1 * cos_theta;
-
-                            src_loc += 2;
-                            dst_data_loc += 2;
-                        }
-                    }
-
-                    src_loc += (is_neox ? half_dims : 0);
-                    dst_data_loc += (is_neox ? half_dims : 0);
-                }
-
-                // TODO: use simd to speed up the remaining elements copy
-                memcpy(dst_data_loc, src_loc, remain_bytes);
-            }
-        }
-    }
-}
-
-static void rope_job_f32_per_thread(struct rope_th_ctx * rope_ctx, int nth, int ith) {
-    struct htp_ops_context * octx = rope_ctx->octx;
-
-    const struct htp_tensor * src0 = &octx->src0;
-    const struct htp_tensor * src1 = &octx->src1;
-    struct htp_tensor *       dst  = &octx->dst;
-
-    htp_rope_preamble;
-
-    const uint32_t src0_nrows            = ne01 * ne02 * ne03;  // src0 rows
-    const uint32_t src0_nrows_per_thread = octx->src0_nrows_per_thread;
+    const uint32_t src0_nrows = rctx->src0_nrows;
+    const uint32_t src0_nrows_per_thread = rctx->src0_nrows_per_thread;
 
     const uint32_t src0_start_row = src0_nrows_per_thread * ith;
     const uint32_t src0_end_row   = MIN(src0_start_row + src0_nrows_per_thread, src0_nrows);
@@ -358,32 +271,114 @@ static void rope_job_f32_per_thread(struct rope_th_ctx * rope_ctx, int nth, int 
         return;
     }
 
-    uint64_t t1, t2;
-    t1 = HAP_perf_get_qtimer_count();
+    uint64_t tt = HAP_perf_get_qtimer_count();
 
-    int is_aligned = 1;
-    int opt_path   = 0;
-    if ((0 == hex_is_aligned((void *) src0->data, VLEN)) || (0 == hex_is_aligned((void *) src1->data, VLEN)) ||
-        (0 == hex_is_aligned((void *) dst->data, VLEN))) {
-        FARF(HIGH, "rope-f32: unaligned addresses in rope op, possibly slower execution\n");
-        is_aligned = 0;
+    const int32_t mode    = rctx->mode;
+    const bool    is_neox = mode & HTP_ROPE_TYPE_NEOX;
+
+    // VTCM setup
+    uint8_t * src0_spad_base = octx->src0_spad.data + (ith * octx->src0_spad.size_per_thread);
+    float *   theta_cache    = (float *) (src0_spad_base);
+              src0_spad_base = src0_spad_base + rctx->theta_cache_offset;
+    uint8_t * dst_spad_base  = octx->dst_spad.data + (ith * octx->dst_spad.size_per_thread);
+
+    dma_queue * dma_queue = octx->ctx->dma[ith];
+    const int32_t * pos = (const int32_t *) src1->data;
+    const float * freq_factors = src2->data ? (const float *) src2->data : NULL;
+
+    uint32_t ir = 0;
+    uint32_t prev_i2 = (uint32_t) -1;
+
+    for (uint32_t i3 = 0; i3 < ne3; i3++) { // batch
+        for (uint32_t i2 = 0; i2 < ne2; i2++) { // seq-len
+            for (uint32_t i1 = 0; i1 < ne1; ) { // attn-heads
+                if (ir < src0_start_row) { ir++; i1++; continue; }
+                if (ir >= src0_end_row) goto done;
+
+                // Rows in this block
+                const uint32_t nrows = MIN(src0_end_row - ir, ne1 - i1);
+
+                // Depth before prefetch
+                uint32_t dma_depth = dma_queue_depth(dma_queue);
+
+                // FARF(HIGH, "rope-block %u: ir %u n-rows %u dma-depth %u : usec %u", ith, ir, nrows, dma_depth,
+                //             (unsigned) HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - rctx->t_start));
+
+                // Prefetch loop
+                for (uint32_t pnr = 0, pr = 0; pr < nrows && pr < HTP_ROPE_SPAD_NROWS; pr += pnr) {
+                    pnr = MIN(nrows - pr, HTP_ROPE_SPAD_BLOCK);
+
+                    uint32_t pi1 = i1 + pr;
+                    uint32_t pir = ir + pr;
+
+                    // Dummy DMA transaction for sequencing (interleaving dst,src,dst,...)
+                    dma_queue_push_vtcm_to_ddr(dma_queue, dma_make_ptr((void *) dst->data, dst_spad_base + pr * rctx->dst_row_size_aligned), 0, 0, 0);
+
+                    const uint8_t * src_addr = (const uint8_t *) src0->data + i3 * nb03 + i2 * nb02 + pi1 * nb01;
+                          uint8_t * src_spad = src0_spad_base + pr * rctx->src0_row_size_aligned;
+                    dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(src_spad, src_addr),
+                        rctx->src0_row_size_aligned, rctx->src0_row_size, pnr);
+
+                    // FARF(HIGH, "rope-prefetch %u: pr %u i1 %u i2 %u i3 %u src-spad %p src-addr %p pnr %u", ith, pir, pi1, i2, i3, src_spad, src_addr, pnr);
+                }
+
+                // Update theta cache
+                if (i2 != prev_i2) {
+                    prev_i2 = i2;
+
+                    const int32_t p = pos[i2];
+                    rope_cache_init(p, rctx->freq_scale, freq_factors, rctx->corr_dims, ne0, rctx->ext_factor, rctx->attn_factor, theta_cache, rctx->theta_scale);
+
+                    // FARF(HIGH, "rope-theta %u: ir %u i1 %u i2 %u i3 %u cache %p : usec %u", ith, ir, i1, i2, i3, theta_cache,
+                    //         (unsigned) HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - rctx->t_start));
+                }
+
+                // Skip DMA transactions from prev block (if any)
+                // No need to wait for these since the DMA is setup for in-order processing
+                for (uint32_t d=0; d < dma_depth; d++) { dma_queue_pop_nowait(dma_queue); }
+
+                // Compute loop
+                for (uint32_t cnr = 0, cr = 0; cr < nrows; cr += cnr, ir += cnr, i1 += cnr) {
+                    // Number of rows to compute
+                    cnr = MIN(nrows - cr, HTP_ROPE_SPAD_BLOCK);
+
+                    uint8_t * dst_spad = (uint8_t *) dma_queue_pop(dma_queue).src;
+                    uint8_t * src_spad = (uint8_t *) dma_queue_pop(dma_queue).dst;
+
+                    // FARF(HIGH, "rope-compute %u: ir %u i1 %u i2 %u i3 %u src-spad %p cnr %u : usec %u", ith, ir, i1, i2, i3, src_spad, cnr,
+                    //         (unsigned) HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - rctx->t_start));
+
+                    if (is_neox) {
+                        rope_neox_f32(rctx, dst_spad, src_spad, cnr, ne0, theta_cache);
+                    } else {
+                        rope_basic_f32(rctx, dst_spad, src_spad, cnr, ne0, theta_cache);
+                    }
+
+                    uint8_t * dst_addr = (uint8_t *) dst->data + i3 * nb3 + i2 * nb2 + i1 * nb1;
+                    dma_queue_push_vtcm_to_ddr(dma_queue, dma_make_ptr(dst_addr, dst_spad), rctx->dst_row_size, rctx->dst_row_size_aligned, cnr);
+
+                    // Prefetch more rows (if any)
+                    if ((cr + HTP_ROPE_SPAD_NROWS) < nrows) {
+                        uint32_t pnr = MIN(nrows - (cr + HTP_ROPE_SPAD_NROWS), HTP_ROPE_SPAD_BLOCK);
+                        uint32_t pi1 = i1 + HTP_ROPE_SPAD_NROWS;
+                        uint32_t pir = ir + HTP_ROPE_SPAD_NROWS;
+
+                        const uint8_t * src_addr = (const uint8_t *) src0->data + i3 * nb03 + i2 * nb02 + pi1 * nb01;
+                        dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(src_spad, src_addr),
+                            rctx->src0_row_size_aligned, rctx->src0_row_size, pnr);
+
+                        // FARF(HIGH, "rope-prefetch %u: pr %u i1 %u i2 %u i3 %u src-spad %p src-addr %p pnr %u", ith, pir, pi1, i2, i3, src_spad, src_addr, pnr);
+                    }
+                }
+            }
+        }
     }
-    if ((1 == is_aligned) && !(nb01 & (VLEN - 1))) {
-        opt_path = 1;
-    }
 
-    rope_hex_f32(rope_ctx, src0_start_row, src0_end_row, nth, ith, opt_path);
+done:
+    dma_queue_flush(dma_queue);
+    tt = HAP_perf_get_qtimer_count() - tt;
 
-    t2 = HAP_perf_get_qtimer_count();
-
-    FARF(HIGH, "rope-f32: %d/%d/%d: (%u:%u) usec %u\n", ith, nth, opt_path, src0_start_row, src0_end_row,
-         (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
-}
-
-static void rope_job_dispatcher_f32(unsigned int n, unsigned int i, void * data) {
-    struct rope_th_ctx * rope_ctx = (struct rope_th_ctx *) data;
-
-    rope_job_f32_per_thread(rope_ctx, n, i);
+    FARF(HIGH, "rope-f32: %d/%d: (%u:%u) usec %u\n", ith, nth, src0_start_row, src0_end_row, (unsigned) HAP_perf_qtimer_count_to_us(tt));
 }
 
 static int execute_op_rope_f32(struct htp_ops_context * octx) {
@@ -394,17 +389,10 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
     const struct htp_tensor * src2 = &octx->src2;
     struct htp_tensor *       dst  = &octx->dst;
 
-    worker_callback_t op_func;
-    const char *      op_type = NULL;
-
-    struct rope_th_ctx rope_ctx;
+    const char * op_type = "rope-f32";
 
     switch (octx->op) {
         case HTP_OP_ROPE:
-            op_func = rope_job_dispatcher_f32;
-            op_type = "rope-f32";
-
-            init_rope_ctx(&rope_ctx, octx);
             break;
 
         default:
@@ -415,49 +403,79 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
     const uint32_t n_threads = octx->n_threads;
 
     const size_t src0_row_size = src0->nb[1];
-    const size_t src1_row_size = src0_row_size;
     const size_t dst_row_size  = dst->nb[1];
 
-    // VTCM scratchpads for all tensors
-    // N rows per thread, padded to HVX vector size
-    octx->dst_spad.size  = hex_round_up(dst_row_size, 128) * n_threads;
-    octx->src0_spad.size = hex_round_up(src0_row_size, 128) * n_threads;
-    octx->src1_spad.size = hex_round_up(src1_row_size, 128) * n_threads;
+    // Aligned row sizes for VTCM
+    const size_t src0_row_size_aligned    = hex_round_up(src0_row_size, VLEN);
+    const size_t dst_row_size_aligned     = hex_round_up(dst_row_size, VLEN);
+    const size_t theta_cache_size_aligned = hex_round_up(src0->ne[0] * sizeof(float), 128);
 
-    size_t spad_size = octx->src0_spad.size + octx->src1_spad.size + octx->dst_spad.size;
+    // Calculate spad sizes per thread
+    size_t src0_spad_per_thread = theta_cache_size_aligned + HTP_ROPE_SPAD_NROWS * src0_row_size_aligned;
+    size_t dst_spad_per_thread  = HTP_ROPE_SPAD_NROWS * dst_row_size_aligned;
+    size_t spad_per_thread = src0_spad_per_thread + dst_spad_per_thread;
 
-    if (src2->ne[0]) {
-        FARF(HIGH,
-             "%s: %ux%ux%ux%u (x %ux%ux%ux%u x %ux%ux%ux%u) -> %ux%ux%ux%u : src0-spad-size %u src1-spad-size %u "
-             "dst-spad-size %u\n",
-             op_type, src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src1->ne[0], src1->ne[1], src1->ne[2],
-             src1->ne[3], src2->ne[0], src2->ne[1], src2->ne[2], src2->ne[3], dst->ne[0], dst->ne[1], dst->ne[2],
-             dst->ne[3], octx->src0_spad.size, octx->src1_spad.size, octx->dst_spad.size);
-    } else {
-        FARF(HIGH,
-             "%s: %ux%ux%ux%u (%ux%ux%ux%u) -> %ux%ux%ux%u : src0-spad-size %u src1-spad-size %u dst-spad-size %u\n",
-             op_type, src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src1->ne[0], src1->ne[1], src1->ne[2],
-             src1->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], octx->src0_spad.size, octx->src1_spad.size,
-             octx->dst_spad.size);
-    }
-
-    // Make sure the reserved vtcm size is sufficient
-    if (octx->ctx->vtcm_size < spad_size) {
-        FARF(ERROR, "%s : current VTCM reservation %zu is too small, needed %zu\n", op_type, octx->ctx->vtcm_size,
-             spad_size);
+    // Check if we fit in VTCM
+    size_t total_vtcm_needed = spad_per_thread * n_threads;
+    if (octx->ctx->vtcm_size < total_vtcm_needed) {
+        FARF(ERROR, "%s : current VTCM reservation %zu is too small, needed %zu\n", op_type, octx->ctx->vtcm_size, total_vtcm_needed);
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
 
-    octx->src0_spad.data = octx->ctx->vtcm_base;
-    octx->src1_spad.data = octx->src0_spad.data + octx->src0_spad.size;
-    octx->dst_spad.data  = octx->src1_spad.data + octx->src1_spad.size;
+    // Assign sizes
+    octx->src0_spad.size_per_thread = src0_spad_per_thread;
+    octx->dst_spad.size_per_thread  = dst_spad_per_thread;
+    octx->src0_spad.size = n_threads * src0_spad_per_thread;
+    octx->dst_spad.size  = n_threads * dst_spad_per_thread;
+    octx->src1_spad.size = 0;
 
+    // Assign pointers
+    octx->src0_spad.data = octx->ctx->vtcm_base;
+    octx->src1_spad.data = NULL;
+    octx->dst_spad.data  = octx->src0_spad.data + octx->src0_spad.size;
+
+    // Fill context
+    struct htp_rope_context rctx;
+    memset(&rctx, 0, sizeof(struct htp_rope_context));
+
+    rctx.t_start = HAP_perf_get_qtimer_count();
+
+    rctx.octx = octx;
+
+    const int32_t * op_params = &octx->op_params[0];
+    rctx.n_dims     = ((const int32_t *) op_params)[1];
+    rctx.mode       = ((const int32_t *) op_params)[2];
+    rctx.n_ctx_orig = ((const int32_t *) op_params)[4];
+
+    memcpy(&rctx.freq_base,   (int32_t *) op_params + 5,  sizeof(float));
+    memcpy(&rctx.freq_scale,  (int32_t *) op_params + 6,  sizeof(float));
+    memcpy(&rctx.ext_factor,  (int32_t *) op_params + 7,  sizeof(float));
+    memcpy(&rctx.attn_factor, (int32_t *) op_params + 8,  sizeof(float));
+    memcpy(&rctx.beta_fast,   (int32_t *) op_params + 9,  sizeof(float));
+    memcpy(&rctx.beta_slow,   (int32_t *) op_params + 10, sizeof(float));
+    memcpy(&rctx.sections,    (int32_t *) op_params + 11, sizeof(int) * 4);
+
+    rctx.theta_scale = powf(rctx.freq_base, -2.0f / rctx.n_dims);
+
+    rope_corr_dims(rctx.n_dims, rctx.n_ctx_orig, rctx.freq_base, rctx.beta_fast, rctx.beta_slow, rctx.corr_dims);
+
+    rctx.src0_row_size = src0_row_size;
+    rctx.dst_row_size  = dst_row_size;
+    rctx.src0_row_size_aligned = src0_row_size_aligned;
+    rctx.dst_row_size_aligned  = dst_row_size_aligned;
+    rctx.theta_cache_offset    = theta_cache_size_aligned;
+
+    uint32_t ne0 = dst->ne[0];
     uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
+    rctx.src0_nrows = src0_nrows;
+
+    FARF(HIGH, "rope-f32 n-rows %u n-dims %d ne0 %u ext-factor %.6f theta-scale %.6f attn-factor %.6f\n", rctx.src0_nrows, rctx.n_dims, ne0,
+         rctx.ext_factor, rctx.theta_scale, rctx.attn_factor);
 
     if (!(octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)) {
-        uint32_t n_jobs             = MIN(n_threads, src0_nrows);
-        octx->src0_nrows_per_thread = (src0_nrows + n_jobs - 1) / n_jobs;
-        worker_pool_run_func(octx->ctx->worker_pool, op_func, &rope_ctx, n_jobs);
+        uint32_t n_jobs = MIN(n_threads, src0_nrows);
+        rctx.src0_nrows_per_thread = (src0_nrows + n_jobs - 1) / n_jobs;
+        worker_pool_run_func(octx->ctx->worker_pool, rope_job_f32, &rctx, n_jobs);
     }
 
     return err;

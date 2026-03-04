@@ -52,6 +52,8 @@ static std::string server_model_status_to_string(server_model_status status) {
 struct server_model_meta {
     common_preset preset;
     std::string name;
+    std::set<std::string> aliases; // additional names that resolve to this model
+    std::set<std::string> tags;    // informational tags, not used for routing
     int port = 0;
     server_model_status status = SERVER_MODEL_STATUS_UNLOADED;
     int64_t last_used = 0; // for LRU unloading

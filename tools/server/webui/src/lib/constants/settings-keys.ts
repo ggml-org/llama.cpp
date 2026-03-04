@@ -23,6 +23,7 @@ export const SETTINGS_KEYS = {
 	DISABLE_AUTO_SCROLL: 'disableAutoScroll',
 	ALWAYS_SHOW_SIDEBAR_ON_DESKTOP: 'alwaysShowSidebarOnDesktop',
 	AUTO_SHOW_SIDEBAR_ON_NEW_CHAT: 'autoShowSidebarOnNewChat',
+	FULL_HEIGHT_CODE_BLOCKS: 'fullHeightCodeBlocks',
 	// Sampling
 	TEMPERATURE: 'temperature',
 	DYNATEMP_RANGE: 'dynatemp_range',

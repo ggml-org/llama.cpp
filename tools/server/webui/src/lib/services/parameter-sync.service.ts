@@ -153,6 +153,12 @@ export const SYNCABLE_PARAMETERS: SyncableParameter[] = [
 		serverKey: 'enableContinueGeneration',
 		type: SyncableParameterType.BOOLEAN,
 		canSync: true
+	},
+	{
+		key: 'fullHeightCodeBlocks',
+		serverKey: 'fullHeightCodeBlocks',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
 	}
 ];
 
