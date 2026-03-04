@@ -3,7 +3,6 @@
 	import { SvelteMap } from 'svelte/reactivity';
 	import { ChevronDown, Loader2, Package } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
-	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { cn } from '$lib/components/ui/utils';
 	import {
 		modelsStore,
@@ -91,25 +90,51 @@
 		const result: {
 			orgName: string | null;
 			isFavouritesGroup: boolean;
+			isLoadedGroup: boolean;
 			items: { option: ModelOption; flatIndex: number }[];
 		}[] = [];
 
+		// Loaded models group (top)
+		const loadedItems: { option: ModelOption; flatIndex: number }[] = [];
+		for (let i = 0; i < filteredOptions.length; i++) {
+			if (modelsStore.isModelLoaded(filteredOptions[i].model)) {
+				loadedItems.push({ option: filteredOptions[i], flatIndex: i });
+			}
+		}
+
+		if (loadedItems.length > 0) {
+			result.push({
+				orgName: null,
+				isFavouritesGroup: false,
+				isLoadedGroup: true,
+				items: loadedItems
+			});
+		}
+
+		// Favourites group
+		const loadedModelIds = new Set(loadedItems.map((item) => item.option.model));
 		const favItems: { option: ModelOption; flatIndex: number }[] = [];
 		for (let i = 0; i < filteredOptions.length; i++) {
-			if (favIds.has(filteredOptions[i].model)) {
+			if (favIds.has(filteredOptions[i].model) && !loadedModelIds.has(filteredOptions[i].model)) {
 				favItems.push({ option: filteredOptions[i], flatIndex: i });
 			}
 		}
 
 		if (favItems.length > 0) {
-			result.push({ orgName: null, isFavouritesGroup: true, items: favItems });
+			result.push({
+				orgName: null,
+				isFavouritesGroup: true,
+				isLoadedGroup: false,
+				items: favItems
+			});
 		}
 
+		// Org groups (excluding loaded and favourites)
 		const orgGroups = new SvelteMap<string, { option: ModelOption; flatIndex: number }[]>();
 		for (let i = 0; i < filteredOptions.length; i++) {
 			const option = filteredOptions[i];
 
-			if (favIds.has(option.model)) continue;
+			if (loadedModelIds.has(option.model) || favIds.has(option.model)) continue;
 
 			const orgName = option.parsedId?.orgName ?? null;
 			const key = orgName ?? '';
@@ -120,7 +145,12 @@
 		}
 
 		for (const [orgName, items] of orgGroups) {
-			result.push({ orgName: orgName || null, isFavouritesGroup: false, items });
+			result.push({
+				orgName: orgName || null,
+				isFavouritesGroup: false,
+				isLoadedGroup: false,
+				items
+			});
 		}
 
 		return result;
@@ -284,6 +314,7 @@
 	{#if loading && options.length === 0 && isRouter}
 		<div class="flex items-center gap-2 text-xs text-muted-foreground">
 			<Loader2 class="h-3.5 w-3.5 animate-spin" />
+
 			Loading models…
 		</div>
 	{:else if options.length === 0 && isRouter}
@@ -333,14 +364,7 @@
 						<Package class="h-3.5 w-3.5" />
 
 						{#if selectedOption}
-							<Tooltip.Root>
-								<Tooltip.Trigger class="min-w-0 overflow-hidden">
-									<ModelId modelId={selectedOption.model} class="min-w-0" showOrgName />
-								</Tooltip.Trigger>
-								<Tooltip.Content>
-									<p class="font-mono">{selectedOption.model}</p>
-								</Tooltip.Content>
-							</Tooltip.Root>
+							<ModelId modelId={selectedOption.model} class="min-w-0" showOrgName />
 						{:else}
 							<span class="min-w-0 font-medium">Select model</span>
 						{/if}
@@ -380,24 +404,28 @@
 									<span class="ml-2 text-xs whitespace-nowrap opacity-70">(not available)</span>
 								</button>
 							{/if}
+
 							{#if filteredOptions.length === 0}
 								<p class="px-4 py-3 text-sm text-muted-foreground">No models found.</p>
 							{/if}
-							{#each groupedFilteredOptions as group (group.isFavouritesGroup ? '__favourites__' : group.orgName)}
-								{#if group.isFavouritesGroup}
-									<p
-										class="mt-2 px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none"
-									>
-										Favourites
+
+							{#each groupedFilteredOptions as group (group.isLoadedGroup ? '__loaded__' : group.isFavouritesGroup ? '__favourites__' : group.orgName)}
+								{#if group.isLoadedGroup}
+									<p class="px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none">
+										Loaded models
+									</p>
+								{:else if group.isFavouritesGroup}
+									<p class="px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none">
+										Favourite models
 									</p>
 								{:else if group.orgName}
 									<p
-										class="mt-2 px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none"
+										class="px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none [&:not(:first-child)]:mt-2"
 									>
 										{group.orgName}
 									</p>
 								{/if}
-								{#each group.items as { option, flatIndex } (group.isFavouritesGroup ? `fav-${option.id}` : option.id)}
+								{#each group.items as { option, flatIndex } (group.isLoadedGroup ? `loaded-${option.id}` : group.isFavouritesGroup ? `fav-${option.id}` : option.id)}
 									{@const isSelected = currentModel === option.model || activeId === option.id}
 									{@const isHighlighted = flatIndex === highlightedIndex}
 									{@const isFav = modelsStore.favouriteModelIds.has(option.model)}
@@ -407,7 +435,7 @@
 										{isSelected}
 										{isHighlighted}
 										{isFav}
-										showOrgName={group.isFavouritesGroup}
+										showOrgName={group.isFavouritesGroup || group.isLoadedGroup}
 										onSelect={handleSelect}
 										onMouseEnter={() => (highlightedIndex = flatIndex)}
 										onKeyDown={(e) => {
@@ -443,14 +471,7 @@
 				<Package class="h-3.5 w-3.5" />
 
 				{#if selectedOption}
-					<Tooltip.Root>
-						<Tooltip.Trigger class="min-w-0 overflow-hidden">
-							<ModelId modelId={selectedOption.model} class="min-w-0" showOrgName />
-						</Tooltip.Trigger>
-						<Tooltip.Content>
-							<p class="font-mono">{selectedOption.model}</p>
-						</Tooltip.Content>
-					</Tooltip.Root>
+					<ModelId modelId={selectedOption.model} class="min-w-0" showOrgName />
 				{/if}
 
 				{#if updating}

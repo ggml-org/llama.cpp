@@ -172,9 +172,9 @@
 
 	<div class="ml-auto flex items-center gap-1.5">
 		<ModelsSelector
-			disabled={disabled || isOffline}
 			bind:this={selectorModelRef}
 			currentModel={conversationModel}
+			disabled={disabled || isOffline}
 			forceForegroundText={true}
 			useGlobalSelection={true}
 		/>

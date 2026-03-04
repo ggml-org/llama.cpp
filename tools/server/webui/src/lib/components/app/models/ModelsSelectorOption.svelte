@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { CircleAlert, Heart, HeartOff, Loader2, Power, PowerOff, RotateCw } from '@lucide/svelte';
-	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { cn } from '$lib/components/ui/utils';
 	import { Badge } from '$lib/components/ui/badge';
 	import { ActionIcon, ModelId } from '$lib/components/app';
@@ -87,21 +86,14 @@
 			onclick={(e) => e.stopPropagation()}
 		>
 			{#if isFav}
-				<Tooltip.Root>
-					<Tooltip.Trigger>
-						<button
-							type="button"
-							class="fav-icon-btn inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-md p-0"
-							aria-label="Remove from favourites"
-							onclick={() => modelsStore.toggleFavourite(option.model)}
-						>
-							<HeartOff class="fav-icon h-4 w-4 hover:text-foreground" />
-						</button>
-					</Tooltip.Trigger>
-					<Tooltip.Content>
-						<p>Remove from favourites</p>
-					</Tooltip.Content>
-				</Tooltip.Root>
+				<button
+					type="button"
+					class="fav-icon-btn inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-md p-0"
+					aria-label="Remove from favourites"
+					onclick={() => modelsStore.toggleFavourite(option.model)}
+				>
+					<HeartOff class="fav-icon h-4 w-4 hover:text-foreground" />
+				</button>
 			{:else}
 				<ActionIcon
 					iconSize="h-2.5 w-2.5"
@@ -113,14 +105,7 @@
 			{/if}
 		</div>
 		{#if isLoading}
-			<Tooltip.Root>
-				<Tooltip.Trigger>
-					<Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
-				</Tooltip.Trigger>
-				<Tooltip.Content class="z-[9999]">
-					<p>Loading model...</p>
-				</Tooltip.Content>
-			</Tooltip.Root>
+			<Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
 		{:else if isFailed}
 			<div class="flex w-4 items-center justify-center">
 				<CircleAlert class="h-3.5 w-3.5 text-red-500 group-hover:hidden" />
