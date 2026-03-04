@@ -8,7 +8,10 @@ struct Params {
     offset_mask: u32,
     seq_len_q: u32,
     seq_len_kv: u32,
+    // plane b base = offset_mask + b * stride_mask3.
     stride_mask3: u32,
+    // Number of KV blocks and Q blocks per batch.
+    // nblk0 = ceil(seq_len_kv / KV_TILE), nblk1 = ceil(seq_len_q / Q_TILE).
     nblk0: u32,
     nblk1: u32,
 };
@@ -26,6 +29,9 @@ var<workgroup> wg_any: array<u32, WG_SIZE>;
 @compute @workgroup_size(WG_SIZE)
 fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
         @builtin(local_invocation_id) local_id: vec3<u32>) {
+    // Dispatch mapping:
+    //  - x indexes KV blocks
+    //  - y flattens (batch_idx, q_blk) as y = batch_idx * nblk1 + q_blk
     let kv_blk = wg_id.x;
     let y = wg_id.y;
     let q_blk = y % params.nblk1;
@@ -40,6 +46,10 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     let mask_batch = select(0u, batch_idx, params.stride_mask3 > 0u);
     let mask_batch_base = params.offset_mask + mask_batch * params.stride_mask3;
 
+    // We keep min/max to classify:
+    //  - fully masked (max <= MASK_MIN)
+    //  - all-zero mask (min == 0 && max == 0)
+    //  - mixed/general mask
     var local_min = MASK_MAX;
     var local_max = -MASK_MAX;
     var local_any = 0u;
@@ -67,6 +77,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     wg_any[local_id.x] = local_any;
     workgroupBarrier();
 
+    // Thread 0 writes one state per block.
     if (local_id.x == 0u) {
         var mmin = wg_min[0];
         var mmax = wg_max[0];

@@ -519,7 +519,6 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_flash_attn_shader(
     defines.push_back(std::string("SG_MAT_K=") + std::to_string(context.sg_mat_k));
 
     // Add chosen Q/KV tile sizes.
-    // Mirror Metal's vec path for split kernels: 1 query per workgroup and 32 KV cache values per subgroup.
     uint32_t q_tile = context.sg_mat_m;
     uint32_t kv_tile = std::min(ggml_webgpu_flash_attn_max_kv_tile(context),
                                 context.sg_mat_n * GGML_WEBGPU_FLASH_ATTN_PREFERRED_KV_SG_TILES);
@@ -542,7 +541,7 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_flash_attn_shader(
 
     uint32_t wg_size = 0;
     if (context.key.use_vec_split) {
-        // Keep vec-split to a single subgroup; aligns lane mapping with Metal's vec kernel.
+        // Keep vec-split to a single subgroup to avoid complexity in the reduction.
         wg_size = context.max_subgroup_size;
     } else {
         wg_size = std::max(context.max_subgroup_size, GGML_WEBGPU_FLASH_ATTN_PREFERRED_WG_SIZE);
