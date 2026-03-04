@@ -14,6 +14,7 @@ import { SvelteMap } from 'svelte/reactivity';
 import { AttachmentType } from '$lib/enums';
 import { MCP_RESOURCE_CACHE_MAX_ENTRIES, MCP_RESOURCE_CACHE_TTL_MS } from '$lib/constants/cache';
 import { MCP_RESOURCE_ATTACHMENT_ID_PREFIX } from '$lib/constants/mcp-resource';
+import { normalizeResourceUri } from '$lib/utils';
 import type {
 	MCPResource,
 	MCPResourceTemplate,
@@ -443,7 +444,11 @@ class MCPResourceStore {
 	 * Check if a resource is already attached
 	 */
 	isAttached(uri: string): boolean {
-		return this._attachments.some((att) => att.resource.uri === uri);
+		const normalizedUri = normalizeResourceUri(uri);
+
+		return this._attachments.some(
+			(att) => att.resource.uri === uri || normalizeResourceUri(att.resource.uri) === normalizedUri
+		);
 	}
 
 	/**
@@ -465,8 +470,13 @@ class MCPResourceStore {
 	 * Find resource info by URI across all servers
 	 */
 	findResourceByUri(uri: string): MCPResourceInfo | undefined {
+		const normalizedUri = normalizeResourceUri(uri);
+
 		for (const [serverName, serverRes] of this._serverResources) {
-			const resource = serverRes.resources.find((r) => r.uri === uri);
+			const resource =
+				serverRes.resources.find((r) => r.uri === uri) ??
+				serverRes.resources.find((r) => normalizeResourceUri(r.uri) === normalizedUri);
+
 			if (resource) {
 				return {
 					uri: resource.uri,

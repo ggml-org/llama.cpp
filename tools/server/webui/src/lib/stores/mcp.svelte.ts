@@ -59,10 +59,12 @@ import type {
 	HealthCheckState,
 	MCPServerSettingsEntry,
 	MCPServerConfig,
-	MCPResourceIcon
+	MCPResourceIcon,
+	MCPResourceAttachment,
+	MCPResourceContent
 } from '$lib/types';
 import type { ListChangedHandlers } from '@modelcontextprotocol/sdk/types.js';
-import type { McpServerOverride } from '$lib/types/database';
+import type { DatabaseMessageExtraMcpResource, McpServerOverride } from '$lib/types/database';
 import type { SettingsConfigType } from '$lib/types/settings';
 
 export function buildMcpClientConfig(
@@ -1340,6 +1342,62 @@ class MCPStore {
 		);
 	}
 
+	/**
+	 * Get completions for a resource template argument.
+	 * Uses the MCP Completion API with ref/resource.
+	 */
+	async getResourceCompletions(
+		serverName: string,
+		uriTemplate: string,
+		argumentName: string,
+		argumentValue: string
+	): Promise<{ values: string[]; total?: number; hasMore?: boolean } | null> {
+		const connection = this.connections.get(serverName);
+
+		if (!connection) {
+			console.warn(`[MCPStore] Server "${serverName}" is not connected`);
+			return null;
+		}
+
+		if (!connection.serverCapabilities?.completions) {
+		
+			return null;
+		}
+
+		return MCPService.complete(
+			connection,
+			{ type: MCPRefType.RESOURCE, uri: uriTemplate },
+			{ name: argumentName, value: argumentValue }
+		);
+	}
+
+	/**
+	 * Read a resource by an arbitrary URI (e.g., one expanded from a template).
+	 * Unlike readResource(), this does not require the URI to be in the resources list.
+	 */
+	async readResourceByUri(
+		serverName: string,
+		uri: string
+	): Promise<MCPResourceContent[] | null> {
+		const connection = this.connections.get(serverName);
+
+		if (!connection) {
+			console.error(`[MCPStore] No connection found for server: ${serverName}`);
+
+			return null;
+		}
+
+		try {
+			const result = await MCPService.readResource(connection, uri);
+
+			return result.contents;
+		} catch (error) {
+			console.error(`[MCPStore] Failed to read resource ${uri}:`, error);
+
+			return null;
+		}
+	}
+
 	private parseHeaders(headersJson?: string): Record<string, string> | undefined {
 		if (!headersJson?.trim()) {
 			return undefined;
@@ -1815,7 +1873,7 @@ class MCPStore {
 	 * Read resource content from a server.
 	 * Caches the result in mcpResourceStore.
 	 */
-	async readResource(uri: string): Promise<import('$lib/types').MCPResourceContent[] | null> {
+	async readResource(uri: string): Promise<MCPResourceContent[] | null> {
 		// Check cache first
 		const cached = mcpResourceStore.getCachedContent(uri);
 		if (cached) {
@@ -1921,7 +1979,7 @@ class MCPStore {
 	 * Add a resource as attachment to chat context.
 	 * Automatically fetches content if not cached.
 	 */
-	async attachResource(uri: string): Promise<import('$lib/types').MCPResourceAttachment | null> {
+	async attachResource(uri: string): Promise<MCPResourceAttachment | null> {
 		const resourceInfo = mcpResourceStore.findResourceByUri(uri);
 		if (!resourceInfo) {
 			console.error(`[MCPStore] Resource not found: ${uri}`);
@@ -1979,7 +2037,7 @@ class MCPStore {
 	 * Convert current resource attachments to DatabaseMessageExtra[] and clear them.
 	 * Called during message send to persist resources with the user message.
 	 */
-	consumeResourceAttachmentsAsExtras(): import('$lib/types').DatabaseMessageExtraMcpResource[] {
+	consumeResourceAttachmentsAsExtras(): DatabaseMessageExtraMcpResource[] {
 		const extras = mcpResourceStore.toMessageExtras();
 		if (extras.length > 0) {
 			mcpResourceStore.clearAttachments();

@@ -246,3 +246,17 @@ export { default as McpResourceBrowser } from './McpResourceBrowser/McpResourceB
  * - Loading and error states
  */
 export { default as McpResourcePreview } from './McpResourcePreview.svelte';
+
+/**
+ * **McpResourceTemplateForm** - MCP resource template variable form
+ *
+ * Form for filling in resource template variables with auto-completion
+ * via the Completions API. Shows live URI preview as variables are filled.
+ *
+ * **Features:**
+ * - Template variable input fields
+ * - Completions API integration for variable auto-complete
+ * - Live URI preview as variables are filled
+ * - Read resolved resource action
+ */
+export { default as McpResourceTemplateForm } from './McpResourceTemplateForm.svelte';

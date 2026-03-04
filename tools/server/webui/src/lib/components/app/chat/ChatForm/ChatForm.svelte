@@ -24,7 +24,7 @@
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { mcpHasResourceAttachments } from '$lib/stores/mcp-resources.svelte';
 	import { conversationsStore, activeMessages } from '$lib/stores/conversations.svelte';
-	import type { GetPromptResult, MCPPromptInfo, PromptMessage } from '$lib/types';
+	import type { GetPromptResult, MCPPromptInfo, MCPResourceInfo, PromptMessage } from '$lib/types';
 	import { isIMEComposing, parseClipboardContent, uuid } from '$lib/utils';
 	import {
 		AudioRecorder,
@@ -635,7 +635,7 @@
 <DialogMcpResources
 	bind:open={isResourceDialogOpen}
 	preSelectedUri={preSelectedResourceUri}
-	onAttach={(resource) => {
+	onAttach={(resource: MCPResourceInfo) => {
 		mcpStore.attachResource(resource.uri);
 	}}
 	onOpenChange={(newOpen: boolean) => {

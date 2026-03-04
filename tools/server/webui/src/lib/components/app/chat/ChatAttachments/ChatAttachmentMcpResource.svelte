@@ -5,7 +5,7 @@
 	import type { MCPResourceAttachment } from '$lib/types';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { ActionIconRemove } from '$lib/components/app';
-	import { getResourceIcon } from '$lib/utils';
+	import { getResourceIcon, getResourceDisplayName } from '$lib/utils';
 
 	interface Props {
 		attachment: MCPResourceAttachment;
@@ -51,7 +51,7 @@
 			{/if}
 
 			<span class="max-w-[150px] truncate text-xs">
-				{attachment.resource.title || attachment.resource.name}
+				{getResourceDisplayName(attachment.resource)}
 			</span>
 
 			{#if onRemove}

@@ -124,6 +124,15 @@ export {
 	downloadResourceContent
 } from './mcp';
 
+// URI Template utilities
+export {
+	extractTemplateVariables,
+	expandTemplate,
+	isTemplateComplete,
+	normalizeResourceUri,
+	type UriTemplateVariable
+} from './uri-template';
+
 // Data URL utilities
 export { createBase64DataUrl } from './data-url';
 

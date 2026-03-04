@@ -16,10 +16,12 @@
 
 	interface Props {
 		resource: MCPResourceInfo | null;
+		/** Pre-loaded content (e.g., from template resolution). Skips store fetch when provided. */
+		preloadedContent?: MCPResourceContent[] | null;
 		class?: string;
 	}
 
-	let { resource, class: className }: Props = $props();
+	let { resource, preloadedContent, class: className }: Props = $props();
 
 	let content = $state<MCPResourceContent[] | null>(null);
 	let isLoading = $state(false);
@@ -27,7 +29,13 @@
 
 	$effect(() => {
 		if (resource) {
-			loadContent(resource.uri);
+			if (preloadedContent) {
+				content = preloadedContent;
+				isLoading = false;
+				error = null;
+			} else {
+				loadContent(resource.uri);
+			}
 		} else {
 			content = null;
 			error = null;

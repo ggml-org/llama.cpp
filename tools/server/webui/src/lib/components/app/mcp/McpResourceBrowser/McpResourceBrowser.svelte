@@ -2,7 +2,7 @@
 	import { cn } from '$lib/components/ui/utils';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { mcpResources, mcpResourcesLoading } from '$lib/stores/mcp-resources.svelte';
-	import type { MCPServerResources, MCPResourceInfo } from '$lib/types';
+	import type { MCPServerResources, MCPResourceInfo, MCPResourceTemplateInfo } from '$lib/types';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import { parseResourcePath } from '$lib/utils';
 	import McpResourceBrowserHeader from './McpResourceBrowserHeader.svelte';
@@ -12,7 +12,9 @@
 	interface Props {
 		onSelect?: (resource: MCPResourceInfo, shiftKey?: boolean) => void;
 		onToggle?: (resource: MCPResourceInfo, checked: boolean) => void;
+		onTemplateSelect?: (template: MCPResourceTemplateInfo) => void;
 		selectedUris?: Set<string>;
+		selectedTemplateUri?: string | null;
 		expandToUri?: string;
 		class?: string;
 	}
@@ -20,7 +22,9 @@
 	let {
 		onSelect,
 		onToggle,
+		onTemplateSelect,
 		selectedUris = new Set(),
+		selectedTemplateUri,
 		expandToUri,
 		class: className
 	}: Props = $props();
@@ -49,10 +53,20 @@
 				);
 			});
 
-			if (filteredResources.length > 0 || query.trim()) {
+			const filteredTemplates = serverRes.templates.filter((t) => {
+				return (
+					t.name?.toLowerCase().includes(query) ||
+					t.title?.toLowerCase().includes(query) ||
+					t.uriTemplate.toLowerCase().includes(query) ||
+					serverName.toLowerCase().includes(query)
+				);
+			});
+
+			if (filteredResources.length > 0 || filteredTemplates.length > 0 || query.trim()) {
 				filtered.set(serverName, {
 					...serverRes,
-					resources: filteredResources
+					resources: filteredResources,
+					templates: filteredTemplates
 				});
 			}
 		}
@@ -125,11 +139,13 @@
 					serverRes={serverRes as MCPServerResources}
 					isExpanded={expandedServers.has(serverName as string)}
 					{selectedUris}
+					{selectedTemplateUri}
 					{expandedFolders}
 					onToggleServer={() => toggleServer(serverName as string)}
 					onToggleFolder={toggleFolder}
 					{onSelect}
 					{onToggle}
+					{onTemplateSelect}
 					{searchQuery}
 				/>
 			{/each}
