@@ -1,3 +1,5 @@
+#pragma once
+
 #include "common.h"
 #include "llama.h"
 #include "ggml.h"
