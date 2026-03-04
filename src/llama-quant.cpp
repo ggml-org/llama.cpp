@@ -76,33 +76,6 @@ static std::string remap_imatrix (const std::string & orig_name, const std::map<
     return orig_name;
 }
 
-struct quantize_state_impl {
-    const llama_model                 & model;
-    const llama_model_quantize_params * params;
-
-    int n_attention_wv = 0;
-    int n_ffn_down     = 0;
-    int n_ffn_gate     = 0;
-    int n_ffn_up       = 0;
-    int i_attention_wv = 0;
-    int i_ffn_down     = 0;
-    int i_ffn_gate     = 0;
-    int i_ffn_up       = 0;
-
-    int n_k_quantized = 0;
-    int n_fallback    = 0;
-
-    bool has_imatrix = false;
-
-    // used to figure out if a model shares tok_embd with the output weight
-    bool has_output = false;
-
-    quantize_state_impl(const llama_model & model, const llama_model_quantize_params * params)
-        : model(model)
-        , params(params)
-        {}
-};
-
 static void llama_tensor_dequantize_impl(
     ggml_tensor * tensor, std::vector<no_init<float>> & output, std::vector<std::thread> & workers,
     const size_t nelements, const int nthread
@@ -175,7 +148,81 @@ static void llama_tensor_dequantize_impl(
     workers.clear();
 }
 
-static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_type, const ggml_tensor * tensor, llama_ftype ftype) {
+bool tensor_allows_quantization(const llama_model_quantize_params * params, llm_arch arch, const ggml_tensor * tensor) {
+    if (params->only_copy) {
+        return false;
+    }
+
+    // quantize only 2D and 3D tensors
+    if (ggml_n_dims(tensor) < 2) {
+        return false;
+    }
+
+    const std::string_view name(tensor->name);
+
+    // must end with "weight"
+    if (name.size() < 6 || name.compare(name.size() - 6, 6, "weight") != 0) {
+        return false;
+    }
+
+    if (!params->quantize_output_tensor && name == "output.weight") {
+        return false;
+    }
+
+    // do not quantize norm tensors
+    if (name.find("_norm.weight")          != std::string_view::npos) return false;
+
+    // do not quantize expert gating tensors
+    if (name.find("ffn_gate_inp.weight")   != std::string_view::npos) return false;
+
+    // these are very small (e.g. 4x4)
+    if (name.find("altup")                 != std::string_view::npos) return false;
+    if (name.find("laurel")                != std::string_view::npos) return false;
+
+    // these are not too big so keep them as it is
+    if (name.find("per_layer_model_proj")  != std::string_view::npos) return false;
+
+    // do not quantize positional embeddings and token types (BERT)
+    {
+        const auto name_s = std::string(name);
+        if (name_s == LLM_TN(arch)(LLM_TENSOR_POS_EMBD,    "weight")) return false;
+        if (name_s == LLM_TN(arch)(LLM_TENSOR_TOKEN_TYPES, "weight")) return false;
+    }
+
+    // do not quantize Mamba/Kimi's small conv1d weights
+    if (name.find("ssm_conv1d")            != std::string_view::npos) return false;
+    if (name.find("shortconv.conv.weight") != std::string_view::npos) return false;
+
+    // do not quantize RWKV's small yet 2D weights
+    if (const auto pos = name.find("time_mix_"); pos != std::string_view::npos) {
+        const std::string_view rest = name.substr(pos + 9);
+        static constexpr std::string_view blocked_suffixes[] = {
+            "first.weight",
+            "w0.weight",         "w1.weight",       "w2.weight",
+            "v0.weight",         "v1.weight",       "v2.weight",
+            "a0.weight",         "a1.weight",       "a2.weight",
+            "g1.weight",         "g2.weight",
+            "decay_w1.weight",   "decay_w2.weight",
+            "lerp_fused.weight",
+        };
+        for (const auto & suffix : blocked_suffixes) {
+            if (rest.size() >= suffix.size() &&
+                rest.compare(0, suffix.size(), suffix) == 0) {
+                return false;
+            }
+        }
+    }
+
+    // do not quantize relative position bias (T5)
+    if (name.find("attn_rel_b.weight")     != std::string_view::npos) return false;
+
+    // do not quantize specific multimodal tensors
+    if (name.find(".position_embd.")       != std::string_view::npos) return false;
+
+    return true;
+}
+
+ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_type, const ggml_tensor * tensor, llama_ftype ftype) {
     const std::string name = ggml_get_name(tensor);
 
     // TODO: avoid hardcoded tensor names - use the TN_* constants
@@ -490,49 +537,129 @@ static bool tensor_type_requires_imatrix(const ggml_tensor * t, const ggml_type 
     );
 }
 
-static void llama_model_quantize_impl(const std::string & fname_inp, const std::string & fname_out, const llama_model_quantize_params * params) {
-    ggml_type default_type;
-    llama_ftype ftype = params->ftype;
+ggml_type llama_ftype_default_type(llama_ftype ftype) {
+    switch (ftype) {
+        case LLAMA_FTYPE_MOSTLY_Q4_0:    return GGML_TYPE_Q4_0;
+        case LLAMA_FTYPE_MOSTLY_Q4_1:    return GGML_TYPE_Q4_1;
+        case LLAMA_FTYPE_MOSTLY_Q5_0:    return GGML_TYPE_Q5_0;
+        case LLAMA_FTYPE_MOSTLY_Q5_1:    return GGML_TYPE_Q5_1;
+        case LLAMA_FTYPE_MOSTLY_Q8_0:    return GGML_TYPE_Q8_0;
+        case LLAMA_FTYPE_MOSTLY_F16:     return GGML_TYPE_F16;
+        case LLAMA_FTYPE_MOSTLY_BF16:    return GGML_TYPE_BF16;
+        case LLAMA_FTYPE_ALL_F32:        return GGML_TYPE_F32;
 
-    switch (params->ftype) {
-        case LLAMA_FTYPE_MOSTLY_Q4_0: default_type = GGML_TYPE_Q4_0; break;
-        case LLAMA_FTYPE_MOSTLY_Q4_1: default_type = GGML_TYPE_Q4_1; break;
-        case LLAMA_FTYPE_MOSTLY_Q5_0: default_type = GGML_TYPE_Q5_0; break;
-        case LLAMA_FTYPE_MOSTLY_Q5_1: default_type = GGML_TYPE_Q5_1; break;
-        case LLAMA_FTYPE_MOSTLY_Q8_0: default_type = GGML_TYPE_Q8_0; break;
-        case LLAMA_FTYPE_MOSTLY_F16:  default_type = GGML_TYPE_F16;  break;
-        case LLAMA_FTYPE_MOSTLY_BF16: default_type = GGML_TYPE_BF16; break;
-        case LLAMA_FTYPE_ALL_F32:     default_type = GGML_TYPE_F32;  break;
-
-        case LLAMA_FTYPE_MOSTLY_MXFP4_MOE: default_type = GGML_TYPE_MXFP4; break;
+        case LLAMA_FTYPE_MOSTLY_MXFP4_MOE: return GGML_TYPE_MXFP4;
 
         // K-quants
         case LLAMA_FTYPE_MOSTLY_Q2_K_S:
-        case LLAMA_FTYPE_MOSTLY_Q2_K:    default_type = GGML_TYPE_Q2_K;    break;
-        case LLAMA_FTYPE_MOSTLY_IQ3_XS:  default_type = GGML_TYPE_IQ3_S;   break;
+        case LLAMA_FTYPE_MOSTLY_Q2_K:    return GGML_TYPE_Q2_K;
+        case LLAMA_FTYPE_MOSTLY_IQ3_XS:  return GGML_TYPE_IQ3_S;
         case LLAMA_FTYPE_MOSTLY_Q3_K_S:
         case LLAMA_FTYPE_MOSTLY_Q3_K_M:
-        case LLAMA_FTYPE_MOSTLY_Q3_K_L:  default_type = GGML_TYPE_Q3_K;    break;
+        case LLAMA_FTYPE_MOSTLY_Q3_K_L:  return GGML_TYPE_Q3_K;
         case LLAMA_FTYPE_MOSTLY_Q4_K_S:
-        case LLAMA_FTYPE_MOSTLY_Q4_K_M:  default_type = GGML_TYPE_Q4_K;    break;
+        case LLAMA_FTYPE_MOSTLY_Q4_K_M:  return GGML_TYPE_Q4_K;
         case LLAMA_FTYPE_MOSTLY_Q5_K_S:
-        case LLAMA_FTYPE_MOSTLY_Q5_K_M:  default_type = GGML_TYPE_Q5_K;    break;
-        case LLAMA_FTYPE_MOSTLY_Q6_K:    default_type = GGML_TYPE_Q6_K;    break;
-        case LLAMA_FTYPE_MOSTLY_TQ1_0:   default_type = GGML_TYPE_TQ1_0;   break;
-        case LLAMA_FTYPE_MOSTLY_TQ2_0:   default_type = GGML_TYPE_TQ2_0;   break;
-        case LLAMA_FTYPE_MOSTLY_IQ2_XXS: default_type = GGML_TYPE_IQ2_XXS; break;
-        case LLAMA_FTYPE_MOSTLY_IQ2_XS:  default_type = GGML_TYPE_IQ2_XS;  break;
-        case LLAMA_FTYPE_MOSTLY_IQ2_S:   default_type = GGML_TYPE_IQ2_XS;  break;
-        case LLAMA_FTYPE_MOSTLY_IQ2_M:   default_type = GGML_TYPE_IQ2_S;   break;
-        case LLAMA_FTYPE_MOSTLY_IQ3_XXS: default_type = GGML_TYPE_IQ3_XXS; break;
-        case LLAMA_FTYPE_MOSTLY_IQ1_S:   default_type = GGML_TYPE_IQ1_S;   break;
-        case LLAMA_FTYPE_MOSTLY_IQ1_M:   default_type = GGML_TYPE_IQ1_M;   break;
-        case LLAMA_FTYPE_MOSTLY_IQ4_NL:  default_type = GGML_TYPE_IQ4_NL;  break;
-        case LLAMA_FTYPE_MOSTLY_IQ4_XS:  default_type = GGML_TYPE_IQ4_XS;  break;
-        case LLAMA_FTYPE_MOSTLY_IQ3_S:   default_type = GGML_TYPE_IQ3_S;   break;
-        case LLAMA_FTYPE_MOSTLY_IQ3_M:   default_type = GGML_TYPE_IQ3_S;   break;
+        case LLAMA_FTYPE_MOSTLY_Q5_K_M:  return GGML_TYPE_Q5_K;
+        case LLAMA_FTYPE_MOSTLY_Q6_K:    return GGML_TYPE_Q6_K;
+        case LLAMA_FTYPE_MOSTLY_TQ1_0:   return GGML_TYPE_TQ1_0;
+        case LLAMA_FTYPE_MOSTLY_TQ2_0:   return GGML_TYPE_TQ2_0;
+        case LLAMA_FTYPE_MOSTLY_IQ2_XXS: return GGML_TYPE_IQ2_XXS;
+        case LLAMA_FTYPE_MOSTLY_IQ2_XS:  return GGML_TYPE_IQ2_XS;
+        case LLAMA_FTYPE_MOSTLY_IQ2_S:   return GGML_TYPE_IQ2_XS;
+        case LLAMA_FTYPE_MOSTLY_IQ2_M:   return GGML_TYPE_IQ2_S;
+        case LLAMA_FTYPE_MOSTLY_IQ3_XXS: return GGML_TYPE_IQ3_XXS;
+        case LLAMA_FTYPE_MOSTLY_IQ1_S:   return GGML_TYPE_IQ1_S;
+        case LLAMA_FTYPE_MOSTLY_IQ1_M:   return GGML_TYPE_IQ1_M;
+        case LLAMA_FTYPE_MOSTLY_IQ4_NL:  return GGML_TYPE_IQ4_NL;
+        case LLAMA_FTYPE_MOSTLY_IQ4_XS:  return GGML_TYPE_IQ4_XS;
+        case LLAMA_FTYPE_MOSTLY_IQ3_S:   return GGML_TYPE_IQ3_S;
+        case LLAMA_FTYPE_MOSTLY_IQ3_M:   return GGML_TYPE_IQ3_S;
 
-        default: throw std::runtime_error(format("invalid output file type %d\n", ftype));
+        default: return GGML_TYPE_COUNT;
+    }
+}
+
+struct ftype_name_entry {
+    const char * name;
+    llama_ftype  ftype;
+};
+
+static const ftype_name_entry ftype_name_table[] = {
+    { "F32",        LLAMA_FTYPE_ALL_F32 },
+    { "F16",        LLAMA_FTYPE_MOSTLY_F16 },
+    { "BF16",       LLAMA_FTYPE_MOSTLY_BF16 },
+    { "Q4_0",       LLAMA_FTYPE_MOSTLY_Q4_0 },
+    { "Q4_1",       LLAMA_FTYPE_MOSTLY_Q4_1 },
+    { "Q5_0",       LLAMA_FTYPE_MOSTLY_Q5_0 },
+    { "Q5_1",       LLAMA_FTYPE_MOSTLY_Q5_1 },
+    { "Q8_0",       LLAMA_FTYPE_MOSTLY_Q8_0 },
+    { "Q2_K",       LLAMA_FTYPE_MOSTLY_Q2_K },
+    { "Q2_K_S",     LLAMA_FTYPE_MOSTLY_Q2_K_S },
+    { "Q3_K_S",     LLAMA_FTYPE_MOSTLY_Q3_K_S },
+    { "Q3_K_M",     LLAMA_FTYPE_MOSTLY_Q3_K_M },
+    { "Q3_K_L",     LLAMA_FTYPE_MOSTLY_Q3_K_L },
+    { "Q4_K_S",     LLAMA_FTYPE_MOSTLY_Q4_K_S },
+    { "Q4_K_M",     LLAMA_FTYPE_MOSTLY_Q4_K_M },
+    { "Q5_K_S",     LLAMA_FTYPE_MOSTLY_Q5_K_S },
+    { "Q5_K_M",     LLAMA_FTYPE_MOSTLY_Q5_K_M },
+    { "Q6_K",       LLAMA_FTYPE_MOSTLY_Q6_K },
+    { "IQ1_S",      LLAMA_FTYPE_MOSTLY_IQ1_S },
+    { "IQ1_M",      LLAMA_FTYPE_MOSTLY_IQ1_M },
+    { "IQ2_XXS",    LLAMA_FTYPE_MOSTLY_IQ2_XXS },
+    { "IQ2_XS",     LLAMA_FTYPE_MOSTLY_IQ2_XS },
+    { "IQ2_S",      LLAMA_FTYPE_MOSTLY_IQ2_S },
+    { "IQ2_M",      LLAMA_FTYPE_MOSTLY_IQ2_M },
+    { "IQ3_XXS",    LLAMA_FTYPE_MOSTLY_IQ3_XXS },
+    { "IQ3_XS",     LLAMA_FTYPE_MOSTLY_IQ3_XS },
+    { "IQ3_S",      LLAMA_FTYPE_MOSTLY_IQ3_S },
+    { "IQ3_M",      LLAMA_FTYPE_MOSTLY_IQ3_M },
+    { "IQ4_NL",     LLAMA_FTYPE_MOSTLY_IQ4_NL },
+    { "IQ4_XS",     LLAMA_FTYPE_MOSTLY_IQ4_XS },
+    { "TQ1_0",      LLAMA_FTYPE_MOSTLY_TQ1_0 },
+    { "TQ2_0",      LLAMA_FTYPE_MOSTLY_TQ2_0 },
+    { "MXFP4_MOE",  LLAMA_FTYPE_MOSTLY_MXFP4_MOE },
+};
+
+llama_ftype llama_ftype_from_name(const char * name) {
+    for (const auto & e : ftype_name_table) {
+        if (strcmp(name, e.name) == 0) {
+            return e.ftype;
+        }
+    }
+    return (llama_ftype)-1;
+}
+
+const char * llama_ftype_to_name(llama_ftype ftype) {
+    for (const auto & e : ftype_name_table) {
+        if (e.ftype == ftype) {
+            return e.name;
+        }
+    }
+    return nullptr;
+}
+
+void init_quantize_state_counters(quantize_state_impl & qs, const std::vector<std::string> & tensor_names) {
+    const auto output_name = LLM_TN(qs.model.arch)(LLM_TENSOR_OUTPUT, "weight").str();
+
+    for (const auto & name : tensor_names) {
+        if (name.find("attn_v.weight")    != std::string::npos ||
+            name.find("attn_qkv.weight")  != std::string::npos ||
+            name.find("attn_kv_b.weight") != std::string::npos) {
+            ++qs.n_attention_wv;
+        } else if (name == output_name) {
+            qs.has_output = true;
+        }
+    }
+    qs.n_ffn_down = qs.n_ffn_gate = qs.n_ffn_up = (int)qs.model.hparams.n_layer;
+}
+
+static void llama_model_quantize_impl(const std::string & fname_inp, const std::string & fname_out, const llama_model_quantize_params * params) {
+    llama_ftype ftype = params->ftype;
+
+    ggml_type default_type = llama_ftype_default_type(ftype);
+    if (default_type == GGML_TYPE_COUNT) {
+        throw std::runtime_error(format("invalid output file type %d\n", ftype));
     }
 
     int nthread = params->nthread;
@@ -657,22 +784,14 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         });
     }
 
-    for (const auto * it : tensors) {
-        const struct ggml_tensor * tensor = it->tensor;
-
-        const std::string name = ggml_get_name(tensor);
-
-        // TODO: avoid hardcoded tensor names - use the TN_* constants
-        if (name.find("attn_v.weight")   != std::string::npos ||
-            name.find("attn_qkv.weight") != std::string::npos ||
-            name.find("attn_kv_b.weight")!= std::string::npos) {
-            ++qs.n_attention_wv;
-        } else if (name == LLM_TN(model.arch)(LLM_TENSOR_OUTPUT, "weight")) {
-            qs.has_output = true;
+    {
+        std::vector<std::string> tensor_names;
+        tensor_names.reserve(tensors.size());
+        for (const auto * it : tensors) {
+            tensor_names.emplace_back(ggml_get_name(it->tensor));
         }
+        init_quantize_state_counters(qs, tensor_names);
     }
-
-    qs.n_ffn_down = qs.n_ffn_gate = qs.n_ffn_up = (int)model.hparams.n_layer;
 
     size_t total_size_org = 0;
     size_t total_size_new = 0;
@@ -783,60 +902,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                llama_format_tensor_shape(tensor).c_str(),
                ggml_type_name(tensor->type));
 
-        // This used to be a regex, but <regex> has an extreme cost to compile times.
-        bool quantize = name.rfind("weight") == name.size() - 6; // ends with 'weight'?
-
-        // quantize only 2D and 3D tensors (experts)
-        quantize &= (ggml_n_dims(tensor) >= 2);
-
-        // do not quantize norm tensors
-        quantize &= name.find("_norm.weight") == std::string::npos;
-
-        quantize &= params->quantize_output_tensor || name != "output.weight";
-        quantize &= !params->only_copy;
-
-        // do not quantize expert gating tensors
-        // NOTE: can't use LLM_TN here because the layer number is not known
-        quantize &= name.find("ffn_gate_inp.weight") == std::string::npos;
-
-        // these are very small (e.g. 4x4)
-        quantize &= name.find("altup")  == std::string::npos;
-        quantize &= name.find("laurel") == std::string::npos;
-
-        // these are not too big so keep them as it is
-        quantize &= name.find("per_layer_model_proj") == std::string::npos;
-
-        // do not quantize positional embeddings and token types (BERT)
-        quantize &= name != LLM_TN(model.arch)(LLM_TENSOR_POS_EMBD,    "weight");
-        quantize &= name != LLM_TN(model.arch)(LLM_TENSOR_TOKEN_TYPES, "weight");
-
-        // do not quantize Mamba /Kimi's small conv1d weights
-        // NOTE: can't use LLM_TN here because the layer number is not known
-        quantize &= name.find("ssm_conv1d") == std::string::npos;
-        quantize &= name.find("shortconv.conv.weight") == std::string::npos;
-
-        // do not quantize RWKV's small yet 2D weights
-        quantize &= name.find("time_mix_first.weight") == std::string::npos;
-        quantize &= name.find("time_mix_w0.weight") == std::string::npos;
-        quantize &= name.find("time_mix_w1.weight") == std::string::npos;
-        quantize &= name.find("time_mix_w2.weight") == std::string::npos;
-        quantize &= name.find("time_mix_v0.weight") == std::string::npos;
-        quantize &= name.find("time_mix_v1.weight") == std::string::npos;
-        quantize &= name.find("time_mix_v2.weight") == std::string::npos;
-        quantize &= name.find("time_mix_a0.weight") == std::string::npos;
-        quantize &= name.find("time_mix_a1.weight") == std::string::npos;
-        quantize &= name.find("time_mix_a2.weight") == std::string::npos;
-        quantize &= name.find("time_mix_g1.weight") == std::string::npos;
-        quantize &= name.find("time_mix_g2.weight") == std::string::npos;
-        quantize &= name.find("time_mix_decay_w1.weight") == std::string::npos;
-        quantize &= name.find("time_mix_decay_w2.weight") == std::string::npos;
-        quantize &= name.find("time_mix_lerp_fused.weight") == std::string::npos;
-
-        // do not quantize relative position bias (T5)
-        quantize &= name.find("attn_rel_b.weight") == std::string::npos;
-
-        // do not quantize specific multimodal tensors
-        quantize &= name.find(".position_embd.") == std::string::npos;
+        bool quantize = tensor_allows_quantization(params, model.arch, tensor);
 
         ggml_type new_type;
         void * new_data;
