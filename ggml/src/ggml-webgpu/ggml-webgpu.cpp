@@ -622,14 +622,6 @@ static webgpu_command ggml_backend_webgpu_build_multi(
     for (size_t i = 0; i < pipelines.size(); i++) {
         webgpu_pool_bufs params_bufs = param_buf_pool.alloc_bufs();
 
-        ggml_backend_webgpu_map_buffer(ctx, params_bufs.host_buf, wgpu::MapMode::Write, 0,
-                                       params_bufs.host_buf.GetSize());
-        uint32_t * _params = (uint32_t *) params_bufs.host_buf.GetMappedRange();
-        for (size_t j = 0; j < params_list[i].size(); j++) {
-            _params[j] = params_list[i][j];
-        }
-        params_bufs.host_buf.Unmap();
-
         std::vector<wgpu::BindGroupEntry> entries            = bind_group_entries_list[i];
         uint32_t                          params_binding_num = entries.size();
         entries.push_back({ .binding = params_binding_num,
@@ -648,8 +640,8 @@ static webgpu_command ggml_backend_webgpu_build_multi(
     }
 
     wgpu::CommandEncoder encoder = ctx->device.CreateCommandEncoder();
-    for (const auto & params_bufs : params_bufs_list) {
-        encoder.CopyBufferToBuffer(params_bufs.host_buf, 0, params_bufs.dev_buf, 0, params_bufs.dev_buf.GetSize());
+    for (size_t i = 0; i < params_bufs_list.size(); i++) {
+        ctx->queue.WriteBuffer(params_bufs_list[i].dev_buf, 0, params_list[i].data(), params_list[i].size() * sizeof(uint32_t));
     }
 
     // If there are SET_ROWS operations in this submission, copy their error
