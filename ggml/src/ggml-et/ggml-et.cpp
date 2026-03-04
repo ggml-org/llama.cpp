@@ -497,7 +497,7 @@ static void ggml_backend_et_synchronize(ggml_backend_t backend) {
         return;
     }
     for(const auto& err : errors) {
-        GGML_LOG_ERROR("ET: stream error detected at synchronization point. Code: %d\n", (int)err.errorCode_);
+        GGML_LOG_ERROR("ET: stream error detected at synchronization point. Hart: %d\n", (int)err.errorContext_.value()[0].type_);
     }
     abort();
 }
@@ -599,7 +599,21 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_MUL_MAT:
             // Support Q8_0 x F32 -> F32, F16 x F32 -> F32, and F32 x F32 -> F32 matrix multiplication
             // Stride requirements: first dimension must be contiguous for all tensors
-            if (op->type == GGML_TYPE_F32 &&
+            if(op->type == GGML_TYPE_F32) {
+                // Special path for the FP32 TensorFMA kernel
+                // Limitation - N is free but the other dims must be multiple of 16
+                // The m edge is difficult to do because of the 4 conseqtive load hardware limitation
+                // And the k edge is impossible because that is encoded as `stride & 0xFFFFFFFFFFC0ULL` which becomes 0 for stride 16 (4x FP32) :(
+                // Can loosen but no real way to make them free. The n edge is the only free one
+                int64_t m = op->src[0]->ne[1];
+                int64_t k = op->src[0]->ne[0];
+                if(op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 && m % 16 == 0 && k % 16 == 0) {
+                    supported = true;
+                } else {
+                    supported = false;
+                }
+            }
+            else if (op->type == GGML_TYPE_F32 &&
                 op->src[0] && (op->src[0]->type == GGML_TYPE_Q8_0 || op->src[0]->type == GGML_TYPE_F16 || op->src[0]->type == GGML_TYPE_F32) &&
                 op->src[1] && op->src[1]->type == GGML_TYPE_F32) {
 
