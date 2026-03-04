@@ -1,0 +1,16 @@
+{
+  "name": "llama.cpp - AI chat inference",
+  "short_name": "llama.cpp",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1b1f20",
+  "theme_color": "#ff8236",
+  "icons": [
+    {
+      "src": "/icon.png",
+      "sizes": "any",
+      "purpose": "maskable",
+      "type": "image/png"
+    }
+  ]
+}
