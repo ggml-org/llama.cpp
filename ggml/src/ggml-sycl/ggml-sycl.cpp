@@ -21530,7 +21530,10 @@ static const void * split_secondary_weight_load(
     const size_t row_bytes   = ggml_row_size(type, ncols);
     const size_t total_bytes = (size_t) nrows * row_bytes;
 
-    // Host staging for D2H (sycl::malloc_host on shared context queue for PCIe zero-copy)
+    // Host staging for D2H — allocate on shared context (secondary queue)
+    // so the unified cache's queue (also shared context) can do H2D within
+    // context.  The D2H memcpy from q_primary is cross-context for the host
+    // pointer, but L0 tracks host USM at the driver level so memcpy works.
     sycl::queue * q_secondary = g_split_config.queue[1];
     void * staging = sycl::malloc_host(total_bytes, *q_secondary);
     if (!staging) {
@@ -21752,12 +21755,16 @@ static bool ggml_sycl_mul_mat_tensor_split(
         // while the current call writes to a new one).
         const int ring_slot = s_ring_idx % MERGE_RING_SIZE;
 
-        // --- Cross-device src1 staging (ring-buffered, shared-context host-pinned) ---
+        // --- Cross-device src1 staging (ring-buffered, primary-context host-pinned) ---
+        // Allocate on primary dpct context so primary queue memcpy (D2H of src1,
+        // merge to dst) stays within context.  Level Zero host USM is tracked at
+        // the driver level, so the secondary queue can still memcpy from these
+        // buffers without cross-context device-memory violations.
         if (s_src1_ring_sz < src1_f32_bytes) {
             split_merge_drain();  // ensure no in-flight merge reads old slots
             for (int i = 0; i < MERGE_RING_SIZE; i++) {
-                if (s_src1_ring[i]) sycl::free(s_src1_ring[i], *stream_second);
-                s_src1_ring[i] = (float *) sycl::malloc_host(src1_f32_bytes, *stream_second);
+                if (s_src1_ring[i]) sycl::free(s_src1_ring[i], *stream);
+                s_src1_ring[i] = (float *) sycl::malloc_host(src1_f32_bytes, *stream);
             }
             s_src1_ring_sz = s_src1_ring[0] ? src1_f32_bytes : 0;
         }
@@ -21789,12 +21796,15 @@ static bool ggml_sycl_mul_mat_tensor_split(
             }
 
             const size_t second_out_bytes = N_second * sizeof(float);
-            // Ensure ring slot host output buffer (shared-context pinned for both GPUs)
+            // Ensure ring slot host output buffer (primary-context pinned).
+            // Allocated on dpct context so merge memcpy to dst (also dpct context)
+            // stays within context.  Secondary queue D2H writes via L0 driver-level
+            // host USM access — no cross-context device-memory violation.
             if (s_second_out_ring_sz < second_out_bytes) {
                 split_merge_drain();  // ensure no in-flight merge reads old slots
                 for (int i = 0; i < MERGE_RING_SIZE; i++) {
-                    if (s_second_out_ring[i]) sycl::free(s_second_out_ring[i], *stream_second);
-                    s_second_out_ring[i] = (float *) sycl::malloc_host(second_out_bytes, *stream_second);
+                    if (s_second_out_ring[i]) sycl::free(s_second_out_ring[i], *stream);
+                    s_second_out_ring[i] = (float *) sycl::malloc_host(second_out_bytes, *stream);
                 }
                 s_second_out_ring_sz = s_second_out_ring[0] ? second_out_bytes : 0;
             }
@@ -21850,8 +21860,8 @@ static bool ggml_sycl_mul_mat_tensor_split(
             if (s_cpu_out_ring_sz < cpu_out_bytes) {
                 split_merge_drain();  // ensure no in-flight merge reads old slots
                 for (int i = 0; i < MERGE_RING_SIZE; i++) {
-                    if (s_cpu_out_ring[i]) sycl::free(s_cpu_out_ring[i], *stream_second);
-                    s_cpu_out_ring[i] = (float *) sycl::malloc_host(cpu_out_bytes, *stream_second);
+                    if (s_cpu_out_ring[i]) sycl::free(s_cpu_out_ring[i], *stream);
+                    s_cpu_out_ring[i] = (float *) sycl::malloc_host(cpu_out_bytes, *stream);
                 }
                 s_cpu_out_ring_sz = s_cpu_out_ring[0] ? cpu_out_bytes : 0;
             }
@@ -27628,14 +27638,24 @@ static void ggml_backend_sycl_free(ggml_backend_t backend) {
     s_cpu_out_ring_sz    = 0;
     s_src1_ring_sz       = 0;
     s_ring_idx           = 0;
-    // Free BCS sync buffers from persistent TG split resources
+    // Free BCS sync buffers from persistent TG split resources.
+    // progress_counter and merge_complete are device memory on dpct context.
+    // h_progress is host memory on shared context (allocated with
+    // secondary_queue.get_context()), so free it with the shared context.
     {
         auto & r = g_split_persistent;
         if (r.allocated && g_split_config.queue[0]) {
-            auto ctx = g_split_config.queue[0]->get_context();
-            if (r.progress_counter) { sycl::free(r.progress_counter, ctx); r.progress_counter = nullptr; }
-            if (r.h_progress)       { sycl::free(r.h_progress, ctx);       r.h_progress       = nullptr; }
-            if (r.merge_complete)   { sycl::free(r.merge_complete, ctx);   r.merge_complete   = nullptr; }
+            auto pri_ctx = g_split_config.queue[0]->get_context();
+            if (r.progress_counter) { sycl::free(r.progress_counter, pri_ctx); r.progress_counter = nullptr; }
+            if (r.merge_complete)   { sycl::free(r.merge_complete, pri_ctx);   r.merge_complete   = nullptr; }
+            // h_progress was allocated on the shared context (secondary queue)
+            if (r.h_progress && g_split_config.queue[1]) {
+                sycl::free(r.h_progress, g_split_config.queue[1]->get_context());
+                r.h_progress = nullptr;
+            } else if (r.h_progress) {
+                sycl::free(r.h_progress, pri_ctx);  // fallback
+                r.h_progress = nullptr;
+            }
             // coord_queue points to a static local — do not free
             r.coord_queue = nullptr;
             r.allocated   = false;
