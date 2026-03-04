@@ -123,11 +123,6 @@ struct webgpu_pool_bufs {
     wgpu::Buffer dev_buf;
 };
 
-// The futures to wait on for a single queue submission
-struct webgpu_submission_futures {
-    std::vector<wgpu::FutureWaitInfo> futures;
-};
-
 // Holds a pool of parameter buffers for WebGPU operations
 struct webgpu_buf_pool {
     std::vector<webgpu_pool_bufs> free;
@@ -559,7 +554,7 @@ static void ggml_backend_webgpu_debug(webgpu_global_context & ctx) {
 }
 #endif
 
-static std::vector<wgpu::FutureWaitInfo> /*webgpu_submission_futures*/ ggml_backend_webgpu_submit(
+static std::vector<wgpu::FutureWaitInfo> ggml_backend_webgpu_submit(
     webgpu_global_context       ctx,
     std::vector<webgpu_command> commands,
     webgpu_buf_pool &           param_buf_pool,
