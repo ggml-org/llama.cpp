@@ -23,10 +23,18 @@ import { browser } from '$app/environment';
 import { MCPService } from '$lib/services/mcp.service';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { mcpResourceStore } from '$lib/stores/mcp-resources.svelte';
+import { mode } from 'mode-watcher';
 import { parseMcpServerSettings, detectMcpTransportFromUrl, getFaviconUrl, uuid } from '$lib/utils';
-import { MCPConnectionPhase, MCPLogLevel, HealthCheckStatus, MCPRefType } from '$lib/enums';
+import {
+	MCPConnectionPhase,
+	MCPLogLevel,
+	HealthCheckStatus,
+	MCPRefType,
+	ColorMode
+} from '$lib/enums';
 import {
 	DEFAULT_MCP_CONFIG,
+	MCP_ALLOWED_ICON_MIME_TYPES,
 	MCP_SERVER_ID_PREFIX,
 	MCP_RECONNECT_INITIAL_DELAY,
 	MCP_RECONNECT_BACKOFF_MULTIPLIER,
@@ -50,12 +58,58 @@ import type {
 	Tool,
 	HealthCheckState,
 	MCPServerSettingsEntry,
-	MCPServerConfig
+	MCPServerConfig,
+	MCPResourceIcon
 } from '$lib/types';
 import type { ListChangedHandlers } from '@modelcontextprotocol/sdk/types.js';
 import type { McpServerOverride } from '$lib/types/database';
 import type { SettingsConfigType } from '$lib/types/settings';
 
+export function buildMcpClientConfig(
+	cfg: SettingsConfigType,
+	perChatOverrides?: McpServerOverride[]
+): MCPClientConfig | undefined {
+	return buildMcpClientConfigInternal(cfg, perChatOverrides);
+}
+
+/**
+ * Internal helper to build MCP client config.
+ * Kept as standalone function for external use and tests.
+ */
+export function buildMcpClientConfigInternal(
+	cfg: SettingsConfigType,
+	perChatOverrides?: McpServerOverride[]
+): MCPClientConfig | undefined {
+	const rawServers = parseServerSettings(cfg.mcpServers);
+	if (!rawServers.length) {
+		return undefined;
+	}
+
+	const servers: Record<string, MCPServerConfig> = {};
+
+	for (const [index, entry] of rawServers.entries()) {
+		if (!checkServerEnabled(entry, perChatOverrides)) continue;
+		const normalized = buildServerConfig(entry);
+		if (normalized) servers[generateMcpServerId(entry.id, index)] = normalized;
+	}
+
+	if (Object.keys(servers).length === 0) {
+		return undefined;
+	}
+
+	return {
+		protocolVersion: DEFAULT_MCP_CONFIG.protocolVersion,
+		capabilities: DEFAULT_MCP_CONFIG.capabilities,
+		clientInfo: DEFAULT_MCP_CONFIG.clientInfo,
+		requestTimeoutMs: Math.round(DEFAULT_MCP_CONFIG.requestTimeoutSeconds * 1000),
+		servers
+	};
+}
+
+/**
+ * Generates a unique server ID from an optional ID string or index.
+ * @deprecated Use MCPStore.#generateServerId instead
+ */
 function generateMcpServerId(id: unknown, index: number): string {
 	if (typeof id === 'string' && id.trim()) {
 		return id.trim();
@@ -64,6 +118,10 @@ function generateMcpServerId(id: unknown, index: number): string {
 	return `${MCP_SERVER_ID_PREFIX}-${index + 1}`;
 }
 
+/**
+ * Parses raw server settings from config into MCPServerSettingsEntry array.
+ * @deprecated Use MCPStore.#parseServerSettings instead
+ */
 function parseServerSettings(rawServers: unknown): MCPServerSettingsEntry[] {
 	if (!rawServers) {
 		return [];
@@ -106,6 +164,10 @@ function parseServerSettings(rawServers: unknown): MCPServerSettingsEntry[] {
 	});
 }
 
+/**
+ * Builds server configuration from a settings entry.
+ * @deprecated Use MCPStore.#buildServerConfig instead
+ */
 function buildServerConfig(
 	entry: MCPServerSettingsEntry,
 	connectionTimeoutMs = DEFAULT_MCP_CONFIG.connectionTimeoutMs
@@ -135,6 +197,10 @@ function buildServerConfig(
 	};
 }
 
+/**
+ * Checks if a server is enabled, considering per-chat overrides.
+ * @deprecated Use MCPStore.#checkServerEnabled instead
+ */
 function checkServerEnabled(
 	server: MCPServerSettingsEntry,
 	perChatOverrides?: McpServerOverride[]
@@ -152,72 +218,6 @@ function checkServerEnabled(
 	return false;
 }
 
-function buildMcpClientConfigInternal(
-	cfg: SettingsConfigType,
-	perChatOverrides?: McpServerOverride[]
-): MCPClientConfig | undefined {
-	const rawServers = parseServerSettings(cfg.mcpServers);
-	if (!rawServers.length) {
-		return undefined;
-	}
-
-	const servers: Record<string, MCPServerConfig> = {};
-
-	for (const [index, entry] of rawServers.entries()) {
-		if (!checkServerEnabled(entry, perChatOverrides)) continue;
-		const normalized = buildServerConfig(entry);
-		if (normalized) servers[generateMcpServerId(entry.id, index)] = normalized;
-	}
-
-	if (Object.keys(servers).length === 0) {
-		return undefined;
-	}
-
-	return {
-		protocolVersion: DEFAULT_MCP_CONFIG.protocolVersion,
-		capabilities: DEFAULT_MCP_CONFIG.capabilities,
-		clientInfo: DEFAULT_MCP_CONFIG.clientInfo,
-		requestTimeoutMs: Math.round(DEFAULT_MCP_CONFIG.requestTimeoutSeconds * 1000),
-		servers
-	};
-}
-
-function buildCapabilitiesInfo(
-	serverCaps?: ServerCapabilities,
-	clientCaps?: ClientCapabilities
-): MCPCapabilitiesInfo {
-	return {
-		server: {
-			tools: serverCaps?.tools ? { listChanged: serverCaps.tools.listChanged } : undefined,
-			prompts: serverCaps?.prompts ? { listChanged: serverCaps.prompts.listChanged } : undefined,
-			resources: serverCaps?.resources
-				? {
-						subscribe: serverCaps.resources.subscribe,
-						listChanged: serverCaps.resources.listChanged
-					}
-				: undefined,
-			logging: !!serverCaps?.logging,
-			completions: !!serverCaps?.completions,
-			tasks: !!serverCaps?.tasks
-		},
-		client: {
-			roots: clientCaps?.roots ? { listChanged: clientCaps.roots.listChanged } : undefined,
-			sampling: !!clientCaps?.sampling,
-			elicitation: clientCaps?.elicitation
-				? { form: !!clientCaps.elicitation.form, url: !!clientCaps.elicitation.url }
-				: undefined,
-			tasks: !!clientCaps?.tasks
-		}
-	};
-}
-
-export function buildMcpClientConfig(
-	cfg: SettingsConfigType,
-	perChatOverrides?: McpServerOverride[]
-): MCPClientConfig | undefined {
-	return buildMcpClientConfigInternal(cfg, perChatOverrides);
-}
-
 class MCPStore {
 	private _isInitializing = $state(false);
 	private _error = $state<string | null>(null);
@@ -232,6 +232,179 @@ class MCPStore {
 	private configSignature: string | null = null;
 	private initPromise: Promise<boolean> | null = null;
 	private activeFlowCount = 0;
+
+	/**
+	 * Generates a unique server ID from an optional ID string or index.
+	 */
+	#generateServerId(id: unknown, index: number): string {
+		if (typeof id === 'string' && id.trim()) {
+			return id.trim();
+		}
+
+		return `${MCP_SERVER_ID_PREFIX}-${index + 1}`;
+	}
+
+	/**
+	 * Parses raw server settings from config into MCPServerSettingsEntry array.
+	 */
+	#parseServerSettings(rawServers: unknown): MCPServerSettingsEntry[] {
+		if (!rawServers) {
+			return [];
+		}
+
+		let parsed: unknown;
+		if (typeof rawServers === 'string') {
+			const trimmed = rawServers.trim();
+			if (!trimmed) {
+				return [];
+			}
+
+			try {
+				parsed = JSON.parse(trimmed);
+			} catch (error) {
+				console.warn('[MCP] Failed to parse mcpServers JSON:', error);
+
+				return [];
+			}
+		} else {
+			parsed = rawServers;
+		}
+		if (!Array.isArray(parsed)) {
+			return [];
+		}
+
+		return parsed.map((entry, index) => {
+			const url = typeof entry?.url === 'string' ? entry.url.trim() : '';
+			const headers = typeof entry?.headers === 'string' ? entry.headers.trim() : undefined;
+
+			return {
+				id: this.#generateServerId((entry as { id?: unknown })?.id, index),
+				enabled: Boolean((entry as { enabled?: unknown })?.enabled),
+				url,
+				name: (entry as { name?: string })?.name,
+				requestTimeoutSeconds: DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
+				headers: headers || undefined,
+				useProxy: Boolean((entry as { useProxy?: unknown })?.useProxy)
+			} satisfies MCPServerSettingsEntry;
+		});
+	}
+
+	/**
+	 * Builds server configuration from a settings entry.
+	 */
+	#buildServerConfig(
+		entry: MCPServerSettingsEntry,
+		connectionTimeoutMs = DEFAULT_MCP_CONFIG.connectionTimeoutMs
+	): MCPServerConfig | undefined {
+		if (!entry?.url) {
+			return undefined;
+		}
+
+		let headers: Record<string, string> | undefined;
+		if (entry.headers) {
+			try {
+				const parsed = JSON.parse(entry.headers);
+				if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed))
+					headers = parsed as Record<string, string>;
+			} catch {
+				console.warn('[MCP] Failed to parse custom headers JSON:', entry.headers);
+			}
+		}
+
+		return {
+			url: entry.url,
+			transport: detectMcpTransportFromUrl(entry.url),
+			handshakeTimeoutMs: connectionTimeoutMs,
+			requestTimeoutMs: Math.round(entry.requestTimeoutSeconds * 1000),
+			headers,
+			useProxy: entry.useProxy
+		};
+	}
+
+	/**
+	 * Checks if a server is enabled, considering per-chat overrides.
+	 */
+	#checkServerEnabled(
+		server: MCPServerSettingsEntry,
+		perChatOverrides?: McpServerOverride[]
+	): boolean {
+		if (!server.enabled) {
+			return false;
+		}
+
+		if (perChatOverrides) {
+			const override = perChatOverrides.find((o) => o.serverId === server.id);
+
+			return override?.enabled ?? false;
+		}
+
+		return false;
+	}
+
+	/**
+	 * Builds MCP client configuration from settings.
+	 */
+	#buildMcpClientConfig(
+		cfg: SettingsConfigType,
+		perChatOverrides?: McpServerOverride[]
+	): MCPClientConfig | undefined {
+		const rawServers = this.#parseServerSettings(cfg.mcpServers);
+		if (!rawServers.length) {
+			return undefined;
+		}
+
+		const servers: Record<string, MCPServerConfig> = {};
+
+		for (const [index, entry] of rawServers.entries()) {
+			if (!this.#checkServerEnabled(entry, perChatOverrides)) continue;
+			const normalized = this.#buildServerConfig(entry);
+			if (normalized) servers[this.#generateServerId(entry.id, index)] = normalized;
+		}
+
+		if (Object.keys(servers).length === 0) {
+			return undefined;
+		}
+
+		return {
+			protocolVersion: DEFAULT_MCP_CONFIG.protocolVersion,
+			capabilities: DEFAULT_MCP_CONFIG.capabilities,
+			clientInfo: DEFAULT_MCP_CONFIG.clientInfo,
+			requestTimeoutMs: Math.round(DEFAULT_MCP_CONFIG.requestTimeoutSeconds * 1000),
+			servers
+		};
+	}
+
+	/**
+	 * Builds capabilities info from server and client capabilities.
+	 */
+	#buildCapabilitiesInfo(
+		serverCaps?: ServerCapabilities,
+		clientCaps?: ClientCapabilities
+	): MCPCapabilitiesInfo {
+		return {
+			server: {
+				tools: serverCaps?.tools ? { listChanged: serverCaps.tools.listChanged } : undefined,
+				prompts: serverCaps?.prompts ? { listChanged: serverCaps.prompts.listChanged } : undefined,
+				resources: serverCaps?.resources
+					? {
+							subscribe: serverCaps.resources.subscribe,
+							listChanged: serverCaps.resources.listChanged
+						}
+					: undefined,
+				logging: !!serverCaps?.logging,
+				completions: !!serverCaps?.completions,
+				tasks: !!serverCaps?.tasks
+			},
+			client: {
+				roots: clientCaps?.roots ? { listChanged: clientCaps.roots.listChanged } : undefined,
+				sampling: !!clientCaps?.sampling,
+				elicitation: clientCaps?.elicitation
+					? { form: !!clientCaps.elicitation.form, url: !!clientCaps.elicitation.url }
+					: undefined,
+				tasks: !!clientCaps?.tasks
+			}
+		};
+	}
 
 	get isInitializing(): boolean {
 		return this._isInitializing;
@@ -258,7 +431,7 @@ class MCPStore {
 	}
 
 	get isEnabled(): boolean {
-		const mcpConfig = buildMcpClientConfigInternal(config());
+		const mcpConfig = this.#buildMcpClientConfig(config());
 		return (
 			mcpConfig !== null && mcpConfig !== undefined && Object.keys(mcpConfig.servers).length > 0
 		);
@@ -352,14 +525,82 @@ class MCPStore {
 	}
 
 	/**
-	 * Get favicon URL for an MCP server by its ID.
-	 * Uses Google's favicon service for consistent display.
+	 * Validates that an icon URI uses a safe scheme (https: or data:).
+	 */
+	#isValidIconUri(src: string): boolean {
+		try {
+			if (src.startsWith('data:')) return true;
+			const url = new URL(src);
+			return url.protocol === 'https:';
+		} catch {
+			return false;
+		}
+	}
+
+	/**
+	 * Selects the best icon URL from an MCP icons array.
+	 * Follows security guidelines from the MCP specification:
+	 * - Only allows https: and data: URIs
+	 * - Filters to supported MIME types
+	 *
+	 * Selection priority:
+	 * 1. Icon matching the current color scheme (dark/light)
+	 * 2. Universal icon (no theme specified); if exactly 2, assumes [0]=light, [1]=dark
+	 * 3. First valid icon as last resort
+	 */
+	#getMcpIconUrl(icons: MCPResourceIcon[] | undefined, isDark = false): string | null {
+		if (!icons?.length) return null;
+
+		const validIcons = icons.filter((icon) => {
+			if (!icon.src || !this.#isValidIconUri(icon.src)) return false;
+			if (icon.mimeType && !MCP_ALLOWED_ICON_MIME_TYPES.has(icon.mimeType)) return false;
+			return true;
+		});
+
+		if (validIcons.length === 0) return null;
+
+		const preferredTheme = isDark ? ColorMode.DARK : ColorMode.LIGHT;
+
+		// 1. Prefer icon explicitly matching the current color scheme
+		const themedIcon = validIcons.find((icon) => icon.theme === preferredTheme);
+		if (themedIcon) return themedIcon.src;
+
+		// 2. Handle universal icons (no theme specified)
+		const universalIcons = validIcons.filter((icon) => !icon.theme);
+
+		if (universalIcons.length === 2) {
+			// Heuristic: two theme-less icons → assume [0] = light, [1] = dark
+			return universalIcons[isDark ? 1 : 0].src;
+		}
+
+		if (universalIcons.length > 0) {
+			return universalIcons[0].src;
+		}
+
+		// 3. Last resort: use opposite-theme icon
+		return validIcons[0].src;
+	}
+
+	/**
+	 * Get icon URL for an MCP server by its ID.
+	 * Prefers the server's own icons (from MCP spec) and falls back
+	 * to Google's favicon service.
 	 * Returns null if server is not found.
 	 */
 	getServerFavicon(serverId: string): string | null {
 		const server = this.getServerById(serverId);
 		if (!server) {
 			return null;
+		}
+
+		const isDark = mode.current === ColorMode.DARK;
+		const healthState = this.getHealthCheckState(serverId);
+		if (healthState.status === HealthCheckStatus.SUCCESS && healthState.serverInfo?.icons) {
+			const mcpIconUrl = this.#getMcpIconUrl(healthState.serverInfo.icons, isDark);
+
+			if (mcpIconUrl) {
+				return mcpIconUrl;
+			}
 		}
 
 		return getFaviconUrl(server.url);
@@ -422,7 +663,7 @@ class MCPStore {
 		return parseMcpServerSettings(config().mcpServers).some((s) => s.enabled && s.url.trim());
 	}
 	hasEnabledServers(perChatOverrides?: McpServerOverride[]): boolean {
-		return Boolean(buildMcpClientConfigInternal(config(), perChatOverrides));
+		return Boolean(this.#buildMcpClientConfig(config(), perChatOverrides));
 	}
 
 	getEnabledServersForConversation(
@@ -448,7 +689,7 @@ class MCPStore {
 			return false;
 		}
 
-		const mcpConfig = buildMcpClientConfigInternal(config(), perChatOverrides);
+		const mcpConfig = this.#buildMcpClientConfig(config(), perChatOverrides);
 		const signature = mcpConfig ? JSON.stringify(mcpConfig) : null;
 		if (!signature) {
 			await this.shutdown();
@@ -1162,7 +1403,7 @@ class MCPStore {
 			// Reuse existing connection - just refresh tools list
 			try {
 				const tools = await MCPService.listTools(existingConnection);
-				const capabilities = buildCapabilitiesInfo(
+				const capabilities = this.#buildCapabilitiesInfo(
 					existingConnection.serverCapabilities,
 					existingConnection.clientCapabilities
 				);
@@ -1257,7 +1498,7 @@ class MCPStore {
 				title: tool.title
 			}));
 
-			const capabilities = buildCapabilitiesInfo(
+			const capabilities = this.#buildCapabilitiesInfo(
 				connection.serverCapabilities,
 				connection.clientCapabilities
 			);

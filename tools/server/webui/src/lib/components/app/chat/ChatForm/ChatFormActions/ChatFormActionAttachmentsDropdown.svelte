@@ -10,7 +10,7 @@
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants/tooltip-config';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { getFaviconUrl } from '$lib/utils';
+
 	import { HealthCheckStatus } from '$lib/enums';
 	import type { MCPServerSettingsEntry } from '$lib/types';
 
@@ -262,9 +262,9 @@
 									disabled={hasError}
 								>
 									<div class="flex min-w-0 flex-1 items-center gap-2">
-										{#if getFaviconUrl(server.url)}
+										{#if mcpStore.getServerFavicon(server.id)}
 											<img
-												src={getFaviconUrl(server.url)}
+												src={mcpStore.getServerFavicon(server.id)}
 												alt=""
 												class="h-4 w-4 shrink-0 rounded-sm"
 												onerror={(e) => {

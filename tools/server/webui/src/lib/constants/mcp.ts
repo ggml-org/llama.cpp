@@ -2,9 +2,19 @@ import { Zap, Globe, Radio } from '@lucide/svelte';
 import { MCPTransportType } from '$lib/enums';
 import type { ClientCapabilities, Implementation } from '$lib/types';
 import type { Component } from 'svelte';
+import { MimeTypeImage } from '$lib/enums/files';
 
 export const DEFAULT_CLIENT_VERSION = '1.0.0';
-export const DEFAULT_IMAGE_MIME_TYPE = 'image/png';
+export const DEFAULT_IMAGE_MIME_TYPE = MimeTypeImage.PNG;
+
+/** MIME types considered safe for rendering MCP server icons */
+export const MCP_ALLOWED_ICON_MIME_TYPES = new Set([
+	MimeTypeImage.PNG,
+	MimeTypeImage.JPEG,
+	MimeTypeImage.JPG,
+	MimeTypeImage.SVG,
+	MimeTypeImage.WEBP
+]);
 
 /**
  * MCP specification version this client targets.

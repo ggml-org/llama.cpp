@@ -5,7 +5,6 @@
 	import { DropdownMenuSearchable, McpActiveServersAvatars } from '$lib/components/app';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { getFaviconUrl } from '$lib/utils';
 	import { HealthCheckStatus } from '$lib/enums';
 	import type { MCPServerSettingsEntry } from '$lib/types';
 
@@ -33,7 +32,7 @@
 	let mcpFavicons = $derived(
 		healthyEnabledMcpServers
 			.slice(0, 3)
-			.map((s) => ({ id: s.id, url: getFaviconUrl(s.url) }))
+			.map((s) => ({ id: s.id, url: mcpStore.getServerFavicon(s.id) }))
 			.filter((f) => f.url !== null)
 	);
 	let filteredMcpServers = $derived.by(() => {
@@ -113,9 +112,9 @@
 							disabled={hasError}
 						>
 							<div class="flex min-w-0 flex-1 items-center gap-2">
-								{#if getFaviconUrl(server.url)}
+								{#if mcpStore.getServerFavicon(server.id)}
 									<img
-										src={getFaviconUrl(server.url)}
+										src={mcpStore.getServerFavicon(server.id)}
 										alt=""
 										class="h-4 w-4 shrink-0 rounded-sm"
 										onerror={(e) => {

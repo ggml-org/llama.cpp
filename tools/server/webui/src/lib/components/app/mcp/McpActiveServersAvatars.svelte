@@ -2,7 +2,6 @@
 	import { cn } from '$lib/components/ui/utils';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { getFaviconUrl } from '$lib/utils';
 	import { HealthCheckStatus } from '$lib/enums';
 
 	interface Props {
@@ -26,7 +25,7 @@
 	let mcpFavicons = $derived(
 		healthyEnabledMcpServers
 			.slice(0, 3)
-			.map((s) => ({ id: s.id, url: getFaviconUrl(s.url) }))
+			.map((s) => ({ id: s.id, url: mcpStore.getServerFavicon(s.id) }))
 			.filter((f) => f.url !== null)
 	);
 </script>

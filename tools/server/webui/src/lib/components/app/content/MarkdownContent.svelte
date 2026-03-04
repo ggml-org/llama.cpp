@@ -24,7 +24,7 @@
 		DATA_ERROR_HANDLED_ATTR,
 		BOOL_TRUE_STRING
 	} from '$lib/constants/markdown';
-	import { UrlPrefix } from '$lib/enums';
+	import { ColorMode, UrlPrefix } from '$lib/enums';
 	import { FileTypeText } from '$lib/enums/files';
 	import {
 		highlightCode,
@@ -560,7 +560,7 @@
 
 	$effect(() => {
 		const currentMode = mode.current;
-		const isDark = currentMode === 'dark';
+		const isDark = currentMode === ColorMode.DARK;
 
 		loadHighlightTheme(isDark);
 	});

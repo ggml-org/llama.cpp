@@ -2,7 +2,7 @@
 	import { Plus } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
-	import { getFaviconUrl, uuid } from '$lib/utils';
+	import { uuid } from '$lib/utils';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { McpServerCard, McpServerCardSkeleton, McpServerForm } from '$lib/components/app/mcp';
@@ -134,7 +134,7 @@
 				{:else}
 					<McpServerCard
 						{server}
-						faviconUrl={getFaviconUrl(server.url)}
+						faviconUrl={mcpStore.getServerFavicon(server.id)}
 						enabled={conversationsStore.isMcpServerEnabledForChat(server.id)}
 						onToggle={async () => await conversationsStore.toggleMcpServerForChat(server.id)}
 						onUpdate={(updates) => mcpStore.updateServer(server.id, updates)}
