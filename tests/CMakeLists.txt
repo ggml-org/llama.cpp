@@ -16,6 +16,12 @@ function(llama_build source)
     endif()
 endfunction()
 
+if (EMSCRIPTEN)
+    set(LLAMA_TEST_LAUNCHER ${CMAKE_CROSSCOMPILING_EMULATOR})
+else()
+    set(LLAMA_TEST_LAUNCHER)
+endif()
+
 function(llama_test target)
     include(CMakeParseArguments)
     set(options)
@@ -40,7 +46,7 @@ function(llama_test target)
     add_test(
         NAME ${TEST_NAME}
         WORKING_DIRECTORY ${LLAMA_TEST_WORKING_DIRECTORY}
-        COMMAND $<TARGET_FILE:${TEST_TARGET}>
+        COMMAND ${LLAMA_TEST_LAUNCHER} $<TARGET_FILE:${TEST_TARGET}>
         ${LLAMA_TEST_ARGS})
 
     set_property(TEST ${TEST_NAME} PROPERTY LABELS ${LLAMA_TEST_LABEL})
@@ -65,10 +71,16 @@ function(llama_test_cmd target)
         set(TEST_NAME ${target})
     endif()
 
+    if (TARGET ${target})
+        set(cmd $<TARGET_FILE:${target}>)
+    else()
+        set(cmd ${target})
+    endif()
+
     add_test(
         NAME ${TEST_NAME}
         WORKING_DIRECTORY ${LLAMA_TEST_WORKING_DIRECTORY}
-        COMMAND ${target}
+        COMMAND ${LLAMA_TEST_LAUNCHER} ${cmd}
         ${LLAMA_TEST_ARGS})
 
     set_property(TEST ${TEST_NAME} PROPERTY LABELS ${LLAMA_TEST_LABEL})
@@ -110,7 +122,7 @@ function(llama_build_and_test source)
     add_test(
         NAME ${TEST_TARGET}
         WORKING_DIRECTORY ${LLAMA_TEST_WORKING_DIRECTORY}
-        COMMAND $<TARGET_FILE:${TEST_TARGET}>
+        COMMAND ${LLAMA_TEST_LAUNCHER} $<TARGET_FILE:${TEST_TARGET}>
         ${LLAMA_TEST_ARGS})
 
     set_property(TEST ${TEST_TARGET} PROPERTY LABELS ${LLAMA_TEST_LABEL})
@@ -253,9 +265,11 @@ if (NOT GGML_BACKEND_DL)
 endif()
 
 # libmtmd
-set(LLAMA_TEST_NAME test-mtmd-c-api)
-llama_build_and_test(test-mtmd-c-api.c)
-target_link_libraries(${LLAMA_TEST_NAME} PRIVATE mtmd)
+if (NOT EMSCRIPTEN) # fails to build under emscripten because mtmd.h is not found
+    set(LLAMA_TEST_NAME test-mtmd-c-api)
+    llama_build_and_test(test-mtmd-c-api.c)
+    target_link_libraries(${LLAMA_TEST_NAME} PRIVATE mtmd)
+endif()
 
 # GGUF model data fetcher library for tests that need real model metadata
 # Only compile when cpp-httplib has SSL support (CPPHTTPLIB_OPENSSL_SUPPORT)
