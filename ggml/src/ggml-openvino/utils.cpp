@@ -17,7 +17,6 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
-#include <mutex>
 #include <openvino/core/any.hpp>
 #include <openvino/core/graph_util.hpp>
 #include <openvino/core/shape.hpp>
@@ -63,16 +62,16 @@ enum ggml_status ov_graph_compute(ggml_cgraph * cgraph, ggml_backend_t backend) 
     }
 }
 
-ov::Tensor create_ov_output_tensor(std::shared_ptr<ov::InferRequest> infer_request,
-                                   const int output_index,
+ov::Tensor create_ov_output_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
+                                   std::shared_ptr<ov::InferRequest> infer_request,
+                                   int output_index,
                                    const ggml_tensor * ggml_tensor) {
-    auto output_type = infer_request->get_output_tensor(output_index).get_element_type();
-    auto output_shape = infer_request->get_output_tensor(output_index).get_shape();
-    // if the output shape is dynamic, we need to update it with the actual shape of the ggml tensor
-    for (size_t i = 0; i < output_shape.size(); i++) {
-        if (output_shape[i] == 0) {
-            output_shape[i] = ggml_tensor->ne[3 - i];
-        }
+    auto output_type = ggml_decoder->get_ov_type(ggml_tensor);
+    ov::Shape output_shape;
+    if (ggml_decoder->is_static()) {
+        output_shape = infer_request->get_output_tensor(output_index).get_shape();
+    } else {
+        output_shape = ggml_decoder->get_shape(ggml_tensor);
     }
 
     ov::Tensor output_tensor(output_type, output_shape, ggml_tensor->data);
@@ -216,7 +215,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
 
     for (size_t i = 0; i < ov_output_names.size(); i++) {
         auto * ggml_tensor = ggml_decoder->get_model_outputs().at(ov_output_names[i]);
-        auto output_tensor = create_ov_output_tensor(infer_request, i, ggml_tensor);
+        auto output_tensor = create_ov_output_tensor(ggml_decoder, infer_request, i, ggml_tensor);
         infer_request->set_output_tensor(i, output_tensor);
     }
 
@@ -390,7 +389,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
 
             for (size_t i = 0; i < ov_output_names.size(); i++) {
                 auto * ggml_tensor = ggml_decoder->get_model_outputs().at(ov_output_names[i]);
-                auto output_tensor = create_ov_output_tensor(infer_request, i, ggml_tensor);
+                auto output_tensor = create_ov_output_tensor(ggml_decoder, infer_request, i, ggml_tensor);
                 infer_request->set_output_tensor(i, output_tensor);
             }
 
@@ -418,7 +417,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
 
         for (size_t i = 0; i < ov_output_names.size(); i++) {
             auto * ggml_tensor = ggml_decoder->get_model_outputs().at(ov_output_names[i]);
-            auto output_tensor = create_ov_output_tensor(infer_request, i, ggml_tensor);
+            auto output_tensor = create_ov_output_tensor(ggml_decoder, infer_request, i, ggml_tensor);
             infer_request->set_output_tensor(i, output_tensor);
         }
 
@@ -500,7 +499,7 @@ enum ggml_status naive_compute(ggml_cgraph * cgraph,
     auto ov_results = model->get_results();
     for (size_t i = 0; i < ov_results.size(); i++) {
         auto * ggml_tensor = decoder->get_model_outputs().at(ov_results[i]->get_friendly_name());
-        auto output_tensor = create_ov_output_tensor(infer_request, i, ggml_tensor);
+        auto output_tensor = create_ov_output_tensor(decoder, infer_request, i, ggml_tensor);
         infer_request->set_output_tensor(i, output_tensor);
     }
 

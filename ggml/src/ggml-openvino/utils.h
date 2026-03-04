@@ -5,8 +5,8 @@
 #include <algorithm>
 #include <cstddef>
 #include <memory>
-#include <mutex>
 #include <openvino/runtime/core.hpp>
+#include <openvino/runtime/infer_request.hpp>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -106,8 +106,9 @@ ov::Tensor get_ov_input_tensor_static_prefill(std::shared_ptr<GgmlOvDecoder> ggm
                                               const std::string & param_name,
                                               int chunk_index);
 
-ov::Tensor create_ov_output_tensor(std::shared_ptr<ov::InferRequest> infer_request,
-                                   const int output_index,
+ov::Tensor create_ov_output_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
+                                   std::shared_ptr<ov::InferRequest> infer_request,
+                                   int output_index,
                                    const ggml_tensor * ggml_tensor);
 
 bool is_naive(struct ggml_cgraph * cgraph);
