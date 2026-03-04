@@ -463,26 +463,69 @@ static void ggml_webgpu_create_buffer(wgpu::Device &    device,
 /** End WebGPU object initializations */
 
 /** WebGPU Actions */
+static void erase_completed(std::vector<wgpu::FutureWaitInfo> & futures) {
+    futures.erase(
+        std::remove_if(futures.begin(), futures.end(),
+                       [](const wgpu::FutureWaitInfo & info) { return info.completed; }),
+        futures.end());
+}
+
+static void clear_completed(std::vector<wgpu::FutureWaitInfo> & futures) {
+    for (auto & f : futures) f.completed = false;
+}
 
 // Wait for the queue to finish processing all submitted work
-static void ggml_backend_webgpu_wait(webgpu_global_context &                  ctx,
-                                     std::vector<webgpu_submission_futures> & futures,
-                                     bool                                     block = true) {
+static void ggml_backend_webgpu_wait(webgpu_global_context &                 ctx,
+                                        std::vector<wgpu::FutureWaitInfo> &  futures,
+                                        bool                                 block = true) {
     // If we have too many in-flight submissions, wait on the oldest one first.
+    // for (int i = 0; i < futures.size(); i++)
+    //     GGML_ASSERT(futures[i].futures.size() == 1);
+    if (futures.empty()) {return;}
+    // TODO(nikhilJain17) should this be 0 if !block?
     uint64_t timeout_ms = block ? UINT64_MAX : 0;
+    // clear stale true
+    clear_completed(futures);
     while (futures.size() >= WEBGPU_MAX_INFLIGHT_SUBS_PER_THREAD) {
-        ctx->instance.WaitAny(futures[0].futures.size(), futures[0].futures.data(), UINT64_MAX);
-        futures.erase(futures.begin());
+        auto waitStatus = ctx->instance.WaitAny(1, &futures[0], UINT64_MAX);
+        if (waitStatus == wgpu::WaitStatus::Error) {
+            GGML_LOG_ERROR("ggml_webgpu: WaitAny returned an error\n");
+        }
+        // TODO(nikhilJain17): erase the right one!
+        if (futures[0].completed) {
+            futures.erase(futures.begin());
+        } 
     }
-    size_t i = 0;
-    while (i < futures.size()) {
-        auto waitStatus = ctx->instance.WaitAny(futures[i].futures.size(), futures[i].futures.data(), timeout_ms);
-        switch (waitStatus) {
+
+    if (futures.empty()) {
+        return;
+    }
+
+    if (block) {
+        while (!futures.empty()) {
+            auto waitStatus = ctx->instance.WaitAny(futures.size(), futures.data(), timeout_ms);
+            switch (waitStatus) {
+                case wgpu::WaitStatus::Success:
+                    // WaitAny doesn't tell us which future completed, so we must check all futures to see which finished.
+                    erase_completed(futures);
+                    break; 
+                case wgpu::WaitStatus::Error:
+                    GGML_LOG_ERROR("ggml_webgpu: WaitAny returned an error\n");
+                    break;
+                default:
+                    GGML_LOG_ERROR("ggml_webgpu: WaitAny returned an unknown status\n");
+                    break;
+            }
+        }
+    } else {
+        // Poll once and return
+        auto waitStatus = ctx->instance.WaitAny(futures.size(), futures.data(), timeout_ms);
+         switch (waitStatus) {
             case wgpu::WaitStatus::Success:
-                futures.erase(futures.begin() + i);
+                // WaitAny doesn't tell us which future completed, so we must check all futures to see which finished.
+                erase_completed(futures);
                 break;
             case wgpu::WaitStatus::TimedOut:
-                i++;
                 break;
             case wgpu::WaitStatus::Error:
                 GGML_LOG_ERROR("ggml_webgpu: WaitAny returned an error\n");
@@ -490,7 +533,6 @@ static void ggml_backend_webgpu_wait(webgpu_global_context &                  ct
             default:
                 GGML_LOG_ERROR("ggml_webgpu: WaitAny returned an unknown status\n");
                 break;
-        }
     }
 }
 
@@ -525,7 +567,7 @@ static void ggml_backend_webgpu_debug(webgpu_global_context & ctx) {
 }
 #endif
 
-static webgpu_submission_futures ggml_backend_webgpu_submit(webgpu_global_context       ctx,
+static std::vector<wgpu::FutureWaitInfo> /*webgpu_submission_futures*/ ggml_backend_webgpu_submit(webgpu_global_context       ctx,
                                                             std::vector<webgpu_command> commands,
                                                             webgpu_buf_pool &           param_buf_pool,
                                                             webgpu_buf_pool * set_rows_error_buf_pool = nullptr) {
@@ -600,7 +642,8 @@ static webgpu_submission_futures ggml_backend_webgpu_submit(webgpu_global_contex
         futures.push_back({ f });
     }
 #endif
-    return { futures };
+    // return { futures };
+    return futures;
 }
 
 static webgpu_command ggml_backend_webgpu_build_multi(
@@ -727,8 +770,9 @@ static void ggml_backend_webgpu_buffer_memset(webgpu_global_context & ctx,
 
     webgpu_command command =
         ggml_backend_webgpu_build(ctx, ctx->memset_buf_pool, ctx->memset_pipelines[0], params, entries, wg_x);
-    std::vector<webgpu_submission_futures> futures = { ggml_backend_webgpu_submit(ctx, { command },
-                                                                                  ctx->memset_buf_pool) };
+    // std::vector<webgpu_submission_futures> futures = { ggml_backend_webgpu_submit(ctx, { command },
+                                                                                //   ctx->memset_buf_pool) };
+    auto futures = ggml_backend_webgpu_submit(ctx, { command }, ctx->memset_buf_pool ); 
     ggml_backend_webgpu_wait(ctx, futures);
 }
 
@@ -2122,7 +2166,8 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
     WEBGPU_CPU_PROFILE_TOTAL_START(graph_compute);
 
     std::vector<webgpu_command>            commands;
-    std::vector<webgpu_submission_futures> futures;
+    // std::vector<webgpu_submission_futures> futures;
+    std::vector<wgpu::FutureWaitInfo> futures;
     uint32_t                               num_batched_kernels = 0;
     for (int i = 0; i < cgraph->n_nodes; i++) {
         if (auto cmd = ggml_webgpu_encode_node(ctx, cgraph->nodes[i])) {
@@ -2132,8 +2177,12 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
 
         if (num_batched_kernels >= WEBGPU_COMMAND_SUBMIT_BATCH_SIZE) {
             num_batched_kernels = 0;
-            futures.push_back(ggml_backend_webgpu_submit(ctx->global_ctx, commands, ctx->param_buf_pool,
-                                                         &ctx->set_rows_error_buf_pool));
+            std::vector<wgpu::FutureWaitInfo> compute_futures 
+                = ggml_backend_webgpu_submit(ctx->global_ctx, commands, ctx->param_buf_pool,
+                                                         &ctx->set_rows_error_buf_pool);
+            futures.insert(futures.end(), compute_futures.begin(), compute_futures.end());
+            // futures.i(ggml_backend_webgpu_submit(ctx->global_ctx, commands, ctx->param_buf_pool,
+            //                                              &ctx->set_rows_error_buf_pool));
             // Process events and check for completed submissions
             ctx->global_ctx->instance.ProcessEvents();
             ggml_backend_webgpu_wait(ctx->global_ctx, futures, false);
@@ -2141,9 +2190,9 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
         }
     }
     if (!commands.empty()) {
-        webgpu_submission_futures new_futures =
+        auto new_futures =
             ggml_backend_webgpu_submit(ctx->global_ctx, commands, ctx->param_buf_pool, &ctx->set_rows_error_buf_pool);
-        futures.push_back(new_futures);
+        futures.insert(futures.end(), new_futures.begin(), new_futures.end());
     }
 
     ggml_backend_webgpu_wait(ctx->global_ctx, futures);
