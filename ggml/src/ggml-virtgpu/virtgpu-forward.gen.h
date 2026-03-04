@@ -20,6 +20,7 @@ apir_buffer_context_t          apir_device_buffer_from_ptr(struct virtgpu * gpu,
 char *                apir_buffer_type_get_name(struct virtgpu * gpu, apir_buffer_type_host_handle_t host_handle);
 size_t                apir_buffer_type_get_alignment(struct virtgpu * gpu, apir_buffer_type_host_handle_t host_handle);
 size_t                apir_buffer_type_get_max_size(struct virtgpu * gpu, apir_buffer_type_host_handle_t host_handle);
+/* apir_buffer_type_is_host is deprecated. */
 apir_buffer_context_t apir_buffer_type_alloc_buffer(struct virtgpu *               gpu,
                                                     apir_buffer_type_host_handle_t host_handle,
                                                     size_t                         size);
