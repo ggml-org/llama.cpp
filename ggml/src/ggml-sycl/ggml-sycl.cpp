@@ -846,6 +846,35 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
             }
         }
 
+        // Verify Phase 2 placement table integrity
+        {
+            int gpu1_count = 0;
+            int gpu0_count = 0;
+            int cpu_count  = 0;
+            // Check first tensor's experts to see which are on GPU0 vs GPU1
+            int first_lid = expert_list.empty() ? -1 : expert_list[0].layer_id;
+            std::vector<int> gpu0_experts, gpu1_experts;
+            for (const auto & info : expert_list) {
+                auto p = placement_table.get(info.layer_id, info.expert_idx);
+                if (p.device_id == 1) {
+                    gpu1_count++;
+                    if (info.layer_id == first_lid) gpu1_experts.push_back(info.expert_idx);
+                } else if (p.device_id == 0) {
+                    gpu0_count++;
+                    if (info.layer_id == first_lid) gpu0_experts.push_back(info.expert_idx);
+                } else {
+                    cpu_count++;
+                }
+            }
+            GGML_LOG_INFO("[MOE-HYBRID] Phase 2 verify: GPU0=%d GPU1=%d CPU=%d in placement table\n",
+                          gpu0_count, gpu1_count, cpu_count);
+            // Show which expert IDs are on GPU0 for first tensor
+            std::string gpu0_str;
+            for (int e : gpu0_experts) gpu0_str += std::to_string(e) + ",";
+            GGML_LOG_INFO("[MOE-HYBRID] First tensor L%d: GPU0 experts=[%s] (%zu), GPU1 experts=%zu\n",
+                          first_lid, gpu0_str.c_str(), gpu0_experts.size(), gpu1_experts.size());
+        }
+
         // Log distribution summary
         // Phase 2 overrides some GPU0 experts → adjust count.
         size_t n_secondary = 0;
@@ -19549,6 +19578,22 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
             stats_direct++;
             continue;
         }
+
+        // Skip GPU0 cache staging for experts placed on secondary GPUs by Phase 2.
+        // These experts are already cached in secondary GPU VRAM — staging them into
+        // GPU0's cache wastes VRAM budget and the placement table entry is preserved
+        // by the set_device_ptr guard below.
+        {
+            auto &    ptable       = ggml_sycl::get_expert_placement_table();
+            const int pt_layer_id  = moe_cache_layer_id(src0->name);
+            auto existing = ptable.get(pt_layer_id, static_cast<int>(e));
+            if (existing.device_id >= 1 && existing.device_ptr != nullptr) {
+                GGML_SYCL_DEBUG("[MOE] Expert %ld on secondary GPU%d, skipping GPU0 staging\n",
+                                (long) e, existing.device_id);
+                continue;
+            }
+        }
+
         const uint8_t * expert_aos = static_cast<const uint8_t *>(src0->data) + e * expert_size;
 
         if (!expert_aos) {
@@ -19659,10 +19704,17 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
 
         // Bridge device pointer into placement table so partition loop uses device dispatch.
         // Placement table keyed by FNV hash (moe_cache_layer_id), not block number.
+        // IMPORTANT: Do NOT overwrite experts already placed on secondary GPUs by Phase 2
+        // (moe_hybrid_init_once). Those experts have valid device_id >= 1 with pointers
+        // into secondary GPU VRAM. Overwriting them with GPU0 cache pointers would
+        // collapse all experts onto GPU0, defeating multi-GPU expert distribution.
         {
             auto &    ptable       = ggml_sycl::get_expert_placement_table();
             const int pt_layer_id  = moe_cache_layer_id(src0->name);
-            ptable.set_device_ptr(pt_layer_id, static_cast<int>(e), device, result.device_ptr);
+            auto existing = ptable.get(pt_layer_id, static_cast<int>(e));
+            if (existing.device_id <= 0) {
+                ptable.set_device_ptr(pt_layer_id, static_cast<int>(e), device, result.device_ptr);
+            }
         }
 
         const bool need_drop = ggml_sycl_unified_kernel_requires_aos(src0->type) || layout != GGML_LAYOUT_AOS;
@@ -25377,13 +25429,16 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
     // Priority order (kernel-first selection):
     // XMX sorted -> fused ESIMD -> MMVQ (coalesced/SoA/AoS) -> host routing.
+    // When multi-GPU MoE is active, some experts in the GPU0 pointer table may be
+    // nullptr (placed on secondary GPUs and skipped during update_moe_ptr_table).
+    // The MMVQ compact list builder detects nullptr entries and returns false,
+    // which triggers fallback to hybrid dispatch (GPU0 MMVQ + CPU for misses).
     if (xmx_layout_allowed() && try_xmx_sorted_moe(ctx, src0, src1, ids, dst)) {
         GGML_SYCL_DEBUG("[MoE] XMX sorted dispatch successful for type %d\n", src0->type);
         return;
     }
     // Fused ESIMD kernel for batched prefill (ne12 > 1)
     if ((!has_override || override_layout == GGML_LAYOUT_AOS) &&
-
         ggml_sycl_mul_mat_id_fused(ctx, src0, src1, ids, dst)) {
         GGML_SYCL_DEBUG("[MoE] Fused ESIMD dispatch successful for type %d\n", src0->type);
         return;
@@ -25828,6 +25883,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
         // ---------------------------------------------------------------
         // Hybrid dispatch: partition experts into GPU (staged) + CPU (miss)
         // ---------------------------------------------------------------
+        GGML_SYCL_DEBUG("[MoE-HYBRID] ne12=%ld hybrid_active=%d cpu_tg=%d expert_cache=%d\n",
+                        (long) ne12, moe_hybrid_active ? 1 : 0,
+                        cpu_expert_tg_active ? 1 : 0, use_expert_cache ? 1 : 0);
         if (moe_hybrid_active) {
             // Hybrid dispatch uses host sync (future.get, stream.wait) which
             // is incompatible with SYCL graph recording.
@@ -26256,7 +26314,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             // ---------------------------------------------------------------
             if (cpu_expert_tg_active) {
                 auto & placement_table = ggml_sycl::get_expert_placement_table();
-
+                // For batch=1 TG, secondary GPU experts route to CPU (no activation
+                // shipping).  per_gpu_entries not used in this path.
                 gpu_entries.reserve(static_cast<size_t>(ids->ne[1] * n_ids));
                 cpu_entries.reserve(static_cast<size_t>(ids->ne[1] * n_ids));
 
@@ -26265,17 +26324,24 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         const int32_t i02 = ids_host[static_cast<size_t>(iid1 * n_ids + id)];
                         GGML_ASSERT(i02 >= 0 && i02 < n_as);
 
-                        // Check placement table for VRAM-resident experts
+                        // Check placement table for GPU0 VRAM-resident experts.
+                        // For batch=1 TG (cpu_expert_tg_active), secondary GPU experts
+                        // are routed to CPU instead of activation shipping because
+                        // CPU DRAM bandwidth (70 GB/s) beats the 3x PCIe round-trip
+                        // overhead of activation shipping for single-vector GEMVs.
                         bool dispatched_gpu = false;
                         if (placement_table.is_initialized()) {
                             auto placement = placement_table.get(layer_id, i02);
+
                             if (placement.device_id == 0 && placement.device_ptr) {
+                                // Primary GPU: expert has explicit VRAM pointer
                                 gpu_entries.push_back({ iid1, id, i02, placement.device_ptr });
                                 dispatched_gpu = true;
                             }
+                            // Secondary GPU experts fall through to CPU for batch=1 TG
                         }
 
-                        // Fallback: check cache-resolved pointer table
+                        // Fallback: check cache-resolved pointer table (GPU0 only)
                         if (!dispatched_gpu && expert_ptrs_host && i02 < n_as
                             && expert_ptrs_host[i02] != nullptr) {
                             gpu_entries.push_back(
@@ -26290,7 +26356,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
                 }
 
-                GGML_SYCL_DEBUG("[MoE-CPU-TG] L%d: GPU=%zu CPU=%zu (hybrid dispatch)\n",
+                GGML_SYCL_DEBUG("[MoE-CPU-TG] L%d: GPU0=%zu CPU=%zu\n",
                                 layer_id, gpu_entries.size(), cpu_entries.size());
 
                 // --- MoE dispatch stats for CPU-TG path ---
@@ -26310,7 +26376,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         }
                     }
 
-                    // Collect actual expert IDs
+                    // Collect actual expert IDs (all dispatch targets)
                     std::vector<int> actual_ids_cputg;
                     actual_ids_cputg.reserve(gpu_entries.size() + cpu_entries.size());
                     for (const auto & e : gpu_entries) {
