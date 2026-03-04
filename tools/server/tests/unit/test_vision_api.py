@@ -70,7 +70,7 @@ def test_v1_models_supports_multimodal_capability():
         ("What is this:\n", "malformed",              False, None),
         ("What is this:\n", "https://google.com/404", False, None), # non-existent image
         ("What is this:\n", "https://ggml.ai",        False, None), # non-image data
-        # TODO @ngxson : test with multiple images, no images and with audio
+        # TODO @ngxson : test with audio (needs a model that supports audio input)
     ]
 )
 def test_vision_chat_completion(prompt, image_url, success, re_content):
@@ -95,6 +95,69 @@ def test_vision_chat_completion(prompt, image_url, success, re_content):
         assert match_regex(re_content, choice["message"]["content"])
     else:
         assert res.status_code != 200
+
+
+def test_vision_chat_completion_multiple_images():
+    """Test sending multiple images in a single chat completion request."""
+    global server
+    server.n_ctx = 2048
+    server.n_slots = 1
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "temperature": 0.0,
+        "top_k": 1,
+        "messages": [
+            {"role": "user", "content": [
+                {"type": "text", "text": "What are these:\n"},
+                {"type": "image_url", "image_url": {
+                    "url": get_img_url("IMG_URL_0"),
+                }},
+                {"type": "image_url", "image_url": {
+                    "url": get_img_url("IMG_URL_1"),
+                }},
+            ]},
+        ],
+    })
+    assert res.status_code == 200
+    choice = res.body["choices"][0]
+    assert "assistant" == choice["message"]["role"]
+    assert len(choice["message"]["content"]) > 0
+
+
+def test_vision_chat_completion_no_image():
+    """Test sending a text-only message to a multimodal model (no images)."""
+    global server
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "temperature": 0.0,
+        "top_k": 1,
+        "messages": [
+            {"role": "user", "content": "Hello, how are you?"},
+        ],
+    })
+    assert res.status_code == 200
+    choice = res.body["choices"][0]
+    assert "assistant" == choice["message"]["role"]
+    assert len(choice["message"]["content"]) > 0
+
+
+def test_vision_chat_completion_no_image_content_parts():
+    """Test sending content parts with only text (no image_url parts)."""
+    global server
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "temperature": 0.0,
+        "top_k": 1,
+        "messages": [
+            {"role": "user", "content": [
+                {"type": "text", "text": "Hello, how are you?"},
+            ]},
+        ],
+    })
+    assert res.status_code == 200
+    choice = res.body["choices"][0]
+    assert "assistant" == choice["message"]["role"]
+    assert len(choice["message"]["content"]) > 0
 
 
 @pytest.mark.parametrize(
