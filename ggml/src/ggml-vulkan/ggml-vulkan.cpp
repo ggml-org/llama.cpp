@@ -11917,7 +11917,7 @@ static void ggml_vk_quantize_data(const float * from, void * to, size_t ne, ggml
     ggml_quantize_chunk(quant, from, to, 0, 1, ne, nullptr);
 }
 
-static void ggml_vk_dequantize_data(const void * from, float * to, size_t ne, ggml_type quant) {
+static void ggml_vk_dequantize_data(const void * from, float * to, size_t ne, ggml_type quant, const void * levels = nullptr) {
     if (quant == GGML_TYPE_F32) {
         memcpy(to, from, sizeof(float) * ne);
         return;
@@ -11927,7 +11927,7 @@ static void ggml_vk_dequantize_data(const void * from, float * to, size_t ne, gg
 
     ggml_to_float_t dequant_fn = tt->to_float;
 
-    dequant_fn(from, to, ne);
+    dequant_fn(from, to, ne, levels);
 }
 
 static void ggml_vk_test_dequant(ggml_backend_vk_context * ctx, size_t ne, ggml_type quant) {

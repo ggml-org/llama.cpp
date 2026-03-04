@@ -30,6 +30,7 @@ static constexpr __device__ vec_dot_q_cuda_t get_vec_dot_q_cuda(ggml_type type) 
         case GGML_TYPE_IQ1_M:   return vec_dot_iq1_m_q8_1;
         case GGML_TYPE_IQ4_NL:  return vec_dot_iq4_nl_q8_1;
         case GGML_TYPE_Q4_DPT:  return vec_dot_q4_dpt_q8_1;
+        case GGML_TYPE_Q2_DPT:  return vec_dot_q2_dpt_q8_1;
         case GGML_TYPE_IQ4_XS:  return vec_dot_iq4_xs_q8_1;
         case GGML_TYPE_IQ3_S:   return vec_dot_iq3_s_q8_1;
         default:                return nullptr;
@@ -56,6 +57,7 @@ static constexpr __device__ int get_vdr_mmvq(ggml_type type) {
         case GGML_TYPE_IQ3_S:   return VDR_IQ3_S_Q8_1_MMVQ;
         case GGML_TYPE_IQ4_NL:  return VDR_IQ4_NL_Q8_1_MMVQ;
         case GGML_TYPE_Q4_DPT:  return VDR_Q4_DPT_Q8_1_MMVQ;
+        case GGML_TYPE_Q2_DPT:  return VDR_Q2_DPT_Q8_1_MMVQ;
         case GGML_TYPE_IQ4_XS:  return VDR_IQ4_XS_Q8_1_MMVQ;
         default:                return 1;
     }
@@ -656,14 +658,20 @@ void ggml_cuda_mul_mat_vec_q(
 
     cudaStream_t stream = ctx.stream();
 
-    // Set Q4_DPT lookup table from per-tensor registry
+    // Set Q4_DPT lookup table from tensor's quant_levels
     if (src0->type == GGML_TYPE_Q4_DPT) {
-        size_t levels_size;
-        const void * levels = ggml_quant_get_tensor_aux_data(src0, &levels_size);
-        GGML_ASSERT(levels && "Q4_DPT MUL_MAT requires levels (register with ggml_quant_set_tensor_aux_data)");
+        GGML_ASSERT(src0->quant_levels && "Q4_DPT MUL_MAT requires levels (set tensor->quant_levels)");
         int8_t * d_q4dpt_levels;
         CUDA_CHECK(cudaGetSymbolAddress((void **)&d_q4dpt_levels, q4dpt_levels_cuda));
-        CUDA_CHECK(cudaMemcpyAsync(d_q4dpt_levels, levels, levels_size, cudaMemcpyHostToDevice, stream));
+        CUDA_CHECK(cudaMemcpyAsync(d_q4dpt_levels, src0->quant_levels, Q4DPT_N_LEVELS * sizeof(int8_t), cudaMemcpyHostToDevice, stream));
+    }
+
+    // Set Q2_DPT lookup table from tensor's quant_levels
+    if (src0->type == GGML_TYPE_Q2_DPT) {
+        GGML_ASSERT(src0->quant_levels && "Q2_DPT MUL_MAT requires levels (set tensor->quant_levels)");
+        int8_t * d_q2dpt_levels;
+        CUDA_CHECK(cudaGetSymbolAddress((void **)&d_q2dpt_levels, q2dpt_levels_cuda));
+        CUDA_CHECK(cudaMemcpyAsync(d_q2dpt_levels, src0->quant_levels, Q2DPT_N_LEVELS * sizeof(int8_t), cudaMemcpyHostToDevice, stream));
     }
 
     const size_t ts_src0 = ggml_type_size(src0->type);

@@ -456,6 +456,11 @@ void ggml_fp16_to_fp32_row(const ggml_fp16_t * x, float * y, int64_t n) {
     }
 }
 
+static void ggml_fp16_to_fp32_row_leveled(const void * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t n, const void * levels) {
+    GGML_UNUSED(levels);
+    ggml_fp16_to_fp32_row((const ggml_fp16_t *)x, y, n);
+}
+
 void ggml_fp32_to_fp16_row(const float * x, ggml_fp16_t * y, int64_t n) {
     int i = 0;
     for (; i < n; ++i) {
@@ -468,6 +473,11 @@ void ggml_bf16_to_fp32_row(const ggml_bf16_t * x, float * y, int64_t n) {
     for (; i < n; ++i) {
         y[i] = GGML_BF16_TO_FP32(x[i]);
     }
+}
+
+static void ggml_bf16_to_fp32_row_leveled(const void * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t n, const void * levels) {
+    GGML_UNUSED(levels);
+    ggml_bf16_to_fp32_row((const ggml_bf16_t *)x, y, n);
 }
 
 void ggml_fp32_to_bf16_row_ref(const float * x, ggml_bf16_t * y, int64_t n) {
@@ -648,7 +658,7 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .blck_size                = 1,
         .type_size                = sizeof(ggml_fp16_t),
         .is_quantized             = false,
-        .to_float                 = (ggml_to_float_t) ggml_fp16_to_fp32_row,
+        .to_float                 = ggml_fp16_to_fp32_row_leveled,
         .from_float_ref           = (ggml_from_float_t) ggml_fp32_to_fp16_row,
     },
     [GGML_TYPE_Q4_0] = {
@@ -841,7 +851,7 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .blck_size                = 1,
         .type_size                = sizeof(ggml_bf16_t),
         .is_quantized             = false,
-        .to_float                 = (ggml_to_float_t) ggml_bf16_to_fp32_row,
+        .to_float                 = ggml_bf16_to_fp32_row_leveled,
         .from_float_ref           = (ggml_from_float_t) ggml_fp32_to_bf16_row_ref,
     },
     [31] = { // GGML_TYPE_Q4_0_4_4
@@ -919,6 +929,22 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .is_quantized             = true,
         .to_float                 = (ggml_to_float_t) dequantize_row_q4_dpt,
         .from_float_ref           = (ggml_from_float_t) quantize_row_q4_dpt_ref,
+    },
+    [GGML_TYPE_Q2_DPT] = {
+        .type_name                = "q2_dpt",
+        .blck_size                = QK2_DPT,
+        .type_size                = sizeof(block_q2_dpt),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_q2_dpt,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_q2_dpt_ref,
+    },
+    [GGML_TYPE_Q2_KPT] = {
+        .type_name                = "q2_kpt",
+        .blck_size                = QK_K,
+        .type_size                = sizeof(block_q2_kpt),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_q2_kpt,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_q2_kpt_ref,
     },
 };
 
@@ -1413,6 +1439,7 @@ enum ggml_type ggml_ftype_to_ggml_type(enum ggml_ftype ftype) {
         case GGML_FTYPE_MOSTLY_Q3_PT:        wtype = GGML_TYPE_Q3_PT;   break;
         case GGML_FTYPE_MOSTLY_Q3_KPT:        wtype = GGML_TYPE_Q3_KPT;   break;
         case GGML_FTYPE_MOSTLY_Q4_DPT:        wtype = GGML_TYPE_Q4_DPT;   break;
+        case GGML_FTYPE_MOSTLY_Q2_KPT:        wtype = GGML_TYPE_Q2_KPT;   break;
         case GGML_FTYPE_UNKNOWN:              wtype = GGML_TYPE_COUNT; break;
         case GGML_FTYPE_MOSTLY_Q4_1_SOME_F16: wtype = GGML_TYPE_COUNT; break;
     }
@@ -7557,9 +7584,10 @@ void ggml_quantize_init(enum ggml_type type) {
         case GGML_TYPE_IQ1_M:   iq2xs_init_impl(type); break;
         case GGML_TYPE_IQ3_XXS: iq3xs_init_impl(256); break;
         case GGML_TYPE_IQ3_S:   iq3xs_init_impl(512); break;
-        case GGML_TYPE_Q3_PT:  break; // levels set externally via q3pt_set_levels()
-        case GGML_TYPE_Q3_KPT:  break; // levels set externally via q3kpt_set_levels()
-        case GGML_TYPE_Q4_DPT:  break; // levels set externally via q4dpt_set_levels()
+        case GGML_TYPE_Q3_PT:  break; // levels stored in tensor->quant_levels
+        case GGML_TYPE_Q3_KPT:  break; // levels stored in tensor->quant_levels
+        case GGML_TYPE_Q4_DPT:  break; // levels stored in tensor->quant_levels
+        case GGML_TYPE_Q2_KPT:  break; // levels stored in tensor->quant_levels
         default: // nothing
             break;
     }
@@ -7639,6 +7667,7 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_Q3_PT:  result = quantize_q3_pt (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q3_KPT:  result = quantize_q3_kpt (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q4_DPT:  result = quantize_q4_dpt (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_Q2_KPT:  result = quantize_q2_kpt (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_F16:
             {
                 size_t elemsize = sizeof(ggml_fp16_t);

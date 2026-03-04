@@ -403,6 +403,18 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .vec_dot_type             = GGML_TYPE_Q8_0,
         .nrows                    = 1,
     },
+    [GGML_TYPE_Q2_DPT] = {
+        // from_float not set — requires level initialization via q2dpt_set_levels()
+        .vec_dot                  = ggml_vec_dot_q2_dpt_q8_0,
+        .vec_dot_type             = GGML_TYPE_Q8_0,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_Q2_KPT] = {
+        // from_float not set — requires level initialization via q2kpt_set_levels()
+        .vec_dot                  = ggml_vec_dot_q2_kpt_q8_K,
+        .vec_dot_type             = GGML_TYPE_Q8_K,
+        .nrows                    = 1,
+    },
     [GGML_TYPE_I32] = {
         .from_float               = (ggml_from_float_t) ggml_cpu_fp32_to_i32,
     },
@@ -1234,7 +1246,7 @@ static void ggml_compute_forward_mul_mat_one_chunk(
                 //}
 
                 for (int64_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ir0 += num_rows_per_vec_dot) {
-                    vec_dot(ne00, &tmp[ir0 - iir0], (num_rows_per_vec_dot > 1 ? 16 : 0), src0_row + ir0 * nb01, (num_rows_per_vec_dot > 1 ? nb01 : 0), src1_col, (num_rows_per_vec_dot > 1 ? src1_col_stride : 0), num_rows_per_vec_dot);
+                    vec_dot(ne00, &tmp[ir0 - iir0], (num_rows_per_vec_dot > 1 ? 16 : 0), src0_row + ir0 * nb01, (num_rows_per_vec_dot > 1 ? nb01 : 0), src1_col, (num_rows_per_vec_dot > 1 ? src1_col_stride : 0), num_rows_per_vec_dot, src0->quant_levels);
                 }
 
                 for (int cn = 0; cn < num_rows_per_vec_dot; ++cn) {
@@ -1279,15 +1291,6 @@ void ggml_compute_forward_mul_mat(
     // nb01 >= nb00 - src0 is not transposed
     //   compute by src0 rows
 
-    // Set current per-tensor quantization levels from registry
-    {
-        size_t levels_size;
-        const void * levels = ggml_quant_get_tensor_aux_data(src0, &levels_size);
-        if (levels) {
-            ggml_quant_set_current_levels(src0->type, levels);
-        }
-    }
-
     // TODO: extract to "extra_op"
 #if GGML_USE_LLAMAFILE
     // broadcast factors
@@ -1309,7 +1312,8 @@ void ggml_compute_forward_mul_mat(
                                      nb1/ggml_type_size(dst->type),
                                      src0->type,
                                      src1->type,
-                                     dst->type))
+                                     dst->type,
+                                     src0->quant_levels))
                     goto UseGgmlGemm1;
         return;
     }
@@ -1377,7 +1381,8 @@ UseGgmlGemm1:;
                                      nb1/ggml_type_size(dst->type),
                                      src0->type,
                                      vec_dot_type,
-                                     dst->type))
+                                     dst->type,
+                                     src0->quant_levels))
                     goto UseGgmlGemm2;
         return;
     }
@@ -1511,7 +1516,7 @@ static void ggml_compute_forward_mul_mat_id_one_chunk(
                 float * dst_col = (float *) ((char *) dst->data + (i1*nb1 + i2*nb2));
 
                 for (int64_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ++ir0) {
-                    vec_dot(ne00, &tmp[ir0 - iir0], 0, src0_cur + ir0*nb01, 0, src1_col, 0, 1);
+                    vec_dot(ne00, &tmp[ir0 - iir0], 0, src0_cur + ir0*nb01, 0, src1_col, 0, 1, src0->quant_levels);
                 }
 
                 memcpy(&dst_col[iir0], tmp, (MIN(iir0 + blck_0, ir0_end) - iir0)*sizeof(float));

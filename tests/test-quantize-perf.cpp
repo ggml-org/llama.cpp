@@ -309,7 +309,7 @@ int main(int argc, char * argv[]) {
                 for (size_t size : params.test_sizes) {
                     printf("    %zu values (%.2f MB)\n", size, 4*size/(float)(1024*1024));
                     auto quantize_fn = [&](void) -> float {
-                        qfns->to_float(test_q1, test_out, size);
+                        qfns->to_float(test_q1, test_out, size, nullptr);
                         return test_out[0];
                     };
                     size_t quantized_size = ggml_row_size(type, size);

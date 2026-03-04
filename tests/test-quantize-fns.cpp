@@ -50,7 +50,7 @@ static float total_quantization_error(const ggml_type_traits * qfns, const ggml_
     std::vector<float> tmp_out(test_size);
 
     qfns_cpu->from_float(test_data, tmp_q.data(), test_size);
-    qfns->to_float(tmp_q.data(), tmp_out.data(), test_size);
+    qfns->to_float(tmp_q.data(), tmp_out.data(), test_size, nullptr);
     return array_rmse(test_data, tmp_out.data(), test_size);
 }
 
@@ -62,10 +62,10 @@ static float reference_quantization_error(const ggml_type_traits * qfns, const g
 
     // FIXME: why is done twice?
     qfns_cpu->from_float(test_data, tmp_q.data(), test_size);
-    qfns->to_float(tmp_q.data(), tmp_out.data(), test_size);
+    qfns->to_float(tmp_q.data(), tmp_out.data(), test_size, nullptr);
 
     qfns->from_float_ref(test_data, tmp_q.data(), test_size);
-    qfns->to_float(tmp_q.data(), tmp_out_ref.data(), test_size);
+    qfns->to_float(tmp_q.data(), tmp_out_ref.data(), test_size, nullptr);
 
     return array_rmse(tmp_out.data(), tmp_out_ref.data(), test_size);
 }

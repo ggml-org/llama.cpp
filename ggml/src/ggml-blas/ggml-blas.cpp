@@ -80,7 +80,7 @@ static void ggml_backend_blas_mul_mat(ggml_backend_blas_context * ctx, struct gg
 #ifdef GGML_USE_OPENMP
                 #pragma omp parallel for num_threads(n_threads)
                 for (int64_t i01 = 0; i01 < ne01; i01++) {
-                    to_float((const char *) x + i01*nb01, wplane + i01*ne00, ne00);
+                    to_float((const char *) x + i01*nb01, wplane + i01*ne00, ne00, src0->quant_levels);
                 }
 #else
                 for (int i = 1; i < n_threads; i++) {
@@ -89,7 +89,7 @@ static void ggml_backend_blas_mul_mat(ggml_backend_blas_context * ctx, struct gg
                     if (start < end) {
                         ctx->tasks.push_back(std::async(std::launch::async, [=]() {
                             for (int64_t i01 = start; i01 < end; i01++) {
-                                to_float((const char *) x + i01*nb01, wplane + i01*ne00, ne00);
+                                to_float((const char *) x + i01*nb01, wplane + i01*ne00, ne00, src0->quant_levels);
                             }
                         }));
                     }
@@ -99,7 +99,7 @@ static void ggml_backend_blas_mul_mat(ggml_backend_blas_context * ctx, struct gg
                     const int64_t start = 0;
                     const int64_t end   = ne01/n_threads;
                     for (int64_t i01 = start; i01 < end; i01++) {
-                        to_float((const char *) x + i01*nb01, wplane + i01*ne00, ne00);
+                        to_float((const char *) x + i01*nb01, wplane + i01*ne00, ne00, src0->quant_levels);
                     }
                 }
 #endif

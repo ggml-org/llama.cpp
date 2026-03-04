@@ -15,15 +15,6 @@
 
 #include "models/models.h"
 
-// Q3_PT/Q3_KPT/Q4_DPT: global fallback levels functions (defined in ggml-quants.c)
-// These remain temporarily for the global fallback used by dequantize paths.
-// The per-tensor registry functions are removed; per-tensor levels now use graph inputs.
-extern "C" {
-    void q3pt_set_levels(const float * levels);
-    void q3kpt_set_levels(const float * levels);
-    void q4dpt_set_levels(const int8_t * levels);
-    void ggml_quant_set_tensor_aux_data(const void * tensor_data, const void * aux_data, size_t aux_size);
-}
 
 #include <algorithm>
 #include <cassert>
@@ -7882,6 +7873,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             { GGML_TYPE_Q3_PT,  "q3_pt.levels",  8, sizeof(float) },
             { GGML_TYPE_Q3_KPT, "q3_kpt.levels", 8, sizeof(float) },
             { GGML_TYPE_Q4_DPT, "q4_dpt.levels", 16, sizeof(int8_t) },
+            { GGML_TYPE_Q2_KPT, "q2_kpt.levels", 4, sizeof(float) },
         };
 
         for (const auto & lt : level_types) {
@@ -7892,7 +7884,6 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             const size_t    lv_arr_n = gguf_get_arr_n(ml.meta.get(), lv_idx);
 
             size_t tensor_count = 0;
-            bool global_set = false;
 
             // Iterate over GGUF slots to find matching tensors
             for (size_t gguf_slot = 0; gguf_slot < lv_arr_n / lt.n_levels; ++gguf_slot) {
@@ -7912,24 +7903,12 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     lv_raw + gguf_offset * lt.elem_bytes,
                     lv_raw + (gguf_offset + lt.n_levels) * lt.elem_bytes
                 );
-                aux.aux_tensor = nullptr;  // Will be created during graph build
+                aux.aux_tensor = nullptr;
 
-                // Register in global registry for backend access
-                ggml_quant_set_tensor_aux_data(t, aux.host_data.data(), aux.host_data.size());
+                // Set quant_levels directly on the tensor
+                t->quant_levels = aux.host_data.data();
 
                 tensor_count++;
-
-                // Set the global fallback from the first tensor's levels
-                if (!global_set) {
-                    if (lt.type == GGML_TYPE_Q4_DPT) {
-                        q4dpt_set_levels((const int8_t *)(lv_raw + gguf_offset * lt.elem_bytes));
-                    } else if (lt.type == GGML_TYPE_Q3_PT) {
-                        q3pt_set_levels((const float *)(lv_raw + gguf_offset * lt.elem_bytes));
-                    } else if (lt.type == GGML_TYPE_Q3_KPT) {
-                        q3kpt_set_levels((const float *)(lv_raw + gguf_offset * lt.elem_bytes));
-                    }
-                    global_set = true;
-                }
             }
 
             if (tensor_count > 0) {

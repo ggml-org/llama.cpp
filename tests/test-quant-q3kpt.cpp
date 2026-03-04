@@ -13,7 +13,6 @@ void         q3kpt_train_levels(const float * data,
                                 const float * imatrix,
                                 float         levels_out[8]);
 void         q3kpt_set_levels(const float * levels);
-const float * q3kpt_get_tensor_levels(const void * data_ptr);
 size_t       quantize_q3_kpt(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 void         quantize_row_q8_K_ref(const float * x, void * y, int64_t k);
 }
@@ -49,7 +48,7 @@ static float std_quant_rmse(ggml_type type, const float * data, size_t nrow, siz
     ggml_quantize_chunk(type, data, qb.data(), 0, nrow, n_per_row, nullptr);
     const ggml_type_traits * tr = ggml_get_type_traits(type);
     for (size_t r = 0; r < nrow; ++r) {
-        tr->to_float(qb.data() + r * rs, dq.data() + r * n_per_row, (int64_t) n_per_row);
+        tr->to_float(qb.data() + r * rs, dq.data() + r * n_per_row, (int64_t) n_per_row, nullptr);
     }
     return rmse(data, dq.data(), nrow * n_per_row);
 }
@@ -65,7 +64,7 @@ static float q3kpt_rmse_actual(const float * data, size_t nrow, size_t n_per_row
     quantize_q3_kpt(data, qb.data(), (int64_t) nrow, (int64_t) n_per_row, nullptr);
     const ggml_type_traits * tr = ggml_get_type_traits(GGML_TYPE_Q3_KPT);
     for (size_t r = 0; r < nrow; ++r) {
-        tr->to_float(qb.data() + r * rs, dq.data() + r * n_per_row, (int64_t) n_per_row);
+        tr->to_float(qb.data() + r * rs, dq.data() + r * n_per_row, (int64_t) n_per_row, levels);
     }
     return rmse(data, dq.data(), nrow * n_per_row);
 }

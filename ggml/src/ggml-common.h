@@ -452,6 +452,23 @@ static_assert(sizeof(block_q3_pt) == 124, "wrong q3_pt block size");
 typedef block_iq4_nl block_q4_dpt;
 #define Q4DPT_N_LEVELS 16
 
+// Q2_DPT: 2-bit per-tensor Lloyd-Max scalar quantization (2.5 bpw)
+// Block format: 2 bytes (FP16 scale) + 8 bytes (2-bit indices for 32 elements) = 10 bytes per block
+// 4 learned int8 levels per tensor, optimized via Lloyd-Max k-means
+typedef struct {
+    ggml_half d;               // 2 bytes: FP16 scale (delta)
+    uint8_t qs[8];             // 8 bytes: 2-bit indices (4 values per byte, 32 elements total)
+} block_q2_dpt;
+static_assert(sizeof(block_q2_dpt) == sizeof(ggml_half) + 8, "wrong q2_dpt block size/padding");
+
+#define QK2_DPT 32
+#define Q2DPT_N_LEVELS 4
+
+// Q2_KPT: Q2_K with learned per-tensor float levels (2.625 bpw)
+// Reuses block_q2_K structure but maps 2-bit indices through learned level table
+typedef block_q2_K block_q2_kpt;
+#define Q2KPT_N_LEVELS 4
+
 #endif // GGML_COMMON_DECL
 #endif // GGML_COMMON_DECL
 

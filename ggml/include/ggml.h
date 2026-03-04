@@ -430,7 +430,9 @@ extern "C" {
         GGML_TYPE_Q3_PT  = 40, // 3.875 bpw per-tensor Lloyd-Max, 16-elem affine sub-blocks
         GGML_TYPE_Q3_KPT  = 41, // Q3_K with learned per-tensor levels (3.4375 bpw)
         GGML_TYPE_Q4_DPT  = 42, // IQ4_NL with learned per-tensor int8 levels (4.125 bpw)
-        GGML_TYPE_COUNT   = 43,
+        GGML_TYPE_Q2_DPT  = 43, // 2-bit with learned per-tensor int8 levels (2.5 bpw)
+        GGML_TYPE_Q2_KPT  = 44, // Q2_K with learned per-tensor float levels (2.625 bpw)
+        GGML_TYPE_COUNT   = 45,
     };
 
     // precision
@@ -469,6 +471,7 @@ extern "C" {
         GGML_FTYPE_MOSTLY_MXFP4   = 25, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q3_KPT  = 27, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q4_DPT  = 28, // except 1d tensors
+        GGML_FTYPE_MOSTLY_Q2_KPT  = 29, // except 1d tensors
     };
 
     // available tensor operations:
@@ -687,9 +690,8 @@ extern "C" {
 
         char name[GGML_MAX_NAME];
 
-        void * extra; // extra things e.g. for ggml-cuda.cu
-
-        char padding[8];
+        void * extra;        // extra things e.g. for ggml-cuda.cu
+        void * quant_levels; // per-tensor quantization levels (replaces char padding[8]; same size on 64-bit)
     };
 
     static const size_t GGML_TENSOR_SIZE = sizeof(struct ggml_tensor);
@@ -2707,7 +2709,7 @@ extern "C" {
 #        define GGML_RESTRICT restrict
 #    endif
 #endif
-    typedef void (*ggml_to_float_t)  (const void  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+    typedef void (*ggml_to_float_t)  (const void  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels);
     typedef void (*ggml_from_float_t)(const float * GGML_RESTRICT x, void  * GGML_RESTRICT y, int64_t k);
 
     struct ggml_type_traits {

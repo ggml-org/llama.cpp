@@ -1026,6 +1026,16 @@ struct ggml_cuda_type_traits<GGML_TYPE_Q4_DPT> {
 // Each TU gets its own copy; initialized via cudaGetSymbolAddress + cudaMemcpyAsync before use.
 __device__ int8_t q4dpt_levels_cuda[16];
 
+// Per-tensor lookup table for Q2_DPT (4 int8 levels).
+__device__ int8_t q2dpt_levels_cuda[4];
+
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_Q2_DPT> {
+    static constexpr int qk = QK2_DPT;
+    static constexpr int qr = 4;  // 4 elements per "quantum" (2-bit)
+    static constexpr int qi = 1;  // 1 uint32 per block
+};
+
 template<>
 struct ggml_cuda_type_traits<GGML_TYPE_IQ4_XS> {
     static constexpr int qk = QK_K;

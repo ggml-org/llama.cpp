@@ -255,6 +255,8 @@ endif()
 # New quant tests
 llama_build_and_test(test-quant-q3kpt.cpp)
 llama_build_and_test(test-quant-q4dpt.cpp)
+llama_build_and_test(test-quant-q2dpt.cpp)
+llama_build_and_test(test-quant-q2kpt.cpp)
 llama_build(test-quant-q4dpt-experiment.cpp)
 
 # libmtmd

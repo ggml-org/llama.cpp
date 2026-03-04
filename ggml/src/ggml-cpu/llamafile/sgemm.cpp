@@ -3679,7 +3679,7 @@ class tinyBLAS_PPC {
  */
 bool llamafile_sgemm(const struct ggml_compute_params * params, int64_t m, int64_t n, int64_t k,
                      const void *A, int64_t lda, const void *B, int64_t ldb, void *C,
-                     int64_t ldc, int Atype, int Btype, int Ctype) {
+                     int64_t ldc, int Atype, int Btype, int Ctype, const void * quant_levels) {
 
     assert(m >= 0);
     assert(n >= 0);
@@ -4023,7 +4023,7 @@ bool llamafile_sgemm(const struct ggml_compute_params * params, int64_t m, int64
 #if defined(__AVX2__) || defined(__AVX512F__) || defined(__AVX__)
         // Q4_DPT has identical block layout to IQ4_NL (block_q4_dpt = block_iq4_nl)
         // but uses a per-tensor lookup table instead of the fixed IQ4_NL values.
-        const int8_t * levels = (const int8_t *)ggml_quant_get_current_levels(GGML_TYPE_Q4_DPT);
+        const int8_t * levels = (const int8_t *)quant_levels;
         if (!levels) return false;
         tinyBLAS_Q0_AVX<block_iq4_nl, block_q8_0, float> tb{
             k, (const block_iq4_nl *)A, lda,

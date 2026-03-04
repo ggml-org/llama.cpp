@@ -36,6 +36,13 @@ extern "C" {
     void   q4dpt_set_levels(const int8_t * levels);
 }
 
+// Q2_KPT levels functions (defined in ggml-quants.c)
+extern "C" {
+    void   q2kpt_train_levels(const float * data, int64_t nrow, int64_t n_per_row,
+                               const float * imatrix, float levels_out[4]);
+    void   q2kpt_set_levels(const float * levels);
+}
+
 // Quantization types. Changes to this struct must be replicated in quantize.cpp
 struct tensor_quantization {
     std::string name;
@@ -151,7 +158,7 @@ static void llama_tensor_dequantize_impl(
         } else if (tensor->type == GGML_TYPE_BF16) {
             ggml_bf16_to_fp32_row((ggml_bf16_t *)tensor->data, f32_output, nelements);
         } else if (ggml_is_quantized(tensor->type)) {
-            qtype->to_float(tensor->data, f32_output, nelements);
+            qtype->to_float(tensor->data, f32_output, nelements, tensor->quant_levels);
         } else {
             GGML_ABORT("fatal error"); // unreachable
         }
@@ -181,13 +188,14 @@ static void llama_tensor_dequantize_impl(
         size_t thr_elems = thr_blocks * block_size; // number of elements for this thread
         size_t thr_block_bytes = thr_blocks * block_size_bytes; // number of input bytes for this thread
 
-        auto compute = [qtype] (ggml_type typ, uint8_t * inbuf, float * outbuf, int nels) {
+        const void * quant_levels = tensor->quant_levels;
+        auto compute = [qtype, quant_levels] (ggml_type typ, uint8_t * inbuf, float * outbuf, int nels) {
             if (typ == GGML_TYPE_F16) {
                 ggml_fp16_to_fp32_row((ggml_fp16_t *)inbuf, outbuf, nels);
             } else if (typ == GGML_TYPE_BF16) {
                 ggml_bf16_to_fp32_row((ggml_bf16_t *)inbuf, outbuf, nels);
             } else {
-                qtype->to_float(inbuf, outbuf, nels);
+                qtype->to_float(inbuf, outbuf, nels, quant_levels);
             }
         };
         workers.emplace_back(compute, tensor->type, (uint8_t *) tensor->data + in_buff_offs, f32_output + out_buff_offs, thr_elems);
@@ -280,6 +288,9 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             else if (ftype == LLAMA_FTYPE_MOSTLY_Q4_DPT) {
                 new_type = GGML_TYPE_IQ4_XS;
             }
+            else if (ftype == LLAMA_FTYPE_MOSTLY_Q2_KPT) {
+                new_type = GGML_TYPE_Q4_K;
+            }
             else if (ftype == LLAMA_FTYPE_MOSTLY_TQ1_0 || ftype == LLAMA_FTYPE_MOSTLY_TQ2_0) {
                 new_type = GGML_TYPE_Q4_K;
             }
@@ -309,7 +320,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             }
         }
     } else if (name.find("attn_v.weight") != std::string::npos) {
-        if      (ftype == LLAMA_FTYPE_MOSTLY_Q2_K) {
+        if      (ftype == LLAMA_FTYPE_MOSTLY_Q2_K || ftype == LLAMA_FTYPE_MOSTLY_Q2_KPT) {
             new_type = qs.model.hparams.n_gqa() >= 4 ? GGML_TYPE_Q4_K : GGML_TYPE_Q3_K;
         }
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S && qs.model.hparams.n_gqa() >= 4) {
@@ -372,6 +383,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
         auto info = layer_info(qs.i_ffn_down, qs.n_ffn_down, name.c_str());
         int i_layer = info.first, n_layer = info.second;
         if      (ftype == LLAMA_FTYPE_MOSTLY_Q2_K) new_type = GGML_TYPE_Q3_K;
+        else if (ftype == LLAMA_FTYPE_MOSTLY_Q2_KPT) new_type = GGML_TYPE_Q3_K;
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S) {
             if (i_layer < n_layer/8) new_type = GGML_TYPE_Q4_K;
         }
@@ -422,11 +434,12 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
                 if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K   || ftype == LLAMA_FTYPE_MOSTLY_IQ3_XS || ftype == LLAMA_FTYPE_MOSTLY_IQ3_XXS ||
                     ftype == LLAMA_FTYPE_MOSTLY_Q3_K_S || ftype == LLAMA_FTYPE_MOSTLY_Q3_K_M  || ftype == LLAMA_FTYPE_MOSTLY_IQ4_NL  ||
                     ftype == LLAMA_FTYPE_MOSTLY_Q4_K_S || ftype == LLAMA_FTYPE_MOSTLY_Q4_K_M  || ftype == LLAMA_FTYPE_MOSTLY_IQ3_S  ||
-                    ftype == LLAMA_FTYPE_MOSTLY_IQ3_M  || ftype == LLAMA_FTYPE_MOSTLY_IQ4_XS || ftype == LLAMA_FTYPE_MOSTLY_Q3_KPT) {
+                    ftype == LLAMA_FTYPE_MOSTLY_IQ3_M  || ftype == LLAMA_FTYPE_MOSTLY_IQ4_XS || ftype == LLAMA_FTYPE_MOSTLY_Q3_KPT ||
+                    ftype == LLAMA_FTYPE_MOSTLY_Q2_KPT) {
                     new_type = GGML_TYPE_Q5_K;
                 }
             } else {
-                if      (ftype == LLAMA_FTYPE_MOSTLY_Q2_K   ) new_type = GGML_TYPE_Q3_K;
+                if      (ftype == LLAMA_FTYPE_MOSTLY_Q2_K || ftype == LLAMA_FTYPE_MOSTLY_Q2_KPT) new_type = GGML_TYPE_Q3_K;
                 else if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_XXS) new_type = GGML_TYPE_IQ3_S;
                 else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_M || ftype == LLAMA_FTYPE_MOSTLY_Q3_KPT) new_type = GGML_TYPE_Q4_K;
                 else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_L ) new_type = GGML_TYPE_Q5_K;
@@ -573,6 +586,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         case LLAMA_FTYPE_MOSTLY_Q3_PT:  default_type = GGML_TYPE_Q3_PT;  break;
         case LLAMA_FTYPE_MOSTLY_Q3_KPT:  default_type = GGML_TYPE_Q3_KPT;  break;
         case LLAMA_FTYPE_MOSTLY_Q4_DPT:  default_type = GGML_TYPE_Q4_DPT;  break;
+        case LLAMA_FTYPE_MOSTLY_Q2_KPT:  default_type = GGML_TYPE_Q2_KPT;  break;
 
         default: throw std::runtime_error(format("invalid output file type %d\n", ftype));
     }
@@ -1031,6 +1045,83 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         LLAMA_LOG_INFO("%s: Q4_DPT pass 1 complete.\n", __func__);
     }
 
+    // Q2_KPT two-pass approach: train all per-tensor float levels BEFORE opening the output
+    static const size_t Q2KPT_N_LEVELS_SZ = 4;
+    std::vector<float> q2kpt_all_levels;
+    if (ftype == LLAMA_FTYPE_MOSTLY_Q2_KPT && !params->dry_run) {
+        LLAMA_LOG_INFO("%s: Q2_KPT pass 1: training per-tensor levels...\n", __func__);
+        q2kpt_all_levels.assign(tensors.size() * Q2KPT_N_LEVELS_SZ, 0.0f);
+
+        std::vector<no_init<uint8_t>> p1_read_data;
+        std::vector<no_init<float>>   p1_f32_buf;
+        std::vector<std::thread>      p1_workers;
+        p1_workers.reserve(nthread);
+
+        for (size_t ti = 0; ti < tensors.size(); ++ti) {
+            ggml_tensor * tensor = tensors[ti]->tensor;
+            const std::string tname = ggml_get_name(tensor);
+
+            bool quantize = tname.rfind("weight") == tname.size() - 6;
+            quantize &= (ggml_n_dims(tensor) >= 2);
+            quantize &= tname.find("_norm.weight")        == std::string::npos;
+            quantize &= tname.find("ffn_gate_inp.weight") == std::string::npos;
+            if (!quantize) { continue; }
+
+            ggml_type new_type = default_type;
+            if (!params->pure) {
+                new_type = llama_tensor_get_type(qs, new_type, tensor, ftype);
+            }
+            if (params->token_embedding_type < GGML_TYPE_COUNT &&
+                (tname == "token_embd.weight" || tname == "per_layer_token_embd.weight")) {
+                new_type = params->token_embedding_type;
+            }
+            if (params->output_tensor_type < GGML_TYPE_COUNT && tname == "output.weight") {
+                new_type = params->output_tensor_type;
+            }
+            if (new_type != GGML_TYPE_Q2_KPT) { continue; }
+
+            const size_t tsz = ggml_nbytes(tensor);
+            if (!ml.use_mmap) {
+                if (p1_read_data.size() < tsz) { p1_read_data.resize(tsz); }
+                tensor->data = p1_read_data.data();
+            }
+            ml.load_data_for(tensor);
+
+            const int64_t nelements = ggml_nelements(tensor);
+            float * f32_data;
+            if (tensor->type == GGML_TYPE_F32) {
+                f32_data = (float *) tensor->data;
+            } else {
+                llama_tensor_dequantize_impl(tensor, p1_f32_buf, p1_workers, nelements, nthread);
+                f32_data = (float *) p1_f32_buf.data();
+            }
+
+            const float * imatrix = nullptr;
+            if (imatrix_data) {
+                auto it2 = imatrix_data->find(remap_imatrix(tensor->name, mapped));
+                if (it2 != imatrix_data->end() &&
+                    it2->second.size() == (size_t)tensor->ne[0] * tensor->ne[2]) {
+                    imatrix = it2->second.data();
+                }
+            }
+
+            const int64_t n_per_row = tensor->ne[0];
+            const int64_t nrows     = tensor->ne[1];
+
+            LLAMA_LOG_INFO("%s: Q2_KPT levels for [%zu/%zu] %s\n", __func__, ti+1, tensors.size(), tensor->name);
+            q2kpt_train_levels(f32_data, nrows, n_per_row, imatrix,
+                               q2kpt_all_levels.data() + ti * Q2KPT_N_LEVELS_SZ);
+        }
+
+        for (auto & ctx : ctx_outs) {
+            if (ctx) {
+                gguf_set_arr_data(ctx.get(), "q2_kpt.levels", GGUF_TYPE_FLOAT32,
+                                  q2kpt_all_levels.data(), q2kpt_all_levels.size());
+            }
+        }
+        LLAMA_LOG_INFO("%s: Q2_KPT pass 1 complete.\n", __func__);
+    }
+
     // no output file for --dry-run
     if (!params->dry_run) {
         new_ofstream(0);
@@ -1312,6 +1403,19 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                     q4dpt_set_levels(q4dpt_all_levels.data() + tensor_pass2_idx * Q4DPT_N_LEVELS);
                 }
 
+                // Q2_KPT: set the per-tensor levels (trained in pass 1) as global for quantization
+                if (new_type == GGML_TYPE_Q2_KPT) {
+                    q2kpt_set_levels(q2kpt_all_levels.data() + tensor_pass2_idx * Q2KPT_N_LEVELS_SZ);
+                    // DIAGNOSTIC: print levels being used for quantization
+                    static int q2kpt_pass2_diag = 0;
+                    if (q2kpt_pass2_diag < 5) {
+                        const float * lv = q2kpt_all_levels.data() + tensor_pass2_idx * Q2KPT_N_LEVELS_SZ;
+                        LLAMA_LOG_INFO("%s: [Q2_KPT pass2 diag] ti=%zu tensor='%s' levels=[%.4f,%.4f,%.4f,%.4f]\n",
+                                       __func__, tensor_pass2_idx, ggml_get_name(tensor), lv[0], lv[1], lv[2], lv[3]);
+                        q2kpt_pass2_diag++;
+                    }
+                }
+
                 // quantize each expert separately since they have different importance matrices
                 new_size = 0;
                 for (int64_t i03 = 0; i03 < tensor->ne[2]; ++i03) {
@@ -1329,7 +1433,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                         //LLAMA_LOG_INFO("nrows = %d, n_per_row = %d\n", nrows, n_per_row);
                         std::vector<float> deq(nrows*n_per_row);
                         const ggml_type_traits * qtype = ggml_get_type_traits(new_type);
-                        qtype->to_float(new_data_03, deq.data(), deq.size());
+                        qtype->to_float(new_data_03, deq.data(), deq.size(), nullptr);
 
                         double err = 0.0f;
                         for (int i = 0; i < (int) deq.size(); ++i) {

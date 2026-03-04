@@ -67,6 +67,9 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
         case GGML_TYPE_Q4_DPT:
             mul_mat_q_case<GGML_TYPE_Q4_DPT>(ctx, args, stream);
             break;
+        case GGML_TYPE_Q2_DPT:
+            mul_mat_q_case<GGML_TYPE_Q2_DPT>(ctx, args, stream);
+            break;
         default:
             GGML_ABORT("fatal error");
             break;
@@ -84,14 +87,20 @@ void ggml_cuda_mul_mat_q(
     cudaStream_t stream = ctx.stream();
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
 
-    // Set Q4_DPT lookup table from per-tensor registry
+    // Set Q4_DPT lookup table from tensor's quant_levels
     if (src0->type == GGML_TYPE_Q4_DPT) {
-        size_t levels_size;
-        const void * levels = ggml_quant_get_tensor_aux_data(src0, &levels_size);
-        GGML_ASSERT(levels && "Q4_DPT MUL_MAT requires levels (register with ggml_quant_set_tensor_aux_data)");
+        GGML_ASSERT(src0->quant_levels && "Q4_DPT MUL_MAT requires levels (set tensor->quant_levels)");
         int8_t * d_q4dpt_levels;
         CUDA_CHECK(cudaGetSymbolAddress((void **)&d_q4dpt_levels, q4dpt_levels_cuda));
-        CUDA_CHECK(cudaMemcpyAsync(d_q4dpt_levels, levels, levels_size, cudaMemcpyHostToDevice, stream));
+        CUDA_CHECK(cudaMemcpyAsync(d_q4dpt_levels, src0->quant_levels, Q4DPT_N_LEVELS * sizeof(int8_t), cudaMemcpyHostToDevice, stream));
+    }
+
+    // Set Q2_DPT lookup table from tensor's quant_levels
+    if (src0->type == GGML_TYPE_Q2_DPT) {
+        GGML_ASSERT(src0->quant_levels && "Q2_DPT MUL_MAT requires levels (set tensor->quant_levels)");
+        int8_t * d_q2dpt_levels;
+        CUDA_CHECK(cudaGetSymbolAddress((void **)&d_q2dpt_levels, q2dpt_levels_cuda));
+        CUDA_CHECK(cudaMemcpyAsync(d_q2dpt_levels, src0->quant_levels, Q2DPT_N_LEVELS * sizeof(int8_t), cudaMemcpyHostToDevice, stream));
     }
 
     const size_t ts_src0 = ggml_type_size(src0->type);
@@ -302,6 +311,7 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_NL:
         case GGML_TYPE_Q4_DPT:
+        case GGML_TYPE_Q2_DPT:
             mmq_supported = true;
             break;
         default:
@@ -385,3 +395,4 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
 // because it accesses the TU-local __device__ variable q4dpt_levels_cuda,
 // which is initialized by the code above.
 DECL_MMQ_CASE(GGML_TYPE_Q4_DPT);
+DECL_MMQ_CASE(GGML_TYPE_Q2_DPT);

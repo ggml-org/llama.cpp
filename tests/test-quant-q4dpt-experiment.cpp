@@ -208,7 +208,7 @@ static float experiment_rmse(const float * data, size_t nrow, size_t n_per_row,
     const ggml_type_traits * tr = ggml_get_type_traits(GGML_TYPE_Q4_DPT);
     for (size_t row = 0; row < nrow; ++row) {
         tr->to_float((const void *)&qblocks[row * nblock],
-                     deq.data() + row * n_per_row, (int64_t)n_per_row);
+                     deq.data() + row * n_per_row, (int64_t)n_per_row, levels);
     }
 
     return rmse_vec(data, deq.data(), total);
@@ -221,7 +221,7 @@ static float iq4nl_rmse(const float * data, size_t nrow, size_t n_per_row) {
     ggml_quantize_chunk(GGML_TYPE_IQ4_NL, data, qb.data(), 0, nrow, n_per_row, nullptr);
     const ggml_type_traits * tr = ggml_get_type_traits(GGML_TYPE_IQ4_NL);
     for (size_t r = 0; r < nrow; ++r) {
-        tr->to_float(qb.data() + r * rs, dq.data() + r * n_per_row, (int64_t)n_per_row);
+        tr->to_float(qb.data() + r * rs, dq.data() + r * n_per_row, (int64_t)n_per_row, nullptr);
     }
     return rmse_vec(data, dq.data(), nrow * n_per_row);
 }
