@@ -476,7 +476,12 @@ enum ggml_status naive_compute(ggml_cgraph * cgraph,
 
     std::shared_ptr<ov::InferRequest> infer_request;
     auto remote_context = ggml_openvino_get_remote_context();
-    core.set_property(device, ov::hint::execution_mode(ov::hint::ExecutionMode::ACCURACY));
+    if (cgraph->nodes[0]->op == GGML_OP_MUL_MAT) {
+        // TODO ACCURACY hint triggers a bug in GPU plugin/driver on Lunar Lake. Remove once CVS-182166 is resolved
+        core.set_property(device, ov::hint::execution_mode(ov::hint::ExecutionMode::PERFORMANCE));
+    } else {
+        core.set_property(device, ov::hint::execution_mode(ov::hint::ExecutionMode::ACCURACY));
+    }
     if (remote_context.has_value()) {
         infer_request = std::make_shared<ov::InferRequest>(
             core.compile_model(model, remote_context.value(), config).create_infer_request());
