@@ -27,7 +27,9 @@ export class ChatService {
 		if (typeof content === 'string') {
 			return content
 				.replace(AGENTIC_REGEX.REASONING_BLOCK, '')
-				.replace(AGENTIC_REGEX.REASONING_OPEN, '');
+				.replace(AGENTIC_REGEX.REASONING_OPEN, '')
+				.replace(AGENTIC_REGEX.AGENTIC_TOOL_CALL_BLOCK, '')
+				.replace(AGENTIC_REGEX.AGENTIC_TOOL_CALL_OPEN, '');
 		}
 
 		if (!Array.isArray(content)) {
@@ -41,6 +43,8 @@ export class ChatService {
 				text: part.text
 					.replace(AGENTIC_REGEX.REASONING_BLOCK, '')
 					.replace(AGENTIC_REGEX.REASONING_OPEN, '')
+					.replace(AGENTIC_REGEX.AGENTIC_TOOL_CALL_BLOCK, '')
+					.replace(AGENTIC_REGEX.AGENTIC_TOOL_CALL_OPEN, '')
 			};
 		});
 	}
