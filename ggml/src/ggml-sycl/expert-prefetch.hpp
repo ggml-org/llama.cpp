@@ -257,6 +257,13 @@ class ExpertPredictor {
     // Checked by ExpertPrefetcher to short-circuit hint().
     bool is_prefetch_disabled() const;
 
+    // Get top-K experts by frequency for a layer (excluding already-selected ones).
+    // Public wrapper for hot expert pool population.
+    std::vector<int> get_top_k_by_freq(int layer_idx, const std::vector<int> & exclude, int k) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return top_k_by_freq(layer_idx, exclude, k);
+    }
+
   private:
     bool initialized_ = false;
     int  n_layers_      = 0;
@@ -303,6 +310,85 @@ class ExpertPredictor {
 
     // Get top-K experts by frequency for a layer (excluding already-selected ones).
     std::vector<int> top_k_by_freq(int layer_idx, const std::vector<int> & exclude, int k) const;
+};
+
+// ============================================================================
+// HotExpertPool: dedicated VRAM cache for most-accessed MoE experts
+// ============================================================================
+//
+// Allocates a fixed-size VRAM pool for caching hot experts identified by the
+// ExpertPredictor's frequency table. After a warmup period, the top-K most
+// frequent experts per MoE tensor are promoted from host-pinned to VRAM,
+// eliminating PCIe streaming for the most commonly accessed weights.
+//
+// This pool is SEPARATE from the unified cache - it doesn't interfere with
+// the cache's budget accounting or eviction. It uses VRAM headroom that's
+// free after the unified cache has finished loading non-expert weights.
+//
+// Env var: GGML_SYCL_HOT_EXPERTS=N sets the number of hot experts per
+// tensor (default: 2). Set to 0 to disable hot expert VRAM caching.
+// GGML_SYCL_HOT_EXPERT_BUDGET_MB=N sets the VRAM budget in MB (default: 512).
+//
+class HotExpertPool {
+  public:
+    HotExpertPool() = default;
+    ~HotExpertPool();
+
+    // Non-copyable, non-movable
+    HotExpertPool(const HotExpertPool &)             = delete;
+    HotExpertPool & operator=(const HotExpertPool &) = delete;
+    HotExpertPool(HotExpertPool &&)                  = delete;
+    HotExpertPool & operator=(HotExpertPool &&)      = delete;
+
+    // Initialize the pool.
+    //   queue: SYCL queue for device allocation and memcpy
+    //   budget_mb: VRAM budget in MB for this pool (default from env)
+    //   expert_bytes: size of one expert-tensor in bytes
+    void init(sycl::queue & queue, size_t expert_bytes);
+
+    // Promote the top-K experts for a given tensor to VRAM.
+    // Called after warmup, triggered by the predictor's frequency data.
+    //   tensor_name_hash: FNV hash identifying the MoE weight tensor
+    //   expert_ids: sorted list of expert IDs to promote (most frequent first)
+    //   host_ptrs: corresponding host-pinned pointers for each expert
+    // Returns number of experts actually promoted (may be less if pool full).
+    int promote(int tensor_name_hash,
+                const std::vector<int> & expert_ids,
+                const std::vector<void *> & host_ptrs);
+
+    // Look up a hot expert. Returns VRAM pointer if promoted, nullptr otherwise.
+    void * lookup(int tensor_name_hash, int expert_id) const;
+
+    // Check if pool is initialized and has capacity.
+    bool is_active() const { return initialized_; }
+
+    // Stats
+    int promoted_count() const { return promoted_count_; }
+    int capacity() const { return total_slots_; }
+
+    // How many hot experts per tensor (from env or default)
+    static int hot_experts_per_tensor();
+
+  private:
+    bool         initialized_  = false;
+    sycl::queue * queue_       = nullptr;
+    void *       pool_base_    = nullptr;   // Base of VRAM allocation
+    size_t       pool_size_    = 0;         // Total bytes allocated
+    size_t       expert_bytes_ = 0;         // Bytes per expert slot
+    int          total_slots_  = 0;         // Number of expert slots
+    int          promoted_count_ = 0;       // Currently promoted experts
+    int          next_slot_    = 0;         // Next free slot index
+
+    // Lookup: (tensor_hash, expert_id) -> slot index
+    // Stored as (tensor_hash << 16 | expert_id) for fast lookup
+    struct hot_entry {
+        int64_t key;           // composite key
+        int     slot;          // index into pool
+        void *  vram_ptr;      // pointer within pool_base_
+    };
+    std::vector<hot_entry> entries_;
+
+    mutable std::mutex mutex_;
 };
 
 // ============================================================================

@@ -871,6 +871,152 @@ bool ggml_sycl_expert_predict_enabled() {
 }
 
 // ============================================================================
+// HotExpertPool
+// ============================================================================
+
+HotExpertPool::~HotExpertPool() {
+    if (pool_base_ && queue_ && !ggml_sycl_is_shutting_down()) {
+        sycl::free(pool_base_, *queue_);
+        pool_base_ = nullptr;
+    }
+}
+
+int HotExpertPool::hot_experts_per_tensor() {
+    static int cached = -1;
+    if (cached < 0) {
+        const char * env = std::getenv("GGML_SYCL_HOT_EXPERTS");
+        cached = env ? std::atoi(env) : 2;  // Default: top-2 experts per tensor
+        if (cached < 0) cached = 0;
+    }
+    return cached;
+}
+
+void HotExpertPool::init(sycl::queue & queue, size_t expert_bytes) {
+    if (initialized_ || expert_bytes == 0) {
+        return;
+    }
+
+    const int hot_k = hot_experts_per_tensor();
+    if (hot_k == 0) {
+        GGML_LOG_INFO("[HOT-EXPERT] Disabled (GGML_SYCL_HOT_EXPERTS=0)\n");
+        return;
+    }
+
+    // Determine budget from env or default
+    size_t budget_mb = 512;
+    const char * env = std::getenv("GGML_SYCL_HOT_EXPERT_BUDGET_MB");
+    if (env) {
+        int val = std::atoi(env);
+        if (val > 0) {
+            budget_mb = static_cast<size_t>(val);
+        }
+    }
+
+    const size_t budget_bytes = budget_mb * 1024ULL * 1024ULL;
+    total_slots_ = static_cast<int>(budget_bytes / expert_bytes);
+    if (total_slots_ < 1) {
+        GGML_LOG_WARN("[HOT-EXPERT] Budget %zu MB too small for expert size %zu bytes\n",
+                      budget_mb, expert_bytes);
+        return;
+    }
+
+    pool_size_ = static_cast<size_t>(total_slots_) * expert_bytes;
+    expert_bytes_ = expert_bytes;
+    queue_ = &queue;
+
+    try {
+        pool_base_ = sycl::malloc_device(pool_size_, queue);
+    } catch (const sycl::exception & e) {
+        GGML_LOG_WARN("[HOT-EXPERT] Failed to allocate %zu MB VRAM pool: %s\n",
+                      pool_size_ / (1024 * 1024), e.what());
+        pool_base_   = nullptr;
+        total_slots_ = 0;
+        return;
+    }
+
+    if (!pool_base_) {
+        GGML_LOG_WARN("[HOT-EXPERT] VRAM pool allocation returned nullptr (%zu MB)\n",
+                      pool_size_ / (1024 * 1024));
+        total_slots_ = 0;
+        return;
+    }
+
+    entries_.reserve(static_cast<size_t>(total_slots_));
+    initialized_ = true;
+    GGML_LOG_INFO("[HOT-EXPERT] VRAM pool: %d slots x %.1f KB = %.1f MB (budget %zu MB, top-%d/tensor)\n",
+                  total_slots_, expert_bytes / 1024.0f, pool_size_ / (1024.0f * 1024.0f),
+                  budget_mb, hot_k);
+}
+
+int HotExpertPool::promote(int tensor_name_hash,
+                            const std::vector<int> & expert_ids,
+                            const std::vector<void *> & host_ptrs) {
+    if (!initialized_ || expert_ids.size() != host_ptrs.size()) {
+        return 0;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    int promoted = 0;
+
+    for (size_t i = 0; i < expert_ids.size(); i++) {
+        if (next_slot_ >= total_slots_) {
+            break;  // Pool full
+        }
+
+        const int    eid = expert_ids[i];
+        const void * src = host_ptrs[i];
+        if (!src) {
+            continue;
+        }
+
+        // Check if already promoted
+        const int64_t key = (static_cast<int64_t>(tensor_name_hash) << 20) | static_cast<int64_t>(eid);
+        bool found = false;
+        for (const auto & entry : entries_) {
+            if (entry.key == key) {
+                found = true;
+                break;
+            }
+        }
+        if (found) {
+            continue;  // Already in VRAM pool
+        }
+
+        // Copy from host-pinned to VRAM
+        void * dst = static_cast<uint8_t *>(pool_base_) + static_cast<size_t>(next_slot_) * expert_bytes_;
+        queue_->memcpy(dst, src, expert_bytes_).wait();
+
+        hot_entry entry{};
+        entry.key      = key;
+        entry.slot     = next_slot_;
+        entry.vram_ptr = dst;
+        entries_.push_back(entry);
+
+        next_slot_++;
+        promoted_count_++;
+        promoted++;
+    }
+
+    return promoted;
+}
+
+void * HotExpertPool::lookup(int tensor_name_hash, int expert_id) const {
+    if (!initialized_) {
+        return nullptr;
+    }
+
+    const int64_t key = (static_cast<int64_t>(tensor_name_hash) << 20) | static_cast<int64_t>(expert_id);
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (const auto & entry : entries_) {
+        if (entry.key == key) {
+            return entry.vram_ptr;
+        }
+    }
+    return nullptr;
+}
+
+// ============================================================================
 // MoE Dispatch Statistics
 // ============================================================================
 
