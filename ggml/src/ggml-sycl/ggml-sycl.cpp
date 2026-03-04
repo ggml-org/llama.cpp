@@ -19528,14 +19528,25 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
 #endif
     }
     const int layer_id = ggml_sycl_tp_extract_layer_number(src0->name);
+
+    // --- MoE cache hit/miss stats counters ---
+    int stats_needed      = 0;  // total needed experts
+    int stats_direct      = 0;  // direct base pointers (always "hit")
+    int stats_vram_ready  = 0;  // cache READY + device-resident (VRAM hit)
+    int stats_host_ready  = 0;  // cache READY + host-resident (host-tier, needs PCIe)
+    int stats_progress    = 0;  // cache IN_PROGRESS (fresh upload from host)
+    int stats_miss        = 0;  // cache miss (nullptr)
+
     for (int64_t e = 0; e < n_experts; ++e) {
         if (!needed[static_cast<size_t>(e)]) {
             continue;
         }
+        stats_needed++;
         if (direct_base) {
             const uint8_t * expert_ptr = static_cast<const uint8_t *>(direct_base) + e * expert_size;
 
             extra->moe_expert_ptrs_host[device][static_cast<size_t>(e)] = const_cast<uint8_t *>(expert_ptr);
+            stats_direct++;
             continue;
         }
         const uint8_t * expert_aos = static_cast<const uint8_t *>(src0->data) + e * expert_size;
@@ -19623,15 +19634,25 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
             // Log at debug level (not error) since this is expected for large MoE models.
             GGML_SYCL_DEBUG("[MOE] Cache miss for expert %ld layout=%d status=%d (host fallback)\n", (long) e,
                             (int) layout, (int) result.status);
+            stats_miss++;
             continue;
         }
 
         if (result.device_ptr == nullptr) {
             GGML_SYCL_DEBUG("[MOE] Null ptr for expert %ld layout=%d (host fallback)\n", (long) e, (int) layout);
+            stats_miss++;
             continue;
         }
         if (result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
             table_deps.push_back(result.event);
+            stats_progress++;
+        } else {
+            // READY: distinguish VRAM-resident vs host-resident
+            if (result.host_resident) {
+                stats_host_ready++;
+            } else {
+                stats_vram_ready++;
+            }
         }
 
         extra->moe_expert_ptrs_host[device][static_cast<size_t>(e)] = result.device_ptr;
@@ -19649,6 +19670,87 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
             ggml_sycl_drop_non_target_expert_entries(cache, expert_cache_key, layer_id, static_cast<int>(e), layout);
         }
     }
+
+    // --- Prediction + accuracy tracking (once per block, on first weight tensor) ---
+    // Only record on the "gate_exps" tensor to avoid 3x counting per block.
+    // The predictor uses sequential layer indices (0..n_layers), not block numbers.
+    // IMPORTANT: predict() must be called BEFORE record_actual() because predict()
+    // uses last_experts_[layer] from the previous token, and record_actual() overwrites it.
+    // NOTE: g_moe_layer_seq is keyed by FNV hash of full tensor name, NOT block number.
+    if (!need_all_experts && !ids_host.empty() && src0->name && strstr(src0->name, "ffn_gate_exps")) {
+        auto & predictor = g_expert_predictors[device];
+        if (predictor.is_active()) {
+            int seq_layer_id = -1;
+            {
+                const int hash_layer_id = moe_cache_layer_id(src0->name);
+                auto &    seq_map       = g_moe_layer_seq[device];
+                auto      it            = seq_map.find(hash_layer_id);
+                if (it != seq_map.end()) {
+                    seq_layer_id = it->second;
+                }
+            }
+            if (seq_layer_id >= 0) {
+                // Generate prediction BEFORE recording actual (so prediction uses previous token state)
+                auto predicted = predictor.predict(seq_layer_id);
+
+                // Extract unique expert IDs from routing tensor
+                std::vector<int> actual_experts;
+                actual_experts.reserve(static_cast<size_t>(ids_host.size()));
+                for (int32_t eid : ids_host) {
+                    if (eid >= 0 && eid < n_experts) {
+                        // Deduplicate: only add if not already present
+                        bool found = false;
+                        for (int ae : actual_experts) {
+                            if (ae == eid) { found = true; break; }
+                        }
+                        if (!found) {
+                            actual_experts.push_back(eid);
+                        }
+                    }
+                }
+                // record_actual: updates last_experts_, freq_table_, and accuracy stats
+                predictor.record_actual(seq_layer_id, actual_experts);
+            }
+        }
+    }
+
+    // --- Record MoE cache stats ---
+    if (stats_needed > 0 && ggml_sycl::MoeDispatchStats::enabled()) {
+        auto & stats = ggml_sycl::get_moe_dispatch_stats(device);
+        stats.record_dispatch(stats_vram_ready + stats_direct, stats_host_ready,
+                              stats_progress, stats_miss, 0);
+
+        // Token boundary detection: count MoE dispatches and auto-detect
+        // the number of MoE weight tensors per token (e.g., 108 = 36 blocks x 3).
+        // Uses FNV hash of the full tensor name (e.g., "blk.0.ffn_gate_exps.weight")
+        // so that each unique MoE tensor name maps to a unique ID. The block number
+        // alone (layer_id) is insufficient because 3 weight tensors share it.
+        static thread_local int          moe_dispatch_count = 0;
+        static thread_local int          moe_ops_per_token  = 0;  // 0 = not yet detected
+        static thread_local std::unordered_set<int> seen_tensor_names;
+        const int tensor_name_id = moe_cache_layer_id(src0->name);
+        moe_dispatch_count++;
+
+        if (moe_ops_per_token == 0) {
+            // Detection phase: track unique tensor name hashes
+            if (seen_tensor_names.count(tensor_name_id) == 0) {
+                seen_tensor_names.insert(tensor_name_id);
+            } else {
+                // Seen this tensor name again — token boundary
+                moe_ops_per_token = moe_dispatch_count - 1;
+                moe_dispatch_count = 1;  // reset count for new token
+                seen_tensor_names.clear();
+                stats.tick_token();  // First token complete
+            }
+        } else {
+            // Steady state: tick every N dispatches
+            if (moe_dispatch_count >= moe_ops_per_token) {
+                moe_dispatch_count = 0;
+                stats.tick_token();
+            }
+        }
+    }
+
     if (cache && !need_all_experts && !ids_host.empty()) {
         ggml_sycl_update_moe_hotset(cache, src0, extra, ids_host, n_experts, expert_layout_bytes, layout, layer_id,
                                     ctx.moe_layer_count);
@@ -26191,6 +26293,47 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 GGML_SYCL_DEBUG("[MoE-CPU-TG] L%d: GPU=%zu CPU=%zu (hybrid dispatch)\n",
                                 layer_id, gpu_entries.size(), cpu_entries.size());
 
+                // --- MoE dispatch stats for CPU-TG path ---
+                if (ggml_sycl::MoeDispatchStats::enabled()) {
+                    auto & stats = ggml_sycl::get_moe_dispatch_stats(ctx.device);
+                    stats.record_dispatch(static_cast<int>(gpu_entries.size()), 0, 0,
+                                          static_cast<int>(cpu_entries.size()), 0);
+
+                    // Record prediction accuracy (CPU-TG still has predictor state
+                    // from the previous token's record_actual calls)
+                    int seq_layer_id_cputg = -1;
+                    {
+                        auto & seq_map = g_moe_layer_seq[ctx.device];
+                        auto it = seq_map.find(layer_id);
+                        if (it != seq_map.end()) {
+                            seq_layer_id_cputg = it->second;
+                        }
+                    }
+
+                    // Collect actual expert IDs
+                    std::vector<int> actual_ids_cputg;
+                    actual_ids_cputg.reserve(gpu_entries.size() + cpu_entries.size());
+                    for (const auto & e : gpu_entries) {
+                        actual_ids_cputg.push_back(e.expert_id);
+                    }
+                    for (const auto & e : cpu_entries) {
+                        actual_ids_cputg.push_back(e.expert_id);
+                    }
+
+                    // Record for predictor + tick token boundary
+                    auto & predictor_cputg = g_expert_predictors[ctx.device];
+                    if (predictor_cputg.is_active() && seq_layer_id_cputg >= 0) {
+                        predictor_cputg.record_actual(seq_layer_id_cputg, actual_ids_cputg);
+
+                        // Token boundary: tick when seq_layer wraps
+                        static thread_local int last_seq_layer_cputg = -1;
+                        if (seq_layer_id_cputg <= last_seq_layer_cputg) {
+                            stats.tick_token();
+                        }
+                        last_seq_layer_cputg = seq_layer_id_cputg;
+                    }
+                }
+
                 // Fall through to shared GPU + CPU dispatch below
             } else {
             // ---------------------------------------------------------------
@@ -26255,12 +26398,16 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             }
 
             // Await any in-flight prefetches for this layer before dispatch
+            int n_prefetch_awaited = 0;
             if (prefetcher.is_active()) {
                 // Read actual router selections from ids tensor
                 for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
                     for (int64_t id = 0; id < n_ids; id++) {
                         const int32_t eid = ids_host[static_cast<size_t>(iid1 * n_ids + id)];
-                        prefetcher.await(layer_id, eid);
+                        void * ptr = prefetcher.await(layer_id, eid);
+                        if (ptr) {
+                            n_prefetch_awaited++;
+                        }
                     }
                 }
             }
@@ -26336,6 +26483,18 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 }
                 GGML_SYCL_DEBUG("[MoE-PARALLEL] L%d: GPU0=%zu secondary=%zu CPU=%zu experts\n",
                                 layer_id, gpu_entries.size(), secondary_total, cpu_entries.size());
+            }
+
+            // --- MoE dispatch stats instrumentation ---
+            if (ggml_sycl::MoeDispatchStats::enabled()) {
+                auto & stats = ggml_sycl::get_moe_dispatch_stats(ctx.device);
+                int n_gpu_total = static_cast<int>(gpu_entries.size());
+                for (int d = 1; d < n_gpu_devs; d++) {
+                    n_gpu_total += static_cast<int>(per_gpu_entries[d].size());
+                }
+                stats.record_dispatch(n_gpu_total, 0, 0,
+                                      static_cast<int>(cpu_entries.size()),
+                                      n_prefetch_awaited);
             }
 
             }  // end else (standard hybrid path -- CPU-TG path skips to here)
@@ -26448,6 +26607,17 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 }
                 if (predictor_rec.is_active() && seq_layer_rec >= 0) {
                     predictor_rec.record_actual(seq_layer_rec, actual_experts);
+                }
+
+                // Token boundary detection for stats reporting.
+                // Tick when we see seq_layer_rec < last seen layer (wraparound).
+                if (ggml_sycl::MoeDispatchStats::enabled()) {
+                    static thread_local int last_seq_layer = -1;
+                    if (seq_layer_rec >= 0 && seq_layer_rec <= last_seq_layer) {
+                        // Wrapped around to start of a new token
+                        ggml_sycl::get_moe_dispatch_stats(ctx.device).tick_token();
+                    }
+                    last_seq_layer = seq_layer_rec;
                 }
 
             }
@@ -27620,6 +27790,15 @@ static void ggml_backend_sycl_free(ggml_backend_t backend) {
 
     ggml_sycl_free_dev2dev_transfer_buffer();
     ggml_sycl_layout_ptr_stats_dump();
+    // Print final MoE dispatch statistics
+    if (ggml_sycl::MoeDispatchStats::enabled()) {
+        for (int d = 0; d < GGML_SYCL_MAX_DEVICES; d++) {
+            auto & stats = ggml_sycl::get_moe_dispatch_stats(d);
+            if (stats.total_experts_dispatched.load(std::memory_order_relaxed) > 0) {
+                stats.print_summary("FINAL");
+            }
+        }
+    }
     // NOTE: do NOT shut down g_cpu_worker here — ggml_backend_sycl_free()
     // is called for temporary backends during model loading.  The worker
     // thread is a global resource tied to split config; it self-terminates

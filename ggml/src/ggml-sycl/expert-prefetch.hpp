@@ -305,6 +305,75 @@ class ExpertPredictor {
     std::vector<int> top_k_by_freq(int layer_idx, const std::vector<int> & exclude, int k) const;
 };
 
+// ============================================================================
+// MoE Dispatch Statistics: per-token cache hit/miss + prediction accuracy
+// ============================================================================
+//
+// Tracks detailed per-expert-level hit rates (not just binary per-layer).
+// Integrated at the dispatch partition point in ggml_sycl_mul_mat_id() to
+// measure actual cache residency and prediction overlap.
+//
+// Env var: GGML_SYCL_MOE_STATS=1 enables stats collection (default: ON when
+// expert prediction is active). GGML_SYCL_MOE_STATS_INTERVAL=N controls
+// reporting interval in tokens (default: 10).
+//
+struct MoeDispatchStats {
+    // Cumulative counters (lifetime)
+    std::atomic<int64_t> total_experts_dispatched{0};  // Total expert dispatches
+    std::atomic<int64_t> total_vram_hits{0};           // Expert in VRAM cache (fastest)
+    std::atomic<int64_t> total_host_hits{0};           // Expert in host-pinned cache (PCIe streaming)
+    std::atomic<int64_t> total_staging{0};             // Expert freshly staged from host (IN_PROGRESS)
+    std::atomic<int64_t> total_cpu_fallbacks{0};       // Expert fell to CPU (cache miss)
+    std::atomic<int64_t> total_prefetch_hits{0};       // Expert was in-flight prefetched and awaited
+    std::atomic<int64_t> total_tokens{0};              // Token counter
+    std::atomic<int64_t> total_layers{0};              // Layer dispatch counter
+
+    // Per-expert prediction accuracy (cumulative)
+    std::atomic<int64_t> pred_total_experts{0};     // Total experts in actual selections
+    std::atomic<int64_t> pred_correct_experts{0};   // Experts that were in prediction set
+    std::atomic<int64_t> pred_total_layers{0};      // Layers where prediction was available
+
+    // Interval counters (reset each report)
+    std::atomic<int64_t> interval_experts{0};
+    std::atomic<int64_t> interval_vram_hits{0};
+    std::atomic<int64_t> interval_host_hits{0};
+    std::atomic<int64_t> interval_staging{0};
+    std::atomic<int64_t> interval_cpu_fallbacks{0};
+    std::atomic<int64_t> interval_pred_total{0};
+    std::atomic<int64_t> interval_pred_correct{0};
+    std::atomic<int64_t> interval_tokens{0};
+
+    // Reporting interval in tokens
+    int report_interval = 10;
+
+    // Record a dispatch partition for one MUL_MAT_ID call.
+    // n_vram: experts found in VRAM (device-resident)
+    // n_host: experts found in host-pinned cache (PCIe streaming)
+    // n_staging: experts freshly being staged (IN_PROGRESS)
+    // n_miss: cache misses (nullptr, falls to CPU)
+    // n_prefetched: experts from async DMA prefetch
+    void record_dispatch(int n_vram, int n_host, int n_staging, int n_miss, int n_prefetched);
+
+    // Record prediction accuracy for one layer: predicted vs actual expert sets
+    void record_prediction_accuracy(const std::vector<int> & predicted,
+                                    const std::vector<int> & actual);
+
+    // Called once per token (after all layers) to check if we should report
+    void tick_token();
+
+    // Print summary statistics
+    void print_summary(const char * tag = "FINAL") const;
+
+    // Print interval statistics and reset interval counters
+    void print_interval();
+
+    // Check if stats collection is enabled
+    static bool enabled();
+};
+
+// Global stats instance (one per device, indexed by device id)
+MoeDispatchStats & get_moe_dispatch_stats(int device);
+
 // Check if expert prediction is enabled via environment variable.
 // Default: ON (returns true unless GGML_SYCL_EXPERT_PREDICT=0).
 bool ggml_sycl_expert_predict_enabled();

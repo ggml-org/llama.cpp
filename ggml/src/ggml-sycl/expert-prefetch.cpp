@@ -75,6 +75,16 @@ void ExpertPrefetcher::shutdown() {
     initialized_ = false;
     GGML_LOG_INFO("[SYCL] Expert prefetcher shut down (prefetched=%d, already_cached=%d)\n",
                   completed_count_, prefetch_hits_);
+
+    // Print final MoE dispatch statistics
+    if (MoeDispatchStats::enabled()) {
+        for (int d = 0; d < GGML_SYCL_MAX_DEVICES; d++) {
+            auto & stats = get_moe_dispatch_stats(d);
+            if (stats.total_experts_dispatched.load(std::memory_order_relaxed) > 0) {
+                stats.print_summary("FINAL");
+            }
+        }
+    }
 }
 
 // ============================================================================
@@ -564,6 +574,13 @@ void ExpertPredictor::record_actual(int layer_idx, const std::vector<int> & actu
             }
         }
 
+        // Feed per-expert stats to MoeDispatchStats (lock-free, outside mutex scope)
+        if (MoeDispatchStats::enabled()) {
+            // Use device 0 for stats — record_actual is called from the primary device
+            auto & stats = get_moe_dispatch_stats(0);
+            stats.record_prediction_accuracy(pred, actual_experts);
+        }
+
         // Hit if we predicted at least half of the actual experts
         // (integer division: lenient for odd sizes).
         bool sample_hit = (hits > 0 && !actual_experts.empty() &&
@@ -851,6 +868,161 @@ bool ggml_sycl_expert_predict_enabled() {
         cached = (!env || std::atoi(env) != 0) ? 1 : 0;
     }
     return cached != 0;
+}
+
+// ============================================================================
+// MoE Dispatch Statistics
+// ============================================================================
+
+bool MoeDispatchStats::enabled() {
+    static int cached = -1;
+    if (cached < 0) {
+        const char * env = std::getenv("GGML_SYCL_MOE_STATS");
+        // Default: ON (1) when expert prediction is active, unless explicitly 0
+        cached = (!env || std::atoi(env) != 0) ? 1 : 0;
+    }
+    return cached != 0;
+}
+
+void MoeDispatchStats::record_dispatch(int n_vram, int n_host, int n_staging,
+                                        int n_miss, int n_prefetched) {
+    const int total = n_vram + n_host + n_staging + n_miss;
+    total_experts_dispatched.fetch_add(total, std::memory_order_relaxed);
+    total_vram_hits.fetch_add(n_vram, std::memory_order_relaxed);
+    total_host_hits.fetch_add(n_host, std::memory_order_relaxed);
+    total_staging.fetch_add(n_staging, std::memory_order_relaxed);
+    total_cpu_fallbacks.fetch_add(n_miss, std::memory_order_relaxed);
+    total_prefetch_hits.fetch_add(n_prefetched, std::memory_order_relaxed);
+    total_layers.fetch_add(1, std::memory_order_relaxed);
+
+    interval_experts.fetch_add(total, std::memory_order_relaxed);
+    interval_vram_hits.fetch_add(n_vram, std::memory_order_relaxed);
+    interval_host_hits.fetch_add(n_host, std::memory_order_relaxed);
+    interval_staging.fetch_add(n_staging, std::memory_order_relaxed);
+    interval_cpu_fallbacks.fetch_add(n_miss, std::memory_order_relaxed);
+}
+
+void MoeDispatchStats::record_prediction_accuracy(const std::vector<int> & predicted,
+                                                   const std::vector<int> & actual) {
+    if (predicted.empty() || actual.empty()) {
+        return;
+    }
+
+    int correct = 0;
+    for (int a : actual) {
+        for (int p : predicted) {
+            if (a == p) {
+                correct++;
+                break;
+            }
+        }
+    }
+
+    pred_total_experts.fetch_add(static_cast<int64_t>(actual.size()), std::memory_order_relaxed);
+    pred_correct_experts.fetch_add(correct, std::memory_order_relaxed);
+    pred_total_layers.fetch_add(1, std::memory_order_relaxed);
+
+    interval_pred_total.fetch_add(static_cast<int64_t>(actual.size()), std::memory_order_relaxed);
+    interval_pred_correct.fetch_add(correct, std::memory_order_relaxed);
+}
+
+void MoeDispatchStats::tick_token() {
+    int64_t tok = total_tokens.fetch_add(1, std::memory_order_relaxed) + 1;
+    interval_tokens.fetch_add(1, std::memory_order_relaxed);
+
+    if (report_interval > 0 && (tok % report_interval) == 0) {
+        print_interval();
+    }
+}
+
+void MoeDispatchStats::print_summary(const char * tag) const {
+    int64_t dispatched = total_experts_dispatched.load(std::memory_order_relaxed);
+    int64_t vram       = total_vram_hits.load(std::memory_order_relaxed);
+    int64_t host       = total_host_hits.load(std::memory_order_relaxed);
+    int64_t staging    = total_staging.load(std::memory_order_relaxed);
+    int64_t cpu        = total_cpu_fallbacks.load(std::memory_order_relaxed);
+    int64_t prefetch   = total_prefetch_hits.load(std::memory_order_relaxed);
+    int64_t tokens     = total_tokens.load(std::memory_order_relaxed);
+    int64_t layers     = total_layers.load(std::memory_order_relaxed);
+    int64_t p_total    = pred_total_experts.load(std::memory_order_relaxed);
+    int64_t p_correct  = pred_correct_experts.load(std::memory_order_relaxed);
+    int64_t p_layers   = pred_total_layers.load(std::memory_order_relaxed);
+
+    if (dispatched == 0) {
+        return;
+    }
+
+    float vram_pct    = dispatched > 0 ? 100.0f * static_cast<float>(vram) / static_cast<float>(dispatched) : 0.0f;
+    float host_pct    = dispatched > 0 ? 100.0f * static_cast<float>(host) / static_cast<float>(dispatched) : 0.0f;
+    float staging_pct = dispatched > 0 ? 100.0f * static_cast<float>(staging) / static_cast<float>(dispatched) : 0.0f;
+    float pred_pct    = p_total > 0 ? 100.0f * static_cast<float>(p_correct) / static_cast<float>(p_total) : 0.0f;
+    float pcie_per_tok = tokens > 0 ? static_cast<float>(host + staging) / static_cast<float>(tokens) : 0.0f;
+
+    GGML_LOG_INFO("\n[MOE-STATS %s] ===== MoE Dispatch Statistics =====\n", tag);
+    GGML_LOG_INFO("[MOE-STATS %s] Tokens: %lld, Layers: %lld, Experts: %lld\n", tag,
+                  (long long) tokens, (long long) layers, (long long) dispatched);
+    GGML_LOG_INFO("[MOE-STATS %s] VRAM hits:  %lld (%.1f%%) - fast, no PCIe\n",
+                  tag, (long long) vram, vram_pct);
+    GGML_LOG_INFO("[MOE-STATS %s] Host hits:  %lld (%.1f%%) - PCIe streaming\n",
+                  tag, (long long) host, host_pct);
+    GGML_LOG_INFO("[MOE-STATS %s] Staging:    %lld (%.1f%%) - fresh upload\n",
+                  tag, (long long) staging, staging_pct);
+    GGML_LOG_INFO("[MOE-STATS %s] CPU miss:   %lld (%.0f%%) - fallback\n",
+                  tag, (long long) cpu,
+                  dispatched > 0 ? 100.0f * static_cast<float>(cpu) / static_cast<float>(dispatched) : 0.0f);
+    GGML_LOG_INFO("[MOE-STATS %s] PCIe experts/token: %.1f (host + staging)\n", tag, pcie_per_tok);
+    GGML_LOG_INFO("[MOE-STATS %s] Prefetch: %lld DMA-awaited\n", tag, (long long) prefetch);
+    GGML_LOG_INFO("[MOE-STATS %s] Prediction: %lld/%lld correct (%.1f%%) across %lld layers\n",
+                  tag, (long long) p_correct, (long long) p_total, pred_pct, (long long) p_layers);
+    GGML_LOG_INFO("[MOE-STATS %s] ================================\n\n", tag);
+}
+
+void MoeDispatchStats::print_interval() {
+    int64_t i_experts = interval_experts.exchange(0, std::memory_order_relaxed);
+    int64_t i_vram    = interval_vram_hits.exchange(0, std::memory_order_relaxed);
+    int64_t i_host    = interval_host_hits.exchange(0, std::memory_order_relaxed);
+    int64_t i_staging = interval_staging.exchange(0, std::memory_order_relaxed);
+    int64_t i_cpu     = interval_cpu_fallbacks.exchange(0, std::memory_order_relaxed);
+    int64_t i_pt      = interval_pred_total.exchange(0, std::memory_order_relaxed);
+    int64_t i_pc      = interval_pred_correct.exchange(0, std::memory_order_relaxed);
+    int64_t i_tok     = interval_tokens.exchange(0, std::memory_order_relaxed);
+    int64_t tok_total = total_tokens.load(std::memory_order_relaxed);
+
+    if (i_experts == 0) {
+        return;
+    }
+
+    float vram_pct = i_experts > 0 ? 100.0f * static_cast<float>(i_vram) / static_cast<float>(i_experts) : 0.0f;
+    float host_pct = i_experts > 0 ? 100.0f * static_cast<float>(i_host) / static_cast<float>(i_experts) : 0.0f;
+    float pcie_per_tok = i_tok > 0 ? static_cast<float>(i_host + i_staging) / static_cast<float>(i_tok) : 0.0f;
+    float pred_pct  = i_pt > 0 ? 100.0f * static_cast<float>(i_pc) / static_cast<float>(i_pt) : 0.0f;
+
+    GGML_LOG_INFO("[MOE-STATS T%lld] vram=%.1f%% host=%.1f%% miss=%lld (%lld/%lld) "
+                  "pcie/tok=%.1f pred=%.1f%% (%lld tok)\n",
+                  (long long) tok_total, vram_pct, host_pct, (long long) i_cpu,
+                  (long long) (i_vram + i_host + i_staging), (long long) i_experts,
+                  pcie_per_tok, pred_pct, (long long) i_tok);
+}
+
+MoeDispatchStats & get_moe_dispatch_stats(int device) {
+    static MoeDispatchStats stats[GGML_SYCL_MAX_DEVICES];
+    static std::once_flag   init_flags[GGML_SYCL_MAX_DEVICES];
+
+    if (device < 0 || device >= GGML_SYCL_MAX_DEVICES) {
+        device = 0;
+    }
+
+    std::call_once(init_flags[device], [device]() {
+        const char * env = std::getenv("GGML_SYCL_MOE_STATS_INTERVAL");
+        if (env) {
+            int val = std::atoi(env);
+            if (val > 0) {
+                stats[device].report_interval = val;
+            }
+        }
+    });
+
+    return stats[device];
 }
 
 }  // namespace ggml_sycl
