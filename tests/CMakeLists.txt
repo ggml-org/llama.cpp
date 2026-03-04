@@ -1502,6 +1502,17 @@ if(GGML_SYCL)
     install(TARGETS test-sycl-pointer-types RUNTIME)
     add_test(NAME test-sycl-pointer-types COMMAND $<TARGET_FILE:test-sycl-pointer-types>)
 
+    # test-sycl-bottleneck-validation: PCIe bandwidth, launch overhead, XMX throughput
+    add_executable(test-sycl-bottleneck-validation test-sycl-bottleneck-validation.cpp)
+    target_link_libraries(test-sycl-bottleneck-validation PRIVATE ggml)
+    target_include_directories(test-sycl-bottleneck-validation PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src)
+    target_compile_options(test-sycl-bottleneck-validation PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-sycl-bottleneck-validation PRIVATE "-fsycl")
+    install(TARGETS test-sycl-bottleneck-validation RUNTIME)
+    add_test(NAME test-sycl-bottleneck-validation COMMAND $<TARGET_FILE:test-sycl-bottleneck-validation>)
+
     # test-q6k-dispatch: Tests Q6_K MMVQ dispatch path using actual ggml backend API
     add_executable(test-q6k-dispatch test-q6k-dispatch.cpp)
     target_link_libraries(test-q6k-dispatch PRIVATE ggml)
