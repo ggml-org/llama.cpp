@@ -543,10 +543,6 @@ jobs:
           # This is using llvmpipe and runs slower than other backends
           ctest -L main --verbose --timeout 3600
 
-      - name: Setup tmate session
-        if: ${{ failure() }}
-        uses: mxschmitt/action-tmate@v3
-
   ubuntu-24-wasm-webgpu:
     runs-on: ubuntu-24.04
 
