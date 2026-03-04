@@ -71,6 +71,7 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph,
         auto * cur_node = cgraph->nodes[node_n];
         set_input_output(cur_node);
     }
+    compute_model_outputs();
 
     for (int node_n = 0; node_n < cgraph->n_nodes; node_n++) {
         m_node_info_list[node_n].node_op_case = compute_op_case(m_node_info_list[node_n].node);
@@ -89,6 +90,7 @@ void GgmlOvDecoder::update_io(ggml_cgraph * cgraph) {
         auto * cur_node = cgraph->nodes[node_n];
         set_input_output(cur_node);
     }
+    compute_model_outputs();
 }
 
 GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph, std::map<std::string, std::shared_ptr<ov::Node>> & model_weights) {
@@ -99,6 +101,7 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph, std::map<std::string, std::sh
         auto * cur_node = cgraph->nodes[node_n];
         set_input_output(cur_node);
     }
+    compute_model_outputs();
     for (int node_n = 0; node_n < cgraph->n_nodes; node_n++) {
         m_node_info_list[node_n].node_op_case = compute_op_case(m_node_info_list[node_n].node);
         m_node_info_list[node_n].node_op_type = compute_op_type(m_node_info_list[node_n].node);
@@ -106,7 +109,6 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph, std::map<std::string, std::sh
     // Iterate through node_info_list to create model inputs and outputs.
     // For inputs: if an input of a node is not seen as an output of any previous node, it is a model input.
     // For outputs: every node output is a model output unless its data_addr is overridden by a later node.
-    std::map<void *, ggml_tensor *> data_addr_map;
     std::unordered_set<std::string> output_name_set;
     for (const auto & node_info : m_node_info_list) {
         if (node_info.node->op == GGML_OP_NONE) {
@@ -126,13 +128,6 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph, std::map<std::string, std::sh
             }
         }
         output_name_set.emplace(node_info.node_output_name);
-        data_addr_map[node_info.data_addr] = node_info.node_output;
-    }
-    for (const auto & it : data_addr_map) {
-        // No need to add view tensors as model outputs
-        if (it.second->op != GGML_OP_VIEW) {
-            m_model_outputs[std::string(it.second->name)] = it.second;
-        }
     }
 }
 
@@ -203,19 +198,6 @@ void GgmlOvDecoder::set_input_output(ggml_tensor * node) {
                 param_node->set_friendly_name(src_name);
                 param_node->output(0).get_tensor().set_names({src_name});
                 m_model_inputs[src_name] = param_node;
-            }
-        }
-    }
-
-    // Add model outputs
-    if (!m_naive) {
-        // Model outputs are tensors with GGML_TENSOR_FLAG_OUTPUT flag and kv_caches
-        static std::set<std::string> debug_output_names = {};
-        // Workaround: the final tensor "result_output" does not have GGML_TENSOR_FLAG_OUTPUT flag set in cgraph
-        if (node->op == GGML_OP_SET_ROWS || node->flags & GGML_TENSOR_FLAG_OUTPUT ||
-            debug_output_names.count(node_output_name)) {
-            if (m_model_outputs.find(node_output_name) == m_model_outputs.end()) {
-                m_model_outputs[node_output_name] = node_output;
             }
         }
     }
@@ -470,6 +452,43 @@ void GgmlOvDecoder::add_extra_inputs() {
     create_1d_input("seq_active_end", m_compute_params.seq_active_start + m_compute_params.n_seq_active);
     create_1d_input("token_len_per_seq", m_compute_params.token_len_per_seq);
     // create_1d_input("token_len", m_token_len_per_seq * m_n_seq_active);
+}
+
+void GgmlOvDecoder::compute_model_outputs() {
+    m_model_outputs.clear();
+    m_model_output_names.clear();
+    for (int node_n = 0; node_n < m_cgraph->n_nodes; node_n++) {
+        auto * cur_node = m_cgraph->nodes[node_n];
+        // if the node op is NONE means this node is not used at all, we can skip it directly without adding to model outputs.
+        if (cur_node->op == GGML_OP_NONE) {
+            continue;
+        }
+        auto cur_node_use_count = m_cgraph->use_counts[ggml_hash_find(&m_cgraph->visited_hash_set, cur_node)];
+        if (cur_node_use_count == 0) {
+            // The output of SET_ROWS is the view_src tensor, which is updated in place. We should use the view_src name as the output name to make sure it can be correctly matched with the later ops that use the view_src.
+            if (cur_node != nullptr && cur_node->op == GGML_OP_SET_ROWS) {
+                cur_node = cur_node->view_src;
+            }
+        } else {
+            int input_use_count = 0;
+            for (int i = 0; i < m_cgraph->n_nodes; i++) {
+                ggml_tensor * node = m_cgraph->nodes[i];
+                for (int j = 0; j < GGML_MAX_SRC; j++) {
+                    if (node->src[j] != NULL && node->src[j] == cur_node) {
+                        input_use_count++;
+                    }
+                }
+            }
+            if (input_use_count == cur_node_use_count) {
+                cur_node = nullptr;
+            }
+        }
+        if (cur_node != nullptr) {
+            std::string node_output_name(cur_node->name);
+            m_model_outputs[node_output_name] = cur_node;
+            m_model_output_names.push_back(node_output_name);
+        }
+    }
 }
 
 const ggml_tensor * GgmlOvDecoder::get_tensor_used_op(const ggml_tensor * tensor) const {
