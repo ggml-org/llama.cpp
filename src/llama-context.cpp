@@ -3355,7 +3355,7 @@ void llama_memory_breakdown_print(const struct llama_context * ctx) {
     const std::string template_gpu    = "%s: | %s | %s = %s + (%s = %s + %s + %s) + %s |\n";
     const std::string template_other  = "%s: | %s | %s   %s    %s = %s + %s + %s    %s |\n";
 
-    table_data.push_back({template_header, "memory breakdown [MiB]", "total", "free", "self", "model", "context", "compute", "unaccounted"});
+    table_data.push_back({{template_header, "memory breakdown [MiB]", "total", "free", "self", "model", "context", "compute", "unaccounted"}});
 
     constexpr size_t MiB = 1024 * 1024;
     const std::vector<std::string> desc_prefixes_strip = {"NVIDIA ", "GeForce ", "Tesla ", "AMD ", "Radeon ", "Instinct "};
@@ -3415,7 +3415,7 @@ void llama_memory_breakdown_print(const struct llama_context * ctx) {
         const size_t self = mb.model + mb.context + mb.compute;
         const size_t unaccounted = total - self - free;
 
-        table_data.push_back({
+        table_data.push_back({{
             template_gpu,
             "  - " + name + " (" + desc + ")",
             std::to_string(total / MiB),
@@ -3424,13 +3424,13 @@ void llama_memory_breakdown_print(const struct llama_context * ctx) {
             std::to_string(mb.model / MiB),
             std::to_string(mb.context / MiB),
             std::to_string(mb.compute / MiB),
-            std::to_string(unaccounted / MiB)});
+            std::to_string(unaccounted / MiB)}});
     }
 
     // print memory breakdown for host:
     {
         const size_t self = mb_host.model + mb_host.context + mb_host.compute;
-        table_data.push_back({
+        table_data.push_back({{
             template_other,
             "  - Host",
             "", // total
@@ -3439,7 +3439,7 @@ void llama_memory_breakdown_print(const struct llama_context * ctx) {
             std::to_string(mb_host.model / MiB),
             std::to_string(mb_host.context / MiB),
             std::to_string(mb_host.compute / MiB),
-            ""}); // unaccounted
+            ""}}); // unaccounted
     }
 
     // print memory breakdown for all remaining buffer types:
@@ -3451,7 +3451,7 @@ void llama_memory_breakdown_print(const struct llama_context * ctx) {
         }
         const std::string name = ggml_backend_buft_name(buft);
         const size_t self = mb.model + mb.context + mb.compute;
-        table_data.push_back({
+        table_data.push_back({{
             template_other,
             "  - " + name,
             "", // total
@@ -3460,7 +3460,7 @@ void llama_memory_breakdown_print(const struct llama_context * ctx) {
             std::to_string(mb.model / MiB),
             std::to_string(mb.context / MiB),
             std::to_string(mb.compute / MiB),
-            ""}); // unaccounted
+            ""}}); // unaccounted
         seen_buffer_types.insert(buft);
     }
 
