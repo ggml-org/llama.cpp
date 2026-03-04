@@ -245,14 +245,14 @@ The OpenVINO backend can be configured using the following environment variables
 |-----------------------------------|------------|-------------------------------------------------------------------------------------------------------------|
 | `GGML_OPENVINO_DEVICE`            | `CPU`      | Specify the target device. When set to **NPU**, static compilation mode is enabled for optimal performance. |
 | `GGML_OPENVINO_CACHE_DIR`         | `not set`  | Directory for OpenVINO model caching (recommended: `/tmp/ov_cache`). Enables model caching when set. **Not supported on NPU devices.** |
-| `GGML_OPENVINO_PREFILL_CHUNK_SIZE`| `256`      | Token chunk size for **NPU** prefill.                                                                        |
-| `GGML_OPENVINO_STATEFUL_EXECUTION`| `0`        | Enable stateful KV cache on **GPU** for better performance.                                                  |
-| `GGML_OPENVINO_PROFILING`         | `0`        | Enable execution-time profiling.                                                                             |
-| `GGML_OPENVINO_DUMP_CGRAPH`       | `0`        | Dump the GGML compute graph to `cgraph_ov.txt`.                                                              |
-| `GGML_OPENVINO_DUMP_IR`           | `0`        | Serialize OpenVINO IR files with timestamps.                                                                 |
-| `GGML_OPENVINO_DEBUG_INPUT`       | `0`        | Enable input debugging and print input tensor info.                                                          |
-| `GGML_OPENVINO_DEBUG_OUTPUT`      | `0`        | Enable output debugging and print output tensor info.                                                        |
-| `GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS` | `0` | Print tensor address map once.                                                                            |
+| `GGML_OPENVINO_PREFILL_CHUNK_SIZE`| `256`      | Token chunk size for **NPU** prefill.                                                                       |
+| `GGML_OPENVINO_STATEFUL_EXECUTION`| `0`        | Enable stateful KV cache on for better performance. Recommended on CPU, GPU.                                |
+| `GGML_OPENVINO_PROFILING`         | `0`        | Enable execution-time profiling.                                                                            |
+| `GGML_OPENVINO_DUMP_CGRAPH`       | `0`        | Dump the GGML compute graph to `cgraph_ov.txt`.                                                             |
+| `GGML_OPENVINO_DUMP_IR`           | `0`        | Serialize OpenVINO IR files with timestamps.                                                                |
+| `GGML_OPENVINO_DEBUG_INPUT`       | `0`        | Enable input debugging and print input tensor info.                                                         |
+| `GGML_OPENVINO_DEBUG_OUTPUT`      | `0`        | Enable output debugging and print output tensor info.                                                       |
+| `GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS` | `0` | Print tensor address map once.                                                                           |
 
 > [!NOTE]
 >`GGML_OPENVINO_STATEFUL_EXECUTION` is an **Experimental** feature to allow stateful execution for managing the KV cache internally inside the OpenVINO model, improving performance on CPUs and GPUs. Stateful execution is not effective on NPUs, and not all models currently support this feature. This feature is experimental and has been validated only with the llama-simple, llama-cli, llama-bench, and llama-run applications and is recommended to enable for the best performance. Other applications, such as llama-server and llama-perplexity, are not yet supported.
