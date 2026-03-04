@@ -44,7 +44,6 @@ struct ov_runtime_context {
     std::string device;
     bool stateful;
     size_t stateful_kv_size;
-    std::mutex cache_mutex;
     std::unordered_map<graph_key, std::shared_ptr<GgmlOvDecoder>, graph_key_hash> decoder_cache;
     std::unordered_map<graph_key, std::shared_ptr<ov::InferRequest>, graph_key_hash> infer_request_cache;
     std::unordered_map<graph_key, std::shared_ptr<ov::InferRequest>, graph_key_hash> infer_request_cache_prefill;
