@@ -78,6 +78,7 @@ extern "C" {
     //
 
     // x86
+    GGML_BACKEND_API int ggml_cpu_has_sse2       (void);
     GGML_BACKEND_API int ggml_cpu_has_sse3       (void);
     GGML_BACKEND_API int ggml_cpu_has_ssse3      (void);
     GGML_BACKEND_API int ggml_cpu_has_avx        (void);

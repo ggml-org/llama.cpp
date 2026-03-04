@@ -3584,6 +3584,14 @@ int ggml_cpu_has_llamafile(void) {
 #endif
 }
 
+int ggml_cpu_has_sse2(void) {
+#if defined(__SSE2__)
+    return 1;
+#else
+    return 0;
+#endif
+}
+
 int ggml_cpu_has_sse3(void) {
 #if defined(__SSE3__)
     return 1;
