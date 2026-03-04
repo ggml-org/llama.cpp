@@ -383,8 +383,14 @@ static ggml_backend_buffer_t ggml_backend_et_buffer_type_alloc_buffer(ggml_backe
 }
 
 static size_t ggml_backend_et_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
-    GGML_UNUSED(buft);
-    return GGML_MEM_ALIGN;
+    std::shared_ptr<rt::IRuntime> runtime = ggml_et_runtime();
+    if (!runtime || !buft->device) {
+        return GGML_MEM_ALIGN;
+    }
+
+    ggml_backend_et_device_context * dev_ctx = (ggml_backend_et_device_context *)buft->device->context;
+    rt::DeviceProperties prop = runtime->getDeviceProperties(dev_ctx->rtid);
+    return prop.cacheLineSize_;
 }
 
 static size_t ggml_backend_et_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
@@ -823,7 +829,7 @@ static bool ggml_backend_et_device_supports_buft(ggml_backend_dev_t dev, ggml_ba
 
 static bool ggml_backend_et_device_offload_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     // TODO: check batch sizes like other backends.
-    return false;
+    return true;
 
     GGML_UNUSED(dev);
     GGML_UNUSED(op);
