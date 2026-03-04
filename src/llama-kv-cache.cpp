@@ -996,7 +996,7 @@ uint32_t llama_kv_cache::get_n_stream() const {
 
 // Resizing the cells vector so we can have dynamic ctx.
 // Not modifying n_stream at the moment
-bool llama_kv_cache_unified::resize(uint32_t new_n_ctx){
+bool llama_kv_cache::resize(uint32_t new_n_ctx){
     try{
         new_n_ctx = GGML_PAD(new_n_ctx, n_pad);
         // v_cells.resize(n_stream);
