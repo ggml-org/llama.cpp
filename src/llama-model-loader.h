@@ -114,7 +114,8 @@ struct llama_model_loader {
 
     // track tensors that had to be moved for debugging:
     size_t n_tensors_moved = 0;
-    ggml_tensor * first_tensor_moved = nullptr;
+    std::string first_tensor_moved_name;
+    std::string first_tensor_moved_type_name;
     ggml_backend_buffer_type_t first_moved_from_buft = nullptr;
     ggml_backend_buffer_type_t first_moved_to_buft = nullptr;
 

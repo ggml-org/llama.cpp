@@ -1156,12 +1156,13 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         }
 
         if (buft != buft_list->front().second) {
-            n_tensors_moved++;
-            if (!first_tensor_moved) {
-                first_tensor_moved = t_meta;
+            if (n_tensors_moved == 0) {
+                first_tensor_moved_name = t_meta->name;
+                first_tensor_moved_type_name = ggml_type_name(t_meta->type);
                 first_moved_from_buft = buft_list->front().second;
                 first_moved_to_buft   = buft;
             }
+            n_tensors_moved++;
         }
 
         return buft;
@@ -1275,7 +1276,7 @@ void llama_model_loader::done_getting_tensors() const {
     }
     if (n_tensors_moved > 0) {
         LLAMA_LOG_DEBUG("%s: tensor '%s' (%s) (and %zu others) cannot be used with preferred buffer type %s, using %s instead\n",
-            __func__, first_tensor_moved->name, ggml_type_name(first_tensor_moved->type), n_tensors_moved - 1,
+            __func__, first_tensor_moved_name.c_str(), first_tensor_moved_type_name.c_str(), n_tensors_moved - 1,
             ggml_backend_buft_name(first_moved_from_buft), ggml_backend_buft_name(first_moved_to_buft));
     }
 }
