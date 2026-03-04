@@ -46,10 +46,10 @@
  *
  *   Value | Encoding | Binary
  *   ------|----------|--------
- *   -1    | 0b10     | 10
- *    0    | 0b00     | 00
- *   +1    | 0b01     | 01
- *   (invalid) | 0b11 | 11
+ *   -1    | 0x2     | 10
+ *    0    | 0x0     | 00
+ *   +1    | 0x1     | 01
+ *   (invalid) | 0x3 | 11
  *
  * Design rationale:
  * - Distinct patterns for each value
@@ -59,10 +59,10 @@
  * - Invalid pattern reserved for error detection
  */
 
-#define TRIT_NEG      0b10  /* Negative: -1 */
-#define TRIT_ZERO     0b00  /* Zero: 0 */
-#define TRIT_POS      0b01  /* Positive: +1 */
-#define TRIT_INVALID  0b11  /* Invalid (error detection) */
+#define TRIT_NEG      0x2  /* Negative: -1 */
+#define TRIT_ZERO     0x0  /* Zero: 0 */
+#define TRIT_POS      0x1  /* Positive: +1 */
+#define TRIT_INVALID  0x3  /* Invalid (error detection) */
 
 #ifdef __cplusplus
 extern "C" {
@@ -120,10 +120,10 @@ static inline uint8_t pack_trits(int8_t t0, int8_t t1, int8_t t2, int8_t t3) {
  * @param trits Output array of 4 trits
  */
 static inline void unpack_trits(uint8_t packed, int8_t* trits) {
-    trits[0] = decode_trit((packed >> 0) & 0b11);
-    trits[1] = decode_trit((packed >> 2) & 0b11);
-    trits[2] = decode_trit((packed >> 4) & 0b11);
-    trits[3] = decode_trit((packed >> 6) & 0b11);
+    trits[0] = decode_trit((packed >> 0) & 0x3);
+    trits[1] = decode_trit((packed >> 2) & 0x3);
+    trits[2] = decode_trit((packed >> 4) & 0x3);
+    trits[3] = decode_trit((packed >> 6) & 0x3);
 }
 
 /**
@@ -256,15 +256,15 @@ static inline int64_t ternary_multiply(int64_t a, uint8_t b_trit) {
  * Ternary negation: result = -trit
  *
  * Flips both bits if non-zero:
- * - 0b00 → 0b00 (zero stays zero)
- * - 0b01 → 0b10 (positive → negative)
- * - 0b10 → 0b01 (negative → positive)
+ * - 0x0 → 0x0 (zero stays zero)
+ * - 0x1 → 0x2 (positive → negative)
+ * - 0x2 → 0x1 (negative → positive)
  *
  * @param trit 2-bit encoded ternary value
  * @return Negated trit
  */
 static inline uint8_t ternary_negate(uint8_t trit) {
-    return (trit == TRIT_ZERO) ? TRIT_ZERO : (trit ^ 0b11);
+    return (trit == TRIT_ZERO) ? TRIT_ZERO : (trit ^ 0x3);
 }
 
 /* ========================================================================== */

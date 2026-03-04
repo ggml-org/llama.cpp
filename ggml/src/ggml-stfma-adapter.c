@@ -122,11 +122,11 @@ void sparse_ternary_fma_int32_scalar(
 ) {
     for (size_t i = 0; i < N; i++) {
         uint8_t trit_byte = B_trit[i / 4];
-        uint8_t trit = (trit_byte >> ((i % 4) * 2)) & 0b11;
+        uint8_t trit = (trit_byte >> ((i % 4) * 2)) & 0x3;
 
-        if (trit == 0b01) {
+        if (trit == 0x1) {
             C[i] += A[i];
-        } else if (trit == 0b10) {
+        } else if (trit == 0x2) {
             C[i] -= A[i];
         }
     }
@@ -155,7 +155,7 @@ void sparse_ternary_fma_int32_avx2(
         __m256i packed_vec = _mm256_set1_epi32(trit_packed);
         __m256i shift_amounts = _mm256_setr_epi32(0, 2, 4, 6, 8, 10, 12, 14);
         __m256i shifted = _mm256_srlv_epi32(packed_vec, shift_amounts);
-        __m256i mask_2bits = _mm256_set1_epi32(0b11);
+        __m256i mask_2bits = _mm256_set1_epi32(0x3);
         __m256i trit_vec = _mm256_and_si256(shifted, mask_2bits);
 
         __m256i nonzero_cmp = _mm256_cmpgt_epi32(trit_vec, zero);
@@ -173,11 +173,11 @@ void sparse_ternary_fma_int32_avx2(
 
     for (; i < N; i++) {
         uint8_t trit_byte = B_trit[i / 4];
-        uint8_t trit = (trit_byte >> ((i % 4) * 2)) & 0b11;
+        uint8_t trit = (trit_byte >> ((i % 4) * 2)) & 0x3;
 
-        if (trit == 0b01) {
+        if (trit == 0x1) {
             C[i] += A[i];
-        } else if (trit == 0b10) {
+        } else if (trit == 0x2) {
             C[i] -= A[i];
         }
     }
@@ -211,7 +211,7 @@ void sparse_ternary_fma_int32_avx512(
             16, 18, 20, 22, 24, 26, 28, 30
         );
         __m512i shifted = _mm512_srlv_epi32(packed_vec, shift_amounts);
-        __m512i mask_2bits = _mm512_set1_epi32(0b11);
+        __m512i mask_2bits = _mm512_set1_epi32(0x3);
         __m512i trit_vec = _mm512_and_si512(shifted, mask_2bits);
 
         __mmask16 nonzero_mask = _mm512_cmpneq_epi32_mask(trit_vec, zero);
@@ -226,11 +226,11 @@ void sparse_ternary_fma_int32_avx512(
 
     for (; i < N; i++) {
         uint8_t trit_byte = B_trit[i / 4];
-        uint8_t trit = (trit_byte >> ((i % 4) * 2)) & 0b11;
+        uint8_t trit = (trit_byte >> ((i % 4) * 2)) & 0x3;
 
-        if (trit == 0b01) {
+        if (trit == 0x1) {
             C[i] += A[i];
-        } else if (trit == 0b10) {
+        } else if (trit == 0x2) {
             C[i] -= A[i];
         }
     }

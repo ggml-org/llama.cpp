@@ -60,7 +60,7 @@ void sparse_ternary_fma_scalar(
         /* Extract 2-bit trit from packed array */
         size_t byte_idx = i / 4;
         size_t trit_offset = (i % 4) * 2;
-        uint8_t trit = (B_trit[byte_idx] >> trit_offset) & 0b11;
+        uint8_t trit = (B_trit[byte_idx] >> trit_offset) & 0x3;
 
         /* Decode and accumulate */
         if (trit == TRIT_POS) {
@@ -103,7 +103,7 @@ void sparse_ternary_fma_avx512(
         /* Extract 8 trits into array */
         uint64_t trits[8];
         for (int j = 0; j < 8; j++) {
-            trits[j] = (trit_packed >> (j * 2)) & 0b11;
+            trits[j] = (trit_packed >> (j * 2)) & 0x3;
         }
 
         /* Load trits into 512-bit vector */
@@ -112,12 +112,12 @@ void sparse_ternary_fma_avx512(
             trits[3], trits[2], trits[1], trits[0]
         );
 
-        /* Create nonzero mask: true if trit != 0b00 */
-        /* This correctly handles both +1 (0b01) and -1 (0b10) */
+        /* Create nonzero mask: true if trit != 0x0 */
+        /* This correctly handles both +1 (0x1) and -1 (0x2) */
         __mmask8 nonzero_mask = _mm512_cmpneq_epi64_mask(trit_vec, zero);
 
         /* Extract sign bit (high bit) for negative detection */
-        /* sign=1 only for -1 (0b10), sign=0 for +1 (0b01) and 0 (0b00) */
+        /* sign=1 only for -1 (0x2), sign=0 for +1 (0x1) and 0 (0x0) */
         __m512i sign = _mm512_srli_epi64(trit_vec, 1);
         sign = _mm512_and_si512(sign, mask_low);
         __mmask8 sign_mask = _mm512_cmpneq_epi64_mask(sign, zero);
@@ -125,7 +125,7 @@ void sparse_ternary_fma_avx512(
         /* Compute contribution: 0 if trit=0, A if trit!=0 */
         __m512i contribution = _mm512_maskz_mov_epi64(nonzero_mask, a_vec);
 
-        /* Conditionally negate if sign=1 (i.e., trit=0b10=-1) */
+        /* Conditionally negate if sign=1 (i.e., trit=0x2=-1) */
         __m512i negated = _mm512_sub_epi64(zero, contribution);
         contribution = _mm512_mask_blend_epi64(sign_mask, contribution, negated);
 
