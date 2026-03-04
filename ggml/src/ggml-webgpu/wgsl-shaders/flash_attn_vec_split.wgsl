@@ -91,15 +91,6 @@ struct Params {
     m0: f32,
     m1: f32,
 
-#ifdef PAD
-    offset_pad: u32,
-    pad_k_base: u32,
-    pad_v_base: u32,
-    pad_m_base: u32,
-    ncpsg: u32,
-    nqptg: u32,
-#endif
-
 #ifdef BLK
     blk_base: u32,
     blk_nblk0: u32,
@@ -114,48 +105,6 @@ struct Params {
 @group(0) @binding(0) var<storage, read_write> Q: array<f32>;
 @group(0) @binding(1) var<storage, read_write> K: array<KV_TYPE>;
 @group(0) @binding(2) var<storage, read_write> V: array<vec4<KV_TYPE>>;
-
-#ifdef PAD
-@group(0) @binding(3) var<storage, read_write> pad: array<KV_TYPE>;
-#endif
-
-#ifdef PAD
-#if defined(MASK) && defined(SINKS)
-@group(0) @binding(4) var<storage, read_write> mask: array<f16>;
-@group(0) @binding(5) var<storage, read_write> sinks: array<f32>;
-#ifdef BLK
-#define BLK_BINDING 6
-#define TMP_BINDING 7
-#define DST_BINDING 8
-#define PARAMS_BINDING 9
-#else
-#define TMP_BINDING 6
-#define DST_BINDING 7
-#define PARAMS_BINDING 8
-#endif
-#elif defined(MASK)
-@group(0) @binding(4) var<storage, read_write> mask: array<f16>;
-#ifdef BLK
-#define BLK_BINDING 5
-#define TMP_BINDING 6
-#define DST_BINDING 7
-#define PARAMS_BINDING 8
-#else
-#define TMP_BINDING 5
-#define DST_BINDING 6
-#define PARAMS_BINDING 7
-#endif
-#elif defined(SINKS)
-@group(0) @binding(4) var<storage, read_write> sinks: array<f32>;
-#define TMP_BINDING 5
-#define DST_BINDING 6
-#define PARAMS_BINDING 7
-#else
-#define TMP_BINDING 4
-#define DST_BINDING 5
-#define PARAMS_BINDING 6
-#endif
-#else
 #if defined(MASK) && defined(SINKS)
 @group(0) @binding(3) var<storage, read_write> mask: array<f16>;
 @group(0) @binding(4) var<storage, read_write> sinks: array<f32>;
@@ -190,7 +139,6 @@ struct Params {
 #define TMP_BINDING 3
 #define DST_BINDING 4
 #define PARAMS_BINDING 5
-#endif
 #endif
 
 #ifdef BLK
@@ -323,11 +271,6 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     }
 
     for (var kv_tile = iwg * KV_TILE; kv_tile < params.seq_len_kv; kv_tile += KV_TILE * params.nwg) {
-#ifdef PAD
-        let tail = params.seq_len_kv % params.ncpsg;
-        let use_pad_tile = (tail != 0u) && (kv_tile + params.ncpsg >= params.seq_len_kv);
-        let kv_plane = k_head_idx + batch_idx * (params.n_heads / params.q_per_kv);
-#endif
 #ifdef BLK
         let q_blk = q_row_start / Q_TILE;
         let kv_blk = kv_tile / KV_TILE;
@@ -429,53 +372,24 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                   if (kv_valid) {
                     for (var i = tx; i < (HEAD_DIM_QK / 4u); i += num_of_threads) {
                         let q_off = q_tile_row * HEAD_DIM_QK + i * 4u;
-                        // let k_off = (kv_idx * HEAD_DIM_QK) + i * 4u;
-                        var idx: u32 = 0u;
-#ifdef PAD
-                        if (use_pad_tile) {
-                            idx = params.offset_pad + params.pad_k_base +
-                                  kv_plane * params.stride_k1 * params.ncpsg +
-                                  kv_idx * params.stride_k1 + i * 4u;
-                        } else {
-                            idx = k_head_offset + (kv_tile + kv_idx) * params.stride_k1 + (i * 4u);
-                        }
-#else
-                        idx = k_head_offset + (kv_tile + kv_idx) * params.stride_k1 + (i * 4u);
-#endif
+                        let idx = k_head_offset + (kv_tile + kv_idx) * params.stride_k1 + (i * 4u);
 
                         let qv = vec4<f32>(f32(q_shmem[q_off]), f32(q_shmem[q_off + 1u]), f32(q_shmem[q_off + 2u]), f32(q_shmem[q_off + 3u]));
-                        // let kv = vec4<f32>(f32(kv_shmem[k_off]), f32(kv_shmem[k_off + 1u]), f32(kv_shmem[k_off + 2u]), f32(kv_shmem[k_off + 3u]));
-                        var kv: vec4<f32>;
-#ifdef PAD
-                        if (use_pad_tile) {
-                            kv = vec4<f32>(f32(pad[idx]), f32(pad[idx + 1u]), f32(pad[idx + 2u]), f32(pad[idx + 3u]));
-                        } else {
-                            kv = vec4<f32>(f32(K[idx]), f32(K[idx + 1u]), f32(K[idx + 2u]), f32(K[idx + 3u]));
-                        }
-#else
-                        kv = vec4<f32>(f32(K[idx]), f32(K[idx + 1u]), f32(K[idx + 2u]), f32(K[idx + 3u]));
-#endif
+                        let kv = vec4<f32>(f32(K[idx]), f32(K[idx + 1u]), f32(K[idx + 2u]), f32(K[idx + 3u]));
                         
                         partial_sum += dot(qv, kv);
 
                     }
                   }
-                  // Match Metal vec reduction pattern: reduce within each ty stripe using subgroup shuffles.
+                  // Reduce along tx lanes inside each ty stripe.
                   var sum = partial_sum;
-                  if (num_of_threads <= 1u) {
-                      sum += subgroupShuffleDown(sum, 16u);
-                  }
-                  if (num_of_threads <= 2u) {
-                      sum += subgroupShuffleDown(sum, 8u);
-                  }
-                  if (num_of_threads <= 4u) {
-                      sum += subgroupShuffleDown(sum, 4u);
-                  }
-                  if (num_of_threads <= 8u) {
-                      sum += subgroupShuffleDown(sum, 2u);
-                  }
-                  if (num_of_threads <= 16u) {
-                      sum += subgroupShuffleDown(sum, 1u);
+                  var delta = num_of_threads >> 1u;
+                  loop {
+                      if (delta == 0u) {
+                          break;
+                      }
+                      sum += subgroupShuffleDown(sum, delta);
+                      delta = delta >> 1u;
                   }
 
                   let sum_bcast = subgroupShuffle(sum, num_of_threads * ty);
@@ -497,24 +411,9 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
               let mask_col = elem_idx % KV_TILE;
               let global_q_row = q_row_start + mask_row;
               let global_k_col = kv_tile + mask_col;
-#ifdef PAD
-              if (use_pad_tile) {
-                  let mask_batch_idx = select(0u, batch_idx, params.stride_mask3 > 0u);
-                  let pad_mask_plane_base = params.offset_pad + params.pad_m_base +
-                                            mask_batch_idx * params.seq_len_q * params.ncpsg;
-                  let mask_in_bounds = global_q_row < params.seq_len_q;
-                  let mask_idx = pad_mask_plane_base + global_q_row * params.ncpsg + mask_col;
-                  mask_shmem[elem_idx] = f16(select(0.0, pad[mask_idx], mask_in_bounds));
-              } else {
-                  let mask_in_bounds = global_q_row < params.seq_len_q && global_k_col < params.seq_len_kv;
-                  let mask_idx = mask_global_offset + mask_row * params.seq_len_kv + global_k_col;
-                  mask_shmem[elem_idx] = select(0.0, mask[mask_idx], mask_in_bounds);
-              }
-#else
               let mask_in_bounds = global_q_row < params.seq_len_q && global_k_col < params.seq_len_kv;
               let mask_idx = mask_global_offset + mask_row * params.seq_len_kv + global_k_col;
               mask_shmem[elem_idx] = select(0.0, mask[mask_idx], mask_in_bounds);
-#endif
           }
       }
 #else
@@ -661,22 +560,8 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                       }
 
                       let p = f32(inter_shmem[kv_idx + q_tile_row * KV_TILE]);
-                      var v_idx: u32 = 0u;
-                      var v4: vec4<f32>;
-#ifdef PAD
-                      if (use_pad_tile) {
-                          v_idx = params.offset_pad + params.pad_v_base +
-                                  kv_plane * params.stride_v1 * params.ncpsg +
-                                  kv_idx * params.stride_v1 + vec_col * 4u;
-                          v4 = vec4<f32>(f32(pad[v_idx]), f32(pad[v_idx + 1u]), f32(pad[v_idx + 2u]), f32(pad[v_idx + 3u]));
-                      } else {
-                          v_idx = v_head_offset + v_row * params.stride_v1 + vec_col * 4u;
-                          v4 = vec4<f32>(V[v_idx / 4u]);
-                      }
-#else
-                      v_idx = v_head_offset + v_row * params.stride_v1 + vec_col * 4u;
-                      v4 = vec4<f32>(V[v_idx / 4u]);
-#endif
+                      let v_idx = v_head_offset + v_row * params.stride_v1 + vec_col * 4u;
+                      let v4 = vec4<f32>(V[v_idx / 4u]);
                       lo += p * v4;
                   }
 
