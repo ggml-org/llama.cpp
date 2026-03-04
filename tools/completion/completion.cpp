@@ -6,6 +6,7 @@
 #include "llama.h"
 #include "chat.h"
 
+#include <clocale>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -84,6 +85,8 @@ static void sigint_handler(int signo) {
 #endif
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     common_params params;
     g_params = &params;
 
@@ -376,7 +379,7 @@ int main(int argc, char ** argv) {
             // remove any "future" tokens that we might have inherited from the previous session
             if (session_tokens.size() > n_match) {
                 if (!llama_memory_seq_rm(mem, -1, n_match, -1)) {
-                    LOG_WRN("%s: unable to resuse common prefix (for example, when the memory is recurrent)\n", __func__);
+                    LOG_WRN("%s: unable to reuse common prefix (for example, when the memory is recurrent)\n", __func__);
                     llama_memory_clear(mem, true);
                     session_tokens.clear();
                     n_match = 0;

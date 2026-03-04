@@ -10,12 +10,15 @@
 #  include <unistd.h>
 #  include <sys/stat.h>
 #endif
-#include <string>
-#include <stdio.h>
-#include <vector>
 #include <algorithm>
-#include <thread>
+#include <clocale>
+#include <codecvt>
+#include <filesystem>
 #include <regex>
+#include <stdio.h>
+#include <string>
+#include <thread>
+#include <vector>
 
 #if defined(__linux__)
 #include <sys/types.h>
@@ -285,6 +288,8 @@ static std::vector<ggml_backend_dev_t> get_devices(const rpc_server_params & par
 }
 
 int main(int argc, char * argv[]) {
+    std::setlocale(LC_NUMERIC, "C");
+
     ggml_backend_load_all();
 
     rpc_server_params params;

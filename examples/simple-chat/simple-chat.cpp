@@ -1,4 +1,5 @@
 #include "llama.h"
+#include <clocale>
 #include <cstdio>
 #include <cstring>
 #include <iostream>
@@ -12,6 +13,8 @@ static void print_usage(int, char ** argv) {
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     std::string model_path;
     int ngl = 99;
     int n_ctx = 2048;

@@ -1,6 +1,7 @@
 #include "ggml.h"
 #include "gguf.h"
 
+#include <clocale>
 #include <cstdio>
 #include <string>
 #include <sstream>
@@ -240,6 +241,8 @@ static bool gguf_ex_read_1(const std::string & fname, bool check_data) {
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     if (argc < 3) {
         printf("usage: %s data.gguf r|w [n]\n", argv[0]);
         printf("r: read data.gguf file\n");
