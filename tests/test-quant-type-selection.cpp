@@ -190,7 +190,7 @@ static const remote_model_spec model_specs[] = {
     { "ggml-org/gpt-oss-120b-GGUF",                   "mxfp4"  },
     { "ggml-org/gemma-3-4b-it-GGUF",                  "Q8_0"   },
     { "bartowski/Meta-Llama-3.1-70B-Instruct-GGUF",   "Q4_K_M" },
-    { "bartowski/deepseek-ai_DeepSeek-V3.1-GGUF",     "IQ1_S"  },
+    { "bartowski/deepseek-ai_DeepSeek-V3.1-GGUF",     "IQ1_M"  },
     { "bartowski/Qwen_Qwen3.5-397B-A17B-GGUF",        "IQ1_S"  }, // TODO: swap with ggml-org if/when it's released
     { "bartowski/Qwen_Qwen3.5-27B-GGUF",              "Q8_0"   }, // TODO: swap with ggml-org if/when it's released
 };
