@@ -3,6 +3,7 @@
 	import { SvelteMap } from 'svelte/reactivity';
 	import { ChevronDown, Loader2, Package } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
+	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { cn } from '$lib/components/ui/utils';
 	import {
 		modelsStore,
@@ -364,7 +365,15 @@
 						<Package class="h-3.5 w-3.5" />
 
 						{#if selectedOption}
-							<ModelId modelId={selectedOption.model} class="min-w-0" showOrgName />
+							<Tooltip.Root>
+								<Tooltip.Trigger class="min-w-0 overflow-hidden">
+									<ModelId modelId={selectedOption.model} class="min-w-0" showOrgName />
+								</Tooltip.Trigger>
+
+								<Tooltip.Content>
+									<p class="font-mono">{selectedOption.model}</p>
+								</Tooltip.Content>
+							</Tooltip.Root>
 						{:else}
 							<span class="min-w-0 font-medium">Select model</span>
 						{/if}
@@ -425,6 +434,7 @@
 										{group.orgName}
 									</p>
 								{/if}
+
 								{#each group.items as { option, flatIndex } (group.isLoadedGroup ? `loaded-${option.id}` : group.isFavouritesGroup ? `fav-${option.id}` : option.id)}
 									{@const isSelected = currentModel === option.model || activeId === option.id}
 									{@const isHighlighted = flatIndex === highlightedIndex}
@@ -471,7 +481,15 @@
 				<Package class="h-3.5 w-3.5" />
 
 				{#if selectedOption}
-					<ModelId modelId={selectedOption.model} class="min-w-0" showOrgName />
+					<Tooltip.Root>
+						<Tooltip.Trigger class="min-w-0 overflow-hidden">
+							<ModelId modelId={selectedOption.model} class="min-w-0" showOrgName />
+						</Tooltip.Trigger>
+
+						<Tooltip.Content>
+							<p class="font-mono">{selectedOption.model}</p>
+						</Tooltip.Content>
+					</Tooltip.Root>
 				{/if}
 
 				{#if updating}

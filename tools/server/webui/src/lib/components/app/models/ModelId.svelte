@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { Badge } from '$lib/components/ui/badge';
 	import { ModelsService } from '$lib/services/models.service';
 	import { config } from '$lib/stores/settings.svelte';
 
@@ -7,6 +6,8 @@
 		modelId: string;
 		showOrgName?: boolean;
 		showRaw?: boolean;
+		aliases?: string[];
+		tags?: string[];
 		class?: string;
 	}
 
@@ -14,8 +15,15 @@
 		modelId,
 		showOrgName = false,
 		showRaw = undefined,
+		aliases,
+		tags,
 		class: className = ''
 	}: Props = $props();
+
+	const badgeClass =
+		'inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-md border border-border/50 px-1 py-0 text-[10px] font-mono bg-foreground/15 dark:bg-foreground/10 text-foreground [a&]:hover:bg-foreground/25';
+	const tagBadgeClass =
+		'inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-md border border-border/50 px-1 py-0 text-[10px] font-mono text-foreground [a&]:hover:bg-accent [a&]:hover:text-accent-foreground';
 
 	let parsed = $derived(ModelsService.parseModelId(modelId));
 	let resolvedShowRaw = $derived(showRaw ?? (config().showRawModelNames as boolean) ?? false);
@@ -30,15 +38,27 @@
 		</span>
 
 		{#if parsed.params}
-			<Badge variant="tertiary" class="px-1 py-0 font-mono text-[10px]">
+			<span class={badgeClass}>
 				{parsed.params}{parsed.activatedParams ? `-${parsed.activatedParams}` : ''}
-			</Badge>
+			</span>
 		{/if}
 
 		{#if parsed.quantization}
-			<Badge variant="tertiary" class="px-1 py-0 font-mono text-[10px]">
+			<span class={badgeClass}>
 				{parsed.quantization}
-			</Badge>
+			</span>
+		{/if}
+
+		{#if aliases && aliases.length > 0}
+			{#each aliases as alias (alias)}
+				<span class={badgeClass}>{alias}</span>
+			{/each}
+		{/if}
+
+		{#if tags && tags.length > 0}
+			{#each tags as tag (tag)}
+				<span class={tagBadgeClass}>{tag}</span>
+			{/each}
 		{/if}
 	</span>
 {/if}

@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { CircleAlert, Heart, HeartOff, Loader2, Power, PowerOff, RotateCw } from '@lucide/svelte';
 	import { cn } from '$lib/components/ui/utils';
-	import { Badge } from '$lib/components/ui/badge';
 	import { ActionIcon, ModelId } from '$lib/components/app';
 	import type { ModelOption } from '$lib/types/models';
 	import { ServerModelStatus } from '$lib/enums';
@@ -56,27 +55,13 @@
 	onmouseenter={onMouseEnter}
 	onkeydown={onKeyDown}
 >
-	<ModelId modelId={option.model} {showOrgName} class="flex-1" />
-
-	{#if option.aliases && option.aliases.length > 0}
-		<div class="flex items-center gap-1">
-			{#each option.aliases as alias (alias)}
-				<Badge variant="tertiary" class="px-1 py-0 font-mono text-[10px]">
-					{alias}
-				</Badge>
-			{/each}
-		</div>
-	{/if}
-
-	{#if option.tags && option.tags.length > 0}
-		<div class="flex items-center gap-1">
-			{#each option.tags as tag (tag)}
-				<Badge variant="outline" class="px-1 py-0 font-mono text-[10px]">
-					{tag}
-				</Badge>
-			{/each}
-		</div>
-	{/if}
+	<ModelId
+		modelId={option.model}
+		{showOrgName}
+		aliases={option.aliases}
+		tags={option.tags}
+		class="flex-1"
+	/>
 
 	<div class="flex shrink-0 items-center gap-2.5">
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -86,14 +71,13 @@
 			onclick={(e) => e.stopPropagation()}
 		>
 			{#if isFav}
-				<button
-					type="button"
-					class="fav-icon-btn inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-md p-0"
-					aria-label="Remove from favourites"
+				<ActionIcon
+					iconSize="h-2.5 w-2.5"
+					icon={HeartOff}
+					tooltip="Remove from favourites"
+					class="h-3 w-3 hover:text-foreground"
 					onclick={() => modelsStore.toggleFavourite(option.model)}
-				>
-					<HeartOff class="fav-icon h-4 w-4 hover:text-foreground" />
-				</button>
+				/>
 			{:else}
 				<ActionIcon
 					iconSize="h-2.5 w-2.5"
