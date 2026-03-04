@@ -394,7 +394,10 @@ static size_t ggml_backend_et_buffer_type_get_alignment(ggml_backend_buffer_type
 }
 
 static size_t ggml_backend_et_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
-    GGML_UNUSED(buft);
+    if (buft->device) {
+        ggml_backend_et_device_context * dev_ctx = (ggml_backend_et_device_context *)buft->device->context;
+        return dev_ctx->total_mem;
+    }
     return SIZE_MAX;
 }
 
@@ -581,44 +584,6 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
 
 static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     GGML_UNUSED(dev);
-
-    // Log what operations are being queried for support (device level)
-    const char * op_name = ggml_op_name(op->op);
-    const char * type_name = ggml_type_name(op->type);
-
-    // Get tensor dimensions and sizes
-    char shape_str[256];
-    snprintf(shape_str, sizeof(shape_str), "[%lld,%lld,%lld,%lld]",
-             (long long)op->ne[0], (long long)op->ne[1], (long long)op->ne[2], (long long)op->ne[3]);
-
-    // Get source tensor types, shapes, strides, and contiguity info
-    char src_info[2048] = "";
-    if (op->src[0]) {
-        char src_str[512];
-        snprintf(src_str, sizeof(src_str), " src0=%s[%lld,%lld,%lld,%lld]nb[%zu,%zu,%zu,%zu]%s",
-                ggml_type_name(op->src[0]->type),
-                (long long)op->src[0]->ne[0], (long long)op->src[0]->ne[1],
-                (long long)op->src[0]->ne[2], (long long)op->src[0]->ne[3],
-                op->src[0]->nb[0], op->src[0]->nb[1], op->src[0]->nb[2], op->src[0]->nb[3],
-                ggml_is_contiguous(op->src[0]) ? "C" : "NC");
-        strcat(src_info, src_str);
-    }
-    if (op->src[1]) {
-        char src_str[512];
-        snprintf(src_str, sizeof(src_str), " src1=%s[%lld,%lld,%lld,%lld]nb[%zu,%zu,%zu,%zu]%s",
-                ggml_type_name(op->src[1]->type),
-                (long long)op->src[1]->ne[0], (long long)op->src[1]->ne[1],
-                (long long)op->src[1]->ne[2], (long long)op->src[1]->ne[3],
-                op->src[1]->nb[0], op->src[1]->nb[1], op->src[1]->nb[2], op->src[1]->nb[3],
-                ggml_is_contiguous(op->src[1]) ? "C" : "NC");
-        strcat(src_info, src_str);
-    }
-
-    // Add output tensor contiguity info
-    char output_contiguity[32];
-    snprintf(output_contiguity, sizeof(output_contiguity), " out_nb[%zu,%zu,%zu,%zu]%s",
-            op->nb[0], op->nb[1], op->nb[2], op->nb[3],
-            ggml_is_contiguous(op) ? "C" : "NC");
 
     bool supported = false;
     switch (op->op) {
