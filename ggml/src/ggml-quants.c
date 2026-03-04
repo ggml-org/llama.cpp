@@ -304,6 +304,41 @@ void quantize_row_mxfp4_ref(const float * GGML_RESTRICT x, block_mxfp4 * GGML_RE
     }
 }
 
+void quantize_row_nvfp4_ref(const float * GGML_RESTRICT x, block_nvfp4 * GGML_RESTRICT y, int64_t k) {
+    static const int qk = QK_NVFP4;
+    static const int qk_sub = QK_NVFP4_SUB;
+    static const int n_sub = QK_NVFP4 / QK_NVFP4_SUB;
+
+    assert(k % qk == 0);
+
+    const int nb = k / qk;
+
+    for (int i = 0; i < nb; i++) {
+        for (int s = 0; s < n_sub; s++) {
+            const float * xb = x + i*qk + s*qk_sub;
+
+            float amax = 0.0f;
+            for (int j = 0; j < qk_sub; j++) {
+                if (amax < fabsf(xb[j])) {
+                    amax = fabsf(xb[j]);
+                }
+            }
+
+            // UE4M3 scale: amax / 6.0 maps the max E2M1 value (6.0) to amax
+            const uint8_t ue = ggml_fp32_to_ue4m3(amax / 6.0f);
+            y[i].d[s] = ue;
+            const float d = ggml_ue4m3_to_fp32(ue);
+
+            for (int j = 0; j < qk_sub/2; ++j) {
+                const uint8_t x0 = best_index_mxfp4(xb[0        + j], d);
+                const uint8_t x1 = best_index_mxfp4(xb[qk_sub/2 + j], d);
+
+                y[i].qs[s*(qk_sub/2) + j] = x0 | (x1 << 4);
+            }
+        }
+    }
+}
+
 void dequantize_row_q4_0(const block_q4_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
     static const int qk = QK4_0;
 
@@ -430,41 +465,6 @@ void dequantize_row_mxfp4(const block_mxfp4 * GGML_RESTRICT x, float * GGML_REST
 
             y[i*qk + j + 0   ] = x0*d;
             y[i*qk + j + qk/2] = x1*d;
-        }
-    }
-}
-
-void quantize_row_nvfp4_ref(const float * GGML_RESTRICT x, block_nvfp4 * GGML_RESTRICT y, int64_t k) {
-    static const int qk = QK_NVFP4;
-    static const int qk_sub = QK_NVFP4_SUB;
-    static const int n_sub = QK_NVFP4 / QK_NVFP4_SUB;
-
-    assert(k % qk == 0);
-
-    const int nb = k / qk;
-
-    for (int i = 0; i < nb; i++) {
-        for (int s = 0; s < n_sub; s++) {
-            const float * xb = x + i*qk + s*qk_sub;
-
-            float amax = 0.0f;
-            for (int j = 0; j < qk_sub; j++) {
-                if (amax < fabsf(xb[j])) {
-                    amax = fabsf(xb[j]);
-                }
-            }
-
-            // UE4M3 scale: amax / 6.0 maps the max E2M1 value (6.0) to amax
-            const uint8_t ue = ggml_fp32_to_ue4m3(amax / 6.0f);
-            y[i].d[s] = ue;
-            const float d = ggml_ue4m3_to_fp32(ue);
-
-            for (int j = 0; j < qk_sub/2; ++j) {
-                const uint8_t x0 = best_index_mxfp4(xb[0        + j], d);
-                const uint8_t x1 = best_index_mxfp4(xb[qk_sub/2 + j], d);
-
-                y[i].qs[s*(qk_sub/2) + j] = x0 | (x1 << 4);
-            }
         }
     }
 }
