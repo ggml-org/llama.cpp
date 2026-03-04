@@ -1870,7 +1870,7 @@ struct test_case {
 
 // ####################################
 // ## Section 2: GGML Op Definitions ##
-// ###################################
+// ####################################
 
 
 // The following is an example showing the bare minimum for creating a test for a GGML op.
