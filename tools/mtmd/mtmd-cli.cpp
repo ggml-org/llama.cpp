@@ -13,6 +13,7 @@
 #include <vector>
 #include <limits.h>
 #include <cinttypes>
+#include <clocale>
 
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
 #include <signal.h>
