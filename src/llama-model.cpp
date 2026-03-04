@@ -466,6 +466,17 @@ struct llama_model::impl {
     layer_dev dev_output = {};
     std::vector<layer_dev> dev_layer;
 
+    // Expert parallelism: per-layer expert device mapping
+    // When split_mode == LLAMA_SPLIT_MODE_EXPERT, expert tensors (ffn_*_exps)
+    // use this mapping instead of dev_layer
+    std::vector<layer_dev> dev_expert;
+
+    // Expert parallelism: per-device split expert tensor contexts and buffers
+    // These hold the ggml contexts and backend buffers for the split expert tensors
+    // that are created during post-loading distribution
+    std::vector<ggml_context_ptr>         expert_split_ctxs;
+    std::vector<ggml_backend_buffer_ptr>  expert_split_bufs;
+
     bool has_tensor_overrides;
 };
 
@@ -2728,6 +2739,40 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     // assign the output layer
     pimpl->dev_output = get_layer_buft_list(n_layer);
 
+    // Expert parallelism: assign expert tensors to devices round-robin by layer
+    if (split_mode == LLAMA_SPLIT_MODE_EXPERT && !devices.empty() && hparams.n_expert > 0) {
+        pimpl->dev_expert.resize(n_layer);
+        const size_t n_dev = n_devices();
+
+        LLAMA_LOG_INFO("%s: expert parallelism enabled with %zu devices, %u experts\n",
+                       __func__, n_dev, hparams.n_expert);
+
+        for (int il = 0; il < n_layer; ++il) {
+            if (il < i_gpu_start || (il - i_gpu_start) >= act_gpu_layers) {
+                // layer not offloaded - expert tensors stay on CPU
+                pimpl->dev_expert[il] = {cpu_dev, &pimpl->cpu_buft_list};
+            } else {
+                // Distribute expert tensors across devices round-robin by layer
+                const int dev_idx = (il - i_gpu_start) % (int)n_dev;
+                auto * dev = devices.at(dev_idx);
+                pimpl->dev_expert[il] = {dev, &pimpl->gpu_buft_list.at(dev)};
+                LLAMA_LOG_DEBUG("load_tensors: layer %3d experts assigned to device %s\n",
+                               il, ggml_backend_dev_name(dev));
+            }
+        }
+
+        // In expert mode, co-locate non-expert tensors (attention, norms) with
+        // expert tensors on the same device to minimize inter-device data movement.
+        // Each layer's attention/norm weights go to the same device as that layer's experts.
+        for (int il = 0; il < n_layer; ++il) {
+            if (il >= i_gpu_start && (il - i_gpu_start) < act_gpu_layers) {
+                const int dev_idx = (il - i_gpu_start) % (int)n_dev;
+                auto * dev = devices.at(dev_idx);
+                pimpl->dev_layer[il] = {dev, &pimpl->gpu_buft_list.at(dev)};
+            }
+        }
+    }
+
     // one ggml context per buffer type
     int max_n_tensors = ml.n_tensors;
     max_n_tensors += 1;         // duplicated output tensor
@@ -2865,7 +2910,14 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     buft_list = pimpl->dev_output.buft_list;
                     break;
                 case LLM_TENSOR_LAYER_REPEATING:
-                    buft_list = pimpl->dev_layer.at(tn.bid).buft_list;
+                    // Expert parallelism: route expert tensors (MUL_MAT_ID ops) to expert device
+                    if (!pimpl->dev_expert.empty() &&
+                        (info.op == GGML_OP_MUL_MAT_ID) &&
+                        tn.bid >= 0 && tn.bid < (int)pimpl->dev_expert.size()) {
+                        buft_list = pimpl->dev_expert.at(tn.bid).buft_list;
+                    } else {
+                        buft_list = pimpl->dev_layer.at(tn.bid).buft_list;
+                    }
                     break;
                 default:
                     GGML_ABORT("invalid layer %d for tensor %s", info.layer, tn.str().c_str());
@@ -7722,6 +7774,111 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         for (auto & mapping : ml.mappings) {
             pimpl->mappings.emplace_back(std::move(mapping));
         }
+    }
+
+    // Expert parallelism: distribute expert tensors across devices
+    // After loading all data, split each layer's expert weight tensors into
+    // per-device sub-tensors, each containing experts_per_device experts.
+    if (split_mode == LLAMA_SPLIT_MODE_EXPERT && n_devices() > 1 && hparams.n_expert > 0) {
+        const int n_dev = (int)n_devices();
+        const int n_exp_per_dev = ((int)hparams.n_expert + n_dev - 1) / n_dev;
+
+        LLAMA_LOG_INFO("%s: distributing expert tensors across %d devices (%d experts per device)\n",
+                       __func__, n_dev, n_exp_per_dev);
+
+        for (int il = 0; il < (int)hparams.n_layer; ++il) {
+            auto & layer = layers[il];
+
+            // Skip layers without expert tensors or layers on CPU
+            if (!layer.ffn_gate_exps || !layer.ffn_up_exps || !layer.ffn_down_exps) {
+                continue;
+            }
+
+            // Prepare the per-device expert tensor arrays
+            layer.ffn_gate_exps_split.resize(n_dev);
+            layer.ffn_up_exps_split.resize(n_dev);
+            layer.ffn_down_exps_split.resize(n_dev);
+
+            // For each device, create sub-tensors with the appropriate expert slice
+            for (int d = 0; d < n_dev; d++) {
+                const int expert_start = d * n_exp_per_dev;
+                const int expert_end = std::min((int)hparams.n_expert, (d + 1) * n_exp_per_dev);
+                const int n_experts_d = expert_end - expert_start;
+
+                if (n_experts_d <= 0) {
+                    layer.ffn_gate_exps_split[d] = nullptr;
+                    layer.ffn_up_exps_split[d]   = nullptr;
+                    layer.ffn_down_exps_split[d]  = nullptr;
+                    continue;
+                }
+
+                // Create a ggml context for this device's expert sub-tensors
+                struct ggml_init_params ctx_params = {
+                    /*.mem_size   =*/ 3 * ggml_tensor_overhead(),
+                    /*.mem_buffer =*/ NULL,
+                    /*.no_alloc   =*/ true,
+                };
+                ggml_context_ptr ctx_split(ggml_init(ctx_params));
+
+                // Create sub-tensors with the same type but fewer experts
+                auto * gate_d = ggml_new_tensor_3d(ctx_split.get(), layer.ffn_gate_exps->type,
+                                                    layer.ffn_gate_exps->ne[0],
+                                                    layer.ffn_gate_exps->ne[1],
+                                                    n_experts_d);
+                auto * up_d = ggml_new_tensor_3d(ctx_split.get(), layer.ffn_up_exps->type,
+                                                  layer.ffn_up_exps->ne[0],
+                                                  layer.ffn_up_exps->ne[1],
+                                                  n_experts_d);
+                auto * down_d = ggml_new_tensor_3d(ctx_split.get(), layer.ffn_down_exps->type,
+                                                    layer.ffn_down_exps->ne[0],
+                                                    layer.ffn_down_exps->ne[1],
+                                                    n_experts_d);
+
+                ggml_format_name(gate_d, "blk.%d.ffn_gate_exps.dev%d", il, d);
+                ggml_format_name(up_d,   "blk.%d.ffn_up_exps.dev%d",   il, d);
+                ggml_format_name(down_d, "blk.%d.ffn_down_exps.dev%d", il, d);
+
+                // Allocate on target device
+                auto * dev = devices.at(d);
+                auto * buft = ggml_backend_dev_buffer_type(dev);
+                ggml_backend_buffer_ptr buf(ggml_backend_alloc_ctx_tensors_from_buft(ctx_split.get(), buft));
+                if (!buf) {
+                    LLAMA_LOG_ERROR("%s: failed to allocate expert split buffer for layer %d device %d\n",
+                                   __func__, il, d);
+                    continue;
+                }
+
+                // Copy expert data slices from the full tensor to the device sub-tensor
+                // Expert dimension is ne[2], so expert `e` data starts at offset e * nb[2]
+                auto copy_expert_slice = [](ggml_tensor * dst, const ggml_tensor * src,
+                                            int expert_start_idx, int n_experts_local) {
+                    const size_t expert_stride = src->nb[2];
+                    const size_t slice_bytes = (size_t)n_experts_local * expert_stride;
+                    const size_t src_offset = (size_t)expert_start_idx * expert_stride;
+
+                    std::vector<uint8_t> tmp(slice_bytes);
+                    ggml_backend_tensor_get(src, tmp.data(), src_offset, slice_bytes);
+                    ggml_backend_tensor_set(dst, tmp.data(), 0, slice_bytes);
+                };
+
+                copy_expert_slice(gate_d, layer.ffn_gate_exps, expert_start, n_experts_d);
+                copy_expert_slice(up_d,   layer.ffn_up_exps,   expert_start, n_experts_d);
+                copy_expert_slice(down_d, layer.ffn_down_exps, expert_start, n_experts_d);
+
+                layer.ffn_gate_exps_split[d] = gate_d;
+                layer.ffn_up_exps_split[d]   = up_d;
+                layer.ffn_down_exps_split[d]  = down_d;
+
+                // Store context and buffer for lifetime management
+                pimpl->expert_split_bufs.push_back(std::move(buf));
+                pimpl->expert_split_ctxs.push_back(std::move(ctx_split));
+            }
+
+            LLAMA_LOG_DEBUG("%s: layer %d expert tensors distributed across %d devices\n",
+                           __func__, il, n_dev);
+        }
+
+        LLAMA_LOG_INFO("%s: expert tensor distribution complete\n", __func__);
     }
 
     return true;

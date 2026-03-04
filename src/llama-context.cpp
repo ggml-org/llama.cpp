@@ -2076,22 +2076,34 @@ llm_graph_params llama_context::graph_params(
                       const llama_ubatch & ubatch,
             const llama_memory_context_i * mctx,
                           llm_graph_type   gtype) const {
+    // Compute expert parallelism parameters
+    int n_expert_devices   = 0;
+    int experts_per_device = 0;
+    if (model.split_mode() == LLAMA_SPLIT_MODE_EXPERT &&
+        model.hparams.n_expert > 0 && model.n_devices() > 0) {
+        n_expert_devices   = (int)model.n_devices();
+        experts_per_device = (int)(model.hparams.n_expert + n_expert_devices - 1) / n_expert_devices;
+    }
+
     return {
-        /*.arch        =*/ model.arch,
-        /*.hparams     =*/ model.hparams,
-        /*.cparams     =*/ cparams,
-        /*.ubatch      =*/ ubatch,
-        /*.gtype       =*/ gtype,
-        /*.sched       =*/ sched.get(),
-        /*.backend_cpu =*/ backend_cpu,
-        /*.cvec        =*/ &cvec,
-        /*.loras       =*/ &loras,
-        /*.mctx        =*/ mctx,
-        /*.cross       =*/ &cross,
-        /*.samplers    =*/ sampling.samplers,
-        /*.n_outputs   =*/ n_outputs,
-        /*.cb          =*/ graph_get_cb(),
-        /*.res         =*/ res,
+        /*.arch                =*/ model.arch,
+        /*.hparams             =*/ model.hparams,
+        /*.cparams             =*/ cparams,
+        /*.ubatch              =*/ ubatch,
+        /*.gtype               =*/ gtype,
+        /*.sched               =*/ sched.get(),
+        /*.backend_cpu         =*/ backend_cpu,
+        /*.cvec                =*/ &cvec,
+        /*.loras               =*/ &loras,
+        /*.mctx                =*/ mctx,
+        /*.cross               =*/ &cross,
+        /*.n_expert_devices    =*/ n_expert_devices,
+        /*.experts_per_device  =*/ experts_per_device,
+        /*.layers              =*/ (n_expert_devices > 0) ? &model.layers : nullptr,
+        /*.samplers            =*/ sampling.samplers,
+        /*.n_outputs           =*/ n_outputs,
+        /*.cb                  =*/ graph_get_cb(),
+        /*.res                 =*/ res,
     };
 }
 

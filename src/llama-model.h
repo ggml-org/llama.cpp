@@ -288,6 +288,14 @@ struct llama_layer {
     struct ggml_tensor * ffn_down_exps_b = nullptr;
     struct ggml_tensor * ffn_up_exps_b   = nullptr;
 
+    // Per-device split expert tensors for expert parallelism (LLAMA_SPLIT_MODE_EXPERT).
+    // When populated, each vector has n_expert_devices entries, with each tensor
+    // containing experts_per_device experts allocated on the corresponding device.
+    // Shape of each: {ne[0], ne[1], experts_per_device}
+    std::vector<struct ggml_tensor *> ffn_gate_exps_split;
+    std::vector<struct ggml_tensor *> ffn_down_exps_split;
+    std::vector<struct ggml_tensor *> ffn_up_exps_split;
+
     // ff shared expert (shexp)
     struct ggml_tensor * ffn_gate_inp_shexp = nullptr;
     struct ggml_tensor * ffn_gate_shexp     = nullptr;

@@ -3,6 +3,7 @@
 #include "llama-impl.h"
 #include "llama-batch.h"
 #include "llama-cparams.h"
+#include "llama-model.h"
 
 #include "llama-kv-cache.h"
 #include "llama-kv-cache-iswa.h"
@@ -829,6 +830,9 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     n_embd_v_gqa     (hparams.n_embd_v_gqa()),
     n_expert         (hparams.n_expert),
     n_expert_used    (cparams.warmup ? hparams.n_expert : hparams.n_expert_used),
+    n_expert_devices (params.n_expert_devices),
+    experts_per_device(params.experts_per_device),
+    layers_for_expert_split(params.layers),
     freq_base        (cparams.rope_freq_base),
     freq_scale       (cparams.rope_freq_scale),
     ext_factor       (cparams.yarn_ext_factor),
@@ -1304,6 +1308,143 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 
     //call early so that topk-moe can be used
     ggml_build_forward_expand(gf, weights);
+
+    // ---- Expert parallelism path: split MoE computation across devices ----
+    // When expert split tensors are available, each device holds a subset of experts.
+    // We compute per-device results with remapped expert IDs and masked weights,
+    // then sum across all devices.
+    if (layers_for_expert_split && il >= 0 && il < (int)layers_for_expert_split->size()) {
+        const auto & layer = (*layers_for_expert_split)[il];
+        const int n_dev = n_expert_devices;
+        const int epd   = experts_per_device;
+
+        if (n_dev > 0 && epd > 0 && !layer.ffn_up_exps_split.empty()) {
+            cur = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
+
+            if (weight_before_ffn) {
+                ggml_tensor * repeated = ggml_repeat_4d(ctx0, cur, n_embd, n_expert_used, n_tokens, 1);
+                cur = ggml_mul(ctx0, repeated, weights);
+                cb(cur, "ffn_moe_weighted_esplit", il);
+            }
+
+            // selected_experts: [n_expert_used, n_tokens] I32 -- global expert IDs
+            ggml_tensor * f_sel = ggml_cast(ctx0, selected_experts, GGML_TYPE_F32);
+
+            ggml_tensor * moe_out = nullptr;
+
+            for (int d = 0; d < n_dev; ++d) {
+                ggml_tensor * dev_gate_exps = layer.ffn_gate_exps_split.empty() ? nullptr : layer.ffn_gate_exps_split[d];
+                ggml_tensor * dev_up_exps   = layer.ffn_up_exps_split[d];
+                ggml_tensor * dev_down_exps = layer.ffn_down_exps_split[d];
+
+                // Remap global expert IDs to device-local IDs:
+                // shifted = global_id - d * epd
+                // Valid experts for device d have shifted in [0, epd-1]
+                float offset = (float)(d * epd);
+                ggml_tensor * shifted = ggml_add1(ctx0, f_sel,
+                    ggml_fill(ctx0, ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1), -offset));
+
+                // Create validity mask: 1 where expert belongs to this device, 0 otherwise
+                // mask = step(shifted) * step(epd - 0.5 - shifted)
+                //   step(x) = 1 if x >= 0, 0 if x < 0
+                ggml_tensor * mask_ge = ggml_step(ctx0, shifted); // 1 where shifted >= 0
+                ggml_tensor * upper_bound = ggml_add1(ctx0, ggml_scale(ctx0, shifted, -1.0f),
+                    ggml_fill(ctx0, ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1), (float)epd - 0.5f));
+                ggml_tensor * mask_lt = ggml_step(ctx0, upper_bound); // 1 where shifted < epd
+                ggml_tensor * mask = ggml_mul(ctx0, mask_ge, mask_lt); // [n_expert_used, n_tokens]
+
+                // Clamp to valid range and cast back to I32
+                ggml_tensor * local_ids = ggml_clamp(ctx0, shifted, 0.0f, (float)(epd - 1));
+                local_ids = ggml_cast(ctx0, local_ids, GGML_TYPE_I32); // [n_expert_used, n_tokens]
+
+                // Masked weights for this device
+                ggml_tensor * mask_3d = ggml_reshape_3d(ctx0, mask, 1, n_expert_used, n_tokens);
+                ggml_tensor * dev_weights = weight_before_ffn ? mask_3d : ggml_mul(ctx0, weights, mask_3d);
+
+                // Up projection
+                ggml_tensor * dev_up = ggml_mul_mat_id(ctx0, dev_up_exps, cur, local_ids);
+
+                // Gate projection + activation
+                ggml_tensor * dev_cur;
+                if (dev_gate_exps) {
+                    dev_cur = ggml_mul_mat_id(ctx0, dev_gate_exps, cur, local_ids);
+
+                    switch (type_op) {
+                        case LLM_FFN_SILU:
+                            dev_cur = ggml_swiglu_split(ctx0, dev_cur, dev_up);
+                            break;
+                        case LLM_FFN_GELU:
+                            dev_cur = ggml_geglu_split(ctx0, dev_cur, dev_up);
+                            break;
+                        case LLM_FFN_SWIGLU_OAI_MOE:
+                            {
+                                constexpr float alpha = 1.702f;
+                                constexpr float limit = 7.0f;
+                                dev_cur = ggml_swiglu_oai(ctx0, dev_cur, dev_up, alpha, limit);
+                            }
+                            break;
+                        case LLM_FFN_RELU:
+                            dev_cur = ggml_reglu_split(ctx0, dev_cur, dev_up);
+                            break;
+                        default:
+                            GGML_ABORT("fatal error: unsupported activation in expert split path");
+                    }
+                } else {
+                    switch (type_op) {
+                        case LLM_FFN_SILU:
+                            dev_cur = ggml_silu(ctx0, dev_up);
+                            break;
+                        case LLM_FFN_GELU:
+                            dev_cur = ggml_gelu(ctx0, dev_up);
+                            break;
+                        case LLM_FFN_RELU:
+                            dev_cur = ggml_relu(ctx0, dev_up);
+                            break;
+                        case LLM_FFN_RELU_SQR:
+                            dev_cur = ggml_relu(ctx0, dev_up);
+                            dev_cur = ggml_sqr(ctx0, dev_cur);
+                            break;
+                        default:
+                            GGML_ABORT("fatal error: unsupported activation in expert split path");
+                    }
+                }
+
+                // Down projection
+                ggml_tensor * dev_experts = ggml_mul_mat_id(ctx0, dev_down_exps, dev_cur, local_ids);
+
+                // Apply weights (masked) -- for weight_before_ffn, multiply by mask only
+                dev_experts = ggml_mul(ctx0, dev_experts, dev_weights);
+
+                // Aggregate per-expert results for this device
+                ggml_tensor * dev_result = nullptr;
+                for (int64_t i = 0; i < n_expert_used; ++i) {
+                    ggml_tensor * expert_view = ggml_view_2d(ctx0, dev_experts,
+                        n_embd, n_tokens, dev_experts->nb[2], i * dev_experts->nb[1]);
+                    ggml_build_forward_expand(gf, expert_view);
+                    if (dev_result == nullptr) {
+                        dev_result = expert_view;
+                    } else {
+                        dev_result = ggml_add(ctx0, dev_result, expert_view);
+                    }
+                }
+
+                // Sum across devices
+                if (moe_out == nullptr) {
+                    moe_out = dev_result;
+                } else {
+                    moe_out = ggml_add(ctx0, moe_out, dev_result);
+                }
+            }
+
+            if (n_expert_used == 1 && n_dev == 1) {
+                moe_out = ggml_cont(ctx0, moe_out);
+            }
+
+            cb(moe_out, "ffn_moe_out", il);
+            return moe_out;
+        }
+    }
+    // ---- End expert parallelism path ----
 
     cur = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
 

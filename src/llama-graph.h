@@ -17,6 +17,7 @@ struct ggml_context;
 struct ggml_tensor;
 
 struct llama_cparams;
+struct llama_layer;
 
 struct llama_memory_context_i;
 
@@ -534,6 +535,11 @@ struct llm_graph_params {
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
 
+    // Expert parallelism parameters
+    int n_expert_devices   = 0; // number of devices for expert parallelism (0 = disabled)
+    int experts_per_device = 0; // experts assigned per device
+    const std::vector<llama_layer> * layers = nullptr; // model layers (for split expert tensor lookup)
+
     std::map<llama_seq_id, llama_sampler *> samplers;
 
     static bool samplers_equal(
@@ -716,6 +722,11 @@ struct llm_graph_context {
     const int64_t n_embd_v_gqa;
     const int64_t n_expert;
     const int64_t n_expert_used;
+
+    // Expert parallelism
+    const int n_expert_devices;
+    const int experts_per_device;
+    const std::vector<llama_layer> * layers_for_expert_split;
 
     const float freq_base;
     const float freq_scale;

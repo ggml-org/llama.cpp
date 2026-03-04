@@ -74,6 +74,10 @@
 #include "ggml-virtgpu.h"
 #endif
 
+#ifdef GGML_USE_CXL
+#include "ggml-cxl.h"
+#endif
+
 #ifdef GGML_USE_CANN
 #include "ggml-cann.h"
 #endif
@@ -134,6 +138,9 @@ struct ggml_backend_registry {
 #endif
 #ifdef GGML_USE_VIRTGPU_FRONTEND
         register_backend(ggml_backend_virtgpu_reg());
+#endif
+#ifdef GGML_USE_CXL
+        register_backend(ggml_backend_cxl_reg());
 #endif
 
 #ifdef GGML_USE_OPENCL
