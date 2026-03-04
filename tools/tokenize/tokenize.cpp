@@ -2,6 +2,7 @@
 //#include "log.h" // TODO: start using log.h
 #include "llama.h"
 
+#include <clocale>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -184,6 +185,8 @@ static void write_utf8_cstr_to_stdout(const char * str, bool & invalid_utf8) {
 }
 
 int main(int raw_argc, char ** raw_argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     const std::vector<std::string> argv = ingest_args(raw_argc, raw_argv);
     const int argc = argv.size();
 
