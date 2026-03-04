@@ -453,7 +453,6 @@ static void ggml_sycl_release_host_weight_extras(ggml_sycl_host_weight_release_m
 // ---------------------------------------------------------------------------
 static ggml_sycl::ExpertPrefetcher  g_expert_prefetchers[GGML_SYCL_MAX_DEVICES];
 static ggml_sycl::ExpertPredictor   g_expert_predictors[GGML_SYCL_MAX_DEVICES];
-static ggml_sycl::HotExpertPool     g_hot_expert_pools[GGML_SYCL_MAX_DEVICES];
 static ggml_sycl::PinnedBufferPool  g_pinned_buffer_pools[GGML_SYCL_MAX_DEVICES];
 static ggml_sycl::CpuExpertPool    g_cpu_expert_pools[GGML_SYCL_MAX_DEVICES];
 static std::once_flag               g_moe_hybrid_init_flags[GGML_SYCL_MAX_DEVICES];
@@ -977,26 +976,6 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
         }
         if (n_gates_registered > 0) {
             GGML_LOG_INFO("[MOE-HYBRID] Pre-gated routing: registered %d gate weight tensors\n", n_gates_registered);
-        }
-    }
-
-    // Initialize HotExpertPool: dedicated VRAM for most-accessed experts.
-    // Uses VRAM headroom left after unified cache loads non-expert weights.
-    // expert_size = rows_per_expert * row_bytes (AOS layout).
-    if (ggml_sycl::HotExpertPool::hot_experts_per_tensor() > 0) {
-        // Find expert size from the first MoE tensor in the graph
-        size_t expert_bytes = 0;
-        for (int i = 0; i < cgraph->n_nodes && expert_bytes == 0; i++) {
-            const ggml_tensor * node = cgraph->nodes[i];
-            if (node->op != GGML_OP_MUL_MAT_ID) continue;
-            const ggml_tensor * src0 = node->src[0];
-            if (!src0 || src0->ne[2] <= 1) continue;
-            // expert_size = rows_per_expert * row_stride
-            expert_bytes = static_cast<size_t>(src0->nb[2]);
-        }
-        if (expert_bytes > 0) {
-            auto & hot_pool = g_hot_expert_pools[device];
-            hot_pool.init(q, expert_bytes);
         }
     }
 
@@ -19670,22 +19649,7 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
         } else {
             // READY: distinguish VRAM-resident vs host-resident
             if (result.host_resident) {
-                // Check hot expert pool for a VRAM-promoted copy
-                auto & hot_pool = g_hot_expert_pools[device];
-                if (hot_pool.is_active()) {
-                    const int tensor_hash = moe_cache_layer_id(src0->name);
-                    void * vram_ptr = hot_pool.lookup(tensor_hash, static_cast<int>(e));
-                    if (vram_ptr) {
-                        // Hot expert found in VRAM pool - use VRAM pointer instead
-                        result.device_ptr   = vram_ptr;
-                        result.host_resident = false;
-                        stats_vram_ready++;
-                    } else {
-                        stats_host_ready++;
-                    }
-                } else {
-                    stats_host_ready++;
-                }
+                stats_host_ready++;
             } else {
                 stats_vram_ready++;
             }
@@ -19783,56 +19747,6 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
             if (moe_dispatch_count >= moe_ops_per_token) {
                 moe_dispatch_count = 0;
                 stats.tick_token();
-            }
-        }
-
-        // --- Hot expert promotion trigger ---
-        // After warmup period, promote the most frequent experts to VRAM.
-        // Fires once per device, using frequency data from the predictor.
-        static thread_local bool hot_promotion_done = false;
-        const int64_t current_tokens = stats.total_tokens.load(std::memory_order_relaxed);
-        if (!hot_promotion_done && current_tokens >= 10) {
-            auto & hot_pool  = g_hot_expert_pools[device];
-            auto & predictor = g_expert_predictors[device];
-            if (hot_pool.is_active() && predictor.is_active() && cache) {
-                hot_promotion_done = true;
-                const int hot_k = ggml_sycl::HotExpertPool::hot_experts_per_tensor();
-                int total_promoted = 0;
-
-                // For each MoE tensor, get the top-K experts by frequency
-                auto & seq_map = g_moe_layer_seq[device];
-                for (const auto & [hash_id, seq_idx] : seq_map) {
-                    auto top_experts = predictor.get_top_k_by_freq(seq_idx, {}, hot_k);
-                    if (top_experts.empty()) continue;
-
-                    // Collect host pointers for these experts from the unified cache
-                    std::vector<void *> host_ptrs;
-                    host_ptrs.reserve(top_experts.size());
-                    for (int eid : top_experts) {
-                        // Look up cached pointer from the unified cache
-                        // We need the cache key - reconstruct from hash_id + expert_id
-                        // The host_ptr is available via the expert_ptrs_host table
-                        // but we need the tensor to get the cache key.
-                        // Simpler: use the placement table which already has pointers.
-                        auto & ptable = ggml_sycl::get_expert_placement_table();
-                        auto placement = ptable.get(hash_id, eid);
-                        if (placement.device_ptr) {
-                            host_ptrs.push_back(placement.device_ptr);
-                        } else {
-                            host_ptrs.push_back(nullptr);
-                        }
-                    }
-
-                    int n = hot_pool.promote(hash_id, top_experts, host_ptrs);
-                    total_promoted += n;
-                }
-
-                if (total_promoted > 0) {
-                    GGML_LOG_INFO("[HOT-EXPERT] Promoted %d experts to VRAM after %lld tokens "
-                                  "(pool %d/%d slots used)\n",
-                                  total_promoted, (long long) current_tokens,
-                                  hot_pool.promoted_count(), hot_pool.capacity());
-                }
             }
         }
     }
