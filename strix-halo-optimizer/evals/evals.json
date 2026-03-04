@@ -1,0 +1,89 @@
+{
+  "skill_name": "strix-halo-optimizer",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I just got a Framework Desktop with the AMD Ryzen AI Max+ 395 and 128GB of RAM running Ubuntu 24.04. I want to run Llama 3.1 70B on it with llama.cpp. How do I build it and what settings should I use for the best token generation speed? I've already installed ROCm 6.3.",
+      "expected_output": "Should provide: 1) TTM memory fix as the critical first step, 2) Build command with GPU_TARGETS=gfx1150 and GGML_HIP=ON, 3) ROCBLAS_USE_HIPBLASLT=1 environment variable, 4) Runtime flags including -ngl 99, --no-mmap, -fa on, -ctk q8_0 -ctv q8_0, 5) Recommendation for Q4_K_M quantization to fit in memory",
+      "files": [],
+      "assertions": [
+        {
+          "name": "ttm_memory_fix",
+          "description": "Mentions TTM pages_limit configuration for Linux",
+          "type": "contains_concept"
+        },
+        {
+          "name": "correct_gpu_target",
+          "description": "Specifies GPU_TARGETS=gfx1150 (or gfx1151) in the build command",
+          "type": "contains_concept"
+        },
+        {
+          "name": "hipblaslt_env",
+          "description": "Includes ROCBLAS_USE_HIPBLASLT=1 environment variable",
+          "type": "contains_concept"
+        },
+        {
+          "name": "no_mmap_flag",
+          "description": "Recommends --no-mmap for the 70B model",
+          "type": "contains_concept"
+        },
+        {
+          "name": "full_gpu_offload",
+          "description": "Uses -ngl 99 to offload all layers to GPU",
+          "type": "contains_concept"
+        },
+        {
+          "name": "quantization_recommendation",
+          "description": "Recommends an appropriate quantization (Q4_K_M or similar) for fitting 70B in 128GB",
+          "type": "contains_concept"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "I'm getting terrible prompt processing speed on my Strix Halo laptop - only about 350 tokens/sec on a 7B model. Token generation is fine at ~48 t/s. What's wrong?",
+      "expected_output": "Should identify the rocBLAS kernel issue for gfx1150/gfx1151 and recommend ROCBLAS_USE_HIPBLASLT=1, explaining that this can improve pp speed from ~350 to ~880 t/s. Should also check if GPU_TARGETS was set correctly during build.",
+      "files": [],
+      "assertions": [
+        {
+          "name": "identifies_rocblas_issue",
+          "description": "Identifies that the problem is poorly optimized rocBLAS kernels for gfx1150/gfx1151",
+          "type": "contains_concept"
+        },
+        {
+          "name": "hipblaslt_solution",
+          "description": "Recommends setting ROCBLAS_USE_HIPBLASLT=1",
+          "type": "contains_concept"
+        },
+        {
+          "name": "expected_improvement",
+          "description": "Mentions the expected ~2.5x improvement (from ~350 to ~880 t/s)",
+          "type": "contains_concept"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "My llama.cpp keeps running out of memory when loading a 65B model on my Ryzen AI Max 395 even though I have 128GB RAM. rocm-smi only shows 4GB VRAM. What's going on?",
+      "expected_output": "Should explain: 1) Strix Halo uses unified memory, the 4GB is just the BIOS-configured 'dedicated' portion, 2) The TTM pages_limit needs to be increased to allow GPU to access more system memory, 3) Provide the exact modprobe.d configuration, 4) After TTM fix, recommend --no-mmap and -ngl 99",
+      "files": [],
+      "assertions": [
+        {
+          "name": "explains_unified_memory",
+          "description": "Explains that Strix Halo uses unified memory and the 4GB is just the dedicated VRAM portion",
+          "type": "contains_concept"
+        },
+        {
+          "name": "ttm_fix",
+          "description": "Provides TTM pages_limit fix with the modprobe.d configuration",
+          "type": "contains_concept"
+        },
+        {
+          "name": "reboot_required",
+          "description": "Mentions that a reboot or initramfs update is needed after TTM change",
+          "type": "contains_concept"
+        }
+      ]
+    }
+  ]
+}
