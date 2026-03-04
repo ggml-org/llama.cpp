@@ -29,6 +29,11 @@
 #include "hmx/hmx-ops.h"
 #endif // HTP_HAS_HMX
 
+// Set to 1 to enable lightweight sample-value tracing via FARF(ALWAYS, ...).
+#ifndef HMX_DEBUG_TRACE_VALUES
+#define HMX_DEBUG_TRACE_VALUES 1
+#endif
+
 AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
     struct htp_context * ctx;
     int                  err = 0;
@@ -259,7 +264,7 @@ static void vtcm_free(struct htp_context * ctx) {
 static void htp_packet_callback(dspqueue_t queue, int error, void * context);
 static void htp_error_callback(dspqueue_t queue, int error, void * context);
 
-AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_queue_id, uint32 n_hvx) {
+AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_queue_id, uint32 n_hvx, uint32 force_hvx) {
     struct htp_context * ctx = (struct htp_context *) handle;
 
     if (!ctx) {
@@ -294,15 +299,23 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_que
     }
 
 #ifdef HTP_HAS_HMX
-    // Reserve VTCM tail for the exp2 lookup table (64 KB)
-    {
+    if (force_hvx) {
+        // Host requested HVX-only mode: skip HMX initialisation so the
+        // dispatch loop falls through to the HVX compute paths.
+        ctx->hmx_enabled       = 0;
+        ctx->vtcm_scratch_size = ctx->vtcm_size;
+        FARF(HIGH, "HMX disabled (force_hvx): vtcm-scratch %zu", ctx->vtcm_scratch_size);
+    } else {
+        // Reserve VTCM tail for the exp2 lookup table (64 KB).
+        // Do NOT write the table here — VTCM is allocated with cache_mode=1,
+        // so pages are not mapped until HAP_compute_res_acquire_cached is called.
+        // vtcm_acquire() will map VTCM and call init_precomputed_tables() on
+        // first use (when vtcm_valid==false && hmx_enabled==1).
         const size_t table_size   = (size_t)65536;
         const size_t table_offset = (ctx->vtcm_size - table_size) & ~((size_t)65535);
         ctx->exp2_table        = ctx->vtcm_base + table_offset;
         ctx->vtcm_scratch_size = table_offset;
-
-        init_precomputed_tables(ctx->exp2_table);
-        ctx->hmx_enabled = 1;
+        ctx->hmx_enabled       = 1;
 
         FARF(HIGH, "HMX enabled: vtcm-scratch %zu exp2-table @%p",
              ctx->vtcm_scratch_size, (void *)ctx->exp2_table);
@@ -1082,9 +1095,20 @@ static void proc_hmx_matmul_req(struct htp_context *     ctx,
                                 struct htp_general_req * req,
                                 struct dspqueue_buffer * bufs,
                                 size_t                   n_bufs) {
-    // HMX activation tile is 32×32: M and K must both be 32-aligned.
-    // HMX weight tile requires N to be 32-aligned (K checked separately below).
-    if (req->src1.ne[1] % 32 != 0 || req->src0.ne[1] % 32 != 0) {
+    // HMX weight tile requires N to be 32-aligned.
+    if (req->src0.ne[1] % 32 != 0) {
+        proc_matmul_req(ctx, req, bufs, n_bufs);
+        return;
+    }
+
+    // M alignment: when M > 32 but not 32-aligned, we split into
+    // HMX (first m_hmx = M & ~31 rows) + HVX (remaining m_tail rows).
+    // When M <= 32 and not 32-aligned, fall back entirely to HVX.
+    const int m_total = (int) req->src1.ne[1];
+    const int m_tail  = m_total % 32;
+    const int m_hmx   = m_total - m_tail;
+
+    if (m_hmx == 0) {
         proc_matmul_req(ctx, req, bufs, n_bufs);
         return;
     }
@@ -1127,29 +1151,38 @@ static void proc_hmx_matmul_req(struct htp_context *     ctx,
     float * act = (float *) bufs[1].ptr;
     float * dst = (float *) bufs[2].ptr;
 
-    int m = (int) req->src1.ne[1];  // activation rows
     int k = (int) req->src0.ne[0];  // inner dimension
     int n = (int) req->src0.ne[1];  // weight columns
+
+#if HMX_DEBUG_TRACE_VALUES
+    FARF(ALWAYS, "proc_hmx_matmul: m=%d(hmx=%d tail=%d) k=%d n=%d type=%u  wgt=%p(%zu) act=%p(%zu) dst=%p(%zu)",
+         m_total, m_hmx, m_tail, k, n, req->src0.type,
+         wgt, bufs[0].size, act, bufs[1].size, dst, bufs[2].size);
+#endif
 
     struct profile_data prof;
     profile_start(&prof);
 
     uint32_t rsp_status = HTP_STATUS_INTERNAL_ERR;
+
+    // --- Phase 1: HMX on the first m_hmx (32-aligned) rows ---
     if (vtcm_acquire(ctx) == AEE_SUCCESS) {
         int ret = -1;
         switch (req->src0.type) {
             case HTP_TYPE_F16:
                 ret = hmx_mat_mul_permuted_w16a32(ctx, dst, act,
-                                                  (const __fp16 *) wgt, m, k, n);
+                                                  (const __fp16 *) wgt, m_hmx, k, n);
                 break;
             default:
-                // Q4_0, Q8_0, IQ4_NL etc.: req->src0.type value matches
-                // HMX_TYPE_* constants (both mirror the ggml_type enum).
                 ret = hmx_mat_mul_permuted_qk_0_d16a32(ctx, dst, act,
                                                        (const uint8_t *) wgt,
-                                                       m, k, n, (int) req->src0.type);
+                                                       m_hmx, k, n, (int) req->src0.type);
                 break;
         }
+#if HMX_DEBUG_TRACE_VALUES
+        FARF(ALWAYS, "proc_hmx_matmul: hmx ret=%d  dst[0..3] = %.6f %.6f %.6f %.6f",
+             ret, dst[0], dst[1], dst[2], dst[3]);
+#endif
         if (ret == 0) {
             rsp_status = HTP_STATUS_OK;
         } else {
@@ -1159,6 +1192,43 @@ static void proc_hmx_matmul_req(struct htp_context *     ctx,
             return;
         }
         vtcm_release(ctx);
+    }
+
+    // --- Phase 2: HVX on the remaining m_tail rows ---
+    if (m_tail > 0 && rsp_status == HTP_STATUS_OK) {
+        struct htp_ops_context octx = { 0 };
+        octx.ctx       = ctx;
+        octx.src0      = req->src0;         // weights: unchanged
+        octx.src1      = req->src1;
+        octx.src1.ne[1] = m_tail;           // only tail rows
+        octx.dst       = req->dst;
+        octx.dst.ne[1]  = m_tail;           // only tail rows
+        // Always re-quantize tail src1: HMX Phase 1 overwrites VTCM,
+        // so any previously cached quantized data (SKIP_QUANTIZE pipeline)
+        // is invalid.
+        octx.flags     = req->flags & ~HTP_OPFLAGS_SKIP_QUANTIZE;
+        octx.op        = req->op;
+        octx.n_threads = ctx->n_threads;
+
+        // Offset activation and dst pointers past the HMX-processed rows.
+        // Use nb[1] (row stride in bytes) to compute the byte offset.
+        octx.src0.data = (uint32_t) bufs[0].ptr;
+        octx.src1.data = (uint32_t)((uint8_t *) bufs[1].ptr + (size_t) m_hmx * req->src1.nb[1]);
+        octx.dst.data  = (uint32_t)((uint8_t *) bufs[2].ptr + (size_t) m_hmx * req->dst.nb[1]);
+
+        FARF(HIGH, "proc_hmx_matmul: HVX tail m_tail=%d act=%p dst=%p",
+             m_tail, (void *)(uintptr_t) octx.src1.data, (void *)(uintptr_t) octx.dst.data);
+
+        if (vtcm_acquire(ctx) == AEE_SUCCESS) {
+            uint32_t hvx_ret = op_matmul(&octx);
+            vtcm_release(ctx);
+            if (hvx_ret != HTP_STATUS_OK) {
+                FARF(ERROR, "HVX tail matmul failed (ret=%u)", hvx_ret);
+                rsp_status = HTP_STATUS_INTERNAL_ERR;
+            }
+        } else {
+            rsp_status = HTP_STATUS_INTERNAL_ERR;
+        }
     }
 
     profile_stop(&prof);
