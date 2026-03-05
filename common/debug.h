@@ -18,7 +18,7 @@ template <bool abort_on_nan> void common_debug_print_tensor(uint8_t * data, ggml
 // prints tensors that are processed in the computation graph
 // by default prints all tensors, but can be configured by creating a `base_callback_data` instance with
 // non-empty filter_patterns. See examples/debug.ccp for possible usage patterns
-// The template parameter determins whether an error should be thrown whenever a NaN is encountered
+// The template parameter determines whether an error should be thrown whenever a NaN is encountered
 // in a tensor (useful for stopping debug sessions on first erroneous tensor)
 // The callback data will be passed as the third parameter (user_data)
 template <bool abort_on_nan> bool common_debug_cb_eval(struct ggml_tensor * t, bool ask, void * user_data);

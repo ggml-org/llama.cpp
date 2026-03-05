@@ -5,9 +5,11 @@
 		ChatFormFileInputInvisible,
 		ChatFormTextarea
 	} from '$lib/components/app';
-	import { INPUT_CLASSES } from '$lib/constants/css-classes';
-	import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
-	import { CLIPBOARD_CONTENT_QUOTE_PREFIX } from '$lib/constants/chat-form';
+	import {
+		CLIPBOARD_CONTENT_QUOTE_PREFIX,
+		INPUT_CLASSES,
+		SETTING_CONFIG_DEFAULT
+	} from '$lib/constants';
 	import { KeyboardKey, MimeTypeText } from '$lib/enums';
 	import { config } from '$lib/stores/settings.svelte';
 	import { modelOptions, selectedModelId } from '$lib/stores/models.svelte';
