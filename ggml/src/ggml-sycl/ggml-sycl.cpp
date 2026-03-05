@@ -610,12 +610,16 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
         }
         n_moe_layers++;
 
-        // Register each expert's host pointer + tensor info for eager upload
+        // Register each expert's pointer + tensor info for eager upload.
+        // IMPORTANT: src0->data may be a device VRAM pointer (not CPU-accessible)
+        // when the buffer was allocated in device memory.  The mmap source data
+        // may have been unmapped after model loading.  We store the pointer as-is
+        // and resolve host accessibility at Phase 2 upload time.
         auto * src0_extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
         for (int e = 0; e < n_experts; e++) {
-            const void * host_ptr = static_cast<const char *>(src0->data)
+            const void * ptr = static_cast<const char *>(src0->data)
                                     + static_cast<size_t>(e) * nb02;
-            expert_list.push_back({ layer_id, e, host_ptr, nb02, src0, src0_extra });
+            expert_list.push_back({ layer_id, e, ptr, nb02, src0, src0_extra });
         }
     }
 
@@ -767,6 +771,8 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                 continue;
             }
             size_t slots = avail / expert_weight_bytes;
+            GGML_LOG_INFO("[MOE-PHASE2] GPU%d: %zu slots available (%.1f MB / %.1f KB per expert)\n",
+                          d, slots, avail / (1024.0 * 1024.0), expert_weight_bytes / 1024.0);
             if (slots > 0) {
                 budgets.push_back({ d, slots, 0, cache_d });
             }
@@ -828,6 +834,31 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                     info.tensor->type, ncols, nrows, GGML_LAYOUT_SOA, budget.dev);
                 const size_t  dst_bytes   = (soa_bytes > 0) ? soa_bytes : info.bytes;
 
+                // Determine if source pointer is device memory (VRAM on device 0).
+                // If so, D2H stage it via device 0's queue before passing to
+                // ensure_cached_layout on the secondary GPU.  The mmap source
+                // may have been unmapped after model loading, so the only reliable
+                // host-accessible copy for device-resident weights is via D2H.
+                const bool src_on_device = (info.tensor->buffer &&
+                                            !ggml_backend_buffer_is_host(info.tensor->buffer));
+
+                const void * upload_src     = info.host_ptr;
+                void *       d2h_staging    = nullptr;
+
+                if (src_on_device) {
+                    // D2H stage from device 0 to pinned host buffer
+                    d2h_staging = ggml_sycl_malloc_host_tracked_bytes(
+                        info.bytes, q, "moe_d2h_staging");
+                    if (d2h_staging) {
+                        q.memcpy(d2h_staging, info.host_ptr, info.bytes).wait();
+                        upload_src = d2h_staging;
+                    } else {
+                        GGML_LOG_ERROR("[MOE-PHASE2] D2H staging alloc failed for L%d E%d (%zu bytes)\n",
+                                       info.layer_id, info.expert_idx, info.bytes);
+                        continue;
+                    }
+                }
+
                 // Set up reorder context for AOS→SOA conversion
                 reorder_ctx             = {};
                 reorder_ctx.type        = info.tensor->type;
@@ -836,12 +867,12 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                 reorder_ctx.nbytes      = info.bytes;
                 reorder_ctx.dst_bytes   = dst_bytes;
                 reorder_ctx.layout      = GGML_LAYOUT_SOA;
-                reorder_ctx.src_is_device = false;  // src is mmap'd host pointer
+                reorder_ctx.src_is_device = false;  // upload_src is always host-accessible
                 reorder_ctx.device_id   = budget.dev;
 
                 cache_layout_request req{};
                 req.key              = key;
-                req.src_ptr          = info.host_ptr;
+                req.src_ptr          = upload_src;
                 req.src_size         = info.bytes;
                 req.dst_size         = dst_bytes;
                 req.type             = cache_entry_type::MOE_EXPERT;
@@ -852,7 +883,27 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                 req.fill_fn          = ggml_sycl_fill_reordered_host;
                 req.fill_ctx         = &reorder_ctx;
 
-                cache_layout_result result = budget.cache->ensure_cached_layout(req, {});
+                GGML_SYCL_DEBUG("[MOE-PHASE2] Uploading expert #%zu L%d E%d to GPU%d "
+                                "(type=%d dst_bytes=%zu)\n",
+                                total_uploaded, info.layer_id, info.expert_idx,
+                                budget.dev, (int)info.tensor->type, dst_bytes);
+
+                cache_layout_result result{};
+                try {
+                    result = budget.cache->ensure_cached_layout(req, {});
+                } catch (const std::exception & e) {
+                    GGML_LOG_ERROR("[MOE-PHASE2] ensure_cached_layout EXCEPTION: %s\n", e.what());
+                    if (d2h_staging) { ggml_sycl_free_host_tracked_bytes(d2h_staging, info.bytes, q); }
+                    continue;
+                } catch (...) {
+                    GGML_LOG_ERROR("[MOE-PHASE2] ensure_cached_layout UNKNOWN EXCEPTION\n");
+                    if (d2h_staging) { ggml_sycl_free_host_tracked_bytes(d2h_staging, info.bytes, q); }
+                    continue;
+                }
+                // Free D2H staging buffer (data is now in device 1 cache)
+                if (d2h_staging) {
+                    ggml_sycl_free_host_tracked_bytes(d2h_staging, info.bytes, q);
+                }
                 if (result.status == cache_layout_status::READY
                     || result.status == cache_layout_status::IN_PROGRESS) {
                     placement_table.set_device_ptr(
@@ -4064,11 +4115,17 @@ static ggml_sycl_device_info ggml_sycl_init() {
     // #else
     //     GGML_LOG_INFO("%s: SYCL_USE_XMX: no\n", __func__);
     // #endif
-    for (int i = 0; i < info.device_count; ++i) {
+    // Initialize device info for ALL physical GPUs (not just scheduler-visible ones)
+    // so MoE expert dispatch can access info.devices[1] for secondary GPUs.
+    // For hidden devices (i >= device_count), use identity mapping since
+    // ggml_sycl_map_device_id returns the device index as-is for out-of-range.
+    for (int i = 0; i < info.total_gpu_count; ++i) {
         info.devices[i].vmm = 0;
 
         dpct::device_info prop;
-        const int         actual_id = device_map[i];
+        const int         actual_id = (i < static_cast<int>(device_map.size()))
+                                          ? device_map[i]
+                                          : ggml_sycl_map_device_id(i);
         auto &            device_i  = dpct::dev_mgr::instance().get_device(actual_id);
         sycl::device      device    = device_i;
         SYCL_CHECK(CHECK_TRY_ERROR(dpct::get_device_info(prop, device)));
@@ -26521,8 +26578,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 // --- MoE dispatch stats for CPU-TG path ---
                 if (ggml_sycl::MoeDispatchStats::enabled()) {
                     auto & stats = ggml_sycl::get_moe_dispatch_stats(ctx.device);
-                    stats.record_dispatch(static_cast<int>(gpu_entries.size()),
-                                          static_cast<int>(secondary_count), 0,
+                    stats.record_dispatch(static_cast<int>(gpu_entries.size() + secondary_count),
+                                          0, 0,
                                           static_cast<int>(cpu_entries.size()), 0);
 
                     // Record prediction accuracy (CPU-TG still has predictor state
