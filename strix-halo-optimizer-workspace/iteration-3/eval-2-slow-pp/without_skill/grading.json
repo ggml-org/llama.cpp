@@ -1,0 +1,9 @@
+{
+  "eval_id": 2,
+  "config": "without_skill",
+  "expectations": [
+    {"text": "identifies_rocblas_issue", "passed": false, "evidence": "Misdiagnoses as CPU-only inference issue, suggests GPU offload and Vulkan, never mentions rocBLAS kernel problem"},
+    {"text": "hipblaslt_solution", "passed": false, "evidence": "ROCBLAS_USE_HIPBLASLT=1 not mentioned anywhere"},
+    {"text": "expected_improvement", "passed": false, "evidence": "Claims 1500-3000+ t/s with GPU offload which is inaccurate for the actual problem"}
+  ]
+}

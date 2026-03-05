@@ -1,0 +1,10 @@
+{
+  "eval_id": 4,
+  "config": "without_skill",
+  "expectations": [
+    {"text": "vulkan_build_command", "passed": true, "evidence": "cmake -B build -DGGML_VULKAN=ON with instructions"},
+    {"text": "hip_recommended_over_vulkan", "passed": true, "evidence": "Notes HIP has fine-grained RDNA 3.5 tuning and hipBLASLt advantage"},
+    {"text": "vulkan_known_issues", "passed": false, "evidence": "Does not mention issue #18741 or any specific Vulkan reliability issues on Strix Halo"},
+    {"text": "vulkan_as_valid_fallback", "passed": true, "evidence": "Concludes Vulkan is 'perfectly viable and practical choice'"}
+  ]
+}

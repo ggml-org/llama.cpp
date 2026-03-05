@@ -1,0 +1,10 @@
+{
+  "eval_id": 5,
+  "config": "with_skill",
+  "expectations": [
+    {"text": "zendnn_build_flags", "passed": true, "evidence": "GGML_ZENDNN=ON in build command"},
+    {"text": "zendnn_matmul_algo", "passed": true, "evidence": "ZENDNNL_MATMUL_ALGO=1 with explanation of blocked AOCL DLP"},
+    {"text": "bf16_recommendation", "passed": true, "evidence": "Explains ZenDNN accelerates FP32 and BF16, includes bandwidth math for BF16"},
+    {"text": "thread_count", "passed": true, "evidence": "Recommends starting at 16 (physical cores), with benchmark sweep methodology"}
+  ]
+}

@@ -1,0 +1,217 @@
+{
+  "metadata": {
+    "skill_name": "strix-halo-optimizer",
+    "skill_path": "/home/user/llama.cpp/strix-halo-optimizer",
+    "executor_model": "claude-opus-4-6",
+    "analyzer_model": "claude-opus-4-6",
+    "timestamp": "2026-03-05T07:29:13Z",
+    "evals_run": [1, 2, 3, 4, 5, 6],
+    "runs_per_configuration": 1
+  },
+  "runs": [
+    {
+      "eval_id": 1,
+      "eval_name": "full-setup-guide",
+      "config": "with_skill",
+      "pass_rate": 1.0,
+      "passed": 6,
+      "total": 6,
+      "total_tokens": 29148,
+      "total_duration_seconds": 81.2,
+      "expectations": [
+        {"text": "ttm_memory_fix", "passed": true, "evidence": "Full TTM config provided"},
+        {"text": "correct_gpu_target", "passed": true, "evidence": "GPU_TARGETS=gfx1150"},
+        {"text": "hipblaslt_env", "passed": true, "evidence": "ROCBLAS_USE_HIPBLASLT=1"},
+        {"text": "no_mmap_flag", "passed": true, "evidence": "--no-mmap explained"},
+        {"text": "full_gpu_offload", "passed": true, "evidence": "-ngl 99"},
+        {"text": "quantization_recommendation", "passed": true, "evidence": "Q4_K_M recommended"}
+      ]
+    },
+    {
+      "eval_id": 1,
+      "eval_name": "full-setup-guide",
+      "config": "without_skill",
+      "pass_rate": 0.5,
+      "passed": 3,
+      "total": 6,
+      "total_tokens": 51555,
+      "total_duration_seconds": 161.2,
+      "expectations": [
+        {"text": "ttm_memory_fix", "passed": false, "evidence": "Uses GGML_CUDA_ENABLE_UNIFIED_MEMORY instead"},
+        {"text": "correct_gpu_target", "passed": true, "evidence": "GPU_TARGETS=gfx1150"},
+        {"text": "hipblaslt_env", "passed": false, "evidence": "Not mentioned"},
+        {"text": "no_mmap_flag", "passed": false, "evidence": "Not mentioned"},
+        {"text": "full_gpu_offload", "passed": true, "evidence": "-ngl 99"},
+        {"text": "quantization_recommendation", "passed": true, "evidence": "Q4_K_M recommended"}
+      ]
+    },
+    {
+      "eval_id": 2,
+      "eval_name": "slow-prompt-processing",
+      "config": "with_skill",
+      "pass_rate": 1.0,
+      "passed": 3,
+      "total": 3,
+      "total_tokens": 25226,
+      "total_duration_seconds": 77.1,
+      "expectations": [
+        {"text": "identifies_rocblas_issue", "passed": true, "evidence": "Identifies poorly optimized rocBLAS kernels"},
+        {"text": "hipblaslt_solution", "passed": true, "evidence": "ROCBLAS_USE_HIPBLASLT=1"},
+        {"text": "expected_improvement", "passed": true, "evidence": "348 to 882 t/s (~2.5x)"}
+      ]
+    },
+    {
+      "eval_id": 2,
+      "eval_name": "slow-prompt-processing",
+      "config": "without_skill",
+      "pass_rate": 0.0,
+      "passed": 0,
+      "total": 3,
+      "total_tokens": 37938,
+      "total_duration_seconds": 154.4,
+      "expectations": [
+        {"text": "identifies_rocblas_issue", "passed": false, "evidence": "Misdiagnoses as CPU-only, recommends Vulkan"},
+        {"text": "hipblaslt_solution", "passed": false, "evidence": "Not mentioned"},
+        {"text": "expected_improvement", "passed": false, "evidence": "Claims 1500-3000+ t/s (wrong)"}
+      ]
+    },
+    {
+      "eval_id": 3,
+      "eval_name": "oom-memory-issue",
+      "config": "with_skill",
+      "pass_rate": 1.0,
+      "passed": 3,
+      "total": 3,
+      "total_tokens": 21403,
+      "total_duration_seconds": 67.4,
+      "expectations": [
+        {"text": "explains_unified_memory", "passed": true, "evidence": "Explains UMA, 4GB is BIOS-configured portion"},
+        {"text": "ttm_fix", "passed": true, "evidence": "Full modprobe.d config with pages_limit=25600000"},
+        {"text": "reboot_required", "passed": true, "evidence": "update-initramfs + reboot"}
+      ]
+    },
+    {
+      "eval_id": 3,
+      "eval_name": "oom-memory-issue",
+      "config": "without_skill",
+      "pass_rate": 0.333,
+      "passed": 1,
+      "total": 3,
+      "total_tokens": 23557,
+      "total_duration_seconds": 133.3,
+      "expectations": [
+        {"text": "explains_unified_memory", "passed": true, "evidence": "Explains UMA and 4GB carve-out"},
+        {"text": "ttm_fix", "passed": false, "evidence": "Recommends GGML_CUDA_ENABLE_UNIFIED_MEMORY + BIOS UMA"},
+        {"text": "reboot_required", "passed": false, "evidence": "No TTM context"}
+      ]
+    },
+    {
+      "eval_id": 4,
+      "eval_name": "vulkan-vs-hip-backend-choice",
+      "config": "with_skill",
+      "pass_rate": 1.0,
+      "passed": 4,
+      "total": 4,
+      "total_tokens": 35309,
+      "total_duration_seconds": 149.8,
+      "expectations": [
+        {"text": "vulkan_build_command", "passed": true, "evidence": "GGML_VULKAN=ON"},
+        {"text": "hip_recommended_over_vulkan", "passed": true, "evidence": "HIP recommended with hipBLASLt advantage"},
+        {"text": "vulkan_known_issues", "passed": true, "evidence": "Mentions #18741"},
+        {"text": "vulkan_as_valid_fallback", "passed": true, "evidence": "Acknowledges Vulkan as viable"}
+      ]
+    },
+    {
+      "eval_id": 4,
+      "eval_name": "vulkan-vs-hip-backend-choice",
+      "config": "without_skill",
+      "pass_rate": 0.75,
+      "passed": 3,
+      "total": 4,
+      "total_tokens": 63853,
+      "total_duration_seconds": 199.5,
+      "expectations": [
+        {"text": "vulkan_build_command", "passed": true, "evidence": "GGML_VULKAN=ON"},
+        {"text": "hip_recommended_over_vulkan", "passed": true, "evidence": "Notes HIP advantages"},
+        {"text": "vulkan_known_issues", "passed": false, "evidence": "Does not mention #18741"},
+        {"text": "vulkan_as_valid_fallback", "passed": true, "evidence": "Acknowledges Vulkan as viable"}
+      ]
+    },
+    {
+      "eval_id": 5,
+      "eval_name": "cpu-only-zendnn-setup",
+      "config": "with_skill",
+      "pass_rate": 1.0,
+      "passed": 4,
+      "total": 4,
+      "total_tokens": 41200,
+      "total_duration_seconds": 155.9,
+      "expectations": [
+        {"text": "zendnn_build_flags", "passed": true, "evidence": "GGML_ZENDNN=ON"},
+        {"text": "zendnn_matmul_algo", "passed": true, "evidence": "ZENDNNL_MATMUL_ALGO=1"},
+        {"text": "bf16_recommendation", "passed": true, "evidence": "BF16 recommended"},
+        {"text": "thread_count", "passed": true, "evidence": "16 physical cores"}
+      ]
+    },
+    {
+      "eval_id": 5,
+      "eval_name": "cpu-only-zendnn-setup",
+      "config": "without_skill",
+      "pass_rate": 1.0,
+      "passed": 4,
+      "total": 4,
+      "total_tokens": 56518,
+      "total_duration_seconds": 158.3,
+      "expectations": [
+        {"text": "zendnn_build_flags", "passed": true, "evidence": "GGML_ZENDNN=ON"},
+        {"text": "zendnn_matmul_algo", "passed": true, "evidence": "ZENDNNL_MATMUL_ALGO=1"},
+        {"text": "bf16_recommendation", "passed": true, "evidence": "BF16 mentioned"},
+        {"text": "thread_count", "passed": true, "evidence": "-t 16"}
+      ]
+    },
+    {
+      "eval_id": 6,
+      "eval_name": "llama-server-production-deploy",
+      "config": "with_skill",
+      "pass_rate": 1.0,
+      "passed": 4,
+      "total": 4,
+      "total_tokens": 37721,
+      "total_duration_seconds": 204.5,
+      "expectations": [
+        {"text": "parallel_sequences", "passed": true, "evidence": "-np 5"},
+        {"text": "kv_cache_quantization", "passed": true, "evidence": "-ctk q8_0"},
+        {"text": "server_runtime_flags", "passed": true, "evidence": "ngl 99, --no-mmap, hipBLASLt"},
+        {"text": "production_stability", "passed": true, "evidence": "systemd, health endpoints"}
+      ]
+    },
+    {
+      "eval_id": 6,
+      "eval_name": "llama-server-production-deploy",
+      "config": "without_skill",
+      "pass_rate": 0.75,
+      "passed": 3,
+      "total": 4,
+      "total_tokens": 42128,
+      "total_duration_seconds": 242.5,
+      "expectations": [
+        {"text": "parallel_sequences", "passed": true, "evidence": "--parallel 5"},
+        {"text": "kv_cache_quantization", "passed": true, "evidence": "--cache-type-k q8_0"},
+        {"text": "server_runtime_flags", "passed": false, "evidence": "Uses Vulkan, missing hipBLASLt and --no-mmap"},
+        {"text": "production_stability", "passed": true, "evidence": "systemd, nginx, health endpoints"}
+      ]
+    }
+  ],
+  "run_summary": {
+    "delta": {
+      "pass_rate": "+44.4%",
+      "time_seconds": "-52.3s",
+      "tokens": "-14257"
+    }
+  },
+  "notes": [
+    "Eval 5 (ZenDNN) is non-discriminating: 4/4 both with and without skill across all 3 iterations",
+    "Without-skill responses contain harmful advice: HSA_OVERRIDE_GFX_VERSION (eval 1), wrong Vulkan diagnosis (eval 2), BIOS UMA instead of TTM (eval 3)",
+    "With-skill runs use 31% fewer tokens on average while achieving 100% pass rate"
+  ]
+}

@@ -1,0 +1,1325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Eval Review</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600&family=Lora:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" integrity="sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT" crossorigin="anonymous"></script>
+  <style>
+    :root {
+      --bg: #faf9f5;
+      --surface: #ffffff;
+      --border: #e8e6dc;
+      --text: #141413;
+      --text-muted: #b0aea5;
+      --accent: #d97757;
+      --accent-hover: #c4613f;
+      --green: #788c5d;
+      --green-bg: #eef2e8;
+      --red: #c44;
+      --red-bg: #fceaea;
+      --header-bg: #141413;
+      --header-text: #faf9f5;
+      --radius: 6px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Lora', Georgia, serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ---- Header ---- */
+    .header {
+      background: var(--header-bg);
+      color: var(--header-text);
+      padding: 1rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-shrink: 0;
+    }
+    .header h1 {
+      font-family: 'Poppins', sans-serif;
+      font-size: 1.25rem;
+      font-weight: 600;
+    }
+    .header .instructions {
+      font-size: 0.8rem;
+      opacity: 0.7;
+      margin-top: 0.25rem;
+    }
+    .header .progress {
+      font-size: 0.875rem;
+      opacity: 0.8;
+      text-align: right;
+    }
+
+    /* ---- Main content ---- */
+    .main {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1.5rem 2rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+
+    /* ---- Sections ---- */
+    .section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      flex-shrink: 0;
+    }
+    .section-header {
+      font-family: 'Poppins', sans-serif;
+      padding: 0.75rem 1rem;
+      font-size: 0.75rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border);
+      background: var(--bg);
+    }
+    .section-body {
+      padding: 1rem;
+    }
+
+    /* ---- Config badge ---- */
+    .config-badge {
+      display: inline-block;
+      padding: 0.2rem 0.625rem;
+      border-radius: 9999px;
+      font-family: 'Poppins', sans-serif;
+      font-size: 0.6875rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      margin-left: 0.75rem;
+      vertical-align: middle;
+    }
+    .config-badge.config-primary {
+      background: rgba(33, 150, 243, 0.12);
+      color: #1976d2;
+    }
+    .config-badge.config-baseline {
+      background: rgba(255, 193, 7, 0.15);
+      color: #f57f17;
+    }
+
+    /* ---- Prompt ---- */
+    .prompt-text {
+      white-space: pre-wrap;
+      font-size: 0.9375rem;
+      line-height: 1.6;
+    }
+
+    /* ---- Outputs ---- */
+    .output-file {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .output-file + .output-file {
+      margin-top: 1rem;
+    }
+    .output-file-header {
+      padding: 0.5rem 0.75rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      font-family: 'SF Mono', SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .output-file-header .dl-btn {
+      font-size: 0.7rem;
+      color: var(--accent);
+      text-decoration: none;
+      cursor: pointer;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-weight: 500;
+      opacity: 0.8;
+    }
+    .output-file-header .dl-btn:hover {
+      opacity: 1;
+      text-decoration: underline;
+    }
+    .output-file-content {
+      padding: 0.75rem;
+      overflow-x: auto;
+    }
+    .output-file-content pre {
+      font-size: 0.8125rem;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: 'SF Mono', SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+    }
+    .output-file-content img {
+      max-width: 100%;
+      height: auto;
+      border-radius: 4px;
+    }
+    .output-file-content iframe {
+      width: 100%;
+      height: 600px;
+      border: none;
+    }
+    .output-file-content table {
+      border-collapse: collapse;
+      font-size: 0.8125rem;
+      width: 100%;
+    }
+    .output-file-content table td,
+    .output-file-content table th {
+      border: 1px solid var(--border);
+      padding: 0.375rem 0.5rem;
+      text-align: left;
+    }
+    .output-file-content table th {
+      background: var(--bg);
+      font-weight: 600;
+    }
+    .output-file-content .download-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 1rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 0.875rem;
+      cursor: pointer;
+    }
+    .output-file-content .download-link:hover {
+      background: var(--border);
+    }
+    .empty-state {
+      color: var(--text-muted);
+      font-style: italic;
+      padding: 2rem;
+      text-align: center;
+    }
+
+    /* ---- Feedback ---- */
+    .prev-feedback {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.625rem 0.75rem;
+      margin-top: 0.75rem;
+      font-size: 0.8125rem;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+    .prev-feedback-label {
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 0.25rem;
+      color: var(--text-muted);
+    }
+    .feedback-textarea {
+      width: 100%;
+      min-height: 100px;
+      padding: 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-family: inherit;
+      font-size: 0.9375rem;
+      line-height: 1.5;
+      resize: vertical;
+      color: var(--text);
+    }
+    .feedback-textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+    }
+    .feedback-status {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-top: 0.5rem;
+      min-height: 1.1em;
+    }
+
+    /* ---- Grades (collapsible) ---- */
+    .grades-toggle {
+      display: flex;
+      align-items: center;
+      cursor: pointer;
+      user-select: none;
+    }
+    .grades-toggle:hover {
+      color: var(--accent);
+    }
+    .grades-toggle .arrow {
+      margin-right: 0.5rem;
+      transition: transform 0.15s;
+      font-size: 0.75rem;
+    }
+    .grades-toggle .arrow.open {
+      transform: rotate(90deg);
+    }
+    .grades-content {
+      display: none;
+      margin-top: 0.75rem;
+    }
+    .grades-content.open {
+      display: block;
+    }
+    .grades-summary {
+      font-size: 0.875rem;
+      margin-bottom: 0.75rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .grade-badge {
+      display: inline-block;
+      padding: 0.125rem 0.5rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .grade-pass { background: var(--green-bg); color: var(--green); }
+    .grade-fail { background: var(--red-bg); color: var(--red); }
+    .assertion-list {
+      list-style: none;
+    }
+    .assertion-item {
+      padding: 0.625rem 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.8125rem;
+    }
+    .assertion-item:last-child { border-bottom: none; }
+    .assertion-status {
+      font-weight: 600;
+      margin-right: 0.5rem;
+    }
+    .assertion-status.pass { color: var(--green); }
+    .assertion-status.fail { color: var(--red); }
+    .assertion-evidence {
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      margin-top: 0.25rem;
+      padding-left: 1.5rem;
+    }
+
+    /* ---- View tabs ---- */
+    .view-tabs {
+      display: flex;
+      gap: 0;
+      padding: 0 2rem;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .view-tab {
+      font-family: 'Poppins', sans-serif;
+      padding: 0.625rem 1.25rem;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      background: none;
+      color: var(--text-muted);
+      border-bottom: 2px solid transparent;
+      transition: all 0.15s;
+    }
+    .view-tab:hover { color: var(--text); }
+    .view-tab.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+    .view-panel { display: none; }
+    .view-panel.active { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
+
+    /* ---- Benchmark view ---- */
+    .benchmark-view {
+      padding: 1.5rem 2rem;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .benchmark-table {
+      border-collapse: collapse;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-size: 0.8125rem;
+      width: 100%;
+      margin-bottom: 1.5rem;
+    }
+    .benchmark-table th, .benchmark-table td {
+      padding: 0.625rem 0.75rem;
+      text-align: left;
+      border: 1px solid var(--border);
+    }
+    .benchmark-table th {
+      font-family: 'Poppins', sans-serif;
+      background: var(--header-bg);
+      color: var(--header-text);
+      font-weight: 500;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .benchmark-table tr:hover { background: var(--bg); }
+    .benchmark-table tr.benchmark-row-with { background: rgba(33, 150, 243, 0.06); }
+    .benchmark-table tr.benchmark-row-without { background: rgba(255, 193, 7, 0.06); }
+    .benchmark-table tr.benchmark-row-with:hover { background: rgba(33, 150, 243, 0.12); }
+    .benchmark-table tr.benchmark-row-without:hover { background: rgba(255, 193, 7, 0.12); }
+    .benchmark-table tr.benchmark-row-avg { font-weight: 600; border-top: 2px solid var(--border); }
+    .benchmark-table tr.benchmark-row-avg.benchmark-row-with { background: rgba(33, 150, 243, 0.12); }
+    .benchmark-table tr.benchmark-row-avg.benchmark-row-without { background: rgba(255, 193, 7, 0.12); }
+    .benchmark-delta-positive { color: var(--green); font-weight: 600; }
+    .benchmark-delta-negative { color: var(--red); font-weight: 600; }
+    .benchmark-notes {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem;
+    }
+    .benchmark-notes h3 {
+      font-family: 'Poppins', sans-serif;
+      font-size: 0.875rem;
+      margin-bottom: 0.75rem;
+    }
+    .benchmark-notes ul {
+      list-style: disc;
+      padding-left: 1.25rem;
+    }
+    .benchmark-notes li {
+      font-size: 0.8125rem;
+      line-height: 1.6;
+      margin-bottom: 0.375rem;
+    }
+    .benchmark-empty {
+      color: var(--text-muted);
+      font-style: italic;
+      text-align: center;
+      padding: 3rem;
+    }
+
+    /* ---- Navigation ---- */
+    .nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 1rem 2rem;
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+      flex-shrink: 0;
+    }
+    .nav-btn {
+      font-family: 'Poppins', sans-serif;
+      padding: 0.5rem 1.25rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      cursor: pointer;
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: var(--text);
+      transition: all 0.15s;
+    }
+    .nav-btn:hover:not(:disabled) {
+      background: var(--bg);
+      border-color: var(--text-muted);
+    }
+    .nav-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .done-btn {
+      font-family: 'Poppins', sans-serif;
+      padding: 0.5rem 1.5rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 0.875rem;
+      font-weight: 500;
+      transition: all 0.15s;
+    }
+    .done-btn:hover {
+      background: var(--bg);
+      border-color: var(--text-muted);
+    }
+    .done-btn.ready {
+      border: none;
+      background: var(--accent);
+      color: white;
+      font-weight: 600;
+    }
+    .done-btn.ready:hover {
+      background: var(--accent-hover);
+    }
+    /* ---- Done overlay ---- */
+    .done-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 100;
+      justify-content: center;
+      align-items: center;
+    }
+    .done-overlay.visible {
+      display: flex;
+    }
+    .done-card {
+      background: var(--surface);
+      border-radius: 12px;
+      padding: 2rem 3rem;
+      text-align: center;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+      max-width: 500px;
+    }
+    .done-card h2 {
+      font-size: 1.5rem;
+      margin-bottom: 0.5rem;
+    }
+    .done-card p {
+      color: var(--text-muted);
+      margin-bottom: 1.5rem;
+      line-height: 1.5;
+    }
+    .done-card .btn-row {
+      display: flex;
+      gap: 0.5rem;
+      justify-content: center;
+    }
+    .done-card button {
+      padding: 0.5rem 1.25rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      cursor: pointer;
+      font-size: 0.875rem;
+    }
+    .done-card button:hover {
+      background: var(--bg);
+    }
+    /* ---- Toast ---- */
+    .toast {
+      position: fixed;
+      bottom: 5rem;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--header-bg);
+      color: var(--header-text);
+      padding: 0.625rem 1.25rem;
+      border-radius: var(--radius);
+      font-size: 0.875rem;
+      opacity: 0;
+      transition: opacity 0.3s;
+      pointer-events: none;
+      z-index: 200;
+    }
+    .toast.visible {
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+  <div id="app" style="height:100vh; display:flex; flex-direction:column;">
+    <div class="header">
+      <div>
+        <h1>Eval Review: <span id="skill-name"></span></h1>
+        <div class="instructions">Review each output and leave feedback below. Navigate with arrow keys or buttons. When done, copy feedback and paste into Claude Code.</div>
+      </div>
+      <div class="progress" id="progress"></div>
+    </div>
+
+    <!-- View tabs (only shown when benchmark data exists) -->
+    <div class="view-tabs" id="view-tabs" style="display:none;">
+      <button class="view-tab active" onclick="switchView('outputs')">Outputs</button>
+      <button class="view-tab" onclick="switchView('benchmark')">Benchmark</button>
+    </div>
+
+    <!-- Outputs panel (qualitative review) -->
+    <div class="view-panel active" id="panel-outputs">
+    <div class="main">
+      <!-- Prompt -->
+      <div class="section">
+        <div class="section-header">Prompt <span class="config-badge" id="config-badge" style="display:none;"></span></div>
+        <div class="section-body">
+          <div class="prompt-text" id="prompt-text"></div>
+        </div>
+      </div>
+
+      <!-- Outputs -->
+      <div class="section">
+        <div class="section-header">Output</div>
+        <div class="section-body" id="outputs-body">
+          <div class="empty-state">No output files found</div>
+        </div>
+      </div>
+
+      <!-- Previous Output (collapsible) -->
+      <div class="section" id="prev-outputs-section" style="display:none;">
+        <div class="section-header">
+          <div class="grades-toggle" onclick="togglePrevOutputs()">
+            <span class="arrow" id="prev-outputs-arrow">&#9654;</span>
+            Previous Output
+          </div>
+        </div>
+        <div class="grades-content" id="prev-outputs-content"></div>
+      </div>
+
+      <!-- Grades (collapsible) -->
+      <div class="section" id="grades-section" style="display:none;">
+        <div class="section-header">
+          <div class="grades-toggle" onclick="toggleGrades()">
+            <span class="arrow" id="grades-arrow">&#9654;</span>
+            Formal Grades
+          </div>
+        </div>
+        <div class="grades-content" id="grades-content"></div>
+      </div>
+
+      <!-- Feedback -->
+      <div class="section">
+        <div class="section-header">Your Feedback</div>
+        <div class="section-body">
+          <textarea
+            class="feedback-textarea"
+            id="feedback"
+            placeholder="What do you think of this output? Any issues, suggestions, or things that look great?"
+          ></textarea>
+          <div class="feedback-status" id="feedback-status"></div>
+          <div class="prev-feedback" id="prev-feedback" style="display:none;">
+            <div class="prev-feedback-label">Previous feedback</div>
+            <div id="prev-feedback-text"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="nav" id="outputs-nav">
+      <button class="nav-btn" id="prev-btn" onclick="navigate(-1)">&#8592; Previous</button>
+      <button class="done-btn" id="done-btn" onclick="showDoneDialog()">Submit All Reviews</button>
+      <button class="nav-btn" id="next-btn" onclick="navigate(1)">Next &#8594;</button>
+    </div>
+    </div><!-- end panel-outputs -->
+
+    <!-- Benchmark panel (quantitative stats) -->
+    <div class="view-panel" id="panel-benchmark">
+      <div class="benchmark-view" id="benchmark-content">
+        <div class="benchmark-empty">No benchmark data available. Run a benchmark to see quantitative results here.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Done overlay -->
+  <div class="done-overlay" id="done-overlay">
+    <div class="done-card">
+      <h2>Review Complete</h2>
+      <p>Your feedback has been saved. Go back to your Claude Code session and tell Claude you're done reviewing.</p>
+      <div class="btn-row">
+        <button onclick="closeDoneDialog()">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+  <script>
+    // ---- Embedded data (injected by generate_review.py) ----
+    const EMBEDDED_DATA = {"skill_name": "strix-halo-optimizer", "runs": [{"id": "eval-1-full-setup-with_skill", "prompt": "I just got a Framework Desktop with the AMD Ryzen AI Max+ 395 and 128GB of RAM running Ubuntu 24.04. I want to run Llama 3.1 70B on it with llama.cpp. How do I build it and what settings should I use for the best token generation speed? I've already installed ROCm 6.3.", "eval_id": 1, "outputs": [{"name": "response.md", "type": "text", "content": "# Running Llama 3.1 70B on AMD Ryzen AI Max+ 395 with llama.cpp\n\nYour Framework Desktop with the Ryzen AI Max+ 395 and 128GB of unified LPDDR5X memory is well suited for running Llama 3.1 70B. The key is that this chip has a Radeon 890M integrated GPU (RDNA 3.5, 40 CUs) that shares the full 128GB memory pool with the CPU -- there is no separate VRAM, so the entire model can be offloaded to the GPU without PCIe transfer bottlenecks. Below is the complete setup.\n\n---\n\n## Step 1: Increase the TTM Memory Limit (Critical)\n\nBy default, the Linux kernel restricts how much system memory the GPU can access. Without this fix, you will get out-of-memory errors loading a 70B model even though you have 128GB of RAM.\n\nCreate the file `/etc/modprobe.d/increase_amd_memory.conf`:\n\n```\noptions ttm pages_limit=25600000\noptions ttm page_pool_size=25600000\n```\n\nThen apply and reboot:\n\n```bash\nsudo update-initramfs -u -k all\nsudo reboot\n```\n\nAfter reboot, verify:\n\n```bash\ncat /sys/module/ttm/parameters/pages_limit\n# Should show: 25600000\n```\n\nWith 4KB pages, this gives the GPU access to approximately 100GB of memory, which is enough for a 70B Q4_K_M model (roughly 40GB for weights plus KV cache and overhead).\n\n---\n\n## Step 2: Verify ROCm and GPU Detection\n\nSince you already have ROCm 6.3 installed:\n\n```bash\nrocminfo | grep -i \"Name:\" | grep gfx\n# Should show: gfx1150 (or gfx1151)\n```\n\nMake sure your user is in the required groups:\n\n```bash\nsudo usermod -a -G video,render $USER\n# Log out and back in if needed\n```\n\n**Important:** Do NOT set `HSA_OVERRIDE_GFX_VERSION`. Older guides recommended this, but llama.cpp now has native RDNA 3.5 support. The override forces generic kernels that are slower than the native gfx1150 code paths.\n\n---\n\n## Step 3: Build llama.cpp\n\nUse the optimized build configuration for Strix Halo:\n\n```bash\ncmake -S . -B build \\\n  -DGGML_HIP=ON \\\n  -DGPU_TARGETS=\"gfx1150\" \\\n  -DGGML_HIP_GRAPHS=ON \\\n  -DGGML_CUDA_FORCE_MMQ=ON \\\n  -DCMAKE_BUILD_TYPE=Release \\\n  -DCMAKE_HIP_FLAGS=\"-O3\"\n\ncmake --build build --config Release -j $(nproc)\n```\n\nWhat each flag does:\n\n| Flag | Purpose |\n|------|---------|\n| `GGML_HIP=ON` | Enables the ROCm/HIP GPU backend |\n| `GPU_TARGETS=\"gfx1150\"` | Compiles kernels specifically for RDNA 3.5 instead of a bloated multi-architecture build. Cuts compile time from 30+ minutes to under 10 and produces better-optimized code. |\n| `GGML_HIP_GRAPHS=ON` | Enables HIP graph capture to reduce kernel dispatch overhead |\n| `GGML_CUDA_FORCE_MMQ=ON` | Forces quantized matrix multiplication kernels, which are often faster than hipBLAS on RDNA 3.5 for quantized models |\n| `CMAKE_HIP_FLAGS=\"-O3\"` | Maximum compiler optimization |\n\nAfter building, verify GPU detection:\n\n```bash\n./build/bin/llama-bench --list-devices\n# Should show: AMD Radeon Graphics (gfx1150 or gfx1151)\n```\n\n---\n\n## Step 4: Download the Model\n\nFor the best balance of quality and speed on your hardware, use a Q4_K_M quantization of Llama 3.1 70B. This uses about 4.8 bits per weight and the total model size will be roughly 40GB, fitting comfortably in your 128GB unified memory.\n\nIf you want maximum token generation speed and can tolerate slightly lower quality, Q4_0 is the fastest quantization format.\n\n---\n\n## Step 5: Run with Optimal Settings\n\n### Set the Critical Environment Variable\n\n```bash\nexport ROCBLAS_USE_HIPBLASLT=1\n```\n\nThis is essential. The default rocBLAS kernels for gfx1150 are poorly optimized and prompt processing will be 2-3x slower without this. Add it to your `~/.bashrc` so it persists across sessions.\n\n### Run Inference\n\n```bash\nexport ROCBLAS_USE_HIPBLASLT=1\n\n./build/bin/llama-cli -m llama-3.1-70b.Q4_K_M.gguf \\\n  -ngl 99 \\\n  --no-mmap \\\n  -fa on \\\n  -ctk q8_0 -ctv q8_0 \\\n  -b 2048 -ub 512 \\\n  -t 4\n```\n\n### Explanation of Each Runtime Flag\n\n| Flag | Purpose |\n|------|---------|\n| `-ngl 99` | Offload all layers to the GPU. On unified memory, there is zero PCIe transfer penalty, so full GPU offload gives the best token generation speed. |\n| `--no-mmap` | **Critical for large models.** Without this, HIP's `hipMemcpy()` must lock/unlock mmap pages, causing extreme slowdown during model loading. The 70B model is large enough to trigger this. |\n| `-fa on` | Enables flash attention, which is WMMA-accelerated on RDNA 3.5. |\n| `-ctk q8_0 -ctv q8_0` | Quantizes the KV cache to 8-bit, halving its memory footprint with negligible quality impact. This is important for a 70B model where you want headroom for longer contexts. |\n| `-b 2048 -ub 512` | Batch sizes for prompt processing. These are good defaults for Strix Halo. |\n| `-t 4` | Keep CPU threads low. Since CPU and GPU share the ~256 GB/s memory bus, high CPU thread counts compete with the GPU for bandwidth and actually hurt performance. 2-4 threads is optimal for GPU-primary inference. |\n\n### If You Want to Run as a Server\n\n```bash\nexport ROCBLAS_USE_HIPBLASLT=1\n\n./build/bin/llama-server \\\n  -m llama-3.1-70b.Q4_K_M.gguf \\\n  -ngl 99 \\\n  --no-mmap \\\n  -fa on \\\n  -ctk q8_0 -ctv q8_0 \\\n  -c 8192 \\\n  -np 4 \\\n  -t 4 \\\n  --host 0.0.0.0 \\\n  --port 8080\n```\n\n---\n\n## Step 6: Benchmark to Validate Performance\n\nRun a benchmark sweep to confirm everything is working correctly:\n\n```bash\nexport ROCBLAS_USE_HIPBLASLT=1\n\n./build/bin/llama-bench -m llama-3.1-70b.Q4_K_M.gguf \\\n  -ngl 99 \\\n  --no-mmap \\\n  -t 4 \\\n  -p 512 -n 128 \\\n  -r 3\n```\n\nFor a 70B Q4_K_M model on this hardware, token generation speed will be constrained by the shared ~256 GB/s memory bandwidth. Since the model is roughly 40GB, the theoretical maximum is around `256 / 40 = ~6.4 tokens/s`, with real-world results typically at 60-70% of theoretical, so expect roughly 4-5 tokens/s for token generation. Prompt processing should be significantly faster with hipBLASLt enabled.\n\nIf you want to compare CPU-only vs GPU offloading (though full GPU offload should win for this model):\n\n```bash\n./build/bin/llama-bench -m llama-3.1-70b.Q4_K_M.gguf \\\n  -ngl 0,99 \\\n  --no-mmap \\\n  -t 4,16 \\\n  -p 512 -n 128 \\\n  -r 3 \\\n  -o csv > bench_results.csv\n```\n\n---\n\n## Summary of Key Points\n\n1. **Increase TTM limits** before anything else, or the GPU cannot access enough memory for a 70B model.\n2. **Always set `ROCBLAS_USE_HIPBLASLT=1`** for 2-3x better prompt processing speed.\n3. **Build with `GPU_TARGETS=\"gfx1150\"`** for faster compilation and better-optimized kernels.\n4. **Use `-ngl 99`** to fully offload to the GPU -- unified memory means no transfer penalty.\n5. **Always use `--no-mmap`** for models this large to avoid HIP page-locking overhead.\n6. **Keep CPU threads low (`-t 4`)** during GPU inference to avoid memory bandwidth contention.\n7. **Do not use `HSA_OVERRIDE_GFX_VERSION`** -- native gfx1150 support is available and faster.\n8. **Use Q4_K_M quantization** for the best quality/speed tradeoff, or Q4_0 for maximum speed.\n"}], "grading": {"eval_id": 1, "config": "with_skill", "expectations": [{"text": "ttm_memory_fix", "passed": true, "evidence": "Step 1 covers TTM pages_limit=25600000 with full /etc/modprobe.d/increase_amd_memory.conf config and update-initramfs + reboot"}, {"text": "correct_gpu_target", "passed": true, "evidence": "GPU_TARGETS=\"gfx1150\" in build command with explanation"}, {"text": "hipblaslt_env", "passed": true, "evidence": "export ROCBLAS_USE_HIPBLASLT=1 with explanation of 2-3x improvement"}, {"text": "no_mmap_flag", "passed": true, "evidence": "--no-mmap explained as critical for large models due to HIP page-locking overhead"}, {"text": "full_gpu_offload", "passed": true, "evidence": "-ngl 99 with explanation of zero PCIe penalty on unified memory"}, {"text": "quantization_recommendation", "passed": true, "evidence": "Q4_K_M recommended, ~40GB size, Q4_0 mentioned as fastest alternative"}]}}, {"id": "eval-1-full-setup-without_skill", "prompt": "I just got a Framework Desktop with the AMD Ryzen AI Max+ 395 and 128GB of RAM running Ubuntu 24.04. I want to run Llama 3.1 70B on it with llama.cpp. How do I build it and what settings should I use for the best token generation speed? I've already installed ROCm 6.3.", "eval_id": 1, "outputs": [{"name": "response.md", "type": "text", "content": "# Running Llama 3.1 70B on AMD Ryzen AI Max+ 395 with llama.cpp\n\n## Hardware Overview\n\nThe AMD Ryzen AI Max+ 395 (codenamed \"Strix Halo\") is a unified memory architecture (UMA) processor that combines:\n\n- **CPU**: Zen 5 cores (16C/32T) with AVX-512 support\n- **iGPU**: Radeon 890M (RDNA 3.5), 40 Compute Units, identified as `gfx1150` in ROCm\n- **Memory**: 128GB unified LPDDR5X shared between CPU and iGPU\n\nThe unified memory is the key advantage here. Unlike discrete GPUs with limited VRAM, the iGPU can access the full 128GB, which is more than enough for Llama 3.1 70B in quantized formats. Since CPU and GPU share the same physical memory, there is no PCIe transfer penalty for GPU offload.\n\n## Model Selection\n\nLlama 3.1 70B has 70 billion parameters. At different quantization levels, the model sizes are approximately:\n\n| Quantization | Model Size | Quality    |\n|-------------|-----------|------------|\n| Q4_K_M      | ~40 GB    | Good       |\n| Q5_K_M      | ~48 GB    | Very Good  |\n| Q6_K        | ~56 GB    | Excellent  |\n| Q8_0        | ~70 GB    | Near-FP16  |\n\nWith 128GB of RAM, you can comfortably run Q4_K_M through Q8_0. For the best balance of speed and quality, **Q4_K_M is recommended** since token generation speed on an iGPU is primarily memory-bandwidth-bound, and the smaller the model, the faster it generates tokens.\n\nDownload a GGUF quantized model from Hugging Face. For example:\n\n```bash\n# Install huggingface-hub CLI if needed\npip install huggingface-hub\n\n# Download Q4_K_M quantization (recommended for speed)\nhuggingface-cli download bartowski/Meta-Llama-3.1-70B-Instruct-GGUF \\\n    Meta-Llama-3.1-70B-Instruct-Q4_K_M.gguf \\\n    --local-dir models/\n```\n\n## Build Option 1: ROCm/HIP Backend (Recommended)\n\nThe HIP backend uses your Radeon 890M iGPU via ROCm. Since you already have ROCm 6.3 installed, this is the most straightforward path to GPU-accelerated inference.\n\n### Build Steps\n\n```bash\ncd /path/to/llama.cpp\n\n# Clean any previous build\nrm -rf build\n\n# Configure with HIP backend targeting RDNA 3.5\nHIPCXX=\"$(hipconfig -l)/clang\" HIP_PATH=\"$(hipconfig -R)\" \\\n    cmake -S . -B build \\\n    -DGGML_HIP=ON \\\n    -DGPU_TARGETS=\"gfx1150\" \\\n    -DCMAKE_BUILD_TYPE=Release\n\n# Build with parallel jobs (adjust -j to your core count)\ncmake --build build --config Release -- -j 16\n```\n\n### Key Build Flags Explained\n\n| Flag | Purpose |\n|------|---------|\n| `GGML_HIP=ON` | Enables the ROCm/HIP GPU backend |\n| `GPU_TARGETS=\"gfx1150\"` | Compiles kernels specifically for RDNA 3.5 (Radeon 890M). Without this, it builds for all detected GPU architectures, which dramatically increases compile time and produces less optimized code. |\n| `CMAKE_BUILD_TYPE=Release` | Enables compiler optimizations |\n\n### Running Inference\n\n```bash\n# Enable unified memory (critical for iGPU - lets the GPU access all system RAM)\nexport GGML_CUDA_ENABLE_UNIFIED_MEMORY=1\n\n# Run with all layers offloaded to GPU\n./build/bin/llama-cli \\\n    -m models/Meta-Llama-3.1-70B-Instruct-Q4_K_M.gguf \\\n    -ngl 99 \\\n    -c 4096 \\\n    -t 4 \\\n    --flash-attn \\\n    -cnv\n```\n\n### Runtime Flags Explained\n\n| Flag | Purpose |\n|------|---------|\n| `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` | **Critical.** Enables unified memory so the iGPU can allocate from system RAM. Without this, the iGPU is limited to its small dedicated VRAM allocation and the model will fail to load. |\n| `-ngl 99` | Offload all model layers to the GPU. On a UMA system there is no memory transfer cost, so full offload is optimal. |\n| `-c 4096` | Context size of 4096 tokens. Increase if you need longer conversations, but larger contexts use more memory and slow down generation. |\n| `-t 4` | Number of CPU threads for any operations that remain on CPU. With full GPU offload, this mainly affects prompt processing of small batches. A moderate thread count (4-8) is usually sufficient. |\n| `--flash-attn` | Enables Flash Attention, which reduces memory usage for the KV cache and improves performance, especially at longer context lengths. |\n| `-cnv` | Enables conversation mode for interactive chat. |\n\n## Build Option 2: Vulkan Backend (Alternative)\n\nVulkan is an alternative GPU backend that does not require ROCm. It can work well on RDNA 3.5 and may be simpler to set up if you encounter ROCm issues.\n\n### Build Steps\n\n```bash\n# Install Vulkan development packages if not already present\nsudo apt-get install libvulkan-dev glslc\n\n# Build with Vulkan\ncmake -B build -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release\ncmake --build build --config Release -- -j 16\n```\n\n### Running with Vulkan\n\n```bash\n./build/bin/llama-cli \\\n    -m models/Meta-Llama-3.1-70B-Instruct-Q4_K_M.gguf \\\n    -ngl 99 \\\n    -c 4096 \\\n    -t 4 \\\n    --flash-attn \\\n    -cnv\n```\n\nThe Vulkan backend automatically detects unified memory on integrated GPUs. No environment variable is needed.\n\n## Build Option 3: CPU-Only (Fallback)\n\nIf you want to avoid GPU complexities, the Zen 5 CPU with AVX-512 support can run inference directly. This will be slower for token generation but can be competitive for prompt processing with enough threads.\n\n```bash\ncmake -B build -DGGML_NATIVE=ON -DCMAKE_BUILD_TYPE=Release\ncmake --build build --config Release -- -j 16\n\n./build/bin/llama-cli \\\n    -m models/Meta-Llama-3.1-70B-Instruct-Q4_K_M.gguf \\\n    -c 4096 \\\n    -t 16 \\\n    -cnv\n```\n\nWith CPU-only, use more threads (e.g., `-t 16` or higher, up to your physical core count) since all computation happens on the CPU.\n\n## Performance Tuning Tips\n\n### 1. Benchmark Before and After Changes\n\nUse `llama-bench` to measure performance systematically:\n\n```bash\n# Benchmark token generation and prompt processing with HIP\nGGML_CUDA_ENABLE_UNIFIED_MEMORY=1 ./build/bin/llama-bench \\\n    -m models/Meta-Llama-3.1-70B-Instruct-Q4_K_M.gguf \\\n    -ngl 99 \\\n    -fa 1 \\\n    -t 4\n```\n\nThis reports tokens per second for both prompt processing (pp) and token generation (tg).\n\n### 2. KV Cache Quantization\n\nTo reduce memory usage and potentially improve speed at longer context lengths, quantize the KV cache:\n\n```bash\n./build/bin/llama-cli \\\n    -m models/Meta-Llama-3.1-70B-Instruct-Q4_K_M.gguf \\\n    -ngl 99 \\\n    -c 8192 \\\n    -ctk q8_0 -ctv q8_0 \\\n    --flash-attn \\\n    -cnv\n```\n\nThe `-ctk q8_0 -ctv q8_0` flags quantize the key and value caches to 8-bit, cutting KV cache memory in half compared to the default f16 with minimal quality loss. This is especially beneficial when using larger context sizes.\n\n### 3. Context Size vs Speed Tradeoff\n\nToken generation speed decreases as the context fills up. If you do not need the full 128K context that Llama 3.1 supports, use a smaller value:\n\n- `-c 4096`: Fast, suitable for most conversations\n- `-c 8192`: Good balance for longer documents\n- `-c 16384`: For tasks requiring more context\n- `-c 32768`+: Only when you genuinely need it; speed will drop noticeably\n\n### 4. Using the Server for Continuous Use\n\nFor ongoing use, the server mode provides an OpenAI-compatible HTTP API:\n\n```bash\nGGML_CUDA_ENABLE_UNIFIED_MEMORY=1 ./build/bin/llama-server \\\n    -m models/Meta-Llama-3.1-70B-Instruct-Q4_K_M.gguf \\\n    -ngl 99 \\\n    -c 4096 \\\n    -t 4 \\\n    --flash-attn \\\n    --host 0.0.0.0 \\\n    --port 8080\n```\n\nYou can then use any OpenAI-compatible client to connect to `http://localhost:8080`.\n\n### 5. Thread Count Optimization\n\nWith full GPU offload (`-ngl 99`), most computation is on the GPU and fewer CPU threads are needed. However, some operations (prompt processing, token sampling) still use the CPU. Experiment with `-t` values:\n\n- Start with `-t 4` for full GPU offload\n- Try `-t 8` and `-t 16` to see if prompt processing improves\n- More threads are not always better due to NUMA effects and memory bandwidth contention\n\n### 6. HSA_OVERRIDE_GFX_VERSION\n\nIf ROCm does not properly detect your Radeon 890M (gfx1150), you can force the GFX version:\n\n```bash\nexport HSA_OVERRIDE_GFX_VERSION=11.5.0\n```\n\nThis tells ROCm to treat the GPU as gfx1150. Try this if you get errors about unsupported GPU architectures at runtime.\n\n## Expected Performance\n\nOn the Ryzen AI Max+ 395 with 128GB LPDDR5X and Llama 3.1 70B Q4_K_M with full GPU offload:\n\n- **Token generation**: Expect roughly 8-14 tokens/second, depending on context length and quantization. The iGPU's memory bandwidth (up to ~256 GB/s for LPDDR5X-8533) is the primary bottleneck for token generation, since each token requires reading the entire model from memory.\n- **Prompt processing**: Several hundred tokens/second, leveraging the GPU's parallel compute capability.\n\nThese numbers are approximate and depend on your specific LPDDR5X speed, ROCm driver version, and llama.cpp version. Always benchmark with `llama-bench` on your actual hardware.\n\n## Quick Start Summary\n\nFor the fastest path to running Llama 3.1 70B:\n\n```bash\n# 1. Build with ROCm/HIP\nHIPCXX=\"$(hipconfig -l)/clang\" HIP_PATH=\"$(hipconfig -R)\" \\\n    cmake -S . -B build \\\n    -DGGML_HIP=ON \\\n    -DGPU_TARGETS=\"gfx1150\" \\\n    -DCMAKE_BUILD_TYPE=Release \\\n    && cmake --build build --config Release -- -j 16\n\n# 2. Run inference\nGGML_CUDA_ENABLE_UNIFIED_MEMORY=1 \\\n    ./build/bin/llama-cli \\\n    -m models/Meta-Llama-3.1-70B-Instruct-Q4_K_M.gguf \\\n    -ngl 99 \\\n    -c 4096 \\\n    -t 4 \\\n    --flash-attn \\\n    -cnv\n```\n"}], "grading": {"eval_id": 1, "config": "without_skill", "expectations": [{"text": "ttm_memory_fix", "passed": false, "evidence": "Not mentioned at all. Uses GGML_CUDA_ENABLE_UNIFIED_MEMORY=1 instead"}, {"text": "correct_gpu_target", "passed": true, "evidence": "GPU_TARGETS=\"gfx1150\" in build command"}, {"text": "hipblaslt_env", "passed": false, "evidence": "Not mentioned anywhere in the response"}, {"text": "no_mmap_flag", "passed": false, "evidence": "Not mentioned anywhere in the response"}, {"text": "full_gpu_offload", "passed": true, "evidence": "-ngl 99 with UMA explanation"}, {"text": "quantization_recommendation", "passed": true, "evidence": "Q4_K_M recommended with size table"}]}}, {"id": "eval-2-slow-pp-with_skill", "prompt": "I'm getting terrible prompt processing speed on my Strix Halo laptop - only about 350 tokens/sec on a 7B model. Token generation is fine at ~48 t/s. What's wrong?", "eval_id": 2, "outputs": [{"name": "response.md", "type": "text", "content": "# Slow Prompt Processing on Strix Halo: Missing `ROCBLAS_USE_HIPBLASLT=1`\n\n## Diagnosis\n\nYour numbers -- ~350 t/s prompt processing and ~48 t/s token generation on a 7B model -- are a textbook match for a known issue on Strix Halo (Ryzen AI Max+ 395 / Radeon 890M) systems. The default rocBLAS kernels for gfx1150/gfx1151 are poorly optimized. Specifically, the standard Tensile-generated GEMM kernels used during prompt processing significantly underperform on RDNA 3.5 hardware.\n\nToken generation is unaffected because it is memory-bandwidth bound (reading weights), not compute bound. Prompt processing, on the other hand, involves large matrix multiplications that hit the slow rocBLAS code path.\n\n## The Fix\n\nSet this environment variable before running llama.cpp:\n\n```bash\nexport ROCBLAS_USE_HIPBLASLT=1\n```\n\nThis forces rocBLAS to use the hipBLASLt (TensileLt) kernel library instead of the default Tensile kernels. The hipBLASLt kernels are substantially better optimized for gfx1150/gfx1151.\n\nAdd this to your `~/.bashrc` or shell profile so it persists across sessions:\n\n```bash\necho 'export ROCBLAS_USE_HIPBLASLT=1' >> ~/.bashrc\nsource ~/.bashrc\n```\n\n## Expected Impact\n\nBased on real benchmarks with a Llama 2 7B Q4_0 model on Strix Halo:\n\n| Metric | Without hipBLASLt | With hipBLASLt |\n|--------|-------------------|----------------|\n| pp512 (prompt processing) | ~348 t/s | ~882 t/s |\n| tg128 (token generation) | ~48 t/s | ~48 t/s |\n\nThat is roughly a **2.5x improvement** in prompt processing speed. Your pp speed should jump from ~350 t/s to ~880+ t/s. Token generation stays the same since it is not affected by this issue.\n\n## Additional Optimizations\n\nWhile you are at it, make sure your full runtime setup is optimized for Strix Halo:\n\n```bash\nexport ROCBLAS_USE_HIPBLASLT=1\n\n./build/bin/llama-cli -m model.gguf \\\n  -ngl 99 \\\n  --no-mmap \\\n  -fa on \\\n  -ctk q8_0 -ctv q8_0 \\\n  -b 2048 -ub 512 \\\n  -t 4\n```\n\nKey flags explained:\n- **`-ngl 99`**: Offload all layers to the Radeon 890M iGPU. Unified memory means no PCIe transfer penalty.\n- **`--no-mmap`**: Avoids HIP page-locking overhead when loading models. Critical for models over ~64GB, good practice for all sizes.\n- **`-fa on`**: Enables flash attention, which is WMMA-accelerated on RDNA 3.5.\n- **`-ctk q8_0 -ctv q8_0`**: Quantized KV cache saves memory with negligible quality impact.\n- **`-t 4`**: Keep CPU threads low during GPU inference. CPU and GPU share the ~256 GB/s memory bus, so high thread counts create bandwidth contention.\n\n## Also Check: HSA_OVERRIDE_GFX_VERSION\n\nIf you followed older setup guides, you may have `HSA_OVERRIDE_GFX_VERSION` set in your environment. This was needed before llama.cpp had native RDNA 3.5 support but is now counterproductive -- it forces generic kernels that are slower than the native gfx1150 code paths.\n\n```bash\n# Check if it's set\necho $HSA_OVERRIDE_GFX_VERSION\n\n# If it returns anything, remove it from your .bashrc\n```\n\n## Build Verification\n\nAlso confirm your build is targeting the correct architecture:\n\n```bash\ncmake -S . -B build \\\n  -DGGML_HIP=ON \\\n  -DGPU_TARGETS=\"gfx1150\" \\\n  -DGGML_HIP_GRAPHS=ON \\\n  -DCMAKE_BUILD_TYPE=Release \\\n  -DCMAKE_HIP_FLAGS=\"-O3\"\n\ncmake --build build --config Release -j $(nproc)\n```\n\nUsing `GPU_TARGETS=\"gfx1150\"` ensures kernels are compiled specifically for your RDNA 3.5 GPU rather than a generic multi-architecture build.\n\n## Root Cause Reference\n\nThis is a rocBLAS limitation, not a llama.cpp bug. It was documented in [llama.cpp Issue #13565](https://github.com/ggml-org/llama.cpp/issues/13565). The fix is purely an environment variable -- no code changes or rebuilds required.\n"}], "grading": {"eval_id": 2, "config": "with_skill", "expectations": [{"text": "identifies_rocblas_issue", "passed": true, "evidence": "Identifies 'default rocBLAS kernels for gfx1150/gfx1151 are poorly optimized' and explains Tensile vs TensileLt"}, {"text": "hipblaslt_solution", "passed": true, "evidence": "export ROCBLAS_USE_HIPBLASLT=1 as the fix"}, {"text": "expected_improvement", "passed": true, "evidence": "Table showing pp512: 348 t/s -> 882 t/s, '~2.5x improvement'"}]}}, {"id": "eval-2-slow-pp-without_skill", "prompt": "I'm getting terrible prompt processing speed on my Strix Halo laptop - only about 350 tokens/sec on a 7B model. Token generation is fine at ~48 t/s. What's wrong?", "eval_id": 2, "outputs": [{"name": "response.md", "type": "text", "content": "# Diagnosing Slow Prompt Processing on AMD Strix Halo\n\nYour symptom -- 350 t/s prompt processing (pp) but ~48 t/s token generation (tg) on a 7B model -- points to a classic configuration problem: **prompt processing is running on the CPU instead of being offloaded to the GPU, or the CPU backend is not using optimal SIMD/threading settings**. Token generation is memory-bandwidth-bound and less affected, which is why tg looks normal while pp is severely bottlenecked.\n\nHere is a systematic diagnosis and set of fixes.\n\n---\n\n## 1. Offload All Layers to the Radeon 890M iGPU (Most Likely Cause)\n\nThe single biggest factor for prompt processing speed is whether the matrix multiplications are running on the GPU. A 7B Q4 model is roughly 3.5-4.5 GiB, which fits easily in Strix Halo's shared LPDDR5X memory when using the Vulkan backend.\n\n**Check:** Look at your startup log for a line like `llm_load_tensors: offloaded X/Y layers to GPU`. If X is 0 or low, that is your problem.\n\n**Fix:** Pass `-ngl 99` (or `--gpu-layers 99`) to offload all layers to the iGPU:\n\n```bash\n./llama-bench -m your-model.gguf -ngl 99 -fa on\n```\n\nOr when running `llama-cli` / `llama-server`:\n\n```bash\n./llama-cli -m your-model.gguf -ngl 99 -fa on -p \"your prompt\"\n```\n\nWith full GPU offload on a Vulkan-enabled build, prompt processing on a 7B Q4_K_M model should reach **1500-3000+ t/s** rather than 350 t/s.\n\n---\n\n## 2. Ensure You Built with Vulkan Support\n\nStrix Halo's Radeon 890M (RDNA 3.5) iGPU is best accessed via the Vulkan backend in llama.cpp. If you built without `-DGGML_VULKAN=ON`, then `-ngl` has no GPU backend to offload to, and everything runs on the CPU.\n\n**Check:** Look at the startup log for `ggml_vulkan: Using AMD Radeon ...` or similar. If you only see `CPU` as the backend, Vulkan is not active.\n\n**Fix:** Rebuild with Vulkan enabled:\n\n```bash\ncmake -B build -DGGML_VULKAN=ON\ncmake --build build --config Release -j$(nproc)\n```\n\nMake sure the Vulkan SDK / runtime is installed:\n```bash\n# Debian/Ubuntu\nsudo apt-get install libvulkan-dev glslc\n\n# Verify\nvulkaninfo | head -20\n```\n\n---\n\n## 3. Increase Batch Size (`-b` and `-ub`)\n\nPrompt processing works by evaluating the entire prompt in batches. The default logical batch size is 2048 and the physical ubatch size is 512. If you or your application has overridden these to small values, pp speed drops dramatically.\n\n**Fix:** Use large batch sizes explicitly:\n\n```bash\n./llama-cli -m model.gguf -ngl 99 -b 2048 -ub 512 -p \"your prompt\"\n```\n\nFor benchmarking, try even larger ubatch sizes to see the peak throughput:\n\n```bash\n./llama-bench -m model.gguf -ngl 99 -b 2048 -ub 512,1024,2048\n```\n\nAs shown in the llama-bench documentation, increasing batch size from 128 to 1024 can nearly double pp throughput.\n\n---\n\n## 4. Enable Flash Attention\n\nFlash attention reduces memory traffic and can significantly speed up prompt processing, especially for longer prompts.\n\n**Fix:**\n\n```bash\n./llama-cli -m model.gguf -ngl 99 -fa on\n```\n\nOr equivalently: `--flash-attn on`\n\n---\n\n## 5. CPU-Only Scenario: Fix Thread Count\n\nIf you are intentionally running CPU-only (no `-ngl`), then 350 t/s on a Zen 5 chip with 12 cores is low but plausible if the thread count is wrong.\n\n**How llama.cpp picks threads by default:** On Linux x86_64, the default thread count is `hardware_concurrency() / 2`. Strix Halo (Ryzen AI 300 series) typically has 12 cores / 24 threads, so the default would be 12 threads. This is correct for Zen 5 since it does not have efficiency cores (the Intel hybrid-core detection in the code does not apply to AMD).\n\n**However**, if your system reports an unexpected number (e.g., some cores are offline, or you are running inside a VM/container), the auto-detection may pick too few threads.\n\n**Fix:** Explicitly set threads, especially batch threads:\n\n```bash\n./llama-cli -m model.gguf -t 12 -tb 12 -p \"your prompt\"\n```\n\nThe `-tb` (`--threads-batch`) flag controls threads used during prompt processing specifically. If unset, it defaults to the same as `-t`.\n\n---\n\n## 6. Verify AVX-512 Is Being Used\n\nStrix Halo's Zen 5 cores support AVX-512. If the build does not use AVX-512 (e.g., you used a pre-built binary compiled for a generic target), prompt processing on CPU will be significantly slower.\n\n**Check:** Look at the startup log for the `system_info` line. It should show `AVX512 = 1`.\n\n**Fix:** Build with native optimizations:\n\n```bash\ncmake -B build -DGGML_NATIVE=ON -DGGML_VULKAN=ON\ncmake --build build --config Release -j$(nproc)\n```\n\n`-DGGML_NATIVE=ON` compiles with `-march=native`, enabling AVX-512 and all Zen 5-specific instruction sets.\n\n---\n\n## 7. NUMA Considerations\n\nStrix Halo is a monolithic die (single CCX for most SKUs), so NUMA is generally not an issue. However, if your system for some reason exposes multiple NUMA nodes (e.g., the NPU or iGPU memory appears as a separate node), you can try:\n\n```bash\n./llama-cli -m model.gguf --numa distribute -ngl 99\n```\n\n---\n\n## Summary: Most Likely Fix\n\nGiven that your tg speed (48 t/s) is reasonable for a 7B model on CPU but your pp speed (350 t/s) is very low, the most likely scenario is:\n\n1. **You are running CPU-only without GPU offload.** A 7B model on CPU with 12 Zen 5 threads at AVX-512 might achieve 300-500 t/s pp, which matches your 350 t/s observation. Adding `-ngl 99` with a Vulkan build should increase pp to 1500-3000+ t/s.\n\n2. **If you already have `-ngl 99` set**, then the Vulkan backend may not have built or loaded correctly. Check the logs for Vulkan initialization messages.\n\n**Recommended command for best Strix Halo performance:**\n\n```bash\n# Build\ncmake -B build -DGGML_VULKAN=ON -DGGML_NATIVE=ON\ncmake --build build --config Release -j$(nproc)\n\n# Run\n./build/bin/llama-cli \\\n    -m your-7B-model-Q4_K_M.gguf \\\n    -ngl 99 \\\n    -fa on \\\n    -b 2048 \\\n    -ub 512 \\\n    -t 12 \\\n    -tb 12 \\\n    -p \"your prompt here\"\n```\n\n**Benchmark to verify:**\n\n```bash\n./build/bin/llama-bench \\\n    -m your-7B-model-Q4_K_M.gguf \\\n    -ngl 0,99 \\\n    -fa 0,1 \\\n    -t 12\n```\n\nThis will compare CPU-only vs full GPU offload, with and without flash attention, so you can see the exact impact of each setting.\n"}], "grading": {"eval_id": 2, "config": "without_skill", "expectations": [{"text": "identifies_rocblas_issue", "passed": false, "evidence": "Misdiagnoses as CPU-only inference issue, suggests GPU offload and Vulkan, never mentions rocBLAS kernel problem"}, {"text": "hipblaslt_solution", "passed": false, "evidence": "ROCBLAS_USE_HIPBLASLT=1 not mentioned anywhere"}, {"text": "expected_improvement", "passed": false, "evidence": "Claims 1500-3000+ t/s with GPU offload which is inaccurate for the actual problem"}]}}, {"id": "eval-3-oom-memory-with_skill", "prompt": "My llama.cpp keeps running out of memory when loading a 65B model on my Ryzen AI Max 395 even though I have 128GB RAM. rocm-smi only shows 4GB VRAM. What's going on?", "eval_id": 3, "outputs": [{"name": "response.md", "type": "text", "content": "# OOM Loading 65B Model on Ryzen AI Max 395 with 128GB RAM\n\n## What's Going On\n\nYou're hitting two separate but related issues that are both well-known on Strix Halo systems.\n\n### 1. rocm-smi Showing Only 4GB VRAM Is Normal\n\nThe Ryzen AI Max 395 has **no dedicated VRAM**. It uses unified memory -- the CPU and GPU share your 128GB of LPDDR5X. The 4GB figure that `rocm-smi` reports is just the BIOS-configured \"dedicated\" portion, not the actual GPU-accessible memory. This is a reporting artifact, not a real limitation.\n\nYou can verify what the GPU actually sees:\n\n```bash\nrocm-smi --showmeminfo vram\ncat /sys/class/drm/card*/device/mem_info_vram_total 2>/dev/null\n```\n\n### 2. The OOM Is Caused by Linux TTM Limits (This Is the Real Problem)\n\nThe Linux kernel's TTM (Translation Table Maps) subsystem controls how much system memory the GPU is allowed to access. The **default limits are extremely conservative** and don't account for APUs with large unified memory pools like Strix Halo. With default TTM settings, the GPU can only use a small fraction of your 128GB, so loading a 65B model triggers an OOM even though `free -h` shows plenty of available RAM.\n\n## The Fix\n\nCreate the file `/etc/modprobe.d/increase_amd_memory.conf` with:\n\n```\noptions ttm pages_limit=25600000\noptions ttm page_pool_size=25600000\n```\n\nThen apply and reboot:\n\n```bash\nsudo update-initramfs -u -k all\nsudo reboot\n```\n\nWith 4KB pages, this sets the GPU-accessible memory pool to approximately 100GB, which is more than enough for a 65B model in Q4 quantization.\n\n**If you want a quick test without rebooting**, you can temporarily increase the limit:\n\n```bash\necho 25600000 | sudo tee /sys/module/ttm/parameters/pages_limit\n```\n\n### Verify the Fix\n\nAfter reboot (or the temporary fix), confirm the new limit is active:\n\n```bash\ncat /sys/module/ttm/parameters/pages_limit\n# Should show: 25600000\n```\n\n## Additional Recommendations for Loading Your 65B Model\n\nOnce TTM is fixed, use these flags for best results:\n\n```bash\nexport ROCBLAS_USE_HIPBLASLT=1\n\n./build/bin/llama-cli -m your-65b-model.gguf \\\n  -ngl 99 \\\n  --no-mmap \\\n  -fa on \\\n  -ctk q8_0 -ctv q8_0 \\\n  -t 4\n```\n\nKey points:\n\n- **`--no-mmap`**: Critical for models this large. Without it, HIP's `hipMemcpy()` has to lock/unlock individual mmap pages, causing extremely slow model loading or hangs for models over ~64GB.\n- **`-ngl 99`**: Offload all layers to GPU. On unified memory there is no PCIe transfer penalty, so full offload is optimal.\n- **`ROCBLAS_USE_HIPBLASLT=1`**: Fixes a ~2.5x prompt processing speed penalty caused by poorly optimized default rocBLAS kernels for gfx1150.\n- **`-t 4`**: Keep CPU threads low during GPU inference since CPU and GPU share the ~256 GB/s memory bus.\n- **`-ctk q8_0 -ctv q8_0`**: Quantized KV cache reduces memory footprint, giving you more headroom for larger contexts.\n\n## Summary\n\n| Observation | Explanation |\n|---|---|\n| rocm-smi shows 4GB VRAM | Normal -- this is the BIOS-reported \"dedicated\" portion; actual GPU-accessible memory is the full unified pool |\n| OOM loading 65B model | Linux TTM limits restrict GPU memory access; increase `pages_limit` to 25600000 |\n| Model loads very slowly after fixing OOM | Use `--no-mmap` flag to avoid HIP page-locking overhead on large models |\n"}], "grading": {"eval_id": 3, "config": "with_skill", "expectations": [{"text": "explains_unified_memory", "passed": true, "evidence": "Explains 'no dedicated VRAM', unified memory, 4GB is 'BIOS-configured dedicated portion'"}, {"text": "ttm_fix", "passed": true, "evidence": "Full modprobe.d config with pages_limit=25600000 and page_pool_size=25600000"}, {"text": "reboot_required", "passed": true, "evidence": "update-initramfs -u -k all + sudo reboot, plus quick test option via sysfs"}]}}, {"id": "eval-3-oom-memory-without_skill", "prompt": "My llama.cpp keeps running out of memory when loading a 65B model on my Ryzen AI Max 395 even though I have 128GB RAM. rocm-smi only shows 4GB VRAM. What's going on?", "eval_id": 3, "outputs": [{"name": "response.md", "type": "text", "content": "# Why llama.cpp Runs Out of Memory on Ryzen AI Max 395 Despite 128GB RAM\n\n## The Core Problem\n\nThe Ryzen AI Max 395 is an APU (Accelerated Processing Unit) with a **unified memory architecture (UMA)**. The GPU (Radeon 8060S) does not have its own dedicated VRAM -- it shares your 128GB of system RAM with the CPU. However, `rocm-smi` only reports a small **carve-out** of memory (typically 4GB) that the BIOS has pre-allocated as \"VRAM\" for the GPU. This is the root of your problem: llama.cpp sees only ~4GB of GPU memory and cannot fit a 65B model into that.\n\n## Why This Happens in llama.cpp\n\nLooking at the llama.cpp source code (`ggml/src/ggml-cuda/ggml-cuda.cu`), there are two interrelated issues:\n\n### 1. The `integrated` GPU flag is hardcoded to `false`\n\nAt line 233 of `ggml-cuda.cu`:\n\n```cpp\ninfo.devices[id].integrated = false; // Temporarily disabled due to issues with corrupted output (e.g. #15034)\n```\n\nEven though the ROCm/HIP runtime correctly reports `prop.integrated > 0` for your APU, llama.cpp forcibly overrides this to `false` due to a corruption bug reported in issue #15034. This means llama.cpp does not recognize your device as an integrated GPU and will not enable any of the UMA-aware memory handling logic.\n\n### 2. Memory reporting falls back to `hipMemGetInfo`\n\nThe function `ggml_backend_cuda_device_get_memory()` (line 4420) has UMA-aware code that reads `/proc/meminfo` to determine the true available system memory. However, this code path is only activated when `prop.integrated > 0` OR when the environment variable `GGML_CUDA_ENABLE_UNIFIED_MEMORY` is set. Since `integrated` is hardcoded to `false`, the function falls through to `hipMemGetInfo`, which returns only the small BIOS-allocated VRAM carve-out (~4GB).\n\n### 3. Memory allocation uses `hipMalloc` instead of `hipMallocManaged`\n\nThe allocation function `ggml_cuda_device_malloc()` (line 119) only uses `cudaMallocManaged` (mapped to `hipMallocManaged` on ROCm) when the environment variable `GGML_CUDA_ENABLE_UNIFIED_MEMORY` is set. Without it, allocations go through `hipMalloc`, which can only allocate from the small VRAM carve-out.\n\n## The Fix: Set the Unified Memory Environment Variable\n\nSet the `GGML_CUDA_ENABLE_UNIFIED_MEMORY` environment variable before running llama.cpp:\n\n```bash\nexport GGML_CUDA_ENABLE_UNIFIED_MEMORY=1\n```\n\nThis does two things:\n1. **Switches memory allocation to `hipMallocManaged`**, which allows the GPU to allocate from the full shared system memory pool (your 128GB) rather than the tiny VRAM carve-out. On HIP/ROCm, it also sets `hipMemAdviseSetCoarseGrain` for performance.\n2. **Enables the UMA memory reporting path**, so llama.cpp reads `/proc/meminfo` to determine how much memory is actually available rather than relying on the misleading `hipMemGetInfo` result.\n\n## Additional Recommendations\n\n### Increase the BIOS VRAM Allocation\n\nEven with unified memory enabled, increasing the BIOS VRAM allocation can help. Many ASUS and Lenovo systems with Ryzen AI Max chips allow setting the GPU memory allocation up to 96GB in BIOS settings (look for \"UMA Frame Buffer Size\" or \"VRAM Size\" in BIOS). This is not strictly required when using `GGML_CUDA_ENABLE_UNIFIED_MEMORY`, but it may improve behavior with certain driver configurations.\n\n### Use Enough GPU Layers\n\nWith unified memory enabled, you can offload all layers to the GPU:\n\n```bash\nGGML_CUDA_ENABLE_UNIFIED_MEMORY=1 llama-cli \\\n  -m your-65B-model.gguf \\\n  -ngl 999\n```\n\nThe `-ngl 999` (or `-ngl all`) tells llama.cpp to offload all layers to the GPU. Since CPU and GPU share the same physical memory on your APU, this does not actually double memory usage -- it just determines which processor computes each layer.\n\n### Use a Quantized Model\n\nA 65B model in FP16 requires ~130GB, which exceeds your 128GB even before accounting for OS and KV cache overhead. Use a quantized version:\n\n- **Q4_K_M**: ~35GB -- fits comfortably, good quality\n- **Q5_K_M**: ~44GB -- fits well, better quality\n- **Q6_K**: ~53GB -- fits with room for KV cache\n- **Q8_0**: ~65GB -- fits but leaves less room for context\n\n### Consider Vulkan as an Alternative Backend\n\nIf you encounter driver issues with ROCm on the Ryzen AI Max (ROCm support for Strix Halo APUs has historically been spotty), the Vulkan backend is an alternative. Vulkan can use the `--vk-mem-budget` flag to specify how much memory the GPU backend should use, sidestepping the VRAM reporting issue entirely:\n\n```bash\nllama-cli -m your-model.gguf -ngl 999 --vk-mem-budget 96000\n```\n\n## Summary\n\n| Problem | Cause | Solution |\n|---------|-------|----------|\n| `rocm-smi` shows 4GB VRAM | BIOS default carve-out for iGPU | Increase in BIOS or use unified memory |\n| llama.cpp OOM on load | `hipMalloc` limited to VRAM carve-out | `export GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` |\n| llama.cpp does not detect APU | `integrated` flag hardcoded to `false` | Same env var works around this |\n| 65B FP16 too large for 128GB | Model exceeds RAM after overhead | Use Q4_K_M or Q5_K_M quantization |\n"}], "grading": {"eval_id": 3, "config": "without_skill", "expectations": [{"text": "explains_unified_memory", "passed": true, "evidence": "Explains UMA architecture, 4GB is 'BIOS-reported carve-out', GPU shares 128GB system RAM"}, {"text": "ttm_fix", "passed": false, "evidence": "Recommends GGML_CUDA_ENABLE_UNIFIED_MEMORY=1 and BIOS UMA settings instead of TTM pages_limit"}, {"text": "reboot_required", "passed": false, "evidence": "No TTM fix mentioned so no reboot/initramfs context"}]}}, {"id": "eval-4-vulkan-vs-hip-with_skill", "prompt": "I have a Strix Halo system but I don't want to install ROCm - it's too heavy. Can I just use Vulkan for llama.cpp? I already have mesa drivers. How does Vulkan compare to HIP on this hardware?", "eval_id": 4, "outputs": [{"name": "response.md", "type": "text", "content": "# Vulkan vs HIP on AMD Strix Halo for llama.cpp\n\n## Short Answer\n\nYes, you can use Vulkan with llama.cpp on Strix Halo, and mesa drivers are sufficient -- you do not need the Vulkan SDK or ROCm. However, there are known issues with the Vulkan backend on this hardware, and the ROCm/HIP backend is significantly better optimized for Strix Halo. If avoiding ROCm is your priority, Vulkan will work for many models, but expect lower performance and potential model loading failures.\n\n## Building with Vulkan (No ROCm Required)\n\nWith mesa drivers already installed, building is straightforward:\n\n```bash\n# Ensure Vulkan development packages are installed\nsudo apt-get install libvulkan-dev glslc\n\n# Verify Vulkan detects your GPU\nvulkaninfo | grep -i \"deviceName\"\n# Should show: AMD Radeon Graphics (or similar for the 890M)\n\n# Build llama.cpp with Vulkan\ncmake -B build -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release\ncmake --build build --config Release -j $(nproc)\n```\n\nThat is all you need. No ROCm installation, no SDK downloads, no kernel module configuration. The mesa RADV Vulkan driver supports RDNA 3.5 hardware natively.\n\n## Running with Vulkan\n\n```bash\n./build/bin/llama-cli -m model.gguf \\\n  -ngl 99 \\\n  -fa on \\\n  -t 4 \\\n  -b 2048 -ub 512\n```\n\nNote: with Vulkan you do not need `--no-mmap` (the mmap slowdown is specific to HIP's `hipMemcpy()` page-locking behavior). You also do not need `ROCBLAS_USE_HIPBLASLT=1` since that is a rocBLAS-specific fix.\n\n## Where Vulkan Falls Short on Strix Halo\n\n### 1. Known Model Loading Failures\n\nThere is a known issue ([Issue #18741](https://github.com/ggml-org/llama.cpp/issues/18741)) where the Vulkan backend fails to load certain models on Strix Halo with a \"failed to load model\" error. This is a reliability problem that may or may not affect the specific models you want to run.\n\n### 2. No RDNA 3.5-Specific Optimizations in Vulkan\n\nThe Vulkan backend in llama.cpp identifies AMD GPUs by architecture class (GCN, RDNA1, RDNA2, RDNA3) but does not have a separate RDNA 3.5 category. Your Strix Halo GPU (gfx1150) is detected as `AMD_RDNA3` in the Vulkan backend. This means it gets RDNA 3 code paths, which work but are not tuned for RDNA 3.5 specifics.\n\nIn contrast, the HIP backend has explicit `GGML_CUDA_CC_RDNA3_5` handling and gfx1150-targeted kernel compilation, meaning kernels are compiled specifically for your hardware.\n\n### 3. No hipBLASLt Equivalent\n\nOne of the biggest HIP performance wins on Strix Halo is `ROCBLAS_USE_HIPBLASLT=1`, which improves prompt processing by approximately 2.5x (e.g., 348 t/s to 882 t/s for 7B Q4_0 on pp512). There is no equivalent optimization path in the Vulkan backend. Vulkan uses its own compute shader-based matrix multiplication, which is generic across vendors.\n\n### 4. No HIP Graphs Equivalent\n\nThe HIP backend supports `GGML_HIP_GRAPHS=ON`, which captures kernel dispatch sequences into graphs for reduced dispatch overhead. Vulkan has no equivalent optimization in the current llama.cpp implementation.\n\n### 5. No WMMA/rocWMMA Flash Attention\n\nThe HIP backend can use `GGML_HIP_ROCWMMA_FATTN=ON` for hardware-accelerated flash attention via WMMA instructions on RDNA 3.5. The Vulkan backend does have flash attention support (scalar and cooperative matrix paths), but it uses generic Vulkan compute shaders rather than architecture-specific WMMA instructions.\n\n## Performance Comparison Summary\n\n| Metric | HIP (ROCm) | Vulkan (mesa) |\n|--------|-----------|---------------|\n| **Prompt processing (7B Q4_0, pp512)** | ~880 t/s (with hipBLASLt) | Lower (no hipBLASLt equivalent) |\n| **Token generation (7B Q4_0, tg128)** | ~48 t/s | Comparable (bandwidth-bound) |\n| **Kernel optimization for gfx1150** | Native, architecture-specific | Generic RDNA3 code paths |\n| **Flash attention** | WMMA-accelerated (rocWMMA) | Compute shader based |\n| **Model loading reliability** | Stable | Known failures ([#18741](https://github.com/ggml-org/llama.cpp/issues/18741)) |\n| **Large model loading (>64GB)** | Requires `--no-mmap` | No mmap issues |\n| **Install complexity** | ROCm 6.1+ required (~5-10 GB) | Mesa drivers only |\n| **TTM kernel config needed** | Yes (for models >8GB) | Yes (same GPU memory limits apply) |\n\nToken generation speed is largely memory-bandwidth-bound (reading model weights from memory), so Vulkan and HIP should perform similarly for that metric since both are limited by the same ~256 GB/s LPDDR5X bus. The main HIP advantage is in prompt processing (compute-bound matrix multiplications) where hipBLASLt and architecture-specific kernels make a large difference.\n\n## TTM Configuration Still Required for Vulkan\n\nEven with Vulkan, you still need the TTM kernel parameter fix if you want to load models larger than a few GB onto the GPU. The TTM limit restricts how much system memory the GPU can access regardless of the backend.\n\nCreate `/etc/modprobe.d/increase_amd_memory.conf`:\n```\noptions ttm pages_limit=25600000\noptions ttm page_pool_size=25600000\n```\n\nThen apply:\n```bash\nsudo update-initramfs -u -k all\nsudo reboot\n```\n\n## Recommendations\n\n**If you want to avoid ROCm entirely and are running smaller models (7B-13B):**\nVulkan with mesa is a reasonable choice. You get GPU acceleration with zero additional software installation. Token generation speed will be comparable to HIP. Prompt processing will be slower, but for interactive use with short prompts, this may be acceptable.\n\n**If you are running larger models or need maximum throughput:**\nROCm/HIP is strongly recommended. The 2.5x prompt processing improvement from hipBLASLt alone justifies the installation overhead. The architecture-specific kernel compilation (`GPU_TARGETS=gfx1150`) and WMMA flash attention provide additional advantages that Vulkan cannot match on this hardware.\n\n**If you hit the Vulkan model loading failure:**\nThis is a known issue with no current workaround other than switching to HIP. If you encounter it, you will need ROCm.\n\n**A middle ground -- CPU-only with AVX-512:**\nIf you truly want zero GPU backend complexity, Strix Halo's Zen 5 cores with AVX-512 provide decent CPU-only inference. Build with:\n```bash\ncmake -B build -DGGML_NATIVE=ON -DCMAKE_BUILD_TYPE=Release\ncmake --build build --config Release -j $(nproc)\n\n./build/bin/llama-cli -m model.gguf -ngl 0 -t $(nproc)\n```\nThis avoids all GPU driver considerations but will be slower than either Vulkan or HIP for token generation.\n"}], "grading": {"eval_id": 4, "config": "with_skill", "expectations": [{"text": "vulkan_build_command", "passed": true, "evidence": "cmake -B build -DGGML_VULKAN=ON with apt install instructions"}, {"text": "hip_recommended_over_vulkan", "passed": true, "evidence": "Clearly recommends HIP for best performance, details hipBLASLt 2.5x advantage"}, {"text": "vulkan_known_issues", "passed": true, "evidence": "Mentions issue #18741 - Vulkan model loading failures on Strix Halo"}, {"text": "vulkan_as_valid_fallback", "passed": true, "evidence": "States Vulkan is 'perfectly viable', token generation gap is modest"}]}}, {"id": "eval-4-vulkan-vs-hip-without_skill", "prompt": "I have a Strix Halo system but I don't want to install ROCm - it's too heavy. Can I just use Vulkan for llama.cpp? I already have mesa drivers. How does Vulkan compare to HIP on this hardware?", "eval_id": 4, "outputs": [{"name": "response.md", "type": "text", "content": "# Using Vulkan Instead of ROCm/HIP on Strix Halo for llama.cpp\n\nYes, you can absolutely use Vulkan with llama.cpp on your Strix Halo system, and with Mesa (RADV) drivers already installed, it is the lowest-friction path to GPU acceleration. Below is a detailed comparison and practical guidance.\n\n---\n\n## Building with Vulkan\n\nSince you already have Mesa drivers, you just need the Vulkan development headers and the `glslc` shader compiler. On Debian/Ubuntu:\n\n```bash\nsudo apt-get install libvulkan-dev glslc\n```\n\nThen build llama.cpp:\n\n```bash\ncmake -B build -DGGML_VULKAN=ON\ncmake --build build --config Release -j$(nproc)\n```\n\nVerify your GPU is detected:\n\n```bash\nvulkaninfo | grep -i \"deviceName\"\n# Should show something like: AMD Radeon 890M (RADV GFX1150)\n\n./build/bin/llama-cli -m YOUR_MODEL.gguf -p \"test\" -ngl 99\n# Output should include: ggml_vulkan: Using AMD Radeon ... | uma: 1\n```\n\nThe `uma: 1` in the output confirms the Vulkan backend recognizes your iGPU as a unified memory architecture device, which is important for efficient operation.\n\n---\n\n## How Vulkan Compares to HIP on Strix Halo\n\n### Architecture Detection\n\nThe Vulkan backend classifies Strix Halo's Radeon 890M (RDNA 3.5, gfx1150/gfx1151) as `AMD_RDNA3` in its architecture detection logic. The classification is based on the GPU reporting support for `integerDotProduct4x8BitPackedMixedSignednessAccelerated`, which RDNA 3 and later all support. This means Strix Halo gets the same tuned shader paths as discrete RDNA 3 cards (RX 7000 series).\n\nThe HIP backend, by contrast, has a distinct `GGML_CUDA_CC_RDNA3_5` compute capability class specifically for gfx1150/gfx1151, enabling more fine-grained optimizations for this exact silicon.\n\n### Feature Support Comparison\n\n| Feature | Vulkan (RADV/Mesa) | HIP (ROCm) |\n|---|---|---|\n| **Install footprint** | ~50-100 MB (Mesa + Vulkan headers) | ~5-15 GB (full ROCm stack) |\n| **Driver requirement** | Mesa RADV (already installed) | ROCm 6.1+ with hipBLAS, rocBLAS |\n| **Unified memory (UMA)** | Auto-detected for iGPUs; avoids unnecessary copies | Requires `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` env var |\n| **Cooperative matrix (tensor ops)** | KHR_cooperative_matrix via RADV -- enabled for all AMD GPUs with open-source drivers | WMMA intrinsics, specifically tuned for RDNA 3/3.5 |\n| **Flash attention** | Vulkan flash attention with coopmat1 path on RDNA3-class hardware | WMMA-accelerated flash attention (`-fa on`), with optional rocWMMA for enhanced performance |\n| **Integer dot product** | Supported (accelerated 4x8-bit packed dot products) | Supported via native ISA |\n| **Quantized matmul (MMQ)** | Vulkan compute shaders with warptile tuning for AMD + coopmat | HIP MMQ kernels with RDNA 3.5-specific tuning (e.g., extended batch size thresholds for IQ2 quants) |\n| **hipBLAS/rocBLAS** | N/A | Available but default rocBLAS kernels for gfx1150 are poorly optimized; requires `ROCBLAS_USE_HIPBLASLT=1` workaround |\n| **Subgroup (wave) size** | Wave32/Wave64 (RADV supports both; backend uses subgroup size control) | Wave64 default via HIP compiler |\n| **Build time** | Fast (~2-5 minutes, shader compilation at build time) | Slow (~10-30+ minutes depending on GPU_TARGETS) |\n| **BFloat16** | Supported if VK_KHR_shader_bfloat16 is available in driver | Supported natively |\n\n### Performance Expectations\n\n**Where HIP has an advantage:**\n\n- **Prompt processing (batch workloads):** HIP with properly configured rocBLAS (`ROCBLAS_USE_HIPBLASLT=1`) can achieve higher throughput on large matrix multiplications during prompt processing. The hipBLASLt library has kernels tuned for gfx1150.\n- **Flash attention:** The HIP flash attention path uses WMMA (Wave Matrix Multiply-Accumulate) intrinsics that are well-optimized for RDNA 3.5. The rocWMMA-enhanced path (`-DGGML_HIP_ROCWMMA_FATTN=ON`) can provide further gains.\n- **Fine-grained arch tuning:** HIP distinguishes RDNA 3.0 from RDNA 3.5 in kernel selection (e.g., different MMQ batch thresholds), while Vulkan groups them together as RDNA3.\n\n**Where Vulkan holds its own or wins:**\n\n- **Token generation (single-token inference):** For autoregressive generation (the common interactive use case), the performance gap is smaller. Matrix-vector operations are more memory-bandwidth-bound, and both backends can saturate the LPDDR5X bandwidth similarly.\n- **UMA handling:** Vulkan's UMA support is more transparent. It auto-detects the iGPU and avoids unnecessary buffer copies. The HIP path requires manually setting environment variables.\n- **Ease of use and maintenance:** No ROCm version compatibility issues, no multi-GB SDK to manage, no `GPU_TARGETS` to configure correctly.\n- **Cooperative matrix support:** With RADV, `VK_KHR_cooperative_matrix` is enabled for all AMD GPUs (including RDNA 3.5). The Vulkan backend has AMD-specific coopmat warptile tuning that benefits matrix multiplication workloads.\n\n**Rough performance ballpark (based on community reports and architecture analysis):**\n\n- Token generation: Vulkan typically achieves 80-95% of HIP performance on iGPUs\n- Prompt processing: Vulkan may be 60-80% of well-tuned HIP (with `ROCBLAS_USE_HIPBLASLT=1`)\n- For interactive chat use cases where token generation is the bottleneck, this difference is often negligible\n\n### Known Caveats with Vulkan on Strix Halo\n\n1. **Shader compilation on first run:** The first launch may be slow as Vulkan shaders are compiled and cached. Subsequent runs use the cached shaders.\n2. **RADV driver version matters:** Newer Mesa versions have better RDNA 3.5 support. Use Mesa 24.1+ if possible for full cooperative matrix and compute shader support.\n3. **Memory limits:** While UMA is auto-detected, the Vulkan backend may report a smaller VRAM budget than the total system RAM. This is a driver-reported limit, not a hard physical limit. You can use `GGML_VK_FORCE_MAX_BUFFER_SIZE` to override if needed.\n\n---\n\n## Recommended Vulkan Runtime Flags\n\n```bash\n./build/bin/llama-cli \\\n    -m model.gguf \\\n    -ngl 99 \\\n    -fa \\\n    -ctk q8_0 -ctv q8_0 \\\n    -c 8192 \\\n    --no-mmap\n```\n\n- **`-ngl 99`**: Offload all layers to the iGPU. With unified memory, there is no PCIe transfer penalty.\n- **`-fa`**: Enable flash attention, which uses the coopmat1 path on RDNA3-class hardware.\n- **`-ctk q8_0 -ctv q8_0`**: Quantize the KV cache to save memory and improve bandwidth utilization.\n- **`--no-mmap`**: Avoids memory-mapped I/O; allocates buffers directly. Can improve performance on UMA systems.\n\n---\n\n## Summary\n\nVulkan with Mesa/RADV is a perfectly viable and practical choice for Strix Halo. You trade some peak prompt processing performance for dramatically simpler setup, smaller disk footprint, and zero ROCm dependency management. For interactive use cases (chatbots, code completion) where token generation speed matters most, the performance difference is modest. If you later find you need every last token/second for batch processing workloads, you can always add ROCm -- llama.cpp even supports building both backends simultaneously (`-DGGML_VULKAN=ON -DGGML_HIP=ON`) and selecting at runtime with `--device`.\n"}], "grading": {"eval_id": 4, "config": "without_skill", "expectations": [{"text": "vulkan_build_command", "passed": true, "evidence": "cmake -B build -DGGML_VULKAN=ON with instructions"}, {"text": "hip_recommended_over_vulkan", "passed": true, "evidence": "Notes HIP has fine-grained RDNA 3.5 tuning and hipBLASLt advantage"}, {"text": "vulkan_known_issues", "passed": false, "evidence": "Does not mention issue #18741 or any specific Vulkan reliability issues on Strix Halo"}, {"text": "vulkan_as_valid_fallback", "passed": true, "evidence": "Concludes Vulkan is 'perfectly viable and practical choice'"}]}}, {"id": "eval-5-cpu-zendnn-with_skill", "prompt": "I want to run a small 7B BF16 model on my Ryzen AI Max 395 using only the CPU \u2014 no GPU at all. I heard Zen 5 has good AVX-512 and there's something called ZenDNN. How do I set this up for best CPU-only performance?", "eval_id": 5, "outputs": [{"name": "response.md", "type": "text", "content": "# CPU-Only Inference with ZenDNN on Ryzen AI Max 395 (Strix Halo)\n\n## Overview\n\nYour Ryzen AI Max 395 has Zen 5 cores with full AVX-512 support (including AVX-512 BF16 instructions), making it a strong CPU-only inference platform. ZenDNN is AMD's optimized primitives library that accelerates matrix multiplication on Zen CPUs. In llama.cpp, it acts as an accelerator backend that intercepts `MUL_MAT` operations for FP32 and BF16 data types and runs them through AMD's hand-tuned BLAS routines instead of the generic CPU path.\n\nFor your specific scenario -- a 7B BF16 model, CPU-only -- ZenDNN is the ideal backend because BF16 is one of its two supported data types and Zen 5 has native hardware BF16 support.\n\n## Step 1: Build llama.cpp with ZenDNN and Native CPU Optimizations\n\nYou need two key build flags:\n\n- `GGML_ZENDNN=ON` -- enables the ZenDNN backend for accelerated matmul\n- `GGML_NATIVE=ON` -- auto-detects and enables all CPU features on your build machine (AVX-512, AVX-512 BF16, AVX-512 VNNI, etc.) so you do not need to set each flag individually\n\nSince you want CPU-only (no GPU), you do **not** need `GGML_HIP=ON` or any GPU flags.\n\n```bash\ncmake -S . -B build \\\n  -DGGML_ZENDNN=ON \\\n  -DGGML_NATIVE=ON \\\n  -DCMAKE_BUILD_TYPE=Release\n\ncmake --build build --config Release -j $(nproc)\n```\n\nCMake will automatically download and build ZenDNN if it is not already installed on your system. If you have a custom ZenDNN installation, point to it before running cmake:\n\n```bash\nexport ZENDNN_ROOT=/path/to/ZenDNN/build/install\n```\n\n### Alternative: Explicit AVX-512 Flags (if not building on the target machine)\n\nIf you are cross-compiling or want explicit control instead of `GGML_NATIVE=ON`:\n\n```bash\ncmake -S . -B build \\\n  -DGGML_ZENDNN=ON \\\n  -DGGML_AVX512=ON \\\n  -DGGML_AVX512_VNNI=ON \\\n  -DGGML_AVX512_BF16=ON \\\n  -DCMAKE_BUILD_TYPE=Release\n\ncmake --build build --config Release -j $(nproc)\n```\n\n## Step 2: Verify the Build\n\nAfter building, confirm AVX-512 support is compiled in:\n\n```bash\n./build/bin/llama-cli --version\n# Look for: AVX512 = 1 in the feature flags\n```\n\n## Step 3: Runtime Configuration\n\n### Set the ZenDNN Algorithm\n\nZenDNN exposes an environment variable to select its matmul algorithm. Algorithm 1 (Blocked AOCL DLP) provides the best performance:\n\n```bash\nexport ZENDNNL_MATMUL_ALGO=1\n```\n\nAdd this to your `~/.bashrc` for persistence.\n\n### Run Inference\n\nFor CPU-only inference, set `-ngl 0` (zero GPU layers) and use all available CPU threads:\n\n```bash\nexport ZENDNNL_MATMUL_ALGO=1\n\n./build/bin/llama-cli -m your-7b-bf16-model.gguf \\\n  -ngl 0 \\\n  -t $(nproc) \\\n  -b 2048 -ub 512\n```\n\nKey parameters explained:\n\n| Flag | Value | Purpose |\n|------|-------|---------|\n| `-ngl 0` | 0 | No GPU layer offloading -- pure CPU inference |\n| `-t $(nproc)` | All threads | Use all CPU threads. On the 395, this is 32 (16 cores x 2 threads). See tuning note below. |\n| `-b 2048` | 2048 | Logical batch size for prompt processing |\n| `-ub 512` | 512 | Physical (compute) batch size |\n\n## Step 4: Thread Count Tuning\n\nPerformance typically scales well up to the physical core count (16 on the Ryzen AI Max 395), then plateaus or even degrades when hyperthreading threads are added. Benchmark to find your sweet spot:\n\n```bash\nexport ZENDNNL_MATMUL_ALGO=1\n\n./build/bin/llama-bench -m your-7b-bf16-model.gguf \\\n  -ngl 0 \\\n  -t 4,8,12,16,24,32 \\\n  -p 512 -n 128 \\\n  -r 3 -o csv > cpu_thread_sweep.csv\n```\n\nStart with `-t 16` (physical core count) and compare against `-t 32` (all threads). For BF16 matmul workloads, the physical core count is usually optimal since ZenDNN's BLAS routines are compute-dense and benefit less from SMT.\n\n## How ZenDNN Works Under the Hood\n\nLooking at the llama.cpp source, the ZenDNN backend (`ggml/src/ggml-zendnn/ggml-zendnn.cpp`) works as follows:\n\n1. It registers itself as an accelerator backend (`GGML_BACKEND_DEVICE_TYPE_ACCEL`).\n2. It only handles `MUL_MAT` operations -- all other operations (attention, normalization, etc.) are handled by the standard CPU backend with AVX-512.\n3. For `MUL_MAT`, it supports exactly two weight types: **FP32** and **BF16**. Quantized types (Q4_0, Q4_K_M, Q8_0, etc.) are **not** supported by ZenDNN and fall back to the standard AVX-512 CPU kernels.\n4. For BF16 weights, ZenDNN supports both BF16 and FP32 output accumulation.\n5. The matmul is dispatched through `zendnnl::lowoha::matmul::matmul_direct()`, which uses AMD's optimized AOCL DLP (Deep Learning Primitives) routines tuned for Zen architecture cache hierarchy.\n\nThis is why BF16 is the ideal format for your use case: ZenDNN accelerates the matmul (the dominant operation during inference), and Zen 5's native BF16 instructions handle the arithmetic efficiently.\n\n## Why BF16 Instead of Quantized for CPU-Only ZenDNN\n\nFor CPU-only inference with ZenDNN, you have a meaningful choice:\n\n| Approach | Backend Used for MUL_MAT | Model Size (7B) | Best For |\n|----------|--------------------------|------------------|----------|\n| BF16 model + ZenDNN | ZenDNN (optimized BLAS) | ~14 GB | Maximum quality, good throughput |\n| Q4_K_M model (no ZenDNN needed) | Standard CPU + AVX-512 | ~4 GB | Maximum speed, smaller memory footprint |\n\nWith a 7B BF16 model (~14 GB), you are well within the memory capacity of the Ryzen AI Max 395 (up to 128 GB unified LPDDR5X). ZenDNN's optimized BF16 matmul on Zen 5 should provide competitive throughput.\n\nHowever, if you find that CPU throughput with BF16 is not fast enough for your needs, consider that a quantized model (e.g., Q4_K_M) at ~4 GB will be significantly faster for token generation because it is memory-bandwidth bound -- smaller model means fewer bytes to read per token. The standard AVX-512 CPU backend handles quantized formats natively and does not need ZenDNN.\n\n## Memory Bandwidth Consideration\n\nToken generation speed is fundamentally limited by memory bandwidth:\n\n```\ntg_speed (approx) = memory_bandwidth / model_size\n```\n\nFor a 7B BF16 model (~14 GB) on ~256 GB/s shared LPDDR5X:\n```\ntheoretical max = 256 / 14 = ~18 tokens/s\n```\n\nFor a 7B Q4_K_M model (~4 GB):\n```\ntheoretical max = 256 / 4 = ~64 tokens/s\n```\n\nReal-world throughput is typically 60-70% of theoretical. So CPU-only BF16 at 7B will give you roughly 11-13 t/s for token generation, while Q4_K_M would give roughly 38-45 t/s. The BF16 advantage is in quality (no quantization loss) and prompt processing throughput (where ZenDNN's optimized BLAS shines with large matrix multiplications).\n\n## Quick-Start Summary\n\n```bash\n# 1. Build\ncmake -S . -B build \\\n  -DGGML_ZENDNN=ON \\\n  -DGGML_NATIVE=ON \\\n  -DCMAKE_BUILD_TYPE=Release\ncmake --build build --config Release -j $(nproc)\n\n# 2. Set runtime env\nexport ZENDNNL_MATMUL_ALGO=1\n\n# 3. Run (CPU-only, BF16 model)\n./build/bin/llama-cli -m your-7b-bf16-model.gguf \\\n  -ngl 0 \\\n  -t 16 \\\n  -b 2048 -ub 512\n\n# 4. Benchmark to tune thread count\n./build/bin/llama-bench -m your-7b-bf16-model.gguf \\\n  -ngl 0 \\\n  -t 8,12,16,24,32 \\\n  -p 512 -n 128 \\\n  -r 3\n```\n\n## No TTM or ROCm Needed\n\nSince you are running CPU-only with no GPU offloading at all, you do **not** need to:\n- Configure TTM memory limits (that is only needed for GPU memory access)\n- Install ROCm or HIP\n- Set `ROCBLAS_USE_HIPBLASLT=1` (that is a GPU-path optimization)\n- Use `--no-mmap` (that workaround is specific to HIP's interaction with memory-mapped files)\n\nYour build and runtime setup is simpler than the GPU-accelerated path. Just ZenDNN + native CPU optimizations.\n"}], "grading": {"eval_id": 5, "config": "with_skill", "expectations": [{"text": "zendnn_build_flags", "passed": true, "evidence": "GGML_ZENDNN=ON in build command"}, {"text": "zendnn_matmul_algo", "passed": true, "evidence": "ZENDNNL_MATMUL_ALGO=1 with explanation of blocked AOCL DLP"}, {"text": "bf16_recommendation", "passed": true, "evidence": "Explains ZenDNN accelerates FP32 and BF16, includes bandwidth math for BF16"}, {"text": "thread_count", "passed": true, "evidence": "Recommends starting at 16 (physical cores), with benchmark sweep methodology"}]}}, {"id": "eval-5-cpu-zendnn-without_skill", "prompt": "I want to run a small 7B BF16 model on my Ryzen AI Max 395 using only the CPU \u2014 no GPU at all. I heard Zen 5 has good AVX-512 and there's something called ZenDNN. How do I set this up for best CPU-only performance?", "eval_id": 5, "outputs": [{"name": "response.md", "type": "text", "content": "# Running a 7B BF16 Model on Ryzen AI Max 395 (CPU-Only) with ZenDNN\n\n## Hardware Overview\n\nThe Ryzen AI Max 395 (codename \"Strix Halo\") features Zen 5 CPU cores with full AVX-512 support, including the AVX-512 BF16 extension. This is important because your BF16 model can take advantage of native BF16 instructions for matrix multiplication. The chip has 16 Zen 5 cores (32 threads) and a large unified LPDDR5X memory pool, which is more than sufficient for a 7B BF16 model (~14 GB).\n\n## What Is ZenDNN and Why Use It?\n\nZenDNN (Zen Deep Neural Network Library) is AMD's optimized deep learning inference library for AMD CPUs. In llama.cpp, it exists as a **separate backend** (not part of the CPU backend) that accelerates **matrix multiplication (MUL_MAT) operations** specifically. It uses AMD's LowOHA (Low Overhead Hardware Accelerated) MatMul operator, which internally leverages AOCL DLP, LibXSMM, and OneDNN for highly optimized GEMM kernels tuned for Zen architectures.\n\nKey facts about the ZenDNN backend in this codebase:\n\n- It accelerates **only MUL_MAT** operations. All other operations (attention, normalization, activations, etc.) fall back to the standard CPU backend.\n- It supports **FP32 and BF16** data types. BF16 is explicitly noted as providing best performance on Zen 4/Zen 5.\n- It does **not** support quantized formats (Q4_0, Q8_0, etc.) -- only full-precision FP32 and BF16.\n- The Ryzen AI Max (Strix Halo) is explicitly listed as a supported processor in the ZenDNN documentation.\n\nSince you are running a BF16 model, ZenDNN is a strong match. The combination of native AVX-512 BF16 instructions on Zen 5 plus ZenDNN's optimized GEMM kernels should deliver the best CPU-only MUL_MAT throughput.\n\n## Build Instructions\n\n### Option 1: ZenDNN with Automatic Download (Recommended)\n\nThe simplest approach -- CMake will automatically download, build, and link ZenDNN:\n\n```bash\ncmake -B build \\\n    -DCMAKE_BUILD_TYPE=Release \\\n    -DGGML_ZENDNN=ON \\\n    -DGGML_NATIVE=ON\n\ncmake --build build --config Release -j $(nproc)\n```\n\nThe key flags:\n\n| Flag | Purpose |\n|------|---------|\n| `-DGGML_ZENDNN=ON` | Enables the ZenDNN backend, which intercepts MUL_MAT ops for BF16/FP32 |\n| `-DGGML_NATIVE=ON` | Compiles the CPU backend with `-march=native`, which on Zen 5 automatically enables AVX-512, AVX-512 BF16, AVX-512 VNNI, and all other supported instruction sets |\n| `-DCMAKE_BUILD_TYPE=Release` | Optimization level -O3 for best performance |\n\n`GGML_NATIVE=ON` is the default when building natively on the target machine, so technically you may omit it. But it is worth being explicit. When set, the CPU backend CMakeLists.txt (at `ggml/src/ggml-cpu/CMakeLists.txt`) passes `-march=native` to the compiler, which on your Zen 5 chip will automatically enable:\n- AVX, AVX2, FMA\n- AVX-512F, AVX-512CD, AVX-512VL, AVX-512DQ, AVX-512BW\n- AVX-512 VBMI, AVX-512 VNNI, AVX-512 BF16\n\nThe first build with ZenDNN auto-download will take several minutes because it clones and builds ZenDNN and its dependencies (AOCL DLP, LibXSMM, OneDNN, etc.).\n\n### Option 2: Manual ZenDNN Installation\n\nIf you want more control over the ZenDNN version:\n\n```bash\n# Build ZenDNN separately\ngit clone https://github.com/amd/ZenDNN.git\ncd ZenDNN\nmkdir build && cd build\ncmake ..\ncmake --build . --target all\ncd ../..\n\n# Build llama.cpp pointing to your ZenDNN\ncmake -B build \\\n    -DCMAKE_BUILD_TYPE=Release \\\n    -DGGML_ZENDNN=ON \\\n    -DZENDNN_ROOT=/path/to/ZenDNN/build/install \\\n    -DGGML_NATIVE=ON\n\ncmake --build build --config Release -j $(nproc)\n```\n\n### Ensuring No GPU Backend Is Used\n\nBy default, llama.cpp does not enable GPU backends unless you explicitly pass flags like `-DGGML_VULKAN=ON` or `-DGGML_HIP=ON`. So a plain build with only `-DGGML_ZENDNN=ON` will be CPU-only. But to be absolutely certain:\n\n```bash\ncmake -B build \\\n    -DCMAKE_BUILD_TYPE=Release \\\n    -DGGML_ZENDNN=ON \\\n    -DGGML_NATIVE=ON \\\n    -DGGML_VULKAN=OFF \\\n    -DGGML_HIP=OFF \\\n    -DGGML_OPENCL=OFF\n```\n\n## Runtime Configuration\n\n### Environment Variables\n\nSet the ZenDNN matrix multiplication algorithm before running:\n\n```bash\nexport ZENDNNL_MATMUL_ALGO=1    # Blocked AOCL DLP algorithm (recommended for best performance)\n```\n\nThis selects the blocked AOCL DLP algorithm inside ZenDNN's LowOHA MatMul, which the documentation identifies as the optimal choice.\n\nFor additional ZenDNN environment variables (logging, profiling, etc.), consult the [ZenDNN runtime environment documentation](https://github.com/amd/ZenDNN/blob/a18adf8c605fb5f5e52cefd7eda08a7b18febbaf/docs/runtime_env.md).\n\n### Running Inference\n\n```bash\n# Set the algorithm\nexport ZENDNNL_MATMUL_ALGO=1\n\n# Run with llama-cli (interactive)\n./build/bin/llama-cli \\\n    -m /path/to/your-7b-model.BF16.gguf \\\n    -t 16 \\\n    -p \"Your prompt here\"\n\n# Or run the server\n./build/bin/llama-server \\\n    -m /path/to/your-7b-model.BF16.gguf \\\n    --host 0.0.0.0 \\\n    --port 8080 \\\n    -t 16\n```\n\n### Thread Count (`-t`)\n\nThe Ryzen AI Max 395 has 16 Zen 5 cores with SMT (32 threads). For inference workloads:\n\n- **Start with `-t 16`** (one thread per physical core). This is typically optimal because LLM inference is memory-bandwidth-bound and SMT provides diminishing returns.\n- If you see improved throughput, try `-t 32` (all hardware threads), but expect marginal gains at most.\n- Benchmark with `llama-bench` to find the sweet spot:\n\n```bash\nexport ZENDNNL_MATMUL_ALGO=1\n./build/bin/llama-bench \\\n    -m /path/to/your-7b-model.BF16.gguf \\\n    -t 16\n```\n\n## How It Works Under the Hood\n\nWhen you build with `-DGGML_ZENDNN=ON`, a separate backend library (`ggml-zendnn`) is compiled. At runtime, llama.cpp's backend scheduling system works as follows:\n\n1. **ZenDNN backend** claims all `MUL_MAT` operations where both operands are FP32 or BF16 and tensors are contiguous.\n2. **CPU backend** handles everything else (RMS norm, RoPE, softmax, element-wise ops, KV cache management, etc.) using AVX-512-optimized code paths compiled via `-march=native`.\n\nThis is a cooperative arrangement. ZenDNN does not replace the CPU backend; it supplements it for the most computationally expensive operation (matrix multiplication), which dominates transformer inference time.\n\n## Memory Considerations\n\nA 7B parameter model in BF16 format requires approximately 14 GB of memory. The Ryzen AI Max 395 supports up to 128 GB of unified LPDDR5X, so memory capacity is not a concern. The LPDDR5X bandwidth (up to ~256 GB/s in 8-channel configurations) is also favorable for memory-bound LLM inference.\n\n## Performance Expectations\n\nWith ZenDNN + AVX-512 BF16 on the Ryzen AI Max 395, you should see:\n\n- **Prompt processing (prefill)**: This is compute-bound, and ZenDNN's optimized BF16 GEMM kernels will provide the most benefit here. The ZenDNN documentation notes 1.1x-2x speedup compared to standard CPU inference for matrix multiplication operations.\n- **Token generation (decode)**: This is largely memory-bandwidth-bound (single-token batch size). ZenDNN will still handle the MUL_MAT, but gains may be more modest since bandwidth is the bottleneck, not compute.\n\n## Summary Checklist\n\n1. Build with `cmake -B build -DGGML_ZENDNN=ON -DGGML_NATIVE=ON -DCMAKE_BUILD_TYPE=Release`\n2. Set `export ZENDNNL_MATMUL_ALGO=1` before running\n3. Use a BF16 GGUF model file (not quantized, since ZenDNN only supports FP32/BF16)\n4. Run with `-t 16` (physical core count)\n5. Benchmark with `llama-bench` to validate performance\n6. Do NOT enable `-DGGML_VULKAN=ON`, `-DGGML_HIP=ON`, or any GPU flags if you want pure CPU execution\n\n## Relevant Source Files\n\n- ZenDNN backend implementation: `ggml/src/ggml-zendnn/ggml-zendnn.cpp`\n- ZenDNN CMake build: `ggml/src/ggml-zendnn/CMakeLists.txt`\n- ZenDNN header: `ggml/include/ggml-zendnn.h`\n- ZenDNN documentation: `docs/backend/ZenDNN.md`\n- CPU backend CMake (AVX-512 flags): `ggml/src/ggml-cpu/CMakeLists.txt`\n- Top-level GGML CMake (GGML_ZENDNN option): `ggml/CMakeLists.txt`\n"}], "grading": {"eval_id": 5, "config": "without_skill", "expectations": [{"text": "zendnn_build_flags", "passed": true, "evidence": "GGML_ZENDNN=ON in build command"}, {"text": "zendnn_matmul_algo", "passed": true, "evidence": "ZENDNNL_MATMUL_ALGO=1 mentioned"}, {"text": "bf16_recommendation", "passed": true, "evidence": "Notes ZenDNN supports FP32/BF16, user's BF16 model is the right choice"}, {"text": "thread_count", "passed": true, "evidence": "-t 16 for physical core count"}]}}, {"id": "eval-6-server-deploy-with_skill", "prompt": "I need to deploy llama-server on my Strix Halo workstation as a production service for our small team (4-5 concurrent users). We're using a Llama 3 8B Q4_K_M model. What's the optimal configuration for stability and throughput?", "eval_id": 6, "outputs": [{"name": "response.md", "type": "text", "content": "# Optimal llama-server Configuration for Strix Halo: Llama 3 8B Q4_K_M with 4-5 Concurrent Users\n\n## Prerequisites (Do These First)\n\n### 1. Increase TTM Memory Limits (Critical)\n\nWithout this, the GPU can only access a small fraction of system RAM and you will hit OOM errors even with free memory available.\n\nCreate `/etc/modprobe.d/increase_amd_memory.conf`:\n```\noptions ttm pages_limit=25600000\noptions ttm page_pool_size=25600000\n```\n\nApply and reboot:\n```bash\nsudo update-initramfs -u -k all\nsudo reboot\n```\n\nVerify after reboot:\n```bash\ncat /sys/module/ttm/parameters/pages_limit\n# Should show: 25600000\n```\n\n### 2. Remove HSA_OVERRIDE_GFX_VERSION (If Set)\n\nOlder guides recommended overriding the GFX version, but llama.cpp now has native RDNA 3.5 support. Using the override forces slower generic kernels. Check and remove if present:\n\n```bash\necho $HSA_OVERRIDE_GFX_VERSION\ngrep -n HSA_OVERRIDE_GFX_VERSION ~/.bashrc\n```\n\n### 3. Verify ROCm Installation\n\n```bash\nrocminfo | grep -i \"Name:\" | grep gfx\n# Should show: gfx1150 or gfx1151\n\nrocm-smi --showid\n```\n\nEnsure your user is in the required groups:\n```bash\nsudo usermod -a -G video,render $USER\n```\n\n## Build Configuration\n\nUse the optimized HIP build targeting your exact GPU architecture:\n\n```bash\ncmake -S . -B build \\\n  -DGGML_HIP=ON \\\n  -DGPU_TARGETS=\"gfx1150\" \\\n  -DGGML_HIP_GRAPHS=ON \\\n  -DGGML_CUDA_FORCE_MMQ=ON \\\n  -DGGML_NATIVE=ON \\\n  -DCMAKE_BUILD_TYPE=Release \\\n  -DCMAKE_HIP_FLAGS=\"-O3\"\n\ncmake --build build --config Release -j $(nproc)\n```\n\nKey flags explained:\n\n| Flag | Why |\n|------|-----|\n| `GPU_TARGETS=\"gfx1150\"` | Compiles kernels specifically for RDNA 3.5 instead of a bloated multi-arch build. Reduces compile time from 30+ minutes to under 10 and produces better-optimized code. |\n| `GGML_HIP_GRAPHS=ON` | Enables HIP graph capture, reducing kernel dispatch overhead -- important for server workloads with sustained throughput. |\n| `GGML_CUDA_FORCE_MMQ=ON` | Forces quantized matmul kernels instead of hipBLAS. Often faster on RDNA 3.5 for quantized models like Q4_K_M. |\n| `GGML_NATIVE=ON` | Auto-detects and enables all CPU features on the build machine (AVX-512, BF16, etc.) for any CPU-side work. |\n\nIf you have rocWMMA v2.0+ installed, add `-DGGML_HIP_ROCWMMA_FATTN=ON` for optimized flash attention kernels via WMMA instructions.\n\nVerify the build:\n```bash\n./build/bin/llama-bench --list-devices\n# Should show: AMD Radeon Graphics (gfx1150 or gfx1151)\n```\n\n## Production Server Configuration\n\n### Environment Variables\n\nAdd these to your shell profile or systemd service file for persistence:\n\n```bash\n# Critical: 2-3x improvement in prompt processing speed\nexport ROCBLAS_USE_HIPBLASLT=1\n\n# Pin to the iGPU if needed\nexport HIP_VISIBLE_DEVICES=0\n```\n\nThe `ROCBLAS_USE_HIPBLASLT=1` variable is essential. Without it, prompt processing on gfx1150 runs at roughly 350 t/s instead of ~880 t/s for a 7-8B Q4 model -- a 2.5x penalty.\n\n### Server Launch Command\n\n```bash\nexport ROCBLAS_USE_HIPBLASLT=1\n\n./build/bin/llama-server \\\n  -m /path/to/llama-3-8b-q4_k_m.gguf \\\n  -ngl 99 \\\n  --no-mmap \\\n  -fa on \\\n  -ctk q8_0 -ctv q8_0 \\\n  -c 8192 \\\n  -np 5 \\\n  -b 2048 -ub 512 \\\n  -t 4 \\\n  --host 0.0.0.0 \\\n  --port 8080\n```\n\n### Parameter Rationale\n\n| Parameter | Value | Why |\n|-----------|-------|-----|\n| `-ngl 99` | Full GPU offload | The Radeon 890M handles token generation well, and unified memory means zero PCIe transfer penalty. For an 8B Q4_K_M model (~4.9 GB), this fits easily in the unified memory pool. |\n| `--no-mmap` | Disable memory mapping | HIP's `hipMemcpy()` must lock/unlock mmap pages, causing severe overhead during model loading. With `--no-mmap`, loading is fast and clean. |\n| `-fa on` | Flash attention enabled | WMMA-accelerated on RDNA 3.5. Reduces memory usage and improves attention computation speed. |\n| `-ctk q8_0 -ctv q8_0` | Quantized KV cache | Halves KV cache memory compared to the f16 default with negligible quality impact. With 5 parallel slots, each user needs their own KV cache, so this is especially important for multi-user serving. |\n| `-c 8192` | Context size | Llama 3 8B supports up to 8192 tokens natively. Set this to match your workload. If your users send shorter prompts, you can reduce this to 4096 to save memory and improve throughput. |\n| `-np 5` | 5 parallel slots | One slot per concurrent user. Matches your team size of 4-5 users. Each slot maintains its own KV cache and can process requests independently via continuous batching. |\n| `-b 2048 -ub 512` | Batch sizes | Good defaults for Strix Halo. The logical batch size of 2048 allows efficient prompt processing; the physical batch size of 512 controls actual GPU computation granularity. |\n| `-t 4` | 4 CPU threads | Critical for Strix Halo. CPU and GPU share the ~256 GB/s memory bus. High thread counts compete with the GPU for bandwidth, degrading token generation speed. 2-4 threads is optimal for GPU-primary inference. |\n\n### Memory Budget Estimate\n\nFor Llama 3 8B Q4_K_M with 5 parallel users:\n\n| Component | Approximate Memory |\n|-----------|-------------------|\n| Model weights (Q4_K_M, ~4.8 bits/weight) | ~5 GB |\n| KV cache per slot (8192 ctx, q8_0, 8B model) | ~0.5 GB |\n| KV cache total (5 slots) | ~2.5 GB |\n| Runtime overhead | ~1 GB |\n| **Total** | **~8.5 GB** |\n\nThis fits very comfortably in the Strix Halo's unified memory pool (up to 128 GB), leaving plenty of headroom for the OS and other applications.\n\n## Expected Performance\n\nBased on the Strix Halo architecture specs and benchmark data from the skill references:\n\n| Metric | Expected Range |\n|--------|---------------|\n| Prompt processing (pp512) | ~700-900 t/s (with hipBLASLt) |\n| Token generation (single user) | ~40-50 t/s |\n| Token generation (5 concurrent users) | ~8-10 t/s per user (shared bandwidth) |\n\nToken generation speed scales inversely with concurrent users because it is memory-bandwidth bound. With 5 users generating simultaneously, the ~256 GB/s bandwidth is shared across all active sequences.\n\n## Production Hardening\n\n### systemd Service File\n\nCreate `/etc/systemd/system/llama-server.service`:\n\n```ini\n[Unit]\nDescription=llama.cpp Inference Server\nAfter=network.target\n\n[Service]\nType=simple\nUser=llama\nGroup=llama\nEnvironment=\"ROCBLAS_USE_HIPBLASLT=1\"\nEnvironment=\"HIP_VISIBLE_DEVICES=0\"\nWorkingDirectory=/opt/llama.cpp\nExecStart=/opt/llama.cpp/build/bin/llama-server \\\n  -m /opt/models/llama-3-8b-q4_k_m.gguf \\\n  -ngl 99 \\\n  --no-mmap \\\n  -fa on \\\n  -ctk q8_0 -ctv q8_0 \\\n  -c 8192 \\\n  -np 5 \\\n  -b 2048 -ub 512 \\\n  -t 4 \\\n  --host 0.0.0.0 \\\n  --port 8080\nRestart=on-failure\nRestartSec=10\nLimitNOFILE=65536\n\n[Install]\nWantedBy=multi-user.target\n```\n\nEnable and start:\n```bash\nsudo systemctl daemon-reload\nsudo systemctl enable llama-server\nsudo systemctl start llama-server\nsudo systemctl status llama-server\n```\n\n### Health Monitoring\n\nllama-server exposes monitoring endpoints. You can poll these for health checks:\n\n```bash\n# Basic health check\ncurl http://localhost:8080/health\n\n# Slot utilization and metrics\ncurl http://localhost:8080/metrics\n```\n\n### Reverse Proxy (Optional)\n\nFor TLS termination and basic auth, place nginx or caddy in front:\n\n```nginx\nserver {\n    listen 443 ssl;\n    server_name llm.internal.example.com;\n\n    ssl_certificate /etc/ssl/certs/llm.crt;\n    ssl_certificate_key /etc/ssl/private/llm.key;\n\n    location / {\n        proxy_pass http://127.0.0.1:8080;\n        proxy_set_header Host $host;\n        proxy_set_header X-Real-IP $remote_addr;\n        proxy_read_timeout 300s;  # LLM responses can take time\n        proxy_send_timeout 300s;\n    }\n}\n```\n\n## Benchmarking Before Going Live\n\nBefore deploying, validate performance on your specific hardware:\n\n```bash\nexport ROCBLAS_USE_HIPBLASLT=1\n\n./build/bin/llama-bench \\\n  -m /path/to/llama-3-8b-q4_k_m.gguf \\\n  -ngl 99 \\\n  --no-mmap \\\n  -t 4 \\\n  -p 512 -n 128 \\\n  -r 3\n```\n\nExpected results for 8B Q4_K_M:\n- **pp512**: 700-900 t/s (prompt processing -- confirms hipBLASLt is working)\n- **tg128**: 40-50 t/s (token generation -- confirms GPU offload is working)\n\nIf pp512 is below 400 t/s, `ROCBLAS_USE_HIPBLASLT=1` is not taking effect. Double-check the environment variable is set in the shell running the benchmark.\n\nIf tg128 is below 30 t/s, check that `-ngl 99` is actually offloading all layers (look for GPU layer count in the startup logs) and that no other applications are consuming GPU bandwidth.\n\n## Troubleshooting Quick Reference\n\n| Problem | Solution |\n|---------|----------|\n| OOM with plenty of free RAM | Increase TTM `pages_limit` (see Prerequisites above) |\n| Slow prompt processing (~350 t/s instead of ~880 t/s) | Set `ROCBLAS_USE_HIPBLASLT=1` |\n| Model loading hangs or is very slow | Use `--no-mmap` (already in recommended config) |\n| \"No HIP devices found\" | Install ROCm 6.1+, add user to video/render groups, verify with `rocminfo` |\n| Poor token generation speed | Rebuild with `GGML_CUDA_FORCE_MMQ=ON`, reduce thread count to `-t 4` |\n| `rocm-smi` shows tiny VRAM | Normal for unified memory -- the GPU uses system RAM via the unified pool, not dedicated VRAM |\n| Performance regression after update | Pin to a known-good commit; try toggling `GGML_CUDA_FORCE_MMQ` on/off |\n\n## Tuning for Your Workload\n\nIf your team's usage patterns differ from the defaults:\n\n- **Short prompts, fast responses**: Reduce `-c` to 4096 to save KV cache memory and slightly improve throughput.\n- **Long document processing**: Increase `-c` up to 8192 (Llama 3 native limit). Consider `-ctk q4_0 -ctv q4_0` if memory gets tight, though q8_0 is preferred for quality.\n- **Fewer concurrent users**: Reduce `-np` to match actual concurrency. Each unused slot still reserves KV cache memory.\n- **Batch processing (not interactive)**: Increase `-b 4096` for better prompt processing throughput on long inputs.\n"}], "grading": {"eval_id": 6, "config": "with_skill", "expectations": [{"text": "parallel_sequences", "passed": true, "evidence": "-np 5 / --parallel 5 configured for 4-5 concurrent users"}, {"text": "kv_cache_quantization", "passed": true, "evidence": "-ctk q8_0 -ctv q8_0 with memory budget explanation"}, {"text": "server_runtime_flags", "passed": true, "evidence": "Includes -ngl 99, --no-mmap, and ROCBLAS_USE_HIPBLASLT=1"}, {"text": "production_stability", "passed": true, "evidence": "Full systemd service file, health monitoring endpoints, reverse proxy config"}]}}, {"id": "eval-6-server-deploy-without_skill", "prompt": "I need to deploy llama-server on my Strix Halo workstation as a production service for our small team (4-5 concurrent users). We're using a Llama 3 8B Q4_K_M model. What's the optimal configuration for stability and throughput?", "eval_id": 6, "outputs": [{"name": "response.md", "type": "text", "content": "# Deploying llama-server on AMD Strix Halo for Production Use\n\n## Hardware Context: AMD Strix Halo (Ryzen AI 300 Series)\n\n- **CPU**: Zen 5 cores with AVX-512 support, large L3 cache, CCX topology\n- **iGPU**: RDNA 3.5 (Radeon 890M) with Vulkan compute support, shared unified memory with CPU\n- **Memory**: Unified LPDDR5X (typically 32-64 GB), shared between CPU and iGPU\n- **Key advantage**: Unified memory architecture means CPU and iGPU share the same physical memory, eliminating PCIe transfer bottlenecks\n\nFor Llama 3 8B Q4_K_M (~4.9 GB model size), this hardware is well-suited -- the model fits entirely in RAM with ample headroom for KV caches serving 4-5 concurrent users.\n\n---\n\n## 1. Building llama.cpp for Strix Halo\n\nBuild with Vulkan backend support to leverage the RDNA 3.5 iGPU:\n\n```bash\n# Install prerequisites (Ubuntu/Debian)\nsudo apt-get install libvulkan-dev glslc libssl-dev\n\n# Build with Vulkan support\ncmake -B build -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release\ncmake --build build --config Release -j$(nproc)\n```\n\nVerify the iGPU is detected:\n\n```bash\n./build/bin/llama-server --list-devices\n# Should show the Radeon 890M (RDNA 3.5) as an available Vulkan device\n```\n\nThe CPU backend will automatically use AVX-512 instructions available on Zen 5. No special build flags are needed for that; the build system auto-detects CPU capabilities.\n\n---\n\n## 2. Optimal Server Launch Configuration\n\n```bash\n./build/bin/llama-server \\\n    --model /path/to/llama-3-8b-q4_k_m.gguf \\\n    --host 0.0.0.0 \\\n    --port 8080 \\\n    --ctx-size 8192 \\\n    --parallel 5 \\\n    --batch-size 2048 \\\n    --ubatch-size 512 \\\n    --threads 8 \\\n    --threads-batch 16 \\\n    --threads-http 4 \\\n    --flash-attn on \\\n    --cache-type-k q8_0 \\\n    --cache-type-v q8_0 \\\n    --cont-batching \\\n    --cache-prompt \\\n    --cache-reuse 256 \\\n    --mlock \\\n    --n-gpu-layers 99 \\\n    --metrics \\\n    --api-key-file /etc/llama-server/api-keys.txt \\\n    --timeout 600 \\\n    --no-webui\n```\n\n### Parameter Rationale\n\n#### Slots and Context\n\n| Parameter | Value | Rationale |\n|-----------|-------|-----------|\n| `--parallel 5` | 5 slots | One slot per concurrent user. The server defaults to 4 when set to auto (`-1`), but since you have 4-5 users, setting 5 ensures no one queues unnecessarily. |\n| `--ctx-size 8192` | 8192 tokens | Llama 3 supports 8192 natively. Total KV memory = 8192 * 5 slots. With q8_0 cache types, this is roughly 1.2-1.5 GB total for all slots. |\n| `--kv-unified` | (enabled by default when parallel is auto; explicitly set if needed) | Uses a single shared KV buffer across all slots for better memory efficiency. Note: when `--parallel` is explicitly set (not auto/-1), you may want to add `--kv-unified` explicitly. |\n\n#### Batch Processing\n\n| Parameter | Value | Rationale |\n|-----------|-------|-----------|\n| `--batch-size 2048` | 2048 (default) | Logical batch size for prompt processing. The default is appropriate for the available memory bandwidth on LPDDR5X. |\n| `--ubatch-size 512` | 512 (default) | Physical batch size. Balances between throughput and memory usage during prompt processing. |\n| `--cont-batching` | enabled (default) | Continuous batching is critical for multi-user throughput -- it allows new prompts to begin processing while other slots are generating tokens. |\n\n#### Threading\n\n| Parameter | Value | Rationale |\n|-----------|-------|-----------|\n| `--threads 8` | 8 | Generation threads. Zen 5 Strix Halo typically has 12 cores (12C/24T). Using 8 threads for generation leaves cores available for batch processing and HTTP handling. Over-subscribing threads hurts latency. |\n| `--threads-batch 16` | 16 | Prompt processing is more parallelizable and benefits from more threads. Using 16 threads (of 24 hardware threads) for batch processing maximizes prompt eval throughput. |\n| `--threads-http 4` | 4 | Dedicated HTTP threads for handling connections from your 4-5 users, separate from inference threads. |\n\n#### GPU Offloading\n\n| Parameter | Value | Rationale |\n|-----------|-------|-----------|\n| `--n-gpu-layers 99` | All layers | Offloads all 32 layers of Llama 3 8B to the RDNA 3.5 iGPU via Vulkan. On Strix Halo, the unified memory architecture means this does not require data copies -- the iGPU accesses the same physical memory as the CPU. This significantly accelerates matrix multiplications. |\n| `--flash-attn on` | Enabled | Flash Attention reduces memory usage and improves throughput for the attention computation. Explicitly enable rather than relying on auto-detection. |\n\n#### KV Cache Optimization\n\n| Parameter | Value | Rationale |\n|-----------|-------|-----------|\n| `--cache-type-k q8_0` | q8_0 | Quantizing KV cache keys to 8-bit reduces memory by 50% vs f16 default, with negligible quality loss. This is important for fitting 5 concurrent contexts. |\n| `--cache-type-v q8_0` | q8_0 | Same for values. Together, q8_0 K+V roughly halves KV cache memory compared to f16. |\n| `--cache-prompt` | enabled (default) | Prompt caching avoids reprocessing common prefixes (e.g., system prompts shared across users). |\n| `--cache-reuse 256` | 256 tokens | Enables KV cache reuse via shifting when at least 256 tokens of prefix match. Particularly valuable when users share a common system prompt. |\n| `--mlock` | enabled | Locks model weights in RAM, preventing the OS from swapping them to disk. Essential for production stability and consistent latency. |\n\n#### Security and Monitoring\n\n| Parameter | Value | Rationale |\n|-----------|-------|-----------|\n| `--api-key-file` | File-based keys | Use a file containing one API key per line. Users authenticate with the `Authorization: Bearer <key>` header. More secure than passing keys on the command line. |\n| `--metrics` | enabled | Exposes Prometheus-compatible metrics at `/metrics` for monitoring throughput, latency, and slot utilization. |\n| `--no-webui` | disabled UI | For production, disable the web UI to reduce attack surface. Users should interact via the API only. |\n| `--timeout 600` | 10 minutes | Read/write timeout for HTTP connections. 600 seconds is the default and appropriate for long-running generation requests. |\n\n---\n\n## 3. Memory Budget Estimate\n\nFor Llama 3 8B Q4_K_M with 5 slots at 8192 context:\n\n| Component | Estimated Memory |\n|-----------|-----------------|\n| Model weights (Q4_K_M) | ~4.9 GB |\n| KV cache (5 slots * 8192 ctx, q8_0) | ~1.2-1.5 GB |\n| Working memory / overhead | ~0.5-1.0 GB |\n| **Total** | **~6.6-7.4 GB** |\n\nThis fits comfortably within the 32+ GB of unified LPDDR5X on Strix Halo, leaving substantial headroom for the OS and other processes.\n\n---\n\n## 4. Systemd Service for Production\n\nCreate a systemd service file for automatic startup and restart:\n\n```ini\n# /etc/systemd/system/llama-server.service\n[Unit]\nDescription=llama.cpp Inference Server\nAfter=network.target\n\n[Service]\nType=simple\nUser=llama\nGroup=llama\nWorkingDirectory=/opt/llama-server\nExecStart=/opt/llama-server/llama-server \\\n    --model /opt/llama-server/models/llama-3-8b-q4_k_m.gguf \\\n    --host 0.0.0.0 \\\n    --port 8080 \\\n    --ctx-size 8192 \\\n    --parallel 5 \\\n    --batch-size 2048 \\\n    --ubatch-size 512 \\\n    --threads 8 \\\n    --threads-batch 16 \\\n    --threads-http 4 \\\n    --flash-attn on \\\n    --cache-type-k q8_0 \\\n    --cache-type-v q8_0 \\\n    --cont-batching \\\n    --cache-prompt \\\n    --cache-reuse 256 \\\n    --mlock \\\n    --n-gpu-layers 99 \\\n    --metrics \\\n    --api-key-file /etc/llama-server/api-keys.txt \\\n    --timeout 600 \\\n    --no-webui\nRestart=always\nRestartSec=5\nLimitMEMLOCK=infinity\nLimitNOFILE=65536\n\n# Security hardening\nNoNewPrivileges=true\nProtectSystem=strict\nProtectHome=true\nReadOnlyPaths=/opt/llama-server\nReadWritePaths=/var/log/llama-server\n\n# Environment variables (alternative to CLI args)\n# Environment=LLAMA_ARG_MODEL=/opt/llama-server/models/llama-3-8b-q4_k_m.gguf\n# Environment=LLAMA_ARG_HOST=0.0.0.0\n# Environment=LLAMA_ARG_N_PARALLEL=5\n\n[Install]\nWantedBy=multi-user.target\n```\n\nEnable and start:\n\n```bash\nsudo systemctl daemon-reload\nsudo systemctl enable llama-server\nsudo systemctl start llama-server\nsudo journalctl -u llama-server -f  # Monitor logs\n```\n\nNote: `LimitMEMLOCK=infinity` is required when using `--mlock` so the kernel allows the process to lock all its memory.\n\n---\n\n## 5. Reverse Proxy with nginx\n\nFor TLS termination and rate limiting in front of the server:\n\n```nginx\nupstream llama_backend {\n    server 127.0.0.1:8080;\n    keepalive 16;\n}\n\nserver {\n    listen 443 ssl;\n    server_name llm.internal.example.com;\n\n    ssl_certificate     /etc/ssl/certs/llm.crt;\n    ssl_certificate_key /etc/ssl/private/llm.key;\n\n    # Increase timeouts for long-running generation\n    proxy_read_timeout 600s;\n    proxy_send_timeout 600s;\n    proxy_connect_timeout 10s;\n\n    # SSE (Server-Sent Events) support for streaming\n    proxy_buffering off;\n    proxy_cache off;\n\n    location / {\n        proxy_pass http://llama_backend;\n        proxy_http_version 1.1;\n        proxy_set_header Connection \"\";\n        proxy_set_header Host $host;\n        proxy_set_header X-Real-IP $remote_addr;\n    }\n}\n```\n\nAlternatively, llama-server has built-in SSL support via `--ssl-key-file` and `--ssl-cert-file` if you want to avoid running nginx.\n\n---\n\n## 6. Monitoring and Health Checks\n\n### Health Endpoint\n\nThe server exposes `GET /health` which returns:\n\n- `200 OK` when the server is ready and accepting requests\n- `503 Service Unavailable` when the server is loading or all slots are busy (with `?fail_on_no_slot=1`)\n\nUse this for load balancer health checks or systemd watchdog integration.\n\n### Prometheus Metrics\n\nWith `--metrics` enabled, `GET /metrics` exposes:\n\n- Request count and latency histograms\n- Token generation rates (prompt eval and generation)\n- Slot utilization (busy vs. idle)\n- KV cache usage\n\nExample Prometheus scrape config:\n\n```yaml\nscrape_configs:\n  - job_name: 'llama-server'\n    scrape_interval: 15s\n    static_configs:\n      - targets: ['localhost:8080']\n```\n\n### Slot Monitoring\n\nThe `GET /slots` endpoint (enabled by default, controllable with `--slots`/`--no-slots`) shows the real-time status of each processing slot, including:\n\n- Current state (idle, processing prompt, generating)\n- Context usage per slot\n- Tokens processed and generated\n\n---\n\n## 7. Performance Tuning Tips\n\n### Strix Halo Specific\n\n1. **Unified memory advantage**: With `--n-gpu-layers 99`, the Vulkan backend uses the iGPU for compute while the data stays in the same physical memory. No PCIe bottleneck exists. This is the primary advantage of Strix Halo for inference.\n\n2. **LPDDR5X bandwidth**: The unified memory bandwidth (~120+ GB/s) is shared between CPU and iGPU. During token generation (which is memory-bandwidth-bound), avoid running other memory-intensive workloads on the system.\n\n3. **Thread pinning (optional)**: If you observe inconsistent latency, consider using `--cpu-range` to pin inference threads to specific CCX cores, keeping threads within the same L3 cache domain:\n   ```\n   --cpu-range 0-7 --cpu-range-batch 0-15\n   ```\n\n4. **Priority boost**: For a dedicated inference server, elevate process priority:\n   ```\n   --prio 2\n   ```\n   This sets \"high\" priority for inference threads.\n\n### General Throughput Tips\n\n5. **If latency spikes occur under load**: Reduce `--parallel` to 4. Fewer slots means less KV cache contention and faster per-request generation at the cost of queuing the 5th user.\n\n6. **For longer contexts**: If users regularly send long prompts (>4K tokens), consider reducing `--parallel` to 4 and increasing `--ctx-size` to 16384. This trades concurrency for context length.\n\n7. **KV cache quantization tradeoff**: If you observe quality degradation with `q8_0` caches, switch to `f16` (the default). The memory cost is roughly doubled for KV cache, but on a 32+ GB system this is still manageable.\n\n8. **Prompt caching**: The `--cache-prompt` and `--cache-reuse 256` settings are particularly valuable when your team uses a shared system prompt. The common prefix is processed once and reused across requests.\n\n---\n\n## 8. Quick Validation Checklist\n\nAfter starting the server, verify it is working correctly:\n\n```bash\n# 1. Check health\ncurl http://localhost:8080/health\n\n# 2. Test a completion (with API key)\ncurl http://localhost:8080/v1/chat/completions \\\n  -H \"Authorization: Bearer YOUR_API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"model\": \"llama-3-8b\",\n    \"messages\": [{\"role\": \"user\", \"content\": \"Hello, how are you?\"}],\n    \"max_tokens\": 100\n  }'\n\n# 3. Check metrics\ncurl http://localhost:8080/metrics\n\n# 4. Check slot status\ncurl http://localhost:8080/slots\n```\n\n---\n\n## Summary\n\nThe key configuration choices for your Strix Halo + Llama 3 8B Q4_K_M + 4-5 users scenario:\n\n| Setting | Value | Why |\n|---------|-------|-----|\n| `--parallel` | 5 | One slot per user |\n| `--ctx-size` | 8192 | Full native context |\n| `--n-gpu-layers` | 99 | Full iGPU offload via Vulkan (unified memory, no copy overhead) |\n| `--flash-attn` | on | Memory efficiency + throughput |\n| `--cache-type-k/v` | q8_0 | Halves KV cache memory with minimal quality impact |\n| `--threads` | 8 | Generation threads (subset of available cores) |\n| `--threads-batch` | 16 | Prompt processing threads (more parallelism) |\n| `--mlock` | enabled | Prevents swapping, ensures stable latency |\n| `--cont-batching` | enabled | Concurrent request processing |\n| `--cache-prompt` | enabled | Reuses common prompt prefixes |\n| `--metrics` | enabled | Production observability |\n"}], "grading": {"eval_id": 6, "config": "without_skill", "expectations": [{"text": "parallel_sequences", "passed": true, "evidence": "--parallel 5 configured"}, {"text": "kv_cache_quantization", "passed": true, "evidence": "--cache-type-k q8_0 --cache-type-v q8_0"}, {"text": "server_runtime_flags", "passed": false, "evidence": "Has -ngl 99 but uses Vulkan not HIP, missing ROCBLAS_USE_HIPBLASLT=1 and --no-mmap"}, {"text": "production_stability", "passed": true, "evidence": "Full systemd service, nginx reverse proxy, health/metrics/slots endpoints"}]}}], "previous_feedback": {}, "previous_outputs": {"eval-4-vulkan-vs-hip-with_skill": [{"name": "response.md", "type": "text", "content": "# Using Vulkan Instead of ROCm on Strix Halo\n\nYes, you can absolutely use Vulkan for llama.cpp on your Strix Halo system. Since you already have Mesa drivers installed, you likely have everything you need -- no additional software installation required. This is one of Vulkan's main advantages over the ROCm/HIP stack.\n\n## Building with Vulkan\n\nThe build is straightforward:\n\n```bash\ncmake -S . -B build \\\n  -DGGML_VULKAN=ON \\\n  -DCMAKE_BUILD_TYPE=Release\n\ncmake --build build --config Release -j $(nproc)\n```\n\nThat's it. No `GPU_TARGETS`, no ROCm SDK, no multi-gigabyte dependency chain. Vulkan uses runtime SPIR-V shaders rather than precompiled ISA, so it automatically works with your RDNA 3.5 hardware without any architecture-specific flags.\n\n## Running Inference\n\n```bash\n./build/bin/llama-cli -m model.gguf \\\n  -ngl 99 \\\n  -fa on \\\n  -ctk q8_0 -ctv q8_0 \\\n  -t 4\n```\n\nThe Vulkan backend will auto-detect your Radeon 890M via the AMD vendor ID (0x1002). It queries `VkPhysicalDeviceSubgroupProperties` at runtime and adapts shader dispatch for RDNA 3.5's wave32/wave64 subgroup sizes. Matmul shaders use subgroup operations (`subgroupAdd`, `subgroupShuffle`) for efficient reductions.\n\nFor memory, Vulkan sees both device-local memory (the BIOS-allocated VRAM portion) and host-visible memory. On a unified memory APU like Strix Halo, both map to the same physical LPDDR5X, but device-local allocations may get priority bandwidth. The backend prefers device-local for model weights.\n\n## Vulkan vs HIP: Honest Comparison\n\nHere is where you should set expectations. HIP/ROCm does have real performance advantages on Strix Halo:\n\n| Factor | HIP/ROCm | Vulkan |\n|--------|----------|--------|\n| **Prompt processing** | Excellent -- ~880 t/s on 7B Q4 with hipBLASLt | Good, but no hipBLASLt equivalent (expect closer to ~350 t/s range) |\n| **Token generation** | ~48 t/s (7B Q4) | Comparable to HIP |\n| **Graph capture** | HIP graphs reduce kernel dispatch overhead | Not available |\n| **Flash attention** | WMMA-accelerated via rocWMMA | Shader-based (functional but not hardware-accelerated the same way) |\n| **Setup complexity** | Requires ROCm 6.1+ (multi-GB install) | Just needs Vulkan drivers (Mesa, already installed) |\n| **Build time** | Can be 10-30 minutes depending on GPU targets | Fast -- standard C++ compilation |\n| **Stability** | Mature on Strix Halo (with TTM + hipBLASLt fixes) | Known model loading failures on some configurations ([#18741](https://github.com/ggml-org/llama.cpp/issues/18741)) |\n\n### Where HIP Wins\n\nThe biggest gap is **prompt processing**. The hipBLASLt kernel library (`ROCBLAS_USE_HIPBLASLT=1`) provides a roughly 2.5x speedup for prompt processing on gfx1150/gfx1151. Vulkan has no equivalent optimization -- it relies on its own SPIR-V matmul shaders in `ggml/src/ggml-vulkan/vulkan-shaders/`. This means if your workload involves processing long prompts (RAG, long documents, large system prompts), you will notice a significant difference.\n\nHIP graphs also reduce kernel dispatch overhead for token generation, which Vulkan cannot replicate.\n\n### Where Vulkan Wins\n\n- **Zero setup friction**: Mesa Vulkan drivers are already on your system. No ROCm packages to install, manage, or update.\n- **Build simplicity**: A Vulkan build compiles in minutes. HIP builds targeting gfx1150 take around 10 minutes; multi-arch builds can exceed 30 minutes.\n- **Portability**: The same Vulkan build works across AMD, NVIDIA, and Intel GPUs.\n- **Lighter footprint**: ROCm is a large software stack. If you are on a laptop and care about disk space or system cleanliness, Vulkan is significantly lighter.\n\n### Where They Are Similar\n\n**Token generation speed is comparable.** Token generation is memory-bandwidth bound (reading model weights from memory), and both backends are limited by the same ~256 GB/s LPDDR5X bus. The compute kernels matter less here -- what matters is how fast you can stream weights through the GPU. Both HIP and Vulkan achieve similar throughput for this workload.\n\n## Known Vulkan Issue to Watch For\n\nThere is a known issue ([#18741](https://github.com/ggml-org/llama.cpp/issues/18741)) where the Vulkan backend can fail to load models on some Strix Halo configurations. If you hit \"failed to load model\" errors, this is a known problem. There is no universal workaround within Vulkan itself -- this is one of the reasons HIP is considered the more reliable backend on this hardware.\n\n## Important: TTM Limits Still Apply\n\nEven with Vulkan, you should configure the kernel TTM limits if you plan to run models larger than ~8GB. Without this, the GPU can only access a fraction of your system RAM regardless of which backend you use.\n\nCreate `/etc/modprobe.d/increase_amd_memory.conf`:\n```\noptions ttm pages_limit=25600000\noptions ttm page_pool_size=25600000\n```\n\nThen:\n```bash\nsudo update-initramfs -u -k all\nsudo reboot\n```\n\n## Bottom Line\n\n**Vulkan is a perfectly viable choice** for your use case, especially if you want to avoid the weight of the ROCm stack. For interactive chat and moderate-length prompts, you will get good token generation performance that is comparable to HIP. The main trade-off is prompt processing speed -- if you regularly feed in long contexts (thousands of tokens), you will notice HIP's hipBLASLt advantage.\n\nIf your typical workflow is conversational (short prompts, lots of token generation), Vulkan will serve you well. If you later find you need faster prompt processing and decide to install ROCm, you can always switch -- the two backends are not mutually exclusive, and you can even build llama.cpp with both enabled.\n"}], "eval-4-vulkan-vs-hip-without_skill": [{"name": "response.md", "type": "text", "content": "# Using Vulkan vs HIP/ROCm for llama.cpp on AMD Strix Halo\n\n## Short Answer\n\nYes, you can absolutely use Vulkan with llama.cpp on Strix Halo, and it works with mesa drivers out of the box. However, HIP/ROCm will deliver better performance on this hardware if you are willing to install it. Below is a detailed comparison.\n\n## Vulkan on Strix Halo: How to Build and Use\n\nBuilding llama.cpp with Vulkan support is straightforward. You only need the Vulkan development libraries and a GLSL compiler:\n\n```bash\n# Install dependencies (Debian/Ubuntu)\nsudo apt-get install libvulkan-dev glslc\n\n# Verify your GPU is detected\nvulkaninfo\n\n# Build llama.cpp with Vulkan\ncmake -S . -B build -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release\ncmake --build build --config Release\n```\n\nWith mesa's RADV driver (which supports RDNA 3.5 / gfx1150), Vulkan should detect your Strix Halo iGPU automatically. The Vulkan backend recognizes the GPU as an integrated (UMA) device and adjusts memory allocation accordingly, preferring host-visible device-local memory.\n\n## Vulkan vs HIP: Performance Comparison\n\n### Where HIP/ROCm Wins\n\n1. **Prompt processing (prefill) throughput**: HIP with hipBLASLt (`ROCBLAS_USE_HIPBLASLT=1`) provides significantly better matrix multiplication performance on gfx1150. The standard rocBLAS kernels are mediocre on Strix Halo, but the hipBLASLt path can roughly double prompt processing speed (e.g., from ~350 t/s to ~880 t/s on a 7B model).\n\n2. **Flash Attention**: The HIP backend has mature flash attention support with rocWMMA on RDNA3+ architectures, offering better memory efficiency for long-context inference.\n\n3. **Quantized matrix multiplication (MMQ)**: HIP can use MFMA (Matrix Fused Multiply-Add) instructions on CDNA and specialized paths for RDNA, giving it an edge for quantized model inference.\n\n4. **Overall maturity on AMD**: The HIP/CUDA backend in llama.cpp has been more heavily optimized for AMD GPUs, with specific tuning for different AMD architectures.\n\n### Where Vulkan is Competitive\n\n1. **Token generation speed**: For autoregressive decoding (generating one token at a time), the performance gap narrows considerably since this is more memory-bandwidth-bound than compute-bound. On a UMA architecture like Strix Halo, both backends are accessing the same physical memory.\n\n2. **Cooperative matrix support**: The Vulkan backend does support `VK_KHR_cooperative_matrix` for accelerated matrix operations on supported hardware. Whether RADV exposes this extension for gfx1150 depends on your mesa version.\n\n3. **Small model inference**: For smaller models (7B and under) where you are not compute-bound, the difference between Vulkan and HIP is less dramatic.\n\n### Estimated Performance Gap\n\nAs a rough guide, expect Vulkan to deliver approximately 60-80% of HIP/ROCm performance for prompt processing on Strix Halo. Token generation performance may be closer to 85-95% of HIP. These numbers depend heavily on model size, quantization, and context length.\n\n## Vulkan: Known Limitations on Strix Halo\n\n- **Architecture detection**: The Vulkan backend classifies RDNA 3.5 (Strix Halo) as `AMD_RDNA3` since it checks for integer dot product support to distinguish RDNA3+ from RDNA2. This means it gets RDNA3-class optimizations, which is generally appropriate.\n\n- **UMA memory handling**: The backend detects Strix Halo as an integrated GPU (`uma = true`) and adjusts buffer allocation. However, unlike the HIP path where you can tune the TTM `pages_limit` to unlock more system memory for the GPU, Vulkan memory management is handled by the driver (RADV) and you have less control.\n\n- **No equivalent to hipBLASLt**: There is no Vulkan equivalent to the `ROCBLAS_USE_HIPBLASLT=1` optimization that dramatically improves prompt processing on gfx1150. This is one of the biggest performance differentiators.\n\n## Recommendation\n\n**If you want simplicity and zero ROCm overhead**, Vulkan is a perfectly viable choice. It will give you good performance for interactive use (chatting with models), especially for token generation. Build with `-DGGML_VULKAN=ON` and you are ready to go.\n\n**If you want maximum performance**, particularly for prompt processing, batch inference, or large context workloads, HIP/ROCm is worth the installation overhead. The `ROCBLAS_USE_HIPBLASLT=1` environment variable alone can provide a significant speedup that Vulkan cannot match on this hardware.\n\n**A middle-ground option**: You can build llama.cpp with both backends enabled (`-DGGML_VULKAN=ON -DGGML_HIP=ON`) and switch between them at runtime using the `--device` flag. This lets you start with Vulkan immediately and add HIP later if you decide you need the extra performance.\n\n## Quick Start with Vulkan\n\n```bash\n# Build\ncmake -S . -B build -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release\ncmake --build build -j$(nproc)\n\n# Run (offload all layers to GPU)\n./build/bin/llama-cli -m model.gguf -ngl 99 -p \"Hello, world\"\n\n# Check detected device\n./build/bin/llama-cli --list-devices\n```\n\nFor Strix Halo with its unified memory architecture, use `-ngl 99` to offload all layers to the GPU regardless of backend choice.\n"}], "eval-5-cpu-zendnn-with_skill": [{"name": "response.md", "type": "text", "content": "# Running a 7B BF16 Model on Ryzen AI Max 395 -- CPU-Only with ZenDNN\n\nGreat choice of hardware. The Ryzen AI Max 395 (Strix Halo) has Zen 5 cores with full AVX-512 support including AVX-512 BF16, which makes it one of the best consumer CPUs for BF16 inference. Here is how to set it up for maximum CPU-only performance.\n\n## What ZenDNN Actually Does\n\nZenDNN is AMD's optimized primitives library for Zen CPUs. In llama.cpp, it accelerates the matrix multiplication operations (MUL_MAT) specifically for FP32 and BF16 data types. Since you are running a BF16 model, ZenDNN is the ideal accelerator -- it uses AMD's AOCL-DLP (AMD Optimized CPU Libraries) internally, which contains hand-tuned matmul kernels for Zen 5 that outperform the generic AVX-512 paths.\n\nImportantly, ZenDNN does **not** help with quantized models (Q4, Q5, Q8). Those use the standard GGML CPU backend with AVX-512 VNNI intrinsics. ZenDNN is specifically valuable for your use case: unquantized BF16 inference.\n\n## Step 1: Build llama.cpp with ZenDNN\n\nThe build system can automatically download ZenDNN for you:\n\n```bash\ncmake -S . -B build \\\n  -DGGML_ZENDNN=ON \\\n  -DGGML_NATIVE=ON \\\n  -DCMAKE_BUILD_TYPE=Release\n\ncmake --build build --config Release -j $(nproc)\n```\n\nKey flags explained:\n\n- **`GGML_ZENDNN=ON`** -- Enables the ZenDNN backend, which provides optimized BF16 matmul kernels for Zen CPUs. CMake will automatically download and build ZenDNN if it is not already installed on your system.\n- **`GGML_NATIVE=ON`** -- Tells the compiler to auto-detect and enable all CPU features available on your machine. On the Ryzen AI Max 395, this enables AVX-512F, AVX-512CD, AVX-512VL, AVX-512DQ, AVX-512BW, AVX-512 VNNI, and AVX-512 BF16. This is simpler and more reliable than setting individual flags like `-DGGML_AVX512=ON -DGGML_AVX512_BF16=ON`, etc.\n- **`Release`** -- Enables compiler optimizations (-O2/-O3).\n\nYou do **not** need `GGML_HIP=ON`, `GGML_VULKAN=ON`, or any GPU-related flags since you want CPU-only.\n\n### Alternative: Custom ZenDNN Installation\n\nIf you have already installed ZenDNN separately (e.g., from AMD's release packages), point CMake to it:\n\n```bash\nexport ZENDNN_ROOT=/path/to/ZenDNN/build/install\n\ncmake -S . -B build \\\n  -DGGML_ZENDNN=ON \\\n  -DGGML_NATIVE=ON \\\n  -DCMAKE_BUILD_TYPE=Release\n\ncmake --build build --config Release -j $(nproc)\n```\n\n### Verify the Build\n\nAfter building, confirm AVX-512 support is active:\n\n```bash\n./build/bin/llama-cli --version\n# Look for: AVX512 = 1 in the feature flags\n```\n\n## Step 2: Set the ZenDNN Runtime Environment Variable\n\nThis is easy to miss but matters for performance:\n\n```bash\nexport ZENDNNL_MATMUL_ALGO=1\n```\n\nThis selects the \"Blocked AOCL DLP\" algorithm, which is the fastest matmul strategy available in ZenDNN for Zen 5. Without this, ZenDNN may default to a slower algorithm.\n\nAdd it to your `~/.bashrc` for persistence:\n\n```bash\necho 'export ZENDNNL_MATMUL_ALGO=1' >> ~/.bashrc\n```\n\n## Step 3: Run Inference\n\n```bash\nexport ZENDNNL_MATMUL_ALGO=1\n\n./build/bin/llama-cli -m your-7b-bf16-model.gguf \\\n  -ngl 0 \\\n  -t 16 \\\n  -b 2048 -ub 512\n```\n\nParameters explained:\n\n- **`-ngl 0`** -- Zero GPU layers. All computation stays on the CPU.\n- **`-t 16`** -- Use 16 threads, matching the physical core count of the Ryzen AI Max 395. This is the sweet spot. Performance scales well up to the physical core count but **degrades** with hyperthreading (using 32 threads is slower than 16 because of resource contention and cache thrashing).\n- **`-b 2048 -ub 512`** -- Batch size settings for prompt processing. `-b` is the logical batch size (how many tokens per batch), `-ub` is the physical/computation batch size. These defaults work well for the 395's large L3 cache and memory bandwidth.\n\n## Step 4: Benchmark to Confirm Performance\n\nRun a benchmark to validate everything is working optimally:\n\n```bash\nexport ZENDNNL_MATMUL_ALGO=1\n\n./build/bin/llama-bench -m your-7b-bf16-model.gguf \\\n  -ngl 0 \\\n  -t 4,8,12,16 \\\n  -p 512 -n 128 \\\n  -r 3\n```\n\nThis sweeps thread counts so you can confirm that 16 threads is optimal on your specific system. Watch the `pp` (prompt processing) and `tg` (token generation) numbers. If you see performance plateau at 12 threads or drop at 16, adjust your `-t` accordingly.\n\n## Performance Expectations and Considerations\n\n### Memory Bandwidth\n\nA 7B BF16 model is approximately 14GB in memory (7 billion parameters at 2 bytes each). Token generation speed is memory-bandwidth-bound. The Ryzen AI Max 395 has approximately 256 GB/s of LPDDR5X bandwidth (shared between CPU and GPU). Since you are running CPU-only, the CPU gets full use of this bandwidth, which is favorable.\n\nRough theoretical estimate for token generation:\n```\ntg_speed ~ 256 GB/s / 14 GB ~ 18 tokens/s theoretical max\n```\nReal-world will be lower (60-70% of theoretical) due to overhead, so expect roughly 11-13 t/s for token generation. Prompt processing will be faster since it is compute-bound and benefits heavily from ZenDNN's optimized BF16 matmul and Zen 5's `_mm512_dpbf16_ps` instruction (AVX-512 BF16), which processes 32 BF16 values per operation.\n\n### Why BF16 + ZenDNN Is a Good Match for Zen 5\n\nZen 5 has native AVX-512 BF16 support via the `DPBF16PS` instruction. This instruction computes a dot product of BF16 pairs and accumulates into FP32, giving you 2x the throughput of FP32 operations. ZenDNN's matmul kernels are specifically tuned to exploit this instruction along with Zen 5's improved front-end and wider execution resources.\n\n### When You Might Consider Quantization Instead\n\nIf token generation speed is more important to you than maintaining full BF16 precision, a quantized model (e.g., Q4_K_M at ~4GB) would give much faster inference since the model is 3-4x smaller and therefore uses proportionally less memory bandwidth. Quantized models do not use ZenDNN -- they run on the standard GGML CPU backend with AVX-512 VNNI kernels, which are also well-optimized on Zen 5. You would not need the `GGML_ZENDNN=ON` flag for quantized models; just `GGML_NATIVE=ON` is sufficient.\n\n## Quick Reference\n\n| Setting | Value |\n|---------|-------|\n| Build flags | `GGML_ZENDNN=ON`, `GGML_NATIVE=ON`, `Release` |\n| Environment variable | `ZENDNNL_MATMUL_ALGO=1` |\n| GPU layers (`-ngl`) | `0` |\n| Thread count (`-t`) | `16` (physical core count) |\n| Batch sizes | `-b 2048 -ub 512` |\n| GPU flags needed | None |\n| ROCm required | No |\n\n## Summary\n\n1. Build with `GGML_ZENDNN=ON` and `GGML_NATIVE=ON` to get ZenDNN BF16 matmul and full AVX-512 support.\n2. Set `ZENDNNL_MATMUL_ALGO=1` at runtime for the fastest matmul algorithm.\n3. Run with `-ngl 0 -t 16` to use all physical cores, no GPU.\n4. Benchmark with `llama-bench` to verify performance on your specific system.\n\nThis gives you the best CPU-only BF16 inference path on Zen 5 without touching the GPU at all.\n"}], "eval-5-cpu-zendnn-without_skill": [{"name": "response.md", "type": "text", "content": "# Running a 7B BF16 Model on Ryzen AI Max 395 (CPU-Only) with ZenDNN\n\n## Overview\n\nThe Ryzen AI Max 395 (codename \"Strix Halo\") uses Zen 5 cores with full AVX-512 support, including AVX-512 BF16 instructions. This makes it well-suited for running BF16 models on the CPU. This fork of llama.cpp includes a **ZenDNN backend** that accelerates matrix multiplication operations using AMD's optimized libraries, which is exactly what you want for best CPU-only performance.\n\n## What is ZenDNN?\n\nZenDNN (Zen Deep Neural Network Library) is AMD's high-performance deep learning inference library optimized for AMD Zen-based CPUs. In this llama.cpp fork, it provides an accelerated backend for **MUL_MAT** (matrix multiplication) operations -- the dominant compute kernel in transformer-based LLMs. Under the hood, ZenDNN uses its **LowOHA (Low Overhead Hardware Accelerated)** MatMul operator, which provides:\n\n- Built-in weight caching\n- Minimal execution overhead\n- Access to backend libraries: AOCL DLP, LibXSMM, and OneDNN\n\nThe ZenDNN backend explicitly supports the Ryzen AI MAX (Strix Halo) and BF16 data type, which is the ideal combination for your setup.\n\n## Step-by-Step Setup\n\n### 1. Build llama.cpp with ZenDNN\n\nThe build system can automatically download and compile ZenDNN for you. No manual installation is required.\n\n```bash\ncd /home/user/llama.cpp\n\n# Clean any previous build\nrm -rf build\n\n# Configure with ZenDNN enabled, no GPU backends\ncmake -B build \\\n    -DGGML_ZENDNN=ON \\\n    -DGGML_VULKAN=OFF \\\n    -DGGML_HIP=OFF \\\n    -DGGML_OPENCL=OFF \\\n    -DCMAKE_BUILD_TYPE=Release\n\n# Build (first build takes several minutes due to ZenDNN compilation)\ncmake --build build --config Release -j $(nproc)\n```\n\n**Note:** The first build will take a while because CMake downloads and compiles ZenDNN and its dependencies (AOCL DLP, LibXSMM, OneDNN) from source. Subsequent rebuilds are fast.\n\n### 2. Enable AVX-512 and Native CPU Optimization\n\nBy default, llama.cpp builds with `-march=native` (the `GGML_NATIVE` option defaults to ON). This automatically enables all AVX-512 extensions supported by your Zen 5 cores, including:\n\n- AVX-512F, AVX-512CD, AVX-512BW, AVX-512DQ, AVX-512VL\n- AVX-512 BF16 (hardware BFloat16 conversion and dot-product instructions)\n- AVX-512 VNNI (vector neural network instructions)\n\nYou can verify this by checking the compiler flags in the CMake output. If for some reason `GGML_NATIVE` is not picking up everything, you can explicitly force the flags:\n\n```bash\ncmake -B build \\\n    -DGGML_ZENDNN=ON \\\n    -DGGML_NATIVE=ON \\\n    -DGGML_AVX512=ON \\\n    -DGGML_AVX512_VNNI=ON \\\n    -DGGML_AVX512_BF16=ON \\\n    -DGGML_VULKAN=OFF \\\n    -DCMAKE_BUILD_TYPE=Release\n```\n\n### 3. Download a BF16 Model\n\nYou need a model in BF16 GGUF format. For example, a 7B-class model:\n\n```bash\n# Example: Llama 3.1 8B Instruct BF16\nhuggingface-cli download meta-llama/Llama-3.1-8B-Instruct-GGUF \\\n    --local-dir models/\n\n# Or any other 7B-class BF16 GGUF model you prefer\n```\n\nA 7B BF16 model requires approximately 14 GB of RAM. The Ryzen AI Max 395 typically comes with 64-128 GB of unified LPDDR5X memory, so this is not a concern.\n\n### 4. Set Environment Variables for Best Performance\n\n```bash\n# Use the Blocked AOCL DLP algorithm (recommended for best performance)\nexport ZENDNNL_MATMUL_ALGO=1\n\n# Set thread count to match your physical core count\n# The Ryzen AI Max 395 has 16 Zen 5 cores\nexport OMP_NUM_THREADS=16\n```\n\n### 5. Run Inference\n\n#### Using llama-server:\n\n```bash\n./build/bin/llama-server \\\n    -m models/your-7b-bf16-model.gguf \\\n    --host 0.0.0.0 \\\n    --port 8080 \\\n    -t 16 \\\n    -ngl 0\n```\n\nThe `-ngl 0` flag explicitly ensures zero layers are offloaded to GPU, keeping everything on the CPU.\n\n#### Using llama-cli for quick testing:\n\n```bash\n./build/bin/llama-cli \\\n    -m models/your-7b-bf16-model.gguf \\\n    -t 16 \\\n    -ngl 0 \\\n    -p \"Hello, how are you?\"\n```\n\n#### Benchmarking with llama-bench:\n\n```bash\n./build/bin/llama-bench \\\n    -m models/your-7b-bf16-model.gguf \\\n    -t 16 \\\n    -ngl 0\n```\n\nThis will give you tokens/second measurements for both prompt processing and generation.\n\n## Performance Tuning Tips\n\n### Thread Count\n\n- The Ryzen AI Max 395 has **16 Zen 5 cores / 32 threads** (with SMT).\n- For LLM inference, using the **physical core count** (16 threads with `-t 16`) typically gives the best results. SMT (hyperthreading) threads rarely help and can hurt due to cache contention.\n- Experiment with `-t 16` vs `-t 32` and benchmark to confirm.\n\n### Memory Bandwidth\n\n- The Strix Halo has **256-bit LPDDR5X** memory with substantial bandwidth (up to ~120 GB/s depending on configuration).\n- BF16 models use half the memory bandwidth of FP32, which is a significant advantage for memory-bandwidth-bound token generation.\n- Autoregressive token generation in LLMs is almost always memory-bandwidth-bound, so BF16 gives you close to 2x speedup over FP32 in this phase.\n\n### ZenDNN Algorithm Selection\n\nThe `ZENDNNL_MATMUL_ALGO` environment variable controls which backend algorithm ZenDNN uses:\n\n| Value | Algorithm | Notes |\n|-------|-----------|-------|\n| 1     | Blocked AOCL DLP | **Recommended** - best overall performance |\n\nFor additional algorithm options and environment variables, refer to the [ZenDNN runtime environment documentation](https://github.com/amd/ZenDNN).\n\n### Batch Size for Prompt Processing\n\nIf you are processing long prompts, larger batch sizes improve throughput because matrix multiplications become more compute-bound (favoring ZenDNN). The default batch size of 512 is generally good. You can adjust with `-ub` (micro-batch size) and `-b` (batch size).\n\n## How It Works Architecturally\n\nWhen you build with `-DGGML_ZENDNN=ON`, the ZenDNN backend registers itself alongside the standard CPU backend:\n\n1. **ZenDNN backend** handles `MUL_MAT` operations using optimized AMD-specific GEMM routines (via `zendnnl::lowoha::matmul::matmul_direct`).\n2. **CPU backend** handles all other operations (attention, activations, normalization, etc.) using AVX-512 SIMD paths compiled via `-march=native`.\n3. The two backends cooperate automatically -- no manual configuration needed to split work between them.\n\nThis means you get the best of both worlds: AMD-optimized matrix multiplication from ZenDNN, plus the standard llama.cpp CPU backend with full AVX-512 BF16 support for everything else.\n\n## Verifying ZenDNN is Active\n\nWhen you start llama-server or llama-cli, check the startup logs. You should see the ZenDNN backend being initialized. You can also look for backend information in the log output confirming that MUL_MAT operations are being routed to ZenDNN.\n\n## Summary\n\n| Setting | Value |\n|---------|-------|\n| Build flag | `-DGGML_ZENDNN=ON` |\n| GPU offload | `-ngl 0` (none) |\n| Thread count | `-t 16` (physical cores) |\n| Environment | `ZENDNNL_MATMUL_ALGO=1` |\n| Data type | BF16 GGUF model |\n| CPU features used | AVX-512, AVX-512 BF16, AVX-512 VNNI (via `-march=native`) |\n\nThis configuration gives you optimized CPU-only inference leveraging both ZenDNN's tuned matrix multiplication and the Zen 5 AVX-512 instruction set for a 7B BF16 model on your Ryzen AI Max 395.\n"}], "eval-6-server-deploy-with_skill": [{"name": "response.md", "type": "text", "content": "# Optimal llama-server Configuration for Strix Halo (Llama 3 8B Q4_K_M, 4-5 Concurrent Users)\n\n## Prerequisites (Do These First)\n\n### 1. Increase TTM Memory Limits\n\nThis is critical. Without it, the GPU can only access a small fraction of system RAM and you will hit OOM errors under sustained multi-user load.\n\nCreate `/etc/modprobe.d/increase_amd_memory.conf`:\n```\noptions ttm pages_limit=25600000\noptions ttm page_pool_size=25600000\n```\n\nApply and reboot:\n```bash\nsudo update-initramfs -u -k all\nsudo reboot\n```\n\nVerify after reboot:\n```bash\ncat /sys/module/ttm/parameters/pages_limit\n# Should show: 25600000\n```\n\n### 2. Install ROCm 6.1+\n\nVerify your installation:\n```bash\nrocminfo | grep -i \"Name:\" | grep gfx\n# Should show gfx1150 or gfx1151\n```\n\nMake sure your user is in the `video` and `render` groups:\n```bash\nsudo usermod -a -G video,render $USER\n```\n\n### 3. Remove HSA_OVERRIDE_GFX_VERSION If Set\n\nIf you followed older guides, you may have this set. It forces generic kernels and hurts performance. Remove it from your `.bashrc` or shell profile.\n\n## Build Configuration\n\nUse the optimized HIP/ROCm build targeting gfx1150 specifically:\n\n```bash\ncmake -S . -B build \\\n  -DGGML_HIP=ON \\\n  -DGPU_TARGETS=\"gfx1150\" \\\n  -DGGML_HIP_GRAPHS=ON \\\n  -DGGML_CUDA_FORCE_MMQ=ON \\\n  -DCMAKE_BUILD_TYPE=Release \\\n  -DCMAKE_HIP_FLAGS=\"-O3\"\n\ncmake --build build --config Release -j $(nproc)\n```\n\nKey flags explained:\n- **`GPU_TARGETS=\"gfx1150\"`**: Compiles kernels specifically for RDNA 3.5 instead of a bloated multi-arch build. Cuts compile time from 30+ minutes to under 10 and produces better-optimized code.\n- **`GGML_HIP_GRAPHS=ON`**: HIP graph capture reduces kernel dispatch overhead, which matters under concurrent load.\n- **`GGML_CUDA_FORCE_MMQ=ON`**: Forces quantized matmul kernels, which are often faster than hipBLAS on RDNA 3.5 for quantized models like Q4_K_M.\n\nIf you have rocWMMA v2.0+ installed, also add `-DGGML_HIP_ROCWMMA_FATTN=ON` for optimized flash attention kernels.\n\nVerify the build:\n```bash\n./build/bin/llama-bench --list-devices\n# Should show: AMD Radeon Graphics (gfx1150 or gfx1151)\n```\n\n## Server Launch Configuration\n\n```bash\nexport ROCBLAS_USE_HIPBLASLT=1\n\n./build/bin/llama-server \\\n  -m /path/to/llama-3-8b-Q4_K_M.gguf \\\n  -ngl 99 \\\n  --no-mmap \\\n  -fa on \\\n  -ctk q8_0 -ctv q8_0 \\\n  -c 8192 \\\n  -np 5 \\\n  -b 2048 -ub 512 \\\n  -t 4 \\\n  --host 0.0.0.0 \\\n  --port 8080\n```\n\n### Parameter Rationale\n\n| Parameter | Value | Why |\n|-----------|-------|-----|\n| `-ngl 99` | Full GPU offload | The Radeon 890M handles all layers well for an 8B model. Unified memory means zero transfer penalty. |\n| `--no-mmap` | Disable memory mapping | Critical for stable operation. HIP's `hipMemcpy()` has severe overhead with mmap'd pages under sustained load. |\n| `-fa on` | Flash attention | Reduces memory usage for long contexts and is WMMA-accelerated on RDNA 3.5. |\n| `-ctk q8_0 -ctv q8_0` | Quantized KV cache | With 5 parallel slots, each needing its own KV cache, this cuts memory usage roughly in half vs f16 with negligible quality loss. |\n| `-c 8192` | 8K context length | Good balance for most use cases. Each slot gets up to 8K tokens of context. |\n| `-np 5` | 5 parallel slots | Matches your team size (4-5 users). Each user gets a dedicated slot so requests don't queue behind each other. |\n| `-b 2048 -ub 512` | Batch sizes | Good defaults for prompt processing throughput on Strix Halo. |\n| `-t 4` | 4 CPU threads | Keep this low. CPU and GPU share the ~256 GB/s memory bus, so excess CPU threads compete with the GPU for bandwidth and hurt token generation speed. |\n| `ROCBLAS_USE_HIPBLASLT=1` | hipBLASLt kernels | Without this, prompt processing is 2-3x slower (~350 t/s vs ~880 t/s for 7B Q4). Always set this. |\n\n### Memory Budget Estimate\n\nFor Llama 3 8B Q4_K_M with this configuration:\n- **Model weights**: ~4.9 GB (8B params at ~4.8 bits/weight for Q4_K_M)\n- **KV cache (q8_0, 5 slots, 8K context)**: ~2.5 GB approximately\n- **Runtime overhead**: ~1-2 GB\n- **Total**: ~8-9 GB -- well within any Strix Halo system's unified memory\n\nThis leaves plenty of headroom. If your team needs longer contexts, you can safely increase `-c` to 16384 or even 32768.\n\n## Expected Performance\n\nWith this configuration, expect approximately:\n- **Prompt processing**: ~800-900 tokens/s (with hipBLASLt enabled)\n- **Token generation (single user)**: ~40-50 tokens/s\n- **Token generation (5 concurrent)**: Throughput is shared across slots, so individual users will see lower per-user speeds under full concurrent load, but aggregate throughput remains high\n\n## Setting Up as a Systemd Service\n\nFor production stability, run llama-server as a systemd service so it auto-restarts on failure and starts on boot.\n\nCreate `/etc/systemd/system/llama-server.service`:\n```ini\n[Unit]\nDescription=llama.cpp Inference Server\nAfter=network.target\n\n[Service]\nType=simple\nUser=llama\nGroup=llama\nWorkingDirectory=/opt/llama.cpp\nEnvironment=ROCBLAS_USE_HIPBLASLT=1\nExecStart=/opt/llama.cpp/build/bin/llama-server \\\n  -m /opt/models/llama-3-8b-Q4_K_M.gguf \\\n  -ngl 99 \\\n  --no-mmap \\\n  -fa on \\\n  -ctk q8_0 -ctv q8_0 \\\n  -c 8192 \\\n  -np 5 \\\n  -b 2048 -ub 512 \\\n  -t 4 \\\n  --host 0.0.0.0 \\\n  --port 8080\nRestart=on-failure\nRestartSec=10\nLimitMEMLOCK=infinity\nLimitNOFILE=65536\n\n[Install]\nWantedBy=multi-user.target\n```\n\nEnable and start:\n```bash\nsudo systemctl daemon-reload\nsudo systemctl enable llama-server\nsudo systemctl start llama-server\nsudo systemctl status llama-server\n```\n\nKey service settings:\n- **`Restart=on-failure`** with **`RestartSec=10`**: Auto-restarts the server if it crashes, with a 10-second cooldown.\n- **`LimitMEMLOCK=infinity`**: Allows HIP to lock memory pages as needed.\n- **`LimitNOFILE=65536`**: Prevents file descriptor exhaustion under concurrent connections.\n- **`Environment=ROCBLAS_USE_HIPBLASLT=1`**: The hipBLASLt variable must be set in the service environment, not just your shell profile.\n\n## Monitoring\n\n### Health Check\n\nThe server exposes a `/health` endpoint:\n```bash\ncurl http://localhost:8080/health\n```\n\nYou can use this for load balancer health checks or a simple watchdog script.\n\n### Metrics\n\nThe `/metrics` endpoint provides Prometheus-compatible metrics for monitoring request throughput, latency, and slot utilization.\n\n### GPU Monitoring\n\nMonitor GPU memory and utilization with:\n```bash\nwatch -n 2 rocm-smi\n```\n\nWatch for TTM-related OOM under sustained multi-user load. If you see errors, verify your TTM `pages_limit` is correctly set.\n\n## Tuning for Your Workload\n\n### If users need longer contexts\n\nIncrease `-c` (e.g., `-c 16384` or `-c 32768`). With q8_0 KV cache and a relatively small 8B model, you have plenty of memory headroom. If memory becomes tight at very large contexts, switch to `-ctk q4_0 -ctv q4_0` for additional savings at the cost of slight quality degradation on very long contexts.\n\n### If you add more concurrent users\n\nIncrease `-np` to match. Each additional slot adds KV cache memory proportional to context length. For an 8B Q4_K_M model, each 8K-context slot with q8_0 KV cache costs roughly 0.5 GB, so scaling to 8-10 users is feasible.\n\n### If prompt processing feels slow\n\nVerify `ROCBLAS_USE_HIPBLASLT=1` is set in the server's environment (check `systemctl show llama-server | grep Environment`). This is the most common cause of unexpectedly slow prompt ingestion.\n\n### Benchmarking your specific setup\n\nBefore going to production, run a quick benchmark to validate performance:\n```bash\nexport ROCBLAS_USE_HIPBLASLT=1\n\n./build/bin/llama-bench \\\n  -m /path/to/llama-3-8b-Q4_K_M.gguf \\\n  -ngl 99 \\\n  --no-mmap \\\n  -t 4 \\\n  -p 512 -n 128 \\\n  -r 3\n```\n\nYou should see pp512 in the 800-900 t/s range and tg128 around 40-50 t/s. If prompt processing is below 400 t/s, hipBLASLt is not active.\n"}], "eval-6-server-deploy-without_skill": [{"name": "response.md", "type": "text", "content": "# Optimal llama-server Configuration for Strix Halo with Llama 3 8B Q4_K_M\n\n## Hardware Context\n\nAMD Strix Halo (Ryzen AI 300 series) features:\n- **CPU**: Zen 5 cores with AVX-512 support, large L3 cache, CCX (Core Complex) topology\n- **iGPU**: RDNA 3.5 (Radeon 890M) with shared unified memory\n- **Memory**: LPDDR5X unified memory (typically 32-64 GB, shared between CPU and iGPU)\n- **Key advantage**: Unified memory architecture eliminates CPU-GPU data copies\n\nLlama 3 8B Q4_K_M model characteristics:\n- ~4.9 GB model file size\n- ~5-6 GB RAM for model weights in memory\n- KV cache memory depends on context size and number of parallel slots\n\n## Recommended Launch Configuration\n\n```bash\n./llama-server \\\n    --model /path/to/Meta-Llama-3-8B-Q4_K_M.gguf \\\n    --host 0.0.0.0 \\\n    --port 8080 \\\n    --ctx-size 8192 \\\n    --parallel 5 \\\n    --batch-size 2048 \\\n    --ubatch-size 512 \\\n    --threads 8 \\\n    --threads-batch 16 \\\n    --flash-attn on \\\n    --cache-type-k q8_0 \\\n    --cache-type-v q8_0 \\\n    --cont-batching \\\n    --predict -1 \\\n    --slots\n```\n\n## Parameter Rationale\n\n### Context and Slots\n\n| Parameter | Value | Reasoning |\n|-----------|-------|-----------|\n| `--ctx-size 8192` | 8192 tokens | Llama 3 supports up to 8192 natively. This is the total context budget divided across all slots. Each of the 5 slots gets ~1638 tokens. If your users need longer contexts, increase this (e.g., 16384 or 32768) but monitor memory usage. |\n| `--parallel 5` | 5 slots | One slot per concurrent user. Match this to your expected peak concurrency (4-5 users). The server defaults to 4 when set to auto. Setting to 5 covers your upper bound. |\n| `--cont-batching` | enabled | Continuous batching (enabled by default) allows the server to process prompt tokens for one request while generating tokens for another, dramatically improving throughput for concurrent users. |\n\n### Threading\n\n| Parameter | Value | Reasoning |\n|-----------|-------|-----------|\n| `--threads 8` | 8 threads | For token generation. Zen 5 cores are powerful individually; using too many threads adds synchronization overhead. For an 8B model, 8 threads typically hits the sweet spot on Zen 5. |\n| `--threads-batch 16` | 16 threads | For prompt processing (batch/prefill). This is more parallelizable, so using more threads improves prompt ingestion speed. Use up to the number of physical cores available. |\n\nStrix Halo SKUs vary (up to 16 cores). Adjust these based on your specific SKU:\n- **12-core SKU**: Use `--threads 6 --threads-batch 12`\n- **16-core SKU**: Use `--threads 8 --threads-batch 16`\n\n### Batching\n\n| Parameter | Value | Reasoning |\n|-----------|-------|-----------|\n| `--batch-size 2048` | 2048 tokens | Logical batch size. This is the maximum number of tokens processed in a single batch. The default (2048) works well for 5 concurrent users. |\n| `--ubatch-size 512` | 512 tokens | Physical batch size. Controls actual compute granularity. The default (512) is well-tuned for most hardware. |\n\n### Memory Optimization\n\n| Parameter | Value | Reasoning |\n|-----------|-------|-----------|\n| `--flash-attn on` | enabled | Flash Attention reduces KV cache memory traffic and improves throughput, especially important with multiple concurrent slots. Zen 5 and RDNA 3.5 both benefit. |\n| `--cache-type-k q8_0` | q8_0 quantized | Quantizing the KV cache K values to q8_0 roughly halves KV cache memory vs f16 with negligible quality loss. Critical for fitting 5 slots in memory. |\n| `--cache-type-v q8_0` | q8_0 quantized | Same for V values. Together these reduce KV cache from ~1 GB to ~500 MB for 5 slots at 8K context. |\n\n### Memory Budget Estimate (8192 ctx, 5 parallel slots)\n\n| Component | Approximate Memory |\n|-----------|-------------------|\n| Model weights (Q4_K_M) | ~5.0 GB |\n| KV cache (q8_0 K+V, 5 slots) | ~0.5 GB |\n| Working memory / overhead | ~1.0 GB |\n| **Total** | **~6.5 GB** |\n\nThis leaves significant headroom on a 32 GB or 64 GB Strix Halo system.\n\n## Optional: Vulkan iGPU Offload\n\nStrix Halo's RDNA 3.5 iGPU shares unified memory with the CPU. You can offload some layers to the iGPU for additional throughput:\n\n```bash\n# Build with Vulkan support first:\n# cmake -B build -DGGML_VULKAN=ON && cmake --build build\n\n./llama-server \\\n    --model /path/to/Meta-Llama-3-8B-Q4_K_M.gguf \\\n    --host 0.0.0.0 \\\n    --port 8080 \\\n    --ctx-size 8192 \\\n    --parallel 5 \\\n    --batch-size 2048 \\\n    --ubatch-size 512 \\\n    --threads 8 \\\n    --threads-batch 16 \\\n    --flash-attn on \\\n    --cache-type-k q8_0 \\\n    --cache-type-v q8_0 \\\n    --cont-batching \\\n    --n-gpu-layers 33 \\\n    --slots\n```\n\nSetting `--n-gpu-layers 33` offloads all 32 transformer layers plus the output layer to the Vulkan iGPU. Because Strix Halo uses unified memory, this avoids the usual PCIe transfer bottleneck. Benchmark both CPU-only and Vulkan configurations to determine which gives better throughput for your specific SKU -- the iGPU can be faster for batch processing while the Zen 5 CPU excels at parallel slot handling.\n\n## NUMA Considerations\n\nIf your Strix Halo SKU has multiple CCX clusters (some higher-end models), consider:\n\n```bash\n--numa distribute\n```\n\nThis spreads work across NUMA nodes. However, most Strix Halo mobile/workstation chips are single-socket with unified memory, so this may not be necessary. Test with and without.\n\n## Production Hardening\n\n### Systemd Service File\n\nCreate `/etc/systemd/system/llama-server.service`:\n\n```ini\n[Unit]\nDescription=llama.cpp Server\nAfter=network.target\n\n[Service]\nType=simple\nUser=llama\nGroup=llama\nWorkingDirectory=/opt/llama.cpp\nExecStart=/opt/llama.cpp/build/bin/llama-server \\\n    --model /opt/models/Meta-Llama-3-8B-Q4_K_M.gguf \\\n    --host 0.0.0.0 \\\n    --port 8080 \\\n    --ctx-size 8192 \\\n    --parallel 5 \\\n    --batch-size 2048 \\\n    --ubatch-size 512 \\\n    --threads 8 \\\n    --threads-batch 16 \\\n    --flash-attn on \\\n    --cache-type-k q8_0 \\\n    --cache-type-v q8_0 \\\n    --cont-batching \\\n    --slots\nRestart=always\nRestartSec=5\nLimitNOFILE=65536\nEnvironment=\"LLAMA_CACHE=/opt/llama.cpp/cache\"\n\n[Install]\nWantedBy=multi-user.target\n```\n\nEnable and start:\n\n```bash\nsudo systemctl daemon-reload\nsudo systemctl enable --now llama-server\nsudo systemctl status llama-server\n```\n\n### Reverse Proxy (Nginx)\n\nFor TLS termination and basic access control:\n\n```nginx\nupstream llama_backend {\n    server 127.0.0.1:8080;\n}\n\nserver {\n    listen 443 ssl;\n    server_name llama.internal.example.com;\n\n    ssl_certificate     /etc/ssl/certs/llama.crt;\n    ssl_certificate_key /etc/ssl/private/llama.key;\n\n    # Basic auth for team access\n    auth_basic \"LLM Service\";\n    auth_basic_user_file /etc/nginx/.htpasswd;\n\n    # Increase timeouts for long generations\n    proxy_read_timeout 300s;\n    proxy_send_timeout 300s;\n\n    # SSE support for streaming\n    proxy_buffering off;\n    proxy_cache off;\n\n    location / {\n        proxy_pass http://llama_backend;\n        proxy_set_header Host $host;\n        proxy_set_header X-Real-IP $remote_addr;\n        proxy_set_header Connection '';\n        proxy_http_version 1.1;\n        chunked_transfer_encoding off;\n    }\n}\n```\n\n### Monitoring\n\nThe `--slots` endpoint (enabled by default) exposes slot utilization at `GET /slots`. Use it to monitor:\n\n- Active vs idle slots\n- Tokens processed per slot\n- Prompt cache hit rates\n\nYou can also use the `/health` endpoint for load balancer health checks and `/metrics` for Prometheus-compatible metrics.\n\n### API Key Protection\n\nllama-server supports API key authentication:\n\n```bash\n--api-key \"your-secret-key-here\"\n```\n\nClients must then include `Authorization: Bearer your-secret-key-here` in requests. For multiple keys, use `--api-key-file /path/to/keys.txt` with one key per line.\n\n## Performance Tuning Checklist\n\n1. **Benchmark first**: Run `llama-bench` with your model to establish baseline tok/s\n2. **Thread count sweep**: Try `--threads` values from 4 to your physical core count; measure tok/s at each\n3. **Test Vulkan vs CPU**: Compare throughput with and without `--n-gpu-layers 33`\n4. **Monitor memory**: Watch `htop` / `free -h` under full 5-user concurrent load\n5. **Stress test**: Use the server's built-in bench endpoint or `tools/server/bench` to simulate concurrent users before going live\n6. **Context scaling**: If users need longer conversations, increase `--ctx-size` but re-verify memory fits\n\n## Scaling Considerations\n\nIf 5 concurrent users is not enough in the future:\n- **More slots**: Increase `--parallel` to 8 (increase `--ctx-size` proportionally to maintain per-slot context)\n- **Quantized KV cache**: Drop to `q4_0` for K and V cache types to further reduce memory per slot\n- **Smaller context**: If your use case allows, reduce per-slot context by lowering `--ctx-size`\n- **Model swap**: Consider Q4_K_S quantization for slightly less memory, or Q5_K_M if you have headroom and want better quality\n"}]}, "benchmark": {"metadata": {"skill_name": "strix-halo-optimizer", "skill_path": "/home/user/llama.cpp/strix-halo-optimizer", "executor_model": "claude-opus-4-6", "analyzer_model": "claude-opus-4-6", "timestamp": "2026-03-05T07:29:13Z", "evals_run": [1, 2, 3, 4, 5, 6], "runs_per_configuration": 1}, "runs": [{"eval_id": 1, "eval_name": "full-setup-guide", "config": "with_skill", "pass_rate": 1.0, "passed": 6, "total": 6, "total_tokens": 29148, "total_duration_seconds": 81.2, "expectations": [{"text": "ttm_memory_fix", "passed": true, "evidence": "Full TTM config provided"}, {"text": "correct_gpu_target", "passed": true, "evidence": "GPU_TARGETS=gfx1150"}, {"text": "hipblaslt_env", "passed": true, "evidence": "ROCBLAS_USE_HIPBLASLT=1"}, {"text": "no_mmap_flag", "passed": true, "evidence": "--no-mmap explained"}, {"text": "full_gpu_offload", "passed": true, "evidence": "-ngl 99"}, {"text": "quantization_recommendation", "passed": true, "evidence": "Q4_K_M recommended"}]}, {"eval_id": 1, "eval_name": "full-setup-guide", "config": "without_skill", "pass_rate": 0.5, "passed": 3, "total": 6, "total_tokens": 51555, "total_duration_seconds": 161.2, "expectations": [{"text": "ttm_memory_fix", "passed": false, "evidence": "Uses GGML_CUDA_ENABLE_UNIFIED_MEMORY instead"}, {"text": "correct_gpu_target", "passed": true, "evidence": "GPU_TARGETS=gfx1150"}, {"text": "hipblaslt_env", "passed": false, "evidence": "Not mentioned"}, {"text": "no_mmap_flag", "passed": false, "evidence": "Not mentioned"}, {"text": "full_gpu_offload", "passed": true, "evidence": "-ngl 99"}, {"text": "quantization_recommendation", "passed": true, "evidence": "Q4_K_M recommended"}]}, {"eval_id": 2, "eval_name": "slow-prompt-processing", "config": "with_skill", "pass_rate": 1.0, "passed": 3, "total": 3, "total_tokens": 25226, "total_duration_seconds": 77.1, "expectations": [{"text": "identifies_rocblas_issue", "passed": true, "evidence": "Identifies poorly optimized rocBLAS kernels"}, {"text": "hipblaslt_solution", "passed": true, "evidence": "ROCBLAS_USE_HIPBLASLT=1"}, {"text": "expected_improvement", "passed": true, "evidence": "348 to 882 t/s (~2.5x)"}]}, {"eval_id": 2, "eval_name": "slow-prompt-processing", "config": "without_skill", "pass_rate": 0.0, "passed": 0, "total": 3, "total_tokens": 37938, "total_duration_seconds": 154.4, "expectations": [{"text": "identifies_rocblas_issue", "passed": false, "evidence": "Misdiagnoses as CPU-only, recommends Vulkan"}, {"text": "hipblaslt_solution", "passed": false, "evidence": "Not mentioned"}, {"text": "expected_improvement", "passed": false, "evidence": "Claims 1500-3000+ t/s (wrong)"}]}, {"eval_id": 3, "eval_name": "oom-memory-issue", "config": "with_skill", "pass_rate": 1.0, "passed": 3, "total": 3, "total_tokens": 21403, "total_duration_seconds": 67.4, "expectations": [{"text": "explains_unified_memory", "passed": true, "evidence": "Explains UMA, 4GB is BIOS-configured portion"}, {"text": "ttm_fix", "passed": true, "evidence": "Full modprobe.d config with pages_limit=25600000"}, {"text": "reboot_required", "passed": true, "evidence": "update-initramfs + reboot"}]}, {"eval_id": 3, "eval_name": "oom-memory-issue", "config": "without_skill", "pass_rate": 0.333, "passed": 1, "total": 3, "total_tokens": 23557, "total_duration_seconds": 133.3, "expectations": [{"text": "explains_unified_memory", "passed": true, "evidence": "Explains UMA and 4GB carve-out"}, {"text": "ttm_fix", "passed": false, "evidence": "Recommends GGML_CUDA_ENABLE_UNIFIED_MEMORY + BIOS UMA"}, {"text": "reboot_required", "passed": false, "evidence": "No TTM context"}]}, {"eval_id": 4, "eval_name": "vulkan-vs-hip-backend-choice", "config": "with_skill", "pass_rate": 1.0, "passed": 4, "total": 4, "total_tokens": 35309, "total_duration_seconds": 149.8, "expectations": [{"text": "vulkan_build_command", "passed": true, "evidence": "GGML_VULKAN=ON"}, {"text": "hip_recommended_over_vulkan", "passed": true, "evidence": "HIP recommended with hipBLASLt advantage"}, {"text": "vulkan_known_issues", "passed": true, "evidence": "Mentions #18741"}, {"text": "vulkan_as_valid_fallback", "passed": true, "evidence": "Acknowledges Vulkan as viable"}]}, {"eval_id": 4, "eval_name": "vulkan-vs-hip-backend-choice", "config": "without_skill", "pass_rate": 0.75, "passed": 3, "total": 4, "total_tokens": 63853, "total_duration_seconds": 199.5, "expectations": [{"text": "vulkan_build_command", "passed": true, "evidence": "GGML_VULKAN=ON"}, {"text": "hip_recommended_over_vulkan", "passed": true, "evidence": "Notes HIP advantages"}, {"text": "vulkan_known_issues", "passed": false, "evidence": "Does not mention #18741"}, {"text": "vulkan_as_valid_fallback", "passed": true, "evidence": "Acknowledges Vulkan as viable"}]}, {"eval_id": 5, "eval_name": "cpu-only-zendnn-setup", "config": "with_skill", "pass_rate": 1.0, "passed": 4, "total": 4, "total_tokens": 41200, "total_duration_seconds": 155.9, "expectations": [{"text": "zendnn_build_flags", "passed": true, "evidence": "GGML_ZENDNN=ON"}, {"text": "zendnn_matmul_algo", "passed": true, "evidence": "ZENDNNL_MATMUL_ALGO=1"}, {"text": "bf16_recommendation", "passed": true, "evidence": "BF16 recommended"}, {"text": "thread_count", "passed": true, "evidence": "16 physical cores"}]}, {"eval_id": 5, "eval_name": "cpu-only-zendnn-setup", "config": "without_skill", "pass_rate": 1.0, "passed": 4, "total": 4, "total_tokens": 56518, "total_duration_seconds": 158.3, "expectations": [{"text": "zendnn_build_flags", "passed": true, "evidence": "GGML_ZENDNN=ON"}, {"text": "zendnn_matmul_algo", "passed": true, "evidence": "ZENDNNL_MATMUL_ALGO=1"}, {"text": "bf16_recommendation", "passed": true, "evidence": "BF16 mentioned"}, {"text": "thread_count", "passed": true, "evidence": "-t 16"}]}, {"eval_id": 6, "eval_name": "llama-server-production-deploy", "config": "with_skill", "pass_rate": 1.0, "passed": 4, "total": 4, "total_tokens": 37721, "total_duration_seconds": 204.5, "expectations": [{"text": "parallel_sequences", "passed": true, "evidence": "-np 5"}, {"text": "kv_cache_quantization", "passed": true, "evidence": "-ctk q8_0"}, {"text": "server_runtime_flags", "passed": true, "evidence": "ngl 99, --no-mmap, hipBLASLt"}, {"text": "production_stability", "passed": true, "evidence": "systemd, health endpoints"}]}, {"eval_id": 6, "eval_name": "llama-server-production-deploy", "config": "without_skill", "pass_rate": 0.75, "passed": 3, "total": 4, "total_tokens": 42128, "total_duration_seconds": 242.5, "expectations": [{"text": "parallel_sequences", "passed": true, "evidence": "--parallel 5"}, {"text": "kv_cache_quantization", "passed": true, "evidence": "--cache-type-k q8_0"}, {"text": "server_runtime_flags", "passed": false, "evidence": "Uses Vulkan, missing hipBLASLt and --no-mmap"}, {"text": "production_stability", "passed": true, "evidence": "systemd, nginx, health endpoints"}]}], "run_summary": {"delta": {"pass_rate": "+44.4%", "time_seconds": "-52.3s", "tokens": "-14257"}}, "notes": ["Eval 5 (ZenDNN) is non-discriminating: 4/4 both with and without skill across all 3 iterations", "Without-skill responses contain harmful advice: HSA_OVERRIDE_GFX_VERSION (eval 1), wrong Vulkan diagnosis (eval 2), BIOS UMA instead of TTM (eval 3)", "With-skill runs use 31% fewer tokens on average while achieving 100% pass rate"]}};
+
+    // ---- State ----
+    let feedbackMap = {};  // run_id -> feedback text
+    let currentIndex = 0;
+    let visitedRuns = new Set();
+
+    // ---- Init ----
+    async function init() {
+      // Load saved feedback from server — but only if this isn't a fresh
+      // iteration (indicated by previous_feedback being present). When
+      // previous feedback exists, the feedback.json on disk is stale from
+      // the prior iteration and should not pre-fill the textareas.
+      const hasPrevious = Object.keys(EMBEDDED_DATA.previous_feedback || {}).length > 0
+        || Object.keys(EMBEDDED_DATA.previous_outputs || {}).length > 0;
+      if (!hasPrevious) {
+        try {
+          const resp = await fetch("/api/feedback");
+          const data = await resp.json();
+          if (data.reviews) {
+            for (const r of data.reviews) feedbackMap[r.run_id] = r.feedback;
+          }
+        } catch { /* first run, no feedback yet */ }
+      }
+
+      document.getElementById("skill-name").textContent = EMBEDDED_DATA.skill_name;
+      showRun(0);
+
+      // Wire up feedback auto-save
+      const textarea = document.getElementById("feedback");
+      let saveTimeout = null;
+      textarea.addEventListener("input", () => {
+        clearTimeout(saveTimeout);
+        document.getElementById("feedback-status").textContent = "";
+        saveTimeout = setTimeout(() => saveCurrentFeedback(), 800);
+      });
+    }
+
+    // ---- Navigation ----
+    function navigate(delta) {
+      const newIndex = currentIndex + delta;
+      if (newIndex >= 0 && newIndex < EMBEDDED_DATA.runs.length) {
+        saveCurrentFeedback();
+        showRun(newIndex);
+      }
+    }
+
+    function updateNavButtons() {
+      document.getElementById("prev-btn").disabled = currentIndex === 0;
+      document.getElementById("next-btn").disabled =
+        currentIndex === EMBEDDED_DATA.runs.length - 1;
+    }
+
+    // ---- Show a run ----
+    function showRun(index) {
+      currentIndex = index;
+      const run = EMBEDDED_DATA.runs[index];
+
+      // Progress
+      document.getElementById("progress").textContent =
+        `${index + 1} of ${EMBEDDED_DATA.runs.length}`;
+
+      // Prompt
+      document.getElementById("prompt-text").textContent = run.prompt;
+
+      // Config badge
+      const badge = document.getElementById("config-badge");
+      const configMatch = run.id.match(/(with_skill|without_skill|new_skill|old_skill)/);
+      if (configMatch) {
+        const config = configMatch[1];
+        const isBaseline = config === "without_skill" || config === "old_skill";
+        badge.textContent = config.replace(/_/g, " ");
+        badge.className = "config-badge " + (isBaseline ? "config-baseline" : "config-primary");
+        badge.style.display = "inline-block";
+      } else {
+        badge.style.display = "none";
+      }
+
+      // Outputs
+      renderOutputs(run);
+
+      // Previous outputs
+      renderPrevOutputs(run);
+
+      // Grades
+      renderGrades(run);
+
+      // Previous feedback
+      const prevFb = (EMBEDDED_DATA.previous_feedback || {})[run.id];
+      const prevEl = document.getElementById("prev-feedback");
+      if (prevFb) {
+        document.getElementById("prev-feedback-text").textContent = prevFb;
+        prevEl.style.display = "block";
+      } else {
+        prevEl.style.display = "none";
+      }
+
+      // Feedback
+      document.getElementById("feedback").value = feedbackMap[run.id] || "";
+      document.getElementById("feedback-status").textContent = "";
+
+      updateNavButtons();
+
+      // Track visited runs and promote done button when all visited
+      visitedRuns.add(index);
+      const doneBtn = document.getElementById("done-btn");
+      if (visitedRuns.size >= EMBEDDED_DATA.runs.length) {
+        doneBtn.classList.add("ready");
+      }
+
+      // Scroll main content to top
+      document.querySelector(".main").scrollTop = 0;
+    }
+
+    // ---- Render outputs ----
+    function renderOutputs(run) {
+      const container = document.getElementById("outputs-body");
+      container.innerHTML = "";
+
+      const outputs = run.outputs || [];
+      if (outputs.length === 0) {
+        container.innerHTML = '<div class="empty-state">No output files</div>';
+        return;
+      }
+
+      for (const file of outputs) {
+        const fileDiv = document.createElement("div");
+        fileDiv.className = "output-file";
+
+        // Always show file header with download link
+        const header = document.createElement("div");
+        header.className = "output-file-header";
+        const nameSpan = document.createElement("span");
+        nameSpan.textContent = file.name;
+        header.appendChild(nameSpan);
+        const dlBtn = document.createElement("a");
+        dlBtn.className = "dl-btn";
+        dlBtn.textContent = "Download";
+        dlBtn.download = file.name;
+        dlBtn.href = getDownloadUri(file);
+        header.appendChild(dlBtn);
+        fileDiv.appendChild(header);
+
+        const content = document.createElement("div");
+        content.className = "output-file-content";
+
+        if (file.type === "text") {
+          const pre = document.createElement("pre");
+          pre.textContent = file.content;
+          content.appendChild(pre);
+        } else if (file.type === "image") {
+          const img = document.createElement("img");
+          img.src = file.data_uri;
+          img.alt = file.name;
+          content.appendChild(img);
+        } else if (file.type === "pdf") {
+          const iframe = document.createElement("iframe");
+          iframe.src = file.data_uri;
+          content.appendChild(iframe);
+        } else if (file.type === "xlsx") {
+          renderXlsx(content, file.data_b64);
+        } else if (file.type === "binary") {
+          const a = document.createElement("a");
+          a.className = "download-link";
+          a.href = file.data_uri;
+          a.download = file.name;
+          a.textContent = "Download " + file.name;
+          content.appendChild(a);
+        } else if (file.type === "error") {
+          const pre = document.createElement("pre");
+          pre.textContent = file.content;
+          pre.style.color = "var(--red)";
+          content.appendChild(pre);
+        }
+
+        fileDiv.appendChild(content);
+        container.appendChild(fileDiv);
+      }
+    }
+
+    // ---- XLSX rendering via SheetJS ----
+    function renderXlsx(container, b64Data) {
+      try {
+        const raw = Uint8Array.from(atob(b64Data), c => c.charCodeAt(0));
+        const wb = XLSX.read(raw, { type: "array" });
+
+        for (let i = 0; i < wb.SheetNames.length; i++) {
+          const sheetName = wb.SheetNames[i];
+          const ws = wb.Sheets[sheetName];
+
+          if (wb.SheetNames.length > 1) {
+            const sheetLabel = document.createElement("div");
+            sheetLabel.style.cssText =
+              "font-weight:600; font-size:0.8rem; color:#b0aea5; margin-top:0.5rem; margin-bottom:0.25rem;";
+            sheetLabel.textContent = "Sheet: " + sheetName;
+            container.appendChild(sheetLabel);
+          }
+
+          const htmlStr = XLSX.utils.sheet_to_html(ws, { editable: false });
+          const wrapper = document.createElement("div");
+          wrapper.innerHTML = htmlStr;
+          container.appendChild(wrapper);
+        }
+      } catch (err) {
+        container.textContent = "Error rendering spreadsheet: " + err.message;
+      }
+    }
+
+    // ---- Grades ----
+    function renderGrades(run) {
+      const section = document.getElementById("grades-section");
+      const content = document.getElementById("grades-content");
+
+      if (!run.grading) {
+        section.style.display = "none";
+        return;
+      }
+
+      const grading = run.grading;
+      section.style.display = "block";
+      // Reset to collapsed
+      content.classList.remove("open");
+      document.getElementById("grades-arrow").classList.remove("open");
+
+      const summary = grading.summary || {};
+      const expectations = grading.expectations || [];
+
+      let html = '<div style="padding: 1rem;">';
+
+      // Summary line
+      const passRate = summary.pass_rate != null
+        ? Math.round(summary.pass_rate * 100) + "%"
+        : "?";
+      const badgeClass = summary.pass_rate >= 0.8 ? "grade-pass" : summary.pass_rate >= 0.5 ? "" : "grade-fail";
+      html += '<div class="grades-summary">';
+      html += '<span class="grade-badge ' + badgeClass + '">' + passRate + '</span>';
+      html += '<span>' + (summary.passed || 0) + ' passed, ' + (summary.failed || 0) + ' failed of ' + (summary.total || 0) + '</span>';
+      html += '</div>';
+
+      // Assertions list
+      html += '<ul class="assertion-list">';
+      for (const exp of expectations) {
+        const statusClass = exp.passed ? "pass" : "fail";
+        const statusIcon = exp.passed ? "\u2713" : "\u2717";
+        html += '<li class="assertion-item">';
+        html += '<span class="assertion-status ' + statusClass + '">' + statusIcon + '</span>';
+        html += '<span>' + escapeHtml(exp.text) + '</span>';
+        if (exp.evidence) {
+          html += '<div class="assertion-evidence">' + escapeHtml(exp.evidence) + '</div>';
+        }
+        html += '</li>';
+      }
+      html += '</ul>';
+
+      html += '</div>';
+      content.innerHTML = html;
+    }
+
+    function toggleGrades() {
+      const content = document.getElementById("grades-content");
+      const arrow = document.getElementById("grades-arrow");
+      content.classList.toggle("open");
+      arrow.classList.toggle("open");
+    }
+
+    // ---- Previous outputs (collapsible) ----
+    function renderPrevOutputs(run) {
+      const section = document.getElementById("prev-outputs-section");
+      const content = document.getElementById("prev-outputs-content");
+      const prevOutputs = (EMBEDDED_DATA.previous_outputs || {})[run.id];
+
+      if (!prevOutputs || prevOutputs.length === 0) {
+        section.style.display = "none";
+        return;
+      }
+
+      section.style.display = "block";
+      // Reset to collapsed
+      content.classList.remove("open");
+      document.getElementById("prev-outputs-arrow").classList.remove("open");
+
+      // Render the files into the content area
+      content.innerHTML = "";
+      const wrapper = document.createElement("div");
+      wrapper.style.padding = "1rem";
+
+      for (const file of prevOutputs) {
+        const fileDiv = document.createElement("div");
+        fileDiv.className = "output-file";
+
+        const header = document.createElement("div");
+        header.className = "output-file-header";
+        const nameSpan = document.createElement("span");
+        nameSpan.textContent = file.name;
+        header.appendChild(nameSpan);
+        const dlBtn = document.createElement("a");
+        dlBtn.className = "dl-btn";
+        dlBtn.textContent = "Download";
+        dlBtn.download = file.name;
+        dlBtn.href = getDownloadUri(file);
+        header.appendChild(dlBtn);
+        fileDiv.appendChild(header);
+
+        const fc = document.createElement("div");
+        fc.className = "output-file-content";
+
+        if (file.type === "text") {
+          const pre = document.createElement("pre");
+          pre.textContent = file.content;
+          fc.appendChild(pre);
+        } else if (file.type === "image") {
+          const img = document.createElement("img");
+          img.src = file.data_uri;
+          img.alt = file.name;
+          fc.appendChild(img);
+        } else if (file.type === "pdf") {
+          const iframe = document.createElement("iframe");
+          iframe.src = file.data_uri;
+          fc.appendChild(iframe);
+        } else if (file.type === "xlsx") {
+          renderXlsx(fc, file.data_b64);
+        } else if (file.type === "binary") {
+          const a = document.createElement("a");
+          a.className = "download-link";
+          a.href = file.data_uri;
+          a.download = file.name;
+          a.textContent = "Download " + file.name;
+          fc.appendChild(a);
+        }
+
+        fileDiv.appendChild(fc);
+        wrapper.appendChild(fileDiv);
+      }
+
+      content.appendChild(wrapper);
+    }
+
+    function togglePrevOutputs() {
+      const content = document.getElementById("prev-outputs-content");
+      const arrow = document.getElementById("prev-outputs-arrow");
+      content.classList.toggle("open");
+      arrow.classList.toggle("open");
+    }
+
+    // ---- Feedback (saved to server -> feedback.json) ----
+    function saveCurrentFeedback() {
+      const run = EMBEDDED_DATA.runs[currentIndex];
+      const text = document.getElementById("feedback").value;
+
+      if (text.trim() === "") {
+        delete feedbackMap[run.id];
+      } else {
+        feedbackMap[run.id] = text;
+      }
+
+      // Build reviews array from map
+      const reviews = [];
+      for (const [run_id, feedback] of Object.entries(feedbackMap)) {
+        if (feedback.trim()) {
+          reviews.push({ run_id, feedback, timestamp: new Date().toISOString() });
+        }
+      }
+
+      fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reviews, status: "in_progress" }),
+      }).then(() => {
+        document.getElementById("feedback-status").textContent = "Saved";
+      }).catch(() => {
+        // Static mode or server unavailable — no-op on auto-save,
+        // feedback will be downloaded on final submit
+        document.getElementById("feedback-status").textContent = "Will download on submit";
+      });
+    }
+
+    // ---- Done ----
+    function showDoneDialog() {
+      // Save current textarea to feedbackMap (but don't POST yet)
+      const run = EMBEDDED_DATA.runs[currentIndex];
+      const text = document.getElementById("feedback").value;
+      if (text.trim() === "") {
+        delete feedbackMap[run.id];
+      } else {
+        feedbackMap[run.id] = text;
+      }
+
+      // POST once with status: complete — include ALL runs so the model
+      // can distinguish "no feedback" (looks good) from "not reviewed"
+      const reviews = [];
+      const ts = new Date().toISOString();
+      for (const r of EMBEDDED_DATA.runs) {
+        reviews.push({ run_id: r.id, feedback: feedbackMap[r.id] || "", timestamp: ts });
+      }
+      const payload = JSON.stringify({ reviews, status: "complete" }, null, 2);
+      fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: payload,
+      }).then(() => {
+        document.getElementById("done-overlay").classList.add("visible");
+      }).catch(() => {
+        // Server not available (static mode) — download as file
+        const blob = new Blob([payload], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "feedback.json";
+        a.click();
+        URL.revokeObjectURL(url);
+        document.getElementById("done-overlay").classList.add("visible");
+      });
+    }
+
+    function closeDoneDialog() {
+      // Reset status back to in_progress
+      saveCurrentFeedback();
+      document.getElementById("done-overlay").classList.remove("visible");
+    }
+
+    // ---- Toast ----
+    function showToast(message) {
+      const toast = document.getElementById("toast");
+      toast.textContent = message;
+      toast.classList.add("visible");
+      setTimeout(() => toast.classList.remove("visible"), 2000);
+    }
+
+    // ---- Keyboard nav ----
+    document.addEventListener("keydown", (e) => {
+      // Don't capture when typing in textarea
+      if (e.target.tagName === "TEXTAREA") return;
+
+      if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+        e.preventDefault();
+        navigate(-1);
+      } else if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+        e.preventDefault();
+        navigate(1);
+      }
+    });
+
+    // ---- Util ----
+    function getDownloadUri(file) {
+      if (file.data_uri) return file.data_uri;
+      if (file.data_b64) return "data:application/octet-stream;base64," + file.data_b64;
+      if (file.type === "text") return "data:text/plain;charset=utf-8," + encodeURIComponent(file.content);
+      return "#";
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement("div");
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    // ---- View switching ----
+    function switchView(view) {
+      document.querySelectorAll(".view-tab").forEach(t => t.classList.remove("active"));
+      document.querySelectorAll(".view-panel").forEach(p => p.classList.remove("active"));
+      document.querySelector(`[onclick="switchView('${view}')"]`).classList.add("active");
+      document.getElementById("panel-" + view).classList.add("active");
+    }
+
+    // ---- Benchmark rendering ----
+    function renderBenchmark() {
+      const data = EMBEDDED_DATA.benchmark;
+      if (!data) return;
+
+      // Show the tabs
+      document.getElementById("view-tabs").style.display = "flex";
+
+      const container = document.getElementById("benchmark-content");
+      const summary = data.run_summary || {};
+      const metadata = data.metadata || {};
+      const notes = data.notes || [];
+
+      let html = "";
+
+      // Header
+      html += "<h2 style='font-family: Poppins, sans-serif; margin-bottom: 0.5rem;'>Benchmark Results</h2>";
+      html += "<p style='color: var(--text-muted); font-size: 0.875rem; margin-bottom: 1.25rem;'>";
+      if (metadata.skill_name) html += "<strong>" + escapeHtml(metadata.skill_name) + "</strong> &mdash; ";
+      if (metadata.timestamp) html += metadata.timestamp + " &mdash; ";
+      if (metadata.evals_run) html += "Evals: " + metadata.evals_run.join(", ") + " &mdash; ";
+      html += (metadata.runs_per_configuration || "?") + " runs per configuration";
+      html += "</p>";
+
+      // Summary table
+      html += '<table class="benchmark-table">';
+
+      function fmtStat(stat, pct) {
+        if (!stat) return "—";
+        const suffix = pct ? "%" : "";
+        const m = pct ? (stat.mean * 100).toFixed(0) : stat.mean.toFixed(1);
+        const s = pct ? (stat.stddev * 100).toFixed(0) : stat.stddev.toFixed(1);
+        return m + suffix + " ± " + s + suffix;
+      }
+
+      function deltaClass(val) {
+        if (!val) return "";
+        const n = parseFloat(val);
+        if (n > 0) return "benchmark-delta-positive";
+        if (n < 0) return "benchmark-delta-negative";
+        return "";
+      }
+
+      // Discover config names dynamically (everything except "delta")
+      const configs = Object.keys(summary).filter(k => k !== "delta");
+      const configA = configs[0] || "config_a";
+      const configB = configs[1] || "config_b";
+      const labelA = configA.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+      const labelB = configB.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+      const a = summary[configA] || {};
+      const b = summary[configB] || {};
+      const delta = summary.delta || {};
+
+      html += "<thead><tr><th>Metric</th><th>" + escapeHtml(labelA) + "</th><th>" + escapeHtml(labelB) + "</th><th>Delta</th></tr></thead>";
+      html += "<tbody>";
+
+      html += "<tr><td><strong>Pass Rate</strong></td>";
+      html += "<td>" + fmtStat(a.pass_rate, true) + "</td>";
+      html += "<td>" + fmtStat(b.pass_rate, true) + "</td>";
+      html += '<td class="' + deltaClass(delta.pass_rate) + '">' + (delta.pass_rate || "—") + "</td></tr>";
+
+      // Time (only show row if data exists)
+      if (a.time_seconds || b.time_seconds) {
+        html += "<tr><td><strong>Time (s)</strong></td>";
+        html += "<td>" + fmtStat(a.time_seconds, false) + "</td>";
+        html += "<td>" + fmtStat(b.time_seconds, false) + "</td>";
+        html += '<td class="' + deltaClass(delta.time_seconds) + '">' + (delta.time_seconds ? delta.time_seconds + "s" : "—") + "</td></tr>";
+      }
+
+      // Tokens (only show row if data exists)
+      if (a.tokens || b.tokens) {
+        html += "<tr><td><strong>Tokens</strong></td>";
+        html += "<td>" + fmtStat(a.tokens, false) + "</td>";
+        html += "<td>" + fmtStat(b.tokens, false) + "</td>";
+        html += '<td class="' + deltaClass(delta.tokens) + '">' + (delta.tokens || "—") + "</td></tr>";
+      }
+
+      html += "</tbody></table>";
+
+      // Per-eval breakdown (if runs data available)
+      const runs = data.runs || [];
+      if (runs.length > 0) {
+        const evalIds = [...new Set(runs.map(r => r.eval_id))].sort((a, b) => a - b);
+
+        html += "<h3 style='font-family: Poppins, sans-serif; margin-bottom: 0.75rem;'>Per-Eval Breakdown</h3>";
+
+        const hasTime = runs.some(r => r.result && r.result.time_seconds != null);
+        const hasErrors = runs.some(r => r.result && r.result.errors > 0);
+
+        for (const evalId of evalIds) {
+          const evalRuns = runs.filter(r => r.eval_id === evalId);
+          const evalName = evalRuns[0] && evalRuns[0].eval_name ? evalRuns[0].eval_name : "Eval " + evalId;
+
+          html += "<h4 style='font-family: Poppins, sans-serif; margin: 1rem 0 0.5rem; color: var(--text);'>" + escapeHtml(evalName) + "</h4>";
+          html += '<table class="benchmark-table">';
+          html += "<thead><tr><th>Config</th><th>Run</th><th>Pass Rate</th>";
+          if (hasTime) html += "<th>Time (s)</th>";
+          if (hasErrors) html += "<th>Crashes During Execution</th>";
+          html += "</tr></thead>";
+          html += "<tbody>";
+
+          // Group by config and render with average rows
+          const configGroups = [...new Set(evalRuns.map(r => r.configuration))];
+          for (let ci = 0; ci < configGroups.length; ci++) {
+            const config = configGroups[ci];
+            const configRuns = evalRuns.filter(r => r.configuration === config);
+            if (configRuns.length === 0) continue;
+
+            const rowClass = ci === 0 ? "benchmark-row-with" : "benchmark-row-without";
+            const configLabel = config.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+
+            for (const run of configRuns) {
+              const r = run.result || {};
+              const prClass = r.pass_rate >= 0.8 ? "benchmark-delta-positive" : r.pass_rate < 0.5 ? "benchmark-delta-negative" : "";
+              html += '<tr class="' + rowClass + '">';
+              html += "<td>" + configLabel + "</td>";
+              html += "<td>" + run.run_number + "</td>";
+              html += '<td class="' + prClass + '">' + ((r.pass_rate || 0) * 100).toFixed(0) + "% (" + (r.passed || 0) + "/" + (r.total || 0) + ")</td>";
+              if (hasTime) html += "<td>" + (r.time_seconds != null ? r.time_seconds.toFixed(1) : "—") + "</td>";
+              if (hasErrors) html += "<td>" + (r.errors || 0) + "</td>";
+              html += "</tr>";
+            }
+
+            // Average row
+            const rates = configRuns.map(r => (r.result || {}).pass_rate || 0);
+            const avgRate = rates.reduce((a, b) => a + b, 0) / rates.length;
+            const avgPrClass = avgRate >= 0.8 ? "benchmark-delta-positive" : avgRate < 0.5 ? "benchmark-delta-negative" : "";
+            html += '<tr class="benchmark-row-avg ' + rowClass + '">';
+            html += "<td>" + configLabel + "</td>";
+            html += "<td>Avg</td>";
+            html += '<td class="' + avgPrClass + '">' + (avgRate * 100).toFixed(0) + "%</td>";
+            if (hasTime) {
+              const times = configRuns.map(r => (r.result || {}).time_seconds).filter(t => t != null);
+              html += "<td>" + (times.length ? (times.reduce((a, b) => a + b, 0) / times.length).toFixed(1) : "—") + "</td>";
+            }
+            if (hasErrors) html += "<td></td>";
+            html += "</tr>";
+          }
+          html += "</tbody></table>";
+
+          // Per-assertion detail for this eval
+          const runsWithExpectations = {};
+          for (const config of configGroups) {
+            runsWithExpectations[config] = evalRuns.filter(r => r.configuration === config && r.expectations && r.expectations.length > 0);
+          }
+          const hasAnyExpectations = Object.values(runsWithExpectations).some(runs => runs.length > 0);
+          if (hasAnyExpectations) {
+            // Collect all unique assertion texts across all configs
+            const allAssertions = [];
+            const seen = new Set();
+            for (const config of configGroups) {
+              for (const run of runsWithExpectations[config]) {
+                for (const exp of (run.expectations || [])) {
+                  if (!seen.has(exp.text)) {
+                    seen.add(exp.text);
+                    allAssertions.push(exp.text);
+                  }
+                }
+              }
+            }
+
+            html += '<table class="benchmark-table" style="margin-top: 0.5rem;">';
+            html += "<thead><tr><th>Assertion</th>";
+            for (const config of configGroups) {
+              const label = config.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+              html += "<th>" + escapeHtml(label) + "</th>";
+            }
+            html += "</tr></thead><tbody>";
+
+            for (const assertionText of allAssertions) {
+              html += "<tr><td>" + escapeHtml(assertionText) + "</td>";
+
+              for (const config of configGroups) {
+                html += "<td>";
+                for (const run of runsWithExpectations[config]) {
+                  const exp = (run.expectations || []).find(e => e.text === assertionText);
+                  if (exp) {
+                    const cls = exp.passed ? "benchmark-delta-positive" : "benchmark-delta-negative";
+                    const icon = exp.passed ? "\u2713" : "\u2717";
+                    html += '<span class="' + cls + '" title="Run ' + run.run_number + ': ' + escapeHtml(exp.evidence || "") + '">' + icon + "</span> ";
+                  } else {
+                    html += "— ";
+                  }
+                }
+                html += "</td>";
+              }
+              html += "</tr>";
+            }
+            html += "</tbody></table>";
+          }
+        }
+      }
+
+      // Notes
+      if (notes.length > 0) {
+        html += '<div class="benchmark-notes">';
+        html += "<h3>Analysis Notes</h3>";
+        html += "<ul>";
+        for (const note of notes) {
+          html += "<li>" + escapeHtml(note) + "</li>";
+        }
+        html += "</ul></div>";
+      }
+
+      container.innerHTML = html;
+    }
+
+    // ---- Start ----
+    init();
+    renderBenchmark();
+  </script>
+</body>
+</html>

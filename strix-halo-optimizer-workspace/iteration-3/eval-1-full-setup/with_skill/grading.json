@@ -1,0 +1,12 @@
+{
+  "eval_id": 1,
+  "config": "with_skill",
+  "expectations": [
+    {"text": "ttm_memory_fix", "passed": true, "evidence": "Step 1 covers TTM pages_limit=25600000 with full /etc/modprobe.d/increase_amd_memory.conf config and update-initramfs + reboot"},
+    {"text": "correct_gpu_target", "passed": true, "evidence": "GPU_TARGETS=\"gfx1150\" in build command with explanation"},
+    {"text": "hipblaslt_env", "passed": true, "evidence": "export ROCBLAS_USE_HIPBLASLT=1 with explanation of 2-3x improvement"},
+    {"text": "no_mmap_flag", "passed": true, "evidence": "--no-mmap explained as critical for large models due to HIP page-locking overhead"},
+    {"text": "full_gpu_offload", "passed": true, "evidence": "-ngl 99 with explanation of zero PCIe penalty on unified memory"},
+    {"text": "quantization_recommendation", "passed": true, "evidence": "Q4_K_M recommended, ~40GB size, Q4_0 mentioned as fastest alternative"}
+  ]
+}

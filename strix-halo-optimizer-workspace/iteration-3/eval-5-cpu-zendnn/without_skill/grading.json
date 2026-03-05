@@ -1,0 +1,10 @@
+{
+  "eval_id": 5,
+  "config": "without_skill",
+  "expectations": [
+    {"text": "zendnn_build_flags", "passed": true, "evidence": "GGML_ZENDNN=ON in build command"},
+    {"text": "zendnn_matmul_algo", "passed": true, "evidence": "ZENDNNL_MATMUL_ALGO=1 mentioned"},
+    {"text": "bf16_recommendation", "passed": true, "evidence": "Notes ZenDNN supports FP32/BF16, user's BF16 model is the right choice"},
+    {"text": "thread_count", "passed": true, "evidence": "-t 16 for physical core count"}
+  ]
+}

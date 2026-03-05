@@ -1,0 +1,12 @@
+{
+  "eval_id": 1,
+  "config": "without_skill",
+  "expectations": [
+    {"text": "ttm_memory_fix", "passed": false, "evidence": "Not mentioned at all. Uses GGML_CUDA_ENABLE_UNIFIED_MEMORY=1 instead"},
+    {"text": "correct_gpu_target", "passed": true, "evidence": "GPU_TARGETS=\"gfx1150\" in build command"},
+    {"text": "hipblaslt_env", "passed": false, "evidence": "Not mentioned anywhere in the response"},
+    {"text": "no_mmap_flag", "passed": false, "evidence": "Not mentioned anywhere in the response"},
+    {"text": "full_gpu_offload", "passed": true, "evidence": "-ngl 99 with UMA explanation"},
+    {"text": "quantization_recommendation", "passed": true, "evidence": "Q4_K_M recommended with size table"}
+  ]
+}

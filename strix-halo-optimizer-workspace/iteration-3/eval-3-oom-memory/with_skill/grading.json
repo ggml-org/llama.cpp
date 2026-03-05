@@ -1,0 +1,9 @@
+{
+  "eval_id": 3,
+  "config": "with_skill",
+  "expectations": [
+    {"text": "explains_unified_memory", "passed": true, "evidence": "Explains 'no dedicated VRAM', unified memory, 4GB is 'BIOS-configured dedicated portion'"},
+    {"text": "ttm_fix", "passed": true, "evidence": "Full modprobe.d config with pages_limit=25600000 and page_pool_size=25600000"},
+    {"text": "reboot_required", "passed": true, "evidence": "update-initramfs -u -k all + sudo reboot, plus quick test option via sysfs"}
+  ]
+}

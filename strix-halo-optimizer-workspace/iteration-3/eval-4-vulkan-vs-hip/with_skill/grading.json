@@ -1,0 +1,10 @@
+{
+  "eval_id": 4,
+  "config": "with_skill",
+  "expectations": [
+    {"text": "vulkan_build_command", "passed": true, "evidence": "cmake -B build -DGGML_VULKAN=ON with apt install instructions"},
+    {"text": "hip_recommended_over_vulkan", "passed": true, "evidence": "Clearly recommends HIP for best performance, details hipBLASLt 2.5x advantage"},
+    {"text": "vulkan_known_issues", "passed": true, "evidence": "Mentions issue #18741 - Vulkan model loading failures on Strix Halo"},
+    {"text": "vulkan_as_valid_fallback", "passed": true, "evidence": "States Vulkan is 'perfectly viable', token generation gap is modest"}
+  ]
+}

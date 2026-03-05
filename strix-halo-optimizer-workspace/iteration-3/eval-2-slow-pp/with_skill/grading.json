@@ -1,0 +1,9 @@
+{
+  "eval_id": 2,
+  "config": "with_skill",
+  "expectations": [
+    {"text": "identifies_rocblas_issue", "passed": true, "evidence": "Identifies 'default rocBLAS kernels for gfx1150/gfx1151 are poorly optimized' and explains Tensile vs TensileLt"},
+    {"text": "hipblaslt_solution", "passed": true, "evidence": "export ROCBLAS_USE_HIPBLASLT=1 as the fix"},
+    {"text": "expected_improvement", "passed": true, "evidence": "Table showing pp512: 348 t/s -> 882 t/s, '~2.5x improvement'"}
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "eval_id": 6,
+  "config": "with_skill",
+  "expectations": [
+    {"text": "parallel_sequences", "passed": true, "evidence": "-np 5 / --parallel 5 configured for 4-5 concurrent users"},
+    {"text": "kv_cache_quantization", "passed": true, "evidence": "-ctk q8_0 -ctv q8_0 with memory budget explanation"},
+    {"text": "server_runtime_flags", "passed": true, "evidence": "Includes -ngl 99, --no-mmap, and ROCBLAS_USE_HIPBLASLT=1"},
+    {"text": "production_stability", "passed": true, "evidence": "Full systemd service file, health monitoring endpoints, reverse proxy config"}
+  ]
+}

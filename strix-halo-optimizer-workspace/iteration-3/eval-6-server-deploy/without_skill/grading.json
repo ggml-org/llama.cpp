@@ -1,0 +1,10 @@
+{
+  "eval_id": 6,
+  "config": "without_skill",
+  "expectations": [
+    {"text": "parallel_sequences", "passed": true, "evidence": "--parallel 5 configured"},
+    {"text": "kv_cache_quantization", "passed": true, "evidence": "--cache-type-k q8_0 --cache-type-v q8_0"},
+    {"text": "server_runtime_flags", "passed": false, "evidence": "Has -ngl 99 but uses Vulkan not HIP, missing ROCBLAS_USE_HIPBLASLT=1 and --no-mmap"},
+    {"text": "production_stability", "passed": true, "evidence": "Full systemd service, nginx reverse proxy, health/metrics/slots endpoints"}
+  ]
+}

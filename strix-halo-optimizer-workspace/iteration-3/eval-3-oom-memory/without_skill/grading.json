@@ -1,0 +1,9 @@
+{
+  "eval_id": 3,
+  "config": "without_skill",
+  "expectations": [
+    {"text": "explains_unified_memory", "passed": true, "evidence": "Explains UMA architecture, 4GB is 'BIOS-reported carve-out', GPU shares 128GB system RAM"},
+    {"text": "ttm_fix", "passed": false, "evidence": "Recommends GGML_CUDA_ENABLE_UNIFIED_MEMORY=1 and BIOS UMA settings instead of TTM pages_limit"},
+    {"text": "reboot_required", "passed": false, "evidence": "No TTM fix mentioned so no reboot/initramfs context"}
+  ]
+}
