@@ -35,7 +35,7 @@
 {:else}
 	<span class="flex min-w-0 flex-wrap items-center gap-1 {className}">
 		<span class="min-w-0 truncate font-medium">
-			{#if showOrgName}{parsed.orgName}/{/if}{parsed.modelName ?? modelId}
+			{#if showOrgName && parsed.orgName}{parsed.orgName}/{/if}{parsed.modelName ?? modelId}
 		</span>
 
 		{#if parsed.params}
