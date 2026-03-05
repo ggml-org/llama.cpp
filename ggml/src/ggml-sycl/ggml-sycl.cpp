@@ -548,7 +548,7 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
     struct moe_expert_info {
         int                    layer_id;
         int                    expert_idx;
-        const void *           host_ptr;
+        const void *           data_ptr;   // may be host or device VRAM pointer
         size_t                 bytes;
         const ggml_tensor *    tensor;    // src0 tensor for cache key generation
         ggml_tensor_extra_gpu * extra;    // tensor extra for cache UUID
@@ -657,7 +657,7 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
     for (const auto & info : expert_list) {
         ggml_sycl::ExpertPlacement placement{};
         placement.device_id       = -1;  // CPU-only initially
-        placement.host_ptr        = const_cast<void *>(info.host_ptr);
+        placement.data_ptr        = const_cast<void *>(info.data_ptr);
         placement.weight_bytes    = info.bytes;
         placement.popularity_rank = -1;  // Unranked initially (profiling will update)
         placement_table.set(info.layer_id, info.expert_idx, placement);
@@ -842,15 +842,21 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                 const bool src_on_device = (info.tensor->buffer &&
                                             !ggml_backend_buffer_is_host(info.tensor->buffer));
 
-                const void * upload_src     = info.host_ptr;
+                const void * upload_src     = info.data_ptr;
                 void *       d2h_staging    = nullptr;
+                auto free_staging = [&]() {
+                    if (d2h_staging) {
+                        ggml_sycl_free_host_tracked_bytes(d2h_staging, info.bytes, q);
+                        d2h_staging = nullptr;
+                    }
+                };
 
                 if (src_on_device) {
                     // D2H stage from device 0 to pinned host buffer
                     d2h_staging = ggml_sycl_malloc_host_tracked_bytes(
                         info.bytes, q, "moe_d2h_staging");
                     if (d2h_staging) {
-                        q.memcpy(d2h_staging, info.host_ptr, info.bytes).wait();
+                        q.memcpy(d2h_staging, info.data_ptr, info.bytes).wait();
                         upload_src = d2h_staging;
                     } else {
                         GGML_LOG_ERROR("[MOE-PHASE2] D2H staging alloc failed for L%d E%d (%zu bytes)\n",
@@ -893,17 +899,14 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                     result = budget.cache->ensure_cached_layout(req, {});
                 } catch (const std::exception & e) {
                     GGML_LOG_ERROR("[MOE-PHASE2] ensure_cached_layout EXCEPTION: %s\n", e.what());
-                    if (d2h_staging) { ggml_sycl_free_host_tracked_bytes(d2h_staging, info.bytes, q); }
+                    free_staging();
                     continue;
                 } catch (...) {
                     GGML_LOG_ERROR("[MOE-PHASE2] ensure_cached_layout UNKNOWN EXCEPTION\n");
-                    if (d2h_staging) { ggml_sycl_free_host_tracked_bytes(d2h_staging, info.bytes, q); }
+                    free_staging();
                     continue;
                 }
-                // Free D2H staging buffer (data is now in device 1 cache)
-                if (d2h_staging) {
-                    ggml_sycl_free_host_tracked_bytes(d2h_staging, info.bytes, q);
-                }
+                free_staging();
                 if (result.status == cache_layout_status::READY
                     || result.status == cache_layout_status::IN_PROGRESS) {
                     placement_table.set_device_ptr(

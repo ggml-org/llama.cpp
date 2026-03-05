@@ -151,7 +151,7 @@ bool ExpertPrefetcher::hint_locked(int layer_idx, int expert_idx) {
     }
 
     // No host pointer — cannot prefetch.
-    if (!placement.host_ptr || placement.weight_bytes == 0) {
+    if (!placement.data_ptr || placement.weight_bytes == 0) {
         return false;
     }
 
@@ -174,7 +174,7 @@ bool ExpertPrefetcher::hint_locked(int layer_idx, int expert_idx) {
     // Submit async H2D DMA on the OOQ.
     void * dst = vram_pool_[slot].ptr;
     try {
-        sycl::event ev = dma_queue_->memcpy(dst, placement.host_ptr, placement.weight_bytes);
+        sycl::event ev = dma_queue_->memcpy(dst, placement.data_ptr, placement.weight_bytes);
 
         prefetch_request req;
         req.key        = key;
@@ -609,7 +609,7 @@ void ExpertPrefetcher::preload_experts(int layer_idx, const std::vector<int> & e
         if (placement.device_ptr) {
             continue;
         }
-        if (!placement.host_ptr || placement.weight_bytes == 0) {
+        if (!placement.data_ptr || placement.weight_bytes == 0) {
             continue;
         }
 
@@ -636,7 +636,7 @@ void ExpertPrefetcher::preload_experts(int layer_idx, const std::vector<int> & e
 
         // Synchronous H2D copy during init (blocking is fine at model load).
         try {
-            dma_queue_->memcpy(vram_pool_[slot].ptr, placement.host_ptr, placement.weight_bytes).wait();
+            dma_queue_->memcpy(vram_pool_[slot].ptr, placement.data_ptr, placement.weight_bytes).wait();
 
             vram_pool_[slot].free            = false;
             vram_pool_[slot].cached_key      = key;

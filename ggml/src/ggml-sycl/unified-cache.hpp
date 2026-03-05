@@ -287,10 +287,10 @@ struct cache_layout_result {
 struct ExpertPlacement {
     int    device_id      = -1;      // 0..n_gpu-1 for GPU, -1 = CPU-only
     void * device_ptr     = nullptr; // SOA device pointer (nullptr if CPU-only)
-    void * host_ptr       = nullptr; // AOS host-pinned pointer (always valid after init)
+    void * data_ptr       = nullptr; // AOS weight pointer (host or device VRAM)
     size_t weight_bytes   = 0;       // Per-expert weight size in bytes
     int    popularity_rank = -1;     // 0 = most popular, -1 = unranked
-    bool   is_valid() const { return host_ptr != nullptr; }
+    bool   is_valid() const { return data_ptr != nullptr; }
 };
 
 class ExpertPlacementTable {
