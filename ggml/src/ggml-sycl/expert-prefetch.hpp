@@ -128,6 +128,7 @@ class ExpertPrefetcher {
 
   private:
     std::unique_ptr<sycl::queue> dma_queue_;    // OOQ for async H2D DMA (unique_ptr to avoid static init + enable leak-on-exit)
+    int                          device_id_      = 0;  // Device index for VRAM budget tracking
     int                          prefetch_depth_ = 2;  // Default: 2 layers ahead
     bool                         initialized_   = false;
 

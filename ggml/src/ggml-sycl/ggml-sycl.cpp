@@ -909,13 +909,22 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
             layer_experts[info.layer_id].push_back(info.expert_idx);
         }
 
-        // Sort expert IDs within each layer and preload the first ones.
-        // Layers are iterated in ascending order so preload slots are
-        // distributed starting from early layers (which run first).
+        // Sort expert IDs within each layer, then preload round-robin
+        // across layers so pool slots are distributed evenly.
+        // With 8 slots and 40 layers, each of the first 8 layers gets 1
+        // expert (expert 0, the most frequently activated).
+        int max_per_layer = 0;
         for (auto & [lid, eids] : layer_experts) {
             std::sort(eids.begin(), eids.end());
             eids.erase(std::unique(eids.begin(), eids.end()), eids.end());
-            prefetcher.preload_experts(lid, eids);
+            max_per_layer = std::max(max_per_layer, static_cast<int>(eids.size()));
+        }
+        for (int round = 0; round < max_per_layer; round++) {
+            for (auto & [lid, eids] : layer_experts) {
+                if (round < static_cast<int>(eids.size())) {
+                    prefetcher.preload_experts(lid, { eids[round] });
+                }
+            }
         }
         GGML_LOG_INFO("[MOE-HYBRID] Phase 3: GPU0 prefetch pool pre-loading complete "
                       "(pool_capacity=%d)\n", prefetcher.pool_capacity());

@@ -27,13 +27,18 @@ ExpertPrefetcher::~ExpertPrefetcher() {
     if (initialized_ && !ggml_sycl_is_shutting_down()) {
         shutdown();
     }
-    // Free VRAM pool slots.
+    // Free VRAM pool slots and deregister from VRAM budget.
     if (!ggml_sycl_is_shutting_down() && dma_queue_) {
+        size_t freed_bytes = 0;
         for (auto & slot : vram_pool_) {
             if (slot.ptr) {
                 sycl::free(slot.ptr, *dma_queue_);
                 slot.ptr = nullptr;
+                freed_bytes += vram_slot_bytes_;
             }
+        }
+        if (freed_bytes > 0) {
+            unified_cache_sub_runtime_bytes(device_id_, freed_bytes, runtime_category::EXPERT_CACHE);
         }
     }
     // During static destruction, intentionally leak the queue handle + VRAM pool.
@@ -51,6 +56,9 @@ void ExpertPrefetcher::init(sycl::queue & compute_q) {
     // Create an out-of-order queue on the same device/context for DMA.
     // OOQ allows multiple H2D transfers to overlap and run concurrently.
     dma_queue_ = std::make_unique<sycl::queue>(compute_q.get_context(), compute_q.get_device());
+
+    // Derive device ID from the compute queue for VRAM budget tracking.
+    device_id_ = ggml_sycl_get_device_id_from_queue(compute_q);
 
     // Read prefetch depth from environment
     const char * depth_env = std::getenv("GGML_SYCL_EXPERT_PREFETCH_DEPTH");
@@ -449,7 +457,7 @@ bool ExpertPrefetcher::ensure_pool_allocated(size_t expert_weight_bytes) {
     vram_slot_bytes_ = expert_weight_bytes;
 
     // Query available VRAM and use ~50% for expert cache.
-    size_t avail = unified_cache_available_for_compute(0);
+    size_t avail = unified_cache_available_for_compute(device_id_);
     const float budget_pct = 0.50f;
     size_t budget = static_cast<size_t>(avail * budget_pct);
     int n_slots = (vram_slot_bytes_ > 0) ? static_cast<int>(budget / vram_slot_bytes_) : 0;
@@ -478,7 +486,7 @@ bool ExpertPrefetcher::ensure_pool_allocated(size_t expert_weight_bytes) {
 
     // Register against VRAM budget so other subsystems see the reservation.
     if (total_alloc_bytes > 0) {
-        unified_cache_add_runtime_bytes(0, total_alloc_bytes, runtime_category::EXPERT_CACHE);
+        unified_cache_add_runtime_bytes(device_id_, total_alloc_bytes, runtime_category::EXPERT_CACHE);
     }
 
     GGML_LOG_INFO("[SYCL] Expert prefetch VRAM pool: %zu/%d slots (%.1f KB each, %.1f MB total, "
@@ -509,6 +517,9 @@ int ExpertPrefetcher::acquire_vram_slot_lru(int layer_idx, int expert_idx) {
 
     // All slots occupied — evict the LRU cached entry.
     // Only evict from cached_slots_ (not in-flight entries — those have active DMA).
+    // NOTE: O(n) linear scan over cached_slots_ is intentional at the current
+    // pool cap of [8, 256] slots. If the cap ever exceeds 256, consider replacing
+    // this with a min-heap keyed on last_used_token for O(log n) eviction.
     int    lru_slot  = -1;
     int64_t lru_time = INT64_MAX;
     for (const auto & [ck, si] : cached_slots_) {
