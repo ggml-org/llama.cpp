@@ -16,14 +16,13 @@
 	import { Check, X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
-	import { INPUT_CLASSES } from '$lib/constants/css-classes';
+	import { INPUT_CLASSES, REASONING_TAGS } from '$lib/constants';
 	import { MessageRole, KeyboardKey } from '$lib/enums';
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { ServerModelStatus } from '$lib/enums';
-	import { REASONING_TAGS } from '$lib/constants/agentic';
 
 	interface Props {
 		class?: string;

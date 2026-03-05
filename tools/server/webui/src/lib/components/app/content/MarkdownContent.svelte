@@ -22,8 +22,9 @@
 		IMAGE_NOT_ERROR_BOUND_SELECTOR,
 		DATA_ERROR_BOUND_ATTR,
 		DATA_ERROR_HANDLED_ATTR,
-		BOOL_TRUE_STRING
-	} from '$lib/constants/markdown';
+		BOOL_TRUE_STRING,
+		SETTINGS_KEYS
+	} from '$lib/constants';
 	import { UrlPrefix } from '$lib/enums';
 	import { FileTypeText } from '$lib/enums/files';
 	import {
@@ -39,7 +40,6 @@
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import type { DatabaseMessageExtra } from '$lib/types/database';
 	import { config } from '$lib/stores/settings.svelte';
-	import { SETTINGS_KEYS } from '$lib/constants/settings-keys';
 
 	interface Props {
 		attachments?: DatabaseMessageExtra[];
