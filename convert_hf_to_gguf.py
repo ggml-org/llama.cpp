@@ -563,48 +563,22 @@ class ModelBase:
         return ()
 
     @staticmethod
-    def _nvfp4_pack(weight: Tensor, scale: Tensor, scale2: Tensor) -> tuple[np.ndarray, list[int]]:
+    def _nvfp4_pack(weight: Tensor, scale: Tensor) -> tuple[np.ndarray, list[int]]:
         """Repack NVFP4 ModelOpt tensors into ggml super-block layout.
-        When scale2 is close to 1.0, preserves original E4M3 scale bits exactly.
-        Otherwise dequantizes and requantizes with scale2 baked in.
+        Preserves original E4M3 scale bits as UE4M3 (strip sign bit).
+        The per-tensor scale2 factor is stored as a separate tensor and applied at inference time via ggml_mul().
         Returns (raw_data, logical_shape)."""
 
         out_features = weight.shape[0]
         n_blocks = scale.shape[1]
 
-        e2m1_lut = torch.tensor([0, 0.5, 1, 1.5, 2, 3, 4, 6, 0, -0.5, -1, -1.5, -2, -3, -4, -6])
-
         # Unpack ModelOpt nibble-packed weights
         w = weight.reshape(out_features, n_blocks, 8)
         vals = torch.stack([w & 0x0F, w >> 4], dim=-1).reshape(out_features, n_blocks, 16)
 
-        scale2_trivial = (scale2.numel() <= 1 and abs(float(scale2.float().sum()) - 1.0) < 1e-6)
-
-        if scale2_trivial:
-            # Preserve original E4M3 scale bits as UE4M3 (strip sign bit)
-            d_ue = scale.view(torch.uint8).numpy().reshape(out_features, n_blocks) & 0x7F
-            qs = (vals[:, :, :8] | (vals[:, :, 8:] << 4)).to(torch.uint8).numpy()
-        else:
-            # Dequantize with scale2, then requantize into UE4M3 scales + E2M1 nibbles
-            float_vals = e2m1_lut[vals.long()] * (scale.float() * scale2.float()).unsqueeze(-1)
-
-            amax = float_vals.abs().amax(dim=-1)
-            d_ue = gguf.quants.NVFP4.fp32_to_ue4m3((amax / 6.0).numpy())
-
-            # Decode UE4M3 scales to find best E2M1 indices
-            ue_exp = (d_ue >> 3) & 0xF
-            ue_man = d_ue & 0x7
-            ue_float = np.where(
-                d_ue == 0, 0.0,
-                np.where(ue_exp == 0, ue_man.astype(np.float32) * 2**-9,
-                         (1.0 + ue_man.astype(np.float32) / 8.0) * (2.0 ** (ue_exp.astype(np.float32) - 7))))
-            ue_float_t = torch.from_numpy(ue_float).float().unsqueeze(-1)
-
-            inv_scale = torch.where(ue_float_t > 0, 1.0 / ue_float_t, torch.zeros_like(ue_float_t))
-            target = float_vals * inv_scale
-            best_idx = (target.unsqueeze(-1) - e2m1_lut.reshape(1, 1, 1, 16)).abs().argmin(dim=-1).to(torch.uint8)
-
-            qs = (best_idx[:, :, :8] | (best_idx[:, :, 8:] << 4)).numpy()
+        # Preserve original E4M3 scale bits as UE4M3 (strip sign bit)
+        d_ue = scale.view(torch.uint8).numpy().reshape(out_features, n_blocks) & 0x7F
+        qs = (vals[:, :, :8] | (vals[:, :, 8:] << 4)).to(torch.uint8).numpy()
 
         # Pack into super-blocks: [4 UE4M3 scales, 32 qs bytes] = 36 bytes per 64 elements
         n_super = n_blocks // 4
@@ -613,14 +587,26 @@ class ModelBase:
         raw = np.concatenate([d_grouped, qs_grouped], axis=-1).reshape(out_features, n_super * 36)
         return raw, [out_features, n_super * 64]
 
+    @staticmethod
+    def _nvfp4_scale2_is_trivial(scale2: Tensor) -> bool:
+        return scale2.numel() <= 1 and abs(float(scale2.float().sum()) - 1.0) < 1e-6
+
     def _repack_nvfp4(self, new_name: str, weight: Tensor, scale: Tensor, scale2: Tensor):
-        raw, shape = self._nvfp4_pack(weight, scale, scale2)
+        raw, shape = self._nvfp4_pack(weight, scale)
         logger.info(f"Repacked {new_name} with shape {shape} and quantization NVFP4")
         self.gguf_writer.add_tensor(new_name, raw, raw_dtype=gguf.GGMLQuantizationType.NVFP4)
+
+        # Emit per-tensor scale2 as a separate F32 tensor when non-trivial
+        if not self._nvfp4_scale2_is_trivial(scale2):
+            scale2_f32 = scale2.float().numpy().flatten()
+            scale_name = new_name.replace(".weight", ".scale")
+            logger.info(f"  + {scale_name} (per-tensor NVFP4 scale2, shape [{scale2_f32.size}])")
+            self.gguf_writer.add_tensor(scale_name, scale2_f32)
 
     def _generate_nvfp4_tensors(self) -> Iterable[tuple[str, Tensor]]:
         # Per-layer expert merging to avoid holding all experts in memory
         expert_blocks: dict[tuple[int, str], list[tuple[int, np.ndarray]]] = {}
+        expert_scales: dict[tuple[int, str], list[tuple[int, float]]] = {}
         expert_shapes: dict[tuple[int, str], list[int]] = {}
         n_experts = self.find_hparam(["num_local_experts", "num_experts"], optional=True) or 0
 
@@ -645,39 +631,50 @@ class ModelBase:
                 bid = int(bid_m.group(1)) if bid_m else 0
                 key = (bid, proj_type)
 
-                raw, shape = self._nvfp4_pack(weight, scale, scale2)
+                raw, shape = self._nvfp4_pack(weight, scale)
 
                 if key not in expert_blocks:
                     expert_blocks[key] = []
+                    expert_scales[key] = []
                     expert_shapes[key] = shape
                 expert_blocks[key].append((expert_id, raw.copy()))
+                # Collect per-expert scale2 (scalar per expert)
+                expert_scales[key].append((expert_id, float(scale2.float().sum())))
 
                 # Flush when all experts for this (layer, proj) are collected
                 if n_experts > 0 and len(expert_blocks[key]) >= n_experts:
-                    experts = expert_blocks.pop(key)
-                    shape = expert_shapes.pop(key)
-                    experts.sort(key=lambda x: x[0])
-                    merged = np.stack([e[1] for e in experts], axis=0)
-                    merged_name = f"model.layers.{bid}.mlp.experts.{proj_type}.weight"
-                    new_name = self.map_tensor_name(merged_name)
-                    logger.info(f"Repacked {new_name} with shape [{len(experts)}, {shape[0]}, {shape[1]}] and quantization NVFP4")
-                    self.gguf_writer.add_tensor(new_name, merged, raw_dtype=gguf.GGMLQuantizationType.NVFP4)
-                    del experts, merged
+                    self._flush_nvfp4_experts(key, expert_blocks, expert_scales, expert_shapes, bid, proj_type)
             else:
                 new_name = self.map_tensor_name(name)
                 self._repack_nvfp4(new_name, weight, scale, scale2)
 
         # Flush any remaining experts (fallback if n_experts was unknown)
-        for (bid, proj_type), experts in expert_blocks.items():
-            experts.sort(key=lambda x: x[0])
-            merged = np.stack([e[1] for e in experts], axis=0)
-            merged_name = f"model.layers.{bid}.mlp.experts.{proj_type}.weight"
-            new_name = self.map_tensor_name(merged_name)
-            shape = expert_shapes[(bid, proj_type)]
-            logger.info(f"Repacked {new_name} with shape [{len(experts)}, {shape[0]}, {shape[1]}] and quantization NVFP4")
-            self.gguf_writer.add_tensor(new_name, merged, raw_dtype=gguf.GGMLQuantizationType.NVFP4)
+        for (bid, proj_type) in list(expert_blocks.keys()):
+            self._flush_nvfp4_experts((bid, proj_type), expert_blocks, expert_scales, expert_shapes, bid, proj_type)
 
         return []
+
+    def _flush_nvfp4_experts(self, key, expert_blocks, expert_scales, expert_shapes, bid, proj_type):
+        experts = expert_blocks.pop(key)
+        scales = expert_scales.pop(key)
+        shape = expert_shapes.pop(key)
+
+        experts.sort(key=lambda x: x[0])
+        merged = np.stack([e[1] for e in experts], axis=0)
+        merged_name = f"model.layers.{bid}.mlp.experts.{proj_type}.weight"
+        new_name = self.map_tensor_name(merged_name)
+        logger.info(f"Repacked {new_name} with shape [{len(experts)}, {shape[0]}, {shape[1]}] and quantization NVFP4")
+        self.gguf_writer.add_tensor(new_name, merged, raw_dtype=gguf.GGMLQuantizationType.NVFP4)
+
+        # Emit per-expert scale2 tensor if any expert has non-trivial scale2
+        scales.sort(key=lambda x: x[0])
+        scale_vals = np.array([s[1] for s in scales], dtype=np.float32)
+        if not np.allclose(scale_vals, 1.0, atol=1e-6):
+            scale_name = new_name.replace(".weight", ".scale")
+            logger.info(f"  + {scale_name} (per-expert NVFP4 scale2, shape [{len(scales)}])")
+            self.gguf_writer.add_tensor(scale_name, scale_vals)
+
+        del experts, merged
 
     def prepare_tensors(self):
         # detect NVFP4 quantization (ModelOpt format)
