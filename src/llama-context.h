@@ -340,6 +340,18 @@ private:
 
     bool has_evaluated_once = false;
 
+    // APEX runtime scheduling (UMA bandwidth-aware offload)
+    // Inline policy state — full apex_scheduler.h included only in common/.
+    struct {
+        bool   active = false;
+        int    offload_start_layer = 0;
+        int    offload_end_layer = -1;
+        // Pending profiler results (set by common/ code, consumed in decode())
+        double pending_ffn_us  = 0.0;
+        double pending_attn_us = 0.0;
+    } apex_policy_state;
+    bool apex_profiling_done = false;
+
     // env: LLAMA_GRAPH_REUSE_DISABLE
     bool graph_reuse_disable = false;
 

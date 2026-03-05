@@ -12,6 +12,48 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+
+// APEX runtime scheduling - inlined to avoid dependency on common/ library.
+// Full implementation in common/apex-scheduler.{h,cpp} and common/uma-profiler.{h,cpp}.
+// The llama library cannot link against common/, so we inline the minimal logic needed.
+namespace apex_inline {
+
+// Attention op names used by llama.cpp graph construction.
+static bool is_attention_op(const char * name) {
+    if (!name) return false;
+    static const char * attn_ops[] = {
+        "Qcur", "Kcur", "Vcur", "attn_out", "attn_norm",
+        "kqv", "kq", "kq_soft_max", "kqv_out", "kqv_mla",
+        "Qcur_normed", "Kcur_normed", nullptr,
+    };
+    for (const char ** op = attn_ops; *op; ++op) {
+        if (strcmp(name, *op) == 0) return true;
+    }
+    return false;
+}
+
+// Evaluate APEX critical inequality for decode workloads.
+// Returns true if CPU offload is profitable.
+static bool evaluate_offload(double T_glinear_us, double T_gatt_us) {
+    if (T_glinear_us <= 0.0 || T_gatt_us <= 0.0) return false;
+
+    // Estimate CPU attention time as 10x GPU (typical for UMA)
+    double T_catt_us = T_gatt_us * 10.0;
+
+    // APEX inequality: ratio < threshold means offload is profitable
+    double ratio     = T_gatt_us / T_catt_us;
+    double threshold = 2.0 * (T_glinear_us / T_gatt_us) + 3.0 + (T_gatt_us / T_glinear_us);
+
+    if (ratio >= threshold) return false;
+
+    // Confirm hybrid throughput > GPU-only
+    double gpu_only_time = T_glinear_us + T_gatt_us;
+    double hybrid_time   = std::max(T_glinear_us, T_catt_us);
+
+    return (1.0 / hybrid_time) > (1.0 / gpu_only_time);
+}
+
+} // namespace apex_inline
 #include <stdexcept>
 
 //
@@ -1759,6 +1801,32 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
     }
 
+    // APEX: evaluate scheduling after profiling warmup completes.
+    // The profiler data is communicated via apex_set_profiler_results() called from common/.
+    // Here we just check if we have pending results to evaluate.
+    if (!apex_profiling_done && apex_policy_state.pending_ffn_us > 0.0) {
+        apex_profiling_done = true;
+
+        double avg_ffn_us  = apex_policy_state.pending_ffn_us;
+        double avg_attn_us = apex_policy_state.pending_attn_us;
+
+        bool offload = apex_inline::evaluate_offload(avg_ffn_us, avg_attn_us);
+
+        if (offload) {
+            apex_policy_state.active              = true;
+            apex_policy_state.offload_start_layer = 0;
+            apex_policy_state.offload_end_layer   = model.hparams.n_layer - 1;
+
+            LLAMA_LOG_INFO("%s: APEX gate: offload=yes (ffn=%.1f us, attn=%.1f us)\n",
+                __func__, avg_ffn_us, avg_attn_us);
+            LLAMA_LOG_INFO("%s: APEX: offloading attention to CPU for layers %d-%d\n",
+                __func__, apex_policy_state.offload_start_layer, apex_policy_state.offload_end_layer);
+        } else {
+            LLAMA_LOG_INFO("%s: APEX gate: offload=no (ffn=%.1f us, attn=%.1f us) — GPU-only\n",
+                __func__, avg_ffn_us, avg_attn_us);
+        }
+    }
+
     // wait for the computation to finish (automatically done when obtaining the model output)
     //synchronize();
 
@@ -2100,6 +2168,20 @@ llm_graph_cb llama_context::graph_get_cb() const {
                         if (ggml_backend_supports_op(backend.get(), cur)) {
                             ggml_backend_sched_set_tensor_backend(sched.get(), cur, backend.get());
                         }
+                    }
+                }
+            }
+        }
+
+        // APEX-driven attention offload to CPU (UMA bandwidth-aware scheduling)
+        // When the APEX inequality gate determines CPU offload is profitable,
+        // route attention ops to CPU backend to free GPU for bandwidth-heavy FFN.
+        if (apex_policy_state.active && il >= 0) {
+            if (il >= apex_policy_state.offload_start_layer &&
+                (apex_policy_state.offload_end_layer < 0 || il <= apex_policy_state.offload_end_layer)) {
+                if (apex_inline::is_attention_op(name)) {
+                    if (backend_cpu && ggml_backend_supports_op(backend_cpu, cur)) {
+                        ggml_backend_sched_set_tensor_backend(sched.get(), cur, backend_cpu);
                     }
                 }
             }

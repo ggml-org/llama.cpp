@@ -126,7 +126,29 @@ bool uma_profiler_cb_eval(struct ggml_tensor * t, bool ask, void * user_data) {
     stats.count++;
     stats.layer = layer;
 
+    // detect decode phase: MUL_MAT with batch size 1 (src[1]->ne[1] <= 1)
+    if (t->op == GGML_OP_MUL_MAT && t->src[1] && t->src[1]->ne[1] <= 1) {
+        stats.is_decode = true;
+    }
+
     return true;
+}
+
+void uma_profiler_check_batch_size(uma_profiler_data & data, int32_t batch_size) {
+    data.current_batch_size = batch_size;
+    if (data.profiled_batch_size == 0) {
+        data.profiled_batch_size = batch_size;
+        return;
+    }
+    // Re-profile if batch size changed by more than 2x
+    if (batch_size > data.profiled_batch_size * 2 || batch_size * 2 < data.profiled_batch_size) {
+        data.needs_reprofile = true;
+        data.profiling_active = true;
+        data.n_iterations = 0;
+        data.profiled_batch_size = batch_size;
+        // Clear old stats
+        data.op_stats.clear();
+    }
 }
 
 void uma_profiler_iteration_done(uma_profiler_data & data) {
@@ -157,11 +179,17 @@ std::vector<uma_layer_analysis> uma_profiler_analyze_layers(const uma_profiler_d
             if (stats.total_bytes > 0) {
                 la.attn_ai = static_cast<double>(stats.total_flops) / stats.total_bytes;
             }
+            if (stats.is_decode && stats.total_bytes > 0) {
+                la.attn_ai_decode = static_cast<double>(stats.total_flops) / stats.total_bytes;
+            }
         } else if (cls == 'F') {
             la.ffn_us += stats.total_us;
             la.ffn_bytes += stats.total_bytes;
             if (stats.total_bytes > 0) {
                 la.ffn_ai = static_cast<double>(stats.total_flops) / stats.total_bytes;
+            }
+            if (stats.is_decode && stats.total_bytes > 0) {
+                la.ffn_ai_decode = static_cast<double>(stats.total_flops) / stats.total_bytes;
             }
         }
     }
@@ -248,6 +276,43 @@ std::string uma_profiler_report(uma_profiler_data & data) {
         report << buf;
     }
     report << "\n";
+
+    // Decode-phase analysis
+    bool has_decode_stats = false;
+    for (const auto & la : layers) {
+        if (la.attn_ai_decode > 0.0 || la.ffn_ai_decode > 0.0) {
+            has_decode_stats = true;
+            break;
+        }
+    }
+
+    if (has_decode_stats) {
+        report << "Decode-phase analysis (layer | attn_AI_decode | ffn_AI_decode):\n";
+        for (const auto & la : layers) {
+            if (la.attn_ai_decode > 0.0 || la.ffn_ai_decode > 0.0) {
+                char buf[256];
+                snprintf(buf, sizeof(buf),
+                    "  layer %3d: attn_AI_decode=%.1f  ffn_AI_decode=%.1f\n",
+                    la.layer, la.attn_ai_decode, la.ffn_ai_decode);
+                report << buf;
+
+                // validation: decode MUL_MAT should be bandwidth-bound (low AI)
+                if (la.attn_ai_decode > 5.0) {
+                    snprintf(buf, sizeof(buf),
+                        "  WARNING: unexpected: decode MUL_MAT classified as compute-bound (AI=%.1f)\n",
+                        la.attn_ai_decode);
+                    report << buf;
+                }
+                if (la.ffn_ai_decode > 5.0) {
+                    snprintf(buf, sizeof(buf),
+                        "  WARNING: unexpected: decode MUL_MAT classified as compute-bound (AI=%.1f)\n",
+                        la.ffn_ai_decode);
+                    report << buf;
+                }
+            }
+        }
+        report << "\n";
+    }
 
     // APEX-inspired recommendations for UMA
     report << "=== UMA Overflow Recommendations (APEX-inspired) ===\n";

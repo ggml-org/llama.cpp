@@ -337,6 +337,11 @@ extern "C" {
     // The correct way to use this API is to discard the deallocated tensors and create new ones.
     GGML_API void                 ggml_backend_sched_reset(ggml_backend_sched_t sched);
 
+    // Enable/disable overlapping execution of splits on different backends (default: false)
+    // When enabled, splits assigned to different backends can execute concurrently.
+    // Requires proper event support from backends for synchronization.
+    GGML_API void                 ggml_backend_sched_set_overlap(ggml_backend_sched_t sched, bool overlap);
+
     // Set a callback to be called for each resulting node during graph compute
     GGML_API void                 ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backend_sched_eval_callback callback, void * user_data);
 

@@ -28,6 +28,7 @@ struct uma_op_stats {
     int64_t  total_flops = 0;   // total floating point operations
     uint32_t count       = 0;   // number of invocations
     int      layer       = -1;  // layer index (-1 for non-layer ops)
+    bool     is_decode   = false; // true if measured during decode (batch=1)
 
     // derived metrics (computed in report)
     double   avg_us          = 0.0;
@@ -50,6 +51,8 @@ struct uma_layer_analysis {
     int64_t  ffn_bytes  = 0;    // FFN weight bytes
     double   attn_ai = 0.0;     // attention arithmetic intensity
     double   ffn_ai  = 0.0;     // FFN arithmetic intensity
+    double   attn_ai_decode = 0.0; // arithmetic intensity during decode
+    double   ffn_ai_decode  = 0.0; // arithmetic intensity during decode
     uma_op_class attn_class = UMA_OP_CLASS_UNKNOWN;
     uma_op_class ffn_class  = UMA_OP_CLASS_UNKNOWN;
 };
@@ -69,6 +72,11 @@ struct uma_profiler_data {
     double   cpu_bandwidth_gbps = 0.0;  // CPU effective memory bandwidth (GB/s)
     double   gpu_compute_gflops = 0.0;  // GPU peak compute (GFLOPS)
     double   cpu_compute_gflops = 0.0;  // CPU peak compute (GFLOPS)
+
+    // batch size tracking for re-profiling
+    int32_t  profiled_batch_size = 0;   // batch size during profiling
+    bool     needs_reprofile     = false; // set when batch size changed >2x
+    int32_t  current_batch_size  = 0;   // set by caller before each iteration
 };
 
 // Eval callback for the backend scheduler. Measures per-op timing.
@@ -80,6 +88,10 @@ std::string uma_profiler_report(uma_profiler_data & data);
 
 // Get per-layer analysis sorted by layer index.
 std::vector<uma_layer_analysis> uma_profiler_analyze_layers(const uma_profiler_data & data);
+
+// Check if profiler needs to re-profile due to batch size change.
+// Call before each iteration with the current batch size.
+void uma_profiler_check_batch_size(uma_profiler_data & data, int32_t batch_size);
 
 // Signal that a full forward pass has completed (call after each inference iteration).
 void uma_profiler_iteration_done(uma_profiler_data & data);

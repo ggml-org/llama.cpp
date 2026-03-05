@@ -730,6 +730,7 @@ struct ggml_backend_sched {
     size_t context_buffer_size;
 
     bool op_offload;
+    bool op_overlap; // allow overlapping execution of splits on different backends
 
     bool backends_used[GGML_SCHED_MAX_BACKENDS]; // tracks which backends ran work during last compute
 
@@ -1576,14 +1577,21 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
                     // TODO: add public function to facilitate this, since applications do not have direct access to the backend interface
                     if (!split_backend->iface.cpy_tensor_async || !split_backend->iface.cpy_tensor_async(input_backend, split_backend, input, input_cpy)) {
-                        ggml_backend_synchronize(input_backend);
-                        // When events are available, we need a CPU-blocking wait since the
-                        // event_wait above (line ~1483) was only a GPU-side wait, but the
-                        // blocking tensor_copy below needs the data to be ready on the CPU side.
-                        // When events are NOT available, split_backend was already synchronized
-                        // above (line ~1485), so a second synchronize would be redundant.
-                        if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
-                            ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
+                        int input_backend_id = ggml_backend_sched_backend_id(sched, input_backend);
+                        // With overlap mode, prefer event-based wait over full sync
+                        if (sched->op_overlap && input_backend_id >= 0 &&
+                            sched->events[input_backend_id][sched->cur_copy] != NULL) {
+                            ggml_backend_event_wait(split_backend, sched->events[input_backend_id][sched->cur_copy]);
+                        } else {
+                            ggml_backend_synchronize(input_backend);
+                            // When events are available, we need a CPU-blocking wait since the
+                            // event_wait above (line ~1483) was only a GPU-side wait, but the
+                            // blocking tensor_copy below needs the data to be ready on the CPU side.
+                            // When events are NOT available, split_backend was already synchronized
+                            // above (line ~1485), so a second synchronize would be redundant.
+                            if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+                                ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
+                            }
                         }
                         ggml_backend_tensor_copy(input, input_cpy);
                     }
@@ -1704,6 +1712,7 @@ ggml_backend_sched_t ggml_backend_sched_new(
 
     sched->galloc = ggml_gallocr_new_n(sched->bufts, n_backends);
     sched->op_offload = op_offload;
+    sched->op_overlap = false;
 
     // Default to all backends used until first compute_splits tracks actual usage
     for (int b = 0; b < GGML_SCHED_MAX_BACKENDS; b++) {
@@ -1900,6 +1909,10 @@ ggml_backend_t ggml_backend_sched_get_tensor_backend(ggml_backend_sched_t sched,
         return NULL;
     }
     return sched->backends[backend_index];
+}
+
+void ggml_backend_sched_set_overlap(ggml_backend_sched_t sched, bool overlap) {
+    sched->op_overlap = overlap;
 }
 
 // utils
