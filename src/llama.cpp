@@ -179,6 +179,22 @@ static void llama_params_fit_impl(
         return;
     }
 
+    // Check for UMA/iGPU devices. On unified memory systems, the GPU shares
+    // system RAM with the CPU, so offloading all layers is almost always optimal
+    // (GPU has higher memory bandwidth than CPU on the same memory bus).
+    {
+        bool all_igpu = true;
+        for (size_t id = 0; id < nd; id++) {
+            if (ggml_backend_dev_type(devs[id]) != GGML_BACKEND_DEVICE_TYPE_IGPU) {
+                all_igpu = false;
+                break;
+            }
+        }
+        if (all_igpu) {
+            LLAMA_LOG_INFO("%s: all GPU devices are iGPU (unified memory) — preferring full offload\n", __func__);
+        }
+    }
+
     std::vector<int64_t> margins; // this function uses int64_t rather than size_t for memory sizes to more conveniently handle deficits
     margins.reserve(nd);
     for (size_t id = 0; id < nd; id++) {

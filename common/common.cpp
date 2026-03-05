@@ -1045,6 +1045,49 @@ struct common_init_result::impl {
 
 common_init_result::common_init_result(common_params & params) :
     pimpl(new impl{}) {
+
+    // Detect UMA/iGPU devices and apply optimal defaults before model loading.
+    // On unified memory systems (e.g., AMD Strix Halo, Apple Silicon), CPU and GPU
+    // share memory bandwidth. This auto-configuration ensures optimal settings:
+    //   - Disable mmap for large models (HIP mmap copy is very slow on UMA)
+    //   - Reduce CPU thread count to avoid bandwidth contention with GPU
+    //   - Recommend full GPU offload
+    {
+        bool has_igpu = false;
+        bool has_dgpu = false;
+        for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+            auto * dev = ggml_backend_dev_get(i);
+            auto dev_type = ggml_backend_dev_type(dev);
+            if (dev_type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
+                has_igpu = true;
+            } else if (dev_type == GGML_BACKEND_DEVICE_TYPE_GPU) {
+                has_dgpu = true;
+            }
+        }
+
+        if (has_igpu && !has_dgpu) {
+            LOG_INF("%s: iGPU (unified memory) detected — applying UMA-optimized defaults\n", __func__);
+
+            // Auto-disable mmap: on UMA systems with HIP, hipMemcpy from mmap'd
+            // pages requires expensive page locking. --no-mmap is always faster.
+            if (params.use_mmap) {
+                LOG_INF("%s:   disabling mmap (--no-mmap) for UMA — avoids slow HIP page locking\n", __func__);
+                params.use_mmap = false;
+            }
+
+            // Reduce CPU thread count for GPU-primary inference to avoid competing
+            // for shared memory bandwidth. Only adjust if user didn't explicitly set -t.
+            if (params.cpuparams.n_threads < 0 && params.n_gpu_layers != 0) {
+                const int n_phys = cpu_get_num_physical_cores();
+                // Use 25% of physical cores (min 2, max 8) during GPU inference
+                const int uma_threads = std::max(2, std::min(8, n_phys / 4));
+                params.cpuparams.n_threads = uma_threads;
+                LOG_INF("%s:   setting thread count to %d (of %d physical cores) to reduce bandwidth contention\n",
+                    __func__, uma_threads, n_phys);
+            }
+        }
+    }
+
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
 
