@@ -684,9 +684,7 @@ static ggml_backend_t ggml_backend_metal_device_init_backend(ggml_backend_dev_t 
         return NULL;
     }
 
-    ggml_backend_t backend = (ggml_backend_t) malloc(sizeof(ggml_backend));
-
-    *backend = {
+    auto * backend = new ggml_backend {
         /* .guid      = */ ggml_backend_metal_guid(),
         /* .interface = */ ggml_backend_metal_i,
         /* .device    = */ dev,

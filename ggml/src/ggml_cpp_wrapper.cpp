@@ -434,19 +434,20 @@ namespace ggml::cpp::backend::cpu {
     class buffer : public ggml::cpp::backend::buffer {
         uint8_t* m_data = nullptr;
         const std::size_t m_size;
+        const std::size_t m_alignment;
 
     public:
-        buffer(std::size_t size, std::size_t alignment): m_size(size) {
-            m_data = new (std::align_val_t(alignment)) uint8_t[m_size];
+        buffer(std::size_t size, std::size_t alignment): m_size(size), m_alignment(alignment) {
+            m_data = new (std::align_val_t(m_alignment)) uint8_t[m_size];
         }
 
-        buffer(void* ptr, std::size_t /*size*/): m_size(0) {
+        buffer(void* ptr, std::size_t /*size*/): m_size(0), m_alignment(0) {
             m_data = (uint8_t*) ptr;
         }
 
         virtual ~buffer() {
-            if (m_size>0 && m_data) { 
-                delete[] m_data;
+            if (m_size>0 && m_data) {
+                operator delete[](m_data, std::align_val_t(m_alignment));
             }
             m_data = nullptr;
         }
@@ -502,7 +503,7 @@ namespace ggml::cpp::backend::cpu {
             return new buffer(size, m_alignment);
         }
 
-        std::size_t get_alignment() override { 
+        std::size_t get_alignment() override {
             return m_alignment;
         }
 

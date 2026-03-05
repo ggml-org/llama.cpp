@@ -9,7 +9,7 @@ ggml_add_backend_library(ggml-blas
                          ggml-blas.cpp
                         )
 
-if (GGML_OPENMP)
+if (GGML_OPENMP_ENABLED STREQUAL "ON")
     find_package(OpenMP REQUIRED)
     add_compile_definitions(GGML_USE_OPENMP)
     target_link_libraries(ggml-blas PRIVATE OpenMP::OpenMP_C OpenMP::OpenMP_CXX)
@@ -128,7 +128,7 @@ elseif (${GGML_BLAS_VENDOR} MATCHES "OpenBLAS_BUILD")
     set(BUILD_TESTING        OFF)
     set(BUILD_STATIC_LIBS     ON)
     set(BUILD_SHARED_LIBS    OFF)
-if (GGML_OPENMP)
+if (GGML_OPENMP_ENABLED STREQUAL "ON")
     set(USE_OPENMP             1)
     set(USE_THREAD             1)
 else()
