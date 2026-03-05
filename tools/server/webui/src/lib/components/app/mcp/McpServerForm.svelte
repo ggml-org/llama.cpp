@@ -5,7 +5,7 @@
 	import type { KeyValuePair } from '$lib/types';
 	import { parseHeadersToArray, serializeHeaders } from '$lib/utils';
 	import { UrlPrefix } from '$lib/enums';
-	import { MCP_SERVER_URL_PLACEHOLDER } from '$lib/constants/mcp-form';
+	import { MCP_SERVER_URL_PLACEHOLDER } from '$lib/constants';
 
 	interface Props {
 		url: string;

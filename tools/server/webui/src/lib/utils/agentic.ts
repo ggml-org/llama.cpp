@@ -1,10 +1,5 @@
 import { AgenticSectionType } from '$lib/enums';
-import {
-	AGENTIC_TAGS,
-	AGENTIC_REGEX,
-	REASONING_TAGS,
-	TRIM_NEWLINES_REGEX
-} from '$lib/constants/agentic';
+import { AGENTIC_TAGS, AGENTIC_REGEX, REASONING_TAGS, TRIM_NEWLINES_REGEX } from '$lib/constants';
 
 /**
  * Represents a parsed section of agentic content

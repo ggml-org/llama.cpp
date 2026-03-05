@@ -8,15 +8,16 @@ import {
 	UriPattern,
 	MimeTypeText
 } from '$lib/enums';
-import { DEFAULT_MCP_CONFIG, MCP_SERVER_ID_PREFIX } from '$lib/constants/mcp';
 import {
+	DEFAULT_MCP_CONFIG,
+	MCP_SERVER_ID_PREFIX,
 	IMAGE_FILE_EXTENSION_REGEX,
 	CODE_FILE_EXTENSION_REGEX,
 	TEXT_FILE_EXTENSION_REGEX,
 	PROTOCOL_PREFIX_REGEX,
 	FILE_EXTENSION_REGEX,
 	DISPLAY_NAME_SEPARATOR_REGEX
-} from '$lib/constants/mcp-resource';
+} from '$lib/constants';
 import {
 	Database,
 	File,

@@ -6,7 +6,7 @@
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { McpServerCard, McpServerCardSkeleton, McpServerForm } from '$lib/components/app/mcp';
-	import { MCP_SERVER_ID_PREFIX } from '$lib/constants/mcp';
+	import { MCP_SERVER_ID_PREFIX } from '$lib/constants';
 
 	let servers = $derived(mcpStore.getServersSorted());
 

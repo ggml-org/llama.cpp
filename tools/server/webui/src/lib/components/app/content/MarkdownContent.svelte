@@ -27,11 +27,7 @@
 	} from '$lib/constants';
 	import { ColorMode, UrlPrefix } from '$lib/enums';
 	import { FileTypeText } from '$lib/enums/files';
-	import {
-		highlightCode,
-		detectIncompleteCodeBlock,
-		type IncompleteCodeBlock
-	} from '$lib/utils/code';
+	import { highlightCode, detectIncompleteCodeBlock, type IncompleteCodeBlock } from '$lib/utils';
 	import '$styles/katex-custom.scss';
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';

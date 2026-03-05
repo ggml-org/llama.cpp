@@ -6,10 +6,7 @@
 		sanitizeKeyValuePairKey,
 		sanitizeKeyValuePairValue
 	} from '$lib/utils';
-	import {
-		KEY_VALUE_PAIR_KEY_MAX_LENGTH,
-		KEY_VALUE_PAIR_VALUE_MAX_LENGTH
-	} from '$lib/constants/key-value-pairs';
+	import { KEY_VALUE_PAIR_KEY_MAX_LENGTH, KEY_VALUE_PAIR_VALUE_MAX_LENGTH } from '$lib/constants';
 	import type { KeyValuePair } from '$lib/types';
 
 	interface Props {

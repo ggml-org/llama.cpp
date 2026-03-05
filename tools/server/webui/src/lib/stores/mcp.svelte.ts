@@ -24,8 +24,13 @@ import { MCPService } from '$lib/services/mcp.service';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { mcpResourceStore } from '$lib/stores/mcp-resources.svelte';
 import { mode } from 'mode-watcher';
-import { parseMcpServerSettings, detectMcpTransportFromUrl, getFaviconUrl, uuid } from '$lib/utils';
-import { getProxiedUrlString } from '$lib/utils/cors-proxy';
+import {
+	getProxiedUrlString,
+	parseMcpServerSettings,
+	detectMcpTransportFromUrl,
+	getFaviconUrl,
+	uuid
+} from '$lib/utils';
 import {
 	MCPConnectionPhase,
 	MCPLogLevel,
@@ -41,7 +46,7 @@ import {
 	MCP_RECONNECT_BACKOFF_MULTIPLIER,
 	MCP_RECONNECT_MAX_DELAY,
 	MCP_RECONNECT_ATTEMPT_TIMEOUT_MS
-} from '$lib/constants/mcp';
+} from '$lib/constants';
 import type {
 	MCPToolCall,
 	OpenAIToolDefinition,

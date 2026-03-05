@@ -9,8 +9,8 @@
 	import { Wrench, Loader2, AlertTriangle, Brain } from '@lucide/svelte';
 	import { AgenticSectionType, AttachmentType, FileTypeText } from '$lib/enums';
 	import { formatJsonPretty } from '$lib/utils';
-	import { ATTACHMENT_SAVED_REGEX, NEWLINE_SEPARATOR } from '$lib/constants/agentic';
-	import { parseAgenticContent, type AgenticSection } from '$lib/utils/agentic';
+	import { ATTACHMENT_SAVED_REGEX, NEWLINE_SEPARATOR } from '$lib/constants';
+	import { parseAgenticContent, type AgenticSection } from '$lib/utils';
 	import type { DatabaseMessage, DatabaseMessageExtraImageFile } from '$lib/types/database';
 	import type { ChatMessageAgenticTimings, ChatMessageAgenticTurnStats } from '$lib/types/chat';
 	import { ChatMessageStatsView } from '$lib/enums';

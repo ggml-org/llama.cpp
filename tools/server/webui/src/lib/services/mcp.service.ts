@@ -12,6 +12,18 @@ import type {
 	ListChangedHandlers
 } from '@modelcontextprotocol/sdk/types.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import {
+	DEFAULT_MCP_CONFIG,
+	DEFAULT_CLIENT_VERSION,
+	DEFAULT_IMAGE_MIME_TYPE
+} from '$lib/constants';
+import {
+	MCPConnectionPhase,
+	MCPLogLevel,
+	MCPTransportType,
+	MCPContentType,
+	MCPRefType
+} from '$lib/enums';
 import type {
 	MCPServerConfig,
 	ToolCallParams,
@@ -27,20 +39,7 @@ import type {
 	MCPResourceContent,
 	MCPReadResourceResult
 } from '$lib/types';
-import {
-	MCPConnectionPhase,
-	MCPLogLevel,
-	MCPTransportType,
-	MCPContentType,
-	MCPRefType
-} from '$lib/enums';
-import {
-	DEFAULT_MCP_CONFIG,
-	DEFAULT_CLIENT_VERSION,
-	DEFAULT_IMAGE_MIME_TYPE
-} from '$lib/constants/mcp';
-import { throwIfAborted, isAbortError, createBase64DataUrl } from '$lib/utils';
-import { buildProxiedUrl } from '$lib/utils/cors-proxy';
+import { buildProxiedUrl, throwIfAborted, isAbortError, createBase64DataUrl } from '$lib/utils';
 
 interface ToolResultContentItem {
 	type: string;

@@ -3,7 +3,7 @@
  */
 
 import { getProxiedUrlString } from './cors-proxy';
-import { GOOGLE_FAVICON_BASE_URL, DEFAULT_FAVICON_SIZE } from '$lib/constants/favicon';
+import { GOOGLE_FAVICON_BASE_URL, DEFAULT_FAVICON_SIZE } from '$lib/constants';
 
 /**
  * Gets a favicon URL for a given URL using Google's favicon service.

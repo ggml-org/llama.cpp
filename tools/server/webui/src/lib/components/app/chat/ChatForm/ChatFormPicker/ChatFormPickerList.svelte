@@ -2,7 +2,7 @@
 	import type { Snippet } from 'svelte';
 	import { SearchInput } from '$lib/components/app';
 	import ScrollArea from '$lib/components/ui/scroll-area/scroll-area.svelte';
-	import { CHAT_FORM_POPOVER_MAX_HEIGHT } from '$lib/constants/css-classes';
+	import { CHAT_FORM_POPOVER_MAX_HEIGHT } from '$lib/constants';
 
 	interface Props {
 		items: T[];

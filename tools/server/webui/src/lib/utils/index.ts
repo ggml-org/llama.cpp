@@ -31,8 +31,14 @@ export {
 	getPreviousSibling
 } from './branching';
 
+// Code
+export { highlightCode, detectIncompleteCodeBlock, type IncompleteCodeBlock } from './code';
+
 // Config helpers
 export { setConfigValue, getConfigValue, configToParameterRecord } from './config-helpers';
+
+// CORS Proxy
+export { buildProxiedUrl, getProxiedUrlString } from './cors-proxy';
 
 // Conversation utilities
 export { createMessageCountMap, getMessageCount } from './conversation-utils';

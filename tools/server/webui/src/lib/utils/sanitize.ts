@@ -3,7 +3,7 @@ import {
 	KEY_VALUE_PAIR_VALUE_MAX_LENGTH,
 	KEY_VALUE_PAIR_UNSAFE_KEY_RE,
 	KEY_VALUE_PAIR_UNSAFE_VALUE_RE
-} from '$lib/constants/key-value-pairs';
+} from '$lib/constants';
 
 /**
  * Strip control characters unsafe in identifier/header-name contexts and cap length.

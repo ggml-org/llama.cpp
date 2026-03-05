@@ -430,7 +430,7 @@ export { default as ChatMessage } from './ChatMessages/ChatMessage.svelte';
  * interactive collapsible sections with real-time streaming support.
  *
  * **Architecture:**
- * - Uses `parseAgenticContent()` from `$lib/utils/agentic` to parse markers
+ * - Uses `parseAgenticContent()` from `$lib/utils` to parse markers
  * - Renders sections as CollapsibleContentBlock components
  * - Handles streaming state for progressive content display
  * - Falls back to MarkdownContent for plain text sections

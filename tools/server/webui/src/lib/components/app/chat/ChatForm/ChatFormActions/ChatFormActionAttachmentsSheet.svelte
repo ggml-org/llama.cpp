@@ -2,7 +2,7 @@
 	import { Plus, MessageSquare, Zap, FolderOpen } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Sheet from '$lib/components/ui/sheet';
-	import { FILE_TYPE_ICONS } from '$lib/constants/icons';
+	import { FILE_TYPE_ICONS } from '$lib/constants';
 	import { McpLogo } from '$lib/components/app';
 
 	interface Props {

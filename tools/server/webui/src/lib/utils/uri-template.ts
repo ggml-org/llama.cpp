@@ -6,7 +6,7 @@ import {
 	VARIABLE_EXPLODE_MODIFIER_REGEX,
 	VARIABLE_PREFIX_MODIFIER_REGEX,
 	LEADING_SLASHES_REGEX
-} from '../constants/uri-template';
+} from '../constants';
 
 /**
  * Normalize a resource URI for comparison.

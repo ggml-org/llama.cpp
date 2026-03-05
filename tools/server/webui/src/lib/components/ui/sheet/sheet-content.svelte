@@ -26,7 +26,7 @@
 	import type { Snippet } from 'svelte';
 	import SheetOverlay from './sheet-overlay.svelte';
 	import { cn, type WithoutChildrenOrChild } from '$lib/components/ui/utils.js';
-	import { PANEL_CLASSES } from '$lib/constants/css-classes';
+	import { PANEL_CLASSES } from '$lib/constants';
 
 	let {
 		ref = $bindable(null),

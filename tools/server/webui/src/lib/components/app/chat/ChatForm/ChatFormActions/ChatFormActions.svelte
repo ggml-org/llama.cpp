@@ -11,7 +11,7 @@
 		ModelsSelectorSheet
 	} from '$lib/components/app';
 	import { DialogChatSettings } from '$lib/components/app/dialogs';
-	import { SETTINGS_SECTION_TITLES } from '$lib/constants/settings-sections';
+	import { SETTINGS_SECTION_TITLES } from '$lib/constants';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { FileTypeCategory } from '$lib/enums';
 	import { getFileTypeCategory } from '$lib/utils';

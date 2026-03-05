@@ -12,8 +12,11 @@
 
 import { SvelteMap } from 'svelte/reactivity';
 import { AttachmentType } from '$lib/enums';
-import { MCP_RESOURCE_CACHE_MAX_ENTRIES, MCP_RESOURCE_CACHE_TTL_MS } from '$lib/constants/cache';
-import { MCP_RESOURCE_ATTACHMENT_ID_PREFIX } from '$lib/constants/mcp-resource';
+import {
+	MCP_RESOURCE_ATTACHMENT_ID_PREFIX,
+	MCP_RESOURCE_CACHE_MAX_ENTRIES,
+	MCP_RESOURCE_CACHE_TTL_MS
+} from '$lib/constants';
 import { normalizeResourceUri } from '$lib/utils';
 import type {
 	MCPResource,

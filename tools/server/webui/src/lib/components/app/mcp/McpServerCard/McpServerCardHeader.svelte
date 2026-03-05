@@ -1,11 +1,11 @@
 <script lang="ts">
 	import { Cable, ExternalLink } from '@lucide/svelte';
 	import { Switch } from '$lib/components/ui/switch';
-	import type { MCPServerInfo, MCPCapabilitiesInfo } from '$lib/types';
-	import { MCPTransportType } from '$lib/enums';
-	import { MCP_TRANSPORT_LABELS, MCP_TRANSPORT_ICONS } from '$lib/constants/mcp';
 	import { Badge } from '$lib/components/ui/badge';
 	import { McpCapabilitiesBadges } from '$lib/components/app/mcp';
+	import { MCP_TRANSPORT_LABELS, MCP_TRANSPORT_ICONS } from '$lib/constants';
+	import { MCPTransportType } from '$lib/enums';
+	import type { MCPServerInfo, MCPCapabilitiesInfo } from '$lib/types';
 
 	interface Props {
 		displayName: string;

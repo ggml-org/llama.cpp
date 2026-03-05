@@ -29,13 +29,13 @@ import {
 	TURN_LIMIT_MESSAGE,
 	LLM_ERROR_BLOCK_START,
 	LLM_ERROR_BLOCK_END
-} from '$lib/constants/agentic';
+} from '$lib/constants';
 import {
 	IMAGE_MIME_TO_EXTENSION,
 	DATA_URI_BASE64_REGEX,
 	MCP_ATTACHMENT_NAME_PREFIX,
 	DEFAULT_IMAGE_EXTENSION
-} from '$lib/constants/mcp-resource';
+} from '$lib/constants';
 import { AttachmentType, ContentPartType, MessageRole, MimeTypePrefix } from '$lib/enums';
 import type {
 	AgenticFlowParams,
