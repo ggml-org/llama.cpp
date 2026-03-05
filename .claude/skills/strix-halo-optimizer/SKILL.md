@@ -172,7 +172,9 @@ cmake --build build --config Release -j $(nproc)
 - **Device detection**: Vulkan auto-detects the Radeon 890M via vendor ID (AMD = 0x1002). No need for `GPU_TARGETS` — Vulkan uses runtime SPIR-V shaders, not precompiled ISA.
 - **Subgroup size**: RDNA 3.5 supports both wave32 and wave64. The Vulkan backend queries `VkPhysicalDeviceSubgroupProperties` and adapts shader dispatch. Matmul shaders use subgroup operations (`subgroupAdd`, `subgroupShuffle`) for efficient reductions.
 - **Memory**: Vulkan sees device-local memory (the BIOS-allocated VRAM portion) plus host-visible memory. For unified memory APUs like Strix Halo, both map to the same physical LPDDR5X, but device-local allocations may get priority bandwidth. The backend prefers device-local for model weights.
-- **Matmul shaders**: Located in `ggml/src/ggml-vulkan/vulkan-shaders/`. Key files: `mul_mat_vec*.comp` (token generation), `mul_mm*.comp` (batched matmul for prompt processing). Shaders are precompiled to SPIR-V at build time.
+- **Matmul shaders**: Located in `ggml/src/ggml-vulkan/vulkan-shaders/`. Key files: `mul_mat_vec*.comp` (token generation), `mul_mm*.comp` (batched matmul), `mul_mm_cm2.comp` (cooperative matrix path). Shaders are precompiled to SPIR-V at build time.
+- **Cooperative matrix**: `VK_KHR_cooperative_matrix` is supported on RDNA3/3.5 and explicitly enabled only for this architecture in the codebase (older AMD GPUs have driver bugs falsely reporting support). Provides hardware-accelerated matrix ops similar to WMMA. Requires Mesa RADV with coopmat support or AMDVLK.
+- **Flash attention tuning**: The Vulkan FA shader allocates unused shared memory (26-30KB) on RDNA to reduce occupancy to 4 subgroups per SIMD, mitigating cache thrashing for small head sizes.
 
 ### Vulkan vs HIP: When to Choose Which
 
