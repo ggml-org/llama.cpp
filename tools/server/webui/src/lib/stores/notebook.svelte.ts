@@ -10,6 +10,7 @@ import { STATS_UNITS } from '$lib/constants/processing-info';
 import { contextSize, isRouterMode } from '$lib/stores/server.svelte';
 import { selectedModelContextSize } from '$lib/stores/models.svelte';
 import { ErrorDialogType } from '$lib/enums';
+import { getETASecs } from '$lib/hooks/use-processing-state.svelte';
 
 export class NotebookStore {
 	content = $state('');
@@ -167,15 +168,6 @@ export class NotebookStore {
 		}, 500);
 	}
 
-	getETASecs(done: number, total: number, elapsedMs: number): number | undefined {
-		const elapsedSecs = elapsedMs / 1000;
-		const progressETASecs =
-			done === 0 || elapsedSecs < 0.5
-				? undefined // can be the case for the 0% progress report
-				: elapsedSecs * (total / done - 1);
-		return progressETASecs;
-	}
-
 	getContextTotal(): number | null {
 		if (isRouterMode()) {
 			const modelContextSize = selectedModelContextSize();
@@ -204,7 +196,7 @@ export class NotebookStore {
 
 			if (actualProcessed < actualTotal && actualProcessed > 0) {
 				const percent = Math.round((actualProcessed / actualTotal) * 100);
-				const eta = this.getETASecs(actualProcessed, actualTotal, time_ms);
+				const eta = getETASecs(actualProcessed, actualTotal, time_ms);
 
 				if (eta !== undefined) {
 					const etaSecs = Math.ceil(eta);
