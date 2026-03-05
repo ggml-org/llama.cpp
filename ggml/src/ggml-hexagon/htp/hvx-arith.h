@@ -43,20 +43,17 @@
 #define HVX_OP_SUB_F32(a, b) Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_VsfVsf(a, b))
 #define HVX_OP_MUL_F32(a, b) Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(a, b))
 
-#define HVX_OP_ADD_F16(a, b) Q6_Vhf_equals_Vqf16(Q6_Vqf16_vadd_VhfVhf(a, b))
-#define HVX_OP_SUB_F16(a, b) Q6_Vhf_equals_Vqf16(Q6_Vqf16_vsub_VhfVhf(a, b))
-#define HVX_OP_MUL_F16(a, b) Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(a, b))
-
 #else
 
 #define HVX_OP_ADD_F32(a, b) Q6_Vsf_vadd_VsfVsf(a, b)
 #define HVX_OP_SUB_F32(a, b) Q6_Vsf_vsub_VsfVsf(a, b)
 #define HVX_OP_MUL_F32(a, b) Q6_Vsf_vmpy_VsfVsf(a, b)
 
-#define HVX_OP_ADD_F16(a, b) Q6_Vhf_vadd_VhfVhf(a, b)
-#define HVX_OP_SUB_F16(a, b) Q6_Vhf_vsub_VhfVhf(a, b)
-#define HVX_OP_MUL_F16(a, b) Q6_Vhf_vmpy_VhfVhf(a, b)
 #endif
+
+#define HVX_OP_ADD_F16(a, b) hvx_vec_add_f16_f16(a, b)
+#define HVX_OP_SUB_F16(a, b) hvx_vec_sub_f16_f16(a, b)
+#define HVX_OP_MUL_F16(a, b) hvx_vec_mul_f16_f16(a, b)
 
 // Generic macro to define alignment permutations for an op
 #define DEFINE_HVX_BINARY_OP_VARIANTS(OP_NAME, OP_MACRO, ELEM_TYPE) \
