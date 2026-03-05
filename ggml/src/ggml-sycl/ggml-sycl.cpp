@@ -20,7 +20,6 @@
 #include <array>
 #include <atomic>
 #include <cctype>
-#include <numeric>
 #include <chrono>
 #include <cinttypes>
 #include <cmath>
@@ -34,6 +33,7 @@
 #include <iostream>
 #include <limits>
 #include <mutex>
+#include <numeric>
 #include <optional>
 #include <regex>
 #include <stdexcept>
