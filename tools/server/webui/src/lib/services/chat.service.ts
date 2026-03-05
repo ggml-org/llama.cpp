@@ -1,5 +1,5 @@
 import { getJsonHeaders, formatAttachmentText, isAbortError } from '$lib/utils';
-import { ATTACHMENT_LABEL_PDF_FILE } from '$lib/constants/attachment-labels';
+import { AGENTIC_REGEX, ATTACHMENT_LABEL_PDF_FILE } from '$lib/constants';
 import {
 	AttachmentType,
 	ContentPartType,
@@ -9,7 +9,6 @@ import {
 } from '$lib/enums';
 import type { ApiChatMessageContentPart, ApiChatCompletionToolCall } from '$lib/types/api';
 import { modelsStore } from '$lib/stores/models.svelte';
-import { AGENTIC_REGEX } from '$lib/constants/agentic';
 
 export class ChatService {
 	private static stripReasoningContent(

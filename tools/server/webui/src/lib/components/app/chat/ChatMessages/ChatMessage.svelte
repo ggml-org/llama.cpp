@@ -5,7 +5,7 @@
 	import { chatStore, pendingEditMessageId } from '$lib/stores/chat.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { DatabaseService } from '$lib/services';
-	import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants/ui';
+	import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants';
 	import { MessageRole } from '$lib/enums';
 	import {
 		ChatMessageAssistant,

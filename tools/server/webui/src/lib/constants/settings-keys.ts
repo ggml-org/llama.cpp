@@ -24,6 +24,7 @@ export const SETTINGS_KEYS = {
 	ALWAYS_SHOW_SIDEBAR_ON_DESKTOP: 'alwaysShowSidebarOnDesktop',
 	AUTO_SHOW_SIDEBAR_ON_NEW_CHAT: 'autoShowSidebarOnNewChat',
 	FULL_HEIGHT_CODE_BLOCKS: 'fullHeightCodeBlocks',
+	SHOW_RAW_MODEL_NAMES: 'showRawModelNames',
 	// Sampling
 	TEMPERATURE: 'temperature',
 	DYNATEMP_RANGE: 'dynatemp_range',

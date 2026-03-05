@@ -1,7 +1,7 @@
 import type { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';
 import type { Break, Content, Paragraph, PhrasingContent, Root, Text } from 'mdast';
-import { LINE_BREAK, NBSP, PHRASE_PARENTS, TAB_AS_SPACES } from '$lib/constants/literal-html';
+import { LINE_BREAK, NBSP, PHRASE_PARENTS, TAB_AS_SPACES } from '$lib/constants';
 
 /**
  * remark plugin that rewrites raw HTML nodes into plain-text equivalents.

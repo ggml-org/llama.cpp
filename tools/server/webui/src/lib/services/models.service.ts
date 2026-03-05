@@ -1,5 +1,16 @@
 import { ServerModelStatus } from '$lib/enums';
 import { apiFetch, apiPost } from '$lib/utils';
+import type { ParsedModelId } from '$lib/types/models';
+import {
+	MODEL_FORMAT_SEGMENT_RE,
+	MODEL_PARAMS_RE,
+	MODEL_ACTIVATED_PARAMS_RE,
+	MODEL_ID_NOT_FOUND,
+	MODEL_ID_ORG_SEPARATOR,
+	MODEL_ID_SEGMENT_SEPARATOR,
+	MODEL_ID_QUANTIZATION_SEPARATOR,
+	API_MODELS
+} from '$lib/constants';
 
 export class ModelsService {
 	/**
@@ -17,7 +28,7 @@ export class ModelsService {
 	 * @returns List of available models with basic metadata
 	 */
 	static async list(): Promise<ApiModelListResponse> {
-		return apiFetch<ApiModelListResponse>('/v1/models');
+		return apiFetch<ApiModelListResponse>(API_MODELS.LIST);
 	}
 
 	/**
@@ -28,7 +39,7 @@ export class ModelsService {
 	 * @returns List of models with detailed status and configuration info
 	 */
 	static async listRouter(): Promise<ApiRouterModelsListResponse> {
-		return apiFetch<ApiRouterModelsListResponse>('/v1/models');
+		return apiFetch<ApiRouterModelsListResponse>(API_MODELS.LIST);
 	}
 
 	/**
@@ -54,7 +65,7 @@ export class ModelsService {
 			payload.extra_args = extraArgs;
 		}
 
-		return apiPost<ApiRouterModelsLoadResponse>('/models/load', payload);
+		return apiPost<ApiRouterModelsLoadResponse>(API_MODELS.LOAD, payload);
 	}
 
 	/**
@@ -66,7 +77,7 @@ export class ModelsService {
 	 * @returns Unload response from the server
 	 */
 	static async unload(modelId: string): Promise<ApiRouterModelsUnloadResponse> {
-		return apiPost<ApiRouterModelsUnloadResponse>('/models/unload', { model: modelId });
+		return apiPost<ApiRouterModelsUnloadResponse>(API_MODELS.UNLOAD, { model: modelId });
 	}
 
 	/**
@@ -95,5 +106,90 @@ export class ModelsService {
 	 */
 	static isModelLoading(model: ApiModelDataEntry): boolean {
 		return model.status.value === ServerModelStatus.LOADING;
+	}
+
+	/**
+	 *
+	 *
+	 * Parsing
+	 *
+	 *
+	 */
+
+	/**
+	 * Parse a model ID string into its structured components.
+	 *
+	 * Handles the convention:
+	 *   `<org>/<ModelName>-<Parameters>(-<ActivatedParameters>)-<Format>:<QuantizationType>`
+	 *
+	 * @param modelId - Raw model identifier string
+	 * @returns Structured {@link ParsedModelId} with all detected fields
+	 */
+	static parseModelId(modelId: string): ParsedModelId {
+		const result: ParsedModelId = {
+			raw: modelId,
+			orgName: null,
+			modelName: null,
+			params: null,
+			activatedParams: null,
+			format: null,
+			quantization: null,
+			tags: []
+		};
+
+		const colonIdx = modelId.indexOf(MODEL_ID_QUANTIZATION_SEPARATOR);
+		let modelPath: string;
+
+		if (colonIdx !== MODEL_ID_NOT_FOUND) {
+			result.quantization = modelId.slice(colonIdx + 1) || null;
+			modelPath = modelId.slice(0, colonIdx);
+		} else {
+			modelPath = modelId;
+		}
+
+		const slashIdx = modelPath.indexOf(MODEL_ID_ORG_SEPARATOR);
+		let modelStr: string;
+
+		if (slashIdx !== MODEL_ID_NOT_FOUND) {
+			result.orgName = modelPath.slice(0, slashIdx);
+			modelStr = modelPath.slice(slashIdx + 1);
+		} else {
+			modelStr = modelPath;
+		}
+
+		const segments = modelStr.split(MODEL_ID_SEGMENT_SEPARATOR);
+
+		if (segments.length > 0 && MODEL_FORMAT_SEGMENT_RE.test(segments[segments.length - 1])) {
+			result.format = segments.pop()!;
+		}
+
+		const paramsRe = MODEL_PARAMS_RE;
+		const activatedParamsRe = MODEL_ACTIVATED_PARAMS_RE;
+
+		let paramsIdx = MODEL_ID_NOT_FOUND;
+		let activatedParamsIdx = MODEL_ID_NOT_FOUND;
+
+		for (let i = 0; i < segments.length; i++) {
+			const seg = segments[i];
+			if (paramsIdx === -1 && paramsRe.test(seg)) {
+				paramsIdx = i;
+				result.params = seg.toUpperCase();
+			} else if (activatedParamsRe.test(seg)) {
+				activatedParamsIdx = i;
+				result.activatedParams = seg.toUpperCase();
+			}
+		}
+
+		const pivotIdx = paramsIdx !== MODEL_ID_NOT_FOUND ? paramsIdx : segments.length;
+
+		result.modelName = segments.slice(0, pivotIdx).join(MODEL_ID_SEGMENT_SEPARATOR) || null;
+
+		if (paramsIdx !== MODEL_ID_NOT_FOUND) {
+			result.tags = segments
+				.slice(paramsIdx + 1)
+				.filter((_, relIdx) => paramsIdx + 1 + relIdx !== activatedParamsIdx);
+		}
+
+		return result;
 	}
 }
