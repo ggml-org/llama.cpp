@@ -922,7 +922,7 @@ static void hellaswag_score(llama_context * ctx, const common_params & params) {
         }
 
         if (i0 == i1) {
-            LOG_ERR("%s : task %zu does not fit in the context window (requires %lu tokens)\n", __func__, i0, hs_data[i0].required_tokens);
+            LOG_ERR("%s : task %zu does not fit in the context window (requires %zu tokens)\n", __func__, i0, hs_data[i0].required_tokens);
             return;
         }
 
@@ -1215,7 +1215,7 @@ static void winogrande_score(llama_context * ctx, const common_params & params) 
         }
 
         if (i0 == i1) {
-            LOG_ERR("%s : task %zu does not fit in the context window (requires %lu tokens)\n", __func__, i0, data[i0].required_tokens);
+            LOG_ERR("%s : task %zu does not fit in the context window (requires %zu tokens)\n", __func__, i0, data[i0].required_tokens);
             return;
         }
 
@@ -1594,7 +1594,7 @@ static void multiple_choice_score(llama_context * ctx, const common_params & par
         }
 
         if (i0 == i1) {
-            LOG_ERR("%s : task %zu does not fit in the context window (requires %lu tokens)\n", __func__, i0, tasks[i0].required_tokens);
+            LOG_ERR("%s : task %zu does not fit in the context window (requires %zu tokens)\n", __func__, i0, tasks[i0].required_tokens);
             return;
         }
 
