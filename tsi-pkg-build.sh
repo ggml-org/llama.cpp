@@ -56,14 +56,6 @@
 # Help:
 #   help | -h | --help
 #
-# Examples:
-#   source tsi-pkg-build.sh debug-detail
-#   source tsi-pkg-build.sh debug git-submodule-pull
-#   source tsi-pkg-build.sh debug build-all-blobs overwrite-venv
-#   source tsi-pkg-build.sh release build-posix
-#   source tsi-pkg-build.sh debug build-fpga package
-#   source tsi-pkg-build.sh debug build-fpga no-auto-blobs build-fpga-blobs
-#
 # ==============================================================================
 
 log_error(){ echo "ERROR: $*" >&2; }
@@ -72,7 +64,11 @@ log_info(){  echo "INFO:  $*"; }
 __TSI_SOURCED=0
 (return 0 2>/dev/null) && __TSI_SOURCED=1 || true
 __TSI_OLD_SET="$(set +o)"
+
+# --- VENV TRACKING (FIX) ---
+# If script activates blob-creation venv, we must restore previous env when sourced.
 __OLD_VIRTUAL_ENV=""
+__TSI_CHANGED_VENV=0
 
 run() { "$@"; local rc=$?; [ $rc -eq 0 ] || log_error "cmd failed ($rc): $*"; return $rc; }
 absdir() { (cd "$1" 2>/dev/null && pwd); }
@@ -84,6 +80,26 @@ die() {
 }
 
 cleanup() {
+  # --- VENV RESTORE (FIX) ---
+  # If we changed the venv, undo it. This runs on RETURN (sourced) or EXIT (executed).
+  if [ "${__TSI_CHANGED_VENV:-0}" -eq 1 ]; then
+    # deactivate exists only if we successfully sourced an activate script.
+    if declare -F deactivate >/dev/null 2>&1; then
+      deactivate >/dev/null 2>&1 || true
+    else
+      # Fallback: if deactivate isn't defined, at least unset VIRTUAL_ENV.
+      # (PATH restoration without deactivate is risky, so keep it minimal.)
+      unset VIRTUAL_ENV 2>/dev/null || true
+    fi
+
+    # If user was in a previous venv before we activated blob-creation, restore it.
+    if [ -n "${__OLD_VIRTUAL_ENV}" ] && [ -f "${__OLD_VIRTUAL_ENV}/bin/activate" ]; then
+      # shellcheck disable=SC1090
+      source "${__OLD_VIRTUAL_ENV}/bin/activate" >/dev/null 2>&1 || true
+    fi
+  fi
+
+  # restore caller shell behavior
   eval "${__TSI_OLD_SET}" >/dev/null 2>&1 || true
   stty sane 2>/dev/null || true
   trap - RETURN EXIT 2>/dev/null || true
@@ -322,6 +338,7 @@ setup_toolchain() {
 # Python venv (only when needed)
 # -------------------------
 setup_python() {
+  # Save the caller's current VIRTUAL_ENV (if any). This allows restore.
   __OLD_VIRTUAL_ENV="${VIRTUAL_ENV:-}"
 
   if [ "${OVERWRITE_VENV}" -eq 1 ] && [ -d "blob-creation" ]; then
@@ -333,6 +350,8 @@ setup_python() {
     run bash -c 'source blob-creation/bin/activate && python -V >/dev/null' || return 1
     # shellcheck disable=SC1091
     source blob-creation/bin/activate || return 1
+    # Mark changed only if we actually switched envs
+    [ "${VIRTUAL_ENV:-}" != "${__OLD_VIRTUAL_ENV:-}" ] && __TSI_CHANGED_VENV=1 || true
     return 0
   fi
 
@@ -340,6 +359,7 @@ setup_python() {
   run bash -c 'source blob-creation/bin/activate && python -V >/dev/null' || return 1
   # shellcheck disable=SC1091
   source blob-creation/bin/activate || return 1
+  [ "${VIRTUAL_ENV:-}" != "${__OLD_VIRTUAL_ENV:-}" ] && __TSI_CHANGED_VENV=1 || true
 
   log_info "installing mlir and python dependencies"
   run pip install --upgrade pip || return 1
@@ -362,14 +382,12 @@ setup_python() {
 # Blob presence + build helpers
 # -------------------------
 posix_host_objs_present() {
-  # host.o provides _mlir_ciface_txe_*_host for POSIX link
   [ -d "posix-kernel/build-posix" ] || return 1
   find "posix-kernel/build-posix" -name "host.o" -print -quit 2>/dev/null | grep -q . || return 1
   return 0
 }
 
 fpga_host_objs_present() {
-  # host.o provides _mlir_ciface_txe_*_host for ARM cross-link too
   [ -d "fpga-kernel/build-fpga" ] || return 1
   find "fpga-kernel/build-fpga" -name "host.o" -print -quit 2>/dev/null | grep -q . || return 1
   return 0
@@ -378,7 +396,6 @@ fpga_host_objs_present() {
 build_fpga_blobs() {
   log_info "BLOB: building FPGA kernels/blobs"
   cd fpga-kernel || return 1
-  # ensure cmake config exists (create-all-kernels.sh may depend on it)
   run cmake -B build-fpga -DTOOLBOX_DIR="${TOOLBOX_DIR}" -DCOMPILER_INSTALL_DIR="${MLIR_COMPILER_DIR}" || return 1
   run ./create-all-kernels.sh || return 1
   cd .. || return 1
@@ -531,7 +548,7 @@ EOL
 }
 
 # -------------------------
-# Cleanup
+# Cleanup commands
 # -------------------------
 do_clean() {
   log_info "clean: removing build directories"
@@ -564,16 +581,13 @@ main() {
   resolve_paths "$arch" || return $?
   setup_toolchain || return 1
 
-  # Ensure submodule exists (fixes your "rm -rf ggml-tsi-kernel/" case)
   ensure_submodules "${GIT_SUBMODULE_PULL}" || return 1
 
-  # Decide if we need python:
   local need_python=0
   if [ "${OVERWRITE_VENV}" -eq 1 ] || [ "${DO_BLOB_FPGA}" -eq 1 ] || [ "${DO_BLOB_POSIX}" -eq 1 ]; then
     need_python=1
   fi
 
-  # AUTO host-object driven blob builds (POSIX + FPGA)
   local auto_posix_blob=0
   local auto_fpga_blob=0
 
@@ -601,7 +615,6 @@ main() {
     cd .. || return 1
   fi
 
-  # Do submodule-side work (python + blobs) only if required
   if [ "${need_python}" -eq 1 ] || [ "${DO_BLOB_FPGA}" -eq 1 ] || [ "${DO_BLOB_POSIX}" -eq 1 ]; then
     cd "${SUBMODULE_DIR}" || die "cannot enter ggml-tsi-kernel"
 
@@ -615,7 +628,6 @@ main() {
     cd .. || return 1
   fi
 
-  # Build llama.cpp outputs (posix first, then fpga, then package)
   if [ "${DO_BUILD_POSIX}" -eq 1 ]; then
     build_posix || return 1
     wrap_glibc_bins || return 1
