@@ -20,6 +20,7 @@
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <numeric>
 #include <chrono>
 #include <cinttypes>
 #include <cmath>
@@ -772,11 +773,26 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
         }
 
         if (!budgets.empty()) {
+            // Sort experts by expert_idx (ascending) for popularity-weighted placement.
+            // Low-index experts (especially expert 0) are activated most frequently in
+            // MoE models.  By placing them first, B50 caches the most-used experts
+            // across ALL layers, rather than all experts from just the first few layers.
+            std::vector<size_t> upload_order(expert_list.size());
+            std::iota(upload_order.begin(), upload_order.end(), 0);
+            std::sort(upload_order.begin(), upload_order.end(),
+                [&](size_t a, size_t b) {
+                    if (expert_list[a].expert_idx != expert_list[b].expert_idx) {
+                        return expert_list[a].expert_idx < expert_list[b].expert_idx;
+                    }
+                    return expert_list[a].layer_id < expert_list[b].layer_id;
+                });
+
             // Secondary GPU dispatch uses SOA MMVQ kernels, so experts must be
             // cached in SOA layout with proper AOS→SOA reordering.
             ggml_sycl_reorder_fill_ctx reorder_ctx{};
 
-            for (size_t ei = 0; ei < expert_list.size(); ei++) {
+            for (size_t oi = 0; oi < upload_order.size(); oi++) {
+                size_t ei = upload_order[oi];
                 if (placed[ei]) {
                     continue;
                 }
