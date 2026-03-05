@@ -116,10 +116,46 @@ int ggml_cuda_get_device() {
     return id;
 }
 
+static bool ggml_cuda_is_device_uma(int device) {
+    // Cache results per device to avoid repeated cudaGetDeviceProperties calls
+    static bool cached[GGML_CUDA_MAX_DEVICES] = {};
+    static bool results[GGML_CUDA_MAX_DEVICES] = {};
+    static bool uma_env_checked = false;
+    static bool uma_env = false;
+
+    if (!uma_env_checked) {
+        uma_env = getenv("GGML_CUDA_ENABLE_UNIFIED_MEMORY") != nullptr;
+        uma_env_checked = true;
+    }
+    if (uma_env) {
+        return true;
+    }
+
+    if (device >= 0 && device < GGML_CUDA_MAX_DEVICES && cached[device]) {
+        return results[device];
+    }
+
+#if defined(GGML_USE_HIP)
+    // Auto-detect AMD APUs (e.g. Strix Halo) by querying the hardware directly.
+    // The info.devices[id].integrated flag is currently disabled due to #15034,
+    // but we can still use prop.integrated for memory allocation decisions.
+    if (device >= 0 && device < GGML_CUDA_MAX_DEVICES) {
+        cudaDeviceProp prop;
+        cudaError_t err = cudaGetDeviceProperties(&prop, device);
+        bool is_uma = (err == cudaSuccess && prop.integrated);
+        results[device] = is_uma;
+        cached[device] = true;
+        return is_uma;
+    }
+#endif
+
+    return false;
+}
+
 static cudaError_t ggml_cuda_device_malloc(void ** ptr, size_t size, int device) {
     ggml_cuda_set_device(device);
     cudaError_t err;
-    if (getenv("GGML_CUDA_ENABLE_UNIFIED_MEMORY") != nullptr) {
+    if (ggml_cuda_is_device_uma(device)) {
         err = cudaMallocManaged(ptr, size);
 #if defined(GGML_USE_HIP)
         if (err == hipSuccess) {
@@ -259,6 +295,21 @@ static ggml_cuda_device_info ggml_cuda_init() {
         GGML_LOG_INFO("  Device %d: %s, %s (0x%x), VMM: %s, Wave Size: %d\n",
                       id, prop.name, prop.gcnArchName, info.devices[id].cc & 0xffff,
                       device_vmm ? "yes" : "no", prop.warpSize);
+
+        // Warn RDNA 3.5 users about poor default rocBLAS performance (ref: #13565)
+        if (GGML_CUDA_CC_IS_RDNA3_5(info.devices[id].cc) && getenv("ROCBLAS_USE_HIPBLASLT") == nullptr) {
+            GGML_LOG_WARN("  RDNA 3.5 detected: set ROCBLAS_USE_HIPBLASLT=1 for 2-3x faster prompt processing\n");
+        }
+
+        // Use spin scheduling for integrated GPUs to reduce synchronization latency
+        if (prop.integrated) {
+            CUDA_CHECK(cudaSetDeviceFlags(cudaDeviceScheduleSpin));
+        }
+
+        // Log UMA auto-detection for integrated GPUs
+        if (prop.integrated) {
+            GGML_LOG_INFO("  Device %d: integrated GPU detected, using unified memory\n", id);
+        }
 #elif defined(GGML_USE_MUSA)
         // FIXME: Ensure compatibility with varying warp sizes across different MUSA archs.
         info.devices[id].warp_size = 32;
@@ -4448,7 +4499,10 @@ static void ggml_backend_cuda_device_get_memory(ggml_backend_dev_t dev, size_t *
 }
 
 static enum ggml_backend_dev_type ggml_backend_cuda_device_get_type(ggml_backend_dev_t dev) {
-    GGML_UNUSED(dev);
+    ggml_backend_cuda_device_context * ctx = (ggml_backend_cuda_device_context *)dev->context;
+    if (ggml_cuda_is_device_uma(ctx->device)) {
+        return GGML_BACKEND_DEVICE_TYPE_IGPU;
+    }
     return GGML_BACKEND_DEVICE_TYPE_GPU;
 }
 
