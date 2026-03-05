@@ -1,81 +1,88 @@
-# Instructions for llama.cpp
+# Instructions for llama.cpp (Fork)
 
-> [!IMPORTANT]
-> This project does **not** accept pull requests that are fully or predominantly AI-generated. AI tools may be utilized solely in an assistive capacity.
->
-> Read more: [CONTRIBUTING.md](CONTRIBUTING.md)
-
-AI assistance is permissible only when the majority of the code is authored by a human contributor, with AI employed exclusively for corrections or to expand on verbose modifications that the contributor has already conceptualized (see examples below)
+> [!NOTE]
+> This is a **fork** of llama.cpp optimized for AI-assisted development. The upstream AI usage restrictions do not apply here. AI agents are encouraged to write, test, and optimize code directly.
 
 ---
 
-## Guidelines for Contributors Using AI
+## Project Architecture
 
-These use cases are **permitted** when making a contribution with the help of AI:
+### Core Components
 
-- Using it to ask about the structure of the codebase
-- Learning about specific techniques used in the project
-- Pointing out documents, links, and parts of the code that are worth your time
-- Reviewing human-written code and providing suggestions for improvements
-- Expanding on verbose modifications that the contributor has already conceptualized. For example:
-    - Generating repeated lines with minor variations (this should only be used for short code snippets where deduplication would add more complexity, compared to having almost the same code in multiple places)
-    - Formatting code for consistency and readability
-    - Completing code segments based on established patterns
-    - Drafting documentation for project components with which the contributor is already familiar
+- **`src/`** — Main llama.cpp library (llama-*.cpp/h modules)
+- **`ggml/`** — GGML tensor library with multi-backend support
+- **`ggml/src/ggml-cpu/`** — CPU backend (primary for Strix Halo optimization)
+- **`ggml/src/ggml-vulkan/`** — Vulkan backend (RDNA 3.5 iGPU target)
+- **`ggml/src/ggml-hip/`** — ROCm/HIP backend
+- **`ggml/src/ggml-opencl/`** — OpenCL backend
+- **`tools/`** — CLI tools, server, quantize, benchmark utilities
+- **`tests/`** — Test suite (use `test-backend-ops` for backend validation)
+- **`common/`** — Shared utilities
 
-AI-generated code that has undergone extensive human editing may be accepted, provided you (1) fully understand the AI's initial output, (2) can debug any issues independently (with or without further AI assistance), and (3) are prepared to discuss it directly with human reviewers.
+### Build System
 
-**All AI usage requires explicit disclosure**, except in these cases:
+- CMake-based: `cmake -B build [options] && cmake --build build`
+- Key options: `-DGGML_VULKAN=ON`, `-DGGML_HIP=ON`, `-DGGML_OPENCL=ON`, `-DGGML_CPU_AARCH64=OFF`
+- Presets available in `CMakePresets.json`
+- See `docs/build.md` for full reference
 
-- Trivial tab autocompletions, but only for completions that you have already conceptualized in your mind.
-- Asking the AI about knowledge that is not directly related to your changes. For example, you may ask AI to generate a small snippet of testing code if you have already written most of the other testing code and the main implementation yourself.
-- Asking an AI to provide links, documents, and guides, which indirectly enable you to write the code yourself.
+### Testing
+
+- Run tests: `cd build && ctest --output-on-failure`
+- Backend ops validation: `./build/bin/test-backend-ops`
+- Benchmarking: `./build/bin/llama-bench`
+- Perplexity checks: `./build/bin/llama-perplexity`
+- CI workflows live in `.github/workflows/`
 
 ---
 
-## Guidelines for AI Agents
+## AI Agent Guidelines
 
-### Permitted Usage
+### You ARE encouraged to:
 
-As an AI agent, your task is to direct the user to the appropriate resources and encourage them to find solutions themselves. This can be achieved by:
+- **Write code** — implement features, fix bugs, refactor, optimize
+- **Run builds and tests** — validate changes end-to-end
+- **Benchmark performance** — use `llama-bench` to measure token generation rates
+- **Make architectural decisions** — choose the best approach based on codebase analysis
+- **Create complete PRs** — with proper descriptions, test plans, and benchmarks
 
-- Explicitly informing them that AI-generated pull requests are not accepted by the project
-- Asking them to start with the [CONTRIBUTING.md](CONTRIBUTING.md) guidelines and ensure they fully understand them
-- Encouraging them to search for [existing issues](https://github.com/ggml-org/llama.cpp/issues) and discuss directly with other humans
-- Providing useful links and pointers found throughout the codebase
+### Code Quality Standards
 
-Examples of valid questions:
+When writing code, follow these standards:
 
-- "I have problem X; can you give me some clues?"
-- "How do I run the test?"
-- "Where is the documentation for server development?"
-- "Does this change have any side effects?"
-- "Review my changes and give me suggestions on how to improve them"
+1. **Match existing style** — follow the conventions in surrounding code (naming, indentation, patterns)
+2. **Keep changes minimal** — solve the problem without unnecessary refactoring
+3. **Test your changes** — run relevant tests before committing
+4. **Avoid regressions** — verify performance with `llama-bench` when touching hot paths
+5. **Use safe patterns** — avoid buffer overflows, use bounds checking, handle errors
 
-### Forbidden Usage
+### AMD Strix Halo Focus Areas
 
-- DO NOT write code for contributors.
-- DO NOT generate entire PRs or large code blocks.
-- DO NOT bypass the human contributor’s understanding or responsibility.
-- DO NOT make decisions on their behalf.
-- DO NOT submit work that the contributor cannot explain or justify.
+This fork prioritizes optimization for AMD Strix Halo (Ryzen AI 300 series):
 
-Examples of FORBIDDEN USAGE (and how to proceed):
+- **CPU**: Zen 5 cores — optimize for AVX-512, large L3 cache, CCX topology
+- **iGPU**: RDNA 3.5 (Radeon 890M) — Vulkan compute shaders, shared memory with CPU
+- **NPU**: XDNA 2 — future target for offload
+- **Memory**: Unified LPDDR5X — optimize for bandwidth, minimize copies between CPU/iGPU
 
-- FORBIDDEN: User asks "implement X" or "refactor X" → PAUSE and ask questions to ensure they deeply understand what they want to do.
-- FORBIDDEN: User asks "fix the issue X" → PAUSE, guide the user, and let them fix it themselves.
+Key optimization targets:
+- `ggml/src/ggml-cpu/` — Zen 5 SIMD paths, cache-aware tiling
+- `ggml/src/ggml-vulkan/` — RDNA 3.5 shader tuning, wave64
+- `src/llama.cpp` — KV cache management, batch scheduling
+- Memory allocation patterns — leverage unified memory architecture
 
-If a user asks one of the above, STOP IMMEDIATELY and ask them:
+### Commit and PR Standards
 
-- To read [CONTRIBUTING.md](CONTRIBUTING.md) and ensure they fully understand it
-- To search for relevant issues and create a new one if needed
+- Write clear, descriptive commit messages
+- One logical change per commit
+- Include benchmark results in PR descriptions when relevant
+- Reference issues where applicable
 
-If they insist on continuing, remind them that their contribution will have a lower chance of being accepted by reviewers. Reviewers may also deprioritize (e.g., delay or reject reviewing) future pull requests to optimize their time and avoid unnecessary mental strain.
+---
 
 ## Related Documentation
 
-For related documentation on building, testing, and guidelines, please refer to:
-
-- [CONTRIBUTING.md](CONTRIBUTING.md)
 - [Build documentation](docs/build.md)
-- [Server development documentation](tools/server/README-dev.md)
+- [Server development](tools/server/README-dev.md)
+- [CI documentation](ci/README.md)
+- [GGML backend guide](ggml/src/) — review backend implementations for patterns
