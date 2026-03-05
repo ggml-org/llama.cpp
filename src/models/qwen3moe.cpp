@@ -31,12 +31,21 @@ llm_build_qwen3moe::llm_build_qwen3moe(const llama_model & model, const llm_grap
         {
             // compute Q and K and RoPE them
             ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
+            if (model.layers[il].wq_s) {
+                Qcur = ggml_mul(ctx0, Qcur, model.layers[il].wq_s);
+            }
             cb(Qcur, "Qcur", il);
 
             ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
+            if (model.layers[il].wk_s) {
+                Kcur = ggml_mul(ctx0, Kcur, model.layers[il].wk_s);
+            }
             cb(Kcur, "Kcur", il);
 
             ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
+            if (model.layers[il].wv_s) {
+                Vcur = ggml_mul(ctx0, Vcur, model.layers[il].wv_s);
+            }
             cb(Vcur, "Vcur", il);
 
             Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
@@ -68,6 +77,9 @@ llm_build_qwen3moe::llm_build_qwen3moe(const llama_model & model, const llm_grap
             cur = build_attn(inp_attn,
                     model.layers[il].wo, model.layers[il].bo,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+            if (model.layers[il].wo_s) {
+                cur = ggml_mul(ctx0, cur, model.layers[il].wo_s);
+            }
         }
         if (il == n_layer - 1 && inp_out_ids) {
             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
@@ -93,7 +105,11 @@ llm_build_qwen3moe::llm_build_qwen3moe(const llama_model & model, const llm_grap
                     LLM_FFN_SILU, true,
                     false, 0.0,
                     LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
-                    il);
+                    il,
+                    nullptr, nullptr,
+                    model.layers[il].ffn_up_exps_s,
+                    model.layers[il].ffn_gate_exps_s,
+                    model.layers[il].ffn_down_exps_s);
         cb(moe_out, "ffn_moe_out", il);
         cur = moe_out;
 
