@@ -2695,8 +2695,11 @@ static vk_buffer ggml_vk_create_buffer_device(vk_device& device, size_t size) {
             buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
                                                        vk::MemoryPropertyFlagBits::eDeviceLocal});
         } else if (device->uma) {
-            // Fall back to host memory type
-            buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eDeviceLocal,
+            // On UMA/iGPU (e.g. AMD RDNA 3.5 Radeon 890M), prefer memory that is both
+            // device-local and host-visible for zero-copy access from CPU and GPU.
+            // Fall back to device-local only, then host-visible as last resort.
+            buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eDeviceLocal | vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+                                                       vk::MemoryPropertyFlagBits::eDeviceLocal,
                                                        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent});
         } else if (device->disable_host_visible_vidmem) {
             if (device->allow_sysmem_fallback) {
@@ -2829,7 +2832,9 @@ static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, 
 
     // Row split splits the workgroup so that synchronization only has to happen within subgroups, which avoids barriers
     uint32_t row_split_max_hsk = 64;
-    if (device->vendor_id == VK_VENDOR_ID_AMD && device->architecture != AMD_GCN && !device->uma) {
+    if (device->vendor_id == VK_VENDOR_ID_AMD && device->architecture != AMD_GCN) {
+        // Enable row_split for all RDNA GPUs including iGPUs (UMA).
+        // RDNA3/3.5 iGPUs (e.g. Radeon 890M) benefit from avoiding barriers.
         row_split_max_hsk = n_rows <= 8 ? 64 : 128;
     }
     result.row_split = (n_rows < 4 || hsk <= row_split_max_hsk) ? 1 : 4;
@@ -2872,7 +2877,12 @@ static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, 
     // at once and end up thrashing the cache. Fix this by setting a large (unused) shmem buffer that reduces occupancy.
     // This targets an occupancy of 4 subgroups per SIMD.
     if (device->vendor_id == VK_VENDOR_ID_AMD && device->properties.limits.maxComputeSharedMemorySize == 65536) {
-        if (device->architecture != AMD_GCN && n_rows >= 64 && hsk <= 128) {
+        if (device->architecture == AMD_RDNA3 && device->uma && n_rows >= 64 && hsk <= 128) {
+            // RDNA 3.5 iGPUs (e.g. Radeon 890M) have fewer CUs (16) than discrete GPUs.
+            // Use a more aggressive occupancy limit to avoid cache thrashing on the smaller L2.
+            // Target occupancy of 3 subgroups per SIMD for iGPU.
+            result.limit_occupancy_shmem = (hsk <= 64 ? 20 : 22) * 1024 / 4 / 4;
+        } else if (device->architecture != AMD_GCN && n_rows >= 64 && hsk <= 128) {
             // 30kb target for hsk > 64, 26kb for <= 64 due to smaller workgroup size
             // Values are guessed, tested on RDNA2
             result.limit_occupancy_shmem = (hsk <= 64 ? 26 : 30) * 1024 / 4 / 4;
@@ -3079,6 +3089,14 @@ static const std::unordered_map<std::string, uint32_t> rdna2_pipelines = {
     {"soft_max", 64}, {"im2col", 64},
 };
 
+// Pipeline configuration for RDNA3/3.5 GPUs.
+// RDNA3 wave64 mode is preferred for compute-heavy shaders (matmul, softmax, flash attention).
+// Wave32 remains default for memory-bound shaders (mul_mat_vec) to improve occupancy.
+static const std::unordered_map<std::string, uint32_t> rdna3_pipelines = {
+    {"soft_max", 64}, {"im2col", 64},
+    {"flash_attn", 64},
+};
+
 static constexpr uint32_t RDNA_DEFAULT_SUBGROUP_SIZE = 32;
 
 // Define configurations for different GPUs.
@@ -3094,6 +3112,13 @@ static std::vector<GpuPipelineConfig> gpu_pipeline_configs = {
         vk_device_architecture::AMD_RDNA2,
         {
             rdna2_pipelines,
+        },
+        RDNA_DEFAULT_SUBGROUP_SIZE
+    },
+    {
+        vk_device_architecture::AMD_RDNA3,
+        {
+            rdna3_pipelines,
         },
         RDNA_DEFAULT_SUBGROUP_SIZE
     },
