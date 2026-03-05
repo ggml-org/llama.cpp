@@ -16,7 +16,7 @@
 	import { goto } from '$app/navigation';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { TOOLTIP_DELAY_DURATION } from '$lib/constants/tooltip-config';
+	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
 	import { KeyboardKey } from '$lib/enums';
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
 

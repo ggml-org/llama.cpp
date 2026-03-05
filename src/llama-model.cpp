@@ -1524,7 +1524,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 }
 
                 switch (hparams.n_layer) {
-                    // TODO: Jamba layers are a bit heterogenous, so naming this is hard.
+                    // TODO: Jamba layers are a bit heterogeneous, so naming this is hard.
                     case 12: // 900M  8x???M
                     case 32: // 51B  16x?B
                     default: type = LLM_TYPE_UNKNOWN;

@@ -17,7 +17,7 @@
 	import { getFileTypeCategory } from '$lib/utils';
 	import { config } from '$lib/stores/settings.svelte';
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
-	import { isRouterMode } from '$lib/stores/server.svelte';
+	import { isRouterMode, serverError } from '$lib/stores/server.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { activeMessages, conversationsStore } from '$lib/stores/conversations.svelte';
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
@@ -56,6 +56,7 @@
 
 	let currentConfig = $derived(config());
 	let isRouter = $derived(isRouterMode());
+	let isOffline = $derived(!!serverError());
 
 	let conversationModel = $derived(
 		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])
@@ -66,7 +67,10 @@
 	$effect(() => {
 		if (conversationModel && conversationModel !== previousConversationModel) {
 			previousConversationModel = conversationModel;
-			modelsStore.selectModelByName(conversationModel);
+
+			if (!isRouter || modelsStore.isModelLoaded(conversationModel)) {
+				modelsStore.selectModelByName(conversationModel);
+			}
 		}
 	});
 
@@ -221,7 +225,7 @@
 	<div class="ml-auto flex items-center gap-1.5">
 		{#if isMobile.current}
 			<ModelsSelectorSheet
-				{disabled}
+				disabled={disabled || isOffline}
 				bind:this={selectorModelRef}
 				currentModel={conversationModel}
 				forceForegroundText={true}
@@ -229,7 +233,7 @@
 			/>
 		{:else}
 			<ModelsSelector
-				{disabled}
+				disabled={disabled || isOffline}
 				bind:this={selectorModelRef}
 				currentModel={conversationModel}
 				forceForegroundText={true}

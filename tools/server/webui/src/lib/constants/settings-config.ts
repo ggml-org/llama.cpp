@@ -23,6 +23,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	autoShowSidebarOnNewChat: true,
 	autoMicOnEmpty: false,
 	fullHeightCodeBlocks: false,
+	showRawModelNames: false,
 	mcpServers: '[]',
 	mcpServerUsageStats: '{}', // JSON object: { [serverId]: usageCount }
 	agenticMaxTurns: 10,
@@ -122,6 +123,8 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 		'Automatically show microphone button instead of send button when textarea is empty for models with audio modality support.',
 	fullHeightCodeBlocks:
 		'Always display code blocks at their full natural height, overriding any height limits.',
+	showRawModelNames:
+		'Display full raw model identifiers (e.g. "unsloth/Qwen3.5-27B-GGUF:BF16") instead of parsed names with badges.',
 	mcpServers:
 		'Configure MCP servers as a JSON list. Use the form in the MCP Client settings section to edit.',
 	mcpServerUsageStats:

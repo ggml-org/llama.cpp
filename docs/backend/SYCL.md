@@ -708,7 +708,7 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 
   - Remove **build** folder or try a clean-build.
 
-- I can **not** see `[ext_oneapi_level_zero:gpu]` afer installing the GPU driver on Linux.
+- I can **not** see `[ext_oneapi_level_zero:gpu]` after installing the GPU driver on Linux.
 
   Please double-check with `sudo sycl-ls`.
 

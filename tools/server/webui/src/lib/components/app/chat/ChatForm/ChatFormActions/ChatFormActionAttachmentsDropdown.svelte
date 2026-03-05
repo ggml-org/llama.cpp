@@ -5,9 +5,8 @@
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { Switch } from '$lib/components/ui/switch';
-	import { FILE_TYPE_ICONS } from '$lib/constants/icons';
+	import { FILE_TYPE_ICONS, TOOLTIP_DELAY_DURATION } from '$lib/constants';
 	import { McpLogo, DropdownMenuSearchable } from '$lib/components/app';
-	import { TOOLTIP_DELAY_DURATION } from '$lib/constants/tooltip-config';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 

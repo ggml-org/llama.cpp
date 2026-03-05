@@ -2399,7 +2399,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 params.fit_params = false;
             } else {
                 throw std::runtime_error(
-                    string_format("error: unkown value for --fit: '%s'\n", value.c_str()));
+                    string_format("error: unknown value for --fit: '%s'\n", value.c_str()));
             }
         }
     ).set_env("LLAMA_ARG_FIT"));

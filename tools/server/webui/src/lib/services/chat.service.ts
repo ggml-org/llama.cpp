@@ -1,10 +1,10 @@
 import { getJsonHeaders, formatAttachmentText, isAbortError } from '$lib/utils';
-import { AGENTIC_REGEX } from '$lib/constants/agentic';
 import {
+	AGENTIC_REGEX,
 	ATTACHMENT_LABEL_PDF_FILE,
 	ATTACHMENT_LABEL_MCP_PROMPT,
 	ATTACHMENT_LABEL_MCP_RESOURCE
-} from '$lib/constants/attachment-labels';
+} from '$lib/constants';
 import {
 	AttachmentType,
 	ContentPartType,
