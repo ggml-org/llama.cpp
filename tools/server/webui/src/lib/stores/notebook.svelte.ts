@@ -1,6 +1,10 @@
 import { CompletionService } from '$lib/services/completion.service';
 import { config } from '$lib/stores/settings.svelte';
 import { tokenize } from '$lib/services/tokenize.service';
+import type { ChatMessageTimings, ChatMessagePromptProgress } from '$lib/types/chat';
+import { STATS_UNITS } from '$lib/constants/processing-info';
+import { contextSize, isRouterMode } from '$lib/stores/server.svelte';
+import { selectedModelContextSize } from '$lib/stores/models.svelte';
 
 export class NotebookStore {
 	content = $state('');
@@ -17,6 +21,7 @@ export class NotebookStore {
 	generationStartTokens = $state(0);
 	generationEndTokens = $state(0);
 	tokenizeTimeout: ReturnType<typeof setTimeout> | undefined;
+	promptProgress = $state<ChatMessagePromptProgress | null>(null);
 
 	error = $state<{
 		message: string;
@@ -42,6 +47,7 @@ export class NotebookStore {
 		this.promptMs = 0;
 		this.predictedTokens = 0;
 		this.predictedMs = 0;
+		this.promptProgress = null;
 
 		// Save number of tokens before generation
 		this.generationStartTokens = this.totalTokens;
@@ -52,7 +58,7 @@ export class NotebookStore {
 				onChunk: (chunk: string) => {
 					this.content += chunk;
 				},
-				onTimings: (timings: ChatMessageTimings, promptProgress: ChatMessagePromptProgress) => {
+				onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
 					if (timings) {
 						if (timings.cache_n) this.cacheTokens = timings.cache_n;
 						if (timings.prompt_n) this.promptTokens = timings.prompt_n;
@@ -66,6 +72,7 @@ export class NotebookStore {
 						const { processed, time_ms } = promptProgress;
 						if (processed > 0) this.promptTokens = processed;
 						if (time_ms > 0) this.promptMs = time_ms;
+						this.promptProgress = promptProgress;
 					}
 
 					// Update totalTokens live
@@ -157,6 +164,81 @@ export class NotebookStore {
 			const tokens = await tokenize(this.content, model);
 			this.totalTokens = tokens.length;
 		}, 500);
+	}
+
+	getETASecs(done: number, total: number, elapsedMs: number): number | undefined {
+		const elapsedSecs = elapsedMs / 1000;
+		const progressETASecs =
+			done === 0 || elapsedSecs < 0.5
+				? undefined // can be the case for the 0% progress report
+				: elapsedSecs * (total / done - 1);
+		return progressETASecs;
+	}
+
+	getContextTotal(): number | null {
+		if (isRouterMode()) {
+			const modelContextSize = selectedModelContextSize();
+
+			if (typeof modelContextSize === 'number' && modelContextSize > 0) {
+				return modelContextSize;
+			}
+		} else {
+			const propsContextSize = contextSize();
+
+			if (typeof propsContextSize === 'number' && propsContextSize > 0) {
+				return propsContextSize;
+			}
+		}
+
+		return null;
+	}
+
+	getProcessingDetails(): string[] {
+		const details: string[] = [];
+
+		if (this.promptProgress) {
+			const { processed, total, time_ms, cache } = this.promptProgress;
+			const actualProcessed = processed - cache;
+			const actualTotal = total - cache;
+
+			if (actualProcessed < actualTotal && actualProcessed > 0) {
+				const percent = Math.round((actualProcessed / actualTotal) * 100);
+				const eta = this.getETASecs(actualProcessed, actualTotal, time_ms);
+
+				if (eta !== undefined) {
+					const etaSecs = Math.ceil(eta);
+					details.push(`Processing ${percent}% (ETA: ${etaSecs}s)`);
+				} else {
+					details.push(`Processing ${percent}%`);
+				}
+			}
+		}
+
+		const contextTotal = this.getContextTotal();
+		const contextUsed = this.promptTokens + this.cacheTokens + this.predictedTokens;
+
+		if (typeof contextTotal === 'number' && contextUsed >= 0 && contextTotal > 0) {
+			const contextPercent = Math.round((contextUsed / contextTotal) * 100);
+			details.push(`Context: ${contextUsed}/${contextTotal} (${contextPercent}%)`);
+		}
+
+		if (this.predictedTokens > 0) {
+			const currentConfig = config();
+			const outputTokensMax = currentConfig.max_tokens || -1;
+			if (outputTokensMax <= 0) {
+				details.push(`Output: ${this.predictedTokens}/∞`);
+			} else {
+				const outputPercent = Math.round((this.predictedTokens / outputTokensMax) * 100);
+				details.push(`Output: ${this.predictedTokens}/${outputTokensMax} (${outputPercent}%)`);
+			}
+		}
+
+		if (this.predictedTokens > 0 && this.predictedMs > 0) {
+			const tokensPerSecond = (this.predictedTokens / this.predictedMs) * 1000;
+			details.push(`${tokensPerSecond.toFixed(1)} ${STATS_UNITS.TOKENS_PER_SECOND}`);
+		}
+
+		return details;
 	}
 }
 

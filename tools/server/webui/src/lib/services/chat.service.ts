@@ -7,7 +7,6 @@ import {
 	ReasoningFormat,
 	UrlPrefix
 } from '$lib/enums';
-import type { ApiChatMessageContentPart, ApiChatCompletionToolCall } from '$lib/types/api';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { AGENTIC_REGEX } from '$lib/constants/agentic';
 import type {

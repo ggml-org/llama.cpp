@@ -11,6 +11,7 @@
 		KeyboardShortcutInfo,
 		ModelsSelector
 	} from '$lib/components/app';
+	import { ProcessingInfo } from '$lib/components/app/misc';
 
 	import { modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
@@ -234,6 +235,11 @@
 			placeholder="Enter your text here..."
 		/>
 	</div>
+
+	<ProcessingInfo
+		visible={notebookStore.isGenerating}
+		processingDetails={notebookStore.getProcessingDetails()}
+	/>
 
 	<div class="bg-background p-2 md:p-4">
 		<div class="flex flex-col-reverse gap-4 md:flex-row md:items-center md:justify-between">

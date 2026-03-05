@@ -43,3 +43,10 @@ export { default as TruncatedText } from './TruncatedText.svelte';
  * Supports special keys like shift, cmd, and custom text.
  */
 export { default as KeyboardShortcutInfo } from './KeyboardShortcutInfo.svelte';
+
+/**
+ * **ProcessingInfo** - Display for generation/processing details
+ *
+ * Shows details like tokens/sec during parsing and generation.
+ */
+export { default as ProcessingInfo } from './ProcessingInfo.svelte';
