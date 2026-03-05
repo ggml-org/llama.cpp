@@ -1307,16 +1307,38 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     ggml_tensor * weights = ggml_get_rows(ctx0, probs, selected_experts); // [1, n_expert_used, n_tokens]
     cb(weights, "ffn_moe_weights", il);
 
+    // HARD MASK: If moe_n_expert_override is set, slice tensors to only use first N experts
+    // This actually reduces computation by only loading/computing N experts instead of all n_expert_used
+    // Unlike soft mask (which zeros weights but still computes all experts), hard mask skips the computation entirely
+    int32_t n_expert_exec = n_expert_used;  // Default: execute all selected experts
+    if (cparams.moe_n_expert_override > 0 && cparams.moe_n_expert_override < n_expert_used) {
+        n_expert_exec = cparams.moe_n_expert_override;
+
+        // Slice selected_experts from [n_expert_used, n_tokens] to [n_expert_exec, n_tokens]
+        // This causes ggml_mul_mat_id to only load and compute the first n_expert_exec experts
+        selected_experts = ggml_view_2d(ctx0, selected_experts, n_expert_exec, n_tokens,
+                                        selected_experts->nb[1], 0);
+        // Make contiguous for subsequent operations
+        selected_experts = ggml_cont(ctx0, selected_experts);
+        cb(selected_experts, "ffn_moe_topk_sliced", il);
+
+        // Slice weights from [1, n_expert_used, n_tokens] to [1, n_expert_exec, n_tokens]
+        weights = ggml_view_3d(ctx0, weights, 1, n_expert_exec, n_tokens,
+                               weights->nb[1], weights->nb[2], 0);
+        // Make contiguous for subsequent reshape operations
+        weights = ggml_cont(ctx0, weights);
+        cb(weights, "ffn_moe_weights_sliced", il);
+    }
 
     if (gating_op == LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT) {
-        weights = ggml_reshape_2d(ctx0, weights, n_expert_used, n_tokens);
-        weights = ggml_soft_max(ctx0, weights); // [n_expert_used, n_tokens]
-        weights = ggml_reshape_3d(ctx0, weights, 1, n_expert_used, n_tokens);
+        weights = ggml_reshape_2d(ctx0, weights, n_expert_exec, n_tokens);
+        weights = ggml_soft_max(ctx0, weights); // [n_expert_exec, n_tokens]
+        weights = ggml_reshape_3d(ctx0, weights, 1, n_expert_exec, n_tokens);
         cb(weights, "ffn_moe_weights_softmax", il);
     }
 
     if (norm_w) {
-        weights = ggml_reshape_2d(ctx0, weights, n_expert_used, n_tokens);
+        weights = ggml_reshape_2d(ctx0, weights, n_expert_exec, n_tokens);
 
         ggml_tensor * weights_sum = ggml_sum_rows(ctx0, weights); // [1, n_tokens]
         cb(weights_sum, "ffn_moe_weights_sum", il);
@@ -1325,10 +1347,10 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         weights_sum = ggml_clamp(ctx0, weights_sum, 6.103515625e-5, INFINITY);
         cb(weights_sum, "ffn_moe_weights_sum_clamped", il);
 
-        weights = ggml_div(ctx0, weights, weights_sum); // [n_expert_used, n_tokens]
+        weights = ggml_div(ctx0, weights, weights_sum); // [n_expert_exec, n_tokens]
         cb(weights, "ffn_moe_weights_norm", il);
 
-        weights = ggml_reshape_3d(ctx0, weights, 1, n_expert_used, n_tokens);
+        weights = ggml_reshape_3d(ctx0, weights, 1, n_expert_exec, n_tokens);
     }
     if (scale_w) {
         weights = ggml_scale(ctx0, weights, w_scale);
@@ -1341,8 +1363,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     cur = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
 
     if (weight_before_ffn) {
-        // repeat cur to [n_embd, n_expert_used, n_tokens]
-        ggml_tensor * repeated = ggml_repeat_4d(ctx0, cur, n_embd, n_expert_used, n_tokens, 1);
+        // repeat cur to [n_embd, n_expert_exec, n_tokens]
+        ggml_tensor * repeated = ggml_repeat_4d(ctx0, cur, n_embd, n_expert_exec, n_tokens, 1);
         cur = ggml_mul(ctx0, repeated, weights);
         cb(cur, "ffn_moe_weighted", il);
     }
@@ -1472,26 +1494,31 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 
     ggml_tensor * cur_experts[LLAMA_MAX_EXPERTS] = { nullptr };
 
-    assert(n_expert_used > 0);
+    // Determine actual expert count for aggregation
+    // When --moe-n-expert is set (hard mask mode), use n_expert_exec
+    // Otherwise use hparams.n_expert_used to avoid dynamic allocation issues during warmup
+    // ref: https://github.com/ggml-org/llama.cpp/pull/14753
+    const uint32_t n_expert_agg = (cparams.moe_n_expert_override > 0)
+                                   ? (uint32_t)n_expert_exec
+                                   : hparams.n_expert_used;
+
+    assert(n_expert_agg > 0);
 
     // order the views before the adds
-    for (uint32_t i = 0; i < hparams.n_expert_used; ++i) {
+    for (uint32_t i = 0; i < n_expert_agg; ++i) {
         cur_experts[i] = ggml_view_2d(ctx0, experts, n_embd, n_tokens, experts->nb[2], i*experts->nb[1]);
 
         ggml_build_forward_expand(gf, cur_experts[i]);
     }
 
     // aggregate experts
-    // note: here we explicitly use hparams.n_expert_used instead of n_expert_used
-    //       to avoid potentially a large number of add nodes during warmup
-    //       ref: https://github.com/ggml-org/llama.cpp/pull/14753
     ggml_tensor * moe_out = cur_experts[0];
 
-    for (uint32_t i = 1; i < hparams.n_expert_used; ++i) {
+    for (uint32_t i = 1; i < n_expert_agg; ++i) {
         moe_out = ggml_add(ctx0, moe_out, cur_experts[i]);
     }
 
-    if (hparams.n_expert_used == 1) {
+    if (n_expert_agg == 1) {
         // avoid returning a non-contiguous tensor
         moe_out = ggml_cont(ctx0, moe_out);
     }
