@@ -26453,39 +26453,27 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         const int32_t i02 = ids_host[static_cast<size_t>(iid1 * n_ids + id)];
                         GGML_ASSERT(i02 >= 0 && i02 < n_as);
 
-                        // Check placement table for VRAM-resident experts on any GPU.
-                        // Experts cached on B50 (device_id >= 1) are dispatched to
-                        // their resident GPU via activation shipping rather than
-                        // falling back to CPU.
-                        bool dispatched_gpu = false;
-                        if (placement_table.is_initialized()) {
-                            auto placement = placement_table.get(layer_id, i02);
+                        // Route expert to GPU with cached weights, CPU only as fallback.
+                        // Priority: placement table (any GPU) > cache-resolved ptr (GPU0) > CPU.
+                        // Default: device_id=-1, device_ptr=nullptr (CPU fallback)
+                        auto placement = placement_table.is_initialized()
+                            ? placement_table.get(layer_id, i02)
+                            : decltype(placement_table.get(0, 0)){};
 
-                            if (placement.device_id == 0 && placement.device_ptr) {
-                                // Primary GPU: expert has explicit VRAM pointer
-                                gpu_entries.push_back({ iid1, id, i02, placement.device_ptr });
-                                dispatched_gpu = true;
-                            } else if (placement.device_id >= 1
-                                       && placement.device_id < n_gpu_devs
-                                       && placement.device_ptr != nullptr
-                                       && g_secondary_queues[placement.device_id] != nullptr) {
-                                // Secondary GPU (e.g. B50): dispatch via activation shipping
-                                per_gpu_entries[placement.device_id].push_back(
-                                    { iid1, id, i02, placement.device_ptr });
-                                dispatched_gpu = true;
-                            }
-                        }
-
-                        // Fallback: check cache-resolved pointer table (GPU0 only)
-                        if (!dispatched_gpu && expert_ptrs_host && i02 < n_as
-                            && expert_ptrs_host[i02] != nullptr) {
+                        if (placement.device_id == 0 && placement.device_ptr) {
+                            gpu_entries.push_back({ iid1, id, i02, placement.device_ptr });
+                        } else if (placement.device_id >= 1
+                                   && placement.device_id < n_gpu_devs
+                                   && placement.device_ptr != nullptr
+                                   && g_secondary_queues[placement.device_id] != nullptr) {
+                            per_gpu_entries[placement.device_id].push_back(
+                                { iid1, id, i02, placement.device_ptr });
+                        } else if (expert_ptrs_host && i02 < n_as
+                                   && expert_ptrs_host[i02] != nullptr) {
                             gpu_entries.push_back(
                                 { iid1, id, i02, const_cast<void *>(expert_ptrs_host[i02]) });
-                            dispatched_gpu = true;
-                        }
-
-                        // Host-resident: route to CPU
-                        if (!dispatched_gpu) {
+                        } else {
+                            // No GPU has this expert cached — CPU fallback
                             cpu_entries.push_back({ iid1, id, i02, nullptr });
                         }
                     }
