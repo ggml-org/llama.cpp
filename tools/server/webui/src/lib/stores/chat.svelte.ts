@@ -16,11 +16,7 @@ import { DatabaseService, ChatService } from '$lib/services';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { config } from '$lib/stores/settings.svelte';
 import { contextSize, isRouterMode } from '$lib/stores/server.svelte';
-import {
-	selectedModelName,
-	modelsStore,
-	selectedModelContextSize
-} from '$lib/stores/models.svelte';
+import { selectedModelName, modelsStore, getContextSize } from '$lib/stores/models.svelte';
 import {
 	normalizeModelName,
 	filterByLeafNodeId,
@@ -1328,19 +1324,7 @@ class ChatStore {
 		if (activeState && typeof activeState.contextTotal === 'number' && activeState.contextTotal > 0)
 			return activeState.contextTotal;
 
-		if (isRouterMode()) {
-			const modelContextSize = selectedModelContextSize();
-
-			if (typeof modelContextSize === 'number' && modelContextSize > 0) {
-				return modelContextSize;
-			}
-		} else {
-			const propsContextSize = contextSize();
-
-			if (typeof propsContextSize === 'number' && propsContextSize > 0) {
-				return propsContextSize;
-			}
-		}
+		return getContextSize();
 
 		return null;
 	}

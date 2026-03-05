@@ -81,8 +81,6 @@ export function useProcessingState(): UseProcessingStateReturn {
 		}
 	});
 
-
-
 	function startMonitoring(): void {
 		if (isMonitoring) return;
 		isMonitoring = true;

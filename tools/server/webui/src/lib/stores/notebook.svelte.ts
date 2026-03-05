@@ -7,8 +7,7 @@ import type {
 	ErrorDialogState
 } from '$lib/types/chat';
 import { STATS_UNITS } from '$lib/constants/processing-info';
-import { contextSize, isRouterMode } from '$lib/stores/server.svelte';
-import { selectedModelContextSize } from '$lib/stores/models.svelte';
+import { getContextSize } from '$lib/stores/models.svelte';
 import { ErrorDialogType } from '$lib/enums';
 import { getETASecs } from '$lib/hooks/use-processing-state.svelte';
 
@@ -168,24 +167,6 @@ export class NotebookStore {
 		}, 500);
 	}
 
-	getContextTotal(): number | null {
-		if (isRouterMode()) {
-			const modelContextSize = selectedModelContextSize();
-
-			if (typeof modelContextSize === 'number' && modelContextSize > 0) {
-				return modelContextSize;
-			}
-		} else {
-			const propsContextSize = contextSize();
-
-			if (typeof propsContextSize === 'number' && propsContextSize > 0) {
-				return propsContextSize;
-			}
-		}
-
-		return null;
-	}
-
 	getProcessingDetails(): string[] {
 		const details: string[] = [];
 
@@ -207,7 +188,7 @@ export class NotebookStore {
 			}
 		}
 
-		const contextTotal = this.getContextTotal();
+		const contextTotal = getContextSize();
 		const contextUsed = this.promptTokens + this.cacheTokens + this.predictedTokens;
 
 		if (typeof contextTotal === 'number' && contextUsed >= 0 && contextTotal > 0) {
