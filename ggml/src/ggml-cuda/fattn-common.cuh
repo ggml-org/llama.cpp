@@ -3,6 +3,7 @@
 #include "common.cuh"
 #include "convert.cuh"
 #include "vecdotq.cuh"
+#include "fattn-autotune.cuh"
 
 #include <cstdint>
 
@@ -918,6 +919,8 @@ void launch_fattn(
     CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max_blocks_per_sm, fattn_kernel, block_dim.x * block_dim.y * block_dim.z, nbytes_shared));
     GGML_ASSERT(max_blocks_per_sm > 0);
     int parallel_blocks = max_blocks_per_sm;
+    fattn_autotune_state * autotune = nullptr;
+    fattn_autotune_key autotune_key = {};
 
     dim3 blocks_num;
     if (stream_k) {
@@ -969,6 +972,38 @@ void launch_fattn(
         blocks_num.y = parallel_blocks;
         blocks_num.z = ntiles_z_gqa*K->ne[2]*Q->ne[3];
 
+        // Auto-tune for batch=1 (ntiles_x == 1): ensure enough total blocks to
+        // fill all SMs. When attention heads alone can't saturate the GPU,
+        // increase parallel_blocks to compensate. Adapts automatically to any
+        // GPU based on actual SM/CU count and occupancy.
+        if (ntiles_x == 1 && blocks_num.z * parallel_blocks < nsm * max_blocks_per_sm) {
+            const int target_total = nsm * max_blocks_per_sm;
+            const int target_pb = (target_total + blocks_num.z - 1) / blocks_num.z;
+            parallel_blocks = std::min(target_pb, ntiles_KQ);
+            blocks_num.y = parallel_blocks;
+        }
+
+        // Online auto-tuning: test different parallel_blocks values during
+        // inference and converge to the fastest one. Only active for batch=1
+        // where parallel_blocks matters most.
+        if (ntiles_x == 1) {
+            autotune_key = {id, (int)Q->ne[2], (int)Q->ne[0], (int)K->type};
+            autotune = &fattn_autotune_registry::instance().get(autotune_key);
+
+            // Cache device name for profile persistence
+            static char device_name[256] = {};
+            if (!device_name[0]) {
+                cudaDeviceProp prop;
+                CUDA_CHECK(cudaGetDeviceProperties(&prop, id));
+                snprintf(device_name, sizeof(device_name), "%s", prop.name);
+            }
+
+            const int tuned_pb = fattn_autotune_get_parallel_blocks(
+                *autotune, parallel_blocks, ntiles_KQ, autotune_key, device_name);
+            parallel_blocks = tuned_pb;
+            blocks_num.y = parallel_blocks;
+        }
+
         if (parallel_blocks > 1) {
             dst_tmp.alloc(parallel_blocks*ggml_nelements(KQV));
             dst_tmp_meta.alloc(parallel_blocks*ggml_nrows(KQV));
@@ -997,6 +1032,11 @@ void launch_fattn(
     const uint3 ne01 = init_fastdiv_values(Q->ne[1]);
 
     GGML_ASSERT(block_dim.x % warp_size == 0);
+
+    if (autotune) {
+        fattn_autotune_record_start(*autotune, main_stream);
+    }
+
     fattn_kernel<<<blocks_num, block_dim, nbytes_shared, main_stream>>>(
         (const char *) Q->data,
         K_data,
@@ -1033,4 +1073,14 @@ void launch_fattn(
             (dst_tmp.ptr, dst_tmp_meta.ptr, (float *) KQV->data, parallel_blocks);
     }
     CUDA_CHECK(cudaGetLastError());
+
+    if (autotune) {
+        static char device_name[256] = {};
+        if (!device_name[0]) {
+            cudaDeviceProp prop;
+            CUDA_CHECK(cudaGetDeviceProperties(&prop, id));
+            snprintf(device_name, sizeof(device_name), "%s", prop.name);
+        }
+        fattn_autotune_record_stop(*autotune, main_stream, autotune_key, device_name);
+    }
 }

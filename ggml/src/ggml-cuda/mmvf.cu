@@ -825,11 +825,14 @@ bool ggml_cuda_should_use_mmvf(enum ggml_type type, int cc, const int64_t * src0
                 return ne11 <= 8;
             } else if (GGML_CUDA_CC_IS_AMD(cc)) {
                 if (fp16_mma_hardware_available(cc)) {
-                    if (GGML_CUDA_CC_IS_RDNA3(cc)) {
-                        return ne11 <= 3;
-                    }
                     if (GGML_CUDA_CC_IS_RDNA4(cc)) {
                         return ne11 <= 5;
+                    }
+                    if (GGML_CUDA_CC_IS_RDNA3(cc)) {
+                        // Auto-tune GEMV threshold based on CU count:
+                        // fewer CUs (iGPUs) can't saturate GEMM, so GEMV stays competitive longer.
+                        const int nsm = ggml_cuda_info().devices[ggml_cuda_get_device()].nsm;
+                        return ne11 <= (nsm <= 20 ? 4 : 3);
                     }
                     return ne11 <= 2;
                 }
@@ -851,6 +854,10 @@ bool ggml_cuda_should_use_mmvf(enum ggml_type type, int cc, const int64_t * src0
                 return ne11 <= 8;
             } else if (GGML_CUDA_CC_IS_AMD(cc)) {
                 if (bf16_mma_hardware_available(cc)) {
+                    if (GGML_CUDA_CC_IS_RDNA3(cc)) {
+                        const int nsm = ggml_cuda_info().devices[ggml_cuda_get_device()].nsm;
+                        return ne11 <= (nsm <= 20 ? 4 : 3);
+                    }
                     return ne11 <= 3;
                 }
                 return ne11 <= 8;
