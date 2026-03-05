@@ -12,6 +12,7 @@
 		ModelsSelector
 	} from '$lib/components/app';
 	import { ProcessingInfo } from '$lib/components/app/misc';
+	import { ErrorDialogType } from '$lib/enums';
 
 	import { modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
@@ -347,6 +348,6 @@
 		contextInfo={errorDialog?.contextInfo}
 		onOpenChange={handleErrorDialogOpenChange}
 		open={Boolean(errorDialog)}
-		type={errorDialog?.type ?? 'server'}
+		type={errorDialog?.type ?? ErrorDialogType.SERVER}
 	/>
 </div>

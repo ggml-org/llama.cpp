@@ -1,10 +1,15 @@
 import { CompletionService } from '$lib/services/completion.service';
 import { config } from '$lib/stores/settings.svelte';
 import { tokenize } from '$lib/services/tokenize.service';
-import type { ChatMessageTimings, ChatMessagePromptProgress } from '$lib/types/chat';
+import type {
+	ChatMessageTimings,
+	ChatMessagePromptProgress,
+	ErrorDialogState
+} from '$lib/types/chat';
 import { STATS_UNITS } from '$lib/constants/processing-info';
 import { contextSize, isRouterMode } from '$lib/stores/server.svelte';
 import { selectedModelContextSize } from '$lib/stores/models.svelte';
+import { ErrorDialogType } from '$lib/enums';
 
 export class NotebookStore {
 	content = $state('');
@@ -23,11 +28,7 @@ export class NotebookStore {
 	tokenizeTimeout: ReturnType<typeof setTimeout> | undefined;
 	promptProgress = $state<ChatMessagePromptProgress | null>(null);
 
-	error = $state<{
-		message: string;
-		type: 'timeout' | 'server';
-		contextInfo?: { n_prompt_tokens: number; n_ctx: number };
-	} | null>(null);
+	error = $state<ErrorDialogState | null>(null);
 
 	previousContent = $state<string | null>(null);
 	undoneContent = $state<string | null>(null);
@@ -88,7 +89,7 @@ export class NotebookStore {
 						console.error('Notebook generation error:', error);
 						this.error = {
 							message: error instanceof Error ? error.message : String(error),
-							type: 'server'
+							type: ErrorDialogType.SERVER
 						};
 					}
 					this.isGenerating = false;
@@ -108,7 +109,7 @@ export class NotebookStore {
 			console.error('Notebook generation failed:', error);
 			this.error = {
 				message: error instanceof Error ? error.message : String(error),
-				type: 'server'
+				type: ErrorDialogType.SERVER
 			};
 			this.isGenerating = false;
 		}
