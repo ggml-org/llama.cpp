@@ -8840,6 +8840,9 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     uint32_t k_stride = (uint32_t)(nbk1 / ggml_type_size(k->type));
     uint32_t v_stride = (uint32_t)(nbv1 / ggml_type_size(v->type));
 
+#ifdef GGML_VULKAN_ENABLE_SLANG
+    if (tuning_params.path != FA_SCALAR) {
+#endif
     // For F32, the shader treats it as a block of size 4 (for vec4 loads)
     if (k->type == GGML_TYPE_F32) {
         k_stride /= 4;
@@ -8847,6 +8850,9 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     if (v->type == GGML_TYPE_F32) {
         v_stride /= 4;
     }
+#ifdef GGML_VULKAN_ENABLE_SLANG
+    }
+#endif
 
     const uint32_t alignment = tuning_params.block_cols;
     bool aligned = (KV % alignment) == 0 &&

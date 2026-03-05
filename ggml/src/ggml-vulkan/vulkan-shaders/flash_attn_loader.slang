@@ -21,7 +21,7 @@ public struct ScalarKVLoader<T: __BuiltinFloatingPointType> : IKVLoader {
     }
 
     public vector<FLOAT, 4> load(uint element_idx, uint head_dim4_idx) {
-        return (buf[offset + element_idx * stride4 + head_dim4_idx] as vector<FLOAT, 4>).value;
+        return vector<FLOAT, 4>(buf[offset + element_idx * stride4 + head_dim4_idx]);
     }
 }
 
@@ -43,8 +43,8 @@ public struct Q8_0KVLoader : IKVLoader {
         const uint ib = coord / QUANT_K_Q8_0;
         const uint iqs = (coord % QUANT_K_Q8_0);
 
-        const vector<FLOAT, 2> v0 = (unpack_s8s32(int32_t(buf[offset + ib].qs[iqs / 2])).xy as vector<FLOAT, 2>).value; // vec4 used due to #12147
-        const vector<FLOAT, 2> v1 = (unpack_s8s32(int32_t(buf[offset + ib].qs[iqs / 2 + 1])).xy as vector<FLOAT, 2>).value;
+        const vector<FLOAT, 2> v0 = vector<FLOAT, 2>(unpack_s8s32(int32_t(buf[offset + ib].qs[iqs / 2])).xy); // vec4 used due to #12147
+        const vector<FLOAT, 2> v1 = vector<FLOAT, 2>(unpack_s8s32(int32_t(buf[offset + ib].qs[iqs / 2 + 1])).xy);
 
         return FLOAT(buf[offset + ib].d) * vector<FLOAT, 4>(v0.x, v0.y, v1.x, v1.y);
     }

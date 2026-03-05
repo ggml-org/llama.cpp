@@ -1,18 +1,18 @@
 import types;
 import flash_attn_loader;
 
-[vk::specialization_constant] const uint WorkGroupSize = 128;
-[vk::specialization_constant] const uint Br = 1;
-[vk::specialization_constant] const uint Bc = 32;
-[vk::specialization_constant] const uint HSK = 32;
-[vk::specialization_constant] const uint HSV = 32;
-[vk::specialization_constant] const uint Clamp = 0;
-[vk::specialization_constant] const uint D_split = 16;
-[vk::specialization_constant] const uint row_split = 1;
-[vk::specialization_constant] const uint SubGroupSize = 32;
-[vk::specialization_constant] const uint SHMEM_STAGING = 0;
-[vk::specialization_constant] const uint Flags = 0;
-[vk::specialization_constant] const uint LIMIT_OCCUPANCY_SHMEM = 0;
+[vk::constant_id( 0)] const uint WorkGroupSize = 128;
+[vk::constant_id( 1)] const uint Br = 1;
+[vk::constant_id( 2)] const uint Bc = 32;
+[vk::constant_id( 3)] const uint HSK = 32;
+[vk::constant_id( 4)] const uint HSV = 32;
+[vk::constant_id( 5)] const uint Clamp = 0;
+[vk::constant_id( 6)] const uint D_split = 16;
+[vk::constant_id( 7)] const uint row_split = 1;
+[vk::constant_id( 8)] const uint SubGroupSize = 32;
+[vk::constant_id( 9)] const uint SHMEM_STAGING = 0;
+[vk::constant_id(10)] const uint Flags = 0;
+[vk::constant_id(11)] const uint LIMIT_OCCUPANCY_SHMEM = 0;
 
 static const bool USE_MASK_OPT    = (Flags & 1) != 0;
 static const bool MASK_ENABLE     = (Flags & 2) != 0;
@@ -131,7 +131,7 @@ T perElemOpStoreCol0<T: __BuiltinFloatingPointType>(const uint r, const uint32_t
 {
     if (r < N && c == 0) {
         uint offset = iq2 + r;
-        data_o[o_offset + offset] = (elem as D_TYPE).value;
+        data_o[o_offset + offset] = floatCast<D_TYPE>(elem);
     }
     return elem;
 }
@@ -240,10 +240,9 @@ typealias VLoader = ScalarKVLoader<half>;
 
 // Store the output when doing grouped query attention.
 // Rows index by Q's dimension 2, and the first N rows are valid.
-void gqaStore<T: __BuiltinFloatingPointType>(const in uint32_t r, const in uint32_t c, const in vector<T, 4> elems, const in uint32_t o_offset, const in uint32_t iq2, const in uint32_t N)
-{
+void gqaStore<T: __BuiltinFloatingPointType>(const in uint32_t r, const in uint32_t c, const in vector<T, 4> elems, const in uint32_t o_offset, const in uint32_t iq2, const in uint32_t N) {
     uint32_t offset = (iq2 + r) * HSV / 4 + c;
-    data_ov4[o_offset + offset] = (elems as vector<D_TYPE, 4>).value;
+    data_ov4[o_offset + offset] = vector<D_TYPE, 4>(elems);
 }
 
 [shader("compute")]
@@ -255,7 +254,7 @@ void main(
     const Indices idcs = init_indices(wgid);
 
     const uint subgroup_invocation_id = WaveGetLaneIndex();
-    const uint subgroup_id = tid / SubGroupSize;
+    const uint subgroup_id = tid / WaveGetLaneCount();
 
     const uint threads_per_rowgroup = WorkGroupSize / row_split;
     const uint row_tid = tid / threads_per_rowgroup;
@@ -386,7 +385,7 @@ void main(
                     tmpsh[subgroup_id] = all_less ? NEG_FLT_MAX_OVER_2 : 0.0f;
                 }
                 GroupMemoryBarrierWithGroupSync();
-                [unroll] for (uint s = 0; s < num_subgroups; ++s) {
+                [unroll] for (uint s = 0; s < WaveGetNumWaves(); ++s) {
                     max_mask = max(max_mask, tmpsh[s]);
                 }
                 if (max_mask <= NEG_FLT_MAX_OVER_2) {
@@ -752,8 +751,8 @@ void main(
     [unroll] for (uint d = 0; d < HSV_per_thread / 4; ++d) {
         [unroll] for (uint r = 0; r < rows_per_thread; ++r) {
             Of[r][d] *= FLOAT(Lfrcp[r]);
-#if defined(FLOAT_MAX)
-            Of[r][d] = clamp(Of[r][d], -FLOAT_MAX, FLOAT_MAX);
+#if defined(FLOAT_TYPE_MAX)
+            Of[r][d] = clamp(Of[r][d], -FLOAT_TYPE_MAX, FLOAT_TYPE_MAX);
 #endif
         }
     }
