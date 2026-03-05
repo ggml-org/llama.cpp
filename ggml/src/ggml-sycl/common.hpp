@@ -549,7 +549,8 @@ struct sycl_device_info {
 };
 
 struct ggml_sycl_device_info {
-    int device_count;
+    int device_count;       // GPUs visible to scheduler (may be reduced to 1)
+    int total_gpu_count;    // Total physical GPUs (before scheduler hiding)
 
     sycl_device_info devices[GGML_SYCL_MAX_DEVICES] = {};
 

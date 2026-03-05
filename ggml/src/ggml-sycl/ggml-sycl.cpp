@@ -462,8 +462,9 @@ static std::once_flag               g_moe_hybrid_init_flags[GGML_SYCL_MAX_DEVICE
 // but ExpertPredictor indexes into fixed-size arrays sized by layer count.
 static std::unordered_map<int, int> g_moe_layer_seq[GGML_SYCL_MAX_DEVICES];
 
-// Multi-GPU MoE dispatch: when GGML_SYCL_MOE_MULTI_GPU=1 and >1 GPU available,
-// experts can be distributed across primary GPU and N-1 secondary GPUs.
+// Multi-GPU MoE dispatch: auto-enabled when >1 physical GPU available.
+// Experts distributed across primary GPU and N-1 secondary GPUs.
+// Opt-out: GGML_SYCL_MOE_MULTI_GPU=0 to force single-GPU MoE.
 // Secondary GPUs write outputs to malloc_host staging, merged via primary compute queue.
 static std::atomic<bool> g_moe_multi_gpu_active{false};
 // Per-secondary-GPU staging buffers (malloc_host, readable from primary GPU).
@@ -661,16 +662,17 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
     // -----------------------------------------------------------------------
     // Early multi-GPU setup: register unified caches for secondary GPUs BEFORE
     // the eager VRAM upload so the upload loop can distribute experts across
-    // all devices. The full multi-GPU init (staging buffers etc.) runs later.
+    // all devices. Auto-enabled when 2+ physical GPUs are available.
+    // Opt-out: GGML_SYCL_MOE_MULTI_GPU=0 to force single-GPU MoE.
     // -----------------------------------------------------------------------
     if (device == 0) {
-        const char * multi_gpu_env_early = std::getenv("GGML_SYCL_MOE_MULTI_GPU");
-        const bool   multi_gpu_early     = multi_gpu_env_early && std::atoi(multi_gpu_env_early) != 0;
-        const int    total_devices_early = ggml_sycl_info().device_count;
+        const char * moe_opt_out    = std::getenv("GGML_SYCL_MOE_MULTI_GPU");
+        const bool   multi_gpu_off  = (moe_opt_out && std::atoi(moe_opt_out) == 0);
+        const int    total_gpus     = ggml_sycl_info().total_gpu_count;
 
-        if (multi_gpu_early && total_devices_early >= 2) {
+        if (!multi_gpu_off && total_gpus >= 2) {
             int n_early_ok = 0;
-            for (int gpu_d = 1; gpu_d < total_devices_early && gpu_d < GGML_SYCL_MAX_DEVICES; gpu_d++) {
+            for (int gpu_d = 1; gpu_d < total_gpus && gpu_d < GGML_SYCL_MAX_DEVICES; gpu_d++) {
                 try {
                     auto & dev_d = ggml_sycl_get_device(gpu_d);
                     g_secondary_queues[gpu_d] = &dev_d.default_queue();
@@ -682,6 +684,8 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
             }
             if (n_early_ok > 0) {
                 g_moe_multi_gpu_active.store(true, std::memory_order_release);
+                GGML_LOG_INFO("[MOE-MULTI-GPU] Auto-enabled: %d secondary GPUs registered "
+                              "(opt-out: GGML_SYCL_MOE_MULTI_GPU=0)\n", n_early_ok);
             }
         }
     }
@@ -3992,24 +3996,27 @@ static ggml_sycl_device_info ggml_sycl_init() {
     }
     device_map.swap(gpu_device_map);
 
-    // When GGML_SYCL_PERSISTENT_SPLIT or GGML_SYCL_MOE_MULTI_GPU is set and
-    // multiple GPUs are visible, expose only the primary GPU (device 0) to
-    // the backend scheduler.  This prevents pipeline parallelism from
-    // allocating compute buffers on secondary GPUs, reserving their VRAM for
-    // internal use (persistent TG row-split or MoE expert caching).
-    // Secondary GPUs remain accessible internally: persistent split discovers
-    // them via split_config_init(), and MoE dispatch accesses them through
-    // g_secondary_queues[] set up in moe_hybrid_init_once().
-    {
-        const bool persistent_split = (std::getenv("GGML_SYCL_PERSISTENT_SPLIT") != nullptr);
-        const char * moe_env        = std::getenv("GGML_SYCL_MOE_MULTI_GPU");
-        const bool   moe_multi_gpu  = (moe_env && std::atoi(moe_env) != 0);
+    // Store total physical GPU count before any scheduler hiding
+    info.total_gpu_count = static_cast<int>(device_map.size());
 
-        if ((persistent_split || moe_multi_gpu) && device_map.size() > 1) {
-            const char * reason = persistent_split ? "PERSISTENT_SPLIT" : "MOE_MULTI_GPU";
-            GGML_LOG_INFO("[SYCL] %s: exposing only device 0 to scheduler "
-                          "(%zu physical GPUs available internally)\n",
-                          reason, device_map.size());
+    // When multiple GPUs are visible, expose only the primary GPU (device 0)
+    // to the backend scheduler by default.  This prevents pipeline parallelism
+    // from allocating compute buffers on secondary GPUs, reserving their VRAM
+    // for internal use (MoE expert caching or persistent TG row-split).
+    // Secondary GPUs remain accessible internally: MoE dispatch uses
+    // g_secondary_queues[], persistent split uses split_config_init().
+    //
+    // Opt-out: GGML_SYCL_SPLIT_RATIO or GGML_SYCL_TENSOR_SPLIT explicitly
+    // request multi-GPU tensor splitting via the scheduler, so we keep all
+    // devices visible in those cases.
+    if (device_map.size() > 1) {
+        const bool split_ratio  = (std::getenv("GGML_SYCL_SPLIT_RATIO") != nullptr);
+        const bool tensor_split = (std::getenv("GGML_SYCL_TENSOR_SPLIT") != nullptr);
+
+        if (!split_ratio && !tensor_split) {
+            GGML_LOG_INFO("[SYCL] Multi-GPU: exposing only device 0 to scheduler "
+                          "(%zu physical GPUs available internally for MoE/split)\n",
+                          device_map.size());
             device_map.resize(1);
         }
     }
@@ -37727,11 +37734,12 @@ int ggml_backend_sycl_get_device_count() {
 }
 
 bool ggml_backend_sycl_moe_multi_gpu_requested() {
+    // Auto-enabled when 2+ physical GPUs available; opt-out with MOE_MULTI_GPU=0
     const char * env = std::getenv("GGML_SYCL_MOE_MULTI_GPU");
-    if (!env || std::atoi(env) == 0) {
+    if (env && std::atoi(env) == 0) {
         return false;
     }
-    return ggml_sycl_info().device_count >= 2;
+    return ggml_sycl_info().total_gpu_count >= 2;
 }
 
 // backend device
