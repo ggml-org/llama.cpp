@@ -774,6 +774,11 @@ struct common_init_result {
 
     std::vector<llama_adapter_lora_ptr> & lora();
 
+    // UMA bandwidth-aware profiler (APEX-inspired). Returns empty string if not active.
+    std::string uma_profiler_get_report();
+    // Signal that a forward pass completed (for UMA profiler iteration tracking).
+    void uma_profiler_on_iteration();
+
 private:
     struct impl;
     std::unique_ptr<impl> pimpl;

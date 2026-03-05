@@ -145,10 +145,14 @@ static std::vector<llama_device_memory_data> llama_get_device_memory_data(
 // enum to identify part of a layer for distributing its tensors:
 enum layer_fraction_t {
     LAYER_FRACTION_NONE = 0, // nothing
-    LAYER_FRACTION_ATTN = 1, // attention
-    LAYER_FRACTION_UP   = 2, // attention + up
-    LAYER_FRACTION_GATE = 3, // attention + up + gate
+    LAYER_FRACTION_ATTN = 1, // attention stays on GPU, FFN overflows to CPU
+    LAYER_FRACTION_UP   = 2, // attention + up stay on GPU
+    LAYER_FRACTION_GATE = 3, // attention + up + gate stay on GPU
     LAYER_FRACTION_MOE  = 4, // everything but sparse MoE weights
+    // UMA-optimized: on unified memory, FFN is bandwidth-heavy and benefits more from
+    // GPU's higher effective memory bandwidth. Overflow attention to CPU instead.
+    // Inspired by APEX (arXiv:2506.03296) compute/bandwidth-aware scheduling.
+    LAYER_FRACTION_FFN  = 5, // FFN stays on GPU, attention overflows to CPU
 };
 // this enum is only used in llama_params_fit_impl but needs to be defined outside of it to fix a Windows compilation issue
 
@@ -182,6 +186,7 @@ static void llama_params_fit_impl(
     // Check for UMA/iGPU devices. On unified memory systems, the GPU shares
     // system RAM with the CPU, so offloading all layers is almost always optimal
     // (GPU has higher memory bandwidth than CPU on the same memory bus).
+    bool is_uma = false;
     {
         bool all_igpu = true;
         for (size_t id = 0; id < nd; id++) {
@@ -191,7 +196,9 @@ static void llama_params_fit_impl(
             }
         }
         if (all_igpu) {
+            is_uma = true;
             LLAMA_LOG_INFO("%s: all GPU devices are iGPU (unified memory) — preferring full offload\n", __func__);
+            LLAMA_LOG_INFO("%s: UMA bandwidth-aware mode: if layers must overflow, FFN stays on GPU (bandwidth-heavy)\n", __func__);
         }
     }
 
@@ -404,6 +411,17 @@ static void llama_params_fit_impl(
                 }
                 return patterns[il].c_str();
             }
+            case LAYER_FRACTION_FFN: {
+                // UMA-optimized: overflow attention weights to CPU, keep FFN on GPU.
+                // On unified memory, FFN is bandwidth-bound (large weight matrices) and
+                // benefits more from GPU's ~2x higher effective memory bandwidth.
+                // Attention during decode is more compute-bound (small batch, large KV cache).
+                static std::array<std::string, n_strings> patterns;
+                if (patterns[il].empty()) {
+                    patterns[il] = "blk\\." + std::to_string(il) + "\\.attn_(q|k|v|output|norm|qkv|gate|q_norm|k_norm).*";
+                }
+                return patterns[il].c_str();
+            }
             default:
                 GGML_ABORT("fatal error");
         }
@@ -606,6 +624,71 @@ static void llama_params_fit_impl(
             __func__, dev_names[id].c_str(), ngl_per_device[id].n_layer, mem[id]/MiB, projected_margin/MiB);
     }
     if (hp_nex == 0 || global_surplus_cpu_moe <= 0) {
+        // UMA bandwidth-aware partial layer fitting (APEX-inspired):
+        // On unified memory, try fitting extra layers by overflowing attention to CPU
+        // while keeping FFN on GPU. FFN is bandwidth-bound (large weight matrices) and
+        // benefits more from GPU's ~2x higher effective memory bandwidth on UMA.
+        // Attention during decode is more compute-bound and tolerates CPU execution better.
+        if (is_uma && hp_nex == 0) {
+            uint32_t total_assigned = 0;
+            for (size_t id = 0; id < nd; id++) {
+                total_assigned += ngl_per_device[id].n_layer;
+            }
+
+            if (total_assigned < hp_ngl + 1) {
+                LLAMA_LOG_INFO("%s: UMA bandwidth-aware fitting: trying to fit extra layers with attention on CPU\n", __func__);
+
+                for (size_t id = 0; id < nd; id++) {
+                    // try adding one more layer with LAYER_FRACTION_FFN overflow
+                    // (FFN stays on GPU, attention overflows to CPU)
+                    std::vector<ngl_t> ngl_test = ngl_per_device;
+                    ngl_test[id].n_layer++;
+                    ngl_test[id].n_part++;
+                    ngl_test[id].overflow_type = LAYER_FRACTION_FFN;
+
+                    LLAMA_LOG_DEBUG("%s: UMA: trying device %zu with LAYER_FRACTION_FFN overflow\n", __func__, id);
+                    std::vector<int64_t> mem_test = get_memory_for_layers(__func__, ngl_test, overflow_bufts);
+
+                    if (mem_test[id] <= targets[id]) {
+                        ngl_per_device = ngl_test;
+                        mem = mem_test;
+                        LLAMA_LOG_INFO("%s:   UMA: fit extra layer on device %zu with attention on CPU (FFN stays on GPU)\n",
+                            __func__, id);
+
+                        // keep trying to fit more layers with the same strategy
+                        total_assigned = 0;
+                        for (size_t jd = 0; jd < nd; jd++) {
+                            total_assigned += ngl_per_device[jd].n_layer;
+                        }
+                        if (total_assigned >= hp_ngl + 1) {
+                            break;
+                        }
+                    } else {
+                        // also try the traditional ATTN overflow (FFN to CPU) for comparison
+                        ngl_test[id].overflow_type = LAYER_FRACTION_ATTN;
+                        LLAMA_LOG_DEBUG("%s: UMA: LAYER_FRACTION_FFN didn't fit, trying LAYER_FRACTION_ATTN\n", __func__);
+                        mem_test = get_memory_for_layers(__func__, ngl_test, overflow_bufts);
+                        if (mem_test[id] <= targets[id]) {
+                            ngl_per_device = ngl_test;
+                            mem = mem_test;
+                            LLAMA_LOG_INFO("%s:   UMA: fit extra layer on device %zu with FFN on CPU (fallback)\n",
+                                __func__, id);
+                        }
+                    }
+                }
+
+                // log final UMA fitting result
+                for (size_t id = 0; id < nd; id++) {
+                    if (ngl_per_device[id].n_part > 0) {
+                        const char * strategy = ngl_per_device[id].overflow_type == LAYER_FRACTION_FFN ?
+                            "FFN-on-GPU (bandwidth-aware)" : "FFN-on-CPU (fallback)";
+                        LLAMA_LOG_INFO("%s:   - device %zu: %" PRIu32 " layers (%" PRIu32 " partial, %s)\n",
+                            __func__, id, ngl_per_device[id].n_layer, ngl_per_device[id].n_part, strategy);
+                    }
+                }
+            }
+        }
+
         set_ngl_tensor_split_tbo(ngl_per_device, overflow_bufts, *mparams);
         return;
     }

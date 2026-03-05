@@ -5,6 +5,7 @@
 #include "log.h"
 #include "llama.h"
 #include "sampling.h"
+#include "uma-profiler.h"
 #include "unicode.h"
 
 #include <algorithm>
@@ -1041,6 +1042,9 @@ struct common_init_result::impl {
 
     std::vector<common_sampler_ptr> samplers;
     std::vector<llama_sampler_seq_config> samplers_seq_config;
+
+    // UMA bandwidth-aware profiler (APEX-inspired)
+    std::unique_ptr<uma_profiler_data> uma_profiler;
 };
 
 common_init_result::common_init_result(common_params & params) :
@@ -1084,6 +1088,16 @@ common_init_result::common_init_result(common_params & params) :
                 params.cpuparams.n_threads = uma_threads;
                 LOG_INF("%s:   setting thread count to %d (of %d physical cores) to reduce bandwidth contention\n",
                     __func__, uma_threads, n_phys);
+            }
+
+            // Enable UMA bandwidth profiler if no eval callback is set and verbosity >= 1.
+            // The profiler measures per-op timing during the first few iterations to
+            // classify ops as bandwidth-bound vs compute-bound (APEX-inspired analysis).
+            if (!params.cb_eval && params.verbosity >= 1) {
+                LOG_INF("%s:   UMA profiler enabled — will analyze bandwidth utilization for first 5 iterations\n", __func__);
+                pimpl->uma_profiler = std::make_unique<uma_profiler_data>();
+                params.cb_eval = uma_profiler_cb_eval;
+                params.cb_eval_user_data = pimpl->uma_profiler.get();
             }
         }
     }
@@ -1324,6 +1338,27 @@ common_init_result_ptr common_init_from_params(common_params & params) {
 }
 
 common_init_result::~common_init_result() = default;
+
+std::string common_init_result::uma_profiler_get_report() {
+    if (pimpl->uma_profiler) {
+        return uma_profiler_report(*pimpl->uma_profiler);
+    }
+    return "";
+}
+
+void common_init_result::uma_profiler_on_iteration() {
+    if (pimpl->uma_profiler) {
+        uma_profiler_iteration_done(*pimpl->uma_profiler);
+        // auto-print report when profiling completes
+        if (!pimpl->uma_profiler->profiling_active && pimpl->uma_profiler->n_iterations > 0) {
+            static bool reported = false;
+            if (!reported) {
+                reported = true;
+                LOG_INF("%s", uma_profiler_report(*pimpl->uma_profiler).c_str());
+            }
+        }
+    }
+}
 
 std::string get_model_endpoint() {
     const char * model_endpoint_env = getenv("MODEL_ENDPOINT");

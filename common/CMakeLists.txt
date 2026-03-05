@@ -72,6 +72,8 @@ add_library(${TARGET} STATIC
     log.h
     ngram-cache.cpp
     ngram-cache.h
+    uma-profiler.cpp
+    uma-profiler.h
     ngram-map.cpp
     ngram-map.h
     ngram-mod.cpp
