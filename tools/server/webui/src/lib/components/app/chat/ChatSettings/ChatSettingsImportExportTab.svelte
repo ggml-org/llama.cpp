@@ -2,7 +2,7 @@
 	import { Download, Upload, Trash2 } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { DialogConversationSelection, DialogConfirmation } from '$lib/components/app';
-	import { createMessageCountMap } from '$lib/utils';
+	import { createMessageCountMap, downloadConversationFile } from '$lib/utils';
 	import { conversationsStore, conversations } from '$lib/stores/conversations.svelte';
 	import { toast } from 'svelte-sonner';
 
@@ -55,18 +55,10 @@
 				})
 			);
 
-			const blob = new Blob([JSON.stringify(allData, null, 2)], {
-				type: 'application/json'
-			});
-			const url = URL.createObjectURL(blob);
-			const a = document.createElement('a');
-
-			a.href = url;
-			a.download = `conversations_${new Date().toISOString().split('T')[0]}.json`;
-			document.body.appendChild(a);
-			a.click();
-			document.body.removeChild(a);
-			URL.revokeObjectURL(url);
+			downloadConversationFile(
+				allData,
+				`${new Date().toISOString().split('T')[0]}_conversations.json`
+			);
 
 			exportedConversations = selectedConversations;
 			showExportSummary = true;
