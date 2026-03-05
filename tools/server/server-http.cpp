@@ -51,6 +51,7 @@ bool server_http_context::init(const common_params & params) {
     path_prefix = params.api_prefix;
     port = params.port;
     hostname = params.hostname;
+    host_family = params.host_family;
 
     auto & srv = pimpl->srv;
 
@@ -275,13 +276,27 @@ bool server_http_context::start() {
     bool is_sock = false;
     if (string_ends_with(std::string(hostname), ".sock")) {
         is_sock = true;
+        if (host_family != COMMON_HOST_FAMILY_AF_UNSPEC) {
+            LOG_WRN("%s: --host-family=ipv%s is ignored for UNIX sockets\n", __func__,
+                host_family == COMMON_HOST_FAMILY_AF_INET6 ? "6" : "4");
+        }
         LOG_INF("%s: setting address family to AF_UNIX\n", __func__);
         srv->set_address_family(AF_UNIX);
         // bind_to_port requires a second arg, any value other than 0 should
         // simply get ignored
         was_bound = srv->bind_to_port(hostname, 8080);
     } else {
-        LOG_INF("%s: binding port with default address family\n", __func__);
+        if (host_family == COMMON_HOST_FAMILY_AF_INET) {
+            LOG_INF("%s: setting address family to AF_INET\n", __func__);
+            srv->set_address_family(AF_INET);
+        } else if (host_family == COMMON_HOST_FAMILY_AF_INET6) {
+            LOG_INF("%s: setting address family to AF_INET6\n", __func__);
+            srv->set_address_family(AF_INET6);
+        } else {
+            LOG_INF("%s: setting address family to AF_UNSPEC\n", __func__);
+            srv->set_address_family(AF_UNSPEC);
+        }
+
         // bind HTTP listen port
         if (port == 0) {
             int bound_port = srv->bind_to_any_port(hostname);

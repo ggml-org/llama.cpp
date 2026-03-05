@@ -18,6 +18,14 @@ def test_server_start_simple():
     assert res.status_code == 200
 
 
+def test_server_start_with_host_family():
+    global server
+    server.server_host_family = "ipv4"
+    server.start()
+    res = server.make_request("GET", "/health")
+    assert res.status_code == 200
+
+
 def test_server_props():
     global server
     server.start()
