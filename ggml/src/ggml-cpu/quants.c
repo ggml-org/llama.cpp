@@ -13,6 +13,7 @@
 #include <float.h>
 #include <stdlib.h> // for qsort
 #include <stdio.h>  // for GGML_ASSERT
+#include "ggml-nvfp4-helpers.h"
 
 #define GROUP_MAX_EPS 1e-15f
 #define GROUP_MAX_EPS_IQ3_XXS 1e-8f
@@ -50,6 +51,9 @@ void quantize_row_mxfp4(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, i
     quantize_row_mxfp4_ref(x, y, k);
 }
 
+void quantize_row_nvfp4(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_nvfp4_ref(x, y, k);
+}
 //
 // 2-6 bit quantization in super-blocks
 //
@@ -215,6 +219,230 @@ void ggml_vec_dot_mxfp4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, 
     }
     *s = sumf;
 }
+
+// NVFP4 x Q8 dot LUT:
+// index = [fp4_code (0..15)][q8_byte (0..255 as uint8_t/int8_t bit pattern)]
+// value = fp4_code_value_doubled * q8_value
+// 16 * 256 = 4096 entries.
+static int16_t ggml_nvfp4_q8_dot_lut[16][256];
+static int8_t  ggml_nvfp4_sum_byte_lut[256];
+static int32_t ggml_nvfp4_cpu_lut_state = 0; // 0=not started, 1=initializing, 2=ready
+
+static inline void ggml_nvfp4_cpu_relax(void) {
+#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
+    __builtin_ia32_pause();
+#elif defined(__aarch64__) || defined(__arm__)
+    __asm__ __volatile__("yield" ::: "memory");
+#else
+    // best-effort: nothing
+#endif
+}
+
+static inline void ggml_nvfp4_cpu_init_luts(void) {
+    if (__atomic_load_n(&ggml_nvfp4_cpu_lut_state, __ATOMIC_ACQUIRE) == 2) {
+        return;
+    }
+
+    int32_t expected = 0;
+    if (__atomic_compare_exchange_n(&ggml_nvfp4_cpu_lut_state, &expected, 1, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        for (int c = 0; c < 16; ++c) {
+            const int32_t w = (int32_t) ggml_nvfp4_lut_i8_dbl_bytes[c];
+            for (int u = 0; u < 256; ++u) {
+                const int32_t q = (int32_t) (int8_t) (uint8_t) u;
+                ggml_nvfp4_q8_dot_lut[c][u] = (int16_t) (w * q);
+            }
+        }
+
+        for (int b = 0; b < 256; ++b) {
+            ggml_nvfp4_sum_byte_lut[b] =
+                (int8_t) ((int32_t) ggml_nvfp4_lut_i8_dbl_bytes[b & 0x0F] +
+                          (int32_t) ggml_nvfp4_lut_i8_dbl_bytes[b >> 4]);
+        }
+
+        __atomic_store_n(&ggml_nvfp4_cpu_lut_state, 2, __ATOMIC_RELEASE);
+        return;
+    }
+
+    while (__atomic_load_n(&ggml_nvfp4_cpu_lut_state, __ATOMIC_ACQUIRE) != 2) {
+        ggml_nvfp4_cpu_relax();
+    }
+}
+
+static inline int32_t ggml_dot16_nvfp4(
+    const uint8_t * GGML_RESTRICT q4_packed8,
+    const int8_t  * GGML_RESTRICT q8_16) {
+#if defined(__SSE4_1__)
+    const __m128i lut   = _mm_loadu_si128((const __m128i *) ggml_nvfp4_lut_i8_dbl_bytes);
+    const __m128i mask0 = _mm_set1_epi8(0x0f);
+
+    const __m128i bx = _mm_loadl_epi64((const __m128i *) q4_packed8);
+    const __m128i b_lo = _mm_and_si128(bx, mask0);
+    const __m128i b_hi = _mm_and_si128(_mm_srli_epi16(bx, 4), mask0);
+    const __m128i b_idx = _mm_unpacklo_epi8(b_lo, b_hi);
+    const __m128i x_i8  = _mm_shuffle_epi8(lut, b_idx);
+
+    const __m128i y_i8 = _mm_loadu_si128((const __m128i *) q8_16);
+
+    const __m128i x16_0 = _mm_cvtepi8_epi16(x_i8);
+    const __m128i y16_0 = _mm_cvtepi8_epi16(y_i8);
+    const __m128i x16_1 = _mm_cvtepi8_epi16(_mm_srli_si128(x_i8, 8));
+    const __m128i y16_1 = _mm_cvtepi8_epi16(_mm_srli_si128(y_i8, 8));
+
+    __m128i s = _mm_add_epi32(_mm_madd_epi16(x16_0, y16_0),
+                              _mm_madd_epi16(x16_1, y16_1));
+    s = _mm_add_epi32(s, _mm_srli_si128(s, 8));
+    s = _mm_add_epi32(s, _mm_srli_si128(s, 4));
+    return _mm_cvtsi128_si32(s);
+#else
+    int32_t sum = 0;
+    for (int j = 0; j < 8; ++j) {
+        const uint8_t a = q4_packed8[j];
+        const int16_t * GGML_RESTRICT lut_lo = ggml_nvfp4_q8_dot_lut[a & 0x0F];
+        const int16_t * GGML_RESTRICT lut_hi = ggml_nvfp4_q8_dot_lut[a >> 4];
+        sum += (int32_t) lut_lo[(uint8_t) q8_16[2*j + 0]];
+        sum += (int32_t) lut_hi[(uint8_t) q8_16[2*j + 1]];
+    }
+    return sum;
+#endif
+}
+
+static inline int32_t ggml_sum16_nvfp4_dbl(const uint8_t * GGML_RESTRICT q4_packed8) {
+    int32_t sum = 0;
+    for (int j = 0; j < 8; ++j) {
+        sum += (int32_t) ggml_nvfp4_sum_byte_lut[q4_packed8[j]];
+    }
+    return sum;
+}
+
+void ggml_vec_dot_nvfp4_q8_0_generic(
+    int n, float * GGML_RESTRICT s, size_t bs,
+    const void * GGML_RESTRICT vx, size_t bx,
+    const void * GGML_RESTRICT vy, size_t by,
+    int nrc
+) {
+    GGML_UNUSED(bx);
+    GGML_UNUSED(by);
+
+    GGML_ASSERT(nrc == 1);
+    GGML_ASSERT(n % QK_K == 0);
+    if (bs == 0) bs = sizeof(float);
+
+    const block_nvfp4 * GGML_RESTRICT x = (const block_nvfp4 *) vx;
+    const block_q8_0  * GGML_RESTRICT y = (const block_q8_0  *) vy;
+
+    ggml_nvfp4_cpu_init_luts();
+
+    const int nb = n / QK_K; // number of logical 256-value NVFP4 blocks
+    float sumf = 0.0f;
+
+    for (int ib = 0; ib < nb; ++ib) {
+        const block_nvfp4 * GGML_RESTRICT p = &x[ib >> 2];
+        const int il = ib & 3;
+
+        const uint8_t * GGML_RESTRICT ql = p->qs[il];
+        const uint8_t * GGML_RESTRICT sc = p->scales[il];
+
+        // One 256-value NVFP4 logical block aligns with 8 Q8_0 blocks.
+        const block_q8_0 * GGML_RESTRICT y_blk = y + ib * 8;
+
+        // Predecode the 16 UE4M3 sub-scales for this block.
+        float sf[QK_NVFP4];
+        for (int sb = 0; sb < QK_NVFP4; ++sb) {
+            sf[sb] = GGML_FP8_UE4M3_TO_FP32(sc[sb]);
+        }
+
+        float blk_sum = 0.0f;
+
+        for (int qb = 0; qb < 8; ++qb) {
+            const float d_q8 = GGML_CPU_FP16_TO_FP32(y_blk[qb].d);
+            const int8_t * GGML_RESTRICT q8 = y_blk[qb].qs;
+
+            float dot = 0.0f;
+            for (int t = 0; t < 32; ++t) {
+                const int idx = qb * 32 + t;
+                const int sb = idx / QK_NVFP4;
+                const uint8_t q4 = ggml_nvfp4_get_q4(ql, idx);
+                dot += sf[sb] * kvalues_nvfp4_float(q4) * (float) q8[t];
+            }
+            blk_sum += d_q8 * dot;
+        }
+
+        sumf += blk_sum;
+    }
+
+    *(float *) ((char *) s) = sumf;
+}
+
+
+void ggml_vec_dot_nvfp4_nvfp4_generic(
+    int n, float * GGML_RESTRICT s, size_t bs,
+    const void * GGML_RESTRICT vx, size_t bx,
+    const void * GGML_RESTRICT vy, size_t by,
+    int nrc
+) {
+    GGML_ASSERT(nrc > 0);
+    GGML_ASSERT(n % QK_K == 0);
+
+    const int nb = n / QK_K;
+    GGML_ASSERT(nb % 4 == 0);
+
+    ggml_nvfp4_cpu_init_luts();
+
+    const size_t expect = (size_t) nb * (size_t) GGML_NVFP4_BYTES_PER_BLOCK;
+
+    // ggml convention: 0 stride means "contiguous default"
+    if (bs == 0) bs = sizeof(float);
+    if (bx == 0) bx = expect;
+    if (by == 0) by = expect;
+
+    for (int ir = 0; ir < nrc; ++ir) {
+        const block_nvfp4 * GGML_RESTRICT x =
+            (const block_nvfp4 *) ((const char *) vx + (size_t) ir * bx);
+        const block_nvfp4 * GGML_RESTRICT y =
+            (const block_nvfp4 *) ((const char *) vy + (size_t) ir * by);
+
+        float sum = 0.0f;
+
+        for (int i = 0; i < nb; ++i) {
+            const block_nvfp4 * GGML_RESTRICT px = &x[i >> 2];
+            const block_nvfp4 * GGML_RESTRICT py = &y[i >> 2];
+            const int il = i & 3;
+
+            // BOTH sides are doubled int table => compensate 1/4
+            const uint8_t * GGML_RESTRICT qx = px->qs[il];
+            const uint8_t * GGML_RESTRICT qy = py->qs[il];
+            const uint8_t * GGML_RESTRICT sx = px->scales[il];
+            const uint8_t * GGML_RESTRICT sy = py->scales[il];
+
+            float sxf[QK_NVFP4];
+            float syf[QK_NVFP4];
+            for (int sb = 0; sb < QK_NVFP4; ++sb) {
+                sxf[sb] = GGML_FP8_UE4M3_TO_FP32(sx[sb]);
+                syf[sb] = GGML_FP8_UE4M3_TO_FP32(sy[sb]);
+            }
+            for (int g32 = 0; g32 < 8; ++g32) {
+                for (int t = 0; t < 32; ++t) {
+                    const int idx = g32 * 32 + t;
+                    const int sb = idx / QK_NVFP4;
+                    const float vx_f = sxf[sb] * kvalues_nvfp4_float(ggml_nvfp4_get_q4(qx, idx));
+                    const float vy_f = syf[sb] * kvalues_nvfp4_float(ggml_nvfp4_get_q4(qy, idx));
+                    sum += vx_f * vy_f;
+                }
+            }
+        }
+
+        *(float *) ((char *) s + (size_t) ir * bs) = sum;
+    }
+}
+
+void ggml_vec_dot_nvfp4_nvfp4(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    ggml_vec_dot_nvfp4_nvfp4_generic(n, s, bs, vx, bx, vy, by, nrc);
+}
+
+void ggml_vec_dot_nvfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    ggml_vec_dot_nvfp4_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
+}
+
 
 void ggml_vec_dot_q5_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     const int qk = QK8_0;

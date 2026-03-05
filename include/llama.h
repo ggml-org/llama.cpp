@@ -152,7 +152,7 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_TQ1_0         = 36, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_TQ2_0         = 37, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_MXFP4_MOE     = 38, // except 1d tensors
-
+        LLAMA_FTYPE_MOSTLY_NVFP4         = 39, // except 1d tensors
         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
     };
 
@@ -309,7 +309,7 @@ extern "C" {
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool vocab_only;      // only load the vocabulary, no weights
         bool use_mmap;        // use mmap if possible
-        bool use_direct_io;   // use direct io, takes precedence over use_mmap when supported
+        bool use_direct_io;   // use direct io, takes precedence over use_mmap
         bool use_mlock;       // force system to keep model in RAM
         bool check_tensors;   // validate model tensor data
         bool use_extra_bufts; // use extra buffer types (used for weight repacking)
@@ -483,14 +483,13 @@ extern "C" {
     enum llama_params_fit_status {
         LLAMA_PARAMS_FIT_STATUS_SUCCESS = 0, // found allocations that are projected to fit
         LLAMA_PARAMS_FIT_STATUS_FAILURE = 1, // could not find allocations that are projected to fit
-        LLAMA_PARAMS_FIT_STATUS_ERROR   = 2, // a hard error occurred, e.g. because no model could be found at the specified path
+        LLAMA_PARAMS_FIT_STATUS_ERROR   = 2, // a hard error occured, e.g. because no model could be found at the specified path
     };
 
     // fits mparams and cparams to free device memory (assumes system memory is unlimited)
     //   - returns true if the parameters could be successfully modified to fit device memory
     //   - this function is NOT thread safe because it modifies the global llama logger state
     //   - only parameters that have the same value as in llama_default_model_params are modified
-    //     with the exception of the context size which is modified if and only if equal to 0
     LLAMA_API enum llama_params_fit_status llama_params_fit(
                                    const char   * path_model,
                     struct llama_model_params   * mparams,

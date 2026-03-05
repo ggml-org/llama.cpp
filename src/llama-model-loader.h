@@ -71,10 +71,12 @@ struct llama_model_loader {
 
     bool use_mmap = false;
     bool use_direct_io = false;
+    bool has_nvfp4_tensor_scales = false;
     bool check_tensors;
     bool no_alloc;
 
     llama_files files;
+    llama_files mmap_files;
     llama_ftype ftype;
     llama_fver  fver;
 

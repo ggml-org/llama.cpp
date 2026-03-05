@@ -78,6 +78,21 @@ float ggml_table_f32_f16[1 << 16];
 // precomputed f32 table for e8m0 half (1 KB) (simd-mappings.h)
 float ggml_table_f32_e8m0_half[1 << 8];
 
+static float ggml_nvfp4_tensor_scale_from_op_params(const struct ggml_tensor * tensor) {
+    if (tensor == NULL || tensor->type != GGML_TYPE_NVFP4) {
+        return 1.0f;
+    }
+
+    const int op_param_idx_nvfp4_tensor_scale = GGML_MAX_OP_PARAMS / (int) sizeof(int32_t) - 2;
+    float tensor_scale = 1.0f;
+    memcpy(&tensor_scale, &tensor->op_params[op_param_idx_nvfp4_tensor_scale], sizeof(tensor_scale));
+    if (!isfinite(tensor_scale) || tensor_scale <= 0.0f) {
+        return 1.0f;
+    }
+
+    return tensor_scale;
+}
+
 #if defined(__ARM_ARCH)
 struct ggml_arm_arch_features_type {
     int sve_cnt;
@@ -267,6 +282,12 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
     [GGML_TYPE_MXFP4] = {
         .from_float               = quantize_row_mxfp4,
         .vec_dot                  = ggml_vec_dot_mxfp4_q8_0,
+        .vec_dot_type             = GGML_TYPE_Q8_0,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_NVFP4] = {
+        .from_float               = quantize_row_nvfp4,
+        .vec_dot                  = ggml_vec_dot_nvfp4_q8_0,
         .vec_dot_type             = GGML_TYPE_Q8_0,
         .nrows                    = 1,
     },
@@ -1155,6 +1176,7 @@ static void ggml_compute_forward_mul_mat_one_chunk(
 
     ggml_vec_dot_t const vec_dot      = type_traits_cpu[type].vec_dot;
     enum ggml_type const vec_dot_type = type_traits_cpu[type].vec_dot_type;
+    const float nvfp4_tensor_scale = ggml_nvfp4_tensor_scale_from_op_params(src0);
 
     // broadcast factors
     const int64_t r2 = ne12 / ne02;
@@ -1218,6 +1240,16 @@ static void ggml_compute_forward_mul_mat_one_chunk(
                     vec_dot(ne00, &tmp[ir0 - iir0], (num_rows_per_vec_dot > 1 ? 16 : 0), src0_row + ir0 * nb01, (num_rows_per_vec_dot > 1 ? nb01 : 0), src1_col, (num_rows_per_vec_dot > 1 ? src1_col_stride : 0), num_rows_per_vec_dot);
                 }
 
+                if (type == GGML_TYPE_NVFP4 && nvfp4_tensor_scale != 1.0f) {
+                    const int64_t ncopy = MIN(iir0 + blck_0, ir0_end) - iir0;
+                    for (int cn = 0; cn < num_rows_per_vec_dot; ++cn) {
+                        float * row = tmp + cn * 16;
+                        for (int64_t k = 0; k < ncopy; ++k) {
+                            row[k] *= nvfp4_tensor_scale;
+                        }
+                    }
+                }
+
                 for (int cn = 0; cn < num_rows_per_vec_dot; ++cn) {
                     memcpy(&dst_col[iir0 + cn * nb1 / nb0], tmp + (cn * 16), (MIN(iir0 + blck_0, ir0_end) - iir0) * sizeof(float));
                 }
@@ -1241,6 +1273,8 @@ void ggml_compute_forward_mul_mat(
     enum ggml_type           const vec_dot_type         = type_traits_cpu[src0->type].vec_dot_type;
     ggml_from_float_t        const from_float           = type_traits_cpu[vec_dot_type].from_float;
     int64_t                  const vec_dot_num_rows     = type_traits_cpu[src0->type].nrows;
+
+    GGML_UNUSED(vec_dot_num_rows);
 
     GGML_ASSERT(ne0 == ne01);
     GGML_ASSERT(ne1 == ne11);
@@ -1267,6 +1301,9 @@ void ggml_compute_forward_mul_mat(
     const int64_t r3 = ne13 / ne03;
 
     const bool src1_cont = ggml_is_contiguous(src1);
+    if (src0->type == GGML_TYPE_NVFP4) {
+        goto UseGgmlGemm1;
+    }
 
     if (src1_cont) {
         for (int64_t i13 = 0; i13 < ne13; i13++)
@@ -1316,6 +1353,15 @@ UseGgmlGemm1:;
                     size_t bs = ggml_blck_size(vec_dot_type);
                     int64_t ne10_block_start = (ith * ne10/bs) / nth;
                     int64_t ne10_block_end   = ((ith + 1) * ne10/bs) / nth;
+                    if (vec_dot_type == GGML_TYPE_NVFP4) {
+                        // NVFP4: force single-threaded full-row quantization.
+                        if (ith != 0) {
+                            continue;
+                        }
+                        ne10_block_start = 0;
+                        ne10_block_end   = ne10 / bs;
+                    }
+
                     from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11 + ne10_block_start*bs*nb10),
                                (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1 + ne10_block_start*nbw0),
                                (ne10_block_end - ne10_block_start) * bs);
@@ -1333,6 +1379,9 @@ UseGgmlGemm1:;
     ggml_barrier(params->threadpool);
 
 #if GGML_USE_LLAMAFILE
+    if (src0->type == GGML_TYPE_NVFP4) {
+        goto UseGgmlGemm2;
+    }
     if (src1->type != vec_dot_type) {
         const void* wdata = (src1->type == vec_dot_type) ? src1->data : params->wdata;
         const size_t row_size = ggml_row_size(vec_dot_type, ne10);
@@ -1410,6 +1459,7 @@ UseGgmlGemm2:;
         if ((nr0 % 2 != 0) || (ne11 % 2 != 0) || ((ir0_end - ir0_start) % 2 != 0) || ((ir1_end - ir1_start) % 2 != 0)) {
             num_rows_per_vec_dot = 1;
         }
+
         ggml_compute_forward_mul_mat_one_chunk(params, dst, src0->type, num_rows_per_vec_dot, ir0_start, ir0_end, ir1_start, ir1_end);
 
         if (nth >= nchunk0 * nchunk1) {
@@ -1451,6 +1501,7 @@ static void ggml_compute_forward_mul_mat_id_one_chunk(
 
     ggml_vec_dot_t    const vec_dot      = type_traits_cpu[type].vec_dot;
     enum ggml_type    const vec_dot_type = type_traits_cpu[type].vec_dot_type;
+    const float nvfp4_tensor_scale = ggml_nvfp4_tensor_scale_from_op_params(src0);
 
     const int64_t blck_0 = 16;
     const int64_t blck_1 = 16;
@@ -1484,6 +1535,13 @@ static void ggml_compute_forward_mul_mat_id_one_chunk(
 
                 for (int64_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ++ir0) {
                     vec_dot(ne00, &tmp[ir0 - iir0], 0, src0_cur + ir0*nb01, 0, src1_col, 0, 1);
+                }
+
+                if (type == GGML_TYPE_NVFP4 && nvfp4_tensor_scale != 1.0f) {
+                    const int64_t ncopy = MIN(iir0 + blck_0, ir0_end) - iir0;
+                    for (int64_t k = 0; k < ncopy; ++k) {
+                        tmp[k] *= nvfp4_tensor_scale;
+                    }
                 }
 
                 memcpy(&dst_col[iir0], tmp, (MIN(iir0 + blck_0, ir0_end) - iir0)*sizeof(float));

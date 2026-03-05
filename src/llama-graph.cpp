@@ -899,7 +899,8 @@ ggml_tensor * llm_graph_context::build_cvec(
 
 ggml_tensor * llm_graph_context::build_lora_mm(
           ggml_tensor * w,
-          ggml_tensor * cur) const {
+          ggml_tensor * cur,
+          ggml_tensor * w_scale) const {
     ggml_tensor * res = ggml_mul_mat(ctx0, w, cur);
 
     for (const auto & lora : *loras) {
@@ -920,13 +921,18 @@ ggml_tensor * llm_graph_context::build_lora_mm(
         res = ggml_add(ctx0, res, ab_cur);
     }
 
+    if (w_scale) {
+        res = ggml_mul(ctx0, res, w_scale);
+    }
+
     return res;
 }
 
 ggml_tensor * llm_graph_context::build_lora_mm_id(
           ggml_tensor * w,   // ggml_tensor * as
           ggml_tensor * cur, // ggml_tensor * b
-          ggml_tensor * ids) const {
+          ggml_tensor * ids,
+          ggml_tensor * w_scale) const {
     ggml_tensor * res = ggml_mul_mat_id(ctx0, w, cur, ids);
     for (const auto & lora : *loras) {
         llama_adapter_lora_weight * lw = lora.first->get_weight(w);
@@ -946,6 +952,24 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
 
         ab_cur = ggml_scale(ctx0, ab_cur, scale);
         res = ggml_add(ctx0, res, ab_cur);
+    }
+
+    if (w_scale) {
+        ggml_tensor * scale = w_scale;
+
+        if (scale->ne[0] == 1 && scale->ne[1] == 1 && scale->ne[2] == 1 && scale->ne[3] == 1) {
+            res = ggml_mul(ctx0, res, scale);
+            return res;
+        }
+
+        if (ggml_is_vector(scale)) {
+            scale = ggml_reshape_3d(ctx0, scale, 1, scale->ne[0], 1);
+        } else if (ggml_n_dims(scale) == 2 && scale->ne[0] == 1) {
+            scale = ggml_reshape_3d(ctx0, scale, 1, scale->ne[1], 1);
+        }
+
+        scale = ggml_get_rows(ctx0, scale, ids);
+        res = ggml_mul(ctx0, res, scale);
     }
 
     return res;
@@ -1204,7 +1228,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                 bool   norm_w,
                 bool   scale_w,
                float   w_scale,
-        llama_expert_gating_func_type gating_op,
+         llama_expert_gating_func_type gating_op,
                  int   il,
          ggml_tensor * probs_in,
          ggml_tensor * gate_up_exps,

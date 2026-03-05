@@ -5,13 +5,16 @@
 #include "ggml-impl.h"
 #include "ggml-cpu/ggml-cpu-impl.h"
 #include "ggml-cpu.h"
-
+#include "../include/ggml-cuda.h"
+#include "ggml-nvfp4-helpers.h"
 #include <math.h>
 #include <string.h>
 #include <assert.h>
 #include <float.h>
 #include <stdlib.h> // for qsort
 #include <stdio.h>  // for GGML_ASSERT
+
+extern bool nvfp4_autotune(const float * x, const float * qw, int64_t n, float * best_a, float * best_b);
 
 #define GROUP_MAX_EPS 1e-15f
 #define GROUP_MAX_EPS_IQ3_XXS 1e-8f
@@ -20,6 +23,33 @@
 #define GROUP_MAX_EPS_IQ1_S 1e-12f
 
 #define UNUSED GGML_UNUSED
+
+static int g_nvfp4_tune_state = 0;
+static float g_nvfp4_scale_mul[] = {
+    0.9918823242f,
+    0.9864501953f,
+    0.875f,
+    0.9375f,
+    0.96875f,
+    1.0f,
+    1.015625f,
+    1.03125f,
+    1.046875f,
+    1.0625f,
+    1.09375f,
+    1.125f,
+    1.1875f,
+    1.25f,
+};
+
+static const int g_nvfp4_scale_mul_count = (int)(sizeof(g_nvfp4_scale_mul) / sizeof(g_nvfp4_scale_mul[0]));
+static const float g_nvfp4_tune_tail_weight = 0.20f;
+static const float g_nvfp4_max_block_scale = 448.0f;
+static const float g_nvfp4_max_tensor_scale = 256.0f;
+#define NVFP4_TUNE_GUARD_TOPK_CPU 32
+#define NVFP4_TUNE_GUARD_BLOCKS_CPU 16
+#define NVFP4_TUNE_GUARD_MAX_OBJ_FRAC_CPU 1.05f
+#define NVFP4_REFIT_ROUNDS 9
 
 static inline int best_index_int8(int n, const int8_t * val, float x) {
     if (x <= val[0]) return 0;
@@ -324,6 +354,460 @@ void dequantize_row_q4_0(const block_q4_0 * GGML_RESTRICT x, float * GGML_RESTRI
     }
 }
 
+static inline float nvfp4_block_max_abs(const float * GGML_RESTRICT block) {
+    float max_abs = 0.0f;
+    for (int i = 0; i < QK_K; ++i) {
+        max_abs = fmaxf(max_abs, fabsf(block[i]));
+    }
+    return max_abs;
+}
+
+static inline void nvfp4_refit_block_scales(
+    const float * GGML_RESTRICT block,
+    const float * GGML_RESTRICT weights,
+    uint8_t * GGML_RESTRICT codes,
+    const float min_tensor_scale,
+    float * GGML_RESTRICT tensor_scale_out,
+    uint8_t * GGML_RESTRICT block_scales_out,
+    const float max_fp8_tensor
+) {
+    float sub_scale[QK_K / QK_NVFP4];
+
+    float max_sub_scale = 0.0f;
+    for (int subblock = 0; subblock < QK_K / QK_NVFP4; ++subblock) {
+        const float * GGML_RESTRICT values = block + subblock * QK_NVFP4;
+
+        float num = 0.0f;
+        float den = 0.0f;
+
+        for (int j = 0; j < QK_NVFP4; ++j) {
+            const int idx = subblock * QK_NVFP4 + j;
+            const float weight = ggml_nvfp4_qw(weights, idx);
+            const float code_value = kvalues_fp4_float[codes[idx] & 0xF];
+            num += weight * values[j] * code_value;
+            den += weight * code_value * code_value;
+        }
+
+        float scale = 0.0f;
+        if (den != 0.0f && isfinite(den) && isfinite(num)) {
+            scale = num / den;
+        }
+
+        if (scale < 0.0f) {
+            scale = -scale;
+            for (int j = 0; j < QK_NVFP4; ++j) {
+                codes[subblock * QK_NVFP4 + j] ^= 0x8;
+            }
+        }
+
+        if (!isfinite(scale) || scale < 0.0f) {
+            scale = 0.0f;
+        }
+
+        sub_scale[subblock] = scale;
+        max_sub_scale = fmaxf(max_sub_scale, scale);
+    }
+
+    const float safe_min_tensor_scale = (isfinite(min_tensor_scale) && min_tensor_scale > 0.0f) ? min_tensor_scale : 0.0f;
+
+    float required_tensor_scale = 0.0f;
+    if (max_sub_scale > 0.0f && isfinite(max_sub_scale)) {
+        required_tensor_scale = max_sub_scale / max_fp8_tensor;
+        if (!isfinite(required_tensor_scale) || required_tensor_scale < 0.0f) {
+            required_tensor_scale = 0.0f;
+        }
+    }
+
+    const float start_tensor_scale = fmaxf(safe_min_tensor_scale, required_tensor_scale);
+    if (!(start_tensor_scale > 0.0f) || !isfinite(start_tensor_scale)) {
+        *tensor_scale_out = 0.0f;
+        memset(block_scales_out, 0, QK_K / QK_NVFP4);
+        return;
+    }
+
+    float best_tensor_scale = start_tensor_scale;
+    float best_objective = INFINITY;
+    uint8_t best_block_scales[QK_K / QK_NVFP4] = { 0 };
+
+    uint8_t trial_block_scales[QK_K / QK_NVFP4];
+
+    for (int factor_idx = 0; factor_idx < g_nvfp4_scale_mul_count; ++factor_idx) {
+        const float trial_tensor_scale = start_tensor_scale * g_nvfp4_scale_mul[factor_idx];
+        if (!(trial_tensor_scale > 0.0f) || !isfinite(trial_tensor_scale)) {
+            continue;
+        }
+
+        for (int subblock = 0; subblock < QK_K / QK_NVFP4; ++subblock) {
+            float block_scale = sub_scale[subblock] / trial_tensor_scale;
+            if (!isfinite(block_scale) || block_scale < 0.0f) {
+                block_scale = 0.0f;
+            } else if (block_scale > g_nvfp4_max_block_scale) {
+                block_scale = g_nvfp4_max_block_scale;
+            }
+
+            const uint8_t initial_block_scale = GGML_FP32_TO_UE4M3(block_scale);
+            const float * values = block + subblock * QK_NVFP4;
+            const float * sub_weights = weights ? (weights + subblock * QK_NVFP4) : NULL;
+            trial_block_scales[subblock] = ggml_nvfp4_refine_sbscale_fp8_local(values, sub_weights, trial_tensor_scale, initial_block_scale);
+        }
+
+        const float objective = ggml_nvfp4_obj_256_codes(block, weights, codes, trial_tensor_scale, trial_block_scales);
+        if (objective < best_objective) {
+            best_objective = objective;
+            best_tensor_scale = trial_tensor_scale;
+            memcpy(best_block_scales, trial_block_scales, sizeof(best_block_scales));
+        }
+    }
+
+    *tensor_scale_out = best_tensor_scale;
+    memcpy(block_scales_out, best_block_scales, sizeof(best_block_scales));
+}
+
+static inline void nvfp4_assign_block_codes(
+        const float * GGML_RESTRICT block,
+        const float tensor_scale,
+        const uint8_t * GGML_RESTRICT block_scales,
+        uint8_t * GGML_RESTRICT codes
+) {
+    for (int subblock = 0; subblock < QK_K / QK_NVFP4; ++subblock) {
+        const float scale = tensor_scale * GGML_FP8_UE4M3_TO_FP32(block_scales[subblock]);
+        const float * GGML_RESTRICT values = block + subblock * QK_NVFP4;
+
+        if (!(scale > 0.0f) || !isfinite(scale)) {
+            memset(codes + subblock * QK_NVFP4, 0, QK_NVFP4);
+            continue;
+        }
+
+        for (int j = 0; j < QK_NVFP4; ++j) {
+            codes[subblock * QK_NVFP4 + j] = best_index_nvfp4(values[j], scale);
+        }
+    }
+}
+
+static inline bool nvfp4_quantize_block(
+        const float * GGML_RESTRICT block,
+        const float * GGML_RESTRICT weights,
+        uint8_t * GGML_RESTRICT codes,
+        uint8_t * GGML_RESTRICT block_scales,
+        float * GGML_RESTRICT tensor_scale_out,
+        float * GGML_RESTRICT objective_out) {
+    const float max_abs = nvfp4_block_max_abs(block);
+    if (max_abs < GROUP_MAX_EPS) {
+        if (tensor_scale_out) {
+            *tensor_scale_out = 0.0f;
+        }
+        if (objective_out) {
+            *objective_out = 0.0f;
+        }
+        memset(codes, 0, QK_K);
+        memset(block_scales, 0, QK_K / QK_NVFP4);
+        return false;
+    }
+
+    const float max_tensor_scale = ggml_nvfp4_pick_max_fp8_tensor_scale(
+        block, weights, max_abs, g_nvfp4_max_tensor_scale);
+
+    const float min_tensor_scale = (max_abs / 4.0f) / max_tensor_scale;
+    float tensor_scale = min_tensor_scale;
+
+    for (int subblock = 0; subblock < QK_K / QK_NVFP4; ++subblock) {
+        const float * values = block + subblock * QK_NVFP4;
+        const float * sub_weights = weights ? (weights + subblock * QK_NVFP4) : NULL;
+        block_scales[subblock] = adaptive_block_scale_4_or_6(values, sub_weights, tensor_scale);
+    }
+
+    nvfp4_assign_block_codes(block, tensor_scale, block_scales, codes);
+
+    for (int round = 0; round < NVFP4_REFIT_ROUNDS; ++round) {
+        nvfp4_refit_block_scales(block, weights, codes, min_tensor_scale, &tensor_scale, block_scales, max_tensor_scale);
+        nvfp4_assign_block_codes(block, tensor_scale, block_scales, codes);
+    }
+
+    if (tensor_scale_out) {
+        *tensor_scale_out = tensor_scale;
+    }
+    if (objective_out) {
+        *objective_out = ggml_nvfp4_obj_256_codes(block, weights, codes, tensor_scale, block_scales);
+    }
+    return true;
+}
+
+static inline int64_t nvfp4_sample_block_index(int64_t is, int64_t nb, int64_t sample_nb) {
+    if (nb <= 1 || sample_nb <= 1) {
+        return 0;
+    }
+    return (is * (nb - 1)) / (sample_nb - 1);
+}
+
+static float nvfp4_eval_candidate_max_obj_on_guard(
+        const float * GGML_RESTRICT x,
+        const float * GGML_RESTRICT quant_weights,
+        int64_t nb,
+        int64_t sample_nb,
+        int64_t guard_nb,
+        float a,
+        float b) {
+    if (sample_nb <= 0 || guard_nb <= 0) {
+        return INFINITY;
+    }
+
+    const int64_t guard_off = sample_nb > guard_nb ? (sample_nb - guard_nb) : 0;
+    float max_obj = 0.0f;
+    int used = 0;
+
+    uint8_t codes[QK_K];
+    uint8_t block_scales[QK_K / QK_NVFP4];
+
+    g_nvfp4_scale_mul[0] = a;
+    g_nvfp4_scale_mul[1] = b;
+
+    for (int64_t is = guard_off; is < sample_nb; ++is) {
+        const int64_t ib = nvfp4_sample_block_index(is, nb, sample_nb);
+        const float * GGML_RESTRICT block = x + ib * QK_K;
+        const float * GGML_RESTRICT weights = quant_weights ? (quant_weights + ib * QK_K) : NULL;
+
+        float block_obj = 0.0f;
+        if (nvfp4_quantize_block(block, weights, codes, block_scales, NULL, &block_obj) &&
+                isfinite(block_obj) && block_obj >= 0.0f) {
+            max_obj = fmaxf(max_obj, block_obj);
+            used += 1;
+        }
+    }
+
+    return used > 0 ? max_obj : INFINITY;
+}
+
+static void nvfp4_autotune_scale_mul_on_row(
+        const float * GGML_RESTRICT x,
+        int64_t n,
+        const float * GGML_RESTRICT quant_weights
+) {
+    if (getenv("LLAMA_NVFP4_TUNE_EVERY") == NULL) {
+        return;
+    }
+    
+    float tuned_a, tuned_b;
+    if (nvfp4_autotune(x, quant_weights, n, &tuned_a, &tuned_b)) {
+        g_nvfp4_scale_mul[0] = tuned_a;
+        g_nvfp4_scale_mul[1] = tuned_b;
+        return;
+    }
+
+    const int64_t nb = n / QK_K;
+    const int64_t sample_cap = nb >= 8192 ? 256 : (nb >= 2048 ? 128 : 64);
+    const int64_t sample_nb = nb < sample_cap ? nb : sample_cap;
+
+    const float base_a = 0.9918823242f;
+    const float base_b = 0.9864501953f;
+    const float step = 1.0f / 32768.0f;
+
+    float best_score = INFINITY;
+    float best_a = base_a;
+    float best_b = base_b;
+    float base_score = INFINITY;
+
+    uint8_t codes[QK_K];
+    uint8_t block_scales[QK_K / QK_NVFP4];
+
+    int top_ai[NVFP4_TUNE_GUARD_TOPK_CPU];
+    int top_bi[NVFP4_TUNE_GUARD_TOPK_CPU];
+    float top_score[NVFP4_TUNE_GUARD_TOPK_CPU];
+    for (int i = 0; i < NVFP4_TUNE_GUARD_TOPK_CPU; ++i) {
+        top_ai[i] = 0;
+        top_bi[i] = 0;
+        top_score[i] = INFINITY;
+    }
+
+    for (int ai = -24; ai <= 24; ++ai) {
+        const float a = base_a + (float) ai * step;
+        for (int bi = -24; bi <= 24; ++bi) {
+            const float b = base_b + (float) bi * step;
+
+            g_nvfp4_scale_mul[0] = a;
+            g_nvfp4_scale_mul[1] = b;
+
+            float sum_obj = 0.0f;
+            float sum_obj2 = 0.0f;
+
+            for (int64_t is = 0; is < sample_nb; ++is) {
+                const int64_t ib = nvfp4_sample_block_index(is, nb, sample_nb);
+
+                const float * GGML_RESTRICT block = x + ib * QK_K;
+                const float * GGML_RESTRICT weights = quant_weights ? (quant_weights + ib * QK_K) : NULL;
+                float block_obj = 0.0f;
+                if (!nvfp4_quantize_block(block, weights, codes, block_scales, NULL, &block_obj)) {
+                    continue;
+                }
+                sum_obj += block_obj;
+                sum_obj2 += block_obj * block_obj;
+            }
+
+            const float rms_obj = (sample_nb > 0) ? sqrtf(sum_obj2 / (float) sample_nb) : 0.0f;
+            const float score = sum_obj + g_nvfp4_tune_tail_weight * (float) sample_nb * rms_obj;
+
+            if (ai == 0 && bi == 0) {
+                base_score = score;
+            }
+
+            if (score < best_score) {
+                best_score = score;
+                best_a = a;
+                best_b = b;
+            }
+
+            int pos = -1;
+            for (int i = 0; i < NVFP4_TUNE_GUARD_TOPK_CPU; ++i) {
+                if (score < top_score[i]) {
+                    pos = i;
+                    break;
+                }
+            }
+            if (pos >= 0) {
+                for (int j = NVFP4_TUNE_GUARD_TOPK_CPU - 1; j > pos; --j) {
+                    top_score[j] = top_score[j - 1];
+                    top_ai[j] = top_ai[j - 1];
+                    top_bi[j] = top_bi[j - 1];
+                }
+                top_score[pos] = score;
+                top_ai[pos] = ai;
+                top_bi[pos] = bi;
+            }
+        }
+    }
+
+    bool base_in_topk = false;
+    for (int i = 0; i < NVFP4_TUNE_GUARD_TOPK_CPU; ++i) {
+        if (top_ai[i] == 0 && top_bi[i] == 0) {
+            base_in_topk = true;
+            break;
+        }
+    }
+    if (!base_in_topk) {
+        top_ai[NVFP4_TUNE_GUARD_TOPK_CPU - 1] = 0;
+        top_bi[NVFP4_TUNE_GUARD_TOPK_CPU - 1] = 0;
+        top_score[NVFP4_TUNE_GUARD_TOPK_CPU - 1] = base_score;
+    }
+
+    const int64_t guard_nb = sample_nb < NVFP4_TUNE_GUARD_BLOCKS_CPU ? sample_nb : NVFP4_TUNE_GUARD_BLOCKS_CPU;
+    const float base_max_obj = nvfp4_eval_candidate_max_obj_on_guard(
+        x, quant_weights, nb, sample_nb, guard_nb, base_a, base_b);
+    const float guard_max_obj =
+        (isfinite(base_max_obj) && base_max_obj > 0.0f)
+            ? (base_max_obj * NVFP4_TUNE_GUARD_MAX_OBJ_FRAC_CPU)
+            : INFINITY;
+
+    best_a = base_a;
+    best_b = base_b;
+    best_score = base_score;
+
+    for (int i = 0; i < NVFP4_TUNE_GUARD_TOPK_CPU; ++i) {
+        if (!isfinite(top_score[i])) {
+            continue;
+        }
+
+        const float a = base_a + (float) top_ai[i] * step;
+        const float b = base_b + (float) top_bi[i] * step;
+        const float max_obj = nvfp4_eval_candidate_max_obj_on_guard(
+            x, quant_weights, nb, sample_nb, guard_nb, a, b);
+
+        if (!isfinite(max_obj)) {
+            continue;
+        }
+
+        if (max_obj <= guard_max_obj) {
+            best_a = a;
+            best_b = b;
+            best_score = top_score[i];
+            break;
+        }
+    }
+
+    g_nvfp4_scale_mul[0] = best_a;
+    g_nvfp4_scale_mul[1] = best_b;
+
+}
+static inline void nvfp4_quantize_subblock(
+        const float * GGML_RESTRICT values,
+        const float * GGML_RESTRICT weights,
+        uint8_t * GGML_RESTRICT block_scale_out,
+        uint8_t * GGML_RESTRICT codes_out) {
+    uint8_t block_scale = adaptive_block_scale_4_or_6(values, weights, 1.0f);
+    block_scale = ggml_nvfp4_refine_sbscale_fp8_local(values, weights, 1.0f, block_scale);
+    *block_scale_out = block_scale;
+
+    const float scale = GGML_FP8_UE4M3_TO_FP32(block_scale);
+    if (!(scale > 0.0f) || !isfinite(scale)) {
+        memset(codes_out, 0, 16);
+        return;
+    }
+
+    for (int j = 0; j < 16; ++j) {
+        codes_out[j] = best_index_nvfp4(values[j], scale);
+    }
+}
+
+static void quantize_row_nvfp4_impl(
+        const float * GGML_RESTRICT x,
+        block_nvfp4 * GGML_RESTRICT y,
+        int64_t n,
+        const float * GGML_RESTRICT quant_weights) {
+    assert(n % QK_K == 0);
+    #ifdef GGML_USE_CUDA
+    if (nvfp4_quantize_cuda(x, false, (void *) y, n / QK_K, QK_K, quant_weights, 1.0f, NULL)) {
+        return;
+    }
+    #endif
+
+    const int64_t nb = n / QK_K;
+    const int64_t packed_block_count = (nb + 3) / 4;
+
+    block_nvfp4 * GGML_RESTRICT packed = (block_nvfp4 *) y;
+    memset(packed, 0, (size_t) packed_block_count * sizeof(block_nvfp4));
+
+    if (__atomic_load_n(&g_nvfp4_tune_state, __ATOMIC_ACQUIRE) != 2) {
+        int expected = 0;
+        if (__atomic_compare_exchange_n(&g_nvfp4_tune_state, &expected, 1, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+            nvfp4_autotune_scale_mul_on_row(x, n, quant_weights);
+            __atomic_store_n(&g_nvfp4_tune_state, 2, __ATOMIC_RELEASE);
+        } else {
+            while (__atomic_load_n(&g_nvfp4_tune_state, __ATOMIC_ACQUIRE) != 2) { }
+        }
+    }
+
+    for (int64_t ib = 0; ib < nb; ++ib) {
+        const int64_t packed_idx = ib / 4;
+        const int slot = (int) (ib % 4);
+
+        const float * GGML_RESTRICT block = x + ib * QK_K;
+        const float * GGML_RESTRICT weights = quant_weights ? (quant_weights + ib * QK_K) : NULL;
+        uint8_t * GGML_RESTRICT block_scales = packed[packed_idx].scales[slot];
+        uint8_t * GGML_RESTRICT packed_codes = packed[packed_idx].qs[slot];
+        uint8_t codes[QK_K] = { 0 };
+
+        if (nvfp4_block_max_abs(block) < GROUP_MAX_EPS) {
+            continue;
+        }
+
+        for (int pair_idx = 0; pair_idx < 8; ++pair_idx) {
+            const int pair_offset = pair_idx * 32;
+            const float * GGML_RESTRICT pair_values = block + pair_offset;
+            const float * GGML_RESTRICT pair_weights = weights ? (weights + pair_offset) : NULL;
+
+            nvfp4_quantize_subblock(pair_values + 0,  pair_weights ? (pair_weights + 0)  : NULL, block_scales + 2 * pair_idx + 0, codes + pair_offset + 0);
+            nvfp4_quantize_subblock(pair_values + 16, pair_weights ? (pair_weights + 16) : NULL, block_scales + 2 * pair_idx + 1, codes + pair_offset + 16);
+        }
+
+        ggml_nvfp4_pack_codes_256(codes, packed_codes);
+    }
+}
+
+void quantize_row_nvfp4_ref(
+        const float * GGML_RESTRICT x,
+        block_nvfp4 * GGML_RESTRICT y,
+        int64_t k) {
+    quantize_row_nvfp4_impl(x, y, k, NULL);
+}
+
 void dequantize_row_q4_1(const block_q4_1 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
     static const int qk = QK4_1;
 
@@ -431,6 +915,32 @@ void dequantize_row_mxfp4(const block_mxfp4 * GGML_RESTRICT x, float * GGML_REST
             y[i*qk + j + 0   ] = x0*d;
             y[i*qk + j + qk/2] = x1*d;
         }
+    }
+}
+
+
+void dequantize_row_nvfp4(const block_nvfp4 * GGML_RESTRICT x,
+                         float * GGML_RESTRICT y,
+                         int64_t k)
+{
+    assert(k % QK_K == 0);
+    const int64_t nb = k / QK_K;
+
+    for (int64_t ib = 0; ib < nb; ++ib) {
+        const block_nvfp4 * GGML_RESTRICT xp = (const block_nvfp4 *) x;
+        const block_nvfp4 * GGML_RESTRICT p = &xp[ib / 4];
+        const int il = (int) (ib % 4);
+
+        const uint8_t * GGML_RESTRICT ql = p->qs[il];
+        const uint8_t * GGML_RESTRICT sc = p->scales[il];
+        for (int i0 = 0; i0 < QK_K; ++i0) {
+            const int sub_block = i0 / QK_NVFP4;
+            const float scale = GGML_FP8_UE4M3_TO_FP32(sc[sub_block]);
+
+            const uint8_t q = ggml_nvfp4_get_q4(ql, i0);
+            y[i0] = scale * kvalues_fp4_float[q];
+        }
+        y += QK_K;
     }
 }
 
@@ -2096,6 +2606,25 @@ size_t quantize_mxfp4(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
     GGML_UNUSED(quant_weights);
     quantize_row_mxfp4_ref(src, dst, (int64_t)nrow*n_per_row);
     return nrow * ggml_row_size(GGML_TYPE_MXFP4, n_per_row);
+}
+
+
+size_t quantize_nvfp4(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow,int64_t n_per_row, const float * quant_weights) {
+    size_t row_size = ggml_row_size(GGML_TYPE_NVFP4, n_per_row);
+#ifdef GGML_USE_CUDA
+    if (nvfp4_quantize_cuda(src, false, dst, nrow, n_per_row, quant_weights, 1.0f, NULL)) {
+        return nrow * row_size;
+    }
+#endif // GGML_USE_CUDA
+
+    char * qrow = (char *) dst;
+    const float * qw_row = quant_weights;
+        for (int64_t row = 0; row < nrow; ++row) {
+        quantize_row_nvfp4_impl(src, (block_nvfp4 *) qrow, n_per_row, qw_row);
+            src  += n_per_row;
+            qrow += row_size;
+    }
+    return nrow * row_size;
 }
 
 // ====================== Ternary (de)-quantization (BitNet b1.58 and TriLMs)
@@ -5044,6 +5573,15 @@ static bool validate_e_e8m0(uint8_t e, size_t i) {
     return true;
 }
 
+static inline bool validate_e_fp8_ue4m3(uint8_t e, size_t idx) {
+    GGML_UNUSED(idx);
+
+    const float s = GGML_FP8_UE4M3_TO_FP32(e);
+    return isfinite(s) && s >= 0.0f;
+}
+
+
+
 #define VALIDATE_ROW_DATA_D_F16_IMPL(type, data, nb) \
     const type * q = (const type *) (data); \
     for (size_t i = 0; i < (nb); ++i) { \
@@ -5068,6 +5606,17 @@ static bool validate_e_e8m0(uint8_t e, size_t i) {
         } \
     }
 
+#define VALIDATE_ROW_DATA_E_FP8_UE4M3_NVFP4(block_type, data, nb)          \
+    do {                                                                   \
+        const block_type * __restrict__ q = (const block_type *)(data);    \
+        for (int i = 0; i < (nb); ++i) {                                   \
+            for (int s = 0; s < QK_K / QK_NVFP4; ++s) {                    \
+                if (!validate_e_fp8_ue4m3(q[i].scales[s], i)) {            \
+                    GGML_ASSERT(false && "invalid NVFP4 scale");          \
+                }                                                          \
+            }                                                              \
+        }                                                                  \
+    } while (0)
 #define VALIDATE_ROW_DATA_DVEC_F16_IMPL(type, data, nb, nr) \
     const type * q = (const type *) (data); \
     for (size_t i = 0; i < (nb); ++i) { \
@@ -5224,6 +5773,32 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_MXFP4:
             {
                 VALIDATE_ROW_DATA_E_E8M0_IMPL(block_mxfp4, data, nb);
+            } break;
+        case GGML_TYPE_NVFP4:
+            {
+                // NVFP4 storage is 4 logical 256-value blocks per 576B pack.
+                // ggml_type_size(NVFP4) is per logical block (144B), so `nb` here is number of blocks.
+                if (nbytes % GGML_NVFP4_BYTES_PER_PACK != 0) {
+                    fprintf(stderr, "%s: invalid size %zu for type %s (expected multiple of %d bytes per pack)\n",
+                            __func__, nbytes, ggml_type_name(type), GGML_NVFP4_BYTES_PER_PACK);
+                    return false;
+                }
+
+                const size_t np = nbytes / GGML_NVFP4_BYTES_PER_PACK;
+                const block_nvfp4 * q = (const block_nvfp4 *) data;
+
+                for (size_t ip = 0; ip < np; ++ip) {
+                    for (int il = 0; il < 4; ++il) {
+                        const size_t bi = ip * 4 + (size_t) il;
+                        for (int s = 0; s < QK_K / QK_NVFP4; ++s) {
+                            if (!validate_e_fp8_ue4m3(q[ip].scales[il][s], bi)) {
+                                fprintf(stderr, "%s: found invalid NVFP4 scale=%u at block %zu sub=%d\n",
+                                        __func__, (unsigned) q[ip].scales[il][s], bi, s);
+                                return false;
+                            }
+                        }
+                    }
+                }
             } break;
         case GGML_TYPE_Q2_K:
             {
