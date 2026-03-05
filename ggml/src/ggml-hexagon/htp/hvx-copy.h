@@ -42,11 +42,11 @@ static inline void hvx_splat_f32_u(uint8_t * restrict dst, float v, uint32_t n) 
     hvx_splat_u(dst,  hvx_vec_splat_f32(v), n, sizeof(float));
 }
 
-static inline void hvx_splat_f16_a(uint8_t * restrict dst, float v, uint32_t n) {
+static inline void hvx_splat_f16_a(uint8_t * restrict dst, _Float16 v, uint32_t n) {
     hvx_splat_u(dst,  hvx_vec_splat_f16(v), n, sizeof(__fp16));
 }
 
-static inline void hvx_splat_f16_u(uint8_t * restrict dst, float v, uint32_t n) {
+static inline void hvx_splat_f16_u(uint8_t * restrict dst, _Float16 v, uint32_t n) {
     hvx_splat_u(dst,  hvx_vec_splat_f16(v), n, sizeof(__fp16));
 }
 
