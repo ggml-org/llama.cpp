@@ -1,6 +1,6 @@
 #pragma once
 
-#include "chat-diff-analyzer.h"
+#include "chat-auto-parser.h"
 #include <functional>
 #include <optional>
 #include <string>

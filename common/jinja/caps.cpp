@@ -17,7 +17,7 @@ using json = nlohmann::ordered_json;
 namespace jinja {
 
 using caps_json_fn = std::function<json()>;
-using caps_analyze_fn = std::function<void(bool, value &, value &, const std::string &)>;
+using caps_analyze_fn = std::function<void(bool, value &, value &)>;
 
 static void caps_try_execute(jinja::program & prog,
                              const caps_json_fn & messages_fn,
@@ -50,7 +50,7 @@ static void caps_try_execute(jinja::program & prog,
         // ignore exceptions during capability analysis
     }
 
-    analyze_fn(success, messages, tools, result);
+    analyze_fn(success, messages, tools);
 }
 
 // for debugging only
@@ -113,7 +113,7 @@ caps caps_get(jinja::program & prog) {
             // tools
             return json{nullptr};
         },
-        [&](bool success, value & messages, value &, const std::string &) {
+        [&](bool success, value & messages, value &) {
             auto & content = messages->at(0)->at("content");
             caps_print_stats(content, "messages[0].content");
             if (has_op(content, "selectattr") || has_op(content, "array_access")) {
@@ -149,7 +149,7 @@ caps caps_get(jinja::program & prog) {
             // tools
             return json::array();
         },
-        [&](bool, value & messages, value &, const std::string &) {
+        [&](bool, value & messages, value &) {
             auto & content = messages->at(0)->at("content");
             caps_print_stats(content, "messages[0].content");
             if (!content->stats.used) {
@@ -224,7 +224,7 @@ caps caps_get(jinja::program & prog) {
                 },
             });
         },
-        [&](bool success, value & messages, value & tools, const std::string & res) {
+        [&](bool success, value & messages, value & tools) {
             if (!success) {
                 result.supports_tool_calls = false;
                 result.supports_tools = false;
@@ -235,9 +235,7 @@ caps caps_get(jinja::program & prog) {
             caps_print_stats(tool_name, "tools[0].function.name");
             caps_print_stats(tools, "tools");
             if (!tool_name->stats.used) {
-                if (!tools->stats.used && res.find(tool_name->as_string().str()) == std::string::npos) {
-                    result.supports_tools = false;
-                }
+                result.supports_tools = false;
             }
 
             auto & tool_calls = messages->at(1)->at("tool_calls");;
@@ -324,7 +322,7 @@ caps caps_get(jinja::program & prog) {
                 },
             });
         },
-        [&](bool success, value & messages, value & /*tools*/, const std::string & /*res*/) {
+        [&](bool success, value & messages, value & /*tools*/) {
             if (!success) {
                 result.supports_parallel_tool_calls = false;
                 return;
@@ -369,7 +367,7 @@ caps caps_get(jinja::program & prog) {
             // tools
             return json::array();
         },
-        [&](bool, value & messages, value &, const std::string &) {
+        [&](bool, value & messages, value &) {
             auto & content = messages->at(1)->at("reasoning_content");
             caps_print_stats(content, "messages[1].reasoning_content");
             if (content->stats.used) {

@@ -1,7 +1,6 @@
 #include "chat-auto-parser-helpers.h"
 
 #include "chat-auto-parser.h"
-#include "chat-diff-analyzer.h"
 #include "chat.h"
 #include "log.h"
 #include "nlohmann/json.hpp"

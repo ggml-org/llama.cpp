@@ -19,6 +19,7 @@
 #include <functional>
 #include <iostream>
 #include <nlohmann/json.hpp>
+#include <set>
 #include <stdexcept>
 #include <string>
 
@@ -124,6 +125,207 @@ static std::unique_ptr<llama_grammar> build_grammar(const std::string & grammar_
         llama_grammar_init_impl(nullptr, grammar_str.c_str(), "root", false, nullptr, 0, nullptr, 0));
 }
 
+// Helper to format a code point as a readable string
+static std::string format_codepoint(uint32_t cp) {
+    if (cp >= 32 && cp < 127) {
+        return std::string("'") + static_cast<char>(cp) + "'";
+    } else if (cp == '\n') {
+        return "'\\n'";
+    } else if (cp == '\r') {
+        return "'\\r'";
+    } else if (cp == '\t') {
+        return "'\\t'";
+    } else {
+        return "U+" + std::to_string(cp);
+    }
+}
+
+// Helper to format expected element from grammar stack
+static std::string format_expected_element(const llama_grammar_rules & /* rules*/, const llama_grammar_element * elem) {
+    if (!elem) {
+        return "<end>";
+    }
+
+    switch (elem->type) {
+        case LLAMA_GRETYPE_END:
+            return "<end of rule>";
+        case LLAMA_GRETYPE_ALT:
+            return "<alternative>";
+        case LLAMA_GRETYPE_RULE_REF:
+            {
+                // Find rule name - just show rule ID for now
+                return "<rule-" + std::to_string(elem->value) + ">";
+            }
+        case LLAMA_GRETYPE_CHAR:
+            {
+                std::string                   result;
+                const llama_grammar_element * pos   = elem;
+                bool                          first = true;
+
+                do {
+                    if (!first) {
+                        result += " | ";
+                    }
+                    first = false;
+
+                    if (pos[1].type == LLAMA_GRETYPE_CHAR_RNG_UPPER) {
+                        // Range like [a-z]
+                        result += "[" + format_codepoint(pos->value) + "-" + format_codepoint(pos[1].value) + "]";
+                        pos += 2;
+                    } else {
+                        result += format_codepoint(pos->value);
+                        pos += 1;
+                    }
+                } while (pos->type == LLAMA_GRETYPE_CHAR_ALT);
+
+                return result;
+            }
+        case LLAMA_GRETYPE_CHAR_NOT:
+            {
+                std::string                   result = "[^";
+                const llama_grammar_element * pos    = elem;
+                bool                          first  = true;
+
+                do {
+                    if (!first) {
+                        result += " ";
+                    }
+                    first = false;
+
+                    if (pos[1].type == LLAMA_GRETYPE_CHAR_RNG_UPPER) {
+                        result += format_codepoint(pos->value) + "-" + format_codepoint(pos[1].value);
+                        pos += 2;
+                    } else {
+                        result += format_codepoint(pos->value);
+                        pos += 1;
+                    }
+                } while (pos->type == LLAMA_GRETYPE_CHAR_ALT);
+
+                return result + "]";
+            }
+        case LLAMA_GRETYPE_CHAR_ANY:
+            return "<any char>";
+        case LLAMA_GRETYPE_TOKEN:
+            return "<token-" + std::to_string(elem->value) + ">";
+        case LLAMA_GRETYPE_TOKEN_NOT:
+            return "<not-token-" + std::to_string(elem->value) + ">";
+        default:
+            return "<unknown>";
+    }
+}
+
+// Get description of what the grammar expects at current position
+static std::string get_expected_description(const llama_grammar_rules & rules, const llama_grammar_stacks & stacks) {
+    if (stacks.empty()) {
+        return "<no valid continuations>";
+    }
+
+    std::string           result;
+    std::set<std::string> seen;
+
+    for (const auto & stack : stacks) {
+        if (stack.empty()) {
+            if (seen.insert("<end>").second) {
+                if (!result.empty()) {
+                    result += " OR ";
+                }
+                result += "<end>";
+            }
+            continue;
+        }
+
+        const llama_grammar_element * elem = stack.back();
+        std::string                   desc = format_expected_element(rules, elem);
+        if (seen.insert(desc).second) {
+            if (!result.empty()) {
+                result += " OR ";
+            }
+            result += desc;
+        }
+    }
+
+    return result;
+}
+
+// Result of a detailed grammar match attempt
+struct grammar_match_result {
+    bool        success            = false;  // Did the string fully match the grammar?
+    size_t      matched_bytes      = 0;      // Bytes successfully matched before failure
+    size_t      matched_codepoints = 0;      // Codepoints successfully matched before failure
+    size_t      total_bytes        = 0;      // Total bytes in input
+    size_t      total_codepoints   = 0;      // Total codepoints in input
+    std::string matched_prefix;              // The portion that was successfully matched
+    std::string failing_char;                // The character that caused failure (if any)
+    std::string expected_description;        // What the grammar expected at failure point
+    bool        incomplete = false;          // True if matched all input but grammar expects more
+};
+
+// Detailed version of match_string that returns failure information
+static grammar_match_result match_string_detailed(const std::string & input, llama_grammar * grammar) {
+    grammar_match_result result;
+    result.total_bytes = input.size();
+
+    const auto cpts         = unicode_cpts_from_utf8(input);
+    result.total_codepoints = cpts.size();
+
+    auto &       stacks_cur = llama_grammar_get_stacks(grammar);
+    const auto & rules      = llama_grammar_get_rules(grammar);
+
+    size_t byte_pos = 0;
+
+    for (size_t i = 0; i < cpts.size(); i++) {
+        const auto & cpt = cpts[i];
+
+        // Get expected before accepting (for error reporting)
+        std::string expected_before = get_expected_description(rules, stacks_cur);
+
+        llama_grammar_accept(grammar, cpt);
+
+        // Calculate byte position for this codepoint
+        size_t cpt_bytes = 0;
+        if (cpt < 0x80) {
+            cpt_bytes = 1;
+        } else if (cpt < 0x800) {
+            cpt_bytes = 2;
+        } else if (cpt < 0x10000) {
+            cpt_bytes = 3;
+        } else {
+            cpt_bytes = 4;
+        }
+
+        if (stacks_cur.empty()) {
+            // Grammar failed to match at this point
+            result.matched_bytes        = byte_pos;
+            result.matched_codepoints   = i;
+            result.matched_prefix       = input.substr(0, byte_pos);
+            result.failing_char         = format_codepoint(cpt);
+            result.expected_description = expected_before;
+            result.incomplete           = false;
+            return result;
+        }
+
+        byte_pos += cpt_bytes;
+    }
+
+    // All input matched - check if grammar is complete
+    result.matched_bytes      = input.size();
+    result.matched_codepoints = cpts.size();
+    result.matched_prefix     = input;
+
+    if (std::any_of(stacks_cur.begin(), stacks_cur.end(), [](const auto & stack) { return stack.empty(); })) {
+        // An empty stack means that the grammar has been completed
+        result.success    = true;
+        result.incomplete = false;
+    } else {
+        // Grammar expects more input
+        result.success              = false;
+        result.incomplete           = true;
+        result.expected_description = get_expected_description(rules, stacks_cur);
+    }
+
+    return result;
+}
+
 // TODO: extract to common helper (copied from test-grammar-integration.cpp)
 static bool match_string(const std::string & input, llama_grammar * grammar) {
     const auto cpts = unicode_cpts_from_utf8(input);
@@ -221,6 +423,14 @@ static common_chat_tool special_function_tool_with_optional_param{
             }
         },
         "required": ["arg1"]
+    })",
+};
+static common_chat_tool empty_args_tool{
+    /* .name = */ "empty_args",
+    /* .description = */ "A tool that takes no arguments",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {}
     })",
 };
 static common_chat_tool python_tool{
@@ -681,9 +891,9 @@ static void test_templates(const struct common_chat_templates *  tmpls,
                         }
                     case COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN:
                         {
-                            const auto & pattern = trigger.value;
-                            if (std::regex_search(constrained, match, std::regex(pattern))) {
-                                pos = match.position(1);
+                            const auto & pattern = std::regex(trigger.value);
+                            if (std::regex_search(constrained, match, pattern)) {
+                                pos = match.position(pattern.mark_count());
                             }
                             break;
                         }
@@ -936,6 +1146,104 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
         assert_msg_equals(tc.expect, parser.parse(tc.input, false), true);
     }
     assert_msg_equals(tc.expect, msg_accum, true);
+
+    // Test grammar if present in params
+    if (!parser.params_.grammar.empty()) {
+        auto grammar = build_grammar(parser.params_.grammar);
+        if (!grammar) {
+            throw std::runtime_error("Failed to build grammar: " + parser.params_.grammar);
+        }
+
+        // Find the earliest trigger position to determine the constrained portion
+        auto earliest_trigger_pos = std::string::npos;
+        for (const auto & trigger : parser.params_.grammar_triggers) {
+            size_t      pos = std::string::npos;
+            std::smatch match;
+            switch (trigger.type) {
+                case COMMON_GRAMMAR_TRIGGER_TYPE_WORD:
+                    {
+                        const auto & word = trigger.value;
+                        pos               = tc.input.find(word);
+                        break;
+                    }
+                case COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN:
+                    {
+                        const auto & pattern = std::regex(trigger.value);
+                        if (std::regex_search(tc.input, match, pattern)) {
+                            pos = match.position(pattern.mark_count());
+                        }
+                        break;
+                    }
+                case COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL:
+                    {
+                        const auto & pattern = trigger.value;
+                        if (std::regex_match(tc.input, match, std::regex(pattern))) {
+                            auto mpos = std::string::npos;
+                            for (size_t i = 1; i < match.size(); ++i) {
+                                if (match[i].length() > 0) {
+                                    mpos = match.position(i);
+                                    break;
+                                }
+                            }
+                            if (mpos == std::string::npos) {
+                                mpos = match.position(0);
+                            }
+                            pos = mpos;
+                        }
+                        break;
+                    }
+                default:
+                    throw std::runtime_error("Unknown trigger type");
+            }
+            if (pos != std::string::npos) {
+                if (earliest_trigger_pos == std::string::npos || pos < earliest_trigger_pos) {
+                    earliest_trigger_pos = pos;
+                }
+            }
+        }
+
+        // Determine the constrained portion of input to test against grammar
+        std::string constrained = tc.input;
+        bool grammar_triggered = false;
+        if (earliest_trigger_pos != std::string::npos) {
+            constrained = tc.input.substr(earliest_trigger_pos);
+            grammar_triggered = true;
+        } else if (!parser.params_.grammar_lazy) {
+            // For non-lazy grammars, the entire input should match
+            grammar_triggered = true;
+        }
+
+        // Test the constrained portion against the grammar
+        if (grammar_triggered && !tc.is_partial) {
+            auto result = match_string_detailed(constrained, grammar.get());
+            if (!result.success) {
+                std::string error_msg;
+                if (result.incomplete) {
+                    error_msg =
+                        "Grammar matched all input but expects more:\n\n"
+                        ">>> Input: " + tc.input +
+                        "\n\n>>> Constrained: " + constrained +
+                        "\n\n>>> Matched prefix (" + std::to_string(result.matched_bytes) + " bytes, " +
+                        std::to_string(result.matched_codepoints) + " codepoints): " +
+                        (result.matched_prefix.size() > 100 ? result.matched_prefix.substr(0, 100) + "..." : result.matched_prefix) +
+                        "\n\n>>> Expected next: " + result.expected_description +
+                        "\n\n>>> Grammar: " + parser.params_.grammar;
+                } else {
+                    error_msg =
+                        "Grammar match failed:\n\n"
+                        ">>> Input: " + tc.input +
+                        "\n\n>>> Constrained: " + constrained +
+                        "\n\n>>> Matched prefix (" + std::to_string(result.matched_bytes) + " bytes, " +
+                        std::to_string(result.matched_codepoints) + " codepoints): " +
+                        (result.matched_prefix.size() > 100 ? result.matched_prefix.substr(0, 100) + "..." : result.matched_prefix) +
+                        "\n\n>>> Failing character: " + result.failing_char +
+                        "\n\n>>> Expected: " + result.expected_description +
+                        "\n\n>>> Grammar: " + parser.params_.grammar;
+                }
+                throw std::runtime_error(error_msg);
+            }
+        }
+    }
 }
 
 // Global template filter for --template flag
@@ -1225,135 +1533,6 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     }
 
     {
-        // Qwen3-Coder
-        auto tmpls = read_templates("models/templates/Qwen3-Coder.jinja");
-
-        // Test basic message
-        test_peg_parser(tmpls.get(), [&](auto & t) {
-            t.input = "Hello, world!\nWhat's up?";
-            t.expect = message_assist;
-        });
-
-        // Test tool call
-        test_peg_parser(tmpls.get(), [&](auto & t) {
-            t.input =
-                "<tool_call>\n"
-                "<function=special_function>\n"
-                "<parameter=arg1>\n"
-                "1\n"
-                "</parameter>\n"
-                "</function>\n"
-                "</tool_call>";
-            t.params.tools = {special_function_tool};
-            t.expect = message_assist_call;
-        });
-
-        // Test parallel tool calls
-        test_peg_parser(tmpls.get(), [&](auto & t) {
-            t.input =
-                "<tool_call>\n"
-                "<function=special_function>\n"
-                "<parameter=arg1>\n"
-                "1\n"
-                "</parameter>\n"
-                "</function>\n"
-                "</tool_call>\n"
-                "<tool_call>\n"
-                "<function=special_function_with_opt>\n"
-                "<parameter=arg1>\n"
-                "1\n"
-                "</parameter>\n"
-                "<parameter=arg2>\n"
-                "2\n"
-                "</parameter>\n"
-                "</function>\n"
-                "</tool_call>";
-            t.params.parallel_tool_calls = true;
-            t.params.tools = {special_function_tool, special_function_tool_with_optional_param};
-
-            t.expect.tool_calls = {{
-                /* .name = */      "special_function",
-                /* .arguments = */ R"({"arg1": 1})",
-                /* .id = */        {},
-            }, {
-                /* .name = */      "special_function_with_opt",
-                /* .arguments = */ R"({"arg1": 1, "arg2": 2})",
-                /* .id = */        {},
-            }};
-        });
-
-        // Test tool call with string parameter
-        test_peg_parser(tmpls.get(), [&](auto & t) {
-            t.input =
-                "<tool_call>\n"
-                "<function=python>\n"
-                "<parameter=code>\n"
-                "def hello():\n"
-                "    print(\"Hello, world!\")\n"
-                "\n"
-                "hello()\n"
-                "</parameter>\n"
-                "</function>\n"
-                "</tool_call>";
-            t.params.tools = {python_tool};
-
-            t.expect.tool_calls = {{
-                /* .name = */      "python",
-                /* .arguments = */ "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}",
-                /* .id = */        {},
-            }};
-        });
-
-        // Test tool call with JSON parameter
-        test_peg_parser(tmpls.get(), [&](auto & t) {
-            t.input =
-                "<tool_call>\n"
-                "<function=todo_list>\n"
-                "<parameter=todos>\n"
-                "[{\"item\": \"Check stuff\", \"selected\": false}, {\"item\": \"Prepare stuff\", \"selected\": true}]\n"
-                "</parameter>\n"
-                "</function>\n"
-                "</tool_call>";
-            t.params.tools = {todo_list_tool};
-
-            t.expect.tool_calls = {{
-                /* .name = */      "todo_list",
-                /* .arguments = */ "{\"todos\": [{\"item\": \"Check stuff\", \"selected\": false}, {\"item\": \"Prepare stuff\", \"selected\": true}]}",
-                /* .id = */        {},
-            }};
-        });
-
-        // Test tool call with string parameter and no closing </parameter> tag
-        test_peg_parser(tmpls.get(), [&](auto & t) {
-            t.input =
-                "<tool_call>\n"
-                "<function=python>\n"
-                "<parameter=code>\n"
-                "def hello():\n"
-                "    print(\"Hello, world!\")\n"
-                "\n"
-                "hello()\n"
-                "</function>\n"
-                "</tool_call>";
-            t.params.tools = {python_tool};
-
-            t.expect.tool_calls = {{
-                /* .name = */      "python",
-                /* .arguments = */ "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}",
-                /* .id = */        {},
-            }};
-        });
-
-        // Test response format
-        test_peg_parser(tmpls.get(), [&](auto & t) {
-            t.input = R"({"amount": 123.45, "date": "2025-12-03"})";
-            t.params.json_schema = invoice_schema;
-
-            t.expect.content = R"({"amount": 123.45, "date": "2025-12-03"})";
-        });
-    }
-
-    {
         // NVIDIA Nemotron-3 Nano
         auto tst = peg_tester("models/templates/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16.jinja", detailed_debug);
 
@@ -1628,21 +1807,6 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             })
             .run();
 
-        // single-quote normalization
-        tst.test(
-               "<seed:tool_call>\n"
-               "<function=todo_list>\n"
-               "<parameter=todos>[{'item': 'Check stuff', 'selected': false}, {'item': 'Prepare stuff', 'selected': true}]</parameter>\n"
-               "</function>\n"
-               "</seed:tool_call>")
-            .tools({
-                todo_list
-        })
-            .expect_tool_calls({
-                { "todo_list", "{\"todos\": [{\"item\": \"Check stuff\", \"selected\": false}, {\"item\": \"Prepare stuff\", \"selected\": true}]}", {} },
-            })
-            .run();
-
         // tool call with inside quotes
         tst.test(
                "<seed:tool_call>\n"
@@ -1737,6 +1901,23 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         })
             .expect_tool_calls({
                 { "python", "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}", {} },
+            })
+            .run();
+
+        // Test with code content (asian unicode chars)
+        tst.test(
+               "<tool_call>\n"
+               "<function=python>\n"
+               "<parameter=code>\n"
+               "格\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({
+                python_tool
+        })
+            .expect_tool_calls({
+                { "python", "{\"code\": \"格\"}", {} },
             })
             .run();
 
@@ -1884,33 +2065,240 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect(message_assist_call_thoughts)
             .run();
 
-        // String argument starting with '[' - should NOT be treated as JSON array
-        // This tests the fix for Godot scene files and similar content
         tst.test(
-               "<tool_call>html"
-               "<arg_key>markup</arg_key><arg_value>[gd_scene load_steps=3 format=3]</arg_value>"
+               "<tool_call>special_function"
+               "<arg_key>arg1</arg_key><arg_value>1</arg_value>"
+               "</tool_call>"
+               "<tool_call>special_function_with_opt"
+               "<arg_key>arg1</arg_key><arg_value>1</arg_value>"
+               "<arg_key>arg2</arg_key><arg_value>2</arg_value>"
                "</tool_call>")
-            .enable_thinking(false)
-            .tools({ html_tool })
+            .parallel_tool_calls(true)
+            .tools({
+                special_function_tool, special_function_tool_with_optional_param
+        })
             .expect_tool_calls({
-                { "html", "{\"markup\": \"[gd_scene load_steps=3 format=3]\"}", {} },
+                { "special_function", R"({"arg1": 1})", {} },
+                { "special_function_with_opt", R"({"arg1": 1, "arg2": 2})", {} },
             })
             .run();
-
-        // Multiple tool calls
-        // Note: Parallel tool calls streaming test skipped - the KEY_VALUE_TAGS format has
-        // partial parsing edge cases when function names share common prefixes (special_function vs special_function_with_opt)
-        // The grammar and full parsing work correctly, but incremental streaming detection needs more work.
     }
 
-    // Kimi-K2-Thinking tests - FUNC_PREFIXED_INDEXED format
+    // Kimi-K2-Thinking tests - custom parser
+    // Unique feature: tool call ID embeds function name as functions.<name>:<counter>
     {
         auto tst = peg_tester("models/templates/Kimi-K2-Thinking.jinja", detailed_debug);
+
+        // Basic content only
+        tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
+
+        // Single tool call
         tst.test(
                "<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>"
                "{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>")
             .tools({ special_function_tool })
-            .expect(message_assist_call)
+            .expect(simple_assist_msg("", "", "special_function", "{\"arg1\": 1}", "functions.special_function:0"))
+            .run();
+
+        // Single tool call with reasoning
+        tst.test(
+               "<think>I'm thinking about this</think>"
+               "<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>"
+               "{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(simple_assist_msg("", "I'm thinking about this", "special_function", "{\"arg1\": 1}", "functions.special_function:0"))
+            .run();
+
+        // Tool call with content
+        tst.test(
+               "Hello, world!\nWhat's up?"
+               "<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>"
+               "{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>")
+            .tools({ special_function_tool })
+            .expect(simple_assist_msg("Hello, world!\nWhat's up?", "", "special_function", "{\"arg1\": 1}", "functions.special_function:0"))
+            .run();
+
+        // Multiple tool calls (parallel) - tests the indexing behavior
+        tst.test(
+               "<|tool_calls_section_begin|>"
+               "<|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|>"
+               "<|tool_call_begin|>functions.special_function_with_opt:1<|tool_call_argument_begin|>{\"arg1\": 1, \"arg2\": 2}<|tool_call_end|>"
+               "<|tool_calls_section_end|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .parallel_tool_calls(true)
+            .tools({
+                special_function_tool, special_function_tool_with_optional_param
+        })
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", "functions.special_function:0" },
+                { "special_function_with_opt", R"({"arg1": 1, "arg2": 2})", "functions.special_function_with_opt:1" },
+            })
+            .run();
+
+        // Multiple tool calls with reasoning
+        tst.test(
+               "<think>I need to call two functions</think>"
+               "<|tool_calls_section_begin|>"
+               "<|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|>"
+               "<|tool_call_begin|>functions.python:1<|tool_call_argument_begin|>{\"code\": \"print('hey')\"}<|tool_call_end|>"
+               "<|tool_calls_section_end|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .parallel_tool_calls(true)
+            .tools({
+                special_function_tool, python_tool
+        })
+            .expect_reasoning("I need to call two functions")
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", "functions.special_function:0" },
+                { "python", "{\"code\": \"print('hey')\"}", "functions.python:1" },
+            })
+            .run();
+
+        // Python tool with multiline code
+        tst.test(
+               "<|tool_calls_section_begin|><|tool_call_begin|>functions.python:0<|tool_call_argument_begin|>"
+               "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}<|tool_call_end|><|tool_calls_section_end|>")
+            .tools({ python_tool })
+            .expect_tool_calls({
+                { "python", "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}", "functions.python:0" },
+            })
+            .run();
+
+        // Tool call with empty arguments
+        tst.test(
+               "<|tool_calls_section_begin|><|tool_call_begin|>functions.empty_args:0<|tool_call_argument_begin|>"
+               "{}<|tool_call_end|><|tool_calls_section_end|>")
+            .tools({ empty_args_tool })
+            .expect(simple_assist_msg("", "", "empty_args", "{}", "functions.empty_args:0"))
+            .run();
+
+        // Partial tool call (streaming)
+        tst.test(
+               "<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>"
+               "{\"arg1\": ")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .is_partial(true)
+            .expect(simple_assist_msg("", "", "special_function", "{\"arg1\": ", "functions.special_function:0"))
+            .run();
+
+        // Three tool calls to verify counter continues incrementing
+        tst.test(
+               "<|tool_calls_section_begin|>"
+               "<|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|>"
+               "<|tool_call_begin|>functions.python:1<|tool_call_argument_begin|>{\"code\": \"print(1)\"}<|tool_call_end|>"
+               "<|tool_call_begin|>functions.html:2<|tool_call_argument_begin|>{\"markup\": \"<p>test</p>\"}<|tool_call_end|>"
+               "<|tool_calls_section_end|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .parallel_tool_calls(true)
+            .tools({
+                special_function_tool, python_tool, html_tool
+        })
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", "functions.special_function:0" },
+                { "python", "{\"code\": \"print(1)\"}", "functions.python:1" },
+                { "html", "{\"markup\": \"<p>test</p>\"}", "functions.html:2" },
+            })
+            .run();
+
+        // Multiple tool calls with reasoning, call *inside thinking block*
+        tst.test(
+               "<think>I need to call two functions"
+               "<|tool_calls_section_begin|>"
+               "<|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|>"
+               "<|tool_call_begin|>functions.python:1<|tool_call_argument_begin|>{\"code\": \"print('hey')\"}<|tool_call_end|>"
+               "<|tool_calls_section_end|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .parallel_tool_calls(true)
+            .tools({
+                special_function_tool, python_tool
+        })
+            .expect_reasoning("I need to call two functions")
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", "functions.special_function:0" },
+                { "python", "{\"code\": \"print('hey')\"}", "functions.python:1" },
+            })
+            .run();
+
+        // Multiple tool calls with reasoning, call *inside thinking block* and *without section markers or end markers
+        tst.test(
+               "<think>I need to call two functions"
+               "<|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{\"arg1\": 1}"
+               "<|tool_call_begin|>functions.python:1<|tool_call_argument_begin|>{\"code\": \"print('hey')\"}")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .parallel_tool_calls(true)
+            .tools({
+                special_function_tool, python_tool
+        })
+            .expect_reasoning("I need to call two functions")
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", "functions.special_function:0" },
+                { "python", "{\"code\": \"print('hey')\"}", "functions.python:1" },
+            })
+            .run();
+
+        // Real life test - execute_command
+        tst.test("<|tool_call_begin|>functions.execute_command:0<|tool_call_argument_begin|>{\"command\": \"ls -lah\""
+            ", \"cwd\": \"/home/jarvis/development/exllamav3\", \"timeout\": 10}")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .parallel_tool_calls(true)
+            .tools({
+                {
+                    /* .name = */ "execute_command",
+                    /* .description = */ "Execute shell command",
+                    /* .parameters = */ R"({
+                        "type": "object",
+                        "properties": {
+                            "command": {
+                                "type": "string",
+                                "description": "Shell command to execute"
+                            },
+                            "cwd": {
+                                "type": "string",
+                                "description": "Working directory"
+                            },
+                            "timeout": {
+                                "type": "integer",
+                                "description": "The timeout in seconds"
+                            }
+                        },
+                        "required": ["command"]
+                    })"
+                }
+            }).
+            expect_tool_calls({
+                {
+                    "execute_command",
+                    R"({"command": "ls -lah", "cwd": "/home/jarvis/development/exllamav3", "timeout": 10})",
+                    "functions.execute_command:0"
+                }
+            })
+            .run();
+    }
+
+    {
+        auto kimi_id_special_func_tool_call =
+            simple_assist_msg("", "", "special_function", "{\"arg1\": 1}", "functions.special_function:0");
+
+        // Kimi-K2 old template
+        auto tst = peg_tester("models/templates/moonshotai-Kimi-K2.jinja", detailed_debug);
+        tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
+        tst.test(
+               "<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>"
+               "{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>")
+            .tools({ special_function_tool })
+            .expect(kimi_id_special_func_tool_call)
+            .run();
+
+        // Kimi-K2-Instruct
+        auto tst2 = peg_tester("models/templates/Kimi-K2-Instruct.jinja", detailed_debug);
+        tst2.test("Hello, world!\nWhat's up?").expect(message_assist).run();
+        tst2.test(
+               "<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>"
+               "{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>")
+            .tools({ special_function_tool })
+            .expect(kimi_id_special_func_tool_call)
             .run();
     }
 
@@ -2058,28 +2446,6 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect(message_assist_call)
             .run();
     }
-    // Kimi-K2 (moonshotai) - FUNC_PREFIXED_INDEXED format
-    {
-        auto tst = peg_tester("models/templates/moonshotai-Kimi-K2.jinja", detailed_debug);
-        tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
-        tst.test(
-               "<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>"
-               "{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>")
-            .tools({ special_function_tool })
-            .expect(message_assist_call)
-            .run();
-    }
-    // Kimi-K2-Instruct - FUNC_PREFIXED_INDEXED format
-    {
-        auto tst = peg_tester("models/templates/Kimi-K2-Instruct.jinja", detailed_debug);
-        tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
-        tst.test(
-               "<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>"
-               "{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>")
-            .tools({ special_function_tool })
-            .expect(message_assist_call)
-            .run();
-    }
 
     // MiMo-VL / Hermes 3 / Qwen 2.5 (Common <tool_call> JSON format)
     for (const auto & path :
@@ -2133,7 +2499,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect(message_assist_call_id)
             .run();
     }
-    // Devstral - FUNC_BRACKET_TAG format (no ID marker): [TOOL_CALLS]func_name[ARGS]{...}
+    // Devstral
     {
         auto tst = peg_tester("models/templates/unsloth-mistral-Devstral-Small-2507.jinja", detailed_debug);
         tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
@@ -2257,7 +2623,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             "<|channel|>final<|message|><|end|>"
             "<|start|>assistant<|channel|>analysis<|message|>Thinking about edit...<|end|>"
             "<|start|>assistant<|channel|>commentary to=functions.edit <|constrain|>json"
-            "<|message|>{\"filePath\": \"file.js\", \"oldString\": \"if (part < railCount - 1) {\", \"newString\": \"if (part < 4) {\", \"replaceAll\": false}"
+            "<|message|>{\"oldString\": \"if (part < railCount - 1) {\", \"newString\": \"if (part < 4) {\", \"replaceAll\": false}"
             )
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .tools({
@@ -2286,7 +2652,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             })
             .expect_reasoning("Thinking about edit...")
             .expect_tool_calls({
-                { "edit", R"({"filePath": "file.js", "oldString": "if (part < railCount - 1) {", "newString": "if (part < 4) {", "replaceAll": false})", {} }
+                { "edit", R"({"oldString": "if (part < railCount - 1) {", "newString": "if (part < 4) {", "replaceAll": false})", {} }
             })
             .run();
 

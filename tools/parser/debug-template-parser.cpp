@@ -1,6 +1,5 @@
 #include "../src/llama-grammar.h"
 #include "chat-auto-parser.h"
-#include "chat-diff-analyzer.h"
 #include "chat.h"
 #include "common.h"
 #include "gguf.h"
@@ -392,7 +391,8 @@ int main(int argc, char ** argv) {
             LOG_ERR("                           TEMPLATE ANALYSIS\n");
             LOG_ERR("================================================================================\n");
 
-            autoparser::analyze_template analysis(chat_template);
+            autoparser::autoparser analysis;
+            analysis.analyze_template(chat_template);
 
             // Generate Parser
             autoparser::templates_params params;
@@ -411,7 +411,7 @@ int main(int argc, char ** argv) {
             }
             params.parallel_tool_calls = false;
 
-            auto parser_data = autoparser::universal_peg_generator::generate_parser(chat_template, params, analysis);
+            auto parser_data = autoparser::peg_generator::generate_parser(chat_template, params, analysis);
 
             LOG_ERR("\n=== Generated Parser ===\n");
             common_peg_arena arena;

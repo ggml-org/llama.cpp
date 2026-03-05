@@ -247,7 +247,7 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
         result.content += std::string(node.text);
     }
 
-    // Handle tool-related tags (unified version supporting both JSON and tagged formats)
+    // Handle tool-related tags (supporting both JSON and tagged formats)
     bool is_tool_open  = node.tag == common_chat_peg_builder::TOOL_OPEN;
     bool is_tool_close = node.tag == common_chat_peg_builder::TOOL_CLOSE;
     bool is_tool_name  = node.tag == common_chat_peg_builder::TOOL_NAME;

@@ -1,7 +1,6 @@
 #include "chat.h"
 
 #include "chat-auto-parser.h"
-#include "chat-diff-analyzer.h"
 #include "chat-peg-parser.h"
 #include "common.h"
 #include "ggml.h"
@@ -1030,10 +1029,9 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
 
                 // Pattern 2: recipient in channel header
                 // "<|channel|>(analysis|commentary) to=functions.NAME[constraint]<|message|>ARGS"
-
                 auto tool_in_channel = p.tool(channel + p.tool_open(func_name + constraint + MESSAGE) + args);
 
-                tool_choice |= p.trigger_rule("tool-" + name, tool_in_role | tool_in_channel);
+                tool_choice |= tool_in_role | tool_in_channel;
             });
 
             auto min_calls = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0;
@@ -1042,7 +1040,7 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
             auto role_start = p.optional(p.space() + p.literal(START_ASSISTANT));
             auto tool_call  = p.rule("tool-call", p.repeat(role_start + tool_choice, min_calls, max_calls) + p.end());
 
-            return p.choice({ tool_call, p.one_or_more(segment) + tool_call });
+            return p.choice({ p.trigger_rule("single-tool", tool_call), p.trigger_rule("tools", p.one_or_more(segment) + tool_call) });
         }
 
         return contents;
@@ -1121,8 +1119,8 @@ static common_chat_params common_chat_params_init_functionary_v3_2(const common_
         });
 
         auto content_only = content_until_end;
-        auto content_and_tools = content_until_tool + p.one_or_more(tool_choice);
-                auto tools_only = p.one_or_more(tool_choice);
+        auto tools_only = p.trigger_rule("tools", p.one_or_more(tool_choice));
+        auto content_and_tools = content_until_tool + tools_only;
 
         if (inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED) {
             if (inputs.parallel_tool_calls) {
@@ -1152,9 +1150,124 @@ static common_chat_params common_chat_params_init_functionary_v3_2(const common_
         });
 
         // Grammar trigger for when the model starts outputting a tool call
-        // (after the initial ">>>" in the generation prompt)
+        // (after the initial ">>>" in the generation prompt but recipient other than "all")
         data.grammar_triggers = {
-            { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, ">>>" }
+            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, ">>>(?!all)" }
+        };
+    }
+
+    return data;
+}
+
+// Kimi K2 Thinking - uses unique tool call ID format: functions.<name>:<index>
+// The ID contains both the function name and an incrementing counter
+static common_chat_params common_chat_params_init_kimi_k2(const common_chat_template &    tmpl,
+                                                          const autoparser::templates_params & inputs) {
+    common_chat_params data;
+
+    data.prompt            = common_chat_template_direct_apply(tmpl, inputs);
+    data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
+    data.supports_thinking = true;
+    data.preserved_tokens  = {
+        "<|tool_calls_section_begin|>",
+        "<|tool_calls_section_end|>",
+        "<|tool_call_begin|>",
+        "<|tool_call_argument_begin|>",
+        "<|tool_call_end|>",
+        "<think>",
+        "</think>",
+    };
+
+    auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
+    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+    auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+
+    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+        // Kimi K2 Thinking format:
+        // - Reasoning: <think>{reasoning}</think>
+        // - Content: text after reasoning
+        // - Tool calls section:
+        //   <|tool_calls_section_begin|>
+        //   <|tool_call_begin|>functions.<name>:<index><|tool_call_argument_begin|>{json_args}<|tool_call_end|>
+        //   ...
+        //   <|tool_calls_section_end|>
+        // The ID format is: functions.<function_name>:<counter> where counter is 0, 1, 2, ...
+
+                // Tool call markers
+        const std::string SECTION_BEGIN = "<|tool_calls_section_begin|>";
+        const std::string SECTION_END   = "<|tool_calls_section_end|>";
+        const std::string CALL_BEGIN    = "<|tool_call_begin|>";
+        const std::string ARGS_BEGIN    = "<|tool_call_argument_begin|>";
+        const std::string CALL_END      = "<|tool_call_end|>";
+
+        const std::string THINK_START   = "<think>";
+        const std::string THINK_END     = "</think>";
+
+        auto end = p.end();
+
+        // Note: this model is CRAZY. It can diverge from its supposed tool calling pattern in so many ways it's not funny.
+        // For example, it can call tools at the end of reasoning without closing reasoning...
+        auto reasoning = extract_reasoning ? p.optional(THINK_START + p.reasoning(
+            p.until_one_of({ THINK_END, "<|tool_calls_section_begin|>", "<|tool_call_begin|>" })) +
+            p.optional(p.literal(THINK_END))) : p.eps();
+
+
+        // Content only parser (no tools)
+        if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
+            return reasoning + p.content(p.rest()) + end;
+        }
+
+        // Build tool call parsers for each available function
+        // The ID format is: functions.<name>:<index>
+        // We need to match: functions.<name>:<digits>
+        auto tool_choice = p.choice();
+        foreach_function(inputs.tools, [&](const json & tool) {
+            const auto & function = tool.at("function");
+            std::string  name     = function.at("name");
+            const auto & schema   = function.at("parameters");
+
+            // Match: functions.<name>:<digits>
+            // Capture the full call id (functions.<name>:<digits>) using tool_id tag
+            auto tool_id = p.tool_id(p.literal("functions.") + p.tool_name(p.literal(name)) + p.literal(":") + p.chars("[0-9]", 1, -1));
+            auto tool_parser = p.tool(
+                p.tool_open(tool_id + p.literal(ARGS_BEGIN)) +
+                p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", schema)) +
+                p.tool_close(p.optional((p.literal(CALL_END))))
+            );
+
+            tool_choice |= p.rule("tool-" + name, tool_parser);
+        });
+
+        // Tool calls section: <|tool_calls_section_begin|> tool_calls <|tool_calls_section_end|>
+        auto min_calls  = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0;
+        auto max_calls  = inputs.parallel_tool_calls ? -1 : 1;
+        // Use trigger_rule so grammar generator knows where to start generating rules
+        auto tool_calls = p.rule("tool-calls",
+            p.optional(p.literal(SECTION_BEGIN)) +
+            p.trigger_rule("tool-call", p.repeat(CALL_BEGIN + tool_choice, min_calls, max_calls) +
+                p.optional(p.literal(SECTION_END)))
+        );
+
+        auto content_before_tools = p.content(p.until_one_of({ SECTION_BEGIN, CALL_BEGIN }));
+
+        return reasoning + content_before_tools + tool_calls + end;
+    });
+
+    data.parser = parser.save();
+
+    if (include_grammar) {
+        data.grammar_lazy = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
+        data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function = tool.at("function");
+                auto         schema   = function.at("parameters");
+                builder.resolve_refs(schema);
+            });
+            parser.build_grammar(builder, data.grammar_lazy);
+        });
+
+        data.grammar_triggers = {
+            { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<|tool_call_begin|>" }
         };
     }
 
@@ -1299,17 +1412,24 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         return common_chat_params_init_functionary_v3_2(tmpl, params);
     }
 
-    try {
-        LOG_DBG("Using differential autoparser\n");
-        auto analysis = autoparser::analyze_template(tmpl);
-        auto auto_params = autoparser::universal_peg_generator::generate_parser(tmpl, params, analysis);
-        auto_params.supports_thinking = analysis.reasoning.mode != autoparser::reasoning_mode::NONE;
-        return auto_params;
-    } catch (const std::exception & e) {
-        LOG_WRN("Automatic parser generation failed: %s\n", e.what());
+    // Kimi K2 Thinking - uses unique tool call ID format: functions.<name>:<index>
+    // Detection: template has "<|tool_calls_section_begin|>" and "functions." prefix in tool call IDs
+    if (src.find("<|tool_calls_section_begin|>") != std::string::npos &&
+        src.find("<|tool_call_begin|>") != std::string::npos) {
+        LOG_DBG("Using specialized template: Kimi K2 Thinking\n");
+        return common_chat_params_init_kimi_k2(tmpl, params);
     }
 
-    GGML_ABORT("Unable to generate parser for this template.");
+    try {
+        LOG_DBG("Using differential autoparser\n");
+        struct autoparser::autoparser autoparser;
+        autoparser.analyze_template(tmpl);
+        auto auto_params = autoparser::peg_generator::generate_parser(tmpl, params, autoparser);
+        auto_params.supports_thinking = autoparser.reasoning.mode != autoparser::reasoning_mode::NONE;
+        return auto_params;
+    } catch (const std::exception & e) {
+        throw std::invalid_argument(std::string("Unable to generate parser for this template. Automatic parser generation failed: ") + e.what());
+    }
 }
 
 // Legacy template route (adhoc C++ implementation of known templates), forward to llama_chat_apply_template.
