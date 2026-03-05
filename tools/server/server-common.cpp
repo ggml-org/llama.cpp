@@ -856,6 +856,7 @@ static void handle_media(
         }
         // load local image file
         std::string file_path = url.substr(7); // remove "file://"
+        file_path = fs_normalize_filepath(file_path); // remove any leading './' and normalize separators
         raw_buffer data;
         if (!fs_validate_filename(file_path, true)) {
             throw std::invalid_argument("file path is not allowed: " + file_path);

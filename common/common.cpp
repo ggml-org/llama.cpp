@@ -660,8 +660,51 @@ bool string_parse_kv_override(const char * data, std::vector<llama_model_kv_over
 // Filesystem utils
 //
 
-// Validate if a filename is safe to use
-// To validate a full path, split the path by the OS-specific path separator, and validate each part with this function
+// Normalizes a relative filepath
+// - Replaces backslashes and forward slashes with the system path separator
+// - Trims leading './' or '.\' segments
+// - Trims leading '/' or '\' (treat 'root' as relative)
+// - Trims duplicate directory separators
+// - Does not resolve '..' segments
+// - Does not ensure the path is valid or safe
+// Use in conjunction with `fs_validate_filename`, calling `fs_validate_filename` after `fs_normalize_filepath`
+std::string fs_normalize_filepath(const std::string & path) {
+    std::string result;
+    result.reserve(path.size());
+
+    bool leading = true;
+    char prev = 0;
+    for (size_t i = 0; i < path.size(); ++i) {
+        char c = path[i];
+        if (c == '/' || c == '\\') {
+            c = DIRECTORY_SEPARATOR;
+        }
+        if (leading) {
+            if (c == DIRECTORY_SEPARATOR) {
+                continue; // Skip leading separators
+            } else if (c == '.') {
+                if (i + 1 < path.size()) {
+                    char next = path[i + 1];
+                    if (next == '/' || next == '\\') {
+                        ++i;
+                        continue; // Skip leading dot segments
+                    }
+                }
+            }
+            leading = false;
+        }
+        if (prev == DIRECTORY_SEPARATOR && c == DIRECTORY_SEPARATOR) {
+            continue; // Skip duplicate separators
+        }
+        prev = c;
+        result += c;
+    }
+
+    return result;
+}
+
+// Validate if a filename or path is safe to use
+// Strictly rejects path traversal attempts, absolute paths, and reserved/illegal characters
 bool fs_validate_filename(const std::string & filename, bool allow_subdirs) {
     if (!filename.length()) {
         // Empty filename invalid
@@ -670,10 +713,13 @@ bool fs_validate_filename(const std::string & filename, bool allow_subdirs) {
     if (filename.length() > 255) {
         // Limit at common largest possible filename on Linux filesystems
         // to avoid unnecessary further validation
+        // NOTE: The 255 limit is per filename element on Linux, not the whole path
+        // On Windows, the limit is commonly 260 for the whole absolute path
         // (On systems with smaller limits it will be caught by the OS)
         return false;
     }
 
+    uint32_t prev = 0;
     size_t offset = 0;
     while (offset < filename.size()) {
         utf8_parse_result result = parse_utf8_codepoint(filename, offset);
@@ -683,6 +729,7 @@ bool fs_validate_filename(const std::string & filename, bool allow_subdirs) {
         }
         uint32_t c = result.codepoint;
 
+        // Check for overlong UTF-8 sequences
         if ((result.bytes_consumed == 2 && c < 0x80) ||
             (result.bytes_consumed == 3 && c < 0x800) ||
             (result.bytes_consumed == 4 && c < 0x10000)) {
@@ -691,7 +738,7 @@ bool fs_validate_filename(const std::string & filename, bool allow_subdirs) {
 
         // Check for forbidden codepoints:
         // - Control characters
-        // - Unicode equivalents of illegal characters
+        // - Unicode equivalents of path traversal characters
         // - UTF-16 surrogate pairs
         // - UTF-8 replacement character
         // - Byte order mark (BOM)
@@ -700,8 +747,17 @@ bool fs_validate_filename(const std::string & filename, bool allow_subdirs) {
             || c == 0x7F // Control characters (DEL)
             || (c >= 0x80 && c <= 0x9F) // Control characters (C1)
             || c == 0xFF0E // Fullwidth Full Stop (period equivalent)
-            || c == 0x2215 // Division Slash (forward slash equivalent)
-            || c == 0x2216 // Set Minus (backslash equivalent)
+            || c == 0xFF0F // Fullwidth Solidus (forward slash equivalent, CP 874, 1250-1258)
+            || c == 0xFF3C // Fullwidth Reverse Solidus (backslash equivalent, CP 874, 1250-1258)
+            || c == 0xFF1A // Fullwidth Colon (colon equivalent, CP 874, 1250-1258)
+            || c == 0x2215 // Division Slash (forward slash equivalent, CP 1250, 1252, 1254)
+            || c == 0x2216 // Set Minus (backslash equivalent, CP 1250, 1252, 1254)
+            || c == 0x2044 // Fraction Slash (forward slash equivalent, CP 1250, 1252, 1254)
+            || c == 0x2236 // Ratio (colon equivalent, CP 1250, 1252, 1254)
+            || c == 0x0589 // Armenian Full Stop (colon equivalent, CP 1250, 1252, 1254)
+            || c == 0x00A5 // Yen Sign (backslash equivalent, CP 932 Japanese)
+            || c == 0x20A9 // Won Sign (backslash equivalent, CP 949, 1361 Korean)
+            || c == 0x00B4 // Acute Accent (forward slash equivalent, CP 1253 Greek)
             || (c >= 0xD800 && c <= 0xDFFF) // UTF-16 surrogate pairs
             || c > 0x10FFFF // Max Unicode limit
             || c == 0xFFFD // Replacement Character (UTF-8)
@@ -710,26 +766,33 @@ bool fs_validate_filename(const std::string & filename, bool allow_subdirs) {
             || c == '?' || c == '"' || c == '<' || c == '>' || c == '|') {
             return false;
         }
-        if (!allow_subdirs && (c == '/' || c == '\\')) {
+        if (allow_subdirs) {
+            if ((prev == '.' || prev == ' ') && (c == '/' || c == '\\')) {
+                // Reject any trailing dot or whitespace, these are stripped on Windows
+                // This also matches path elements that equal '..' or '.'
+                return false;
+            }
+            if ((prev == '/' || prev == '\\') && (c == ' ')) {
+                // Reject any leading whitespace, these are stripped on Windows
+                return false;
+            }
+        } else if (c == '/' || c == '\\') {
             // Subdirectories not allowed, reject path separators
             return false;
         }
+        prev = c;
         offset += result.bytes_consumed;
     }
 
     // Reject any leading or trailing ' ', or any trailing '.', these are stripped on Windows and will cause a different filename
     // Unicode and other whitespace is not affected, only 0x20 space
+    // This also matches paths that equal '..' or '.'
     if (filename.front() == ' ' || filename.back() == ' ' || filename.back() == '.') {
         return false;
     }
 
-    // Reject any ".." (currently stricter than necessary, it should be fine to just check for == ".." instead)
-    if (filename.find("..") != std::string::npos) {
-        return false;
-    }
-
-    // Reject "."
-    if (filename == ".") {
+    // Reject any leading path separators
+    if (filename.front() == '/' || filename.front() == '\\') {
         return false;
     }
 
