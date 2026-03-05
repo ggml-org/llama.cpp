@@ -707,7 +707,7 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
         using namespace ggml_sycl;
 
         const int n_gpu = g_moe_multi_gpu_active.load(std::memory_order_acquire)
-                              ? ggml_sycl_info().device_count
+                              ? ggml_sycl_info().total_gpu_count
                               : 1;
 
         std::vector<bool> placed(expert_list.size(), false);
@@ -1086,7 +1086,7 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
     // Queues and caches were already registered in the early init block above.
     // -----------------------------------------------------------------------
     if (device == 0 && g_moe_multi_gpu_active.load(std::memory_order_acquire)) {
-        const int total_devices = ggml_sycl_info().device_count;
+        const int total_devices = ggml_sycl_info().total_gpu_count;
         int       n_secondary_ok = 0;
 
         for (int gpu_d = 1; gpu_d < total_devices && gpu_d < GGML_SYCL_MAX_DEVICES; gpu_d++) {
@@ -26037,7 +26037,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             };
 
             std::vector<expert_dispatch_entry> gpu_entries;   // primary GPU (device 0)
-            const int n_gpu_devs = ggml_sycl_info().device_count;
+            const int n_gpu_devs = ggml_sycl_info().total_gpu_count;
             std::vector<std::vector<expert_dispatch_entry>> per_gpu_entries(n_gpu_devs);  // per-device secondary entries
             std::vector<expert_dispatch_entry> cpu_entries;
 
@@ -26650,7 +26650,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             // device_id == 1..N-1  → per_gpu_entries[d] (secondary GPUs, activation shipping)
             // device_id == -1      → cpu_entries (CPU vec_dot fallback)
             auto & placement_table = ggml_sycl::get_expert_placement_table();
-            const int n_gpu        = ggml_sycl_info().device_count;
+            const int n_gpu        = ggml_sycl_info().total_gpu_count;
             const bool multi_gpu   = g_moe_multi_gpu_active.load(std::memory_order_acquire);
 
             gpu_entries.reserve(static_cast<size_t>(ids->ne[1] * n_ids));
