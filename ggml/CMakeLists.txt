@@ -159,12 +159,18 @@ option(GGML_AVX512_VNNI      "ggml: enable AVX512-VNNI"      OFF)
 option(GGML_AVX512_BF16      "ggml: enable AVX512-BF16"      OFF)
 option(GGML_ZEN5             "ggml: optimize for AMD Zen 5 (enables AVX512 + VNNI + BF16 + VBMI, adds -mtune=znver5)" OFF)
 
-# GGML_ZEN5 is a convenience preset that enables the full set of Zen 5 AVX-512 extensions
+# GGML_ZEN5 is a convenience preset that enables the full set of Zen 5 ISA extensions.
+# Force-set all flags so that GGML_ZEN5 works regardless of cached CMake values.
 if (GGML_ZEN5)
-    set(GGML_AVX512      ON)
-    set(GGML_AVX512_VBMI ON)
-    set(GGML_AVX512_VNNI ON)
-    set(GGML_AVX512_BF16 ON)
+    set(GGML_AVX         ON CACHE BOOL "ggml: enable AVX"         FORCE)
+    set(GGML_AVX2        ON CACHE BOOL "ggml: enable AVX2"        FORCE)
+    set(GGML_FMA         ON CACHE BOOL "ggml: enable FMA"         FORCE)
+    set(GGML_F16C        ON CACHE BOOL "ggml: enable F16C"        FORCE)
+    set(GGML_BMI2        ON CACHE BOOL "ggml: enable BMI2"        FORCE)
+    set(GGML_AVX512      ON CACHE BOOL "ggml: enable AVX512F"     FORCE)
+    set(GGML_AVX512_VBMI ON CACHE BOOL "ggml: enable AVX512-VBMI" FORCE)
+    set(GGML_AVX512_VNNI ON CACHE BOOL "ggml: enable AVX512-VNNI" FORCE)
+    set(GGML_AVX512_BF16 ON CACHE BOOL "ggml: enable AVX512-BF16" FORCE)
 endif()
 
 if (NOT MSVC)
