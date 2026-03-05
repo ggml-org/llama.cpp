@@ -440,18 +440,29 @@ int common_download_file_single(const std::string & url,
                                 const std::string & path,
                                 const std::string & bearer_token,
                                 bool offline,
+                                bool cache_only,
                                 const common_header_list & headers) {
-    if (!offline) {
-        return common_download_file_single_online(url, path, bearer_token, headers);
+    if (offline) {
+        // Original offline mode: no network access at all
+        if (!std::filesystem::exists(path)) {
+            LOG_ERR("%s: required file is not available in cache (offline mode): %s\n", __func__, path.c_str());
+            return -1;
+        }
+        LOG_INF("%s: using cached file (offline mode): %s\n", __func__, path.c_str());
+        return 304; // Not Modified - fake cached response
     }
 
-    if (!std::filesystem::exists(path)) {
-        LOG_ERR("%s: required file is not available in cache (offline mode): %s\n", __func__, path.c_str());
-        return -1;
+    if (cache_only) {
+        // Cache-only mode: use cached file if exists, otherwise download
+        // but never re-download if etag changed
+        if (std::filesystem::exists(path)) {
+            LOG_INF("%s: using cached file (cache-only mode): %s\n", __func__, path.c_str());
+            return 304; // Not Modified - fake cached response
+        }
+        // File not cached, proceed with download
     }
 
-    LOG_INF("%s: using cached file (offline mode): %s\n", __func__, path.c_str());
-    return 304; // Not Modified - fake cached response
+    return common_download_file_single_online(url, path, bearer_token, headers);
 }
 
 // download multiple files from remote URLs to local paths
@@ -459,6 +470,7 @@ int common_download_file_single(const std::string & url,
 static bool common_download_file_multiple(const std::vector<std::pair<std::string, std::string>> & urls,
                                           const std::string & bearer_token,
                                           bool offline,
+                                          bool cache_only,
                                           const common_header_list & headers) {
     // Prepare download in parallel
     std::vector<std::future<bool>> futures_download;
@@ -468,8 +480,8 @@ static bool common_download_file_multiple(const std::vector<std::pair<std::strin
         futures_download.push_back(
             std::async(
                 std::launch::async,
-                [&bearer_token, offline, &headers](const std::pair<std::string, std::string> & it) -> bool {
-                    const int http_status = common_download_file_single(it.first, it.second, bearer_token, offline, headers);
+                [&bearer_token, offline, cache_only, &headers](const std::pair<std::string, std::string> & it) -> bool {
+                    const int http_status = common_download_file_single(it.first, it.second, bearer_token, offline, cache_only, headers);
                     return is_http_status_ok(http_status);
                 },
                 item
@@ -490,6 +502,7 @@ static bool common_download_file_multiple(const std::vector<std::pair<std::strin
 bool common_download_model(const common_params_model & model,
                            const std::string & bearer_token,
                            bool offline,
+                           bool cache_only,
                            const common_header_list & headers) {
     // Basic validation of the model.url
     if (model.url.empty()) {
@@ -497,7 +510,7 @@ bool common_download_model(const common_params_model & model,
         return false;
     }
 
-    const int http_status = common_download_file_single(model.url, model.path, bearer_token, offline, headers);
+    const int http_status = common_download_file_single(model.url, model.path, bearer_token, offline, cache_only, headers);
     if (!is_http_status_ok(http_status)) {
         return false;
     }
@@ -557,7 +570,7 @@ bool common_download_model(const common_params_model & model,
         }
 
         // Download in parallel
-        common_download_file_multiple(urls, bearer_token, offline, headers);
+        common_download_file_multiple(urls, bearer_token, offline, cache_only, headers);
     }
 
     return true;
@@ -751,7 +764,7 @@ std::string common_docker_resolve_model(const std::string & docker) {
         std::string local_path = fs_get_cache_file(model_filename);
 
         const std::string blob_url = url_prefix + "/blobs/" + gguf_digest;
-        const int http_status = common_download_file_single(blob_url, local_path, token, false, {});
+        const int http_status = common_download_file_single(blob_url, local_path, token, false, false, {});
         if (!is_http_status_ok(http_status)) {
             throw std::runtime_error("Failed to download Docker Model");
         }

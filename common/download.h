@@ -65,6 +65,7 @@ bool common_download_model(
     const common_params_model & model,
     const std::string & bearer_token,
     bool offline,
+    bool cache_only,
     const common_header_list & headers = {}
 );
 
@@ -77,6 +78,7 @@ int common_download_file_single(const std::string & url,
                                 const std::string & path,
                                 const std::string & bearer_token,
                                 bool offline,
+                                bool cache_only,
                                 const common_header_list & headers = {});
 
 // resolve and download model from Docker registry
