@@ -117,31 +117,56 @@ class ExpertPrefetcher {
     int  completed_count() const;
     bool is_active() const { return initialized_; }
 
+    // Query how many pool slots are available (total, not just free).
+    int pool_capacity() const { return pool_capacity_; }
+
+    // Pre-fill the pool with popular experts at model init time.
+    // Called from moe_hybrid_init_once() after Phase 2.
+    void preload_experts(int layer_idx, const std::vector<int> & expert_ids);
+
   private:
     std::unique_ptr<sycl::queue> dma_queue_;    // OOQ for async H2D DMA (unique_ptr to avoid static init + enable leak-on-exit)
     int                          prefetch_depth_ = 2;  // Default: 2 layers ahead
     bool                         initialized_   = false;
 
-    // Max concurrent DMA operations. MoE models activate up to 8 experts
-    // per layer, so 8 in-flight requests covers a full layer's worth of misses.
-    static constexpr int max_inflight_ = 8;
+    // Dynamic pool capacity: computed from available VRAM at first use.
+    // Uses ~50% of remaining VRAM, clamped to [8, 256] slots.
+    int pool_capacity_ = 0;
+
+    // Max concurrent in-flight DMA operations. Limits PCIe bandwidth
+    // saturation while allowing the rest of the pool for LRU caching.
+    static constexpr int kMaxConcurrentDMA = 32;
 
     // In-flight prefetch tracking. Key = expert_key.
     std::unordered_map<expert_key, prefetch_request, expert_key_hash> inflight_;
 
-    // VRAM prefetch pool: ring buffer of pre-allocated device memory slots.
-    // Each slot holds one expert's worth of weight data.
-    // Allocated lazily on first hint() with weight_bytes > 0.
+    // VRAM prefetch pool with LRU tracking.
+    // Each slot holds one expert's weight data and persists across tokens.
+    // Only evicted (LRU) when the pool is full and a new expert needs a slot.
     struct vram_slot {
-        void * ptr  = nullptr;
-        bool   free = true;
+        void *     ptr             = nullptr;
+        bool       free            = true;
+        expert_key cached_key      = { -1, -1 };  // Which expert occupies this slot
+        int64_t    last_used_token = -1;           // Token number at last access (for LRU)
     };
     std::vector<vram_slot> vram_pool_;
     size_t                 vram_slot_bytes_ = 0;  // Size of each pool slot
 
-    // Acquire a free VRAM slot. Returns slot index or -1 if none available.
-    int acquire_vram_slot();
-    // Release a VRAM slot back to the pool.
+    // LRU cache: maps cached expert_key -> pool slot index.
+    // Entries persist across tokens until evicted for a new expert.
+    std::unordered_map<expert_key, int, expert_key_hash> cached_slots_;
+
+    // Monotonic token counter, incremented each time hint() is called for a new layer.
+    int64_t current_token_ = 0;
+
+    // Lazily allocate the VRAM pool from available budget. Returns false if
+    // allocation failed (disables prefetching). Called with mutex_ held.
+    bool ensure_pool_allocated(size_t expert_weight_bytes);
+
+    // Acquire a free VRAM slot. If all slots are occupied, evict the LRU entry.
+    // Returns slot index or -1 if pool is not allocated.
+    int acquire_vram_slot_lru(int layer_idx, int expert_idx);
+    // Release a VRAM slot back to the pool (internal, clears cached state).
     void release_vram_slot(int slot);
 
     mutable std::mutex mutex_;
@@ -149,12 +174,15 @@ class ExpertPrefetcher {
     // Stats
     int completed_count_ = 0;
     int prefetch_hits_   = 0;  // Experts found already in VRAM (no DMA needed)
+    int lru_evictions_   = 0;  // Number of LRU evictions
 
-    // Garbage-collect completed requests to free tracking slots.
+    // Garbage-collect completed in-flight requests -> move to cached state.
+    // Unlike the old gc_completed(), this does NOT release the slot or clear
+    // the placement table. Instead, the slot transitions to "cached" state.
     void gc_completed();
 
     // Check if we have room for more in-flight requests.
-    // Counts only active (non-completed) entries.
+    // Counts only active (non-completed) entries in inflight_.
     bool has_capacity() const;
 
     // Internal locked implementation of hint(). Caller must hold mutex_.

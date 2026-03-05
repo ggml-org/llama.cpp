@@ -45,6 +45,7 @@
 #    include <unistd.h>
 #endif
 #include <sycl/sycl.hpp>
+#include <map>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -896,6 +897,29 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
     // Initialize ExpertPrefetcher
     auto & prefetcher = g_expert_prefetchers[device];
     prefetcher.init(q);
+
+    // --- Phase 3: GPU0 expert pre-loading via prefetch pool ---
+    // Pre-fill the prefetch VRAM pool with the first N experts per MoE layer.
+    // Expert 0 tends to be most frequently activated, so preloading low-index
+    // experts gives good coverage even without runtime frequency data.
+    if (device == 0 && n_experts_per_layer > 0) {
+        // Collect unique layer IDs from expert_list.
+        std::map<int, std::vector<int>> layer_experts;  // sorted by layer ID for deterministic order
+        for (const auto & info : expert_list) {
+            layer_experts[info.layer_id].push_back(info.expert_idx);
+        }
+
+        // Sort expert IDs within each layer and preload the first ones.
+        // Layers are iterated in ascending order so preload slots are
+        // distributed starting from early layers (which run first).
+        for (auto & [lid, eids] : layer_experts) {
+            std::sort(eids.begin(), eids.end());
+            eids.erase(std::unique(eids.begin(), eids.end()), eids.end());
+            prefetcher.preload_experts(lid, eids);
+        }
+        GGML_LOG_INFO("[MOE-HYBRID] Phase 3: GPU0 prefetch pool pre-loading complete "
+                      "(pool_capacity=%d)\n", prefetcher.pool_capacity());
+    }
 
     // Initialize ExpertPredictor using top-K detected from graph ids tensor.
     // During warmup, ids->ne[0] may equal n_experts_per_layer (all experts
@@ -19579,17 +19603,27 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
             continue;
         }
 
-        // Skip GPU0 cache staging for experts placed on secondary GPUs by Phase 2.
-        // These experts are already cached in secondary GPU VRAM — staging them into
-        // GPU0's cache wastes VRAM budget and the placement table entry is preserved
-        // by the set_device_ptr guard below.
+        // Skip cache staging for experts already in VRAM via placement table.
+        // This covers:
+        //   - Secondary GPU experts (device_id >= 1) from Phase 2
+        //   - GPU0 prefetch pool experts (device_id == 0) from ExpertPrefetcher
+        // Using the existing device_ptr avoids redundant staging through
+        // ensure_cached_layout and saves VRAM budget.
         {
             auto &    ptable       = ggml_sycl::get_expert_placement_table();
             const int pt_layer_id  = moe_cache_layer_id(src0->name);
             auto existing = ptable.get(pt_layer_id, static_cast<int>(e));
-            if (existing.device_id >= 1 && existing.device_ptr != nullptr) {
-                GGML_SYCL_DEBUG("[MOE] Expert %ld on secondary GPU%d, skipping GPU0 staging\n",
-                                (long) e, existing.device_id);
+            if (existing.device_ptr != nullptr) {
+                if (existing.device_id >= 1) {
+                    GGML_SYCL_DEBUG("[MOE] Expert %ld on secondary GPU%d, skipping GPU0 staging\n",
+                                    (long) e, existing.device_id);
+                    continue;
+                }
+                // Expert cached in GPU0 prefetch pool — use VRAM pointer directly.
+                extra->moe_expert_ptrs_host[device][static_cast<size_t>(e)] = existing.device_ptr;
+                stats_vram_ready++;
+                GGML_SYCL_DEBUG("[MOE] Expert %ld cached in prefetch pool, device_ptr=%p\n",
+                                (long) e, existing.device_ptr);
                 continue;
             }
         }
