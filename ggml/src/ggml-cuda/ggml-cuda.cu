@@ -3417,11 +3417,88 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
     return false;
 }
 
+// Check if UMA weight prefetching is enabled.
+// On UMA/integrated GPU systems (e.g. AMD Strix Halo), issuing hipMemPrefetchAsync
+// for upcoming weight tensors hides memory-to-TLB/cache latency behind compute.
+static bool ggml_cuda_uma_prefetch_enabled() {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char * env = getenv("GGML_CUDA_UMA_PREFETCH");
+        if (env) {
+            enabled = atoi(env);
+        } else {
+            // Auto-enable on UMA devices
+            enabled = 2; // 2 = auto-detect per device
+        }
+    }
+    return enabled != 0;
+}
+
+// Number of nodes to look ahead for prefetching weight tensors.
+// A small lookahead (2-4) balances hiding latency vs. cache pollution.
+static int ggml_cuda_uma_prefetch_lookahead() {
+    static int lookahead = -1;
+    if (lookahead < 0) {
+        const char * env = getenv("GGML_CUDA_UMA_PREFETCH_LOOKAHEAD");
+        lookahead = env ? atoi(env) : 3;
+        if (lookahead < 1) { lookahead = 1; }
+        if (lookahead > 8) { lookahead = 8; }
+    }
+    return lookahead;
+}
+
 static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, const bool use_cuda_graph, const bool cuda_graph_update_required, const void * graph_key) {
     bool graph_evaluated_or_captured = false;
 
     // flag used to determine whether it is an integrated_gpu
     const bool integrated            = ggml_cuda_info().devices[cuda_ctx->device].integrated;
+
+    // UMA weight prefetching: on integrated GPUs with unified memory, prefetch weight
+    // tensors of upcoming MUL_MAT operations into the GPU TLB/cache while current
+    // operations are executing. This hides memory latency behind compute.
+    // Note: we use ggml_cuda_is_device_uma() instead of the info.integrated flag,
+    // which is temporarily disabled (#15034). ggml_cuda_is_device_uma() queries
+    // prop.integrated directly and also respects GGML_CUDA_ENABLE_UNIFIED_MEMORY.
+    const bool uma_prefetch = ggml_cuda_is_device_uma(cuda_ctx->device) && ggml_cuda_uma_prefetch_enabled();
+    const int  prefetch_lookahead = uma_prefetch ? ggml_cuda_uma_prefetch_lookahead() : 0;
+    const int  device = cuda_ctx->device;
+
+    if (uma_prefetch) {
+        static bool logged = false;
+        if (!logged) {
+            GGML_LOG_INFO("%s: UMA weight prefetching enabled (lookahead=%d)\n", __func__, prefetch_lookahead);
+            logged = true;
+        }
+    }
+
+    // Helper: issue prefetch for weight tensors of a graph node.
+    // Only prefetches src[0] (weights) for MUL_MAT/MUL_MAT_ID ops, as these are
+    // the largest tensors and dominate memory bandwidth during token generation.
+    const auto prefetch_node_weights = [&](int node_idx) {
+        if (node_idx >= cgraph->n_nodes) {
+            return;
+        }
+        const ggml_tensor * future_node = cgraph->nodes[node_idx];
+        if (future_node->op != GGML_OP_MUL_MAT && future_node->op != GGML_OP_MUL_MAT_ID) {
+            return;
+        }
+        const ggml_tensor * weights = future_node->src[0];
+        if (weights == nullptr || weights->data == nullptr) {
+            return;
+        }
+        // Only prefetch if the weight tensor is in a CUDA buffer (not split across devices)
+        if (weights->buffer == nullptr || ggml_backend_buft_is_cuda_split(weights->buffer->buft)) {
+            return;
+        }
+        const size_t nbytes = ggml_nbytes(weights);
+        // Skip very small tensors (not worth the API call overhead)
+        if (nbytes < 4096) {
+            return;
+        }
+#if !defined(GGML_USE_MUSA)
+        cudaMemPrefetchAsync(weights->data, nbytes, device, cuda_ctx->stream());
+#endif
+    };
 
     ggml_cuda_stream_context & stream_ctx = cuda_ctx->stream_context();
     bool                         is_concurrent_event_active = false;
@@ -3899,6 +3976,14 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
 #else
                 GGML_UNUSED(integrated);
 #endif  // NDEBUG
+
+                // Prefetch weight tensors for upcoming MUL_MAT operations on UMA systems.
+                // This overlaps memory-to-cache migration with the current node's compute.
+                if (uma_prefetch) {
+                    for (int la = 1; la <= prefetch_lookahead; ++la) {
+                        prefetch_node_weights(i + la);
+                    }
+                }
 
                 bool ok = ggml_cuda_compute_forward(*cuda_ctx, node);
                 if (!ok) {
