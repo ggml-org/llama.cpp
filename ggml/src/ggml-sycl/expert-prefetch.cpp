@@ -225,7 +225,7 @@ std::vector<int> ExpertPrefetcher::hint_batch_adaptive(
     current_token_++;
 
     gc_completed();
-    int max_dma = (pool_capacity_ > 0) ? std::min(pool_capacity_, kMaxConcurrentDMA) : 8;
+    int max_dma = (pool_capacity_ > 0) ? std::min(pool_capacity_, max_concurrent_dma_) : 8;
     int budget = max_dma - static_cast<int>(inflight_.size());
 
     int scheduled = 0;
@@ -436,7 +436,7 @@ bool ExpertPrefetcher::has_capacity() const {
         }
     }
     // Limit concurrent DMA to pool_capacity_ (or 8 if pool not yet allocated).
-    int max_dma = (pool_capacity_ > 0) ? std::min(pool_capacity_, kMaxConcurrentDMA) : 8;
+    int max_dma = (pool_capacity_ > 0) ? std::min(pool_capacity_, max_concurrent_dma_) : 8;
     return active < max_dma;
 }
 

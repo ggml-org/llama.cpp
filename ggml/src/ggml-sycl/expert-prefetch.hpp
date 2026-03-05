@@ -118,6 +118,8 @@ class ExpertPrefetcher {
     bool is_active() const { return initialized_; }
 
     // Query how many pool slots are available (total, not just free).
+    // Safe to call without lock only after preload_experts() or hint() has returned
+    // (happens-before through mutex_ release).
     int pool_capacity() const { return pool_capacity_; }
 
     // Pre-fill the pool with popular experts at model init time.
@@ -135,7 +137,7 @@ class ExpertPrefetcher {
 
     // Max concurrent in-flight DMA operations. Limits PCIe bandwidth
     // saturation while allowing the rest of the pool for LRU caching.
-    static constexpr int kMaxConcurrentDMA = 32;
+    static constexpr int max_concurrent_dma_ = 32;
 
     // In-flight prefetch tracking. Key = expert_key.
     std::unordered_map<expert_key, prefetch_request, expert_key_hash> inflight_;
@@ -156,7 +158,9 @@ class ExpertPrefetcher {
     // Entries persist across tokens until evicted for a new expert.
     std::unordered_map<expert_key, int, expert_key_hash> cached_slots_;
 
-    // Monotonic token counter, incremented each time hint() is called for a new layer.
+    // Monotonic counter, incremented per hint/hint_batch/hint_batch_adaptive call.
+    // NOT a true token counter — multiple calls per inference token are expected
+    // (one per predicted layer across lookahead depths). Used only for LRU ordering.
     int64_t current_token_ = 0;
 
     // Lazily allocate the VRAM pool from available budget. Returns false if
