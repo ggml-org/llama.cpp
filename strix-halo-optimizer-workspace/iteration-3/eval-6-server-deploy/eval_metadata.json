@@ -1,0 +1,11 @@
+{
+  "eval_id": 6,
+  "eval_name": "llama-server-production-deploy",
+  "prompt": "I need to deploy llama-server on my Strix Halo workstation as a production service for our small team (4-5 concurrent users). We're using a Llama 3 8B Q4_K_M model. What's the optimal configuration for stability and throughput?",
+  "assertions": [
+    {"name": "parallel_sequences", "description": "Configures -np for multiple concurrent users (4 or 5)", "type": "contains_concept"},
+    {"name": "kv_cache_quantization", "description": "Recommends KV cache quantization (-ctk q8_0 or similar) since parallel sequences multiply memory usage", "type": "contains_concept"},
+    {"name": "server_runtime_flags", "description": "Includes essential flags: -ngl 99, --no-mmap, ROCBLAS_USE_HIPBLASLT=1", "type": "contains_concept"},
+    {"name": "production_stability", "description": "Mentions monitoring, systemd service, or health endpoint for production stability", "type": "contains_concept"}
+  ]
+}

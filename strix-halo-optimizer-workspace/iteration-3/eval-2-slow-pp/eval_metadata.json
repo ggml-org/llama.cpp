@@ -1,0 +1,10 @@
+{
+  "eval_id": 2,
+  "eval_name": "slow-prompt-processing",
+  "prompt": "I'm getting terrible prompt processing speed on my Strix Halo laptop - only about 350 tokens/sec on a 7B model. Token generation is fine at ~48 t/s. What's wrong?",
+  "assertions": [
+    {"name": "identifies_rocblas_issue", "description": "Identifies that the problem is poorly optimized rocBLAS kernels for gfx1150/gfx1151", "type": "contains_concept"},
+    {"name": "hipblaslt_solution", "description": "Recommends setting ROCBLAS_USE_HIPBLASLT=1", "type": "contains_concept"},
+    {"name": "expected_improvement", "description": "Mentions the expected ~2.5x improvement (from ~350 to ~880 t/s)", "type": "contains_concept"}
+  ]
+}

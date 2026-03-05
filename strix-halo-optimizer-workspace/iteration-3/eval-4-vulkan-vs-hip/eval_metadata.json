@@ -1,0 +1,11 @@
+{
+  "eval_id": 4,
+  "eval_name": "vulkan-vs-hip-backend-choice",
+  "prompt": "I have a Strix Halo system but I don't want to install ROCm - it's too heavy. Can I just use Vulkan for llama.cpp? I already have mesa drivers. How does Vulkan compare to HIP on this hardware?",
+  "assertions": [
+    {"name": "vulkan_build_command", "description": "Provides Vulkan build command with GGML_VULKAN=ON", "type": "contains_concept"},
+    {"name": "hip_recommended_over_vulkan", "description": "Recommends HIP/ROCm over Vulkan for best performance on Strix Halo", "type": "contains_concept"},
+    {"name": "vulkan_known_issues", "description": "Mentions Vulkan model loading issues or known limitations on Strix Halo", "type": "contains_concept"},
+    {"name": "vulkan_as_valid_fallback", "description": "Acknowledges Vulkan as a reasonable alternative when ROCm is impractical", "type": "contains_concept"}
+  ]
+}

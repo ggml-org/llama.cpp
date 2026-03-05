@@ -1,0 +1,11 @@
+{
+  "eval_id": 5,
+  "eval_name": "cpu-only-zendnn-setup",
+  "prompt": "I want to run a small 7B BF16 model on my Ryzen AI Max 395 using only the CPU — no GPU at all. I heard Zen 5 has good AVX-512 and there's something called ZenDNN. How do I set this up for best CPU-only performance?",
+  "assertions": [
+    {"name": "zendnn_build_flags", "description": "Provides build command with GGML_ZENDNN=ON", "type": "contains_concept"},
+    {"name": "zendnn_matmul_algo", "description": "Sets ZENDNNL_MATMUL_ALGO=1 environment variable", "type": "contains_concept"},
+    {"name": "bf16_recommendation", "description": "Recommends BF16 format as ideal for ZenDNN on Zen 5", "type": "contains_concept"},
+    {"name": "thread_count", "description": "Recommends using physical core count (16 cores) for thread count", "type": "contains_concept"}
+  ]
+}

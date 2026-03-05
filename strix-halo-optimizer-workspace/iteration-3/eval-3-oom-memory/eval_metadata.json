@@ -1,0 +1,10 @@
+{
+  "eval_id": 3,
+  "eval_name": "oom-memory-issue",
+  "prompt": "My llama.cpp keeps running out of memory when loading a 65B model on my Ryzen AI Max 395 even though I have 128GB RAM. rocm-smi only shows 4GB VRAM. What's going on?",
+  "assertions": [
+    {"name": "explains_unified_memory", "description": "Explains that Strix Halo uses unified memory and the 4GB is just the dedicated VRAM portion", "type": "contains_concept"},
+    {"name": "ttm_fix", "description": "Provides TTM pages_limit fix with the modprobe.d configuration", "type": "contains_concept"},
+    {"name": "reboot_required", "description": "Mentions that a reboot or initramfs update is needed after TTM change", "type": "contains_concept"}
+  ]
+}
