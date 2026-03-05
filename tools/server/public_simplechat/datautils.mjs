@@ -63,7 +63,7 @@ export function trim_repeat_garbage_at_end(sIn, maxSubL=10, maxMatchLenThreshold
 
 
 /**
- * Simple minded logic to help remove repeating garbage at end of the string, till it cant.
+ * Simple minded logic to help remove repeating garbage at end of the string, till it can't.
  * If its not able to trim, then it will try to skip a char at end and then trim, a few times.
  * This ensures that even if there are multiple runs of garbage with different patterns, the
  * logic still tries to munch through them.

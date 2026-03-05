@@ -375,7 +375,7 @@ static void ggml_compute_forward_dup_bytes(
         const size_t rs = ne00 * type_size;
 
         if (nb00 == type_size) {
-            // src0 is contigous on first dimension, copy by rows
+            // src0 is contiguous on first dimension, copy by rows
             for (int64_t i03 = 0; i03 < ne03; i03++) {
                 for (int64_t i02 = 0; i02 < ne02; i02++) {
                     id += rs * ir0;
@@ -1795,7 +1795,7 @@ void ggml_compute_forward_repeat(
             {
                 ggml_compute_forward_repeat_f32(params, dst);
             } break;
-        // TODO: templateify the implemenation and support for I64
+        // TODO: templateify the implementation and support for I64
         //       ref https://github.com/ggml-org/llama.cpp/pull/14274#discussion_r2169492225
         //case GGML_TYPE_I64:
         //    {

@@ -116,7 +116,8 @@ class ModelBase:
                  split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False,
                  small_first_shard: bool = False, hparams: dict[str, Any] | None = None, remote_hf_model_id: str | None = None,
                  disable_mistral_community_chat_template: bool = False,
-                 sentence_transformers_dense_modules: bool = False):
+                 sentence_transformers_dense_modules: bool = False,
+                 fuse_gate_up_exps: bool = False):
         if type(self) is ModelBase or \
                 type(self) is TextModel or \
                 type(self) is MmprojModel:
@@ -135,6 +136,9 @@ class ModelBase:
         self.dry_run = dry_run
         self.remote_hf_model_id = remote_hf_model_id
         self.sentence_transformers_dense_modules = sentence_transformers_dense_modules
+        self.fuse_gate_up_exps = fuse_gate_up_exps
+        self._gate_exp_buffer: dict[int, Tensor] = {}
+        self._up_exp_buffer: dict[int, Tensor] = {}
         self.hparams = ModelBase.load_hparams(self.dir_model, self.is_mistral_format) if hparams is None else hparams
         self.model_tensors = self.index_tensors(remote_hf_model_id=remote_hf_model_id)
         self.metadata_override = metadata_override
@@ -512,8 +516,31 @@ class ModelBase:
         raise NotImplementedError("set_gguf_parameters() must be implemented in subclasses")
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        del bid # unused
-        return [(self.map_tensor_name(name), data_torch)]
+        new_name = self.map_tensor_name(name)
+
+        # Handle gate/up expert tensor fusion if enabled
+        if self.fuse_gate_up_exps and bid is not None:
+            if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.FFN_GATE_EXP, bid):
+                self._gate_exp_buffer[bid] = data_torch
+            elif self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.FFN_UP_EXP, bid):
+                self._up_exp_buffer[bid] = data_torch
+
+            # Check if both gate and up are buffered for this layer
+            if bid in self._gate_exp_buffer and bid in self._up_exp_buffer:
+                gate_data = self._gate_exp_buffer.pop(bid)
+                up_data = self._up_exp_buffer.pop(bid)
+                # gate/up shape: (n_expert, n_ff, n_embd), concatenate to (n_expert, n_ff*2, n_embd)
+                fused_data = torch.cat([gate_data, up_data], dim=1)
+                fused_name = self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_UP_EXP, bid)
+                logger.info(f"Fused gate_exps and up_exps for layer {bid}")
+                return [(fused_name, fused_data)]
+
+            # If we buffered a gate/up tensor, wait for the other
+            if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.FFN_GATE_EXP, bid) or \
+               self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.FFN_UP_EXP, bid):
+                return []
+
+        return [(new_name, data_torch)]
 
     def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
         del name, new_name, bid, n_dims  # unused
@@ -1148,6 +1175,9 @@ class TextModel(ModelBase):
         if chkhsh == "27949a2493fc4a9f53f5b9b029c82689cfbe5d3a1929bb25e043089e28466de6":
             # ref: https://huggingface.co/jinaai/jina-embeddings-v2-base-de
             res = "jina-v2-de"
+        if chkhsh == "a023e9fdc5a11f034d3ef515b92350e56fb2af1f66c6b6811a4444ea9bf8763d":
+            # ref: https://huggingface.co/jinaai/jina-embeddings-v5-text-nano
+            res = "jina-v5-nano"
         if chkhsh == "c136ed14d01c2745d4f60a9596ae66800e2b61fa45643e72436041855ad4089d":
             # ref: https://huggingface.co/abacusai/Smaug-Llama-3-70B-Instruct
             res = "smaug-bpe"
@@ -1274,6 +1304,9 @@ class TextModel(ModelBase):
         if chkhsh == "b4b8ca1f9769494fbd956ebc4c249de6131fb277a4a3345a7a92c7dd7a55808d":
             # ref: https://huggingface.co/jdopensource/JoyAI-LLM-Flash
             res = "joyai-llm"
+        if chkhsh == "e4d54df1ebc1f2b91acd986c5b51aa50837d5faf7c7398e73c1f9e9ee5d19869":
+            # ref: https://huggingface.co/kakaocorp/kanana-2-30b-a3b-instruct-2601
+            res = "kanana2"
 
         if res is None:
             logger.warning("\n")
@@ -3998,7 +4031,7 @@ class Qwen2VLVisionModel(MmprojModel):
                 # split Conv3D into Conv2Ds
                 c1, c2, kt, kh, kw = data_torch.shape
                 del c1, c2, kh, kw  # unused
-                assert kt == 2, "Current implmentation only support temporal_patch_size of 2"
+                assert kt == 2, "Current implementation only support temporal_patch_size of 2"
                 yield (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight"  , data_torch[:, :, 0, ...])
                 yield (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight.1", data_torch[:, :, 1, ...])
             else:
@@ -4809,12 +4842,12 @@ class _LinearAttentionVReorderBase(Qwen3NextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("Qwen3_5ForConditionalGeneration")
+@ModelBase.register("Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM")
 class Qwen3_5TextModel(_LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35
 
 
-@ModelBase.register("Qwen3_5MoeForConditionalGeneration")
+@ModelBase.register("Qwen3_5MoeForConditionalGeneration", "Qwen3_5MoeForCausalLM")
 class Qwen3_5MoeTextModel(_LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35MOE
 
@@ -5371,7 +5404,7 @@ class KimiLinearModel(TextModel):
         # Get ssm_d_conv from linear_attn_config.short_conv_kernel_size or ssm_d_conv
         linear_attn_config = self.hparams["linear_attn_config"]
         # n_head == 0 for KDA layers, n_head > 0 for MLA layers
-        # full_attention_layers list will be used to distingush layer type
+        # full_attention_layers list will be used to distinguish layer type
         _num_kv_heads = list()
         _full_attn_layers = linear_attn_config["full_attn_layers"]
         for il in range(self.hparams["num_hidden_layers"]):
@@ -6122,6 +6155,32 @@ class NeoBert(BertModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("EuroBertModel", "JinaEmbeddingsV5Model")
+class EuroBertModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.EUROBERT
+
+    def set_vocab(self):
+        self.gguf_writer.add_add_bos_token(False)
+        self._set_vocab_gpt2()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        # EuroBert is bidirectional (encoder)
+        self.gguf_writer.add_causal_attention(False)
+
+        self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
+
+        self._try_set_pooling_type()
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Strip "model." prefix from tensor names
+        if name.startswith("model."):
+            name = name[6:]
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
 @ModelBase.register("XLMRobertaModel", "XLMRobertaForSequenceClassification")
 class XLMRobertaModel(BertModel):
     model_arch = gguf.MODEL_ARCH.BERT
@@ -6446,7 +6505,7 @@ class Gemma3VisionModel(MmprojModel):
         super().set_gguf_parameters()
         hparams = self.hparams
         self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.GEMMA3)
-        # default values below are taken from HF tranformers code
+        # default values below are taken from HF transformers code
         self.gguf_writer.add_vision_attention_layernorm_eps(hparams.get("layer_norm_eps", 1e-6))
         self.gguf_writer.add_vision_use_gelu(True)
         # calculate proj_scale_factor (used by tinygemma3 test model)
@@ -7038,7 +7097,7 @@ class Rwkv7Model(TextModel):
 
             if bid == 0 and "time_mix_a" in new_name:
                 # dummy v0/v1/v2 on first layer
-                # easist way to make llama happy
+                # easiest way to make llama happy
                 yield (new_name.replace("time_mix_a", "time_mix_v"), data_torch)
 
             yield (new_name, data_torch)
@@ -9537,7 +9596,7 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
         # NOTE: Explicitly include hparam prefix prefix for d_model to
         #   disambiguate with top-level head_dim
         # NOTE 2: If needed for future models, this can be isolated in a method
-        #   to separate the prefix setting and teh keys used
+        #   to separate the prefix setting and the keys used
         self.d_model = self.find_hparam([f"{self.hparam_prefixes[0]}_head_dim", "hidden_size", "d_model"])
         self.n_group = self.find_hparam(["n_groups", "num_groups"])
         self.d_inner = self.find_hparam(["expand", "num_heads"]) * self.d_model
@@ -9684,7 +9743,7 @@ class NemotronHModel(GraniteHybridModel):
         self.gguf_writer.add_value_length(self.head_dim)
 
         # Set feed_forward_length
-        # NOTE: This will trigger an override warning. This is preferrable to
+        # NOTE: This will trigger an override warning. This is preferable to
         #   duplicating all the parent logic
         if not self.is_moe:
             n_ff = self.find_hparam(["intermediate_size", "n_inner", "hidden_dim"])
@@ -11910,6 +11969,11 @@ def parse_args() -> argparse.Namespace:
               "Default these modules are not included.")
     )
 
+    parser.add_argument(
+        "--fuse-gate-up-exps", action="store_true",
+        help="Fuse gate_exps and up_exps tensors into a single gate_up_exps tensor for MoE models.",
+    )
+
     args = parser.parse_args()
     if not args.print_supported_models and args.model is None:
         parser.error("the following arguments are required: model")
@@ -12047,7 +12111,8 @@ def main() -> None:
                                      split_max_size=split_str_to_n_bytes(args.split_max_size), dry_run=args.dry_run,
                                      small_first_shard=args.no_tensor_first_split,
                                      remote_hf_model_id=hf_repo_id, disable_mistral_community_chat_template=disable_mistral_community_chat_template,
-                                     sentence_transformers_dense_modules=args.sentence_transformers_dense_modules
+                                     sentence_transformers_dense_modules=args.sentence_transformers_dense_modules,
+                                     fuse_gate_up_exps=args.fuse_gate_up_exps
                                      )
 
         if args.vocab_only:

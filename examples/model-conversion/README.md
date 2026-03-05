@@ -69,7 +69,7 @@ Command line arguments take precedence over environment variables when both are 
 
 In cases where the transformer implementation for the model has not been released
 yet it is possible to set the environment variable `UNRELEASED_MODEL_NAME` which
-will then cause the transformer implementation to be loaded explicitely and not
+will then cause the transformer implementation to be loaded explicitly and not
 use AutoModelForCausalLM:
 ```
 export UNRELEASED_MODEL_NAME=SomeNewModel
@@ -120,7 +120,7 @@ The converted model can be inspected using the following command:
 (venv) $ make causal-run-converted-model
 ```
 
-### Model logits verfication
+### Model logits verification
 The following target will run the original model and the converted model and
 compare the logits:
 ```console
@@ -235,7 +235,7 @@ new model the model can be converted to GGUF format using the following command:
 (venv) $ make embedding-run-converted-model
 ```
 
-### Model logits verfication
+### Model logits verification
 The following target will run the original model and the converted model (which
 was done manually in the previous steps) and compare the logits:
 ```console
@@ -335,7 +335,7 @@ $ make perplexity-run-full QUANTIZED_MODEL=~/path/to/quantized/model-Qxx.gguf LO
 
 ## HuggingFace utilities
 The following targets are useful for creating collections and model repositories
-on Hugging Face in the the ggml-org. These can be used when preparing a relase
+on Hugging Face in the the ggml-org. These can be used when preparing a release
 to script the process for new model releases.
 
 For the following targets a `HF_TOKEN` environment variable is required.
@@ -347,7 +347,7 @@ For the following targets a `HF_TOKEN` environment variable is required.
 > $ unset HF_TOKEN
 
 ### Create a new Hugging Face Model (model repository)
-This will create a new model repsository on Hugging Face with the specified
+This will create a new model repository on Hugging Face with the specified
 model name.
 ```console
 (venv) $ make hf-create-model MODEL_NAME='TestModel' NAMESPACE="danbev" ORIGINAL_BASE_MODEL="some-base-model"

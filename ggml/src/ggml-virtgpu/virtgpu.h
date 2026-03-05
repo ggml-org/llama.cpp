@@ -1,5 +1,6 @@
 #pragma once
 
+// clang-format off
 #include "virtgpu-utils.h"
 #include "virtgpu-shm.h"
 #include "virtgpu-apir.h"
@@ -23,20 +24,21 @@
 #include "apir_hw.h"
 #include <drm/virtgpu_drm.h>
 #include "venus_hw.h"
+// clang-format on
 
 #ifndef VIRTGPU_DRM_CAPSET_APIR
 // Will be defined include/drm/virtgpu_drm.h when
 // https://gitlab.freedesktop.org/virgl/virglrenderer/-/merge_requests/1590/diffs
 // is merged
-#define VIRTGPU_DRM_CAPSET_APIR 10
+#    define VIRTGPU_DRM_CAPSET_APIR 10
 #endif
 
 // Mesa/Virlgrenderer Venus internal. Only necessary during the
 // Venus->APIR transition in Virglrenderer
 #define VENUS_COMMAND_TYPE_LENGTH 331
 
-#ifndef VIRTGPU_DRM_CAPSET_VENUS // only available with Linux >= v6.16
-#define VIRTGPU_DRM_CAPSET_VENUS 4
+#ifndef VIRTGPU_DRM_CAPSET_VENUS  // only available with Linux >= v6.16
+#    define VIRTGPU_DRM_CAPSET_VENUS 4
 #endif
 
 typedef uint32_t virgl_renderer_capset;

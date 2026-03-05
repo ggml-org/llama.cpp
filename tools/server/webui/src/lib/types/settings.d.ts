@@ -1,4 +1,4 @@
-import type { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
+import type { SETTING_CONFIG_DEFAULT } from '$lib/constants';
 import type { ChatMessagePromptProgress, ChatMessageTimings } from './chat';
 import type { DatabaseMessageExtra } from './database';
 import type { ParameterSource, SyncableParameterType, SettingsFieldType } from '$lib/enums';

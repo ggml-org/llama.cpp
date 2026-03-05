@@ -22,8 +22,9 @@
 		IMAGE_NOT_ERROR_BOUND_SELECTOR,
 		DATA_ERROR_BOUND_ATTR,
 		DATA_ERROR_HANDLED_ATTR,
-		BOOL_TRUE_STRING
-	} from '$lib/constants/markdown';
+		BOOL_TRUE_STRING,
+		SETTINGS_KEYS
+	} from '$lib/constants';
 	import { UrlPrefix } from '$lib/enums';
 	import { FileTypeText } from '$lib/enums/files';
 	import {
@@ -38,6 +39,7 @@
 	import { ActionIconsCodeBlock, DialogCodePreview } from '$lib/components/app';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import type { DatabaseMessageExtra } from '$lib/types/database';
+	import { config } from '$lib/stores/settings.svelte';
 
 	interface Props {
 		attachments?: DatabaseMessageExtra[];
@@ -593,7 +595,12 @@
 	});
 </script>
 
-<div bind:this={containerRef} class={className}>
+<div
+	bind:this={containerRef}
+	class="{className}{config()[SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS]
+		? ' full-height-code-blocks'
+		: ''}"
+>
 	{#each renderedBlocks as block (block.id)}
 		<div class="markdown-block" data-block-id={block.id}>
 			<!-- eslint-disable-next-line no-at-html-tags -->
@@ -912,6 +919,16 @@
 		overflow-x: auto;
 		padding: 3rem 1rem 1rem;
 		line-height: 1.3;
+	}
+
+	.full-height-code-blocks :global(.code-block-wrapper) {
+		max-height: none;
+	}
+
+	.full-height-code-blocks :global(.code-block-scroll-container),
+	.full-height-code-blocks .streaming-code-scroll-container {
+		max-height: none;
+		overflow-y: visible;
 	}
 
 	div :global(.code-block-header) {
