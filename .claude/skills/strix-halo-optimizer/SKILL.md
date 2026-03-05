@@ -19,12 +19,20 @@ This skill helps you get maximum inference performance from llama.cpp on AMD Ryz
 
 | Component | Spec |
 |-----------|------|
-| CPU | Zen 5, up to 16 cores / 32 threads, AVX-512 |
-| GPU | Radeon 890M (RDNA 3.5), 40 CUs, gfx1150/gfx1151 |
-| Memory | Up to 128GB unified LPDDR5X (shared CPU/GPU) |
+| CPU | Zen 5, up to 16C/32T (2 CCDs x 8 cores), boost 5.1 GHz |
+| CPU cache | 80 KB L1/core, 1 MB L2/core, 32 MB L3/CCD (64 MB total on 16C) |
+| CPU AVX-512 | Supported (BF16, VNNI, VBMI) — **half-width 256-bit datapaths** on mobile Zen 5 (double-pumped, still beneficial but not full 512-bit throughput) |
+| GPU | Radeon 8060S (RDNA 3.5), 40 CUs / 2560 SPs, up to 2.9 GHz, gfx1151 |
+| GPU compute | ~59.4 FP16/BF16 TFLOPS peak |
+| Infinity Cache | 32 MB MALL (shared CPU/GPU memory-side cache) |
+| Memory | Up to 128GB unified LPDDR5X-8000, ~256 GB/s theoretical (~212 GB/s measured) |
 | GPU arch class | RDNA 3.5 (`GGML_CUDA_CC_RDNA3_5` in llama.cpp) |
 | WMMA | Supported (inherited from RDNA3) |
-| Memory bandwidth | ~256 GB/s (shared between CPU and GPU) |
+| NPU | XDNA 2, 50 TOPS INT8 (not yet a llama.cpp target) |
+
+**SKU Variants**: Max+ 395 (16C/40CU), Max+ 392 (12C/40CU), Max 390 (12C/40CU), Max+ 388 (8C/40CU), Max 385 (8C/32CU), Max Pro 380 (6C/16CU). Adjust `-t` thread count and GPU expectations based on your specific SKU.
+
+**MoE Model Sweet Spot**: Strix Halo excels at Mixture-of-Experts models due to high memory bandwidth. Qwen3-30B-A3B achieves ~52 tok/s, Llama 4 Scout (109B params, 17B active) runs ~4x faster than Llama 3.3 70B dense.
 
 ## Critical First Steps (Linux)
 
@@ -59,7 +67,7 @@ The essential build command:
 ```bash
 cmake -S . -B build \
   -DGGML_HIP=ON \
-  -DGPU_TARGETS="gfx1150" \
+  -DGPU_TARGETS="gfx1151" \
   -DGGML_HIP_GRAPHS=ON \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_HIP_FLAGS="-O3"
@@ -76,7 +84,7 @@ Read `references/build-guide.md` for all build configurations including ZenDNN a
 | Flag | Purpose | Recommendation |
 |------|---------|----------------|
 | `GGML_HIP=ON` | Enable ROCm/HIP GPU backend | Always for GPU accel |
-| `GPU_TARGETS=gfx1150` | Target Strix Halo RDNA 3.5 | Always — avoids bloated multi-arch |
+| `GPU_TARGETS=gfx1151` | Target Strix Halo RDNA 3.5 | Always — avoids bloated multi-arch (use `gfx1150` if `rocminfo` reports that instead) |
 | `GGML_HIP_GRAPHS=ON` | HIP graph capture for kernel dispatch | Reduces dispatch overhead |
 | `GGML_CUDA_FORCE_MMQ=ON` | Force quantized matmul kernels | Often faster than hipBLAS on RDNA 3.5 for quantized models |
 | `GGML_HIP_ROCWMMA_FATTN=ON` | rocWMMA flash attention | Enable if rocWMMA v2.0+ is installed |
@@ -168,16 +176,17 @@ cmake --build build --config Release -j $(nproc)
 
 ### Vulkan vs HIP: When to Choose Which
 
-| Factor | HIP/ROCm | Vulkan |
-|--------|----------|--------|
-| Prompt processing | Excellent with hipBLASLt (~880 t/s 7B Q4) | Good but no hipBLASLt equivalent |
-| Token generation | ~48 t/s (7B Q4) | Comparable |
+| Factor | HIP/ROCm | Vulkan (RADV) |
+|--------|----------|---------------|
+| Prompt processing | ~880 t/s 7B Q4 (with hipBLASLt) / ~350 without | ~850 t/s — competitive with HIP+hipBLASLt |
+| Token generation | ~48 t/s (7B Q4) | ~44 t/s — RADV is ~4% faster on tg but this varies |
 | Graph capture | HIP graphs reduce dispatch overhead | Not available |
-| Flash attention | WMMA-accelerated via rocWMMA | Shader-based |
-| Setup complexity | Requires ROCm 6.1+ installation | Just needs Vulkan drivers (usually pre-installed) |
+| Flash attention | WMMA-accelerated via rocWMMA | Shader-based, scales well at long context |
+| Setup complexity | Requires ROCm 6.1+ installation | Just needs Vulkan drivers (Mesa RADV, usually pre-installed) |
 | Known issues | None critical (with TTM + hipBLASLt) | Model loading failures on some configs ([#18741](https://github.com/ggml-org/llama.cpp/issues/18741)) |
+| Driver choice | N/A | RADV ~4% faster tg, AMDVLK ~16% faster pp |
 
-**Recommendation**: Use HIP/ROCm as the primary backend. Fall back to Vulkan only if ROCm installation is impractical (e.g., unsupported distro, containerized environments without ROCm, or quick testing without the full ROCm stack).
+**Recommendation**: Both backends are viable. Vulkan (RADV) is the easiest path — no ROCm install, competitive performance. HIP/ROCm provides the most tuning options (HIP graphs, rocWMMA flash attention, FORCE_MMQ). If you have ROCm installed, use HIP. If you want simplicity or are on a distro without easy ROCm support, Vulkan is excellent. Note: Linux kernel version matters — 6.15+ showed ~15% improvement over 6.14.
 
 ## Zen 5 CPU Backend Details
 
