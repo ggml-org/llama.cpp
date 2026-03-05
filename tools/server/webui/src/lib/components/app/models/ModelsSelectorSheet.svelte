@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { SvelteMap } from 'svelte/reactivity';
 	import { ChevronDown, Loader2, Package } from '@lucide/svelte';
 	import * as Sheet from '$lib/components/ui/sheet';
 	import { cn } from '$lib/components/ui/utils';
@@ -9,12 +10,15 @@
 		modelsLoading,
 		modelsUpdating,
 		selectedModelId,
-		routerModels,
 		singleModelName
 	} from '$lib/stores/models.svelte';
-	import { ServerModelStatus } from '$lib/enums';
 	import { isRouterMode } from '$lib/stores/server.svelte';
-	import { DialogModelInformation, SearchInput, TruncatedText } from '$lib/components/app';
+	import {
+		DialogModelInformation,
+		SearchInput,
+		TruncatedText,
+		ModelsSelectorOption
+	} from '$lib/components/app';
 	import type { ModelOption } from '$lib/types/models';
 
 	interface Props {
@@ -37,20 +41,19 @@
 		useGlobalSelection = false
 	}: Props = $props();
 
-	let options = $derived(modelOptions());
+	let options = $derived(
+		modelOptions().filter((option) => {
+			const modelProps = modelsStore.getModelProps(option.model);
+			return modelProps?.webui !== false;
+		})
+	);
 	let loading = $derived(modelsLoading());
 	let updating = $derived(modelsUpdating());
 	let activeId = $derived(selectedModelId());
 	let isRouter = $derived(isRouterMode());
 	let serverModel = $derived(singleModelName());
 
-	// Reactive router models state - needed for proper reactivity of status checks
-	let currentRouterModels = $derived(routerModels());
-
-	function getModelStatus(modelId: string): ServerModelStatus | null {
-		const model = currentRouterModels.find((m) => m.id === modelId);
-		return (model?.status?.value as ServerModelStatus) ?? null;
-	}
+	let isLoadingModel = $state(false);
 
 	let isHighlightedCurrentModelActive = $derived(
 		!isRouter || !currentModel
@@ -62,7 +65,7 @@
 				})()
 	);
 
-	let isCurrentModelInCache = $derived(() => {
+	let isCurrentModelInCache = $derived.by(() => {
 		if (!isRouter || !currentModel) return true;
 
 		return options.some((option) => option.model === currentModel);
@@ -70,17 +73,82 @@
 
 	let searchTerm = $state('');
 
-	let filteredOptions: ModelOption[] = $derived(
-		(() => {
-			const term = searchTerm.trim().toLowerCase();
-			if (!term) return options;
+	let filteredOptions: ModelOption[] = $derived.by(() => {
+		const term = searchTerm.trim().toLowerCase();
+		if (!term) return options;
 
-			return options.filter(
-				(option) =>
-					option.model.toLowerCase().includes(term) || option.name?.toLowerCase().includes(term)
-			);
-		})()
-	);
+		return options.filter(
+			(option) =>
+				option.model.toLowerCase().includes(term) ||
+				option.name?.toLowerCase().includes(term) ||
+				option.aliases?.some((alias: string) => alias.toLowerCase().includes(term)) ||
+				option.tags?.some((tag: string) => tag.toLowerCase().includes(term))
+		);
+	});
+
+	let groupedFilteredOptions = $derived.by(() => {
+		const favIds = modelsStore.favouriteModelIds;
+		const result: {
+			orgName: string | null;
+			isFavouritesGroup: boolean;
+			isLoadedGroup: boolean;
+			items: { option: ModelOption; flatIndex: number }[];
+		}[] = [];
+
+		// Loaded models group (top)
+		const loadedItems: { option: ModelOption; flatIndex: number }[] = [];
+		for (let i = 0; i < filteredOptions.length; i++) {
+			if (modelsStore.isModelLoaded(filteredOptions[i].model)) {
+				loadedItems.push({ option: filteredOptions[i], flatIndex: i });
+			}
+		}
+		if (loadedItems.length > 0) {
+			result.push({
+				orgName: null,
+				isFavouritesGroup: false,
+				isLoadedGroup: true,
+				items: loadedItems
+			});
+		}
+
+		// Favourites group
+		const loadedModelIds = new Set(loadedItems.map((item) => item.option.model));
+		const favItems: { option: ModelOption; flatIndex: number }[] = [];
+		for (let i = 0; i < filteredOptions.length; i++) {
+			if (favIds.has(filteredOptions[i].model) && !loadedModelIds.has(filteredOptions[i].model)) {
+				favItems.push({ option: filteredOptions[i], flatIndex: i });
+			}
+		}
+		if (favItems.length > 0) {
+			result.push({
+				orgName: null,
+				isFavouritesGroup: true,
+				isLoadedGroup: false,
+				items: favItems
+			});
+		}
+
+		// Org groups (excluding loaded and favourites)
+		const orgGroups = new SvelteMap<string, { option: ModelOption; flatIndex: number }[]>();
+		for (let i = 0; i < filteredOptions.length; i++) {
+			const option = filteredOptions[i];
+			if (loadedModelIds.has(option.model) || favIds.has(option.model)) continue;
+			const orgName = option.parsedId?.orgName ?? null;
+			const key = orgName ?? '';
+			if (!orgGroups.has(key)) orgGroups.set(key, []);
+			orgGroups.get(key)!.push({ option, flatIndex: i });
+		}
+		for (const [orgName, items] of orgGroups) {
+			result.push({
+				orgName: orgName || null,
+				isFavouritesGroup: false,
+				isLoadedGroup: false,
+				items
+			});
+		}
+
+		return result;
+	});
 
 	let sheetOpen = $state(false);
 	let showModelDialog = $state(false);
@@ -135,14 +203,6 @@
 			}
 		} else {
 			await modelsStore.selectModelById(option.id);
-
-			if (isRouter && getModelStatus(option.model) !== ServerModelStatus.LOADED) {
-				try {
-					await modelsStore.loadModel(option.model);
-				} catch (error) {
-					console.error('Failed to load model:', error);
-				}
-			}
 		}
 
 		if (shouldCloseMenu) {
@@ -154,6 +214,14 @@
 				);
 				textarea?.focus();
 			});
+		}
+
+		if (!onModelChange && isRouter && !modelsStore.isModelLoaded(option.model)) {
+			isLoadingModel = true;
+			modelsStore
+				.loadModel(option.model)
+				.catch((error) => console.error('Failed to load model:', error))
+				.finally(() => (isLoadingModel = false));
 		}
 	}
 
@@ -177,7 +245,7 @@
 		}
 
 		if (currentModel) {
-			if (!isCurrentModelInCache()) {
+			if (!isCurrentModelInCache) {
 				return {
 					id: 'not-in-cache',
 					model: currentModel,
@@ -209,12 +277,11 @@
 		{@const selectedOption = getDisplayOption()}
 
 		{#if isRouter}
-			<!-- Mobile: trigger button + Sheet from bottom -->
 			<button
 				type="button"
 				class={cn(
 					`inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs transition hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60`,
-					!isCurrentModelInCache()
+					!isCurrentModelInCache
 						? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
 						: forceForegroundText
 							? 'text-foreground'
@@ -231,7 +298,7 @@
 
 				<TruncatedText text={selectedOption?.model || 'Select model'} class="min-w-0 font-medium" />
 
-				{#if updating}
+				{#if updating || isLoadingModel}
 					<Loader2 class="h-3 w-3.5 animate-spin" />
 				{:else}
 					<ChevronDown class="h-3 w-3.5" />
@@ -254,7 +321,7 @@
 						</div>
 
 						<div class="max-h-[60vh] overflow-y-auto px-2">
-							{#if !isCurrentModelInCache() && currentModel}
+							{#if !isCurrentModelInCache && currentModel}
 								<button
 									type="button"
 									class="flex w-full cursor-not-allowed items-center rounded-md bg-red-400/10 px-3 py-2.5 text-left text-sm text-red-400"
@@ -272,54 +339,37 @@
 								<p class="px-3 py-3 text-center text-sm text-muted-foreground">No models found.</p>
 							{/if}
 
-							{#each filteredOptions as option (option.id)}
-								{@const status = getModelStatus(option.model)}
-								{@const isLoaded = status === ServerModelStatus.LOADED}
-								{@const isLoading = status === ServerModelStatus.LOADING}
-								{@const isSelected = currentModel === option.model || activeId === option.id}
+							{#each groupedFilteredOptions as group (group.isLoadedGroup ? '__loaded__' : group.isFavouritesGroup ? '__favourites__' : group.orgName)}
+								{#if group.isLoadedGroup}
+									<p class="px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none">
+										Loaded models
+									</p>
+								{:else if group.isFavouritesGroup}
+									<p class="px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none">
+										Favourite models
+									</p>
+								{:else if group.orgName}
+									<p
+										class="px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none [&:not(:first-child)]:mt-2"
+									>
+										{group.orgName}
+									</p>
+								{/if}
 
-								<button
-									type="button"
-									class={cn(
-										'group flex w-full items-center gap-2 rounded-md px-3 py-2.5 text-left text-sm transition active:bg-accent',
-										isSelected
-											? 'bg-accent text-accent-foreground'
-											: 'hover:bg-accent hover:text-accent-foreground',
-										isLoaded ? 'text-popover-foreground' : 'text-muted-foreground'
-									)}
-									onclick={() => handleSelect(option.id)}
-								>
-									<span class="min-w-0 flex-1 truncate text-left">
-										{option.model}
-									</span>
-
-									<div class="flex w-6 shrink-0 items-center justify-center">
-										{#if isLoading}
-											<Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
-										{:else if isLoaded}
-											<div
-												role="button"
-												tabindex="0"
-												aria-label="Unload model"
-												class="relative flex h-6 w-6 items-center justify-center"
-												onclick={(e) => {
-													e.stopPropagation();
-													modelsStore.unloadModel(option.model);
-												}}
-												onkeydown={(e) => {
-													if (e.key === 'Enter' || e.key === ' ') {
-														e.stopPropagation();
-														modelsStore.unloadModel(option.model);
-													}
-												}}
-											>
-												<span class="h-2 w-2 rounded-full bg-green-500"></span>
-											</div>
-										{:else}
-											<span class="h-2 w-2 rounded-full bg-muted-foreground/50"></span>
-										{/if}
-									</div>
-								</button>
+								{#each group.items as { option } (group.isLoadedGroup ? `loaded-${option.id}` : group.isFavouritesGroup ? `fav-${option.id}` : option.id)}
+									{@const isSelected = currentModel === option.model || activeId === option.id}
+									{@const isFav = modelsStore.favouriteModelIds.has(option.model)}
+									<ModelsSelectorOption
+										{option}
+										{isSelected}
+										isHighlighted={false}
+										{isFav}
+										showOrgName={group.isFavouritesGroup || group.isLoadedGroup}
+										onSelect={handleSelect}
+										onMouseEnter={() => {}}
+										onKeyDown={() => {}}
+									/>
+								{/each}
 							{/each}
 						</div>
 					</div>
@@ -329,7 +379,7 @@
 			<button
 				class={cn(
 					`inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs transition hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60`,
-					!isCurrentModelInCache()
+					!isCurrentModelInCache
 						? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
 						: forceForegroundText
 							? 'text-foreground'
