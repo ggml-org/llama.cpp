@@ -1,0 +1,1325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Eval Review</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600&family=Lora:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" integrity="sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT" crossorigin="anonymous"></script>
+  <style>
+    :root {
+      --bg: #faf9f5;
+      --surface: #ffffff;
+      --border: #e8e6dc;
+      --text: #141413;
+      --text-muted: #b0aea5;
+      --accent: #d97757;
+      --accent-hover: #c4613f;
+      --green: #788c5d;
+      --green-bg: #eef2e8;
+      --red: #c44;
+      --red-bg: #fceaea;
+      --header-bg: #141413;
+      --header-text: #faf9f5;
+      --radius: 6px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Lora', Georgia, serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ---- Header ---- */
+    .header {
+      background: var(--header-bg);
+      color: var(--header-text);
+      padding: 1rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-shrink: 0;
+    }
+    .header h1 {
+      font-family: 'Poppins', sans-serif;
+      font-size: 1.25rem;
+      font-weight: 600;
+    }
+    .header .instructions {
+      font-size: 0.8rem;
+      opacity: 0.7;
+      margin-top: 0.25rem;
+    }
+    .header .progress {
+      font-size: 0.875rem;
+      opacity: 0.8;
+      text-align: right;
+    }
+
+    /* ---- Main content ---- */
+    .main {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1.5rem 2rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+
+    /* ---- Sections ---- */
+    .section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      flex-shrink: 0;
+    }
+    .section-header {
+      font-family: 'Poppins', sans-serif;
+      padding: 0.75rem 1rem;
+      font-size: 0.75rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border);
+      background: var(--bg);
+    }
+    .section-body {
+      padding: 1rem;
+    }
+
+    /* ---- Config badge ---- */
+    .config-badge {
+      display: inline-block;
+      padding: 0.2rem 0.625rem;
+      border-radius: 9999px;
+      font-family: 'Poppins', sans-serif;
+      font-size: 0.6875rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      margin-left: 0.75rem;
+      vertical-align: middle;
+    }
+    .config-badge.config-primary {
+      background: rgba(33, 150, 243, 0.12);
+      color: #1976d2;
+    }
+    .config-badge.config-baseline {
+      background: rgba(255, 193, 7, 0.15);
+      color: #f57f17;
+    }
+
+    /* ---- Prompt ---- */
+    .prompt-text {
+      white-space: pre-wrap;
+      font-size: 0.9375rem;
+      line-height: 1.6;
+    }
+
+    /* ---- Outputs ---- */
+    .output-file {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .output-file + .output-file {
+      margin-top: 1rem;
+    }
+    .output-file-header {
+      padding: 0.5rem 0.75rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      font-family: 'SF Mono', SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .output-file-header .dl-btn {
+      font-size: 0.7rem;
+      color: var(--accent);
+      text-decoration: none;
+      cursor: pointer;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-weight: 500;
+      opacity: 0.8;
+    }
+    .output-file-header .dl-btn:hover {
+      opacity: 1;
+      text-decoration: underline;
+    }
+    .output-file-content {
+      padding: 0.75rem;
+      overflow-x: auto;
+    }
+    .output-file-content pre {
+      font-size: 0.8125rem;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: 'SF Mono', SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+    }
+    .output-file-content img {
+      max-width: 100%;
+      height: auto;
+      border-radius: 4px;
+    }
+    .output-file-content iframe {
+      width: 100%;
+      height: 600px;
+      border: none;
+    }
+    .output-file-content table {
+      border-collapse: collapse;
+      font-size: 0.8125rem;
+      width: 100%;
+    }
+    .output-file-content table td,
+    .output-file-content table th {
+      border: 1px solid var(--border);
+      padding: 0.375rem 0.5rem;
+      text-align: left;
+    }
+    .output-file-content table th {
+      background: var(--bg);
+      font-weight: 600;
+    }
+    .output-file-content .download-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 1rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 0.875rem;
+      cursor: pointer;
+    }
+    .output-file-content .download-link:hover {
+      background: var(--border);
+    }
+    .empty-state {
+      color: var(--text-muted);
+      font-style: italic;
+      padding: 2rem;
+      text-align: center;
+    }
+
+    /* ---- Feedback ---- */
+    .prev-feedback {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.625rem 0.75rem;
+      margin-top: 0.75rem;
+      font-size: 0.8125rem;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+    .prev-feedback-label {
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 0.25rem;
+      color: var(--text-muted);
+    }
+    .feedback-textarea {
+      width: 100%;
+      min-height: 100px;
+      padding: 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-family: inherit;
+      font-size: 0.9375rem;
+      line-height: 1.5;
+      resize: vertical;
+      color: var(--text);
+    }
+    .feedback-textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+    }
+    .feedback-status {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-top: 0.5rem;
+      min-height: 1.1em;
+    }
+
+    /* ---- Grades (collapsible) ---- */
+    .grades-toggle {
+      display: flex;
+      align-items: center;
+      cursor: pointer;
+      user-select: none;
+    }
+    .grades-toggle:hover {
+      color: var(--accent);
+    }
+    .grades-toggle .arrow {
+      margin-right: 0.5rem;
+      transition: transform 0.15s;
+      font-size: 0.75rem;
+    }
+    .grades-toggle .arrow.open {
+      transform: rotate(90deg);
+    }
+    .grades-content {
+      display: none;
+      margin-top: 0.75rem;
+    }
+    .grades-content.open {
+      display: block;
+    }
+    .grades-summary {
+      font-size: 0.875rem;
+      margin-bottom: 0.75rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .grade-badge {
+      display: inline-block;
+      padding: 0.125rem 0.5rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .grade-pass { background: var(--green-bg); color: var(--green); }
+    .grade-fail { background: var(--red-bg); color: var(--red); }
+    .assertion-list {
+      list-style: none;
+    }
+    .assertion-item {
+      padding: 0.625rem 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.8125rem;
+    }
+    .assertion-item:last-child { border-bottom: none; }
+    .assertion-status {
+      font-weight: 600;
+      margin-right: 0.5rem;
+    }
+    .assertion-status.pass { color: var(--green); }
+    .assertion-status.fail { color: var(--red); }
+    .assertion-evidence {
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      margin-top: 0.25rem;
+      padding-left: 1.5rem;
+    }
+
+    /* ---- View tabs ---- */
+    .view-tabs {
+      display: flex;
+      gap: 0;
+      padding: 0 2rem;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .view-tab {
+      font-family: 'Poppins', sans-serif;
+      padding: 0.625rem 1.25rem;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      background: none;
+      color: var(--text-muted);
+      border-bottom: 2px solid transparent;
+      transition: all 0.15s;
+    }
+    .view-tab:hover { color: var(--text); }
+    .view-tab.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+    .view-panel { display: none; }
+    .view-panel.active { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
+
+    /* ---- Benchmark view ---- */
+    .benchmark-view {
+      padding: 1.5rem 2rem;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .benchmark-table {
+      border-collapse: collapse;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-size: 0.8125rem;
+      width: 100%;
+      margin-bottom: 1.5rem;
+    }
+    .benchmark-table th, .benchmark-table td {
+      padding: 0.625rem 0.75rem;
+      text-align: left;
+      border: 1px solid var(--border);
+    }
+    .benchmark-table th {
+      font-family: 'Poppins', sans-serif;
+      background: var(--header-bg);
+      color: var(--header-text);
+      font-weight: 500;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .benchmark-table tr:hover { background: var(--bg); }
+    .benchmark-table tr.benchmark-row-with { background: rgba(33, 150, 243, 0.06); }
+    .benchmark-table tr.benchmark-row-without { background: rgba(255, 193, 7, 0.06); }
+    .benchmark-table tr.benchmark-row-with:hover { background: rgba(33, 150, 243, 0.12); }
+    .benchmark-table tr.benchmark-row-without:hover { background: rgba(255, 193, 7, 0.12); }
+    .benchmark-table tr.benchmark-row-avg { font-weight: 600; border-top: 2px solid var(--border); }
+    .benchmark-table tr.benchmark-row-avg.benchmark-row-with { background: rgba(33, 150, 243, 0.12); }
+    .benchmark-table tr.benchmark-row-avg.benchmark-row-without { background: rgba(255, 193, 7, 0.12); }
+    .benchmark-delta-positive { color: var(--green); font-weight: 600; }
+    .benchmark-delta-negative { color: var(--red); font-weight: 600; }
+    .benchmark-notes {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem;
+    }
+    .benchmark-notes h3 {
+      font-family: 'Poppins', sans-serif;
+      font-size: 0.875rem;
+      margin-bottom: 0.75rem;
+    }
+    .benchmark-notes ul {
+      list-style: disc;
+      padding-left: 1.25rem;
+    }
+    .benchmark-notes li {
+      font-size: 0.8125rem;
+      line-height: 1.6;
+      margin-bottom: 0.375rem;
+    }
+    .benchmark-empty {
+      color: var(--text-muted);
+      font-style: italic;
+      text-align: center;
+      padding: 3rem;
+    }
+
+    /* ---- Navigation ---- */
+    .nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 1rem 2rem;
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+      flex-shrink: 0;
+    }
+    .nav-btn {
+      font-family: 'Poppins', sans-serif;
+      padding: 0.5rem 1.25rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      cursor: pointer;
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: var(--text);
+      transition: all 0.15s;
+    }
+    .nav-btn:hover:not(:disabled) {
+      background: var(--bg);
+      border-color: var(--text-muted);
+    }
+    .nav-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .done-btn {
+      font-family: 'Poppins', sans-serif;
+      padding: 0.5rem 1.5rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 0.875rem;
+      font-weight: 500;
+      transition: all 0.15s;
+    }
+    .done-btn:hover {
+      background: var(--bg);
+      border-color: var(--text-muted);
+    }
+    .done-btn.ready {
+      border: none;
+      background: var(--accent);
+      color: white;
+      font-weight: 600;
+    }
+    .done-btn.ready:hover {
+      background: var(--accent-hover);
+    }
+    /* ---- Done overlay ---- */
+    .done-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 100;
+      justify-content: center;
+      align-items: center;
+    }
+    .done-overlay.visible {
+      display: flex;
+    }
+    .done-card {
+      background: var(--surface);
+      border-radius: 12px;
+      padding: 2rem 3rem;
+      text-align: center;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+      max-width: 500px;
+    }
+    .done-card h2 {
+      font-size: 1.5rem;
+      margin-bottom: 0.5rem;
+    }
+    .done-card p {
+      color: var(--text-muted);
+      margin-bottom: 1.5rem;
+      line-height: 1.5;
+    }
+    .done-card .btn-row {
+      display: flex;
+      gap: 0.5rem;
+      justify-content: center;
+    }
+    .done-card button {
+      padding: 0.5rem 1.25rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      cursor: pointer;
+      font-size: 0.875rem;
+    }
+    .done-card button:hover {
+      background: var(--bg);
+    }
+    /* ---- Toast ---- */
+    .toast {
+      position: fixed;
+      bottom: 5rem;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--header-bg);
+      color: var(--header-text);
+      padding: 0.625rem 1.25rem;
+      border-radius: var(--radius);
+      font-size: 0.875rem;
+      opacity: 0;
+      transition: opacity 0.3s;
+      pointer-events: none;
+      z-index: 200;
+    }
+    .toast.visible {
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+  <div id="app" style="height:100vh; display:flex; flex-direction:column;">
+    <div class="header">
+      <div>
+        <h1>Eval Review: <span id="skill-name"></span></h1>
+        <div class="instructions">Review each output and leave feedback below. Navigate with arrow keys or buttons. When done, copy feedback and paste into Claude Code.</div>
+      </div>
+      <div class="progress" id="progress"></div>
+    </div>
+
+    <!-- View tabs (only shown when benchmark data exists) -->
+    <div class="view-tabs" id="view-tabs" style="display:none;">
+      <button class="view-tab active" onclick="switchView('outputs')">Outputs</button>
+      <button class="view-tab" onclick="switchView('benchmark')">Benchmark</button>
+    </div>
+
+    <!-- Outputs panel (qualitative review) -->
+    <div class="view-panel active" id="panel-outputs">
+    <div class="main">
+      <!-- Prompt -->
+      <div class="section">
+        <div class="section-header">Prompt <span class="config-badge" id="config-badge" style="display:none;"></span></div>
+        <div class="section-body">
+          <div class="prompt-text" id="prompt-text"></div>
+        </div>
+      </div>
+
+      <!-- Outputs -->
+      <div class="section">
+        <div class="section-header">Output</div>
+        <div class="section-body" id="outputs-body">
+          <div class="empty-state">No output files found</div>
+        </div>
+      </div>
+
+      <!-- Previous Output (collapsible) -->
+      <div class="section" id="prev-outputs-section" style="display:none;">
+        <div class="section-header">
+          <div class="grades-toggle" onclick="togglePrevOutputs()">
+            <span class="arrow" id="prev-outputs-arrow">&#9654;</span>
+            Previous Output
+          </div>
+        </div>
+        <div class="grades-content" id="prev-outputs-content"></div>
+      </div>
+
+      <!-- Grades (collapsible) -->
+      <div class="section" id="grades-section" style="display:none;">
+        <div class="section-header">
+          <div class="grades-toggle" onclick="toggleGrades()">
+            <span class="arrow" id="grades-arrow">&#9654;</span>
+            Formal Grades
+          </div>
+        </div>
+        <div class="grades-content" id="grades-content"></div>
+      </div>
+
+      <!-- Feedback -->
+      <div class="section">
+        <div class="section-header">Your Feedback</div>
+        <div class="section-body">
+          <textarea
+            class="feedback-textarea"
+            id="feedback"
+            placeholder="What do you think of this output? Any issues, suggestions, or things that look great?"
+          ></textarea>
+          <div class="feedback-status" id="feedback-status"></div>
+          <div class="prev-feedback" id="prev-feedback" style="display:none;">
+            <div class="prev-feedback-label">Previous feedback</div>
+            <div id="prev-feedback-text"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="nav" id="outputs-nav">
+      <button class="nav-btn" id="prev-btn" onclick="navigate(-1)">&#8592; Previous</button>
+      <button class="done-btn" id="done-btn" onclick="showDoneDialog()">Submit All Reviews</button>
+      <button class="nav-btn" id="next-btn" onclick="navigate(1)">Next &#8594;</button>
+    </div>
+    </div><!-- end panel-outputs -->
+
+    <!-- Benchmark panel (quantitative stats) -->
+    <div class="view-panel" id="panel-benchmark">
+      <div class="benchmark-view" id="benchmark-content">
+        <div class="benchmark-empty">No benchmark data available. Run a benchmark to see quantitative results here.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Done overlay -->
+  <div class="done-overlay" id="done-overlay">
+    <div class="done-card">
+      <h2>Review Complete</h2>
+      <p>Your feedback has been saved. Go back to your Claude Code session and tell Claude you're done reviewing.</p>
+      <div class="btn-row">
+        <button onclick="closeDoneDialog()">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+  <script>
+    // ---- Embedded data (injected by generate_review.py) ----
+    const EMBEDDED_DATA = {"skill_name": "strix-halo-optimizer", "runs": [{"id": "eval-4-vulkan-vs-hip-with_skill", "prompt": "I have a Strix Halo system but I don't want to install ROCm - it's too heavy. Can I just use Vulkan for llama.cpp? I already have mesa drivers. How does Vulkan compare to HIP on this hardware?", "eval_id": 4, "outputs": [{"name": "response.md", "type": "text", "content": "# Using Vulkan Instead of ROCm on Strix Halo\n\nYes, you can absolutely use Vulkan for llama.cpp on your Strix Halo system. Since you already have Mesa drivers installed, you likely have everything you need -- no additional software installation required. This is one of Vulkan's main advantages over the ROCm/HIP stack.\n\n## Building with Vulkan\n\nThe build is straightforward:\n\n```bash\ncmake -S . -B build \\\n  -DGGML_VULKAN=ON \\\n  -DCMAKE_BUILD_TYPE=Release\n\ncmake --build build --config Release -j $(nproc)\n```\n\nThat's it. No `GPU_TARGETS`, no ROCm SDK, no multi-gigabyte dependency chain. Vulkan uses runtime SPIR-V shaders rather than precompiled ISA, so it automatically works with your RDNA 3.5 hardware without any architecture-specific flags.\n\n## Running Inference\n\n```bash\n./build/bin/llama-cli -m model.gguf \\\n  -ngl 99 \\\n  -fa on \\\n  -ctk q8_0 -ctv q8_0 \\\n  -t 4\n```\n\nThe Vulkan backend will auto-detect your Radeon 890M via the AMD vendor ID (0x1002). It queries `VkPhysicalDeviceSubgroupProperties` at runtime and adapts shader dispatch for RDNA 3.5's wave32/wave64 subgroup sizes. Matmul shaders use subgroup operations (`subgroupAdd`, `subgroupShuffle`) for efficient reductions.\n\nFor memory, Vulkan sees both device-local memory (the BIOS-allocated VRAM portion) and host-visible memory. On a unified memory APU like Strix Halo, both map to the same physical LPDDR5X, but device-local allocations may get priority bandwidth. The backend prefers device-local for model weights.\n\n## Vulkan vs HIP: Honest Comparison\n\nHere is where you should set expectations. HIP/ROCm does have real performance advantages on Strix Halo:\n\n| Factor | HIP/ROCm | Vulkan |\n|--------|----------|--------|\n| **Prompt processing** | Excellent -- ~880 t/s on 7B Q4 with hipBLASLt | Good, but no hipBLASLt equivalent (expect closer to ~350 t/s range) |\n| **Token generation** | ~48 t/s (7B Q4) | Comparable to HIP |\n| **Graph capture** | HIP graphs reduce kernel dispatch overhead | Not available |\n| **Flash attention** | WMMA-accelerated via rocWMMA | Shader-based (functional but not hardware-accelerated the same way) |\n| **Setup complexity** | Requires ROCm 6.1+ (multi-GB install) | Just needs Vulkan drivers (Mesa, already installed) |\n| **Build time** | Can be 10-30 minutes depending on GPU targets | Fast -- standard C++ compilation |\n| **Stability** | Mature on Strix Halo (with TTM + hipBLASLt fixes) | Known model loading failures on some configurations ([#18741](https://github.com/ggml-org/llama.cpp/issues/18741)) |\n\n### Where HIP Wins\n\nThe biggest gap is **prompt processing**. The hipBLASLt kernel library (`ROCBLAS_USE_HIPBLASLT=1`) provides a roughly 2.5x speedup for prompt processing on gfx1150/gfx1151. Vulkan has no equivalent optimization -- it relies on its own SPIR-V matmul shaders in `ggml/src/ggml-vulkan/vulkan-shaders/`. This means if your workload involves processing long prompts (RAG, long documents, large system prompts), you will notice a significant difference.\n\nHIP graphs also reduce kernel dispatch overhead for token generation, which Vulkan cannot replicate.\n\n### Where Vulkan Wins\n\n- **Zero setup friction**: Mesa Vulkan drivers are already on your system. No ROCm packages to install, manage, or update.\n- **Build simplicity**: A Vulkan build compiles in minutes. HIP builds targeting gfx1150 take around 10 minutes; multi-arch builds can exceed 30 minutes.\n- **Portability**: The same Vulkan build works across AMD, NVIDIA, and Intel GPUs.\n- **Lighter footprint**: ROCm is a large software stack. If you are on a laptop and care about disk space or system cleanliness, Vulkan is significantly lighter.\n\n### Where They Are Similar\n\n**Token generation speed is comparable.** Token generation is memory-bandwidth bound (reading model weights from memory), and both backends are limited by the same ~256 GB/s LPDDR5X bus. The compute kernels matter less here -- what matters is how fast you can stream weights through the GPU. Both HIP and Vulkan achieve similar throughput for this workload.\n\n## Known Vulkan Issue to Watch For\n\nThere is a known issue ([#18741](https://github.com/ggml-org/llama.cpp/issues/18741)) where the Vulkan backend can fail to load models on some Strix Halo configurations. If you hit \"failed to load model\" errors, this is a known problem. There is no universal workaround within Vulkan itself -- this is one of the reasons HIP is considered the more reliable backend on this hardware.\n\n## Important: TTM Limits Still Apply\n\nEven with Vulkan, you should configure the kernel TTM limits if you plan to run models larger than ~8GB. Without this, the GPU can only access a fraction of your system RAM regardless of which backend you use.\n\nCreate `/etc/modprobe.d/increase_amd_memory.conf`:\n```\noptions ttm pages_limit=25600000\noptions ttm page_pool_size=25600000\n```\n\nThen:\n```bash\nsudo update-initramfs -u -k all\nsudo reboot\n```\n\n## Bottom Line\n\n**Vulkan is a perfectly viable choice** for your use case, especially if you want to avoid the weight of the ROCm stack. For interactive chat and moderate-length prompts, you will get good token generation performance that is comparable to HIP. The main trade-off is prompt processing speed -- if you regularly feed in long contexts (thousands of tokens), you will notice HIP's hipBLASLt advantage.\n\nIf your typical workflow is conversational (short prompts, lots of token generation), Vulkan will serve you well. If you later find you need faster prompt processing and decide to install ROCm, you can always switch -- the two backends are not mutually exclusive, and you can even build llama.cpp with both enabled.\n"}], "grading": {"eval_id": 4, "eval_name": "vulkan-vs-hip-backend-choice", "configuration": "with_skill", "score": 4, "max_score": 4, "expectations": [{"text": "Provides Vulkan build command with GGML_VULKAN=ON", "passed": true, "evidence": "Shows 'cmake -S . -B build -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release' with clear explanation that no GPU_TARGETS needed"}, {"text": "Recommends HIP/ROCm over Vulkan for best performance on Strix Halo", "passed": true, "evidence": "Detailed comparison table showing HIP wins on prompt processing (~880 vs ~350 t/s), graph capture, and flash attention. States 'Use HIP/ROCm as the primary backend'"}, {"text": "Mentions Vulkan model loading issues or known limitations on Strix Halo", "passed": true, "evidence": "Explicitly references issue #18741 with model loading failures, describes it as a 'known problem'"}, {"text": "Acknowledges Vulkan as a reasonable alternative when ROCm is impractical", "passed": true, "evidence": "States 'Vulkan is a perfectly viable choice' and discusses when it wins (zero setup, lighter footprint, portability)"}]}}, {"id": "eval-4-vulkan-vs-hip-without_skill", "prompt": "I have a Strix Halo system but I don't want to install ROCm - it's too heavy. Can I just use Vulkan for llama.cpp? I already have mesa drivers. How does Vulkan compare to HIP on this hardware?", "eval_id": 4, "outputs": [{"name": "response.md", "type": "text", "content": "# Using Vulkan vs HIP/ROCm for llama.cpp on AMD Strix Halo\n\n## Short Answer\n\nYes, you can absolutely use Vulkan with llama.cpp on Strix Halo, and it works with mesa drivers out of the box. However, HIP/ROCm will deliver better performance on this hardware if you are willing to install it. Below is a detailed comparison.\n\n## Vulkan on Strix Halo: How to Build and Use\n\nBuilding llama.cpp with Vulkan support is straightforward. You only need the Vulkan development libraries and a GLSL compiler:\n\n```bash\n# Install dependencies (Debian/Ubuntu)\nsudo apt-get install libvulkan-dev glslc\n\n# Verify your GPU is detected\nvulkaninfo\n\n# Build llama.cpp with Vulkan\ncmake -S . -B build -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release\ncmake --build build --config Release\n```\n\nWith mesa's RADV driver (which supports RDNA 3.5 / gfx1150), Vulkan should detect your Strix Halo iGPU automatically. The Vulkan backend recognizes the GPU as an integrated (UMA) device and adjusts memory allocation accordingly, preferring host-visible device-local memory.\n\n## Vulkan vs HIP: Performance Comparison\n\n### Where HIP/ROCm Wins\n\n1. **Prompt processing (prefill) throughput**: HIP with hipBLASLt (`ROCBLAS_USE_HIPBLASLT=1`) provides significantly better matrix multiplication performance on gfx1150. The standard rocBLAS kernels are mediocre on Strix Halo, but the hipBLASLt path can roughly double prompt processing speed (e.g., from ~350 t/s to ~880 t/s on a 7B model).\n\n2. **Flash Attention**: The HIP backend has mature flash attention support with rocWMMA on RDNA3+ architectures, offering better memory efficiency for long-context inference.\n\n3. **Quantized matrix multiplication (MMQ)**: HIP can use MFMA (Matrix Fused Multiply-Add) instructions on CDNA and specialized paths for RDNA, giving it an edge for quantized model inference.\n\n4. **Overall maturity on AMD**: The HIP/CUDA backend in llama.cpp has been more heavily optimized for AMD GPUs, with specific tuning for different AMD architectures.\n\n### Where Vulkan is Competitive\n\n1. **Token generation speed**: For autoregressive decoding (generating one token at a time), the performance gap narrows considerably since this is more memory-bandwidth-bound than compute-bound. On a UMA architecture like Strix Halo, both backends are accessing the same physical memory.\n\n2. **Cooperative matrix support**: The Vulkan backend does support `VK_KHR_cooperative_matrix` for accelerated matrix operations on supported hardware. Whether RADV exposes this extension for gfx1150 depends on your mesa version.\n\n3. **Small model inference**: For smaller models (7B and under) where you are not compute-bound, the difference between Vulkan and HIP is less dramatic.\n\n### Estimated Performance Gap\n\nAs a rough guide, expect Vulkan to deliver approximately 60-80% of HIP/ROCm performance for prompt processing on Strix Halo. Token generation performance may be closer to 85-95% of HIP. These numbers depend heavily on model size, quantization, and context length.\n\n## Vulkan: Known Limitations on Strix Halo\n\n- **Architecture detection**: The Vulkan backend classifies RDNA 3.5 (Strix Halo) as `AMD_RDNA3` since it checks for integer dot product support to distinguish RDNA3+ from RDNA2. This means it gets RDNA3-class optimizations, which is generally appropriate.\n\n- **UMA memory handling**: The backend detects Strix Halo as an integrated GPU (`uma = true`) and adjusts buffer allocation. However, unlike the HIP path where you can tune the TTM `pages_limit` to unlock more system memory for the GPU, Vulkan memory management is handled by the driver (RADV) and you have less control.\n\n- **No equivalent to hipBLASLt**: There is no Vulkan equivalent to the `ROCBLAS_USE_HIPBLASLT=1` optimization that dramatically improves prompt processing on gfx1150. This is one of the biggest performance differentiators.\n\n## Recommendation\n\n**If you want simplicity and zero ROCm overhead**, Vulkan is a perfectly viable choice. It will give you good performance for interactive use (chatting with models), especially for token generation. Build with `-DGGML_VULKAN=ON` and you are ready to go.\n\n**If you want maximum performance**, particularly for prompt processing, batch inference, or large context workloads, HIP/ROCm is worth the installation overhead. The `ROCBLAS_USE_HIPBLASLT=1` environment variable alone can provide a significant speedup that Vulkan cannot match on this hardware.\n\n**A middle-ground option**: You can build llama.cpp with both backends enabled (`-DGGML_VULKAN=ON -DGGML_HIP=ON`) and switch between them at runtime using the `--device` flag. This lets you start with Vulkan immediately and add HIP later if you decide you need the extra performance.\n\n## Quick Start with Vulkan\n\n```bash\n# Build\ncmake -S . -B build -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release\ncmake --build build -j$(nproc)\n\n# Run (offload all layers to GPU)\n./build/bin/llama-cli -m model.gguf -ngl 99 -p \"Hello, world\"\n\n# Check detected device\n./build/bin/llama-cli --list-devices\n```\n\nFor Strix Halo with its unified memory architecture, use `-ngl 99` to offload all layers to the GPU regardless of backend choice.\n"}], "grading": {"eval_id": 4, "eval_name": "vulkan-vs-hip-backend-choice", "configuration": "without_skill", "score": 3, "max_score": 4, "expectations": [{"text": "Provides Vulkan build command with GGML_VULKAN=ON", "passed": true, "evidence": "Shows 'cmake -S . -B build -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release' build command"}, {"text": "Recommends HIP/ROCm over Vulkan for best performance on Strix Halo", "passed": true, "evidence": "States HIP provides better performance with hipBLASLt, recommends HIP for max performance"}, {"text": "Mentions Vulkan model loading issues or known limitations on Strix Halo", "passed": false, "evidence": "Does not mention issue #18741 or specific Vulkan model loading failures on Strix Halo"}, {"text": "Acknowledges Vulkan as a reasonable alternative when ROCm is impractical", "passed": true, "evidence": "Recommends Vulkan for 'simplicity and zero ROCm overhead', suggests building with both backends"}]}}, {"id": "eval-5-cpu-zendnn-with_skill", "prompt": "I want to run a small 7B BF16 model on my Ryzen AI Max 395 using only the CPU \u2014 no GPU at all. I heard Zen 5 has good AVX-512 and there's something called ZenDNN. How do I set this up for best CPU-only performance?", "eval_id": 5, "outputs": [{"name": "response.md", "type": "text", "content": "# Running a 7B BF16 Model on Ryzen AI Max 395 -- CPU-Only with ZenDNN\n\nGreat choice of hardware. The Ryzen AI Max 395 (Strix Halo) has Zen 5 cores with full AVX-512 support including AVX-512 BF16, which makes it one of the best consumer CPUs for BF16 inference. Here is how to set it up for maximum CPU-only performance.\n\n## What ZenDNN Actually Does\n\nZenDNN is AMD's optimized primitives library for Zen CPUs. In llama.cpp, it accelerates the matrix multiplication operations (MUL_MAT) specifically for FP32 and BF16 data types. Since you are running a BF16 model, ZenDNN is the ideal accelerator -- it uses AMD's AOCL-DLP (AMD Optimized CPU Libraries) internally, which contains hand-tuned matmul kernels for Zen 5 that outperform the generic AVX-512 paths.\n\nImportantly, ZenDNN does **not** help with quantized models (Q4, Q5, Q8). Those use the standard GGML CPU backend with AVX-512 VNNI intrinsics. ZenDNN is specifically valuable for your use case: unquantized BF16 inference.\n\n## Step 1: Build llama.cpp with ZenDNN\n\nThe build system can automatically download ZenDNN for you:\n\n```bash\ncmake -S . -B build \\\n  -DGGML_ZENDNN=ON \\\n  -DGGML_NATIVE=ON \\\n  -DCMAKE_BUILD_TYPE=Release\n\ncmake --build build --config Release -j $(nproc)\n```\n\nKey flags explained:\n\n- **`GGML_ZENDNN=ON`** -- Enables the ZenDNN backend, which provides optimized BF16 matmul kernels for Zen CPUs. CMake will automatically download and build ZenDNN if it is not already installed on your system.\n- **`GGML_NATIVE=ON`** -- Tells the compiler to auto-detect and enable all CPU features available on your machine. On the Ryzen AI Max 395, this enables AVX-512F, AVX-512CD, AVX-512VL, AVX-512DQ, AVX-512BW, AVX-512 VNNI, and AVX-512 BF16. This is simpler and more reliable than setting individual flags like `-DGGML_AVX512=ON -DGGML_AVX512_BF16=ON`, etc.\n- **`Release`** -- Enables compiler optimizations (-O2/-O3).\n\nYou do **not** need `GGML_HIP=ON`, `GGML_VULKAN=ON`, or any GPU-related flags since you want CPU-only.\n\n### Alternative: Custom ZenDNN Installation\n\nIf you have already installed ZenDNN separately (e.g., from AMD's release packages), point CMake to it:\n\n```bash\nexport ZENDNN_ROOT=/path/to/ZenDNN/build/install\n\ncmake -S . -B build \\\n  -DGGML_ZENDNN=ON \\\n  -DGGML_NATIVE=ON \\\n  -DCMAKE_BUILD_TYPE=Release\n\ncmake --build build --config Release -j $(nproc)\n```\n\n### Verify the Build\n\nAfter building, confirm AVX-512 support is active:\n\n```bash\n./build/bin/llama-cli --version\n# Look for: AVX512 = 1 in the feature flags\n```\n\n## Step 2: Set the ZenDNN Runtime Environment Variable\n\nThis is easy to miss but matters for performance:\n\n```bash\nexport ZENDNNL_MATMUL_ALGO=1\n```\n\nThis selects the \"Blocked AOCL DLP\" algorithm, which is the fastest matmul strategy available in ZenDNN for Zen 5. Without this, ZenDNN may default to a slower algorithm.\n\nAdd it to your `~/.bashrc` for persistence:\n\n```bash\necho 'export ZENDNNL_MATMUL_ALGO=1' >> ~/.bashrc\n```\n\n## Step 3: Run Inference\n\n```bash\nexport ZENDNNL_MATMUL_ALGO=1\n\n./build/bin/llama-cli -m your-7b-bf16-model.gguf \\\n  -ngl 0 \\\n  -t 16 \\\n  -b 2048 -ub 512\n```\n\nParameters explained:\n\n- **`-ngl 0`** -- Zero GPU layers. All computation stays on the CPU.\n- **`-t 16`** -- Use 16 threads, matching the physical core count of the Ryzen AI Max 395. This is the sweet spot. Performance scales well up to the physical core count but **degrades** with hyperthreading (using 32 threads is slower than 16 because of resource contention and cache thrashing).\n- **`-b 2048 -ub 512`** -- Batch size settings for prompt processing. `-b` is the logical batch size (how many tokens per batch), `-ub` is the physical/computation batch size. These defaults work well for the 395's large L3 cache and memory bandwidth.\n\n## Step 4: Benchmark to Confirm Performance\n\nRun a benchmark to validate everything is working optimally:\n\n```bash\nexport ZENDNNL_MATMUL_ALGO=1\n\n./build/bin/llama-bench -m your-7b-bf16-model.gguf \\\n  -ngl 0 \\\n  -t 4,8,12,16 \\\n  -p 512 -n 128 \\\n  -r 3\n```\n\nThis sweeps thread counts so you can confirm that 16 threads is optimal on your specific system. Watch the `pp` (prompt processing) and `tg` (token generation) numbers. If you see performance plateau at 12 threads or drop at 16, adjust your `-t` accordingly.\n\n## Performance Expectations and Considerations\n\n### Memory Bandwidth\n\nA 7B BF16 model is approximately 14GB in memory (7 billion parameters at 2 bytes each). Token generation speed is memory-bandwidth-bound. The Ryzen AI Max 395 has approximately 256 GB/s of LPDDR5X bandwidth (shared between CPU and GPU). Since you are running CPU-only, the CPU gets full use of this bandwidth, which is favorable.\n\nRough theoretical estimate for token generation:\n```\ntg_speed ~ 256 GB/s / 14 GB ~ 18 tokens/s theoretical max\n```\nReal-world will be lower (60-70% of theoretical) due to overhead, so expect roughly 11-13 t/s for token generation. Prompt processing will be faster since it is compute-bound and benefits heavily from ZenDNN's optimized BF16 matmul and Zen 5's `_mm512_dpbf16_ps` instruction (AVX-512 BF16), which processes 32 BF16 values per operation.\n\n### Why BF16 + ZenDNN Is a Good Match for Zen 5\n\nZen 5 has native AVX-512 BF16 support via the `DPBF16PS` instruction. This instruction computes a dot product of BF16 pairs and accumulates into FP32, giving you 2x the throughput of FP32 operations. ZenDNN's matmul kernels are specifically tuned to exploit this instruction along with Zen 5's improved front-end and wider execution resources.\n\n### When You Might Consider Quantization Instead\n\nIf token generation speed is more important to you than maintaining full BF16 precision, a quantized model (e.g., Q4_K_M at ~4GB) would give much faster inference since the model is 3-4x smaller and therefore uses proportionally less memory bandwidth. Quantized models do not use ZenDNN -- they run on the standard GGML CPU backend with AVX-512 VNNI kernels, which are also well-optimized on Zen 5. You would not need the `GGML_ZENDNN=ON` flag for quantized models; just `GGML_NATIVE=ON` is sufficient.\n\n## Quick Reference\n\n| Setting | Value |\n|---------|-------|\n| Build flags | `GGML_ZENDNN=ON`, `GGML_NATIVE=ON`, `Release` |\n| Environment variable | `ZENDNNL_MATMUL_ALGO=1` |\n| GPU layers (`-ngl`) | `0` |\n| Thread count (`-t`) | `16` (physical core count) |\n| Batch sizes | `-b 2048 -ub 512` |\n| GPU flags needed | None |\n| ROCm required | No |\n\n## Summary\n\n1. Build with `GGML_ZENDNN=ON` and `GGML_NATIVE=ON` to get ZenDNN BF16 matmul and full AVX-512 support.\n2. Set `ZENDNNL_MATMUL_ALGO=1` at runtime for the fastest matmul algorithm.\n3. Run with `-ngl 0 -t 16` to use all physical cores, no GPU.\n4. Benchmark with `llama-bench` to verify performance on your specific system.\n\nThis gives you the best CPU-only BF16 inference path on Zen 5 without touching the GPU at all.\n"}], "grading": {"eval_id": 5, "eval_name": "cpu-only-zendnn-setup", "configuration": "with_skill", "score": 4, "max_score": 4, "expectations": [{"text": "Provides build command with GGML_ZENDNN=ON", "passed": true, "evidence": "Shows 'cmake -S . -B build -DGGML_ZENDNN=ON -DGGML_NATIVE=ON -DCMAKE_BUILD_TYPE=Release'"}, {"text": "Sets ZENDNNL_MATMUL_ALGO=1 environment variable", "passed": true, "evidence": "Explicitly shows 'export ZENDNNL_MATMUL_ALGO=1' and explains it selects the 'Blocked AOCL DLP' algorithm"}, {"text": "Recommends BF16 format as ideal for ZenDNN on Zen 5", "passed": true, "evidence": "Extensively explains BF16 is ideal, references _mm512_dpbf16_ps instruction, and explains ZenDNN only accelerates FP32/BF16"}, {"text": "Recommends using physical core count (16 cores) for thread count", "passed": true, "evidence": "Recommends '-t 16' matching physical core count, explains HT degrades performance"}]}}, {"id": "eval-5-cpu-zendnn-without_skill", "prompt": "I want to run a small 7B BF16 model on my Ryzen AI Max 395 using only the CPU \u2014 no GPU at all. I heard Zen 5 has good AVX-512 and there's something called ZenDNN. How do I set this up for best CPU-only performance?", "eval_id": 5, "outputs": [{"name": "response.md", "type": "text", "content": "# Running a 7B BF16 Model on Ryzen AI Max 395 (CPU-Only) with ZenDNN\n\n## Overview\n\nThe Ryzen AI Max 395 (codename \"Strix Halo\") uses Zen 5 cores with full AVX-512 support, including AVX-512 BF16 instructions. This makes it well-suited for running BF16 models on the CPU. This fork of llama.cpp includes a **ZenDNN backend** that accelerates matrix multiplication operations using AMD's optimized libraries, which is exactly what you want for best CPU-only performance.\n\n## What is ZenDNN?\n\nZenDNN (Zen Deep Neural Network Library) is AMD's high-performance deep learning inference library optimized for AMD Zen-based CPUs. In this llama.cpp fork, it provides an accelerated backend for **MUL_MAT** (matrix multiplication) operations -- the dominant compute kernel in transformer-based LLMs. Under the hood, ZenDNN uses its **LowOHA (Low Overhead Hardware Accelerated)** MatMul operator, which provides:\n\n- Built-in weight caching\n- Minimal execution overhead\n- Access to backend libraries: AOCL DLP, LibXSMM, and OneDNN\n\nThe ZenDNN backend explicitly supports the Ryzen AI MAX (Strix Halo) and BF16 data type, which is the ideal combination for your setup.\n\n## Step-by-Step Setup\n\n### 1. Build llama.cpp with ZenDNN\n\nThe build system can automatically download and compile ZenDNN for you. No manual installation is required.\n\n```bash\ncd /home/user/llama.cpp\n\n# Clean any previous build\nrm -rf build\n\n# Configure with ZenDNN enabled, no GPU backends\ncmake -B build \\\n    -DGGML_ZENDNN=ON \\\n    -DGGML_VULKAN=OFF \\\n    -DGGML_HIP=OFF \\\n    -DGGML_OPENCL=OFF \\\n    -DCMAKE_BUILD_TYPE=Release\n\n# Build (first build takes several minutes due to ZenDNN compilation)\ncmake --build build --config Release -j $(nproc)\n```\n\n**Note:** The first build will take a while because CMake downloads and compiles ZenDNN and its dependencies (AOCL DLP, LibXSMM, OneDNN) from source. Subsequent rebuilds are fast.\n\n### 2. Enable AVX-512 and Native CPU Optimization\n\nBy default, llama.cpp builds with `-march=native` (the `GGML_NATIVE` option defaults to ON). This automatically enables all AVX-512 extensions supported by your Zen 5 cores, including:\n\n- AVX-512F, AVX-512CD, AVX-512BW, AVX-512DQ, AVX-512VL\n- AVX-512 BF16 (hardware BFloat16 conversion and dot-product instructions)\n- AVX-512 VNNI (vector neural network instructions)\n\nYou can verify this by checking the compiler flags in the CMake output. If for some reason `GGML_NATIVE` is not picking up everything, you can explicitly force the flags:\n\n```bash\ncmake -B build \\\n    -DGGML_ZENDNN=ON \\\n    -DGGML_NATIVE=ON \\\n    -DGGML_AVX512=ON \\\n    -DGGML_AVX512_VNNI=ON \\\n    -DGGML_AVX512_BF16=ON \\\n    -DGGML_VULKAN=OFF \\\n    -DCMAKE_BUILD_TYPE=Release\n```\n\n### 3. Download a BF16 Model\n\nYou need a model in BF16 GGUF format. For example, a 7B-class model:\n\n```bash\n# Example: Llama 3.1 8B Instruct BF16\nhuggingface-cli download meta-llama/Llama-3.1-8B-Instruct-GGUF \\\n    --local-dir models/\n\n# Or any other 7B-class BF16 GGUF model you prefer\n```\n\nA 7B BF16 model requires approximately 14 GB of RAM. The Ryzen AI Max 395 typically comes with 64-128 GB of unified LPDDR5X memory, so this is not a concern.\n\n### 4. Set Environment Variables for Best Performance\n\n```bash\n# Use the Blocked AOCL DLP algorithm (recommended for best performance)\nexport ZENDNNL_MATMUL_ALGO=1\n\n# Set thread count to match your physical core count\n# The Ryzen AI Max 395 has 16 Zen 5 cores\nexport OMP_NUM_THREADS=16\n```\n\n### 5. Run Inference\n\n#### Using llama-server:\n\n```bash\n./build/bin/llama-server \\\n    -m models/your-7b-bf16-model.gguf \\\n    --host 0.0.0.0 \\\n    --port 8080 \\\n    -t 16 \\\n    -ngl 0\n```\n\nThe `-ngl 0` flag explicitly ensures zero layers are offloaded to GPU, keeping everything on the CPU.\n\n#### Using llama-cli for quick testing:\n\n```bash\n./build/bin/llama-cli \\\n    -m models/your-7b-bf16-model.gguf \\\n    -t 16 \\\n    -ngl 0 \\\n    -p \"Hello, how are you?\"\n```\n\n#### Benchmarking with llama-bench:\n\n```bash\n./build/bin/llama-bench \\\n    -m models/your-7b-bf16-model.gguf \\\n    -t 16 \\\n    -ngl 0\n```\n\nThis will give you tokens/second measurements for both prompt processing and generation.\n\n## Performance Tuning Tips\n\n### Thread Count\n\n- The Ryzen AI Max 395 has **16 Zen 5 cores / 32 threads** (with SMT).\n- For LLM inference, using the **physical core count** (16 threads with `-t 16`) typically gives the best results. SMT (hyperthreading) threads rarely help and can hurt due to cache contention.\n- Experiment with `-t 16` vs `-t 32` and benchmark to confirm.\n\n### Memory Bandwidth\n\n- The Strix Halo has **256-bit LPDDR5X** memory with substantial bandwidth (up to ~120 GB/s depending on configuration).\n- BF16 models use half the memory bandwidth of FP32, which is a significant advantage for memory-bandwidth-bound token generation.\n- Autoregressive token generation in LLMs is almost always memory-bandwidth-bound, so BF16 gives you close to 2x speedup over FP32 in this phase.\n\n### ZenDNN Algorithm Selection\n\nThe `ZENDNNL_MATMUL_ALGO` environment variable controls which backend algorithm ZenDNN uses:\n\n| Value | Algorithm | Notes |\n|-------|-----------|-------|\n| 1     | Blocked AOCL DLP | **Recommended** - best overall performance |\n\nFor additional algorithm options and environment variables, refer to the [ZenDNN runtime environment documentation](https://github.com/amd/ZenDNN).\n\n### Batch Size for Prompt Processing\n\nIf you are processing long prompts, larger batch sizes improve throughput because matrix multiplications become more compute-bound (favoring ZenDNN). The default batch size of 512 is generally good. You can adjust with `-ub` (micro-batch size) and `-b` (batch size).\n\n## How It Works Architecturally\n\nWhen you build with `-DGGML_ZENDNN=ON`, the ZenDNN backend registers itself alongside the standard CPU backend:\n\n1. **ZenDNN backend** handles `MUL_MAT` operations using optimized AMD-specific GEMM routines (via `zendnnl::lowoha::matmul::matmul_direct`).\n2. **CPU backend** handles all other operations (attention, activations, normalization, etc.) using AVX-512 SIMD paths compiled via `-march=native`.\n3. The two backends cooperate automatically -- no manual configuration needed to split work between them.\n\nThis means you get the best of both worlds: AMD-optimized matrix multiplication from ZenDNN, plus the standard llama.cpp CPU backend with full AVX-512 BF16 support for everything else.\n\n## Verifying ZenDNN is Active\n\nWhen you start llama-server or llama-cli, check the startup logs. You should see the ZenDNN backend being initialized. You can also look for backend information in the log output confirming that MUL_MAT operations are being routed to ZenDNN.\n\n## Summary\n\n| Setting | Value |\n|---------|-------|\n| Build flag | `-DGGML_ZENDNN=ON` |\n| GPU offload | `-ngl 0` (none) |\n| Thread count | `-t 16` (physical cores) |\n| Environment | `ZENDNNL_MATMUL_ALGO=1` |\n| Data type | BF16 GGUF model |\n| CPU features used | AVX-512, AVX-512 BF16, AVX-512 VNNI (via `-march=native`) |\n\nThis configuration gives you optimized CPU-only inference leveraging both ZenDNN's tuned matrix multiplication and the Zen 5 AVX-512 instruction set for a 7B BF16 model on your Ryzen AI Max 395.\n"}], "grading": {"eval_id": 5, "eval_name": "cpu-only-zendnn-setup", "configuration": "without_skill", "score": 4, "max_score": 4, "expectations": [{"text": "Provides build command with GGML_ZENDNN=ON", "passed": true, "evidence": "Shows cmake build with -DGGML_ZENDNN=ON"}, {"text": "Sets ZENDNNL_MATMUL_ALGO=1 environment variable", "passed": true, "evidence": "Shows 'export ZENDNNL_MATMUL_ALGO=1' with explanation of Blocked AOCL DLP"}, {"text": "Recommends BF16 format as ideal for ZenDNN on Zen 5", "passed": true, "evidence": "Explains BF16 is supported by ZenDNN and references AVX-512 BF16 instructions"}, {"text": "Recommends using physical core count (16 cores) for thread count", "passed": true, "evidence": "Recommends '-t 16' matching physical core count, notes SMT threads rarely help"}]}}, {"id": "eval-6-server-deploy-with_skill", "prompt": "I need to deploy llama-server on my Strix Halo workstation as a production service for our small team (4-5 concurrent users). We're using a Llama 3 8B Q4_K_M model. What's the optimal configuration for stability and throughput?", "eval_id": 6, "outputs": [{"name": "response.md", "type": "text", "content": "# Optimal llama-server Configuration for Strix Halo (Llama 3 8B Q4_K_M, 4-5 Concurrent Users)\n\n## Prerequisites (Do These First)\n\n### 1. Increase TTM Memory Limits\n\nThis is critical. Without it, the GPU can only access a small fraction of system RAM and you will hit OOM errors under sustained multi-user load.\n\nCreate `/etc/modprobe.d/increase_amd_memory.conf`:\n```\noptions ttm pages_limit=25600000\noptions ttm page_pool_size=25600000\n```\n\nApply and reboot:\n```bash\nsudo update-initramfs -u -k all\nsudo reboot\n```\n\nVerify after reboot:\n```bash\ncat /sys/module/ttm/parameters/pages_limit\n# Should show: 25600000\n```\n\n### 2. Install ROCm 6.1+\n\nVerify your installation:\n```bash\nrocminfo | grep -i \"Name:\" | grep gfx\n# Should show gfx1150 or gfx1151\n```\n\nMake sure your user is in the `video` and `render` groups:\n```bash\nsudo usermod -a -G video,render $USER\n```\n\n### 3. Remove HSA_OVERRIDE_GFX_VERSION If Set\n\nIf you followed older guides, you may have this set. It forces generic kernels and hurts performance. Remove it from your `.bashrc` or shell profile.\n\n## Build Configuration\n\nUse the optimized HIP/ROCm build targeting gfx1150 specifically:\n\n```bash\ncmake -S . -B build \\\n  -DGGML_HIP=ON \\\n  -DGPU_TARGETS=\"gfx1150\" \\\n  -DGGML_HIP_GRAPHS=ON \\\n  -DGGML_CUDA_FORCE_MMQ=ON \\\n  -DCMAKE_BUILD_TYPE=Release \\\n  -DCMAKE_HIP_FLAGS=\"-O3\"\n\ncmake --build build --config Release -j $(nproc)\n```\n\nKey flags explained:\n- **`GPU_TARGETS=\"gfx1150\"`**: Compiles kernels specifically for RDNA 3.5 instead of a bloated multi-arch build. Cuts compile time from 30+ minutes to under 10 and produces better-optimized code.\n- **`GGML_HIP_GRAPHS=ON`**: HIP graph capture reduces kernel dispatch overhead, which matters under concurrent load.\n- **`GGML_CUDA_FORCE_MMQ=ON`**: Forces quantized matmul kernels, which are often faster than hipBLAS on RDNA 3.5 for quantized models like Q4_K_M.\n\nIf you have rocWMMA v2.0+ installed, also add `-DGGML_HIP_ROCWMMA_FATTN=ON` for optimized flash attention kernels.\n\nVerify the build:\n```bash\n./build/bin/llama-bench --list-devices\n# Should show: AMD Radeon Graphics (gfx1150 or gfx1151)\n```\n\n## Server Launch Configuration\n\n```bash\nexport ROCBLAS_USE_HIPBLASLT=1\n\n./build/bin/llama-server \\\n  -m /path/to/llama-3-8b-Q4_K_M.gguf \\\n  -ngl 99 \\\n  --no-mmap \\\n  -fa on \\\n  -ctk q8_0 -ctv q8_0 \\\n  -c 8192 \\\n  -np 5 \\\n  -b 2048 -ub 512 \\\n  -t 4 \\\n  --host 0.0.0.0 \\\n  --port 8080\n```\n\n### Parameter Rationale\n\n| Parameter | Value | Why |\n|-----------|-------|-----|\n| `-ngl 99` | Full GPU offload | The Radeon 890M handles all layers well for an 8B model. Unified memory means zero transfer penalty. |\n| `--no-mmap` | Disable memory mapping | Critical for stable operation. HIP's `hipMemcpy()` has severe overhead with mmap'd pages under sustained load. |\n| `-fa on` | Flash attention | Reduces memory usage for long contexts and is WMMA-accelerated on RDNA 3.5. |\n| `-ctk q8_0 -ctv q8_0` | Quantized KV cache | With 5 parallel slots, each needing its own KV cache, this cuts memory usage roughly in half vs f16 with negligible quality loss. |\n| `-c 8192` | 8K context length | Good balance for most use cases. Each slot gets up to 8K tokens of context. |\n| `-np 5` | 5 parallel slots | Matches your team size (4-5 users). Each user gets a dedicated slot so requests don't queue behind each other. |\n| `-b 2048 -ub 512` | Batch sizes | Good defaults for prompt processing throughput on Strix Halo. |\n| `-t 4` | 4 CPU threads | Keep this low. CPU and GPU share the ~256 GB/s memory bus, so excess CPU threads compete with the GPU for bandwidth and hurt token generation speed. |\n| `ROCBLAS_USE_HIPBLASLT=1` | hipBLASLt kernels | Without this, prompt processing is 2-3x slower (~350 t/s vs ~880 t/s for 7B Q4). Always set this. |\n\n### Memory Budget Estimate\n\nFor Llama 3 8B Q4_K_M with this configuration:\n- **Model weights**: ~4.9 GB (8B params at ~4.8 bits/weight for Q4_K_M)\n- **KV cache (q8_0, 5 slots, 8K context)**: ~2.5 GB approximately\n- **Runtime overhead**: ~1-2 GB\n- **Total**: ~8-9 GB -- well within any Strix Halo system's unified memory\n\nThis leaves plenty of headroom. If your team needs longer contexts, you can safely increase `-c` to 16384 or even 32768.\n\n## Expected Performance\n\nWith this configuration, expect approximately:\n- **Prompt processing**: ~800-900 tokens/s (with hipBLASLt enabled)\n- **Token generation (single user)**: ~40-50 tokens/s\n- **Token generation (5 concurrent)**: Throughput is shared across slots, so individual users will see lower per-user speeds under full concurrent load, but aggregate throughput remains high\n\n## Setting Up as a Systemd Service\n\nFor production stability, run llama-server as a systemd service so it auto-restarts on failure and starts on boot.\n\nCreate `/etc/systemd/system/llama-server.service`:\n```ini\n[Unit]\nDescription=llama.cpp Inference Server\nAfter=network.target\n\n[Service]\nType=simple\nUser=llama\nGroup=llama\nWorkingDirectory=/opt/llama.cpp\nEnvironment=ROCBLAS_USE_HIPBLASLT=1\nExecStart=/opt/llama.cpp/build/bin/llama-server \\\n  -m /opt/models/llama-3-8b-Q4_K_M.gguf \\\n  -ngl 99 \\\n  --no-mmap \\\n  -fa on \\\n  -ctk q8_0 -ctv q8_0 \\\n  -c 8192 \\\n  -np 5 \\\n  -b 2048 -ub 512 \\\n  -t 4 \\\n  --host 0.0.0.0 \\\n  --port 8080\nRestart=on-failure\nRestartSec=10\nLimitMEMLOCK=infinity\nLimitNOFILE=65536\n\n[Install]\nWantedBy=multi-user.target\n```\n\nEnable and start:\n```bash\nsudo systemctl daemon-reload\nsudo systemctl enable llama-server\nsudo systemctl start llama-server\nsudo systemctl status llama-server\n```\n\nKey service settings:\n- **`Restart=on-failure`** with **`RestartSec=10`**: Auto-restarts the server if it crashes, with a 10-second cooldown.\n- **`LimitMEMLOCK=infinity`**: Allows HIP to lock memory pages as needed.\n- **`LimitNOFILE=65536`**: Prevents file descriptor exhaustion under concurrent connections.\n- **`Environment=ROCBLAS_USE_HIPBLASLT=1`**: The hipBLASLt variable must be set in the service environment, not just your shell profile.\n\n## Monitoring\n\n### Health Check\n\nThe server exposes a `/health` endpoint:\n```bash\ncurl http://localhost:8080/health\n```\n\nYou can use this for load balancer health checks or a simple watchdog script.\n\n### Metrics\n\nThe `/metrics` endpoint provides Prometheus-compatible metrics for monitoring request throughput, latency, and slot utilization.\n\n### GPU Monitoring\n\nMonitor GPU memory and utilization with:\n```bash\nwatch -n 2 rocm-smi\n```\n\nWatch for TTM-related OOM under sustained multi-user load. If you see errors, verify your TTM `pages_limit` is correctly set.\n\n## Tuning for Your Workload\n\n### If users need longer contexts\n\nIncrease `-c` (e.g., `-c 16384` or `-c 32768`). With q8_0 KV cache and a relatively small 8B model, you have plenty of memory headroom. If memory becomes tight at very large contexts, switch to `-ctk q4_0 -ctv q4_0` for additional savings at the cost of slight quality degradation on very long contexts.\n\n### If you add more concurrent users\n\nIncrease `-np` to match. Each additional slot adds KV cache memory proportional to context length. For an 8B Q4_K_M model, each 8K-context slot with q8_0 KV cache costs roughly 0.5 GB, so scaling to 8-10 users is feasible.\n\n### If prompt processing feels slow\n\nVerify `ROCBLAS_USE_HIPBLASLT=1` is set in the server's environment (check `systemctl show llama-server | grep Environment`). This is the most common cause of unexpectedly slow prompt ingestion.\n\n### Benchmarking your specific setup\n\nBefore going to production, run a quick benchmark to validate performance:\n```bash\nexport ROCBLAS_USE_HIPBLASLT=1\n\n./build/bin/llama-bench \\\n  -m /path/to/llama-3-8b-Q4_K_M.gguf \\\n  -ngl 99 \\\n  --no-mmap \\\n  -t 4 \\\n  -p 512 -n 128 \\\n  -r 3\n```\n\nYou should see pp512 in the 800-900 t/s range and tg128 around 40-50 t/s. If prompt processing is below 400 t/s, hipBLASLt is not active.\n"}], "grading": {"eval_id": 6, "eval_name": "llama-server-production-deploy", "configuration": "with_skill", "score": 4, "max_score": 4, "expectations": [{"text": "Configures -np for multiple concurrent users (4 or 5)", "passed": true, "evidence": "Uses '-np 5' matching team size, explains each user gets a dedicated slot"}, {"text": "Recommends KV cache quantization since parallel sequences multiply memory usage", "passed": true, "evidence": "Uses '-ctk q8_0 -ctv q8_0' with explanation that 5 parallel slots each need own KV cache"}, {"text": "Includes essential flags: -ngl 99, --no-mmap, ROCBLAS_USE_HIPBLASLT=1", "passed": true, "evidence": "All three present: -ngl 99, --no-mmap, ROCBLAS_USE_HIPBLASLT=1 with detailed explanations for each"}, {"text": "Mentions monitoring, systemd service, or health endpoint for production stability", "passed": true, "evidence": "Provides full systemd unit file, /health endpoint, /metrics for Prometheus, rocm-smi monitoring, LimitMEMLOCK=infinity"}]}}, {"id": "eval-6-server-deploy-without_skill", "prompt": "I need to deploy llama-server on my Strix Halo workstation as a production service for our small team (4-5 concurrent users). We're using a Llama 3 8B Q4_K_M model. What's the optimal configuration for stability and throughput?", "eval_id": 6, "outputs": [{"name": "response.md", "type": "text", "content": "# Optimal llama-server Configuration for Strix Halo with Llama 3 8B Q4_K_M\n\n## Hardware Context\n\nAMD Strix Halo (Ryzen AI 300 series) features:\n- **CPU**: Zen 5 cores with AVX-512 support, large L3 cache, CCX (Core Complex) topology\n- **iGPU**: RDNA 3.5 (Radeon 890M) with shared unified memory\n- **Memory**: LPDDR5X unified memory (typically 32-64 GB, shared between CPU and iGPU)\n- **Key advantage**: Unified memory architecture eliminates CPU-GPU data copies\n\nLlama 3 8B Q4_K_M model characteristics:\n- ~4.9 GB model file size\n- ~5-6 GB RAM for model weights in memory\n- KV cache memory depends on context size and number of parallel slots\n\n## Recommended Launch Configuration\n\n```bash\n./llama-server \\\n    --model /path/to/Meta-Llama-3-8B-Q4_K_M.gguf \\\n    --host 0.0.0.0 \\\n    --port 8080 \\\n    --ctx-size 8192 \\\n    --parallel 5 \\\n    --batch-size 2048 \\\n    --ubatch-size 512 \\\n    --threads 8 \\\n    --threads-batch 16 \\\n    --flash-attn on \\\n    --cache-type-k q8_0 \\\n    --cache-type-v q8_0 \\\n    --cont-batching \\\n    --predict -1 \\\n    --slots\n```\n\n## Parameter Rationale\n\n### Context and Slots\n\n| Parameter | Value | Reasoning |\n|-----------|-------|-----------|\n| `--ctx-size 8192` | 8192 tokens | Llama 3 supports up to 8192 natively. This is the total context budget divided across all slots. Each of the 5 slots gets ~1638 tokens. If your users need longer contexts, increase this (e.g., 16384 or 32768) but monitor memory usage. |\n| `--parallel 5` | 5 slots | One slot per concurrent user. Match this to your expected peak concurrency (4-5 users). The server defaults to 4 when set to auto. Setting to 5 covers your upper bound. |\n| `--cont-batching` | enabled | Continuous batching (enabled by default) allows the server to process prompt tokens for one request while generating tokens for another, dramatically improving throughput for concurrent users. |\n\n### Threading\n\n| Parameter | Value | Reasoning |\n|-----------|-------|-----------|\n| `--threads 8` | 8 threads | For token generation. Zen 5 cores are powerful individually; using too many threads adds synchronization overhead. For an 8B model, 8 threads typically hits the sweet spot on Zen 5. |\n| `--threads-batch 16` | 16 threads | For prompt processing (batch/prefill). This is more parallelizable, so using more threads improves prompt ingestion speed. Use up to the number of physical cores available. |\n\nStrix Halo SKUs vary (up to 16 cores). Adjust these based on your specific SKU:\n- **12-core SKU**: Use `--threads 6 --threads-batch 12`\n- **16-core SKU**: Use `--threads 8 --threads-batch 16`\n\n### Batching\n\n| Parameter | Value | Reasoning |\n|-----------|-------|-----------|\n| `--batch-size 2048` | 2048 tokens | Logical batch size. This is the maximum number of tokens processed in a single batch. The default (2048) works well for 5 concurrent users. |\n| `--ubatch-size 512` | 512 tokens | Physical batch size. Controls actual compute granularity. The default (512) is well-tuned for most hardware. |\n\n### Memory Optimization\n\n| Parameter | Value | Reasoning |\n|-----------|-------|-----------|\n| `--flash-attn on` | enabled | Flash Attention reduces KV cache memory traffic and improves throughput, especially important with multiple concurrent slots. Zen 5 and RDNA 3.5 both benefit. |\n| `--cache-type-k q8_0` | q8_0 quantized | Quantizing the KV cache K values to q8_0 roughly halves KV cache memory vs f16 with negligible quality loss. Critical for fitting 5 slots in memory. |\n| `--cache-type-v q8_0` | q8_0 quantized | Same for V values. Together these reduce KV cache from ~1 GB to ~500 MB for 5 slots at 8K context. |\n\n### Memory Budget Estimate (8192 ctx, 5 parallel slots)\n\n| Component | Approximate Memory |\n|-----------|-------------------|\n| Model weights (Q4_K_M) | ~5.0 GB |\n| KV cache (q8_0 K+V, 5 slots) | ~0.5 GB |\n| Working memory / overhead | ~1.0 GB |\n| **Total** | **~6.5 GB** |\n\nThis leaves significant headroom on a 32 GB or 64 GB Strix Halo system.\n\n## Optional: Vulkan iGPU Offload\n\nStrix Halo's RDNA 3.5 iGPU shares unified memory with the CPU. You can offload some layers to the iGPU for additional throughput:\n\n```bash\n# Build with Vulkan support first:\n# cmake -B build -DGGML_VULKAN=ON && cmake --build build\n\n./llama-server \\\n    --model /path/to/Meta-Llama-3-8B-Q4_K_M.gguf \\\n    --host 0.0.0.0 \\\n    --port 8080 \\\n    --ctx-size 8192 \\\n    --parallel 5 \\\n    --batch-size 2048 \\\n    --ubatch-size 512 \\\n    --threads 8 \\\n    --threads-batch 16 \\\n    --flash-attn on \\\n    --cache-type-k q8_0 \\\n    --cache-type-v q8_0 \\\n    --cont-batching \\\n    --n-gpu-layers 33 \\\n    --slots\n```\n\nSetting `--n-gpu-layers 33` offloads all 32 transformer layers plus the output layer to the Vulkan iGPU. Because Strix Halo uses unified memory, this avoids the usual PCIe transfer bottleneck. Benchmark both CPU-only and Vulkan configurations to determine which gives better throughput for your specific SKU -- the iGPU can be faster for batch processing while the Zen 5 CPU excels at parallel slot handling.\n\n## NUMA Considerations\n\nIf your Strix Halo SKU has multiple CCX clusters (some higher-end models), consider:\n\n```bash\n--numa distribute\n```\n\nThis spreads work across NUMA nodes. However, most Strix Halo mobile/workstation chips are single-socket with unified memory, so this may not be necessary. Test with and without.\n\n## Production Hardening\n\n### Systemd Service File\n\nCreate `/etc/systemd/system/llama-server.service`:\n\n```ini\n[Unit]\nDescription=llama.cpp Server\nAfter=network.target\n\n[Service]\nType=simple\nUser=llama\nGroup=llama\nWorkingDirectory=/opt/llama.cpp\nExecStart=/opt/llama.cpp/build/bin/llama-server \\\n    --model /opt/models/Meta-Llama-3-8B-Q4_K_M.gguf \\\n    --host 0.0.0.0 \\\n    --port 8080 \\\n    --ctx-size 8192 \\\n    --parallel 5 \\\n    --batch-size 2048 \\\n    --ubatch-size 512 \\\n    --threads 8 \\\n    --threads-batch 16 \\\n    --flash-attn on \\\n    --cache-type-k q8_0 \\\n    --cache-type-v q8_0 \\\n    --cont-batching \\\n    --slots\nRestart=always\nRestartSec=5\nLimitNOFILE=65536\nEnvironment=\"LLAMA_CACHE=/opt/llama.cpp/cache\"\n\n[Install]\nWantedBy=multi-user.target\n```\n\nEnable and start:\n\n```bash\nsudo systemctl daemon-reload\nsudo systemctl enable --now llama-server\nsudo systemctl status llama-server\n```\n\n### Reverse Proxy (Nginx)\n\nFor TLS termination and basic access control:\n\n```nginx\nupstream llama_backend {\n    server 127.0.0.1:8080;\n}\n\nserver {\n    listen 443 ssl;\n    server_name llama.internal.example.com;\n\n    ssl_certificate     /etc/ssl/certs/llama.crt;\n    ssl_certificate_key /etc/ssl/private/llama.key;\n\n    # Basic auth for team access\n    auth_basic \"LLM Service\";\n    auth_basic_user_file /etc/nginx/.htpasswd;\n\n    # Increase timeouts for long generations\n    proxy_read_timeout 300s;\n    proxy_send_timeout 300s;\n\n    # SSE support for streaming\n    proxy_buffering off;\n    proxy_cache off;\n\n    location / {\n        proxy_pass http://llama_backend;\n        proxy_set_header Host $host;\n        proxy_set_header X-Real-IP $remote_addr;\n        proxy_set_header Connection '';\n        proxy_http_version 1.1;\n        chunked_transfer_encoding off;\n    }\n}\n```\n\n### Monitoring\n\nThe `--slots` endpoint (enabled by default) exposes slot utilization at `GET /slots`. Use it to monitor:\n\n- Active vs idle slots\n- Tokens processed per slot\n- Prompt cache hit rates\n\nYou can also use the `/health` endpoint for load balancer health checks and `/metrics` for Prometheus-compatible metrics.\n\n### API Key Protection\n\nllama-server supports API key authentication:\n\n```bash\n--api-key \"your-secret-key-here\"\n```\n\nClients must then include `Authorization: Bearer your-secret-key-here` in requests. For multiple keys, use `--api-key-file /path/to/keys.txt` with one key per line.\n\n## Performance Tuning Checklist\n\n1. **Benchmark first**: Run `llama-bench` with your model to establish baseline tok/s\n2. **Thread count sweep**: Try `--threads` values from 4 to your physical core count; measure tok/s at each\n3. **Test Vulkan vs CPU**: Compare throughput with and without `--n-gpu-layers 33`\n4. **Monitor memory**: Watch `htop` / `free -h` under full 5-user concurrent load\n5. **Stress test**: Use the server's built-in bench endpoint or `tools/server/bench` to simulate concurrent users before going live\n6. **Context scaling**: If users need longer conversations, increase `--ctx-size` but re-verify memory fits\n\n## Scaling Considerations\n\nIf 5 concurrent users is not enough in the future:\n- **More slots**: Increase `--parallel` to 8 (increase `--ctx-size` proportionally to maintain per-slot context)\n- **Quantized KV cache**: Drop to `q4_0` for K and V cache types to further reduce memory per slot\n- **Smaller context**: If your use case allows, reduce per-slot context by lowering `--ctx-size`\n- **Model swap**: Consider Q4_K_S quantization for slightly less memory, or Q5_K_M if you have headroom and want better quality\n"}], "grading": {"eval_id": 6, "eval_name": "llama-server-production-deploy", "configuration": "without_skill", "score": 2, "max_score": 4, "expectations": [{"text": "Configures -np for multiple concurrent users (4 or 5)", "passed": true, "evidence": "Uses '--parallel 5' for 5 concurrent users"}, {"text": "Recommends KV cache quantization since parallel sequences multiply memory usage", "passed": true, "evidence": "Uses '--cache-type-k q8_0 --cache-type-v q8_0' with explanation about memory savings"}, {"text": "Includes essential flags: -ngl 99, --no-mmap, ROCBLAS_USE_HIPBLASLT=1", "passed": false, "evidence": "Missing all three critical Strix Halo flags: no -ngl 99 (suggests Vulkan with -ngl 33 as optional), no --no-mmap, no ROCBLAS_USE_HIPBLASLT=1. Defaults to CPU-only inference which is suboptimal"}, {"text": "Mentions monitoring, systemd service, or health endpoint for production stability", "passed": true, "evidence": "Provides systemd service file, /health endpoint, /metrics, nginx reverse proxy, and API key protection"}]}}], "previous_feedback": {}, "previous_outputs": {}, "benchmark": {"skill_name": "strix-halo-optimizer", "iteration": 2, "timestamp": "2026-03-05T07:15:00Z", "configurations": [{"name": "with_skill", "description": "With strix-halo-optimizer skill"}, {"name": "without_skill", "description": "Baseline (no skill)"}], "evals": [{"eval_id": 4, "eval_name": "vulkan-vs-hip-backend-choice", "results": {"with_skill": {"score": 4, "max_score": 4, "pass_rate": 1.0}, "without_skill": {"score": 3, "max_score": 4, "pass_rate": 0.75}}}, {"eval_id": 5, "eval_name": "cpu-only-zendnn-setup", "results": {"with_skill": {"score": 4, "max_score": 4, "pass_rate": 1.0}, "without_skill": {"score": 4, "max_score": 4, "pass_rate": 1.0}}}, {"eval_id": 6, "eval_name": "llama-server-production-deploy", "results": {"with_skill": {"score": 4, "max_score": 4, "pass_rate": 1.0}, "without_skill": {"score": 2, "max_score": 4, "pass_rate": 0.5}}}], "summary": {"with_skill": {"total_score": 12, "total_max": 12, "overall_pass_rate": 1.0}, "without_skill": {"total_score": 9, "total_max": 12, "overall_pass_rate": 0.75}}}};
+
+    // ---- State ----
+    let feedbackMap = {};  // run_id -> feedback text
+    let currentIndex = 0;
+    let visitedRuns = new Set();
+
+    // ---- Init ----
+    async function init() {
+      // Load saved feedback from server — but only if this isn't a fresh
+      // iteration (indicated by previous_feedback being present). When
+      // previous feedback exists, the feedback.json on disk is stale from
+      // the prior iteration and should not pre-fill the textareas.
+      const hasPrevious = Object.keys(EMBEDDED_DATA.previous_feedback || {}).length > 0
+        || Object.keys(EMBEDDED_DATA.previous_outputs || {}).length > 0;
+      if (!hasPrevious) {
+        try {
+          const resp = await fetch("/api/feedback");
+          const data = await resp.json();
+          if (data.reviews) {
+            for (const r of data.reviews) feedbackMap[r.run_id] = r.feedback;
+          }
+        } catch { /* first run, no feedback yet */ }
+      }
+
+      document.getElementById("skill-name").textContent = EMBEDDED_DATA.skill_name;
+      showRun(0);
+
+      // Wire up feedback auto-save
+      const textarea = document.getElementById("feedback");
+      let saveTimeout = null;
+      textarea.addEventListener("input", () => {
+        clearTimeout(saveTimeout);
+        document.getElementById("feedback-status").textContent = "";
+        saveTimeout = setTimeout(() => saveCurrentFeedback(), 800);
+      });
+    }
+
+    // ---- Navigation ----
+    function navigate(delta) {
+      const newIndex = currentIndex + delta;
+      if (newIndex >= 0 && newIndex < EMBEDDED_DATA.runs.length) {
+        saveCurrentFeedback();
+        showRun(newIndex);
+      }
+    }
+
+    function updateNavButtons() {
+      document.getElementById("prev-btn").disabled = currentIndex === 0;
+      document.getElementById("next-btn").disabled =
+        currentIndex === EMBEDDED_DATA.runs.length - 1;
+    }
+
+    // ---- Show a run ----
+    function showRun(index) {
+      currentIndex = index;
+      const run = EMBEDDED_DATA.runs[index];
+
+      // Progress
+      document.getElementById("progress").textContent =
+        `${index + 1} of ${EMBEDDED_DATA.runs.length}`;
+
+      // Prompt
+      document.getElementById("prompt-text").textContent = run.prompt;
+
+      // Config badge
+      const badge = document.getElementById("config-badge");
+      const configMatch = run.id.match(/(with_skill|without_skill|new_skill|old_skill)/);
+      if (configMatch) {
+        const config = configMatch[1];
+        const isBaseline = config === "without_skill" || config === "old_skill";
+        badge.textContent = config.replace(/_/g, " ");
+        badge.className = "config-badge " + (isBaseline ? "config-baseline" : "config-primary");
+        badge.style.display = "inline-block";
+      } else {
+        badge.style.display = "none";
+      }
+
+      // Outputs
+      renderOutputs(run);
+
+      // Previous outputs
+      renderPrevOutputs(run);
+
+      // Grades
+      renderGrades(run);
+
+      // Previous feedback
+      const prevFb = (EMBEDDED_DATA.previous_feedback || {})[run.id];
+      const prevEl = document.getElementById("prev-feedback");
+      if (prevFb) {
+        document.getElementById("prev-feedback-text").textContent = prevFb;
+        prevEl.style.display = "block";
+      } else {
+        prevEl.style.display = "none";
+      }
+
+      // Feedback
+      document.getElementById("feedback").value = feedbackMap[run.id] || "";
+      document.getElementById("feedback-status").textContent = "";
+
+      updateNavButtons();
+
+      // Track visited runs and promote done button when all visited
+      visitedRuns.add(index);
+      const doneBtn = document.getElementById("done-btn");
+      if (visitedRuns.size >= EMBEDDED_DATA.runs.length) {
+        doneBtn.classList.add("ready");
+      }
+
+      // Scroll main content to top
+      document.querySelector(".main").scrollTop = 0;
+    }
+
+    // ---- Render outputs ----
+    function renderOutputs(run) {
+      const container = document.getElementById("outputs-body");
+      container.innerHTML = "";
+
+      const outputs = run.outputs || [];
+      if (outputs.length === 0) {
+        container.innerHTML = '<div class="empty-state">No output files</div>';
+        return;
+      }
+
+      for (const file of outputs) {
+        const fileDiv = document.createElement("div");
+        fileDiv.className = "output-file";
+
+        // Always show file header with download link
+        const header = document.createElement("div");
+        header.className = "output-file-header";
+        const nameSpan = document.createElement("span");
+        nameSpan.textContent = file.name;
+        header.appendChild(nameSpan);
+        const dlBtn = document.createElement("a");
+        dlBtn.className = "dl-btn";
+        dlBtn.textContent = "Download";
+        dlBtn.download = file.name;
+        dlBtn.href = getDownloadUri(file);
+        header.appendChild(dlBtn);
+        fileDiv.appendChild(header);
+
+        const content = document.createElement("div");
+        content.className = "output-file-content";
+
+        if (file.type === "text") {
+          const pre = document.createElement("pre");
+          pre.textContent = file.content;
+          content.appendChild(pre);
+        } else if (file.type === "image") {
+          const img = document.createElement("img");
+          img.src = file.data_uri;
+          img.alt = file.name;
+          content.appendChild(img);
+        } else if (file.type === "pdf") {
+          const iframe = document.createElement("iframe");
+          iframe.src = file.data_uri;
+          content.appendChild(iframe);
+        } else if (file.type === "xlsx") {
+          renderXlsx(content, file.data_b64);
+        } else if (file.type === "binary") {
+          const a = document.createElement("a");
+          a.className = "download-link";
+          a.href = file.data_uri;
+          a.download = file.name;
+          a.textContent = "Download " + file.name;
+          content.appendChild(a);
+        } else if (file.type === "error") {
+          const pre = document.createElement("pre");
+          pre.textContent = file.content;
+          pre.style.color = "var(--red)";
+          content.appendChild(pre);
+        }
+
+        fileDiv.appendChild(content);
+        container.appendChild(fileDiv);
+      }
+    }
+
+    // ---- XLSX rendering via SheetJS ----
+    function renderXlsx(container, b64Data) {
+      try {
+        const raw = Uint8Array.from(atob(b64Data), c => c.charCodeAt(0));
+        const wb = XLSX.read(raw, { type: "array" });
+
+        for (let i = 0; i < wb.SheetNames.length; i++) {
+          const sheetName = wb.SheetNames[i];
+          const ws = wb.Sheets[sheetName];
+
+          if (wb.SheetNames.length > 1) {
+            const sheetLabel = document.createElement("div");
+            sheetLabel.style.cssText =
+              "font-weight:600; font-size:0.8rem; color:#b0aea5; margin-top:0.5rem; margin-bottom:0.25rem;";
+            sheetLabel.textContent = "Sheet: " + sheetName;
+            container.appendChild(sheetLabel);
+          }
+
+          const htmlStr = XLSX.utils.sheet_to_html(ws, { editable: false });
+          const wrapper = document.createElement("div");
+          wrapper.innerHTML = htmlStr;
+          container.appendChild(wrapper);
+        }
+      } catch (err) {
+        container.textContent = "Error rendering spreadsheet: " + err.message;
+      }
+    }
+
+    // ---- Grades ----
+    function renderGrades(run) {
+      const section = document.getElementById("grades-section");
+      const content = document.getElementById("grades-content");
+
+      if (!run.grading) {
+        section.style.display = "none";
+        return;
+      }
+
+      const grading = run.grading;
+      section.style.display = "block";
+      // Reset to collapsed
+      content.classList.remove("open");
+      document.getElementById("grades-arrow").classList.remove("open");
+
+      const summary = grading.summary || {};
+      const expectations = grading.expectations || [];
+
+      let html = '<div style="padding: 1rem;">';
+
+      // Summary line
+      const passRate = summary.pass_rate != null
+        ? Math.round(summary.pass_rate * 100) + "%"
+        : "?";
+      const badgeClass = summary.pass_rate >= 0.8 ? "grade-pass" : summary.pass_rate >= 0.5 ? "" : "grade-fail";
+      html += '<div class="grades-summary">';
+      html += '<span class="grade-badge ' + badgeClass + '">' + passRate + '</span>';
+      html += '<span>' + (summary.passed || 0) + ' passed, ' + (summary.failed || 0) + ' failed of ' + (summary.total || 0) + '</span>';
+      html += '</div>';
+
+      // Assertions list
+      html += '<ul class="assertion-list">';
+      for (const exp of expectations) {
+        const statusClass = exp.passed ? "pass" : "fail";
+        const statusIcon = exp.passed ? "\u2713" : "\u2717";
+        html += '<li class="assertion-item">';
+        html += '<span class="assertion-status ' + statusClass + '">' + statusIcon + '</span>';
+        html += '<span>' + escapeHtml(exp.text) + '</span>';
+        if (exp.evidence) {
+          html += '<div class="assertion-evidence">' + escapeHtml(exp.evidence) + '</div>';
+        }
+        html += '</li>';
+      }
+      html += '</ul>';
+
+      html += '</div>';
+      content.innerHTML = html;
+    }
+
+    function toggleGrades() {
+      const content = document.getElementById("grades-content");
+      const arrow = document.getElementById("grades-arrow");
+      content.classList.toggle("open");
+      arrow.classList.toggle("open");
+    }
+
+    // ---- Previous outputs (collapsible) ----
+    function renderPrevOutputs(run) {
+      const section = document.getElementById("prev-outputs-section");
+      const content = document.getElementById("prev-outputs-content");
+      const prevOutputs = (EMBEDDED_DATA.previous_outputs || {})[run.id];
+
+      if (!prevOutputs || prevOutputs.length === 0) {
+        section.style.display = "none";
+        return;
+      }
+
+      section.style.display = "block";
+      // Reset to collapsed
+      content.classList.remove("open");
+      document.getElementById("prev-outputs-arrow").classList.remove("open");
+
+      // Render the files into the content area
+      content.innerHTML = "";
+      const wrapper = document.createElement("div");
+      wrapper.style.padding = "1rem";
+
+      for (const file of prevOutputs) {
+        const fileDiv = document.createElement("div");
+        fileDiv.className = "output-file";
+
+        const header = document.createElement("div");
+        header.className = "output-file-header";
+        const nameSpan = document.createElement("span");
+        nameSpan.textContent = file.name;
+        header.appendChild(nameSpan);
+        const dlBtn = document.createElement("a");
+        dlBtn.className = "dl-btn";
+        dlBtn.textContent = "Download";
+        dlBtn.download = file.name;
+        dlBtn.href = getDownloadUri(file);
+        header.appendChild(dlBtn);
+        fileDiv.appendChild(header);
+
+        const fc = document.createElement("div");
+        fc.className = "output-file-content";
+
+        if (file.type === "text") {
+          const pre = document.createElement("pre");
+          pre.textContent = file.content;
+          fc.appendChild(pre);
+        } else if (file.type === "image") {
+          const img = document.createElement("img");
+          img.src = file.data_uri;
+          img.alt = file.name;
+          fc.appendChild(img);
+        } else if (file.type === "pdf") {
+          const iframe = document.createElement("iframe");
+          iframe.src = file.data_uri;
+          fc.appendChild(iframe);
+        } else if (file.type === "xlsx") {
+          renderXlsx(fc, file.data_b64);
+        } else if (file.type === "binary") {
+          const a = document.createElement("a");
+          a.className = "download-link";
+          a.href = file.data_uri;
+          a.download = file.name;
+          a.textContent = "Download " + file.name;
+          fc.appendChild(a);
+        }
+
+        fileDiv.appendChild(fc);
+        wrapper.appendChild(fileDiv);
+      }
+
+      content.appendChild(wrapper);
+    }
+
+    function togglePrevOutputs() {
+      const content = document.getElementById("prev-outputs-content");
+      const arrow = document.getElementById("prev-outputs-arrow");
+      content.classList.toggle("open");
+      arrow.classList.toggle("open");
+    }
+
+    // ---- Feedback (saved to server -> feedback.json) ----
+    function saveCurrentFeedback() {
+      const run = EMBEDDED_DATA.runs[currentIndex];
+      const text = document.getElementById("feedback").value;
+
+      if (text.trim() === "") {
+        delete feedbackMap[run.id];
+      } else {
+        feedbackMap[run.id] = text;
+      }
+
+      // Build reviews array from map
+      const reviews = [];
+      for (const [run_id, feedback] of Object.entries(feedbackMap)) {
+        if (feedback.trim()) {
+          reviews.push({ run_id, feedback, timestamp: new Date().toISOString() });
+        }
+      }
+
+      fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reviews, status: "in_progress" }),
+      }).then(() => {
+        document.getElementById("feedback-status").textContent = "Saved";
+      }).catch(() => {
+        // Static mode or server unavailable — no-op on auto-save,
+        // feedback will be downloaded on final submit
+        document.getElementById("feedback-status").textContent = "Will download on submit";
+      });
+    }
+
+    // ---- Done ----
+    function showDoneDialog() {
+      // Save current textarea to feedbackMap (but don't POST yet)
+      const run = EMBEDDED_DATA.runs[currentIndex];
+      const text = document.getElementById("feedback").value;
+      if (text.trim() === "") {
+        delete feedbackMap[run.id];
+      } else {
+        feedbackMap[run.id] = text;
+      }
+
+      // POST once with status: complete — include ALL runs so the model
+      // can distinguish "no feedback" (looks good) from "not reviewed"
+      const reviews = [];
+      const ts = new Date().toISOString();
+      for (const r of EMBEDDED_DATA.runs) {
+        reviews.push({ run_id: r.id, feedback: feedbackMap[r.id] || "", timestamp: ts });
+      }
+      const payload = JSON.stringify({ reviews, status: "complete" }, null, 2);
+      fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: payload,
+      }).then(() => {
+        document.getElementById("done-overlay").classList.add("visible");
+      }).catch(() => {
+        // Server not available (static mode) — download as file
+        const blob = new Blob([payload], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "feedback.json";
+        a.click();
+        URL.revokeObjectURL(url);
+        document.getElementById("done-overlay").classList.add("visible");
+      });
+    }
+
+    function closeDoneDialog() {
+      // Reset status back to in_progress
+      saveCurrentFeedback();
+      document.getElementById("done-overlay").classList.remove("visible");
+    }
+
+    // ---- Toast ----
+    function showToast(message) {
+      const toast = document.getElementById("toast");
+      toast.textContent = message;
+      toast.classList.add("visible");
+      setTimeout(() => toast.classList.remove("visible"), 2000);
+    }
+
+    // ---- Keyboard nav ----
+    document.addEventListener("keydown", (e) => {
+      // Don't capture when typing in textarea
+      if (e.target.tagName === "TEXTAREA") return;
+
+      if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+        e.preventDefault();
+        navigate(-1);
+      } else if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+        e.preventDefault();
+        navigate(1);
+      }
+    });
+
+    // ---- Util ----
+    function getDownloadUri(file) {
+      if (file.data_uri) return file.data_uri;
+      if (file.data_b64) return "data:application/octet-stream;base64," + file.data_b64;
+      if (file.type === "text") return "data:text/plain;charset=utf-8," + encodeURIComponent(file.content);
+      return "#";
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement("div");
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    // ---- View switching ----
+    function switchView(view) {
+      document.querySelectorAll(".view-tab").forEach(t => t.classList.remove("active"));
+      document.querySelectorAll(".view-panel").forEach(p => p.classList.remove("active"));
+      document.querySelector(`[onclick="switchView('${view}')"]`).classList.add("active");
+      document.getElementById("panel-" + view).classList.add("active");
+    }
+
+    // ---- Benchmark rendering ----
+    function renderBenchmark() {
+      const data = EMBEDDED_DATA.benchmark;
+      if (!data) return;
+
+      // Show the tabs
+      document.getElementById("view-tabs").style.display = "flex";
+
+      const container = document.getElementById("benchmark-content");
+      const summary = data.run_summary || {};
+      const metadata = data.metadata || {};
+      const notes = data.notes || [];
+
+      let html = "";
+
+      // Header
+      html += "<h2 style='font-family: Poppins, sans-serif; margin-bottom: 0.5rem;'>Benchmark Results</h2>";
+      html += "<p style='color: var(--text-muted); font-size: 0.875rem; margin-bottom: 1.25rem;'>";
+      if (metadata.skill_name) html += "<strong>" + escapeHtml(metadata.skill_name) + "</strong> &mdash; ";
+      if (metadata.timestamp) html += metadata.timestamp + " &mdash; ";
+      if (metadata.evals_run) html += "Evals: " + metadata.evals_run.join(", ") + " &mdash; ";
+      html += (metadata.runs_per_configuration || "?") + " runs per configuration";
+      html += "</p>";
+
+      // Summary table
+      html += '<table class="benchmark-table">';
+
+      function fmtStat(stat, pct) {
+        if (!stat) return "—";
+        const suffix = pct ? "%" : "";
+        const m = pct ? (stat.mean * 100).toFixed(0) : stat.mean.toFixed(1);
+        const s = pct ? (stat.stddev * 100).toFixed(0) : stat.stddev.toFixed(1);
+        return m + suffix + " ± " + s + suffix;
+      }
+
+      function deltaClass(val) {
+        if (!val) return "";
+        const n = parseFloat(val);
+        if (n > 0) return "benchmark-delta-positive";
+        if (n < 0) return "benchmark-delta-negative";
+        return "";
+      }
+
+      // Discover config names dynamically (everything except "delta")
+      const configs = Object.keys(summary).filter(k => k !== "delta");
+      const configA = configs[0] || "config_a";
+      const configB = configs[1] || "config_b";
+      const labelA = configA.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+      const labelB = configB.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+      const a = summary[configA] || {};
+      const b = summary[configB] || {};
+      const delta = summary.delta || {};
+
+      html += "<thead><tr><th>Metric</th><th>" + escapeHtml(labelA) + "</th><th>" + escapeHtml(labelB) + "</th><th>Delta</th></tr></thead>";
+      html += "<tbody>";
+
+      html += "<tr><td><strong>Pass Rate</strong></td>";
+      html += "<td>" + fmtStat(a.pass_rate, true) + "</td>";
+      html += "<td>" + fmtStat(b.pass_rate, true) + "</td>";
+      html += '<td class="' + deltaClass(delta.pass_rate) + '">' + (delta.pass_rate || "—") + "</td></tr>";
+
+      // Time (only show row if data exists)
+      if (a.time_seconds || b.time_seconds) {
+        html += "<tr><td><strong>Time (s)</strong></td>";
+        html += "<td>" + fmtStat(a.time_seconds, false) + "</td>";
+        html += "<td>" + fmtStat(b.time_seconds, false) + "</td>";
+        html += '<td class="' + deltaClass(delta.time_seconds) + '">' + (delta.time_seconds ? delta.time_seconds + "s" : "—") + "</td></tr>";
+      }
+
+      // Tokens (only show row if data exists)
+      if (a.tokens || b.tokens) {
+        html += "<tr><td><strong>Tokens</strong></td>";
+        html += "<td>" + fmtStat(a.tokens, false) + "</td>";
+        html += "<td>" + fmtStat(b.tokens, false) + "</td>";
+        html += '<td class="' + deltaClass(delta.tokens) + '">' + (delta.tokens || "—") + "</td></tr>";
+      }
+
+      html += "</tbody></table>";
+
+      // Per-eval breakdown (if runs data available)
+      const runs = data.runs || [];
+      if (runs.length > 0) {
+        const evalIds = [...new Set(runs.map(r => r.eval_id))].sort((a, b) => a - b);
+
+        html += "<h3 style='font-family: Poppins, sans-serif; margin-bottom: 0.75rem;'>Per-Eval Breakdown</h3>";
+
+        const hasTime = runs.some(r => r.result && r.result.time_seconds != null);
+        const hasErrors = runs.some(r => r.result && r.result.errors > 0);
+
+        for (const evalId of evalIds) {
+          const evalRuns = runs.filter(r => r.eval_id === evalId);
+          const evalName = evalRuns[0] && evalRuns[0].eval_name ? evalRuns[0].eval_name : "Eval " + evalId;
+
+          html += "<h4 style='font-family: Poppins, sans-serif; margin: 1rem 0 0.5rem; color: var(--text);'>" + escapeHtml(evalName) + "</h4>";
+          html += '<table class="benchmark-table">';
+          html += "<thead><tr><th>Config</th><th>Run</th><th>Pass Rate</th>";
+          if (hasTime) html += "<th>Time (s)</th>";
+          if (hasErrors) html += "<th>Crashes During Execution</th>";
+          html += "</tr></thead>";
+          html += "<tbody>";
+
+          // Group by config and render with average rows
+          const configGroups = [...new Set(evalRuns.map(r => r.configuration))];
+          for (let ci = 0; ci < configGroups.length; ci++) {
+            const config = configGroups[ci];
+            const configRuns = evalRuns.filter(r => r.configuration === config);
+            if (configRuns.length === 0) continue;
+
+            const rowClass = ci === 0 ? "benchmark-row-with" : "benchmark-row-without";
+            const configLabel = config.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+
+            for (const run of configRuns) {
+              const r = run.result || {};
+              const prClass = r.pass_rate >= 0.8 ? "benchmark-delta-positive" : r.pass_rate < 0.5 ? "benchmark-delta-negative" : "";
+              html += '<tr class="' + rowClass + '">';
+              html += "<td>" + configLabel + "</td>";
+              html += "<td>" + run.run_number + "</td>";
+              html += '<td class="' + prClass + '">' + ((r.pass_rate || 0) * 100).toFixed(0) + "% (" + (r.passed || 0) + "/" + (r.total || 0) + ")</td>";
+              if (hasTime) html += "<td>" + (r.time_seconds != null ? r.time_seconds.toFixed(1) : "—") + "</td>";
+              if (hasErrors) html += "<td>" + (r.errors || 0) + "</td>";
+              html += "</tr>";
+            }
+
+            // Average row
+            const rates = configRuns.map(r => (r.result || {}).pass_rate || 0);
+            const avgRate = rates.reduce((a, b) => a + b, 0) / rates.length;
+            const avgPrClass = avgRate >= 0.8 ? "benchmark-delta-positive" : avgRate < 0.5 ? "benchmark-delta-negative" : "";
+            html += '<tr class="benchmark-row-avg ' + rowClass + '">';
+            html += "<td>" + configLabel + "</td>";
+            html += "<td>Avg</td>";
+            html += '<td class="' + avgPrClass + '">' + (avgRate * 100).toFixed(0) + "%</td>";
+            if (hasTime) {
+              const times = configRuns.map(r => (r.result || {}).time_seconds).filter(t => t != null);
+              html += "<td>" + (times.length ? (times.reduce((a, b) => a + b, 0) / times.length).toFixed(1) : "—") + "</td>";
+            }
+            if (hasErrors) html += "<td></td>";
+            html += "</tr>";
+          }
+          html += "</tbody></table>";
+
+          // Per-assertion detail for this eval
+          const runsWithExpectations = {};
+          for (const config of configGroups) {
+            runsWithExpectations[config] = evalRuns.filter(r => r.configuration === config && r.expectations && r.expectations.length > 0);
+          }
+          const hasAnyExpectations = Object.values(runsWithExpectations).some(runs => runs.length > 0);
+          if (hasAnyExpectations) {
+            // Collect all unique assertion texts across all configs
+            const allAssertions = [];
+            const seen = new Set();
+            for (const config of configGroups) {
+              for (const run of runsWithExpectations[config]) {
+                for (const exp of (run.expectations || [])) {
+                  if (!seen.has(exp.text)) {
+                    seen.add(exp.text);
+                    allAssertions.push(exp.text);
+                  }
+                }
+              }
+            }
+
+            html += '<table class="benchmark-table" style="margin-top: 0.5rem;">';
+            html += "<thead><tr><th>Assertion</th>";
+            for (const config of configGroups) {
+              const label = config.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+              html += "<th>" + escapeHtml(label) + "</th>";
+            }
+            html += "</tr></thead><tbody>";
+
+            for (const assertionText of allAssertions) {
+              html += "<tr><td>" + escapeHtml(assertionText) + "</td>";
+
+              for (const config of configGroups) {
+                html += "<td>";
+                for (const run of runsWithExpectations[config]) {
+                  const exp = (run.expectations || []).find(e => e.text === assertionText);
+                  if (exp) {
+                    const cls = exp.passed ? "benchmark-delta-positive" : "benchmark-delta-negative";
+                    const icon = exp.passed ? "\u2713" : "\u2717";
+                    html += '<span class="' + cls + '" title="Run ' + run.run_number + ': ' + escapeHtml(exp.evidence || "") + '">' + icon + "</span> ";
+                  } else {
+                    html += "— ";
+                  }
+                }
+                html += "</td>";
+              }
+              html += "</tr>";
+            }
+            html += "</tbody></table>";
+          }
+        }
+      }
+
+      // Notes
+      if (notes.length > 0) {
+        html += '<div class="benchmark-notes">';
+        html += "<h3>Analysis Notes</h3>";
+        html += "<ul>";
+        for (const note of notes) {
+          html += "<li>" + escapeHtml(note) + "</li>";
+        }
+        html += "</ul></div>";
+      }
+
+      container.innerHTML = html;
+    }
+
+    // ---- Start ----
+    init();
+    renderBenchmark();
+  </script>
+</body>
+</html>

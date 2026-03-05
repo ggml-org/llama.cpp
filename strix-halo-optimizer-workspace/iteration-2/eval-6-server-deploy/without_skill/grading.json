@@ -1,0 +1,29 @@
+{
+  "eval_id": 6,
+  "eval_name": "llama-server-production-deploy",
+  "configuration": "without_skill",
+  "score": 2,
+  "max_score": 4,
+  "expectations": [
+    {
+      "text": "Configures -np for multiple concurrent users (4 or 5)",
+      "passed": true,
+      "evidence": "Uses '--parallel 5' for 5 concurrent users"
+    },
+    {
+      "text": "Recommends KV cache quantization since parallel sequences multiply memory usage",
+      "passed": true,
+      "evidence": "Uses '--cache-type-k q8_0 --cache-type-v q8_0' with explanation about memory savings"
+    },
+    {
+      "text": "Includes essential flags: -ngl 99, --no-mmap, ROCBLAS_USE_HIPBLASLT=1",
+      "passed": false,
+      "evidence": "Missing all three critical Strix Halo flags: no -ngl 99 (suggests Vulkan with -ngl 33 as optional), no --no-mmap, no ROCBLAS_USE_HIPBLASLT=1. Defaults to CPU-only inference which is suboptimal"
+    },
+    {
+      "text": "Mentions monitoring, systemd service, or health endpoint for production stability",
+      "passed": true,
+      "evidence": "Provides systemd service file, /health endpoint, /metrics, nginx reverse proxy, and API key protection"
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "skill_name": "strix-halo-optimizer",
+  "iteration": 2,
+  "timestamp": "2026-03-05T07:15:00Z",
+  "configurations": [
+    {
+      "name": "with_skill",
+      "description": "With strix-halo-optimizer skill"
+    },
+    {
+      "name": "without_skill",
+      "description": "Baseline (no skill)"
+    }
+  ],
+  "evals": [
+    {
+      "eval_id": 4,
+      "eval_name": "vulkan-vs-hip-backend-choice",
+      "results": {
+        "with_skill": {"score": 4, "max_score": 4, "pass_rate": 1.0},
+        "without_skill": {"score": 3, "max_score": 4, "pass_rate": 0.75}
+      }
+    },
+    {
+      "eval_id": 5,
+      "eval_name": "cpu-only-zendnn-setup",
+      "results": {
+        "with_skill": {"score": 4, "max_score": 4, "pass_rate": 1.0},
+        "without_skill": {"score": 4, "max_score": 4, "pass_rate": 1.0}
+      }
+    },
+    {
+      "eval_id": 6,
+      "eval_name": "llama-server-production-deploy",
+      "results": {
+        "with_skill": {"score": 4, "max_score": 4, "pass_rate": 1.0},
+        "without_skill": {"score": 2, "max_score": 4, "pass_rate": 0.5}
+      }
+    }
+  ],
+  "summary": {
+    "with_skill": {"total_score": 12, "total_max": 12, "overall_pass_rate": 1.0},
+    "without_skill": {"total_score": 9, "total_max": 12, "overall_pass_rate": 0.75}
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "eval_id": 6,
+  "eval_name": "llama-server-production-deploy",
+  "configuration": "with_skill",
+  "score": 4,
+  "max_score": 4,
+  "expectations": [
+    {
+      "text": "Configures -np for multiple concurrent users (4 or 5)",
+      "passed": true,
+      "evidence": "Uses '-np 5' matching team size, explains each user gets a dedicated slot"
+    },
+    {
+      "text": "Recommends KV cache quantization since parallel sequences multiply memory usage",
+      "passed": true,
+      "evidence": "Uses '-ctk q8_0 -ctv q8_0' with explanation that 5 parallel slots each need own KV cache"
+    },
+    {
+      "text": "Includes essential flags: -ngl 99, --no-mmap, ROCBLAS_USE_HIPBLASLT=1",
+      "passed": true,
+      "evidence": "All three present: -ngl 99, --no-mmap, ROCBLAS_USE_HIPBLASLT=1 with detailed explanations for each"
+    },
+    {
+      "text": "Mentions monitoring, systemd service, or health endpoint for production stability",
+      "passed": true,
+      "evidence": "Provides full systemd unit file, /health endpoint, /metrics for Prometheus, rocm-smi monitoring, LimitMEMLOCK=infinity"
+    }
+  ]
+}

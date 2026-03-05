@@ -1,0 +1,29 @@
+{
+  "eval_id": 4,
+  "eval_name": "vulkan-vs-hip-backend-choice",
+  "configuration": "without_skill",
+  "score": 3,
+  "max_score": 4,
+  "expectations": [
+    {
+      "text": "Provides Vulkan build command with GGML_VULKAN=ON",
+      "passed": true,
+      "evidence": "Shows 'cmake -S . -B build -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release' build command"
+    },
+    {
+      "text": "Recommends HIP/ROCm over Vulkan for best performance on Strix Halo",
+      "passed": true,
+      "evidence": "States HIP provides better performance with hipBLASLt, recommends HIP for max performance"
+    },
+    {
+      "text": "Mentions Vulkan model loading issues or known limitations on Strix Halo",
+      "passed": false,
+      "evidence": "Does not mention issue #18741 or specific Vulkan model loading failures on Strix Halo"
+    },
+    {
+      "text": "Acknowledges Vulkan as a reasonable alternative when ROCm is impractical",
+      "passed": true,
+      "evidence": "Recommends Vulkan for 'simplicity and zero ROCm overhead', suggests building with both backends"
+    }
+  ]
+}

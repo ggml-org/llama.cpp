@@ -1,0 +1,29 @@
+{
+  "eval_id": 5,
+  "eval_name": "cpu-only-zendnn-setup",
+  "configuration": "with_skill",
+  "score": 4,
+  "max_score": 4,
+  "expectations": [
+    {
+      "text": "Provides build command with GGML_ZENDNN=ON",
+      "passed": true,
+      "evidence": "Shows 'cmake -S . -B build -DGGML_ZENDNN=ON -DGGML_NATIVE=ON -DCMAKE_BUILD_TYPE=Release'"
+    },
+    {
+      "text": "Sets ZENDNNL_MATMUL_ALGO=1 environment variable",
+      "passed": true,
+      "evidence": "Explicitly shows 'export ZENDNNL_MATMUL_ALGO=1' and explains it selects the 'Blocked AOCL DLP' algorithm"
+    },
+    {
+      "text": "Recommends BF16 format as ideal for ZenDNN on Zen 5",
+      "passed": true,
+      "evidence": "Extensively explains BF16 is ideal, references _mm512_dpbf16_ps instruction, and explains ZenDNN only accelerates FP32/BF16"
+    },
+    {
+      "text": "Recommends using physical core count (16 cores) for thread count",
+      "passed": true,
+      "evidence": "Recommends '-t 16' matching physical core count, explains HT degrades performance"
+    }
+  ]
+}
