@@ -25,6 +25,7 @@ import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { mcpResourceStore } from '$lib/stores/mcp-resources.svelte';
 import { mode } from 'mode-watcher';
 import { parseMcpServerSettings, detectMcpTransportFromUrl, getFaviconUrl, uuid } from '$lib/utils';
+import { getProxiedUrlString } from '$lib/utils/cors-proxy';
 import {
 	MCPConnectionPhase,
 	MCPLogLevel,
@@ -565,22 +566,32 @@ class MCPStore {
 
 		// 1. Prefer icon explicitly matching the current color scheme
 		const themedIcon = validIcons.find((icon) => icon.theme === preferredTheme);
-		if (themedIcon) return themedIcon.src;
+		if (themedIcon) return this.#proxyIconSrc(themedIcon.src);
 
 		// 2. Handle universal icons (no theme specified)
 		const universalIcons = validIcons.filter((icon) => !icon.theme);
 
 		if (universalIcons.length === 2) {
 			// Heuristic: two theme-less icons → assume [0] = light, [1] = dark
-			return universalIcons[isDark ? 1 : 0].src;
+			return this.#proxyIconSrc(universalIcons[isDark ? 1 : 0].src);
 		}
 
 		if (universalIcons.length > 0) {
-			return universalIcons[0].src;
+			return this.#proxyIconSrc(universalIcons[0].src);
 		}
 
 		// 3. Last resort: use opposite-theme icon
-		return validIcons[0].src;
+		return this.#proxyIconSrc(validIcons[0].src);
+	}
+
+	/**
+	 * Route an icon src through the CORS proxy if it's an HTTPS URL.
+	 * Data URIs are returned as-is.
+	 */
+	#proxyIconSrc(src: string): string {
+		if (src.startsWith('data:')) return src;
+
+		return getProxiedUrlString(src);
 	}
 
 	/**
