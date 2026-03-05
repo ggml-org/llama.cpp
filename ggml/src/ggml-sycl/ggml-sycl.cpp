@@ -3555,12 +3555,12 @@ static void flush_pending_cpu_scatter() {
 // Flushed after GPU0 dispatch completes.
 struct pending_secondary_scatter {
     struct scatter_entry {
-        char *  dst_device;   // Primary GPU dst pointer
-        float * out_staging;  // Host-pinned output buffer (from ring)
-        size_t  bytes;        // Output size in bytes
+        char *        dst_device;    // Primary GPU dst pointer
+        float *       out_staging;   // Host-pinned output buffer (from ring)
+        size_t        bytes;         // Output size in bytes
+        sycl::queue * target_queue;  // Secondary GPU queue that produced this result
     };
     std::vector<scatter_entry> entries;
-    sycl::queue * target_queue = nullptr;  // Secondary GPU queue to wait on
     sycl::queue * stream       = nullptr;  // Primary GPU queue for H2D scatter
     bool          active       = false;
 };
@@ -3571,9 +3571,19 @@ static void flush_pending_secondary_scatter() {
     if (!g_pending_secondary_scatter.active) return;
 
     try {
-        // Wait for secondary GPU compute + D2H result copies to complete
-        if (g_pending_secondary_scatter.target_queue) {
-            g_pending_secondary_scatter.target_queue->wait();
+        // Wait on all unique secondary GPU queues
+        sycl::queue * waited[GGML_SYCL_MAX_DEVICES] = {};
+        int n_waited = 0;
+        for (const auto & e : g_pending_secondary_scatter.entries) {
+            if (!e.target_queue) continue;
+            bool already = false;
+            for (int i = 0; i < n_waited; i++) {
+                if (waited[i] == e.target_queue) { already = true; break; }
+            }
+            if (!already && n_waited < GGML_SYCL_MAX_DEVICES) {
+                e.target_queue->wait();
+                waited[n_waited++] = e.target_queue;
+            }
         }
 
         // Scatter results H2D to primary GPU dst, then drain
@@ -3592,9 +3602,8 @@ static void flush_pending_secondary_scatter() {
     }
 
     g_pending_secondary_scatter.entries.clear();
-    g_pending_secondary_scatter.target_queue = nullptr;
-    g_pending_secondary_scatter.stream       = nullptr;
-    g_pending_secondary_scatter.active       = false;
+    g_pending_secondary_scatter.stream = nullptr;
+    g_pending_secondary_scatter.active = false;
 }
 
 // Public entry point for graph boundary flush
@@ -26411,16 +26420,20 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         const int64_t i2    = entry.iid1;
                         char *        d_d   = dst_original + i1 * nb1 + i2 * nb2;
                         g_pending_secondary_scatter.entries.push_back(
-                            { d_d, out_staging[slot], needed_out });
+                            { d_d, out_staging[slot], needed_out, target_queue });
+                    }
+                    g_pending_secondary_scatter.stream = stream;
+                    g_pending_secondary_scatter.active = true;
+
+                    // Flush between chunks: out_staging slots are reused by the
+                    // next chunk, so we must consume them before they're overwritten.
+                    if (chunk_end < n_gpu) {
+                        flush_pending_secondary_scatter();
                     }
                 }
 
-                // Mark as active — flush will wait + scatter after GPU0 dispatch.
-                if (!gpu_indices.empty()) {
-                    g_pending_secondary_scatter.target_queue = target_queue;
-                    g_pending_secondary_scatter.stream       = stream;
-                    g_pending_secondary_scatter.active       = true;
-                }
+                // g_pending_secondary_scatter is populated per-chunk above.
+                // Last chunk's entries remain pending for flush after GPU0 dispatch.
             };
 
             // ---------------------------------------------------------------
