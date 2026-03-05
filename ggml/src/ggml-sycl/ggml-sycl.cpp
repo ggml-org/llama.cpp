@@ -3992,19 +3992,26 @@ static ggml_sycl_device_info ggml_sycl_init() {
     }
     device_map.swap(gpu_device_map);
 
-    // When GGML_SYCL_PERSISTENT_SPLIT is set and multiple GPUs are visible,
-    // expose only the primary GPU (device 0) to the backend scheduler.
-    // This forces the scheduler to send the FULL computation graph to device 0
-    // instead of splitting it across GPUs via pipeline parallelism.
-    // The persistent TG kernel requires the complete transformer forward pass;
-    // partial graphs produce garbage output.
-    // The secondary GPU remains accessible internally via SYCL platform scanning
-    // in split_config_init(), which discovers devices independently of device_count.
-    if (std::getenv("GGML_SYCL_PERSISTENT_SPLIT") != nullptr && device_map.size() > 1) {
-        GGML_LOG_INFO("[SYCL] PERSISTENT_SPLIT: exposing only device 0 to scheduler "
-                      "(%zu physical GPUs available for internal split)\n",
-                      device_map.size());
-        device_map.resize(1);
+    // When GGML_SYCL_PERSISTENT_SPLIT or GGML_SYCL_MOE_MULTI_GPU is set and
+    // multiple GPUs are visible, expose only the primary GPU (device 0) to
+    // the backend scheduler.  This prevents pipeline parallelism from
+    // allocating compute buffers on secondary GPUs, reserving their VRAM for
+    // internal use (persistent TG row-split or MoE expert caching).
+    // Secondary GPUs remain accessible internally: persistent split discovers
+    // them via split_config_init(), and MoE dispatch accesses them through
+    // g_secondary_queues[] set up in moe_hybrid_init_once().
+    {
+        const bool persistent_split = (std::getenv("GGML_SYCL_PERSISTENT_SPLIT") != nullptr);
+        const char * moe_env        = std::getenv("GGML_SYCL_MOE_MULTI_GPU");
+        const bool   moe_multi_gpu  = (moe_env && std::atoi(moe_env) != 0);
+
+        if ((persistent_split || moe_multi_gpu) && device_map.size() > 1) {
+            const char * reason = persistent_split ? "PERSISTENT_SPLIT" : "MOE_MULTI_GPU";
+            GGML_LOG_INFO("[SYCL] %s: exposing only device 0 to scheduler "
+                          "(%zu physical GPUs available internally)\n",
+                          reason, device_map.size());
+            device_map.resize(1);
+        }
     }
 
     info.device_count = static_cast<int>(device_map.size());
