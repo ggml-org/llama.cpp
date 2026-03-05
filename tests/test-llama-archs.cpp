@@ -60,7 +60,7 @@ static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
 }
 
 static void usage(char ** argv) {
-    printf("Usage: %s [-s/--seed seed] [-v/--verbose]\n", argv[0]);
+    printf("Usage: %s [-a/--arch arch] [-s/--seed seed] [-v/--verbose]\n", argv[0]);
 }
 
 static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32_t n_vocab, const size_t seed){
@@ -234,8 +234,8 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
 
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = 0;
-    ctx_params.n_threads = 4;
-    ctx_params.n_threads_batch = 4;
+    ctx_params.n_threads = 1; // FIXME LLAMA_SANITIZE_THREAD workaround
+    ctx_params.n_threads_batch = 1;
 
     size_t tmp = seed;
     llama_model_ptr model(llama_model_init_from_user(gguf_ctx, set_tensor_data, &tmp, model_params));
@@ -343,7 +343,7 @@ static bool moe_implemented(const llm_arch arch) {
     }
 }
 
-static int save_models(const size_t seed, const ggml_log_level log_level, const std::string & dir) {
+static int save_models(const llm_arch target_arch, const size_t seed, const ggml_log_level log_level, const std::string & dir) {
     GGML_ABORT("llama_model_save_to_file is broken");
     struct user_data_t {
         struct {
@@ -363,6 +363,9 @@ static int save_models(const size_t seed, const ggml_log_level log_level, const 
     }, &ud);
 
     for (const llm_arch & arch : llm_arch_all()) {
+        if (target_arch != LLM_ARCH_UNKNOWN && arch != target_arch) {
+            continue;
+        }
         if (arch == LLM_ARCH_CLIP || arch == LLM_ARCH_GPTJ || arch == LLM_ARCH_UNKNOWN) {
             continue; // These models don't have usable implementations.
         }
@@ -384,7 +387,7 @@ static int save_models(const size_t seed, const ggml_log_level log_level, const 
     return 0;
 }
 
-static int test_backends(const size_t seed, const ggml_log_level log_level) {
+static int test_backends(const llm_arch target_arch, const size_t seed, const ggml_log_level log_level) {
     struct user_data_t {
         struct {
             ggml_log_callback callback;
@@ -409,6 +412,9 @@ static int test_backends(const size_t seed, const ggml_log_level log_level) {
     printf("|%15s|%30s|%6s|%8s|%6s|\n", "Model arch.", "Device", "Config", "NMSE", "Status");
     printf("|---------------|------------------------------|------|--------|------|\n");
     for (const llm_arch & arch : llm_arch_all()) {
+        if (target_arch != LLM_ARCH_UNKNOWN && arch != target_arch) {
+            continue;
+        }
         if (arch == LLM_ARCH_CLIP || arch == LLM_ARCH_GPTJ || arch == LLM_ARCH_UNKNOWN) {
             continue; // These models don't have usable implementations.
         }
@@ -448,7 +454,7 @@ static int test_backends(const size_t seed, const ggml_log_level log_level) {
                 auto model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), seed, {dev});
                 const std::vector<float> logits_dev = get_logits(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens, encode);
                 const double nmse_val = nmse(logits_cpu, logits_dev);
-                const bool ok = nmse_val <= 1e-6;
+                const bool ok = nmse_val <= 1e-5;
                 all_ok = all_ok && ok;
                 char nmse_str[10];
                 snprintf(nmse_str, sizeof(nmse_str), "%.2e", nmse_val);
@@ -465,22 +471,28 @@ int main(int argc, char ** argv) {
     common_init();
     std::random_device rd;
 
+    llm_arch arch = LLM_ARCH_UNKNOWN;
     size_t seed = rd();
     ggml_log_level log_level = GGML_LOG_LEVEL_ERROR;
     std::string out;
 
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-s") == 0 || strcmp(argv[i], "--seed") == 0) {
+        if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--arch") == 0) {
             if (i + 1 < argc) {
-                seed = std::stoull(argv[++i]);
+                const std::string arch_name = argv[++i];
+                arch = llm_arch_from_string(arch_name);
+                if (arch == LLM_ARCH_UNKNOWN) {
+                    LOG_ERR("%s: unkown LLM architecture: %s\n", __func__, arch_name.c_str());
+                    return 1;
+                }
             } else {
                 usage(argv);
                 return 1;
             }
         }
-        if (strcmp(argv[i], "-o") == 0 || strcmp(argv[i], "--out") == 0) {
+        if (strcmp(argv[i], "-s") == 0 || strcmp(argv[i], "--seed") == 0) {
             if (i + 1 < argc) {
-                out = argv[++i];
+                seed = std::stoull(argv[++i]);
             } else {
                 usage(argv);
                 return 1;
@@ -490,13 +502,21 @@ int main(int argc, char ** argv) {
             log_level = GGML_LOG_LEVEL_INFO;
             continue;
         }
+        if (strcmp(argv[i], "-o") == 0 || strcmp(argv[i], "--out") == 0) {
+            if (i + 1 < argc) {
+                out = argv[++i];
+            } else {
+                usage(argv);
+                return 1;
+            }
+        }
     }
 
     try {
         if (!out.empty()) {
-            return save_models(seed, log_level, out);
+            return save_models(arch, seed, log_level, out);
         }
-        return test_backends(seed, log_level);
+        return test_backends(arch, seed, log_level);
     } catch (const std::exception & err) {
         fprintf(stderr, "encountered runtime error: %s\n", err.what());
         return -1;

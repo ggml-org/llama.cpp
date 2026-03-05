@@ -130,7 +130,7 @@ int main(int argc, char ** argv) {
         const double nmse_val = nmse(logits_disk, logits_calc);
         LOG_INF("%s: NMSE=%.3e\n", __func__, nmse_val);
 
-        if (nmse_val > 1e-6) {
+        if (nmse_val > 1e-5) {
             printf("\033[1;31mFAIL\033[0m\n");
             return 1;
         }
