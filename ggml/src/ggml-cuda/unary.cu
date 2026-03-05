@@ -572,23 +572,32 @@ static void ggml_cuda_op_unary_mul_impl(ggml_backend_cuda_context & ctx, ggml_te
     const ggml_tensor * unary_src = unary_node->src[0];  // input to the unary op
     const ggml_tensor * other_src = (mul_node->src[0] == unary_node) ? mul_node->src[1] : mul_node->src[0];
 
-    GGML_ASSERT(ggml_is_contiguous(unary_src));
-    GGML_ASSERT(ggml_is_contiguous(other_src));
+    GGML_ASSERT(ggml_is_contiguous_1(unary_src));
+    GGML_ASSERT(unary_src->nb[0] == ggml_element_size(unary_src));
+    GGML_ASSERT(ggml_is_contiguous_1(other_src));
+    GGML_ASSERT(other_src->nb[0] == ggml_element_size(other_src));
     GGML_ASSERT(ggml_are_same_shape(unary_src, other_src));
-    GGML_ASSERT(unary_src->type == GGML_TYPE_F32);
-    GGML_ASSERT(other_src->type == GGML_TYPE_F32);
-    GGML_ASSERT(mul_node->type == GGML_TYPE_F32);
 
-    const float * unary_src_d = (const float *) unary_src->data;
-    const float * other_src_d = (const float *) other_src->data;
-    float *       dst_d       = (float *) mul_node->data;
-    cudaStream_t  stream      = ctx.stream();
+    GGML_ASSERT(unary_src->type == GGML_TYPE_F32 || unary_src->type == GGML_TYPE_F16);
+    GGML_ASSERT(unary_src->type == other_src->type);
+    GGML_ASSERT(unary_src->type == mul_node->type);
+
+    cudaStream_t stream = ctx.stream();
 
     const int64_t k  = ggml_nelements(mul_node);
     const int64_t nc = unary_src->ne[0];
-    const int64_t stride = unary_src->nb[1] / sizeof(float);
+    const int64_t unary_stride = unary_src->nb[1];
+    const int64_t other_stride = other_src->nb[1];
 
-    unary_gated_cuda<op>(unary_src_d, other_src_d, dst_d, k, nc, stride, stride, stream);
+    if (unary_src->type == GGML_TYPE_F16) {
+        unary_gated_cuda<op>((const half *) unary_src->data, (const half *) other_src->data,
+                             (half *) mul_node->data, k, nc,
+                             unary_stride / sizeof(half), other_stride / sizeof(half), stream);
+    } else {
+        unary_gated_cuda<op>((const float *) unary_src->data, (const float *) other_src->data,
+                             (float *) mul_node->data, k, nc,
+                             unary_stride / sizeof(float), other_stride / sizeof(float), stream);
+    }
 }
 
 void ggml_cuda_op_unary_mul(ggml_backend_cuda_context & ctx, ggml_tensor * unary_node, ggml_tensor * mul_node) {

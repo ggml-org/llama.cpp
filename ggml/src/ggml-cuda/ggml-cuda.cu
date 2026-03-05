@@ -3363,13 +3363,19 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
             return false;
         }
 
-        if (unary->type != GGML_TYPE_F32 || mul->type != GGML_TYPE_F32) {
+        if (unary->type != GGML_TYPE_F32 && unary->type != GGML_TYPE_F16) {
             return false;
         }
 
-        // The other mul operand must also be contiguous and same shape
+        if (unary->type != mul->type) {
+            return false;
+        }
+
         const ggml_tensor *other = (mul->src[0] == unary) ? mul->src[1] : mul->src[0];
-        if (!ggml_is_contiguous(other) || !ggml_is_contiguous(unary->src[0]) || !ggml_are_same_shape(other, unary)) {
+        if (other->type != unary->type) {
+            return false;
+        }
+        if (!ggml_is_contiguous_1(other) || !ggml_is_contiguous_1(unary->src[0]) || !ggml_are_same_shape(other, unary)) {
             return false;
         }
 
