@@ -67,10 +67,7 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph,
 
     validate_cgraph();
 
-    for (int node_n = 0; node_n < cgraph->n_nodes; node_n++) {
-        auto * cur_node = cgraph->nodes[node_n];
-        set_input_output(cur_node);
-    }
+    set_input_output();
     compute_model_inputs();
     compute_model_outputs();
 
@@ -87,10 +84,7 @@ void GgmlOvDecoder::update_io(ggml_cgraph * cgraph) {
     m_model_inputs.clear();
     m_model_outputs.clear();
     m_node_info_list.clear();
-    for (int node_n = 0; node_n < cgraph->n_nodes; node_n++) {
-        auto * cur_node = cgraph->nodes[node_n];
-        set_input_output(cur_node);
-    }
+    set_input_output();
     compute_model_inputs();
     compute_model_outputs();
 }
@@ -99,10 +93,7 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph, std::map<std::string, std::sh
     m_cgraph = cgraph;
     m_model_weights = model_weights;
     m_naive = true;
-    for (int node_n = 0; node_n < cgraph->n_nodes; node_n++) {
-        auto * cur_node = cgraph->nodes[node_n];
-        set_input_output(cur_node);
-    }
+    set_input_output();
     compute_model_inputs();
     compute_model_outputs();
     for (int node_n = 0; node_n < cgraph->n_nodes; node_n++) {
@@ -111,41 +102,45 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph, std::map<std::string, std::sh
     }
 }
 
-void GgmlOvDecoder::set_input_output(ggml_tensor * node) {
-    NodeInfo current_node_info;
-    auto node_name = std::string(node->name);
-    auto node_output_name = node_name;
-    auto * node_output = node;
-    if (node->op == GGML_OP_SET_ROWS) {
-        // SET_ROWS updates the tensor in place. For later ov op that uses the
-        // the view_src of SET_ROWS, we need to make sure they get the updated tensor
-        // by putting the view_src name in the tensor_map in
-        // <openvino>/src/frontends/ggml/src/translate_session.cpp
-        node_output_name = std::string(node->view_src->name);
-        node_output = node->view_src;
-    }
+void GgmlOvDecoder::set_input_output() {
+    for (int node_n = 0; node_n < m_cgraph->n_nodes; node_n++) {
+        auto node = m_cgraph->nodes[node_n];
 
-    current_node_info.node = node;
-    current_node_info.node_name = node_name;
-    current_node_info.node_output = node_output;
-    current_node_info.node_output_name = node_output_name;
-    current_node_info.node_op_case = 0;
-    current_node_info.data_addr = node->data;
-
-    for (int i = 0; i < GGML_MAX_SRC; i++) {
-        auto * src = node->src[i];
-        if (src == nullptr) {
-            continue;
+        NodeInfo current_node_info;
+        auto node_name = std::string(node->name);
+        auto node_output_name = node_name;
+        auto * node_output = node;
+        if (node->op == GGML_OP_SET_ROWS) {
+            // SET_ROWS updates the tensor in place. For later ov op that uses the
+            // the view_src of SET_ROWS, we need to make sure they get the updated tensor
+            // by putting the view_src name in the tensor_map in
+            // <openvino>/src/frontends/ggml/src/translate_session.cpp
+            node_output_name = std::string(node->view_src->name);
+            node_output = node->view_src;
         }
-        auto src_name = std::string(src->name);
-        if (src->flags & GGML_TENSOR_FLAG_INPUT) {
-            src_name = get_graph_input_ov_name(src, node);
-        }
-        current_node_info.node_inputs[src_name] = src;
-        current_node_info.node_inputs_names.push_back(src_name);
-    }
 
-    m_node_info_list.push_back(current_node_info);
+        current_node_info.node = node;
+        current_node_info.node_name = node_name;
+        current_node_info.node_output = node_output;
+        current_node_info.node_output_name = node_output_name;
+        current_node_info.node_op_case = 0;
+        current_node_info.data_addr = node->data;
+
+        for (int i = 0; i < GGML_MAX_SRC; i++) {
+            auto * src = node->src[i];
+            if (src == nullptr) {
+                continue;
+            }
+            auto src_name = std::string(src->name);
+            if (src->flags & GGML_TENSOR_FLAG_INPUT) {
+                src_name = get_graph_input_ov_name(src, node);
+            }
+            current_node_info.node_inputs[src_name] = src;
+            current_node_info.node_inputs_names.push_back(src_name);
+        }
+
+        m_node_info_list.push_back(current_node_info);
+    }
 }
 
 int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
