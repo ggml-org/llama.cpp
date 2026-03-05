@@ -63,7 +63,7 @@ The llama.cpp Jinja engine introduces `jinja::string` (see `jinja/string.h`), wh
   - **One-to-many** (e.g., split): result is marked `is_input` **only if ALL** input parts are marked `is_input`
   - **Many-to-one** (e.g., join): same as one-to-many
 
-For string concatenation, string parts will be appended to the new string as-is, while perserving the `is_input` flag.
+For string concatenation, string parts will be appended to the new string as-is, while preserving the `is_input` flag.
 
 **Enabling Input Marking:**
 

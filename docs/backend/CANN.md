@@ -20,7 +20,7 @@
 
 **Llama.cpp + CANN**
 
-The llama.cpp CANN backend is designed to support Ascend NPU. It utilize the ability of AscendC and ACLNN which are intergrated to CANN Toolkit and kernels to using Ascend NPU directly.
+The llama.cpp CANN backend is designed to support Ascend NPU. It utilize the ability of AscendC and ACLNN which are integrated to CANN Toolkit and kernels to using Ascend NPU directly.
 
 ## News
 
@@ -210,7 +210,7 @@ docker run --name llamacpp --device /dev/davinci0  --device /dev/davinci_manager
     # and install driver.
     sudo sh Ascend-hdk-910b-npu-firmware_x.x.x.x.X.run --full
     ```
-    If the following messaage appers, firmware is installed successfully.
+    If the following message appears, firmware is installed successfully.
     ```sh
     Firmware package installed successfully!
     ```

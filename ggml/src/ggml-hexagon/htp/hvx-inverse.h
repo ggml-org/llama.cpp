@@ -67,7 +67,7 @@ static inline HVX_Vector hvx_vec_inverse_f16(HVX_Vector vals) {
 
     HVX_Vector vcl0 = Q6_Vuh_vcl0_Vuh(rm);  //count leading zeros
 
-    // Get mantissa for 16-bit represenation
+    // Get mantissa for 16-bit representation
     HVX_Vector mant_recip = Q6_V_vand_VV(Q6_Vh_vasr_VhR(Q6_Vh_vasl_VhVh(rm, vcl0), 5), Q6_Vh_vsplat_R(0x03FF));
 
     //Compute Reciprocal Exponent

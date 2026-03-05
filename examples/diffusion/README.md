@@ -43,12 +43,12 @@ Choose one of the following scheduling methods:
 - `-b`: Batch size
 
 ### Examples
-#### Dream architechture:
+#### Dream architecture:
 ```
 llama-diffusion-cli -m dream7b.gguf -p "write code to train MNIST in pytorch" -ub 512 --diffusion-eps 0.001 --diffusion-algorithm 3 --diffusion-steps 256 --diffusion-visual
 ```
 
-#### LLaDA architechture:
+#### LLaDA architecture:
 ```
 llama-diffusion-cli -m llada-8b.gguf -p "write code to train MNIST in pytorch" -ub 512 --diffusion-block-length 32 --diffusion-steps 256 --diffusion-visual
 ```

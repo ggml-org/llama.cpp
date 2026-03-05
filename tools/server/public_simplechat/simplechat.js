@@ -318,7 +318,7 @@ class SimpleChat {
     }
 
     /**
-     * Allow setting of system prompt, but only at begining.
+     * Allow setting of system prompt, but only at beginning.
      * @param {string} sysPrompt
      * @param {string} msgTag
      */
@@ -333,7 +333,7 @@ class SimpleChat {
                     console.error(`ERRR:SimpleChat:SC:${msgTag}:You need to specify system prompt before any user query, ignoring...`);
                 } else {
                     if (this.xchat[0].content !== sysPrompt) {
-                        console.error(`ERRR:SimpleChat:SC:${msgTag}:You cant change system prompt, mid way through, ignoring...`);
+                        console.error(`ERRR:SimpleChat:SC:${msgTag}:You can't change system prompt, mid way through, ignoring...`);
                     }
                 }
             }
