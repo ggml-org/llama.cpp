@@ -44,7 +44,7 @@ export function el_create_button(id, callback, name=undefined, innerText=undefin
 }
 
 /**
- * Create a para and set it up. Optionaly append it to a passed parent.
+ * Create a para and set it up. Optionally append it to a passed parent.
  * @param {string} text
  * @param {HTMLElement | undefined} elParent
  * @param {string | undefined} id
@@ -111,7 +111,7 @@ export function el_creatediv_boolbutton(id, label, texts, defaultValue, cb, clas
 /**
  * Create a select ui element, with a set of options to select from.
  * * options: an object which contains name-value pairs
- * * defaultOption: the value whose name should be choosen, by default.
+ * * defaultOption: the value whose name should be chosen, by default.
  * * cb : the call back returns the name string of the option selected.
  *
  * @param {string} id

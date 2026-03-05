@@ -18,15 +18,16 @@
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import {
 		SETTINGS_SECTION_TITLES,
-		type SettingsSectionTitle
-	} from '$lib/constants/settings-sections';
+		type SettingsSectionTitle,
+		NUMERIC_FIELDS,
+		POSITIVE_INTEGER_FIELDS,
+		SETTINGS_COLOR_MODES_CONFIG,
+		SETTINGS_KEYS
+	} from '$lib/constants';
 	import { setMode } from 'mode-watcher';
 	import { ColorMode } from '$lib/enums/ui';
 	import { SettingsFieldType } from '$lib/enums/settings';
 	import type { Component } from 'svelte';
-	import { NUMERIC_FIELDS, POSITIVE_INTEGER_FIELDS } from '$lib/constants/settings-fields';
-	import { SETTINGS_COLOR_MODES_CONFIG } from '$lib/constants/settings-config';
-	import { SETTINGS_KEYS } from '$lib/constants/settings-keys';
 
 	interface Props {
 		onSave?: () => void;
@@ -132,6 +133,11 @@
 				{
 					key: SETTINGS_KEYS.AUTO_SHOW_SIDEBAR_ON_NEW_CHAT,
 					label: 'Auto-show sidebar on new chat',
+					type: SettingsFieldType.CHECKBOX
+				},
+				{
+					key: SETTINGS_KEYS.SHOW_RAW_MODEL_NAMES,
+					label: 'Show raw model names',
 					type: SettingsFieldType.CHECKBOX
 				}
 			]
