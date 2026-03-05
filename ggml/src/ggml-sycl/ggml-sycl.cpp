@@ -26357,8 +26357,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             // ---------------------------------------------------------------
             if (cpu_expert_tg_active) {
                 auto & placement_table = ggml_sycl::get_expert_placement_table();
-                // For batch=1 TG, secondary GPU experts route to CPU (no activation
-                // shipping).  per_gpu_entries not used in this path.
+                // For batch=1 TG, VRAM-resident experts on any GPU are dispatched
+                // to their device; host-resident experts fall back to CPU.
                 gpu_entries.reserve(static_cast<size_t>(ids->ne[1] * n_ids));
                 cpu_entries.reserve(static_cast<size_t>(ids->ne[1] * n_ids));
 
@@ -26367,11 +26367,10 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         const int32_t i02 = ids_host[static_cast<size_t>(iid1 * n_ids + id)];
                         GGML_ASSERT(i02 >= 0 && i02 < n_as);
 
-                        // Check placement table for GPU0 VRAM-resident experts.
-                        // For batch=1 TG (cpu_expert_tg_active), secondary GPU experts
-                        // are routed to CPU instead of activation shipping because
-                        // CPU DRAM bandwidth (70 GB/s) beats the 3x PCIe round-trip
-                        // overhead of activation shipping for single-vector GEMVs.
+                        // Check placement table for VRAM-resident experts on any GPU.
+                        // Experts cached on B50 (device_id >= 1) are dispatched to
+                        // their resident GPU via activation shipping rather than
+                        // falling back to CPU.
                         bool dispatched_gpu = false;
                         if (placement_table.is_initialized()) {
                             auto placement = placement_table.get(layer_id, i02);
@@ -26380,8 +26379,15 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                 // Primary GPU: expert has explicit VRAM pointer
                                 gpu_entries.push_back({ iid1, id, i02, placement.device_ptr });
                                 dispatched_gpu = true;
+                            } else if (placement.device_id >= 1
+                                       && placement.device_id < n_gpu_devs
+                                       && placement.device_ptr != nullptr
+                                       && g_secondary_queues[placement.device_id] != nullptr) {
+                                // Secondary GPU (e.g. B50): dispatch via activation shipping
+                                per_gpu_entries[placement.device_id].push_back(
+                                    { iid1, id, i02, placement.device_ptr });
+                                dispatched_gpu = true;
                             }
-                            // Secondary GPU experts fall through to CPU for batch=1 TG
                         }
 
                         // Fallback: check cache-resolved pointer table (GPU0 only)
@@ -26399,13 +26405,25 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
                 }
 
-                GGML_SYCL_DEBUG("[MoE-CPU-TG] L%d: GPU0=%zu CPU=%zu\n",
-                                layer_id, gpu_entries.size(), cpu_entries.size());
+                {
+                    size_t secondary_total_cputg = 0;
+                    for (int d = 1; d < n_gpu_devs; d++) {
+                        secondary_total_cputg += per_gpu_entries[d].size();
+                    }
+                    GGML_SYCL_DEBUG("[MoE-CPU-TG] L%d: GPU0=%zu secondary=%zu CPU=%zu\n",
+                                    layer_id, gpu_entries.size(), secondary_total_cputg,
+                                    cpu_entries.size());
+                }
 
                 // --- MoE dispatch stats for CPU-TG path ---
                 if (ggml_sycl::MoeDispatchStats::enabled()) {
                     auto & stats = ggml_sycl::get_moe_dispatch_stats(ctx.device);
-                    stats.record_dispatch(static_cast<int>(gpu_entries.size()), 0, 0,
+                    int secondary_gpu_cputg = 0;
+                    for (int d = 1; d < n_gpu_devs; d++) {
+                        secondary_gpu_cputg += static_cast<int>(per_gpu_entries[d].size());
+                    }
+                    stats.record_dispatch(static_cast<int>(gpu_entries.size()),
+                                          secondary_gpu_cputg, 0,
                                           static_cast<int>(cpu_entries.size()), 0);
 
                     // Record prediction accuracy (CPU-TG still has predictor state
@@ -26420,10 +26438,20 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
 
                     // Collect actual expert IDs (all dispatch targets)
+                    size_t secondary_count_cputg = 0;
+                    for (int d = 1; d < n_gpu_devs; d++) {
+                        secondary_count_cputg += per_gpu_entries[d].size();
+                    }
                     std::vector<int> actual_ids_cputg;
-                    actual_ids_cputg.reserve(gpu_entries.size() + cpu_entries.size());
+                    actual_ids_cputg.reserve(gpu_entries.size() + secondary_count_cputg
+                                             + cpu_entries.size());
                     for (const auto & e : gpu_entries) {
                         actual_ids_cputg.push_back(e.expert_id);
+                    }
+                    for (int d = 1; d < n_gpu_devs; d++) {
+                        for (const auto & e : per_gpu_entries[d]) {
+                            actual_ids_cputg.push_back(e.expert_id);
+                        }
                     }
                     for (const auto & e : cpu_entries) {
                         actual_ids_cputg.push_back(e.expert_id);
