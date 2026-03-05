@@ -21,7 +21,7 @@
 	<div class="pointer-events-auto flex items-center space-x-2">
 		<Button
 			variant="ghost"
-			size="icon"
+			size="icon-lg"
 			onclick={toggleSettings}
 			class="rounded-full backdrop-blur-lg"
 		>

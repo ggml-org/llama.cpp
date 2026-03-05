@@ -41,7 +41,6 @@
 	}
 
 	function handleMcpSettingsClick() {
-		// Keep sheet open — settings dialog opens on top
 		onMcpSettingsClick?.();
 	}
 
@@ -122,14 +121,12 @@
 					{/if}
 				</button>
 
-				<!-- Text Files -->
 				<button type="button" class={sheetItemClass} onclick={handleSheetFileUpload}>
 					<FILE_TYPE_ICONS.text class="h-4 w-4 shrink-0" />
 
 					<span>Text Files</span>
 				</button>
 
-				<!-- PDF Files -->
 				<button type="button" class={sheetItemClass} onclick={handleSheetFileUpload}>
 					<FILE_TYPE_ICONS.pdf class="h-4 w-4 shrink-0" />
 
@@ -140,14 +137,12 @@
 					{/if}
 				</button>
 
-				<!-- System Message -->
 				<button type="button" class={sheetItemClass} onclick={handleSheetSystemPromptClick}>
 					<MessageSquare class="h-4 w-4 shrink-0" />
 
 					<span>System Message</span>
 				</button>
 
-				<!-- MCP Servers → opens settings dialog -->
 				<button type="button" class={sheetItemClass} onclick={handleMcpSettingsClick}>
 					<McpLogo class="h-4 w-4 shrink-0" />
 
