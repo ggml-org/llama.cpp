@@ -10406,8 +10406,8 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
     GGML_ASSERT(ggml_is_contiguous(src_beta));
     GGML_ASSERT(ggml_is_contiguous(src_state));
 
-    // TODO: to support KDA
-    GGML_ASSERT(ggml_are_same_shape(src_beta, src_g));
+    GGML_ASSERT(src_g->ne[0] == 1 || src_g->ne[0] == S_v);
+    GGML_ASSERT(src_beta->ne[0] == 1);
 
     GGML_TENSOR_LOCALS(int64_t, neq, src_q, ne);
     GGML_TENSOR_LOCALS(size_t,  nbq, src_q, nb);
@@ -10417,6 +10417,9 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
     GGML_TENSOR_LOCALS(size_t,  nbv, src_v, nb);
     GGML_TENSOR_LOCALS(int64_t, neg, src_g, ne);
     GGML_TENSOR_LOCALS(size_t,  nbg, src_g, nb);
+    GGML_TENSOR_LOCALS(size_t,  nbb, src_beta, nb);
+
+    const bool kda = (neg0 == S_v);
 
     // scratch layout per thread: [delta(S_v)]
     const int64_t scratch_per_thread = S_v;
@@ -10464,11 +10467,16 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
             const float * k_d = (const float *)((const char *)src_k->data + ik3 * nbk3 + t * nbk2 + ik1 * nbk1);
             const float * v_d = (const float *)((const char *)src_v->data + iv3 * nbv3 + t * nbv2 + iv1 * nbv1);
 
-            const size_t gb_byte_offset = iv3 * nbg3 + t * nbg2 + iv1 * nbg1;
-            const float beta_val = *(const float *)((const char *)src_beta->data + gb_byte_offset);
-            const float g_val    = expf(*(const float *)((const char *)src_g->data + gb_byte_offset));
+            const float beta_val = *(const float *)((const char *)src_beta->data + iv3 * nbb3 + t * nbb2 + iv1 * nbb1);
+            const float * g_d   =  (const float *)((const char *)src_g->data    + iv3 * nbg3 + t * nbg2 + iv1 * nbg1);
 
-            ggml_vec_scale_f32(S_v * S_v, s_out, g_val);
+            if (kda) {
+                for (int64_t i = 0; i < S_v; ++i) {
+                    ggml_vec_scale_f32(S_v, &s_out[i * S_v], expf(g_d[i]));
+                }
+            } else {
+                ggml_vec_scale_f32(S_v * S_v, s_out, expf(g_d[0]));
+            }
 
             // delta[j] = sum_i S[j][i] * k[i]
             memset(delta, 0, S_v * sizeof(float));

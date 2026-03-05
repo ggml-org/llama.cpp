@@ -6155,6 +6155,10 @@ struct ggml_tensor * ggml_gated_delta_net(
     const int64_t n_tokens = v->ne[2];
     const int64_t n_seqs   = v->ne[3];
 
+    // gate: scalar [1, H, T, B] or vector [S_v, H, T, B] (KDA)
+    GGML_ASSERT(g->ne[0] == 1 || g->ne[0] == S_v);
+    GGML_ASSERT(beta->ne[0] == 1);
+
     GGML_ASSERT(ggml_nelements(state) == S_v * S_v * H * n_seqs);
 
     // concat output and new_state into a single tensor
