@@ -112,6 +112,7 @@ set(GGML_OPENCL_KERNELS
     gemm_noshuffle_q4_1_f32
     gemv_noshuffle_general_q8_0_f32
     mul
+    neg
     norm
     relu
     rms_norm
