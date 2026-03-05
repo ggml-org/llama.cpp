@@ -556,6 +556,7 @@ extern "C" {
         GGML_OP_GATED_LINEAR_ATTN,
         GGML_OP_RWKV_WKV7,
         GGML_OP_SOLVE_TRI,
+        GGML_OP_LERP,
 
         GGML_OP_UNARY,
 
@@ -583,6 +584,7 @@ extern "C" {
         GGML_UNARY_OP_TANH,
         GGML_UNARY_OP_ELU,
         GGML_UNARY_OP_RELU,
+        GGML_UNARY_OP_RELU_SQR,
         GGML_UNARY_OP_SIGMOID,
         GGML_UNARY_OP_GELU,
         GGML_UNARY_OP_GELU_QUICK,
@@ -1127,6 +1129,14 @@ extern "C" {
             struct ggml_tensor  * a, float negative_slope, bool inplace);
 
     GGML_API struct ggml_tensor * ggml_relu_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_relu_sqr(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_relu_sqr_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
@@ -2440,7 +2450,8 @@ extern "C" {
             struct ggml_tensor  * v,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b,
-            struct ggml_tensor  * state);
+            struct ggml_tensor  * state,
+            bool                  fuse_exp);
 
     /* Solves a specific equation of the form Ax=B, where A is a triangular matrix
     *  without zeroes on the diagonal (i.e. invertible).
@@ -2462,6 +2473,14 @@ extern "C" {
         bool                  left,
         bool                  lower,
         bool                  uni);
+
+    // a + (b - a) * t
+    // used in rwkv7
+    GGML_API struct ggml_tensor * ggml_lerp(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            struct ggml_tensor  * t);
 
     // custom operators
 
