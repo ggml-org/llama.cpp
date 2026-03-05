@@ -790,11 +790,6 @@ void llm_graph_result::set_outputs() {
             ggml_set_output(t);
         }
     }
-    for (auto & [layer, t] : t_attn) {
-        if (t != nullptr) {
-            ggml_set_output(t);
-        }
-    }
     for (auto & [seq_id, t] : t_candidates) {
         if (t != nullptr) {
             ggml_set_output(t);

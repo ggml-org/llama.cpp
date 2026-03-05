@@ -308,6 +308,15 @@ private:
     buffer_view<float> attn = {nullptr, 0}; // [n_outputs][n_pairs * n_ctx]
     int32_t attn_n_kv = 0;                  // KV cache length at time of last decode
 
+    struct attn_cb_state {
+        llama_context      * ctx            = nullptr;
+        const llama_ubatch * ubatch         = nullptr;
+        int64_t              n_outputs_prev = 0;
+    };
+    attn_cb_state attn_cb;
+
+    static bool attn_cb_eval_fn(struct ggml_tensor * t, bool ask, void * user_data);
+
     // reuse the batch_allocr to avoid unnecessary memory allocations
     std::unique_ptr<llama_batch_allocr> balloc;
 
