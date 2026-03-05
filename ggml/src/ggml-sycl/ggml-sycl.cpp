@@ -3549,9 +3549,58 @@ static void flush_pending_cpu_scatter() {
     g_pending_scatter.active     = false;
 }
 
+// ----- Deferred secondary GPU scatter (async B50 dispatch) -----
+// Stores scatter metadata from dispatch_experts_secondary_gpu() so
+// B50 GEMM kernels run in parallel with B580 primary GPU dispatch.
+// Flushed after GPU0 dispatch completes.
+struct pending_secondary_scatter {
+    struct scatter_entry {
+        char *  dst_device;   // Primary GPU dst pointer
+        float * out_staging;  // Host-pinned output buffer (from ring)
+        size_t  bytes;        // Output size in bytes
+    };
+    std::vector<scatter_entry> entries;
+    sycl::queue * target_queue = nullptr;  // Secondary GPU queue to wait on
+    sycl::queue * stream       = nullptr;  // Primary GPU queue for H2D scatter
+    bool          active       = false;
+};
+
+static thread_local pending_secondary_scatter g_pending_secondary_scatter = {};
+
+static void flush_pending_secondary_scatter() {
+    if (!g_pending_secondary_scatter.active) return;
+
+    try {
+        // Wait for secondary GPU compute + D2H result copies to complete
+        if (g_pending_secondary_scatter.target_queue) {
+            g_pending_secondary_scatter.target_queue->wait();
+        }
+
+        // Scatter results H2D to primary GPU dst, then drain
+        if (g_pending_secondary_scatter.stream
+            && !g_pending_secondary_scatter.entries.empty()) {
+            for (const auto & e : g_pending_secondary_scatter.entries) {
+                if (e.dst_device && e.out_staging) {
+                    g_pending_secondary_scatter.stream->memcpy(
+                        e.dst_device, e.out_staging, e.bytes);
+                }
+            }
+            g_pending_secondary_scatter.stream->wait();
+        }
+    } catch (const std::exception & ex) {
+        GGML_LOG_ERROR("[MoE-GPU-ASYNC] Deferred secondary scatter failed: %s\n", ex.what());
+    }
+
+    g_pending_secondary_scatter.entries.clear();
+    g_pending_secondary_scatter.target_queue = nullptr;
+    g_pending_secondary_scatter.stream       = nullptr;
+    g_pending_secondary_scatter.active       = false;
+}
+
 // Public entry point for graph boundary flush
 void ggml_sycl_cpu_tg_flush_pending() {
     flush_pending_cpu_scatter();
+    flush_pending_secondary_scatter();
 }
 
 // Cold path for ggml_sycl_get_data_ptr: full resolution chain
@@ -25244,6 +25293,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
             // Flush any deferred scatter from the previous MUL_MAT_ID
             flush_pending_cpu_scatter();
+            flush_pending_secondary_scatter();
 
             // --- Phase-level profiling (enabled by GGML_SYCL_CPU_TG_PROFILE=1) ---
             static int prof_enabled = -1;
@@ -25936,6 +25986,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
             // Flush any deferred scatter from the previous MUL_MAT_ID
             flush_pending_cpu_scatter();
+            flush_pending_secondary_scatter();
 
             // Declare expert dispatch entry struct and partition vectors
             // before the CPU-TG / hybrid branch point so both paths share them.
@@ -26344,30 +26395,31 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
                     // Phase 4: Submit ALL D2H result copies from secondary GPU.
                     // Each expert reads from its own dev_out[slot] → out_staging[slot].
+                    // These are submitted but NOT waited on — deferred to flush.
                     for (size_t ci = 0; ci < chunk_sz; ci++) {
                         const int slot = static_cast<int>(ci);
                         target_queue->memcpy(out_staging[slot], dev_out[slot], needed_out);
                     }
 
-                    // Phase 5: Single secondary queue drain — all results now on host.
-                    target_queue->wait();
-
-                    // Phase 6: Submit ALL H2D scatter copies back to primary GPU.
-                    // out_staging[slot] is malloc_host — primary GPU reads via PCIe.
+                    // Record scatter metadata for deferred flush.
+                    // Phase 5 (wait) + Phase 6 (H2D scatter) happen in
+                    // flush_pending_secondary_scatter() after GPU0 dispatch.
                     for (size_t ci = 0; ci < chunk_sz; ci++) {
                         const auto &  entry = entries[gpu_indices[chunk_start + ci]];
                         const int     slot  = static_cast<int>(ci);
                         const int64_t i1    = entry.id;
                         const int64_t i2    = entry.iid1;
                         char *        d_d   = dst_original + i1 * nb1 + i2 * nb2;
-                        stream->memcpy(d_d, out_staging[slot], needed_out);
+                        g_pending_secondary_scatter.entries.push_back(
+                            { d_d, out_staging[slot], needed_out });
                     }
                 }
 
-                // Final primary queue drain: ensures ALL scatter H2D copies are complete
-                // before any downstream consumer reads dst.
+                // Mark as active — flush will wait + scatter after GPU0 dispatch.
                 if (!gpu_indices.empty()) {
-                    stream->wait();
+                    g_pending_secondary_scatter.target_queue = target_queue;
+                    g_pending_secondary_scatter.stream       = stream;
+                    g_pending_secondary_scatter.active       = true;
                 }
             };
 
@@ -26651,10 +26703,23 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             // ----- CPU path: dispatch cache-miss experts via shared helper -----
             dispatch_cpu_and_scatter(cpu_entries);
 
+            // ----- Secondary GPU path (async): submit kernels on B50, defer scatter -----
+            // Submit BEFORE GPU0 dispatch so B50 compute overlaps with B580 compute.
+            // D2H activation + quantize + GEMM + D2H results are submitted fire-and-forget;
+            // scatter (wait + H2D to primary dst) is deferred to after GPU0 finishes.
+            if (g_moe_multi_gpu_active.load(std::memory_order_acquire)) {
+                for (int d = 1; d < n_gpu_devs; d++) {
+                    if (!per_gpu_entries[d].empty()) {
+                        dispatch_experts_secondary_gpu(per_gpu_entries[d], d);
+                    }
+                }
+            }
+
             // ----- GPU0 path (B580): batched MMVQ dispatch -----
             // Instead of calling ggml_sycl_mul_mat() per expert (N kernel
             // submissions for top-K), dispatch a single batched MMVQ kernel.
             // Q8_1 quantization of src1 runs once and is shared.
+            // Runs in parallel with B50 secondary GPU compute submitted above.
             if (!gpu_entries.empty()) {
                 // Build arrays for batched dispatch
                 std::vector<int32_t> gpu_expert_ids(gpu_entries.size());
@@ -26706,19 +26771,10 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 }
             }
 
-            // ----- Secondary GPU path: dispatch via activation shipping + secondary GPU GEMM -----
-            // For each secondary-GPU-cached expert: D2H activation to host-pinned staging,
-            // quantize on secondary queue, run SOA MMVQ kernel, D2H result to host,
-            // scatter to primary GPU dst via primary compute queue.
-            if (g_moe_multi_gpu_active.load(std::memory_order_acquire)) {
-                for (int d = 1; d < n_gpu_devs; d++) {
-                    if (!per_gpu_entries[d].empty()) {
-                        dispatch_experts_secondary_gpu(per_gpu_entries[d], d);
-                    }
-                }
-            }
-
-            // CPU pinned buffer cleanup already handled by dispatch_cpu_and_scatter()
+            // ----- Flush deferred secondary GPU scatter -----
+            // Wait for B50 compute to finish, then scatter results to primary dst.
+            // GPU0 dispatch above ran in parallel with B50, maximizing overlap.
+            flush_pending_secondary_scatter();
 
             // --- Record actual expert selections (T6 + T7 integration) ---
             // Feed actual router selections to predictor for accuracy tracking
@@ -27480,11 +27536,12 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
         return false;
     }
 
-    // Flush any deferred CPU scatter from a previous MUL_MAT_ID.
+    // Flush any deferred scatter from a previous MUL_MAT_ID.
     // Must happen before dispatching any op that might read from a
     // MUL_MAT_ID output tensor.  The in-order queue serializes the
     // scatter memcpy before subsequent GPU kernels.
     flush_pending_cpu_scatter();
+    flush_pending_secondary_scatter();
 
     // Debug: trace operations in multi-process mode
     if (g_sycl_tp_config.is_multiprocess && g_ggml_sycl_tp_debug) {
