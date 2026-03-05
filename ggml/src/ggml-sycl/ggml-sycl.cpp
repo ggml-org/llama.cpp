@@ -26405,25 +26405,20 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
                 }
 
-                {
-                    size_t secondary_total_cputg = 0;
-                    for (int d = 1; d < n_gpu_devs; d++) {
-                        secondary_total_cputg += per_gpu_entries[d].size();
-                    }
-                    GGML_SYCL_DEBUG("[MoE-CPU-TG] L%d: GPU0=%zu secondary=%zu CPU=%zu\n",
-                                    layer_id, gpu_entries.size(), secondary_total_cputg,
-                                    cpu_entries.size());
+                size_t secondary_count = 0;
+                for (int d = 1; d < n_gpu_devs; d++) {
+                    secondary_count += per_gpu_entries[d].size();
                 }
+
+                GGML_SYCL_DEBUG("[MoE-CPU-TG] L%d: GPU0=%zu secondary=%zu CPU=%zu\n",
+                                layer_id, gpu_entries.size(), secondary_count,
+                                cpu_entries.size());
 
                 // --- MoE dispatch stats for CPU-TG path ---
                 if (ggml_sycl::MoeDispatchStats::enabled()) {
                     auto & stats = ggml_sycl::get_moe_dispatch_stats(ctx.device);
-                    int secondary_gpu_cputg = 0;
-                    for (int d = 1; d < n_gpu_devs; d++) {
-                        secondary_gpu_cputg += static_cast<int>(per_gpu_entries[d].size());
-                    }
                     stats.record_dispatch(static_cast<int>(gpu_entries.size()),
-                                          secondary_gpu_cputg, 0,
+                                          static_cast<int>(secondary_count), 0,
                                           static_cast<int>(cpu_entries.size()), 0);
 
                     // Record prediction accuracy (CPU-TG still has predictor state
@@ -26438,12 +26433,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
 
                     // Collect actual expert IDs (all dispatch targets)
-                    size_t secondary_count_cputg = 0;
-                    for (int d = 1; d < n_gpu_devs; d++) {
-                        secondary_count_cputg += per_gpu_entries[d].size();
-                    }
                     std::vector<int> actual_ids_cputg;
-                    actual_ids_cputg.reserve(gpu_entries.size() + secondary_count_cputg
+                    actual_ids_cputg.reserve(gpu_entries.size() + secondary_count
                                              + cpu_entries.size());
                     for (const auto & e : gpu_entries) {
                         actual_ids_cputg.push_back(e.expert_id);
