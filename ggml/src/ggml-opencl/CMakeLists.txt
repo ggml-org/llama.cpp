@@ -135,6 +135,7 @@ set(GGML_OPENCL_KERNELS
     tsembd
     upscale
     tanh
+    exp
     expm1
     softplus
     pad
