@@ -51,7 +51,7 @@ public:
     virtual ~buffer() { }
 
     ggml_status init_tensor(ggml_tensor& tensor) override {
-        tensor->extra = (void *) ggml::cpu::amx::get_tensor_traits(&tensor);
+        tensor.extra = (void *) ggml::cpu::amx::get_tensor_traits(&tensor);
         return GGML_STATUS_SUCCESS;
     }
 
@@ -66,7 +66,7 @@ public:
 
 };
 
-class extra_buffer_type : ggml::cpu::extra_buffer_type {
+class extra_buffer_type : public ggml::cpu::extra_buffer_type {
 
     const std::string& get_name() override {
         static const std::string name {"AMX"};

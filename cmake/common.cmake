@@ -7,6 +7,7 @@ function(llama_add_compile_flags)
             list(APPEND CXX_FLAGS -Werror)
         elseif (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
             add_compile_options(/WX)
+            add_compile_options(/Zc:__cplusplus)
         endif()
     endif()
 

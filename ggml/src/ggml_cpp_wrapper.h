@@ -13,7 +13,7 @@
 
 namespace ggml::cpp::backend {
 
-    class buffer { // ggml_backend_buffer_t
+    class GGML_API buffer { // ggml_backend_buffer_t
     public:
         virtual ~buffer();
 
@@ -30,7 +30,7 @@ namespace ggml::cpp::backend {
         virtual void reset        () {}
     };
 
-    class buffer_type { // ggml_backend_buffer_type_t
+    class GGML_API buffer_type { // ggml_backend_buffer_type_t
     public:
         virtual ~buffer_type();
 
@@ -45,7 +45,7 @@ namespace ggml::cpp::backend {
     };
 
     // TODO: manage event
-    class event {
+    class GGML_API event {
     public:
         virtual ~event();
     };
@@ -58,7 +58,7 @@ namespace ggml::cpp::backend {
 
     class device;
 
-    class backend { // ggml_backend_t
+    class GGML_API backend { // ggml_backend_t
         backend() = delete;
     public:
         backend(device& dev);
@@ -92,7 +92,7 @@ namespace ggml::cpp::backend {
         device& m_device;
     };
 
-    class device { // ggml_backend_dev_t
+    class GGML_API device { // ggml_backend_dev_t
     protected:
         friend ggml_backend_buffer_type_t* backend_dev_get_extra_bufts(ggml_backend_dev_t device);
         std::vector<buffer_type*> m_extra_buffers_type;
@@ -125,11 +125,12 @@ namespace ggml::cpp::backend {
         virtual bool caps_events()               { return false; }
 
     protected:
+        // have to be call by the device at init.
         void register_extra_buffer_type(buffer_type* buft);
 
     };
 
-    class reg { // ggml_backend_reg_t
+    class GGML_API reg { // ggml_backend_reg_t
     public:
         virtual ~reg();
 
@@ -138,14 +139,14 @@ namespace ggml::cpp::backend {
         virtual device&            get_device(std::size_t index) = 0;
     };
 
-    ggml_backend_buffer_t      c_wrapper(ggml_backend_buffer_type_t buft, buffer* ctx, std::size_t size);
-    ggml_backend_buffer_type_t c_wrapper(ggml_backend_dev_t device, buffer_type* ctx);
-    ggml_backend_t             c_wrapper(ggml_backend_dev_t device, backend* ctx);
-    ggml_backend_dev_t         c_wrapper(ggml_backend_reg_t reg, device* ctx);
-    ggml_backend_reg_t         c_wrapper(reg* ctx);
+    GGML_API ggml_backend_buffer_t      c_wrapper(ggml_backend_buffer_type_t buft, buffer* ctx, std::size_t size);
+    GGML_API ggml_backend_buffer_type_t c_wrapper(ggml_backend_dev_t device, buffer_type* ctx);
+    GGML_API ggml_backend_t             c_wrapper(ggml_backend_dev_t device, backend* ctx);
+    GGML_API ggml_backend_dev_t         c_wrapper(ggml_backend_reg_t reg, device* ctx);
+    GGML_API ggml_backend_reg_t         c_wrapper(reg* ctx);
 
-    // for simple cpu buffer:
-    buffer_type* new_cpu_buffer_type(
+    // helper for simple cpu buffer type:
+    GGML_API buffer_type* new_cpu_buffer_type(
         const std::string& name,
         bool from_ptr=false,
         std::size_t alignment = TENSOR_ALIGNMENT
