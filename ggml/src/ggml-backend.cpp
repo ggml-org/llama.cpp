@@ -428,7 +428,9 @@ void ggml_backend_tensor_copy_async(ggml_backend_t backend_src, ggml_backend_t b
     // an async copy would normally happen after all the queued operations on both backends are completed
     // to simulate the same behavior, we need to synchronize both backends first, and do a blocking copy
     ggml_backend_synchronize(backend_src);
-    ggml_backend_synchronize(backend_dst);
+    if (backend_dst != backend_src) {
+        ggml_backend_synchronize(backend_dst);
+    }
     ggml_backend_tensor_copy(src, dst);
 }
 
@@ -728,6 +730,8 @@ struct ggml_backend_sched {
     size_t context_buffer_size;
 
     bool op_offload;
+
+    bool backends_used[GGML_SCHED_MAX_BACKENDS]; // tracks which backends ran work during last compute
 
     int debug;
 
@@ -1446,6 +1450,9 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     GGML_ASSERT(sched);
     struct ggml_backend_sched_split * splits = sched->splits;
 
+    // Reset backend usage tracking for selective synchronization
+    memset(sched->backends_used, 0, sizeof(sched->backends_used));
+
     ggml_tensor * prev_ids_tensor = nullptr;
     std::vector<int32_t> ids;
     std::vector<ggml_bitset_t> used_ids;
@@ -1454,6 +1461,9 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         struct ggml_backend_sched_split * split = &splits[split_id];
         int split_backend_id = split->backend_id;
         ggml_backend_t split_backend = sched->backends[split_backend_id];
+
+        // Mark this backend as active for selective synchronization
+        sched->backends_used[split_backend_id] = true;
 
         // copy the input tensors to the split backend
         for (int input_id = 0; input_id < split->n_inputs; input_id++) {
@@ -1567,10 +1577,13 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     // TODO: add public function to facilitate this, since applications do not have direct access to the backend interface
                     if (!split_backend->iface.cpy_tensor_async || !split_backend->iface.cpy_tensor_async(input_backend, split_backend, input, input_cpy)) {
                         ggml_backend_synchronize(input_backend);
+                        // When events are available, we need a CPU-blocking wait since the
+                        // event_wait above (line ~1483) was only a GPU-side wait, but the
+                        // blocking tensor_copy below needs the data to be ready on the CPU side.
+                        // When events are NOT available, split_backend was already synchronized
+                        // above (line ~1485), so a second synchronize would be redundant.
                         if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                             ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
-                        } else {
-                            ggml_backend_synchronize(split_backend);
                         }
                         ggml_backend_tensor_copy(input, input_cpy);
                     }
@@ -1692,6 +1705,11 @@ ggml_backend_sched_t ggml_backend_sched_new(
     sched->galloc = ggml_gallocr_new_n(sched->bufts, n_backends);
     sched->op_offload = op_offload;
 
+    // Default to all backends used until first compute_splits tracks actual usage
+    for (int b = 0; b < GGML_SCHED_MAX_BACKENDS; b++) {
+        sched->backends_used[b] = true;
+    }
+
     ggml_backend_sched_reset(sched);
 
     return sched;
@@ -1807,8 +1825,13 @@ enum ggml_status ggml_backend_sched_graph_compute_async(ggml_backend_sched_t sch
 
 void ggml_backend_sched_synchronize(ggml_backend_sched_t sched) {
     GGML_ASSERT(sched);
+    // Only synchronize backends that actually ran work during the last compute.
+    // On systems with multiple backends (e.g. CPU + GPU), synchronizing idle backends
+    // adds unnecessary latency from the API call overhead and driver round-trip.
     for (int i = 0; i < sched->n_backends; i++) {
-        ggml_backend_synchronize(sched->backends[i]);
+        if (sched->backends_used[i]) {
+            ggml_backend_synchronize(sched->backends[i]);
+        }
     }
     if (!sched->is_alloc) {
         // if the graph is not already allocated, always use copy 0 after a synchronization
