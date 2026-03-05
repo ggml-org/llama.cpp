@@ -1,0 +1,173 @@
+{
+  "skill_name": "strix-halo-optimizer",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I just got a Framework Desktop with the AMD Ryzen AI Max+ 395 and 128GB of RAM running Ubuntu 24.04. I want to run Llama 3.1 70B on it with llama.cpp. How do I build it and what settings should I use for the best token generation speed? I've already installed ROCm 6.3.",
+      "expected_output": "Should provide: 1) TTM memory fix as the critical first step, 2) Build command with GPU_TARGETS=gfx1150 and GGML_HIP=ON, 3) ROCBLAS_USE_HIPBLASLT=1 environment variable, 4) Runtime flags including -ngl 99, --no-mmap, -fa on, -ctk q8_0 -ctv q8_0, 5) Recommendation for Q4_K_M quantization to fit in memory",
+      "files": [],
+      "assertions": [
+        {
+          "name": "ttm_memory_fix",
+          "description": "Mentions TTM pages_limit configuration for Linux",
+          "type": "contains_concept"
+        },
+        {
+          "name": "correct_gpu_target",
+          "description": "Specifies GPU_TARGETS=gfx1150 (or gfx1151) in the build command",
+          "type": "contains_concept"
+        },
+        {
+          "name": "hipblaslt_env",
+          "description": "Includes ROCBLAS_USE_HIPBLASLT=1 environment variable",
+          "type": "contains_concept"
+        },
+        {
+          "name": "no_mmap_flag",
+          "description": "Recommends --no-mmap for the 70B model",
+          "type": "contains_concept"
+        },
+        {
+          "name": "full_gpu_offload",
+          "description": "Uses -ngl 99 to offload all layers to GPU",
+          "type": "contains_concept"
+        },
+        {
+          "name": "quantization_recommendation",
+          "description": "Recommends an appropriate quantization (Q4_K_M or similar) for fitting 70B in 128GB",
+          "type": "contains_concept"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "I'm getting terrible prompt processing speed on my Strix Halo laptop - only about 350 tokens/sec on a 7B model. Token generation is fine at ~48 t/s. What's wrong?",
+      "expected_output": "Should identify the rocBLAS kernel issue for gfx1150/gfx1151 and recommend ROCBLAS_USE_HIPBLASLT=1, explaining that this can improve pp speed from ~350 to ~880 t/s. Should also check if GPU_TARGETS was set correctly during build.",
+      "files": [],
+      "assertions": [
+        {
+          "name": "identifies_rocblas_issue",
+          "description": "Identifies that the problem is poorly optimized rocBLAS kernels for gfx1150/gfx1151",
+          "type": "contains_concept"
+        },
+        {
+          "name": "hipblaslt_solution",
+          "description": "Recommends setting ROCBLAS_USE_HIPBLASLT=1",
+          "type": "contains_concept"
+        },
+        {
+          "name": "expected_improvement",
+          "description": "Mentions the expected ~2.5x improvement (from ~350 to ~880 t/s)",
+          "type": "contains_concept"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "My llama.cpp keeps running out of memory when loading a 65B model on my Ryzen AI Max 395 even though I have 128GB RAM. rocm-smi only shows 4GB VRAM. What's going on?",
+      "expected_output": "Should explain: 1) Strix Halo uses unified memory, the 4GB is just the BIOS-configured 'dedicated' portion, 2) The TTM pages_limit needs to be increased to allow GPU to access more system memory, 3) Provide the exact modprobe.d configuration, 4) After TTM fix, recommend --no-mmap and -ngl 99",
+      "files": [],
+      "assertions": [
+        {
+          "name": "explains_unified_memory",
+          "description": "Explains that Strix Halo uses unified memory and the 4GB is just the dedicated VRAM portion",
+          "type": "contains_concept"
+        },
+        {
+          "name": "ttm_fix",
+          "description": "Provides TTM pages_limit fix with the modprobe.d configuration",
+          "type": "contains_concept"
+        },
+        {
+          "name": "reboot_required",
+          "description": "Mentions that a reboot or initramfs update is needed after TTM change",
+          "type": "contains_concept"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "I have a Strix Halo system but I don't want to install ROCm - it's too heavy. Can I just use Vulkan for llama.cpp? I already have mesa drivers. How does Vulkan compare to HIP on this hardware?",
+      "expected_output": "Should explain: 1) Yes, Vulkan works — build with GGML_VULKAN=ON, no GPU_TARGETS needed since Vulkan uses SPIR-V shaders, 2) Vulkan auto-detects RDNA 3.5 and uses wave64 subgroups, 3) HIP is recommended over Vulkan for best performance due to hipBLASLt and HIP graphs, 4) Vulkan has known model loading issues (#18741), 5) Vulkan is a valid fallback when ROCm isn't practical",
+      "files": [],
+      "assertions": [
+        {
+          "name": "vulkan_build_command",
+          "description": "Provides Vulkan build command with GGML_VULKAN=ON",
+          "type": "contains_concept"
+        },
+        {
+          "name": "hip_recommended_over_vulkan",
+          "description": "Recommends HIP/ROCm over Vulkan for best performance on Strix Halo",
+          "type": "contains_concept"
+        },
+        {
+          "name": "vulkan_known_issues",
+          "description": "Mentions Vulkan model loading issues or known limitations on Strix Halo",
+          "type": "contains_concept"
+        },
+        {
+          "name": "vulkan_as_valid_fallback",
+          "description": "Acknowledges Vulkan as a reasonable alternative when ROCm is impractical",
+          "type": "contains_concept"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "I want to run a small 7B BF16 model on my Ryzen AI Max 395 using only the CPU — no GPU at all. I heard Zen 5 has good AVX-512 and there's something called ZenDNN. How do I set this up for best CPU-only performance?",
+      "expected_output": "Should explain: 1) Build with GGML_ZENDNN=ON and GGML_NATIVE=ON for Zen 5 feature auto-detection, 2) Set ZENDNNL_MATMUL_ALGO=1 for best performance, 3) BF16 is the ideal format for ZenDNN on Zen 5 (uses _mm512_dpbf16_ps), 4) Use -ngl 0 and -t 16 (physical cores), 5) ZenDNN only accelerates FP32/BF16 matmul — quantized models use standard AVX-512 GGML kernels",
+      "files": [],
+      "assertions": [
+        {
+          "name": "zendnn_build_flags",
+          "description": "Provides build command with GGML_ZENDNN=ON",
+          "type": "contains_concept"
+        },
+        {
+          "name": "zendnn_matmul_algo",
+          "description": "Sets ZENDNNL_MATMUL_ALGO=1 environment variable",
+          "type": "contains_concept"
+        },
+        {
+          "name": "bf16_recommendation",
+          "description": "Recommends BF16 format as ideal for ZenDNN on Zen 5",
+          "type": "contains_concept"
+        },
+        {
+          "name": "thread_count",
+          "description": "Recommends using physical core count (16 cores) for thread count",
+          "type": "contains_concept"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "I need to deploy llama-server on my Strix Halo workstation as a production service for our small team (4-5 concurrent users). We're using a Llama 3 8B Q4_K_M model. What's the optimal configuration for stability and throughput?",
+      "expected_output": "Should provide: 1) Full llama-server command with -np 4 or 5, -c for context length, -ngl 99, --no-mmap, -fa on, -ctk q8_0, 2) ROCBLAS_USE_HIPBLASLT=1, 3) KV cache quantization since parallel sequences each need their own cache, 4) Low thread count (-t 4) for GPU-primary, 5) Monitoring advice (rocm-smi, /health endpoint), 6) Consider systemd for persistence",
+      "files": [],
+      "assertions": [
+        {
+          "name": "parallel_sequences",
+          "description": "Configures -np for multiple concurrent users (4 or 5)",
+          "type": "contains_concept"
+        },
+        {
+          "name": "kv_cache_quantization",
+          "description": "Recommends KV cache quantization (-ctk q8_0 or similar) since parallel sequences multiply memory usage",
+          "type": "contains_concept"
+        },
+        {
+          "name": "server_runtime_flags",
+          "description": "Includes essential flags: -ngl 99, --no-mmap, ROCBLAS_USE_HIPBLASLT=1",
+          "type": "contains_concept"
+        },
+        {
+          "name": "production_stability",
+          "description": "Mentions monitoring, systemd service, or health endpoint for production stability",
+          "type": "contains_concept"
+        }
+      ]
+    }
+  ]
+}
