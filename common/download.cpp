@@ -50,20 +50,15 @@ using json = nlohmann::ordered_json;
 // downloader
 //
 
-// validate repo name format: owner/repo
-static bool validate_repo_name(const std::string & repo) {
-    static const std::regex repo_regex(R"(^[A-Za-z0-9_.\-]+\/[A-Za-z0-9_.\-]+$)");
-    return std::regex_match(repo, repo_regex);
-}
-
-static std::string get_manifest_path(const std::string & repo, const std::string & tag) {
-    // we use "=" to avoid clashing with other component, while still being allowed on windows
-    std::string fname = "manifest=" + repo + "=" + tag + ".json";
-    if (!validate_repo_name(repo)) {
-        throw std::runtime_error("error: repo name must be in the format 'owner/repo'");
+static void create_dirs(const std::string & filename) {
+    std::filesystem::path p(filename);
+    if (p.has_parent_path()) {
+        try {
+            std::filesystem::create_directories(p.parent_path());
+        } catch (const std::filesystem::filesystem_error & e) {
+            throw std::runtime_error(string_format("error: failed to create directory: %s\n", e.what()));
+        }
     }
-    string_replace_all(fname, "/", "=");
-    return fs_get_cache_file(fname);
 }
 
 static std::string read_file(const std::string & fname) {
@@ -77,6 +72,7 @@ static std::string read_file(const std::string & fname) {
 }
 
 static void write_file(const std::string & fname, const std::string & content) {
+    create_dirs(fname);
     const std::string fname_tmp = fname + ".tmp";
     std::ofstream     file(fname_tmp);
     if (!file) {
@@ -132,12 +128,20 @@ static bool is_http_status_ok(int status) {
 
 std::pair<std::string, std::string> common_download_split_repo_tag(const std::string & hf_repo_with_tag) {
     auto parts = string_split<std::string>(hf_repo_with_tag, ':');
-    std::string tag = parts.size() > 1 ? parts.back() : "latest";
-    std::string hf_repo = parts[0];
-    if (string_split<std::string>(hf_repo, '/').size() != 2) {
-        throw std::invalid_argument("error: invalid HF repo format, expected <user>/<model>[:quant]\n");
+    auto repo  = string_split<std::string>(parts[0], '/');
+
+    if (parts.size() > 2 || repo.size() != 2) {
+        throw std::invalid_argument("error: invalid HF repo format, expected <user>/<model>[:quant]");
     }
-    return {hf_repo, tag};
+    std::string tag = parts.size() == 2 ? parts[1] : "latest";
+
+    static const std::regex regex(R"(^[A-Za-z0-9_.\-]+$)");
+    if (!std::regex_match(repo[0], regex) ||
+        !std::regex_match(repo[1], regex) ||
+        !std::regex_match(tag, regex)) {
+        throw std::invalid_argument("error: invalid HF repo format, expected chars: alphanumerics, '-', '.' and '_'");
+    }
+    return {parts[0], tag};
 }
 
 class ProgressBar {
@@ -220,6 +224,7 @@ static bool common_pull_file(httplib::Client & cli,
                              bool supports_ranges,
                              size_t existing_size,
                              size_t & total_size) {
+    create_dirs(path_tmp);
     std::ofstream ofs(path_tmp, std::ios::binary | std::ios::app);
     if (!ofs.is_open()) {
         LOG_ERR("%s: error opening local file for writing: %s\n", __func__, path_tmp.c_str());
@@ -587,7 +592,9 @@ common_hf_file_res common_get_hf_file(const std::string & hf_repo_with_tag,
     long res_code = 0;
     std::string res_str;
     bool use_cache = false;
-    std::string cached_response_path = get_manifest_path(hf_repo, tag);
+    std::filesystem::path cache(fs_get_cache_directory());
+    std::string manifest = (cache / hf_repo / "manifests" / (tag + ".json")).string();
+
     if (!offline) {
         try {
             auto res = common_remote_get_content(url, params);
@@ -598,9 +605,9 @@ common_hf_file_res common_get_hf_file(const std::string & hf_repo_with_tag,
         }
     }
     if (res_code == 0) {
-        if (std::filesystem::exists(cached_response_path)) {
-            LOG_WRN("trying to read manifest from cache: %s\n", cached_response_path.c_str());
-            res_str = read_file(cached_response_path);
+        if (std::filesystem::exists(manifest)) {
+            LOG_WRN("trying to read manifest from cache: %s\n", manifest.c_str());
+            res_str = read_file(manifest);
             res_code = 200;
             use_cache = true;
         } else {
@@ -627,7 +634,7 @@ common_hf_file_res common_get_hf_file(const std::string & hf_repo_with_tag,
         }
         if (!use_cache) {
             // if not using cached response, update the cache file
-            write_file(cached_response_path, res_str);
+            write_file(manifest, res_str);
         }
     } else if (res_code == 401) {
         throw std::runtime_error("error: model is private or does not exist; if you are accessing a gated model, please provide a valid HF token");
@@ -748,7 +755,8 @@ std::string common_docker_resolve_model(const std::string & docker) {
         std::string model_filename = repo;
         std::replace(model_filename.begin(), model_filename.end(), '/', '_');
         model_filename += "_" + tag + ".gguf";
-        std::string local_path = fs_get_cache_file(model_filename);
+        std::filesystem::path cache(fs_get_cache_directory());
+        std::string local_path = (cache / model_filename).string();
 
         const std::string blob_url = url_prefix + "/blobs/" + gguf_digest;
         const int http_status = common_download_file_single(blob_url, local_path, token, false, {});
@@ -764,28 +772,35 @@ std::string common_docker_resolve_model(const std::string & docker) {
     }
 }
 
-std::vector<common_cached_model_info> common_list_cached_models() {
-    std::vector<common_cached_model_info> models;
-    const std::string cache_dir = fs_get_cache_directory();
-    const std::vector<common_file_info> files = fs_list(cache_dir, false);
-    for (const auto & file : files) {
-        if (string_starts_with(file.name, "manifest=") && string_ends_with(file.name, ".json")) {
-            common_cached_model_info model_info;
-            model_info.manifest_path = file.path;
-            std::string fname = file.name;
-            string_replace_all(fname, ".json", ""); // remove extension
-            auto parts = string_split<std::string>(fname, '=');
-            if (parts.size() == 4) {
-                // expect format: manifest=<user>=<model>=<tag>=<other>
-                model_info.user  = parts[1];
-                model_info.model = parts[2];
-                model_info.tag   = parts[3];
-            } else {
-                // invalid format
+std::vector<std::string> common_list_cached_models() {
+    std::vector<std::string> models;
+    std::filesystem::path cache(fs_get_cache_directory());
+    if (!std::filesystem::is_directory(cache)) {
+        return models;
+    }
+    for (const auto & entry : std::filesystem::recursive_directory_iterator(cache)) {
+        if (!entry.is_regular_file()) {
+            continue;
+        }
+        auto dirs = std::filesystem::relative(entry.path(), cache);
+        std::vector<std::string> parts;
+        for (const auto & p : dirs) {
+            parts.push_back(p.string());
+        }
+        if (parts.size() == 1 && string_ends_with(parts[0], ".gguf")) {
+            static const std::regex split("-[0-9]+-of-[0-9]+");
+            static const std::regex first("-0+1-of-[0-9]+");
+            if (std::regex_search(parts[0], split) && !std::regex_search(parts[0], first)) {
                 continue;
             }
-            model_info.size = 0; // TODO: get GGUF size, not manifest size
-            models.push_back(model_info);
+            models.push_back(parts[0]);
+        }
+        else if (parts.size() == 4 && parts[2] == "manifests") {
+            auto & tag = parts[3];
+            if (!string_remove_suffix(tag, ".json")) {
+                continue;
+            }
+            models.push_back(parts[0] + "/" + parts[1] + (tag == "latest" ? "" : ":" + tag));
         }
     }
     return models;

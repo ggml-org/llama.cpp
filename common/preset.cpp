@@ -365,8 +365,12 @@ common_presets common_preset_context::load_from_cache() const {
     auto cached_models = common_list_cached_models();
     for (const auto & model : cached_models) {
         common_preset preset;
-        preset.name = model.to_string();
-        preset.set_option(*this, "LLAMA_ARG_HF_REPO", model.to_string());
+        preset.name = model;
+        if (string_ends_with(model, ".gguf")) {
+            preset.set_option(*this, "LLAMA_ARG_MODEL", model);
+        } else {
+            preset.set_option(*this, "LLAMA_ARG_HF_REPO", model);
+        }
         out[preset.name] = preset;
     }
 

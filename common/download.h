@@ -23,19 +23,6 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string &
 // example: "user/model" -> <"user/model", "latest">
 std::pair<std::string, std::string> common_download_split_repo_tag(const std::string & hf_repo_with_tag);
 
-struct common_cached_model_info {
-    std::string manifest_path;
-    std::string user;
-    std::string model;
-    std::string tag;
-    size_t      size = 0; // GGUF size in bytes
-    // return string representation like "user/model:tag"
-    // if tag is "latest", it will be omitted
-    std::string to_string() const {
-        return user + "/" + model + (tag == "latest" ? "" : ":" + tag);
-    }
-};
-
 struct common_hf_file_res {
     std::string repo; // repo name with ":tag" removed
     std::string ggufFile;
@@ -69,7 +56,7 @@ bool common_download_model(
 );
 
 // returns list of cached models
-std::vector<common_cached_model_info> common_list_cached_models();
+std::vector<std::string> common_list_cached_models();
 
 // download single file from url to local path
 // returns status code or -1 on error

@@ -272,13 +272,6 @@ static void parse_tensor_buffer_overrides(const std::string & value, std::vector
     }
 }
 
-static std::string clean_file_name(const std::string & fname) {
-    std::string clean_fname = fname;
-    string_replace_all(clean_fname, "\\", "_");
-    string_replace_all(clean_fname, "/", "_");
-    return clean_fname;
-}
-
 static bool common_params_handle_remote_preset(common_params & params, llama_example ex) {
     GGML_ASSERT(!params.model.hf_repo.empty());
 
@@ -295,8 +288,8 @@ static bool common_params_handle_remote_preset(common_params & params, llama_exa
     auto preset_url = model_endpoint + hf_repo + "/resolve/main/preset.ini";
 
     // prepare local path for caching
-    auto preset_fname = clean_file_name(hf_repo + "_preset.ini");
-    auto preset_path = fs_get_cache_file(preset_fname);
+    std::filesystem::path cache(fs_get_cache_directory());
+    std::string preset_path = (cache / hf_repo / "preset.ini").string();
     const int status = common_download_file_single(preset_url, preset_path, params.hf_token, offline);
     const bool has_preset = status >= 200 && status < 400;
 
@@ -321,6 +314,77 @@ static bool common_params_handle_remote_preset(common_params & params, llama_exa
     return has_preset;
 }
 
+// delete this function later
+static void migrate_old_manifest(const std::filesystem::path & cache,
+                                 const std::string           & hf_repo,
+                                 const std::string           & tag) {
+    auto old_repo = hf_repo;
+    string_replace_all(old_repo, "/", "=");
+    auto old_manifest = cache / ("manifest=" + old_repo + "=" + tag + ".json");
+
+    if (!std::filesystem::exists(old_manifest)) {
+        return;
+    }
+
+    auto old_prefix = hf_repo;
+    string_replace_all(old_prefix, "/", "_");
+    old_prefix += "_";
+
+    auto base = cache / hf_repo;
+
+    auto migrate = [](const std::filesystem::path & src, const std::filesystem::path & dst) {
+        try {
+            if (dst.has_parent_path()) {
+                std::filesystem::create_directories(dst.parent_path());
+            }
+            if (std::filesystem::exists(dst)) {
+                std::filesystem::remove(dst);
+            }
+            std::filesystem::rename(src, dst);
+            LOG_INF("migrated: %s\n", src.filename().string().c_str());
+        } catch (const std::exception & e) {
+            LOG_WRN("failed to migrate %s: %s\n", src.string().c_str(), e.what());
+        }
+    };
+    migrate(old_manifest, base / "manifests" / (tag + ".json"));
+
+    for (const auto & entry : std::filesystem::directory_iterator(cache)) {
+        if (!entry.is_regular_file()) {
+            continue;
+        }
+        std::string filename = entry.path().filename().string();
+        if (string_remove_prefix(filename, old_prefix)) {
+            migrate(entry.path(), base / filename);
+        }
+    }
+}
+
+// delete this function later
+static void migrate_old_cache() {
+    std::filesystem::path cache(fs_get_cache_directory());
+    if (!std::filesystem::exists(cache)) {
+        return;
+    }
+    for (const auto & entry : std::filesystem::directory_iterator(cache)) {
+        if (!entry.is_regular_file()) {
+            continue;
+        }
+        auto filename = entry.path().filename().string();
+        auto model = filename;
+
+        if (!string_remove_prefix(model, "manifest=") || !string_remove_suffix(model, ".json")) {
+            continue;
+        }
+        auto parts = string_split<std::string>(model, '=');
+
+        if (parts.size() < 3) {
+            LOG_WRN("unable to split manifest %s\n", filename.c_str());
+            continue;
+        }
+        migrate_old_manifest(cache, parts[0] + "/" + parts[1], parts[2]);
+    }
+}
+
 struct handle_model_result {
     bool found_mmproj = false;
     common_params_model mmproj;
@@ -330,6 +394,7 @@ static handle_model_result common_params_handle_model(
         struct common_params_model & model,
         const std::string & bearer_token,
         bool offline) {
+    migrate_old_cache(); // delete this later
     handle_model_result result;
     // handle pre-fill default model path and url based on hf_repo and hf_file
     {
@@ -361,18 +426,27 @@ static handle_model_result common_params_handle_model(
             model.url = model_endpoint + model.hf_repo + "/resolve/main/" + model.hf_file;
             // make sure model path is present (for caching purposes)
             if (model.path.empty()) {
-                // this is to avoid different repo having same file name, or same file name in different subdirs
-                std::string filename = clean_file_name(model.hf_repo + "_" + model.hf_file);
-                model.path = fs_get_cache_file(filename);
+                std::filesystem::path cache(fs_get_cache_directory());
+                model.path = (cache / model.hf_repo / model.hf_file).string();
             }
 
         } else if (!model.url.empty()) {
             if (model.path.empty()) {
                 auto f = string_split<std::string>(model.url, '#').front();
                 f = string_split<std::string>(f, '?').front();
-                model.path = fs_get_cache_file(string_split<std::string>(f, '/').back());
+                std::filesystem::path cache(fs_get_cache_directory());
+                model.path = (cache / string_split<std::string>(f, '/').back()).string();
             }
 
+        } else if (!model.path.empty()) {
+            std::filesystem::path p(model.path);
+            if (p.parent_path().empty()) {
+                std::filesystem::path cache(fs_get_cache_directory());
+                std::filesystem::path cached_file = cache / p;
+                if (std::filesystem::exists(cached_file)) {
+                    model.path = cached_file.string();
+                }
+            }
         }
     }
 
@@ -380,8 +454,7 @@ static handle_model_result common_params_handle_model(
     if (!model.url.empty()) {
         bool ok = common_download_model(model, bearer_token, offline);
         if (!ok) {
-            LOG_ERR("error: failed to download model from %s\n", model.url.c_str());
-            exit(1);
+            throw std::runtime_error("error: failed to download model from " + model.url);
         }
     }
 
@@ -1060,8 +1133,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             auto models = common_list_cached_models();
             printf("number of models in cache: %zu\n", models.size());
             for (size_t i = 0; i < models.size(); i++) {
-                auto & model = models[i];
-                printf("%4d. %s\n", (int) i + 1, model.to_string().c_str());
+                printf("%4zu. %s\n", i + 1, models[i].c_str());
             }
             exit(0);
         }
