@@ -7,9 +7,11 @@
 #include <map>
 #include <memory>
 
+static_assert(__cplusplus >= 201703L, "This file expects a C++17 compatible compiler.");
+
 namespace ggml::cpp::backend {
 
-// TODO: voir si on ne cree pas une fontion static plutot que friend.
+// may be best with a static methode than with a friend function.
 ggml_backend_buffer_type_t* backend_dev_get_extra_bufts(ggml_backend_dev_t device) {
     auto& ctx = *((ggml::cpp::backend::device*) (device->context));
     if (ctx.m_ggml_extra_buffers_type.size() == 0) { // need init of extra buffer wrappers
@@ -22,14 +24,14 @@ ggml_backend_buffer_type_t* backend_dev_get_extra_bufts(ggml_backend_dev_t devic
     return ctx.m_ggml_extra_buffers_type.data();
 }
 
-    namespace { // unnamed namespace
+    namespace { // unamed namespace
 
     //=========================================================
-    // les wrappper pour ggml_backend_buffer
+    // wrappper for ggml_backend_buffer
     void buffer_free_buffer(ggml_backend_buffer_t buf) {
         auto* ctx = (ggml::cpp::backend::buffer*) (buf->context);
         delete ctx;
-        // delete buf; NO => deleted by the core.
+        // delete buf; NO => deleted by the ggml_core: ggml_backend_buffer_free().
     }
     void * buffer_get_base(ggml_backend_buffer_t buf) {
         auto& ctx = *((ggml::cpp::backend::buffer*) (buf->context));
@@ -169,7 +171,6 @@ ggml_backend_buffer_type_t* backend_dev_get_extra_bufts(ggml_backend_dev_t devic
         return c_wrapper(dev, &ctx.init_backend(params?params:""));
     }
     ggml_backend_buffer_type_t device_get_buffer_type(ggml_backend_dev_t dev) {
-        // Note: nothing to delete it.
         auto& ctx = *((ggml::cpp::backend::device*) (dev->context));
         return c_wrapper(dev, &ctx.get_buffer_type());
     }
@@ -187,7 +188,6 @@ ggml_backend_buffer_type_t* backend_dev_get_extra_bufts(ggml_backend_dev_t devic
         if (!bft) { return nullptr; }
         auto* buf = bft->register_buffer(ptr, size, max_tensor_size);
         if (!buf) { return nullptr; }
-        // comment / ou memoriser ce wrapper, il n'y a pas de "delete"
         auto * ggml_buf_type = c_wrapper(dev, bft);
         return c_wrapper(ggml_buf_type, buf, size);
     }
@@ -247,25 +247,26 @@ ggml_backend_buffer_type_t* backend_dev_get_extra_bufts(ggml_backend_dev_t devic
         if (name == "ggml_backend_dev_get_extra_bufts") {
             return (void*) backend_dev_get_extra_bufts;
         }
+        // TODO: add the other elements as needed.
+        // see how to manage them optionally if useful.
         return nullptr;
     }
 
     }
 
-    // les destructeurs...
+    // virtual destructors
     buffer::~buffer() {}
     buffer_type::~buffer_type() {}
     event::~event() {}
     backend::backend(device& dev): m_device(dev) {}
     backend::~backend() { }
-    device::~device() {
-        // TODO: il faut detruire des wrapper des buffer_type???
-    }
+    device::~device() { }
     reg::~reg() {}
 
     // non virtual fct:
     void device::register_extra_buffer_type(buffer_type* buft) {
-        GGML_ASSERT(m_ggml_extra_buffers_type.size() == 0); // pas encore initialisé!
+        // have to be call early before any app ask for them.
+        GGML_ASSERT(m_ggml_extra_buffers_type.size() == 0);
         m_extra_buffers_type.push_back(buft);
     }
 
@@ -300,7 +301,7 @@ ggml_backend_buffer_type_t* backend_dev_get_extra_bufts(ggml_backend_dev_t devic
     typedef std::unique_ptr<ggml_backend_buffer_type,  buffer_type_deleter>  c_buffer_type_ptr;
 
     ggml_backend_buffer_type_t c_wrapper(ggml_backend_dev_t device, buffer_type* ctx) {
-        // the ctx have to be "static".
+        // the ctx have to be "~static": owned by a device (or static).
         static std::map<buffer_type*, c_buffer_type_ptr> map;
         if (!ctx) { return nullptr; }
 
@@ -417,11 +418,9 @@ ggml_backend_buffer_type_t* backend_dev_get_extra_bufts(ggml_backend_dev_t devic
                 /* .context     = */ ctx,
             };
             map[ctx] = c_register_ptr(wrapper);
-            //map[ctx] = wrapper;
             return wrapper;
         }
         return it->second.get();
-        //return it->second;
     }
 
 }
@@ -431,21 +430,27 @@ ggml_backend_buffer_type_t* backend_dev_get_extra_bufts(ggml_backend_dev_t devic
 namespace ggml::cpp::backend::cpu {
 
     // buffer
+    template<std::size_t ALIGNMENT>
     class buffer : public ggml::cpp::backend::buffer {
-        uint8_t* m_data = nullptr;
+        // correct aligned data for c++17.
+        struct alignas(ALIGNMENT) aligned_uint8_t {
+            uint8_t val;
+        };
+        aligned_uint8_t* m_data = nullptr;
         const std::size_t m_size;
 
     public:
-        buffer(std::size_t size, std::size_t alignment): m_size(size) {
-            m_data = new (std::align_val_t(alignment)) uint8_t[m_size];
+        buffer(std::size_t size): m_size(size) {
+            m_data = new aligned_uint8_t[m_size];
+            GGML_ASSERT(reinterpret_cast<uintptr_t>(m_data) % ALIGNMENT == 0);
         }
 
         buffer(void* ptr, std::size_t /*size*/): m_size(0) {
-            m_data = (uint8_t*) ptr;
+            m_data = (aligned_uint8_t*) ptr;
         }
 
         virtual ~buffer() {
-            if (m_size>0 && m_data) { 
+            if (m_size>0 && m_data) {
                 delete[] m_data;
             }
             m_data = nullptr;
@@ -481,14 +486,14 @@ namespace ggml::cpp::backend::cpu {
     };
 
     // buffer_type
+    template<std::size_t ALIGNMENT>
     class buffer_type : public ggml::cpp::backend::buffer_type {
         const std::string m_name;
-        const std::size_t m_alignment;
         const bool m_from_ptr;
 
     public:
-        buffer_type(const std::string& name, bool from_ptr, std::size_t alignment) :
-            m_name(name), m_alignment(alignment), m_from_ptr(from_ptr)
+        buffer_type(const std::string& name, bool from_ptr) :
+            m_name(name), m_from_ptr(from_ptr)
         {}
 
         virtual ~buffer_type() {}
@@ -497,23 +502,23 @@ namespace ggml::cpp::backend::cpu {
             return m_name;
         }
 
-        buffer* alloc_buffer(std::size_t size) override {
+        buffer<ALIGNMENT>* alloc_buffer(std::size_t size) override {
             GGML_ASSERT(!m_from_ptr && "buffer type not for allocatable buffer");
-            return new buffer(size, m_alignment);
+            return new buffer<ALIGNMENT>(size);
         }
 
-        std::size_t get_alignment() override { 
-            return m_alignment;
+        std::size_t get_alignment() override {
+            return ALIGNMENT;
         }
 
         bool is_host() override {
             return true;
         }
 
-        buffer* register_buffer(void * ptr, std::size_t size, std::size_t /*max_tensor_size*/) override {
+        buffer<ALIGNMENT>* register_buffer(void * ptr, std::size_t size, std::size_t /*max_tensor_size*/) override {
             GGML_ASSERT(m_from_ptr && "buffer type not for ptr memory");
-            GGML_ASSERT((uintptr_t)ptr % m_alignment == 0 && "buffer pointer must be aligned");
-            return new buffer(ptr, size);
+            // GGML_ASSERT((uintptr_t)ptr % ALIGNMENT == 0 && "buffer pointer must be aligned");
+            return new buffer<ALIGNMENT>(ptr, size);
         }
     };
 
@@ -526,7 +531,21 @@ namespace ggml::cpp::backend {
         bool from_ptr,
         std::size_t alignment
     ) {
-        return new ggml::cpp::backend::cpu::buffer_type(name, from_ptr, alignment);
+        // May be define alignment with supported SIMD size?
+        if (alignment <= 8) { // 64 bits
+            return new ggml::cpp::backend::cpu::buffer_type<8>(name, from_ptr);
+        } else
+        if (alignment <= 16) { // 128 bits (AVX)
+            return new ggml::cpp::backend::cpu::buffer_type<16>(name, from_ptr);
+        } else
+        if (alignment <= 32) { // 256 bits (AVX2)
+            return new ggml::cpp::backend::cpu::buffer_type<32>(name, from_ptr);
+        } else
+        if (alignment <= 64) { // 256 bits (AVX512)
+            return new ggml::cpp::backend::cpu::buffer_type<64>(name, from_ptr);
+        } else { // do we need more?
+            return new ggml::cpp::backend::cpu::buffer_type<128>(name, from_ptr);
+        }
     }
 
 }

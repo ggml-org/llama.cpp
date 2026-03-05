@@ -1337,111 +1337,98 @@ public:
     }
 };
 
-static ggml::cpu::tensor_traits * get_tensor_traits(ggml_backend_buffer_t, struct ggml_tensor *) {
+static ggml::cpu::tensor_traits * get_tensor_traits(struct ggml_tensor *) {
     static tensor_traits traits;
     return &traits;
 }
-}  // namespace ggml::cpu::kleidiai
 
-static enum ggml_status ggml_backend_cpu_kleidiai_buffer_init_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor) {
-    tensor->extra = (void *) ggml::cpu::kleidiai::get_tensor_traits(buffer, tensor);
+// kleidiai buffer
+class buffer : public ggml::cpu::buffer {
+public:
+    buffer(std::size_t size) : ggml::cpu::buffer(size) { }
 
-    return GGML_STATUS_SUCCESS;
-    GGML_UNUSED(buffer);
-}
+    virtual ~buffer() { }
 
-static void ggml_backend_cpu_kleidiai_buffer_set_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor,
-                                                       const void * data, size_t offset, size_t size) {
-    GGML_ASSERT(offset == 0);
-    GGML_ASSERT(size == ggml_nbytes(tensor));
-
-    auto tensor_traits = (ggml::cpu::kleidiai::tensor_traits *) tensor->extra;
-    auto OK            = tensor_traits->repack(tensor, data, size);
-
-    GGML_ASSERT(OK == 0);
-    GGML_UNUSED(buffer);
-}
-
-static const char * ggml_backend_cpu_kleidiai_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
-    GGML_UNUSED(buft);
-    return "CPU_KLEIDIAI";
-}
-
-static ggml_backend_buffer_t ggml_backend_cpu_kleidiai_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
-    ggml_backend_buffer_t buffer = ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), size);
-
-    if (buffer == nullptr) {
-        return nullptr;
+    ggml_status init_tensor(ggml_tensor& tensor) override {
+        tensor.extra = (void *) ggml::cpu::kleidiai::get_tensor_traits(&tensor);
+        return GGML_STATUS_SUCCESS;
     }
 
-    buffer->buft              = buft;
-    buffer->iface.init_tensor = ggml_backend_cpu_kleidiai_buffer_init_tensor;
-    buffer->iface.set_tensor  = ggml_backend_cpu_kleidiai_buffer_set_tensor;
-    buffer->iface.get_tensor  = nullptr;
-    buffer->iface.cpy_tensor  = nullptr;
-    return buffer;
-}
+    void set_tensor(ggml_tensor & tensor, const void * data, std::size_t offset, std::size_t size) override {
+        GGML_ASSERT(offset == 0);
+        GGML_ASSERT(size == ggml_nbytes(&tensor));
 
-static size_t ggml_backend_cpu_kleidiai_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
-    GGML_UNUSED(buft);
-    return TENSOR_ALIGNMENT;
-}
+        auto tensor_traits = (ggml::cpu::kleidiai::tensor_traits *) tensor.extra;
+        auto OK            = tensor_traits->repack(&tensor, data, size);
 
-static size_t ggml_backend_cpu_kleidiai_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const struct ggml_tensor * tensor) {
-    GGML_UNUSED(buft);
-
-    if (tensor->type != GGML_TYPE_Q4_0 && tensor->type != GGML_TYPE_Q8_0) {
-        return ggml_nbytes(tensor);
+        GGML_ASSERT(OK == 0);
     }
 
-    const size_t n = tensor->ne[1];
-    const size_t k = tensor->ne[0];
+};
 
-    size_t cursor = sizeof(kleidiai_weight_header);
-    cursor = align_up(cursor, GGML_KLEIDIAI_PACK_ALIGN);
+class extra_buffer_type : public ggml::cpu::extra_buffer_type {
 
-    std::array<ggml_kleidiai_kernels *, GGML_KLEIDIAI_MAX_KERNEL_SLOTS> kernel_chain;
-    const bool want_q8 = tensor->type == GGML_TYPE_Q8_0;
-    const int slot_total = want_q8 ? kleidiai_collect_q8_chain(kernel_chain)
-                                   : kleidiai_collect_q4_chain(kernel_chain);
-    const bool allow_fallback = kleidiai_pack_fallback_allowed();
+    const std::string& get_name() override {
+        static const std::string name {"CPU_KLEIDIAI"};
+        return name;
+    }
 
-    size_t slot_count = 0;
-    for (int slot = 0; slot < slot_total; ++slot) {
-        if (!allow_fallback && slot > 0) {
-            break;
-        }
-        ggml_kleidiai_kernels * kernels = kernel_chain[slot];
-        if (!kernels) {
-            continue;
-        }
-        kernel_info * kernel = &kernels->gemm;
-        rhs_packing_info * rhs_info = &kernels->rhs_info;
-        if (!kernel || !rhs_info || !rhs_info->packed_size_ex) {
-            continue;
+    ggml::cpp::backend::buffer* alloc_buffer(std::size_t size) override {
+        return new buffer(size);
+    }
+
+    size_t get_alloc_size(const ggml_tensor& tensor) override {
+
+        if (tensor.type != GGML_TYPE_Q4_0 && tensor.type != GGML_TYPE_Q8_0) {
+            return ggml_nbytes(&tensor);
         }
 
-        const ggml_type rhs_type = kernels->rhs_type;
-        const size_t block_len = rhs_type == GGML_TYPE_Q4_0 ? QK4_0 :
-                                 rhs_type == GGML_TYPE_Q8_0 ? QK8_0 : 0;
-        if (block_len == 0) {
-            continue;
-        }
+        const size_t n = tensor.ne[1];
+        const size_t k = tensor.ne[0];
 
+        size_t cursor = sizeof(kleidiai_weight_header);
         cursor = align_up(cursor, GGML_KLEIDIAI_PACK_ALIGN);
-        cursor += rhs_info->packed_size_ex(n, k, kernel->get_nr(), kernel->get_kr(), block_len);
-        ++slot_count;
+
+        std::array<ggml_kleidiai_kernels *, GGML_KLEIDIAI_MAX_KERNEL_SLOTS> kernel_chain;
+        const bool want_q8 = tensor.type == GGML_TYPE_Q8_0;
+        const int slot_total = want_q8 ? kleidiai_collect_q8_chain(kernel_chain)
+                                       : kleidiai_collect_q4_chain(kernel_chain);
+        const bool allow_fallback = kleidiai_pack_fallback_allowed();
+
+        size_t slot_count = 0;
+        for (int slot = 0; slot < slot_total; ++slot) {
+            if (!allow_fallback && slot > 0) {
+                break;
+            }
+            ggml_kleidiai_kernels * kernels = kernel_chain[slot];
+            if (!kernels) {
+                continue;
+            }
+            kernel_info * kernel = &kernels->gemm;
+            rhs_packing_info * rhs_info = &kernels->rhs_info;
+            if (!kernel || !rhs_info || !rhs_info->packed_size_ex) {
+                continue;
+            }
+
+            const ggml_type rhs_type = kernels->rhs_type;
+            const size_t block_len = rhs_type == GGML_TYPE_Q4_0 ? QK4_0 :
+                                     rhs_type == GGML_TYPE_Q8_0 ? QK8_0 : 0;
+            if (block_len == 0) {
+                continue;
+            }
+
+            cursor = align_up(cursor, GGML_KLEIDIAI_PACK_ALIGN);
+            cursor += rhs_info->packed_size_ex(n, k, kernel->get_nr(), kernel->get_kr(), block_len);
+            ++slot_count;
+        }
+
+        if (slot_count == 0) {
+            return ggml_nbytes(&tensor);
+        }
+
+        return std::max(cursor, ggml_nbytes(&tensor));
     }
 
-    if (slot_count == 0) {
-        return ggml_nbytes(tensor);
-    }
-
-    return std::max(cursor, ggml_nbytes(tensor));
-}
-
-namespace ggml::cpu::kleidiai {
-class extra_buffer_type : ggml::cpu::extra_buffer_type {
     bool supports_op(ggml_backend_dev_t, const struct ggml_tensor * op) override {
         std::array<ggml_kleidiai_kernels *, GGML_KLEIDIAI_MAX_KERNEL_SLOTS> kernel_chain;
         const int slot_total = kleidiai_collect_kernel_chain(op, kernel_chain);
@@ -1481,7 +1468,7 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
                         (op->src[1]->nb[1] * op->src[1]->ne[1] != op->src[1]->nb[2])) {
                         return nullptr;
                     }
-                    return ggml::cpu::kleidiai::get_tensor_traits(NULL, NULL);
+                    return ggml::cpu::kleidiai::get_tensor_traits(nullptr);
                 }
             }
         }
@@ -1491,21 +1478,7 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
 }  // namespace ggml::cpu::kleidiai
 
 ggml_backend_buffer_type_t ggml_backend_cpu_kleidiai_buffer_type(void) {
-    static ggml::cpu::kleidiai::extra_buffer_type ctx;
-    static struct ggml_backend_buffer_type ggml_backend_cpu_buffer_type_kleidiai = {
-        /* .iface    = */ {
-                           /* .get_name         = */ ggml_backend_cpu_kleidiai_buffer_type_get_name,
-                           /* .alloc_buffer     = */ ggml_backend_cpu_kleidiai_buffer_type_alloc_buffer,
-                           /* .get_alignment    = */ ggml_backend_cpu_kleidiai_buffer_type_get_alignment,
-                           /* .get_max_size     = */ nullptr,  // defaults to SIZE_MAX
-                           /* .get_alloc_size   = */ ggml_backend_cpu_kleidiai_buffer_type_get_alloc_size,
-                           /* .is_host          = */ nullptr,
-                           },
-        /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_cpu_reg(), 0),
-        /* .context = */ &ctx,
-    };
-
+    static auto* buffer_type = ggml::cpu::c_wrapper(new ggml::cpu::kleidiai::extra_buffer_type());
     init_kleidiai_context();
-
-    return &ggml_backend_cpu_buffer_type_kleidiai;
+    return buffer_type;
 }

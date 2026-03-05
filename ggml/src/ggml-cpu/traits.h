@@ -36,8 +36,9 @@ public:
     void get_tensor(const ggml_tensor &, void *, std::size_t, std::size_t size) override;
     void clear(uint8_t value) override;
 protected:
+    struct alignas(TENSOR_ALIGNMENT) aligned_uint8_t { uint8_t val; };
     const std::size_t m_size;
-    uint8_t* m_data;
+    aligned_uint8_t* m_data;
 };
 
 class extra_buffer_type {

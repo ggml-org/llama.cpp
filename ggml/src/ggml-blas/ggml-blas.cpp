@@ -11,6 +11,8 @@
 #include <string>
 #include <algorithm>
 
+static_assert(__cplusplus >= 201703L, "This file expects a C++17 compatible compiler.");
+
 #if defined(GGML_BLAS_USE_ACCELERATE)
 #   include <Accelerate/Accelerate.h>
 #elif defined(GGML_BLAS_USE_MKL)
@@ -32,7 +34,7 @@
 #endif
 
 namespace ggml::backend::blas {
-    
+
     static constexpr std::size_t MEMORY_ALIGNMENT = 64; // 512 bits
 
     // backend class
@@ -40,26 +42,28 @@ namespace ggml::backend::blas {
 
         int n_threads = GGML_DEFAULT_N_THREADS;
 
-        std::unique_ptr<char[]> work_data;
-        size_t work_size = 0;
-
-        // for tensor convert (TODO: remove work_data)
+        // for tensor convert
         //  TODO: have a stack off buffer if we need 2+ work_data
-        void* m_work_data = nullptr;
+        // nead C++17 for correct aligned buffer
+        struct alignas(MEMORY_ALIGNMENT) aligned_uint8_t {
+            uint8_t val;
+        };
+        aligned_uint8_t* m_work_data = nullptr;
         std::size_t m_work_size = 0;
         template<typename T>
         T* get_work(std::size_t size) {
             std::size_t nb_byte = size * sizeof(T);
             if (nb_byte > m_work_size) {
                 nb_byte = std::max(nb_byte , 2*m_work_size);
-                // force "aligned size"
+                // force "aligned" size
                 nb_byte  = ((nb_byte-1)/MEMORY_ALIGNMENT)+1;
                 nb_byte *= MEMORY_ALIGNMENT;
-                if (m_work_data) std::free(m_work_data);
+                if (m_work_data) delete[] m_work_data;
                 m_work_size = nb_byte;
-                m_work_data = aligned_alloc(MEMORY_ALIGNMENT, m_work_size);
+                m_work_data = new aligned_uint8_t[m_work_size];
+                GGML_ASSERT(reinterpret_cast<uintptr_t>(m_work_data) % MEMORY_ALIGNMENT == 0);
             }
-            return (T*) m_work_data;
+            return  reinterpret_cast<T*> (m_work_data);
         }
 
 #ifndef GGML_USE_OPENMP
@@ -67,8 +71,8 @@ namespace ggml::backend::blas {
 #endif
 
     private:
-    
-    //void cblas_sgemm(OPENBLAS_CONST enum CBLAS_ORDER Order, 
+
+    //void cblas_sgemm(OPENBLAS_CONST enum CBLAS_ORDER Order,
     //                 OPENBLAS_CONST enum CBLAS_TRANSPOSE TransA,
     //                 OPENBLAS_CONST enum CBLAS_TRANSPOSE TransB,
     //                 OPENBLAS_CONST blasint M,
@@ -79,7 +83,7 @@ namespace ggml::backend::blas {
     //                 OPENBLAS_CONST float *B, OPENBLAS_CONST blasint ldb,
     //                 OPENBLAS_CONST float beta,
     //                                float *C, OPENBLAS_CONST blasint ldc);
-    
+
     //void cblas_sgemm_batch(OPENBLAS_CONST enum CBLAS_ORDER Order, OPENBLAS_CONST enum CBLAS_TRANSPOSE * TransA_array, OPENBLAS_CONST enum CBLAS_TRANSPOSE * TransB_array, OPENBLAS_CONST blasint * M_array, OPENBLAS_CONST blasint * N_array, OPENBLAS_CONST blasint * K_array,
     //               OPENBLAS_CONST float * alpha_array, OPENBLAS_CONST float ** A_array, OPENBLAS_CONST blasint * lda_array, OPENBLAS_CONST float ** B_array, OPENBLAS_CONST blasint * ldb_array, OPENBLAS_CONST float * beta_array, float ** C_array, OPENBLAS_CONST blasint * ldc_array, OPENBLAS_CONST blasint group_count, OPENBLAS_CONST blasint * group_size);
     //void cblas_sgemm_batch_strided(OPENBLAS_CONST enum CBLAS_ORDER Order, OPENBLAS_CONST enum CBLAS_TRANSPOSE TransA, OPENBLAS_CONST enum CBLAS_TRANSPOSE TransB, OPENBLAS_CONST blasint M, OPENBLAS_CONST blasint N, OPENBLAS_CONST blasint K, OPENBLAS_CONST float alpha, OPENBLAS_CONST float * A, OPENBLAS_CONST blasint lda, OPENBLAS_CONST blasint stridea, OPENBLAS_CONST float * B, OPENBLAS_CONST blasint ldb, OPENBLAS_CONST blasint strideb, OPENBLAS_CONST float beta, float * C, OPENBLAS_CONST blasint ldc, OPENBLAS_CONST blasint stridec, OPENBLAS_CONST blasint group_size);
@@ -90,18 +94,18 @@ namespace ggml::backend::blas {
             GGML_ASSERT(A.ne[0] == B.ne[0]); // K
             GGML_ASSERT(B.ne[1] == C.ne[1]); // N
             GGML_ASSERT(A.ne[1] == C.ne[0]); // M
-            // for now!
+            // for now only this case:
             GGML_ASSERT(A.type == GGML_TYPE_BF16);
             GGML_ASSERT(B.type == GGML_TYPE_F32);
             GGML_ASSERT(C.type == GGML_TYPE_F32);
-            
+
             // convert B to BF16:
             // - B contigue: (TODO: other case?)
             GGML_ASSERT(((size_t)4*B.ne[0]*B.ne[1]*B.ne[2]) == B.nb[3]);
             std::size_t sizeB = B.ne[0]*B.ne[1]*B.ne[2]*B.ne[3];
             auto* B_work = get_work<bfloat16>(std::max(sizeB, B.ne[0]*(std::size_t)256));
             cblas_sbstobf16(sizeB, (const float*)B.data, 1, B_work, 1);
-            
+
             // compute:
             if (B.ne[2]*B.ne[3] == 1) {
                 if (B.ne[1] == 1) {
@@ -195,13 +199,8 @@ namespace ggml::backend::blas {
             const int64_t r3 = ne13/ne03;
 
             const int64_t ne_plane      = ne01*ne00;
-            const size_t  desired_wsize = type == GGML_TYPE_F32 ? 0 : ne03*ne02*ne_plane*sizeof(float);
 
-            if (work_size < desired_wsize) {
-                work_data.reset(new char[desired_wsize]);
-                work_size = desired_wsize;
-            }
-            void * wdata = work_data.get();
+            auto * wdata = get_work<float>(type == GGML_TYPE_F32 ? 0 : ne03*ne02*ne_plane);
 
             // convert src0 to float
             if (type != GGML_TYPE_F32) {
@@ -219,7 +218,7 @@ namespace ggml::backend::blas {
                 for (int64_t i03 = 0; i03 < ne03; i03++) {
                     for (int64_t i02 = 0; i02 < ne02; i02++) {
                         for (int64_t i01 = 0; i01 < ne01; i01++) {
-                            to_float(x      + i03*nb03       + i02*nb02       + i01*nb01, 
+                            to_float(x      + i03*nb03       + i02*nb02       + i01*nb01,
                                      wplane + i03*nf_plane03 + i02*nf_plane02 + i01*nf_plane01,
                                      ne00);
                         }
@@ -354,13 +353,13 @@ namespace ggml::backend::blas {
 
     public:
         static constexpr ggml_guid s_guid = { 0x12, 0xa8, 0xae, 0xf4, 0xc0, 0x1e, 0x61, 0x97, 0x8f, 0xeb, 0x33, 0x04, 0xa1, 0x33, 0x51, 0x2d };
-            
+
         backend(const std::string& /*params*/, ggml::cpp::backend::device& dev) :
             ggml::cpp::backend::backend(dev)
         { }
 
         virtual ~backend() {
-            if (m_work_data) std::free(m_work_data);
+            if (m_work_data) delete[] m_work_data;
         }
 
         const std::string& get_name() override {
@@ -490,7 +489,7 @@ namespace ggml::backend::blas {
         }
 
         bool caps_buffer_from_host_ptr() override { return true; }
-        ggml::cpp::backend::buffer_type* get_from_host_ptr_buffer_type() override { 
+        ggml::cpp::backend::buffer_type* get_from_host_ptr_buffer_type() override {
             return m_cpu_buffer_from_ptr_type;
         }
 
@@ -523,7 +522,7 @@ namespace ggml::backend::blas {
                            (    src0->type == GGML_TYPE_F32 ||
 #ifdef GGML_BLAS_USE_SBGEMM
                                 (   src0->type == GGML_TYPE_BF16 &&
-                                    ne1 >= min_batch 
+                                    ne1 >= min_batch
                                 ) ||
 #endif
                                 (   (ne0 >= min_batch && ne1 >= min_batch && ne10 >= min_batch) &&
@@ -561,7 +560,7 @@ namespace ggml::backend::blas {
     public:
         reg() {
             m_device = new device();
-#if defined(GGML_BLAS_USE_OPENBLAS) 
+#if defined(GGML_BLAS_USE_OPENBLAS)
             if (openblas_get_parallel() == OPENBLAS_SEQUENTIAL) {
                 GGML_LOG_WARN("%s: warning: OpenBLAS was compiled without parallel support\n", __func__);
             }

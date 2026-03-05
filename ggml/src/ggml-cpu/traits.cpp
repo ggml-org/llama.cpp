@@ -6,11 +6,14 @@
 
 #include <new>
 
+static_assert(__cplusplus >= 201703L, "This file expects a C++17 compatible compiler.");
+
 namespace ggml::cpu {
 
 buffer::buffer(std::size_t size) : m_size(size) {
-    m_data = new (std::align_val_t(32)) uint8_t[m_size];
+    m_data = new aligned_uint8_t[m_size];
     GGML_ASSERT(m_data);
+    GGML_ASSERT(reinterpret_cast<uintptr_t>(m_data) % TENSOR_ALIGNMENT == 0);
 }
 
 buffer::~buffer() {

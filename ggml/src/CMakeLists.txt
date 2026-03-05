@@ -8,6 +8,10 @@ if (CMAKE_SYSTEM_NAME MATCHES "Linux")
     add_compile_definitions($<$<CONFIG:Debug>:_GLIBCXX_ASSERTIONS>)
 endif()
 
+if (MSVC)
+    add_compile_options(/Zc:__cplusplus)
+endif()
+
 if (NOT MSVC)
     if (GGML_SANITIZE_THREAD)
         add_compile_options(-fsanitize=thread)
@@ -24,6 +28,7 @@ if (NOT MSVC)
         link_libraries     (-fsanitize=undefined)
     endif()
 endif()
+
 
 if (GGML_FATAL_WARNINGS)
     if (CMAKE_CXX_COMPILER_ID MATCHES "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
