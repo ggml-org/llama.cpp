@@ -26268,51 +26268,72 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 // Process GPU-eligible experts in chunks of MERGE_RING_SIZE.
                 // Each expert in a chunk gets its own staging slot to enable
                 // fully parallel D2H/compute/H2D without per-expert waits.
+                //
+                // Batch=1 optimization: all experts share the same input activation
+                // (ne11=1, so src1 row is identical). Quantize once into dev_q8_1[0]
+                // and reuse for all GEMM calls, saving redundant D2H + quantize ops.
                 const size_t n_gpu = gpu_indices.size();
+                const bool batch1 = (ne11 == 1);
                 for (size_t chunk_start = 0; chunk_start < n_gpu; chunk_start += MERGE_RING_SIZE) {
                     const size_t chunk_end = std::min(chunk_start + MERGE_RING_SIZE, n_gpu);
                     const size_t chunk_sz  = chunk_end - chunk_start;
 
-                    // Phase 1: Submit ALL D2H activation copies on primary queue.
-                    // Each expert gets its own act_staging slot — no data races.
-                    for (size_t ci = 0; ci < chunk_sz; ci++) {
-                        const auto &  entry    = entries[gpu_indices[chunk_start + ci]];
-                        const int     slot     = static_cast<int>(ci);
+                    // Phase 1: D2H activation copies on primary queue.
+                    // Batch=1: single copy to slot 0 (all experts share same activation).
+                    // Batch>1: each expert gets its own act_staging slot.
+                    if (batch1) {
+                        const auto &  entry    = entries[gpu_indices[chunk_start]];
                         const int64_t i11      = entry.id % ne11;
                         const int64_t i12      = entry.iid1;
                         const char *  src1_dev = src1_original + i11 * nb11 + i12 * nb12;
-                        stream->memcpy(act_staging[slot], src1_dev, needed_act);
+                        stream->memcpy(act_staging[0], src1_dev, needed_act);
+                    } else {
+                        for (size_t ci = 0; ci < chunk_sz; ci++) {
+                            const auto &  entry    = entries[gpu_indices[chunk_start + ci]];
+                            const int     slot     = static_cast<int>(ci);
+                            const int64_t i11      = entry.id % ne11;
+                            const int64_t i12      = entry.iid1;
+                            const char *  src1_dev = src1_original + i11 * nb11 + i12 * nb12;
+                            stream->memcpy(act_staging[slot], src1_dev, needed_act);
+                        }
                     }
 
                     // Phase 2: Single primary queue drain — all activations now on host.
                     // In-order stream guarantees all memcpys complete in submission order.
                     stream->wait();
 
-                    // Phase 3: Submit ALL quantize + GEMM kernels on secondary queue.
-                    // Target queue is in-order, so quantize completes before GEMM for
-                    // each slot. Different slots use different device buffers, so
-                    // kernels for different experts can overlap on the GPU.
+                    // Phase 3: Quantize + GEMM kernels on secondary queue.
+                    // Batch=1: quantize once into dev_q8_1[0], reuse for all GEMMs.
+                    // Batch>1: per-slot quantize + GEMM as before.
+                    if (batch1) {
+                        mmvq_submit_quantize_q8_1_soa(*target_queue, act_staging[0], dev_q8_1[0],
+                                                      static_cast<int>(K));
+                    }
                     for (size_t ci = 0; ci < chunk_sz; ci++) {
                         const auto & entry = entries[gpu_indices[chunk_start + ci]];
                         const int    slot  = static_cast<int>(ci);
 
-                        // Quantize: act_staging[slot] (malloc_host, PCIe zero-copy)
-                        //         → dev_q8_1[slot] (device memory on secondary GPU)
-                        mmvq_submit_quantize_q8_1_soa(*target_queue, act_staging[slot], dev_q8_1[slot],
-                                                      static_cast<int>(K));
+                        if (!batch1) {
+                            // Quantize: act_staging[slot] (malloc_host, PCIe zero-copy)
+                            //         → dev_q8_1[slot] (device memory on secondary GPU)
+                            mmvq_submit_quantize_q8_1_soa(*target_queue, act_staging[slot], dev_q8_1[slot],
+                                                          static_cast<int>(K));
+                        }
 
                         // GEMM: weights (SOA, secondary VRAM) × Q8_1 act → dev_out[slot]
+                        // Batch=1: all experts share dev_q8_1[0]; batch>1: per-slot.
+                        void * q8_src = batch1 ? dev_q8_1[0] : dev_q8_1[slot];
                         switch (src0->type) {
                             case GGML_TYPE_Q4_0:
-                                mmvq_submit_q4_0_soa(*target_queue, entry.device_ptr, dev_q8_1[slot], dev_out[slot],
+                                mmvq_submit_q4_0_soa(*target_queue, entry.device_ptr, q8_src, dev_out[slot],
                                                      static_cast<int>(K), static_cast<int>(N), static_cast<int>(N), 0);
                                 break;
                             case GGML_TYPE_Q6_K:
-                                mmvq_submit_q6_k_soa(*target_queue, entry.device_ptr, dev_q8_1[slot], dev_out[slot],
+                                mmvq_submit_q6_k_soa(*target_queue, entry.device_ptr, q8_src, dev_out[slot],
                                                      static_cast<int>(K), static_cast<int>(N), static_cast<int>(N), 0);
                                 break;
                             case GGML_TYPE_MXFP4:
-                                mmvq_submit_mxfp4_soa(*target_queue, entry.device_ptr, dev_q8_1[slot], dev_out[slot],
+                                mmvq_submit_mxfp4_soa(*target_queue, entry.device_ptr, q8_src, dev_out[slot],
                                                       static_cast<int>(K), static_cast<int>(N), static_cast<int>(N), 0);
                                 break;
                             default:
