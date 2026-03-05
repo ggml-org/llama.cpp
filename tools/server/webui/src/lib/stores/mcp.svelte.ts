@@ -36,10 +36,15 @@ import {
 	MCPLogLevel,
 	HealthCheckStatus,
 	MCPRefType,
-	ColorMode
+	ColorMode,
+	UrlProtocol,
+	JsonSchemaType,
+	ToolCallType
 } from '$lib/enums';
 import {
+	DEFAULT_CACHE_TTL_MS,
 	DEFAULT_MCP_CONFIG,
+	EXPECTED_THEMED_ICON_PAIR_COUNT,
 	MCP_ALLOWED_ICON_MIME_TYPES,
 	MCP_SERVER_ID_PREFIX,
 	MCP_RECONNECT_INITIAL_DELAY,
@@ -477,11 +482,14 @@ class MCPStore {
 	}
 
 	getHealthCheckState(serverId: string): HealthCheckState {
-		return this._healthChecks[serverId] ?? { status: 'idle' };
+		return this._healthChecks[serverId] ?? { status: HealthCheckStatus.IDLE };
 	}
 
 	hasHealthCheck(serverId: string): boolean {
-		return serverId in this._healthChecks && this._healthChecks[serverId].status !== 'idle';
+		return (
+			serverId in this._healthChecks &&
+			this._healthChecks[serverId].status !== HealthCheckStatus.IDLE
+		);
 	}
 
 	clearHealthCheck(serverId: string): void {
@@ -537,9 +545,9 @@ class MCPStore {
 	 */
 	#isValidIconUri(src: string): boolean {
 		try {
-			if (src.startsWith('data:')) return true;
+			if (src.startsWith(UrlProtocol.DATA)) return true;
 			const url = new URL(src);
-			return url.protocol === 'https:';
+			return url.protocol === UrlProtocol.HTTPS;
 		} catch {
 			return false;
 		}
@@ -576,7 +584,7 @@ class MCPStore {
 		// 2. Handle universal icons (no theme specified)
 		const universalIcons = validIcons.filter((icon) => !icon.theme);
 
-		if (universalIcons.length === 2) {
+		if (universalIcons.length === EXPECTED_THEMED_ICON_PAIR_COUNT) {
 			// Heuristic: two theme-less icons → assume [0] = light, [1] = dark
 			return this.#proxyIconSrc(universalIcons[isDark ? 1 : 0].src);
 		}
@@ -1074,13 +1082,13 @@ class MCPStore {
 		for (const connection of this.connections.values()) {
 			for (const tool of connection.tools) {
 				const rawSchema = (tool.inputSchema as Record<string, unknown>) ?? {
-					type: 'object',
+					type: JsonSchemaType.OBJECT,
 					properties: {},
 					required: []
 				};
 
 				tools.push({
-					type: 'function' as const,
+					type: ToolCallType.FUNCTION as const,
 					function: {
 						name: tool.name,
 						description: tool.description,
@@ -1829,7 +1837,7 @@ class MCPStore {
 				// Cache is valid for 5 minutes
 				const age = Date.now() - serverRes.lastFetched.getTime();
 
-				return age < 5 * 60 * 1000;
+				return age < DEFAULT_CACHE_TTL_MS;
 			});
 
 			if (allServersCached) {

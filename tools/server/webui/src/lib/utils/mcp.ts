@@ -2,7 +2,7 @@ import type { MCPServerSettingsEntry, MCPResourceContent, MCPResourceInfo } from
 import {
 	MCPTransportType,
 	MCPLogLevel,
-	UrlPrefix,
+	UrlProtocol,
 	MimeTypePrefix,
 	MimeTypeIncludes,
 	UriPattern,
@@ -16,7 +16,10 @@ import {
 	TEXT_FILE_EXTENSION_REGEX,
 	PROTOCOL_PREFIX_REGEX,
 	FILE_EXTENSION_REGEX,
-	DISPLAY_NAME_SEPARATOR_REGEX
+	DISPLAY_NAME_SEPARATOR_REGEX,
+	PATH_SEPARATOR,
+	RESOURCE_TEXT_CONTENT_SEPARATOR,
+	DEFAULT_RESOURCE_FILENAME
 } from '$lib/constants';
 import {
 	Database,
@@ -38,8 +41,8 @@ import type { MimeTypeUnion } from '$lib/types/common';
 export function detectMcpTransportFromUrl(url: string): MCPTransportType {
 	const normalized = url.trim().toLowerCase();
 
-	return normalized.startsWith(UrlPrefix.WEBSOCKET) ||
-		normalized.startsWith(UrlPrefix.WEBSOCKET_SECURE)
+	return normalized.startsWith(UrlProtocol.WEBSOCKET) ||
+		normalized.startsWith(UrlProtocol.WEBSOCKET_SECURE)
 		? MCPTransportType.WEBSOCKET
 		: MCPTransportType.STREAMABLE_HTTP;
 }
@@ -145,7 +148,7 @@ export function isImageMimeType(mimeType?: MimeTypeUnion): boolean {
 export function parseResourcePath(uri: string): string[] {
 	try {
 		const withoutProtocol = uri.replace(PROTOCOL_PREFIX_REGEX, '');
-		return withoutProtocol.split('/').filter((p) => p.length > 0);
+		return withoutProtocol.split(PATH_SEPARATOR).filter((p) => p.length > 0);
 	} catch {
 		return [uri];
 	}
@@ -258,7 +261,7 @@ export function getResourceTextContent(content: MCPResourceContent[] | null | un
 	return content
 		.filter((c): c is { uri: string; mimeType?: MimeTypeUnion; text: string } => 'text' in c)
 		.map((c) => c.text)
-		.join('\n\n');
+		.join(RESOURCE_TEXT_CONTENT_SEPARATOR);
 }
 
 /**
@@ -287,7 +290,7 @@ export function getResourceBlobContent(
 export function downloadResourceContent(
 	text: string,
 	mimeType: MimeTypeUnion = MimeTypeText.PLAIN,
-	filename: string = 'resource.txt'
+	filename: string = DEFAULT_RESOURCE_FILENAME
 ): void {
 	const blob = new Blob([text], { type: mimeType });
 	const url = URL.createObjectURL(blob);

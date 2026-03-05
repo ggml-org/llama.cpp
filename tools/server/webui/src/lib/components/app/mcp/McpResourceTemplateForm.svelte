@@ -3,6 +3,7 @@
 	import { InputWithSuggestions } from '$lib/components/app';
 	import { KeyboardKey } from '$lib/enums';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { MIN_AUTOCOMPLETE_INPUT_LENGTH } from '$lib/constants';
 	import type { MCPResourceTemplateInfo } from '$lib/types';
 	import {
 		debounce,
@@ -123,7 +124,7 @@
 	function handleArgFocus(argName: string) {
 		const value = values[argName] ?? '';
 
-		if (value.length >= 1) {
+		if (value.length >= MIN_AUTOCOMPLETE_INPUT_LENGTH) {
 			fetchCompletions(argName, value);
 		}
 	}

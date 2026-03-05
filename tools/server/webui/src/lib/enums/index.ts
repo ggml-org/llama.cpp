@@ -1,6 +1,6 @@
 export { AttachmentType } from './attachment';
 
-export { AgenticSectionType } from './agentic';
+export { AgenticSectionType, ToolCallType } from './agentic';
 
 export {
 	ChatMessageStatsView,
@@ -37,7 +37,8 @@ export {
 	MCPTransportType,
 	HealthCheckStatus,
 	MCPContentType,
-	MCPRefType
+	MCPRefType,
+	JsonSchemaType
 } from './mcp';
 
 export { ModelModality } from './model';
@@ -46,6 +47,6 @@ export { ServerRole, ServerModelStatus } from './server';
 
 export { ParameterSource, SyncableParameterType, SettingsFieldType } from './settings';
 
-export { ColorMode, McpPromptVariant, UrlPrefix } from './ui';
+export { ColorMode, McpPromptVariant, UrlProtocol } from './ui';
 
 export { KeyboardKey } from './keyboard';

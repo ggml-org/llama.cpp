@@ -110,7 +110,7 @@
 		class={className}
 		{disabled}
 		{isLoading}
-		showMcpPromptButton={true}
+		showMcpPromptButton
 		onFilesAdd={handleFilesAdd}
 		{onStop}
 		onSubmit={handleSubmit}

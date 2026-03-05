@@ -27,6 +27,21 @@ export const MCP_RESOURCE_ATTACHMENT_ID_PREFIX = 'res';
 // Default file extension for unknown image types
 export const DEFAULT_IMAGE_EXTENSION = 'img';
 
+// Default filename for resource content downloads
+export const DEFAULT_RESOURCE_FILENAME = 'resource.txt';
+
+// Path separator for resource URI parsing
+export const PATH_SEPARATOR = '/';
+
+// Separator for joining text content from multiple resource parts
+export const RESOURCE_TEXT_CONTENT_SEPARATOR = '\n\n';
+
+// Fallback text for unknown content types
+export const RESOURCE_UNKNOWN_TYPE = 'unknown type';
+
+// Label prefix for binary blob content
+export const BINARY_CONTENT_LABEL = 'Binary content';
+
 /**
  * Mapping from image MIME types to file extensions.
  * Used for generating attachment filenames from MIME types.

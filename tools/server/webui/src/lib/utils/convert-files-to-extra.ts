@@ -43,6 +43,7 @@ export async function parseFilesToMessageExtras(
 				content: file.textContent ?? '',
 				arguments: file.mcpPrompt.arguments
 			});
+
 			continue;
 		}
 

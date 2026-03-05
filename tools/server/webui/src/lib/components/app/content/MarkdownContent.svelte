@@ -25,7 +25,7 @@
 		BOOL_TRUE_STRING,
 		SETTINGS_KEYS
 	} from '$lib/constants';
-	import { ColorMode, UrlPrefix } from '$lib/enums';
+	import { ColorMode, UrlProtocol } from '$lib/enums';
 	import { FileTypeText } from '$lib/enums/files';
 	import { highlightCode, detectIncompleteCodeBlock, type IncompleteCodeBlock } from '$lib/utils';
 	import '$styles/katex-custom.scss';
@@ -501,7 +501,7 @@
 
 		// Don't handle data URLs or already-handled images
 		if (
-			img.src.startsWith(UrlPrefix.DATA) ||
+			img.src.startsWith(UrlProtocol.DATA) ||
 			img.dataset[DATA_ERROR_HANDLED_ATTR] === BOOL_TRUE_STRING
 		)
 			return;
@@ -618,7 +618,7 @@
 				<ActionIconsCodeBlock
 					code={incompleteCodeBlock.code}
 					language={incompleteCodeBlock.language || 'text'}
-					disabled={true}
+					disabled
 					onPreview={(code, lang) => {
 						previewCode = code;
 						previewLanguage = lang;

@@ -585,7 +585,7 @@ export { default as ChatMessageEditForm } from './ChatMessages/ChatMessageEditFo
  * @example
  * ```svelte
  * <!-- In chat route -->
- * <ChatScreen showCenteredEmpty={true} />
+ * <ChatScreen showCenteredEmpty />
  *
  * <!-- In conversation route -->
  * <ChatScreen showCenteredEmpty={false} />

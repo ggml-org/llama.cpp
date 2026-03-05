@@ -328,7 +328,7 @@
 
 					{#if liveStats || genStats}
 						<ChatMessageStatistics
-							isLive={true}
+							isLive
 							isProcessingPrompt={!!isStillProcessingPrompt}
 							promptTokens={liveStats?.tokensProcessed}
 							promptMs={liveStats?.timeMs}

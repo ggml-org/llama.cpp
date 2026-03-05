@@ -1,4 +1,5 @@
 import type { MessageRole } from '$lib/enums';
+import { ToolCallType } from '$lib/enums';
 import type {
 	ApiChatCompletionRequest,
 	ApiChatMessageContentPart,
@@ -21,7 +22,7 @@ export interface AgenticConfig {
  */
 export type AgenticToolCallPayload = {
 	id: string;
-	type: 'function';
+	type: ToolCallType.FUNCTION;
 	function: {
 		name: string;
 		arguments: string;

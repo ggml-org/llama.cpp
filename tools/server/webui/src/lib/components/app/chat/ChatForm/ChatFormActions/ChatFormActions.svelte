@@ -228,16 +228,16 @@
 				disabled={disabled || isOffline}
 				bind:this={selectorModelRef}
 				currentModel={conversationModel}
-				forceForegroundText={true}
-				useGlobalSelection={true}
+				forceForegroundText
+				useGlobalSelection
 			/>
 		{:else}
 			<ModelsSelector
 				disabled={disabled || isOffline}
 				bind:this={selectorModelRef}
 				currentModel={conversationModel}
-				forceForegroundText={true}
-				useGlobalSelection={true}
+				forceForegroundText
+				useGlobalSelection
 			/>
 		{/if}
 	</div>

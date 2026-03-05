@@ -3,6 +3,7 @@
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { HealthCheckStatus } from '$lib/enums';
+	import { MAX_DISPLAYED_MCP_AVATARS } from '$lib/constants';
 
 	interface Props {
 		class?: string;
@@ -21,10 +22,12 @@
 		})
 	);
 	let hasEnabledMcpServers = $derived(enabledMcpServersForChat.length > 0);
-	let extraServersCount = $derived(Math.max(0, healthyEnabledMcpServers.length - 3));
+	let extraServersCount = $derived(
+		Math.max(0, healthyEnabledMcpServers.length - MAX_DISPLAYED_MCP_AVATARS)
+	);
 	let mcpFavicons = $derived(
 		healthyEnabledMcpServers
-			.slice(0, 3)
+			.slice(0, MAX_DISPLAYED_MCP_AVATARS)
 			.map((s) => ({ id: s.id, url: mcpStore.getServerFavicon(s.id) }))
 			.filter((f) => f.url !== null)
 	);

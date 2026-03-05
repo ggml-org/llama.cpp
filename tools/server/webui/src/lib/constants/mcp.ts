@@ -39,6 +39,15 @@ export const MCP_RECONNECT_MAX_DELAY = 30000;
 /** Per-attempt timeout for a single reconnection attempt before giving up and backing off. */
 export const MCP_RECONNECT_ATTEMPT_TIMEOUT_MS = 15_000;
 
+/** Maximum number of MCP server avatars to display in the chat form */
+export const MAX_DISPLAYED_MCP_AVATARS = 3;
+
+/** Expected count when two theme-less icons represent a light/dark pair */
+export const EXPECTED_THEMED_ICON_PAIR_COUNT = 2;
+
+/** CORS proxy URL query parameter name */
+export const CORS_PROXY_URL_PARAM = 'url';
+
 /** Human-readable labels for MCP transport types */
 export const MCP_TRANSPORT_LABELS: Record<MCPTransportType, string> = {
 	[MCPTransportType.WEBSOCKET]: 'WebSocket',

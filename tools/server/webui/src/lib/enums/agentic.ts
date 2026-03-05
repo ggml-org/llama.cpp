@@ -1,4 +1,11 @@
 /**
+ * OpenAI-compatible tool call type.
+ */
+export enum ToolCallType {
+	FUNCTION = 'function'
+}
+
+/**
  * Types of sections in agentic content display.
  */
 export enum AgenticSectionType {

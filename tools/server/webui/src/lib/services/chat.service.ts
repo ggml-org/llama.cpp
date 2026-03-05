@@ -10,7 +10,7 @@ import {
 	ContentPartType,
 	MessageRole,
 	ReasoningFormat,
-	UrlPrefix
+	UrlProtocol
 } from '$lib/enums';
 import type { ApiChatMessageContentPart, ApiChatCompletionToolCall } from '$lib/types/api';
 import type { DatabaseMessageExtraMcpPrompt, DatabaseMessageExtraMcpResource } from '$lib/types';
@@ -414,7 +414,7 @@ export class ChatService {
 				for (const line of lines) {
 					if (abortSignal?.aborted) break;
 
-					if (line.startsWith(UrlPrefix.DATA)) {
+					if (line.startsWith(UrlProtocol.DATA)) {
 						const data = line.slice(6);
 						if (data === '[DONE]') {
 							streamFinished = true;

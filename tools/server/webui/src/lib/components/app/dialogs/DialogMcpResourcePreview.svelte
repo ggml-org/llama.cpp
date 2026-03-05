@@ -11,6 +11,7 @@
 		downloadResourceContent
 	} from '$lib/utils';
 	import { MimeTypeIncludes, MimeTypeText } from '$lib/enums';
+	import { DEFAULT_RESOURCE_FILENAME } from '$lib/constants';
 	import type { DatabaseMessageExtraMcpResource } from '$lib/types';
 
 	interface Props {
@@ -25,9 +26,9 @@
 	const favicon = $derived(mcpStore.getServerFavicon(extra.serverName));
 
 	function getLanguage(): string {
-		if (extra.mimeType?.includes(MimeTypeIncludes.JSON)) return 'json';
-		if (extra.mimeType?.includes(MimeTypeIncludes.JAVASCRIPT)) return 'javascript';
-		if (extra.mimeType?.includes(MimeTypeIncludes.TYPESCRIPT)) return 'typescript';
+		if (extra.mimeType?.includes(MimeTypeIncludes.JSON)) return MimeTypeIncludes.JSON;
+		if (extra.mimeType?.includes(MimeTypeIncludes.JAVASCRIPT)) return MimeTypeIncludes.JAVASCRIPT;
+		if (extra.mimeType?.includes(MimeTypeIncludes.TYPESCRIPT)) return MimeTypeIncludes.TYPESCRIPT;
 
 		const name = extra.name || extra.uri || '';
 		return getLanguageFromFilename(name) || 'plaintext';
@@ -38,7 +39,7 @@
 		downloadResourceContent(
 			extra.content,
 			extra.mimeType || MimeTypeText.PLAIN,
-			extra.name || 'resource.txt'
+			extra.name || DEFAULT_RESOURCE_FILENAME
 		);
 	}
 </script>

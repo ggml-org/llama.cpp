@@ -14,9 +14,17 @@
 		INPUT_CLASSES,
 		SETTING_CONFIG_DEFAULT,
 		INITIAL_FILE_SIZE,
-		PROMPT_CONTENT_SEPARATOR
+		PROMPT_CONTENT_SEPARATOR,
+		PROMPT_TRIGGER_PREFIX,
+		RESOURCE_TRIGGER_PREFIX
 	} from '$lib/constants';
-	import { ContentPartType, KeyboardKey, MimeTypeText, SpecialFileType } from '$lib/enums';
+	import {
+		ContentPartType,
+		FileExtensionText,
+		KeyboardKey,
+		MimeTypeText,
+		SpecialFileType
+	} from '$lib/enums';
 	import { config } from '$lib/stores/settings.svelte';
 	import { modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
@@ -211,14 +219,6 @@
 	 *
 	 */
 
-	/**
-	 *
-	 *
-	 * EVENT HANDLERS - File Management
-	 *
-	 *
-	 */
-
 	function handleFileSelect(files: File[]) {
 		onFilesAdd?.(files);
 	}
@@ -250,13 +250,13 @@
 		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
 		const hasServers = mcpStore.hasEnabledServers(perChatOverrides);
 
-		if (value.startsWith('/') && hasServers) {
+		if (value.startsWith(PROMPT_TRIGGER_PREFIX) && hasServers) {
 			isPromptPickerOpen = true;
 			promptSearchQuery = value.slice(1);
 			isInlineResourcePickerOpen = false;
 			resourceSearchQuery = '';
 		} else if (
-			value.startsWith('@') &&
+			value.startsWith(RESOURCE_TRIGGER_PREFIX) &&
 			hasServers &&
 			mcpStore.hasResourcesCapability(perChatOverrides)
 		) {
@@ -344,7 +344,9 @@
 						name: att.name,
 						size: att.content.length,
 						type: SpecialFileType.MCP_PROMPT,
-						file: new File([att.content], `${att.name}.txt`, { type: MimeTypeText.PLAIN }),
+						file: new File([att.content], `${att.name}${FileExtensionText.TXT}`, {
+							type: MimeTypeText.PLAIN
+						}),
 						isLoading: false,
 						textContent: att.content,
 						mcpPrompt: {
@@ -395,7 +397,7 @@
 		args?: Record<string, string>
 	) {
 		// Only clear the value if the prompt was triggered by typing '/'
-		if (value.startsWith('/')) {
+		if (value.startsWith(PROMPT_TRIGGER_PREFIX)) {
 			value = '';
 			onValueChange?.('');
 		}
@@ -445,7 +447,9 @@
 						isLoading: false,
 						textContent: promptText,
 						size: promptText.length,
-						file: new File([promptText], `${f.name}.txt`, { type: MimeTypeText.PLAIN })
+						file: new File([promptText], `${f.name}${FileExtensionText.TXT}`, {
+							type: MimeTypeText.PLAIN
+						})
 					}
 				: f
 		);
@@ -481,7 +485,7 @@
 
 	function handleInlineResourceSelect() {
 		// Clear the @query from input after resource is attached
-		if (value.startsWith('@')) {
+		if (value.startsWith(RESOURCE_TRIGGER_PREFIX)) {
 			value = '';
 			onValueChange?.('');
 		}
@@ -495,7 +499,7 @@
 		isInlineResourcePickerOpen = false;
 		resourceSearchQuery = '';
 
-		if (value.startsWith('@')) {
+		if (value.startsWith(RESOURCE_TRIGGER_PREFIX)) {
 			value = '';
 			onValueChange?.('');
 		}

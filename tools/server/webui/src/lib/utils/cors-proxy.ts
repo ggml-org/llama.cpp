@@ -3,6 +3,7 @@
  */
 
 import { base } from '$app/paths';
+import { CORS_PROXY_ENDPOINT, CORS_PROXY_URL_PARAM } from '$lib/constants';
 
 /**
  * Build a proxied URL that routes through llama-server's CORS proxy.
@@ -10,10 +11,10 @@ import { base } from '$app/paths';
  * @returns URL pointing to the CORS proxy with target encoded
  */
 export function buildProxiedUrl(targetUrl: string): URL {
-	const proxyPath = `${base}/cors-proxy`;
+	const proxyPath = `${base}${CORS_PROXY_ENDPOINT}`;
 	const proxyUrl = new URL(proxyPath, window.location.origin);
 
-	proxyUrl.searchParams.set('url', targetUrl);
+	proxyUrl.searchParams.set(CORS_PROXY_URL_PARAM, targetUrl);
 
 	return proxyUrl;
 }

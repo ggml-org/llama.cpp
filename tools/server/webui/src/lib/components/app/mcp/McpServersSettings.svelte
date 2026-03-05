@@ -7,6 +7,7 @@
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { McpServerCard, McpServerCardSkeleton, McpServerForm } from '$lib/components/app/mcp';
 	import { MCP_SERVER_ID_PREFIX } from '$lib/constants';
+	import { HealthCheckStatus } from '$lib/enums';
 
 	let servers = $derived(mcpStore.getServersSorted());
 
@@ -20,7 +21,9 @@
 			servers.every((server) => {
 				const state = mcpStore.getHealthCheckState(server.id);
 
-				return state.status === 'success' || state.status === 'error';
+				return (
+					state.status === HealthCheckStatus.SUCCESS || state.status === HealthCheckStatus.ERROR
+				);
 			});
 
 		if (allChecked) {

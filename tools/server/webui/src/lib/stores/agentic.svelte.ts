@@ -36,7 +36,13 @@ import {
 	MCP_ATTACHMENT_NAME_PREFIX,
 	DEFAULT_IMAGE_EXTENSION
 } from '$lib/constants';
-import { AttachmentType, ContentPartType, MessageRole, MimeTypePrefix } from '$lib/enums';
+import {
+	AttachmentType,
+	ContentPartType,
+	MessageRole,
+	MimeTypePrefix,
+	ToolCallType
+} from '$lib/enums';
 import type {
 	AgenticFlowParams,
 	AgenticFlowResult,
@@ -92,7 +98,7 @@ function toAgenticMessages(messages: ApiChatMessageData[]): AgenticMessage[] {
 				content: message.content,
 				tool_calls: message.tool_calls.map((call, index) => ({
 					id: call.id ?? `call_${index}`,
-					type: (call.type as 'function') ?? 'function',
+					type: (call.type as ToolCallType.FUNCTION) ?? ToolCallType.FUNCTION,
 					function: { name: call.function?.name ?? '', arguments: call.function?.arguments ?? '' }
 				}))
 			} satisfies AgenticMessage;
@@ -616,7 +622,7 @@ class AgenticStore {
 		if (!toolCalls) return [];
 		return toolCalls.map((call, index) => ({
 			id: call?.id ?? `tool_${index}`,
-			type: (call?.type as 'function') ?? 'function',
+			type: (call?.type as ToolCallType.FUNCTION) ?? ToolCallType.FUNCTION,
 			function: { name: call?.function?.name ?? '', arguments: call?.function?.arguments ?? '' }
 		}));
 	}
@@ -630,11 +636,11 @@ class AgenticStore {
 			return;
 		}
 
-		let output = `\n${AGENTIC_TAGS.TOOL_ARGS_END}`;
+		let output = `${NEWLINE_SEPARATOR}${AGENTIC_TAGS.TOOL_ARGS_END}`;
 		const lines = result.split(NEWLINE_SEPARATOR);
 		const trimmedLines = lines.length > maxLines ? lines.slice(-maxLines) : lines;
 
-		output += `\n${trimmedLines.join('\n')}\n${AGENTIC_TAGS.TOOL_CALL_END}\n`;
+		output += `${NEWLINE_SEPARATOR}${trimmedLines.join(NEWLINE_SEPARATOR)}${NEWLINE_SEPARATOR}${AGENTIC_TAGS.TOOL_CALL_END}${NEWLINE_SEPARATOR}`;
 		emit(output);
 	}
 

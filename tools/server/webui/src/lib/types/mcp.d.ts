@@ -1,4 +1,4 @@
-import type { MCPConnectionPhase, MCPLogLevel } from '$lib/enums/mcp';
+import type { MCPConnectionPhase, MCPLogLevel, HealthCheckStatus } from '$lib/enums/mcp';
 import type {
 	Client,
 	ClientCapabilities as SDKClientCapabilities,
@@ -140,20 +140,20 @@ export interface MCPConnection {
  * Extended health check state with detailed connection info
  */
 export type HealthCheckState =
-	| { status: import('$lib/enums/mcp').HealthCheckStatus.IDLE }
+	| { status: HealthCheckStatus.IDLE }
 	| {
-			status: import('$lib/enums/mcp').HealthCheckStatus.CONNECTING;
+			status: HealthCheckStatus.CONNECTING;
 			phase: MCPConnectionPhase;
 			logs: MCPConnectionLog[];
 	  }
 	| {
-			status: import('$lib/enums/mcp').HealthCheckStatus.ERROR;
+			status: HealthCheckStatus.ERROR;
 			message: string;
 			phase?: MCPConnectionPhase;
 			logs: MCPConnectionLog[];
 	  }
 	| {
-			status: import('$lib/enums/mcp').HealthCheckStatus.SUCCESS;
+			status: HealthCheckStatus.SUCCESS;
 			tools: MCPToolInfo[];
 			serverInfo?: MCPServerInfo;
 			capabilities?: MCPCapabilitiesInfo;

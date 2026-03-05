@@ -1,7 +1,7 @@
 import type { Root as HastRoot } from 'hast';
 import { visit } from 'unist-util-visit';
 import type { DatabaseMessageExtra, DatabaseMessageExtraImageFile } from '$lib/types/database';
-import { AttachmentType, UrlPrefix } from '$lib/enums';
+import { AttachmentType, UrlProtocol } from '$lib/enums';
 
 /**
  * Rehype plugin to resolve attachment image sources.
@@ -14,7 +14,7 @@ export function rehypeResolveAttachmentImages(options: { attachments?: DatabaseM
 				const src = String(node.properties.src);
 
 				// Skip data URLs and external URLs
-				if (src.startsWith(UrlPrefix.DATA) || src.startsWith(UrlPrefix.HTTP)) {
+				if (src.startsWith(UrlProtocol.DATA) || src.startsWith(UrlProtocol.HTTP)) {
 					return;
 				}
 

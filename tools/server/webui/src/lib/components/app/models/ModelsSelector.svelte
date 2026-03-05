@@ -338,7 +338,6 @@
 		{@const selectedOption = getDisplayOption()}
 
 		{#if isRouter}
-			<!-- Desktop: Dropdown menu -->
 			<DropdownMenu.Root bind:open={isOpen} onOpenChange={handleOpenChange}>
 				<DropdownMenu.Trigger
 					disabled={disabled || updating}

@@ -15,7 +15,7 @@ export enum McpPromptVariant {
 /**
  * URL prefixes for protocol detection
  */
-export enum UrlPrefix {
+export enum UrlProtocol {
 	DATA = 'data:',
 	HTTP = 'http://',
 	HTTPS = 'https://',

@@ -126,8 +126,10 @@ function parseToolCallContent(rawContent: string): AgenticSection[] {
 
 	if (pendingMatch) {
 		const pendingIndex = remainingContent.indexOf(AGENTIC_TAGS.TOOL_CALL_START);
+
 		if (pendingIndex > 0) {
 			const textBefore = remainingContent.slice(0, pendingIndex).trim();
+
 			if (textBefore) {
 				sections.push({ type: AgenticSectionType.TEXT, content: textBefore });
 			}
@@ -146,6 +148,7 @@ function parseToolCallContent(rawContent: string): AgenticSection[] {
 		});
 	} else if (partialWithNameMatch) {
 		const pendingIndex = remainingContent.indexOf(AGENTIC_TAGS.TOOL_CALL_START);
+
 		if (pendingIndex > 0) {
 			const textBefore = remainingContent.slice(0, pendingIndex).trim();
 			if (textBefore) {
@@ -164,6 +167,7 @@ function parseToolCallContent(rawContent: string): AgenticSection[] {
 		});
 	} else if (earlyMatch) {
 		const pendingIndex = remainingContent.indexOf(AGENTIC_TAGS.TOOL_CALL_START);
+
 		if (pendingIndex > 0) {
 			const textBefore = remainingContent.slice(0, pendingIndex).trim();
 			if (textBefore) {
@@ -184,6 +188,7 @@ function parseToolCallContent(rawContent: string): AgenticSection[] {
 		let remainingText = rawContent.slice(lastIndex).trim();
 
 		const partialMarkerMatch = remainingText.match(AGENTIC_REGEX.PARTIAL_MARKER);
+
 		if (partialMarkerMatch) {
 			remainingText = remainingText.slice(0, partialMarkerMatch.index).trim();
 		}
@@ -211,9 +216,11 @@ function parseToolCallContent(rawContent: string): AgenticSection[] {
  */
 function stripPartialMarker(text: string): string {
 	const partialMarkerMatch = text.match(AGENTIC_REGEX.PARTIAL_MARKER);
+
 	if (partialMarkerMatch) {
 		return text.slice(0, partialMarkerMatch.index).trim();
 	}
+
 	return text;
 }
 
@@ -235,16 +242,20 @@ function splitReasoningSegments(rawContent: string): ReasoningSegment[] {
 
 	while (cursor < rawContent.length) {
 		const startIndex = rawContent.indexOf(REASONING_TAGS.START, cursor);
+
 		if (startIndex === -1) {
 			const remainingText = rawContent.slice(cursor);
+
 			if (remainingText) {
 				segments.push({ type: AgenticSectionType.TEXT, content: remainingText });
 			}
+
 			break;
 		}
 
 		if (startIndex > cursor) {
 			const textBefore = rawContent.slice(cursor, startIndex);
+
 			if (textBefore) {
 				segments.push({ type: AgenticSectionType.TEXT, content: textBefore });
 			}
@@ -255,10 +266,12 @@ function splitReasoningSegments(rawContent: string): ReasoningSegment[] {
 
 		if (endIndex === -1) {
 			const pendingContent = rawContent.slice(contentStart);
+
 			segments.push({
 				type: AgenticSectionType.REASONING_PENDING,
 				content: stripPartialMarker(pendingContent)
 			});
+
 			break;
 		}
 

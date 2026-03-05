@@ -3,7 +3,12 @@
  */
 
 import { getProxiedUrlString } from './cors-proxy';
-import { GOOGLE_FAVICON_BASE_URL, DEFAULT_FAVICON_SIZE } from '$lib/constants';
+import {
+	GOOGLE_FAVICON_BASE_URL,
+	DEFAULT_FAVICON_SIZE,
+	DOMAIN_SEPARATOR,
+	ROOT_DOMAIN_MIN_PARTS
+} from '$lib/constants';
 
 /**
  * Gets a favicon URL for a given URL using Google's favicon service.
@@ -15,8 +20,11 @@ import { GOOGLE_FAVICON_BASE_URL, DEFAULT_FAVICON_SIZE } from '$lib/constants';
 export function getFaviconUrl(urlString: string): string | null {
 	try {
 		const url = new URL(urlString);
-		const hostnameParts = url.hostname.split('.');
-		const rootDomain = hostnameParts.length >= 2 ? hostnameParts.slice(-2).join('.') : url.hostname;
+		const hostnameParts = url.hostname.split(DOMAIN_SEPARATOR);
+		const rootDomain =
+			hostnameParts.length >= ROOT_DOMAIN_MIN_PARTS
+				? hostnameParts.slice(-ROOT_DOMAIN_MIN_PARTS).join(DOMAIN_SEPARATOR)
+				: url.hostname;
 
 		const googleFaviconUrl = `${GOOGLE_FAVICON_BASE_URL}?domain=${rootDomain}&sz=${DEFAULT_FAVICON_SIZE}`;
 		return getProxiedUrlString(googleFaviconUrl);

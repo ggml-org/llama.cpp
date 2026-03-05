@@ -4,7 +4,7 @@
 	import { KeyValuePairs } from '$lib/components/app';
 	import type { KeyValuePair } from '$lib/types';
 	import { parseHeadersToArray, serializeHeaders } from '$lib/utils';
-	import { UrlPrefix } from '$lib/enums';
+	import { UrlProtocol } from '$lib/enums';
 	import { MCP_SERVER_URL_PLACEHOLDER } from '$lib/constants';
 
 	interface Props {
@@ -30,8 +30,8 @@
 	}: Props = $props();
 
 	let isWebSocket = $derived(
-		url.toLowerCase().startsWith(UrlPrefix.WEBSOCKET) ||
-			url.toLowerCase().startsWith(UrlPrefix.WEBSOCKET_SECURE)
+		url.toLowerCase().startsWith(UrlProtocol.WEBSOCKET) ||
+			url.toLowerCase().startsWith(UrlProtocol.WEBSOCKET_SECURE)
 	);
 
 	let headerPairs = $derived<KeyValuePair[]>(parseHeadersToArray(headers));
@@ -83,6 +83,6 @@
 		addButtonLabel="Add"
 		emptyMessage="No custom headers configured."
 		sectionLabel="Custom Headers"
-		sectionLabelOptional={true}
+		sectionLabelOptional
 	/>
 </div>

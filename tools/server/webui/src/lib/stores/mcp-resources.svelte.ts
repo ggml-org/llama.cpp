@@ -15,7 +15,10 @@ import { AttachmentType } from '$lib/enums';
 import {
 	MCP_RESOURCE_ATTACHMENT_ID_PREFIX,
 	MCP_RESOURCE_CACHE_MAX_ENTRIES,
-	MCP_RESOURCE_CACHE_TTL_MS
+	MCP_RESOURCE_CACHE_TTL_MS,
+	NEWLINE_SEPARATOR,
+	RESOURCE_UNKNOWN_TYPE,
+	BINARY_CONTENT_LABEL
 } from '$lib/constants';
 import { normalizeResourceUri } from '$lib/utils';
 import type {
@@ -27,7 +30,8 @@ import type {
 	MCPCachedResource,
 	MCPResourceAttachment,
 	MCPResourceSubscription,
-	MCPServerResources
+	MCPServerResources,
+	DatabaseMessageExtraMcpResource
 } from '$lib/types';
 
 function generateAttachmentId(): string {
@@ -544,7 +548,7 @@ class MCPResourceStore {
 				} else if ('blob' in content && content.blob) {
 					// For binary content, just note it exists
 					parts.push(
-						`\n\n--- Resource: ${resourceName} (from ${serverName}) ---\n[Binary content: ${content.mimeType || 'unknown type'}]`
+						`\n\n--- Resource: ${resourceName} (from ${serverName}) ---\n[${BINARY_CONTENT_LABEL}: ${content.mimeType || RESOURCE_UNKNOWN_TYPE}]`
 					);
 				}
 			}
@@ -557,8 +561,8 @@ class MCPResourceStore {
 	 * Convert current resource attachments to DatabaseMessageExtra[] for persisting with a message.
 	 * Each attachment becomes a DatabaseMessageExtraMcpResource stored on the user message.
 	 */
-	toMessageExtras(): import('$lib/types').DatabaseMessageExtraMcpResource[] {
-		const extras: import('$lib/types').DatabaseMessageExtraMcpResource[] = [];
+	toMessageExtras(): DatabaseMessageExtraMcpResource[] {
+		const extras: DatabaseMessageExtraMcpResource[] = [];
 
 		for (const attachment of this._attachments) {
 			if (attachment.error) continue;
@@ -571,7 +575,9 @@ class MCPResourceStore {
 				if ('text' in content && content.text) {
 					contentParts.push(content.text);
 				} else if ('blob' in content && content.blob) {
-					contentParts.push(`[Binary content: ${content.mimeType || 'unknown type'}]`);
+					contentParts.push(
+						`[${BINARY_CONTENT_LABEL}: ${content.mimeType || RESOURCE_UNKNOWN_TYPE}]`
+					);
 				}
 			}
 
@@ -581,7 +587,7 @@ class MCPResourceStore {
 					name: resourceName,
 					uri: attachment.resource.uri,
 					serverName: attachment.resource.serverName,
-					content: contentParts.join('\n'),
+					content: contentParts.join(NEWLINE_SEPARATOR),
 					mimeType: attachment.resource.mimeType
 				});
 			}

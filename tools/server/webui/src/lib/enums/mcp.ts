@@ -51,6 +51,13 @@ export enum MCPContentType {
 }
 
 /**
+ * JSON Schema types used in MCP tool definitions
+ */
+export enum JsonSchemaType {
+	OBJECT = 'object'
+}
+
+/**
  * Reference types for MCP completions
  */
 export enum MCPRefType {
