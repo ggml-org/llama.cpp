@@ -2,45 +2,68 @@
 # ==============================================================================
 # tsi-pkg-build.sh  (source-safe)
 #
-# Key behaviors (read this once):
-# 1) Submodules:
-#    - If ggml-tsi-kernel/ is missing => ALWAYS runs "git submodule update --init --recursive"
-#      (even if .tsi_submodules_initialized exists and even without git-submodule-pull).
-#    - First time in a fresh checkout => auto init submodules and drop marker file.
-#    - Later runs => submodule update is optional via: git-submodule-pull
+# USAGE (source is recommended)
+# ============================
 #
-# 2) Clean rebuild:
-#    - build-posix => rm -rf ./build-posix before configuring/building
-#    - build-fpga  => rm -rf ./build-fpga  before configuring/building
-#    - default build (posix+fpga+package) cleans both.
-#    - Disable cleaning with: incremental
+#   source tsi-pkg-build.sh [build-mode] [flags...] [MLIR_COMPILER_DIR] [TOOLBOX_DIR]
 #
-# 3) Blobs:
-#    - Explicit blob flags:
-#        build-posix-blobs | build-fpga-blobs | build-all-blobs
-#    - overwrite-venv deletes ggml-tsi-kernel/blob-creation and recreates it
-#      (does NOT build blobs by itself).
-#    - git-submodule-pull additionally forces: overwrite-venv + build-all-blobs.
+# Build modes (optional):
+#   release | debug | debug-detail
+#     - release      : GGML_PERF_RELEASE
+#     - debug        : GGML_PERF_DETAIL
+#     - debug-detail : GGML_PERF_DETAIL + TMU_DEBUG_VALIDATE
 #
-# 4) IMPORTANT POSIX LINK FIX:
-#    - POSIX build needs generated host objects that define _mlir_ciface_txe_*_host.
-#    - If those host objects are missing, this script AUTO builds POSIX blobs
-#      (equivalent to build-posix-blobs) unless you pass: no-auto-blobs
+# Submodules:
+#   - First run in a fresh repo checkout: auto "git submodule update --init --recursive"
+#   - Later runs: submodule update is OPTIONAL unless you pass:
+#       git-submodule-pull
+#   - If ggml-tsi-kernel is missing, script forces submodule init even without the flag.
 #
-# 5) IMPORTANT FPGA LINK FIX (your new failure):
-#    - FPGA build also links against generated host objects (cross-linker sees _mlir_ciface_*_host).
-#    - If FPGA host objects are missing, this script AUTO builds FPGA blobs
-#      (equivalent to build-fpga-blobs) unless you pass: no-auto-blobs
+# Blob build (OFF by default):
+#   build-fpga-blobs     : build blobs in ggml-tsi-kernel/fpga-kernel only
+#   build-posix-blobs    : build blobs in ggml-tsi-kernel/posix-kernel only
+#   build-all-blobs      : build blobs for both fpga+posix kernels
 #
-# Build modes:
-#    release | debug | debug-detail
+# Auto blob safeguards (ON by default):
+#   - If you deleted ggml-tsi-kernel (rm -rf) or host objects are missing:
+#       * POSIX build auto-builds POSIX blobs if required for link
+#       * FPGA build auto-builds FPGA blobs if required for link
+#   Disable both with:
+#       no-auto-blobs
 #
-# Build selection flags:
-#    build-posix | build-fpga | package
-#    (default: build-posix + build-fpga + package)
+# Python virtual env:
+#   overwrite-venv       : delete blob-creation venv and recreate it (installs deps)
+#                          NOTE: this alone does NOT build blobs unless blob flag is also set.
+#   git-submodule-pull   : ALSO forces overwrite-venv AND build-all-blobs (as requested)
 #
-# Cleanup flags:
-#    clean | clean-all
+# Build selection:
+#   Default (no build-selection flags): build-posix + build-fpga + package
+#   build-posix          : only build posix C/C++
+#   build-fpga           : only build fpga target
+#   package              : only package fpga bundle (requires fpga already built)
+#   (You can combine them: e.g. build-posix build-fpga)
+#
+# Incremental build:
+#   incremental          : do not rm -rf build dirs (both llama.cpp + kernels)
+#
+# Cleanup:
+#   clean                : rm -rf build-posix build-fpga (llama.cpp) and kernel build dirs in ggml-tsi-kernel
+#   clean-all            : clean + remove python venv blob-creation
+#
+# Coverage:
+#   enable_coverage      : adds -DENABLE_COVERAGE=ON
+#
+# Help:
+#   help | -h | --help
+#
+# Examples:
+#   source tsi-pkg-build.sh debug-detail
+#   source tsi-pkg-build.sh debug git-submodule-pull
+#   source tsi-pkg-build.sh debug build-all-blobs overwrite-venv
+#   source tsi-pkg-build.sh release build-posix
+#   source tsi-pkg-build.sh debug build-fpga package
+#   source tsi-pkg-build.sh debug build-fpga no-auto-blobs build-fpga-blobs
+#
 # ==============================================================================
 
 log_error(){ echo "ERROR: $*" >&2; }
@@ -66,7 +89,9 @@ cleanup() {
   trap - RETURN EXIT 2>/dev/null || true
 }
 
-usage() { sed -n '1,200p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'; }
+usage() {
+  sed -n '1,220p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'
+}
 
 select_arch() {
   local m; m="$(uname -m)"
@@ -84,6 +109,7 @@ MARKER_FILE=".tsi_submodules_initialized"
 SUBMODULE_DIR="ggml-tsi-kernel"
 
 submodule_self_heal_if_needed() {
+  # If the path exists but is not a proper submodule checkout and is non-empty, wipe it.
   if [ -e "${SUBMODULE_DIR}" ]; then
     if [ ! -d "${SUBMODULE_DIR}/.git" ] && [ -n "$(ls -A "${SUBMODULE_DIR}" 2>/dev/null || true)" ]; then
       log_info "${SUBMODULE_DIR} exists and is non-empty (stale). Cleaning to allow submodule clone."
@@ -96,18 +122,21 @@ submodule_self_heal_if_needed() {
 }
 
 ensure_submodules() {
-  local want_update="$1"
+  local want_update="$1"   # 0/1 from user flag
   local force=0
 
+  # If submodule directory missing, ALWAYS force init.
   if [ ! -d "${SUBMODULE_DIR}" ]; then
     log_info "${SUBMODULE_DIR} missing; forcing submodule init"
     force=1
   fi
 
+  # If marker missing, treat as first-time repo.
   if [ ! -f "${MARKER_FILE}" ]; then
     force=1
   fi
 
+  # User asked explicitly.
   if [ "${want_update}" -eq 1 ]; then
     force=1
   fi
@@ -134,54 +163,108 @@ parse_args() {
   TOOLBOX_DIR_IN="${TOOLBOX_DIR:-}"
   ENABLE_COVERAGE_FLAG=""
 
+  # submodules
   GIT_SUBMODULE_PULL=0
 
+  # blobs
   DO_BLOB_FPGA=0
   DO_BLOB_POSIX=0
 
+  # python venv
   OVERWRITE_VENV=0
 
+  # build selection (default: posix+fpga+package)
   DO_BUILD_POSIX=1
   DO_BUILD_FPGA=1
   DO_PACKAGE_FPGA=1
   __USER_BUILD_SELECT=0
 
+  # cleanup
   DO_CLEAN=0
   DO_CLEAN_ALL=0
 
+  # cleaning build dirs before build (default ON)
   DO_CLEAN_BUILD_DIRS=1
   INCREMENTAL=0
 
+  # auto blobs (default ON; applies to POSIX+FPGA host object link safety)
   AUTO_BLOBS=1
 
   local a
   for a in "$@"; do
     case "$(tolower "$a")" in
-      help|-h|--help) usage; if [ "$__TSI_SOURCED" -eq 1 ]; then return 0; else exit 0; fi ;;
-      release|debug|debug-detail) [ -z "${BUILD_TYPE}" ] && BUILD_TYPE="$a" ;;
-      enable_coverage) ENABLE_COVERAGE_FLAG="-DENABLE_COVERAGE=ON"; log_info "enable_coverage detected" ;;
-      git-submodule-pull) GIT_SUBMODULE_PULL=1; log_info "git-submodule-pull detected" ;;
-      build-fpga-blobs) DO_BLOB_FPGA=1; log_info "build-fpga-blobs detected" ;;
-      build-posix-blobs) DO_BLOB_POSIX=1; log_info "build-posix-blobs detected" ;;
-      build-all-blobs) DO_BLOB_FPGA=1; DO_BLOB_POSIX=1; log_info "build-all-blobs detected" ;;
-      overwrite-venv) OVERWRITE_VENV=1; log_info "overwrite-venv detected" ;;
-      no-auto-blobs) AUTO_BLOBS=0; log_info "no-auto-blobs detected" ;;
-      incremental) INCREMENTAL=1; DO_CLEAN_BUILD_DIRS=0; log_info "incremental build selected (no rm -rf build dirs)" ;;
+      help|-h|--help)
+        usage
+        if [ "$__TSI_SOURCED" -eq 1 ]; then return 0; else exit 0; fi
+        ;;
+      release|debug|debug-detail)
+        [ -z "${BUILD_TYPE}" ] && BUILD_TYPE="$a"
+        ;;
+      enable_coverage)
+        ENABLE_COVERAGE_FLAG="-DENABLE_COVERAGE=ON"
+        log_info "enable_coverage detected"
+        ;;
+      git-submodule-pull)
+        GIT_SUBMODULE_PULL=1
+        log_info "git-submodule-pull detected"
+        ;;
+      build-fpga-blobs)
+        DO_BLOB_FPGA=1
+        log_info "build-fpga-blobs detected"
+        ;;
+      build-posix-blobs)
+        DO_BLOB_POSIX=1
+        log_info "build-posix-blobs detected"
+        ;;
+      build-all-blobs)
+        DO_BLOB_FPGA=1
+        DO_BLOB_POSIX=1
+        log_info "build-all-blobs detected"
+        ;;
+      overwrite-venv)
+        OVERWRITE_VENV=1
+        log_info "overwrite-venv detected"
+        ;;
+      no-auto-blobs)
+        AUTO_BLOBS=0
+        log_info "no-auto-blobs detected"
+        ;;
+      incremental)
+        INCREMENTAL=1
+        DO_CLEAN_BUILD_DIRS=0
+        log_info "incremental build selected (no rm -rf build dirs)"
+        ;;
       build-posix|posix)
-        if [ "$__USER_BUILD_SELECT" -eq 0 ]; then DO_BUILD_POSIX=0; DO_BUILD_FPGA=0; DO_PACKAGE_FPGA=0; __USER_BUILD_SELECT=1; fi
-        DO_BUILD_POSIX=1; log_info "build-posix selected"
+        if [ "$__USER_BUILD_SELECT" -eq 0 ]; then
+          DO_BUILD_POSIX=0; DO_BUILD_FPGA=0; DO_PACKAGE_FPGA=0; __USER_BUILD_SELECT=1
+        fi
+        DO_BUILD_POSIX=1
+        log_info "build-posix selected"
         ;;
       build-fpga|fpga)
-        if [ "$__USER_BUILD_SELECT" -eq 0 ]; then DO_BUILD_POSIX=0; DO_BUILD_FPGA=0; DO_PACKAGE_FPGA=0; __USER_BUILD_SELECT=1; fi
-        DO_BUILD_FPGA=1; log_info "build-fpga selected"
+        if [ "$__USER_BUILD_SELECT" -eq 0 ]; then
+          DO_BUILD_POSIX=0; DO_BUILD_FPGA=0; DO_PACKAGE_FPGA=0; __USER_BUILD_SELECT=1
+        fi
+        DO_BUILD_FPGA=1
+        log_info "build-fpga selected"
         ;;
       package|bundle)
-        if [ "$__USER_BUILD_SELECT" -eq 0 ]; then DO_BUILD_POSIX=0; DO_BUILD_FPGA=0; DO_PACKAGE_FPGA=0; __USER_BUILD_SELECT=1; fi
-        DO_PACKAGE_FPGA=1; log_info "package selected"
+        if [ "$__USER_BUILD_SELECT" -eq 0 ]; then
+          DO_BUILD_POSIX=0; DO_BUILD_FPGA=0; DO_PACKAGE_FPGA=0; __USER_BUILD_SELECT=1
+        fi
+        DO_PACKAGE_FPGA=1
+        log_info "package selected"
         ;;
-      clean) DO_CLEAN=1; log_info "clean selected" ;;
-      clean-all) DO_CLEAN_ALL=1; log_info "clean-all selected" ;;
+      clean)
+        DO_CLEAN=1
+        log_info "clean selected"
+        ;;
+      clean-all)
+        DO_CLEAN_ALL=1
+        log_info "clean-all selected"
+        ;;
       *)
+        # positional paths
         if [ -z "${MLIR_COMPILER_DIR_IN}" ]; then
           MLIR_COMPILER_DIR_IN="$a"
         elif [ -z "${TOOLBOX_DIR_IN}" ]; then
@@ -191,12 +274,16 @@ parse_args() {
     esac
   done
 
+  # git-submodule-pull ALSO deletes+recreates venv and builds all blobs.
   if [ "${GIT_SUBMODULE_PULL}" -eq 1 ]; then
     OVERWRITE_VENV=1
     DO_BLOB_FPGA=1
     DO_BLOB_POSIX=1
     log_info "git-submodule-pull => forcing overwrite-venv + build-all-blobs"
   fi
+
+  # Default build type if none provided
+  [ -n "${BUILD_TYPE}" ] || BUILD_TYPE="debug"
 }
 
 resolve_paths() {
@@ -275,12 +362,14 @@ setup_python() {
 # Blob presence + build helpers
 # -------------------------
 posix_host_objs_present() {
+  # host.o provides _mlir_ciface_txe_*_host for POSIX link
   [ -d "posix-kernel/build-posix" ] || return 1
   find "posix-kernel/build-posix" -name "host.o" -print -quit 2>/dev/null | grep -q . || return 1
   return 0
 }
 
 fpga_host_objs_present() {
+  # host.o provides _mlir_ciface_txe_*_host for ARM cross-link too
   [ -d "fpga-kernel/build-fpga" ] || return 1
   find "fpga-kernel/build-fpga" -name "host.o" -print -quit 2>/dev/null | grep -q . || return 1
   return 0
@@ -289,6 +378,7 @@ fpga_host_objs_present() {
 build_fpga_blobs() {
   log_info "BLOB: building FPGA kernels/blobs"
   cd fpga-kernel || return 1
+  # ensure cmake config exists (create-all-kernels.sh may depend on it)
   run cmake -B build-fpga -DTOOLBOX_DIR="${TOOLBOX_DIR}" -DCOMPILER_INSTALL_DIR="${MLIR_COMPILER_DIR}" || return 1
   run ./create-all-kernels.sh || return 1
   cd .. || return 1
@@ -304,7 +394,7 @@ build_posix_blobs() {
 }
 
 # -------------------------
-# POSIX build
+# POSIX build (clean rebuild by default)
 # -------------------------
 build_posix() {
   log_info "building llama.cpp/ggml for posix"
@@ -362,7 +452,7 @@ EOL
 }
 
 # -------------------------
-# FPGA build
+# FPGA build (clean rebuild by default)
 # -------------------------
 build_fpga() {
   log_info "building llama.cpp/ggml for fpga"
@@ -474,14 +564,16 @@ main() {
   resolve_paths "$arch" || return $?
   setup_toolchain || return 1
 
+  # Ensure submodule exists (fixes your "rm -rf ggml-tsi-kernel/" case)
   ensure_submodules "${GIT_SUBMODULE_PULL}" || return 1
 
+  # Decide if we need python:
   local need_python=0
   if [ "${OVERWRITE_VENV}" -eq 1 ] || [ "${DO_BLOB_FPGA}" -eq 1 ] || [ "${DO_BLOB_POSIX}" -eq 1 ]; then
     need_python=1
   fi
 
-  # AUTO blobs when required for link (unless disabled)
+  # AUTO host-object driven blob builds (POSIX + FPGA)
   local auto_posix_blob=0
   local auto_fpga_blob=0
 
@@ -523,6 +615,7 @@ main() {
     cd .. || return 1
   fi
 
+  # Build llama.cpp outputs (posix first, then fpga, then package)
   if [ "${DO_BUILD_POSIX}" -eq 1 ]; then
     build_posix || return 1
     wrap_glibc_bins || return 1
