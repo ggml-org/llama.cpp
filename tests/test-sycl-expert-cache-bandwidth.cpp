@@ -7,7 +7,7 @@
 //   1. B50 VRAM read bandwidth (kernel reads from device-local memory)
 //   2. Host→B50 H2D bandwidth (upload experts to B50 VRAM)
 //   3. B50-local MMVQ latency (activation round-trip: H2D act + kernel + D2H result)
-//   4. B580-stream latency (H2D expert weight + kernel on B580)
+//   4. B580-stream latency (H2D expert + H2D act + kernel + D2H result)
 //
 // Usage:
 //   source /opt/intel/oneapi/setvars.sh --force
@@ -26,8 +26,7 @@ static constexpr size_t EXPERT_BYTES    = 4ULL * 1024 * 1024;
 // Simulated activation: 16KB (batch=1 hidden state, e.g. 4096 floats)
 static constexpr size_t ACTIVATION_BYTES = 16 * 1024;
 // Simulated output: ~57KB (batch=1, intermediate_size=14336, sizeof(float))
-// For simplicity we use same size as activation in the dot-product simulation
-static constexpr size_t OUTPUT_FLOATS   = ACTIVATION_BYTES / sizeof(float);
+static constexpr size_t OUTPUT_FLOATS   = 14336;
 static constexpr int    WARMUP_ITERS    = 3;
 static constexpr int    BENCH_ITERS     = 10;
 
@@ -138,7 +137,7 @@ static double measure_h2d_bandwidth(sycl::queue & q) {
 //   H2D activation (16KB) → dot kernel on B50 → D2H result
 static double measure_local_compute_latency(sycl::queue & q) {
     int n_cols = ACTIVATION_BYTES / sizeof(float);  // 4096
-    int n_rows = OUTPUT_FLOATS;                     // 4096
+    int n_rows = OUTPUT_FLOATS;                     // 14336
 
     // Expert weight resident on B50 VRAM
     float * weights = sycl::malloc_device<float>((size_t)n_rows * n_cols, q);
@@ -180,41 +179,51 @@ static double measure_local_compute_latency(sycl::queue & q) {
     return best_us;
 }
 
-// Measure B580-stream latency: H2D expert weight (4MB) + kernel on B580
+// Measure B580-stream latency:
+//   H2D expert weight (4MB) + H2D activation (16KB) + kernel + D2H result (57KB)
 static double measure_stream_compute_latency(sycl::queue & q) {
     int n_cols = ACTIVATION_BYTES / sizeof(float);  // 4096
-    int n_rows = OUTPUT_FLOATS;                     // 4096
+    int n_rows = OUTPUT_FLOATS;                     // 14336
 
     // Expert weight: host-pinned, must be uploaded each time (simulating cache miss)
     float * host_weights   = sycl::malloc_host<float>((size_t)n_rows * n_cols, q);
     float * device_weights = sycl::malloc_device<float>((size_t)n_rows * n_cols, q);
-    // Activation already on B580
+    // Activation: host-pinned → H2D each iteration (simulating activation shipping)
+    float * host_act   = sycl::malloc_host<float>(n_cols, q);
     float * device_act = sycl::malloc_device<float>(n_cols, q);
+    // Output: device → D2H each iteration
     float * device_out = sycl::malloc_device<float>(n_rows, q);
+    float * host_out   = sycl::malloc_host<float>(n_rows, q);
 
     memset(host_weights, 0x01, (size_t)n_rows * n_cols * sizeof(float));
-    q.memset(device_act, 0x01, n_cols * sizeof(float)).wait();
+    memset(host_act, 0x01, n_cols * sizeof(float));
 
     // Warmup
     for (int i = 0; i < WARMUP_ITERS; i++) {
         q.memcpy(device_weights, host_weights, (size_t)n_rows * n_cols * sizeof(float)).wait();
+        q.memcpy(device_act, host_act, n_cols * sizeof(float)).wait();
         run_dot_kernel(q, device_weights, device_act, device_out, n_cols, n_rows);
+        q.memcpy(host_out, device_out, n_rows * sizeof(float)).wait();
     }
 
-    // Benchmark: upload weight + compute
+    // Benchmark: upload weight + upload activation + compute + download result
     double best_us = 1e12;
     for (int i = 0; i < BENCH_ITERS; i++) {
         auto t0 = now_us();
         q.memcpy(device_weights, host_weights, (size_t)n_rows * n_cols * sizeof(float)).wait();
+        q.memcpy(device_act, host_act, n_cols * sizeof(float)).wait();
         run_dot_kernel(q, device_weights, device_act, device_out, n_cols, n_rows);
+        q.memcpy(host_out, device_out, n_rows * sizeof(float)).wait();
         double elapsed_us = now_us() - t0;
         best_us = std::min(best_us, elapsed_us);
     }
 
     sycl::free(host_weights, q);
     sycl::free(device_weights, q);
+    sycl::free(host_act, q);
     sycl::free(device_act, q);
     sycl::free(device_out, q);
+    sycl::free(host_out, q);
 
     return best_us;
 }
@@ -275,14 +284,16 @@ int main() {
 
     // Test 3: B50-local compute (expert cached in B50 VRAM)
     printf("--- Test 3: B50-Local Compute Latency ---\n");
-    printf("  H2D activation (%zu KB) + dot kernel + D2H result\n", ACTIVATION_BYTES / 1024);
+    printf("  H2D activation (%zu KB) + dot kernel + D2H result (%zu KB)\n",
+           ACTIVATION_BYTES / 1024, OUTPUT_FLOATS * sizeof(float) / 1024);
     double local_us = measure_local_compute_latency(q_b50);
     printf("  B50-local round-trip: %.0f us\n", local_us);
     printf("\n");
 
     // Test 4: B580-stream compute (expert streamed from host)
     printf("--- Test 4: B580-Stream Compute Latency ---\n");
-    printf("  H2D expert weight (%zu KB) + dot kernel on B580\n", EXPERT_BYTES / 1024);
+    printf("  H2D expert weight (%zu KB) + H2D activation (%zu KB) + dot kernel + D2H result (%zu KB)\n",
+           EXPERT_BYTES / 1024, ACTIVATION_BYTES / 1024, OUTPUT_FLOATS * sizeof(float) / 1024);
     double stream_us = measure_stream_compute_latency(q_b580);
     printf("  B580-stream latency: %.0f us\n", stream_us);
     printf("\n");
