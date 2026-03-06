@@ -6,6 +6,8 @@
 #include <vector>
 #include <cstring>
 
+#include <sys/sysinfo.h>
+
 #if defined(GGML_BLAS_USE_ACCELERATE)
 #   include <Accelerate/Accelerate.h>
 #elif defined(GGML_BLAS_USE_MKL)
@@ -338,11 +340,24 @@ static const char * ggml_backend_blas_device_get_description(ggml_backend_dev_t 
     GGML_UNUSED(dev);
 }
 
-static void ggml_backend_blas_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
-    // TODO
-    *free = 0;
-    *total = 0;
+static bool get_meminfo(size_t *total, size_t *free) {
+    struct sysinfo info;
+    if (sysinfo(&info) != 0) {
+        return false;
+    }
 
+    if (total) {
+        *total = info.totalram;
+    }
+    if (free) {
+        *free = info.freeram;
+    }
+
+    return true;
+}
+
+static void ggml_backend_blas_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
+    get_meminfo(total, free);
     GGML_UNUSED(dev);
 }
 
