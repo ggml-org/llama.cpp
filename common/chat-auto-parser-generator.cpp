@@ -4,7 +4,6 @@
 #include "json-schema-to-grammar.h"
 #include "nlohmann/json.hpp"
 
-#include <functional>
 #include <stdexcept>
 #include <string>
 
