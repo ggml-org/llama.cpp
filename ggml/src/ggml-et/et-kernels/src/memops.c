@@ -25,6 +25,9 @@ struct memset_params {
 static void* vectorized_memset(void* dest, int val, size_t n) {
     char* d = (char*)dest;
     size_t i = 0;
+    uint64_t temp_mask;
+    __asm__ volatile("mova.x.m %0" : "=r"(temp_mask));  // Save current mask
+
 
     // Replicate the 8-bit value across a 32-bit word
     uint32_t v = (uint8_t)val;
@@ -68,6 +71,7 @@ static void* vectorized_memset(void* dest, int val, size_t n) {
             );
         }
     }
+    __asm__ volatile("mova.m.x %0" :: "r"(temp_mask));
 
     // Handle the unaligned tail (0 to 31 bytes).
     // As with memcpy, a scalar loop is used to avoid overwriting or accessing
@@ -127,32 +131,26 @@ int entry_point(struct memset_params* params, void* env) {
     uint64_t total_size = (uint64_t)size;
     uint64_t aligned_total = total_size & ~((uint64_t)(CACHE_LINE_SIZE_BYTES - 1));
 
-    if (thread_id < num_threads - 1) {
-        uint64_t chunks = aligned_total / CACHE_LINE_SIZE_BYTES;
-        uint64_t chunks_per_thread = chunks / (uint64_t)(num_threads - 1);
-        uint64_t extra_chunks = chunks % (uint64_t)(num_threads - 1);
+    uint64_t chunks = aligned_total / CACHE_LINE_SIZE_BYTES;
+    uint64_t worker_count = (uint64_t)(num_threads - 1);
+    uint64_t chunks_per_thread = chunks / worker_count;
+    uint64_t extra_chunks = chunks % worker_count;
 
-        uint64_t my_chunks = chunks_per_thread + ((uint64_t)thread_id < extra_chunks ? 1 : 0);
-        uint64_t prior_chunks =
-            chunks_per_thread * (uint64_t)thread_id +
-            ((uint64_t)thread_id < extra_chunks ? (uint64_t)thread_id : extra_chunks);
+    uint64_t tid = (uint64_t)thread_id;
+    uint64_t my_chunks = chunks_per_thread + (unsigned)(tid < extra_chunks);
+    uint64_t prior_chunks =
+        chunks_per_thread * tid +
+        (tid < extra_chunks ? tid : extra_chunks);
 
-        start_offset = prior_chunks * CACHE_LINE_SIZE_BYTES;
-        thread_work_size = my_chunks * CACHE_LINE_SIZE_BYTES;
-        end_offset = start_offset + thread_work_size;
-    } else {
-        // Last thread handles any remaining aligned chunks and all tail bytes.
-        uint64_t chunks = aligned_total / CACHE_LINE_SIZE_BYTES;
-        uint64_t chunks_per_thread = chunks / (uint64_t)(num_threads - 1);
-        uint64_t extra_chunks = chunks % (uint64_t)(num_threads - 1);
+    start_offset = prior_chunks * CACHE_LINE_SIZE_BYTES;
+    end_offset = start_offset + my_chunks * CACHE_LINE_SIZE_BYTES;
 
-        uint64_t prior_chunks =
-            chunks_per_thread * (uint64_t)(num_threads - 1) + extra_chunks;
-
-        start_offset = prior_chunks * CACHE_LINE_SIZE_BYTES;
+    // Last thread handles any remaining aligned chunks and all tail bytes.
+    if (thread_id == num_threads - 1) {
         end_offset = total_size;
-        thread_work_size = end_offset - start_offset;
     }
+
+    thread_work_size = end_offset - start_offset;
 
     if (thread_work_size > 0) {
         vectorized_memset(dst + start_offset, value, (size_t)thread_work_size);
