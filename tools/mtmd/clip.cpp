@@ -788,7 +788,7 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
     std::unique_ptr<clip_graph> builder;
 
     switch (ctx->proj_type()) {
-        case PROJECTOR_TYPE_PHI4_SIGLIP:
+        case PROJECTOR_TYPE_PHI4:
             {
                 builder = std::make_unique<clip_graph_phi4_siglip>(ctx, img);
             } break;
@@ -1148,7 +1148,7 @@ struct clip_model_loader {
                         // ref: https://huggingface.co/LiquidAI/LFM2.5-VL-1.6B/blob/main/processor_config.json
                         hparams.set_limit_image_tokens(64, 256);
                     } break;
-                case PROJECTOR_TYPE_PHI4_SIGLIP:
+                case PROJECTOR_TYPE_PHI4:
                     {
                         hparams.n_merge = 1;
                         get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels);
@@ -1852,7 +1852,7 @@ struct clip_model_loader {
                     model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
                     model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"));
                 } break;
-            case PROJECTOR_TYPE_PHI4_SIGLIP:
+            case PROJECTOR_TYPE_PHI4:
                 {
                     model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
                     model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
@@ -3075,7 +3075,7 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                 // res_imgs->data[0] = *res;
                 res_imgs->entries.push_back(std::move(img_f32));
             } break;
-        case PROJECTOR_TYPE_PHI4_SIGLIP:
+        case PROJECTOR_TYPE_PHI4:
             {
                 GGML_ASSERT(params.image_min_pixels > 0 && params.image_max_pixels > 0);
                 const int patch_size = params.patch_size;
@@ -3420,7 +3420,7 @@ int clip_n_output_tokens_x(const struct clip_ctx * ctx, struct clip_image_f32 * 
     const int n_total = clip_n_output_tokens(ctx, img);
     const auto & proj = ctx->proj_type();
     switch (proj) {
-        case PROJECTOR_TYPE_PHI4_SIGLIP:
+        case PROJECTOR_TYPE_PHI4:
             return img->nx / params.patch_size;
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
@@ -3439,7 +3439,7 @@ int clip_n_output_tokens_y(const struct clip_ctx * ctx, struct clip_image_f32 * 
     const auto & params = ctx->model.hparams;
     const auto & proj = ctx->proj_type();
     switch (proj) {
-        case PROJECTOR_TYPE_PHI4_SIGLIP:
+        case PROJECTOR_TYPE_PHI4:
             return img->ny / params.patch_size;
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
@@ -3467,7 +3467,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
         case PROJECTOR_TYPE_MLP:
         case PROJECTOR_TYPE_MLP_NORM:
         case PROJECTOR_TYPE_JANUS_PRO:
-        case PROJECTOR_TYPE_PHI4_SIGLIP:
+        case PROJECTOR_TYPE_PHI4:
             {
                 // do nothing
             } break;
@@ -3969,7 +3969,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         case PROJECTOR_TYPE_VOXTRAL:
         case PROJECTOR_TYPE_MUSIC_FLAMINGO:
         case PROJECTOR_TYPE_JANUS_PRO:
-        case PROJECTOR_TYPE_PHI4_SIGLIP:
+        case PROJECTOR_TYPE_PHI4:
         case PROJECTOR_TYPE_COGVLM:
             {
                 // do nothing
@@ -4099,7 +4099,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_LDPV2:
             return ctx->model.mm_model_peg_0_b->ne[0];
         case PROJECTOR_TYPE_MLP:
-        case PROJECTOR_TYPE_PHI4_SIGLIP:
+        case PROJECTOR_TYPE_PHI4:
         case PROJECTOR_TYPE_PIXTRAL:
         case PROJECTOR_TYPE_LIGHTONOCR:
             return ctx->model.mm_2_w->ne[1];
