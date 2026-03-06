@@ -353,7 +353,8 @@ static int execute_op_softmax_f32(struct htp_ops_context * octx) {
             return HTP_STATUS_NO_SUPPORT;
     }
 
-    const uint32_t n_threads = octx->n_threads;
+    const uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
+    const uint32_t n_threads  = MIN(octx->n_threads, src0_nrows);
 
     const size_t src0_row_size = src0->nb[1];
     const size_t src1_row_size = src0_row_size;
@@ -393,12 +394,9 @@ static int execute_op_softmax_f32(struct htp_ops_context * octx) {
     octx->src1_spad.data = octx->src0_spad.data + octx->src0_spad.size;
     octx->dst_spad.data  = octx->src1_spad.data + octx->src1_spad.size;
 
-    uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
-
     if (!(octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)) {
-        uint32_t n_jobs             = MIN(n_threads, src0_nrows);
-        smctx.src0_nrows_per_thread = (src0_nrows + n_jobs - 1) / n_jobs;
-        worker_pool_run_func(octx->ctx->worker_pool, softmax_job_f32, &smctx, n_jobs);
+        smctx.src0_nrows_per_thread = (src0_nrows + n_threads - 1) / n_threads;
+        worker_pool_run_func(octx->ctx->worker_pool, softmax_job_f32, &smctx, n_threads);
     }
 
     return err;

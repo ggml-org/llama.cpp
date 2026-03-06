@@ -202,6 +202,8 @@ static void cpy_work_func(unsigned int n, unsigned int i, void *data) {
 int op_cpy(struct htp_ops_context * octx) {
     cpy_preamble;
 
+    const uint32_t n_threads = MIN(nr, octx->n_threads);
+
     struct htp_copy_context ct;
     ct.octx = octx;
 
@@ -227,8 +229,7 @@ int op_cpy(struct htp_ops_context * octx) {
     const bool transposed = (nb00 > nb01) || (nb0 > nb1);
     const bool sameshape  = !transposed && (ne00 == ne0 && ne01 == ne1 && ne02 == ne2 && ne03 == ne3);
 
-    const uint32_t n_jobs = MIN(nr, octx->n_threads);
-    ct.src0_nrows_per_thread = (nr + n_jobs - 1) / n_jobs;
+    ct.src0_nrows_per_thread = (nr + n_threads - 1) / n_threads;
 
     if (sametype && sameshape) {
         ct.copy = cpy_thread_sametype_sameshape;
@@ -245,7 +246,7 @@ int op_cpy(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
-    worker_pool_run_func(octx->ctx->worker_pool, cpy_work_func, &ct, n_jobs);
+    worker_pool_run_func(octx->ctx->worker_pool, cpy_work_func, &ct, n_threads);
 
     return HTP_STATUS_OK;
 }
