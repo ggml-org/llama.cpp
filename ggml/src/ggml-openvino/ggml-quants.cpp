@@ -1,4 +1,4 @@
-#include "ggml-quants.hpp"
+#include "ggml-quants.h"
 
 #include "ggml-common.h"
 #include "ggml-impl.h"

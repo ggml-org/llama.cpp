@@ -1,6 +1,6 @@
-#include "input_model.hpp"
+#include "input_model.h"
 
-#include "decoder.hpp"
+#include "decoder.h"
 
 namespace ov {
 namespace frontend {

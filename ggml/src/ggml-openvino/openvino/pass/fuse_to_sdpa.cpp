@@ -1,4 +1,4 @@
-#include "fuse_to_sdpa.hpp"
+#include "fuse_to_sdpa.h"
 
 #include <openvino/core/graph_util.hpp>
 #include <openvino/core/rt_info.hpp>

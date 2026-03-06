@@ -1,4 +1,4 @@
-#include "squeeze_matmul.hpp"
+#include "squeeze_matmul.h"
 
 #include <openvino/core/graph_util.hpp>
 #include <openvino/core/rt_info.hpp>

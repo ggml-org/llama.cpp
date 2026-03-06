@@ -4,7 +4,7 @@
 #include "ggml-backend.h"
 #include "ggml-openvino-extra.h"
 #include "ggml-openvino.h"
-#include "ggml-quants.hpp"
+#include "ggml-quants.h"
 
 #include <ggml-impl.h>
 #include <ggml.h>

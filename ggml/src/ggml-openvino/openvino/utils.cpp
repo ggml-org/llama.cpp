@@ -1,4 +1,4 @@
-#include "utils.hpp"
+#include "utils.h"
 
 #include "ggml-impl.h"
 

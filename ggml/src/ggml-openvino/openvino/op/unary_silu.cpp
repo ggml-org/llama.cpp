@@ -1,6 +1,6 @@
-#include "../node_context.hpp"
-#include "../op_table.hpp"
-#include "../utils.hpp"
+#include "../node_context.h"
+#include "../op_table.h"
+#include "../utils.h"
 
 #include <openvino/core/node_output.hpp>
 #include <openvino/op/multiply.hpp>

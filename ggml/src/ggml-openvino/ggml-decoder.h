@@ -1,8 +1,8 @@
 #pragma once
 
-#include "ggml-quants.hpp"
+#include "ggml-quants.h"
 #include "ggml.h"
-#include "openvino/decoder.hpp"
+#include "openvino/decoder.h"
 
 #include <cstdint>
 #include <cstring>

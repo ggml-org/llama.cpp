@@ -4,8 +4,8 @@
 #include "ggml-openvino-extra.h"
 #include "ggml-openvino/ggml-decoder.h"
 #include "ggml.h"
-#include "openvino/frontend.hpp"
-#include "openvino/input_model.hpp"
+#include "openvino/frontend.h"
+#include "openvino/input_model.h"
 
 #include <algorithm>
 #include <cassert>

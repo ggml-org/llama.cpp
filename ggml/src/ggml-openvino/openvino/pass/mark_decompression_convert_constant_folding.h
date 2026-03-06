@@ -1,6 +1,6 @@
 #pragma once
 
-#include "mark_decompression_convert_constant_folding.hpp"
+#include "mark_decompression_convert_constant_folding.h"
 #include "openvino/pass/matcher_pass.hpp"
 #include "openvino/core/visibility.hpp"
 

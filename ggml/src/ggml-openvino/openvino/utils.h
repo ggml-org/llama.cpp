@@ -6,7 +6,7 @@
 #include <openvino/op/slice.hpp>
 #include <utility>
 
-#include "node_context.hpp"
+#include "node_context.h"
 
 namespace ov {
 namespace frontend {
