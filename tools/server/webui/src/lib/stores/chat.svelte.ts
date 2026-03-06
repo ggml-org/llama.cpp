@@ -622,16 +622,12 @@ class ChatStore {
 			},
 			onModel: (modelName: string) => recordModel(modelName),
 			onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
-				const tokensPerSecond =
-					timings?.predicted_ms && timings?.predicted_n
-						? (timings.predicted_n / timings.predicted_ms) * 1000
-						: 0;
 				this.updateProcessingStateFromTimings(
 					{
 						prompt_n: timings?.prompt_n || 0,
 						prompt_ms: timings?.prompt_ms,
 						predicted_n: timings?.predicted_n || 0,
-						predicted_per_second: tokensPerSecond,
+						predicted_ms: timings?.predicted_ms,
 						cache_n: timings?.cache_n || 0,
 						prompt_progress: promptProgress
 					},
@@ -752,10 +748,7 @@ class ChatStore {
 						prompt_ms: lastKnownState.promptMs,
 						predicted_n: lastKnownState.tokensDecoded || 0,
 						cache_n: lastKnownState.cacheTokens || 0,
-						predicted_ms:
-							lastKnownState.tokensPerSecond && lastKnownState.tokensDecoded
-								? (lastKnownState.tokensDecoded / lastKnownState.tokensPerSecond) * 1000
-								: undefined
+						predicted_ms: lastKnownState.predictedMs
 					};
 				}
 				await DatabaseService.updateMessage(lastMessage.id, updateData);
@@ -1054,16 +1047,12 @@ class ChatStore {
 					onChunk: (chunk: string) => appendContentChunk(chunk),
 					onReasoningChunk: (chunk: string) => appendReasoningChunk(chunk),
 					onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
-						const tokensPerSecond =
-							timings?.predicted_ms && timings?.predicted_n
-								? (timings.predicted_n / timings.predicted_ms) * 1000
-								: 0;
 						this.updateProcessingStateFromTimings(
 							{
 								prompt_n: timings?.prompt_n || 0,
 								prompt_ms: timings?.prompt_ms,
 								predicted_n: timings?.predicted_n || 0,
-								predicted_per_second: tokensPerSecond,
+								predicted_ms: timings?.predicted_ms || 0,
 								cache_n: timings?.cache_n || 0,
 								prompt_progress: promptProgress
 							},
@@ -1325,8 +1314,6 @@ class ChatStore {
 			return activeState.contextTotal;
 
 		return getContextSize();
-
-		return null;
 	}
 
 	updateProcessingStateFromTimings(
@@ -1334,7 +1321,7 @@ class ChatStore {
 			prompt_n: number;
 			prompt_ms?: number;
 			predicted_n: number;
-			predicted_per_second: number;
+			predicted_ms?: number;
 			cache_n: number;
 			prompt_progress?: ChatMessagePromptProgress;
 		},
@@ -1353,16 +1340,21 @@ class ChatStore {
 		}
 	}
 
-	private parseTimingData(timingData: Record<string, unknown>): ApiProcessingState | null {
+	parseTimingData(
+		timingData: Record<string, unknown>,
+		contextSize: number | null = null
+	): ApiProcessingState {
 		const promptTokens = (timingData.prompt_n as number) || 0,
 			promptMs = (timingData.prompt_ms as number) || undefined,
 			predictedTokens = (timingData.predicted_n as number) || 0,
-			tokensPerSecond = (timingData.predicted_per_second as number) || 0,
+			predictedMs = (timingData.predicted_ms as number) || undefined,
 			cacheTokens = (timingData.cache_n as number) || 0;
+		const tokensPerSecond =
+			predictedMs && predictedTokens ? (predictedTokens / predictedMs) * 1000 : 0;
 		const promptProgress = timingData.prompt_progress as
 			| { total: number; cache: number; processed: number; time_ms: number }
 			| undefined;
-		const contextTotal = this.getContextTotal();
+		const contextTotal = contextSize ?? this.getContextTotal();
 		const currentConfig = config();
 		const outputTokensMax = currentConfig.max_tokens || -1;
 		const contextUsed = promptTokens + cacheTokens + predictedTokens,
@@ -1383,6 +1375,7 @@ class ChatStore {
 			outputTokensMax,
 			hasNextToken: predictedTokens > 0,
 			tokensPerSecond,
+			predictedMs,
 			temperature: currentConfig.temperature ?? 0.8,
 			topP: currentConfig.top_p ?? 0.95,
 			speculative: false,
@@ -1402,10 +1395,7 @@ class ChatStore {
 					prompt_n: message.timings.prompt_n || 0,
 					prompt_ms: message.timings.prompt_ms,
 					predicted_n: message.timings.predicted_n || 0,
-					predicted_per_second:
-						message.timings.predicted_n && message.timings.predicted_ms
-							? (message.timings.predicted_n / message.timings.predicted_ms) * 1000
-							: 0,
+					predicted_ms: message.timings.predicted_ms,
 					cache_n: message.timings.cache_n || 0
 				});
 				if (restoredState) {

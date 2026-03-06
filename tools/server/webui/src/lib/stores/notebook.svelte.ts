@@ -1,32 +1,31 @@
 import { CompletionService } from '$lib/services/completion.service';
 import { config } from '$lib/stores/settings.svelte';
 import { tokenize } from '$lib/services/tokenize.service';
+import { STATS_UNITS } from '$lib/constants/processing-info';
+import { getContextSize } from '$lib/stores/models.svelte';
+import { ErrorDialogType } from '$lib/enums';
+import { getETASecs } from '$lib/hooks/use-processing-state.svelte';
+import { chatStore } from '$lib/stores/chat.svelte';
+
 import type {
 	ChatMessageTimings,
 	ChatMessagePromptProgress,
 	ErrorDialogState
 } from '$lib/types/chat';
-import { STATS_UNITS } from '$lib/constants/processing-info';
-import { getContextSize } from '$lib/stores/models.svelte';
-import { ErrorDialogType } from '$lib/enums';
-import { getETASecs } from '$lib/hooks/use-processing-state.svelte';
+import type { ApiProcessingState } from '$lib/types';
 
 export class NotebookStore {
 	content = $state('');
 	isGenerating = $state(false);
 	abortController: AbortController | null = null;
 
-	// Statistics
-	cacheTokens = $state(0);
-	promptTokens = $state(0);
-	promptMs = $state(0);
-	predictedTokens = $state(0);
-	predictedMs = $state(0);
+	processingState = $state<ApiProcessingState | null>(null);
+
 	totalTokens = $state(0);
 	generationStartTokens = $state(0);
 	generationEndTokens = $state(0);
+
 	tokenizeTimeout: ReturnType<typeof setTimeout> | undefined;
-	promptProgress = $state<ChatMessagePromptProgress | null>(null);
 
 	error = $state<ErrorDialogState | null>(null);
 
@@ -42,14 +41,6 @@ export class NotebookStore {
 		this.abortController = new AbortController();
 		this.error = null;
 
-		// Reset stats
-		this.cacheTokens = 0;
-		this.promptTokens = 0;
-		this.promptMs = 0;
-		this.predictedTokens = 0;
-		this.predictedMs = 0;
-		this.promptProgress = null;
-
 		// Save number of tokens before generation
 		this.generationStartTokens = this.totalTokens;
 
@@ -60,27 +51,17 @@ export class NotebookStore {
 					this.content += chunk;
 				},
 				onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
-					if (timings) {
-						if (timings.cache_n) this.cacheTokens = timings.cache_n;
-						if (timings.prompt_n) this.promptTokens = timings.prompt_n;
-						if (timings.prompt_ms) this.promptMs = timings.prompt_ms;
-						if (timings.predicted_n) this.predictedTokens = timings.predicted_n;
-						if (timings.predicted_ms) this.predictedMs = timings.predicted_ms;
-					}
-
-					if (promptProgress) {
-						// Update prompt stats from progress
-						const { processed, time_ms } = promptProgress;
-						if (processed > 0) this.promptTokens = processed;
-						if (time_ms > 0) this.promptMs = time_ms;
-						this.promptProgress = promptProgress;
-					}
-
-					// Update totalTokens live
-					this.totalTokens = this.cacheTokens + this.promptTokens + this.predictedTokens;
+					this.updateProcessingStateFromTimings({
+						prompt_n: timings?.prompt_n || 0,
+						prompt_ms: timings?.prompt_ms,
+						predicted_n: timings?.predicted_n || 0,
+						predicted_ms: timings?.predicted_ms,
+						cache_n: timings?.cache_n || 0,
+						prompt_progress: promptProgress
+					});
 				},
 				onComplete: () => {
-					this.isGenerating = false;
+					this.resetState();
 				},
 				onError: (error: unknown) => {
 					if (error instanceof Error && error.name === 'AbortError') {
@@ -92,7 +73,7 @@ export class NotebookStore {
 							type: ErrorDialogType.SERVER
 						};
 					}
-					this.isGenerating = false;
+					this.resetState();
 				}
 			};
 			await CompletionService.sendCompletion(
@@ -111,7 +92,7 @@ export class NotebookStore {
 				message: error instanceof Error ? error.message : String(error),
 				type: ErrorDialogType.SERVER
 			};
-			this.isGenerating = false;
+			this.resetState();
 		}
 		// Save number of tokens after generation
 		this.generationEndTokens = this.totalTokens;
@@ -119,6 +100,18 @@ export class NotebookStore {
 
 	dismissError() {
 		this.error = null;
+	}
+
+	updateProcessingStateFromTimings(timingData: {
+		prompt_n: number;
+		prompt_ms?: number;
+		predicted_n: number;
+		predicted_ms?: number;
+		cache_n: number;
+		prompt_progress?: ChatMessagePromptProgress;
+	}): void {
+		this.processingState = chatStore.parseTimingData(timingData, getContextSize());
+		this.totalTokens = this.processingState?.contextUsed ?? 0;
 	}
 
 	undo() {
@@ -149,7 +142,14 @@ export class NotebookStore {
 			this.abortController.abort();
 			this.abortController = null;
 		}
+		this.resetState();
+	}
+
+	resetState() {
 		this.isGenerating = false;
+		if (this.processingState) {
+			this.processingState.status = 'idle';
+		}
 	}
 
 	updateTokenCount(model?: string) {
@@ -170,8 +170,13 @@ export class NotebookStore {
 	getProcessingDetails(): string[] {
 		const details: string[] = [];
 
-		if (this.promptProgress) {
-			const { processed, total, time_ms, cache } = this.promptProgress;
+		const state = this.processingState;
+		if (!state) {
+			return [];
+		}
+
+		if (state.promptProgress) {
+			const { processed, total, time_ms, cache } = state.promptProgress;
 			const actualProcessed = processed - cache;
 			const actualTotal = total - cache;
 
@@ -188,28 +193,26 @@ export class NotebookStore {
 			}
 		}
 
+		const contextUsed = state.contextUsed;
 		const contextTotal = getContextSize();
-		const contextUsed = this.promptTokens + this.cacheTokens + this.predictedTokens;
 
 		if (typeof contextTotal === 'number' && contextUsed >= 0 && contextTotal > 0) {
 			const contextPercent = Math.round((contextUsed / contextTotal) * 100);
 			details.push(`Context: ${contextUsed}/${contextTotal} (${contextPercent}%)`);
 		}
 
-		if (this.predictedTokens > 0) {
+		if (state.tokensDecoded > 0) {
 			const currentConfig = config();
-			const outputTokensMax = currentConfig.max_tokens || -1;
-			if (outputTokensMax <= 0) {
-				details.push(`Output: ${this.predictedTokens}/∞`);
+			if (state.outputTokensMax <= 0) {
+				details.push(`Output: ${state.tokensDecoded}/∞`);
 			} else {
-				const outputPercent = Math.round((this.predictedTokens / outputTokensMax) * 100);
-				details.push(`Output: ${this.predictedTokens}/${outputTokensMax} (${outputPercent}%)`);
+				const outputPercent = Math.round((state.tokensDecoded / state.outputTokensMax) * 100);
+				details.push(`Output: ${state.tokensDecoded}/${state.outputTokensMax} (${outputPercent}%)`);
 			}
 		}
 
-		if (this.predictedTokens > 0 && this.predictedMs > 0) {
-			const tokensPerSecond = (this.predictedTokens / this.predictedMs) * 1000;
-			details.push(`${tokensPerSecond.toFixed(1)} ${STATS_UNITS.TOKENS_PER_SECOND}`);
+		if (state.tokensDecoded > 0 && state.tokensPerSecond && state.tokensPerSecond > 0) {
+			details.push(`${state.tokensPerSecond.toFixed(1)} ${STATS_UNITS.TOKENS_PER_SECOND}`);
 		}
 
 		return details;

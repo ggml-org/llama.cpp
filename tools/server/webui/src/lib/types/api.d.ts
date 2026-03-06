@@ -431,6 +431,7 @@ export interface ApiProcessingState {
 	speculative: boolean;
 	hasNextToken: boolean;
 	tokensPerSecond?: number;
+	predictedMs?: number;
 	// Progress information from prompt_progress
 	progressPercent?: number;
 	promptProgress?: ChatMessagePromptProgress;

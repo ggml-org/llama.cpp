@@ -37,6 +37,7 @@
 	let userScrolledUp = $state(false);
 
 	let isRouter = $derived(isRouterMode());
+  let processingState = $derived(notebookStore.processingState);
 
 	let errorDialog = $derived(notebookStore.error);
 	let canUndo = $derived(notebookStore.previousContent !== null && !notebookStore.isGenerating);
@@ -326,14 +327,14 @@
 						</Tooltip.Root>
 					{/if}
 
-					{#if notebookStore.promptTokens > 0 || notebookStore.predictedTokens > 0}
+					{#if processingState?.promptTokens}
 						<ChatMessageStatistics
-							promptTokens={notebookStore.promptTokens}
-							promptMs={notebookStore.promptMs}
-							predictedTokens={notebookStore.predictedTokens}
-							predictedMs={notebookStore.predictedMs}
+							promptTokens={processingState.promptTokens}
+							promptMs={processingState.promptMs}
+							predictedTokens={processingState.tokensDecoded}
+							predictedMs={processingState.predictedMs}
 							isLive={notebookStore.isGenerating}
-							isProcessingPrompt={notebookStore.isGenerating && notebookStore.predictedTokens === 0}
+							isProcessingPrompt={notebookStore.isGenerating && processingState.tokensDecoded === 0}
 						/>
 					{/if}
 				</div>
