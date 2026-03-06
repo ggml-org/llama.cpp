@@ -28,7 +28,9 @@ llama_memory_hybrid::llama_memory_hybrid(
                      bool   unified,
                             /* layer filters */
     const layer_filter_cb & filter_attn,
-    const layer_filter_cb & filter_recr) :
+    const layer_filter_cb & filter_recr,
+                            /* dynamic resize */
+                 uint32_t   kv_size_max) :
     hparams(model.hparams),
     mem_attn(new llama_kv_cache(
         model,
@@ -45,7 +47,8 @@ llama_memory_hybrid::llama_memory_hybrid(
         filter_attn == nullptr ?
             [&](int32_t il) { return !hparams.is_recurrent(il); }
             : filter_attn,
-        nullptr
+        nullptr,
+        kv_size_max
     )),
     mem_recr(new llama_memory_recurrent(
         model,
@@ -99,6 +102,12 @@ llama_memory_context_ptr llama_memory_hybrid::init_batch(llama_batch_allocr & ba
 
         // prepare the attention cache
         auto heads_attn = mem_attn->prepare(ubatches);
+        while (heads_attn.empty()) {
+            if (!mem_attn->try_resize()) {
+                break;
+            }
+            heads_attn = mem_attn->prepare(ubatches);
+        }
         if (heads_attn.empty()) {
             LLAMA_LOG_ERROR("%s: failed to prepare attention ubatches\n", __func__);
             return std::make_unique<llama_memory_hybrid_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);

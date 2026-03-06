@@ -38,6 +38,7 @@ struct llama_cparams {
     bool warmup;
     bool op_offload;
     bool kv_unified;
+    bool kv_dynamic;
     bool pipeline_parallel;
 
     enum llama_pooling_type pooling_type;

@@ -5,9 +5,31 @@
 #include "llama-batch.h"
 #include "llama-io.h"
 #include "llama-memory.h"
+#include "llama-memory-hybrid.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "llama-ext.h"
+
+namespace {
+
+bool check_and_clear_resized_kv(llama_memory_i * memory) {
+    if (memory == nullptr) {
+        return false;
+    }
+
+    if (auto * kv = dynamic_cast<llama_kv_cache *>(memory)) {
+        return kv->check_and_clear_resized();
+    }
+
+    if (auto * hybrid = dynamic_cast<llama_memory_hybrid *>(memory)) {
+        auto * mem_attn = hybrid->get_mem_attn();
+        return mem_attn != nullptr && mem_attn->check_and_clear_resized();
+    }
+
+    return false;
+}
+
+} // namespace
 
 #include <cinttypes>
 #include <cmath>
@@ -162,6 +184,7 @@ llama_context::llama_context(
 
     cparams.op_offload = params.op_offload;
     cparams.kv_unified = params.kv_unified;
+    cparams.kv_dynamic = params.kv_dynamic;
 
     // initialized later
     cparams.pipeline_parallel = false;
@@ -1620,6 +1643,11 @@ int llama_context::decode(const llama_batch & batch_inp) {
             return -2;
         }
 
+        if (check_and_clear_resized_kv(memory.get())) {
+            sched_need_reserve = true;
+            sched_reserve();
+        }
+
         switch (mctx->get_status()) {
             case LLAMA_MEMORY_STATUS_SUCCESS:
                 {
@@ -2912,6 +2940,7 @@ llama_context_params llama_context_default_params() {
         /*.op_offload                  =*/ true,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
+        /*.kv_dynamic                  =*/ false,
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
     };
