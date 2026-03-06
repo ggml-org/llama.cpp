@@ -1,7 +1,8 @@
 aiohttp~=3.9.3
 pytest~=8.3.3
 huggingface_hub>=0.34.0,<1.0
-matplotlib~=3.10.0
+matplotlib~=3.10.0; python_version>="3.10"
+matplotlib>=3.9.0; python_version<"3.10"
 numpy~=1.26.4
 openai~=2.14.0
 pandas~=2.2.3
