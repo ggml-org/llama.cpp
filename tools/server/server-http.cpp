@@ -155,12 +155,24 @@ bool server_http_context::init(const common_params & params) {
             req_api_key = req_api_key.substr(prefix.size());
         }
 
+        // audit logging for missing API key
+        if (req_api_key.empty()) {
+            security_log_audit_event("auth_failure", req.path, req.method, req.remote_addr, "missing",
+                                     "No API key provided");
+        }
+
         // validate the API key
         if (std::find(api_keys.begin(), api_keys.end(), req_api_key) != api_keys.end()) {
+            security_log_audit_event("auth_success", req.path, req.method, req.remote_addr, "provided",
+                                     "API key validated");
             return true; // API key is valid
         }
 
         // API key is invalid or not provided
+        if (!req_api_key.empty()) {
+            security_log_audit_event("auth_failure", req.path, req.method, req.remote_addr, "invalid",
+                                     "Invalid API key provided");
+        }
         res.status = 401;
         res.set_content(
             safe_json_to_str(json {
