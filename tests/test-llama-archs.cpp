@@ -234,8 +234,8 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
 
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = 0;
-    ctx_params.n_threads = 1; // FIXME LLAMA_SANITIZE_THREAD workaround
-    ctx_params.n_threads_batch = 1;
+    ctx_params.n_threads = 4;
+    ctx_params.n_threads_batch = 4;
 
     size_t tmp = seed;
     llama_model_ptr model(llama_model_init_from_user(gguf_ctx, set_tensor_data, &tmp, model_params));
