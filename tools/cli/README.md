@@ -39,6 +39,7 @@
 | `--perf, --no-perf` | whether to enable internal libllama performance timings (default: false)<br/>(env: LLAMA_ARG_PERF) |
 | `-f, --file FNAME` | a file containing the prompt (default: none) |
 | `-bf, --binary-file FNAME` | binary file containing the prompt (default: none) |
+| `-o, --output FNAME` | a file to which to save the output (default: none) |
 | `-e, --escape, --no-escape` | whether to process escapes sequences (\n, \r, \t, \', \", \\) (default: true) |
 | `--rope-scaling {none,linear,yarn}` | RoPE frequency scaling method, defaults to linear unless specified by the model<br/>(env: LLAMA_ARG_ROPE_SCALING_TYPE) |
 | `--rope-scale N` | RoPE context scaling factor, expands context by a factor of N<br/>(env: LLAMA_ARG_ROPE_SCALE) |
