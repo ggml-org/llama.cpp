@@ -95,4 +95,4 @@ Weighted averages of Σ(Act²), ZD Score and CosSim are also calculated.
 #### Important note on the computed Statistics
 
 When using these statistics, please note that they are computed on the squared activations, **not on the actual (raw) activations**.
-Whilst the results are still useful, they're less realiable than using the raw values, and in the case of the cosine similarity, could be misleading if the tensor contains opposite vectors.
+Whilst the results are still useful, they're less reliable than using the raw values, and in the case of the cosine similarity, could be misleading if the tensor contains opposite vectors.

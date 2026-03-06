@@ -438,7 +438,7 @@ static void test_templates(const struct common_chat_templates * tmpls, const std
 }
 
 /**
- * Test if streaming=true is consistant with streaming=false for given partial parser
+ * Test if streaming=true is consistent with streaming=false for given partial parser
  * Also test if there is any problem with partial message
  */
 template <typename T>

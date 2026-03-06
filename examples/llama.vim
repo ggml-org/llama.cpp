@@ -52,8 +52,8 @@ highlight llama_hl_info guifg=#77ff2f ctermfg=119
 "   n_prefix:         number of lines before the cursor location to include in the local prefix
 "   n_suffix:         number of lines after  the cursor location to include in the local suffix
 "   n_predict:        max number of tokens to predict
-"   t_max_prompt_ms:  max alloted time for the prompt processing (TODO: not yet supported)
-"   t_max_predict_ms: max alloted time for the prediction
+"   t_max_prompt_ms:  max allotted time for the prompt processing (TODO: not yet supported)
+"   t_max_predict_ms: max allotted time for the prediction
 "   show_info:        show extra info about the inference (0 - disabled, 1 - statusline, 2 - inline)
 "   auto_fim:         trigger FIM completion automatically on cursor movement
 "   max_line_suffix:  do not auto-trigger FIM completion if there are more than this number of characters to the right of the cursor

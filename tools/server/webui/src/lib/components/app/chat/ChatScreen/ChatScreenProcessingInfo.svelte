@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import { PROCESSING_INFO_TIMEOUT } from '$lib/constants/processing-info';
+	import { PROCESSING_INFO_TIMEOUT } from '$lib/constants';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { chatStore, isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
 	import { activeMessages, activeConversation } from '$lib/stores/conversations.svelte';

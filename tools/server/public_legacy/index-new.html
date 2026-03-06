@@ -36,7 +36,7 @@
 
     const params = signal({
       n_predict: 358, // 358 is a nice number
-      temperature: 0.8, // adapt all following parameters to optimized min-p requierements. If for non-english, set to 0.6 or lower
+      temperature: 0.8, // adapt all following parameters to optimized min-p requirements. If for non-english, set to 0.6 or lower
       repeat_last_n: 0, // 0 = disable penalty, -1 = context size
       repeat_penalty: 1.0, // 1.0 = disabled
       dry_multiplier: 0.0, // 0.0 = disabled, 0.8 works well
@@ -108,7 +108,7 @@
     let importedTemplates = local_storage_getDataAsObject('user_templates')
 
     if (importedTemplates) {
-      // saved templates were successfuly imported.
+      // saved templates were successfully imported.
 
       console.log('Processing saved templates and updating default template')
       params.value = { ...params.value, image_data: [] };
@@ -129,7 +129,7 @@
     }
 
     function userTemplateResetToDefault() {
-      console.log('Reseting themplate to default')
+      console.log('Reseting template to default')
       selectedUserTemplate.value.name = 'default';
       selectedUserTemplate.value.data = savedUserTemplates.value['default'];
     }

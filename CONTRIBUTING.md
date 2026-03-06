@@ -159,7 +159,7 @@ Maintainers reserve the right to decline review or close pull requests for any r
 
 # Code maintenance
 
-- Existing code should have designated collaborators and/or maintainers specified in the [CODEOWNERS](CODEOWNERS) file reponsible for:
+- Existing code should have designated collaborators and/or maintainers specified in the [CODEOWNERS](CODEOWNERS) file responsible for:
   - Reviewing and merging related PRs
   - Fixing related bugs
   - Providing developer guidance/support

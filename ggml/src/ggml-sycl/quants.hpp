@@ -29,7 +29,7 @@ namespace ggml_sycl_reordered {
 // [qs0, qs1, qs2, ..., qsN]  [d0, d1, d2, ..., dN]
 //
 // Notes: out-of-bounds qs will run into d values
-// Aligment relies on the allocated size of qs
+// Alignment relies on the allocated size of qs
 
 template <ggml_type type> struct block_q_t;
 

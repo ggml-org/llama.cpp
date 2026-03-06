@@ -158,7 +158,7 @@ llama_context::llama_context(
     cparams.op_offload = params.op_offload;
     cparams.kv_unified = params.kv_unified;
 
-    // intialized later
+    // initialized later
     cparams.pipeline_parallel = false;
 
     {
@@ -1981,7 +1981,7 @@ ggml_cgraph * llama_context::graph_reserve(
 
     ggml_backend_sched_reset(sched.get());
 
-    // when the scheduler is reset, we cannnot reuse the old graph, so we reset the previous graph result to prevent that
+    // when the scheduler is reset, we cannot reuse the old graph, so we reset the previous graph result to prevent that
     gf_res_prev->reset();
 
     // store the n_outputs as it is, and restore it afterwards
