@@ -11801,6 +11801,18 @@ class Phi4VModel(Phi4MMModel):
     pass
 
 
+@ModelBase.register("Phi4MMForCausalLM", "Phi4ForCausalLMV")
+class Phi4TextModel(Phi3MiniModel):
+    # Text model variant for Phi-4 multimodal architectures 
+    # This prevents the text converter from crashing when it encounters vision/audio tensors
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if "embed_tokens_extend.audio_embed" in name or "embed_tokens_extend.image_embed" in name:
+            return  # skip multimodal tensors when exporting text model
+        yield from super().modify_tensors(data_torch, name, bid)
+    pass
+
+
 ###### CONVERSION LOGIC ######
 
 
