@@ -5156,7 +5156,8 @@ class Phi4VisionMmprojModel(MmprojModel):
 
                 num_channels = in_features // patch_area
                 patch_size = self.hparams_vision["patch_size"]
-                data_torch = data_torch.view(data_torch.shape[0], num_channels, patch_size, patch_size)
+                data_torch = data_torch.view(data_torch.shape[0], patch_size, patch_size, num_channels)
+                data_torch = data_torch.permute(0, 3, 1, 2)
 
             yield from super().modify_tensors(data_torch, new_name, bid)
             return

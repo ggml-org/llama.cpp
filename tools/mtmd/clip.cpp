@@ -2440,6 +2440,43 @@ struct img_tool {
         return {w_bar, h_bar};
     }
 
+    // equivalent to transformers.models.siglip2.image_processing_siglip2.get_image_size_for_max_num_patches()
+    static clip_image_size calc_size_siglip2(const clip_image_size & inp_size, const int patch_size, const int max_num_patches, const double eps = 1e-5) {
+        GGML_ASSERT(patch_size > 0);
+        GGML_ASSERT(max_num_patches > 0);
+
+        const int image_width  = inp_size.width;
+        const int image_height = inp_size.height;
+
+        auto get_scaled_image_size = [patch_size](double scale, int size) {
+            double scaled_size = size * scale;
+            scaled_size = std::ceil(scaled_size / static_cast<double>(patch_size)) * patch_size;
+            scaled_size = std::max(static_cast<double>(patch_size), scaled_size);
+            return static_cast<int>(scaled_size);
+        };
+
+        double scale_min = eps / 10.0;
+        double scale_max = 100.0;
+
+        while ((scale_max - scale_min) >= eps) {
+            const double scale = (scale_min + scale_max) / 2.0;
+            const int target_height = get_scaled_image_size(scale, image_height);
+            const int target_width  = get_scaled_image_size(scale, image_width);
+            const int num_patches = (target_height / patch_size) * (target_width / patch_size);
+
+            if (num_patches <= max_num_patches) {
+                scale_min = scale;
+            } else {
+                scale_max = scale;
+            }
+        }
+
+        const int target_height = get_scaled_image_size(scale_min, image_height);
+        const int target_width  = get_scaled_image_size(scale_min, image_width);
+
+        return {target_width, target_height};
+    }
+
     // draw src image into dst image at offset (offset_x, offset_y)
     static void composite(clip_image_u8 & dst, const clip_image_u8 & src, int offset_x, int offset_y) {
         for (int y = 0; y < src.ny; ++y) {
@@ -3041,12 +3078,23 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         case PROJECTOR_TYPE_PHI4_SIGLIP:
             {
                 GGML_ASSERT(params.image_min_pixels > 0 && params.image_max_pixels > 0);
+                const int patch_size = params.patch_size;
+                const int patch_area = patch_size * patch_size;
+                GGML_ASSERT(params.image_min_pixels % patch_area == 0);
+                GGML_ASSERT(params.image_max_pixels % patch_area == 0);
+
+                const int min_num_patches = params.image_min_pixels / patch_area;
+                const int max_num_patches = params.image_max_pixels / patch_area;
+                int num_patches = std::max((original_size.height / patch_size) * (original_size.width / patch_size), 1);
+                if (num_patches < min_num_patches) {
+                    num_patches = min_num_patches;
+                } else if (num_patches > max_num_patches) {
+                    num_patches = max_num_patches;
+                }
+
                 clip_image_u8 resized;
-                const clip_image_size target_size = img_tool::calc_size_preserved_ratio(
-                    original_size,
-                    params.patch_size,
-                    params.image_min_pixels,
-                    params.image_max_pixels);
+                const clip_image_size target_size = img_tool::calc_size_siglip2(
+                    original_size, patch_size, num_patches);
                 img_tool::resize(*img, resized, target_size, img_tool::RESIZE_ALGO_BILINEAR, false);
                 clip_image_f32_ptr img_f32(clip_image_f32_init());
                 normalize_image_u8_to_f32(resized, *img_f32, params.image_mean, params.image_std);
