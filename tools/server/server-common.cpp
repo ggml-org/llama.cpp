@@ -10,7 +10,6 @@
 #include "server-common.h"
 
 #include <ctime>
-#include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <random>
@@ -2084,7 +2083,9 @@ static void rotate_security_log_if_needed() {
         }
 
         // Create directory if it doesn't exist
-        std::filesystem::create_directories(g_security_log_folder);
+        if (!fs_create_directory_with_parents(g_security_log_folder)) {
+            LOG_WRN("Failed to create security log directory: %s\n", g_security_log_folder.c_str());
+        }
 
         // Set new log file
         common_log_set_file(g_security_log, new_log_file.c_str());
