@@ -322,7 +322,7 @@ void * ExpertPrefetcher::await(int layer_idx, int expert_idx) {
         // Update placement table so the dispatch path finds device_ptr.
         auto & ptable = get_expert_placement_table();
         if (ptable.is_initialized()) {
-            ptable.set_device_ptr(layer_idx, expert_idx, 0, it->second.device_ptr);
+            ptable.set_device_ptr(layer_idx, expert_idx, device_id_, it->second.device_ptr);
         }
 
         GGML_SYCL_DEBUG("[PREFETCH] await L%d E%d: DMA complete, device_ptr=%p\n",
@@ -373,6 +373,23 @@ void ExpertPrefetcher::cancel_all() {
         }
     }
     cached_slots_.clear();
+}
+
+// ============================================================================
+// Non-blocking cache query
+// ============================================================================
+
+void * ExpertPrefetcher::get_cached_ptr(int layer_idx, int expert_idx) const {
+    if (!initialized_) {
+        return nullptr;
+    }
+    expert_key key{ layer_idx, expert_idx };
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = cached_slots_.find(key);
+    if (it != cached_slots_.end()) {
+        return vram_pool_[it->second].ptr;
+    }
+    return nullptr;
 }
 
 // ============================================================================

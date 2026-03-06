@@ -797,7 +797,19 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
             // cached in SOA layout with proper AOS→SOA reordering.
             ggml_sycl_reorder_fill_ctx reorder_ctx{};
 
-            for (size_t oi = 0; oi < upload_order.size(); oi++) {
+            // Limit static Phase 2 uploads: demand-driven LRU prefetch handles
+            // the rest. Default 256 experts (warm-start with most popular).
+            // Override via GGML_SYCL_PHASE2_MAX_UPLOAD env var.
+            size_t max_phase2_upload = 256;
+            const char * phase2_env = std::getenv("GGML_SYCL_PHASE2_MAX_UPLOAD");
+            if (phase2_env) {
+                int val = std::atoi(phase2_env);
+                if (val >= 0) {
+                    max_phase2_upload = static_cast<size_t>(val);
+                }
+            }
+
+            for (size_t oi = 0; oi < upload_order.size() && total_uploaded < max_phase2_upload; oi++) {
                 size_t ei = upload_order[oi];
                 if (placed[ei]) {
                     continue;
@@ -968,9 +980,20 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                       expert_weight_bytes / 1024.0);
     }
 
-    // Initialize ExpertPrefetcher
+    // Initialize ExpertPrefetcher for primary device
     auto & prefetcher = g_expert_prefetchers[device];
     prefetcher.init(q);
+
+    // Initialize ExpertPrefetcher for secondary GPUs (demand-driven LRU)
+    if (g_moe_multi_gpu_active.load(std::memory_order_acquire)) {
+        for (int d = 0; d < ggml_sycl_info().total_gpu_count && d < GGML_SYCL_MAX_DEVICES; d++) {
+            if (d == device) continue;  // already initialized above
+            if (g_secondary_queues[d] != nullptr && !g_expert_prefetchers[d].is_initialized()) {
+                g_expert_prefetchers[d].init(*g_secondary_queues[d]);
+                GGML_LOG_INFO("[MOE-HYBRID] Initialized ExpertPrefetcher for GPU%d (demand-driven LRU)\n", d);
+            }
+        }
+    }
 
     // --- Phase 3: GPU0 expert pre-loading via prefetch pool ---
     // Pre-fill the prefetch VRAM pool with the first N experts per MoE layer.
@@ -26666,39 +26689,64 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 // using pre-gated routing (actual router scores via inline GEMV).
                 // 3-layer lookahead gives ~9ms of DMA prefetch overlap time,
                 // significantly improving cache hit rates during PP.
+                //
+                // Route each predicted expert to the correct device's prefetcher
+                // based on the placement table. Experts placed on secondary GPUs
+                // get prefetched into that device's LRU pool.
+                auto & placement_tbl = ggml_sycl::get_expert_placement_table();
+                auto route_hint_to_device = [&](int hint_layer_id, const std::vector<int> & experts) {
+                    for (int eid : experts) {
+                        int target_dev = ctx.device;  // default: primary GPU
+                        if (placement_tbl.is_initialized()) {
+                            auto p = placement_tbl.get(hint_layer_id, eid);
+                            if (p.device_id >= 0) {
+                                target_dev = p.device_id;
+                            }
+                        }
+                        auto & target_pf = g_expert_prefetchers[target_dev];
+                        if (target_pf.is_initialized()) {
+                            target_pf.hint(hint_layer_id, eid);
+                        }
+                    }
+                };
+
                 if (src1->type == GGML_TYPE_F32) {
                     const void * hidden_ptr = ggml_sycl_get_data_ptr(src1, ctx.device);
                     auto multi_predictions = predictor.predict_multi_layer(
                         seq_layer_id, hidden_ptr, *ctx.stream());
 
                     for (const auto & [target_seq, predicted] : multi_predictions) {
-                        // hint_batch uses hash-based layer_id, so we need to find
-                        // ALL hash layer_ids for the target sequential layer (one per
-                        // MUL_MAT_ID tensor: gate_exps, up_exps, down_exps).
                         for (const auto & [hash_id, sid] : g_moe_layer_seq[ctx.device]) {
                             if (sid == target_seq) {
-                                prefetcher.hint_batch(hash_id, predicted);
+                                route_hint_to_device(hash_id, predicted);
                             }
                         }
                     }
                 }
 
                 // Also run heuristic prediction for current layer as a fallback
-                // (pre-gate only covers next layer, not current)
                 auto predicted = predictor.predict(seq_layer_id);
-                prefetcher.hint_batch(layer_id, predicted);
+                route_hint_to_device(layer_id, predicted);
             }
 
-            // Await any in-flight prefetches for this layer before dispatch
+            // Await any in-flight prefetches for this layer before dispatch.
+            // Check ALL initialized prefetchers (primary + secondary devices)
+            // so demand-driven LRU on secondary GPUs is properly synchronized.
             int n_prefetch_awaited = 0;
-            if (prefetcher.is_active()) {
+            {
                 // Read actual router selections from ids tensor
                 for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
                     for (int64_t id = 0; id < n_ids; id++) {
                         const int32_t eid = ids_host[static_cast<size_t>(iid1 * n_ids + id)];
-                        void * ptr = prefetcher.await(layer_id, eid);
-                        if (ptr) {
-                            n_prefetch_awaited++;
+                        // Try each initialized prefetcher until one has this expert
+                        for (int d = 0; d < GGML_SYCL_MAX_DEVICES; d++) {
+                            auto & pf = g_expert_prefetchers[d];
+                            if (!pf.is_initialized()) continue;
+                            void * ptr = pf.await(layer_id, eid);
+                            if (ptr) {
+                                n_prefetch_awaited++;
+                                break;  // found on this device, no need to check others
+                            }
                         }
                     }
                 }
@@ -26747,8 +26795,25 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                 per_gpu_entries[placement.device_id].push_back(
                                     { iid1, id, i02, placement.device_ptr });
                             } else {
-                                // Device not available or multi-GPU not active — CPU fallback.
-                                cpu_entries.push_back({ iid1, id, i02, nullptr });
+                                // No static placement ptr — check if any prefetcher
+                                // has this expert cached (demand-driven LRU).
+                                bool found_cached = false;
+                                for (int d = 0; d < GGML_SYCL_MAX_DEVICES && !found_cached; d++) {
+                                    auto & pf = g_expert_prefetchers[d];
+                                    if (!pf.is_initialized()) continue;
+                                    void * cached = pf.get_cached_ptr(layer_id, i02);
+                                    if (cached) {
+                                        if (d == 0) {
+                                            gpu_entries.push_back({ iid1, id, i02, cached });
+                                        } else if (d < n_gpu_devs && g_secondary_queues[d]) {
+                                            per_gpu_entries[d].push_back({ iid1, id, i02, cached });
+                                        }
+                                        found_cached = true;
+                                    }
+                                }
+                                if (!found_cached) {
+                                    cpu_entries.push_back({ iid1, id, i02, nullptr });
+                                }
                             }
                         } else {
                             // CPU-only expert (device_id == -1).

@@ -112,6 +112,13 @@ class ExpertPrefetcher {
     // Return the configured prefetch depth (layers ahead to look).
     int prefetch_depth() const { return prefetch_depth_; }
 
+    // Non-blocking query: is this expert currently in the LRU cache?
+    // Returns the cached VRAM pointer if found, nullptr otherwise.
+    void * get_cached_ptr(int layer_idx, int expert_idx) const;
+
+    // Is this prefetcher initialized (has a valid DMA queue)?
+    bool is_initialized() const { return initialized_; }
+
     // Statistics
     int  pending_count() const;
     int  completed_count() const;
