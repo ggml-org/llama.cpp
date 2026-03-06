@@ -1,7 +1,9 @@
 import type { SETTING_CONFIG_DEFAULT } from '$lib/constants';
 import type { ChatMessagePromptProgress, ChatMessageTimings } from './chat';
+import type { OpenAIToolDefinition } from './mcp';
 import type { DatabaseMessageExtra } from './database';
 import type { ParameterSource, SyncableParameterType, SettingsFieldType } from '$lib/enums';
+import type { Icon } from '@lucide/svelte';
 
 export type SettingsConfigValue = string | number | boolean;
 
@@ -11,7 +13,7 @@ export interface SettingsFieldConfig {
 	type: SettingsFieldType;
 	isExperimental?: boolean;
 	help?: string;
-	options?: Array<{ value: string; label: string; icon?: typeof import('@lucide/svelte').Icon }>;
+	options?: Array<{ value: string; label: string; icon?: typeof Icon }>;
 }
 
 export interface SettingsChatServiceOptions {
@@ -22,6 +24,7 @@ export interface SettingsChatServiceOptions {
 	systemMessage?: string;
 	// Disable reasoning parsing (use 'none' instead of 'auto')
 	disableReasoningParsing?: boolean;
+	tools?: OpenAIToolDefinition[];
 	// Generation parameters
 	temperature?: number;
 	max_tokens?: number;
