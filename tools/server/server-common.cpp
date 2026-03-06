@@ -274,6 +274,15 @@ llama_pos server_tokens::pos_next(int64_t n_tokens) const {
     return pos;
 }
 
+std::vector<llama_pos> server_tokens::media_pos_costs() const {
+    std::vector<llama_pos> costs;
+    costs.reserve(map_idx_to_media.size());
+    for (const auto & [idx, chunk] : map_idx_to_media) {
+        costs.push_back(mtmd_input_chunk_get_n_pos(chunk.get()));
+    }
+    return costs;
+}
+
 size_t server_tokens::size_up_to_pos(llama_pos max_pos) const {
     if (!has_mtmd) {
         return std::min((size_t)(max_pos + 1), tokens.size());
@@ -889,6 +898,8 @@ static void handle_media(
 json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
+    const llama_vocab * vocab,
+    mtmd_context * mctx,
     std::vector<raw_buffer> & out_files)
 {
     json llama_params;
@@ -942,6 +953,7 @@ json oaicompat_chat_params_parse(
     if (!messages.is_array()) {
         throw std::invalid_argument("Expected 'messages' to be an array");
     }
+    bool has_media = false;
     for (auto & msg : messages) {
         std::string role = json_value(msg, "role", std::string());
         if (role != "assistant" && !msg.contains("content")) {
@@ -964,6 +976,7 @@ json oaicompat_chat_params_parse(
             throw std::invalid_argument("Expected 'content' to be a string or an array");
         }
 
+        bool msg_has_media = false;
         for (auto & p : content) {
             std::string type      = json_value(p, "type", std::string());
             if (type == "image_url") {
@@ -977,6 +990,7 @@ json oaicompat_chat_params_parse(
                 p["type"] = "media_marker";
                 p["text"] = mtmd_default_marker();
                 p.erase("image_url");
+                msg_has_media = true;
 
             } else if (type == "input_audio") {
                 if (!opt.allow_audio) {
@@ -998,11 +1012,13 @@ json oaicompat_chat_params_parse(
                 p["type"] = "media_marker";
                 p["text"] = mtmd_default_marker();
                 p.erase("input_audio");
+                msg_has_media = true;
 
             } else if (type != "text") {
                 throw std::invalid_argument("unsupported content[].type");
             }
         }
+        has_media |= msg_has_media;
     }
 
     common_chat_templates_inputs inputs;
@@ -1041,6 +1057,21 @@ json oaicompat_chat_params_parse(
         inputs.enable_thinking = false;
     } else if (!enable_thinking_kwarg.empty() && enable_thinking_kwarg[0] == '"') {
         throw std::invalid_argument("invalid type for \"enable_thinking\" (expected boolean, got string)");
+    }
+
+    // Chat truncation: drop oldest turns until prompt fits in context
+    if (opt.chat_truncate) {
+        int32_t n_predict_with_server_priority = get_n_predict_with_server_priority(body, opt.n_predict);
+        int32_t target_pos = chat_truncate_target_tokens(opt.n_ctx_seq, opt.chat_truncate_max_keep, n_predict_with_server_priority);
+        if (has_media) {
+            // No chat_needs_truncation guard: mtmd_tokenize must run anyway to get image costs,
+            // and the real size check (initial_n_pos >= target_pos) happens inside.
+            chat_truncate_messages_with_media(inputs, opt.tmpls.get(), vocab, mctx, out_files, target_pos);
+        } else {
+            if (chat_needs_truncation(chat_n_tokens(inputs, opt.tmpls.get(), vocab), opt.n_ctx_seq, n_predict_with_server_priority, opt.chat_truncate_max_keep)) {
+                chat_truncate_messages(inputs, opt.tmpls.get(), vocab, target_pos);
+            }
+        }
     }
 
     // if the assistant message appears at the end of list, we do not add end-of-turn token
@@ -2037,4 +2068,207 @@ server_tokens format_prompt_rerank(
     }
 
     return result;
+}
+
+//
+// Chat truncation helpers
+//
+
+int32_t chat_truncate_target_tokens(int32_t n_ctx, float chat_truncate_max_keep, int32_t n_predict = -1) {
+    int32_t target_tokens = (int32_t)(chat_truncate_max_keep * (float)n_ctx);
+    int32_t budget_tokens = n_ctx - n_predict;
+    if (n_predict > 0 && target_tokens > budget_tokens) {
+        target_tokens = budget_tokens;
+    }
+    return target_tokens;
+}
+
+int32_t chat_n_tokens(
+    const common_chat_templates_inputs & inputs,
+    const common_chat_templates        * tmpls,
+    const struct llama_vocab           * vocab)
+{
+    common_chat_params chat_params = common_chat_templates_apply(tmpls, inputs);
+    auto tokens = common_tokenize(vocab, chat_params.prompt, true, true);
+    return (int32_t)tokens.size();
+}
+
+bool chat_needs_truncation(
+    int32_t n_tokens, int32_t n_ctx, int32_t n_predict, float chat_truncate_max_keep)
+{
+    const int32_t threshold = (n_predict > 0) ? n_ctx - n_predict : chat_truncate_target_tokens(n_ctx, chat_truncate_max_keep);
+    return n_tokens >= threshold;
+}
+
+static size_t chat_count_media_markers(const common_chat_msg & msg) {
+    size_t n = 0;
+    for (const auto & part : msg.content_parts)
+        if (part.type == "media_marker") n++;
+    return n;
+}
+
+// Describes a contiguous block of messages that forms one droppable user turn.
+struct TurnSpan {
+    size_t msg_first;   // index of user message in inputs.messages
+    size_t msg_count;   // number of messages (user + following non-user messages)
+    size_t file_offset; // cumulative media-file index at start of this turn
+    size_t file_count;  // number of media files in this turn
+};
+
+// Token count after hypothetically dropping the first n_drop turns from inputs.
+static int32_t chat_n_tokens_after_drop(
+    const common_chat_templates_inputs & inputs,
+    const common_chat_templates        * tmpls,
+    const struct llama_vocab           * vocab,
+    const std::vector<TurnSpan>        & turns,
+    size_t                               n_drop)
+{
+    common_chat_templates_inputs tmp = inputs;
+    tmp.messages.erase(
+        tmp.messages.begin() + (ptrdiff_t)turns[0].msg_first,
+        tmp.messages.begin() + (ptrdiff_t)(turns[n_drop - 1].msg_first + turns[n_drop - 1].msg_count));
+    return chat_n_tokens(tmp, tmpls, vocab);
+}
+
+// Returns the smallest n_drop in [1, n_turns] for which count(n_drop) < target.
+template<typename CountFn>
+static size_t chat_bisect_n_drop(size_t n_turns, CountFn count, int32_t target) {
+    size_t lo = 1, hi = n_turns;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (count(mid) < target) { hi = mid; }
+        else                     { lo = mid + 1; }
+    }
+    return lo;
+}
+
+// Build the list of droppable turns (all user turns except the last).
+// file_offset/file_count track positions in the out_files vector.
+static std::vector<TurnSpan> chat_build_droppable_turns(
+    const common_chat_templates_inputs & inputs)
+{
+    size_t last_user = SIZE_MAX;
+    for (size_t i = 0; i < inputs.messages.size(); ++i)
+        if (inputs.messages[i].role == "user") last_user = i;
+
+    std::vector<TurnSpan> turns;
+    size_t i           = 0;
+    size_t file_cursor = 0;
+    while (i < inputs.messages.size()) {
+        if (inputs.messages[i].role != "user") {
+            file_cursor += chat_count_media_markers(inputs.messages[i]);
+            ++i;
+            continue;
+        }
+        if (i == last_user) break;
+        TurnSpan span{ i, 1, file_cursor, chat_count_media_markers(inputs.messages[i]) };
+        ++i;
+        while (i < inputs.messages.size() && inputs.messages[i].role != "user") {
+            ++span.msg_count;
+            span.file_count += chat_count_media_markers(inputs.messages[i]);
+            ++i;
+        }
+        file_cursor += span.file_count;
+        turns.push_back(span);
+    }
+    return turns;
+}
+
+void chat_truncate_messages(
+    common_chat_templates_inputs & inputs,
+    const common_chat_templates  * tmpls,
+    const struct llama_vocab     * vocab,
+    int32_t                        target_tokens)
+{
+    const auto turns = chat_build_droppable_turns(inputs);
+    if (turns.empty()) return;
+
+    auto count_after_drop = [&](size_t n_drop) -> int32_t {
+        return chat_n_tokens_after_drop(inputs, tmpls, vocab, turns, n_drop);
+    };
+
+    const size_t n_drop = chat_bisect_n_drop(turns.size(), count_after_drop, target_tokens);
+
+    inputs.messages.erase(
+        inputs.messages.begin() + (ptrdiff_t)turns[0].msg_first,
+        inputs.messages.begin() + (ptrdiff_t)(turns[n_drop - 1].msg_first + turns[n_drop - 1].msg_count));
+}
+
+void chat_truncate_messages_with_media(
+    common_chat_templates_inputs & inputs,
+    const common_chat_templates  * tmpls,
+    const struct llama_vocab     * vocab,
+    mtmd_context                 * mctx,
+    std::vector<raw_buffer>      & out_files,
+    int32_t                        target_pos)
+{
+    // Collect turns elegible to be dropped
+    const auto turns = chat_build_droppable_turns(inputs);
+    if (turns.empty()) return;
+
+    // Run mtmd_tokenize once to get per-image n_pos values.
+    common_chat_params p0 = common_chat_templates_apply(tmpls, inputs);
+    server_tokens initial_st = process_mtmd_prompt(mctx, p0.prompt, out_files);
+    std::vector<llama_pos> image_costs = initial_st.media_pos_costs();
+    GGML_ASSERT(image_costs.size() == out_files.size());
+
+    llama_pos image_pos_total = 0;
+    for (auto c : image_costs) {image_pos_total += c;}
+
+    // Estimate the error due to the <__media__> marker replacement heuristic
+    // (issue is that each tokeniser can give different cost for <__media__>. We could skip if we can cache mtmd processing add_media)
+    // markers_token_cost_num = chat_n_tokens + image_pos_total − initial_n_pos.
+    // Positive: chat_n_tokens over-counts → count_pos_after_drop overshoots a little → bisect drops ≤1 extra turn (safe).
+    // Negative: chat_n_tokens under-counts → count_pos_after_drop would undershoot → we apply a
+    //   per-image ceiling correction to convert the undershoot into a small overshoot (still ≤1 extra turn).
+    const int32_t initial_chat_n_tokens = chat_n_tokens(inputs, tmpls, vocab);
+    const int32_t initial_n_pos         = (int32_t)initial_st.pos_next(-1);
+    const int32_t n_images_initial      = (int32_t)out_files.size();
+    constexpr int32_t MAX_MARKER_COST_PER_IMAGE = 5;
+    const int32_t markers_token_cost_num = initial_chat_n_tokens + (int32_t)image_pos_total - initial_n_pos;
+    const int32_t abs_cost               = markers_token_cost_num < 0 ? -markers_token_cost_num : markers_token_cost_num;
+    if (abs_cost > n_images_initial * MAX_MARKER_COST_PER_IMAGE) {
+        GGML_ABORT("image placeholder token overhead out of expected range [-%d, %d] per image "
+                   "(got total %d for %d images). "
+                   "Truncation not currently supported for template: %s",
+                   MAX_MARKER_COST_PER_IMAGE, MAX_MARKER_COST_PER_IMAGE,
+                   markers_token_cost_num, n_images_initial,
+                   common_chat_templates_source(tmpls).c_str());
+    }
+
+    // Per-image correction applied when markers_token_cost_num < 0 to prevent undershoot.
+    const int32_t correction_per_image = (markers_token_cost_num < 0)
+        ? ((-markers_token_cost_num + n_images_initial - 1) / n_images_initial)
+        : 0;
+
+    if (initial_n_pos >= target_pos) {
+        // Cheap text re-tokenization + cached image costs (no image re-decoding).
+        // correction_per_image (≥0) prevents undershoot when markers_token_cost_num < 0.
+        auto count_pos_after_drop = [&](size_t n_drop) -> int32_t {
+            const size_t file_begin     = turns[0].file_offset;
+            const size_t file_end       = turns[n_drop - 1].file_offset + turns[n_drop - 1].file_count;
+            const int32_t files_removed = (int32_t)(file_end - file_begin);
+            int32_t img_pos_removed = 0;
+            for (size_t fi = file_begin; fi < file_end; ++fi)
+                img_pos_removed += (int32_t)image_costs[fi];
+            int32_t n = chat_n_tokens_after_drop(inputs, tmpls, vocab, turns, n_drop);
+            n += (int32_t)(image_pos_total - img_pos_removed);
+            n += correction_per_image * ((int32_t)out_files.size() - files_removed);
+            return n;
+        };
+
+        const size_t n_drop = chat_bisect_n_drop(turns.size(), count_pos_after_drop, target_pos);
+
+        if (n_drop > 0) {
+            const size_t msg_begin  = turns[0].msg_first;
+            const size_t msg_end    = turns[n_drop - 1].msg_first + turns[n_drop - 1].msg_count;
+            const size_t file_begin = turns[0].file_offset;
+            const size_t file_end   = turns[n_drop - 1].file_offset + turns[n_drop - 1].file_count;
+            for (size_t fi = file_begin; fi < file_end; ++fi)
+                image_pos_total -= image_costs[fi];
+            inputs.messages.erase(inputs.messages.begin() + (ptrdiff_t)msg_begin, inputs.messages.begin() + (ptrdiff_t)msg_end);
+            image_costs.erase(image_costs.begin() + (ptrdiff_t)file_begin, image_costs.begin() + (ptrdiff_t)file_end);
+            out_files.erase(out_files.begin() + (ptrdiff_t)file_begin, out_files.begin() + (ptrdiff_t)file_end);
+        }
+    }
 }

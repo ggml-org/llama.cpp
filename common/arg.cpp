@@ -1311,6 +1311,24 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_PERPLEXITY}).set_env("LLAMA_ARG_CONTEXT_SHIFT"));
     add_opt(common_arg(
+        {"--chat-truncate"},
+        {"--no-chat-truncate"},
+        string_format("when the chat generation might exceed the context size, truncate by dropping oldest turns (default: %s)", params.chat_truncate ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.chat_truncate = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--chat-truncate-max-keep"}, "F",
+        string_format("keep at maximum F*n_ctx_seq tokens after truncation (default: %.1f)", params.chat_truncate_max_keep),
+        [](common_params & params, const std::string & value) {
+            params.chat_truncate_max_keep = std::stof(value);
+            if (params.chat_truncate_max_keep <= 0.0f || params.chat_truncate_max_keep >= 1.0f) {
+                throw std::invalid_argument("--chat-truncate-max-keep must be in range (0, 1)");
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"--chunks"}, "N",
         string_format("max number of chunks to process (default: %d, -1 = all)", params.n_chunks),
         [](common_params & params, int value) {

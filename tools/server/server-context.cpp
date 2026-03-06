@@ -899,6 +899,10 @@ private:
                 /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,
                 /* enable_thinking       */ enable_thinking,
                 /* media_path            */ params_base.media_path,
+                /* n_ctx_seq             */ (int32_t) llama_n_ctx_seq(ctx),  /* TODO should be safe to keep in chat_params? int32_t Should not change after exit sleep. Add to params_base?*/
+                /* n_predict             */ params_base.n_predict,
+                /* chat_truncate         */ params_base.chat_truncate,
+                /* chat_truncate_max_keep */ params_base.chat_truncate_max_keep,
             };
         }
 
@@ -3584,6 +3588,8 @@ void server_routes::init_routes() {
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
+            ctx_server.vocab,
+            ctx_server.mctx,
             files);
         return handle_completions_impl(
             req,
@@ -3602,6 +3608,8 @@ void server_routes::init_routes() {
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
+            ctx_server.vocab,
+            ctx_server.mctx,
             files);
         return handle_completions_impl(
             req,
@@ -3620,6 +3628,8 @@ void server_routes::init_routes() {
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
+            ctx_server.vocab,
+            ctx_server.mctx,
             files);
         return handle_completions_impl(
             req,
@@ -3638,6 +3648,8 @@ void server_routes::init_routes() {
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
+            ctx_server.vocab,
+            ctx_server.mctx,
             files);
 
         json prompt = body_parsed.at("prompt");
@@ -3654,6 +3666,8 @@ void server_routes::init_routes() {
         json data = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
+            ctx_server.vocab,
+            ctx_server.mctx,
             files);
         res->ok({{ "prompt", std::move(data.at("prompt")) }});
         return res;

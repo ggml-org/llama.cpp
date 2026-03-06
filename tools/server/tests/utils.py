@@ -102,6 +102,8 @@ class ServerProcess:
     mmproj_url: str | None = None
     media_path: str | None = None
     sleep_idle_seconds: int | None = None
+    chat_truncate: bool | None = None
+    chat_truncate_max_keep: float | None = None
 
     # session variables
     process: subprocess.Popen | None = None
@@ -236,6 +238,10 @@ class ServerProcess:
             server_args.extend(["--media-path", self.media_path])
         if self.sleep_idle_seconds is not None:
             server_args.extend(["--sleep-idle-seconds", self.sleep_idle_seconds])
+        if self.chat_truncate is not None:
+            server_args.extend(["--chat-truncate" if self.chat_truncate else "--no-chat-truncate"])
+        if self.chat_truncate_max_keep is not None:
+            server_args.extend(["--chat-truncate-max-keep", self.chat_truncate_max_keep])
 
         args = [str(arg) for arg in [server_path, *server_args]]
         print(f"tests: starting server with: {' '.join(args)}")
