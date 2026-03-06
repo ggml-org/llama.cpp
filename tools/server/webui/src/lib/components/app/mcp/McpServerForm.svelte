@@ -78,11 +78,16 @@
 
 				<span>
 					<span class="text-xs text-muted-foreground">Use llama-server proxy</span>
-				
+
 					<br />
-					
+
 					{#if !mcpStore.isProxyAvailable}
-						<span class="inline-flex gap-0.75 text-xs text-muted-foreground/60">(Run <pre>llama-server</pre> with <pre>--webui-mcp-proxy</pre> flag)</span>
+						<span class="inline-flex gap-0.75 text-xs text-muted-foreground/60"
+							>(Run <pre>llama-server</pre>
+							with
+							<pre>--webui-mcp-proxy</pre>
+							flag)</span
+						>
 					{/if}
 				</span>
 			</label>
