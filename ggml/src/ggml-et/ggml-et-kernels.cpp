@@ -227,3 +227,12 @@ void ggml_et_unload_all_kernels(ggml_backend_et_device_context* dev_ctx) {
         ggml_et_unload_kernel(dev_ctx, kernel_name);
     }
 }
+
+std::vector<std::pair<std::string, rt::KernelId>> ggml_et_get_loaded_kernels(ggml_backend_et_device_context* dev_ctx) {
+    std::vector<std::pair<std::string, rt::KernelId>> loaded_kernels;
+    loaded_kernels.reserve(dev_ctx->loaded_kernels.size());
+    for (const auto& kernel_pair : dev_ctx->loaded_kernels) {
+        loaded_kernels.push_back(kernel_pair);
+    }
+    return loaded_kernels;
+}

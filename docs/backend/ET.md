@@ -187,7 +187,7 @@ point operations per second.
 
 You can enable ET-SOC runtime level ET-SOC profiling by setting environment
 variable `GGML_ET_PROFILE` to a path. Profiling/tracing results will be written
-to `GGML_ET_PROFILE/et_runtime_trace.json` on exit.
+to `GGML_ET_PROFILE/et_runtime_trace.json` and `GGML_ET_PROFILE/kernel_map` on exit.
 
 
 ## Roadmap

@@ -81,6 +81,8 @@ static struct ggml_et_driver {
     std::shared_ptr<dev::IDeviceLayer> device_layer;
     std::shared_ptr<rt::IRuntime> runtime;
     std::unique_ptr<std::ofstream> profile_stream;
+    std::unique_ptr<std::ofstream> kernel_id_stream;
+    std::vector<std::pair<std::string, rt::KernelId>> kernel_map;
     bool profiling_enabled = false;
 } _drv;
 
@@ -172,20 +174,26 @@ static bool ggml_et_driver_init() {
 	    const char* profile_path = getenv("GGML_ET_PROFILE");
 	    if (profile_path) {
 	        std::string output_path = std::string(profile_path) + "/et_runtime_trace.json";
+			std::string kernel_id_path = std::string(profile_path) + "/kernel_id.json";
 
 	        _drv.profile_stream = std::make_unique<std::ofstream>(output_path);
+			_drv.kernel_id_stream = std::make_unique<std::ofstream>(kernel_id_path);
 	        if (!_drv.profile_stream->is_open()) {
 	            GGML_LOG_ERROR("ET: Failed to open profiling output file: %s", output_path.c_str());
 				abort();
-	        } else {
-	            auto* profiler = _drv.runtime->getProfiler();
-	            profiler->start(*_drv.profile_stream, rt::IProfiler::OutputType::Json);
-	            _drv.profiling_enabled = true;
-	            GGML_LOG_INFO("ET: Runtime profiler started (JSON format)");
-
-	            // Register cleanup at program exit
-	            std::atexit(ggml_et_driver_cleanup);
 	        }
+			if(!_drv.kernel_id_stream->is_open()) {
+			    GGML_LOG_ERROR("ET: Failed to open profiling kernel map: %s", kernel_id_path.c_str());
+				abort();
+			}
+
+            auto* profiler = _drv.runtime->getProfiler();
+            profiler->start(*_drv.profile_stream, rt::IProfiler::OutputType::Json);
+            _drv.profiling_enabled = true;
+            GGML_LOG_INFO("ET: Runtime profiler started (JSON format)");
+
+            // Register cleanup at program exit
+            std::atexit(ggml_et_driver_cleanup);
 	    }
 	} catch (const std::exception& e) {
 	    GGML_LOG_ERROR("ggml_et: %s", e.what());
@@ -210,13 +218,30 @@ std::shared_ptr<rt::IRuntime> ggml_et_runtime() {
 static void ggml_et_driver_cleanup() {
     if (_drv.profiling_enabled && _drv.runtime) {
         GGML_LOG_INFO("ET: Stopping runtime profiler");
-        auto profiler = _drv.runtime->getProfiler();
+        auto* profiler = _drv.runtime->getProfiler();
         profiler->stop();
         _drv.profiling_enabled = false;
 
         if (_drv.profile_stream) {
             _drv.profile_stream->close();
             _drv.profile_stream.reset();
+        }
+
+        // Save kernel map
+        if (_drv.kernel_id_stream && !_drv.kernel_map.empty()) {
+            auto & os = *_drv.kernel_id_stream;
+            // XXX: Manual JSON construction. Not pretty but removes dependency
+            os << "{\n";
+            for (size_t i = 0; i < _drv.kernel_map.size(); i++) {
+                os << "  \"" << _drv.kernel_map[i].first << "\": " << (int)_drv.kernel_map[i].second;
+                if (i + 1 < _drv.kernel_map.size()) {
+                    os << ",";
+                }
+                os << "\n";
+            }
+            os << "}\n";
+            _drv.kernel_id_stream->close();
+            _drv.kernel_id_stream.reset();
         }
     }
 }
@@ -432,6 +457,12 @@ static void ggml_backend_et_free(ggml_backend_t backend) {
     ggml_backend_dev_t dev = ggml_backend_et_reg_get_device(ggml_backend_et_reg(), et_ctx->devidx);
     if (dev && dev->context) {
         ggml_backend_et_device_context * dev_ctx = (ggml_backend_et_device_context *)dev->context;
+
+        if (_drv.profiling_enabled) {
+            auto kernels = ggml_et_get_loaded_kernels(dev_ctx);
+            _drv.kernel_map.insert(_drv.kernel_map.end(), kernels.begin(), kernels.end());
+        }
+
         ggml_et_unload_all_kernels(dev_ctx);
     }
 
