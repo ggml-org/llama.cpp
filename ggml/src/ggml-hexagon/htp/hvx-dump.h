@@ -28,19 +28,16 @@ static void hvx_vec_dump_f16(char * pref, HVX_Vector v) {
 }
 
 static void hvx_vec_dump_f32_n(char * pref, HVX_Vector v, uint32_t n) {
-    union {
-        HVX_Vector v;
-        float      d[32];
-    } u = { .v = v };
+    HVX_VectorAlias u = { .v = v };
 
     const uint32_t n0 = n / 16;
     const uint32_t n1 = n % 16;
     int            i  = 0;
     for (; i < n0; i++) {
-        hex_dump_f32_line(pref, u.d + (16 * i), 16);
+        hex_dump_f32_line(pref, u.fp32 + (16 * i), 16);
     }
     if (n1) {
-        hex_dump_f32_line(pref, u.d + (16 * i), n1);
+        hex_dump_f32_line(pref, u.fp32 + (16 * i), n1);
     }
 }
 

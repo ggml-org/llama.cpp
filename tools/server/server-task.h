@@ -153,7 +153,7 @@ struct server_task {
 
     // used by SERVER_TASK_TYPE_SLOT_SAVE, SERVER_TASK_TYPE_SLOT_RESTORE, SERVER_TASK_TYPE_SLOT_ERASE
     struct slot_action {
-        int slot_id;
+        int id_slot;
         std::string filename;
         std::string filepath;
     };
@@ -556,6 +556,8 @@ struct server_task_result_apply_lora : server_task_result {
 struct server_prompt_checkpoint {
     llama_pos pos_min;
     llama_pos pos_max;
+
+    int64_t n_tokens;
 
     std::vector<uint8_t> data;
 

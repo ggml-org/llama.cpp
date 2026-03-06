@@ -899,7 +899,8 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
 };
 
 const struct ggml_type_traits * ggml_get_type_traits(enum ggml_type type) {
-    GGML_ASSERT(type < GGML_TYPE_COUNT);
+    assert(type >= 0);
+    assert(type < GGML_TYPE_COUNT);
     return &type_traits[type];
 }
 
@@ -1265,27 +1266,33 @@ size_t ggml_nbytes_pad(const struct ggml_tensor * tensor) {
 }
 
 int64_t ggml_blck_size(enum ggml_type type) {
+    assert(type >= 0);
+    assert(type < GGML_TYPE_COUNT);
     return type_traits[type].blck_size;
 }
 
 size_t ggml_type_size(enum ggml_type type) {
+    assert(type >= 0);
+    assert(type < GGML_TYPE_COUNT);
     return type_traits[type].type_size;
 }
 
 size_t ggml_row_size(enum ggml_type type, int64_t ne) {
+    assert(type >= 0);
+    assert(type < GGML_TYPE_COUNT);
     assert(ne % ggml_blck_size(type) == 0);
     return ggml_type_size(type)*ne/ggml_blck_size(type);
 }
 
-double ggml_type_sizef(enum ggml_type type) {
-    return ((double)(type_traits[type].type_size))/type_traits[type].blck_size;
-}
-
 const char * ggml_type_name(enum ggml_type type) {
-    return type < GGML_TYPE_COUNT ? type_traits[type].type_name : "NONE";
+    assert(type >= 0);
+    assert(type < GGML_TYPE_COUNT);
+    return type_traits[type].type_name;
 }
 
 bool ggml_is_quantized(enum ggml_type type) {
+    assert(type >= 0);
+    assert(type < GGML_TYPE_COUNT);
     return type_traits[type].is_quantized;
 }
 
@@ -1403,16 +1410,14 @@ static bool ggml_is_contiguous_n(const struct ggml_tensor * tensor, int n) {
     }
     next_nb *= tensor->ne[0]/ggml_blck_size(tensor->type);
     for (int i = 1; i < GGML_MAX_DIMS; i++) {
-        if (tensor->ne[i] != 1) {
-            if (i > n) {
-                if (tensor->nb[i] != next_nb) {
-                    return false;
-                }
-                next_nb *= tensor->ne[i];
-            } else {
-                // this dimension does not need to be contiguous
-                next_nb = tensor->ne[i]*tensor->nb[i];
+        if (i > n) {
+            if (tensor->ne[i] != 1 && tensor->nb[i] != next_nb) {
+                return false;
             }
+            next_nb *= tensor->ne[i];
+        } else {
+            // this dimension does not need to be contiguous
+            next_nb = tensor->ne[i]*tensor->nb[i];
         }
     }
     return true;
@@ -1494,6 +1499,10 @@ bool ggml_are_same_stride(const struct ggml_tensor * t0, const struct ggml_tenso
         (t0->nb[1] == t1->nb[1]) &&
         (t0->nb[2] == t1->nb[2]) &&
         (t0->nb[3] == t1->nb[3]);
+}
+
+bool ggml_is_view(const struct ggml_tensor * t) {
+    return ggml_impl_is_view(t);
 }
 
 // check if t1 can be represented as a repetition of t0
@@ -1625,10 +1634,22 @@ static struct ggml_object * ggml_new_object(struct ggml_context * ctx, enum ggml
     const size_t cur_end  = cur_offs + cur_size;
 
     // align to GGML_MEM_ALIGN
+    GGML_ASSERT(size <= SIZE_MAX - (GGML_MEM_ALIGN - 1));
     size_t size_needed = GGML_PAD(size, GGML_MEM_ALIGN);
 
     char * const mem_buffer = ctx->mem_buffer;
     struct ggml_object * const obj_new = (struct ggml_object *)(mem_buffer + cur_end);
+
+    // integer overflow checks
+    if (cur_end > SIZE_MAX - size_needed) {
+        GGML_LOG_WARN("%s: overflow detected in cur_end (%zu) + size_needed (%zu)\n", __func__, cur_end, size_needed);
+        return NULL;
+    }
+    if (cur_end + size_needed > SIZE_MAX - GGML_OBJECT_SIZE) {
+        GGML_LOG_WARN("%s: overflow detected in cur_end (%zu) + size_needed (%zu) + GGML_OBJECT_SIZE (%zu)\n", __func__,
+                cur_end, size_needed, (size_t) GGML_OBJECT_SIZE);
+        return NULL;
+    }
 
     if (cur_end + size_needed + GGML_OBJECT_SIZE > ctx->mem_size) {
         GGML_LOG_WARN("%s: not enough space in the context's memory pool (needed %zu, available %zu)\n",
@@ -1697,6 +1718,8 @@ static struct ggml_tensor * ggml_new_tensor_impl(
         // allocate tensor data in the context's memory pool
         obj_alloc_size = data_size;
     }
+
+    GGML_ASSERT(GGML_TENSOR_SIZE <= SIZE_MAX - obj_alloc_size);
 
     struct ggml_object * const obj_new = ggml_new_object(ctx, GGML_OBJECT_TYPE_TENSOR, GGML_TENSOR_SIZE + obj_alloc_size);
     GGML_ASSERT(obj_new);
@@ -5749,7 +5772,7 @@ static struct ggml_tensor * ggml_unary_impl(
         struct ggml_tensor  * a,
         enum ggml_unary_op    op,
         bool                  inplace) {
-    GGML_ASSERT(ggml_is_contiguous_1(a));
+    GGML_ASSERT(ggml_is_contiguous_rows(a));
 
     struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
 
@@ -6562,7 +6585,7 @@ static void ggml_compute_backward(
         case GGML_OP_DIAG_MASK_INF: {
             if (src0_needs_grads) {
                 /* ggml_diag_mask_inf_impl() shouldn't be here */
-                /* ref:  https://github.com/ggerganov/llama.cpp/pull/4203#discussion_r1412377992 */
+                /* ref:  https://github.com/ggml-org/llama.cpp/pull/4203#discussion_r1412377992 */
                 const int n_past = ((const int32_t *) tensor->op_params)[0];
                 ggml_add_or_set(ctx, cgraph, isrc0, ggml_diag_mask_zero_impl(ctx, grad, n_past, false));
             }
@@ -7517,8 +7540,11 @@ void ggml_quantize_free(void) {
 
     iq2xs_free_impl(GGML_TYPE_IQ2_XXS);
     iq2xs_free_impl(GGML_TYPE_IQ2_XS);
+    iq2xs_free_impl(GGML_TYPE_IQ2_S);
     iq2xs_free_impl(GGML_TYPE_IQ1_S);
+    iq2xs_free_impl(GGML_TYPE_IQ1_M);
     iq3xs_free_impl(256);
+    iq3xs_free_impl(512);
 
     ggml_critical_section_end();
 }

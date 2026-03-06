@@ -11,7 +11,9 @@ function(llama_build source)
 
     add_executable(${TEST_TARGET} ${TEST_SOURCES})
     target_link_libraries(${TEST_TARGET} PRIVATE common)
-    install(TARGETS ${TEST_TARGET} RUNTIME)
+    if (LLAMA_TESTS_INSTALL)
+        install(TARGETS ${TEST_TARGET} RUNTIME)
+    endif()
 endfunction()
 
 function(llama_test target)
@@ -100,7 +102,9 @@ function(llama_build_and_test source)
     endif()
 
     add_executable(${TEST_TARGET} ${TEST_SOURCES})
-    install(TARGETS ${TEST_TARGET} RUNTIME)
+    if (LLAMA_TESTS_INSTALL)
+        install(TARGETS ${TEST_TARGET} RUNTIME)
+    endif()
     target_link_libraries(${TEST_TARGET} PRIVATE common)
 
     add_test(
@@ -148,7 +152,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     llama_build_and_test(test-grammar-parser.cpp)
     llama_build_and_test(test-grammar-integration.cpp)
     llama_build_and_test(test-llama-grammar.cpp)
-    llama_build_and_test(test-chat.cpp)
+    llama_build_and_test(test-chat.cpp WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
     # TODO: disabled on loongarch64 because the ggml-ci node lacks Python 3.8
     if (NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "loongarch64")
         llama_build_and_test(test-json-schema-to-grammar.cpp   WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
@@ -252,6 +256,21 @@ endif()
 set(LLAMA_TEST_NAME test-mtmd-c-api)
 llama_build_and_test(test-mtmd-c-api.c)
 target_link_libraries(${LLAMA_TEST_NAME} PRIVATE mtmd)
+
+# GGUF model data fetcher library for tests that need real model metadata
+# Only compile when cpp-httplib has SSL support (CPPHTTPLIB_OPENSSL_SUPPORT)
+if (TARGET cpp-httplib)
+    get_target_property(_cpp_httplib_defs cpp-httplib INTERFACE_COMPILE_DEFINITIONS)
+    if (_cpp_httplib_defs MATCHES "CPPHTTPLIB_OPENSSL_SUPPORT")
+        add_library(gguf-model-data STATIC gguf-model-data.cpp)
+        target_link_libraries(gguf-model-data PRIVATE common cpp-httplib)
+        target_include_directories(gguf-model-data PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
+        add_executable(test-gguf-model-data test-gguf-model-data.cpp)
+        target_link_libraries(test-gguf-model-data PRIVATE gguf-model-data common)
+        llama_test(test-gguf-model-data LABEL "model")
+    endif()
+endif()
 
 # dummy executable - not installed
 get_filename_component(TEST_TARGET test-c.c NAME_WE)

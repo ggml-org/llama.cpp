@@ -42,11 +42,11 @@ static inline void hvx_splat_f32_u(uint8_t * restrict dst, float v, uint32_t n) 
     hvx_splat_u(dst,  hvx_vec_splat_f32(v), n, sizeof(float));
 }
 
-static inline void hvx_splat_f16_a(uint8_t * restrict dst, float v, uint32_t n) {
+static inline void hvx_splat_f16_a(uint8_t * restrict dst, _Float16 v, uint32_t n) {
     hvx_splat_u(dst,  hvx_vec_splat_f16(v), n, sizeof(__fp16));
 }
 
-static inline void hvx_splat_f16_u(uint8_t * restrict dst, float v, uint32_t n) {
+static inline void hvx_splat_f16_u(uint8_t * restrict dst, _Float16 v, uint32_t n) {
     hvx_splat_u(dst,  hvx_vec_splat_f16(v), n, sizeof(__fp16));
 }
 
@@ -135,8 +135,6 @@ static inline void hvx_copy_f32_uu(uint8_t * restrict dst, const uint8_t * restr
     do {                                                                            \
         dst_type * restrict vdst = (dst_type *) dst;                                \
         src_type * restrict vsrc = (src_type *) src;                                \
-                                                                                    \
-        const HVX_Vector zero = Q6_V_vsplat_R(0);                                   \
                                                                                     \
         const uint32_t elem_size = sizeof(__fp16);                                  \
         const uint32_t epv  = 128 / elem_size;                                      \

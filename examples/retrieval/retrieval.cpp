@@ -4,6 +4,7 @@
 #include "llama.h"
 
 #include <algorithm>
+#include <clocale>
 #include <fstream>
 #include <iostream> // TODO: remove me
 
@@ -112,6 +113,8 @@ static void batch_process(llama_context * ctx, llama_batch & batch, float * outp
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     common_params params;
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_RETRIEVAL, print_usage)) {

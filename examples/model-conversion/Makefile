@@ -33,11 +33,14 @@ DEVICE ?= auto
 causal-convert-model-bf16: OUTTYPE=bf16
 causal-convert-model-bf16: causal-convert-model
 
+causal-convert-model-debug: DEBUG=--debug
+causal-convert-model-debug: causal-convert-model
+
 causal-convert-model:
 	$(call validate_model_path,causal-convert-model)
 	@MODEL_NAME="$(MODEL_NAME)" OUTTYPE="$(OUTTYPE)" MODEL_PATH="$(MODEL_PATH)" \
 	METADATA_OVERRIDE="$(METADATA_OVERRIDE)" \
-	./scripts/causal/convert-model.sh
+	./scripts/causal/convert-model.sh $(DEBUG)
 
 causal-convert-mm-model-bf16: OUTTYPE=bf16
 causal-convert-mm-model-bf16: MM_OUTTYPE=f16
@@ -74,7 +77,10 @@ causal-verify-embeddings: causal-run-original-embeddings causal-run-converted-em
 	@./scripts/causal/compare-embeddings-logits.sh
 
 causal-inspect-original-model:
-	@./scripts/utils/inspect-org-model.py
+	@./scripts/utils/inspect-org-model.py --list-all -s
+
+causal-list-original-model-tensors:
+	@./scripts/utils/inspect-org-model.py --list-all-short -s
 
 causal-inspect-converted-model:
 	@./scripts/utils/inspect-converted-model.sh
@@ -150,7 +156,7 @@ embedding-verify-logits-st: embedding-run-original-model-st embedding-run-conver
 
 embedding-inspect-original-model:
 	$(call validate_embedding_model_path,embedding-inspect-original-model)
-	@EMBEDDING_MODEL_PATH="$(EMBEDDING_MODEL_PATH)" ./scripts/utils/inspect-org-model.py -m ${EMBEDDING_MODEL_PATH}
+	@EMBEDDING_MODEL_PATH="$(EMBEDDING_MODEL_PATH)" ./scripts/utils/inspect-org-model.py -m ${EMBEDDING_MODEL_PATH} --list-all -s
 
 embedding-inspect-converted-model:
 	@CONVERTED_EMBEDDING_MODEL="$(CONVERTED_EMBEDDING_MODEL)" ./scripts/utils/inspect-converted-model.sh ${CONVERTED_EMBEDDING_MODEL}

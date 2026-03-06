@@ -5,6 +5,7 @@
 #include "llama.h"
 #include "chat.h"
 #include "sampling.h"
+#include "speculative.h"
 #include "json-schema-to-grammar.h"
 
 using json = nlohmann::ordered_json;
@@ -76,6 +77,10 @@ json task_params::to_json(bool only_metrics) const {
             {"speculative.n_max",         speculative.n_max},
             {"speculative.n_min",         speculative.n_min},
             {"speculative.p_min",         speculative.p_min},
+            {"speculative.type",          common_speculative_type_to_str(speculative.type)},
+            {"speculative.ngram_size_n",  speculative.ngram_size_n},
+            {"speculative.ngram_size_m",  speculative.ngram_size_m},
+            {"speculative.ngram_m_hits",  speculative.ngram_min_hits},
             {"timings_per_token",         timings_per_token},
             {"post_sampling_probs",       post_sampling_probs},
             {"backend_sampling",          sampling.backend_sampling},
@@ -135,6 +140,10 @@ json task_params::to_json(bool only_metrics) const {
         {"speculative.n_max",         speculative.n_max},
         {"speculative.n_min",         speculative.n_min},
         {"speculative.p_min",         speculative.p_min},
+        {"speculative.type",          common_speculative_type_to_str(speculative.type)},
+        {"speculative.ngram_size_n",  speculative.ngram_size_n},
+        {"speculative.ngram_size_m",  speculative.ngram_size_m},
+        {"speculative.ngram_m_hits",  speculative.ngram_min_hits},
         {"timings_per_token",         timings_per_token},
         {"post_sampling_probs",       post_sampling_probs},
         {"backend_sampling",          sampling.backend_sampling},
@@ -195,7 +204,8 @@ task_params server_task::params_from_json_cmpl(
     params.cache_prompt     = json_value(data,       "cache_prompt",       defaults.cache_prompt);
     params.return_tokens    = json_value(data,       "return_tokens",      false);
     params.return_progress  = json_value(data,       "return_progress",    false);
-    params.n_predict        = json_value(data,       "n_predict",          json_value(data, "max_tokens", defaults.n_predict));
+    auto max_tokens         = json_value(data,       "max_tokens",         defaults.n_predict);
+    params.n_predict        = json_value(data,       "n_predict",          json_value(data, "max_completion_tokens", max_tokens));
     params.n_indent         = json_value(data,       "n_indent",           defaults.n_indent);
     params.n_keep           = json_value(data,       "n_keep",             defaults.n_keep);
     params.n_discard        = json_value(data,       "n_discard",          defaults.n_discard);
@@ -241,6 +251,16 @@ task_params server_task::params_from_json_cmpl(
     params.speculative.n_min = std::min(params.speculative.n_max, params.speculative.n_min);
     params.speculative.n_min = std::max(params.speculative.n_min, 0);
     params.speculative.n_max = std::max(params.speculative.n_max, 0);
+
+    params.speculative.type = common_speculative_type_from_name(json_value(data, "speculative.type", common_speculative_type_to_str(defaults.speculative.type)));
+
+    params.speculative.ngram_size_n     = json_value(data, "speculative.ngram_size_n", defaults.speculative.ngram_size_n);
+    params.speculative.ngram_size_m     = json_value(data, "speculative.ngram_size_m", defaults.speculative.ngram_size_m);
+    params.speculative.ngram_min_hits   = json_value(data, "speculative.ngram_m_hits", defaults.speculative.ngram_min_hits);
+
+    params.speculative.ngram_size_n     = std::max(std::min(1, (int) params.speculative.ngram_size_n),     1024);
+    params.speculative.ngram_size_m     = std::max(std::min(1, (int) params.speculative.ngram_size_m),     1024);
+    params.speculative.ngram_min_hits   = std::max(std::min(1, (int) params.speculative.ngram_min_hits),   1024);
 
     // Use OpenAI API logprobs only if n_probs wasn't provided
     if (data.contains("logprobs") && params.sampling.n_probs == defaults.sampling.n_probs){
@@ -700,7 +720,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
     json choice {
         {"finish_reason", finish_reason},
         {"index", index},
-        {"message", msg.to_json_oaicompat<json>()},
+        {"message", msg.to_json_oaicompat()},
     };
 
     if (!stream && probs_output.size() > 0) {
@@ -750,7 +770,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
                 json {
                     {"finish_reason", nullptr},
                     {"index", 0},
-                    {"delta", common_chat_msg_diff_to_json_oaicompat<json>(diff)},
+                    {"delta", common_chat_msg_diff_to_json_oaicompat(diff)},
                 },
             })},
             {"created", t},
@@ -1383,7 +1403,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat_chat() {
     }
 
     for (const auto & diff : oaicompat_msg_diffs) {
-        add_delta(common_chat_msg_diff_to_json_oaicompat<json>(diff));
+        add_delta(common_chat_msg_diff_to_json_oaicompat(diff));
     }
 
     if (!deltas.empty()) {
@@ -1880,10 +1900,9 @@ server_prompt * server_prompt_cache::alloc(const server_prompt & prompt, size_t 
         return nullptr;
     }
 
-    // TODO: for some reason we can't copy server_tokens, so we have to do this workaround
     auto & cur = states.emplace_back();
     cur = {
-        /*.tokens      =*/ server_tokens(prompt.tokens.get_text_tokens(), false),
+        /*.tokens      =*/ prompt.tokens.clone(),
         /*.data        =*/ std::move(state_data),
         /*.checkpoints =*/ prompt.checkpoints,
     };

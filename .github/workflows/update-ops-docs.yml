@@ -14,7 +14,7 @@ on:
 
 jobs:
     update-ops-docs:
-        runs-on: ubuntu-latest
+        runs-on: ubuntu-slim
 
         steps:
         - name: Checkout repository

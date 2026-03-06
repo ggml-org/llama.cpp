@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.14) # for add_link_options and implicit target directories.
+cmake_minimum_required(VERSION 3.14...3.28) # for add_link_options and implicit target directories.
 project("llama.cpp" C CXX)
 include(CheckIncludeFileCXX)
 
@@ -109,17 +109,12 @@ option(LLAMA_BUILD_TOOLS    "llama: build tools"          ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_EXAMPLES "llama: build examples"       ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_SERVER   "llama: build server example" ${LLAMA_STANDALONE})
 option(LLAMA_TOOLS_INSTALL  "llama: install tools"        ${LLAMA_TOOLS_INSTALL_DEFAULT})
+option(LLAMA_TESTS_INSTALL  "llama: install tests"        ON)
 
 # 3rd party libs
-option(LLAMA_HTTPLIB    "llama: httplib for downloading functionality" ON)
 option(LLAMA_OPENSSL    "llama: use openssl to support HTTPS" ON)
 option(LLAMA_LLGUIDANCE "llama-common: include LLGuidance library for structured output in common utils" OFF)
 
-# deprecated
-option(LLAMA_CURL "llama: use libcurl to download model from an URL" OFF)
-if (LLAMA_CURL)
-    message(WARNING "LLAMA_CURL option is deprecated and will be ignored")
-endif()
 
 # Required for relocatable CMake package
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/build-info.cmake)
@@ -147,10 +142,15 @@ if (NOT DEFINED GGML_CUDA_GRAPHS)
 endif()
 
 # transition helpers
-function (llama_option_depr TYPE OLD NEW)
+function (llama_option_depr TYPE OLD)
     if (${OLD})
-        message(${TYPE} "${OLD} is deprecated and will be removed in the future.\nUse ${NEW} instead\n")
-        set(${NEW} ON PARENT_SCOPE)
+        set(NEW "${ARGV2}")
+        if(NEW)
+            message(${TYPE} "${OLD} is deprecated, use ${NEW} instead")
+            set(${NEW} ON PARENT_SCOPE)
+        else()
+            message(${TYPE} "${OLD} is deprecated and will be ignored")
+        endif()
     endif()
 endfunction()
 
@@ -163,29 +163,7 @@ llama_option_depr(WARNING     LLAMA_RPC                 GGML_RPC)
 llama_option_depr(WARNING     LLAMA_SYCL                GGML_SYCL)
 llama_option_depr(WARNING     LLAMA_SYCL_F16            GGML_SYCL_F16)
 llama_option_depr(WARNING     LLAMA_CANN                GGML_CANN)
-
-if (NOT MSVC)
-    if (LLAMA_SANITIZE_THREAD)
-        message(STATUS "Using -fsanitize=thread")
-
-        add_compile_options(-fsanitize=thread)
-        link_libraries     (-fsanitize=thread)
-    endif()
-
-    if (LLAMA_SANITIZE_ADDRESS)
-        message(STATUS "Using -fsanitize=address")
-
-        add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
-        link_libraries     (-fsanitize=address)
-    endif()
-
-    if (LLAMA_SANITIZE_UNDEFINED)
-        message(STATUS "Using -fsanitize=undefined")
-
-        add_compile_options(-fsanitize=undefined)
-        link_libraries     (-fsanitize=undefined)
-    endif()
-endif()
+llama_option_depr(WARNING     LLAMA_CURL)
 
 include("cmake/license.cmake")
 license_add_file("llama.cpp" "LICENSE")
@@ -219,9 +197,7 @@ add_subdirectory(src)
 
 if (LLAMA_BUILD_COMMON)
     add_subdirectory(common)
-    if (LLAMA_HTTPLIB)
-        add_subdirectory(vendor/cpp-httplib)
-    endif()
+    add_subdirectory(vendor/cpp-httplib)
 endif()
 
 if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TESTS AND NOT CMAKE_JS_VERSION)

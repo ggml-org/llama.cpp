@@ -6,7 +6,7 @@
 // This documentation is still a work in progress.
 // If you wish some specific topics to be covered, feel free to drop a comment:
 //
-//   https://github.com/ggerganov/whisper.cpp/issues/40
+//   https://github.com/ggml-org/whisper.cpp/issues/40
 //
 // ## Overview
 //
@@ -730,10 +730,6 @@ extern "C" {
     GGML_API size_t  ggml_type_size(enum ggml_type type);             // size in bytes for all elements in a block
     GGML_API size_t  ggml_row_size (enum ggml_type type, int64_t ne); // size in bytes for all elements in a row
 
-    GGML_DEPRECATED(
-    GGML_API double ggml_type_sizef(enum ggml_type type), // ggml_type_size()/ggml_blck_size() as float
-    "use ggml_row_size() instead");
-
     GGML_API const char * ggml_type_name(enum ggml_type type);
     GGML_API const char * ggml_op_name  (enum ggml_op   op);
     GGML_API const char * ggml_op_symbol(enum ggml_op   op);
@@ -752,6 +748,7 @@ extern "C" {
     GGML_API bool ggml_is_transposed(const struct ggml_tensor * tensor);
     GGML_API bool ggml_is_permuted  (const struct ggml_tensor * tensor);
     GGML_API bool ggml_is_empty     (const struct ggml_tensor * tensor);
+    GGML_API bool ggml_is_view      (const struct ggml_tensor * tensor);
     GGML_API bool ggml_is_scalar    (const struct ggml_tensor * tensor);
     GGML_API bool ggml_is_vector    (const struct ggml_tensor * tensor);
     GGML_API bool ggml_is_matrix    (const struct ggml_tensor * tensor);
@@ -2578,7 +2575,7 @@ extern "C" {
         struct ggml_tensor *  grad,
         struct ggml_tensor *  sgd_params); // alpha, weight decay
 
-    // build forward mutiple tensors and select one of them for computing
+    // build forward multiple tensors and select one of them for computing
     // this is useful for creating graphs that have constant topology but compute different things based on the input
     // ref: https://github.com/ggml-org/llama.cpp/pull/18550
     //

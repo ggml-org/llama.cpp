@@ -29,9 +29,7 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-      - name: Install Python dependencies
-        # TODO: use a venv
-        run: pip install -r requirements/requirements-all.txt
+          pip-install: -r requirements/requirements-all.txt
       - name: Type-check with Pyright
         uses: jakebailey/pyright-action@v2
         with:

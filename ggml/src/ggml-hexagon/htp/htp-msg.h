@@ -42,32 +42,36 @@ enum htp_data_type {
     HTP_TYPE_COUNT
 };
 
-// These values are manually translated over to HTP
-// !!!! DO NOT ALTER THE ORDER OF THE FIRST FOUR ENUMS !!!!
+// Do not reorder first 4 (used as an index)
 enum htp_op {
-    HTP_OP_MUL            = 0,
-    HTP_OP_ADD            = 1,
-    HTP_OP_SUB            = 2,
-    HTP_OP_DIV            = 3,
-    HTP_OP_MUL_MAT        = 4,
-    HTP_OP_MUL_MAT_ID     = 5,
-    HTP_OP_RMS_NORM       = 6,
-    HTP_OP_UNARY_SILU     = 7,
-    HTP_OP_UNARY_GELU     = 8,
-    HTP_OP_GLU_SWIGLU     = 9,
-    HTP_OP_GLU_SWIGLU_OAI = 10,
-    HTP_OP_SOFTMAX        = 11,
-    HTP_OP_ADD_ID         = 12,
-    HTP_OP_ROPE           = 13,
-    HTP_OP_FLASH_ATTN_EXT = 14,
-    HTP_OP_SET_ROWS       = 15,
-    HTP_OP_SCALE          = 16,
-    HTP_OP_GET_ROWS       = 17,
-    HTP_OP_CPY            = 18,
+    HTP_OP_MUL = 0,
+    HTP_OP_ADD = 1,
+    HTP_OP_SUB = 2,
+    HTP_OP_DIV = 3,
+    HTP_OP_MUL_MAT,
+    HTP_OP_MUL_MAT_ID,
+    HTP_OP_RMS_NORM,
+    HTP_OP_UNARY_SILU,
+    HTP_OP_UNARY_GELU,
+    HTP_OP_GLU_SWIGLU,
+    HTP_OP_GLU_SWIGLU_OAI,
+    HTP_OP_GLU_GEGLU,
+    HTP_OP_SOFTMAX,
+    HTP_OP_ADD_ID,
+    HTP_OP_ROPE,
+    HTP_OP_FLASH_ATTN_EXT,
+    HTP_OP_SET_ROWS,
+    HTP_OP_GET_ROWS,
+    HTP_OP_SCALE,
+    HTP_OP_CPY,
+    HTP_OP_ARGSORT,
+    HTP_OP_SQR,
+    HTP_OP_SQRT,
+    HTP_OP_SUM_ROWS,
     INVALID
 };
 
-static inline size_t htp_type_block_size(uint32_t t) {
+static inline size_t htp_t_block_size(uint32_t t) {
     switch (t) {
         case HTP_TYPE_F32:
             return 1;
@@ -99,22 +103,6 @@ static inline size_t htp_type_nbytes(uint32_t t) {
             return sizeof(block_mxfp4);
         default:
             assert(0 && "unsupported HTP data type");
-    }
-    return 0;
-}
-
-static const char * htp_type_name(uint32_t t) {
-    switch (t) {
-        case HTP_TYPE_F32:
-            return "fp32";
-        case HTP_TYPE_F16:
-            return "fp16";
-        case HTP_TYPE_Q4_0:
-            return "q4_0";
-        case HTP_TYPE_Q8_0:
-            return "q8_0";
-        case HTP_TYPE_MXFP4:
-            return "mxfp4";
     }
     return 0;
 }

@@ -1,8 +1,19 @@
-import type { ServerModelStatus, ServerRole } from '$lib/enums';
-import type { ChatMessagePromptProgress } from './chat';
+import type { ContentPartType, ServerModelStatus, ServerRole } from '$lib/enums';
+import type { ChatMessagePromptProgress, ChatRole } from './chat';
+
+export interface ApiChatCompletionToolFunction {
+	name: string;
+	description?: string;
+	parameters: Record<string, unknown>;
+}
+
+export interface ApiChatCompletionTool {
+	type: 'function';
+	function: ApiChatCompletionToolFunction;
+}
 
 export interface ApiChatMessageContentPart {
-	type: 'text' | 'image_url' | 'input_audio';
+	type: ContentPartType;
 	text?: string;
 	image_url?: {
 		url: string;
@@ -34,6 +45,8 @@ export interface ApiErrorResponse {
 export interface ApiChatMessageData {
 	role: ChatRole;
 	content: string | ApiChatMessageContentPart[];
+	tool_calls?: ApiChatCompletionToolCall[];
+	tool_call_id?: string;
 	timestamp?: number;
 }
 
@@ -68,6 +81,10 @@ export interface ApiModelDataEntry {
 	path: string;
 	/** Current status of the model */
 	status: ApiModelStatus;
+	/** Alternative names that resolve to this model */
+	aliases?: string[];
+	/** Informational tags for this model */
+	tags?: string[];
 	/** Legacy meta field (may be present in older responses) */
 	meta?: Record<string, unknown> | null;
 }
@@ -188,6 +205,7 @@ export interface ApiChatCompletionRequest {
 	stream?: boolean;
 	model?: string;
 	return_progress?: boolean;
+	tools?: ApiChatCompletionTool[];
 	// Reasoning parameters
 	reasoning_format?: string;
 	// Generation parameters
@@ -247,6 +265,7 @@ export interface ApiChatCompletionStreamChunk {
 			model?: string;
 			tool_calls?: ApiChatCompletionToolCallDelta[];
 		};
+		finish_reason?: string | null;
 	}>;
 	timings?: {
 		prompt_n?: number;
@@ -267,8 +286,9 @@ export interface ApiChatCompletionResponse {
 			content: string;
 			reasoning_content?: string;
 			model?: string;
-			tool_calls?: ApiChatCompletionToolCallDelta[];
+			tool_calls?: ApiChatCompletionToolCall[];
 		};
+		finish_reason?: string | null;
 	}>;
 }
 
@@ -335,7 +355,7 @@ export interface ApiProcessingState {
 	tokensDecoded: number;
 	tokensRemaining: number;
 	contextUsed: number;
-	contextTotal: number;
+	contextTotal: number | null;
 	outputTokensUsed: number; // Total output tokens (thinking + regular content)
 	outputTokensMax: number; // Max output tokens allowed
 	temperature: number;

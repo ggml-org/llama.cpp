@@ -32,8 +32,12 @@
  */
 
 import { browser } from '$app/environment';
-import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
-import { ParameterSyncService } from '$lib/services/parameter-sync';
+import {
+	CONFIG_LOCALSTORAGE_KEY,
+	SETTING_CONFIG_DEFAULT,
+	USER_OVERRIDES_LOCALSTORAGE_KEY
+} from '$lib/constants';
+import { ParameterSyncService } from '$lib/services/parameter-sync.service';
 import { serverStore } from '$lib/stores/server.svelte';
 import {
 	configToParameterRecord,
@@ -41,24 +45,28 @@ import {
 	getConfigValue,
 	setConfigValue
 } from '$lib/utils';
-import {
-	CONFIG_LOCALSTORAGE_KEY,
-	USER_OVERRIDES_LOCALSTORAGE_KEY
-} from '$lib/constants/localstorage-keys';
 
 class SettingsStore {
-	// ─────────────────────────────────────────────────────────────────────────────
-	// State
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * State
+	 *
+	 *
+	 */
 
 	config = $state<SettingsConfigType>({ ...SETTING_CONFIG_DEFAULT });
 	theme = $state<string>('auto');
 	isInitialized = $state(false);
 	userOverrides = $state<Set<string>>(new Set());
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Utilities (private helpers)
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Utilities (private helpers)
+	 *
+	 *
+	 */
 
 	/**
 	 * Helper method to get server defaults with null safety
@@ -76,9 +84,13 @@ class SettingsStore {
 		}
 	}
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Lifecycle
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Lifecycle
+	 *
+	 *
+	 */
 
 	/**
 	 * Initialize the settings store by loading from localStorage
@@ -130,9 +142,13 @@ class SettingsStore {
 
 		this.theme = localStorage.getItem('theme') || 'auto';
 	}
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Config Updates
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Config Updates
+	 *
+	 *
+	 */
 
 	/**
 	 * Update a specific configuration setting
@@ -234,9 +250,13 @@ class SettingsStore {
 		}
 	}
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Reset
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Reset
+	 *
+	 *
+	 */
 
 	/**
 	 * Reset configuration to defaults
@@ -285,9 +305,13 @@ class SettingsStore {
 		this.saveConfig();
 	}
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Server Sync
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Server Sync
+	 *
+	 *
+	 */
 
 	/**
 	 * Initialize settings with props defaults when server properties are first loaded
@@ -349,9 +373,13 @@ class SettingsStore {
 		this.saveConfig();
 	}
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Utilities
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Utilities
+	 *
+	 *
+	 */
 
 	/**
 	 * Get a specific configuration value
