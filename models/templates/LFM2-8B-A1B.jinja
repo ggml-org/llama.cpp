@@ -1,0 +1,47 @@
+{{- bos_token -}}
+{%- set system_prompt = "" -%}
+{%- set ns = namespace(system_prompt="") -%}
+{%- if messages[0]["role"] == "system" -%}
+	{%- set ns.system_prompt = messages[0]["content"] -%}
+	{%- set messages = messages[1:] -%}
+{%- endif -%}
+{%- if tools -%}
+	{%- set ns.system_prompt = ns.system_prompt + ("\n" if ns.system_prompt else "") + "You can use the following tools: <|tool_list_start|>[" -%}
+	{%- for tool in tools -%}
+		{%- if tool is not string -%}
+			{%- set tool = tool | tojson -%}
+		{%- endif -%}
+		{%- set ns.system_prompt = ns.system_prompt + tool -%}
+		{%- if not loop.last -%}
+			{%- set ns.system_prompt = ns.system_prompt + ", " -%}
+		{%- endif -%}
+	{%- endfor -%}
+	{%- set ns.system_prompt = ns.system_prompt + "]<|tool_list_end|>" -%}
+	{{- '**IMPORTANT**: The syntax for calling the tools is: <|tool_call_start|>JSON tool call goes here<|tool_call_end|>. Please only call tools in the specified manner.' -}}
+{%- endif -%}
+{%- if ns.system_prompt -%}
+	{{- "<|im_start|>system\n" + ns.system_prompt + "<|im_end|>\n" -}}
+{%- endif -%}
+{%- for message in messages -%}
+	{{- "<|im_start|>" + message["role"] + "\n" -}}
+	{%- set content = message["content"] -%}
+	{%- if content is not string -%}
+		{%- set content = content | tojson -%}
+	{%- endif -%}
+	{%- if message["role"] == "tool" -%}
+		{%- set content = "<|tool_response_start|>" + content + "<|tool_response_end|>" -%}
+	{%- elif message["role"] == "assistant" -%}
+		{%- if message.tool_calls %}
+			{%- for tool_call in message.tool_calls %}
+				{%- if tool_call.function %}
+					{%- set tool_call = tool_call.function %}
+				{%- endif %}
+				{{- '\n<|tool_call_start|>\n{"name": "' + tool_call.name + '", "arguments": ' + (tool_call.arguments if tool_call.arguments is string else tool_call.arguments | tojson) + '}\n<|tool_call_end|>\n' }}
+			{%- endfor %}
+		{%- endif %}
+	{%- endif -%}
+	{{- content + "<|im_end|>\n" -}}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+	{{- "<|im_start|>assistant\n" -}}
+{%- endif -%}

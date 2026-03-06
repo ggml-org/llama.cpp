@@ -132,7 +132,7 @@ The following instructions take precedence over instructions in the default prea
     {%- elif message.role|lower == 'user' %}
 <|START_OF_TURN_TOKEN|><|USER_TOKEN|>{{ message.content }}<|END_OF_TURN_TOKEN|>{%- if documents and not sent_documents.value %}{%- set sent_documents.value = true %}{% set tool_idx.value = tool_idx.value + 1 %}{{ document_turn(documents) }}{% endif %}
     {%- elif message.role|lower == 'assistant' or message.role|lower == 'chatbot' %}
-<|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>{% if message.tool_calls %}<|START_THINKING|>{{message.tool_plan}}<|END_THINKING|><|START_ACTION|>[
+<|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>{% if message.tool_calls %}<|START_THINKING|>{{message.reasoning_content}}<|END_THINKING|><|START_ACTION|>[
     {% for tc in message.tool_calls %}
     {"tool_call_id": "{{ tool_idx.value }}", "tool_name": "{{ tc['function']['name'] }}", "parameters": {{ tc['function']['arguments']|tojson }}}{% if not loop.last %},{% endif %}
 
@@ -153,4 +153,4 @@ The following instructions take precedence over instructions in the default prea
 
 ]<|END_TOOL_RESULT|><|END_OF_TURN_TOKEN|>
     {%- endif %}
-{%- endfor %}<|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>
+{%- endfor %}<|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>{%- if not enable_thinking -%}<|START_THINKING|><|END_THINKING|>{%- endif %}

@@ -29,7 +29,7 @@
     {%- endif %}
 {%- endif %}
 {%- if tools is iterable and tools | length > 0 %}
-    {{- "\n\n# Tools\n\nYou have access to the following functions:\n\n" }}
+    {{- "\n\n# Tools\n\nYou have access to the following tools:\n\n" }}
     {{- "<tools>" }}
     {%- for tool in tools %}
         {%- if tool.function is defined %}
@@ -63,7 +63,7 @@
         {{- '\n</function>' }}
     {%- endfor %}
     {{- "\n</tools>" }}
-    {{- '\n\nIf you choose to call a function ONLY reply in the following format with NO suffix:\n\n<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n<parameter=example_parameter_2>\nThis is the value for the second parameter\nthat can span\nmultiple lines\n</parameter>\n</function>\n</tool_call>\n\n<IMPORTANT>\nReminder:\n- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags\n- Required parameters MUST be specified\n- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after\n- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls\n</IMPORTANT>' }}
+    {{- '\n\nIf you choose to call a tool ONLY reply in the following format with NO suffix:\n\n<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n<parameter=example_parameter_2>\nvalue_2\n</parameter>\n</function>\n</tool_call>\n\n<IMPORTANT>\nReminder:\n- Function calls MUST follow the specified format: the tool calling block MUST begin with an opening <tool_call> tag and end with a closing </tool_call> tag.\n- Required parameters MUST be specified\n- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after\n- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls\n</IMPORTANT>' }}
 {%- endif %}
 {%- if system_message is defined %}
     {{- '<|im_end|>\n' }}

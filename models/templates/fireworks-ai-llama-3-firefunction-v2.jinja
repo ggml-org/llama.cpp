@@ -46,7 +46,7 @@ Available functions as JSON spec:
     {%- if 'tool_calls' in message and message['tool_calls'] -%}
       {%- set tool = namespace(calls=[]) -%}
       {%- for call in message['tool_calls'] -%}
-        {%- set tool.calls = tool.calls + ['{"name": "' + call['function']['name'] + '", "arguments": ' + call['function']['arguments'] + '}'] -%}
+        {%- set tool.calls = tool.calls + ['{"name": "' + call['function']['name'] + '", "arguments": ' + call['function']['arguments']|tojson + '}'] -%}
       {%- endfor -%}
       {%- set ns.content = ns.content + ' functools[' + tool.calls | join(', ') + ']' -%}
     {%- endif -%}
