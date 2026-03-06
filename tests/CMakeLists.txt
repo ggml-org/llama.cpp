@@ -256,6 +256,7 @@ endif()
 set(LLAMA_TEST_NAME test-mtmd-c-api)
 llama_build_and_test(test-mtmd-c-api.c)
 target_link_libraries(${LLAMA_TEST_NAME} PRIVATE mtmd)
+unset(LLAMA_TEST_NAME)
 
 # dummy executable - not installed
 get_filename_component(TEST_TARGET test-c.c NAME_WE)
@@ -264,3 +265,6 @@ target_link_libraries(${TEST_TARGET} PRIVATE llama)
 
 llama_build_and_test(test-alloc.cpp)
 target_include_directories(test-alloc PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src)
+
+llama_build(export-graph-ops.cpp)
+target_include_directories(export-graph-ops PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src)
