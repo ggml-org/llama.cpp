@@ -3387,7 +3387,7 @@ static bool ggml_cuda_check_fusion_memory_ranges(ggml_cgraph * cgraph,
     };
 
     bool is_ok = true;
-    // for nrows=1, all fusion operation correctly read the src before writing dst or do it elementwise, so we should be ok
+    // for nrows=1, all fusion operations correctly read the src before writing dst or do it elementwise, so we should be ok
     if (ggml_nrows(cgraph->nodes[node_idx]) == 1) {
         return true;
     }
