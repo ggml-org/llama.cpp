@@ -2418,12 +2418,53 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         ne10*ts_src1_sorted, ne_get_rows*ne10*ts_src1_sorted, ne_get_rows*ne10*ts_src1_sorted, stream);
     CUDA_CHECK(cudaGetLastError());
 
+    // On UMA systems (e.g. Strix Halo), prefetch only the active expert weight
+    // slices instead of the entire tensor. This avoids polluting the Infinity
+    // Cache / MALL with unused expert data and reduces wasted bandwidth.
+    const bool uma_expert_prefetch = ggml_cuda_is_device_uma(ggml_cuda_get_device())
+                                  && ggml_cuda_uma_prefetch_enabled();
+
+    // Prefetch the first active expert's weights before the loop starts
+#if !defined(GGML_USE_MUSA)
+    if (uma_expert_prefetch) {
+        for (int64_t first = 0; first < ne02; ++first) {
+            if (tokens_per_expert[first] > 0) {
+                const char * first_data = (const char *) src0->data + first * nb02;
+                const size_t slice_bytes = (size_t) nb02;
+                if (slice_bytes >= 4096) {
+                    cudaMemPrefetchAsync(first_data, slice_bytes, ggml_cuda_get_device(), stream);
+                }
+                break;
+            }
+        }
+    }
+#endif
+
     char * src1_data_cur = (char *) src1_sorted.ptr;
     char *  dst_data_cur = (char *)  dst_sorted.ptr;
     for (int64_t i02 = 0; i02 < ne02; ++i02) {
         if (tokens_per_expert[i02] == 0) {
             continue;
         }
+
+        // UMA expert-aware prefetch: while computing with the current expert,
+        // prefetch the next active expert's weight slice to overlap DRAM access
+        // with GPU compute. Only prefetches the specific expert slice (~1/N of
+        // the full tensor), keeping Infinity Cache / MALL pressure low.
+#if !defined(GGML_USE_MUSA)
+        if (uma_expert_prefetch) {
+            for (int64_t next = i02 + 1; next < ne02; ++next) {
+                if (tokens_per_expert[next] > 0) {
+                    const char * next_data = (const char *) src0->data + next * nb02;
+                    const size_t slice_bytes = (size_t) nb02;
+                    if (slice_bytes >= 4096) {
+                        cudaMemPrefetchAsync(next_data, slice_bytes, ggml_cuda_get_device(), stream);
+                    }
+                    break;
+                }
+            }
+        }
+#endif
 
         ggml_tensor src0_slice = *src0;
         src0_slice.ne[2]    = 1;
@@ -3474,12 +3515,24 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
     // Helper: issue prefetch for weight tensors of a graph node.
     // Only prefetches src[0] (weights) for MUL_MAT/MUL_MAT_ID ops, as these are
     // the largest tensors and dominate memory bandwidth during token generation.
+    //
+    // For MUL_MAT_ID (MoE expert dispatch), we skip bulk prefetch of the entire
+    // expert weight tensor because only top-K experts are used per token.
+    // Prefetching all experts wastes shared memory bandwidth and pollutes the
+    // Infinity Cache / MALL on AMD UMA systems (e.g. 32MB on Strix Halo).
+    // Instead, per-expert prefetch is handled inside ggml_cuda_mul_mat_id.
     const auto prefetch_node_weights = [&](int node_idx) {
         if (node_idx >= cgraph->n_nodes) {
             return;
         }
         const ggml_tensor * future_node = cgraph->nodes[node_idx];
         if (future_node->op != GGML_OP_MUL_MAT && future_node->op != GGML_OP_MUL_MAT_ID) {
+            return;
+        }
+        // Skip MUL_MAT_ID: bulk prefetch of all expert weights wastes bandwidth.
+        // Only top-K of N experts are active; expert-aware prefetch happens at
+        // execution time inside the MUL_MAT_ID handler.
+        if (future_node->op == GGML_OP_MUL_MAT_ID) {
             return;
         }
         const ggml_tensor * weights = future_node->src[0];
