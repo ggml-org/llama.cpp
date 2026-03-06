@@ -56,7 +56,7 @@ Although OpenVINO supports a wide range of [Intel hardware](https://docs.openvin
 
 The following models have been validated for functionality on Intel® Core™ Ultra Series 1 and Series 2:
 
-- [Llama-3.2-1B-Instruct-GGUF](https://huggingface.co/MaziyarPanahi/Llama-3.2-1B-Instruct-GGUF)
+- [Llama-3.2-1B-Instruct-GGUF](https://huggingface.co/unsloth/Llama-3.2-1B-Instruct-GGUF/)
 - [Llama-3.1-8B-Instruct](https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF)
 - [microsoft/Phi-3-mini-4k-instruct-gguf](https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf)
 - [Qwen/Qwen2.5-1.5B-Instruct-GGUF](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF)
@@ -85,18 +85,27 @@ The following models have been validated for functionality on Intel® Core™ Ul
     ```
 
 - **Windows:**
-    - Download Microsoft.VisualStudio.2022.BuildTools: [Visual_Studio_Build_Tools](https://aka.ms/vs/17/release/vs_BuildTools.exe) and select "Desktop development with C++" under workloads
-    - Install git
-    - Install OpenCL with vcpkg
-      ```powershell
-      cd C:\
-      git clone https://github.com/microsoft/vcpkg
-      cd vcpkg
-      bootstrap-vcpkg.bat
-      vcpkg install opencl
-      ```
-> [!NOTE]
-> Use `x64 Native Tools Command Prompt` for Windows build.
+  - Download and install [Microsoft Visual Studio 2022 Build Tools](https://aka.ms/vs/17/release/vs_BuildTools.exe). During installation, select the **"Desktop development with C++"** workload.
+
+  - Install required tools:
+    ```powershell
+    # Windows PowerShell
+    winget install Git.Git
+    winget install GNU.Wget
+    winget install Ninja-build.Ninja
+    ```
+
+  - Install **OpenCL** using **vcpkg**:
+    ```powershell
+    # Windows PowerShell
+    cd C:\
+    git clone https://github.com/microsoft/vcpkg
+    cd vcpkg
+    .\bootstrap-vcpkg.bat
+    .\vcpkg install opencl
+    # Optional but recommended: Integrate vcpkg with Visual Studio / CMake:
+    .\vcpkg integrate install
+    ```
 
 ### 1. Install OpenVINO Runtime
 
@@ -140,19 +149,31 @@ git switch dev_backend_openvino
 
 - **Windows:**
     ```cmd
+    # x64 Native Tools Command Prompt for VS 2022
     "C:\Program Files (x86)\Intel\openvino_2026.0\setupvars.bat"
     cmake -B build\ReleaseOV -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_OPENVINO=ON -DLLAMA_CURL=OFF -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake
     cmake --build build\ReleaseOV --parallel
     ```
+> [!NOTE]
+> Use `x64 Native Tools Command Prompt` for Windows build. After building, you could use either `cmd` or `PowerShell` to run the OpenVINO backend.
 
 ### 3. Download Sample Model
 
 Download models for testing:
 
 ```bash
+# Linux
 mkdir -p ~/models/
 wget https://huggingface.co/unsloth/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_0.gguf \
      -O ~/models/Llama-3.2-1B-Instruct-Q4_0.gguf
+
+# Windows PowerShell
+mkdir C:\models
+Invoke-WebRequest -Uri https://huggingface.co/unsloth/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_0.gguf -OutFile C:\models\Llama-3.2-1B-Instruct-Q4_0.gguf
+
+# Windows Command Line
+mkdir C:\models
+curl -L https://huggingface.co/unsloth/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_0.gguf -o C:\models\Llama-3.2-1B-Instruct-Q4_0.gguf 
 ```
 
 ### 4. Run Inference with OpenVINO Backend
@@ -163,19 +184,21 @@ When using the OpenVINO backend, the first inference token may have slightly hig
 # Linux
 # If device is unset or unavailable, defaults to CPU.
 export GGML_OPENVINO_DEVICE=GPU
+# To run llama-simple:
 ./build/ReleaseOV/bin/llama-simple -m ~/models/Llama-3.2-1B-Instruct-Q4_0.gguf -n 50 "The story of AI is "
+# To run in chat mode:
+./build/ReleaseOV/bin/llama-cli -m ~/models/Llama-3.2-1B-Instruct-Q4_0.gguf
 
 # Windows Command Line
 set GGML_OPENVINO_DEVICE=GPU
 # Windows PowerShell
 $env:GGML_OPENVINO_DEVICE = "GPU"
 
+# To run llama-simple
 build\ReleaseOV\bin\llama-simple.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_0.gguf" -n 50 "The story of AI is "
-```
+# To run in chat mode:
+build\ReleaseOV\bin\llama-cli.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_0.gguf"
 
-To run in chat mode:
-```bash
-./build/ReleaseOV/bin/llama-cli -m ~/models/Llama-3.2-1B-Instruct-Q4_0.gguf
 ```
 
 ### Docker Build

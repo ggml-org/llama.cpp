@@ -1828,6 +1828,46 @@ jobs:
          run: |
            GG_BUILD_KLEIDIAI=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
+  ggml-ci-x64-intel-openvino-gpu:
+    runs-on: [self-hosted, Linux, X64, Intel]
+
+    env:
+      # Sync versions in build.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
+      OPENVINO_VERSION_MAJOR: "2026.0"
+      OPENVINO_VERSION_FULL: "2026.0.0.20965.c6d6a13a886"
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Use OpenVINO Toolkit Cache
+        uses: actions/cache@v4
+        id: cache-openvino
+        with:
+          path: ./openvino_toolkit
+          key: openvino-toolkit-v${{ env.OPENVINO_VERSION_FULL }}-${{ runner.os }}
+
+      - name: Setup OpenVINO Toolkit
+        if: steps.cache-openvino.outputs.cache-hit != 'true'
+        uses: ./.github/actions/linux-setup-openvino
+        with:
+          path: ./openvino_toolkit
+          version_major: ${{ env.OPENVINO_VERSION_MAJOR }}
+          version_full: ${{ env.OPENVINO_VERSION_FULL }}
+
+      - name: Install OpenVINO dependencies
+        run: |
+          cd ./openvino_toolkit
+          chmod +x ./install_dependencies/install_openvino_dependencies.sh
+          echo "Y" | sudo -E ./install_dependencies/install_openvino_dependencies.sh
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          source ./openvino_toolkit/setupvars.sh
+          GG_BUILD_OPENVINO=1 GGML_OPENVINO_DEVICE=GPU bash ./ci/run.sh ~/results-ci/llama.cpp /mnt/llama.cpp
+
   ubuntu-cpu-cmake-riscv64-native:
     runs-on: RISCV64
 
