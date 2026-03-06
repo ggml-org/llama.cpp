@@ -11,6 +11,8 @@
 /common/base64.hpp.*                    @ggerganov
 /common/build-info.*                    @ggerganov
 /common/chat.*                          @pwilkin
+/common/chat-auto*.*                    @pwilkin
+/common/chat-diff-analyzer.*            @pwilkin
 /common/chat-peg-parser.*               @aldehir
 /common/common.*                        @ggerganov
 /common/console.*                       @ggerganov
@@ -89,12 +91,13 @@
 /src/llama-vocab.*                      @CISC
 /src/models/                            @CISC
 /tests/                                 @ggerganov
-/tests/test-chat-.*                     @pwilkin
+/tests/test-chat.*                      @pwilkin
 /tools/batched-bench/                   @ggerganov
 /tools/cli/                             @ngxson
 /tools/completion/                      @ggerganov
 /tools/mtmd/                            @ngxson
 /tools/perplexity/                      @ggerganov
+/tools/parser/                          @pwilkin
 /tools/quantize/                        @ggerganov
 /tools/rpc/                             @rgerganov
 /tools/server/*                         @ngxson @ggerganov # no subdir
