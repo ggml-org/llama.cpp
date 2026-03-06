@@ -475,6 +475,7 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
 }
 
 int main(int argc, char ** argv) {
+    // FIXME these tests are disabled in the CI for macOS-latest-cmake-arm64 because they are segfaulting
     common_init();
     std::random_device rd;
 
