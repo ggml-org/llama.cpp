@@ -31,6 +31,7 @@ add_library(${HTP_LIB} SHARED
     get-rows-ops.c
     cpy-ops.c
     argsort-ops.c
+    ssm-conv.c
 )
 
 target_compile_definitions(${HTP_LIB} PRIVATE
