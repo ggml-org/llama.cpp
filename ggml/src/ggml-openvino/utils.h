@@ -117,6 +117,8 @@ ov::Tensor create_ov_output_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
 
 bool is_naive(struct ggml_cgraph * cgraph);
 
+bool is_model_splitted(struct ggml_cgraph * cgraph);
+
 enum ggml_status naive_compute(struct ggml_cgraph * cgraph,
                                ov::Core & core,
                                const std::string & device,

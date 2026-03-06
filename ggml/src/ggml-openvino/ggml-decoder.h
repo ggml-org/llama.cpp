@@ -69,6 +69,7 @@ public:
                   std::map<std::string, std::shared_ptr<ov::Node>> & model_weights,
                   bool is_static,
                   bool is_stateful = false,
+                  bool model_is_splitted = false,
                   bool is_prefill = false,
                   int prefill_chunk_size = 256);
 
@@ -205,6 +206,7 @@ public:
     bool m_is_prefill = false;
     bool m_naive = false;
     int m_prefill_chunk_size = 0;
+    bool m_model_is_splitted = false; // label the cgraph is splited or not
 
     static ov::Shape get_shape(const ggml_tensor * tensor);
     static std::vector<size_t> get_stride(const ggml_tensor * tensor);
