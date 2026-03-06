@@ -2283,6 +2283,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
         case GGML_OP_MUL_MAT:
             {
                 switch (op->src[0]->type) {
+                    case GGML_TYPE_BF16:
                     case GGML_TYPE_F16:
                     case GGML_TYPE_F32:
                         return true;
@@ -2300,6 +2301,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
             }
         case GGML_OP_MUL_MAT_ID:
             switch (op->src[0]->type) {
+                case GGML_TYPE_BF16:
                 case GGML_TYPE_F16:
                 case GGML_TYPE_F32:
                     return true;
@@ -2320,6 +2322,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                 switch (op->src[0]->type) {
                     case GGML_TYPE_F32:
                     case GGML_TYPE_F16:
+                    case GGML_TYPE_BF16:
                     case GGML_TYPE_Q8_0:
                         return true;
                     default:
@@ -2332,6 +2335,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                 switch (op->type) {
                     case GGML_TYPE_F32:
                     case GGML_TYPE_F16:
+                    case GGML_TYPE_BF16:
                         return true;
                     default:
                         return false;
@@ -2341,9 +2345,9 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
         case GGML_OP_CPY:
             {
                 ggml_tensor * src = op->src[0];
-                if ((op->type != GGML_TYPE_F32 && op->type != GGML_TYPE_F16) ||
-                    (src->type != GGML_TYPE_F32 && src->type != GGML_TYPE_F16)) {
-                    // only support F32 and F16.
+                if ((op->type != GGML_TYPE_F32 && op->type != GGML_TYPE_F16 && op->type != GGML_TYPE_BF16) ||
+                    (src->type != GGML_TYPE_F32 && src->type != GGML_TYPE_F16 && src->type != GGML_TYPE_BF16)) {
+                    // only support F32, F16 and BF16.
                     return false;
                 }
                 return true;
@@ -2351,10 +2355,10 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
             break;
         case GGML_OP_CONT:
             {
-                // TODO: support GGML_TYPE_BF16
                 switch (op->src[0]->type) {
                     case GGML_TYPE_F32:
                     case GGML_TYPE_F16:
+                    case GGML_TYPE_BF16:
                         return true;
                     default:
                         return false;
@@ -2459,6 +2463,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                 return false;
 #endif
                 switch (op->src[0]->type) {
+                    case GGML_TYPE_BF16:
                     case GGML_TYPE_F16:
                     case GGML_TYPE_F32:
                         return true;
