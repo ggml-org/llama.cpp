@@ -58,6 +58,7 @@ static std::initializer_list<enum llama_example> mmproj_examples = {
     LLAMA_EXAMPLE_MTMD,
     LLAMA_EXAMPLE_SERVER,
     LLAMA_EXAMPLE_CLI,
+    LLAMA_EXAMPLE_LIQUID_AUDIO,
 };
 
 static std::string read_file(const std::string & fname) {
@@ -1352,7 +1353,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.system_prompt = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_DIFFUSION, LLAMA_EXAMPLE_MTMD}));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_DIFFUSION, LLAMA_EXAMPLE_MTMD, LLAMA_EXAMPLE_LIQUID_AUDIO}));
     add_opt(common_arg(
         {"--perf"},
         {"--no-perf"},
@@ -2172,7 +2173,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 params.image.emplace_back(item);
             }
         }
-    ).set_examples({LLAMA_EXAMPLE_MTMD, LLAMA_EXAMPLE_CLI}));
+    ).set_examples({LLAMA_EXAMPLE_MTMD, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_LIQUID_AUDIO}));
     add_opt(common_arg(
         {"--image-min-tokens"}, "N",
         "minimum number of tokens each image can take, only used by vision models with dynamic resolution (default: read from model)",
@@ -2666,7 +2667,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.out_file = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_CVECTOR_GENERATOR, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_FINETUNE}));
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_CVECTOR_GENERATOR, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_FINETUNE, LLAMA_EXAMPLE_LIQUID_AUDIO}));
     add_opt(common_arg(
         {"-ofreq", "--output-frequency"}, "N",
         string_format("output the imatrix every N iterations (default: %d)", params.n_out_freq),
@@ -2798,14 +2799,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.hostname = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_HOST"));
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_LIQUID_AUDIO}).set_env("LLAMA_ARG_HOST"));
     add_opt(common_arg(
         {"--port"}, "PORT",
         string_format("port to listen (default: %d)", params.port),
         [](common_params & params, int value) {
             params.port = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_PORT"));
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_LIQUID_AUDIO}).set_env("LLAMA_ARG_PORT"));
     add_opt(common_arg(
         {"--path"}, "PATH",
         string_format("path to serve static files from (default: %s)", params.public_path.c_str()),
@@ -3512,7 +3513,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.vocoder.model.path = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_SERVER}));
+    ).set_examples({LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_LIQUID_AUDIO}));
      add_opt(common_arg(
         {"--tts-use-guide-tokens"},
         "Use guide tokens to improve TTS word recall",
@@ -3526,7 +3527,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.vocoder.speaker_file = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_TTS}));
+    ).set_examples({LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_LIQUID_AUDIO}));
 
     add_opt(common_arg(
         {"--diffusion-steps"}, "N",

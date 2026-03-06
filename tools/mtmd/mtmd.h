@@ -99,6 +99,11 @@ struct mtmd_context_params {
     // callback function passed over to mtmd proper
     ggml_backend_sched_eval_callback cb_eval;
     void * cb_eval_user_data;
+
+    // audio output parameters (for TTS models like LFM2.5-Audio)
+    const char * vocoder_path;      // path to vocoder model (enables audio output if set)
+    const char * tokenizer_path;    // path to audio tokenizer model (for LFM2.5)
+
 };
 
 MTMD_API const char * mtmd_default_marker(void);
@@ -235,6 +240,45 @@ MTMD_API void mtmd_log_set(ggml_log_callback log_callback, void * user_data);
 
 // test function, to be used in test-mtmd-c-api.c
 MTMD_API mtmd_input_chunks * mtmd_test_create_input_chunks(void);
+
+//
+// Audio output API
+//
+enum mtmd_output_modality {
+    MTMD_OUTPUT_MODALITY_TEXT,
+    MTMD_OUTPUT_MODALITY_AUDIO,
+    MTMD_OUTPUT_MODALITY_END,
+};
+
+// check if audio output is supported
+MTMD_API bool mtmd_support_audio_output(mtmd_context * ctx);
+
+// returns 0 if audio output is not supported
+MTMD_API int mtmd_audio_output_get_sample_rate(mtmd_context * ctx);
+
+// decode audio frame
+MTMD_API int mtmd_audio_output_decode(mtmd_context * ctx,
+                                      const float *  embedding,
+                                      size_t         n_embd,
+                                      float *        out_embedding);
+
+// get current output modality
+MTMD_API mtmd_output_modality mtmd_get_output_modality(mtmd_context * ctx);
+
+// get num of audio samples available after last decode
+MTMD_API int mtmd_get_n_audio_samples(mtmd_context * ctx);
+
+// retrieve audio samples after last decode
+MTMD_API int mtmd_get_audio_samples(mtmd_context * ctx, int16_t * samples);
+
+// accept text token, can switch modality
+MTMD_API void mtmd_audio_output_accept_token(mtmd_context * ctx, llama_token id);
+
+// set output modalities sequence for generation
+MTMD_API void mtmd_set_output_modalities(mtmd_context * ctx, const mtmd_output_modality * ptr, size_t len);
+
+// notify about new turn start, has to be called after modalities are set
+MTMD_API void mtmd_audio_output_start_new_turn(mtmd_context * ctx);
 
 #ifdef __cplusplus
 } // extern "C"

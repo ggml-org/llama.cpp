@@ -51,6 +51,7 @@ struct task_params {
     bool cache_prompt    = true; // remember the prompt to avoid reprocessing all prompt
     bool return_tokens   = false;
     bool return_progress = false;
+    bool continue_slot   = false; // continue from existing slot state, append tokens instead of replacing
 
     int32_t n_keep    =  0; // number of tokens to keep from initial prompt
     int32_t n_discard =  0; // number of tokens after n_keep that may be discarded when shifting context, 0 defaults to half
@@ -85,6 +86,10 @@ struct task_params {
 
     // Embeddings
     int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)
+
+    // output modalities (from modalities: ["text"], ["audio"], or ["text", "audio"])
+    bool has_out_audio = false;
+    bool has_out_text  = true;  // default to text
 
     json format_logit_bias(const std::vector<llama_logit_bias> & logit_bias) const;
     json to_json(bool only_metrics = false) const;
@@ -320,6 +325,10 @@ struct completion_token_output {
     };
     std::vector<prob_info> probs;
 
+    // audio output
+    std::vector<int16_t> audio_samples;
+    int audio_sample_rate = 0;
+
     json to_json(bool post_sampling_probs) const;
 
     static json probs_vector_to_json(const std::vector<completion_token_output> & probs, bool post_sampling_probs);
@@ -433,6 +442,10 @@ struct server_task_result_cmpl_partial : server_task_result {
 
     // for Anthropic API: track if any reasoning content has been generated
     bool anthropic_has_reasoning = false;
+
+    // Audio output
+    std::vector<int16_t> audio_out;
+    int audio_out_sample_rate = 0;
 
     virtual bool is_stop() override {
         return false; // in stream mode, partial responses are not considered stop
