@@ -2,6 +2,7 @@
 #include "common.h"
 #include "log.h"
 #include "llama.h"
+#include "../src/llama-ext.h"
 #include "ggml.h"
 
 #include <array>
