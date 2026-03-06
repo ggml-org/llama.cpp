@@ -12009,7 +12009,7 @@ static void ggml_cl_cumsum(ggml_backend_t backend, const ggml_tensor * src0, con
     const cl_ulong nbt1 = net0*nbt0;
     const cl_ulong nbt2 = net1*nbt1;
     const cl_ulong nbt3 = net2*nbt2;
-    
+
     static ggml_cl_buffer tmp_buffer;
     tmp_buffer.allocate(backend_ctx->context, net0*ne01*ne02*ne03*sizeof(float));
 
@@ -12034,7 +12034,7 @@ static void ggml_cl_cumsum(ggml_backend_t backend, const ggml_tensor * src0, con
     size_t local_work_size[] = { (size_t)nth, 1, 1};
 
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
-    
+
     if(ne00 > nth){
         cl_ulong offsett = 0;
         CL_CHECK(clSetKernelArg(kernel,   0, sizeof(cl_mem),   &tmp_buffer.buffer));
@@ -12057,7 +12057,7 @@ static void ggml_cl_cumsum(ggml_backend_t backend, const ggml_tensor * src0, con
         backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 
         kernel = backend_ctx->kernel_cumsum_add;
-        
+
         CL_CHECK(clSetKernelArg(kernel,   0, sizeof(cl_mem),   &tmp_buffer.buffer));
         CL_CHECK(clSetKernelArg(kernel,   1, sizeof(cl_mem),   &extrad->data_device));
         CL_CHECK(clSetKernelArg(kernel,   2, sizeof(cl_ulong), &offsetd));

@@ -132,7 +132,7 @@ kernel void kernel_cumsum_add(
 
     global float * tmp_row  = (global float *)(tmp + nbt1 * i01 + nbt2 * i02 + nbt3 * i03);
     global float * dst_row  = (global float *)dst + i03*ne02*ne01*ne00 + i02*ne01*ne00 + i01*ne00;
-    
+
     if (i00 + tid < ne00) {
         dst_row[i00 + tid] += tmp_row[ib - 1];
     }
