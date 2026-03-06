@@ -36,10 +36,13 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <queue>
+#include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #define GGML_COMMON_DECL_C
 
@@ -770,6 +773,21 @@ std::unique_ptr<ggml_cann_pool> ggml_backend_cann_context::new_pool_for_device(i
 }
 
 // cann buffer
+
+/**
+ * @brief Tracks multi-threaded write progress for a single tensor.
+ *
+ * When multiple threads call set_tensor on different chunks of the same tensor,
+ * this tracker accumulates progress and defers post-processing (quantized format
+ * transform or ND-to-NZ conversion) until all data has been written.
+ */
+struct TensorSetTracker {
+    std::mutex mtx;                   ///< Protects concurrent access to this tracker
+    size_t bytes_written = 0;         ///< Accumulated bytes written so far
+    size_t total_bytes = 0;           ///< Target size (full tensor)
+    std::vector<uint8_t> host_buffer; ///< Host staging buffer for quantized tensors
+};
+
 /**
  * @brief Context for managing a CANN buffer associated with a specific device.
  *
@@ -779,6 +797,9 @@ std::unique_ptr<ggml_cann_pool> ggml_backend_cann_context::new_pool_for_device(i
 struct ggml_backend_cann_buffer_context {
     int32_t device;             ///< The device ID associated with this buffer context.
     void *  dev_ptr = nullptr;  ///< Pointer to the device memory allocated for the buffer.
+
+    std::mutex tracker_mutex;   ///< Protects the trackers map
+    std::unordered_map<void *, std::unique_ptr<TensorSetTracker>> trackers;
 
     /**
      * @brief Constructor to initialize the CANN buffer context.
@@ -792,6 +813,31 @@ struct ggml_backend_cann_buffer_context {
      * @brief Destructor to free the device memory allocated for the buffer.
      */
     ~ggml_backend_cann_buffer_context() { ACL_CHECK(aclrtFree(dev_ptr)); }
+
+    /**
+     * @brief Get or create a tracker for the given tensor.
+     */
+    TensorSetTracker * get_or_create_tracker(ggml_tensor * tensor) {
+        std::lock_guard<std::mutex> lock(tracker_mutex);
+        auto key = tensor->data;
+        auto it = trackers.find(key);
+        if (it == trackers.end()) {
+            auto tracker = std::make_unique<TensorSetTracker>();
+            tracker->total_bytes = ggml_nbytes(tensor);
+            auto * ptr = tracker.get();
+            trackers[key] = std::move(tracker);
+            return ptr;
+        }
+        return it->second.get();
+    }
+
+    /**
+     * @brief Remove the tracker for the given tensor.
+     */
+    void remove_tracker(ggml_tensor * tensor) {
+        std::lock_guard<std::mutex> lock(tracker_mutex);
+        trackers.erase(tensor->data);
+    }
 };
 
 // cann buffer type
@@ -1124,6 +1170,7 @@ static enum ggml_status ggml_backend_cann_buffer_init_tensor(ggml_backend_buffer
  * designed to be used with a global array, one per device.
  */
 struct ggml_cann_nz_workspace {
+    std::mutex mtx;    // Protects ptr/allocated from concurrent access
     void * ptr;        // Pointer to allocated device buffer
     size_t allocated;  // Size of currently allocated buffer in bytes
 
@@ -1190,13 +1237,15 @@ static ggml_cann_nz_workspace g_nz_workspaces[GGML_CANN_MAX_DEVICES];
  * @note The workspace buffer used in this function is managed globally and reused
  *       across calls. This reduces overhead from repeated memory allocation and deallocation.
  */
-static void weight_format_to_nz(ggml_tensor * tensor, size_t offset, int device) {
-    acl_tensor_ptr weightTransposed = ggml_cann_create_tensor(tensor, tensor->ne, tensor->nb, 2, ACL_FORMAT_ND, offset);
+static void weight_format_to_nz(ggml_tensor * tensor, int device) {
+    acl_tensor_ptr weightTransposed = ggml_cann_create_tensor(tensor, tensor->ne, tensor->nb, 2, ACL_FORMAT_ND, 0);
     uint64_t       workspaceSize    = 0;
     aclOpExecutor * executor;
 
     // TransMatmulWeight
     ACL_CHECK(aclnnTransMatmulWeightGetWorkspaceSize(weightTransposed.get(), &workspaceSize, &executor));
+
+    std::lock_guard<std::mutex> lock(g_nz_workspaces[device].mtx);
     // Avoid frequent malloc/free of the workspace.
     g_nz_workspaces[device].realloc(workspaceSize);
 
@@ -1210,7 +1259,13 @@ static void weight_format_to_nz(ggml_tensor * tensor, size_t offset, int device)
  * @brief Set tensor data in a CANN buffer.
  *
  * This function sets tensor data in a CANN buffer, handling transformations
- * if needed based on the tensor's type.
+ * if needed based on the tensor's type. It supports multi-threaded calls
+ * where different threads write different chunks of the same tensor.
+ *
+ * For quantized tensors (Q4_0/Q8_0), data is staged in a host buffer and
+ * the format transform is deferred until all chunks are written.
+ * For NZ weight tensors, chunks are uploaded directly but the ND-to-NZ
+ * conversion is deferred until all chunks are written.
  *
  * @param buffer The CANN buffer where the tensor data will be set.
  * @param tensor Pointer to the tensor whose data will be set.
@@ -1226,25 +1281,71 @@ static void ggml_backend_cann_buffer_set_tensor(ggml_backend_buffer_t buffer,
     ggml_backend_cann_buffer_context * ctx = (ggml_backend_cann_buffer_context *) buffer->context;
 
     ggml_cann_set_device(ctx->device);
-    // TODO: refer to cann(#6017), it use thread's default stream.
-    // For acl, synchronous functions use this default stream.
-    // Why aclrtSynchronizeDevice?
 
     // Only check env once.
     static bool weight_to_nz = parse_bool(get_env_as_lowercase("GGML_CANN_WEIGHT_NZ").value_or("on"));
-    if (!need_transform(tensor->type)) {
+
+    bool is_quantized = need_transform(tensor->type);
+    bool is_nz = !is_quantized && weight_to_nz && is_matmul_weight((const ggml_tensor *) tensor);
+
+    // Plain tensor (not quantized, not NZ): direct copy, no tracking needed
+    if (!is_quantized && !is_nz) {
         ACL_CHECK(aclrtMemcpy((char *) tensor->data + offset, size, data, size, ACL_MEMCPY_HOST_TO_DEVICE));
-        if (weight_to_nz && is_matmul_weight((const ggml_tensor *) tensor)) {
+        return;
+    }
+
+    // Single-shot write (full tensor at once): handle directly without tracking overhead
+    if (offset == 0 && size == ggml_nbytes(tensor)) {
+        if (is_quantized) {
+            void * transform_buffer = malloc(size);
+            ggml_backend_cann_transform(tensor, data, transform_buffer);
+            ACL_CHECK(aclrtMemcpy(tensor->data, size, transform_buffer, size, ACL_MEMCPY_HOST_TO_DEVICE));
+            free(transform_buffer);
+        } else {
+            // NZ weight
             GGML_ASSERT(tensor->ne[2] == 1);
             GGML_ASSERT(tensor->ne[3] == 1);
-            weight_format_to_nz(tensor, offset, ctx->device);
+            ACL_CHECK(aclrtMemcpy(tensor->data, size, data, size, ACL_MEMCPY_HOST_TO_DEVICE));
+            weight_format_to_nz(tensor, ctx->device);
         }
-    } else {
-        void * transform_buffer = malloc(size);
-        ggml_backend_cann_transform(tensor, data, transform_buffer);
+        return;
+    }
 
-        ACL_CHECK(aclrtMemcpy((char *) tensor->data + offset, size, transform_buffer, size, ACL_MEMCPY_HOST_TO_DEVICE));
-        free(transform_buffer);
+    // Chunked write: use tracker to accumulate progress and defer transform/conversion
+    TensorSetTracker * tracker = ctx->get_or_create_tracker(tensor);
+    std::unique_lock<std::mutex> lock(tracker->mtx);
+
+    if (is_quantized) {
+        // Stage data in host buffer; transform requires full tensor data
+        if (tracker->host_buffer.empty()) {
+            tracker->host_buffer.resize(tracker->total_bytes);
+        }
+        memcpy(tracker->host_buffer.data() + offset, data, size);
+    } else {
+        // NZ weight: upload chunk to device immediately, defer conversion
+        ACL_CHECK(aclrtMemcpy((char *) tensor->data + offset, size, data, size, ACL_MEMCPY_HOST_TO_DEVICE));
+    }
+
+    tracker->bytes_written += size;
+
+    // All chunks received: perform deferred transform/conversion
+    if (tracker->bytes_written >= tracker->total_bytes) {
+        if (is_quantized) {
+            void * transform_buffer = malloc(tracker->total_bytes);
+            ggml_backend_cann_transform(tensor, tracker->host_buffer.data(), transform_buffer);
+            ACL_CHECK(aclrtMemcpy(tensor->data, tracker->total_bytes, transform_buffer, tracker->total_bytes, ACL_MEMCPY_HOST_TO_DEVICE));
+            free(transform_buffer);
+        }
+
+        if (is_nz) {
+            GGML_ASSERT(tensor->ne[2] == 1);
+            GGML_ASSERT(tensor->ne[3] == 1);
+            weight_format_to_nz(tensor, ctx->device);
+        }
+
+        // Unlock before removing tracker, as remove_tracker destroys the mutex
+        lock.unlock();
+        ctx->remove_tracker(tensor);
     }
 }
 
