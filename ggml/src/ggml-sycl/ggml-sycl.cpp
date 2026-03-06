@@ -807,10 +807,13 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
             // cached in SOA layout with proper AOS→SOA reordering.
             ggml_sycl_reorder_fill_ctx reorder_ctx{};
 
-            // Limit static Phase 2 uploads: demand-driven LRU prefetch handles
-            // the rest. Default 256 experts (warm-start with most popular).
+            // Default: fill all available secondary GPU VRAM with experts.
             // Override via GGML_SYCL_PHASE2_MAX_UPLOAD env var.
-            size_t max_phase2_upload = 256;
+            size_t total_secondary_slots = 0;
+            for (const auto & b : budgets) {
+                total_secondary_slots += b.n_slots;
+            }
+            size_t max_phase2_upload = total_secondary_slots;
             const char * phase2_env = std::getenv("GGML_SYCL_PHASE2_MAX_UPLOAD");
             if (phase2_env) {
                 int val = std::atoi(phase2_env);
@@ -26116,9 +26119,15 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             // is incompatible with SYCL graph recording.
             ctx.moe_graphs_disabled_once = true;
 
-            // Flush any deferred scatter from the previous MUL_MAT_ID
+            // Flush any deferred CPU scatter from the previous MUL_MAT_ID
             flush_pending_cpu_scatter();
-            flush_pending_secondary_scatter();
+            // Only flush secondary scatter if ring buffers are full.
+            // This allows inter-layer pipelining: layer N+1's B50 dispatch
+            // can start while layer N's results are still being scattered.
+            if (g_pending_secondary_scatter.active
+                && g_pending_secondary_scatter.entries.size() >= MERGE_RING_SIZE) {
+                flush_pending_secondary_scatter();
+            }
 
             // Declare expert dispatch entry struct and partition vectors
             // before the CPU-TG / hybrid branch point so both paths share them.
@@ -26140,6 +26149,34 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
             const int64_t K = ne00;  // input dimension (columns)
             const int64_t N = ne01;  // output rows per expert
+
+            // ---------------------------------------------------------------
+            // Shared activation D2H: for batch=1 TG, all experts in a layer
+            // share the same src1 activation. Copy once to host-pinned staging,
+            // shared between CPU dispatch and secondary GPU dispatch.
+            // Use sycl::event capture instead of stream->wait() so B580's
+            // compute pipeline continues executing during the D2H transfer.
+            // ---------------------------------------------------------------
+            float *     shared_act_host = nullptr;
+            sycl::event act_d2h_event;
+            bool        act_on_host = false;
+
+            const bool multi_gpu = g_moe_multi_gpu_active.load(std::memory_order_acquire);
+            if (ne11 == 1 && (cpu_expert_tg_active || multi_gpu)) {
+                static thread_local float * s_act_staging    = nullptr;
+                static thread_local size_t  s_act_staging_sz = 0;
+                const size_t needed = static_cast<size_t>(K) * sizeof(float);
+                if (!s_act_staging || needed > s_act_staging_sz) {
+                    if (s_act_staging) { sycl::free(s_act_staging, stream->get_context()); }
+                    s_act_staging    = sycl::malloc_host<float>(K, stream->get_context());
+                    s_act_staging_sz = needed;
+                }
+                if (s_act_staging) {
+                    shared_act_host = s_act_staging;
+                    act_d2h_event   = stream->memcpy(shared_act_host, src1_original, needed);
+                    act_on_host     = true;
+                }
+            }
 
             // Shared CPU expert dispatch helper: alloc pinned buffers, D2H
             // activations, build tasks, submit to CPU pool, wait, scatter
@@ -26189,13 +26226,22 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 }
 
                 // D2H copy activations for each expert dispatch.
-                // Optimization: when cpu_expert_tg_active (batch=1), all experts
-                // use the same src1 row (ne12==1). Copy once and share the pointer
-                // so batched dispatch auto-deduplicates Q8_0 quantization.
-                if (cpu_expert_tg_active && n_cpu > 1) {
+                // Optimization: when act_on_host (batch=1), use the shared
+                // activation D2H with event-level wait instead of stream->wait()
+                // to avoid draining the B580 compute pipeline.
+                if (act_on_host && cpu_expert_tg_active) {
+                    // Use shared activation — wait only for the D2H event
+                    act_d2h_event.wait();
+                    // Point act_pinned at the shared staging buffer.
+                    // All CPU tasks will read from here; batched dispatch
+                    // auto-deduplicates Q8_0 quantization via pointer equality.
+                    std::memcpy(act_pinned, shared_act_host,
+                                static_cast<size_t>(K) * sizeof(float));
+                } else if (cpu_expert_tg_active && n_cpu > 1) {
                     // Single D2H: all experts share the same activation at offset 0
                     stream->memcpy(act_pinned, src1_original,
                                    static_cast<size_t>(K) * sizeof(float));
+                    stream->wait();
                 } else {
                     for (size_t ci = 0; ci < n_cpu; ci++) {
                         const auto &  entry    = entries[ci];
@@ -26206,8 +26252,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         stream->memcpy(dst_host, src1_dev,
                                        static_cast<size_t>(K) * sizeof(float));
                     }
+                    stream->wait();
                 }
-                stream->wait();
 
                 // Build CPU tasks from mmap host weight pointers.
                 // Tasks are stored in g_pending_scatter to keep the array
@@ -26461,15 +26507,25 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     const size_t chunk_end = std::min(chunk_start + MERGE_RING_SIZE, n_gpu);
                     const size_t chunk_sz  = chunk_end - chunk_start;
 
-                    // Phase 1: D2H activation copies on primary queue.
-                    // Batch=1: single copy to slot 0 (all experts share same activation).
-                    // Batch>1: each expert gets its own act_staging slot.
-                    if (batch1) {
+                    // Phase 1+2: Get activation data to host for secondary GPU.
+                    //
+                    // Batch=1 with shared activation: use the pre-copied shared_act_host
+                    // with event-level wait (NOT stream->wait!) so B580's compute pipeline
+                    // continues executing. This is THE key optimization: stream->wait()
+                    // was draining all pending B580 work, creating a full pipeline stall.
+                    //
+                    // Batch>1: per-expert D2H via act_staging slots + stream->wait().
+                    if (act_on_host && batch1) {
+                        // Event wait: blocks host ONLY until the D2H memcpy completes.
+                        // B580 compute kernels submitted before the memcpy keep running.
+                        act_d2h_event.wait();
+                    } else if (batch1) {
                         const auto &  entry    = entries[gpu_indices[chunk_start]];
                         const int64_t i11      = entry.id % ne11;
                         const int64_t i12      = entry.iid1;
                         const char *  src1_dev = src1_original + i11 * nb11 + i12 * nb12;
                         stream->memcpy(act_staging[0], src1_dev, needed_act);
+                        stream->wait();
                     } else {
                         for (size_t ci = 0; ci < chunk_sz; ci++) {
                             const auto &  entry    = entries[gpu_indices[chunk_start + ci]];
@@ -26479,17 +26535,17 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                             const char *  src1_dev = src1_original + i11 * nb11 + i12 * nb12;
                             stream->memcpy(act_staging[slot], src1_dev, needed_act);
                         }
+                        stream->wait();
                     }
 
-                    // Phase 2: Single primary queue drain — all activations now on host.
-                    // In-order stream guarantees all memcpys complete in submission order.
-                    stream->wait();
-
                     // Phase 3: Quantize + GEMM kernels on secondary queue.
-                    // Batch=1: quantize once into dev_q8_1[0], reuse for all GEMMs.
-                    // Batch>1: per-slot quantize + GEMM as before.
+                    // Batch=1 with shared act: quantize from shared_act_host (malloc_host,
+                    // B50 reads via PCIe zero-copy). Otherwise: from act_staging[slot].
                     if (batch1) {
-                        mmvq_submit_quantize_q8_1_soa(*target_queue, act_staging[0], dev_q8_1[0],
+                        const float * q_src = (act_on_host && shared_act_host)
+                                                  ? shared_act_host
+                                                  : act_staging[0];
+                        mmvq_submit_quantize_q8_1_soa(*target_queue, q_src, dev_q8_1[0],
                                                       static_cast<int>(K));
                     }
                     for (size_t ci = 0; ci < chunk_sz; ci++) {
@@ -26889,13 +26945,11 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
             }  // end else (standard hybrid path -- CPU-TG path skips to here)
 
-            // ----- CPU path: dispatch cache-miss experts via shared helper -----
-            dispatch_cpu_and_scatter(cpu_entries);
-
-            // ----- Secondary GPU path (async): submit kernels on B50, defer scatter -----
-            // Submit BEFORE GPU0 dispatch so B50 compute overlaps with B580 compute.
-            // D2H activation + quantize + GEMM + D2H results are submitted fire-and-forget;
-            // scatter (wait + H2D to primary dst) is deferred to after GPU0 finishes.
+            // ----- Secondary GPU path (async): submit kernels FIRST for overlap -----
+            // Submit B50 kernels BEFORE GPU0 dispatch so both GPUs compute in
+            // parallel. With shared activation D2H (event wait, not stream->wait),
+            // B580's pipeline is NOT drained — only the D2H memcpy is awaited.
+            // D2H results are deferred to flush_pending_secondary_scatter().
             if (g_moe_multi_gpu_active.load(std::memory_order_acquire)) {
                 for (int d = 1; d < n_gpu_devs; d++) {
                     if (!per_gpu_entries[d].empty()) {
@@ -26905,10 +26959,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             }
 
             // ----- GPU0 path (B580): batched MMVQ dispatch -----
-            // Instead of calling ggml_sycl_mul_mat() per expert (N kernel
-            // submissions for top-K), dispatch a single batched MMVQ kernel.
+            // Runs IN PARALLEL with B50 secondary GPU compute submitted above.
             // Q8_1 quantization of src1 runs once and is shared.
-            // Runs in parallel with B50 secondary GPU compute submitted above.
             if (!gpu_entries.empty()) {
                 // Build arrays for batched dispatch
                 std::vector<int32_t> gpu_expert_ids(gpu_entries.size());
@@ -26960,9 +27012,14 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 }
             }
 
+            // ----- CPU path: dispatch cache-miss experts via shared helper -----
+            // Placed AFTER GPU0 dispatch: CPU tasks don't compete for GPU queues,
+            // and the shared activation is already on host from the event wait.
+            dispatch_cpu_and_scatter(cpu_entries);
+
             // ----- Flush deferred secondary GPU scatter -----
             // Wait for B50 compute to finish, then scatter results to primary dst.
-            // GPU0 dispatch above ran in parallel with B50, maximizing overlap.
+            // GPU0 + CPU dispatch ran in parallel with B50, maximizing overlap.
             flush_pending_secondary_scatter();
 
             // --- Record actual expert selections (T6 + T7 integration) ---
