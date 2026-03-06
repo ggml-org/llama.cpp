@@ -20,6 +20,7 @@
  */
 
 import { browser } from '$app/environment';
+import { base } from '$app/paths';
 import { MCPService } from '$lib/services/mcp.service';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { mcpResourceStore } from '$lib/stores/mcp-resources.svelte';
@@ -42,6 +43,7 @@ import {
 	ToolCallType
 } from '$lib/enums';
 import {
+	CORS_PROXY_ENDPOINT,
 	DEFAULT_CACHE_TTL_MS,
 	DEFAULT_MCP_CONFIG,
 	EXPECTED_THEMED_ICON_PAIR_COUNT,
@@ -93,6 +95,29 @@ class MCPStore {
 	private configSignature: string | null = null;
 	private initPromise: Promise<boolean> | null = null;
 	private activeFlowCount = 0;
+
+	constructor() {
+		if (browser) {
+			this.probeProxy();
+		}
+	}
+
+	/**
+	 * Probes the CORS proxy endpoint to determine availability.
+	 * The endpoint is only registered when llama-server runs with --webui-mcp-proxy.
+	 */
+	async probeProxy(): Promise<void> {
+		try {
+			const response = await fetch(`${base}${CORS_PROXY_ENDPOINT}`, { method: 'HEAD' });
+			this._proxyAvailable = response.status !== 404;
+		} catch {
+			this._proxyAvailable = false;
+		}
+	}
+
+	get isProxyAvailable(): boolean {
+		return this._proxyAvailable;
+	}
 
 	/**
 	 * Generates a unique server ID from an optional ID string or index.
@@ -368,6 +393,7 @@ class MCPStore {
 
 	getServerLabel(server: MCPServerSettingsEntry): string {
 		const healthState = this.getHealthCheckState(server.id);
+
 		if (healthState?.status === HealthCheckStatus.SUCCESS)
 			return (
 				healthState.serverInfo?.title || healthState.serverInfo?.name || server.name || server.url
@@ -451,6 +477,7 @@ class MCPStore {
 	 */
 	#proxyIconSrc(src: string): string {
 		if (src.startsWith('data:')) return src;
+		if (!this._proxyAvailable) return src;
 
 		return getProxiedUrlString(src);
 	}
@@ -477,7 +504,7 @@ class MCPStore {
 			}
 		}
 
-		return getFaviconUrl(server.url);
+		return getFaviconUrl(server.url, this._proxyAvailable);
 	}
 
 	isAnyServerLoading(): boolean {
@@ -1920,6 +1947,7 @@ export const mcpIsInitializing = () => mcpStore.isInitializing;
 export const mcpIsInitialized = () => mcpStore.isInitialized;
 export const mcpError = () => mcpStore.error;
 export const mcpIsEnabled = () => mcpStore.isEnabled;
+export const mcpIsProxyAvailable = () => mcpStore.isProxyAvailable;
 export const mcpAvailableTools = () => mcpStore.availableTools;
 export const mcpConnectedServerCount = () => mcpStore.connectedServerCount;
 export const mcpConnectedServerNames = () => mcpStore.connectedServerNames;
