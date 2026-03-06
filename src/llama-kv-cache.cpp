@@ -583,7 +583,7 @@ llama_kv_cache::slot_info_vec_t llama_kv_cache::prepare(const std::vector<llama_
             break;
         }
 
-        // remeber the position that we found
+        // remember the position that we found
         res.push_back(sinfo_new);
 
         // store the old state of the cells in the recovery stack
@@ -1293,7 +1293,7 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, float * 
     }
 
     for (uint32_t s = 0; s < n_stream; ++s) {
-        // bookeeping of the KQ mask cells that could change for other tokens of the same sequence
+        // bookkeeping of the KQ mask cells that could change for other tokens of the same sequence
         std::unordered_map<llama_seq_id, uint32_t>              seq_srct;
         std::unordered_map<llama_seq_id, std::vector<uint32_t>> seq_idxs;
 

@@ -4,8 +4,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { FILE_TYPE_ICONS } from '$lib/constants/icons';
-	import { TOOLTIP_DELAY_DURATION } from '$lib/constants/tooltip-config';
+	import { FILE_TYPE_ICONS, TOOLTIP_DELAY_DURATION } from '$lib/constants';
 
 	interface Props {
 		class?: string;
