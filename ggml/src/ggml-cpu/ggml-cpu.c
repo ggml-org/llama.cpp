@@ -72,6 +72,17 @@
 #define UNUSED GGML_UNUSED
 #define SWAP(x, y, T) do { T SWAP = x; (x) = y; (y) = SWAP; } while (0)
 
+// software prefetch hint: schedules a cache line load without stalling
+// locality: 0 = no temporal locality (NTA), 3 = high temporal locality (all cache levels)
+#if defined(__clang__) || defined(__GNUC__)
+#define GGML_PREFETCH(addr, locality) __builtin_prefetch((addr), 0, (locality))
+#elif defined(_MSC_VER)
+#include <intrin.h>
+#define GGML_PREFETCH(addr, locality) _mm_prefetch((const char *)(addr), (locality))
+#else
+#define GGML_PREFETCH(addr, locality) ((void)(addr), (void)(locality))
+#endif
+
 // precomputed f32 table for f16 (256 KB) (simd-mappings.h)
 float ggml_table_f32_f16[1 << 16];
 
@@ -1483,6 +1494,15 @@ static void ggml_compute_forward_mul_mat_id_one_chunk(
                 float * dst_col = (float *) ((char *) dst->data + (i1*nb1 + i2*nb2));
 
                 for (int64_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ++ir0) {
+                    // prefetch the next block of weight rows to hide DRAM latency
+                    // this overlaps memory access with the current vec_dot computation
+                    if (ir0 + 1 < iir0 + blck_0 && ir0 + 1 < ir0_end) {
+                        GGML_PREFETCH(src0_cur + (ir0 + 1)*nb01, 0);
+                    } else if (iir0 + blck_0 < ir0_end) {
+                        // prefetch first row of next block
+                        GGML_PREFETCH(src0_cur + (iir0 + blck_0)*nb01, 0);
+                    }
+
                     vec_dot(ne00, &tmp[ir0 - iir0], 0, src0_cur + ir0*nb01, 0, src1_col, 0, 1);
                 }
 
@@ -1623,6 +1643,21 @@ static void ggml_compute_forward_mul_mat_id(
         const char * src0_cur = (const char *) src0->data + cur_a * nb02;
         const void * wdata = (src1->type == vec_dot_type) ? src1->data : params->wdata;
         const size_t row_size = ggml_row_size(vec_dot_type, ne10);
+
+        // prefetch the next active expert's weight rows to overlap DRAM access
+        // with the current expert's computation (MoE decode optimization)
+        if (ith == 0) {
+            for (int next_a = cur_a + 1; next_a < n_as; ++next_a) {
+                if (matrix_row_counts[next_a] > 0) {
+                    const char * src0_next = (const char *) src0->data + next_a * nb02;
+                    // prefetch first few cache lines of next expert's weight matrix
+                    for (int64_t pf = 0; pf < MIN(ne01, 4); ++pf) {
+                        GGML_PREFETCH(src0_next + pf * nb01, 0);
+                    }
+                    break;
+                }
+            }
+        }
 
         const int64_t nr0 = ne01;
         const int64_t nr1 = cne1;
