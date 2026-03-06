@@ -1,222 +1,31 @@
-#define(VARIANTS)
+enable f16;
+#include "common_decls.tmpl"
 
-[
-  {
-    "SHADER_SUFFIX": "f32_vec",
-    "REPLS": {
-      "TYPE" : "vec4<f32>",
-      "DST_TYPE": "vec4<f32>",
-      "BLOCK_SIZE": 4
-    },
-    "DECLS": ["F32_VEC"]
-  },
-  {
-    "REPLS": {
-      "TYPE" : "f32",
-      "DST_TYPE": "f32",
-      "BLOCK_SIZE": 1
-    },
-    "DECLS": ["F32"]
-  },
-  {
-    "REPLS": {
-      "TYPE" : "f16",
-      "DST_TYPE": "f32",
-      "BLOCK_SIZE": 1
-    },
-    "DECLS": ["F16"]
-  },
-  {
-    "REPLS": {
-      "TYPE" : "i32",
-      "DST_TYPE": "i32",
-      "BLOCK_SIZE": 1
-    },
-    "DECLS": ["I32"]
-  },
-  {
-    "REPLS": {
-      "TYPE" : "q4_0",
-      "DST_TYPE": "f32",
-      "BLOCK_SIZE": 32
-    },
-    "DECLS": ["BYTE_HELPERS", "Q4_0_T", "Q4_0"]
-  },
-  {
-    "REPLS": {
-      "TYPE" : "q4_1",
-      "DST_TYPE": "f32",
-      "BLOCK_SIZE": 32
-    },
-    "DECLS": ["BYTE_HELPERS", "Q4_1_T", "Q4_1"]
-  },
-  {
-    "REPLS": {
-      "TYPE" : "q5_0",
-      "DST_TYPE": "f32",
-      "BLOCK_SIZE": 32
-    },
-    "DECLS": ["BYTE_HELPERS", "Q5_0_T", "Q5_0"]
-  },
-  {
-    "REPLS": {
-      "TYPE" : "q5_1",
-      "DST_TYPE": "f32",
-      "BLOCK_SIZE": 32
-    },
-    "DECLS": ["BYTE_HELPERS", "Q5_1_T", "Q5_1"]
-  },
-  {
-    "REPLS": {
-      "TYPE" : "q8_0",
-      "DST_TYPE": "f32",
-      "BLOCK_SIZE": 32
-    },
-    "DECLS": ["BYTE_HELPERS", "Q8_0_T", "Q8_0"]
-  },
-  {
-    "REPLS": {
-      "TYPE" : "q2_k",
-      "DST_TYPE": "f32",
-      "BLOCK_SIZE": 256
-    },
-    "DECLS": ["BYTE_HELPERS", "Q2_K_T", "Q2_K"]
-  },
-  {
-    "REPLS": {
-      "TYPE" : "q3_k",
-      "DST_TYPE": "f32",
-      "BLOCK_SIZE": 256
-    },
-    "DECLS": ["BYTE_HELPERS", "Q3_K_T", "Q3_K"]
-  },
-  {
-    "REPLS": {
-      "TYPE" : "q4_k",
-      "DST_TYPE": "f32",
-      "BLOCK_SIZE": 256
-    },
-    "DECLS": ["Q45_K_SCALE_MIN", "BYTE_HELPERS", "Q4_K_T", "Q4_K"]
-  },
-  {
-    "REPLS": {
-      "TYPE" : "q5_k",
-      "DST_TYPE": "f32",
-      "BLOCK_SIZE": 256
-    },
-    "DECLS": ["Q45_K_SCALE_MIN", "BYTE_HELPERS", "Q5_K_T", "Q5_K"]
-  },
-  {
-    "REPLS": {
-      "TYPE" : "q6_k",
-      "DST_TYPE": "f32",
-      "BLOCK_SIZE": 256
-    },
-    "DECLS": ["BYTE_HELPERS", "Q6_K_T", "Q6_K"]
-  },
-  {
-    "REPLS": {
-      "TYPE" : "iq2_xxs",
-      "DST_TYPE": "f32",
-      "BLOCK_SIZE": 256
-    },
-    "DECLS": ["BYTE_HELPERS", "IQ23_TABLES", "IQ2_XXS_GRID", "IQ2_XXS_T", "IQ2_XXS"]
-  },
-  {
-    "REPLS": {
-      "TYPE" : "iq2_xs",
-      "DST_TYPE": "f32",
-      "BLOCK_SIZE": 256
-    },
-    "DECLS": ["BYTE_HELPERS", "IQ23_TABLES", "IQ2_XS_GRID", "IQ2_XS_T", "IQ2_XS"]
-  },
-  {
-    "REPLS": {
-      "TYPE": "iq2_s",
-      "DST_TYPE": "f32",
-      "BLOCK_SIZE": 256
-    },
-    "DECLS": ["BYTE_HELPERS", "IQ23_TABLES", "IQ2_S_GRID", "IQ2_S_T", "IQ2_S"]
-  },
-  {
-    "REPLS": {
-      "TYPE": "iq3_xxs",
-      "DST_TYPE": "f32",
-      "BLOCK_SIZE": 256
-    },
-    "DECLS": ["BYTE_HELPERS", "IQ23_TABLES", "IQ3_XSS_GRID", "IQ3_XSS_T", "IQ3_XSS"]
-  },
-  {
-    "REPLS": {
-      "TYPE": "iq3_s",
-      "DST_TYPE": "f32",
-      "BLOCK_SIZE": 256
-    },
-    "DECLS": ["BYTE_HELPERS", "IQ23_TABLES", "IQ3_S_GRID", "IQ3_S_T", "IQ3_S"]
-  },
-  {
-    "REPLS": {
-      "TYPE": "iq1_s",
-      "DST_TYPE": "f32",
-      "BLOCK_SIZE": 256
-    },
-    "DECLS": ["BYTE_HELPERS", "IQ1_GRID", "IQ1_S_T", "IQ1_S"]
-  },
-  {
-    "REPLS": {
-      "TYPE": "iq1_m",
-      "DST_TYPE": "f32",
-      "BLOCK_SIZE": 256
-    },
-    "DECLS": ["BYTE_HELPERS", "IQ1_GRID", "IQ1_M_T", "IQ1_M"]
-  },
-  {
-    "REPLS": {
-      "TYPE": "iq4_nl",
-      "DST_TYPE": "f32",
-      "BLOCK_SIZE": 32,
-    },
-    "DECLS": ["BYTE_HELPERS", "IQ4_GRID", "IQ4_NL_T", "IQ4_NL"]
-  },
-  {
-    "REPLS": {
-      "TYPE": "iq4_xs",
-      "DST_TYPE": "f32",
-      "BLOCK_SIZE": 256,
-    },
-    "DECLS": ["BYTE_HELPERS", "IQ4_GRID", "IQ4_XS_T", "IQ4_XS"]
-  }
-]
-
-#end(VARIANTS)
-
-#define(DECLS)
-
-#decl(F32_VEC)
+#ifdef F32_VEC
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
     dst[(dst_base / 4) + offset] = src[(src_base / 4) + offset];
 }
-#enddecl(F32_VEC)
+#endif
 
-#decl(F32)
+#ifdef F32
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
     dst[dst_base + offset] = src[src_base + offset];
 }
-#enddecl(F32)
+#endif
 
-#decl(F16)
+#ifdef F16
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
     dst[dst_base + offset] = f32(src[src_base + offset]);
 }
-#enddecl(F16)
+#endif
 
-#decl(I32)
+#ifdef I32
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
     dst[dst_base + offset] = src[src_base + offset];
 }
-#enddecl(I32)
+#endif
 
-#decl(Q4_0)
+#ifdef Q4_0
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
     let block_q4_0 = src[src_base + offset];
     let d = f32(block_q4_0.d);
@@ -232,9 +41,9 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
         }
     }
 }
-#enddecl(Q4_0)
+#endif
 
-#decl(Q4_1)
+#ifdef Q4_1
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
     let block_q4_1 = src[src_base + offset];
     let d = f32(block_q4_1.d);
@@ -251,9 +60,9 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
         }
     }
 }
-#enddecl(Q4_1)
+#endif
 
-#decl(Q5_0)
+#ifdef Q5_0
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
     let block_q5_0 = src[src_base + offset];
     let d = f32(block_q5_0.d);
@@ -272,10 +81,9 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
         }
     }
 }
+#endif
 
-#enddecl(Q5_0)
-
-#decl(Q5_1)
+#ifdef Q5_1
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
     let block_q5_1 = src[src_base + offset];
     let d = f32(block_q5_1.d);
@@ -294,9 +102,9 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
         }
     }
 }
-#enddecl(Q5_1)
+#endif
 
-#decl(Q8_0)
+#ifdef Q8_0
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
     let block_q8_0 = src[src_base + offset];
     let d = f32(block_q8_0.d);
@@ -310,9 +118,9 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
         }
     }
 }
-#enddecl(Q8_0)
+#endif
 
-#decl(Q2_K)
+#ifdef Q2_K
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
     let block = src[src_base + offset];
     let d = f32(block.d);
@@ -340,9 +148,9 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
         }
     }
 }
-#enddecl(Q2_K)
+#endif
 
-#decl(Q3_K)
+#ifdef Q3_K
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
     let block = src[src_base + offset];
     let d = f32(block.d);
@@ -398,9 +206,9 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
         }
     }
 }
-#enddecl(Q3_K)
+#endif
 
-#decl(Q4_K)
+#ifdef Q4_K
 // 8 blocks of 32 elements each
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
     let block = src[src_base + offset];
@@ -425,9 +233,9 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
         }
     }
 }
-#enddecl(Q4_K)
+#endif
 
-#decl(Q5_K)
+#ifdef Q5_K
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
     let block = src[src_base + offset];
     let d = f32(block.d);
@@ -455,9 +263,9 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
         }
     }
 }
-#enddecl(Q5_K)
+#endif
 
-#decl(Q6_K)
+#ifdef Q6_K
 // 16 blocks of 16 elements each
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
     let block = src[src_base + offset];
@@ -511,10 +319,9 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
         sc_b_idx += 8;
     }
 }
+#endif
 
-#enddecl(Q6_K)
-
-#decl(IQ2_XXS)
+#ifdef IQ2_XXS
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
     let block = src[src_base + offset];
     let d = f32(block.d);
@@ -536,9 +343,9 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
         }
     }
 }
-#enddecl(IQ2_XXS)
+#endif
 
-#decl(IQ2_XS)
+#ifdef IQ2_XS
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
     let block = src[src_base + offset];
     let d = f32(block.d);
@@ -568,9 +375,9 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
         }
     }
 }
-#enddecl(IQ2_XS)
+#endif
 
-#decl(IQ2_S)
+#ifdef IQ2_S
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
     let block = src[src_base + offset];
     let d = f32(block.d);
@@ -608,10 +415,9 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
         }
     }
 }
+#endif
 
-#enddecl(IQ2_S)
-
-#decl(IQ3_XSS)
+#ifdef IQ3_XXS
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
     let block = src[src_base + offset];
     let d = f32(block.d);
@@ -638,9 +444,9 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
         }
     }
 }
-#enddecl(IQ3_XSS)
+#endif
 
-#decl(IQ3_S)
+#ifdef IQ3_S
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
     let block = src[src_base + offset];
     let d = f32(block.d);
@@ -683,9 +489,9 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
         }
     }
 }
-#enddecl(IQ3_S)
+#endif
 
-#decl(IQ1_S)
+#ifdef IQ1_S
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
     let block = src[src_base + offset];
     let d = f32(block.d);
@@ -707,10 +513,9 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
         }
     }
 }
+#endif
 
-#enddecl(IQ1_S)
-
-#decl(IQ1_M)
+#ifdef IQ1_M
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
     let block = src[src_base + offset];
 
@@ -751,10 +556,9 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
         }
     }
 }
+#endif
 
-#enddecl(IQ1_M)
-
-#decl(IQ4_NL)
+#ifdef IQ4_NL
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
     let block = src[src_base + offset];
     let d = f32(block.d);
@@ -770,9 +574,9 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
         dst_i++;
     }
 }
-#enddecl(IQ4_NL)
+#endif
 
-#decl(IQ4_XS)
+#ifdef IQ4_XS
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
     let block = src[src_base + offset];
     let d = f32(block.d);
@@ -791,24 +595,16 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
         dst_i += 16;
     }
 }
-#enddecl(IQ4_XS)
-
-#end(DECLS)
-
-#define(SHADER)
-
-enable f16;
-
-DECLS
+#endif
 
 @group(0) @binding(0)
-var<storage, read_write> src: array<{{TYPE}}>;
+var<storage, read_write> src: array<SRC_TYPE>;
 
 @group(0) @binding(1)
 var<storage, read_write> idx: array<i32>;
 
 @group(0) @binding(2)
-var<storage, read_write> dst: array<{{DST_TYPE}}>;
+var<storage, read_write> dst: array<DST_TYPE>;
 
 struct Params {
     offset_src: u32, // in elements
@@ -842,8 +638,7 @@ struct Params {
 @group(0) @binding(3)
 var<uniform> params: Params;
 
-override wg_size: u32;
-@compute @workgroup_size(wg_size)
+@compute @workgroup_size(WG_SIZE)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x >= params.n_rows * params.ne2 * params.ne3) {
         return;
@@ -866,9 +661,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i_src_row = params.offset_src + idx_val * params.stride_src1 + i_dst2 * params.stride_src2 + i_dst3 * params.stride_src3;
     let i_dst_row = params.offset_dst + i_dst1 * params.stride_dst1 + i_dst2 * params.stride_dst2 + i_dst3 * params.stride_dst3;
 
-    for (var i: u32 = 0; i < params.ne0/{{BLOCK_SIZE}}; i++) {
+    for (var i: u32 = 0; i < params.ne0/BLOCK_SIZE; i++) {
       copy_elements(i_src_row, i_dst_row, i);
     }
 }
 
-#end(SHADER)

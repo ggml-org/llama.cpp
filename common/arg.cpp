@@ -1279,13 +1279,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_SWA_FULL"));
     add_opt(common_arg(
-        {"--ctx-checkpoints", "--swa-checkpoints"}, "N",
+        {"-ctxcp", "--ctx-checkpoints", "--swa-checkpoints"}, "N",
         string_format("max number of context checkpoints to create per slot (default: %d)"
             "[(more info)](https://github.com/ggml-org/llama.cpp/pull/15293)", params.n_ctx_checkpoints),
         [](common_params & params, int value) {
             params.n_ctx_checkpoints = value;
         }
     ).set_env("LLAMA_ARG_CTX_CHECKPOINTS").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"-cpent", "--checkpoint-every-n-tokens"}, "N",
+        string_format("create a checkpoint every n tokens during prefill (processing), -1 to disable (default: %d)", params.checkpoint_every_nt),
+        [](common_params & params, int value) {
+            params.checkpoint_every_nt = value;
+        }
+    ).set_env("LLAMA_ARG_CHECKPOINT_EVERY_NT").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
         {"-cram", "--cache-ram"}, "N",
         string_format("set the maximum cache size in MiB (default: %d, -1 - no limit, 0 - disable)"
@@ -1578,7 +1585,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sparam());
     add_opt(common_arg(
-        {"--temp"}, "N",
+        {"--temp", "--temperature"}, "N",
         string_format("temperature (default: %.2f)", (double)params.sampling.temp),
         [](common_params & params, const std::string & value) {
             params.sampling.temp = std::stof(value);
@@ -1611,7 +1618,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sparam());
     add_opt(common_arg(
-        {"--top-nsigma"}, "N",
+        {"--top-nsigma", "--top-n-sigma"}, "N",
         string_format("top-n-sigma sampling (default: %.2f, -1.0 = disabled)", params.sampling.top_n_sigma),
         [](common_params & params, const std::string & value) {
             params.sampling.top_n_sigma = std::stof(value);
@@ -1634,7 +1641,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sparam());
     add_opt(common_arg(
-        {"--typical"}, "N",
+        {"--typical", "--typical-p"}, "N",
         string_format("locally typical sampling, parameter p (default: %.2f, 1.0 = disabled)", (double)params.sampling.typ_p),
         [](common_params & params, const std::string & value) {
             params.sampling.typ_p = std::stof(value);
@@ -2399,7 +2406,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 params.fit_params = false;
             } else {
                 throw std::runtime_error(
-                    string_format("error: unkown value for --fit: '%s'\n", value.c_str()));
+                    string_format("error: unknown value for --fit: '%s'\n", value.c_str()));
             }
         }
     ).set_env("LLAMA_ARG_FIT"));
@@ -2520,11 +2527,28 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ));
     add_opt(common_arg(
         {"-a", "--alias"}, "STRING",
-        "set alias for model name (to be used by REST API)",
+        "set model name aliases, comma-separated (to be used by API)",
         [](common_params & params, const std::string & value) {
-            params.model_alias = value;
+            for (auto & alias : string_split<std::string>(value, ',')) {
+                alias = string_strip(alias);
+                if (!alias.empty()) {
+                    params.model_alias.insert(alias);
+                }
+            }
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_ALIAS"));
+    add_opt(common_arg(
+        {"--tags"}, "STRING",
+        "set model tags, comma-separated (informational, not used for routing)",
+        [](common_params & params, const std::string & value) {
+            for (auto & tag : string_split<std::string>(value, ',')) {
+                tag = string_strip(tag);
+                if (!tag.empty()) {
+                    params.model_tags.insert(tag);
+                }
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TAGS"));
     add_opt(common_arg(
         {"-m", "--model"}, "FNAME",
         ex == LLAMA_EXAMPLE_EXPORT_LORA
@@ -2810,6 +2834,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.webui_config_json = read_file(value);
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_WEBUI_CONFIG_FILE"));
+    add_opt(common_arg(
+        {"--webui-mcp-proxy"},
+        {"--no-webui-mcp-proxy"},
+        string_format("experimental: whether to enable MCP CORS proxy - do not enable in untrusted environments (default: %s)", params.webui_mcp_proxy ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.webui_mcp_proxy = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_WEBUI_MCP_PROXY"));
     add_opt(common_arg(
         {"--webui"},
         {"--no-webui"},

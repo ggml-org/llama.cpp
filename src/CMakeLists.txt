@@ -62,6 +62,7 @@ add_library(llama
             models/dream.cpp
             models/ernie4-5-moe.cpp
             models/ernie4-5.cpp
+            models/eurobert.cpp
             models/exaone-moe.cpp
             models/exaone.cpp
             models/exaone4.cpp
@@ -84,6 +85,7 @@ add_library(llama
             models/hunyuan-moe.cpp
             models/internlm2.cpp
             models/jais.cpp
+            models/jais2.cpp
             models/jamba.cpp
             models/kimi-linear.cpp
             models/lfm2.cpp
@@ -109,6 +111,7 @@ add_library(llama
             models/openai-moe-iswa.cpp
             models/openelm.cpp
             models/orion.cpp
+            models/paddleocr.cpp
             models/pangu-embedded.cpp
             models/phi2.cpp
             models/phi3.cpp

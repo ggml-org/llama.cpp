@@ -65,14 +65,25 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
     } else if (!content_parts.empty()) {
         if (concat_typed_text) {
             std::string text;
+            bool last_was_media_marker = false;
+            // join parts with newline, do not add newline before or after media markers
             for (const auto & part : content_parts) {
-                if (part.type != "text") {
+                bool add_new_line = true;
+                if (part.type == "text") {
+                    add_new_line = !last_was_media_marker && !text.empty();
+                    last_was_media_marker = false;
+                } else if (part.type == "media_marker") {
+                    add_new_line = false;
+                    last_was_media_marker = true;
+                } else {
                     LOG_WRN("Ignoring content part type: %s\n", part.type.c_str());
                     continue;
                 }
-                if (!text.empty()) {
+
+                if (add_new_line) {
                     text += '\n';
                 }
+
                 text += part.text;
             }
             jmsg["content"] = text;
@@ -319,7 +330,7 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
                             throw std::invalid_argument("Missing content part type: " + part.dump());
                         }
                         const auto & type = part.at("type");
-                        if (type != "text") {
+                        if (type != "text" && type != "media_marker") {
                             throw std::invalid_argument("Unsupported content part type: " + type.dump());
                         }
                         common_chat_msg_content_part msg_part;
@@ -725,7 +736,6 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_MINIMAX_M2: return "MiniMax-M2";
         case COMMON_CHAT_FORMAT_GLM_4_5: return "GLM 4.5";
         case COMMON_CHAT_FORMAT_KIMI_K2: return "Kimi K2";
-        case COMMON_CHAT_FORMAT_QWEN3_CODER_XML: return "Qwen3 Coder";
         case COMMON_CHAT_FORMAT_APRIEL_1_5: return "Apriel 1.5";
         case COMMON_CHAT_FORMAT_XIAOMI_MIMO: return "Xiaomi MiMo";
         case COMMON_CHAT_FORMAT_SOLAR_OPEN: return "Solar Open";
@@ -1511,14 +1521,17 @@ static common_chat_params common_chat_params_init_nemotron_v2(const common_chat_
     return data;
 }
 
-static common_chat_params common_chat_params_init_nemotron_v3(const common_chat_template & tmpl, const struct templates_params & inputs) {
+static common_chat_params common_chat_params_init_qwen3_coder(const common_chat_template & tmpl, const struct templates_params & inputs) {
     common_chat_params data;
 
     data.prompt = apply(tmpl, inputs);
     data.format = COMMON_CHAT_FORMAT_PEG_CONSTRUCTED;
 
+    // Nemotron Nano 3 and Step-3.5-Flash use the Qwen3 Coder tool calling with thinking
+    bool supports_reasoning = (tmpl.source().find("<think>") != std::string::npos);
+
     // Handle thinking tags appropriately based on inputs.enable_thinking
-    if (string_ends_with(data.prompt, "<think>\n")) {
+    if (supports_reasoning && string_ends_with(data.prompt, "<think>\n")) {
         if (!inputs.enable_thinking) {
             data.prompt += "</think>";
         } else {
@@ -1527,11 +1540,13 @@ static common_chat_params common_chat_params_init_nemotron_v3(const common_chat_
     }
 
     data.preserved_tokens = {
-        "<think>",
-        "</think>",
         "<tool_call>",
         "</tool_call>",
     };
+
+    if (supports_reasoning) {
+        data.preserved_tokens.insert(data.preserved_tokens.end(), {"<think>", "</think>"});
+    }
 
     auto has_tools = inputs.tools.is_array() && !inputs.tools.empty();
     auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
@@ -1539,7 +1554,7 @@ static common_chat_params common_chat_params_init_nemotron_v3(const common_chat_
 
     auto parser = build_chat_peg_constructed_parser([&](auto & p) {
         auto reasoning = p.eps();
-        if (inputs.enable_thinking && extract_reasoning) {
+        if (supports_reasoning && inputs.enable_thinking && extract_reasoning) {
             auto reasoning_content = p.reasoning(p.until("</think>")) + ("</think>" | p.end());
             if (data.thinking_forced_open) {
                 reasoning = reasoning_content;
@@ -1877,38 +1892,6 @@ static common_chat_params common_chat_params_init_minimax_m2(const common_chat_t
     return data;
 }
 
-static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_chat_template & tmpl, const struct templates_params & params) {
-    common_chat_params data;
-    data.grammar_lazy = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
-
-    data.prompt = apply(tmpl, params);
-    data.format = COMMON_CHAT_FORMAT_QWEN3_CODER_XML;
-
-    data.preserved_tokens = {
-        "<tool_call>",
-        "</tool_call>",
-        "<function=",
-        "</function>",
-        "<parameter=",
-        "</parameter>",
-    };
-
-    // build grammar for tool call
-    static const xml_tool_call_format form {
-        /* form.scope_start = */ "<tool_call>\n",
-        /* form.tool_start  = */ "<function=",
-        /* form.tool_sep    = */ ">\n",
-        /* form.key_start   = */ "<parameter=",
-        /* form.key_val_sep = */ ">\n",
-        /* form.val_end     = */ "\n</parameter>\n",
-        /* form.tool_end    = */ "</function>\n",
-        /* form.scope_end   = */ "</tool_call>",
-    };
-    build_grammar_xml_tool_call(data, params.tools, form);
-
-    return data;
-}
-
 static common_chat_params common_chat_params_init_kimi_k2(const common_chat_template & tmpl, const struct templates_params & params) {
     common_chat_params data;
     data.grammar_lazy = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
@@ -2032,6 +2015,7 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
         if (has_reasoning_content && has_tool_calls) {
             auto adjusted_message = msg;
             adjusted_message["thinking"] = msg.at("reasoning_content");
+            adjusted_message.erase("content");
             adjusted_messages.push_back(adjusted_message);
         } else {
             adjusted_messages.push_back(msg);
@@ -3129,19 +3113,13 @@ static common_chat_params common_chat_templates_apply_jinja(
     }
 
     // Qwen3-Coder XML format detection (must come before Hermes 2 Pro)
-    // Detect via explicit XML markers unique to Qwen3-Coder to avoid false positives in other templates.
-    // Require presence of <tool_call>, <function=...>, and <parameter=...> blocks.
+    // Detect via XML markers: <tool_call>, <function=...>, and <parameter=...> blocks.
+    // Also matches Step-3.5-Flash and Nemotron 3 Nano which use the same output format.
     if (src.find("<tool_call>") != std::string::npos &&
-        src.find("<function>") != std::string::npos &&
         src.find("<function=") != std::string::npos &&
-        src.find("<parameters>") != std::string::npos &&
         src.find("<parameter=") != std::string::npos) {
         workaround::func_args_not_string(params.messages);
-        // Nemotron 3 Nano 30B A3B
-        if (src.find("<think>") != std::string::npos) {
-            return common_chat_params_init_nemotron_v3(tmpl, params);
-        }
-        return common_chat_params_init_qwen3_coder_xml(tmpl, params);
+        return common_chat_params_init_qwen3_coder(tmpl, params);
     }
 
     // Xiaomi MiMo format detection (must come before Hermes 2 Pro)
@@ -3307,7 +3285,7 @@ static common_chat_params common_chat_templates_apply_legacy(
     for (const auto & msg : inputs.messages) {
         auto content = msg.content;
         for (const auto & part : msg.content_parts) {
-            if (part.type != "text") {
+            if (part.type != "text" && part.type != "media_marker") {
                 LOG_WRN("Ignoring non-text content part: %s\n", part.type.c_str());
                 continue;
             }
