@@ -176,6 +176,10 @@ public:
 
     virtual bool is_stateful() const override { return m_is_stateful; }
 
+    virtual bool is_splited_model() const override {
+        return m_model_is_splitted;
+    }
+
     ov::PartialShape get_graph_input_shape(const ggml_tensor * op, const ggml_tensor * input) const;
 
     static void dump_cgraph(const ggml_cgraph * cgraph, std::string & filename);
