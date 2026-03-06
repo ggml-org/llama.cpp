@@ -41,9 +41,6 @@ struct htp_ops_context {
     worker_pool_context_t * wpool;      // worker pool
     uint32_t                n_threads;  // num threads
 
-    uint32_t src0_nrows_per_thread;
-    uint32_t src1_nrows_per_thread;
-
     uint32_t flags;
 };
 
