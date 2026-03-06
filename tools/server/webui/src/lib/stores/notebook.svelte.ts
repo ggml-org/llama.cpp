@@ -53,7 +53,7 @@ export class NotebookStore {
 				onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
 					this.updateProcessingStateFromTimings({
 						prompt_n: timings?.prompt_n || 0,
-						prompt_ms: timings?.prompt_ms,
+						prompt_ms: promptProgress?.time_ms ?? timings?.prompt_ms,
 						predicted_n: timings?.predicted_n || 0,
 						predicted_ms: timings?.predicted_ms,
 						cache_n: timings?.cache_n || 0,
