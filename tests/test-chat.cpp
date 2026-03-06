@@ -3141,6 +3141,12 @@ static void test_template_output_peg_parsers() {
             t.expect.reasoning_content = "I need to output the invoice details in JSON";
             t.expect.content =R"({"amount": 123.45, "date": "2025-12-03"})";
         });
+
+        // Test invalid UTF-8
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "Hello \xE2\x9Cworld\xE2\x9C";
+            t.expect.content = "Hello world";
+        });
     }
 
     {
