@@ -23264,13 +23264,13 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                             g_fp16_cache.init_once();
 
                             // Check if we should use oneDNN FP16 for large batches
-                            // Default threshold: M >= 64 (can be tuned via env var)
+                            // Default threshold: M >= 16 (can be tuned via env var)
                             static int onednn_pp_threshold = -1;
                             if (onednn_pp_threshold < 0) {
                                 const char * env    = std::getenv("GGML_SYCL_ONEDNN_PP_MIN_BATCH");
-                                onednn_pp_threshold = env ? std::atoi(env) : 64;
+                                onednn_pp_threshold = env ? std::atoi(env) : 16;
                                 if (onednn_pp_threshold < 1) {
-                                    onednn_pp_threshold = 64;
+                                    onednn_pp_threshold = 16;
                                 }
                             }
                             // Enabled by default when scratch buffers are available.
@@ -29760,8 +29760,8 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
         static int pp_threshold = -1;
         if (pp_threshold < 0) {
             const char * env = std::getenv("GGML_SYCL_ONEDNN_PP_MIN_BATCH");
-            pp_threshold     = env ? std::atoi(env) : 64;
-            if (pp_threshold < 1) pp_threshold = 64;
+            pp_threshold     = env ? std::atoi(env) : 16;
+            if (pp_threshold < 1) pp_threshold = 16;
         }
 
         // Scan graph for PP-eligible MUL_MAT nodes
@@ -31071,9 +31071,9 @@ static void ggml_sycl_mmvq_soa_pre_allocate_buffers(ggml_backend_sycl_context & 
         const char * env_pp     = std::getenv("GGML_SYCL_ONEDNN_PP");
         onednn_pp_enabled_cached = (env_pp == nullptr || std::atoi(env_pp) != 0);
         const char * env_thr    = std::getenv("GGML_SYCL_ONEDNN_PP_MIN_BATCH");
-        onednn_pp_threshold_cached = env_thr ? std::atoi(env_thr) : 64;
+        onednn_pp_threshold_cached = env_thr ? std::atoi(env_thr) : 16;
         if (onednn_pp_threshold_cached < 1) {
-            onednn_pp_threshold_cached = 64;
+            onednn_pp_threshold_cached = 16;
         }
     }
 #endif
