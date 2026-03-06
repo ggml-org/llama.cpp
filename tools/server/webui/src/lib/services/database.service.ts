@@ -1,5 +1,5 @@
 import Dexie, { type EntityTable } from 'dexie';
-import { findDescendantMessages } from '$lib/utils';
+import { findDescendantMessages, uuid } from '$lib/utils';
 
 class LlamacppDatabase extends Dexie {
 	conversations!: EntityTable<DatabaseConversation, string>;
@@ -16,7 +16,6 @@ class LlamacppDatabase extends Dexie {
 }
 
 const db = new LlamacppDatabase();
-import { v4 as uuid } from 'uuid';
 import { MessageRole } from '$lib/enums';
 
 export class DatabaseService {

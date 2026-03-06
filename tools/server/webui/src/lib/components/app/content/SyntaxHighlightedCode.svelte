@@ -5,6 +5,7 @@
 
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
+	import { ColorMode } from '$lib/enums';
 
 	interface Props {
 		code: string;
@@ -39,7 +40,7 @@
 
 	$effect(() => {
 		const currentMode = mode.current;
-		const isDark = currentMode === 'dark';
+		const isDark = currentMode === ColorMode.DARK;
 
 		loadHighlightTheme(isDark);
 	});

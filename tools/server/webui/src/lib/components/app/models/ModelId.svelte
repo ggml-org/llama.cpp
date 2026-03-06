@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { ModelsService } from '$lib/services/models.service';
 	import { config } from '$lib/stores/settings.svelte';
+	import { TruncatedText } from '$lib/components/app';
 
 	interface Props {
 		modelId: string;
@@ -30,11 +31,11 @@
 </script>
 
 {#if resolvedShowRaw}
-	<span class="min-w-0 truncate font-medium {className}">{modelId}</span>
+	<TruncatedText class="font-medium {className}" showTooltip={false} text={modelId} />
 {:else}
 	<span class="flex min-w-0 flex-wrap items-center gap-1 {className}">
 		<span class="min-w-0 truncate font-medium">
-			{#if showOrgName}{parsed.orgName}/{/if}{parsed.modelName ?? modelId}
+			{#if showOrgName && parsed.orgName}{parsed.orgName}/{/if}{parsed.modelName ?? modelId}
 		</span>
 
 		{#if parsed.params}

@@ -545,6 +545,7 @@ struct common_params {
 
     // webui configs
     bool webui = true;
+    bool webui_mcp_proxy = false;
     std::string webui_config_json;
 
     // "advanced" endpoints are disabled by default for better security

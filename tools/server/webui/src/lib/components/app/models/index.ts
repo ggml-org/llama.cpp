@@ -45,6 +45,15 @@
 export { default as ModelsSelector } from './ModelsSelector.svelte';
 
 /**
+ * **ModelsSelectorSheet** - Mobile model selection sheet
+ *
+ * Bottom sheet variant of ModelsSelector optimized for touch interaction
+ * on mobile devices. Same functionality as ModelsSelector but uses Sheet UI
+ * instead of DropdownMenu.
+ */
+export { default as ModelsSelectorSheet } from './ModelsSelectorSheet.svelte';
+
+/**
  * **ModelBadge** - Model name display badge
  *
  * Compact badge showing current model name with package icon.
