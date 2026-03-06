@@ -66,6 +66,8 @@ public:
 
     virtual bool is_stateful() const = 0;
 
+    virtual bool is_splited_model() const = 0;
+
     virtual int is_swa_layer(int layer) const = 0;
 };
 

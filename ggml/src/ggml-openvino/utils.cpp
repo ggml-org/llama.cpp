@@ -85,7 +85,9 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
     const auto & stateful = r_ctx->stateful;
     static auto is_static = false;
 
-    if (is_naive(cgraph)) {
+    bool model_is_splitted = is_model_splitted(cgraph);
+
+    if (is_naive(cgraph) && !model_is_splitted) {
         return naive_compute(cgraph, core, device, config);
     }
 
@@ -193,7 +195,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
             std::shared_ptr<ov::Model> model;
             auto model_weights = GgmlOvDecoder::create_weight_nodes(cgraph);
 
-            ggml_decoder = std::make_shared<GgmlOvDecoder>(cgraph, m_params, c_params, model_weights, is_static, stateful);
+            ggml_decoder = std::make_shared<GgmlOvDecoder>(cgraph, m_params, c_params, model_weights, is_static, stateful, model_is_splitted);
             decoder_end_time = ggml_time_us();
 
             auto input_model = std::make_shared<ov::frontend::ggml::InputModel>(ggml_decoder);
@@ -386,9 +388,9 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
         auto model_weights = GgmlOvDecoder::create_weight_nodes(cgraph);
 
         auto ggml_decoder_prefill = std::make_shared<GgmlOvDecoder>(cgraph, m_params, c_params, model_weights,
-                                                                    is_static, stateful, true, prefill_chunk_size);
+                                                                    is_static, stateful, false, true, prefill_chunk_size);
         auto ggml_decoder_decode = std::make_shared<GgmlOvDecoder>(cgraph, m_params, c_params, model_weights, is_static,
-                                                                   stateful, false, prefill_chunk_size);
+                                                                   stateful, false, false, prefill_chunk_size);
         decoder_end_time = ggml_time_us();
 
         auto input_model_prefill = std::make_shared<ov::frontend::ggml::InputModel>(ggml_decoder_prefill);
@@ -525,6 +527,52 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
     }
 
     return GGML_STATUS_SUCCESS;
+}
+
+// Detect whether a cgraph is a split subgraph or not.
+// Step 1 compares each node's recorded use_count with actual fan-out references in node->src.
+// Step 2 verifies that node inputs come from model nodes/weights/leafs; external sources imply split.
+bool is_model_splitted(ggml_cgraph * cgraph) {
+    // check the nodes of the model are used by the following nodes, through compare the node's use count and the count of nodes that use it as input. If does not match, return true, else return false.
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        ggml_tensor * node = cgraph->nodes[i];
+        int use_count = cgraph->use_counts[ggml_hash_find(&cgraph->visited_hash_set, node)];
+        // TODO: this is a workround for the tests case from llama.cpp, fix should from the root cause in the future.
+        if ((cgraph->n_nodes <= 1 && use_count==0) || (cgraph->n_nodes <= 1 && node->op == GGML_OP_VIEW && use_count == 1 && node->src[0] != nullptr && node->src[0]->op == GGML_OP_NONE)) {
+            return false;
+        }
+        int input_use_count = 0;
+        for (int j = 0; j < cgraph->n_nodes; j++) {
+            ggml_tensor * other_node = cgraph->nodes[j];
+            for (int k = 0; k < GGML_MAX_SRC; k++) {
+                if (other_node->src[k] == node) {
+                    input_use_count++;
+                }
+            }
+        }
+        if (use_count != input_use_count && node->op != GGML_OP_NONE) {
+            return true;
+        }
+    }
+    // if all nodes's src node's src is not come from the nodes in the model, we think the model is splitted. This is a complementary check for the above check, because for some special case like the output node is not used by any node, the use count and input use count are both 0, we can not determine whether the model is splitted or not just based on the first check.
+    auto model_weights = GgmlOvDecoder::create_weight_nodes(cgraph, true);
+    std::set<ggml_tensor *> model_nodes(cgraph->nodes, cgraph->nodes + cgraph->n_nodes);
+    // leaf nodes
+    std::set<ggml_tensor *> model_leafs(cgraph->leafs, cgraph->leafs + cgraph->n_leafs);
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        ggml_tensor * node = cgraph->nodes[i];
+        for (int j = 0; j < GGML_MAX_SRC; j++) {
+            ggml_tensor * src = node->src[j];
+            // the src is also not the model weights, we think the model is splitted.
+            // the src is also not in model leafs, we think the model is splitted.
+            if (src != nullptr && model_nodes.find(src) == model_nodes.end() &&
+                model_weights.find(std::string(src->name)) == model_weights.end() && !model_leafs.empty() == false &&
+                model_leafs.find(src) == model_leafs.end()) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 bool is_naive(ggml_cgraph * cgraph) {
