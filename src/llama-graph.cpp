@@ -2683,5 +2683,5 @@ int32_t llama_relative_position_bucket(llama_pos x, llama_pos y, uint64_t n_buck
     relative_position_if_large = std::min<int32_t>(relative_position_if_large, n_buckets - 1);
     relative_bucket += (relative_position < max_exact ? relative_position : relative_position_if_large);
 
-    return relative_bucket;
+    return 0;
 }
