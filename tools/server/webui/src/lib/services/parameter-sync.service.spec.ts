@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ParameterSyncService } from './parameter-sync.service';
+import { ColorMode } from '$lib/enums';
 
 describe('ParameterSyncService', () => {
 	describe('roundFloatingPoint', () => {
@@ -136,7 +137,7 @@ describe('ParameterSyncService', () => {
 				pasteLongTextToFileLen: 0,
 				pdfAsImage: true,
 				renderUserContentAsMarkdown: false,
-				theme: 'dark'
+				theme: ColorMode.DARK
 			});
 
 			expect(result.pasteLongTextToFileLen).toBe(0);
