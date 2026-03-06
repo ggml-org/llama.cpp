@@ -11801,7 +11801,7 @@ class Phi4VModel(Phi4MMModel):
     pass
 
 
-@ModelBase.register("Phi4MMForCausalLM", "Phi4ForCausalLMV")
+@ModelBase.register("Phi4MMForCausalLM", "Phi4ForCausalLMV", "Phi4ForCausalLM")
 class Phi4TextModel(Phi3MiniModel):
     # Text model variant for Phi-4 multimodal architectures 
     # This prevents the text converter from crashing when it encounters vision/audio tensors
