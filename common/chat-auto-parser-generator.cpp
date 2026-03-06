@@ -380,7 +380,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
             func_parser = p.tool_open(function.name_prefix + p.tool_name(p.literal(name)) + function.name_suffix) +
                 call_id_section + p.space() + args_seq;
         }
-         
+
         if (!function.close.empty()) {
             func_parser = func_parser + p.space() + p.tool_close(p.literal(function.close));
         } else if (!format.per_call_end.empty()) {
