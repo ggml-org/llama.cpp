@@ -68,6 +68,7 @@ struct ggml_webgpu_shader_lib_context {
     size_t   wg_mem_limit_bytes       = 0;
     bool     inplace                  = false;
     bool     overlap                  = false;
+    bool     src_overlap              = false;
     bool     supports_subgroup_matrix = false;
     uint32_t sg_mat_m                 = 0;
     uint32_t sg_mat_n                 = 0;
@@ -172,6 +173,22 @@ struct ggml_webgpu_scale_pipeline_key_hash {
     }
 };
 
+/** Concat **/
+
+struct ggml_webgpu_concat_pipeline_key {
+    int type;
+
+    bool operator==(const ggml_webgpu_concat_pipeline_key & other) const { return type == other.type; }
+};
+
+struct ggml_webgpu_concat_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_concat_pipeline_key & key) const {
+        size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.type);
+        return seed;
+    }
+};
+
 /** Binary **/
 
 struct ggml_webgpu_binary_pipeline_key {
@@ -179,9 +196,10 @@ struct ggml_webgpu_binary_pipeline_key {
     int  op;
     bool inplace;
     bool overlap;
+    bool src_overlap;
 
     bool operator==(const ggml_webgpu_binary_pipeline_key & other) const {
-        return type == other.type && op == other.op && inplace == other.inplace && overlap == other.overlap;
+        return type == other.type && op == other.op && inplace == other.inplace && overlap == other.overlap && src_overlap == other.src_overlap;
     }
 };
 
@@ -192,6 +210,7 @@ struct ggml_webgpu_binary_pipeline_key_hash {
         ggml_webgpu_hash_combine(seed, key.op);
         ggml_webgpu_hash_combine(seed, key.inplace);
         ggml_webgpu_hash_combine(seed, key.overlap);
+        ggml_webgpu_hash_combine(seed, key.src_overlap);
         return seed;
     }
 };
@@ -400,6 +419,8 @@ class ggml_webgpu_shader_lib {
         pad_pipelines;                                                 // circular/non-circular
     std::unordered_map<ggml_webgpu_binary_pipeline_key, webgpu_pipeline, ggml_webgpu_binary_pipeline_key_hash>
         binary_pipelines;                                              // type/op/inplace/overlap
+    std::unordered_map<ggml_webgpu_concat_pipeline_key, webgpu_pipeline, ggml_webgpu_concat_pipeline_key_hash>
+        concat_pipelines;                                              // type
     std::unordered_map<ggml_webgpu_flash_attn_pipeline_key, webgpu_pipeline, ggml_webgpu_flash_attn_pipeline_key_hash>
         flash_attn_pipelines;
     std::unordered_map<ggml_webgpu_legacy_mul_mat_pipeline_key,
@@ -1044,6 +1065,7 @@ class ggml_webgpu_shader_lib {
             .op      = context.dst->op,
             .inplace = context.inplace,
             .overlap = context.overlap,
+            .src_overlap = context.src_overlap,
         };
 
         auto it = binary_pipelines.find(key);
@@ -1076,6 +1098,9 @@ class ggml_webgpu_shader_lib {
         } else if (key.overlap) {
             defines.push_back("OVERLAP");
             variant += "_overlap";
+        } else if (key.src_overlap) {
+            defines.push_back("SRC_OVERLAP");
+            variant += "_src_overlap";
         }
 
         defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
@@ -1087,6 +1112,43 @@ class ggml_webgpu_shader_lib {
         pipeline.context         = decisions;
         binary_pipelines[key]    = pipeline;
         return binary_pipelines[key];
+    }
+
+    webgpu_pipeline get_concat_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        ggml_webgpu_concat_pipeline_key key = {
+            .type = context.dst->type,
+        };
+
+        auto it = concat_pipelines.find(key);
+        if (it != concat_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines;
+        std::string variant = "concat";
+
+        switch (key.type) {
+            case GGML_TYPE_F32:
+                defines.push_back("TYPE_F32");
+                variant += "_f32";
+                break;
+            case GGML_TYPE_I32:
+                defines.push_back("TYPE_I32");
+                variant += "_i32";
+                break;
+            default:
+                GGML_ABORT("Unsupported type for concat shader");
+        }
+
+        defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+        auto processed = preprocessor.preprocess(wgsl_concat, defines);
+        auto decisions = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        decisions->wg_size = context.max_wg_size;
+        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
+        pipeline.context = decisions;
+        concat_pipelines[key] = pipeline;
+        return concat_pipelines[key];
     }
 
     webgpu_pipeline get_flash_attn_pipeline(const ggml_webgpu_shader_lib_context & context) {

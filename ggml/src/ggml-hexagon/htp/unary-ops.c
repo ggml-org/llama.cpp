@@ -301,8 +301,8 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
             return HTP_STATUS_NO_SUPPORT;
     }
 
-    const int      n_threads  = octx->n_threads;
     const uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
+    const uint32_t n_threads  = MIN(octx->n_threads, src0_nrows);
 
     const size_t src0_row_size = src0->nb[1];
     const size_t dst_row_size  = dst->nb[1];
@@ -338,11 +338,9 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
          octx->src0_spad.size, octx->src1_spad.size, octx->dst_spad.size);
 
     if (!(octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)) {
-        uint32_t n_jobs = MIN(n_threads, src0_nrows);
-
         struct htp_unary_context uctx = {
             .octx                  = octx,
-            .src0_nrows_per_thread = (src0_nrows + n_jobs - 1) / n_jobs,
+            .src0_nrows_per_thread = (src0_nrows + n_threads - 1) / n_threads,
             .src0_nrows            = src0_nrows,
 
             .data_src0             = (const uint8_t *)src0->data,
@@ -361,7 +359,7 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
             .nc                    = src0->ne[0],
         };
 
-        worker_pool_run_func(octx->ctx->worker_pool, unary_job_f32_per_thread, &uctx, n_jobs);
+        worker_pool_run_func(octx->ctx->worker_pool, unary_job_f32_per_thread, &uctx, n_threads);
     }
 
     return err;

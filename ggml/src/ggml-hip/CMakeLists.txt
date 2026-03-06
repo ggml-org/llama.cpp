@@ -56,6 +56,12 @@ file(GLOB   GGML_HEADERS_ROCM "../ggml-cuda/*.cuh")
 list(APPEND GGML_HEADERS_ROCM "../../include/ggml-cuda.h")
 
 file(GLOB   GGML_SOURCES_ROCM "../ggml-cuda/*.cu")
+file(GLOB   SRCS "../ggml-cuda/gfx906/fused/*.cu")
+list(APPEND GGML_SOURCES_ROCM ${SRCS})
+file(GLOB   SRCS "../ggml-cuda/gfx906/attention/*.cu")
+list(APPEND GGML_SOURCES_ROCM ${SRCS})
+file(GLOB   SRCS "../ggml-cuda/gfx906/attention/instances/*.cu")
+list(APPEND GGML_SOURCES_ROCM ${SRCS})
 file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-tile*.cu")
 list(APPEND GGML_SOURCES_ROCM ${SRCS})
 file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-mma*.cu")
@@ -120,6 +126,10 @@ endif()
 
 if (GGML_HIP_EXPORT_METRICS)
     set(CMAKE_HIP_FLAGS "${CMAKE_HIP_FLAGS} -Rpass-analysis=kernel-resource-usage --save-temps")
+endif()
+
+if (GGML_HIP_GFX906 OR CMAKE_HIP_ARCHITECTURES MATCHES "gfx906" OR GPU_TARGETS MATCHES "gfx906")
+    add_compile_definitions(GGML_HIP_GFX906)
 endif()
 
 if (NOT GGML_CUDA_FA)

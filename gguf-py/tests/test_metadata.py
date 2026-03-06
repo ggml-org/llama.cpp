@@ -164,7 +164,7 @@ class TestMetadataMethod(unittest.TestCase):
         self.assertEqual(gguf.Metadata.get_model_id_components("Llama-3-Instruct-abliteration-LoRA-8B"),
                          ('Llama-3-Instruct-abliteration-LoRA-8B', None, 'Llama-3', 'Instruct-abliteration-LoRA', None, '8B'))
 
-        # Negative size --> output is a LoRA adaper --> prune "LoRA" out of the name to avoid redundancy with the suffix
+        # Negative size --> output is a LoRA adapter --> prune "LoRA" out of the name to avoid redundancy with the suffix
         self.assertEqual(gguf.Metadata.get_model_id_components("Llama-3-Instruct-abliteration-LoRA-8B", -1234),
                          ('Llama-3-Instruct-abliteration-LoRA-8B', None, 'Llama-3', 'Instruct-abliteration', None, '8B'))
 

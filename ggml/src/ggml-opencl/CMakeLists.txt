@@ -63,6 +63,7 @@ set(GGML_OPENCL_KERNELS
     cpy
     cvt
     diag_mask_inf
+    diag
     div
     gelu
     gemv_noshuffle_general
@@ -108,8 +109,11 @@ set(GGML_OPENCL_KERNELS
     mul_mm_q8_0_f32_l4_lm
     mul_mm_q6_k_f32_l4_lm
     mul_mm_q8_0_f32_8x4
+    gemv_noshuffle_q4_1_f32
+    gemm_noshuffle_q4_1_f32
     gemv_noshuffle_general_q8_0_f32
     mul
+    neg
     norm
     relu
     rms_norm
@@ -132,6 +136,7 @@ set(GGML_OPENCL_KERNELS
     tsembd
     upscale
     tanh
+    exp
     expm1
     softplus
     pad

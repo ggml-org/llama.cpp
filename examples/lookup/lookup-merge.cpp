@@ -3,6 +3,7 @@
 #include "common.h"
 #include "ngram-cache.h"
 
+#include <clocale>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
@@ -17,6 +18,8 @@ static void print_usage(char* argv0) {
 }
 
 int main(int argc, char ** argv){
+    std::setlocale(LC_NUMERIC, "C");
+
     if (argc < 3) {
         print_usage(argv[0]);
         exit(1);

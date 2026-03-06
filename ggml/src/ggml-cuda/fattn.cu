@@ -6,6 +6,10 @@
 #include "fattn-wmma-f16.cuh"
 #include "fattn.cuh"
 
+#ifdef GGML_HIP_GFX906
+#include "gfx906/attention/fattn-q8.cuh"
+#endif
+
 template <int DKQ, int DV, int ncols2>
 static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
@@ -275,6 +279,9 @@ enum best_fattn_kernel {
     BEST_FATTN_KERNEL_VEC      = 100,
     BEST_FATTN_KERNEL_WMMA_F16 = 300,
     BEST_FATTN_KERNEL_MMA_F16  = 400,
+#ifdef GGML_HIP_GFX906
+    BEST_FATTN_KERNEL_TILE_Q8  = 250,
+#endif
 };
 
 static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const ggml_tensor * dst) {
@@ -440,6 +447,18 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         return BEST_FATTN_KERNEL_MMA_F16;
     }
 
+    // Use MFMA flash attention for CDNA (MI100+):
+    if (amd_mfma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72 && Q->ne[0] != 256 && Q->ne[0] != 576) {
+        const int64_t eff_nq = Q->ne[1] * (gqa_opt_applies ? gqa_ratio : 1);
+        // MMA vs tile crossover benchmarked on MI300X @ d32768:
+        //   hsk=64  (gqa=4): MMA wins at eff >= 128 (+11%)
+        //   hsk=128 (gqa=4): MMA wins at eff >= 128 (+4%)
+        if (eff_nq >= (GGML_CUDA_CC_IS_CDNA1(cc) && Q->ne[0] == 64 ? 64 : 128)) {
+            return BEST_FATTN_KERNEL_MMA_F16;
+        }
+        // Fall through to tile kernel for small effective batch sizes.
+    }
+
     // If there are no tensor cores available, use the generic tile kernel:
     if (can_use_vector_kernel) {
         if (!ggml_is_quantized(K->type) && !ggml_is_quantized(V->type)) {
@@ -454,6 +473,20 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
             }
         }
     }
+
+#ifdef GGML_HIP_GFX906
+    if (K->type == GGML_TYPE_Q8_0 || V->type == GGML_TYPE_Q8_0) {
+        const bool q8_head_size_supported = (K->ne[0] % 32 == 0) &&
+                                            (K->ne[0] != 40) &&
+                                            (K->ne[0] != 80) &&
+                                            (K->ne[0] != 112) &&
+                                            (K->ne[0] != 576);
+        if (q8_head_size_supported) {
+            return BEST_FATTN_KERNEL_TILE_Q8;
+        }
+    }
+#endif
+
     return BEST_FATTN_KERNEL_TILE;
 }
 
@@ -465,6 +498,11 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
         case BEST_FATTN_KERNEL_TILE:
             ggml_cuda_flash_attn_ext_tile(ctx, dst);
             break;
+#ifdef GGML_HIP_GFX906
+        case BEST_FATTN_KERNEL_TILE_Q8:
+            ggml_cuda_flash_attn_ext_tile_q8(ctx, dst);
+            break;
+#endif
         case BEST_FATTN_KERNEL_VEC:
             ggml_cuda_flash_attn_ext_vec(ctx, dst);
             break;

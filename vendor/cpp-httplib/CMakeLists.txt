@@ -171,7 +171,6 @@ endif()
 if (CPPHTTPLIB_OPENSSL_SUPPORT)
     target_compile_definitions(${TARGET} PUBLIC CPPHTTPLIB_OPENSSL_SUPPORT) # used in server.cpp
     if (APPLE AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-        target_compile_definitions(${TARGET} PRIVATE CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN)
         find_library(CORE_FOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
         find_library(SECURITY_FRAMEWORK Security REQUIRED)
         target_link_libraries(${TARGET} PUBLIC ${CORE_FOUNDATION_FRAMEWORK} ${SECURITY_FRAMEWORK})

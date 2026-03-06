@@ -128,6 +128,8 @@ static void set_rows_thread_f16_f32(unsigned int nth, unsigned int ith, void *da
 int op_set_rows(struct htp_ops_context * octx) {
     set_rows_preamble;
 
+    const uint32_t n_threads = MIN(nr, octx->n_threads);
+
     if (octx->src0.type != HTP_TYPE_F32) {
         return HTP_STATUS_NO_SUPPORT;
     }
@@ -149,15 +151,14 @@ int op_set_rows(struct htp_ops_context * octx) {
     srctx.div_ne12 = init_fastdiv_values(ne12);
     srctx.div_ne11 = init_fastdiv_values(ne11);
 
-    const uint32_t n_jobs = MIN(nr, octx->n_threads);
-    srctx.src0_nrows_per_thread = (nr + n_jobs - 1) / n_jobs;
+    srctx.src0_nrows_per_thread = (nr + n_threads - 1) / n_threads;
 
     switch(octx->dst.type) {
     case HTP_TYPE_F32:
-        worker_pool_run_func(octx->ctx->worker_pool, set_rows_thread_f32_f32, &srctx, n_jobs);
+        worker_pool_run_func(octx->ctx->worker_pool, set_rows_thread_f32_f32, &srctx, n_threads);
         break;
     case HTP_TYPE_F16:
-        worker_pool_run_func(octx->ctx->worker_pool, set_rows_thread_f16_f32, &srctx, n_jobs);
+        worker_pool_run_func(octx->ctx->worker_pool, set_rows_thread_f16_f32, &srctx, n_threads);
         break;
     default:
         return HTP_STATUS_NO_SUPPORT;

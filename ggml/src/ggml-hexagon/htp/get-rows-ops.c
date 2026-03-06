@@ -82,6 +82,8 @@ static void get_rows_thread_f32_f32(unsigned int nth, unsigned int ith, void *da
 int op_get_rows(struct htp_ops_context * octx) {
     get_rows_preamble;
 
+    const uint32_t n_threads = MIN(nr, octx->n_threads);
+
     if (octx->src0.type != HTP_TYPE_F32) {
         return HTP_STATUS_NO_SUPPORT;
     }
@@ -103,9 +105,8 @@ int op_get_rows(struct htp_ops_context * octx) {
     grctx.get_rows_div_ne10      = init_fastdiv_values(octx->src1.ne[0]);
     grctx.get_rows_div_ne10_ne11 = init_fastdiv_values(octx->src1.ne[0] * octx->src1.ne[1]);
 
-    const uint32_t n_jobs = MIN(nr, octx->n_threads);
-    grctx.src1_nrows_per_thread = (nr + n_jobs - 1) / n_jobs;
+    grctx.src1_nrows_per_thread = (nr + n_threads - 1) / n_threads;
 
-    worker_pool_run_func(octx->ctx->worker_pool, get_rows_thread_f32_f32, &grctx, n_jobs);
+    worker_pool_run_func(octx->ctx->worker_pool, get_rows_thread_f32_f32, &grctx, n_threads);
     return HTP_STATUS_OK;
 }

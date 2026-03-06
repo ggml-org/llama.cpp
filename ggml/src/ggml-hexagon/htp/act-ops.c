@@ -693,8 +693,8 @@ static int execute_op_activations_f32(struct htp_ops_context * octx) {
             return HTP_STATUS_NO_SUPPORT;
     }
 
-    const uint32_t n_threads  = octx->n_threads;
     const uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
+    const uint32_t n_threads  = MIN(octx->n_threads, src0_nrows);
 
     size_t src0_row_size = src0->nb[1];
     size_t src1_row_size = src1->nb[1]; // zero bytes if src1 is not used
@@ -748,13 +748,11 @@ static int execute_op_activations_f32(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
-    uint32_t n_jobs = MIN(n_threads, src0_nrows);
-
     // Prepare context
     struct htp_act_context actx;
     actx.octx = octx;
 
-    actx.src0_nrows_per_thread = (src0_nrows + n_jobs - 1) / n_jobs;
+    actx.src0_nrows_per_thread = (src0_nrows + n_threads - 1) / n_threads;
 
     actx.src0_row_size = src0_row_size;
     actx.src1_row_size = src1_row_size;
@@ -794,7 +792,7 @@ static int execute_op_activations_f32(struct htp_ops_context * octx) {
     actx.data_src1 = data_src1;
     actx.data_dst  = (uint8_t *) dst->data;
 
-    worker_pool_run_func(octx->ctx->worker_pool, act_op_func, &actx, n_jobs);
+    worker_pool_run_func(octx->ctx->worker_pool, act_op_func, &actx, n_threads);
     return HTP_STATUS_OK;
 }
 

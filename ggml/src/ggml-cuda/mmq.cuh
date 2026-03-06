@@ -9,6 +9,11 @@
 
 using namespace ggml_cuda_mma;
 
+#ifdef GGML_HIP_GFX906
+#include "gfx906/gfx906-config.h"
+#include "gfx906/matmul/mmq.cuh"
+#endif
+
 #define MMQ_DP4A_MAX_BATCH_SIZE 64 // Max. batch size to use for dp4a MMQ kernels when FP16 tensor cores are available.
 #define MMQ_ITER_K 256
 #define MMQ_ITER_K_MXFP4_FP4    512
@@ -250,6 +255,7 @@ static constexpr __host__ __device__ int mmq_get_mma_tile_x_k(ggml_type type) {
 // block_q8_1_mmq has (128 8-bit ints == 32 32-bit ints + 4 32-bit scales)
 #define MMQ_TILE_Y_K     (MMQ_TILE_NE_K + MMQ_TILE_NE_K / QI8_1)
 #define MMQ_TILE_Y_FP4_K MMQ_TILE_Y_K
+#define MMQ_TILE_Y_K_LDS MMQ_TILE_Y_K
 
 static int mmq_get_granularity_host(const int mmq_x, const int cc) {
     if (amd_mfma_available(cc) || amd_wmma_available(cc)) {
@@ -277,7 +283,13 @@ static constexpr __device__ int mmq_get_granularity_device(const int /*mmq_x*/) 
 
 #if defined(GGML_USE_HIP)
 static int mmq_get_nwarps_host(const int cc, const int warp_size) {
+#ifdef GGML_HIP_GFX906
+    GGML_UNUSED(cc);
+    GGML_UNUSED(warp_size);
+    return GFX906_MMQ_NWARPS;
+#else
     return amd_mfma_available(cc) ? 8 : 256/warp_size;
+#endif
 }
 #else
 static int mmq_get_nwarps_host(const int /*cc*/, const int warp_size) {
@@ -286,7 +298,9 @@ static int mmq_get_nwarps_host(const int /*cc*/, const int warp_size) {
 #endif // (GGML_USE_HIP)
 
 static constexpr __device__ int mmq_get_nwarps_device() {
-#if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
+#ifdef GGML_HIP_GFX906
+    return GFX906_MMQ_NWARPS;
+#elif defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
     return 8;
 #else
     return 256/ggml_cuda_get_physical_warp_size();
@@ -385,14 +399,18 @@ static __device__ __forceinline__ void vec_dot_q4_0_q8_1_dp4a(
                 int u[2*VDR_Q4_0_Q8_1_MMQ];
 
 #pragma unroll
+                #ifdef GGML_HIP_GFX906
+                gfx906_load_q4_0_quants_vectorized(y_qs, j*MMQ_TILE_Y_K_LDS + kyqs, QI4_0, u);
+                #else
                 for (int l = 0; l < VDR_Q4_0_Q8_1_MMQ; ++l) {
-                    u[2*l+0] = y_qs[j*MMQ_TILE_Y_K + kyqs +  l];
-                    u[2*l+1] = y_qs[j*MMQ_TILE_Y_K + kyqs + (l + QI4_0)];
+                    u[2*l+0] = y_qs[j*MMQ_TILE_Y_K_LDS + kyqs +  l];
+                    u[2*l+1] = y_qs[j*MMQ_TILE_Y_K_LDS + kyqs + (l + QI4_0)];
                 }
+                #endif
 
                 sum[j0/nwarps*mmq_y/warp_size + i0/warp_size] += vec_dot_q4_0_q8_1_impl<VDR_Q4_0_Q8_1_MMQ>
                     (&x_qs[i*(MMQ_TILE_NE_K + 1) + k0/QR4_0], u,
-                     x_df[i*(MMQ_TILE_NE_K/QI4_0) + i/QI4_0 + k0/(QR4_0*QI4_0)], y_ds[j*MMQ_TILE_Y_K + k01/QI8_1]);
+                     x_df[i*(MMQ_TILE_NE_K/QI4_0) + i/QI4_0 + k0/(QR4_0*QI4_0)], y_ds[j*MMQ_TILE_Y_K_LDS + k01/QI8_1]);
             }
         }
     }
@@ -488,14 +506,18 @@ static __device__ __forceinline__ void vec_dot_q4_1_q8_1_dp4a(
                 int u[2*VDR_Q4_1_Q8_1_MMQ];
 
 #pragma unroll
+                #ifdef GGML_HIP_GFX906
+                gfx906_load_q4_1_quants_vectorized(y_qs, j*MMQ_TILE_Y_K_LDS + kyqs, QI4_1, u);
+                #else
                 for (int l = 0; l < VDR_Q4_1_Q8_1_MMQ; ++l) {
-                    u[2*l+0] = y_qs[j*MMQ_TILE_Y_K + kyqs +  l];
-                    u[2*l+1] = y_qs[j*MMQ_TILE_Y_K + kyqs + (l + QI4_1)];
+                    u[2*l+0] = y_qs[j*MMQ_TILE_Y_K_LDS + kyqs +  l];
+                    u[2*l+1] = y_qs[j*MMQ_TILE_Y_K_LDS + kyqs + (l + QI4_1)];
                 }
+                #endif
 
                 sum[j0/nwarps*mmq_y/warp_size + i0/warp_size] += vec_dot_q4_1_q8_1_impl<VDR_Q4_1_Q8_1_MMQ>
                     (&x_qs[i*(MMQ_TILE_NE_K + 1) + k0/QR4_1], u,
-                     x_dm[i*(MMQ_TILE_NE_K/QI4_1) + i/QI4_1 + k0/(QR4_1*QI4_1)], y_ds[j*MMQ_TILE_Y_K + k01/QI8_1]);
+                     x_dm[i*(MMQ_TILE_NE_K/QI4_1) + i/QI4_1 + k0/(QR4_1*QI4_1)], y_ds[j*MMQ_TILE_Y_K_LDS + k01/QI8_1]);
             }
         }
     }

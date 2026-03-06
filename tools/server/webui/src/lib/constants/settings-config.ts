@@ -23,6 +23,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	autoShowSidebarOnNewChat: true,
 	autoMicOnEmpty: false,
 	fullHeightCodeBlocks: false,
+	showRawModelNames: false,
 	// make sure these default values are in sync with `common.h`
 	samplers: 'top_k;typ_p;top_p;min_p;temperature',
 	backend_sampling: false,
@@ -116,6 +117,8 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 		'Automatically show microphone button instead of send button when textarea is empty for models with audio modality support.',
 	fullHeightCodeBlocks:
 		'Always display code blocks at their full natural height, overriding any height limits.',
+	showRawModelNames:
+		'Display full raw model identifiers (e.g. "unsloth/Qwen3.5-27B-GGUF:BF16") instead of parsed names with badges.',
 	pyInterpreterEnabled:
 		'Enable Python interpreter using Pyodide. Allows running Python code in markdown code blocks.',
 	enableContinueGeneration:

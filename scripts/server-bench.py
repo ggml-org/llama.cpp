@@ -292,6 +292,6 @@ if __name__ == "__main__":
         "--n_predict_min", type=int, default=1024,
         help="Min. number of tokens to predict per prompt (supported for synthetic prompts only)")
     parser.add_argument("--seed_offset", type=int, default=0, help="Offset for determining the seeds for pseudorandom prompt/generation lengths. "
-                        "Corelations between seeds can occur when set >= 1000. Negative values mean no seed.")
+                        "Correlations between seeds can occur when set >= 1000. Negative values mean no seed.")
     args = parser.parse_args()
     benchmark(**vars(args))

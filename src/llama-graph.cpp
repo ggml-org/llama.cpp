@@ -1165,7 +1165,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                float   w_scale,
          llama_expert_gating_func_type gating_op,
                  int   il,
-         ggml_tensor * probs_in) const {
+         ggml_tensor * probs_in,
+         ggml_tensor * gate_up_exps) const {
     return build_moe_ffn(
         cur,
         gate_inp,  /* gate_inp_b  */ nullptr,
@@ -1181,7 +1182,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         w_scale,
         gating_op,
         il,
-        probs_in
+        probs_in,
+        gate_up_exps
     );
 }
 
@@ -1204,7 +1206,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                float   w_scale,
         llama_expert_gating_func_type gating_op,
                  int   il,
-         ggml_tensor * probs_in) const {
+         ggml_tensor * probs_in,
+         ggml_tensor * gate_up_exps,
+         ggml_tensor * gate_up_exps_b) const {
     const int64_t n_embd   = cur->ne[0];
     const int64_t n_tokens = cur->ne[1];
     const bool weight_before_ffn = arch == LLM_ARCH_LLAMA4; // for llama4, we apply the sigmoid-ed weights before the FFN
@@ -1343,26 +1347,48 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         cb(cur, "ffn_moe_weighted", il);
     }
 
-    ggml_tensor * up = build_lora_mm_id(up_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
-    cb(up, "ffn_moe_up", il);
-
-    if (up_exps_b) {
-        up = ggml_add_id(ctx0, up, up_exps_b, selected_experts);
-        cb(up, "ffn_moe_up_biased", il);
-    }
-
+    ggml_tensor * up = nullptr;
     ggml_tensor * experts = nullptr;
-    if (gate_exps) {
-        cur = build_lora_mm_id(gate_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
+
+    if (gate_up_exps) {
+        // merged gate_up path: one mul_mat_id, then split into gate and up views
+        ggml_tensor * gate_up = build_lora_mm_id(gate_up_exps, cur, selected_experts); // [n_ff*2, n_expert_used, n_tokens]
+        cb(gate_up, "ffn_moe_gate_up", il);
+
+        if (gate_up_exps_b) {
+            gate_up = ggml_add_id(ctx0, gate_up, gate_up_exps_b, selected_experts);
+            cb(gate_up, "ffn_moe_gate_up_biased", il);
+        }
+
+        const int64_t n_ff = gate_up->ne[0] / 2;
+        cur = ggml_view_3d(ctx0, gate_up, n_ff, gate_up->ne[1], gate_up->ne[2], gate_up->nb[1], gate_up->nb[2], 0);
         cb(cur, "ffn_moe_gate", il);
+        up  = ggml_view_3d(ctx0, gate_up, n_ff, gate_up->ne[1], gate_up->ne[2], gate_up->nb[1], gate_up->nb[2], n_ff * gate_up->nb[0]);
+        cb(up, "ffn_moe_up", il);
     } else {
-        cur = up;
+        // separate gate and up path
+        up = build_lora_mm_id(up_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
+        cb(up, "ffn_moe_up", il);
+
+        if (up_exps_b) {
+            up = ggml_add_id(ctx0, up, up_exps_b, selected_experts);
+            cb(up, "ffn_moe_up_biased", il);
+        }
+
+        if (gate_exps) {
+            cur = build_lora_mm_id(gate_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
+            cb(cur, "ffn_moe_gate", il);
+        } else {
+            cur = up;
+        }
+
+        if (gate_exps_b) {
+            cur = ggml_add_id(ctx0, cur, gate_exps_b, selected_experts);
+            cb(cur, "ffn_moe_gate_biased", il);
+        }
     }
 
-    if (gate_exps_b) {
-        cur = ggml_add_id(ctx0, cur, gate_exps_b, selected_experts);
-        cb(cur, "ffn_moe_gate_biased", il);
-    }
+    const bool has_gate = gate_exps || gate_up_exps;
 
     switch (type_op) {
         case LLM_FFN_SILU:
@@ -1385,7 +1411,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                         break;
                     }
                 }
+            }
 
+            if (has_gate) {
                 cur = ggml_swiglu_split(ctx0, cur, up);
                 cb(cur, "ffn_moe_swiglu", il);
             } else {
@@ -1393,7 +1421,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                 cb(cur, "ffn_moe_silu", il);
             } break;
         case LLM_FFN_GELU:
-            if (gate_exps) {
+            if (has_gate) {
                 cur = ggml_geglu_split(ctx0, cur, up);
                 cb(cur, "ffn_moe_geglu", il);
             } else {
@@ -1409,7 +1437,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                 cb(cur, "ffn_moe_swiglu_oai", il);
             } break;
         case LLM_FFN_RELU:
-            if (gate_exps) {
+            if (has_gate) {
                 cur = ggml_reglu_split(ctx0, cur, up);
                 cb(cur, "ffn_moe_reglu", il);
             } else {
@@ -1417,7 +1445,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                 cb(cur, "ffn_moe_relu", il);
             } break;
         case LLM_FFN_RELU_SQR:
-            if (gate_exps) {
+            if (has_gate) {
                 // TODO: add support for gated squared relu
                 GGML_ABORT("fatal error: gated squared relu not implemented");
             } else {
@@ -1588,7 +1616,7 @@ ggml_tensor * llm_graph_context::build_inp_attn_scale() const {
 ggml_tensor * llm_graph_context::build_inp_out_ids() const {
     // note: when all tokens are output, we could skip this optimization to spare the ggml_get_rows() calls,
     //       but this would make the graph topology depend on the number of output tokens, which can interere with
-    //       features that require constant topology such as pipline parallelism
+    //       features that require constant topology such as pipeline parallelism
     //       ref: https://github.com/ggml-org/llama.cpp/pull/14275#issuecomment-2987424471
     //if (n_outputs < n_tokens) {
     //    return nullptr;
@@ -1751,7 +1779,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         if (v_mla) {
 #if 0
             // v_mla can be applied as a matrix-vector multiplication with broadcasting across dimension 3 == n_tokens.
-            // However, the code is optimized for dimensions 0 and 1 being large, so this is ineffient.
+            // However, the code is optimized for dimensions 0 and 1 being large, so this is inefficient.
             cur = ggml_reshape_4d(ctx0, cur, v_mla->ne[0], 1, n_head, n_tokens);
             cur = ggml_mul_mat(ctx0, v_mla, cur);
 #else
