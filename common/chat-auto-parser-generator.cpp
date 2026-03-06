@@ -234,7 +234,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context
             call_id_section = p.optional(call_id.prefix + p.tool_id(p.until(call_id.suffix))) + call_id.suffix;
         }
 
-        auto func_parser = p.tool_open(p.atomic(function.name_prefix + p.tool_name(p.literal(name)) + function.name_suffix)) +
+        auto func_parser = p.tool_open(function.name_prefix + p.tool_name(p.literal(name)) + function.name_suffix) +
                            call_id_section + p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", schema));
         if (!function.close.empty()) {
             func_parser = func_parser + function.close;
@@ -316,8 +316,8 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
             }
 
             auto arg = p.tool_arg(
-                p.tool_arg_open(p.atomic(arguments.name_prefix + p.tool_arg_name(p.literal(param_name)) +
-                                arguments.name_suffix)) +
+                p.tool_arg_open(arguments.name_prefix + p.tool_arg_name(p.literal(param_name)) +
+                                arguments.name_suffix) +
                 arguments.value_prefix +
                 (type == "string" ? p.tool_arg_string_value(p.schema(p.until(arguments.value_suffix),
                                                                      "tool-" + name + "-arg-" + param_name + "-schema",
@@ -365,7 +365,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
         bool matched_atomic = false;
         common_peg_parser func_parser = p.eps();
         if (!function.name_suffix.empty()) {
-            func_parser = p.tool_open(p.atomic(function.name_prefix + p.tool_name(p.literal(name)) + function.name_suffix)) +
+            func_parser = p.tool_open(function.name_prefix + p.tool_name(p.literal(name)) + function.name_suffix) +
                 call_id_section + p.space() + args_seq;
             matched_atomic = true;
         } else if (have_call_id) {
