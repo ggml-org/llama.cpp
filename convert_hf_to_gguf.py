@@ -5081,10 +5081,6 @@ class Phi3MiniModel(TextModel):
 class Phi4VisionTextModel(Phi3MiniModel):
     model_arch = gguf.MODEL_ARCH.PHI3
 
-    def set_vocab(self):
-        super().set_vocab()
-        self.gguf_writer.add_tokenizer_pre("phi4")
-
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name.startswith(("model.vision_tower.", "vision_tower.", "model.mm_projector.", "mm_projector.")):
             return
