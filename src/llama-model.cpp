@@ -27,6 +27,7 @@
 #include <regex>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 
 struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const struct ggml_tensor * tensor, void * userdata) {
     const llama_meta_device_get_split_state_userdata * ud = (const llama_meta_device_get_split_state_userdata *) userdata;
@@ -52,83 +53,95 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     const std::regex pattern_output_weight("output\\.weight");
     const std::regex pattern_output_bias("output\\.bias");
 
-    auto get_axis_0_tensor = [&](const std::string & suffix, const std::string & suffix_fallback = "") -> const ggml_tensor * {
+    struct tensor_config {
+        ggml_backend_meta_split_axis axis;
+        const ggml_tensor *          tensor_axis_0;
+        size_t                       rotation;
+    };
+
+    auto get_tensor_config_impl = [&](
+                const ggml_backend_meta_split_axis axis, const std::string & suffix = "", const std::string & suffix_fallback = "") -> tensor_config {
         std::string prefix;
+        size_t rotation;
         if (tensor_name.substr(0, 4) == "blk.") {
             const size_t length_prefix = tensor_name.find('.', 4);
             GGML_ASSERT(length_prefix != std::string::npos);
             prefix = tensor_name.substr(0, length_prefix + 1);
+            const uint32_t il = std::stoull(tensor_name.substr(4, length_prefix));
+            rotation = il % ud->n_devices;
         } else if (tensor_name.substr(0, 6) == "cache_") {
             const size_t layer_index_start = tensor_name.find("_l", 6);
             GGML_ASSERT(layer_index_start != std::string::npos);
-            prefix = "blk." + tensor_name.substr(layer_index_start + 2) + ".";
+            const uint32_t il = std::stoull(tensor_name.substr(layer_index_start + 2));
+            prefix = "blk." + std::to_string(il) + ".";
+            rotation = il % ud->n_devices;
+        } else if (tensor_name.substr(0, 6) == "output") {
+            rotation = ud->model->hparams.n_layer % ud->n_devices;
         } else {
             GGML_ABORT("fatal error");
         }
-        const ggml_tensor * ret = ud->model->get_tensor((prefix + suffix).c_str());
-        if (ret == nullptr) {
+        const ggml_tensor * tensor_axis_0 = suffix.empty() ? tensor : ud->model->get_tensor((prefix + suffix).c_str());
+        if (tensor_axis_0 == nullptr) {
             GGML_ASSERT(!suffix_fallback.empty());
-            ret = ud->model->get_tensor((prefix + suffix_fallback).c_str());
+            tensor_axis_0 = ud->model->get_tensor((prefix + suffix_fallback).c_str());
         }
-        GGML_ASSERT(ret != nullptr);
-        return ret;
+        GGML_ASSERT(tensor_axis_0 != nullptr);
+        return {axis, tensor_axis_0, rotation};
     };
 
-    auto get_split_axis_and_axis_0_tensor = [&]() -> std::pair<ggml_backend_meta_split_axis, const ggml_tensor *> {
+    auto get_tensor_config = [&]() -> tensor_config {
         // standard attention
         if (std::regex_match(tensor_name, pattern_q_weight) || std::regex_match(tensor_name, pattern_kv_weight)) {
-            return std::make_pair(GGML_BACKEND_SPLIT_AXIS_1, get_axis_0_tensor("attn_output.weight"));
+            return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_1, "attn_output.weight");
         }
         if (std::regex_match(tensor_name, pattern_q_bias) || std::regex_match(tensor_name, pattern_kv_bias)) {
-            return std::make_pair(GGML_BACKEND_SPLIT_AXIS_0, get_axis_0_tensor("attn_output.weight"));
+            return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_0, "attn_output.weight");
         }
         if (std::regex_match(tensor_name, pattern_qk_norm)) {
-            return std::make_pair(
-                tensor->ne[1] == 1 ? GGML_BACKEND_SPLIT_AXIS_MIRRORED : GGML_BACKEND_SPLIT_AXIS_1,
-                get_axis_0_tensor("attn_output.weight"));
+            return get_tensor_config_impl(tensor->ne[1] == 1 ? GGML_BACKEND_SPLIT_AXIS_MIRRORED : GGML_BACKEND_SPLIT_AXIS_1, "attn_output.weight");
         }
         if (std::regex_match(tensor_name, pattern_kv_cache) || std::regex_match(tensor_name, pattern_attn_sinks)) {
-            return std::make_pair(GGML_BACKEND_SPLIT_AXIS_0, get_axis_0_tensor("attn_output.weight"));
+            return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_0, "attn_output.weight");
         }
         if (std::regex_match(tensor_name, pattern_attn_out_weight)) {
-            return std::make_pair(GGML_BACKEND_SPLIT_AXIS_0, tensor);
+            return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_0);
         }
         if (std::regex_match(tensor_name, pattern_attn_out_bias)) {
-            return std::make_pair(GGML_BACKEND_SPLIT_AXIS_MIRRORED, tensor);
+            return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_MIRRORED);
         }
 
         // Qwen 3 Next
         // TODO: cache_r and cache_s need different shapes
         // if (std::regex_match(tensor_name, pattern_qkv_weight) || std::regex_match(tensor_name, pattern_attn_gate_weight)) {
-        //     return std::make_pair(GGML_BACKEND_SPLIT_AXIS_1, tensor);
+        //     return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_1);
         // }
 
         // FFN
         if (std::regex_match(tensor_name, pattern_ffn_up_gate_weight)) {
-            return std::make_pair(GGML_BACKEND_SPLIT_AXIS_1, get_axis_0_tensor("ffn_down.weight", "ffn_down_exps.weight"));
+            return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_1, "ffn_down.weight", "ffn_down_exps.weight");
         }
         if (std::regex_match(tensor_name, pattern_ffn_up_gate_bias)) {
-            return std::make_pair(GGML_BACKEND_SPLIT_AXIS_0, get_axis_0_tensor("ffn_down.weight", "ffn_down_exps.weight"));
+            return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_0, "ffn_down.weight", "ffn_down_exps.weight");
         }
         if (std::regex_match(tensor_name, pattern_ffn_down_weight)) {
-            return std::make_pair(GGML_BACKEND_SPLIT_AXIS_0, get_axis_0_tensor("ffn_down.weight", "ffn_down_exps.weight"));
+            return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_0, "ffn_down.weight", "ffn_down_exps.weight");
         }
         if (std::regex_match(tensor_name, pattern_ffn_down_bias)) {
-            return std::make_pair(GGML_BACKEND_SPLIT_AXIS_MIRRORED, tensor);
+            return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_MIRRORED);
         }
 
         // output
         if (std::regex_match(tensor_name, pattern_output_weight)) {
-            return std::make_pair(GGML_BACKEND_SPLIT_AXIS_1, tensor);
+            return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_1);
         }
         if (std::regex_match(tensor_name, pattern_output_bias)) {
             const ggml_tensor * output_weight = ud->model->get_tensor("output_weight");
             GGML_ASSERT(output_weight != nullptr);
-            return std::make_pair(GGML_BACKEND_SPLIT_AXIS_0, output_weight);
+            return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_0);
         }
 
         // everything else
-        return std::make_pair(GGML_BACKEND_SPLIT_AXIS_MIRRORED, tensor);
+        return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_MIRRORED);
     };
 
     auto get_split_granularity = [&](int64_t blck_size) -> int64_t {
@@ -162,18 +175,18 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     };
 
     ggml_backend_meta_split_state split_state;
-    auto tmp = get_split_axis_and_axis_0_tensor();
-    split_state.axis = tmp.first;
+    tensor_config tc = get_tensor_config();
+    split_state.axis = tc.axis;
     if (split_state.axis >= 0 && split_state.axis < GGML_MAX_DIMS) {
         const int64_t ne_full = tensor->ne[split_state.axis];
-        const int64_t blck_size = ggml_blck_size(tmp.second->type);
+        const int64_t blck_size = ggml_blck_size(tc.tensor_axis_0->type);
         const int64_t granularity = get_split_granularity(blck_size);
         GGML_ASSERT(ne_full % granularity == 0);
         const float * tensor_split = ud->model->tensor_split();
         std::vector<float> tensor_split_scan;
         tensor_split_scan.reserve(ud->n_devices);
         for (size_t j = 0; j < ud->n_devices; j++) {
-            tensor_split_scan.push_back(tensor_split[j]);
+            tensor_split_scan.push_back(tensor_split[(j + tc.rotation) % ud->n_devices]);
             if (j > 0) {
                 tensor_split_scan[j] += tensor_split_scan[j - 1];
             }
@@ -186,10 +199,10 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             if (high % granularity != 0) {
                 high -= high % granularity;
             }
-            split_state.ne[j] = high - low;
+            split_state.ne[(j + tc.rotation) % ud->n_devices] = high - low;
             low = high;
         }
-        split_state.ne[j] = ne_full - low;
+        split_state.ne[(j + tc.rotation) % ud->n_devices] = ne_full - low;
     } else {
         memset(split_state.ne, 0, sizeof(split_state.ne));
     }
