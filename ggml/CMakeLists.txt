@@ -309,6 +309,10 @@ endif ()
 
 include(CMakePackageConfigHelpers)
 
+set(GGML_INCLUDE_INSTALL_DIR ${CMAKE_INSTALL_INCLUDEDIR} CACHE PATH "Location of header  files")
+set(GGML_LIB_INSTALL_DIR     ${CMAKE_INSTALL_LIBDIR}     CACHE PATH "Location of library files")
+set(GGML_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location of binary  files")
+
 # all public headers
 set(GGML_PUBLIC_HEADERS
     include/ggml.h
@@ -333,8 +337,10 @@ set_target_properties(ggml PROPERTIES PUBLIC_HEADER "${GGML_PUBLIC_HEADERS}")
 #if (GGML_METAL)
 #    set_target_properties(ggml PROPERTIES RESOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/ggml-metal.metal")
 #endif()
-install(TARGETS ggml LIBRARY PUBLIC_HEADER)
-install(TARGETS ggml-base LIBRARY)
+install(TARGETS ggml
+    LIBRARY DESTINATION ${GGML_LIB_INSTALL_DIR}
+    PUBLIC_HEADER DESTINATION ${GGML_INCLUDE_INSTALL_DIR})
+install(TARGETS ggml-base LIBRARY DESTINATION ${GGML_LIB_INSTALL_DIR})
 
 if (GGML_STANDALONE)
     configure_file(${CMAKE_CURRENT_SOURCE_DIR}/ggml.pc.in
@@ -378,9 +384,6 @@ set(GGML_VARIABLES_EXPANDED ${variable_set_statements})
 # Create the CMake package and set install location.
 
 set(GGML_INSTALL_VERSION ${GGML_VERSION})
-set(GGML_INCLUDE_INSTALL_DIR ${CMAKE_INSTALL_INCLUDEDIR} CACHE PATH "Location of header  files")
-set(GGML_LIB_INSTALL_DIR     ${CMAKE_INSTALL_LIBDIR}     CACHE PATH "Location of library files")
-set(GGML_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location of binary  files")
 
 configure_package_config_file(
         ${CMAKE_CURRENT_SOURCE_DIR}/cmake/ggml-config.cmake.in
