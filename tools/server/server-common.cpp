@@ -927,10 +927,15 @@ json oaicompat_chat_params_parse(
         if (response_type == "json_object") {
             json_schema = json_value(response_format, "schema", json::object());
         } else if (response_type == "json_schema") {
+            // https://platform.openai.com/docs/api-reference/chat/create#chat-create-response_format
+            // OpenAI expects: response_format.json_schema.schema
             auto schema_wrapper = json_value(response_format, "json_schema", json::object());
-            json_schema = json_value(schema_wrapper, "schema", json::object());
+            if (!schema_wrapper.contains("schema")) {
+                throw std::invalid_argument("response_format type \"json_schema\" requires \"json_schema.schema\" to be set");
+            }
+            json_schema = schema_wrapper.at("schema");
         } else if (!response_type.empty() && response_type != "text") {
-            throw std::invalid_argument("response_format type must be one of \"text\" or \"json_object\", but got: " + response_type);
+            throw std::invalid_argument("response_format type must be one of \"text\", \"json_object\", or \"json_schema\", but got: " + response_type);
         }
     }
 
