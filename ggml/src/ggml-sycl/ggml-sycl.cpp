@@ -7900,15 +7900,10 @@ static ggml_backend_buffer_t ggml_backend_sycl_buffer_type_alloc_buffer(ggml_bac
             GGML_LOG_INFO("SYCL: Large buffer (%zu MB) exceeds safe alloc (%zu MB), using host-pinned fallback\n",
                           size / (1024 * 1024), safe_alloc / (1024 * 1024));
             req.intent.constraints.must_host_pinned = true;
-        } else if (buft_ctx->allow_shared_fallback) {
-            // Model weight loading: let unified_select_tier() decide the tier
-            // based on available VRAM budget.  This prevents over-committing
-            // device memory when cumulative allocations exceed VRAM capacity.
-            // The allocator checks cache->available() and routes to HOST_PINNED
-            // automatically when VRAM is insufficient.
-            req.intent.constraints.must_device = false;
         } else {
-            // Non-fallback path (compute buffers, KV cache): force device VRAM.
+            // Always prefer device VRAM for weights.  When allow_shared_fallback
+            // is true and the device allocation fails (budget exceeded or OOM),
+            // the retry block below will fall back to host-pinned automatically.
             req.intent.constraints.must_device = true;
         }
     }
@@ -12615,7 +12610,11 @@ inline void ggml_sycl_op_mul_mat_sycl(ggml_backend_sycl_context & ctx,
             if (src0->type != GGML_TYPE_F16) {
                 scope_op_debug_print scope_dbg_print(__func__, "/to_fp16_sycl", dst, /*num_src=*/2,
                                                      " : converting src0 to fp16");
-                const to_fp16_sycl_t to_fp16_sycl = ggml_get_to_fp16_sycl(src0->type, dst);
+                // CRITICAL: Pass full_tensor=false to force standard AOS dequant.
+                // src0_dd_i is an AOS data pointer. With full_tensor=true (default),
+                // if the tensor has SOA layout metadata, the function returns an
+                // SOA-reorder dequant which produces garbage from AOS data.
+                const to_fp16_sycl_t to_fp16_sycl = ggml_get_to_fp16_sycl(src0->type, dst, false);
 
                 GGML_ASSERT(to_fp16_sycl != nullptr);
                 size_t ne = row_diff * ne00;
@@ -21324,6 +21323,14 @@ MatmulDecision UnifiedMatmulOrchestrator::select(const ggml_tensor *            
             case GGML_LAYOUT_AOS:
                 if (batch <= MMVQ_MAX_BATCH_SIZE && can_use_mul_mat_vec_q(src0, src1, dst, ctx_.device)) {
                     layout_kernel = ggml_sycl_mul_mat_kernel::MMVQ_AOS;
+#if GGML_SYCL_DNNL
+                } else if (ggml_is_quantized(src0->type) && ggml_is_contiguous(src0) &&
+                           src1->type == GGML_TYPE_F32) {
+                    // For large batches (PP), oneDNN FP16 GEMM is ~3x faster than MMQ.
+                    // The dequant+GEMM path through ggml_sycl_op_mul_mat_sycl uses
+                    // oneDNN's optimized jit:gemm kernel which outperforms joint_matrix.
+                    layout_kernel = ggml_sycl_mul_mat_kernel::ONEDNN_AOS;
+#endif
                 } else if (ggml_sycl_supports_mmq(src0->type) && src1->type == GGML_TYPE_F32) {
                     layout_kernel = ggml_sycl_mul_mat_kernel::MMQ_AOS;
                 }
@@ -23200,6 +23207,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                     // that matches the performance of the legacy DMMV kernel.
                     // Set GGML_SYCL_UNIFIED_FORCE_LEGACY=1 to bypass unified kernel entirely.
                     static bool force_legacy = (std::getenv("GGML_SYCL_UNIFIED_FORCE_LEGACY") != nullptr);
+
                     if (!force_legacy) {
                         // IMPORTANT: unified kernel must use device-accessible pointers.
                         // Using tensor->data directly can pass host/mmap pointers and yield NaNs.
@@ -23276,8 +23284,14 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                             bool used_onednn_fp16 = false;
                             if (onednn_pp_enabled && M >= onednn_pp_threshold && ggml_is_quantized(src0->type) &&
                                 ggml_is_contiguous(src0)) {
-                                // Get dequantization function for the weight type
-                                const to_fp16_sycl_t dequant_to_fp16 = ggml_get_to_fp16_sycl(src0->type, dst);
+                                // Get dequantization function for the weight type.
+                                // CRITICAL: Pass full_tensor=false to force standard AOS dequant.
+                                // src0_data points to AOS layout (from ggml_sycl_get_layout_ptr_for
+                                // with GGML_LAYOUT_AOS). With full_tensor=true, the function checks
+                                // dst->src[0]->extra for SOA layout and returns SOA-reorder dequant,
+                                // which reads data in SOA format — applying it to AOS data produces
+                                // garbage FP16 weights and wrong GEMM results.
+                                const to_fp16_sycl_t dequant_to_fp16 = ggml_get_to_fp16_sycl(src0->type, dst, false);
                                 if (dequant_to_fp16) {
                                     // Calculate buffer sizes needed
                                     const size_t src0_elems        = static_cast<size_t>(N) * static_cast<size_t>(K);
@@ -23291,43 +23305,25 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                                     sycl::half * activations_scratch = nullptr;
                                     bool         using_scratch       = false;
 
-                                    // Auto-reserve scratch buffers on first use
-                                    // Reserve 150% of current need to handle varying sizes
-                                    if (!ggml_sycl::unified_cache_has_onednn_scratch(device_id)) {
-                                        // Calculate generous scratch sizes based on typical model dimensions
-                                        // FFN is usually the largest: up to 14336*4096 for weights
-                                        // Activations: max_batch * max_K
-                                        const size_t reserve_weights =
-                                            std::max(weights_bytes * 3 / 2, size_t(128 * 1024 * 1024));
-                                        const size_t reserve_activations =
-                                            std::max(activations_bytes * 3 / 2, size_t(32 * 1024 * 1024));
-                                        ggml_sycl::unified_cache_reserve_onednn_scratch(device_id, reserve_weights,
-                                                                                        reserve_activations);
-                                    }
-
-                                    auto scratch = ggml_sycl::unified_cache_get_onednn_scratch(device_id, weights_bytes,
-                                                                                               activations_bytes);
-                                    if (scratch.ok) {
-                                        weights_scratch     = static_cast<sycl::half *>(scratch.weights);
-                                        activations_scratch = static_cast<sycl::half *>(scratch.activations);
-                                        using_scratch       = true;
-                                    }
-
-                                    // Fall back to per-op allocation if scratch not available
-                                    ggml_sycl_pool_alloc<sycl::half> src0_f16_fallback(ctx.pool());
-                                    ggml_sycl_pool_alloc<sycl::half> src1_f16_fallback(ctx.pool());
-                                    if (!using_scratch) {
-                                        // Try per-op allocation (may fail with large contexts)
-                                        try {
-                                            src0_f16_fallback.alloc(src0_elems);
-                                            src1_f16_fallback.alloc(src1_elems);
-                                            weights_scratch     = src0_f16_fallback.get();
-                                            activations_scratch = src1_f16_fallback.get();
-                                        } catch (...) {
-                                            // Allocation failed, fall back to unified kernel
-                                            weights_scratch     = nullptr;
-                                            activations_scratch = nullptr;
-                                        }
+                                    // Use pool allocation for scratch buffers (same as legacy path).
+                                    // Pool allocator uses pre-existing VRAM pool and is fast.
+                                    ggml_sycl_pool_alloc<sycl::half> src0_f16_alloc(ctx.pool());
+                                    ggml_sycl_pool_alloc<sycl::half> src1_f16_alloc(ctx.pool());
+                                    try {
+                                        src0_f16_alloc.alloc(src0_elems);
+                                        src1_f16_alloc.alloc(src1_elems);
+                                        weights_scratch     = src0_f16_alloc.get();
+                                        activations_scratch = src1_f16_alloc.get();
+                                    } catch (const std::exception & e) {
+                                        GGML_LOG_INFO("[PP-DBG] Pool alloc FAILED: %s (need %zu + %zu)\n",
+                                                      e.what(), src0_elems * sizeof(sycl::half),
+                                                      src1_elems * sizeof(sycl::half));
+                                        weights_scratch     = nullptr;
+                                        activations_scratch = nullptr;
+                                    } catch (...) {
+                                        GGML_LOG_INFO("[PP-DBG] Pool alloc FAILED (unknown)\n");
+                                        weights_scratch     = nullptr;
+                                        activations_scratch = nullptr;
                                     }
 
                                     if (weights_scratch && activations_scratch) {
@@ -23445,10 +23441,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                                         }
                                     }
 
-                                    // Release scratch lock if we acquired it
-                                    if (using_scratch) {
-                                        ggml_sycl::unified_cache_release_onednn_scratch(device_id);
-                                    }
+                                    // No scratch lock to release (using pool allocation)
                                 }
                             }
 
@@ -31067,6 +31060,22 @@ static void ggml_sycl_mmvq_soa_pre_allocate_buffers(ggml_backend_sycl_context & 
     int64_t max_ne10  = 0;
     int64_t max_nrows = 0;
 
+#if GGML_SYCL_DNNL
+    // Check if oneDNN PP is enabled — skip PP-sized MUL_MATs since oneDNN handles them
+    // without needing Q8_1 buffers. This avoids allocating ~1.8 GB of unused buffers.
+    static int  onednn_pp_threshold_cached = -1;
+    static bool onednn_pp_enabled_cached   = true;
+    if (onednn_pp_threshold_cached < 0) {
+        const char * env_pp     = std::getenv("GGML_SYCL_ONEDNN_PP");
+        onednn_pp_enabled_cached = (env_pp == nullptr || std::atoi(env_pp) != 0);
+        const char * env_thr    = std::getenv("GGML_SYCL_ONEDNN_PP_MIN_BATCH");
+        onednn_pp_threshold_cached = env_thr ? std::atoi(env_thr) : 64;
+        if (onednn_pp_threshold_cached < 1) {
+            onednn_pp_threshold_cached = 64;
+        }
+    }
+#endif
+
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
         if (node->op != GGML_OP_MUL_MAT) {
@@ -31078,6 +31087,17 @@ static void ggml_sycl_mmvq_soa_pre_allocate_buffers(ggml_backend_sycl_context & 
         if (!ggml_is_quantized(src0->type)) {
             continue;
         }
+#if GGML_SYCL_DNNL
+        // Skip PP-sized MUL_MATs when oneDNN handles them — they use FP16 dequant,
+        // not Q8_1, so pre-allocating Q8_1 buffers wastes VRAM
+        {
+            const int64_t nrows = src1->ne[1] * src1->ne[2];
+            if (onednn_pp_enabled_cached && nrows >= onednn_pp_threshold_cached &&
+                ggml_is_contiguous(src0)) {
+                continue;
+            }
+        }
+#endif
         soa_mmvq_count++;
 
         // Track max dimensions
@@ -31090,7 +31110,7 @@ static void ggml_sycl_mmvq_soa_pre_allocate_buffers(ggml_backend_sycl_context & 
             max_nrows = nrows;
         }
     }
-    if (soa_mmvq_count == 0) {
+    if (soa_mmvq_count == 0 || max_nrows == 0) {
         return;  // No SoA MMVQ operations
     }
     if (ctx.mmvq_soa_buffers.initialized) {

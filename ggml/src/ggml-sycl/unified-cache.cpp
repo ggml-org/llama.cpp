@@ -6354,13 +6354,15 @@ bool unified_cache::reserve_onednn_scratch(size_t weights_size, size_t activatio
         saturating_sub_used(old_total);
     }
 
-    // Check if we have budget
+    // Check budget to ensure we have VRAM headroom for oneDNN scratch
     const size_t total_needed = weights_size + activations_size;
     if (total_needed > available()) {
-        GGML_SYCL_DEBUG("[UNIFIED-CACHE] Cannot reserve oneDNN scratch: need %.1f MB, available %.1f MB\n",
+        GGML_SYCL_DEBUG("[UNIFIED-CACHE] oneDNN scratch allocation blocked: need %.1f MB but only %.1f MB available\n",
                         total_needed / (1024.0f * 1024.0f), available() / (1024.0f * 1024.0f));
         return false;
     }
+    GGML_SYCL_DEBUG("[UNIFIED-CACHE] Reserving oneDNN scratch: need %.1f MB, cache-available %.1f MB\n",
+                    total_needed / (1024.0f * 1024.0f), available() / (1024.0f * 1024.0f));
 
     // Allocate weights scratch
     try {

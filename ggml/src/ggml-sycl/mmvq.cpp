@@ -3549,9 +3549,11 @@ void ggml_sycl_moe_pre_allocate_buffers(ggml_backend_sycl_context & ctx, ggml_cg
         return;  // No MoE operations
     }
 
-    // Calculate buffer size (use max dimensions for all buffers)
+    // Calculate buffer size for SoA layout: [qs: ne10 bytes][ds: (ne10/QK8_1) * sizeof(half2)]
     const int64_t ne10_padded   = GGML_PAD(max_ne10, QK8_1);
-    const int64_t q8_1_row_size = ne10_padded * sizeof(block_q8_1) / QK8_1;
+    const int64_t q8_1_qs_size  = ne10_padded;  // One byte per quantized value
+    const int64_t q8_1_ds_size  = (ne10_padded / QK8_1) * sizeof(sycl::half2);  // Scales
+    const int64_t q8_1_row_size = q8_1_qs_size + q8_1_ds_size;
     const size_t  buffer_size   = max_src1_rows * q8_1_row_size;
 
     GGML_SYCL_DEBUG("[MOE-GRAPH] Pre-allocating %d Q8_1 buffers, %zu bytes each (ne10=%lld, rows=%lld)\n", moe_count,
