@@ -1697,6 +1697,7 @@ void ggml_gemv_iq4_nl_8x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const 
     ggml_gemv_iq4_nl_8x8_q8_0_generic(n, s, bs, vx, vy, nr, nc);
 }
 
+<<<<<<< HEAD
 void ggml_gemv_mxfp4_8x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
 #if defined(__AVX2__)
     __m256i signextendlut = _mm256_castsi128_si256(_mm_loadu_si128((const __m128i*)kvalues_mxfp4));
@@ -1708,6 +1709,135 @@ void ggml_gemv_mxfp4_8x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const v
 #endif
 
     ggml_gemv_mxfp4_8x8_q8_0_generic(n, s, bs, vx, vy, nr, nc);
+=======
+void ggml_gemv_q5_0_8x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+
+    const int qk = QK8_0;
+    const int nb = n / qk;
+    const int ncols_interleaved = 8;
+    const int blocklen = 8;
+
+    UNUSED(s);
+    UNUSED(bs);
+    UNUSED(vx);
+    UNUSED(vy);
+    UNUSED(nr);
+    UNUSED(nc);
+    UNUSED(nb);
+    UNUSED(ncols_interleaved);
+    UNUSED(blocklen);
+
+#if defined(__AVX2__)
+
+    const __m256i m4b  = _mm256_set1_epi8(0x0F);
+    const __m256i zero = _mm256_setzero_si256();
+    const __m256i hF0  = _mm256_set1_epi8((char)0xF0);
+    const __m256i bit_pos = _mm256_set1_epi64x(0x8040201008040201LL);
+
+    const __m256i shuf_0123 = _mm256_set_epi8(3,3,3,3,3,3,3,3,2,2,2,2,2,2,2,2,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0);
+    const __m256i shuf_4567 = _mm256_set_epi8(7,7,7,7,7,7,7,7,6,6,6,6,6,6,6,6,5,5,5,5,5,5,5,5,4,4,4,4,4,4,4,4);
+
+    // Permute mask used for easier vector processing at later stages
+    const __m128i changemask = _mm_set_epi8(15,14,7,6,13,12,5,4,11,10,3,2,9,8,1,0);
+    const __m256i finalpermutemask = _mm256_set_epi32(7,5,3,1,6,4,2,0);
+
+    const int64_t b_nb = n / 32;
+    const block_q5_0x8 * b_ptr_start = (const block_q5_0x8 *)vx;
+    const block_q8_0 * a_ptr_start = (const block_q8_0 *)vy;
+
+    // Pointers to LHS block of block_q8_0 format
+    const block_q8_0 * a_ptr = a_ptr_start;
+
+    // Take group of eight blocks at each pass of the loop and perform dot product operation
+    for (int64_t x = 0; x < nc / 8; x++) {
+
+        // Pointers to RHS blocks
+        const block_q5_0x8 * b_ptr = b_ptr_start + (x * b_nb);
+
+        // Master FP accumulator
+        __m256 acc_row = _mm256_setzero_ps();
+
+        for (int64_t b = 0; b < nb; b++) {
+
+            // Load 8 blocks of 32 interleaved as 8 bytes (B0 - B7)
+            const __m256i lbit_raw_0123_0 = _mm256_loadu_si256((const __m256i *)b_ptr[b].qs);
+            const __m256i lbit_raw_4567_0 = _mm256_loadu_si256((const __m256i *)b_ptr[b].qs + 1);
+            const __m256i lbit_raw_0123_1 = _mm256_loadu_si256((const __m256i *)b_ptr[b].qs + 2);
+            const __m256i lbit_raw_4567_1 = _mm256_loadu_si256((const __m256i *)b_ptr[b].qs + 3);
+
+            // 4-bit -> 8-bit
+            const __m256i lbit_0123_0 = _mm256_and_si256(lbit_raw_0123_0, m4b);
+            const __m256i lbit_4567_0 = _mm256_and_si256(lbit_raw_4567_0, m4b);
+            const __m256i lbit_0123_1 = _mm256_and_si256(lbit_raw_0123_1, m4b);
+            const __m256i lbit_4567_1 = _mm256_and_si256(lbit_raw_4567_1, m4b);
+            const __m256i lbit_0123_2 = _mm256_and_si256(_mm256_srli_epi16(lbit_raw_0123_0, 4), m4b);
+            const __m256i lbit_4567_2 = _mm256_and_si256(_mm256_srli_epi16(lbit_raw_4567_0, 4), m4b);
+            const __m256i lbit_0123_3 = _mm256_and_si256(_mm256_srli_epi16(lbit_raw_0123_1, 4), m4b);
+            const __m256i lbit_4567_3 = _mm256_and_si256(_mm256_srli_epi16(lbit_raw_4567_1, 4), m4b);
+
+            // Load high bit of quantized values
+            const __m128i hbit_raw128_0 = _mm_loadl_epi64((const __m128i *)(b_ptr[b].qh));
+            const __m256i hbit_raw256_0 = _mm256_broadcastsi128_si256(hbit_raw128_0);
+            const __m256i hbit_0123_0 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(hbit_raw256_0, shuf_0123), bit_pos), zero), hF0);
+            const __m256i hbit_4567_0 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(hbit_raw256_0, shuf_4567), bit_pos), zero), hF0);
+
+            const __m128i hbit_raw128_1 = _mm_loadl_epi64((const __m128i *)(b_ptr[b].qh + 8));
+            const __m256i hbit_raw256_1 = _mm256_broadcastsi128_si256(hbit_raw128_1);
+            const __m256i hbit_0123_1 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(hbit_raw256_1, shuf_0123), bit_pos), zero), hF0);
+            const __m256i hbit_4567_1 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(hbit_raw256_1, shuf_4567), bit_pos), zero), hF0);
+
+            const __m128i hbit_raw128_2 = _mm_loadl_epi64((const __m128i *)(b_ptr[b].qh + 16));
+            const __m256i hbit_raw256_2 = _mm256_broadcastsi128_si256(hbit_raw128_2);
+            const __m256i hbit_0123_2 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(hbit_raw256_2, shuf_0123), bit_pos), zero), hF0);
+            const __m256i hbit_4567_2 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(hbit_raw256_2, shuf_4567), bit_pos), zero), hF0);
+
+            const __m128i hbit_raw128_3 = _mm_loadl_epi64((const __m128i *)(b_ptr[b].qh + 24));
+            const __m256i hbit_raw256_3 = _mm256_broadcastsi128_si256(hbit_raw128_3);
+            const __m256i hbit_0123_3 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(hbit_raw256_3, shuf_0123), bit_pos), zero), hF0);
+            const __m256i hbit_4567_3 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(hbit_raw256_3, shuf_4567), bit_pos), zero), hF0);
+
+            // combine lbit | hbit
+            const __m256i rhs_vec_0123_0 = _mm256_or_si256(lbit_0123_0, hbit_0123_0);
+            const __m256i rhs_vec_4567_0 = _mm256_or_si256(lbit_4567_0, hbit_4567_0);
+            const __m256i rhs_vec_0123_1 = _mm256_or_si256(lbit_0123_1, hbit_0123_1);
+            const __m256i rhs_vec_4567_1 = _mm256_or_si256(lbit_4567_1, hbit_4567_1);
+            const __m256i rhs_vec_0123_2 = _mm256_or_si256(lbit_0123_2, hbit_0123_2);
+            const __m256i rhs_vec_4567_2 = _mm256_or_si256(lbit_4567_2, hbit_4567_2);
+            const __m256i rhs_vec_0123_3 = _mm256_or_si256(lbit_0123_3, hbit_0123_3);
+            const __m256i rhs_vec_4567_3 = _mm256_or_si256(lbit_4567_3, hbit_4567_3);
+
+            // Load the scale values for the 8 blocks interleaved in block_q5_0x8
+            const __m256 col_scale_f32 = GGML_F32Cx8_REARRANGE_LOAD(b_ptr[b].d, changemask);
+            const __m256 row_scale_f32 = _mm256_set1_ps(GGML_CPU_FP16_TO_FP32(a_ptr[b].d));
+
+            // Load and convert to FP32 scale from block_q8_0
+            __m256i lhs_vec_0 = _mm256_broadcastsi128_si256(_mm_loadu_si128((const __m128i *)a_ptr[b].qs));
+            __m256i lhs_vec_1 = _mm256_broadcastsi128_si256(_mm_loadu_si128((const __m128i *)(a_ptr[b].qs + 16)));
+
+            __m256i iacc = _mm256_setzero_si256();
+            iacc = mul_sum_i8_pairs_acc_int32x8(iacc, _mm256_blend_epi32(rhs_vec_0123_0, _mm256_shuffle_epi32(rhs_vec_4567_0, 177), 170), _mm256_shuffle_epi32(lhs_vec_0,   0));
+            iacc = mul_sum_i8_pairs_acc_int32x8(iacc, _mm256_blend_epi32(_mm256_shuffle_epi32(rhs_vec_0123_0, 177), rhs_vec_4567_0, 170), _mm256_shuffle_epi32(lhs_vec_0,  85));
+            iacc = mul_sum_i8_pairs_acc_int32x8(iacc, _mm256_blend_epi32(rhs_vec_0123_1, _mm256_shuffle_epi32(rhs_vec_4567_1, 177), 170), _mm256_shuffle_epi32(lhs_vec_0, 170));
+            iacc = mul_sum_i8_pairs_acc_int32x8(iacc, _mm256_blend_epi32(_mm256_shuffle_epi32(rhs_vec_0123_1, 177), rhs_vec_4567_1, 170), _mm256_shuffle_epi32(lhs_vec_0, 255));
+            iacc = mul_sum_i8_pairs_acc_int32x8(iacc, _mm256_blend_epi32(rhs_vec_0123_2, _mm256_shuffle_epi32(rhs_vec_4567_2, 177), 170), _mm256_shuffle_epi32(lhs_vec_1,   0));
+            iacc = mul_sum_i8_pairs_acc_int32x8(iacc, _mm256_blend_epi32(_mm256_shuffle_epi32(rhs_vec_0123_2, 177), rhs_vec_4567_2, 170), _mm256_shuffle_epi32(lhs_vec_1,  85));
+            iacc = mul_sum_i8_pairs_acc_int32x8(iacc, _mm256_blend_epi32(rhs_vec_0123_3, _mm256_shuffle_epi32(rhs_vec_4567_3, 177), 170), _mm256_shuffle_epi32(lhs_vec_1, 170));
+            iacc = mul_sum_i8_pairs_acc_int32x8(iacc, _mm256_blend_epi32(_mm256_shuffle_epi32(rhs_vec_0123_3, 177), rhs_vec_4567_3, 170), _mm256_shuffle_epi32(lhs_vec_1, 255));
+
+            // Accumulated values multiplied with appropriate scales
+            acc_row = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc), _mm256_mul_ps(col_scale_f32, row_scale_f32), acc_row);
+        }
+        // Accumulated output values permuted so as to be stored in appropriate order post accumulation
+        acc_row = _mm256_permutevar8x32_ps(acc_row, finalpermutemask);
+        _mm256_storeu_ps(s + (x * 8), acc_row);
+    }
+
+#else
+
+    ggml_gemv_q5_0_8x8_q8_0_generic(n, s, bs, vx, vy, nr, nc);
+#endif
+
+>>>>>>> b0a838b62 (Block interleaving implementation for Q5_0 nodes)
 }
 
 void ggml_gemv_q2_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
@@ -3522,6 +3652,856 @@ void ggml_gemm_mxfp4_8x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const v
 
     ggml_gemm_mxfp4_8x8_q8_0_generic(n, s, bs, vx, vy, nr, nc);
 }
+
+void ggml_gemm_q5_0_8x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+
+    const int qk = QK8_0;
+    const int nb = n / qk;
+    const int ncols_interleaved = 8;
+    const int blocklen = 8;
+
+    assert (n % qk == 0);
+    assert (nr % 4 == 0);
+    assert (nc % ncols_interleaved == 0);
+
+    UNUSED(s);
+    UNUSED(bs);
+    UNUSED(vx);
+    UNUSED(vy);
+    UNUSED(nr);
+    UNUSED(nc);
+    UNUSED(nb);
+    UNUSED(ncols_interleaved);
+    UNUSED(blocklen);
+
+#if defined(__AVX2__) || defined(__AVX512F__)
+    const block_q5_0x8 * b_ptr_start = (const block_q5_0x8 *)vx;
+    const block_q8_0x4 * a_ptr_start = (const block_q8_0x4 *)vy;
+
+    int64_t b_nb = n / 32;
+    int64_t y = 0;
+    // Mask to mask out nibbles from packed bytes
+    const __m256i m4b = _mm256_set1_epi8(0x0F);
+    const __m128i loadMask = _mm_blend_epi32(_mm_setzero_si128(), _mm_set1_epi32(0xFFFFFFFF), 3);
+    // Permute mask used for easier vector processing at later stages
+    __m256i requiredOrder  = _mm256_set_epi32(3, 2, 1, 0, 7, 6, 5, 4);
+    int64_t xstart = 0;
+    int anr = nr - nr%16;// Used to align nr with boundary of 16
+
+    // Shuffle masks to replicate qh byte for each block into 8 consecutive byte positions
+    const __m128i shuf_lo01 = _mm_set_epi8(1,1,1,1,1,1,1,1, 0,0,0,0,0,0,0,0);
+    const __m128i shuf_hi45 = _mm_set_epi8(5,5,5,5,5,5,5,5, 4,4,4,4,4,4,4,4);
+    const __m128i shuf_lo23 = _mm_set_epi8(3,3,3,3,3,3,3,3, 2,2,2,2,2,2,2,2);
+    const __m128i shuf_hi67 = _mm_set_epi8(7,7,7,7,7,7,7,7, 6,6,6,6,6,6,6,6);
+    const __m256i bit_pos = _mm256_set1_epi64x(0x8040201008040201LL);
+    const __m256i zero  = _mm256_setzero_si256();
+    const __m256i hF0 = _mm256_set1_epi8((char)0xF0);
+
+#if defined(__AVX512BW__) && defined(__AVX512DQ__)
+    int anc = nc - nc%16; // Used to align nc with boundary of 16
+    // Mask to mask out nibbles from packed bytes expanded to 512 bit length
+    const __m512i m4bexpanded = _mm512_set1_epi8(0x0F);
+
+    // hbit shuffle masks
+    const __m256i shuf_hbit_0145_cur=_mm256_set_epi8(5,5,5,5,5,5,5,5,4,4,4,4,4,4,4,4,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0);
+    const __m256i shuf_hbit_2367_cur=_mm256_set_epi8(7,7,7,7,7,7,7,7,6,6,6,6,6,6,6,6,3,3,3,3,3,3,3,3,2,2,2,2,2,2,2,2);
+    const __m256i shuf_hbit_0145_next=_mm256_set_epi8(13,13,13,13,13,13,13,13,12,12,12,12,12,12,12,12,9,9,9,9,9,9,9,9,8,8,8,8,8,8,8,8);
+    const __m256i shuf_hbit_2367_next=_mm256_set_epi8(15,15,15,15,15,15,15,15,14,14,14,14,14,14,14,14,11,11,11,11,11,11,11,11,10,10,10,10,10,10,10,10);
+
+    // Take group of four block_q8_0x4 structures at each pass of the loop and perform dot product operation
+    for (; y < anr / 4; y += 4) {
+        const block_q8_0x4 * a_ptrs[4];
+
+        a_ptrs[0] = a_ptr_start + (y * nb);
+        for (int i = 0; i < 3; ++i) {
+            a_ptrs[i + 1] = a_ptrs[i] + nb;
+        }
+
+        // Take group of two block_q5_0x8 structures at each pass of the loop and perform dot product operation
+        for (int64_t x = 0; x < anc / 8; x += 2) {
+            const block_q5_0x8 * b_ptr_0 = b_ptr_start + ((x) * b_nb);
+            const block_q5_0x8 * b_ptr_1 = b_ptr_start + ((x + 1) * b_nb);
+
+            // Master FP accumulators
+            __m512 acc_rows[16];
+            for (int i = 0; i < 16; i++) {
+                acc_rows[i] = _mm512_setzero_ps();
+            }
+
+            for (int64_t b = 0; b < nb; b++) {
+                // Delta values - Load the sixteen scale values from two block_q5_0x8 structures
+                const __m512 col_scale_f32 = GGML_F32Cx8x2_LOAD(b_ptr_0[b].d, b_ptr_1[b].d);
+                // Load the sixteen blocks of lower bits for quantized values interleaved with each other in chunks of eight - B0,B1 ....BE,BF
+                const __m256i rhs_raw_lbit_0123_0 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].qs));
+                const __m256i rhs_raw_lbit_4567_0 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].qs + 32));
+                const __m256i rhs_raw_lbit_0123_1 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].qs + 64));
+                const __m256i rhs_raw_lbit_4567_1 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].qs + 96));
+
+                const __m256i rhs_raw_lbit_89AB_0 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].qs));
+                const __m256i rhs_raw_lbit_CDEF_0 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].qs + 32));
+                const __m256i rhs_raw_lbit_89AB_1 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].qs + 64));
+                const __m256i rhs_raw_lbit_CDEF_1 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].qs + 96));
+
+                // Save the values in the following vectors in the forlbits B0B1B4B5B8B9BCBD, B2B3B6B7BABBBEBF for further processing and storing of values
+                const __m256i rhs_raw_lbit_0145_0 = _mm256_blend_epi32(rhs_raw_lbit_0123_0, _mm256_permutevar8x32_epi32(rhs_raw_lbit_4567_0, requiredOrder), 240);
+                const __m256i rhs_raw_lbit_2367_0 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_lbit_0123_0, requiredOrder), rhs_raw_lbit_4567_0, 240);
+                const __m256i rhs_raw_lbit_0145_1 = _mm256_blend_epi32(rhs_raw_lbit_0123_1, _mm256_permutevar8x32_epi32(rhs_raw_lbit_4567_1, requiredOrder), 240);
+                const __m256i rhs_raw_lbit_2367_1 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_lbit_0123_1, requiredOrder), rhs_raw_lbit_4567_1, 240);
+
+                const __m256i rhs_raw_lbit_89CD_0 = _mm256_blend_epi32(rhs_raw_lbit_89AB_0, _mm256_permutevar8x32_epi32(rhs_raw_lbit_CDEF_0, requiredOrder), 240);
+                const __m256i rhs_raw_lbit_ABEF_0 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_lbit_89AB_0, requiredOrder), rhs_raw_lbit_CDEF_0, 240);
+                const __m256i rhs_raw_lbit_89CD_1 = _mm256_blend_epi32(rhs_raw_lbit_89AB_1, _mm256_permutevar8x32_epi32(rhs_raw_lbit_CDEF_1, requiredOrder), 240);
+                const __m256i rhs_raw_lbit_ABEF_1 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_lbit_89AB_1, requiredOrder), rhs_raw_lbit_CDEF_1, 240);
+
+                const __m512i rhs_raw_lbit_014589CD_0 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_lbit_0145_0), rhs_raw_lbit_89CD_0, 1);
+                const __m512i rhs_raw_lbit_2367ABEF_0 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_lbit_2367_0), rhs_raw_lbit_ABEF_0, 1);
+                const __m512i rhs_raw_lbit_014589CD_1 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_lbit_0145_1), rhs_raw_lbit_89CD_1, 1);
+                const __m512i rhs_raw_lbit_2367ABEF_1 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_lbit_2367_1), rhs_raw_lbit_ABEF_1, 1);
+
+                // 4-bit -> 8-bit
+                const __m512i rhs_lbit_014589CD_0 = _mm512_and_si512(rhs_raw_lbit_014589CD_0, m4bexpanded); //B0(0-7) B1(0-7) B4(0-7) B5(0-7) B8(0-7) B9(0-7) BC(0-7) BD(0-7)
+                const __m512i rhs_lbit_2367ABEF_0 = _mm512_and_si512(rhs_raw_lbit_2367ABEF_0, m4bexpanded); //B2(0-7) B3(0-7) B6(0-7) B7(0-7) BA(0-7) BB(0-7) BE(0-7) BF(0-7)
+
+                const __m512i rhs_lbit_014589CD_1 = _mm512_and_si512(rhs_raw_lbit_014589CD_1, m4bexpanded); //B0(8-15) B1(8-15) B4(8-15) B5(8-15) B8(8-15) B9(8-15) BC(8-15) BD(8-15)
+                const __m512i rhs_lbit_2367ABEF_1 = _mm512_and_si512(rhs_raw_lbit_2367ABEF_1, m4bexpanded); //B2(8-15) B3(8-15) B6(8-15) B7(8-15) BA(8-15) BB(8-15) BE(8-15) BF(8-15)
+
+                const __m512i rhs_lbit_014589CD_2 = _mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_0, 4), m4bexpanded); //B0(16-23) B1(16-23) B4(16-23) B5(16-23) B8(16-23) B9(16-23) BC(16-23) BD(16-23)
+                const __m512i rhs_lbit_2367ABEF_2 = _mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_0, 4), m4bexpanded); //B2(16-23) B3(16-23) B6(16-23) B7(16-23) BA(16-23) BB(16-23) BE(16-23) BF(16-23)
+
+                const __m512i rhs_lbit_014589CD_3 = _mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_1, 4), m4bexpanded); //B0(24-31) B1(24-31) B4(24-31) B5(24-31) B8(24-31) B9(24-31) BC(24-31) BD(24-31)
+                const __m512i rhs_lbit_2367ABEF_3 = _mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_1, 4), m4bexpanded); //B2(24-31) B3(24-31) B6(24-31) B7(24-31) BA(24-31) BB(24-31) BE(24-31) BF(24-31)
+
+                // Load high bit of quantized values
+                const __m256i qh_all_0 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].qh));
+                const __m256i qh_segs01_0 = _mm256_permute2f128_si256(qh_all_0, qh_all_0,  0);
+                const __m256i qh_segs23_0 = _mm256_permute2f128_si256(qh_all_0, qh_all_0, 17);
+
+                const __m256i rhs_hbit_0145_0 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs01_0, shuf_hbit_0145_cur),  bit_pos), zero), hF0);
+                const __m256i rhs_hbit_2367_0 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs01_0, shuf_hbit_2367_cur),  bit_pos), zero), hF0);
+                const __m256i rhs_hbit_0145_1 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs01_0, shuf_hbit_0145_next), bit_pos), zero), hF0);
+                const __m256i rhs_hbit_2367_1 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs01_0, shuf_hbit_2367_next), bit_pos), zero), hF0);
+                const __m256i rhs_hbit_0145_2 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs23_0, shuf_hbit_0145_cur),  bit_pos), zero), hF0);
+                const __m256i rhs_hbit_2367_2 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs23_0, shuf_hbit_2367_cur),  bit_pos), zero), hF0);
+                const __m256i rhs_hbit_0145_3 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs23_0, shuf_hbit_0145_next), bit_pos), zero), hF0);
+                const __m256i rhs_hbit_2367_3 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs23_0, shuf_hbit_2367_next), bit_pos), zero), hF0);
+
+                const __m256i qh_all_1 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].qh));
+                const __m256i qh_segs01_1 = _mm256_permute2f128_si256(qh_all_1, qh_all_1,  0);
+                const __m256i qh_segs23_1 = _mm256_permute2f128_si256(qh_all_1, qh_all_1, 17);
+
+                const __m256i rhs_hbit_89CD_0 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs01_1, shuf_hbit_0145_cur),  bit_pos), zero), hF0);
+                const __m256i rhs_hbit_ABEF_0 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs01_1, shuf_hbit_2367_cur),  bit_pos), zero), hF0);
+                const __m256i rhs_hbit_89CD_1 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs01_1, shuf_hbit_0145_next), bit_pos), zero), hF0);
+                const __m256i rhs_hbit_ABEF_1 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs01_1, shuf_hbit_2367_next), bit_pos), zero), hF0);
+                const __m256i rhs_hbit_89CD_2 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs23_1, shuf_hbit_0145_cur),  bit_pos), zero), hF0);
+                const __m256i rhs_hbit_ABEF_2 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs23_1, shuf_hbit_2367_cur),  bit_pos), zero), hF0);
+                const __m256i rhs_hbit_89CD_3 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs23_1, shuf_hbit_0145_next), bit_pos), zero), hF0);
+                const __m256i rhs_hbit_ABEF_3 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs23_1, shuf_hbit_2367_next), bit_pos), zero), hF0);
+
+                // Combine into 512-bit
+                const __m512i rhs_hbit_014589CD_0 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_hbit_0145_0), rhs_hbit_89CD_0, 1);
+                const __m512i rhs_hbit_2367ABEF_0 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_hbit_2367_0), rhs_hbit_ABEF_0, 1);
+                const __m512i rhs_hbit_014589CD_1 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_hbit_0145_1), rhs_hbit_89CD_1, 1);
+                const __m512i rhs_hbit_2367ABEF_1 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_hbit_2367_1), rhs_hbit_ABEF_1, 1);
+                const __m512i rhs_hbit_014589CD_2 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_hbit_0145_2), rhs_hbit_89CD_2, 1);
+                const __m512i rhs_hbit_2367ABEF_2 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_hbit_2367_2), rhs_hbit_ABEF_2, 1);
+                const __m512i rhs_hbit_014589CD_3 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_hbit_0145_3), rhs_hbit_89CD_3, 1);
+                const __m512i rhs_hbit_2367ABEF_3 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_hbit_2367_3), rhs_hbit_ABEF_3, 1);
+
+                // Combine: lbit | hbit
+                const __m512i rhs_mat_014589CD_0 = _mm512_or_si512(rhs_lbit_014589CD_0, rhs_hbit_014589CD_0);
+                const __m512i rhs_mat_2367ABEF_0 = _mm512_or_si512(rhs_lbit_2367ABEF_0, rhs_hbit_2367ABEF_0);
+                const __m512i rhs_mat_014589CD_1 = _mm512_or_si512(rhs_lbit_014589CD_1, rhs_hbit_014589CD_1);
+                const __m512i rhs_mat_2367ABEF_1 = _mm512_or_si512(rhs_lbit_2367ABEF_1, rhs_hbit_2367ABEF_1);
+                const __m512i rhs_mat_014589CD_2 = _mm512_or_si512(rhs_lbit_014589CD_2, rhs_hbit_014589CD_2);
+                const __m512i rhs_mat_2367ABEF_2 = _mm512_or_si512(rhs_lbit_2367ABEF_2, rhs_hbit_2367ABEF_2);
+                const __m512i rhs_mat_014589CD_3 = _mm512_or_si512(rhs_lbit_014589CD_3, rhs_hbit_014589CD_3);
+                const __m512i rhs_mat_2367ABEF_3 = _mm512_or_si512(rhs_lbit_2367ABEF_3, rhs_hbit_2367ABEF_3);
+
+                // Shuffle pattern one - right side input
+                const __m512i rhs_mat_014589CD_0_sp1 = _mm512_shuffle_epi32(rhs_mat_014589CD_0, (_MM_PERM_ENUM)136); //B0(0-3) B1(0-3) B0(0-3) B1(0-3) B4(0-3) B5(0-3) B4(0-3) B5(0-3) B8(0-3) B9(0-3) B8(0-3) B9(0-3) BC(0-3) BD(0-3) BC(0-3) BD(0-3)
+                const __m512i rhs_mat_2367ABEF_0_sp1 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_0, (_MM_PERM_ENUM)136); //B2(0-3) B3(0-3) B2(0-3) B3(0-3) B6(0-3) B7(0-3) B6(0-3) B7(0-3) BA(0-3) BB(0-3) BA(0-3) BB(0-3) BE(0-3) BF(0-3) BE(0-3) BF(0-3)
+
+                const __m512i rhs_mat_014589CD_1_sp1 = _mm512_shuffle_epi32(rhs_mat_014589CD_1, (_MM_PERM_ENUM)136); //B0(8-11) B1(8-11) B0(8-11) B1(8-11) B4(8-11) B5(8-11) B4(8-11) B5(8-11) B8(8-11) B9(8-11) B8(8-11) B9(8-11) BC(8-11) BD(8-11) BC(8-11) BD(8-11)
+                const __m512i rhs_mat_2367ABEF_1_sp1 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_1, (_MM_PERM_ENUM)136); //B2(8-11) B3(8-11) B2(8-11) B3(8-11) B6(8-11) B7(8-11) B6(8-11) B7(8-11) BA(8-11) BB(8-11) BA(8-11) BB(8-11) BE(8-11) BF(8-11) BE(8-11) BF(8-11)
+
+                const __m512i rhs_mat_014589CD_2_sp1 = _mm512_shuffle_epi32(rhs_mat_014589CD_2, (_MM_PERM_ENUM)136); //B0(16-19) B1(16-19) B0(16-19) B1(16-19) B4(16-19) B5(16-19) B4(16-19) B5(16-19) B8(16-19) B9(16-19) B8(16-19) B9(16-19) BC(16-19) BD(16-19) BC(16-19) BD(16-19)
+                const __m512i rhs_mat_2367ABEF_2_sp1 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_2, (_MM_PERM_ENUM)136); //B2(16-19) B3(16-19) B2(16-19) B3(16-19) B6(16-19) B7(16-19) B6(16-19) B7(16-19) BA(16-19) BB(16-19) BA(16-19) BB(16-19) BE(16-19) BF(16-19) BE(16-19) BF(16-19)
+
+                const __m512i rhs_mat_014589CD_3_sp1 = _mm512_shuffle_epi32(rhs_mat_014589CD_3, (_MM_PERM_ENUM)136); //B0(24-27) B1(24-27) B0(24-27) B1(24-27) B4(24-27) B5(24-27) B4(24-27) B5(24-27) B8(24-27) B9(24-27) B8(24-27) B9(24-27) BC(24-27) BD(24-27) BC(24-27) BD(24-27)
+                const __m512i rhs_mat_2367ABEF_3_sp1 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_3, (_MM_PERM_ENUM)136); //B2(24-27) B3(24-27) B2(24-27) B3(24-27) B6(24-27) B7(24-27) B6(24-27) B7(24-27) BA(24-27) BB(24-27) BA(24-27) BB(24-27) BE(24-27) BF(24-27) BE(24-27) BF(24-27)
+
+                // Shuffle pattern two - right side input
+                const __m512i rhs_mat_014589CD_0_sp2 = _mm512_shuffle_epi32(rhs_mat_014589CD_0, (_MM_PERM_ENUM)221); //B0(4-7) B1(4-7) B0(4-7) B1(4-7) B4(4-7) B5(4-7) B4(4-7) B5(4-7) B8(4-7) B9(4-7) B8(4-7) B9(4-7) BC(4-7) BD(4-7) BC(4-7) BD(4-7)
+                const __m512i rhs_mat_2367ABEF_0_sp2 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_0, (_MM_PERM_ENUM)221); //B2(4-7) B3(4-7) B2(4-7) B3(4-7) B6(4-7) B7(4-7) B6(4-7) B7(4-7) BA(4-7) BB(4-7) BA(4-7) BB(4-7) BE(4-7) BF(4-7) BE(4-7) BF(4-7)
+
+                const __m512i rhs_mat_014589CD_1_sp2 = _mm512_shuffle_epi32(rhs_mat_014589CD_1, (_MM_PERM_ENUM)221); //B0(12-15) B1(12-15) B0(12-15) B1(12-15) B4(12-15) B5(12-15) B4(12-15) B5(12-15) B8(12-15) B9(12-15) B8(12-15) B9(12-15) BC(12-15) BD(12-15) BC(12-15) BD(12-15)
+                const __m512i rhs_mat_2367ABEF_1_sp2 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_1, (_MM_PERM_ENUM)221); //B2(12-15) B3(12-15) B2(12-15) B3(12-15) B6(12-15) B7(12-15) B6(12-15) B7(12-15) BA(12-15) BB(12-15) BA(12-15) BB(12-15) BE(12-15) BF(12-15) BE(12-15) BF(12-15)
+
+                const __m512i rhs_mat_014589CD_2_sp2 = _mm512_shuffle_epi32(rhs_mat_014589CD_2, (_MM_PERM_ENUM)221); //B0(20-23) B1(20-23) B0(20-23) B1(20-23) B4(20-23) B5(20-23) B4(20-23) B5(20-23) B8(20-23) B9(20-23) B8(20-23) B9(20-23) BC(20-23) BD(20-23) BC(20-23) BD(20-23)
+                const __m512i rhs_mat_2367ABEF_2_sp2 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_2, (_MM_PERM_ENUM)221); //B2(20-23) B3(20-23) B2(20-23) B3(20-23) B6(20-23) B7(20-23) B6(20-23) B7(20-23) BA(20-23) BB(20-23) BA(20-23) BB(20-23) BE(20-23) BF(20-23) BE(20-23) BF(20-23)
+
+                const __m512i rhs_mat_014589CD_3_sp2 = _mm512_shuffle_epi32(rhs_mat_014589CD_3, (_MM_PERM_ENUM)221); //B0(28-31) B1(28-31) B0(28-31) B1(28-31) B4(28-31) B5(28-31) B4(28-31) B5(28-31) B8(28-31) B9(28-31) B8(28-31) B9(28-31) BC(28-31) BD(28-31) BC(28-31) BD(28-31)
+                const __m512i rhs_mat_2367ABEF_3_sp2 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_3, (_MM_PERM_ENUM)221); //B2(28-31) B3(28-31) B2(28-31) B3(28-31) B6(28-31) B7(28-31) B6(28-31) B7(28-31) BA(28-31) BB(28-31) BA(28-31) BB(28-31) BE(28-31) BF(28-31) BE(28-31) BF(28-31)
+
+                // Process LHS in pairs of rows
+                for (int rp = 0; rp < 4; rp++) {
+                    // Load the four blocks of quantized values interleaved with each other in chunks of eight - A0,A1,A2,A3
+                    // Loaded as set of 128 bit vectors and repeated and stored into a 256 bit vector before again repeating into 512 bit vector
+                    __m256i lhs_mat_ymm_0123_0 = _mm256_loadu_si256((const __m256i *)((a_ptrs[rp][b].qs)));
+                    __m256i lhs_mat_ymm_01_0 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_0, lhs_mat_ymm_0123_0, 0);
+                    __m256i lhs_mat_ymm_23_0 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_0, lhs_mat_ymm_0123_0, 17);
+                    __m256i lhs_mat_ymm_0123_1 = _mm256_loadu_si256((const __m256i *)((a_ptrs[rp][b].qs + 32)));
+                    __m256i lhs_mat_ymm_01_1 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_1, lhs_mat_ymm_0123_1, 0);
+                    __m256i lhs_mat_ymm_23_1 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_1, lhs_mat_ymm_0123_1, 17);
+                    __m256i lhs_mat_ymm_0123_2 = _mm256_loadu_si256((const __m256i *)((a_ptrs[rp][b].qs + 64)));
+                    __m256i lhs_mat_ymm_01_2 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_2, lhs_mat_ymm_0123_2, 0);
+                    __m256i lhs_mat_ymm_23_2 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_2, lhs_mat_ymm_0123_2, 17);
+                    __m256i lhs_mat_ymm_0123_3 = _mm256_loadu_si256((const __m256i *)((a_ptrs[rp][b].qs + 96)));
+                    __m256i lhs_mat_ymm_01_3 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_3, lhs_mat_ymm_0123_3, 0);
+                    __m256i lhs_mat_ymm_23_3 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_3, lhs_mat_ymm_0123_3, 17);
+
+                    __m512i lhs_mat_01_0 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_0), lhs_mat_ymm_01_0, 1);
+                    __m512i lhs_mat_23_0 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_0), lhs_mat_ymm_23_0, 1);
+                    __m512i lhs_mat_01_1 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_1), lhs_mat_ymm_01_1, 1);
+                    __m512i lhs_mat_23_1 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_1), lhs_mat_ymm_23_1, 1);
+                    __m512i lhs_mat_01_2 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_2), lhs_mat_ymm_01_2, 1);
+                    __m512i lhs_mat_23_2 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_2), lhs_mat_ymm_23_2, 1);
+                    __m512i lhs_mat_01_3 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_3), lhs_mat_ymm_01_3, 1);
+                    __m512i lhs_mat_23_3 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_3), lhs_mat_ymm_23_3, 1);
+
+                    // Shuffle pattern one - left side input
+                    const __m512i lhs_mat_01_0_sp1 = _mm512_shuffle_epi32(lhs_mat_01_0, (_MM_PERM_ENUM)160);  //A0(0-3) A0(0-3) A1(0-3) A1(0-3) A0(0-3) A0(0-3) A1(0-3) A1(0-3) A0(0-3) A0(0-3) A1(0-3) A1(0-3) A0(0-3) A0(0-3) A1(0-3) A1(0-3)
+                    const __m512i lhs_mat_23_0_sp1 = _mm512_shuffle_epi32(lhs_mat_23_0, (_MM_PERM_ENUM)160);  //A2(0-3) A2(0-3) A3(0-3) A3(0-3) A2(0-3) A2(0-3) A3(0-3) A3(0-3) A2(0-3) A2(0-3) A3(0-3) A3(0-3) A2(0-3) A2(0-3) A3(0-3) A3(0-3)
+
+                    const __m512i lhs_mat_01_1_sp1 = _mm512_shuffle_epi32(lhs_mat_01_1, (_MM_PERM_ENUM)160);  //A0(8-11) A0(8-11) A1(8-11) A1(8-11) A0(8-11) A0(8-11) A1(8-11) A1(8-11) A0(8-11) A0(8-11) A1(8-11) A1(8-11) A0(8-11) A0(8-11) A1(8-11) A1(8-11)
+                    const __m512i lhs_mat_23_1_sp1 = _mm512_shuffle_epi32(lhs_mat_23_1, (_MM_PERM_ENUM)160);  //A2(8-11) A2(8-11) A3(8-11) A3(8-11) A2(8-11) A2(8-11) A3(8-11) A3(8-11) A2(8-11) A2(8-11) A3(8-11) A3(8-11) A2(8-11) A2(8-11) A3(8-11) A3(8-11)
+
+                    const __m512i lhs_mat_01_2_sp1 = _mm512_shuffle_epi32(lhs_mat_01_2, (_MM_PERM_ENUM)160);  //A0(16-19) A0(16-19) A1(16-19) A1(16-19) A0(16-19) A0(16-19) A1(16-19) A1(16-19) A0(16-19) A0(16-19) A1(16-19) A1(16-19) A0(16-19) A0(16-19) A1(16-19) A1(16-19)
+                    const __m512i lhs_mat_23_2_sp1 = _mm512_shuffle_epi32(lhs_mat_23_2, (_MM_PERM_ENUM)160);  //A2(16-19) A2(16-19) A3(16-19) A3(16-19) A2(16-19) A2(16-19) A3(16-19) A3(16-19) A2(16-19) A2(16-19) A3(16-19) A3(16-19) A2(16-19) A2(16-19) A3(16-19) A3(16-19)
+
+                    const __m512i lhs_mat_01_3_sp1 = _mm512_shuffle_epi32(lhs_mat_01_3, (_MM_PERM_ENUM)160);  //A0(24-27) A0(24-27) A1(24-27) A1(24-27) A0(24-27) A0(24-27) A1(24-27) A1(24-27) A0(24-27) A0(24-27) A1(24-27) A1(24-27) A0(24-27) A0(24-27) A1(24-27) A1(24-27)
+                    const __m512i lhs_mat_23_3_sp1 = _mm512_shuffle_epi32(lhs_mat_23_3, (_MM_PERM_ENUM)160);  //A2(24-27) A2(24-27) A3(24-27) A3(24-27) A2(24-27) A2(24-27) A3(24-27) A3(24-27) A2(24-27) A2(24-27) A3(24-27) A3(24-27) A2(24-27) A2(24-27) A3(24-27) A3(24-27)
+
+                    // Shuffle pattern two - left side input
+                    const __m512i lhs_mat_01_0_sp2 = _mm512_shuffle_epi32(lhs_mat_01_0, (_MM_PERM_ENUM)245);  //A0(4-7) A0(4-7) A1(4-7) A1(4-7) A0(4-7) A0(4-7) A1(4-7) A1(4-7) A0(4-7) A0(4-7) A1(4-7) A1(4-7) A0(4-7) A0(4-7) A1(4-7) A1(4-7)
+                    const __m512i lhs_mat_23_0_sp2 = _mm512_shuffle_epi32(lhs_mat_23_0, (_MM_PERM_ENUM)245);  //A2(4-7) A2(4-7) A3(4-7) A3(4-7) A2(4-7) A2(4-7) A3(4-7) A3(4-7) A2(4-7) A2(4-7) A3(4-7) A3(4-7) A2(4-7) A2(4-7) A3(4-7) A3(4-7)
+
+                    const __m512i lhs_mat_01_1_sp2 = _mm512_shuffle_epi32(lhs_mat_01_1, (_MM_PERM_ENUM)245);  //A0(12-15) A0(12-15) A1(12-15) A1(12-15) A0(12-15) A0(12-15) A1(12-15) A1(12-15) A0(12-15) A0(12-15) A1(12-15) A1(12-15) A0(12-15) A0(12-15) A1(12-15) A1(12-15)
+                    const __m512i lhs_mat_23_1_sp2 = _mm512_shuffle_epi32(lhs_mat_23_1, (_MM_PERM_ENUM)245);  //A2(12-15) A2(12-15) A3(12-15) A3(12-15) A2(12-15) A2(12-15) A3(12-15) A3(12-15) A2(12-15) A2(12-15) A3(12-15) A3(12-15) A2(12-15) A2(12-15) A3(12-15) A3(12-15)
+
+                    const __m512i lhs_mat_01_2_sp2 = _mm512_shuffle_epi32(lhs_mat_01_2, (_MM_PERM_ENUM)245);  //A0(20-23) A0(20-23) A1(20-23) A1(20-23) A0(20-23) A0(20-23) A1(20-23) A1(20-23) A0(20-23) A0(20-23) A1(20-23) A1(20-23) A0(20-23) A0(20-23) A1(20-23) A1(20-23)
+                    const __m512i lhs_mat_23_2_sp2 = _mm512_shuffle_epi32(lhs_mat_23_2, (_MM_PERM_ENUM)245);  //A2(20-23) A2(20-23) A3(20-23) A3(20-23) A2(20-23) A2(20-23) A3(20-23) A3(20-23) A2(20-23) A2(20-23) A3(20-23) A3(20-23) A2(20-23) A2(20-23) A3(20-23) A3(20-23)
+
+                    const __m512i lhs_mat_01_3_sp2 = _mm512_shuffle_epi32(lhs_mat_01_3, (_MM_PERM_ENUM)245);  //A0(28-31) A0(28-31) A1(28-31) A1(28-31) A0(28-31) A0(28-31) A1(28-31) A1(28-31) A0(28-31) A0(28-31) A1(28-31) A1(28-31) A0(28-31) A0(28-31) A1(28-31) A1(28-31)
+                    const __m512i lhs_mat_23_3_sp2 = _mm512_shuffle_epi32(lhs_mat_23_3, (_MM_PERM_ENUM)245);  //A2(28-31) A2(28-31) A3(28-31) A3(28-31) A2(28-31) A2(28-31) A3(28-31) A3(28-31) A2(28-31) A2(28-31) A3(28-31) A3(28-31) A2(28-31) A2(28-31) A3(28-31) A3(28-31)
+
+                    // The values arranged in shuffle patterns are operated with dot product operation within 32 bit lane i.e corresponding bytes and multiplied and added into 32 bit integers within 32 bit lane
+                    const __m512i zero = _mm512_setzero_epi32();
+                    __m512i iacc_mat_00_sp1 = mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(zero, lhs_mat_01_3_sp1, rhs_mat_014589CD_3_sp1), lhs_mat_01_2_sp1, rhs_mat_014589CD_2_sp1), lhs_mat_01_1_sp1, rhs_mat_014589CD_1_sp1), lhs_mat_01_0_sp1, rhs_mat_014589CD_0_sp1);
+                    __m512i iacc_mat_01_sp1 = mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(zero, lhs_mat_01_3_sp1, rhs_mat_2367ABEF_3_sp1), lhs_mat_01_2_sp1, rhs_mat_2367ABEF_2_sp1), lhs_mat_01_1_sp1, rhs_mat_2367ABEF_1_sp1), lhs_mat_01_0_sp1, rhs_mat_2367ABEF_0_sp1);
+                    __m512i iacc_mat_10_sp1 = mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(zero, lhs_mat_23_3_sp1, rhs_mat_014589CD_3_sp1), lhs_mat_23_2_sp1, rhs_mat_014589CD_2_sp1), lhs_mat_23_1_sp1, rhs_mat_014589CD_1_sp1), lhs_mat_23_0_sp1, rhs_mat_014589CD_0_sp1);
+                    __m512i iacc_mat_11_sp1 = mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(zero, lhs_mat_23_3_sp1, rhs_mat_2367ABEF_3_sp1), lhs_mat_23_2_sp1, rhs_mat_2367ABEF_2_sp1), lhs_mat_23_1_sp1, rhs_mat_2367ABEF_1_sp1), lhs_mat_23_0_sp1, rhs_mat_2367ABEF_0_sp1);
+                    __m512i iacc_mat_00_sp2 = mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(zero, lhs_mat_01_3_sp2, rhs_mat_014589CD_3_sp2), lhs_mat_01_2_sp2, rhs_mat_014589CD_2_sp2), lhs_mat_01_1_sp2, rhs_mat_014589CD_1_sp2), lhs_mat_01_0_sp2, rhs_mat_014589CD_0_sp2);
+                    __m512i iacc_mat_01_sp2 = mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(zero, lhs_mat_01_3_sp2, rhs_mat_2367ABEF_3_sp2), lhs_mat_01_2_sp2, rhs_mat_2367ABEF_2_sp2), lhs_mat_01_1_sp2, rhs_mat_2367ABEF_1_sp2), lhs_mat_01_0_sp2, rhs_mat_2367ABEF_0_sp2);
+                    __m512i iacc_mat_10_sp2 = mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(zero, lhs_mat_23_3_sp2, rhs_mat_014589CD_3_sp2), lhs_mat_23_2_sp2, rhs_mat_014589CD_2_sp2), lhs_mat_23_1_sp2, rhs_mat_014589CD_1_sp2), lhs_mat_23_0_sp2, rhs_mat_014589CD_0_sp2);
+                    __m512i iacc_mat_11_sp2 = mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(zero, lhs_mat_23_3_sp2, rhs_mat_2367ABEF_3_sp2), lhs_mat_23_2_sp2, rhs_mat_2367ABEF_2_sp2), lhs_mat_23_1_sp2, rhs_mat_2367ABEF_1_sp2), lhs_mat_23_0_sp2, rhs_mat_2367ABEF_0_sp2);
+
+                    // Output of both shuffle patterns are added in order to sum dot product outputs of all 32 values in block
+                    __m512i iacc_mat_00 = _mm512_add_epi32(iacc_mat_00_sp1, iacc_mat_00_sp2);
+                    __m512i iacc_mat_01 = _mm512_add_epi32(iacc_mat_01_sp1, iacc_mat_01_sp2);
+                    __m512i iacc_mat_10 = _mm512_add_epi32(iacc_mat_10_sp1, iacc_mat_10_sp2);
+                    __m512i iacc_mat_11 = _mm512_add_epi32(iacc_mat_11_sp1, iacc_mat_11_sp2);
+
+                    // Straighten out to make 4 row vectors
+                    __m512i iacc_row_0 = _mm512_mask_blend_epi32(0xCCCC, iacc_mat_00, _mm512_shuffle_epi32(iacc_mat_01, (_MM_PERM_ENUM)78));
+                    __m512i iacc_row_1 = _mm512_mask_blend_epi32(0xCCCC, _mm512_shuffle_epi32(iacc_mat_00, (_MM_PERM_ENUM)78), iacc_mat_01);
+                    __m512i iacc_row_2 = _mm512_mask_blend_epi32(0xCCCC, iacc_mat_10, _mm512_shuffle_epi32(iacc_mat_11, (_MM_PERM_ENUM)78));
+                    __m512i iacc_row_3 = _mm512_mask_blend_epi32(0xCCCC, _mm512_shuffle_epi32(iacc_mat_10, (_MM_PERM_ENUM)78), iacc_mat_11);
+
+                    // Load the scale(d) values for all the 4 Q8_0 blocks and repeat it across lanes
+                    const __m128i row_scale_f16 = _mm_shuffle_epi32(_mm_maskload_epi32((int const*)(a_ptrs[rp][b].d), loadMask), 68);
+                    const __m512 row_scale_f32 = GGML_F32Cx16_REPEAT_LOAD(row_scale_f16);
+
+                    // Multiply with appropriate scales and accumulate
+                    acc_rows[rp * 4] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(iacc_row_0), _mm512_mul_ps(col_scale_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 0)),   acc_rows[rp * 4]);
+                    acc_rows[rp * 4 + 1] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(iacc_row_1), _mm512_mul_ps(col_scale_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 85)),  acc_rows[rp * 4 + 1]);
+                    acc_rows[rp * 4 + 2] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(iacc_row_2), _mm512_mul_ps(col_scale_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 170)), acc_rows[rp * 4 + 2]);
+                    acc_rows[rp * 4 + 3] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(iacc_row_3), _mm512_mul_ps(col_scale_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 255)), acc_rows[rp * 4 + 3]);
+
+                }
+            }
+            // Store the accumulated values
+            for (int i = 0; i < 16; i++) {
+                _mm512_storeu_ps((float *)(s + ((y * 4 + i) * bs + x * 8)), acc_rows[i]);
+            }
+        }
+    }
+
+    // Take a block_q8_0x4 structures at each pass of the loop and perform dot product operation
+    for (; y < nr / 4; y ++) {
+        const block_q8_0x4 * a_ptr = a_ptr_start + (y * nb);
+
+        // Take group of two block_q5_0x8 structures at each pass of the loop and perform dot product operation
+        for (int64_t x = 0; x < anc / 8; x += 2) {
+            const block_q5_0x8 * b_ptr_0 = b_ptr_start + ((x) * b_nb);
+            const block_q5_0x8 * b_ptr_1 = b_ptr_start + ((x + 1) * b_nb);
+
+            // Master FP accumulators
+            __m512 acc_rows[4];
+            for (int i = 0; i < 4; i++) {
+                acc_rows[i] = _mm512_setzero_ps();
+            }
+            for (int64_t b = 0; b < nb; b++) {
+                // Delta values - Load the sixteen scale values from two block_q5_0x8 structures
+                const __m512 col_scale_f32 = GGML_F32Cx8x2_LOAD(b_ptr_0[b].d, b_ptr_1[b].d);
+
+                // Load the sixteen blocks of lower bits for quantized values interleaved with each other in chunks of eight - B0,B1 ....BE,BF
+                const __m256i rhs_raw_lbit_0123_0 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].qs));
+                const __m256i rhs_raw_lbit_4567_0 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].qs + 32));
+                const __m256i rhs_raw_lbit_0123_1 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].qs + 64));
+                const __m256i rhs_raw_lbit_4567_1 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].qs + 96));
+
+                const __m256i rhs_raw_lbit_89AB_0 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].qs));
+                const __m256i rhs_raw_lbit_CDEF_0 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].qs + 32));
+                const __m256i rhs_raw_lbit_89AB_1 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].qs + 64));
+                const __m256i rhs_raw_lbit_CDEF_1 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].qs + 96));
+
+                // Save the values in the following vectors in the forlbits B0B1B4B5B8B9BCBD, B2B3B6B7BABBBEBF for further processing and storing of values
+                const __m256i rhs_raw_lbit_0145_0 = _mm256_blend_epi32(rhs_raw_lbit_0123_0, _mm256_permutevar8x32_epi32(rhs_raw_lbit_4567_0, requiredOrder), 240);
+                const __m256i rhs_raw_lbit_2367_0 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_lbit_0123_0, requiredOrder), rhs_raw_lbit_4567_0, 240);
+                const __m256i rhs_raw_lbit_0145_1 = _mm256_blend_epi32(rhs_raw_lbit_0123_1, _mm256_permutevar8x32_epi32(rhs_raw_lbit_4567_1, requiredOrder), 240);
+                const __m256i rhs_raw_lbit_2367_1 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_lbit_0123_1, requiredOrder), rhs_raw_lbit_4567_1, 240);
+
+                const __m256i rhs_raw_lbit_89CD_0 = _mm256_blend_epi32(rhs_raw_lbit_89AB_0, _mm256_permutevar8x32_epi32(rhs_raw_lbit_CDEF_0, requiredOrder), 240);
+                const __m256i rhs_raw_lbit_ABEF_0 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_lbit_89AB_0, requiredOrder), rhs_raw_lbit_CDEF_0, 240);
+                const __m256i rhs_raw_lbit_89CD_1 = _mm256_blend_epi32(rhs_raw_lbit_89AB_1, _mm256_permutevar8x32_epi32(rhs_raw_lbit_CDEF_1, requiredOrder), 240);
+                const __m256i rhs_raw_lbit_ABEF_1 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_lbit_89AB_1, requiredOrder), rhs_raw_lbit_CDEF_1, 240);
+
+                const __m512i rhs_raw_lbit_014589CD_0 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_lbit_0145_0), rhs_raw_lbit_89CD_0, 1);
+                const __m512i rhs_raw_lbit_2367ABEF_0 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_lbit_2367_0), rhs_raw_lbit_ABEF_0, 1);
+                const __m512i rhs_raw_lbit_014589CD_1 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_lbit_0145_1), rhs_raw_lbit_89CD_1, 1);
+                const __m512i rhs_raw_lbit_2367ABEF_1 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_lbit_2367_1), rhs_raw_lbit_ABEF_1, 1);
+
+                // 4-bit -> 8-bit
+                const __m512i rhs_lbit_014589CD_0 = _mm512_and_si512(rhs_raw_lbit_014589CD_0, m4bexpanded); //B0(0-7) B1(0-7) B4(0-7) B5(0-7) B8(0-7) B9(0-7) BC(0-7) BD(0-7)
+                const __m512i rhs_lbit_2367ABEF_0 = _mm512_and_si512(rhs_raw_lbit_2367ABEF_0, m4bexpanded); //B2(0-7) B3(0-7) B6(0-7) B7(0-7) BA(0-7) BB(0-7) BE(0-7) BF(0-7)
+
+                const __m512i rhs_lbit_014589CD_1 = _mm512_and_si512(rhs_raw_lbit_014589CD_1, m4bexpanded); //B0(8-15) B1(8-15) B4(8-15) B5(8-15) B8(8-15) B9(8-15) BC(8-15) BD(8-15)
+                const __m512i rhs_lbit_2367ABEF_1 = _mm512_and_si512(rhs_raw_lbit_2367ABEF_1, m4bexpanded); //B2(8-15) B3(8-15) B6(8-15) B7(8-15) BA(8-15) BB(8-15) BE(8-15) BF(8-15)
+
+                const __m512i rhs_lbit_014589CD_2 = _mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_0, 4), m4bexpanded); //B0(16-23) B1(16-23) B4(16-23) B5(16-23) B8(16-23) B9(16-23) BC(16-23) BD(16-23)
+                const __m512i rhs_lbit_2367ABEF_2 = _mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_0, 4), m4bexpanded); //B2(16-23) B3(16-23) B6(16-23) B7(16-23) BA(16-23) BB(16-23) BE(16-23) BF(16-23)
+
+                const __m512i rhs_lbit_014589CD_3 = _mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_1, 4), m4bexpanded); //B0(24-31) B1(24-31) B4(24-31) B5(24-31) B8(24-31) B9(24-31) BC(24-31) BD(24-31)
+                const __m512i rhs_lbit_2367ABEF_3 = _mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_1, 4), m4bexpanded); //B2(24-31) B3(24-31) B6(24-31) B7(24-31) BA(24-31) BB(24-31) BE(24-31) BF(24-31)
+
+                // Load hbits of quantized values
+                const __m256i qh_all_0 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].qh));
+                const __m256i qh_segs01_0 = _mm256_permute2f128_si256(qh_all_0, qh_all_0,  0);
+                const __m256i qh_segs23_0 = _mm256_permute2f128_si256(qh_all_0, qh_all_0, 17);
+
+                const __m256i rhs_hbit_0145_0 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs01_0, shuf_hbit_0145_cur),  bit_pos), zero), hF0);
+                const __m256i rhs_hbit_2367_0 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs01_0, shuf_hbit_2367_cur),  bit_pos), zero), hF0);
+                const __m256i rhs_hbit_0145_1 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs01_0, shuf_hbit_0145_next), bit_pos), zero), hF0);
+                const __m256i rhs_hbit_2367_1 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs01_0, shuf_hbit_2367_next), bit_pos), zero), hF0);
+                const __m256i rhs_hbit_0145_2 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs23_0, shuf_hbit_0145_cur),  bit_pos), zero), hF0);
+                const __m256i rhs_hbit_2367_2 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs23_0, shuf_hbit_2367_cur),  bit_pos), zero), hF0);
+                const __m256i rhs_hbit_0145_3 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs23_0, shuf_hbit_0145_next), bit_pos), zero), hF0);
+                const __m256i rhs_hbit_2367_3 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs23_0, shuf_hbit_2367_next), bit_pos), zero), hF0);
+
+                const __m256i qh_all_1 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].qh));
+                const __m256i qh_segs01_1 = _mm256_permute2f128_si256(qh_all_1, qh_all_1,  0);
+                const __m256i qh_segs23_1 = _mm256_permute2f128_si256(qh_all_1, qh_all_1, 17);
+
+                const __m256i rhs_hbit_89CD_0 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs01_1, shuf_hbit_0145_cur),  bit_pos), zero), hF0);
+                const __m256i rhs_hbit_ABEF_0 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs01_1, shuf_hbit_2367_cur),  bit_pos), zero), hF0);
+                const __m256i rhs_hbit_89CD_1 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs01_1, shuf_hbit_0145_next), bit_pos), zero), hF0);
+                const __m256i rhs_hbit_ABEF_1 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs01_1, shuf_hbit_2367_next), bit_pos), zero), hF0);
+                const __m256i rhs_hbit_89CD_2 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs23_1, shuf_hbit_0145_cur),  bit_pos), zero), hF0);
+                const __m256i rhs_hbit_ABEF_2 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs23_1, shuf_hbit_2367_cur),  bit_pos), zero), hF0);
+                const __m256i rhs_hbit_89CD_3 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs23_1, shuf_hbit_0145_next), bit_pos), zero), hF0);
+                const __m256i rhs_hbit_ABEF_3 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(qh_segs23_1, shuf_hbit_2367_next), bit_pos), zero), hF0);
+
+                // Combine into 512-bit
+                const __m512i rhs_hbit_014589CD_0 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_hbit_0145_0), rhs_hbit_89CD_0, 1);
+                const __m512i rhs_hbit_2367ABEF_0 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_hbit_2367_0), rhs_hbit_ABEF_0, 1);
+                const __m512i rhs_hbit_014589CD_1 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_hbit_0145_1), rhs_hbit_89CD_1, 1);
+                const __m512i rhs_hbit_2367ABEF_1 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_hbit_2367_1), rhs_hbit_ABEF_1, 1);
+                const __m512i rhs_hbit_014589CD_2 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_hbit_0145_2), rhs_hbit_89CD_2, 1);
+                const __m512i rhs_hbit_2367ABEF_2 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_hbit_2367_2), rhs_hbit_ABEF_2, 1);
+                const __m512i rhs_hbit_014589CD_3 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_hbit_0145_3), rhs_hbit_89CD_3, 1);
+                const __m512i rhs_hbit_2367ABEF_3 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_hbit_2367_3), rhs_hbit_ABEF_3, 1);
+
+                // Combine: lbit | hbit
+                const __m512i rhs_mat_014589CD_0 = _mm512_or_si512(rhs_lbit_014589CD_0, rhs_hbit_014589CD_0);
+                const __m512i rhs_mat_2367ABEF_0 = _mm512_or_si512(rhs_lbit_2367ABEF_0, rhs_hbit_2367ABEF_0);
+                const __m512i rhs_mat_014589CD_1 = _mm512_or_si512(rhs_lbit_014589CD_1, rhs_hbit_014589CD_1);
+                const __m512i rhs_mat_2367ABEF_1 = _mm512_or_si512(rhs_lbit_2367ABEF_1, rhs_hbit_2367ABEF_1);
+                const __m512i rhs_mat_014589CD_2 = _mm512_or_si512(rhs_lbit_014589CD_2, rhs_hbit_014589CD_2);
+                const __m512i rhs_mat_2367ABEF_2 = _mm512_or_si512(rhs_lbit_2367ABEF_2, rhs_hbit_2367ABEF_2);
+                const __m512i rhs_mat_014589CD_3 = _mm512_or_si512(rhs_lbit_014589CD_3, rhs_hbit_014589CD_3);
+                const __m512i rhs_mat_2367ABEF_3 = _mm512_or_si512(rhs_lbit_2367ABEF_3, rhs_hbit_2367ABEF_3);
+
+                // Shuffle pattern one - right side input
+                const __m512i rhs_mat_014589CD_0_sp1 = _mm512_shuffle_epi32(rhs_mat_014589CD_0, (_MM_PERM_ENUM)136); //B0(0-3) B1(0-3) B0(0-3) B1(0-3) B4(0-3) B5(0-3) B4(0-3) B5(0-3) B8(0-3) B9(0-3) B8(0-3) B9(0-3) BC(0-3) BD(0-3) BC(0-3) BD(0-3)
+                const __m512i rhs_mat_2367ABEF_0_sp1 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_0, (_MM_PERM_ENUM)136); //B2(0-3) B3(0-3) B2(0-3) B3(0-3) B6(0-3) B7(0-3) B6(0-3) B7(0-3) BA(0-3) BB(0-3) BA(0-3) BB(0-3) BE(0-3) BF(0-3) BE(0-3) BF(0-3)
+
+                const __m512i rhs_mat_014589CD_1_sp1 = _mm512_shuffle_epi32(rhs_mat_014589CD_1, (_MM_PERM_ENUM)136); //B0(8-11) B1(8-11) B0(8-11) B1(8-11) B4(8-11) B5(8-11) B4(8-11) B5(8-11) B8(8-11) B9(8-11) B8(8-11) B9(8-11) BC(8-11) BD(8-11) BC(8-11) BD(8-11)
+                const __m512i rhs_mat_2367ABEF_1_sp1 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_1, (_MM_PERM_ENUM)136); //B2(8-11) B3(8-11) B2(8-11) B3(8-11) B6(8-11) B7(8-11) B6(8-11) B7(8-11) BA(8-11) BB(8-11) BA(8-11) BB(8-11) BE(8-11) BF(8-11) BE(8-11) BF(8-11)
+
+                const __m512i rhs_mat_014589CD_2_sp1 = _mm512_shuffle_epi32(rhs_mat_014589CD_2, (_MM_PERM_ENUM)136); //B0(16-19) B1(16-19) B0(16-19) B1(16-19) B4(16-19) B5(16-19) B4(16-19) B5(16-19) B8(16-19) B9(16-19) B8(16-19) B9(16-19) BC(16-19) BD(16-19) BC(16-19) BD(16-19)
+                const __m512i rhs_mat_2367ABEF_2_sp1 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_2, (_MM_PERM_ENUM)136); //B2(16-19) B3(16-19) B2(16-19) B3(16-19) B6(16-19) B7(16-19) B6(16-19) B7(16-19) BA(16-19) BB(16-19) BA(16-19) BB(16-19) BE(16-19) BF(16-19) BE(16-19) BF(16-19)
+
+                const __m512i rhs_mat_014589CD_3_sp1 = _mm512_shuffle_epi32(rhs_mat_014589CD_3, (_MM_PERM_ENUM)136); //B0(24-27) B1(24-27) B0(24-27) B1(24-27) B4(24-27) B5(24-27) B4(24-27) B5(24-27) B8(24-27) B9(24-27) B8(24-27) B9(24-27) BC(24-27) BD(24-27) BC(24-27) BD(24-27)
+                const __m512i rhs_mat_2367ABEF_3_sp1 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_3, (_MM_PERM_ENUM)136); //B2(24-27) B3(24-27) B2(24-27) B3(24-27) B6(24-27) B7(24-27) B6(24-27) B7(24-27) BA(24-27) BB(24-27) BA(24-27) BB(24-27) BE(24-27) BF(24-27) BE(24-27) BF(24-27)
+
+                // Shuffle pattern two - right side input
+                const __m512i rhs_mat_014589CD_0_sp2 = _mm512_shuffle_epi32(rhs_mat_014589CD_0, (_MM_PERM_ENUM)221); //B0(4-7) B1(4-7) B0(4-7) B1(4-7) B4(4-7) B5(4-7) B4(4-7) B5(4-7) B8(4-7) B9(4-7) B8(4-7) B9(4-7) BC(4-7) BD(4-7) BC(4-7) BD(4-7)
+                const __m512i rhs_mat_2367ABEF_0_sp2 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_0, (_MM_PERM_ENUM)221); //B2(4-7) B3(4-7) B2(4-7) B3(4-7) B6(4-7) B7(4-7) B6(4-7) B7(4-7) BA(4-7) BB(4-7) BA(4-7) BB(4-7) BE(4-7) BF(4-7) BE(4-7) BF(4-7)
+
+                const __m512i rhs_mat_014589CD_1_sp2 = _mm512_shuffle_epi32(rhs_mat_014589CD_1, (_MM_PERM_ENUM)221); //B0(12-15) B1(12-15) B0(12-15) B1(12-15) B4(12-15) B5(12-15) B4(12-15) B5(12-15) B8(12-15) B9(12-15) B8(12-15) B9(12-15) BC(12-15) BD(12-15) BC(12-15) BD(12-15)
+                const __m512i rhs_mat_2367ABEF_1_sp2 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_1, (_MM_PERM_ENUM)221); //B2(12-15) B3(12-15) B2(12-15) B3(12-15) B6(12-15) B7(12-15) B6(12-15) B7(12-15) BA(12-15) BB(12-15) BA(12-15) BB(12-15) BE(12-15) BF(12-15) BE(12-15) BF(12-15)
+
+                const __m512i rhs_mat_014589CD_2_sp2 = _mm512_shuffle_epi32(rhs_mat_014589CD_2, (_MM_PERM_ENUM)221); //B0(20-23) B1(20-23) B0(20-23) B1(20-23) B4(20-23) B5(20-23) B4(20-23) B5(20-23) B8(20-23) B9(20-23) B8(20-23) B9(20-23) BC(20-23) BD(20-23) BC(20-23) BD(20-23)
+                const __m512i rhs_mat_2367ABEF_2_sp2 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_2, (_MM_PERM_ENUM)221); //B2(20-23) B3(20-23) B2(20-23) B3(20-23) B6(20-23) B7(20-23) B6(20-23) B7(20-23) BA(20-23) BB(20-23) BA(20-23) BB(20-23) BE(20-23) BF(20-23) BE(20-23) BF(20-23)
+
+                const __m512i rhs_mat_014589CD_3_sp2 = _mm512_shuffle_epi32(rhs_mat_014589CD_3, (_MM_PERM_ENUM)221); //B0(28-31) B1(28-31) B0(28-31) B1(28-31) B4(28-31) B5(28-31) B4(28-31) B5(28-31) B8(28-31) B9(28-31) B8(28-31) B9(28-31) BC(28-31) BD(28-31) BC(28-31) BD(28-31)
+                const __m512i rhs_mat_2367ABEF_3_sp2 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_3, (_MM_PERM_ENUM)221); //B2(28-31) B3(28-31) B2(28-31) B3(28-31) B6(28-31) B7(28-31) B6(28-31) B7(28-31) BA(28-31) BB(28-31) BA(28-31) BB(28-31) BE(28-31) BF(28-31) BE(28-31) BF(28-31)
+
+                // Load the four blocks of quantized values interleaved with each other in chunks of eight - A0,A1,A2,A3
+                __m256i lhs_mat_ymm_0123_0 = _mm256_loadu_si256((const __m256i *)((a_ptr[b].qs)));
+                __m256i lhs_mat_ymm_01_0 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_0, lhs_mat_ymm_0123_0, 0);
+                __m256i lhs_mat_ymm_23_0 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_0, lhs_mat_ymm_0123_0, 17);
+                __m256i lhs_mat_ymm_0123_1 = _mm256_loadu_si256((const __m256i *)((a_ptr[b].qs + 32)));
+                __m256i lhs_mat_ymm_01_1 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_1, lhs_mat_ymm_0123_1, 0);
+                __m256i lhs_mat_ymm_23_1 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_1, lhs_mat_ymm_0123_1, 17);
+                __m256i lhs_mat_ymm_0123_2 = _mm256_loadu_si256((const __m256i *)((a_ptr[b].qs + 64)));
+                __m256i lhs_mat_ymm_01_2 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_2, lhs_mat_ymm_0123_2, 0);
+                __m256i lhs_mat_ymm_23_2 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_2, lhs_mat_ymm_0123_2, 17);
+                __m256i lhs_mat_ymm_0123_3 = _mm256_loadu_si256((const __m256i *)((a_ptr[b].qs + 96)));
+                __m256i lhs_mat_ymm_01_3 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_3, lhs_mat_ymm_0123_3, 0);
+                __m256i lhs_mat_ymm_23_3 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_3, lhs_mat_ymm_0123_3, 17);
+
+                __m512i lhs_mat_01_0 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_0), lhs_mat_ymm_01_0, 1);
+                __m512i lhs_mat_23_0 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_0), lhs_mat_ymm_23_0, 1);
+                __m512i lhs_mat_01_1 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_1), lhs_mat_ymm_01_1, 1);
+                __m512i lhs_mat_23_1 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_1), lhs_mat_ymm_23_1, 1);
+                __m512i lhs_mat_01_2 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_2), lhs_mat_ymm_01_2, 1);
+                __m512i lhs_mat_23_2 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_2), lhs_mat_ymm_23_2, 1);
+                __m512i lhs_mat_01_3 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_3), lhs_mat_ymm_01_3, 1);
+                __m512i lhs_mat_23_3 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_3), lhs_mat_ymm_23_3, 1);
+
+                // Shuffle pattern one - left side input
+                const __m512i lhs_mat_01_0_sp1 = _mm512_shuffle_epi32(lhs_mat_01_0, (_MM_PERM_ENUM)160);  //A0(0-3) A0(0-3) A1(0-3) A1(0-3) A0(0-3) A0(0-3) A1(0-3) A1(0-3) A0(0-3) A0(0-3) A1(0-3) A1(0-3) A0(0-3) A0(0-3) A1(0-3) A1(0-3)
+                const __m512i lhs_mat_23_0_sp1 = _mm512_shuffle_epi32(lhs_mat_23_0, (_MM_PERM_ENUM)160);  //A2(0-3) A2(0-3) A3(0-3) A3(0-3) A2(0-3) A2(0-3) A3(0-3) A3(0-3) A2(0-3) A2(0-3) A3(0-3) A3(0-3) A2(0-3) A2(0-3) A3(0-3) A3(0-3)
+
+                const __m512i lhs_mat_01_1_sp1 = _mm512_shuffle_epi32(lhs_mat_01_1, (_MM_PERM_ENUM)160);  //A0(8-11) A0(8-11) A1(8-11) A1(8-11) A0(8-11) A0(8-11) A1(8-11) A1(8-11) A0(8-11) A0(8-11) A1(8-11) A1(8-11) A0(8-11) A0(8-11) A1(8-11) A1(8-11)
+                const __m512i lhs_mat_23_1_sp1 = _mm512_shuffle_epi32(lhs_mat_23_1, (_MM_PERM_ENUM)160);  //A2(8-11) A2(8-11) A3(8-11) A3(8-11) A2(8-11) A2(8-11) A3(8-11) A3(8-11) A2(8-11) A2(8-11) A3(8-11) A3(8-11) A2(8-11) A2(8-11) A3(8-11) A3(8-11)
+
+                const __m512i lhs_mat_01_2_sp1 = _mm512_shuffle_epi32(lhs_mat_01_2, (_MM_PERM_ENUM)160);  //A0(16-19) A0(16-19) A1(16-19) A1(16-19) A0(16-19) A0(16-19) A1(16-19) A1(16-19) A0(16-19) A0(16-19) A1(16-19) A1(16-19) A0(16-19) A0(16-19) A1(16-19) A1(16-19)
+                const __m512i lhs_mat_23_2_sp1 = _mm512_shuffle_epi32(lhs_mat_23_2, (_MM_PERM_ENUM)160);  //A2(16-19) A2(16-19) A3(16-19) A3(16-19) A2(16-19) A2(16-19) A3(16-19) A3(16-19) A2(16-19) A2(16-19) A3(16-19) A3(16-19) A2(16-19) A2(16-19) A3(16-19) A3(16-19)
+
+                const __m512i lhs_mat_01_3_sp1 = _mm512_shuffle_epi32(lhs_mat_01_3, (_MM_PERM_ENUM)160);  //A0(24-27) A0(24-27) A1(24-27) A1(24-27) A0(24-27) A0(24-27) A1(24-27) A1(24-27) A0(24-27) A0(24-27) A1(24-27) A1(24-27) A0(24-27) A0(24-27) A1(24-27) A1(24-27)
+                const __m512i lhs_mat_23_3_sp1 = _mm512_shuffle_epi32(lhs_mat_23_3, (_MM_PERM_ENUM)160);  //A2(24-27) A2(24-27) A3(24-27) A3(24-27) A2(24-27) A2(24-27) A3(24-27) A3(24-27) A2(24-27) A2(24-27) A3(24-27) A3(24-27) A2(24-27) A2(24-27) A3(24-27) A3(24-27)
+
+                // Shuffle pattern two - left side input
+                const __m512i lhs_mat_01_0_sp2 = _mm512_shuffle_epi32(lhs_mat_01_0, (_MM_PERM_ENUM)245);  //A0(4-7) A0(4-7) A1(4-7) A1(4-7) A0(4-7) A0(4-7) A1(4-7) A1(4-7) A0(4-7) A0(4-7) A1(4-7) A1(4-7) A0(4-7) A0(4-7) A1(4-7) A1(4-7)
+                const __m512i lhs_mat_23_0_sp2 = _mm512_shuffle_epi32(lhs_mat_23_0, (_MM_PERM_ENUM)245);  //A2(4-7) A2(4-7) A3(4-7) A3(4-7) A2(4-7) A2(4-7) A3(4-7) A3(4-7) A2(4-7) A2(4-7) A3(4-7) A3(4-7) A2(4-7) A2(4-7) A3(4-7) A3(4-7)
+
+                const __m512i lhs_mat_01_1_sp2 = _mm512_shuffle_epi32(lhs_mat_01_1, (_MM_PERM_ENUM)245);  //A0(12-15) A0(12-15) A1(12-15) A1(12-15) A0(12-15) A0(12-15) A1(12-15) A1(12-15) A0(12-15) A0(12-15) A1(12-15) A1(12-15) A0(12-15) A0(12-15) A1(12-15) A1(12-15)
+                const __m512i lhs_mat_23_1_sp2 = _mm512_shuffle_epi32(lhs_mat_23_1, (_MM_PERM_ENUM)245);  //A2(12-15) A2(12-15) A3(12-15) A3(12-15) A2(12-15) A2(12-15) A3(12-15) A3(12-15) A2(12-15) A2(12-15) A3(12-15) A3(12-15) A2(12-15) A2(12-15) A3(12-15) A3(12-15)
+
+                const __m512i lhs_mat_01_2_sp2 = _mm512_shuffle_epi32(lhs_mat_01_2, (_MM_PERM_ENUM)245);  //A0(20-23) A0(20-23) A1(20-23) A1(20-23) A0(20-23) A0(20-23) A1(20-23) A1(20-23) A0(20-23) A0(20-23) A1(20-23) A1(20-23) A0(20-23) A0(20-23) A1(20-23) A1(20-23)
+                const __m512i lhs_mat_23_2_sp2 = _mm512_shuffle_epi32(lhs_mat_23_2, (_MM_PERM_ENUM)245);  //A2(20-23) A2(20-23) A3(20-23) A3(20-23) A2(20-23) A2(20-23) A3(20-23) A3(20-23) A2(20-23) A2(20-23) A3(20-23) A3(20-23) A2(20-23) A2(20-23) A3(20-23) A3(20-23)
+
+                const __m512i lhs_mat_01_3_sp2 = _mm512_shuffle_epi32(lhs_mat_01_3, (_MM_PERM_ENUM)245);  //A0(28-31) A0(28-31) A1(28-31) A1(28-31) A0(28-31) A0(28-31) A1(28-31) A1(28-31) A0(28-31) A0(28-31) A1(28-31) A1(28-31) A0(28-31) A0(28-31) A1(28-31) A1(28-31)
+                const __m512i lhs_mat_23_3_sp2 = _mm512_shuffle_epi32(lhs_mat_23_3, (_MM_PERM_ENUM)245);  //A2(28-31) A2(28-31) A3(28-31) A3(28-31) A2(28-31) A2(28-31) A3(28-31) A3(28-31) A2(28-31) A2(28-31) A3(28-31) A3(28-31) A2(28-31) A2(28-31) A3(28-31) A3(28-31)
+
+                // The values arranged in shuffle patterns are operated with dot product operation within 32 bit lane i.e corresponding bytes and multiplied and added into 32 bit integers within 32 bit lane
+                const __m512i zero = _mm512_setzero_epi32();
+                __m512i iacc_mat_00_sp1 = mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(zero, lhs_mat_01_3_sp1, rhs_mat_014589CD_3_sp1), lhs_mat_01_2_sp1, rhs_mat_014589CD_2_sp1), lhs_mat_01_1_sp1, rhs_mat_014589CD_1_sp1), lhs_mat_01_0_sp1, rhs_mat_014589CD_0_sp1);
+                __m512i iacc_mat_01_sp1 = mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(zero, lhs_mat_01_3_sp1, rhs_mat_2367ABEF_3_sp1), lhs_mat_01_2_sp1, rhs_mat_2367ABEF_2_sp1), lhs_mat_01_1_sp1, rhs_mat_2367ABEF_1_sp1), lhs_mat_01_0_sp1, rhs_mat_2367ABEF_0_sp1);
+                __m512i iacc_mat_10_sp1 = mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(zero, lhs_mat_23_3_sp1, rhs_mat_014589CD_3_sp1), lhs_mat_23_2_sp1, rhs_mat_014589CD_2_sp1), lhs_mat_23_1_sp1, rhs_mat_014589CD_1_sp1), lhs_mat_23_0_sp1, rhs_mat_014589CD_0_sp1);
+                __m512i iacc_mat_11_sp1 = mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(zero, lhs_mat_23_3_sp1, rhs_mat_2367ABEF_3_sp1), lhs_mat_23_2_sp1, rhs_mat_2367ABEF_2_sp1), lhs_mat_23_1_sp1, rhs_mat_2367ABEF_1_sp1), lhs_mat_23_0_sp1, rhs_mat_2367ABEF_0_sp1);
+                __m512i iacc_mat_00_sp2 = mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(zero, lhs_mat_01_3_sp2, rhs_mat_014589CD_3_sp2), lhs_mat_01_2_sp2, rhs_mat_014589CD_2_sp2), lhs_mat_01_1_sp2, rhs_mat_014589CD_1_sp2), lhs_mat_01_0_sp2, rhs_mat_014589CD_0_sp2);
+                __m512i iacc_mat_01_sp2 = mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(zero, lhs_mat_01_3_sp2, rhs_mat_2367ABEF_3_sp2), lhs_mat_01_2_sp2, rhs_mat_2367ABEF_2_sp2), lhs_mat_01_1_sp2, rhs_mat_2367ABEF_1_sp2), lhs_mat_01_0_sp2, rhs_mat_2367ABEF_0_sp2);
+                __m512i iacc_mat_10_sp2 = mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(zero, lhs_mat_23_3_sp2, rhs_mat_014589CD_3_sp2), lhs_mat_23_2_sp2, rhs_mat_014589CD_2_sp2), lhs_mat_23_1_sp2, rhs_mat_014589CD_1_sp2), lhs_mat_23_0_sp2, rhs_mat_014589CD_0_sp2);
+                __m512i iacc_mat_11_sp2 = mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(mul_sum_i8_pairs_acc_int32x16(zero, lhs_mat_23_3_sp2, rhs_mat_2367ABEF_3_sp2), lhs_mat_23_2_sp2, rhs_mat_2367ABEF_2_sp2), lhs_mat_23_1_sp2, rhs_mat_2367ABEF_1_sp2), lhs_mat_23_0_sp2, rhs_mat_2367ABEF_0_sp2);
+
+                // Output of both shuffle patterns are added in order to sum dot product outputs of all 32 values in block
+                __m512i iacc_mat_00 = _mm512_add_epi32(iacc_mat_00_sp1, iacc_mat_00_sp2);
+                __m512i iacc_mat_01 = _mm512_add_epi32(iacc_mat_01_sp1, iacc_mat_01_sp2);
+                __m512i iacc_mat_10 = _mm512_add_epi32(iacc_mat_10_sp1, iacc_mat_10_sp2);
+                __m512i iacc_mat_11 = _mm512_add_epi32(iacc_mat_11_sp1, iacc_mat_11_sp2);
+
+                // Straighten out to make 4 row vectors
+                __m512i iacc_row_0 = _mm512_mask_blend_epi32(0xCCCC, iacc_mat_00, _mm512_shuffle_epi32(iacc_mat_01, (_MM_PERM_ENUM)78));
+                __m512i iacc_row_1 = _mm512_mask_blend_epi32(0xCCCC, _mm512_shuffle_epi32(iacc_mat_00, (_MM_PERM_ENUM)78), iacc_mat_01);
+                __m512i iacc_row_2 = _mm512_mask_blend_epi32(0xCCCC, iacc_mat_10, _mm512_shuffle_epi32(iacc_mat_11, (_MM_PERM_ENUM)78));
+                __m512i iacc_row_3 = _mm512_mask_blend_epi32(0xCCCC, _mm512_shuffle_epi32(iacc_mat_10, (_MM_PERM_ENUM)78), iacc_mat_11);
+
+                // Load the scale(d) values for all the 4 Q8_0 blocks and repeat it across lanes
+                const __m128i row_scale_f16 = _mm_shuffle_epi32(_mm_maskload_epi32((int const*)(a_ptr[b].d), loadMask), 68);
+                const __m512 row_scale_f32 = GGML_F32Cx16_REPEAT_LOAD(row_scale_f16);
+
+                // Multiply with appropriate scales and accumulate
+                acc_rows[0] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(iacc_row_0), _mm512_mul_ps(col_scale_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 0)),   acc_rows[0]);
+                acc_rows[1] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(iacc_row_1), _mm512_mul_ps(col_scale_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 85)),  acc_rows[1]);
+                acc_rows[2] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(iacc_row_2), _mm512_mul_ps(col_scale_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 170)), acc_rows[2]);
+                acc_rows[3] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(iacc_row_3), _mm512_mul_ps(col_scale_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 255)), acc_rows[3]);
+
+            }
+            // Store the accumulated values
+            for (int i = 0; i < 4; i++) {
+                _mm512_storeu_ps((float *)(s + ((y * 4 + i) * bs + x * 8)), acc_rows[i]);
+            }
+        }
+    }
+    if (anc != nc) {
+        xstart = anc/8;
+        y = 0;
+    }
+#endif // __AVX512__
+
+
+    for (; y < anr / 4; y += 4) {
+        const block_q8_0x4 * a_ptrs[4];
+        a_ptrs[0] = a_ptr_start + (y * nb);
+        for (int i = 0; i < 3; ++i) {
+            a_ptrs[i + 1] = a_ptrs[i] + nb;
+        }
+
+        for (int64_t x = xstart; x < nc / 8; x++) {
+            const block_q5_0x8 * b_ptr = b_ptr_start + (x * b_nb);
+
+            __m256 acc_rows[16];
+            for (int i = 0; i < 16; i++) {
+                acc_rows[i] = _mm256_setzero_ps();
+            }
+
+            for (int64_t b = 0; b < nb; b++) {
+                const __m256 col_scale_f32 = GGML_F32Cx8_LOAD(b_ptr[b].d);
+
+                // Load the eight blocks of lower bits for quantized values interleaved with each other in chunks of eight - B0,B1 ....B6,B7
+                const __m256i rhs_raw_lbit_0123_0 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].qs));
+                const __m256i rhs_raw_lbit_4567_0 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].qs + 32));
+                const __m256i rhs_raw_lbit_0123_1 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].qs + 64));
+                const __m256i rhs_raw_lbit_4567_1 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].qs + 96));
+
+                // Save the values in the following vectors in the formats B0B1B4B5, B2B3B6B7 for further processing and storing of values
+                const __m256i rhs_raw_lbit_0145_0 = _mm256_blend_epi32(rhs_raw_lbit_0123_0, _mm256_permutevar8x32_epi32(rhs_raw_lbit_4567_0, requiredOrder), 240);
+                const __m256i rhs_raw_lbit_2367_0 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_lbit_0123_0, requiredOrder), rhs_raw_lbit_4567_0, 240);
+                const __m256i rhs_raw_lbit_0145_1 = _mm256_blend_epi32(rhs_raw_lbit_0123_1, _mm256_permutevar8x32_epi32(rhs_raw_lbit_4567_1, requiredOrder), 240);
+                const __m256i rhs_raw_lbit_2367_1 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_lbit_0123_1, requiredOrder), rhs_raw_lbit_4567_1, 240);
+
+                // 4-bit -> 8-bit 
+                const __m256i rhs_lbit_0145_0 = _mm256_and_si256(rhs_raw_lbit_0145_0, m4b);
+                const __m256i rhs_lbit_2367_0 = _mm256_and_si256(rhs_raw_lbit_2367_0, m4b);
+                const __m256i rhs_lbit_0145_1 = _mm256_and_si256(rhs_raw_lbit_0145_1, m4b);
+                const __m256i rhs_lbit_2367_1 = _mm256_and_si256(rhs_raw_lbit_2367_1, m4b);
+                const __m256i rhs_lbit_0145_2 = _mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_0, 4), m4b);
+                const __m256i rhs_lbit_2367_2 = _mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_0, 4), m4b);
+                const __m256i rhs_lbit_0145_3 = _mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_1, 4), m4b);
+                const __m256i rhs_lbit_2367_3 = _mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_1, 4), m4b);
+
+                // Load higher bits of quantized values
+                const __m128i rhs_raw_hbit_0 = _mm_loadu_si128((const __m128i *)(b_ptr[b].qh + 0));
+                __m256i rhs_hbit_0145_0 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_set_m128i(_mm_shuffle_epi8(rhs_raw_hbit_0, shuf_hi45), _mm_shuffle_epi8(rhs_raw_hbit_0, shuf_lo01)), bit_pos), zero), hF0);
+                __m256i rhs_hbit_2367_0 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_set_m128i(_mm_shuffle_epi8(rhs_raw_hbit_0, shuf_hi67), _mm_shuffle_epi8(rhs_raw_hbit_0, shuf_lo23)), bit_pos), zero), hF0);
+
+                const __m128i rhs_raw_hbit_1 = _mm_loadu_si128((const __m128i *)(b_ptr[b].qh + 8));
+                __m256i rhs_hbit_0145_1 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_set_m128i(_mm_shuffle_epi8(rhs_raw_hbit_1, shuf_hi45), _mm_shuffle_epi8(rhs_raw_hbit_1, shuf_lo01)), bit_pos), zero), hF0);
+                __m256i rhs_hbit_2367_1 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_set_m128i(_mm_shuffle_epi8(rhs_raw_hbit_1, shuf_hi67), _mm_shuffle_epi8(rhs_raw_hbit_1, shuf_lo23)), bit_pos), zero), hF0);
+
+                const __m128i rhs_raw_hbit_2 = _mm_loadu_si128((const __m128i *)(b_ptr[b].qh + 16));
+                __m256i rhs_hbit_0145_2 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_set_m128i(_mm_shuffle_epi8(rhs_raw_hbit_2, shuf_hi45), _mm_shuffle_epi8(rhs_raw_hbit_2, shuf_lo01)), bit_pos), zero), hF0);
+                __m256i rhs_hbit_2367_2 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_set_m128i(_mm_shuffle_epi8(rhs_raw_hbit_2, shuf_hi67), _mm_shuffle_epi8(rhs_raw_hbit_2, shuf_lo23)), bit_pos), zero), hF0);
+
+                const __m128i rhs_raw_hbit_3 = _mm_loadu_si128((const __m128i *)(b_ptr[b].qh + 24));
+                __m256i rhs_hbit_0145_3 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_set_m128i(_mm_shuffle_epi8(rhs_raw_hbit_3, shuf_hi45), _mm_shuffle_epi8(rhs_raw_hbit_3, shuf_lo01)), bit_pos), zero), hF0);
+                __m256i rhs_hbit_2367_3 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_set_m128i(_mm_shuffle_epi8(rhs_raw_hbit_3, shuf_hi67), _mm_shuffle_epi8(rhs_raw_hbit_3, shuf_lo23)), bit_pos), zero), hF0);
+
+                // Combine: nibble | h_contrib
+                const __m256i rhs_mat_0145_0 = _mm256_or_si256(rhs_lbit_0145_0, rhs_hbit_0145_0);
+                const __m256i rhs_mat_2367_0 = _mm256_or_si256(rhs_lbit_2367_0, rhs_hbit_2367_0);
+                const __m256i rhs_mat_0145_1 = _mm256_or_si256(rhs_lbit_0145_1, rhs_hbit_0145_1);
+                const __m256i rhs_mat_2367_1 = _mm256_or_si256(rhs_lbit_2367_1, rhs_hbit_2367_1);
+                const __m256i rhs_mat_0145_2 = _mm256_or_si256(rhs_lbit_0145_2, rhs_hbit_0145_2);
+                const __m256i rhs_mat_2367_2 = _mm256_or_si256(rhs_lbit_2367_2, rhs_hbit_2367_2);
+                const __m256i rhs_mat_0145_3 = _mm256_or_si256(rhs_lbit_0145_3, rhs_hbit_0145_3);
+                const __m256i rhs_mat_2367_3 = _mm256_or_si256(rhs_lbit_2367_3, rhs_hbit_2367_3);
+
+                // Shuffle pattern one - right side input
+                const __m256i rhs_mat_0145_0_sp1 = _mm256_shuffle_epi32(rhs_mat_0145_0, 136);
+                const __m256i rhs_mat_2367_0_sp1 = _mm256_shuffle_epi32(rhs_mat_2367_0, 136);
+                const __m256i rhs_mat_0145_1_sp1 = _mm256_shuffle_epi32(rhs_mat_0145_1, 136);
+                const __m256i rhs_mat_2367_1_sp1 = _mm256_shuffle_epi32(rhs_mat_2367_1, 136);
+                const __m256i rhs_mat_0145_2_sp1 = _mm256_shuffle_epi32(rhs_mat_0145_2, 136);
+                const __m256i rhs_mat_2367_2_sp1 = _mm256_shuffle_epi32(rhs_mat_2367_2, 136);
+                const __m256i rhs_mat_0145_3_sp1 = _mm256_shuffle_epi32(rhs_mat_0145_3, 136);
+                const __m256i rhs_mat_2367_3_sp1 = _mm256_shuffle_epi32(rhs_mat_2367_3, 136);
+
+                // Shuffle pattern two - right side input
+                const __m256i rhs_mat_0145_0_sp2 = _mm256_shuffle_epi32(rhs_mat_0145_0, 221);
+                const __m256i rhs_mat_2367_0_sp2 = _mm256_shuffle_epi32(rhs_mat_2367_0, 221);
+                const __m256i rhs_mat_0145_1_sp2 = _mm256_shuffle_epi32(rhs_mat_0145_1, 221);
+                const __m256i rhs_mat_2367_1_sp2 = _mm256_shuffle_epi32(rhs_mat_2367_1, 221);
+                const __m256i rhs_mat_0145_2_sp2 = _mm256_shuffle_epi32(rhs_mat_0145_2, 221);
+                const __m256i rhs_mat_2367_2_sp2 = _mm256_shuffle_epi32(rhs_mat_2367_2, 221);
+                const __m256i rhs_mat_0145_3_sp2 = _mm256_shuffle_epi32(rhs_mat_0145_3, 221);
+                const __m256i rhs_mat_2367_3_sp2 = _mm256_shuffle_epi32(rhs_mat_2367_3, 221);
+
+                // Process LHS in groups of four
+                 for (int rp = 0; rp < 4; rp++) {
+                    // Load the four blocks of quantized values interleaved with each other in chunks of eight - A0,A1,A2,A3
+                    // Loaded as set of 128 bit vectors and repeated into a 256 bit vector
+                    __m256i lhs_mat_0123_0 = _mm256_loadu_si256((const __m256i *)((a_ptrs[rp][b].qs)));
+                    __m256i lhs_mat_01_0 = _mm256_permute2f128_si256(lhs_mat_0123_0, lhs_mat_0123_0, 0);
+                    __m256i lhs_mat_23_0 = _mm256_permute2f128_si256(lhs_mat_0123_0, lhs_mat_0123_0, 17);
+                    __m256i lhs_mat_0123_1 = _mm256_loadu_si256((const __m256i *)((a_ptrs[rp][b].qs + 32)));
+                    __m256i lhs_mat_01_1 = _mm256_permute2f128_si256(lhs_mat_0123_1, lhs_mat_0123_1, 0);
+                    __m256i lhs_mat_23_1 = _mm256_permute2f128_si256(lhs_mat_0123_1, lhs_mat_0123_1, 17);
+                    __m256i lhs_mat_0123_2 = _mm256_loadu_si256((const __m256i *)((a_ptrs[rp][b].qs + 64)));
+                    __m256i lhs_mat_01_2 = _mm256_permute2f128_si256(lhs_mat_0123_2, lhs_mat_0123_2, 0);
+                    __m256i lhs_mat_23_2 = _mm256_permute2f128_si256(lhs_mat_0123_2, lhs_mat_0123_2, 17);
+                    __m256i lhs_mat_0123_3 = _mm256_loadu_si256((const __m256i *)((a_ptrs[rp][b].qs + 96)));
+                    __m256i lhs_mat_01_3 = _mm256_permute2f128_si256(lhs_mat_0123_3, lhs_mat_0123_3, 0);
+                    __m256i lhs_mat_23_3 = _mm256_permute2f128_si256(lhs_mat_0123_3, lhs_mat_0123_3, 17);
+
+                    // Shuffle pattern one - left side input
+                    const __m256i lhs_mat_01_0_sp1 = _mm256_shuffle_epi32(lhs_mat_01_0, 160);
+                    const __m256i lhs_mat_23_0_sp1 = _mm256_shuffle_epi32(lhs_mat_23_0, 160);
+                    const __m256i lhs_mat_01_1_sp1 = _mm256_shuffle_epi32(lhs_mat_01_1, 160);
+                    const __m256i lhs_mat_23_1_sp1 = _mm256_shuffle_epi32(lhs_mat_23_1, 160);
+                    const __m256i lhs_mat_01_2_sp1 = _mm256_shuffle_epi32(lhs_mat_01_2, 160);
+                    const __m256i lhs_mat_23_2_sp1 = _mm256_shuffle_epi32(lhs_mat_23_2, 160);
+                    const __m256i lhs_mat_01_3_sp1 = _mm256_shuffle_epi32(lhs_mat_01_3, 160);
+                    const __m256i lhs_mat_23_3_sp1 = _mm256_shuffle_epi32(lhs_mat_23_3, 160);
+
+                    // Shuffle pattern two - left side input
+                    const __m256i lhs_mat_01_0_sp2 = _mm256_shuffle_epi32(lhs_mat_01_0, 245);
+                    const __m256i lhs_mat_23_0_sp2 = _mm256_shuffle_epi32(lhs_mat_23_0, 245);
+                    const __m256i lhs_mat_01_1_sp2 = _mm256_shuffle_epi32(lhs_mat_01_1, 245);
+                    const __m256i lhs_mat_23_1_sp2 = _mm256_shuffle_epi32(lhs_mat_23_1, 245);
+                    const __m256i lhs_mat_01_2_sp2 = _mm256_shuffle_epi32(lhs_mat_01_2, 245);
+                    const __m256i lhs_mat_23_2_sp2 = _mm256_shuffle_epi32(lhs_mat_23_2, 245);
+                    const __m256i lhs_mat_01_3_sp2 = _mm256_shuffle_epi32(lhs_mat_01_3, 245);
+                    const __m256i lhs_mat_23_3_sp2 = _mm256_shuffle_epi32(lhs_mat_23_3, 245);
+
+                    // The values arranged in shuffle patterns are operated with dot product operation within 32 bit lane i.e corresponding bytes and multiplied and added into 32 bit integers within 32 bit lane
+                    const __m256i zero32 = _mm256_setzero_si256();
+                    __m256i iacc_mat_00_sp1 = mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(zero32, lhs_mat_01_3_sp1, rhs_mat_0145_3_sp1), lhs_mat_01_2_sp1, rhs_mat_0145_2_sp1), lhs_mat_01_1_sp1, rhs_mat_0145_1_sp1), lhs_mat_01_0_sp1, rhs_mat_0145_0_sp1);
+                    __m256i iacc_mat_01_sp1 = mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(zero32, lhs_mat_01_3_sp1, rhs_mat_2367_3_sp1), lhs_mat_01_2_sp1, rhs_mat_2367_2_sp1), lhs_mat_01_1_sp1, rhs_mat_2367_1_sp1), lhs_mat_01_0_sp1, rhs_mat_2367_0_sp1);
+                    __m256i iacc_mat_10_sp1 = mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(zero32, lhs_mat_23_3_sp1, rhs_mat_0145_3_sp1), lhs_mat_23_2_sp1, rhs_mat_0145_2_sp1), lhs_mat_23_1_sp1, rhs_mat_0145_1_sp1), lhs_mat_23_0_sp1, rhs_mat_0145_0_sp1);
+                    __m256i iacc_mat_11_sp1 = mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(zero32, lhs_mat_23_3_sp1, rhs_mat_2367_3_sp1), lhs_mat_23_2_sp1, rhs_mat_2367_2_sp1), lhs_mat_23_1_sp1, rhs_mat_2367_1_sp1), lhs_mat_23_0_sp1, rhs_mat_2367_0_sp1);
+                    __m256i iacc_mat_00_sp2 = mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(zero32, lhs_mat_01_3_sp2, rhs_mat_0145_3_sp2), lhs_mat_01_2_sp2, rhs_mat_0145_2_sp2), lhs_mat_01_1_sp2, rhs_mat_0145_1_sp2), lhs_mat_01_0_sp2, rhs_mat_0145_0_sp2);
+                    __m256i iacc_mat_01_sp2 = mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(zero32, lhs_mat_01_3_sp2, rhs_mat_2367_3_sp2), lhs_mat_01_2_sp2, rhs_mat_2367_2_sp2), lhs_mat_01_1_sp2, rhs_mat_2367_1_sp2), lhs_mat_01_0_sp2, rhs_mat_2367_0_sp2);
+                    __m256i iacc_mat_10_sp2 = mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(zero32, lhs_mat_23_3_sp2, rhs_mat_0145_3_sp2), lhs_mat_23_2_sp2, rhs_mat_0145_2_sp2), lhs_mat_23_1_sp2, rhs_mat_0145_1_sp2), lhs_mat_23_0_sp2, rhs_mat_0145_0_sp2);
+                    __m256i iacc_mat_11_sp2 = mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(zero32, lhs_mat_23_3_sp2, rhs_mat_2367_3_sp2), lhs_mat_23_2_sp2, rhs_mat_2367_2_sp2), lhs_mat_23_1_sp2, rhs_mat_2367_1_sp2), lhs_mat_23_0_sp2, rhs_mat_2367_0_sp2);
+
+                    // Output of both shuffle patterns are added in order to sum dot product outputs of all 32 values in block
+                    __m256i iacc_mat_00 = _mm256_add_epi32(iacc_mat_00_sp1, iacc_mat_00_sp2);
+                    __m256i iacc_mat_01 = _mm256_add_epi32(iacc_mat_01_sp1, iacc_mat_01_sp2);
+                    __m256i iacc_mat_10 = _mm256_add_epi32(iacc_mat_10_sp1, iacc_mat_10_sp2);
+                    __m256i iacc_mat_11 = _mm256_add_epi32(iacc_mat_11_sp1, iacc_mat_11_sp2);
+
+                    // Straighten out to make 4 row vectors
+                    __m256i iacc_row_0 = _mm256_blend_epi32(iacc_mat_00, _mm256_shuffle_epi32(iacc_mat_01, 78), 204);
+                    __m256i iacc_row_1 = _mm256_blend_epi32(_mm256_shuffle_epi32(iacc_mat_00, 78), iacc_mat_01, 204);
+                    __m256i iacc_row_2 = _mm256_blend_epi32(iacc_mat_10, _mm256_shuffle_epi32(iacc_mat_11, 78), 204);
+                    __m256i iacc_row_3 = _mm256_blend_epi32(_mm256_shuffle_epi32(iacc_mat_10, 78), iacc_mat_11, 204);
+
+                    // Load the scale(d) values for all the 4 Q8_0 blocks and repeat it across lanes
+                    const __m256 row_scale_f32 = GGML_F32Cx8_REPEAT_LOAD(a_ptrs[rp][b].d, loadMask);
+
+                    // Multiply with appropriate scales and accumulate
+                    acc_rows[rp * 4] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_row_0), _mm256_mul_ps(col_scale_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32,   0)), acc_rows[rp * 4]);
+                    acc_rows[rp * 4 + 1] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_row_1), _mm256_mul_ps(col_scale_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32,  85)), acc_rows[rp * 4 + 1]);
+                    acc_rows[rp * 4 + 2] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_row_2), _mm256_mul_ps(col_scale_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 170)), acc_rows[rp * 4 + 2]);
+                    acc_rows[rp * 4 + 3] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_row_3), _mm256_mul_ps(col_scale_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 255)), acc_rows[rp * 4 + 3]);
+                }
+            }
+
+            // Store the accumulated values
+            for (int i = 0; i < 16; i++) {
+                _mm256_storeu_ps((float *)(s + ((y * 4 + i) * bs + x * 8)), acc_rows[i]);
+            }
+        }
+    }
+
+    // Take a block_q8_0x4 structures at each pass of the loop and perform dot product operation
+    for (; y < nr / 4; y++) {
+
+        const block_q8_0x4 * a_ptr = a_ptr_start + (y * nb);
+
+        // Load the eight blocks of quantized values interleaved with each other in chunks of eight - B0,B1 ....B6,B7
+        for (int64_t x = 0; x < nc / 8; x++) {
+
+            const block_q5_0x8 * b_ptr = b_ptr_start + (x * b_nb);
+            // Master FP accumulators
+            __m256 acc_rows[4];
+            for (int i = 0; i < 4; i++) {
+                acc_rows[i] = _mm256_setzero_ps();
+            }
+
+            for (int64_t b = 0; b < nb; b++) {
+                // Scale values - Load the eight scale values of block_q5_0x8
+                const __m256 col_scale_f32 = GGML_F32Cx8_LOAD(b_ptr[b].d);
+
+                // Load the eight lower bits of block_q5_0 quantized values interleaved with each other in chunks of eight - B0,B1 ....B6,B7
+                const __m256i rhs_raw_lbit_0123_0 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].qs));
+                const __m256i rhs_raw_lbit_4567_0 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].qs + 32));
+                const __m256i rhs_raw_lbit_0123_1 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].qs + 64));
+                const __m256i rhs_raw_lbit_4567_1 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].qs + 96));
+
+                // Save the values in the following vectors in the formats B0B1B4B5, B2B3B6B7 for further processing and storing of values
+                const __m256i rhs_raw_lbit_0145_0 = _mm256_blend_epi32(rhs_raw_lbit_0123_0, _mm256_permutevar8x32_epi32(rhs_raw_lbit_4567_0, requiredOrder), 240);
+                const __m256i rhs_raw_lbit_2367_0 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_lbit_0123_0, requiredOrder), rhs_raw_lbit_4567_0, 240);
+                const __m256i rhs_raw_lbit_0145_1 = _mm256_blend_epi32(rhs_raw_lbit_0123_1, _mm256_permutevar8x32_epi32(rhs_raw_lbit_4567_1, requiredOrder), 240);
+                const __m256i rhs_raw_lbit_2367_1 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_lbit_0123_1, requiredOrder), rhs_raw_lbit_4567_1, 240);
+
+                // 4-bit -> 8-bit
+                const __m256i rhs_lbit_0145_0 = _mm256_and_si256(rhs_raw_lbit_0145_0, m4b);
+                const __m256i rhs_lbit_2367_0 = _mm256_and_si256(rhs_raw_lbit_2367_0, m4b);
+                const __m256i rhs_lbit_0145_1 = _mm256_and_si256(rhs_raw_lbit_0145_1, m4b);
+                const __m256i rhs_lbit_2367_1 = _mm256_and_si256(rhs_raw_lbit_2367_1, m4b);
+                const __m256i rhs_lbit_0145_2 = _mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_0, 4), m4b);
+                const __m256i rhs_lbit_2367_2 = _mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_0, 4), m4b);
+                const __m256i rhs_lbit_0145_3 = _mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_1, 4), m4b);
+                const __m256i rhs_lbit_2367_3 = _mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_1, 4), m4b);
+
+                //Load high bits of quantized values
+                const __m128i rhs_raw_hbit_0 = _mm_loadl_epi64((const __m128i *)(b_ptr[b].qh + 0));
+                __m256i rhs_hbit_0145_0 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_set_m128i(_mm_shuffle_epi8(rhs_raw_hbit_0, shuf_hi45), _mm_shuffle_epi8(rhs_raw_hbit_0, shuf_lo01)), bit_pos), zero), hF0);
+                __m256i rhs_hbit_2367_0 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_set_m128i(_mm_shuffle_epi8(rhs_raw_hbit_0, shuf_hi67), _mm_shuffle_epi8(rhs_raw_hbit_0, shuf_lo23)), bit_pos), zero), hF0);
+
+                const __m128i rhs_raw_hbit_1 = _mm_loadl_epi64((const __m128i *)(b_ptr[b].qh + 8));
+                __m256i rhs_hbit_0145_1 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_set_m128i(_mm_shuffle_epi8(rhs_raw_hbit_1, shuf_hi45), _mm_shuffle_epi8(rhs_raw_hbit_1, shuf_lo01)), bit_pos), zero), hF0);
+                __m256i rhs_hbit_2367_1 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_set_m128i(_mm_shuffle_epi8(rhs_raw_hbit_1, shuf_hi67), _mm_shuffle_epi8(rhs_raw_hbit_1, shuf_lo23)), bit_pos), zero), hF0);
+
+                const __m128i rhs_raw_hbit_2 = _mm_loadl_epi64((const __m128i *)(b_ptr[b].qh + 16));
+                __m256i rhs_hbit_0145_2 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_set_m128i(_mm_shuffle_epi8(rhs_raw_hbit_2, shuf_hi45), _mm_shuffle_epi8(rhs_raw_hbit_2, shuf_lo01)), bit_pos), zero), hF0);
+                __m256i rhs_hbit_2367_2 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_set_m128i(_mm_shuffle_epi8(rhs_raw_hbit_2, shuf_hi67), _mm_shuffle_epi8(rhs_raw_hbit_2, shuf_lo23)), bit_pos), zero), hF0);
+
+                const __m128i rhs_raw_hbit_3 = _mm_loadl_epi64((const __m128i *)(b_ptr[b].qh + 24));
+                __m256i rhs_hbit_0145_3 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_set_m128i(_mm_shuffle_epi8(rhs_raw_hbit_3, shuf_hi45), _mm_shuffle_epi8(rhs_raw_hbit_3, shuf_lo01)), bit_pos), zero), hF0);
+                __m256i rhs_hbit_2367_3 = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_set_m128i(_mm_shuffle_epi8(rhs_raw_hbit_3, shuf_hi67), _mm_shuffle_epi8(rhs_raw_hbit_3, shuf_lo23)), bit_pos), zero), hF0);
+
+                // Combine: nibble | h_contrib
+                const __m256i rhs_mat_0145_0 = _mm256_or_si256(rhs_lbit_0145_0, rhs_hbit_0145_0);
+                const __m256i rhs_mat_2367_0 = _mm256_or_si256(rhs_lbit_2367_0, rhs_hbit_2367_0);
+                const __m256i rhs_mat_0145_1 = _mm256_or_si256(rhs_lbit_0145_1, rhs_hbit_0145_1);
+                const __m256i rhs_mat_2367_1 = _mm256_or_si256(rhs_lbit_2367_1, rhs_hbit_2367_1);
+                const __m256i rhs_mat_0145_2 = _mm256_or_si256(rhs_lbit_0145_2, rhs_hbit_0145_2);
+                const __m256i rhs_mat_2367_2 = _mm256_or_si256(rhs_lbit_2367_2, rhs_hbit_2367_2);
+                const __m256i rhs_mat_0145_3 = _mm256_or_si256(rhs_lbit_0145_3, rhs_hbit_0145_3);
+                const __m256i rhs_mat_2367_3 = _mm256_or_si256(rhs_lbit_2367_3, rhs_hbit_2367_3);
+
+                // Shuffle pattern one - right side input
+                const __m256i rhs_mat_0145_0_sp1 = _mm256_shuffle_epi32(rhs_mat_0145_0, 136);
+                const __m256i rhs_mat_2367_0_sp1 = _mm256_shuffle_epi32(rhs_mat_2367_0, 136);
+                const __m256i rhs_mat_0145_1_sp1 = _mm256_shuffle_epi32(rhs_mat_0145_1, 136);
+                const __m256i rhs_mat_2367_1_sp1 = _mm256_shuffle_epi32(rhs_mat_2367_1, 136);
+                const __m256i rhs_mat_0145_2_sp1 = _mm256_shuffle_epi32(rhs_mat_0145_2, 136);
+                const __m256i rhs_mat_2367_2_sp1 = _mm256_shuffle_epi32(rhs_mat_2367_2, 136);
+                const __m256i rhs_mat_0145_3_sp1 = _mm256_shuffle_epi32(rhs_mat_0145_3, 136);
+                const __m256i rhs_mat_2367_3_sp1 = _mm256_shuffle_epi32(rhs_mat_2367_3, 136);
+
+                // Shuffle pattern two - right side input
+                const __m256i rhs_mat_0145_0_sp2 = _mm256_shuffle_epi32(rhs_mat_0145_0, 221);
+                const __m256i rhs_mat_2367_0_sp2 = _mm256_shuffle_epi32(rhs_mat_2367_0, 221);
+                const __m256i rhs_mat_0145_1_sp2 = _mm256_shuffle_epi32(rhs_mat_0145_1, 221);
+                const __m256i rhs_mat_2367_1_sp2 = _mm256_shuffle_epi32(rhs_mat_2367_1, 221);
+                const __m256i rhs_mat_0145_2_sp2 = _mm256_shuffle_epi32(rhs_mat_0145_2, 221);
+                const __m256i rhs_mat_2367_2_sp2 = _mm256_shuffle_epi32(rhs_mat_2367_2, 221);
+                const __m256i rhs_mat_0145_3_sp2 = _mm256_shuffle_epi32(rhs_mat_0145_3, 221);
+                const __m256i rhs_mat_2367_3_sp2 = _mm256_shuffle_epi32(rhs_mat_2367_3, 221);
+
+
+                // Load the four blocks of quantized values interleaved with each other in chunks of eight - A0,A1,A2,A3
+                // Loaded as set of 128 bit vectors and repeated into a 256 bit vector
+                __m256i lhs_mat_0123_0 = _mm256_loadu_si256((const __m256i *)((a_ptr[b].qs)));
+                __m256i lhs_mat_01_0 = _mm256_permute2f128_si256(lhs_mat_0123_0, lhs_mat_0123_0, 0);
+                __m256i lhs_mat_23_0 = _mm256_permute2f128_si256(lhs_mat_0123_0, lhs_mat_0123_0, 17);
+                __m256i lhs_mat_0123_1 = _mm256_loadu_si256((const __m256i *)((a_ptr[b].qs + 32)));
+                __m256i lhs_mat_01_1 = _mm256_permute2f128_si256(lhs_mat_0123_1, lhs_mat_0123_1, 0);
+                __m256i lhs_mat_23_1 = _mm256_permute2f128_si256(lhs_mat_0123_1, lhs_mat_0123_1, 17);
+                __m256i lhs_mat_0123_2 = _mm256_loadu_si256((const __m256i *)((a_ptr[b].qs + 64)));
+                __m256i lhs_mat_01_2 = _mm256_permute2f128_si256(lhs_mat_0123_2, lhs_mat_0123_2, 0);
+                __m256i lhs_mat_23_2 = _mm256_permute2f128_si256(lhs_mat_0123_2, lhs_mat_0123_2, 17);
+                __m256i lhs_mat_0123_3 = _mm256_loadu_si256((const __m256i *)((a_ptr[b].qs + 96)));
+                __m256i lhs_mat_01_3 = _mm256_permute2f128_si256(lhs_mat_0123_3, lhs_mat_0123_3, 0);
+                __m256i lhs_mat_23_3 = _mm256_permute2f128_si256(lhs_mat_0123_3, lhs_mat_0123_3, 17);
+
+                // Shuffle pattern one - left side input
+                const __m256i lhs_mat_01_0_sp1 = _mm256_shuffle_epi32(lhs_mat_01_0, 160);
+                const __m256i lhs_mat_23_0_sp1 = _mm256_shuffle_epi32(lhs_mat_23_0, 160);
+                const __m256i lhs_mat_01_1_sp1 = _mm256_shuffle_epi32(lhs_mat_01_1, 160);
+                const __m256i lhs_mat_23_1_sp1 = _mm256_shuffle_epi32(lhs_mat_23_1, 160);
+                const __m256i lhs_mat_01_2_sp1 = _mm256_shuffle_epi32(lhs_mat_01_2, 160);
+                const __m256i lhs_mat_23_2_sp1 = _mm256_shuffle_epi32(lhs_mat_23_2, 160);
+                const __m256i lhs_mat_01_3_sp1 = _mm256_shuffle_epi32(lhs_mat_01_3, 160);
+                const __m256i lhs_mat_23_3_sp1 = _mm256_shuffle_epi32(lhs_mat_23_3, 160);
+
+                // Shuffle pattern two - left side input
+                const __m256i lhs_mat_01_0_sp2 = _mm256_shuffle_epi32(lhs_mat_01_0, 245);
+                const __m256i lhs_mat_23_0_sp2 = _mm256_shuffle_epi32(lhs_mat_23_0, 245);
+                const __m256i lhs_mat_01_1_sp2 = _mm256_shuffle_epi32(lhs_mat_01_1, 245);
+                const __m256i lhs_mat_23_1_sp2 = _mm256_shuffle_epi32(lhs_mat_23_1, 245);
+                const __m256i lhs_mat_01_2_sp2 = _mm256_shuffle_epi32(lhs_mat_01_2, 245);
+                const __m256i lhs_mat_23_2_sp2 = _mm256_shuffle_epi32(lhs_mat_23_2, 245);
+                const __m256i lhs_mat_01_3_sp2 = _mm256_shuffle_epi32(lhs_mat_01_3, 245);
+                const __m256i lhs_mat_23_3_sp2 = _mm256_shuffle_epi32(lhs_mat_23_3, 245);
+
+                // The values arranged in shuffle patterns are operated with dot product operation within 32 bit lane i.e corresponding bytes and multiplied and added into 32 bit integers within 32 bit lane
+                const __m256i zero32 = _mm256_setzero_si256();
+                __m256i iacc_mat_00_sp1 = mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(zero32, lhs_mat_01_3_sp1, rhs_mat_0145_3_sp1), lhs_mat_01_2_sp1, rhs_mat_0145_2_sp1), lhs_mat_01_1_sp1, rhs_mat_0145_1_sp1), lhs_mat_01_0_sp1, rhs_mat_0145_0_sp1);
+                __m256i iacc_mat_01_sp1 = mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(zero32, lhs_mat_01_3_sp1, rhs_mat_2367_3_sp1), lhs_mat_01_2_sp1, rhs_mat_2367_2_sp1), lhs_mat_01_1_sp1, rhs_mat_2367_1_sp1), lhs_mat_01_0_sp1, rhs_mat_2367_0_sp1);
+                __m256i iacc_mat_10_sp1 = mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(zero32, lhs_mat_23_3_sp1, rhs_mat_0145_3_sp1), lhs_mat_23_2_sp1, rhs_mat_0145_2_sp1), lhs_mat_23_1_sp1, rhs_mat_0145_1_sp1), lhs_mat_23_0_sp1, rhs_mat_0145_0_sp1);
+                __m256i iacc_mat_11_sp1 = mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(zero32, lhs_mat_23_3_sp1, rhs_mat_2367_3_sp1), lhs_mat_23_2_sp1, rhs_mat_2367_2_sp1), lhs_mat_23_1_sp1, rhs_mat_2367_1_sp1), lhs_mat_23_0_sp1, rhs_mat_2367_0_sp1);
+                __m256i iacc_mat_00_sp2 = mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(zero32, lhs_mat_01_3_sp2, rhs_mat_0145_3_sp2), lhs_mat_01_2_sp2, rhs_mat_0145_2_sp2), lhs_mat_01_1_sp2, rhs_mat_0145_1_sp2), lhs_mat_01_0_sp2, rhs_mat_0145_0_sp2);
+                __m256i iacc_mat_01_sp2 = mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(zero32, lhs_mat_01_3_sp2, rhs_mat_2367_3_sp2), lhs_mat_01_2_sp2, rhs_mat_2367_2_sp2), lhs_mat_01_1_sp2, rhs_mat_2367_1_sp2), lhs_mat_01_0_sp2, rhs_mat_2367_0_sp2);
+                __m256i iacc_mat_10_sp2 = mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(zero32, lhs_mat_23_3_sp2, rhs_mat_0145_3_sp2), lhs_mat_23_2_sp2, rhs_mat_0145_2_sp2), lhs_mat_23_1_sp2, rhs_mat_0145_1_sp2), lhs_mat_23_0_sp2, rhs_mat_0145_0_sp2);
+                __m256i iacc_mat_11_sp2 = mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(mul_sum_i8_pairs_acc_int32x8(zero32, lhs_mat_23_3_sp2, rhs_mat_2367_3_sp2), lhs_mat_23_2_sp2, rhs_mat_2367_2_sp2), lhs_mat_23_1_sp2, rhs_mat_2367_1_sp2), lhs_mat_23_0_sp2, rhs_mat_2367_0_sp2);
+
+                // Output of both shuffle patterns are added in order to sum dot product outputs of all 32 values in block
+                __m256i iacc_mat_00 = _mm256_add_epi32(iacc_mat_00_sp1, iacc_mat_00_sp2);
+                __m256i iacc_mat_01 = _mm256_add_epi32(iacc_mat_01_sp1, iacc_mat_01_sp2);
+                __m256i iacc_mat_10 = _mm256_add_epi32(iacc_mat_10_sp1, iacc_mat_10_sp2);
+                __m256i iacc_mat_11 = _mm256_add_epi32(iacc_mat_11_sp1, iacc_mat_11_sp2);
+
+                // Straighten out to make 4 row vectors
+                __m256i iacc_row_0 = _mm256_blend_epi32(iacc_mat_00, _mm256_shuffle_epi32(iacc_mat_01, 78), 204);
+                __m256i iacc_row_1 = _mm256_blend_epi32(_mm256_shuffle_epi32(iacc_mat_00, 78), iacc_mat_01, 204);
+                __m256i iacc_row_2 = _mm256_blend_epi32(iacc_mat_10, _mm256_shuffle_epi32(iacc_mat_11, 78), 204);
+                __m256i iacc_row_3 = _mm256_blend_epi32(_mm256_shuffle_epi32(iacc_mat_10, 78), iacc_mat_11, 204);
+
+                // Load the scale(d) values for all the 4 Q8_0 blocks and repeat it across lanes
+                const __m256 row_scale_f32 = GGML_F32Cx8_REPEAT_LOAD(a_ptr[b].d, loadMask);
+
+                // Multiply with appropriate scales and accumulate
+                acc_rows[0] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_row_0), _mm256_mul_ps(col_scale_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32,   0)), acc_rows[0]);
+                acc_rows[1] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_row_1), _mm256_mul_ps(col_scale_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32,  85)), acc_rows[1]);
+                acc_rows[2] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_row_2), _mm256_mul_ps(col_scale_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 170)), acc_rows[2]);
+                acc_rows[3] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_row_3), _mm256_mul_ps(col_scale_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 255)), acc_rows[3]);
+
+
+            }
+            // Store the accumulated values
+            for (int i = 0; i < 4; i++) {
+                _mm256_storeu_ps((float * )(s + ((y * 4 + i) * bs + x * 8)), acc_rows[i]);
+            }
+        }
+
+    }
+
+#else
+    ggml_gemm_q5_0_8x8_q8_0_generic(n, s, bs, vx, vy, nr, nc);
+#endif
+
+}
+
 
 void ggml_gemm_q2_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK_K;
