@@ -4422,6 +4422,23 @@ class Qwen3Model(Qwen2Model):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
+
+        # Add linear_attn parameters for Qwen3.5
+        if "linear_attn_config" in self.hparams:
+            linear_attn_config = self.hparams["linear_attn_config"]
+            if "short_conv_kernel_size" in linear_attn_config:
+                self.gguf_writer.add_ssm_conv_kernel(linear_attn_config["short_conv_kernel_size"])
+            if "head_dim" in linear_attn_config:
+                self.gguf_writer.add_ssm_state_size(linear_attn_config["head_dim"])
+            if "num_key_heads" in linear_attn_config:
+                self.gguf_writer.add_ssm_group_count(linear_attn_config["num_key_heads"])
+            if "num_value_heads" in linear_attn_config:
+                self.gguf_writer.add_ssm_time_step_rank(linear_attn_config["num_value_heads"])
+            if "value_head_dim" in linear_attn_config and "num_value_heads" in linear_attn_config:
+                self.gguf_writer.add_ssm_inner_size(linear_attn_config["value_head_dim"] * linear_attn_config["num_value_heads"])
+            if "full_attention_interval" in linear_attn_config:
+                self.gguf_writer.add_full_attention_interval(linear_attn_config["full_attention_interval"])
+
         if self.is_rerank:
             self.gguf_writer.add_pooling_type(gguf.PoolingType.RANK)
             self.gguf_writer.add_classifier_output_labels(["yes", "no"])
@@ -4443,6 +4460,23 @@ class Qwen3Model(Qwen2Model):
             # skip multimodal tensors
             return
 
+        # Handle linear_attn tensors in Qwen3.5
+        if "linear_attn." in name:
+            # Rename linear_attn to ssm to match expected format
+            new_name = name.replace(".linear_attn.", ".ssm.")
+
+            if name.endswith(".A_log"):
+                data_torch = -torch.exp(data_torch)
+            elif name.endswith(".dt_bias"):
+                new_name = name.replace(".dt_bias", ".dt_proj.bias")
+            elif "conv1d" in name:
+                data_torch = data_torch.squeeze()
+            elif name.endswith("norm.weight") and not name.endswith(".linear_attn.norm.weight"):
+                data_torch = data_torch + 1
+
+            yield new_name, data_torch
+            return
+
         if self.is_rerank:
             is_tied_head = self.is_tied_embeddings and "embed_tokens" in name
             is_real_head = not self.is_tied_embeddings and "lm_head" in name
@@ -4455,6 +4489,14 @@ class Qwen3Model(Qwen2Model):
                 if is_tied_head:
                     yield from super().modify_tensors(data_torch, name, bid)
                 return
+
+        # Handle linear_attn.A_log tensors in Qwen3.5
+        if name.endswith(".linear_attn.A_log"):
+            data_torch = -torch.exp(data_torch)
+            # Rename the tensor to match expected format
+            new_name = name.replace(".linear_attn.A_log", ".ssm.A_log")
+            yield new_name, data_torch
+            return
 
         yield from super().modify_tensors(data_torch, name, bid)
 
@@ -4842,9 +4884,31 @@ class _LinearAttentionVReorderBase(Qwen3NextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("Qwen3_5ForConditionalGeneration")
+@ModelBase.register("Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM")
 class Qwen3_5TextModel(_LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Handle models with root-level linear attention parameters (no linear_attn_config)
+        if "linear_attn_config" not in self.hparams and "linear_conv_kernel_dim" in self.hparams:
+            # Create a synthetic linear_attn_config for compatibility
+            self.hparams["linear_attn_config"] = {
+                "short_conv_kernel_size": self.hparams.get("linear_conv_kernel_dim"),
+                "head_dim": self.hparams.get("linear_key_head_dim"),
+                "num_key_heads": self.hparams.get("linear_num_key_heads"),
+                "num_value_heads": self.hparams.get("linear_num_value_heads"),
+                "value_head_dim": self.hparams.get("linear_value_head_dim"),
+                "full_attention_interval": self.hparams.get("full_attention_interval"),
+            }
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Remove language_model. prefix if present (used in some Qwen3.5 models)
+        if name.startswith("language_model."):
+            name = name.replace("language_model.", "")
+
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("Qwen3_5MoeForConditionalGeneration")
