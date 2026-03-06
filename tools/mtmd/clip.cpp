@@ -788,14 +788,11 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
     std::unique_ptr<clip_graph> builder;
 
     switch (ctx->proj_type()) {
-        case PROJECTOR_TYPE_PHI4:
-            {
-                builder = std::make_unique<clip_graph_phi4_siglip>(ctx, img);
-            } break;
         case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_IDEFICS3:
         case PROJECTOR_TYPE_LFM2:
         case PROJECTOR_TYPE_JANUS_PRO:
+        case PROJECTOR_TYPE_PHI4:
             {
                 builder = std::make_unique<clip_graph_siglip>(ctx, img);
             } break;
