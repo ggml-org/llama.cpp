@@ -1,3 +1,4 @@
+import common;
 import types;
 import flash_attn_loader;
 
@@ -96,7 +97,23 @@ static const uint num_subgroups = SubGroupSize == 0 ? 0 : WorkGroupSize / SubGro
 // If SubGroupSize is set to 0 then only use shmem reductions
 static const uint tmpsh_size = (SubGroupSize > 0) ? (row_split == 1 ? num_subgroups * D_split : num_subgroups) : WorkGroupSize;
 groupshared float tmpsh[tmpsh_size];
+struct ShMemFloat: ISharedMemory<float> {
+    static float get(uint idx) {
+        return tmpsh[idx];
+    }
+    static void set(uint idx, float value) {
+        tmpsh[idx] = value;
+    }
+}
 groupshared vector<FLOAT, 4> tmpshv4[tmpsh_size];
+struct ShMemFloat4: ISharedMemory<vector<FLOAT, 4>> {
+    static vector<FLOAT, 4> get(uint idx) {
+        return tmpshv4[idx];
+    }
+    static void set(uint idx, vector<FLOAT, 4> value) {
+        tmpshv4[idx] = value;
+    }
+}
 
 static const uint masksh_stride = Br + 1;
 groupshared FLOAT masksh[Bc * masksh_stride];
@@ -566,34 +583,7 @@ void main(
         float rowmaxf = Mf[r];
 
         // Compute max across the row
-        if (SubGroupSize > 0) {
-            [unroll] for (uint s = D_split; s < SubGroupSize; s *= 2) {
-                rowmaxf = max(rowmaxf, WaveReadLaneAt(rowmaxf, subgroup_invocation_id ^ s));
-            }
-            if (row_split == 1) {
-                // Reduce inside workgroup with shmem
-                GroupMemoryBarrierWithGroupSync();
-                if (subgroup_invocation_id == d_tid) {
-                    tmpsh[subgroup_id * D_split + d_tid] = rowmaxf;
-                }
-                GroupMemoryBarrierWithGroupSync();
-                rowmaxf = tmpsh[d_tid];
-                [unroll] for (uint s = 1; s < num_subgroups; ++s) {
-                    rowmaxf = max(rowmaxf, tmpsh[s * D_split + d_tid]);
-                }
-            }
-        } else {
-            GroupMemoryBarrierWithGroupSync();
-            tmpsh[tid] = rowmaxf;
-            GroupMemoryBarrierWithGroupSync();
-            [unroll] for (int s = int(threads_per_rowgroup) / 2; s >= D_split; s >>= 1) {
-                if (rowgroup_tid < s) {
-                    tmpsh[tid] = max(tmpsh[tid], tmpsh[tid ^ s]);
-                }
-                GroupMemoryBarrierWithGroupSync();
-            }
-            rowmaxf = tmpsh[row_tid * threads_per_rowgroup + d_tid];
-        }
+        rowmaxf = reduce<float, MaxOp<float>, ShMemFloat>(rowmaxf, D_split, threads_per_rowgroup);
 
         float Moldf = Mf[r];
 
@@ -605,72 +595,12 @@ void main(
         Lf[r] = eMf*Lf[r];
 
         // Compute sum across the row
-        if (SubGroupSize > 0) {
-            [unroll] for (uint s = D_split; s < SubGroupSize; s *= 2) {
-                Lf[r] += WaveReadLaneAt(Lf[r], subgroup_invocation_id ^ s);
-            }
-            if (row_split == 1) {
-                GroupMemoryBarrierWithGroupSync();
-                if (subgroup_invocation_id == d_tid) {
-                    tmpsh[subgroup_id * D_split + d_tid] = Lf[r];
-                }
-                GroupMemoryBarrierWithGroupSync();
-                Lf[r] = tmpsh[d_tid];
-                [unroll] for (uint s = 1; s < num_subgroups; ++s) {
-                    Lf[r] += tmpsh[s * D_split + d_tid];
-                }
-            }
-        } else {
-            GroupMemoryBarrierWithGroupSync();
-            tmpsh[tid] = Lf[r];
-            GroupMemoryBarrierWithGroupSync();
-            [unroll] for (int s = int(threads_per_rowgroup) / 2; s >= D_split; s >>= 1) {
-                if (rowgroup_tid < s) {
-                    tmpsh[tid] = tmpsh[tid] + tmpsh[tid ^ s];
-                }
-                GroupMemoryBarrierWithGroupSync();
-            }
-            Lf[r] = tmpsh[row_tid * threads_per_rowgroup + d_tid];
-        }
+        Lf[r] = reduce<float, SumOp<float>, ShMemFloat>(Lf[r], D_split, threads_per_rowgroup);
 
         [unroll] for (uint d = 0; d < HSV_per_thread / 4; ++d) {
             Of[r][d] = FLOAT(eMf) * Of[r][d];
 
-            if (SubGroupSize > 0) {
-                [unroll] for (uint s = D_split; s < SubGroupSize; s *= 2) {
-                    if (!OLD_AMD_WINDOWS) {
-                        Of[r][d] += WaveReadLaneAt(Of[r][d], subgroup_invocation_id ^ s);
-                    } else {
-                        // Something about f16vector<float, 4> subgroupShuffleXor is broken on AMD Windows RDNA2 and below.
-                        // Shuffle full vector<float, 4> as workaround.
-                        // See https://github.com/ggml-org/llama.cpp/issues/19881#issuecomment-3958643697
-                        Of[r][d] += vector<FLOAT, 4>(WaveReadLaneAt(vector<float, 4>(Of[r][d]), subgroup_invocation_id ^ s));
-                    }
-                }
-                if (row_split == 1) {
-                    GroupMemoryBarrierWithGroupSync();
-                    if (subgroup_invocation_id == d_tid) {
-                        tmpshv4[subgroup_id * D_split + d_tid] = Of[r][d];
-                    }
-                    GroupMemoryBarrierWithGroupSync();
-                    Of[r][d] = tmpshv4[d_tid];
-                    [unroll] for (uint s = 1; s < num_subgroups; ++s) {
-                        Of[r][d] += tmpshv4[s * D_split + d_tid];
-                    }
-                }
-            } else {
-                GroupMemoryBarrierWithGroupSync();
-                tmpshv4[tid] = Of[r][d];
-                GroupMemoryBarrierWithGroupSync();
-                [unroll] for (int s = int(threads_per_rowgroup) / 2; s >= D_split; s >>= 1) {
-                    if (rowgroup_tid < s) {
-                        Of[r][d] += tmpshv4[tid ^ s];
-                        tmpshv4[tid] = Of[r][d];
-                    }
-                    GroupMemoryBarrierWithGroupSync();
-                }
-                Of[r][d] = tmpshv4[row_tid * threads_per_rowgroup + d_tid];
-            }
+            reduceVec<FLOAT, 4, SumVecOp<FLOAT, 4>, ShMemFloat4>(Of[r][d], D_split, threads_per_rowgroup, OLD_AMD_WINDOWS);
         }
     }
 
