@@ -1,3 +1,7 @@
+/**
+ * NotebookStore - Reactive State Store for Notebook Operations
+ *
+ */
 import { CompletionService } from '$lib/services/completion.service';
 import { config } from '$lib/stores/settings.svelte';
 import { tokenize } from '$lib/services/tokenize.service';
@@ -38,6 +42,7 @@ export class NotebookStore {
 		this.previousContent = this.content;
 		this.undoneContent = null;
 		this.isGenerating = true;
+		this.processingState = null;
 		this.abortController = new AbortController();
 		this.error = null;
 
@@ -167,15 +172,11 @@ export class NotebookStore {
 		}, 500);
 	}
 
-	getProcessingDetails(): string[] {
-		const details: string[] = [];
-
+	getPromptProcessingText(): string {
 		const state = this.processingState;
-		if (!state) {
-			return [];
-		}
+		let processing_text = 'Processing...';
 
-		if (state.promptProgress) {
+		if (state?.promptProgress) {
 			const { processed, total, time_ms, cache } = state.promptProgress;
 			const actualProcessed = processed - cache;
 			const actualTotal = total - cache;
@@ -186,19 +187,46 @@ export class NotebookStore {
 
 				if (eta !== undefined) {
 					const etaSecs = Math.ceil(eta);
-					details.push(`Processing ${percent}% (ETA: ${etaSecs}s)`);
+					processing_text = `Processing ${percent}% (ETA: ${etaSecs}s)`;
 				} else {
-					details.push(`Processing ${percent}%`);
+					processing_text = `Processing ${percent}%`;
 				}
 			}
 		}
 
-		const contextUsed = state.contextUsed;
+		return processing_text;
+	}
+
+	getProcessingContextDetail(): string {
+		const state = this.processingState;
+		const contextUsed = state?.contextUsed;
 		const contextTotal = getContextSize();
 
-		if (typeof contextTotal === 'number' && contextUsed >= 0 && contextTotal > 0) {
+		if (
+			typeof contextUsed === 'number' &&
+			typeof contextTotal === 'number' &&
+			contextUsed >= 0 &&
+			contextTotal > 0
+		) {
 			const contextPercent = Math.round((contextUsed / contextTotal) * 100);
-			details.push(`Context: ${contextUsed}/${contextTotal} (${contextPercent}%)`);
+			return `Context: ${contextUsed}/${contextTotal} (${contextPercent}%)`;
+		}
+
+		return '';
+	}
+
+	getProcessingDetails(): string[] {
+		const details: string[] = [];
+
+		const state = this.processingState;
+		if (!state) {
+			return [];
+		}
+
+		const contextDetail = this.getProcessingContextDetail();
+
+		if (contextDetail) {
+			details.push(contextDetail);
 		}
 
 		if (state.tokensDecoded > 0) {

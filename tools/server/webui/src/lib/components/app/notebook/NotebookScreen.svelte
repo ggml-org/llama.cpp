@@ -11,7 +11,7 @@
 		KeyboardShortcutInfo,
 		ModelsSelector
 	} from '$lib/components/app';
-	import { ProcessingInfo } from '$lib/components/app/misc';
+	import { ProcessingText, ProcessingInfo } from '$lib/components/app/misc';
 	import { ErrorDialogType } from '$lib/enums';
 
 	import { modelOptions, selectedModelId } from '$lib/stores/models.svelte';
@@ -238,10 +238,17 @@
 		/>
 	</div>
 
-	<ProcessingInfo
-		visible={notebookStore.isGenerating}
-		processingDetails={notebookStore.getProcessingDetails()}
-	/>
+  {#if notebookStore.processingState?.status === 'preparing'}
+    <ProcessingText
+      cls='px-4 md:px-6'
+      processingText={notebookStore.getPromptProcessingText()}
+    />
+  {:else if showMessageStats}
+    <ProcessingInfo
+      visible={notebookStore.processingState?.status === 'generating'}
+      processingDetails={notebookStore.getProcessingDetails()}
+    />
+	{/if}
 
 	<div class="bg-background p-2 md:p-4">
 		<div class="flex flex-col-reverse gap-4 md:flex-row md:items-center md:justify-between">
