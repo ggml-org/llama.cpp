@@ -4905,55 +4905,6 @@ class Phi2Model(TextModel):
 class Phi3MiniModel(TextModel):
     model_arch = gguf.MODEL_ARCH.PHI3
 
-    @staticmethod
-    def _has_phi4_gpt2_pretokenizer(tokenizer_json: dict[str, Any]) -> bool:
-        phi4_regex = "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+"
-
-        if tokenizer_json.get("normalizer") is not None:
-            return False
-
-        pre_tokenizer = tokenizer_json.get("pre_tokenizer")
-        if not isinstance(pre_tokenizer, dict) or pre_tokenizer.get("type") != "Sequence":
-            return False
-
-        pretokenizers = pre_tokenizer.get("pretokenizers")
-        if not isinstance(pretokenizers, list) or len(pretokenizers) != 2:
-            return False
-
-        split, bytelevel = pretokenizers
-        if not isinstance(split, dict) or not isinstance(bytelevel, dict):
-            return False
-
-        split_pattern = split.get("pattern")
-        decoder = tokenizer_json.get("decoder")
-
-        return (
-            split.get("type") == "Split"
-            and isinstance(split_pattern, dict)
-            and split_pattern.get("Regex") == phi4_regex
-            and split.get("behavior") == "Removed"
-            and split.get("invert") is True
-            and bytelevel.get("type") == "ByteLevel"
-            and bytelevel.get("add_prefix_space") is False
-            and bytelevel.get("trim_offsets") is True
-            and bytelevel.get("use_regex") is False
-            and isinstance(decoder, dict)
-            and decoder.get("type") == "ByteLevel"
-            and decoder.get("add_prefix_space") is True
-            and decoder.get("trim_offsets") is True
-            and decoder.get("use_regex") is True
-        )
-
-    def get_vocab_base_pre(self, tokenizer) -> str:
-        tokenizer_json_path = self.dir_model / "tokenizer.json"
-        if tokenizer_json_path.is_file():
-            with open(tokenizer_json_path, "r", encoding="utf-8") as f:
-                tokenizer_json = json.load(f)
-            if self._has_phi4_gpt2_pretokenizer(tokenizer_json):
-                return "phi4"
-
-        return super().get_vocab_base_pre(tokenizer)
-
     def set_vocab(self):
         # Phi-4 model uses GPT2Tokenizer
         tokenizer_config_file = self.dir_model / 'tokenizer_config.json'
@@ -5129,6 +5080,10 @@ class Phi3MiniModel(TextModel):
 @ModelBase.register("Phi4ForCausalLMV")
 class Phi4VisionTextModel(Phi3MiniModel):
     model_arch = gguf.MODEL_ARCH.PHI3
+
+    def set_vocab(self):
+        super().set_vocab()
+        self.gguf_writer.add_tokenizer_pre("phi4")
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name.startswith(("model.vision_tower.", "vision_tower.", "model.mm_projector.", "mm_projector.")):
