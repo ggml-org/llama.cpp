@@ -36,9 +36,9 @@ set(TARGET_SRCS
     server-models.h
 )
 
-option(LLAMA_SERVER_NO_WEBUI "Disable the embedded Web UI" OFF)
+option(LLAMA_BUILD_WEBUI "Build the embedded Web UI" ${LLAMA_STANDALONE})
 
-if (NOT LLAMA_SERVER_NO_WEBUI)
+if (LLAMA_BUILD_WEBUI)
     set(PUBLIC_ASSETS
         index.html.gz
         loading.html
@@ -55,8 +55,8 @@ if (NOT LLAMA_SERVER_NO_WEBUI)
         )
         set_source_files_properties(${output} PROPERTIES GENERATED TRUE)
     endforeach()
+    add_definitions(-DLLAMA_BUILD_WEBUI)
 else()
-    add_definitions(-DLLAMA_SERVER_NO_WEBUI)
 endif()
 
 add_executable(${TARGET} ${TARGET_SRCS})

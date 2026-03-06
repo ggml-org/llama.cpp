@@ -8,7 +8,7 @@
 #include <string>
 #include <thread>
 
-#ifndef LLAMA_SERVER_NO_WEBUI
+#ifdef LLAMA_BUILD_WEBUI
 // auto generated files (see README.md for details)
 #include "index.html.gz.hpp"
 #include "loading.html.hpp"
@@ -183,7 +183,7 @@ bool server_http_context::init(const common_params & params) {
     auto middleware_server_state = [this](const httplib::Request & req, httplib::Response & res) {
         bool ready = is_ready.load();
         if (!ready) {
-#ifndef LLAMA_SERVER_NO_WEBUI
+#ifdef LLAMA_BUILD_WEBUI
             auto tmp = string_split<std::string>(req.path, '.');
             if (req.path == "/" || tmp.back() == "html") {
                 res.status = 503;
@@ -254,7 +254,7 @@ bool server_http_context::init(const common_params & params) {
                 return 1;
             }
         } else {
-#ifndef LLAMA_SERVER_NO_WEBUI
+#ifdef LLAMA_BUILD_WEBUI
             // using embedded static index.html
             srv->Get(params.api_prefix + "/", [](const httplib::Request & req, httplib::Response & res) {
                 if (req.get_header_value("Accept-Encoding").find("gzip") == std::string::npos) {
