@@ -268,6 +268,8 @@ public:
 private:
     void set_input_output(ggml_tensor * node);
     int compute_op_case(const ggml_tensor * node) const;
+    bool node_is_used_as_src(const int node_idx);
+    void compute_model_inputs();
     void compute_model_outputs();
 
     void validate_cgraph() const;

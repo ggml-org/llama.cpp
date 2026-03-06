@@ -71,6 +71,7 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph,
         auto * cur_node = cgraph->nodes[node_n];
         set_input_output(cur_node);
     }
+    compute_model_inputs();
     compute_model_outputs();
 
     for (int node_n = 0; node_n < cgraph->n_nodes; node_n++) {
@@ -90,6 +91,7 @@ void GgmlOvDecoder::update_io(ggml_cgraph * cgraph) {
         auto * cur_node = cgraph->nodes[node_n];
         set_input_output(cur_node);
     }
+    compute_model_inputs();
     compute_model_outputs();
 }
 
@@ -101,33 +103,11 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph, std::map<std::string, std::sh
         auto * cur_node = cgraph->nodes[node_n];
         set_input_output(cur_node);
     }
+    compute_model_inputs();
     compute_model_outputs();
     for (int node_n = 0; node_n < cgraph->n_nodes; node_n++) {
         m_node_info_list[node_n].node_op_case = compute_op_case(m_node_info_list[node_n].node);
         m_node_info_list[node_n].node_op_type = compute_op_type(m_node_info_list[node_n].node);
-    }
-    // Iterate through node_info_list to create model inputs and outputs.
-    // For inputs: if an input of a node is not seen as an output of any previous node, it is a model input.
-    // For outputs: every node output is a model output unless its data_addr is overridden by a later node.
-    std::unordered_set<std::string> output_name_set;
-    for (const auto & node_info : m_node_info_list) {
-        if (node_info.node->op == GGML_OP_NONE) {
-            continue;
-        }
-        for (const auto & it : node_info.node_inputs) {
-            const auto & src_name = it.first;
-            const auto & src_node = it.second;
-
-            if (output_name_set.find(src_name) == output_name_set.end() &&
-                m_model_weights.find(src_name) == m_model_weights.end() &&
-                m_model_inputs.find(src_name) == m_model_inputs.end()) {
-                auto param_node = std::make_shared<ov::op::v0::Parameter>(get_ov_type(src_node), get_shape(src_node));
-                param_node->set_friendly_name(src_name);
-                param_node->output(0).get_tensor().set_names({src_name});
-                m_model_inputs[src_name] = param_node;
-            }
-        }
-        output_name_set.emplace(node_info.node_output_name);
     }
 }
 
@@ -161,45 +141,8 @@ void GgmlOvDecoder::set_input_output(ggml_tensor * node) {
         if (src->flags & GGML_TENSOR_FLAG_INPUT) {
             src_name = get_graph_input_ov_name(src, node);
         }
-        m_inputs[src_name] = src;
         current_node_info.node_inputs[src_name] = src;
         current_node_info.node_inputs_names.push_back(src_name);
-
-        // Add model inputs
-        if (!m_naive && !src->view_src) {
-            ggml_backend_buffer * buffer = src->buffer;
-
-            if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY || src->flags & GGML_TENSOR_FLAG_INPUT) {
-                ov::PartialShape stateful_kv_shape;
-                // GGML_BACKEND_BUFFER_USAGE_ANY are kv caches
-                if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY) {
-                    if (auto it = std::find(m_model_params.kv_names.begin(), m_model_params.kv_names.end(), src_name);
-                        it == m_model_params.kv_names.end()) {
-                        m_model_params.kv_names.push_back(src_name);
-                        if (is_stateful()) {
-                            // TODO: The shape modification for stateful model below is not validated for all supported models yet. More generic solution might be needed
-                            // to enable additional cases. Ideally, this could be removed from decoder and done as part of a transformation later.
-                            auto stateless_kv_shape = get_graph_input_shape(node, src);
-                            assert(stateless_kv_shape.size() == 4 && stateless_kv_shape[0] == 1 &&
-                                   stateless_kv_shape[1] == 1 && stateless_kv_shape[2].is_dynamic() &&
-                                   stateless_kv_shape[3] == (m_model_params.n_heads_kv * m_model_params.head_size));
-                            stateful_kv_shape = {stateless_kv_shape[0], ov::Dimension::dynamic(),
-                                                 m_model_params.n_heads_kv, m_model_params.head_size};
-                        }
-                    }
-                }
-                if (m_model_inputs.find(src_name) != m_model_inputs.end()) {
-                    continue;
-                }
-                assert(stateful_kv_shape.rank().is_static());
-                ov::PartialShape param_shape =
-                    (stateful_kv_shape.rank().get_length() != 0) ? stateful_kv_shape : get_graph_input_shape(node, src);
-                auto param_node = std::make_shared<ov::op::v0::Parameter>(get_ov_type(src), param_shape);
-                param_node->set_friendly_name(src_name);
-                param_node->output(0).get_tensor().set_names({src_name});
-                m_model_inputs[src_name] = param_node;
-            }
-        }
     }
 
     m_node_info_list.push_back(current_node_info);
@@ -378,6 +321,9 @@ void GgmlOvDecoder::validate_cgraph() const {
 }
 
 ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op, const ggml_tensor * input) const {
+    if (m_naive) {
+        return input!= nullptr ? ov::PartialShape{get_shape(input)} : ov::PartialShape{get_shape(op)};
+    }
     auto name = std::string(input->name);
     ov::PartialShape input_shape;
 
@@ -406,6 +352,15 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op, co
         if (!m_is_static) {
             // do not fix ctx size to make llama-bench work across test params
             input_shape[2] = -1;
+        }
+        if (is_stateful()) {
+            // Convert stateless KV cache layout [1, 1, seq, n_heads_kv * head_size]
+            // to stateful layout [1, seq, n_heads_kv, head_size].
+            assert(input_shape.size() == 4 && input_shape[0] == 1 && input_shape[1] == 1 &&
+                   input_shape[2].is_dynamic() &&
+                   input_shape[3] == (m_model_params.n_heads_kv * m_model_params.head_size));
+            input_shape = {input_shape[0], ov::Dimension::dynamic(), m_model_params.n_heads_kv,
+                           m_model_params.head_size};
         }
 
     } else if (is_kv_idx(input, op)) {
@@ -452,6 +407,83 @@ void GgmlOvDecoder::add_extra_inputs() {
     create_1d_input("seq_active_end", m_compute_params.seq_active_start + m_compute_params.n_seq_active);
     create_1d_input("token_len_per_seq", m_compute_params.token_len_per_seq);
     // create_1d_input("token_len", m_token_len_per_seq * m_n_seq_active);
+}
+
+bool GgmlOvDecoder::node_is_used_as_src(const int node_idx) {
+    ggml_tensor * node = m_cgraph->nodes[node_idx];
+    for (int i = node_idx; i < m_cgraph->n_nodes; i++) {
+        ggml_tensor * other_node = m_cgraph->nodes[i];
+        for (int j = 0; j < GGML_MAX_SRC; j++) {
+            if (other_node->src[j] == node) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+void GgmlOvDecoder::compute_model_inputs() {
+    m_model_inputs.clear();
+    m_inputs.clear();
+    for (int i = 0; i < m_cgraph->n_nodes; i++) {
+        ggml_tensor * node = m_cgraph->nodes[i];
+        // the node op is NONE means this node maybe as input of later nodes, we should add it to model inputs for this node.
+        if (node->op == GGML_OP_NONE && node_is_used_as_src(i)) {
+            std::string node_name(node->name);
+            if (m_model_weights.find(node_name) == m_model_weights.end()) {
+                m_inputs[node_name] = node;
+                auto param_node =
+                    std::make_shared<ov::op::v0::Parameter>(get_ov_type(node), get_graph_input_shape(node, nullptr));
+                param_node->set_friendly_name(node_name);
+                param_node->output(0).get_tensor().set_names({node_name});
+                m_model_inputs[node_name] = param_node;
+            }
+            continue;
+        }
+        for (int i = 0; i < GGML_MAX_SRC; i++) {
+            auto * src = node->src[i];
+            if (src == nullptr) {
+                continue;
+            }
+            std::string src_name = std::string(src->name);
+            if (src->flags & GGML_TENSOR_FLAG_INPUT) {
+                src_name = get_graph_input_ov_name(src, node);
+            }
+            if (m_model_weights.find(src_name) != m_model_weights.end()) {
+                continue;
+            }
+
+            bool is_intermediate_node = false;
+            for (const auto & node_info : m_node_info_list) {
+                if (node_info.node == src) {
+                    is_intermediate_node = true;
+                    break;
+                }
+            }
+            if (is_intermediate_node) {
+                continue;
+            }
+            if (m_model_inputs.find(src_name) != m_model_inputs.end()) {
+                continue;
+            }
+
+            m_inputs[src_name] = src;
+
+            ggml_backend_buffer * buffer = src->buffer;
+            // GGML_BACKEND_BUFFER_USAGE_ANY are kv caches
+            if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY) {
+                if (auto it = std::find(m_model_params.kv_names.begin(), m_model_params.kv_names.end(), src_name);
+                    it == m_model_params.kv_names.end()) {
+                    m_model_params.kv_names.push_back(src_name);
+                }
+            }
+            ov::PartialShape param_shape = get_graph_input_shape(node, src);
+            auto param_node = std::make_shared<ov::op::v0::Parameter>(get_ov_type(src), param_shape);
+            param_node->set_friendly_name(src_name);
+            param_node->output(0).get_tensor().set_names({src_name});
+            m_model_inputs[src_name] = param_node;
+        }
+    }
 }
 
 void GgmlOvDecoder::compute_model_outputs() {
