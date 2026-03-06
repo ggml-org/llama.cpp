@@ -334,25 +334,7 @@ ggml_tensor * llm_build_qwen35::build_layer_attn_linear(
 
     std::pair<ggml_tensor *, ggml_tensor *> attn_out;
     if (n_seq_tokens == 1) {
-        ggml_tensor * result = ggml_gated_delta_net(ctx0, q_conv, k_conv, v_conv, gate, beta, state);
-
-        const int64_t S_v = head_v_dim;
-        const int64_t H   = num_v_heads;
-
-        ggml_tensor * output = ggml_view_4d(ctx0, result,
-            S_v, H, n_seq_tokens, n_seqs,
-            ggml_row_size(result->type, S_v),
-            ggml_row_size(result->type, S_v * H),
-            ggml_row_size(result->type, S_v * H * n_seq_tokens), 0);
-
-        ggml_tensor * new_state = ggml_view_4d(ctx0, result,
-            S_v, S_v, H, n_seqs,
-            ggml_row_size(result->type, S_v),
-            ggml_row_size(result->type, S_v * S_v),
-            ggml_row_size(result->type, S_v * S_v * H),
-            ggml_row_size(result->type, S_v * H * n_seq_tokens * n_seqs));
-
-        attn_out = {output, new_state};
+        attn_out = build_delta_net_autoregressive(q_conv, k_conv, v_conv, gate, beta, state, il);
     } else {
         attn_out = build_delta_net_chunking(q_conv, k_conv, v_conv, gate, beta, state, il);
     }
