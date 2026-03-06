@@ -20,6 +20,16 @@
 #   include <cblas.h>
 #endif
 
+#if defined(_WIN32)
+#    define WIN32_LEAN_AND_MEAN
+#    ifndef NOMINMAX
+#        define NOMINMAX
+#    endif
+#    include <windows.h>
+#else
+#    include <unistd.h>
+#endif
+
 struct ggml_backend_blas_context {
     int n_threads = GGML_DEFAULT_N_THREADS;
     std::unique_ptr<char[]> work_data;
@@ -341,6 +351,13 @@ static const char * ggml_backend_blas_device_get_description(ggml_backend_dev_t 
 }
 
 static bool get_meminfo(size_t *total, size_t *free) {
+#ifdef _WIN32
+    MEMORYSTATUSEX status;
+    status.dwLength = sizeof(status);
+    GlobalMemoryStatusEx(&status);
+    *total = status.ullTotalPhys;
+    *free = status.ullAvailPhys;
+#else
     struct sysinfo info;
     if (sysinfo(&info) != 0) {
         return false;
@@ -354,6 +371,7 @@ static bool get_meminfo(size_t *total, size_t *free) {
     }
 
     return true;
+#endif // _WIN32
 }
 
 static void ggml_backend_blas_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
