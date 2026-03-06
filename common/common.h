@@ -270,6 +270,8 @@ struct common_params_speculative {
     uint16_t ngram_size_n     = 12; // ngram size for lookup
     uint16_t ngram_size_m     = 48; // mgram size for speculative tokens
     uint16_t ngram_min_hits   =  1; // minimum hits at ngram/mgram lookup for mgram to be proposed
+    bool     use_checkpoints  =  false; // use checkpoints to rewind in token history of recurrent models
+
 
     std::shared_ptr<common_ngram_mod> ngram_mod;
 
