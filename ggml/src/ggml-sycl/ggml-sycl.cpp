@@ -7901,9 +7901,11 @@ static ggml_backend_buffer_t ggml_backend_sycl_buffer_type_alloc_buffer(ggml_bac
                           size / (1024 * 1024), safe_alloc / (1024 * 1024));
             req.intent.constraints.must_host_pinned = true;
         } else {
-            // Always prefer device VRAM for weights.  When allow_shared_fallback
-            // is true and the device allocation fails (budget exceeded or OOM),
+            // Always prefer device VRAM.  When allow_shared_fallback is true
+            // and the device allocation fails (budget exceeded or OOM),
             // the retry block below will fall back to host-pinned automatically.
+            // This is critical for oneDNN PP performance: device-local weights
+            // enable fast dequant+GEMM whereas host-pinned weights are slow.
             req.intent.constraints.must_device = true;
         }
     }

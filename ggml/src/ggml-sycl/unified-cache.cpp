@@ -5294,6 +5294,33 @@ bool unified_alloc(const alloc_request & req_in, alloc_handle * out) {
     bool   uses_pinned_pool = false;
     void * ptr              = nullptr;
     if (tier == alloc_tier::DEVICE_VRAM) {
+        // Guard against Level Zero overcommit: if this allocation would exceed
+        // the device's total VRAM, fail early so the caller can retry with
+        // host-pinned.  Without this check, L0 may return a valid pointer but
+        // a subsequent memset/memcpy triggers DEVICE_LOST.
+        if (req.device >= 0 && req.device < GGML_SYCL_MAX_DEVICES) {
+            const size_t total_vram    = ggml_sycl_info().devices[req.device].total_vram;
+            const size_t runtime_vram  = g_runtime_managed_reserved_bytes[req.device].load(std::memory_order_relaxed);
+            // Include weight cache usage (SOA entries on device VRAM)
+            size_t       cache_vram    = 0;
+            if (auto * cache = get_unified_cache_for_device(req.device)) {
+                cache_vram = cache->used();
+            }
+            const size_t used_vram = runtime_vram + cache_vram;
+            if (total_vram > 0 && used_vram + alloc_size > total_vram) {
+                GGML_SYCL_DEBUG("[UNIFIED-ALLOC] Device %d VRAM overcommit guard: "
+                                "used=%.1f MB + alloc=%.1f MB > total=%.1f MB, failing\n",
+                                req.device, used_vram / (1024.0f * 1024.0f),
+                                alloc_size / (1024.0f * 1024.0f),
+                                total_vram / (1024.0f * 1024.0f));
+                // Roll back the reserve we just added above
+                if (reserve_device) {
+                    unified_cache_sub_runtime_bytes(req.device, alloc_size, cat);
+                    unified_managed_sub_device_bytes(req.device, alloc_size);
+                }
+                return false;
+            }
+        }
         ptr = ggml_sycl_malloc_device(alloc_size, *req.queue, "unified_alloc:device");
     } else {
         if (req.intent.constraints.use_pinned_pool) {
@@ -6354,14 +6381,14 @@ bool unified_cache::reserve_onednn_scratch(size_t weights_size, size_t activatio
         saturating_sub_used(old_total);
     }
 
-    // Check budget to ensure we have VRAM headroom for oneDNN scratch
+    // Note: we do NOT check cache budget here.  oneDNN scratch is a temporary
+    // compute buffer (not cached weights), so it should not be gated by the
+    // weight-cache available() budget.  When all weights are device-resident
+    // (must_device=true), available() is near-zero but the device still has
+    // physical VRAM for scratch.  If the device truly lacks memory,
+    // sycl::malloc_device will fail and we handle it in the catch blocks below.
     const size_t total_needed = weights_size + activations_size;
-    if (total_needed > available()) {
-        GGML_SYCL_DEBUG("[UNIFIED-CACHE] oneDNN scratch allocation blocked: need %.1f MB but only %.1f MB available\n",
-                        total_needed / (1024.0f * 1024.0f), available() / (1024.0f * 1024.0f));
-        return false;
-    }
-    GGML_SYCL_DEBUG("[UNIFIED-CACHE] Reserving oneDNN scratch: need %.1f MB, cache-available %.1f MB\n",
+    GGML_SYCL_DEBUG("[UNIFIED-CACHE] oneDNN scratch: need %.1f MB, cache-available %.1f MB (bypassing budget check)\n",
                     total_needed / (1024.0f * 1024.0f), available() / (1024.0f * 1024.0f));
 
     // Allocate weights scratch
