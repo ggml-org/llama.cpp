@@ -1,5 +1,6 @@
 #include "arg.h"
 #include "common.h"
+#include "sampling.h"
 #include "log.h"
 #include "llama.h"
 
@@ -194,7 +195,8 @@ static bool moe_cb_eval(struct ggml_tensor * t, bool ask, void * user_data) {
     }
 
     if (op_name == "ffn_moe_logits") {
-        if (ask) return g_collector.save_logits;
+        // always accept to auto-detect n_experts, even if not saving logits
+        if (ask) return g_collector.save_logits || g_collector.n_experts == 0;
 
         const int64_t n_expert = t->ne[0];
         const int64_t n_tokens = t->ne[1];
@@ -799,6 +801,10 @@ int main(int argc, char ** argv) {
     bool save_logits      = false;
     std::string out_file  = "moe_selections.bin";
 
+    // Parse custom args and build a filtered argv for common_params_parse
+    std::vector<char *> filtered_argv;
+    filtered_argv.push_back(argv[0]);
+
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--analyze") == 0 && i + 1 < argc) {
             analyze_file = argv[++i];
@@ -818,8 +824,12 @@ int main(int argc, char ** argv) {
             save_logits = true;
         } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
             out_file = argv[++i];
+        } else {
+            filtered_argv.push_back(argv[i]);
         }
     }
+
+    int filtered_argc = (int)filtered_argv.size();
 
     // Analysis mode
     if (!analyze_file.empty()) {
@@ -850,7 +860,7 @@ int main(int argc, char ** argv) {
     // Collection mode: use common_params for model/prompt handling
     common_params params;
 
-    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_PERPLEXITY, print_usage)) {
+    if (!common_params_parse(filtered_argc, filtered_argv.data(), params, LLAMA_EXAMPLE_PERPLEXITY, print_usage)) {
         return 1;
     }
 
@@ -941,7 +951,8 @@ int main(int argc, char ** argv) {
 
         llama_batch batch = llama_batch_init(n_eval, 0, 1);
         for (int i = 0; i < n_eval; i++) {
-            common_batch_add(batch, tokens[n_processed + i], n_processed + i, {0}, false);
+            bool last_token = (n_processed + i == n_total - 1);
+            common_batch_add(batch, tokens[n_processed + i], n_processed + i, {0}, last_token);
         }
 
         if (llama_decode(ctx, batch) != 0) {
@@ -958,6 +969,56 @@ int main(int argc, char ** argv) {
         if (n_processed % 100 == 0 || n_processed >= n_total) {
             LOG_INF("Progress: %d / %d tokens\n", n_processed, n_total);
         }
+    }
+
+    // Token generation phase
+    const int n_predict = params.n_predict < 0 ? 0 : params.n_predict;
+    if (n_predict > 0 && n_processed > 0) {
+        LOG_INF("Generating %d tokens...\n", n_predict);
+
+        struct common_sampler * smpl = common_sampler_init(model, params.sampling);
+
+        // enable logits for last prompt token
+        llama_batch batch = llama_batch_init(1, 0, 1);
+
+        int n_gen = 0;
+        while (n_gen < n_predict && n_processed + n_gen < n_ctx) {
+            llama_token new_token;
+            if (n_gen == 0) {
+                // sample from the last prompt eval
+                new_token = common_sampler_sample(smpl, ctx, -1);
+            } else {
+                new_token = common_sampler_sample(smpl, ctx, 0);
+            }
+
+            common_sampler_accept(smpl, new_token, true);
+
+            // check for EOS
+            if (llama_vocab_is_eog(vocab, new_token)) {
+                LOG_INF("EOS token generated after %d tokens\n", n_gen);
+                break;
+            }
+
+            // prepare next batch
+            common_batch_clear(batch);
+            common_batch_add(batch, new_token, n_processed + n_gen, {0}, true);
+
+            if (llama_decode(ctx, batch) != 0) {
+                LOG_ERR("Failed to decode during generation at token %d\n", n_gen);
+                break;
+            }
+
+            g_collector.current_token = n_processed + n_gen + 1;
+            n_gen++;
+
+            if (n_gen % 10 == 0) {
+                LOG_INF("Generated: %d / %d tokens\n", n_gen, n_predict);
+            }
+        }
+
+        LOG_INF("Generated %d tokens total\n", n_gen);
+        llama_batch_free(batch);
+        common_sampler_free(smpl);
     }
 
     g_collector.finish();
