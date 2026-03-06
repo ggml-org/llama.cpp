@@ -1349,6 +1349,68 @@ static void test_template_output_parsers() {
                 }));
     }
     {
+        auto tmpls = read_templates("models/templates/Qwen-Qwen3-0.6B.jinja");
+        std::vector<std::string> end_tokens{ "<|im_end|>" };
+
+        assert_equals(COMMON_CHAT_FORMAT_HERMES_2_PRO, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
+        assert_equals(COMMON_CHAT_FORMAT_HERMES_2_PRO, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
+
+        // Test that enable_thinking=false adds empty think tags
+        {
+            common_chat_templates_inputs inputs_no_thinking;
+            inputs_no_thinking.messages = {message_user};
+            inputs_no_thinking.tools = tools;
+            inputs_no_thinking.tool_choice = COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+            inputs_no_thinking.enable_thinking = false;
+            
+            auto params = common_chat_templates_apply(tmpls.get(), inputs_no_thinking);
+            assert_equals(COMMON_CHAT_FORMAT_HERMES_2_PRO, params.format);
+            // Verify the prompt contains empty think tags when thinking is disabled
+            assert_equals(true, params.prompt.find("<think>\n\n</think>") != std::string::npos);
+        }
+
+        // Test that grammar allows thinking with REQUIRED tool choice
+        {
+            common_chat_templates_inputs inputs_with_thinking;
+            inputs_with_thinking.messages = {message_user};
+            inputs_with_thinking.tools = tools;
+            inputs_with_thinking.tool_choice = COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+            inputs_with_thinking.enable_thinking = true;
+            
+            auto params = common_chat_templates_apply(tmpls.get(), inputs_with_thinking);
+            assert_equals(COMMON_CHAT_FORMAT_HERMES_2_PRO, params.format);
+            
+            // The key fix: grammar should contain the thinking pattern even with REQUIRED
+            assert_equals(false, params.grammar.empty());
+            assert_equals(true, params.grammar.find("</think>") != std::string::npos);
+            
+            // Grammar should allow thinking before tool calls
+            assert_equals(true, params.grammar.find("think-") != std::string::npos || 
+                            params.grammar.find("<think>") != std::string::npos);
+        }
+
+        // Test parsing: tool call with thinking works correctly
+        assert_msg_equals(message_assist_call_thoughts,
+            common_chat_parse(
+                "<think>I'm\nthinking</think>\n"
+                "<tool_call>{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}</tool_call>",
+                /* is_partial= */ false,
+                {
+                    /* .format = */ COMMON_CHAT_FORMAT_HERMES_2_PRO,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                }));
+
+        // Test that reasoning + tool calls work in template generation
+        test_templates(tmpls.get(), end_tokens, message_assist_call_thoughts, tools,
+                    "",  // Don't check exact delta, just verify it parses correctly
+                    /* expect_grammar_triggered= */ true,
+                    /* test_grammar_if_triggered= */ true,
+                    COMMON_REASONING_FORMAT_DEEPSEEK);
+
+        // Verify enable_thinking support
+        assert_equals(true, common_chat_templates_support_enable_thinking(tmpls.get()));
+    }
+    {
         auto tmpls = read_templates("models/templates/meta-llama-Llama-3.1-8B-Instruct.jinja");
         std::vector<std::string>   end_tokens{ "<|eom_id|>", "<|eot_id|>" };
 
