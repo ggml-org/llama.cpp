@@ -548,7 +548,8 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
     struct moe_expert_info {
         int                    layer_id;
         int                    expert_idx;
-        const void *           data_ptr;   // may be host or device VRAM pointer
+        const void *           data_ptr;       // may be host or device VRAM pointer
+        const void *           host_src_ptr;   // host-accessible source for cross-device DMA
         size_t                 bytes;
         const ggml_tensor *    tensor;    // src0 tensor for cache key generation
         ggml_tensor_extra_gpu * extra;    // tensor extra for cache UUID
@@ -619,7 +620,8 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
         for (int e = 0; e < n_experts; e++) {
             const void * ptr = static_cast<const char *>(src0->data)
                                     + static_cast<size_t>(e) * nb02;
-            expert_list.push_back({ layer_id, e, ptr, nb02, src0, src0_extra });
+            const void * host_ptr = ggml_sycl_is_device_vram_buffer(src0) ? nullptr : ptr;
+            expert_list.push_back({ layer_id, e, ptr, host_ptr, nb02, src0, src0_extra });
         }
     }
 
@@ -658,11 +660,19 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
         ggml_sycl::ExpertPlacement placement{};
         placement.device_id       = -1;  // CPU-only initially
         placement.data_ptr        = const_cast<void *>(info.data_ptr);
+        placement.host_src_ptr    = const_cast<void *>(info.host_src_ptr);
         placement.weight_bytes    = info.bytes;
         placement.popularity_rank = -1;  // Unranked initially (profiling will update)
         placement_table.set(info.layer_id, info.expert_idx, placement);
     }
-    GGML_SYCL_DEBUG("[MOE-HYBRID] ExpertPlacementTable populated with %zu expert entries\n", expert_list.size());
+    {
+        int n_with_host_ptr = 0;
+        for (const auto & info : expert_list) {
+            if (info.host_src_ptr) n_with_host_ptr++;
+        }
+        GGML_LOG_INFO("[MOE-HYBRID] ExpertPlacementTable populated: %zu entries, %d with host_src_ptr, %zu device-only\n",
+                      expert_list.size(), n_with_host_ptr, expert_list.size() - n_with_host_ptr);
+    }
 
     // -----------------------------------------------------------------------
     // Early multi-GPU setup: register unified caches for secondary GPUs BEFORE
@@ -26694,18 +26704,21 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 // based on the placement table. Experts placed on secondary GPUs
                 // get prefetched into that device's LRU pool.
                 auto & placement_tbl = ggml_sycl::get_expert_placement_table();
+                const int n_gpu_hint = ggml_sycl_info().total_gpu_count;
                 auto route_hint_to_device = [&](int hint_layer_id, const std::vector<int> & experts) {
                     for (int eid : experts) {
-                        int target_dev = ctx.device;  // default: primary GPU
-                        if (placement_tbl.is_initialized()) {
-                            auto p = placement_tbl.get(hint_layer_id, eid);
-                            if (p.device_id >= 0) {
-                                target_dev = p.device_id;
-                            }
+                        // Route to GPU0's prefetcher (always, for VRAM-resident experts).
+                        auto & pf0 = g_expert_prefetchers[ctx.device];
+                        if (pf0.is_initialized()) {
+                            pf0.hint(hint_layer_id, eid);
                         }
-                        auto & target_pf = g_expert_prefetchers[target_dev];
-                        if (target_pf.is_initialized()) {
-                            target_pf.hint(hint_layer_id, eid);
+                        // Also route to secondary GPUs' prefetchers for demand-driven LRU caching.
+                        // hint_locked() will skip experts whose data_ptr is device
+                        // VRAM (no P2P), and only prefetch host-accessible experts.
+                        for (int d = 1; d < n_gpu_hint; d++) {
+                            if (g_expert_prefetchers[d].is_initialized()) {
+                                g_expert_prefetchers[d].hint(hint_layer_id, eid);
+                            }
                         }
                     }
                 };
@@ -26730,16 +26743,18 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             }
 
             // Await any in-flight prefetches for this layer before dispatch.
-            // Check ALL initialized prefetchers (primary + secondary devices)
+            // Check initialized prefetchers (primary + secondary devices)
             // so demand-driven LRU on secondary GPUs is properly synchronized.
+            const int n_pf_devs = ggml_sycl_info().total_gpu_count;
             int n_prefetch_awaited = 0;
+            int n_demand_loaded   = 0;
             {
                 // Read actual router selections from ids tensor
                 for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
                     for (int64_t id = 0; id < n_ids; id++) {
                         const int32_t eid = ids_host[static_cast<size_t>(iid1 * n_ids + id)];
                         // Try each initialized prefetcher until one has this expert
-                        for (int d = 0; d < GGML_SYCL_MAX_DEVICES; d++) {
+                        for (int d = 0; d < n_pf_devs; d++) {
                             auto & pf = g_expert_prefetchers[d];
                             if (!pf.is_initialized()) continue;
                             void * ptr = pf.await(layer_id, eid);
@@ -26798,7 +26813,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                 // No static placement ptr — check if any prefetcher
                                 // has this expert cached (demand-driven LRU).
                                 bool found_cached = false;
-                                for (int d = 0; d < GGML_SYCL_MAX_DEVICES && !found_cached; d++) {
+                                for (int d = 0; d < n_gpu && !found_cached; d++) {
                                     auto & pf = g_expert_prefetchers[d];
                                     if (!pf.is_initialized()) continue;
                                     void * cached = pf.get_cached_ptr(layer_id, i02);
@@ -26809,6 +26824,23 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                             per_gpu_entries[d].push_back({ iid1, id, i02, cached });
                                         }
                                         found_cached = true;
+                                    }
+                                }
+                                if (!found_cached && multi_gpu) {
+                                    // Try on-demand DMA to secondary GPUs before CPU fallback.
+                                    for (int d = 1; d < n_gpu && !found_cached; d++) {
+                                        auto & pf = g_expert_prefetchers[d];
+                                        if (!pf.is_initialized()) continue;
+                                        void * loaded = pf.demand_load(layer_id, i02);
+                                        if (loaded) {
+                                            n_demand_loaded++;
+                                            if (d < n_gpu_devs && g_secondary_queues[d]) {
+                                                per_gpu_entries[d].push_back({ iid1, id, i02, loaded });
+                                            } else {
+                                                gpu_entries.push_back({ iid1, id, i02, loaded });
+                                            }
+                                            found_cached = true;
+                                        }
                                     }
                                 }
                                 if (!found_cached) {
@@ -26838,8 +26870,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 for (int d = 1; d < n_gpu_devs; d++) {
                     secondary_total += per_gpu_entries[d].size();
                 }
-                GGML_SYCL_DEBUG("[MoE-PARALLEL] L%d: GPU0=%zu secondary=%zu CPU=%zu experts\n",
-                                layer_id, gpu_entries.size(), secondary_total, cpu_entries.size());
+                GGML_SYCL_DEBUG("[MoE-PARALLEL] L%d: GPU0=%zu secondary=%zu CPU=%zu demand_loaded=%d experts\n",
+                                layer_id, gpu_entries.size(), secondary_total, cpu_entries.size(),
+                                n_demand_loaded);
             }
 
             // --- MoE dispatch stats instrumentation ---
@@ -26851,7 +26884,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 }
                 stats.record_dispatch(n_gpu_total, 0, 0,
                                       static_cast<int>(cpu_entries.size()),
-                                      n_prefetch_awaited);
+                                      n_prefetch_awaited + n_demand_loaded);
             }
 
             }  // end else (standard hybrid path -- CPU-TG path skips to here)

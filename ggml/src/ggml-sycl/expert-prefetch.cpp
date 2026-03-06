@@ -144,15 +144,31 @@ bool ExpertPrefetcher::hint_locked(int layer_idx, int expert_idx) {
 
     auto placement = ptable.get(layer_idx, expert_idx);
 
-    // Already in VRAM via another path (e.g. Phase 2 secondary GPU upload) — skip.
-    if (placement.device_ptr) {
+    // Already in VRAM on THIS device via another path (e.g. Phase 2 upload) — skip.
+    // Only skip if the placement is on our device; experts on other devices still need
+    // to be prefetched into our own VRAM pool.
+    if (placement.device_ptr && placement.device_id == device_id_) {
         prefetch_hits_++;
         return false;
     }
 
-    // No host pointer — cannot prefetch.
+    // No source pointer — cannot prefetch.
     if (!placement.data_ptr || placement.weight_bytes == 0) {
         return false;
+    }
+
+    // For cross-device prefetch: use host_src_ptr (guaranteed host-accessible)
+    // if data_ptr is device VRAM on another GPU (no P2P on Intel Arc).
+    const void * src_ptr = placement.data_ptr;
+    if (placement.device_id != device_id_ && placement.host_src_ptr) {
+        src_ptr = placement.host_src_ptr;
+    } else if (placement.device_id != device_id_) {
+        // No host source available — check if data_ptr is host-accessible.
+        auto ptr_type = sycl::get_pointer_type(placement.data_ptr, dma_queue_->get_context());
+        if (ptr_type == sycl::usm::alloc::device) {
+            return false;  // GPU0 VRAM, can't DMA cross-device
+        }
+        // host, shared, or unknown (mmap) — proceed with data_ptr
     }
 
     // Lazily allocate VRAM pool on first use, dynamically sized from VRAM budget.
@@ -174,7 +190,7 @@ bool ExpertPrefetcher::hint_locked(int layer_idx, int expert_idx) {
     // Submit async H2D DMA on the OOQ.
     void * dst = vram_pool_[slot].ptr;
     try {
-        sycl::event ev = dma_queue_->memcpy(dst, placement.data_ptr, placement.weight_bytes);
+        sycl::event ev = dma_queue_->memcpy(dst, src_ptr, placement.weight_bytes);
 
         prefetch_request req;
         req.key        = key;
@@ -393,6 +409,34 @@ void * ExpertPrefetcher::get_cached_ptr(int layer_idx, int expert_idx) const {
 }
 
 // ============================================================================
+// Demand load: synchronous hint + await for cache-miss experts
+// ============================================================================
+
+void * ExpertPrefetcher::demand_load(int layer_idx, int expert_idx) {
+    if (!initialized_ || !dma_queue_) {
+        return nullptr;
+    }
+
+    // Single lock: check cache and, only on miss, submit DMA.
+    // Using one critical section avoids the TOCTOU race where a concurrent
+    // await() could move the expert to cached_slots_ between two acquisitions,
+    // causing hint_locked() to submit a redundant DMA and evict an LRU entry.
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto cached_it = cached_slots_.find({layer_idx, expert_idx});
+        if (cached_it != cached_slots_.end()) {
+            vram_pool_[cached_it->second].last_used_token = current_token_;
+            return vram_pool_[cached_it->second].ptr;
+        }
+        current_token_++;
+        hint_locked(layer_idx, expert_idx);
+    }
+
+    // Wait for DMA completion and return VRAM pointer.
+    return await(layer_idx, expert_idx);
+}
+
+// ============================================================================
 // Statistics
 // ============================================================================
 
@@ -479,9 +523,10 @@ bool ExpertPrefetcher::ensure_pool_allocated(size_t expert_weight_bytes) {
     size_t budget = static_cast<size_t>(avail * budget_pct);
     int n_slots = (vram_slot_bytes_ > 0) ? static_cast<int>(budget / vram_slot_bytes_) : 0;
 
-    // Clamp to [8, 256] slots.
+    // Clamp to [8, 2048] slots.  B50 has ~13.5GB free → ~3375 slots at 4MB each.
+    // 2048 is a reasonable upper bound for demand-driven LRU (covers ~4x active set).
     n_slots = std::max(n_slots, 8);
-    n_slots = std::min(n_slots, 256);
+    n_slots = std::min(n_slots, 2048);
     pool_capacity_ = n_slots;
 
     vram_pool_.resize(pool_capacity_);
@@ -535,7 +580,7 @@ int ExpertPrefetcher::acquire_vram_slot_lru(int layer_idx, int expert_idx) {
     // All slots occupied — evict the LRU cached entry.
     // Only evict from cached_slots_ (not in-flight entries — those have active DMA).
     // NOTE: O(n) linear scan over cached_slots_ is intentional at the current
-    // pool cap of [8, 256] slots. If the cap ever exceeds 256, consider replacing
+    // pool cap of [8, 2048] slots. If the cap ever exceeds 2048, consider replacing
     // this with a min-heap keyed on last_used_token for O(log n) eviction.
     int    lru_slot  = -1;
     int64_t lru_time = INT64_MAX;
@@ -793,19 +838,31 @@ void ExpertPredictor::record_actual(int layer_idx, const std::vector<int> & actu
 
     std::lock_guard<std::mutex> lock(mutex_);
 
-    // Update last-token expert selections for this layer
+    // Update last-token expert selections for this layer (ALWAYS, even during warmup)
     last_experts_[layer_idx] = actual_experts;
 
-    // Update global frequency table
+    // Update global frequency table (ALWAYS, needed for learning)
     for (int eidx : actual_experts) {
         if (eidx >= 0 && eidx < n_experts_) {
             freq_table_[layer_idx][eidx]++;
         }
     }
 
-    // Accuracy tracking: compare last prediction vs actual
+    // Detect token boundary for warmup tracking.
+    // When layer_idx wraps around to a previously-seen layer, a new token has started.
+    // NOTE: This heuristic assumes record_actual is called once per MoE layer
+    // per token in increasing layer_idx order. Speculative decoding or out-of-order
+    // dispatch can cause warmup_tokens_ to advance faster than actual token count.
+    if (warmup_layer_max_ >= 0 && layer_idx < warmup_layer_max_) {
+        warmup_tokens_ = std::min(warmup_tokens_ + 1, 2);
+    }
+    warmup_layer_max_ = std::max(warmup_layer_max_, layer_idx);
+
+    // Accuracy tracking: compare last prediction vs actual.
+    // Skip during warmup (first 2 tokens) to avoid cold-start misses
+    // poisoning the accuracy window and triggering permanent disable.
     const auto & pred = last_prediction_[layer_idx];
-    if (!pred.empty()) {
+    if (!pred.empty() && warmup_tokens_ >= 2) {
         // Count how many predicted experts were actually selected
         int hits = 0;
         for (int p : pred) {
@@ -846,6 +903,7 @@ void ExpertPredictor::record_actual(int layer_idx, const std::vector<int> & actu
         accuracy_ring_pos_ = (accuracy_ring_pos_ + 1) % ACCURACY_WINDOW;
 
         // Periodic logging every ACCURACY_WINDOW predictions
+        static constexpr float DISABLE_THRESHOLD = 0.3f;
         if (window_total_ >= ACCURACY_WINDOW && accuracy_ring_pos_ == 0) {
             float rate = static_cast<float>(accuracy_hits_) / static_cast<float>(window_total_);
             GGML_LOG_INFO("[EXPERT-PREDICT] accuracy=%.1f%% (hits=%d, window=%d)\n",
@@ -853,12 +911,19 @@ void ExpertPredictor::record_actual(int layer_idx, const std::vector<int> & actu
 
             // Disable prefetching when prediction accuracy drops below 30%.
             // At this accuracy, most prefetches are wasted DMA bandwidth.
-            static constexpr float DISABLE_THRESHOLD = 0.3f;
             if (!prefetch_disabled_ && rate < DISABLE_THRESHOLD) {
                 prefetch_disabled_ = true;
                 GGML_LOG_WARN("[EXPERT-PREDICT] hit rate %.1f%% below threshold %.0f%% — "
                               "prefetching disabled\n",
                               rate * 100.0f, DISABLE_THRESHOLD * 100.0f);
+            } else if (prefetch_disabled_ && rate >= DISABLE_THRESHOLD) {
+                // Re-enable prefetching if accuracy recovers above threshold.
+                // This handles the case where cold-start disabled prefetch but
+                // the predictor later achieves good accuracy after warmup.
+                prefetch_disabled_ = false;
+                GGML_LOG_INFO("[EXPERT-PREDICT] hit rate %.1f%% recovered above threshold "
+                              "(hits=%d, window=%d) — prefetching re-enabled\n",
+                              rate * 100.0f, accuracy_hits_, window_total_);
             }
         }
     }

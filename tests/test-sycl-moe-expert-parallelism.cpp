@@ -79,7 +79,7 @@ static bool test_placement_set_get_roundtrip() {
     ggml_sycl::ExpertPlacement p{};
     p.device_id       = 0;
     p.device_ptr      = reinterpret_cast<void *>(0xDEAD0000);
-    p.host_ptr        = reinterpret_cast<void *>(0xBEEF0000);
+    p.data_ptr        = reinterpret_cast<void *>(0xBEEF0000);
     p.weight_bytes    = 1024;
     p.popularity_rank = 3;
 
@@ -90,7 +90,7 @@ static bool test_placement_set_get_roundtrip() {
     auto got = table.get(layer_id, expert_id);
     TEST_ASSERT(got.device_id == 0, "device_id roundtrip");
     TEST_ASSERT(got.device_ptr == reinterpret_cast<void *>(0xDEAD0000), "device_ptr roundtrip");
-    TEST_ASSERT(got.host_ptr == reinterpret_cast<void *>(0xBEEF0000), "host_ptr roundtrip");
+    TEST_ASSERT(got.data_ptr == reinterpret_cast<void *>(0xBEEF0000), "host_ptr roundtrip");
     TEST_ASSERT(got.weight_bytes == 1024, "weight_bytes roundtrip");
     TEST_ASSERT(got.popularity_rank == 3, "popularity_rank roundtrip");
     TEST_ASSERT(got.is_valid(), "placement should be valid (host_ptr != nullptr)");
@@ -117,7 +117,7 @@ static bool test_placement_update_methods() {
     // Initial placement: CPU-only
     ggml_sycl::ExpertPlacement p{};
     p.device_id       = -1;
-    p.host_ptr        = reinterpret_cast<void *>(0x1000);
+    p.data_ptr        = reinterpret_cast<void *>(0x1000);
     p.weight_bytes    = 512;
     p.popularity_rank = -1;
     table.set(layer_id, expert_id, p);
@@ -154,7 +154,7 @@ static bool test_key_uniqueness() {
         for (int e = 0; e < n_experts; e++) {
             ggml_sycl::ExpertPlacement p{};
             p.device_id    = l % 3;  // Distribute across 3 devices
-            p.host_ptr     = reinterpret_cast<void *>(static_cast<uintptr_t>(l * 1000 + e));
+            p.data_ptr     = reinterpret_cast<void *>(static_cast<uintptr_t>(l * 1000 + e));
             p.weight_bytes = static_cast<size_t>(l * 100 + e);
             table.set(l, e, p);
         }
@@ -175,19 +175,19 @@ static bool test_key_uniqueness() {
     {
         ggml_sycl::ExpertPlacement p1{};
         p1.device_id = 0;
-        p1.host_ptr  = reinterpret_cast<void *>(0xA);
+        p1.data_ptr  = reinterpret_cast<void *>(0xA);
         table.set(1001, 2002, p1);
 
         ggml_sycl::ExpertPlacement p2{};
         p2.device_id = 1;
-        p2.host_ptr  = reinterpret_cast<void *>(0xB);
+        p2.data_ptr  = reinterpret_cast<void *>(0xB);
         table.set(2002, 1001, p2);
 
         auto got1 = table.get(1001, 2002);
         auto got2 = table.get(2002, 1001);
         TEST_ASSERT(got1.device_id == 0, "swapped key 1 device_id");
         TEST_ASSERT(got2.device_id == 1, "swapped key 2 device_id");
-        TEST_ASSERT(got1.host_ptr != got2.host_ptr, "swapped keys should have different host_ptr");
+        TEST_ASSERT(got1.data_ptr != got2.data_ptr, "swapped keys should have different host_ptr");
     }
 
     return true;
@@ -215,7 +215,7 @@ static bool test_hash_based_layer_ids() {
     for (int i = 0; i < 6; i++) {
         ggml_sycl::ExpertPlacement p{};
         p.device_id = i % 3;
-        p.host_ptr  = reinterpret_cast<void *>(static_cast<uintptr_t>(i + 1));
+        p.data_ptr  = reinterpret_cast<void *>(static_cast<uintptr_t>(i + 1));
         table.set(layer_ids[i], 0, p);
     }
 
@@ -239,7 +239,7 @@ static bool test_thread_safety() {
         for (int e = 0; e < 32; e++) {
             ggml_sycl::ExpertPlacement p{};
             p.device_id    = 0;
-            p.host_ptr     = reinterpret_cast<void *>(static_cast<uintptr_t>(1));
+            p.data_ptr     = reinterpret_cast<void *>(static_cast<uintptr_t>(1));
             p.weight_bytes = 100;
             table.set(l, e, p);
         }
@@ -268,7 +268,7 @@ static bool test_thread_safety() {
             int e = iter % 32;
             auto p = table.get(l, e);
             // host_ptr was set to non-null during init, should never be null
-            if (p.host_ptr == nullptr) {
+            if (p.data_ptr == nullptr) {
                 errors.fetch_add(1, std::memory_order_relaxed);
             }
             // device_id should be in valid range
@@ -325,7 +325,7 @@ static bool test_n_device_routing() {
                 p.device_id  = -1;
                 p.device_ptr = nullptr;
             }
-            p.host_ptr     = reinterpret_cast<void *>(static_cast<uintptr_t>(e + 100));
+            p.data_ptr     = reinterpret_cast<void *>(static_cast<uintptr_t>(e + 100));
             p.weight_bytes = 1024;
             table.set(l, e, p);
         }
@@ -391,7 +391,7 @@ static bool test_get_layer_experts_sorted() {
     for (int e = 0; e < 8; e++) {
         ggml_sycl::ExpertPlacement p{};
         p.device_id       = 0;
-        p.host_ptr        = reinterpret_cast<void *>(static_cast<uintptr_t>(e + 1));
+        p.data_ptr        = reinterpret_cast<void *>(static_cast<uintptr_t>(e + 1));
         p.weight_bytes    = 100;
         p.popularity_rank = popularities[e];
         table.set(layer_id, e, p);

@@ -116,6 +116,11 @@ class ExpertPrefetcher {
     // Returns the cached VRAM pointer if found, nullptr otherwise.
     void * get_cached_ptr(int layer_idx, int expert_idx) const;
 
+    // Synchronous demand-load: hint + await in one call.
+    // Used when an expert is needed NOW but not in cache.
+    // Bypasses prefetch_disabled_ check (demand loads are not speculative).
+    void * demand_load(int layer_idx, int expert_idx);
+
     // Is this prefetcher initialized (has a valid DMA queue)?
     bool is_initialized() const { return initialized_; }
 
@@ -140,7 +145,7 @@ class ExpertPrefetcher {
     bool                         initialized_   = false;
 
     // Dynamic pool capacity: computed from available VRAM at first use.
-    // Uses ~50% of remaining VRAM, clamped to [8, 256] slots.
+    // Uses ~50% of remaining VRAM, clamped to [8, 2048] slots.
     int pool_capacity_ = 0;
 
     // Max concurrent in-flight DMA operations. Limits PCIe bandwidth
@@ -338,6 +343,12 @@ class ExpertPredictor {
     // uint8_t avoids std::vector<bool> specialization issues.
     std::vector<uint8_t> accuracy_ring_;
     int                  accuracy_ring_pos_ = 0;
+
+    // Cold-start warmup tracking: skip accuracy ring updates until we have
+    // seen at least 2 full tokens (all layers). Without this, the first token's
+    // 100% miss rate fills the accuracy window and triggers permanent disable.
+    int warmup_tokens_    = 0;   // Count of fully completed tokens (layer wraparound)
+    int warmup_layer_max_ = -1;  // Highest layer seen so far (detect wraparound)
 
     mutable std::mutex mutex_;
 
