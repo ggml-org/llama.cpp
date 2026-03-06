@@ -382,12 +382,15 @@ int main(int argc, char ** argv) {
         modalities += ", audio";
     }
 
-    if (!params.system_prompt.empty()) {
-        ctx_cli.messages.push_back({
-            {"role",    "system"},
-            {"content", params.system_prompt}
-        });
-    }
+    auto add_system_prompt = [&]() {
+        if (!params.system_prompt.empty()) {
+            ctx_cli.messages.push_back({
+                {"role",    "system"},
+                {"content", params.system_prompt}
+            });
+        }
+    };
+    add_system_prompt();
 
     console::log("\n");
     console::log("%s\n", LLAMA_ASCII_LOGO);
@@ -477,6 +480,8 @@ int main(int argc, char ** argv) {
             }
         } else if (string_starts_with(buffer, "/clear")) {
             ctx_cli.messages.clear();
+            add_system_prompt();
+
             ctx_cli.input_files.clear();
             console::log("Chat history cleared.\n");
             continue;
