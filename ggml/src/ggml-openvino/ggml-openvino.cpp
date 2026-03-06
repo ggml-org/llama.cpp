@@ -5,7 +5,7 @@
 #include "ggml-impl.h"
 #include "ggml-openvino-extra.h"
 #include "ggml-openvino/utils.h"
-#include "ggml-quants.hpp"
+#include "ggml-quants.h"
 #include "ggml.h"
 
 #include <atomic>

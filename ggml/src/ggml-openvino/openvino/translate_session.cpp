@@ -1,11 +1,11 @@
-#include "translate_session.hpp"
+#include "translate_session.h"
 
-#include "ggml-openvino/openvino/node_context.hpp"
-#include "ggml-openvino/openvino/utils.hpp"
-#include "input_model.hpp"
-#include "pass/eliminate_zp.hpp"
-#include "pass/mark_decompression_convert_constant_folding.hpp"
-#include "pass/squeeze_matmul.hpp"
+#include "ggml-openvino/openvino/node_context.h"
+#include "ggml-openvino/openvino/utils.h"
+#include "input_model.h"
+#include "pass/eliminate_zp.h"
+#include "pass/mark_decompression_convert_constant_folding.h"
+#include "pass/squeeze_matmul.h"
 
 #include <cstdint>
 #include <cstdlib>

@@ -1,5 +1,5 @@
-#include "../op_table.hpp"
-#include "../utils.hpp"
+#include "../op_table.h"
+#include "../utils.h"
 
 namespace ov {
 namespace frontend {

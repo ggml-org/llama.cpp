@@ -1,6 +1,6 @@
-#include "op_table.hpp"
+#include "op_table.h"
 
-#include "utils.hpp"
+#include "utils.h"
 
 #include <openvino/op/add.hpp>
 #include <openvino/op/divide.hpp>

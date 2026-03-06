@@ -4,7 +4,7 @@
 #include <openvino/frontend/node_context.hpp>
 #include <string>
 
-#include "decoder.hpp"
+#include "decoder.h"
 
 namespace ov {
 namespace frontend {

@@ -1,8 +1,8 @@
-#include "frontend.hpp"
+#include "frontend.h"
 
-#include "input_model.hpp"
-#include "op_table.hpp"
-#include "translate_session.hpp"
+#include "input_model.h"
+#include "op_table.h"
+#include "translate_session.h"
 
 namespace ov {
 namespace frontend {
