@@ -156,7 +156,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 - [x] [GLM-EDGE](https://huggingface.co/models?search=glm-edge)
 - [x] [Qwen2-VL](https://huggingface.co/collections/Qwen/qwen2-vl-66cee7455501d7126940800d)
 - [x] [LFM2-VL](https://huggingface.co/collections/LiquidAI/lfm2-vl-68963bbc84a610f7638d5ffa)
-- [x] [Phi-4 Multimodal](https://huggingface.co/microsoft/Phi-4-multimodal-instruct)
+- [x] [Phi-4 Multimodal](https://huggingface.co/microsoft/Phi-4-multimodal-instruct) (Native Text support. For vision/audio `mmproj` see [Phi-4-Vision-Audio-mmproj-Generator](https://github.com/butterwecksolutions/Phi-4-Vision-Audio-mmproj-Generator))
 
 </details>
 
