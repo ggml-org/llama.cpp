@@ -45,6 +45,11 @@ export { default as TruncatedText } from './TruncatedText.svelte';
 export { default as KeyboardShortcutInfo } from './KeyboardShortcutInfo.svelte';
 
 /**
+ * **ProcessingText** - Display for simple processing text using shine animation
+ */
+export { default as ProcessingText } from './ProcessingText.svelte';
+
+/**
  * **ProcessingInfo** - Display for generation/processing details
  *
  * Shows details like tokens/sec during parsing and generation.

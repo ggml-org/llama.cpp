@@ -12,7 +12,6 @@
 	import { isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
 	import { autoResizeTextarea, copyToClipboard, isIMEComposing } from '$lib/utils';
 	import { tick } from 'svelte';
-	import { fade } from 'svelte/transition';
 	import { Check, X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
@@ -24,6 +23,7 @@
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { ServerModelStatus } from '$lib/enums';
 	import { REASONING_TAGS } from '$lib/constants/agentic';
+	import { ProcessingText } from '$lib/components/app/misc';
 
 	interface Props {
 		class?: string;
@@ -142,6 +142,12 @@
 	const hasReasoningMarkers = $derived(parsedMessageContent.hasReasoningMarkers);
 	const processingState = useProcessingState();
 
+  let processingText = $derived(
+		processingState.getPromptProgressText() ??
+		processingState.getProcessingMessage() ??
+	  'Processing...'
+  );
+
 	let currentConfig = $derived(config());
 	let isRouter = $derived(isRouterMode());
 	let showRawOutput = $state(false);
@@ -241,15 +247,7 @@
 	{/if}
 
 	{#if showProcessingInfoTop}
-		<div class="mt-6 w-full max-w-[48rem]" in:fade>
-			<div class="processing-container">
-				<span class="processing-text">
-					{processingState.getPromptProgressText() ??
-						processingState.getProcessingMessage() ??
-						'Processing...'}
-				</span>
-			</div>
-		</div>
+    <ProcessingText cls="mt-6" {processingText} />
 	{/if}
 
 	{#if editCtx.isEditing}
@@ -308,15 +306,7 @@
 	{/if}
 
 	{#if showProcessingInfoBottom}
-		<div class="mt-4 w-full max-w-[48rem]" in:fade>
-			<div class="processing-container">
-				<span class="processing-text">
-					{processingState.getPromptProgressText() ??
-						processingState.getProcessingMessage() ??
-						'Processing...'}
-				</span>
-			</div>
-		</div>
+    <ProcessingText cls="mt-4" {processingText} />
 	{/if}
 
 	<div class="info my-6 grid gap-4 tabular-nums">
@@ -400,35 +390,6 @@
 </div>
 
 <style>
-	.processing-container {
-		display: flex;
-		flex-direction: column;
-		align-items: flex-start;
-		gap: 0.5rem;
-	}
-
-	.processing-text {
-		background: linear-gradient(
-			90deg,
-			var(--muted-foreground),
-			var(--foreground),
-			var(--muted-foreground)
-		);
-		background-size: 200% 100%;
-		background-clip: text;
-		-webkit-background-clip: text;
-		-webkit-text-fill-color: transparent;
-		animation: shine 1s linear infinite;
-		font-weight: 500;
-		font-size: 0.875rem;
-	}
-
-	@keyframes shine {
-		to {
-			background-position: -200% 0;
-		}
-	}
-
 	.raw-output {
 		width: 100%;
 		max-width: 48rem;
