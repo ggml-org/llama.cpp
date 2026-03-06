@@ -11760,6 +11760,47 @@ class SolarOpenModel(Glm4MoeModel):
         special_vocab.add_to_gguf(self.gguf_writer)
 
 
+@ModelBase.register("Phi4MMForCausalLM")
+class Phi4MMModel(MmprojModel):
+    model_arch = gguf.MODEL_ARCH.PHI3
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.LDPV2)
+        
+        if self.hparams_vision:
+            # Add eps if found
+            if "layer_norm_eps" in self.hparams_vision:
+                self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams_vision["layer_norm_eps"])
+            
+            # Siglip uses gelu with pytorch tanh approximation by default
+            hidden_act = self.hparams_vision.get("hidden_act", "gelu_pytorch_tanh")
+            if "gelu" in hidden_act:
+                self.gguf_writer.add_vision_use_gelu(True)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # This handles mmproj conversion
+        # Let's clean up name prefixes to match tensor_mapping
+        
+        # Audio mapping
+        if name.startswith("model.embed_tokens_extend.audio_embed."):
+            name = name.replace("model.embed_tokens_extend.audio_embed.", "audio.")
+
+        # Vision mapping
+        if name.startswith("model.embed_tokens_extend.image_embed.img_processor."):
+            name = name.replace("model.embed_tokens_extend.image_embed.img_processor.", "vision_model.")
+        elif name.startswith("model.embed_tokens_extend.image_embed.img_projection."):
+            name = name.replace("model.embed_tokens_extend.image_embed.img_projection.", "mm_projector.proj.linear_")
+            
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("Phi4ForCausalLMV")
+class Phi4VModel(Phi4MMModel):
+    # Same as Phi4MMModel but vision only variant
+    pass
+
+
 ###### CONVERSION LOGIC ######
 
 

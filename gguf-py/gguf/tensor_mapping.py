@@ -1344,6 +1344,7 @@ class TensorNameMap:
             "vision_model.vision_adapter.mlp.fc{bid}", # llama 4
             "mlp1.{bid}", # InternVL
             "model.aligner.fc1.hidden_layers.{bid}", # Janus Pro
+            "model.embed_tokens_extend.image_embed.img_projection.{bid}", # phi4mm, phi4v
         ),
 
         MODEL_TENSOR.V_MMPROJ_PEG: (
@@ -1362,6 +1363,7 @@ class TensorNameMap:
             "vision_tower.vision_model.embeddings.patch_embedding",
             "model.vision_tower.embeddings.patch_embeddings.projection", # Intern-S1
             "vpm.embeddings.patch_embedding",
+            "model.embed_tokens_extend.image_embed.img_processor.embeddings.patch_embedding", # phi4mm, phi4v
             "model.vision_model.embeddings.patch_embedding", # SmolVLM
             "vision_tower.patch_conv", # pixtral-hf
             "vision_encoder.patch_conv", # pixtral
@@ -1381,6 +1383,7 @@ class TensorNameMap:
             "vision_tower.vision_model.embeddings.position_embedding",
             "model.vision_tower.embeddings.position_embeddings", # Intern-S1
             "vpm.embeddings.position_embedding",
+            "model.embed_tokens_extend.image_embed.img_processor.embeddings.position_embedding", # phi4mm, phi4v
             "model.vision_model.embeddings.position_embedding", # SmolVLM
             "vision_model.positional_embedding_vlm", # llama 4
             "vision_tower.patch_embed.pos_emb", # kimi-vl
@@ -1401,6 +1404,7 @@ class TensorNameMap:
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.q_proj",
             "model.vision_tower.encoder.layer.{bid}.attention.q_proj", # Intern-S1
             "vpm.encoder.layers.{bid}.self_attn.q_proj",
+            "model.embed_tokens_extend.image_embed.img_processor.encoder.layers.{bid}.self_attn.q_proj", # phi4mm, phi4v
             "model.vision_model.encoder.layers.{bid}.self_attn.q_proj", # SmolVLM
             "vision_model.model.layers.{bid}.self_attn.q_proj", # llama4
             "vision_tower.transformer.layers.{bid}.attention.q_proj", # pixtral-hf
@@ -1420,6 +1424,7 @@ class TensorNameMap:
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.k_proj",
             "model.vision_tower.encoder.layer.{bid}.attention.k_proj", # Intern-S1
             "vpm.encoder.layers.{bid}.self_attn.k_proj",
+            "model.embed_tokens_extend.image_embed.img_processor.encoder.layers.{bid}.self_attn.k_proj", # phi4mm, phi4v
             "model.vision_model.encoder.layers.{bid}.self_attn.k_proj", # SmolVLM
             "vision_model.model.layers.{bid}.self_attn.k_proj", # llama4
             "vision_tower.transformer.layers.{bid}.attention.k_proj", # pixtral-hf
@@ -1439,6 +1444,7 @@ class TensorNameMap:
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.v_proj",
             "model.vision_tower.encoder.layer.{bid}.attention.v_proj", # Intern-S1
             "vpm.encoder.layers.{bid}.self_attn.v_proj",
+            "model.embed_tokens_extend.image_embed.img_processor.encoder.layers.{bid}.self_attn.v_proj", # phi4mm, phi4v
             "model.vision_model.encoder.layers.{bid}.self_attn.v_proj", # SmolVLM
             "vision_model.model.layers.{bid}.self_attn.v_proj", # llama4
             "vision_tower.transformer.layers.{bid}.attention.v_proj", # pixtral-hf
@@ -1453,6 +1459,7 @@ class TensorNameMap:
             "vision_tower.vision_model.encoder.layers.{bid}.norm1", # InternVL
             "model.vision_tower.encoder.layer.{bid}.layernorm_before", # Intern-S1
             "vpm.encoder.layers.{bid}.layer_norm1",
+            "model.embed_tokens_extend.image_embed.img_processor.encoder.layers.{bid}.layer_norm1", # phi4mm, phi4v
             "model.vision_model.encoder.layers.{bid}.layer_norm1", # SmolVLM
             "vision_tower.transformer.layers.{bid}.attention_norm", # pixtral-hf
             "vision_encoder.transformer.layers.{bid}.attention_norm", # pixtral
@@ -1469,6 +1476,7 @@ class TensorNameMap:
             "vision_tower.vision_model.encoder.layers.{bid}.attn.proj", # InternVL
             "model.vision_tower.encoder.layer.{bid}.attention.projection_layer", # Intern-S1
             "vpm.encoder.layers.{bid}.self_attn.out_proj",
+            "model.embed_tokens_extend.image_embed.img_processor.encoder.layers.{bid}.self_attn.out_proj", # phi4mm, phi4v
             "model.vision_model.encoder.layers.{bid}.self_attn.out_proj", # SmolVLM
             "model.vision_model.encoder.layers.{bid}.self_attn.projection_layer", # Janus Pro
             "vision_model.model.layers.{bid}.self_attn.o_proj", # llama4
@@ -1486,6 +1494,7 @@ class TensorNameMap:
             "vision_tower.vision_model.encoder.layers.{bid}.norm2", # InternVL
             "model.vision_tower.encoder.layer.{bid}.layernorm_after", # Intern-S1
             "vpm.encoder.layers.{bid}.layer_norm2",
+            "model.embed_tokens_extend.image_embed.img_processor.encoder.layers.{bid}.layer_norm2", # phi4mm, phi4v
             "model.vision_model.encoder.layers.{bid}.layer_norm2", # SmolVLM
             "vision_model.model.layers.{bid}.post_attention_layernorm", # llama4
             "vision_tower.transformer.layers.{bid}.ffn_norm", # pixtral-hf
@@ -1501,6 +1510,7 @@ class TensorNameMap:
             "vision_tower.vision_model.encoder.layers.{bid}.mlp.fc1",
             "model.vision_tower.encoder.layer.{bid}.mlp.fc1", # Intern-S1
             "vpm.encoder.layers.{bid}.mlp.fc1",
+            "model.embed_tokens_extend.image_embed.img_processor.encoder.layers.{bid}.mlp.fc1", # phi4mm, phi4v
             "model.vision_model.encoder.layers.{bid}.mlp.fc1", # SmolVLM, gemma3
             "vision_tower.transformer.layers.{bid}.feed_forward.up_proj", # pixtral-hf
             "vision_encoder.transformer.layers.{bid}.feed_forward.w3", # pixtral
@@ -1524,6 +1534,7 @@ class TensorNameMap:
             "vision_tower.vision_model.encoder.layers.{bid}.mlp.fc2",
             "model.vision_tower.encoder.layer.{bid}.mlp.fc2", # Intern-S1
             "vpm.encoder.layers.{bid}.mlp.fc2",
+            "model.embed_tokens_extend.image_embed.img_processor.encoder.layers.{bid}.mlp.fc2", # phi4mm, phi4v
             "model.vision_model.encoder.layers.{bid}.mlp.fc2", # SmolVLM, gemma3
             "vision_tower.transformer.layers.{bid}.feed_forward.down_proj", # pixtral-hf
             "vision_encoder.transformer.layers.{bid}.feed_forward.w2", # pixtral
@@ -1686,6 +1697,7 @@ class TensorNameMap:
         MODEL_TENSOR.A_ENC_EMBD_POS: (
             "audio_tower.embed_positions", # ultravox
             "audio_embedding.embedding", # lfm2
+            "model.embed_tokens_extend.audio_embed.encoder.relative_attention_bias_layer.bias_values", # phi4mm audio
         ),
 
         MODEL_TENSOR.A_ENC_EMBD_NORM: (
@@ -1700,6 +1712,12 @@ class TensorNameMap:
             "audio_tower.conv{bid}", # ultravox
             "conformer.pre_encode.conv.{bid}", # lfm2
             "model.audio_tower.subsample_conv_projection.conv_{bid}.conv", # gemma3n
+            "model.embed_tokens_extend.audio_embed.encoder.embedr.0.conv1d", # phi4mm conv stem
+            "model.embed_tokens_extend.audio_embed.encoder.embedr.2.conv1d", # phi4mm conv stem
+            "model.embed_tokens_extend.audio_embed.encoder.embedr.4.conv1d", # phi4mm conv stem
+            "model.embed_tokens_extend.audio_embed.encoder.encoders.{bid}.conv_module.depthwise_conv", # phi4mm depthwise conv
+            "model.embed_tokens_extend.audio_embed.encoder.encoders.{bid}.conv_module.pointwise_conv1", # phi4mm pointwise 1
+            "model.embed_tokens_extend.audio_embed.encoder.encoders.{bid}.conv_module.pointwise_conv2", # phi4mm pointwise 2
         ),
 
         MODEL_TENSOR.A_ENC_CONV1D_NORM: (
@@ -1717,18 +1735,21 @@ class TensorNameMap:
             "audio_tower.layers.{bid}.self_attn.q_proj", # ultravox
             "conformer.layers.{bid}.self_attn.linear_q", # lfm2
             "conformer.layers.{bid}.attention.attn.q_proj", # gemma3n
+            "model.embed_tokens_extend.audio_embed.encoder.encoders.{bid}.self_attn.linear_q", # phi4mm audio q
         ),
 
         MODEL_TENSOR.A_ENC_ATTN_K: (
             "audio_tower.layers.{bid}.self_attn.k_proj", # ultravox
             "conformer.layers.{bid}.self_attn.linear_k", # lfm2
             "conformer.layers.{bid}.attention.attn.k_proj", # gemma3n
+            "model.embed_tokens_extend.audio_embed.encoder.encoders.{bid}.self_attn.linear_k", # phi4mm audio k
         ),
 
         MODEL_TENSOR.A_ENC_ATTN_V: (
             "audio_tower.layers.{bid}.self_attn.v_proj", # ultravox
             "conformer.layers.{bid}.self_attn.linear_v", # lfm2
             "conformer.layers.{bid}.attention.attn.v_proj", # gemma3n
+            "model.embed_tokens_extend.audio_embed.encoder.encoders.{bid}.self_attn.linear_v", # phi4mm audio v
         ),
 
         MODEL_TENSOR.A_ENC_PER_DIM_SCALE: (
@@ -1743,18 +1764,28 @@ class TensorNameMap:
             "audio_tower.layers.{bid}.self_attn_layer_norm", # ultravox
             "conformer.layers.{bid}.norm_self_att", # lfm2
             "conformer.layers.{bid}.attention.pre_attn_norm", # gemma3n
+            "model.embed_tokens_extend.audio_embed.encoder.encoders.{bid}.norm_self_att", # phi4mm
+            "model.embed_tokens_extend.audio_embed.encoder.encoders.{bid}.norm_macaron", # phi4mm macaron norm
+            "model.embed_tokens_extend.audio_embed.encoder.encoders.{bid}.norm_ff_macaron", # phi4mm macaron ffn norm
+            "model.embed_tokens_extend.audio_embed.encoder.encoders.{bid}.norm_conv", # phi4mm conv norm
+            "model.embed_tokens_extend.audio_embed.encoder.encoders.{bid}.conv_module.norm", # phi4mm depthwise norm
         ),
 
         MODEL_TENSOR.A_ENC_OUTPUT: (
             "audio_tower.layers.{bid}.self_attn.out_proj", # ultravox
             "conformer.layers.{bid}.self_attn.linear_out", # lfm2
             "conformer.layers.{bid}.attention.post", # gemma3n
+            "model.embed_tokens_extend.audio_embed.encoder.encoders.{bid}.self_attn.linear_out", # phi4mm audio o
         ),
 
         MODEL_TENSOR.A_ENC_OUTPUT_NORM: (
             "audio_tower.layers.{bid}.final_layer_norm", # ultravox
             "conformer.layers.{bid}.norm_out", # lfm2
             "conformer.layers.{bid}.attention.post_norm", # gemma3n
+            "model.embed_tokens_extend.audio_embed.encoder.global_cmvn", # phi4mm cmvn
+            "model.embed_tokens_extend.audio_embed.encoder.encoders.{bid}.norm_ff", # phi4mm final ffn norm
+            "model.embed_tokens_extend.audio_embed.encoder.encoders.{bid}.norm_out", # phi4mm layer out norm
+            "model.embed_tokens_extend.audio_embed.encoder.after_norm", # phi4mm after norm
         ),
 
         MODEL_TENSOR.A_ENC_FFN_NORM: (
@@ -1774,6 +1805,8 @@ class TensorNameMap:
             "audio_tower.layers.{bid}.fc1", # ultravox
             "conformer.layers.{bid}.feed_forward1.linear1", # lfm2
             "conformer.layers.{bid}.ffw_layer_start.ffw_layer_1", # gemma3n
+            "model.embed_tokens_extend.audio_embed.encoder.encoders.{bid}.feed_forward.w1", # phi4mm regular ffn up
+            "model.embed_tokens_extend.audio_embed.encoder.encoders.{bid}.feed_forward_macaron.w1", # phi4mm macaron ffn up
         ),
 
         MODEL_TENSOR.A_ENC_FFN_GATE: (),
@@ -1782,6 +1815,8 @@ class TensorNameMap:
             "audio_tower.layers.{bid}.fc2", # ultravox
             "conformer.layers.{bid}.feed_forward1.linear2", # lfm2
             "conformer.layers.{bid}.ffw_layer_start.ffw_layer_2", # gemma3n
+            "model.embed_tokens_extend.audio_embed.encoder.encoders.{bid}.feed_forward.w2", # phi4mm regular ffn down
+            "model.embed_tokens_extend.audio_embed.encoder.encoders.{bid}.feed_forward_macaron.w2", # phi4mm macaron ffn down
         ),
 
         MODEL_TENSOR.A_ENC_FFN_UP_1: (
@@ -1836,6 +1871,10 @@ class TensorNameMap:
         MODEL_TENSOR.A_MMPROJ_FC: (
             "audio.multi_modal_projector.linear", # qwen2audio
             "audio_tower.proj", # qwen2omni
+            "model.embed_tokens_extend.audio_embed.audio_projection.speech.0", # phi4mm speech proj
+            "model.embed_tokens_extend.audio_embed.audio_projection.speech.2", # phi4mm speech proj
+            "model.embed_tokens_extend.audio_embed.audio_projection.vision.0", # phi4mm audio cross modal
+            "model.embed_tokens_extend.audio_embed.audio_projection.vision.2", # phi4mm audio cross modal
         ),
 
         MODEL_TENSOR.A_MM_NORM_PRE: (
