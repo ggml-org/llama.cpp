@@ -1,8 +1,25 @@
 #pragma OPENCL EXTENSION cl_khr_fp16 : enable
-//------------------------------------------------------------------------------
-// cumsum
-//------------------------------------------------------------------------------
-#define MAX_SUBGROUPS 16
+
+#ifdef cl_intel_required_subgroup_size
+#pragma OPENCL EXTENSION cl_intel_required_subgroup_size : enable
+#define INTEL_GPU 1
+#define REQD_SUBGROUP_SIZE_16 __attribute__((intel_reqd_sub_group_size(16)))
+#define REQD_SUBGROUP_SIZE_32 __attribute__((intel_reqd_sub_group_size(32)))
+#elif defined(cl_qcom_reqd_sub_group_size)
+#pragma OPENCL EXTENSION cl_qcom_reqd_sub_group_size : enable
+#define ADRENO_GPU 1
+#define REQD_SUBGROUP_SIZE_64  __attribute__((qcom_reqd_sub_group_size("half")))
+#define REQD_SUBGROUP_SIZE_128 __attribute__((qcom_reqd_sub_group_size("full")))
+#endif
+
+// max workgroup size is usually 1024, this covers various subgroups sizes
+#define MAX_SUBGROUPS 128
+
+#ifdef INTEL_GPU
+REQD_SUBGROUP_SIZE_32
+#elif defined (ADRENO_GPU)
+REQD_SUBGROUP_SIZE_64
+#endif
 kernel void kernel_cumsum_blk(
         global char * src0,
         ulong offset0,
@@ -48,30 +65,36 @@ kernel void kernel_cumsum_blk(
     __local float partial[MAX_SUBGROUPS];
 
     float v = 0.0f;
-    if(i00 + tid < ne00){
+    if (i00 + tid < ne00) {
         v = src0_row[i00 + tid];
     }
 
     float s = sub_group_scan_inclusive_add(v);
-    if(sg_lid == sg_size - 1){
+    if (sg_lid == sg_size - 1) {
         partial[sg_id] = s;
     }
     barrier(CLK_LOCAL_MEM_FENCE);
 
-    if(sg_id == 0){
+    // NB: subgroup size should be larger than number of subgroups
+    // assuming max workgroup size of 1024, subgroup size should be >= 32
+    if (sg_id == 0) {
         float x = 0.0f;
-        if(sg_lid < get_num_sub_groups()) x = partial[sg_lid];
+        if (sg_lid < get_num_sub_groups()) {
+            x = partial[sg_lid];
+        }
         float ex = sub_group_scan_exclusive_add(x);
-        if(sg_lid < get_num_sub_groups()) partial[sg_lid] = ex;
+        if (sg_lid < get_num_sub_groups()) {
+            partial[sg_lid] = ex;
+        }
     }
     barrier(CLK_LOCAL_MEM_FENCE);
 
     s += partial[sg_id];
 
-    if(i00 + tid < ne00){
+    if (i00 + tid < ne00) {
         dst_row[i00 + tid] = s;
     }
-    if(ne00 > nth && tid == nth - 1){
+    if (ne00 > nth && tid == nth - 1) {
         tmp_row[ib] = s;
     }
 }
@@ -99,7 +122,7 @@ kernel void kernel_cumsum_add(
     const int tid = get_local_id(0);
 
     const int ib = i1 / ne01;
-    if(ib == 0){
+    if (ib == 0) {
         return;
     }
     const int i00 = ib * nth;
@@ -110,7 +133,7 @@ kernel void kernel_cumsum_add(
     global float * tmp_row  = (global float *)(tmp + nbt1 * i01 + nbt2 * i02 + nbt3 * i03);
     global float * dst_row  = (global float *)dst + i03*ne02*ne01*ne00 + i02*ne01*ne00 + i01*ne00;
     
-    if(i00 + tid < ne00){
+    if (i00 + tid < ne00) {
         dst_row[i00 + tid] += tmp_row[ib - 1];
     }
 }
