@@ -637,6 +637,41 @@ static common_chat_tool quoted_unquoted_tool{
 };
 
 
+static common_chat_tool tool_2req_4opt{
+    /* .name = */ "tool_2req_4opt",
+    /* .description = */ "Tool with 2 required and 4 optional params",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "req1": { "type": "string", "description": "Required string" },
+            "req2": { "type": "integer", "description": "Required int" },
+            "opt1": { "type": "string", "description": "Optional string 1" },
+            "opt2": { "type": "integer", "description": "Optional int 1" },
+            "opt3": { "type": "string", "description": "Optional string 2" },
+            "opt4": { "type": "integer", "description": "Optional int 2" }
+        },
+        "required": ["req1", "req2"]
+    })",
+};
+
+static common_chat_tool tool_2req_5opt{
+    /* .name = */ "tool_2req_5opt",
+    /* .description = */ "Tool with 2 required and 5 optional params",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "req1": { "type": "string", "description": "Required string" },
+            "req2": { "type": "integer", "description": "Required int" },
+            "opt1": { "type": "string", "description": "Optional string 1" },
+            "opt2": { "type": "integer", "description": "Optional int 1" },
+            "opt3": { "type": "string", "description": "Optional string 2" },
+            "opt4": { "type": "integer", "description": "Optional int 2" },
+            "opt5": { "type": "string", "description": "Optional string 3" }
+        },
+        "required": ["req1", "req2"]
+    })",
+};
+
 static std::vector<common_chat_tool> tools{ special_function_tool, special_function_tool_with_optional_param,
                                             python_tool, html_tool, todo_list };
 
@@ -1956,6 +1991,58 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         })
             .expect_tool_calls({
                 { "todo_list", "{\"todos\": [{\"item\": \"Check stuff\", \"selected\": false}, {\"item\": \"Prepare stuff\", \"selected\": true}]}", {} },
+            })
+            .run();
+
+        // Test flexible optional argument ordering (2 required + 4 optional, reversed optional order)
+        tst.test(
+               "<tool_call>\n"
+               "<function=tool_2req_4opt>\n"
+               "<parameter=req1>\nhello\n</parameter>\n"
+               "<parameter=req2>\n42\n</parameter>\n"
+               "<parameter=opt4>\n100\n</parameter>\n"
+               "<parameter=opt2>\n200\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ tool_2req_4opt })
+            .expect_tool_calls({
+                { "tool_2req_4opt", R"({"req1": "hello", "req2": 42, "opt4": 100, "opt2": 200})", {} },
+            })
+            .run();
+
+        // Test flexible optional argument ordering (2 required + 5 optional, reversed optional order)
+        tst.test(
+               "<tool_call>\n"
+               "<function=tool_2req_5opt>\n"
+               "<parameter=req1>\nworld\n</parameter>\n"
+               "<parameter=req2>\n7\n</parameter>\n"
+               "<parameter=opt5>\nlast\n</parameter>\n"
+               "<parameter=opt3>\nmiddle\n</parameter>\n"
+               "<parameter=opt1>\nfirst\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ tool_2req_5opt })
+            .expect_tool_calls({
+                { "tool_2req_5opt", R"({"req1": "world", "req2": 7, "opt5": "last", "opt3": "middle", "opt1": "first"})", {} },
+            })
+            .run();
+
+        // Test flexible optional argument ordering (2 required + 5 optional, all 5 in shuffled order)
+        tst.test(
+               "<tool_call>\n"
+               "<function=tool_2req_5opt>\n"
+               "<parameter=req1>\ntest\n</parameter>\n"
+               "<parameter=req2>\n99\n</parameter>\n"
+               "<parameter=opt3>\nc\n</parameter>\n"
+               "<parameter=opt1>\na\n</parameter>\n"
+               "<parameter=opt5>\ne\n</parameter>\n"
+               "<parameter=opt4>\n4\n</parameter>\n"
+               "<parameter=opt2>\n2\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ tool_2req_5opt })
+            .expect_tool_calls({
+                { "tool_2req_5opt", R"({"req1": "test", "req2": 99, "opt3": "c", "opt1": "a", "opt5": "e", "opt4": 4, "opt2": 2})", {} },
             })
             .run();
     }
