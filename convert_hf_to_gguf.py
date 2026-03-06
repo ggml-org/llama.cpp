@@ -5143,6 +5143,26 @@ class Phi4VisionMmprojModel(MmprojModel):
         super().__init__(*args, **kwargs)
         assert self.hparams_vision is not None
 
+        self.vision_total_layers = int(self.find_vparam(self.n_block_keys))
+        if self.vision_total_layers < 2:
+            raise ValueError(
+                f"Phi-4 vision mmproj conversion requires at least 2 vision layers, got {self.vision_total_layers}"
+            )
+
+        # Phi-4 uses SigLIP2 hidden_states[-2], so export one fewer encoder block and
+        # drop post-layernorm/head weights. This makes the GGUF runtime output match
+        # the feature map consumed by the patched siglip.cpp Phi-4 projector path.
+        self.vision_export_layers = self.vision_total_layers - 1
+        self.vision_last_layer_idx = self.vision_total_layers - 1
+
+        for key in self.n_block_keys:
+            if key in self.hparams_vision:
+                self.hparams_vision[key] = self.vision_export_layers
+                break
+
+        self.block_count = self.vision_export_layers
+        self.tensor_map = gguf.get_tensor_name_map(gguf.MODEL_ARCH.MMPROJ, self.block_count)
+
         patch_size = self.preprocessor_config.get("patch_size")
         if patch_size is None:
             raise KeyError("Phi-4 vision mmproj conversion requires patch_size in preprocessor_config.json")
@@ -5191,6 +5211,16 @@ class Phi4VisionMmprojModel(MmprojModel):
                 return
 
             new_name = name.replace("model.vision_tower.vision_tower.", "vision_tower.")
+
+            if ".vision_model.post_layernorm." in new_name:
+                return
+
+            layer_prefix = "vision_tower.vision_model.encoder.layers."
+            if new_name.startswith(layer_prefix):
+                layer_suffix = new_name[len(layer_prefix):]
+                layer_idx = layer_suffix.split(".", maxsplit=1)[0]
+                if layer_idx.isdigit() and int(layer_idx) == self.vision_last_layer_idx:
+                    return
 
             if new_name.endswith("vision_model.embeddings.patch_embedding.weight"):
                 if data_torch.ndim != 2:
