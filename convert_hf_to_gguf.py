@@ -5173,6 +5173,9 @@ class Phi4VisionMmprojModel(MmprojModel):
                 if data_torch.ndim != 2:
                     raise ValueError(f"Unexpected Phi-4 patch embedding shape: {tuple(data_torch.shape)}")
 
+                if self.hparams_vision is None:
+                    raise ValueError("hparams_vision is not set")
+
                 patch_area = self.hparams_vision["patch_size"] ** 2
                 in_features = data_torch.shape[1]
                 if in_features % patch_area != 0:
