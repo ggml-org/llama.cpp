@@ -61,6 +61,18 @@ describe('parseModelId', () => {
 			raw: 'openai/gpt-oss-20b:Q4_K_M',
 			tags: []
 		});
+
+		expect(parseModelId('Qwen/Qwen3-Coder-30B-A3B-Instruct-1M-BF16')).toStrictEqual({
+			activatedParams: 'A3B',
+			format: 'BF16',
+			modelName: 'Qwen3-Coder',
+			orgName: 'Qwen',
+			params: '30B',
+			// purpose: ['coder', 'instruct'],
+			quantization: null,
+			raw: 'Qwen/Qwen3-Coder-30B-A3B-Instruct-1M-BF16',
+			tags: ['Instruct', '1M']
+		});
 	});
 
 	// TODO: fix and merge working tests into one block
