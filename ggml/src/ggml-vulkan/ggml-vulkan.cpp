@@ -779,7 +779,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_geglu_erf[2];
     vk_pipeline pipeline_geglu_quick[2];
 
-    vk_pipeline pipeline_leaky_relu_f32;    
+    vk_pipeline pipeline_leaky_relu_f32;
     vk_pipeline pipeline_silu_back_f32;
     vk_pipeline pipeline_diag_mask_inf_f32;
     vk_pipeline pipeline_soft_max_f32, pipeline_soft_max_f32_f16;
@@ -12876,8 +12876,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         case GGML_UNARY_OP_FLOOR:
         case GGML_UNARY_OP_TRUNC:
             ggml_vk_unary(ctx, compute_ctx, src0, node);
-            break;
-        
+            break;        
         case GGML_UNARY_OP_XIELU:
             ggml_vk_xielu(ctx, compute_ctx, src0, node);
             break;
