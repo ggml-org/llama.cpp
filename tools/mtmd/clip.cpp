@@ -3072,7 +3072,7 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                 // res_imgs->data[0] = *res;
                 res_imgs->entries.push_back(std::move(img_f32));
             } break;
-            case PROJECTOR_TYPE_PHI4:
+        case PROJECTOR_TYPE_PHI4:
             {
                 const int patch_size = params.patch_size;
                 const int ps2 = patch_size * patch_size;
@@ -3090,7 +3090,7 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                 normalize_image_u8_to_f32(resized, *img_f32, params.image_mean, params.image_std);
                 res_imgs->entries.push_back(std::move(img_f32));
             } break;
-            case PROJECTOR_TYPE_YOUTUVL:
+        case PROJECTOR_TYPE_YOUTUVL:
             {
                 const int patch_size = params.patch_size;  // typically 16
                 const int merge_size = params.n_merge;      // typically 2
