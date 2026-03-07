@@ -16,11 +16,14 @@
 #include "models/models.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
+#include <cstdlib>
 #include <cfloat>
 #include <cstring>
 #include <cmath>
 #include <functional>
+#include <future>
 #include <map>
 #include <regex>
 #include <sstream>
@@ -7850,9 +7853,59 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     }
 
     // load tensor data
-    for (auto & [ctx, buf_map] : ctx_buf_maps) {
-        if (!ml.load_all_data(ctx, buf_map, use_mlock ? &pimpl->mlock_mmaps : NULL, params.progress_callback, params.progress_callback_user_data)) {
+    const char * limit_env = getenv("LLAMA_ARG_PARALLEL_LOAD");
+    const size_t default_limit = 4;
+    const int limit_val = limit_env ? atoi(limit_env) : (int) default_limit;
+    const size_t n_contexts = ctx_buf_maps.size();
+    const size_t parallel_limit = limit_val <= 0 ? n_contexts : (size_t) limit_val;
+    const bool use_parallel = n_contexts > 1 && parallel_limit > 1;
+
+    if (use_parallel) {
+        LLAMA_LOG_INFO("%s: using parallel loading for %zu GPU contexts (limit=%zu)\n", __func__, n_contexts, parallel_limit);
+
+        std::atomic<bool> load_failed{false};
+        std::vector<std::future<bool>> futures;
+        futures.reserve(n_contexts);
+
+        for (auto & [ctx, buf_map] : ctx_buf_maps) {
+            if (futures.size() >= parallel_limit) {
+                if (!futures.front().get()) {
+                    load_failed.store(true, std::memory_order_relaxed);
+                }
+                futures.erase(futures.begin());
+            }
+
+            auto * ctx_ptr = ctx;
+            auto * buf_map_ptr = &buf_map;
+            auto * mlock_ptr = use_mlock ? &pimpl->mlock_mmaps : nullptr;
+
+            futures.emplace_back(std::async(std::launch::async, [&ml, ctx_ptr, buf_map_ptr, mlock_ptr, &load_failed]() {
+                if (load_failed.load(std::memory_order_relaxed)) {
+                    return false;
+                }
+                return ml.load_all_data(
+                    ctx_ptr,
+                    *buf_map_ptr,
+                    mlock_ptr,
+                    nullptr,
+                    nullptr);
+            }));
+        }
+
+        for (auto & future : futures) {
+            if (!future.get()) {
+                load_failed.store(true, std::memory_order_relaxed);
+            }
+        }
+
+        if (load_failed.load(std::memory_order_relaxed)) {
             return false;
+        }
+    } else {
+        for (auto & [ctx, buf_map] : ctx_buf_maps) {
+            if (!ml.load_all_data(ctx, buf_map, use_mlock ? &pimpl->mlock_mmaps : NULL, params.progress_callback, params.progress_callback_user_data)) {
+                return false;
+            }
         }
     }
 
