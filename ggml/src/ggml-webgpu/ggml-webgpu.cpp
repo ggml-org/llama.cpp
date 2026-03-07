@@ -1450,7 +1450,14 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
     uint32_t wg_per_head = CEIL_DIV(Q->ne[1], decisions->q_tile);
     uint32_t wg_x        = wg_per_head * Q->ne[2] * Q->ne[3];  // wg per head * number of heads * number of batches
 
-    uint32_t vec_nwg = use_vec_split ? 1u : vec_nwg_cap;
+    uint32_t vec_nwg = 1u;
+    if (use_vec_split) {
+        const uint64_t kv_span = (uint64_t) std::max(1u, decisions->kv_tile);
+        while ((2u * vec_nwg * kv_span) < (uint64_t) K->ne[1] && vec_nwg < vec_nwg_cap) {
+            vec_nwg <<= 1;
+        }
+        vec_nwg = std::min(vec_nwg, vec_nwg_cap);
+    }
 
     bool         have_blk_buf    = false;
     wgpu::Buffer blk_buf         = {};
@@ -1656,7 +1663,7 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
             workgroups_list.push_back({ (uint32_t) nrows, 1u });
         }
 
-        const bool split_passes = use_blk;
+        const bool split_passes = use_blk || use_vec_reduce;
 
         std::vector<wgpu::Buffer> retained_buffers = { tmp_buf };
         if (use_blk) {
