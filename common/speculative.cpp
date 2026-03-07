@@ -529,6 +529,8 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
 
     // consecutive accept rounds with low acceptance fraction (< 0.5)
     int n_low = 0;
+    // hash indices of ngrams consulted during the most recent draft
+    std::vector<size_t> used_hashes;
 
     // enable trace logging if LLAMA_TRACE is set
     const bool verbose;
@@ -560,7 +562,7 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
 
         constexpr double f_thold = 0.25;
         if (f > f_thold) {
-            LOG_WRN("%s: ngram_mod occupancy %.2f exceeds threshold (%.2f) - resetting\n", __func__, f, f_thold);
+            LOG_WRN("%s: ngram_mod occupancy %.2f exceeds threshold (%.2f) - resetting (collisions=%zu)\n", __func__, f, f_thold, mod.get_collisions());
 
             mod.reset();
         }
@@ -574,6 +576,7 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
         GGML_UNUSED(params);
 
         n_draft_last = 0;
+        used_hashes.clear();
 
         const size_t cur_len = prompt_tgt.size();
         if (cur_len < mod.get_n()) {
@@ -609,6 +612,8 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
                 break;
             }
             result[n + i] = token;
+            // remember which hash entry produced this token
+            used_hashes.push_back(mod.index(result.data() + i));
         }
 
         // only return the m tokens that were drafted
@@ -629,18 +634,37 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
         // compute acceptance fraction if we have a recorded draft length
         if (n_draft_last > 0) {
             const double f_acc = (double)n_accepted / (double)n_draft_last;
+
+            // update per-ngram scores based on acceptance outcome
+            for (size_t i = 0; i < n_draft_last; ++i) {
+                if (i < static_cast<size_t>(n_accepted)) {
+                    mod.inc_score_by_index(used_hashes[i]);
+                } else {
+                    mod.dec_score_by_index(used_hashes[i]);
+                }
+            }
+
             if (f_acc < 0.5) {
                 n_low++;
                 if (n_low >= 3) {
-                    LOG_WRN("%s: low acceptance streak (%d) – resetting ngram_mod\n", __func__, n_low);
+                    LOG_WRN("%s: low acceptance streak (%d) - pruning ngram_mod (collisions=%zu)\n", __func__, n_low, mod.get_collisions());
+                    // Log detailed score metrics before pruning
+                    mod.update_score_stats();
+                    LOG_WRN("%s: before prune scores - below_thr=%zu, at_min=%zu, at_max=%zu, at_ins=%zu\n",
+                            __func__,
+                            mod.get_below_thr(),
+                            mod.get_at_min(),
+                            mod.get_at_max(),
+                            mod.get_at_ins());
 
-                    mod.reset();
+                    mod.prune_low_score();
                     n_low = 0;
                 }
             } else {
                 n_low = 0;
             }
         }
+        used_hashes.clear();
     }
 };
 
