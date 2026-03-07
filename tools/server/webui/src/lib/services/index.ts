@@ -212,3 +212,51 @@ export { PropsService } from './props.service';
  * @see ChatSettingsParameterSourceIndicator — displays parameter source badges in UI
  */
 export { ParameterSyncService } from './parameter-sync.service';
+
+/**
+ * **MCPService** - Low-level MCP protocol communication layer
+ *
+ * Implements the client-side MCP (Model Context Protocol) SDK operations for connecting
+ * to MCP servers, discovering capabilities, and executing protocol operations.
+ * Supports multiple transport types: WebSocket, StreamableHTTP, and SSE (legacy fallback).
+ *
+ * **Architecture & Relationships:**
+ * - **MCPService** (this class): Stateless protocol communication
+ *   - Creates and manages transport connections (WebSocket, StreamableHTTP, SSE)
+ *   - Wraps MCP SDK client operations with error handling
+ *   - Formats tool results and extracts server info
+ *   - Provides abort signal support for cancellable operations
+ *
+ * - **mcpStore**: Reactive business logic facade
+ *   - Uses MCPService for all protocol-level operations
+ *   - Manages connection lifecycle, health checks, reconnection
+ *   - Handles tool name conflict resolution and server coordination
+ *
+ * - **mcpResourceStore**: Reactive resource state
+ *   - Receives resource data fetched via MCPService
+ *   - Manages resource caching, subscriptions, and attachments
+ *
+ * - **agenticStore**: Agentic loop orchestration
+ *   - Executes tool calls via mcpStore → MCPService chain
+ *
+ * **Key Responsibilities:**
+ * - Transport creation with automatic fallback (StreamableHTTP → SSE)
+ * - Server connection with detailed phase tracking and progress callbacks
+ * - Tool discovery (`listTools`) and execution (`callTool`) with abort support
+ * - Prompt listing (`listPrompts`) and retrieval (`getPrompt`) with arguments
+ * - Resource operations: list, read, subscribe/unsubscribe, template support
+ * - Completion suggestions for prompt arguments and resource URI templates
+ * - CORS proxy routing via llama-server for cross-origin MCP servers
+ * - Tool result formatting (text, images, embedded resources)
+ *
+ * **Transport Hierarchy:**
+ * 1. **WebSocket** — bidirectional, no CORS proxy support
+ * 2. **StreamableHTTP** — modern HTTP-based, supports CORS proxy
+ * 3. **SSE** — legacy fallback, supports CORS proxy
+ *
+ * @see mcpStore in stores/mcp.svelte.ts — reactive business logic facade on top of MCPService
+ * @see mcpResourceStore in stores/mcp-resources.svelte.ts — reactive resource state management
+ * @see agenticStore in stores/agentic.svelte.ts — uses MCPService (via mcpStore) for tool execution
+ * @see MCP Protocol Specification: https://modelcontextprotocol.io/specification/2025-06-18
+ */
+export { MCPService } from './mcp.service';

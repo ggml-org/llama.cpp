@@ -70,7 +70,7 @@ export { default as SyntaxHighlightedCode } from './SyntaxHighlightedCode.svelte
  *   bind:open
  *   icon={BrainIcon}
  *   title="Thinking..."
- *   isStreaming={true}
+ *   isStreaming
  * >
  *   {reasoningContent}
  * </CollapsibleContentBlock>

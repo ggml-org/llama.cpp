@@ -2,8 +2,10 @@
 sequenceDiagram
     participant UI as 🧩 ChatForm / ChatMessage
     participant chatStore as 🗄️ chatStore
+    participant agenticStore as 🗄️ agenticStore
     participant convStore as 🗄️ conversationsStore
     participant settingsStore as 🗄️ settingsStore
+    participant mcpStore as 🗄️ mcpStore
     participant ChatSvc as ⚙️ ChatService
     participant DbSvc as ⚙️ DatabaseService
     participant API as 🌐 /v1/chat/completions
@@ -25,6 +27,9 @@ sequenceDiagram
         Note over convStore: → see conversations-flow.mmd
     end
 
+    chatStore->>mcpStore: consumeResourceAttachmentsAsExtras()
+    Note right of mcpStore: Converts pending MCP resource<br/>attachments into message extras
+
     chatStore->>chatStore: addMessage("user", content, extras)
     chatStore->>DbSvc: createMessageBranch(userMsg, parentId)
     chatStore->>convStore: addMessageToActive(userMsg)
@@ -38,7 +43,7 @@ sequenceDiagram
     deactivate chatStore
 
     %% ═══════════════════════════════════════════════════════════════════════════
-    Note over UI,API: 🌊 STREAMING
+    Note over UI,API: 🌊 STREAMING (with agentic flow detection)
     %% ═══════════════════════════════════════════════════════════════════════════
 
     activate chatStore
@@ -52,10 +57,17 @@ sequenceDiagram
     chatStore->>chatStore: getApiOptions()
     Note right of chatStore: Merge from settingsStore.config:<br/>temperature, max_tokens, top_p, etc.
 
-    chatStore->>ChatSvc: sendMessage(messages, options, signal)
+    alt agenticConfig.enabled && mcpStore has connected servers
+        chatStore->>agenticStore: runAgenticFlow(convId, messages, assistantMsg, options, signal)
+        Note over agenticStore: Multi-turn agentic loop:<br/>1. Call ChatService.sendMessage()<br/>2. If response has tool_calls → execute via mcpStore<br/>3. Append tool results as messages<br/>4. Loop until no more tool_calls or maxTurns<br/>→ see agentic flow details below
+        agenticStore-->>chatStore: final response with timings
+    else standard (non-agentic) flow
+        chatStore->>ChatSvc: sendMessage(messages, options, signal)
+    end
+
     activate ChatSvc
 
-    ChatSvc->>ChatSvc: convertMessageToChatData(messages)
+    ChatSvc->>ChatSvc: convertDbMessageToApiChatMessageData(messages)
     Note right of ChatSvc: DatabaseMessage[] → ApiChatMessageData[]<br/>Process attachments (images, PDFs, audio)
 
     ChatSvc->>API: POST /v1/chat/completions
@@ -63,7 +75,7 @@ sequenceDiagram
 
     loop SSE chunks
         API-->>ChatSvc: data: {"choices":[{"delta":{...}}]}
-        ChatSvc->>ChatSvc: parseSSEChunk(line)
+        ChatSvc->>ChatSvc: handleStreamResponse(response)
 
         alt content chunk
             ChatSvc-->>chatStore: onChunk(content)
@@ -154,12 +166,15 @@ sequenceDiagram
     Note over UI,API: ✏️ EDIT USER MESSAGE
     %% ═══════════════════════════════════════════════════════════════════════════
 
-    UI->>chatStore: editUserMessagePreserveResponses(msgId, newContent)
+    UI->>chatStore: editMessageWithBranching(msgId, newContent, extras)
     activate chatStore
     chatStore->>chatStore: Get parent of target message
     chatStore->>DbSvc: createMessageBranch(editedMsg, parentId)
     chatStore->>convStore: refreshActiveMessages()
     Note right of chatStore: Creates new branch, original preserved
+    chatStore->>chatStore: createAssistantMessage(editedMsg.id)
+    chatStore->>chatStore: streamChatCompletion(...)
+    Note right of chatStore: Automatically regenerates response
     deactivate chatStore
 
     %% ═══════════════════════════════════════════════════════════════════════════
@@ -171,4 +186,43 @@ sequenceDiagram
     Note right of chatStore: errorDialogState = {type: 'timeout'|'server', message}
     chatStore->>convStore: removeMessageAtIndex(failedMsgIdx)
     chatStore->>DbSvc: deleteMessage(failedMsgId)
+
+    %% ═══════════════════════════════════════════════════════════════════════════
+    Note over UI,API: 🤖 AGENTIC LOOP (when agenticConfig.enabled)
+    %% ═══════════════════════════════════════════════════════════════════════════
+
+    Note over agenticStore: agenticStore.runAgenticFlow(convId, messages, assistantMsg, options, signal)
+    activate agenticStore
+    agenticStore->>agenticStore: getSession(convId) or create new
+    agenticStore->>agenticStore: updateSession(turn: 0, running: true)
+
+    loop executeAgenticLoop (until no tool_calls or maxTurns)
+        agenticStore->>agenticStore: turn++
+        agenticStore->>ChatSvc: sendMessage(messages, options, signal)
+        ChatSvc->>API: POST /v1/chat/completions
+        API-->>ChatSvc: response with potential tool_calls
+        ChatSvc-->>agenticStore: onComplete(content, reasoning, timings, toolCalls)
+
+        alt response has tool_calls
+            agenticStore->>agenticStore: normalizeToolCalls(toolCalls)
+            loop for each tool_call
+                agenticStore->>agenticStore: updateSession(streamingToolCall)
+                agenticStore->>mcpStore: executeTool(mcpCall, signal)
+                mcpStore-->>agenticStore: tool result
+                agenticStore->>agenticStore: extractBase64Attachments(result)
+                agenticStore->>agenticStore: emitToolCallResult(convId, ...)
+                agenticStore->>convStore: addMessageToActive(toolResultMsg)
+                agenticStore->>DbSvc: createMessageBranch(toolResultMsg)
+            end
+            agenticStore->>agenticStore: Create new assistantMsg for next turn
+            Note right of agenticStore: Continue loop with updated messages
+        else no tool_calls (final response)
+            agenticStore->>agenticStore: buildFinalTimings(allTurns)
+            Note right of agenticStore: Break loop, return final response
+        end
+    end
+
+    agenticStore->>agenticStore: updateSession(running: false)
+    agenticStore-->>chatStore: final content, timings, model
+    deactivate agenticStore
 ```

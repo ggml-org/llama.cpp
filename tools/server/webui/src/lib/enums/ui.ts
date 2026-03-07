@@ -5,9 +5,17 @@ export enum ColorMode {
 }
 
 /**
+ * MCP prompt display variant
+ */
+export enum McpPromptVariant {
+	MESSAGE = 'message',
+	ATTACHMENT = 'attachment'
+}
+
+/**
  * URL prefixes for protocol detection
  */
-export enum UrlPrefix {
+export enum UrlProtocol {
 	DATA = 'data:',
 	HTTP = 'http://',
 	HTTPS = 'https://',
