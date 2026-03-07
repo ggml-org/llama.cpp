@@ -213,7 +213,7 @@ extern "C" {
     typedef bool (*llama_progress_callback)(float progress, void * user_data);
 
     // called after graph build but before memory allocation in llama_decode/llama_encode
-    // use ggml_backend_sched_set_tensor_backend() to reassign ops to a different backend
+    // use ggml_backend_sched_set_tensor_backend() to reassign graph nodes to a different backend
     // NOTE: not called when a previous graph is reused; assignments from the last invocation
     //       persist. set LLAMA_GRAPH_REUSE_DISABLE=1 for per-decode control.
     typedef void (*llama_pre_alloc_callback)(ggml_backend_sched_t sched, struct ggml_cgraph * gf, void * user_data);
