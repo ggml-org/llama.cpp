@@ -5166,12 +5166,8 @@ class Phi4VisionMmprojModel(MmprojModel):
             if ".vision_model.post_layernorm." in new_name:
                 return
 
-            layer_prefix = "vision_tower.vision_model.encoder.layers."
-            if new_name.startswith(layer_prefix):
-                layer_suffix = new_name[len(layer_prefix):]
-                layer_idx = layer_suffix.split(".", maxsplit=1)[0]
-                if layer_idx.isdigit() and int(layer_idx) == self.vision_last_layer_idx:
-                    return
+            if bid is not None and bid == self.vision_last_layer_idx:
+                return
 
             if new_name.endswith("vision_model.embeddings.patch_embedding.weight"):
                 if data_torch.ndim != 2:

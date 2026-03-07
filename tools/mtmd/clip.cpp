@@ -3072,22 +3072,15 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                 // res_imgs->data[0] = *res;
                 res_imgs->entries.push_back(std::move(img_f32));
             } break;
-        case PROJECTOR_TYPE_PHI4:
+            case PROJECTOR_TYPE_PHI4:
             {
-                GGML_ASSERT(params.image_min_pixels > 0 && params.image_max_pixels > 0);
                 const int patch_size = params.patch_size;
-                const int patch_area = patch_size * patch_size;
-                GGML_ASSERT(params.image_min_pixels % patch_area == 0);
-                GGML_ASSERT(params.image_max_pixels % patch_area == 0);
-
-                const int min_num_patches = params.image_min_pixels / patch_area;
-                const int max_num_patches = params.image_max_pixels / patch_area;
-                int num_patches = std::max((original_size.height / patch_size) * (original_size.width / patch_size), 1);
-                if (num_patches < min_num_patches) {
-                    num_patches = min_num_patches;
-                } else if (num_patches > max_num_patches) {
-                    num_patches = max_num_patches;
-                }
+                const int ps2 = patch_size * patch_size;
+                const int min_patches = params.image_min_pixels / ps2;
+                const int max_patches = params.image_max_pixels / ps2;
+                const int num_patches = std::clamp(
+                    std::max((original_size.height / patch_size) * (original_size.width / patch_size), 1),
+                    min_patches, max_patches);
 
                 clip_image_u8 resized;
                 const clip_image_size target_size = img_tool::calc_size_siglip2(
@@ -3097,7 +3090,7 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                 normalize_image_u8_to_f32(resized, *img_f32, params.image_mean, params.image_std);
                 res_imgs->entries.push_back(std::move(img_f32));
             } break;
-        case PROJECTOR_TYPE_YOUTUVL:
+            case PROJECTOR_TYPE_YOUTUVL:
             {
                 const int patch_size = params.patch_size;  // typically 16
                 const int merge_size = params.n_merge;      // typically 2
@@ -3417,8 +3410,6 @@ int clip_n_output_tokens_x(const struct clip_ctx * ctx, struct clip_image_f32 * 
     const int n_total = clip_n_output_tokens(ctx, img);
     const auto & proj = ctx->proj_type();
     switch (proj) {
-        case PROJECTOR_TYPE_PHI4:
-            return img->nx / params.patch_size;
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_QWEN3VL:
@@ -3436,8 +3427,6 @@ int clip_n_output_tokens_y(const struct clip_ctx * ctx, struct clip_image_f32 * 
     const auto & params = ctx->model.hparams;
     const auto & proj = ctx->proj_type();
     switch (proj) {
-        case PROJECTOR_TYPE_PHI4:
-            return img->ny / params.patch_size;
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_QWEN3VL:
