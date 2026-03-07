@@ -12876,7 +12876,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         case GGML_UNARY_OP_FLOOR:
         case GGML_UNARY_OP_TRUNC:
             ggml_vk_unary(ctx, compute_ctx, src0, node);
-            break;        
+            break;
         case GGML_UNARY_OP_XIELU:
             ggml_vk_xielu(ctx, compute_ctx, src0, node);
             break;
