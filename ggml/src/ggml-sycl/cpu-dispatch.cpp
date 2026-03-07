@@ -1086,6 +1086,29 @@ static inline float silu_f32(float x) {
     return x / (1.0f + expf(-x));
 }
 
+// swiglu_oai activation: clamp(gate)/(1+exp(-gate*alpha)) * (1+clamp(up))
+static inline float swiglu_oai_f32(float gate, float up, float alpha, float limit) {
+    gate      = std::fmin(gate, limit);
+    up        = std::fmax(std::fmin(up, limit), -limit);
+    float out = gate / (1.0f + expf(-gate * alpha));
+    return out * (1.0f + up);
+}
+
+// Dispatch activation function based on variant.
+static inline float fused_act_apply(float                gate_val,
+                                    float                up_val,
+                                    cpu_expert_fused_act variant,
+                                    float                alpha,
+                                    float                limit) {
+    switch (variant) {
+        case CPU_EXPERT_FUSED_ACT_SWIGLU_OAI:
+            return swiglu_oai_f32(gate_val, up_val, alpha, limit);
+        case CPU_EXPERT_FUSED_ACT_SILU:
+        default:
+            return silu_f32(gate_val) * up_val;
+    }
+}
+
 void ggml_sycl_cpu_expert_fused_gate_up_silu(const cpu_expert_fused_task & task) {
     if (task.N <= 0 || task.K <= 0 || !task.weight_gate || !task.weight_up ||
         !task.act_host || !task.output_host) {
@@ -1147,7 +1170,8 @@ void ggml_sycl_cpu_expert_fused_gate_up_silu(const cpu_expert_fused_task & task)
                                             gate_row, 0, act_q, 0, 1);
                         cpu_traits->vec_dot(task.K, &up_val, sizeof(float),
                                             up_row, 0, act_q, 0, 1);
-                        task.output_host[i] = silu_f32(gate_val) * up_val;
+                        task.output_host[i] =
+                            fused_act_apply(gate_val, up_val, task.act_variant, task.alpha, task.limit);
                     }
                 });
         });
@@ -1168,7 +1192,7 @@ void ggml_sycl_cpu_expert_fused_gate_up_silu(const cpu_expert_fused_task & task)
                             gate_row, 0, act_q, 0, 1);
         cpu_traits->vec_dot(task.K, &up_val, sizeof(float),
                             up_row, 0, act_q, 0, 1);
-        task.output_host[i] = silu_f32(gate_val) * up_val;
+        task.output_host[i] = fused_act_apply(gate_val, up_val, task.act_variant, task.alpha, task.limit);
     }
 }
 
@@ -1277,7 +1301,8 @@ void ggml_sycl_cpu_expert_fused_gate_up_silu_batched(
                                         gate_row, 0, act_q, 0, 1);
                     cpu_traits->vec_dot(task.K, &up_val, sizeof(float),
                                         up_row, 0, act_q, 0, 1);
-                    task.output_host[m.row_idx] = silu_f32(gate_val) * up_val;
+                    task.output_host[m.row_idx] =
+                        fused_act_apply(gate_val, up_val, task.act_variant, task.alpha, task.limit);
                 }
             });
     });
@@ -1296,7 +1321,7 @@ void ggml_sycl_cpu_expert_fused_gate_up_silu_batched(
                             gate_row, 0, task_act_q[m.task_idx], 0, 1);
         cpu_traits->vec_dot(task.K, &up_val, sizeof(float),
                             up_row, 0, task_act_q[m.task_idx], 0, 1);
-        task.output_host[m.row_idx] = silu_f32(gate_val) * up_val;
+        task.output_host[m.row_idx] = fused_act_apply(gate_val, up_val, task.act_variant, task.alpha, task.limit);
     }
 #endif
 }

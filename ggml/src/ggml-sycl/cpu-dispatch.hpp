@@ -184,14 +184,22 @@ void ggml_sycl_cpu_expert_mul_mat_adaptive(
 // against a shared quantized activation. The SiLU activation function
 // (x * sigmoid(x)) and element-wise multiply are applied inline.
 
+enum cpu_expert_fused_act {
+    CPU_EXPERT_FUSED_ACT_SILU       = 0,  // SiLU(gate) * up (standard)
+    CPU_EXPERT_FUSED_ACT_SWIGLU_OAI = 1,  // clamp(gate)/(1+exp(-gate*alpha)) * (1+clamp(up))
+};
+
 struct cpu_expert_fused_task {
-    const void *  weight_gate;   // Gate projection weights in host RAM (quantized)
-    const void *  weight_up;     // Up projection weights in host RAM (quantized)
-    const float * act_host;      // Activation vector (float32, length K)
-    float *       output_host;   // Output buffer (float32, length N)
-    ggml_type     type;          // Weight quant type (must match for gate and up)
-    int           K;             // Input dimension (columns per weight row)
-    int           N;             // Output rows (intermediate dimension)
+    const void *         weight_gate;         // Gate projection weights in host RAM (quantized)
+    const void *         weight_up;           // Up projection weights in host RAM (quantized)
+    const float *        act_host;            // Activation vector (float32, length K)
+    float *              output_host;         // Output buffer (float32, length N)
+    ggml_type            type;                // Weight quant type (must match for gate and up)
+    int                  K;                   // Input dimension (columns per weight row)
+    int                  N;                   // Output rows (intermediate dimension)
+    cpu_expert_fused_act act_variant = CPU_EXPERT_FUSED_ACT_SILU;
+    float                alpha       = 0.0f;  // Alpha for swiglu_oai (default 1.702)
+    float                limit       = 0.0f;  // Clamp limit for swiglu_oai (default 7.0)
 };
 
 // Compute one expert's fused gate+up+SiLU on CPU.

@@ -3769,6 +3769,12 @@ struct moe_fusion_state {
 
 static thread_local moe_fusion_state g_moe_fusion;
 
+// MoE activation variant detected from graph structure.
+// Set once during first graph_compute, used by fusion to select correct activation.
+static std::atomic<int> g_moe_fused_act_variant{ -1 };  // -1 = not yet detected
+static float            g_moe_fused_act_alpha = 0.0f;
+static float            g_moe_fused_act_limit = 0.0f;
+
 // MoE fusion env var: GGML_SYCL_MOE_FUSE (default: 1 = enabled)
 static bool ggml_sycl_moe_fusion_enabled() {
     static std::atomic<int> moe_fusion_mode{ -1 };
@@ -25752,6 +25758,11 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         ft = heap_ft.data();
                     }
 
+                    const int                  av    = g_moe_fused_act_variant.load(std::memory_order_acquire);
+                    const cpu_expert_fused_act act_v = (av == CPU_EXPERT_FUSED_ACT_SWIGLU_OAI) ?
+                                                           CPU_EXPERT_FUSED_ACT_SWIGLU_OAI :
+                                                           CPU_EXPERT_FUSED_ACT_SILU;
+
                     for (size_t ci = 0; ci < n_cpu_f; ci++) {
                         const int32_t eid  = g_moe_fusion.ids_data[ci];
                         ft[ci].weight_gate = static_cast<const char *>(g_moe_fusion.gate_data) +
@@ -25762,6 +25773,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         ft[ci].type        = g_moe_fusion.type;
                         ft[ci].K           = g_moe_fusion.K;
                         ft[ci].N           = static_cast<int>(N_f);
+                        ft[ci].act_variant = act_v;
+                        ft[ci].alpha       = g_moe_fused_act_alpha;
+                        ft[ci].limit       = g_moe_fused_act_limit;
                     }
 
                     ggml_sycl_cpu_expert_fused_gate_up_silu_batched(ft, static_cast<int>(n_cpu_f));
@@ -31453,6 +31467,29 @@ static bool check_graph_compatibility(ggml_backend_sycl_context & ctx, ggml_cgra
         }
         // Continue - graph_preload_moe_experts() will update pointer tables per ids
     }
+
+    // Detect MoE activation variant for fusion (only once).
+    // Scans for GLU ops in the graph and extracts swiglu_oai parameters.
+    if (g_moe_fused_act_variant.load(std::memory_order_acquire) < 0) {
+        for (int i = 0; i < cgraph->n_nodes; i++) {
+            if (cgraph->nodes[i]->op == GGML_OP_GLU) {
+                const int glu_op = ggml_get_op_params_i32(cgraph->nodes[i], 0);
+                if (glu_op == GGML_GLU_OP_SWIGLU_OAI) {
+                    g_moe_fused_act_alpha = ggml_get_op_params_f32(cgraph->nodes[i], 2);
+                    g_moe_fused_act_limit = ggml_get_op_params_f32(cgraph->nodes[i], 3);
+                    g_moe_fused_act_variant.store(CPU_EXPERT_FUSED_ACT_SWIGLU_OAI, std::memory_order_release);
+                } else {
+                    g_moe_fused_act_variant.store(CPU_EXPERT_FUSED_ACT_SILU, std::memory_order_release);
+                }
+                break;
+            }
+        }
+        // No GLU found — default to SiLU
+        if (g_moe_fused_act_variant.load(std::memory_order_acquire) < 0) {
+            g_moe_fused_act_variant.store(CPU_EXPERT_FUSED_ACT_SILU, std::memory_order_release);
+        }
+    }
+
     for (int i = 0; i < cgraph->n_nodes; i++) {
         const ggml_op node_op = cgraph->nodes[i]->op;
         switch (node_op) {
