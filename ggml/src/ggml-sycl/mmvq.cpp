@@ -2317,6 +2317,16 @@ static void coalesced_mul_mat_vec_mxfp4_q8_1_sycl(const void *    vx,
     });
 }
 
+// Public wrapper for coalesced MXFP4 MMVQ kernel (used by direct dispatch in ggml-sycl.cpp)
+void mmvq_submit_mxfp4_coalesced(sycl::queue & q,
+                                  const void * vx,
+                                  const void * vy,
+                                  float *      dst,
+                                  int          ncols,
+                                  int          nrows) {
+    coalesced_mul_mat_vec_mxfp4_q8_1_sycl(vx, vy, dst, ncols, nrows, &q);
+}
+
 // Dispatch function for coalesced Q6_K MMVQ kernel
 // Now uses variable tile kernel which handles any block count
 // total_nrows is the full tensor row count (ne01), nrows is the slice size (row_diff)

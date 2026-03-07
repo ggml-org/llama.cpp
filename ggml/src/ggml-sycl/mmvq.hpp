@@ -109,6 +109,16 @@ void mmvq_submit_mxfp4_soa(sycl::queue & q,
                             int          total_nrows,
                             int          row_low);
 
+// Coalesced MXFP4 MMVQ kernel submission
+// vx: coalesced-layout weights (quants tiled word-major, then exponents)
+// vy: SOA Q8_1 activations (quants[ncols] then ds[ncols/QK8_1])
+void mmvq_submit_mxfp4_coalesced(sycl::queue & q,
+                                  const void * vx,
+                                  const void * vy,
+                                  float *      dst,
+                                  int          ncols,
+                                  int          nrows);
+
 // Float-to-Q8_1 SOA quantization kernel submission for micro-graph
 // Input:  x[ncols] float activations
 // Output: y_q8[ncols + ncols/QK8_1 * 4] SOA Q8_1

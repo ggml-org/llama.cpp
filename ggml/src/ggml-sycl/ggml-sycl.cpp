@@ -22741,22 +22741,57 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                                 (long long) M, (long long) K, (long long) N, (long long) n_batch,
                                 src0_data, src1_data, dst_data, (int)data_layout);
 
-                // Dispatch per-row with M=1 to use the DMMV path.
-                // The scalar tiled kernel (used for M>1) has untested MXFP4 support.
-                for (int64_t i0 = 0; i0 < n_batch; ++i0) {
-                    const int64_t src0_batch = i0 / i02_divisor;
-                    const char *  src0_batch_ptr =
-                        static_cast<const char *>(src0_data) + src0_batch * src0_plane_bytes;
-                    const float * src1_batch_ptr = src1_data + i0 * src1_plane_elems;
-                    float *       dst_batch_ptr  = dst_data  + i0 * dst_plane_elems;
+                // For COALESCED or SOA layouts, use MMVQ kernels that understand
+                // these formats. The unified kernel only handles AOS for MXFP4.
+                if (data_layout == ggml_sycl_unified::LayoutMode::COALESCED ||
+                    data_layout == ggml_sycl_unified::LayoutMode::SOA) {
+                    // Allocate SOA Q8_1 buffer for src1 quantization
+                    const size_t q8_soa_bytes = mmvq_q8_1_soa_size(static_cast<int>(K));
+                    ggml_sycl_pool_alloc<uint8_t> q8_pool(ctx.pool(), q8_soa_bytes);
+                    void * q8_soa = q8_pool.get();
 
-                    for (int64_t m = 0; m < M; ++m) {
-                        ggml_sycl::ggml_sycl_mul_mat_unified_default(
-                            *ctx.stream(),
-                            src0_batch_ptr,
-                            src1_batch_ptr + m * K,
-                            dst_batch_ptr + m * N,
-                            1, N, K, src0->type, data_layout);
+                    for (int64_t i0 = 0; i0 < n_batch; ++i0) {
+                        const int64_t src0_batch = i0 / i02_divisor;
+                        const char *  src0_batch_ptr =
+                            static_cast<const char *>(src0_data) + src0_batch * src0_plane_bytes;
+                        const float * src1_batch_ptr = src1_data + i0 * src1_plane_elems;
+                        float *       dst_batch_ptr  = dst_data  + i0 * dst_plane_elems;
+
+                        for (int64_t m = 0; m < M; ++m) {
+                            // Quantize src1 row to SOA Q8_1 format
+                            mmvq_submit_quantize_q8_1_soa(*ctx.stream(),
+                                src1_batch_ptr + m * K, q8_soa, static_cast<int>(K));
+
+                            if (data_layout == ggml_sycl_unified::LayoutMode::COALESCED) {
+                                mmvq_submit_mxfp4_coalesced(*ctx.stream(),
+                                    src0_batch_ptr, q8_soa, dst_batch_ptr + m * N,
+                                    static_cast<int>(K), static_cast<int>(N));
+                            } else {
+                                // SOA layout: total_nrows=N, row_low=0 (full expert slice)
+                                mmvq_submit_mxfp4_soa(*ctx.stream(),
+                                    src0_batch_ptr, q8_soa, dst_batch_ptr + m * N,
+                                    static_cast<int>(K), static_cast<int>(N),
+                                    static_cast<int>(N), 0);
+                            }
+                        }
+                    }
+                } else {
+                    // AOS layout: use unified kernel (existing path)
+                    for (int64_t i0 = 0; i0 < n_batch; ++i0) {
+                        const int64_t src0_batch = i0 / i02_divisor;
+                        const char *  src0_batch_ptr =
+                            static_cast<const char *>(src0_data) + src0_batch * src0_plane_bytes;
+                        const float * src1_batch_ptr = src1_data + i0 * src1_plane_elems;
+                        float *       dst_batch_ptr  = dst_data  + i0 * dst_plane_elems;
+
+                        for (int64_t m = 0; m < M; ++m) {
+                            ggml_sycl::ggml_sycl_mul_mat_unified_default(
+                                *ctx.stream(),
+                                src0_batch_ptr,
+                                src1_batch_ptr + m * K,
+                                dst_batch_ptr + m * N,
+                                1, N, K, src0->type, data_layout);
+                        }
                     }
                 }
                 return;
@@ -25602,7 +25637,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 const int    cur_layer_fast = parse_layer_id_from_name(tname_fast);
 
                 // GATE: resolve IDs + activation, save state, skip compute
-                if (ggml_sycl_moe_fusion_enabled() && is_gate_fast && cur_layer_fast >= 0) {
+                if (ggml_sycl_moe_fusion_enabled() && is_gate_fast && cur_layer_fast >= 0 &&
+                    src0->type != GGML_TYPE_MXFP4) {
                     ctx.moe_graphs_disabled_once = true;
                     const queue_ptr stream       = ctx.stream();
                     const int64_t   K_f          = ne00;
