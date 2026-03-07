@@ -3159,6 +3159,9 @@ static struct ggml_threadpool * ggml_threadpool_new_impl(
     for (int j = 0; j < tpp->n_threads; j++) {
         workers[j].threadpool = threadpool;
         workers[j].ith        = j;
+        memset(workers[j].cpumask, 0, GGML_MAX_N_THREADS);
+        //workers[j].cpumask[(j/3)*8+(j%3)*2]=1; 
+        workers[j].cpumask[j*2] = 1;
     }
 
     threadpool->workers = workers;
@@ -3180,15 +3183,15 @@ static struct ggml_threadpool * ggml_threadpool_new_impl(
     int32_t cpumask_iter = 0;
 
     for (int j = 1; j < tpp->n_threads; j++) {
-        ggml_thread_cpumask_next(tpp->cpumask, workers[j].cpumask, tpp->strict_cpu, &cpumask_iter);
+        //ggml_thread_cpumask_next(tpp->cpumask, workers[j].cpumask, tpp->strict_cpu, &cpumask_iter);
 
         int32_t rc = ggml_thread_create(&workers[j].thrd, NULL, ggml_graph_compute_secondary_thread, &workers[j]);
         GGML_ASSERT(rc == 0);
     }
 
-    ggml_thread_cpumask_next(tpp->cpumask, workers[0].cpumask, tpp->strict_cpu, &cpumask_iter);
+    //ggml_thread_cpumask_next(tpp->cpumask, workers[0].cpumask, tpp->strict_cpu, &cpumask_iter);
 
-    if (!threadpool->pause) {
+    if (true || !threadpool->pause) {
         // Update main thread prio and affinity at the start, otherwise we'll do it in resume
         ggml_thread_apply_priority(threadpool->prio);
         if (ggml_thread_cpumask_is_valid(threadpool->workers[0].cpumask)) {
@@ -3270,7 +3273,7 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
 #endif
 
     // don't leave affinity set on the main thread
-    clear_numa_thread_affinity();
+    // clear_numa_thread_affinity();
 
     enum ggml_status ret = threadpool->ec;
 
