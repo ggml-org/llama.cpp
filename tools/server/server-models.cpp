@@ -351,6 +351,14 @@ void server_models::load_models() {
         }
     }
 
+    // handle custom pin option
+    for (auto & [name, inst] : mapping) {
+        std::string val;
+        if (inst.meta.preset.get_option(COMMON_ARG_PRESET_PIN, val)) {
+            inst.meta.pinned = true;
+        }
+    }
+
     // load any autoload models
     std::vector<std::string> models_to_load;
     for (const auto & [name, inst] : mapping) {
@@ -505,7 +513,9 @@ void server_models::unload_lru() {
         for (const auto & m : mapping) {
             if (m.second.meta.is_active()) {
                 count_active++;
-                if (m.second.meta.last_used < lru_last_used) {
+                // If all active models are pinned, this condition never holds and no LRU eviction will occur.
+                // We throw an error instead of allowing the server to exceed models_max.
+                if (!m.second.meta.pinned && m.second.meta.last_used < lru_last_used) {
                     lru_model_name = m.first;
                     lru_last_used = m.second.meta.last_used;
                 }
@@ -522,6 +532,11 @@ void server_models::unload_lru() {
                 return mapping[lru_model_name].meta.status == SERVER_MODEL_STATUS_UNLOADED;
             });
         }
+    } else if (count_active >= (size_t)base_params.models_max) {
+        throw std::runtime_error(string_format(
+            "models_max limit (%d) reached, but no unpinned models available for LRU eviction - cannot load more models",
+            base_params.models_max
+        ));
     }
 }
 
