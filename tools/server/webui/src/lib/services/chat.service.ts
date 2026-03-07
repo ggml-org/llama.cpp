@@ -12,7 +12,15 @@ import {
 	ReasoningFormat,
 	UrlProtocol
 } from '$lib/enums';
-import type { ApiChatMessageContentPart, ApiChatCompletionToolCall } from '$lib/types/api';
+import type {
+	ApiChatCompletionRequest,
+	ApiChatCompletionResponse,
+	ApiChatCompletionStreamChunk,
+	ApiChatCompletionToolCall,
+	ApiChatCompletionToolCallDelta,
+	ApiChatMessageContentPart,
+	ApiChatMessageData
+} from '$lib/types/api';
 import type { DatabaseMessageExtraMcpPrompt, DatabaseMessageExtraMcpResource } from '$lib/types';
 import { modelsStore } from '$lib/stores/models.svelte';
 
@@ -822,7 +830,7 @@ export class ChatService {
 	 * @param response - HTTP response object
 	 * @returns Promise<Error> - Parsed error with context info if available
 	 */
-	private static async parseErrorResponse(
+	public static async parseErrorResponse(
 		response: Response
 	): Promise<Error & { contextInfo?: { n_prompt_tokens: number; n_ctx: number } }> {
 		try {
@@ -864,9 +872,8 @@ export class ChatService {
 	 *
 	 * @param data - Raw response data from the Chat Completions API
 	 * @returns Model name string if found, undefined otherwise
-	 * @private
 	 */
-	private static extractModelName(data: unknown): string | undefined {
+	public static extractModelName(data: unknown): string | undefined {
 		const asRecord = (value: unknown): Record<string, unknown> | undefined => {
 			return typeof value === 'object' && value !== null
 				? (value as Record<string, unknown>)

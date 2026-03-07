@@ -199,6 +199,17 @@ class ModelsStore {
 	}
 
 	/**
+	 * Get context size valid both in MODEL or ROUTER modes
+	 */
+	get contextSize(): number | null {
+		if (serverStore.isRouterMode) {
+			return this.selectedModelContextSize;
+		}
+
+		return serverStore.contextSize;
+	}
+
+	/**
 	 * Check if props are being fetched for a model
 	 */
 	isModelPropsFetching(modelId: string): boolean {
@@ -713,4 +724,5 @@ export const loadingModelIds = () => modelsStore.loadingModelIds;
 export const propsCacheVersion = () => modelsStore.propsCacheVersion;
 export const singleModelName = () => modelsStore.singleModelName;
 export const selectedModelContextSize = () => modelsStore.selectedModelContextSize;
+export const getContextSize = () => modelsStore.contextSize;
 export const favouriteModelIds = () => modelsStore.favouriteModelIds;

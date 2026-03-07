@@ -16,6 +16,15 @@ export interface UseProcessingStateReturn {
 	stopMonitoring(): void;
 }
 
+export function getETASecs(done: number, total: number, elapsedMs: number): number | undefined {
+	const elapsedSecs = elapsedMs / 1000;
+	const progressETASecs =
+		done === 0 || elapsedSecs < 0.5
+			? undefined // can be the case for the 0% progress report
+			: elapsedSecs * (total / done - 1);
+	return progressETASecs;
+}
+
 /**
  * useProcessingState - Reactive processing state hook
  *
@@ -71,15 +80,6 @@ export function useProcessingState(): UseProcessingStateReturn {
 			}
 		}
 	});
-
-	function getETASecs(done: number, total: number, elapsedMs: number): number | undefined {
-		const elapsedSecs = elapsedMs / 1000;
-		const progressETASecs =
-			done === 0 || elapsedSecs < 0.5
-				? undefined // can be the case for the 0% progress report
-				: elapsedSecs * (total / done - 1);
-		return progressETASecs;
-	}
 
 	function startMonitoring(): void {
 		if (isMonitoring) return;
