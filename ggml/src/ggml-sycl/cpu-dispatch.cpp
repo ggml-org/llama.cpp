@@ -282,6 +282,18 @@ static inline void simd_mul_mat_q4_0_q8_0_4row_int4(
     const void * GGML_RESTRICT vx0, const void * GGML_RESTRICT vx1,
     const void * GGML_RESTRICT vx2, const void * GGML_RESTRICT vx3,
     const void * GGML_RESTRICT vy);
+// 4-row MXFP4 x Q8_0 dot product: shares activation load across 4 weight rows.
+static inline void simd_mul_mat_mxfp4_q8_0_4row(
+    int K_elem, float * GGML_RESTRICT out,
+    const void * GGML_RESTRICT vx0, const void * GGML_RESTRICT vx1,
+    const void * GGML_RESTRICT vx2, const void * GGML_RESTRICT vx3,
+    const void * GGML_RESTRICT vy);
+// Fused gate+up+SiLU: computes SiLU(dot(gate_row, act)) * dot(up_row, act)
+static inline void simd_fused_gate_up_silu_q4_0_q8_0(
+    int K_elem, float * GGML_RESTRICT out,
+    const void * GGML_RESTRICT v_gate,
+    const void * GGML_RESTRICT v_up,
+    const void * GGML_RESTRICT vy);
 #if defined(__AVXVNNIINT8__)
 static inline void simd_mul_mat_q4_0_q8_0_8row(
     int K_elem, float * GGML_RESTRICT out,
@@ -707,52 +719,113 @@ void ggml_sycl_cpu_expert_mul_mat_batched(
                     }
                 }
 
-                for (int flat_r = range.begin(); flat_r < range.end(); flat_r++) {
+                int flat_r = range.begin();
+                while (flat_r < range.end()) {
                     while (cur_task + 1 < n_tasks
                            && flat_r >= meta_ptr[cur_task + 1].prefix_rows) {
                         cur_task++;
                     }
                     const auto & m = meta_ptr[cur_task];
                     if (!m.cpu_traits) {
+                        flat_r++;
                         continue;
                     }
                     const auto & t  = tasks_ptr[cur_task];
                     int local_r     = flat_r - m.prefix_rows;
+                    // How many consecutive rows remain in this task within this range?
+                    int task_rows_left = t.N - local_r;
+                    int range_left     = range.end() - flat_r;
+                    int chunk          = std::min(task_rows_left, range_left);
 
-                    const void * row =
-                        (const char *) t.weight_host + (size_t) local_r * m.row_stride;
+                    // Multi-row SIMD fast path: process 4/8/16 rows at once,
+                    // loading each Q8 activation block once per group.
+                    int i = 0;
+#if defined(__AVX2__)
+                    if (t.type == GGML_TYPE_Q4_0 && chunk >= 4) {
+                        const char * wbase = (const char *) t.weight_host
+                                             + (size_t) local_r * m.row_stride;
+                        const void * act_q = q8_ptrs[cur_task];
+                        float *      out   = t.output_host + local_r;
 
-                    // Prefetch next row's weight data into L2 while computing current row.
-                    // Weight rows are large (e.g. 2176 bytes for MXFP4 K=4096), so
-                    // prefetching the first few cache lines hides DRAM latency.
-                    if (flat_r + 1 < range.end()) {
-                        // Determine next row within same or next task
-                        int next_task = cur_task;
-                        int next_local_r = local_r + 1;
-                        if (flat_r + 1 >= meta_ptr[cur_task].prefix_rows + tasks_ptr[cur_task].N) {
-                            // Next row is in a different task
-                            next_task = cur_task + 1;
-                            while (next_task < n_tasks && !meta_ptr[next_task].cpu_traits) {
-                                next_task++;
+#if defined(__AVXVNNIINT8__)
+                        // 16-row VNNI kernel
+                        for (; i + 15 < chunk; i += 16) {
+                            const void * row_ptrs[16];
+                            for (int k = 0; k < 16; k++) {
+                                row_ptrs[k] = wbase + (size_t)(i + k) * m.row_stride;
                             }
-                            next_local_r = 0;
+                            simd_mul_mat_q4_0_q8_0_16row(t.K, out + i, row_ptrs,
+                                                         (const uint8_t *) act_q);
                         }
-                        if (next_task < n_tasks && meta_ptr[next_task].cpu_traits) {
-                            const char * next_row =
-                                (const char *) tasks_ptr[next_task].weight_host
-                                + (size_t) next_local_r * meta_ptr[next_task].row_stride;
-                            // Prefetch first 4 cache lines (256 bytes) of next weight row
-                            __builtin_prefetch(next_row,        0, 1);
-                            __builtin_prefetch(next_row + 64,   0, 1);
-                            __builtin_prefetch(next_row + 128,  0, 1);
-                            __builtin_prefetch(next_row + 192,  0, 1);
+                        // 8-row VNNI kernel
+                        for (; i + 7 < chunk; i += 8) {
+                            simd_mul_mat_q4_0_q8_0_8row(
+                                t.K, out + i,
+                                wbase + (size_t)(i + 0) * m.row_stride,
+                                wbase + (size_t)(i + 1) * m.row_stride,
+                                wbase + (size_t)(i + 2) * m.row_stride,
+                                wbase + (size_t)(i + 3) * m.row_stride,
+                                wbase + (size_t)(i + 4) * m.row_stride,
+                                wbase + (size_t)(i + 5) * m.row_stride,
+                                wbase + (size_t)(i + 6) * m.row_stride,
+                                wbase + (size_t)(i + 7) * m.row_stride,
+                                (const uint8_t *) act_q);
+                        }
+#endif
+                        // 4-row AVX2 kernel
+                        for (; i + 3 < chunk; i += 4) {
+                            simd_mul_mat_q4_0_q8_0_4row(
+                                t.K, out + i,
+                                wbase + (size_t)(i + 0) * m.row_stride,
+                                wbase + (size_t)(i + 1) * m.row_stride,
+                                wbase + (size_t)(i + 2) * m.row_stride,
+                                wbase + (size_t)(i + 3) * m.row_stride,
+                                act_q);
+                        }
+                    } else if (t.type == GGML_TYPE_Q6_K && chunk >= 4) {
+                        const char * wbase = (const char *) t.weight_host
+                                             + (size_t) local_r * m.row_stride;
+                        const void * act_q = q8_ptrs[cur_task];
+                        float *      out   = t.output_host + local_r;
+
+                        for (; i + 3 < chunk; i += 4) {
+                            simd_mul_mat_q6_K_q8_K_4row(
+                                t.K, out + i,
+                                wbase + (size_t)(i + 0) * m.row_stride,
+                                wbase + (size_t)(i + 1) * m.row_stride,
+                                wbase + (size_t)(i + 2) * m.row_stride,
+                                wbase + (size_t)(i + 3) * m.row_stride,
+                                (const uint8_t *) act_q);
+                        }
+                    } else if (t.type == GGML_TYPE_MXFP4 && chunk >= 4) {
+                        const char * wbase = (const char *) t.weight_host
+                                             + (size_t) local_r * m.row_stride;
+                        const void * act_q = q8_ptrs[cur_task];
+                        float *      out   = t.output_host + local_r;
+
+                        for (; i + 3 < chunk; i += 4) {
+                            simd_mul_mat_mxfp4_q8_0_4row(
+                                t.K, out + i,
+                                wbase + (size_t)(i + 0) * m.row_stride,
+                                wbase + (size_t)(i + 1) * m.row_stride,
+                                wbase + (size_t)(i + 2) * m.row_stride,
+                                wbase + (size_t)(i + 3) * m.row_stride,
+                                act_q);
                         }
                     }
+#endif
+                    // Remainder: single-row generic vec_dot
+                    for (; i < chunk; i++) {
+                        int row_idx      = local_r + i;
+                        const void * row =
+                            (const char *) t.weight_host + (size_t) row_idx * m.row_stride;
+                        float dot = 0.0f;
+                        m.cpu_traits->vec_dot(t.K, &dot, sizeof(float),
+                                              row, 0, q8_ptrs[cur_task], 0, 1);
+                        t.output_host[row_idx] = dot;
+                    }
 
-                    float dot = 0.0f;
-                    m.cpu_traits->vec_dot(t.K, &dot, sizeof(float),
-                                          row, 0, q8_ptrs[cur_task], 0, 1);
-                    t.output_host[local_r] = dot;
+                    flat_r += chunk;
                 }
             });
     });
@@ -943,6 +1016,238 @@ void ggml_sycl_cpu_expert_mul_mat_adaptive(
     GGML_SYCL_DEBUG("[EXPERT-CPU] Adaptive dispatch: %d full, %d int4-reduced "
                     "(threshold=%d, total_miss=%d)\n",
                     n_full, n_reduced, threshold, n_miss_total);
+}
+
+// ---------------------------------------------------------------------------
+// Fused Gate+Up+SiLU MoE Expert Kernel
+// ---------------------------------------------------------------------------
+//
+// Computes output[i] = SiLU(dot(W_gate[i], act)) * dot(W_up[i], act)
+// in a single pass over the activation data. Halves DRAM bandwidth for
+// the gate+up phase: one activation load serves both gate and up rows.
+//
+// SiLU(x) = x * sigmoid(x) = x / (1 + exp(-x))
+//
+// The fused output replaces both gate_proj and up_proj outputs. The caller
+// must route the down_proj MUL_MAT to use this fused result as input.
+
+static inline float silu_f32(float x) {
+    return x / (1.0f + expf(-x));
+}
+
+void ggml_sycl_cpu_expert_fused_gate_up_silu(const cpu_expert_fused_task & task) {
+    if (task.N <= 0 || task.K <= 0 || !task.weight_gate || !task.weight_up ||
+        !task.act_host || !task.output_host) {
+        return;
+    }
+
+    const auto * cpu_traits = ggml_get_type_traits_cpu(task.type);
+    if (!cpu_traits || !cpu_traits->vec_dot) {
+        return;
+    }
+
+    const ggml_type   vec_dot_type  = cpu_traits->vec_dot_type;
+    const auto *      vdt_traits    = ggml_get_type_traits_cpu(vec_dot_type);
+    ggml_from_float_t from_float_fn = vdt_traits ? vdt_traits->from_float : nullptr;
+    if (!from_float_fn) {
+        return;
+    }
+
+    // Quantize activation once (shared between gate and up)
+    const size_t q_row_size = ggml_row_size(vec_dot_type, task.K);
+    static thread_local std::vector<uint8_t> act_q_buf;
+    act_q_buf.resize(q_row_size);
+    from_float_fn(task.act_host, act_q_buf.data(), task.K);
+
+    const size_t row_stride = ggml_row_size(task.type, task.K);
+
+#if GGML_SYCL_HAS_TBB
+    if (task.N >= 8) {
+        const uint8_t *  act_q     = act_q_buf.data();
+        const char *     gate_base = static_cast<const char *>(task.weight_gate);
+        const char *     up_base   = static_cast<const char *>(task.weight_up);
+
+        ggml_sycl_cpu_arena().execute([&] {
+            ggml_sycl_tbb::parallel_for(
+                ggml_sycl_tbb::blocked_range<int>(0, task.N, 16),
+                [&](const ggml_sycl_tbb::blocked_range<int> & r) {
+                    int i = r.begin();
+#if defined(__AVX2__)
+                    if (task.type == GGML_TYPE_Q4_0) {
+                        for (; i < r.end(); i++) {
+                            float fused;
+                            simd_fused_gate_up_silu_q4_0_q8_0(
+                                task.K, &fused,
+                                gate_base + (size_t) i * row_stride,
+                                up_base   + (size_t) i * row_stride,
+                                act_q);
+                            task.output_host[i] = fused;
+                        }
+                        return;
+                    }
+#endif
+                    // Generic path: vec_dot for gate and up, then SiLU+mul
+                    for (; i < r.end(); i++) {
+                        const void * gate_row = gate_base + (size_t) i * row_stride;
+                        const void * up_row   = up_base   + (size_t) i * row_stride;
+                        float gate_val = 0.0f;
+                        float up_val   = 0.0f;
+                        cpu_traits->vec_dot(task.K, &gate_val, sizeof(float),
+                                            gate_row, 0, act_q, 0, 1);
+                        cpu_traits->vec_dot(task.K, &up_val, sizeof(float),
+                                            up_row, 0, act_q, 0, 1);
+                        task.output_host[i] = silu_f32(gate_val) * up_val;
+                    }
+                });
+        });
+        return;
+    }
+#endif
+
+    // Sequential fallback for small N
+    const uint8_t * act_q = act_q_buf.data();
+    for (int i = 0; i < task.N; i++) {
+        const void * gate_row = static_cast<const char *>(task.weight_gate)
+                                + (size_t) i * row_stride;
+        const void * up_row   = static_cast<const char *>(task.weight_up)
+                                + (size_t) i * row_stride;
+        float gate_val = 0.0f;
+        float up_val   = 0.0f;
+        cpu_traits->vec_dot(task.K, &gate_val, sizeof(float),
+                            gate_row, 0, act_q, 0, 1);
+        cpu_traits->vec_dot(task.K, &up_val, sizeof(float),
+                            up_row, 0, act_q, 0, 1);
+        task.output_host[i] = silu_f32(gate_val) * up_val;
+    }
+}
+
+void ggml_sycl_cpu_expert_fused_gate_up_silu_batched(
+    const cpu_expert_fused_task * tasks, int n_tasks)
+{
+    if (n_tasks <= 0 || !tasks) {
+        return;
+    }
+
+    const auto * cpu_traits = ggml_get_type_traits_cpu(tasks[0].type);
+    if (!cpu_traits || !cpu_traits->vec_dot) {
+        return;
+    }
+
+    const ggml_type   vec_dot_type  = cpu_traits->vec_dot_type;
+    const auto *      vdt_traits    = ggml_get_type_traits_cpu(vec_dot_type);
+    ggml_from_float_t from_float_fn = vdt_traits ? vdt_traits->from_float : nullptr;
+    if (!from_float_fn) {
+        return;
+    }
+
+    // Deduplicate activation quantization: tasks sharing the same act_host
+    // pointer and K dimension share one quantized copy.
+    struct act_quant_entry {
+        const float * act_host;
+        int           K;
+        std::vector<uint8_t> q_buf;
+    };
+    std::vector<act_quant_entry> quant_entries;
+    std::vector<const uint8_t *> task_act_q(static_cast<size_t>(n_tasks));
+
+    for (int t = 0; t < n_tasks; t++) {
+        const float * ah = tasks[t].act_host;
+        int           K  = tasks[t].K;
+        // Check if already quantized
+        const uint8_t * found = nullptr;
+        for (auto & e : quant_entries) {
+            if (e.act_host == ah && e.K == K) {
+                found = e.q_buf.data();
+                break;
+            }
+        }
+        if (!found) {
+            act_quant_entry entry;
+            entry.act_host = ah;
+            entry.K        = K;
+            const size_t q_row_size = ggml_row_size(vec_dot_type, K);
+            entry.q_buf.resize(q_row_size);
+            from_float_fn(ah, entry.q_buf.data(), K);
+            found = entry.q_buf.data();
+            quant_entries.push_back(std::move(entry));
+        }
+        task_act_q[t] = found;
+    }
+
+    // Build flat row list for TBB parallelism
+    struct fused_row_meta {
+        int task_idx;
+        int row_idx;
+    };
+    int total_rows = 0;
+    for (int t = 0; t < n_tasks; t++) {
+        total_rows += tasks[t].N;
+    }
+
+    std::vector<fused_row_meta> meta;
+    meta.reserve(static_cast<size_t>(total_rows));
+    for (int t = 0; t < n_tasks; t++) {
+        for (int r = 0; r < tasks[t].N; r++) {
+            meta.push_back({ t, r });
+        }
+    }
+
+    if (total_rows == 0) {
+        return;
+    }
+
+#if GGML_SYCL_HAS_TBB
+    ggml_sycl_cpu_arena().execute([&] {
+        ggml_sycl_tbb::parallel_for(
+            ggml_sycl_tbb::blocked_range<int>(0, total_rows, 16),
+            [&](const ggml_sycl_tbb::blocked_range<int> & r) {
+                for (int flat = r.begin(); flat < r.end(); flat++) {
+                    const auto & m = meta[flat];
+                    const auto & task = tasks[m.task_idx];
+                    const size_t row_stride = ggml_row_size(task.type, task.K);
+                    const void * gate_row = static_cast<const char *>(task.weight_gate)
+                                            + (size_t) m.row_idx * row_stride;
+                    const void * up_row   = static_cast<const char *>(task.weight_up)
+                                            + (size_t) m.row_idx * row_stride;
+                    const uint8_t * act_q = task_act_q[m.task_idx];
+
+#if defined(__AVX2__)
+                    if (task.type == GGML_TYPE_Q4_0) {
+                        float fused;
+                        simd_fused_gate_up_silu_q4_0_q8_0(
+                            task.K, &fused, gate_row, up_row, act_q);
+                        task.output_host[m.row_idx] = fused;
+                        continue;
+                    }
+#endif
+                    float gate_val = 0.0f;
+                    float up_val   = 0.0f;
+                    cpu_traits->vec_dot(task.K, &gate_val, sizeof(float),
+                                        gate_row, 0, act_q, 0, 1);
+                    cpu_traits->vec_dot(task.K, &up_val, sizeof(float),
+                                        up_row, 0, act_q, 0, 1);
+                    task.output_host[m.row_idx] = silu_f32(gate_val) * up_val;
+                }
+            });
+    });
+#else
+    for (int flat = 0; flat < total_rows; flat++) {
+        const auto & m = meta[flat];
+        const auto & task = tasks[m.task_idx];
+        const size_t row_stride = ggml_row_size(task.type, task.K);
+        const void * gate_row = static_cast<const char *>(task.weight_gate)
+                                + (size_t) m.row_idx * row_stride;
+        const void * up_row   = static_cast<const char *>(task.weight_up)
+                                + (size_t) m.row_idx * row_stride;
+        float gate_val = 0.0f;
+        float up_val   = 0.0f;
+        cpu_traits->vec_dot(task.K, &gate_val, sizeof(float),
+                            gate_row, 0, task_act_q[m.task_idx], 0, 1);
+        cpu_traits->vec_dot(task.K, &up_val, sizeof(float),
+                            up_row, 0, task_act_q[m.task_idx], 0, 1);
+        task.output_host[m.row_idx] = silu_f32(gate_val) * up_val;
+    }
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -1986,6 +2291,84 @@ static inline void simd_mul_mat_q4_0_q8_0_4row(
     out[3] = ggml_sycl_hsum_float_8(acc3);
 }
 
+// Process 4 weight rows x 1 activation row for MXFP4 x Q8_0.
+// Loads each Q8_0 block once and dots against 4 MXFP4 blocks simultaneously.
+// Returns 4 dot products in out[0..3].
+static inline void simd_mul_mat_mxfp4_q8_0_4row(
+    int K_elem,
+    float * GGML_RESTRICT out,
+    const void * GGML_RESTRICT vx0,
+    const void * GGML_RESTRICT vx1,
+    const void * GGML_RESTRICT vx2,
+    const void * GGML_RESTRICT vx3,
+    const void * GGML_RESTRICT vy
+) {
+    const int nb = K_elem / QK_MXFP4;
+
+    const block_mxfp4 * GGML_RESTRICT x0 = (const block_mxfp4 *)vx0;
+    const block_mxfp4 * GGML_RESTRICT x1 = (const block_mxfp4 *)vx1;
+    const block_mxfp4 * GGML_RESTRICT x2 = (const block_mxfp4 *)vx2;
+    const block_mxfp4 * GGML_RESTRICT x3 = (const block_mxfp4 *)vx3;
+    const block_q8_0  * GGML_RESTRICT y  = (const block_q8_0 *)vy;
+
+    const __m128i values128 = _mm_loadu_si128((const __m128i *)kvalues_mxfp4);
+    const __m128i m4b       = _mm_set1_epi8(0x0f);
+
+    __m256 acc0 = _mm256_setzero_ps();
+    __m256 acc1 = _mm256_setzero_ps();
+    __m256 acc2 = _mm256_setzero_ps();
+    __m256 acc3 = _mm256_setzero_ps();
+
+    for (int ib = 0; ib < nb; ib++) {
+        // Load activation block ONCE (amortized across 4 weight rows)
+        const float   q8_d = cpu_half_to_f32(y[ib].d);
+        const __m256i qy   = _mm256_loadu_si256((const __m256i *)y[ib].qs);
+
+        // Macro: dequant MXFP4 block via pshufb table lookup, dot with q8, accumulate
+#define MXFP4_DOT_ROW(xr, accr) \
+        { \
+            const __m128i q4bits = _mm_loadu_si128((const __m128i *)(xr)[ib].qs); \
+            const __m256i qx = GGML_SYCL_MM256_SET_M128I( \
+                _mm_shuffle_epi8(values128, _mm_and_si128(_mm_srli_epi16(q4bits, 4), m4b)), \
+                _mm_shuffle_epi8(values128, _mm_and_si128(q4bits, m4b))); \
+            const float d = q8_d * GGML_E8M0_TO_FP32_HALF((xr)[ib].e); \
+            GGML_MXFP4_DOT_ACCUM(qx, qy, d, accr) \
+        }
+
+        // Dispatch based on available instructions
+#if defined(__AVXVNNIINT8__)
+#define GGML_MXFP4_DOT_ACCUM(qx, qy, d, acc) \
+            { \
+                const __m256i prod = _mm256_dpbssd_epi32(_mm256_setzero_si256(), qx, qy); \
+                acc = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod), acc); \
+            }
+#else
+#define GGML_MXFP4_DOT_ACCUM(qx, qy, d, acc) \
+            { \
+                const __m256i ax     = _mm256_sign_epi8(qx, qx); \
+                const __m256i sy     = _mm256_sign_epi8(qy, qx); \
+                const __m256i dot    = _mm256_maddubs_epi16(ax, sy); \
+                const __m256i ones   = _mm256_set1_epi16(1); \
+                const __m256i summed = _mm256_madd_epi16(ones, dot); \
+                acc = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(summed), acc); \
+            }
+#endif
+
+        MXFP4_DOT_ROW(x0, acc0)
+        MXFP4_DOT_ROW(x1, acc1)
+        MXFP4_DOT_ROW(x2, acc2)
+        MXFP4_DOT_ROW(x3, acc3)
+
+#undef MXFP4_DOT_ROW
+#undef GGML_MXFP4_DOT_ACCUM
+    }
+
+    out[0] = ggml_sycl_hsum_float_8(acc0);
+    out[1] = ggml_sycl_hsum_float_8(acc1);
+    out[2] = ggml_sycl_hsum_float_8(acc2);
+    out[3] = ggml_sycl_hsum_float_8(acc3);
+}
+
 // INT4 fast-path: 4-row Q4_0 x Q8_0 dot product WITHOUT zero-point offset.
 // Treats nibbles as unsigned [0,15] and uses _mm256_maddubs_epi16 directly
 // (first arg unsigned, second signed). This eliminates the sub_epi8 + sign
@@ -2298,6 +2681,80 @@ static inline void simd_mul_mat_q6_K_q8_K_4row(
     out[1] = ggml_sycl_hsum_float_8(acc1);
     out[2] = ggml_sycl_hsum_float_8(acc2);
     out[3] = ggml_sycl_hsum_float_8(acc3);
+}
+
+// ---------------------------------------------------------------------------
+// Fused Gate+Up+SiLU 2-row SIMD kernel for Q4_0 x Q8_0
+// ---------------------------------------------------------------------------
+// Computes gate_dot and up_dot in a single pass over the activation,
+// then applies SiLU(gate_dot) * up_dot.
+// Saves one full activation load per output row vs. separate matmuls.
+static inline void simd_fused_gate_up_silu_q4_0_q8_0(
+    int K_elem,
+    float * GGML_RESTRICT out,
+    const void * GGML_RESTRICT v_gate,
+    const void * GGML_RESTRICT v_up,
+    const void * GGML_RESTRICT vy
+) {
+    const int nb = K_elem / QK4_0;
+
+    const block_q4_0 * GGML_RESTRICT xg = (const block_q4_0 *)v_gate;
+    const block_q4_0 * GGML_RESTRICT xu = (const block_q4_0 *)v_up;
+    const block_q8_0 * GGML_RESTRICT y  = (const block_q8_0 *)vy;
+
+    const __m256i off = _mm256_set1_epi8(8);
+
+    __m256 acc_gate = _mm256_setzero_ps();
+    __m256 acc_up   = _mm256_setzero_ps();
+
+    for (int ib = 0; ib < nb; ib++) {
+        // Load activation block ONCE (amortized across gate + up)
+        const float   q8_d = cpu_half_to_f32(y[ib].d);
+        const __m256i qy   = _mm256_loadu_si256((const __m256i *)y[ib].qs);
+
+        // Gate row
+        {
+            const float d  = cpu_half_to_f32(xg[ib].d) * q8_d;
+            __m256i     qx = ggml_sycl_bytes_from_nibbles_32(xg[ib].qs);
+            qx             = _mm256_sub_epi8(qx, off);
+#if defined(__AVXVNNIINT8__)
+            const __m256i prod = _mm256_dpbssd_epi32(_mm256_setzero_si256(), qx, qy);
+            acc_gate = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod), acc_gate);
+#else
+            const __m256i ax     = _mm256_sign_epi8(qx, qx);
+            const __m256i sy     = _mm256_sign_epi8(qy, qx);
+            const __m256i dot    = _mm256_maddubs_epi16(ax, sy);
+            const __m256i ones   = _mm256_set1_epi16(1);
+            const __m256i summed = _mm256_madd_epi16(ones, dot);
+            acc_gate = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(summed), acc_gate);
+#endif
+        }
+
+        // Up row
+        {
+            const float d  = cpu_half_to_f32(xu[ib].d) * q8_d;
+            __m256i     qx = ggml_sycl_bytes_from_nibbles_32(xu[ib].qs);
+            qx             = _mm256_sub_epi8(qx, off);
+#if defined(__AVXVNNIINT8__)
+            const __m256i prod = _mm256_dpbssd_epi32(_mm256_setzero_si256(), qx, qy);
+            acc_up = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod), acc_up);
+#else
+            const __m256i ax     = _mm256_sign_epi8(qx, qx);
+            const __m256i sy     = _mm256_sign_epi8(qy, qx);
+            const __m256i dot    = _mm256_maddubs_epi16(ax, sy);
+            const __m256i ones   = _mm256_set1_epi16(1);
+            const __m256i summed = _mm256_madd_epi16(ones, dot);
+            acc_up = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(summed), acc_up);
+#endif
+        }
+    }
+
+    // Horizontal sum both accumulators
+    float gate_val = ggml_sycl_hsum_float_8(acc_gate);
+    float up_val   = ggml_sycl_hsum_float_8(acc_up);
+
+    // SiLU(gate) * up  =  gate / (1 + exp(-gate)) * up
+    *out = (gate_val / (1.0f + expf(-gate_val))) * up_val;
 }
 
 #endif // defined(__AVX2__)
@@ -4265,23 +4722,72 @@ bool ggml_sycl_cpu_pp_gemm(ggml_type weight_type,
             const int       K_int      = static_cast<int>(K);
 
 #if GGML_SYCL_HAS_TBB
-            // Parallelize over N output rows; each row is independent.
-            // Inner loop over M activation rows is sequential per row.
+            // Parallelize over N output rows with multi-row SIMD fast path.
+            // Process 4/8/16 weight rows at once per activation, amortizing
+            // Q8 activation loads across multiple weight rows.
             const int n_threads_hint = ggml_sycl_cpu_threads_hint();
             const int target_tasks   = std::max(1, n_threads_hint * 2);
-            const int grain          = std::max(1, static_cast<int>(N) / target_tasks);
+            const int grain          = std::max(4, static_cast<int>(N) / target_tasks);
             ggml_sycl_cpu_arena().execute([&, src1_q_ptr, K_int] {
                 ggml_sycl_tbb::parallel_for(
                     ggml_sycl_tbb::blocked_range<int>(0, static_cast<int>(N), grain),
                     [&, src1_q_ptr, K_int](const ggml_sycl_tbb::blocked_range<int> & r) {
-                        for (int n = r.begin(); n < r.end(); n++) {
-                            const void * weight_row = weight_bytes + static_cast<int64_t>(n) * nb01;
-                            for (int64_t m = 0; m < M; m++) {
+                        for (int64_t m = 0; m < M; m++) {
+                            const uint8_t * act_q = src1_q_ptr + m * q_row_size;
+                            float *         dst_m = dst_host + m * ldc;
+                            int n = r.begin();
+#if defined(__AVX2__)
+                            if (weight_type == GGML_TYPE_Q4_0) {
+#if defined(__AVXVNNIINT8__)
+                                for (; n + 15 < r.end(); n += 16) {
+                                    const void * row_ptrs[16];
+                                    for (int k = 0; k < 16; k++) {
+                                        row_ptrs[k] = weight_bytes + static_cast<int64_t>(n + k) * nb01;
+                                    }
+                                    simd_mul_mat_q4_0_q8_0_16row(K_int, dst_m + n, row_ptrs, act_q);
+                                }
+                                for (; n + 7 < r.end(); n += 8) {
+                                    simd_mul_mat_q4_0_q8_0_8row(
+                                        K_int, dst_m + n,
+                                        weight_bytes + static_cast<int64_t>(n + 0) * nb01,
+                                        weight_bytes + static_cast<int64_t>(n + 1) * nb01,
+                                        weight_bytes + static_cast<int64_t>(n + 2) * nb01,
+                                        weight_bytes + static_cast<int64_t>(n + 3) * nb01,
+                                        weight_bytes + static_cast<int64_t>(n + 4) * nb01,
+                                        weight_bytes + static_cast<int64_t>(n + 5) * nb01,
+                                        weight_bytes + static_cast<int64_t>(n + 6) * nb01,
+                                        weight_bytes + static_cast<int64_t>(n + 7) * nb01,
+                                        act_q);
+                                }
+#endif
+                                for (; n + 3 < r.end(); n += 4) {
+                                    simd_mul_mat_q4_0_q8_0_4row(
+                                        K_int, dst_m + n,
+                                        weight_bytes + static_cast<int64_t>(n + 0) * nb01,
+                                        weight_bytes + static_cast<int64_t>(n + 1) * nb01,
+                                        weight_bytes + static_cast<int64_t>(n + 2) * nb01,
+                                        weight_bytes + static_cast<int64_t>(n + 3) * nb01,
+                                        act_q);
+                                }
+                            } else if (weight_type == GGML_TYPE_Q6_K) {
+                                for (; n + 3 < r.end(); n += 4) {
+                                    simd_mul_mat_q6_K_q8_K_4row(
+                                        K_int, dst_m + n,
+                                        weight_bytes + static_cast<int64_t>(n + 0) * nb01,
+                                        weight_bytes + static_cast<int64_t>(n + 1) * nb01,
+                                        weight_bytes + static_cast<int64_t>(n + 2) * nb01,
+                                        weight_bytes + static_cast<int64_t>(n + 3) * nb01,
+                                        act_q);
+                                }
+                            }
+#endif
+                            // Remainder: single-row generic path
+                            for (; n < r.end(); n++) {
+                                const void * weight_row = weight_bytes + static_cast<int64_t>(n) * nb01;
                                 float dot_result = 0.0f;
                                 cpu_traits->vec_dot(K_int, &dot_result, sizeof(float),
-                                                    weight_row, 0,
-                                                    src1_q_ptr + m * q_row_size, 0, 1);
-                                dst_host[m * ldc + n] = dot_result;
+                                                    weight_row, 0, act_q, 0, 1);
+                                dst_m[n] = dot_result;
                             }
                         }
                     });

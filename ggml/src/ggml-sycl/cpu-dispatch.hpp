@@ -173,4 +173,34 @@ void ggml_sycl_cpu_expert_mul_mat_adaptive(
     const cpu_expert_task * tasks, int n_tasks,
     int n_miss_total);
 
+// ---------------------------------------------------------------------------
+// Fused Gate+Up+SiLU MoE Expert Kernel
+// ---------------------------------------------------------------------------
+// Computes output[i] = SiLU(dot(W_gate[i], act)) * dot(W_up[i], act)
+// in a single pass over the activation, halving DRAM bandwidth for the
+// gate+up phase compared to separate matmuls.
+//
+// For each output row, both gate and up weight rows are read and dotted
+// against a shared quantized activation. The SiLU activation function
+// (x * sigmoid(x)) and element-wise multiply are applied inline.
+
+struct cpu_expert_fused_task {
+    const void *  weight_gate;   // Gate projection weights in host RAM (quantized)
+    const void *  weight_up;     // Up projection weights in host RAM (quantized)
+    const float * act_host;      // Activation vector (float32, length K)
+    float *       output_host;   // Output buffer (float32, length N)
+    ggml_type     type;          // Weight quant type (must match for gate and up)
+    int           K;             // Input dimension (columns per weight row)
+    int           N;             // Output rows (intermediate dimension)
+};
+
+// Compute one expert's fused gate+up+SiLU on CPU.
+// output[i] = SiLU(dot(W_gate[i], act)) * dot(W_up[i], act) for i in [0, N).
+void ggml_sycl_cpu_expert_fused_gate_up_silu(const cpu_expert_fused_task & task);
+
+// Batch version: compute multiple fused expert tasks concurrently.
+// Deduplicates activation quantization for tasks sharing the same act_host.
+void ggml_sycl_cpu_expert_fused_gate_up_silu_batched(
+    const cpu_expert_fused_task * tasks, int n_tasks);
+
 #endif // GGML_SYCL_CPU_DISPATCH_HPP
