@@ -4901,7 +4901,7 @@ class Phi2Model(TextModel):
         self.gguf_writer.add_add_bos_token(False)
 
 
-@ModelBase.register("Phi3ForCausalLM")
+@ModelBase.register("Phi3ForCausalLM", "Phi4ForCausalLMV")
 class Phi3MiniModel(TextModel):
     model_arch = gguf.MODEL_ARCH.PHI3
 
@@ -5076,11 +5076,6 @@ class Phi3MiniModel(TextModel):
         yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FACTORS_LONG), torch.tensor(long_factors, dtype=torch.float32))
         yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FACTORS_SHORT), torch.tensor(short_factors, dtype=torch.float32))
 
-
-@ModelBase.register("Phi4ForCausalLMV")
-class Phi4VisionTextModel(Phi3MiniModel):
-    model_arch = gguf.MODEL_ARCH.PHI3
-
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name.startswith(("model.vision_tower.", "vision_tower.", "model.mm_projector.", "mm_projector.")):
             return
@@ -5170,11 +5165,9 @@ class Phi4VisionMmprojModel(MmprojModel):
                 return
 
             if new_name.endswith("vision_model.embeddings.patch_embedding.weight"):
+                assert self.hparams_vision is not None
                 if data_torch.ndim != 2:
                     raise ValueError(f"Unexpected Phi-4 patch embedding shape: {tuple(data_torch.shape)}")
-
-                if self.hparams_vision is None:
-                    raise ValueError("hparams_vision is not set")
 
                 patch_area = self.hparams_vision["patch_size"] ** 2
                 in_features = data_torch.shape[1]
