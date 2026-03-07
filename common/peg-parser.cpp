@@ -576,9 +576,6 @@ struct parser_executor {
         auto result = common_parse_utf8_codepoint(ctx.input, start_pos);
 
         if (result.status == utf8_parse_result::INCOMPLETE) {
-            if (!ctx.is_partial) {
-                return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
-            }
             return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos);
         }
         if (result.status == utf8_parse_result::INVALID) {
@@ -615,9 +612,6 @@ struct parser_executor {
                     return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos, pos);
                 }
                 // Not enough matches yet
-                if (!ctx.is_partial) {
-                    return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
-                }
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
             }
 
@@ -732,9 +726,6 @@ struct parser_executor {
                 auto utf8_result = common_parse_utf8_codepoint(ctx.input, pos);
 
                 if (utf8_result.status == utf8_parse_result::INCOMPLETE) {
-                    if (!ctx.is_partial) {
-                        return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
-                    }
                     return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
                 }
 
@@ -774,9 +765,6 @@ struct parser_executor {
                 auto utf8_result = common_parse_utf8_codepoint(ctx.input, pos);
 
                 if (utf8_result.status == utf8_parse_result::INCOMPLETE) {
-                    if (!ctx.is_partial) {
-                        return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
-                    }
                     return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
                 }
 
@@ -806,11 +794,6 @@ struct parser_executor {
             auto utf8_result = common_parse_utf8_codepoint(ctx.input, pos);
 
             if (utf8_result.status == utf8_parse_result::INCOMPLETE) {
-                // Incomplete UTF-8 sequence
-                if (!ctx.is_partial) {
-                    // Input is complete but UTF-8 is incomplete = malformed
-                    return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
-                }
                 // Return what we have so far (before incomplete sequence)
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, last_valid_pos);
             }
