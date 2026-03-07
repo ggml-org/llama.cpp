@@ -16,6 +16,12 @@
 #include <cassert>
 #include <cstdio>  // for GGML_ASSERT
 
+static int g_repack_n_threads = 1;
+
+#if defined(GGML_USE_OPENMP)
+#include <omp.h>
+#endif
+
 #include "repack.h"
 
 #if defined(__GNUC__)
@@ -47,6 +53,19 @@ static inline int nearest_int(float fval) {
 //
 
 extern "C" {
+
+#if defined(GGML_USE_OPENMP)
+void ggml_cpu_set_repack_n_threads(int n_threads) {
+    g_repack_n_threads = n_threads;
+}
+
+int ggml_cpu_get_repack_n_threads(void) {
+    return g_repack_n_threads;
+}
+#else
+void ggml_cpu_set_repack_n_threads(int n_threads) {}
+int ggml_cpu_get_repack_n_threads(void) { return 0; }
+#endif
 
 void ggml_quantize_mat_q8_0_4x4_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
     assert(QK8_0 == 32);
@@ -2337,11 +2356,10 @@ static int repack_q4_0_to_q4_0_4_bl(struct ggml_tensor * t, int interleave_block
     GGML_ASSERT(interleave_block == 4 || interleave_block == 8);
     constexpr int nrows_interleaved = 4;
 
-    block_q4_0x4 * dst = (block_q4_0x4 *)t->data;
-    const block_q4_0 * src = (const block_q4_0 *)data;
-    block_q4_0 dst_tmp[4];
-    int nrow = ggml_nrows(t);
-    int nblocks = t->ne[0] / QK4_0;
+    block_q4_0x4 * dst_base = (block_q4_0x4 *)t->data;
+    const block_q4_0 * src_base = (const block_q4_0 *)data;
+    const int nrow = ggml_nrows(t);
+    const int nblocks = t->ne[0] / QK4_0;
 
     GGML_ASSERT(data_size == nrow * nblocks * sizeof(block_q4_0));
 
@@ -2349,14 +2367,23 @@ static int repack_q4_0_to_q4_0_4_bl(struct ggml_tensor * t, int interleave_block
         return -1;
     }
 
-    for (int b = 0; b < nrow; b += nrows_interleaved) {
+    const int n_row_groups = nrow / nrows_interleaved;
+
+#ifdef GGML_USE_OPENMP
+#pragma omp for schedule(static)
+#endif
+    for (int bg = 0; bg < n_row_groups; bg++) {
+        const int b = bg * nrows_interleaved;
+        const block_q4_0 * src = src_base + b * nblocks;
+        block_q4_0x4 * dst = dst_base + bg * nblocks;
+        block_q4_0 dst_tmp[4];
+
         for (int64_t x = 0; x < nblocks; x++) {
             for (int i = 0; i < nrows_interleaved; i++) {
                 dst_tmp[i] = src[x + i * nblocks];
             }
-            *dst++ = make_block_q4_0x4(dst_tmp, interleave_block);
+            dst[x] = make_block_q4_0x4(dst_tmp, interleave_block);
         }
-        src += nrows_interleaved * nblocks;
     }
     return 0;
 
@@ -2368,11 +2395,10 @@ static int repack_q4_K_to_q4_K_8_bl(struct ggml_tensor * t, int interleave_block
     GGML_ASSERT(interleave_block == 8 || interleave_block == 4);
     constexpr int nrows_interleaved = 8;
 
-    block_q4_Kx8 * dst = (block_q4_Kx8*)t->data;
-    const block_q4_K * src = (const block_q4_K*) data;
-    block_q4_K dst_tmp[8];
-    int nrow = ggml_nrows(t);
-    int nblocks = t->ne[0] / QK_K;
+    block_q4_Kx8 * dst_base = (block_q4_Kx8*)t->data;
+    const block_q4_K * src_base = (const block_q4_K*) data;
+    const int nrow = ggml_nrows(t);
+    const int nblocks = t->ne[0] / QK_K;
 
     GGML_ASSERT(data_size == nrow * nblocks * sizeof(block_q4_K));
 
@@ -2380,14 +2406,23 @@ static int repack_q4_K_to_q4_K_8_bl(struct ggml_tensor * t, int interleave_block
         return -1;
     }
 
-    for (int b = 0; b < nrow; b += nrows_interleaved) {
+    const int n_row_groups = nrow / nrows_interleaved;
+
+#ifdef GGML_USE_OPENMP
+#pragma omp for schedule(static)
+#endif
+    for (int bg = 0; bg < n_row_groups; bg++) {
+        const int b = bg * nrows_interleaved;
+        const block_q4_K * src = src_base + b * nblocks;
+        block_q4_Kx8 * dst = dst_base + bg * nblocks;
+        block_q4_K dst_tmp[8];
+
         for (int64_t x = 0; x < nblocks; x++) {
-            for (int i  = 0; i < nrows_interleaved; i++ ) {
+            for (int i = 0; i < nrows_interleaved; i++) {
                 dst_tmp[i] = src[x + i * nblocks];
             }
-            *dst++ = make_block_q4_Kx8(dst_tmp, interleave_block);
+            dst[x] = make_block_q4_Kx8(dst_tmp, interleave_block);
         }
-        src += nrows_interleaved * nblocks;
     }
     return 0;
 
@@ -2399,11 +2434,10 @@ static int repack_q2_K_to_q2_K_8_bl(struct ggml_tensor * t, int interleave_block
     GGML_ASSERT(interleave_block == 8);
     constexpr int nrows_interleaved = 8;
 
-    block_q2_Kx8 * dst = (block_q2_Kx8*)t->data;
-    const block_q2_K * src = (const block_q2_K*) data;
-    block_q2_K dst_tmp[8];
-    int nrow = ggml_nrows(t);
-    int nblocks = t->ne[0] / QK_K;
+    block_q2_Kx8 * dst_base = (block_q2_Kx8*)t->data;
+    const block_q2_K * src_base = (const block_q2_K*) data;
+    const int nrow = ggml_nrows(t);
+    const int nblocks = t->ne[0] / QK_K;
 
     GGML_ASSERT(data_size == nrow * nblocks * sizeof(block_q2_K));
 
@@ -2411,14 +2445,23 @@ static int repack_q2_K_to_q2_K_8_bl(struct ggml_tensor * t, int interleave_block
         return -1;
     }
 
-    for (int b = 0; b < nrow; b += nrows_interleaved) {
+    const int n_row_groups = nrow / nrows_interleaved;
+
+#ifdef GGML_USE_OPENMP
+#pragma omp for schedule(static)
+#endif
+    for (int bg = 0; bg < n_row_groups; bg++) {
+        const int b = bg * nrows_interleaved;
+        const block_q2_K * src = src_base + b * nblocks;
+        block_q2_Kx8 * dst = dst_base + bg * nblocks;
+        block_q2_K dst_tmp[8];
+
         for (int64_t x = 0; x < nblocks; x++) {
             for (int i = 0; i < nrows_interleaved; i++) {
                 dst_tmp[i] = src[x + i * nblocks];
             }
-            *dst++ = make_block_q2_Kx8(dst_tmp, interleave_block);
+            dst[x] = make_block_q2_Kx8(dst_tmp, interleave_block);
         }
-        src += nrows_interleaved * nblocks;
     }
     return 0;
 
@@ -2491,11 +2534,10 @@ static int repack_q4_0_to_q4_0_8_bl(struct ggml_tensor * t, int interleave_block
     GGML_ASSERT(interleave_block == 8);
     constexpr int nrows_interleaved = 8;
 
-    block_q4_0x8 * dst = (block_q4_0x8*)t->data;
-    const block_q4_0 * src = (const block_q4_0*) data;
-    block_q4_0 dst_tmp[8];
-    int nrow = ggml_nrows(t);
-    int nblocks = t->ne[0] / QK4_0;
+    block_q4_0x8 * dst_base = (block_q4_0x8*)t->data;
+    const block_q4_0 * src_base = (const block_q4_0*) data;
+    const int nrow = ggml_nrows(t);
+    const int nblocks = t->ne[0] / QK4_0;
 
     GGML_ASSERT(data_size == nrow * nblocks * sizeof(block_q4_0));
 
@@ -2503,14 +2545,23 @@ static int repack_q4_0_to_q4_0_8_bl(struct ggml_tensor * t, int interleave_block
         return -1;
     }
 
-    for (int b = 0; b < nrow; b += nrows_interleaved) {
+    const int n_row_groups = nrow / nrows_interleaved;
+
+#ifdef GGML_USE_OPENMP
+#pragma omp for schedule(static)
+#endif
+    for (int bg = 0; bg < n_row_groups; bg++) {
+        const int b = bg * nrows_interleaved;
+        const block_q4_0 * src = src_base + b * nblocks;
+        block_q4_0x8 * dst = dst_base + bg * nblocks;
+        block_q4_0 dst_tmp[8];
+
         for (int64_t x = 0; x < nblocks; x++) {
-            for (int i  = 0; i < nrows_interleaved; i++ ) {
+            for (int i = 0; i < nrows_interleaved; i++) {
                 dst_tmp[i] = src[x + i * nblocks];
             }
-            *dst++ = make_block_q4_0x8(dst_tmp, interleave_block);
+            dst[x] = make_block_q4_0x8(dst_tmp, interleave_block);
         }
-        src += nrows_interleaved * nblocks;
     }
     return 0;
 
@@ -2588,14 +2639,12 @@ static int repack_iq4_nl_to_iq4_nl_4_bl(struct ggml_tensor * t, int interleave_b
     GGML_ASSERT(t->type == GGML_TYPE_IQ4_NL);
     GGML_ASSERT(interleave_block == 4);
 
-    const block_iq4_nl   * src = (const block_iq4_nl   *)data;
-          block_iq4_nlx4 * dst = (      block_iq4_nlx4 *)t->data;
+    const block_iq4_nl * src_base = (const block_iq4_nl *)data;
+    block_iq4_nlx4 * dst_base = (block_iq4_nlx4 *)t->data;
 
-    block_iq4_nl dst_tmp[4];
-
-    int nrow = ggml_nrows(t);
-    int nrows_interleaved = 4;
-    int nblocks = t->ne[0] / QK4_NL;
+    const int nrow = ggml_nrows(t);
+    const int nrows_interleaved = 4;
+    const int nblocks = t->ne[0] / QK4_NL;
 
     GGML_ASSERT(data_size == nrow * nblocks * sizeof(block_iq4_nl));
 
@@ -2603,14 +2652,23 @@ static int repack_iq4_nl_to_iq4_nl_4_bl(struct ggml_tensor * t, int interleave_b
         return -1;
     }
 
-    for (int b = 0; b < nrow; b += nrows_interleaved) {
+    const int n_row_groups = nrow / nrows_interleaved;
+
+#ifdef GGML_USE_OPENMP
+#pragma omp for schedule(static)
+#endif
+    for (int bg = 0; bg < n_row_groups; bg++) {
+        const int b = bg * nrows_interleaved;
+        const block_iq4_nl * src = src_base + b * nblocks;
+        block_iq4_nlx4 * dst = dst_base + bg * nblocks;
+        block_iq4_nl dst_tmp[4];
+
         for (int64_t x = 0; x < nblocks; x++) {
             for (int i = 0; i < nrows_interleaved; i++) {
                 dst_tmp[i] = src[x + i * nblocks];
             }
-            *dst++ = make_block_iq4_nlx4(dst_tmp, interleave_block);
+            dst[x] = make_block_iq4_nlx4(dst_tmp, interleave_block);
         }
-        src += nrows_interleaved * nblocks;
     }
     return 0;
 
@@ -2645,14 +2703,12 @@ static int repack_iq4_nl_to_iq4_nl_8_bl(struct ggml_tensor * t, int interleave_b
     GGML_ASSERT(t->type == GGML_TYPE_IQ4_NL);
     GGML_ASSERT(interleave_block == 8);
 
-    const block_iq4_nl   * src = (const block_iq4_nl   *)data;
-          block_iq4_nlx8 * dst = (      block_iq4_nlx8 *)t->data;
+    const block_iq4_nl * src_base = (const block_iq4_nl *)data;
+    block_iq4_nlx8 * dst_base = (block_iq4_nlx8 *)t->data;
 
-    block_iq4_nl dst_tmp[8];
-
-    int nrow = ggml_nrows(t);
-    int nrows_interleaved = 8;
-    int nblocks = t->ne[0] / QK4_NL;
+    const int nrow = ggml_nrows(t);
+    const int nrows_interleaved = 8;
+    const int nblocks = t->ne[0] / QK4_NL;
 
     GGML_ASSERT(data_size == nrow * nblocks * sizeof(block_iq4_nl));
 
@@ -2660,14 +2716,23 @@ static int repack_iq4_nl_to_iq4_nl_8_bl(struct ggml_tensor * t, int interleave_b
         return -1;
     }
 
-    for (int b = 0; b < nrow; b += nrows_interleaved) {
+    const int n_row_groups = nrow / nrows_interleaved;
+
+#ifdef GGML_USE_OPENMP
+#pragma omp for schedule(static)
+#endif
+    for (int bg = 0; bg < n_row_groups; bg++) {
+        const int b = bg * nrows_interleaved;
+        const block_iq4_nl * src = src_base + b * nblocks;
+        block_iq4_nlx8 * dst = dst_base + bg * nblocks;
+        block_iq4_nl dst_tmp[8];
+
         for (int64_t x = 0; x < nblocks; x++) {
             for (int i = 0; i < nrows_interleaved; i++) {
                 dst_tmp[i] = src[x + i * nblocks];
             }
-            *dst++ = make_block_iq4_nlx8(dst_tmp, interleave_block);
+            dst[x] = make_block_iq4_nlx8(dst_tmp, interleave_block);
         }
-        src += nrows_interleaved * nblocks;
     }
     return 0;
 
@@ -3381,9 +3446,29 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
     }
 
     int repack(struct ggml_tensor * t, const void * data, size_t data_size) override {
+        int ret = -1;
         GGML_LOG_DEBUG("%s: repack tensor %s with %s_%dx%d\n", __func__, t->name, ggml_type_name(t->type),
                        (int) NB_COLS, (int) INTER_SIZE);
-        return ggml::cpu::repack::repack<BLOC_TYPE, INTER_SIZE, NB_COLS>(t, data, data_size);
+#ifdef GGML_USE_OPENMP
+        int n_threads = ggml_cpu_get_repack_n_threads();
+        GGML_ASSERT(n_threads >= 0);
+        if (n_threads == 0) {
+            n_threads = omp_get_max_threads();
+        }
+        if (n_threads > 1) {
+            #pragma omp parallel num_threads(n_threads)
+            {
+                ggml_cpu_set_numa_thread_affinity(omp_get_thread_num());
+                int r = ggml::cpu::repack::repack<BLOC_TYPE, INTER_SIZE, NB_COLS>(t, data, data_size);
+                #pragma omp master
+                ret = r;
+            }
+        }
+#endif
+        if (ret == -1) {
+            ret = ggml::cpu::repack::repack<BLOC_TYPE, INTER_SIZE, NB_COLS>(t, data, data_size);
+        }
+        return ret;
     }
 };
 
