@@ -726,7 +726,7 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 
 - Missed the AOT (Ahead-of-Time) in buiding.
   - Good: build quickly, smaller size of binary file.
-  - Bad: The startup is slow in first time, but subsequent performance is unaffected.
+  - Bad: The startup is slow (JIT) in first time, but subsequent performance is unaffected.
 
 ## Q&A
 
