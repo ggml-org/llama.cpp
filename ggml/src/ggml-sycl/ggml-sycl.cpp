@@ -38578,13 +38578,12 @@ static bool ggml_backend_sycl_device_offload_op(ggml_backend_dev_t dev, const gg
         // Offload everything SYCL can handle - ensures consistent GPU-side execution
         return true;
     }
-    // For MUL_MAT_ID with types that CPU can't handle (like MXFP4), always offload
-    // This is critical for lazy MoE where weights are in mmap (CPU_Mapped buffer)
-    // but require GPU kernels for computation
+    // For MUL_MAT_ID with types that lack CPU vec_dot support, always offload.
+    // Types with vec_dot (Q4_0, Q8_0, MXFP4, etc.) can fall through to hybrid
+    // dispatch which routes experts to CPU when weights are host-resident.
     if (op->op == GGML_OP_MUL_MAT_ID && op->src[0]) {
-        ggml_type src_type = op->src[0]->type;
-        // MXFP4 requires GPU (CPU doesn't support it)
-        if (src_type == GGML_TYPE_MXFP4) {
+        const auto * cpu_traits = ggml_get_type_traits_cpu(op->src[0]->type);
+        if (!cpu_traits || !cpu_traits->vec_dot) {
             return true;
         }
     }
