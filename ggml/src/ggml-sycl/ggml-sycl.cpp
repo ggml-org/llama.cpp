@@ -3652,8 +3652,14 @@ struct moe_ids_cache_entry {
 // Keyed by the ggml_tensor pointer (avoids unnecessary device round-trips).
 static thread_local std::unordered_map<const ggml_tensor *, moe_ids_cache_entry> g_moe_ids_d2h_cache;
 
+// Counter incremented at each graph boundary so that thread-local caches
+// (activation pointer type, etc.) can detect stale entries without a
+// function call into the thread-local storage from graph_compute_impl.
+static std::atomic<uint64_t> g_moe_graph_epoch{0};
+
 static void ggml_sycl_moe_ids_cache_new_graph() {
     g_moe_ids_d2h_cache.clear();
+    g_moe_graph_epoch.fetch_add(1, std::memory_order_relaxed);
 }
 
 // ---------------------------------------------------------------------------
@@ -25485,18 +25491,11 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             cpu_tg_val_fast = cpu_expert_tg_mode_fast.load(std::memory_order_acquire);
         }
 
-        // Check if weights are host-accessible. The unified cache wraps mmap'd
-        // weights in a SYCL buffer type, so ggml_backend_buffer_is_host() returns
-        // false. Check both: (a) buffer type and (b) actual USM pointer type.
-        bool host_weights_fast = src0->buffer && ggml_backend_buffer_is_host(src0->buffer);
-        if (!host_weights_fast && src0->data) {
-            // Check if the raw data pointer is host or shared USM
-            const queue_ptr qf = ctx.stream();
-            sycl::usm::alloc ptr_type_fast = sycl::get_pointer_type(src0->data, qf->get_context());
-            host_weights_fast = (ptr_type_fast == sycl::usm::alloc::host ||
-                                 ptr_type_fast == sycl::usm::alloc::shared ||
-                                 ptr_type_fast == sycl::usm::alloc::unknown);  // mmap = unknown
-        }
+        // Check if weights are host-accessible.  Uses buffer-context tier
+        // check first (zero cost), falls back to USM pointer type only when
+        // buffer context is unavailable.  Avoids ~0.7ms driver round-trip
+        // per call that the old inline get_pointer_type() incurred.
+        const bool host_weights_fast = ggml_sycl_is_host_resident_weight(src0, ctx.stream());
         const auto * cpu_traits_fast = ggml_get_type_traits_cpu(src0->type);
         const bool   cpu_type_ok_fast = cpu_traits_fast && cpu_traits_fast->vec_dot;
 
@@ -25569,12 +25568,41 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             // For mmap'd models or host-pinned compute buffers, src1 may already
             // be in host memory. Skip D2H copy in that case.
             const float * act_host_ptr = nullptr;
-            static thread_local std::vector<float> tl_act_buf;
 
-            // Check if src1 data is host-accessible (USM host/shared/mmap)
+            // Use USM host-pinned buffer for activation D2H.  Page-locked
+            // memory enables direct DMA from GPU to host, avoiding the
+            // internal staging copy that std::vector memory would require.
+            struct pinned_act_buf {
+                float *      ptr  = nullptr;
+                size_t       cap  = 0;   // capacity in floats
+                sycl::queue * owner_q = nullptr;
+                ~pinned_act_buf() {
+                    if (ptr && owner_q) { sycl::free(ptr, *owner_q); }
+                }
+                void ensure(size_t n, sycl::queue & q) {
+                    if (n <= cap) return;
+                    if (ptr) sycl::free(ptr, q);
+                    ptr = sycl::malloc_host<float>(n, q);
+                    cap = n;
+                    owner_q = &q;
+                }
+            };
+            static thread_local pinned_act_buf tl_act_pinned;
+
+            // Check if src1 data is host-accessible (USM host/shared/mmap).
+            // Cache the pointer type result to avoid repeated ~0.7ms driver
+            // round-trips. USM allocation type never changes for a given pointer.
             bool src1_on_host = src1->buffer && ggml_backend_buffer_is_host(src1->buffer);
             if (!src1_on_host && src1->data) {
-                sycl::usm::alloc pt = sycl::get_pointer_type(src1->data, stream->get_context());
+                static thread_local std::unordered_map<const void *, sycl::usm::alloc> tl_ptr_type_cache;
+                auto cache_it = tl_ptr_type_cache.find(src1->data);
+                sycl::usm::alloc pt;
+                if (cache_it != tl_ptr_type_cache.end()) {
+                    pt = cache_it->second;
+                } else {
+                    pt = sycl::get_pointer_type(src1->data, stream->get_context());
+                    tl_ptr_type_cache[src1->data] = pt;
+                }
                 src1_on_host = (pt == sycl::usm::alloc::host ||
                                 pt == sycl::usm::alloc::shared ||
                                 pt == sycl::usm::alloc::unknown);
@@ -25584,28 +25612,40 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 // Zero-copy: use src1 data directly from host
                 act_host_ptr = static_cast<const float *>(src1->data);
             } else {
-                // D2H: copy activation to thread-local buffer (reused across calls)
+                // D2H: copy activation to pinned host buffer (reused across calls).
+                // Pinned memory enables direct DMA without internal staging.
                 const size_t act_floats = static_cast<size_t>(K);
-                if (tl_act_buf.size() < act_floats) {
-                    tl_act_buf.resize(act_floats);
-                }
+                tl_act_pinned.ensure(act_floats, *stream);
                 const char * src1_dev = static_cast<const char *>(
                     ggml_sycl_get_data_ptr(src1, ctx.device));
-                stream->memcpy(tl_act_buf.data(), src1_dev, act_floats * sizeof(float));
+                stream->memcpy(tl_act_pinned.ptr, src1_dev, act_floats * sizeof(float));
                 stream->wait();
-                act_host_ptr = tl_act_buf.data();
+                act_host_ptr = tl_act_pinned.ptr;
             }
 
             if (prof_enabled) { t2 = hrc::now(); }
 
             // --- Build tasks and compute inline ---
-            // Use thread-local output buffer to avoid pool acquire/release overhead.
-            // Max 16 experts typical (top-K=8 per token); size to actual need.
-            static thread_local std::vector<float> tl_out_buf;
+            // Use pinned host output buffer for direct DMA scatter to device.
+            // Pinned memory avoids internal staging for H2D copies.
+            struct pinned_out_buf {
+                float *      ptr  = nullptr;
+                size_t       cap  = 0;
+                sycl::queue * owner_q = nullptr;
+                ~pinned_out_buf() {
+                    if (ptr && owner_q) { sycl::free(ptr, *owner_q); }
+                }
+                void ensure(size_t n, sycl::queue & q) {
+                    if (n <= cap) return;
+                    if (ptr) sycl::free(ptr, q);
+                    ptr = sycl::malloc_host<float>(n, q);
+                    cap = n;
+                    owner_q = &q;
+                }
+            };
+            static thread_local pinned_out_buf tl_out_pinned;
             const size_t out_floats = n_cpu * static_cast<size_t>(N);
-            if (tl_out_buf.size() < out_floats) {
-                tl_out_buf.resize(out_floats);
-            }
+            tl_out_pinned.ensure(out_floats, *stream);
 
             // Build task array on stack for small expert counts, heap for large.
             // Typical: 8 experts (top-K), max ~16.
@@ -25624,7 +25664,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 tasks_ptr[ci].weight_host = static_cast<const char *>(src0->data)
                                             + static_cast<size_t>(expert_id) * nb02;
                 tasks_ptr[ci].act_host    = act_host_ptr;
-                tasks_ptr[ci].output_host = tl_out_buf.data() + ci * static_cast<size_t>(N);
+                tasks_ptr[ci].output_host = tl_out_pinned.ptr + ci * static_cast<size_t>(N);
                 tasks_ptr[ci].type        = src0->type;
                 tasks_ptr[ci].K           = static_cast<int>(K);
                 tasks_ptr[ci].N           = static_cast<int>(N);
@@ -25637,17 +25677,33 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
             if (prof_enabled) { t3 = hrc::now(); }
 
-            // --- Scatter results H2D immediately ---
-            // No deferred scatter — eliminates future/state management overhead.
+            // --- Scatter results H2D ---
+            // For ne12=1 (single token), the output layout is contiguous:
+            // dst_slot[ci] = dst_d + ci * nb1, and nb1 = N * sizeof(float).
+            // Use a single bulk memcpy instead of n_cpu individual memcpys
+            // to reduce SYCL submission overhead.
             char * dst_d = static_cast<char *>(ggml_sycl_get_data_ptr(dst, ctx.device));
-            const float * out_src = tl_out_buf.data();
-            for (size_t ci = 0; ci < n_cpu; ci++) {
-                const int64_t iid1 = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_f));
-                const int64_t id   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_f));
-                char *        dst_slot = dst_d + id * nb1 + iid1 * nb2;
-                stream->memcpy(dst_slot, out_src + ci * static_cast<size_t>(N),
-                               static_cast<size_t>(N) * sizeof(float));
+            const float * out_src = tl_out_pinned.ptr;
+            const bool scatter_contiguous = (nb1 == static_cast<size_t>(N) * sizeof(float));
+            if (scatter_contiguous && ne12 == 1) {
+                // Single bulk H2D copy — source (tl_out_buf) and destination
+                // are both contiguous for the single-token case.
+                stream->memcpy(dst_d, out_src,
+                               n_cpu * static_cast<size_t>(N) * sizeof(float));
+            } else {
+                // Strided scatter fallback for multi-token or padded layouts.
+                for (size_t ci = 0; ci < n_cpu; ci++) {
+                    const int64_t iid1 = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_f));
+                    const int64_t id   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_f));
+                    char *        dst_slot = dst_d + id * nb1 + iid1 * nb2;
+                    stream->memcpy(dst_slot, out_src + ci * static_cast<size_t>(N),
+                                   static_cast<size_t>(N) * sizeof(float));
+                }
             }
+            // Must wait for the memcpy to complete before returning, because
+            // the pinned output buffer (tl_out_pinned) will be reused by
+            // the next MUL_MAT_ID call's CPU compute, which would corrupt
+            // the DMA source data if the memcpy is still in-flight.
             stream->wait();
 
             if (prof_enabled) { t4 = hrc::now(); }
@@ -25671,7 +25727,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 if (g_prof.n_calls >= report_interval) {
                     const int nc = g_prof.n_calls;
                     g_prof.n_tokens_reported++;
-                    GGML_LOG_INFO(
+                    fprintf(stderr,
                         "[CPU-TG-PROF] token #%d | %d calls, %d experts, %.1f MB weights\n"
                         "  ids:     %7.0f us (%4.1f%%)  act:     %7.0f us (%4.1f%%)\n"
                         "  compute: %7.0f us (%4.1f%%)  scatter: %7.0f us (%4.1f%%)\n"
