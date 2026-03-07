@@ -289,5 +289,7 @@ void ggml_cuda_op_upscale(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         upscale_f32_bicubic_cuda(src0_d, dst_d, src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3],
                                  src0->ne[0], src0->ne[1], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
                                  sf0, sf1, sf2, sf3, pixel_offset, stream);
+    } else {
+        GGML_ABORT("fatal error");
     }
 }

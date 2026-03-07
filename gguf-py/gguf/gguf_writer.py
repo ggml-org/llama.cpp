@@ -1198,6 +1198,15 @@ class GGUFWriter:
     def add_vision_window_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.WINDOW_SIZE, value)
 
+    def add_vision_sam_layers_count(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.SAM.BLOCK_COUNT, value)
+
+    def add_vision_sam_embedding_length(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.SAM.EMBEDDING_LENGTH, value)
+
+    def add_vision_sam_head_count(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.SAM.HEAD_COUNT, value)
+
     # audio models
 
     def add_clip_audio_projector_type(self, value: str) -> None:
