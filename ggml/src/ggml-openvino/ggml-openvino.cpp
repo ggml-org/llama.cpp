@@ -637,7 +637,7 @@ static ggml_guid_t ggml_backend_openvino_guid(void) {
     return &guid;
 }
 
-std::shared_ptr<ov_runtime_context> get_ov_runtime_context_ptr() {
+static std::shared_ptr<ov_runtime_context> get_ov_runtime_context_ptr() {
     static std::shared_ptr<ov_runtime_context> r_ctx = std::make_shared<ov_runtime_context>();
     return r_ctx;
 }

@@ -151,9 +151,10 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
                                           state_tensor.get_shape()[2], state_tensor.get_shape()[3]});
                        state_tensor = kv_tensor;
                     }
+                    auto state_tensor_shape = state_tensor.get_shape();
                     ov::Coordinate begin = {0, 0, 0, 0};
-                    ov::Coordinate end = {state_tensor.get_shape()[0], static_cast<uint32_t>(pos_data[0]),
-                                          state_tensor.get_shape()[2], state_tensor.get_shape()[3]};
+                    ov::Coordinate end = {state_tensor_shape[0], static_cast<uint32_t>(pos_data[0]),
+                                          state_tensor_shape[2], state_tensor_shape[3]};
                     ov::Tensor new_state_tensor(state_tensor, begin, end);
                     state.set_state(new_state_tensor);
                 }
