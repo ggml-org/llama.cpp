@@ -1279,13 +1279,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_SWA_FULL"));
     add_opt(common_arg(
-        {"--ctx-checkpoints", "--swa-checkpoints"}, "N",
+        {"-ctxcp", "--ctx-checkpoints", "--swa-checkpoints"}, "N",
         string_format("max number of context checkpoints to create per slot (default: %d)"
             "[(more info)](https://github.com/ggml-org/llama.cpp/pull/15293)", params.n_ctx_checkpoints),
         [](common_params & params, int value) {
             params.n_ctx_checkpoints = value;
         }
     ).set_env("LLAMA_ARG_CTX_CHECKPOINTS").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"-cpent", "--checkpoint-every-n-tokens"}, "N",
+        string_format("create a checkpoint every n tokens during prefill (processing), -1 to disable (default: %d)", params.checkpoint_every_nt),
+        [](common_params & params, int value) {
+            params.checkpoint_every_nt = value;
+        }
+    ).set_env("LLAMA_ARG_CHECKPOINT_EVERY_NT").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
         {"-cram", "--cache-ram"}, "N",
         string_format("set the maximum cache size in MiB (default: %d, -1 - no limit, 0 - disable)"
@@ -2399,7 +2406,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 params.fit_params = false;
             } else {
                 throw std::runtime_error(
-                    string_format("error: unkown value for --fit: '%s'\n", value.c_str()));
+                    string_format("error: unknown value for --fit: '%s'\n", value.c_str()));
             }
         }
     ).set_env("LLAMA_ARG_FIT"));
@@ -2827,6 +2834,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.webui_config_json = read_file(value);
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_WEBUI_CONFIG_FILE"));
+    add_opt(common_arg(
+        {"--webui-mcp-proxy"},
+        {"--no-webui-mcp-proxy"},
+        string_format("experimental: whether to enable MCP CORS proxy - do not enable in untrusted environments (default: %s)", params.webui_mcp_proxy ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.webui_mcp_proxy = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_WEBUI_MCP_PROXY"));
     add_opt(common_arg(
         {"--webui"},
         {"--no-webui"},
