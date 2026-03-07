@@ -16081,7 +16081,7 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
                 tensor_clone = ggml_exp(ggml_ctx, src_clone[0]);
                 break;
             case GGML_UNARY_OP_ELU:
-                tensor_clone = ggml_elu(ggml_ctx, src_clone[0]);                
+                tensor_clone = ggml_elu(ggml_ctx, src_clone[0]);
                 break;
             case GGML_UNARY_OP_SILU:
                 tensor_clone = ggml_silu(ggml_ctx, src_clone[0]);

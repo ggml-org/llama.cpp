@@ -17,8 +17,8 @@ void main() {
         return;
     }
 
-    float x = float(data_a[i]);    
-   
+    float x = float(data_a[i]);
+
     if (x < 0.0f) {
         x = exp(x) - 1;
     }
