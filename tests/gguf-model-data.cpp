@@ -124,6 +124,35 @@ static bool gguf_skip_value(gguf_buf_reader & r, int32_t vtype) {
 }
 
 static bool gguf_read_uint32_val(gguf_buf_reader & r, int32_t vtype, uint32_t & out) {
+    // Handle array-valued fields (e.g. per-layer head counts in hybrid models)
+    // by reading the first element as a representative value.
+    if (vtype == GGUF_TYPE_ARRAY) {
+        int32_t elem_type;
+        uint64_t count;
+        if (!r.read_val(elem_type)) {
+            return false;
+        }
+        if (!r.read_val(count)) {
+            return false;
+        }
+        if (count == 0) {
+            return false;
+        }
+        // Read first element, skip the rest
+        if (!gguf_read_uint32_val(r, elem_type, out)) {
+            return false;
+        }
+        for (uint64_t i = 1; i < count; i++) {
+            size_t sz = gguf_val_type_size(elem_type);
+            if (sz == 0) {
+                return false;
+            }
+            if (!r.skip(sz)) {
+                return false;
+            }
+        }
+        return true;
+    }
     if (vtype == GGUF_TYPE_UINT8) {
         uint8_t v;
         if (!r.read_val(v)) {
