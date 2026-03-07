@@ -529,6 +529,33 @@ static sycl::event ggml_sycl_fill_reordered_host(sycl::queue & queue, void * dst
 static size_t ggml_sycl_layout_bytes_for_dims(ggml_type type, int64_t ncols, int64_t nrows,
                                               layout_mode layout, int device_id);
 
+// ---------------------------------------------------------------------------
+// Gate+Up tensor pairing for fused CPU expert dispatch
+// ---------------------------------------------------------------------------
+// Maps gate tensor data pointer → up tensor data pointer.
+// Built during moe_hybrid_init_once() by scanning MUL_MAT_ID nodes for
+// paired ffn_gate_exps/ffn_up_exps tensors in the same block.
+// Used by CPU-TG fast-path to precompute up matmul during gate dispatch.
+struct gate_up_pair {
+    const void * up_data;     // mmap pointer to up tensor's data
+    size_t       nb02;        // bytes per expert (stride for expert_id indexing)
+    ggml_type    type;        // weight quant type (must match gate)
+    int64_t      K;           // input dimension (ne[0])
+    int64_t      N;           // output dimension (ne[1])
+};
+static std::unordered_map<const void *, gate_up_pair> g_gate_up_pairs;  // gate data ptr → up info
+
+// Precomputed up results cache: keyed by up tensor data pointer.
+// Populated during gate MUL_MAT_ID dispatch, consumed during up dispatch.
+// Entries are valid for one token (cleared at graph boundary).
+struct precomputed_up_result {
+    std::vector<float>   data;      // precomputed up output [n_experts * N]
+    std::vector<int32_t> expert_ids; // expert IDs that were computed
+    int64_t              N;          // output dimension per expert
+    bool                 valid;
+};
+static thread_local std::unordered_map<const void *, precomputed_up_result> g_precomputed_up;
+
 // Scan a compute graph for MUL_MAT_ID nodes, register experts with the unified cache,
 // and set up prefetcher + predictor.
 // Called once per device via std::call_once.
@@ -1239,6 +1266,65 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
             g_moe_multi_gpu_active.store(false, std::memory_order_release);
             GGML_LOG_WARN("[MOE-MULTI-GPU] No secondary devices completed init, "
                           "falling back to single-GPU\n");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Build gate→up tensor pairing map for fused CPU expert dispatch.
+    // Scans MUL_MAT_ID nodes for paired ffn_gate_exps/ffn_up_exps tensors.
+    // -----------------------------------------------------------------------
+    {
+        // Collect all MUL_MAT_ID tensors by block number + type (gate/up/down)
+        struct mmid_tensor_info {
+            const ggml_tensor * tensor;
+            int                 block_id;
+            bool                is_gate;
+            bool                is_up;
+        };
+        std::vector<mmid_tensor_info> mmid_tensors;
+
+        for (int i = 0; i < cgraph->n_nodes; i++) {
+            const ggml_tensor * node = cgraph->nodes[i];
+            if (node->op != GGML_OP_MUL_MAT_ID || !node->src[0] || !node->src[0]->name) {
+                continue;
+            }
+            const ggml_tensor * src0 = node->src[0];
+            const char * name = src0->name;
+            int block_id = ggml_sycl_tp_extract_layer_number(name);
+            if (block_id < 0) {
+                continue;
+            }
+            bool is_gate = (strstr(name, "ffn_gate") != nullptr);
+            bool is_up   = (strstr(name, "ffn_up") != nullptr);
+            if (is_gate || is_up) {
+                mmid_tensors.push_back({ src0, block_id, is_gate, is_up });
+            }
+        }
+
+        // Pair gate→up within same block
+        int n_pairs = 0;
+        for (const auto & gate_info : mmid_tensors) {
+            if (!gate_info.is_gate) continue;
+            for (const auto & up_info : mmid_tensors) {
+                if (!up_info.is_up || up_info.block_id != gate_info.block_id) continue;
+                if (gate_info.tensor->ne[0] != up_info.tensor->ne[0] ||
+                    gate_info.tensor->ne[1] != up_info.tensor->ne[1]) continue;
+                if (gate_info.tensor->type != up_info.tensor->type) continue;
+
+                gate_up_pair pair;
+                pair.up_data = up_info.tensor->data;
+                pair.nb02    = up_info.tensor->nb[2];
+                pair.type    = up_info.tensor->type;
+                pair.K       = up_info.tensor->ne[0];
+                pair.N       = up_info.tensor->ne[1];
+                g_gate_up_pairs[gate_info.tensor->data] = pair;
+                n_pairs++;
+                break;  // One up per gate
+            }
+        }
+        if (n_pairs > 0) {
+            GGML_LOG_INFO("[MOE-FUSION] Paired %d gate→up tensors for fused CPU dispatch\n",
+                          n_pairs);
         }
     }
 }
@@ -25393,7 +25479,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
         int cpu_tg_val_fast = cpu_expert_tg_mode_fast.load(std::memory_order_acquire);
         if (cpu_tg_val_fast < 0) {
             const char * env = getenv("GGML_SYCL_CPU_EXPERT_TG");
-            int new_val = env ? std::atoi(env) : 0;  // Default: OFF (opt-in for now)
+            int new_val = env ? std::atoi(env) : -2;  // Default: auto (enable when host-resident)
             cpu_expert_tg_mode_fast.compare_exchange_strong(cpu_tg_val_fast, new_val,
                 std::memory_order_release, std::memory_order_acquire);
             cpu_tg_val_fast = cpu_expert_tg_mode_fast.load(std::memory_order_acquire);
@@ -25414,7 +25500,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
         const auto * cpu_traits_fast = ggml_get_type_traits_cpu(src0->type);
         const bool   cpu_type_ok_fast = cpu_traits_fast && cpu_traits_fast->vec_dot;
 
-        if (cpu_tg_val_fast == 1 && host_weights_fast && cpu_type_ok_fast) {
+        const bool multi_gpu_fast = g_moe_multi_gpu_active.load(std::memory_order_acquire);
+        if ((cpu_tg_val_fast == 1 || cpu_tg_val_fast == -2) &&
+            host_weights_fast && cpu_type_ok_fast && !multi_gpu_fast) {
             static std::atomic<int> cpu_tg_log{0};
             if (cpu_tg_log.fetch_add(1, std::memory_order_relaxed) < 3) {
                 GGML_LOG_INFO("[CPU-TG] Routing %s (type=%d, ne12=1) to CPU-primary path\n",
@@ -25650,12 +25738,68 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
         }
     }
 
+    // ---------------------------------------------------------------
+    // Early computation of cpu_expert_tg for hybrid dispatch.
+    // Must be computed BEFORE GPU dispatch paths (XMX sorted, ESIMD, MMVQ)
+    // which would otherwise intercept the op and return early.
+    // ---------------------------------------------------------------
+    bool early_cpu_expert_tg = false;
+    if (ne12 == 1) {
+        // Check if weights are host-resident using the comprehensive check
+        bool hw = ggml_sycl_is_host_resident_weight(src0, ctx.stream());
+        if (!hw && src0->extra) {
+            auto * ex = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
+            void * lp = ggml_sycl_get_layout_ptr_for(src0, ctx.device, GGML_LAYOUT_AOS);
+            if (lp) {
+                auto pt = sycl::get_pointer_type(lp, ctx.stream()->get_context());
+                hw = (pt != sycl::usm::alloc::device);
+            }
+            GGML_UNUSED(ex);
+        }
+        if (hw) {
+            // Check env var
+            static std::atomic<int> cpu_expert_tg_early{ -1 };
+            int etv = cpu_expert_tg_early.load(std::memory_order_acquire);
+            if (etv < 0) {
+                const char * env = getenv("GGML_SYCL_CPU_EXPERT_TG");
+                int nv = env ? std::atoi(env) : -2;  // -2 = auto
+                cpu_expert_tg_early.compare_exchange_strong(etv, nv,
+                    std::memory_order_release, std::memory_order_acquire);
+                etv = cpu_expert_tg_early.load(std::memory_order_acquire);
+            }
+            // Check MOE_HYBRID env
+            static std::atomic<int> moe_hybrid_early{ -1 };
+            int mhv = moe_hybrid_early.load(std::memory_order_acquire);
+            if (mhv < 0) {
+                const char * env = getenv("GGML_SYCL_MOE_HYBRID");
+                int nv = env ? atoi(env) : 1;
+                moe_hybrid_early.compare_exchange_strong(mhv, nv,
+                    std::memory_order_release, std::memory_order_acquire);
+                mhv = moe_hybrid_early.load(std::memory_order_acquire);
+            }
+            const auto * ct = ggml_get_type_traits_cpu(src0->type);
+            bool ct_ok = ct && ct->vec_dot;
+            early_cpu_expert_tg = (mhv != 0) && ct_ok && (etv == 1 || etv == -2);
+            if (early_cpu_expert_tg) {
+                static std::atomic<int> log_count{0};
+                if (log_count.fetch_add(1, std::memory_order_relaxed) < 3) {
+                    GGML_LOG_INFO("[CPU-TG] Hybrid dispatch active for %s (host-resident MoE weights)\n",
+                                  src0->name ? src0->name : "?");
+                }
+            }
+        }
+    }
+
     // Priority order (kernel-first selection):
     // XMX sorted -> fused ESIMD -> MMVQ (coalesced/SoA/AoS) -> host routing.
     // When multi-GPU MoE is active, some experts in the GPU0 pointer table may be
     // nullptr (placed on secondary GPUs and skipped during update_moe_ptr_table).
     // The MMVQ compact list builder detects nullptr entries and returns false,
     // which triggers fallback to hybrid dispatch (GPU0 MMVQ + CPU for misses).
+    //
+    // When early_cpu_expert_tg is true, skip GPU dispatch paths entirely and
+    // fall through to the host routing section for hybrid CPU/GPU dispatch.
+    if (!early_cpu_expert_tg) {
     if (xmx_layout_allowed() && try_xmx_sorted_moe(ctx, src0, src1, ids, dst)) {
         GGML_SYCL_DEBUG("[MoE] XMX sorted dispatch successful for type %d\n", src0->type);
         return;
@@ -25730,8 +25874,11 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
         GGML_SYCL_DEBUG("[MoE] GPU-side MMVQ (AoS) dispatch successful for type %d\n", src0->type);
         return;
     }
+    } // end if (!early_cpu_expert_tg)
     GGML_SYCL_DEBUG("[MoE] All MMVQ layouts failed, falling back to host routing\n");
-    GGML_LOG_INFO("[MoE] Falling back to host-side routing for type %d\n", src0->type);
+    if (!early_cpu_expert_tg) {
+        GGML_LOG_INFO("[MoE] Falling back to host-side routing for type %d\n", src0->type);
+    }
     // Host-side routing requires synchronization which is incompatible with graph recording.
 
     // If we reach here during graph recording, throw so the outer handler can
