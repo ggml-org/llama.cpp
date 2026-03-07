@@ -105,159 +105,163 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
     int64_t compile_end_time;
     int64_t infer_end_time;
 
-    auto it = r_ctx->decoder_cache.find(key);
+    {
+        std::lock_guard<std::mutex> lock(r_ctx->ov_compute_mutex);
 
-    cache_hit = it != r_ctx->decoder_cache.end();
-    ModelParams old_m_params;
-    if (cache_hit) {
-        ggml_decoder = it->second;
-        old_m_params = ggml_decoder->get_model_params();
-        cache_hit = old_m_params.can_reuse_dynamically(m_params);
-    }
+        auto it = r_ctx->decoder_cache.find(key);
 
-    if (cache_hit) {
-        std::map<std::string, std::shared_ptr<ov::Node>> model_weights;
-        ggml_decoder->set_compute_params(c_params);
-        ggml_decoder->set_model_params(m_params);
-        if (old_m_params.kv_buffer_changed(m_params)) {
-            ggml_decoder->update_io(cgraph);
+        cache_hit = it != r_ctx->decoder_cache.end();
+        ModelParams old_m_params;
+        if (cache_hit) {
+            ggml_decoder = it->second;
+            old_m_params = ggml_decoder->get_model_params();
+            cache_hit = old_m_params.can_reuse_dynamically(m_params);
         }
-        ggml_decoder->add_extra_inputs();
-        infer_request = r_ctx->infer_request_cache.at(key);
 
-        if (stateful) {
-            const auto * inp_pos = get_inp_pos_tensor(cgraph);
-            int32_t * pos_data = (int32_t *) inp_pos->data;
-            auto pos_shape = ggml_decoder->get_shape(inp_pos);
-            if (pos_data[0] == 0) {
-                infer_request->reset_state();
-                r_ctx->stateful_kv_size = pos_shape[3];
-            } else if (r_ctx->stateful_kv_size == static_cast<size_t>(pos_data[0])) {
-                r_ctx->stateful_kv_size += pos_shape[3];
-            } else {
-                auto states = infer_request->query_state();
-                for (auto state : states) {
-                    auto state_tensor = state.get_state();
-                    auto state_tensor_shape = state_tensor.get_shape();
-                    if (static_cast<uint32_t>(pos_data[0]) > r_ctx->stateful_kv_size) {
-                        std::string state_name;
-                        try {
-                            state_name = r_ctx->kv_state_input_name_map.at(state.get_name());
-                        } catch (...) {
-                            GGML_LOG_ERROR("GGML OpenVINO backend stateful inference failed: no input found for the state\n");
-                            return GGML_STATUS_FAILED;
+        if (cache_hit) {
+            std::map<std::string, std::shared_ptr<ov::Node>> model_weights;
+            ggml_decoder->set_compute_params(c_params);
+            ggml_decoder->set_model_params(m_params);
+            if (old_m_params.kv_buffer_changed(m_params)) {
+                ggml_decoder->update_io(cgraph);
+            }
+            ggml_decoder->add_extra_inputs();
+            infer_request = r_ctx->infer_request_cache.at(key);
+
+            if (stateful) {
+                const auto * inp_pos = get_inp_pos_tensor(cgraph);
+                int32_t * pos_data = (int32_t *) inp_pos->data;
+                auto pos_shape = ggml_decoder->get_shape(inp_pos);
+                if (pos_data[0] == 0) {
+                    infer_request->reset_state();
+                    r_ctx->stateful_kv_size = pos_shape[3];
+                } else if (r_ctx->stateful_kv_size == static_cast<size_t>(pos_data[0])) {
+                    r_ctx->stateful_kv_size += pos_shape[3];
+                } else {
+                    auto states = infer_request->query_state();
+                    for (auto state : states) {
+                        auto state_tensor = state.get_state();
+                        auto state_tensor_shape = state_tensor.get_shape();
+                        if (static_cast<uint32_t>(pos_data[0]) > r_ctx->stateful_kv_size) {
+                            std::string state_name;
+                            try {
+                                state_name = r_ctx->kv_state_input_name_map.at(state.get_name());
+                            } catch (...) {
+                                GGML_LOG_ERROR("GGML OpenVINO backend stateful inference failed: no input found for the state\n");
+                                return GGML_STATUS_FAILED;
+                            }
+                            auto kv_tensor = get_ov_input_tensor(ggml_decoder, state_name);
+                            kv_tensor.set_shape({state_tensor_shape[0], kv_tensor.get_shape()[2],
+                                                 state_tensor_shape[2], state_tensor_shape[3]});
+                           state_tensor = kv_tensor;
+                           state_tensor_shape = state_tensor.get_shape();
                         }
-                        auto kv_tensor = get_ov_input_tensor(ggml_decoder, state_name);
-                        kv_tensor.set_shape({state_tensor_shape[0], kv_tensor.get_shape()[2],
-                                             state_tensor_shape[2], state_tensor_shape[3]});
-                       state_tensor = kv_tensor;
-                       state_tensor_shape = state_tensor.get_shape();
+                        ov::Coordinate begin = {0, 0, 0, 0};
+                        ov::Coordinate end = {state_tensor_shape[0], static_cast<uint32_t>(pos_data[0]),
+                                              state_tensor_shape[2], state_tensor_shape[3]};
+                        ov::Tensor new_state_tensor(state_tensor, begin, end);
+                        state.set_state(new_state_tensor);
                     }
-                    ov::Coordinate begin = {0, 0, 0, 0};
-                    ov::Coordinate end = {state_tensor_shape[0], static_cast<uint32_t>(pos_data[0]),
-                                          state_tensor_shape[2], state_tensor_shape[3]};
-                    ov::Tensor new_state_tensor(state_tensor, begin, end);
-                    state.set_state(new_state_tensor);
+                    r_ctx->stateful_kv_size = pos_data[0] + 1;
                 }
-                r_ctx->stateful_kv_size = pos_data[0] + 1;
             }
-        }
 
-        decoder_end_time = ggml_time_us();
-        conversion_end_time = decoder_end_time;
-        compile_end_time = decoder_end_time;
-    } else {
-        r_ctx->infer_request_cache.erase(key);
-
-        std::shared_ptr<ov::Model> model;
-        auto model_weights = GgmlOvDecoder::create_weight_nodes(cgraph);
-
-        ggml_decoder = std::make_shared<GgmlOvDecoder>(cgraph, m_params, c_params, model_weights, is_static, stateful);
-        decoder_end_time = ggml_time_us();
-
-        auto input_model = std::make_shared<ov::frontend::ggml::InputModel>(ggml_decoder);
-        model = ov::frontend::ggml::FrontEnd::convert(input_model);
-        ggml_decoder->clear_model_weights();
-        conversion_end_time = ggml_time_us();
-
-        if (getenv("GGML_OPENVINO_DUMP_IR")) {
-            char timestamped_filename[64];
-            auto timestamp = (long long) ggml_time_us();
-            snprintf(timestamped_filename, sizeof(timestamped_filename), "model_%lld.xml", timestamp);
-            ov::serialize(model, timestamped_filename);
-        }
-
-        ov::CompiledModel compiled_model;
-        auto remote_context = ggml_openvino_get_remote_context();
-        if (remote_context.has_value()) {
-            compiled_model = core.compile_model(model, remote_context.value(), config);
+            decoder_end_time = ggml_time_us();
+            conversion_end_time = decoder_end_time;
+            compile_end_time = decoder_end_time;
         } else {
-            compiled_model = core.compile_model(model, device, config);
-        }
-        compile_end_time = ggml_time_us();
-        infer_request = std::make_shared<ov::InferRequest>(compiled_model.create_infer_request());
-        r_ctx->infer_request_cache[key] = infer_request;
-        r_ctx->decoder_cache[key] = ggml_decoder;
+            r_ctx->infer_request_cache.erase(key);
 
-        std::vector<std::string> ov_input_names;
-        std::vector<std::string> ov_output_names;
-        for (const auto & ov_param : model->get_parameters()) {
-            ov_input_names.push_back(ov_param->get_friendly_name());
-        }
-        for (const auto & ov_output : model->get_results()) {
-            ov_output_names.push_back(ov_output->get_friendly_name());
-        }
-        r_ctx->ov_input_names_cache[key] = std::move(ov_input_names);
-        r_ctx->ov_output_names_cache[key] = std::move(ov_output_names);
+            std::shared_ptr<ov::Model> model;
+            auto model_weights = GgmlOvDecoder::create_weight_nodes(cgraph);
 
-        if (stateful) {
-            const auto * inp_pos = get_inp_pos_tensor(cgraph);
-            auto pos_shape = ggml_decoder->get_shape(inp_pos);
-            r_ctx->stateful_kv_size = pos_shape[3];
-            const auto kv_param_res_names = ggml_decoder->get_kv_param_res_names();
-            for (const auto& pair : kv_param_res_names) {
-                r_ctx->kv_state_input_name_map[pair.first+pair.second] = pair.first;
+            ggml_decoder = std::make_shared<GgmlOvDecoder>(cgraph, m_params, c_params, model_weights, is_static, stateful);
+            decoder_end_time = ggml_time_us();
+
+            auto input_model = std::make_shared<ov::frontend::ggml::InputModel>(ggml_decoder);
+            model = ov::frontend::ggml::FrontEnd::convert(input_model);
+            ggml_decoder->clear_model_weights();
+            conversion_end_time = ggml_time_us();
+
+            if (getenv("GGML_OPENVINO_DUMP_IR")) {
+                char timestamped_filename[64];
+                auto timestamp = (long long) ggml_time_us();
+                snprintf(timestamped_filename, sizeof(timestamped_filename), "model_%lld.xml", timestamp);
+                ov::serialize(model, timestamped_filename);
+            }
+
+            ov::CompiledModel compiled_model;
+            auto remote_context = ggml_openvino_get_remote_context();
+            if (remote_context.has_value()) {
+                compiled_model = core.compile_model(model, remote_context.value(), config);
+            } else {
+                compiled_model = core.compile_model(model, device, config);
+            }
+            compile_end_time = ggml_time_us();
+            infer_request = std::make_shared<ov::InferRequest>(compiled_model.create_infer_request());
+            r_ctx->infer_request_cache[key] = infer_request;
+            r_ctx->decoder_cache[key] = ggml_decoder;
+
+            std::vector<std::string> ov_input_names;
+            std::vector<std::string> ov_output_names;
+            for (const auto & ov_param : model->get_parameters()) {
+                ov_input_names.push_back(ov_param->get_friendly_name());
+            }
+            for (const auto & ov_output : model->get_results()) {
+                ov_output_names.push_back(ov_output->get_friendly_name());
+            }
+            r_ctx->ov_input_names_cache[key] = std::move(ov_input_names);
+            r_ctx->ov_output_names_cache[key] = std::move(ov_output_names);
+
+            if (stateful) {
+                const auto * inp_pos = get_inp_pos_tensor(cgraph);
+                auto pos_shape = ggml_decoder->get_shape(inp_pos);
+                r_ctx->stateful_kv_size = pos_shape[3];
+                const auto kv_param_res_names = ggml_decoder->get_kv_param_res_names();
+                for (const auto& pair : kv_param_res_names) {
+                    r_ctx->kv_state_input_name_map[pair.first+pair.second] = pair.first;
+                }
             }
         }
-    }
 
-    auto ov_input_names = r_ctx->ov_input_names_cache[key];
-    auto ov_output_names = r_ctx->ov_output_names_cache[key];
+        auto ov_input_names = r_ctx->ov_input_names_cache[key];
+        auto ov_output_names = r_ctx->ov_output_names_cache[key];
 
-    for (size_t i = 0; i < ov_input_names.size(); i++) {
-        auto param_name = ov_input_names[i];
-        auto input_tensor = get_ov_input_tensor(ggml_decoder, param_name);
-        infer_request->set_input_tensor(i, input_tensor);
+        for (size_t i = 0; i < ov_input_names.size(); i++) {
+            auto param_name = ov_input_names[i];
+            auto input_tensor = get_ov_input_tensor(ggml_decoder, param_name);
+            infer_request->set_input_tensor(i, input_tensor);
 
-        if (getenv("GGML_OPENVINO_DEBUG_INPUT")) {
-            print_input_tensor_info(param_name, input_tensor);
+            if (getenv("GGML_OPENVINO_DEBUG_INPUT")) {
+                print_input_tensor_info(param_name, input_tensor);
+            }
         }
-    }
 
-    for (size_t i = 0; i < ov_output_names.size(); i++) {
-        auto * ggml_tensor = ggml_decoder->get_model_outputs().at(ov_output_names[i]);
-        auto output_tensor = create_ov_output_tensor(ggml_decoder, infer_request, i, ggml_tensor);
-        infer_request->set_output_tensor(i, output_tensor);
-    }
-
-    infer_request->infer();
-    infer_end_time = ggml_time_us();
-
-    if (getenv("GGML_OPENVINO_DEBUG_OUTPUT")) {
         for (size_t i = 0; i < ov_output_names.size(); i++) {
-            const auto output_tensor = infer_request->get_output_tensor(i);
-            print_output_tensor_info(ov_output_names[i], output_tensor, output_tensor.data());
+            auto * ggml_tensor = ggml_decoder->get_model_outputs().at(ov_output_names[i]);
+            auto output_tensor = create_ov_output_tensor(ggml_decoder, infer_request, i, ggml_tensor);
+            infer_request->set_output_tensor(i, output_tensor);
         }
-    }
 
-    if (getenv("GGML_OPENVINO_PROFILING")) {
-        GGML_LOG_INFO("\nGGML OpenVINO Backend: \n");
-        GGML_LOG_INFO("  - Graph decoder time: %ld ms \n", (decoder_end_time - start_time) / 1000);
-        if (!cache_hit) {
-            GGML_LOG_INFO("  - Graph conversion time: %ld ms \n", (conversion_end_time - decoder_end_time) / 1000);
-            GGML_LOG_INFO("  - Graph compile time: %ld ms \n", (compile_end_time - conversion_end_time) / 1000);
+        infer_request->infer();
+        infer_end_time = ggml_time_us();
+
+        if (getenv("GGML_OPENVINO_DEBUG_OUTPUT")) {
+            for (size_t i = 0; i < ov_output_names.size(); i++) {
+                const auto output_tensor = infer_request->get_output_tensor(i);
+                print_output_tensor_info(ov_output_names[i], output_tensor, output_tensor.data());
+            }
         }
-        GGML_LOG_INFO("  - Graph inference time: %ld ms \n", (infer_end_time - compile_end_time) / 1000);
+
+        if (getenv("GGML_OPENVINO_PROFILING")) {
+            GGML_LOG_INFO("\nGGML OpenVINO Backend: \n");
+            GGML_LOG_INFO("  - Graph decoder time: %ld ms \n", (decoder_end_time - start_time) / 1000);
+            if (!cache_hit) {
+                GGML_LOG_INFO("  - Graph conversion time: %ld ms \n", (conversion_end_time - decoder_end_time) / 1000);
+                GGML_LOG_INFO("  - Graph compile time: %ld ms \n", (compile_end_time - conversion_end_time) / 1000);
+            }
+            GGML_LOG_INFO("  - Graph inference time: %ld ms \n", (infer_end_time - compile_end_time) / 1000);
+        }
     }
 
     return GGML_STATUS_SUCCESS;

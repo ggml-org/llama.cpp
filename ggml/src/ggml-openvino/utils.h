@@ -41,6 +41,7 @@ struct graph_key_hash {
 };
 
 struct ov_runtime_context {
+    std::mutex ov_compute_mutex;
     std::string device;
     bool stateful;
     std::unordered_map<graph_key, std::shared_ptr<GgmlOvDecoder>, graph_key_hash> decoder_cache;
