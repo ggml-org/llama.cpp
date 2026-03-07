@@ -31,6 +31,9 @@ to_fp32_nc_cuda_t ggml_get_to_fp32_nc_cuda(ggml_type type);
 to_fp16_nc_cuda_t ggml_get_to_fp16_nc_cuda(ggml_type type);
 to_bf16_nc_cuda_t ggml_get_to_bf16_nc_cuda(ggml_type type);
 
+// Set the Q4_DPT lookup table in device constant memory.
+void ggml_cuda_set_q4dpt_levels(const int8_t * levels, cudaStream_t stream);
+
 template<typename dst_t, typename src_t>
  __host__ __device__ inline dst_t ggml_cuda_cast(src_t x) {
     if constexpr (std::is_same_v<dst_t, src_t>) {
