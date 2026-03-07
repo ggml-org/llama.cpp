@@ -74,7 +74,7 @@ void block_b_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
 
     if (iqs == 0) {
         // Divide by TK for matmul scale application
-        buf_b_d[buf_ib] = data_b[ib_outer].ds[ib_inner].x / float16_t(TK);
+        buf_b_d[buf_ib] = data_b[ib_outer].ds[ib_inner].x;
     }
 
     const ivec4 values = data_b[ib_outer].qs[ib_inner * 2 + iqs];
