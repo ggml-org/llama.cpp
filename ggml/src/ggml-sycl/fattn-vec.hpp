@@ -201,7 +201,7 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
                 for (int i0 = 0; i0 < int(D/sizeof(int)); i0 += warp_size) {
                     const int i = i0 + item_ct1.get_local_id(2);
 
-                    if (i0 + warp_size <= D/sizeof(int) || i < D/sizeof(int)) {
+                    if (i0 + warp_size <= int(D/sizeof(int)) || i < int(D/sizeof(int))) {
                         tmp_q_i32[i] = 0;
                     }
                 }
@@ -328,9 +328,10 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
 
                 KQ_max_new[j] = sycl::fmax((float) KQ_max_new[j], sum);
 
-                if ((nthreads_KQ == warp_size ? item_ct1.get_local_id(2) : item_ct1.get_local_id(2) % nthreads_KQ) ==
-                    i_KQ_0) {
-                    KQ_reg[j] = sum;
+                if (int(nthreads_KQ == warp_size ? item_ct1.get_local_id(2)
+                                                 : item_ct1.get_local_id(2) %
+                                                       nthreads_KQ) == i_KQ_0) {
+                  KQ_reg[j] = sum;
                 }
             }
         }

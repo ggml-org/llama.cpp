@@ -724,6 +724,10 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 
 - `Split-mode:[row]` is not supported.
 
+- Missed the AOT (Ahead-of-Time) in buiding.
+  - Good: build quickly, smaller size of binary file.
+  - Bad: The startup is slow in first time, but subsequent performance is unaffected.
+
 ## Q&A
 
 - Error:  `error while loading shared libraries: libsycl.so: cannot open shared object file: No such file or directory`.

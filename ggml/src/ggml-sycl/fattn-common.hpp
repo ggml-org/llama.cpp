@@ -100,8 +100,6 @@ static __dpct_inline__ float vec_dot_fattn_vec_KQ_q4_0(const char * __restrict__
                                                        const void * __restrict__ Q_ds_v) {
     auto item_ct1 = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
 
-    int idx = Q_q8[0];
-
     const block_q4_0 * K_q4_0   = (const block_q4_0 *) K_c;
     GGML_UNUSED(Q_v);
 
@@ -875,12 +873,14 @@ static void lauch_kernel(
     const int32_t nb31,
     const int32_t nb32,
     const int64_t nb33) {
+    GGML_UNUSED(local_mem_size);
     q->submit([&](sycl::handler &cgh) {
         cgh.parallel_for(
             sycl::nd_range<3>(
                 static_cast<sycl::range<3>>(group_range * local_range),
                 static_cast<sycl::range<3>>(local_range)),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(warp_size)]] {
+                GGML_UNUSED(item_ct1);
                 fattn_kernel(Q, K, V, mask, sinks, KV_max, dst, dst_meta, scale,
                              max_bias, m0, m1, n_head_log2, logit_softcap, ne00,
                              ne01, ne02, ne03, nb01, nb02, nb03, ne10, ne11,
@@ -920,7 +920,6 @@ void launch_fattn(
     ggml_sycl_pool & pool = ctx.pool();
     dpct::queue_ptr  main_stream = ctx.stream();
     const int id  = ggml_sycl_get_device();
-    const int cc  = ggml_sycl_info().devices[id].cc;
     const int nsm = ggml_sycl_info().devices[id].nsm;
 
     ggml_sycl_pool_alloc<sycl::half>   K_f16(pool);
@@ -1031,6 +1030,7 @@ void launch_fattn(
 
                 cgh.parallel_for(sycl::nd_range<3>(blocks_num_KV_max * block_dim_KV_max, block_dim_KV_max),
                                  [=](sycl::nd_item<3> item_ct1) {
+                                     GGML_UNUSED(item_ct1);
                                      flash_attn_mask_to_KV_max<ncols1, warp_size>(
                                          mask_data_ct0, KV_max_ptr_ct1, iter_k, s31, s33,
                                          buf_iw_acc_ct1.get_multi_ptr<sycl::access::decorated::no>().get());
@@ -1049,10 +1049,7 @@ void launch_fattn(
     if (stream_k) {
         // For short contexts it can be faster to have the SMs work on whole tiles because this lets us skip the fixup.
         const int max_blocks = max_blocks_per_sm*nsm;
-        const int tiles_nwaves = (ntiles_total + max_blocks - 1) / max_blocks;
-
         const int nblocks_stream_k = max_blocks;
-
         const bool use_stream_k = true;
 
         blocks_num.x = use_stream_k ? nblocks_stream_k : ntiles_total;
@@ -1151,6 +1148,7 @@ void launch_fattn(
 
                 cgh.parallel_for(sycl::nd_range<3>(blocks_num_combine * block_dim_combine, block_dim_combine),
                                  [=](sycl::nd_item<3> item_ct1) {
+                                     GGML_UNUSED(item_ct1);
                                      flash_attn_stream_k_fixup<DV, ncols1, ncols2>(KQV_data_ct0, dst_tmp_meta_ptr_ct1,
                                                                                    Q_ne_ct2, Q_ne_ct3, Q_ne_ct4,
                                                                                    K_ne_ct5, K_ne_ct6, nbatch_fa);
@@ -1170,6 +1168,7 @@ void launch_fattn(
 
             cgh.parallel_for(sycl::nd_range<3>(blocks_num_combine * block_dim_combine, block_dim_combine),
                              [=](sycl::nd_item<3> item_ct1) {
+                                 GGML_UNUSED(item_ct1);
                                  flash_attn_combine_results<DV>(
                                      dst_tmp_ptr_ct0, dst_tmp_meta_ptr_ct1, KQV_data_ct2, parallel_blocks,
                                      dpct_local_acc_ct1.get_multi_ptr<sycl::access::decorated::no>().get());

@@ -1185,9 +1185,7 @@ static void flash_attn_tile(const char *  Q,
 
 template <int DKQ, int DV, int ncols2, bool use_logit_softcap>
 static void launch_fattn_tile_switch_ncols1(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-
     const ggml_tensor * Q = dst->src[0];
-    const ggml_tensor * K = dst->src[1];
 
     const int id        = ggml_sycl_get_device();
     const int cc        = ggml_sycl_info().devices[id].cc;

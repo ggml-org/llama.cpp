@@ -535,6 +535,7 @@ static void dequantize_block_nc_sycl(const void *    vx,
     stream->parallel_for(sycl::nd_range<3>(num_blocks * sycl::range<3>(1, 1, SYCL_DEQUANTIZE_BLOCK_SIZE),
                                            sycl::range<3>(1, 1, SYCL_DEQUANTIZE_BLOCK_SIZE)),
                          [=](sycl::nd_item<3> item_ct1) {
+                             GGML_UNUSED(item_ct1);
                              dequantize_block_nc<qk, qr, dequantize_kernel>(vx, y, ne00, ne01, ne02, s01, s02, s03);
                          });
 }

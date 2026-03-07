@@ -870,6 +870,7 @@ static __dpct_inline__ uint32_t fastmodulo(uint32_t n, const sycl::uint3 fastdiv
 }
 
 static bool fast_fp16_available(const int cc) {
+    GGML_UNUSED(cc);
     return true;   //Intel GPUs always support FP16.
 }
 

@@ -94,15 +94,14 @@ static void ggml_sycl_flash_attn_ext_vec(ggml_backend_sycl_context & ctx, ggml_t
 // Best FlashAttention kernel for a specific GPU:
 enum best_fattn_kernel {
     BEST_FATTN_KERNEL_NONE     =   0,
-    BEST_FATTN_KERNEL_TILE     = 200,
     BEST_FATTN_KERNEL_VEC      = 100,
-    BEST_FATTN_KERNEL_WMMA_F16 = 300,
-    BEST_FATTN_KERNEL_MMA_F16  = 400,
+    BEST_FATTN_KERNEL_TILE     = 200,
 };
 
 static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const ggml_tensor * dst) {
+    GGML_UNUSED(device);
 #ifndef SYCL_FLASH_ATTN
-    GGML_UNUSED(device); GGML_UNUSED(dst);
+    GGML_UNUSED(dst);
     return BEST_FATTN_KERNEL_NONE;
 #endif// SYCL_FLASH_ATTN
 
@@ -132,8 +131,6 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
             }
         }
     }
-
-    const int cc = ggml_sycl_info().devices[device].cc;
 
     switch (K->ne[0]) {
         case  40:
