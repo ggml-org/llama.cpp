@@ -11805,6 +11805,7 @@ class Phi4VModel(Phi4MMModel):
 class Phi4TextModel(Phi3MiniModel):
     # Text model variant for Phi-4 multimodal architectures 
     # This prevents the text converter from crashing when it encounters vision/audio tensors
+    model_arch = gguf.MODEL_ARCH.PHI3
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if "embed_tokens_extend.audio_embed" in name or "embed_tokens_extend.image_embed" in name:
