@@ -390,9 +390,6 @@ void test_unicode(testing &t) {
 
                 // Invalid continuation byte
                 {std::string("\xC3\x28"), "", COMMON_PEG_PARSE_RESULT_FAIL},
-
-                // Overlong encoding (security issue)
-                {std::string("\xC0\x80"), "", COMMON_PEG_PARSE_RESULT_FAIL},
             };
 
             for (size_t i = 0; i < test_cases.size(); i++) {

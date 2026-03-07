@@ -349,9 +349,6 @@ struct parser_executor {
         auto pos = start_pos;
         for (auto i = 0u; i < p.literal.size(); ++i) {
             if (pos >= ctx.input.size()) {
-                if (!ctx.is_partial) {
-                    return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
-                }
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
             }
             if (ctx.input[pos] != p.literal[i]) {
@@ -387,13 +384,6 @@ struct parser_executor {
 
             if (result.fail()) {
                 ctx.parse_depth--;
-                if (ctx.is_partial && result.end >= ctx.input.size()) {
-                    if (ctx.debug) {
-                        fprintf(stderr, "%sSEQ -> NEED_MORE (child failed at end)\n", debug_indent().c_str());
-                    }
-                    return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, result.end,
-                                                   std::move(nodes));
-                }
                 if (ctx.debug) {
                     fprintf(stderr, "%sSEQ -> FAIL\n", debug_indent().c_str());
                 }
@@ -526,7 +516,7 @@ struct parser_executor {
         // Check if we got enough matches
         if (p.min_count > 0 && match_count < p.min_count) {
             ctx.parse_depth--;
-            if (pos >= ctx.input.size() && ctx.is_partial) {
+            if (pos >= ctx.input.size()) {
                 if (ctx.debug) {
                     fprintf(stderr, "%sREPEAT -> NEED_MORE (not enough matches: %d < %d)\n", debug_indent().c_str(),
                             match_count, p.min_count);
@@ -650,7 +640,7 @@ struct parser_executor {
 
         // Check if we got enough matches
         if (match_count < p.min_count) {
-            if (pos >= ctx.input.size() && ctx.is_partial) {
+            if (pos >= ctx.input.size()) {
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
             }
             return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos, pos);
@@ -662,9 +652,6 @@ struct parser_executor {
     static common_peg_parse_result handle_escape_sequence(common_peg_parse_context & ctx, size_t start, size_t & pos) {
         ++pos; // consume '\'
         if (pos >= ctx.input.size()) {
-            if (!ctx.is_partial) {
-                return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start);
-            }
             return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start, pos);
         }
 
@@ -692,9 +679,6 @@ struct parser_executor {
         ++pos; // consume 'u'
         for (int i = 0; i < 4; ++i) {
             if (pos >= ctx.input.size()) {
-                if (!ctx.is_partial) {
-                    return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start);
-                }
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start, pos);
             }
             if (!is_hex_digit(ctx.input[pos])) {
@@ -738,9 +722,6 @@ struct parser_executor {
         }
 
         // Reached end without finding closing quote
-        if (!ctx.is_partial) {
-            return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos, pos);
-        }
         return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
     }
 
@@ -777,9 +758,6 @@ struct parser_executor {
         }
 
         // Reached end without finding closing quote
-        if (!ctx.is_partial) {
-            return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos, pos);
-        }
         return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
     }
 
