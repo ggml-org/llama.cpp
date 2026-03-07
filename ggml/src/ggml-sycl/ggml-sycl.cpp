@@ -3701,6 +3701,87 @@ struct pending_cpu_scatter {
 
 static thread_local pending_cpu_scatter g_pending_scatter = {};
 
+// ---------------------------------------------------------------------------
+// MoE gate+up+SiLU fusion state
+// Tracks the three-phase gate->up->down sequence within each MoE layer.
+// Gate:  save weights + activation, skip compute/scatter.
+// Up:    call fused gate+up+SiLU kernel, cache fused output.
+// Down:  use cached fused output as activation, compute+scatter normally.
+// ---------------------------------------------------------------------------
+struct moe_fusion_state {
+    const void *    gate_data;      // Gate tensor src0->data (base of all gate experts)
+    const float *   act_host;       // Shared activation (resolved once on gate call)
+    const int32_t * ids_data;       // Expert IDs (shared across gate/up/down)
+    size_t          n_ids;          // Number of expert dispatches
+    int64_t         n_as;           // Total number of experts
+    size_t          gate_nb02;      // Gate expert stride in bytes
+    int             K;              // Input dimension
+    int             N_gate;         // Gate/up output dimension (intermediate size)
+    ggml_type       type;           // Weight quantization type
+    int             layer_id;       // Layer number for matching
+    bool            gate_pending;   // Gate saved, waiting for up
+    bool            fused_pending;  // Gate+up fused, waiting for down
+    float *         fused_output;   // Pinned buffer: SiLU(gate*act) * (up*act) per expert
+    sycl::queue *   fused_q;        // Queue that owns fused_output
+    size_t          fused_cap;      // Capacity of fused_output in floats
+
+    moe_fusion_state() :
+        gate_data(nullptr),
+        act_host(nullptr),
+        ids_data(nullptr),
+        n_ids(0),
+        n_as(0),
+        gate_nb02(0),
+        K(0),
+        N_gate(0),
+        type(GGML_TYPE_F32),
+        layer_id(-1),
+        gate_pending(false),
+        fused_pending(false),
+        fused_output(nullptr),
+        fused_q(nullptr),
+        fused_cap(0) {}
+
+    ~moe_fusion_state() {
+        if (fused_output && fused_q) {
+            sycl::free(fused_output, *fused_q);
+        }
+    }
+
+    void ensure_fused_buf(size_t n, sycl::queue & q) {
+        if (n <= fused_cap) {
+            return;
+        }
+        if (fused_output) {
+            sycl::free(fused_output, q);
+        }
+        fused_output = sycl::malloc_host<float>(n, q);
+        fused_cap    = n;
+        fused_q      = &q;
+    }
+
+    void reset() {
+        gate_pending  = false;
+        fused_pending = false;
+        layer_id      = -1;
+    }
+};
+
+static thread_local moe_fusion_state g_moe_fusion;
+
+// MoE fusion env var: GGML_SYCL_MOE_FUSE (default: 1 = enabled)
+static bool ggml_sycl_moe_fusion_enabled() {
+    static std::atomic<int> moe_fusion_mode{ -1 };
+    int                     val = moe_fusion_mode.load(std::memory_order_acquire);
+    if (val < 0) {
+        const char * env     = getenv("GGML_SYCL_MOE_FUSE");
+        int          new_val = env ? std::atoi(env) : 1;
+        moe_fusion_mode.compare_exchange_strong(val, new_val, std::memory_order_release, std::memory_order_acquire);
+        val = moe_fusion_mode.load(std::memory_order_acquire);
+    }
+    return val != 0;
+}
+
 // Flush any pending deferred CPU scatter.  Called:
 //  - At the start of each CPU-TG MUL_MAT_ID entry
 //  - At graph boundaries (graph_compute_impl)
@@ -25511,6 +25592,242 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             // Flush any deferred scatter from the previous MUL_MAT_ID
             flush_pending_cpu_scatter();
             flush_pending_secondary_scatter();
+
+            // --- Gate+Up+SiLU fusion for single-GPU CPU-TG fast-path ---
+            {
+                const char * tname_fast     = src0->name ? src0->name : "";
+                const bool   is_gate_fast   = (strstr(tname_fast, "ffn_gate") != nullptr);
+                const bool   is_up_fast     = (strstr(tname_fast, "ffn_up") != nullptr);
+                const bool   is_down_fast   = (strstr(tname_fast, "ffn_down") != nullptr);
+                const int    cur_layer_fast = parse_layer_id_from_name(tname_fast);
+
+                // GATE: resolve IDs + activation, save state, skip compute
+                if (ggml_sycl_moe_fusion_enabled() && is_gate_fast && cur_layer_fast >= 0) {
+                    ctx.moe_graphs_disabled_once = true;
+                    const queue_ptr stream       = ctx.stream();
+                    const int64_t   K_f          = ne00;
+                    const int64_t   n_ids_f      = ids->ne[0];
+                    const int64_t   n_as_f       = src0->ne[2];
+                    const size_t    ids_n_elem   = static_cast<size_t>(ids->ne[1] * n_ids_f);
+
+                    // Resolve expert IDs
+                    const int32_t * ids_data_f = nullptr;
+                    auto            cache_it_f = g_moe_ids_d2h_cache.find(ids);
+                    if (cache_it_f != g_moe_ids_d2h_cache.end() && cache_it_f->second.n_elements == ids_n_elem) {
+                        ids_data_f = cache_it_f->second.host_ids.data();
+                    } else {
+                        auto & entry = g_moe_ids_d2h_cache[ids];
+                        ggml_sycl_copy_ids_to_host(ctx, ids, entry.host_ids);
+                        entry.n_elements = entry.host_ids.size();
+                        ids_data_f       = entry.host_ids.data();
+                    }
+
+                    // Resolve activation
+                    const float * act_f = nullptr;
+
+                    struct pinned_act_buf_f {
+                        float *       ptr = nullptr;
+                        size_t        cap = 0;
+                        sycl::queue * q   = nullptr;
+
+                        ~pinned_act_buf_f() {
+                            if (ptr && q) {
+                                sycl::free(ptr, *q);
+                            }
+                        }
+
+                        void ensure(size_t n, sycl::queue & sq) {
+                            if (n <= cap) {
+                                return;
+                            }
+                            if (ptr) {
+                                sycl::free(ptr, sq);
+                            }
+                            ptr = sycl::malloc_host<float>(n, sq);
+                            cap = n;
+                            q   = &sq;
+                        }
+                    };
+
+                    static thread_local pinned_act_buf_f tl_gate_act;
+
+                    bool src1_host_f = src1->buffer && ggml_backend_buffer_is_host(src1->buffer);
+                    if (!src1_host_f && src1->data) {
+                        static thread_local std::unordered_map<const void *, sycl::usm::alloc> tl_pt_cache;
+                        auto             pt_it = tl_pt_cache.find(src1->data);
+                        sycl::usm::alloc pt;
+                        if (pt_it != tl_pt_cache.end()) {
+                            pt = pt_it->second;
+                        } else {
+                            pt                      = sycl::get_pointer_type(src1->data, stream->get_context());
+                            tl_pt_cache[src1->data] = pt;
+                        }
+                        src1_host_f = (pt == sycl::usm::alloc::host || pt == sycl::usm::alloc::shared ||
+                                       pt == sycl::usm::alloc::unknown);
+                    }
+                    if (src1_host_f) {
+                        act_f = static_cast<const float *>(src1->data);
+                    } else {
+                        tl_gate_act.ensure(static_cast<size_t>(K_f), *stream);
+                        stream->memcpy(tl_gate_act.ptr, ggml_sycl_get_data_ptr(src1, ctx.device),
+                                       static_cast<size_t>(K_f) * sizeof(float));
+                        stream->wait();
+                        act_f = tl_gate_act.ptr;
+                    }
+
+                    g_moe_fusion.gate_data     = src0->data;
+                    g_moe_fusion.act_host      = act_f;
+                    g_moe_fusion.ids_data      = ids_data_f;
+                    g_moe_fusion.n_ids         = ids_n_elem;
+                    g_moe_fusion.n_as          = n_as_f;
+                    g_moe_fusion.gate_nb02     = nb02;
+                    g_moe_fusion.K             = static_cast<int>(K_f);
+                    g_moe_fusion.N_gate        = static_cast<int>(ne01);
+                    g_moe_fusion.type          = src0->type;
+                    g_moe_fusion.layer_id      = cur_layer_fast;
+                    g_moe_fusion.gate_pending  = true;
+                    g_moe_fusion.fused_pending = false;
+
+                    static std::atomic<int> flog{ 0 };
+                    if (flog.fetch_add(1, std::memory_order_relaxed) < 3) {
+                        GGML_LOG_INFO("[CPU-TG-FUSE] Gate saved for layer %d, %zu experts\n", cur_layer_fast,
+                                      ids_n_elem);
+                    }
+                    return;
+                }
+
+                // UP: fused gate+up+SiLU kernel
+                if (ggml_sycl_moe_fusion_enabled() && is_up_fast && cur_layer_fast >= 0 && g_moe_fusion.gate_pending &&
+                    g_moe_fusion.layer_id == cur_layer_fast && g_moe_fusion.type == src0->type &&
+                    g_moe_fusion.K == static_cast<int>(ne00) && g_moe_fusion.N_gate == static_cast<int>(ne01)) {
+                    ctx.moe_graphs_disabled_once = true;
+                    const queue_ptr stream       = ctx.stream();
+                    const int64_t   N_f          = ne01;
+                    const size_t    n_cpu_f      = g_moe_fusion.n_ids;
+                    const size_t    fused_floats = n_cpu_f * static_cast<size_t>(N_f);
+                    g_moe_fusion.ensure_fused_buf(fused_floats, *stream);
+
+                    constexpr size_t                   STACK_F = 16;
+                    cpu_expert_fused_task              stack_ft[STACK_F];
+                    std::vector<cpu_expert_fused_task> heap_ft;
+                    cpu_expert_fused_task *            ft = stack_ft;
+                    if (n_cpu_f > STACK_F) {
+                        heap_ft.resize(n_cpu_f);
+                        ft = heap_ft.data();
+                    }
+
+                    for (size_t ci = 0; ci < n_cpu_f; ci++) {
+                        const int32_t eid  = g_moe_fusion.ids_data[ci];
+                        ft[ci].weight_gate = static_cast<const char *>(g_moe_fusion.gate_data) +
+                                             static_cast<size_t>(eid) * g_moe_fusion.gate_nb02;
+                        ft[ci].weight_up   = static_cast<const char *>(src0->data) + static_cast<size_t>(eid) * nb02;
+                        ft[ci].act_host    = g_moe_fusion.act_host;
+                        ft[ci].output_host = g_moe_fusion.fused_output + ci * static_cast<size_t>(N_f);
+                        ft[ci].type        = g_moe_fusion.type;
+                        ft[ci].K           = g_moe_fusion.K;
+                        ft[ci].N           = static_cast<int>(N_f);
+                    }
+
+                    ggml_sycl_cpu_expert_fused_gate_up_silu_batched(ft, static_cast<int>(n_cpu_f));
+                    g_moe_fusion.gate_pending  = false;
+                    g_moe_fusion.fused_pending = true;
+
+                    static std::atomic<int> flog2{ 0 };
+                    if (flog2.fetch_add(1, std::memory_order_relaxed) < 3) {
+                        GGML_LOG_INFO("[CPU-TG-FUSE] Fused gate+up+SiLU for layer %d, %zu experts\n", cur_layer_fast,
+                                      n_cpu_f);
+                    }
+                    return;
+                }
+
+                // DOWN: use fused output as activation
+                if (ggml_sycl_moe_fusion_enabled() && is_down_fast && cur_layer_fast >= 0 &&
+                    g_moe_fusion.fused_pending && g_moe_fusion.layer_id == cur_layer_fast) {
+                    ctx.moe_graphs_disabled_once = true;
+                    const queue_ptr stream       = ctx.stream();
+                    const int64_t   K_d          = ne00;
+                    const int64_t   N_d          = ne01;
+                    const size_t    n_cpu_d      = g_moe_fusion.n_ids;
+                    const int64_t   n_ids_d      = ids->ne[0];
+
+                    struct pinned_out_d {
+                        float *       ptr = nullptr;
+                        size_t        cap = 0;
+                        sycl::queue * q   = nullptr;
+
+                        ~pinned_out_d() {
+                            if (ptr && q) {
+                                sycl::free(ptr, *q);
+                            }
+                        }
+
+                        void ensure(size_t n, sycl::queue & sq) {
+                            if (n <= cap) {
+                                return;
+                            }
+                            if (ptr) {
+                                sycl::free(ptr, sq);
+                            }
+                            ptr = sycl::malloc_host<float>(n, sq);
+                            cap = n;
+                            q   = &sq;
+                        }
+                    };
+
+                    static thread_local pinned_out_d tl_down_out;
+                    tl_down_out.ensure(n_cpu_d * static_cast<size_t>(N_d), *stream);
+
+                    constexpr size_t             STACK_D = 16;
+                    cpu_expert_task              stack_dt[STACK_D];
+                    std::vector<cpu_expert_task> heap_dt;
+                    cpu_expert_task *            dt = stack_dt;
+                    if (n_cpu_d > STACK_D) {
+                        heap_dt.resize(n_cpu_d);
+                        dt = heap_dt.data();
+                    }
+
+                    for (size_t ci = 0; ci < n_cpu_d; ci++) {
+                        const int32_t eid  = g_moe_fusion.ids_data[ci];
+                        dt[ci].weight_host = static_cast<const char *>(src0->data) + static_cast<size_t>(eid) * nb02;
+                        dt[ci].act_host    = g_moe_fusion.fused_output + ci * static_cast<size_t>(g_moe_fusion.N_gate);
+                        dt[ci].output_host = tl_down_out.ptr + ci * static_cast<size_t>(N_d);
+                        dt[ci].type        = src0->type;
+                        dt[ci].K           = static_cast<int>(K_d);
+                        dt[ci].N           = static_cast<int>(N_d);
+                    }
+
+                    ggml_sycl_cpu_expert_mul_mat_batched(dt, static_cast<int>(n_cpu_d));
+
+                    // Scatter down results H2D
+                    char *     dst_d = static_cast<char *>(ggml_sycl_get_data_ptr(dst, ctx.device));
+                    const bool sc    = (nb1 == static_cast<size_t>(N_d) * sizeof(float));
+                    if (sc && ne12 == 1) {
+                        stream->memcpy(dst_d, tl_down_out.ptr, n_cpu_d * static_cast<size_t>(N_d) * sizeof(float));
+                    } else {
+                        for (size_t ci = 0; ci < n_cpu_d; ci++) {
+                            const int64_t iid1 = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_d));
+                            const int64_t id   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_d));
+                            char *        slot = dst_d + id * nb1 + iid1 * nb2;
+                            stream->memcpy(slot, tl_down_out.ptr + ci * static_cast<size_t>(N_d),
+                                           static_cast<size_t>(N_d) * sizeof(float));
+                        }
+                    }
+                    stream->wait();
+                    g_moe_fusion.reset();
+
+                    static std::atomic<int> flog3{ 0 };
+                    if (flog3.fetch_add(1, std::memory_order_relaxed) < 3) {
+                        GGML_LOG_INFO("[CPU-TG-FUSE] Down with fused activation for layer %d, %zu experts\n",
+                                      cur_layer_fast, n_cpu_d);
+                    }
+                    return;
+                }
+
+                // Fusion mismatch — reset and fall through to unfused path
+                if (g_moe_fusion.gate_pending || g_moe_fusion.fused_pending) {
+                    g_moe_fusion.reset();
+                }
+            }
 
             // --- Phase-level profiling (enabled by GGML_SYCL_CPU_TG_PROFILE=1) ---
             static int prof_enabled = -1;
