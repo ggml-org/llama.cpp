@@ -790,8 +790,13 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
             }
         }
 #elif defined(AMD_WMMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE)
+#if defined(AMD_MFMA_AVAILABLE)
+        const float2 KQ_max_scale_h2 = make_float2(
+            KQ_max_scale[0], KQ_max_scale[0]);
+#else
         const half2 KQ_max_scale_h2 = make_half2(
             KQ_max_scale[0], KQ_max_scale[0]);
+#endif // defined(AMD_MFMA_AVAILABLE)
 #pragma unroll
         for (int i = 0; i < (DV/2)/T_C_VKQ::J; ++i) {
 #pragma unroll
@@ -963,7 +968,7 @@ template<> struct mma_tile_sizes<8> {
     using T_B_VKQ = tile< 8,  8, half2>; // column-major
     using T_C_VKQ = tile<16,  4, half2>; // row-major
 };
-#elif defined(AMD_WMMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE)
+#elif defined(AMD_WMMA_AVAILABLE)
 template<int ncols> struct mma_tile_sizes {
     using T_A_KQ  = tile<16,  8, half2>; // row-major
     using T_B_KQ  = tile<16,  8, half2>; // column-major
@@ -971,6 +976,15 @@ template<int ncols> struct mma_tile_sizes {
     using T_A_VKQ = tile<16,  8, half2>; // row-major
     using T_B_VKQ = tile<16,  8, half2>; // column-major
     using T_C_VKQ = tile<16,  8, half2>; // column-major
+};
+#elif defined(AMD_MFMA_AVAILABLE)
+template<int ncols> struct mma_tile_sizes {
+    using T_A_KQ  = tile<16,  8, half2>;  // row-major
+    using T_B_KQ  = tile<16,  8, half2>;  // column-major
+    using T_C_KQ  = tile<16, 16, float>;  // column-major
+    using T_A_VKQ = tile<16,  8, half2>;  // row-major
+    using T_B_VKQ = tile<16,  8, half2>;  // column-major
+    using T_C_VKQ = tile<16,  8, float2>; // column-major
 };
 #else // Volta
 template<int ncols> struct mma_tile_sizes {
@@ -1259,7 +1273,13 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
             }
         }
 #elif defined(AMD_WMMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE)
-        const half2 KQ_max_scale_h2 = make_half2(KQ_max_scale[0], KQ_max_scale[0]);
+#if defined(AMD_MFMA_AVAILABLE)
+        const float2 KQ_max_scale_h2 = make_float2(
+            KQ_max_scale[0], KQ_max_scale[0]);
+#else
+        const half2 KQ_max_scale_h2 = make_half2(
+            KQ_max_scale[0], KQ_max_scale[0]);
+#endif // defined(AMD_MFMA_AVAILABLE)
 #pragma unroll
         for (int i = 0; i < (DV/2)/T_C_VKQ::J; ++i) {
 #pragma unroll
@@ -1444,7 +1464,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
                     const int j = j0 + T_C_VKQ::get_i(l);
                     const int k = k1 + T_C_VKQ::get_j(l);
 
-                    tile_Q[j*tile_stride + k] = VKQ_C[(k00 + k1)/T_C_VKQ::J].x[l];
+                    tile_Q[j*tile_stride + k] = ggml_cuda_cast<half2>(VKQ_C[(k00 + k1)/T_C_VKQ::J].x[l]);
                 }
             }
         }
