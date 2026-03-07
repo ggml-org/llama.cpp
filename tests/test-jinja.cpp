@@ -1964,6 +1964,9 @@ static void test_template_py(testing & t, const std::string & name, const std::s
             return;
         }
 
+        // Normalize line endings for cross-platform compatibility (Windows Python outputs \r\n)
+        jinja::string_replace_all(output, "\r\n", "\n");
+
         if (!t.assert_true("Template render mismatch", expect == output)) {
             t.log("Template: " + json(tmpl).dump());
             t.log("Expected: " + json(expect).dump());
