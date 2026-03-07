@@ -7,6 +7,7 @@
 #include "sampling.h"
 #include "speculative.h"
 #include "server-common.h"
+#include <stdexcept>
 
 using json = nlohmann::ordered_json;
 
@@ -162,10 +163,22 @@ common_chat_msg task_result_state::update_chat_msg(
     generated_text += text_added;
     auto msg_prv_copy = chat_msg;
     SRV_DBG("Parsing chat message: %s\n", generated_text.c_str());
-    auto new_msg = common_chat_parse(
-        generated_text,
-        is_partial,
-        chat_parser_params);
+    common_chat_msg new_msg;
+    try {
+        new_msg = common_chat_parse(
+            generated_text,
+            is_partial,
+            chat_parser_params);
+    } catch (std::runtime_error &e) {
+        if (!is_partial) { // always try to recover a partial parse in a final parse scenario, i.e. truncated output
+            SRV_WRN("Attempting to recover from parse failure by using partial parse: %s\n", generated_text.c_str());
+            new_msg = common_chat_parse(
+                generated_text,
+                true,
+                chat_parser_params);
+        }
+    }
+
     if (!new_msg.empty()) {
         new_msg.set_tool_call_ids(generated_tool_call_ids, gen_tool_call_id);
         chat_msg = new_msg;
