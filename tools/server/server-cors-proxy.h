@@ -35,7 +35,7 @@ static server_http_res_ptr proxy_request(const server_http_req & req, std::strin
     auto proxy = std::make_unique<server_http_proxy>(
             method,
             parsed_url.host,
-            parsed_url.scheme == "http" ? 80 : 443,
+            parsed_url.port,
             parsed_url.path,
             req.headers,
             req.body,
