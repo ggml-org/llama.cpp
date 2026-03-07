@@ -524,9 +524,12 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_flash_attn_shader(
                                 context.sg_mat_n * GGML_WEBGPU_FLASH_ATTN_PREFERRED_KV_SG_TILES);
     if (context.key.use_vec_split) {
         q_tile  = 1;
-        kv_tile = 32;
+        const uint32_t max_kv_tile = ggml_webgpu_flash_attn_max_kv_tile(context);
+        kv_tile = std::max(context.sg_mat_n, std::min(32u, max_kv_tile));
+        kv_tile = (kv_tile / context.sg_mat_n) * context.sg_mat_n;
         GGML_ASSERT(kv_tile % context.sg_mat_n == 0);
-        GGML_ASSERT(kv_tile <= ggml_webgpu_flash_attn_max_kv_tile(context));
+        GGML_ASSERT(kv_tile <= max_kv_tile);
+        defines.push_back("VEC_NE=1");
     }
     if (context.key.kv_direct) {
         GGML_ASSERT(kv_tile <= GGML_WEBGPU_KV_SEQ_PAD);
@@ -541,8 +544,8 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_flash_attn_shader(
 
     uint32_t wg_size = 0;
     if (context.key.use_vec_split) {
-        // Keep vec-split to a single subgroup to avoid complexity in the reduction.
-        wg_size = context.max_subgroup_size;
+        // Keep vec-split to exactly one subgroup to preserve thread mapping.
+        wg_size = std::max(1u, std::min<uint32_t>(32u, context.max_subgroup_size));
     } else {
         wg_size = std::max(context.max_subgroup_size, GGML_WEBGPU_FLASH_ATTN_PREFERRED_WG_SIZE);
     }
