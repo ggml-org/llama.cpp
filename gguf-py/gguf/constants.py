@@ -3869,6 +3869,7 @@ class VisionProjectorType:
     GEMMA3 = "gemma3"
     GEMMA3NV = "gemma3nv"
     GEMMA3NA = "gemma3na"
+    PHI4 = "phi4"
     IDEFICS3 = "idefics3"
     PIXTRAL = "pixtral"
     LLAMA4 = "llama4"
