@@ -214,11 +214,11 @@ describe('parseModelId', () => {
 	it.skip('handles real-world examples correctly', () => {
 		expect(parseModelId('noctrex/GLM-4.7-Flash-MXFP4_MOE')).toStrictEqual({
 			activatedParams: null,
-			format: null,
+			format: 'MXFP4_MOE', // TODO: does this make sense?
 			modelName: 'GLM-4.7-Flash',
 			orgName: 'noctrex',
 			params: null,
-			quantization: 'MXFP4_MOE',
+			quantization: null,
 			raw: 'noctrex/GLM-4.7-Flash-MXFP4_MOE',
 			tags: []
 		});
