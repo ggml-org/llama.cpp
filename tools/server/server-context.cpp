@@ -1473,6 +1473,7 @@ private:
         res->post_sampling_probs = slot.task->params.post_sampling_probs;
 
         res->verbose           = slot.task->params.verbose;
+        res->tool_args_compat  = slot.task->params.tool_args_compat;
         res->stream            = slot.task->params.stream;
         res->include_usage     = slot.task->params.include_usage;
         res->res_type          = slot.task->params.res_type;

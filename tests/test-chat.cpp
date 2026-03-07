@@ -1284,6 +1284,23 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
 // Global template filter for --template flag
 static std::string g_template_filter;
 
+// Global flag for tool args compat mode (--tool-args-compat / -tac)
+static bool g_tool_args_compat = false;
+
+// Helper: convert a single message to OAI-compat JSON, respecting g_tool_args_compat
+static json msg_to_json_oaicompat(const common_chat_msg & msg) {
+    return msg.to_json_oaicompat(/* concat_typed_text= */ false, /* tool_args_as_string= */ g_tool_args_compat);
+}
+
+// Helper: convert a vector of messages to OAI-compat JSON array, respecting g_tool_args_compat
+static json msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msgs) {
+    json result = json::array();
+    for (const auto & msg : msgs) {
+        result.push_back(msg_to_json_oaicompat(msg));
+    }
+    return result;
+}
+
 // Fluent builder for PEG parser tests
 class peg_test_builder;
 
@@ -1401,7 +1418,7 @@ static void test_msgs_oaicompat_json_conversion() {
         message_assist_call_python,
     };
     for (const auto & msg : msgs) {
-        auto oai_json = common_chat_msgs_to_json_oaicompat({ msg });
+        auto oai_json = msgs_to_json_oaicompat({ msg });
         auto msgs2    = common_chat_msgs_parse_oaicompat(oai_json);
         assert_equals((size_t) 1, msgs2.size());
         const auto & msg2 = msgs2[0];
@@ -1422,9 +1439,14 @@ static void test_msgs_oaicompat_json_conversion() {
                               "    ]\n"
                               "  }\n"
                               "]"),
-                  common_chat_msgs_to_json_oaicompat({ message_user_parts }).dump(2));
+                  msgs_to_json_oaicompat({ message_user_parts }).dump(2));
 
     // Note: content is "" instead of null due to workaround for templates that render null as "None"
+    std::string expected_python_args = g_tool_args_compat
+        ? "          \"arguments\": \"{\\\"code\\\":\\\"print('hey')\\\"}\"\n"
+        : "          \"arguments\": {\n"
+          "            \"code\": \"print('hey')\"\n"
+          "          }\n";
     assert_equals(std::string("[\n"
                               "  {\n"
                               "    \"role\": \"assistant\",\n"
@@ -1434,15 +1456,13 @@ static void test_msgs_oaicompat_json_conversion() {
                               "        \"type\": \"function\",\n"
                               "        \"function\": {\n"
                               "          \"name\": \"python\",\n"
-                              "          \"arguments\": {\n"
-                              "            \"code\": \"print('hey')\"\n"
-                              "          }\n"
+                              + expected_python_args +
                               "        }\n"
                               "      }\n"
                               "    ]\n"
                               "  }\n"
                               "]"),
-                  common_chat_msgs_to_json_oaicompat({ message_assist_call_python }).dump(2));
+                  msgs_to_json_oaicompat({ message_assist_call_python }).dump(2));
 
     auto res = common_chat_msgs_parse_oaicompat(json::parse("[{\"role\": \"assistant\", \"tool_calls\": []}]"));
     assert_equals<size_t>(1, res.size());
@@ -3031,17 +3051,21 @@ int main(int argc, char ** argv) {
     bool detailed_debug    = false;
     bool only_run_filtered = false;
 
-    // Check for --template flag
+    // Check for flags
+    int n_unrecognized_args = 0;
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "--template" && i + 1 < argc) {
             g_template_filter = argv[++i];
             // Only run PEG parser tests with the filter
             only_run_filtered = true;
-        }
-        if (arg == "--detailed") {
+        } else if (arg == "--detailed") {
             detailed_debug = true;
             common_log_set_verbosity_thold(999);
+        } else if (arg == "--tool-args-compat" || arg == "-tac") {
+            g_tool_args_compat = true;
+        } else {
+            n_unrecognized_args++;
         }
     }
 
@@ -3052,7 +3076,7 @@ int main(int argc, char ** argv) {
     }
 
 #ifndef _WIN32
-    if (argc > 1) {
+    if (n_unrecognized_args > 0) {
         common_chat_templates_inputs inputs;
         common_chat_msg              msg;
         msg.role        = "user";

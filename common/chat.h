@@ -121,7 +121,7 @@ struct common_chat_msg {
     std::string                               tool_name;
     std::string                               tool_call_id;
 
-    nlohmann::ordered_json to_json_oaicompat(bool concat_typed_text = false) const;
+    nlohmann::ordered_json to_json_oaicompat(bool concat_typed_text = false, bool tool_args_as_string = false) const;
 
     bool empty() const {
         return content.empty() && content_parts.empty() && tool_calls.empty() && reasoning_content.empty() &&

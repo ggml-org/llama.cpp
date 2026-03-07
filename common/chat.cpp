@@ -66,7 +66,7 @@ static bool has_content_or_tool_calls(const common_chat_msg & msg) {
     return !msg.content.empty() || !msg.tool_calls.empty();
 }
 
-json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
+json common_chat_msg::to_json_oaicompat(bool concat_typed_text, bool tool_args_as_string) const {
     if (!content.empty() && !content_parts.empty()) {
         throw std::runtime_error("Cannot specify both content and content_parts");
     }
@@ -129,7 +129,7 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
                 {"type", "function"},
                 {"function", {
                     {"name", tool_call.name},
-                    {"arguments", json::parse(tool_call.arguments)},
+                    {"arguments", tool_args_as_string ? json(tool_call.arguments) : json::parse(tool_call.arguments)},
                 }},
             };
             if (!tool_call.id.empty()) {

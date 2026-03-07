@@ -535,6 +535,7 @@ struct common_params {
     common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
     int reasoning_budget = -1;
     bool prefill_assistant = true; // if true, any trailing assistant message will be prefilled into the response
+    bool tool_args_compat = false; // if true, tool call arguments are returned as JSON strings (OpenAI-standard)
     int sleep_idle_seconds = -1;   // if >0, server will sleep after this many seconds of idle time
 
     std::vector<std::string> api_keys;
