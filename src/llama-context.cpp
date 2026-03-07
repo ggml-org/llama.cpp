@@ -7,6 +7,7 @@
 #include "llama-memory.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
+#include "llama-ext.h"
 
 #include <cinttypes>
 #include <cmath>
