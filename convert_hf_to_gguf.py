@@ -11808,7 +11808,7 @@ class Phi4TextModel(Phi3MiniModel):
     model_arch = gguf.MODEL_ARCH.PHI3
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if "embed_tokens_extend.audio_embed" in name or "embed_tokens_extend.image_embed" in name:
+        if "embed_tokens_extend.audio_embed" in name or "embed_tokens_extend.image_embed" in name or "mm_projector" in name:
             return  # skip multimodal tensors when exporting text model
         yield from super().modify_tensors(data_torch, name, bid)
     pass
