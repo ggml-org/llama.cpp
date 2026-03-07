@@ -265,6 +265,7 @@ static ggml_sycl_tbb::task_arena & ggml_sycl_cpu_arena();
 
 // Forward declarations for SIMD kernels (defined later, guarded by __AVX2__ / __AVXVNNIINT8__)
 #if defined(__AVX2__)
+static inline float ggml_sycl_hsum_float_8(const __m256 x);
 static inline void simd_mul_mat_q4_0_q8_0_4row(
     int K_elem, float * GGML_RESTRICT out,
     const void * GGML_RESTRICT vx0, const void * GGML_RESTRICT vx1,
@@ -288,6 +289,14 @@ static inline void simd_mul_mat_mxfp4_q8_0_4row(
     const void * GGML_RESTRICT vx0, const void * GGML_RESTRICT vx1,
     const void * GGML_RESTRICT vx2, const void * GGML_RESTRICT vx3,
     const void * GGML_RESTRICT vy);
+// Tiled 4-row MXFP4 x Q8_0: partial dot product over blocks [ib_start, ib_end).
+// Accumulates into caller-owned __m256 accumulators (no horizontal sum).
+static inline void simd_mxfp4_q8_0_4row_tile(
+    int ib_start, int ib_end,
+    const void * GGML_RESTRICT vx0, const void * GGML_RESTRICT vx1,
+    const void * GGML_RESTRICT vx2, const void * GGML_RESTRICT vx3,
+    const void * GGML_RESTRICT vy,
+    __m256 & acc0, __m256 & acc1, __m256 & acc2, __m256 & acc3);
 // Fused gate+up+SiLU: computes SiLU(dot(gate_row, act)) * dot(up_row, act)
 static inline void simd_fused_gate_up_silu_q4_0_q8_0(
     int K_elem, float * GGML_RESTRICT out,
@@ -803,15 +812,57 @@ void ggml_sycl_cpu_expert_mul_mat_batched(
                         const void * act_q = q8_ptrs[cur_task];
                         float *      out   = t.output_host + local_r;
 
-                        for (; i + 3 < chunk; i += 4) {
-                            simd_mul_mat_mxfp4_q8_0_4row(
-                                t.K, out + i,
-                                wbase + (size_t)(i + 0) * m.row_stride,
-                                wbase + (size_t)(i + 1) * m.row_stride,
-                                wbase + (size_t)(i + 2) * m.row_stride,
-                                wbase + (size_t)(i + 3) * m.row_stride,
-                                act_q);
+                        // Tiled GEMM: process K in tiles of TILE_BLOCKS blocks.
+                        // Outer loop over K-tiles, inner loop over row groups.
+                        // The activation tile (TILE_BLOCKS * 34 bytes Q8_0) stays
+                        // in L1 cache and is reused across ALL row groups, converting
+                        // a bandwidth-bound pattern into a compute-bound one.
+                        // For K=3584 (120B), nb=112, TILE_BLOCKS=16 → 7 tiles.
+                        // Activation tile = 544 bytes, fits L1 with headroom.
+                        static constexpr int TILE_BLOCKS = 16;
+                        const int nb = t.K / QK_MXFP4;
+
+                        // Round chunk down to multiple of 4 for SIMD processing
+                        const int chunk4 = chunk & ~3;
+
+                        // Per-row __m256 accumulators (stack-allocated for typical
+                        // TBB grain sizes; heap fallback for unusually large chunks)
+                        __m256 accs_stack[256];
+                        std::vector<__m256> accs_heap;
+                        __m256 * accs;
+                        if (chunk4 <= 256) {
+                            accs = accs_stack;
+                        } else {
+                            accs_heap.resize(chunk4);
+                            accs = accs_heap.data();
                         }
+                        for (int j = 0; j < chunk4; j++) {
+                            accs[j] = _mm256_setzero_ps();
+                        }
+
+                        // Outer: K-tiles. Inner: 4-row groups.
+                        // Each tile iteration loads the activation tile once into
+                        // L1 and reuses it across all row groups in this chunk.
+                        for (int ib_start = 0; ib_start < nb; ib_start += TILE_BLOCKS) {
+                            int ib_end = std::min(ib_start + TILE_BLOCKS, nb);
+                            for (int j = 0; j + 3 < chunk4; j += 4) {
+                                simd_mxfp4_q8_0_4row_tile(
+                                    ib_start, ib_end,
+                                    wbase + (size_t)(j + 0) * m.row_stride,
+                                    wbase + (size_t)(j + 1) * m.row_stride,
+                                    wbase + (size_t)(j + 2) * m.row_stride,
+                                    wbase + (size_t)(j + 3) * m.row_stride,
+                                    act_q,
+                                    accs[j + 0], accs[j + 1],
+                                    accs[j + 2], accs[j + 3]);
+                            }
+                        }
+
+                        // Horizontal sum and store
+                        for (int j = 0; j < chunk4; j++) {
+                            out[j] = ggml_sycl_hsum_float_8(accs[j]);
+                        }
+                        i = chunk4;
                     }
 #endif
                     // Remainder: single-row generic vec_dot
@@ -2367,6 +2418,71 @@ static inline void simd_mul_mat_mxfp4_q8_0_4row(
     out[1] = ggml_sycl_hsum_float_8(acc1);
     out[2] = ggml_sycl_hsum_float_8(acc2);
     out[3] = ggml_sycl_hsum_float_8(acc3);
+}
+
+// Tiled 4-row MXFP4 x Q8_0: partial dot product over blocks [ib_start, ib_end).
+// Accumulates into caller-owned __m256 accumulators without final horizontal sum.
+// This enables K-dimension tiling: the caller iterates K in tiles, calling this
+// function for each tile, then performs hsum once after all tiles are processed.
+// The activation tile (ib_end - ib_start blocks of Q8_0) stays in L1 cache and
+// is reused across all rows, converting a bandwidth-bound DRAM-per-row pattern
+// into a compute-bound L1-hot pattern.
+static inline void simd_mxfp4_q8_0_4row_tile(
+    int ib_start, int ib_end,
+    const void * GGML_RESTRICT vx0, const void * GGML_RESTRICT vx1,
+    const void * GGML_RESTRICT vx2, const void * GGML_RESTRICT vx3,
+    const void * GGML_RESTRICT vy,
+    __m256 & acc0, __m256 & acc1, __m256 & acc2, __m256 & acc3
+) {
+    const block_mxfp4 * GGML_RESTRICT x0 = (const block_mxfp4 *)vx0;
+    const block_mxfp4 * GGML_RESTRICT x1 = (const block_mxfp4 *)vx1;
+    const block_mxfp4 * GGML_RESTRICT x2 = (const block_mxfp4 *)vx2;
+    const block_mxfp4 * GGML_RESTRICT x3 = (const block_mxfp4 *)vx3;
+    const block_q8_0  * GGML_RESTRICT y  = (const block_q8_0 *)vy;
+
+    const __m128i values128 = _mm_loadu_si128((const __m128i *)kvalues_mxfp4);
+    const __m128i m4b       = _mm_set1_epi8(0x0f);
+
+    for (int ib = ib_start; ib < ib_end; ib++) {
+        const float   q8_d = cpu_half_to_f32(y[ib].d);
+        const __m256i qy   = _mm256_loadu_si256((const __m256i *)y[ib].qs);
+
+#define MXFP4_DOT_ROW_TILE(xr, accr) \
+        { \
+            const __m128i q4bits = _mm_loadu_si128((const __m128i *)(xr)[ib].qs); \
+            const __m256i qx = GGML_SYCL_MM256_SET_M128I( \
+                _mm_shuffle_epi8(values128, _mm_and_si128(_mm_srli_epi16(q4bits, 4), m4b)), \
+                _mm_shuffle_epi8(values128, _mm_and_si128(q4bits, m4b))); \
+            const float d = q8_d * GGML_E8M0_TO_FP32_HALF((xr)[ib].e); \
+            GGML_MXFP4_DOT_ACCUM_TILE(qx, qy, d, accr) \
+        }
+
+#if defined(__AVXVNNIINT8__)
+#define GGML_MXFP4_DOT_ACCUM_TILE(qx, qy, d, acc) \
+            { \
+                const __m256i prod = _mm256_dpbssd_epi32(_mm256_setzero_si256(), qx, qy); \
+                acc = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod), acc); \
+            }
+#else
+#define GGML_MXFP4_DOT_ACCUM_TILE(qx, qy, d, acc) \
+            { \
+                const __m256i ax     = _mm256_sign_epi8(qx, qx); \
+                const __m256i sy     = _mm256_sign_epi8(qy, qx); \
+                const __m256i dot    = _mm256_maddubs_epi16(ax, sy); \
+                const __m256i ones   = _mm256_set1_epi16(1); \
+                const __m256i summed = _mm256_madd_epi16(ones, dot); \
+                acc = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(summed), acc); \
+            }
+#endif
+
+        MXFP4_DOT_ROW_TILE(x0, acc0)
+        MXFP4_DOT_ROW_TILE(x1, acc1)
+        MXFP4_DOT_ROW_TILE(x2, acc2)
+        MXFP4_DOT_ROW_TILE(x3, acc3)
+
+#undef MXFP4_DOT_ROW_TILE
+#undef GGML_MXFP4_DOT_ACCUM_TILE
+    }
 }
 
 // INT4 fast-path: 4-row Q4_0 x Q8_0 dot product WITHOUT zero-point offset.
