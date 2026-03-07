@@ -7,6 +7,7 @@ struct common_http_url {
     std::string user;
     std::string password;
     std::string host;
+    int port;
     std::string path;
 };
 
@@ -47,6 +48,20 @@ static common_http_url common_http_parse_url(const std::string & url) {
         parts.host = rest;
         parts.path = "/";
     }
+
+    auto colon_pos = parts.host.find(':');
+
+    if (colon_pos != std::string::npos) {
+        parts.port = std::stoi(parts.host.substr(colon_pos + 1));
+        parts.host = parts.host.substr(0, colon_pos);
+    } else if (parts.scheme == "http") {
+        parts.port = 80;
+    } else if (parts.scheme == "https") {
+        parts.port = 443;
+    } else {
+        throw std::runtime_error("unsupported URL scheme: " + parts.scheme);
+    }
+
     return parts;
 }
 
