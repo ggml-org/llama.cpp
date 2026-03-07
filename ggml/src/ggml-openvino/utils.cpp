@@ -138,6 +138,19 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
                 auto states = infer_request->query_state();
                 for (auto state : states) {
                     auto state_tensor = state.get_state();
+                    if (static_cast<uint32_t>(pos_data[0]) > r_ctx->stateful_kv_size) {
+                       std::string state_name;
+                        try {
+                            state_name = r_ctx->kv_state_input_name_map.at(state.get_name());
+                        } catch (...) {
+                            GGML_LOG_ERROR("GGML OpenVINO backend stateful inference failed: no input found for the state\n");
+                            return GGML_STATUS_FAILED;
+                        }
+                        auto kv_tensor = get_ov_input_tensor(ggml_decoder, state_name);
+                        kv_tensor.set_shape({state_tensor.get_shape()[0], kv_tensor.get_shape()[2],
+                                          state_tensor.get_shape()[2], state_tensor.get_shape()[3]});
+                       state_tensor = kv_tensor;
+                    }
                     ov::Coordinate begin = {0, 0, 0, 0};
                     ov::Coordinate end = {state_tensor.get_shape()[0], static_cast<uint32_t>(pos_data[0]),
                                           state_tensor.get_shape()[2], state_tensor.get_shape()[3]};
@@ -196,7 +209,13 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
         r_ctx->ov_output_names_cache[key] = std::move(ov_output_names);
 
         if (stateful) {
-            r_ctx->stateful_kv_size = 0;
+            const auto * inp_pos = get_inp_pos_tensor(cgraph);
+            auto pos_shape = ggml_decoder->get_shape(inp_pos);
+            r_ctx->stateful_kv_size = pos_shape[3];
+            const auto kv_param_res_names = ggml_decoder->get_kv_param_res_names();
+            for (const auto& pair : kv_param_res_names) {
+                r_ctx->kv_state_input_name_map[pair.first+pair.second] = pair.first;
+            }
         }
     }
 
