@@ -25643,8 +25643,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 const int    cur_layer_fast = parse_layer_id_from_name(tname_fast);
 
                 // GATE: resolve IDs + activation, save state, skip compute
-                if (ggml_sycl_moe_fusion_enabled() && is_gate_fast && cur_layer_fast >= 0 &&
-                    src0->type != GGML_TYPE_MXFP4) {
+                if (ggml_sycl_moe_fusion_enabled() && is_gate_fast && cur_layer_fast >= 0) {
                     ctx.moe_graphs_disabled_once = true;
                     const queue_ptr stream       = ctx.stream();
                     const int64_t   K_f          = ne00;
@@ -28518,6 +28517,11 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
             }
             break;
         case GGML_OP_GLU:
+            if (g_moe_fusion.fused_pending) {
+                // Fusion already computed gate+up+activation on CPU; skip GPU GLU
+                // to prevent reading stale gate/up device outputs
+                break;
+            }
             switch (ggml_get_glu_op(dst)) {
                 case GGML_GLU_OP_REGLU:
                     ggml_sycl_reglu(ctx, dst);
