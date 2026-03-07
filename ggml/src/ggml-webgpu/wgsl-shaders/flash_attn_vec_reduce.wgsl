@@ -16,7 +16,7 @@ struct Params {
 };
 
 @group(0) @binding(0) var<storage, read_write> tmp: array<f32>;
-@group(0) @binding(1) var<storage, read_write> dst: array<f32>;
+@group(0) @binding(1) var<storage, read_write> dst: array<vec4<f32>>;
 @group(0) @binding(2) var<uniform> params: Params;
 
 const FLOAT_MIN: f32 = -1.0e9;
@@ -70,11 +70,8 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
         let sum_w = subgroupAdd(weighted.w);
 
         if (lane == 0u) {
-            let dst_base = row_base + elem_base;
-            dst[dst_base + 0u] = sum_x * inv_s;
-            dst[dst_base + 1u] = sum_y * inv_s;
-            dst[dst_base + 2u] = sum_z * inv_s;
-            dst[dst_base + 3u] = sum_w * inv_s;
+            let dst_vec_index = (row_base + elem_base) >> 2u;
+            dst[dst_vec_index] = vec4<f32>(sum_x, sum_y, sum_z, sum_w) * inv_s;
         }
     }
 }

@@ -99,7 +99,7 @@ struct Params {
 
 @group(0) @binding(0) var<storage, read_write> Q: array<f32>;
 @group(0) @binding(1) var<storage, read_write> K: array<KV_TYPE>;
-@group(0) @binding(2) var<storage, read_write> V: array<KV_TYPE>;
+@group(0) @binding(2) var<storage, read_write> V: array<vec4<KV_TYPE>>;
 #if defined(MASK) && defined(SINKS)
 @group(0) @binding(3) var<storage, read_write> mask: array<f16>;
 @group(0) @binding(4) var<storage, read_write> sinks: array<f32>;
@@ -563,10 +563,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
                       let p = f32(inter_shmem[kv_idx + q_tile_row * KV_TILE]);
                       let v_idx = v_head_offset + v_row * params.stride_v1 + vec_col * 4u;
-                      let v4 = vec4<f32>(f32(V[v_idx + 0u]),
-                                         f32(V[v_idx + 1u]),
-                                         f32(V[v_idx + 2u]),
-                                         f32(V[v_idx + 3u]));
+                      let v4 = vec4<f32>(V[v_idx >> 2u]);
                       lo += p * v4;
                   }
 
