@@ -2583,7 +2583,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.model.hf_repo = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_BENCH}).set_env("LLAMA_ARG_HF_REPO"));
+    ).set_env("LLAMA_ARG_HF_REPO"));
     add_opt(common_arg(
         {"-hfd", "-hfrd", "--hf-repo-draft"}, "<user>/<model>[:quant]",
         "Same as --hf-repo, but for the draft model (default: unused)",
@@ -2597,7 +2597,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.model.hf_file = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_BENCH}).set_env("LLAMA_ARG_HF_FILE"));
+    ).set_env("LLAMA_ARG_HF_FILE"));
     add_opt(common_arg(
         {"-hfv", "-hfrv", "--hf-repo-v"}, "<user>/<model>[:quant]",
         "Hugging Face model repository for the vocoder model (default: unused)",
@@ -2618,7 +2618,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.hf_token = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_BENCH}).set_env("HF_TOKEN"));
+    ).set_env("HF_TOKEN"));
     add_opt(common_arg(
         {"--context-file"}, "FNAME",
         "file to load context from (use comma-separated values to specify multiple files)",
