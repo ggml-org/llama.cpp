@@ -4425,12 +4425,20 @@ class Qwen3Model(Qwen2Model):
         if self.is_rerank:
             self.gguf_writer.add_pooling_type(gguf.PoolingType.RANK)
             self.gguf_writer.add_classifier_output_labels(["yes", "no"])
-            self.gguf_writer.add_chat_template([{
-                "name": "rerank",
-                "template": "<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be \"yes\" or \"no\".<|im_end|>\n"
-                            "<|im_start|>user\n<Instruct>: Given a web search query, retrieve relevant passages that answer the query\n<Query>: {query}\n<Document>: {document}<|im_end|>\n"
-                            "<|im_start|>assistant\n<think>\n\n</think>\n\n"
-            }])
+            self.gguf_writer.add_chat_template([
+                {
+                    "name": "rerank",
+                    "template": "<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be \"yes\" or \"no\".<|im_end|>\n"
+                                "<|im_start|>user\n<Instruct>: Given a web search query, retrieve relevant passages that answer the query\n<Query>: {query}\n<Document>: {document}<|im_end|>\n"
+                                "<|im_start|>assistant\n<think>\n\n</think>\n\n",
+                },
+                {
+                    "name": "rerank_instruct",
+                    "template": "<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be \"yes\" or \"no\".<|im_end|>\n"
+                                "<|im_start|>user\n<Instruct>: {instruction}\n<Query>: {query}\n<Document>: {document}<|im_end|>\n"
+                                "<|im_start|>assistant\n<think>\n\n</think>\n\n",
+                },
+            ])
 
     def _get_cls_out_tensor(self, data_torch: Tensor) -> Tensor:
         # extract "yes" and "no" tokens from the output lm_head tensor
