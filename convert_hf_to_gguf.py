@@ -20,6 +20,16 @@ from transformers import AutoConfig
 
 import math
 import numpy as np
+
+# BEGIN QWEN3VL MOE TRANSPOSED WORKAROUND
+def auto_transpose_qwen_moe(name: str, tensor: np.ndarray) -> np.ndarray:
+    # Qwen3VLMoe HuggingFace exports incorrectly transposed down_proj weights
+    # due to an old llama.cpp bug. This fixes them back natively.
+    if "mlp.experts" in name and "down_proj.weight" in name and tensor.ndim == 3 and tensor.shape[1] > tensor.shape[2]:
+        print(f"⚠️ Auto-transposing {name} from {tensor.shape} to {(tensor.shape[0], tensor.shape[2], tensor.shape[1])} (Qwen3VLMoe workaround)")
+        return tensor.swapaxes(-1, -2)
+    return tensor
+# END QWEN3VL MOE TRANSPOSED WORKAROUND
 import torch
 
 if TYPE_CHECKING:
