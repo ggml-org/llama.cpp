@@ -13,14 +13,24 @@ static void pre_alloc_cb(ggml_backend_sched_t sched, struct ggml_cgraph * gf, vo
     auto * state = static_cast<callback_state *>(user_data);
     state->called = true;
 
-    // reassign the first node to the last backend (CPU) and verify
+    // reassign the first node to a different backend and verify
     int n_backends = ggml_backend_sched_get_n_backends(sched);
     if (n_backends < 1 || ggml_graph_n_nodes(gf) <= 0) {
         return;
     }
 
-    ggml_backend_t target = ggml_backend_sched_get_backend(sched, n_backends - 1);
     struct ggml_tensor * node = ggml_graph_node(gf, 0);
+    ggml_backend_t current = ggml_backend_sched_get_tensor_backend(sched, node);
+    ggml_backend_t target  = current;
+
+    for (int i = 0; i < n_backends; i++) {
+        ggml_backend_t candidate = ggml_backend_sched_get_backend(sched, i);
+        if (candidate != current) {
+            target = candidate;
+            break;
+        }
+    }
+
     ggml_backend_sched_set_tensor_backend(sched, node, target);
     state->reassign_ok = (ggml_backend_sched_get_tensor_backend(sched, node) == target);
 }
@@ -32,6 +42,7 @@ int main(int argc, char ** argv) {
     auto * model = llama_model_load_from_file(model_path, llama_model_default_params());
     if (!model) {
         fprintf(stderr, "FAIL: could not load model\n");
+        llama_backend_free();
         return 1;
     }
 
@@ -60,9 +71,11 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    fprintf(stderr, "called=%d reassign_ok=%d\n", state.called, state.reassign_ok);
-
     int ret = (state.called && state.reassign_ok) ? 0 : 1;
+
+    if (ret != 0) {
+        fprintf(stderr, "FAIL: called=%d reassign_ok=%d\n", state.called, state.reassign_ok);
+    }
 
     llama_free(ctx);
     llama_model_free(model);
