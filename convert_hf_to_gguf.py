@@ -11808,10 +11808,12 @@ class Phi4TextModel(Phi3MiniModel):
     model_arch = gguf.MODEL_ARCH.PHI3
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if "embed_tokens_extend.audio_embed" in name or "embed_tokens_extend.image_embed" in name or "mm_projector" in name:
-            return  # skip multimodal tensors when exporting text model
+        # Whitelist: only process known text model tensors, skip ALL multimodal components
+        # This covers vision_tower, mm_projector, embed_tokens_extend (audio/image), etc.
+        text_prefixes = ("model.embed_tokens.", "model.layers.", "model.norm.", "lm_head.")
+        if not name.startswith(text_prefixes):
+            return  # skip all non-text tensors (vision, audio, projectors, etc.)
         yield from super().modify_tensors(data_torch, name, bid)
-    pass
 
 
 ###### CONVERSION LOGIC ######
