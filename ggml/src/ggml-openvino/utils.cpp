@@ -138,6 +138,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
                 auto states = infer_request->query_state();
                 for (auto state : states) {
                     auto state_tensor = state.get_state();
+                    auto state_tensor_shape = state_tensor.get_shape();
                     if (static_cast<uint32_t>(pos_data[0]) > r_ctx->stateful_kv_size) {
                         std::string state_name;
                         try {
@@ -147,11 +148,11 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
                             return GGML_STATUS_FAILED;
                         }
                         auto kv_tensor = get_ov_input_tensor(ggml_decoder, state_name);
-                        kv_tensor.set_shape({state_tensor.get_shape()[0], kv_tensor.get_shape()[2],
-                                          state_tensor.get_shape()[2], state_tensor.get_shape()[3]});
+                        kv_tensor.set_shape({state_tensor_shape[0], kv_tensor.get_shape()[2],
+                                             state_tensor_shape[2], state_tensor_shape[3]});
                        state_tensor = kv_tensor;
+                       state_tensor_shape = state_tensor.get_shape();
                     }
-                    auto state_tensor_shape = state_tensor.get_shape();
                     ov::Coordinate begin = {0, 0, 0, 0};
                     ov::Coordinate end = {state_tensor_shape[0], static_cast<uint32_t>(pos_data[0]),
                                           state_tensor_shape[2], state_tensor_shape[3]};
