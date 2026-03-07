@@ -139,7 +139,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
                 for (auto state : states) {
                     auto state_tensor = state.get_state();
                     if (static_cast<uint32_t>(pos_data[0]) > r_ctx->stateful_kv_size) {
-                       std::string state_name;
+                        std::string state_name;
                         try {
                             state_name = r_ctx->kv_state_input_name_map.at(state.get_name());
                         } catch (...) {
