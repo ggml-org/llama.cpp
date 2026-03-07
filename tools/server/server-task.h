@@ -76,7 +76,7 @@ struct task_params {
 
     // response formatting
     bool               verbose          = false;
-    bool               tool_args_compat = false;
+    bool               tool_args_object = false;
     task_response_type res_type = TASK_RESPONSE_TYPE_NONE;
     std::string        oaicompat_model;
     std::string        oaicompat_cmpl_id;
@@ -358,7 +358,7 @@ struct server_task_result_cmpl_final : server_task_result {
 
     // response formatting
     bool               verbose          = false;
-    bool               tool_args_compat = false;
+    bool               tool_args_object = false;
     task_response_type res_type = TASK_RESPONSE_TYPE_NONE;
     std::string        oaicompat_model;
     std::string        oaicompat_cmpl_id;

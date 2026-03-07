@@ -3092,13 +3092,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_PREFILL_ASSISTANT"));
     add_opt(common_arg(
-        {"-tac", "--tool-args-compat"},
-        {"--no-tool-args-compat"},
-        "return tool call arguments as JSON strings instead of JSON objects (default: disabled)",
+        {"-tao", "--tool-args-object"},
+        {"--no-tool-args-object"},
+        "return tool call arguments as objects instead of JSON strings (default: disabled)",
         [](common_params & params, bool value) {
-            params.tool_args_compat = value;
+            params.tool_args_object = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TOOL_ARGS_COMPAT"));
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TOOL_ARGS_OBJECT"));
     add_opt(common_arg(
         {"-sps", "--slot-prompt-similarity"}, "SIMILARITY",
         string_format("how much the prompt of a request must match the prompt of a slot in order to use that slot (default: %.2f, 0.0 = disabled)\n", params.slot_prompt_similarity),

@@ -1284,15 +1284,15 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
 // Global template filter for --template flag
 static std::string g_template_filter;
 
-// Global flag for tool args compat mode (--tool-args-compat / -tac)
-static bool g_tool_args_compat = false;
+// Global flag for tool args compat mode (--tool-args-object / -tao)
+static bool g_tool_args_object = false;
 
-// Helper: convert a single message to OAI-compat JSON, respecting g_tool_args_compat
+// Helper: convert a single message to OAI-compat JSON, respecting g_tool_args_object
 static json msg_to_json_oaicompat(const common_chat_msg & msg) {
-    return msg.to_json_oaicompat(/* concat_typed_text= */ false, /* tool_args_as_string= */ g_tool_args_compat);
+    return msg.to_json_oaicompat(/* concat_typed_text= */ false, /* tool_args_as_string= */ !g_tool_args_object);
 }
 
-// Helper: convert a vector of messages to OAI-compat JSON array, respecting g_tool_args_compat
+// Helper: convert a vector of messages to OAI-compat JSON array, respecting g_tool_args_object
 static json msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msgs) {
     json result = json::array();
     for (const auto & msg : msgs) {
@@ -1442,7 +1442,7 @@ static void test_msgs_oaicompat_json_conversion() {
                   msgs_to_json_oaicompat({ message_user_parts }).dump(2));
 
     // Note: content is "" instead of null due to workaround for templates that render null as "None"
-    std::string expected_python_args = g_tool_args_compat
+    std::string expected_python_args = !g_tool_args_object
         ? "          \"arguments\": \"{\\\"code\\\":\\\"print('hey')\\\"}\"\n"
         : "          \"arguments\": {\n"
           "            \"code\": \"print('hey')\"\n"
@@ -3062,8 +3062,8 @@ int main(int argc, char ** argv) {
         } else if (arg == "--detailed") {
             detailed_debug = true;
             common_log_set_verbosity_thold(999);
-        } else if (arg == "--tool-args-compat" || arg == "-tac") {
-            g_tool_args_compat = true;
+        } else if (arg == "--tool-args-object" || arg == "-tao") {
+            g_tool_args_object = true;
         } else {
             n_unrecognized_args++;
         }

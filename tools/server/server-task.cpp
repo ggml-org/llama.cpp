@@ -254,7 +254,7 @@ task_params server_task::params_from_json_cmpl(
 
     // enabling this will output extra debug information in the HTTP responses from the server
     params.verbose           = params_base.verbosity > 9;
-    params.tool_args_compat  = params_base.tool_args_compat;
+    params.tool_args_object  = params_base.tool_args_object;
     params.timings_per_token = json_value(data, "timings_per_token", false);
 
     params.stream           = json_value(data,       "stream",             false);
@@ -779,7 +779,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
     json choice {
         {"finish_reason", finish_reason},
         {"index", index},
-        {"message", msg.to_json_oaicompat(/* concat_typed_text= */ false, /* tool_args_as_string= */ tool_args_compat)},
+        {"message", msg.to_json_oaicompat(/* concat_typed_text= */ false, /* tool_args_as_string= */ !tool_args_object)},
     };
 
     if (!stream && probs_output.size() > 0) {
