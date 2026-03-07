@@ -92,15 +92,14 @@ llama_memory_context_ptr llama_memory_hybrid::init_batch(llama_batch_allocr & ba
 
         // prepare the recurrent batches first
         if (!mem_recr->prepare(ubatches)) {
-            // TODO: will the recurrent cache be in an undefined context at this point?
-            LLAMA_LOG_ERROR("%s: failed to prepare recurrent ubatches\n", __func__);
+            LLAMA_LOG_DEBUG("%s: failed to prepare recurrent ubatches\n", __func__);
             return std::make_unique<llama_memory_hybrid_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
         }
 
         // prepare the attention cache
         auto heads_attn = mem_attn->prepare(ubatches);
         if (heads_attn.empty()) {
-            LLAMA_LOG_ERROR("%s: failed to prepare attention ubatches\n", __func__);
+            LLAMA_LOG_DEBUG("%s: failed to prepare attention ubatches\n", __func__);
             return std::make_unique<llama_memory_hybrid_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
         }
 
