@@ -492,6 +492,45 @@ static inline HVX_Vector dequantize_x4x2_q4_0_group_hvx(
   return Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_hf, v_scales));
 }
 
+// Batch-dequantize 4 contiguous x4x2 Q4_0 groups (4×32 = 128 packed bytes) using
+// full HVX vector width.  One vmemu + one vlut16 replaces 4 separate calls.
+// Output: out[0..3] each hold 32 FP16 values in the first 64 bytes.
+static inline void dequantize_x4x2_q4_0_x4groups_hvx(
+    const uint8_t *packed_128, bool upper_nibbles,
+    const __fp16 *scales_4, const HVX_Vector vlut_cvt,
+    HVX_Vector out[4]) {
+  // Load all 128 packed bytes (4 contiguous 32-byte groups)
+  HVX_Vector vq = hmx_vmemu(packed_128);
+  const HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
+  HVX_Vector v_quants = upper_nibbles ? Q6_Vub_vlsr_VubR(vq, 4) : vq;
+  v_quants = Q6_V_vand_VV(v_quants, mask_h4);
+
+  // Full-width vlut16: 128 byte lookups → 128 fp16 results in a VectorPair
+  HVX_VectorPair vp = Q6_Wh_vlut16_VbVhR(v_quants, vlut_cvt, 0);
+  // Deinterleave to linear order: lo = bytes 0..63, hi = bytes 64..127
+  HVX_VectorPair vp_lin = Q6_W_vshuff_VVR(Q6_V_hi_W(vp), Q6_V_lo_W(vp), -2);
+  HVX_Vector v_lo = Q6_V_lo_W(vp_lin);  // [group0: 32 fp16 | group1: 32 fp16]
+  HVX_Vector v_hi = Q6_V_hi_W(vp_lin);  // [group2: 32 fp16 | group3: 32 fp16]
+
+  // Build per-group scale vectors: first 64 bytes use scale_a, last 64 use scale_b
+  HVX_VectorPred q64 = Q6_Q_vsetq_R(64);
+  HVX_Vector v_sc01 = Q6_V_vmux_QVV(q64,
+      Q6_Vh_vsplat_R(hmx_fp16_to_bits((__fp16 *)&scales_4[0])),
+      Q6_Vh_vsplat_R(hmx_fp16_to_bits((__fp16 *)&scales_4[1])));
+  HVX_Vector v_sc23 = Q6_V_vmux_QVV(q64,
+      Q6_Vh_vsplat_R(hmx_fp16_to_bits((__fp16 *)&scales_4[2])),
+      Q6_Vh_vsplat_R(hmx_fp16_to_bits((__fp16 *)&scales_4[3])));
+
+  v_lo = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_lo, v_sc01));
+  v_hi = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_hi, v_sc23));
+
+  // Extract individual groups: scatter uses q_mask64 so only first 64 bytes matter
+  out[0] = v_lo;                       // group0 already in [0:63]
+  out[1] = Q6_V_vror_VR(v_lo, 64);    // group1 rotated to [0:63]
+  out[2] = v_hi;                       // group2 already in [0:63]
+  out[3] = Q6_V_vror_VR(v_hi, 64);    // group3 rotated to [0:63]
+}
+
 // Dequantize one x4x2 Q8_0 group (32 int8 quants) → 32 FP16 in first 64 bytes.
 static inline HVX_Vector dequantize_x4x2_q8_0_group_hvx(
     const int8_t *quants_32, const __fp16 *scale) {
@@ -526,10 +565,56 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(
   const HVX_Vector v_scat_step = Q6_V_vsplat_R(4);  // 4 bytes = 1 column step
   const HVX_VectorPred q_mask64 = Q6_Q_vsetq_R(64);  // first 16 words (64 bytes)
 
-  for (int t = start_tile; t < end_tile; ++t) {
+  for (int t = start_tile; t < end_tile; ) {
     int ct = t / n_k_tiles;  // column tile index
     int kt = t % n_k_tiles;  // K tile index
 
+    // --- Batch-4 fast path for Q4: process 4 contiguous K-tiles with one vlut16 per row ---
+    if (is_q4 && (kt % 4 == 0) && (t + 4 <= end_tile) && ((t + 3) / n_k_tiles == ct)) {
+      int blk_idx      = (kt * 32) / HMX_QK_Q4x4x2;
+      int sub_blk_base = ((kt * 32) % HMX_QK_Q4x4x2) / 32;  // 0 or 4
+      bool upper       = (sub_blk_base >= 4);
+      int packed_off   = blk_idx * (HMX_QK_Q4x4x2 / 2);     // 128 contiguous packed bytes
+      int scale_off    = qrow_size + blk_idx * HMX_X4X2_DBLK_SIZE
+                       + sub_blk_base * (int)sizeof(__fp16);   // 4 consecutive scales
+
+      __fp16 *tile_bases[4];
+      for (int g = 0; g < 4; g++)
+        tile_bases[g] = vtcm_dst + (t + g) * HMX_FP16_TILE_N_ELMS;
+
+      HVX_Vector v_off = v_scat_base;
+      for (int r = 0; r < HMX_FP16_TILE_N_ROWS; r += 2) {
+        int row0 = ct * HMX_FP16_TILE_N_COLS + r;
+        int row1 = row0 + 1;
+        const uint8_t *r0 = vtcm_src + row0 * row_stride;
+        const uint8_t *r1 = vtcm_src + row1 * row_stride;
+
+        HVX_Vector v0[4], v1[4];
+        dequantize_x4x2_q4_0_x4groups_hvx(
+            r0 + packed_off, upper, (const __fp16 *)(r0 + scale_off), vlut_cvt, v0);
+        if (row1 < n_cols) {
+          dequantize_x4x2_q4_0_x4groups_hvx(
+              r1 + packed_off, upper, (const __fp16 *)(r1 + scale_off), vlut_cvt, v1);
+        } else {
+          v1[0] = v1[1] = v1[2] = v1[3] = Q6_V_vzero();
+        }
+
+        for (int g = 0; g < 4; g++)
+          Q6_vscatter_QRMVwV(q_mask64, (size_t)tile_bases[g], HMX_FP16_TILE_SIZE - 1, v_off, v0[g]);
+        v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);
+        for (int g = 0; g < 4; g++)
+          Q6_vscatter_QRMVwV(q_mask64, (size_t)tile_bases[g], HMX_FP16_TILE_SIZE - 1, v_off, v1[g]);
+        v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);
+      }
+
+      for (int g = 0; g < 4; g++)
+        (void) *(volatile HVX_Vector *)(tile_bases[g]);
+
+      t += 4;
+      continue;
+    }
+
+    // --- Single-tile fallback ---
     __fp16 *tile_base = vtcm_dst + t * HMX_FP16_TILE_N_ELMS;
 
     if (is_q4) {
@@ -554,55 +639,12 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(
                 r1 + byte_off, upper, (const __fp16 *)(r1 + scale_off), vlut_cvt)
             : Q6_V_vzero();
 
-#if HMX_DEBUG_TRACE_VALUES
-        // Check dequant output BEFORE scatter — show scale value and offset for DMA correlation
-        if (t == start_tile) {
-          __attribute__((aligned(128))) uint16_t _dq[64];
-          *(HVX_Vector *)_dq = v0;
-          int _nq0 = 0;
-          for (int _j = 0; _j < 32; ++_j) { if (_dq[_j] == 0xFFFF) _nq0++; }
-          if (_nq0 > 0) {
-            uint16_t _sc = *(const uint16_t *)(r0 + scale_off);
-            FARF(ALWAYS, "  DBG DEQUANT-PRE-SCATTER: tile %d r=%d row0=%d v0 has %d NaN, scale=0x%04x byte_off=%d scale_off=%d blk=%d sub=%d",
-                 t, r, (int)(ct * HMX_FP16_TILE_N_COLS + r), _nq0, _sc, byte_off, scale_off, blk_idx, sub_blk);
-          }
-          *(HVX_Vector *)_dq = v1;
-          int _nq1 = 0;
-          for (int _j = 0; _j < 32; ++_j) { if (_dq[_j] == 0xFFFF) _nq1++; }
-          if (_nq1 > 0) {
-            uint16_t _sc = *(const uint16_t *)(r1 + scale_off);
-            FARF(ALWAYS, "  DBG DEQUANT-PRE-SCATTER: tile %d r=%d row1=%d v1 has %d NaN, scale=0x%04x byte_off=%d scale_off=%d blk=%d sub=%d",
-                 t, r, (int)(ct * HMX_FP16_TILE_N_COLS + r + 1), _nq1, _sc, byte_off, scale_off, blk_idx, sub_blk);
-          }
-        }
-#endif
-
-        // Scatter each row's 32 K-values directly to transposed [K][N] positions.
-        // word[i] = {k=2i, k=2i+1} written to K-row-pair i, N-column r / r+1.
         Q6_vscatter_QRMVwV(q_mask64, (size_t)tile_base, HMX_FP16_TILE_SIZE - 1, v_off, v0);
         v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);
         Q6_vscatter_QRMVwV(q_mask64, (size_t)tile_base, HMX_FP16_TILE_SIZE - 1, v_off, v1);
         v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);
       }
-      // Drain scatter buffer after each tile to prevent HVX scatter FIFO overflow.
-      // 32 scatter ops per tile; without periodic drains the buffer overflows for
-      // large matrices (e.g. 128 tiles = 4096 scatters) and early writes are lost.
       (void) *(volatile HVX_Vector *)(tile_base);
-
-#if HMX_DEBUG_TRACE_VALUES
-      // Verify tile data immediately after scatter+drain
-      if (t == start_tile) {
-        const uint16_t *_tr = (const uint16_t *)tile_base;
-        int _nan_scat = 0;
-        for (int _j = 0; _j < 1024; ++_j) { if (_tr[_j] == 0xFFFF) _nan_scat++; }
-        if (_nan_scat > 0) {
-          FARF(ALWAYS, "  DBG SCATTER-READBACK: tile %d has %d NaN AFTER scatter+drain, [6..9]=%04x %04x %04x %04x",
-               t, _nan_scat, _tr[6], _tr[7], _tr[8], _tr[9]);
-        } else {
-          FARF(ALWAYS, "  DBG SCATTER-READBACK: tile %d OK (0 NaN after scatter+drain)", t);
-        }
-      }
-#endif
     } else {
       // Q8_0
       int blk_idx  = (kt * 32) / HMX_QK_Q8x4x2;
@@ -630,9 +672,9 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(
         Q6_vscatter_QRMVwV(q_mask64, (size_t)tile_base, HMX_FP16_TILE_SIZE - 1, v_off, v1);
         v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);
       }
-      // Drain scatter buffer after each tile (same reason as Q4_0 path above)
       (void) *(volatile HVX_Vector *)(tile_base);
     }
+    ++t;
   }
 
   // Drain HVX scatter write buffer: a vmem load on the same HW thread retires
