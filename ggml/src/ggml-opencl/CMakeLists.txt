@@ -116,6 +116,7 @@ set(GGML_OPENCL_KERNELS
     neg
     norm
     relu
+    l2_norm
     rms_norm
     rope
     scale
