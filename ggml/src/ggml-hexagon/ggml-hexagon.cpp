@@ -201,8 +201,7 @@ void ggml_hexagon_session::flush() {
         }
 
         if (rsp.status != HTP_STATUS_OK) {
-            GGML_LOG_ERROR("ggml-hex: dspcall : dsp-rsp: %s\n", status_to_str(rsp.status));
-            // TODO: handle errors
+            GGML_ABORT("ggml-hex: dspcall FATAL: dsp-rsp: %s\n", status_to_str(rsp.status));
         }
 
         // TODO: update profiling implementation, currently only works for opt_opsync mode

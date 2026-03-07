@@ -1188,6 +1188,7 @@ static void proc_hmx_matmul_req(struct htp_context *     ctx,
         } else {
             FARF(HIGH, "HMX matmul failed (ret=%d), falling back to HVX", ret);
             vtcm_release(ctx);
+            req->flags &= ~HTP_OPFLAGS_SKIP_QUANTIZE;
             proc_matmul_req(ctx, req, bufs, n_bufs);
             return;
         }
