@@ -204,11 +204,11 @@ void main() {
 
     coopmat<int8_t, gl_ScopeSubgroup, TM, TK, gl_MatrixUseA> cache_a;
     coopmat<int8_t, gl_ScopeSubgroup, TK, TN, gl_MatrixUseB> cache_b;
-    coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> int_result[cms_per_row * cms_per_col];
+    coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> int_result;
 
     coopmat<float16_t, gl_ScopeSubgroup, TM, TK, gl_MatrixUseA> scales_a;
-    coopmat<float16_t, gl_ScopeSubgroup, TK, TN, gl_MatrixUseB> scales_b;
-    coopmat<ACC_TYPE, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> scales;
+    coopmat<float16_t, gl_ScopeSubgroup, TK, TN, gl_MatrixUseB> scales_b[cms_per_col];
+    coopmat<ACC_TYPE, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> scales[cms_per_row * cms_per_col];
     coopmat<ACC_TYPE, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> sums[cms_per_row * cms_per_col];
 
     [[unroll]] for (uint i = 0; i < cms_per_row * cms_per_col; i++) {
@@ -242,13 +242,19 @@ void main() {
         pos_a_ib += 1;
         pos_b_ib += 1;
 
-        // Calculate quants
+        // Precompute scales
+        [[unroll]] for (uint cm_col = 0; cm_col < cms_per_col; cm_col++) {
+            coopMatLoad(scales_b[cm_col], buf_b_d, warp_c*WN + cm_col*TN, 0, gl_CooperativeMatrixLayoutRowMajor);
+        }
+
         [[unroll]] for (uint cm_row = 0; cm_row < cms_per_row; cm_row++) {
+            coopMatLoad(scales_a, buf_a_d, warp_r*WM + cm_row*TM, 0, gl_CooperativeMatrixLayoutColumnMajor);
             [[unroll]] for (uint cm_col = 0; cm_col < cms_per_col; cm_col++) {
-                int_result[cm_col * cms_per_row + cm_row] = coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator>(0);
+                scales[cm_col * cms_per_row + cm_row] = coopMatMulAdd(scales_a, scales_b[cm_col], coopmat<ACC_TYPE, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator>(0));
             }
         }
 
+        // Calculate quants
         [[unroll]] for (uint i = 0; i < BK; i += TK) {
             [[unroll]] for (uint cm_row = 0; cm_row < cms_per_row; cm_row++) {
                 coopMatLoad(cache_a, buf_a_qs, (warp_r * WM + cm_row * TM) * shmem_stride + i / 4, shmem_stride, gl_CooperativeMatrixLayoutRowMajor);
@@ -256,18 +262,9 @@ void main() {
                 [[unroll]] for (uint cm_col = 0; cm_col < cms_per_col; cm_col++) {
                     coopMatLoad(cache_b, buf_b_qs, (warp_c * WN + cm_col * TN) * shmem_stride + i / 4, shmem_stride, gl_CooperativeMatrixLayoutColumnMajor);
 
-                    int_result[cm_col * cms_per_row + cm_row] = coopMatMulAdd(cache_a, cache_b, int_result[cm_col * cms_per_row + cm_row]);
+                    int_result = coopMatMulAdd(cache_a, cache_b, coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator>(0));
+                    sums[cm_col * cms_per_row + cm_row] += scales[cm_col * cms_per_row + cm_row] * coopmat<ACC_TYPE, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator>(int_result);
                 }
-            }
-        }
-
-        // Apply scales
-        [[unroll]] for (uint cm_row = 0; cm_row < cms_per_row; cm_row++) {
-            coopMatLoad(scales_a, buf_a_d, warp_r*WM + cm_row*TM, 0, gl_CooperativeMatrixLayoutColumnMajor);
-            [[unroll]] for (uint cm_col = 0; cm_col < cms_per_col; cm_col++) {
-                coopMatLoad(scales_b, buf_b_d, warp_c*WN + cm_col*TN, 0, gl_CooperativeMatrixLayoutRowMajor);
-                scales = coopMatMulAdd(scales_a, scales_b, coopmat<ACC_TYPE, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator>(0));
-                sums[cm_col * cms_per_row + cm_row] += scales * coopmat<ACC_TYPE, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator>(int_result[cm_col * cms_per_row + cm_row]);
             }
         }
 
