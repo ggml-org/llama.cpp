@@ -27,6 +27,7 @@ DispatchLoaderDynamic & ggml_vk_default_dispatcher();
 #include <iostream>
 #include <tuple>
 #include <vector>
+#include <deque>
 #include <sstream>
 #include <utility>
 #include <memory>
@@ -197,6 +198,7 @@ struct vk_command_pool {
     vk::CommandPool pool;
     uint32_t cmd_buffer_idx;
     std::vector<vk::CommandBuffer> cmd_buffers;
+    std::deque<int64_t> reusable_cmd_buffer_index;
 
     vk_queue *q;
 };
@@ -878,8 +880,11 @@ struct vk_device_struct {
 void vk_command_pool::init(vk_device& device, vk_queue *q_) {
     cmd_buffer_idx = 0;
     q = q_;
+    reusable_cmd_buffer_index.clear();
 
-    vk::CommandPoolCreateInfo command_pool_create_info(vk::CommandPoolCreateFlags(VK_COMMAND_POOL_CREATE_TRANSIENT_BIT), q->queue_family_index);
+    vk::CommandPoolCreateInfo command_pool_create_info(
+        vk::CommandPoolCreateFlags(VK_COMMAND_POOL_CREATE_TRANSIENT_BIT | VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT),
+        q->queue_family_index);
     pool = device->device.createCommandPool(command_pool_create_info);
 }
 
@@ -887,6 +892,7 @@ void vk_command_pool::destroy(vk::Device& device) {
     device.destroyCommandPool(pool);
     pool = nullptr;
     cmd_buffers.clear();
+    reusable_cmd_buffer_index.clear();
 }
 
 struct vk_buffer_struct {
@@ -927,6 +933,12 @@ struct vk_subbuffer {
 struct vk_event {
     vk::Event event;
     vk::Fence fence;
+    // Command pool associated with command buffer.
+    // Used to record reusable command buffer index after fence sync
+    vk_command_pool* command_pool = nullptr;
+    // Command buffer index associated with this event.
+    // We can reuse it once we're done using it
+    int64_t command_buffer_index = -1;
 };
 
 struct vk_semaphore {
@@ -2491,6 +2503,7 @@ static void ggml_vk_command_pool_cleanup(vk_device& device, vk_command_pool& p) 
     // Requires command buffers to be done
     device->device.resetCommandPool(p.pool);
     p.cmd_buffer_idx = 0;
+    p.reusable_cmd_buffer_index.clear();
 }
 
 static void ggml_vk_queue_command_pools_cleanup(vk_device& device) {
@@ -6344,9 +6357,9 @@ static vk_subbuffer ggml_vk_tensor_subbuffer(
     return vk_subbuffer{buffer, offset, size};
 }
 
-static vk_submission ggml_vk_begin_submission(vk_device& device, vk_command_pool& p, bool one_time = true) {
+static vk_submission ggml_vk_begin_submission(vk::CommandBuffer buffer, bool one_time = true) {
     vk_submission s;
-    s.buffer = ggml_vk_create_cmd_buffer(device, p);
+    s.buffer = buffer;
     if (one_time) {
         s.buffer.begin({ vk::CommandBufferUsageFlagBits::eOneTimeSubmit });
     } else {
@@ -6430,14 +6443,42 @@ static void ggml_vk_ctx_end(vk_context& ctx) {
     ctx->s = nullptr;
 }
 
-static void ggml_vk_ctx_begin(vk_device& device, vk_context& subctx) {
-    VK_LOG_DEBUG("ggml_vk_ctx_begin(" << device->name << ")");
+static void ggml_vk_ctx_begin(vk_context& subctx, vk::CommandBuffer buffer) {
+    VK_LOG_DEBUG("ggml_vk_ctx_begin(" << buffer << ")");
     if (subctx->s != nullptr) {
         ggml_vk_ctx_end(subctx);
     }
 
-    subctx->seqs.push_back({ ggml_vk_begin_submission(device, *subctx->p) });
+    subctx->seqs.push_back({ ggml_vk_begin_submission(buffer) });
     subctx->s = subctx->seqs[subctx->seqs.size() - 1].data();
+}
+
+static bool ggml_vk_try_pop_reusable_cmd_buffer_index(vk_command_pool& pool, int64_t& idx) {
+    if (pool.reusable_cmd_buffer_index.empty()) {
+        return false;
+    }
+
+    idx = pool.reusable_cmd_buffer_index.front();
+    pool.reusable_cmd_buffer_index.pop_front();
+    return true;
+}
+
+// Get a command buffer from pool. Create a new one if no reusable buffer is available
+static vk::CommandBuffer ggml_vk_get_or_create_cmd_buffer(vk_device& device, vk_command_pool& pool) {
+    int64_t idx = -1;
+    if (ggml_vk_try_pop_reusable_cmd_buffer_index(pool, idx)) {
+        GGML_ASSERT(idx >= 0 && (size_t) idx < pool.cmd_buffers.size());
+        return pool.cmd_buffers[idx];
+    }
+    return ggml_vk_create_cmd_buffer(device, pool);
+}
+
+static int64_t ggml_vk_find_cmd_buffer_index(const vk_command_pool & pool, vk::CommandBuffer buffer) {
+    auto it = std::find(pool.cmd_buffers.begin(), pool.cmd_buffers.end(), buffer);
+    if (it == pool.cmd_buffers.end()) {
+        return -1;
+    }
+    return std::distance(pool.cmd_buffers.begin(), it);
 }
 
 static vk_context ggml_vk_get_compute_ctx(ggml_backend_vk_context * ctx) {
@@ -6448,7 +6489,8 @@ static vk_context ggml_vk_get_compute_ctx(ggml_backend_vk_context * ctx) {
     vk_context result = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
 
     ctx->compute_ctx = result;
-    ggml_vk_ctx_begin(ctx->device, result);
+    vk::CommandBuffer buf = ggml_vk_get_or_create_cmd_buffer(ctx->device, *result->p);
+    ggml_vk_ctx_begin(result, buf);
 
     if (ctx->device->async_use_transfer_queue && ctx->transfer_semaphore_last_submitted < ctx->transfer_semaphore.value) {
         result->s->wait_semaphores.push_back(ctx->transfer_semaphore);
@@ -6696,7 +6738,8 @@ static void ggml_vk_buffer_write_2d(vk_buffer& dst, size_t offset, const void * 
         std::lock_guard<std::recursive_mutex> guard(dst->device->mutex);
 
         vk_context subctx = ggml_vk_create_temporary_context(dst->device->transfer_queue.cmd_pool);
-        ggml_vk_ctx_begin(dst->device, subctx);
+        vk::CommandBuffer buf = ggml_vk_create_cmd_buffer(dst->device, *subctx->p);
+        ggml_vk_ctx_begin(subctx, buf);
         bool ret = ggml_vk_buffer_write_2d_async(subctx, dst, offset, src, spitch, width, height, true);
         GGML_ASSERT(ret);
         ggml_vk_ctx_end(subctx);
@@ -6794,7 +6837,8 @@ static void ggml_vk_buffer_read(vk_buffer& src, size_t offset, void * dst, size_
         std::lock_guard<std::recursive_mutex> guard(src->device->mutex);
 
         vk_context subctx = ggml_vk_create_temporary_context(src->device->transfer_queue.cmd_pool);
-        ggml_vk_ctx_begin(src->device, subctx);
+        vk::CommandBuffer buf = ggml_vk_create_cmd_buffer(src->device, *subctx->p);
+        ggml_vk_ctx_begin(subctx, buf);
         bool ret = ggml_vk_buffer_read_async(subctx, src, offset, dst, size, true);
         GGML_ASSERT(ret);
         ggml_vk_ctx_end(subctx);
@@ -6826,7 +6870,8 @@ static void ggml_vk_buffer_copy(vk_buffer& dst, size_t dst_offset, vk_buffer& sr
         VK_LOG_DEBUG("ggml_vk_buffer_copy(SINGLE_DEVICE, " << size << ")");
         // Copy within the device
         vk_context subctx = ggml_vk_create_temporary_context(src->device->transfer_queue.cmd_pool);
-        ggml_vk_ctx_begin(src->device, subctx);
+        vk::CommandBuffer buf = ggml_vk_create_cmd_buffer(src->device, *subctx->p);
+        ggml_vk_ctx_begin(subctx, buf);
         ggml_vk_buffer_copy_async(subctx, dst, dst_offset, src, src_offset, size);
         ggml_vk_ctx_end(subctx);
         ggml_vk_submit(subctx, src->device->fence);
@@ -6869,7 +6914,8 @@ static void ggml_vk_buffer_memset(vk_buffer& dst, size_t offset, uint32_t c, siz
 
     std::lock_guard<std::recursive_mutex> guard(dst->device->mutex);
     vk_context subctx = ggml_vk_create_temporary_context(dst->device->transfer_queue.cmd_pool);
-    ggml_vk_ctx_begin(dst->device, subctx);
+    vk::CommandBuffer buf = ggml_vk_create_cmd_buffer(dst->device, *subctx->p);
+    ggml_vk_ctx_begin(subctx, buf);
     subctx->s->buffer.fillBuffer(dst->buffer, offset, size, c);
     ggml_vk_ctx_end(subctx);
 
@@ -11825,7 +11871,8 @@ static void ggml_vk_test_matmul(ggml_backend_vk_context * ctx, size_t m, size_t 
     ggml_vk_buffer_write(d_Y, 0, y, sizeof(Y_TYPE) * k * n * batch);
 
     vk_context subctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
-    ggml_vk_ctx_begin(ctx->device, subctx);
+    vk::CommandBuffer buf = ggml_vk_create_cmd_buffer(ctx->device, *subctx->p);
+    ggml_vk_ctx_begin(subctx, buf);
     for (size_t i = 0; i < num_it; i++) {
         ggml_vk_matmul(
             ctx, subctx, p, ggml_vk_subbuffer(ctx, d_X), ggml_vk_subbuffer(ctx, d_Y), ggml_vk_subbuffer(ctx, d_D), ggml_vk_subbuffer(ctx, ctx->prealloc_split_k),
@@ -12032,7 +12079,8 @@ static void ggml_vk_test_dequant(ggml_backend_vk_context * ctx, size_t ne, ggml_
     ggml_vk_buffer_write(qx_buf, 0, qx, qx_sz);
 
     vk_context subctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
-    ggml_vk_ctx_begin(ctx->device, subctx);
+    vk::CommandBuffer buf = ggml_vk_create_cmd_buffer(ctx->device, *subctx->p);
+    ggml_vk_ctx_begin(subctx, buf);
     const std::vector<uint32_t> pc = { 1, (uint32_t)ne, (uint32_t)ne, (uint32_t)ne, (uint32_t)ne };
     ggml_vk_dispatch_pipeline(ctx, subctx, p, { vk_subbuffer{ qx_buf, 0, qx_sz }, vk_subbuffer{ x_buf, 0, x_sz_f16 } }, pc, { (uint32_t)ne, 1, 1});
     ggml_vk_ctx_end(subctx);
@@ -12129,7 +12177,8 @@ static void ggml_vk_test_dequant(ggml_backend_vk_context * ctx, size_t ne, ggml_
 //     ggml_vk_buffer_write(x_buf, 0, x, x_sz);
 //
 //     vk_context subctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
-//     ggml_vk_ctx_begin(ctx->device, subctx);
+//     vk::CommandBuffer buf = ggml_vk_create_cmd_buffer(ctx->device, *subctx->p);
+//     ggml_vk_ctx_begin(subctx, buf);
 //     ggml_vk_quantize_q8_1(ctx, subctx, ggml_vk_subbuffer(ctx, x_buf), ggml_vk_subbuffer(ctx, qx_buf), ne);
 //     ggml_vk_ctx_end(subctx);
 //
@@ -12300,7 +12349,8 @@ static void ggml_vk_test_dequant_matmul(ggml_backend_vk_context * ctx, size_t m,
     ggml_vk_buffer_write(y_buf, 0, y, y_sz);
 
     vk_context subctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
-    ggml_vk_ctx_begin(ctx->device, subctx);
+    vk::CommandBuffer buf = ggml_vk_create_cmd_buffer(ctx->device, *subctx->p);
+    ggml_vk_ctx_begin(subctx, buf);
     if (mmq) {
         for (size_t i = 0; i < num_it; i++) {
             ggml_vk_quantize_q8_1(ctx, subctx, { y_buf, 0, y_sz }, { qy_buf, 0, qy_sz }, y_ne);
@@ -12528,7 +12578,8 @@ static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_contex
         ctx->submit_pending = true;
         ggml_vk_synchronize(ctx);
         GGML_ASSERT(ctx->compute_ctx.expired());
-        ggml_vk_ctx_begin(ctx->device, subctx);
+        vk::CommandBuffer buf = ggml_vk_create_cmd_buffer(ctx->device, *subctx->p);
+        ggml_vk_ctx_begin(subctx, buf);
         ctx->compute_ctx = subctx;
     }
 
@@ -13468,7 +13519,8 @@ static void ggml_backend_vk_set_tensor_async(ggml_backend_t backend, ggml_tensor
             // Initialize new transfer context
             cpy_ctx = ggml_vk_create_context(ctx, ctx->transfer_cmd_pool);
             ctx->transfer_ctx = cpy_ctx;
-            ggml_vk_ctx_begin(ctx->device, cpy_ctx);
+            vk::CommandBuffer buf = ggml_vk_create_cmd_buffer(ctx->device, *cpy_ctx->p);
+            ggml_vk_ctx_begin(cpy_ctx, buf);
         } else {
             cpy_ctx = ctx->transfer_ctx.lock();
         }
@@ -13567,7 +13619,8 @@ static bool ggml_backend_vk_cpy_tensor_async(ggml_backend_t backend_src, ggml_ba
             if (ctx->transfer_ctx.expired()) {
                 cpy_ctx = ggml_vk_create_context(ctx, ctx->transfer_cmd_pool);
                 ctx->transfer_ctx = cpy_ctx;
-                ggml_vk_ctx_begin(ctx->device, cpy_ctx);
+                vk::CommandBuffer buf = ggml_vk_create_cmd_buffer(ctx->device, *cpy_ctx->p);
+                ggml_vk_ctx_begin(cpy_ctx, buf);
             } else {
                 cpy_ctx = ctx->transfer_ctx.lock();
             }
@@ -14687,6 +14740,7 @@ static void ggml_backend_vk_event_record(ggml_backend_t backend, ggml_backend_ev
     ggml_vk_submit_transfer_ctx(ctx);
 
     vk_context compute_ctx = ggml_vk_get_compute_ctx(ctx);
+    int64_t used_cmd_buffer_index = ggml_vk_find_cmd_buffer_index(*compute_ctx->p, compute_ctx->s->buffer);
 
     // the backend interface doesn't have an explicit reset, so reset it here
     // before we record the command to set it
@@ -14699,6 +14753,8 @@ static void ggml_backend_vk_event_record(ggml_backend_t backend, ggml_backend_ev
 
     ggml_vk_submit(compute_ctx, {vkev->fence});
     ctx->submit_pending = true;
+    vkev->command_pool  = compute_ctx->p;
+    vkev->command_buffer_index = used_cmd_buffer_index;
     ctx->compute_ctx.reset();
 }
 
@@ -15516,6 +15572,13 @@ static void ggml_backend_vk_device_event_synchronize(ggml_backend_dev_t dev, ggm
     vk_event *vkev = (vk_event *)event->context;
 
     VK_CHECK(device->device.waitForFences({ vkev->fence }, true, UINT64_MAX), "event_synchronize");
+    // Finished using current command buffer.
+    // We add current command buffer index to usable buffers if index is valid
+    if (vkev->command_pool && vkev->command_buffer_index >= 0) {
+        vkev->command_pool->reusable_cmd_buffer_index.push_back(vkev->command_buffer_index);
+        vkev->command_buffer_index = -1;
+        vkev->command_pool = nullptr;
+    }
 }
 
 static vk_buffer ggml_vk_buffer_from_host_ptr(vk_device & device, void * ptr, size_t size) {
