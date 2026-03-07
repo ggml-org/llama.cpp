@@ -1113,16 +1113,62 @@ static const ggml_backend_buffer_type_i ggml_backend_cuda_split_buffer_type_inte
 
 bool ggml_backend_cuda_allreduce_tensor(ggml_backend_t * backends, struct ggml_tensor ** tensors, size_t n_backends) {
 #ifdef GGML_USE_NCCL
+    const int64_t ne = ggml_nelements(tensors[0]);
+    // FIXME the input of llm_graph_context::build_in_out_ids can produce a tensor with 0 elements if n_outputs == 0
+    // This then causes a crash in this function
+    if (ne == 0) {
+        return true;
+    }
+    for (size_t i = 0; i < n_backends; ++i) {
+        GGML_ASSERT(tensors[i] != nullptr);
+        GGML_ASSERT(ggml_nelements(tensors[i]) == ne);
+        GGML_ASSERT(ggml_is_contiguously_allocated(tensors[i]));
+    }
+
     const ggml_cuda_device_info info = ggml_cuda_info();
 
-    const size_t ne = ggml_nelements(tensors[0]);
+    // For small tensors, simply reduce them as FP32.
+    // The following heuristic for how "small" a tensor should be is based on RTX 4090s connected via 16x PCIe 4.0.
+    if ((n_backends <= 2 && ne < 32768) || (n_backends == 3 && ne < 131072) || (n_backends >= 4 && ne < 262144)) {
+        NCCL_CHECK(ncclGroupStart());
+        for (size_t i = 0; i < n_backends; ++i) {
+            ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backends[i]->context;
+            NCCL_CHECK(ncclAllReduce(tensors[i]->data, tensors[i]->data, ne, ncclFloat, ncclSum, info.comms[cuda_ctx->device], cuda_ctx->stream()));
+        }
+        NCCL_CHECK(ncclGroupEnd());
+
+        return true;
+    }
+
+    // For large tensors it's faster to compress them to BF16 for the reduction:
+    to_bf16_cuda_t to_bf16 = ggml_get_to_bf16_cuda(GGML_TYPE_F32);
+    to_fp32_cuda_t to_fp32 = ggml_get_to_fp32_cuda(GGML_TYPE_BF16);
+
+    ggml_cuda_pool_alloc<nv_bfloat16> tmp[GGML_CUDA_MAX_DEVICES];
+    for (size_t i = 0; i < n_backends; ++i) {
+        ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backends[i]->context;
+        tmp[i].pool = &cuda_ctx->pool();
+        tmp[i].alloc(ne);
+
+        ggml_cuda_set_device(i);
+        to_bf16(tensors[i]->data, tmp[i].get(), ne, cuda_ctx->stream());
+        CUDA_CHECK(cudaGetLastError());
+    }
 
     NCCL_CHECK(ncclGroupStart());
     for (size_t i = 0; i < n_backends; ++i) {
         ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backends[i]->context;
-        NCCL_CHECK(ncclAllReduce(tensors[i]->data, tensors[i]->data, ne, ncclFloat, ncclSum, info.comms[cuda_ctx->device], cuda_ctx->stream()));
+        NCCL_CHECK(ncclAllReduce(tmp[i].get(), tmp[i].get(), ne, ncclBfloat16, ncclSum, info.comms[cuda_ctx->device], cuda_ctx->stream()));
     }
     NCCL_CHECK(ncclGroupEnd());
+
+    for (size_t i = 0; i < n_backends; ++i) {
+        ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backends[i]->context;
+
+        ggml_cuda_set_device(i);
+        to_fp32(tmp[i].get(), (float *) tensors[i]->data, ne, cuda_ctx->stream());
+        CUDA_CHECK(cudaGetLastError());
+    }
 
     return true;
 #else
