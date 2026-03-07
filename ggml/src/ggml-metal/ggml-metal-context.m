@@ -129,8 +129,16 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
 
     res->d_queue = dispatch_queue_create("ggml-metal", DISPATCH_QUEUE_CONCURRENT);
 
-    res->use_fusion      = getenv("GGML_METAL_FUSION_DISABLE") == nil;
-    res->use_concurrency = getenv("GGML_METAL_CONCURRENCY_DISABLE") == nil;
+    res->use_fusion = getenv("GGML_METAL_FUSION_DISABLE") == nil;
+
+    // Auto-disable concurrent dispatch on non-Apple GPUs (AMD/Intel)
+    // MTLDispatchTypeConcurrent has broken memory barriers on these GPUs
+    bool is_apple_gpu = props_dev->supports_gpu_family_apple7;
+    res->use_concurrency = is_apple_gpu && (getenv("GGML_METAL_CONCURRENCY_DISABLE") == nil);
+
+    if (!is_apple_gpu && getenv("GGML_METAL_CONCURRENCY_DISABLE") == nil) {
+        GGML_LOG_INFO("%s: disabling concurrent dispatch (non-Apple GPU detected)\n", __func__);
+    }
 
     {
         const char * val = getenv("GGML_METAL_GRAPH_DEBUG");
