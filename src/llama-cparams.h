@@ -39,6 +39,8 @@ struct llama_cparams {
 
     enum llama_pooling_type pooling_type;
 
+    uint32_t n_sampling_outputs_max; // max outputs per sequence for backend sampling
+
     ggml_backend_sched_eval_callback cb_eval;
     void * cb_eval_user_data;
 };

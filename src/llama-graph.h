@@ -662,10 +662,10 @@ public:
     ggml_tensor * t_embd        = nullptr;
     ggml_tensor * t_embd_pooled = nullptr;
 
-    std::map<llama_seq_id, ggml_tensor*> t_sampled_logits;
-    std::map<llama_seq_id, ggml_tensor*> t_candidates;
-    std::map<llama_seq_id, ggml_tensor*> t_sampled;
-    std::map<llama_seq_id, ggml_tensor*> t_sampled_probs;
+    std::map<llama_seq_id, std::vector<ggml_tensor*>> t_sampled_logits;
+    std::map<llama_seq_id, std::vector<ggml_tensor*>> t_candidates;
+    std::map<llama_seq_id, std::vector<ggml_tensor*>> t_sampled;
+    std::map<llama_seq_id, std::vector<ggml_tensor*>> t_sampled_probs;
 
     std::vector<llm_graph_input_ptr> inputs;
 
