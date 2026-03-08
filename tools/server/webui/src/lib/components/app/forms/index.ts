@@ -7,12 +7,18 @@
  */
 
 /**
- * **SearchInput** - Search field with clear button
+ * **InputWithSuggestions** - Input field with autocomplete suggestions
  *
- * Input field optimized for search with clear button and keyboard handling.
- * Supports placeholder, autofocus, and change callbacks.
+ * Text input with dropdown suggestions and keyboard navigation.
+ * Supports autocomplete functionality with suggestion loading.
+ *
+ * **Features:**
+ * - Autocomplete dropdown with suggestions
+ * - Keyboard navigation (arrow keys, enter)
+ * - Loading state for suggestions
+ * - Focus and blur handling
  */
-export { default as SearchInput } from './SearchInput.svelte';
+export { default as InputWithSuggestions } from './InputWithSuggestions.svelte';
 
 /**
  * **KeyValuePairs** - Editable key-value list
@@ -28,3 +34,11 @@ export { default as SearchInput } from './SearchInput.svelte';
  * - Auto-resize value textarea
  */
 export { default as KeyValuePairs } from './KeyValuePairs.svelte';
+
+/**
+ * **SearchInput** - Search field with clear button
+ *
+ * Input field optimized for search with clear button and keyboard handling.
+ * Supports placeholder, autofocus, and change callbacks.
+ */
+export { default as SearchInput } from './SearchInput.svelte';
