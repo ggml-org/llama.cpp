@@ -2514,6 +2514,9 @@ kernel void kernel_gated_delta_net_f32(
         const float v_tid    = v[kv_offset + tid];
 
         // Decay state and compute sk = sum_j M[j][tid] * k[j]
+        // Two-pass approach: decay state first, then compute on decayed state.
+        // Algebraically equivalent to CUDA's fused form: delta = (v - g*dot(S,k))*beta;
+        // S = g*S + k*delta, since dot(g*S, k) = g*dot(S, k).
         // GDA: all elements scaled by same exp(g)
         // KDA: state[j] = M[j][tid] scaled by exp(g[j]) (per-row gate)
         float sk = 0.0f;
