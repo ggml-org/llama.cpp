@@ -1417,20 +1417,32 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
         // For a single split workgroup there is nothing to merge.
         // Let vec split write final dst directly and skip reduce.
         const bool use_vec_reduce = nwg > 1u;
-
-        const uint64_t tmp_data_elems = nrows * (uint64_t) V->ne[0] * nwg;
-        const uint64_t tmp_stats_base = tmp_data_elems;
-        const uint64_t tmp_stats_elems = nrows * 2u * nwg;
-        const uint64_t tmp_total_elems = tmp_data_elems + tmp_stats_elems;
-        const uint64_t tmp_size_bytes =
-            ROUNDUP_POW2(tmp_total_elems * sizeof(float), WEBGPU_STORAGE_BUF_BINDING_MULT);
-        GGML_ASSERT(tmp_stats_base <= UINT32_MAX);
         GGML_ASSERT(nrows <= UINT32_MAX);
 
-        wgpu::Buffer tmp_buf;
-        ggml_webgpu_create_buffer(ctx->global_ctx->device, tmp_buf, tmp_size_bytes,
-                                  wgpu::BufferUsage::Storage,
-                                  "flash_attn_vec_tmp");
+        uint64_t tmp_stats_base = 0;
+        uint64_t tmp_size_bytes = 0;
+        wgpu::Buffer tmp_buf    = {};
+        uint64_t tmp_bind_offset = 0;
+        uint64_t tmp_bind_size   = 0;
+
+        if (use_vec_reduce) {
+            const uint64_t tmp_data_elems  = nrows * (uint64_t) V->ne[0] * nwg;
+            tmp_stats_base                 = tmp_data_elems;
+            const uint64_t tmp_stats_elems = nrows * 2u * nwg;
+            const uint64_t tmp_total_elems = tmp_data_elems + tmp_stats_elems;
+            tmp_size_bytes                 = ROUNDUP_POW2(tmp_total_elems * sizeof(float), WEBGPU_STORAGE_BUF_BINDING_MULT);
+            GGML_ASSERT(tmp_stats_base <= UINT32_MAX);
+
+            ggml_webgpu_create_buffer(ctx->global_ctx->device, tmp_buf, tmp_size_bytes, wgpu::BufferUsage::Storage,
+                                      "flash_attn_vec_tmp");
+            tmp_bind_offset = 0;
+            tmp_bind_size   = tmp_size_bytes;
+        } else {
+            // nwg==1 writes final dst directly in vec-split; keep tmp binding valid without extra allocation.
+            tmp_buf         = ggml_webgpu_tensor_buf(dst);
+            tmp_bind_offset = ggml_webgpu_tensor_align_offset(ctx, dst);
+            tmp_bind_size   = ggml_webgpu_tensor_binding_size(ctx, dst);
+        }
 
         webgpu_pipeline                blk_pipeline;
         std::vector<uint32_t>          blk_params;
@@ -1532,8 +1544,8 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
         }
         split_entries.push_back({ .binding = split_binding_index++,
                                   .buffer  = tmp_buf,
-                                  .offset  = 0,
-                                  .size    = tmp_size_bytes });
+                                  .offset  = tmp_bind_offset,
+                                  .size    = tmp_bind_size });
         split_entries.push_back({ .binding = split_binding_index++,
                                   .buffer  = ggml_webgpu_tensor_buf(dst),
                                   .offset  = ggml_webgpu_tensor_align_offset(ctx, dst),
@@ -1609,7 +1621,10 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
 
         const bool split_passes = use_blk || use_vec_reduce;
 
-        std::vector<wgpu::Buffer> retained_buffers = { tmp_buf };
+        std::vector<wgpu::Buffer> retained_buffers;
+        if (use_vec_reduce) {
+            retained_buffers.push_back(tmp_buf);
+        }
         if (use_blk) {
             retained_buffers.push_back(blk_buf);
         }

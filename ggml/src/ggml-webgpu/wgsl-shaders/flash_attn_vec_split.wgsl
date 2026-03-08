@@ -681,31 +681,6 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
         let global_q_row = q_row_start + q_tile_row;
         if (global_q_row >= params.seq_len_q) { break; }
 
-        let rid = batch_idx * rows_per_batch + head_idx * params.seq_len_q + global_q_row;
-        let tmp_row_data_base = params.tmp_data_base + rid * (HEAD_DIM_V * params.nwg) + iwg * HEAD_DIM_V;
-        let tmp_row_stats_base = params.tmp_stats_base + rid * (2u * params.nwg) + 2u * iwg;
-
-        for (var elem_base = sg_inv_id * 4u;
-            elem_base < HEAD_DIM_V;
-            elem_base += subgroup_size * 4u) {
-
-            let i0 = q_tile_row * HEAD_DIM_V + (elem_base + 0u);
-            let i1 = q_tile_row * HEAD_DIM_V + (elem_base + 1u);
-            let i2 = q_tile_row * HEAD_DIM_V + (elem_base + 2u);
-            let i3 = q_tile_row * HEAD_DIM_V + (elem_base + 3u);
-
-            let tbase = tmp_row_data_base + elem_base;
-            tmp[tbase + 0u] = f32(o_shmem[i0]);
-            tmp[tbase + 1u] = f32(o_shmem[i1]);
-            tmp[tbase + 2u] = f32(o_shmem[i2]);
-            tmp[tbase + 3u] = f32(o_shmem[i3]);
-        }
-
-        if (sg_inv_id == 0u) {
-            tmp[tmp_row_stats_base + 0u] = exp_sum_shmem[q_tile_row];
-            tmp[tmp_row_stats_base + 1u] = row_max_shmem[q_tile_row];
-        }
-
         if (params.nwg == 1u) {
             let exp_sum = exp_sum_shmem[q_tile_row];
             let scale = select(0.0, 1.0 / exp_sum, exp_sum != 0.0);
@@ -727,6 +702,31 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
                 let dst_vec_index: u32 = (row_base + elem_base) >> 2u;
                 dst[dst_vec_index] = v;
+            }
+        } else {
+            let rid = batch_idx * rows_per_batch + head_idx * params.seq_len_q + global_q_row;
+            let tmp_row_data_base = params.tmp_data_base + rid * (HEAD_DIM_V * params.nwg) + iwg * HEAD_DIM_V;
+            let tmp_row_stats_base = params.tmp_stats_base + rid * (2u * params.nwg) + 2u * iwg;
+
+            for (var elem_base = sg_inv_id * 4u;
+                elem_base < HEAD_DIM_V;
+                elem_base += subgroup_size * 4u) {
+
+                let i0 = q_tile_row * HEAD_DIM_V + (elem_base + 0u);
+                let i1 = q_tile_row * HEAD_DIM_V + (elem_base + 1u);
+                let i2 = q_tile_row * HEAD_DIM_V + (elem_base + 2u);
+                let i3 = q_tile_row * HEAD_DIM_V + (elem_base + 3u);
+
+                let tbase = tmp_row_data_base + elem_base;
+                tmp[tbase + 0u] = f32(o_shmem[i0]);
+                tmp[tbase + 1u] = f32(o_shmem[i1]);
+                tmp[tbase + 2u] = f32(o_shmem[i2]);
+                tmp[tbase + 3u] = f32(o_shmem[i3]);
+            }
+
+            if (sg_inv_id == 0u) {
+                tmp[tmp_row_stats_base + 0u] = exp_sum_shmem[q_tile_row];
+                tmp[tmp_row_stats_base + 1u] = row_max_shmem[q_tile_row];
             }
         }
     }
