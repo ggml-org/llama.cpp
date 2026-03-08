@@ -7615,7 +7615,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     ml.done_getting_tensors();
 
     // populate tensors_by_name
-    for (auto & [_, ctx_ptr] : ctx_map) {
+    for (auto & [_, ctx_ptr] : ml.ctx_map) {
         for (auto * cur = ggml_get_first_tensor(ctx_ptr.get()); cur != NULL; cur = ggml_get_next_tensor(ctx_ptr.get(), cur)) {
             tensors_by_name.emplace_back(ggml_get_name(cur), cur);
         }
