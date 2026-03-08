@@ -1151,6 +1151,7 @@ ggml_tensor * llm_graph_context::build_ffn(
     return cur;
 }
 
+// TODO remove redundant scale_w argument
 ggml_tensor * llm_graph_context::build_moe_ffn(
          ggml_tensor * cur,
          ggml_tensor * gate_inp,

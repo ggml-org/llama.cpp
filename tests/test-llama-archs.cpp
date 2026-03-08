@@ -123,8 +123,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_FEED_FORWARD_LENGTH, n_ff);
     }
 
-    ms.add_kv(LLM_KV_USE_PARALLEL_RESIDUAL,   false); // TODO
-    ms.add_kv(LLM_KV_LOGIT_SCALE,             1.0f); // TODO
+    ms.add_kv(LLM_KV_USE_PARALLEL_RESIDUAL,   false);
+    ms.add_kv(LLM_KV_LOGIT_SCALE,             1.0f);
     ms.add_kv(LLM_KV_TIME_MIX_EXTRA_DIM,      uint32_t(64));
     ms.add_kv(LLM_KV_TIME_DECAY_EXTRA_DIM,    uint32_t(128));
     ms.add_kv(LLM_KV_FULL_ATTENTION_INTERVAL, uint32_t(2));
