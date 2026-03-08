@@ -31,6 +31,7 @@ enum llm_graph_type {
     LLM_GRAPH_TYPE_DEFAULT,
     LLM_GRAPH_TYPE_ENCODER,
     LLM_GRAPH_TYPE_DECODER,
+    LLM_GRAPH_TYPE_DECODER_MTP,
 };
 
 enum llm_ffn_op_type {
@@ -56,17 +57,23 @@ enum llm_norm_type {
 };
 
 // TODO: tmp - need something better to pass the data from the encoder to the decoder
+// currently also for passing embeddings for from main model to MTP layers
 struct llama_cross {
     // the output embeddings from the encoder as a ggml tensor
     // TODO: this needs more work to be correct, for now copy the embeddings data to host memory
     //       ref: https://github.com/ggml-org/llama.cpp/pull/11213#discussion_r1969892524
     //ggml_tensor * t_embd = nullptr;
 
-    int64_t n_embd = 0;
-    int64_t n_enc  = 0;
+    int64_t n_embd  = 0;
+    int64_t n_enc   = 0;
+    int64_t n_token = 0; // used by mtp
 
     // embeddings data copied to host memory (tmp)
     std::vector<float> v_embd;
+
+    // embeddings data to be passed to MTP layers
+    // TODO: optimize by using ggml_tensor here
+    std::vector<float> mtp_embd;
 
     // needed to construct the cross-attention mask in the decoder
     std::vector<std::set<llama_seq_id>> seq_ids_enc;
@@ -254,6 +261,18 @@ public:
     void set_input(const llama_ubatch * ubatch) override;
 
     ggml_tensor * cross_embd; // F32 [n_embd, n_outputs_enc]
+
+    const llama_cross * cross;
+};
+
+class llm_graph_input_cross_mtp : public llm_graph_input_i {
+public:
+    llm_graph_input_cross_mtp(
+            const llama_cross * cross) : cross(cross) {}
+    virtual ~llm_graph_input_cross_mtp() = default;
+    void set_input(const llama_ubatch * ubatch) override;
+
+    ggml_tensor * cross_mtp; // F32 [n_embd, n_token]
 
     const llama_cross * cross;
 };
@@ -852,6 +871,7 @@ struct llm_graph_context {
     ggml_tensor * build_inp_cls() const;
 
     ggml_tensor * build_inp_cross_embd() const;
+    ggml_tensor * build_inp_cross_mtp() const;
     ggml_tensor * build_inp_pos_bucket_enc() const;
     ggml_tensor * build_inp_pos_bucket_dec() const;
     ggml_tensor * build_pos_bias(ggml_tensor * pos_bucket, ggml_tensor * attn_rel_b) const;

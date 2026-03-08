@@ -194,6 +194,13 @@ extern "C" {
         LLAMA_SPLIT_MODE_ROW   = 2, // split layers and KV across GPUs, use tensor parallelism if supported
     };
 
+    enum llama_graph_type {
+        LLAMA_GRAPH_TYPE_DEFAULT,
+        LLAMA_GRAPH_TYPE_ENCODER,
+        LLAMA_GRAPH_TYPE_DECODER,
+        LLAMA_GRAPH_TYPE_DECODER_MTP,
+    };
+
     // TODO: simplify (https://github.com/ggml-org/llama.cpp/pull/9294#pullrequestreview-2286561979)
     typedef struct llama_token_data {
         llama_token id; // token id
@@ -376,6 +383,8 @@ extern "C" {
         // note: the samplers must be sampler chains (i.e. use llama_sampler_chain_init)
         struct llama_sampler_seq_config * samplers;
         size_t                            n_samplers;
+
+        llama_graph_type graph_type; // type of the computation graph to be used
     };
 
     // model quantization parameters
@@ -998,6 +1007,10 @@ extern "C" {
     // when pooling_type == LLAMA_POOLING_TYPE_RANK, returns float[n_cls_out] with the rank(s) of the sequence
     // otherwise: float[n_embd] (1-dimensional)
     LLAMA_API float * llama_get_embeddings_seq(struct llama_context * ctx, llama_seq_id seq_id);
+
+    // Copy the internal MTP state from ctx_llm to ctx_mtp, ready for MTP decoding.
+    // This must be done before calling llama_decode() on ctx_mtp
+    LLAMA_API int32_t llama_mtp_start(struct llama_context * ctx_llm, struct llama_context * ctx_mtp);
 
     //
     // backend sampling API [EXPERIMENTAL]
