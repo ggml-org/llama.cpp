@@ -167,8 +167,8 @@ void tag_based_peg_mapper::from_ast(const common_peg_ast_arena & arena, const co
     });
 }
 
-tagged_parse_result tagged_peg_parser::parse_and_extract(const std::string & input, bool is_partial) const {
-    common_peg_parse_context ctx(input, is_partial);
+tagged_parse_result tagged_peg_parser::parse_and_extract(const std::string & input, common_peg_parse_flags extra_flags) const {
+    common_peg_parse_context ctx(input, flags | extra_flags);
     auto parse_result = arena.parse(ctx);
 
     tag_based_peg_mapper mapper;
@@ -179,11 +179,10 @@ tagged_parse_result tagged_peg_parser::parse_and_extract(const std::string & inp
 
 tagged_parse_result tagged_peg_parser::parse_anywhere_and_extract(const std::string & input) const {
     if (input.empty()) {
-        return parse_and_extract(input, false);
+        return parse_and_extract(input);
     }
     for (size_t i = 0; i < input.size(); i++) {
-        common_peg_parse_context ctx(input, false);
-        ctx.debug = debug;
+        common_peg_parse_context ctx(input, flags);
         auto parse_result = arena.parse(ctx, i);
         if (parse_result.success() || i == input.size() - 1) {
             tag_based_peg_mapper mapper;

@@ -361,7 +361,7 @@ static void test_example_native(testing & t) {
                 t.log(line);
             }
 
-            common_peg_parse_context ctx(tc.input, false);
+            common_peg_parse_context ctx(tc.input);
             auto                     result = parser.parse(ctx);
 
             t.assert_true("success", result.success());
@@ -458,7 +458,7 @@ static void test_example_qwen3_coder(testing & t) {
         for (auto it = tokens.begin(); it != tokens.end(); it++) {
             std::string in = std::accumulate(tokens.begin(), it + 1, std::string());
 
-            common_peg_parse_context ctx(in, it + 1 < tokens.end());
+            common_peg_parse_context ctx(in, (it + 1 < tokens.end()) ? COMMON_PEG_PARSE_FLAG_LENIENT : COMMON_PEG_PARSE_FLAG_NONE);
 
             auto result = parser.parse(ctx);
             if (!t.assert_equal("not fail", false, result.fail())) {
@@ -523,7 +523,7 @@ static void test_example_qwen3_non_coder(testing & t) {
             "\"fahrenheit\"}}"
             "</tool_call>";
 
-        common_peg_parse_context ctx(input, false);
+        common_peg_parse_context ctx(input);
         auto                     result = parser.parse(ctx);
 
         t.assert_true("success", result.success());
@@ -556,7 +556,7 @@ static void test_example_qwen3_non_coder(testing & t) {
         for (auto it = tokens.begin(); it != tokens.end(); it++) {
             std::string in = std::accumulate(tokens.begin(), it + 1, std::string());
 
-            common_peg_parse_context ctx(in, it + 1 < tokens.end());
+            common_peg_parse_context ctx(in, (it + 1 < tokens.end()) ? COMMON_PEG_PARSE_FLAG_LENIENT : COMMON_PEG_PARSE_FLAG_NONE);
 
             auto result = parser.parse(ctx);
             if (!t.assert_equal("not fail", false, result.fail())) {
@@ -617,7 +617,7 @@ void test_command7_parser_compare(testing & t) {
 
     auto test_current = [&](const common_peg_arena & p, const std::string & input, bool is_partial,
                             bool print_results) {
-        common_peg_parse_context ctx(input, is_partial);
+        common_peg_parse_context ctx(input, is_partial ? COMMON_PEG_PARSE_FLAG_LENIENT : COMMON_PEG_PARSE_FLAG_NONE);
         auto                     result = p.parse(ctx);
 
         common_chat_msg msg;
@@ -780,7 +780,7 @@ static void test_prefix_tool_names(testing & t) {
             "</function>"
             "</tool_call>";
 
-        common_peg_parse_context ctx(input, false);
+        common_peg_parse_context ctx(input);
         auto                     result = parser.parse(ctx);
 
         t.assert_true("success", result.success());
@@ -814,7 +814,7 @@ static void test_prefix_tool_names(testing & t) {
         for (auto it = tokens.begin(); it != tokens.end(); it++) {
             std::string in = std::accumulate(tokens.begin(), it + 1, std::string());
 
-            common_peg_parse_context ctx(in, it + 1 < tokens.end());
+            common_peg_parse_context ctx(in, (it + 1 < tokens.end()) ? COMMON_PEG_PARSE_FLAG_LENIENT : COMMON_PEG_PARSE_FLAG_NONE);
             auto                     result = parser.parse(ctx);
 
             if (!t.assert_equal("not fail", false, result.fail())) {
@@ -864,7 +864,7 @@ static void test_prefix_tool_names(testing & t) {
             "</function>"
             "</tool_call>";
 
-        common_peg_parse_context ctx(input, false);
+        common_peg_parse_context ctx(input);
         auto                     result = parser.parse(ctx);
 
         t.assert_true("success", result.success());
@@ -931,7 +931,7 @@ static void test_tagged_peg_parser(testing & t) {
             return p.tag("prefix", p.until(":")) + ":" + p.tag("value", p.rest()) + p.end();
         });
 
-        auto result = parser.parse_and_extract("key:val", true);
+        auto result = parser.parse_and_extract("key:val", COMMON_PEG_PARSE_FLAG_LENIENT);
         t.assert_true("not fail", !result.result.fail());
         t.assert_equal("prefix tag", "key", result.tags.at("prefix"));
         t.assert_equal("value tag", "val", result.tags.at("value"));
