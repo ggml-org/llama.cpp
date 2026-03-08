@@ -15,6 +15,8 @@
 #include <stdlib.h> // for qsort
 #include <stdio.h>  // for GGML_ASSERT
 
+#include "power-prefetch.h"
+
 #define GROUP_MAX_EPS 1e-15f
 #define GROUP_MAX_EPS_IQ3_XXS 1e-8f
 #define GROUP_MAX_EPS_IQ2_S 1e-8f
@@ -168,8 +170,8 @@ void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
 #pragma GCC unroll 8
     for (; ib < nb; ++ib) {
-        __builtin_prefetch(x[ib].qs, 0, 1);
-        __builtin_prefetch(y[ib].qs, 0, 1);
+        GGML_PREFETCH_L2_RESIDENT(x[ib].qs);
+        GGML_PREFETCH_L2_RESIDENT(y[ib].qs);
 
         vector float vxd = vec_splats(GGML_CPU_FP16_TO_FP32(x[ib].d));
         vector float vyd = vec_splats(GGML_CPU_FP16_TO_FP32(y[ib].d));
@@ -237,8 +239,8 @@ void ggml_vec_dot_q4_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
 #pragma GCC unroll 4
     for (; ib < nb; ++ib) {
-        __builtin_prefetch(x[ib].qs, 0, 1);
-        __builtin_prefetch(y[ib].qs, 0, 1);
+        GGML_PREFETCH_L2_RESIDENT(x[ib].qs);
+        GGML_PREFETCH_L2_RESIDENT(y[ib].qs);
 
         vector float vxd = vec_splats(GGML_CPU_FP16_TO_FP32(x[ib].d));
         vector float vyd = vec_splats(GGML_CPU_FP16_TO_FP32(y[ib].d));
@@ -304,8 +306,8 @@ void ggml_vec_dot_mxfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
 #pragma GCC unroll 8
     for (; ib < nb; ++ib) {
-        __builtin_prefetch(x[ib].qs, 0, 1);
-        __builtin_prefetch(y[ib].qs, 0, 1);
+        GGML_PREFETCH_L2_RESIDENT(x[ib].qs);
+        GGML_PREFETCH_L2_RESIDENT(y[ib].qs);
 
         vector float vyd = vec_splats(GGML_CPU_FP16_TO_FP32(y[ib].d) *
                                       GGML_E8M0_TO_FP32_HALF(x[ib].e));
@@ -370,8 +372,8 @@ void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
 #pragma GCC unroll 4
     for (; ib < nb; ++ib) {
-        __builtin_prefetch(x[ib].qs, 0, 1);
-        __builtin_prefetch(y[ib].qs, 0, 1);
+        GGML_PREFETCH_L2_RESIDENT(x[ib].qs);
+        GGML_PREFETCH_L2_RESIDENT(y[ib].qs);
 
         vector float vxd = vec_splats(GGML_CPU_FP16_TO_FP32(x[ib].d));
         vector float vyd = vec_splats(GGML_CPU_FP16_TO_FP32(y[ib].d));
@@ -443,8 +445,8 @@ void ggml_vec_dot_q5_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
 #pragma GCC unroll 4
     for (; ib < nb; ++ib) {
-        __builtin_prefetch(x[ib].qs, 0, 1);
-        __builtin_prefetch(y[ib].qs, 0, 1);
+        GGML_PREFETCH_L2_RESIDENT(x[ib].qs);
+        GGML_PREFETCH_L2_RESIDENT(y[ib].qs);
 
         vector float vxd = vec_splats(GGML_CPU_FP16_TO_FP32(x[ib].d));
         vector float vyd = vec_splats(GGML_CPU_FP16_TO_FP32(y[ib].d));
@@ -515,8 +517,8 @@ void ggml_vec_dot_q8_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
 #pragma GCC unroll 8
     for (; ib < nb; ++ib) {
-        __builtin_prefetch(x[ib].qs, 0, 1);
-        __builtin_prefetch(y[ib].qs, 0, 1);
+        GGML_PREFETCH_L2_RESIDENT(x[ib].qs);
+        GGML_PREFETCH_L2_RESIDENT(y[ib].qs);
 
         vector float vxd = vec_splats(GGML_CPU_FP16_TO_FP32(x[ib].d));
         vector float vyd = vec_splats(GGML_CPU_FP16_TO_FP32(y[ib].d));
@@ -627,8 +629,8 @@ void ggml_vec_dot_q2_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
         const int8_t  * GGML_RESTRICT q8 = y[i].qs;
 
         for (int j = 0; j < QK_K/128; ++j) {
-            __builtin_prefetch(q2, 0, 1);
-            __builtin_prefetch(q8, 0, 1);
+            GGML_PREFETCH_L2_RESIDENT(q2);
+            GGML_PREFETCH_L2_RESIDENT(q8);
 
             vector signed char qxs0 = (vector signed char)vec_xl( 0, q2);
             vector signed char qxs1 = (vector signed char)vec_xl(16, q2);
@@ -784,8 +786,8 @@ void ggml_vec_dot_q3_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
         const int8_t  * GGML_RESTRICT q8 = y[i].qs;
 
         for (int j = 0; j < QK_K/128; ++j) {
-            __builtin_prefetch(q3, 0, 1);
-            __builtin_prefetch(q8, 0, 1);
+            GGML_PREFETCH_L2_RESIDENT(q3);
+            GGML_PREFETCH_L2_RESIDENT(q8);
 
             vector signed char qxs0 = (vector signed char)vec_xl( 0, q3);
             vector signed char qxs1 = (vector signed char)vec_xl(16, q3);
@@ -978,8 +980,8 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
         const int8_t  * GGML_RESTRICT q8 = y[i].qs;
 
         for (int j = 0; j < QK_K/64; j+=2) {
-            __builtin_prefetch(q4, 0, 1);
-            __builtin_prefetch(q8, 0, 1);
+            GGML_PREFETCH_L2_RESIDENT(q4);
+            GGML_PREFETCH_L2_RESIDENT(q8);
 
             vector signed char qxs0 = (vector signed char)vec_xl( 0, q4);
             vector signed char qxs1 = (vector signed char)vec_xl(16, q4);
@@ -1152,8 +1154,8 @@ void ggml_vec_dot_q5_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
         const int8_t  * GGML_RESTRICT q8 = y[i].qs;
 
         for (int j = 0; j < QK_K/64; ++j) {
-            __builtin_prefetch(q5, 0, 1);
-            __builtin_prefetch(q8, 0, 1);
+            GGML_PREFETCH_L2_RESIDENT(q5);
+            GGML_PREFETCH_L2_RESIDENT(q8);
 
             vector signed char qxs0 = (vector signed char)vec_xl( 0, q5);
             vector signed char qxs1 = (vector signed char)vec_xl(16, q5);
@@ -1273,9 +1275,9 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
         const int8_t  * GGML_RESTRICT q8 = y[i].qs;
 
         for (int j = 0; j < QK_K/128; ++j) {
-            __builtin_prefetch(q6, 0, 0);
-            __builtin_prefetch(qh, 0, 0);
-            __builtin_prefetch(q8, 0, 0);
+            GGML_PREFETCH_L2_RESIDENT(q6);
+            GGML_PREFETCH_L2_RESIDENT(qh);
+            GGML_PREFETCH_L2_RESIDENT(q8);
 
             vector signed char qxs0 = (vector signed char)vec_xl( 0, q6);
             vector signed char qxs1 = (vector signed char)vec_xl(16, q6);
@@ -1457,8 +1459,8 @@ void ggml_vec_dot_iq2_xxs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const 
         const int8_t  *  GGML_RESTRICT q8 = y[i].qs;
 
         for (int j = 0; j < QK_K/32; j += 2) {
-            __builtin_prefetch(q2, 0, 1);
-            __builtin_prefetch(q8, 0, 1);
+            GGML_PREFETCH_L2_RESIDENT(q2);
+            GGML_PREFETCH_L2_RESIDENT(q8);
 
             uint32_t aux32[4];
             const uint8_t * aux8 = (const uint8_t *)aux32;
@@ -1565,8 +1567,8 @@ void ggml_vec_dot_iq2_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
         const int8_t  *  GGML_RESTRICT q8 = y[i].qs;
 
         for (int j = 0; j < QK_K/64; ++j) {
-            __builtin_prefetch(q2, 0, 1);
-            __builtin_prefetch(q8, 0, 1);
+            GGML_PREFETCH_L2_RESIDENT(q2);
+            GGML_PREFETCH_L2_RESIDENT(q8);
 
             vector signed long long aux64x2_0 = {*(const int64_t *)(iq2xs_grid + (q2[0] & 511)), *(const int64_t *)(iq2xs_grid + (q2[1] & 511))};
             vector signed long long aux64x2_1 = {*(const int64_t *)(iq2xs_grid + (q2[2] & 511)), *(const int64_t *)(iq2xs_grid + (q2[3] & 511))};
@@ -1684,8 +1686,8 @@ void ggml_vec_dot_iq2_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
         const int8_t  *  GGML_RESTRICT q8 = y[i].qs;
 
         for (int j = 0; j < QK_K/32; j += 2) {
-            __builtin_prefetch(q2, 0, 1);
-            __builtin_prefetch(q8, 0, 1);
+            GGML_PREFETCH_L2_RESIDENT(q2);
+            GGML_PREFETCH_L2_RESIDENT(q8);
 
             vector signed long long aux64x2_0 = {*(const int64_t *)(iq2s_grid + (q2[0] | ((qh[0] << 8) & 0x300))), *(const int64_t *)(iq2s_grid + (q2[1] | ((qh[0] << 6) & 0x300)))};
             vector signed long long aux64x2_1 = {*(const int64_t *)(iq2s_grid + (q2[2] | ((qh[0] << 4) & 0x300))), *(const int64_t *)(iq2s_grid + (q2[3] | ((qh[0] << 2) & 0x300)))};
@@ -1804,8 +1806,8 @@ void ggml_vec_dot_iq3_xxs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const 
 
 #pragma GCC unroll 1
         for (int j = 0; j < QK_K/32; j += 2) {
-            __builtin_prefetch(q3, 0, 1);
-            __builtin_prefetch(q8, 0, 1);
+            GGML_PREFETCH_L2_RESIDENT(q3);
+            GGML_PREFETCH_L2_RESIDENT(q8);
 
             vector unsigned int aux32x4_0 = {iq3xxs_grid[q3[ 0]], iq3xxs_grid[q3[ 1]], iq3xxs_grid[q3[ 2]], iq3xxs_grid[q3[ 3]]};
             vector unsigned int aux32x4_1 = {iq3xxs_grid[q3[ 4]], iq3xxs_grid[q3[ 5]], iq3xxs_grid[q3[ 6]], iq3xxs_grid[q3[ 7]]};
@@ -1919,8 +1921,8 @@ void ggml_vec_dot_iq3_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
         vector signed int vsumi3 = v0;
 
         for (int j = 0; j < QK_K/32; j += 2) {
-            __builtin_prefetch(q3, 0, 1);
-            __builtin_prefetch(q8, 0, 1);
+            GGML_PREFETCH_L2_RESIDENT(q3);
+            GGML_PREFETCH_L2_RESIDENT(q8);
 
             vector unsigned int aux32x4_0 = {iq3s_grid[q3[ 0] | ((qh[0] << 8) & 256)], iq3s_grid[q3[ 1] | ((qh[0] << 7) & 256)],
                                              iq3s_grid[q3[ 2] | ((qh[0] << 6) & 256)], iq3s_grid[q3[ 3] | ((qh[0] << 5) & 256)]};
@@ -2039,9 +2041,9 @@ void ggml_vec_dot_iq1_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
         const int16_t  * GGML_RESTRICT qs = y[i].bsums;
 
         for (int j = 0; j < QK_K/32; j += 2) {
-            __builtin_prefetch(q1, 0, 1);
-            __builtin_prefetch(qh, 0, 1);
-            __builtin_prefetch(q8, 0, 1);
+            GGML_PREFETCH_L2_RESIDENT(q1);
+            GGML_PREFETCH_L2_RESIDENT(qh);
+            GGML_PREFETCH_L2_RESIDENT(q8);
 
             vector signed long long aux64x2_0 = {*(const int64_t *)(iq1s_grid + (q1[0] | ((qh[0] << 8) & 0x700))), *(const int64_t *)(iq1s_grid + (q1[1] | ((qh[0] << 5) & 0x700)))};
             vector signed long long aux64x2_1 = {*(const int64_t *)(iq1s_grid + (q1[2] | ((qh[0] << 2) & 0x700))), *(const int64_t *)(iq1s_grid + (q1[3] | ((qh[0] >> 1) & 0x700)))};
@@ -2145,8 +2147,8 @@ void ggml_vec_dot_iq4_nl_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const v
 
 #pragma GCC unroll 4
     for (; ib < nb; ++ib) {
-        __builtin_prefetch(x[ib].qs, 0, 1);
-        __builtin_prefetch(y[ib].qs, 0, 1);
+        GGML_PREFETCH_L2_RESIDENT(x[ib].qs);
+        GGML_PREFETCH_L2_RESIDENT(y[ib].qs);
 
 
         vector float vxd = vec_splats(GGML_CPU_FP16_TO_FP32(x[ib].d));
@@ -2237,8 +2239,8 @@ void ggml_vec_dot_iq4_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
         const int8_t  * GGML_RESTRICT q8 = y[ibl].qs;
 
         for (int ib = 0; ib < QK_K/64; ib ++ ) {
-            __builtin_prefetch(q4, 0, 1);
-            __builtin_prefetch(q8, 0, 1);
+            GGML_PREFETCH_L2_RESIDENT(q4);
+            GGML_PREFETCH_L2_RESIDENT(q8);
 
             vector signed char qxs0 = (vector signed char)vec_xl( 0, q4);
             vector signed char qxs1 = (vector signed char)vec_xl(16, q4);
