@@ -1,6 +1,7 @@
 #include "chat-auto-parser.h"
 #include "chat-peg-parser.h"
 #include "chat.h"
+#include "common.h"
 #include "json-schema-to-grammar.h"
 #include "nlohmann/json.hpp"
 
@@ -51,13 +52,15 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
     bool has_tools =
         autoparser.tools.format.mode != tool_format::NONE && inputs.tools.is_array() && !inputs.tools.empty();
     std::string trigger_marker = !autoparser.tools.format.section_start.empty() ? autoparser.tools.format.section_start :
-                                                                                autoparser.tools.format.per_call_start;
-    bool        include_grammar =
-        has_tools && ((inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO && !trigger_marker.empty()) ||
-                      inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED);
+                                                                                  autoparser.tools.format.per_call_start;
+
+    bool has_response_format = !inputs.json_schema.empty() && inputs.json_schema.is_object();
+    bool include_grammar = has_response_format || (has_tools &&
+            ((inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO && !trigger_marker.empty()) ||
+              inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED));
 
     if (include_grammar) {
-        data.grammar_lazy = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
+        data.grammar_lazy = !has_response_format && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
             foreach_function(inputs.tools, [&](const json & tool) {
                 const auto & function = tool.at("function");
@@ -68,7 +71,7 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
         });
 
         // Set grammar triggers based on tool section markers (fall back to per-call markers)
-        if (data.grammar_lazy) {  // only do triggers on lazy grammar
+        if (data.grammar_lazy) {
             data.grammar_triggers = {
                 { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, trigger_marker }
             };
@@ -104,8 +107,9 @@ common_peg_arena autoparser::build_parser(const templates_params & inputs) const
         bool has_response_format = inputs.json_schema.is_object() && !inputs.json_schema.empty();
 
         if (has_response_format) {
-            return ctx.reasoning_parser + p.space() +
-                   p.content(p.schema(p.json(), "response-format", inputs.json_schema)) + p.end();
+            return ctx.reasoning_parser + p.space() + p.optional(p.literal("```json") + p.space()) +
+                p.content(p.schema(p.json(), "response-format", inputs.json_schema)) +
+                p.optional(p.space() + p.literal("```")) + p.end();
         }
 
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE && jinja_caps.supports_tool_calls) {
