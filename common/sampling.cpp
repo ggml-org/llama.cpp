@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <regex>
 #include <unordered_map>
 
 // the ring buffer works similarly to std::deque, but with a fixed capacity
@@ -101,10 +102,186 @@ struct ring_buffer {
     std::vector<T> data;
 };
 
+//
+// Multi-grammar state machine
+//
+
+enum common_grammar_state {
+    COMMON_GRAMMAR_STATE_IDLE,      // not constraining (delayed: waiting for arm trigger)
+    COMMON_GRAMMAR_STATE_ARMED,     // delayed: countdown in progress
+    COMMON_GRAMMAR_STATE_ACTIVE,    // actively constraining
+    COMMON_GRAMMAR_STATE_EXHAUSTED, // grammar done, no longer constraining (one-shot)
+    COMMON_GRAMMAR_STATE_DEFUSED,   // delayed: countdown cancelled (one-shot)
+};
+
+struct common_grammar_instance {
+    common_grammar_spec spec;
+    common_grammar_state state = COMMON_GRAMMAR_STATE_IDLE;
+    struct llama_sampler * sampler = nullptr;
+    int32_t countdown_remaining = 0;
+
+    // trigger matching state for arm/defuse (managed at common_sampler level)
+    std::string arm_trigger_buffer;
+    std::string defuse_trigger_buffer;
+};
+
+// helper: create a llama grammar sampler from a grammar spec
+static llama_sampler * common_grammar_sampler_create(
+        const llama_vocab * vocab,
+        const common_grammar_spec & spec) {
+    if (spec.grammar.empty()) {
+        return nullptr;
+    }
+
+    if (spec.grammar_lazy) {
+        // lazy grammar: use existing trigger mechanism
+        std::vector<std::string> trigger_patterns;
+        std::vector<llama_token> trigger_tokens;
+
+        for (const auto & trigger : spec.grammar_triggers) {
+            switch (trigger.type) {
+                case COMMON_GRAMMAR_TRIGGER_TYPE_WORD:
+                    trigger_patterns.push_back(regex_escape(trigger.value));
+                    break;
+                case COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN:
+                    trigger_patterns.push_back(trigger.value);
+                    break;
+                case COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL:
+                {
+                    const auto & pattern = trigger.value;
+                    std::string anchored = "^$";
+                    if (!pattern.empty()) {
+                        anchored = (pattern.front() != '^' ? "^" : "")
+                            + pattern
+                            + (pattern.back() != '$' ? "$" : "");
+                    }
+                    trigger_patterns.push_back(anchored);
+                    break;
+                }
+                case COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN:
+                    trigger_tokens.push_back(trigger.token);
+                    break;
+                default:
+                    GGML_ASSERT(false && "unknown trigger type");
+            }
+        }
+
+        std::vector<const char *> trigger_patterns_c;
+        trigger_patterns_c.reserve(trigger_patterns.size());
+        for (const auto & regex : trigger_patterns) {
+            trigger_patterns_c.push_back(regex.c_str());
+        }
+
+        return llama_sampler_init_grammar_lazy_patterns(vocab, spec.grammar.c_str(), "root",
+                trigger_patterns_c.data(), trigger_patterns_c.size(),
+                trigger_tokens.data(), trigger_tokens.size());
+    }
+
+    // regular (non-lazy) grammar
+    return llama_sampler_init_grammar(vocab, spec.grammar.c_str(), "root");
+}
+
+// helper: check if a token matches any trigger in a trigger list
+// returns true if a trigger matched
+static bool common_grammar_check_triggers(
+        const llama_vocab * vocab,
+        const std::vector<common_grammar_trigger> & triggers,
+        std::string & trigger_buffer,
+        llama_token token) {
+    if (triggers.empty()) {
+        return false;
+    }
+
+    // check token triggers first (fast path)
+    for (const auto & trigger : triggers) {
+        if (trigger.type == COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN && trigger.token == token) {
+            trigger_buffer.clear();
+            return true;
+        }
+    }
+
+    // get the token piece for text-based trigger matching
+    // use llama_token_to_piece via the public API
+    char buf[256];
+    int n = llama_token_to_piece(vocab, token, buf, sizeof(buf), 0, true);
+    std::string piece;
+    if (n > 0) {
+        piece.assign(buf, n);
+    } else if (n < 0) {
+        // buffer too small, allocate
+        std::vector<char> large_buf(-n);
+        llama_token_to_piece(vocab, token, large_buf.data(), large_buf.size(), 0, true);
+        piece.assign(large_buf.data(), -n);
+    }
+
+    if (piece.empty()) {
+        return false;
+    }
+
+    trigger_buffer += piece;
+
+    // check word and pattern triggers against the accumulated buffer
+    for (const auto & trigger : triggers) {
+        switch (trigger.type) {
+            case COMMON_GRAMMAR_TRIGGER_TYPE_WORD:
+            {
+                if (trigger_buffer.find(trigger.value) != std::string::npos) {
+                    trigger_buffer.clear();
+                    return true;
+                }
+                break;
+            }
+            case COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN:
+            {
+                try {
+                    std::regex re(trigger.value);
+                    if (std::regex_search(trigger_buffer, re)) {
+                        trigger_buffer.clear();
+                        return true;
+                    }
+                } catch (const std::regex_error &) {
+                    LOG_WRN("%s: invalid regex pattern in trigger: %s\n", __func__, trigger.value.c_str());
+                }
+                break;
+            }
+            case COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL:
+            {
+                try {
+                    const auto & pattern = trigger.value;
+                    std::string anchored = "^$";
+                    if (!pattern.empty()) {
+                        anchored = (pattern.front() != '^' ? "^" : "")
+                            + pattern
+                            + (pattern.back() != '$' ? "$" : "");
+                    }
+                    std::regex re(anchored);
+                    if (std::regex_match(trigger_buffer, re)) {
+                        trigger_buffer.clear();
+                        return true;
+                    }
+                } catch (const std::regex_error &) {
+                    LOG_WRN("%s: invalid regex pattern in trigger: %s\n", __func__, trigger.value.c_str());
+                }
+                break;
+            }
+            case COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN:
+                // already handled above
+                break;
+            default:
+                break;
+        }
+    }
+
+    return false;
+}
+
 struct common_sampler {
     common_params_sampling params;
 
-    struct llama_sampler * grmr;
+    const llama_vocab * vocab = nullptr;
+
+    std::vector<common_grammar_instance> grammars;
+
     struct llama_sampler * chain;
 
     ring_buffer<llama_token> prev;
@@ -112,6 +289,37 @@ struct common_sampler {
     std::vector<llama_token_data> cur;
 
     llama_token_data_array cur_p;
+
+    bool has_active_grammars() const {
+        for (const auto & g : grammars) {
+            if (g.state == COMMON_GRAMMAR_STATE_ACTIVE) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void apply_active_grammars(llama_token_data_array * cur_p_) {
+        for (auto & g : grammars) {
+            if (g.state == COMMON_GRAMMAR_STATE_ACTIVE && g.sampler) {
+                llama_sampler_apply(g.sampler, cur_p_);
+            }
+        }
+    }
+
+    bool check_token_against_active_grammars(llama_token id) {
+        for (auto & g : grammars) {
+            if (g.state == COMMON_GRAMMAR_STATE_ACTIVE && g.sampler) {
+                llama_token_data       single_token_data       = { id, 1.0f, 0.0f };
+                llama_token_data_array single_token_data_array = { &single_token_data, 1, -1, false };
+                llama_sampler_apply(g.sampler, &single_token_data_array);
+                if (single_token_data_array.data[0].logit == -INFINITY) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
 
     void reset() {
         prev.clear();
@@ -125,9 +333,9 @@ struct common_sampler {
         const llama_token * sampled_ids    = llama_get_sampled_candidates_ith(ctx, idx);
 
         const llama_model * model = llama_get_model(ctx);
-        const llama_vocab * vocab = llama_model_get_vocab(model);
+        const llama_vocab * v     = llama_model_get_vocab(model);
 
-        const int n_vocab = llama_vocab_n_tokens(vocab);
+        const int n_vocab = llama_vocab_n_tokens(v);
 
         if (sampled_probs) {
             const uint32_t sampled_probs_count = llama_get_sampled_probs_count_ith(ctx, idx);
@@ -183,72 +391,64 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
 
     lparams.no_perf = params.no_perf;
 
-    llama_sampler * grmr = nullptr;
     llama_sampler * chain = llama_sampler_chain_init(lparams);
 
-    std::vector<llama_sampler *> samplers;
+    // build the list of grammar specs to use
+    std::vector<common_grammar_spec> specs;
 
-    if (params.grammar.compare(0, 11, "%llguidance") == 0) {
-#ifdef LLAMA_USE_LLGUIDANCE
-        grmr = llama_sampler_init_llg(vocab, "lark", params.grammar.c_str());
-#else
-        GGML_ABORT("llguidance (cmake -DLLAMA_LLGUIDANCE=ON) is not enabled");
-#endif // LLAMA_USE_LLGUIDANCE
-    } else {
-        std::vector<std::string> trigger_patterns;
-        std::vector<llama_token> trigger_tokens;
-        for (const auto & trigger : params.grammar_triggers) {
-            switch (trigger.type) {
-                case COMMON_GRAMMAR_TRIGGER_TYPE_WORD:
-                {
-                    const auto & word = trigger.value;
-                    trigger_patterns.push_back(regex_escape(word));
-                    break;
-                }
-                case COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN:
-                {
-                    trigger_patterns.push_back(trigger.value);
-                    break;
-                }
-                case COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL:
-                {
-                    const auto & pattern = trigger.value;
-                    std::string anchored = "^$";
-                    if (!pattern.empty()) {
-                        anchored = (pattern.front() != '^' ? "^" : "")
-                            + pattern
-                            + (pattern.back() != '$' ? "$" : "");
-                    }
-                    trigger_patterns.push_back(anchored);
-                    break;
-                }
-                case COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN:
-                {
-                    const auto token = trigger.token;
-                    trigger_tokens.push_back(token);
-                    break;
-                }
-                default:
-                    GGML_ASSERT(false && "unknown trigger type");
-            }
-        }
-
-        std::vector<const char *> trigger_patterns_c;
-        trigger_patterns_c.reserve(trigger_patterns.size());
-        for (const auto & regex : trigger_patterns) {
-            trigger_patterns_c.push_back(regex.c_str());
-        }
-
-        if (!params.grammar.empty()) {
-             if (params.grammar_lazy) {
-                 grmr = llama_sampler_init_grammar_lazy_patterns(vocab, params.grammar.c_str(), "root",
-                         trigger_patterns_c.data(), trigger_patterns_c.size(),
-                         trigger_tokens.data(), trigger_tokens.size());
-             } else {
-                 grmr = llama_sampler_init_grammar(vocab, params.grammar.c_str(), "root");
-             }
-        }
+    if (!params.grammar_specs.empty()) {
+        // use the new multi-grammar specs
+        specs = params.grammar_specs;
+    } else if (!params.grammar.empty()) {
+        // backward compat: create a single grammar spec from legacy fields
+        common_grammar_spec legacy_spec;
+        legacy_spec.id            = "default";
+        legacy_spec.grammar       = params.grammar;
+        legacy_spec.grammar_lazy  = params.grammar_lazy;
+        legacy_spec.grammar_triggers = params.grammar_triggers;
+        specs.push_back(std::move(legacy_spec));
     }
+
+    // create grammar instances
+    std::vector<common_grammar_instance> grammars;
+    bool has_any_grammar = false;
+
+    for (auto & spec : specs) {
+        common_grammar_instance instance;
+        instance.spec = spec;
+
+        if (spec.grammar.compare(0, 11, "%llguidance") == 0) {
+#ifdef LLAMA_USE_LLGUIDANCE
+            instance.sampler = llama_sampler_init_llg(vocab, "lark", spec.grammar.c_str());
+            instance.state = COMMON_GRAMMAR_STATE_ACTIVE;
+#else
+            GGML_ABORT("llguidance (cmake -DLLAMA_LLGUIDANCE=ON) is not enabled");
+#endif
+        } else if (spec.delayed) {
+            // delayed grammar: create sampler but start in IDLE (or ARMED if arm_immediately)
+            instance.sampler = common_grammar_sampler_create(vocab, spec);
+            if (spec.arm_immediately) {
+                instance.state = COMMON_GRAMMAR_STATE_ARMED;
+            } else {
+                instance.state = COMMON_GRAMMAR_STATE_IDLE;
+            }
+            instance.countdown_remaining = spec.countdown;
+        } else {
+            // regular or lazy grammar: create sampler, start ACTIVE
+            // (for lazy grammars, the internal awaiting_trigger handles the lazy behavior)
+            instance.sampler = common_grammar_sampler_create(vocab, spec);
+            instance.state = instance.sampler ? COMMON_GRAMMAR_STATE_ACTIVE : COMMON_GRAMMAR_STATE_IDLE;
+        }
+
+        if (instance.sampler) {
+            has_any_grammar = true;
+        }
+
+        grammars.push_back(std::move(instance));
+    }
+
+    // build the sampling chain (unchanged from original)
+    std::vector<llama_sampler *> samplers;
 
     if (params.has_logit_bias()) {
         samplers.push_back(llama_sampler_init_logit_bias(llama_vocab_n_tokens(vocab), params.logit_bias.size(), params.logit_bias.data()));
@@ -329,19 +529,20 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
         llama_sampler_chain_add(chain, smpl);
     }
 
-    if (grmr && params.backend_sampling) {
+    if (has_any_grammar && params.backend_sampling) {
         LOG_WRN("%s: backend sampling is not compatible with grammar, disabling\n", __func__);
 
         params.backend_sampling = false;
     }
 
     auto * result = new common_sampler {
-        /* .params  = */ params,
-        /* .grmr    = */ grmr,
-        /* .chain   = */ chain,
-        /* .prev    = */ ring_buffer<llama_token>(std::max(32, params.n_prev)),
-        /* .cur     = */ {},
-        /* .cur_p   = */ {},
+        /* .params   = */ params,
+        /* .vocab    = */ vocab,
+        /* .grammars = */ std::move(grammars),
+        /* .chain    = */ chain,
+        /* .prev     = */ ring_buffer<llama_token>(std::max(32, params.n_prev)),
+        /* .cur      = */ {},
+        /* .cur_p    = */ {},
     };
 
     return result;
@@ -352,7 +553,9 @@ void common_sampler_free(struct common_sampler * gsmpl) {
         return;
     }
 
-    llama_sampler_free(gsmpl->grmr);
+    for (auto & g : gsmpl->grammars) {
+        llama_sampler_free(g.sampler);
+    }
     llama_sampler_free(gsmpl->chain);
 
     delete gsmpl;
@@ -365,8 +568,100 @@ void common_sampler_accept(struct common_sampler * gsmpl, llama_token token, boo
 
     const auto tm = gsmpl->tm();
 
-    if (gsmpl->grmr && accept_grammar) {
-        llama_sampler_accept(gsmpl->grmr, token);
+    if (accept_grammar) {
+        for (auto & g : gsmpl->grammars) {
+            if (!g.sampler) {
+                continue;
+            }
+
+            switch (g.state) {
+                case COMMON_GRAMMAR_STATE_IDLE:
+                {
+                    if (g.spec.delayed) {
+                        // check arm triggers
+                        bool armed = common_grammar_check_triggers(
+                                gsmpl->vocab, g.spec.arm_triggers,
+                                g.arm_trigger_buffer, token);
+                        if (armed) {
+                            g.state = COMMON_GRAMMAR_STATE_ARMED;
+                            g.countdown_remaining = g.spec.countdown;
+                            g.defuse_trigger_buffer.clear();
+                            LOG_INF("%s: grammar '%s' armed, countdown = %d\n",
+                                    __func__, g.spec.id.c_str(), g.countdown_remaining);
+                        }
+                    }
+                    // for non-delayed grammars in IDLE state, nothing to do
+                    // (lazy grammars handle their own triggers internally in ACTIVE state)
+                    break;
+                }
+                case COMMON_GRAMMAR_STATE_ARMED:
+                {
+                    // check defuse triggers first
+                    bool defused = common_grammar_check_triggers(
+                            gsmpl->vocab, g.spec.defuse_triggers,
+                            g.defuse_trigger_buffer, token);
+                    if (defused) {
+                        g.state = g.spec.rearmable ? COMMON_GRAMMAR_STATE_IDLE : COMMON_GRAMMAR_STATE_DEFUSED;
+                        g.arm_trigger_buffer.clear();
+                        LOG_INF("%s: grammar '%s' defused (rearmable=%d)\n",
+                                __func__, g.spec.id.c_str(), g.spec.rearmable);
+                        break;
+                    }
+
+                    // decrement countdown
+                    if (g.spec.countdown_mode == COMMON_GRAMMAR_COUNTDOWN_TOKENS) {
+                        g.countdown_remaining--;
+                    } else {
+                        // character countdown
+                        char buf[256];
+                        int n = llama_token_to_piece(gsmpl->vocab, token, buf, sizeof(buf), 0, true);
+                        if (n > 0) {
+                            g.countdown_remaining -= n;
+                        } else if (n < 0) {
+                            g.countdown_remaining -= (-n);
+                        }
+                    }
+
+                    if (g.countdown_remaining <= 0) {
+                        // countdown expired: activate grammar
+                        llama_sampler_reset(g.sampler);
+                        g.state = COMMON_GRAMMAR_STATE_ACTIVE;
+                        g.defuse_trigger_buffer.clear();
+                        LOG_INF("%s: grammar '%s' activated after countdown\n",
+                                __func__, g.spec.id.c_str());
+                    }
+                    break;
+                }
+                case COMMON_GRAMMAR_STATE_ACTIVE:
+                {
+                    try {
+                        llama_sampler_accept(g.sampler, token);
+                    } catch (const std::runtime_error & e) {
+                        if (g.spec.non_terminating) {
+                            if (g.spec.rearmable) {
+                                g.state = COMMON_GRAMMAR_STATE_IDLE;
+                                llama_sampler_reset(g.sampler);
+                                g.arm_trigger_buffer.clear();
+                                g.defuse_trigger_buffer.clear();
+                                LOG_INF("%s: grammar '%s' exhausted, returning to IDLE (rearmable)\n",
+                                        __func__, g.spec.id.c_str());
+                            } else {
+                                g.state = COMMON_GRAMMAR_STATE_EXHAUSTED;
+                                LOG_INF("%s: grammar '%s' exhausted (one-shot)\n",
+                                        __func__, g.spec.id.c_str());
+                            }
+                        } else {
+                            throw; // re-throw if not non-terminating
+                        }
+                    }
+                    break;
+                }
+                case COMMON_GRAMMAR_STATE_EXHAUSTED:
+                case COMMON_GRAMMAR_STATE_DEFUSED:
+                    // terminal states, nothing to do
+                    break;
+            }
+        }
     }
 
     llama_sampler_accept(gsmpl->chain, token);
@@ -383,13 +678,27 @@ void common_sampler_reset(struct common_sampler * gsmpl) {
 }
 
 struct common_sampler * common_sampler_clone(common_sampler * gsmpl) {
+    std::vector<common_grammar_instance> cloned_grammars;
+    cloned_grammars.reserve(gsmpl->grammars.size());
+    for (const auto & g : gsmpl->grammars) {
+        common_grammar_instance cloned;
+        cloned.spec                 = g.spec;
+        cloned.state                = g.state;
+        cloned.sampler              = g.sampler ? llama_sampler_clone(g.sampler) : nullptr;
+        cloned.countdown_remaining  = g.countdown_remaining;
+        cloned.arm_trigger_buffer   = g.arm_trigger_buffer;
+        cloned.defuse_trigger_buffer = g.defuse_trigger_buffer;
+        cloned_grammars.push_back(std::move(cloned));
+    }
+
     return new common_sampler {
-        /* .params  = */ gsmpl->params,
-        /* .grmr    = */ llama_sampler_clone(gsmpl->grmr),
-        /* .chain   = */ llama_sampler_clone(gsmpl->chain),
-        /* .prev    = */ gsmpl->prev,
-        /* .cur     = */ gsmpl->cur,
-        /* .cur_p   = */ gsmpl->cur_p,
+        /* .params   = */ gsmpl->params,
+        /* .vocab    = */ gsmpl->vocab,
+        /* .grammars = */ std::move(cloned_grammars),
+        /* .chain    = */ llama_sampler_clone(gsmpl->chain),
+        /* .prev     = */ gsmpl->prev,
+        /* .cur      = */ gsmpl->cur,
+        /* .cur_p    = */ gsmpl->cur_p,
     };
 }
 
@@ -454,7 +763,6 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
 
     llama_token id = LLAMA_TOKEN_NULL;
 
-    auto & grmr  = gsmpl->grmr;
     auto & chain = gsmpl->chain;
     auto & cur_p = gsmpl->cur_p; // initialized by set_logits
 
@@ -466,7 +774,7 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
         if (id != LLAMA_TOKEN_NULL) {
             LOG_DBG("%s: Backend sampler selected token: '%d'. Will not run any CPU samplers\n", __func__, id);
 
-            GGML_ASSERT(!gsmpl->grmr && "using grammar in combination with backend sampling is not supported");
+            GGML_ASSERT(!gsmpl->has_active_grammars() && "using grammar in combination with backend sampling is not supported");
 
             // TODO: simplify
             gsmpl->cur.resize(1);
@@ -479,36 +787,30 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
 
     gsmpl->set_logits(ctx, idx);
 
-    if (grammar_first) {
-        llama_sampler_apply(grmr, &cur_p);
+    const bool has_grammars = gsmpl->has_active_grammars();
+
+    if (grammar_first && has_grammars) {
+        gsmpl->apply_active_grammars(&cur_p);
     }
 
     llama_sampler_apply(chain, &cur_p);
 
     id = cur_p.data[cur_p.selected].id;
 
-    if (grammar_first) {
+    if (grammar_first || !has_grammars) {
         return id;
     }
 
-    // check if it the sampled token fits the grammar (grammar-based rejection sampling)
-    {
-        llama_token_data       single_token_data       = { id, 1.0f, 0.0f };
-        llama_token_data_array single_token_data_array = { &single_token_data, 1, -1, false };
-
-        llama_sampler_apply(grmr, &single_token_data_array);
-
-        const bool is_valid = single_token_data_array.data[0].logit != -INFINITY;
-        if (is_valid) {
-            return id;
-        }
+    // check if the sampled token fits all active grammars (grammar-based rejection sampling)
+    if (gsmpl->check_token_against_active_grammars(id)) {
+        return id;
     }
 
     // resampling:
-    // if the token is not valid, sample again, but first apply the grammar sampler and then the sampling chain
+    // if the token is not valid, sample again, but first apply the grammar samplers and then the sampling chain
     gsmpl->set_logits(ctx, idx);
 
-    llama_sampler_apply(grmr,  &cur_p);
+    gsmpl->apply_active_grammars(&cur_p);
     llama_sampler_apply(chain, &cur_p);
 
     GGML_ASSERT(cur_p.selected != -1 && "no selected token during sampling - check your sampling configuration");

@@ -907,6 +907,7 @@ private:
                 /* allow_image           */ mctx ? mtmd_support_vision(mctx) : false,
                 /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,
                 /* enable_thinking       */ enable_thinking,
+                /* reasoning_budget      */ params_base.reasoning_budget,
                 /* media_path            */ params_base.media_path,
             };
         }

@@ -3050,9 +3050,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK"));
     add_opt(common_arg(
         {"--reasoning-budget"}, "N",
-        "controls the amount of thinking allowed; currently only one of: -1 for unrestricted thinking budget, or 0 to disable thinking (default: -1)",
+        "controls the amount of thinking allowed: -1 for unrestricted, 0 to disable thinking, N>0 for token budget (default: -1)",
         [](common_params & params, int value) {
-            if (value != 0 && value != -1) { throw std::invalid_argument("invalid value"); }
+            if (value < -1) { throw std::invalid_argument("invalid value"); }
             params.reasoning_budget = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK_BUDGET"));

@@ -150,6 +150,30 @@ struct common_grammar_trigger {
     llama_token token = LLAMA_TOKEN_NULL;
 };
 
+enum common_grammar_countdown_mode {
+    COMMON_GRAMMAR_COUNTDOWN_TOKENS,     // count in tokens
+    COMMON_GRAMMAR_COUNTDOWN_CHARACTERS, // count in characters
+};
+
+struct common_grammar_spec {
+    std::string id;                // unique identifier (e.g., "tool_call", "reasoning_budget")
+    std::string grammar;           // BNF grammar string
+    bool grammar_lazy = false;     // lazy activation via existing trigger mechanism
+    std::vector<common_grammar_trigger> grammar_triggers; // activation triggers (for lazy grammars)
+
+    // non-terminating: when grammar is exhausted, stop constraining instead of crashing
+    bool non_terminating = false;
+
+    // delayed activation fields
+    bool delayed = false;
+    std::vector<common_grammar_trigger> arm_triggers;    // triggers that start countdown
+    std::vector<common_grammar_trigger> defuse_triggers; // triggers that cancel countdown
+    int32_t countdown = -1;        // countdown value (-1 = not delayed)
+    common_grammar_countdown_mode countdown_mode = COMMON_GRAMMAR_COUNTDOWN_TOKENS;
+    bool rearmable = true;         // go back to IDLE after exhaustion/defuse?
+    bool arm_immediately = false;  // skip arm trigger, start countdown immediately
+};
+
 enum common_params_sampling_config : uint64_t {
     COMMON_PARAMS_SAMPLING_CONFIG_SAMPLERS        = 1 << 0,
     COMMON_PARAMS_SAMPLING_CONFIG_TOP_K           = 1 << 1,
@@ -231,6 +255,8 @@ struct common_params_sampling {
     bool                                grammar_lazy = false;
     std::vector<common_grammar_trigger> grammar_triggers; // optional triggers (for lazy grammars)
     std::set<llama_token>               preserved_tokens;
+
+    std::vector<common_grammar_spec>  grammar_specs; // multiple grammar specifications (overrides single grammar fields above)
 
     std::vector<llama_logit_bias> logit_bias;     // logit biases to apply
     std::vector<llama_logit_bias> logit_bias_eog; // pre-calculated logit biases for EOG tokens

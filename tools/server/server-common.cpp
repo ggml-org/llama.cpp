@@ -1101,6 +1101,79 @@ json oaicompat_chat_params_parse(
         llama_params["chat_parser"] = chat_params.parser;
     }
 
+    // Create reasoning budget delayed grammar spec if applicable
+    {
+        // Determine budget: prefer server config, fall back to Anthropic thinking_budget_tokens
+        int reasoning_budget = opt.reasoning_budget;
+        if (reasoning_budget == -1 && body.contains("thinking_budget_tokens")) {
+            reasoning_budget = json_value(body, "thinking_budget_tokens", -1);
+        }
+
+        SRV_DBG("reasoning_budget=%d, thinking_start_tag='%s', thinking_end_tag='%s', thinking_forced_open=%s\n",
+            reasoning_budget,
+            chat_params.thinking_start_tag.c_str(),
+            chat_params.thinking_end_tag.c_str(),
+            chat_params.thinking_forced_open ? "true" : "false");
+
+        if (reasoning_budget > 0
+                && !chat_params.thinking_end_tag.empty()) {
+            json grammar_specs = json::array();
+
+            // If there's already a tool-call grammar from chat_params, include it as the first spec
+            if (!chat_params.grammar.empty()) {
+                json tool_spec;
+                tool_spec["id"] = "tool_call";
+                tool_spec["grammar"] = chat_params.grammar;
+                tool_spec["grammar_lazy"] = chat_params.grammar_lazy;
+                auto triggers = json::array();
+                for (const auto & trigger : chat_params.grammar_triggers) {
+                    server_grammar_trigger ct(trigger);
+                    triggers.push_back(ct.to_json());
+                }
+                tool_spec["grammar_triggers"] = triggers;
+                grammar_specs.push_back(tool_spec);
+
+                // Clear the legacy grammar fields since we're using grammar_specs now
+                llama_params.erase("grammar");
+                llama_params.erase("grammar_lazy");
+                llama_params.erase("grammar_triggers");
+            }
+
+            // Build the end tag grammar (forces model to output the thinking end tag)
+            std::string end_tag_grammar = "root ::= \"" + chat_params.thinking_end_tag + "\"";
+
+            json budget_spec;
+            budget_spec["id"] = "reasoning_budget";
+            budget_spec["grammar"] = end_tag_grammar;
+            budget_spec["delayed"] = true;
+            budget_spec["non_terminating"] = true;
+            budget_spec["rearmable"] = true;
+            budget_spec["countdown"] = reasoning_budget;
+            budget_spec["countdown_mode"] = "tokens";
+
+            // The thinking start tag is typically part of the generation prompt (not sampled),
+            // so we arm immediately for the first thinking block.
+            // The arm trigger is still needed for rearming after exhaustion (if model re-enters thinking).
+            budget_spec["arm_immediately"] = true;
+
+            if (!chat_params.thinking_start_tag.empty()) {
+                json arm_trigger;
+                arm_trigger["type"] = (int) COMMON_GRAMMAR_TRIGGER_TYPE_WORD;
+                arm_trigger["value"] = chat_params.thinking_start_tag;
+                budget_spec["arm_triggers"] = json::array({arm_trigger});
+            }
+
+            // Defuse trigger: when thinking ends naturally
+            json defuse_trigger;
+            defuse_trigger["type"] = (int) COMMON_GRAMMAR_TRIGGER_TYPE_WORD;
+            defuse_trigger["value"] = chat_params.thinking_end_tag;
+            budget_spec["defuse_triggers"] = json::array({defuse_trigger});
+
+            grammar_specs.push_back(budget_spec);
+            llama_params["grammar_specs"] = grammar_specs;
+        }
+    }
+
     // Handle "logprobs" field
     // TODO: The response format of this option is not yet OAI-compatible, but seems like no one really using it; We may need to fix it in the future
     if (json_value(body, "logprobs", false)) {
