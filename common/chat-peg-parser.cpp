@@ -515,10 +515,7 @@ common_peg_parser common_chat_peg_builder::python_style_tool_calls(
                 if (is_string_type) {
                     arg_value_parser = string_value_parser;
                 } else {
-                    auto bool_parser = tool_arg_value(choice({ literal("True"), literal("true"), literal("False"), literal("false") }));
-                    auto null_parser = tool_arg_value(choice({ literal("null"), literal("None") }));
-                    auto num_parser = tool_arg_value(json_number()); // number format is the same, so just reuse
-                    arg_value_parser = bool_parser | null_parser | num_parser | string_value_parser; // allow string fallback just in case
+                    arg_value_parser = tool_arg_value(python_value());
                 }
 
                 // Full argument: name="value" or name=value
