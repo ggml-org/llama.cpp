@@ -14,6 +14,7 @@ llama_add_compile_flags()
 
 if (EMSCRIPTEN)
 else()
+    add_subdirectory(attn-weights)
     add_subdirectory(batched)
     add_subdirectory(debug)
     add_subdirectory(embedding)

@@ -79,6 +79,10 @@ struct llama_context {
     float * get_embeddings_ith(int32_t i);
     float * get_embeddings_seq(llama_seq_id seq_id);
 
+    void set_attn_heads(const int32_t * layers, const int32_t * heads, size_t n_pairs);
+    float * get_attn_ith(int32_t i);
+    int32_t get_attn_n_kv() const;
+
     llama_token * get_sampled_tokens() const;
     llama_token   get_sampled_token_ith(int32_t idx);
 
@@ -294,6 +298,24 @@ private:
     // sequence embeddings output (map of [n_embd] vectors)
     // populated only when pooling_type != LLAMA_POOLING_TYPE_NONE
     std::map<llama_seq_id, std::vector<float>> embd_seq;
+
+    // attention weight extraction
+    struct attn_head_pair {
+        int32_t layer;
+        int32_t head;
+    };
+    std::vector<attn_head_pair> attn_heads; // which (layer, head) pairs to extract
+    buffer_view<float> attn = {nullptr, 0}; // [n_outputs][n_pairs * n_ctx]
+    int32_t attn_n_kv = 0;                  // KV cache length at time of last decode
+
+    struct attn_cb_state {
+        llama_context      * ctx            = nullptr;
+        const llama_ubatch * ubatch         = nullptr;
+        int64_t              n_outputs_prev = 0;
+    };
+    attn_cb_state attn_cb;
+
+    static bool attn_cb_eval_fn(struct ggml_tensor * t, bool ask, void * user_data);
 
     // reuse the batch_allocr to avoid unnecessary memory allocations
     std::unique_ptr<llama_batch_allocr> balloc;
