@@ -2712,7 +2712,8 @@ static void test_developer_role_to_system_workaround() {
 
     auto tmpls = common_chat_templates_ptr(common_chat_templates_init(/* model= */ nullptr, mock_template));
 
-    // Test case 1: Only developer message - should be changed to system
+    // Test case 1: Developer message - should be changed to system
+    // After simplification we only test this case
     {
         common_chat_templates_inputs inputs;
         common_chat_msg developer_msg;
@@ -2731,88 +2732,6 @@ static void test_developer_role_to_system_workaround() {
             throw std::runtime_error("Test failed: system message not found in output");
         }
         LOG_ERR("Test 1 passed: developer role changed to system\n");
-    }
-
-    // Test case 2: System + developer messages - should be merged into one system message
-    {
-        common_chat_templates_inputs inputs;
-        common_chat_msg system_msg;
-        system_msg.role = "system";
-        system_msg.content = "You are a helpful assistant.";
-        common_chat_msg developer_msg;
-        developer_msg.role = "developer";
-        developer_msg.content = "You are an expert coder.";
-        inputs.messages = { system_msg, developer_msg };
-        inputs.add_generation_prompt = false;
-
-        auto params = common_chat_templates_apply(tmpls.get(), inputs);
-
-        // Should have only one system message with merged content
-        // Count occurrences of <|system|>
-        size_t system_count = 0;
-        size_t pos = 0;
-        while ((pos = params.prompt.find("<|system|>", pos)) != std::string::npos) {
-            system_count++;
-            pos++;
-        }
-
-        if (system_count != 1) {
-            throw std::runtime_error("Test failed: expected 1 system message, found " + std::to_string(system_count));
-        }
-
-        // Check that both contents are present in the merged message
-        if (params.prompt.find("You are a helpful assistant.") == std::string::npos) {
-            throw std::runtime_error("Test failed: original system message content not found, got: " + params.prompt + "\n");
-        }
-        if (params.prompt.find("You are an expert coder.") == std::string::npos) {
-            throw std::runtime_error("Test failed: developer message content not found, got: " + params.prompt + "\n");
-        }
-        // Check that they are merged with newline separator
-        if (params.prompt.find("You are a helpful assistant.\nYou are an expert coder.") == std::string::npos) {
-            throw std::runtime_error("Test failed: messages not properly merged, got: " + params.prompt + "\n");
-        }
-
-        LOG_ERR("Test 2 passed: system and developer messages merged into one system message\n");
-    }
-
-    // Test case 3: Multiple messages with developer in the middle
-    {
-        common_chat_templates_inputs inputs;
-        common_chat_msg system_msg;
-        system_msg.role = "system";
-        system_msg.content = "System instruction.";
-        common_chat_msg developer_msg;
-        developer_msg.role = "developer";
-        developer_msg.content = "Developer note.";
-        common_chat_msg user_msg;
-        user_msg.role = "user";
-        user_msg.content = "Hello!";
-        inputs.messages = { system_msg, developer_msg, user_msg };
-        inputs.add_generation_prompt = false;
-
-        auto params = common_chat_templates_apply(tmpls.get(), inputs);
-
-        // Should have one system message with merged content, then user message
-        size_t system_count = 0;
-        size_t pos = 0;
-        while ((pos = params.prompt.find("<|system|>", pos)) != std::string::npos) {
-            system_count++;
-            pos++;
-        }
-
-        if (system_count != 1) {
-            throw std::runtime_error("Test failed: expected 1 system message, found " + std::to_string(system_count));
-        }
-
-        if (params.prompt.find("System instruction.\nDeveloper note.") == std::string::npos) {
-            throw std::runtime_error("Test failed: messages not properly merged");
-        }
-
-        if (params.prompt.find("<|user|>Hello!<|end|>") == std::string::npos) {
-            throw std::runtime_error("Test failed: user message not found");
-        }
-
-        LOG_ERR("Test 3 passed: multiple messages with developer merged correctly\n");
     }
 }
 

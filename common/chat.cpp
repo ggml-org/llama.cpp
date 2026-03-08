@@ -1277,41 +1277,10 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
 namespace workaround {
 
 static void map_developer_role_to_system(json & messages) {
-    bool has_system = false;
-    bool has_developer = false;
     for (auto & message : messages) {
         if (message.contains("role")) {
             if (message["role"] == "developer") {
                 message["role"] = "system";
-                has_developer = true;
-            } else if (message["role"] == "system") {
-                has_system = true;
-            }
-        }
-    }
-    if (has_system && has_developer) { // now we have 2 system messages, we have to merge into one;
-        bool found_first_msg = false;
-        std::string first_msg;
-        for (auto iter = messages.begin(); iter != messages.end(); ) {
-            auto & msg = *iter;
-            bool increment_iter = true;
-            if (msg.contains("role") && msg["role"] == "system") {
-                if (!found_first_msg) {
-                    first_msg = msg.contains("content") ? msg["content"].get<std::string>() : "";
-                    iter = messages.erase(iter);
-                    found_first_msg = true;
-                    increment_iter = false;
-                } else {
-                    if (msg.contains("content")) {
-                        std::string prev_content = msg["content"].get<std::string>();
-                        msg["content"] = first_msg + "\n" + prev_content;
-                    } else {
-                        msg["content"] = first_msg;
-                    }
-                }
-            }
-            if (increment_iter) {
-                iter++;
             }
         }
     }
