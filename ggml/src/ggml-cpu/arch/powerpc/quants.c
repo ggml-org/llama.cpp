@@ -959,15 +959,11 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
         vector signed short q4xmins0 = vec_mergeh(q4xmins, q4xmins);
         vector signed short q4xmins1 = vec_mergel(q4xmins, q4xmins);
 
-        vector signed int prod0 = vec_mule(q4xmins0, q8ysums0);
-        vector signed int prod1 = vec_mule(q4xmins1, q8ysums1);
-        vector signed int prod2 = vec_mulo(q4xmins0, q8ysums0);
-        vector signed int prod3 = vec_mulo(q4xmins1, q8ysums1);
+        vector signed int prod0 = vec_msum(q4xmins0, q8ysums0, v0);
+        vector signed int prod1 = vec_msum(q4xmins1, q8ysums1, v0);
 
         vsumf0 = vec_nmsub(vec_ctf(prod0, 0), vdmin, vsumf0);
         vsumf1 = vec_nmsub(vec_ctf(prod1, 0), vdmin, vsumf1);
-        vsumf2 = vec_nmsub(vec_ctf(prod2, 0), vdmin, vsumf2);
-        vsumf3 = vec_nmsub(vec_ctf(prod3, 0), vdmin, vsumf3);
 
         vector signed int vsumi0 = v0;
         vector signed int vsumi1 = v0;
