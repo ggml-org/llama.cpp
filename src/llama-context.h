@@ -127,6 +127,7 @@ struct llama_context {
                        ggml_status & ret);
 
     int encode(const llama_batch & batch_inp);
+    void encode_clear_seq(llama_seq_id seq_id);
     int decode(const llama_batch & batch_inp);
 
     //

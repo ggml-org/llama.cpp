@@ -323,6 +323,16 @@ void llm_graph_input_cross_embd::set_input(const llama_ubatch * ubatch) {
     }
 }
 
+bool llm_graph_input_cross_embd::can_reuse(const llm_graph_params & params) {
+    GGML_UNUSED(params);
+
+    const int64_t n_enc_cur = !cross->v_embd.empty()
+        ? cross->n_enc
+        : (int64_t)n_ctx_train;
+
+    return n_enc_built == n_enc_cur;
+}
+
 static void print_mask(const float * data, int64_t n_tokens, int64_t n_kv, int64_t n_swa, llama_swa_type swa_type) {
     LLAMA_LOG_DEBUG("%s: === Attention mask ===\n", __func__);
     const char * swa_type_str = "unknown";
@@ -508,8 +518,10 @@ void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
 
     float * data = (float *) cross_kq_mask->data;
 
-    for (int i = 0; i < n_tokens; ++i) {
-        for (int j = 0; j < n_enc; ++j) {
+    const int64_t n_enc_actual = cross->n_enc;
+
+    for (int64_t i = 0; i < n_tokens; ++i) {
+        for (int64_t j = 0; j < n_enc_actual; ++j) {
             float f = -INFINITY;
 
             for (int s = 0; s < ubatch->n_seq_id[i]; ++s) {
@@ -522,7 +534,22 @@ void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
 
             data[i*n_enc + j] = f;
         }
+
+        // mask out any unused positions (when tensor is larger than actual encoder output)
+        for (int64_t j = n_enc_actual; j < n_enc; ++j) {
+            data[i*n_enc + j] = -INFINITY;
+        }
     }
+}
+
+bool llm_graph_input_attn_cross::can_reuse(const llm_graph_params & params) {
+    GGML_UNUSED(params);
+
+    const int64_t n_enc_cur = !cross->v_embd.empty()
+        ? cross->n_enc
+        : (int64_t)n_ctx_train;
+
+    return n_enc_built == n_enc_cur;
 }
 
 void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
@@ -1661,20 +1688,21 @@ ggml_tensor * llm_graph_context::build_inp_cls() const {
 }
 
 ggml_tensor * llm_graph_context::build_inp_cross_embd() const {
-    auto inp = std::make_unique<llm_graph_input_cross_embd>(cross);
+    auto inp = std::make_unique<llm_graph_input_cross_embd>(cross, cparams.n_seq_max, hparams.n_ctx_train);
 
     auto & cur = inp->cross_embd;
 
-    // if we have the output embeddings from the encoder, use them directly
-    // TODO: needs more work to be correct, for now just use the tensor shape
-    //if (cross->t_embd) {
-    //    cur = ggml_view_tensor(ctx0, cross->t_embd);
+    const auto n_embd = hparams.n_embd_inp();
 
-    //    return cur;
-    //}
+    // use actual n_enc at runtime; worst-case at reservation (cross empty)
+    // note: at reservation time, use n_ctx_train (single sequence worst-case) to avoid
+    // shape mismatches in the graph. at runtime, the graph is rebuilt via can_reuse()
+    // when n_enc changes, and alloc_graph will succeed if n_enc <= reserved size.
+    const auto n_enc = !cross->v_embd.empty()
+        ? cross->n_enc
+        : (int64_t)hparams.n_ctx_train;
 
-    const auto n_embd = !cross->v_embd.empty() ? cross->n_embd : hparams.n_embd_inp();
-    const auto n_enc  = !cross->v_embd.empty() ? cross->n_enc  : hparams.n_ctx_train;
+    inp->n_enc_built = n_enc;
 
     cur = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_enc);
     ggml_set_input(cur);
@@ -2177,9 +2205,13 @@ ggml_tensor * llm_graph_context::build_attn(
 }
 
 llm_graph_input_attn_cross * llm_graph_context::build_attn_inp_cross() const {
-    auto inp = std::make_unique<llm_graph_input_attn_cross>(cross);
+    auto inp = std::make_unique<llm_graph_input_attn_cross>(cross, cparams.n_seq_max, hparams.n_ctx_train);
 
-    const int32_t n_enc = !cross->v_embd.empty() ? cross->n_enc : hparams.n_ctx_train;
+    const int64_t n_enc = !cross->v_embd.empty()
+        ? cross->n_enc
+        : (int64_t)hparams.n_ctx_train;
+
+    inp->n_enc_built = n_enc;
 
     inp->cross_kq_mask = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, n_enc, n_tokens, 1, 1);
     ggml_set_input(inp->cross_kq_mask);
