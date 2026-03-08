@@ -653,7 +653,8 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_mod
             for (const auto & [pattern, qtype] : qs.tensor_type_patterns) {
                 if (std::regex_search(tensor_name, pattern)) {
                     if (qtype != new_type) {
-                        LLAMA_LOG_WARN("(manual override: %s -> %s) ", ggml_type_name(new_type), ggml_type_name(qtype));
+                        LLAMA_LOG_WARN("%s: %-36s - applying manual override: %s -> %s\n",
+                                       __func__, tensor_name.c_str(), ggml_type_name(new_type), ggml_type_name(qtype));
                         new_type = qtype;
                         manual = true;
                         break;
