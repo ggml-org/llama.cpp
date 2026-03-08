@@ -2180,7 +2180,8 @@ private:
                 // compute draft and add draft to internal batch
                 draft = slot.spec_session->compute_draft(cached_text_tokens, slot.sampled, n_draft_max_slot);
                 if (draft.size() > 0) {
-                    SLT_DBG(slot, "compute_draft: #cached_text_tokens=%zu, #tokens=%zu, #i_batch_dft=%zu\n",
+                    SLT_DBG(slot, "compute_draft: id=%d, #cached_text_tokens=%zu, #tokens=%zu, #i_batch_dft=%zu\n",
+                            slot.sampled,
                             cached_text_tokens.size(), draft.size(), slot.i_batch_dft.size());
                 }
             }
@@ -2194,7 +2195,8 @@ private:
 
                 slot.prompt.tokens.push_back(slot.sampled);
 
-                SLT_DBG(slot, "slot decode token, n_ctx = %d, n_tokens = %d, truncated = %d\n",
+                SLT_DBG(slot, "slot decode token, id=%d, n_ctx = %d, n_tokens = %d, truncated = %d\n",
+                        slot.sampled,
                         slot.n_ctx, slot.prompt.n_tokens(), slot.truncated);
             }
         }
@@ -2945,6 +2947,7 @@ private:
 
                 // update how many tokens out of those tested were accepted
                 slot.n_draft_accepted += ids.size() - 1;
+                slot.n_draft_total += n_draft;
 
                 // rollback to the state before sampling the draft tokens
                 slot.prompt.tokens.keep_first(slot.prompt.n_tokens() - n_draft);
@@ -2952,6 +2955,7 @@ private:
                 // add accepted tokens to the prompt
                 slot.prompt.tokens.insert({ids.begin(), ids.end() - 1});
                 slot.sampled = ids.back(); // last accepted token
+                SLT_DBG(slot, "add accepted tokens: sampled=%d, ids.size=%zu, n_draft=%zu\n", slot.sampled, ids.size(), n_draft);
 
                 slot.spec_session->rewind(slot.prompt.n_tokens());
 
