@@ -1,0 +1,29 @@
+name: apply power8 compat shim
+
+on:
+  push:
+    branches:
+      - power8-compat-shim
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Apply patch
+        run: |
+          git apply --whitespace=nowarn .github/patches/power8-compat-shim.patch
+          rm .github/workflows/power8-compat-shim.yml
+          rm .github/patches/power8-compat-shim.patch
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "ggml: POWER8 compat shim for vec_absd, vaddudm, etc."
+          git push
