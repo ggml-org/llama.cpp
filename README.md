@@ -192,7 +192,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 - Delphi [Embarcadero/llama-cpp-delphi](https://github.com/Embarcadero/llama-cpp-delphi)
 - Go (no CGo needed): [hybridgroup/yzma](https://github.com/hybridgroup/yzma)
 - Android: [llama.android](/examples/llama.android)
-
+- Elixir: [llama_cpp_ex](https://github.com/nyo16/llama_cpp_ex/tree/master)
 </details>
 
 <details>
