@@ -107,9 +107,11 @@ common_peg_arena autoparser::build_parser(const templates_params & inputs) const
         bool has_response_format = inputs.json_schema.is_object() && !inputs.json_schema.empty();
 
         if (has_response_format) {
-            return ctx.reasoning_parser + p.space() + p.optional(p.literal("```json") + p.space()) +
-                p.content(p.schema(p.json(), "response-format", inputs.json_schema)) +
-                p.optional(p.space() + p.literal("```")) + p.end();
+            auto response_format = p.rule("response-format", p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema)));
+            return ctx.reasoning_parser + p.space() + p.choice({
+                p.literal("```json") + p.space() + response_format + p.space() + p.literal("```"),
+                response_format
+            }) + p.end();
         }
 
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE && jinja_caps.supports_tool_calls) {
