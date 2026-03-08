@@ -13,16 +13,34 @@ ggml_cgraph * clip_graph_qwen3vl::build() {
 
     int mrope_sections[4] = {d_head/4, d_head/4, d_head/4, d_head/4};
 
-    ggml_tensor * inp_raw = build_inp_raw();
-    ggml_tensor * inp = ggml_conv_2d(ctx0, model.patch_embeddings_0, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
+    // detect video: 6-channel input means interleaved frame pairs (even_rgb + odd_rgb)
+    // for images (3ch), both Conv2Ds receive the same input (original behavior)
+    // for video (6ch), Conv2D_0 gets even frames (ch 0-2), Conv2D_1 gets odd frames (ch 3-5)
+    const bool is_video = (img.buf.size() == (size_t)img.nx * img.ny * 6);
+    const int  n_channels = is_video ? 6 : 3;
+
+    ggml_tensor * inp_raw = build_inp_raw(n_channels);
+
+    ggml_tensor * inp;
+    if (is_video) {
+        const size_t nb1 = ggml_row_size(inp_raw->type, img.nx);
+        const size_t nb2 = nb1 * img.ny;
+        ggml_tensor * inp_even = ggml_view_3d(ctx0, inp_raw, img.nx, img.ny, 3, nb1, nb2, 0);
+        ggml_tensor * inp_odd  = ggml_view_3d(ctx0, inp_raw, img.nx, img.ny, 3, nb1, nb2, nb2 * 3);
+        inp = ggml_add(ctx0,
+            ggml_conv_2d(ctx0, model.patch_embeddings_0, inp_even, patch_size, patch_size, 0, 0, 1, 1),
+            ggml_conv_2d(ctx0, model.patch_embeddings_1, inp_odd,  patch_size, patch_size, 0, 0, 1, 1));
+    } else {
+        inp = ggml_add(ctx0,
+            ggml_conv_2d(ctx0, model.patch_embeddings_0, inp_raw, patch_size, patch_size, 0, 0, 1, 1),
+            ggml_conv_2d(ctx0, model.patch_embeddings_1, inp_raw, patch_size, patch_size, 0, 0, 1, 1));
+    }
 
     GGML_ASSERT(img.nx % (patch_size * 2) == 0);
     GGML_ASSERT(img.ny % (patch_size * 2) == 0);
 
-    // second conv dimension
+    // spatial merge
     {
-        auto inp_1 = ggml_conv_2d(ctx0, model.patch_embeddings_1, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
-        inp = ggml_add(ctx0, inp, inp_1);
 
         inp = ggml_permute(ctx0, inp, 1, 2, 0, 3);  // [w, h, c, b] -> [c, w, h, b]
         inp = ggml_cont_4d(
