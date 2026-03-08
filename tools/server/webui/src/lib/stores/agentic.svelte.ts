@@ -18,6 +18,12 @@
 
 import { SvelteMap } from 'svelte/reactivity';
 import { ChatService } from '$lib/services';
+import '$lib/services/tools';
+import {
+	findToolByName,
+	getEnabledToolDefinitions,
+	isToolEnabled
+} from '$lib/services/tools/registry';
 import { config } from '$lib/stores/settings.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
@@ -50,7 +56,9 @@ import type {
 	AgenticConfig,
 	SettingsConfigType,
 	McpServerOverride,
-	MCPToolCall
+	MCPToolCall,
+	OpenAIToolDefinition,
+	ToolExecutionResult
 } from '$lib/types';
 import type {
 	AgenticMessage,
@@ -70,11 +78,7 @@ import type {
 	ChatMessageToolCallTiming,
 	ChatMessageAgenticTurnStats
 } from '$lib/types/chat';
-import type {
-	DatabaseMessage,
-	DatabaseMessageExtra,
-	DatabaseMessageExtraImageFile
-} from '$lib/types/database';
+import type { DatabaseMessage, DatabaseMessageExtra, DatabaseMessageExtraImageFile } from '$lib/types/database';
 
 function createDefaultSession(): AgenticSession {
 	return {
@@ -88,19 +92,25 @@ function createDefaultSession(): AgenticSession {
 
 function toAgenticMessages(messages: ApiChatMessageData[]): AgenticMessage[] {
 	return messages.map((message) => {
-		if (
-			message.role === MessageRole.ASSISTANT &&
-			message.tool_calls &&
-			message.tool_calls.length > 0
-		) {
+		if (message.role === MessageRole.ASSISTANT) {
 			return {
 				role: MessageRole.ASSISTANT,
 				content: message.content,
-				tool_calls: message.tool_calls.map((call, index) => ({
-					id: call.id ?? `call_${index}`,
-					type: (call.type as ToolCallType.FUNCTION) ?? ToolCallType.FUNCTION,
-					function: { name: call.function?.name ?? '', arguments: call.function?.arguments ?? '' }
-				}))
+				...(message.reasoning_content
+					? { reasoning_content: message.reasoning_content }
+					: {}),
+				...(message.tool_calls && message.tool_calls.length > 0
+					? {
+							tool_calls: message.tool_calls.map((call, index) => ({
+								id: call.id ?? `call_${index}`,
+								type: (call.type as ToolCallType.FUNCTION) ?? ToolCallType.FUNCTION,
+								function: {
+									name: call.function?.name ?? '',
+									arguments: call.function?.arguments ?? ''
+								}
+							}))
+						}
+					: {})
 			} satisfies AgenticMessage;
 		}
 		if (message.role === MessageRole.TOOL && message.tool_call_id) {
@@ -184,8 +194,10 @@ class AgenticStore {
 		const maxTurns = Number(settings.agenticMaxTurns) || DEFAULT_AGENTIC_CONFIG.maxTurns;
 		const maxToolPreviewLines =
 			Number(settings.agenticMaxToolPreviewLines) || DEFAULT_AGENTIC_CONFIG.maxToolPreviewLines;
+		const hasLocalTools = getEnabledToolDefinitions(settings).length > 0;
+		const hasMcpServers = mcpStore.hasEnabledServers(perChatOverrides);
 		return {
-			enabled: mcpStore.hasEnabledServers(perChatOverrides) && DEFAULT_AGENTIC_CONFIG.enabled,
+			enabled: DEFAULT_AGENTIC_CONFIG.enabled && (hasLocalTools || hasMcpServers),
 			maxTurns,
 			maxToolPreviewLines
 		};
@@ -205,16 +217,35 @@ class AgenticStore {
 			onTurnComplete
 		} = callbacks;
 
-		const agenticConfig = this.getConfig(config(), perChatOverrides);
+		const currentSettings = config();
+		const agenticConfig = this.getConfig(currentSettings, perChatOverrides);
 		if (!agenticConfig.enabled) return { handled: false };
 
-		const initialized = await mcpStore.ensureInitialized(perChatOverrides);
-		if (!initialized) {
-			console.log('[AgenticStore] MCP not initialized, falling back to standard chat');
-			return { handled: false };
+		const toolMap = new Map<string, OpenAIToolDefinition>();
+		for (const tool of getEnabledToolDefinitions(currentSettings) as OpenAIToolDefinition[]) {
+			toolMap.set(tool.function.name, tool);
 		}
 
-		const tools = mcpStore.getToolDefinitionsForLLM();
+		let hasMcpTools = false;
+		if (mcpStore.hasEnabledServers(perChatOverrides)) {
+			const initialized = await mcpStore.ensureInitialized(perChatOverrides);
+			if (initialized) {
+				for (const tool of mcpStore.getToolDefinitionsForLLM()) {
+					if (toolMap.has(tool.function.name)) {
+						console.warn(
+							`[AgenticStore] Skipping MCP tool "${tool.function.name}" because a built-in tool with the same name is enabled`
+						);
+						continue;
+					}
+					toolMap.set(tool.function.name, tool);
+					hasMcpTools = true;
+				}
+			} else {
+				console.log('[AgenticStore] MCP not initialized, continuing with built-in tools only');
+			}
+		}
+
+		const tools = Array.from(toolMap.values());
 		if (tools.length === 0) {
 			console.log('[AgenticStore] No tools available, falling back to standard chat');
 			return { handled: false };
@@ -244,7 +275,9 @@ class AgenticStore {
 			totalToolCalls: 0,
 			lastError: null
 		});
-		mcpStore.acquireConnection();
+		if (hasMcpTools) {
+			mcpStore.acquireConnection();
+		}
 
 		try {
 			await this.executeAgenticLoop({
@@ -252,6 +285,7 @@ class AgenticStore {
 				messages: normalizedMessages,
 				options,
 				tools,
+				settings: currentSettings,
 				agenticConfig,
 				callbacks: {
 					onChunk,
@@ -274,11 +308,13 @@ class AgenticStore {
 			return { handled: true, error: normalizedError };
 		} finally {
 			this.updateSession(conversationId, { isRunning: false });
-			await mcpStore
-				.releaseConnection()
-				.catch((err: unknown) =>
-					console.warn('[AgenticStore] Failed to release MCP connection:', err)
-				);
+			if (hasMcpTools) {
+				await mcpStore
+					.releaseConnection()
+					.catch((err: unknown) =>
+						console.warn('[AgenticStore] Failed to release MCP connection:', err)
+					);
+			}
 		}
 	}
 
@@ -286,12 +322,14 @@ class AgenticStore {
 		conversationId: string;
 		messages: ApiChatMessageData[];
 		options: AgenticFlowOptions;
-		tools: ReturnType<typeof mcpStore.getToolDefinitionsForLLM>;
+		tools: OpenAIToolDefinition[];
+		settings: SettingsConfigType;
 		agenticConfig: AgenticConfig;
 		callbacks: AgenticFlowCallbacks;
 		signal?: AbortSignal;
 	}): Promise<void> {
-		const { conversationId, messages, options, tools, agenticConfig, callbacks, signal } = params;
+		const { conversationId, messages, options, tools, settings, agenticConfig, callbacks, signal } =
+			params;
 		const {
 			onChunk,
 			onReasoningChunk,
@@ -333,6 +371,7 @@ class AgenticStore {
 			}
 
 			let turnContent = '';
+			let turnReasoningContent = '';
 			let turnToolCalls: ApiChatCompletionToolCall[] = [];
 			let lastStreamingToolCallName = '';
 			let lastStreamingToolCallArgsLength = 0;
@@ -360,7 +399,10 @@ class AgenticStore {
 							turnContent += chunk;
 							onChunk?.(chunk);
 						},
-						onReasoningChunk,
+						onReasoningChunk: (chunk: string) => {
+							turnReasoningContent += chunk;
+							onReasoningChunk?.(chunk);
+						},
 						onToolCallChunk: (serialized: string) => {
 							try {
 								turnToolCalls = JSON.parse(serialized) as ApiChatCompletionToolCall[];
@@ -495,6 +537,7 @@ class AgenticStore {
 			sessionMessages.push({
 				role: MessageRole.ASSISTANT,
 				content: turnContent || undefined,
+				...(turnReasoningContent ? { reasoning_content: turnReasoningContent } : {}),
 				tool_calls: normalizedCalls
 			});
 
@@ -520,8 +563,14 @@ class AgenticStore {
 				let toolSuccess = true;
 
 				try {
-					const executionResult = await mcpStore.executeTool(mcpCall, signal);
+					const executionResult = await this.executeTool(
+						mcpCall,
+						settings,
+						sessionMessages,
+						signal
+					);
 					result = executionResult.content;
+					toolSuccess = !executionResult.isError;
 				} catch (error) {
 					if (isAbortError(error)) {
 						onComplete?.(
@@ -690,6 +739,31 @@ class AgenticStore {
 		const extension = IMAGE_MIME_TO_EXTENSION[mimeType] ?? DEFAULT_IMAGE_EXTENSION;
 
 		return `${MCP_ATTACHMENT_NAME_PREFIX}-${Date.now()}-${index}.${extension}`;
+	}
+
+	private async executeTool(
+		toolCall: MCPToolCall,
+		settings: SettingsConfigType,
+		sessionMessages: AgenticMessage[],
+		signal?: AbortSignal
+	): Promise<ToolExecutionResult> {
+		const toolName = toolCall.function.name;
+		const registration = findToolByName(toolName);
+		if (registration && isToolEnabled(toolName, settings)) {
+			const argsJson =
+				typeof toolCall.function.arguments === 'string'
+					? toolCall.function.arguments
+					: JSON.stringify(toolCall.function.arguments ?? {});
+			const result = await registration.execute(argsJson, settings, {
+				messages: sessionMessages
+			});
+			return {
+				content: result.content,
+				isError: result.isError ?? result.content.trimStart().startsWith('Error:')
+			};
+		}
+
+		return mcpStore.executeTool(toolCall, signal);
 	}
 }
 
