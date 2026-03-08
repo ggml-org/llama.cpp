@@ -3626,7 +3626,8 @@ bool mmvq_moe_batched_dispatch(
     const int64_t *             gpu_ids,
     int                         n_gpu_entries,
     int                         n_experts,
-    int64_t                     n_ids) {
+    int64_t                     n_ids,
+    layout_mode                 layout) {
 
     if (n_gpu_entries <= 0 || !expert_ptrs_device) {
         return false;
@@ -3636,6 +3637,7 @@ bool mmvq_moe_batched_dispatch(
     switch (src0->type) {
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
+        case GGML_TYPE_MXFP4:
             break;
         default:
             return false;
@@ -3660,10 +3662,17 @@ bool mmvq_moe_batched_dispatch(
     src1_q8_1_pool.alloc(required_size);
     void * q8_1_buffer = src1_q8_1_pool.get();
 
-    // AOS layout → use standard Q8_1 quantizer
-    quantize_row_q8_1_sycl<quantize_q8_1>(
-        src1_d, (char *) q8_1_buffer, ne10, total_src1_rows,
-        ne10_padded, stream);
+    // Use SoA quantizer if weights are in reordered layout (both SoA and COALESCED kernels expect SoA Y)
+    const bool y_soa = (layout == GGML_LAYOUT_SOA || layout == GGML_LAYOUT_COALESCED);
+    if (y_soa) {
+        quantize_row_q8_1_sycl<quantize_and_reorder_q8_1_soa>(
+            src1_d, (char *) q8_1_buffer, ne10, total_src1_rows,
+            ne10_padded, stream);
+    } else {
+        quantize_row_q8_1_sycl<quantize_q8_1>(
+            src1_d, (char *) q8_1_buffer, ne10, total_src1_rows,
+            ne10_padded, stream);
+    }
 
     // --- Build compact pointer table for batched dispatch ---
     // We dispatch over n_gpu_entries only.  Each entry becomes one
@@ -3732,6 +3741,51 @@ bool mmvq_moe_batched_dispatch(
                 q8_nb11, q8_nb12,
                 nb1, nb2,
                 stream);
+            break;
+        case GGML_TYPE_MXFP4:
+            if (layout == GGML_LAYOUT_COALESCED) {
+                coalesced_mul_mat_vec_mxfp4_q8_1_id_sycl(
+                    nullptr,              // vx (unused with expert_ptrs)
+                    expert_ptrs_device,
+                    q8_1_buffer, dst_d, ids_device,
+                    ne00,                 // ncols (MXFP4)
+                    ne10,                 // ncols_y (Q8_1 row size for SoA ds offset)
+                    ne01,                 // nrows_per_expert
+                    ne02,                 // num_experts
+                    total_batches, n_ids, num_tokens, ne11,
+                    ids_nb0, ids_nb1,     // ids strides
+                    q8_nb11, q8_nb12,     // Q8_1 strides
+                    nb1, nb2,             // dst strides
+                    stream);
+            } else if (layout == GGML_LAYOUT_SOA) {
+                reorder_mul_mat_vec_mxfp4_q8_1_id_sycl(
+                    nullptr,              // vx (unused with expert_ptrs)
+                    expert_ptrs_device,
+                    q8_1_buffer, dst_d, ids_device,
+                    ne00,                 // ncols (MXFP4)
+                    ne10,                 // ncols_y (Q8_1 row size for SoA ds offset)
+                    ne01,                 // nrows_per_expert
+                    ne02,                 // num_experts
+                    total_batches, n_ids, num_tokens, ne11,
+                    ids_nb0, ids_nb1,     // ids strides
+                    q8_nb11, q8_nb12,     // Q8_1 strides
+                    nb1, nb2,             // dst strides
+                    stream);
+            } else {
+                // AOS layout
+                mul_mat_vec_mxfp4_q8_1_id_sycl(
+                    nullptr,              // vx (unused with expert_ptrs)
+                    expert_ptrs_device,
+                    q8_1_buffer, dst_d, ids_device,
+                    ne00,                 // ncols
+                    ne01,                 // nrows_per_expert
+                    total_batches, n_ids, num_tokens, ne11,
+                    stride_expert_x,
+                    ids_nb0, ids_nb1,     // ids strides
+                    q8_nb11, q8_nb12,     // Q8_1 strides
+                    nb1, nb2,             // dst strides
+                    stream);
+            }
             break;
         default:
             return false;

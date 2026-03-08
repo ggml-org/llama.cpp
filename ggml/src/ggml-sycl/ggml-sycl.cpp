@@ -219,7 +219,8 @@ struct fp16_weight_cache {
             slab_ptr = nullptr;
         }
         if (slab_ptr) {
-            ggml_sycl::alloc_registry::instance().register_alloc(slab_ptr, limit_bytes, -1,
+            ggml_sycl::alloc_registry::instance().register_alloc(slab_ptr, limit_bytes,
+                                                                 ggml_sycl_get_device_id_from_queue(queue),
                                                                  ggml_sycl::alloc_type::DEVICE);
             slab_size = limit_bytes;
             GGML_LOG_INFO("[SYCL] FP16 weight cache: allocated %.1fMB VRAM slab\n",
@@ -269,6 +270,7 @@ struct fp16_weight_cache {
         std::lock_guard<std::mutex> lock(mtx);
         if (slab_ptr) {
             queue.wait();  // Drain any pending copies
+            ggml_sycl::alloc_registry::instance().unregister_alloc(slab_ptr);
             sycl::free(slab_ptr, queue);
             slab_ptr  = nullptr;
             slab_size = 0;
@@ -471,6 +473,132 @@ static std::unordered_map<int, int> g_moe_layer_seq[GGML_SYCL_MAX_DEVICES];
 // Opt-out: GGML_SYCL_MOE_MULTI_GPU=0 to force single-GPU MoE.
 // Secondary GPUs write outputs to malloc_host staging, merged via primary compute queue.
 static std::atomic<bool> g_moe_multi_gpu_active{false};
+
+// -----------------------------------------------------------------------
+// Popularity-aware expert placement: warmup profiling + re-placement.
+// During the first WARMUP_TOKENS tokens, count activations per expert per
+// layer.  After warmup, sort experts by frequency and update the placement
+// table with popularity ranks.  Hot experts are placed on B580 (GPU0),
+// warm on B50 (GPU1), cold remain on CPU.
+// -----------------------------------------------------------------------
+static constexpr int MOE_MAX_LAYERS  = 128;
+static constexpr int MOE_MAX_EXPERTS = 256;
+
+struct moe_warmup_state {
+    std::atomic<uint32_t> counts[MOE_MAX_LAYERS][MOE_MAX_EXPERTS] = {};
+    std::atomic<int>      token_count{0};
+    std::atomic<bool>     warmup_done{false};
+    int                   warmup_tokens = 32;  // configurable via env
+    int                   n_layers      = 0;
+    int                   n_experts     = 0;
+
+    void init(int nl, int ne) {
+        n_layers  = std::min(nl, MOE_MAX_LAYERS);
+        n_experts = std::min(ne, MOE_MAX_EXPERTS);
+        // Read env var for warmup token count
+        const char * env = getenv("GGML_SYCL_MOE_WARMUP_TOKENS");
+        if (env) warmup_tokens = std::max(1, std::atoi(env));
+        GGML_LOG_INFO("[MOE-WARMUP] Profiling %d layers × %d experts for %d tokens\n",
+                      n_layers, n_experts, warmup_tokens);
+    }
+
+    void record(int layer_id, const int32_t * expert_ids, int n_selected) {
+        if (warmup_done.load(std::memory_order_acquire)) return;
+        if (layer_id < 0 || layer_id >= n_layers) return;
+        for (int i = 0; i < n_selected; i++) {
+            int eid = expert_ids[i];
+            if (eid >= 0 && eid < n_experts) {
+                counts[layer_id][eid].fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+    }
+
+    // Called once per token.  Returns true on the token that ends warmup.
+    bool tick_token() {
+        if (warmup_done.load(std::memory_order_acquire)) return false;
+        int t = token_count.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (t >= warmup_tokens) {
+            warmup_done.store(true, std::memory_order_release);
+            return true;
+        }
+        return false;
+    }
+};
+
+static moe_warmup_state g_moe_warmup;
+
+// Apply warmup results: sort experts by popularity and update placement table.
+// Called once after warmup completes.
+static void moe_apply_popularity_placement() {
+    auto & placement_table = ggml_sycl::get_expert_placement_table();
+    if (!placement_table.is_initialized()) return;
+
+    const int nl = g_moe_warmup.n_layers;
+    const int ne = g_moe_warmup.n_experts;
+
+    // Build reverse map: sequential layer index -> hash-based layer_id.
+    // g_moe_layer_seq[device] maps hash -> sequential; we invert it.
+    // Use device 0 as the canonical source (all devices share the same mapping).
+    std::unordered_map<int, int> seq_to_hash;
+    for (const auto & [hash_id, seq_id] : g_moe_layer_seq[0]) {
+        seq_to_hash[seq_id] = hash_id;
+    }
+
+    int total_placed = 0;
+    for (int l = 0; l < nl; l++) {
+        // Map sequential index back to hash-based layer_id for placement table
+        auto it = seq_to_hash.find(l);
+        if (it == seq_to_hash.end()) continue;
+        int hash_layer_id = it->second;
+
+        // Collect (count, expert_id) pairs and sort descending by count
+        std::vector<std::pair<uint32_t, int>> sorted_experts;
+        sorted_experts.reserve(ne);
+        for (int e = 0; e < ne; e++) {
+            uint32_t c = g_moe_warmup.counts[l][e].load(std::memory_order_relaxed);
+            sorted_experts.push_back({c, e});
+        }
+        std::sort(sorted_experts.begin(), sorted_experts.end(),
+                  [](const auto & a, const auto & b) { return a.first > b.first; });
+
+        // Assign popularity ranks using hash-based layer_id
+        for (int rank = 0; rank < (int)sorted_experts.size(); rank++) {
+            int eid = sorted_experts[rank].second;
+            placement_table.set_popularity(hash_layer_id, eid, rank);
+        }
+        total_placed += (int)sorted_experts.size();
+    }
+
+    GGML_LOG_INFO("[MOE-WARMUP] Popularity profiling complete: %d layers, %d total experts ranked\n",
+                  nl, total_placed);
+
+    // Log top-3 most popular experts per layer (first 4 layers)
+    for (int l = 0; l < std::min(nl, 4); l++) {
+        std::vector<std::pair<uint32_t, int>> layer_counts;
+        for (int e = 0; e < ne; e++) {
+            uint32_t c = g_moe_warmup.counts[l][e].load(std::memory_order_relaxed);
+            if (c > 0) layer_counts.push_back({c, e});
+        }
+        std::sort(layer_counts.begin(), layer_counts.end(),
+                  [](const auto & a, const auto & b) { return a.first > b.first; });
+        if (layer_counts.size() >= 3) {
+            GGML_LOG_INFO("[MOE-WARMUP] Layer %d top-3: expert %d (%u), expert %d (%u), expert %d (%u)\n",
+                          l,
+                          layer_counts[0].second, layer_counts[0].first,
+                          layer_counts[1].second, layer_counts[1].first,
+                          layer_counts[2].second, layer_counts[2].first);
+        }
+    }
+
+    // Signal that popularity data is now available.
+    // The next update_moe_ptr_table call for each layer will use
+    // ensure_cached_layout to pre-stage popular experts that weren't
+    // already GPU-resident. The eviction scoring in unified-cache.cpp
+    // also uses popularity_rank to retain hot experts in cache.
+    GGML_LOG_INFO("[MOE-WARMUP] Popularity ranks applied. Cache eviction "
+                  "now favors popular experts; pre-staging on next dispatch.\n");
+}
+
 // Per-secondary-GPU staging buffers (malloc_host, readable from primary GPU).
 // Allocated once during init, sized for max_dispatch_count * max_N floats.
 static float *       g_secondary_staging_buffer[GGML_SYCL_MAX_DEVICES]  = {};
@@ -684,6 +812,9 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
     placement_table.init(n_moe_layers, n_experts_per_layer);
     GGML_SYCL_DEBUG("[MOE-HYBRID] ExpertPlacementTable initialized: %d layers, %d experts/layer\n",
                     n_moe_layers, n_experts_per_layer);
+
+    // Initialize warmup profiling for popularity-aware placement
+    g_moe_warmup.init(n_moe_layers, n_experts_per_layer);
 
     // Populate placement table — initially all experts are CPU-only
     for (const auto & info : expert_list) {
@@ -2642,6 +2773,7 @@ static void ggml_sycl_release_xmx_aos_staging(ggml_tensor_extra_gpu * extra, int
     void * staging = extra->xmx_mxfp4_tiled_aos_staging[device];
     if (staging) {
         ggml_sycl::unified_cache_sub_runtime_bytes(device, extra->xmx_mxfp4_tiled_aos_staging_size[device]);
+        ggml_sycl::alloc_registry::instance().unregister_alloc(staging);
         sycl::free(staging, *stream);
         extra->xmx_mxfp4_tiled_aos_staging[device]      = nullptr;
         extra->xmx_mxfp4_tiled_aos_staging_size[device] = 0;
@@ -3666,6 +3798,22 @@ static void ggml_sycl_moe_ids_cache_new_graph() {
 }
 
 // ---------------------------------------------------------------------------
+// MoE expert probability threshold: skip low-probability experts in TG
+// ---------------------------------------------------------------------------
+// Maps layer_id -> pointer to the final ffn_moe_weights tensor for this graph.
+// Populated by a pre-scan in graph_compute_impl, consumed by mul_mat_id.
+static thread_local std::unordered_map<int, const ggml_tensor *> g_moe_weights_by_layer;
+
+static float ggml_sycl_moe_prob_threshold() {
+    static float threshold = -1.0f;
+    if (threshold < 0.0f) {
+        const char * env = getenv("GGML_SYCL_MOE_PROB_THRESHOLD");
+        threshold = env ? std::atof(env) : 0.0f;  // Default: disabled
+    }
+    return threshold;
+}
+
+// ---------------------------------------------------------------------------
 // Deferred CPU scatter: pipeline CPU expert compute with GPU work
 // ---------------------------------------------------------------------------
 // Instead of waiting for CPU compute to finish and scattering results
@@ -3698,8 +3846,14 @@ struct pending_cpu_scatter {
     bool   from_pool;         // Whether buffers came from pool
     bool   active;            // Whether there's a pending scatter
 
+    // Deferred scatter tracking: the MUL_MAT_ID output tensor that this
+    // scatter writes to.  Used by selective flush to skip flushing when
+    // the next op doesn't consume our destination tensor.
+    const ggml_tensor * dst_tensor;
+
     pending_cpu_scatter() : out_pinned(nullptr), act_pinned(nullptr),
-        stream(nullptr), sycl_ctx(), device_id(-1), from_pool(false), active(false) {}
+        stream(nullptr), sycl_ctx(), device_id(-1), from_pool(false), active(false),
+        dst_tensor(nullptr) {}
 };
 
 static thread_local pending_cpu_scatter g_pending_scatter = {};
@@ -3839,6 +3993,67 @@ static void flush_pending_cpu_scatter() {
     g_pending_scatter.stream     = nullptr;
     g_pending_scatter.sycl_ctx   = sycl::context();  // release ref
     g_pending_scatter.active     = false;
+    g_pending_scatter.dst_tensor = nullptr;
+}
+
+// Selective flush: only flush if the pending scatter's destination tensor
+// is consumed by the given op (i.e., dst_tensor matches one of consuming_dst's
+// sources).  Returns true if a flush was performed.
+// This enables expert deferral: cold CPU experts from layer N can compute
+// in parallel with layer N+1's GPU attention window (~381us) as long as
+// the attention ops don't read from the MoE output tensor.
+static bool flush_pending_cpu_scatter_if_consumed(const ggml_tensor * consuming_dst) {
+    if (!g_pending_scatter.active) return false;
+    if (!consuming_dst)           return false;
+
+    // Opt-out: GGML_SYCL_EXPERT_DEFER=0 disables deferral (always flush)
+    static std::atomic<int> expert_defer_mode{ -1 };
+    int defer_val = expert_defer_mode.load(std::memory_order_acquire);
+    if (defer_val < 0) {
+        const char * env = getenv("GGML_SYCL_EXPERT_DEFER");
+        int new_val = env ? std::atoi(env) : 1;  // Default: enabled
+        expert_defer_mode.compare_exchange_strong(defer_val, new_val,
+            std::memory_order_release, std::memory_order_acquire);
+        defer_val = expert_defer_mode.load(std::memory_order_acquire);
+    }
+    if (defer_val == 0) {
+        flush_pending_cpu_scatter();
+        return true;
+    }
+
+    const ggml_tensor * pending_dst = g_pending_scatter.dst_tensor;
+    if (!pending_dst) {
+        // No dst_tensor recorded — flush unconditionally (safety)
+        flush_pending_cpu_scatter();
+        return true;
+    }
+
+    // Check if any of consuming_dst's sources match the pending scatter's
+    // destination tensor.  GGML_MAX_SRC is typically 10.
+    for (int i = 0; i < GGML_MAX_SRC; i++) {
+        if (consuming_dst->src[i] == pending_dst) {
+            flush_pending_cpu_scatter();
+            return true;
+        }
+    }
+
+    // Also check view_src chain: if consuming_dst reads from a view
+    // of the pending tensor, we must flush.
+    for (int i = 0; i < GGML_MAX_SRC; i++) {
+        const ggml_tensor * s = consuming_dst->src[i];
+        while (s && s->view_src) {
+            s = s->view_src;
+            if (s == pending_dst) {
+                flush_pending_cpu_scatter();
+                return true;
+            }
+        }
+    }
+
+    GGML_SYCL_DEBUG("[MoE-DEFER] Deferring CPU scatter (pending=%s, op=%s)\n",
+                    pending_dst->name ? pending_dst->name : "?",
+                    consuming_dst->name ? consuming_dst->name : "?");
+    return false;  // No overlap — defer the scatter
 }
 
 // ----- Deferred secondary GPU scatter (async B50 dispatch) -----
@@ -8324,10 +8539,12 @@ static void tiered_kv_buffer_free(ggml_backend_buffer_t buffer) {
     auto * ctx = static_cast<tiered_kv_buffer_context *>(buffer->context);
     ggml_sycl_set_device(ctx->device);
     if (ctx->hot_base) {
+        ggml_sycl::alloc_registry::instance().unregister_alloc(ctx->hot_base);
         ggml_sycl::unified_cache_sub_runtime_bytes(ctx->device, ctx->hot_size, ggml_sycl::runtime_category::KV_CACHE);
         SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ctx->hot_base, *ctx->stream)));
     }
     if (ctx->cold_base) {
+        ggml_sycl::alloc_registry::instance().unregister_alloc(ctx->cold_base);
         ggml_sycl::unified_cache_sub_runtime_host_bytes(ctx->cold_size);
         SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ctx->cold_base, *ctx->stream)));
     }
@@ -8563,6 +8780,7 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
         if (!cold_base) {
             GGML_LOG_ERROR("[KV-TIER] Failed to allocate %zu bytes host pinned memory for cold region\n", cold_size);
             if (hot_base) {
+                ggml_sycl::alloc_registry::instance().unregister_alloc(hot_base);
                 ggml_sycl::unified_cache_sub_runtime_bytes(device, hot_size, ggml_sycl::runtime_category::KV_CACHE);
                 sycl::free(hot_base, *buft_ctx->stream);
             }
@@ -11522,6 +11740,7 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
             ggml_sycl_buffer & b = buffer_pool[i];
 
             if (b.ptr != nullptr) {
+                ggml_sycl::alloc_registry::instance().unregister_alloc(b.ptr);
                 ggml_sycl::unified_cache_sub_runtime_bytes(device, b.size);
                 SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(b.ptr, *qptr)));
                 pool_size -= b.size;
@@ -11607,6 +11826,7 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
             }
         }
         GGML_LOG_WARN("WARNING: sycl buffer pool full, increase MAX_sycl_BUFFERS\n");
+        ggml_sycl::alloc_registry::instance().unregister_alloc(ptr);
         ggml_sycl::unified_cache_sub_runtime_bytes(device, size);
         SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ptr, *qptr)));
         pool_size -= size;
@@ -11633,6 +11853,7 @@ struct ggml_sycl_pool_host : public ggml_sycl_pool {
         for (int i = 0; i < MAX_POOL_SIZE; ++i) {
             ggml_sycl_buffer & b = buffer_pool[i];
             if (b.ptr != nullptr) {
+                ggml_sycl::alloc_registry::instance().unregister_alloc(b.ptr);
                 ggml_sycl::unified_cache_sub_runtime_host_bytes(b.size);
                 SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(b.ptr, *qptr)));
                 b.ptr = nullptr;
@@ -11696,6 +11917,7 @@ struct ggml_sycl_pool_host : public ggml_sycl_pool {
                 return;
             }
         }
+        ggml_sycl::alloc_registry::instance().unregister_alloc(ptr);
         ggml_sycl::unified_cache_sub_runtime_host_bytes(size);
         SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ptr, *qptr)));
         pool_size -= size;
@@ -11723,6 +11945,7 @@ ggml_backend_sycl_context::~ggml_backend_sycl_context() {
         if (entry.device_ids) {
             ggml_sycl::unified_cache_sub_runtime_bytes(device, entry.device_bytes);
             try {
+                ggml_sycl::alloc_registry::instance().unregister_alloc(entry.device_ids);
                 sycl::free(entry.device_ids, *stream());
             } catch (...) {
             }
@@ -11803,6 +12026,7 @@ void ggml_backend_sycl_context::free_staging_buffer() {
         return;
     }
     sycl::queue & q = *stream(staging_buffer_device_, 0);
+    ggml_sycl::alloc_registry::instance().unregister_alloc(staging_buffer_);
     sycl::free(staging_buffer_, q);
     ggml_sycl::unified_cache_sub_runtime_bytes(staging_buffer_device_, staging_buffer_size_,
                                                ggml_sycl::runtime_category::STAGING);
@@ -18617,6 +18841,7 @@ static bool convert_tensor_layout(ggml_tensor * tensor,
             if (device_staging && extra->xmx_mxfp4_tiled_aos_staging_size[device_id] < aos_expert_size) {
                 ggml_sycl::unified_cache_sub_runtime_bytes(device_id,
                                                            extra->xmx_mxfp4_tiled_aos_staging_size[device_id]);
+                ggml_sycl::alloc_registry::instance().unregister_alloc(device_staging);
                 sycl::free(device_staging, *stream);
                 device_staging = nullptr;
             }
@@ -19735,6 +19960,7 @@ const int32_t * ggml_sycl_get_moe_ids_device_ptr(ggml_backend_sycl_context & ctx
     if (!entry.device_ids || entry.device_bytes < ids_bytes) {
         if (entry.device_ids) {
             ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, entry.device_bytes);
+            ggml_sycl::alloc_registry::instance().unregister_alloc(entry.device_ids);
             sycl::free(entry.device_ids, *stream);
         }
         ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, ids_bytes);
@@ -19997,7 +20223,8 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
         // Using the existing device_ptr avoids redundant staging through
         // ensure_cached_layout and saves VRAM budget.
         //
-        // IMPORTANT: GPU0 prefetch pool stores raw AOS bytes (no layout conversion).
+        // Check placement table for pre-staged experts (secondary GPU or prefetch pool).
+        // Prefetch pool copies raw AOS bytes without layout conversion.
         // Only use the shortcut when the requested layout is AOS.  For SOA/COALESCED,
         // fall through to ensure_cached_layout which performs the AOS→SOA conversion.
         {
@@ -20396,6 +20623,7 @@ static bool graph_preload_moe_experts(ggml_backend_sycl_context & ctx, ggml_cgra
             if (!ids_entry.device_ids || ids_entry.device_bytes < ids_bytes) {
                 if (ids_entry.device_ids) {
                     ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, ids_entry.device_bytes);
+                    ggml_sycl::alloc_registry::instance().unregister_alloc(ids_entry.device_ids);
                     sycl::free(ids_entry.device_ids, *ctx.stream());
                 }
                 ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, ids_bytes);
@@ -25651,8 +25879,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                               src0->name ? src0->name : "?", (int)src0->type);
             }
 
-            // Flush any deferred scatter from the previous MUL_MAT_ID
-            flush_pending_cpu_scatter();
+            // Selective flush: only flush if current op consumes the pending
+            // scatter's output tensor.  Enables CPU expert deferral overlap.
+            flush_pending_cpu_scatter_if_consumed(dst);
             flush_pending_secondary_scatter();
 
             // --- Gate+Up+SiLU fusion for single-GPU CPU-TG fast-path ---
@@ -26023,6 +26252,77 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             const size_t out_floats = n_cpu * static_cast<size_t>(N);
             tl_out_pinned.ensure(out_floats, *stream);
 
+            // --- Smart expert reduction: skip low-probability experts ---
+            // Read routing weights from the pre-scanned ffn_moe_weights tensor
+            // and zero output for experts below the probability threshold.
+            // After skipping, renormalize remaining expert outputs so their
+            // weighted sum equals the original total contribution.
+            const float prob_threshold = ggml_sycl_moe_prob_threshold();
+            int skip_flags_stack[16] = {};
+            std::vector<int> skip_flags_heap;
+            int * skip_flags = skip_flags_stack;
+            float renorm_scale = 1.0f;  // output scaling factor for renormalization
+
+            if (n_cpu > 16) {
+                skip_flags_heap.resize(n_cpu, 0);
+                skip_flags = skip_flags_heap.data();
+            }
+
+            if (prob_threshold > 0.0f) {
+                // Parse layer ID to find the weights tensor
+                const char * tname = src0->name ? src0->name : "";
+                int layer = parse_layer_id_from_name(tname);
+                if (layer >= 0) {
+                    auto wit = g_moe_weights_by_layer.find(layer);
+                    if (wit != g_moe_weights_by_layer.end()) {
+                        const ggml_tensor * wt = wit->second;
+                        // weights shape: [1, n_expert_used, n_tokens]
+                        // For batch=1 TG: n_expert_used floats
+                        if (wt->data && static_cast<size_t>(wt->ne[1]) == n_cpu) {
+                            // Read weights to host — small copy (4-8 floats)
+                            float wt_stack[16];
+                            std::vector<float> wt_heap;
+                            float * wt_host = wt_stack;
+                            if (n_cpu > 16) {
+                                wt_heap.resize(n_cpu);
+                                wt_host = wt_heap.data();
+                            }
+                            stream->memcpy(wt_host, wt->data,
+                                           n_cpu * sizeof(float)).wait();
+
+                            float w_total = 0.0f, w_kept = 0.0f;
+                            for (size_t ci = 0; ci < n_cpu; ci++) {
+                                w_total += wt_host[ci];
+                                if (wt_host[ci] < prob_threshold) {
+                                    skip_flags[ci] = 1;
+                                } else {
+                                    w_kept += wt_host[ci];
+                                }
+                            }
+
+                            // Renormalize: scale remaining outputs by total/kept
+                            // so the weighted sum preserves the original magnitude.
+                            if (w_kept > 0.0f && w_kept < w_total) {
+                                renorm_scale = w_total / w_kept;
+                            }
+
+                            static std::atomic<int> skip_log{0};
+                            if (skip_log.fetch_add(1, std::memory_order_relaxed) < 3) {
+                                int n_skip = 0;
+                                for (size_t ci = 0; ci < n_cpu; ci++) {
+                                    if (skip_flags[ci]) n_skip++;
+                                }
+                                if (n_skip > 0) {
+                                    GGML_LOG_INFO("[MOE-SKIP] layer %d: skipping %d/%zu experts"
+                                                  " (threshold=%.3f, renorm=%.3f)\n",
+                                                  layer, n_skip, n_cpu, prob_threshold, renorm_scale);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Build task array on stack for small expert counts, heap for large.
             // Typical: 8 experts (top-K), max ~16.
             constexpr size_t STACK_TASKS = 16;
@@ -26034,22 +26334,44 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 tasks_ptr = heap_tasks.data();
             }
 
+            int n_tasks = 0;
             for (size_t ci = 0; ci < n_cpu; ci++) {
+                float * out_ptr = tl_out_pinned.ptr + ci * static_cast<size_t>(N);
+                if (skip_flags[ci]) {
+                    // Zero output for skipped expert — downstream MUL will
+                    // apply non-zero weight to zero, producing zero contribution.
+                    memset(out_ptr, 0, static_cast<size_t>(N) * sizeof(float));
+                    continue;
+                }
                 const int32_t expert_id = ids_data[ci];
                 GGML_ASSERT(expert_id >= 0 && expert_id < n_as);
-                tasks_ptr[ci].weight_host = static_cast<const char *>(src0->data)
+                tasks_ptr[n_tasks].weight_host = static_cast<const char *>(src0->data)
                                             + static_cast<size_t>(expert_id) * nb02;
-                tasks_ptr[ci].act_host    = act_host_ptr;
-                tasks_ptr[ci].output_host = tl_out_pinned.ptr + ci * static_cast<size_t>(N);
-                tasks_ptr[ci].type        = src0->type;
-                tasks_ptr[ci].K           = static_cast<int>(K);
-                tasks_ptr[ci].N           = static_cast<int>(N);
+                tasks_ptr[n_tasks].act_host    = act_host_ptr;
+                tasks_ptr[n_tasks].output_host = out_ptr;
+                tasks_ptr[n_tasks].type        = src0->type;
+                tasks_ptr[n_tasks].K           = static_cast<int>(K);
+                tasks_ptr[n_tasks].N           = static_cast<int>(N);
+                n_tasks++;
             }
 
             // Call batched compute inline — no thread pool, no future, no deferred scatter.
             // ggml_sycl_cpu_expert_mul_mat_batched handles activation pre-quantization
             // and TBB parallel row dispatch with multi-row SIMD kernels internally.
-            ggml_sycl_cpu_expert_mul_mat_batched(tasks_ptr, static_cast<int>(n_cpu));
+            if (n_tasks > 0) {
+                ggml_sycl_cpu_expert_mul_mat_batched(tasks_ptr, n_tasks);
+
+                // Renormalize non-skipped expert outputs so the downstream
+                // weighted sum preserves the original magnitude.
+                if (renorm_scale != 1.0f) {
+                    for (int ti = 0; ti < n_tasks; ti++) {
+                        float * out = tasks_ptr[ti].output_host;
+                        for (int j = 0; j < tasks_ptr[ti].N; j++) {
+                            out[j] *= renorm_scale;
+                        }
+                    }
+                }
+            }
 
             if (prof_enabled) { t3 = hrc::now(); }
 
@@ -26467,20 +26789,18 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     const bool   cpu_type_ok      = cpu_traits_check && cpu_traits_check->vec_dot;
     const bool moe_hybrid_active = (moe_hybrid_val != 0) && use_expert_cache && (ne12 == 1) && cpu_type_ok;
 
-    // Expert cache stores raw AOS bytes (no layout conversion during H2D).
-    // Force AOS layout so the GPU kernel interprets the data correctly.
-    // This MUST happen before update_moe_ptr_table which stages data in route_layout.
-    // local_extra fields are updated later (after local_extra is declared).
-    if (moe_hybrid_active && route_layout != GGML_LAYOUT_AOS) {
-        route_layout = GGML_LAYOUT_AOS;
-    }
+    // Expert cache stages data in the requested layout via ensure_cached_layout.
+    // No longer force AOS — GPU0 batched dispatch now supports SOA/Coalesced MXFP4
+    // kernels. CPU dispatch reads src0->data directly (host AOS) regardless of
+    // route_layout.  B50 dispatch uses its own SOA staging.
 
     const void * const * expert_ptrs_host = nullptr;
     if (use_expert_cache) {
-        // force_cache_aos=true ensures experts are staged to GPU memory even for AoS layout
-        // This is critical for mmap'd weights which cannot be accessed directly by GPU kernels
+        // Stage experts in the requested layout (SOA/Coalesced for MXFP4, AOS otherwise).
+        // force_cache_aos=true only when layout is AOS (ensures mmap'd weights get staged).
+        const bool need_force_aos = (route_layout == GGML_LAYOUT_AOS);
         if (!ggml_sycl_update_moe_ptr_table(ctx, src0, ids, route_layout, nullptr, /*allow_all_experts=*/false, nullptr,
-                                            false, /*force_cache_aos=*/true)) {
+                                            false, /*force_cache_aos=*/need_force_aos)) {
             GGML_LOG_ERROR("[MoE] Failed to update expert pointer table for %s\n", src0->name);
         } else if (src0_extra && ctx.device >= 0 && ctx.device < GGML_SYCL_MAX_DEVICES) {
             const auto & host_ptrs = src0_extra->moe_expert_ptrs_host[ctx.device];
@@ -26652,8 +26972,11 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             // is incompatible with SYCL graph recording.
             ctx.moe_graphs_disabled_once = true;
 
-            // Flush any deferred CPU scatter from the previous MUL_MAT_ID
-            flush_pending_cpu_scatter();
+            // Selective flush: only flush deferred CPU scatter if the current
+            // MUL_MAT_ID's inputs overlap with the pending scatter's output.
+            // This enables expert deferral: cold CPU experts from layer N
+            // compute in parallel with layer N+1's GPU attention window.
+            flush_pending_cpu_scatter_if_consumed(dst);
             // Only flush secondary scatter if ring buffers are full.
             // This allows inter-layer pipelining: layer N+1's B50 dispatch
             // can start while layer N's results are still being scattered.
@@ -26840,6 +27163,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 g_pending_scatter.device_id  = ctx.device;
                 g_pending_scatter.from_pool  = from_pool;
                 g_pending_scatter.active     = true;
+                g_pending_scatter.dst_tensor = dst;  // track MUL_MAT_ID output for selective flush
 
                 g_pending_scatter.entries.clear();
                 g_pending_scatter.entries.reserve(entries.size());
@@ -27200,23 +27524,45 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                 layer_id, gpu_entries.size(), secondary_count,
                                 cpu_entries.size());
 
+                // Compute sequential layer ID for warmup/stats (CPU-TG path)
+                int seq_layer_id_cputg = -1;
+                {
+                    auto & seq_map = g_moe_layer_seq[ctx.device];
+                    auto   it      = seq_map.find(layer_id);
+                    if (it != seq_map.end()) {
+                        seq_layer_id_cputg = it->second;
+                    }
+                }
+
+                // Record expert activations for warmup profiling (CPU-TG path)
+                if (!g_moe_warmup.warmup_done.load(std::memory_order_acquire)
+                    && seq_layer_id_cputg >= 0) {
+                    int scratch_ids[32];
+                    int n_ids_total = 0;
+                    for (const auto & e : gpu_entries) {
+                        if (n_ids_total < 32) scratch_ids[n_ids_total++] = e.expert_id;
+                    }
+                    for (int d = 1; d < n_gpu_devs; d++) {
+                        for (const auto & e : per_gpu_entries[d]) {
+                            if (n_ids_total < 32) scratch_ids[n_ids_total++] = e.expert_id;
+                        }
+                    }
+                    for (const auto & e : cpu_entries) {
+                        if (n_ids_total < 32) scratch_ids[n_ids_total++] = e.expert_id;
+                    }
+                    g_moe_warmup.record(seq_layer_id_cputg, scratch_ids, n_ids_total);
+
+                    if (g_moe_warmup.tick_token()) {
+                        moe_apply_popularity_placement();
+                    }
+                }
+
                 // --- MoE dispatch stats for CPU-TG path ---
                 if (ggml_sycl::MoeDispatchStats::enabled()) {
                     auto & stats = ggml_sycl::get_moe_dispatch_stats(ctx.device);
                     stats.record_dispatch(static_cast<int>(gpu_entries.size() + secondary_count),
                                           0, 0,
                                           static_cast<int>(cpu_entries.size()), 0);
-
-                    // Record prediction accuracy (CPU-TG still has predictor state
-                    // from the previous token's record_actual calls)
-                    int seq_layer_id_cputg = -1;
-                    {
-                        auto & seq_map = g_moe_layer_seq[ctx.device];
-                        auto it = seq_map.find(layer_id);
-                        if (it != seq_map.end()) {
-                            seq_layer_id_cputg = it->second;
-                        }
-                    }
 
                     // Collect actual expert IDs (all dispatch targets)
                     std::vector<int> actual_ids_cputg;
@@ -27454,6 +27800,30 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
             moe_token_counter.fetch_add(1, std::memory_order_relaxed);
 
+            // Record expert activations for warmup profiling
+            if (!g_moe_warmup.warmup_done.load(std::memory_order_acquire)) {
+                // Collect all dispatched expert IDs (GPU0 + secondary + CPU)
+                int scratch_ids[32];
+                int n_ids_total = 0;
+                for (const auto & e : gpu_entries) {
+                    if (n_ids_total < 32) scratch_ids[n_ids_total++] = e.expert_id;
+                }
+                for (int d = 1; d < n_gpu_devs; d++) {
+                    for (const auto & e : per_gpu_entries[d]) {
+                        if (n_ids_total < 32) scratch_ids[n_ids_total++] = e.expert_id;
+                    }
+                }
+                for (const auto & e : cpu_entries) {
+                    if (n_ids_total < 32) scratch_ids[n_ids_total++] = e.expert_id;
+                }
+                g_moe_warmup.record(seq_layer_id, scratch_ids, n_ids_total);
+
+                // Tick token and trigger re-placement when warmup ends
+                if (g_moe_warmup.tick_token()) {
+                    moe_apply_popularity_placement();
+                }
+            }
+
             {
                 size_t secondary_total = 0;
                 for (int d = 1; d < n_gpu_devs; d++) {
@@ -27522,7 +27892,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         gpu_id_slots.data(),
                         static_cast<int>(gpu_entries.size()),
                         static_cast<int>(n_as),
-                        n_ids);
+                        n_ids,
+                        route_layout);
                 }
 
                 // Fallback: per-expert dispatch if batched path unavailable
@@ -28315,11 +28686,13 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
         return false;
     }
 
-    // Flush any deferred scatter from a previous MUL_MAT_ID.
-    // Must happen before dispatching any op that might read from a
-    // MUL_MAT_ID output tensor.  The in-order queue serializes the
-    // scatter memcpy before subsequent GPU kernels.
-    flush_pending_cpu_scatter();
+    // Selective flush: only flush deferred CPU scatter if this op
+    // consumes the pending scatter's output tensor.  This preserves
+    // the expert deferral window — cold CPU experts from layer N
+    // compute in parallel with layer N+1's GPU attention ops.
+    // Safety net: graph boundary flush at graph_compute_impl ensures
+    // nothing leaks across graphs.
+    flush_pending_cpu_scatter_if_consumed(dst);
     flush_pending_secondary_scatter();
 
     // Debug: trace operations in multi-process mode
@@ -30073,6 +30446,24 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     ggml_sycl_data_ptr_cache_new_graph();
     ggml_sycl_cpu_quant_cache_new_graph();
     ggml_sycl_moe_ids_cache_new_graph();
+
+    // Pre-scan graph for MoE routing weights tensors.
+    // Maps layer_id -> final weights tensor for expert probability threshold.
+    g_moe_weights_by_layer.clear();
+    if (ggml_sycl_moe_prob_threshold() > 0.0f) {
+        for (int i = 0; i < cgraph->n_nodes; i++) {
+            const ggml_tensor * node = cgraph->nodes[i];
+            if (!node->name) continue;
+            // Match ffn_moe_weights variants; take the LAST one per layer
+            // (after softmax/norm/scale transformations).
+            if (strstr(node->name, "ffn_moe_weights")) {
+                int layer = parse_layer_id_from_name(node->name);
+                if (layer >= 0) {
+                    g_moe_weights_by_layer[layer] = node;
+                }
+            }
+        }
+    }
 
     // Flush any deferred CPU scatter from the previous graph.
     ggml_sycl_cpu_tg_flush_pending();

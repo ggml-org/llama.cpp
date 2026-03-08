@@ -298,6 +298,14 @@ static inline void simd_mxfp4_q8_0_4row_tile(
     const void * GGML_RESTRICT vx2, const void * GGML_RESTRICT vx3,
     const void * GGML_RESTRICT vy,
     __m256 & acc0, __m256 & acc1, __m256 & acc2, __m256 & acc3);
+// Multi-activation MXFP4 tile: 1 weight row × 4 activation rows.
+// For PP mode where same expert gets multiple tokens.
+static inline void simd_mxfp4_1row_4act_tile(
+    int ib_start, int ib_end,
+    const void * GGML_RESTRICT vx,
+    const void * GGML_RESTRICT vy0, const void * GGML_RESTRICT vy1,
+    const void * GGML_RESTRICT vy2, const void * GGML_RESTRICT vy3,
+    __m256 & acc0, __m256 & acc1, __m256 & acc2, __m256 & acc3);
 // Fused gate+up+SiLU: computes SiLU(dot(gate_row, act)) * dot(up_row, act)
 static inline void simd_fused_gate_up_silu_q4_0_q8_0(
     int K_elem, float * GGML_RESTRICT out,
@@ -677,6 +685,115 @@ void ggml_sycl_cpu_expert_mul_mat_batched(
             task_act_q[i] = it->second.data();
         }
     }
+
+    // --- Phase 1.5: Multi-activation GEMM for PP mode (MXFP4) ---
+    // When multiple tasks share the same weight_host (same expert, different
+    // tokens in PP), we can load each weight block once and dot with all
+    // activation rows.  This saves weight memory bandwidth proportional to
+    // the number of grouped activations.
+    //
+    // Group tasks by weight_host pointer.  If any expert has >1 activation,
+    // process that expert with the multi-activation kernel and mark its tasks
+    // as handled (set task_act_q[i] = nullptr so Phase 2 skips them).
+#if defined(__AVX2__)
+    {
+        // Build expert groups: weight_host → list of task indices
+        std::unordered_map<const void *, std::vector<int>> expert_groups;
+        for (int i = 0; i < n_tasks; i++) {
+            if (!task_act_q[i] || !tasks[i].weight_host || tasks[i].N <= 0) continue;
+            if (tasks[i].type != GGML_TYPE_MXFP4) continue;
+            expert_groups[tasks[i].weight_host].push_back(i);
+        }
+
+        // Process experts with multiple activations using multi-act kernel
+        for (auto & [wptr, group] : expert_groups) {
+            if (group.size() < 2) continue;  // single activation — Phase 2 handles it
+
+            const int M = static_cast<int>(group.size());  // number of activation rows
+            const auto & t0 = tasks[group[0]];
+            const int N = t0.N;            // output rows per expert
+            const int K = t0.K;
+            const size_t row_stride = ggml_row_size(t0.type, K);
+            const int nb = K / QK_MXFP4;
+
+            // Collect Q8_0 activation pointers for all tokens in this group
+            std::vector<const uint8_t *> act_ptrs(M);
+            std::vector<float *>         out_ptrs(M);
+            for (int a = 0; a < M; a++) {
+                act_ptrs[a] = task_act_q[group[a]];
+                out_ptrs[a] = tasks[group[a]].output_host;
+            }
+
+#if GGML_SYCL_HAS_TBB
+            // Parallel over weight rows, inner loop over activation groups
+            const uint8_t ** act_data = act_ptrs.data();
+            float **         out_data = out_ptrs.data();
+            ggml_sycl_cpu_arena().execute([&] {
+                ggml_sycl_tbb::parallel_for(
+                    ggml_sycl_tbb::blocked_range<int>(0, N, 4),
+                    [wptr, act_data, out_data, M, nb, row_stride, K](
+                        const ggml_sycl_tbb::blocked_range<int> & range) {
+                        constexpr int TILE_BLK = 16;
+                        for (int r = range.begin(); r < range.end(); r++) {
+                            const char * weight_row =
+                                (const char *)wptr + (size_t)r * row_stride;
+                            // Process 4 activations at a time with K-tiling
+                            int a = 0;
+                            for (; a + 3 < M; a += 4) {
+                                __m256 acc0 = _mm256_setzero_ps();
+                                __m256 acc1 = _mm256_setzero_ps();
+                                __m256 acc2 = _mm256_setzero_ps();
+                                __m256 acc3 = _mm256_setzero_ps();
+                                for (int ib_start = 0; ib_start < nb; ib_start += TILE_BLK) {
+                                    int ib_end = std::min(ib_start + TILE_BLK, nb);
+                                    simd_mxfp4_1row_4act_tile(
+                                        ib_start, ib_end,
+                                        weight_row,
+                                        act_data[a + 0], act_data[a + 1],
+                                        act_data[a + 2], act_data[a + 3],
+                                        acc0, acc1, acc2, acc3);
+                                }
+                                out_data[a + 0][r] = ggml_sycl_hsum_float_8(acc0);
+                                out_data[a + 1][r] = ggml_sycl_hsum_float_8(acc1);
+                                out_data[a + 2][r] = ggml_sycl_hsum_float_8(acc2);
+                                out_data[a + 3][r] = ggml_sycl_hsum_float_8(acc3);
+                            }
+                            // Remainder: 1 activation at a time via vec_dot
+                            for (; a < M; a++) {
+                                float dot = 0.0f;
+                                const auto * cpu_traits = ggml_get_type_traits_cpu(GGML_TYPE_MXFP4);
+                                cpu_traits->vec_dot(K, &dot, sizeof(float),
+                                                    weight_row, 0, act_data[a], 0, 1);
+                                out_data[a][r] = dot;
+                            }
+                        }
+                    });
+            });
+#else
+            // Sequential fallback
+            for (int r = 0; r < N; r++) {
+                const char * weight_row =
+                    (const char *)wptr + (size_t)r * row_stride;
+                for (int a = 0; a < M; a++) {
+                    float dot = 0.0f;
+                    const auto * cpu_traits = ggml_get_type_traits_cpu(GGML_TYPE_MXFP4);
+                    cpu_traits->vec_dot(K, &dot, sizeof(float),
+                                        weight_row, 0, act_ptrs[a], 0, 1);
+                    out_ptrs[a][r] = dot;
+                }
+            }
+#endif
+
+            // Mark grouped tasks as handled so Phase 2 skips them
+            for (int idx : group) {
+                task_act_q[idx] = nullptr;
+            }
+
+            GGML_SYCL_DEBUG("[EXPERT-CPU] Multi-act GEMM: expert=%p, M=%d acts, N=%d rows\n",
+                            wptr, M, N);
+        }
+    }
+#endif
 
     // --- Phase 2: Row-level parallel_for ---
     // Flatten all experts' rows into a single parallel_for for max load balance.
@@ -2511,6 +2628,72 @@ static inline void simd_mxfp4_q8_0_4row_tile(
     }
 }
 
+// Multi-activation MXFP4 tile: 1 weight row × 4 activation rows.
+// For PP mode where the same expert gets multiple tokens: load weight block
+// once, dot with 4 different Q8_0 activation vectors.
+// Produces 4 output values: out[0..3] = weight_row · act[0..3].
+static inline void simd_mxfp4_1row_4act_tile(
+    int ib_start, int ib_end,
+    const void * GGML_RESTRICT vx,    // weight row
+    const void * GGML_RESTRICT vy0,   // activation 0
+    const void * GGML_RESTRICT vy1,   // activation 1
+    const void * GGML_RESTRICT vy2,   // activation 2
+    const void * GGML_RESTRICT vy3,   // activation 3
+    __m256 & acc0, __m256 & acc1, __m256 & acc2, __m256 & acc3
+) {
+    const block_mxfp4 * GGML_RESTRICT x  = (const block_mxfp4 *)vx;
+    const block_q8_0  * GGML_RESTRICT y0 = (const block_q8_0 *)vy0;
+    const block_q8_0  * GGML_RESTRICT y1 = (const block_q8_0 *)vy1;
+    const block_q8_0  * GGML_RESTRICT y2 = (const block_q8_0 *)vy2;
+    const block_q8_0  * GGML_RESTRICT y3 = (const block_q8_0 *)vy3;
+
+    const __m128i values128 = _mm_loadu_si128((const __m128i *)kvalues_mxfp4);
+    const __m128i m4b       = _mm_set1_epi8(0x0f);
+
+    for (int ib = ib_start; ib < ib_end; ib++) {
+        // Load and dequant weight block ONCE (reused across 4 activations)
+        const __m128i q4bits = _mm_loadu_si128((const __m128i *)x[ib].qs);
+        const __m256i qx = GGML_SYCL_MM256_SET_M128I(
+            _mm_shuffle_epi8(values128, _mm_and_si128(_mm_srli_epi16(q4bits, 4), m4b)),
+            _mm_shuffle_epi8(values128, _mm_and_si128(q4bits, m4b)));
+        const float xe = GGML_E8M0_TO_FP32_HALF(x[ib].e);
+
+#define MXFP4_DOT_ACT_TILE(yr, accr) \
+        { \
+            const float   q8_d = cpu_half_to_f32((yr)[ib].d); \
+            const __m256i qy   = _mm256_loadu_si256((const __m256i *)(yr)[ib].qs); \
+            const float   d    = q8_d * xe; \
+            GGML_MXFP4_DOT_ACT_ACCUM(qx, qy, d, accr) \
+        }
+
+#if defined(__AVXVNNIINT8__)
+#define GGML_MXFP4_DOT_ACT_ACCUM(qx, qy, d, acc) \
+            { \
+                const __m256i prod = _mm256_dpbssd_epi32(_mm256_setzero_si256(), qx, qy); \
+                acc = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod), acc); \
+            }
+#else
+#define GGML_MXFP4_DOT_ACT_ACCUM(qx, qy, d, acc) \
+            { \
+                const __m256i ax     = _mm256_sign_epi8(qx, qx); \
+                const __m256i sy     = _mm256_sign_epi8(qy, qx); \
+                const __m256i dot    = _mm256_maddubs_epi16(ax, sy); \
+                const __m256i ones   = _mm256_set1_epi16(1); \
+                const __m256i summed = _mm256_madd_epi16(ones, dot); \
+                acc = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(summed), acc); \
+            }
+#endif
+
+        MXFP4_DOT_ACT_TILE(y0, acc0)
+        MXFP4_DOT_ACT_TILE(y1, acc1)
+        MXFP4_DOT_ACT_TILE(y2, acc2)
+        MXFP4_DOT_ACT_TILE(y3, acc3)
+
+#undef MXFP4_DOT_ACT_TILE
+#undef GGML_MXFP4_DOT_ACT_ACCUM
+    }
+}
+
 // INT4 fast-path: 4-row Q4_0 x Q8_0 dot product WITHOUT zero-point offset.
 // Treats nibbles as unsigned [0,15] and uses _mm256_maddubs_epi16 directly
 // (first arg unsigned, second signed). This eliminates the sub_epi8 + sign
@@ -2545,6 +2728,18 @@ static inline void simd_mul_mat_q4_0_q8_0_4row_int4(
     __m256 acc3 = _mm256_setzero_ps();
 
     // Macro for one row: unsigned nibble x signed Q8, no offset subtraction.
+#if defined(__AVXVNNI__)
+    // _mm256_dpbusd_epi32: unsigned x signed -> int32 accumulate (1 instruction)
+#define PROCESS_ROW_INT4(xrow, acc)                                            \
+    {                                                                          \
+        const float   d  = cpu_half_to_f32(xrow[ib].d) * q8_d;             \
+        const __m256i qx = ggml_sycl_bytes_from_nibbles_32(xrow[ib].qs);      \
+        const __m256i prod = _mm256_dpbusd_epi32(_mm256_setzero_si256(),       \
+                                                  qx, qy);                    \
+        acc = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod),     \
+                              acc);                                            \
+    }
+#else
     // _mm256_maddubs_epi16 treats arg1 as unsigned, arg2 as signed.
 #define PROCESS_ROW_INT4(xrow, acc)                                            \
     {                                                                          \
@@ -2556,6 +2751,7 @@ static inline void simd_mul_mat_q4_0_q8_0_4row_int4(
         acc = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(summed),   \
                               acc);                                            \
     }
+#endif
 
     for (int ib = 0; ib < nb; ib++) {
         const float   q8_d = cpu_half_to_f32(y[ib].d);

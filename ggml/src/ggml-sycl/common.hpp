@@ -503,6 +503,7 @@ using tensor_layout_info = ggml_tensor_layout;
 
 static inline void ggml_sycl_release_layout(tensor_layout_info & layout, sycl::queue & q) {
     if (layout.owns_memory && layout.data_ptr) {
+        ggml_sycl::alloc_registry::instance().unregister_alloc(layout.data_ptr);
         sycl::free(layout.data_ptr, q);
         layout.data_ptr    = nullptr;
         layout.owns_memory = false;
@@ -1505,6 +1506,8 @@ inline sycl::usm::alloc ggml_sycl_get_alloc_type(const void * ptr) {
             return sycl::usm::alloc::shared;
         case ggml_sycl::alloc_type::MMAP:
             return sycl::usm::alloc::host;
+        case ggml_sycl::alloc_type::UNKNOWN:
+            return sycl::usm::alloc::unknown;
     }
     return sycl::usm::alloc::unknown;
 }
@@ -1548,6 +1551,7 @@ inline void ggml_sycl_free_device_tracked_bytes(void * ptr, size_t bytes, sycl::
     if (!ptr) {
         return;
     }
+    ggml_sycl::alloc_registry::instance().unregister_alloc(ptr);
     sycl::free(ptr, queue);
     ggml_sycl::unified_cache_sub_runtime_bytes(ggml_sycl_get_device_id_from_queue(queue), bytes);
 }
@@ -1575,6 +1579,7 @@ inline void ggml_sycl_free_host_tracked_bytes(void * ptr, size_t bytes, sycl::qu
     if (!ptr) {
         return;
     }
+    ggml_sycl::alloc_registry::instance().unregister_alloc(ptr);
     sycl::free(ptr, queue);
     ggml_sycl::unified_cache_sub_runtime_host_bytes(bytes);
 }

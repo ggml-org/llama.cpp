@@ -25,6 +25,7 @@
 #include <sycl/sycl.hpp>
 
 #include "ggml-impl.h"
+#include "alloc-registry.hpp"
 
 // Forward-declare to avoid circular include with common.hpp
 void * ggml_sycl_malloc_device(size_t size, const sycl::queue & queue, const char * tag);
@@ -133,6 +134,7 @@ class sycl_device_pool {
         for (auto & c : chunks_) {
             if (c.base) {
                 try {
+                    ggml_sycl::alloc_registry::instance().unregister_alloc(c.base);
                     sycl::free(c.base, queue_);
                 } catch (...) {
                 }

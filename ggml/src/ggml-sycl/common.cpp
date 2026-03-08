@@ -472,6 +472,7 @@ void * ggml_sycl_host_malloc(size_t size) try {
         }
         ggml_sycl::offload_stats_note_host_alloc("tp_shared_host", size);
         ggml_sycl_alloc_trace_record("host", size, "tp_shared_host");
+        ggml_sycl::alloc_registry::instance().register_alloc(ptr, size, -1, ggml_sycl::alloc_type::HOST_PINNED);
         {
             std::lock_guard<std::mutex> guard(g_sycl_host_alloc_mutex);
             g_sycl_host_alloc_sizes[ptr] = size;
@@ -492,6 +493,7 @@ void * ggml_sycl_host_malloc(size_t size) try {
     }
     ggml_sycl::offload_stats_note_host_alloc("host_malloc", size);
     ggml_sycl_alloc_trace_record("host", size, "host_malloc");
+    ggml_sycl::alloc_registry::instance().register_alloc(ptr, size, -1, ggml_sycl::alloc_type::HOST_PINNED);
     {
         std::lock_guard<std::mutex> guard(g_sycl_host_alloc_mutex);
         g_sycl_host_alloc_sizes[ptr] = size;
@@ -506,6 +508,7 @@ void ggml_sycl_host_free(void * ptr) try {
     if (!ptr) {
         return;
     }
+    ggml_sycl::alloc_registry::instance().unregister_alloc(ptr);
     // Prefer shared TP context if it exists (pinned host memory may be bound to it).
     size_t alloc_size = 0;
     {

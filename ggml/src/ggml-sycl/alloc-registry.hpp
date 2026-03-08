@@ -22,6 +22,7 @@ enum class alloc_type : uint8_t {
     HOST_PINNED,  // sycl::malloc_host   — CPU-accessible, GPU zero-copy via PCIe
     SHARED,       // sycl::malloc_shared  — migrates between host/device
     MMAP,         // mmap'd from GGUF    — CPU-only, no USM
+    UNKNOWN,      // Not registered — pointer type is unknown
 };
 
 // Metadata for a single allocation
@@ -129,7 +130,7 @@ class alloc_registry {
     alloc_type get_alloc_type(const void * ptr) const {
         const alloc_info * info = lookup(ptr);
         if (info == nullptr) {
-            return alloc_type::DEVICE;  // Unknown = assume device (conservative for GPU dispatch)
+            return alloc_type::UNKNOWN;  // Not registered — caller must handle
         }
         return info->type;
     }
@@ -174,6 +175,7 @@ class alloc_registry {
 //       case alloc_type::HOST_PINNED: return sycl::usm::alloc::host;
 //       case alloc_type::SHARED:      return sycl::usm::alloc::shared;
 //       case alloc_type::MMAP:        return sycl::usm::alloc::host;  // treat as host-accessible
+//       case alloc_type::UNKNOWN:     return sycl::usm::alloc::unknown;
 //   }
 
 }  // namespace ggml_sycl

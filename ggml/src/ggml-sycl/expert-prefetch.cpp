@@ -1055,7 +1055,9 @@ std::vector<int> ExpertPredictor::predict_pregate(int           next_layer_idx,
 
     try {
         auto ev = compute_q.submit([&](sycl::handler & cgh) {
-            sycl::local_accessor<float, 1> slm(sycl::range<1>(wg_size / 16 + 1), cgh);
+            // Allocate SLM for cross-subgroup reduction.  Use wg_size as upper
+            // bound on subgroup count (covers any subgroup size the runtime picks).
+            sycl::local_accessor<float, 1> slm(sycl::range<1>(wg_size + 1), cgh);
 
             cgh.parallel_for(sycl::nd_range<1>(n_wgs * wg_size, wg_size), [=](sycl::nd_item<1> item) {
                 const int j     = item.get_group_linear_id();  // expert index

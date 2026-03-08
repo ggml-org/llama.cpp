@@ -1905,6 +1905,22 @@ float host_cache::compute_score(const host_cache_entry & entry) const {
     if (entry.type == cache_entry_type::DENSE_WEIGHT) {
         return base_score * 2.0f;
     }
+    // Boost MoE experts with high popularity (low rank = more popular).
+    // This makes popular experts resist eviction after warmup profiling.
+    if (entry.type == cache_entry_type::MOE_EXPERT && entry.layer_id >= 0 && entry.expert_id >= 0) {
+        auto & placement_table = get_expert_placement_table();
+        if (placement_table.is_initialized()) {
+            auto placement = placement_table.get(entry.layer_id, entry.expert_id);
+            if (placement.popularity_rank >= 0) {
+                // Top experts (rank 0-3) get 4x-1x boost; rank 4+ get no boost
+                int boost_slots = 4;
+                if (placement.popularity_rank < boost_slots) {
+                    float boost = static_cast<float>(boost_slots - placement.popularity_rank);
+                    base_score *= (1.0f + boost);
+                }
+            }
+        }
+    }
     return base_score;
 }
 
@@ -4021,6 +4037,21 @@ float unified_cache::compute_score(const unified_cache_entry & entry) const {
     if (entry.hot) {
         constexpr float k_hot_boost = 1.5f;
         return base_score * k_hot_boost;
+    }
+    // Boost MoE experts with high popularity (low rank = more popular).
+    // This makes popular experts resist VRAM eviction after warmup profiling.
+    if (entry.type == cache_entry_type::MOE_EXPERT && entry.layer_id >= 0 && entry.expert_id >= 0) {
+        auto & placement_table = get_expert_placement_table();
+        if (placement_table.is_initialized()) {
+            auto placement = placement_table.get(entry.layer_id, entry.expert_id);
+            if (placement.popularity_rank >= 0) {
+                int boost_slots = 4;
+                if (placement.popularity_rank < boost_slots) {
+                    float boost = static_cast<float>(boost_slots - placement.popularity_rank);
+                    base_score *= (1.0f + boost);
+                }
+            }
+        }
     }
     return base_score;
 }

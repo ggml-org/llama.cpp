@@ -99,6 +99,7 @@ bool layer_stream_manager::allocate_buffers(sycl::queue & queue) {
                            i, buffer_size_ / (1024.0 * 1024.0));
             // Clean up buffer 0 if buffer 1 failed
             if (i == 1 && buffers_[0]) {
+                alloc_registry::instance().unregister_alloc(buffers_[0]);
                 sycl::free(buffers_[0], queue);
                 buffers_[0] = nullptr;
             }
@@ -124,6 +125,7 @@ void layer_stream_manager::shutdown() {
 
     for (int i = 0; i < 2; i++) {
         if (buffers_[i]) {
+            alloc_registry::instance().unregister_alloc(buffers_[i]);
             sycl::free(buffers_[i], ctx_);
             buffers_[i] = nullptr;
         }

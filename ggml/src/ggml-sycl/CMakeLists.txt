@@ -58,13 +58,18 @@ target_sources(ggml-sycl PRIVATE ${GGML_HEADERS_SYCL} ${GGML_SOURCES_SYCL})
 # Enable AVX2 + VNNI for CPU vec_dot kernels in tensor split / CPU offload.
 # Applied ONLY to cpu-dispatch.cpp to avoid affecting SYCL device code compilation.
 # Note: Arrow Lake does NOT support AVX-512 (removed from consumer chips).
-# AVX2 + AVX-VNNI (_mm256_dpbssd_epi32) are available and used for Q4_0 fast-path.
+# AVX-VNNI (_mm256_dpbusd_epi32, unsigned x signed) and AVX-VNNIINT8 (_mm256_dpbssd_epi32,
+# signed x signed) are available and used for Q4_0/MXFP4 fast-paths.
 if (GGML_SYCL_TARGET STREQUAL "INTEL" AND NOT WIN32)
     include(CheckCXXCompilerFlag)
     check_cxx_compiler_flag("-mavx2" HAS_AVX2)
+    check_cxx_compiler_flag("-mavxvnni" HAS_AVXVNNI)
     check_cxx_compiler_flag("-mavxvnniint8" HAS_AVXVNNIINT8)
     if (HAS_AVX2)
         set(_CPU_DISPATCH_AVX_FLAGS "-mavx2;-mfma")
+        if (HAS_AVXVNNI)
+            list(APPEND _CPU_DISPATCH_AVX_FLAGS "-mavxvnni")
+        endif()
         if (HAS_AVXVNNIINT8)
             list(APPEND _CPU_DISPATCH_AVX_FLAGS "-mavxvnniint8")
         endif()
