@@ -2048,6 +2048,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_gla(params, tensor);
             } break;
+        case GGML_OP_DELTA_NET_RECURRENCE:
+            {
+                ggml_compute_forward_delta_net_recurrence(params, tensor);
+            } break;
         case GGML_OP_RWKV_WKV7:
             {
                 ggml_compute_forward_rwkv_wkv7(params, tensor);
@@ -2376,6 +2380,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_SSM_SCAN:
         case GGML_OP_RWKV_WKV6:
         case GGML_OP_GATED_LINEAR_ATTN:
+        case GGML_OP_DELTA_NET_RECURRENCE:
         case GGML_OP_RWKV_WKV7:
             {
                 n_tasks = n_threads;

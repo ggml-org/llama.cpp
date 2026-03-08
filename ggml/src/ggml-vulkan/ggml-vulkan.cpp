@@ -814,6 +814,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_ssm_scan_f32_d128;
     vk_pipeline pipeline_ssm_scan_f32_d256;
     vk_pipeline pipeline_ssm_conv_f32;
+    vk_pipeline pipeline_delta_net_recurrence_f32;
     vk_pipeline pipeline_opt_step_adamw_f32;
     vk_pipeline pipeline_opt_step_sgd_f32;
     std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv2d_f32[CONV_SHAPE_COUNT];
@@ -1443,6 +1444,12 @@ struct vk_op_ssm_scan_push_constants {
     uint32_t nb42, nb43, nb52, nb53;
     uint32_t s_off;
     uint32_t n_head, d_head, n_group, n_tok;
+};
+struct vk_op_delta_net_recurrence_push_constants {
+    uint32_t S;       // state dimension (128)
+    uint32_t H;       // number of heads
+    uint32_t n_seqs;  // batch size
+    uint32_t s_off;   // offset to state in dst (in floats)
 };
 struct vk_op_ssm_conv_push_constants {
     uint32_t nb01, nb02;
@@ -2695,11 +2702,9 @@ static vk_buffer ggml_vk_create_buffer_device(vk_device& device, size_t size) {
             buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
                                                        vk::MemoryPropertyFlagBits::eDeviceLocal});
         } else if (device->uma) {
-            // On UMA/iGPU (e.g. AMD RDNA 3.5 Radeon 890M), prefer memory that is both
-            // device-local and host-visible for zero-copy access from CPU and GPU.
-            // Fall back to device-local only, then host-visible as last resort.
-            buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eDeviceLocal | vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-                                                       vk::MemoryPropertyFlagBits::eDeviceLocal,
+            // On UMA, device-local is in system RAM anyway. Prefer device-local only
+            // (GPU-optimized caching) over host-visible+coherent (uncached/WC).
+            buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eDeviceLocal,
                                                        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent});
         } else if (device->disable_host_visible_vidmem) {
             if (device->allow_sysmem_fallback) {
@@ -3120,7 +3125,7 @@ static std::vector<GpuPipelineConfig> gpu_pipeline_configs = {
         {
             rdna3_pipelines,
         },
-        RDNA_DEFAULT_SUBGROUP_SIZE
+        0  // Let driver choose default (wave64 on RDNA 3.5 — faster for bandwidth-bound ops)
     },
 };
 
@@ -4589,6 +4594,8 @@ static void ggml_vk_load_shaders(vk_device& device) {
     }
 
     ggml_vk_create_pipeline(device, device->pipeline_ssm_conv_f32, "ssm_conv_f32", ssm_conv_f32_len, ssm_conv_f32_data, "main", 3, sizeof(vk_op_ssm_conv_push_constants), {32, 1, 1}, {32}, 1);
+
+    ggml_vk_create_pipeline(device, device->pipeline_delta_net_recurrence_f32, "ssm_recurrence_f32", ssm_recurrence_f32_len, ssm_recurrence_f32_data, "main", 7, sizeof(vk_op_delta_net_recurrence_push_constants), {1, 1, 1}, {}, 1, true);
 
     ggml_vk_create_pipeline(device, device->pipeline_opt_step_adamw_f32, "opt_step_adamw_f32", opt_step_adamw_f32_len, opt_step_adamw_f32_data, "main", 5, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
 
@@ -9510,6 +9517,11 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             return ctx->device->pipeline_ssm_conv_f32;
         }
         return nullptr;
+    case GGML_OP_DELTA_NET_RECURRENCE:
+        if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+            return ctx->device->pipeline_delta_net_recurrence_f32;
+        }
+        return nullptr;
     case GGML_OP_OPT_STEP_ADAMW:
         if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
             return ctx->device->pipeline_opt_step_adamw_f32;
@@ -10378,6 +10390,41 @@ static void ggml_vk_ssm_scan(ggml_backend_vk_context * ctx, vk_context& subctx, 
 
     ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
         {src_buf[0], src_buf[1], src_buf[2], src_buf[3], src_buf[4], src_buf[5], src_buf[6], dst_buf},
+        pc, elements);
+}
+
+static void ggml_vk_delta_net_recurrence(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst) {
+    // src[0] = state_in [S, S, H, n_seqs]
+    // src[1] = q [S, H, 1, n_seqs]
+    // src[2] = k, src[3] = v, src[4] = gate, src[5] = beta
+    const ggml_tensor * state_in = dst->src[0];
+    const ggml_tensor * q        = dst->src[1];
+
+    GGML_ASSERT(dst->buffer != nullptr);
+
+    const uint32_t S      = (uint32_t)q->ne[0];
+    const uint32_t H      = (uint32_t)q->ne[1];
+    const uint32_t n_seqs = (uint32_t)state_in->ne[3];
+    const uint32_t s_off  = S * H * n_seqs;  // 1 token per seq
+
+    vk_pipeline pipeline = ggml_vk_op_get_pipeline(ctx, state_in, q, nullptr, dst, dst->op);
+    GGML_ASSERT(pipeline != nullptr);
+
+    ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
+
+    const vk_op_delta_net_recurrence_push_constants pc = { S, H, n_seqs, s_off };
+
+    vk_subbuffer dst_buf = ggml_vk_tensor_subbuffer(ctx, dst);
+    vk_subbuffer src_buf[6] = {};
+    for (int i = 0; i < 6 && dst->src[i] != nullptr; i++) {
+        src_buf[i] = ggml_vk_tensor_subbuffer(ctx, dst->src[i]);
+    }
+
+    // One workgroup per (head, seq): H * n_seqs total
+    std::array<uint32_t, 3> elements = { H * n_seqs, 1, 1 };
+
+    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
+        {src_buf[0], src_buf[1], src_buf[2], src_buf[3], src_buf[4], src_buf[5], dst_buf},
         pc, elements);
 }
 
@@ -13049,6 +13096,11 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
 
         break;
 
+    case GGML_OP_DELTA_NET_RECURRENCE:
+        ggml_vk_delta_net_recurrence(ctx, compute_ctx, node);
+
+        break;
+
     case GGML_OP_OPT_STEP_ADAMW:
         ggml_vk_opt_step_adamw(ctx, compute_ctx, node);
 
@@ -15450,6 +15502,8 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             }
         case GGML_OP_SSM_CONV:
             return op->src[0]->type == GGML_TYPE_F32;
+        case GGML_OP_DELTA_NET_RECURRENCE:
+            return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
         case GGML_OP_CONV_TRANSPOSE_1D:
             return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32;
         case GGML_OP_CONV_2D:

@@ -1,0 +1,165 @@
+#version 450
+
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_EXT_control_flow_attributes : enable
+
+// Buffer Device Address references for reading/writing f32 data
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer F32Src {
+    float data[];
+};
+
+layout(buffer_reference, std430, buffer_reference_align = 4) writeonly buffer F32Dst {
+    float data[];
+};
+
+// Op type constants
+const uint OP_MUL      = 0;
+const uint OP_ADD      = 1;
+const uint OP_SUB      = 2;
+const uint OP_SCALE    = 3;
+const uint OP_SIGMOID  = 4;
+const uint OP_SILU     = 5;
+const uint OP_EXP      = 6;
+const uint OP_SOFTPLUS = 7;
+const uint OP_RELU     = 8;
+const uint OP_NEG      = 9;
+const uint OP_TANH     = 10;
+const uint OP_REPEAT   = 11;
+
+// Each BatchedOp describes one elementwise operation.
+// Stored in the SSBO (op_buf).
+// Layout must match C++ struct exactly.
+struct BatchedOp {
+    uint op_type;          // enum value from OP_* constants
+    uint n_elements;       // total elements to process
+    uint64_t src0_addr;    // BDA address of src0
+    uint64_t src1_addr;    // BDA address of src1 (0 for unary ops)
+    uint64_t dst_addr;     // BDA address of dst
+    float param0;          // for SCALE: scale factor; for SOFTPLUS: beta
+    float param1;          // for SOFTPLUS: threshold
+    uint src1_n_elements;  // for broadcast: src1 element count (idx % this); 0 = same shape
+    uint _pad;             // padding to align struct to 16 bytes
+};
+
+// Push constants
+layout(push_constant) uniform PushConstants {
+    uint op_offset;        // offset into op_buf array (first op index)
+    uint op_count;         // number of ops in this dispatch
+} pc;
+
+// SSBO holding the operation descriptors
+layout(binding = 0, std430) readonly buffer OpBuf {
+    BatchedOp ops[];
+} op_buf;
+
+// Each workgroup has 256 threads, and each workgroup processes elements from one or more ops.
+// We use gl_WorkGroupID.x to index which op to process and gl_LocalInvocationID.x for the element within.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+// Specialization constant: number of elements per thread (loop unrolling)
+layout(constant_id = 0) const uint ELEMENTS_PER_THREAD = 4;
+
+void main() {
+    // Each workgroup is assigned to process a contiguous range of ops.
+    // We use a flat dispatch where workgroup IDs map to (op_index, element_block).
+    // The mapping is: for each op, we need ceil(n_elements / (256 * ELEMENTS_PER_THREAD)) workgroups.
+    // But since ops have varying sizes, we use a simpler scheme:
+    // gl_WorkGroupID.x maps linearly across all ops' workgroups.
+
+    // We walk through ops to find which op this workgroup belongs to.
+    uint wg_id = gl_WorkGroupID.x;
+    uint thread_id = gl_LocalInvocationID.x;
+    uint threads_per_wg = 256;
+    uint elements_per_wg = threads_per_wg * ELEMENTS_PER_THREAD;
+
+    // Linear search through ops to find the one this workgroup processes
+    uint cumulative_wgs = 0;
+    for (uint op_idx = 0; op_idx < pc.op_count; op_idx++) {
+        BatchedOp op = op_buf.ops[pc.op_offset + op_idx];
+        uint op_wgs = (op.n_elements + elements_per_wg - 1) / elements_per_wg;
+
+        if (wg_id < cumulative_wgs + op_wgs) {
+            // This workgroup belongs to this op
+            uint local_wg = wg_id - cumulative_wgs;
+            uint base_element = local_wg * elements_per_wg + thread_id;
+
+            F32Src src0 = F32Src(op.src0_addr);
+            F32Dst dst = F32Dst(op.dst_addr);
+
+            [[unroll]] for (uint iter = 0; iter < ELEMENTS_PER_THREAD; iter++) {
+                uint idx = base_element + iter * threads_per_wg;
+                if (idx >= op.n_elements) {
+                    break;
+                }
+
+                float val = src0.data[idx];
+                float result;
+
+                // For binary ops with broadcast: src1 index wraps via modulo
+                uint src1_idx = (op.src1_n_elements > 0) ? (idx % op.src1_n_elements) : idx;
+
+                switch (op.op_type) {
+                case OP_MUL:
+                    {
+                        F32Src src1 = F32Src(op.src1_addr);
+                        result = val * src1.data[src1_idx];
+                    }
+                    break;
+                case OP_ADD:
+                    {
+                        F32Src src1 = F32Src(op.src1_addr);
+                        result = val + src1.data[src1_idx];
+                    }
+                    break;
+                case OP_SUB:
+                    {
+                        F32Src src1 = F32Src(op.src1_addr);
+                        result = val - src1.data[src1_idx];
+                    }
+                    break;
+                case OP_SCALE:
+                    result = val * op.param0;
+                    break;
+                case OP_SIGMOID:
+                    result = 1.0f / (1.0f + exp(-val));
+                    break;
+                case OP_SILU:
+                    result = val / (1.0f + exp(-val));
+                    break;
+                case OP_EXP:
+                    result = exp(val);
+                    break;
+                case OP_SOFTPLUS:
+                    {
+                        // softplus(x) = log(1 + exp(beta * x)) / beta, clamped for large values
+                        float beta = op.param0;
+                        float threshold = op.param1;
+                        float bx = beta * val;
+                        result = (bx > threshold) ? val : log(1.0f + exp(bx)) / beta;
+                    }
+                    break;
+                case OP_RELU:
+                    result = max(val, 0.0f);
+                    break;
+                case OP_NEG:
+                    result = -val;
+                    break;
+                case OP_TANH:
+                    result = tanh(val);
+                    break;
+                case OP_REPEAT:
+                    result = src0.data[idx % op.src1_n_elements];
+                    break;
+                default:
+                    result = val;
+                    break;
+                }
+
+                dst.data[idx] = result;
+            }
+            return;
+        }
+        cumulative_wgs += op_wgs;
+    }
+}

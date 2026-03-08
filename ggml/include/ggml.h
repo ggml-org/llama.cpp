@@ -554,6 +554,7 @@ extern "C" {
         GGML_OP_ADD_REL_POS,
         GGML_OP_RWKV_WKV6,
         GGML_OP_GATED_LINEAR_ATTN,
+        GGML_OP_DELTA_NET_RECURRENCE,
         GGML_OP_RWKV_WKV7,
         GGML_OP_SOLVE_TRI,
 
@@ -2431,6 +2432,18 @@ extern "C" {
             struct ggml_tensor  * g,
             struct ggml_tensor  * state,
             float scale);
+
+    // Fused Delta-Net SSM recurrence (GDA variant).
+    // Inputs: q/k/v [S, H, 1, n_seqs], gate/beta [1, H, 1, n_seqs], state [S, S, H, n_seqs]
+    // Output: combined [S*H, n_seqs*(1+S), 1, 1] = concat(output, new_state)
+    GGML_API struct ggml_tensor * ggml_delta_net_recurrence(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * v,
+            struct ggml_tensor  * gate,
+            struct ggml_tensor  * beta,
+            struct ggml_tensor  * state);
 
     GGML_API struct ggml_tensor * ggml_rwkv_wkv7(
             struct ggml_context * ctx,

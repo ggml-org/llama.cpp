@@ -10305,6 +10305,84 @@ void ggml_compute_forward_gla(
     }
 }
 
+// ggml_compute_forward_delta_net_recurrence
+
+void ggml_compute_forward_delta_net_recurrence(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * state_in = dst->src[0];  // [S, S, H, n_seqs]
+    const ggml_tensor * q        = dst->src[1];  // [S, H, 1, n_seqs]
+    const ggml_tensor * k        = dst->src[2];  // [S, H, 1, n_seqs]
+    const ggml_tensor * v        = dst->src[3];  // [S, H, 1, n_seqs]
+    const ggml_tensor * gate     = dst->src[4];  // [1, H, 1, n_seqs]
+    const ggml_tensor * beta_t   = dst->src[5];  // [1, H, 1, n_seqs]
+
+    GGML_ASSERT(state_in->type == GGML_TYPE_F32);
+
+    const int64_t S      = q->ne[0];
+    const int64_t H      = q->ne[1];
+    const int64_t n_seqs = state_in->ne[3];
+    const int64_t s_off  = S * H * n_seqs;  // offset to state in output (in floats)
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    // Parallelize over heads
+    const int h_start = (H * ith) / nth;
+    const int h_end   = (H * (ith + 1)) / nth;
+
+    float * dst_data     = (float *) dst->data;
+    const float * si     = (const float *) state_in->data;
+    const float * q_data = (const float *) q->data;
+    const float * k_data = (const float *) k->data;
+    const float * v_data = (const float *) v->data;
+    const float * g_data = (const float *) gate->data;
+    const float * b_data = (const float *) beta_t->data;
+
+    for (int64_t seq = 0; seq < n_seqs; seq++) {
+        for (int64_t h = h_start; h < h_end; h++) {
+            const int64_t si_base  = seq * H * S * S + h * S * S;
+            const int64_t qkv_base = seq * H * S + h * S;
+            const int64_t gh_idx   = seq * H + h;
+            const int64_t out_base = seq * H * S + h * S;
+            const int64_t so_base  = s_off + si_base;
+
+            const float exp_g    = expf(g_data[gh_idx]);
+            const float beta_val = b_data[gh_idx];
+
+            for (int64_t j = 0; j < S; j++) {
+                // Phase 1: Decay + dot(row_j, k)
+                float sk_j = 0.0f;
+                float s_row[128];
+                for (int64_t i = 0; i < S; i++) {
+                    float s_val = si[si_base + j * S + i] * exp_g;
+                    s_row[i] = s_val;
+                    sk_j += s_val * k_data[qkv_base + i];
+                }
+
+                // Phase 2: Innovation
+                float d_j = (v_data[qkv_base + j] - sk_j) * beta_val;
+
+                // Phase 3+4: State update + output dot product
+                float o_j = 0.0f;
+                for (int64_t i = 0; i < S; i++) {
+                    s_row[i] += k_data[qkv_base + i] * d_j;
+                    o_j += s_row[i] * q_data[qkv_base + i];
+                }
+
+                // Write output
+                dst_data[out_base + j] = o_j;
+
+                // Write new state
+                for (int64_t i = 0; i < S; i++) {
+                    dst_data[so_base + j * S + i] = s_row[i];
+                }
+            }
+        }
+    }
+}
+
 static void ggml_compute_forward_solve_tri_f32(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
     const struct ggml_tensor * src0 = dst->src[0];  // A (lower triangular)
     const struct ggml_tensor * src1 = dst->src[1];  // B (RHS)

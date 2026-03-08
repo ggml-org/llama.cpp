@@ -1,0 +1,161 @@
+#version 450
+
+/*
+ * Fused Delta-Net SSM recurrence kernel (GDA variant) with shared memory tiling.
+ *
+ * Replaces 11+ individual Vulkan dispatches per SSM layer with 1.
+ *
+ * Dispatch: vkCmdDispatch(H * n_seqs, 1, 1)
+ *   One workgroup per (head, sequence) pair.
+ *   128 threads per workgroup, one per state row.
+ *
+ * Key optimization: State matrix (128x128) is processed in column tiles that
+ * fit in shared memory. Each tile is loaded via coalesced global reads (thread j
+ * loads column j → consecutive threads access consecutive addresses).
+ * Transposed storage in LDS gives 2-way bank conflicts instead of 64-way.
+ *
+ * Math per head:
+ *   s_dec[j][i] = s[j][i] * exp(gate)        // Decay (broadcast scalar)
+ *   sk[j] = sum_i(s_dec[j][i] * k[i])        // dot(row_j, k)
+ *   d[j]  = (v[j] - sk[j]) * beta            // Innovation
+ *   s_new[j][i] = s_dec[j][i] + k[i] * d[j]  // Outer product update
+ *   o[j]  = sum_i(s_new[j][i] * q[i])        // dot(row_j, q) = output
+ *
+ * State layout: [S, S, H, n_seqs] (ggml convention, ne[0]=S is column/fastest)
+ * Output layout: dst[0..S*H*n_seqs-1] = output, dst[s_off..] = new state
+ *
+ * Shared memory: TILE_K * 128 * 4 bytes. TILE_K=64 → 32 KB (fits 32 KB limit).
+ */
+
+#define TILE_K 64
+
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform PushConstants {
+    uint S;             // State dimension (typically 128)
+    uint H;             // Number of heads (H_v = H_k after GQA expansion)
+    uint n_seqs;        // Number of sequences in batch
+    uint s_off;         // Offset to state output in dst buffer (in floats)
+};
+
+layout(std430, binding = 0) readonly buffer StateIn { float state_in[]; };
+layout(std430, binding = 1) readonly buffer QBuf    { float q[];        };
+layout(std430, binding = 2) readonly buffer KBuf    { float k[];        };
+layout(std430, binding = 3) readonly buffer VBuf    { float v[];        };
+layout(std430, binding = 4) readonly buffer GateBuf { float gate[];     };
+layout(std430, binding = 5) readonly buffer BetaBuf { float beta[];     };
+layout(std430, binding = 6) buffer DstBuf           { float dst[];      };
+
+// Shared memory tile: TILE_K columns × 128 rows, transposed layout.
+// s_tile[col_in_tile * 128 + row] = state[row][tile_start + col_in_tile]
+// TILE_K * 128 * 4 = 32768 bytes = 32 KB
+shared float s_tile[TILE_K * 128];
+
+void main() {
+    const uint wg = gl_WorkGroupID.x;
+    const uint j  = gl_LocalInvocationIndex;  // Thread j owns row j of state
+
+    if (j >= S) return;
+
+    // Map workgroup to (head, seq)
+    const uint head = wg % H;
+    const uint seq  = wg / H;
+
+    // Base offsets into buffers
+    const uint si_base  = seq * H * S * S + head * S * S;  // state_in: [S, S, H, n_seqs]
+    const uint qkv_base = seq * H * S + head * S;          // q/k/v: [S, H, 1, n_seqs]
+    const uint gh_idx   = seq * H + head;                   // gate/beta: [1, H, 1, n_seqs]
+    const uint out_base = seq * H * S + head * S;           // output region in dst
+    const uint so_base  = s_off + si_base;                  // state output region in dst
+
+    const float exp_g    = exp(gate[gh_idx]);
+    const float beta_val = beta[gh_idx];
+
+    // =============================================================
+    // Pass 1: Compute sk_j = dot(decayed_state_row_j, k)
+    // Process state in TILE_K-column tiles via shared memory.
+    // =============================================================
+    float sk_j = 0.0;
+
+    for (uint tile = 0; tile < S; tile += TILE_K) {
+        // Number of columns in this tile (handles non-multiple-of-TILE_K)
+        uint tile_cols = min(TILE_K, S - tile);
+
+        // --- Cooperative coalesced load ---
+        // Thread j loads column j (within tile) from all 128 rows.
+        // We have 128 threads and TILE_K=64 columns, so threads 0..63
+        // each load one column. Threads 64..127 load a second column
+        // from the next tile if available, otherwise idle.
+        // For simplicity with 128 threads and 64 columns: each column
+        // is loaded by 2 threads, each handling half the rows.
+        uint my_col = j % TILE_K;       // Which column I load
+        uint my_half = j / TILE_K;      // 0 = rows 0..63, 1 = rows 64..127
+        uint row_start = my_half * (S / 2);
+        uint row_end = row_start + (S / 2);
+
+        for (uint row = row_start; row < row_end; row++) {
+            // Global: consecutive threads (same my_half) access consecutive columns → COALESCED
+            s_tile[my_col * S + row] = state_in[si_base + row * S + (tile + my_col)] * exp_g;
+        }
+
+        barrier();
+
+        // --- Compute partial dot product for sk_j ---
+        // state[j][tile+t] is at s_tile[t * S + j] (transposed layout)
+        // Bank analysis: threads 0..63 access s_tile[t*128 + 0..63]
+        //   bank = (t*128 + tid) mod 32 = tid mod 32 → 2-way conflict
+        for (uint t = 0; t < tile_cols; t++) {
+            sk_j += s_tile[t * S + j] * k[qkv_base + tile + t];
+        }
+
+        barrier();
+    }
+
+    // =============================================================
+    // Innovation d[j] = (v[j] - sk[j]) * beta
+    // =============================================================
+    float d_j = (v[qkv_base + j] - sk_j) * beta_val;
+
+    // =============================================================
+    // Pass 2: State update + output dot product
+    // Reload tiles, apply update, compute o_j, write state back.
+    // =============================================================
+    float o_j = 0.0;
+
+    for (uint tile = 0; tile < S; tile += TILE_K) {
+        uint tile_cols = min(TILE_K, S - tile);
+
+        // --- Cooperative coalesced load (same pattern as Pass 1) ---
+        uint my_col = j % TILE_K;
+        uint my_half = j / TILE_K;
+        uint row_start = my_half * (S / 2);
+        uint row_end = row_start + (S / 2);
+
+        for (uint row = row_start; row < row_end; row++) {
+            s_tile[my_col * S + row] = state_in[si_base + row * S + (tile + my_col)] * exp_g;
+        }
+
+        barrier();
+
+        // --- Update state + partial output dot product ---
+        // Thread j reads/writes only column j (positions t*S+j),
+        // no overlap with other threads → no barrier needed.
+        for (uint t = 0; t < tile_cols; t++) {
+            float s_new = s_tile[t * S + j] + k[qkv_base + tile + t] * d_j;
+            s_tile[t * S + j] = s_new;
+            o_j += s_new * q[qkv_base + tile + t];
+        }
+
+        barrier();
+
+        // --- Cooperative coalesced writeback ---
+        for (uint row = row_start; row < row_end; row++) {
+            dst[so_base + row * S + (tile + my_col)] = s_tile[my_col * S + row];
+        }
+
+        barrier();
+    }
+
+    // Write output
+    dst[out_base + j] = o_j;
+}

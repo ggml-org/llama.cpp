@@ -1028,6 +1028,10 @@ void process_shaders() {
 
     string_to_spv("topk_moe_f32", "topk_moe.comp", {});
 
+    string_to_spv("batched_elementwise_f32", "batched_elementwise.comp", {});
+
+    string_to_spv("ssm_recurrence_f32", "ssm_recurrence.comp", {});
+
     for (auto &c : compiles) {
         c.wait();
     }
