@@ -112,6 +112,11 @@ class common_chat_peg_builder : public common_peg_parser_builder {
                                                  bool                                       parallel_tool_calls,
                                                  bool                                       force_tool_calls);
 
+    // Helper for Python-style function call format: name(arg1="value1", arg2=123)
+    // Used by LFM2 and similar templates
+    common_peg_parser python_style_tool_calls(const nlohmann::json & tools,
+                                              bool                   parallel_tool_calls);
+
   private:
     // Implementation helpers for standard_json_tools — one per JSON tool call layout mode
     common_peg_parser build_json_tools_function_is_key(const nlohmann::json & tools,
