@@ -19,6 +19,13 @@
 #include <algorithm>
 #include <filesystem>
 
+// result of parsing --tensor-type option
+// (changes to this struct must be reflected in src/llama-quant.cpp)
+struct tensor_quantization {
+    std::string name;
+    ggml_type quant = GGML_TYPE_COUNT;
+};
+
 struct quant_option {
     std::string name;
     llama_ftype ftype;
