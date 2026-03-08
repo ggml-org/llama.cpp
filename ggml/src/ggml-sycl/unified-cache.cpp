@@ -6,6 +6,7 @@
 
 #include "unified-cache.hpp"
 
+#include "alloc-registry.hpp"
 #include "common.hpp"
 #include "ggml-impl.h"
 #include "ggml-sycl.h"
@@ -1139,7 +1140,7 @@ static bool is_host_accessible_ptr(const void * ptr, const sycl::queue & queue) 
         return false;
     }
     try {
-        const sycl::usm::alloc alloc = sycl::get_pointer_type(ptr, queue.get_context());
+        const sycl::usm::alloc alloc = ggml_sycl_get_alloc_type(ptr);
         return alloc == sycl::usm::alloc::host || alloc == sycl::usm::alloc::shared;
     } catch (...) {
         return false;
@@ -2436,7 +2437,7 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
     if (g_ggml_sycl_debug) {
         sycl::usm::alloc alloc = sycl::usm::alloc::unknown;
         try {
-            alloc = sycl::get_pointer_type(request.src_ptr, queue_.get_context());
+            alloc = ggml_sycl_get_alloc_type(request.src_ptr);
         } catch (...) {
         }
         GGML_SYCL_DEBUG(
@@ -4064,8 +4065,8 @@ sycl::event unified_cache::copy_to_device_async(void *                          
                                                 const void *                     src,
                                                 size_t                           size,
                                                 const std::vector<sycl::event> & deps) {
-    const sycl::usm::alloc src_type = sycl::get_pointer_type(src, queue_.get_context());
-    const sycl::usm::alloc dst_type = sycl::get_pointer_type(dst, queue_.get_context());
+    const sycl::usm::alloc src_type = ggml_sycl_get_alloc_type(src);
+    const sycl::usm::alloc dst_type = ggml_sycl_get_alloc_type(dst);
     if (g_ggml_sycl_debug >= 2 || copy_trace_enabled()) {
         GGML_LOG_INFO("[SYCL] copy_to_device_async ptr types: dst=%p type=%d src=%p type=%d size=%zu\n", dst,
                       (int) dst_type, src, (int) src_type, size);
@@ -6399,6 +6400,8 @@ bool unified_cache::reserve_onednn_scratch(size_t weights_size, size_t activatio
                             weights_size / (1024.0f * 1024.0f));
             return false;
         }
+        alloc_registry::instance().register_alloc(onednn_weights_scratch_, weights_size,
+                                                  ggml_sycl_get_device_id_from_queue(queue_), alloc_type::DEVICE);
         onednn_weights_scratch_size_ = weights_size;
     } catch (const sycl::exception & e) {
         GGML_SYCL_DEBUG("[UNIFIED-CACHE] oneDNN weights scratch allocation failed: %s\n", e.what());
@@ -6412,11 +6415,14 @@ bool unified_cache::reserve_onednn_scratch(size_t weights_size, size_t activatio
             GGML_SYCL_DEBUG("[UNIFIED-CACHE] Failed to allocate oneDNN activations scratch (%.1f MB)\n",
                             activations_size / (1024.0f * 1024.0f));
             // Cleanup weights
+            alloc_registry::instance().unregister_alloc(onednn_weights_scratch_);
             sycl::free(onednn_weights_scratch_, queue_);
             onednn_weights_scratch_      = nullptr;
             onednn_weights_scratch_size_ = 0;
             return false;
         }
+        alloc_registry::instance().register_alloc(onednn_activations_scratch_, activations_size,
+                                                  ggml_sycl_get_device_id_from_queue(queue_), alloc_type::DEVICE);
         onednn_activations_scratch_size_ = activations_size;
     } catch (const sycl::exception & e) {
         GGML_SYCL_DEBUG("[UNIFIED-CACHE] oneDNN activations scratch allocation failed: %s\n", e.what());
@@ -6556,6 +6562,8 @@ bool unified_cache::reserve_persistent_scratch(const std::string & buffer_name, 
                            buffer_name.c_str(), size_bytes / (1024.0f * 1024.0f));
             return false;
         }
+        alloc_registry::instance().register_alloc(ptr, size_bytes, ggml_sycl_get_device_id_from_queue(queue_),
+                                                  alloc_type::DEVICE);
     } catch (const sycl::exception & e) {
         GGML_LOG_ERROR("[UNIFIED-CACHE] Persistent scratch '%s' allocation failed: %s\n", buffer_name.c_str(),
                        e.what());

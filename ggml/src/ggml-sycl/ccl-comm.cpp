@@ -309,8 +309,8 @@ void ggml_sycl_ccl_allreduce_sum_f32(const float* send_buf, float* recv_buf, siz
         sycl::queue& q = stream.get_native();
         sycl::context ctx = q.get_context();
 
-        auto send_ptr_type = sycl::get_pointer_type(send_buf, ctx);
-        auto recv_ptr_type = sycl::get_pointer_type(recv_buf, ctx);
+        auto send_ptr_type = ggml_sycl_get_alloc_type(send_buf);
+        auto recv_ptr_type = ggml_sycl_get_alloc_type(recv_buf);
 
         bool need_staging = (send_ptr_type != sycl::usm::alloc::device ||
                             recv_ptr_type != sycl::usm::alloc::device);

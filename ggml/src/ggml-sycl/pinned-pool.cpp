@@ -226,7 +226,7 @@ bool pinned_chunk_pool::grow(size_t min_size) {
         return false;
     }
     if (pinned_trace_enabled()) {
-        const sycl::usm::alloc alloc_type = sycl::get_pointer_type(ptr, queue_.get_context());
+        const sycl::usm::alloc alloc_type = ggml_sycl_get_alloc_type(ptr);
         const char *           alloc_name = alloc_type == sycl::usm::alloc::host ? "host" :
                                   alloc_type == sycl::usm::alloc::shared ? "shared" :
                                   alloc_type == sycl::usm::alloc::device ? "device" : "unknown";

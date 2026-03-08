@@ -691,7 +691,7 @@ void ggml_sycl_cpy(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, co
                 return sycl::usm::alloc::device;
             }
         }
-        return ptr ? sycl::get_pointer_type(const_cast<void *>(ptr), query_ctx) : sycl::usm::alloc::unknown;
+        return ptr ? ggml_sycl_get_alloc_type(const_cast<void *>(ptr)) : sycl::usm::alloc::unknown;
     };
     sycl::usm::alloc src0_type = fast_alloc(src0, src0_ddc);
     sycl::usm::alloc src1_type = fast_alloc(src1, src1_ddc);

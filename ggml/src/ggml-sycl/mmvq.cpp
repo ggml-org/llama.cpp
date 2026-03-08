@@ -22,7 +22,7 @@ static bool ggml_sycl_is_host_resident_weight(const ggml_tensor * src0, sycl::qu
     // Check 2: USM pointer type query (may return unknown on multi-device L0)
     if (src0->data && stream) {
         try {
-            const auto alloc = sycl::get_pointer_type(src0->data, stream->get_context());
+            const auto alloc = ggml_sycl_get_alloc_type(src0->data);
             return alloc != sycl::usm::alloc::device;
         } catch (...) {
             return true;  // Assume host for safety
@@ -4165,10 +4165,13 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
                         // DEBUG: Verify all kernel pointers are device-accessible before dispatch
                         if (g_ggml_sycl_debug >= 1) {
                             sycl::context sycl_ctx = stream->get_context();
-                            auto q8_alloc = q8_1_buffer ? sycl::get_pointer_type(q8_1_buffer, sycl_ctx) : sycl::usm::alloc::unknown;
-                            auto dst_alloc = dst_d ? sycl::get_pointer_type(dst_d, sycl_ctx) : sycl::usm::alloc::unknown;
-                            auto ids_alloc = dispatch_ids ? sycl::get_pointer_type(dispatch_ids, sycl_ctx) : sycl::usm::alloc::unknown;
-                            auto ptrs_alloc = dispatch_ptrs ? sycl::get_pointer_type(dispatch_ptrs, sycl_ctx) : sycl::usm::alloc::unknown;
+                            auto          q8_alloc =
+                                q8_1_buffer ? ggml_sycl_get_alloc_type(q8_1_buffer) : sycl::usm::alloc::unknown;
+                            auto dst_alloc = dst_d ? ggml_sycl_get_alloc_type(dst_d) : sycl::usm::alloc::unknown;
+                            auto ids_alloc =
+                                dispatch_ids ? ggml_sycl_get_alloc_type(dispatch_ids) : sycl::usm::alloc::unknown;
+                            auto ptrs_alloc =
+                                dispatch_ptrs ? ggml_sycl_get_alloc_type(dispatch_ptrs) : sycl::usm::alloc::unknown;
                             GGML_SYCL_DEBUG("[MMVQ-USM-CHECK] q8=%d dst=%d ids=%d ptrs=%d dispatch_ids=%p ids_d=%p (0=host,1=dev,2=shared,3=unknown)\n",
                                             (int)q8_alloc, (int)dst_alloc, (int)ids_alloc, (int)ptrs_alloc,
                                             (void*)dispatch_ids, (void*)ids_d);
@@ -4178,7 +4181,7 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
                                 const auto & host_ptrs = src0_extra->moe_expert_ptrs_host[ctx.device];
                                 for (size_t e = 0; e < std::min(host_ptrs.size(), (size_t)4); ++e) {
                                     void * eptr = host_ptrs[e];
-                                    auto ealloc = eptr ? sycl::get_pointer_type(eptr, sycl_ctx) : sycl::usm::alloc::unknown;
+                                    auto   ealloc = eptr ? ggml_sycl_get_alloc_type(eptr) : sycl::usm::alloc::unknown;
                                     GGML_SYCL_DEBUG("[MMVQ-USM-CHECK] expert[%zu]=%p alloc=%d\n", e, eptr, (int)ealloc);
                                 }
                             }
@@ -4765,7 +4768,7 @@ static sycl::event mmvq_stream_copy(sycl::queue &                    queue,
     const size_t row_count = slice_bytes / ctx->row_total_bytes;
     const size_t src_row   = static_cast<size_t>(ctx->row_base) + row_start;
 
-    const sycl::usm::alloc src_alloc = sycl::get_pointer_type(ctx->src_base, queue.get_context());
+    const sycl::usm::alloc src_alloc = ggml_sycl_get_alloc_type(ctx->src_base);
     if (src_alloc != sycl::usm::alloc::device) {
         uint8_t * host_slice =
             static_cast<uint8_t *>(ggml_sycl_malloc_host_tracked_bytes(slice_bytes, queue, "mmvq:host_stage"));
@@ -5064,7 +5067,7 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx,
         if (!ptr) {
             return ggml_sycl::cache_location::HOST_MMAP;
         }
-        const sycl::usm::alloc alloc = sycl::get_pointer_type(ptr, stream->get_context());
+        const sycl::usm::alloc alloc = ggml_sycl_get_alloc_type(ptr);
         if (alloc == sycl::usm::alloc::device) {
             return ggml_sycl::cache_location::DEVICE;
         }

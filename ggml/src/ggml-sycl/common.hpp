@@ -13,15 +13,16 @@
 #ifndef GGML_SYCL_COMMON_HPP
 #define GGML_SYCL_COMMON_HPP
 
+#include "alloc-registry.hpp"
 #include "dpct/helper.hpp"
 #include "ggml-sycl.h"
 #include "kv-offload.hpp"
 #include "layer-streaming.hpp"
+#include "orchestrator.hpp"
 #include "presets.hpp"
 #include "sycl_hw.hpp"
 #include "tensor-types.hpp"
 #include "unified-cache.hpp"
-#include "orchestrator.hpp"
 
 #include <atomic>
 #include <condition_variable>
@@ -1487,6 +1488,32 @@ void * ggml_sycl_malloc_device(size_t size, const sycl::queue & queue, const cha
 void * ggml_sycl_malloc_host(size_t size, const sycl::queue & queue, const char * tag);
 void * ggml_sycl_malloc_shared(size_t size, const sycl::queue & queue, const char * tag);
 
+// Query pointer allocation type via internal registry (no driver round-trip).
+// Replaces sycl::get_pointer_type() which is slow (~0.7ms) and broken on multi-device.
+// Returns sycl::usm::alloc for compatibility with existing code.
+inline sycl::usm::alloc ggml_sycl_get_alloc_type(const void * ptr) {
+    const auto * info = ggml_sycl::alloc_registry::instance().lookup(ptr);
+    if (info == nullptr) {
+        return sycl::usm::alloc::unknown;  // Not registered = unknown (mmap, external, etc.)
+    }
+    switch (info->type) {
+        case ggml_sycl::alloc_type::DEVICE:
+            return sycl::usm::alloc::device;
+        case ggml_sycl::alloc_type::HOST_PINNED:
+            return sycl::usm::alloc::host;
+        case ggml_sycl::alloc_type::SHARED:
+            return sycl::usm::alloc::shared;
+        case ggml_sycl::alloc_type::MMAP:
+            return sycl::usm::alloc::host;
+    }
+    return sycl::usm::alloc::unknown;
+}
+
+// Check if a pointer is device-allocated via the internal registry.
+inline bool ggml_sycl_is_device_ptr(const void * ptr) {
+    return ggml_sycl::alloc_registry::instance().is_device(ptr);
+}
+
 #define GGML_SYCL_STRINGIFY_HELPER(x) #x
 #define GGML_SYCL_STRINGIFY(x) GGML_SYCL_STRINGIFY_HELPER(x)
 #define GGML_SYCL_ALLOC_TAG (__FILE__ ":" GGML_SYCL_STRINGIFY(__LINE__))
@@ -1752,7 +1779,7 @@ inline void ggml_sycl_refresh_cached_input_ptr(void * dst, const void * src, siz
         return;
     }
     sycl::queue & q = ggml_sycl_get_device(device).default_queue();
-    sycl::usm::alloc alloc = sycl::get_pointer_type(dst, q.get_context());
+    sycl::usm::alloc alloc = ggml_sycl_get_alloc_type(dst);
     if (alloc == sycl::usm::alloc::device) {
         const bool avoid_wait =
             ggml_sycl_graph_recording_active() || ggml_sycl_graph_inflight_count() > 0;
@@ -2013,8 +2040,7 @@ inline void * ggml_sycl_get_layout_ptr_for(const ggml_tensor * tensor,
         ggml_sycl_tensor_is_weight(tensor)) {
         if ((layout->device_id < 0 || layout->device_id == device) && layout->mode == target &&
             layout->data_ptr == tensor->data) {
-            const sycl::usm::alloc alloc =
-                sycl::get_pointer_type(layout->data_ptr, ggml_sycl_get_device(device).default_queue().get_context());
+            const sycl::usm::alloc alloc = ggml_sycl_get_alloc_type(layout->data_ptr);
             if (alloc == sycl::usm::alloc::device) {
                 if (out_source) {
                     *out_source = "layout_ptr_override";
@@ -2026,8 +2052,7 @@ inline void * ggml_sycl_get_layout_ptr_for(const ggml_tensor * tensor,
     if (layout != nullptr && layout->data_ptr != nullptr && layout_cached && !layout_dirty) {
         bool layout_ptr_usable = true;
         if (target != GGML_LAYOUT_AOS && ggml_sycl_tensor_is_weight(tensor)) {
-            const sycl::usm::alloc alloc =
-                sycl::get_pointer_type(layout->data_ptr, ggml_sycl_get_device(device).default_queue().get_context());
+            const sycl::usm::alloc alloc = ggml_sycl_get_alloc_type(layout->data_ptr);
             if (alloc == sycl::usm::alloc::unknown) {
                 layout_ptr_usable = false;
                 if (out_source) {
@@ -2049,8 +2074,7 @@ inline void * ggml_sycl_get_layout_ptr_for(const ggml_tensor * tensor,
     if (layout != nullptr && layout->data_ptr != nullptr && layout_cached && !layout_dirty) {
         bool layout_ptr_usable = true;
         if (target != GGML_LAYOUT_AOS && ggml_sycl_tensor_is_weight(tensor)) {
-            const sycl::usm::alloc alloc =
-                sycl::get_pointer_type(layout->data_ptr, ggml_sycl_get_device(device).default_queue().get_context());
+            const sycl::usm::alloc alloc = ggml_sycl_get_alloc_type(layout->data_ptr);
             if (alloc == sycl::usm::alloc::unknown) {
                 layout_ptr_usable = false;
                 if (out_source) {
@@ -2082,8 +2106,7 @@ inline void * ggml_sycl_get_layout_ptr_for(const ggml_tensor * tensor,
         void * cached = ggml_sycl_get_weight_layout_ptr(tensor, device, target);
         if (cached) {
             if (target != GGML_LAYOUT_AOS && ggml_sycl_tensor_is_weight(tensor)) {
-                const sycl::usm::alloc alloc =
-                    sycl::get_pointer_type(cached, ggml_sycl_get_device(device).default_queue().get_context());
+                const sycl::usm::alloc alloc = ggml_sycl_get_alloc_type(cached);
                 if (alloc == sycl::usm::alloc::unknown) {
                     if (out_source) {
                         *out_source = "cache_ptr_non_usm";

@@ -59,6 +59,7 @@
 #include "ggml-impl.h"
 #include "ggml-sycl.h"
 #include "ggml-sycl/add-id.hpp"
+#include "ggml-sycl/alloc-registry.hpp"
 #include "ggml-sycl/backend.hpp"
 #include "ggml-sycl/common.hpp"
 #include "ggml-sycl/convert.hpp"
@@ -218,6 +219,8 @@ struct fp16_weight_cache {
             slab_ptr = nullptr;
         }
         if (slab_ptr) {
+            ggml_sycl::alloc_registry::instance().register_alloc(slab_ptr, limit_bytes, -1,
+                                                                 ggml_sycl::alloc_type::DEVICE);
             slab_size = limit_bytes;
             GGML_LOG_INFO("[SYCL] FP16 weight cache: allocated %.1fMB VRAM slab\n",
                           limit_bytes / (1024.0f * 1024.0f));
@@ -1121,7 +1124,7 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
 
                 // Get device pointer for the gate weights
                 const void *     gate_ptr = nullptr;
-                sycl::usm::alloc atype    = sycl::get_pointer_type(src->data, q.get_context());
+                sycl::usm::alloc atype    = ggml_sycl_get_alloc_type(src->data);
                 if (atype == sycl::usm::alloc::device) {
                     gate_ptr = src->data;
                 } else {
@@ -3600,7 +3603,7 @@ void * ggml_sycl_get_cached_tensor_ptr_for(const ggml_tensor *      tensor,
         return nullptr;
     }
     sycl::queue &    q     = ggml_sycl_get_device(device).default_queue();
-    sycl::usm::alloc alloc = sycl::get_pointer_type(cached_ptr, q.get_context());
+    sycl::usm::alloc alloc = ggml_sycl_get_alloc_type(cached_ptr);
     if (alloc_out) {
         *alloc_out = alloc;
     }
@@ -3983,7 +3986,7 @@ void * ggml_sycl_get_data_ptr_slow(const ggml_tensor * tensor, int device) {
                 view_ctx = nullptr;
             }
             if (view_ctx != nullptr) {
-                sycl::usm::alloc base_ptr_type = sycl::get_pointer_type(base->data, *view_ctx);
+                sycl::usm::alloc base_ptr_type = ggml_sycl_get_alloc_type(base->data);
                 GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr_slow: base=%s data=%p ptr_type=%d\n",
                                 base->name ? base->name : "(null)", base->data, (int) base_ptr_type);
                 if (base_ptr_type == sycl::usm::alloc::device || base_ptr_type == sycl::usm::alloc::shared) {
@@ -4017,7 +4020,7 @@ void * ggml_sycl_get_data_ptr_slow(const ggml_tensor * tensor, int device) {
         }
 
         if (ctx != nullptr) {
-            sycl::usm::alloc ptr_type = sycl::get_pointer_type(tensor->data, *ctx);
+            sycl::usm::alloc ptr_type = ggml_sycl_get_alloc_type(tensor->data);
 
             if (ptr_type == sycl::usm::alloc::device) {
                 if (tensor->extra != nullptr) {
@@ -4835,7 +4838,7 @@ static bool ggml_sycl_is_host_resident_weight(const ggml_tensor * src0, sycl::qu
     // Check 3: USM pointer type query (fallback -- may return unknown on multi-device L0)
     if (src0->data && stream) {
         try {
-            const auto alloc = sycl::get_pointer_type(src0->data, stream->get_context());
+            const auto alloc = ggml_sycl_get_alloc_type(src0->data);
             return alloc != sycl::usm::alloc::device;
         } catch (...) {
             return true;  // Assume host for safety
@@ -5439,7 +5442,7 @@ static sycl::event ggml_sycl_fill_reordered_host(sycl::queue &                  
     sycl::usm::alloc src_alloc             = sycl::usm::alloc::unknown;
 
     if (!src_is_device) {
-        src_alloc             = sycl::get_pointer_type(src, queue.get_context());
+        src_alloc             = ggml_sycl_get_alloc_type(src);
         src_is_usm_accessible = (src_alloc == sycl::usm::alloc::host || src_alloc == sycl::usm::alloc::shared);
         // NOTE: device type would be src_is_device=true, so not checked here
     }
@@ -5544,7 +5547,7 @@ static sycl::event ggml_sycl_fill_reordered_host(sycl::queue &                  
     GGML_SYCL_DEBUG("[DEBUG-FILL] memcpy dst=%p src=%p size=%zu\n", dst, reorder_buf, dst_size);
 
     // Check destination pointer type
-    sycl::usm::alloc dst_type = sycl::get_pointer_type(dst, queue.get_context());
+    sycl::usm::alloc dst_type = ggml_sycl_get_alloc_type(dst);
     GGML_SYCL_DEBUG("[DEBUG-FILL] dst_type=%d (0=unknown, 1=device, 2=host, 3=shared)\n", (int) dst_type);
     const uintptr_t dst_addr = reinterpret_cast<uintptr_t>(dst);
 
@@ -5757,7 +5760,7 @@ static sycl::event ggml_sycl_fill_onednn_woq(sycl::queue &                    qu
         throw std::runtime_error("onednn_woq fill: packed buffer size mismatch");
     }
 
-    const sycl::usm::alloc dst_alloc = sycl::get_pointer_type(dst, queue.get_context());
+    const sycl::usm::alloc dst_alloc = ggml_sycl_get_alloc_type(dst);
     if (dst_alloc == sycl::usm::alloc::device || dst_alloc == sycl::usm::alloc::shared) {
         queue.memcpy(dst, packed.s4.data(), info.weights_bytes);
         queue.memcpy(static_cast<char *>(dst) + info.scales_offset, packed.scales.data(), info.scales_bytes);
@@ -5787,7 +5790,7 @@ static sycl::event ggml_sycl_safe_memcpy(sycl::queue &                    queue,
 
     // CRITICAL: Stage ALL non-device sources due to Level Zero driver bug that reports
     // mmap'd memory as "shared" (type=3) instead of "unknown" (type=0), causing DEVICE_LOST
-    const sycl::usm::alloc src_type = sycl::get_pointer_type(src, queue.get_context());
+    const sycl::usm::alloc src_type = ggml_sycl_get_alloc_type(src);
     if (src_type != sycl::usm::alloc::device) {
         // Non-device source - cannot use queue.memcpy directly
         // Use CPU memcpy to pinned staging buffer, then DMA to device
@@ -5835,7 +5838,7 @@ static sycl::event ggml_sycl_fill_xmx_tiled(sycl::queue & queue,
     // CRITICAL: Stage ALL non-device memory due to Level Zero driver bug that reports
     // mmap'd memory as "shared" (type=3) instead of "unknown" (type=0), causing DEVICE_LOST.
     // We must use host staging for all non-device sources to be safe.
-    const sycl::usm::alloc aos_alloc         = sycl::get_pointer_type(aos_base, queue.get_context());
+    const sycl::usm::alloc aos_alloc         = ggml_sycl_get_alloc_type(aos_base);
     const bool             aos_needs_staging = (aos_alloc != sycl::usm::alloc::device);
 
     uint8_t * device_staging = nullptr;  // Device-side staging for non-device source
@@ -5992,7 +5995,7 @@ static bool ggml_sycl_fill_xmx_tiled_host(sycl::queue & queue,
         return false;
     }
 
-    const sycl::usm::alloc src_alloc = sycl::get_pointer_type(src, queue.get_context());
+    const sycl::usm::alloc src_alloc = ggml_sycl_get_alloc_type(src);
     if (src_alloc != sycl::usm::alloc::device) {
         if (ggml_sycl_fill_xmx_tiled_host_cpu(host_dst, dst_size, src, src_size, ctx)) {
             return true;
@@ -6303,7 +6306,7 @@ static bool ggml_sycl_preload_moe_experts(const ggml_tensor * src0, int device, 
         return false;
 #endif
     }
-    const bool src0_is_device = sycl::get_pointer_type(src0->data, stream.get_context()) == sycl::usm::alloc::device;
+    const bool src0_is_device = ggml_sycl_get_alloc_type(src0->data) == sycl::usm::alloc::device;
     if (layout == GGML_LAYOUT_SOA || layout == GGML_LAYOUT_COALESCED) {
         reorder_ctx.type  = src0->type;
         reorder_ctx.ncols = ncols;
@@ -6442,7 +6445,7 @@ static void ggml_sycl_preload_model_weights() {
         bool host_weights = tensor->buffer && ggml_backend_buffer_is_host(tensor->buffer);
         if (!host_weights) {
             sycl::queue & stream = ggml_sycl_get_device(device).default_queue();
-            const auto    alloc  = sycl::get_pointer_type(tensor->data, stream.get_context());
+            const auto    alloc  = ggml_sycl_get_alloc_type(tensor->data);
             host_weights         = (alloc != sycl::usm::alloc::device);
         }
 
@@ -6562,7 +6565,7 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, l
         return nullptr;
     }
     if (src_alloc == sycl::usm::alloc::unknown) {
-        src_alloc = sycl::get_pointer_type(src_ptr, q.get_context());
+        src_alloc = ggml_sycl_get_alloc_type(src_ptr);
     }
     const bool src_is_device = (src_alloc == sycl::usm::alloc::device);
     const bool strict_aos    = ggml_sycl_unified_dispatch_enabled() && ggml_sycl::should_use_unified(tensor->type) &&
@@ -7445,12 +7448,10 @@ static void ggml_backend_sycl_buffer_get_tensor(ggml_backend_buffer_t buffer,
         }
     };
     if (s_get_tensor_trace) {
-        const sycl::usm::alloc src_alloc_stream = sycl::get_pointer_type(src_ptr, stream.get_context());
-        const sycl::usm::alloc src_alloc_default =
-            sycl::get_pointer_type(src_ptr, dpct::get_in_order_queue().get_context());
-        const sycl::usm::alloc dst_alloc_stream = sycl::get_pointer_type(data, stream.get_context());
-        const sycl::usm::alloc dst_alloc_default =
-            sycl::get_pointer_type(data, dpct::get_in_order_queue().get_context());
+        const sycl::usm::alloc src_alloc_stream  = ggml_sycl_get_alloc_type(src_ptr);
+        const sycl::usm::alloc src_alloc_default = ggml_sycl_get_alloc_type(src_ptr);
+        const sycl::usm::alloc dst_alloc_stream  = ggml_sycl_get_alloc_type(data);
+        const sycl::usm::alloc dst_alloc_default = ggml_sycl_get_alloc_type(data);
         size_t free_mem  = 0;
         size_t total_mem = 0;
         ggml_backend_sycl_get_device_memory(ctx->device, &free_mem, &total_mem);
@@ -7571,7 +7572,7 @@ static bool ggml_sycl_readback_via_shared_kernel(sycl::queue & q,
         }
     }
 
-    const sycl::usm::alloc src_alloc = sycl::get_pointer_type(src_ptr, exec_q.get_context());
+    const sycl::usm::alloc src_alloc = ggml_sycl_get_alloc_type(src_ptr);
     if (src_alloc == sycl::usm::alloc::unknown) {
         if (s_shared_fallback_trace) {
             GGML_LOG_ERROR("[SYCL] %s: shared-fallback source pointer is unknown in exec queue context\n", tag);
@@ -7820,7 +7821,7 @@ static void ggml_backend_sycl_buffer_clear(ggml_backend_buffer_t buffer, uint8_t
     {
         bool is_host_ptr = false;
         try {
-            sycl::usm::alloc pt = sycl::get_pointer_type(ctx->dev_ptr, stream->get_context());
+            sycl::usm::alloc pt = ggml_sycl_get_alloc_type(ctx->dev_ptr);
             is_host_ptr = (pt != sycl::usm::alloc::device);
         } catch (...) {
             is_host_ptr = true;
@@ -7841,7 +7842,7 @@ static void ggml_backend_sycl_buffer_clear(ggml_backend_buffer_t buffer, uint8_t
         s_clear_trace    = (env && std::atoi(env) != 0) ? 1 : 0;
     }
     if (s_clear_trace) {
-        const sycl::usm::alloc alloc      = sycl::get_pointer_type(ctx->dev_ptr, stream->get_context());
+        const sycl::usm::alloc alloc      = ggml_sycl_get_alloc_type(ctx->dev_ptr);
         const char *           alloc_name = "unknown";
         switch (alloc) {
             case sycl::usm::alloc::host:
@@ -7931,7 +7932,7 @@ static void ggml_backend_sycl_buffer_memset_tensor(ggml_backend_buffer_t buffer,
     // Host-pinned buffers: Level Zero GPU queue can't memset host USM pointers.
     bool is_host_ptr = false;
     try {
-        sycl::usm::alloc pt = sycl::get_pointer_type(target_ptr, stream->get_context());
+        sycl::usm::alloc pt = ggml_sycl_get_alloc_type(target_ptr);
         is_host_ptr = (pt != sycl::usm::alloc::device);
     } catch (...) {
         is_host_ptr = true;
@@ -8532,6 +8533,10 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
     // Allocate hot region (device memory)
     if (hot_size > 0) {
         auto err = CHECK_TRY_ERROR(hot_base = sycl::malloc_device(hot_size, *buft_ctx->stream));
+        if (err == 0 && hot_base) {
+            ggml_sycl::alloc_registry::instance().register_alloc(hot_base, hot_size, device,
+                                                                 ggml_sycl::alloc_type::DEVICE);
+        }
         if (err != 0 || !hot_base) {
             // Device allocation failed — fall back to all-cold (host pinned) mode.
             // This happens when VRAM is exhausted (e.g. 120B MoE on 12GB GPU).
@@ -8551,6 +8556,10 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
     // In all-cold mode (hot_size == 0), this holds the entire KV cache.
     if (cold_size > 0) {
         SYCL_CHECK(CHECK_TRY_ERROR(cold_base = sycl::malloc_host(cold_size, *buft_ctx->stream)));
+        if (cold_base) {
+            ggml_sycl::alloc_registry::instance().register_alloc(cold_base, cold_size, -1,
+                                                                 ggml_sycl::alloc_type::HOST_PINNED);
+        }
         if (!cold_base) {
             GGML_LOG_ERROR("[KV-TIER] Failed to allocate %zu bytes host pinned memory for cold region\n", cold_size);
             if (hot_base) {
@@ -11053,7 +11062,7 @@ static ggml_backend_buffer_t ggml_backend_sycl_host_buffer_type_alloc_buffer(ggm
             size / (1024.0f * 1024.0f));
         return ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), size);
     }
-    const sycl::usm::alloc alloc_type = sycl::get_pointer_type(ptr, dpct::get_in_order_queue().get_context());
+    const sycl::usm::alloc alloc_type = ggml_sycl_get_alloc_type(ptr);
     const char *           alloc_name = alloc_type == sycl::usm::alloc::host   ? "pinned" :
                                         alloc_type == sycl::usm::alloc::shared ? "shared" :
 
@@ -11428,6 +11437,8 @@ void * ggml_sycl_malloc_device(size_t size, const sycl::queue & queue, const cha
         return nullptr;
     }
     if (ptr != nullptr) {
+        int dev_id = ggml_sycl_get_device_id_from_queue(const_cast<sycl::queue &>(queue));
+        ggml_sycl::alloc_registry::instance().register_alloc(ptr, size, dev_id, ggml_sycl::alloc_type::DEVICE);
         ggml_sycl_alloc_trace_record("device", size, tag);
         if (size >= 1024 * 1024) {
             GGML_SYCL_DEBUG("[ALLOC] device %.1f MB  tag=%s\n", size / (1024.0f * 1024.0f), tag ? tag : "unknown");
@@ -11448,6 +11459,7 @@ void * ggml_sycl_malloc_host(size_t size, const sycl::queue & queue, const char 
         return nullptr;
     }
     if (ptr != nullptr) {
+        ggml_sycl::alloc_registry::instance().register_alloc(ptr, size, -1, ggml_sycl::alloc_type::HOST_PINNED);
         ggml_sycl_alloc_trace_record("host", size, tag);
         ggml_sycl::offload_stats_note_host_alloc(tag ? tag : "malloc_host", size);
     }
@@ -11466,6 +11478,8 @@ void * ggml_sycl_malloc_shared(size_t size, const sycl::queue & queue, const cha
         return nullptr;
     }
     if (ptr != nullptr) {
+        int dev_id = ggml_sycl_get_device_id_from_queue(const_cast<sycl::queue &>(queue));
+        ggml_sycl::alloc_registry::instance().register_alloc(ptr, size, dev_id, ggml_sycl::alloc_type::SHARED);
         ggml_sycl_alloc_trace_record("shared", size, tag);
     }
     return ptr;
@@ -11775,6 +11789,7 @@ std::pair<void *, size_t> ggml_backend_sycl_context::get_staging_buffer(size_t n
         ggml_sycl::unified_cache_sub_runtime_bytes(device, alloc_size, ggml_sycl::runtime_category::STAGING);
         return { nullptr, 0 };
     }
+    ggml_sycl::alloc_registry::instance().register_alloc(ptr, alloc_size, device, ggml_sycl::alloc_type::DEVICE);
 
     staging_buffer_        = ptr;
     staging_buffer_size_   = alloc_size;
@@ -11847,7 +11862,7 @@ bool ggml_sycl_cpu_fallback_graph(ggml_backend_sycl_context & ctx, ggml_tensor *
             return false;
         }
         try {
-            return sycl::get_pointer_type(ptr, stream->get_context()) == sycl::usm::alloc::device;
+            return ggml_sycl_get_alloc_type(ptr) == sycl::usm::alloc::device;
 
         } catch (...) {
             return false;
@@ -12729,7 +12744,7 @@ inline void ggml_sycl_op_mul_mat_sycl(ggml_backend_sycl_context & ctx,
                 if (info.total_bytes > 0) {
                     void * woq_ptr = ggml_sycl_get_weight_layout_ptr(src0, ctx.device, GGML_LAYOUT_ONEDNN_WOQ);
                     if (woq_ptr) {
-                        const sycl::usm::alloc ptr_type = sycl::get_pointer_type(woq_ptr, stream->get_context());
+                        const sycl::usm::alloc ptr_type = ggml_sycl_get_alloc_type(woq_ptr);
                         if (ptr_type == sycl::usm::alloc::device || ptr_type == sycl::usm::alloc::shared) {
                             const uint8_t * weights_dev = static_cast<const uint8_t *>(woq_ptr);
                             const float *   scales_dev =
@@ -13340,7 +13355,7 @@ static bool ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx,
         if (!ptr) {
             return ggml_sycl::cache_location::HOST_MMAP;
         }
-        const sycl::usm::alloc alloc = sycl::get_pointer_type(ptr, queue.get_context());
+        const sycl::usm::alloc alloc = ggml_sycl_get_alloc_type(ptr);
         if (alloc == sycl::usm::alloc::device) {
             return ggml_sycl::cache_location::DEVICE;
         }
@@ -18592,7 +18607,7 @@ static bool convert_tensor_layout(ggml_tensor * tensor,
         // Determine source memory type to choose correct copy strategy
         // CRITICAL: Stage ALL non-device memory due to Level Zero driver bug that reports
         // mmap'd memory as "shared" (type=3) instead of "unknown" (type=0), causing DEVICE_LOST.
-        const sycl::usm::alloc aos_alloc         = sycl::get_pointer_type(aos_base, stream->get_context());
+        const sycl::usm::alloc aos_alloc         = ggml_sycl_get_alloc_type(aos_base);
         const bool             aos_needs_staging = (aos_alloc != sycl::usm::alloc::device);
         uint8_t *              device_staging    = nullptr;
         uint8_t *              host_staging      = nullptr;  // For non-device source
@@ -19209,7 +19224,7 @@ static void finalize_layouts(ggml_backend_sycl_context & ctx, ggml_cgraph * cgra
 
             bool host_weights = src->buffer && ggml_backend_buffer_is_host(src->buffer);
             if (!host_weights && src->data && ctx.stream()) {
-                const auto alloc = sycl::get_pointer_type(src->data, ctx.stream()->get_context());
+                const auto alloc = ggml_sycl_get_alloc_type(src->data);
                 if (alloc != sycl::usm::alloc::device) {
                     host_weights = true;
                 }
@@ -19698,7 +19713,7 @@ const int32_t * ggml_sycl_get_moe_ids_device_ptr(ggml_backend_sycl_context & ctx
 
     // Also check USM type - if pointer is unknown (mmap'd/heap), we need staging
     sycl::queue *    stream                    = ctx.stream();
-    sycl::usm::alloc ptr_type                  = sycl::get_pointer_type(ids->data, stream->get_context());
+    sycl::usm::alloc ptr_type                  = ggml_sycl_get_alloc_type(ids->data);
     const bool       ids_ptr_device_accessible = (ptr_type == sycl::usm::alloc::device ||
                                             ptr_type == sycl::usm::alloc::shared || ptr_type == sycl::usm::alloc::host);
 
@@ -19848,8 +19863,7 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
     // Determine if src0->data is directly usable by GPU kernels
     // Only host and shared USM types are device-accessible without staging
     // unknown (mmap'd/heap) and device require special handling
-    sycl::usm::alloc src0_alloc =
-        src0->data ? sycl::get_pointer_type(src0->data, stream->get_context()) : sycl::usm::alloc::unknown;
+    sycl::usm::alloc src0_alloc     = src0->data ? ggml_sycl_get_alloc_type(src0->data) : sycl::usm::alloc::unknown;
     const bool src0_is_device = (src0_alloc == sycl::usm::alloc::device);
     const bool src0_is_usm_accessible =
         (src0_alloc == sycl::usm::alloc::host || src0_alloc == sycl::usm::alloc::shared);
@@ -22712,8 +22726,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
 
         const void * src0_data = nullptr;
         if (src0->data) {
-            const sycl::usm::alloc alloc = sycl::get_pointer_type(
-                src0->data, ctx.stream()->get_context());
+            const sycl::usm::alloc alloc = ggml_sycl_get_alloc_type(src0->data);
             GGML_SYCL_DEBUG("[MXFP4-DIRECT] src0=%s src0->data=%p alloc_type=%d ne=[%lld,%lld,%lld,%lld] M=%lld layout=%d\n",
                     src0->name ? src0->name : "(null)", src0->data, (int)alloc,
                     (long long)src0->ne[0], (long long)src0->ne[1], (long long)src0->ne[2], (long long)src0->ne[3],
@@ -23603,8 +23616,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                                                 // expanding VRAM usage for host-resident weights
                                                 bool src_is_device = false;
                                                 try {
-                                                    sycl::usm::alloc atype = sycl::get_pointer_type(
-                                                        src0_data, ctx.stream()->get_context());
+                                                    sycl::usm::alloc atype = ggml_sycl_get_alloc_type(src0_data);
                                                     src_is_device = (atype == sycl::usm::alloc::device);
                                                 } catch (...) {
                                                 }
@@ -23815,8 +23827,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
 
                                         // If the tensor data pointer is host-accessible, compare a few samples.
                                         const sycl::context &  sycl_ctx_local = ctx.stream()->get_context();
-                                        const sycl::usm::alloc src0_tensor_alloc =
-                                            sycl::get_pointer_type(src0->data, sycl_ctx_local);
+                                        const sycl::usm::alloc src0_tensor_alloc = ggml_sycl_get_alloc_type(src0->data);
                                         const bool src0_host_accessible =
                                             (src0_tensor_alloc != sycl::usm::alloc::device);
                                         if (src0_host_accessible && sample_blocks > 0 && weight_bytes > 0) {
@@ -24400,7 +24411,7 @@ static bool ggml_sycl_mul_mat_id_fused(ggml_backend_sycl_context & ctx,
             // All routed experts are device-resident — proceed with fused kernel.
         } else {
             // Path B: single pointer-type check on the contiguous weight block.
-            sycl::usm::alloc ptr_type = sycl::get_pointer_type(src0_weight_ptr, stream->get_context());
+            sycl::usm::alloc ptr_type = ggml_sycl_get_alloc_type(src0_weight_ptr);
             if (ptr_type != sycl::usm::alloc::device) {
                 GGML_SYCL_DEBUG("[MoE FUSED] Weights not in device memory (type=%d), falling back to MMVQ\n",
                                 (int) ptr_type);
@@ -24689,7 +24700,7 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
         if (!ptr) {
             return ggml_sycl::cache_location::HOST_MMAP;
         }
-        const sycl::usm::alloc alloc = sycl::get_pointer_type(ptr, stream->get_context());
+        const sycl::usm::alloc alloc = ggml_sycl_get_alloc_type(ptr);
         if (alloc == sycl::usm::alloc::device) {
             return ggml_sycl::cache_location::DEVICE;
         }
@@ -24774,7 +24785,7 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
     }
     const uint8_t * src0_layout_u8 = use_ptr_table ? nullptr : static_cast<const uint8_t *>(src0_layout_ptr);
     if (!use_ptr_table) {
-        const sycl::usm::alloc src0_layout_alloc = sycl::get_pointer_type(src0_layout_ptr, stream->get_context());
+        const sycl::usm::alloc src0_layout_alloc = ggml_sycl_get_alloc_type(src0_layout_ptr);
         // CRITICAL: non-device memory is NOT safe - must fall back to MMVQ
         // Level Zero driver bug reports mmap'd memory as "shared" instead of "unknown"
         if (src0_layout_alloc != sycl::usm::alloc::device) {
@@ -25632,11 +25643,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
         const bool   cpu_type_ok_fast = cpu_traits_fast && cpu_traits_fast->vec_dot;
 
         const bool multi_gpu_fast = g_moe_multi_gpu_active.load(std::memory_order_acquire);
-        // MXFP4 CPU TG produces incorrect output — vec_dot_mxfp4_q8_0 activation
-        // data is lost during D2H/H2D round-trip. Use GPU MMVQ dispatch instead.
-        const bool mxfp4_exclude = (src0->type == GGML_TYPE_MXFP4);
-        if ((cpu_tg_val_fast == 1 || cpu_tg_val_fast == -2) &&
-            host_weights_fast && cpu_type_ok_fast && !multi_gpu_fast && !mxfp4_exclude) {
+        if ((cpu_tg_val_fast == 1 || cpu_tg_val_fast == -2) && host_weights_fast && cpu_type_ok_fast &&
+            !multi_gpu_fast) {
             static std::atomic<int> cpu_tg_log{0};
             if (cpu_tg_log.fetch_add(1, std::memory_order_relaxed) < 3) {
                 GGML_LOG_INFO("[CPU-TG] Routing %s (type=%d, ne12=1) to CPU-primary path\n",
@@ -25707,17 +25715,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
                     bool src1_host_f = src1->buffer && ggml_backend_buffer_is_host(src1->buffer);
                     if (!src1_host_f && src1->data) {
-                        static thread_local std::unordered_map<const void *, sycl::usm::alloc> tl_pt_cache;
-                        auto             pt_it = tl_pt_cache.find(src1->data);
-                        sycl::usm::alloc pt;
-                        if (pt_it != tl_pt_cache.end()) {
-                            pt = pt_it->second;
-                        } else {
-                            pt                      = sycl::get_pointer_type(src1->data, stream->get_context());
-                            tl_pt_cache[src1->data] = pt;
-                        }
-                        src1_host_f = (pt == sycl::usm::alloc::host || pt == sycl::usm::alloc::shared ||
-                                       pt == sycl::usm::alloc::unknown);
+                        const sycl::usm::alloc pt = ggml_sycl_get_alloc_type(src1->data);
+                        src1_host_f               = (pt == sycl::usm::alloc::host || pt == sycl::usm::alloc::shared);
                     }
                     if (src1_host_f) {
                         act_f = static_cast<const float *>(src1->data);
@@ -25979,12 +25978,10 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 if (cache_it != tl_ptr_type_cache.end()) {
                     pt = cache_it->second;
                 } else {
-                    pt = sycl::get_pointer_type(src1->data, stream->get_context());
+                    pt                            = ggml_sycl_get_alloc_type(src1->data);
                     tl_ptr_type_cache[src1->data] = pt;
                 }
-                src1_on_host = (pt == sycl::usm::alloc::host ||
-                                pt == sycl::usm::alloc::shared ||
-                                pt == sycl::usm::alloc::unknown);
+                src1_on_host = (pt == sycl::usm::alloc::host || pt == sycl::usm::alloc::shared);
             }
 
             if (src1_on_host) {
@@ -26149,7 +26146,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             auto * ex = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
             void * lp = ggml_sycl_get_layout_ptr_for(src0, ctx.device, GGML_LAYOUT_AOS);
             if (lp) {
-                auto pt = sycl::get_pointer_type(lp, ctx.stream()->get_context());
+                auto pt = ggml_sycl_get_alloc_type(lp);
                 hw = (pt != sycl::usm::alloc::device);
             }
             GGML_UNUSED(ex);
@@ -26177,8 +26174,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             }
             const auto * ct = ggml_get_type_traits_cpu(src0->type);
             bool ct_ok = ct && ct->vec_dot;
-            const bool mxfp4_early_exclude = (src0->type == GGML_TYPE_MXFP4);
-            early_cpu_expert_tg = (mhv != 0) && ct_ok && (etv == 1 || etv == -2) && !mxfp4_early_exclude;
+            early_cpu_expert_tg = (mhv != 0) && ct_ok && (etv == 1 || etv == -2);
             if (early_cpu_expert_tg) {
                 static std::atomic<int> log_count{0};
                 if (log_count.fetch_add(1, std::memory_order_relaxed) < 3) {
@@ -26372,7 +26368,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     const size_t     expert_size      = nb02;  // Bytes per expert
     sycl::usm::alloc ptr_type         = sycl::usm::alloc::unknown;
     if (!use_expert_cache && src0_layout_ptr) {
-        ptr_type = sycl::get_pointer_type(src0_layout_ptr, stream->get_context());
+        ptr_type = ggml_sycl_get_alloc_type(src0_layout_ptr);
         if (ptr_type != sycl::usm::alloc::device) {
             use_expert_cache = true;
         }
@@ -32035,7 +32031,7 @@ static void graph_prestage_leaf_tensors(ggml_backend_sycl_context * ctx, const g
         }
 
         // Check if this is already device memory
-        sycl::usm::alloc ptr_type = sycl::get_pointer_type(tensor->data, *sycl_ctx);
+        sycl::usm::alloc ptr_type = ggml_sycl_get_alloc_type(tensor->data);
         if (ptr_type == sycl::usm::alloc::device) {
             already_device_count++;
             staged_pointers.insert(tensor->data);
@@ -32882,8 +32878,8 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
     // read when the pointer is host-accessible (malloc_host or malloc_shared).
     // Falls back to blocking D2H memcpy only for device-only pointers.
     const sycl::context & sycl_ctx_ref = q->get_context();
-    auto read_i32_host_or_d2h = [&](const int32_t * ptr) -> int32_t {
-        const auto alloc_type = sycl::get_pointer_type(ptr, sycl_ctx_ref);
+    auto                  read_i32_host_or_d2h = [&](const int32_t * ptr) -> int32_t {
+        const auto alloc_type = ggml_sycl_get_alloc_type(ptr);
         if (alloc_type == sycl::usm::alloc::host || alloc_type == sycl::usm::alloc::shared) {
             return *ptr;
         }
@@ -32892,7 +32888,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
         return val;
     };
     auto read_i64_host_or_d2h = [&](const void * ptr) -> int64_t {
-        const auto alloc_type = sycl::get_pointer_type(ptr, sycl_ctx_ref);
+        const auto alloc_type = ggml_sycl_get_alloc_type(ptr);
         if (alloc_type == sycl::usm::alloc::host || alloc_type == sycl::usm::alloc::shared) {
             return *(const int64_t *)ptr;
         }
@@ -33073,7 +33069,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
             return sycl::usm::alloc::unknown;
         }
         try {
-            return sycl::get_pointer_type(ptr, q->get_context());
+            return ggml_sycl_get_alloc_type(ptr);
         } catch (...) {
             return sycl::usm::alloc::unknown;
         }

@@ -108,7 +108,7 @@ static bool ggml_sycl_cpu_get_rows_direct(ggml_backend_sycl_context & ctx,
             return false;
         }
         try {
-            return sycl::get_pointer_type(const_cast<void *>(ptr), stream->get_context()) == sycl::usm::alloc::device;
+            return ggml_sycl_get_alloc_type(const_cast<void *>(ptr)) == sycl::usm::alloc::device;
         } catch (...) {
             return false;
         }
@@ -1567,7 +1567,7 @@ static sycl::event get_rows_stream_copy(sycl::queue &                    queue,
     const size_t row_start = offset_bytes / ctx->row_total_bytes;
     const size_t row_count = slice_bytes / ctx->row_total_bytes;
 
-    const sycl::usm::alloc src_alloc = sycl::get_pointer_type(ctx->src_base, queue.get_context());
+    const sycl::usm::alloc src_alloc = ggml_sycl_get_alloc_type(ctx->src_base);
     if (src_alloc != sycl::usm::alloc::device) {
         uint8_t * host_slice =
             static_cast<uint8_t *>(ggml_sycl_malloc_host_tracked_bytes(slice_bytes, queue, "get_rows:host_stage"));
@@ -1754,7 +1754,7 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
             cache_view.size     = ggml_row_size(src0->type, src0->ne[0]) * static_cast<size_t>(storage_rows);
             cache_view.layout   = layout;
             cache_view.type     = ggml_sycl::cache_entry_type::DENSE_WEIGHT;
-            const sycl::usm::alloc alloc = sycl::get_pointer_type(cache_view.ptr, ctx.stream()->get_context());
+            const sycl::usm::alloc alloc = ggml_sycl_get_alloc_type(cache_view.ptr);
             if (alloc == sycl::usm::alloc::device) {
                 cache_view.location = ggml_sycl::cache_location::DEVICE;
             } else if (alloc == sycl::usm::alloc::host || alloc == sycl::usm::alloc::shared) {
@@ -1780,10 +1780,10 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         const sycl::context & sycl_ctx = ctx.stream()->get_context();
         sycl::usm::alloc src0_alloc = sycl::usm::alloc::unknown;
         if (src0->data != nullptr) {
-            src0_alloc = sycl::get_pointer_type(src0->data, sycl_ctx);
+            src0_alloc = ggml_sycl_get_alloc_type(src0->data);
         }
-        const sycl::usm::alloc src1_alloc = sycl::get_pointer_type(src1_i32, sycl_ctx);
-        const sycl::usm::alloc dst_alloc  = sycl::get_pointer_type(dst_d, sycl_ctx);
+        const sycl::usm::alloc src1_alloc = ggml_sycl_get_alloc_type(src1_i32);
+        const sycl::usm::alloc dst_alloc  = ggml_sycl_get_alloc_type(dst_d);
         GGML_LOG_INFO(
             "[GET_ROWS] entry: tensor=%s type=%s mode=%d layout=%d rows=%lld ncols=%lld src0_alloc=%d src1_alloc=%d dst_alloc=%d "
             "free=%.1fMB total=%.1fMB\n",
@@ -1821,7 +1821,7 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
             const char * alloc_name = "unknown";
             if (ctx.stream()) {
                 const sycl::context & sycl_ctx = ctx.stream()->get_context();
-                const sycl::usm::alloc alloc = sycl::get_pointer_type(src1_i32, sycl_ctx);
+                const sycl::usm::alloc alloc    = ggml_sycl_get_alloc_type(src1_i32);
                 alloc_name = ggml_sycl_usm_alloc_name(alloc);
                 if (alloc != sycl::usm::alloc::unknown) {
                     ctx.stream()->memcpy(host_ids, src1_i32, sizeof(int32_t) * (size_t) n_copy).wait();
@@ -1879,8 +1879,7 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
             if (segments_ok && stream_ctx.row_total_bytes > 0) {
                 try {
                     std::vector<int32_t> row_indices(n_rows_total);
-                    const sycl::usm::alloc idx_alloc =
-                        sycl::get_pointer_type(src1_i32, ctx.stream()->get_context());
+                    const sycl::usm::alloc idx_alloc = ggml_sycl_get_alloc_type(src1_i32);
                     if (idx_alloc == sycl::usm::alloc::device) {
                         if (ggml_sycl_graph_recording_active()) {
                             ctx.graphs_disabled = true;

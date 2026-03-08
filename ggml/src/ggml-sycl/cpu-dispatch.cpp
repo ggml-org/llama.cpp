@@ -24,6 +24,7 @@
 
 #include "cpu-dispatch.hpp"
 
+#include "common.hpp"
 #include "ggml-backend.h"
 #include "ggml-cpu.h"
 #include "ggml.h"
@@ -231,7 +232,7 @@ void ggml_sycl_cpu_dispatch_register_host_ptr(const char * name, const void * ho
         // will deadlock or stall indefinitely when accessing them from the CPU.
         try {
             sycl::context    sycl_ctx = ggml_sycl_get_device(0).default_queue().get_context();
-            sycl::usm::alloc alloc    = sycl::get_pointer_type(host_ptr, sycl_ctx);
+            sycl::usm::alloc alloc    = ggml_sycl_get_alloc_type(host_ptr);
             if (alloc == sycl::usm::alloc::device) {
                 // Device-only USM — not safe for CPU vec_dot.  Skip registration.
                 return;
@@ -1838,7 +1839,7 @@ static bool is_host_accessible_usm(void * ptr, int device) {
     bool is_host = true;  // assume host unless proven device
     try {
         sycl::context    ctx = ggml_sycl_get_device(device).default_queue().get_context();
-        sycl::usm::alloc pt  = sycl::get_pointer_type(ptr, ctx);
+        sycl::usm::alloc pt  = ggml_sycl_get_alloc_type(ptr);
         is_host              = (pt != sycl::usm::alloc::device);
     } catch (...) {}
     cache[ptr] = is_host;

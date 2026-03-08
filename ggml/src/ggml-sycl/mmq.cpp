@@ -6708,7 +6708,7 @@ static sycl::event mmq_stream_copy(sycl::queue &                    queue,
     const size_t row_count = slice_bytes / ctx->row_total_bytes;
     const size_t src_row   = static_cast<size_t>(ctx->row_base) + row_start;
 
-    const sycl::usm::alloc src_alloc = sycl::get_pointer_type(ctx->src_base, queue.get_context());
+    const sycl::usm::alloc src_alloc = ggml_sycl_get_alloc_type(ctx->src_base);
     if (src_alloc != sycl::usm::alloc::device) {
         uint8_t * host_slice =
             static_cast<uint8_t *>(ggml_sycl_malloc_host_tracked_bytes(slice_bytes, queue, "mmq:host_stage"));
@@ -6977,7 +6977,7 @@ void ggml_sycl_op_mul_mat_q(
         if (!ptr) {
             return ggml_sycl::cache_location::HOST_MMAP;
         }
-        const sycl::usm::alloc alloc = sycl::get_pointer_type(ptr, stream->get_context());
+        const sycl::usm::alloc alloc = ggml_sycl_get_alloc_type(ptr);
         if (alloc == sycl::usm::alloc::device) {
             return ggml_sycl::cache_location::DEVICE;
         }

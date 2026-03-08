@@ -60,7 +60,7 @@ void ggml_sycl_add_id(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
   // Check if src1 needs staging - GPU can only directly access device memory
   // CRITICAL: Stage ALL non-device pointers due to Level Zero driver bug that reports
   // mmap'd memory as "shared" (type=3) instead of "unknown" (type=0), causing DEVICE_LOST
-  const sycl::usm::alloc src1_type = sycl::get_pointer_type(src1->data, q.get_context());
+  const sycl::usm::alloc src1_type          = ggml_sycl_get_alloc_type(src1->data);
   const bool src1_needs_staging = (src1_type != sycl::usm::alloc::device);
 
   const float* src1_d = nullptr;

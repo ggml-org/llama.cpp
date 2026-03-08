@@ -13,11 +13,13 @@
 #ifndef GGML_SYCL_DPCT_HELPER_HPP
 #define GGML_SYCL_DPCT_HELPER_HPP
 
-#include <sycl/sycl.hpp>
-#include <sycl/half_type.hpp>
-#include <syclcompat/math.hpp>
+#include "../alloc-registry.hpp"
+
 #include <map>
 #include <optional>
+#include <sycl/half_type.hpp>
+#include <sycl/sycl.hpp>
+#include <syclcompat/math.hpp>
 
 // Math library includes for BLAS operations
 // Intel: Uses oneDNN as primary, MKL optional fallback via GGML_SYCL_USE_INTEL_ONEMKL
@@ -1258,16 +1260,19 @@ namespace dpct
         static pointer_access_attribute get_pointer_attribute(sycl::queue &q,
                                                               const void *ptr)
         {
-            switch (sycl::get_pointer_type(ptr, q.get_context()))
-            {
-            case sycl::usm::alloc::unknown:
-                return pointer_access_attribute::host_only;
-            case sycl::usm::alloc::device:
-                return pointer_access_attribute::device_only;
-            case sycl::usm::alloc::shared:
-            case sycl::usm::alloc::host:
-                return pointer_access_attribute::host_device;
+            const auto * info = ggml_sycl::alloc_registry::instance().lookup(ptr);
+            if (info == nullptr) {
+                return pointer_access_attribute::host_only;  // Unknown = host-only (mmap, etc.)
             }
+            switch (info->type) {
+                case ggml_sycl::alloc_type::DEVICE:
+                    return pointer_access_attribute::device_only;
+                case ggml_sycl::alloc_type::HOST_PINNED:
+                case ggml_sycl::alloc_type::SHARED:
+                case ggml_sycl::alloc_type::MMAP:
+                    return pointer_access_attribute::host_device;
+            }
+            return pointer_access_attribute::host_only;
         }
 
         template <typename ArgT>

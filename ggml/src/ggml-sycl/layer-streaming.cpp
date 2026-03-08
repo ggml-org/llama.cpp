@@ -5,9 +5,11 @@
 //
 
 #include "layer-streaming.hpp"
-#include "tensor-types.hpp"
 
+#include "alloc-registry.hpp"
+#include "common.hpp"
 #include "ggml-impl.h"
+#include "tensor-types.hpp"
 
 #include <algorithm>
 
@@ -88,6 +90,10 @@ bool layer_stream_manager::allocate_buffers(sycl::queue & queue) {
 
     for (int i = 0; i < 2; i++) {
         buffers_[i] = sycl::malloc_device(buffer_size_, queue);
+        if (buffers_[i]) {
+            alloc_registry::instance().register_alloc(buffers_[i], buffer_size_,
+                                                      ggml_sycl_get_device_id_from_queue(queue), alloc_type::DEVICE);
+        }
         if (!buffers_[i]) {
             GGML_LOG_ERROR("[LAYER-STREAM] Failed to allocate buffer %d (%.1f MB)\n",
                            i, buffer_size_ / (1024.0 * 1024.0));

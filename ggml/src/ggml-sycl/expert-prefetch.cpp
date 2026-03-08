@@ -164,7 +164,7 @@ bool ExpertPrefetcher::hint_locked(int layer_idx, int expert_idx) {
         src_ptr = placement.host_src_ptr;
     } else if (placement.device_id != device_id_) {
         // No host source available — check if data_ptr is host-accessible.
-        auto ptr_type = sycl::get_pointer_type(placement.data_ptr, dma_queue_->get_context());
+        auto ptr_type = ggml_sycl_get_alloc_type(placement.data_ptr);
         if (ptr_type == sycl::usm::alloc::device) {
             return false;  // GPU0 VRAM, can't DMA cross-device
         }
