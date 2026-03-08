@@ -1,5 +1,4 @@
 #include "llama.h"
-#include "llama-quant.h"
 #include "llama-impl.h"
 #include "llama-model.h"
 #include "llama-model-loader.h"

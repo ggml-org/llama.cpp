@@ -1,7 +1,6 @@
 #include "common.h"
 #include "llama.h"
 #include "gguf.h"
-#include "../src/llama-quant.h"
 
 #include <algorithm>
 #include <cctype>
