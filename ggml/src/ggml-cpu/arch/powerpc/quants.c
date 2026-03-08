@@ -23,6 +23,13 @@
 
 #define UNUSED GGML_UNUSED
 
+#if defined(__ALTIVEC__) || defined(__VSX__)
+#define GGML_POWER_PREFETCH_RESIDENT(addr) \
+    __asm__ __volatile__("dcbt 16, %0, 0" : : "b"(addr) : "memory")
+#else
+#define GGML_POWER_PREFETCH_RESIDENT(addr) ((void) 0)
+#endif
+
 #if defined(__POWER9_VECTOR__)
 #define B1(c,s,n)  0x ## n ## c ,  0x ## n ## s
 #define B2(c,s,n) B1(c,s,n ## c), B1(c,s,n ## s)
@@ -170,6 +177,11 @@ void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
     for (; ib < nb; ++ib) {
         __builtin_prefetch(x[ib].qs, 0, 1);
         __builtin_prefetch(y[ib].qs, 0, 1);
+
+        if (ib + 4 < nb) {
+            GGML_POWER_PREFETCH_RESIDENT(x[ib + 4].qs);
+            GGML_POWER_PREFETCH_RESIDENT(y[ib + 4].qs);
+        }
 
         vector float vxd = vec_splats(GGML_CPU_FP16_TO_FP32(x[ib].d));
         vector float vyd = vec_splats(GGML_CPU_FP16_TO_FP32(y[ib].d));
@@ -587,6 +599,13 @@ void ggml_vec_dot_q2_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
     vector float vsumf3 = vec_splats(0.0f);
 
     for (int i = 0; i < nb; ++i) {
+        if (i + 2 < nb) {
+            GGML_POWER_PREFETCH_RESIDENT(x[i + 2].qs);
+            GGML_POWER_PREFETCH_RESIDENT(x[i + 2].scales);
+            GGML_POWER_PREFETCH_RESIDENT(y[i + 2].qs);
+            GGML_POWER_PREFETCH_RESIDENT(y[i + 2].bsums);
+        }
+
         vector float vxd = vec_splats(GGML_CPU_FP16_TO_FP32(x[i].d));
         vector float vyd = vec_splats(y[i].d);
         vector float vd = vec_mul(vxd, vyd);
@@ -980,6 +999,11 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
         for (int j = 0; j < QK_K/64; j+=2) {
             __builtin_prefetch(q4, 0, 1);
             __builtin_prefetch(q8, 0, 1);
+
+            if (j + 2 < QK_K/64) {
+                GGML_POWER_PREFETCH_RESIDENT(q4 + 128);
+                GGML_POWER_PREFETCH_RESIDENT(q8 + 256);
+            }
 
             vector signed char qxs0 = (vector signed char)vec_xl( 0, q4);
             vector signed char qxs1 = (vector signed char)vec_xl(16, q4);
