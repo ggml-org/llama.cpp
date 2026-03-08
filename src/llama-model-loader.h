@@ -8,8 +8,10 @@
 
 #include "ggml-cpp.h"
 
+#include <atomic>
 #include <cstddef>
 #include <map>
+#include <mutex>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -75,6 +77,7 @@ struct llama_model_loader {
     bool no_alloc;
 
     llama_files files;
+    std::vector<std::string> file_paths;
     llama_ftype ftype;
     llama_fver  fver;
 
@@ -90,9 +93,11 @@ struct llama_model_loader {
     std::string arch_name;
     LLM_KV      llm_kv    = LLM_KV(LLM_ARCH_UNKNOWN);
 
-    size_t size_done = 0;
+    std::atomic<size_t> size_done = 0;
     size_t size_data = 0;
     std::vector<std::pair<size_t, size_t>> mmaps_used;
+    std::mutex mmaps_used_mutex;
+    std::atomic<bool> final_cleanup_done = false;
 
     llama_model_loader(
         const std::string & fname,

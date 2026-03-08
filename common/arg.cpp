@@ -2360,6 +2360,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_SPLIT_MODE"));
     add_opt(common_arg(
+        {"-pl", "--parallel-load"}, "N",
+        string_format("max parallel jobs for model loading (default: %d, -1 = no cap (up to #contexts), 1 = sequential)", params.n_parallel_load),
+        [](common_params & params, int value) {
+            params.n_parallel_load = value;
+            if (params.n_parallel_load <= 0) {
+                params.n_parallel_load = -1; // unlimited
+            }
+#ifdef _WIN32
+            _putenv_s("LLAMA_ARG_PARALLEL_LOAD", std::to_string(params.n_parallel_load).c_str());
+#else
+            setenv("LLAMA_ARG_PARALLEL_LOAD", std::to_string(params.n_parallel_load).c_str(), 1);
+#endif
+        }
+    ).set_env("LLAMA_ARG_PARALLEL_LOAD"));
+    add_opt(common_arg(
         {"-ts", "--tensor-split"}, "N0,N1,N2,...",
         "fraction of the model to offload to each GPU, comma-separated list of proportions, e.g. 3,1",
         [](common_params & params, const std::string & value) {
