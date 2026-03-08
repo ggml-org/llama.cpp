@@ -168,8 +168,10 @@ void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
 #pragma GCC unroll 8
     for (; ib < nb; ++ib) {
-        __builtin_prefetch(x[ib].qs, 0, 1);
-        __builtin_prefetch(y[ib].qs, 0, 1);
+        if (ib + 1 < nb) {
+            __builtin_prefetch(x[ib + 1].qs, 0, 1);
+            __builtin_prefetch(y[ib + 1].qs, 0, 1);
+        }
 
         vector float vxd = vec_splats(GGML_CPU_FP16_TO_FP32(x[ib].d));
         vector float vyd = vec_splats(GGML_CPU_FP16_TO_FP32(y[ib].d));
@@ -237,8 +239,10 @@ void ggml_vec_dot_q4_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
 #pragma GCC unroll 4
     for (; ib < nb; ++ib) {
-        __builtin_prefetch(x[ib].qs, 0, 1);
-        __builtin_prefetch(y[ib].qs, 0, 1);
+        if (ib + 1 < nb) {
+            __builtin_prefetch(x[ib + 1].qs, 0, 1);
+            __builtin_prefetch(y[ib + 1].qs, 0, 1);
+        }
 
         vector float vxd = vec_splats(GGML_CPU_FP16_TO_FP32(x[ib].d));
         vector float vyd = vec_splats(GGML_CPU_FP16_TO_FP32(y[ib].d));
@@ -304,8 +308,10 @@ void ggml_vec_dot_mxfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
 #pragma GCC unroll 8
     for (; ib < nb; ++ib) {
-        __builtin_prefetch(x[ib].qs, 0, 1);
-        __builtin_prefetch(y[ib].qs, 0, 1);
+        if (ib + 1 < nb) {
+            __builtin_prefetch(x[ib + 1].qs, 0, 1);
+            __builtin_prefetch(y[ib + 1].qs, 0, 1);
+        }
 
         vector float vyd = vec_splats(GGML_CPU_FP16_TO_FP32(y[ib].d) *
                                       GGML_E8M0_TO_FP32_HALF(x[ib].e));
@@ -370,8 +376,10 @@ void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
 #pragma GCC unroll 4
     for (; ib < nb; ++ib) {
-        __builtin_prefetch(x[ib].qs, 0, 1);
-        __builtin_prefetch(y[ib].qs, 0, 1);
+        if (ib + 1 < nb) {
+            __builtin_prefetch(x[ib + 1].qs, 0, 1);
+            __builtin_prefetch(y[ib + 1].qs, 0, 1);
+        }
 
         vector float vxd = vec_splats(GGML_CPU_FP16_TO_FP32(x[ib].d));
         vector float vyd = vec_splats(GGML_CPU_FP16_TO_FP32(y[ib].d));
@@ -443,8 +451,10 @@ void ggml_vec_dot_q5_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
 #pragma GCC unroll 4
     for (; ib < nb; ++ib) {
-        __builtin_prefetch(x[ib].qs, 0, 1);
-        __builtin_prefetch(y[ib].qs, 0, 1);
+        if (ib + 1 < nb) {
+            __builtin_prefetch(x[ib + 1].qs, 0, 1);
+            __builtin_prefetch(y[ib + 1].qs, 0, 1);
+        }
 
         vector float vxd = vec_splats(GGML_CPU_FP16_TO_FP32(x[ib].d));
         vector float vyd = vec_splats(GGML_CPU_FP16_TO_FP32(y[ib].d));
@@ -515,8 +525,10 @@ void ggml_vec_dot_q8_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
 #pragma GCC unroll 8
     for (; ib < nb; ++ib) {
-        __builtin_prefetch(x[ib].qs, 0, 1);
-        __builtin_prefetch(y[ib].qs, 0, 1);
+        if (ib + 1 < nb) {
+            __builtin_prefetch(x[ib + 1].qs, 0, 1);
+            __builtin_prefetch(y[ib + 1].qs, 0, 1);
+        }
 
         vector float vxd = vec_splats(GGML_CPU_FP16_TO_FP32(x[ib].d));
         vector float vyd = vec_splats(GGML_CPU_FP16_TO_FP32(y[ib].d));
@@ -2145,8 +2157,10 @@ void ggml_vec_dot_iq4_nl_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const v
 
 #pragma GCC unroll 4
     for (; ib < nb; ++ib) {
-        __builtin_prefetch(x[ib].qs, 0, 1);
-        __builtin_prefetch(y[ib].qs, 0, 1);
+        if (ib + 1 < nb) {
+            __builtin_prefetch(x[ib + 1].qs, 0, 1);
+            __builtin_prefetch(y[ib + 1].qs, 0, 1);
+        }
 
 
         vector float vxd = vec_splats(GGML_CPU_FP16_TO_FP32(x[ib].d));
