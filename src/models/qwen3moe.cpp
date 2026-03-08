@@ -33,10 +33,10 @@ llm_build_qwen3moe::llm_build_qwen3moe(const llama_model & model, const llm_grap
             ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
             cb(Qcur, "Qcur", il);
 
-            ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
+            ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur, model.layers[il].wk_scale);
             cb(Kcur, "Kcur", il);
 
-            ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
+            ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur, model.layers[il].wv_scale);
             cb(Vcur, "Vcur", il);
 
             Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);

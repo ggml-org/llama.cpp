@@ -122,10 +122,10 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn(
                      Qcur_full->nb[1], Qcur_full->nb[2], Qcur_full->nb[3], n_embd_head * ggml_element_size(Qcur_full));
     cb(gate, "gate", il);
 
-    ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
+    ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur, model.layers[il].wk_scale);
     cb(Kcur, "Kcur", il);
 
-    ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
+    ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur, model.layers[il].wv_scale);
     cb(Vcur, "Vcur", il);
 
     Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
@@ -514,9 +514,9 @@ ggml_tensor * llm_build_qwen3next::build_layer_ffn(ggml_tensor * cur, const int 
     } else {
         // Dense FFN branch (not currently used I believe)
         cur = build_ffn(cur,
-            model.layers[il].ffn_up, NULL, NULL,
-            model.layers[il].ffn_gate, NULL, NULL,
-            model.layers[il].ffn_down, NULL, NULL,
+            model.layers[il].ffn_up, NULL, model.layers[il].ffn_up_scale,
+            model.layers[il].ffn_gate, NULL, model.layers[il].ffn_gate_scale,
+            model.layers[il].ffn_down, NULL, model.layers[il].ffn_down_scale,
             NULL,
             LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);

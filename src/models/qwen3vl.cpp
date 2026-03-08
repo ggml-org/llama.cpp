@@ -39,10 +39,10 @@ llm_build_qwen3vl::llm_build_qwen3vl(const llama_model & model, const llm_graph_
             ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
             cb(Qcur, "Qcur", il);
 
-            ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
+            ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur, model.layers[il].wk_scale);
             cb(Kcur, "Kcur", il);
 
-            ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
+            ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur, model.layers[il].wv_scale);
             cb(Vcur, "Vcur", il);
 
             Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
@@ -91,9 +91,9 @@ llm_build_qwen3vl::llm_build_qwen3vl(const llama_model & model, const llm_graph_
         cb(cur, "ffn_norm", il);
 
         cur = build_ffn(cur,
-                model.layers[il].ffn_up,   NULL, NULL,
-                model.layers[il].ffn_gate, NULL, NULL,
-                model.layers[il].ffn_down, NULL, NULL,
+                model.layers[il].ffn_up,   NULL, model.layers[il].ffn_up_scale,
+                model.layers[il].ffn_gate, NULL, model.layers[il].ffn_gate_scale,
+                model.layers[il].ffn_down, NULL, model.layers[il].ffn_down_scale,
                 NULL,
                 LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);

@@ -2,6 +2,141 @@
 
 #include "llama-memory-recurrent.h"
 
+namespace {
+
+static bool qwen35moe_has_nvfp4_expert_scales(const llama_layer & layer) {
+    return (layer.ffn_gate_up_exps != nullptr && layer.ffn_gate_up_exps->type == GGML_TYPE_NVFP4 && layer.ffn_gate_up_exps_scale != nullptr) ||
+           (layer.ffn_gate_exps    != nullptr && layer.ffn_gate_exps->type    == GGML_TYPE_NVFP4 && layer.ffn_gate_exps_scale    != nullptr) ||
+           (layer.ffn_up_exps      != nullptr && layer.ffn_up_exps->type      == GGML_TYPE_NVFP4 && layer.ffn_up_exps_scale      != nullptr) ||
+           (layer.ffn_down_exps    != nullptr && layer.ffn_down_exps->type    == GGML_TYPE_NVFP4 && layer.ffn_down_exps_scale    != nullptr);
+}
+
+static ggml_tensor * qwen35moe_build_moe_ffn_nvfp4_scaled(
+        llm_build_qwen35moe & gctx,
+        ggml_tensor *         cur,
+        const llama_layer &   layer,
+        const int             il) {
+    const int64_t n_embd   = cur->ne[0];
+    const int64_t n_tokens = cur->ne[1];
+
+    ggml_tensor * logits = gctx.build_lora_mm(layer.ffn_gate_inp, cur); // [n_expert, n_tokens]
+    gctx.cb(logits, "ffn_moe_logits", il);
+
+    ggml_tensor * probs = ggml_soft_max(gctx.ctx0, logits); // [n_expert, n_tokens]
+    gctx.cb(probs, "ffn_moe_probs", il);
+
+    ggml_tensor * selection_probs = probs;
+
+    if (gctx.hparams.n_expert_groups > 1 && n_tokens > 0) {
+        const int64_t n_exp_per_group = gctx.n_expert / gctx.hparams.n_expert_groups;
+
+        ggml_tensor * selection_groups = ggml_reshape_3d(gctx.ctx0, selection_probs, n_exp_per_group, gctx.hparams.n_expert_groups, n_tokens); // [n_exp_per_group, n_expert_groups, n_tokens]
+
+        ggml_tensor * group_scores = ggml_argsort_top_k(gctx.ctx0, selection_groups, 2); // [2, n_expert_groups, n_tokens]
+        group_scores = ggml_get_rows(gctx.ctx0, ggml_reshape_4d(gctx.ctx0, selection_groups, 1, selection_groups->ne[0], selection_groups->ne[1], selection_groups->ne[2]), group_scores); // [1, 2, n_expert_groups, n_tokens]
+
+        group_scores = ggml_sum_rows(gctx.ctx0, ggml_reshape_3d(gctx.ctx0, group_scores, group_scores->ne[1], group_scores->ne[2], group_scores->ne[3])); // [1, n_expert_groups, n_tokens]
+        group_scores = ggml_reshape_2d(gctx.ctx0, group_scores, group_scores->ne[1], group_scores->ne[2]); // [n_expert_groups, n_tokens]
+
+        ggml_tensor * expert_groups = ggml_argsort_top_k(gctx.ctx0, group_scores, gctx.hparams.n_group_used); // [n_group_used, n_tokens]
+        gctx.cb(expert_groups, "ffn_moe_group_topk", il);
+
+        selection_probs = ggml_get_rows(gctx.ctx0, selection_groups, expert_groups); // [n_exp_per_group, n_group_used, n_tokens]
+        selection_probs = ggml_set_rows(gctx.ctx0, ggml_fill(gctx.ctx0, selection_groups, -INFINITY), selection_probs, expert_groups); // [n_exp_per_group, n_expert_groups, n_tokens]
+        selection_probs = ggml_reshape_2d(gctx.ctx0, selection_probs, gctx.n_expert, n_tokens); // [n_expert, n_tokens]
+        gctx.cb(selection_probs, "ffn_moe_probs_masked", il);
+    }
+
+    ggml_tensor * selected_experts = ggml_argsort_top_k(gctx.ctx0, selection_probs, gctx.n_expert_used); // [n_expert_used, n_tokens]
+    gctx.cb(selected_experts->src[0], "ffn_moe_argsort", il);
+    gctx.cb(selected_experts, "ffn_moe_topk", il);
+
+    probs = ggml_reshape_3d(gctx.ctx0, probs, 1, gctx.n_expert, n_tokens);
+
+    ggml_tensor * weights = ggml_get_rows(gctx.ctx0, probs, selected_experts); // [1, n_expert_used, n_tokens]
+    gctx.cb(weights, "ffn_moe_weights", il);
+
+    weights = ggml_reshape_2d(gctx.ctx0, weights, gctx.n_expert_used, n_tokens);
+
+    ggml_tensor * weights_sum = ggml_sum_rows(gctx.ctx0, weights); // [1, n_tokens]
+    gctx.cb(weights_sum, "ffn_moe_weights_sum", il);
+
+    weights_sum = ggml_clamp(gctx.ctx0, weights_sum, 6.103515625e-5f, INFINITY);
+    gctx.cb(weights_sum, "ffn_moe_weights_sum_clamped", il);
+
+    weights = ggml_div(gctx.ctx0, weights, weights_sum); // [n_expert_used, n_tokens]
+    gctx.cb(weights, "ffn_moe_weights_norm", il);
+
+    weights = ggml_reshape_3d(gctx.ctx0, weights, 1, gctx.n_expert_used, n_tokens);
+
+    // build early so topk-moe can use it
+    ggml_build_forward_expand(gctx.gf, weights);
+
+    cur = ggml_reshape_3d(gctx.ctx0, cur, n_embd, 1, n_tokens);
+
+    ggml_tensor * up = nullptr;
+
+    if (layer.ffn_gate_up_exps) {
+        ggml_tensor * gate_up = gctx.build_lora_mm_id(layer.ffn_gate_up_exps, cur, selected_experts, layer.ffn_gate_up_exps_scale); // [n_ff*2, n_expert_used, n_tokens]
+        gctx.cb(gate_up, "ffn_moe_gate_up", il);
+
+        const int64_t n_ff = gate_up->ne[0] / 2;
+        cur = ggml_view_3d(gctx.ctx0, gate_up, n_ff, gate_up->ne[1], gate_up->ne[2], gate_up->nb[1], gate_up->nb[2], 0);
+        gctx.cb(cur, "ffn_moe_gate", il);
+        up  = ggml_view_3d(gctx.ctx0, gate_up, n_ff, gate_up->ne[1], gate_up->ne[2], gate_up->nb[1], gate_up->nb[2], n_ff * gate_up->nb[0]);
+        gctx.cb(up, "ffn_moe_up", il);
+    } else {
+        up = gctx.build_lora_mm_id(layer.ffn_up_exps, cur, selected_experts, layer.ffn_up_exps_scale); // [n_ff, n_expert_used, n_tokens]
+        gctx.cb(up, "ffn_moe_up", il);
+
+        if (layer.ffn_gate_exps) {
+            cur = gctx.build_lora_mm_id(layer.ffn_gate_exps, cur, selected_experts, layer.ffn_gate_exps_scale); // [n_ff, n_expert_used, n_tokens]
+            gctx.cb(cur, "ffn_moe_gate", il);
+        } else {
+            cur = up;
+        }
+    }
+
+    const bool has_gate = layer.ffn_gate_exps || layer.ffn_gate_up_exps;
+    if (has_gate) {
+        cur = ggml_swiglu_split(gctx.ctx0, cur, up);
+        gctx.cb(cur, "ffn_moe_swiglu", il);
+    } else {
+        cur = ggml_silu(gctx.ctx0, cur);
+        gctx.cb(cur, "ffn_moe_silu", il);
+    }
+
+    ggml_tensor * experts = gctx.build_lora_mm_id(layer.ffn_down_exps, cur, selected_experts, layer.ffn_down_exps_scale); // [n_embd, n_expert_used, n_tokens]
+    gctx.cb(experts, "ffn_moe_down", il);
+
+    experts = ggml_mul(gctx.ctx0, experts, weights);
+    gctx.cb(cur, "ffn_moe_weighted", il);
+
+    ggml_tensor * cur_experts[LLAMA_MAX_EXPERTS] = { nullptr };
+
+    GGML_ASSERT(gctx.n_expert_used > 0);
+
+    // Keep add-node count stable by using configured expert count here.
+    for (uint32_t i = 0; i < gctx.hparams.n_expert_used; ++i) {
+        cur_experts[i] = ggml_view_2d(gctx.ctx0, experts, n_embd, n_tokens, experts->nb[2], i*experts->nb[1]);
+        ggml_build_forward_expand(gctx.gf, cur_experts[i]);
+    }
+
+    ggml_tensor * moe_out = cur_experts[0];
+    for (uint32_t i = 1; i < gctx.hparams.n_expert_used; ++i) {
+        moe_out = ggml_add(gctx.ctx0, moe_out, cur_experts[i]);
+    }
+
+    if (gctx.hparams.n_expert_used == 1) {
+        moe_out = ggml_cont(gctx.ctx0, moe_out);
+    }
+
+    gctx.cb(moe_out, "ffn_moe_out", il);
+    return moe_out;
+}
+
+} // namespace
+
 llm_build_qwen35moe::llm_build_qwen35moe(const llama_model & model, const llm_graph_params & params) :
     llm_build_delta_net_base(params), model(model) {
     const int64_t n_embd_head = hparams.n_embd_head_v;
@@ -90,11 +225,11 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen35moe::build_qkvz(
     const int64_t n_seqs       = ubatch.n_seqs;
     const int64_t n_seq_tokens = ubatch.n_seq_tokens;
 
-    ggml_tensor * qkv_mixed = build_lora_mm(model.layers[il].wqkv, input);
+    ggml_tensor * qkv_mixed = build_lora_mm(model.layers[il].wqkv, input, model.layers[il].wqkv_scale);
     qkv_mixed = ggml_reshape_3d(ctx0, qkv_mixed, qkv_mixed->ne[0], n_seq_tokens, n_seqs);
     cb(qkv_mixed, "linear_attn_qkv_mixed", il);
 
-    ggml_tensor * z = build_lora_mm(model.layers[il].wqkv_gate, input);
+    ggml_tensor * z = build_lora_mm(model.layers[il].wqkv_gate, input, model.layers[il].wqkv_gate_scale);
     cb(z, "z", il);
 
     return { qkv_mixed, z };
@@ -123,7 +258,7 @@ ggml_tensor * llm_build_qwen35moe ::build_layer_attn(
     // Order: joint QG projection, QG split, Q norm, KV projection, K norm, RoPE, attention
 
     // Qwen3Next uses a single Q projection that outputs query + gate
-    ggml_tensor * Qcur_full = build_lora_mm(model.layers[il].wq, cur); // [ (n_embd_head * 2) * n_head, n_tokens ]
+    ggml_tensor * Qcur_full = build_lora_mm(model.layers[il].wq, cur, model.layers[il].wq_scale); // [ (n_embd_head * 2) * n_head, n_tokens ]
     cb(Qcur_full, "Qcur_full", il);
 
     ggml_tensor * Qcur = ggml_view_3d(ctx0, Qcur_full, n_embd_head, n_head, n_tokens,
@@ -135,10 +270,10 @@ ggml_tensor * llm_build_qwen35moe ::build_layer_attn(
     Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, il);
     cb(Qcur, "Qcur_normed", il);
 
-    ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
+    ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur, model.layers[il].wk_scale);
     cb(Kcur, "Kcur", il);
 
-    ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
+    ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur, model.layers[il].wv_scale);
     cb(Vcur, "Vcur", il);
 
     // Apply K normalization
@@ -186,7 +321,7 @@ ggml_tensor * llm_build_qwen35moe ::build_layer_attn(
     cur = ggml_mul(ctx0, cur, gate_sigmoid);
     cb(cur, "attn_gated", il);
 
-    cur = build_lora_mm(model.layers[il].wo, cur);
+    cur = build_lora_mm(model.layers[il].wo, cur, model.layers[il].wo_scale);
     cb(cur, "attn_output", il);
 
     return cur;
@@ -217,13 +352,13 @@ ggml_tensor * llm_build_qwen35moe ::build_layer_attn_linear(
     ggml_tensor * qkv_mixed = qkvz.first;
     ggml_tensor * z         = qkvz.second;
 
-    ggml_tensor * beta = build_lora_mm(model.layers[il].ssm_beta, cur);
+    ggml_tensor * beta = build_lora_mm(model.layers[il].ssm_beta, cur, model.layers[il].ssm_beta_scale);
     beta = ggml_reshape_4d(ctx0, beta, 1, num_v_heads, n_seq_tokens, n_seqs);
     cb(beta, "beta", il);
 
     beta = ggml_sigmoid(ctx0, beta);
 
-    ggml_tensor * alpha = build_lora_mm(model.layers[il].ssm_alpha, cur);
+    ggml_tensor * alpha = build_lora_mm(model.layers[il].ssm_alpha, cur, model.layers[il].ssm_alpha_scale);
     alpha = ggml_cont_3d(ctx0, alpha, num_v_heads, n_seq_tokens, n_seqs);
     cb(alpha, "alpha", il);
 
@@ -360,7 +495,7 @@ ggml_tensor * llm_build_qwen35moe ::build_layer_attn_linear(
     cb(final_output, "final_output", il);
 
     // Output projection
-    cur = build_lora_mm(model.layers[il].ssm_out, final_output);
+    cur = build_lora_mm(model.layers[il].ssm_out, final_output, model.layers[il].ssm_out_scale);
     cb(cur, "linear_attn_out", il);
 
     // Reshape back to original dimensions
@@ -373,14 +508,20 @@ ggml_tensor * llm_build_qwen35moe ::build_layer_ffn(ggml_tensor * cur, const int
     // Check if this is an MoE layer
     GGML_ASSERT(model.layers[il].ffn_gate_inp != nullptr);
 
-    ggml_tensor * moe_out =
-        build_moe_ffn(cur,
-            model.layers[il].ffn_gate_inp, model.layers[il].ffn_up_exps,
-            model.layers[il].ffn_gate_exps, model.layers[il].ffn_down_exps,
-            nullptr,
-            n_expert, n_expert_used, LLM_FFN_SILU,
-            true, false, 0.0, LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX, il,
-            nullptr, model.layers[il].ffn_gate_up_exps);
+    const auto & layer = model.layers[il];
+    ggml_tensor * moe_out = nullptr;
+
+    if (qwen35moe_has_nvfp4_expert_scales(layer)) {
+        moe_out = qwen35moe_build_moe_ffn_nvfp4_scaled(*this, cur, layer, il);
+    } else {
+        moe_out = build_moe_ffn(cur,
+                layer.ffn_gate_inp, layer.ffn_up_exps,
+                layer.ffn_gate_exps, layer.ffn_down_exps,
+                nullptr,
+                n_expert, n_expert_used, LLM_FFN_SILU,
+                true, false, 0.0f, LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX, il,
+                nullptr, layer.ffn_gate_up_exps);
+    }
     cb(moe_out, "ffn_moe_out", il);
 
     // Add shared experts if present - following Qwen3Next reference implementation

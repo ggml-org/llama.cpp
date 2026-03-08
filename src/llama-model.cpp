@@ -2995,6 +2995,21 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", bid), {n_embd_, n_ff_, n_expert_}, flags);
             }
         };
+
+        auto create_scale_tensor = [&](const LLM_TN_IMPL & tn_scale) -> ggml_tensor * {
+            const ggml_tensor * t_meta = ml.get_tensor_meta(tn_scale.str().c_str());
+            if (t_meta == nullptr) {
+                return nullptr;
+            }
+            return create_tensor(tn_scale, { t_meta->ne[0], t_meta->ne[1], t_meta->ne[2], t_meta->ne[3] }, 0);
+        };
+
+        auto create_nvfp4_scale_tensor = [&](const LLM_TN_IMPL & tn_scale, const ggml_tensor * weight) -> ggml_tensor * {
+            if (weight == nullptr) {
+                return nullptr;
+            }
+            return create_scale_tensor(tn_scale);
+        };
         switch (arch) {
             case LLM_ARCH_LLAMA:
             case LLM_ARCH_REFACT:
@@ -3927,7 +3942,9 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                         layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
                         layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa}, 0);
+                        layer.wk_scale = create_tensor(tn(LLM_TENSOR_ATTN_K,   "scale",  i), {1}, TENSOR_NOT_REQUIRED);
                         layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa}, 0);
+                        layer.wv_scale = create_tensor(tn(LLM_TENSOR_ATTN_V,   "scale",  i), {1}, TENSOR_NOT_REQUIRED);
                         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
 
                         layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0);
@@ -3935,8 +3952,11 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
                         layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
+                        layer.ffn_gate_scale = create_tensor(tn(LLM_TENSOR_FFN_GATE, "scale", i), {1}, TENSOR_NOT_REQUIRED);
                         layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
+                        layer.ffn_down_scale = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "scale", i), {1}, TENSOR_NOT_REQUIRED);
                         layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+                        layer.ffn_up_scale = create_tensor(tn(LLM_TENSOR_FFN_UP, "scale", i), {1}, TENSOR_NOT_REQUIRED);
                     }
                 } break;
             case LLM_ARCH_QWEN3MOE:
@@ -3960,7 +3980,9 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                         layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
                         layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa}, 0);
+                        layer.wk_scale = create_tensor(tn(LLM_TENSOR_ATTN_K,   "scale",  i), {1}, TENSOR_NOT_REQUIRED);
                         layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa}, 0);
+                        layer.wv_scale = create_tensor(tn(LLM_TENSOR_ATTN_V,   "scale",  i), {1}, TENSOR_NOT_REQUIRED);
                         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
 
                         layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0);
@@ -7416,9 +7438,13 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         if (!hparams.is_recurrent(i)) {
                             // Attention layers
                             layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), { n_embd, n_embd_head_k * n_head * 2 }, 0);
+                            layer.wq_scale = create_nvfp4_scale_tensor(tn(LLM_TENSOR_ATTN_Q, "scale", i), layer.wq);
                             layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), { n_embd, n_embd_k_gqa }, 0);
+                            layer.wk_scale = create_nvfp4_scale_tensor(tn(LLM_TENSOR_ATTN_K, "scale", i), layer.wk);
                             layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), { n_embd, n_embd_v_gqa }, 0);
+                            layer.wv_scale = create_nvfp4_scale_tensor(tn(LLM_TENSOR_ATTN_V, "scale", i), layer.wv);
                             layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_k * n_head, n_embd }, 0);
+                            layer.wo_scale = create_nvfp4_scale_tensor(tn(LLM_TENSOR_ATTN_OUT, "scale", i), layer.wo);
 
                             // Q/K normalization for attention layers
                             layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), { n_embd_head_k }, 0);
@@ -7483,7 +7509,9 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                             // Attention layers
                             layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), { n_embd, n_embd_head_k * n_head * 2 }, 0);
                             layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), { n_embd, n_embd_k_gqa }, 0);
+                            layer.wk_scale = create_tensor(tn(LLM_TENSOR_ATTN_K, "scale", i), {1}, TENSOR_NOT_REQUIRED);
                             layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), { n_embd, n_embd_v_gqa }, 0);
+                            layer.wv_scale = create_tensor(tn(LLM_TENSOR_ATTN_V, "scale", i), {1}, TENSOR_NOT_REQUIRED);
                             layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_k * n_head, n_embd }, 0);
 
                             // Q/K normalization for attention layers
@@ -7493,19 +7521,33 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                             // Linear attention (gated delta net) specific tensors
                             // Create tensors with calculated dimensions
                             layer.wqkv           = create_tensor(tn(LLM_TENSOR_ATTN_QKV,       "weight", i), { n_embd, key_dim * 2 + value_dim }, TENSOR_NOT_REQUIRED);
+                            layer.wqkv_scale     = create_nvfp4_scale_tensor(tn(LLM_TENSOR_ATTN_QKV, "scale", i), layer.wqkv);
                             layer.wqkv_gate      = create_tensor(tn(LLM_TENSOR_ATTN_GATE,      "weight", i), { n_embd, value_dim }, TENSOR_NOT_REQUIRED);
+                            layer.wqkv_gate_scale = create_nvfp4_scale_tensor(tn(LLM_TENSOR_ATTN_GATE, "scale", i), layer.wqkv_gate);
                             layer.ssm_conv1d     = create_tensor(tn(LLM_TENSOR_SSM_CONV1D,     "weight", i), { hparams.ssm_d_conv, conv_dim }, 0);
                             layer.ssm_dt         = create_tensor(tn(LLM_TENSOR_SSM_DT,         "bias",   i), { hparams.ssm_dt_rank }, 0);
                             layer.ssm_a          = create_tensor(tn(LLM_TENSOR_SSM_A_NOSCAN,             i), { hparams.ssm_dt_rank }, 0);
                             layer.ssm_beta       = create_tensor(tn(LLM_TENSOR_SSM_BETA,       "weight", i), { n_embd, n_v_heads }, 0);
+                            layer.ssm_beta_scale = create_nvfp4_scale_tensor(tn(LLM_TENSOR_SSM_BETA, "scale", i), layer.ssm_beta);
                             layer.ssm_alpha      = create_tensor(tn(LLM_TENSOR_SSM_ALPHA,      "weight", i), { n_embd, n_v_heads }, 0);
+                            layer.ssm_alpha_scale = create_nvfp4_scale_tensor(tn(LLM_TENSOR_SSM_ALPHA, "scale", i), layer.ssm_alpha);
                             layer.ssm_norm       = create_tensor(tn(LLM_TENSOR_SSM_NORM,       "weight", i), { head_v_dim }, 0);
                             layer.ssm_out        = create_tensor(tn(LLM_TENSOR_SSM_OUT,        "weight", i), { value_dim, n_embd }, 0);
+                            layer.ssm_out_scale  = create_nvfp4_scale_tensor(tn(LLM_TENSOR_SSM_OUT, "scale", i), layer.ssm_out);
                         }
 
                         layer.ffn_gate_inp  = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), { n_embd, n_expert }, 0);
                         layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), { n_ff_exp, n_embd, n_expert }, 0);
                         create_tensor_gate_up_exps(layer, i, n_embd, n_ff_exp, n_expert, 0);
+                        layer.ffn_down_exps_scale = create_nvfp4_scale_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "scale", i), layer.ffn_down_exps);
+                        layer.ffn_gate_up_exps_scale = create_nvfp4_scale_tensor(tn(LLM_TENSOR_FFN_GATE_UP_EXPS, "scale", i), layer.ffn_gate_up_exps);
+                        if (layer.ffn_gate_up_exps == nullptr) {
+                            layer.ffn_gate_exps_scale = create_nvfp4_scale_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "scale", i), layer.ffn_gate_exps);
+                            layer.ffn_up_exps_scale   = create_nvfp4_scale_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "scale", i), layer.ffn_up_exps);
+                        } else {
+                            layer.ffn_gate_exps_scale = layer.ffn_gate_up_exps_scale;
+                            layer.ffn_up_exps_scale   = layer.ffn_gate_up_exps_scale;
+                        }
 
                         // Shared experts
                         const int64_t n_ff_shexp = hparams.n_ff_shexp ? hparams.n_ff_shexp : n_ff;
@@ -7547,9 +7589,13 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         if (!hparams.is_recurrent(i)) {
                             // Attention layers
                             layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), { n_embd, n_embd_head_k * n_head * 2 }, 0);
+                            layer.wq_scale = create_nvfp4_scale_tensor(tn(LLM_TENSOR_ATTN_Q, "scale", i), layer.wq);
                             layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), { n_embd, n_embd_k_gqa }, 0);
+                            layer.wk_scale = create_nvfp4_scale_tensor(tn(LLM_TENSOR_ATTN_K, "scale", i), layer.wk);
                             layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), { n_embd, n_embd_v_gqa }, 0);
+                            layer.wv_scale = create_nvfp4_scale_tensor(tn(LLM_TENSOR_ATTN_V, "scale", i), layer.wv);
                             layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_k * n_head, n_embd }, 0);
+                            layer.wo_scale = create_nvfp4_scale_tensor(tn(LLM_TENSOR_ATTN_OUT, "scale", i), layer.wo);
 
                             // Q/K normalization for attention layers
                             layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), { n_embd_head_k }, 0);
@@ -7558,19 +7604,27 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                             // Linear attention (gated delta net) specific tensors
                             // Create tensors with calculated dimensions
                             layer.wqkv           = create_tensor(tn(LLM_TENSOR_ATTN_QKV,       "weight", i), { n_embd, key_dim * 2 + value_dim }, TENSOR_NOT_REQUIRED);
+                            layer.wqkv_scale     = create_nvfp4_scale_tensor(tn(LLM_TENSOR_ATTN_QKV, "scale", i), layer.wqkv);
                             layer.wqkv_gate      = create_tensor(tn(LLM_TENSOR_ATTN_GATE,      "weight", i), { n_embd, value_dim }, TENSOR_NOT_REQUIRED);
+                            layer.wqkv_gate_scale = create_nvfp4_scale_tensor(tn(LLM_TENSOR_ATTN_GATE, "scale", i), layer.wqkv_gate);
                             layer.ssm_conv1d     = create_tensor(tn(LLM_TENSOR_SSM_CONV1D,     "weight", i), { hparams.ssm_d_conv, conv_dim }, 0);
                             layer.ssm_dt         = create_tensor(tn(LLM_TENSOR_SSM_DT,         "bias",   i), { hparams.ssm_dt_rank }, 0);
                             layer.ssm_a          = create_tensor(tn(LLM_TENSOR_SSM_A_NOSCAN,             i), { hparams.ssm_dt_rank }, 0);
                             layer.ssm_beta       = create_tensor(tn(LLM_TENSOR_SSM_BETA,       "weight", i), { n_embd, n_v_heads }, 0);
+                            layer.ssm_beta_scale = create_nvfp4_scale_tensor(tn(LLM_TENSOR_SSM_BETA, "scale", i), layer.ssm_beta);
                             layer.ssm_alpha      = create_tensor(tn(LLM_TENSOR_SSM_ALPHA,      "weight", i), { n_embd, n_v_heads }, 0);
+                            layer.ssm_alpha_scale = create_nvfp4_scale_tensor(tn(LLM_TENSOR_SSM_ALPHA, "scale", i), layer.ssm_alpha);
                             layer.ssm_norm       = create_tensor(tn(LLM_TENSOR_SSM_NORM,       "weight", i), { head_v_dim }, 0);
                             layer.ssm_out        = create_tensor(tn(LLM_TENSOR_SSM_OUT,        "weight", i), { value_dim, n_embd }, 0);
+                            layer.ssm_out_scale  = create_nvfp4_scale_tensor(tn(LLM_TENSOR_SSM_OUT, "scale", i), layer.ssm_out);
                         }
 
                         layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
+                        layer.ffn_gate_scale = create_nvfp4_scale_tensor(tn(LLM_TENSOR_FFN_GATE, "scale", i), layer.ffn_gate);
                         layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
+                        layer.ffn_down_scale = create_nvfp4_scale_tensor(tn(LLM_TENSOR_FFN_DOWN, "scale", i), layer.ffn_down);
                         layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+                        layer.ffn_up_scale = create_nvfp4_scale_tensor(tn(LLM_TENSOR_FFN_UP, "scale", i), layer.ffn_up);
                     }
                 } break;
             case LLM_ARCH_MIMO2:

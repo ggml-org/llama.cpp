@@ -102,6 +102,10 @@ typedef sycl::half2 ggml_half2;
 #define QI_MXFP4 (QK_MXFP4 / (4 * QR_MXFP4))
 #define QR_MXFP4 2
 
+#define QI_NVFP4 (QK_K / (4 * QR_NVFP4))
+#define QR_NVFP4 2
+
+
 #define QI5_0 (QK5_0 / (4 * QR5_0))
 #define QR5_0 2
 
@@ -167,6 +171,13 @@ typedef sycl::half2 ggml_half2;
 #define GGML_EXTENSION __extension__
 #endif // _MSC_VER
 
+// Note: CUDA provides __align__(N),  host compilers (gcc/clang) do not.
+#if defined(_MSC_VER)
+#define GGML_ALIGN(N) __declspec(align(N))
+#else
+#define GGML_ALIGN(N) __attribute__((aligned(N)))
+#endif
+
 #define QK4_0 32
 typedef struct {
     ggml_half d;           // delta
@@ -193,6 +204,24 @@ typedef struct {
     uint8_t qs[QK_MXFP4/2];
 } block_mxfp4;
 static_assert(sizeof(block_mxfp4) == sizeof(uint8_t) + QK_MXFP4/2, "wrong mxfp4 block size/padding");
+
+#define QK_NVFP4 16
+typedef struct GGML_ALIGN(16) {
+    // 256 FP4 codes packed (2 per byte) => 128 bytes
+    uint8_t qs[4][QK_K/2];
+    uint8_t scales[4][QK_NVFP4];
+} block_nvfp4;  // struct block_nvfp4
+
+static_assert(sizeof(block_nvfp4) == 576, "block_nvfp4 must be 4×144 bytes (one pack)");
+static_assert(sizeof(block_nvfp4) % 16 == 0, "block_nvfp4 must be 16B aligned");
+
+#define GGML_NVFP4_BYTES_PER_BLOCK 144
+#define GGML_NVFP4_BYTES_PER_PACK  ((int) sizeof(block_nvfp4))
+#define GGML_NVFP4_INTS_PER_BLOCK  36
+#define GGML_NVFP4_INTS_PER_PACK   (GGML_NVFP4_BYTES_PER_PACK / (int) sizeof(int))
+
+static_assert(GGML_NVFP4_BYTES_PER_PACK     == 576, "NVFP4 pack bytes mismatch");
+static_assert(GGML_NVFP4_INTS_PER_PACK      == 144, "NVFP4 pack ints mismatch");
 
 #define QK5_0 32
 typedef struct {
@@ -1093,6 +1122,10 @@ GGML_TABLE_END()
 // ref: https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
 GGML_TABLE_BEGIN(int8_t, kvalues_mxfp4, 16)
     0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12,
+GGML_TABLE_END()
+GGML_TABLE_BEGIN(float, kvalues_fp4_float, 16)
+     0.0f,  0.5f,  1.0f,  1.5f,  2.0f,  3.0f,  4.0f,  6.0f,
+    -0.0f, -0.5f, -1.0f, -1.5f, -2.0f, -3.0f, -4.0f, -6.0f
 GGML_TABLE_END()
 
 #define NGRID_IQ1S 2048

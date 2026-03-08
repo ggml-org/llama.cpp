@@ -718,6 +718,14 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .to_float                 = (ggml_to_float_t) dequantize_row_mxfp4,
         .from_float_ref           = (ggml_from_float_t)quantize_row_mxfp4_ref,
     },
+[GGML_TYPE_NVFP4] = {
+        .type_name                = "nvfp4",
+        .blck_size                = QK_K,
+        .type_size                = GGML_NVFP4_BYTES_PER_BLOCK,
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_nvfp4,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_nvfp4_ref,
+    },
     [GGML_TYPE_Q2_K] = {
         .type_name                = "q2_K",
         .blck_size                = QK_K,
@@ -1254,7 +1262,12 @@ size_t ggml_nbytes(const struct ggml_tensor * tensor) {
         }
     }
     else {
-        nbytes = tensor->ne[0]*tensor->nb[0]/blck_size;
+        if (tensor->type == GGML_TYPE_NVFP4) {
+            nbytes = ggml_row_size(tensor->type, tensor->ne[0]);
+        } else {
+            nbytes = tensor->ne[0]*tensor->nb[0]/blck_size;
+         
+        }
         for (int i = 1; i < GGML_MAX_DIMS; ++i) {
             nbytes += (tensor->ne[i] - 1)*tensor->nb[i];
         }
@@ -1283,6 +1296,11 @@ size_t ggml_row_size(enum ggml_type type, int64_t ne) {
     assert(type >= 0);
     assert(type < GGML_TYPE_COUNT);
     assert(ne % ggml_blck_size(type) == 0);
+    if (type == GGML_TYPE_NVFP4) {
+        const int64_t nb = ne / QK_K;
+        const int64_t np = (nb + 3) / 4;
+        return (size_t) np * sizeof(block_nvfp4);
+    }
     return ggml_type_size(type)*ne/ggml_blck_size(type);
 }
 
@@ -1374,6 +1392,7 @@ enum ggml_type ggml_ftype_to_ggml_type(enum ggml_ftype ftype) {
         case GGML_FTYPE_MOSTLY_Q5_1:          wtype = GGML_TYPE_Q5_1;  break;
         case GGML_FTYPE_MOSTLY_Q8_0:          wtype = GGML_TYPE_Q8_0;  break;
         case GGML_FTYPE_MOSTLY_MXFP4:         wtype = GGML_TYPE_MXFP4; break;
+        case GGML_FTYPE_MOSTLY_NVFP4:         wtype = GGML_TYPE_NVFP4; break;
         case GGML_FTYPE_MOSTLY_Q2_K:          wtype = GGML_TYPE_Q2_K;  break;
         case GGML_FTYPE_MOSTLY_Q3_K:          wtype = GGML_TYPE_Q3_K;  break;
         case GGML_FTYPE_MOSTLY_Q4_K:          wtype = GGML_TYPE_Q4_K;  break;
@@ -1753,7 +1772,11 @@ static struct ggml_tensor * ggml_new_tensor_impl(
     }
 
     result->nb[0] = ggml_type_size(type);
-    result->nb[1] = result->nb[0]*(result->ne[0]/ggml_blck_size(type));
+    if (type == GGML_TYPE_NVFP4) {
+        result->nb[1] = ggml_row_size(type, result->ne[0]);
+    } else {
+        result->nb[1] = result->nb[0]*(result->ne[0]/ggml_blck_size(type));
+    }
     for (int i = 2; i < GGML_MAX_DIMS; i++) {
         result->nb[i] = result->nb[i - 1]*result->ne[i - 1];
     }
@@ -1815,7 +1838,9 @@ void * ggml_new_buffer(struct ggml_context * ctx, size_t nbytes) {
 }
 
 struct ggml_tensor * ggml_dup_tensor(struct ggml_context * ctx, const struct ggml_tensor * src) {
-    return ggml_new_tensor(ctx, src->type, GGML_MAX_DIMS, src->ne);
+    struct ggml_tensor * result = ggml_new_tensor(ctx, src->type, GGML_MAX_DIMS, src->ne);
+    memcpy(result->op_params, src->op_params, sizeof(result->op_params));
+    return result;
 }
 
 void ggml_unravel_index(const struct ggml_tensor * tensor, int64_t i, int64_t * i0, int64_t * i1, int64_t * i2, int64_t * i3) {
@@ -1887,6 +1912,7 @@ struct ggml_tensor * ggml_view_tensor(
         struct ggml_tensor  * src) {
     struct ggml_tensor * result = ggml_new_tensor_impl(ctx, src->type, GGML_MAX_DIMS, src->ne, src, 0);
     ggml_format_name(result, "%s (view)", src->name);
+    memcpy(result->op_params, src->op_params, sizeof(result->op_params));
 
     for (int i = 0; i < GGML_MAX_DIMS; i++) {
         result->nb[i] = src->nb[i];
@@ -3211,6 +3237,10 @@ struct ggml_tensor * ggml_mul_mat(
     result->op     = GGML_OP_MUL_MAT;
     result->src[0] = a;
     result->src[1] = b;
+    // stream_k_mode: -1 auto (default), 0 force off, 1 force on.
+    ggml_set_op_params_i32(result, 1, -1);
+    // stream_k_nblocks: 0 auto (nsm), >0 absolute blocks, <0 multiplier of nsm.
+    ggml_set_op_params_i32(result, 2, 0);
 
     return result;
 }
@@ -3261,6 +3291,10 @@ struct ggml_tensor * ggml_mul_mat_id(
     result->src[0] = as;
     result->src[1] = b;
     result->src[2] = ids;
+    // stream_k_mode: -1 auto (default), 0 force off, 1 force on.
+    ggml_set_op_params_i32(result, 1, -1);
+    // stream_k_nblocks: 0 auto (nsm), >0 absolute blocks, <0 multiplier of nsm.
+    ggml_set_op_params_i32(result, 2, 0);
 
     return result;
 }
@@ -7641,6 +7675,7 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_Q5_1:    result = quantize_q5_1(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q8_0:    result = quantize_q8_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_MXFP4:   result = quantize_mxfp4(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_NVFP4:   result = quantize_nvfp4(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q2_K:    result = quantize_q2_K(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q3_K:    result = quantize_q3_K(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q4_K:    result = quantize_q4_K(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
