@@ -119,6 +119,8 @@ bool server_http_context::init(const common_params & params) {
         LOG_INF("%s: api_keys: %zu keys loaded\n", __func__, params.api_keys.size());
     }
 
+    srv->set_payload_max_length(1024LL * 1024LL * 1024LL); //To allow big B64 embbeding.yeah i know this is a bit hacky, but cpp-httplib doesn't provide a way to set max payload size for specific endpoints, and we need to allow big payload for image embedding endpoint. ideally we should set this limit only for that endpoint, but for now we just set it globally to 1GB which should be enough for most cases.
+
     //
     // Middlewares
     //
