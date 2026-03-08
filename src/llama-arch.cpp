@@ -2825,3 +2825,59 @@ bool llm_arch_is_diffusion(const llm_arch & arch) {
             return false;
     }
 }
+
+bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
+    switch (arch) {
+        case LLM_ARCH_FALCON:
+        case LLM_ARCH_GROK:
+        case LLM_ARCH_GPT2:
+        case LLM_ARCH_GPTNEOX:
+        case LLM_ARCH_MPT:
+        case LLM_ARCH_STARCODER:
+        case LLM_ARCH_BLOOM:
+        case LLM_ARCH_QWEN:
+        case LLM_ARCH_QWEN3NEXT:
+        case LLM_ARCH_QWEN35:
+        case LLM_ARCH_QWEN35MOE:
+        case LLM_ARCH_PHI2:
+        case LLM_ARCH_PHI3:
+        case LLM_ARCH_PHIMOE:
+        case LLM_ARCH_PLAMO2:
+        case LLM_ARCH_PLAMO3:
+        case LLM_ARCH_CODESHELL:
+        case LLM_ARCH_MINICPM3:
+        case LLM_ARCH_GEMMA3N:
+        case LLM_ARCH_MAMBA:
+        case LLM_ARCH_MAMBA2:
+        case LLM_ARCH_JAMBA:
+        case LLM_ARCH_FALCON_H1:
+        case LLM_ARCH_DBRX:
+        case LLM_ARCH_OLMO2:
+        case LLM_ARCH_OLMOE:
+        case LLM_ARCH_OPENELM:
+        case LLM_ARCH_DEEPSEEK2: // FIXME
+        case LLM_ARCH_CHATGLM:
+        case LLM_ARCH_GLM4:
+        case LLM_ARCH_GLM_DSA: // FIXME
+        case LLM_ARCH_BITNET:
+        case LLM_ARCH_T5:
+        case LLM_ARCH_JAIS:
+        case LLM_ARCH_NEMOTRON_H:
+        case LLM_ARCH_NEMOTRON_H_MOE:
+        case LLM_ARCH_GRANITE_HYBRID:
+        case LLM_ARCH_CHAMELEON:
+        case LLM_ARCH_BAILINGMOE2:
+        case LLM_ARCH_AFMOE:
+        case LLM_ARCH_DREAM:
+        case LLM_ARCH_LLADA:
+        case LLM_ARCH_LLADA_MOE:
+        case LLM_ARCH_MINIMAX_M2:
+        case LLM_ARCH_COGVLM:
+        case LLM_ARCH_RND1:
+        case LLM_ARCH_STEP35:
+        case LLM_ARCH_KIMI_LINEAR: // FIXME
+            return false;
+        default:
+            return true;
+    }
+}

@@ -1,6 +1,7 @@
 #include "llama-model.h"
 
 #include "ggml.h"
+#include "llama-arch.h"
 #include "llama-impl.h"
 #include "llama-mmap.h"
 #include "llama-cparams.h"
@@ -76,10 +77,8 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             const uint32_t il = std::stoull(tensor_name.substr(layer_index_start + 2));
             prefix = "blk." + std::to_string(il) + ".";
             rotation = il % ud->n_devices;
-        } else if (tensor_name.substr(0, 6) == "output") {
-            rotation = ud->model->hparams.n_layer % ud->n_devices;
         } else {
-            GGML_ABORT("fatal error");
+            rotation = ud->model->hparams.n_layer % ud->n_devices;
         }
         const ggml_tensor * tensor_axis_0 = suffix.empty() ? tensor : ud->model->get_tensor((prefix + suffix).c_str());
         if (tensor_axis_0 == nullptr) {
@@ -136,7 +135,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_1);
         }
         if (std::regex_match(tensor_name, pattern_output_bias)) {
-            const ggml_tensor * output_weight = ud->model->get_tensor("output_weight");
+            const ggml_tensor * output_weight = ud->model->get_tensor("output.weight");
             GGML_ASSERT(output_weight != nullptr);
             return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_0);
         }
@@ -187,7 +186,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
         std::vector<float> tensor_split_scan;
         tensor_split_scan.reserve(ud->n_devices);
         for (size_t j = 0; j < ud->n_devices; j++) {
-            tensor_split_scan.push_back(tensor_split[(j + tc.rotation) % ud->n_devices]);
+            tensor_split_scan.push_back(tensor_split == nullptr ? 0.0f : tensor_split[(j + tc.rotation) % ud->n_devices]);
             if (j > 0) {
                 tensor_split_scan[j] += tensor_split_scan[j - 1];
             }
@@ -525,6 +524,9 @@ void llama_model::load_arch(llama_model_loader & ml) {
     arch = ml.get_arch();
     if (arch == LLM_ARCH_UNKNOWN) {
         throw std::runtime_error("unknown model architecture: '" + ml.get_arch_name() + "'");
+    }
+    if (!devices.empty() && ggml_backend_dev_is_meta(devices[0]) && !llm_arch_supports_sm_tensor(arch)) {
+        throw std::runtime_error(std::string("LLAMA_SPLIT_MODE_TENSOR not implemented for architecture '") + llm_arch_name(arch) + "'");
     }
 }
 
