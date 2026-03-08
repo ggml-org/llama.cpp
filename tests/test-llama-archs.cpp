@@ -226,11 +226,13 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
 }
 
 static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
-        struct gguf_context * gguf_ctx, const size_t seed, const std::vector<ggml_backend_dev_t> & devs) {
+        struct gguf_context * gguf_ctx, const size_t seed, const std::vector<ggml_backend_dev_t> & devs,
+        const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER) {
     llama_model_params model_params = llama_model_default_params();
     std::vector<ggml_backend_dev_t> devs_copy = devs;
     devs_copy.push_back(nullptr);
     model_params.devices = devs_copy.data();
+    model_params.split_mode = split_mode;
 
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = 0;
@@ -407,6 +409,19 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
 
     const std::vector<llama_token> tokens = get_tokens(128, 128, seed);
 
+    std::vector<ggml_backend_dev_t> devices;
+    {
+        const size_t device_count = ggml_backend_dev_count();
+        devices.reserve(device_count);
+        for (size_t i = 0; i < device_count; i++) {
+            ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+            if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+                continue;
+            }
+            devices.push_back(dev);
+        }
+    }
+
     bool all_ok = true;
     common_log_flush(common_log_main());
     printf("|%15s|%30s|%6s|%8s|%6s|\n", "Model arch.", "Device", "Config", "NMSE", "Status");
@@ -466,6 +481,17 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
                 char nmse_str[10];
                 snprintf(nmse_str, sizeof(nmse_str), "%.2e", nmse_val);
                 printf("|%15s|%30s|%6s|%8s|%17s|\n", llm_arch_name(arch), ggml_backend_dev_description(dev),
+                    moe ? "MoE" : "Dense", nmse_str, ok ? "\033[1;32mOK\033[0m" : "\033[1;31mFAIL\033[0m");
+            }
+            if (llm_arch_supports_sm_tensor(arch)) {
+                auto model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), seed, devices, LLAMA_SPLIT_MODE_TENSOR);
+                const std::vector<float> logits_dev = get_logits(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens, encode);
+                const double nmse_val = nmse(logits_cpu, logits_dev);
+                const bool ok = nmse_val <= 1e-4;
+                all_ok = all_ok && ok;
+                char nmse_str[10];
+                snprintf(nmse_str, sizeof(nmse_str), "%.2e", nmse_val);
+                printf("|%15s|%30s|%6s|%8s|%17s|\n", llm_arch_name(arch), "Meta",
                     moe ? "MoE" : "Dense", nmse_str, ok ? "\033[1;32mOK\033[0m" : "\033[1;31mFAIL\033[0m");
             }
         }

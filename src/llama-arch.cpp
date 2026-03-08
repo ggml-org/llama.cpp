@@ -537,6 +537,10 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
         case LLM_ARCH_CLIP:
             return {};
         case LLM_ARCH_LLAMA:
+        case LLM_ARCH_REFACT:
+        case LLM_ARCH_MINICPM:
+        case LLM_ARCH_GRANITE:
+        case LLM_ARCH_GRANITE_MOE:
         case LLM_ARCH_DECI:
         case LLM_ARCH_MISTRAL3:
         case LLM_ARCH_LLAMA_EMBED:
@@ -737,11 +741,9 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_ATTN_Q_NORM,
                 LLM_TENSOR_ATTN_K_NORM,
             };
-        case LLM_ARCH_REFACT:
         case LLM_ARCH_QWEN2:
         case LLM_ARCH_QWEN2VL:
         case LLM_ARCH_INTERNLM2:
-        case LLM_ARCH_GRANITE:
         case LLM_ARCH_ERNIE4_5:
         case LLM_ARCH_PADDLEOCR:
         case LLM_ARCH_SMOLLM3:
@@ -1224,29 +1226,6 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_FFN_DOWN,
                 LLM_TENSOR_FFN_UP,
             };
-        case LLM_ARCH_MINICPM:
-            return {
-                LLM_TENSOR_TOKEN_EMBD,
-                LLM_TENSOR_OUTPUT_NORM,
-                LLM_TENSOR_OUTPUT,
-                LLM_TENSOR_ROPE_FREQS,
-                LLM_TENSOR_ROPE_FACTORS_LONG,
-                LLM_TENSOR_ROPE_FACTORS_SHORT,
-                LLM_TENSOR_ATTN_NORM,
-                LLM_TENSOR_ATTN_Q,
-                LLM_TENSOR_ATTN_K,
-                LLM_TENSOR_ATTN_V,
-                LLM_TENSOR_ATTN_OUT,
-                LLM_TENSOR_ATTN_ROT_EMBD,
-                LLM_TENSOR_FFN_GATE_INP,
-                LLM_TENSOR_FFN_NORM,
-                LLM_TENSOR_FFN_GATE,
-                LLM_TENSOR_FFN_DOWN,
-                LLM_TENSOR_FFN_UP,
-                LLM_TENSOR_FFN_GATE_EXP,
-                LLM_TENSOR_FFN_DOWN_EXP,
-                LLM_TENSOR_FFN_UP_EXP,
-            };
         case LLM_ARCH_MINICPM3:
             return {
                 LLM_TENSOR_TOKEN_EMBD,
@@ -1648,7 +1627,9 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_ROPE_FREQS,
                 LLM_TENSOR_OUTPUT_NORM,
                 LLM_TENSOR_OUTPUT,
+                LLM_TENSOR_TOKEN_EMBD,
                 LLM_TENSOR_ATTN_NORM,
+                LLM_TENSOR_ATTN_QKV,
                 LLM_TENSOR_ATTN_Q,
                 LLM_TENSOR_ATTN_K,
                 LLM_TENSOR_ATTN_V,
@@ -2049,25 +2030,6 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_FFN_GATE,
                 LLM_TENSOR_FFN_DOWN,
                 LLM_TENSOR_FFN_UP,
-            };
-        case LLM_ARCH_GRANITE_MOE:
-            return {
-                LLM_TENSOR_TOKEN_EMBD,
-                LLM_TENSOR_OUTPUT_NORM,
-                LLM_TENSOR_OUTPUT,
-                LLM_TENSOR_ATTN_NORM,
-                LLM_TENSOR_ATTN_Q,
-                LLM_TENSOR_ATTN_K,
-                LLM_TENSOR_ATTN_V,
-                LLM_TENSOR_ATTN_OUT,
-                LLM_TENSOR_FFN_NORM,
-                LLM_TENSOR_FFN_GATE_INP,
-                LLM_TENSOR_FFN_GATE_EXPS,
-                LLM_TENSOR_FFN_DOWN_EXPS,
-                LLM_TENSOR_FFN_UP_EXPS,
-                LLM_TENSOR_FFN_GATE_SHEXP,
-                LLM_TENSOR_FFN_DOWN_SHEXP,
-                LLM_TENSOR_FFN_UP_SHEXP,
             };
         case LLM_ARCH_GRANITE_HYBRID:
             return {
@@ -2861,5 +2823,61 @@ bool llm_arch_is_diffusion(const llm_arch & arch) {
             return true;
         default:
             return false;
+    }
+}
+
+bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
+    switch (arch) {
+        case LLM_ARCH_FALCON:
+        case LLM_ARCH_GROK:
+        case LLM_ARCH_GPT2:
+        case LLM_ARCH_GPTNEOX:
+        case LLM_ARCH_MPT:
+        case LLM_ARCH_STARCODER:
+        case LLM_ARCH_BLOOM:
+        case LLM_ARCH_QWEN:
+        case LLM_ARCH_QWEN3NEXT:
+        case LLM_ARCH_QWEN35:
+        case LLM_ARCH_QWEN35MOE:
+        case LLM_ARCH_PHI2:
+        case LLM_ARCH_PHI3:
+        case LLM_ARCH_PHIMOE:
+        case LLM_ARCH_PLAMO2:
+        case LLM_ARCH_PLAMO3:
+        case LLM_ARCH_CODESHELL:
+        case LLM_ARCH_MINICPM3:
+        case LLM_ARCH_GEMMA3N:
+        case LLM_ARCH_MAMBA:
+        case LLM_ARCH_MAMBA2:
+        case LLM_ARCH_JAMBA:
+        case LLM_ARCH_FALCON_H1:
+        case LLM_ARCH_DBRX:
+        case LLM_ARCH_OLMO2:
+        case LLM_ARCH_OLMOE:
+        case LLM_ARCH_OPENELM:
+        case LLM_ARCH_DEEPSEEK2: // FIXME
+        case LLM_ARCH_CHATGLM:
+        case LLM_ARCH_GLM4:
+        case LLM_ARCH_GLM_DSA: // FIXME
+        case LLM_ARCH_BITNET:
+        case LLM_ARCH_T5:
+        case LLM_ARCH_JAIS:
+        case LLM_ARCH_NEMOTRON_H:
+        case LLM_ARCH_NEMOTRON_H_MOE:
+        case LLM_ARCH_GRANITE_HYBRID:
+        case LLM_ARCH_CHAMELEON:
+        case LLM_ARCH_BAILINGMOE2:
+        case LLM_ARCH_AFMOE:
+        case LLM_ARCH_DREAM:
+        case LLM_ARCH_LLADA:
+        case LLM_ARCH_LLADA_MOE:
+        case LLM_ARCH_MINIMAX_M2:
+        case LLM_ARCH_COGVLM:
+        case LLM_ARCH_RND1:
+        case LLM_ARCH_STEP35:
+        case LLM_ARCH_KIMI_LINEAR: // FIXME
+            return false;
+        default:
+            return true;
     }
 }

@@ -6,6 +6,10 @@
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 
+#ifdef GGML_USE_NCCL
+#include <nccl.h>
+#endif // GGML_USE_NCCL
+
 #if CUDART_VERSION >= 12050
 #include <cuda_fp8.h>
 #endif // CUDART_VERSION >= 12050
