@@ -145,3 +145,6 @@ perf_log_*.txt
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# Unfinished/experimental work
+.unfinished/
