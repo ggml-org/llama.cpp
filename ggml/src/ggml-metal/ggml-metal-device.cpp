@@ -577,6 +577,26 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_rwkv(ggml_metal_
     return res;
 }
 
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_gated_delta_net(ggml_metal_library_t lib, const ggml_tensor * op) {
+    // v is src[2], dimensions: S_v = ne[0], H = ne[1]
+    const int64_t S_v = op->src[2]->ne[0];
+    const int64_t H   = op->src[2]->ne[1];
+    const int64_t C   = op->ne[0];
+
+    GGML_ASSERT(op->src[5]->type == GGML_TYPE_F32);
+    GGML_ASSERT(C == S_v * H);
+    GGML_ASSERT(S_v == 64 || S_v == 128);
+
+    const char * name = "kernel_gated_delta_net_f32";
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        res = ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
+    }
+
+    return res;
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_solve_tri(ggml_metal_library_t lib, const ggml_tensor * op) {
     char base[256];
     char name[256];

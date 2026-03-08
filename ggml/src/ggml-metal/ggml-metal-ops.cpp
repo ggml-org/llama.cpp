@@ -333,6 +333,10 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
             {
                 n_fuse = ggml_metal_op_rwkv(ctx, idx);
             } break;
+        case GGML_OP_GATED_DELTA_NET:
+            {
+                n_fuse = ggml_metal_op_gated_delta_net(ctx, idx);
+            } break;
         case GGML_OP_SOLVE_TRI:
             {
                 n_fuse = ggml_metal_op_solve_tri(ctx, idx);
@@ -1556,6 +1560,43 @@ int ggml_metal_op_rwkv(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_bytes   (enc, (void *) &T, sizeof(T), ida++);
     ggml_metal_encoder_set_bytes   (enc, (void *) &C, sizeof(C), ida++);
     ggml_metal_encoder_set_bytes   (enc, (void *) &H, sizeof(H), ida++);
+
+    ggml_metal_encoder_dispatch_threadgroups(enc, B * H, 1, 1, C/H, 1, 1);
+
+    return 1;
+}
+
+int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
+    ggml_tensor * op = ctx->node(idx);
+
+    ggml_metal_library_t lib = ctx->lib;
+    ggml_metal_encoder_t enc = ctx->enc;
+
+    // src[0]=q, src[1]=k, src[2]=v, src[3]=gate, src[4]=beta, src[5]=state
+    // Dimensions from v (src[2]): S_v=ne[0], H=ne[1], n_tokens=ne[2], n_seqs=ne[3]
+    const int64_t B = op->src[2]->ne[3]; // n_seqs
+    const int64_t T = op->src[2]->ne[2] * B; // total tokens
+    const int64_t C = op->ne[0];         // S_v * H
+    const int64_t H = op->src[2]->ne[1]; // num heads
+    const int64_t G = op->src[3]->ne[0]; // gate ne[0]: 1=GDA, S_v=KDA
+
+    auto pipeline = ggml_metal_library_get_pipeline_gated_delta_net(lib, op);
+
+    int ida = 0;
+
+    ggml_metal_encoder_set_pipeline(enc, pipeline);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), ida++); // q
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), ida++); // k
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[2]), ida++); // v
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[3]), ida++); // gate
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[4]), ida++); // beta
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[5]), ida++); // state
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         ida++); // dst
+    ggml_metal_encoder_set_bytes   (enc, (void *) &B, sizeof(B), ida++);
+    ggml_metal_encoder_set_bytes   (enc, (void *) &T, sizeof(T), ida++);
+    ggml_metal_encoder_set_bytes   (enc, (void *) &C, sizeof(C), ida++);
+    ggml_metal_encoder_set_bytes   (enc, (void *) &H, sizeof(H), ida++);
+    ggml_metal_encoder_set_bytes   (enc, (void *) &G, sizeof(G), ida++);
 
     ggml_metal_encoder_dispatch_threadgroups(enc, B * H, 1, 1, C/H, 1, 1);
 

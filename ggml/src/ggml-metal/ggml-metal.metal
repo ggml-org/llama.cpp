@@ -2434,6 +2434,148 @@ kernel void kernel_rwkv_wkv7_f32(
     }
 }
 
+// Gated DeltaNet fused recurrence kernel (GDA and KDA gate modes)
+//
+// State layout: CPU kernel uses row-major M[i][j] at offset i*S+j.
+// Thread tid owns column tid of M: state[j] = M[j][tid] (row j, col tid).
+// This gives coalesced loads (consecutive threads read consecutive addresses).
+//
+// Gate semantics:
+//   GDA (G=1): scalar gate, M[i][j] *= exp(g) for all i,j
+//   KDA (G=S):  per-row gate, M[i][j] *= exp(g[i]) for all j
+//     => thread tid must scale state[j] by exp(g[j]) since state[j] = M[j][tid]
+//
+// Grid: (B*H, 1, 1) threadgroups, (head_size, 1, 1) threads per threadgroup
+//
+// src layout (matches GGML_OP_GATED_DELTA_NET):
+//   src[0]=q, src[1]=k, src[2]=v, src[3]=gate, src[4]=beta, src[5]=state
+//   Dimensions from v: S_v=ne[0], H=ne[1], n_tokens=ne[2], n_seqs=ne[3]
+//   gate: [1,H,T,B] (GDA) or [S_v,H,T,B] (KDA)
+kernel void kernel_gated_delta_net_f32(
+    device const float * q,
+    device const float * k,
+    device const float * v,
+    device const float * gate,      // [G, H, T, B] log-space; G=1 (GDA) or G=S (KDA)
+    device const float * beta,      // [1, H, T, B]
+    device const float * state_in,  // [S*S*H, n_seqs] row-major per head
+    device       float * dst,       // [S*H, n_tokens*n_seqs + S*n_seqs]
+    constant    uint & B,           // n_seqs
+    constant    uint & T,           // n_tokens * n_seqs (total tokens)
+    constant    uint & C,           // S * H
+    constant    uint & H,           // num heads
+    constant    uint & G,           // gate ne[0]: 1=GDA, S=KDA
+    uint3 tgpig[[threadgroup_position_in_grid]],
+    uint3 tpitg[[thread_position_in_threadgroup]],
+    uint3   ntg[[threads_per_threadgroup]])  {
+
+    const uint head_size = C / H;
+    const uint batch_id = tgpig.x / H;
+    const uint head_id  = tgpig.x % H;
+    const uint tid      = tpitg.x;
+
+    if (batch_id >= B || head_id >= H || tid >= head_size) {
+        return;
+    }
+
+    const float scale = 1.0f / sqrt((float)head_size);
+
+    const uint state_size = C * head_size; // S * S * H
+    const uint n_seq_tokens = T / B;
+
+    // Max head_size is 128 (enforced by pipeline getter).
+    threadgroup float _k[128];
+    threadgroup float _q[128];
+    threadgroup float _g[128]; // gate vector for KDA mode
+
+    // Load initial state: thread tid owns column tid of M (row-major)
+    // M[row=j][col=tid] at offset j*head_size+tid (row-major, coalesced)
+    float state[128];
+    for (uint j = 0; j < head_size; j++) {
+        state[j] = state_in[batch_id * state_size + head_id * head_size * head_size
+                          + j * head_size + tid];
+    }
+
+    // Process tokens sequentially
+    for (uint tt = 0; tt < n_seq_tokens; tt++) {
+        const uint t_abs = batch_id * n_seq_tokens + tt;
+        const uint kv_offset = t_abs * C + head_id * head_size;
+        const uint gb_offset = t_abs * H + head_id;
+
+        // Load k, q (and gate for KDA) into shared memory
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        _k[tid] = k[kv_offset + tid];
+        _q[tid] = q[kv_offset + tid];
+        if (G > 1) {
+            _g[tid] = exp(min(gate[t_abs * H * head_size + head_id * head_size + tid], 88.0f));
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        const float beta_val = beta[gb_offset];
+        const float v_tid    = v[kv_offset + tid];
+
+        // Decay state and compute sk = sum_j M[j][tid] * k[j]
+        // GDA: all elements scaled by same exp(g)
+        // KDA: state[j] = M[j][tid] scaled by exp(g[j]) (per-row gate)
+        float sk = 0.0f;
+        if (G == 1) {
+            const float g_exp = exp(min(gate[gb_offset], 88.0f));
+            for (uint j = 0; j < head_size; j += 4) {
+                float4 s_vec = float4(state[j], state[j+1], state[j+2], state[j+3]);
+                float4 k_vec = float4(_k[j], _k[j+1], _k[j+2], _k[j+3]);
+                s_vec *= g_exp;
+                sk += dot(s_vec, k_vec);
+                state[j]   = s_vec[0];
+                state[j+1] = s_vec[1];
+                state[j+2] = s_vec[2];
+                state[j+3] = s_vec[3];
+            }
+        } else {
+            for (uint j = 0; j < head_size; j += 4) {
+                float4 s_vec = float4(state[j], state[j+1], state[j+2], state[j+3]);
+                float4 k_vec = float4(_k[j], _k[j+1], _k[j+2], _k[j+3]);
+                float4 g_vec = float4(_g[j], _g[j+1], _g[j+2], _g[j+3]);
+                s_vec *= g_vec;
+                sk += dot(s_vec, k_vec);
+                state[j]   = s_vec[0];
+                state[j+1] = s_vec[1];
+                state[j+2] = s_vec[2];
+                state[j+3] = s_vec[3];
+            }
+        }
+
+        // Delta: d = (v[tid] - sk) * beta
+        // Note: delta is per-column (thread-local), matching CPU's delta[j] = (v[j] - sk[j]) * beta
+        // Here sk is sum_j M[j][tid]*k[j], and v_tid = v[tid], so d = delta for column tid
+        float d = (v_tid - sk) * beta_val;
+
+        // State update: M[j][tid] += k[j] * d (rank-1 outer product k * delta^T)
+        for (uint j = 0; j < head_size; j += 4) {
+            float4 s_vec = float4(state[j], state[j+1], state[j+2], state[j+3]);
+            float4 k_vec = float4(_k[j], _k[j+1], _k[j+2], _k[j+3]);
+            s_vec += k_vec * d;
+            state[j]   = s_vec[0];
+            state[j+1] = s_vec[1];
+            state[j+2] = s_vec[2];
+            state[j+3] = s_vec[3];
+        }
+
+        // Output: o[tid] = sum_j M[j][tid] * q[j] * scale
+        float y = 0.0f;
+        for (uint j = 0; j < head_size; j += 4) {
+            float4 s_vec = float4(state[j], state[j+1], state[j+2], state[j+3]);
+            float4 q_vec = float4(_q[j], _q[j+1], _q[j+2], _q[j+3]);
+            y += dot(s_vec, q_vec);
+        }
+        dst[t_abs * C + head_id * head_size + tid] = y * scale;
+    }
+
+    // Write final state (row-major: M[j][tid] at j*head_size+tid)
+    for (uint j = 0; j < head_size; j++) {
+        dst[T * C + batch_id * state_size + head_id * head_size * head_size
+            + j * head_size + tid] = state[j];
+    }
+}
+
 constant short FC_solve_tri_nsg [[function_constant(FC_SOLVE_TRI + 0)]];
 constant short FC_solve_tri_n   [[function_constant(FC_SOLVE_TRI + 1)]];
 constant short FC_solve_tri_k   [[function_constant(FC_SOLVE_TRI + 2)]];
