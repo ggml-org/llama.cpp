@@ -524,7 +524,7 @@ void common_ngram_map_accept(common_ngram_map & map, uint16_t n_accepted) {
     struct common_ngram_map_value & curr_value = curr_key.values[val_idx]; // value used for draft generation.
 
     // update the value statistics
-    LOG_INF("common_ngram_map_send_accepted: n_accepted = %d, prev value_num = %d\n",
+    LOG_DBG("common_ngram_map_send_accepted: n_accepted = %d, prev value_num = %d\n",
             n_accepted, curr_value.n_accepted);
     curr_value.n_accepted = n_accepted;
 }
