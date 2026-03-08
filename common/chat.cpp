@@ -129,7 +129,7 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
                 {"type", "function"},
                 {"function", {
                     {"name", tool_call.name},
-                    {"arguments", json::parse(tool_call.arguments)},
+                    {"arguments", json(tool_call.arguments)},
                 }},
             };
             if (!tool_call.id.empty()) {
@@ -1368,6 +1368,7 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         // map developer to system for all models except for GPT-OSS
         workaround::map_developer_role_to_system(params.messages);
     }
+    workaround::func_args_not_string(params.messages);
 
     if (!tmpl.original_caps().supports_system_role) {
         workaround::system_message_not_supported(params.messages);
@@ -1541,8 +1542,12 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
 
     LOG_DBG("Parsing PEG input with format %s: %s\n", common_chat_format_name(params.format), input.c_str());
 
-    common_peg_parse_context ctx(input, is_partial);
-    ctx.debug   = params.debug;
+    common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_LENIENT;
+    if (params.debug) {
+        flags |= COMMON_PEG_PARSE_FLAG_DEBUG;
+    }
+
+    common_peg_parse_context ctx(input, flags);
     auto result = parser.parse(ctx);
 
     if (result.fail()) {
@@ -1555,7 +1560,7 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
             auto mapper = common_chat_peg_mapper(msg);
             mapper.from_ast(ctx.ast, result);
 
-            if (ctx.debug) {
+            if (ctx.is_debug()) {
                 fprintf(stderr, "\nAST for partial parse (fail):\n%s\n", ctx.ast.dump().c_str());
                 fflush(stderr);
             }
@@ -1571,7 +1576,7 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
     auto mapper = common_chat_peg_mapper(msg);
     mapper.from_ast(ctx.ast, result);
 
-    if (ctx.debug) {
+    if (ctx.is_debug()) {
         fprintf(stderr, "\nAST for %s parse:\n%s\n", is_partial ? "partial" : "full", ctx.ast.dump().c_str());
         fflush(stderr);
     }

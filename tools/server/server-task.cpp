@@ -827,7 +827,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
             {"choices", json::array({
                 json {
                     {"finish_reason", nullptr},
-                    {"index", 0},
+                    {"index", index},
                     {"delta", common_chat_msg_diff_to_json_oaicompat(diff)},
                 },
             })},
@@ -843,7 +843,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
         {"choices", json::array({
             json {
                 {"finish_reason", finish_reason},
-                {"index", 0},
+                {"index", index},
                 {"delta", json::object()},
             },
         })},
