@@ -415,7 +415,7 @@ void server_tokens::keep_first(size_t n) {
             // note that the case where we keep a full image at the end is allowed:
             //   tokens[n - 1] == LLAMA_TOKEN_NULL && tokens[n] != LLAMA_TOKEN_NULL
             if (has_precomputed) { //if it is precomputed, we only need to check if the previous token is precomputed.
-                    find_precomputed(n - 1); // must be find_precomputed but not find_chunk.beacause it knows more than mtmd chunk
+                    find_precomputed(n - 1); // must be find_precomputed but not find_chunk.because it knows more than mtmd chunk
             }
             else if (tokens[n - 1] == LLAMA_TOKEN_NULL && tokens[n] == LLAMA_TOKEN_NULL) {
                     find_chunk(n - 1); // will throw an error if the token is not begin-of-chunk
