@@ -77,6 +77,33 @@ bool llm_graph_input_embd::can_reuse(const llm_graph_params & params) {
     return res;
 }
 
+void llm_graph_input_ngram_ids::set_input(const llama_ubatch * ubatch) {
+    GGML_ASSERT(!ubatch->embd);
+    GGML_ASSERT(ubatch->token);
+    const int64_t n_tokens = ubatch->n_tokens;
+
+    // each token have a context of ngram_k ids
+    std::vector<std::vector<llama_token>> ngrams;
+    ngrams.reserve(ubatch->n_tokens);
+    for (size_t i = 0; i < (size_t) n_tokens; ++i) {
+        auto ngram = mctx->get_last_n_tokens(ngram_n,
+                                ubatch->pos[i],
+                                ubatch->seq_id[i][0] /* FIXME: support multiple seq ids */);
+
+        printf("token[%zu] = %d : ngram =", i, ubatch->token[i]);
+        for (size_t j = 0; j < ngram.size(); ++j) {
+            printf(" %d", ngram[j]);
+        }
+        printf("\n");
+        ngrams.push_back(std::move(ngram));
+    }
+
+    if (ubatch->pos) { exit(1); } // TEST ONLY
+
+    if (ubatch->pos && pos_ngram) {
+    }
+}
+
 void llm_graph_input_pos::set_input(const llama_ubatch * ubatch) {
     if (ubatch->pos && pos) {
         const int64_t n_tokens = ubatch->n_tokens;
@@ -1611,6 +1638,15 @@ ggml_tensor * llm_graph_context::build_inp_attn_scale() const {
     res->add_input(std::move(inp));
 
     return cur;
+}
+
+ggml_tensor * llm_graph_context::build_inp_ngram_ids() const {
+    const auto * mctx_cur = static_cast<const llama_kv_cache_context *>(mctx);
+
+    auto inp = std::make_unique<llm_graph_input_ngram_ids>(4, 4, mctx_cur);
+    res->add_input(std::move(inp));
+
+    return nullptr; // TODO
 }
 
 ggml_tensor * llm_graph_context::build_inp_out_ids() const {
