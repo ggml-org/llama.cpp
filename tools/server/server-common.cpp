@@ -166,7 +166,7 @@ static inline bool is_base64(uint8_t c) {
     return (isalnum(c) || (c == '+') || (c == '/'));
 }
 
-inline raw_buffer base64_decode(const std::string & encoded_string) {
+raw_buffer base64_decode(const std::string & encoded_string) {
     int i = 0;
     int j = 0;
     int in_ = 0;
@@ -414,13 +414,14 @@ void server_tokens::keep_first(size_t n) {
             // make sure we never remove tokens in the middle of an image
             // note that the case where we keep a full image at the end is allowed:
             //   tokens[n - 1] == LLAMA_TOKEN_NULL && tokens[n] != LLAMA_TOKEN_NULL
-            if (tokens[n - 1] == LLAMA_TOKEN_NULL && tokens[n] == LLAMA_TOKEN_NULL) {
-                    find_chunk(n - 1); // will throw an error if the token is not begin-of-chunk
-                }
-                if (has_precomputed) {
+            if (has_precomputed) { //if it is precomputed, we only need to check if the previous token is precomputed.
                     find_precomputed(n - 1); // must be find_precomputed but not find_chunk.beacause it knows more than mtmd chunk
-                }
             }
+            else if (tokens[n - 1] == LLAMA_TOKEN_NULL && tokens[n] == LLAMA_TOKEN_NULL) {
+                    find_chunk(n - 1); // will throw an error if the token is not begin-of-chunk
+            }
+          
+        }
         }
         // remove all image chunks that are not used anymore
         for (auto it = map_idx_to_media.begin(); it != map_idx_to_media.end(); ) {
@@ -1148,8 +1149,14 @@ json oaicompat_chat_params_parse(
 
             } else if (type=="image_embedding" || type=="image_embedding_b64"){
                 json emb_data = json_value(p, type, json::object());
-                if (!(emb_data.contains("embedding")||emb_data.contains("embedding_b64")) || !emb_data.contains("n_tokens") || !emb_data.contains("n_embd")) {
-                    throw std::invalid_argument(type + " must contain 'embedding', 'n_tokens', and 'n_embd'");
+                if (!emb_data.contains("n_tokens") || !emb_data.contains("n_embd")) {
+                    throw std::invalid_argument(type + " must contain 'n_tokens', and 'n_embd'");
+                }
+                if(type=="image_embedding" && !emb_data.contains("embedding")) {
+                    throw std::invalid_argument(type + " must contain 'embedding'");
+                }
+                if(type=="image_embedding_b64" && !emb_data.contains("embedding_b64")) {
+                    throw std::invalid_argument(type + " must contain 'embedding_b64'");
                 }
 
                 server_precomputed_image img;
