@@ -139,22 +139,43 @@ struct common_peg_parse_result {
     bool success() const { return type == COMMON_PEG_PARSE_RESULT_SUCCESS; }
 };
 
+enum common_peg_parse_flags {
+    COMMON_PEG_PARSE_FLAG_NONE    = 0,
+    COMMON_PEG_PARSE_FLAG_LENIENT = 1 << 0,
+    COMMON_PEG_PARSE_FLAG_DEBUG   = 1 << 1,
+};
+
+inline common_peg_parse_flags operator|(common_peg_parse_flags a, common_peg_parse_flags b) {
+    return static_cast<common_peg_parse_flags>(int(a) | int(b));
+}
+
+inline common_peg_parse_flags & operator|=(common_peg_parse_flags & a, common_peg_parse_flags b) {
+    return a = a | b;
+}
+
+inline common_peg_parse_flags operator&(common_peg_parse_flags a, common_peg_parse_flags b) {
+    return static_cast<common_peg_parse_flags>(int(a) & int(b));
+}
+
+inline common_peg_parse_flags operator~(common_peg_parse_flags a) {
+    return static_cast<common_peg_parse_flags>(~int(a));
+}
+
 struct common_peg_parse_context {
     std::string input;
-    bool is_partial;
-    bool debug = false;  // Enable debug output for parser tracing
+    common_peg_parse_flags flags;
     common_peg_ast_arena ast;
 
     int parse_depth;
 
-    common_peg_parse_context()
-        : is_partial(false), parse_depth(0) {}
+    common_peg_parse_context(common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_NONE)
+        : flags(flags), parse_depth(0) {}
 
-    common_peg_parse_context(const std::string & input)
-        : input(input), is_partial(false), parse_depth(0) {}
+    common_peg_parse_context(const std::string & input, common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_NONE)
+        : input(input), flags(flags), parse_depth(0) {}
 
-    common_peg_parse_context(const std::string & input, bool is_partial)
-        : input(input), is_partial(is_partial), parse_depth(0) {}
+    bool is_lenient() const { return flags & COMMON_PEG_PARSE_FLAG_LENIENT; }
+    bool is_debug() const { return flags & COMMON_PEG_PARSE_FLAG_DEBUG; }
 };
 
 class common_peg_arena;

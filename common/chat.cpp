@@ -1527,8 +1527,12 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
 
     LOG_DBG("Parsing PEG input with format %s: %s\n", common_chat_format_name(params.format), input.c_str());
 
-    common_peg_parse_context ctx(input, is_partial);
-    ctx.debug   = params.debug;
+    common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_LENIENT;
+    if (params.debug) {
+        flags |= COMMON_PEG_PARSE_FLAG_DEBUG;
+    }
+
+    common_peg_parse_context ctx(input, flags);
     auto result = parser.parse(ctx);
 
     if (result.fail()) {
@@ -1541,7 +1545,7 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
             auto mapper = common_chat_peg_mapper(msg);
             mapper.from_ast(ctx.ast, result);
 
-            if (ctx.debug) {
+            if (ctx.is_debug()) {
                 fprintf(stderr, "\nAST for partial parse (fail):\n%s\n", ctx.ast.dump().c_str());
                 fflush(stderr);
             }
@@ -1557,7 +1561,7 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
     auto mapper = common_chat_peg_mapper(msg);
     mapper.from_ast(ctx.ast, result);
 
-    if (ctx.debug) {
+    if (ctx.is_debug()) {
         fprintf(stderr, "\nAST for %s parse:\n%s\n", is_partial ? "partial" : "full", ctx.ast.dump().c_str());
         fflush(stderr);
     }

@@ -155,19 +155,19 @@ struct tagged_parse_result {
 
 struct tagged_peg_parser {
     common_peg_arena arena;
-    bool debug = false;
+    common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_NONE;
 
     tagged_peg_parser & withDebug() {
-      debug = true;
+      flags |= COMMON_PEG_PARSE_FLAG_DEBUG;
       return *this;
     }
 
     tagged_peg_parser & withoutDebug() {
-      debug = false;
+      flags = flags & ~COMMON_PEG_PARSE_FLAG_DEBUG;
       return *this;
     }
 
-    tagged_parse_result parse_and_extract(const std::string & input, bool is_partial = false) const;
+    tagged_parse_result parse_and_extract(const std::string & input, common_peg_parse_flags extra_flags = COMMON_PEG_PARSE_FLAG_NONE) const;
     tagged_parse_result parse_anywhere_and_extract(const std::string & input) const;
 };
 

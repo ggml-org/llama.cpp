@@ -85,7 +85,7 @@ void test_python_dict_parser(testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p) { return p.python_value(); });
 
         std::string    input = "{'name': 'test', 'value': ";
-        common_peg_parse_context ctx(input, true);
+        common_peg_parse_context ctx(input, COMMON_PEG_PARSE_FLAG_LENIENT);
 
         auto result = parser.parse(ctx);
 
@@ -97,7 +97,7 @@ void test_python_dict_parser(testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p) { return p.python_value(); });
 
         std::string    input = "{'name': 'test";
-        common_peg_parse_context ctx(input, true);
+        common_peg_parse_context ctx(input, COMMON_PEG_PARSE_FLAG_LENIENT);
 
         auto result = parser.parse(ctx);
 
@@ -229,7 +229,7 @@ void test_python_dict_parser(testing &t) {
 
         t.test("incomplete string", [&](testing &t) {
             std::string input = "'hello";
-            common_peg_parse_context ctx(input, true);
+            common_peg_parse_context ctx(input, COMMON_PEG_PARSE_FLAG_LENIENT);
 
             auto result = parser.parse(ctx);
             t.assert_true("need_more_input", result.need_more_input());

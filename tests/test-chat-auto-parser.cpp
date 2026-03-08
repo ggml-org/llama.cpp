@@ -1478,7 +1478,7 @@ static void test_standard_json_tools_openai(testing & t) {
         R"({"id": "call_abc123", "function": {"name": "get_current_weather", "arguments": {"location": "NYC"}}})"
         "</tool_call>";
 
-    common_peg_parse_context ctx(input, false);
+    common_peg_parse_context ctx(input);
     auto result = parser.parse(ctx);
 
     if (!t.assert_true("parse success", result.success())) {
@@ -1524,7 +1524,7 @@ static void test_standard_json_tools_cohere(testing & t) {
         R"({"tool_call_id": 0, "tool_name": "get_current_weather", "parameters": {"location": "NYC", "unit": "celsius"}})"
         "]<|END_ACTION|>";
 
-    common_peg_parse_context ctx(input, false);
+    common_peg_parse_context ctx(input);
     auto result = parser.parse(ctx);
 
     if (!t.assert_true("parse success", result.success())) {
@@ -1570,7 +1570,7 @@ static void test_standard_json_tools_function_key(testing & t) {
         R"({"get_current_weather": {"id": "call-0001", "args": {"location": "NYC", "unit": "celsius"}}})"
         "]</tool_calls>";
 
-    common_peg_parse_context ctx(input, false);
+    common_peg_parse_context ctx(input);
     auto result = parser.parse(ctx);
 
     if (!t.assert_true("parse success", result.success())) {
@@ -1845,7 +1845,7 @@ static void test_tagged_args_with_embedded_quotes(testing & t) {
         "</function>\n"
         "</seed:tool_call>";
 
-    common_peg_parse_context ctx(input, false);
+    common_peg_parse_context ctx(input);
     auto result = parser.parse(ctx);
 
     if (!t.assert_true("parse success", result.success())) {
