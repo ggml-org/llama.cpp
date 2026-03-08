@@ -172,19 +172,15 @@ var<workgroup> exp_sum_shmem: array<f32, Q_TILE>;
 var<workgroup> blk_state_wg: u32;
 
 fn calc_softmax_term(kv_idx: u32, q_tile_row: u32, slope: f32, has_bias: bool, apply_mask: bool) -> f32 {
-    var v = FLOAT_MIN;
-    if (kv_idx < KV_TILE) {
-        v = f32(inter_shmem[kv_idx + q_tile_row * KV_TILE]) * params.scale;
-    }
+    var v = select(FLOAT_MIN,
+                   f32(inter_shmem[kv_idx + q_tile_row * KV_TILE]) * params.scale,
+                   kv_idx < KV_TILE);
 #ifdef LOGIT_SOFTCAP
     v = params.logit_softcap * tanh(v);
 #endif
 #ifdef MASK
     if (apply_mask) {
-        var mask_val = 0.0;
-        if (kv_idx < KV_TILE) {
-            mask_val = f32(mask_shmem[q_tile_row * KV_TILE + kv_idx]);
-        }
+        var mask_val = select(0.0,f32(mask_shmem[q_tile_row * KV_TILE + kv_idx]), kv_idx < KV_TILE);
         v += select(mask_val, slope * mask_val, has_bias);
     }
 #endif
@@ -247,19 +243,17 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     let has_bias = params.max_bias > 0.0;
     let slope = select(1.0, select(pow(params.m1, 2.0 * (head - params.n_head_log2) + 1.0), pow(params.m0, head + 1.0), head < params.n_head_log2), has_bias);
 
-    // Load Q tile once and keep it in f16 to match scalar/Metal precision path.
+    // load q tile into shared memory
     for (var elem_idx = local_id.x; elem_idx < Q_TILE * HEAD_DIM_QK; elem_idx += WG_SIZE) {
         let q_row = elem_idx / HEAD_DIM_QK;
         let q_col = elem_idx % HEAD_DIM_QK;
-        let global_q_row = q_row_start + q_row;
-        let global_q_row_offset = q_head_offset + global_q_row * params.stride_q1;
+        let head_q_row = q_row_start + q_row;
+        let global_q_row_offset = q_head_offset + head_q_row * params.stride_q1;
         q_shmem[elem_idx] = f16(select(
             0.0,
             Q[global_q_row_offset + q_col],
-            global_q_row < params.seq_len_q && q_col < HEAD_DIM_QK));
+            head_q_row < params.seq_len_q && q_col < HEAD_DIM_QK));
     }
-
-    workgroupBarrier();
 
     for (var kv_tile = iwg * KV_TILE; kv_tile < params.seq_len_kv; kv_tile += KV_TILE * params.nwg) {
 #ifdef BLK
