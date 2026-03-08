@@ -1162,7 +1162,10 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 return (S_v == 64 || S_v == 128)
                     && ggml_is_contiguous(op->src[0])
                     && ggml_is_contiguous(op->src[1])
-                    && ggml_is_contiguous(op->src[2]);
+                    && ggml_is_contiguous(op->src[2])
+                    && ggml_is_contiguous(op->src[3])
+                    && ggml_is_contiguous(op->src[4])
+                    && ggml_is_contiguous(op->src[5]);
             }
         case GGML_OP_SOLVE_TRI:
         case GGML_OP_MUL_MAT:
