@@ -325,6 +325,23 @@ struct ggml_webgpu_flash_attn_shader_decisions {
     uint32_t wg_size = 0;
 };
 
+inline uint32_t ggml_webgpu_flash_attn_pick_vec_ne(const ggml_webgpu_flash_attn_pipeline_key & key) {
+    // Keep conservative defaults unless this is the f16 vec-split shape family.
+    if (key.kv_type != GGML_TYPE_F16 || key.head_dim_qk != key.head_dim_v) {
+        return 1u;
+    }
+
+    // Head-dim specializations used by the tuned vec f16 path.
+    switch (key.head_dim_qk) {
+        case 64: return 2u;
+        case 96: return 4u;
+        case 128: return 1u;
+        case 192: return 2u;
+        case 576: return 2u;
+        default: return 1u;
+    }
+}
+
 struct ggml_webgpu_flash_attn_vec_reduce_pipeline_key {
     uint32_t head_dim_v;
     uint32_t wg_size;
@@ -529,7 +546,8 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_flash_attn_shader(
         kv_tile = (kv_tile / context.sg_mat_n) * context.sg_mat_n;
         GGML_ASSERT(kv_tile % context.sg_mat_n == 0);
         GGML_ASSERT(kv_tile <= max_kv_tile);
-        defines.push_back("VEC_NE=1");
+        const uint32_t vec_ne = ggml_webgpu_flash_attn_pick_vec_ne(context.key);
+        defines.push_back(std::string("VEC_NE=") + std::to_string(vec_ne) + "u");
     }
     if (context.key.kv_direct) {
         GGML_ASSERT(kv_tile <= GGML_WEBGPU_KV_SEQ_PAD);
