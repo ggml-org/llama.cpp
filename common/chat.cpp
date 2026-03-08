@@ -1526,9 +1526,6 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
     LOG_DBG("Parsing PEG input with format %s: %s\n", common_chat_format_name(params.format), input.c_str());
 
     common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_LENIENT;
-    if (is_partial) {
-        flags |= COMMON_PEG_PARSE_FLAG_PARTIAL;
-    }
     if (params.debug) {
         flags |= COMMON_PEG_PARSE_FLAG_DEBUG;
     }

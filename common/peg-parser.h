@@ -141,9 +141,8 @@ struct common_peg_parse_result {
 
 enum common_peg_parse_flags {
     COMMON_PEG_PARSE_FLAG_NONE    = 0,
-    COMMON_PEG_PARSE_FLAG_PARTIAL = 1 << 0,
-    COMMON_PEG_PARSE_FLAG_LENIENT = 1 << 1,
-    COMMON_PEG_PARSE_FLAG_DEBUG   = 1 << 2,
+    COMMON_PEG_PARSE_FLAG_LENIENT = 1 << 0,
+    COMMON_PEG_PARSE_FLAG_DEBUG   = 1 << 1,
 };
 
 inline common_peg_parse_flags operator|(common_peg_parse_flags a, common_peg_parse_flags b) {
@@ -175,9 +174,7 @@ struct common_peg_parse_context {
     common_peg_parse_context(const std::string & input, common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_NONE)
         : input(input), flags(flags), parse_depth(0) {}
 
-    bool is_partial() const { return flags & COMMON_PEG_PARSE_FLAG_PARTIAL; }
     bool is_lenient() const { return flags & COMMON_PEG_PARSE_FLAG_LENIENT; }
-    bool is_partial_or_lenient() const { return is_partial() || is_lenient(); }
     bool is_debug() const { return flags & COMMON_PEG_PARSE_FLAG_DEBUG; }
 };
 
