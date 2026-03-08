@@ -9,6 +9,7 @@
 - [Linux](#linux)
 - [Windows](#windows)
 - [Environment Variable](#environment-variable)
+- [Design Rule](#design-rule)
 - [Known Issue](#known-issues)
 - [Q&A](#qa)
 - [TODO](#todo)
@@ -40,6 +41,9 @@ The following releases are verified and recommended:
 
 
 ## News
+
+- 2026.03
+  - Support Flash-Attention: less memory usage, performance impact depends on LLM.
 
 - 2026.02
   - Remove support for Nvidia & AMD GPU, because the oneAPI plugin for Nvidia & AMD GPU is unavailable: download/installation channels are out of work. User can't build up the software for Nvidia & AMD GPU.
@@ -685,17 +689,44 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 | Name              | Value            | Function                                                                                                                  |
 |-------------------|------------------|---------------------------------------------------------------------------------------------------------------------------|
 | GGML_SYCL_DEBUG   | 0 (default) or 1 | Enable log function by macro: GGML_SYCL_DEBUG                                                                             |
+| GGML_SYCL_ENABLE_FLASH_ATTN | 1 (default) or 0| Enable Flash-Attention. It can reduce memory usage. The performance impact depends on the LLM.|
 | GGML_SYCL_DISABLE_OPT | 0 (default) or 1 | Disable optimize features for Intel GPUs. (Recommended to 1 for intel devices older than Gen 10) |
 | GGML_SYCL_DISABLE_GRAPH | 0 or 1 (default) | Disable running computations through SYCL Graphs feature. Disabled by default because SYCL Graph is still on development, no better performance. |
 | GGML_SYCL_DISABLE_DNN | 0 (default) or 1 | Disable running computations through oneDNN and always use oneMKL. |
 | ZES_ENABLE_SYSMAN | 0 (default) or 1 | Support to get free memory of GPU by sycl::aspect::ext_intel_free_memory.<br>Recommended to use when --split-mode = layer |
 | UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS | 0 (default) or 1 | Support malloc device memory more than 4GB.|
 
+## Design Rule
 
+- Open to all contributors.
+
+- All code change should be useful to user:
+    - Fix bug.
+    - Add new function.
+    - Improve the performance/usage.
+    - Make code be easy to maintain.
+    - ...
+
+- Don't accept the codes of following cases:
+    - Break legacy function.
+    - Reduce the performance of legacy case in default.
+    - Not completed work/the functionality cannot be demonstrated.
+
+- Encourage to use environment variable to control features to be opened/closed.
+    - User can evaluate the feature without rebuild the code.
+    - Recommend the best features to user by setting them be opened as default.
+
+- Design the code based on the published official releases of oneAPI packages: compiler, library, driver, OS kernel.
+
+- Developers need to maintain the code they submit.
 
 ## Known Issues
 
 - `Split-mode:[row]` is not supported.
+
+- Missed the AOT (Ahead-of-Time) in buiding.
+  - Good: build quickly, smaller size of binary file.
+  - Bad: The startup is slow (JIT) in first time, but subsequent performance is unaffected.
 
 ## Q&A
 
