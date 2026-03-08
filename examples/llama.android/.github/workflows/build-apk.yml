@@ -1,0 +1,39 @@
+name: Build Llama APK
+on: 
+  workflow_dispatch: # Allows you to click a button to start the build
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive # Important for llama.cpp dependencies
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'gradle'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27d # Stable version for 2026
+
+      - name: Build with Gradle
+        run: |
+          cd examples/llama.android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-slm-runner
+          path: examples/llama.android/app/build/outputs/apk/debug/*.apk
