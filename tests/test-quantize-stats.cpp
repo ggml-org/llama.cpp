@@ -158,7 +158,7 @@ static void test_roundtrip_on_chunk(
     } else {
         qfns_cpu.from_float(input_scratch, quantized_scratch, chunk_size);
     }
-    qfns.to_float(quantized_scratch, output_scratch, chunk_size);
+    qfns.to_float(quantized_scratch, output_scratch, chunk_size, nullptr);
 
     update_error_stats(chunk_size, input_scratch, output_scratch, stats);
 }

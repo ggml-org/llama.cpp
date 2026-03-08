@@ -111,7 +111,7 @@ extern "C" {
     // Internal types and functions exposed for tests and benchmarks
 
     typedef void (*ggml_vec_dot_t)  (int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT x, size_t bx,
-                                       const void * GGML_RESTRICT y, size_t by, int nrc);
+                                       const void * GGML_RESTRICT y, size_t by, int nrc, const void * levels);
 
     struct ggml_type_traits_cpu {
         ggml_from_float_t        from_float;

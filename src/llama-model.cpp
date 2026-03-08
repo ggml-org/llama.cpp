@@ -15,6 +15,7 @@
 
 #include "models/models.h"
 
+
 #include <algorithm>
 #include <cassert>
 #include <cfloat>
@@ -7853,6 +7854,73 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     for (auto & [ctx, buf_map] : ctx_buf_maps) {
         if (!ml.load_all_data(ctx, buf_map, use_mlock ? &pimpl->mlock_mmaps : NULL, params.progress_callback, params.progress_callback_user_data)) {
             return false;
+        }
+    }
+
+    // Load per-tensor quantization auxiliary data (levels/kvalues) from GGUF metadata.
+    // Indexed by weight tensor pointer for direct lookup during inference.
+    {
+        // Build tensor name to tensor pointer map
+        std::unordered_map<std::string, ggml_tensor*> name_to_tensor;
+        for (auto & [ctx, buf_map] : ctx_buf_maps) {
+            for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+                name_to_tensor[ggml_get_name(t)] = t;
+            }
+        }
+
+        struct level_type_info {
+            ggml_type    type;
+            const char * gguf_key;
+            size_t       n_levels;      // number of level values per tensor
+            size_t       elem_bytes;    // size of each level value
+        };
+
+        const level_type_info level_types[] = {
+            { GGML_TYPE_Q3_PT,  "q3_pt.levels",  8, sizeof(float) },
+            { GGML_TYPE_Q3_KPT, "q3_kpt.levels", 8, sizeof(float) },
+            { GGML_TYPE_Q4_DPT, "q4_dpt.levels", 16, sizeof(int8_t) },
+            { GGML_TYPE_Q2_KPT, "q2_kpt.levels", 4, sizeof(float) },
+        };
+
+        for (const auto & lt : level_types) {
+            int64_t lv_idx = gguf_find_key(ml.meta.get(), lt.gguf_key);
+            if (lv_idx < 0) { continue; }
+
+            const uint8_t * lv_raw = (const uint8_t *)gguf_get_arr_data(ml.meta.get(), lv_idx);
+            const size_t    lv_arr_n = gguf_get_arr_n(ml.meta.get(), lv_idx);
+
+            size_t tensor_count = 0;
+
+            // Iterate over GGUF slots to find matching tensors
+            for (size_t gguf_slot = 0; gguf_slot < lv_arr_n / lt.n_levels; ++gguf_slot) {
+                std::string tensor_name = gguf_get_tensor_name(ml.meta.get(), gguf_slot);
+                auto it = name_to_tensor.find(tensor_name);
+                if (it == name_to_tensor.end()) { continue; }
+
+                ggml_tensor* t = it->second;
+                if (t->type != lt.type) { continue; }
+
+                const size_t gguf_offset = gguf_slot * lt.n_levels;
+
+                // Store directly indexed by tensor pointer
+                auto & aux = tensor_aux_data[t];
+                aux.type = lt.type;
+                aux.host_data.assign(
+                    lv_raw + gguf_offset * lt.elem_bytes,
+                    lv_raw + (gguf_offset + lt.n_levels) * lt.elem_bytes
+                );
+                aux.aux_tensor = nullptr;
+
+                // Set quant_levels directly on the tensor
+                t->quant_levels = aux.host_data.data();
+
+                tensor_count++;
+            }
+
+            if (tensor_count > 0) {
+                LLAMA_LOG_INFO("%s: loaded %zu %s per-tensor level tables\n",
+                               __func__, tensor_count, lt.gguf_key);
+            }
         }
     }
 

@@ -1208,6 +1208,67 @@ static __device__ __forceinline__ float vec_dot_iq4_nl_q8_1(
     return d * sumi;
 }
 
+#define VDR_Q4_DPT_Q8_1_MMVQ 2
+#define VDR_Q4_DPT_Q8_1_MMQ  4
+
+static __device__ __forceinline__ float vec_dot_q4_dpt_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_q4_dpt * bq4 = (const block_q4_dpt *) vbq + kbx;
+
+    const int * q8 = (const int *) bq8_1->qs + iqs;
+
+    int sumi = 0;
+#pragma unroll
+    for (int l = 0; l < VDR_Q4_DPT_Q8_1_MMVQ; ++l) {
+        const int aux_q4 = get_int_b2(bq4->qs, iqs + l);
+        const int2 v = get_int_from_table_16(aux_q4, q4dpt_levels_cuda);
+
+        sumi = ggml_cuda_dp4a(v.x, q8[l + 0], sumi);
+        sumi = ggml_cuda_dp4a(v.y, q8[l + 4], sumi);
+    }
+
+    const float d = __half2float(bq4->d) * __low2float(bq8_1->ds);
+    return d * sumi;
+}
+
+// Q2_DPT: 2-bit quantization with 4 learned levels
+// Helper: lookup 4 int8 levels using 2-bit indices packed in a 32-bit int
+static __device__ __forceinline__ int4 get_int_from_table_4(const int & q2, const int8_t * table) {
+    int4 result;
+    result.x = table[(q2 >>  0) & 3];
+    result.y = table[(q2 >>  8) & 3];
+    result.z = table[(q2 >> 16) & 3];
+    result.w = table[(q2 >> 24) & 3];
+    return result;
+}
+
+#define VDR_Q2_DPT_Q8_1_MMVQ 4
+#define VDR_Q2_DPT_Q8_1_MMQ  8
+
+static __device__ __forceinline__ float vec_dot_q2_dpt_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_q2_dpt * bq2 = (const block_q2_dpt *) vbq + kbx;
+
+    const int * q8 = (const int *) bq8_1->qs + iqs;
+
+    int sumi = 0;
+#pragma unroll
+    for (int l = 0; l < VDR_Q2_DPT_Q8_1_MMVQ; ++l) {
+        const int aux_q2 = get_int_b4(bq2->qs, l);
+        const int4 v = get_int_from_table_4(aux_q2, q2dpt_levels_cuda);
+
+        sumi = ggml_cuda_dp4a(v.x, q8[l + 0], sumi);
+        sumi = ggml_cuda_dp4a(v.y, q8[l + 4], sumi);
+        sumi = ggml_cuda_dp4a(v.z, q8[l + 8], sumi);
+        sumi = ggml_cuda_dp4a(v.w, q8[l + 12], sumi);
+    }
+
+    const float d = __half2float(bq2->d) * __low2float(bq8_1->ds);
+    return d * sumi;
+}
+
 #define VDR_IQ4_XS_Q8_1_MMVQ 4
 #define VDR_IQ4_XS_Q8_1_MMQ  4
 
