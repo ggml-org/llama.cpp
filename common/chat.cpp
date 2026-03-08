@@ -129,7 +129,7 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
                 {"type", "function"},
                 {"function", {
                     {"name", tool_call.name},
-                    {"arguments", json::parse(tool_call.arguments)},
+                    {"arguments", json(tool_call.arguments)},
                 }},
             };
             if (!tool_call.id.empty()) {
@@ -1352,6 +1352,8 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
     params.now = inputs.now;
     params.add_bos = tmpls->add_bos;
     params.add_eos = tmpls->add_eos;
+
+    workaround::func_args_not_string(params.messages);
 
     if (!tmpl.original_caps().supports_system_role) {
         workaround::system_message_not_supported(params.messages);
