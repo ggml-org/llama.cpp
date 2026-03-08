@@ -23,7 +23,7 @@
 
 #define UNUSED GGML_UNUSED
 
-#if defined(__POWER9_VECTOR__)
+#if defined(__POWER9_VECTOR__) || defined(__VSX__)
 #define B1(c,s,n)  0x ## n ## c ,  0x ## n ## s
 #define B2(c,s,n) B1(c,s,n ## c), B1(c,s,n ## s)
 #define B3(c,s,n) B2(c,s,n ## c), B2(c,s,n ## s)
@@ -45,7 +45,7 @@ void quantize_row_q8_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
 
     block_q8_0 * GGML_RESTRICT y = vy;
 
-#if defined(__POWER9_VECTOR__)
+#if defined(__POWER9_VECTOR__) || defined(__VSX__)
     for (int i = 0; i < nb; i++) {
         vector float srcv [8];
         vector float asrcv[8];
@@ -90,7 +90,7 @@ void quantize_row_q8_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
 
     block_q8_1 * GGML_RESTRICT y = vy;
 
-#if defined(__POWER9_VECTOR__)
+#if defined(__POWER9_VECTOR__) || defined(__VSX__)
     for (int i = 0; i < nb; i++) {
         vector float srcv [8];
         vector float asrcv[8];
@@ -158,7 +158,7 @@ void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
     int ib = 0;
     float sumf = 0;
 
-#if defined(__POWER9_VECTOR__)
+#if defined(__POWER9_VECTOR__) || defined(__VSX__)
     const vector signed char lowMask = vec_splats((signed char)0xF);
     const vector signed int v0 = vec_splats((int32_t)0);
     const vector unsigned char v4 = vec_splats((unsigned char)0x4);
@@ -228,7 +228,7 @@ void ggml_vec_dot_q4_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
     int ib = 0;
     float sumf = 0;
 
-#if defined(__POWER9_VECTOR__)
+#if defined(__POWER9_VECTOR__) || defined(__VSX__)
     const vector signed char lowMask = vec_splats((signed char)0xF);
     const vector signed int v0 = vec_splats((int32_t)0);
     const vector unsigned char v4 = vec_splats((unsigned char)0x4);
@@ -295,7 +295,7 @@ void ggml_vec_dot_mxfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
     int ib = 0;
     float sumf = 0;
 
-#if defined(__POWER9_VECTOR__)
+#if defined(__POWER9_VECTOR__) || defined(__VSX__)
     const vector signed char lowMask = vec_splats((signed char)0xF);
     const vector unsigned char vshift4 = vec_splats((unsigned char)4);
     vector float vsumf0 = vec_splats(0.0f);
@@ -362,7 +362,7 @@ void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
     const block_q5_0 * GGML_RESTRICT x = vx;
     const block_q8_0 * GGML_RESTRICT y = vy;
 
-#if defined(__POWER9_VECTOR__)
+#if defined(__POWER9_VECTOR__) || defined(__VSX__)
     const vector signed char lowMask = vec_splats((signed char)0xF);
     const vector unsigned char v4 = vec_splats((unsigned char)4);
 
@@ -434,7 +434,7 @@ void ggml_vec_dot_q5_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
     const block_q5_1 * GGML_RESTRICT x = vx;
     const block_q8_1 * GGML_RESTRICT y = vy;
 
-#if defined(__POWER9_VECTOR__)
+#if defined(__POWER9_VECTOR__) || defined(__VSX__)
     const vector signed char lowMask = vec_splats((signed char)0xF);
     const vector signed int v0 = vec_splats((int32_t)0);
     const vector unsigned char v4 = vec_splats((unsigned char)0x4);
@@ -509,7 +509,7 @@ void ggml_vec_dot_q8_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
     int ib = 0;
     float sumf = 0;
 
-#if defined(__POWER9_VECTOR__)
+#if defined(__POWER9_VECTOR__) || defined(__VSX__)
     const vector signed int v0 = vec_splats((int32_t)0);
     vector float vsumf0 = vec_splats(0.0f);
 
@@ -573,7 +573,7 @@ void ggml_vec_dot_q2_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
     const int nb = n / QK_K;
 
-#if defined(__POWER9_VECTOR__)
+#if defined(__POWER9_VECTOR__) || defined(__VSX__)
     const vector signed char lowMask = vec_splats((signed char)0x3);
     const vector signed char lowScaleMask = vec_splats((signed char)0xF);
     const vector int v0 = vec_splats((int32_t)0);
@@ -730,7 +730,7 @@ void ggml_vec_dot_q3_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
     const int nb = n / QK_K;
 
-#if defined(__POWER9_VECTOR__)
+#if defined(__POWER9_VECTOR__) || defined(__VSX__)
     const vector signed char lowMask = vec_splats((signed char)0x3);
     const vector signed char lowMask1 = vec_splats((int8_t)0xf);
     const vector signed char lowMask2 = vec_splats((int8_t)0x30);
@@ -912,7 +912,7 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
     uint32_t utmp[4];
 
-#if defined(__POWER9_VECTOR__)
+#if defined(__POWER9_VECTOR__) || defined(__VSX__)
     const vector signed char lowMask = vec_splats((signed char)0xF);
     const vector signed char lowMask1 = vec_splats((int8_t)0x3f);
     const vector signed char lowMask2 = vec_splats((int8_t)0x30);
@@ -1080,7 +1080,7 @@ void ggml_vec_dot_q5_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
     uint32_t utmp[4];
 
-#if defined(__POWER9_VECTOR__)
+#if defined(__POWER9_VECTOR__) || defined(__VSX__)
     const vector signed char lowMask = vec_splats((signed char)0xF);
     const vector signed char lowMask1 = vec_splats((int8_t)0x3f);
     const vector signed char lowMask2 = vec_splats((int8_t)0x30);
@@ -1239,7 +1239,7 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
     const int nb = n / QK_K;
 
-#if defined(__POWER9_VECTOR__)
+#if defined(__POWER9_VECTOR__) || defined(__VSX__)
     const vector signed char lowMask = vec_splats((signed char)0xF);
     const vector int v0 = vec_splats((int32_t)0);
     const vector unsigned char v2 = vec_splats((unsigned char)0x2);
@@ -1384,7 +1384,7 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 #endif
 }
 
-#if defined (__POWER9_VECTOR__)
+#if defined(__POWER9_VECTOR__) || defined(__VSX__)
 static const int8_t keven_signs_q2xs[1024] = {
      1,  1,  1,  1,  1,  1,  1,  1, -1,  1,  1,  1,  1,  1,  1, -1,  1, -1,  1,  1,  1,  1,  1, -1, -1, -1,  1,  1,  1,  1,  1,  1,
      1,  1, -1,  1,  1,  1,  1, -1, -1,  1, -1,  1,  1,  1,  1,  1,  1, -1, -1,  1,  1,  1,  1,  1, -1, -1, -1,  1,  1,  1,  1, -1,
@@ -1434,7 +1434,7 @@ void ggml_vec_dot_iq2_xxs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const 
 
     const int nb = n / QK_K;
 
-#if defined(__POWER9_VECTOR__)
+#if defined(__POWER9_VECTOR__) || defined(__VSX__)
     const vector int v0 = vec_splats((int32_t)0);
     vector float vsumf0 = vec_splats(0.0f);
     vector float vsumf1 = vec_splats(0.0f);
@@ -1541,7 +1541,7 @@ void ggml_vec_dot_iq2_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
 
     const int nb = n / QK_K;
 
-#if defined(__POWER9_VECTOR__)
+#if defined(__POWER9_VECTOR__) || defined(__VSX__)
     const vector int v0 = vec_splats((int32_t)0);
     vector float vsumf0 = vec_splats(0.0f);
     vector float vsumf1 = vec_splats(0.0f);
@@ -1649,7 +1649,7 @@ void ggml_vec_dot_iq2_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
     const int nb = n / QK_K;
 
-#if defined(__POWER9_VECTOR__)
+#if defined(__POWER9_VECTOR__) || defined(__VSX__)
     static const uint8_t k_mask1[32] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
                                         0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03
     };
@@ -1778,7 +1778,7 @@ void ggml_vec_dot_iq3_xxs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const 
 
     const int nb = n / QK_K;
 
-#if defined(__POWER9_VECTOR__)
+#if defined(__POWER9_VECTOR__) || defined(__VSX__)
     const uint64_t * signs64 = (const uint64_t *)keven_signs_q2xs;
 
     const vector int v0 = vec_splats((int32_t)0);
@@ -1884,7 +1884,7 @@ void ggml_vec_dot_iq3_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
     const int nb = n / QK_K;
 
-#if defined(__POWER9_VECTOR__)
+#if defined(__POWER9_VECTOR__) || defined(__VSX__)
     static const uint8_t k_mask1[32] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
                                         0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03
     };
@@ -2013,7 +2013,7 @@ void ggml_vec_dot_iq1_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
     const int nb = n / QK_K;
 
-#if defined(__POWER9_VECTOR__)
+#if defined(__POWER9_VECTOR__) || defined(__VSX__)
     const vector unsigned char v0 = vec_splats((unsigned char)0x0);
     const vector unsigned short vsign = vec_splats((unsigned short)0x8000);
 
@@ -2133,7 +2133,7 @@ void ggml_vec_dot_iq4_nl_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const v
     int ib = 0;
     float sumf = 0;
 
-#if defined(__POWER9_VECTOR__)
+#if defined(__POWER9_VECTOR__) || defined(__VSX__)
     const vector signed char lowMask = vec_splats((signed char)0xF);
     const vector signed int v0 = vec_splats((int32_t)0);
     const vector unsigned char v4 = vec_splats((unsigned char)0x4);
@@ -2207,7 +2207,7 @@ void ggml_vec_dot_iq4_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
 
     const int nb = n / QK_K;
 
-#if defined(__POWER9_VECTOR__)
+#if defined(__POWER9_VECTOR__) || defined(__VSX__)
     const vector signed char lowMask = vec_splats((signed char)0xF);
     const vector int v0 = vec_splats((int32_t)0);
     const vector unsigned char v4 = vec_splats((unsigned char)0x4);

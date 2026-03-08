@@ -62,13 +62,13 @@ extern "C" {
         #define GGML_CPU_COMPUTE_FP32_TO_FP16(x) _cvtss_sh(x, 0)
     #endif
 #elif defined(__POWER9_VECTOR__)
-    #define GGML_CPU_COMPUTE_FP16_TO_FP32(x) power_compute_fp16_to_fp32(x)
-    #define GGML_CPU_COMPUTE_FP32_TO_FP16(x) power_compute_fp32_to_fp16(x)
+    #define GGML_CPU_COMPUTE_FP16_TO_FP32(x) power9_compute_fp16_to_fp32(x)
+    #define GGML_CPU_COMPUTE_FP32_TO_FP16(x) power9_compute_fp32_to_fp16(x)
     /* the inline asm below is about 12% faster than the lookup method */
     #define GGML_CPU_FP16_TO_FP32(x) GGML_CPU_COMPUTE_FP16_TO_FP32(x)
     #define GGML_CPU_FP32_TO_FP16(x) GGML_CPU_COMPUTE_FP32_TO_FP16(x)
 
-    static inline float power_compute_fp16_to_fp32(ggml_fp16_t h) {
+    static inline float power9_compute_fp16_to_fp32(ggml_fp16_t h) {
         float f;
         double d;
         __asm__(
@@ -81,7 +81,7 @@ extern "C" {
         return f;
     }
 
-    static inline ggml_fp16_t power_compute_fp32_to_fp16(float f) {
+    static inline ggml_fp16_t power9_compute_fp32_to_fp16(float f) {
         double d;
         ggml_fp16_t r;
         __asm__( /* xscvdphp can work on double or single precision */
@@ -629,11 +629,11 @@ static inline void __avx_f32cx8_store(ggml_fp16_t *x, __m256 y) {
 #define GGML_F16_VEC_MUL            GGML_F32Cx8_MUL
 #define GGML_F16_VEC_REDUCE         GGML_F32Cx8_REDUCE
 
-#elif defined(__POWER9_VECTOR__)
+#elif defined(__POWER9_VECTOR__) || defined(__VSX__)
 
 #define GGML_SIMD
 
-// F32 POWER9
+// F32 POWER8+ (all VSX intrinsics below are available since ISA 2.07)
 
 #define GGML_F32_STEP 32
 #define GGML_F32_EPR  4
@@ -684,7 +684,8 @@ static inline void __avx_f32cx8_store(ggml_fp16_t *x, __m256 y) {
 #define GGML_F32_VEC_MUL    GGML_F32x4_MUL
 #define GGML_F32_VEC_REDUCE GGML_F32x4_REDUCE
 
-// F16 POWER9
+// F16 POWER9+ (vec_extract_fp32_from_short* requires ISA 3.0)
+#if defined(__POWER9_VECTOR__)
 #define GGML_F16_STEP       GGML_F32_STEP
 #define GGML_F16_EPR        GGML_F32_EPR
 #define GGML_F16_VEC        GGML_F32x4
@@ -708,8 +709,10 @@ static inline unsigned char ggml_endian_byte(int i) {
     vec_xst(vec_pack_to_short_fp32(r[i - GGML_ENDIAN_BYTE(1)],  \
                                    r[i - GGML_ENDIAN_BYTE(0)]), \
             0, p - GGML_F16_EPR)
+#endif // __POWER9_VECTOR__ (F16 VEC)
 
-//BF16 POWER9
+//BF16 POWER9+ (vec_merge for BF16 needs ISA 3.0 encoding)
+#if defined(__POWER9_VECTOR__)
 #define GGML_BF16_STEP 16
 #define GGML_BF16_EPR  8
 
@@ -731,6 +734,7 @@ static inline unsigned char ggml_endian_byte(int i) {
     (acc) = GGML_F32x4_FMA((acc), GGML_BF16_TO_F32_LO(x), GGML_BF16_TO_F32_LO(y))
 #define GGML_BF16_FMA_HI(acc, x, y) \
     (acc) = GGML_F32x4_FMA((acc), GGML_BF16_TO_F32_HI(x), GGML_BF16_TO_F32_HI(y))
+#endif // __POWER9_VECTOR__ (BF16)
 
 #elif defined(__wasm_simd128__)
 

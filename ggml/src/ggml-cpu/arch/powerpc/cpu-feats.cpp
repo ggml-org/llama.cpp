@@ -36,7 +36,9 @@ struct powerpc_features {
             }
         }
 #endif
-        if (power_version >= 9) {
+        // VSX is available since POWER7 (ISA 2.06).
+        // POWER8 (ISA 2.07) adds full VSX support used by ggml.
+        if (power_version >= 7) {
             has_vsx = true;
         }
     }
