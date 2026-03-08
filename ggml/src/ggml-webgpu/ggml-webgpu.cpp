@@ -1338,10 +1338,12 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
     bool kv_direct = (K->type == GGML_TYPE_F16) && (Q->ne[0] % ctx->global_ctx->capabilities.sg_mat_k == 0) &&
                      (K->ne[1] % GGML_WEBGPU_KV_SEQ_PAD == 0);
 
+    const bool kv_vec_type_supported = K->type == GGML_TYPE_F16 || K->type == GGML_TYPE_Q4_0 || K->type == GGML_TYPE_Q8_0;
     const bool use_vec = (Q->ne[1] < 20) &&
                          (Q->ne[0] % 32 == 0) &&
                          (V->ne[0] % 4 == 0) &&
-                         (K->type == GGML_TYPE_F16);
+                         kv_vec_type_supported &&
+                         (V->type == K->type);
 
     const uint32_t vec_nwg_cap =
         std::max(1u, std::min<uint32_t>(32u, ctx->global_ctx->capabilities.max_subgroup_size));

@@ -99,7 +99,11 @@ struct Params {
 
 @group(0) @binding(0) var<storage, read_write> Q: array<f32>;
 @group(0) @binding(1) var<storage, read_write> K: array<KV_TYPE>;
+#if defined(KV_Q4_0) || defined(KV_Q8_0)
+@group(0) @binding(2) var<storage, read_write> V: array<KV_TYPE>;
+#else
 @group(0) @binding(2) var<storage, read_write> V: array<vec4<KV_TYPE>>;
+#endif
 #if defined(MASK) && defined(SINKS)
 @group(0) @binding(3) var<storage, read_write> mask: array<f16>;
 @group(0) @binding(4) var<storage, read_write> sinks: array<f32>;
@@ -276,61 +280,74 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
         }
 
       // load k tile into shared memory
-// #if defined(KV_Q4_0)
-//       for (var elem_idx = local_id.x * NQ; elem_idx < KV_TILE * HEAD_DIM_QK; elem_idx += WG_SIZE * NQ) {
-//           let blck_idx = elem_idx / BLOCK_SIZE;
-//           let block_offset = (elem_idx % BLOCK_SIZE) / WEIGHTS_PER_F16;
-//           let k_row = blck_idx / BLOCKS_K;
-//           let global_k_row = kv_tile + k_row;
-//           let block_k = blck_idx % BLOCKS_K;
-//           let row_offset = k_row * HEAD_DIM_QK;
+#if defined(KV_Q4_0)
+      for (var elem_idx = local_id.x * NQ; elem_idx < KV_TILE * HEAD_DIM_QK; elem_idx += WG_SIZE * NQ) {
+          let blck_idx = elem_idx / BLOCK_SIZE;
+          let block_offset = (elem_idx % BLOCK_SIZE) / WEIGHTS_PER_F16;
+          let k_row = blck_idx / BLOCKS_K;
+          let global_k_row = kv_tile + k_row;
+          let block_k = blck_idx % BLOCKS_K;
+          let row_offset = k_row * HEAD_DIM_QK;
 
-//           if (global_k_row < params.seq_len_kv) {
-//               let global_block_idx = k_head_offset + global_k_row * params.stride_k1 + block_k;
-//               let base_idx = global_block_idx * F16_PER_BLOCK;
-//               let d = K[base_idx]; // scale
-//               for (var j = 0u; j < F16_PER_THREAD; j += 2) {
-//                   let q_0 = K[base_idx + 1u + block_offset + j];
-//                   let q_1 = K[base_idx + 1u + block_offset + j + 1];
-//                   let q_packed = bitcast<u32>(vec2(q_0, q_1));
-//                   for (var k = 0u; k < 4u; k++) {
-//                       let q_byte = get_byte(q_packed, k);
-//                       let q_hi = (f16((q_byte >> 4) & 0xF) - 8.0) * d;
-//                       let q_lo = (f16(q_byte & 0xF) - 8.0) * d;
-//                       let idx = block_k * BLOCK_SIZE + block_offset * 2u + j * 2u + k;
-//                       kv_shmem[row_offset + idx] = q_lo;
-//                       kv_shmem[row_offset + idx + 16u] = q_hi;
-//                   }
-//               }
-//           }
-//       }
-// #elif defined(KV_Q8_0)
-//       for (var elem_idx = local_id.x * NQ; elem_idx < KV_TILE * HEAD_DIM_QK; elem_idx += WG_SIZE * NQ) {
-//           let blck_idx = elem_idx / BLOCK_SIZE;
-//           let block_offset = (elem_idx % BLOCK_SIZE) / WEIGHTS_PER_F16;
-//           let k_row = blck_idx / BLOCKS_K;
-//           let global_k_row = kv_tile + k_row;
-//           let block_k = blck_idx % BLOCKS_K;
-//           let row_offset = k_row * HEAD_DIM_QK;
+          if (global_k_row < params.seq_len_kv) {
+              let global_block_idx = k_head_offset + global_k_row * params.stride_k1 + block_k;
+              let base_idx = global_block_idx * F16_PER_BLOCK;
+              let d = K[base_idx];
+              for (var j = 0u; j < F16_PER_THREAD; j += 2) {
+                  let q_0 = K[base_idx + 1u + block_offset + j];
+                  let q_1 = K[base_idx + 1u + block_offset + j + 1];
+                  let q_packed = bitcast<u32>(vec2(q_0, q_1));
+                  for (var k = 0u; k < 4u; k++) {
+                      let q_byte = get_byte(q_packed, k);
+                      let q_hi = (f16((q_byte >> 4) & 0xF) - 8.0) * d;
+                      let q_lo = (f16(q_byte & 0xF) - 8.0) * d;
+                      let idx = block_k * BLOCK_SIZE + block_offset * 2u + j * 2u + k;
+                      kv_shmem[row_offset + idx] = q_lo;
+                      kv_shmem[row_offset + idx + 16u] = q_hi;
+                  }
+              }
+          }
+      }
+#elif defined(KV_Q8_0)
+      for (var elem_idx = local_id.x * NQ; elem_idx < KV_TILE * HEAD_DIM_QK; elem_idx += WG_SIZE * NQ) {
+          let blck_idx = elem_idx / BLOCK_SIZE;
+          let block_offset = (elem_idx % BLOCK_SIZE) / WEIGHTS_PER_F16;
+          let k_row = blck_idx / BLOCKS_K;
+          let global_k_row = kv_tile + k_row;
+          let block_k = blck_idx % BLOCKS_K;
+          let row_offset = k_row * HEAD_DIM_QK;
 
-//           if (global_k_row < params.seq_len_kv) {
-//               let global_block_idx = k_head_offset + global_k_row * params.stride_k1 + block_k;
-//               let base_idx = global_block_idx * F16_PER_BLOCK;
-//               let d = K[base_idx]; // scale
-//               for (var j = 0u; j < F16_PER_THREAD; j += 2) {
-//                   let q_0 = K[base_idx + 1u + block_offset + j];
-//                   let q_1 = K[base_idx + 1u + block_offset + j + 1];
-//                   let q_packed = bitcast<u32>(vec2(q_0, q_1));
-//                   for (var k = 0u; k < 4u; k++) {
-//                       let q_byte = get_byte_i32(q_packed, k);
-//                       let q_val = f16(q_byte) * d;
-//                       let idx = block_k * BLOCK_SIZE + block_offset * 2u + j * 2u + k;
-//                       kv_shmem[row_offset + idx] = q_val;
-//                   }
-//               }
-//           }
-//       }
-// #endif
+          if (global_k_row < params.seq_len_kv) {
+              let global_block_idx = k_head_offset + global_k_row * params.stride_k1 + block_k;
+              let base_idx = global_block_idx * F16_PER_BLOCK;
+              let d = K[base_idx];
+              for (var j = 0u; j < F16_PER_THREAD; j += 2) {
+                  let q_0 = K[base_idx + 1u + block_offset + j];
+                  let q_1 = K[base_idx + 1u + block_offset + j + 1];
+                  let q_packed = bitcast<u32>(vec2(q_0, q_1));
+                  for (var k = 0u; k < 4u; k++) {
+                      let q_byte = get_byte_i32(q_packed, k);
+                      let q_val = f16(q_byte) * d;
+                      let idx = block_k * BLOCK_SIZE + block_offset * 2u + j * 2u + k;
+                      kv_shmem[row_offset + idx] = q_val;
+                  }
+              }
+          }
+      }
+#elif defined(KV_DIRECT)
+      // Direct global loads for KV
+#else
+      for (var elem_idx = local_id.x; elem_idx < KV_TILE * HEAD_DIM_QK; elem_idx += WG_SIZE) {
+          let k_row = elem_idx / HEAD_DIM_QK;
+          let k_col = elem_idx % HEAD_DIM_QK;
+          let global_k_row = kv_tile + k_row;
+          let global_k_row_offset = k_head_offset + global_k_row * params.stride_k1;
+          kv_shmem[elem_idx] = f16(select(
+              0.0,
+              K[global_k_row_offset + k_col],
+              global_k_row < params.seq_len_kv && k_col < HEAD_DIM_QK));
+      }
+#endif
 
       workgroupBarrier();
 
@@ -356,19 +373,28 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                   if (kv_valid) {
                     for (var i = tx; i < (HEAD_DIM_QK / 4u); i += num_of_threads) {
                         let q_off = local_q_row_offset + i * 4u;
+
+                        let qv = vec4<f32>(
+                            f32(q_shmem[q_off + 0u]),
+                            f32(q_shmem[q_off + 1u]),
+                            f32(q_shmem[q_off + 2u]),
+                            f32(q_shmem[q_off + 3u]));
+#ifdef KV_DIRECT
                         let idx = k_head_offset + (kv_tile + kv_idx) * params.stride_k1 + (i * 4u);
-
-                        let qv = vec4<f32>(f32(q_shmem[q_off + 0u]),
-                                           f32(q_shmem[q_off + 1u]),
-                                           f32(q_shmem[q_off + 2u]),
-                                           f32(q_shmem[q_off + 3u]));
-                        let kv = vec4<f32>(f32(K[idx + 0u]),
-                                           f32(K[idx + 1u]),
-                                           f32(K[idx + 2u]),
-                                           f32(K[idx + 3u]));
-                        
+                        let kv = vec4<f32>(
+                            f32(K[idx + 0u]),
+                            f32(K[idx + 1u]),
+                            f32(K[idx + 2u]),
+                            f32(K[idx + 3u]));
+#else
+                        let idx = kv_idx * HEAD_DIM_QK + (i * 4u);
+                        let kv = vec4<f32>(
+                            f32(kv_shmem[idx + 0u]),
+                            f32(kv_shmem[idx + 1u]),
+                            f32(kv_shmem[idx + 2u]),
+                            f32(kv_shmem[idx + 3u]));
+#endif
                         partial_sum += dot(qv, kv);
-
                     }
                   }
                   var sum = partial_sum;
@@ -465,74 +491,77 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
       }
 
       // load v tile into shared memory
-// #if defined(KV_Q4_0)
-//       for (var elem_idx = local_id.x * NQ; elem_idx < KV_TILE * HEAD_DIM_V; elem_idx += WG_SIZE * NQ) {
-//           let blck_idx = elem_idx / BLOCK_SIZE;
-//           let block_offset = (elem_idx % BLOCK_SIZE) / WEIGHTS_PER_F16;
-//           let v_row = blck_idx / BLOCKS_V;
-//           let global_v_row = kv_tile + v_row;
-//           let block_k = blck_idx % BLOCKS_V;
-//           let row_offset = v_row * HEAD_DIM_V;
+#if defined(KV_Q4_0)
+      for (var elem_idx = local_id.x * NQ; elem_idx < KV_TILE * HEAD_DIM_V; elem_idx += WG_SIZE * NQ) {
+          let blck_idx = elem_idx / BLOCK_SIZE;
+          let block_offset = (elem_idx % BLOCK_SIZE) / WEIGHTS_PER_F16;
+          let v_row = blck_idx / BLOCKS_V;
+          let global_v_row = kv_tile + v_row;
+          let block_k = blck_idx % BLOCKS_V;
+          let row_offset = v_row * HEAD_DIM_V;
 
-//           if (global_v_row < params.seq_len_kv) {
-//               let global_block_idx = v_head_offset + global_v_row * params.stride_v1 + block_k;
-//               let base_idx = global_block_idx * F16_PER_BLOCK;
-//               let d = V[base_idx]; // scale
-//               for (var j = 0u; j < F16_PER_THREAD; j += 2) {
-//                   let q_0 = V[base_idx + 1u + block_offset + j];
-//                   let q_1 = V[base_idx + 1u + block_offset + j + 1];
-//                   let q_packed = bitcast<u32>(vec2(q_0, q_1));
-//                   for (var k = 0u; k < 4u; k++) {
-//                       let q_byte = get_byte(q_packed, k);
-//                       let q_hi = (f16((q_byte >> 4) & 0xF) - 8.0) * d;
-//                       let q_lo = (f16(q_byte & 0xF) - 8.0) * d;
-//                       let idx = block_k * BLOCK_SIZE + block_offset * 2u + j * 2u + k;
-//                       kv_shmem[row_offset + idx] = q_lo;
-//                       kv_shmem[row_offset + idx + 16u] = q_hi;
-//                   }
-//               }
-//           }
-//       }
-// #elif defined(KV_Q8_0)
-//       for (var elem_idx = local_id.x * NQ; elem_idx < KV_TILE * HEAD_DIM_V; elem_idx += WG_SIZE * NQ) {
-//           let blck_idx = elem_idx / BLOCK_SIZE;
-//           let block_offset = (elem_idx % BLOCK_SIZE) / WEIGHTS_PER_F16;
-//           let v_row = blck_idx / BLOCKS_V;
-//           let global_v_row = kv_tile + v_row;
-//           let block_k = blck_idx % BLOCKS_V;
-//           let row_offset = v_row * HEAD_DIM_V;
+          if (global_v_row < params.seq_len_kv) {
+              let global_block_idx = v_head_offset + global_v_row * params.stride_v1 + block_k;
+              let base_idx = global_block_idx * F16_PER_BLOCK;
+              let d = V[base_idx];
+              for (var j = 0u; j < F16_PER_THREAD; j += 2) {
+                  let q_0 = V[base_idx + 1u + block_offset + j];
+                  let q_1 = V[base_idx + 1u + block_offset + j + 1];
+                  let q_packed = bitcast<u32>(vec2(q_0, q_1));
+                  for (var k = 0u; k < 4u; k++) {
+                      let q_byte = get_byte(q_packed, k);
+                      let q_hi = (f16((q_byte >> 4) & 0xF) - 8.0) * d;
+                      let q_lo = (f16(q_byte & 0xF) - 8.0) * d;
+                      let idx = block_k * BLOCK_SIZE + block_offset * 2u + j * 2u + k;
+                      kv_shmem[row_offset + idx] = q_lo;
+                      kv_shmem[row_offset + idx + 16u] = q_hi;
+                  }
+              }
+          }
+      }
+#elif defined(KV_Q8_0)
+      for (var elem_idx = local_id.x * NQ; elem_idx < KV_TILE * HEAD_DIM_V; elem_idx += WG_SIZE * NQ) {
+          let blck_idx = elem_idx / BLOCK_SIZE;
+          let block_offset = (elem_idx % BLOCK_SIZE) / WEIGHTS_PER_F16;
+          let v_row = blck_idx / BLOCKS_V;
+          let global_v_row = kv_tile + v_row;
+          let block_k = blck_idx % BLOCKS_V;
+          let row_offset = v_row * HEAD_DIM_V;
 
-//           if (global_v_row < params.seq_len_kv) {
-//               let global_block_idx = v_head_offset + global_v_row * params.stride_v1 + block_k;
-//               let base_idx = global_block_idx * F16_PER_BLOCK;
-//               let d = V[base_idx]; // scale
-//               for (var j = 0u; j < F16_PER_THREAD; j += 2) {
-//                   let q_0 = V[base_idx + 1u + block_offset + j];
-//                   let q_1 = V[base_idx + 1u + block_offset + j + 1];
-//                   let q_packed = bitcast<u32>(vec2(q_0, q_1));
-//                   for (var k = 0u; k < 4u; k++) {
-//                       let q_byte = get_byte_i32(q_packed, k);
-//                       let q_val = f16(q_byte) * d;
-//                       let idx = block_k * BLOCK_SIZE + block_offset * 2u + j * 2u + k;
-//                       kv_shmem[row_offset + idx] = q_val;
-//                   }
-//               }
-//           }
-//       }
-// #elif defined(KV_DIRECT)
-//       // Direct global loads for KV
-// #else
-//       for (var elem_idx = local_id.x; elem_idx < KV_TILE * HEAD_DIM_V; elem_idx += WG_SIZE) {
-//           let v_row = elem_idx / HEAD_DIM_V;
-//           let v_col = elem_idx % HEAD_DIM_V;
-//           let global_v_row = kv_tile + v_row;
-//           let global_v_row_offset = v_head_offset + global_v_row * params.stride_v1;
-//           kv_shmem[elem_idx] = f16(select(
-//               0.0,
-//               V[global_v_row_offset + v_col],
-//               global_v_row < params.seq_len_kv && v_col < HEAD_DIM_V));
-//       }
-// #endif
+          if (global_v_row < params.seq_len_kv) {
+              let global_block_idx = v_head_offset + global_v_row * params.stride_v1 + block_k;
+              let base_idx = global_block_idx * F16_PER_BLOCK;
+              let d = V[base_idx];
+              for (var j = 0u; j < F16_PER_THREAD; j += 2) {
+                  let q_0 = V[base_idx + 1u + block_offset + j];
+                  let q_1 = V[base_idx + 1u + block_offset + j + 1];
+                  let q_packed = bitcast<u32>(vec2(q_0, q_1));
+                  for (var k = 0u; k < 4u; k++) {
+                      let q_byte = get_byte_i32(q_packed, k);
+                      let q_val = f16(q_byte) * d;
+                      let idx = block_k * BLOCK_SIZE + block_offset * 2u + j * 2u + k;
+                      kv_shmem[row_offset + idx] = q_val;
+                  }
+              }
+          }
+      }
+#elif defined(KV_DIRECT)
+      // Direct global loads for KV
+#else
+      for (var elem_idx = local_id.x * 4u; elem_idx < KV_TILE * HEAD_DIM_V; elem_idx += WG_SIZE * 4u) {
+          let v_row = elem_idx / HEAD_DIM_V;
+          let v_col = elem_idx % HEAD_DIM_V;
+          let global_v_row = kv_tile + v_row;
+          let global_v_row_offset = v_head_offset + global_v_row * params.stride_v1;
+          let in_bounds = global_v_row < params.seq_len_kv && (v_col + 3u) < HEAD_DIM_V;
+          let vec_idx = (global_v_row_offset + v_col) >> 2u;
+          let v4 = select(vec4<KV_TYPE>(0.0), V[vec_idx], in_bounds);
+          kv_shmem[elem_idx + 0u] = f16(v4.x);
+          kv_shmem[elem_idx + 1u] = f16(v4.y);
+          kv_shmem[elem_idx + 2u] = f16(v4.z);
+          kv_shmem[elem_idx + 3u] = f16(v4.w);
+      }
+#endif
 
       workgroupBarrier();
 
@@ -556,8 +585,17 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                       }
 
                       let p = f32(inter_shmem[kv_idx + q_tile_row * KV_TILE]);
+#ifdef KV_DIRECT
                       let v_idx = v_head_offset + v_row * params.stride_v1 + vec_col * 4u;
                       let v4 = vec4<f32>(V[v_idx >> 2u]);
+#else
+                      let v_idx = kv_idx * HEAD_DIM_V + vec_col * 4u;
+                      let v4 = vec4<f32>(
+                          f32(kv_shmem[v_idx + 0u]),
+                          f32(kv_shmem[v_idx + 1u]),
+                          f32(kv_shmem[v_idx + 2u]),
+                          f32(kv_shmem[v_idx + 3u]));
+#endif
                       lo += p * v4;
                   }
 
