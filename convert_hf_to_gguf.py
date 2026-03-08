@@ -144,6 +144,7 @@ class ModelBase:
         self.metadata_override = metadata_override
         self.model_name = model_name
         self.dir_model_card = dir_model  # overridden in convert_lora_to_gguf.py
+        self._is_nvfp4 = False
 
         # Apply heuristics to figure out typical tensor encoding based on first tensor's dtype
         # NOTE: can't use field "torch_dtype" in config.json, because some finetunes lie.
@@ -271,6 +272,9 @@ class ModelBase:
         return tensors
 
     def dequant_model(self):
+        if self._is_nvfp4:
+            return  # NVFP4 weights are repacked in generate_extra_tensors
+
         tensors_to_remove: list[str] = []
         new_tensors: dict[str, Callable[[], Tensor]] = {}
 
@@ -516,6 +520,13 @@ class ModelBase:
         raise NotImplementedError("set_gguf_parameters() must be implemented in subclasses")
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # skip NVFP4 auxiliary tensors (handled in _generate_nvfp4_tensors)
+        if self._is_nvfp4:
+            if name.endswith((".weight_scale", ".weight_scale_2", ".input_scale", ".k_scale", ".v_scale")):
+                return []
+            if name.endswith(".weight") and name.replace(".weight", ".weight_scale") in self.model_tensors:
+                return []
+
         new_name = self.map_tensor_name(name)
 
         # Handle gate/up expert tensor fusion if enabled
@@ -551,8 +562,136 @@ class ModelBase:
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         return ()
 
+    @staticmethod
+    def _nvfp4_pack(weight: Tensor, scale: Tensor) -> tuple[np.ndarray, list[int]]:
+        """Repack NVFP4 ModelOpt tensors into ggml super-block layout.
+        Preserves original E4M3 scale bits as UE4M3 (strip sign bit).
+        The per-tensor scale2 factor is stored as a separate tensor and applied at inference time via ggml_mul().
+        Returns (raw_data, logical_shape)."""
+
+        out_features = weight.shape[0]
+        n_blocks = scale.shape[1]
+
+        # Unpack ModelOpt nibble-packed weights
+        w = weight.reshape(out_features, n_blocks, 8)
+        vals = torch.stack([w & 0x0F, w >> 4], dim=-1).reshape(out_features, n_blocks, 16)
+
+        # Preserve original E4M3 scale bits as UE4M3 (strip sign bit)
+        d_ue = scale.view(torch.uint8).numpy().reshape(out_features, n_blocks) & 0x7F
+        qs = (vals[:, :, :8] | (vals[:, :, 8:] << 4)).to(torch.uint8).numpy()
+
+        # Pack into super-blocks: [4 UE4M3 scales, 32 qs bytes] = 36 bytes per 64 elements
+        n_super = n_blocks // 4
+        d_grouped = d_ue.reshape(out_features, n_super, 4)
+        qs_grouped = qs.reshape(out_features, n_super, 4, 8).reshape(out_features, n_super, 32)
+        raw = np.concatenate([d_grouped, qs_grouped], axis=-1).reshape(out_features, n_super * 36)
+        return raw, [out_features, n_super * 64]
+
+    @staticmethod
+    def _nvfp4_scale2_is_trivial(scale2: Tensor) -> bool:
+        return scale2.numel() <= 1 and abs(float(scale2.float().sum()) - 1.0) < 1e-6
+
+    def _repack_nvfp4(self, new_name: str, weight: Tensor, scale: Tensor, scale2: Tensor):
+        raw, shape = self._nvfp4_pack(weight, scale)
+        logger.info(f"Repacked {new_name} with shape {shape} and quantization NVFP4")
+        self.gguf_writer.add_tensor(new_name, raw, raw_dtype=gguf.GGMLQuantizationType.NVFP4)
+
+        # Emit per-tensor scale2 as a separate F32 tensor when non-trivial
+        if not self._nvfp4_scale2_is_trivial(scale2):
+            scale2_f32 = scale2.float().numpy().flatten()
+            scale_name = new_name.replace(".weight", ".scale")
+            logger.info(f"  + {scale_name} (per-tensor NVFP4 scale2, shape [{scale2_f32.size}])")
+            self.gguf_writer.add_tensor(scale_name, scale2_f32)
+
+    def _generate_nvfp4_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        # Per-layer expert merging to avoid holding all experts in memory
+        expert_blocks: dict[tuple[int, str], list[tuple[int, np.ndarray]]] = {}
+        expert_scales: dict[tuple[int, str], list[tuple[int, float]]] = {}
+        expert_shapes: dict[tuple[int, str], list[int]] = {}
+        n_experts = self.find_hparam(["num_local_experts", "num_experts"], optional=True) or 0
+
+        for name in list(self.model_tensors.keys()):
+            if not name.endswith(".weight"):
+                continue
+            scale_name = name.replace(".weight", ".weight_scale")
+            scale2_name = name.replace(".weight", ".weight_scale_2")
+            if scale_name not in self.model_tensors:
+                continue
+            # Force eager materialization of lazy tensors
+            weight = LazyTorchTensor.to_eager(self.model_tensors[name]())
+            scale = LazyTorchTensor.to_eager(self.model_tensors[scale_name]())
+            scale2 = LazyTorchTensor.to_eager(self.model_tensors.get(scale2_name, lambda: torch.tensor(1.0))())
+
+            # Check if this is a per-expert tensor
+            m = re.search(r'\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.weight$', name)
+            if m:
+                expert_id = int(m.group(1))
+                proj_type = m.group(2)
+                bid_m = re.search(r'\.layers\.(\d+)\.', name)
+                bid = int(bid_m.group(1)) if bid_m else 0
+                key = (bid, proj_type)
+
+                raw, shape = self._nvfp4_pack(weight, scale)
+
+                if key not in expert_blocks:
+                    expert_blocks[key] = []
+                    expert_scales[key] = []
+                    expert_shapes[key] = shape
+                expert_blocks[key].append((expert_id, raw.copy()))
+                # Collect per-expert scale2 (scalar per expert)
+                expert_scales[key].append((expert_id, float(scale2.float().sum())))
+
+                # Flush when all experts for this (layer, proj) are collected
+                if n_experts > 0 and len(expert_blocks[key]) >= n_experts:
+                    self._flush_nvfp4_experts(key, expert_blocks, expert_scales, expert_shapes, bid, proj_type)
+            else:
+                new_name = self.map_tensor_name(name)
+                self._repack_nvfp4(new_name, weight, scale, scale2)
+
+        # Flush any remaining experts (fallback if n_experts was unknown)
+        for (bid, proj_type) in list(expert_blocks.keys()):
+            self._flush_nvfp4_experts((bid, proj_type), expert_blocks, expert_scales, expert_shapes, bid, proj_type)
+
+        return []
+
+    def _flush_nvfp4_experts(self, key, expert_blocks, expert_scales, expert_shapes, bid, proj_type):
+        experts = expert_blocks.pop(key)
+        scales = expert_scales.pop(key)
+        shape = expert_shapes.pop(key)
+
+        experts.sort(key=lambda x: x[0])
+        merged = np.stack([e[1] for e in experts], axis=0)
+        merged_name = f"model.layers.{bid}.mlp.experts.{proj_type}.weight"
+        new_name = self.map_tensor_name(merged_name)
+        logger.info(f"Repacked {new_name} with shape [{len(experts)}, {shape[0]}, {shape[1]}] and quantization NVFP4")
+        self.gguf_writer.add_tensor(new_name, merged, raw_dtype=gguf.GGMLQuantizationType.NVFP4)
+
+        # Emit per-expert scale2 tensor if any expert has non-trivial scale2
+        scales.sort(key=lambda x: x[0])
+        scale_vals = np.array([s[1] for s in scales], dtype=np.float32)
+        if not np.allclose(scale_vals, 1.0, atol=1e-6):
+            scale_name = new_name.replace(".weight", ".scale")
+            logger.info(f"  + {scale_name} (per-expert NVFP4 scale2, shape [{len(scales)}])")
+            self.gguf_writer.add_tensor(scale_name, scale_vals)
+
+        del experts, merged
+
     def prepare_tensors(self):
+        # detect NVFP4 quantization (ModelOpt format)
+        quant_algo = (self.hparams.get("quantization_config") or {}).get("quant_algo")
+        quant_config_file = self.dir_model / "hf_quant_config.json"
+
+        if not quant_algo and quant_config_file.is_file():
+            with open(quant_config_file, "r", encoding="utf-8") as f:
+                quant_algo = (json.load(f).get("quantization") or {}).get("quant_algo")
+
+        self._is_nvfp4 = quant_algo == "NVFP4"
+
         self.dequant_model()
+
+        # NVFP4 weights are repacked and written directly to gguf_writer
+        if self._is_nvfp4:
+            self._generate_nvfp4_tensors()
 
         # Handle empty tensor_map for models with block_count=0 (like MobileNetV5)
         if self.tensor_map.mapping:
@@ -4302,6 +4441,14 @@ class Qwen2MoeModel(TextModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # process the experts separately
         name = name.replace("language_model.", "") # InternVL
+
+        # NVFP4 expert weights are handled in generate_extra_tensors
+        if self._is_nvfp4 and "experts" in name:
+            if name.endswith((".weight", ".weight_scale", ".weight_scale_2", ".input_scale")):
+                if name.endswith(".weight") and name.replace(".weight", ".weight_scale") in self.model_tensors:
+                    return
+                if not name.endswith(".weight"):
+                    return
 
         # handle aggregated expert tensors
         # GGUF stores dimensions reversed from PyTorch, so:

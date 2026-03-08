@@ -1166,7 +1166,10 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          llama_expert_gating_func_type gating_op,
                  int   il,
          ggml_tensor * probs_in,
-         ggml_tensor * gate_up_exps) const {
+         ggml_tensor * gate_up_exps,
+         ggml_tensor * up_exps_s,
+         ggml_tensor * gate_exps_s,
+         ggml_tensor * down_exps_s) const {
     return build_moe_ffn(
         cur,
         gate_inp,  /* gate_inp_b  */ nullptr,
@@ -1183,7 +1186,11 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         gating_op,
         il,
         probs_in,
-        gate_up_exps
+        gate_up_exps,
+        /* gate_up_exps_b */ nullptr,
+        up_exps_s,
+        gate_exps_s,
+        down_exps_s
     );
 }
 
@@ -1208,7 +1215,10 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                  int   il,
          ggml_tensor * probs_in,
          ggml_tensor * gate_up_exps,
-         ggml_tensor * gate_up_exps_b) const {
+         ggml_tensor * gate_up_exps_b,
+         ggml_tensor * up_exps_s,
+         ggml_tensor * gate_exps_s,
+         ggml_tensor * down_exps_s) const {
     const int64_t n_embd   = cur->ne[0];
     const int64_t n_tokens = cur->ne[1];
     const bool weight_before_ffn = arch == LLM_ARCH_LLAMA4; // for llama4, we apply the sigmoid-ed weights before the FFN
@@ -1360,6 +1370,15 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             cb(gate_up, "ffn_moe_gate_up_biased", il);
         }
 
+        // apply per-expert scale2 to merged gate_up (use up_exps_s since gate and up are fused)
+        if (up_exps_s) {
+            ggml_tensor * s = ggml_reshape_3d(ctx0, up_exps_s, 1, n_expert, 1);
+            s = ggml_repeat_4d(ctx0, s, 1, n_expert, n_tokens, 1);
+            s = ggml_get_rows(ctx0, s, selected_experts); // [1, n_expert_used, n_tokens]
+            gate_up = ggml_mul(ctx0, gate_up, s);
+            cb(gate_up, "ffn_moe_gate_up_scaled", il);
+        }
+
         const int64_t n_ff = gate_up->ne[0] / 2;
         cur = ggml_view_3d(ctx0, gate_up, n_ff, gate_up->ne[1], gate_up->ne[2], gate_up->nb[1], gate_up->nb[2], 0);
         cb(cur, "ffn_moe_gate", il);
@@ -1375,6 +1394,15 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             cb(up, "ffn_moe_up_biased", il);
         }
 
+        // apply per-expert scale2 to up
+        if (up_exps_s) {
+            ggml_tensor * s = ggml_reshape_3d(ctx0, up_exps_s, 1, n_expert, 1);
+            s = ggml_repeat_4d(ctx0, s, 1, n_expert, n_tokens, 1);
+            s = ggml_get_rows(ctx0, s, selected_experts); // [1, n_expert_used, n_tokens]
+            up = ggml_mul(ctx0, up, s);
+            cb(up, "ffn_moe_up_scaled", il);
+        }
+
         if (gate_exps) {
             cur = build_lora_mm_id(gate_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
             cb(cur, "ffn_moe_gate", il);
@@ -1385,6 +1413,15 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         if (gate_exps_b) {
             cur = ggml_add_id(ctx0, cur, gate_exps_b, selected_experts);
             cb(cur, "ffn_moe_gate_biased", il);
+        }
+
+        // apply per-expert scale2 to gate
+        if (gate_exps_s) {
+            ggml_tensor * s = ggml_reshape_3d(ctx0, gate_exps_s, 1, n_expert, 1);
+            s = ggml_repeat_4d(ctx0, s, 1, n_expert, n_tokens, 1);
+            s = ggml_get_rows(ctx0, s, selected_experts); // [1, n_expert_used, n_tokens]
+            cur = ggml_mul(ctx0, cur, s);
+            cb(cur, "ffn_moe_gate_scaled", il);
         }
     }
 
@@ -1463,6 +1500,15 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     if (down_exps_b) {
         experts = ggml_add_id(ctx0, experts, down_exps_b, selected_experts);
         cb(experts, "ffn_moe_down_biased", il);
+    }
+
+    // apply per-expert scale2 to down
+    if (down_exps_s) {
+        ggml_tensor * s = ggml_reshape_3d(ctx0, down_exps_s, 1, n_expert, 1);
+        s = ggml_repeat_4d(ctx0, s, 1, n_expert, n_tokens, 1);
+        s = ggml_get_rows(ctx0, s, selected_experts); // [1, n_expert_used, n_tokens]
+        experts = ggml_mul(ctx0, experts, s);
+        cb(experts, "ffn_moe_down_scaled", il);
     }
 
     if (!weight_before_ffn) {
