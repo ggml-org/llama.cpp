@@ -98,7 +98,11 @@ struct Params {
 };
 
 @group(0) @binding(0) var<storage, read_write> Q: array<f32>;
+#if defined(KV_Q4_0) || defined(KV_Q8_0)
 @group(0) @binding(1) var<storage, read_write> K: array<KV_TYPE>;
+#else
+@group(0) @binding(1) var<storage, read_write> K: array<vec4<KV_TYPE>>;
+#endif
 #if defined(KV_Q4_0) || defined(KV_Q8_0)
 @group(0) @binding(2) var<storage, read_write> V: array<KV_TYPE>;
 #else
@@ -337,15 +341,18 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 #elif defined(KV_DIRECT)
       // Direct global loads for KV
 #else
-      for (var elem_idx = local_id.x; elem_idx < KV_TILE * HEAD_DIM_QK; elem_idx += WG_SIZE) {
+      for (var elem_idx = local_id.x * 4u; elem_idx < KV_TILE * HEAD_DIM_QK; elem_idx += WG_SIZE * 4u) {
           let k_row = elem_idx / HEAD_DIM_QK;
           let k_col = elem_idx % HEAD_DIM_QK;
           let global_k_row = kv_tile + k_row;
           let global_k_row_offset = k_head_offset + global_k_row * params.stride_k1;
-          kv_shmem[elem_idx] = f16(select(
-              0.0,
-              K[global_k_row_offset + k_col],
-              global_k_row < params.seq_len_kv && k_col < HEAD_DIM_QK));
+          let in_bounds = global_k_row < params.seq_len_kv && (k_col + 3u) < HEAD_DIM_QK;
+          let vec_idx = (global_k_row_offset + k_col) >> 2u;
+          let k4 = select(vec4<KV_TYPE>(0.0), K[vec_idx], in_bounds);
+          kv_shmem[elem_idx + 0u] = f16(k4.x);
+          kv_shmem[elem_idx + 1u] = f16(k4.y);
+          kv_shmem[elem_idx + 2u] = f16(k4.z);
+          kv_shmem[elem_idx + 3u] = f16(k4.w);
       }
 #endif
 
@@ -381,11 +388,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                             f32(q_shmem[q_off + 3u]));
 #ifdef KV_DIRECT
                         let idx = k_head_offset + (kv_tile + kv_idx) * params.stride_k1 + (i * 4u);
-                        let kv = vec4<f32>(
-                            f32(K[idx + 0u]),
-                            f32(K[idx + 1u]),
-                            f32(K[idx + 2u]),
-                            f32(K[idx + 3u]));
+                        let kv = vec4<f32>(K[idx >> 2u]);
 #else
                         let idx = kv_idx * HEAD_DIM_QK + (i * 4u);
                         let kv = vec4<f32>(
