@@ -19978,10 +19978,14 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
 
         // Skip cache staging for experts already in VRAM via placement table.
         // This covers:
-        //   - Secondary GPU experts (device_id >= 1) from Phase 2
+        //   - Secondary GPU experts (device_id >= 1) from Phase 2 (staged in SOA)
         //   - GPU0 prefetch pool experts (device_id == 0) from ExpertPrefetcher
         // Using the existing device_ptr avoids redundant staging through
         // ensure_cached_layout and saves VRAM budget.
+        //
+        // IMPORTANT: GPU0 prefetch pool stores raw AOS bytes (no layout conversion).
+        // Only use the shortcut when the requested layout is AOS.  For SOA/COALESCED,
+        // fall through to ensure_cached_layout which performs the AOS→SOA conversion.
         {
             auto &    ptable       = ggml_sycl::get_expert_placement_table();
             const int pt_layer_id  = moe_cache_layer_id(src0->name);
@@ -19992,12 +19996,18 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
                                     (long) e, existing.device_id);
                     continue;
                 }
-                // Expert cached in GPU0 prefetch pool — use VRAM pointer directly.
-                extra->moe_expert_ptrs_host[device][static_cast<size_t>(e)] = existing.device_ptr;
-                stats_vram_ready++;
-                GGML_SYCL_DEBUG("[MOE] Expert %ld cached in prefetch pool, device_ptr=%p\n",
-                                (long) e, existing.device_ptr);
-                continue;
+                // GPU0 prefetch pool: only use shortcut for AOS layout.
+                // Prefetch pool copies raw bytes (AOS) without layout conversion.
+                if (layout == GGML_LAYOUT_AOS) {
+                    extra->moe_expert_ptrs_host[device][static_cast<size_t>(e)] = existing.device_ptr;
+                    stats_vram_ready++;
+                    GGML_SYCL_DEBUG("[MOE] Expert %ld cached in prefetch pool (AOS), device_ptr=%p\n",
+                                    (long) e, existing.device_ptr);
+                    continue;
+                }
+                GGML_SYCL_DEBUG("[MOE] Expert %ld in prefetch pool but layout=%d != AOS, staging via cache\n",
+                                (long) e, (int) layout);
+                // Fall through to cache staging for layout conversion.
             }
         }
 
@@ -25622,8 +25632,11 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
         const bool   cpu_type_ok_fast = cpu_traits_fast && cpu_traits_fast->vec_dot;
 
         const bool multi_gpu_fast = g_moe_multi_gpu_active.load(std::memory_order_acquire);
+        // MXFP4 CPU TG produces incorrect output — vec_dot_mxfp4_q8_0 activation
+        // data is lost during D2H/H2D round-trip. Use GPU MMVQ dispatch instead.
+        const bool mxfp4_exclude = (src0->type == GGML_TYPE_MXFP4);
         if ((cpu_tg_val_fast == 1 || cpu_tg_val_fast == -2) &&
-            host_weights_fast && cpu_type_ok_fast && !multi_gpu_fast) {
+            host_weights_fast && cpu_type_ok_fast && !multi_gpu_fast && !mxfp4_exclude) {
             static std::atomic<int> cpu_tg_log{0};
             if (cpu_tg_log.fetch_add(1, std::memory_order_relaxed) < 3) {
                 GGML_LOG_INFO("[CPU-TG] Routing %s (type=%d, ne12=1) to CPU-primary path\n",
@@ -26164,7 +26177,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             }
             const auto * ct = ggml_get_type_traits_cpu(src0->type);
             bool ct_ok = ct && ct->vec_dot;
-            early_cpu_expert_tg = (mhv != 0) && ct_ok && (etv == 1 || etv == -2);
+            const bool mxfp4_early_exclude = (src0->type == GGML_TYPE_MXFP4);
+            early_cpu_expert_tg = (mhv != 0) && ct_ok && (etv == 1 || etv == -2) && !mxfp4_early_exclude;
             if (early_cpu_expert_tg) {
                 static std::atomic<int> log_count{0};
                 if (log_count.fetch_add(1, std::memory_order_relaxed) < 3) {
@@ -26439,6 +26453,32 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
         }
         src0_layout_base = src0_layout_ptr;
     }
+    // ---------------------------------------------------------------------------
+    // MoE hybrid GPU+CPU dispatch gate (GGML_SYCL_MOE_HYBRID=1)
+    // MUST be computed BEFORE update_moe_ptr_table so expert data is staged
+    // in the correct layout (AOS for hybrid, SOA/coalesced otherwise).
+    // ---------------------------------------------------------------------------
+    static std::atomic<int> moe_hybrid_enabled{ -1 };
+    int                     moe_hybrid_val = moe_hybrid_enabled.load(std::memory_order_acquire);
+    if (moe_hybrid_val < 0) {
+        const char * env     = getenv("GGML_SYCL_MOE_HYBRID");
+        int          new_val = env ? atoi(env) : 1;  // Default: ON
+        moe_hybrid_enabled.compare_exchange_strong(moe_hybrid_val, new_val, std::memory_order_release,
+                                                    std::memory_order_acquire);
+        moe_hybrid_val = moe_hybrid_enabled.load(std::memory_order_acquire);
+    }
+    const auto * cpu_traits_check = ggml_get_type_traits_cpu(src0->type);
+    const bool   cpu_type_ok      = cpu_traits_check && cpu_traits_check->vec_dot;
+    const bool moe_hybrid_active = (moe_hybrid_val != 0) && use_expert_cache && (ne12 == 1) && cpu_type_ok;
+
+    // Expert cache stores raw AOS bytes (no layout conversion during H2D).
+    // Force AOS layout so the GPU kernel interprets the data correctly.
+    // This MUST happen before update_moe_ptr_table which stages data in route_layout.
+    // local_extra fields are updated later (after local_extra is declared).
+    if (moe_hybrid_active && route_layout != GGML_LAYOUT_AOS) {
+        route_layout = GGML_LAYOUT_AOS;
+    }
+
     const void * const * expert_ptrs_host = nullptr;
     if (use_expert_cache) {
         // force_cache_aos=true ensures experts are staged to GPU memory even for AoS layout
@@ -26586,28 +26626,6 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     local_extra.layout.data_ptr    = nullptr;
     src0_row.extra                 = &local_extra;
     src0_row.layout                = &local_extra.layout;
-    // ---------------------------------------------------------------------------
-    // MoE hybrid GPU+CPU dispatch gate (GGML_SYCL_MOE_HYBRID=1)
-    // When enabled and weights are host-resident (mmap/shared), experts that
-    // failed GPU staging (expert_ptrs_host[i] == nullptr) are computed on CPU
-    // instead of being skipped. GPU-staged experts use the fast MMVQ path.
-    // ---------------------------------------------------------------------------
-    static std::atomic<int> moe_hybrid_enabled{ -1 };
-    int                     moe_hybrid_val = moe_hybrid_enabled.load(std::memory_order_acquire);
-    if (moe_hybrid_val < 0) {
-        const char * env     = getenv("GGML_SYCL_MOE_HYBRID");
-        int          new_val = env ? atoi(env) : 1;  // Default: ON (auto-enable for MoE with host-resident experts)
-        moe_hybrid_enabled.compare_exchange_strong(moe_hybrid_val, new_val, std::memory_order_release,
-                                                    std::memory_order_acquire);
-        moe_hybrid_val = moe_hybrid_enabled.load(std::memory_order_acquire);
-    }
-
-    // MoE hybrid dispatch requires CPU fallback for cache misses.
-    // Only enable for types that have vec_dot CPU support (Q4_0, Q8_0, MXFP4, etc.).
-    const auto * cpu_traits_check = ggml_get_type_traits_cpu(src0->type);
-    const bool   cpu_type_ok      = cpu_traits_check && cpu_traits_check->vec_dot;
-    const bool moe_hybrid_active = (moe_hybrid_val != 0) && use_expert_cache && (ne12 == 1) && cpu_type_ok;
-
     // CPU-primary expert routing for TG (batch=1 decode).
     // Routes ALL expert FFNs to CPU, bypassing GPU cache entirely.
     // Rationale: CPU DRAM BW (70 GB/s) >> PCIe BW (13.4 GB/s) for batch=1.
@@ -26625,14 +26643,6 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     // (moe_hybrid_active already requires ne12 == 1, use_expert_cache, cpu_type_ok)
     const bool cpu_expert_tg_active = moe_hybrid_active &&
         (cpu_tg_val == 1 || cpu_tg_val == -2);
-
-    // Expert cache stores raw AOS bytes (no layout conversion during H2D).
-    // Force AOS layout so the GPU kernel interprets the data correctly.
-    if (moe_hybrid_active && route_layout != GGML_LAYOUT_AOS) {
-        route_layout                   = GGML_LAYOUT_AOS;
-        local_extra.optimized_feature  = optimize_feature(reorder_mode::NONE);
-        local_extra.layout.mode        = GGML_LAYOUT_AOS;
-    }
 
     if (ne12 == 1) {
         // ---------------------------------------------------------------
