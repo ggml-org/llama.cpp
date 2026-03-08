@@ -93,7 +93,7 @@ jobs:
         id: cmake_test
         run: |
           cd build
-          ctest -L main --verbose --timeout 900
+          ctest -L main -E "test-llama-archs" --verbose --timeout 900
 
   macOS-latest-cmake-x64:
     runs-on: macos-15-intel

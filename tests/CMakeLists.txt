@@ -185,6 +185,8 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     #llama_test(test-tokenizer-1-spm  NAME test-tokenizer-1-baichuan  ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-baichuan.gguf)
 
     # llama_build_and_test(test-double-float.cpp) # SLOW
+
+    llama_build_and_test(test-llama-archs.cpp)
 endif()
 
 llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp)
