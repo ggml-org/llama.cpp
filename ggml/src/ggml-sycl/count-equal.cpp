@@ -18,7 +18,7 @@ static void count_equal(const T *__restrict__ x, const T *__restrict__ y,
         nequal += xi == yi;
     }
 
-    nequal = warp_reduce_sum(nequal);
+    nequal = warp_reduce_sum<WARP_SIZE>(nequal);
 
     if (item_ct1.get_local_id(2) != 0) {
         return;

@@ -112,6 +112,11 @@ class common_chat_peg_builder : public common_peg_parser_builder {
                                                  bool                                       parallel_tool_calls,
                                                  bool                                       force_tool_calls);
 
+    // Helper for Python-style function call format: name(arg1="value1", arg2=123)
+    // Used by LFM2 and similar templates
+    common_peg_parser python_style_tool_calls(const nlohmann::json & tools,
+                                              bool                   parallel_tool_calls);
+
   private:
     // Implementation helpers for standard_json_tools — one per JSON tool call layout mode
     common_peg_parser build_json_tools_function_is_key(const nlohmann::json & tools,
@@ -155,19 +160,19 @@ struct tagged_parse_result {
 
 struct tagged_peg_parser {
     common_peg_arena arena;
-    bool debug = false;
+    common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_NONE;
 
     tagged_peg_parser & withDebug() {
-      debug = true;
+      flags |= COMMON_PEG_PARSE_FLAG_DEBUG;
       return *this;
     }
 
     tagged_peg_parser & withoutDebug() {
-      debug = false;
+      flags = flags & ~COMMON_PEG_PARSE_FLAG_DEBUG;
       return *this;
     }
 
-    tagged_parse_result parse_and_extract(const std::string & input, bool is_partial = false) const;
+    tagged_parse_result parse_and_extract(const std::string & input, common_peg_parse_flags extra_flags = COMMON_PEG_PARSE_FLAG_NONE) const;
     tagged_parse_result parse_anywhere_and_extract(const std::string & input) const;
 };
 

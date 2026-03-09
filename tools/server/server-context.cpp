@@ -562,7 +562,7 @@ private:
 
     llama_model_ptr model_dft;
 
-    bool add_bos_token  = true;
+    bool add_bos_token = true;
 
     int32_t n_ctx; // total context for all clients / slots
 
@@ -570,6 +570,7 @@ private:
     std::vector<server_slot> slots;
 
     int slots_debug = 0;
+    int n_empty_consequtive = 0;
 
     std::unique_ptr<server_prompt_cache> prompt_cache;
 
@@ -2438,6 +2439,8 @@ private:
                         slot.n_prompt_tokens_cache = 0;
                     }
 
+                    bool do_checkpoint = params_base.n_ctx_checkpoints > 0;
+
                     // check if we should process the image
                     if (slot.prompt.n_tokens() < slot.task->n_tokens() && input_tokens[slot.prompt.n_tokens()] == LLAMA_TOKEN_NULL) {
                         // process the image
@@ -2457,6 +2460,8 @@ private:
                             const auto & chunk = input_tokens.find_chunk(slot.prompt.n_tokens());
                             slot.prompt.tokens.push_back(chunk.get()); // copy
                         }
+
+                        do_checkpoint = false; // do not checkpoint right after an image chunk
                     }
 
                     // If using an alora, there may be uncached tokens that come
@@ -2472,8 +2477,6 @@ private:
                         slot.lora[enabled_loras[0]].scale = 0.0f;
                         alora_disabled_id = enabled_loras[0];
                     }
-
-                    bool do_checkpoint = params_base.n_ctx_checkpoints > 0;
 
                     // make checkpoints only for completion tasks
                     do_checkpoint = do_checkpoint && slot.task->type == SERVER_TASK_TYPE_COMPLETION;
@@ -2626,6 +2629,12 @@ private:
 
         if (batch.n_tokens == 0) {
             SRV_WRN("%s", "no tokens to decode\n");
+
+            if (++n_empty_consequtive > 3) {
+                GGML_ABORT("fatal error - please provide logs and repro in %s\n", "https://github.com/ggml-org/llama.cpp/pull/20277");
+            }
+        } else {
+            n_empty_consequtive = 0;
         }
 
         int32_t i_next = 0;
