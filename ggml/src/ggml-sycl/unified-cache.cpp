@@ -5728,6 +5728,9 @@ void unified_cache_add_runtime_bytes(int device, size_t bytes, runtime_category 
     const size_t new_total =
         g_runtime_reserved_bytes[effective_device].fetch_add(bytes, std::memory_order_relaxed) + bytes;
     g_runtime_cat_bytes[effective_device][static_cast<int>(cat)].fetch_add(bytes, std::memory_order_relaxed);
+    GGML_SYCL_DEBUG("[BUDGET] add dev=%d(eff=%d) +%.3f MB cat=%d total=%.1f MB\n",
+                    device, effective_device, bytes / (1024.0 * 1024.0),
+                    static_cast<int>(cat), new_total / (1024.0 * 1024.0));
     auto it = g_device_caches.find(effective_device);
     if (it != g_device_caches.end()) {
         const size_t baseline = g_runtime_reserved_baseline[effective_device].load(std::memory_order_relaxed);

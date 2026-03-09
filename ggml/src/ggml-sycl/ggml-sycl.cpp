@@ -838,15 +838,17 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
     // -----------------------------------------------------------------------
     // Early multi-GPU setup: register unified caches for secondary GPUs BEFORE
     // the eager VRAM upload so the upload loop can distribute experts across
-    // all devices. Auto-enabled when 2+ physical GPUs are available.
-    // Opt-out: GGML_SYCL_MOE_MULTI_GPU=0 to force single-GPU MoE.
+    // all devices. Requires explicit opt-in: GGML_SYCL_MOE_MULTI_GPU=1.
+    // Default OFF because secondary GPU dispatch overhead (activation D2H,
+    // cross-device merge) often exceeds the benefit of extra VRAM caching,
+    // causing 2-3x performance regression on PCIe-connected multi-GPU setups.
     // -----------------------------------------------------------------------
     if (device == 0) {
-        const char * moe_opt_out    = std::getenv("GGML_SYCL_MOE_MULTI_GPU");
-        const bool   multi_gpu_off  = (moe_opt_out && std::atoi(moe_opt_out) == 0);
+        const char * moe_opt_in     = std::getenv("GGML_SYCL_MOE_MULTI_GPU");
+        const bool   multi_gpu_on   = (moe_opt_in && std::atoi(moe_opt_in) == 1);
         const int    total_gpus     = ggml_sycl_info().total_gpu_count;
 
-        if (!multi_gpu_off && total_gpus >= 2) {
+        if (multi_gpu_on && total_gpus >= 2) {
             int n_early_ok = 0;
             for (int gpu_d = 1; gpu_d < total_gpus && gpu_d < GGML_SYCL_MAX_DEVICES; gpu_d++) {
                 try {
@@ -860,8 +862,8 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
             }
             if (n_early_ok > 0) {
                 g_moe_multi_gpu_active.store(true, std::memory_order_release);
-                GGML_LOG_INFO("[MOE-MULTI-GPU] Auto-enabled: %d secondary GPUs registered "
-                              "(opt-out: GGML_SYCL_MOE_MULTI_GPU=0)\n", n_early_ok);
+                GGML_LOG_INFO("[MOE-MULTI-GPU] Enabled via GGML_SYCL_MOE_MULTI_GPU=1: %d secondary GPUs registered\n",
+                              n_early_ok);
             }
         }
     }
@@ -4617,6 +4619,20 @@ static ggml_sycl_device_info ggml_sycl_init() {
     for (int id = 0; id < info.device_count; ++id) {
         info.default_tensor_split[id] /= total_vram;
     }
+    // Post-probe free VRAM check
+    for (int i = 0; i < info.total_gpu_count; ++i) {
+        size_t post_free = 0, post_total = 0;
+        const int actual_id = (i < static_cast<int>(device_map.size()))
+                                  ? device_map[i]
+                                  : ggml_sycl_map_device_id(i);
+        auto & device_i = dpct::dev_mgr::instance().get_device(actual_id);
+        dpct::err0 mem_err = CHECK_TRY_ERROR(device_i.get_memory_info(post_free, post_total));
+        if (mem_err == 0) {
+            GGML_SYCL_DEBUG("[PROBE] Device %d post-probe: free=%.1f MB total=%.1f MB consumed=%.1f MB\n",
+                           i, post_free / (1024.0 * 1024.0), post_total / (1024.0 * 1024.0),
+                           (post_total - post_free) / (1024.0 * 1024.0));
+        }
+    }
     // Compute per-allocation host malloc limit from device VRAM sizes.
     // Intel Level Zero limits sycl::malloc_host to roughly the smallest device's
     // total VRAM (empirically verified: 11605 MB = B580's VRAM on this platform).
@@ -8242,6 +8258,9 @@ static ggml_backend_buffer_t ggml_backend_sycl_buffer_type_alloc_buffer(ggml_bac
     if (buft_ctx->mem_policy == GGML_SYCL_MEM_POLICY_KV_AUTO) {
         if (auto * cache = ggml_sycl::get_unified_cache_for_device(buft_ctx->device)) {
             const size_t available = cache->available();
+            GGML_SYCL_DEBUG("[KV-AUTO-DBG] dev=%d size=%.1f MB available=%.1f MB -> %s\n",
+                          buft_ctx->device, size / (1024.0 * 1024.0), available / (1024.0 * 1024.0),
+                          size > available ? "HOST" : "DEVICE");
             if (size > available) {
                 effective_mem_type = GGML_SYCL_MEM_HOST;
             }
@@ -8702,6 +8721,9 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
         free_mem / (1024.0 * 1024.0), total_mem / (1024.0 * 1024.0), compute_reserve / (1024.0 * 1024.0),
         kv_vram_cap / (1024.0 * 1024.0), size / (1024.0 * 1024.0));
 
+    GGML_SYCL_DEBUG("[KV-TIER-DBG] dev=%d size=%.1f MB free_mem=%.1f MB total_mem=%.1f MB compute_reserve=%.1f MB kv_vram_cap=%.1f MB\n",
+                  device, size / (1024.0 * 1024.0), free_mem / (1024.0 * 1024.0), total_mem / (1024.0 * 1024.0),
+                  compute_reserve / (1024.0 * 1024.0), kv_vram_cap / (1024.0 * 1024.0));
     // Use kv_tier_manager as the authority for the hot/cold split.
     // Estimate kv_bytes_per_token so the manager can work in token units
     // (required for GGML_SYCL_KV_HOT_TOKENS env var and 1024-token minimum).
@@ -29114,18 +29136,10 @@ GGML_API void ggml_backend_sycl_get_device_description(int device, char * descri
 void ggml_backend_sycl_get_device_memory(int device, size_t * free, size_t * total) try {
     GGML_SYCL_DEBUG("[SYCL] call ggml_backend_sycl_get_device_memory\n");
     ggml_sycl_set_device(device);
-    /*
-    DPCT1009:218: SYCL uses exceptions to report errors and does not use the
-    error codes. The original code was commented out and a warning string was
-    inserted. You need to rewrite this code.
-    */
-    /*
-    DPCT1106:217: 'cudaMemGetInfo' was migrated with the Intel extensions for
-    device information which may not be supported by all compilers or runtimes.
-
-    You may need to adjust the code.
-    */
     SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl_get_device(device).get_memory_info(*free, *total)));
+    GGML_SYCL_DEBUG("[MEM-QUERY] dev=%d free=%.1f MB total=%.1f MB consumed=%.1f MB\n",
+                    device, *free / (1024.0 * 1024.0), *total / (1024.0 * 1024.0),
+                    (*total - *free) / (1024.0 * 1024.0));
 } catch (const sycl::exception & exc) {
     std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
     std::exit(1);
@@ -38944,12 +38958,14 @@ int ggml_backend_sycl_get_device_count() {
 }
 
 bool ggml_backend_sycl_moe_multi_gpu_requested() {
-    // Auto-enabled when 2+ physical GPUs available; opt-out with MOE_MULTI_GPU=0
+    // Requires explicit opt-in: GGML_SYCL_MOE_MULTI_GPU=1.
+    // Default OFF because secondary GPU dispatch overhead often exceeds
+    // the benefit of extra VRAM caching on PCIe-connected setups.
     const char * env = std::getenv("GGML_SYCL_MOE_MULTI_GPU");
-    if (env && std::atoi(env) == 0) {
-        return false;
+    if (env && std::atoi(env) == 1) {
+        return ggml_sycl_info().total_gpu_count >= 2;
     }
-    return ggml_sycl_info().total_gpu_count >= 2;
+    return false;
 }
 
 // backend device
