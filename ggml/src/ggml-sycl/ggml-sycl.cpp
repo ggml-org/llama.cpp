@@ -4070,8 +4070,9 @@ struct pending_secondary_scatter {
         sycl::queue * target_queue;  // Secondary GPU queue that produced this result
     };
     std::vector<scatter_entry> entries;
-    sycl::queue * stream       = nullptr;  // Primary GPU queue for H2D scatter
-    bool          active       = false;
+    sycl::queue *           stream     = nullptr;  // Primary GPU queue for H2D scatter
+    bool                    active     = false;
+    const ggml_tensor *     dst_tensor = nullptr;  // MUL_MAT_ID output tensor being scattered into
 };
 
 static thread_local pending_secondary_scatter g_pending_secondary_scatter = {};
@@ -4104,15 +4105,38 @@ static void flush_pending_secondary_scatter() {
                         e.dst_device, e.out_staging, e.bytes);
                 }
             }
-            g_pending_secondary_scatter.stream->wait();
         }
     } catch (const std::exception & ex) {
         GGML_LOG_ERROR("[MoE-GPU-ASYNC] Deferred secondary scatter failed: %s\n", ex.what());
     }
 
     g_pending_secondary_scatter.entries.clear();
-    g_pending_secondary_scatter.stream = nullptr;
-    g_pending_secondary_scatter.active = false;
+    g_pending_secondary_scatter.stream     = nullptr;
+    g_pending_secondary_scatter.active     = false;
+    g_pending_secondary_scatter.dst_tensor = nullptr;
+}
+
+// Selective flush: only flush if the pending scatter's dst_tensor is consumed
+// by the current operation (i.e., dst reads from the pending result).
+static void flush_pending_secondary_scatter_if_consumed(const ggml_tensor * dst) {
+    if (!g_pending_secondary_scatter.active) return;
+
+    const ggml_tensor * pending_dst = g_pending_secondary_scatter.dst_tensor;
+    if (!pending_dst) {
+        flush_pending_secondary_scatter();  // No tracking -> flush unconditionally (safety)
+        return;
+    }
+
+    for (int i = 0; i < GGML_MAX_SRC; i++) {
+        const ggml_tensor * s = dst->src[i];
+        while (s) {
+            if (s == pending_dst) {
+                flush_pending_secondary_scatter();
+                return;
+            }
+            s = s->view_src;
+        }
+    }
 }
 
 // Public entry point for graph boundary flush
@@ -27480,8 +27504,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         g_pending_secondary_scatter.entries.push_back(
                             { d_d, out_staging[slot], needed_out, target_queue });
                     }
-                    g_pending_secondary_scatter.stream = stream;
-                    g_pending_secondary_scatter.active = true;
+                    g_pending_secondary_scatter.stream     = stream;
+                    g_pending_secondary_scatter.active     = true;
+                    g_pending_secondary_scatter.dst_tensor = dst;
 
                     // Flush between chunks: out_staging slots are reused by the
                     // next chunk, so we must consume them before they're overwritten.
