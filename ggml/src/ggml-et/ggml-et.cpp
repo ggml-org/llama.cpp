@@ -838,11 +838,19 @@ static bool ggml_backend_et_device_supports_buft(ggml_backend_dev_t dev, ggml_ba
 }
 
 static bool ggml_backend_et_device_offload_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
-    // TODO: check batch sizes like other backends.
+    // GET_ROWS (embedding lookup) uses a large weight (tok_embd) that lives on CPU (dev_input).
+    // The scheduler has no mechanism to cache cross-backend weight copies - it re-copies split
+    // inputs every graph_compute call. For GET_ROWS this means copying the entire embedding table
+    // (e.g. 266MB for Llama 3.1 1B) from host to device on every token, just to look up a few rows.
+    // Keep GET_ROWS on CPU and let the scheduler copy only the small result to the device.
+    // The other backends either only offload if the tensor lives on device or is large enough to
+    // justify the copy cost.
+    if (op->op == GGML_OP_GET_ROWS) {
+        return false;
+    }
     return true;
 
     GGML_UNUSED(dev);
-    GGML_UNUSED(op);
 }
 
 static const struct ggml_backend_i ggml_backend_et_i = {
