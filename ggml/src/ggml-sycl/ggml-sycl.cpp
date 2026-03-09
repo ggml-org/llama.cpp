@@ -971,11 +971,28 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
             ggml_sycl_reorder_fill_ctx reorder_ctx{};
 
             // Default: fill all available secondary GPU VRAM with experts.
-            // Override via GGML_SYCL_PHASE2_MAX_UPLOAD env var.
+            // Override via GGML_SYCL_PHASE2_MAX_UPLOAD or GGML_SYCL_B50_EXPERT_SLOTS env vars.
             size_t total_secondary_slots = 0;
             for (const auto & b : budgets) {
                 total_secondary_slots += b.n_slots;
             }
+
+            // GGML_SYCL_B50_EXPERT_SLOTS: cap total secondary GPU expert cache slots.
+            // Set to 0 to disable B50 expert cache entirely.
+            // Default -1 (auto: use full VRAM capacity).
+            const char * b50_slots_env = std::getenv("GGML_SYCL_B50_EXPERT_SLOTS");
+            if (b50_slots_env) {
+                int val = std::atoi(b50_slots_env);
+                if (val >= 0) {
+                    size_t capped = static_cast<size_t>(val);
+                    if (capped < total_secondary_slots) {
+                        GGML_LOG_INFO("[MoE-GPU-INIT] B50 expert slots capped: %zu -> %zu (via GGML_SYCL_B50_EXPERT_SLOTS)\n",
+                                      total_secondary_slots, capped);
+                        total_secondary_slots = capped;
+                    }
+                }
+            }
+
             size_t max_phase2_upload = total_secondary_slots;
             const char * phase2_env = std::getenv("GGML_SYCL_PHASE2_MAX_UPLOAD");
             if (phase2_env) {
