@@ -2,6 +2,7 @@
 #include "common.h"
 #include "arg.h"
 #include "console.h"
+#include "json-schema-to-grammar.h"
 // #include "log.h"
 
 #include "server-context.h"
@@ -57,6 +58,8 @@ struct cli_context {
     std::vector<raw_buffer> input_files;
     task_params defaults;
     bool verbose_prompt;
+    int reasoning_budget = -1;
+    std::string reasoning_budget_message;
 
     // thread for showing "loading" animation
     std::atomic<bool> loading_show;
@@ -73,6 +76,8 @@ struct cli_context {
         // defaults.return_progress = true; // TODO: show progress
 
         verbose_prompt = params.verbose_prompt;
+        reasoning_budget = params.reasoning_budget;
+        reasoning_budget_message = params.reasoning_budget_message;
     }
 
     std::string generate_completion(result_timings & out_timings) {
@@ -93,6 +98,30 @@ struct cli_context {
             task.params.chat_parser_params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
             if (!chat_params.parser.empty()) {
                 task.params.chat_parser_params.parser.load(chat_params.parser);
+            }
+
+            // reasoning budget grammar spec
+            if (reasoning_budget >= 0 && !chat_params.thinking_end_tag.empty()) {
+                common_grammar_spec spec;
+                spec.id = "reasoning_budget";
+                spec.grammar = "root ::= " + gbnf_format_literal(reasoning_budget_message + chat_params.thinking_end_tag);
+                spec.delayed = true;
+                spec.non_terminating = true;
+                spec.rearmable = true;
+                spec.countdown = reasoning_budget;
+                spec.countdown_mode = COMMON_GRAMMAR_COUNTDOWN_TOKENS;
+
+                if (chat_params.thinking_forced_open) {
+                    spec.arm_immediately = true;
+                }
+
+                if (!chat_params.thinking_start_tag.empty()) {
+                    spec.arm_triggers.push_back({COMMON_GRAMMAR_TRIGGER_TYPE_WORD, chat_params.thinking_start_tag});
+                }
+
+                spec.defuse_triggers.push_back({COMMON_GRAMMAR_TRIGGER_TYPE_WORD, chat_params.thinking_end_tag});
+
+                task.params.sampling.grammar_specs.push_back(std::move(spec));
             }
 
             rd.post_task({std::move(task)});
@@ -193,7 +222,7 @@ struct cli_context {
         inputs.parallel_tool_calls   = false;
         inputs.add_generation_prompt = true;
         inputs.reasoning_format      = COMMON_REASONING_FORMAT_DEEPSEEK;
-        inputs.enable_thinking       = common_chat_templates_support_enable_thinking(chat_params.tmpls.get());
+        inputs.enable_thinking       = chat_params.enable_thinking;
 
         // Apply chat template to the list of messages
         return common_chat_templates_apply(chat_params.tmpls.get(), inputs);
