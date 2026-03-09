@@ -82,11 +82,19 @@ __global__ void gated_delta_net_cuda(const float * q,
 
             attn_data[col] = attn_col * scale;
         } else {
+            // Optimization: pre-compute expf(g_t[i]) once and reuse
+            // This reduces expf calls from 2*S_v to S_v per token
+            float g_exp[S_v];
+#pragma unroll
+            for (int i = 0; i < S_v; i++) {
+                g_exp[i] = expf(g_t[i]);
+            }
+
             // kv[col] = sum_i g[i] * S[i][col] * k[i]
             float kv_col = 0.0f;
 #pragma unroll
             for (int i = 0; i < S_v; i++) {
-                kv_col += expf(g_t[i]) * s[i] * k_t[i];
+                kv_col += g_exp[i] * s[i] * k_t[i];
             }
 
             // delta[col] = (v[col] - kv[col]) * beta
@@ -97,7 +105,7 @@ __global__ void gated_delta_net_cuda(const float * q,
             float attn_col = 0.0f;
 #pragma unroll
             for (int i = 0; i < S_v; i++) {
-                s[i] = expf(g_t[i]) * s[i] + k_t[i] * delta_col;
+                s[i] = g_exp[i] * s[i] + k_t[i] * delta_col;
                 attn_col += s[i] * q_t[i];
             }
 
