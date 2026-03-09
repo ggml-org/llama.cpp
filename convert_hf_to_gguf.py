@@ -273,7 +273,7 @@ class ModelBase:
 
     def dequant_model(self):
         if self._is_nvfp4:
-            return  # NVFP4 weights are repacked in generate_extra_tensors
+            return  # NVFP4 weights are repacked in _generate_nvfp4_tensors
 
         tensors_to_remove: list[str] = []
         new_tensors: dict[str, Callable[[], Tensor]] = {}
