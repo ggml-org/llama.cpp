@@ -275,7 +275,7 @@ static std::vector<std::pair<std::string, ggml_type>> compute_quant_types(llama_
     }
     init_quantize_state_counters(qs, names);
 
-    ggml_type default_type = llama_ftype_default_type(ftype);
+    ggml_type default_type = llama_ftype_get_default_type(ftype);
 
     std::vector<std::pair<std::string, ggml_type>> result;
     result.reserve(tensors.size());

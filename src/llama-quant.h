@@ -39,7 +39,7 @@ struct quantize_state_impl {
 };
 
 ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_type, const ggml_tensor * tensor, llama_ftype ftype);
-ggml_type llama_ftype_default_type(llama_ftype ftype);
+ggml_type llama_ftype_get_default_type(llama_ftype ftype);
 
 // Ftype name <-> enum conversions.
 // Returns (llama_ftype)-1 on failure.
