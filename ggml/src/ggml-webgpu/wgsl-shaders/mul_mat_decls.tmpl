@@ -11,7 +11,7 @@ fn store_shmem(val: vec4<f16>, idx: u32) {
     shmem[idx + 2] = val.z;
     shmem[idx + 3] = val.w;
 }
-#endif
+#endif // VEC
 
 #ifdef SCALAR
 #define VEC_SIZE 1
@@ -23,7 +23,7 @@ fn store_shmem(val: vec4<f16>, idx: u32) {
 fn store_shmem(val: f16, idx: u32) {
     shmem[idx] = val;
 }
-#endif
+#endif // SCALAR
 
 #ifdef INIT_SRC0_SHMEM_FLOAT
 fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u32) {
@@ -40,7 +40,7 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         store_shmem(SHMEM_TYPE(src0_val), elem_idx);
     }
 }
-#endif
+#endif // INIT_SRC0_SHMEM_FLOAT
 
 #ifdef INIT_SRC1_SHMEM_FLOAT
 fn init_shmem_src1(thread_id: u32, batch_offset: u32, offset_n: u32, k_outer: u32) {
@@ -57,7 +57,7 @@ fn init_shmem_src1(thread_id: u32, batch_offset: u32, offset_n: u32, k_outer: u3
         store_shmem(SHMEM_TYPE(src1_val), TILE_SRC0_SHMEM + elem_idx);
     }
 }
-#endif
+#endif // INIT_SRC1_SHMEM_FLOAT
 
 #ifdef INIT_SRC0_SHMEM_Q4_0
 const BLOCK_SIZE = 32u;
@@ -100,10 +100,9 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         }
     }
 }
-#endif
+#endif // INIT_SRC0_SHMEM_Q4_0
 
 #ifdef INIT_SRC0_SHMEM_Q4_1
-
 const BLOCK_SIZE = 32u;
 // the number of blocks per k-tile. Note that this currently only works if TILE_K is a multiple of BLOCK_SIZE, which may need to be rethought for larger quantized types.
 override BLOCKS_K = TILE_K/BLOCK_SIZE;
@@ -145,10 +144,9 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         }
     }
 }
-#endif
+#endif // INIT_SRC0_SHMEM_Q4_1
 
 #ifdef INIT_SRC0_SHMEM_Q5_0
-
 // 32 weights per block, each at 4 bits each = 32 * 4 = 128 bits / 16 = 8 f16s per block
 const BLOCK_SIZE = 32u;
 // the number of blocks per k-tile. Note that this currently only works if TILE_K is a multiple of BLOCK_SIZE, which may need to be rethought for larger quantized types.
@@ -204,11 +202,9 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         }
     }
 }
-#endif
-
+#endif // INIT_SRC0_SHMEM_Q5_0
 
 #ifdef INIT_SRC0_SHMEM_Q5_1
-
 // 32 weights per block, each at 4 bits each = 32 * 4 = 128 bits / 16 = 8 f16s per block
 const BLOCK_SIZE = 32u;
 // the number of blocks per k-tile. Note that this currently only works if TILE_K is a multiple of BLOCK_SIZE, which may need to be rethought for larger quantized types.
@@ -266,10 +262,9 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         }
     }
 }
-#endif
+#endif // INIT_SRC0_SHMEM_Q5_1
 
 #ifdef INIT_SRC0_SHMEM_Q8_0
-
 const BLOCK_SIZE = 32u;
 // the number of blocks per k-tile. Note that this currently only works if TILE_K is a multiple of BLOCK_SIZE, which may need to be rethought for larger quantized types.
 override BLOCKS_K = TILE_K/BLOCK_SIZE;
@@ -309,10 +304,9 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         }
     }
 }
-#endif
+#endif // INIT_SRC0_SHMEM_Q8_0
 
 #ifdef INIT_SRC0_SHMEM_Q8_1
-
 const BLOCK_SIZE = 32u;
 // the number of blocks per k-tile. Note that this currently only works if TILE_K is a multiple of BLOCK_SIZE, which may need to be rethought for larger quantized types.
 override BLOCKS_K = TILE_K/BLOCK_SIZE;
@@ -353,10 +347,9 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         }
     }
 }
-#endif
+#endif // INIT_SRC0_SHMEM_Q8_1
 
 #ifdef INIT_SRC0_SHMEM_Q2_K
-
 const BLOCK_SIZE = 256u;
 const F16_PER_BLOCK = 42u;
 
@@ -413,10 +406,9 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         shmem[elem_idx] = q_val;
     }
 }
-#endif
+#endif // INIT_SRC0_SHMEM_Q2_K
 
 #ifdef INIT_SRC0_SHMEM_Q3_K
-
 const BLOCK_SIZE = 256u;
 const F16_PER_BLOCK = 55u;
 
@@ -506,9 +498,9 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
     }
 }
 
-#endif
-#ifdef INIT_SRC0_SHMEM_Q4_K
+#endif // INIT_SRC0_SHMEM_Q3_K
 
+#ifdef INIT_SRC0_SHMEM_Q4_K
 const BLOCK_SIZE = 256u;
 const F16_PER_BLOCK = 72u;
 
@@ -586,10 +578,9 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         shmem[elem_idx] = q_val;
     }
 }
-#endif
+#endif // INIT_SRC0_SHMEM_Q4_K
 
 #ifdef INIT_SRC0_SHMEM_Q5_K
-
 const BLOCK_SIZE = 256u;
 const F16_PER_BLOCK = 88u;
 
@@ -679,9 +670,10 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         shmem[elem_idx] = q_val;
     }
 }
-#endif
-#ifdef INIT_SRC0_SHMEM_Q6_K
 
+#endif // INIT_SRC0_SHMEM_Q5_K
+
+#ifdef INIT_SRC0_SHMEM_Q6_K
 const BLOCK_SIZE = 256u;
 const F16_PER_BLOCK = 105u;
 
@@ -771,5 +763,4 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         shmem[elem_idx] = d * f16(sc_val) * q_val;
     }
 }
-
-#endif
+#endif // INIT_SRC0_SHMEM_Q6_K
