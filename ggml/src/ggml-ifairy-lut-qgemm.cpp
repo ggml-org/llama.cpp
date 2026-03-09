@@ -88,33 +88,32 @@ static inline float32x4_t ggml_ifairy_s16x4_to_f32(int16x4_t v) {
 #endif
 
 #if defined(__AVX2__)
-static inline __m128i ggml_ifairy_blendv_epi8(__m128i mask, __m128i t, __m128i f) {
-    return _mm_or_si128(_mm_and_si128(mask, t), _mm_andnot_si128(mask, f));
-}
-
-static inline __m128i ggml_ifairy_neg_if_epi8(__m128i mask, __m128i v) {
-    const __m128i neg = _mm_sub_epi8(_mm_setzero_si128(), v);
-    return ggml_ifairy_blendv_epi8(mask, neg, v);
-}
-
 static inline void ggml_ifairy_lut_decode_16x3_3x1_with_lut_avx2(const __m128i  code,
                                                                  const int8_t * tbl,
                                                                  __m128i *      out0,
                                                                  __m128i *      out1,
                                                                  __m128i *      out2,
                                                                  __m128i *      out3) {
-    const __m128i mask_idx = _mm_set1_epi8(0x0f);
-    const __m128i mask_b6  = _mm_set1_epi8((char) 0x40);
-    const __m128i mask_b7  = _mm_set1_epi8((char) 0x80);
-    const __m128i all_ones = _mm_set1_epi8((char) 0xff);
+    const __m128i zero = _mm_setzero_si128();
+    const __m128i one  = _mm_set1_epi8(1);
 
-    const __m128i idx = _mm_and_si128(code, mask_idx);
-    const __m128i fl0 = _mm_cmpeq_epi8(_mm_and_si128(code, mask_b6), mask_b6);
-    const __m128i fl1 = _mm_cmpeq_epi8(_mm_and_si128(code, mask_b7), mask_b7);
+    // 1. 无需常量掩码的标志位提取 (利用 8 位有符号数的符号位特性)
+    // fl1 (bit 7): 当 bit 7 为 1 时，数为负数，0 > code 直接产生 0xFF 掩码
+    const __m128i fl1 = _mm_cmpgt_epi8(zero, code);
+    // fl0 (bit 6): 通过 code + code 将 bit 6 左移至符号位，同理提取
+    const __m128i fl0 = _mm_cmpgt_epi8(zero, _mm_add_epi8(code, code));
 
-    const __m128i fl0_xor_fl1 = _mm_xor_si128(fl0, fl1);
-    const __m128i not_fl0     = _mm_xor_si128(fl0, all_ones);
+    // 2. 为 _mm_sign_epi8 极速生成 +1 / -1 的乘数掩码
+    const __m128i fl0_xor_fl1      = _mm_xor_si128(fl0, fl1);
+    // 巧妙转换: 0xFF | 1 = 0xFF (-1), 0x00 | 1 = 0x01 (+1)
+    const __m128i sign_fl0         = _mm_or_si128(fl0, one); 
+    const __m128i sign_fl0_xor_fl1 = _mm_or_si128(fl0_xor_fl1, one);
+    // sign_not_fl0 正好是 sign_fl0 的相反数：0 - (-1) = +1, 0 - (+1) = -1
+    const __m128i sign_not_fl0     = _mm_sub_epi8(zero, sign_fl0);
 
+    // 3. 提取低 4 位索引与并发查表 (查表指令保留在 Port 5 专享执行)
+    const __m128i idx = _mm_and_si128(code, _mm_set1_epi8(0x0f));
+    
     const __m128i ilut0 = _mm_loadu_si128((const __m128i *) (tbl + 0 * 16));
     const __m128i ilut1 = _mm_loadu_si128((const __m128i *) (tbl + 1 * 16));
     const __m128i ilut2 = _mm_loadu_si128((const __m128i *) (tbl + 2 * 16));
@@ -125,10 +124,21 @@ static inline void ggml_ifairy_lut_decode_16x3_3x1_with_lut_avx2(const __m128i  
     const __m128i ac_11 = _mm_shuffle_epi8(ilut2, idx);
     const __m128i bd_11 = _mm_shuffle_epi8(ilut3, idx);
 
-    *out0 = ggml_ifairy_neg_if_epi8(fl0_xor_fl1, ggml_ifairy_blendv_epi8(fl1, ac_11, ac_00));
-    *out1 = ggml_ifairy_neg_if_epi8(fl0, ggml_ifairy_blendv_epi8(fl1, ac_00, ac_11));
-    *out2 = ggml_ifairy_neg_if_epi8(fl0_xor_fl1, ggml_ifairy_blendv_epi8(fl1, bd_01, bd_11));
-    *out3 = ggml_ifairy_neg_if_epi8(not_fl0, ggml_ifairy_blendv_epi8(fl1, bd_11, bd_01));
+    // 4. XOR Trick 实现成对混合 (XOR Blending)
+    // 彻底废弃 vpblendvb，用基础位运算并行算出正反两个 blend 结果
+    const __m128i diff_ac = _mm_and_si128(fl1, _mm_xor_si128(ac_11, ac_00));
+    const __m128i ac_sel0 = _mm_xor_si128(ac_00, diff_ac); // 等效于: fl1 ? ac_11 : ac_00
+    const __m128i ac_sel1 = _mm_xor_si128(ac_11, diff_ac); // 等效于: fl1 ? ac_00 : ac_11
+
+    const __m128i diff_bd = _mm_and_si128(fl1, _mm_xor_si128(bd_11, bd_01));
+    const __m128i bd_sel0 = _mm_xor_si128(bd_01, diff_bd); // 等效于: fl1 ? bd_11 : bd_01
+    const __m128i bd_sel1 = _mm_xor_si128(bd_11, diff_bd); // 等效于: fl1 ? bd_01 : bd_11
+
+    // 5. 极速条件取负 (运行在 Port 0/1，无缝衔接)
+    *out0 = _mm_sign_epi8(ac_sel0, sign_fl0_xor_fl1);
+    *out1 = _mm_sign_epi8(ac_sel1, sign_fl0);
+    *out2 = _mm_sign_epi8(bd_sel1, sign_fl0_xor_fl1); 
+    *out3 = _mm_sign_epi8(bd_sel0, sign_not_fl0);
 }
 #endif
 
@@ -573,7 +583,6 @@ void ggml_ifairy_lut_qgemm_lut16(int          m,
     }
     return;
 #endif
-
     // Non-NEON (or non-aarch64): keep a scalar reference for portability and unit tests.
     for (int col = 0; col < n; ++col) {
         const int8_t * lut_col =
