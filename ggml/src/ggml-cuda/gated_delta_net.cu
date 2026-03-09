@@ -4,27 +4,27 @@
 template <int S_v, bool KDA>
 __global__ void __launch_bounds__(S_v, 1)
 gated_delta_net_cuda(const float * q,
-                                     const float * k,
-                                     const float * v,
-                                     const float * g,
-                                     const float * beta,
-                                     const float * curr_state,
-                                     float *       dst,
-                                     int64_t       H,
-                                     int64_t       n_tokens,
-                                     int64_t       n_seqs,
-                                     int64_t       sq1,
-                                     int64_t       sq2,
-                                     int64_t       sq3,
-                                     int64_t       sv1,
-                                     int64_t       sv2,
-                                     int64_t       sv3,
-                                     int64_t       sb1,
-                                     int64_t       sb2,
-                                     int64_t       sb3,
-                                     int64_t       rq1,
-                                     int64_t       rq3,
-                                     float         scale) {
+                     const float * k,
+                     const float * v,
+                     const float * g,
+                     const float * beta,
+                     const float * curr_state,
+                     float *       dst,
+                     const int64_t H,
+                     const int64_t n_tokens,
+                     const int64_t n_seqs,
+                     const int64_t sq1,
+                     const int64_t sq2,
+                     const int64_t sq3,
+                     const int64_t sv1,
+                     const int64_t sv2,
+                     const int64_t sv3,
+                     const int64_t sb1,
+                     const int64_t sb2,
+                     const int64_t sb3,
+                     const int64_t rq1,
+                     const int64_t rq3,
+                     const float   scale) {
     const int64_t h_idx    = blockIdx.x;
     const int64_t sequence = blockIdx.y;
     const int     col      = threadIdx.x;  // each thread owns one column
@@ -41,7 +41,7 @@ gated_delta_net_cuda(const float * q,
     curr_state += state_offset;
     attn_data += (sequence * n_tokens * H + h_idx) * S_v;
 
-#if defined(GGML_USE_HIP)
+#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
     extern __shared__ float s_shared[];
     float * s = s_shared + col * S_v;
 #else
@@ -137,7 +137,7 @@ static void launch_gated_delta_net(
     switch (S_v) {
         case 32: {
             constexpr int sv = 32;
-#if defined(GGML_USE_HIP)
+#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
             constexpr size_t smem = sv * sv * sizeof(float);
             CUDA_SET_SHARED_MEMORY_LIMIT((gated_delta_net_cuda<sv, KDA>), smem);
 #else
@@ -151,7 +151,7 @@ static void launch_gated_delta_net(
         }
         case 64: {
             constexpr int sv = 64;
-#if defined(GGML_USE_HIP)
+#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
             constexpr size_t smem = sv * sv * sizeof(float);
             CUDA_SET_SHARED_MEMORY_LIMIT((gated_delta_net_cuda<sv, KDA>), smem);
 #else
@@ -165,7 +165,7 @@ static void launch_gated_delta_net(
         }
         case 128: {
             constexpr int sv = 128;
-#if defined(GGML_USE_HIP)
+#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
             constexpr size_t smem = sv * sv * sizeof(float);
             CUDA_SET_SHARED_MEMORY_LIMIT((gated_delta_net_cuda<sv, KDA>), smem);
 #else
