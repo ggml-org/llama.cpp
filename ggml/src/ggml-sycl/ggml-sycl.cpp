@@ -3883,6 +3883,8 @@ struct moe_fusion_state {
     float *         fused_output;   // Pinned buffer: SiLU(gate*act) * (up*act) per expert
     sycl::queue *   fused_q;        // Queue that owns fused_output
     size_t          fused_cap;      // Capacity of fused_output in floats
+    std::vector<size_t> cpu_indices;   // Indices of CPU-dispatched experts
+    std::vector<size_t> sec_indices;   // Indices of secondary-GPU experts
 
     moe_fusion_state() :
         gate_data(nullptr),
@@ -3923,6 +3925,8 @@ struct moe_fusion_state {
         gate_pending  = false;
         fused_pending = false;
         layer_id      = -1;
+        cpu_indices.clear();
+        sec_indices.clear();
     }
 };
 
@@ -26225,7 +26229,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 const int    cur_layer_fast = parse_layer_id_from_name(tname_fast);
 
                 // GATE: resolve IDs + activation, save state, skip compute
-                if (ggml_sycl_moe_fusion_enabled() && !have_secondary_pre && is_gate_fast && cur_layer_fast >= 0) {
+                if (ggml_sycl_moe_fusion_enabled() && is_gate_fast && cur_layer_fast >= 0) {
                     ctx.moe_graphs_disabled_once = true;
                     const queue_ptr stream       = ctx.stream();
                     const int64_t   K_f          = ne00;
@@ -26302,22 +26306,89 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     g_moe_fusion.gate_pending  = true;
                     g_moe_fusion.fused_pending = false;
 
+                    // Partition experts: CPU-only vs secondary GPU
+                    g_moe_fusion.cpu_indices.clear();
+                    g_moe_fusion.sec_indices.clear();
+                    g_moe_fusion.cpu_indices.reserve(ids_n_elem);
+
+                    if (have_secondary_pre && cur_layer_fast >= 0) {
+                        const int n_gpu_devs_gate = ggml_sycl_info().total_gpu_count;
+                        for (size_t ci = 0; ci < ids_n_elem; ci++) {
+                            const int32_t eid = ids_data_f[ci];
+                            auto placement = placement_table_pre.get(cur_layer_fast, eid);
+                            if (placement.device_id >= 1
+                                && placement.device_id < n_gpu_devs_gate
+                                && placement.device_ptr != nullptr
+                                && g_secondary_queues[placement.device_id] != nullptr) {
+                                g_moe_fusion.sec_indices.push_back(ci);
+                            } else {
+                                g_moe_fusion.cpu_indices.push_back(ci);
+                            }
+                        }
+                    } else {
+                        for (size_t ci = 0; ci < ids_n_elem; ci++) {
+                            g_moe_fusion.cpu_indices.push_back(ci);
+                        }
+                    }
+                    // n_ids reflects CPU expert count for fusion buffer sizing
+                    g_moe_fusion.n_ids = g_moe_fusion.cpu_indices.size();
+
+                    // Dispatch secondary GPU experts for GATE computation.
+                    // Results scatter to dst slots so downstream SiLU/multiply
+                    // ops see correct values for secondary experts.
+                    if (!g_moe_fusion.sec_indices.empty()) {
+                        const int n_gpu_devs_gate = ggml_sycl_info().total_gpu_count;
+                        std::vector<std::vector<expert_dispatch_entry>> sec_entries_gate(n_gpu_devs_gate);
+                        for (size_t si = 0; si < g_moe_fusion.sec_indices.size(); si++) {
+                            const size_t  ci  = g_moe_fusion.sec_indices[si];
+                            const int32_t eid = ids_data_f[ci];
+                            auto placement = placement_table_pre.get(cur_layer_fast, eid);
+                            if (placement.device_id >= 1 && placement.device_id < n_gpu_devs_gate
+                                && placement.device_ptr != nullptr
+                                && g_secondary_queues[placement.device_id] != nullptr) {
+                                const int64_t iid1 = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_f));
+                                const int64_t id   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_f));
+                                sec_entries_gate[placement.device_id].push_back(
+                                    { iid1, id, eid, placement.device_ptr, placement.device_id });
+                            }
+                        }
+                        char * dst_d_gate = static_cast<char *>(ggml_sycl_get_data_ptr(dst, ctx.device));
+                        secondary_dispatch_ctx sctx_gate = {
+                            stream, src0,
+                            static_cast<char *>(src1->data),
+                            dst_d_gate,
+                            K_f, static_cast<int64_t>(ne01), ne11, nb11, nb12, nb1, nb2,
+                            true,
+                            act_f,
+                            sycl::event{},
+                            dst
+                        };
+                        std::vector<expert_dispatch_entry> cpu_fallback_gate;
+                        for (int d = 1; d < n_gpu_devs_gate; d++) {
+                            if (!sec_entries_gate[d].empty()) {
+                                dispatch_experts_secondary_gpu_impl(
+                                    sec_entries_gate[d], d, sctx_gate, cpu_fallback_gate);
+                            }
+                        }
+                    }
+
                     static std::atomic<int> flog{ 0 };
                     if (flog.fetch_add(1, std::memory_order_relaxed) < 3) {
-                        GGML_LOG_INFO("[CPU-TG-FUSE] Gate saved for layer %d, %zu experts\n", cur_layer_fast,
-                                      ids_n_elem);
+                        GGML_LOG_INFO("[CPU-TG-FUSE] Gate saved for layer %d, %zu CPU + %zu secondary experts\n",
+                                      cur_layer_fast, g_moe_fusion.cpu_indices.size(),
+                                      g_moe_fusion.sec_indices.size());
                     }
                     return;
                 }
 
                 // UP: fused gate+up+SiLU kernel
-                if (ggml_sycl_moe_fusion_enabled() && !have_secondary_pre && is_up_fast && cur_layer_fast >= 0 && g_moe_fusion.gate_pending &&
+                if (ggml_sycl_moe_fusion_enabled() && is_up_fast && cur_layer_fast >= 0 && g_moe_fusion.gate_pending &&
                     g_moe_fusion.layer_id == cur_layer_fast && g_moe_fusion.type == src0->type &&
                     g_moe_fusion.K == static_cast<int>(ne00) && g_moe_fusion.N_gate == static_cast<int>(ne01)) {
                     ctx.moe_graphs_disabled_once = true;
                     const queue_ptr stream       = ctx.stream();
                     const int64_t   N_f          = ne01;
-                    const size_t    n_cpu_f      = g_moe_fusion.n_ids;
+                    const size_t    n_cpu_f      = g_moe_fusion.cpu_indices.size();
                     const size_t    fused_floats = n_cpu_f * static_cast<size_t>(N_f);
                     g_moe_fusion.ensure_fused_buf(fused_floats, *stream);
 
@@ -26335,41 +26406,87 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                                            CPU_EXPERT_FUSED_ACT_SWIGLU_OAI :
                                                            CPU_EXPERT_FUSED_ACT_SILU;
 
-                    for (size_t ci = 0; ci < n_cpu_f; ci++) {
+                    for (size_t fi = 0; fi < n_cpu_f; fi++) {
+                        const size_t  ci   = g_moe_fusion.cpu_indices[fi];
                         const int32_t eid  = g_moe_fusion.ids_data[ci];
-                        ft[ci].weight_gate = static_cast<const char *>(g_moe_fusion.gate_data) +
+                        ft[fi].weight_gate = static_cast<const char *>(g_moe_fusion.gate_data) +
                                              static_cast<size_t>(eid) * g_moe_fusion.gate_nb02;
-                        ft[ci].weight_up   = static_cast<const char *>(src0->data) + static_cast<size_t>(eid) * nb02;
-                        ft[ci].act_host    = g_moe_fusion.act_host;
-                        ft[ci].output_host = g_moe_fusion.fused_output + ci * static_cast<size_t>(N_f);
-                        ft[ci].type        = g_moe_fusion.type;
-                        ft[ci].K           = g_moe_fusion.K;
-                        ft[ci].N           = static_cast<int>(N_f);
-                        ft[ci].act_variant = act_v;
-                        ft[ci].alpha       = g_moe_fused_act_alpha;
-                        ft[ci].limit       = g_moe_fused_act_limit;
+                        ft[fi].weight_up   = static_cast<const char *>(src0->data) + static_cast<size_t>(eid) * nb02;
+                        ft[fi].act_host    = g_moe_fusion.act_host;
+                        ft[fi].output_host = g_moe_fusion.fused_output + fi * static_cast<size_t>(N_f);
+                        ft[fi].type        = g_moe_fusion.type;
+                        ft[fi].K           = g_moe_fusion.K;
+                        ft[fi].N           = static_cast<int>(N_f);
+                        ft[fi].act_variant = act_v;
+                        ft[fi].alpha       = g_moe_fused_act_alpha;
+                        ft[fi].limit       = g_moe_fused_act_limit;
                     }
 
-                    ggml_sycl_cpu_expert_fused_gate_up_silu_batched(ft, static_cast<int>(n_cpu_f));
+                    if (n_cpu_f > 0) {
+                        ggml_sycl_cpu_expert_fused_gate_up_silu_batched(ft, static_cast<int>(n_cpu_f));
+                    }
+
+                    // Dispatch secondary GPU experts for the UP sub-tensor
+                    if (!g_moe_fusion.sec_indices.empty()) {
+                        const int64_t n_ids_up = ids->ne[0];
+                        const int n_gpu_devs_up = ggml_sycl_info().total_gpu_count;
+                        std::vector<std::vector<expert_dispatch_entry>> sec_entries_up(n_gpu_devs_up);
+                        for (size_t si = 0; si < g_moe_fusion.sec_indices.size(); si++) {
+                            const size_t  ci  = g_moe_fusion.sec_indices[si];
+                            const int32_t eid = g_moe_fusion.ids_data[ci];
+                            auto placement = placement_table_pre.get(cur_layer_fast, eid);
+                            if (placement.device_id >= 1 && placement.device_id < n_gpu_devs_up
+                                && placement.device_ptr != nullptr
+                                && g_secondary_queues[placement.device_id] != nullptr) {
+                                const int64_t iid1 = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_up));
+                                const int64_t id   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_up));
+                                sec_entries_up[placement.device_id].push_back(
+                                    { iid1, id, eid, placement.device_ptr, placement.device_id });
+                            }
+                        }
+                        // Build dispatch context for UP sub-tensor
+                        char * dst_d_up = static_cast<char *>(ggml_sycl_get_data_ptr(dst, ctx.device));
+                        secondary_dispatch_ctx sctx_up = {
+                            stream, src0,
+                            static_cast<char *>(src1->data),
+                            dst_d_up,
+                            ne00, N_f, ne11, nb11, nb12, nb1, nb2,
+                            true,
+                            g_moe_fusion.act_host,
+                            sycl::event{},
+                            dst
+                        };
+                        std::vector<expert_dispatch_entry> cpu_fallback_up;
+                        for (int d = 1; d < n_gpu_devs_up; d++) {
+                            if (!sec_entries_up[d].empty()) {
+                                dispatch_experts_secondary_gpu_impl(
+                                    sec_entries_up[d], d, sctx_up, cpu_fallback_up);
+                            }
+                        }
+                        // CPU fallback for failed secondary dispatch is rare;
+                        // skip for UP since these results feed into fused output
+                        // which the DOWN phase handles separately.
+                    }
+
                     g_moe_fusion.gate_pending  = false;
                     g_moe_fusion.fused_pending = true;
 
                     static std::atomic<int> flog2{ 0 };
                     if (flog2.fetch_add(1, std::memory_order_relaxed) < 3) {
-                        GGML_LOG_INFO("[CPU-TG-FUSE] Fused gate+up+SiLU for layer %d, %zu experts\n", cur_layer_fast,
-                                      n_cpu_f);
+                        GGML_LOG_INFO("[CPU-TG-FUSE] Fused gate+up+SiLU for layer %d, %zu CPU + %zu secondary experts\n",
+                                      cur_layer_fast, n_cpu_f, g_moe_fusion.sec_indices.size());
                     }
                     return;
                 }
 
                 // DOWN: use fused output as activation
-                if (ggml_sycl_moe_fusion_enabled() && !have_secondary_pre && is_down_fast && cur_layer_fast >= 0 &&
+                if (ggml_sycl_moe_fusion_enabled() && is_down_fast && cur_layer_fast >= 0 &&
                     g_moe_fusion.fused_pending && g_moe_fusion.layer_id == cur_layer_fast) {
                     ctx.moe_graphs_disabled_once = true;
                     const queue_ptr stream       = ctx.stream();
                     const int64_t   K_d          = ne00;
                     const int64_t   N_d          = ne01;
-                    const size_t    n_cpu_d      = g_moe_fusion.n_ids;
+                    const size_t    n_cpu_d      = g_moe_fusion.cpu_indices.size();
                     const int64_t   n_ids_d      = ids->ne[0];
 
                     struct pinned_out_d {
@@ -26408,40 +26525,89 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         dt = heap_dt.data();
                     }
 
-                    for (size_t ci = 0; ci < n_cpu_d; ci++) {
+                    for (size_t fi = 0; fi < n_cpu_d; fi++) {
+                        const size_t  ci   = g_moe_fusion.cpu_indices[fi];
                         const int32_t eid  = g_moe_fusion.ids_data[ci];
-                        dt[ci].weight_host = static_cast<const char *>(src0->data) + static_cast<size_t>(eid) * nb02;
-                        dt[ci].act_host    = g_moe_fusion.fused_output + ci * static_cast<size_t>(g_moe_fusion.N_gate);
-                        dt[ci].output_host = tl_down_out.ptr + ci * static_cast<size_t>(N_d);
-                        dt[ci].type        = src0->type;
-                        dt[ci].K           = static_cast<int>(K_d);
-                        dt[ci].N           = static_cast<int>(N_d);
+                        dt[fi].weight_host = static_cast<const char *>(src0->data) + static_cast<size_t>(eid) * nb02;
+                        dt[fi].act_host    = g_moe_fusion.fused_output + fi * static_cast<size_t>(g_moe_fusion.N_gate);
+                        dt[fi].output_host = tl_down_out.ptr + fi * static_cast<size_t>(N_d);
+                        dt[fi].type        = src0->type;
+                        dt[fi].K           = static_cast<int>(K_d);
+                        dt[fi].N           = static_cast<int>(N_d);
                     }
 
-                    ggml_sycl_cpu_expert_mul_mat_batched(dt, static_cast<int>(n_cpu_d));
+                    if (n_cpu_d > 0) {
+                        ggml_sycl_cpu_expert_mul_mat_batched(dt, static_cast<int>(n_cpu_d));
+                    }
 
-                    // Scatter down results H2D
-                    char *     dst_d = static_cast<char *>(ggml_sycl_get_data_ptr(dst, ctx.device));
-                    const bool sc    = (nb1 == static_cast<size_t>(N_d) * sizeof(float));
-                    if (sc && ne12 == 1) {
-                        stream->memcpy(dst_d, tl_down_out.ptr, n_cpu_d * static_cast<size_t>(N_d) * sizeof(float));
-                    } else {
-                        for (size_t ci = 0; ci < n_cpu_d; ci++) {
-                            const int64_t iid1 = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_d));
-                            const int64_t id   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_d));
-                            char *        slot = dst_d + id * nb1 + iid1 * nb2;
-                            stream->memcpy(slot, tl_down_out.ptr + ci * static_cast<size_t>(N_d),
-                                           static_cast<size_t>(N_d) * sizeof(float));
+                    // Scatter down results H2D — use original ci indices for correct dst slots
+                    char * dst_d = static_cast<char *>(ggml_sycl_get_data_ptr(dst, ctx.device));
+                    for (size_t fi = 0; fi < n_cpu_d; fi++) {
+                        const size_t  ci   = g_moe_fusion.cpu_indices[fi];
+                        const int64_t iid1 = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_d));
+                        const int64_t id   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_d));
+                        char *        slot = dst_d + id * nb1 + iid1 * nb2;
+                        stream->memcpy(slot, tl_down_out.ptr + fi * static_cast<size_t>(N_d),
+                                       static_cast<size_t>(N_d) * sizeof(float));
+                    }
+
+                    // Dispatch secondary GPU experts for the DOWN sub-tensor
+                    if (!g_moe_fusion.sec_indices.empty()) {
+                        const int n_gpu_devs_dn = ggml_sycl_info().total_gpu_count;
+                        std::vector<std::vector<expert_dispatch_entry>> sec_entries_dn(n_gpu_devs_dn);
+                        for (size_t si = 0; si < g_moe_fusion.sec_indices.size(); si++) {
+                            const size_t  ci  = g_moe_fusion.sec_indices[si];
+                            const int32_t eid = g_moe_fusion.ids_data[ci];
+                            auto placement = placement_table_pre.get(cur_layer_fast, eid);
+                            if (placement.device_id >= 1 && placement.device_id < n_gpu_devs_dn
+                                && placement.device_ptr != nullptr
+                                && g_secondary_queues[placement.device_id] != nullptr) {
+                                const int64_t iid1 = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_d));
+                                const int64_t id   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_d));
+                                sec_entries_dn[placement.device_id].push_back(
+                                    { iid1, id, eid, placement.device_ptr, placement.device_id });
+                            }
+                        }
+                        // For DOWN, activation is on device (output of SiLU/multiply)
+                        char * src1_d = static_cast<char *>(ggml_sycl_get_data_ptr(src1, ctx.device));
+                        secondary_dispatch_ctx sctx_dn = {
+                            stream, src0,
+                            src1_d,
+                            dst_d,
+                            K_d, N_d, ne11, nb11, nb12, nb1, nb2,
+                            false,
+                            nullptr,
+                            sycl::event{},
+                            dst
+                        };
+                        std::vector<expert_dispatch_entry> cpu_fallback_dn;
+                        for (int d = 1; d < n_gpu_devs_dn; d++) {
+                            if (!sec_entries_dn[d].empty()) {
+                                dispatch_experts_secondary_gpu_impl(
+                                    sec_entries_dn[d], d, sctx_dn, cpu_fallback_dn);
+                            }
+                        }
+                        // CPU fallback for failed secondary dispatch
+                        if (!cpu_fallback_dn.empty()) {
+                            for (const auto & e : cpu_fallback_dn) {
+                                const size_t ci_fb = static_cast<size_t>(e.iid1) * static_cast<size_t>(n_ids_d) + static_cast<size_t>(e.id);
+                                // Need unfused path for fallback — zero the slot
+                                // (the fused output doesn't cover secondary experts)
+                                char * slot_fb = dst_d + e.id * nb1 + e.iid1 * nb2;
+                                stream->memset(slot_fb, 0, static_cast<size_t>(N_d) * sizeof(float));
+                                (void)ci_fb;
+                            }
                         }
                     }
+
                     stream->wait();
-                    g_moe_fusion.reset();
 
                     static std::atomic<int> flog3{ 0 };
                     if (flog3.fetch_add(1, std::memory_order_relaxed) < 3) {
-                        GGML_LOG_INFO("[CPU-TG-FUSE] Down with fused activation for layer %d, %zu experts\n",
-                                      cur_layer_fast, n_cpu_d);
+                        GGML_LOG_INFO("[CPU-TG-FUSE] Down with fused activation for layer %d, %zu CPU + %zu secondary experts\n",
+                                      cur_layer_fast, n_cpu_d, g_moe_fusion.sec_indices.size());
                     }
+                    g_moe_fusion.reset();
                     return;
                 }
 
