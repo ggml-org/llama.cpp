@@ -893,7 +893,7 @@ private:
             }
 
             // thinking is enabled if:
-            // 1. It's not explicitly disabled via --disable-reasoning
+            // 1. It's not explicitly disabled via --reasoning off
             // 2. The chat template supports it
             const bool template_supports_thinking = params_base.use_jinja && common_chat_templates_support_enable_thinking(chat_templates.get());
             const bool enable_thinking = params_base.enable_reasoning != 0 && template_supports_thinking;
