@@ -53,6 +53,8 @@ static float find_max_f32(const float* x, int n) {
     return max_val;
 }
 
+#define LOG2E_F 1.4426950408889634f
+
 // Compute softmax for a single row
 static void compute_softmax_row(
     float* dst,           // Output row
@@ -66,8 +68,10 @@ static void compute_softmax_row(
     bool use_sinks)       // Whether sinks are enabled
 {
     (void)ne10;
+    unsigned long ms;
     // Real online softmax:
     // Pass 1: track running max and running normalized sum only (no dst writes).
+    // TODO: Vectorize this
     float running_max = -INFINITY;
     float running_sum = 0.0f;
 
@@ -99,16 +103,93 @@ static void compute_softmax_row(
     }
 
     // Pass 2: write final probabilities
-    if (running_sum > 0.0f) {
-        float inv_sum = et_fdiv(1.0f, running_sum);
-        for (int i = 0; i < ne00; i++) {
-            float v = src[i] * scale;
-            if (mask != NULL) {
-                v += slope * mask[i];
-            }
-            dst[i] = et_expf(v - running_max) * inv_sum;
+    // the algorithm implements the following in vectorized form
+    // if (running_sum > 0.0f) {
+    //     float inv_sum = et_fdiv(1.0f, running_sum);
+    //     for (int i = 0; i < ne00; i++) {
+    //         float v = src[i] * scale;
+    //         if (mask != NULL) {
+    //             v += slope * mask[i];
+    //         }
+    //         dst[i] = et_expf(v - running_max) * inv_sum;
+    //     }
+    // }
+    if (running_sum <= 0.0f) {
+        return;
+    }
+
+    const float inv_sum = et_fdiv(1.0f, running_sum);
+    const float s2      = scale * LOG2E_F;
+    const float sl2     = slope * LOG2E_F;
+    const float neg_ml2 = -running_max * LOG2E_F;
+
+    __asm__ volatile (
+        // Vector mask setup
+        "mova.x.m  %[ms]                \n\t"
+        "mov.m.x   m0, x0, 0xFF         \n\t"
+
+        // Broadcast loop-invariant constants
+        "fbc.ps    f10, 0(%[p_s2])      \n\t"
+        "fbc.ps    f12, 0(%[p_nml2])    \n\t"
+        "fbc.ps    f13, 0(%[p_inv])     \n\t"
+
+        : [ms] "=&r"(ms)
+        : [p_s2]   "r"(&s2),
+            [p_nml2] "r"(&neg_ml2),
+            [p_inv]  "r"(&inv_sum)
+        : "f10", "f12", "f13"
+    );
+
+    if (mask != NULL) {
+        __asm__ volatile (
+            "fbc.ps    f11, 0(%[p_sl2]) \n\t"
+            :
+            : [p_sl2] "r"(&sl2)
+            : "f11"
+        );
+
+        for (int c = 0; c < ne00; c+=8) {
+            const float* sp = src  + c;
+            const float* mp = mask + c;
+            float*       dp = dst  + c;
+
+            __asm__ volatile (
+                "flw.ps    f0, 0(%[sp])           \n\t"
+                "flw.ps    f1, 0(%[mp])           \n\t"
+                "fmadd.ps  f0, f0, f10, f12       \n\t"  // src*s2 + neg_ml2
+                "fmadd.ps  f0, f1, f11, f0        \n\t"  // + mask*sl2
+                "fexp.ps   f0, f0                 \n\t"
+                "fmul.ps   f0, f0, f13            \n\t"
+                "fsw.ps    f0, 0(%[dp])           \n\t"
+                :
+                : [sp] "r"(sp), [mp] "r"(mp), [dp] "r"(dp)
+                : "f0", "f1", "memory"
+            );
+        }
+    } else {
+        for (int c = 0; c < ne00; c+=8) {
+            const float* sp = src + c;
+            float*       dp = dst + c;
+
+            __asm__ volatile (
+                "flw.ps    f0, 0(%[sp])           \n\t"
+                "fmadd.ps  f0, f0, f10, f12       \n\t"
+                "fexp.ps   f0, f0                 \n\t"
+                "fmul.ps   f0, f0, f13            \n\t"
+                "fsw.ps    f0, 0(%[dp])           \n\t"
+                :
+                : [sp] "r"(sp), [dp] "r"(dp)
+                : "f0", "memory"
+            );
         }
     }
+
+    // Restore mask state
+    __asm__ volatile (
+        "mova.m.x  %[ms] \n\t"
+        :: [ms] "r"(ms)
+    );
+
 }
 
 // Main entry point for Softmax kernel
