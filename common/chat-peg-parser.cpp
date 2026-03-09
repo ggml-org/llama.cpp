@@ -577,7 +577,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_function_is_key(
         if (!call_id_key.empty()) {
             auto id_parser = atomic(
                 literal("\"" + call_id_key + "\"") + space() + literal(":") + space() +
-                literal("\"") + tool_id(json_string_content()) + literal("\"")
+                literal("\"") + tool_id(string_content('"')) + literal("\"")
             );
             inner_fields.push_back(optional(id_parser + space() + optional(literal(",") + space())));
         }
@@ -586,7 +586,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_function_is_key(
             auto gen_id_parser = atomic(
                 literal("\"" + gen_call_id_key + "\"") + space() + literal(":") + space() +
                 choice({
-                    literal("\"") + tool_id(json_string_content()) + literal("\""),
+                    literal("\"") + tool_id(string_content('"')) + literal("\""),
                     tool_id(json_number())
                 })
             );
@@ -675,7 +675,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
             if (id_spec.first.empty()) {
                 auto id_parser = atomic(
                     literal("\"" + call_id_key + "\"") + space() + literal(":") + space() +
-                    literal("\"") + tool_id(json_string_content()) + literal("\"")
+                    literal("\"") + tool_id(string_content('"')) + literal("\"")
                 );
                 tool_parser_body = tool_parser_body + optional(id_parser + space() + literal(",") + space());
             }
@@ -687,7 +687,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
                 auto gen_id_parser = atomic(
                     literal("\"" + gen_call_id_key + "\"") + space() + literal(":") + space() +
                     choice({
-                        literal("\"") + tool_id(json_string_content()) + literal("\""),
+                        literal("\"") + tool_id(string_content('"')) + literal("\""),
                         tool_id(json_number())
                     })
                 );
@@ -736,7 +736,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
             id_parser = atomic(
                 literal("\"" + call_id_key + "\"") + space() + literal(":") + space() +
                 choice({
-                    literal("\"") + tool_id(json_string_content()) + literal("\""),
+                    literal("\"") + tool_id(string_content('"')) + literal("\""),
                     tool_id(json_number())
                 })
             );
@@ -747,7 +747,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
             gen_id_parser = atomic(
                 literal("\"" + gen_call_id_key + "\"") + space() + literal(":") + space() +
                 choice({
-                    literal("\"") + tool_id(json_string_content()) + literal("\""),
+                    literal("\"") + tool_id(string_content('"')) + literal("\""),
                     tool_id(json_number())
                 })
             );
