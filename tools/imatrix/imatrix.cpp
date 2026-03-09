@@ -143,9 +143,17 @@ static void compute_statistics(std::vector<tensor_statistics> & tstats, const st
     activations.reserve(e.values.size());
 
     for (int i = 0; i < n_mat; ++i) {
+        if (e.counts[i] == 0) {
+            continue;
+        }
         for (int j = 0; j < row_size; ++j) {
             activations.push_back(e.values[i*row_size + j] / e.counts[i]);
         }
+    }
+
+    if (activations.empty()) {
+        LOG_ERR("%s: all activations for tensor %s have zero count. The imatrix may be suboptimal\n", __func__, name.c_str());
+        return;
     }
 
     const float act_total     = std::accumulate(activations.begin(), activations.end(), 0.0f);
