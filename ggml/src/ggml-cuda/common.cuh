@@ -821,6 +821,35 @@ __device__ __forceinline__ uint8_t ggml_cuda_float_to_fp4_e2m1(float x, float e)
     return static_cast<uint8_t>(best_i | sign_bit);
 }
 
+__device__ __forceinline__ float ggml_cuda_e4m3_to_fp32(uint8_t u) {
+    #if CUDART_VERSION >= 12800
+        #include "cuda_fp8.h"
+        __nv_fp8_storage_t s = static_cast<__nv_fp8_storage_t>(u);
+        __half_raw hr = __nv_cvt_fp8_to_halfraw(s, __NV_E4M3);
+        return __half2float(__half(hr));
+    #else
+        // E4M3: sign(1) | exp(4, bias=7) | mant(3)
+        const int s = (u & 0x80) ? -1 : 1;
+        const int e = (u >> 3) & 0x0F;
+        const int m =  u       & 0x07;
+
+        // Zero / subnormals
+        if (e == 0) {
+            if (m == 0) return s * 0.0f;             // ±0
+            // subnormal: value = s * (m / 2^6)
+            return s * (float(m) * (1.0f / 64.0f));   // 2^(-6) * mant
+        }
+        if (e == 0xF) {
+            return  __int_as_float(0x7fc00000);
+        }
+
+        // Normal: (1 + m/8) * 2^(e-7)
+        const float mant = 1.0f + float(m) * (1.0f/8.0f);
+        const int   exp2 = e - 7;
+        return s * ldexpf(mant, exp2);
+    #endif // CUDART_VERSION >= 12800
+
+}
 // See https://gmplib.org/~tege/divcnst-pldi94.pdf figure 4.1.
 // Precompute mp (m' in the paper) and L such that division
 // can be computed using a multiply (high 32b of 64b result)
@@ -930,6 +959,13 @@ struct ggml_cuda_type_traits<GGML_TYPE_MXFP4> {
     static constexpr int qr = QR_MXFP4;
     static constexpr int qi = QI_MXFP4;
 };
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_NVFP4> {
+    static constexpr int qk = QK_K;
+    static constexpr int qr = QR_NVFP4;
+    static constexpr int qi = QI_NVFP4;
+};
+
 
 template<>
 struct ggml_cuda_type_traits<GGML_TYPE_Q2_K> {
@@ -1418,10 +1454,14 @@ struct ggml_cuda_mm_fusion_args_host {
     const ggml_tensor * gate = nullptr;
     const ggml_tensor * gate_bias = nullptr;
     ggml_glu_op glu_op;
+    float nvfp4_tensor_scale = 1.0f;
+    float nvfp4_gate_tensor_scale = 1.0f;
 };
 struct ggml_cuda_mm_fusion_args_device {
     const void * x_bias = nullptr;
     const void * gate = nullptr;
     const void * gate_bias = nullptr;
     ggml_glu_op glu_op;
+    float nvfp4_tensor_scale = 1.0f;
+    float nvfp4_gate_tensor_scale = 1.0f;
 };

@@ -1,12 +1,23 @@
+#ifdef GGML_COMMON_DECL
+#undef GGML_COMMON_DECL
+#endif
+#define GGML_COMMON_DECL_CPP
+#include "../ggml/src/ggml-common.h"
+
 #include "llama-model-loader.h"
 
 #include "ggml-alloc.h"
 #include "ggml.h"
 #include "gguf.h"
 #include "llama-hparams.h"
+#include "ggml-cpu.h"
+#include "../ggml/src/ggml-impl.h"
+
+#include "../ggml/src/ggml-nvfp4-helpers.h"
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cinttypes>
 #include <cstdint>
 #include <cstring>
@@ -16,6 +27,66 @@
 static const size_t kiB = 1024;
 static const size_t MiB = 1024*kiB;
 static const size_t GiB = 1024*MiB;
+
+static float llama_get_nvfp4_tensor_scale(const gguf_context * meta, const std::string & name) {
+    const std::string key_tensor_scale = name + ".tensor_scale";
+    const int kid_tensor_scale = gguf_find_key(meta, key_tensor_scale.c_str());
+    if (kid_tensor_scale >= 0 && gguf_get_kv_type(meta, kid_tensor_scale) == GGUF_TYPE_FLOAT32) {
+        float tensor_scale = gguf_get_val_f32(meta, kid_tensor_scale);
+        if (std::isfinite(tensor_scale) && tensor_scale > 0.0f) {
+            return tensor_scale;
+        }
+    }
+
+    const std::string key2 = name + ".weight_scale_2";
+    const int kid2 = gguf_find_key(meta, key2.c_str());
+    if (kid2 >= 0 && gguf_get_kv_type(meta, kid2) == GGUF_TYPE_FLOAT32) {
+        float tensor_scale = gguf_get_val_f32(meta, kid2);
+        if (std::isfinite(tensor_scale) && tensor_scale > 0.0f) {
+            return tensor_scale;
+        }
+    }
+
+    return 1.0f;
+}
+
+static float llama_get_nvfp4_activation_scale(const gguf_context * meta, const std::string & name) {
+    const std::string key_input_scale = name + ".input_scale";
+    const int kid_input_scale = gguf_find_key(meta, key_input_scale.c_str());
+    if (kid_input_scale >= 0 && gguf_get_kv_type(meta, kid_input_scale) == GGUF_TYPE_FLOAT32) {
+        const float gguf_nvfp4_input_scale = gguf_get_val_f32(meta, kid_input_scale);
+        if (std::isfinite(gguf_nvfp4_input_scale) && gguf_nvfp4_input_scale > 0.0f) {
+            return llama_nvfp4_activation_scale_from_gguf_input_scale(gguf_nvfp4_input_scale);
+        }
+    }
+
+    return 1.0f;
+}
+
+float llama_nvfp4_activation_scale_from_gguf_input_scale(float gguf_nvfp4_input_scale) {
+    if (!std::isfinite(gguf_nvfp4_input_scale) || gguf_nvfp4_input_scale <= 0.0f) {
+        return 1.0f;
+    }
+
+    const float nvfp4_activation_scale = 1.0f / gguf_nvfp4_input_scale;
+    if (!std::isfinite(nvfp4_activation_scale) || nvfp4_activation_scale <= 0.0f) {
+        return 1.0f;
+    }
+
+    return nvfp4_activation_scale;
+}
+
+static void llama_set_nvfp4_scale(struct ggml_tensor * tensor, float scale, uint32_t op_param_idx) {
+    if (tensor == nullptr || tensor->type != GGML_TYPE_NVFP4) {
+        return;
+    }
+
+    if (!std::isfinite(scale) || scale <= 0.0f) {
+        scale = 1.0f;
+    }
+
+    ggml_set_op_params_f32(tensor, op_param_idx, scale);
+}
 
 const char * llama_file_version_name(llama_fver version) {
     switch (version) {
@@ -42,6 +113,7 @@ static std::string llama_model_ftype_name(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_Q5_1:     return "Q5_1";
         case LLAMA_FTYPE_MOSTLY_Q8_0:     return "Q8_0";
         case LLAMA_FTYPE_MOSTLY_MXFP4_MOE: return "MXFP4 MoE";
+        case LLAMA_FTYPE_MOSTLY_NVFP4:    return "NVFP4";
         case LLAMA_FTYPE_MOSTLY_Q2_K:     return "Q2_K - Medium";
         case LLAMA_FTYPE_MOSTLY_Q2_K_S:   return "Q2_K - Small";
         case LLAMA_FTYPE_MOSTLY_Q3_K_S:   return "Q3_K - Small";
@@ -683,7 +755,6 @@ llama_model_loader::llama_model_loader(
             const ggml_tensor * tensor = w.tensor;
 
             enum ggml_type type = tensor->type;
-
             n_type[type]++;
 
             if (n_type_max < n_type[type]) {
@@ -703,6 +774,7 @@ llama_model_loader::llama_model_loader(
             case GGML_TYPE_F32:     ftype = LLAMA_FTYPE_ALL_F32;        break;
             case GGML_TYPE_F16:     ftype = LLAMA_FTYPE_MOSTLY_F16;     break;
             case GGML_TYPE_BF16:    ftype = LLAMA_FTYPE_MOSTLY_BF16;    break;
+            case GGML_TYPE_NVFP4:   ftype = LLAMA_FTYPE_MOSTLY_NVFP4;   break;
             case GGML_TYPE_Q4_0:    ftype = LLAMA_FTYPE_MOSTLY_Q4_0;    break;
             case GGML_TYPE_Q4_1:    ftype = LLAMA_FTYPE_MOSTLY_Q4_1;    break;
             case GGML_TYPE_Q5_0:    ftype = LLAMA_FTYPE_MOSTLY_Q5_0;    break;
@@ -780,6 +852,7 @@ llama_model_loader::llama_model_loader(
     this->use_direct_io = use_direct_io;
     this->check_tensors = check_tensors;
     this->no_alloc = no_alloc;
+
 }
 
 std::string llama_model_loader::get_arch_name() const {
@@ -1232,6 +1305,10 @@ struct ggml_tensor * llama_model_loader::create_tensor(
 
     struct ggml_tensor * tensor = ggml_dup_tensor(ctx, cur);
     ggml_set_name(tensor, ggml_get_name(cur));
+    constexpr int op_param_idx_nvfp4_tensor_scale = GGML_MAX_OP_PARAMS / sizeof(float) - 2;
+    constexpr int op_param_idx_nvfp4_activation_scale = GGML_MAX_OP_PARAMS / sizeof(float) - 1;
+    llama_set_nvfp4_scale(tensor, llama_get_nvfp4_tensor_scale(metadata, ggml_get_name(tensor)), op_param_idx_nvfp4_tensor_scale);
+    llama_set_nvfp4_scale(tensor, llama_get_nvfp4_activation_scale(metadata, ggml_get_name(tensor)), op_param_idx_nvfp4_activation_scale);
 
     if (duplicated) {
         size_data += ggml_nbytes(cur);
@@ -1264,6 +1341,10 @@ struct ggml_tensor * llama_model_loader::create_tensor_as_view(struct ggml_conte
                                     offset);
 
     ggml_set_name(tensor, name.c_str());
+    constexpr int op_param_idx_nvfp4_tensor_scale = GGML_MAX_OP_PARAMS / sizeof(float) - 2;
+    constexpr int op_param_idx_nvfp4_activation_scale = GGML_MAX_OP_PARAMS / sizeof(float) - 1;
+    llama_set_nvfp4_scale(tensor, llama_get_nvfp4_tensor_scale(metadata, ggml_get_name(tensor)), op_param_idx_nvfp4_tensor_scale);
+    llama_set_nvfp4_scale(tensor, llama_get_nvfp4_activation_scale(metadata, ggml_get_name(tensor)), op_param_idx_nvfp4_activation_scale);
 
     n_created++;
 
@@ -1342,6 +1423,12 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
             memcpy(cur->data, (uint8_t *)mapping->addr() + w.offs, ggml_nbytes(cur));
         }
     } else {
+        if (cur->data == nullptr) {
+            auto & owned = owned_tensor_data[cur];
+            owned.resize(ggml_nbytes(cur));
+            cur->data = owned.data();
+        }
+
         GGML_ASSERT(cur->data != nullptr);
         GGML_ASSERT(w.idx < files.size());
         const auto & file = files.at(w.idx);
@@ -1352,6 +1439,7 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
     if (check_tensors && !ggml_validate_row_data(cur->type, cur->data, ggml_nbytes(cur))) {
         throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
     }
+
 }
 
 bool llama_model_loader::load_all_data(
@@ -1483,7 +1571,6 @@ bool llama_model_loader::load_all_data(
         }
 
         size_t n_size = ggml_nbytes(cur);
-
         if (use_mmap) {
             const auto & mapping = mappings.at(weight->idx);
             ggml_backend_buffer_t buf_mmap = nullptr;
@@ -1524,7 +1611,6 @@ bool llama_model_loader::load_all_data(
                     }));
                 }
             } else {
-                // If upload_backend is valid load the tensor in chunks to pinned memory and upload the buffers asynchronously to the GPU.
                 if (upload_backend) {
                     size_t offset = weight->offs;
                     alignment = file->read_alignment();

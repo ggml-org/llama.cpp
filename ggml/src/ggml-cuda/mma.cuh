@@ -1061,6 +1061,64 @@ namespace ggml_cuda_mma {
 #endif  // BLACKWELL_MMA_AVAILABLE
     }
 
+    static __device__ __forceinline__ void mma_nvfp4_block_scaled(
+                                                            tile<16, 8, float> &     D,
+                                                            const tile<16, 8, int> & A,
+                                                            const tile<8, 8, int> &  B,
+                                                            uint32_t                 a_scale,
+                                                            uint32_t                 b_scale) {
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_BLACKWELL && __CUDA_ARCH__ < GGML_CUDA_CC_RUBIN
+        const int * Axi = (const int *) A.x;
+        const int * Bxi = (const int *) B.x;
+        float *     Dxi = (float *) D.x;
+
+        asm volatile(
+            "mma.sync.aligned.kind::mxf4nvf4.block_scale.scale_vec::4X"
+            ".m16n8k64.row.col.f32.e2m1.e2m1.f32.ue4m3 "
+            "{%0, %1, %2, %3}, "
+            "{%4, %5, %6, %7}, "
+            "{%8, %9}, "
+            "{%0, %1, %2, %3}, "
+            "%10, {0, 0}, %11, {0, 0};\n"
+            : "+f"(Dxi[0]), "+f"(Dxi[1]), "+f"(Dxi[2]), "+f"(Dxi[3])
+            : "r"(Axi[0]), "r"(Axi[1]), "r"(Axi[2]), "r"(Axi[3]), "r"(Bxi[0]), "r"(Bxi[1]), "r"(a_scale), "r"(b_scale));
+#else
+        GGML_UNUSED_VARS(D, A, B, a_scale, b_scale);
+#endif  // BLACKWELL_MMA_AVAILABLE
+    }
+
+    struct acc4 {
+        float x0, x1, x2, x3;
+    };
+
+    static __device__ __forceinline__ void mma_nvfp4_nvfp4_block_scale(
+        acc4 & acc,
+        uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3,
+        uint32_t b0, uint32_t b1,
+        uint32_t sfa0,
+        uint32_t sfb0) {
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_BLACKWELL && __CUDA_ARCH__ < GGML_CUDA_CC_RUBIN
+        asm volatile(
+            "mma.sync.aligned.kind::mxf4nvf4.block_scale.scale_vec::4X"
+            ".m16n8k64.row.col.f32.e2m1.e2m1.f32.ue4m3 "
+            "{%0, %1, %2, %3}, "
+            "{%4, %5, %6, %7}, "
+            "{%8, %9}, "
+            "{%0, %1, %2, %3}, "
+            "%10, {0, 0}, %11, {0, 0};\n"
+            : "+f"(acc.x0), "+f"(acc.x1), "+f"(acc.x2), "+f"(acc.x3)
+            : "r"(a0), "r"(a1), "r"(a2), "r"(a3),
+              "r"(b0), "r"(b1),
+              "r"(sfa0), "r"(sfb0));
+#else
+        GGML_UNUSED(acc);
+        GGML_UNUSED(a0); GGML_UNUSED(a1); GGML_UNUSED(a2); GGML_UNUSED(a3);
+        GGML_UNUSED(b0); GGML_UNUSED(b1);
+        GGML_UNUSED(sfa0); GGML_UNUSED(sfb0);
+        NO_DEVICE_CODE;
+#endif // __CUDA_ARCH__ >= GGML_CUDA_CC_BLACKWELL
+    }
+
     static __device__ __forceinline__ void mma(
             tile<16, 8, float> & D, const tile<16, 8, half2> & A, const tile<8, 8, half2> & B) {
 #ifdef TURING_MMA_AVAILABLE

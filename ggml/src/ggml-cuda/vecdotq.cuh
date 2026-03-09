@@ -1,8 +1,21 @@
 #pragma once
 
 #include "common.cuh"
-
+#include "ggml-nvfp4-helpers.h"
 #include <cstdint>
+
+
+// NVFP4 lookup table (CUDA device-side)
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
+// Must be at least 4B aligned: get_int_from_table_16 casts this to uint32_t[4].
+__device__ __constant__ __align__(16) int8_t kvalues_nvfp4_i8x2[16] = {
+    0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12
+};
+#else
+alignas(16) static const int8_t kvalues_nvfp4_i8x2[16] = {
+    0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12
+};
+#endif
 
 static __device__ __forceinline__ int get_int_b1(const void * x, const int & i32) {
     const uint8_t * x8 = (const uint8_t *) x;
@@ -102,6 +115,52 @@ static __device__ __forceinline__ uint32_t unpack_ksigns(const uint8_t v) {
     // broadcast over uint to allow for 0x08040201 / 0x80402010 as selectors
     return s * 0x01010101;
 }
+
+// qs bytes layout per 32-group: byte j stores (q[j] | q[j+16]<<4), j=0..15.
+static __device__ __forceinline__ uint32_t nvfp4_pack4_i8_mx(const uint8_t * __restrict__ qs8, const int sh, const int off4) {
+    return
+        ((uint32_t)(uint8_t)kvalues_nvfp4_i8x2[(qs8[off4 + 0] >> sh) & 0x0F]      ) |
+        ((uint32_t)(uint8_t)kvalues_nvfp4_i8x2[(qs8[off4 + 1] >> sh) & 0x0F] <<  8) |
+        ((uint32_t)(uint8_t)kvalues_nvfp4_i8x2[(qs8[off4 + 2] >> sh) & 0x0F] << 16) |
+        ((uint32_t)(uint8_t)kvalues_nvfp4_i8x2[(qs8[off4 + 3] >> sh) & 0x0F] << 24);
+}
+
+static __device__ __forceinline__ int nvfp4_dot8_dotxy_mx(const uint8_t * __restrict__ qsx,
+                                                          const uint8_t * __restrict__ qsy,
+                                                          const int chunk8) {
+    const int g32  = chunk8 >> 2;              // 0..7
+    const int off8 = (chunk8 & 1) << 3;        // 0 or 8
+    const int sh   = ((chunk8 >> 1) & 1) << 2; // 0 or 4
+    const uint8_t * __restrict__ x8 = qsx + g32*16 + off8;
+    const uint8_t * __restrict__ y8 = qsy + g32*16 + off8;
+
+    const uint32_t x0 = nvfp4_pack4_i8_mx(x8, sh, 0);
+    const uint32_t x1 = nvfp4_pack4_i8_mx(x8, sh, 4);
+    const uint32_t y0 = nvfp4_pack4_i8_mx(y8, sh, 0);
+    const uint32_t y1 = nvfp4_pack4_i8_mx(y8, sh, 4);
+
+    int acc = 0;
+    acc = ggml_cuda_dp4a((int) x0, (int) y0, acc);
+    acc = ggml_cuda_dp4a((int) x1, (int) y1, acc);
+    return acc;
+}
+
+static __device__ __forceinline__ int nvfp4_sum8_mx(const uint8_t * __restrict__ qs,
+                                                    const int chunk8) {
+    const int g32  = chunk8 >> 2;
+    const int off8 = (chunk8 & 1) << 3;
+    const int sh   = ((chunk8 >> 1) & 1) << 2;
+    const uint8_t * __restrict__ q8 = qs + g32*16 + off8;
+
+    const uint32_t w0 = nvfp4_pack4_i8_mx(q8, sh, 0);
+    const uint32_t w1 = nvfp4_pack4_i8_mx(q8, sh, 4);
+
+    int acc = 0;
+    acc = ggml_cuda_dp4a((int) w0, 0x01010101, acc);
+    acc = ggml_cuda_dp4a((int) w1, 0x01010101, acc);
+    return acc;
+}
+
 
 // VDR = vec dot ratio, how many contiguous integers each thread processes when the vec dot kernel is called
 // MMVQ = mul_mat_vec_q, MMQ = mul_mat_q
@@ -321,6 +380,296 @@ static __device__ __forceinline__ float vec_dot_mxfp4_q8_1(
     const float d = ggml_cuda_e8m0_to_fp32(bq4->e) * 0.5f * __low2float(bq8_1->ds);
     return d * sumi;
 }
+
+#define VDR_NVFP4_Q8_1_MMVQ   4
+#define VDR_NVFP4_Q8_1_MMQ    8
+#define VDR_NVFP4_NVFP4_MMVQ  2
+#define VDR_NVFP4_NVFP4_MMQ   4
+
+// kvalues_nvfp4_i8x2 is now provided by ggml-nvfp4-helpers.h
+
+static __device__ __forceinline__ float nvfp4_ue4m3_to_fp32(uint8_t c) {
+    c &= 0x7F;
+    if (c == 0x7F) c = 0x7E;
+    float s = GGML_FP8_UE4M3_TO_FP32(c);
+    return isfinite(s) ? s : 0.0f;
+}
+
+// NVFP4 × NVFP4 constants
+// MMVQ uses VDR=2, and each step processes 4 bytes = 8 FP4 values.
+struct nvfp4_dot8_stats {
+    int dot_xy;
+    int sum_x;
+    int sum_y;
+};
+
+struct nvfp4_dot8_noby_stats {
+    int dot_xy;
+    int sum_y;
+};
+
+static __device__ __forceinline__ nvfp4_dot8_stats nvfp4_dot8(
+    const uint8_t * __restrict__ qx,
+    const uint8_t * __restrict__ qy) {
+    const int qx4 = get_int_b4(qx, 0);
+    const int qy4 = get_int_b4(qy, 0);
+
+    const int2 x8 = get_int_from_table_16(qx4, kvalues_nvfp4_i8x2);
+    const int2 y8 = get_int_from_table_16(qy4, kvalues_nvfp4_i8x2);
+
+    constexpr int ones_i8 = 0x01010101;
+
+    nvfp4_dot8_stats out;
+    out.dot_xy = ggml_cuda_dp4a(x8.x, y8.x, 0);
+    out.dot_xy = ggml_cuda_dp4a(x8.y, y8.y, out.dot_xy);
+    out.sum_x  = ggml_cuda_dp4a(x8.x, ones_i8, 0);
+    out.sum_x  = ggml_cuda_dp4a(x8.y, ones_i8, out.sum_x);
+    out.sum_y  = ggml_cuda_dp4a(y8.x, ones_i8, 0);
+    out.sum_y  = ggml_cuda_dp4a(y8.y, ones_i8, out.sum_y);
+    return out;
+}
+
+static __device__ __forceinline__ nvfp4_dot8_noby_stats nvfp4_dot8_noby(
+    const uint8_t * __restrict__ qx,
+    const uint8_t * __restrict__ qy) {
+    const int qx4 = get_int_b4(qx, 0);
+    const int qy4 = get_int_b4(qy, 0);
+
+    const int2 x8 = get_int_from_table_16(qx4, kvalues_nvfp4_i8x2);
+    const int2 y8 = get_int_from_table_16(qy4, kvalues_nvfp4_i8x2);
+
+    constexpr int ones_i8 = 0x01010101;
+    nvfp4_dot8_noby_stats out;
+    out.dot_xy = ggml_cuda_dp4a(x8.x, y8.x, 0);
+    out.dot_xy = ggml_cuda_dp4a(x8.y, y8.y, out.dot_xy);
+    out.sum_y  = ggml_cuda_dp4a(y8.x, ones_i8, 0);
+    out.sum_y  = ggml_cuda_dp4a(y8.y, ones_i8, out.sum_y);
+    return out;
+}
+
+static __device__ __forceinline__ int nvfp4_dot8_dotxy(
+    const uint8_t * __restrict__ qx,
+    const uint8_t * __restrict__ qy) {
+    const int qx4 = get_int_b4(qx, 0);
+    const int qy4 = get_int_b4(qy, 0);
+
+    const int2 x8 = get_int_from_table_16(qx4, kvalues_nvfp4_i8x2);
+    const int2 y8 = get_int_from_table_16(qy4, kvalues_nvfp4_i8x2);
+
+    int dot_xy = ggml_cuda_dp4a(x8.x, y8.x, 0);
+    dot_xy = ggml_cuda_dp4a(x8.y, y8.y, dot_xy);
+    return dot_xy;
+}
+
+static __device__ __forceinline__ float nvfp4_affine_dot8(
+    const float ax, const float ay,
+    const float bx, const float by,
+    const nvfp4_dot8_stats & s,
+    const float n_vals = 8.0f) {
+    // kvalues_nvfp4_i8x2 stores 2x(NVFP4 value), so map dot/sums back to value domain.
+    return (ax * ay) * (0.25f * float(s.dot_xy))
+         + (bx * ay) * (0.5f  * float(s.sum_y))
+         + (by * ax) * (0.5f  * float(s.sum_x))
+         + (bx * by) * n_vals;
+}
+
+// NVFP4 × NVFP4 (MMVQ) dot product
+static __device__ __forceinline__ float
+vec_dot_nvfp4_nvfp4_mmvq_cfg(const block_nvfp4 * __restrict__ bq4x_base,
+                             const block_nvfp4 * __restrict__ bq4y_base,
+                             const int pack_x,
+                             const int pack_y,
+                             const int lane_x,
+                             const int lane_y,
+                             const int & iqs) {
+
+    const block_nvfp4 * bq4x = bq4x_base + pack_x;
+    const block_nvfp4 * bq4  = bq4y_base + pack_y;
+
+    float sum = 0.0f;
+#pragma unroll
+    for (int l = 0; l < VDR_NVFP4_NVFP4_MMVQ; ++l) {
+        const int sc_idx = (iqs + l) >> 1;
+        const float sx = nvfp4_ue4m3_to_fp32(bq4x->scales[lane_x][sc_idx]);
+        const float sy = nvfp4_ue4m3_to_fp32(bq4->scales[lane_y][sc_idx]);
+
+        const uint32_t qx_u32 = ggml_nvfp4_pack8(bq4x->qs[lane_x], iqs + l);
+        const uint32_t qy_u32 = ggml_nvfp4_pack8(bq4->qs[lane_y],  iqs + l);
+        const int dot_xy = nvfp4_dot8_dotxy((const uint8_t *) &qx_u32, (const uint8_t *) &qy_u32);
+        sum += (sx * sy) * (0.5 * float(dot_xy));
+    }
+
+    return sum;
+}
+
+static __device__ __forceinline__ float
+vec_dot_nvfp4_nvfp4_mmvq(const block_nvfp4 * __restrict__ bq4x_base,
+                         const block_nvfp4 * __restrict__ bq4y_base,
+                         const int pack_x,
+                         const int pack_y,
+                         const int lane_x,
+                         const int lane_y,
+                         const int & iqs) {
+    return vec_dot_nvfp4_nvfp4_mmvq_cfg(
+        bq4x_base, bq4y_base, pack_x, pack_y, lane_x, lane_y, iqs);
+}
+
+// NVFP4 x NVFP4 (MMVQ) dot product with MMA activation layout
+static __device__ __forceinline__ float
+vec_dot_nvfp4_nvfp4_mmvq_mma_cfg(const void * __restrict__ vbq,
+                                 const void * __restrict__ by,
+                                 const int & x_idx,
+                                 const int & iqs) {
+
+    const int pack_x = x_idx >> 2;
+    const int lane_x = x_idx & 3;
+
+    const block_nvfp4 * __restrict__ bq4x = ((const block_nvfp4 *) vbq) + pack_x;
+    const float dx = 1.0f;
+
+    const float dy = 1.0f;
+
+    // MMVQ native staging uses block_nvfp4_mmq: sc4_u32[4], qs_u32[32].
+    const uint32_t * __restrict__ by_u32 = (const uint32_t *) by;
+    const uint8_t * __restrict__ y_sc = reinterpret_cast<const uint8_t *>(by_u32 + 0);
+    const uint8_t * __restrict__ y_qs = reinterpret_cast<const uint8_t *>(by_u32 + 4);
+
+    float sum = 0.0f;
+    static_assert(VDR_NVFP4_NVFP4_MMVQ == 2, "nvfp4 mmvq expects vdr=2");
+    // MMVQ supplies iqs in steps of vdr=2, so both 8-value chunks share the same sub-scale.
+    const int sc_idx = iqs >> 1;
+    const float sx = nvfp4_ue4m3_to_fp32(bq4x->scales[lane_x][sc_idx]);
+    const float sy = nvfp4_ue4m3_to_fp32(y_sc[sc_idx]);
+    const float ax = dx * sx;
+    const float ay = dy * sy;
+
+    const uint32_t qx0_u32 = ggml_nvfp4_pack8(bq4x->qs[lane_x], iqs + 0);
+    // y_qs is runtime activation staging (block_nvfp4_mmq), where each 8-value chunk
+    // is already packed contiguously as one uint32 lane payload.
+    const uint32_t qy0_u32 = ((const uint32_t *) y_qs)[iqs + 0];
+    const uint32_t qx1_u32 = ggml_nvfp4_pack8(bq4x->qs[lane_x], iqs + 1);
+    const uint32_t qy1_u32 = ((const uint32_t *) y_qs)[iqs + 1];
+    const int dot_xy =
+        nvfp4_dot8_dotxy((const uint8_t *) &qx0_u32, (const uint8_t *) &qy0_u32) +
+        nvfp4_dot8_dotxy((const uint8_t *) &qx1_u32, (const uint8_t *) &qy1_u32);
+    sum += (ax * ay) * (0.25f * float(dot_xy));
+
+    return sum;
+}
+
+static __device__ __forceinline__ float
+vec_dot_nvfp4_nvfp4_mmvq_mma(const void * __restrict__ vbq,
+                             const void * __restrict__ by,
+                             const int & x_idx,
+                             const int & iqs) {
+    return vec_dot_nvfp4_nvfp4_mmvq_mma_cfg(
+        vbq, by, x_idx, iqs);
+}
+
+static __device__ __forceinline__ float
+vec_dot_nvfp4_q8_1_cfg(const void * __restrict__ vbq,
+                       const block_q8_1 * __restrict__ bq8_1,
+                       const int & kbx,
+                       const int & iqs) {
+
+    const int pack = kbx >> 2;
+    const int lane = kbx & 3;
+    const block_nvfp4 * bq4 = (const block_nvfp4 *) vbq + pack;
+
+    float sum = 0.0f;
+    for (int l = 0; l < VDR_NVFP4_Q8_1_MMVQ; ++l) {
+        const int chunk8 = iqs + l;
+        const int idx0 = chunk8 * 8;
+        const int q8_block_idx = idx0 >> 5;
+        const int q8_off = idx0 & 31;
+        const block_q8_1 * bq8 = bq8_1 + q8_block_idx;
+        const int sc_idx = chunk8 >> 1;
+        const int g32  = chunk8 >> 2;              // which 32-value group (0..7)
+        const int off8 = (chunk8 & 1) << 3;        // 0 or 8
+        const int sh   = ((chunk8 >> 1) & 1) << 2; // 0 or 4
+        const uint8_t * __restrict__ x8 = bq4->qs[lane] + g32*16 + off8;
+        const int x0 = (int) nvfp4_pack4_i8_mx(x8, sh, 0);
+        const int x1 = (int) nvfp4_pack4_i8_mx(x8, sh, 4);
+        const int q8i = q8_off >> 2;
+        const int u0 = get_int_b1(bq8->qs, q8i + 0);
+        const int u1 = get_int_b1(bq8->qs, q8i + 1);
+        const float s = nvfp4_ue4m3_to_fp32(bq4->scales[lane][sc_idx]);
+        const int dot2x = ggml_cuda_dp4a(x1, u1, ggml_cuda_dp4a(x0, u0, 0));
+        const float dot8 = 0.5f * float(dot2x);
+        const float yd = __low2float(bq8->ds);
+        sum += (s * yd) * dot8;
+
+    }
+
+    return sum;
+}
+
+
+static __device__ __forceinline__ float
+vec_dot_nvfp4_q8_1(const void * __restrict__ vbq,
+                   const block_q8_1 * __restrict__ bq8_1,
+                   const int & kbx,
+                   const int & iqs) {
+    return vec_dot_nvfp4_q8_1_cfg(vbq, bq8_1, kbx, iqs);
+    }
+
+
+// -------- MMQ internal: v/u are MMQ-staged (even/odd packed ints) --------
+// v: packed FP4 nibbles in int32 words (8 weights per int)
+// u: packed Q8_1 in int32 words (4 int8 per int), already staged in MMQ layout
+// sc: 4 UE4M3 scales (1 per 16 weights) for THIS thread's chunk
+// ds4: 2 half2 values, each contains Q8_1 "d" in low half for 32 values
+template <int ds_layout>
+static __device__ __forceinline__ float
+vec_dot_nvfp4_q8_1_impl_mmq(const int * __restrict__ v,
+                            const int * __restrict__ u,
+                            const uint8_t * __restrict__ sc,
+                            const float & d6,
+                            const void * __restrict__ y_ds_void) {
+
+    float y_d0, y_d1;
+
+    // NOTE: ds_layout is passed as an int (derived from mmq_q8_1_ds_layout in mmq.cuh).
+    // Layout ids:
+    //   0: D4     -> float d4[4]
+    //   1: DS4    -> half2 ds4[4]   (scale,sum)
+    //   2: D2S6   -> half  d2s6[8]
+
+    if constexpr (ds_layout == 0) {
+        const float * d4 = (const float *) y_ds_void;
+        y_d0 = d4[0];
+        y_d1 = d4[1];
+    } else if constexpr (ds_layout == 1) {
+        const half2 * ds4 = (const half2 *) y_ds_void;
+        y_d0 = __low2float(ds4[0]);
+        y_d1 = __low2float(ds4[1]);
+    } else {
+        const half * d2s6 = (const half *) y_ds_void;
+        y_d0 = __half2float(d2s6[0]);
+        y_d1 = __half2float(d2s6[1]);
+    }
+
+    float sum = 0.0f;
+
+#pragma unroll
+    for (int sub = 0; sub < 4; ++sub) {
+        const float s  = nvfp4_ue4m3_to_fp32(sc[sub]);
+        const float yd = (sub < 2) ? y_d0 : y_d1;
+        const int u_base = sub * 4;
+        const int2 w0 = get_int_from_table_16(v[sub*2 + 0], kvalues_nvfp4_i8x2);
+        const int2 w1 = get_int_from_table_16(v[sub*2 + 1], kvalues_nvfp4_i8x2);
+        int sumi = ggml_cuda_dp4a(w0.x, u[u_base + 0], 0);
+        sumi = ggml_cuda_dp4a(w0.y, u[u_base + 1], sumi);
+        sumi = ggml_cuda_dp4a(w1.x, u[u_base + 2], sumi);
+        sumi = ggml_cuda_dp4a(w1.y, u[u_base + 3], sumi);
+
+        sum += (0.5f * s * yd) * float(sumi);
+    }
+
+    return d6 * sum;
+}
+
+
 
 #define VDR_Q2_K_Q8_1_MMVQ 1
 #define VDR_Q2_K_Q8_1_MMQ  4

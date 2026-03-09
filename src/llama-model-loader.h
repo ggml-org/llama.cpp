@@ -14,6 +14,7 @@
 #include <map>
 #include <stdexcept>
 #include <unordered_map>
+#include <vector>
 
 using llama_buf_map = std::unordered_map<uint32_t, ggml_backend_buffer_t>;
 
@@ -27,6 +28,10 @@ enum llama_fver {
 };
 
 const char * llama_file_version_name(llama_fver version);
+
+// GGUF stores NVFP4 input_scale as the gguf_nvfp4 activation scale.
+// Runtime CUDA paths consume its reciprocal as nvfp4_activation_scale.
+float llama_nvfp4_activation_scale_from_gguf_input_scale(float gguf_nvfp4_input_scale);
 
 struct llama_model_loader {
     // Holds information on a model weight
@@ -77,6 +82,7 @@ struct llama_model_loader {
 
     bool use_mmap = false;
     bool use_direct_io = false;
+    bool has_nvfp4_tensor_scales = false;
     bool check_tensors;
     bool no_alloc;
 
@@ -85,6 +91,7 @@ struct llama_model_loader {
     llama_fver  fver;
 
     llama_mmaps mappings;
+    mutable std::unordered_map<const ggml_tensor *, std::vector<uint8_t>> owned_tensor_data;
 
     std::map<std::string, llama_tensor_weight, weight_name_comparer> weights_map;
     std::unordered_map<std::string, llama_model_kv_override> kv_overrides;

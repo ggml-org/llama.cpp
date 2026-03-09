@@ -1493,10 +1493,37 @@ static void ggml_cuda_op_mul_mat(
     const size_t q8_1_ts = sizeof(block_q8_1);
     const size_t q8_1_bs = QK8_1;
 
+
+    //  WIP BUG and still investigating  root cause, so still in progress:
+    //  In CPU op-offload mode, MMQ for NVFP4  uses Q8_1/src1.
+    //   NVFP4 activations still has issues with mixed BF16-activation / NVFP4
+    //  on some Qwen3.5 FFN-only NVFP4 layouts.
+    //   Activation-aware NVFP4 MMQ src1 quantization still gives mixed and inconsistent results
+    //   Varies depending on which the converted HF NVFP4 models tested so far (limited so far)
+    // Had good success so far with the llama-quantizer with imatrix.
+    const bool quantize_is_mmq_layout = quantize_src1 == quantize_mmq_q8_1_cuda;
+    const bool native_nvfp4_mmq = quantize_is_mmq_layout &&
+        src0->type == GGML_TYPE_NVFP4 &&
+        blackwell_mma_available(ggml_cuda_info().devices[ctx.device].cc);
+
+    quantize_cuda_t quantize_src1_selected = quantize_src1;
+    size_t quant_src1_ts = q8_1_ts;
+    size_t quant_src1_bs = q8_1_bs;
+    size_t quant_src1_block_size = sizeof(block_q8_1_mmq);
+    int64_t quant_src1_block_ne = 4 * QK8_1;
+
+    if (native_nvfp4_mmq) {
+        quant_src1_ts = sizeof(block_nvfp4_mmq);
+        quant_src1_bs = QK_K;
+        quant_src1_block_size = sizeof(block_nvfp4_mmq);
+        quant_src1_block_ne = QK_K;
+    }
+
     const bool src0_is_contiguous = ggml_is_contiguous(src0);
     const bool src1_is_contiguous = ggml_is_contiguous(src1);
 
     const int64_t src1_padded_col_size = GGML_PAD(ne10, MATRIX_ROW_PADDING);
+    const int64_t quant_src1_blocks_per_col = (src1_padded_col_size + quant_src1_block_ne - 1) / quant_src1_block_ne;
 
     const bool split = ggml_backend_buft_is_cuda_split(src0->buffer->buft);
     GGML_ASSERT(!(split && ne02 > 1));
@@ -1602,17 +1629,31 @@ static void ggml_cuda_op_mul_mat(
         }
 
         if (quantize_src1) {
+            /* previously was:
             size_t src_1_ddq_size = nrows1*src1_padded_col_size*q8_1_ts/q8_1_bs;
             if (quantize_src1 == quantize_mmq_q8_1_cuda) {
+            */
+            if (quantize_is_mmq_layout) {
+                size_t src_1_ddq_size = nrows1 * quant_src1_blocks_per_col * quant_src1_block_size;
                 src_1_ddq_size += get_mmq_x_max_host(dev[id].cc)*sizeof(block_q8_1_mmq);
+                dev[id].src1_ddq = dev[id].src1_ddq_alloc.alloc(ctx.pool(id), src_1_ddq_size);
+            } else {
+                size_t src_1_ddq_size = nrows1 * src1_padded_col_size * quant_src1_ts / quant_src1_bs;
+                dev[id].src1_ddq = dev[id].src1_ddq_alloc.alloc(ctx.pool(id), src_1_ddq_size);
             }
-            dev[id].src1_ddq = dev[id].src1_ddq_alloc.alloc(ctx.pool(id), src_1_ddq_size);
 
             if (src1_on_device && src1_is_contiguous) {
-                quantize_src1(
-                    dev[id].src1_ddf, nullptr, dev[id].src1_ddq, src0->type, ne10,
-                    nb11/sizeof(float), nb12/sizeof(float), nb13/sizeof(float),
-                    src1_padded_col_size, ne11, ne12, ne13, stream);
+                if (native_nvfp4_mmq) {
+                    quantize_mmq_nvfp4_cuda(
+                        dev[id].src1_ddf, nullptr, dev[id].src1_ddq, src0, ne10,
+                        nb11/sizeof(float), nb12/sizeof(float), nb13/sizeof(float),
+                        src1_padded_col_size, ne11, ne12, ne13, stream);
+                } else {
+                    quantize_src1_selected(
+                        dev[id].src1_ddf, nullptr, dev[id].src1_ddq, src0->type, ne10,
+                        nb11/sizeof(float), nb12/sizeof(float), nb13/sizeof(float),
+                        src1_padded_col_size, ne11, ne12, ne13, stream);
+                }
                 CUDA_CHECK(cudaGetLastError());
             }
         }
@@ -1658,11 +1699,21 @@ static void ggml_cuda_op_mul_mat(
                 const int64_t i03 = i0 / ne12;
                 const int64_t i02 = i0 % ne12;
 
+                /* previously was:
                 size_t src1_ddq_i_offset = i0*ne11 * src1_padded_col_size*q8_1_ts/q8_1_bs;
                 if (quantize_src1 == quantize_mmq_q8_1_cuda) {
                     src1_ddq_i_offset += src1_col_0 * sizeof(block_q8_1_mmq);
+                    */
+                size_t src1_ddq_i_offset;
+                if (quantize_is_mmq_layout) {
+                    src1_ddq_i_offset = i0 * ne11 * quant_src1_blocks_per_col * quant_src1_block_size;
+                    src1_ddq_i_offset += src1_col_0 * quant_src1_block_size;
+                    //previously was:
+                    //src1_ddq_i, id, src1_ddq_i_source, ctx.device, src1_ncols*src1_padded_col_size*q8_1_ts/q8_1_bs, stream));
+
                 } else {
-                    src1_ddq_i_offset += src1_col_0 * src1_padded_col_size*q8_1_ts/q8_1_bs;
+                    src1_ddq_i_offset = i0 * ne11 * src1_padded_col_size * quant_src1_ts / quant_src1_bs;
+                    src1_ddq_i_offset += src1_col_0 * src1_padded_col_size * quant_src1_ts / quant_src1_bs;
                 }
 
                 // for split tensors the data begins at i0 == i0_offset_low
@@ -1683,14 +1734,20 @@ static void ggml_cuda_op_mul_mat(
                     if (id != ctx.device) {
                         if (quantize_src1) {
                             char * src1_ddq_i_source = dev[ctx.device].src1_ddq + src1_ddq_i_offset;
+                            /* previously was:
                             if (quantize_src1 == quantize_mmq_q8_1_cuda) {
                                 const size_t pitch = ne11*sizeof(block_q8_1_mmq);
                                 const size_t width = src1_ncols*sizeof(block_q8_1_mmq);
                                 const size_t height = src1_padded_col_size/(4*QK8_1);
+                            */
+                            if (quantize_is_mmq_layout) {
+                                const size_t pitch = ne11 * quant_src1_block_size;
+                                const size_t width = src1_ncols * quant_src1_block_size;
+                                const size_t height = quant_src1_blocks_per_col;
                                 CUDA_CHECK(ggml_cuda_Memcpy2DPeerAsync(src1_ddq_i, id, pitch, src1_ddq_i_source, ctx.device, pitch, width, height, stream));
                             } else {
                                 CUDA_CHECK(cudaMemcpyPeerAsync(
-                                    src1_ddq_i, id, src1_ddq_i_source, ctx.device, src1_ncols*src1_padded_col_size*q8_1_ts/q8_1_bs, stream));
+                                    src1_ddq_i, id, src1_ddq_i_source, ctx.device, src1_ncols * src1_padded_col_size * quant_src1_ts / quant_src1_bs, stream));
                             }
                         } else {
                             float * src1_ddf_i_source = (float *) src1->data;
@@ -1707,9 +1764,15 @@ static void ggml_cuda_op_mul_mat(
                 }
 
                 if (quantize_src1 && !src1_is_contiguous) {
-                    quantize_src1(
-                        src1_ddf_i, nullptr, src1_ddq_i, src0->type, ne10, ne10, ne11*ne10, ne12*ne11*ne10,
-                        src1_padded_col_size, src1_ncols, 1, 1, stream);
+                    if (native_nvfp4_mmq) {
+                        quantize_mmq_nvfp4_cuda(
+                            src1_ddf_i, nullptr, src1_ddq_i, src0, ne10, ne10, ne11*ne10, ne12*ne11*ne10,
+                            src1_padded_col_size, src1_ncols, 1, 1, stream);
+                    } else {
+                        quantize_src1_selected( //previously was quantize_src1
+                            src1_ddf_i, nullptr, src1_ddq_i, src0->type, ne10, ne10, ne11*ne10, ne12*ne11*ne10,
+                            src1_padded_col_size, src1_ncols, 1, 1, stream);
+                    }
                     CUDA_CHECK(cudaGetLastError());
                 }
 
@@ -2152,7 +2215,8 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
                                    ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) &&
                                    src0->view_src;
 
-    bool use_mul_mat_vec_q = ggml_is_quantized(src0->type) && !bad_padding_clear && src1->type == GGML_TYPE_F32 &&
+    bool use_mul_mat_vec_q = ggml_is_quantized(src0->type) &&
+                             !bad_padding_clear && src1->type == GGML_TYPE_F32 &&
                              dst->type == GGML_TYPE_F32 && src1->ne[1] <= MMVQ_MAX_BATCH_SIZE;
 
     // fusion is not universally faster on Pascal
@@ -2807,7 +2871,6 @@ static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_src, ggml_
     ggml_backend_buffer_t buf_src = src->view_src ? src->view_src->buffer : src->buffer;
     ggml_backend_buffer_t buf_dst = dst->view_src ? dst->view_src->buffer : dst->buffer;
 
-    //enables async copies from CPU to CUDA, instead of only CUDA-to-CUDA
     bool copy_from_host = ggml_backend_buffer_is_host(buf_src) && ggml_backend_dev_type(backend_src->device) == GGML_BACKEND_DEVICE_TYPE_CPU;
 
     if (!(copy_from_host || ggml_backend_is_cuda(backend_src)) || !ggml_backend_is_cuda(backend_dst)) {
@@ -3416,7 +3479,6 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
     return false;
 }
 
-// returns whether the write (out) nodes overwrite the read nodes in operation
 static bool ggml_cuda_check_fusion_memory_ranges(ggml_cgraph * cgraph,
                                                  int           node_idx,
                                                  int           node_count,
@@ -3437,7 +3499,6 @@ static bool ggml_cuda_check_fusion_memory_ranges(ggml_cgraph * cgraph,
     };
 
     bool is_ok = true;
-    // for nrows=1, all fusion operations correctly read the src before writing dst or do it elementwise, so we should be ok
     if (ggml_nrows(cgraph->nodes[node_idx]) == 1) {
         return true;
     }
@@ -3446,10 +3507,6 @@ static bool ggml_cuda_check_fusion_memory_ranges(ggml_cgraph * cgraph,
         const ggml_tensor * dst = cgraph->nodes[out_nodes[i]];
 
         for (int j = node_idx; j < node_idx + node_count; ++j) {
-            // Loop over all srcs of all nodes in the fusion. If the src overlaps
-            // the destination and the src is not an intermediate node that's being
-            // elided, then disable fusion.
-
             for (int src_idx = 0; src_idx < GGML_MAX_SRC; ++src_idx) {
                 const ggml_tensor * src = cgraph->nodes[j]->src[src_idx];
 
@@ -4065,18 +4122,14 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
             const bool properties_changed = ggml_cuda_graph_update_required(cuda_ctx, cgraph);
 
             if (!graph->warmup_complete) {
-                // Warmup: need at least 2 calls with no property change on the 2nd call
                 if (!properties_changed) {
                     graph->warmup_complete = true;
                     GGML_LOG_DEBUG("%s: CUDA graph warmup complete\n", __func__);
                     use_cuda_graph = true;
                     cuda_graph_update_required = true;
                 }
-                // else: properties changed or first call - execute directly (use_cuda_graph stays false)
             } else {
-                // Post-warmup: normal CUDA graph operation
                 if (properties_changed) {
-                    // Properties changed - reset warmup, execute directly until stable again
                     graph->warmup_complete = false;
                     GGML_LOG_DEBUG("%s: CUDA graph warmup reset\n", __func__);
                 } else {
@@ -4733,6 +4786,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     case GGML_TYPE_Q5_1:
                     case GGML_TYPE_Q8_0:
                     case GGML_TYPE_MXFP4:
+                    case GGML_TYPE_NVFP4:
                     case GGML_TYPE_Q2_K:
                     case GGML_TYPE_Q3_K:
                     case GGML_TYPE_Q4_K:
@@ -4768,6 +4822,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     case GGML_TYPE_Q5_0:
                     case GGML_TYPE_Q5_1:
                     case GGML_TYPE_Q8_0:
+                    case GGML_TYPE_NVFP4:
                         return true;
                     default:
                         return false;
@@ -5247,5 +5302,4 @@ ggml_backend_t ggml_backend_cuda_init(int device) {
 
     return cuda_backend;
 }
-
 GGML_BACKEND_DL_IMPL(ggml_backend_cuda_reg)

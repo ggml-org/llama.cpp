@@ -1202,7 +1202,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
      llm_ffn_op_type   type_op,
                 bool   norm_w,
                float   w_scale,
-        llama_expert_gating_func_type gating_op,
+         llama_expert_gating_func_type gating_op,
                  int   il,
          ggml_tensor * probs_in,
          ggml_tensor * gate_up_exps,
@@ -1412,6 +1412,14 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             }
 
             if (has_gate) {
+                if (!ggml_is_contiguous_1(cur)) {
+                    cur = ggml_cont(ctx0, cur);
+                    cb(cur, "ffn_moe_gate_cont", il);
+                }
+                if (!ggml_is_contiguous_1(up)) {
+                    up = ggml_cont(ctx0, up);
+                    cb(up, "ffn_moe_up_cont", il);
+                }
                 cur = ggml_swiglu_split(ctx0, cur, up);
                 cb(cur, "ffn_moe_swiglu", il);
             } else {
@@ -1420,6 +1428,14 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             } break;
         case LLM_FFN_GELU:
             if (has_gate) {
+                if (!ggml_is_contiguous_1(cur)) {
+                    cur = ggml_cont(ctx0, cur);
+                    cb(cur, "ffn_moe_gate_cont", il);
+                }
+                if (!ggml_is_contiguous_1(up)) {
+                    up = ggml_cont(ctx0, up);
+                    cb(up, "ffn_moe_up_cont", il);
+                }
                 cur = ggml_geglu_split(ctx0, cur, up);
                 cb(cur, "ffn_moe_geglu", il);
             } else {

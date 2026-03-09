@@ -1,5 +1,6 @@
 #include "convert.cuh"
 #include "dequantize.cuh"
+#include "ggml-nvfp4-helpers.h"
 
 #include <cstdint>
 
@@ -486,6 +487,32 @@ static __global__ void dequantize_block_mxfp4(const void * __restrict__ vx, dst_
     }
 }
 
+template <typename dst_t>
+static __global__ void dequantize_block_nvfp4(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+    const block_nvfp4 * x = (const block_nvfp4 *) vx;
+
+    const int64_t i    = (int64_t) blockIdx.x;
+    const int64_t pack = i >> 2;
+    const int     lane = (int) (i & 3);
+
+    const int tid = (int) threadIdx.x; // 0..127, dequantize two logical values per thread
+
+    const uint8_t * qs = x[pack].qs[lane];
+    const uint8_t * sc = x[pack].scales[lane];
+
+    const int i0 = 2 * tid + 0;
+    const int i1 = 2 * tid + 1;
+    const uint8_t q0 = ggml_nvfp4_get_q4(qs, i0);
+    const uint8_t q1 = ggml_nvfp4_get_q4(qs, i1);
+    const int sub_block = i0 / QK_NVFP4;
+    const float scale = ggml_fp8_ue4m3_to_fp32(sc[sub_block]);
+    const float b32 = 0.0f;
+
+    dst_t * y = yy + i * QK_K + 2 * tid;
+    y[0] = (dst_t) fmaf(scale, ggml_fp4_to_fp32(q0), b32);
+    y[1] = (dst_t) fmaf(scale, ggml_fp4_to_fp32(q1), b32);
+}
+
 template <int qk, int qr, dequantize_kernel_t dequantize_kernel, typename dst_t>
 static void dequantize_block_cuda(const void * vx, dst_t * y,
         const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
@@ -617,6 +644,12 @@ static void dequantize_row_mxfp4_cuda(const void * vx, dst_t * y, const int64_t 
     dequantize_block_mxfp4<<<nb, 32, 0, stream>>>(vx, y);
 }
 
+template<typename dst_t>
+static void dequantize_row_nvfp4_cuda(const void * vx, dst_t * y, const int64_t k, cudaStream_t stream) {
+    const int nb = k / QK_K;
+    dequantize_block_nvfp4<<<nb, 128, 0, stream>>>(vx, y);
+}
+
 template <typename src_t, typename dst_t>
 static __global__ void convert_unary(
         const void * __restrict__ vx, dst_t * __restrict__ y, const int64_t ne00, const int64_t ne01,
@@ -715,6 +748,8 @@ to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
             return dequantize_row_iq3_s_cuda;
         case GGML_TYPE_MXFP4:
             return dequantize_row_mxfp4_cuda;
+        case GGML_TYPE_NVFP4:
+            return dequantize_row_nvfp4_cuda;
         case GGML_TYPE_F32:
             return convert_unary_cont_cuda<float>;
         case GGML_TYPE_BF16:
@@ -766,6 +801,8 @@ to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type) {
             return dequantize_row_iq3_s_cuda;
         case GGML_TYPE_MXFP4:
             return dequantize_row_mxfp4_cuda;
+        case GGML_TYPE_NVFP4:
+            return dequantize_row_nvfp4_cuda;
         case GGML_TYPE_F16:
             return convert_unary_cont_cuda<half>;
         case GGML_TYPE_BF16:

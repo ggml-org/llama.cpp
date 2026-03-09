@@ -403,11 +403,17 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
         }
 
         int64_t ne = shape[0];
+        int64_t nr = 1;
         for (uint32_t i = 1; i < n_dims; ++i) {
             ne *= shape[i];
+            nr *= shape[i];
         }
 
-        offset += GGML_PAD(ggml_row_size(type, ne), (uint64_t) alignment);
+        if (type == GGML_TYPE_NVFP4) {
+            offset += GGML_PAD(ggml_row_size(type, shape[0]) * nr, (uint64_t) alignment);
+        } else {
+            offset += GGML_PAD(ggml_row_size(type, ne), (uint64_t) alignment);
+        }
     }
 
     while (ftell(file) % alignment != 0) {
@@ -634,10 +640,16 @@ static bool handcrafted_check_tensors(const gguf_context * gguf_ctx, const unsig
         }
 
         int64_t ne = shape[0];
+        int64_t nr = 1;
         for (size_t j = 1; j < GGML_MAX_DIMS; ++j) {
             ne *= shape[j];
+            nr *= shape[j];
         }
-        expected_offset += GGML_PAD(ggml_row_size(type, ne), alignment);
+        if (type == GGML_TYPE_NVFP4) {
+            expected_offset += GGML_PAD(ggml_row_size(type, shape[0]) * nr, alignment);
+        } else {
+            expected_offset += GGML_PAD(ggml_row_size(type, ne), alignment);
+        }
     }
 
     return ok;
@@ -659,10 +671,17 @@ static bool handcrafted_check_tensor_data(const gguf_context * gguf_ctx, const u
         const std::array<int64_t, GGML_MAX_DIMS> shape = tensor_configs[i].second;
 
         int64_t ne = shape[0];
+        int64_t nr = 1;
         for (size_t j = 1; j < GGML_MAX_DIMS; ++j) {
             ne *= shape[j];
+            nr *= shape[j];
         }
-        const size_t size = ggml_row_size(type, ne);
+        size_t size;
+        if (type == GGML_TYPE_NVFP4) {
+            size = ggml_row_size(type, shape[0]) * nr;
+        } else {
+            size = ggml_row_size(type, ne);
+        }
 
         const std::string name = "my_tensor_" + std::to_string(i);
         const size_t offset = gguf_get_tensor_offset(gguf_ctx, gguf_find_tensor(gguf_ctx, name.c_str()));

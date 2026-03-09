@@ -1,11 +1,19 @@
 #include "mmvq.cuh"
+#include "mmq.cuh"
+#include "mmvq-nvfp4-mma.cuh"
 #include "quantize.cuh"
 #include "unary.cuh"
 #include "vecdotq.cuh"
+#include "../ggml-nvfp4-helpers.h"
 
 #include <cstdint>
 
 typedef float (*vec_dot_q_cuda_t)(const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs);
+
+static __device__ __forceinline__ float vec_dot_nvfp4_nvfp4_mmvq_mma_wrapper(
+        const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+    return vec_dot_nvfp4_nvfp4_mmvq_mma(vbq, (const void *) bq8_1, kbx, iqs);
+}
 
 static constexpr __device__ vec_dot_q_cuda_t get_vec_dot_q_cuda(ggml_type type) {
     switch (type) {
@@ -15,6 +23,7 @@ static constexpr __device__ vec_dot_q_cuda_t get_vec_dot_q_cuda(ggml_type type) 
         case GGML_TYPE_Q5_1:    return vec_dot_q5_1_q8_1;
         case GGML_TYPE_Q8_0:    return vec_dot_q8_0_q8_1;
         case GGML_TYPE_MXFP4:   return vec_dot_mxfp4_q8_1;
+        case GGML_TYPE_NVFP4:   return vec_dot_nvfp4_nvfp4_mmvq_mma_wrapper;
         case GGML_TYPE_Q2_K:    return vec_dot_q2_K_q8_1;
         case GGML_TYPE_Q3_K:    return vec_dot_q3_K_q8_1;
         case GGML_TYPE_Q4_K:    return vec_dot_q4_K_q8_1;
@@ -41,6 +50,7 @@ static constexpr __device__ int get_vdr_mmvq(ggml_type type) {
         case GGML_TYPE_Q5_1:    return VDR_Q5_1_Q8_1_MMVQ;
         case GGML_TYPE_Q8_0:    return VDR_Q8_0_Q8_1_MMVQ;
         case GGML_TYPE_MXFP4:   return VDR_MXFP4_Q8_1_MMVQ;
+        case GGML_TYPE_NVFP4:   return VDR_NVFP4_NVFP4_MMVQ;
         case GGML_TYPE_Q2_K:    return VDR_Q2_K_Q8_1_MMVQ;
         case GGML_TYPE_Q3_K:    return VDR_Q3_K_Q8_1_MMVQ;
         case GGML_TYPE_Q4_K:    return VDR_Q4_K_Q8_1_MMVQ;
@@ -236,8 +246,15 @@ static __global__ void mul_mat_vec_q(
     float tmp_gate[ncols_dst][rows_per_cuda_block] = {{0.0f}};
 
     const block_q8_1 * y = ((const block_q8_1 *) vy) + sample_y*stride_sample_y + channel_y*stride_channel_y;
+    const block_nvfp4_mmq * y_nv = nullptr;
+    if constexpr (type == GGML_TYPE_NVFP4) {
+        y_nv = ((const block_nvfp4_mmq *) vy) + sample_y*stride_sample_y + channel_y*stride_channel_y;
+    }
     if constexpr (is_multi_token_id) {
         y += token_idx*stride_col_y;
+        if constexpr (type == GGML_TYPE_NVFP4) {
+            y_nv += token_idx*stride_col_y;
+        }
     }
     const int kbx_offset = sample_x*stride_sample_x + channel_x*stride_channel_x + row0*stride_row_x;
 
@@ -251,12 +268,22 @@ static __global__ void mul_mat_vec_q(
         for (int j = 0; j < ncols_dst; ++j) {
 #pragma unroll
             for (int i = 0; i < rows_per_cuda_block; ++i) {
+                const block_q8_1 * y_ptr;
+                if constexpr (type == GGML_TYPE_NVFP4) {
+                    y_ptr = reinterpret_cast<const block_q8_1 *>(&y_nv[kbx*ncols_dst + j]);
+                } else {
+                    y_ptr = &y[j*stride_col_y + kby];
+                }
+
                 tmp[j][i] += vec_dot_q_cuda(
-                    vx, &y[j*stride_col_y + kby], kbx_offset + i*stride_row_x + kbx, kqs);
+                    vx, y_ptr,
+                    kbx_offset + i*stride_row_x + kbx, kqs);
+
+
                 if constexpr (has_fusion) {
                     if (use_gate) {
                         tmp_gate[j][i] += vec_dot_q_cuda(
-                            vgate, &y[j*stride_col_y + kby], kbx_offset + i*stride_row_x + kbx, kqs);
+                            vgate, y_ptr, kbx_offset + i*stride_row_x + kbx, kqs);
                     }
                 }
             }
@@ -320,12 +347,18 @@ static __global__ void mul_mat_vec_q(
 
         if (threadIdx.x < rows_per_cuda_block && (rows_per_cuda_block == 1 || uint32_t(row0 + threadIdx.x) < stride_col_dst)) {
             float result = tmp[j][threadIdx.x];
+            if constexpr (type == GGML_TYPE_NVFP4) {
+                result *= fusion.nvfp4_tensor_scale;
+            }
             if constexpr (has_fusion) {
                 if (use_bias) {
                     result += x_biases[j];
                 }
                 if (use_gate) {
                     float gate_value = tmp_gate[j][threadIdx.x];
+                    if constexpr (type == GGML_TYPE_NVFP4) {
+                        gate_value *= fusion.nvfp4_gate_tensor_scale;
+                    }
                     if (use_gate_bias) {
                         gate_value += gate_biases[j];
                     }
@@ -545,6 +578,12 @@ static void mul_mat_vec_q_switch_type(
                  nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
                  nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, stream);
             break;
+        case GGML_TYPE_NVFP4:
+            mul_mat_vec_q_switch_ncols_dst<GGML_TYPE_NVFP4>
+                (vx, vy, ids, fusion, dst, ncols_x, nrows_x, ncols_dst, stride_row_x, stride_col_y, stride_col_dst,
+                 nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, stream);
+            break;
         case GGML_TYPE_Q2_K:
             mul_mat_vec_q_switch_ncols_dst<GGML_TYPE_Q2_K>
                 (vx, vy, ids, fusion, dst, ncols_x, nrows_x, ncols_dst, stride_row_x, stride_col_y, stride_col_dst,
@@ -662,6 +701,7 @@ void ggml_cuda_mul_mat_vec_q(
     float         *  dst_d =       (float         *)  dst->data;
 
     ggml_cuda_mm_fusion_args_device fusion_local{};
+    fusion_local.nvfp4_tensor_scale = ggml_nvfp4_get_tensor_scale(src0);
 
     if (fusion) {
         GGML_ASSERT( !ids || dst->ne[2] == 1);
@@ -676,6 +716,9 @@ void ggml_cuda_mul_mat_vec_q(
         if (fusion->gate) {
             GGML_ASSERT(fusion->gate->type == src0->type && ggml_are_same_stride(fusion->gate, src0));
             fusion_local.gate = fusion->gate->data;
+            if (fusion->gate->type == GGML_TYPE_NVFP4) {
+                fusion_local.nvfp4_gate_tensor_scale = ggml_nvfp4_get_tensor_scale(fusion->gate);
+            }
         }
         if (fusion->gate_bias) {
             GGML_ASSERT(fusion->gate_bias->type == GGML_TYPE_F32);
@@ -685,7 +728,6 @@ void ggml_cuda_mul_mat_vec_q(
         }
         fusion_local.glu_op = fusion->glu_op;
     }
-
     // If src0 is a temporary compute buffer, clear any potential padding.
     if (ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE) {
         const size_t size_data  = ggml_nbytes(src0);
@@ -697,42 +739,86 @@ void ggml_cuda_mul_mat_vec_q(
         }
     }
 
+    const bool is_nvfp4 = src0->type == GGML_TYPE_NVFP4;
+
     const int64_t ne10_padded = GGML_PAD(ne10, MATRIX_ROW_PADDING);
-    ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool(), ne13*ne12 * ne11*ne10_padded * sizeof(block_q8_1)/QK8_1);
-    {
-        const int64_t s11 = src1->nb[1] / ts_src1;
-        const int64_t s12 = src1->nb[2] / ts_src1;
-        const int64_t s13 = src1->nb[3] / ts_src1;
-        quantize_row_q8_1_cuda(src1_d, nullptr, src1_q8_1.get(), src0->type, ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
-    }
 
     const int64_t s01 = src0->nb[1] / ts_src0;
-    const int64_t s11 = ne10_padded / QK8_1;
     const int64_t s1  =  dst->nb[1] / ts_dst;
     const int64_t s02 = src0->nb[2] / ts_src0;
     const int64_t s2  =  dst->nb[2] / ts_dst;
     const int64_t s03 = src0->nb[3] / ts_src0;
     const int64_t s3  =  dst->nb[3] / ts_dst;
 
-    const int64_t s12 = ne11*s11;
-    const int64_t s13 = ne12*s12;
-
     // For MUL_MAT_ID the memory layout is different than for MUL_MAT:
     const int64_t ncols_dst          = ids ? ne2  : ne1;
     const int64_t nchannels_y        = ids ? ne11 : ne12;
     const int64_t nchannels_dst      = ids ? ne1  : ne2;
     const int64_t stride_col_dst     = ids ? s2   : s1;
-    const int64_t stride_col_y       = ids ? s12  : s11;
     const int64_t stride_channel_dst = ids ? s1   : s2;
-    const int64_t stride_channel_y   = ids ? s11  : s12;
+    const int64_t ids_stride         = ids ? ids->nb[1] / ggml_type_size(ids->type) : 0;
 
-    const int64_t ids_stride = ids ? ids->nb[1] / ggml_type_size(ids->type) : 0;
+    if (is_nvfp4) {
+        GGML_ASSERT(ne10 % QK_K == 0);
+        const int64_t blocks_per_col = ne10 / QK_K;
+        const size_t nbytes_src1_q_nvfp4 = ne13*ne12 * ne11*blocks_per_col * sizeof(block_nvfp4_mmq);
+        ggml_cuda_pool_alloc<char> src1_q_nvfp4(ctx.pool(), nbytes_src1_q_nvfp4);
+        {
+            const int64_t s11 = src1->nb[1] / ts_src1;
+            const int64_t s12 = src1->nb[2] / ts_src1;
+            const int64_t s13 = src1->nb[3] / ts_src1;
+            quantize_mmq_nvfp4_cuda(src1_d, nullptr, src1_q_nvfp4.get(), src0, ne10, s11, s12, s13,
+                    ne10, ne11, ne12, ne13, stream);
+        }
 
-    mul_mat_vec_q_switch_type(
-        src0->data, src0->type, src1_q8_1.get(), ids_d, fusion_local, dst_d, ne00,
-        ne01,              ncols_dst,     s01, stride_col_y,     stride_col_dst,
-        ne02, nchannels_y, nchannels_dst, s02, stride_channel_y, stride_channel_dst,
-        ne03,              ne3,           s03, s13,              s3,               ids_stride, stream);
+        const int64_t s11 = blocks_per_col;
+        const int64_t s12 = ne11*s11;
+        const int64_t s13 = ne12*s12;
+
+        const int64_t stride_col_y       = ids ? s12  : s11;
+        const int64_t stride_channel_y   = ids ? s11  : s12;
+
+        if (!ids && fusion == nullptr &&
+                ggml_cuda_mul_mat_vec_nvfp4_mma(
+                    src0->data, src1_q_nvfp4.get(), dst_d, fusion_local.nvfp4_tensor_scale,
+                    ne00, ne01, ncols_dst,
+                    s01, stride_col_y, stride_col_dst,
+                    ne02, nchannels_y, nchannels_dst,
+                    s02, stride_channel_y, stride_channel_dst,
+                    ne03, ne3, s03, s13, s3,
+                    stream)) {
+            return;
+        }
+
+        mul_mat_vec_q_switch_type(
+            src0->data, src0->type, src1_q_nvfp4.get(), ids_d, fusion_local, dst_d, ne00,
+            ne01,              ncols_dst,     s01, stride_col_y,     stride_col_dst,
+            ne02, nchannels_y, nchannels_dst, s02, stride_channel_y, stride_channel_dst,
+            ne03,              ne3,           s03, s13,              s3,               ids_stride, stream);
+    } else {
+        const size_t nbytes_src1_q8_1 = ne13*ne12 * ne11*ne10_padded * sizeof(block_q8_1)/QK8_1;
+        ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool(), nbytes_src1_q8_1);
+        CUDA_CHECK(cudaMemsetAsync(src1_q8_1.get(), 0, nbytes_src1_q8_1, stream));
+        {
+            const int64_t s11 = src1->nb[1] / ts_src1;
+            const int64_t s12 = src1->nb[2] / ts_src1;
+            const int64_t s13 = src1->nb[3] / ts_src1;
+            quantize_row_q8_1_cuda(src1_d, nullptr, src1_q8_1.get(), src0->type, ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
+        }
+
+        const int64_t s11 = ne10_padded / QK8_1;
+        const int64_t s12 = ne11*s11;
+        const int64_t s13 = ne12*s12;
+
+        const int64_t stride_col_y       = ids ? s12  : s11;
+        const int64_t stride_channel_y   = ids ? s11  : s12;
+
+        mul_mat_vec_q_switch_type(
+            src0->data, src0->type, src1_q8_1.get(), ids_d, fusion_local, dst_d, ne00,
+            ne01,              ncols_dst,     s01, stride_col_y,     stride_col_dst,
+            ne02, nchannels_y, nchannels_dst, s02, stride_channel_y, stride_channel_dst,
+            ne03,              ne3,           s03, s13,              s3,               ids_stride, stream);
+    }
 }
 
 void ggml_cuda_op_mul_mat_vec_q(
@@ -759,6 +845,8 @@ void ggml_cuda_op_mul_mat_vec_q(
     const int stride_col_y = src1_padded_row_size / QK8_1;
 
     ggml_cuda_mm_fusion_args_device fusion_local{};
+    fusion_local.nvfp4_tensor_scale = ggml_nvfp4_get_tensor_scale(src0);
+
     mul_mat_vec_q_switch_type(
         src0_dd_i, src0->type, src1_ddq_i, nullptr, fusion_local, dst_dd_i, ne00, row_diff, src1_ncols, stride_row_x, stride_col_y, nrows_dst,
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, stream);

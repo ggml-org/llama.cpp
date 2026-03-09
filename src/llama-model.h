@@ -288,6 +288,10 @@ struct llama_layer {
     struct ggml_tensor * ffn_down_exps     = nullptr;
     struct ggml_tensor * ffn_up_exps       = nullptr;
     struct ggml_tensor * ffn_gate_up_exps  = nullptr;
+    struct ggml_tensor * ffn_gate_exps_scale    = nullptr;
+    struct ggml_tensor * ffn_down_exps_scale    = nullptr;
+    struct ggml_tensor * ffn_up_exps_scale      = nullptr;
+    struct ggml_tensor * ffn_gate_up_exps_scale = nullptr;
     struct ggml_tensor * ffn_gate_inp_b    = nullptr;
     struct ggml_tensor * ffn_gate_exps_b   = nullptr;
     struct ggml_tensor * ffn_down_exps_b   = nullptr;
@@ -391,6 +395,11 @@ struct llama_layer {
     struct ggml_tensor * wk_scale       = nullptr;
     struct ggml_tensor * wv_scale       = nullptr;
     struct ggml_tensor * wo_scale       = nullptr;
+    struct ggml_tensor * wqkv_scale      = nullptr;
+    struct ggml_tensor * wqkv_gate_scale = nullptr;
+    struct ggml_tensor * ssm_alpha_scale = nullptr;
+    struct ggml_tensor * ssm_beta_scale  = nullptr;
+    struct ggml_tensor * ssm_out_scale   = nullptr;
     struct ggml_tensor * ffn_gate_scale = nullptr;
     struct ggml_tensor * ffn_up_scale   = nullptr;
     struct ggml_tensor * ffn_down_scale = nullptr;

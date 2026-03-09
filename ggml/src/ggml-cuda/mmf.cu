@@ -160,10 +160,18 @@ bool ggml_cuda_should_use_mmf(enum ggml_type type, int cc, int warp_size, const 
     }
 
     if (mul_mat_id) {
-        if (src0_ne[1] <= 1024 && src1_ncols > 512) {
-            return false;
-        } else if(src0_ne[1] > 1024 && src1_ncols > 128) {
-            return false;
+        // On Blackwell, large-batch MoE mat_id with F16/BF16 is still faster than
+        // falling back to the generic sorted path (which has host sync overhead).
+        const bool allow_large_mul_mat_id =
+            GGML_CUDA_CC_IS_NVIDIA(cc) &&
+            blackwell_mma_available(cc) &&
+            (type == GGML_TYPE_F16 || type == GGML_TYPE_BF16);
+        if (!allow_large_mul_mat_id) {
+            if (src0_ne[1] <= 1024 && src1_ncols > 512) {
+                return false;
+            } else if (src0_ne[1] > 1024 && src1_ncols > 128) {
+                return false;
+            }
         }
     } else {
         if (GGML_CUDA_CC_IS_RDNA3_0(cc) && src1_ncols > 8) {

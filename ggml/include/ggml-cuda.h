@@ -42,6 +42,39 @@ GGML_BACKEND_API void ggml_backend_cuda_unregister_host_buffer(void * buffer);
 
 GGML_BACKEND_API ggml_backend_reg_t ggml_backend_cuda_reg(void);
 
+#define NVFP4_A0 0.9918823242f
+#define NVFP4_B0 0.9864501953f
+#define NVFP4_STEP (1.0f / 32768.0f)
+
+enum nvfp4_cuda_choose46_mode {
+    NVFP4_CUDA_CHOOSE46_ADAPTIVE = 0,
+    NVFP4_CUDA_CHOOSE46_FORCE_M6 = 1,
+    NVFP4_CUDA_CHOOSE46_FORCE_M4 = 2,
+};
+
+typedef struct nvfp4_cuda_runtime_cfg {
+    int32_t choose46_mode;
+    int32_t refit_iters;
+    int32_t use_compand_sat;
+    int32_t reserved_i32;
+    float cap_m6;
+    float cap_m4;
+} nvfp4_cuda_runtime_cfg;
+
+GGML_BACKEND_API bool nvfp4_autotune(const float * x, const float * qw, int64_t n, float * best_a, float * best_b);
+GGML_BACKEND_API bool nvfp4_autotune_cuda(const float * x, const float * qw, int64_t n, float * best_a, float * best_b, void * stream);
+
+GGML_BACKEND_API void nvfp4_set_ab(float a, float b);
+GGML_BACKEND_API void nvfp4_clear_ab(void);
+
+GGML_BACKEND_API bool nvfp4_quantize_cuda(const void * x, bool x_bf16, void * vy, int64_t nrow, int64_t n_per_row, const float * qw, float x_scale, void * stream);
+GGML_BACKEND_API bool nvfp4_quantize_cuda_ab(const void * x, bool x_bf16, void * vy, int64_t nrow, int64_t n_per_row, const float * qw, float x_scale, float a, float b, void * stream);
+GGML_BACKEND_API bool nvfp4_quantize_cuda_cfg(
+    const void * x, bool x_bf16, void * vy,
+    int64_t nrow, int64_t n_per_row,
+    const float * qw, float x_scale,
+    const nvfp4_cuda_runtime_cfg * cfg, void * stream);
+
 #ifdef  __cplusplus
 }
 #endif

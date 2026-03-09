@@ -1,4 +1,5 @@
 #include "common.cuh"
+#include "ggml-nvfp4-helpers.h"
 
 static __device__ __forceinline__ void dequantize_q4_0(const void * vx, const int64_t ib, const int iqs, float2 & v){
     const block_q4_0 * x = (const block_q4_0 *) vx;
@@ -74,4 +75,22 @@ static __device__ __forceinline__ void dequantize_q8_0(const void * vx, const in
 
     v.x *= d;
     v.y *= d;
+}
+
+static __device__ __forceinline__ void dequantize_nvfp4(const void * vx, const int64_t ib, const int iqs, float2 & v) {
+    const block_nvfp4 * x = (const block_nvfp4 *) vx;
+
+    const int64_t pack = ib >> 2;
+    const int lane = (int) (ib & 3);
+
+    const int i0 = 2 * iqs + 0;
+    const int i1 = 2 * iqs + 1;
+    const uint8_t q0 = ggml_nvfp4_get_q4(x[pack].qs[lane], i0);
+    const uint8_t q1 = ggml_nvfp4_get_q4(x[pack].qs[lane], i1);
+    const int sub_block = i0 / QK_NVFP4;
+    const float scale = ggml_fp8_ue4m3_to_fp32(x[pack].scales[lane][sub_block]);
+
+
+    v.x = fmaf(scale, ggml_fp4_to_fp32(q0), 0.0f);
+    v.y = fmaf(scale, ggml_fp4_to_fp32(q1), 0.0f);
 }
