@@ -1352,6 +1352,17 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
 
 namespace workaround {
 
+static void map_developer_role_to_system(json & messages) {
+    for (auto & message : messages) {
+        if (message.contains("role")) {
+            if (message["role"] == "developer") {
+                message["role"] = "system";
+            }
+        }
+    }
+}
+
+
 // if first message is system and template does not support it, merge it with next message
 static void system_message_not_supported(json & messages) {
     if (!messages.empty() && messages.front().at("role") == "system") {
@@ -1429,6 +1440,10 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
     params.add_bos = tmpls->add_bos;
     params.add_eos = tmpls->add_eos;
 
+    if (src.find("<|channel|>") == std::string::npos) {
+        // map developer to system for all models except for GPT-OSS
+        workaround::map_developer_role_to_system(params.messages);
+    }
     workaround::func_args_not_string(params.messages);
 
     if (!tmpl.original_caps().supports_system_role) {
