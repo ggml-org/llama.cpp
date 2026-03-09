@@ -102,6 +102,7 @@ class ServerProcess:
     mmproj_url: str | None = None
     media_path: str | None = None
     sleep_idle_seconds: int | None = None
+    webui_mcp_proxy: bool = False
 
     # session variables
     process: subprocess.Popen | None = None
@@ -236,6 +237,8 @@ class ServerProcess:
             server_args.extend(["--media-path", self.media_path])
         if self.sleep_idle_seconds is not None:
             server_args.extend(["--sleep-idle-seconds", self.sleep_idle_seconds])
+        if self.webui_mcp_proxy:
+            server_args.append("--webui-mcp-proxy")
 
         args = [str(arg) for arg in [server_path, *server_args]]
         print(f"tests: starting server with: {' '.join(args)}")

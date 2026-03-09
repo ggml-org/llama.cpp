@@ -562,7 +562,7 @@ private:
 
     llama_model_ptr model_dft;
 
-    bool add_bos_token  = true;
+    bool add_bos_token = true;
 
     int32_t n_ctx; // total context for all clients / slots
 
@@ -570,6 +570,7 @@ private:
     std::vector<server_slot> slots;
 
     int slots_debug = 0;
+    int n_empty_consecutive = 0;
 
     std::unique_ptr<server_prompt_cache> prompt_cache;
 
@@ -725,6 +726,13 @@ private:
             if (params_base.n_cache_reuse) {
                 params_base.n_cache_reuse = 0;
                 SRV_WRN("%s\n", "cache_reuse is not supported by this context, it will be disabled");
+            }
+        }
+
+        if (llama_model_n_swa(model) == 0) {
+            if (params_base.swa_full) {
+                params_base.swa_full = false;
+                SRV_WRN("%s\n", "swa_full is not supported by this model, it will be disabled");
             }
         }
 
@@ -2133,6 +2141,9 @@ private:
                 if (slot.state == SLOT_STATE_PROCESSING_PROMPT || slot.state == SLOT_STATE_STARTED) {
                     const auto & input_tokens = slot.task->tokens;
 
+                    // used to determine the number of tokens added to the batch for the current slot
+                    const auto n_tokens_prev = batch.n_tokens;
+
                     // TODO: maybe move branch to outside of this loop in the future
                     if (slot.state == SLOT_STATE_STARTED) {
                         slot.t_start_process_prompt = ggml_time_us();
@@ -2371,7 +2382,7 @@ private:
                                         } else {
                                             pos_next = std::min(pos_next, std::max(it->pos_min + 1, it->pos_max));
                                             n_past = std::min(slot.prompt.tokens.size_up_to_pos(pos_next), (size_t) it->n_tokens);
-                                            SLT_WRN(slot, "restored context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n", it->pos_min, it->pos_max, it->n_tokens, (float) checkpoint_size / 1024 / 1024);
+                                            SLT_WRN(slot, "restored context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", it->pos_min, it->pos_max, it->n_tokens, n_past, (float) checkpoint_size / 1024 / 1024);
                                         }
                                     }
 
@@ -2525,6 +2536,9 @@ private:
                         }
                     }
 
+                    // the number of tokens added to the batch for the current slot
+                    const auto n_tokens_cur = batch.n_tokens - n_tokens_prev;
+
                     // entire prompt has been processed
                     if (slot.prompt.n_tokens() == slot.task->n_tokens()) {
                         slot.state = SLOT_STATE_DONE_PROMPT;
@@ -2585,7 +2599,7 @@ private:
                         auto & cur = slot.prompt.checkpoints.emplace_back(server_prompt_checkpoint{
                             /*.pos_min  = */ pos_min,
                             /*.pos_max  = */ pos_max,
-                            /*.n_tokens = */ slot.prompt.n_tokens() - batch.n_tokens,
+                            /*.n_tokens = */ slot.prompt.n_tokens() - n_tokens_cur,
                             /*.data     = */ std::vector<uint8_t>(checkpoint_size),
                         });
 
@@ -2628,6 +2642,12 @@ private:
 
         if (batch.n_tokens == 0) {
             SRV_WRN("%s", "no tokens to decode\n");
+
+            if (++n_empty_consecutive > 3) {
+                GGML_ABORT("fatal error - please provide logs and repro in %s\n", "https://github.com/ggml-org/llama.cpp/pull/20277");
+            }
+        } else {
+            n_empty_consecutive = 0;
         }
 
         int32_t i_next = 0;
