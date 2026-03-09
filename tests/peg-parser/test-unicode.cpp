@@ -327,7 +327,7 @@ void test_unicode(testing &t) {
 
                 t.test(test_name, [&](testing &t) {
                     auto parser = build_peg_parser([](common_peg_parser_builder& p) {
-                        return p.sequence({p.json_string_content(), p.literal("\"")});
+                        return p.sequence({p.string_content('"'), p.literal("\"")});
                     });
 
                     common_peg_parse_context ctx(tc.input);
@@ -364,7 +364,7 @@ void test_unicode(testing &t) {
 
                 t.test(test_name, [&](testing &t) {
                     auto parser = build_peg_parser([](common_peg_parser_builder& p) {
-                        return p.json_string_content();
+                        return p.string_content('"');
                     });
 
                     common_peg_parse_context ctx(tc.input, COMMON_PEG_PARSE_FLAG_LENIENT);
@@ -398,7 +398,7 @@ void test_unicode(testing &t) {
 
                 t.test(test_name, [&](testing &t) {
                     auto parser = build_peg_parser([](common_peg_parser_builder& p) {
-                        return p.json_string_content();
+                        return p.string_content('"');
                     });
 
                     common_peg_parse_context ctx(tc.input);
@@ -427,7 +427,7 @@ void test_unicode(testing &t) {
 
                 t.test(test_name, [&](testing &t) {
                     auto parser = build_peg_parser([](common_peg_parser_builder& p) {
-                        return p.sequence({p.json_string_content(), p.literal("\"")});
+                        return p.sequence({p.string_content('"'), p.literal("\"")});
                     });
 
                     common_peg_parse_context ctx(tc.input);

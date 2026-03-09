@@ -90,7 +90,7 @@ common_peg_arena autoparser::build_parser(const templates_params & inputs) const
         // pre-register a json-string rule that accepts both quote styles. This must happen
         // before any call to p.json() so that all JSON parsing inherits the flexible rule.
         if (tools.format.uses_python_dicts) {
-            p.rule("json-string", [&]() { return p.choice({ p.double_quoted_string(), p.single_quoted_string() }); });
+            p.rule("json-string", p.quoted_string());
         }
 
         parser_build_context ctx(p, inputs);
