@@ -26197,9 +26197,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
         const auto * cpu_traits_fast = ggml_get_type_traits_cpu(src0->type);
         const bool   cpu_type_ok_fast = cpu_traits_fast && cpu_traits_fast->vec_dot;
 
-        const bool multi_gpu_fast = g_moe_multi_gpu_active.load(std::memory_order_acquire);
-        if ((cpu_tg_val_fast == 1 || cpu_tg_val_fast == -2) && host_weights_fast && cpu_type_ok_fast &&
-            !multi_gpu_fast) {
+        if ((cpu_tg_val_fast == 1 || cpu_tg_val_fast == -2) && host_weights_fast && cpu_type_ok_fast) {
             static std::atomic<int> cpu_tg_log{0};
             if (cpu_tg_log.fetch_add(1, std::memory_order_relaxed) < 3) {
                 GGML_LOG_INFO("[CPU-TG] Routing %s (type=%d, ne12=1) to CPU-primary path\n",
@@ -26207,11 +26205,18 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             }
 
             // Selective flush: only flush if current op consumes the pending
-            // scatter's output tensor.  Enables CPU expert deferral overlap.
+            // scatter's output tensor.  Enables deferral overlap (e.g. up→gate).
             flush_pending_cpu_scatter_if_consumed(dst);
-            flush_pending_secondary_scatter();
+            flush_pending_secondary_scatter_if_consumed(dst);
 
-            // --- Gate+Up+SiLU fusion for single-GPU CPU-TG fast-path ---
+            // Check if multi-GPU secondary dispatch is available.  When active,
+            // fusion is disabled because secondary experts scatter directly to
+            // the gate/up output tensors while fusion bypasses those tensors.
+            const bool multi_gpu_fast = g_moe_multi_gpu_active.load(std::memory_order_acquire);
+            auto & placement_table_pre = ggml_sycl::get_expert_placement_table();
+            const bool have_secondary_pre = multi_gpu_fast && placement_table_pre.is_initialized();
+
+            // --- Gate+Up+SiLU fusion (disabled when multi-GPU secondary dispatch active) ---
             {
                 const char * tname_fast     = src0->name ? src0->name : "";
                 const bool   is_gate_fast   = (strstr(tname_fast, "ffn_gate") != nullptr);
@@ -26220,7 +26225,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 const int    cur_layer_fast = parse_layer_id_from_name(tname_fast);
 
                 // GATE: resolve IDs + activation, save state, skip compute
-                if (ggml_sycl_moe_fusion_enabled() && is_gate_fast && cur_layer_fast >= 0) {
+                if (ggml_sycl_moe_fusion_enabled() && !have_secondary_pre && is_gate_fast && cur_layer_fast >= 0) {
                     ctx.moe_graphs_disabled_once = true;
                     const queue_ptr stream       = ctx.stream();
                     const int64_t   K_f          = ne00;
@@ -26306,7 +26311,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 }
 
                 // UP: fused gate+up+SiLU kernel
-                if (ggml_sycl_moe_fusion_enabled() && is_up_fast && cur_layer_fast >= 0 && g_moe_fusion.gate_pending &&
+                if (ggml_sycl_moe_fusion_enabled() && !have_secondary_pre && is_up_fast && cur_layer_fast >= 0 && g_moe_fusion.gate_pending &&
                     g_moe_fusion.layer_id == cur_layer_fast && g_moe_fusion.type == src0->type &&
                     g_moe_fusion.K == static_cast<int>(ne00) && g_moe_fusion.N_gate == static_cast<int>(ne01)) {
                     ctx.moe_graphs_disabled_once = true;
@@ -26358,7 +26363,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 }
 
                 // DOWN: use fused output as activation
-                if (ggml_sycl_moe_fusion_enabled() && is_down_fast && cur_layer_fast >= 0 &&
+                if (ggml_sycl_moe_fusion_enabled() && !have_secondary_pre && is_down_fast && cur_layer_fast >= 0 &&
                     g_moe_fusion.fused_pending && g_moe_fusion.layer_id == cur_layer_fast) {
                     ctx.moe_graphs_disabled_once = true;
                     const queue_ptr stream       = ctx.stream();
@@ -26650,6 +26655,17 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 }
             }
 
+            // --- Multi-GPU: route secondary GPU experts via placement table ---
+            // Reuse have_secondary_pre and placement_table_pre computed above.
+            const bool have_secondary_fast = have_secondary_pre;
+            const int n_gpu_devs_fast = have_secondary_fast ? ggml_sycl_info().total_gpu_count : 0;
+            const char * tname_layer = src0->name ? src0->name : "";
+            const int layer_id_fast = have_secondary_fast ? parse_layer_id_from_name(tname_layer) : -1;
+
+            // Per-device secondary entries collected during the expert loop below.
+            std::vector<std::vector<expert_dispatch_entry>> sec_entries_fast(
+                have_secondary_fast ? n_gpu_devs_fast : 0);
+
             // Build task array on stack for small expert counts, heap for large.
             // Typical: 8 experts (top-K), max ~16.
             constexpr size_t STACK_TASKS = 16;
@@ -26672,6 +26688,23 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 }
                 const int32_t expert_id = ids_data[ci];
                 GGML_ASSERT(expert_id >= 0 && expert_id < n_as);
+
+                // Multi-GPU: check if this expert is on a secondary GPU
+                if (have_secondary_fast && layer_id_fast >= 0) {
+                    auto placement = placement_table_pre.get(layer_id_fast, expert_id);
+                    if (placement.device_id >= 1
+                        && placement.device_id < n_gpu_devs_fast
+                        && placement.device_ptr != nullptr
+                        && g_secondary_queues[placement.device_id] != nullptr) {
+                        // Route to secondary GPU — compute iid1/id from ci
+                        const int64_t iid1 = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_f));
+                        const int64_t id   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_f));
+                        sec_entries_fast[placement.device_id].push_back(
+                            { iid1, id, expert_id, placement.device_ptr, placement.device_id });
+                        continue;  // Skip CPU dispatch for this expert
+                    }
+                }
+
                 tasks_ptr[n_tasks].weight_host = static_cast<const char *>(src0->data)
                                             + static_cast<size_t>(expert_id) * nb02;
                 tasks_ptr[n_tasks].act_host    = act_host_ptr;
@@ -26696,6 +26729,49 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         for (int j = 0; j < tasks_ptr[ti].N; j++) {
                             out[j] *= renorm_scale;
                         }
+                    }
+                }
+            }
+
+            // --- Dispatch secondary GPU experts (multi-GPU mode) ---
+            // These run concurrently with CPU compute above.  Results are
+            // deferred to flush_pending_secondary_scatter_if_consumed().
+            if (have_secondary_fast) {
+                char * dst_d_sec = static_cast<char *>(ggml_sycl_get_data_ptr(dst, ctx.device));
+                secondary_dispatch_ctx sctx = {
+                    stream, src0,
+                    static_cast<char *>(src1->data),  // src1_original (unused: act_on_host=true)
+                    dst_d_sec,                        // dst_original (GPU0 device pointer)
+                    K, N, ne11, nb11, nb12, nb1, nb2,
+                    true,                             // act_on_host: fast path already resolved
+                    const_cast<float *>(act_host_ptr), // shared_act_host
+                    sycl::event{},                    // act_d2h_event: no-op (already on host)
+                    dst                               // dst_tensor for tracking
+                };
+                std::vector<expert_dispatch_entry> cpu_fallback_fast;
+                for (int d = 1; d < n_gpu_devs_fast; d++) {
+                    if (!sec_entries_fast[d].empty()) {
+                        dispatch_experts_secondary_gpu_impl(
+                            sec_entries_fast[d], d, sctx, cpu_fallback_fast);
+                    }
+                }
+                // CPU fallback for any experts that failed secondary dispatch
+                if (!cpu_fallback_fast.empty()) {
+                    for (const auto & e : cpu_fallback_fast) {
+                        const size_t ci_fb = static_cast<size_t>(e.iid1) * static_cast<size_t>(n_ids_f) + static_cast<size_t>(e.id);
+                        float * out_fb = tl_out_pinned.ptr + ci_fb * static_cast<size_t>(N);
+                        tasks_ptr[n_tasks].weight_host = static_cast<const char *>(src0->data)
+                                                    + static_cast<size_t>(e.expert_id) * nb02;
+                        tasks_ptr[n_tasks].act_host    = act_host_ptr;
+                        tasks_ptr[n_tasks].output_host = out_fb;
+                        tasks_ptr[n_tasks].type        = src0->type;
+                        tasks_ptr[n_tasks].K           = static_cast<int>(K);
+                        tasks_ptr[n_tasks].N           = static_cast<int>(N);
+                        n_tasks++;
+                    }
+                    if (!cpu_fallback_fast.empty()) {
+                        ggml_sycl_cpu_expert_mul_mat_batched(tasks_ptr + (n_tasks - static_cast<int>(cpu_fallback_fast.size())),
+                                                            static_cast<int>(cpu_fallback_fast.size()));
                     }
                 }
             }
@@ -27960,10 +28036,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             // and the shared activation is already on host from the event wait.
             dispatch_cpu_and_scatter(cpu_entries);
 
-            // ----- Flush deferred secondary GPU scatter -----
-            // Wait for B50 compute to finish, then scatter results to primary dst.
-            // GPU0 + CPU dispatch ran in parallel with B50, maximizing overlap.
-            flush_pending_secondary_scatter();
+            // Secondary scatter deferred to selective flush at consumption points.
+            // The flush_pending_secondary_scatter_if_consumed() calls in the
+            // fast path entry and compute_forward handle the actual flushing.
 
             // --- Record actual expert selections (T6 + T7 integration) ---
             // Feed actual router selections to predictor for accuracy tracking
@@ -28732,7 +28807,7 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
     // Safety net: graph boundary flush at graph_compute_impl ensures
     // nothing leaks across graphs.
     flush_pending_cpu_scatter_if_consumed(dst);
-    flush_pending_secondary_scatter();
+    flush_pending_secondary_scatter_if_consumed(dst);
 
     // Debug: trace operations in multi-process mode
     if (g_sycl_tp_config.is_multiprocess && g_ggml_sycl_tp_debug) {
