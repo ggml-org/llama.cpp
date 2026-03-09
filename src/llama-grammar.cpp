@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <stdexcept>
 
-#define MAX_REPETITION_THRESHOLD 50000
+#define MAX_REPETITION_THRESHOLD 2000
 //
 // helpers
 //
@@ -1386,7 +1386,7 @@ void llama_grammar_accept_impl(struct llama_grammar & grammar, llama_token token
                 return;
             }
         }
-        throw std::runtime_error("grammar not complete when EOG received");
+        GGML_ABORT("fatal error");
     }
 
     llama_grammar_accept_token(grammar, token, piece);

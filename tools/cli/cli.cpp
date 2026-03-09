@@ -2,7 +2,6 @@
 #include "common.h"
 #include "arg.h"
 #include "console.h"
-#include "json-schema-to-grammar.h"
 // #include "log.h"
 
 #include "server-context.h"
@@ -100,28 +99,22 @@ struct cli_context {
                 task.params.chat_parser_params.parser.load(chat_params.parser);
             }
 
-            // reasoning budget grammar spec
+            // reasoning budget sampler
             if (reasoning_budget >= 0 && !chat_params.thinking_end_tag.empty()) {
-                common_grammar_spec spec;
-                spec.id = "reasoning_budget";
-                spec.grammar = "root ::= " + gbnf_format_literal(reasoning_budget_message + chat_params.thinking_end_tag);
-                spec.delayed = true;
-                spec.non_terminating = true;
-                spec.rearmable = true;
-                spec.countdown = reasoning_budget;
-                spec.countdown_mode = COMMON_GRAMMAR_COUNTDOWN_TOKENS;
+                const llama_vocab * vocab = llama_model_get_vocab(
+                    llama_get_model(ctx_server.get_llama_context()));
 
-                if (chat_params.thinking_forced_open) {
-                    spec.arm_immediately = true;
-                }
+                task.params.sampling.reasoning_budget_tokens = reasoning_budget;
+                task.params.sampling.reasoning_budget_arm_immediately = chat_params.thinking_forced_open;
 
                 if (!chat_params.thinking_start_tag.empty()) {
-                    spec.arm_triggers.push_back({COMMON_GRAMMAR_TRIGGER_TYPE_WORD, chat_params.thinking_start_tag});
+                    task.params.sampling.reasoning_budget_start =
+                        common_tokenize(vocab, chat_params.thinking_start_tag, false, true);
                 }
-
-                spec.defuse_triggers.push_back({COMMON_GRAMMAR_TRIGGER_TYPE_WORD, chat_params.thinking_end_tag});
-
-                task.params.sampling.grammar_specs.push_back(std::move(spec));
+                task.params.sampling.reasoning_budget_end =
+                    common_tokenize(vocab, chat_params.thinking_end_tag, false, true);
+                task.params.sampling.reasoning_budget_forced =
+                    common_tokenize(vocab, reasoning_budget_message + chat_params.thinking_end_tag, false, true);
             }
 
             rd.post_task({std::move(task)});
@@ -222,7 +215,7 @@ struct cli_context {
         inputs.parallel_tool_calls   = false;
         inputs.add_generation_prompt = true;
         inputs.reasoning_format      = COMMON_REASONING_FORMAT_DEEPSEEK;
-        inputs.enable_thinking       = chat_params.enable_thinking;
+        inputs.enable_thinking       = common_chat_templates_support_enable_thinking(chat_params.tmpls.get());
 
         // Apply chat template to the list of messages
         return common_chat_templates_apply(chat_params.tmpls.get(), inputs);

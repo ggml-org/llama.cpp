@@ -462,114 +462,31 @@ task_params server_task::params_from_json_cmpl(
         }
     }
 
-    // Parse grammar_specs (multi-grammar support)
+    // Parse reasoning budget sampler parameters
     {
-        const auto grammar_specs_it = data.find("grammar_specs");
-        SRV_DBG("grammar_specs present: %s, count: %d\n",
-            grammar_specs_it != data.end() ? "yes" : "no",
-            (grammar_specs_it != data.end() && grammar_specs_it->is_array()) ? (int) grammar_specs_it->size() : 0);
-        if (grammar_specs_it != data.end() && grammar_specs_it->is_array()) {
-            for (const auto & spec_json : *grammar_specs_it) {
-                common_grammar_spec spec;
-                spec.id = json_value(spec_json, "id", std::string());
-                spec.grammar = json_value(spec_json, "grammar", std::string());
-                spec.grammar_lazy = json_value(spec_json, "grammar_lazy", false);
-                spec.non_terminating = json_value(spec_json, "non_terminating", false);
-                spec.delayed = json_value(spec_json, "delayed", false);
-                spec.rearmable = json_value(spec_json, "rearmable", true);
-                spec.countdown = json_value(spec_json, "countdown", (int32_t) -1);
+        const int32_t budget = json_value(data, "reasoning_budget_tokens", (int32_t) -1);
+        if (budget >= 0) {
+            const auto start_tag = json_value(data, "reasoning_budget_start_tag", std::string());
+            const auto end_tag   = json_value(data, "reasoning_budget_end_tag", std::string());
+            const auto message   = json_value(data, "reasoning_budget_message", std::string());
+            const bool arm_imm   = json_value(data, "reasoning_budget_arm_immediately", false);
 
-                // Parse countdown_mode
-                auto mode_str = json_value(spec_json, "countdown_mode", std::string("tokens"));
-                if (mode_str == "characters") {
-                    spec.countdown_mode = COMMON_GRAMMAR_COUNTDOWN_CHARACTERS;
-                } else {
-                    spec.countdown_mode = COMMON_GRAMMAR_COUNTDOWN_TOKENS;
-                }
+            params.sampling.reasoning_budget_tokens = budget;
+            params.sampling.reasoning_budget_arm_immediately = arm_imm;
 
-                // Parse arm_immediately
-                bool arm_immediately = json_value(spec_json, "arm_immediately", false);
-                if (arm_immediately) {
-                    spec.arm_immediately = true;
-                }
-
-                // Parse grammar_triggers
-                if (spec_json.contains("grammar_triggers")) {
-                    for (const auto & t : spec_json.at("grammar_triggers")) {
-                        server_grammar_trigger ct(t);
-                        if (ct.value.type == COMMON_GRAMMAR_TRIGGER_TYPE_WORD) {
-                            const auto & word = ct.value.value;
-                            auto ids = common_tokenize(vocab, word, /* add_special= */ false, /* parse_special= */ true);
-                            if (ids.size() == 1) {
-                                auto token = ids[0];
-                                SRV_DBG("Grammar spec '%s' trigger token: %d (`%s`)\n", spec.id.c_str(), token, word.c_str());
-                                common_grammar_trigger trigger;
-                                trigger.type = COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN;
-                                trigger.value = word;
-                                trigger.token = token;
-                                spec.grammar_triggers.push_back(std::move(trigger));
-                            } else {
-                                SRV_DBG("Grammar spec '%s' trigger word: `%s`\n", spec.id.c_str(), word.c_str());
-                                spec.grammar_triggers.push_back({COMMON_GRAMMAR_TRIGGER_TYPE_WORD, word});
-                            }
-                        } else {
-                            spec.grammar_triggers.emplace_back(std::move(ct.value));
-                        }
-                    }
-                }
-
-                // Parse arm_triggers
-                if (spec_json.contains("arm_triggers")) {
-                    for (const auto & t : spec_json.at("arm_triggers")) {
-                        server_grammar_trigger ct(t);
-                        if (ct.value.type == COMMON_GRAMMAR_TRIGGER_TYPE_WORD) {
-                            const auto & word = ct.value.value;
-                            auto ids = common_tokenize(vocab, word, /* add_special= */ false, /* parse_special= */ true);
-                            if (ids.size() == 1) {
-                                common_grammar_trigger trigger;
-                                trigger.type = COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN;
-                                trigger.value = word;
-                                trigger.token = ids[0];
-                                spec.arm_triggers.push_back(std::move(trigger));
-                            } else {
-                                spec.arm_triggers.push_back({COMMON_GRAMMAR_TRIGGER_TYPE_WORD, word});
-                            }
-                        } else {
-                            spec.arm_triggers.emplace_back(std::move(ct.value));
-                        }
-                    }
-                }
-
-                // Parse defuse_triggers
-                if (spec_json.contains("defuse_triggers")) {
-                    for (const auto & t : spec_json.at("defuse_triggers")) {
-                        server_grammar_trigger ct(t);
-                        if (ct.value.type == COMMON_GRAMMAR_TRIGGER_TYPE_WORD) {
-                            const auto & word = ct.value.value;
-                            auto ids = common_tokenize(vocab, word, /* add_special= */ false, /* parse_special= */ true);
-                            if (ids.size() == 1) {
-                                common_grammar_trigger trigger;
-                                trigger.type = COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN;
-                                trigger.value = word;
-                                trigger.token = ids[0];
-                                spec.defuse_triggers.push_back(std::move(trigger));
-                            } else {
-                                spec.defuse_triggers.push_back({COMMON_GRAMMAR_TRIGGER_TYPE_WORD, word});
-                            }
-                        } else {
-                            spec.defuse_triggers.emplace_back(std::move(ct.value));
-                        }
-                    }
-                }
-
-                SRV_DBG("Grammar spec: id='%s', delayed=%s, non_terminating=%s, countdown=%d\n",
-                    spec.id.c_str(),
-                    spec.delayed ? "true" : "false",
-                    spec.non_terminating ? "true" : "false",
-                    spec.countdown);
-
-                params.sampling.grammar_specs.push_back(std::move(spec));
+            if (!start_tag.empty()) {
+                params.sampling.reasoning_budget_start = common_tokenize(vocab, start_tag, false, true);
             }
+            if (!end_tag.empty()) {
+                params.sampling.reasoning_budget_end = common_tokenize(vocab, end_tag, false, true);
+                params.sampling.reasoning_budget_forced = common_tokenize(vocab, message + end_tag, false, true);
+            }
+
+            SRV_DBG("reasoning budget: tokens=%d, arm_immediately=%s, start=%zu toks, end=%zu toks, forced=%zu toks\n",
+                budget, arm_imm ? "true" : "false",
+                params.sampling.reasoning_budget_start.size(),
+                params.sampling.reasoning_budget_end.size(),
+                params.sampling.reasoning_budget_forced.size());
         }
     }
 

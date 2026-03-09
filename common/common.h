@@ -150,30 +150,6 @@ struct common_grammar_trigger {
     llama_token token = LLAMA_TOKEN_NULL;
 };
 
-enum common_grammar_countdown_mode {
-    COMMON_GRAMMAR_COUNTDOWN_TOKENS,     // count in tokens
-    COMMON_GRAMMAR_COUNTDOWN_CHARACTERS, // count in characters
-};
-
-struct common_grammar_spec {
-    std::string id;                // unique identifier (e.g., "tool_call", "reasoning_budget")
-    std::string grammar;           // BNF grammar string
-    bool grammar_lazy = false;     // lazy activation via existing trigger mechanism
-    std::vector<common_grammar_trigger> grammar_triggers; // activation triggers (for lazy grammars)
-
-    // non-terminating: when grammar is exhausted, stop constraining instead of crashing
-    bool non_terminating = false;
-
-    // delayed activation fields
-    bool delayed = false;
-    std::vector<common_grammar_trigger> arm_triggers;    // triggers that start countdown
-    std::vector<common_grammar_trigger> defuse_triggers; // triggers that cancel countdown
-    int32_t countdown = -1;        // countdown value (-1 = not delayed)
-    common_grammar_countdown_mode countdown_mode = COMMON_GRAMMAR_COUNTDOWN_TOKENS;
-    bool rearmable = true;         // go back to IDLE after exhaustion/defuse?
-    bool arm_immediately = false;  // skip arm trigger, start countdown immediately
-};
-
 enum common_params_sampling_config : uint64_t {
     COMMON_PARAMS_SAMPLING_CONFIG_SAMPLERS        = 1 << 0,
     COMMON_PARAMS_SAMPLING_CONFIG_TOP_K           = 1 << 1,
@@ -256,10 +232,16 @@ struct common_params_sampling {
     std::vector<common_grammar_trigger> grammar_triggers; // optional triggers (for lazy grammars)
     std::set<llama_token>               preserved_tokens;
 
-    std::vector<common_grammar_spec>  grammar_specs; // multiple grammar specifications (overrides single grammar fields above)
-
     std::vector<llama_logit_bias> logit_bias;     // logit biases to apply
     std::vector<llama_logit_bias> logit_bias_eog; // pre-calculated logit biases for EOG tokens
+
+    // reasoning budget sampler parameters
+    // these are populated by the server/CLI based on chat template params
+    int32_t                  reasoning_budget_tokens   = -1;   // -1 = disabled, >= 0 = token budget
+    bool                     reasoning_budget_arm_immediately = false;
+    std::vector<llama_token> reasoning_budget_start;           // start tag token sequence
+    std::vector<llama_token> reasoning_budget_end;             // end tag token sequence
+    std::vector<llama_token> reasoning_budget_forced;          // forced sequence (message + end tag)
 
     bool backend_sampling = false;
 
@@ -562,7 +544,7 @@ struct common_params {
     bool use_jinja = true;                                                                                  // NOLINT
     bool enable_chat_template = true;
     common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
-    int enable_reasoning = -1; // -1 = auto (enable if template supports), 0 = disable, 1 = enable
+    int enable_reasoning = -1; // -1 = auto, 0 = disable, 1 = enable
     int reasoning_budget = -1;
     std::string reasoning_budget_message; // message injected before end tag when budget exhausted
     bool prefill_assistant = true; // if true, any trailing assistant message will be prefilled into the response

@@ -1455,6 +1455,36 @@ extern "C" {
     //
     LLAMA_API struct llama_sampler * llama_sampler_init_infill(const struct llama_vocab * vocab);
 
+    /// @details Reasoning budget sampler. Limits the number of tokens a model can generate inside
+    ///          a reasoning block (e.g. between <think> and </think>).
+    ///
+    /// State machine: IDLE -> COUNTING -> FORCING -> DONE
+    ///   - IDLE:     passthrough, watching accepted tokens for the start sequence
+    ///   - COUNTING: counts down tokens, watching for natural end (defuse)
+    ///   - FORCING:  forces the budget message + end sequence token-by-token
+    ///   - DONE:     passthrough forever
+    ///
+    /// @param vocab              The vocabulary (for tokenization and EOG checks)
+    /// @param start_tokens       Token sequence that arms the countdown (e.g. "<think>")
+    /// @param n_start            Number of tokens in start_tokens
+    /// @param end_tokens         Token sequence that defuses naturally (e.g. "</think>")
+    /// @param n_end              Number of tokens in end_tokens
+    /// @param forced_tokens      Token sequence forced when budget expires (e.g. "(budget exceeded)</think>")
+    /// @param n_forced           Number of tokens in forced_tokens
+    /// @param budget             Maximum number of tokens allowed in the reasoning block
+    /// @param arm_immediately    If true, skip IDLE and start in COUNTING directly
+    ///
+    LLAMA_API struct llama_sampler * llama_sampler_init_reasoning_budget(
+            const struct llama_vocab * vocab,
+                   const llama_token * start_tokens,
+                              size_t   n_start,
+                   const llama_token * end_tokens,
+                              size_t   n_end,
+                   const llama_token * forced_tokens,
+                              size_t   n_forced,
+                             int32_t   budget,
+                                bool   arm_immediately);
+
     // Returns the seed used by the sampler if applicable, LLAMA_DEFAULT_SEED otherwise
     LLAMA_API uint32_t llama_sampler_get_seed(const struct llama_sampler * smpl);
 

@@ -3822,6 +3822,208 @@ struct llama_sampler * llama_sampler_init_infill(const struct llama_vocab * voca
     );
 }
 
+// reasoning budget
+
+enum llama_reasoning_budget_state {
+    REASONING_BUDGET_IDLE,     // waiting for start sequence
+    REASONING_BUDGET_COUNTING, // counting down tokens
+    REASONING_BUDGET_FORCING,  // forcing budget message + end sequence
+    REASONING_BUDGET_DONE,     // passthrough forever
+};
+
+struct llama_sampler_reasoning_budget {
+    const llama_vocab * vocab;
+
+    std::vector<llama_token> start_tokens;   // sequence that starts counting (e.g. "<think>")
+    std::vector<llama_token> end_tokens;     // sequence that defuses naturally (e.g. "</think>")
+    std::vector<llama_token> forced_tokens;  // sequence forced when budget expires (e.g. "(budget exceeded)</think>")
+
+    int32_t budget;           // maximum tokens in reasoning block
+    int32_t remaining;        // tokens remaining in budget
+
+    llama_reasoning_budget_state state;
+
+    // for multi-token sequence matching
+    size_t start_match_pos;   // how many tokens of start_tokens we've matched so far
+    size_t end_match_pos;     // how many tokens of end_tokens we've matched so far
+
+    // for forcing
+    size_t force_pos;         // next position in forced_tokens to force
+};
+
+static const char * llama_sampler_reasoning_budget_name(const struct llama_sampler * /*smpl*/) {
+    return "reasoning-budget";
+}
+
+static void llama_sampler_reasoning_budget_accept(struct llama_sampler * smpl, llama_token token) {
+    auto * ctx = (llama_sampler_reasoning_budget *) smpl->ctx;
+
+    switch (ctx->state) {
+        case REASONING_BUDGET_IDLE:
+        {
+            // watch for start sequence
+            if (!ctx->start_tokens.empty() && token == ctx->start_tokens[ctx->start_match_pos]) {
+                ctx->start_match_pos++;
+                if (ctx->start_match_pos >= ctx->start_tokens.size()) {
+                    // full start sequence matched
+                    ctx->state = REASONING_BUDGET_COUNTING;
+                    ctx->remaining = ctx->budget;
+                    ctx->start_match_pos = 0;
+                    LLAMA_LOG_INFO("reasoning-budget: armed, budget=%d tokens\n", ctx->budget);
+
+                    if (ctx->remaining <= 0) {
+                        // budget is 0 — go straight to forcing
+                        ctx->state = REASONING_BUDGET_FORCING;
+                        ctx->force_pos = 0;
+                        LLAMA_LOG_INFO("reasoning-budget: budget=0, forcing immediately\n");
+                    }
+                }
+            } else {
+                ctx->start_match_pos = 0;
+                // check if current token starts a new match
+                if (!ctx->start_tokens.empty() && token == ctx->start_tokens[0]) {
+                    ctx->start_match_pos = 1;
+                }
+            }
+            break;
+        }
+        case REASONING_BUDGET_COUNTING:
+        {
+            // check for natural end sequence (defuse)
+            if (!ctx->end_tokens.empty() && token == ctx->end_tokens[ctx->end_match_pos]) {
+                ctx->end_match_pos++;
+                if (ctx->end_match_pos >= ctx->end_tokens.size()) {
+                    // natural end — stop constraining
+                    ctx->state = REASONING_BUDGET_DONE;
+                    ctx->end_match_pos = 0;
+                    LLAMA_LOG_INFO("reasoning-budget: defused (natural end)\n");
+                }
+            } else {
+                ctx->end_match_pos = 0;
+                if (!ctx->end_tokens.empty() && token == ctx->end_tokens[0]) {
+                    ctx->end_match_pos = 1;
+                }
+            }
+
+            if (ctx->state == REASONING_BUDGET_COUNTING) {
+                ctx->remaining--;
+                if (ctx->remaining <= 0) {
+                    ctx->state = REASONING_BUDGET_FORCING;
+                    ctx->force_pos = 0;
+                    ctx->end_match_pos = 0;
+                    LLAMA_LOG_INFO("reasoning-budget: budget exhausted, forcing end sequence\n");
+                }
+            }
+            break;
+        }
+        case REASONING_BUDGET_FORCING:
+        {
+            // advance through forced sequence
+            ctx->force_pos++;
+            if (ctx->force_pos >= ctx->forced_tokens.size()) {
+                ctx->state = REASONING_BUDGET_DONE;
+                LLAMA_LOG_INFO("reasoning-budget: forced sequence complete, done\n");
+            }
+            break;
+        }
+        case REASONING_BUDGET_DONE:
+            break;
+    }
+}
+
+static void llama_sampler_reasoning_budget_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
+    auto * ctx = (llama_sampler_reasoning_budget *) smpl->ctx;
+
+    if (ctx->state != REASONING_BUDGET_FORCING) {
+        // passthrough — don't modify logits
+        return;
+    }
+
+    if (ctx->force_pos >= ctx->forced_tokens.size()) {
+        return;
+    }
+
+    const llama_token forced = ctx->forced_tokens[ctx->force_pos];
+
+    // set all logits to -inf except the forced token
+    for (size_t i = 0; i < cur_p->size; i++) {
+        if (cur_p->data[i].id != forced) {
+            cur_p->data[i].logit = -INFINITY;
+        }
+    }
+}
+
+static void llama_sampler_reasoning_budget_reset(struct llama_sampler * smpl) {
+    auto * ctx = (llama_sampler_reasoning_budget *) smpl->ctx;
+    ctx->state = REASONING_BUDGET_IDLE;
+    ctx->remaining = ctx->budget;
+    ctx->start_match_pos = 0;
+    ctx->end_match_pos = 0;
+    ctx->force_pos = 0;
+}
+
+static struct llama_sampler * llama_sampler_reasoning_budget_clone(const struct llama_sampler * smpl) {
+    const auto * ctx = (const llama_sampler_reasoning_budget *) smpl->ctx;
+    return llama_sampler_init_reasoning_budget(
+        ctx->vocab,
+        ctx->start_tokens.data(), ctx->start_tokens.size(),
+        ctx->end_tokens.data(),   ctx->end_tokens.size(),
+        ctx->forced_tokens.data(), ctx->forced_tokens.size(),
+        ctx->budget,
+        ctx->state == REASONING_BUDGET_COUNTING || ctx->state == REASONING_BUDGET_FORCING);
+}
+
+static void llama_sampler_reasoning_budget_free(struct llama_sampler * smpl) {
+    delete (llama_sampler_reasoning_budget *) smpl->ctx;
+}
+
+static struct llama_sampler_i llama_sampler_reasoning_budget_i = {
+    /* .name              = */ llama_sampler_reasoning_budget_name,
+    /* .accept            = */ llama_sampler_reasoning_budget_accept,
+    /* .apply             = */ llama_sampler_reasoning_budget_apply,
+    /* .reset             = */ llama_sampler_reasoning_budget_reset,
+    /* .clone             = */ llama_sampler_reasoning_budget_clone,
+    /* .free              = */ llama_sampler_reasoning_budget_free,
+    /* .backend_init      = */ nullptr,
+    /* .backend_accept    = */ nullptr,
+    /* .backend_apply     = */ nullptr,
+    /* .backend_set_input = */ nullptr,
+};
+
+struct llama_sampler * llama_sampler_init_reasoning_budget(
+        const struct llama_vocab * vocab,
+               const llama_token * start_tokens,
+                          size_t   n_start,
+               const llama_token * end_tokens,
+                          size_t   n_end,
+               const llama_token * forced_tokens,
+                          size_t   n_forced,
+                         int32_t   budget,
+                            bool   arm_immediately) {
+    auto initial_state = arm_immediately ? REASONING_BUDGET_COUNTING : REASONING_BUDGET_IDLE;
+
+    // if armed immediately with budget <= 0, go straight to forcing
+    if (arm_immediately && budget <= 0) {
+        initial_state = REASONING_BUDGET_FORCING;
+    }
+
+    return llama_sampler_init(
+        /* .iface = */ &llama_sampler_reasoning_budget_i,
+        /* .ctx   = */ new llama_sampler_reasoning_budget {
+            /* .vocab           = */ vocab,
+            /* .start_tokens    = */ std::vector<llama_token>(start_tokens, start_tokens + n_start),
+            /* .end_tokens      = */ std::vector<llama_token>(end_tokens, end_tokens + n_end),
+            /* .forced_tokens   = */ std::vector<llama_token>(forced_tokens, forced_tokens + n_forced),
+            /* .budget          = */ budget,
+            /* .remaining       = */ budget,
+            /* .state           = */ initial_state,
+            /* .start_match_pos = */ 0,
+            /* .end_match_pos   = */ 0,
+            /* .force_pos       = */ 0,
+        }
+    );
+}
+
 // utils
 
 uint32_t llama_sampler_get_seed(const struct llama_sampler * smpl) {

@@ -1,6 +1,5 @@
 #include "common.h"
 #include "download.h"
-#include "json-schema-to-grammar.h"
 #include "log.h"
 #include "llama.h"
 #include "mtmd.h"
@@ -1102,80 +1101,19 @@ json oaicompat_chat_params_parse(
         llama_params["chat_parser"] = chat_params.parser;
     }
 
-    // Create reasoning budget delayed grammar spec if applicable
+    // Reasoning budget: pass parameters through to sampling layer
     {
-        // Determine budget: prefer server config, fall back to Anthropic thinking_budget_tokens
         int reasoning_budget = opt.reasoning_budget;
         if (reasoning_budget == -1 && body.contains("thinking_budget_tokens")) {
             reasoning_budget = json_value(body, "thinking_budget_tokens", -1);
         }
 
-        SRV_DBG("reasoning_budget=%d, thinking_start_tag='%s', thinking_end_tag='%s', thinking_forced_open=%s\n",
-            reasoning_budget,
-            chat_params.thinking_start_tag.c_str(),
-            chat_params.thinking_end_tag.c_str(),
-            chat_params.thinking_forced_open ? "true" : "false");
-
-        if (reasoning_budget >= 0
-                && !chat_params.thinking_end_tag.empty()) {
-            json grammar_specs = json::array();
-
-            // If there's already a tool-call grammar from chat_params, include it as the first spec
-            if (!chat_params.grammar.empty()) {
-                json tool_spec;
-                tool_spec["id"] = "tool_call";
-                tool_spec["grammar"] = chat_params.grammar;
-                tool_spec["grammar_lazy"] = chat_params.grammar_lazy;
-                auto triggers = json::array();
-                for (const auto & trigger : chat_params.grammar_triggers) {
-                    server_grammar_trigger ct(trigger);
-                    triggers.push_back(ct.to_json());
-                }
-                tool_spec["grammar_triggers"] = triggers;
-                grammar_specs.push_back(tool_spec);
-
-                // Clear the legacy grammar fields since we're using grammar_specs now
-                llama_params.erase("grammar");
-                llama_params.erase("grammar_lazy");
-                llama_params.erase("grammar_triggers");
-            }
-
-            // Build the grammar that forces model output when budget expires.
-            // If a budget message is set, it's prepended before the end tag.
-            std::string forced_text = opt.reasoning_budget_message + chat_params.thinking_end_tag;
-            std::string end_tag_grammar = "root ::= " + gbnf_format_literal(forced_text);
-
-            json budget_spec;
-            budget_spec["id"] = "reasoning_budget";
-            budget_spec["grammar"] = end_tag_grammar;
-            budget_spec["delayed"] = true;
-            budget_spec["non_terminating"] = true;
-            budget_spec["rearmable"] = true;
-            budget_spec["countdown"] = reasoning_budget;
-            budget_spec["countdown_mode"] = "tokens";
-
-            // FORCED_OPEN: the thinking start tag is part of the generation prompt (not sampled),
-            // so arm immediately. For TAG_BASED/FORCED_CLOSED/etc., the model generates
-            // the start tag, so we rely on the arm trigger.
-            if (chat_params.thinking_forced_open) {
-                budget_spec["arm_immediately"] = true;
-            }
-
-            if (!chat_params.thinking_start_tag.empty()) {
-                json arm_trigger;
-                arm_trigger["type"] = (int) COMMON_GRAMMAR_TRIGGER_TYPE_WORD;
-                arm_trigger["value"] = chat_params.thinking_start_tag;
-                budget_spec["arm_triggers"] = json::array({arm_trigger});
-            }
-
-            // Defuse trigger: when thinking ends naturally
-            json defuse_trigger;
-            defuse_trigger["type"] = (int) COMMON_GRAMMAR_TRIGGER_TYPE_WORD;
-            defuse_trigger["value"] = chat_params.thinking_end_tag;
-            budget_spec["defuse_triggers"] = json::array({defuse_trigger});
-
-            grammar_specs.push_back(budget_spec);
-            llama_params["grammar_specs"] = grammar_specs;
+        if (reasoning_budget >= 0 && !chat_params.thinking_end_tag.empty()) {
+            llama_params["reasoning_budget_tokens"] = reasoning_budget;
+            llama_params["reasoning_budget_start_tag"] = chat_params.thinking_start_tag;
+            llama_params["reasoning_budget_end_tag"] = chat_params.thinking_end_tag;
+            llama_params["reasoning_budget_message"] = opt.reasoning_budget_message;
+            llama_params["reasoning_budget_arm_immediately"] = chat_params.thinking_forced_open;
         }
     }
 
