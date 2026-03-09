@@ -7348,7 +7348,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     // ("rope_freqs.weight") and ggml uses only the first (n_rot_l/2) entries per layer.
                     uint32_t n_rot_max = 0;
                     for (int i = 0; i < n_layer; ++i) {
-                        n_rot_max = std::max(n_rot_max, hparams.n_rot());
+                        n_rot_max = std::max(n_rot_max, hparams.n_rot(i));
                     }
                     if (n_rot_max == 0) {
                         n_rot_max = n_rot;
