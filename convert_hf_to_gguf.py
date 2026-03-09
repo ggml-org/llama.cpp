@@ -652,8 +652,6 @@ class ModelBase:
         for (bid, proj_type) in list(expert_blocks.keys()):
             self._flush_nvfp4_experts((bid, proj_type), expert_blocks, expert_scales, expert_shapes, bid, proj_type)
 
-        return []
-
     def _flush_nvfp4_experts(self, key, expert_blocks, expert_scales, expert_shapes, bid, proj_type):
         experts = expert_blocks.pop(key)
         scales = expert_scales.pop(key)
