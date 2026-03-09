@@ -570,7 +570,7 @@ private:
     std::vector<server_slot> slots;
 
     int slots_debug = 0;
-    int n_empty_consequtive = 0;
+    int n_empty_consecutive = 0;
 
     std::unique_ptr<server_prompt_cache> prompt_cache;
 
@@ -2372,7 +2372,7 @@ private:
                                         } else {
                                             pos_next = std::min(pos_next, std::max(it->pos_min + 1, it->pos_max));
                                             n_past = std::min(slot.prompt.tokens.size_up_to_pos(pos_next), (size_t) it->n_tokens);
-                                            SLT_WRN(slot, "restored context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n", it->pos_min, it->pos_max, it->n_tokens, (float) checkpoint_size / 1024 / 1024);
+                                            SLT_WRN(slot, "restored context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", it->pos_min, it->pos_max, it->n_tokens, n_past, (float) checkpoint_size / 1024 / 1024);
                                         }
                                     }
 
@@ -2630,11 +2630,11 @@ private:
         if (batch.n_tokens == 0) {
             SRV_WRN("%s", "no tokens to decode\n");
 
-            if (++n_empty_consequtive > 3) {
+            if (++n_empty_consecutive > 3) {
                 GGML_ABORT("fatal error - please provide logs and repro in %s\n", "https://github.com/ggml-org/llama.cpp/pull/20277");
             }
         } else {
-            n_empty_consequtive = 0;
+            n_empty_consecutive = 0;
         }
 
         int32_t i_next = 0;
