@@ -562,7 +562,7 @@ private:
 
     llama_model_ptr model_dft;
 
-    bool add_bos_token  = true;
+    bool add_bos_token = true;
 
     int32_t n_ctx; // total context for all clients / slots
 
@@ -570,6 +570,7 @@ private:
     std::vector<server_slot> slots;
 
     int slots_debug = 0;
+    int n_empty_consequtive = 0;
 
     std::unique_ptr<server_prompt_cache> prompt_cache;
 
@@ -2628,6 +2629,12 @@ private:
 
         if (batch.n_tokens == 0) {
             SRV_WRN("%s", "no tokens to decode\n");
+
+            if (++n_empty_consequtive > 3) {
+                GGML_ABORT("fatal error - please provide logs and repro in %s\n", "https://github.com/ggml-org/llama.cpp/pull/20277");
+            }
+        } else {
+            n_empty_consequtive = 0;
         }
 
         int32_t i_next = 0;
