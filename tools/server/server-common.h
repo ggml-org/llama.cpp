@@ -290,6 +290,7 @@ struct server_chat_params {
     int  reasoning_budget = -1;
     std::string reasoning_budget_message;
     std::string media_path;
+    bool force_pure_content = false;
 };
 
 // used by /completions endpoint

@@ -308,6 +308,7 @@ int main(int argc, char ** argv) {
                 inputs.use_jinja = g_params->use_jinja;
                 inputs.messages = chat_msgs;
                 inputs.add_generation_prompt = !params.prompt.empty();
+                inputs.force_pure_content = params.force_pure_content_parser;
 
                 prompt = common_chat_templates_apply(chat_templates.get(), inputs).prompt;
             }
