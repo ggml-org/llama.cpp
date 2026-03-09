@@ -729,6 +729,13 @@ private:
             }
         }
 
+        if (llama_model_n_swa(model) == 0) {
+            if (params_base.swa_full) {
+                params_base.swa_full = false;
+                SRV_WRN("%s\n", "swa_full is not supported by this model, it will be disabled");
+            }
+        }
+
         // Necessary similarity of prompt for slot selection
         slot_prompt_similarity = params_base.slot_prompt_similarity;
 
