@@ -3901,7 +3901,12 @@ struct moe_fusion_state {
     sycl::queue *   fused_q;        // Queue that owns fused_output
     size_t          fused_cap;      // Capacity of fused_output in floats
     std::vector<size_t> cpu_indices;   // Indices of CPU-dispatched experts
-    std::vector<size_t> sec_indices;   // Indices of secondary-GPU experts
+    struct sec_expert_info {
+        size_t ci;          // Original expert index
+        int    device_id;
+        void * device_ptr;
+    };
+    std::vector<sec_expert_info> sec_indices;   // Secondary-GPU experts with cached placement
 
     moe_fusion_state() :
         gate_data(nullptr),
@@ -26330,7 +26335,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                 && placement.device_id < n_gpu_devs_gate
                                 && placement.device_ptr != nullptr
                                 && g_secondary_queues[placement.device_id] != nullptr) {
-                                g_moe_fusion.sec_indices.push_back(ci);
+                                g_moe_fusion.sec_indices.push_back({ci, placement.device_id, placement.device_ptr});
                             } else {
                                 g_moe_fusion.cpu_indices.push_back(ci);
                             }
@@ -26340,7 +26345,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                             g_moe_fusion.cpu_indices.push_back(ci);
                         }
                     }
-                    // n_ids reflects CPU expert count for fusion buffer sizing
+                    // n_ids now reflects CPU-only count (secondary experts tracked via sec_indices).
+                    // ids_data still contains ALL expert IDs; cpu_indices/sec_indices index into it.
                     g_moe_fusion.n_ids = g_moe_fusion.cpu_indices.size();
 
                     // Dispatch secondary GPU experts for GATE computation.
@@ -26349,18 +26355,12 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     if (!g_moe_fusion.sec_indices.empty()) {
                         const int n_gpu_devs_gate = ggml_sycl_info().total_gpu_count;
                         std::vector<std::vector<expert_dispatch_entry>> sec_entries_gate(n_gpu_devs_gate);
-                        for (size_t si = 0; si < g_moe_fusion.sec_indices.size(); si++) {
-                            const size_t  ci  = g_moe_fusion.sec_indices[si];
-                            const int32_t eid = ids_data_f[ci];
-                            auto placement = placement_table_pre.get(cur_layer_fast, eid);
-                            if (placement.device_id >= 1 && placement.device_id < n_gpu_devs_gate
-                                && placement.device_ptr != nullptr
-                                && g_secondary_queues[placement.device_id] != nullptr) {
-                                const int64_t iid1 = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_f));
-                                const int64_t id   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_f));
-                                sec_entries_gate[placement.device_id].push_back(
-                                    { iid1, id, eid, placement.device_ptr, placement.device_id });
-                            }
+                        for (const auto & sec : g_moe_fusion.sec_indices) {
+                            const int32_t eid = ids_data_f[sec.ci];
+                            const int64_t iid1 = static_cast<int64_t>(sec.ci / static_cast<size_t>(n_ids_f));
+                            const int64_t id   = static_cast<int64_t>(sec.ci % static_cast<size_t>(n_ids_f));
+                            sec_entries_gate[sec.device_id].push_back(
+                                { iid1, id, eid, sec.device_ptr, sec.device_id });
                         }
                         char * dst_d_gate = static_cast<char *>(ggml_sycl_get_data_ptr(dst, ctx.device));
                         secondary_dispatch_ctx sctx_gate = {
@@ -26441,18 +26441,12 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         const int64_t n_ids_up = ids->ne[0];
                         const int n_gpu_devs_up = ggml_sycl_info().total_gpu_count;
                         std::vector<std::vector<expert_dispatch_entry>> sec_entries_up(n_gpu_devs_up);
-                        for (size_t si = 0; si < g_moe_fusion.sec_indices.size(); si++) {
-                            const size_t  ci  = g_moe_fusion.sec_indices[si];
-                            const int32_t eid = g_moe_fusion.ids_data[ci];
-                            auto placement = placement_table_pre.get(cur_layer_fast, eid);
-                            if (placement.device_id >= 1 && placement.device_id < n_gpu_devs_up
-                                && placement.device_ptr != nullptr
-                                && g_secondary_queues[placement.device_id] != nullptr) {
-                                const int64_t iid1 = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_up));
-                                const int64_t id   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_up));
-                                sec_entries_up[placement.device_id].push_back(
-                                    { iid1, id, eid, placement.device_ptr, placement.device_id });
-                            }
+                        for (const auto & sec : g_moe_fusion.sec_indices) {
+                            const int32_t eid = g_moe_fusion.ids_data[sec.ci];
+                            const int64_t iid1 = static_cast<int64_t>(sec.ci / static_cast<size_t>(n_ids_up));
+                            const int64_t id   = static_cast<int64_t>(sec.ci % static_cast<size_t>(n_ids_up));
+                            sec_entries_up[sec.device_id].push_back(
+                                { iid1, id, eid, sec.device_ptr, sec.device_id });
                         }
                         // Build dispatch context for UP sub-tensor
                         char * dst_d_up = static_cast<char *>(ggml_sycl_get_data_ptr(dst, ctx.device));
@@ -26565,18 +26559,12 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     if (!g_moe_fusion.sec_indices.empty()) {
                         const int n_gpu_devs_dn = ggml_sycl_info().total_gpu_count;
                         std::vector<std::vector<expert_dispatch_entry>> sec_entries_dn(n_gpu_devs_dn);
-                        for (size_t si = 0; si < g_moe_fusion.sec_indices.size(); si++) {
-                            const size_t  ci  = g_moe_fusion.sec_indices[si];
-                            const int32_t eid = g_moe_fusion.ids_data[ci];
-                            auto placement = placement_table_pre.get(cur_layer_fast, eid);
-                            if (placement.device_id >= 1 && placement.device_id < n_gpu_devs_dn
-                                && placement.device_ptr != nullptr
-                                && g_secondary_queues[placement.device_id] != nullptr) {
-                                const int64_t iid1 = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_d));
-                                const int64_t id   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_d));
-                                sec_entries_dn[placement.device_id].push_back(
-                                    { iid1, id, eid, placement.device_ptr, placement.device_id });
-                            }
+                        for (const auto & sec : g_moe_fusion.sec_indices) {
+                            const int32_t eid = g_moe_fusion.ids_data[sec.ci];
+                            const int64_t iid1 = static_cast<int64_t>(sec.ci / static_cast<size_t>(n_ids_d));
+                            const int64_t id   = static_cast<int64_t>(sec.ci % static_cast<size_t>(n_ids_d));
+                            sec_entries_dn[sec.device_id].push_back(
+                                { iid1, id, eid, sec.device_ptr, sec.device_id });
                         }
                         // For DOWN, activation is on device (output of SiLU/multiply)
                         char * src1_d = static_cast<char *>(ggml_sycl_get_data_ptr(src1, ctx.device));
@@ -26600,12 +26588,10 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         // CPU fallback for failed secondary dispatch
                         if (!cpu_fallback_dn.empty()) {
                             for (const auto & e : cpu_fallback_dn) {
-                                const size_t ci_fb = static_cast<size_t>(e.iid1) * static_cast<size_t>(n_ids_d) + static_cast<size_t>(e.id);
-                                // Need unfused path for fallback — zero the slot
-                                // (the fused output doesn't cover secondary experts)
+                                GGML_LOG_WARN("[CPU-TG-FUSE] DOWN fallback: zeroing slot for expert %d (secondary dispatch failed)\n",
+                                              e.expert_id);
                                 char * slot_fb = dst_d + e.id * nb1 + e.iid1 * nb2;
                                 stream->memset(slot_fb, 0, static_cast<size_t>(N_d) * sizeof(float));
-                                (void)ci_fb;
                             }
                         }
                     }
