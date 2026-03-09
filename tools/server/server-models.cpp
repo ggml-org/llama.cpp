@@ -1155,6 +1155,10 @@ server_http_proxy::server_http_proxy(
                 // disable Accept-Encoding to avoid compressed responses
                 continue;
             }
+            if (key == "Transfer-Encoding") {
+                // the body is already decoded
+                continue;
+            }
             if (key == "Host" || key == "host") {
                 req.set_header(key, host);
             } else {
