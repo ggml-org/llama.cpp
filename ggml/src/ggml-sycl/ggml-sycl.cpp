@@ -3961,6 +3961,11 @@ static float            g_moe_fused_act_alpha = 0.0f;
 static float            g_moe_fused_act_limit = 0.0f;
 
 // MoE fusion env var: GGML_SYCL_MOE_FUSE (default: 1 = enabled)
+// Fusion is automatically disabled for models with expert biases (ADD_ID after
+// MUL_MAT_ID) because the fused gate+up+SiLU kernel does not incorporate
+// per-expert bias terms, producing incorrect output.
+static std::atomic<bool> g_moe_has_expert_bias{ false };
+
 static bool ggml_sycl_moe_fusion_enabled() {
     static std::atomic<int> moe_fusion_mode{ -1 };
     int                     val = moe_fusion_mode.load(std::memory_order_acquire);
@@ -3969,6 +3974,9 @@ static bool ggml_sycl_moe_fusion_enabled() {
         int          new_val = env ? std::atoi(env) : 1;
         moe_fusion_mode.compare_exchange_strong(val, new_val, std::memory_order_release, std::memory_order_acquire);
         val = moe_fusion_mode.load(std::memory_order_acquire);
+    }
+    if (val != 0 && g_moe_has_expert_bias.load(std::memory_order_acquire)) {
+        return false;
     }
     return val != 0;
 }
@@ -26973,6 +26981,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             char * dst_d = static_cast<char *>(ggml_sycl_get_data_ptr(dst, ctx.device));
             const float * out_src = tl_out_pinned.ptr;
             const bool scatter_contiguous = (nb1 == static_cast<size_t>(N) * sizeof(float));
+
             if (scatter_contiguous && ne12 == 1) {
                 // Single bulk H2D copy — source (tl_out_buf) and destination
                 // are both contiguous for the single-token case.
@@ -30739,6 +30748,31 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     ggml_sycl_data_ptr_cache_new_graph();
     ggml_sycl_cpu_quant_cache_new_graph();
     ggml_sycl_moe_ids_cache_new_graph();
+
+    // Detect expert biases: scan for ADD_ID nodes following MoE MUL_MAT_ID.
+    // Models with expert biases (e.g. GPT-OSS) have ADD_ID(MUL_MAT_ID, bias)
+    // after each gate/up/down expert matmul.  The fused gate+up+SiLU kernel
+    // does not incorporate these biases, so fusion must be disabled.
+    {
+        static std::once_flag bias_detect_flag;
+        std::call_once(bias_detect_flag, [&]() {
+            for (int i = 0; i < cgraph->n_nodes; i++) {
+                const ggml_tensor * node = cgraph->nodes[i];
+                if (node->op == GGML_OP_ADD_ID && node->src[0] &&
+                    node->src[0]->op == GGML_OP_MUL_MAT_ID) {
+                    const char * src0_name = node->src[0]->src[0] ? node->src[0]->src[0]->name : nullptr;
+                    if (src0_name && (strstr(src0_name, "ffn_gate") ||
+                                      strstr(src0_name, "ffn_up") ||
+                                      strstr(src0_name, "ffn_down"))) {
+                        g_moe_has_expert_bias.store(true, std::memory_order_release);
+                        GGML_LOG_INFO("[SYCL] Detected expert biases (ADD_ID after MoE MUL_MAT_ID) "
+                                      "— disabling MoE gate+up+SiLU fusion\n");
+                        break;
+                    }
+                }
+            }
+        });
+    }
 
     // Pre-scan graph for MoE routing weights tensors.
     // Maps layer_id -> final weights tensor for expert probability threshold.
