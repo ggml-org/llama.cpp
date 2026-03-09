@@ -952,6 +952,22 @@ bool ExpertPredictor::is_prefetch_disabled() const {
     return prefetch_disabled_;
 }
 
+std::vector<std::pair<int, uint32_t>> ExpertPredictor::get_frequency_ranking(int layer_idx) const {
+    if (!initialized_ || layer_idx < 0 || layer_idx >= n_layers_) {
+        return {};
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<std::pair<int, uint32_t>> ranked;
+    for (int e = 0; e < n_experts_; e++) {
+        if (freq_table_[layer_idx][e] > 0) {
+            ranked.push_back({e, freq_table_[layer_idx][e]});
+        }
+    }
+    std::sort(ranked.begin(), ranked.end(),
+              [](const auto & a, const auto & b) { return a.second > b.second; });
+    return ranked;
+}
+
 std::vector<int> ExpertPredictor::top_k_by_freq(int layer_idx,
                                                  const std::vector<int> & exclude,
                                                  int k) const {
