@@ -1959,11 +1959,11 @@ static void ggml_cuda_mul_mat_batched_cublas_impl(ggml_backend_cuda_context & ct
     const void * beta = traits::get_beta();
 
     const auto & force_compute_type = ggml_cuda_cublas_get_force_compute_type();
-    
+
     int id = ggml_cuda_get_device();
     const int cc = ggml_cuda_info().devices[id].cc;
     static constexpr bool is_src0_type_f16 = src0_type == GGML_TYPE_F16;
-    
+
     // bf16 and fp32 are already being computed in fp32 (ensure it using static_assert),
     // so checking necessity of forced fp32 only for fp16 src0_type
     static_assert(is_src0_type_f16 || traits::compute_type == CUBLAS_COMPUTE_32F);
@@ -1972,7 +1972,6 @@ static void ggml_cuda_mul_mat_batched_cublas_impl(ggml_backend_cuda_context & ct
                                                                                   || GGML_CUDA_CC_IS_RDNA4(cc)
                                                                                   || cc == GGML_CUDA_CC_VOLTA
                                                                                   || force_compute_type.fp32);
-
 
     if (dst->op_params[0] == GGML_PREC_DEFAULT && !need_compute_32f) {
         if constexpr (src0_type == GGML_TYPE_F32) {
