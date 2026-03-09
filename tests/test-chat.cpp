@@ -637,6 +637,41 @@ static common_chat_tool quoted_unquoted_tool{
 };
 
 
+static common_chat_tool tool_2req_4opt{
+    /* .name = */ "tool_2req_4opt",
+    /* .description = */ "Tool with 2 required and 4 optional params",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "req1": { "type": "string", "description": "Required string" },
+            "req2": { "type": "integer", "description": "Required int" },
+            "opt1": { "type": "string", "description": "Optional string 1" },
+            "opt2": { "type": "integer", "description": "Optional int 1" },
+            "opt3": { "type": "string", "description": "Optional string 2" },
+            "opt4": { "type": "integer", "description": "Optional int 2" }
+        },
+        "required": ["req1", "req2"]
+    })",
+};
+
+static common_chat_tool tool_2req_5opt{
+    /* .name = */ "tool_2req_5opt",
+    /* .description = */ "Tool with 2 required and 5 optional params",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "req1": { "type": "string", "description": "Required string" },
+            "req2": { "type": "integer", "description": "Required int" },
+            "opt1": { "type": "string", "description": "Optional string 1" },
+            "opt2": { "type": "integer", "description": "Optional int 1" },
+            "opt3": { "type": "string", "description": "Optional string 2" },
+            "opt4": { "type": "integer", "description": "Optional int 2" },
+            "opt5": { "type": "string", "description": "Optional string 3" }
+        },
+        "required": ["req1", "req2"]
+    })",
+};
+
 static std::vector<common_chat_tool> tools{ special_function_tool, special_function_tool_with_optional_param,
                                             python_tool, html_tool, todo_list };
 
@@ -1399,9 +1434,7 @@ static void test_msgs_oaicompat_json_conversion() {
                               "        \"type\": \"function\",\n"
                               "        \"function\": {\n"
                               "          \"name\": \"python\",\n"
-                              "          \"arguments\": {\n"
-                              "            \"code\": \"print('hey')\"\n"
-                              "          }\n"
+                              "          \"arguments\": \"{\\\"code\\\":\\\"print('hey')\\\"}\"\n"
                               "        }\n"
                               "      }\n"
                               "    ]\n"
@@ -1958,6 +1991,58 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 { "todo_list", "{\"todos\": [{\"item\": \"Check stuff\", \"selected\": false}, {\"item\": \"Prepare stuff\", \"selected\": true}]}", {} },
             })
             .run();
+
+        // Test flexible optional argument ordering (2 required + 4 optional, reversed optional order)
+        tst.test(
+               "<tool_call>\n"
+               "<function=tool_2req_4opt>\n"
+               "<parameter=req1>\nhello\n</parameter>\n"
+               "<parameter=req2>\n42\n</parameter>\n"
+               "<parameter=opt4>\n100\n</parameter>\n"
+               "<parameter=opt2>\n200\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ tool_2req_4opt })
+            .expect_tool_calls({
+                { "tool_2req_4opt", R"({"req1": "hello", "req2": 42, "opt4": 100, "opt2": 200})", {} },
+            })
+            .run();
+
+        // Test flexible optional argument ordering (2 required + 5 optional, reversed optional order)
+        tst.test(
+               "<tool_call>\n"
+               "<function=tool_2req_5opt>\n"
+               "<parameter=req1>\nworld\n</parameter>\n"
+               "<parameter=req2>\n7\n</parameter>\n"
+               "<parameter=opt5>\nlast\n</parameter>\n"
+               "<parameter=opt3>\nmiddle\n</parameter>\n"
+               "<parameter=opt1>\nfirst\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ tool_2req_5opt })
+            .expect_tool_calls({
+                { "tool_2req_5opt", R"({"req1": "world", "req2": 7, "opt5": "last", "opt3": "middle", "opt1": "first"})", {} },
+            })
+            .run();
+
+        // Test flexible optional argument ordering (2 required + 5 optional, all 5 in shuffled order)
+        tst.test(
+               "<tool_call>\n"
+               "<function=tool_2req_5opt>\n"
+               "<parameter=req1>\ntest\n</parameter>\n"
+               "<parameter=req2>\n99\n</parameter>\n"
+               "<parameter=opt3>\nc\n</parameter>\n"
+               "<parameter=opt1>\na\n</parameter>\n"
+               "<parameter=opt5>\ne\n</parameter>\n"
+               "<parameter=opt4>\n4\n</parameter>\n"
+               "<parameter=opt2>\n2\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ tool_2req_5opt })
+            .expect_tool_calls({
+                { "tool_2req_5opt", R"({"req1": "test", "req2": 99, "opt3": "c", "opt1": "a", "opt5": "e", "opt4": 4, "opt2": 2})", {} },
+            })
+            .run();
     }
     {
         auto tst = peg_tester("models/templates/deepseek-ai-DeepSeek-V3.1.jinja", detailed_debug);
@@ -2299,6 +2384,78 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                "{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>")
             .tools({ special_function_tool })
             .expect(kimi_id_special_func_tool_call)
+            .run();
+    }
+
+    // LFM2-8B-A1B tests - uses <|tool_list_start|>/<|tool_list_end|> and <|tool_call_start|>[name(args)]<|tool_call_end|>
+    {
+        auto tst = peg_tester("models/templates/LFM2-8B-A1B.jinja", detailed_debug);
+
+        // Basic content only
+        tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
+
+        // Single tool call without reasoning
+        tst.test("<|tool_call_start|>[special_function(arg1=1)]<|tool_call_end|>")
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+
+        // Tool call with string argument
+        tst.test("<|tool_call_start|>[get_time(city=\"XYZCITY\")]<|tool_call_end|>")
+            .tools({ get_time_tool })
+            .expect(message_with_tool_calls("get_time", "{\"city\":\"XYZCITY\"}"))
+            .run();
+
+        // Tool call with reasoning (enable_thinking=true)
+        tst.test("<think>I'm\nthinking</think><|tool_call_start|>[special_function(arg1=1)]<|tool_call_end|>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(message_assist_call_thoughts)
+            .run();
+
+        // Multiple tool calls (parallel)
+        tst.test("<|tool_call_start|>[special_function(arg1=1), special_function_with_opt(arg1=1, arg2=2)]<|tool_call_end|>")
+            .parallel_tool_calls(true)
+            .tools({
+                special_function_tool, special_function_tool_with_optional_param
+            })
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", {} },
+                { "special_function_with_opt", R"({"arg1": 1, "arg2": 2})", {} },
+            })
+            .run();
+
+        // Tool call with reasoning and content
+        tst.test("<think>I need to call a function</think>"
+                 "Let me check the time.<|tool_call_start|>[get_time(city=\"Paris\")]<|tool_call_end|>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ get_time_tool })
+            .expect(message_with_reasoning_content_and_multiple_tool_calls(
+                "I need to call a function", "Let me check the time.", { { "get_time", "{\"city\":\"Paris\"}" } }
+            ))
+            .run();
+
+        // Python tool with multiline code in string
+        tst.test("<|tool_call_start|>[python(code=\"def hello():\\n    print('hey')\")]<|tool_call_end|>")
+            .tools({ python_tool })
+            .expect_tool_calls({
+                { "python", R"#({"code": "def hello():\\n    print('hey')"})#", "" }
+            })
+            .run();
+
+        // Partial tool call (streaming)
+        tst.test("<|tool_call_start|>[special_function(arg1=")
+            .tools({ special_function_tool })
+            .is_partial(true)
+            .expect(simple_assist_msg("", "", "special_function", "{\"arg1\": "))
+            .run();
+
+        // Tool call with empty arguments
+        tst.test("<|tool_call_start|>[empty_args()]<|tool_call_end|>")
+            .tools({ empty_args_tool })
+            .expect(simple_assist_msg("", "", "empty_args", "{}"))
             .run();
     }
 

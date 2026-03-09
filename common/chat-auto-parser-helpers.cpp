@@ -162,7 +162,7 @@ diff_split calculate_diff_split(const std::string & left, const std::string & ri
         right_fully_consumed = true;
     }
 
-    auto eat_segment = [](std::string & str, segment & seg) -> std::string { return str.append(seg.value); };
+    auto eat_segment = [](std::string str, const segment & seg) -> std::string { return std::move(str) + seg.value; };
 
     bool can_have_text_suffix = left_end->type == segment_type::TEXT && right_end->type == segment_type::TEXT;
     bool can_have_text_prefix = right_start->type == segment_type::TEXT && left_start->type == segment_type::TEXT;
