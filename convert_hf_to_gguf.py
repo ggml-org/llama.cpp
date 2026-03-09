@@ -4440,7 +4440,7 @@ class Qwen2MoeModel(TextModel):
         # process the experts separately
         name = name.replace("language_model.", "") # InternVL
 
-        # NVFP4 expert weights are handled in generate_extra_tensors
+        # NVFP4 expert weights are handled in _generate_nvfp4_tensors
         if self._is_nvfp4 and "experts" in name:
             if name.endswith((".weight", ".weight_scale", ".weight_scale_2", ".input_scale")):
                 if name.endswith(".weight") and name.replace(".weight", ".weight_scale") in self.model_tensors:
