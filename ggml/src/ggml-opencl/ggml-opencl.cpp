@@ -12004,6 +12004,7 @@ static void ggml_cl_cumsum(ggml_backend_t backend, const ggml_tensor * src0, con
     const int net0 = CEIL_DIV(ne00, nth);
     const int net1 = ne01;
     const int net2 = ne02;
+    const int net3 = ne03;
 
     const cl_ulong nbt0 = sizeof(float);
     const cl_ulong nbt1 = net0*nbt0;
@@ -12030,13 +12031,17 @@ static void ggml_cl_cumsum(ggml_backend_t backend, const ggml_tensor * src0, con
     CL_CHECK(clSetKernelArg(kernel,  14, sizeof(int),      &net1));
     CL_CHECK(clSetKernelArg(kernel,  15, sizeof(int),      &net2));
 
-    size_t global_work_size[] = { (size_t)(nth * net0 * ne01), (size_t)ne02, (size_t)ne03};
+    size_t global_work_size[] = { (size_t)(nth*net0*ne01), (size_t)ne02, (size_t)ne03};
     size_t local_work_size[] = { (size_t)nth, 1, 1};
 
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 
-    if(ne00 > nth){
+    if(ne00 > nth) {
+        // if a single workgroup cannot handle an entire row, each workgroup
+        // computes a partial sum and stores to dst, tmp_buffer contains the sum
+        // of the each workgroup; cumsum this buffer and add to the partial sums in dst
         cl_ulong offsett = 0;
+        kernel = backend_ctx->kernel_cumsum_blk;
         CL_CHECK(clSetKernelArg(kernel,   0, sizeof(cl_mem),   &tmp_buffer.buffer));
         CL_CHECK(clSetKernelArg(kernel,   1, sizeof(cl_ulong), &offsett));
         CL_CHECK(clSetKernelArg(kernel,   2, sizeof(cl_mem),   &tmp_buffer.buffer));
@@ -12054,10 +12059,11 @@ static void ggml_cl_cumsum(ggml_backend_t backend, const ggml_tensor * src0, con
         CL_CHECK(clSetKernelArg(kernel,  14, sizeof(int),      &net1));
         CL_CHECK(clSetKernelArg(kernel,  15, sizeof(int),      &net2));
 
-        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+        size_t global_work_size_1[] = { (size_t)net1*nth, (size_t)net2, (size_t)net3};
+        size_t local_work_size_1[] = { (size_t)nth, 1, 1};
+        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size_1, local_work_size_1, dst);
 
         kernel = backend_ctx->kernel_cumsum_add;
-
         CL_CHECK(clSetKernelArg(kernel,   0, sizeof(cl_mem),   &tmp_buffer.buffer));
         CL_CHECK(clSetKernelArg(kernel,   1, sizeof(cl_mem),   &extrad->data_device));
         CL_CHECK(clSetKernelArg(kernel,   2, sizeof(cl_ulong), &offsetd));
@@ -12070,7 +12076,9 @@ static void ggml_cl_cumsum(ggml_backend_t backend, const ggml_tensor * src0, con
         CL_CHECK(clSetKernelArg(kernel,   9, sizeof(int),      &nbt2));
         CL_CHECK(clSetKernelArg(kernel,  10, sizeof(int),      &nbt3));
 
-        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+        size_t global_work_size_2[] = { (size_t)(nth*net0*ne01), (size_t)ne02, (size_t)ne03};
+        size_t local_work_size_2[] = { (size_t)nth, 1, 1};
+        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size_2, local_work_size_2, dst);
     }
 }
 
