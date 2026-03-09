@@ -26837,12 +26837,21 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             }
 
             int n_tasks = 0;
+            int n_sec_skipped = 0;
             for (size_t ci = 0; ci < n_cpu; ci++) {
                 float * out_ptr = tl_out_pinned.ptr + ci * static_cast<size_t>(N);
                 if (skip_flags[ci]) {
                     // Zero output for skipped expert — downstream MUL will
                     // apply non-zero weight to zero, producing zero contribution.
                     memset(out_ptr, 0, static_cast<size_t>(N) * sizeof(float));
+                    // Track if this would have been a secondary GPU expert
+                    if (have_secondary_fast && layer_id_fast >= 0) {
+                        const int32_t eid_skip = ids_data[ci];
+                        auto placement = placement_table_pre.get(layer_id_fast, eid_skip);
+                        if (placement.device_id >= 1 && placement.device_ptr != nullptr) {
+                            n_sec_skipped++;
+                        }
+                    }
                     continue;
                 }
                 const int32_t expert_id = ids_data[ci];
@@ -26939,6 +26948,15 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
                     ggml_sycl_cpu_expert_mul_mat_batched(tasks_ptr + (n_tasks - static_cast<int>(cpu_fallback_fast.size())),
                                                         static_cast<int>(cpu_fallback_fast.size()));
+                }
+            }
+
+            // Diagnostic: log secondary GPU expert skips
+            if (n_sec_skipped > 0) {
+                static std::atomic<int> sec_skip_log{ 0 };
+                if (sec_skip_log.fetch_add(1, std::memory_order_relaxed) < 10) {
+                    GGML_LOG_INFO("[MOE-SKIP] layer %d: %d secondary GPU expert(s) skipped by prob threshold\n",
+                                  layer_id_fast, n_sec_skipped);
                 }
             }
 
