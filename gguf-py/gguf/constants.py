@@ -177,6 +177,8 @@ class Keys:
         TEMPERATURE_LENGTH           = "{arch}.attention.temperature_length"
         KEY_LENGTH_MLA               = "{arch}.attention.key_length_mla"
         VALUE_LENGTH_MLA             = "{arch}.attention.value_length_mla"
+        KEY_LENGTH_SWA               = "{arch}.attention.key_length_swa"
+        VALUE_LENGTH_SWA             = "{arch}.attention.value_length_swa"
         SHARED_KV_LAYERS             = "{arch}.attention.shared_kv_layers"
         SLIDING_WINDOW_PATTERN       = "{arch}.attention.sliding_window_pattern"
         TEMPERATURE_SCALE            = "{arch}.attention.temperature_scale"
@@ -188,6 +190,7 @@ class Keys:
 
     class Rope:
         DIMENSION_COUNT           = "{arch}.rope.dimension_count"
+        DIMENSION_COUNT_SWA       = "{arch}.rope.dimension_count_swa"
         DIMENSION_SECTIONS        = "{arch}.rope.dimension_sections"
         FREQ_BASE                 = "{arch}.rope.freq_base"
         FREQ_BASE_SWA             = "{arch}.rope.freq_base_swa"

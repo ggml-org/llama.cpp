@@ -100,8 +100,8 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn(
         ggml_tensor *             cur,
         ggml_tensor *             inp_pos,
         int                       il) {
-    const int64_t n_embd_head = hparams.n_embd_head_v;
-    GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
+    const int64_t n_embd_head = hparams.n_embd_head_v();
+    GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
 
     // Order: joint QG projection, QG split, Q norm, KV projection, K norm, RoPE, attention
 

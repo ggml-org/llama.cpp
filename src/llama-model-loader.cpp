@@ -918,7 +918,7 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
             } break;
         case GGML_OP_ROPE:
             {
-                const int n_embd_head = hparams.n_embd_head_v;
+                const int n_embd_head = hparams.n_embd_head_v();
                 const int n_head = hparams.n_head();
                 ggml_tensor * a = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd_head, n_head, 512);
                 ggml_tensor * b = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 512);
