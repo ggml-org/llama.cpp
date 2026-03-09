@@ -25866,7 +25866,7 @@ struct secondary_dispatch_ctx {
     int64_t             ne11, nb11, nb12; // src1 strides
     int64_t             nb1, nb2;         // dst strides
     bool                act_on_host;      // Whether activation is host-staged
-    float *             shared_act_host;  // Shared activation host buffer
+    const float *       shared_act_host;  // Shared activation host buffer
     sycl::event         act_d2h_event;    // Activation D2H completion event
     const ggml_tensor * dst_tensor;       // For dst_tensor tracking
 };
@@ -26744,7 +26744,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     dst_d_sec,                        // dst_original (GPU0 device pointer)
                     K, N, ne11, nb11, nb12, nb1, nb2,
                     true,                             // act_on_host: fast path already resolved
-                    const_cast<float *>(act_host_ptr), // shared_act_host
+                    act_host_ptr,                     // shared_act_host
                     sycl::event{},                    // act_d2h_event: no-op (already on host)
                     dst                               // dst_tensor for tracking
                 };
@@ -26769,10 +26769,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         tasks_ptr[n_tasks].N           = static_cast<int>(N);
                         n_tasks++;
                     }
-                    if (!cpu_fallback_fast.empty()) {
-                        ggml_sycl_cpu_expert_mul_mat_batched(tasks_ptr + (n_tasks - static_cast<int>(cpu_fallback_fast.size())),
-                                                            static_cast<int>(cpu_fallback_fast.size()));
-                    }
+                    ggml_sycl_cpu_expert_mul_mat_batched(tasks_ptr + (n_tasks - static_cast<int>(cpu_fallback_fast.size())),
+                                                        static_cast<int>(cpu_fallback_fast.size()));
                 }
             }
 
@@ -27612,7 +27610,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                             : decltype(placement_table.get(0, 0)){};
 
                         if (placement.device_id == 0 && placement.device_ptr) {
-                            gpu_entries.push_back({ iid1, id, i02, placement.device_ptr });
+                            gpu_entries.push_back({ iid1, id, i02, placement.device_ptr, /* device_id */ 0 });
                         } else if (placement.device_id >= 1
                                    && placement.device_id < n_gpu_devs
                                    && placement.device_ptr != nullptr
@@ -27625,7 +27623,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                 { iid1, id, i02, const_cast<void *>(expert_ptrs_host[i02]) });
                         } else {
                             // No GPU has this expert cached — CPU fallback
-                            cpu_entries.push_back({ iid1, id, i02, nullptr });
+                            cpu_entries.push_back({ iid1, id, i02, nullptr, /* device_id */ 0 });
                         }
                     }
                 }
