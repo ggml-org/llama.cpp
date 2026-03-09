@@ -26895,7 +26895,16 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             // --- Dispatch secondary GPU experts (multi-GPU mode) ---
             // These run concurrently with CPU compute above.  Results are
             // deferred to flush_pending_secondary_scatter_if_consumed().
+            bool any_secondary_dispatched = false;
             if (have_secondary_fast) {
+                for (int d = 1; d < n_gpu_devs_fast; d++) {
+                    if (!sec_entries_fast[d].empty()) {
+                        any_secondary_dispatched = true;
+                        break;
+                    }
+                }
+            }
+            if (any_secondary_dispatched) {
                 char * dst_d_sec = static_cast<char *>(ggml_sycl_get_data_ptr(dst, ctx.device));
                 secondary_dispatch_ctx sctx = {
                     stream, src0,
