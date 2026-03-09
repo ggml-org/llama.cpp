@@ -44,6 +44,7 @@ add_library(llama
             models/baichuan.cpp
             models/bailingmoe.cpp
             models/bailingmoe2.cpp
+            models/sarvam-moe.cpp
             models/bert.cpp
             models/bitnet.cpp
             models/bloom.cpp
