@@ -179,7 +179,7 @@ struct quantize_state_impl {
     bool has_imatrix = false;
 
     // used to figure out if a model has tied embeddings (tok_embd shares weights with output)
-    bool has_tied_embeddings = false; // assume tied until we see output.weight
+    bool has_tied_embeddings = true; // assume tied until we see output.weight
 
     // tensor type override patterns (compiled once, used twice)
     std::vector<std::pair<std::regex, ggml_type>> tensor_type_patterns;
