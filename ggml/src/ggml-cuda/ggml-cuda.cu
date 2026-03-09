@@ -1253,9 +1253,9 @@ static const cublas_force_compute_type & ggml_cuda_cublas_get_force_compute_type
 
         const bool ggml_cuda_force_cublas_compute_32f_env = getenv("GGML_CUDA_FORCE_CUBLAS_COMPUTE_32F") != nullptr;
         const bool ggml_cuda_force_cublas_compute_16f_env = getenv("GGML_CUDA_FORCE_CUBLAS_COMPUTE_16F") != nullptr;
-        
+
         GGML_ASSERT(ggml_cuda_force_cublas_compute_16f_env == false || ggml_cuda_force_cublas_compute_32f_env == false);
-        
+
         if (ggml_cuda_force_cublas_compute_32f_env) {
             GGML_LOG_INFO("Detected GGML_CUDA_FORCE_CUBLAS_COMPUTE_32F\n");
             result.fp32 = true;
@@ -1357,7 +1357,7 @@ static void ggml_cuda_op_mul_mat_cublas(
         if (!force_compute_type.fp16 && (GGML_CUDA_CC_IS_CDNA(cc)
                                         || GGML_CUDA_CC_IS_RDNA4(cc)
                                         || cc == GGML_CUDA_CC_VOLTA
-                                        || force_compute_type.fp32)) 
+                                        || force_compute_type.fp32))
         {
             const float alpha = 1.0f;
             const float beta = 0.0f;
