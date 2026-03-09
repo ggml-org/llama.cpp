@@ -4072,6 +4072,7 @@ struct pending_secondary_scatter {
         float *       out_staging;   // Host-pinned output buffer (from ring)
         size_t        bytes;         // Output size in bytes
         sycl::queue * target_queue;  // Secondary GPU queue that produced this result
+        sycl::event   last_event;    // Last D2H memcpy event on target queue
     };
     std::vector<scatter_entry> entries;
     sycl::queue *           stream     = nullptr;  // Primary GPU queue for H2D scatter
@@ -4085,19 +4086,9 @@ static void flush_pending_secondary_scatter() {
     if (!g_pending_secondary_scatter.active) return;
 
     try {
-        // Wait on all unique secondary GPU queues
-        sycl::queue * waited[GGML_SYCL_MAX_DEVICES] = {};
-        int n_waited = 0;
-        for (const auto & e : g_pending_secondary_scatter.entries) {
-            if (!e.target_queue) continue;
-            bool already = false;
-            for (int i = 0; i < n_waited; i++) {
-                if (waited[i] == e.target_queue) { already = true; break; }
-            }
-            if (!already && n_waited < GGML_SYCL_MAX_DEVICES) {
-                e.target_queue->wait();
-                waited[n_waited++] = e.target_queue;
-            }
+        // Wait on specific D2H memcpy events instead of draining entire queues
+        for (auto & e : g_pending_secondary_scatter.entries) {
+            e.last_event.wait();
         }
 
         // Scatter results H2D to primary GPU dst, then drain
@@ -26103,9 +26094,11 @@ static void dispatch_experts_secondary_gpu_impl(
         }
 
         // Phase 4: Submit ALL D2H result copies from secondary GPU.
+        // Capture events for event-based sync (avoids full queue drain).
+        sycl::event d2h_events[MERGE_RING_SIZE];
         for (size_t ci = 0; ci < chunk_sz; ci++) {
             const int slot = static_cast<int>(ci);
-            target_queue->memcpy(out_staging[slot], dev_out[slot], needed_out);
+            d2h_events[ci] = target_queue->memcpy(out_staging[slot], dev_out[slot], needed_out);
         }
 
         // Record scatter metadata for deferred flush.
@@ -26116,7 +26109,7 @@ static void dispatch_experts_secondary_gpu_impl(
             const int64_t i2    = entry.iid1;
             char *        d_d   = ctx.dst_original + i1 * nb1 + i2 * nb2;
             g_pending_secondary_scatter.entries.push_back(
-                { d_d, out_staging[slot], needed_out, target_queue });
+                { d_d, out_staging[slot], needed_out, target_queue, d2h_events[ci] });
         }
         g_pending_secondary_scatter.stream     = ctx.stream;
         g_pending_secondary_scatter.active     = true;
