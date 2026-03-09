@@ -302,7 +302,48 @@ struct common_sampler {
     void apply_active_grammars(llama_token_data_array * cur_p_) {
         for (auto & g : grammars) {
             if (g.state == COMMON_GRAMMAR_STATE_ACTIVE && g.sampler) {
-                llama_sampler_apply(g.sampler, cur_p_);
+                if (g.spec.non_terminating) {
+                    // For non-terminating grammars, detect if the grammar is complete
+                    // (only EOG tokens survive). If so, skip applying and transition out.
+                    // Save logits before applying so we can restore if needed.
+                    std::vector<float> saved_logits(cur_p_->size);
+                    for (size_t i = 0; i < cur_p_->size; i++) {
+                        saved_logits[i] = cur_p_->data[i].logit;
+                    }
+
+                    llama_sampler_apply(g.sampler, cur_p_);
+
+                    // Check if any non-EOG token survived
+                    bool has_non_eog = false;
+                    for (size_t i = 0; i < cur_p_->size; i++) {
+                        if (cur_p_->data[i].logit > -INFINITY
+                                && !llama_vocab_is_eog(vocab, cur_p_->data[i].id)) {
+                            has_non_eog = true;
+                            break;
+                        }
+                    }
+
+                    if (!has_non_eog) {
+                        // Grammar is complete — restore logits and transition out
+                        for (size_t i = 0; i < cur_p_->size; i++) {
+                            cur_p_->data[i].logit = saved_logits[i];
+                        }
+                        if (g.spec.rearmable) {
+                            g.state = COMMON_GRAMMAR_STATE_IDLE;
+                            llama_sampler_reset(g.sampler);
+                            g.arm_trigger_buffer.clear();
+                            g.defuse_trigger_buffer.clear();
+                            LOG_INF("%s: grammar '%s' completed, returning to IDLE\n",
+                                    __func__, g.spec.id.c_str());
+                        } else {
+                            g.state = COMMON_GRAMMAR_STATE_EXHAUSTED;
+                            LOG_INF("%s: grammar '%s' completed (one-shot)\n",
+                                    __func__, g.spec.id.c_str());
+                        }
+                    }
+                } else {
+                    llama_sampler_apply(g.sampler, cur_p_);
+                }
             }
         }
     }
@@ -425,14 +466,19 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
             GGML_ABORT("llguidance (cmake -DLLAMA_LLGUIDANCE=ON) is not enabled");
 #endif
         } else if (spec.delayed) {
-            // delayed grammar: create sampler but start in IDLE (or ARMED if arm_immediately)
+            // delayed grammar: create sampler, start state depends on arm_immediately and countdown
             instance.sampler = common_grammar_sampler_create(vocab, spec);
-            if (spec.arm_immediately) {
+            instance.countdown_remaining = spec.countdown;
+            if (spec.arm_immediately && spec.countdown <= 0) {
+                // countdown already expired at init: start directly in ACTIVE
+                instance.state = COMMON_GRAMMAR_STATE_ACTIVE;
+                LOG_INF("%s: grammar '%s' starting directly in ACTIVE (countdown=%d)\n",
+                        __func__, spec.id.c_str(), spec.countdown);
+            } else if (spec.arm_immediately) {
                 instance.state = COMMON_GRAMMAR_STATE_ARMED;
             } else {
                 instance.state = COMMON_GRAMMAR_STATE_IDLE;
             }
-            instance.countdown_remaining = spec.countdown;
         } else {
             // regular or lazy grammar: create sampler, start ACTIVE
             // (for lazy grammars, the internal awaiting_trigger handles the lazy behavior)

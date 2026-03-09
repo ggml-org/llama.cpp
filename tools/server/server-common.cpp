@@ -1,5 +1,6 @@
 #include "common.h"
 #include "download.h"
+#include "json-schema-to-grammar.h"
 #include "log.h"
 #include "llama.h"
 #include "mtmd.h"
@@ -1115,7 +1116,7 @@ json oaicompat_chat_params_parse(
             chat_params.thinking_end_tag.c_str(),
             chat_params.thinking_forced_open ? "true" : "false");
 
-        if (reasoning_budget > 0
+        if (reasoning_budget >= 0
                 && !chat_params.thinking_end_tag.empty()) {
             json grammar_specs = json::array();
 
@@ -1139,8 +1140,10 @@ json oaicompat_chat_params_parse(
                 llama_params.erase("grammar_triggers");
             }
 
-            // Build the end tag grammar (forces model to output the thinking end tag)
-            std::string end_tag_grammar = "root ::= \"" + chat_params.thinking_end_tag + "\"";
+            // Build the grammar that forces model output when budget expires.
+            // If a budget message is set, it's prepended before the end tag.
+            std::string forced_text = opt.reasoning_budget_message + chat_params.thinking_end_tag;
+            std::string end_tag_grammar = "root ::= " + gbnf_format_literal(forced_text);
 
             json budget_spec;
             budget_spec["id"] = "reasoning_budget";
@@ -1151,10 +1154,12 @@ json oaicompat_chat_params_parse(
             budget_spec["countdown"] = reasoning_budget;
             budget_spec["countdown_mode"] = "tokens";
 
-            // The thinking start tag is typically part of the generation prompt (not sampled),
-            // so we arm immediately for the first thinking block.
-            // The arm trigger is still needed for rearming after exhaustion (if model re-enters thinking).
-            budget_spec["arm_immediately"] = true;
+            // FORCED_OPEN: the thinking start tag is part of the generation prompt (not sampled),
+            // so arm immediately. For TAG_BASED/FORCED_CLOSED/etc., the model generates
+            // the start tag, so we rely on the arm trigger.
+            if (chat_params.thinking_forced_open) {
+                budget_spec["arm_immediately"] = true;
+            }
 
             if (!chat_params.thinking_start_tag.empty()) {
                 json arm_trigger;
