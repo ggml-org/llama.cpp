@@ -3120,7 +3120,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--no-force-pure-content"},
         string_format(
             "force a pure content parser, even if a Jinja template is specified; model will output everything "
-            "in the content section, including any reasaoning and/or tool calls (default: disabled)"
+            "in the content section, including any reasoning and/or tool calls (default: disabled)"
         ),
         [](common_params & params, bool value) {
             params.force_pure_content_parser = value;
