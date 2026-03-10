@@ -637,6 +637,11 @@ static ggml_guid_t ggml_backend_openvino_guid(void) {
     return &guid;
 }
 
+static std::shared_ptr<ov_runtime_context> get_ov_runtime_context_ptr() {
+    static std::shared_ptr<ov_runtime_context> r_ctx = std::make_shared<ov_runtime_context>();
+    return r_ctx;
+}
+
 // backend API
 GGML_BACKEND_API ggml_backend_t ggml_backend_openvino_init(int device) {
     if (device < 0 || device >= ggml_backend_openvino_get_device_count()) {
@@ -650,7 +655,7 @@ GGML_BACKEND_API ggml_backend_t ggml_backend_openvino_init(int device) {
         return nullptr;
     }
 
-    ctx->runtime_context = std::make_shared<ov_runtime_context>();
+    ctx->runtime_context = get_ov_runtime_context_ptr();
     if (ctx->runtime_context == nullptr) {
         GGML_LOG_ERROR("%s: failed to allocate runtime context\n", __func__);
         delete ctx;

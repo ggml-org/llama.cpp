@@ -41,14 +41,18 @@ struct graph_key_hash {
 };
 
 struct ov_runtime_context {
+    std::mutex ov_compute_mutex;
     std::string device;
     bool stateful;
-    size_t stateful_kv_size;
     std::unordered_map<graph_key, std::shared_ptr<GgmlOvDecoder>, graph_key_hash> decoder_cache;
     std::unordered_map<graph_key, std::shared_ptr<ov::InferRequest>, graph_key_hash> infer_request_cache;
     std::unordered_map<graph_key, std::shared_ptr<ov::InferRequest>, graph_key_hash> infer_request_cache_prefill;
     std::unordered_map<graph_key, std::vector<std::string>, graph_key_hash> ov_input_names_cache;
     std::unordered_map<graph_key, std::vector<std::string>, graph_key_hash> ov_output_names_cache;
+    //TODO: Stateful is only supported for single request at a time.
+    //      Simultanous stateful inference request support to be added.
+    size_t stateful_kv_size;
+    std::map<std::string, std::string> kv_state_input_name_map;
 
     ov_runtime_context() :
         device("CPU"),
