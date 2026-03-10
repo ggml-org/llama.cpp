@@ -838,6 +838,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
         // do not quantize specific multimodal tensors
         quantize &= name.find(".position_embd.") == std::string::npos;
+        quantize &= name.find(".patch_embd.") == std::string::npos;
 
         ggml_type new_type;
         void * new_data;
