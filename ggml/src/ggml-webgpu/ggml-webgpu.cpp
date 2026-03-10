@@ -529,15 +529,24 @@ static void ggml_backend_webgpu_wait(webgpu_global_context &          ctx,
 
     if (block) {
         for (auto & sub : subs) {
+            // TODO: bubble this status up to caller?
+            bool failed = false;
             while (!sub.submit_done.completed) {
                 auto waitStatus = ctx->instance.WaitAny(1, &sub.submit_done, UINT64_MAX);
-                ggml_backend_webgpu_handle_wait_status(waitStatus);
+                if (!ggml_backend_webgpu_handle_wait_status(waitStatus)) {
+                    // Since we wait with UINT64_MAX, we should not time out and only error here.
+                    // Ignore the profiling future.
+                    failed = true;
+                    break;
+                }
             }
 #ifdef GGML_WEBGPU_GPU_PROFILE
-            ggml_backend_webgpu_wait_profile_futures(ctx, sub.profile_futures, true);
+            if (!failed) {
+                // TODO: move profiling waiting to device teardown to try making it non blocking
+                ggml_backend_webgpu_wait_profile_futures(ctx, sub.profile_futures, true);
+            }
 #endif
         }
-        subs.clear();
     } else {
         // Poll each submit future once and remove completed submissions.
         for (auto sub = subs.begin(); sub != subs.end();) {
