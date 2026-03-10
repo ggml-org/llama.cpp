@@ -3907,6 +3907,9 @@ struct moe_fusion_state {
         void * device_ptr;
     };
     std::vector<sec_expert_info> sec_indices;   // Secondary-GPU experts with cached placement
+    const float *   gate_bias_data; // Gate bias base pointer (float32, or nullptr if no bias)
+    const float *   up_bias_data;   // Up bias base pointer (float32, or nullptr if no bias)
+    size_t          bias_nb;        // Bias expert stride in bytes (nb11 from bias tensor)
 
     moe_fusion_state() :
         gate_data(nullptr),
@@ -3923,7 +3926,10 @@ struct moe_fusion_state {
         fused_pending(false),
         fused_output(nullptr),
         fused_q(nullptr),
-        fused_cap(0) {}
+        fused_cap(0),
+        gate_bias_data(nullptr),
+        up_bias_data(nullptr),
+        bias_nb(0) {}
 
     ~moe_fusion_state() {
         if (fused_output && fused_q) {
@@ -3960,12 +3966,17 @@ static std::atomic<int> g_moe_fused_act_variant{ -1 };  // -1 = not yet detected
 static float            g_moe_fused_act_alpha = 0.0f;
 static float            g_moe_fused_act_limit = 0.0f;
 
-// MoE fusion env var: GGML_SYCL_MOE_FUSE (default: 1 = enabled)
-// Fusion is automatically disabled for models with expert biases (ADD_ID after
-// MUL_MAT_ID) because the fused gate+up+SiLU kernel does not incorporate
-// per-expert bias terms, producing incorrect output.
-static std::atomic<bool> g_moe_has_expert_bias{ false };
+// Per-layer expert bias pointers captured during graph scan.
+// Maps layer_id -> {gate_bias, up_bias, down_bias} data pointers + stride.
+struct layer_expert_biases {
+    const float * gate_bias = nullptr;  // ffn_gate_exps bias base
+    const float * up_bias   = nullptr;  // ffn_up_exps bias base
+    const float * down_bias = nullptr;  // ffn_down_exps bias base
+    size_t        nb        = 0;        // Expert stride in bytes (nb11)
+};
+static std::unordered_map<int, layer_expert_biases> g_moe_expert_biases;
 
+// MoE fusion env var: GGML_SYCL_MOE_FUSE (default: 1 = enabled)
 static bool ggml_sycl_moe_fusion_enabled() {
     static std::atomic<int> moe_fusion_mode{ -1 };
     int                     val = moe_fusion_mode.load(std::memory_order_acquire);
@@ -3974,9 +3985,6 @@ static bool ggml_sycl_moe_fusion_enabled() {
         int          new_val = env ? std::atoi(env) : 1;
         moe_fusion_mode.compare_exchange_strong(val, new_val, std::memory_order_release, std::memory_order_acquire);
         val = moe_fusion_mode.load(std::memory_order_acquire);
-    }
-    if (val != 0 && g_moe_has_expert_bias.load(std::memory_order_acquire)) {
-        return false;
     }
     return val != 0;
 }
@@ -26329,6 +26337,19 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     g_moe_fusion.gate_pending  = true;
                     g_moe_fusion.fused_pending = false;
 
+                    // Look up per-layer bias pointers captured during graph scan
+                    g_moe_fusion.gate_bias_data = nullptr;
+                    g_moe_fusion.up_bias_data   = nullptr;
+                    g_moe_fusion.bias_nb        = 0;
+                    if (cur_layer_fast >= 0) {
+                        auto it = g_moe_expert_biases.find(cur_layer_fast);
+                        if (it != g_moe_expert_biases.end()) {
+                            g_moe_fusion.gate_bias_data = it->second.gate_bias;
+                            g_moe_fusion.up_bias_data   = it->second.up_bias;
+                            g_moe_fusion.bias_nb        = it->second.nb;
+                        }
+                    }
+
                     // Partition experts: CPU-only vs secondary GPU
                     g_moe_fusion.cpu_indices.clear();
                     g_moe_fusion.sec_indices.clear();
@@ -26438,6 +26459,17 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         ft[fi].act_variant = act_v;
                         ft[fi].alpha       = g_moe_fused_act_alpha;
                         ft[fi].limit       = g_moe_fused_act_limit;
+                        // Per-expert bias pointers: offset into bias base by expert ID
+                        if (g_moe_fusion.gate_bias_data) {
+                            ft[fi].bias_gate = reinterpret_cast<const float *>(
+                                reinterpret_cast<const char *>(g_moe_fusion.gate_bias_data) +
+                                static_cast<size_t>(eid) * g_moe_fusion.bias_nb);
+                        }
+                        if (g_moe_fusion.up_bias_data) {
+                            ft[fi].bias_up = reinterpret_cast<const float *>(
+                                reinterpret_cast<const char *>(g_moe_fusion.up_bias_data) +
+                                static_cast<size_t>(eid) * g_moe_fusion.bias_nb);
+                        }
                     }
 
                     if (n_cpu_f > 0) {
@@ -30749,27 +30781,48 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     ggml_sycl_cpu_quant_cache_new_graph();
     ggml_sycl_moe_ids_cache_new_graph();
 
-    // Detect expert biases: scan for ADD_ID nodes following MoE MUL_MAT_ID.
+    // Capture per-layer expert bias pointers from ADD_ID nodes following MoE MUL_MAT_ID.
     // Models with expert biases (e.g. GPT-OSS) have ADD_ID(MUL_MAT_ID, bias)
-    // after each gate/up/down expert matmul.  The fused gate+up+SiLU kernel
-    // does not incorporate these biases, so fusion must be disabled.
+    // after each gate/up/down expert matmul.  The fused kernel applies these biases
+    // inline, so we capture the bias data pointers here for use during fusion.
     {
         static std::once_flag bias_detect_flag;
         std::call_once(bias_detect_flag, [&]() {
             for (int i = 0; i < cgraph->n_nodes; i++) {
                 const ggml_tensor * node = cgraph->nodes[i];
-                if (node->op == GGML_OP_ADD_ID && node->src[0] &&
-                    node->src[0]->op == GGML_OP_MUL_MAT_ID) {
-                    const char * src0_name = node->src[0]->src[0] ? node->src[0]->src[0]->name : nullptr;
-                    if (src0_name && (strstr(src0_name, "ffn_gate") ||
-                                      strstr(src0_name, "ffn_up") ||
-                                      strstr(src0_name, "ffn_down"))) {
-                        g_moe_has_expert_bias.store(true, std::memory_order_release);
-                        GGML_LOG_INFO("[SYCL] Detected expert biases (ADD_ID after MoE MUL_MAT_ID) "
-                                      "— disabling MoE gate+up+SiLU fusion\n");
-                        break;
-                    }
+                if (node->op != GGML_OP_ADD_ID || !node->src[0] ||
+                    node->src[0]->op != GGML_OP_MUL_MAT_ID) {
+                    continue;
                 }
+                // src[0] = MUL_MAT_ID result, src[1] = bias tensor, src[2] = expert IDs
+                const ggml_tensor * bias_tensor = node->src[1];
+                if (!bias_tensor || bias_tensor->type != GGML_TYPE_F32) {
+                    continue;
+                }
+                // The MUL_MAT_ID's src[0] is the weight tensor — its name tells us gate/up/down
+                const char * weight_name = node->src[0]->src[0] ? node->src[0]->src[0]->name : nullptr;
+                if (!weight_name) {
+                    continue;
+                }
+                const int layer = parse_layer_id_from_name(weight_name);
+                if (layer < 0) {
+                    continue;
+                }
+                auto & lb = g_moe_expert_biases[layer];
+                lb.nb = bias_tensor->nb[1];  // Expert stride in bytes
+                const float * bias_ptr = static_cast<const float *>(bias_tensor->data);
+                if (strstr(weight_name, "ffn_gate")) {
+                    lb.gate_bias = bias_ptr;
+                } else if (strstr(weight_name, "ffn_up")) {
+                    lb.up_bias = bias_ptr;
+                } else if (strstr(weight_name, "ffn_down")) {
+                    lb.down_bias = bias_ptr;
+                }
+            }
+            if (!g_moe_expert_biases.empty()) {
+                GGML_LOG_INFO("[SYCL] Captured expert biases for %zu layers "
+                              "— fusion will apply biases inline\n",
+                              g_moe_expert_biases.size());
             }
         });
     }
