@@ -979,10 +979,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     // initialize quantization state before preliminary loop (counters for use_more_bits)
     {
         for (size_t i = 0; i < tensors.size(); ++i) {
-            const auto * it = tensors[i];
-            const struct ggml_tensor * tensor = it->tensor;
-            const char * name = tensor->name;
-            const auto cat = tensor_get_category(name);
+            const auto cat = tensor_get_category(tensors[i]->tensor->name);
             if (category_is_attn_v(cat)) {
                 ++qs.n_attention_wv;
             }
