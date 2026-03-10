@@ -230,9 +230,9 @@ bool ggml_ifairy_lut_transform_tensor(struct ggml_tensor * tensor, struct ggml_t
 
             const uint8_t * blk_idx = row_indexes + (size_t) blk * (size_t) QK_IFAIRY_GROUPS_PER_BLOCK;
             for (int gi = 0; gi < QK_IFAIRY_GROUPS_PER_BLOCK; gi += 2) {
-                const uint8_t lo = blk_idx[gi + 0] & 0x0fu;
-                const uint8_t hi = blk_idx[gi + 1] & 0x0fu;
-                t->qs[gi / 2][lane] = lo | (uint8_t)(hi << 4);
+                const uint8_t lo    = blk_idx[gi + 0] & 0x0fu;
+                const uint8_t hi    = blk_idx[gi + 1] & 0x0fu;
+                t->qs[gi / 2][lane] = lo | (uint8_t) (hi << 4);
             }
         }
     }
