@@ -18,6 +18,13 @@
 #include <algorithm>
 #include <filesystem>
 
+// result of parsing --tensor-type option
+// (changes to this struct must be reflected in src/llama-quant.cpp)
+struct tensor_type_option {
+    std::string name;
+    ggml_type type = GGML_TYPE_COUNT;
+};
+
 struct quant_option {
     std::string name;
     llama_ftype ftype;
@@ -63,12 +70,6 @@ static const std::vector<quant_option> QUANT_OPTIONS = {
     { "F32",      LLAMA_FTYPE_ALL_F32,         "26.00G              @ 7B",          },
     // Note: Ensure COPY comes after F32 to avoid ftype 0 from matching.
     { "COPY",     LLAMA_FTYPE_ALL_F32,         "only copy tensors, no quantizing",  },
-};
-
-// Quantization types. Changes to this struct must be replicated in llama-quantize.cpp
-struct tensor_quantization {
-    std::string name;
-    ggml_type quant = GGML_TYPE_COUNT;
 };
 
 static const char * const LLM_KV_QUANTIZE_IMATRIX_FILE       = "quantize.imatrix.file";
@@ -413,7 +414,7 @@ static ggml_type parse_ggml_type(const char * arg) {
     return GGML_TYPE_COUNT;
 }
 
-static bool parse_tensor_type(const char * data, std::vector<tensor_quantization> & tensor_type) {
+static bool parse_tensor_type(const char * data, std::vector<tensor_type_option> & tensor_type) {
     const char * sep = strchr(data, '=');
     if (sep == nullptr) {
         printf("\n%s: malformed tensor type '%s'\n\n", __func__, data);
@@ -433,11 +434,11 @@ static bool parse_tensor_type(const char * data, std::vector<tensor_quantization
     std::string tn(data, tn_len);
     std::transform(tn.begin(), tn.end(), tn.begin(), tolower);
     sep++;
-    tensor_quantization tqz;
-    tqz.name = tn;
-    tqz.quant = parse_ggml_type(sep);
-    tensor_type.emplace_back(std::move(tqz));
-    if (tqz.quant == GGML_TYPE_COUNT) {
+    tensor_type_option tensor_type_opt;
+    tensor_type_opt.name = tn;
+    tensor_type_opt.type = parse_ggml_type(sep);
+    tensor_type.emplace_back(std::move(tensor_type_opt));
+    if (tensor_type_opt.type == GGML_TYPE_COUNT) {
         printf("\n%s: invalid quantization type '%s'\n\n", __func__, sep);
         return false;
     }
@@ -445,7 +446,7 @@ static bool parse_tensor_type(const char * data, std::vector<tensor_quantization
     return true;
 }
 
-static bool parse_tensor_type_file(const char * filename, std::vector<tensor_quantization> & tensor_type) {
+static bool parse_tensor_type_file(const char * filename, std::vector<tensor_type_option> & tensor_type) {
     std::ifstream file(filename);
     if (!file) {
         printf("\n%s: failed to open file '%s': %s\n\n", __func__, filename, std::strerror(errno));
@@ -501,7 +502,7 @@ int main(int argc, char ** argv) {
     std::string imatrix_file;
     std::vector<std::string> included_weights, excluded_weights;
     std::vector<llama_model_kv_override> kv_overrides;
-    std::vector<tensor_quantization> tensor_types;
+    std::vector<tensor_type_option> tensor_type_opts;
     std::vector<int> prune_layers;
 
     for (; arg_idx < argc && strncmp(argv[arg_idx], "--", 2) == 0; arg_idx++) {
@@ -526,11 +527,11 @@ int main(int argc, char ** argv) {
                 usage(argv[0]);
             }
         } else if (strcmp(argv[arg_idx], "--tensor-type") == 0) {
-            if (arg_idx == argc-1 || !parse_tensor_type(argv[++arg_idx], tensor_types)) {
+            if (arg_idx == argc-1 || !parse_tensor_type(argv[++arg_idx], tensor_type_opts)) {
                 usage(argv[0]);
             }
         } else if (strcmp(argv[arg_idx], "--tensor-type-file") == 0) {
-            if (arg_idx == argc-1 || !parse_tensor_type_file(argv[++arg_idx], tensor_types)) {
+            if (arg_idx == argc-1 || !parse_tensor_type_file(argv[++arg_idx], tensor_type_opts)) {
                 usage(argv[0]);
             }
         } else if (strcmp(argv[arg_idx], "--prune-layers") == 0) {
@@ -624,8 +625,8 @@ int main(int argc, char ** argv) {
         kv_overrides.back().key[0] = 0;
         params.kv_overrides = &kv_overrides;
     }
-    if (!tensor_types.empty()) {
-        params.tensor_types = &tensor_types;
+    if (!tensor_type_opts.empty()) {
+        params.tensor_types = &tensor_type_opts;
     }
     if (!prune_layers.empty()) {
         params.prune_layers = &prune_layers;
@@ -692,18 +693,6 @@ int main(int argc, char ** argv) {
         }
     }
 
-    if (!params.dry_run &&
-        (
-            params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS  || params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS ||
-            params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_S   || params.ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S  ||
-            params.ftype == LLAMA_FTYPE_MOSTLY_IQ1_S   || params.ftype == LLAMA_FTYPE_MOSTLY_IQ1_M
-        ) && imatrix_data.empty()) {
-        fprintf(stderr, "\n==========================================================================================================\n");
-        fprintf(stderr, "Please do not use IQ1_S, IQ1_M, IQ2_S, IQ2_XXS, IQ2_XS or Q2_K_S quantization without an importance matrix\n");
-        fprintf(stderr, "==========================================================================================================\n\n\n");
-        return 1;
-    }
-
     if (!params.dry_run) {
         if (std::error_code ec; std::filesystem::equivalent(fname_inp, fname_out, ec)) {
             fprintf(stderr, "%s: error: input and output files are the same: '%s'\n", __func__, fname_inp.c_str());
@@ -753,4 +742,3 @@ int main(int argc, char ** argv) {
 
     return 0;
 }
-
