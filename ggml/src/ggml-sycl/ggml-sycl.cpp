@@ -3950,9 +3950,12 @@ struct moe_fusion_state {
     }
 
     void reset() {
-        gate_pending  = false;
-        fused_pending = false;
-        layer_id      = -1;
+        gate_pending    = false;
+        fused_pending   = false;
+        layer_id        = -1;
+        gate_bias_data  = nullptr;
+        up_bias_data    = nullptr;
+        bias_nb         = 0;
         cpu_indices.clear();
         sec_indices.clear();
     }
