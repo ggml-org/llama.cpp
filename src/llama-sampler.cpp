@@ -3824,18 +3824,56 @@ struct llama_sampler * llama_sampler_init_infill(const struct llama_vocab * voca
 
 // reasoning budget
 
+// Check if a string ends with an incomplete UTF-8 multi-byte sequence.
+// Returns true if cutting after this string would split a multi-byte character.
+static bool llama_utf8_is_incomplete(const std::string & s) {
+    if (s.empty()) {
+        return false;
+    }
+
+    // Scan backwards to count trailing continuation bytes (10xxxxxx)
+    int i = (int)s.size() - 1;
+    int n_cont = 0;
+    while (i >= 0 && (static_cast<unsigned char>(s[i]) & 0xC0) == 0x80) {
+        n_cont++;
+        i--;
+    }
+
+    if (i < 0) {
+        // Only continuation bytes, no leading byte — malformed
+        return true;
+    }
+
+    const unsigned char lead = static_cast<unsigned char>(s[i]);
+
+    if ((lead & 0x80) == 0x00) {
+        // ASCII byte — complete on its own, trailing continuations would be malformed
+        return n_cont > 0;
+    }
+
+    // Determine expected continuation bytes from leading byte
+    int expected;
+    if      ((lead & 0xE0) == 0xC0) { expected = 1; }  // 110xxxxx: 2-byte
+    else if ((lead & 0xF0) == 0xE0) { expected = 2; }  // 1110xxxx: 3-byte
+    else if ((lead & 0xF8) == 0xF0) { expected = 3; }  // 11110xxx: 4-byte
+    else { return true; }                               // invalid leading byte
+
+    return n_cont < expected;
+}
+
 enum llama_reasoning_budget_state {
-    REASONING_BUDGET_IDLE,     // waiting for start sequence
-    REASONING_BUDGET_COUNTING, // counting down tokens
-    REASONING_BUDGET_FORCING,  // forcing budget message + end sequence
-    REASONING_BUDGET_DONE,     // passthrough forever
+    REASONING_BUDGET_IDLE,         // waiting for start sequence
+    REASONING_BUDGET_COUNTING,     // counting down tokens
+    REASONING_BUDGET_FORCING,      // forcing budget message + end sequence
+    REASONING_BUDGET_WAITING_UTF8, // budget exhausted, waiting for UTF-8 completion
+    REASONING_BUDGET_DONE,         // passthrough forever
 };
 
 struct llama_sampler_reasoning_budget {
     const llama_vocab * vocab;
 
     std::vector<llama_token> start_tokens;   // sequence that starts counting (e.g. "<think>")
-    std::vector<llama_token> end_tokens;     // sequence that defuses naturally (e.g. "</think>")
+    std::vector<llama_token> end_tokens;     // sequence that deactivates naturally (e.g. "</think>")
     std::vector<llama_token> forced_tokens;  // sequence forced when budget expires (e.g. "(budget exceeded)</think>")
 
     int32_t budget;           // maximum tokens in reasoning block
@@ -3888,8 +3926,9 @@ static void llama_sampler_reasoning_budget_accept(struct llama_sampler * smpl, l
             break;
         }
         case REASONING_BUDGET_COUNTING:
+        case REASONING_BUDGET_WAITING_UTF8:
         {
-            // check for natural end sequence (defuse)
+            // check for natural end sequence (deactivate)
             if (!ctx->end_tokens.empty() && token == ctx->end_tokens[ctx->end_match_pos]) {
                 ctx->end_match_pos++;
                 if (ctx->end_match_pos >= ctx->end_tokens.size()) {
@@ -3905,25 +3944,53 @@ static void llama_sampler_reasoning_budget_accept(struct llama_sampler * smpl, l
                 }
             }
 
-            if (ctx->state == REASONING_BUDGET_COUNTING) {
-                ctx->remaining--;
-                if (ctx->remaining <= 0) {
+            if (ctx->state == REASONING_BUDGET_WAITING_UTF8) {
+                // Check if the token completes the UTF-8 sequence
+                bool still_incomplete = false;  // default: assume complete (safe fallback for null vocab)
+                if (ctx->vocab != nullptr) {
+                    const std::string piece = ctx->vocab->token_to_piece(token);
+                    still_incomplete = llama_utf8_is_incomplete(piece);
+                }
+
+                if (!still_incomplete) {
+                    // UTF-8 sequence complete, now start forcing
                     ctx->state = REASONING_BUDGET_FORCING;
                     ctx->force_pos = 0;
                     ctx->end_match_pos = 0;
-                    LLAMA_LOG_INFO("reasoning-budget: budget exhausted, forcing end sequence\n");
+                    LLAMA_LOG_INFO("reasoning-budget: UTF-8 complete, now forcing end sequence\n");
+                }
+            } else if (ctx->state == REASONING_BUDGET_COUNTING) {
+                ctx->remaining--;
+                if (ctx->remaining <= 0) {
+                    // Budget exhausted — check if we need to wait for UTF-8 completion
+                    bool wait_for_utf8 = false;
+                    if (ctx->vocab != nullptr) {
+                        const std::string piece = ctx->vocab->token_to_piece(token);
+                        wait_for_utf8 = llama_utf8_is_incomplete(piece);
+                    }
+
+                    if (wait_for_utf8) {
+                        // Incomplete UTF-8 sequence, wait for completion
+                        ctx->state = REASONING_BUDGET_WAITING_UTF8;
+                        ctx->force_pos = 0;
+                        ctx->end_match_pos = 0;
+                        LLAMA_LOG_INFO("reasoning-budget: budget exhausted, waiting for UTF-8 completion\n");
+                    } else {
+                        // Complete UTF-8, go straight to forcing
+                        ctx->state = REASONING_BUDGET_FORCING;
+                        ctx->force_pos = 0;
+                        ctx->end_match_pos = 0;
+                        LLAMA_LOG_INFO("reasoning-budget: budget exhausted, forcing end sequence\n");
+                    }
                 }
             }
             break;
         }
         case REASONING_BUDGET_FORCING:
         {
-            // advance through forced sequence
-            ctx->force_pos++;
-            if (ctx->force_pos >= ctx->forced_tokens.size()) {
-                ctx->state = REASONING_BUDGET_DONE;
-                LLAMA_LOG_INFO("reasoning-budget: forced sequence complete, done\n");
-            }
+            // force_pos is advanced in apply(), not here
+            // This ensures the first forced token isn't skipped when the sampler
+            // is initialized directly in FORCING state (e.g. activate_immediately + budget=0)
             break;
         }
         case REASONING_BUDGET_DONE:
@@ -3951,6 +4018,14 @@ static void llama_sampler_reasoning_budget_apply(struct llama_sampler * smpl, ll
             cur_p->data[i].logit = -INFINITY;
         }
     }
+
+    // advance to next forced token (done here rather than in accept so that
+    // the first forced token isn't skipped when starting in FORCING state)
+    ctx->force_pos++;
+    if (ctx->force_pos >= ctx->forced_tokens.size()) {
+        ctx->state = REASONING_BUDGET_DONE;
+        LLAMA_LOG_INFO("reasoning-budget: forced sequence complete, done\n");
+    }
 }
 
 static void llama_sampler_reasoning_budget_reset(struct llama_sampler * smpl) {
@@ -3970,7 +4045,7 @@ static struct llama_sampler * llama_sampler_reasoning_budget_clone(const struct 
         ctx->end_tokens.data(),   ctx->end_tokens.size(),
         ctx->forced_tokens.data(), ctx->forced_tokens.size(),
         ctx->budget,
-        ctx->state == REASONING_BUDGET_COUNTING || ctx->state == REASONING_BUDGET_FORCING);
+        ctx->state == REASONING_BUDGET_COUNTING || ctx->state == REASONING_BUDGET_FORCING || ctx->state == REASONING_BUDGET_WAITING_UTF8);
 }
 
 static void llama_sampler_reasoning_budget_free(struct llama_sampler * smpl) {
