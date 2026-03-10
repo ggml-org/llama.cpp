@@ -1620,8 +1620,8 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
         build_chat_peg_parser([](common_chat_peg_builder & p) { return p.content(p.rest()) + p.end(); }) :
         src_parser;
 
-        if (src_parser.empty()) {
-        LOG_WRN("No parser definition detected, assuming pure content parser.");
+    if (src_parser.empty()) {
+        LOG_DBG("No parser definition detected, assuming pure content parser.");
     }
 
     LOG_DBG("Parsing PEG input with format %s: %s\n", common_chat_format_name(params.format), input.c_str());
