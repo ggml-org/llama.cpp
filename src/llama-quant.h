@@ -6,10 +6,18 @@
 
 #include "llama-arch.h"
 
+#include <regex>
 #include <string>
 #include <vector>
 
 struct llama_model;
+
+// result of parsing --tensor-type option
+// (changes to this struct must be reflected in tools/quantize/quantize.cpp)
+struct tensor_type_option {
+    std::string name;
+    ggml_type   type = GGML_TYPE_COUNT;
+};
 
 struct quantize_state_impl {
     const llama_model                 & model;
@@ -30,7 +38,7 @@ struct quantize_state_impl {
     bool has_imatrix = false;
 
     // used to figure out if a model has tied embeddings (tok_embd shares weights with output)
-    bool has_tied_embeddings = false; // assume tied until we see output.weight
+    bool has_tied_embeddings = true; // assume tied until we see output.weight
 
     // tensor type override patterns (compiled once, used twice)
     std::vector<std::pair<std::regex, ggml_type>> tensor_type_patterns;
