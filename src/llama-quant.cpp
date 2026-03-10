@@ -913,7 +913,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         imatrix_data = static_cast<const std::unordered_map<std::string, std::vector<float>>*>(params->imatrix);
         if (imatrix_data) {
             LLAMA_LOG_INFO("\n%s: have importance matrix data with %d entries\n",
-                           __func__, (int)imatrix_data->size());            qs.has_imatrix = true;
+                           __func__, (int)imatrix_data->size());
+            qs.has_imatrix = true;
             // check imatrix for nans or infs
             for (const auto & kv : *imatrix_data) {
                 for (float f : kv.second) {
@@ -995,7 +996,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         });
     }
 
-    { // Based on old loop
+    {
         std::vector<std::string> tensor_names;
         tensor_names.reserve(tensors.size());
         for (const auto * it : tensors) {
@@ -1005,7 +1006,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     }
 
     int idx = 0;
-
     uint16_t n_split = 1;
 
     // Assume split index is continuous
@@ -1047,6 +1047,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         const auto * it = tensors[i];
         const struct ggml_tensor * tensor = it->tensor;
         const std::string name = ggml_get_name(tensor);
+
+        metadata[i].category = tensor_get_category(name);
 
         uint16_t i_split = params->keep_split ? it->idx : 0;
         if (!ctx_outs[i_split]) {
