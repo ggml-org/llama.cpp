@@ -26613,15 +26613,17 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
                             // Scatter gate results H2D
                             char * dst_d_gate = static_cast<char *>(ggml_sycl_get_data_ptr(dst, ctx.device));
+                            std::vector<sycl::event> scatter_events;
+                            scatter_events.reserve(n_cpu_gate);
                             for (size_t fi = 0; fi < n_cpu_gate; fi++) {
                                 const size_t  ci   = g_moe_fusion.cpu_indices[fi];
                                 const int64_t iid1 = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_f));
                                 const int64_t id   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_f));
                                 char * slot = dst_d_gate + id * nb1 + iid1 * nb2;
-                                stream->memcpy(slot, tl_gate_out.ptr + fi * static_cast<size_t>(N_gate_f),
-                                               static_cast<size_t>(N_gate_f) * sizeof(float));
+                                scatter_events.push_back(stream->memcpy(slot, tl_gate_out.ptr + fi * static_cast<size_t>(N_gate_f),
+                                               static_cast<size_t>(N_gate_f) * sizeof(float)));
                             }
-                            stream->wait();
+                            sycl::event::wait(scatter_events);
                         }
                     }
                     return;
@@ -26951,13 +26953,15 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
                     // Scatter down results H2D — use original ci indices for correct dst slots
                     char * dst_d = static_cast<char *>(ggml_sycl_get_data_ptr(dst, ctx.device));
+                    std::vector<sycl::event> down_events;
+                    down_events.reserve(n_cpu_d + 8);
                     for (size_t fi = 0; fi < n_cpu_d; fi++) {
                         const size_t  ci   = g_moe_fusion.cpu_indices[fi];
                         const int64_t iid1 = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_d));
                         const int64_t id   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_d));
                         char *        slot = dst_d + id * nb1 + iid1 * nb2;
-                        stream->memcpy(slot, tl_down_out.ptr + fi * static_cast<size_t>(N_d),
-                                       static_cast<size_t>(N_d) * sizeof(float));
+                        down_events.push_back(stream->memcpy(slot, tl_down_out.ptr + fi * static_cast<size_t>(N_d),
+                                       static_cast<size_t>(N_d) * sizeof(float)));
                     }
 
                     // Dispatch secondary GPU experts for the DOWN sub-tensor
@@ -26996,12 +27000,12 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                 GGML_LOG_WARN("[CPU-TG-FUSE] DOWN fallback: zeroing slot for expert %d (secondary dispatch failed)\n",
                                               e.expert_id);
                                 char * slot_fb = dst_d + e.id * nb1 + e.iid1 * nb2;
-                                stream->memset(slot_fb, 0, static_cast<size_t>(N_d) * sizeof(float));
+                                down_events.push_back(stream->memset(slot_fb, 0, static_cast<size_t>(N_d) * sizeof(float)));
                             }
                         }
                     }
 
-                    stream->wait();
+                    sycl::event::wait(down_events);
 
                     static std::atomic<int> flog3{ 0 };
                     if (flog3.fetch_add(1, std::memory_order_relaxed) < 3) {
@@ -27131,8 +27135,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 tl_act_pinned.ensure(act_floats, *stream);
                 const char * src1_dev = static_cast<const char *>(
                     ggml_sycl_get_data_ptr(src1, ctx.device));
-                stream->memcpy(tl_act_pinned.ptr, src1_dev, act_floats * sizeof(float));
-                stream->wait();
+                stream->memcpy(tl_act_pinned.ptr, src1_dev, act_floats * sizeof(float)).wait();
                 act_host_ptr = tl_act_pinned.ptr;
             }
 
@@ -27391,23 +27394,25 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             if (scatter_contiguous && ne12 == 1) {
                 // Single bulk H2D copy — source (tl_out_buf) and destination
                 // are both contiguous for the single-token case.
+                // Per-event wait: protects pinned buffer reuse without
+                // draining the entire GPU compute queue.
                 stream->memcpy(dst_d, out_src,
-                               n_cpu * static_cast<size_t>(N) * sizeof(float));
+                               n_cpu * static_cast<size_t>(N) * sizeof(float)).wait();
             } else {
                 // Strided scatter fallback for multi-token or padded layouts.
+                std::vector<sycl::event> scatter_events;
+                scatter_events.reserve(n_cpu);
                 for (size_t ci = 0; ci < n_cpu; ci++) {
                     const int64_t iid1 = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_f));
                     const int64_t id   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_f));
                     char *        dst_slot = dst_d + id * nb1 + iid1 * nb2;
-                    stream->memcpy(dst_slot, out_src + ci * static_cast<size_t>(N),
-                                   static_cast<size_t>(N) * sizeof(float));
+                    scatter_events.push_back(stream->memcpy(dst_slot, out_src + ci * static_cast<size_t>(N),
+                                   static_cast<size_t>(N) * sizeof(float)));
                 }
+                // Must wait for all copies before returning — pinned output
+                // buffer (tl_out_pinned) will be reused by next MUL_MAT_ID.
+                sycl::event::wait(scatter_events);
             }
-            // Must wait for the memcpy to complete before returning, because
-            // the pinned output buffer (tl_out_pinned) will be reused by
-            // the next MUL_MAT_ID call's CPU compute, which would corrupt
-            // the DMA source data if the memcpy is still in-flight.
-            stream->wait();
 
             if (prof_enabled) { t4 = hrc::now(); }
 
