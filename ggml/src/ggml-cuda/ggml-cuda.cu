@@ -4999,7 +4999,8 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
 #ifdef GGML_USE_MUSA
             return false;
 #else
-            // TODO: add non-KDA chunked support. for now enable chunked support for KDA only
+            KDA is faster using the AR kernel even when n_tokens >= 512. 
+            //TODO: Add chunked kernel
             return op->src[0]->ne[2] == 1 || op->src[3]->ne[0] == op->src[2]->ne[0];
 #endif // GGML_USE_MUSA
         case GGML_OP_FLASH_ATTN_EXT:
