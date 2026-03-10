@@ -41,7 +41,8 @@ gated_delta_net_cuda(const float * q,
     curr_state += state_offset;
     attn_data += (sequence * n_tokens * H + h_idx) * S_v;
 
-#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
+// CDNA devices spill registers, we use shared mem for them. See https://github.com/ggml-org/llama.cpp/pull/20282#issuecomment-4025770229
+#if !defined(RDNA3) || !defined(RDNA4) || defined(GGML_USE_MUSA)
     extern __shared__ float s_shared[];
     float * s = s_shared + col * S_v;
 #else
@@ -137,7 +138,7 @@ static void launch_gated_delta_net(
     switch (S_v) {
         case 32: {
             constexpr int sv = 32;
-#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
+#if !defined(RDNA3) || !defined(RDNA4) || defined(GGML_USE_MUSA)
             constexpr size_t smem = sv * sv * sizeof(float);
             CUDA_SET_SHARED_MEMORY_LIMIT((gated_delta_net_cuda<sv, KDA>), smem);
 #else
@@ -151,7 +152,7 @@ static void launch_gated_delta_net(
         }
         case 64: {
             constexpr int sv = 64;
-#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
+#if !defined(RDNA3) || !defined(RDNA4) || defined(GGML_USE_MUSA)
             constexpr size_t smem = sv * sv * sizeof(float);
             CUDA_SET_SHARED_MEMORY_LIMIT((gated_delta_net_cuda<sv, KDA>), smem);
 #else
@@ -165,7 +166,7 @@ static void launch_gated_delta_net(
         }
         case 128: {
             constexpr int sv = 128;
-#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
+#if !defined(RDNA3) || !defined(RDNA4) || defined(GGML_USE_MUSA)
             constexpr size_t smem = sv * sv * sizeof(float);
             CUDA_SET_SHARED_MEMORY_LIMIT((gated_delta_net_cuda<sv, KDA>), smem);
 #else
