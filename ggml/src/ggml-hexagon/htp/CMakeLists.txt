@@ -89,13 +89,13 @@ add_library(${HTP_LIB} SHARED
     softmax-ops.c
     act-ops.c
     rope-ops.c
-    flash-attn-ops.c
     set-rows-ops.c
     get-rows-ops.c
     cpy-ops.c
     repeat-ops.c
     argsort-ops.c
     ssm-conv.c
+    flash-attn-ops.c
 )
 
 target_compile_definitions(${HTP_LIB} PRIVATE
@@ -118,14 +118,11 @@ list(FIND HTP_HMX_VERSIONS ${DSP_VERSION} _hmx_idx)
 if (_hmx_idx GREATER_EQUAL 0)
     target_sources(${HTP_LIB} PRIVATE
         hmx/hmx-matmul-ops.c
-        hmx/hmx-flash-attn-ops.c
-        hmx/precompute-table.c
     )
 
     # -mhmx enables HMX instruction set (needed by files that include hmx-utils.h)
     set_source_files_properties(
         hmx/hmx-matmul-ops.c
-        hmx/hmx-flash-attn-ops.c
         PROPERTIES COMPILE_OPTIONS "-mhmx"
     )
 

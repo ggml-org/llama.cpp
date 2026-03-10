@@ -1,7 +1,6 @@
 #pragma clang diagnostic ignored "-Wgnu-zero-variadic-macro-arguments"
 #pragma clang diagnostic ignored "-Wunused-function"
 
-#include "htp-log.h"
 #include <HAP_farf.h>
 #include <HAP_perf.h>
 #include <AEEStdErr.h>
@@ -170,12 +169,6 @@ static int vtcm_acquire(struct htp_context * ctx) {
             abort();
         }
         ctx->vtcm_valid = true;
-#ifdef HTP_HAS_HMX
-    if (ctx->hmx_enabled) {
-        // VTCM was preempted then re-acquired: refill precompute tables
-        init_precomputed_tables(ctx->exp2_table);
-    }
-#endif
     }
 
     ctx->vtcm_inuse = true;
@@ -307,19 +300,10 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_que
         ctx->vtcm_scratch_size = ctx->vtcm_size;
         FARF(HIGH, "HMX disabled (force_hvx): vtcm-scratch %zu", ctx->vtcm_scratch_size);
     } else {
-        // Reserve VTCM tail for the exp2 lookup table (64 KB).
-        // Do NOT write the table here — VTCM is allocated with cache_mode=1,
-        // so pages are not mapped until HAP_compute_res_acquire_cached is called.
-        // vtcm_acquire() will map VTCM and call init_precomputed_tables() on
-        // first use (when vtcm_valid==false && hmx_enabled==1).
-        const size_t table_size   = (size_t)65536;
-        const size_t table_offset = (ctx->vtcm_size - table_size) & ~((size_t)65535);
-        ctx->exp2_table        = ctx->vtcm_base + table_offset;
-        ctx->vtcm_scratch_size = table_offset;
+        ctx->vtcm_scratch_size = ctx->vtcm_size;
         ctx->hmx_enabled       = 1;
 
-        FARF(HIGH, "HMX enabled: vtcm-scratch %zu exp2-table @%p",
-             ctx->vtcm_scratch_size, (void *)ctx->exp2_table);
+        FARF(HIGH, "HMX enabled: vtcm-scratch %zu", ctx->vtcm_scratch_size);
     }
 #endif
 
@@ -1406,67 +1390,6 @@ static void proc_hmx_matmul_req(struct htp_context *     ctx,
 #endif
 }
 
-static void proc_hmx_flash_attn_req(struct htp_context *     ctx,
-                                     struct htp_general_req * req,
-                                     struct dspqueue_buffer * bufs,
-                                     uint32_t                 n_bufs) {
-    // HMX simple_flash_attn operates entirely in FP16.
-    // If Q (src0) is not FP16 we fall back to the HVX path.
-    if (req->src0.type != HTP_TYPE_F16) {
-        FARF(ALWAYS, "proc_hmx_flash_attn: HVX fallback (Q type=%u != F16) qo_len=%d kv_len=%d heads=%d/%d hdim=%d",
-             req->src0.type, (int)req->src0.ne[1], (int)req->src1.ne[1],
-             (int)req->src0.ne[2], (int)req->src1.ne[2], (int)req->src0.ne[0]);
-        proc_flash_attn_ext_req(ctx, req, bufs, n_bufs);
-        return;
-    }
-
-    __fp16 * Q = (__fp16 *) bufs[0].ptr;
-    __fp16 * K = (__fp16 *) bufs[1].ptr;
-    __fp16 * V = (__fp16 *) bufs[2].ptr;
-
-    int last_buf = 3;
-    __fp16 * mask = NULL;
-    if (req->src3.ne[0]) {
-        mask = (__fp16 *) bufs[last_buf++].ptr;
-    }
-    if (req->src4.ne[0]) {
-        last_buf++;  // skip sinks — not consumed by HMX FA
-    }
-    __fp16 * O = (__fp16 *) bufs[last_buf].ptr;
-
-    int head_dim   = (int) req->src0.ne[0];
-    int qo_len     = (int) req->src0.ne[1];
-    int n_heads    = (int) req->src0.ne[2];
-    int kv_len     = (int) req->src1.ne[1];
-    int n_kv_heads = (int) req->src1.ne[2];
-
-    FARF(ALWAYS, "proc_hmx_flash_attn: HMX path qo_len=%d kv_len=%d heads=%d/%d hdim=%d mask=%p",
-         qo_len, kv_len, n_heads, n_kv_heads, head_dim, mask);
-
-    struct profile_data prof;
-    profile_start(&prof);
-
-    uint32_t rsp_status = HTP_STATUS_INTERNAL_ERR;
-    if (vtcm_acquire(ctx) == AEE_SUCCESS) {
-        int ret = simple_flash_attn(ctx, O, Q, K, V, mask,
-                                    qo_len, kv_len, n_heads, n_kv_heads, head_dim);
-        FARF(ALWAYS, "proc_hmx_flash_attn: ret=%d O[0..3]=%.4f %.4f %.4f %.4f",
-             ret, (float)O[0], (float)O[1], (float)O[2], (float)O[3]);
-        if (ret == 0) {
-            rsp_status = HTP_STATUS_OK;
-        }
-        vtcm_release(ctx);
-    }
-
-    profile_stop(&prof);
-
-    struct dspqueue_buffer rsp_buf = bufs[last_buf];
-    rsp_buf.flags = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |
-                     DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);
-
-    send_htp_rsp(ctx, req->op, rsp_status, &rsp_buf, 1, &prof);
-}
-
 #endif // HTP_HAS_HMX
 
 static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
@@ -1630,14 +1553,7 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
                     FARF(ERROR, "Bad flash-attn-ext-req buffer list");
                     continue;
                 }
-#ifdef HTP_HAS_HMX
-                if (ctx->hmx_enabled) {
-                    proc_hmx_flash_attn_req(ctx, &req, bufs, n_bufs);
-                } else
-#endif
-                {
-                    proc_flash_attn_ext_req(ctx, &req, bufs, n_bufs);
-                }
+                proc_flash_attn_ext_req(ctx, &req, bufs, n_bufs);
                 break;
 
             case HTP_OP_SET_ROWS:

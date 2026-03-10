@@ -66,21 +66,6 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx,
                                       int m, int k, int n,
                                       int weight_type);
 
-// HMX flash attention — FP16 in/out
-int simple_flash_attn(struct htp_context *ctx,
-                      __fp16 *restrict O,
-                      const __fp16 *restrict Q,
-                      const __fp16 *restrict K,
-                      const __fp16 *restrict V,
-                      const __fp16 *restrict mask,
-                      int qo_len, int kv_len,
-                      int n_heads, int n_kv_heads,
-                      int head_dim);
-
-// Precomputed table initialisation (exp2 LUT for safe softmax).
-// vtcm_table points to the reserved VTCM tail area.
-void init_precomputed_tables(uint8_t *vtcm_table);
-
 #ifdef __cplusplus
 }
 #endif

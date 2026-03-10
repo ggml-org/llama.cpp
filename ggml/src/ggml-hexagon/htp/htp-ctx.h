@@ -35,7 +35,6 @@ struct htp_context {
 #ifdef HTP_HAS_HMX
     int        hmx_enabled;       // Runtime flag: HMX initialisation succeeded
     size_t     vtcm_scratch_size; // Usable dynamic scratch (vtcm_size minus tail reservation)
-    uint8_t *  exp2_table;        // Precomputed exp2 table address at VTCM tail
 #endif
 };
 

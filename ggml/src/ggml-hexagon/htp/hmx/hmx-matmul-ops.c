@@ -29,8 +29,6 @@
 #include <HAP_compute_res.h>
 
 // debug & profile
-#define HTP_IS_HMX_SOURCE
-#include "htp-log.h"
 // Performance mode: silence all FARF output (remove this block to re-enable logging)
 #undef  FARF_ALWAYS
 #undef  FARF_ERROR
