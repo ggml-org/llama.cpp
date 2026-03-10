@@ -379,16 +379,16 @@ extern "C" {
         size_t                            n_samplers;
     };
 
-    typedef struct llama_model_tensor_override {
+    struct llama_model_tensor_override {
         const char * pattern;
         enum ggml_type type;
-    } llama_model_tensor_override;
+    };
 
-    typedef struct llama_imatrix_data {
+    struct llama_imatrix_data {
         const char * name;
         const float * data;
         size_t size;
-    } llama_imatrix_data;
+    };
 
     // model quantization parameters
     typedef struct llama_model_quantize_params {

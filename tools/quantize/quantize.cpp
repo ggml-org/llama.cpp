@@ -15,6 +15,7 @@
 #include <fstream>
 #include <filesystem>
 
+// result of parsing --tensor-type option
 // changes to this struct must also be reflected in src/llama-quant.cpp
 struct tensor_type_option {
     std::string name;
