@@ -778,12 +778,13 @@ void ggml_ifairy_lut_qgemm_lut_c(int          m,
 // 专属 Thread-Local 内存池管理器：零开销规避系统缺页中断
 namespace {
 struct ggml_ifairy_tl_buf {
-    uint8_t * ptr = nullptr;
-    size_t    cap = 0;
+    uint8_t * ptr  = nullptr;
+    size_t    cap  = 0;
+    size_t    used = 0;  // last allocation size for aligned_free
 
     ~ggml_ifairy_tl_buf() {
         if (ptr) {
-            free(ptr);
+            ggml_aligned_free(ptr, used);
         }
     }
 };
@@ -822,12 +823,16 @@ void ggml_ifairy_lut_mul_mat_scalar(int          m,
     static thread_local ggml_ifairy_tl_buf tl;
     if (tl.cap < total_bytes) {
         if (tl.ptr) {
-            free(tl.ptr);
+            ggml_aligned_free(tl.ptr, tl.used);
+            tl.ptr = nullptr;
+            tl.cap = 0;
         }
-        if (posix_memalign((void **) &tl.ptr, 64, total_bytes) != 0) {
+        tl.ptr = (uint8_t *) ggml_aligned_malloc(total_bytes);
+        if (!tl.ptr) {
             return;
         }
-        tl.cap = total_bytes;
+        tl.cap  = total_bytes;
+        tl.used = total_bytes;
     }
 
     uint8_t * buf      = tl.ptr;
