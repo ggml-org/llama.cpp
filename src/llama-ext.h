@@ -1,5 +1,4 @@
-#ifndef LLAMA_EXT_H
-#define LLAMA_EXT_H
+#pragma once
 
 #include "llama-context.h"
 #include "ggml.h"
@@ -11,5 +10,3 @@ struct ggml_cgraph * llama_graph_reserve(
         uint32_t n_tokens,
         uint32_t n_seqs,
         uint32_t n_outputs);
-
-#endif // LLAMA_EXT_H
