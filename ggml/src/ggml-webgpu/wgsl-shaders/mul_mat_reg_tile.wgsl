@@ -50,6 +50,7 @@ fn get_local_m(thread_id: u32) -> u32 {
 const TOTAL_WORKGROUP_SIZE = WORKGROUP_SIZE_M * WORKGROUP_SIZE_N;
 const TILE_SRC0_SHMEM = TILE_K * WORKGROUP_SIZE_M * TILE_M;
 const TILE_SRC1_SHMEM = TILE_K * WORKGROUP_SIZE_N * TILE_N;
+
 var<workgroup> shmem: array<f16, TILE_SRC0_SHMEM + TILE_SRC1_SHMEM>;
 
 @compute @workgroup_size(TOTAL_WORKGROUP_SIZE)
