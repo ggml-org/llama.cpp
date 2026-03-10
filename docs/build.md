@@ -599,7 +599,13 @@ If KleidiAI is enabled, the output will contain a line similar to:
 ```
 load_tensors: CPU_KLEIDIAI model buffer size =  3474.00 MiB
 ```
-KleidiAI's microkernels implement optimized tensor operations using Arm CPU features such as dotprod, int8mm and SME. llama.cpp selects the most efficient kernel based on runtime CPU feature detection. However, on platforms that support SME, you must manually enable SME microkernels by setting the environment variable `GGML_KLEIDIAI_SME=1`.
+KleidiAI’s microkernels implement optimized tensor operations using Arm CPU features such as dotprod, int8mm, SVE, and SME. Llama.cpp selects the most efficient kernels at runtime based on detected CPU capabilities.
+On CPUs that support SME, SME microkernels are enabled automatically using runtime detection.
+The environment variable GGML_KLEIDIAI_SME can be used to control SME behavior:
+- Not set: enable SME automatically if supported and detected.
+- 0: disable SME.
+- <n> > 0: enable SME and assume <n> available SME units (override auto detection).
+If SME is not supported by the CPU, SME microkernels are always disabled.
 
 Depending on your build target, other higher priority backends may be enabled by default. To ensure the CPU backend is used, you must disable the higher priority backends either at compile time, e.g. -DGGML_METAL=OFF, or during run-time using the command line option `--device none`.
 
