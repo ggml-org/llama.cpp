@@ -174,92 +174,80 @@ int entry_point(struct ggml_et_rope_params* params, void* env) {
     rope_yarn_corr_dims(n_dims, rope_params->n_ctx_orig, freq_base,
                        rope_params->beta_fast, rope_params->beta_slow, corr_dims);
 
-    if (mode & GGML_ROPE_TYPE_NEOX) {
-        // NeoX Mode: iterate (batch, seq) positions, cache trig values, apply to all heads
-        const int64_t total_positions = batch * seq_len;
+    const int64_t total_positions = batch * seq_len;
 
-        // Distribute positions across threads
-        int64_t pos_per_thread = total_positions / num_threads;
-        int64_t start_pos = thread_id * pos_per_thread;
-        int64_t end_pos = (thread_id == num_threads - 1) ?
-                          total_positions :
-                          start_pos + pos_per_thread;
+    // Distribute positions across threads
+    int64_t pos_per_thread = total_positions / num_threads;
+    int64_t start_pos = thread_id * pos_per_thread;
+    int64_t end_pos = (thread_id == num_threads - 1) ?
+                      total_positions :
+                      start_pos + pos_per_thread;
 
-        const float theta_scale = et_powf(freq_base, et_fdiv(-2.0f, (float)n_dims));
-        const int32_t half_dims = n_dims / 2;
+    const float theta_scale = et_powf(freq_base, et_fdiv(-2.0f, (float)n_dims));
+    const int32_t half_dims = n_dims / 2;
 
-        for (int64_t bs = start_pos; bs < end_pos; bs++) {
-            int64_t s = bs % seq_len;
-            int64_t b = bs / seq_len;
+    const int is_neox = (mode & GGML_ROPE_TYPE_NEOX) != 0;
 
-            const int32_t pos = src1_data[s] + rope_params->n_past;
+    for (int64_t bs = start_pos; bs < end_pos; bs++) {
+        int64_t s = bs % seq_len;
+        int64_t b = bs / seq_len;
 
-            // Compute trig cache once for this position
-            compute_rope_cache(cos_cache, sin_cache, n_dims, theta_scale, pos,
-                               freq_factors, freq_scale, corr_dims,
-                               rope_params->ext_factor, rope_params->attn_factor);
+        const int32_t pos = src1_data[s] + rope_params->n_past;
 
-            // Apply cached values to all heads
-            for (int64_t h = 0; h < heads; h++) {
-                const float* head_src = (const float*)((const char*)src0_data +
-                    b * src0->nb[3] + s * src0->nb[2] + h * src0->nb[1]);
+        // Compute trig cache once for this position
+        compute_rope_cache(cos_cache, sin_cache, n_dims, theta_scale, pos,
+                           freq_factors, freq_scale, corr_dims,
+                           rope_params->ext_factor, rope_params->attn_factor);
 
-                float* head_dst = (float*)((char*)dst_data +
-                    b * dst->nb[3] + s * dst->nb[2] + h * dst->nb[1]);
+        // Apply cached values to all heads
+        for (int64_t h = 0; h < heads; h++) {
+            const float* head_src = (const float*)((const char*)src0_data +
+                b * src0->nb[3] + s * src0->nb[2] + h * src0->nb[1]);
 
-                // Copy entire head (including dims beyond n_dims)
-                for (int64_t d = 0; d < head_dim; d++) {
-                    head_dst[d] = head_src[d];
-                }
+            float* head_dst = (float*)((char*)dst_data +
+                b * dst->nb[3] + s * dst->nb[2] + h * dst->nb[1]);
 
-                // Apply rotations using cached cos/sin
-                for (int32_t dim_idx = 0; dim_idx < half_dims; dim_idx++) {
-                    float x0 = head_src[dim_idx];
-                    float x1 = head_src[dim_idx + half_dims];
-
-                    head_dst[dim_idx]             = x0 * cos_cache[dim_idx] - x1 * sin_cache[dim_idx];
-                    head_dst[dim_idx + half_dims] = x0 * sin_cache[dim_idx] + x1 * cos_cache[dim_idx];
-                }
+            // Copy entire head (including dims beyond n_dims)
+            for (int64_t d = 0; d < head_dim; d++) {
+                head_dst[d] = head_src[d];
             }
-        }
-    } else {
-        // Standard Mode: iterate (batch, seq) positions, cache trig values, apply to all heads
-        const int64_t total_positions = batch * seq_len;
 
-        // Distribute positions across threads
-        int64_t pos_per_thread = total_positions / num_threads;
-        int64_t start_pos = thread_id * pos_per_thread;
-        int64_t end_pos = (thread_id == num_threads - 1) ?
-                          total_positions :
-                          start_pos + pos_per_thread;
+            if (is_neox) {
+                // Apply rotations using cached cos/sin
+                uint64_t temp_mask;
+                __asm__ volatile("mova.x.m %0" : "=r"(temp_mask));  // Save current mask
+                __asm__ volatile("mov.m.x m0, x0, 0xFF");           // Enable all 8 elements
 
-        const float theta_scale = et_powf(freq_base, et_fdiv(-2.0f, (float)n_dims));
-        const int32_t half_dims = n_dims / 2;
+                int32_t dim_idx = 0;
+                for (; dim_idx < half_dims; dim_idx+=8) {
+                    // (scalar paths says dim_idx+=1)
+                    // float x0 = head_src[dim_idx];
+                    // float x1 = head_src[dim_idx + half_dims];
 
-        for (int64_t bs = start_pos; bs < end_pos; bs++) {
-            int64_t s = bs % seq_len;
-            int64_t b = bs / seq_len;
-
-            const int32_t pos = src1_data[s] + rope_params->n_past;
-
-            // Compute trig cache once for this position
-            compute_rope_cache(cos_cache, sin_cache, n_dims, theta_scale, pos,
-                               freq_factors, freq_scale, corr_dims,
-                               rope_params->ext_factor, rope_params->attn_factor);
-
-            // Apply cached values to all heads
-            for (int64_t h = 0; h < heads; h++) {
-                const float* head_src = (const float*)((const char*)src0_data +
-                    b * src0->nb[3] + s * src0->nb[2] + h * src0->nb[1]);
-
-                float* head_dst = (float*)((char*)dst_data +
-                    b * dst->nb[3] + s * dst->nb[2] + h * dst->nb[1]);
-
-                // Copy entire head (including dims beyond n_dims)
-                for (int64_t d = 0; d < head_dim; d++) {
-                    head_dst[d] = head_src[d];
+                    // head_dst[dim_idx]             = x0 * cos_cache[dim_idx] - x1 * sin_cache[dim_idx];
+                    // head_dst[dim_idx + half_dims] = x0 * sin_cache[dim_idx] + x1 * cos_cache[dim_idx];
+                    __asm__ volatile(
+                        "flw.ps f0, %[x0_src]       \n\t"
+                        "flw.ps f1, %[x1_src]       \n\t"
+                        "flw.ps f2, %[sin_cache]    \n\t"
+                        "flw.ps f3, %[cos_cache]    \n\t"
+                        "fmul.ps f4, f0, f3         \n\t"
+                        "fmul.ps f5, f0, f2         \n\t"
+                        "fnmsub.ps f4, f1, f2, f4   \n\t"
+                        "fmadd.ps f5, f1, f3, f5    \n\t"
+                        "fsw.ps f4, %[x0_dst]       \n\t"
+                        "fsw.ps f5, %[x1_dst]       \n\t"
+                        : [x0_dst] "=m"(*(float(*)[8])&head_dst[dim_idx]),
+                            [x1_dst] "=m"(*(float(*)[8])&head_dst[dim_idx + half_dims])
+                        : [x0_src] "m"(*(const float(*)[8])&head_src[dim_idx]),
+                            [x1_src] "m"(*(const float(*)[8])&head_src[dim_idx + half_dims]),
+                            [sin_cache] "m"(*(const float(*)[8])&sin_cache[dim_idx]),
+                            [cos_cache] "m"(*(const float(*)[8])&cos_cache[dim_idx])
+                        : "f0", "f1", "f2", "f3", "f4", "f5", "memory"
+                    );
                 }
-
+                __asm__ volatile("mova.m.x %0" :: "r"(temp_mask));
+            } else {
                 // Apply rotations using cached cos/sin (standard interleaved pairs)
                 for (int32_t pair_idx = 0; pair_idx < half_dims; pair_idx++) {
                     int32_t dim_in_head = pair_idx * 2;
