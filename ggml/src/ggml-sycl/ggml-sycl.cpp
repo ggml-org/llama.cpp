@@ -26102,18 +26102,19 @@ static void dispatch_experts_secondary_gpu_impl(
             const int64_t i11      = entry.id % ne11;
             const int64_t i12      = entry.iid1;
             const char *  src1_dev = ctx.src1_original + i11 * nb11 + i12 * nb12;
-            ctx.stream->memcpy(act_staging[0], src1_dev, needed_act);
-            ctx.stream->wait();
+            ctx.stream->memcpy(act_staging[0], src1_dev, needed_act).wait();
         } else {
+            std::vector<sycl::event> copy_events;
+            copy_events.reserve(chunk_sz);
             for (size_t ci = 0; ci < chunk_sz; ci++) {
                 const auto &  entry    = entries[gpu_indices[chunk_start + ci]];
                 const int     slot     = static_cast<int>(ci);
                 const int64_t i11      = entry.id % ne11;
                 const int64_t i12      = entry.iid1;
                 const char *  src1_dev = ctx.src1_original + i11 * nb11 + i12 * nb12;
-                ctx.stream->memcpy(act_staging[slot], src1_dev, needed_act);
+                copy_events.push_back(ctx.stream->memcpy(act_staging[slot], src1_dev, needed_act));
             }
-            ctx.stream->wait();
+            sycl::event::wait(copy_events);
         }
 
         // Phase 3: Quantize + GEMM kernels on secondary queue.
@@ -26467,8 +26468,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     } else {
                         tl_gate_act.ensure(static_cast<size_t>(K_f), *stream);
                         stream->memcpy(tl_gate_act.ptr, ggml_sycl_get_data_ptr(src1, ctx.device),
-                                       static_cast<size_t>(K_f) * sizeof(float));
-                        stream->wait();
+                                       static_cast<size_t>(K_f) * sizeof(float)).wait();
                         act_f = tl_gate_act.ptr;
                     }
 
@@ -26688,8 +26688,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     } else {
                         tl_up_act.ensure(static_cast<size_t>(K_f), *stream);
                         stream->memcpy(tl_up_act.ptr, ggml_sycl_get_data_ptr(src1, ctx.device),
-                                       static_cast<size_t>(K_f) * sizeof(float));
-                        stream->wait();
+                                       static_cast<size_t>(K_f) * sizeof(float)).wait();
                         act_f = tl_up_act.ptr;
                     }
 
@@ -28094,20 +28093,25 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                 static_cast<size_t>(K) * sizeof(float));
                 } else if (cpu_expert_tg_active && n_cpu > 1) {
                     // Single D2H: all experts share the same activation at offset 0
+                    // Per-event wait: only blocks until this memcpy completes,
+                    // GPU compute pipeline continues executing in parallel.
                     stream->memcpy(act_pinned, src1_original,
-                                   static_cast<size_t>(K) * sizeof(float));
-                    stream->wait();
+                                   static_cast<size_t>(K) * sizeof(float)).wait();
                 } else {
+                    // Per-expert D2H: collect events and batch-wait instead
+                    // of draining the entire GPU queue with stream->wait().
+                    std::vector<sycl::event> copy_events;
+                    copy_events.reserve(n_cpu);
                     for (size_t ci = 0; ci < n_cpu; ci++) {
                         const auto &  entry    = entries[ci];
                         const int64_t i11      = entry.id % ne11;
                         const int64_t i12      = entry.iid1;
                         const char *  src1_dev = src1_original + i11 * nb11 + i12 * nb12;
                         float *       dst_host = act_pinned + ci * static_cast<size_t>(K);
-                        stream->memcpy(dst_host, src1_dev,
-                                       static_cast<size_t>(K) * sizeof(float));
+                        copy_events.push_back(stream->memcpy(dst_host, src1_dev,
+                                       static_cast<size_t>(K) * sizeof(float)));
                     }
-                    stream->wait();
+                    sycl::event::wait(copy_events);
                 }
 
                 // Build CPU tasks from mmap host weight pointers.
@@ -32224,6 +32228,7 @@ gpu_dispatch:
             && g_recording_graph_ptr && g_recording_queue_ptr) {
             g_recording_graph_ptr->end_recording();
             g_ggml_sycl_graph_recording = false;
+            g_ggml_sycl_graph_recording_depth.fetch_sub(1, std::memory_order_acq_rel);
 
             bool ok = ggml_sycl_compute_forward(*sycl_ctx, node);
             if (!ok) {
@@ -32231,10 +32236,13 @@ gpu_dispatch:
             }
             GGML_ASSERT(ok);
 
+            g_ggml_sycl_graph_recording_depth.fetch_add(1, std::memory_order_acq_rel);
             g_ggml_sycl_graph_recording = true;
             g_recording_graph_ptr->begin_recording(*g_recording_queue_ptr);
             sycl_ctx->moe_graph_rerecord = true;
             continue;
+        } else if (g_ggml_sycl_graph_recording && node->op == GGML_OP_MUL_MAT_ID) {
+            GGML_ASSERT(false && "graph recording active but recording pointers are null");
         }
 #endif
         bool ok = ggml_sycl_compute_forward(*sycl_ctx, node);
