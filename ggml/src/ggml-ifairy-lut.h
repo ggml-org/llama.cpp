@@ -73,25 +73,26 @@ struct ifairy_lut_extra {
 
 #define GGML_IFAIRY_LUT_WTILE_ALIGNMENT 64
 
-// Packed iFairy 3-weight codes for lut_c-style kernels:
-// - per ggml QK_IFAIRY block has QK_IFAIRY_GROUPS_PER_BLOCK groups
-// - each group stores 16 lanes (16 output rows) of 1-byte codes (idx16 + flags)
+// Packed iFairy 2-weight codes for LUT kernels (nibble-packed):
+// - per ggml QK_IFAIRY block has QK_IFAIRY_GROUPS_PER_BLOCK groups (128 = 256/2)
+// - pairs of groups are nibble-packed: lo nibble = even group, hi nibble = odd group
+// - qs has QK_IFAIRY_GROUPS_PER_BLOCK/2 entries, each byte holds two 4-bit LUT indices for 1 lane
 // - d_real/d_imag are per-row/per-block weight scales, stored as float for fast use in kernels
 struct GGML_IFAIRY_LUT_ALIGN(GGML_IFAIRY_LUT_WTILE_ALIGNMENT) ifairy_lut_wtile_16 {
-    uint8_t qs[QK_IFAIRY_GROUPS_PER_BLOCK][16];
+    uint8_t qs[QK_IFAIRY_GROUPS_PER_BLOCK / 2][16];
     float   d_real[16];
     float   d_imag[16];
 };
 
-// iFairy 3-weight LUT API
+// iFairy 2-weight LUT API
 //
 // Current state:
 // - CPU-only iFairy LUT path integrated into ggml mul_mat (guarded by GGML_IFAIRY_LUT_CPU + GGML_IFAIRY_LUT env).
 // - Correctness matches ggml_vec_dot_ifairy_q16_K_generic semantics (w * conj(x)).
-// - Index encoding is 6-bit pattern per 3 weights: pat = c0 | (c1<<2) | (c2<<4).
+// - Index encoding is 4-bit pattern per 2 weights: pat = c0 | (c1<<2), 16 entries.
 // - V2 core path keeps a single production layout/kernel:
-//   - LUT: 16 entries × 4 channels × int8 per group (64B/group), lut_c-style
-//   - Weights: packed 16-row tiles (`struct ifairy_lut_wtile_16`), lut_c-style
+//   - LUT: 16 entries × 4 channels × int8 per group (64B/group)
+//   - Weights: packed 16-row tiles (`struct ifairy_lut_wtile_16`)
 // - Runtime env:
 //   - `GGML_IFAIRY_LUT=0/1` (enable/disable)
 //   - `GGML_IFAIRY_LUT_DEBUG=0/1` (debug logging)

@@ -18,7 +18,7 @@
 #include <unordered_map>
 #include <vector>
 
-static_assert(QK_IFAIRY == 256, "lut_c packing assumes QK_IFAIRY=256");
+static_assert(QK_IFAIRY == 256, "lut packing assumes QK_IFAIRY=256");
 
 static std::vector<ifairy_lut_extra *> g_ifairy_lut_extras;
 static std::mutex                      g_ifairy_lut_mutex;
@@ -114,8 +114,8 @@ bool ggml_ifairy_lut_transform_tensor(struct ggml_tensor * tensor, struct ggml_t
         return false;
     }
 
-    const struct ggml_ifairy_3w_index_info info        = ggml_ifairy_3w_get_index_info(k);
-    const size_t                           index_bytes = ggml_ifairy_3w_index_buffer_size(&info, rows);
+    const struct ggml_ifairy_2w_index_info info        = ggml_ifairy_2w_get_index_info(k);
+    const size_t                           index_bytes = ggml_ifairy_2w_index_buffer_size(&info, rows);
     if (index_bytes == 0) {
         if (dbg) {
             GGML_LOG_WARN("ifairy_lut: transform_tensor: index_bytes==0 (k=%lld rows=%lld)\n", (long long) k,
@@ -139,16 +139,6 @@ bool ggml_ifairy_lut_transform_tensor(struct ggml_tensor * tensor, struct ggml_t
     //   [indexes (padded to tile alignment)] [packed_wtiles]
     const size_t index_bytes_aligned = GGML_PAD(index_bytes, GGML_IFAIRY_LUT_WTILE_ALIGNMENT);
     const size_t total_bytes         = index_bytes_aligned + packed_bytes;
-
-    // pat (6-bit) -> packed code byte (idx16 + flags for lut_c-style decode).
-    // This mapping matches ggml's direct triplet encoding:
-    //   pat = c0 | (c1<<2) | (c2<<4)
-    static const uint8_t k_ifairy_pat_to_code_u8[64] = {
-        0x00, 0x45, 0x8f, 0xca, 0x04, 0x41, 0x8b, 0xce, 0x08, 0x4d, 0x83, 0xc6, 0x0c, 0x49, 0x87, 0xc2,
-        0x01, 0x44, 0x8e, 0xcb, 0x05, 0x40, 0x8a, 0xcf, 0x09, 0x4c, 0x82, 0xc7, 0x0d, 0x48, 0x86, 0xc3,
-        0x02, 0x47, 0x8c, 0xc9, 0x06, 0x43, 0x88, 0xcd, 0x0a, 0x4f, 0x80, 0xc5, 0x0e, 0x4b, 0x84, 0xc1,
-        0x03, 0x46, 0x8d, 0xc8, 0x07, 0x42, 0x89, 0xcc, 0x0b, 0x4e, 0x81, 0xc4, 0x0f, 0x4a, 0x85, 0xc0,
-    };
 
     {
         std::lock_guard<std::mutex> lock(g_ifairy_lut_mutex);
@@ -208,10 +198,10 @@ bool ggml_ifairy_lut_transform_tensor(struct ggml_tensor * tensor, struct ggml_t
     uint8_t *                    indexes  = buf;
     struct ifairy_lut_wtile_16 * packed_w = (struct ifairy_lut_wtile_16 *) (buf + index_bytes_aligned);
 
-    const bool ok = ggml_ifairy_3w_encode((const block_ifairy *) tensor->data, k, rows, indexes, index_bytes);
+    const bool ok = ggml_ifairy_2w_encode((const block_ifairy *) tensor->data, k, rows, indexes, index_bytes);
     if (!ok) {
         if (dbg) {
-            GGML_LOG_WARN("ifairy_lut: transform_tensor: ggml_ifairy_3w_encode failed (bytes=%zu)\n", index_bytes);
+            GGML_LOG_WARN("ifairy_lut: transform_tensor: ggml_ifairy_2w_encode failed (bytes=%zu)\n", index_bytes);
         }
         if (index_buffer) {
             ggml_backend_buffer_free(index_buffer);
@@ -221,8 +211,8 @@ bool ggml_ifairy_lut_transform_tensor(struct ggml_tensor * tensor, struct ggml_t
         return false;
     }
 
-    // Build packed 16-lane weights (lut_c-style) from the per-row indexes.
-    // Note: this is a one-time preprocessing step for a weight tensor; prioritize correctness and simplicity.
+    // Build packed 16-lane weights from the per-row indexes.
+    // 2-weight encoding: 4-bit pattern is the direct LUT index.
     const block_ifairy * w_blocks = (const block_ifairy *) tensor->data;
     for (int64_t row = 0; row < rows; ++row) {
         const int64_t tile = row >> 4;
@@ -239,9 +229,10 @@ bool ggml_ifairy_lut_transform_tensor(struct ggml_tensor * tensor, struct ggml_t
             t->d_imag[lane]         = GGML_FP16_TO_FP32(wb->d_imag);
 
             const uint8_t * blk_idx = row_indexes + (size_t) blk * (size_t) QK_IFAIRY_GROUPS_PER_BLOCK;
-            for (int gi = 0; gi < QK_IFAIRY_GROUPS_PER_BLOCK; ++gi) {
-                const uint8_t pat = blk_idx[gi] & 0x3fu;
-                t->qs[gi][lane]   = k_ifairy_pat_to_code_u8[pat];
+            for (int gi = 0; gi < QK_IFAIRY_GROUPS_PER_BLOCK; gi += 2) {
+                const uint8_t lo = blk_idx[gi + 0] & 0x0fu;
+                const uint8_t hi = blk_idx[gi + 1] & 0x0fu;
+                t->qs[gi / 2][lane] = lo | (uint8_t)(hi << 4);
             }
         }
     }
