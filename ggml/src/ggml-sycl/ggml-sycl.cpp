@@ -147,6 +147,12 @@ int g_ggml_sycl_xmx_threshold = 1024;  // Max batch size for XMX (XMX faster for
 // Unified dispatch: Set GGML_SYCL_UNIFIED_DISPATCH=1 to use the unified kernel dispatch path
 static std::atomic<int> g_ggml_sycl_unified_dispatch{ -1 };          // -1 = not initialized, 0 = disabled, 1 = enabled
 thread_local bool       g_ggml_sycl_graph_recording = false;         // True when SYCL graph is recording
+#ifdef GGML_SYCL_GRAPH
+// Selective graph recording: pause/resume around MoE ops so non-MoE ops
+// get recorded while MoE ops execute outside the graph.
+thread_local sycl_ex::command_graph<sycl_ex::graph_state::modifiable> * g_recording_graph_ptr = nullptr;
+thread_local sycl::queue * g_recording_queue_ptr = nullptr;
+#endif
 std::atomic<int>        g_ggml_sycl_graph_recording_depth{ 0 };
 static std::atomic<int> g_sycl_barrier_count_during_recording{ 0 };  // DIAG: barrier counter during graph recording
 std::atomic<int>        g_sycl_submit_count_during_recording{ 0 };   // DIAG: operation dispatches during recording
@@ -32210,6 +32216,27 @@ gpu_dispatch:
         if (g_ggml_sycl_graph_recording) {
             g_sycl_submit_count_during_recording.fetch_add(1, std::memory_order_relaxed);
         }
+#ifdef GGML_SYCL_GRAPH
+        // Selective graph recording: MoE ops (MUL_MAT_ID) require host sync
+        // which is incompatible with graph recording.  Pause recording, dispatch
+        // the MoE op normally, then resume.  Non-MoE ops stay in the graph.
+        if (g_ggml_sycl_graph_recording && node->op == GGML_OP_MUL_MAT_ID
+            && g_recording_graph_ptr && g_recording_queue_ptr) {
+            g_recording_graph_ptr->end_recording();
+            g_ggml_sycl_graph_recording = false;
+
+            bool ok = ggml_sycl_compute_forward(*sycl_ctx, node);
+            if (!ok) {
+                GGML_LOG_ERROR("%s: error: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
+            }
+            GGML_ASSERT(ok);
+
+            g_ggml_sycl_graph_recording = true;
+            g_recording_graph_ptr->begin_recording(*g_recording_queue_ptr);
+            sycl_ctx->moe_graph_rerecord = true;
+            continue;
+        }
+#endif
         bool ok = ggml_sycl_compute_forward(*sycl_ctx, node);
 
         if (!ok) {
@@ -39232,12 +39259,14 @@ normal_dispatch:
         use_sycl_graph = false;
     }
 
+    // Selective graph recording: MoE ops are paused/resumed during recording
+    // instead of disabling graphs entirely.  The moe_graphs_disabled_once flag
+    // is still set by MoE paths but no longer disables graphs — it signals
+    // that selective re-record mode is needed.
     if (sycl_ctx->moe_graphs_disabled_once) {
-        GGML_SYCL_DEBUG("[SYCL-GRAPH] graphs disabled for this run (MoE compact list not ready)\n");
-        use_sycl_graph = false;
-    }
-    if (sycl_ctx->moe_graphs_disabled_once) {
+        sycl_ctx->moe_graph_rerecord       = true;
         sycl_ctx->moe_graphs_disabled_once = false;
+        GGML_SYCL_DEBUG("[SYCL-GRAPH] MoE detected — enabling selective graph re-record\n");
     }
 
     // Tensor split provides ~14% TG improvement via GPU/CPU overlap, while
@@ -39542,6 +39571,16 @@ normal_dispatch:
         // Enable with GGML_SYCL_GRAPH_RERECORD=1 to test if stale recording causes perf issues.
         static bool rerecord_mode = (getenv("GGML_SYCL_GRAPH_RERECORD") != nullptr);
 
+        // MoE selective graph: invalidate cached graph so we re-record every
+        // token.  MoE ops execute outside the graph (via pause/resume recording)
+        // and need fresh dispatch each token — pure replay would miss them.
+        if (sycl_ctx->exec_graph && sycl_ctx->moe_graph_rerecord && !rerecord_mode) {
+            GGML_SYCL_DEBUG("[SYCL-GRAPH] MoE selective re-record: invalidating cached graph\n");
+            sycl_ctx->exec_graph.reset();
+            sycl_ctx->exec_graph_n_nodes = 0;
+            sycl_ctx->exec_graph_hash    = 0;
+        }
+
         if (sycl_ctx->exec_graph && rerecord_mode) {
             // Re-record + update: matches master's strategy (re-record every call)
             GGML_SYCL_DEBUG("[SYCL-GRAPH] re-record + update...\n");
@@ -39554,9 +39593,13 @@ normal_dispatch:
 
                 g_ggml_sycl_graph_recording_depth.fetch_add(1, std::memory_order_acq_rel);
                 g_ggml_sycl_graph_recording = true;
+                g_recording_graph_ptr = &model_sycl_graph;
+                g_recording_queue_ptr = sycl_ctx->stream();
                 model_sycl_graph.begin_recording(*(sycl_ctx->stream()));
                 compute_impl();
                 model_sycl_graph.end_recording();
+                g_recording_graph_ptr = nullptr;
+                g_recording_queue_ptr = nullptr;
                 g_ggml_sycl_graph_recording = false;
                 g_ggml_sycl_graph_recording_depth.fetch_sub(1, std::memory_order_acq_rel);
 
@@ -39568,6 +39611,8 @@ normal_dispatch:
                 sycl_ctx->stream()->ext_oneapi_graph(*(sycl_ctx->exec_graph));
             } catch (const sycl::exception & exc) {
                 g_ggml_sycl_graph_recording = false;
+                g_recording_graph_ptr       = nullptr;
+                g_recording_queue_ptr       = nullptr;
                 g_ggml_sycl_graph_recording_depth.fetch_sub(1, std::memory_order_acq_rel);
                 GGML_LOG_ERROR("[SYCL-GRAPH] re-record+update failed: %s, re-finalizing\n", exc.what());
                 // Invalidate and force re-record on next call
@@ -39624,11 +39669,15 @@ normal_dispatch:
                 g_sycl_submit_count_during_recording.store(0);
                 g_sycl_extra_submit_count_during_recording.store(0);
                 g_ggml_sycl_graph_recording = true;  // Mark recording state
+                g_recording_graph_ptr = &model_sycl_graph;
+                g_recording_queue_ptr = sycl_ctx->stream();
                 model_sycl_graph.begin_recording(*(sycl_ctx->stream()));
                 GGML_SYCL_DEBUG("[SYCL-GRAPH-DEBUG] calling compute_impl...\n");
                 compute_impl();
                 GGML_SYCL_DEBUG("[SYCL-GRAPH-DEBUG] end_recording...\n");
                 model_sycl_graph.end_recording();
+                g_recording_graph_ptr = nullptr;
+                g_recording_queue_ptr = nullptr;
                 fprintf(stderr, "[GRAPH-DIAG] barriers: %d  ops_dispatched: %d  extra_submits: %d  nodes: %d\n",
                         g_sycl_barrier_count_during_recording.load(), g_sycl_submit_count_during_recording.load(),
                         g_sycl_extra_submit_count_during_recording.load(), cgraph->n_nodes);
@@ -39656,6 +39705,8 @@ normal_dispatch:
                 GGML_SYCL_DEBUG("[SYCL-GRAPH] execute done\n");
             } catch (const sycl::exception & exc) {
                 g_ggml_sycl_graph_recording       = false;
+                g_recording_graph_ptr             = nullptr;
+                g_recording_queue_ptr             = nullptr;
                 sycl_ctx->fa_graph_ptrs_recording = false;
 
                 sycl_ctx->fa_graph_ptrs_valid = false;
