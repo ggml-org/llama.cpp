@@ -3977,6 +3977,10 @@ struct layer_expert_biases {
 static std::unordered_map<int, layer_expert_biases> g_moe_expert_biases;
 
 // MoE fusion env var: GGML_SYCL_MOE_FUSE (default: 1 = enabled)
+// Fusion is auto-disabled for models with expert biases until the fused kernel
+// fully supports bias models (the infrastructure is in place but the underlying
+// fusion produces incorrect output for SWIGLU_OAI MoE models like GPT-OSS).
+// Set GGML_SYCL_MOE_FUSE=2 to force-enable fusion with biases.
 static bool ggml_sycl_moe_fusion_enabled() {
     static std::atomic<int> moe_fusion_mode{ -1 };
     int                     val = moe_fusion_mode.load(std::memory_order_acquire);
@@ -3985,6 +3989,10 @@ static bool ggml_sycl_moe_fusion_enabled() {
         int          new_val = env ? std::atoi(env) : 1;
         moe_fusion_mode.compare_exchange_strong(val, new_val, std::memory_order_release, std::memory_order_acquire);
         val = moe_fusion_mode.load(std::memory_order_acquire);
+    }
+    // Auto-disable for models with expert biases (unless force-enabled with =2)
+    if (val == 1 && !g_moe_expert_biases.empty()) {
+        return false;
     }
     return val != 0;
 }
@@ -26349,7 +26357,6 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                             g_moe_fusion.bias_nb        = it->second.nb;
                         }
                     }
-
                     // Partition experts: CPU-only vs secondary GPU
                     g_moe_fusion.cpu_indices.clear();
                     g_moe_fusion.sec_indices.clear();
