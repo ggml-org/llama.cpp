@@ -166,6 +166,9 @@ clEnqueueMemcpyINTEL_fn ggml_openvino_get_clEnqueueMemcpyINTEL() {
 
 // Get requantization type for a tensor type (returns nullopt if no requant needed)
 std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor * tensor, bool no_requant) {
+    if (no_requant) {
+        return std::nullopt;
+    }
     if (strncmp(tensor->name, "token_embd.weight", 17) == 0) {
         return ((ggml_openvino_is_npu() && tensor->type == GGML_TYPE_Q6_K) ? ExtraQuantType::F16 : ExtraQuantType::Q8_0_C);
     }
@@ -174,9 +177,6 @@ std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor *
     }
     if (ggml_openvino_is_npu()) {
         return ExtraQuantType::Q4_0_128;
-    }
-    if (no_requant) {
-        return std::nullopt;
     }
     switch (tensor->type) {
     case GGML_TYPE_Q6_K:

@@ -18,15 +18,12 @@ OutputVector translate_view(const NodeContext & context) {
     if (context.get_op_case() == 3) {
         auto input = context.get_input(0);
         auto input_ov_shape = input.get_partial_shape();
-        std::cout << "Input " << " shape (OpenVINO): " << input_ov_shape << std::endl;
 
         auto input_llama_shape = context.get_input_shape(0).to_shape();
-        std::cout << "Input " << " shape (LLaMA): " << input_llama_shape << std::endl;
 
         // if the input ov shape size is different from the input llama shape size, it means the input is already reshaped and we need to reshape it back to the original shape before slicing
         if (input_ov_shape.size() != input_llama_shape.size()) {
             input = std::make_shared<ov::op::v1::Reshape>(input, ov::op::v0::Constant::create(ov::element::i64, {input_llama_shape.size()}, input_llama_shape), false);
-            std::cout << "Input (reshaped)" << " shape (OpenVINO): " << input.get_partial_shape() << std::endl;
         }
 
         auto dst_shape = context.get_output_shape().to_shape();
@@ -45,7 +42,6 @@ OutputVector translate_view(const NodeContext & context) {
         auto stride = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
         auto axes = ov::op::v0::Constant::create(ov::element::i64, {1}, {slice_dim});
         auto sliced = std::make_shared<ov::op::v8::Slice>(input, begin, end, stride, axes);
-        // print_shape(sliced, "Sliced");
         return {sliced};
     }
     return {context.get_input(0)};
