@@ -5,14 +5,13 @@
 //******************************************************************************
 
 #include <stdint.h>
-#include <stdbool.h>
 #include "ggml_tensor.h"
 #include "platform.h"
 #include "math_fp.h"
 
 // ROPE constants (matching GGML definitions)
 #define GGML_ROPE_TYPE_NEOX 2
-#define CACHE_LINE_SIZE_F32 16
+#define MAX_ROPE_HALF_DIMS 256  // supports up to n_dims=512
 
 // ROPE operation parameters structure (matches ggml-et-ops.h)
 typedef struct {
@@ -83,6 +82,28 @@ static inline void rope_yarn(float theta_extrap, float freq_scale, const float c
     *sin_theta = et_sinf(theta) * mscale;
 }
 
+// Populate cos/sin cache for a given position using running theta product
+static inline void compute_rope_cache(
+    float* cos_cache, float* sin_cache,
+    int32_t n_dims, float theta_scale, int32_t pos,
+    const float* freq_factors, float freq_scale,
+    const float corr_dims[2], float ext_factor, float attn_factor) {
+
+    const int32_t half_dims = n_dims / 2;
+    float theta = 1.0f;
+
+    for (int32_t dim_idx = 0; dim_idx < half_dims; dim_idx++) {
+        const float ff = freq_factors ? freq_factors[dim_idx] : 1.0f;
+        const float theta_base = (float)pos * theta;
+
+        rope_yarn(et_fdiv(theta_base, ff), freq_scale, corr_dims, dim_idx * 2,
+                  ext_factor, attn_factor,
+                  &cos_cache[dim_idx], &sin_cache[dim_idx]);
+
+        theta *= theta_scale;
+    }
+}
+
 int entry_point(struct ggml_et_rope_params* params, void* env) {
     kernel_environment_t* kernel_env = (kernel_environment_t*)env;
 
@@ -141,7 +162,12 @@ int entry_point(struct ggml_et_rope_params* params, void* env) {
         return -1; // Invalid ROPE dimensions
     }
 
-    const int64_t elements_per_cacheline = 16;  // 64 bytes / 4 bytes per float
+    if (n_dims / 2 > MAX_ROPE_HALF_DIMS) {
+        return -1; // n_dims exceeds cache capacity
+    }
+
+    float cos_cache[MAX_ROPE_HALF_DIMS];
+    float sin_cache[MAX_ROPE_HALF_DIMS];
 
     // Calculate YaRN correction dimensions
     float corr_dims[2];
@@ -149,172 +175,99 @@ int entry_point(struct ggml_et_rope_params* params, void* env) {
                        rope_params->beta_fast, rope_params->beta_slow, corr_dims);
 
     if (mode & GGML_ROPE_TYPE_NEOX) {
-        // NeoX Mode: Work on complete heads to handle split pattern
-        const int64_t total_work_units = batch * seq_len * heads;
+        // NeoX Mode: iterate (batch, seq) positions, cache trig values, apply to all heads
+        const int64_t total_positions = batch * seq_len;
 
-        // Distribute work units across threads
-        int64_t units_per_thread = total_work_units / num_threads;
-        int64_t start_unit = thread_id * units_per_thread;
-        int64_t end_unit = (thread_id == num_threads - 1) ?
-                           total_work_units :
-                           start_unit + units_per_thread;
+        // Distribute positions across threads
+        int64_t pos_per_thread = total_positions / num_threads;
+        int64_t start_pos = thread_id * pos_per_thread;
+        int64_t end_pos = (thread_id == num_threads - 1) ?
+                          total_positions :
+                          start_pos + pos_per_thread;
 
         const float theta_scale = et_powf(freq_base, et_fdiv(-2.0f, (float)n_dims));
+        const int32_t half_dims = n_dims / 2;
 
-        const bool is_inplace = (src0_data == dst_data);
-
-        for (int64_t unit = start_unit; unit < end_unit; unit++) {
-            // Map work unit back to coordinates
-            int64_t h = unit % heads;
-            int64_t s = (unit / heads) % seq_len;
-            int64_t b = unit / (heads * seq_len);
-
-            const float* head_src = (const float*)((char*)src0_data +
-                b * src0->nb[3] + s * src0->nb[2] + h * src0->nb[1]);
-
-            float* head_dst = (float*)((char*)dst_data +
-                b * dst->nb[3] + s * dst->nb[2] + h * dst->nb[1]);
+        for (int64_t bs = start_pos; bs < end_pos; bs++) {
+            int64_t s = bs % seq_len;
+            int64_t b = bs / seq_len;
 
             const int32_t pos = src1_data[s] + rope_params->n_past;
 
-            // Process cache lines within this head
-            int64_t cachelines_in_head = (head_dim + elements_per_cacheline - 1) / elements_per_cacheline;
+            // Compute trig cache once for this position
+            compute_rope_cache(cos_cache, sin_cache, n_dims, theta_scale, pos,
+                               freq_factors, freq_scale, corr_dims,
+                               rope_params->ext_factor, rope_params->attn_factor);
 
-            if (is_inplace) {
-                // Inplace: Process each cacheline, writing both halves together
-                for (int64_t cl = 0; cl < cachelines_in_head; cl++) {
-                    float* cacheline = head_dst + cl * elements_per_cacheline;
+            // Apply cached values to all heads
+            for (int64_t h = 0; h < heads; h++) {
+                const float* head_src = (const float*)((const char*)src0_data +
+                    b * src0->nb[3] + s * src0->nb[2] + h * src0->nb[1]);
 
-                    // Copy source to destination first (for unmodified elements)
-                    for (int64_t elem = 0; elem < elements_per_cacheline && (cl * elements_per_cacheline + elem) < head_dim; elem++) {
-                        cacheline[elem] = head_src[cl * elements_per_cacheline + elem];
-                    }
+                float* head_dst = (float*)((char*)dst_data +
+                    b * dst->nb[3] + s * dst->nb[2] + h * dst->nb[1]);
 
-                    // Process elements in this cache line
-                    for (int64_t elem = 0; elem < elements_per_cacheline && (cl * elements_per_cacheline + elem) < head_dim; elem++) {
-                        int64_t dim_idx = cl * elements_per_cacheline + elem;
-
-                        if (dim_idx < n_dims / 2) {
-                            // First half - read before any writes, then write both halves
-                            float x0 = head_src[dim_idx];
-                            float x1 = head_src[dim_idx + n_dims/2];
-
-                            // Calculate theta for this dimension pair
-                            float theta = 1.0f;
-                            for (int64_t j = 0; j < dim_idx; j++) {
-                                theta *= theta_scale;
-                            }
-
-                            const float ff = freq_factors ? freq_factors[dim_idx] : 1.0f;
-                            const float theta_base = (float)pos * theta;
-
-                            float cos_theta, sin_theta;
-                            rope_yarn(et_fdiv(theta_base, ff), freq_scale, corr_dims, dim_idx * 2,
-                                     rope_params->ext_factor, rope_params->attn_factor,
-                                     &cos_theta, &sin_theta);
-
-                            // Write both halves of the pair (safe because we read both first)
-                            head_dst[dim_idx] = x0 * cos_theta - x1 * sin_theta;
-                            head_dst[dim_idx + n_dims/2] = x0 * sin_theta + x1 * cos_theta;
-                        }
-                    }
-                }
-            } else {
-                // Non-inplace: Copy all cachelines first, then process rotations
-                for (int64_t cl = 0; cl < cachelines_in_head; cl++) {
-                    float* cacheline = head_dst + cl * elements_per_cacheline;
-                    for (int64_t elem = 0; elem < elements_per_cacheline && (cl * elements_per_cacheline + elem) < head_dim; elem++) {
-                        cacheline[elem] = head_src[cl * elements_per_cacheline + elem];
-                    }
+                // Copy entire head (including dims beyond n_dims)
+                for (int64_t d = 0; d < head_dim; d++) {
+                    head_dst[d] = head_src[d];
                 }
 
-                // Now process rotations, writing both halves together
-                for (int64_t dim_idx = 0; dim_idx < n_dims / 2; dim_idx++) {
-                    float x0 = head_dst[dim_idx];
-                    float x1 = head_dst[dim_idx + n_dims/2];
+                // Apply rotations using cached cos/sin
+                for (int32_t dim_idx = 0; dim_idx < half_dims; dim_idx++) {
+                    float x0 = head_src[dim_idx];
+                    float x1 = head_src[dim_idx + half_dims];
 
-                    // Calculate theta for this dimension pair
-                    float theta = 1.0f;
-                    for (int64_t j = 0; j < dim_idx; j++) {
-                        theta *= theta_scale;
-                    }
-
-                    const float ff = freq_factors ? freq_factors[dim_idx] : 1.0f;
-                    const float theta_base = (float)pos * theta;
-
-                    float cos_theta, sin_theta;
-                    rope_yarn(et_fdiv(theta_base, ff), freq_scale, corr_dims, dim_idx * 2,
-                             rope_params->ext_factor, rope_params->attn_factor,
-                             &cos_theta, &sin_theta);
-
-                    // Write both halves of the pair
-                    head_dst[dim_idx] = x0 * cos_theta - x1 * sin_theta;
-                    head_dst[dim_idx + n_dims/2] = x0 * sin_theta + x1 * cos_theta;
+                    head_dst[dim_idx]             = x0 * cos_cache[dim_idx] - x1 * sin_cache[dim_idx];
+                    head_dst[dim_idx + half_dims] = x0 * sin_cache[dim_idx] + x1 * cos_cache[dim_idx];
                 }
             }
         }
     } else {
-        // Standard Mode: Process cache lines directly across all data
-        const int64_t total_elements = batch * seq_len * heads * head_dim;
-        const int64_t total_cachelines = (total_elements + elements_per_cacheline - 1) / elements_per_cacheline;
+        // Standard Mode: iterate (batch, seq) positions, cache trig values, apply to all heads
+        const int64_t total_positions = batch * seq_len;
 
-        // Distribute cache lines across threads
-        int64_t cachelines_per_thread = total_cachelines / num_threads;
-        int64_t start_cacheline = thread_id * cachelines_per_thread;
-        int64_t end_cacheline = (thread_id == num_threads - 1) ?
-                                total_cachelines :
-                                start_cacheline + cachelines_per_thread;
+        // Distribute positions across threads
+        int64_t pos_per_thread = total_positions / num_threads;
+        int64_t start_pos = thread_id * pos_per_thread;
+        int64_t end_pos = (thread_id == num_threads - 1) ?
+                          total_positions :
+                          start_pos + pos_per_thread;
 
-        // Pre-calculate theta_scale
         const float theta_scale = et_powf(freq_base, et_fdiv(-2.0f, (float)n_dims));
+        const int32_t half_dims = n_dims / 2;
 
-        for (int64_t cl = start_cacheline; cl < end_cacheline; cl++) {
-            float* cacheline_dst = dst_data + cl * elements_per_cacheline;
-            const float* cacheline_src = src0_data + cl * elements_per_cacheline;
+        for (int64_t bs = start_pos; bs < end_pos; bs++) {
+            int64_t s = bs % seq_len;
+            int64_t b = bs / seq_len;
 
-            // Copy source to destination first
-            for (int64_t elem = 0; elem < elements_per_cacheline && (cl * elements_per_cacheline + elem) < total_elements; elem++) {
-                cacheline_dst[elem] = cacheline_src[elem];
-            }
+            const int32_t pos = src1_data[s] + rope_params->n_past;
 
-            // Process pairs in this cache line
-            const int64_t pairs_per_cacheline = elements_per_cacheline / 2;
+            // Compute trig cache once for this position
+            compute_rope_cache(cos_cache, sin_cache, n_dims, theta_scale, pos,
+                               freq_factors, freq_scale, corr_dims,
+                               rope_params->ext_factor, rope_params->attn_factor);
 
-            for (int64_t local_pair = 0; local_pair < pairs_per_cacheline; local_pair++) {
-                int64_t global_element_idx = cl * elements_per_cacheline + local_pair * 2;
+            // Apply cached values to all heads
+            for (int64_t h = 0; h < heads; h++) {
+                const float* head_src = (const float*)((const char*)src0_data +
+                    b * src0->nb[3] + s * src0->nb[2] + h * src0->nb[1]);
 
-                if (global_element_idx + 1 >= total_elements) break;
+                float* head_dst = (float*)((char*)dst_data +
+                    b * dst->nb[3] + s * dst->nb[2] + h * dst->nb[1]);
 
-                // Map back to [batch, seq, head, dim] coordinates
-                int64_t dim_in_head = global_element_idx % head_dim;
-                int64_t h = (global_element_idx / head_dim) % heads;
-                int64_t s = (global_element_idx / (head_dim * heads)) % seq_len;
-                int64_t b = global_element_idx / (head_dim * heads * seq_len);
+                // Copy entire head (including dims beyond n_dims)
+                for (int64_t d = 0; d < head_dim; d++) {
+                    head_dst[d] = head_src[d];
+                }
 
-                if (dim_in_head < n_dims && dim_in_head % 2 == 0) {
-                    // Calculate position and theta
-                    const int32_t pos = src1_data[s] + rope_params->n_past;
-                    const int64_t pair_idx = dim_in_head / 2;
+                // Apply rotations using cached cos/sin (standard interleaved pairs)
+                for (int32_t pair_idx = 0; pair_idx < half_dims; pair_idx++) {
+                    int32_t dim_in_head = pair_idx * 2;
+                    float x0 = head_src[dim_in_head];
+                    float x1 = head_src[dim_in_head + 1];
 
-                    float theta = 1.0f;
-                    for (int64_t j = 0; j < pair_idx; j++) {
-                        theta *= theta_scale;
-                    }
-
-                    const float ff = freq_factors ? freq_factors[pair_idx] : 1.0f;
-                    const float theta_base = (float)pos * theta;
-
-                    // Apply rotation to this pair using YaRN
-                    float cos_theta, sin_theta;
-                    rope_yarn(et_fdiv(theta_base, ff), freq_scale, corr_dims, dim_in_head,
-                             rope_params->ext_factor, rope_params->attn_factor,
-                             &cos_theta, &sin_theta);
-
-                    float x0 = cacheline_dst[local_pair * 2];
-                    float x1 = cacheline_dst[local_pair * 2 + 1];
-
-                    cacheline_dst[local_pair * 2]     = x0 * cos_theta - x1 * sin_theta;
-                    cacheline_dst[local_pair * 2 + 1] = x0 * sin_theta + x1 * cos_theta;
+                    head_dst[dim_in_head]     = x0 * cos_cache[pair_idx] - x1 * sin_cache[pair_idx];
+                    head_dst[dim_in_head + 1] = x0 * sin_cache[pair_idx] + x1 * cos_cache[pair_idx];
                 }
             }
         }

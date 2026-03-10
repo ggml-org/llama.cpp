@@ -120,6 +120,7 @@ struct ggml_et_mul_mat_id_params {
 
 bool ggml_et_op_mul(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_add(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
+bool ggml_et_op_sub(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_mul_mat_id(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_rope(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
