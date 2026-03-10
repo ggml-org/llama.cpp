@@ -324,6 +324,19 @@ static inline void simd_mul_mat_q4_0_q8_0_16row(
     int K_elem, float * GGML_RESTRICT out,
     const void * GGML_RESTRICT rows[16],
     const void * GGML_RESTRICT vy);
+// 8-row MXFP4 x Q8_0 VNNI kernel: amortizes activation load across 8 weight rows.
+static inline void simd_mxfp4_q8_0_8row(
+    int K_elem, float * GGML_RESTRICT out,
+    const void * GGML_RESTRICT vx0, const void * GGML_RESTRICT vx1,
+    const void * GGML_RESTRICT vx2, const void * GGML_RESTRICT vx3,
+    const void * GGML_RESTRICT vx4, const void * GGML_RESTRICT vx5,
+    const void * GGML_RESTRICT vx6, const void * GGML_RESTRICT vx7,
+    const void * GGML_RESTRICT vy);
+// 16-row MXFP4 x Q8_0 VNNI kernel: maximum activation amortization.
+static inline void simd_mxfp4_q8_0_16row(
+    int K_elem, float * GGML_RESTRICT out,
+    const void * GGML_RESTRICT rows[16],
+    const void * GGML_RESTRICT vy);
 #endif
 #endif
 
@@ -406,6 +419,39 @@ void ggml_sycl_cpu_vec_dot_rows(ggml_type type, int ne00,
                         // Q6_K 4-row kernel: amortize Q8_K activation load across 4 rows
                         for (; i + 3 < r.end(); i += 4) {
                             simd_mul_mat_q6_K_q8_K_4row(
+                                ne00, output + i,
+                                (const char *) src0_host + (size_t)(i + 0) * row_stride,
+                                (const char *) src0_host + (size_t)(i + 1) * row_stride,
+                                (const char *) src0_host + (size_t)(i + 2) * row_stride,
+                                (const char *) src0_host + (size_t)(i + 3) * row_stride,
+                                src1_q_data);
+                        }
+                    } else if (type == GGML_TYPE_MXFP4) {
+#if defined(__AVXVNNIINT8__)
+                        for (; i + 15 < r.end(); i += 16) {
+                            const void * row_ptrs[16];
+                            for (int k = 0; k < 16; k++) {
+                                row_ptrs[k] = (const char *) src0_host + (size_t)(i + k) * row_stride;
+                            }
+                            simd_mxfp4_q8_0_16row(ne00, output + i, row_ptrs, src1_q_data);
+                        }
+                        for (; i + 7 < r.end(); i += 8) {
+                            simd_mxfp4_q8_0_8row(
+                                ne00, output + i,
+                                (const char *) src0_host + (size_t)(i + 0) * row_stride,
+                                (const char *) src0_host + (size_t)(i + 1) * row_stride,
+                                (const char *) src0_host + (size_t)(i + 2) * row_stride,
+                                (const char *) src0_host + (size_t)(i + 3) * row_stride,
+                                (const char *) src0_host + (size_t)(i + 4) * row_stride,
+                                (const char *) src0_host + (size_t)(i + 5) * row_stride,
+                                (const char *) src0_host + (size_t)(i + 6) * row_stride,
+                                (const char *) src0_host + (size_t)(i + 7) * row_stride,
+                                src1_q_data);
+                        }
+#endif
+                        // 4-row MXFP4 kernel (AVX2 with or without VNNI)
+                        for (; i + 3 < r.end(); i += 4) {
+                            simd_mul_mat_mxfp4_q8_0_4row(
                                 ne00, output + i,
                                 (const char *) src0_host + (size_t)(i + 0) * row_stride,
                                 (const char *) src0_host + (size_t)(i + 1) * row_stride,
@@ -930,57 +976,72 @@ void ggml_sycl_cpu_expert_mul_mat_batched(
                         const void * act_q = q8_ptrs[cur_task];
                         float *      out   = t.output_host + local_r;
 
-                        // Tiled GEMM: process K in tiles of TILE_BLOCKS blocks.
-                        // Outer loop over K-tiles, inner loop over row groups.
-                        // The activation tile (TILE_BLOCKS * 34 bytes Q8_0) stays
-                        // in L1 cache and is reused across ALL row groups, converting
-                        // a bandwidth-bound pattern into a compute-bound one.
-                        // For K=3584 (120B), nb=112, TILE_BLOCKS=16 → 7 tiles.
-                        // Activation tile = 544 bytes, fits L1 with headroom.
-                        static constexpr int TILE_BLOCKS = 16;
-                        const int nb = t.K / QK_MXFP4;
-
-                        // Round chunk down to multiple of 4 for SIMD processing
-                        const int chunk4 = chunk & ~3;
-
-                        // Per-row __m256 accumulators (stack-allocated for typical
-                        // TBB grain sizes; heap fallback for unusually large chunks)
-                        __m256 accs_stack[256];
-                        std::vector<__m256> accs_heap;
-                        __m256 * accs;
-                        if (chunk4 <= 256) {
-                            accs = accs_stack;
-                        } else {
-                            accs_heap.resize(chunk4);
-                            accs = accs_heap.data();
-                        }
-                        for (int j = 0; j < chunk4; j++) {
-                            accs[j] = _mm256_setzero_ps();
-                        }
-
-                        // Outer: K-tiles. Inner: 4-row groups.
-                        // Each tile iteration loads the activation tile once into
-                        // L1 and reuses it across all row groups in this chunk.
-                        for (int ib_start = 0; ib_start < nb; ib_start += TILE_BLOCKS) {
-                            int ib_end = std::min(ib_start + TILE_BLOCKS, nb);
-                            for (int j = 0; j + 3 < chunk4; j += 4) {
-                                simd_mxfp4_q8_0_4row_tile(
-                                    ib_start, ib_end,
-                                    wbase + (size_t)(j + 0) * m.row_stride,
-                                    wbase + (size_t)(j + 1) * m.row_stride,
-                                    wbase + (size_t)(j + 2) * m.row_stride,
-                                    wbase + (size_t)(j + 3) * m.row_stride,
-                                    act_q,
-                                    accs[j + 0], accs[j + 1],
-                                    accs[j + 2], accs[j + 3]);
+#if defined(__AVXVNNIINT8__)
+                        // VNNI fast path: 16-row → 8-row → 4-row tile fallback.
+                        // Self-contained kernels (no K-tiling needed: activation
+                        // for K=2880 is only 3060 bytes, fits L1 easily).
+                        for (; i + 15 < chunk; i += 16) {
+                            const void * row_ptrs[16];
+                            for (int k = 0; k < 16; k++) {
+                                row_ptrs[k] = wbase + (size_t)(i + k) * m.row_stride;
                             }
+                            simd_mxfp4_q8_0_16row(t.K, out + i, row_ptrs, act_q);
                         }
+                        for (; i + 7 < chunk; i += 8) {
+                            simd_mxfp4_q8_0_8row(
+                                t.K, out + i,
+                                wbase + (size_t)(i + 0) * m.row_stride,
+                                wbase + (size_t)(i + 1) * m.row_stride,
+                                wbase + (size_t)(i + 2) * m.row_stride,
+                                wbase + (size_t)(i + 3) * m.row_stride,
+                                wbase + (size_t)(i + 4) * m.row_stride,
+                                wbase + (size_t)(i + 5) * m.row_stride,
+                                wbase + (size_t)(i + 6) * m.row_stride,
+                                wbase + (size_t)(i + 7) * m.row_stride,
+                                act_q);
+                        }
+#endif
+                        // 4-row K-tiled fallback (AVX2 or VNNI remainder).
+                        // For remaining rows < 8 (VNNI) or all rows (non-VNNI).
+                        {
+                            static constexpr int TILE_BLOCKS = 16;
+                            const int nb        = t.K / QK_MXFP4;
+                            const int remaining = chunk - i;
+                            const int chunk4    = remaining & ~3;
 
-                        // Horizontal sum and store
-                        for (int j = 0; j < chunk4; j++) {
-                            out[j] = ggml_sycl_hsum_float_8(accs[j]);
+                            __m256 accs_stack[256];
+                            std::vector<__m256> accs_heap;
+                            __m256 * accs;
+                            if (chunk4 <= 256) {
+                                accs = accs_stack;
+                            } else {
+                                accs_heap.resize(chunk4);
+                                accs = accs_heap.data();
+                            }
+                            for (int j = 0; j < chunk4; j++) {
+                                accs[j] = _mm256_setzero_ps();
+                            }
+
+                            for (int ib_start = 0; ib_start < nb; ib_start += TILE_BLOCKS) {
+                                int ib_end = std::min(ib_start + TILE_BLOCKS, nb);
+                                for (int j = 0; j + 3 < chunk4; j += 4) {
+                                    simd_mxfp4_q8_0_4row_tile(
+                                        ib_start, ib_end,
+                                        wbase + (size_t)(i + j + 0) * m.row_stride,
+                                        wbase + (size_t)(i + j + 1) * m.row_stride,
+                                        wbase + (size_t)(i + j + 2) * m.row_stride,
+                                        wbase + (size_t)(i + j + 3) * m.row_stride,
+                                        act_q,
+                                        accs[j + 0], accs[j + 1],
+                                        accs[j + 2], accs[j + 3]);
+                                }
+                            }
+
+                            for (int j = 0; j < chunk4; j++) {
+                                out[i + j] = ggml_sycl_hsum_float_8(accs[j]);
+                            }
+                            i += chunk4;
                         }
-                        i = chunk4;
                     }
 #endif
                     // Remainder: single-row generic vec_dot
@@ -2701,6 +2762,128 @@ static inline void simd_mxfp4_1row_4act_tile(
 #undef GGML_MXFP4_DOT_ACT_ACCUM
     }
 }
+
+// ---------------------------------------------------------------------------
+// 8-row and 16-row MXFP4 x Q8_0 VNNI kernels
+// Same pattern as Q4_0 8/16-row kernels: load activation block once, dot
+// with 8 or 16 weight rows using _mm256_dpbssd_epi32.  Reduces activation
+// load overhead vs 4-row tile by 2x/4x respectively.
+// ---------------------------------------------------------------------------
+#if defined(__AVXVNNIINT8__)
+
+static inline void simd_mxfp4_q8_0_8row(
+    int K_elem,
+    float * GGML_RESTRICT out,
+    const void * GGML_RESTRICT vx0, const void * GGML_RESTRICT vx1,
+    const void * GGML_RESTRICT vx2, const void * GGML_RESTRICT vx3,
+    const void * GGML_RESTRICT vx4, const void * GGML_RESTRICT vx5,
+    const void * GGML_RESTRICT vx6, const void * GGML_RESTRICT vx7,
+    const void * GGML_RESTRICT vy
+) {
+    const int nb = K_elem / QK_MXFP4;
+
+    const block_mxfp4 * GGML_RESTRICT x0 = (const block_mxfp4 *)vx0;
+    const block_mxfp4 * GGML_RESTRICT x1 = (const block_mxfp4 *)vx1;
+    const block_mxfp4 * GGML_RESTRICT x2 = (const block_mxfp4 *)vx2;
+    const block_mxfp4 * GGML_RESTRICT x3 = (const block_mxfp4 *)vx3;
+    const block_mxfp4 * GGML_RESTRICT x4 = (const block_mxfp4 *)vx4;
+    const block_mxfp4 * GGML_RESTRICT x5 = (const block_mxfp4 *)vx5;
+    const block_mxfp4 * GGML_RESTRICT x6 = (const block_mxfp4 *)vx6;
+    const block_mxfp4 * GGML_RESTRICT x7 = (const block_mxfp4 *)vx7;
+    const block_q8_0  * GGML_RESTRICT y  = (const block_q8_0 *)vy;
+
+    const __m128i values128 = _mm_loadu_si128((const __m128i *)kvalues_mxfp4);
+    const __m128i m4b       = _mm_set1_epi8(0x0f);
+
+    __m256 acc0 = _mm256_setzero_ps();
+    __m256 acc1 = _mm256_setzero_ps();
+    __m256 acc2 = _mm256_setzero_ps();
+    __m256 acc3 = _mm256_setzero_ps();
+    __m256 acc4 = _mm256_setzero_ps();
+    __m256 acc5 = _mm256_setzero_ps();
+    __m256 acc6 = _mm256_setzero_ps();
+    __m256 acc7 = _mm256_setzero_ps();
+
+    for (int ib = 0; ib < nb; ib++) {
+        const float   q8_d = cpu_half_to_f32(y[ib].d);
+        const __m256i qy   = _mm256_loadu_si256((const __m256i *)y[ib].qs);
+
+#define MXFP4_ROW_8(xr, accr) \
+        { \
+            const __m128i q4bits = _mm_loadu_si128((const __m128i *)(xr)[ib].qs); \
+            const __m256i qx = GGML_SYCL_MM256_SET_M128I( \
+                _mm_shuffle_epi8(values128, _mm_and_si128(_mm_srli_epi16(q4bits, 4), m4b)), \
+                _mm_shuffle_epi8(values128, _mm_and_si128(q4bits, m4b))); \
+            const float d = q8_d * GGML_E8M0_TO_FP32_HALF((xr)[ib].e); \
+            const __m256i prod = _mm256_dpbssd_epi32(_mm256_setzero_si256(), qx, qy); \
+            accr = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod), accr); \
+        }
+
+        MXFP4_ROW_8(x0, acc0)
+        MXFP4_ROW_8(x1, acc1)
+        MXFP4_ROW_8(x2, acc2)
+        MXFP4_ROW_8(x3, acc3)
+        MXFP4_ROW_8(x4, acc4)
+        MXFP4_ROW_8(x5, acc5)
+        MXFP4_ROW_8(x6, acc6)
+        MXFP4_ROW_8(x7, acc7)
+
+#undef MXFP4_ROW_8
+    }
+
+    out[0] = ggml_sycl_hsum_float_8(acc0);
+    out[1] = ggml_sycl_hsum_float_8(acc1);
+    out[2] = ggml_sycl_hsum_float_8(acc2);
+    out[3] = ggml_sycl_hsum_float_8(acc3);
+    out[4] = ggml_sycl_hsum_float_8(acc4);
+    out[5] = ggml_sycl_hsum_float_8(acc5);
+    out[6] = ggml_sycl_hsum_float_8(acc6);
+    out[7] = ggml_sycl_hsum_float_8(acc7);
+}
+
+static inline void simd_mxfp4_q8_0_16row(
+    int K_elem,
+    float * GGML_RESTRICT out,
+    const void * GGML_RESTRICT rows[16],
+    const void * GGML_RESTRICT vy
+) {
+    const int nb = K_elem / QK_MXFP4;
+
+    const block_mxfp4 * GGML_RESTRICT xr[16];
+    for (int r = 0; r < 16; r++) {
+        xr[r] = (const block_mxfp4 *)rows[r];
+    }
+    const block_q8_0 * GGML_RESTRICT y = (const block_q8_0 *)vy;
+
+    const __m128i values128 = _mm_loadu_si128((const __m128i *)kvalues_mxfp4);
+    const __m128i m4b       = _mm_set1_epi8(0x0f);
+
+    __m256 acc[16];
+    for (int r = 0; r < 16; r++) {
+        acc[r] = _mm256_setzero_ps();
+    }
+
+    for (int ib = 0; ib < nb; ib++) {
+        const float   q8_d = cpu_half_to_f32(y[ib].d);
+        const __m256i qy   = _mm256_loadu_si256((const __m256i *)y[ib].qs);
+
+        for (int r = 0; r < 16; r++) {
+            const __m128i q4bits = _mm_loadu_si128((const __m128i *)xr[r][ib].qs);
+            const __m256i qx = GGML_SYCL_MM256_SET_M128I(
+                _mm_shuffle_epi8(values128, _mm_and_si128(_mm_srli_epi16(q4bits, 4), m4b)),
+                _mm_shuffle_epi8(values128, _mm_and_si128(q4bits, m4b)));
+            const float d = q8_d * GGML_E8M0_TO_FP32_HALF(xr[r][ib].e);
+            const __m256i prod = _mm256_dpbssd_epi32(_mm256_setzero_si256(), qx, qy);
+            acc[r] = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod), acc[r]);
+        }
+    }
+
+    for (int r = 0; r < 16; r++) {
+        out[r] = ggml_sycl_hsum_float_8(acc[r]);
+    }
+}
+
+#endif // defined(__AVXVNNIINT8__)
 
 // INT4 fast-path: 4-row Q4_0 x Q8_0 dot product WITHOUT zero-point offset.
 // Treats nibbles as unsigned [0,15] and uses _mm256_maddubs_epi16 directly
