@@ -108,7 +108,7 @@ Building through oneAPI compilers will make avx_vnni instruction set available f
 - Using oneAPI docker image:
   If you do not want to source the environment vars and install oneAPI manually, you can also build the code using intel docker container: [oneAPI-basekit](https://hub.docker.com/r/intel/oneapi-basekit). Then, you can use the commands given above.
 
-Check [Optimizing and Running LLaMA2 on Intel® CPU](https://www.intel.com/content/www/us/en/content-details/791610/optimizing-and-running-llama2-on-intel-cpu.html) for more information.
+Check [Optimizing and Running LLaMA2 on Intel® CPU](https://builders.intel.com/solutionslibrary/optimizing-and-running-llama2-on-intel-cpu) for more information.
 
 ### Other BLAS libraries
 
@@ -595,11 +595,17 @@ You can verify that KleidiAI is being used by running
 ```bash
 ./build/bin/llama-cli -m PATH_TO_MODEL -p "What is a car?"
 ```
-If KleidiAI is enabled, the ouput will contain a line similar to:
+If KleidiAI is enabled, the output will contain a line similar to:
 ```
 load_tensors: CPU_KLEIDIAI model buffer size =  3474.00 MiB
 ```
-KleidiAI's microkernels implement optimized tensor operations using Arm CPU features such as dotprod, int8mm and SME. llama.cpp selects the most efficient kernel based on runtime CPU feature detection. However, on platforms that support SME, you must manually enable SME microkernels by setting the environment variable `GGML_KLEIDIAI_SME=1`.
+KleidiAI’s microkernels implement optimized tensor operations using Arm CPU features such as dotprod, int8mm, SVE, and SME. Llama.cpp selects the most efficient kernels at runtime based on detected CPU capabilities.
+On CPUs that support SME, SME microkernels are enabled automatically using runtime detection.
+The environment variable GGML_KLEIDIAI_SME can be used to control SME behavior:
+- Not set: enable SME automatically if supported and detected.
+- 0: disable SME.
+- <n> > 0: enable SME and assume <n> available SME units (override auto detection).
+If SME is not supported by the CPU, SME microkernels are always disabled.
 
 Depending on your build target, other higher priority backends may be enabled by default. To ensure the CPU backend is used, you must disable the higher priority backends either at compile time, e.g. -DGGML_METAL=OFF, or during run-time using the command line option `--device none`.
 
@@ -699,7 +705,7 @@ To read documentation for how to build on Android, [click here](./android.md)
 
 ## WebGPU [In Progress]
 
-The WebGPU backend relies on [Dawn](https://dawn.googlesource.com/dawn). Follow the instructions [here](https://dawn.googlesource.com/dawn/+/refs/heads/main/docs/quickstart-cmake.md) to install Dawn locally so that llama.cpp can find it using CMake. The currrent implementation is up-to-date with Dawn commit `bed1a61`.
+The WebGPU backend relies on [Dawn](https://dawn.googlesource.com/dawn). Follow the instructions [here](https://dawn.googlesource.com/dawn/+/refs/heads/main/docs/quickstart-cmake.md) to install Dawn locally so that llama.cpp can find it using CMake. The current implementation is up-to-date with Dawn commit `bed1a61`.
 
 In the llama.cpp directory, build with CMake:
 

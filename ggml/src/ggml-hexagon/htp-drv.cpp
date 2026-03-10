@@ -282,7 +282,7 @@ static std::string get_driver_path() {
     // Replace \SystemRoot with an absolute path from system ENV windir
     const std::wstring systemRootEnv = L"windir";
 
-    // Query the number of wide charactors this variable requires
+    // Query the number of wide characters this variable requires
     DWORD numWords = GetEnvironmentVariableW(systemRootEnv.c_str(), NULL, 0);
     if (numWords == 0) {
         GGML_LOG_ERROR("ggml-hex: Failed get systemRoot environment variable\n");

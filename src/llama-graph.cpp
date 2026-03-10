@@ -509,6 +509,7 @@ void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
     float * data = (float *) cross_kq_mask->data;
 
     for (int i = 0; i < n_tokens; ++i) {
+        GGML_ASSERT(!cross->seq_ids_enc.empty() && "llama_encode must be called first");
         for (int j = 0; j < n_enc; ++j) {
             float f = -INFINITY;
 
@@ -848,13 +849,13 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     ubatch           (params.ubatch),
     n_embd           (hparams.n_embd),
     n_layer          (hparams.n_layer),
-    n_rot            (hparams.n_rot),
+    n_rot            (hparams.n_rot()),
     n_ctx            (cparams.n_ctx),
     n_head           (hparams.n_head()),
     n_head_kv        (hparams.n_head_kv()),
-    n_embd_head_k    (hparams.n_embd_head_k),
+    n_embd_head_k    (hparams.n_embd_head_k()),
     n_embd_k_gqa     (hparams.n_embd_k_gqa()),
-    n_embd_head_v    (hparams.n_embd_head_v),
+    n_embd_head_v    (hparams.n_embd_head_v()),
     n_embd_v_gqa     (hparams.n_embd_v_gqa()),
     n_expert         (hparams.n_expert),
     n_expert_used    (cparams.warmup ? hparams.n_expert : hparams.n_expert_used),
@@ -1161,7 +1162,6 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
              int64_t   n_expert_used,
      llm_ffn_op_type   type_op,
                 bool   norm_w,
-                bool   scale_w,
                float   w_scale,
          llama_expert_gating_func_type gating_op,
                  int   il,
@@ -1178,7 +1178,6 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         n_expert_used,
         type_op,
         norm_w,
-        scale_w,
         w_scale,
         gating_op,
         il,
@@ -1202,7 +1201,6 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
              int64_t   n_expert_used,
      llm_ffn_op_type   type_op,
                 bool   norm_w,
-                bool   scale_w,
                float   w_scale,
         llama_expert_gating_func_type gating_op,
                  int   il,
@@ -1330,7 +1328,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 
         weights = ggml_reshape_3d(ctx0, weights, 1, n_expert_used, n_tokens);
     }
-    if (scale_w) {
+    if (w_scale != 0.0f && w_scale != 1.0f) {
         weights = ggml_scale(ctx0, weights, w_scale);
         cb(weights, "ffn_moe_weights_scaled", il);
     }
@@ -1607,6 +1605,7 @@ ggml_tensor * llm_graph_context::build_inp_attn_scale() const {
     // this need to be 1x1xN for broadcasting
     cur = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, 1, n_tokens);
     ggml_set_input(cur);
+    ggml_set_name(cur, "attn_scale");
 
     res->add_input(std::move(inp));
 
@@ -1616,7 +1615,7 @@ ggml_tensor * llm_graph_context::build_inp_attn_scale() const {
 ggml_tensor * llm_graph_context::build_inp_out_ids() const {
     // note: when all tokens are output, we could skip this optimization to spare the ggml_get_rows() calls,
     //       but this would make the graph topology depend on the number of output tokens, which can interere with
-    //       features that require constant topology such as pipline parallelism
+    //       features that require constant topology such as pipeline parallelism
     //       ref: https://github.com/ggml-org/llama.cpp/pull/14275#issuecomment-2987424471
     //if (n_outputs < n_tokens) {
     //    return nullptr;
@@ -1779,7 +1778,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         if (v_mla) {
 #if 0
             // v_mla can be applied as a matrix-vector multiplication with broadcasting across dimension 3 == n_tokens.
-            // However, the code is optimized for dimensions 0 and 1 being large, so this is ineffient.
+            // However, the code is optimized for dimensions 0 and 1 being large, so this is inefficient.
             cur = ggml_reshape_4d(ctx0, cur, v_mla->ne[0], 1, n_head, n_tokens);
             cur = ggml_mul_mat(ctx0, v_mla, cur);
 #else
