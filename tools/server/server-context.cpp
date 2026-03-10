@@ -2520,11 +2520,12 @@ private:
                         slot.n_prompt_tokens_processed++;
 
                         // process the last few tokens of the prompt separately in order to allow for a checkpoint to be created.
-                        // create checkpoints:
-                        //  - n_ubatch tokens before the end of the prompt
-                        //  - 64       tokens before the end of the prompt
+                        // create checkpoints that many tokens before the end of the prompt:
+                        //  - 4 + n_ubatch
+                        //  - 4
+                        // ref: https://github.com/ggml-org/llama.cpp/pull/20288
                         {
-                            static const int checkpoint_offsets[] = {n_ubatch, 64};
+                            static const int checkpoint_offsets[] = {4 + n_ubatch, 4};
 
                             bool should_break = false;
                             for (int offset : checkpoint_offsets) {
