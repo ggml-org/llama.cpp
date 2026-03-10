@@ -94,6 +94,11 @@ bool ggml_et_op_add(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* 
     return ggml_et_op_elmap(dev_ctx, node);
 }
 
+bool ggml_et_op_sub(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    // Delegate to generic element map operation
+    return ggml_et_op_elmap(dev_ctx, node);
+}
+
 bool ggml_et_op_elmap(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
     ET_PERF_START();
 

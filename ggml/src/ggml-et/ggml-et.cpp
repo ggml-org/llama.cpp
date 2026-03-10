@@ -528,7 +528,7 @@ static void ggml_backend_et_synchronize(ggml_backend_t backend) {
         return;
     }
     for(const auto& err : errors) {
-        GGML_LOG_ERROR("ET: stream error detected at synchronization point. Hart: %d\n", (int)err.errorContext_.value()[0].type_);
+        GGML_LOG_ERROR("ET: stream error detected at synchronization point. Code: %d,Type: %d\n", (int)err.errorCode_, (int)err.errorContext_.value()[0].type_);
     }
     abort();
 }
@@ -550,6 +550,10 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
 
             case GGML_OP_ADD:
                 ggml_et_op_add(dev_ctx, node);
+                break;
+
+            case GGML_OP_SUB:
+                ggml_et_op_sub(dev_ctx, node);
                 break;
 
             case GGML_OP_MUL_MAT:
@@ -620,9 +624,13 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
     switch (op->op) {
         case GGML_OP_MUL:
         case GGML_OP_ADD:
+        case GGML_OP_SUB:
             supported = op->type == GGML_TYPE_F32 &&
                        op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
                        op->src[1] && op->src[1]->type == GGML_TYPE_F32 &&
+                       op->ne[0] % 16 == 0 && // cache-aligned
+                       op->src[0]->ne[0] % 16 == 0 &&
+                       op->src[1]->ne[0] % 16 == 0 &&
                        ggml_is_contiguous(op) &&
                        ggml_is_contiguous(op->src[0]) &&
                        ggml_is_contiguous(op->src[1]);
@@ -714,7 +722,8 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 ggml_is_contiguous(op->src[0])) {
                 // Check ROPE mode - only support standard (0x0) and NEOX (0x2)
                 const int mode = ((const int32_t *) op->op_params)[2];
-                supported = (mode == 0x0) || (mode & GGML_ROPE_TYPE_NEOX);
+                const int ndims = ((const int32_t *) op->op_params)[1];
+                supported = ((mode == 0x0) || (mode & GGML_ROPE_TYPE_NEOX)) && (ndims <= 512);
             } else {
                 supported = false;
             }

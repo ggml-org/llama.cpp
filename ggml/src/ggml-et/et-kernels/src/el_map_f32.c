@@ -11,7 +11,7 @@
 // TODO: only even threads
 
 // Block operation implementations using ET vector instructions
-static inline void block_mul(float* dst_block, const float* src0_block, const float* src1_block, int elements) {
+static inline void block_mul_cache_aligned(float* dst_block, const float* src0_block, const float* src1_block, int elements) {
     // Process 8 elements at a time using vector multiplication
     int32_t vec_end = (elements / 8) * 8;
 
@@ -22,36 +22,24 @@ static inline void block_mul(float* dst_block, const float* src0_block, const fl
 
     for (int32_t i = 0; i < vec_end; i += 8) {
         // Compute results into temporary buffer
-        float temp_result[8];
         __asm__ volatile(
             "flw.ps f10, %[src0_vec]\n"        // Load 8 src0 values
             "flw.ps f11, %[src1_vec]\n"        // Load 8 src1 values
             "fmul.ps f12, f10, f11\n"          // dst = src0 * src1 (8-wide)
             "fsw.ps f12, %[dst_vec]\n"         // Store 8 results to temp buffer
 
-            : [dst_vec] "=m"(*(float(*)[8])temp_result)
+            : [dst_vec] "=m"(*(float(*)[8])&dst_block[i])
             : [src0_vec] "m"(*(const float(*)[8])&src0_block[i]),
               [src1_vec] "m"(*(const float(*)[8])&src1_block[i])
             : "f10", "f11", "f12"
         );
-
-        // Use atomic stores to write results to global memory
-        for (int32_t j = 0; j < 8; j++) {
-            atomic_store_f32((volatile float*)&dst_block[i + j], temp_result[j]);
-        }
     }
 
     // Restore original mask
     __asm__ volatile("mova.m.x %0" :: "r"(temp_mask));
-
-    // Handle remaining elements (< 8) with scalar operations and atomic stores
-    for (int32_t i = vec_end; i < elements; i++) {
-        float result = src0_block[i] * src1_block[i];
-        atomic_store_f32((volatile float*)&dst_block[i], result);
-    }
 }
 
-static inline void block_add(float* dst_block, const float* src0_block, const float* src1_block, int elements) {
+static inline void block_add_cache_aligned(float* dst_block, const float* src0_block, const float* src1_block, int elements) {
     // Process 8 elements at a time using vector addition
     int32_t vec_end = (elements / 8) * 8;
 
@@ -62,34 +50,51 @@ static inline void block_add(float* dst_block, const float* src0_block, const fl
 
     for (int32_t i = 0; i < vec_end; i += 8) {
         // Compute results into temporary buffer
-        float temp_result[8];
         __asm__ volatile(
             "flw.ps f10, %[src0_vec]\n"        // Load 8 src0 values
             "flw.ps f11, %[src1_vec]\n"        // Load 8 src1 values
             "fadd.ps f12, f10, f11\n"          // dst = src0 + src1 (8-wide)
             "fsw.ps f12, %[dst_vec]\n"         // Store 8 results to temp buffer
 
-            : [dst_vec] "=m"(*(float(*)[8])temp_result)
+            : [dst_vec] "=m"(*(float(*)[8])&dst_block[i])
             : [src0_vec] "m"(*(const float(*)[8])&src0_block[i]),
               [src1_vec] "m"(*(const float(*)[8])&src1_block[i])
             : "f10", "f11", "f12"
         );
-
-        // Use atomic stores to write results to global memory
-        for (int32_t j = 0; j < 8; j++) {
-            atomic_store_f32((volatile float*)&dst_block[i + j], temp_result[j]);
-        }
     }
 
     // Restore original mask
     __asm__ volatile("mova.m.x %0" :: "r"(temp_mask));
-
-    // Handle remaining elements (< 8) with scalar operations and atomic stores
-    for (int32_t i = vec_end; i < elements; i++) {
-        float result = src0_block[i] + src1_block[i];
-        atomic_store_f32((volatile float*)&dst_block[i], result);
-    }
 }
+
+static inline void block_sub_cache_aligned(float* dst_block, const float* src0_block, const float* src1_block, int elements) {
+    // Process 8 elements at a time using vector addition
+    int32_t vec_end = (elements / 8) * 8;
+
+    // Set mask register to enable all 8 vector elements
+    unsigned long temp_mask;
+    __asm__ volatile("mova.x.m %0" : "=r"(temp_mask));  // Save current mask
+    __asm__ volatile("mov.m.x m0, x0, 0xFF");           // Enable all 8 elements
+
+    for (int32_t i = 0; i < vec_end; i += 8) {
+        // Compute results into temporary buffer
+        __asm__ volatile(
+            "flw.ps f10, %[src0_vec]\n"        // Load 8 src0 values
+            "flw.ps f11, %[src1_vec]\n"        // Load 8 src1 values
+            "fsub.ps f12, f10, f11\n"          // dst = src0 + src1 (8-wide)
+            "fsw.ps f12, %[dst_vec]\n"         // Store 8 results to temp buffer
+
+            : [dst_vec] "=m"(*(float(*)[8])&dst_block[i])
+            : [src0_vec] "m"(*(const float(*)[8])&src0_block[i]),
+              [src1_vec] "m"(*(const float(*)[8])&src1_block[i])
+            : "f10", "f11", "f12"
+        );
+    }
+
+    // Restore original mask
+    __asm__ volatile("mova.m.x %0" :: "r"(temp_mask));
+}
+
 
 int entry_point(struct ggml_et_binary_params* params, void* env) {
     kernel_environment_t* kernel_env = (kernel_environment_t*)env;
@@ -127,7 +132,7 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
 
     enum ggml_op operation = dst->op;
 
-    if (operation != GGML_OP_MUL && operation != GGML_OP_ADD) {
+    if (operation != GGML_OP_MUL && operation != GGML_OP_ADD && operation != GGML_OP_SUB) {
         return -1; // Unsupported operation
     }
 
@@ -149,6 +154,11 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
 
     if (start_row >= total_rows) {
         return 0;
+    }
+
+    bool cache_aligned = (dst->ne[0] % 16 == 0);
+    if(!cache_aligned) {
+        return 1;
     }
 
     for (int64_t ir = start_row; ir < end_row; ir++) {
@@ -177,11 +187,16 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
 
             switch (operation) {
                 case GGML_OP_MUL:
-                    block_mul(dst_block, src0_block, src1_ptr, (int)ne10);
+                    block_mul_cache_aligned(dst_block, src0_block, src1_ptr, (int)ne10);
                     break;
                 case GGML_OP_ADD:
-                    block_add(dst_block, src0_block, src1_ptr, (int)ne10);
+                    block_add_cache_aligned(dst_block, src0_block, src1_ptr, (int)ne10);
                     break;
+                case GGML_OP_SUB:
+                    block_sub_cache_aligned(dst_block, src0_block, src1_ptr, (int)ne10);
+                    break;
+                default:
+                    return 1;
             }
         }
     }
