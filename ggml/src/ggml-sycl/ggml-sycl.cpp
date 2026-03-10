@@ -3886,16 +3886,19 @@ static thread_local pending_cpu_scatter g_pending_scatter = {};
 // ---------------------------------------------------------------------------
 struct moe_fusion_state {
     const void *    gate_data;      // Gate tensor src0->data (base of all gate experts)
-    const float *   act_host;       // Shared activation (resolved once on gate call)
+    const void *    up_data;        // Up tensor src0->data (if UP seen first)
+    const float *   act_host;       // Shared activation (resolved once on first phase)
     const int32_t * ids_data;       // Expert IDs (shared across gate/up/down)
     size_t          n_ids;          // Number of expert dispatches
     int64_t         n_as;           // Total number of experts
     size_t          gate_nb02;      // Gate expert stride in bytes
+    size_t          up_nb02;        // Up expert stride in bytes
     int             K;              // Input dimension
     int             N_gate;         // Gate/up output dimension (intermediate size)
     ggml_type       type;           // Weight quantization type
     int             layer_id;       // Layer number for matching
     bool            gate_pending;   // Gate saved, waiting for up
+    bool            up_pending;     // Up saved, waiting for gate
     bool            fused_pending;  // Gate+up fused, waiting for down
     float *         fused_output;   // Pinned buffer: SiLU(gate*act) * (up*act) per expert
     sycl::queue *   fused_q;        // Queue that owns fused_output
@@ -3913,16 +3916,19 @@ struct moe_fusion_state {
 
     moe_fusion_state() :
         gate_data(nullptr),
+        up_data(nullptr),
         act_host(nullptr),
         ids_data(nullptr),
         n_ids(0),
         n_as(0),
         gate_nb02(0),
+        up_nb02(0),
         K(0),
         N_gate(0),
         type(GGML_TYPE_F32),
         layer_id(-1),
         gate_pending(false),
+        up_pending(false),
         fused_pending(false),
         fused_output(nullptr),
         fused_q(nullptr),
@@ -3951,8 +3957,11 @@ struct moe_fusion_state {
 
     void reset() {
         gate_pending    = false;
+        up_pending      = false;
         fused_pending   = false;
         layer_id        = -1;
+        up_data         = nullptr;
+        up_nb02         = 0;
         gate_bias_data  = nullptr;
         up_bias_data    = nullptr;
         bias_nb         = 0;
@@ -3970,20 +3979,20 @@ static float            g_moe_fused_act_alpha = 0.0f;
 static float            g_moe_fused_act_limit = 0.0f;
 
 // Per-layer expert bias pointers captured during graph scan.
-// Maps layer_id -> {gate_bias, up_bias, down_bias} data pointers + stride.
+// Maps layer_id -> {gate_bias, up_bias, down_bias} HOST data pointers + stride.
+// Bias tensors in the graph have device pointers; we copy to host-owned buffers
+// so the CPU fused kernel can access them safely.
 struct layer_expert_biases {
-    const float * gate_bias = nullptr;  // ffn_gate_exps bias base
-    const float * up_bias   = nullptr;  // ffn_up_exps bias base
-    const float * down_bias = nullptr;  // ffn_down_exps bias base
+    const float * gate_bias = nullptr;  // HOST copy of ffn_gate_exps bias base
+    const float * up_bias   = nullptr;  // HOST copy of ffn_up_exps bias base
+    const float * down_bias = nullptr;  // HOST copy of ffn_down_exps bias base
     size_t        nb        = 0;        // Expert stride in bytes (nb11)
 };
 static std::unordered_map<int, layer_expert_biases> g_moe_expert_biases;
+// Host-side copies of bias data (owned memory, freed at static destruction).
+static std::vector<std::vector<float>> g_moe_bias_host_copies;
 
 // MoE fusion env var: GGML_SYCL_MOE_FUSE (default: 1 = enabled)
-// Fusion is auto-disabled for models with expert biases until the fused kernel
-// fully supports bias models (the infrastructure is in place but the underlying
-// fusion produces incorrect output for SWIGLU_OAI MoE models like GPT-OSS).
-// Set GGML_SYCL_MOE_FUSE=2 to force-enable fusion with biases.
 static bool ggml_sycl_moe_fusion_enabled() {
     static std::atomic<int> moe_fusion_mode{ -1 };
     int                     val = moe_fusion_mode.load(std::memory_order_acquire);
@@ -3992,10 +4001,6 @@ static bool ggml_sycl_moe_fusion_enabled() {
         int          new_val = env ? std::atoi(env) : 1;
         moe_fusion_mode.compare_exchange_strong(val, new_val, std::memory_order_release, std::memory_order_acquire);
         val = moe_fusion_mode.load(std::memory_order_acquire);
-    }
-    // Auto-disable for models with expert biases (unless force-enabled with =2)
-    if (val == 1 && !g_moe_expert_biases.empty()) {
-        return false;
     }
     return val != 0;
 }
@@ -26243,6 +26248,26 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
         const auto * cpu_traits_fast = ggml_get_type_traits_cpu(src0->type);
         const bool   cpu_type_ok_fast = cpu_traits_fast && cpu_traits_fast->vec_dot;
 
+        // Guard: if fusion state is pending but this weight is NOT host-resident,
+        // the gate/up/down weights for this layer have mixed residency (some on
+        // device, some on host).  Reset fusion state to prevent stale gate_pending
+        // from causing GLU to read uninitialized data and ADD_ID to be incorrectly skipped.
+        if (!host_weights_fast && (g_moe_fusion.gate_pending || g_moe_fusion.up_pending || g_moe_fusion.fused_pending)) {
+            const char * mname = src0->name ? src0->name : "";
+            if (strstr(mname, "ffn_up") || strstr(mname, "ffn_down") || strstr(mname, "ffn_gate")) {
+                static std::atomic<int> mix_log{ 0 };
+                if (mix_log.fetch_add(1, std::memory_order_relaxed) < 10) {
+                    GGML_LOG_WARN("[FUSE-MIXED] Reset fusion: %s is device-resident but fusion pending "
+                                  "(gate=%d fused=%d up=%d layer=%d)\n",
+                                  mname, (int)g_moe_fusion.gate_pending,
+                                  (int)g_moe_fusion.fused_pending,
+                                  (int)g_moe_fusion.up_pending,
+                                  g_moe_fusion.layer_id);
+                }
+                g_moe_fusion.reset();
+            }
+        }
+
         if ((cpu_tg_val_fast == 1 || cpu_tg_val_fast == -2) && host_weights_fast && cpu_type_ok_fast) {
             static std::atomic<int> cpu_tg_log{0};
             if (cpu_tg_log.fetch_add(1, std::memory_order_relaxed) < 3) {
@@ -26270,7 +26295,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 const bool   is_down_fast   = (strstr(tname_fast, "ffn_down") != nullptr);
                 const int    cur_layer_fast = parse_layer_id_from_name(tname_fast);
 
-                // GATE: resolve IDs + activation, save state, skip compute
+                // GATE: resolve IDs + activation, save state (or fuse if UP already pending)
                 if (ggml_sycl_moe_fusion_enabled() && is_gate_fast && cur_layer_fast >= 0) {
                     ctx.moe_graphs_disabled_once = true;
                     const queue_ptr stream       = ctx.stream();
@@ -26278,6 +26303,112 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     const int64_t   n_ids_f      = ids->ne[0];
                     const int64_t   n_as_f       = src0->ne[2];
                     const size_t    ids_n_elem   = static_cast<size_t>(ids->ne[1] * n_ids_f);
+
+                    // If UP already pending for this layer, FUSE now (UP-first ordering)
+                    if (g_moe_fusion.up_pending && g_moe_fusion.layer_id == cur_layer_fast &&
+                        g_moe_fusion.type == src0->type && g_moe_fusion.K == static_cast<int>(K_f) &&
+                        g_moe_fusion.N_gate == static_cast<int>(ne01)) {
+
+                        const int64_t  N_f     = ne01;
+                        const size_t   n_cpu_f = g_moe_fusion.cpu_indices.size();
+                        const size_t   fused_floats = n_cpu_f * static_cast<size_t>(N_f);
+                        g_moe_fusion.ensure_fused_buf(fused_floats, *stream);
+
+                        constexpr size_t                   STACK_F = 16;
+                        cpu_expert_fused_task              stack_ft[STACK_F];
+                        std::vector<cpu_expert_fused_task> heap_ft;
+                        cpu_expert_fused_task *            ft = stack_ft;
+                        if (n_cpu_f > STACK_F) {
+                            heap_ft.resize(n_cpu_f);
+                            ft = heap_ft.data();
+                        }
+
+                        const int                  av    = g_moe_fused_act_variant.load(std::memory_order_acquire);
+                        const cpu_expert_fused_act act_v = (av == CPU_EXPERT_FUSED_ACT_SWIGLU_OAI) ?
+                                                               CPU_EXPERT_FUSED_ACT_SWIGLU_OAI :
+                                                               CPU_EXPERT_FUSED_ACT_SILU;
+
+                        for (size_t fi = 0; fi < n_cpu_f; fi++) {
+                            const size_t  ci   = g_moe_fusion.cpu_indices[fi];
+                            const int32_t eid  = g_moe_fusion.ids_data[ci];
+                            // Gate data from current src0, up data saved earlier
+                            ft[fi].weight_gate = static_cast<const char *>(src0->data) +
+                                                 static_cast<size_t>(eid) * nb02;
+                            ft[fi].weight_up   = static_cast<const char *>(g_moe_fusion.up_data) +
+                                                 static_cast<size_t>(eid) * g_moe_fusion.up_nb02;
+                            ft[fi].act_host    = g_moe_fusion.act_host;
+                            ft[fi].output_host = g_moe_fusion.fused_output + fi * static_cast<size_t>(N_f);
+                            ft[fi].type        = g_moe_fusion.type;
+                            ft[fi].K           = g_moe_fusion.K;
+                            ft[fi].N           = static_cast<int>(N_f);
+                            ft[fi].act_variant = act_v;
+                            ft[fi].alpha       = g_moe_fused_act_alpha;
+                            ft[fi].limit       = g_moe_fused_act_limit;
+                            if (g_moe_fusion.gate_bias_data) {
+                                ft[fi].bias_gate = reinterpret_cast<const float *>(
+                                    reinterpret_cast<const char *>(g_moe_fusion.gate_bias_data) +
+                                    static_cast<size_t>(eid) * g_moe_fusion.bias_nb);
+                            }
+                            if (g_moe_fusion.up_bias_data) {
+                                ft[fi].bias_up = reinterpret_cast<const float *>(
+                                    reinterpret_cast<const char *>(g_moe_fusion.up_bias_data) +
+                                    static_cast<size_t>(eid) * g_moe_fusion.bias_nb);
+                            }
+                        }
+
+                        if (n_cpu_f > 0) {
+                            ggml_sycl_cpu_expert_fused_gate_up_silu_batched(ft, static_cast<int>(n_cpu_f));
+                        }
+
+                        // Dispatch secondary GPU experts for GATE sub-tensor
+                        if (!g_moe_fusion.sec_indices.empty()) {
+                            const int64_t n_ids_gate_uf = ids->ne[0];
+                            const int n_gpu_devs_gate_uf = ggml_sycl_info().total_gpu_count;
+                            std::vector<std::vector<expert_dispatch_entry>> sec_entries_gate_uf(n_gpu_devs_gate_uf);
+                            for (const auto & sec : g_moe_fusion.sec_indices) {
+                                const int32_t eid = g_moe_fusion.ids_data[sec.ci];
+                                const int64_t iid1 = static_cast<int64_t>(sec.ci / static_cast<size_t>(n_ids_gate_uf));
+                                const int64_t id   = static_cast<int64_t>(sec.ci % static_cast<size_t>(n_ids_gate_uf));
+                                sec_entries_gate_uf[sec.device_id].push_back(
+                                    { iid1, id, eid, sec.device_ptr, sec.device_id });
+                            }
+                            char * dst_d_gate_uf = static_cast<char *>(ggml_sycl_get_data_ptr(dst, ctx.device));
+                            secondary_dispatch_ctx sctx_gate_uf = {
+                                stream, src0,
+                                static_cast<char *>(src1->data),
+                                dst_d_gate_uf,
+                                ne00, static_cast<int64_t>(ne01), ne11, nb11, nb12, nb1, nb2,
+                                true,
+                                g_moe_fusion.act_host,
+                                sycl::event{},
+                                dst
+                            };
+                            std::vector<expert_dispatch_entry> cpu_fallback_gate_uf;
+                            for (int d = 1; d < n_gpu_devs_gate_uf; d++) {
+                                if (!sec_entries_gate_uf[d].empty()) {
+                                    dispatch_experts_secondary_gpu_impl(
+                                        sec_entries_gate_uf[d], d, sctx_gate_uf, cpu_fallback_gate_uf);
+                                }
+                            }
+                        }
+
+                        // Save gate_nb02 for down phase (uses gate_nb02 for reference)
+                        g_moe_fusion.gate_data  = src0->data;
+                        g_moe_fusion.gate_nb02  = nb02;
+                        g_moe_fusion.up_pending = false;
+                        g_moe_fusion.gate_pending  = false;
+                        g_moe_fusion.fused_pending = true;
+
+                        static std::atomic<int> flog_uf{ 0 };
+                        if (flog_uf.fetch_add(1, std::memory_order_relaxed) < 50) {
+                            GGML_LOG_INFO("[CPU-TG-FUSE] Fused gate+up+SiLU (UP-first) for layer %d, "
+                                          "%zu CPU + %zu secondary experts\n",
+                                          cur_layer_fast, n_cpu_f, g_moe_fusion.sec_indices.size());
+                        }
+                        return;
+                    }
+
+                    // Normal GATE-first path: resolve IDs + activation, save state
 
                     // Resolve expert IDs
                     const int32_t * ids_data_f = nullptr;
@@ -26346,6 +26477,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     g_moe_fusion.type          = src0->type;
                     g_moe_fusion.layer_id      = cur_layer_fast;
                     g_moe_fusion.gate_pending  = true;
+                    g_moe_fusion.up_pending    = false;
                     g_moe_fusion.fused_pending = false;
 
                     // Look up per-layer bias pointers captured during graph scan
@@ -26422,15 +26554,233 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
 
                     static std::atomic<int> flog{ 0 };
-                    if (flog.fetch_add(1, std::memory_order_relaxed) < 3) {
+                    if (flog.fetch_add(1, std::memory_order_relaxed) < 50) {
                         GGML_LOG_INFO("[CPU-TG-FUSE] Gate saved for layer %d, %zu CPU + %zu secondary experts\n",
+                                      cur_layer_fast, g_moe_fusion.cpu_indices.size(),
+                                      g_moe_fusion.sec_indices.size());
+                    }
+
+                    // Also compute gate result and write to dst, so the output is
+                    // valid even if fusion is later reset (mixed host/device weights).
+                    // Uses the unfused batched mul_mat to compute gate MUL_MAT_ID
+                    // result and scatter to dst.
+                    {
+                        const size_t n_cpu_gate = g_moe_fusion.cpu_indices.size();
+                        if (n_cpu_gate > 0) {
+                            constexpr size_t             STACK_G = 16;
+                            cpu_expert_task              stack_gt[STACK_G];
+                            std::vector<cpu_expert_task> heap_gt;
+                            cpu_expert_task *            gt = stack_gt;
+                            if (n_cpu_gate > STACK_G) {
+                                heap_gt.resize(n_cpu_gate);
+                                gt = heap_gt.data();
+                            }
+
+                            struct gate_out_buf {
+                                float *       ptr = nullptr;
+                                size_t        cap = 0;
+                                sycl::queue * q   = nullptr;
+                                ~gate_out_buf() { if (ptr && q) sycl::free(ptr, *q); }
+                                void ensure(size_t n, sycl::queue & sq) {
+                                    if (n <= cap) return;
+                                    if (ptr) sycl::free(ptr, sq);
+                                    ptr = sycl::malloc_host<float>(n, sq);
+                                    cap = n; q = &sq;
+                                }
+                            };
+                            static thread_local gate_out_buf tl_gate_out;
+                            const int64_t N_gate_f = ne01;
+                            tl_gate_out.ensure(n_cpu_gate * static_cast<size_t>(N_gate_f), *stream);
+
+                            for (size_t fi = 0; fi < n_cpu_gate; fi++) {
+                                const size_t  ci  = g_moe_fusion.cpu_indices[fi];
+                                const int32_t eid = g_moe_fusion.ids_data[ci];
+                                gt[fi].weight_host = static_cast<const char *>(g_moe_fusion.gate_data) +
+                                                     static_cast<size_t>(eid) * g_moe_fusion.gate_nb02;
+                                gt[fi].act_host    = g_moe_fusion.act_host;
+                                gt[fi].output_host = tl_gate_out.ptr + fi * static_cast<size_t>(N_gate_f);
+                                gt[fi].type        = g_moe_fusion.type;
+                                gt[fi].K           = g_moe_fusion.K;
+                                gt[fi].N           = static_cast<int>(N_gate_f);
+                            }
+                            ggml_sycl_cpu_expert_mul_mat_batched(gt, static_cast<int>(n_cpu_gate));
+
+                            // Scatter gate results H2D
+                            char * dst_d_gate = static_cast<char *>(ggml_sycl_get_data_ptr(dst, ctx.device));
+                            for (size_t fi = 0; fi < n_cpu_gate; fi++) {
+                                const size_t  ci   = g_moe_fusion.cpu_indices[fi];
+                                const int64_t iid1 = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_f));
+                                const int64_t id   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_f));
+                                char * slot = dst_d_gate + id * nb1 + iid1 * nb2;
+                                stream->memcpy(slot, tl_gate_out.ptr + fi * static_cast<size_t>(N_gate_f),
+                                               static_cast<size_t>(N_gate_f) * sizeof(float));
+                            }
+                            stream->wait();
+                        }
+                    }
+                    return;
+                }
+
+                // UP-first: save up state if gate hasn't arrived yet
+                if (ggml_sycl_moe_fusion_enabled() && is_up_fast && cur_layer_fast >= 0 &&
+                    !g_moe_fusion.gate_pending && !g_moe_fusion.up_pending) {
+                    ctx.moe_graphs_disabled_once = true;
+                    const queue_ptr stream       = ctx.stream();
+                    const int64_t   K_f          = ne00;
+                    const int64_t   n_ids_f      = ids->ne[0];
+                    const int64_t   n_as_f       = src0->ne[2];
+                    const size_t    ids_n_elem   = static_cast<size_t>(ids->ne[1] * n_ids_f);
+
+                    // Resolve expert IDs
+                    const int32_t * ids_data_f = nullptr;
+                    auto            cache_it_f = g_moe_ids_d2h_cache.find(ids);
+                    if (cache_it_f != g_moe_ids_d2h_cache.end() && cache_it_f->second.n_elements == ids_n_elem) {
+                        ids_data_f = cache_it_f->second.host_ids.data();
+                    } else {
+                        auto & entry = g_moe_ids_d2h_cache[ids];
+                        ggml_sycl_copy_ids_to_host(ctx, ids, entry.host_ids);
+                        entry.n_elements = entry.host_ids.size();
+                        ids_data_f       = entry.host_ids.data();
+                    }
+
+                    // Resolve activation
+                    const float * act_f = nullptr;
+
+                    struct pinned_act_buf_up {
+                        float *       ptr = nullptr;
+                        size_t        cap = 0;
+                        sycl::queue * q   = nullptr;
+
+                        ~pinned_act_buf_up() {
+                            if (ptr && q) {
+                                sycl::free(ptr, *q);
+                            }
+                        }
+
+                        void ensure(size_t n, sycl::queue & sq) {
+                            if (n <= cap) {
+                                return;
+                            }
+                            if (ptr) {
+                                sycl::free(ptr, sq);
+                            }
+                            ptr = sycl::malloc_host<float>(n, sq);
+                            cap = n;
+                            q   = &sq;
+                        }
+                    };
+
+                    static thread_local pinned_act_buf_up tl_up_act;
+
+                    bool src1_host_f = src1->buffer && ggml_backend_buffer_is_host(src1->buffer);
+                    if (!src1_host_f && src1->data) {
+                        const sycl::usm::alloc pt = ggml_sycl_get_alloc_type(src1->data);
+                        src1_host_f               = (pt == sycl::usm::alloc::host || pt == sycl::usm::alloc::shared);
+                    }
+                    if (src1_host_f) {
+                        act_f = static_cast<const float *>(src1->data);
+                    } else {
+                        tl_up_act.ensure(static_cast<size_t>(K_f), *stream);
+                        stream->memcpy(tl_up_act.ptr, ggml_sycl_get_data_ptr(src1, ctx.device),
+                                       static_cast<size_t>(K_f) * sizeof(float));
+                        stream->wait();
+                        act_f = tl_up_act.ptr;
+                    }
+
+                    g_moe_fusion.up_data       = src0->data;
+                    g_moe_fusion.act_host      = act_f;
+                    g_moe_fusion.ids_data      = ids_data_f;
+                    g_moe_fusion.n_ids         = ids_n_elem;
+                    g_moe_fusion.n_as          = n_as_f;
+                    g_moe_fusion.up_nb02       = nb02;
+                    g_moe_fusion.K             = static_cast<int>(K_f);
+                    g_moe_fusion.N_gate        = static_cast<int>(ne01);
+                    g_moe_fusion.type          = src0->type;
+                    g_moe_fusion.layer_id      = cur_layer_fast;
+                    g_moe_fusion.up_pending    = true;
+                    g_moe_fusion.gate_pending  = false;
+                    g_moe_fusion.fused_pending = false;
+
+                    // Look up per-layer bias pointers captured during graph scan
+                    g_moe_fusion.gate_bias_data = nullptr;
+                    g_moe_fusion.up_bias_data   = nullptr;
+                    g_moe_fusion.bias_nb        = 0;
+                    if (cur_layer_fast >= 0) {
+                        auto it = g_moe_expert_biases.find(cur_layer_fast);
+                        if (it != g_moe_expert_biases.end()) {
+                            g_moe_fusion.gate_bias_data = it->second.gate_bias;
+                            g_moe_fusion.up_bias_data   = it->second.up_bias;
+                            g_moe_fusion.bias_nb        = it->second.nb;
+                        }
+                    }
+
+                    // Partition experts: CPU-only vs secondary GPU
+                    g_moe_fusion.cpu_indices.clear();
+                    g_moe_fusion.sec_indices.clear();
+                    g_moe_fusion.cpu_indices.reserve(ids_n_elem);
+
+                    if (have_secondary_pre && cur_layer_fast >= 0) {
+                        const int n_gpu_devs_up = ggml_sycl_info().total_gpu_count;
+                        for (size_t ci = 0; ci < ids_n_elem; ci++) {
+                            const int32_t eid = ids_data_f[ci];
+                            auto placement = placement_table_pre.get(cur_layer_fast, eid);
+                            if (placement.device_id >= 1
+                                && placement.device_id < n_gpu_devs_up
+                                && placement.device_ptr != nullptr
+                                && g_secondary_queues[placement.device_id] != nullptr) {
+                                g_moe_fusion.sec_indices.push_back({ci, placement.device_id, placement.device_ptr});
+                            } else {
+                                g_moe_fusion.cpu_indices.push_back(ci);
+                            }
+                        }
+                    } else {
+                        for (size_t ci = 0; ci < ids_n_elem; ci++) {
+                            g_moe_fusion.cpu_indices.push_back(ci);
+                        }
+                    }
+                    g_moe_fusion.n_ids = g_moe_fusion.cpu_indices.size();
+
+                    // Dispatch secondary GPU experts for UP computation
+                    if (!g_moe_fusion.sec_indices.empty()) {
+                        const int n_gpu_devs_up_s = ggml_sycl_info().total_gpu_count;
+                        std::vector<std::vector<expert_dispatch_entry>> sec_entries_up_s(n_gpu_devs_up_s);
+                        for (const auto & sec : g_moe_fusion.sec_indices) {
+                            const int32_t eid = ids_data_f[sec.ci];
+                            const int64_t iid1 = static_cast<int64_t>(sec.ci / static_cast<size_t>(n_ids_f));
+                            const int64_t id   = static_cast<int64_t>(sec.ci % static_cast<size_t>(n_ids_f));
+                            sec_entries_up_s[sec.device_id].push_back(
+                                { iid1, id, eid, sec.device_ptr, sec.device_id });
+                        }
+                        char * dst_d_up_s = static_cast<char *>(ggml_sycl_get_data_ptr(dst, ctx.device));
+                        secondary_dispatch_ctx sctx_up_s = {
+                            stream, src0,
+                            static_cast<char *>(src1->data),
+                            dst_d_up_s,
+                            K_f, static_cast<int64_t>(ne01), ne11, nb11, nb12, nb1, nb2,
+                            true,
+                            act_f,
+                            sycl::event{},
+                            dst
+                        };
+                        std::vector<expert_dispatch_entry> cpu_fallback_up_s;
+                        for (int d = 1; d < n_gpu_devs_up_s; d++) {
+                            if (!sec_entries_up_s[d].empty()) {
+                                dispatch_experts_secondary_gpu_impl(
+                                    sec_entries_up_s[d], d, sctx_up_s, cpu_fallback_up_s);
+                            }
+                        }
+                    }
+
+                    static std::atomic<int> flog_us{ 0 };
+                    if (flog_us.fetch_add(1, std::memory_order_relaxed) < 50) {
+                        GGML_LOG_INFO("[CPU-TG-FUSE] Up saved for layer %d, %zu CPU + %zu secondary experts\n",
                                       cur_layer_fast, g_moe_fusion.cpu_indices.size(),
                                       g_moe_fusion.sec_indices.size());
                     }
                     return;
                 }
 
-                // UP: fused gate+up+SiLU kernel
+                // UP: fused gate+up+SiLU kernel (gate-first ordering)
                 if (ggml_sycl_moe_fusion_enabled() && is_up_fast && cur_layer_fast >= 0 && g_moe_fusion.gate_pending &&
                     g_moe_fusion.layer_id == cur_layer_fast && g_moe_fusion.type == src0->type &&
                     g_moe_fusion.K == static_cast<int>(ne00) && g_moe_fusion.N_gate == static_cast<int>(ne01)) {
@@ -26526,7 +26876,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     g_moe_fusion.fused_pending = true;
 
                     static std::atomic<int> flog2{ 0 };
-                    if (flog2.fetch_add(1, std::memory_order_relaxed) < 3) {
+                    if (flog2.fetch_add(1, std::memory_order_relaxed) < 50) {
                         GGML_LOG_INFO("[CPU-TG-FUSE] Fused gate+up+SiLU for layer %d, %zu CPU + %zu secondary experts\n",
                                       cur_layer_fast, n_cpu_f, g_moe_fusion.sec_indices.size());
                     }
@@ -26649,7 +26999,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     stream->wait();
 
                     static std::atomic<int> flog3{ 0 };
-                    if (flog3.fetch_add(1, std::memory_order_relaxed) < 3) {
+                    if (flog3.fetch_add(1, std::memory_order_relaxed) < 50) {
                         GGML_LOG_INFO("[CPU-TG-FUSE] Down with fused activation for layer %d, %zu CPU + %zu secondary experts\n",
                                       cur_layer_fast, n_cpu_d, g_moe_fusion.sec_indices.size());
                     }
@@ -26658,7 +27008,16 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 }
 
                 // Fusion mismatch — reset and fall through to unfused path
-                if (g_moe_fusion.gate_pending || g_moe_fusion.fused_pending) {
+                if (g_moe_fusion.gate_pending || g_moe_fusion.fused_pending || g_moe_fusion.up_pending) {
+                    static std::atomic<int> mismatch_log{ 0 };
+                    if (mismatch_log.fetch_add(1, std::memory_order_relaxed) < 20) {
+                        GGML_LOG_ERROR("[FUSE-MISMATCH] name=%s layer=%d gate=%d fused=%d up=%d saved_layer=%d\n",
+                                      tname_fast, cur_layer_fast,
+                                      (int)g_moe_fusion.gate_pending,
+                                      (int)g_moe_fusion.fused_pending,
+                                      (int)g_moe_fusion.up_pending,
+                                      g_moe_fusion.layer_id);
+                    }
                     g_moe_fusion.reset();
                 }
             }
@@ -29159,8 +29518,11 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
             ggml_sycl_add1(ctx, dst);
             break;
         case GGML_OP_ADD_ID:
-            // Skip ADD_ID for gate/up biases when fusion already applied them
-            if (g_moe_fusion.fused_pending || g_moe_fusion.gate_pending) {
+            // Skip ADD_ID for gate/up biases ONLY when fused kernel already applied them.
+            // gate_pending/up_pending alone is NOT sufficient — the gate/up MUL_MAT_ID
+            // also runs the unfused path to produce valid dst output (in case the
+            // other weight is device-resident and fusion is later reset).
+            if (g_moe_fusion.fused_pending) {
                 const char * name = dst->name;
                 if (name && (strstr(name, "ffn_moe_gate_biased") ||
                              strstr(name, "ffn_moe_up_biased"))) {
@@ -30803,9 +31165,24 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     // Models with expert biases (e.g. GPT-OSS) have ADD_ID(MUL_MAT_ID, bias)
     // after each gate/up/down expert matmul.  The fused kernel applies these biases
     // inline, so we capture the bias data pointers here for use during fusion.
+    //
+    // IMPORTANT: bias_tensor->data is a DEVICE pointer (GPU memory).  The CPU fused
+    // kernel needs host-accessible data.  We copy each bias tensor to a host buffer
+    // during this one-time scan.  Bias tensors are small (N_expert * N_ff * 4 bytes,
+    // typically a few hundred KB per layer), so the total host copy is negligible.
     {
         static std::once_flag bias_detect_flag;
         std::call_once(bias_detect_flag, [&]() {
+            // Temporary collection of bias info before D2H copy
+            struct bias_capture {
+                int           layer;
+                const char *  category;  // "gate", "up", or "down"
+                const void *  device_ptr;
+                size_t        total_bytes;
+                size_t        nb;  // expert stride
+            };
+            std::vector<bias_capture> captures;
+
             for (int i = 0; i < cgraph->n_nodes; i++) {
                 const ggml_tensor * node = cgraph->nodes[i];
                 if (node->op != GGML_OP_ADD_ID || !node->src[0] ||
@@ -30826,21 +31203,62 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                 if (layer < 0) {
                     continue;
                 }
-                auto & lb = g_moe_expert_biases[layer];
-                lb.nb = bias_tensor->nb[1];  // Expert stride in bytes
-                const float * bias_ptr = static_cast<const float *>(bias_tensor->data);
+
+                const char * cat = nullptr;
                 if (strstr(weight_name, "ffn_gate")) {
-                    lb.gate_bias = bias_ptr;
+                    cat = "gate";
                 } else if (strstr(weight_name, "ffn_up")) {
-                    lb.up_bias = bias_ptr;
+                    cat = "up";
                 } else if (strstr(weight_name, "ffn_down")) {
-                    lb.down_bias = bias_ptr;
+                    cat = "down";
                 }
+                if (!cat) {
+                    continue;
+                }
+
+                // Total bias bytes = n_expert * expert_bias_size
+                const size_t total_bytes = ggml_nbytes(bias_tensor);
+                captures.push_back({ layer, cat, bias_tensor->data, total_bytes, bias_tensor->nb[1] });
+
+                // Initialize layer entry with stride
+                auto & lb = g_moe_expert_biases[layer];
+                lb.nb = bias_tensor->nb[1];
             }
-            if (!g_moe_expert_biases.empty()) {
-                GGML_LOG_INFO("[SYCL] Captured expert biases for %zu layers "
+
+            // Copy all bias data from device to host
+            if (!captures.empty()) {
+                const queue_ptr stream = sycl_ctx->stream();
+                g_moe_bias_host_copies.reserve(captures.size());
+
+                for (auto & cap : captures) {
+                    const size_t n_floats = cap.total_bytes / sizeof(float);
+                    g_moe_bias_host_copies.emplace_back(n_floats);
+                    auto & host_buf = g_moe_bias_host_copies.back();
+
+                    // Check if source is already host-accessible
+                    const sycl::usm::alloc pt = sycl::get_pointer_type(cap.device_ptr, stream->get_context());
+                    if (pt == sycl::usm::alloc::host || pt == sycl::usm::alloc::shared) {
+                        // Direct copy from host memory
+                        std::memcpy(host_buf.data(), cap.device_ptr, cap.total_bytes);
+                    } else {
+                        // D2H copy from device memory
+                        stream->memcpy(host_buf.data(), cap.device_ptr, cap.total_bytes).wait();
+                    }
+
+                    const float * host_ptr = host_buf.data();
+                    auto & lb = g_moe_expert_biases[cap.layer];
+                    if (strcmp(cap.category, "gate") == 0) {
+                        lb.gate_bias = host_ptr;
+                    } else if (strcmp(cap.category, "up") == 0) {
+                        lb.up_bias = host_ptr;
+                    } else {
+                        lb.down_bias = host_ptr;
+                    }
+                }
+
+                GGML_LOG_INFO("[SYCL] Captured expert biases for %zu layers (%zu tensors, D2H copied) "
                               "— fusion will apply biases inline\n",
-                              g_moe_expert_biases.size());
+                              g_moe_expert_biases.size(), captures.size());
             }
         });
     }
