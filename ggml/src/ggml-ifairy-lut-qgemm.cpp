@@ -87,60 +87,6 @@ static inline float32x4_t ggml_ifairy_s16x4_to_f32(int16x4_t v) {
 }
 #endif
 
-#if defined(__AVX2__)
-static inline void ggml_ifairy_lut_decode_16x3_3x1_with_lut_avx2(const __m128i  code,
-                                                                 const int8_t * tbl,
-                                                                 __m128i *      out0,
-                                                                 __m128i *      out1,
-                                                                 __m128i *      out2,
-                                                                 __m128i *      out3) {
-    const __m128i zero = _mm_setzero_si128();
-    const __m128i one  = _mm_set1_epi8(1);
-
-    // 1. 无需常量掩码的标志位提取 (利用 8 位有符号数的符号位特性)
-    // fl1 (bit 7): 当 bit 7 为 1 时，数为负数，0 > code 直接产生 0xFF 掩码
-    const __m128i fl1 = _mm_cmpgt_epi8(zero, code);
-    // fl0 (bit 6): 通过 code + code 将 bit 6 左移至符号位，同理提取
-    const __m128i fl0 = _mm_cmpgt_epi8(zero, _mm_add_epi8(code, code));
-
-    // 2. 为 _mm_sign_epi8 极速生成 +1 / -1 的乘数掩码
-    const __m128i fl0_xor_fl1      = _mm_xor_si128(fl0, fl1);
-    // 巧妙转换: 0xFF | 1 = 0xFF (-1), 0x00 | 1 = 0x01 (+1)
-    const __m128i sign_fl0         = _mm_or_si128(fl0, one); 
-    const __m128i sign_fl0_xor_fl1 = _mm_or_si128(fl0_xor_fl1, one);
-    // sign_not_fl0 正好是 sign_fl0 的相反数：0 - (-1) = +1, 0 - (+1) = -1
-    const __m128i sign_not_fl0     = _mm_sub_epi8(zero, sign_fl0);
-
-    // 3. 提取低 4 位索引与并发查表 (查表指令保留在 Port 5 专享执行)
-    const __m128i idx = _mm_and_si128(code, _mm_set1_epi8(0x0f));
-    
-    const __m128i ilut0 = _mm_loadu_si128((const __m128i *) (tbl + 0 * 16));
-    const __m128i ilut1 = _mm_loadu_si128((const __m128i *) (tbl + 1 * 16));
-    const __m128i ilut2 = _mm_loadu_si128((const __m128i *) (tbl + 2 * 16));
-    const __m128i ilut3 = _mm_loadu_si128((const __m128i *) (tbl + 3 * 16));
-
-    const __m128i ac_00 = _mm_shuffle_epi8(ilut0, idx);
-    const __m128i bd_01 = _mm_shuffle_epi8(ilut1, idx);
-    const __m128i ac_11 = _mm_shuffle_epi8(ilut2, idx);
-    const __m128i bd_11 = _mm_shuffle_epi8(ilut3, idx);
-
-    // 4. XOR Trick 实现成对混合 (XOR Blending)
-    // 彻底废弃 vpblendvb，用基础位运算并行算出正反两个 blend 结果
-    const __m128i diff_ac = _mm_and_si128(fl1, _mm_xor_si128(ac_11, ac_00));
-    const __m128i ac_sel0 = _mm_xor_si128(ac_00, diff_ac); // 等效于: fl1 ? ac_11 : ac_00
-    const __m128i ac_sel1 = _mm_xor_si128(ac_11, diff_ac); // 等效于: fl1 ? ac_00 : ac_11
-
-    const __m128i diff_bd = _mm_and_si128(fl1, _mm_xor_si128(bd_11, bd_01));
-    const __m128i bd_sel0 = _mm_xor_si128(bd_01, diff_bd); // 等效于: fl1 ? bd_11 : bd_01
-    const __m128i bd_sel1 = _mm_xor_si128(bd_11, diff_bd); // 等效于: fl1 ? bd_01 : bd_11
-
-    // 5. 极速条件取负 (运行在 Port 0/1，无缝衔接)
-    *out0 = _mm_sign_epi8(ac_sel0, sign_fl0_xor_fl1);
-    *out1 = _mm_sign_epi8(ac_sel1, sign_fl0);
-    *out2 = _mm_sign_epi8(bd_sel1, sign_fl0_xor_fl1); 
-    *out3 = _mm_sign_epi8(bd_sel0, sign_not_fl0);
-}
-#endif
 
 static inline void ggml_ifairy_lut_decode_lane_scalar(const uint8_t  code,
                                                       const int8_t * tbl,
@@ -299,38 +245,153 @@ void ggml_ifairy_lut_qgemm_lut16(int          m,
             for (int64_t blk = 0; blk < blocks; ++blk) {
                 const struct ifairy_lut_wtile_16 * wt = wtiles + (size_t) t * (size_t) blocks + (size_t) blk;
 
-                __m256i sum_ac = _mm256_setzero_si256();
-                __m256i sum_bc = _mm256_setzero_si256();
-                __m256i sum_ad = _mm256_setzero_si256();
-                __m256i sum_bd = _mm256_setzero_si256();
+                // 1. 声明 256-bit 交织累加器
+                __m256i sum_03_lo = _mm256_setzero_si256(); // 自动累积 [ sum_bd_lo_16 | sum_ac_lo_16 ]
+                __m256i sum_03_hi = _mm256_setzero_si256(); // 自动累积 [ sum_bd_hi_16 | sum_ac_hi_16 ]
+                __m256i sum_12_lo = _mm256_setzero_si256(); // 自动累积 [ sum_ad_lo_16 | sum_bc_lo_16 ]
+                __m256i sum_12_hi = _mm256_setzero_si256(); // 自动累积 [ sum_ad_hi_16 | sum_bc_hi_16 ]
 
-                const int8_t * lut_blk =
-                    lut_col + (size_t) blk * (size_t) groups_per_block * (size_t) k_ifairy_lut_group_bytes;
+                // 循环不变量
+                const __m256i zero      = _mm256_setzero_si256();
+                const __m256i one       = _mm256_set1_epi8(1);
+                const __m256i minus_one = _mm256_set1_epi8(-1);
+                const __m256i mask_idx  = _mm256_set1_epi8(0x0f);
 
-                for (int gi = 0; gi < groups_per_block; ++gi) {
-                    const __m128i  code = _mm_loadu_si128((const __m128i *) wt->qs[gi]);
-                    const int8_t * tbl  = lut_blk + (size_t) gi * (size_t) k_ifairy_lut_group_bytes;
+                const int8_t * lut_blk = lut_col + (size_t) blk * groups_per_block * k_ifairy_lut_group_bytes;
 
-                    __m128i v0;
-                    __m128i v1;
-                    __m128i v2;
-                    __m128i v3;
-                    ggml_ifairy_lut_decode_16x3_3x1_with_lut_avx2(code, tbl, &v0, &v1, &v2, &v3);
+                int gi = 0;
+                const int groups_even = groups_per_block & ~1;
 
-                    sum_ac = _mm256_add_epi16(sum_ac, _mm256_cvtepi8_epi16(v0));
-                    sum_bc = _mm256_add_epi16(sum_bc, _mm256_cvtepi8_epi16(v1));
-                    sum_ad = _mm256_add_epi16(sum_ad, _mm256_cvtepi8_epi16(v2));
-                    sum_bd = _mm256_add_epi16(sum_bd, _mm256_cvtepi8_epi16(v3));
+                // 2. 强行 Unroll by 2：让 CPU 预取指令与算术计算重叠
+                for (; gi < groups_even; gi += 2) {
+                    // ------------------ Iteration 0 ------------------
+                    const __m128i  code_128_0 = _mm_loadu_si128((const __m128i *) wt->qs[gi]);
+                    const __m256i code_0 = _mm256_broadcastsi128_si256(code_128_0);
+
+                    const __m256i fl1_0 = _mm256_cmpgt_epi8(zero, code_0);
+                    const __m256i fl0_0 = _mm256_cmpgt_epi8(zero, _mm256_add_epi8(code_0, code_0));
+
+                    const __m256i fl0_xor_fl1_0 = _mm256_xor_si256(fl0_0, fl1_0);
+                    const __m256i not_fl0_0     = _mm256_xor_si256(fl0_0, minus_one);
+
+                    // 256 位 Blend 掩码生成
+                    const __m256i mask03_base_0 = _mm256_blend_epi32(fl0_xor_fl1_0, not_fl0_0, 0xF0);
+                    const __m256i mask12_base_0 = _mm256_blend_epi32(fl0_0, fl0_xor_fl1_0, 0xF0);
+                    const __m256i mask03_0      = _mm256_or_si256(mask03_base_0, one);
+                    const __m256i mask12_0      = _mm256_or_si256(mask12_base_0, one);
+
+                    const __m256i idx_0   = _mm256_and_si256(code_0, mask_idx);
+                    const int8_t * tbl_0  = lut_blk + (size_t) gi * k_ifairy_lut_group_bytes;
+                    const __m256i lut01_0 = _mm256_loadu_si256((const __m256i *) (tbl_0 + 0));
+                    const __m256i lut23_0 = _mm256_loadu_si256((const __m256i *) (tbl_0 + 32));
+
+                    const __m256i val01_0 = _mm256_shuffle_epi8(lut01_0, idx_0);
+                    const __m256i val23_0 = _mm256_shuffle_epi8(lut23_0, idx_0);
+
+                    const __m256i diff_0  = _mm256_and_si256(fl1_0, _mm256_xor_si256(val23_0, val01_0));
+                    const __m256i sel01_0 = _mm256_xor_si256(val01_0, diff_0);
+                    const __m256i sel23_0 = _mm256_xor_si256(val23_0, diff_0);
+
+                    const __m256i out03_0 = _mm256_sign_epi8(sel01_0, mask03_0);
+                    const __m256i out12_0 = _mm256_sign_epi8(sel23_0, mask12_0);
+
+                    //Iteration 1
+                    const __m128i  code_128_1 = _mm_loadu_si128((const __m128i *) wt->qs[gi + 1]);
+                    const __m256i code_1 = _mm256_broadcastsi128_si256(code_128_1);
+
+                    const __m256i fl1_1 = _mm256_cmpgt_epi8(zero, code_1);
+                    const __m256i fl0_1 = _mm256_cmpgt_epi8(zero, _mm256_add_epi8(code_1, code_1));
+
+                    const __m256i fl0_xor_fl1_1 = _mm256_xor_si256(fl0_1, fl1_1);
+                    const __m256i not_fl0_1     = _mm256_xor_si256(fl0_1, minus_one);
+
+                    const __m256i mask03_base_1 = _mm256_blend_epi32(fl0_xor_fl1_1, not_fl0_1, 0xF0);
+                    const __m256i mask12_base_1 = _mm256_blend_epi32(fl0_1, fl0_xor_fl1_1, 0xF0);
+                    const __m256i mask03_1      = _mm256_or_si256(mask03_base_1, one);
+                    const __m256i mask12_1      = _mm256_or_si256(mask12_base_1, one);
+
+                    const __m256i idx_1   = _mm256_and_si256(code_1, mask_idx);
+                    const int8_t * tbl_1  = lut_blk + (size_t) (gi + 1) * k_ifairy_lut_group_bytes;
+                    const __m256i lut01_1 = _mm256_loadu_si256((const __m256i *) (tbl_1 + 0));
+                    const __m256i lut23_1 = _mm256_loadu_si256((const __m256i *) (tbl_1 + 32));
+
+                    const __m256i val01_1 = _mm256_shuffle_epi8(lut01_1, idx_1);
+                    const __m256i val23_1 = _mm256_shuffle_epi8(lut23_1, idx_1);
+
+                    const __m256i diff_1  = _mm256_and_si256(fl1_1, _mm256_xor_si256(val23_1, val01_1));
+                    const __m256i sel01_1 = _mm256_xor_si256(val01_1, diff_1);
+                    const __m256i sel23_1 = _mm256_xor_si256(val23_1, diff_1);
+
+                    const __m256i out03_1 = _mm256_sign_epi8(sel01_1, mask03_1);
+                    const __m256i out12_1 = _mm256_sign_epi8(sel23_1, mask12_1);
+
+                    // Maddubs
+                    // unpack 将两次迭代的 8 位结果交织： [out_0[0], out_1[0] ...]
+                    // maddubs 自动完成 (1 * out_0) + (1 * out_1)，并原生存为16位整数
+                    __m256i lo03 = _mm256_unpacklo_epi8(out03_0, out03_1);
+                    __m256i hi03 = _mm256_unpackhi_epi8(out03_0, out03_1);
+                    sum_03_lo = _mm256_add_epi16(sum_03_lo, _mm256_maddubs_epi16(one, lo03));
+                    sum_03_hi = _mm256_add_epi16(sum_03_hi, _mm256_maddubs_epi16(one, hi03));
+
+                    __m256i lo12 = _mm256_unpacklo_epi8(out12_0, out12_1);
+                    __m256i hi12 = _mm256_unpackhi_epi8(out12_0, out12_1);
+                    sum_12_lo = _mm256_add_epi16(sum_12_lo, _mm256_maddubs_epi16(one, lo12));
+                    sum_12_hi = _mm256_add_epi16(sum_12_hi, _mm256_maddubs_epi16(one, hi12));
                 }
 
-                const __m128i sum_ac_lo_s16 = _mm256_castsi256_si128(sum_ac);
-                const __m128i sum_ac_hi_s16 = _mm256_extracti128_si256(sum_ac, 1);
-                const __m128i sum_bc_lo_s16 = _mm256_castsi256_si128(sum_bc);
-                const __m128i sum_bc_hi_s16 = _mm256_extracti128_si256(sum_bc, 1);
-                const __m128i sum_ad_lo_s16 = _mm256_castsi256_si128(sum_ad);
-                const __m128i sum_ad_hi_s16 = _mm256_extracti128_si256(sum_ad, 1);
-                const __m128i sum_bd_lo_s16 = _mm256_castsi256_si128(sum_bd);
-                const __m128i sum_bd_hi_s16 = _mm256_extracti128_si256(sum_bd, 1);
+                // 处理可能剩余的 1 个奇数尾巴（兜底用，通常 groups_per_block 为双数直接跳过）
+                if (gi < groups_per_block) {
+                    const __m128i  code_128_0 = _mm_loadu_si128((const __m128i *) wt->qs[gi]);
+                    const __m256i code_0 = _mm256_broadcastsi128_si256(code_128_0);
+
+                    const __m256i fl1_0 = _mm256_cmpgt_epi8(zero, code_0);
+                    const __m256i fl0_0 = _mm256_cmpgt_epi8(zero, _mm256_add_epi8(code_0, code_0));
+
+                    const __m256i fl0_xor_fl1_0 = _mm256_xor_si256(fl0_0, fl1_0);
+                    const __m256i not_fl0_0     = _mm256_xor_si256(fl0_0, minus_one);
+
+                    const __m256i mask03_base_0 = _mm256_blend_epi32(fl0_xor_fl1_0, not_fl0_0, 0xF0);
+                    const __m256i mask12_base_0 = _mm256_blend_epi32(fl0_0, fl0_xor_fl1_0, 0xF0);
+                    const __m256i mask03_0      = _mm256_or_si256(mask03_base_0, one);
+                    const __m256i mask12_0      = _mm256_or_si256(mask12_base_0, one);
+
+                    const __m256i idx_0   = _mm256_and_si256(code_0, mask_idx);
+                    const int8_t * tbl_0  = lut_blk + (size_t) gi * k_ifairy_lut_group_bytes;
+                    const __m256i lut01_0 = _mm256_loadu_si256((const __m256i *) (tbl_0 + 0));
+                    const __m256i lut23_0 = _mm256_loadu_si256((const __m256i *) (tbl_0 + 32));
+
+                    const __m256i val01_0 = _mm256_shuffle_epi8(lut01_0, idx_0);
+                    const __m256i val23_0 = _mm256_shuffle_epi8(lut23_0, idx_0);
+
+                    const __m256i diff_0  = _mm256_and_si256(fl1_0, _mm256_xor_si256(val23_0, val01_0));
+                    const __m256i sel01_0 = _mm256_xor_si256(val01_0, diff_0);
+                    const __m256i sel23_0 = _mm256_xor_si256(val23_0, diff_0);
+
+                    const __m256i out03_0 = _mm256_sign_epi8(sel01_0, mask03_0);
+                    const __m256i out12_0 = _mm256_sign_epi8(sel23_0, mask12_0);
+
+                    // 与 0 交织，(1 * out) + (1 * 0) = out
+                    __m256i lo03 = _mm256_unpacklo_epi8(out03_0, zero);
+                    __m256i hi03 = _mm256_unpackhi_epi8(out03_0, zero);
+                    sum_03_lo = _mm256_add_epi16(sum_03_lo, _mm256_maddubs_epi16(one, lo03));
+                    sum_03_hi = _mm256_add_epi16(sum_03_hi, _mm256_maddubs_epi16(one, hi03));
+
+                    __m256i lo12 = _mm256_unpacklo_epi8(out12_0, zero);
+                    __m256i hi12 = _mm256_unpackhi_epi8(out12_0, zero);
+                    sum_12_lo = _mm256_add_epi16(sum_12_lo, _mm256_maddubs_epi16(one, lo12));
+                    sum_12_hi = _mm256_add_epi16(sum_12_hi, _mm256_maddubs_epi16(one, hi12));
+                }
+
+                // 3. 利用交织特性还原回原本需要的排列组合
+                const __m128i sum_ac_lo_s16 = _mm256_castsi256_si128(sum_03_lo);
+                const __m128i sum_bd_lo_s16 = _mm256_extracti128_si256(sum_03_lo, 1);
+                const __m128i sum_ac_hi_s16 = _mm256_castsi256_si128(sum_03_hi);
+                const __m128i sum_bd_hi_s16 = _mm256_extracti128_si256(sum_03_hi, 1);
+
+                const __m128i sum_bc_lo_s16 = _mm256_castsi256_si128(sum_12_lo);
+                const __m128i sum_ad_lo_s16 = _mm256_extracti128_si256(sum_12_lo, 1);
+                const __m128i sum_bc_hi_s16 = _mm256_castsi256_si128(sum_12_hi);
+                const __m128i sum_ad_hi_s16 = _mm256_extracti128_si256(sum_12_hi, 1);
 
                 const __m256 v_ac_lo = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_ac_lo_s16));
                 const __m256 v_ac_hi = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_ac_hi_s16));
