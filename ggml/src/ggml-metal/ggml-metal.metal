@@ -2434,150 +2434,122 @@ kernel void kernel_rwkv_wkv7_f32(
     }
 }
 
-// Gated DeltaNet fused recurrence kernel (GDA and KDA gate modes)
-//
-// State layout: CPU kernel uses row-major M[i][j] at offset i*S+j.
-// Thread tid owns column tid of M: state[j] = M[j][tid] (row j, col tid).
-// This gives coalesced loads (consecutive threads read consecutive addresses).
-//
-// Gate semantics:
-//   GDA (G=1): scalar gate, M[i][j] *= exp(g) for all i,j
-//   KDA (G=S):  per-row gate, M[i][j] *= exp(g[i]) for all j
-//     => thread tid must scale state[j] by exp(g[j]) since state[j] = M[j][tid]
-//
-// Grid: (B*H, 1, 1) threadgroups, (head_size, 1, 1) threads per threadgroup
-//
-// src layout (matches GGML_OP_GATED_DELTA_NET):
-//   src[0]=q, src[1]=k, src[2]=v, src[3]=gate, src[4]=beta, src[5]=state
-//   Dimensions from v: S_v=ne[0], H=ne[1], n_tokens=ne[2], n_seqs=ne[3]
-//   gate: [1,H,T,B] (GDA) or [S_v,H,T,B] (KDA)
-kernel void kernel_gated_delta_net_f32(
-    device const float * q,
-    device const float * k,
-    device const float * v,
-    device const float * gate,      // [G, H, T, B] log-space; G=1 (GDA) or G=S (KDA)
-    device const float * beta,      // [1, H, T, B]
-    device const float * state_in,  // [S*S*H, n_seqs] row-major per head
-    device       float * dst,       // [S*H, n_tokens*n_seqs + S*n_seqs]
-    constant    uint & B,           // n_seqs
-    constant    uint & T,           // n_tokens * n_seqs (total tokens)
-    constant    uint & C,           // S * H
-    constant    uint & H,           // num heads
-    constant    uint & G,           // gate ne[0]: 1=GDA, S=KDA
-    uint3 tgpig[[threadgroup_position_in_grid]],
-    uint3 tpitg[[thread_position_in_threadgroup]],
-    uint3   ntg[[threads_per_threadgroup]])  {
+constant short FC_gated_delta_net_ne20 [[function_constant(FC_GATED_DELTA_NET + 0)]];
+constant short FC_gated_delta_net_ne30 [[function_constant(FC_GATED_DELTA_NET + 1)]];
 
-    const uint head_size = C / H;
-    const uint batch_id = tgpig.x / H;
-    const uint head_id  = tgpig.x % H;
-    const uint tid      = tpitg.x;
+template<short NSG>
+kernel void kernel_gated_delta_net_impl(
+        constant ggml_metal_kargs_gated_delta_net & args,
+        device const char * q,
+        device const char * k,
+        device const char * v,
+        device const char * g,
+        device const char * b,
+        device const char * s,
+        device       char * dst,
+        uint3 tgpig[[threadgroup_position_in_grid]],
+        uint3 tpitg[[thread_position_in_threadgroup]],
+        uint3   ntg[[threads_per_threadgroup]])  {
+#define S_v FC_gated_delta_net_ne20
+#define G   FC_gated_delta_net_ne30
 
-    if (batch_id >= B || head_id >= H || tid >= head_size) {
-        return;
+    const uint tx = tpitg.x;
+    const uint ty = tpitg.y;
+
+    const uint i23 = tgpig.z; // B
+    const uint i21 = tgpig.y; // H
+    const uint i20 = tgpig.x*NSG + ty;
+
+    const uint i01 = i21 % args.ne01;
+    const uint i11 = i21 % args.ne11;
+
+    const float scale = 1.0f / sqrt((float)S_v);
+
+    device const float * s_ptr = (device const float *) (s) + (i23 * args.ne21*S_v*S_v + i21*S_v*S_v);
+
+    float ls[NSG];
+
+    FOR_UNROLL (short j = 0; j < NSG; j++) {
+        const short is = tx*NSG + j;
+        ls[j] = s_ptr[is*S_v + i20];
     }
 
-    const float scale = 1.0f / sqrt((float)head_size);
+    device float * dst_attn = (device float *) (dst) + i23*args.ne22*args.ne21*S_v + i21*S_v + i20;
 
-    const uint state_size = C * head_size; // S * S * H
-    const uint n_seq_tokens = T / B;
+    device const float * q_ptr = (device const float *) (q + i23*args.nb03 + i01*args.nb01);
+    device const float * k_ptr = (device const float *) (k + i23*args.nb13 + i11*args.nb11);
+    device const float * v_ptr = (device const float *) (v + i23*args.nb23 + i21*args.nb21);
 
-    // Max head_size is 128 (enforced by pipeline getter).
-    threadgroup float _k[128];
-    threadgroup float _q[128];
-    threadgroup float _g[128]; // gate vector for KDA mode
+    device const float * b_ptr = (device const float *) (b) + (i23*args.ne22*args.ne21 + i21);
+    device const float * g_ptr = (device const float *) (g) + (i23*args.ne22*args.ne21 + i21)*G;
 
-    // Load initial state: thread tid owns column tid of M (row-major)
-    // M[row=j][col=tid] at offset j*head_size+tid (row-major, coalesced)
-    float state[128];
-    for (uint j = 0; j < head_size; j++) {
-        state[j] = state_in[batch_id * state_size + head_id * head_size * head_size
-                          + j * head_size + tid];
-    }
+    FOR_UNROLL (short t = 0; t < args.ne22; t++) {
+        const float beta = b_ptr[0];
 
-    // Process tokens sequentially
-    for (uint tt = 0; tt < n_seq_tokens; tt++) {
-        const uint t_abs = batch_id * n_seq_tokens + tt;
-        const uint kv_offset = t_abs * C + head_id * head_size;
-        const uint gb_offset = t_abs * H + head_id;
+        float s_k = 0.0f;
 
-        // Load k, q (and gate for KDA) into shared memory
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-        _k[tid] = k[kv_offset + tid];
-        _q[tid] = q[kv_offset + tid];
-        if (G > 1) {
-            _g[tid] = exp(min(gate[t_abs * H * head_size + head_id * head_size + tid], 88.0f));
-        }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-
-        const float beta_val = beta[gb_offset];
-        const float v_tid    = v[kv_offset + tid];
-
-        // Decay state and compute sk = sum_j M[j][tid] * k[j]
-        // Two-pass approach: decay state first, then compute on decayed state.
-        // Algebraically equivalent to CUDA's fused form: delta = (v - g*dot(S,k))*beta;
-        // S = g*S + k*delta, since dot(g*S, k) = g*dot(S, k).
-        // GDA: all elements scaled by same exp(g)
-        // KDA: state[j] = M[j][tid] scaled by exp(g[j]) (per-row gate)
-        float sk = 0.0f;
         if (G == 1) {
-            const float g_exp = exp(min(gate[gb_offset], 88.0f));
-            for (uint j = 0; j < head_size; j += 4) {
-                float4 s_vec = float4(state[j], state[j+1], state[j+2], state[j+3]);
-                float4 k_vec = float4(_k[j], _k[j+1], _k[j+2], _k[j+3]);
-                s_vec *= g_exp;
-                sk += dot(s_vec, k_vec);
-                state[j]   = s_vec[0];
-                state[j+1] = s_vec[1];
-                state[j+2] = s_vec[2];
-                state[j+3] = s_vec[3];
+            const float g_exp = exp(g_ptr[0]);
+
+            FOR_UNROLL (short j = 0; j < NSG; j++) {
+                const short is = tx*NSG + j;
+                ls[j] *= g_exp;
+
+                s_k += ls[j]*k_ptr[is];
             }
         } else {
-            for (uint j = 0; j < head_size; j += 4) {
-                float4 s_vec = float4(state[j], state[j+1], state[j+2], state[j+3]);
-                float4 k_vec = float4(_k[j], _k[j+1], _k[j+2], _k[j+3]);
-                float4 g_vec = float4(_g[j], _g[j+1], _g[j+2], _g[j+3]);
-                s_vec *= g_vec;
-                sk += dot(s_vec, k_vec);
-                state[j]   = s_vec[0];
-                state[j+1] = s_vec[1];
-                state[j+2] = s_vec[2];
-                state[j+3] = s_vec[3];
+            // KDA
+            FOR_UNROLL (short j = 0; j < NSG; j++) {
+                const short is = tx*NSG + j;
+                ls[j] *= exp(g_ptr[is]);
+
+                s_k += ls[j]*k_ptr[is];
             }
         }
 
-        // Delta: d = (v[tid] - sk) * beta
-        // Note: delta is per-column (thread-local), matching CPU's delta[j] = (v[j] - sk[j]) * beta
-        // Here sk is sum_j M[j][tid]*k[j], and v_tid = v[tid], so d = delta for column tid
-        float d = (v_tid - sk) * beta_val;
+        s_k = simd_sum(s_k);
 
-        // State update: M[j][tid] += k[j] * d (rank-1 outer product k * delta^T)
-        for (uint j = 0; j < head_size; j += 4) {
-            float4 s_vec = float4(state[j], state[j+1], state[j+2], state[j+3]);
-            float4 k_vec = float4(_k[j], _k[j+1], _k[j+2], _k[j+3]);
-            s_vec += k_vec * d;
-            state[j]   = s_vec[0];
-            state[j+1] = s_vec[1];
-            state[j+2] = s_vec[2];
-            state[j+3] = s_vec[3];
-        }
+        const float d = (v_ptr[i20] - s_k)*beta;
 
-        // Output: o[tid] = sum_j M[j][tid] * q[j] * scale
         float y = 0.0f;
-        for (uint j = 0; j < head_size; j += 4) {
-            float4 s_vec = float4(state[j], state[j+1], state[j+2], state[j+3]);
-            float4 q_vec = float4(_q[j], _q[j+1], _q[j+2], _q[j+3]);
-            y += dot(s_vec, q_vec);
+
+        FOR_UNROLL (short j = 0; j < NSG; j++) {
+            const short is = tx*NSG + j;
+            ls[j] += k_ptr[is]*d;
+
+            y += ls[j]*q_ptr[is];
         }
-        dst[t_abs * C + head_id * head_size + tid] = y * scale;
+
+        y = simd_sum(y);
+
+        if (tx == 0) {
+            dst_attn[t*args.ne21*S_v] = y*scale;
+        }
+
+        q_ptr += args.ns02;
+        k_ptr += args.ns12;
+        v_ptr += args.ns22;
+
+        b_ptr += args.ne21;
+        g_ptr += args.ne21*G;
     }
 
-    // Write final state (row-major: M[j][tid] at j*head_size+tid)
-    for (uint j = 0; j < head_size; j++) {
-        dst[T * C + batch_id * state_size + head_id * head_size * head_size
-            + j * head_size + tid] = state[j];
+    device float * dst_state = (device float *) (dst) + args.ne23*args.ne22*args.ne21*S_v + (i23*args.ne21 + i21)*S_v*S_v + i20;
+
+    FOR_UNROLL (short j = 0; j < NSG; j++) {
+        const short is = tx*NSG + j;
+        dst_state[is*S_v] = ls[j];
     }
+
+#undef S_v
+#undef G
 }
+
+typedef decltype(kernel_gated_delta_net_impl<4>) kernel_gated_delta_net_t;
+
+template [[host_name("kernel_gated_delta_net_f32_1")]] kernel kernel_gated_delta_net_t kernel_gated_delta_net_impl<1>;
+template [[host_name("kernel_gated_delta_net_f32_2")]] kernel kernel_gated_delta_net_t kernel_gated_delta_net_impl<2>;
+template [[host_name("kernel_gated_delta_net_f32_4")]] kernel kernel_gated_delta_net_t kernel_gated_delta_net_impl<4>;
 
 constant short FC_solve_tri_nsg [[function_constant(FC_SOLVE_TRI + 0)]];
 constant short FC_solve_tri_n   [[function_constant(FC_SOLVE_TRI + 1)]];

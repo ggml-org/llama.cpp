@@ -1156,17 +1156,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_RWKV_WKV7:
             return true;
         case GGML_OP_GATED_DELTA_NET:
-            {
-                // Metal kernel supports head_size 64 and 128, contiguous tensors only
-                const int64_t S_v = op->src[2]->ne[0];
-                return (S_v == 64 || S_v == 128)
-                    && ggml_is_contiguous(op->src[0])
-                    && ggml_is_contiguous(op->src[1])
-                    && ggml_is_contiguous(op->src[2])
-                    && ggml_is_contiguous(op->src[3])
-                    && ggml_is_contiguous(op->src[4])
-                    && ggml_is_contiguous(op->src[5]);
-            }
+            return op->src[2]->ne[0] % 32 == 0;
         case GGML_OP_SOLVE_TRI:
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:

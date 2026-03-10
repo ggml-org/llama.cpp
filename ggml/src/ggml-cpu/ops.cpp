@@ -10468,7 +10468,7 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
             const float * v_d = (const float *)((const char *)src_v->data + iv3 * nbv3 + t * nbv2 + iv1 * nbv1);
 
             const float beta_val = *(const float *)((const char *)src_beta->data + iv3 * nbb3 + t * nbb2 + iv1 * nbb1);
-            const float * g_d   =  (const float *)((const char *)src_g->data    + iv3 * nbg3 + t * nbg2 + iv1 * nbg1);
+            const float * g_d    =  (const float *)((const char *)src_g->data    + iv3 * nbg3 + t * nbg2 + iv1 * nbg1);
 
             if (kda) {
                 for (int64_t i = 0; i < S_v; ++i) {
@@ -10501,7 +10501,6 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
 
             attn_data += S_v * H; // advance to next token
         }
-
     }
 }
 
