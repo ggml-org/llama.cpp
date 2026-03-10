@@ -216,8 +216,8 @@ static std::unique_ptr<llama_model> build_mock_model_from_remote(const gguf_remo
     model->type = infer_llm_type(model->arch, remote);
 
     model->hparams.n_embd        = remote.n_embd;
-    model->hparams.n_embd_head_k = remote.n_embd_head_k;
-    model->hparams.n_embd_head_v = remote.n_embd_head_v;
+    model->hparams.n_embd_head_k_full = remote.n_embd_head_k;
+    model->hparams.n_embd_head_v_full = remote.n_embd_head_v;
     model->hparams.n_layer       = remote.n_layer;
     model->hparams.n_expert      = remote.n_expert;
 
@@ -408,7 +408,7 @@ static bool run_test_section(llama_model &                    mdl,
         }
 
         if (got != expected) {
-            printf("  FAIL  [%s] %-50s expected %s, got %s\n", llama_ftype_to_name(section.ftype), name.c_str(), ggml_type_name(expected), ggml_type_name(got));
+            printf("  FAIL  %-50s expected %s, got %s\n", name.c_str(), ggml_type_name(expected), ggml_type_name(got));
             all_pass = false;
         }
     }
