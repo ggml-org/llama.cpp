@@ -2374,7 +2374,7 @@ struct ggml_backend_sycl_context {
     bool graphs_disabled          = false;  // Set when graph recording fails; disables graphs for this context
     bool moe_graphs_disabled      = false;  // Set when MoE preload fails; disables graphs for all splits
     bool moe_graphs_disabled_once = false;  // Set when we skip graphs for a single run
-    bool moe_graph_rerecord       = false;  // MoE ops present — force re-record mode for selective graph
+    bool moe_graph_rerecord       = false;  // Once set, never cleared — MoE models always re-record per token
 
     // === Cached per-graph computations (reset when n_nodes changes) ===
     int  cached_persistent_n_nodes = -1;   // n_nodes when persistent check was cached

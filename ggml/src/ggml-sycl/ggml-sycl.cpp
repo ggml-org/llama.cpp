@@ -39686,7 +39686,7 @@ normal_dispatch:
                 model_sycl_graph.end_recording();
                 g_recording_graph_ptr = nullptr;
                 g_recording_queue_ptr = nullptr;
-                fprintf(stderr, "[GRAPH-DIAG] barriers: %d  ops_dispatched: %d  extra_submits: %d  nodes: %d\n",
+                GGML_SYCL_DEBUG("[GRAPH-DIAG] barriers: %d  ops_dispatched: %d  extra_submits: %d  nodes: %d\n",
                         g_sycl_barrier_count_during_recording.load(), g_sycl_submit_count_during_recording.load(),
                         g_sycl_extra_submit_count_during_recording.load(), cgraph->n_nodes);
                 sycl_ctx->fa_graph_ptrs_recording = false;
