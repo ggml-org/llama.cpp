@@ -2427,11 +2427,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 );
             }
             if (split_arg.size() == 1) {
-                std::fill(params.fit_params_target.begin(), params.fit_params_target.end(), std::stoul(split_arg[0]) * 1024*1024);
+                std::fill(params.fit_params_target.begin(), params.fit_params_target.end(), std::stoull(split_arg[0]) * 1024*1024);
                 return;
             }
             for (size_t i = 0; i < split_arg.size(); i++) {
-                params.fit_params_target[i] = std::stoul(split_arg[i]) * 1024*1024;
+                params.fit_params_target[i] = std::stoull(split_arg[i]) * 1024*1024;
             }
         }
     ).set_env("LLAMA_ARG_FIT_TARGET"));
