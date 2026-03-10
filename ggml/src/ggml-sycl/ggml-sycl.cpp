@@ -3822,12 +3822,6 @@ struct moe_ids_cache_entry {
 // Keyed by the ggml_tensor pointer (avoids unnecessary device round-trips).
 static thread_local std::unordered_map<const ggml_tensor *, moe_ids_cache_entry> g_moe_ids_d2h_cache;
 
-// Dedicated OOQ for async expert IDs D2H transfers.  Submitting on a
-// separate queue lets the compute thread continue dispatching GPU kernels
-// without blocking on the IDs memcpy.  Must be on the SAME device as the
-// compute queue (cross-device OOQ depends_on is broken on Level Zero).
-static thread_local std::unique_ptr<sycl::queue> g_moe_ids_dma_queue;
-
 // Counter incremented at each graph boundary so that thread-local caches
 // (activation pointer type, etc.) can detect stale entries without a
 // function call into the thread-local storage from graph_compute_impl.
@@ -20012,21 +20006,10 @@ static bool ggml_sycl_copy_ids_to_host(ggml_backend_sycl_context & ctx,
         return true;
     }
 
-    // Select queue: dedicated OOQ for async mode, compute stream for sync.
-    sycl::queue * q = nullptr;
-    if (async_event) {
-        if (!g_moe_ids_dma_queue) {
-            sycl::queue * compute_q = ctx.stream();
-            if (compute_q) {
-                g_moe_ids_dma_queue = std::make_unique<sycl::queue>(
-                    compute_q->get_context(), compute_q->get_device());
-            }
-        }
-        q = g_moe_ids_dma_queue.get();
-    }
-    if (!q) {
-        q = ctx.stream();
-    }
+    // Use the compute stream for IDs D2H — this ensures proper ordering
+    // after the GPU kernel that produced the IDs tensor.  A separate OOQ
+    // lacks dependency on the compute queue and may read stale data.
+    sycl::queue * q = ctx.stream();
     if (!q) {
         return false;
     }
