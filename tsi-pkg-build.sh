@@ -22,7 +22,7 @@
 #
 # Submodules:
 # - First run in a fresh repo checkout: auto "git submodule update --init --recursive"
-# - Later runs: submodule update is OPTIONAL unless you pass:
+# - Later runs: submodule update is OPTIONAL unless pass:
 # git-submodule-pull
 # - If ggml-tsi-kernel is missing, script forces submodule init even without the flag.
 #
@@ -32,7 +32,7 @@
 # build-all-blobs : build blobs for both fpga+posix kernels
 #
 # Auto blob safeguards (ON by default):
-# - If you deleted ggml-tsi-kernel (rm -rf) or host objects are missing:
+# - If deleted ggml-tsi-kernel (rm -rf) or host objects are missing:
 #   * POSIX build auto-builds POSIX blobs if required for link
 #   * FPGA build auto-builds FPGA blobs if required for link
 # Disable both with:
@@ -48,7 +48,7 @@
 # build-posix : only build posix C/C++
 # build-fpga : only build fpga target
 # package : only package fpga bundle (requires fpga already built)
-# (You can combine them: e.g. build-posix build-fpga)
+# (We can combine them: e.g. build-posix build-fpga)
 #
 # NOTE (UPDATED, without removing above comments):
 # - build-fpga adds compilation defines: -DTMU_SUPPORTED -DTVU_SUPPORTED
