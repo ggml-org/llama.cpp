@@ -1091,7 +1091,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             gguf_set_val_i32(ctx_outs[i].get(), ml.llm_kv(LLM_KV_SPLIT_TENSORS_COUNT).c_str(), (int32_t)tensors.size());
         }
     }
-    
+
     size_t total_size_org = 0;
     size_t total_size_new = 0;
 
