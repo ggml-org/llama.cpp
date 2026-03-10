@@ -3869,7 +3869,7 @@ static void llama_sampler_reasoning_budget_accept(struct llama_sampler * smpl, l
                     ctx->state = REASONING_BUDGET_COUNTING;
                     ctx->remaining = ctx->budget;
                     ctx->start_match_pos = 0;
-                    LLAMA_LOG_INFO("reasoning-budget: armed, budget=%d tokens\n", ctx->budget);
+                    LLAMA_LOG_INFO("reasoning-budget: activated, budget=%d tokens\n", ctx->budget);
 
                     if (ctx->remaining <= 0) {
                         // budget is 0 — go straight to forcing
@@ -3896,7 +3896,7 @@ static void llama_sampler_reasoning_budget_accept(struct llama_sampler * smpl, l
                     // natural end — stop constraining
                     ctx->state = REASONING_BUDGET_DONE;
                     ctx->end_match_pos = 0;
-                    LLAMA_LOG_INFO("reasoning-budget: defused (natural end)\n");
+                    LLAMA_LOG_INFO("reasoning-budget: deactivated (natural end)\n");
                 }
             } else {
                 ctx->end_match_pos = 0;
@@ -3999,11 +3999,11 @@ struct llama_sampler * llama_sampler_init_reasoning_budget(
                const llama_token * forced_tokens,
                           size_t   n_forced,
                          int32_t   budget,
-                            bool   arm_immediately) {
-    auto initial_state = arm_immediately ? REASONING_BUDGET_COUNTING : REASONING_BUDGET_IDLE;
+                            bool   activate_immediately) {
+   auto initial_state = activate_immediately ? REASONING_BUDGET_COUNTING : REASONING_BUDGET_IDLE;
 
-    // if armed immediately with budget <= 0, go straight to forcing
-    if (arm_immediately && budget <= 0) {
+   // if activated immediately with budget <= 0, go straight to forcing
+   if (activate_immediately && budget <= 0) {
         initial_state = REASONING_BUDGET_FORCING;
     }
 

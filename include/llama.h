@@ -1465,14 +1465,14 @@ extern "C" {
     ///   - DONE:     passthrough forever
     ///
     /// @param vocab              The vocabulary (for tokenization and EOG checks)
-    /// @param start_tokens       Token sequence that arms the countdown (e.g. "<think>")
+    /// @param start_tokens       Token sequence that activates the countdown (e.g. "<think>")
     /// @param n_start            Number of tokens in start_tokens
-    /// @param end_tokens         Token sequence that defuses naturally (e.g. "</think>")
+    /// @param end_tokens         Token sequence that deactivates naturally (e.g. "</think>")
     /// @param n_end              Number of tokens in end_tokens
     /// @param forced_tokens      Token sequence forced when budget expires (e.g. "(budget exceeded)</think>")
     /// @param n_forced           Number of tokens in forced_tokens
     /// @param budget             Maximum number of tokens allowed in the reasoning block
-    /// @param arm_immediately    If true, skip IDLE and start in COUNTING directly
+    /// @param activate_immediately    If true, skip IDLE and start in COUNTING directly
     ///
     LLAMA_API struct llama_sampler * llama_sampler_init_reasoning_budget(
             const struct llama_vocab * vocab,
@@ -1483,7 +1483,7 @@ extern "C" {
                    const llama_token * forced_tokens,
                               size_t   n_forced,
                              int32_t   budget,
-                                bool   arm_immediately);
+                                bool   activate_immediately);
 
     // Returns the seed used by the sampler if applicable, LLAMA_DEFAULT_SEED otherwise
     LLAMA_API uint32_t llama_sampler_get_seed(const struct llama_sampler * smpl);

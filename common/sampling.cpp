@@ -258,7 +258,7 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
             params.reasoning_budget_end.data(),    params.reasoning_budget_end.size(),
             params.reasoning_budget_forced.data(), params.reasoning_budget_forced.size(),
             params.reasoning_budget_tokens,
-            params.reasoning_budget_arm_immediately));
+            params.reasoning_budget_activate_immediately));
     }
 
     if (params.has_logit_bias()) {
