@@ -29149,16 +29149,18 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
             ggml_sycl_add1(ctx, dst);
             break;
         case GGML_OP_ADD_ID:
+            // Skip ADD_ID for gate/up biases when fusion already applied them
+            if (g_moe_fusion.fused_pending || g_moe_fusion.gate_pending) {
+                const char * name = dst->name;
+                if (name && (strstr(name, "ffn_moe_gate_biased") ||
+                             strstr(name, "ffn_moe_up_biased"))) {
+                    break;  // Fusion already incorporated this bias
+                }
+            }
             if (g_ggml_sycl_debug) {
                 ggml_sycl_debug_dump_tensor_meta("ADD_ID dst", dst);
                 ggml_sycl_debug_dump_tensor_meta("ADD_ID src0", dst->src[0]);
                 ggml_sycl_debug_dump_tensor_meta("ADD_ID src1", dst->src[1]);
-            }
-            if (g_moe_fusion.fused_pending && dst->name &&
-                (strstr(dst->name, "ffn_moe_gate_biased") ||
-                 strstr(dst->name, "ffn_moe_up_biased"))) {
-                // Fusion already applied gate/up biases inline; skip GPU ADD_ID
-                break;
             }
             ggml_sycl_add_id(ctx, dst);
             break;
