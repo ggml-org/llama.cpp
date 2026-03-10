@@ -134,17 +134,6 @@ int entry_point(struct ggml_et_glu_params* params, void* env) {
     int thread_id = get_relative_thread_id(kernel_env->shire_mask);
     int num_threads = get_num_threads(kernel_env->shire_mask);
 
-    // Return early if this hart is not active
-    if (thread_id < 0) {
-        return 0;
-    }
-
-    // TEMPORARY: Make kernel single-threaded to avoid race conditions
-    // Only thread 0 should do the work, all others return immediately
-    if (thread_id != 0) {
-        return 0;
-    }
-
     // Basic safety check on params
     if (params == 0 || ((uint64_t)params & 0x7) != 0) {
         return -1; // Invalid pointer
@@ -207,27 +196,20 @@ int entry_point(struct ggml_et_glu_params* params, void* env) {
     const int64_t total_elements = nr * nc;
     const int64_t total_cachelines = (total_elements + elements_per_cacheline - 1) / elements_per_cacheline;
 
-    // TEMPORARY: Comment out multi-threaded work distribution
-    // // Distribute cache lines across threads
-    // int64_t cachelines_per_thread = total_cachelines / num_threads;
-    // if (cachelines_per_thread == 0) cachelines_per_thread = 1;
-    //
-    // int64_t start_cacheline = thread_id * cachelines_per_thread;
-    // int64_t end_cacheline = start_cacheline + cachelines_per_thread;
-    //
-    // // Clamp end_cacheline to actual number of cache lines
-    // if (end_cacheline > total_cachelines) {
-    //     end_cacheline = total_cachelines;
-    // }
-    //
-    // // Thread should return if no work to do
-    // if (start_cacheline >= total_cachelines) {
-    //     return 0;
-    // }
+    // Distribute cache lines across threads
+    int64_t cachelines_per_thread = (total_cachelines + num_threads - 1) / num_threads;
+    int64_t start_cacheline = thread_id * cachelines_per_thread;
+    int64_t end_cacheline = start_cacheline + cachelines_per_thread;
 
-    // TEMPORARY: Single-threaded - thread 0 does all the work
-    int64_t start_cacheline = 0;
-    int64_t end_cacheline = total_cachelines;
+    // Clamp end_cacheline to actual number of cache lines
+    if (end_cacheline > total_cachelines) {
+        end_cacheline = total_cachelines;
+    }
+
+    // Thread should return if no work to do
+    if (start_cacheline >= total_cachelines) {
+        return 0;
+    }
 
     // Process cache lines assigned to this thread
     for (int64_t cl = start_cacheline; cl < end_cacheline; cl++) {
@@ -237,7 +219,9 @@ int entry_point(struct ggml_et_glu_params* params, void* env) {
         int64_t col = global_element_start % nc;
 
         // Skip if we're past the end of data
-        if (global_element_start >= total_elements) break;
+        if (global_element_start >= total_elements) {
+            break;
+        }
 
         // Calculate how many elements to process in this cache line
         int64_t elements_remaining = total_elements - global_element_start;
