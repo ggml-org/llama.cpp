@@ -26400,7 +26400,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         g_moe_fusion.fused_pending = true;
 
                         static std::atomic<int> flog_uf{ 0 };
-                        if (flog_uf.fetch_add(1, std::memory_order_relaxed) < 50) {
+                        if (flog_uf.fetch_add(1, std::memory_order_relaxed) < 3) {
                             GGML_LOG_INFO("[CPU-TG-FUSE] Fused gate+up+SiLU (UP-first) for layer %d, "
                                           "%zu CPU + %zu secondary experts\n",
                                           cur_layer_fast, n_cpu_f, g_moe_fusion.sec_indices.size());
@@ -26554,7 +26554,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
 
                     static std::atomic<int> flog{ 0 };
-                    if (flog.fetch_add(1, std::memory_order_relaxed) < 50) {
+                    if (flog.fetch_add(1, std::memory_order_relaxed) < 3) {
                         GGML_LOG_INFO("[CPU-TG-FUSE] Gate saved for layer %d, %zu CPU + %zu secondary experts\n",
                                       cur_layer_fast, g_moe_fusion.cpu_indices.size(),
                                       g_moe_fusion.sec_indices.size());
@@ -26772,7 +26772,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
 
                     static std::atomic<int> flog_us{ 0 };
-                    if (flog_us.fetch_add(1, std::memory_order_relaxed) < 50) {
+                    if (flog_us.fetch_add(1, std::memory_order_relaxed) < 3) {
                         GGML_LOG_INFO("[CPU-TG-FUSE] Up saved for layer %d, %zu CPU + %zu secondary experts\n",
                                       cur_layer_fast, g_moe_fusion.cpu_indices.size(),
                                       g_moe_fusion.sec_indices.size());
@@ -26876,7 +26876,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     g_moe_fusion.fused_pending = true;
 
                     static std::atomic<int> flog2{ 0 };
-                    if (flog2.fetch_add(1, std::memory_order_relaxed) < 50) {
+                    if (flog2.fetch_add(1, std::memory_order_relaxed) < 3) {
                         GGML_LOG_INFO("[CPU-TG-FUSE] Fused gate+up+SiLU for layer %d, %zu CPU + %zu secondary experts\n",
                                       cur_layer_fast, n_cpu_f, g_moe_fusion.sec_indices.size());
                     }
@@ -26999,7 +26999,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     stream->wait();
 
                     static std::atomic<int> flog3{ 0 };
-                    if (flog3.fetch_add(1, std::memory_order_relaxed) < 50) {
+                    if (flog3.fetch_add(1, std::memory_order_relaxed) < 3) {
                         GGML_LOG_INFO("[CPU-TG-FUSE] Down with fused activation for layer %d, %zu CPU + %zu secondary experts\n",
                                       cur_layer_fast, n_cpu_d, g_moe_fusion.sec_indices.size());
                     }
