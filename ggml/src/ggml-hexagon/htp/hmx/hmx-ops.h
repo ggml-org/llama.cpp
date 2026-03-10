@@ -18,11 +18,17 @@ extern "C" {
 struct htp_context;  // forward declaration
 
 // HMX matrix multiplication — tile-permuted FP16 weights, FP32 activation/output
+// act_stride: activation row stride in elements (= k for contiguous, or
+//             nb[1]/sizeof(float) for permuted tensors like attention Q).
+// weight_stride: weight row stride in elements (= k for compact weights, or
+//                nb[1]/sizeof(__fp16) for permuted KV-cache views used by QK).
 int hmx_mat_mul_permuted_w16a32(struct htp_context *ctx,
                                 float *restrict dst,
                                 const float *activation,
                                 const __fp16 *permuted_weight,
-                                int m, int k, int n);
+                                int m, int k, int n,
+                                int act_stride,
+                                int weight_stride);
 
 // HMX matrix multiplication — tile-permuted quantised weights (Q4_0/Q8_0/IQ4_NL)
 int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx,

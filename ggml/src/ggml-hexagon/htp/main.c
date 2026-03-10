@@ -1,6 +1,7 @@
 #pragma clang diagnostic ignored "-Wgnu-zero-variadic-macro-arguments"
 #pragma clang diagnostic ignored "-Wunused-function"
 
+#include "htp-log.h"
 #include <HAP_farf.h>
 #include <HAP_perf.h>
 #include <AEEStdErr.h>
@@ -31,7 +32,7 @@
 
 // Set to 1 to enable lightweight sample-value tracing via FARF(ALWAYS, ...).
 #ifndef HMX_DEBUG_TRACE_VALUES
-#define HMX_DEBUG_TRACE_VALUES 1
+#define HMX_DEBUG_TRACE_VALUES 0
 #endif
 
 AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
@@ -423,8 +424,9 @@ static int send_htp_rsp(struct htp_context *     c,
                         struct dspqueue_buffer * bufs,
                         size_t                   n_bufs,
                         struct profile_data *    prof) {
-    // Prep response struct
+    // Prep response struct (zero-init to clear cmp/unused union)
     struct htp_general_rsp rsp;
+    memset(&rsp, 0, sizeof(rsp));
     rsp.op          = op;
     rsp.status      = status;
     rsp.prof_usecs  = prof->usecs;
@@ -1091,12 +1093,40 @@ static void proc_flash_attn_ext_req(struct htp_context *     ctx,
 // VTCM, DMA and thread dispatch are managed inside the HMX kernels.
 // ---------------------------------------------------------------------------
 
+// Debug: set to 1 to run both HMX and HVX for the first N matmuls and compare outputs.
+// Comparison metrics are returned to the host via htp_cmp_data in the response.
+#define HMX_DEBUG_COMPARE_HVX 0
+#define HMX_DEBUG_COMPARE_COUNT 200  // compare first N matmul invocations
+
+#if HMX_DEBUG_COMPARE_HVX
+static int hmx_matmul_invocation_count = 0;
+static struct htp_cmp_data hmx_cmp_result;  // filled per-op, sent in response
+#endif
+
 static void proc_hmx_matmul_req(struct htp_context *     ctx,
                                 struct htp_general_req * req,
                                 struct dspqueue_buffer * bufs,
                                 size_t                   n_bufs) {
     // HMX weight tile requires N to be 32-aligned.
     if (req->src0.ne[1] % 32 != 0) {
+        proc_matmul_req(ctx, req, bufs, n_bufs);
+        return;
+    }
+
+    // Quantised HMX kernels only handle flat 2D matmul (host already rejects
+    // batched quantised, but guard here too).  F16 batched matmul is handled
+    // by looping over batch slices in Phase 1 below.
+    if ((req->src0.ne[2] * req->src0.ne[3] > 1 ||
+         req->src1.ne[2] * req->src1.ne[3] > 1) &&
+        req->src0.type != HTP_TYPE_F16) {
+        proc_matmul_req(ctx, req, bufs, n_bufs);
+        return;
+    }
+
+    // HMX assumes contiguous row-major layout.  Fall back for permuted
+    // tensors where strides are non-monotonic (e.g. transposed KV cache).
+    if (req->src0.nb[0] > req->src0.nb[1] ||
+        req->src1.nb[0] > req->src1.nb[1]) {
         proc_matmul_req(ctx, req, bufs, n_bufs);
         return;
     }
@@ -1166,12 +1196,42 @@ static void proc_hmx_matmul_req(struct htp_context *     ctx,
     uint32_t rsp_status = HTP_STATUS_INTERNAL_ERR;
 
     // --- Phase 1: HMX on the first m_hmx (32-aligned) rows ---
+    // For batched F16, loop over (b3, b2) calling HMX kernel per 2D slice
+    // with GQA broadcasting (src0 batch index = b2/r2, b3/r3).
     if (vtcm_acquire(ctx) == AEE_SUCCESS) {
         int ret = -1;
+
+        const int ne02 = (int) req->src0.ne[2];
+        const int ne03 = (int) req->src0.ne[3];
+        const int ne12 = (int) req->src1.ne[2];
+        const int ne13 = (int) req->src1.ne[3];
+        const int r2   = ne02 > 0 ? ne12 / ne02 : 1;
+        const int r3   = ne03 > 0 ? ne13 / ne03 : 1;
+        // Row strides in elements. For compact tensors these equal k; for
+        // permuted attention views they can be larger, so pass the real stride.
+        const int act_stride    = (int)(req->src1.nb[1] / sizeof(float));
+        const int weight_stride = (int)(req->src0.nb[1] / sizeof(__fp16));
+
         switch (req->src0.type) {
             case HTP_TYPE_F16:
-                ret = hmx_mat_mul_permuted_w16a32(ctx, dst, act,
-                                                  (const __fp16 *) wgt, m_hmx, k, n);
+                ret = 0;
+                for (int b3 = 0; b3 < ne13 && ret == 0; b3++) {
+                    for (int b2 = 0; b2 < ne12 && ret == 0; b2++) {
+                        const __fp16 *wgt_b = (const __fp16 *)((uint8_t *) bufs[0].ptr
+                            + (size_t)(b2 / r2) * req->src0.nb[2]
+                            + (size_t)(b3 / r3) * req->src0.nb[3]);
+                        const float *act_b = (const float *)((uint8_t *) bufs[1].ptr
+                            + (size_t) b2 * req->src1.nb[2]
+                            + (size_t) b3 * req->src1.nb[3]);
+                        float *dst_b = (float *)((uint8_t *) bufs[2].ptr
+                            + (size_t) b2 * req->dst.nb[2]
+                            + (size_t) b3 * req->dst.nb[3]);
+                        ret = hmx_mat_mul_permuted_w16a32(ctx, dst_b, act_b,
+                                                          wgt_b, m_hmx, k, n,
+                                                          act_stride,
+                                                          weight_stride);
+                    }
+                }
                 break;
             default:
                 ret = hmx_mat_mul_permuted_qk_0_d16a32(ctx, dst, act,
@@ -1193,6 +1253,85 @@ static void proc_hmx_matmul_req(struct htp_context *     ctx,
             return;
         }
         vtcm_release(ctx);
+
+#if HMX_DEBUG_COMPARE_HVX
+        // Compare HMX output with HVX output for the first N matmuls.
+        // Save 64 HMX samples spread across the output, then run HVX and compare.
+        hmx_matmul_invocation_count++;
+        if (hmx_matmul_invocation_count <= HMX_DEBUG_COMPARE_COUNT) {
+            const int total_elems = m_hmx * n;
+            const int n_samples = (total_elems < 64) ? total_elems : 64;
+            const int stride = total_elems / n_samples;
+
+            // Save sampled HMX output values
+            float hmx_samples[64];
+            for (int _i = 0; _i < n_samples; _i++) {
+                hmx_samples[_i] = dst[_i * stride];
+            }
+
+            // Compute HMX output sum (lightweight checksum over ALL elements)
+            double hmx_sum = 0.0;
+            for (int _i = 0; _i < total_elems; _i++) hmx_sum += (double)dst[_i];
+
+            // Run HVX on same input data for comparison
+            struct htp_ops_context cmp_octx = { 0 };
+            cmp_octx.ctx       = ctx;
+            cmp_octx.src0      = req->src0;
+            cmp_octx.src1      = req->src1;
+            cmp_octx.src1.ne[1] = m_hmx;
+            cmp_octx.dst       = req->dst;
+            cmp_octx.dst.ne[1]  = m_hmx;
+            cmp_octx.flags     = req->flags & ~HTP_OPFLAGS_SKIP_QUANTIZE;
+            cmp_octx.op        = req->op;
+            cmp_octx.n_threads = ctx->n_threads;
+            cmp_octx.src0.data = (uint32_t) bufs[0].ptr;
+            cmp_octx.src1.data = (uint32_t) bufs[1].ptr;
+            cmp_octx.dst.data  = (uint32_t) bufs[2].ptr;
+
+            if (vtcm_acquire(ctx) == AEE_SUCCESS) {
+                op_matmul(&cmp_octx);
+                vtcm_release(ctx);
+            }
+
+            // Compute comparison metrics over sampled positions
+            float max_abs_diff = 0.0f, max_rel_diff = 0.0f;
+            double sum_sq_diff = 0.0;
+            for (int _i = 0; _i < n_samples; _i++) {
+                float hvx_val = dst[_i * stride];
+                float diff = hmx_samples[_i] - hvx_val;
+                if (diff < 0) diff = -diff;
+                double dd = (double)(hmx_samples[_i] - hvx_val);
+                sum_sq_diff += dd * dd;
+                if (diff > max_abs_diff) { max_abs_diff = diff; }
+                float ref = hvx_val < 0 ? -hvx_val : hvx_val;
+                if (ref > 1e-6f && diff / ref > max_rel_diff) max_rel_diff = diff / ref;
+            }
+            float rmse_sq = (float)(sum_sq_diff / n_samples);
+            float rmse = rmse_sq;
+            if (rmse > 0.0f) {
+                for (int _it = 0; _it < 5; _it++) rmse = 0.5f * (rmse + rmse_sq / rmse);
+            }
+
+            // Compute HVX output sum for global comparison
+            double hvx_sum = 0.0;
+            for (int _i = 0; _i < total_elems; _i++) hvx_sum += (double)dst[_i];
+
+            // Store comparison metrics in shared struct (sent to host in response)
+            hmx_cmp_result.flags      = HTP_CMP_FLAG_VALID;
+            hmx_cmp_result.invocation = (uint32_t)hmx_matmul_invocation_count;
+            hmx_cmp_result.m          = (uint32_t)m_hmx;
+            hmx_cmp_result.k          = (uint32_t)k;
+            hmx_cmp_result.n          = (uint32_t)n;
+            hmx_cmp_result.rmse       = rmse;
+            hmx_cmp_result.max_abs    = max_abs_diff;
+            hmx_cmp_result.max_rel    = max_rel_diff;
+            hmx_cmp_result.hmx_sum    = (float)hmx_sum;
+            hmx_cmp_result.hvx_sum    = (float)hvx_sum;
+            hmx_cmp_result.type       = req->src0.type;
+
+            // Leave HVX results in dst for correct downstream execution.
+        }
+#endif
     }
 
     // --- Phase 2: HVX on the remaining m_tail rows ---
@@ -1233,7 +1372,28 @@ static void proc_hmx_matmul_req(struct htp_context *     ctx,
     }
 
     profile_stop(&prof);
+
+#if HMX_DEBUG_COMPARE_HVX
+    // Send response with comparison data embedded in the unused/cmp union
+    {
+        struct htp_general_rsp rsp;
+        memset(&rsp, 0, sizeof(rsp));
+        rsp.op          = req->op;
+        rsp.status      = rsp_status;
+        rsp.prof_usecs  = prof.usecs;
+        rsp.prof_cycles = prof.cycles;
+        rsp.prof_pkts   = prof.pkts;
+        rsp.cmp         = hmx_cmp_result;
+        // Clear for next invocation
+        hmx_cmp_result.flags = 0;
+
+        dspqueue_write(ctx->queue, 0, 1, rsp_bufs,
+                       sizeof(rsp), (const uint8_t *)&rsp,
+                       DSPQUEUE_TIMEOUT_NONE);
+    }
+#else
     send_htp_rsp(ctx, req->op, rsp_status, rsp_bufs, 1, &prof);
+#endif
 }
 
 static void proc_hmx_flash_attn_req(struct htp_context *     ctx,
@@ -1243,6 +1403,9 @@ static void proc_hmx_flash_attn_req(struct htp_context *     ctx,
     // HMX simple_flash_attn operates entirely in FP16.
     // If Q (src0) is not FP16 we fall back to the HVX path.
     if (req->src0.type != HTP_TYPE_F16) {
+        FARF(ALWAYS, "proc_hmx_flash_attn: HVX fallback (Q type=%u != F16) qo_len=%d kv_len=%d heads=%d/%d hdim=%d",
+             req->src0.type, (int)req->src0.ne[1], (int)req->src1.ne[1],
+             (int)req->src0.ne[2], (int)req->src1.ne[2], (int)req->src0.ne[0]);
         proc_flash_attn_ext_req(ctx, req, bufs, n_bufs);
         return;
     }
@@ -1267,6 +1430,9 @@ static void proc_hmx_flash_attn_req(struct htp_context *     ctx,
     int kv_len     = (int) req->src1.ne[1];
     int n_kv_heads = (int) req->src1.ne[2];
 
+    FARF(ALWAYS, "proc_hmx_flash_attn: HMX path qo_len=%d kv_len=%d heads=%d/%d hdim=%d mask=%p",
+         qo_len, kv_len, n_heads, n_kv_heads, head_dim, mask);
+
     struct profile_data prof;
     profile_start(&prof);
 
@@ -1274,6 +1440,8 @@ static void proc_hmx_flash_attn_req(struct htp_context *     ctx,
     if (vtcm_acquire(ctx) == AEE_SUCCESS) {
         int ret = simple_flash_attn(ctx, O, Q, K, V, mask,
                                     qo_len, kv_len, n_heads, n_kv_heads, head_dim);
+        FARF(ALWAYS, "proc_hmx_flash_attn: ret=%d O[0..3]=%.4f %.4f %.4f %.4f",
+             ret, (float)O[0], (float)O[1], (float)O[2], (float)O[3]);
         if (ret == 0) {
             rsp_status = HTP_STATUS_OK;
         }

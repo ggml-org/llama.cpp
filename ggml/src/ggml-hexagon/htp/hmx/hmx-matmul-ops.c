@@ -926,8 +926,12 @@ static void transfer_output_chunk_multithread(struct htp_context *ctx, float *ds
 }
 
 int hmx_mat_mul_permuted_w16a32(struct htp_context *ctx, float *restrict dst, const float *restrict activation,
-                                const __fp16 *restrict permuted_weight, int m, int k, int n) {
+                                const __fp16 *restrict permuted_weight, int m, int k, int n,
+                                int act_stride, int weight_stride) {
   if (!dst || !activation || !permuted_weight || !m || !n || !k) {
+    return -1;
+  }
+  if (act_stride < k || weight_stride < k) {
     return -1;
   }
   if (k % 32 != 0 || n % 32 != 0) {
@@ -992,23 +996,25 @@ int hmx_mat_mul_permuted_w16a32(struct htp_context *ctx, float *restrict dst, co
 
     TIMER_START(activation_load);
     {
-      const float *activation_chunk = activation + mr * k;
-      transfer_activation_chunk_multithread(ctx, vtcm_activation, activation_chunk, n_rows, k, k);
+      const float *activation_chunk = activation + mr * act_stride;
+      transfer_activation_chunk_multithread(ctx, vtcm_activation, activation_chunk, n_rows, k, act_stride);
     }
     TIMER_STOP(activation_load);
 
-    const size_t fp16_row_stride = k * sizeof(__fp16);
+    const size_t fp16_row_bytes    = (size_t) k * sizeof(__fp16);
+    const size_t weight_row_bytes  = (size_t) weight_stride * sizeof(__fp16);
 
     void *buf_curr = vtcm_scratch0;
     void *buf_next = vtcm_scratch1;
 
     // issue async DMA for the first weight chunk
-    // NOTE: use 2D DMA (n_cols rows × fp16_row_stride) to avoid 16-bit roiwidth overflow.
+    // NOTE: use 2D DMA (n_cols rows × fp16_row_bytes) to avoid 16-bit roiwidth overflow.
+    // The source rows can be strided (e.g. KV-cache K after ggml_permute).
     {
       const size_t n_cols_first = hmx_smin(n, n_chunk_n_cols);
 
       hmx_dma_push_safe(ctx->dma[0], dma_make_ptr(buf_curr, permuted_weight),
-                        fp16_row_stride, fp16_row_stride, fp16_row_stride, n_cols_first);
+                        fp16_row_bytes, weight_row_bytes, fp16_row_bytes, n_cols_first);
     }
 
     for (size_t nc = 0; nc < n; nc += n_chunk_n_cols) {
@@ -1022,10 +1028,10 @@ int hmx_mat_mul_permuted_w16a32(struct htp_context *ctx, float *restrict dst, co
         const size_t nc_next = nc + n_chunk_n_cols;
         if (nc_next < n) {
           const size_t n_cols_next       = hmx_smin(n - nc_next, n_chunk_n_cols);
-          const __fp16 *next_weight_chunk = permuted_weight + nc_next * k;
+          const __fp16 *next_weight_chunk = permuted_weight + nc_next * weight_stride;
 
           hmx_dma_push_safe(ctx->dma[0], dma_make_ptr(buf_next, next_weight_chunk),
-                            fp16_row_stride, fp16_row_stride, fp16_row_stride, n_cols_next);
+                            fp16_row_bytes, weight_row_bytes, fp16_row_bytes, n_cols_next);
         }
 
         // interleave row-major fp16 from scratch into tile-major in vtcm_weight
