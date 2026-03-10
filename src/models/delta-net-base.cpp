@@ -42,10 +42,23 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
     GGML_ASSERT(s->ne[0] == S_v && s->ne[1] == S_v && s->ne[2] == H_v      && s->ne[3] == n_seqs);
 
     if (cparams.fused_gdn_ch) {
-        //ggml_tensor * result = ggml_gated_delta_net(ctx0, q, k, v, g, b, s);
-        //cb(result, LLAMA_TENSOR_NAME_FGDNCH, il);
+        ggml_tensor * result = ggml_gated_delta_net(ctx0, q, k, v, g, b, s);
+        cb(result, LLAMA_TENSOR_NAME_FGDN_CH, il);
 
-        GGML_ABORT("not implemented yet");
+        ggml_tensor * output = ggml_view_4d(ctx0, result,
+            S_v, H_v, n_tokens, n_seqs,
+            ggml_row_size(result->type, S_v),
+            ggml_row_size(result->type, S_v * H_v),
+            ggml_row_size(result->type, S_v * H_v * n_tokens), 0);
+
+        ggml_tensor * new_state = ggml_view_4d(ctx0, result,
+            S_v, S_v, H_v, n_seqs,
+            ggml_row_size(result->type, S_v),
+            ggml_row_size(result->type, S_v * S_v),
+            ggml_row_size(result->type, S_v * S_v * H_v),
+            ggml_row_size(result->type, S_v * H_v * n_tokens * n_seqs));
+
+        return {output, new_state};
     }
 
     const float scale = 1.0f / sqrtf(S_k);
@@ -327,7 +340,7 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
 
     if (cparams.fused_gdn_ar) {
         ggml_tensor * result = ggml_gated_delta_net(ctx0, q, k, v, g, b, s);
-        cb(result, LLAMA_TENSOR_NAME_FGDNAR, il);
+        cb(result, LLAMA_TENSOR_NAME_FGDN_AR, il);
 
         ggml_tensor * output = ggml_view_4d(ctx0, result,
             S_v, H_v, n_tokens, n_seqs,
