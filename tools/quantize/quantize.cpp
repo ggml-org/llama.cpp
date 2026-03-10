@@ -577,8 +577,16 @@ int main(int argc, char ** argv) {
     std::vector<std::string> imatrix_datasets;
     std::unordered_map<std::string, std::vector<float>> imatrix_data;
     int m_last_call = prepare_imatrix(imatrix_file, imatrix_datasets, included_weights, excluded_weights, imatrix_data);
+
+    std::vector<llama_imatrix_data> i_data;
+    std::vector<llama_model_tensor_override> t_override;
     if (!imatrix_data.empty()) {
-        params.imatrix = &imatrix_data;
+        i_data.reserve(imatrix_data.size() + 1);
+        for (const auto & kv : imatrix_data) {
+            i_data.push_back({kv.first.c_str(), kv.second.data(), kv.second.size()});
+        }
+        i_data.push_back({nullptr, nullptr, 0});  // array terminator
+        params.imatrix = i_data.data();
         {
             llama_model_kv_override kvo;
             std::strcpy(kvo.key, LLM_KV_QUANTIZE_IMATRIX_FILE);
@@ -596,7 +604,6 @@ int main(int argc, char ** argv) {
             kvo.val_str[127] = '\0';
             kv_overrides.emplace_back(std::move(kvo));
         }
-
         {
             llama_model_kv_override kvo;
             std::strcpy(kvo.key, LLM_KV_QUANTIZE_IMATRIX_N_ENTRIES);
@@ -604,7 +611,6 @@ int main(int argc, char ** argv) {
             kvo.val_i64 = imatrix_data.size();
             kv_overrides.emplace_back(std::move(kvo));
         }
-
         if (m_last_call > 0) {
             llama_model_kv_override kvo;
             std::strcpy(kvo.key, LLM_KV_QUANTIZE_IMATRIX_N_CHUNKS);
@@ -616,13 +622,19 @@ int main(int argc, char ** argv) {
     if (!kv_overrides.empty()) {
         kv_overrides.emplace_back();
         kv_overrides.back().key[0] = 0;
-        params.kv_overrides = &kv_overrides;
+        params.kv_overrides = kv_overrides.data();
     }
     if (!tensor_types.empty()) {
-        params.tensor_types = &tensor_types;
+        t_override.reserve(tensor_types.size() + 1);
+        for (const auto & tt : tensor_types) {
+            t_override.push_back({tt.name.c_str(), tt.quant});
+        }
+        t_override.push_back({nullptr, GGML_TYPE_COUNT});  // array terminator
+        params.tensor_types = t_override.data();
     }
     if (!prune_layers.empty()) {
-        params.prune_layers = &prune_layers;
+        prune_layers.push_back(-1);  // array terminator
+        params.prune_layers = prune_layers.data();
     }
 
     llama_backend_init();
