@@ -28,6 +28,7 @@ layout(binding = 6) buffer         DstBuf     { float dst[];      };
 
 shared float s_k[S_V];
 shared float s_q[S_V];
+shared float s_g[S_V]; // KDA only: cached exp(g[i])
 
 void main() {
     const uint head_id = gl_WorkGroupID.x;
@@ -46,7 +47,6 @@ void main() {
 
     const float scale = 1.0 / sqrt(float(S_V));
 
-    // Load state column into registers: S[i][col] for all rows i
     float state[S_V];
     [[unroll]] for (uint i = 0; i < S_V; i++) {
         state[i] = state_in[state_base + i * S_V + col];
@@ -55,57 +55,72 @@ void main() {
     uint attn_off = (seq_id * n_tokens * H + head_id) * S_V;
 
     for (uint t = 0; t < n_tokens; t++) {
-        // Load q and k into shared memory
         const uint q_off = iq3 * sq3 + t * sq2 + iq1 * sq1;
-        const uint k_off = q_off; // q and k share strides (asserted in ggml.c)
+        const uint k_off = q_off;
         const uint v_off = seq_id * sv3 + t * sv2 + head_id * sv1;
 
         s_q[col] = q_in[q_off + col];
         s_k[col] = k_in[k_off + col];
+
+        const uint gb_off = seq_id * sb3 + t * sb2 + head_id * sb1;
+
+        if (KDA != 0) {
+            const uint g_base = gb_off * S_V;
+            s_g[col] = exp(g_in[g_base + col]);
+        }
+
         barrier();
 
         const float v_val = v_in[v_off + col];
-
-        // beta and gate offsets
-        const uint gb_off = seq_id * sb3 + t * sb2 + head_id * sb1;
         const float beta_val = beta_in[gb_off];
 
         if (KDA == 0) {
             const float g_val = exp(g_in[gb_off]);
 
-            // kv_col = (S^T @ k)[col] = sum_i S[i][col] * k[i]
+            // vec4 dot product: S^T @ k
             float kv_col = 0.0;
-            [[unroll]] for (uint i = 0; i < S_V; i++) {
-                kv_col += state[i] * s_k[i];
+            [[unroll]] for (uint i = 0; i < S_V; i += 4) {
+                kv_col += dot(
+                    vec4(state[i], state[i+1], state[i+2], state[i+3]),
+                    vec4(s_k[i], s_k[i+1], s_k[i+2], s_k[i+3])
+                );
             }
 
-            // delta_col = (v[col] - g * kv_col) * beta
             float delta_col = (v_val - g_val * kv_col) * beta_val;
 
-            // Fused decay + rank-1 update + readout
+            // Fused vec4 decay + rank-1 update + readout
             float attn_col = 0.0;
-            [[unroll]] for (uint i = 0; i < S_V; i++) {
-                state[i] = g_val * state[i] + s_k[i] * delta_col;
-                attn_col += state[i] * s_q[i];
+            [[unroll]] for (uint i = 0; i < S_V; i += 4) {
+                vec4 sv = vec4(state[i], state[i+1], state[i+2], state[i+3]);
+                vec4 kv = vec4(s_k[i], s_k[i+1], s_k[i+2], s_k[i+3]);
+                sv = g_val * sv + kv * delta_col;
+                state[i] = sv.x; state[i+1] = sv.y; state[i+2] = sv.z; state[i+3] = sv.w;
+
+                attn_col += dot(sv, vec4(s_q[i], s_q[i+1], s_q[i+2], s_q[i+3]));
             }
 
             dst[attn_off + col] = attn_col * scale;
         } else {
-            // KDA: per-row vector gate
-            const uint g_base = gb_off * S_V;
-
-            // kv_col = sum_i exp(g[i]) * S[i][col] * k[i]
+            // KDA: vec4 with cached exp(g) from shared memory
             float kv_col = 0.0;
-            [[unroll]] for (uint i = 0; i < S_V; i++) {
-                kv_col += exp(g_in[g_base + i]) * state[i] * s_k[i];
+            [[unroll]] for (uint i = 0; i < S_V; i += 4) {
+                vec4 gv = vec4(s_g[i], s_g[i+1], s_g[i+2], s_g[i+3]);
+                vec4 sv = vec4(state[i], state[i+1], state[i+2], state[i+3]);
+                vec4 kv = vec4(s_k[i], s_k[i+1], s_k[i+2], s_k[i+3]);
+                kv_col += dot(gv * sv, kv);
             }
 
             float delta_col = (v_val - kv_col) * beta_val;
 
             float attn_col = 0.0;
-            [[unroll]] for (uint i = 0; i < S_V; i++) {
-                state[i] = exp(g_in[g_base + i]) * state[i] + s_k[i] * delta_col;
-                attn_col += state[i] * s_q[i];
+            [[unroll]] for (uint i = 0; i < S_V; i += 4) {
+                vec4 gv = vec4(s_g[i], s_g[i+1], s_g[i+2], s_g[i+3]);
+                vec4 sv = vec4(state[i], state[i+1], state[i+2], state[i+3]);
+                vec4 kv = vec4(s_k[i], s_k[i+1], s_k[i+2], s_k[i+3]);
+                sv = gv * sv + kv * delta_col;
+                state[i] = sv.x; state[i+1] = sv.y; state[i+2] = sv.z; state[i+3] = sv.w;
+
+                attn_col += dot(sv, vec4(s_q[i], s_q[i+1], s_q[i+2], s_q[i+3]));
             }
 
             dst[attn_off + col] = attn_col * scale;
@@ -115,7 +130,6 @@ void main() {
         barrier();
     }
 
-    // Write final state
     [[unroll]] for (uint i = 0; i < S_V; i++) {
         dst[s_off + state_base + i * S_V + col] = state[i];
     }
