@@ -211,9 +211,11 @@ extern void _mlir_ciface_txe_rms_norm_host(void *a, void *res, void *buf);
 // ============================================================================
 // TMU TILE CONSTANTS
 // ============================================================================
-
-// Fixed TMU tile geometry
-// Max rows per TMU call (MAR window)
+// Fixed TMU tile geometry.
+// Maximum number of rows processed per TMU call (MAR window).
+// Today we use a fixed tile (e.g., TXE shape 8x1). In the future, this will be
+// extended to support multiple shapes, with an algorithm that selects the best
+// TMU shape and corresponding blob for a given matrix multiplication.
 #define TMU_M_TILE_MAX   64     // rows
 
 // TMU FP32 store granularity (floats per output cacheline)
@@ -295,12 +297,16 @@ void tmu_mul_mat_k2048(const void *A, const void *B, void *C);
 extern void _mlir_ciface_txe_mul_mat_tile_f32_k32_host  (void *A_tile, void *B_tile, void *C_tile);
 extern void _mlir_ciface_txe_mul_mat_tile_f32_k64_host  (void *A_tile, void *B_tile, void *C_tile);
 extern void _mlir_ciface_txe_mul_mat_tile_f32_k128_host (void *A_tile, void *B_tile, void *C_tile);
+
+// Temporarily disabled TMU blob host functions.
+// These blobs exceed the 64 KB size limit, which is not currently supported.
+// They will be re-enabled once support for larger blobs is available.
+#if 0
 extern void _mlir_ciface_txe_mul_mat_tile_f32_k256_host (void *A_tile, void *B_tile, void *C_tile);
 extern void _mlir_ciface_txe_mul_mat_tile_f32_k512_host (void *A_tile, void *B_tile, void *C_tile);
 extern void _mlir_ciface_txe_mul_mat_tile_f32_k1024_host(void *A_tile, void *B_tile, void *C_tile);
 extern void _mlir_ciface_txe_mul_mat_tile_f32_k2048_host(void *A_tile, void *B_tile, void *C_tile);
-
-
+#endif
 
 /* 
  * FP16 Kernels 
