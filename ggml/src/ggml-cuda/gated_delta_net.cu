@@ -2,34 +2,34 @@
 #include "ggml-cuda/common.cuh"
 
 template <int S_v, bool KDA>
-__global__ void gated_delta_net_cuda(const float * q,
-                                     const float * k,
-                                     const float * v,
-                                     const float * g,
-                                     const float * beta,
-                                     const float * curr_state,
-                                     float *       dst,
-                                     int64_t       H,
-                                     int64_t       n_tokens,
-                                     int64_t       n_seqs,
-                                     int64_t       sq1,
-                                     int64_t       sq2,
-                                     int64_t       sq3,
-                                     int64_t       sv1,
-                                     int64_t       sv2,
-                                     int64_t       sv3,
-                                     int64_t       sb1,
-                                     int64_t       sb2,
-                                     int64_t       sb3,
-                                     int64_t       neqk1,
-                                     int64_t       rq3,
-                                     float         scale) {
+__global__ void gated_delta_net_cuda(const float *            q,
+                                     const float *            k,
+                                     const float *            v,
+                                     const float *            g,
+                                     const float *            beta,
+                                     const float *            curr_state,
+                                     float *                  dst,
+                                     int64_t                  H,
+                                     int64_t                  n_tokens,
+                                     int64_t                  n_seqs,
+                                     int64_t                  sq1,
+                                     int64_t                  sq2,
+                                     int64_t                  sq3,
+                                     int64_t                  sv1,
+                                     int64_t                  sv2,
+                                     int64_t                  sv3,
+                                     int64_t                  sb1,
+                                     int64_t                  sb2,
+                                     int64_t                  sb3,
+                                     const fastdiv_consts_s64 neqk1_magic,
+                                     const fastdiv_consts_s64 rq3_magic,
+                                     float                    scale) {
     const int64_t h_idx    = blockIdx.x;
     const int64_t sequence = blockIdx.y;
     const int     col      = threadIdx.x;  // each thread owns one column
 
-    const int64_t iq1 = h_idx % neqk1;
-    const int64_t iq3 = sequence / rq3;
+    const int64_t iq1 = fastmodulo_s64(h_idx, neqk1_magic);
+    const int64_t iq3 = fastdiv_s64(sequence, rq3_magic);
 
     const int64_t attn_score_elems = S_v * H * n_tokens * n_seqs;
     float *       attn_data        = dst;
@@ -129,24 +129,27 @@ static void launch_gated_delta_net(
     dim3 grid_dims(H, n_seqs, 1);
     dim3 block_dims(S_v, 1, 1);
 
+    const fastdiv_consts_s64 neqk1_magic = init_fastdiv_s64(neqk1);
+    const fastdiv_consts_s64 rq3_magic   = init_fastdiv_s64(rq3);
+
     switch (S_v) {
         case 32:
             gated_delta_net_cuda<32, KDA><<<grid_dims, block_dims, 0, stream>>>(
                 q_d, k_d, v_d, g_d, b_d, s_d, dst_d, H,
                 n_tokens, n_seqs, sq1, sq2, sq3, sv1, sv2, sv3,
-                sb1, sb2, sb3, neqk1, rq3, scale);
+                sb1, sb2, sb3, neqk1_magic, rq3_magic, scale);
             break;
         case 64:
             gated_delta_net_cuda<64, KDA><<<grid_dims, block_dims, 0, stream>>>(
                 q_d, k_d, v_d, g_d, b_d, s_d, dst_d, H,
                 n_tokens, n_seqs, sq1, sq2, sq3, sv1, sv2, sv3,
-                sb1, sb2, sb3, neqk1, rq3, scale);
+                sb1, sb2, sb3, neqk1_magic, rq3_magic, scale);
             break;
         case 128:
             gated_delta_net_cuda<128, KDA><<<grid_dims, block_dims, 0, stream>>>(
                 q_d, k_d, v_d, g_d, b_d, s_d, dst_d, H,
                 n_tokens, n_seqs, sq1, sq2, sq3, sv1, sv2, sv3,
-                sb1, sb2, sb3, neqk1, rq3, scale);
+                sb1, sb2, sb3, neqk1_magic, rq3_magic, scale);
             break;
         default:
             GGML_ABORT("fatal error");
