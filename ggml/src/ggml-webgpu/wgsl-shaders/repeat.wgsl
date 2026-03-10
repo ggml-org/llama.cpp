@@ -1,3 +1,5 @@
+enable f16;
+
 struct Params {
     ne: u32,
 
@@ -24,6 +26,10 @@ struct Params {
 #endif
 #ifdef TYPE_I32
 #define DataType i32
+#endif
+#ifdef TYPE_I16
+// same size (16-bit) is sufficient for repeat
+#define DataType f16
 #endif
 
 @group(0) @binding(0)

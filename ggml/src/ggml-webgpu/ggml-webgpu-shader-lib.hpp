@@ -1192,6 +1192,10 @@ class ggml_webgpu_shader_lib {
                 defines.push_back("TYPE_I32");
                 variant += "_i32";
                 break;
+            case GGML_TYPE_I16:
+                defines.push_back("TYPE_I16");
+                variant += "_i16";
+                break;
             default:
                 GGML_ABORT("Unsupported type for repeat shader");
         }
