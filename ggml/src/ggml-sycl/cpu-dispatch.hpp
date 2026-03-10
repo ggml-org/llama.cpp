@@ -197,9 +197,11 @@ struct cpu_expert_fused_task {
     ggml_type            type;                // Weight quant type (must match for gate and up)
     int                  K;                   // Input dimension (columns per weight row)
     int                  N;                   // Output rows (intermediate dimension)
-    cpu_expert_fused_act act_variant = CPU_EXPERT_FUSED_ACT_SILU;
-    float                alpha       = 0.0f;  // Alpha for swiglu_oai (default 1.702)
-    float                limit       = 0.0f;  // Clamp limit for swiglu_oai (default 7.0)
+    const float *        bias_gate    = nullptr; // Gate bias vector (float32, length N, or nullptr)
+    const float *        bias_up      = nullptr; // Up bias vector (float32, length N, or nullptr)
+    cpu_expert_fused_act act_variant  = CPU_EXPERT_FUSED_ACT_SILU;
+    float                alpha        = 0.0f;  // Alpha for swiglu_oai (default 1.702)
+    float                limit        = 0.0f;  // Clamp limit for swiglu_oai (default 7.0)
 };
 
 // Compute one expert's fused gate+up+SiLU on CPU.
