@@ -1265,7 +1265,7 @@ void ggml_sycl_cpu_expert_fused_gate_up_silu(const cpu_expert_fused_task & task)
                 [&](const ggml_sycl_tbb::blocked_range<int> & r) {
                     int i = r.begin();
 #if defined(__AVX2__)
-                    if (task.type == GGML_TYPE_Q4_0) {
+                    if (task.type == GGML_TYPE_Q4_0 && !task.bias_gate && !task.bias_up) {
                         for (; i < r.end(); i++) {
                             float fused;
                             simd_fused_gate_up_silu_q4_0_q8_0(
@@ -1288,6 +1288,8 @@ void ggml_sycl_cpu_expert_fused_gate_up_silu(const cpu_expert_fused_task & task)
                                             gate_row, 0, act_q, 0, 1);
                         cpu_traits->vec_dot(task.K, &up_val, sizeof(float),
                                             up_row, 0, act_q, 0, 1);
+                        if (task.bias_gate) { gate_val += task.bias_gate[i]; }
+                        if (task.bias_up)   { up_val   += task.bias_up[i]; }
                         task.output_host[i] =
                             fused_act_apply(gate_val, up_val, task.act_variant, task.alpha, task.limit);
                     }
@@ -1310,6 +1312,8 @@ void ggml_sycl_cpu_expert_fused_gate_up_silu(const cpu_expert_fused_task & task)
                             gate_row, 0, act_q, 0, 1);
         cpu_traits->vec_dot(task.K, &up_val, sizeof(float),
                             up_row, 0, act_q, 0, 1);
+        if (task.bias_gate) { gate_val += task.bias_gate[i]; }
+        if (task.bias_up)   { up_val   += task.bias_up[i]; }
         task.output_host[i] = fused_act_apply(gate_val, up_val, task.act_variant, task.alpha, task.limit);
     }
 }
@@ -1405,7 +1409,7 @@ void ggml_sycl_cpu_expert_fused_gate_up_silu_batched(
                     const uint8_t * act_q = task_act_q[m.task_idx];
 
 #if defined(__AVX2__)
-                    if (task.type == GGML_TYPE_Q4_0) {
+                    if (task.type == GGML_TYPE_Q4_0 && !task.bias_gate && !task.bias_up) {
                         float fused;
                         simd_fused_gate_up_silu_q4_0_q8_0(
                             task.K, &fused, gate_row, up_row, act_q);
@@ -1419,6 +1423,8 @@ void ggml_sycl_cpu_expert_fused_gate_up_silu_batched(
                                         gate_row, 0, act_q, 0, 1);
                     cpu_traits->vec_dot(task.K, &up_val, sizeof(float),
                                         up_row, 0, act_q, 0, 1);
+                    if (task.bias_gate) { gate_val += task.bias_gate[m.row_idx]; }
+                    if (task.bias_up)   { up_val   += task.bias_up[m.row_idx]; }
                     task.output_host[m.row_idx] =
                         fused_act_apply(gate_val, up_val, task.act_variant, task.alpha, task.limit);
                 }
@@ -1439,6 +1445,8 @@ void ggml_sycl_cpu_expert_fused_gate_up_silu_batched(
                             gate_row, 0, task_act_q[m.task_idx], 0, 1);
         cpu_traits->vec_dot(task.K, &up_val, sizeof(float),
                             up_row, 0, task_act_q[m.task_idx], 0, 1);
+        if (task.bias_gate) { gate_val += task.bias_gate[m.row_idx]; }
+        if (task.bias_up)   { up_val   += task.bias_up[m.row_idx]; }
         task.output_host[m.row_idx] = fused_act_apply(gate_val, up_val, task.act_variant, task.alpha, task.limit);
     }
 #endif
