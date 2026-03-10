@@ -1,3 +1,4 @@
+#include "chat.h"
 #include "common.h"
 #include "arg.h"
 #include "console.h"
@@ -6,7 +7,10 @@
 #include "server-context.h"
 #include "server-task.h"
 
+#include <array>
 #include <atomic>
+#include <algorithm>
+#include <filesystem>
 #include <fstream>
 #include <thread>
 #include <signal.h>
@@ -188,12 +192,129 @@ struct cli_context {
         inputs.use_jinja             = chat_params.use_jinja;
         inputs.parallel_tool_calls   = false;
         inputs.add_generation_prompt = true;
-        inputs.enable_thinking       = chat_params.enable_thinking;
+        inputs.reasoning_format      = COMMON_REASONING_FORMAT_DEEPSEEK;
+        inputs.enable_thinking       = common_chat_templates_support_enable_thinking(chat_params.tmpls.get());
 
         // Apply chat template to the list of messages
         return common_chat_templates_apply(chat_params.tmpls.get(), inputs);
     }
 };
+
+// TODO?: Make this reusable, enums, docs
+static const std::array<const std::string, 6> cmds = {
+    "/audio ",
+    "/clear",
+    "/exit",
+    "/image ",
+    "/read ",
+    "/regen",
+};
+
+static std::vector<std::pair<std::string, size_t>> auto_completion_callback(std::string_view line, size_t cursor_byte_pos) {
+    std::vector<std::pair<std::string, size_t>> matches;
+    std::string cmd;
+
+    if (line.length() > 1 && line[0] == '/' && !std::any_of(cmds.begin(), cmds.end(), [line](const std::string & prefix) {
+        return string_starts_with(line, prefix);
+    })) {
+        auto it = cmds.begin();
+
+        while ((it = std::find_if(it, cmds.end(), [line](const std::string & cmd_line) {
+            return string_starts_with(cmd_line, line);
+        })) != cmds.end()) {
+            matches.emplace_back(*it, (*it).length());
+            ++it;
+        }
+    } else {
+        auto it = std::find_if(cmds.begin(), cmds.end(), [line](const std::string & prefix) {
+            return prefix.back() == ' ' && string_starts_with(line, prefix);
+        });
+
+        if (it != cmds.end()) {
+            cmd = *it;
+        }
+    }
+
+    if (!cmd.empty() && line.length() >= cmd.length() && cursor_byte_pos >= cmd.length()) {
+        const std::string path_prefix  = std::string(line.substr(cmd.length(), cursor_byte_pos - cmd.length()));
+        const std::string path_postfix = std::string(line.substr(cursor_byte_pos));
+        auto cur_dir = std::filesystem::current_path();
+        std::string cur_dir_str = cur_dir.string();
+        std::string expanded_prefix = path_prefix;
+
+#if !defined(_WIN32)
+        if (string_starts_with(path_prefix, "~")) {
+            const char * home = std::getenv("HOME");
+            if (home && home[0]) {
+                expanded_prefix = std::string(home) + path_prefix.substr(1);
+            }
+        }
+        if (string_starts_with(expanded_prefix, "/")) {
+#else
+        if (std::isalpha(expanded_prefix[0]) && expanded_prefix.find(':') == 1) {
+#endif
+            cur_dir = std::filesystem::path(expanded_prefix).parent_path();
+            cur_dir_str = "";
+        } else if (!path_prefix.empty()) {
+            cur_dir /= std::filesystem::path(path_prefix).parent_path();
+        }
+
+        std::error_code ec;
+        for (const auto & entry : std::filesystem::directory_iterator(cur_dir, ec)) {
+            if (ec) {
+                break;
+            }
+            if (!entry.exists(ec)) {
+                ec.clear();
+                continue;
+            }
+
+            const std::string path_full = entry.path().string();
+            std::string path_entry = !cur_dir_str.empty() && string_starts_with(path_full, cur_dir_str) ? path_full.substr(cur_dir_str.length() + 1) : path_full;
+
+            if (entry.is_directory(ec)) {
+                path_entry.push_back(std::filesystem::path::preferred_separator);
+            }
+
+            if (expanded_prefix.empty() || string_starts_with(path_entry, expanded_prefix)) {
+                std::string updated_line = cmd + path_entry;
+                matches.emplace_back(updated_line + path_postfix, updated_line.length());
+            }
+
+            if (ec) {
+                ec.clear();
+            }
+        }
+
+        if (matches.empty()) {
+            std::string updated_line = cmd + path_prefix;
+            matches.emplace_back(updated_line + path_postfix, updated_line.length());
+        }
+
+        // Add the longest common prefix
+        if (!expanded_prefix.empty() && matches.size() > 1) {
+            const std::string_view match0(matches[0].first);
+            const std::string_view match1(matches[1].first);
+            auto it = std::mismatch(match0.begin(), match0.end(), match1.begin(), match1.end());
+            size_t len = it.first - match0.begin();
+
+            for (size_t i = 2; i < matches.size(); ++i) {
+                const std::string_view matchi(matches[i].first);
+                auto cmp = std::mismatch(match0.begin(), match0.end(), matchi.begin(), matchi.end());
+                len = std::min(len, static_cast<size_t>(cmp.first - match0.begin()));
+            }
+
+            std::string updated_line = std::string(match0.substr(0, len));
+            matches.emplace_back(updated_line + path_postfix, updated_line.length());
+        }
+
+        std::sort(matches.begin(), matches.end(), [](const auto & a, const auto & b) {
+            return a.first.compare(0, a.second, b.first, 0, b.second) < 0;
+        });
+    }
+
+    return matches;
+}
 
 int main(int argc, char ** argv) {
     common_params params;
@@ -223,6 +344,7 @@ int main(int argc, char ** argv) {
     atexit([]() { console::cleanup(); });
 
     console::set_display(DISPLAY_TYPE_RESET);
+    console::set_completion_callback(auto_completion_callback);
 
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
     struct sigaction sigint_action;
@@ -262,12 +384,15 @@ int main(int argc, char ** argv) {
         modalities += ", audio";
     }
 
-    if (!params.system_prompt.empty()) {
-        ctx_cli.messages.push_back({
-            {"role",    "system"},
-            {"content", params.system_prompt}
-        });
-    }
+    auto add_system_prompt = [&]() {
+        if (!params.system_prompt.empty()) {
+            ctx_cli.messages.push_back({
+                {"role",    "system"},
+                {"content", params.system_prompt}
+            });
+        }
+    };
+    add_system_prompt();
 
     console::log("\n");
     console::log("%s\n", LLAMA_ASCII_LOGO);
@@ -357,6 +482,8 @@ int main(int argc, char ** argv) {
             }
         } else if (string_starts_with(buffer, "/clear")) {
             ctx_cli.messages.clear();
+            add_system_prompt();
+
             ctx_cli.input_files.clear();
             console::log("Chat history cleared.\n");
             continue;

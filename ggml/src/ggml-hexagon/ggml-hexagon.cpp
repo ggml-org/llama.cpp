@@ -139,7 +139,7 @@ struct ggml_hexagon_session {
 };
 
 void ggml_hexagon_session::enqueue(struct htp_general_req &req, struct dspqueue_buffer *bufs, uint32_t n_bufs, bool sync) {
-    // Bump pending flag (cleared in the session::flush once we get the responce)
+    // Bump pending flag (cleared in the session::flush once we get the response)
     this->op_pending++;  // atomic inc
 
     int err = dspqueue_write(this->queue,
@@ -443,7 +443,7 @@ static void repack_row_q4x4x2(uint8_t * y, const block_q4_0 * x, int64_t k) {
 
     // Repack the scales
     // Note: Do not combine with the loop above. For tensor sizes not multiple of 256 (QK_Q4_0x4x2)
-    // the last block is truncated and overriden by the scales.
+    // the last block is truncated and overridden by the scales.
     for (int i = 0; i < nb; i++) {
         // Repack the scales
         ggml_half * d = (ggml_half *) (y_d + i * dblk_size);
@@ -503,7 +503,7 @@ static void unpack_row_q4x4x2(block_q4_0 * x, const uint8_t * y, int64_t k) {
 
     // Repack the scales
     // Note: Do not combine with the loop above. For tensor sizes not multiple of 256 (QK_Q4_0x4x2)
-    // the last block is truncated and overriden by the scales.
+    // the last block is truncated and overridden by the scales.
     for (int i = 0; i < nb; i++) {
         // Unpack the scales
         const ggml_half * d = (const ggml_half *) (y_d + i * dblk_size);
@@ -552,7 +552,7 @@ static void init_row_q4x4x2(block_q4_0 * x, int64_t k) {
 
     // Init the scales
     // Note: Do not combine with the loop above. For tensor sizes not multiple of 256 (QK_Q4_0x4x2)
-    // the last block is truncated and overriden by the scales.
+    // the last block is truncated and overridden by the scales.
     for (int i = 0; i < nb; i++) {
         // Unpack the scales
         x[i * 8 + 0].d = 0;
@@ -770,7 +770,7 @@ static void repack_row_q8x4x2(uint8_t * y, const block_q8_0 * x, int64_t k) {
 
     // Repack the scales
     // Note: Do not combine with the loop above. For tensor sizes not multiple of 256 (QK_Q4_0x4x2)
-    // the last block is truncated and overriden by the scales.
+    // the last block is truncated and overridden by the scales.
     for (int i = 0; i < nb; i++) {
         // Repack the scales
         ggml_half * d = (ggml_half *) (y_d + i * dblk_size);
@@ -829,7 +829,7 @@ static void unpack_row_q8x4x2(block_q8_0 * x, const uint8_t * y, int64_t k) {
 
     // Repack the scales
     // Note: Do not combine with the loop above. For tensor sizes not multiple of 256 (QK_Q4_0x4x2)
-    // the last block is truncated and overriden by the scales.
+    // the last block is truncated and overridden by the scales.
     for (int i = 0; i < nb; i++) {
         // Unpack the scales
         const ggml_half * d = (const ggml_half *) (y_d + i * dblk_size);
@@ -878,7 +878,7 @@ static void init_row_q8x4x2(block_q8_0 * x, int64_t k) {
 
     // Init the scales
     // Note: Do not combine with the loop above. For tensor sizes not multiple of 256 (QK_Q8_0x4x2)
-    // the last block is truncated and overriden by the scales.
+    // the last block is truncated and overridden by the scales.
     for (int i = 0; i < nb; i++) {
         // Unpack the scales
         x[i * 8 + 0].d = 0;
@@ -1120,7 +1120,7 @@ static void repack_row_mxfp4x4x2(uint8_t * y, const block_mxfp4 * x, int64_t k) 
 
     // Repack the scales
     // Note: Do not combine with the loop above. For tensor sizes not multiple of 256 (QK_MXFP4x4x2)
-    // the last block is truncated and overriden by the scales.
+    // the last block is truncated and overridden by the scales.
     for (int i = 0; i < nb; i++) {
         // Repack the scales
         uint8_t * e = (uint8_t *) (y_e + i * eblk_size);
@@ -1180,7 +1180,7 @@ static void unpack_row_mxfp4x4x2(block_mxfp4 * x, const uint8_t * y, int64_t k) 
 
     // Repack the scales
     // Note: Do not combine with the loop above. For tensor sizes not multiple of 256 (QK_MXFP4_0x4x2)
-    // the last block is truncated and overriden by the scales.
+    // the last block is truncated and overridden by the scales.
     for (int i = 0; i < nb; i++) {
         // Unpack the scales
         const uint8_t * e = (const uint8_t *) (y_e + i * eblk_size);
@@ -1229,7 +1229,7 @@ static void init_row_mxfp4x4x2(block_mxfp4 * x, int64_t k) {
 
     // Init the scales
     // Note: Do not combine with the loop above. For tensor sizes not multiple of 256 (QK_MXFP4x4x2)
-    // the last block is truncated and overriden by the scales.
+    // the last block is truncated and overridden by the scales.
     for (int i = 0; i < nb; i++) {
         // Unpack the scales
         x[i * 8 + 0].e = 0;
@@ -1865,15 +1865,26 @@ static bool ggml_hexagon_supported_binary(const struct ggml_hexagon_session * se
     const struct ggml_tensor * src1 = op->src[1];
     const struct ggml_tensor * dst  = op;
 
-    if (src0->type != GGML_TYPE_F32) {
+    if (src0->type == GGML_TYPE_F32) {
+        if (src1->type != GGML_TYPE_F32) {
+            return false;
+        }
+        if (dst->type != GGML_TYPE_F32) {
+            return false;
+        }
+    }
+    else if (src0->type == GGML_TYPE_F16) {
+        if (src1->type != GGML_TYPE_F16) {
+            return false;
+        }
+        if (dst->type != GGML_TYPE_F16) {
+            return false;
+        }
+    }
+    else {
         return false;
     }
-    if (src1->type != GGML_TYPE_F32) {
-        return false;
-    }
-    if (dst->type != GGML_TYPE_F32) {
-        return false;
-    }
+
     if (!ggml_are_same_shape(src0, dst)) {
         return false;
     }
@@ -2136,6 +2147,44 @@ static bool ggml_hexagon_supported_rope(const struct ggml_hexagon_session * sess
         if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1) || !ggml_is_contiguous(dst)) {
             return false;
         }
+    }
+
+    return true;
+}
+
+static bool ggml_hexagon_supported_ssm_conv(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    const struct ggml_tensor * src0 = op->src[0];
+    const struct ggml_tensor * src1 = op->src[1];
+    const struct ggml_tensor * dst  = op;
+
+    // Only support FP32 for now
+    if (src0->type != GGML_TYPE_F32 || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    // Check IO tensor shapes and dims
+    if (src0->ne[3] != 1 || src1->ne[2] != 1 || src1->ne[3] != 1 || dst->ne[3] != 1) {
+        return false; // src0 should be effectively 3D
+    }
+
+    const int d_conv = src1->ne[0];
+    const int d_inner = src0->ne[1];
+    const int n_t = dst->ne[1];
+    const int n_s = dst->ne[2];
+
+    if (src0->ne[0] != d_conv - 1 + n_t || src0->ne[1] != d_inner || src0->ne[2] != n_s) {
+        return false;
+    }
+    if (src1->ne[0] != d_conv || src1->ne[1] != d_inner) {
+        return false;
+    }
+    if (dst->ne[0] != d_inner || dst->ne[1] != n_t || dst->ne[2] != n_s) {
+        return false;
+    }
+
+    // TODO: add support for non-contiguous tensors
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1) || !ggml_is_contiguous(dst)) {
+        return false;
     }
 
     return true;
@@ -2457,6 +2506,17 @@ static inline size_t init_flash_attn_ext_req(htp_general_req * req, dspqueue_buf
     return n_bufs;
 }
 
+static inline size_t init_ssm_conv_req(htp_general_req * req, dspqueue_buffer * bufs, const ggml_tensor * t) {
+    req->op = HTP_OP_SSM_CONV;
+
+    size_t n_bufs = 0;
+    n_bufs += htp_req_buff_init(&req->src0, &bufs[n_bufs], t->src[0], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
+    n_bufs += htp_req_buff_init(&req->src1, &bufs[n_bufs], t->src[1], DSPQBUF_TYPE_CONSTANT);
+    n_bufs += htp_req_buff_init(&req->dst,  &bufs[n_bufs], t,         DSPQBUF_TYPE_DSP_WRITE_CPU_READ);
+
+    return n_bufs;
+}
+
 static const char * ggml_backend_hexagon_name(ggml_backend_t backend) {
     auto sess = static_cast<ggml_hexagon_session *>(backend->context);
     return sess->name.c_str();
@@ -2595,6 +2655,10 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
                 ggml_hexagon_dispatch_op<init_argsort_req>(sess, node, flags);
                 break;
 
+            case GGML_OP_SSM_CONV:
+                ggml_hexagon_dispatch_op<init_ssm_conv_req>(sess, node, flags);
+                break;
+
             default:
                 GGML_ABORT("\nggml-hex: graph-compute %s is not supported\n", ggml_op_desc(node));
         }
@@ -2670,7 +2734,7 @@ static std::vector<int> ggml_hexagon_graph_optimize_reorder(const std::vector<no
     // The main goal here is to stack the MUL_MAT ops with the same src1 input.
     // This allows use to reuse dynamically quantized src1 in VTCM.
 
-    // TODO: the current version might do incorrect reodering in cases where quantized src0
+    // TODO: the current version might do incorrect reordering in cases where quantized src0
     //       input is an output of another Op.
 
     for (int i0 = 0; i0 < n; i0++) {
@@ -3011,6 +3075,10 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
 
         case GGML_OP_ARGSORT:
             supp = ggml_hexagon_supported_argsort(sess, op);
+            break;
+
+        case GGML_OP_SSM_CONV:
+            supp = ggml_hexagon_supported_ssm_conv(sess, op);
             break;
 
         default:

@@ -10,7 +10,7 @@ More information is available in <https://github.com/ggml-org/llama.cpp/pull/486
     -m model.gguf -f some-text.txt [-o imatrix.gguf] [--output-format {gguf,dat}] [--no-ppl] \
     [--process-output] [--chunk 123] [--save-frequency 0] [--output-frequency 10] \
     [--in-file imatrix-prev-0.gguf --in-file imatrix-prev-1.gguf ...] [--parse-special] \
-    [--output-format gguf|dat] [--show-statistics] [...]
+    [--show-statistics] [...]
 ```
 
 Here `-m | --model` with a model name and `-f | --file` with a file containing calibration data (such as e.g. `wiki.train.raw`) are mandatory.
@@ -32,7 +32,7 @@ The parameters in square brackets are optional and have the following meaning:
 
 For faster computation, make sure to use GPU offloading via the `-ngl | --n-gpu-layers` argument.
 
-Versions **b5942** and newer of `llama-imatrix` store data in GGUF format by default. For the legacy format, use `--output-format dat` when saving the output file. More information is available in <https://github.com/ggml-org/llama.cpp/pull/9400>.
+Recent versions of `llama-imatrix` store data in GGUF format by default. For the legacy format, use an extension other than `.gguf` when saving the output file. More information is available in <https://github.com/ggml-org/llama.cpp/pull/9400>.
 
 ## Examples
 
@@ -41,7 +41,7 @@ Versions **b5942** and newer of `llama-imatrix` store data in GGUF format by def
 ./llama-imatrix -m ggml-model-f16.gguf -f calibration-data.txt -ngl 99
 
 # use the imatrix to perform a Q4_K_M quantization
-./llama-quantize --imatrix imatrix.gguf ggml-model-f16.gguf ./ggml-model-q4_k_m.gguf q4_k_m 99
+./llama-quantize --imatrix imatrix.gguf ggml-model-f16.gguf ./ggml-model-q4_k_m.gguf q4_k_m
 ```
 
 ```bash
