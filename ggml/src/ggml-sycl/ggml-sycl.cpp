@@ -3807,10 +3807,26 @@ void ggml_sycl_data_ptr_cache_new_graph() {
 struct moe_ids_cache_entry {
     std::vector<int32_t> host_ids;
     size_t               n_elements = 0;  // number of int32 elements
+    sycl::event          d2h_event;       // async D2H completion event (lazy sync)
+    bool                 pending    = false;  // true = D2H submitted but not yet waited
+
+    // Block until the async D2H completes, then clear pending flag.
+    void wait() {
+        if (pending) {
+            d2h_event.wait();
+            pending = false;
+        }
+    }
 };
 
 // Keyed by the ggml_tensor pointer (avoids unnecessary device round-trips).
 static thread_local std::unordered_map<const ggml_tensor *, moe_ids_cache_entry> g_moe_ids_d2h_cache;
+
+// Dedicated OOQ for async expert IDs D2H transfers.  Submitting on a
+// separate queue lets the compute thread continue dispatching GPU kernels
+// without blocking on the IDs memcpy.  Must be on the SAME device as the
+// compute queue (cross-device OOQ depends_on is broken on Level Zero).
+static thread_local std::unique_ptr<sycl::queue> g_moe_ids_dma_queue;
 
 // Counter incremented at each graph boundary so that thread-local caches
 // (activation pointer type, etc.) can detect stale entries without a
@@ -3818,6 +3834,11 @@ static thread_local std::unordered_map<const ggml_tensor *, moe_ids_cache_entry>
 static std::atomic<uint64_t> g_moe_graph_epoch{0};
 
 static void ggml_sycl_moe_ids_cache_new_graph() {
+    // Wait for any in-flight async D2H before destroying the host vectors
+    // that the OOQ memcpy is writing into.
+    for (auto & [key, entry] : g_moe_ids_d2h_cache) {
+        entry.wait();
+    }
     g_moe_ids_d2h_cache.clear();
     g_moe_graph_epoch.fetch_add(1, std::memory_order_relaxed);
 }
@@ -19960,10 +19981,15 @@ static void ggml_sycl_update_moe_hotset(ggml_sycl::unified_cache *   cache,
     }
 }
 
+// Copy expert IDs from device to host.  When async_event is non-null, the
+// memcpy is submitted on the dedicated IDs DMA queue and the completion
+// event is written to *async_event — the caller must wait before reading
+// ids_host.  When async_event is null, the copy is synchronous.
 static bool ggml_sycl_copy_ids_to_host(ggml_backend_sycl_context & ctx,
 
                                        const ggml_tensor *    ids,
-                                       std::vector<int32_t> & ids_host) {
+                                       std::vector<int32_t> & ids_host,
+                                       sycl::event *          async_event = nullptr) {
     if (!ids) {
         return false;
     }
@@ -19986,21 +20012,50 @@ static bool ggml_sycl_copy_ids_to_host(ggml_backend_sycl_context & ctx,
         return true;
     }
 
-    sycl::queue * stream = ctx.stream();
-    if (!stream) {
+    // Select queue: dedicated OOQ for async mode, compute stream for sync.
+    sycl::queue * q = nullptr;
+    if (async_event) {
+        if (!g_moe_ids_dma_queue) {
+            sycl::queue * compute_q = ctx.stream();
+            if (compute_q) {
+                g_moe_ids_dma_queue = std::make_unique<sycl::queue>(
+                    compute_q->get_context(), compute_q->get_device());
+            }
+        }
+        q = g_moe_ids_dma_queue.get();
+    }
+    if (!q) {
+        q = ctx.stream();
+    }
+    if (!q) {
         return false;
     }
+
     if (ids->nb[1] == row_bytes) {
-        stream->memcpy(ids_host.data(), ids_base, ids_host.size() * sizeof(int32_t)).wait();
+        sycl::event e = q->memcpy(ids_host.data(), ids_base, ids_host.size() * sizeof(int32_t));
+        if (async_event) {
+            *async_event = e;
+        } else {
+            e.wait();
+        }
     } else {
         std::vector<sycl::event> copy_events;
         copy_events.reserve(static_cast<size_t>(n_tokens));
 
         for (int64_t row = 0; row < n_tokens; ++row) {
             copy_events.push_back(
-                stream->memcpy(ids_host.data() + row * n_ids, ids_base + row * ids->nb[1], row_bytes));
+                q->memcpy(ids_host.data() + row * n_ids, ids_base + row * ids->nb[1], row_bytes));
         }
-        sycl::event::wait(copy_events);
+        if (async_event) {
+            // Submit a barrier that depends on all copy events — single
+            // event for the caller to wait on.
+            *async_event = q->submit([&](sycl::handler & cgh) {
+                cgh.depends_on(copy_events);
+                cgh.single_task([]() {});
+            });
+        } else {
+            sycl::event::wait(copy_events);
+        }
     }
 
     return true;
@@ -26421,11 +26476,14 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     const int32_t * ids_data_f = nullptr;
                     auto            cache_it_f = g_moe_ids_d2h_cache.find(ids);
                     if (cache_it_f != g_moe_ids_d2h_cache.end() && cache_it_f->second.n_elements == ids_n_elem) {
+                        cache_it_f->second.wait();
                         ids_data_f = cache_it_f->second.host_ids.data();
                     } else {
                         auto & entry = g_moe_ids_d2h_cache[ids];
-                        ggml_sycl_copy_ids_to_host(ctx, ids, entry.host_ids);
+                        ggml_sycl_copy_ids_to_host(ctx, ids, entry.host_ids, &entry.d2h_event);
                         entry.n_elements = entry.host_ids.size();
+                        entry.pending    = true;
+                        entry.wait();
                         ids_data_f       = entry.host_ids.data();
                     }
 
@@ -26643,11 +26701,14 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     const int32_t * ids_data_f = nullptr;
                     auto            cache_it_f = g_moe_ids_d2h_cache.find(ids);
                     if (cache_it_f != g_moe_ids_d2h_cache.end() && cache_it_f->second.n_elements == ids_n_elem) {
+                        cache_it_f->second.wait();
                         ids_data_f = cache_it_f->second.host_ids.data();
                     } else {
                         auto & entry = g_moe_ids_d2h_cache[ids];
-                        ggml_sycl_copy_ids_to_host(ctx, ids, entry.host_ids);
+                        ggml_sycl_copy_ids_to_host(ctx, ids, entry.host_ids, &entry.d2h_event);
                         entry.n_elements = entry.host_ids.size();
+                        entry.pending    = true;
+                        entry.wait();
                         ids_data_f       = entry.host_ids.data();
                     }
 
@@ -27068,11 +27129,14 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             auto cache_it = g_moe_ids_d2h_cache.find(ids);
             if (cache_it != g_moe_ids_d2h_cache.end() &&
                 cache_it->second.n_elements == ids_n_elem) {
+                cache_it->second.wait();
                 ids_data = cache_it->second.host_ids.data();
             } else {
                 auto & entry = g_moe_ids_d2h_cache[ids];
-                ggml_sycl_copy_ids_to_host(ctx, ids, entry.host_ids);
+                ggml_sycl_copy_ids_to_host(ctx, ids, entry.host_ids, &entry.d2h_event);
                 entry.n_elements = entry.host_ids.size();
+                entry.pending    = true;
+                entry.wait();
                 ids_data = entry.host_ids.data();
             }
 
