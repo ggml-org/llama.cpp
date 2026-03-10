@@ -220,6 +220,21 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
             }
             op_case = 2;
         }
+        {
+            auto * src = node->src[0];
+            if ((ggml_nelements(node) != ggml_nelements(src)) && m_naive) {
+                // Compare each dimension of node and src, if only one dimension differs then op_case=3
+                int diff_count = 0;
+                for (int i = 0; i < GGML_MAX_DIMS; i++) {
+                    if (node->ne[i] != src->ne[i]) {
+                        diff_count++;
+                    }
+                }
+                if (diff_count == 1) {
+                    op_case = 3;
+                }
+            }
+        }
         break;
     }
     default:
