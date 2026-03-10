@@ -1113,11 +1113,13 @@ static void proc_hmx_matmul_req(struct htp_context *     ctx,
         return;
     }
 
+    const bool is_batched = (req->src0.ne[2] * req->src0.ne[3] > 1 ||
+                             req->src1.ne[2] * req->src1.ne[3] > 1);
+
     // Quantised HMX kernels only handle flat 2D matmul (host already rejects
     // batched quantised, but guard here too).  F16 batched matmul is handled
-    // by looping over batch slices in Phase 1 below.
-    if ((req->src0.ne[2] * req->src0.ne[3] > 1 ||
-         req->src1.ne[2] * req->src1.ne[3] > 1) &&
+    // by the dedicated wrapper in hmx-matmul-ops.c.
+    if (is_batched &&
         req->src0.type != HTP_TYPE_F16) {
         proc_matmul_req(ctx, req, bufs, n_bufs);
         return;
@@ -1196,8 +1198,6 @@ static void proc_hmx_matmul_req(struct htp_context *     ctx,
     uint32_t rsp_status = HTP_STATUS_INTERNAL_ERR;
 
     // --- Phase 1: HMX on the first m_hmx (32-aligned) rows ---
-    // For batched F16, loop over (b3, b2) calling HMX kernel per 2D slice
-    // with GQA broadcasting (src0 batch index = b2/r2, b3/r3).
     if (vtcm_acquire(ctx) == AEE_SUCCESS) {
         int ret = -1;
 
@@ -1205,8 +1205,6 @@ static void proc_hmx_matmul_req(struct htp_context *     ctx,
         const int ne03 = (int) req->src0.ne[3];
         const int ne12 = (int) req->src1.ne[2];
         const int ne13 = (int) req->src1.ne[3];
-        const int r2   = ne02 > 0 ? ne12 / ne02 : 1;
-        const int r3   = ne03 > 0 ? ne13 / ne03 : 1;
         // Row strides in elements. For compact tensors these equal k; for
         // permuted attention views they can be larger, so pass the real stride.
         const int act_stride    = (int)(req->src1.nb[1] / sizeof(float));
@@ -1214,23 +1212,35 @@ static void proc_hmx_matmul_req(struct htp_context *     ctx,
 
         switch (req->src0.type) {
             case HTP_TYPE_F16:
-                ret = 0;
-                for (int b3 = 0; b3 < ne13 && ret == 0; b3++) {
-                    for (int b2 = 0; b2 < ne12 && ret == 0; b2++) {
-                        const __fp16 *wgt_b = (const __fp16 *)((uint8_t *) bufs[0].ptr
-                            + (size_t)(b2 / r2) * req->src0.nb[2]
-                            + (size_t)(b3 / r3) * req->src0.nb[3]);
-                        const float *act_b = (const float *)((uint8_t *) bufs[1].ptr
-                            + (size_t) b2 * req->src1.nb[2]
-                            + (size_t) b3 * req->src1.nb[3]);
-                        float *dst_b = (float *)((uint8_t *) bufs[2].ptr
-                            + (size_t) b2 * req->dst.nb[2]
-                            + (size_t) b3 * req->dst.nb[3]);
-                        ret = hmx_mat_mul_permuted_w16a32(ctx, dst_b, act_b,
-                                                          wgt_b, m_hmx, k, n,
-                                                          act_stride,
-                                                          weight_stride);
-                    }
+                if (is_batched) {
+                    hmx_matmul_w16a32_batched_params_t batch_params = {
+                        .dst             = dst,
+                        .activation      = act,
+                        .permuted_weight = (const __fp16 *) wgt,
+                        .m               = m_hmx,
+                        .k               = k,
+                        .n               = n,
+                        .act_stride      = act_stride,
+                        .weight_stride   = weight_stride,
+                        .dst_stride      = (int)(req->dst.nb[1] / sizeof(float)),
+                        .ne02            = ne02,
+                        .ne03            = ne03,
+                        .ne12            = ne12,
+                        .ne13            = ne13,
+                        .src0_nb2        = req->src0.nb[2],
+                        .src0_nb3        = req->src0.nb[3],
+                        .src1_nb2        = req->src1.nb[2],
+                        .src1_nb3        = req->src1.nb[3],
+                        .dst_nb2         = req->dst.nb[2],
+                        .dst_nb3         = req->dst.nb[3],
+                    };
+                    ret = hmx_mat_mul_permuted_w16a32_batched(ctx, &batch_params);
+                } else {
+                    ret = hmx_mat_mul_permuted_w16a32(ctx, dst, act,
+                                                      (const __fp16 *) wgt,
+                                                      m_hmx, k, n,
+                                                      act_stride,
+                                                      weight_stride);
                 }
                 break;
             default:
@@ -1258,7 +1268,7 @@ static void proc_hmx_matmul_req(struct htp_context *     ctx,
         // Compare HMX output with HVX output for the first N matmuls.
         // Save 64 HMX samples spread across the output, then run HVX and compare.
         hmx_matmul_invocation_count++;
-        if (hmx_matmul_invocation_count <= HMX_DEBUG_COMPARE_COUNT) {
+        if (!is_batched && hmx_matmul_invocation_count <= HMX_DEBUG_COMPARE_COUNT) {
             const int total_elems = m_hmx * n;
             const int n_samples = (total_elems < 64) ? total_elems : 64;
             const int stride = total_elems / n_samples;
