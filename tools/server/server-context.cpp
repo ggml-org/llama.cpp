@@ -658,7 +658,7 @@ private:
         size_t create_checkpoint() override {
             const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx_impl.ctx), slot.id);
             const auto pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_impl.ctx), slot.id);
-            const auto n_tokens_cur = batch.n_tokens;
+            const auto n_tokens_cur = 0; // TODO was ctx_impl.batch.n_tokens; The draft model doesn't change the prompt?
             const auto & cur_with_size = ctx_impl.get_checkpoint(slot, n_tokens_cur, pos_min, pos_max);
             auto & cur = cur_with_size.checkpoint;
 

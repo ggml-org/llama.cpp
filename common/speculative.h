@@ -99,7 +99,7 @@ struct common_speculative_session {
 
     ~common_speculative_session();
 
-    // dont copy
+    // don't copy
     common_speculative_session(const common_speculative_session &) = delete;
     common_speculative_session & operator=(const common_speculative_session &) = delete;
 
