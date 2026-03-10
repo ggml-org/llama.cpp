@@ -21,14 +21,14 @@ __global__ void gated_delta_net_cuda(const float * q,
                                      int64_t       sb1,
                                      int64_t       sb2,
                                      int64_t       sb3,
-                                     int64_t       rq1,
+                                     int64_t       neqk1,
                                      int64_t       rq3,
                                      float         scale) {
     const int64_t h_idx    = blockIdx.x;
     const int64_t sequence = blockIdx.y;
     const int     col      = threadIdx.x;  // each thread owns one column
 
-    const int64_t iq1 = h_idx / rq1;
+    const int64_t iq1 = h_idx % neqk1;
     const int64_t iq3 = sequence / rq3;
 
     const int64_t attn_score_elems = S_v * H * n_tokens * n_seqs;
@@ -119,11 +119,11 @@ static void launch_gated_delta_net(
         const float * q_d, const float * k_d, const float * v_d,
         const float * g_d, const float * b_d, const float * s_d,
         float * dst_d,
-        int64_t S_v, int64_t H, int64_t n_tokens, int64_t n_seqs,
-        int64_t sq1, int64_t sq2, int64_t sq3,
-        int64_t sv1, int64_t sv2, int64_t sv3,
-        int64_t sb1, int64_t sb2, int64_t sb3,
-        int64_t rq1, int64_t rq3,
+        int64_t S_v,   int64_t H, int64_t n_tokens, int64_t n_seqs,
+        int64_t sq1,   int64_t sq2, int64_t sq3,
+        int64_t sv1,   int64_t sv2, int64_t sv3,
+        int64_t sb1,   int64_t sb2, int64_t sb3,
+        int64_t neqk1, int64_t rq3,
         float scale, cudaStream_t stream) {
 
     dim3 grid_dims(H, n_seqs, 1);
@@ -134,19 +134,19 @@ static void launch_gated_delta_net(
             gated_delta_net_cuda<32, KDA><<<grid_dims, block_dims, 0, stream>>>(
                 q_d, k_d, v_d, g_d, b_d, s_d, dst_d, H,
                 n_tokens, n_seqs, sq1, sq2, sq3, sv1, sv2, sv3,
-                sb1, sb2, sb3, rq1, rq3, scale);
+                sb1, sb2, sb3, neqk1, rq3, scale);
             break;
         case 64:
             gated_delta_net_cuda<64, KDA><<<grid_dims, block_dims, 0, stream>>>(
                 q_d, k_d, v_d, g_d, b_d, s_d, dst_d, H,
                 n_tokens, n_seqs, sq1, sq2, sq3, sv1, sv2, sv3,
-                sb1, sb2, sb3, rq1, rq3, scale);
+                sb1, sb2, sb3, neqk1, rq3, scale);
             break;
         case 128:
             gated_delta_net_cuda<128, KDA><<<grid_dims, block_dims, 0, stream>>>(
                 q_d, k_d, v_d, g_d, b_d, s_d, dst_d, H,
                 n_tokens, n_seqs, sq1, sq2, sq3, sv1, sv2, sv3,
-                sb1, sb2, sb3, rq1, rq3, scale);
+                sb1, sb2, sb3, neqk1, rq3, scale);
             break;
         default:
             GGML_ABORT("fatal error");
@@ -163,10 +163,12 @@ void ggml_cuda_op_gated_delta_net(ggml_backend_cuda_context & ctx, ggml_tensor *
     ggml_tensor * src_state = dst->src[5];
 
     GGML_TENSOR_LOCALS(int64_t, neq, src_q, ne);
-    GGML_TENSOR_LOCALS(size_t, nbq, src_q, nb);
+    GGML_TENSOR_LOCALS(size_t , nbq, src_q, nb);
+    GGML_TENSOR_LOCALS(int64_t, nek, src_k, ne);
+    GGML_TENSOR_LOCALS(size_t , nbk, src_k, nb);
     GGML_TENSOR_LOCALS(int64_t, nev, src_v, ne);
-    GGML_TENSOR_LOCALS(size_t, nbv, src_v, nb);
-    GGML_TENSOR_LOCALS(size_t, nbb, src_beta, nb);
+    GGML_TENSOR_LOCALS(size_t,  nbv, src_v, nb);
+    GGML_TENSOR_LOCALS(size_t,  nbb, src_beta, nb);
 
     const int64_t S_v      = nev0;
     const int64_t H        = nev1;
@@ -175,7 +177,9 @@ void ggml_cuda_op_gated_delta_net(ggml_backend_cuda_context & ctx, ggml_tensor *
 
     const bool kda = (src_g->ne[0] == S_v);
 
-    const int64_t rq1 = nev1 / neq1;
+    GGML_ASSERT(neq1 == nek1);
+    const int64_t neqk1 = neq1;
+
     const int64_t rq3 = nev3 / neq3;
 
     const float * q_d = (const float *) src_q->data;
@@ -214,10 +218,10 @@ void ggml_cuda_op_gated_delta_net(ggml_backend_cuda_context & ctx, ggml_tensor *
     if (kda) {
         launch_gated_delta_net<true>(q_d, k_d, v_d, g_d, b_d, s_d, dst_d,
             S_v, H, n_tokens, n_seqs, sq1, sq2, sq3, sv1, sv2, sv3,
-            sb1, sb2, sb3, rq1, rq3, scale, stream);
+            sb1, sb2, sb3, neqk1, rq3, scale, stream);
     } else {
         launch_gated_delta_net<false>(q_d, k_d, v_d, g_d, b_d, s_d, dst_d,
             S_v, H, n_tokens, n_seqs, sq1, sq2, sq3, sv1, sv2, sv3,
-            sb1, sb2, sb3, rq1, rq3, scale, stream);
+            sb1, sb2, sb3, neqk1, rq3, scale, stream);
     }
 }

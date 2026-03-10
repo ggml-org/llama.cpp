@@ -10436,8 +10436,8 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
 
     const float * state_in_base = (const float *)src_state->data;
 
-    const int64_t rq1 = nev1 / neq1;
-    const int64_t rk1 = nev1 / nek1;
+  //const int64_t rq1 = nev1 / neq1;
+  //const int64_t rk1 = nev1 / nek1;
     const int64_t rq3 = nev3 / neq3;
     const int64_t rk3 = nev3 / nek3;
 
@@ -10447,8 +10447,8 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
         const int64_t iv1 = ir % H; // head_index
         const int64_t iv3 = ir / H; // sequence
 
-        const int64_t iq1 = iv1 / rq1;
-        const int64_t ik1 = iv1 / rk1;
+        const int64_t iq1 = iv1 % neq1;
+        const int64_t ik1 = iv1 % nek1;
 
         const int64_t iq3 = iv3 / rq3;
         const int64_t ik3 = iv3 / rk3;

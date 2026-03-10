@@ -4999,8 +4999,8 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
 #ifdef GGML_USE_MUSA
             return false;
 #else
-            // TODO: add chunked support
-            return op->src[0]->ne[2] == 1;
+            // TODO: add non-KDA chunked support. for now enable chunked support for KDA only
+            return op->src[0]->ne[2] == 1 || op->src[3]->ne[0] == op->src[2]->ne[0];
 #endif // GGML_USE_MUSA
         case GGML_OP_FLASH_ATTN_EXT:
             return ggml_cuda_flash_attn_ext_supported(dev_ctx->device, op);
