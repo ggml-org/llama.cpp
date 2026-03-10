@@ -1,3 +1,4 @@
+#include "chat.h"
 #include "common.h"
 #include "arg.h"
 #include "console.h"
@@ -191,7 +192,8 @@ struct cli_context {
         inputs.use_jinja             = chat_params.use_jinja;
         inputs.parallel_tool_calls   = false;
         inputs.add_generation_prompt = true;
-        inputs.enable_thinking       = chat_params.enable_thinking;
+        inputs.reasoning_format      = COMMON_REASONING_FORMAT_DEEPSEEK;
+        inputs.enable_thinking       = common_chat_templates_support_enable_thinking(chat_params.tmpls.get());
 
         // Apply chat template to the list of messages
         return common_chat_templates_apply(chat_params.tmpls.get(), inputs);
@@ -382,12 +384,15 @@ int main(int argc, char ** argv) {
         modalities += ", audio";
     }
 
-    if (!params.system_prompt.empty()) {
-        ctx_cli.messages.push_back({
-            {"role",    "system"},
-            {"content", params.system_prompt}
-        });
-    }
+    auto add_system_prompt = [&]() {
+        if (!params.system_prompt.empty()) {
+            ctx_cli.messages.push_back({
+                {"role",    "system"},
+                {"content", params.system_prompt}
+            });
+        }
+    };
+    add_system_prompt();
 
     console::log("\n");
     console::log("%s\n", LLAMA_ASCII_LOGO);
@@ -477,6 +482,8 @@ int main(int argc, char ** argv) {
             }
         } else if (string_starts_with(buffer, "/clear")) {
             ctx_cli.messages.clear();
+            add_system_prompt();
+
             ctx_cli.input_files.clear();
             console::log("Chat history cleared.\n");
             continue;

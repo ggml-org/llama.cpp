@@ -1,6 +1,7 @@
 <script lang="ts">
 	import '../app.css';
 	import { base } from '$app/paths';
+	import { browser } from '$app/environment';
 	import { page } from '$app/state';
 	import { untrack } from 'svelte';
 	import { ChatSidebar, DialogConversationTitleUpdate } from '$lib/components/app';
@@ -14,6 +15,7 @@
 	import { Toaster } from 'svelte-sonner';
 	import { goto } from '$app/navigation';
 	import { modelsStore } from '$lib/stores/models.svelte';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
 	import { KeyboardKey } from '$lib/enums';
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
@@ -142,6 +144,26 @@
 		}
 	});
 
+	// Background MCP server health checks on app load
+	// Fetch enabled servers from settings and run health checks in background
+	$effect(() => {
+		if (!browser) return;
+
+		const mcpServers = mcpStore.getServers();
+
+		// Only run health checks if we have enabled servers with URLs
+		const enabledServers = mcpServers.filter((s) => s.enabled && s.url.trim());
+
+		if (enabledServers.length > 0) {
+			untrack(() => {
+				// Run health checks in background (don't await)
+				mcpStore.runHealthChecksForServers(enabledServers, false).catch((error) => {
+					console.warn('[layout] MCP health checks failed:', error);
+				});
+			});
+		}
+	});
+
 	// Monitor API key changes and redirect to error page if removed or changed when required
 	$effect(() => {
 		const apiKey = config().apiKey;
@@ -207,7 +229,7 @@
 
 			{#if !(alwaysShowSidebarOnDesktop && isDesktop)}
 				<Sidebar.Trigger
-					class="transition-left absolute left-0 z-[900] h-8 w-8 duration-200 ease-linear {sidebarOpen
+					class="transition-left absolute left-0 z-[900] duration-200 ease-linear {sidebarOpen
 						? 'md:left-[var(--sidebar-width)]'
 						: ''}"
 					style="translate: 1rem 1rem;"

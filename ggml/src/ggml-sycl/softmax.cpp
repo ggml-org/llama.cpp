@@ -102,7 +102,7 @@ static void soft_max_f32(const float *         x,
         max_val   = sycl::max(max_val, val);
     }
     // find the max value in the block
-    max_val = warp_reduce_max(max_val);
+    max_val = warp_reduce_max<WARP_SIZE>(max_val);
 
     if (block_size > WARP_SIZE) {
         if (warp_id == 0) {
@@ -116,7 +116,7 @@ static void soft_max_f32(const float *         x,
         item_ct1.barrier();
 
         max_val = buf_iw[lane_id];
-        max_val = warp_reduce_max(max_val);
+        max_val = warp_reduce_max<WARP_SIZE>(max_val);
     }
     float tmp = 0.0f; // partial sum
 
@@ -133,7 +133,7 @@ static void soft_max_f32(const float *         x,
         vals[col] = val;
     }
     // find the sum of exps in the block
-    tmp = warp_reduce_sum(tmp);
+    tmp = warp_reduce_sum<WARP_SIZE>(tmp);
     if (block_size > WARP_SIZE) {
         item_ct1.barrier();
         if (warp_id == 0) {
@@ -153,7 +153,7 @@ static void soft_max_f32(const float *         x,
         for (size_t i = 1; i < nreduce; i += 1) {
             tmp += buf_iw[lane_id + i * WARP_SIZE];
         }
-        tmp = warp_reduce_sum(tmp);
+        tmp = warp_reduce_sum<WARP_SIZE>(tmp);
     }
     if (sinks) {
         tmp += sycl::native::exp(sinks[i02] - max_val);
@@ -191,7 +191,7 @@ static void soft_max_back_f32(const float *grad, const float *dstf, float *dst,
         dgf_dot += dstf[col]*grad[col];
     }
 
-    dgf_dot = warp_reduce_sum(dgf_dot);
+    dgf_dot = warp_reduce_sum<WARP_SIZE>(dgf_dot);
 
     for (int col = tid; col < ncols; col += WARP_SIZE) {
         dst[col] = scale * (grad[col] - dgf_dot) * dstf[col];

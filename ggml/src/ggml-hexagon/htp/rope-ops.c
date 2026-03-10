@@ -400,7 +400,9 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
             return HTP_STATUS_NO_SUPPORT;
     }
 
-    const uint32_t n_threads = octx->n_threads;
+    const uint32_t ne0 = dst->ne[0];
+    const uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
+    const uint32_t n_threads = MIN(octx->n_threads, src0_nrows);
 
     const size_t src0_row_size = src0->nb[1];
     const size_t dst_row_size  = dst->nb[1];
@@ -465,17 +467,14 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
     rctx.dst_row_size_aligned  = dst_row_size_aligned;
     rctx.theta_cache_offset    = theta_cache_size_aligned;
 
-    uint32_t ne0 = dst->ne[0];
-    uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
     rctx.src0_nrows = src0_nrows;
+    rctx.src0_nrows_per_thread = (src0_nrows + n_threads - 1) / n_threads;
 
     FARF(HIGH, "rope-f32 n-rows %u n-dims %d ne0 %u ext-factor %.6f theta-scale %.6f attn-factor %.6f\n", rctx.src0_nrows, rctx.n_dims, ne0,
          rctx.ext_factor, rctx.theta_scale, rctx.attn_factor);
 
     if (!(octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)) {
-        uint32_t n_jobs = MIN(n_threads, src0_nrows);
-        rctx.src0_nrows_per_thread = (src0_nrows + n_jobs - 1) / n_jobs;
-        worker_pool_run_func(octx->ctx->worker_pool, rope_job_f32, &rctx, n_jobs);
+        worker_pool_run_func(octx->ctx->worker_pool, rope_job_f32, &rctx, n_threads);
     }
 
     return err;
