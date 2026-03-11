@@ -1,4 +1,5 @@
 #include "chat-auto-parser.h"
+#include "chat-auto-parser-helpers.h"
 #include "chat-peg-parser.h"
 #include "chat.h"
 #include "common.h"
@@ -54,21 +55,13 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
         const auto & r_start = autoparser.reasoning.start;
         const auto & r_end   = autoparser.reasoning.end;
 
-        auto rtrim = [](std::string s) {
-            while (!s.empty() && (s.back() == ' ' || s.back() == '\n' ||
-                                  s.back() == '\r' || s.back() == '\t')) {
-                s.pop_back();
-            }
-            return s;
-        };
-
-        auto prompt_trimmed  = rtrim(data.prompt);
-        auto r_end_trimmed   = rtrim(r_end);
-        auto r_start_trimmed = rtrim(r_start);
+        auto prompt_trimmed  = trim_trailing_whitespace(data.prompt);
+        auto r_end_trimmed   = trim_trailing_whitespace(r_end);
+        auto r_start_trimmed = trim_trailing_whitespace(r_start);
 
         if (!r_start_trimmed.empty()) {
             if (string_ends_with(prompt_trimmed, r_end_trimmed)) {
-                auto before_end = rtrim(prompt_trimmed.substr(0, prompt_trimmed.size() - r_end_trimmed.size()));
+                auto before_end = trim_trailing_whitespace(prompt_trimmed.substr(0, prompt_trimmed.size() - r_end_trimmed.size()));
                 if (string_ends_with(before_end, r_start_trimmed)) {
                     // Start+end at prompt end — use canonical markers to preserve whitespace.
                     data.reasoning_prefill = r_start + r_end;
@@ -185,7 +178,7 @@ common_peg_parser analyze_reasoning::build_parser(parser_build_context & ctx) co
                 // Standard tag-based: optional(<think>reasoning</think>)
                 return p.optional(start + p.reasoning(p.until(end)) + end);
             }
-            // Delimiter-style (empty start): optional(reasoning[DELIMITER])
+            // Delimiter-style (empty start)
             return p.optional(p.reasoning(p.until(end)) + end);
         }
     }
