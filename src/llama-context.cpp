@@ -464,7 +464,7 @@ void llama_context::sched_reserve() {
     }
 
     if (cparams.auto_fgdn) {
-        LLAMA_LOG_INFO("%s: resolving fused Gated Delta Net\n", __func__);
+        LLAMA_LOG_INFO("%s: resolving fused Gated Delta Net support:\n", __func__);
 
         if (cparams.fused_gdn_ar) {
             auto * gf = graph_reserve(1, n_seqs, n_outputs, mctx.get(), true);
