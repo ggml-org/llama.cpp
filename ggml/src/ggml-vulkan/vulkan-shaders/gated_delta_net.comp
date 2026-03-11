@@ -19,17 +19,17 @@ layout(push_constant) uniform Parameters {
     float scale;
 };
 
-layout(binding = 0) readonly  buffer QBuf     { A_TYPE data_q[];     };
-layout(binding = 1) readonly  buffer KBuf     { A_TYPE data_k[];     };
-layout(binding = 2) readonly  buffer VBuf     { A_TYPE data_v[];     };
-layout(binding = 3) readonly  buffer GBuf     { A_TYPE data_g[];     };
-layout(binding = 4) readonly  buffer BetaBuf  { A_TYPE data_beta[];  };
-layout(binding = 5) readonly  buffer StateBuf { A_TYPE data_state[]; };
-layout(binding = 6) buffer         DstBuf     { D_TYPE data_dst[];   };
+layout(binding = 0) readonly  buffer QBuf     { FLOAT_TYPE data_q[];     };
+layout(binding = 1) readonly  buffer KBuf     { FLOAT_TYPE data_k[];     };
+layout(binding = 2) readonly  buffer VBuf     { FLOAT_TYPE data_v[];     };
+layout(binding = 3) readonly  buffer GBuf     { FLOAT_TYPE data_g[];     };
+layout(binding = 4) readonly  buffer BetaBuf  { FLOAT_TYPE data_beta[];  };
+layout(binding = 5) readonly  buffer StateBuf { FLOAT_TYPE data_state[]; };
+layout(binding = 6)           buffer DstBuf   { FLOAT_TYPE data_dst[];   };
 
-shared A_TYPE s_k[S_V];
-shared A_TYPE s_q[S_V];
-shared A_TYPE s_g[S_V]; // KDA only: cached exp(g[i])
+shared FLOAT_TYPE s_k[S_V];
+shared FLOAT_TYPE s_q[S_V];
+shared FLOAT_TYPE s_g[S_V]; // KDA only: cached exp(g[i])
 
 void main() {
     const uint head_id = gl_WorkGroupID.x;
@@ -61,7 +61,7 @@ void main() {
 
         if (KDA != 0) {
             const uint g_base = gb_off * S_V;
-            s_g[col] = A_TYPE(exp(FLOAT_TYPE(data_g[g_base + col])));
+            s_g[col] = exp(data_g[g_base + col]);
         }
 
         barrier();
@@ -92,7 +92,7 @@ void main() {
                 attn_col += dot(sv, vec4(s_q[i], s_q[i+1], s_q[i+2], s_q[i+3]));
             }
 
-            data_dst[attn_off + col] = D_TYPE(attn_col * FLOAT_TYPE(scale));
+            data_dst[attn_off + col] = attn_col * scale;
         } else {
             FLOAT_TYPE kv_col = 0.0;
             [[unroll]] for (uint i = 0; i < S_V; i += 4) {
@@ -115,7 +115,7 @@ void main() {
                 attn_col += dot(sv, vec4(s_q[i], s_q[i+1], s_q[i+2], s_q[i+3]));
             }
 
-            data_dst[attn_off + col] = D_TYPE(attn_col * FLOAT_TYPE(scale));
+            data_dst[attn_off + col] = attn_col * scale;
         }
 
         attn_off += S_V * H;
@@ -123,6 +123,6 @@ void main() {
     }
 
     [[unroll]] for (uint i = 0; i < S_V; i++) {
-        data_dst[s_off + state_base + i * S_V + col] = D_TYPE(state[i]);
+        data_dst[s_off + state_base + i * S_V + col] = state[i];
     }
 }
