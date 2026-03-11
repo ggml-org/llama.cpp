@@ -1,4 +1,5 @@
 #include "reasoning-budget.h"
+#include "unicode.h"
 
 #include "llama.h"
 #include "ggml.h"
@@ -124,61 +125,28 @@ static void test_reasoning_budget(
 }
 
 // UTF-8 boundary detection unit test
-// Tests the core logic used by the reasoning budget sampler to detect incomplete UTF-8 sequences
-// This mirrors common_utf8_is_incomplete() from reasoning-budget.cpp
+// Tests common_utf8_is_complete() from reasoning-budget.h
 static void test_utf8_boundary_detection() {
-    // Reimplement the same logic as common_utf8_is_incomplete for testing
-    auto is_incomplete = [](const std::string & s) -> bool {
-        if (s.empty()) {
-            return false;
-        }
+    // Complete sequences
+    GGML_ASSERT(common_utf8_is_complete("hello"));
+    GGML_ASSERT(common_utf8_is_complete(""));
+    GGML_ASSERT(common_utf8_is_complete("\xC2\xA0"));            // complete 2-byte UTF-8 (U+00A0)
+    GGML_ASSERT(common_utf8_is_complete("\xE2\x80\x9C"));        // complete 3-byte UTF-8 (left double quote)
+    GGML_ASSERT(common_utf8_is_complete("\xF0\x9F\x98\x80"));    // complete 4-byte UTF-8 (emoji)
+    GGML_ASSERT(common_utf8_is_complete("abc\xC3\xA9"));         // ASCII + complete 2-byte
 
-        int i = (int)s.size() - 1;
-        int n_cont = 0;
-        while (i >= 0 && (static_cast<unsigned char>(s[i]) & 0xC0) == 0x80) {
-            n_cont++;
-            i--;
-        }
-
-        if (i < 0) {
-            return true;  // only continuation bytes, no leading byte
-        }
-
-        const unsigned char lead = static_cast<unsigned char>(s[i]);
-
-        if ((lead & 0x80) == 0x00) {
-            return n_cont > 0;  // ASCII followed by continuation bytes = malformed
-        }
-
-        int expected;
-        if      ((lead & 0xE0) == 0xC0) { expected = 1; }
-        else if ((lead & 0xF0) == 0xE0) { expected = 2; }
-        else if ((lead & 0xF8) == 0xF0) { expected = 3; }
-        else { return true; }  // invalid leading byte
-
-        return n_cont < expected;
-    };
-
-    // Complete sequences — should NOT wait
-    GGML_ASSERT(!is_incomplete("hello"));
-    GGML_ASSERT(!is_incomplete(""));
-    GGML_ASSERT(!is_incomplete("\xC2\xA0"));               // complete 2-byte UTF-8 (U+00A0)
-    GGML_ASSERT(!is_incomplete("\xE2\x80\x9C"));           // complete 3-byte UTF-8 (left double quote)
-    GGML_ASSERT(!is_incomplete("\xF0\x9F\x98\x80"));       // complete 4-byte UTF-8 (emoji)
-    GGML_ASSERT(!is_incomplete("abc\xC3\xA9"));            // ASCII + complete 2-byte
-
-    // Incomplete sequences — SHOULD wait
-    GGML_ASSERT(is_incomplete(std::string("\xC2", 1)));              // 2-byte start, missing continuation
-    GGML_ASSERT(is_incomplete(std::string("\xE2\x80", 2)));          // 3-byte start + 1 cont, missing 1
-    GGML_ASSERT(is_incomplete(std::string("\xE2", 1)));              // 3-byte start, missing 2
-    GGML_ASSERT(is_incomplete(std::string("\xF0\x9F\x98", 3)));      // 4-byte start + 2 cont, missing 1
-    GGML_ASSERT(is_incomplete(std::string("\xF0\x9F", 2)));          // 4-byte start + 1 cont, missing 2
-    GGML_ASSERT(is_incomplete(std::string("\xF0", 1)));              // 4-byte start, missing 3
-    GGML_ASSERT(is_incomplete(std::string("\x80", 1)));              // orphan continuation byte
+    // Incomplete sequences
+    GGML_ASSERT(!common_utf8_is_complete(std::string("\xC2", 1)));            // 2-byte start, missing continuation
+    GGML_ASSERT(!common_utf8_is_complete(std::string("\xE2\x80", 2)));        // 3-byte start + 1 cont, missing 1
+    GGML_ASSERT(!common_utf8_is_complete(std::string("\xE2", 1)));            // 3-byte start, missing 2
+    GGML_ASSERT(!common_utf8_is_complete(std::string("\xF0\x9F\x98", 3)));    // 4-byte start + 2 cont, missing 1
+    GGML_ASSERT(!common_utf8_is_complete(std::string("\xF0\x9F", 2)));        // 4-byte start + 1 cont, missing 2
+    GGML_ASSERT(!common_utf8_is_complete(std::string("\xF0", 1)));            // 4-byte start, missing 3
+    GGML_ASSERT(!common_utf8_is_complete(std::string("\x80", 1)));            // orphan continuation byte
 
     // Mixed: ASCII followed by start of multi-byte
-    GGML_ASSERT(is_incomplete(std::string("hello\xC3", 6)));        // ASCII + incomplete 2-byte
-    GGML_ASSERT(!is_incomplete(std::string("hello\xC3\xA9", 7)));   // ASCII + complete 2-byte
+    GGML_ASSERT(!common_utf8_is_complete(std::string("hello\xC3", 6)));       // ASCII + incomplete 2-byte
+    GGML_ASSERT(common_utf8_is_complete(std::string("hello\xC3\xA9", 7)));    // ASCII + complete 2-byte
 }
 
 int main(void) {

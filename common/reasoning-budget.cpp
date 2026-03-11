@@ -1,60 +1,41 @@
 #include "reasoning-budget.h"
+#include "common.h"
+#include "unicode.h"
 
-#include "llama.h"
 #include "log.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <string>
 #include <vector>
 
-// Check if a string ends with an incomplete UTF-8 multi-byte sequence.
-// Returns true if cutting after this string would split a multi-byte character.
-static bool common_utf8_is_incomplete(const std::string & s) {
-    if (s.empty()) {
+struct token_matcher {
+    std::vector<llama_token> tokens;
+    size_t pos = 0;
+
+    bool advance(llama_token token) {
+        if (tokens.empty()) {
+            return false;
+        }
+
+        if (token == tokens[pos]) {
+            pos++;
+            if (pos >= tokens.size()) {
+                pos = 0;
+                return true;
+            }
+        } else {
+            pos = 0;
+            if (token == tokens[0]) {
+                pos = 1;
+            }
+        }
         return false;
     }
 
-    // Scan backwards to count trailing continuation bytes (10xxxxxx)
-    int i = (int)s.size() - 1;
-    int n_cont = 0;
-    while (i >= 0 && (static_cast<unsigned char>(s[i]) & 0xC0) == 0x80) {
-        n_cont++;
-        i--;
-    }
-
-    if (i < 0) {
-        // Only continuation bytes, no leading byte — malformed
-        return true;
-    }
-
-    const unsigned char lead = static_cast<unsigned char>(s[i]);
-
-    if ((lead & 0x80) == 0x00) {
-        // ASCII byte — complete on its own, trailing continuations would be malformed
-        return n_cont > 0;
-    }
-
-    // Determine expected continuation bytes from leading byte
-    int expected;
-    if      ((lead & 0xE0) == 0xC0) { expected = 1; }  // 110xxxxx: 2-byte
-    else if ((lead & 0xF0) == 0xE0) { expected = 2; }  // 1110xxxx: 3-byte
-    else if ((lead & 0xF8) == 0xF0) { expected = 3; }  // 11110xxx: 4-byte
-    else { return true; }                               // invalid leading byte
-
-    return n_cont < expected;
-}
-
-// Helper to convert a token to a string piece using the public API
-static std::string common_token_to_piece(const struct llama_vocab * vocab, llama_token token) {
-    char buf[128];
-    int n = llama_token_to_piece(vocab, token, buf, sizeof(buf), 0, false);
-    if (n < 0) {
-        // buffer too small (shouldn't happen for single tokens), return empty
-        return {};
-    }
-    return std::string(buf, n);
-}
+    void reset() { pos = 0; }
+};
 
 enum common_reasoning_budget_state {
     REASONING_BUDGET_IDLE,         // waiting for start sequence
@@ -67,18 +48,14 @@ enum common_reasoning_budget_state {
 struct common_reasoning_budget_ctx {
     const llama_vocab * vocab;
 
-    std::vector<llama_token> start_tokens;   // sequence that starts counting (e.g. "<think>")
-    std::vector<llama_token> end_tokens;     // sequence that deactivates naturally (e.g. "</think>")
-    std::vector<llama_token> forced_tokens;  // sequence forced when budget expires (e.g. "(budget exceeded)</think>")
+    token_matcher start_matcher;
+    token_matcher end_matcher;
+    std::vector<llama_token> forced_tokens;
 
     int32_t budget;           // maximum tokens in reasoning block
     int32_t remaining;        // tokens remaining in budget
 
     common_reasoning_budget_state state;
-
-    // for multi-token sequence matching
-    size_t start_match_pos;   // how many tokens of start_tokens we've matched so far
-    size_t end_match_pos;     // how many tokens of end_tokens we've matched so far
 
     // for forcing
     size_t force_pos;         // next position in forced_tokens to force
@@ -94,28 +71,15 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
     switch (ctx->state) {
         case REASONING_BUDGET_IDLE:
         {
-            // watch for start sequence
-            if (!ctx->start_tokens.empty() && token == ctx->start_tokens[ctx->start_match_pos]) {
-                ctx->start_match_pos++;
-                if (ctx->start_match_pos >= ctx->start_tokens.size()) {
-                    // full start sequence matched
-                    ctx->state = REASONING_BUDGET_COUNTING;
-                    ctx->remaining = ctx->budget;
-                    ctx->start_match_pos = 0;
-                    LOG_INF("reasoning-budget: activated, budget=%d tokens\n", ctx->budget);
+            if (ctx->start_matcher.advance(token)) {
+                ctx->state = REASONING_BUDGET_COUNTING;
+                ctx->remaining = ctx->budget;
+                LOG_INF("reasoning-budget: activated, budget=%d tokens\n", ctx->budget);
 
-                    if (ctx->remaining <= 0) {
-                        // budget is 0 — go straight to forcing
-                        ctx->state = REASONING_BUDGET_FORCING;
-                        ctx->force_pos = 0;
-                        LOG_INF("reasoning-budget: budget=0, forcing immediately\n");
-                    }
-                }
-            } else {
-                ctx->start_match_pos = 0;
-                // check if current token starts a new match
-                if (!ctx->start_tokens.empty() && token == ctx->start_tokens[0]) {
-                    ctx->start_match_pos = 1;
+                if (ctx->remaining <= 0) {
+                    ctx->state = REASONING_BUDGET_FORCING;
+                    ctx->force_pos = 0;
+                    LOG_INF("reasoning-budget: budget=0, forcing immediately\n");
                 }
             }
             break;
@@ -123,71 +87,47 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
         case REASONING_BUDGET_COUNTING:
         case REASONING_BUDGET_WAITING_UTF8:
         {
-            // check for natural end sequence (deactivate)
-            if (!ctx->end_tokens.empty() && token == ctx->end_tokens[ctx->end_match_pos]) {
-                ctx->end_match_pos++;
-                if (ctx->end_match_pos >= ctx->end_tokens.size()) {
-                    // natural end — stop constraining
-                    ctx->state = REASONING_BUDGET_DONE;
-                    ctx->end_match_pos = 0;
-                    LOG_INF("reasoning-budget: deactivated (natural end)\n");
-                }
-            } else {
-                ctx->end_match_pos = 0;
-                if (!ctx->end_tokens.empty() && token == ctx->end_tokens[0]) {
-                    ctx->end_match_pos = 1;
-                }
+            if (ctx->end_matcher.advance(token)) {
+                ctx->state = REASONING_BUDGET_DONE;
+                LOG_INF("reasoning-budget: deactivated (natural end)\n");
+                break;
+            }
+
+            bool utf8_complete = true;
+            if (ctx->vocab != nullptr) {
+                const std::string piece = common_token_to_piece(ctx->vocab, token, false);
+                utf8_complete = common_utf8_is_complete(piece);
             }
 
             if (ctx->state == REASONING_BUDGET_WAITING_UTF8) {
-                // Check if the token completes the UTF-8 sequence
-                bool still_incomplete = false;  // default: assume complete (safe fallback for null vocab)
-                if (ctx->vocab != nullptr) {
-                    const std::string piece = common_token_to_piece(ctx->vocab, token);
-                    still_incomplete = common_utf8_is_incomplete(piece);
-                }
-
-                if (!still_incomplete) {
-                    // UTF-8 sequence complete, now start forcing
+                if (utf8_complete) {
                     ctx->state = REASONING_BUDGET_FORCING;
                     ctx->force_pos = 0;
-                    ctx->end_match_pos = 0;
+                    ctx->end_matcher.reset();
                     LOG_INF("reasoning-budget: UTF-8 complete, now forcing end sequence\n");
                 }
             } else if (ctx->state == REASONING_BUDGET_COUNTING) {
                 ctx->remaining--;
                 if (ctx->remaining <= 0) {
-                    // Budget exhausted — check if we need to wait for UTF-8 completion
-                    bool wait_for_utf8 = false;
-                    if (ctx->vocab != nullptr) {
-                        const std::string piece = common_token_to_piece(ctx->vocab, token);
-                        wait_for_utf8 = common_utf8_is_incomplete(piece);
-                    }
-
-                    if (wait_for_utf8) {
-                        // Incomplete UTF-8 sequence, wait for completion
-                        ctx->state = REASONING_BUDGET_WAITING_UTF8;
-                        ctx->force_pos = 0;
-                        ctx->end_match_pos = 0;
-                        LOG_INF("reasoning-budget: budget exhausted, waiting for UTF-8 completion\n");
-                    } else {
-                        // Complete UTF-8, go straight to forcing
+                    if (utf8_complete) {
                         ctx->state = REASONING_BUDGET_FORCING;
                         ctx->force_pos = 0;
-                        ctx->end_match_pos = 0;
+                        ctx->end_matcher.reset();
                         LOG_INF("reasoning-budget: budget exhausted, forcing end sequence\n");
+                    } else {
+                        ctx->state = REASONING_BUDGET_WAITING_UTF8;
+                        ctx->end_matcher.reset();
+                        LOG_INF("reasoning-budget: budget exhausted, waiting for UTF-8 completion\n");
                     }
                 }
             }
             break;
         }
         case REASONING_BUDGET_FORCING:
-        {
-            // force_pos is advanced in apply(), not here
+            // force_pos is advanced in apply(), not here.
             // This ensures the first forced token isn't skipped when the sampler
             // is initialized directly in FORCING state (e.g. activate_immediately + budget=0)
             break;
-        }
         case REASONING_BUDGET_DONE:
             break;
     }
@@ -227,8 +167,8 @@ static void common_reasoning_budget_reset(struct llama_sampler * smpl) {
     auto * ctx = (common_reasoning_budget_ctx *) smpl->ctx;
     ctx->state = REASONING_BUDGET_IDLE;
     ctx->remaining = ctx->budget;
-    ctx->start_match_pos = 0;
-    ctx->end_match_pos = 0;
+    ctx->start_matcher.reset();
+    ctx->end_matcher.reset();
     ctx->force_pos = 0;
 }
 
@@ -236,8 +176,8 @@ static struct llama_sampler * common_reasoning_budget_clone(const struct llama_s
     const auto * ctx = (const common_reasoning_budget_ctx *) smpl->ctx;
     return common_reasoning_budget_init(
         ctx->vocab,
-        ctx->start_tokens,
-        ctx->end_tokens,
+        ctx->start_matcher.tokens,
+        ctx->end_matcher.tokens,
         ctx->forced_tokens,
         ctx->budget,
         ctx->state == REASONING_BUDGET_COUNTING || ctx->state == REASONING_BUDGET_FORCING || ctx->state == REASONING_BUDGET_WAITING_UTF8);
@@ -277,16 +217,14 @@ struct llama_sampler * common_reasoning_budget_init(
     return llama_sampler_init(
         /* .iface = */ &common_reasoning_budget_i,
         /* .ctx   = */ new common_reasoning_budget_ctx {
-            /* .vocab           = */ vocab,
-            /* .start_tokens    = */ start_tokens,
-            /* .end_tokens      = */ end_tokens,
-            /* .forced_tokens   = */ forced_tokens,
-            /* .budget          = */ budget,
-            /* .remaining       = */ budget,
-            /* .state           = */ initial_state,
-            /* .start_match_pos = */ 0,
-            /* .end_match_pos   = */ 0,
-            /* .force_pos       = */ 0,
+            /* .vocab         = */ vocab,
+            /* .start_matcher = */ { start_tokens, 0 },
+            /* .end_matcher   = */ { end_tokens, 0 },
+            /* .forced_tokens = */ forced_tokens,
+            /* .budget        = */ budget,
+            /* .remaining     = */ budget,
+            /* .state         = */ initial_state,
+            /* .force_pos     = */ 0,
         }
     );
 }
