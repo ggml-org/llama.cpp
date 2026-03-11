@@ -6,7 +6,7 @@
 
 #include <nlohmann/json.hpp>
 
-using json = nlohmann::ordered_json;
+using ordered_json = nlohmann::ordered_json;
 
 static std::string_view trim_trailing_space(std::string_view sv, int max = -1) {
     int count = 0;
@@ -68,7 +68,7 @@ static int json_brace_depth(const std::string & s) {
 
 // JSON-escape a string and return the inner content (without surrounding quotes).
 static std::string escape_json_string_inner(const std::string & s) {
-    std::string escaped = json(s).dump();
+    std::string escaped = ordered_json(s).dump();
     if (escaped.size() >= 2 && escaped.front() == '"' && escaped.back() == '"') {
         return escaped.substr(1, escaped.size() - 2);
     }
@@ -309,7 +309,7 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
         if (arg_count > 0) {
             arg_entry = ",";
         }
-        arg_entry += json(trim(node.text)).dump() + ":";
+        arg_entry += ordered_json(trim(node.text)).dump() + ":";
         ++arg_count;
 
         auto & target = args_target();
@@ -343,7 +343,7 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
 
             // Try to parse as JSON value (number, bool, null, object, array)
             try {
-                json parsed = json::parse(value_content);
+                ordered_json parsed = ordered_json::parse(value_content);
                 if (parsed.is_string()) {
                     // Don't add closing quote yet (added by arg_close) for monotonic streaming
                     std::string escaped = parsed.dump();
@@ -408,7 +408,7 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
 
 common_peg_parser common_chat_peg_builder::standard_constructed_tools(
     const std::map<std::string, std::string> & markers,
-    const nlohmann::json &                     tools,
+    const ordered_json &                       tools,
     bool                                       parallel_tool_calls,
     bool                                       force_tool_calls) {
     if (!tools.is_array() || tools.empty()) {
@@ -439,7 +439,7 @@ common_peg_parser common_chat_peg_builder::standard_constructed_tools(
         }
         const auto &   function = tool_def.at("function");
         std::string    name     = function.at("name");
-        nlohmann::json params = function.contains("parameters") ? function.at("parameters") : nlohmann::json::object();
+        ordered_json   params   = function.contains("parameters") ? function.at("parameters") : ordered_json::object();
 
         // Build argument parsers
         auto args = eps();
@@ -479,8 +479,8 @@ common_peg_parser common_chat_peg_builder::standard_constructed_tools(
 // Python-style tool calls: name(arg1="value1", arg2=123)
 // Used only by LFM2 for now, so we don't merge it into autoparser
 common_peg_parser common_chat_peg_builder::python_style_tool_calls(
-    const nlohmann::json & tools,
-    bool                   parallel_tool_calls) {
+    const ordered_json & tools,
+    bool                 parallel_tool_calls) {
     if (!tools.is_array() || tools.empty()) {
         return eps();
     }
@@ -493,7 +493,7 @@ common_peg_parser common_chat_peg_builder::python_style_tool_calls(
         }
         const auto &   function = tool_def.at("function");
         std::string    name     = function.at("name");
-        nlohmann::json params = function.contains("parameters") ? function.at("parameters") : nlohmann::json::object();
+        ordered_json   params   = function.contains("parameters") ? function.at("parameters") : ordered_json::object();
 
         auto args = eps();
         if (params.contains("properties") && !params["properties"].empty()) {
@@ -507,8 +507,8 @@ common_peg_parser common_chat_peg_builder::python_style_tool_calls(
 
                 common_peg_parser arg_value_parser = eps();
                 auto string_value_parser = choice({
-                    literal("\"") + tool_arg_string_value(json_string_content()) + literal("\""),
-                    literal("'") + tool_arg_string_value(json_string_content()) + literal("'")
+                    literal("\"") + tool_arg_string_value(string_content('"')) + literal("\""),
+                    literal("'") + tool_arg_string_value(string_content('\'')) + literal("'")
                 });
 
                 if (is_string_type) {
@@ -555,11 +555,11 @@ static std::pair<std::string, std::string> parse_key_spec(const std::string & ke
 
 // Mode 1: function_is_key — parse {"function_name": {...}}
 common_peg_parser common_chat_peg_builder::build_json_tools_function_is_key(
-    const nlohmann::json & tools,
-    const std::string &    args_key,
-    const std::string &    effective_args_key,
-    const std::string &    call_id_key,
-    const std::string &    gen_call_id_key) {
+    const ordered_json & tools,
+    const std::string &  args_key,
+    const std::string &  effective_args_key,
+    const std::string &  call_id_key,
+    const std::string &  gen_call_id_key) {
 
     auto tool_choices = choice();
 
@@ -569,7 +569,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_function_is_key(
         }
         const auto &   function = tool_def.at("function");
         std::string    name     = function.at("name");
-        nlohmann::json params = function.contains("parameters") ? function.at("parameters") : nlohmann::json::object();
+        ordered_json   params   = function.contains("parameters") ? function.at("parameters") : ordered_json::object();
 
         // Build inner object fields
         std::vector<common_peg_parser> inner_fields;
@@ -577,7 +577,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_function_is_key(
         if (!call_id_key.empty()) {
             auto id_parser = atomic(
                 literal("\"" + call_id_key + "\"") + space() + literal(":") + space() +
-                literal("\"") + tool_id(json_string_content()) + literal("\"")
+                literal("\"") + tool_id(string_content('"')) + literal("\"")
             );
             inner_fields.push_back(optional(id_parser + space() + optional(literal(",") + space())));
         }
@@ -586,7 +586,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_function_is_key(
             auto gen_id_parser = atomic(
                 literal("\"" + gen_call_id_key + "\"") + space() + literal(":") + space() +
                 choice({
-                    literal("\"") + tool_id(json_string_content()) + literal("\""),
+                    literal("\"") + tool_id(string_content('"')) + literal("\""),
                     tool_id(json_number())
                 })
             );
@@ -634,11 +634,11 @@ common_peg_parser common_chat_peg_builder::build_json_tools_function_is_key(
 
 // Mode 2: Nested keys (dot notation like "function.name")
 common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
-    const nlohmann::json & tools,
-    const std::string &    effective_name_key,
-    const std::string &    effective_args_key,
-    const std::string &    call_id_key,
-    const std::string &    gen_call_id_key) {
+    const ordered_json & tools,
+    const std::string &  effective_name_key,
+    const std::string &  effective_args_key,
+    const std::string &  call_id_key,
+    const std::string &  gen_call_id_key) {
 
     auto tool_choices = choice();
 
@@ -655,7 +655,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
         }
         const auto &   function = tool_def.at("function");
         std::string    name     = function.at("name");
-        nlohmann::json params = function.contains("parameters") ? function.at("parameters") : nlohmann::json::object();
+        ordered_json   params   = function.contains("parameters") ? function.at("parameters") : ordered_json::object();
 
         auto nested_name = literal("\"" + nested_name_field + "\"") + space() + literal(":") + space() +
                           literal("\"") + tool_name(literal(name)) + literal("\"");
@@ -675,7 +675,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
             if (id_spec.first.empty()) {
                 auto id_parser = atomic(
                     literal("\"" + call_id_key + "\"") + space() + literal(":") + space() +
-                    literal("\"") + tool_id(json_string_content()) + literal("\"")
+                    literal("\"") + tool_id(string_content('"')) + literal("\"")
                 );
                 tool_parser_body = tool_parser_body + optional(id_parser + space() + literal(",") + space());
             }
@@ -687,7 +687,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
                 auto gen_id_parser = atomic(
                     literal("\"" + gen_call_id_key + "\"") + space() + literal(":") + space() +
                     choice({
-                        literal("\"") + tool_id(json_string_content()) + literal("\""),
+                        literal("\"") + tool_id(string_content('"')) + literal("\""),
                         tool_id(json_number())
                     })
                 );
@@ -706,7 +706,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
 
 // Mode 3: Flat keys with optional ID fields and parameter ordering
 common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
-    const nlohmann::json &           tools,
+    const ordered_json &             tools,
     const std::string &              effective_name_key,
     const std::string &              effective_args_key,
     const std::string &              call_id_key,
@@ -723,7 +723,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
         }
         const auto &   function = tool_def.at("function");
         std::string    name     = function.at("name");
-        nlohmann::json params = function.contains("parameters") ? function.at("parameters") : nlohmann::json::object();
+        ordered_json   params   = function.contains("parameters") ? function.at("parameters") : ordered_json::object();
 
         auto tool_name_ = name_key_parser + space() + literal(":") + space() +
                          literal("\"") + tool_name(literal(name)) + literal("\"");
@@ -736,7 +736,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
             id_parser = atomic(
                 literal("\"" + call_id_key + "\"") + space() + literal(":") + space() +
                 choice({
-                    literal("\"") + tool_id(json_string_content()) + literal("\""),
+                    literal("\"") + tool_id(string_content('"')) + literal("\""),
                     tool_id(json_number())
                 })
             );
@@ -747,7 +747,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
             gen_id_parser = atomic(
                 literal("\"" + gen_call_id_key + "\"") + space() + literal(":") + space() +
                 choice({
-                    literal("\"") + tool_id(json_string_content()) + literal("\""),
+                    literal("\"") + tool_id(string_content('"')) + literal("\""),
                     tool_id(json_number())
                 })
             );
@@ -791,7 +791,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
 common_peg_parser common_chat_peg_builder::standard_json_tools(
                                                        const std::string &              section_start,
                                                        const std::string &              section_end,
-                                                       const nlohmann::json &           tools,
+                                                       const ordered_json &             tools,
                                                        bool                             parallel_tool_calls,
                                                        bool                             force_tool_calls,
                                                        const std::string &              name_key,

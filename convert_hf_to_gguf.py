@@ -4390,15 +4390,31 @@ class Qwen3Model(Qwen2Model):
         hparams = ModelBase.load_hparams(self.dir_model, is_mistral_format=False)
         self.origin_hf_arch = hparams.get('architectures', [None])[0]
 
-        # a bit hacky, but currently the only way to detect if this is a rerank model
-        # ref: https://huggingface.co/Qwen/Qwen3-Reranker-0.6B
+        if self._is_qwen3_reranker():
+            self._find_rerank_config()
+
+    def _is_qwen3_reranker(self) -> bool:
         readme_path = self.dir_model / "README.md"
         readme_text = ""
         if readme_path.exists():
             with readme_path.open("r", encoding="utf-8") as f:
                 readme_text = f.read()
-        if "# Qwen3-Reranker" in readme_text:
-            self._find_rerank_config()
+
+        name_hints = [
+            str(self.dir_model.name),
+            str(self.hparams.get("_name_or_path", "")),
+            str(self.hparams.get("model_type", "")),
+            str(self.origin_hf_arch or ""),
+        ]
+        name_hints = [hint.lower() for hint in name_hints if hint]
+
+        if "# qwen3-reranker" in readme_text.lower() or "# qwen3-vl-reranker" in readme_text.lower():
+            return True
+
+        if any("qwen3-reranker" in hint or "qwen3-vl-reranker" in hint for hint in name_hints):
+            return True
+
+        return "sequenceclassification" in (self.origin_hf_arch or "").lower()
 
     def set_vocab(self):
         # deal with intern-s1-mini

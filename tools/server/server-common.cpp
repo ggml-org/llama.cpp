@@ -276,7 +276,7 @@ llama_pos server_tokens::pos_next(int64_t n_tokens) const {
 
 size_t server_tokens::size_up_to_pos(llama_pos max_pos) const {
     if (!has_mtmd) {
-        return std::min((size_t)(max_pos + 1), tokens.size());
+        return std::min((size_t)max_pos, tokens.size());
     }
 
     size_t idx = 0;
@@ -296,7 +296,7 @@ size_t server_tokens::size_up_to_pos(llama_pos max_pos) const {
             idx++;
         }
 
-        if (pos > max_pos) {
+        if (pos >= max_pos) {
             break;
         }
     }
@@ -1099,6 +1099,22 @@ json oaicompat_chat_params_parse(
     }
     if (!chat_params.parser.empty()) {
         llama_params["chat_parser"] = chat_params.parser;
+    }
+
+    // Reasoning budget: pass parameters through to sampling layer
+    {
+        int reasoning_budget = opt.reasoning_budget;
+        if (reasoning_budget == -1 && body.contains("thinking_budget_tokens")) {
+            reasoning_budget = json_value(body, "thinking_budget_tokens", -1);
+        }
+
+        if (reasoning_budget >= 0 && !chat_params.thinking_end_tag.empty()) {
+            llama_params["reasoning_budget_tokens"] = reasoning_budget;
+            llama_params["reasoning_budget_start_tag"] = chat_params.thinking_start_tag;
+            llama_params["reasoning_budget_end_tag"] = chat_params.thinking_end_tag;
+            llama_params["reasoning_budget_message"] = opt.reasoning_budget_message;
+            llama_params["reasoning_budget_activate_immediately"] = chat_params.thinking_forced_open;
+        }
     }
 
     // Handle "logprobs" field
