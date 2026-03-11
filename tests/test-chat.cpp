@@ -995,6 +995,16 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
             grammar_triggered = true;
         }
 
+        // For non-lazy grammars, prepend reasoning prefill to grammar input, just like
+        // PEG parsing does. The grammar includes the full reasoning pattern (e.g. optional
+        // <think>...</think>), but the model output may start mid-reasoning if the template
+        // already placed the opening tag in the prompt.
+        // For lazy grammars, the grammar only activates from the trigger position, so the
+        // reasoning prefill is irrelevant — reasoning is handled by the PEG parser.
+        if (!parser.params_.reasoning_prefill.empty() && earliest_trigger_pos == std::string::npos) {
+            constrained = parser.params_.reasoning_prefill + constrained;
+        }
+
         // Test the constrained portion against the grammar
         if (grammar_triggered && !tc.is_partial) {
             auto result = match_string_detailed(constrained, grammar.get());

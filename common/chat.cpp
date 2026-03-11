@@ -1614,12 +1614,6 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         if (auto_params.supports_thinking) {
             auto_params.thinking_start_tag = autoparser.reasoning.start;
             auto_params.thinking_end_tag   = autoparser.reasoning.end;
-            // FORCED_OPEN and FORCED_CLOSED both put <think> in the generation prompt
-            // (FORCED_CLOSED forces empty <think></think> when thinking is disabled,
-            //  but forces <think> open when thinking is enabled)
-            auto_params.thinking_forced_open =
-                autoparser.reasoning.mode == autoparser::reasoning_mode::FORCED_OPEN ||
-                autoparser.reasoning.mode == autoparser::reasoning_mode::FORCED_CLOSED;
         }
         return auto_params;
     } catch (const std::exception & e) {

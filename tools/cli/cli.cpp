@@ -105,7 +105,7 @@ struct cli_context {
                     llama_get_model(ctx_server.get_llama_context()));
 
                 task.params.sampling.reasoning_budget_tokens = reasoning_budget;
-                task.params.sampling.reasoning_budget_activate_immediately = chat_params.thinking_forced_open;
+                task.params.sampling.grammar_prefill = chat_params.reasoning_prefill;
 
                 if (!chat_params.thinking_start_tag.empty()) {
                     task.params.sampling.reasoning_budget_start =
