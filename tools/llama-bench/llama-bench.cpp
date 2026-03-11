@@ -328,6 +328,7 @@ struct cmd_params {
     std::vector<std::string>         cpu_mask;
     std::vector<bool>                cpu_strict;
     std::vector<int>                 poll;
+    std::vector<int>                 sched_n_copies;
     std::vector<int>                 n_gpu_layers;
     std::vector<int>                 n_cpu_moe;
     std::vector<llama_split_mode>    split_mode;
@@ -370,6 +371,7 @@ static const cmd_params cmd_params_defaults = {
     /* cpu_mask             */ { "0x0" },
     /* cpu_strict           */ { false },
     /* poll                 */ { 50 },
+    /* sched_n_copies       */ { 0 },
     /* n_gpu_layers         */ { 99 },
     /* n_cpu_moe            */ { 0 },
     /* split_mode           */ { LLAMA_SPLIT_MODE_LAYER },
@@ -436,6 +438,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -C, --cpu-mask <hex,hex>                    (default: %s)\n", join(cmd_params_defaults.cpu_mask, ",").c_str());
     printf("  --cpu-strict <0|1>                          (default: %s)\n", join(cmd_params_defaults.cpu_strict, ",").c_str());
     printf("  --poll <0...100>                            (default: %s)\n", join(cmd_params_defaults.poll, ",").c_str());
+    printf("  --sched-n-copies <n>                        ggml scheduler input copies, 0 = auto (default: %s)\n", join(cmd_params_defaults.sched_n_copies, ",").c_str());
     printf("  -ngl, --n-gpu-layers <n>                    (default: %s)\n", join(cmd_params_defaults.n_gpu_layers, ",").c_str());
     printf("  -ncmoe, --n-cpu-moe <n>                     (default: %s)\n", join(cmd_params_defaults.n_cpu_moe, ",").c_str());
     printf("  -sm, --split-mode <none|layer|row>          (default: %s)\n", join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
@@ -695,6 +698,13 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = parse_int_range(argv[i]);
                 params.poll.insert(params.poll.end(), p.begin(), p.end());
+            } else if (arg == "--sched-n-copies") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = parse_int_range(argv[i]);
+                params.sched_n_copies.insert(params.sched_n_copies.end(), p.begin(), p.end());
             } else if (arg == "-ngl" || arg == "--n-gpu-layers") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1095,6 +1105,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.poll.empty()) {
         params.poll = cmd_params_defaults.poll;
     }
+    if (params.sched_n_copies.empty()) {
+        params.sched_n_copies = cmd_params_defaults.sched_n_copies;
+    }
 
     return params;
 }
@@ -1112,6 +1125,7 @@ struct cmd_params_instance {
     std::string        cpu_mask;
     bool               cpu_strict;
     int                poll;
+    int                sched_n_copies;
     int                n_gpu_layers;
     int                n_cpu_moe;
     llama_split_mode   split_mode;
@@ -1236,6 +1250,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & cm : params.cpu_mask)
     for (const auto & cs : params.cpu_strict)
     for (const auto & nd : params.n_depth)
+    for (const auto & snc : params.sched_n_copies)
     for (const auto & pl : params.poll) {
         for (const auto & n_prompt : params.n_prompt) {
             if (n_prompt == 0) {
@@ -1254,6 +1269,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .cpu_mask     = */ cm,
                 /* .cpu_strict   = */ cs,
                 /* .poll         = */ pl,
+                /* .sched_n_copies = */ snc,
                 /* .n_gpu_layers = */ nl,
                 /* .n_cpu_moe    = */ ncmoe,
                 /* .split_mode   = */ sm,
@@ -1289,6 +1305,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .cpu_mask     = */ cm,
                 /* .cpu_strict   = */ cs,
                 /* .poll         = */ pl,
+                /* .sched_n_copies = */ snc,
                 /* .n_gpu_layers = */ nl,
                 /* .n_cpu_moe    = */ ncmoe,
                 /* .split_mode   = */ sm,
@@ -1324,6 +1341,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .cpu_mask     = */ cm,
                 /* .cpu_strict   = */ cs,
                 /* .poll         = */ pl,
+                /* .sched_n_copies = */ snc,
                 /* .n_gpu_layers = */ nl,
                 /* .n_cpu_moe    = */ ncmoe,
                 /* .split_mode   = */ sm,
@@ -1362,6 +1380,7 @@ struct test {
     std::string              cpu_mask;
     bool                     cpu_strict;
     int                      poll;
+    int                      sched_n_copies;
     ggml_type                type_k;
     ggml_type                type_v;
     int                      n_gpu_layers;
@@ -1400,6 +1419,7 @@ struct test {
         cpu_mask       = inst.cpu_mask;
         cpu_strict     = inst.cpu_strict;
         poll           = inst.poll;
+        sched_n_copies = inst.sched_n_copies;
         type_k         = inst.type_k;
         type_v         = inst.type_v;
         n_gpu_layers   = inst.n_gpu_layers;
@@ -1470,6 +1490,7 @@ struct test {
             "build_commit",   "build_number",   "cpu_info",      "gpu_info",       "backends",
             "model_filename", "model_type",     "model_size",    "model_n_params", "n_batch",
             "n_ubatch",       "n_threads",      "cpu_mask",      "cpu_strict",     "poll",
+            "sched_n_copies",
             "type_k",         "type_v",         "n_gpu_layers",  "n_cpu_moe",      "split_mode",
             "main_gpu",       "no_kv_offload",  "flash_attn",    "devices",        "tensor_split",
             "tensor_buft_overrides",            "use_mmap",      "use_direct_io",  "embeddings",
@@ -1483,7 +1504,7 @@ struct test {
 
     static field_type get_field_type(const std::string & field) {
         if (field == "build_number" || field == "n_batch" || field == "n_ubatch" || field == "n_threads" ||
-            field == "poll" || field == "model_size" || field == "model_n_params" || field == "n_gpu_layers" ||
+            field == "poll" || field == "sched_n_copies" || field == "model_size" || field == "model_n_params" || field == "n_gpu_layers" ||
             field == "main_gpu" || field == "n_prompt" || field == "n_gen" || field == "n_depth" || field == "avg_ns" ||
             field == "stddev_ns" || field == "no_op_offload" || field == "n_cpu_moe") {
             return INT;
@@ -1550,6 +1571,7 @@ struct test {
                                             cpu_mask,
                                             std::to_string(cpu_strict),
                                             std::to_string(poll),
+                                            std::to_string(sched_n_copies),
                                             ggml_type_name(type_k),
                                             ggml_type_name(type_v),
                                             std::to_string(n_gpu_layers),
@@ -1838,6 +1860,9 @@ struct markdown_printer : public printer {
         }
         if (params.poll.size() > 1 || params.poll != cmd_params_defaults.poll) {
             fields.emplace_back("poll");
+        }
+        if (params.sched_n_copies.size() > 1 || params.sched_n_copies != cmd_params_defaults.sched_n_copies) {
+            fields.emplace_back("sched_n_copies");
         }
         if (params.n_batch.size() > 1 || params.n_batch != cmd_params_defaults.n_batch) {
             fields.emplace_back("n_batch");
@@ -2170,6 +2195,10 @@ int main(int argc, char ** argv) {
                 return 1;
             }
             prev_inst = &inst;
+        }
+
+        if (inst.sched_n_copies > 0) {
+            ggml_backend_sched_set_n_copies(inst.sched_n_copies);
         }
 
         llama_context * ctx = llama_init_from_model(lmodel, inst.to_llama_cparams());
