@@ -1233,6 +1233,77 @@ static webgpu_command ggml_webgpu_mul_mat(webgpu_context & ctx,
 }
 
 #ifndef __EMSCRIPTEN__
+static webgpu_pipeline ggml_webgpu_get_or_create_flash_attn_pipeline(
+    webgpu_context & ctx, const ggml_webgpu_flash_attn_pipeline_key & key) {
+    auto it = ctx->flash_attn_pipelines.find(key);
+    if (it != ctx->flash_attn_pipelines.end()) {
+        return it->second;
+    }
+
+    ggml_webgpu_flash_attn_shader_lib_context shader_lib_ctx = {
+        .key                = key,
+        .sg_mat_m           = ctx->global_ctx->capabilities.sg_mat_m,
+        .sg_mat_n           = ctx->global_ctx->capabilities.sg_mat_n,
+        .sg_mat_k           = ctx->global_ctx->capabilities.sg_mat_k,
+        .wg_mem_limit_bytes = ctx->global_ctx->capabilities.limits.maxComputeWorkgroupStorageSize,
+        .max_subgroup_size  = ctx->global_ctx->capabilities.max_subgroup_size
+    };
+
+    ggml_webgpu_processed_shader processed = ggml_webgpu_preprocess_flash_attn_shader(
+        ctx->p, key.use_vec ? wgsl_flash_attn_vec_split : wgsl_flash_attn, shader_lib_ctx);
+    webgpu_pipeline pipeline =
+        ggml_webgpu_create_pipeline(ctx->global_ctx->device, processed.wgsl.c_str(), processed.variant.c_str());
+    pipeline.context = processed.decisions;
+    ctx->flash_attn_pipelines.emplace(key, pipeline);
+    return pipeline;
+}
+
+static webgpu_pipeline ggml_webgpu_get_or_create_flash_attn_blk_pipeline(
+    webgpu_context & ctx, uint32_t q_tile, uint32_t kv_tile) {
+    const ggml_webgpu_flash_attn_blk_pipeline_key blk_key = {
+        .q_tile  = q_tile,
+        .kv_tile = kv_tile,
+    };
+    auto blk_it = ctx->flash_attn_blk_pipelines.find(blk_key);
+    if (blk_it != ctx->flash_attn_blk_pipelines.end()) {
+        return blk_it->second;
+    }
+
+    ggml_webgpu_flash_attn_blk_shader_lib_context blk_shader_ctx = {
+        .key         = blk_key,
+        .max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup,
+    };
+    ggml_webgpu_processed_shader processed =
+        ggml_webgpu_preprocess_flash_attn_blk_shader(ctx->p, wgsl_flash_attn_vec_blk, blk_shader_ctx);
+    webgpu_pipeline blk_pipeline =
+        ggml_webgpu_create_pipeline(ctx->global_ctx->device, processed.wgsl.c_str(), processed.variant.c_str());
+    ctx->flash_attn_blk_pipelines.emplace(blk_key, blk_pipeline);
+    return blk_pipeline;
+}
+
+static webgpu_pipeline ggml_webgpu_get_or_create_flash_attn_vec_reduce_pipeline(
+    webgpu_context & ctx, uint32_t head_dim_v, uint32_t wg_size) {
+    const ggml_webgpu_flash_attn_vec_reduce_pipeline_key reduce_key = {
+        .head_dim_v = head_dim_v,
+        .wg_size    = wg_size,
+    };
+    auto reduce_it = ctx->flash_attn_vec_reduce_pipelines.find(reduce_key);
+    if (reduce_it != ctx->flash_attn_vec_reduce_pipelines.end()) {
+        return reduce_it->second;
+    }
+
+    ggml_webgpu_flash_attn_vec_reduce_shader_lib_context reduce_shader_ctx = {
+        .key         = reduce_key,
+        .max_wg_size = wg_size,
+    };
+    ggml_webgpu_processed_shader processed =
+        ggml_webgpu_preprocess_flash_attn_vec_reduce_shader(ctx->p, wgsl_flash_attn_vec_reduce, reduce_shader_ctx);
+    webgpu_pipeline reduce_pipeline =
+        ggml_webgpu_create_pipeline(ctx->global_ctx->device, processed.wgsl.c_str(), processed.variant.c_str());
+    ctx->flash_attn_vec_reduce_pipelines.emplace(reduce_key, reduce_pipeline);
+    return reduce_pipeline;
+}
+
 static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
                                              ggml_tensor *    Q,
                                              ggml_tensor *    K,
@@ -1343,31 +1414,7 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
         .use_vec            = use_vec,
     };
 
-    webgpu_pipeline pipeline;
-    auto            it = ctx->flash_attn_pipelines.find(key);
-    if (it != ctx->flash_attn_pipelines.end()) {
-        pipeline = it->second;
-    } else {
-        ggml_webgpu_flash_attn_shader_lib_context shader_lib_ctx = {
-            .key                = key,
-            .sg_mat_m           = ctx->global_ctx->capabilities.sg_mat_m,
-            .sg_mat_n           = ctx->global_ctx->capabilities.sg_mat_n,
-            .sg_mat_k           = ctx->global_ctx->capabilities.sg_mat_k,
-            .wg_mem_limit_bytes = ctx->global_ctx->capabilities.limits.maxComputeWorkgroupStorageSize,
-            .max_subgroup_size  = ctx->global_ctx->capabilities.max_subgroup_size
-        };
-
-        ggml_webgpu_processed_shader processed;
-        if (use_vec) {
-            processed = ggml_webgpu_preprocess_flash_attn_shader(ctx->p, wgsl_flash_attn_vec_split, shader_lib_ctx);
-        } else {
-            processed = ggml_webgpu_preprocess_flash_attn_shader(ctx->p, wgsl_flash_attn, shader_lib_ctx);
-        }
-        pipeline =
-            ggml_webgpu_create_pipeline(ctx->global_ctx->device, processed.wgsl.c_str(), processed.variant.c_str());
-        pipeline.context = processed.decisions;
-        ctx->flash_attn_pipelines.emplace(key, pipeline);
-    }
+    webgpu_pipeline pipeline = ggml_webgpu_get_or_create_flash_attn_pipeline(ctx, key);
 
     auto * decisions = static_cast<ggml_webgpu_flash_attn_shader_decisions *>(pipeline.context.get());
 
@@ -1435,24 +1482,8 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
             blk_size_bytes           = ROUNDUP_POW2(blk_elems * sizeof(uint32_t), WEBGPU_STORAGE_BUF_BINDING_MULT);
             ggml_webgpu_create_buffer(ctx->global_ctx->device, blk_buf, blk_size_bytes, wgpu::BufferUsage::Storage,
                                       "flash_attn_vec_blk");
-            const ggml_webgpu_flash_attn_blk_pipeline_key blk_key = {
-                .q_tile  = decisions->q_tile,
-                .kv_tile = decisions->kv_tile,
-            };
-            auto blk_it = ctx->flash_attn_blk_pipelines.find(blk_key);
-            if (blk_it != ctx->flash_attn_blk_pipelines.end()) {
-                blk_pipeline = blk_it->second;
-            } else {
-                ggml_webgpu_flash_attn_blk_shader_lib_context blk_shader_ctx = {
-                    .key         = blk_key,
-                    .max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup,
-                };
-                ggml_webgpu_processed_shader processed =
-                    ggml_webgpu_preprocess_flash_attn_blk_shader(ctx->p, wgsl_flash_attn_vec_blk, blk_shader_ctx);
-                blk_pipeline = ggml_webgpu_create_pipeline(ctx->global_ctx->device, processed.wgsl.c_str(),
-                                                           processed.variant.c_str());
-                ctx->flash_attn_blk_pipelines.emplace(blk_key, blk_pipeline);
-            }
+            blk_pipeline =
+                ggml_webgpu_get_or_create_flash_attn_blk_pipeline(ctx, decisions->q_tile, decisions->kv_tile);
 
             blk_params = {
                 (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, mask) / ggml_type_size(mask->type)),  // offset_mask
@@ -1526,24 +1557,8 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
             const uint32_t reduce_wg_size = std::max(
                 32u,
                 std::min<uint32_t>(nwg * 32u, ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup));
-            const ggml_webgpu_flash_attn_vec_reduce_pipeline_key reduce_key = {
-                .head_dim_v = (uint32_t) V->ne[0],
-                .wg_size    = reduce_wg_size,
-            };
-            auto reduce_it = ctx->flash_attn_vec_reduce_pipelines.find(reduce_key);
-            if (reduce_it != ctx->flash_attn_vec_reduce_pipelines.end()) {
-                reduce_pipeline = reduce_it->second;
-            } else {
-                ggml_webgpu_flash_attn_vec_reduce_shader_lib_context reduce_shader_ctx = {
-                    .key         = reduce_key,
-                    .max_wg_size = reduce_wg_size,
-                };
-                ggml_webgpu_processed_shader processed = ggml_webgpu_preprocess_flash_attn_vec_reduce_shader(
-                    ctx->p, wgsl_flash_attn_vec_reduce, reduce_shader_ctx);
-                reduce_pipeline = ggml_webgpu_create_pipeline(ctx->global_ctx->device, processed.wgsl.c_str(),
-                                                              processed.variant.c_str());
-                ctx->flash_attn_vec_reduce_pipelines.emplace(reduce_key, reduce_pipeline);
-            }
+            reduce_pipeline =
+                ggml_webgpu_get_or_create_flash_attn_vec_reduce_pipeline(ctx, (uint32_t) V->ne[0], reduce_wg_size);
 
             reduce_params = {
                 (uint32_t) nrows,                                                                    // nrows
