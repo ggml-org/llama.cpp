@@ -1,36 +1,36 @@
 #include "gated_delta_net.cuh"
 
 template <int S_v, bool KDA>
-__global__ void gated_delta_net_cuda(const float *            q,
-                                     const float *            k,
-                                     const float *            v,
-                                     const float *            g,
-                                     const float *            beta,
-                                     const float *            curr_state,
-                                     float *                  dst,
-                                     int64_t                  H,
-                                     int64_t                  n_tokens,
-                                     int64_t                  n_seqs,
-                                     int64_t                  sq1,
-                                     int64_t                  sq2,
-                                     int64_t                  sq3,
-                                     int64_t                  sv1,
-                                     int64_t                  sv2,
-                                     int64_t                  sv3,
-                                     int64_t                  sb1,
-                                     int64_t                  sb2,
-                                     int64_t                  sb3,
-                                     const fastdiv_consts_s64 neqk1_magic,
-                                     const fastdiv_consts_s64 rq3_magic,
-                                     float                    scale) {
-    const int64_t h_idx    = blockIdx.x;
-    const int64_t sequence = blockIdx.y;
+__global__ void gated_delta_net_cuda(const float * q,
+                                     const float * k,
+                                     const float * v,
+                                     const float * g,
+                                     const float * beta,
+                                     const float * curr_state,
+                                     float *       dst,
+                                     int64_t       H,
+                                     int64_t       n_tokens,
+                                     int64_t       n_seqs,
+                                     int64_t       sq1,
+                                     int64_t       sq2,
+                                     int64_t       sq3,
+                                     int64_t       sv1,
+                                     int64_t       sv2,
+                                     int64_t       sv3,
+                                     int64_t       sb1,
+                                     int64_t       sb2,
+                                     int64_t       sb3,
+                                     const uint3   neqk1_magic,
+                                     const uint3   rq3_magic,
+                                     float         scale) {
+    const uint32_t h_idx    = blockIdx.x;
+    const uint32_t sequence = blockIdx.y;
     // each warp owns one column, using warp-level primitives to reduce across rows
-    const int     lane     = threadIdx.x;
-    const int col = blockIdx.z * blockDim.y + threadIdx.y;
+    const int      lane     = threadIdx.x;
+    const int      col      = blockIdx.z * blockDim.y + threadIdx.y;
 
-    const int64_t iq1 = fastmodulo_s64(h_idx, neqk1_magic);
-    const int64_t iq3 = fastdiv_s64(sequence, rq3_magic);
+    const uint32_t iq1 = fastmodulo(h_idx, neqk1_magic);
+    const uint32_t iq3 = fastdiv(sequence, rq3_magic);
 
     const int64_t attn_score_elems = S_v * H * n_tokens * n_seqs;
     float *       attn_data        = dst;
@@ -151,8 +151,8 @@ static void launch_gated_delta_net(
     dim3      grid_dims(H, n_seqs, (S_v + num_warps - 1) / num_warps);
     dim3      block_dims(warp_size <= S_v ? warp_size : S_v, num_warps, 1);
 
-    const fastdiv_consts_s64 neqk1_magic = init_fastdiv_s64(neqk1);
-    const fastdiv_consts_s64 rq3_magic   = init_fastdiv_s64(rq3);
+    const uint3 neqk1_magic = init_fastdiv_values(neqk1);
+    const uint3 rq3_magic   = init_fastdiv_values(rq3);
 
     switch (S_v) {
         case 16:
