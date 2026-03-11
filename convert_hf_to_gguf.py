@@ -4535,15 +4535,31 @@ class Qwen3Model(Qwen2Model):
         hparams = ModelBase.load_hparams(self.dir_model, is_mistral_format=False)
         self.origin_hf_arch = hparams.get('architectures', [None])[0]
 
-        # a bit hacky, but currently the only way to detect if this is a rerank model
-        # ref: https://huggingface.co/Qwen/Qwen3-Reranker-0.6B
+        if self._is_qwen3_reranker():
+            self._find_rerank_config()
+
+    def _is_qwen3_reranker(self) -> bool:
         readme_path = self.dir_model / "README.md"
         readme_text = ""
         if readme_path.exists():
             with readme_path.open("r", encoding="utf-8") as f:
                 readme_text = f.read()
-        if "# Qwen3-Reranker" in readme_text:
-            self._find_rerank_config()
+
+        name_hints = [
+            str(self.dir_model.name),
+            str(self.hparams.get("_name_or_path", "")),
+            str(self.hparams.get("model_type", "")),
+            str(self.origin_hf_arch or ""),
+        ]
+        name_hints = [hint.lower() for hint in name_hints if hint]
+
+        if "# qwen3-reranker" in readme_text.lower() or "# qwen3-vl-reranker" in readme_text.lower():
+            return True
+
+        if any("qwen3-reranker" in hint or "qwen3-vl-reranker" in hint for hint in name_hints):
+            return True
+
+        return "sequenceclassification" in (self.origin_hf_arch or "").lower()
 
     def set_vocab(self):
         # deal with intern-s1-mini
@@ -9872,20 +9888,35 @@ class NemotronHModel(GraniteHybridModel):
         # M: Mamba2, *: Attention, -: MLP
         # MoE:
         # M: Mamba2, *: Attention, E: Expert
-        hybrid_override_pattern = self.hparams["hybrid_override_pattern"]
-        self._ssm_layers = [i for i, val in enumerate(hybrid_override_pattern) if val == "M"]
-        self._mlp_layers = [i for i, val in enumerate(hybrid_override_pattern) if val == ("E" if self.is_moe else "-")]
+        pattern = self.hparams.get("hybrid_override_pattern") or self.hparams.get("layers_block_type")
+        if pattern is None:
+            self._ssm_layers = []
+            self._mlp_layers = []
+        elif isinstance(pattern, str):
+            self._ssm_layers = [i for i, val in enumerate(pattern) if val == "M"]
+            self._mlp_layers = [i for i, val in enumerate(pattern) if val == ("E" if self.is_moe else "-")]
+        else:
+            self._ssm_layers = [i for i, val in enumerate(pattern) if val == "mamba"]
+            self._mlp_layers = [i for i, val in enumerate(pattern) if val == "moe"]
 
     def get_attn_layers(self):
-        hybrid_override_pattern = self.hparams["hybrid_override_pattern"]
-        assert len(hybrid_override_pattern) == self.block_count, "Mismatch between hybrid override and num_hidden_layers!"
-        return [i for i, val in enumerate(hybrid_override_pattern) if val == "*"]
+        pattern = self.hparams.get("hybrid_override_pattern") or self.hparams.get("layers_block_type")
+        if pattern is None:
+            return []
+        assert len(pattern) == self.block_count, f"Mismatch between pattern ({len(pattern)}) and block_count ({self.block_count})!"
+        if isinstance(pattern, str):
+            return [i for i, val in enumerate(pattern) if val == "*"]
+
+        return [i for i, val in enumerate(pattern) if val == "attention"]
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
 
-        self.gguf_writer.add_key_length(self.head_dim)
-        self.gguf_writer.add_value_length(self.head_dim)
+        head_dim = self.head_dim
+        if head_dim is None:
+            raise ValueError("Could not find the attention head dim in config")
+        self.gguf_writer.add_key_length(head_dim)
+        self.gguf_writer.add_value_length(head_dim)
 
         # Set feed_forward_length
         # NOTE: This will trigger an override warning. This is preferable to
@@ -9913,6 +9944,9 @@ class NemotronHModel(GraniteHybridModel):
             if (n_experts_used := self.hparams.get("num_experts_per_tok")) is not None:
                 self.gguf_writer.add_expert_used_count(n_experts_used)
 
+            if (latent_size := self.hparams.get("moe_latent_size")) is not None:
+                self.gguf_writer.add_moe_latent_size(latent_size)
+
     def set_vocab(self):
         super().set_vocab()
 
@@ -9932,6 +9966,13 @@ class NemotronHModel(GraniteHybridModel):
             name = name[len("language_model."):]
 
         if self.is_moe and bid is not None:
+            # Skip Multi-Token Prediction (MTP) tensors. These are used for
+            # for speculative decoding but we don't include them in this model
+            # conversion. See https://github.com/ggml-org/llama.cpp/pull/18886
+            if "mtp" in name:
+                logger.info(f"gguf: Skipping MTP (Speculative) layer: {name}")
+                return []
+
             if name.endswith("mixer.gate.e_score_correction_bias"):
                 new_name = name.replace("e_score_correction_bias", "e_score_correction.bias")
                 yield from ModelBase.modify_tensors(self, data_torch, new_name, bid)

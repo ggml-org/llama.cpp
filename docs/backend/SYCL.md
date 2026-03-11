@@ -382,17 +382,27 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 
 ## Windows
 
-### I. Setup Environment
-
-1. Install GPU driver
+### Install GPU driver
 
 Intel GPU drivers instructions guide and download page can be found here: [Get Intel GPU Drivers](https://www.intel.com/content/www/us/en/products/docs/discrete-gpus/arc/software/drivers.html).
 
-2. Install Visual Studio
+### Option 1: download the binary package directly
+
+Download the binary package for Windows from: https://github.com/ggml-org/llama.cpp/releases.
+
+Extract the package to local folder, run the llama tools directly. Refer to [Run the inference](#iii-run-the-inference-1).
+
+Note, the package includes the SYCL running time and all depended dll files, no need to install oneAPI package and activte them.
+
+### Option 2: build locally from the source code.
+
+#### I. Setup environment
+
+1. Install Visual Studio
 
 If you already have a recent version of Microsoft Visual Studio, you can skip this step. Otherwise, please refer to the official download page for [Microsoft Visual Studio](https://visualstudio.microsoft.com/).
 
-3. Install Intel® oneAPI Base toolkit
+2. Install Intel® oneAPI Base toolkit
 
 SYCL backend depends on:
   - Intel® oneAPI DPC++/C++ compiler/running-time.
@@ -443,25 +453,25 @@ Output (example):
 [ext_oneapi_level_zero:gpu:0] Intel(R) Level-Zero, Intel(R) Iris(R) Xe Graphics 1.3 [1.3.28044]
 ```
 
-4. Install build tools
+3. Install build tools
 
 a. Download & install cmake for Windows: https://cmake.org/download/ (CMake can also be installed from Visual Studio Installer)
 b. The new Visual Studio will install Ninja as default. (If not, please install it manually: https://ninja-build.org/)
 
 
-### II. Build llama.cpp
+#### II. Build llama.cpp
 
 You could download the release package for Windows directly, which including binary files and depended oneAPI dll files.
 
 Choose one of following methods to build from source code.
 
-#### 1. Script
+##### Option 1: Script
 
 ```sh
 .\examples\sycl\win-build-sycl.bat
 ```
 
-#### 2. CMake
+##### Option 2: CMake
 
 On the oneAPI command line window, step into the llama.cpp main directory and run the following:
 
@@ -490,7 +500,7 @@ cmake --preset x64-windows-sycl-debug
 cmake --build build-x64-windows-sycl-debug -j --target llama-completion
 ```
 
-#### 3. Visual Studio
+##### Option 3: Visual Studio
 
 You have two options to use Visual Studio to build llama.cpp:
 - As CMake Project using CMake presets.
@@ -500,7 +510,7 @@ You have two options to use Visual Studio to build llama.cpp:
 
 All following commands are executed in PowerShell.
 
-##### - Open as a CMake Project
+###### - Open as a CMake Project
 
 You can use Visual Studio to open the `llama.cpp` folder directly as a CMake project. Before compiling, select one of the SYCL CMake presets:
 
@@ -515,7 +525,7 @@ You can use Visual Studio to open the `llama.cpp` folder directly as a CMake pro
     cmake --build build --config Release -j --target llama-completion
     ```
 
-##### - Generating a Visual Studio Solution
+###### - Generating a Visual Studio Solution
 
 You can use Visual Studio solution to build and work on llama.cpp on Windows. You need to convert the CMake Project into a `.sln` file.
 
@@ -603,7 +613,7 @@ found 2 SYCL devices:
 
 ```
 
-#### Choose level-zero devices
+##### Choose level-zero devices
 
 |Chosen Device ID|Setting|
 |-|-|
@@ -611,7 +621,7 @@ found 2 SYCL devices:
 |1|`set ONEAPI_DEVICE_SELECTOR="level_zero:1"`|
 |0 & 1|`set ONEAPI_DEVICE_SELECTOR="level_zero:0;level_zero:1"` or `set ONEAPI_DEVICE_SELECTOR="level_zero:*"`|
 
-#### Execute
+##### Execute
 
 Choose one of following methods to run.
 
@@ -669,7 +679,7 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 
 ## Environment Variable
 
-#### Build
+### Build
 
 | Name               | Value                                 | Function                                    |
 |--------------------|---------------------------------------|---------------------------------------------|
@@ -684,7 +694,7 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 
 1. FP32 or FP16 have different performance impact to LLM. Recommended to test them for better prompt processing performance on your models. You need to rebuild the code after change `GGML_SYCL_F16=OFF/ON`.
 
-#### Runtime
+### Runtime
 
 | Name              | Value            | Function                                                                                                                  |
 |-------------------|------------------|---------------------------------------------------------------------------------------------------------------------------|
@@ -777,7 +787,7 @@ use 1 SYCL GPUs: [0] with Max compute units:512
   ```
 
 ### **GitHub contribution**:
-Please add the `SYCL :` prefix/tag in issues/PRs titles to help the SYCL contributors to check/address them without delay.
+Please add the `[SYCL]` prefix/tag in issues/PRs titles to help the SYCL contributors to check/address them without delay.
 
 ## TODO
 

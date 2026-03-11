@@ -35,7 +35,7 @@
 #define N_R0_Q4_K 2
 #define N_SG_Q4_K 2
 
-#define N_R0_Q5_K 2
+#define N_R0_Q5_K 1
 #define N_SG_Q5_K 2
 
 #define N_R0_Q6_K 2
@@ -83,6 +83,7 @@
 #define FC_UNARY                       1200
 #define FC_BIN                         1300
 #define FC_SUM_ROWS                    1400
+#define FC_UPSCALE                     1500
 
 // op-specific constants
 #define OP_FLASH_ATTN_EXT_NQPSG 8
@@ -890,6 +891,7 @@ typedef struct {
     float    sf1;
     float    sf2;
     float    sf3;
+    float    poffs;
 } ggml_metal_kargs_upscale;
 
 typedef struct {
