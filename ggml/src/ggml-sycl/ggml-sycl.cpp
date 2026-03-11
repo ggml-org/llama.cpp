@@ -4022,6 +4022,14 @@ struct moe_profile_layer {
     int    n_cpu_experts   = 0;  // Number of CPU-dispatched experts
     int    n_gpu_experts   = 0;  // Number of GPU-dispatched experts
     int    n_calls         = 0;  // Number of MUL_MAT_ID calls in this layer (gate/up/down)
+
+    // Scatter decomposition (U6): break scatter_us into sub-phases
+    double scatter_cpu_wait_us = 0;  // Time waiting for CPU future.get()
+    double scatter_submit_us   = 0;  // Time submitting memcpy to queue
+    double scatter_event_wait_us = 0; // Time inside event::wait / stream->wait()
+    int    scatter_n_calls     = 0;  // Number of scatter calls in this layer
+    int    scatter_n_entries   = 0;  // Total scatter entries (expert results)
+    double scatter_bytes       = 0;  // Total bytes scattered H2D
 };
 
 struct moe_profile_token {
@@ -4052,7 +4060,8 @@ struct moe_profile_state {
     hrc::time_point op_start;
     hrc::time_point ids_done;
     hrc::time_point routing_done;
-    hrc::time_point compute_done;
+    hrc::time_point gpu_compute_done_tp;  // GPU MMVQ dispatch end
+    hrc::time_point compute_done;         // All compute end (GPU + CPU)
     hrc::time_point scatter_done;
     int             op_n_cpu = 0;
     int             op_n_gpu = 0;
@@ -4151,10 +4160,11 @@ struct moe_profile_state {
             moe_entry = now;
         }
 
-        op_start     = hrc::now();
-        ids_done     = op_start;  // Default: no IDs D2H
-        routing_done = op_start;  // Default: no routing
-        compute_done = op_start;  // Default: no compute
+        op_start              = hrc::now();
+        ids_done              = op_start;  // Default: no IDs D2H
+        routing_done          = op_start;  // Default: no routing
+        gpu_compute_done_tp   = op_start;  // Default: no GPU compute
+        compute_done          = op_start;  // Default: no compute
         op_n_cpu = 0;
         op_n_gpu = 0;
     }
@@ -4162,6 +4172,7 @@ struct moe_profile_state {
     // Sub-phase timestamps within a MUL_MAT_ID call
     void moe_ids_done()     { if (token_active) ids_done = hrc::now(); }
     void moe_routing_done() { if (token_active) routing_done = hrc::now(); }
+    void moe_gpu_compute_done() { if (token_active) gpu_compute_done_tp = hrc::now(); }
     void moe_compute_done(int n_cpu, int n_gpu) {
         if (!token_active) return;
         compute_done = hrc::now();
@@ -4170,26 +4181,53 @@ struct moe_profile_state {
     }
     void moe_scatter_done() { if (token_active) scatter_done = hrc::now(); }
 
+    // Record scatter decomposition (U6 probes)
+    void moe_scatter_detail(double cpu_wait_us, double submit_us, double event_wait_us,
+                            int n_entries, double bytes) {
+        if (!token_active) return;
+        cur_layer.scatter_cpu_wait_us += cpu_wait_us;
+        cur_layer.scatter_submit_us   += submit_us;
+        cur_layer.scatter_event_wait_us += event_wait_us;
+        cur_layer.scatter_n_calls++;
+        cur_layer.scatter_n_entries   += n_entries;
+        cur_layer.scatter_bytes       += bytes;
+    }
+
     // Called at MoE MUL_MAT_ID exit
     void moe_op_end() {
         if (!token_active) return;
         auto now = hrc::now();
 
         // Default unset timestamps to op_start to avoid garbage values
-        auto ids_t     = (ids_done     > op_start) ? ids_done     : op_start;
-        auto routing_t = (routing_done > op_start) ? routing_done : ids_t;
-        auto compute_t = (compute_done > op_start) ? compute_done : routing_t;
+        auto ids_t     = (ids_done              > op_start) ? ids_done              : op_start;
+        auto routing_t = (routing_done          > op_start) ? routing_done          : ids_t;
+        auto gpu_t     = (gpu_compute_done_tp   > op_start) ? gpu_compute_done_tp   : routing_t;
+        auto compute_t = (compute_done          > op_start) ? compute_done          : gpu_t;
 
         cur_layer.ids_d2h_us     += us(op_start, ids_t);
         cur_layer.routing_us     += us(ids_t, routing_t);
-        cur_layer.cpu_compute_us += us(routing_t, compute_t);
+        cur_layer.gpu_compute_us += us(routing_t, gpu_t);
+        cur_layer.cpu_compute_us += us(gpu_t, compute_t);
         cur_layer.scatter_us     += us(compute_t, now);
         cur_layer.n_cpu_experts  += op_n_cpu;
         cur_layer.n_gpu_experts  += op_n_gpu;
         cur_layer.n_calls++;
 
+        // U6 diagnostic: detect when compute_done was never set (falls back to
+        // op_start or routing_done), causing entire op time to be misattributed
+        // to "scatter".  This happens on paths that skip moe_compute_done().
+        bool compute_was_set = (compute_done > op_start);
+        if (!compute_was_set) {
+            n_compute_not_set++;
+            unset_scatter_accum_us += us(compute_t, now);
+        }
+
         last_moe_exit = now;
     }
+
+    // U6 diagnostic counters
+    int    n_compute_not_set = 0;       // How many ops had compute_done unset
+    double unset_scatter_accum_us = 0;  // Total "scatter" time from unset compute_done
 
     // Called when fusion completes a full gate+up+silu+down cycle
     void moe_fusion_phase(double ids_us, double routing_us_val, double compute_us_val,
@@ -4216,10 +4254,16 @@ struct moe_profile_state {
         double avg_ids = 0, avg_routing = 0, avg_cpu = 0, avg_gpu = 0;
         double avg_scatter = 0, avg_attn = 0, avg_other = 0, avg_total = 0;
         double avg_moe = 0;
+        // Scatter decomposition averages (U6)
+        double avg_scatter_cpu_wait = 0, avg_scatter_submit = 0, avg_scatter_event_wait = 0;
+        double avg_scatter_bytes = 0;
+        int    avg_scatter_entries = 0, avg_scatter_calls = 0;
         int    avg_layers = 0, avg_cpu_experts = 0, avg_gpu_experts = 0;
 
         for (auto & tok : tokens) {
             double tok_ids = 0, tok_routing = 0, tok_cpu = 0, tok_gpu = 0, tok_scatter = 0;
+            double tok_scat_cpu = 0, tok_scat_sub = 0, tok_scat_wait = 0, tok_scat_bytes = 0;
+            int    tok_scat_ent = 0, tok_scat_calls = 0;
             int    tok_cpu_exp = 0, tok_gpu_exp = 0;
             for (auto & lay : tok.layers) {
                 tok_ids     += lay.ids_d2h_us;
@@ -4229,6 +4273,12 @@ struct moe_profile_state {
                 tok_scatter += lay.scatter_us;
                 tok_cpu_exp += lay.n_cpu_experts;
                 tok_gpu_exp += lay.n_gpu_experts;
+                tok_scat_cpu   += lay.scatter_cpu_wait_us;
+                tok_scat_sub   += lay.scatter_submit_us;
+                tok_scat_wait  += lay.scatter_event_wait_us;
+                tok_scat_ent   += lay.scatter_n_entries;
+                tok_scat_calls += lay.scatter_n_calls;
+                tok_scat_bytes += lay.scatter_bytes;
             }
             avg_ids     += tok_ids;
             avg_routing += tok_routing;
@@ -4242,12 +4292,20 @@ struct moe_profile_state {
             avg_layers  += tok.n_moe_layers;
             avg_cpu_experts += tok_cpu_exp;
             avg_gpu_experts += tok_gpu_exp;
+            avg_scatter_cpu_wait  += tok_scat_cpu;
+            avg_scatter_submit    += tok_scat_sub;
+            avg_scatter_event_wait += tok_scat_wait;
+            avg_scatter_entries   += tok_scat_ent;
+            avg_scatter_calls     += tok_scat_calls;
+            avg_scatter_bytes     += tok_scat_bytes;
         }
 
         const int nt = static_cast<int>(tokens.size());
         avg_ids     /= nt;  avg_routing /= nt;  avg_cpu     /= nt;
         avg_gpu     /= nt;  avg_scatter /= nt;  avg_attn    /= nt;
         avg_other   /= nt;  avg_total   /= nt;  avg_moe     /= nt;
+        avg_scatter_cpu_wait  /= nt;  avg_scatter_submit /= nt;
+        avg_scatter_event_wait /= nt; avg_scatter_bytes  /= nt;
 
         // Print one detailed token first (token index 2, or last if fewer)
         int detail_idx = std::min(2, nt - 1);
@@ -4267,6 +4325,8 @@ struct moe_profile_state {
         };
 
         double dtok_ids = 0, dtok_routing = 0, dtok_cpu = 0, dtok_gpu = 0, dtok_scatter = 0;
+        double dtok_scat_cpu = 0, dtok_scat_sub = 0, dtok_scat_wait = 0, dtok_scat_bytes = 0;
+        int    dtok_scat_ent = 0, dtok_scat_calls = 0;
         int dtok_cpu_exp = 0, dtok_gpu_exp = 0;
         for (auto & lay : dtok.layers) {
             dtok_ids     += lay.ids_d2h_us;
@@ -4276,6 +4336,12 @@ struct moe_profile_state {
             dtok_scatter += lay.scatter_us;
             dtok_cpu_exp += lay.n_cpu_experts;
             dtok_gpu_exp += lay.n_gpu_experts;
+            dtok_scat_cpu   += lay.scatter_cpu_wait_us;
+            dtok_scat_sub   += lay.scatter_submit_us;
+            dtok_scat_wait  += lay.scatter_event_wait_us;
+            dtok_scat_ent   += lay.scatter_n_entries;
+            dtok_scat_calls += lay.scatter_n_calls;
+            dtok_scat_bytes += lay.scatter_bytes;
         }
 
         print_row("MoE total",            dtok.moe_total_us, dtok.n_moe_layers);
@@ -4286,6 +4352,22 @@ struct moe_profile_state {
             print_row("  CPU expert compute", dtok_cpu,     dtok.n_moe_layers);
             print_row("  GPU expert compute", dtok_gpu,     dtok.n_moe_layers);
             print_row("  Scatter H2D",        dtok_scatter, dtok.n_moe_layers);
+            // U6: Scatter decomposition
+            if (dtok_scat_cpu > 0 || dtok_scat_sub > 0 || dtok_scat_wait > 0) {
+                print_row("    CPU future.get()", dtok_scat_cpu,  dtok.n_moe_layers);
+                print_row("    memcpy submit",    dtok_scat_sub,  dtok.n_moe_layers);
+                print_row("    event::wait()",    dtok_scat_wait, dtok.n_moe_layers);
+                fprintf(stderr, "    Scatter: %d calls, %d entries, %.1f KB total\n",
+                        dtok_scat_calls, dtok_scat_ent, dtok_scat_bytes / 1024.0);
+                if (dtok_scat_calls > 0) {
+                    double per_call_us = (dtok_scat_cpu + dtok_scat_sub + dtok_scat_wait)
+                                         / dtok_scat_calls;
+                    double per_call_bytes = dtok_scat_bytes / dtok_scat_calls;
+                    fprintf(stderr, "    Per scatter call: %.1f us (%.1f KB, %.2f GB/s effective)\n",
+                            per_call_us, per_call_bytes / 1024.0,
+                            per_call_bytes > 0 ? per_call_bytes / (per_call_us * 1e-6) / 1e9 : 0);
+                }
+            }
         }
         print_row("Non-MoE (attn+norms)",  dtok.attention_us, dtok.n_moe_layers);
         fprintf(stderr, "%-25s-+-%10s-+-%13s-+-%8s\n",
@@ -4317,6 +4399,26 @@ struct moe_profile_state {
             print_avg("  CPU expert compute", avg_cpu);
             print_avg("  GPU expert compute", avg_gpu);
             print_avg("  Scatter H2D",        avg_scatter);
+            // U6: Scatter decomposition averages
+            if (avg_scatter_cpu_wait > 0 || avg_scatter_submit > 0 || avg_scatter_event_wait > 0) {
+                print_avg("    CPU future.get()", avg_scatter_cpu_wait);
+                print_avg("    memcpy submit",    avg_scatter_submit);
+                print_avg("    event::wait()",    avg_scatter_event_wait);
+                fprintf(stderr, "    Avg scatter: %.0f calls, %.0f entries, %.1f KB/token\n",
+                        static_cast<double>(avg_scatter_calls) / nt,
+                        static_cast<double>(avg_scatter_entries) / nt,
+                        avg_scatter_bytes / 1024.0);
+                double avg_total_scatter_us = avg_scatter_cpu_wait + avg_scatter_submit + avg_scatter_event_wait;
+                if (avg_total_scatter_us > 0) {
+                    fprintf(stderr, "    Breakdown: CPU wait %.1f%%, submit %.1f%%, event::wait %.1f%%\n",
+                            100.0 * avg_scatter_cpu_wait / avg_total_scatter_us,
+                            100.0 * avg_scatter_submit / avg_total_scatter_us,
+                            100.0 * avg_scatter_event_wait / avg_total_scatter_us);
+                    double eff_bw = avg_scatter_bytes / (avg_total_scatter_us * 1e-6) / 1e9;
+                    fprintf(stderr, "    Effective BW: %.3f GB/s (%.1f KB in %.1f us)\n",
+                            eff_bw, avg_scatter_bytes / 1024.0, avg_total_scatter_us);
+                }
+            }
         }
         print_avg("Non-MoE (attn+norms)",  avg_attn);
         fprintf(stderr, "%-25s-+-%10s-+-%13s-+-%8s\n",
@@ -4325,7 +4427,56 @@ struct moe_profile_state {
                 "Token total", avg_total / 1000.0, 100.0);
         fprintf(stderr, "  Avg experts/token: %d CPU, %d GPU | MoE layers: %d\n",
                 avg_cpu_experts / nt, avg_gpu_experts / nt, avg_nl);
-        fprintf(stderr, "  Token rate: %.2f tok/s\n\n", avg_total > 0 ? 1e6 / avg_total : 0);
+        fprintf(stderr, "  Token rate: %.2f tok/s\n", avg_total > 0 ? 1e6 / avg_total : 0);
+
+        // Per-expert GPU MMVQ dispatch cost
+        const int total_gpu_exp = avg_gpu_experts;  // already summed
+        if (total_gpu_exp > 0 && avg_gpu > 0) {
+            const double per_expert_gpu_us = avg_gpu * nt / total_gpu_exp;
+            fprintf(stderr, "\n--- GPU MMVQ Dispatch Cost ---\n");
+            fprintf(stderr, "  Total GPU experts across %d tokens: %d\n", nt, total_gpu_exp);
+            fprintf(stderr, "  Avg GPU dispatch/token:   %.1f us (%.3f ms)\n",
+                    avg_gpu, avg_gpu / 1000.0);
+            fprintf(stderr, "  Per-expert dispatch:      %.1f us (%.3f ms)\n",
+                    per_expert_gpu_us, per_expert_gpu_us / 1000.0);
+            fprintf(stderr, "  GPU dispatch includes: ptr table build, Q8_1 quant, batch ID upload, kernel submit\n");
+        }
+
+        // Per-expert CPU compute cost
+        const int total_cpu_exp = avg_cpu_experts;
+        if (total_cpu_exp > 0 && avg_cpu > 0) {
+            const double per_expert_cpu_us = avg_cpu * nt / total_cpu_exp;
+            fprintf(stderr, "\n--- CPU Expert Compute Cost ---\n");
+            fprintf(stderr, "  Total CPU experts across %d tokens: %d\n", nt, total_cpu_exp);
+            fprintf(stderr, "  Avg CPU compute/token:    %.1f us (%.3f ms)\n",
+                    avg_cpu, avg_cpu / 1000.0);
+            fprintf(stderr, "  Per-expert CPU compute:   %.1f us (%.3f ms)\n",
+                    per_expert_cpu_us, per_expert_cpu_us / 1000.0);
+        }
+        // U6 diagnostic: misattributed scatter time
+        if (n_compute_not_set > 0) {
+            fprintf(stderr, "\n--- U6 Scatter Misattribution Diagnostic ---\n");
+            fprintf(stderr, "  moe_compute_done() NOT called: %d sub-ops across %d tokens\n",
+                    n_compute_not_set, nt);
+            fprintf(stderr, "  Time misattributed to scatter: %.1f ms (%.1f ms/token)\n",
+                    unset_scatter_accum_us / 1000.0, unset_scatter_accum_us / 1000.0 / nt);
+            fprintf(stderr, "  True scatter time (U6 probes): %.1f ms/token\n",
+                    (avg_scatter_cpu_wait + avg_scatter_submit + avg_scatter_event_wait) / 1000.0);
+            fprintf(stderr, "  => %.1f%% of reported 'Scatter H2D' is actually non-scatter overhead\n",
+                    avg_scatter > 0 ? 100.0 * (unset_scatter_accum_us / nt) / avg_scatter : 0);
+        } else {
+            fprintf(stderr, "\n--- U6 Scatter Diagnostic ---\n");
+            fprintf(stderr, "  All sub-ops had moe_compute_done() called (no misattribution)\n");
+            fprintf(stderr, "  True scatter time (U6 probes): %.1f ms/token\n",
+                    (avg_scatter_cpu_wait + avg_scatter_submit + avg_scatter_event_wait) / 1000.0);
+            if (avg_scatter > 0) {
+                double true_scatter = avg_scatter_cpu_wait + avg_scatter_submit + avg_scatter_event_wait;
+                fprintf(stderr, "  Unaccounted scatter overhead: %.1f ms/token (%.1f%%)\n",
+                        (avg_scatter - true_scatter) / 1000.0,
+                        100.0 * (avg_scatter - true_scatter) / avg_scatter);
+            }
+        }
+        fprintf(stderr, "\n");
     }
 };
 
@@ -4370,23 +4521,50 @@ static bool ggml_sycl_moe_fusion_enabled() {
 static void flush_pending_cpu_scatter() {
     if (!g_pending_scatter.active) return;
 
+    using hrc = std::chrono::high_resolution_clock;
+    auto t0 = hrc::now();
+
     try {
         // Wait for CPU compute to finish
         if (g_pending_scatter.future.valid()) {
             g_pending_scatter.future.get();
         }
 
+        auto t1 = hrc::now();  // After CPU future.get()
+
         // Scatter results H2D
+        double total_bytes = 0;
+        int    n_entries   = 0;
         if (g_pending_scatter.stream && g_pending_scatter.out_pinned) {
             const float * src = g_pending_scatter.out_pinned;
             for (auto & e : g_pending_scatter.entries) {
                 if (e.dst_device) {
                     g_pending_scatter.stream->memcpy(
                         e.dst_device, src, static_cast<size_t>(e.N) * sizeof(float));
+                    total_bytes += static_cast<double>(e.N) * sizeof(float);
+                    n_entries++;
                 }
                 src += e.N;
             }
+
+            auto t2 = hrc::now();  // After memcpy submissions (before wait)
+
             g_pending_scatter.stream->wait();
+
+            auto t3 = hrc::now();  // After stream->wait()
+
+            // Record scatter decomposition if profiling
+            if (g_moe_profile_enabled) {
+                double cpu_wait_us   = std::chrono::duration<double, std::micro>(t1 - t0).count();
+                double submit_us     = std::chrono::duration<double, std::micro>(t2 - t1).count();
+                double event_wait_us = std::chrono::duration<double, std::micro>(t3 - t2).count();
+                g_moe_profile.moe_scatter_detail(cpu_wait_us, submit_us, event_wait_us,
+                                                 n_entries, total_bytes);
+            }
+        } else if (g_moe_profile_enabled) {
+            // No stream/output — record only CPU wait
+            double cpu_wait_us = std::chrono::duration<double, std::micro>(t1 - t0).count();
+            g_moe_profile.moe_scatter_detail(cpu_wait_us, 0, 0, 0, 0);
         }
     } catch (const std::exception & ex) {
         GGML_LOG_ERROR("[CPU-TG] Deferred scatter failed: %s\n", ex.what());
@@ -27019,6 +27197,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                             char * dst_d_gate = static_cast<char *>(ggml_sycl_get_data_ptr(dst, ctx.device));
                             std::vector<sycl::event> scatter_events;
                             scatter_events.reserve(n_cpu_gate);
+                            auto scatter_t0 = std::chrono::high_resolution_clock::now();
+                            double gate_scatter_bytes = 0;
                             for (size_t fi = 0; fi < n_cpu_gate; fi++) {
                                 const size_t  ci   = g_moe_fusion.cpu_indices[fi];
                                 const int64_t iid1 = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_f));
@@ -27026,8 +27206,17 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                 char * slot = dst_d_gate + id * nb1 + iid1 * nb2;
                                 scatter_events.push_back(stream->memcpy(slot, tl_gate_out.ptr + fi * static_cast<size_t>(N_gate_f),
                                                static_cast<size_t>(N_gate_f) * sizeof(float)));
+                                gate_scatter_bytes += static_cast<double>(N_gate_f) * sizeof(float);
                             }
+                            auto scatter_t1 = std::chrono::high_resolution_clock::now();
                             sycl::event::wait(scatter_events);
+                            auto scatter_t2 = std::chrono::high_resolution_clock::now();
+                            if (g_moe_profile_enabled) {
+                                double submit_us = std::chrono::duration<double, std::micro>(scatter_t1 - scatter_t0).count();
+                                double wait_us   = std::chrono::duration<double, std::micro>(scatter_t2 - scatter_t1).count();
+                                g_moe_profile.moe_scatter_detail(0, submit_us, wait_us,
+                                    static_cast<int>(n_cpu_gate), gate_scatter_bytes);
+                            }
                         }
                     }
                     return;
@@ -27378,6 +27567,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     char * dst_d = static_cast<char *>(ggml_sycl_get_data_ptr(dst, ctx.device));
                     std::vector<sycl::event> down_events;
                     down_events.reserve(n_cpu_d + 8);
+                    auto down_scatter_t0 = std::chrono::high_resolution_clock::now();
+                    double down_scatter_bytes = 0;
                     for (size_t fi = 0; fi < n_cpu_d; fi++) {
                         const size_t  ci   = g_moe_fusion.cpu_indices[fi];
                         const int64_t iid1 = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_d));
@@ -27385,7 +27576,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         char *        slot = dst_d + id * nb1 + iid1 * nb2;
                         down_events.push_back(stream->memcpy(slot, tl_down_out.ptr + fi * static_cast<size_t>(N_d),
                                        static_cast<size_t>(N_d) * sizeof(float)));
+                        down_scatter_bytes += static_cast<double>(N_d) * sizeof(float);
                     }
+                    auto down_scatter_t1 = std::chrono::high_resolution_clock::now();
 
                     // Dispatch secondary GPU experts for the DOWN sub-tensor
                     if (!g_moe_fusion.sec_indices.empty()) {
@@ -27429,6 +27622,13 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
 
                     sycl::event::wait(down_events);
+                    auto down_scatter_t2 = std::chrono::high_resolution_clock::now();
+                    if (g_moe_profile_enabled) {
+                        double submit_us = std::chrono::duration<double, std::micro>(down_scatter_t1 - down_scatter_t0).count();
+                        double wait_us   = std::chrono::duration<double, std::micro>(down_scatter_t2 - down_scatter_t1).count();
+                        g_moe_profile.moe_scatter_detail(0, submit_us, wait_us,
+                            static_cast<int>(n_cpu_d), down_scatter_bytes);
+                    }
 
                     static std::atomic<int> flog3{ 0 };
                     if (flog3.fetch_add(1, std::memory_order_relaxed) < 3) {
@@ -28631,12 +28831,123 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 dispatch_experts_secondary_gpu_impl(entries, target_device, sctx, cpu_entries);
             };
 
+            bool probe_partition_done = false;
+
+            // ---------------------------------------------------------------
+            // GPU MMVQ Probe: when MOE_PROFILE is active, force-dispatch
+            // selected experts to GPU via temp device buffer to measure real
+            // GPU MMVQ dispatch overhead (host-side + kernel execution).
+            // ---------------------------------------------------------------
+            static std::atomic<int> s_moe_gpu_probe_count{-1};
+            {
+                int probe_n = s_moe_gpu_probe_count.load(std::memory_order_acquire);
+                if (probe_n < 0) {
+                    const char * env = getenv("GGML_SYCL_MOE_GPU_PROBE");
+                    int new_val = env ? std::atoi(env) : 0;
+                    // Auto-enable when profiling is on: probe 8 experts
+                    if (new_val == 0 && g_moe_profile_enabled) new_val = 8;
+                    s_moe_gpu_probe_count.compare_exchange_strong(probe_n, new_val,
+                        std::memory_order_release, std::memory_order_acquire);
+                }
+            }
+            const int n_gpu_probe = s_moe_gpu_probe_count.load(std::memory_order_acquire);
+
+            // Persistent device-side probe buffer: one expert's worth of VRAM.
+            // Allocated once, reused across layers/tokens to avoid alloc overhead
+            // polluting the timing measurement.
+            static thread_local void * s_probe_device_buf = nullptr;
+            static thread_local size_t s_probe_buf_size   = 0;
+
+            if (n_gpu_probe > 0 && src0->data && expert_size > 0) {
+                // Ensure probe buffer is large enough
+                if (!s_probe_device_buf || s_probe_buf_size < expert_size) {
+                    if (s_probe_device_buf) {
+                        sycl::free(s_probe_device_buf, *stream);
+                    }
+                    s_probe_device_buf = sycl::malloc_device(expert_size, *stream);
+                    s_probe_buf_size   = expert_size;
+                    if (g_moe_profile_enabled) {
+                        fprintf(stderr, "[MOE-PROBE] Alloc probe buf: %zu bytes, ptr=%p, "
+                                "layout=%d, type=%d\n",
+                                expert_size, s_probe_device_buf,
+                                (int) route_layout, (int) src0->type);
+                    }
+                }
+
+                if (s_probe_device_buf) {
+                    // Determine which experts to probe (first N_GPU_PROBE from ids)
+                    const int n_probe = std::min(n_gpu_probe,
+                        static_cast<int>(ids->ne[1] * n_ids));
+
+                    for (int pi = 0; pi < n_probe; pi++) {
+                        const int32_t eid = ids_host[pi];
+                        if (eid < 0 || eid >= n_as) continue;
+
+                        // Copy this expert from host mmap to device probe buffer
+                        const char * host_expert_ptr =
+                            static_cast<const char *>(src0->data) + eid * nb02;
+                        stream->memcpy(s_probe_device_buf, host_expert_ptr,
+                                       expert_size).wait();
+
+                        // Add to gpu_entries with probe device pointer
+                        const int64_t iid1 = pi / n_ids;
+                        const int64_t id   = pi % n_ids;
+                        gpu_entries.push_back({ iid1, id, eid, s_probe_device_buf });
+                    }
+
+                    // Build device pointer table: all point to probe buffer
+                    // (single expert re-used — results won't be correct but
+                    // timing is real)
+                    if (!gpu_entries.empty() && src0_extra) {
+                        ggml_sycl_ensure_moe_ptr_table(src0_extra, ctx.device,
+                            static_cast<int>(n_as), *stream);
+
+                        auto & host_ptrs =
+                            src0_extra->moe_expert_ptrs_host[ctx.device];
+                        if (host_ptrs.size() != static_cast<size_t>(n_as)) {
+                            host_ptrs.resize(static_cast<size_t>(n_as), nullptr);
+                        }
+                        for (int e = 0; e < n_as; e++) {
+                            host_ptrs[e] = s_probe_device_buf;
+                        }
+                        stream->memcpy(
+                            src0_extra->moe_expert_ptrs_device[ctx.device],
+                            host_ptrs.data(),
+                            host_ptrs.size() * sizeof(void *)).wait();
+                    }
+
+                    // Remaining experts go to CPU
+                    for (int pi = n_probe;
+                         pi < static_cast<int>(ids->ne[1] * n_ids); pi++) {
+                        const int32_t eid = ids_host[pi];
+                        if (eid < 0 || eid >= n_as) continue;
+                        const int64_t iid1 = pi / n_ids;
+                        const int64_t id   = pi % n_ids;
+                        cpu_entries.push_back({ iid1, id, eid, nullptr });
+                    }
+
+                    probe_partition_done = true;
+
+                    static thread_local int s_probe_log_count = 0;
+                    if (g_moe_profile_enabled && s_probe_log_count < 3) {
+                        s_probe_log_count++;
+                        fprintf(stderr, "[MOE-PROBE] Partitioned: %zu GPU, %zu CPU "
+                                "(probe=%d, n_ids=%lld, ne[1]=%lld)\n",
+                                gpu_entries.size(), cpu_entries.size(),
+                                n_probe,
+                                (long long) n_ids, (long long) ids->ne[1]);
+                    }
+                }
+            }
+
             // ---------------------------------------------------------------
             // CPU-primary expert TG: hybrid GPU+CPU dispatch.
             // VRAM-resident experts → GPU (380 GB/s), host-resident → CPU
             // (70 GB/s). Skips prediction/prefetch overhead for batch=1 TG.
             // ---------------------------------------------------------------
-            if (cpu_expert_tg_active) {
+            if (probe_partition_done) {
+                // GPU probe handled partition — skip to shared dispatch
+            } else if (cpu_expert_tg_active) {
                 auto & placement_table = ggml_sycl::get_expert_placement_table();
                 // For batch=1 TG, VRAM-resident experts on any GPU are dispatched
                 // to their device; host-resident experts fall back to CPU.
@@ -29078,6 +29389,11 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         ggml_sycl_mul_mat(ctx, &src0_row, &src1_row, &dst_row, &route_layout);
                     }
                 }
+            }
+
+            // MoE profiling: GPU MMVQ dispatch done (host-side submission)
+            if (g_moe_profile_enabled) {
+                g_moe_profile.moe_gpu_compute_done();
             }
 
             // ----- CPU path: dispatch cache-miss experts via shared helper -----
