@@ -86,6 +86,10 @@ struct llama_file::impl {
         seek(0, SEEK_SET);
     }
 
+    impl(int /*fd_src*/) {
+        throw std::runtime_error("fd-based loading is not supported on Windows");
+    }
+
     size_t tell() const {
         LARGE_INTEGER li;
         li.QuadPart = 0;
@@ -203,6 +207,25 @@ struct llama_file::impl {
         fp = ggml_fopen(fname.c_str(), mode);
         if (fp == NULL) {
             throw std::runtime_error(format("failed to open %s: %s", fname.c_str(), strerror(errno)));
+        }
+        seek(0, SEEK_END);
+        size = tell();
+        seek(0, SEEK_SET);
+    }
+
+    impl(int fd_src) : fname("(fd:" + std::to_string(fd_src) + ")") {
+        init_from_fd(fd_src);
+    }
+
+    void init_from_fd(int fd_src) {
+        const int fd_duped = dup(fd_src);
+        if (fd_duped < 0) {
+            throw std::runtime_error(format("llama_file: failed to dup fd %d: %s", fd_src, strerror(errno)));
+        }
+        fp = fdopen(fd_duped, "rb");
+        if (!fp) {
+            close(fd_duped);
+            throw std::runtime_error(format("llama_file: failed to fdopen fd %d: %s", fd_src, strerror(errno)));
         }
         seek(0, SEEK_END);
         size = tell();
@@ -373,6 +396,9 @@ struct llama_file::impl {
 
 llama_file::llama_file(const char * fname, const char * mode, const bool use_direct_io) :
     pimpl(std::make_unique<impl>(fname, mode, use_direct_io)) {}
+
+llama_file::llama_file(int fd) : pimpl(std::make_unique<impl>(fd)) {}
+
 llama_file::~llama_file() = default;
 
 size_t llama_file::tell() const { return pimpl->tell(); }
