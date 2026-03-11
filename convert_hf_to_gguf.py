@@ -9817,7 +9817,7 @@ class NemotronHModel(GraniteHybridModel):
             # for speculative decoding but we don't include them in this model
             # conversion. See https://github.com/ggml-org/llama.cpp/pull/18886
             if "mtp" in name:
-                print(f"Skipping MTP (Speculative) layer: {name}")
+                logger.info(f"gguf: Skipping MTP (Speculative) layer: {name}")
                 return []
 
             if name.endswith("mixer.gate.e_score_correction_bias"):
