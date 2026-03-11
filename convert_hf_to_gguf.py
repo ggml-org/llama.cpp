@@ -9744,7 +9744,10 @@ class NemotronHModel(GraniteHybridModel):
         # MoE:
         # M: Mamba2, *: Attention, E: Expert
         pattern = self.hparams.get("hybrid_override_pattern") or self.hparams.get("layers_block_type")
-        if isinstance(pattern, str):
+        if pattern is None:
+            self._ssm_layers = []
+            self._mlp_layers = []
+        elif isinstance(pattern, str):
             self._ssm_layers = [i for i, val in enumerate(pattern) if val == "M"]
             self._mlp_layers = [i for i, val in enumerate(pattern) if val == ("E" if self.is_moe else "-")]
         else:
@@ -9753,6 +9756,8 @@ class NemotronHModel(GraniteHybridModel):
 
     def get_attn_layers(self):
         pattern = self.hparams.get("hybrid_override_pattern") or self.hparams.get("layers_block_type")
+        if pattern is None:
+            return []
         assert len(pattern) == self.block_count, f"Mismatch between pattern ({len(pattern)}) and block_count ({self.block_count})!"
         if isinstance(pattern, str):
             return [i for i, val in enumerate(pattern) if val == "*"]
@@ -9762,8 +9767,11 @@ class NemotronHModel(GraniteHybridModel):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
 
-        self.gguf_writer.add_key_length(self.head_dim)
-        self.gguf_writer.add_value_length(self.head_dim)
+        head_dim = self.head_dim
+        if head_dim is None:
+            raise ValueError("Could not find the attention head dim in config")
+        self.gguf_writer.add_key_length(head_dim)
+        self.gguf_writer.add_value_length(head_dim)
 
         # Set feed_forward_length
         # NOTE: This will trigger an override warning. This is preferable to
