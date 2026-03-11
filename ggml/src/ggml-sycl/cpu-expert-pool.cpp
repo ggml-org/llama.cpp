@@ -7,6 +7,7 @@
 #include "cpu-expert-pool.hpp"
 
 #include "ggml-impl.h"
+#include "unified-cache.hpp"  // ggml_sycl_is_shutting_down()
 
 #include <algorithm>
 #include <cstdlib>
@@ -192,7 +193,11 @@ void CpuExpertPool::shutdown() {
 }
 
 CpuExpertPool::~CpuExpertPool() {
-    shutdown();
+    // Skip cleanup during static destruction — unified cache statics
+    // (g_runtime_alloc_registry etc.) may already be destroyed.
+    if (!ggml_sycl_is_shutting_down()) {
+        shutdown();
+    }
 }
 
 }  // namespace ggml_sycl

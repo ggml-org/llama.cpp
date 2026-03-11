@@ -30700,6 +30700,15 @@ static void ggml_backend_sycl_free(ggml_backend_t backend) {
     // is called for temporary backends during model loading.  The worker
     // thread is a global resource tied to split config; it self-terminates
     // via static destructor at program exit.
+    // Shut down CpuExpertPool and PinnedBufferPool instances while the
+    // unified cache and SYCL context are still alive.  Both pools use
+    // unified_alloc for their buffers; if we leave this to the static
+    // destructor, the unified cache statics may already be destroyed → SIGSEGV.
+    // shutdown() is idempotent and a no-op for pools that were never started.
+    for (int d = 0; d < GGML_SYCL_MAX_DEVICES; d++) {
+        g_cpu_expert_pools[d].shutdown();
+        g_pinned_buffer_pools[d].shutdown();
+    }
     // Drain any pending merge events before teardown
     split_merge_drain();
     // Free ring buffer staging entries

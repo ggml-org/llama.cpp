@@ -18,7 +18,11 @@
 namespace ggml_sycl {
 
 PinnedBufferPool::~PinnedBufferPool() {
-    shutdown();
+    // Skip cleanup during static destruction — unified cache statics
+    // (g_runtime_alloc_registry etc.) may already be destroyed.
+    if (!ggml_sycl_is_shutting_down()) {
+        shutdown();
+    }
 }
 
 void PinnedBufferPool::init(sycl::queue & q, int device_id, size_t max_experts,
