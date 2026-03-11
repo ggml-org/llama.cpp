@@ -135,7 +135,9 @@ common_peg_parser analyze_reasoning::build_parser(parser_build_context & ctx) co
     if (thinking_forced_open || thinking_forced_closed) {
         // Thinking is forced open OR forced closed with enable_thinking=true
         // In both cases, expect only the closing tag (opening was in template)
-        return p.reasoning(p.until(end)) + end;
+        // However, since we might have incorrectly detected the open/close pattern,
+        // we admit an optional starting marker
+        return p.optional(p.literal(start)) + p.reasoning(p.until(end)) + end;
     }
     if (mode == reasoning_mode::TAG_BASED || mode == reasoning_mode::TOOLS_ONLY) {
         // Standard tag-based reasoning OR tools-only mode (reasoning appears with tools)

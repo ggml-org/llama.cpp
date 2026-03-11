@@ -870,9 +870,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
     quantize_state_impl qs(model, params);
 
-    // these need to be set to n_layer by default
-    qs.n_ffn_down = qs.n_ffn_gate = qs.n_ffn_up = (int)model.hparams.n_layer;
-
     if (params->only_copy) {
         ftype = ml.ftype;
     }
@@ -979,6 +976,22 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     // compute tensor metadata once and cache it
     std::vector<tensor_metadata> metadata(tensors.size());
 
+    // initialize quantization state before preliminary loop (counters for use_more_bits)
+    {
+        for (size_t i = 0; i < tensors.size(); ++i) {
+            const auto cat = tensor_get_category(tensors[i]->tensor->name);
+            if (category_is_attn_v(cat)) {
+                ++qs.n_attention_wv;
+            }
+            if (cat == tensor_category::OUTPUT) {
+                qs.has_tied_embeddings = false;
+            }
+            metadata[i].category = cat; // save and re-use the category while we're at it
+        }
+        // these also need to be set to n_layer by default
+        qs.n_ffn_down = qs.n_ffn_gate = qs.n_ffn_up = (int)qs.model.hparams.n_layer;
+    }
+
     // flag for --dry-run
     bool will_require_imatrix = false;
 
@@ -990,16 +1003,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         const auto * it = tensors[i];
         const struct ggml_tensor * tensor = it->tensor;
         const std::string name = ggml_get_name(tensor);
-
-        metadata[i].category = tensor_get_category(name);
-
-        if (category_is_attn_v(metadata[i].category)) {
-            ++qs.n_attention_wv;
-        }
-
-        if (tensor_name_match_output_weight(name.c_str())) {
-            qs.has_tied_embeddings = false;
-        }
 
         uint16_t i_split = params->keep_split ? it->idx : 0;
         if (!ctx_outs[i_split]) {
