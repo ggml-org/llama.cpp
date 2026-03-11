@@ -9824,9 +9824,9 @@ class NemotronHModel(GraniteHybridModel):
             # Skip Multi-Token Prediction (MTP) tensors. These are used for
             # for speculative decoding but we don't include them in this model
             # conversion. See https://github.com/ggml-org/llama.cpp/pull/18886
-            if "mtp" in name:
+            if name.startswith("mtp."):
                 logger.info(f"gguf: Skipping MTP (Speculative) layer: {name}")
-                return []
+                return
 
             if name.endswith("mixer.gate.e_score_correction_bias"):
                 new_name = name.replace("e_score_correction_bias", "e_score_correction.bias")
