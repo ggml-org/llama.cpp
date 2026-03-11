@@ -266,8 +266,8 @@ Text is segmentized into markers and non-marker fragments using `segmentize_mark
 
 - Searches `diff.right` (output with reasoning) for the reasoning content needle
 - Uses PEG parsers to find surrounding markers:
-  - If both pre/post markers found in `diff.right` → `TAG_BASED` (both tags visible in diff = no forced close)
-  - If both found but post marker only in the full output B → `FORCED_CLOSED`
+  - If both pre/post markers found in `diff.right` → `TAG_BASED`
+  - If both found but post marker only in the full output B → `TAG_BASED` (template forces markers; handled via prefill)
   - If only post marker found → `TAG_BASED` (delimiter-style, empty start)
 - Sets `reasoning.start` and `reasoning.end`
 
@@ -349,7 +349,7 @@ Classification logic:
 
 A workaround array in `common/chat-diff-analyzer.cpp` applies post-hoc patches after analysis. Each workaround is a lambda that inspects the template source and overrides analysis results. Current workarounds:
 
-1. **Old Qwen/DeepSeek thinking templates** — source contains `content.split('</think>')`: sets `reasoning.mode = FORCED_OPEN` with `<think>`/`</think>` markers if no reasoning was detected
+1. **Old Qwen/DeepSeek thinking templates** — source contains `content.split('</think>')`: sets `reasoning.mode = TAG_BASED` with `<think>`/`</think>` markers if no reasoning was detected
 2. **Granite 3.3** — source contains specific "Write your thoughts" text: forces `TAG_BASED` reasoning with `<think>`/`</think>` and `WRAPPED_WITH_REASONING` content with `<response>`/`</response>`
 3. **Cohere Command R+** — source contains `<|CHATBOT_TOKEN|>`: sets `ALWAYS_WRAPPED` content mode if no content start is already set
 4. **Functionary 3.1** — source contains `set has_code_interpreter`: forces `PLAIN` content, specific `per_call_start/end`, clears preserved tokens to only keep Functionary-specific markers
