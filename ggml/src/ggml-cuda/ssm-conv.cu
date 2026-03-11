@@ -44,7 +44,6 @@ static __global__ void ssm_conv_f32(const float * __restrict__ src0, const float
         }
         y_block[i * stride_y + tid] = sumf;
     }
-    GGML_CUDA_PDL_LC();
 }
 
 template <size_t split_d_inner, size_t d_conv, int64_t split_n_t>

@@ -335,7 +335,6 @@ static __global__ void mul_mat_vec_f(
     }
 
     if (tid >= ncols_dst) {
-        GGML_CUDA_PDL_LC();
         return;
     }
 
@@ -369,7 +368,6 @@ static __global__ void mul_mat_vec_f(
     }
 
     dst[tid*stride_col_dst + row] = value;
-    GGML_CUDA_PDL_LC();
 
     if constexpr (!has_fusion) {
         GGML_UNUSED_VARS(use_gate, use_bias, use_gate_bias, glu_op, gate_x, x_bias, gate_bias, sumf_gate);

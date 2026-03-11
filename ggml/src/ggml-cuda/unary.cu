@@ -114,13 +114,11 @@ static __global__ void unary_op_kernel(const T * x, T * dst, const int k) {
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
 
     if (i >= k) {
-        GGML_CUDA_PDL_LC();
         return;
     }
 
     GGML_CUDA_PDL_SYNC();
     dst[i] = (T)op((float)x[i]);
-    GGML_CUDA_PDL_LC();
 }
 
 template <float (*op)(float), typename T>

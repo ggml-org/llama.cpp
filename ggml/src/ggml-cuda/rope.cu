@@ -137,7 +137,6 @@ static __global__ void rope_neox(const T *            x,
     const int i0 = 2*(blockDim.y*blockIdx.y + threadIdx.y);
 
     if (i0 >= ne00) {
-        GGML_CUDA_PDL_LC();
         return;
     }
 
@@ -162,7 +161,6 @@ static __global__ void rope_neox(const T *            x,
         dst[idst + i0 / 2 + 0] = ggml_cuda_cast<D>(x[ix + i0 / 2 + 0]);
         dst[idst + i0 / 2 + 1] = ggml_cuda_cast<D>(x[ix + i0 / 2 + 1]);
 
-        GGML_CUDA_PDL_LC();
         return;
     }
 
@@ -180,7 +178,6 @@ static __global__ void rope_neox(const T *            x,
 
     dst[idst + 0]          = ggml_cuda_cast<D>(x0 * cos_theta - x1 * sin_theta);
     dst[idst + n_dims / 2] = ggml_cuda_cast<D>(x0 * sin_theta + x1 * cos_theta);
-    GGML_CUDA_PDL_LC();
 }
 
 template <bool forward, bool has_ff, typename T>
@@ -208,7 +205,6 @@ static __global__ void rope_multi(const T *            x,
     const int i0 = 2 * (blockDim.y * blockIdx.y + threadIdx.y);
 
     if (i0 >= ne00) {
-        GGML_CUDA_PDL_LC();
         return;
     }
 
@@ -226,7 +222,6 @@ static __global__ void rope_multi(const T *            x,
         dst[idst + i0/2 + 0] = x[ix + i0/2 + 0];
         dst[idst + i0/2 + 1] = x[ix + i0/2 + 1];
 
-        GGML_CUDA_PDL_LC();
         return;
     }
 
@@ -269,7 +264,6 @@ static __global__ void rope_multi(const T *            x,
 
     dst[idst + 0]        = x0*cos_theta - x1*sin_theta;
     dst[idst + n_dims/2] = x0*sin_theta + x1*cos_theta;
-    GGML_CUDA_PDL_LC();
 }
 
 template <bool forward, bool has_ff, typename T>
@@ -296,7 +290,6 @@ static __global__ void rope_vision(const T *            x,
     const int i0 = 2*(blockDim.y*blockIdx.y + threadIdx.y);
 
     if (i0 >= ne00) {
-        GGML_CUDA_PDL_LC();
         return;
     }
 
@@ -335,7 +328,6 @@ static __global__ void rope_vision(const T *            x,
 
     dst[idst + 0]      = x0*cos_theta - x1*sin_theta;
     dst[idst + n_dims] = x0*sin_theta + x1*cos_theta;
-    GGML_CUDA_PDL_LC();
 }
 
 template <bool forward, typename T, typename D>

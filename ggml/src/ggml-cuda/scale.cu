@@ -10,7 +10,6 @@ static __global__ void scale_f32(const float * x, float * dst, const float scale
     for (int64_t i = tid; i < nelements; i += stride) {
         dst[i] = scale * x[i] + bias;
     }
-    GGML_CUDA_PDL_LC();
 }
 
 static void scale_f32_cuda(const float * x, float * dst, const float scale, const float bias, const int64_t nelements, cudaStream_t stream) {

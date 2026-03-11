@@ -49,7 +49,6 @@ static __global__ void flash_attn_ext_f16(
     // Skip unused kernel variants for faster compilation:
     if (use_logit_softcap && !(D == 128 || D == 256)) {
         NO_DEVICE_CODE;
-        GGML_CUDA_PDL_LC();
         return;
     }
 
@@ -456,7 +455,6 @@ static __global__ void flash_attn_ext_f16(
     for (int j0 = 0; j0 < ncols; j0 += nwarps) {
         const int j_VKQ = j0 + threadIdx.y;
         if (ic0 + j_VKQ >= int(ne01.z)) {
-            GGML_CUDA_PDL_LC();
             return;
         }
 

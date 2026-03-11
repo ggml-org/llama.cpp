@@ -288,7 +288,6 @@ static __global__ void mul_mat_vec_q(
     }
     __syncthreads();
     if (threadIdx.y > 0) {
-        GGML_CUDA_PDL_LC();
         return;
     }
 
@@ -351,7 +350,6 @@ static __global__ void mul_mat_vec_q(
             dst[j*stride_col_dst + threadIdx.x] = result;
         }
     }
-    GGML_CUDA_PDL_LC();
 
     if constexpr (!has_fusion) {
         GGML_UNUSED_VARS(use_gate, use_bias, use_gate_bias, active_glu, gate_bias, x_bias, tmp_gate);

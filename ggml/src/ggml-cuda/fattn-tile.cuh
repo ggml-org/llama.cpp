@@ -769,7 +769,6 @@ static __global__ void flash_attn_tile(
 #endif // GGML_USE_WMMA_FATTN
             (use_logit_softcap && !(DV == 128 || DV == 256))
     ) {
-        GGML_CUDA_PDL_LC();
         GGML_UNUSED_VARS(Q, K, V, mask, sinks, KV_max, dst, dst_meta, scale,
             max_bias, m0, m1, n_head_log2, logit_softcap,
             ne00, ne01, ne02, ne03,
@@ -959,7 +958,6 @@ static __global__ void flash_attn_tile(
                 KQ_sum_combine[threadIdx.y] = KQ_sum[0];
             }
 
-            GGML_CUDA_PDL_LC();
             return;
         }
 
@@ -1034,7 +1032,6 @@ static __global__ void flash_attn_tile(
         const int c = jc % ncols2;
 
         if (ncols1 > 1 && col_Q_0 + j >= int(ne01.z)) {
-            GGML_CUDA_PDL_LC();
             return;
         }
 

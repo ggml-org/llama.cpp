@@ -88,7 +88,6 @@ __launch_bounds__(4 * WARP_SIZE, 1) __global__ void topk_moe_cuda(const float * 
                                                                   const topk_moe_config config) {
     const int row = blockIdx.x * blockDim.y + threadIdx.y;
     if (row >= n_rows) {
-        GGML_CUDA_PDL_LC();
         return;
     }
 
@@ -238,7 +237,6 @@ __launch_bounds__(4 * WARP_SIZE, 1) __global__ void topk_moe_cuda(const float * 
             weights[idx] = output_weights[i] * scale_val;
         }
     }
-    GGML_CUDA_PDL_LC();
 }
 
 template<bool has_bias>

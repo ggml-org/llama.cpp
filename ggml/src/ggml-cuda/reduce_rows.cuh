@@ -34,10 +34,8 @@ static __global__ void reduce_rows_f32(const float * __restrict__ x, float * __r
     sum = block_reduce<block_reduce_method::SUM>(sum, shared_vals);
 
     if (col != 0) {
-        GGML_CUDA_PDL_LC();
         return;
     }
 
     dst[row] = norm ? sum / ncols : sum;
-    GGML_CUDA_PDL_LC();
 }

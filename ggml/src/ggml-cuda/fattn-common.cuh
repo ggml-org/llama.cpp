@@ -621,12 +621,10 @@ static __global__ void flash_attn_mask_to_KV_max(
     KV_max_sj += FATTN_KQ_STRIDE;
 
     if (threadIdx.x != 0) {
-        GGML_CUDA_PDL_LC();
         return;
     }
 
     KV_max[sequence*ne31 + jt] = KV_max_sj;
-    GGML_CUDA_PDL_LC();
 }
 
 template<int D, int ncols1, int ncols2> // D == head size
@@ -658,7 +656,6 @@ static __global__ void flash_attn_stream_k_fixup(
     const bool wrote_beginning_of_tile = kbc0 % iter_k == 0;
     const bool did_not_write_last      = kbc0/iter_k == kbc0_stop/iter_k && kbc0_stop % iter_k != 0;
     if (did_not_have_any_data || wrote_beginning_of_tile || did_not_write_last) {
-        GGML_CUDA_PDL_LC();
         return;
     }
 
@@ -671,7 +668,6 @@ static __global__ void flash_attn_stream_k_fixup(
     const int zt_Q = z_KV*gqa_ratio + zt_gqa*ncols2; // Global Q head start index.
 
     if (jt*ncols1 + j >= ne01 || zt_gqa*ncols2 + c >= gqa_ratio) {
-        GGML_CUDA_PDL_LC();
         return;
     }
 
@@ -729,7 +725,6 @@ static __global__ void flash_attn_stream_k_fixup(
 
     // Write back final result:
     *dst = dst_val / rowsum;
-    GGML_CUDA_PDL_LC();
 }
 
 template<int D> // D == head size
@@ -784,7 +779,6 @@ static __global__ void flash_attn_combine_results(
     }
 
     dst[tid] = VKQ_numerator / VKQ_denominator;
-    GGML_CUDA_PDL_LC();
 }
 
 template <int DV, int ncols1, int ncols2>

@@ -4,7 +4,6 @@
 static __global__ void concat_f32_dim0(const float * x, const float * y, float * dst, const int ne0, const int ne00) {
     int nidx = threadIdx.x + blockIdx.x * blockDim.x;
     if (nidx >= ne0) {
-        GGML_CUDA_PDL_LC();
         return;
     }
 
@@ -27,7 +26,6 @@ static __global__ void concat_f32_dim0(const float * x, const float * y, float *
             blockIdx.z * (ne0 - ne00) * gridDim.y;
         dst[offset_dst] = y[offset_src];
     }
-    GGML_CUDA_PDL_LC();
 }
 
 static __global__ void concat_f32_dim1(const float * x, const float * y, float * dst, const int ne0, const int ne01) {

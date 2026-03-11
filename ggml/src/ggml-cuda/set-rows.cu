@@ -30,7 +30,6 @@ static __global__ void k_set_rows_quant(const float * __restrict__ src0,
     const int64_t i = int64_t(blockDim.x) * blockIdx.x + threadIdx.x;
 
     if (i >= ne_total) {
-        GGML_CUDA_PDL_LC();
         return;
     }
 
@@ -64,7 +63,6 @@ static __global__ void k_set_rows_quant(const float * __restrict__ src0,
     block_type * dst_block = dst_row_ptr + i00 / qk;
 
     quantize_func(src_block, dst_block);
-    GGML_CUDA_PDL_LC();
 
     GGML_UNUSED(ne10);
     GGML_UNUSED(ne11);
@@ -138,7 +136,6 @@ static __global__ void k_set_rows(const src_t * __restrict__ src0,
     const int64_t i = int64_t(blockDim.x) * blockIdx.x + threadIdx.x;
 
     if (i >= ne_total) {
-        GGML_CUDA_PDL_LC();
         return;
     }
 
@@ -168,7 +165,6 @@ static __global__ void k_set_rows(const src_t * __restrict__ src0,
     dst_t * dst_row_ptr    = dst + dst_row*s1 + i02*s2 + i03*s3;
 
     dst_row_ptr[i00] = ggml_cuda_cast<dst_t>(src0_row[i00]);
-    GGML_CUDA_PDL_LC();
 
     GGML_UNUSED(ne10);
     GGML_UNUSED(ne11);
