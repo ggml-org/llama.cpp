@@ -1,5 +1,4 @@
 #include "gated_delta_net.cuh"
-#include "ggml-cuda/common.cuh"
 
 template <int S_v, bool KDA>
 __global__ void gated_delta_net_cuda(const float *            q,
