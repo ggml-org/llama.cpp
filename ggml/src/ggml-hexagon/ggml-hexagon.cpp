@@ -402,6 +402,7 @@ static void pack_q4_0_quants(block_q4_0 * x, const uint8_t * qs, unsigned int bi
 static void repack_row_q4x4x2(uint8_t * y, const block_q4_0 * x, int64_t k) {
     static const int qk = QK_Q4_0x4x2;
     const int        nb = (k + qk - 1) / qk;  // number of blocks (padded)
+    const int        nloe = k % qk;           // leftovers
 
     const int dblk_size = 8 * 2;              // 8x __fp16
     const int qblk_size = qk / 2;             // int4
@@ -435,9 +436,11 @@ static void repack_row_q4x4x2(uint8_t * y, const block_q4_0 * x, int64_t k) {
         unpack_q4_0_quants(qs, &x[i * 8 + 6], 6);
         unpack_q4_0_quants(qs, &x[i * 8 + 7], 7);
 
+        bool partial = (nloe && i == nb-1);
+
         uint8_t * q = y_q + (i * qblk_size);
         for (int j = 0; j < qk / 2; j++) {
-            q[j] = (qs[j*2+1] << 4) | qs[j*2+0];
+            q[j] = partial ? (qs[j*2+1] << 4) | qs[j*2+0] : (qs[j+128] << 4) | qs[j+000];
         }
     }
 
@@ -467,6 +470,7 @@ static void repack_row_q4x4x2(uint8_t * y, const block_q4_0 * x, int64_t k) {
 static void unpack_row_q4x4x2(block_q4_0 * x, const uint8_t * y, int64_t k) {
     static const int qk = QK_Q4_0x4x2;
     const int        nb = (k + qk - 1) / qk;  // number of blocks (padded)
+    const int        nloe = k % qk;           // leftovers
 
     const int dblk_size = 8 * 2;              // 8x __fp16
     const int qblk_size = qk / 2;             // int4
@@ -485,10 +489,17 @@ static void unpack_row_q4x4x2(block_q4_0 * x, const uint8_t * y, int64_t k) {
     for (int i = 0; i < nb; i++) {
         uint8_t qs[QK_Q4_0x4x2];  // unpacked quants
 
+        bool partial = (nloe && i == nb-1);
+
         const uint8_t * q = y_q + (i * qblk_size);
         for (int j = 0; j < qk / 2; j++) {
-            qs[j*2+0] = q[j] & 0xf;
-            qs[j*2+1] = q[j] >> 4;
+            if (partial) {
+                qs[j*2+0] = q[j] & 0xf;
+                qs[j*2+1] = q[j] >> 4;
+            } else {
+                qs[j+000] = q[j] & 0xf;
+                qs[j+128] = q[j] >> 4;
+            }
         }
 
         pack_q4_0_quants(&x[i * 8 + 0], qs, 0);
@@ -1078,6 +1089,7 @@ static void pack_mxfp4_quants(block_mxfp4 * x, const uint8_t * qs, unsigned int 
 static void repack_row_mxfp4x4x2(uint8_t * y, const block_mxfp4 * x, int64_t k) {
     static const int qk = QK_MXFP4x4x2;
     const int        nb = (k + qk - 1) / qk;  // number of blocks (padded)
+    const int        nloe = k % qk;           // leftovers
 
     const int eblk_size = 8 * 1;              // 8x E8M0
     const int qblk_size = qk / 2;             // int4
@@ -1112,9 +1124,11 @@ static void repack_row_mxfp4x4x2(uint8_t * y, const block_mxfp4 * x, int64_t k) 
         unpack_mxfp4_quants(qs, &x[i * 8 + 6], 6);
         unpack_mxfp4_quants(qs, &x[i * 8 + 7], 7);
 
+        bool partial = (nloe && i == nb-1);
+
         uint8_t * q = y_q + (i * qblk_size);
         for (int j = 0; j < qk / 2; j++) {
-            q[j] = (qs[j*2+1] << 4) | qs[j*2+0];
+            q[j] = partial ? (qs[j*2+1] << 4) | qs[j*2+0] : (qs[j+128] << 4) | qs[j+000];
         }
     }
 
@@ -1144,6 +1158,7 @@ static void repack_row_mxfp4x4x2(uint8_t * y, const block_mxfp4 * x, int64_t k) 
 static void unpack_row_mxfp4x4x2(block_mxfp4 * x, const uint8_t * y, int64_t k) {
     static const int qk = QK_MXFP4x4x2;
     const int        nb = (k + qk - 1) / qk;  // number of blocks (padded)
+    const int        nloe = k % qk;           // leftovers
 
     const int eblk_size = 8 * 1;              // 8x E8M0
     const int qblk_size = qk / 2;             // int4
@@ -1162,10 +1177,17 @@ static void unpack_row_mxfp4x4x2(block_mxfp4 * x, const uint8_t * y, int64_t k) 
     for (int i = 0; i < nb; i++) {
         uint8_t qs[QK_MXFP4x4x2];  // unpacked quants
 
+        bool partial = (nloe && i == nb-1);
+
         const uint8_t * q = y_q + (i * qblk_size);
         for (int j = 0; j < qk / 2; j++) {
-            qs[j*2+0] = q[j] & 0xf;
-            qs[j*2+1] = q[j] >> 4;
+            if (partial) {
+                qs[j*2+0] = q[j] & 0xf;
+                qs[j*2+1] = q[j] >> 4;
+            } else {
+                qs[j+000] = q[j] & 0xf;
+                qs[j+128] = q[j] >> 4;
+            }
         }
 
         pack_mxfp4_quants(&x[i * 8 + 0], qs, 0);
