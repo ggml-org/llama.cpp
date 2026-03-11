@@ -2,10 +2,8 @@
 # n_embd=2560, n_ff=10240, n_vocab=262144, n_layer=34, n_head=8, n_head_kv=4
 
 [F32] f32
-token_embd.weight q6_K
 
 [F16] f16
-token_embd.weight q6_K
 
 [Q4_0] q4_0
 token_embd.weight q6_K
@@ -1205,7 +1203,6 @@ blk.33.attn_output.weight iq2_xxs
 blk.33.attn_v.weight q2_K
 
 [BF16] bf16
-token_embd.weight q6_K
 
 [TQ1_0] tq1_0
 token_embd.weight q6_K

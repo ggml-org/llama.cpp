@@ -13,22 +13,6 @@
 #include <thread>
 #include <unordered_map>
 
-// tensor categorization - used to avoid repeated string matching in quantization logic.
-// this is different from LLM_TN - we want broad categories, not specific tensor names per arch.
-enum class tensor_category {
-    TOKEN_EMBD,
-    ATTENTION_Q,
-    ATTENTION_V,
-    ATTENTION_K,
-    ATTENTION_QKV,
-    ATTENTION_KV_B,
-    ATTENTION_OUTPUT,
-    FFN_UP,
-    FFN_GATE,
-    FFN_DOWN,
-    OUTPUT,
-    OTHER
-};
 
 static void zeros(std::ofstream & file, size_t n) {
     char zero = 0;
@@ -149,15 +133,6 @@ static bool category_is_attn_v(tensor_category cat) {
            cat == tensor_category::ATTENTION_QKV   ||
            cat == tensor_category::ATTENTION_KV_B;
 }
-
-// per-tensor metadata, computed in the preliminary loop and used in the main loop
-struct tensor_metadata {
-    ggml_type       target_type;
-    tensor_category category;
-    std::string     remapped_imatrix_name;
-    bool            allows_quantization;
-    bool            requires_imatrix;
-};
 
 //
 // dequantization
@@ -355,6 +330,7 @@ static ggml_type tensor_type_fallback(quantize_state_impl & qs, const ggml_tenso
     return return_type;
 }
 
+// internal standard logic for selecting the target tensor type based on tensor category, ftype, and model arch
 static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type new_type, const ggml_tensor * tensor, llama_ftype ftype, tensor_category category) {
     const std::string name = ggml_get_name(tensor);
 
@@ -604,15 +580,8 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
     return new_type;
 }
 
-// public API: compute category from tensor name and delegate to _impl
-ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_type, const ggml_tensor * tensor, llama_ftype ftype) {
-    const std::string name = ggml_get_name(tensor);
-    tensor_category category = tensor_get_category(name);
-    return llama_tensor_get_type_impl(qs, new_type, tensor, ftype, category);
-}
-
-// outer wrapper: determine the ggml_type that this tensor should be quantized to (used internally by llama_model_quantize_impl)
-static ggml_type llama_tensor_get_type_internal(quantize_state_impl & qs, const llama_model_quantize_params * params, const ggml_tensor * tensor, ggml_type default_type, const tensor_metadata & tm) {
+// outer wrapper: determine the ggml_type that this tensor should be quantized to
+ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_model_quantize_params * params, const ggml_tensor * tensor, ggml_type default_type, const tensor_metadata & tm) {
     if (!tensor_allows_quantization(params, qs.model.arch, tensor)) {
         return tensor->type;
     }
@@ -845,15 +814,16 @@ const char * llama_ftype_to_name(llama_ftype ftype) {
     return nullptr;
 }
 
-void init_quantize_state_counters(quantize_state_impl & qs, const std::vector<std::string> & tensor_names) {
-    for (const auto & name : tensor_names) {
-        tensor_category cat = tensor_get_category(name);
+void init_quantize_state_counters(quantize_state_impl & qs, std::vector<tensor_metadata> & metadata) {
+    for (auto & tm : metadata) {
+        tensor_category cat = tensor_get_category(tm.name);
+        tm.category = cat;
 
         if (category_is_attn_v(cat)) {
             ++qs.n_attention_wv;
         }
 
-        if (tensor_name_match_output_weight(name.c_str())) {
+        if (cat == tensor_category::OUTPUT) {
             qs.has_tied_embeddings = false;
         }
     }
@@ -996,14 +966,14 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         });
     }
 
-    {
-        std::vector<std::string> tensor_names;
-        tensor_names.reserve(tensors.size());
-        for (const auto * it : tensors) {
-            tensor_names.emplace_back(ggml_get_name(it->tensor));
-        }
-        init_quantize_state_counters(qs, tensor_names);
+    // compute tensor metadata once and cache it
+    std::vector<tensor_metadata> metadata(tensors.size());
+    for (size_t i = 0; i < tensors.size(); ++i) {
+        metadata[i].name = ggml_get_name(tensors[i]->tensor);
     }
+
+    // initialize quantization state counters and metadata categories
+    init_quantize_state_counters(qs, metadata);
 
     int idx = 0;
     uint16_t n_split = 1;
@@ -1016,25 +986,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     }
     std::vector<gguf_context_ptr> ctx_outs(n_split);
     ctx_outs[0] = std::move(ctx_out);
-
-    // compute tensor metadata once and cache it
-    std::vector<tensor_metadata> metadata(tensors.size());
-
-    // initialize quantization state before preliminary loop (counters for use_more_bits)
-    {
-        for (size_t i = 0; i < tensors.size(); ++i) {
-            const auto cat = tensor_get_category(tensors[i]->tensor->name);
-            if (category_is_attn_v(cat)) {
-                ++qs.n_attention_wv;
-            }
-            if (cat == tensor_category::OUTPUT) {
-                qs.has_tied_embeddings = false;
-            }
-            metadata[i].category = cat; // save and re-use the category while we're at it
-        }
-        // these also need to be set to n_layer by default
-        qs.n_ffn_down = qs.n_ffn_gate = qs.n_ffn_up = (int)qs.model.hparams.n_layer;
-    }
 
     // flag for --dry-run
     bool will_require_imatrix = false;
@@ -1059,7 +1010,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         metadata[i].allows_quantization = tensor_allows_quantization(params, model.arch, tensor);
 
         if (metadata[i].allows_quantization) {
-            metadata[i].target_type = llama_tensor_get_type_internal(qs, params, tensor, default_type, metadata[i]);
+            metadata[i].target_type = llama_tensor_get_type(qs, params, tensor, default_type, metadata[i]);
         } else {
             metadata[i].target_type = tensor->type;
         }

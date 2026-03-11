@@ -2,10 +2,8 @@
 # n_embd=5120, n_ff=17408, n_vocab=248320, n_layer=64, n_head=24, n_head_kv=4
 
 [F32] f32
-output.weight q6_K
 
 [F16] f16
-output.weight q6_K
 
 [Q4_0] q4_0
 output.weight q6_K
@@ -1898,7 +1896,6 @@ blk.63.attn_output.weight iq2_xxs
 blk.63.attn_v.weight q4_K
 
 [BF16] bf16
-output.weight q6_K
 
 [TQ1_0] tq1_0
 output.weight q6_K

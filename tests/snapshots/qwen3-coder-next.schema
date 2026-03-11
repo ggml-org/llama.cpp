@@ -2,10 +2,8 @@
 # n_embd=2048, n_ff=5120, n_vocab=151936, n_layer=48, n_head=16, n_head_kv=2, n_expert=512
 
 [F32] f32
-output.weight q6_K
 
 [F16] f16
-output.weight q6_K
 
 [Q4_0] q4_0
 output.weight q6_K
@@ -1790,7 +1788,6 @@ blk.47.attn_v.weight q4_K
 output.weight q5_K
 
 [BF16] bf16
-output.weight q6_K
 
 [TQ1_0] tq1_0
 token_embd.weight q4_K

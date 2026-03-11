@@ -268,21 +268,20 @@ static std::vector<std::pair<std::string, ggml_type>> compute_quant_types(llama_
 
     quantize_state_impl qs(mdl, &qparams);
 
-    std::vector<std::string> names;
-    names.reserve(tensors.size());
-    for (const auto & mt : tensors) {
-        names.push_back(mt.tensor->name);
+    std::vector<tensor_metadata> metadata(tensors.size());
+    for (size_t i = 0; i < tensors.size(); ++i) {
+        metadata[i].name = tensors[i].tensor->name;
     }
-    init_quantize_state_counters(qs, names);
+    init_quantize_state_counters(qs, metadata);
 
     ggml_type default_type = llama_ftype_get_default_type(ftype);
 
     std::vector<std::pair<std::string, ggml_type>> result;
     result.reserve(tensors.size());
 
-    for (const auto & mt : tensors) {
-        ggml_type got = llama_tensor_get_type(qs, default_type, mt.tensor, ftype);
-        result.push_back({ mt.tensor->name, got });
+    for (size_t i = 0; i < tensors.size(); ++i) {
+        ggml_type got = llama_tensor_get_type(qs, &qparams, tensors[i].tensor, default_type, metadata[i]);
+        result.push_back({ metadata[i].name, got });
     }
 
     return result;
@@ -408,7 +407,7 @@ static bool run_test_section(llama_model &                    mdl,
         }
 
         if (got != expected) {
-            printf("  FAIL  %-50s expected %s, got %s\n", name.c_str(), ggml_type_name(expected), ggml_type_name(got));
+            printf("  FAIL  %-50s %-10s expected %s, got %s\n", name.c_str(), llama_ftype_to_name(section.ftype), ggml_type_name(expected), ggml_type_name(got));
             all_pass = false;
         }
     }
@@ -432,8 +431,7 @@ static int run_remote_tests(const std::string & snapshot_dir, const char * argv0
         std::string  name = model_name_from_repo(spec.repo);
         printf("=== %s ===\n", name.c_str());
 
-        fprintf(stderr, "Fetching model metadata for %s from %s...\n", name.c_str(), spec.repo);
-        auto result = gguf_fetch_model_meta(spec.repo, spec.quant);
+        auto result = gguf_fetch_model_meta(spec.repo, spec.quant, "", false);
         if (!result.has_value()) {
             printf("  SKIP  (could not fetch model metadata)\n\n");
             total_skip++;
@@ -505,6 +503,9 @@ int main(int argc, char ** argv) {
     if (generate) {
         return run_generate(snapshot_dir);
     }
+
+    // suppress llama log warnings during test (e.g. tensor type fallback messages)
+    llama_log_set([](enum ggml_log_level, const char *, void *) {}, nullptr);
 
     return run_remote_tests(snapshot_dir, argv[0]);
 }
