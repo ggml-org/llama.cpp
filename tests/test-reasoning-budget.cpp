@@ -24,7 +24,7 @@ static void test_reasoning_budget(
     const std::vector<llama_token> & end_tokens,
     const std::vector<llama_token> & forced_tokens,
     int32_t budget,
-    bool activate_immediately,
+    common_reasoning_budget_state initial_state,
     size_t expected_force_start,   // token index where forcing should start (SIZE_MAX = never)
     size_t expected_force_end      // token index where forcing should end (after this, no more forcing)
 ) {
@@ -44,7 +44,7 @@ static void test_reasoning_budget(
         end_tokens,
         forced_tokens,
         budget,
-        activate_immediately
+        initial_state
     );
 
     // Create a test token data array for checking forcing behavior
@@ -162,7 +162,7 @@ int main(void) {
 
         test_reasoning_budget("natural end before budget exhausted", sequence, start, end, forced,
             5,      // budget of 5 tokens
-            false,  // don't activate immediately
+            REASONING_BUDGET_IDLE,
             SIZE_MAX, SIZE_MAX); // no forcing expected (natural end)
     }
 
@@ -178,7 +178,7 @@ int main(void) {
 
         test_reasoning_budget("budget exhausted forcing", sequence, start, end, forced,
             2,      // budget of 2 tokens
-            false,  // don't activate immediately
+            REASONING_BUDGET_IDLE,
             2,      // forcing starts at i=2 (after accept(51) depletes budget, apply() forces)
             3);     // forcing continues through i=3 (at i=4 state becomes DONE)
     }
@@ -194,7 +194,7 @@ int main(void) {
 
         test_reasoning_budget("activate immediately budget=0", sequence, start, end, forced,
             0,      // budget of 0 tokens
-            true,   // activate immediately when start token seen
+            REASONING_BUDGET_COUNTING, // starts counting, promoted to FORCING since budget=0
             0,      // forcing starts at i=0 (after accept(100), budget=0 goes straight to FORCING)
             1);     // forcing continues through i=1 (at i=2 state becomes DONE)
     }
@@ -208,7 +208,7 @@ int main(void) {
 
         test_reasoning_budget("no start/end configured", sequence, start, end, forced,
             2,      // budget
-            false,  // don't activate immediately
+            REASONING_BUDGET_IDLE,
             SIZE_MAX, SIZE_MAX); // no forcing (no start/end configured)
     }
 
@@ -223,7 +223,7 @@ int main(void) {
 
         test_reasoning_budget("activate immediately with budget", sequence, start, end, forced,
             2,      // budget of 2 tokens
-            true,   // activate immediately
+            REASONING_BUDGET_COUNTING,
             1,      // forcing starts at i=1 (after 2 accepts deplete budget)
             2);     // forcing continues through i=2
     }

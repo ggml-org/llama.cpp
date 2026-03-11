@@ -37,14 +37,6 @@ struct token_matcher {
     void reset() { pos = 0; }
 };
 
-enum common_reasoning_budget_state {
-    REASONING_BUDGET_IDLE,         // waiting for start sequence
-    REASONING_BUDGET_COUNTING,     // counting down tokens
-    REASONING_BUDGET_FORCING,      // forcing budget message + end sequence
-    REASONING_BUDGET_WAITING_UTF8, // budget exhausted, waiting for UTF-8 completion
-    REASONING_BUDGET_DONE,         // passthrough forever
-};
-
 struct common_reasoning_budget_ctx {
     const llama_vocab * vocab;
 
@@ -126,7 +118,7 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
         case REASONING_BUDGET_FORCING:
             // force_pos is advanced in apply(), not here.
             // This ensures the first forced token isn't skipped when the sampler
-            // is initialized directly in FORCING state (e.g. activate_immediately + budget=0)
+            // is initialized directly in FORCING state (e.g. COUNTING + budget=0)
             break;
         case REASONING_BUDGET_DONE:
             break;
@@ -180,7 +172,7 @@ static struct llama_sampler * common_reasoning_budget_clone(const struct llama_s
         ctx->end_matcher.tokens,
         ctx->forced_tokens,
         ctx->budget,
-        ctx->state == REASONING_BUDGET_COUNTING || ctx->state == REASONING_BUDGET_FORCING || ctx->state == REASONING_BUDGET_WAITING_UTF8);
+        ctx->state);
 }
 
 static void common_reasoning_budget_free(struct llama_sampler * smpl) {
@@ -206,11 +198,9 @@ struct llama_sampler * common_reasoning_budget_init(
         const std::vector<llama_token> & end_tokens,
         const std::vector<llama_token> & forced_tokens,
         int32_t                          budget,
-        bool                             activate_immediately) {
-    auto initial_state = activate_immediately ? REASONING_BUDGET_COUNTING : REASONING_BUDGET_IDLE;
-
-    // if activated immediately with budget <= 0, go straight to forcing
-    if (activate_immediately && budget <= 0) {
+        common_reasoning_budget_state    initial_state) {
+    // promote COUNTING with budget <= 0 to FORCING
+    if (initial_state == REASONING_BUDGET_COUNTING && budget <= 0) {
         initial_state = REASONING_BUDGET_FORCING;
     }
 
