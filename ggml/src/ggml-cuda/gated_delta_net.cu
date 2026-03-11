@@ -146,8 +146,8 @@ static void launch_gated_delta_net(
         float scale, cudaStream_t stream) {
 
     const int num_warps = 4;
-    dim3 grid_dims(H, n_seqs, (S_v + num_warps - 1) / num_warps);
-    dim3 block_dims(WARP_SIZE, num_warps, 1);
+    dim3      grid_dims(H, n_seqs, (S_v + num_warps - 1) / num_warps);
+    dim3      block_dims(WARP_SIZE, num_warps, 1);
 
     const fastdiv_consts_s64 neqk1_magic = init_fastdiv_s64(neqk1);
     const fastdiv_consts_s64 rq3_magic   = init_fastdiv_s64(rq3);
