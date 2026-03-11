@@ -54,14 +54,14 @@ void main() {
         const uint k_off = q_off;
         const uint v_off = seq_id * sv3 + t * sv2 + head_id * sv1;
 
-        s_q[col] = data_q[q_off + col];
-        s_k[col] = data_k[k_off + col];
+        s_q[col] = FLOAT_TYPE(data_q[q_off + col]);
+        s_k[col] = FLOAT_TYPE(data_k[k_off + col]);
 
         const uint gb_off = seq_id * sb3 + t * sb2 + head_id * sb1;
 
         if (KDA != 0) {
             const uint g_base = gb_off * S_V;
-            s_g[col] = exp(data_g[g_base + col]);
+            s_g[col] = exp(FLOAT_TYPE(data_g[g_base + col]));
         }
 
         barrier();
