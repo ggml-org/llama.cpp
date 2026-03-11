@@ -20,8 +20,6 @@ layout(push_constant) uniform PushConstants {
     uint nc; uint ncs; uint nr; uint n_t; uint n_s;
 };
 
-shared float s_conv[4];
-
 void main() {
     const uint i1 = gl_GlobalInvocationID.x;
     const uint i2 = gl_WorkGroupID.y * TOKENS_PER_WG + gl_LocalInvocationID.y;
