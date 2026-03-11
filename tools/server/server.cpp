@@ -110,6 +110,10 @@ int main(int argc, char ** argv) {
     llama_backend_init();
     llama_numa_init(params.numa);
 
+    if (!set_process_priority(params.cpuparams.priority)) {
+        LOG_WRN("%s: failed to set process priority\n", __func__);
+    }
+
     LOG_INF("build_info: %s\n", llama_build_info());
     LOG_INF("%s\n", common_params_get_system_info(params).c_str());
 
