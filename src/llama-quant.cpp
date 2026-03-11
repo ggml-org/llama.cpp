@@ -997,7 +997,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     for (size_t i = 0; i < tensors.size(); ++i) {
         const auto * it = tensors[i];
         const struct ggml_tensor * tensor = it->tensor;
-        const std::string name = ggml_get_name(tensor);
 
         metadata[i].category = tensor_get_category(name);
 
@@ -1028,7 +1027,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                                 "        - offending tensor: %s\n"
                                 "        - target type: %s\n"
                                 "============================================================================\n\n",
-                                name.c_str(), ggml_type_name(metadata[i].target_type));
+                                metadata[i].name.c_str(), ggml_type_name(metadata[i].target_type));
                 throw std::runtime_error("this quantization requires an imatrix!");
             }
         }
@@ -1101,7 +1100,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             new_ofstream(weight.idx);
         }
 
-        const std::string name = ggml_get_name(tensor);
         const size_t tensor_size = ggml_nbytes(tensor);
 
         if (!params->dry_run) {
@@ -1232,9 +1230,9 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             total_size_new += new_size;
 
             // update the gguf meta data as we go
-            gguf_set_tensor_type(ctx_outs[cur_split].get(), name.c_str(), new_type);
-            GGML_ASSERT(gguf_get_tensor_size(ctx_outs[cur_split].get(), gguf_find_tensor(ctx_outs[cur_split].get(), name.c_str())) == new_size);
-            gguf_set_tensor_data(ctx_outs[cur_split].get(), name.c_str(), new_data);
+            gguf_set_tensor_type(ctx_outs[cur_split].get(), metadata[i].name.c_str(), new_type);
+            GGML_ASSERT(gguf_get_tensor_size(ctx_outs[cur_split].get(), gguf_find_tensor(ctx_outs[cur_split].get(), metadata[i].name.c_str())) == new_size);
+            gguf_set_tensor_data(ctx_outs[cur_split].get(), metadata[i].name.c_str(), new_data);
 
             // write tensor data + padding
             fout.write((const char *) new_data, new_size);
