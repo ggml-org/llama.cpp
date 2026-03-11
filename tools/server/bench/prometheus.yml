@@ -1,9 +1,0 @@
-global:
-  scrape_interval:     10s
-  external_labels:
-    llamacpp: 'server'
-
-scrape_configs:
-  - job_name: 'llama.cpp server'
-    static_configs:
-      - targets: ['localhost:8080']
