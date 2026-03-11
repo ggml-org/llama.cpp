@@ -2913,6 +2913,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             auto parsed = json::parse(value);
             for (const auto & item : parsed.items()) {
+                if (item.key() == "enable_thinking") {
+                    LOG_WRN("Setting 'enable_thinking' via --chat-template-kwargs is deprecated. "
+                            "Use --reasoning on / --reasoning off instead.\n");
+                }
                 params.default_template_kwargs[item.key()] = item.value().dump();
             }
         }
@@ -3049,13 +3053,38 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK"));
     add_opt(common_arg(
+        {"-rea", "--reasoning"}, "[on|off|auto]",
+        "Use reasoning/thinking in the chat ('on', 'off', or 'auto', default: 'auto' (detect from template))",
+        [](common_params & params, const std::string & value) {
+            if (is_truthy(value)) {
+                params.enable_reasoning = 1;
+                params.default_template_kwargs["enable_thinking"] = "true";
+            } else if (is_falsey(value)) {
+                params.enable_reasoning = 0;
+                params.default_template_kwargs["enable_thinking"] = "false";
+            } else if (is_autoy(value)) {
+                params.enable_reasoning = -1;
+            } else {
+                throw std::invalid_argument(
+                    string_format("error: unknown value for --reasoning: '%s'\n", value.c_str()));
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_REASONING"));
+    add_opt(common_arg(
         {"--reasoning-budget"}, "N",
-        "controls the amount of thinking allowed; currently only one of: -1 for unrestricted thinking budget, or 0 to disable thinking (default: -1)",
+        "token budget for thinking: -1 for unrestricted, 0 for immediate end, N>0 for token budget (default: -1)",
         [](common_params & params, int value) {
-            if (value != 0 && value != -1) { throw std::invalid_argument("invalid value"); }
+            if (value < -1) { throw std::invalid_argument("invalid value"); }
             params.reasoning_budget = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK_BUDGET"));
+    add_opt(common_arg(
+        {"--reasoning-budget-message"}, "MESSAGE",
+        "message injected before the end-of-thinking tag when reasoning budget is exhausted (default: none)",
+        [](common_params & params, const std::string & value) {
+            params.reasoning_budget_message = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK_BUDGET_MESSAGE"));
     add_opt(common_arg(
         {"--chat-template"}, "JINJA_TEMPLATE",
         string_format(

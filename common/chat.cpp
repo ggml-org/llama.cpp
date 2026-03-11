@@ -857,7 +857,9 @@ static common_chat_params common_chat_params_init_ministral_3(const common_chat_
     auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
     auto include_grammar   = true;
 
-    data.supports_thinking = true;
+    data.supports_thinking  = true;
+    data.thinking_start_tag = "[THINK]";
+    data.thinking_end_tag   = "[/THINK]";
     data.prompt            = common_chat_template_direct_apply(tmpl, inputs, /* messages_override = */ adjusted_messages);
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.preserved_tokens  = {
@@ -1165,9 +1167,11 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
                                                           const autoparser::templates_params & inputs) {
     common_chat_params data;
 
-    data.prompt            = common_chat_template_direct_apply(tmpl, inputs);
-    data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
-    data.supports_thinking = true;
+    data.prompt             = common_chat_template_direct_apply(tmpl, inputs);
+    data.format             = COMMON_CHAT_FORMAT_PEG_NATIVE;
+    data.supports_thinking  = true;
+    data.thinking_start_tag = "<think>";
+    data.thinking_end_tag   = "</think>";
     data.preserved_tokens  = {
         "<|tool_calls_section_begin|>",
         "<|tool_calls_section_end|>",
@@ -1527,6 +1531,16 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         autoparser.analyze_template(tmpl);
         auto auto_params = autoparser::peg_generator::generate_parser(tmpl, params, autoparser);
         auto_params.supports_thinking = autoparser.reasoning.mode != autoparser::reasoning_mode::NONE;
+        if (auto_params.supports_thinking) {
+            auto_params.thinking_start_tag = autoparser.reasoning.start;
+            auto_params.thinking_end_tag   = autoparser.reasoning.end;
+            // FORCED_OPEN and FORCED_CLOSED both put <think> in the generation prompt
+            // (FORCED_CLOSED forces empty <think></think> when thinking is disabled,
+            //  but forces <think> open when thinking is enabled)
+            auto_params.thinking_forced_open =
+                autoparser.reasoning.mode == autoparser::reasoning_mode::FORCED_OPEN ||
+                autoparser.reasoning.mode == autoparser::reasoning_mode::FORCED_CLOSED;
+        }
         return auto_params;
     } catch (const std::exception & e) {
         throw std::invalid_argument(std::string("Unable to generate parser for this template. Automatic parser generation failed: ") + e.what());
