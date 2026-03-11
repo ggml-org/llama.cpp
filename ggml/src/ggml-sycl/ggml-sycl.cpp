@@ -605,6 +605,138 @@ static void moe_apply_popularity_placement() {
                   "now favors popular experts; pre-staging on next dispatch.\n");
 }
 
+// ---------------------------------------------------------------------------
+// Per-expert metadata for proactive pre-staging after warmup.
+// Populated once during moe_hybrid_init_once(), keyed by (hash_layer_id, expert_idx).
+// ---------------------------------------------------------------------------
+struct moe_expert_meta {
+    const ggml_tensor *     tensor;       // src0 tensor for cache key generation
+    ggml_tensor_extra_gpu * extra;        // tensor extra for cache UUID
+    ggml_type               type;         // weight quantization type
+    int64_t                 ne0;          // columns (K)
+    int64_t                 ne1;          // rows (N)
+    const void *            data_ptr;     // host-accessible weight data
+    size_t                  bytes;        // per-expert weight bytes
+    int                     layer_id;     // hash-based layer_id
+    int                     expert_idx;   // expert index within layer
+};
+static std::vector<moe_expert_meta> g_moe_expert_meta;
+static std::mutex                   g_moe_expert_meta_mutex;
+
+// ---------------------------------------------------------------------------
+// Proactive pre-staging: upload popular experts to GPU0 VRAM after warmup.
+// Called immediately after moe_apply_popularity_placement() sets popularity ranks.
+// ---------------------------------------------------------------------------
+static void moe_prestage_popular_experts() {
+    auto & ptable = ggml_sycl::get_expert_placement_table();
+    if (!ptable.is_initialized()) return;
+
+    std::lock_guard<std::mutex> lock(g_moe_expert_meta_mutex);
+    if (g_moe_expert_meta.empty()) return;
+
+    // Get GPU0 unified cache and available VRAM
+    const int device = 0;
+    size_t avail = ggml_sycl::unified_cache_available_for_compute(device);
+    if (avail == 0) return;
+
+    ggml_sycl::unified_cache * cache = ggml_sycl::get_unified_cache_for_device(device);
+    if (!cache) return;
+
+    // Group experts by layer_id, sort each group by popularity rank
+    std::unordered_map<int, std::vector<const moe_expert_meta *>> by_layer;
+    for (const auto & meta : g_moe_expert_meta) {
+        by_layer[meta.layer_id].push_back(&meta);
+    }
+
+    const int n_layers = static_cast<int>(by_layer.size());
+    if (n_layers == 0) return;
+
+    // Compute slots per layer: spread VRAM budget evenly across layers
+    const size_t expert_bytes = g_moe_expert_meta[0].bytes;
+    if (expert_bytes == 0) return;
+    const size_t total_slots  = avail / expert_bytes;
+    const size_t slots_per_layer = std::max(size_t(1), total_slots / static_cast<size_t>(n_layers));
+
+    int prestaged = 0;
+    int skipped   = 0;
+
+    for (auto & [lid, experts] : by_layer) {
+        // Sort by popularity rank (lower = more popular)
+        std::sort(experts.begin(), experts.end(),
+                  [&](const moe_expert_meta * a, const moe_expert_meta * b) {
+                      auto pa = ptable.get(a->layer_id, a->expert_idx);
+                      auto pb = ptable.get(b->layer_id, b->expert_idx);
+                      int ra = (pa.popularity_rank >= 0) ? pa.popularity_rank : INT_MAX;
+                      int rb = (pb.popularity_rank >= 0) ? pb.popularity_rank : INT_MAX;
+                      return ra < rb;
+                  });
+
+        size_t staged_this_layer = 0;
+        for (const auto * meta : experts) {
+            if (staged_this_layer >= slots_per_layer) break;
+
+            // Skip experts already in VRAM
+            auto placement = ptable.get(meta->layer_id, meta->expert_idx);
+            if (placement.device_ptr != nullptr) {
+                skipped++;
+                continue;
+            }
+
+            // Build cache key
+            ggml_sycl_cache_id key = ggml_sycl_get_moe_expert_cache_key(
+                meta->tensor, meta->extra, meta->expert_idx);
+            if (!key.valid) continue;
+
+            // Build SOA layout request
+            const size_t soa_bytes = ggml_sycl_layout_bytes_for_dims(
+                meta->type, meta->ne0, meta->ne1, GGML_LAYOUT_SOA, device);
+            const size_t dst_bytes = (soa_bytes > 0) ? soa_bytes : meta->bytes;
+
+            ggml_sycl_reorder_fill_ctx reorder_ctx{};
+            reorder_ctx.type        = meta->type;
+            reorder_ctx.ncols       = meta->ne0;
+            reorder_ctx.nrows       = meta->ne1;
+            reorder_ctx.nbytes      = meta->bytes;
+            reorder_ctx.dst_bytes   = dst_bytes;
+            reorder_ctx.layout      = GGML_LAYOUT_SOA;
+            reorder_ctx.src_is_device = false;
+            reorder_ctx.device_id   = device;
+
+            ggml_sycl::cache_layout_request req{};
+            req.key              = key;
+            req.src_ptr          = meta->data_ptr;
+            req.src_size         = meta->bytes;
+            req.dst_size         = dst_bytes;
+            req.type             = ggml_sycl::cache_entry_type::MOE_EXPERT;
+            req.layer_id         = meta->layer_id;
+            req.expert_id        = meta->expert_idx;
+            req.layout           = GGML_LAYOUT_SOA;
+            req.validate_content = false;
+            req.fill_fn          = ggml_sycl_fill_reordered_host;
+            req.fill_ctx         = &reorder_ctx;
+
+            try {
+                auto result = cache->ensure_cached_layout(req, {});
+                if (result.status == ggml_sycl::cache_layout_status::READY ||
+                    result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
+                    if (result.device_ptr) {
+                        ptable.set_device_ptr(meta->layer_id, meta->expert_idx, device, result.device_ptr);
+                    }
+                    prestaged++;
+                    staged_this_layer++;
+                }
+            } catch (...) {
+                // VRAM exhausted — stop pre-staging
+                break;
+            }
+        }
+    }
+
+    GGML_LOG_INFO("[MOE-PRESTAGE] Pre-staged %d popular experts to GPU0 VRAM "
+                  "(%d already cached, %zu slots/layer, %d layers)\n",
+                  prestaged, skipped, slots_per_layer, n_layers);
+}
+
 // Per-secondary-GPU staging buffers (malloc_host, readable from primary GPU).
 // Allocated once during init, sized for max_dispatch_count * max_N floats.
 static float *       g_secondary_staging_buffer[GGML_SYCL_MAX_DEVICES]  = {};
@@ -839,6 +971,28 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
         }
         GGML_LOG_INFO("[MOE-HYBRID] ExpertPlacementTable populated: %zu entries, %d with host_src_ptr, %zu device-only\n",
                       expert_list.size(), n_with_host_ptr, expert_list.size() - n_with_host_ptr);
+    }
+
+    // Store per-expert metadata for proactive pre-staging after warmup.
+    {
+        std::lock_guard<std::mutex> lock(g_moe_expert_meta_mutex);
+        g_moe_expert_meta.clear();
+        g_moe_expert_meta.reserve(expert_list.size());
+        for (const auto & info : expert_list) {
+            moe_expert_meta meta{};
+            meta.tensor     = info.tensor;
+            meta.extra      = info.extra;
+            meta.type       = info.tensor->type;
+            meta.ne0        = info.tensor->ne[0];
+            meta.ne1        = info.tensor->ne[1];
+            meta.data_ptr   = info.data_ptr;
+            meta.bytes      = info.bytes;
+            meta.layer_id   = info.layer_id;
+            meta.expert_idx = info.expert_idx;
+            g_moe_expert_meta.push_back(meta);
+        }
+        GGML_LOG_INFO("[MOE-HYBRID] Expert metadata stored: %zu entries for post-warmup pre-staging\n",
+                      g_moe_expert_meta.size());
     }
 
     // -----------------------------------------------------------------------
@@ -3838,6 +3992,23 @@ static void ggml_sycl_moe_ids_cache_new_graph() {
 }
 
 // ---------------------------------------------------------------------------
+// Per-layer IDs D2H + expert pointer cache for MoE sub-op batching (Task 1E).
+// Gate/Up/Down sub-ops within the same MoE block share the same expert IDs.
+// The GATE sub-op populates this cache; UP and DOWN reuse it to avoid
+// redundant D2H copies and placement table lookups.
+// ---------------------------------------------------------------------------
+struct moe_layer_ids_cache_entry {
+    std::vector<int32_t> ids_host;       // Expert IDs (copied D2H once at GATE)
+    uint64_t             graph_epoch;    // Graph epoch for staleness detection
+};
+// Keyed by block-number layer_id (parsed from tensor name). Cleared each graph epoch.
+static thread_local std::unordered_map<int, moe_layer_ids_cache_entry> g_moe_layer_ids_cache;
+
+static void ggml_sycl_moe_layer_ids_cache_new_graph() {
+    g_moe_layer_ids_cache.clear();
+}
+
+// ---------------------------------------------------------------------------
 // MoE expert probability threshold: skip low-probability experts in TG
 // ---------------------------------------------------------------------------
 // Maps layer_id -> pointer to the final ffn_moe_weights tensor for this graph.
@@ -4020,6 +4191,8 @@ struct moe_profile_layer {
     double cpu_compute_us  = 0;  // CPU expert compute (gate+up+silu+down)
     double gpu_compute_us  = 0;  // GPU expert compute (secondary dispatch)
     double scatter_us      = 0;  // H2D scatter of results
+    double inter_op_us     = 0;  // Time between MUL_MAT_ID calls within layer (SILU, norms, scatter flush)
+    double weight_load_us  = 0;  // Weight ensure/streaming time (PCIe)
     double layer_total_us  = 0;  // Total MoE layer time (entry to exit)
     int    n_cpu_experts   = 0;  // Number of CPU-dispatched experts
     int    n_gpu_experts   = 0;  // Number of GPU-dispatched experts
@@ -4065,6 +4238,8 @@ struct moe_profile_state {
     hrc::time_point gpu_compute_done_tp;  // GPU MMVQ dispatch end
     hrc::time_point compute_done;         // All compute end (GPU + CPU)
     hrc::time_point scatter_done;
+    hrc::time_point last_op_end;          // End of previous MUL_MAT_ID in same layer
+    bool            has_last_op_end = false;
     int             op_n_cpu = 0;
     int             op_n_gpu = 0;
 
@@ -4160,6 +4335,10 @@ struct moe_profile_state {
             current_layer = layer_id;
             in_moe_layer = true;
             moe_entry = now;
+            has_last_op_end = false;
+        } else if (has_last_op_end) {
+            // Same layer, not first op — capture inter-op time (SILU, norms, scatter flush)
+            cur_layer.inter_op_us += us(last_op_end, now);
         }
 
         op_start              = hrc::now();
@@ -4172,6 +4351,12 @@ struct moe_profile_state {
     }
 
     // Sub-phase timestamps within a MUL_MAT_ID call
+    void moe_weight_load_done() {
+        if (!token_active) return;
+        auto now = hrc::now();
+        cur_layer.weight_load_us += us(op_start, now);
+        op_start = now;  // Shift op_start past weight load so IDs D2H starts fresh
+    }
     void moe_ids_done()     { if (token_active) ids_done = hrc::now(); }
     void moe_routing_done() { if (token_active) routing_done = hrc::now(); }
     void moe_gpu_compute_done() { if (token_active) gpu_compute_done_tp = hrc::now(); }
@@ -4225,6 +4410,8 @@ struct moe_profile_state {
         }
 
         last_moe_exit = now;
+        last_op_end = now;
+        has_last_op_end = true;
     }
 
     // U6 diagnostic counters
@@ -4254,7 +4441,8 @@ struct moe_profile_state {
 
         // Compute averages across all profiled tokens
         double avg_ids = 0, avg_routing = 0, avg_cpu = 0, avg_gpu = 0;
-        double avg_scatter = 0, avg_attn = 0, avg_other = 0, avg_total = 0;
+        double avg_scatter = 0, avg_inter_op = 0, avg_weight_load = 0;
+        double avg_attn = 0, avg_other = 0, avg_total = 0;
         double avg_moe = 0;
         // Scatter decomposition averages (U6)
         double avg_scatter_cpu_wait = 0, avg_scatter_submit = 0, avg_scatter_event_wait = 0;
@@ -4264,6 +4452,7 @@ struct moe_profile_state {
 
         for (auto & tok : tokens) {
             double tok_ids = 0, tok_routing = 0, tok_cpu = 0, tok_gpu = 0, tok_scatter = 0;
+            double tok_inter_op = 0, tok_weight_load = 0;
             double tok_scat_cpu = 0, tok_scat_sub = 0, tok_scat_wait = 0, tok_scat_bytes = 0;
             int    tok_scat_ent = 0, tok_scat_calls = 0;
             int    tok_cpu_exp = 0, tok_gpu_exp = 0;
@@ -4273,6 +4462,8 @@ struct moe_profile_state {
                 tok_cpu     += lay.cpu_compute_us;
                 tok_gpu     += lay.gpu_compute_us;
                 tok_scatter += lay.scatter_us;
+                tok_inter_op += lay.inter_op_us;
+                tok_weight_load += lay.weight_load_us;
                 tok_cpu_exp += lay.n_cpu_experts;
                 tok_gpu_exp += lay.n_gpu_experts;
                 tok_scat_cpu   += lay.scatter_cpu_wait_us;
@@ -4287,6 +4478,8 @@ struct moe_profile_state {
             avg_cpu     += tok_cpu;
             avg_gpu     += tok_gpu;
             avg_scatter += tok_scatter;
+            avg_inter_op += tok_inter_op;
+            avg_weight_load += tok_weight_load;
             avg_attn    += tok.attention_us;
             avg_other   += tok.other_us;
             avg_total   += tok.token_total_us;
@@ -4304,8 +4497,8 @@ struct moe_profile_state {
 
         const int nt = static_cast<int>(tokens.size());
         avg_ids     /= nt;  avg_routing /= nt;  avg_cpu     /= nt;
-        avg_gpu     /= nt;  avg_scatter /= nt;  avg_attn    /= nt;
-        avg_other   /= nt;  avg_total   /= nt;  avg_moe     /= nt;
+        avg_gpu     /= nt;  avg_scatter /= nt;  avg_inter_op /= nt;  avg_weight_load /= nt;
+        avg_attn    /= nt;  avg_other   /= nt;  avg_total   /= nt;  avg_moe     /= nt;
         avg_scatter_cpu_wait  /= nt;  avg_scatter_submit /= nt;
         avg_scatter_event_wait /= nt; avg_scatter_bytes  /= nt;
 
@@ -4327,6 +4520,7 @@ struct moe_profile_state {
         };
 
         double dtok_ids = 0, dtok_routing = 0, dtok_cpu = 0, dtok_gpu = 0, dtok_scatter = 0;
+        double dtok_inter_op = 0;
         double dtok_scat_cpu = 0, dtok_scat_sub = 0, dtok_scat_wait = 0, dtok_scat_bytes = 0;
         int    dtok_scat_ent = 0, dtok_scat_calls = 0;
         int dtok_cpu_exp = 0, dtok_gpu_exp = 0;
@@ -4336,6 +4530,7 @@ struct moe_profile_state {
             dtok_cpu     += lay.cpu_compute_us;
             dtok_gpu     += lay.gpu_compute_us;
             dtok_scatter += lay.scatter_us;
+            dtok_inter_op += lay.inter_op_us;
             dtok_cpu_exp += lay.n_cpu_experts;
             dtok_gpu_exp += lay.n_gpu_experts;
             dtok_scat_cpu   += lay.scatter_cpu_wait_us;
@@ -4346,14 +4541,34 @@ struct moe_profile_state {
             dtok_scat_bytes += lay.scatter_bytes;
         }
 
+        // Accumulate weight_load
+        double dtok_weight_load = 0;
+        int    dtok_total_calls = 0;
+        for (auto & lay : dtok.layers) {
+            dtok_weight_load += lay.weight_load_us;
+            dtok_total_calls += lay.n_calls;
+        }
+
+        // Compute unaccounted MoE time (layer_total - sum of sub-phases)
+        double dtok_subphase_sum = dtok_ids + dtok_routing + dtok_cpu + dtok_gpu + dtok_scatter
+                                 + dtok_inter_op + dtok_weight_load;
+        double dtok_moe_unaccounted = dtok.moe_total_us - dtok_subphase_sum;
+
         print_row("MoE total",            dtok.moe_total_us, dtok.n_moe_layers);
+        fprintf(stderr, "  (MUL_MAT_ID calls: %d, expected: %d x 3 = %d)\n",
+                dtok_total_calls, dtok.n_moe_layers, dtok.n_moe_layers * 3);
         // Sub-phase breakdown (only when instrumented, i.e., non-zero)
         if (dtok_ids > 0 || dtok_routing > 0 || dtok_cpu > 0 || dtok_gpu > 0) {
+            print_row("  Weight load (PCIe)", dtok_weight_load, dtok.n_moe_layers);
             print_row("  IDs D2H",           dtok_ids,     dtok.n_moe_layers);
             print_row("  Expert routing",     dtok_routing, dtok.n_moe_layers);
             print_row("  CPU expert compute", dtok_cpu,     dtok.n_moe_layers);
             print_row("  GPU expert compute", dtok_gpu,     dtok.n_moe_layers);
             print_row("  Scatter H2D",        dtok_scatter, dtok.n_moe_layers);
+            print_row("  Inter-op (SILU/etc)",dtok_inter_op, dtok.n_moe_layers);
+            if (dtok_moe_unaccounted > 100) {  // Only show if > 0.1ms
+                print_row("  MoE unaccounted",dtok_moe_unaccounted, dtok.n_moe_layers);
+            }
             // U6: Scatter decomposition
             if (dtok_scat_cpu > 0 || dtok_scat_sub > 0 || dtok_scat_wait > 0) {
                 print_row("    CPU future.get()", dtok_scat_cpu,  dtok.n_moe_layers);
@@ -4395,12 +4610,20 @@ struct moe_profile_state {
         };
 
         print_avg("MoE total",            avg_moe);
+        double avg_subphase_sum = avg_ids + avg_routing + avg_cpu + avg_gpu + avg_scatter
+                                + avg_inter_op + avg_weight_load;
+        double avg_moe_unaccounted = avg_moe - avg_subphase_sum;
         if (avg_ids > 0 || avg_routing > 0 || avg_cpu > 0 || avg_gpu > 0) {
+            print_avg("  Weight load (PCIe)", avg_weight_load);
             print_avg("  IDs D2H",           avg_ids);
             print_avg("  Expert routing",     avg_routing);
             print_avg("  CPU expert compute", avg_cpu);
             print_avg("  GPU expert compute", avg_gpu);
             print_avg("  Scatter H2D",        avg_scatter);
+            print_avg("  Inter-op (SILU/etc)",avg_inter_op);
+            if (avg_moe_unaccounted > 100) {
+                print_avg("  MoE unaccounted", avg_moe_unaccounted);
+            }
             // U6: Scatter decomposition averages
             if (avg_scatter_cpu_wait > 0 || avg_scatter_submit > 0 || avg_scatter_event_wait > 0) {
                 print_avg("    CPU future.get()", avg_scatter_cpu_wait);
@@ -20777,8 +21000,32 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
         if (ids_host_override) {
             ids_host = *ids_host_override;
         } else {
-            if (!ggml_sycl_copy_ids_to_host(ctx, ids, ids_host)) {
-                return false;
+            // Task 1E: check per-layer IDs cache before D2H copy.
+            // GATE populates the cache; UP/DOWN reuse it within the same graph epoch.
+            const int blk_id = parse_layer_id_from_name(src0->name ? src0->name : "");
+            const uint64_t cur_epoch = g_moe_graph_epoch.load(std::memory_order_relaxed);
+            bool from_layer_cache = false;
+            if (blk_id >= 0) {
+                auto it = g_moe_layer_ids_cache.find(blk_id);
+                if (it != g_moe_layer_ids_cache.end() &&
+                    it->second.graph_epoch == cur_epoch &&
+                    !it->second.ids_host.empty()) {
+                    ids_host = it->second.ids_host;
+                    from_layer_cache = true;
+                    GGML_SYCL_DEBUG("[MOE-PTR-1E] Reusing cached IDs for layer %d (%s)\n",
+                                    blk_id, src0->name ? src0->name : "?");
+                }
+            }
+            if (!from_layer_cache) {
+                if (!ggml_sycl_copy_ids_to_host(ctx, ids, ids_host)) {
+                    return false;
+                }
+                // Cache at GATE for subsequent UP/DOWN sub-ops in same block
+                if (blk_id >= 0 && src0->name && strstr(src0->name, "ffn_gate")) {
+                    auto & entry = g_moe_layer_ids_cache[blk_id];
+                    entry.ids_host    = ids_host;
+                    entry.graph_epoch = cur_epoch;
+                }
             }
         }
     }
@@ -26764,6 +27011,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
         call_count++;
     }
     ggml_sycl_ensure_weight_on_device(src0, ctx.device);
+    if (g_moe_profile_enabled) { g_moe_profile.moe_weight_load_done(); }
 
     GGML_ASSERT(!ggml_backend_buffer_is_sycl_split(src0->buffer) && "mul_mat_id does not support split buffers");
     const ggml_tensor * ids = dst->src[2];
@@ -27049,6 +27297,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                             g_moe_warmup.record(seq_layer_id_fuse, ids_data_f, static_cast<int>(ids_n_elem));
                             if (g_moe_warmup.tick_token()) {
                                 moe_apply_popularity_placement();
+                                moe_prestage_popular_experts();
                             }
                         }
                     }
@@ -27341,6 +27590,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                             g_moe_warmup.record(seq_layer_id_fuse, ids_data_f, static_cast<int>(ids_n_elem));
                             if (g_moe_warmup.tick_token()) {
                                 moe_apply_popularity_placement();
+                                moe_prestage_popular_experts();
                             }
                         }
                     }
@@ -28598,10 +28848,43 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     const int64_t        n_as   = ne02;
     const int64_t        n_ids  = ids->ne[0];
     std::vector<int32_t> ids_host;
-    if (!ggml_sycl_copy_ids_to_host(ctx, ids, ids_host)) {
-        GGML_LOG_ERROR("[MoE] Failed to copy ids to host for %s\n", src0->name ? src0->name : "?");
-        return;
+
+    // Task 1E: Batch IDs D2H across GATE/UP/DOWN sub-ops.
+    // Within a MoE block, GATE/UP/DOWN share the same expert IDs.
+    // Copy D2H once at GATE and reuse for UP and DOWN.
+    const int    blk_layer_id = parse_layer_id_from_name(src0->name ? src0->name : "");
+    const bool   is_gate_subop = src0->name && strstr(src0->name, "ffn_gate");
+    const uint64_t cur_epoch = g_moe_graph_epoch.load(std::memory_order_relaxed);
+    bool ids_from_cache = false;
+
+    if (blk_layer_id >= 0 && !is_gate_subop) {
+        // UP or DOWN: try to reuse cached IDs from GATE
+        auto cache_it = g_moe_layer_ids_cache.find(blk_layer_id);
+        if (cache_it != g_moe_layer_ids_cache.end() &&
+            cache_it->second.graph_epoch == cur_epoch &&
+            !cache_it->second.ids_host.empty()) {
+            ids_host = cache_it->second.ids_host;
+            ids_from_cache = true;
+            GGML_SYCL_DEBUG("[MoE-1E] Reusing cached IDs for layer %d (%s), %zu elements\n",
+                            blk_layer_id, src0->name ? src0->name : "?", ids_host.size());
+        }
     }
+
+    if (!ids_from_cache) {
+        if (!ggml_sycl_copy_ids_to_host(ctx, ids, ids_host)) {
+            GGML_LOG_ERROR("[MoE] Failed to copy ids to host for %s\n", src0->name ? src0->name : "?");
+            return;
+        }
+        // Cache at GATE for subsequent UP/DOWN reuse
+        if (blk_layer_id >= 0 && is_gate_subop) {
+            auto & entry = g_moe_layer_ids_cache[blk_layer_id];
+            entry.ids_host    = ids_host;
+            entry.graph_epoch = cur_epoch;
+            GGML_SYCL_DEBUG("[MoE-1E] Cached IDs for layer %d (GATE), %zu elements\n",
+                            blk_layer_id, ids_host.size());
+        }
+    }
+
     // MoE profiling: IDs D2H complete
     if (g_moe_profile_enabled) {
         g_moe_profile.moe_ids_done();
@@ -28789,8 +29072,10 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
         // Stage experts in the requested layout (SOA/Coalesced for MXFP4, AOS otherwise).
         // force_cache_aos=true only when layout is AOS (ensures mmap'd weights get staged).
         const bool need_force_aos = (route_layout == GGML_LAYOUT_AOS);
-        if (!ggml_sycl_update_moe_ptr_table(ctx, src0, ids, route_layout, nullptr, /*allow_all_experts=*/false, nullptr,
-                                            false, /*force_cache_aos=*/need_force_aos)) {
+        // Task 1E: pass pre-resolved ids_host to avoid redundant D2H inside update_moe_ptr_table
+        const auto * ids_override = ids_host.empty() ? nullptr : &ids_host;
+        if (!ggml_sycl_update_moe_ptr_table(ctx, src0, ids, route_layout, nullptr, /*allow_all_experts=*/false,
+                                            ids_override, false, /*force_cache_aos=*/need_force_aos)) {
             GGML_LOG_ERROR("[MoE] Failed to update expert pointer table for %s\n", src0->name);
         } else if (src0_extra && ctx.device >= 0 && ctx.device < GGML_SYCL_MAX_DEVICES) {
             const auto & host_ptrs = src0_extra->moe_expert_ptrs_host[ctx.device];
@@ -29258,6 +29543,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
                     if (g_moe_warmup.tick_token()) {
                         moe_apply_popularity_placement();
+                        moe_prestage_popular_experts();
                     }
                 }
 
@@ -29530,6 +29816,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 // Tick token and trigger re-placement when warmup ends
                 if (g_moe_warmup.tick_token()) {
                     moe_apply_popularity_placement();
+                    moe_prestage_popular_experts();
                 }
             }
 
@@ -32184,6 +32471,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     ggml_sycl_data_ptr_cache_new_graph();
     ggml_sycl_cpu_quant_cache_new_graph();
     ggml_sycl_moe_ids_cache_new_graph();
+    ggml_sycl_moe_layer_ids_cache_new_graph();
 
     // Capture per-layer expert bias pointers from ADD_ID nodes following MoE MUL_MAT_ID.
     // Models with expert biases (e.g. GPT-OSS) have ADD_ID(MUL_MAT_ID, bias)
