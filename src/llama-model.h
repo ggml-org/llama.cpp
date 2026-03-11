@@ -295,6 +295,11 @@ struct llama_layer {
     struct ggml_tensor * ffn_up_exps_b     = nullptr;
     struct ggml_tensor * ffn_gate_up_exps_b = nullptr;
 
+    // ff MoE per-expert scales (NVFP4 per-tensor scale2)
+    struct ggml_tensor * ffn_gate_exps_s   = nullptr;
+    struct ggml_tensor * ffn_down_exps_s   = nullptr;
+    struct ggml_tensor * ffn_up_exps_s     = nullptr;
+  
     // ff MoE latent proj
     struct ggml_tensor * ffn_latent_down = nullptr;
     struct ggml_tensor * ffn_latent_up   = nullptr;
@@ -392,13 +397,13 @@ struct llama_layer {
     struct ggml_tensor * rope_freqs = nullptr;
 
     // bitnet scale
-    struct ggml_tensor * wq_scale       = nullptr;
-    struct ggml_tensor * wk_scale       = nullptr;
-    struct ggml_tensor * wv_scale       = nullptr;
-    struct ggml_tensor * wo_scale       = nullptr;
-    struct ggml_tensor * ffn_gate_scale = nullptr;
-    struct ggml_tensor * ffn_up_scale   = nullptr;
-    struct ggml_tensor * ffn_down_scale = nullptr;
+    struct ggml_tensor * wq_s       = nullptr;
+    struct ggml_tensor * wk_s       = nullptr;
+    struct ggml_tensor * wv_s       = nullptr;
+    struct ggml_tensor * wo_s       = nullptr;
+    struct ggml_tensor * ffn_gate_s = nullptr;
+    struct ggml_tensor * ffn_up_s   = nullptr;
+    struct ggml_tensor * ffn_down_s = nullptr;
 
     // altup & laurel
     struct ggml_tensor * per_layer_inp_gate   = nullptr;

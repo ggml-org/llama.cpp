@@ -30,8 +30,8 @@ llm_build_bitnet::llm_build_bitnet(const llama_model & model, const llm_graph_pa
         {
             // compute Q and K and RoPE them
             ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
-            if (model.layers[il].wq_scale) {
-                Qcur = ggml_mul(ctx0, Qcur, model.layers[il].wq_scale);
+            if (model.layers[il].wq_s) {
+                Qcur = ggml_mul(ctx0, Qcur, model.layers[il].wq_s);
             }
             cb(Qcur, "Qcur", il);
             if (model.layers[il].bq) {
@@ -41,8 +41,8 @@ llm_build_bitnet::llm_build_bitnet(const llama_model & model, const llm_graph_pa
 
             // B1.K
             ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
-            if (model.layers[il].wk_scale) {
-                Kcur = ggml_mul(ctx0, Kcur, model.layers[il].wk_scale);
+            if (model.layers[il].wk_s) {
+                Kcur = ggml_mul(ctx0, Kcur, model.layers[il].wk_s);
             }
             cb(Kcur, "Kcur", il);
             if (model.layers[il].bk) {
@@ -52,8 +52,8 @@ llm_build_bitnet::llm_build_bitnet(const llama_model & model, const llm_graph_pa
 
             // B1.V
             ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
-            if (model.layers[il].wv_scale) {
-                Vcur = ggml_mul(ctx0, Vcur, model.layers[il].wv_scale);
+            if (model.layers[il].wv_s) {
+                Vcur = ggml_mul(ctx0, Vcur, model.layers[il].wv_s);
             }
             cb(Vcur, "Vcur", il);
             if (model.layers[il].bv) {
@@ -91,8 +91,8 @@ llm_build_bitnet::llm_build_bitnet(const llama_model & model, const llm_graph_pa
             cb(cur, "attn_sub_norm", il);
 
             cur = build_lora_mm(model.layers[il].wo, cur);
-            if (model.layers[il].wo_scale) {
-                cur = ggml_mul(ctx0, cur, model.layers[il].wo_scale);
+            if (model.layers[il].wo_s) {
+                cur = ggml_mul(ctx0, cur, model.layers[il].wo_s);
             }
             if (model.layers[il].bo) {
                 cur = ggml_add(ctx0, cur, model.layers[il].bo);
@@ -115,8 +115,8 @@ llm_build_bitnet::llm_build_bitnet(const llama_model & model, const llm_graph_pa
         cb(cur, "ffn_norm", il);
 
         cur = build_ffn(cur,
-                model.layers[il].ffn_up,   NULL, model.layers[il].ffn_up_scale,
-                model.layers[il].ffn_gate, NULL, model.layers[il].ffn_gate_scale,
+                model.layers[il].ffn_up,   NULL, model.layers[il].ffn_up_s,
+                model.layers[il].ffn_gate, NULL, model.layers[il].ffn_gate_s,
                 NULL,                      NULL, NULL,
                 NULL,
                 LLM_FFN_SILU, LLM_FFN_PAR, il);
@@ -128,8 +128,8 @@ llm_build_bitnet::llm_build_bitnet(const llama_model & model, const llm_graph_pa
         cb(cur, "ffn_sub_norm", il);
 
         cur = build_lora_mm(model.layers[il].ffn_down, cur);
-        if (model.layers[il].ffn_down_scale) {
-            cur = ggml_mul(ctx0, cur, model.layers[il].ffn_down_scale);
+        if (model.layers[il].ffn_down_s) {
+            cur = ggml_mul(ctx0, cur, model.layers[il].ffn_down_s);
         }
         cb(cur, "ffn_down", il);
 
