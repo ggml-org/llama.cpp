@@ -2427,11 +2427,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 );
             }
             if (split_arg.size() == 1) {
-                std::fill(params.fit_params_target.begin(), params.fit_params_target.end(), std::stoul(split_arg[0]) * 1024*1024);
+                std::fill(params.fit_params_target.begin(), params.fit_params_target.end(), std::stoull(split_arg[0]) * 1024*1024);
                 return;
             }
             for (size_t i = 0; i < split_arg.size(); i++) {
-                params.fit_params_target[i] = std::stoul(split_arg[i]) * 1024*1024;
+                params.fit_params_target[i] = std::stoull(split_arg[i]) * 1024*1024;
             }
         }
     ).set_env("LLAMA_ARG_FIT_TARGET"));
@@ -2666,7 +2666,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.out_file = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_CVECTOR_GENERATOR, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_FINETUNE}));
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_CVECTOR_GENERATOR, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_FINETUNE, LLAMA_EXAMPLE_RESULTS}));
     add_opt(common_arg(
         {"-ofreq", "--output-frequency"}, "N",
         string_format("output the imatrix every N iterations (default: %d)", params.n_out_freq),
@@ -3607,6 +3607,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg(
+        {"--check"},
+        string_format("check rather than generate results (default: %s)", params.check ? "true" : "false"),
+        [](common_params & params) {
+            params.check = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_RESULTS}));
     add_opt(common_arg(
         {"--save-logits"},
         string_format("save final logits to files for verification (default: %s)", params.save_logits ? "true" : "false"),

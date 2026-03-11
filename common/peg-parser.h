@@ -139,22 +139,43 @@ struct common_peg_parse_result {
     bool success() const { return type == COMMON_PEG_PARSE_RESULT_SUCCESS; }
 };
 
+enum common_peg_parse_flags {
+    COMMON_PEG_PARSE_FLAG_NONE    = 0,
+    COMMON_PEG_PARSE_FLAG_LENIENT = 1 << 0,
+    COMMON_PEG_PARSE_FLAG_DEBUG   = 1 << 1,
+};
+
+inline common_peg_parse_flags operator|(common_peg_parse_flags a, common_peg_parse_flags b) {
+    return static_cast<common_peg_parse_flags>(int(a) | int(b));
+}
+
+inline common_peg_parse_flags & operator|=(common_peg_parse_flags & a, common_peg_parse_flags b) {
+    return a = a | b;
+}
+
+inline common_peg_parse_flags operator&(common_peg_parse_flags a, common_peg_parse_flags b) {
+    return static_cast<common_peg_parse_flags>(int(a) & int(b));
+}
+
+inline common_peg_parse_flags operator~(common_peg_parse_flags a) {
+    return static_cast<common_peg_parse_flags>(~int(a));
+}
+
 struct common_peg_parse_context {
     std::string input;
-    bool is_partial;
-    bool debug = false;  // Enable debug output for parser tracing
+    common_peg_parse_flags flags;
     common_peg_ast_arena ast;
 
     int parse_depth;
 
-    common_peg_parse_context()
-        : is_partial(false), parse_depth(0) {}
+    common_peg_parse_context(common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_NONE)
+        : flags(flags), parse_depth(0) {}
 
-    common_peg_parse_context(const std::string & input)
-        : input(input), is_partial(false), parse_depth(0) {}
+    common_peg_parse_context(const std::string & input, common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_NONE)
+        : input(input), flags(flags), parse_depth(0) {}
 
-    common_peg_parse_context(const std::string & input, bool is_partial)
-        : input(input), is_partial(is_partial), parse_depth(0) {}
+    bool is_lenient() const { return flags & COMMON_PEG_PARSE_FLAG_LENIENT; }
+    bool is_debug() const { return flags & COMMON_PEG_PARSE_FLAG_DEBUG; }
 };
 
 class common_peg_arena;
@@ -210,8 +231,9 @@ struct common_peg_chars_parser {
     int max_count;  // -1 for unbounded
 };
 
-struct common_peg_json_string_parser {};
-struct common_peg_python_dict_string_parser {};
+struct common_peg_string_parser {
+    char delimiter;
+};
 
 struct common_peg_until_parser {
     std::vector<std::string> delimiters;
@@ -259,8 +281,7 @@ using common_peg_parser_variant = std::variant<
     common_peg_any_parser,
     common_peg_space_parser,
     common_peg_chars_parser,
-    common_peg_json_string_parser,
-    common_peg_python_dict_string_parser,
+    common_peg_string_parser,
     common_peg_until_parser,
     common_peg_schema_parser,
     common_peg_rule_parser,
@@ -318,10 +339,6 @@ class common_peg_parser_builder {
 
     common_peg_parser wrap(common_peg_parser_id id) { return common_peg_parser(id, *this); }
     common_peg_parser add(const common_peg_parser_variant & p) { return wrap(arena_.add_parser(p)); }
-
-    // Generic helpers for building object/array structures with configurable string/value parsers.
-    common_peg_parser generic_object(const std::string & name, const common_peg_parser & string_parser, const common_peg_parser & value_parser);
-    common_peg_parser generic_array(const std::string & name, const common_peg_parser & value_parser);
 
   public:
     common_peg_parser_builder();
@@ -423,13 +440,10 @@ class common_peg_parser_builder {
     common_peg_parser single_quoted_string();
 
     // Matches a string that accepts both double-quoted and single-quoted styles.
-    common_peg_parser flexible_string();
+    common_peg_parser quoted_string();
 
-    // Matches double-quoted string content without the surrounding quotes.
-    common_peg_parser json_string_content();
-
-    // Matches single-quoted string content without the surrounding quotes.
-    common_peg_parser single_quoted_string_content();
+    // Matches string content without the surrounding delimiter.
+    common_peg_parser string_content(char delimiter);
 
     // Creates a complete JSON parser supporting objects, arrays, strings, numbers, booleans, and null.
     //   value -> object | array | string | number | true | false | null

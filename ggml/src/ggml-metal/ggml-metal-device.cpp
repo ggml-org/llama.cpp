@@ -1717,12 +1717,29 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_upscale(ggml_met
     char base[256];
     char name[256];
 
-    snprintf(base, 256, "kernel_upscale_%s", ggml_type_name(op->src[0]->type));
-    snprintf(name, 256, "%s", base);
+    const int32_t mode_flags = ggml_get_op_params_i32(op, 0);
+    const ggml_scale_mode mode = (ggml_scale_mode) (mode_flags & 0xFF);
+
+    const bool antialias = (mode_flags & GGML_SCALE_FLAG_ANTIALIAS);
+
+    if (mode == GGML_SCALE_MODE_BILINEAR) {
+        snprintf(base, 256, "kernel_upscale_bilinear_%s", ggml_type_name(op->src[0]->type));
+    } else if (mode == GGML_SCALE_MODE_BICUBIC) {
+        snprintf(base, 256, "kernel_upscale_bicubic_%s", ggml_type_name(op->src[0]->type));
+    } else {
+        snprintf(base, 256, "kernel_upscale_nearest_%s", ggml_type_name(op->src[0]->type));
+    }
+    snprintf(name, 256, "%s_aa=%d", base, antialias);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
-        res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
+        ggml_metal_cv_t cv = ggml_metal_cv_init();
+
+        ggml_metal_cv_set_bool(cv, antialias, FC_UPSCALE + 0);
+
+        res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
+
+        ggml_metal_cv_free(cv);
     }
 
     return res;

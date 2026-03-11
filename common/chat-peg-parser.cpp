@@ -167,8 +167,8 @@ void tag_based_peg_mapper::from_ast(const common_peg_ast_arena & arena, const co
     });
 }
 
-tagged_parse_result tagged_peg_parser::parse_and_extract(const std::string & input, bool is_partial) const {
-    common_peg_parse_context ctx(input, is_partial);
+tagged_parse_result tagged_peg_parser::parse_and_extract(const std::string & input, common_peg_parse_flags extra_flags) const {
+    common_peg_parse_context ctx(input, flags | extra_flags);
     auto parse_result = arena.parse(ctx);
 
     tag_based_peg_mapper mapper;
@@ -179,11 +179,10 @@ tagged_parse_result tagged_peg_parser::parse_and_extract(const std::string & inp
 
 tagged_parse_result tagged_peg_parser::parse_anywhere_and_extract(const std::string & input) const {
     if (input.empty()) {
-        return parse_and_extract(input, false);
+        return parse_and_extract(input);
     }
     for (size_t i = 0; i < input.size(); i++) {
-        common_peg_parse_context ctx(input, false);
-        ctx.debug = debug;
+        common_peg_parse_context ctx(input, flags);
         auto parse_result = arena.parse(ctx, i);
         if (parse_result.success() || i == input.size() - 1) {
             tag_based_peg_mapper mapper;
@@ -477,6 +476,74 @@ common_peg_parser common_chat_peg_builder::standard_constructed_tools(
     return force_tool_calls ? section : optional(section);
 }
 
+// Python-style tool calls: name(arg1="value1", arg2=123)
+// Used only by LFM2 for now, so we don't merge it into autoparser
+common_peg_parser common_chat_peg_builder::python_style_tool_calls(
+    const nlohmann::json & tools,
+    bool                   parallel_tool_calls) {
+    if (!tools.is_array() || tools.empty()) {
+        return eps();
+    }
+
+    auto tool_choices = choice();
+
+    for (const auto & tool_def : tools) {
+        if (!tool_def.contains("function")) {
+            continue;
+        }
+        const auto &   function = tool_def.at("function");
+        std::string    name     = function.at("name");
+        nlohmann::json params = function.contains("parameters") ? function.at("parameters") : nlohmann::json::object();
+
+        auto args = eps();
+        if (params.contains("properties") && !params["properties"].empty()) {
+            auto arg_choice = choice();
+            for (const auto & el : params["properties"].items()) {
+                const std::string & prop_name = el.key();
+                const auto & prop_def = el.value();
+                bool is_string_type = (prop_def.contains("type") && prop_def["type"] == "string");
+
+                auto arg_name_parser = literal(prop_name);
+
+                common_peg_parser arg_value_parser = eps();
+                auto string_value_parser = choice({
+                    literal("\"") + tool_arg_string_value(string_content('"')) + literal("\""),
+                    literal("'") + tool_arg_string_value(string_content('\'')) + literal("'")
+                });
+
+                if (is_string_type) {
+                    arg_value_parser = string_value_parser;
+                } else {
+                    arg_value_parser = tool_arg_value(python_value());
+                }
+
+                // Full argument: name="value" or name=value
+                auto arg_rule = tool_arg(
+                    tool_arg_open(eps()) +
+                    tool_arg_name(arg_name_parser) +
+                    literal("=") +
+                    arg_value_parser +
+                    tool_arg_close(eps())
+                );
+                arg_choice |= arg_rule;
+            }
+
+            args = arg_choice + zero_or_more("," + space() + arg_choice);
+        }
+
+        auto tool_parser = tool(tool_open(tool_name(literal(name)) + literal("(")) +
+            space() + tool_args(args) + space() + tool_close(literal(")"))
+        );
+
+        tool_choices |= rule("tool-" + name, tool_parser);
+    }
+
+    if (parallel_tool_calls) {
+        return "[" + space() + tool_choices + zero_or_more("," + space() + tool_choices) + space() + "]";
+    }
+    return "[" + space() + tool_choices + space() + "]";
+}
+
 // Helper: Parse dot notation key into prefix and field name
 static std::pair<std::string, std::string> parse_key_spec(const std::string & key) {
     auto dot_pos = key.find('.');
@@ -510,7 +577,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_function_is_key(
         if (!call_id_key.empty()) {
             auto id_parser = atomic(
                 literal("\"" + call_id_key + "\"") + space() + literal(":") + space() +
-                literal("\"") + tool_id(json_string_content()) + literal("\"")
+                literal("\"") + tool_id(string_content('"')) + literal("\"")
             );
             inner_fields.push_back(optional(id_parser + space() + optional(literal(",") + space())));
         }
@@ -519,7 +586,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_function_is_key(
             auto gen_id_parser = atomic(
                 literal("\"" + gen_call_id_key + "\"") + space() + literal(":") + space() +
                 choice({
-                    literal("\"") + tool_id(json_string_content()) + literal("\""),
+                    literal("\"") + tool_id(string_content('"')) + literal("\""),
                     tool_id(json_number())
                 })
             );
@@ -608,7 +675,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
             if (id_spec.first.empty()) {
                 auto id_parser = atomic(
                     literal("\"" + call_id_key + "\"") + space() + literal(":") + space() +
-                    literal("\"") + tool_id(json_string_content()) + literal("\"")
+                    literal("\"") + tool_id(string_content('"')) + literal("\"")
                 );
                 tool_parser_body = tool_parser_body + optional(id_parser + space() + literal(",") + space());
             }
@@ -620,7 +687,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
                 auto gen_id_parser = atomic(
                     literal("\"" + gen_call_id_key + "\"") + space() + literal(":") + space() +
                     choice({
-                        literal("\"") + tool_id(json_string_content()) + literal("\""),
+                        literal("\"") + tool_id(string_content('"')) + literal("\""),
                         tool_id(json_number())
                     })
                 );
@@ -669,7 +736,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
             id_parser = atomic(
                 literal("\"" + call_id_key + "\"") + space() + literal(":") + space() +
                 choice({
-                    literal("\"") + tool_id(json_string_content()) + literal("\""),
+                    literal("\"") + tool_id(string_content('"')) + literal("\""),
                     tool_id(json_number())
                 })
             );
@@ -680,7 +747,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
             gen_id_parser = atomic(
                 literal("\"" + gen_call_id_key + "\"") + space() + literal(":") + space() +
                 choice({
-                    literal("\"") + tool_id(json_string_content()) + literal("\""),
+                    literal("\"") + tool_id(string_content('"')) + literal("\""),
                     tool_id(json_number())
                 })
             );
