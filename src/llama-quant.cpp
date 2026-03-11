@@ -1399,11 +1399,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         const struct ggml_tensor * tensor = it->tensor;
         const std::string name = ggml_get_name(tensor);
 
-        metadata[i].category = tensor_get_category(name);
-
-        if (category_is_attn_v(metadata[i].category)) {
-            ++qs.n_attention_wv;
-
         uint16_t i_split = params->keep_split ? it->idx : 0;
         if (!ctx_outs[i_split]) {
             ctx_outs[i_split].reset(gguf_init_empty());
