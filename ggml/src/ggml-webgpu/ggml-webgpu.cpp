@@ -20,11 +20,18 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
+#ifdef GGML_WEBGPU_GPU_PROFILE
+#    include <iomanip>
+#endif
+#if defined(GGML_WEBGPU_DEBUG) || defined(GGML_WEBGPU_CPU_PROFILE) || defined(GGML_WEBGPU_GPU_PROFILE)
+#    include <iostream>
+#endif
 #include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #define ROUNDUP_POW2(x, pow2) (((x) + ((pow2) - 1)) & ~((pow2) - 1))
@@ -69,23 +76,23 @@ static inline void compute_2d_workgroups(uint32_t total_wg, uint32_t max_per_dim
 #endif  // GGML_WEBGPU_CPU_PROFILE
 
 #ifdef GGML_WEBGPU_GPU_PROFILE
-#    define WEBGPU_NUM_TIMESTAMP_QUERY_BUFS       24
+#    define WEBGPU_NUM_TIMESTAMP_QUERY_BUFS       32
 #    define WEBGPU_TIMESTAMP_QUERY_BUF_SIZE_BYTES 16  // e.g. enough for two timestamps
 #endif
 
 /* Constants */
 
-#define WEBGPU_NUM_PARAM_BUFS                48u
-#define WEBGPU_COMMAND_SUBMIT_BATCH_SIZE     16u
+#define WEBGPU_NUM_PARAM_BUFS                96u
+#define WEBGPU_COMMAND_SUBMIT_BATCH_SIZE     32u
 #define WEBGPU_WAIT_ANY_TIMEOUT_MS           0
 // Maximum number of in-flight submissions per-thread, to avoid exhausting the
 // parameter buffer pool
-#define WEBGPU_MAX_INFLIGHT_SUBS_PER_THREAD  WEBGPU_NUM_PARAM_BUFS / WEBGPU_COMMAND_SUBMIT_BATCH_SIZE
+#define WEBGPU_MAX_INFLIGHT_SUBS_PER_THREAD  (WEBGPU_NUM_PARAM_BUFS / WEBGPU_COMMAND_SUBMIT_BATCH_SIZE)
 #define WEBGPU_MAX_PARAM_BUFS_PER_CMD        4u
 #define WEBGPU_PARAMS_BUF_SIZE_BYTES         128  // enough for 32 parameters
 #define WEBGPU_NUM_SET_ROWS_ERROR_BUFS       16
 #define WEBGPU_SET_ROWS_ERROR_BUF_SIZE_BYTES 4
-#define WEBGPU_STORAGE_BUF_BINDING_MULT      4  // a storage buffer binding size must be a multiple of 4
+#define WEBGPU_STORAGE_BUF_BINDING_MULT      4    // a storage buffer binding size must be a multiple of 4
 
 // For operations which process a row in parallel, this seems like a reasonable
 // default
@@ -497,9 +504,11 @@ static void ggml_backend_webgpu_wait(webgpu_global_context &                  ct
                 break;
             case wgpu::WaitStatus::Error:
                 GGML_LOG_ERROR("ggml_webgpu: WaitAny returned an error\n");
+                i++;
                 break;
             default:
                 GGML_LOG_ERROR("ggml_webgpu: WaitAny returned an unknown status\n");
+                i++;
                 break;
         }
     }
