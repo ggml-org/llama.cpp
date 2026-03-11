@@ -813,12 +813,8 @@ struct vk_device_struct {
     vk_pipeline pipeline_pool2d_f32;
     vk_pipeline pipeline_rwkv_wkv6_f32;
     vk_pipeline pipeline_rwkv_wkv7_f32;
-    vk_pipeline pipeline_gated_delta_net_f32_d32;
-    vk_pipeline pipeline_gated_delta_net_f32_d64;
-    vk_pipeline pipeline_gated_delta_net_f32_d128;
-    vk_pipeline pipeline_gated_delta_net_f32_d32_kda;
-    vk_pipeline pipeline_gated_delta_net_f32_d64_kda;
-    vk_pipeline pipeline_gated_delta_net_f32_d128_kda;
+    // [size_idx][kda] where size_idx: 0=d32, 1=d64, 2=d128
+    vk_pipeline pipeline_gated_delta_net[3][2];
     vk_pipeline pipeline_ssm_scan_f32_d128;
     vk_pipeline pipeline_ssm_scan_f32_d256;
     vk_pipeline pipeline_ssm_conv_f32;
@@ -1454,6 +1450,7 @@ struct vk_op_gated_delta_net_push_constants {
     uint32_t sv1, sv2, sv3;
     uint32_t sb1, sb2, sb3;
     uint32_t rq1, rq3;
+    float scale;
 };
 
 struct vk_op_ssm_scan_push_constants {
@@ -4576,12 +4573,22 @@ static void ggml_vk_load_shaders(vk_device& device) {
 
     ggml_vk_create_pipeline(device, device->pipeline_rwkv_wkv7_f32, "rwkv_wkv7_f32", rwkv_wkv7_f32_len, rwkv_wkv7_f32_data, "main", 8, sizeof(vk_op_rwkv_wkv7_push_constants), {1, 1, 1}, {device->subgroup_size}, 1);
 
-    ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_f32_d32,      "gated_delta_net_f32_d32",      gated_delta_net_f32_len, gated_delta_net_f32_data, "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {32, 0},  1);
-    ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_f32_d64,      "gated_delta_net_f32_d64",      gated_delta_net_f32_len, gated_delta_net_f32_data, "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {64, 0},  1);
-    ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_f32_d128,     "gated_delta_net_f32_d128",     gated_delta_net_f32_len, gated_delta_net_f32_data, "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {128, 0}, 1);
-    ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_f32_d32_kda,  "gated_delta_net_f32_d32_kda",  gated_delta_net_f32_len, gated_delta_net_f32_data, "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {32, 1},  1);
-    ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_f32_d64_kda,  "gated_delta_net_f32_d64_kda",  gated_delta_net_f32_len, gated_delta_net_f32_data, "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {64, 1},  1);
-    ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_f32_d128_kda, "gated_delta_net_f32_d128_kda", gated_delta_net_f32_len, gated_delta_net_f32_data, "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {128, 1}, 1);
+    {
+        const uint32_t gdn_sizes[] = {32, 64, 128};
+        const char * gdn_names[][2] = {
+            {"gated_delta_net_f32_d32",     "gated_delta_net_f32_d32_kda"},
+            {"gated_delta_net_f32_d64",     "gated_delta_net_f32_d64_kda"},
+            {"gated_delta_net_f32_d128",    "gated_delta_net_f32_d128_kda"},
+        };
+        for (uint32_t si = 0; si < 3; si++) {
+            for (uint32_t kda = 0; kda < 2; kda++) {
+                ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net[si][kda],
+                    gdn_names[si][kda], gated_delta_net_f32_len, gated_delta_net_f32_data,
+                    "main", 7, sizeof(vk_op_gated_delta_net_push_constants),
+                    {1, 1, 1}, {gdn_sizes[si], kda}, 1);
+            }
+        }
+    }
 
     if (device->subgroup_arithmetic && device->subgroup_require_full_support) {
         ggml_vk_create_pipeline(device, device->pipeline_ssm_scan_f32_d128, "ssm_scan_128_f32", ssm_scan_subgroup_f32_len, ssm_scan_subgroup_f32_data, "main", 8, sizeof(vk_op_ssm_scan_push_constants), {1, 1, 1}, {128, device->subgroup_size}, 1, true, true);
@@ -9505,20 +9512,15 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
     case GGML_OP_GATED_DELTA_NET:
         if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
             const uint32_t S_v = dst->src[2]->ne[0];
-            const bool kda = (dst->src[3]->ne[0] == (int64_t)S_v);
-            if (kda) {
-                switch (S_v) {
-                    case 32:  return ctx->device->pipeline_gated_delta_net_f32_d32_kda;
-                    case 64:  return ctx->device->pipeline_gated_delta_net_f32_d64_kda;
-                    case 128: return ctx->device->pipeline_gated_delta_net_f32_d128_kda;
-                }
-            } else {
-                switch (S_v) {
-                    case 32:  return ctx->device->pipeline_gated_delta_net_f32_d32;
-                    case 64:  return ctx->device->pipeline_gated_delta_net_f32_d64;
-                    case 128: return ctx->device->pipeline_gated_delta_net_f32_d128;
-                }
+            const uint32_t kda = (dst->src[3]->ne[0] == (int64_t)S_v) ? 1 : 0;
+            uint32_t si;
+            switch (S_v) {
+                case 32:  si = 0; break;
+                case 64:  si = 1; break;
+                case 128: si = 2; break;
+                default: return nullptr;
             }
+            return ctx->device->pipeline_gated_delta_net[si][kda];
         }
         return nullptr;
     case GGML_OP_SSM_SCAN:
@@ -10353,11 +10355,8 @@ static void ggml_vk_rwkv_wkv7(ggml_backend_vk_context * ctx, vk_context& subctx,
 
 static void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst) {
     const ggml_tensor * src_q     = dst->src[0];
-    const ggml_tensor * src_k     = dst->src[1];
     const ggml_tensor * src_v     = dst->src[2];
-    const ggml_tensor * src_g     = dst->src[3];
     const ggml_tensor * src_beta  = dst->src[4];
-    const ggml_tensor * src_state = dst->src[5];
 
     GGML_ASSERT(dst->buffer != nullptr);
 
@@ -10367,10 +10366,6 @@ static void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& s
     const uint32_t n_seqs   = (uint32_t)src_v->ne[3];
 
     const uint32_t s_off = S_v * H * n_tokens * n_seqs;
-
-    for (int i = 0; i < 6; i++) {
-        GGML_ASSERT(!ggml_is_quantized(dst->src[i]->type));
-    }
 
     vk_pipeline pipeline = ggml_vk_op_get_pipeline(ctx, dst->src[0], dst->src[1], dst->src[2], dst, dst->op);
     GGML_ASSERT(pipeline != nullptr);
@@ -10383,7 +10378,6 @@ static void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& s
         src_buf[i] = ggml_vk_tensor_subbuffer(ctx, dst->src[i]);
     }
 
-    // q and k share strides
     const uint32_t sq1 = (uint32_t)(src_q->nb[1] / sizeof(float));
     const uint32_t sq2 = (uint32_t)(src_q->nb[2] / sizeof(float));
     const uint32_t sq3 = (uint32_t)(src_q->nb[3] / sizeof(float));
@@ -10397,19 +10391,19 @@ static void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& s
     const uint32_t rq1 = (uint32_t)(src_v->ne[1] / src_q->ne[1]);
     const uint32_t rq3 = (uint32_t)(src_v->ne[3] / src_q->ne[3]);
 
+    const float scale = 1.0f / sqrtf((float)S_v);
     const vk_op_gated_delta_net_push_constants pc = {
         H, n_tokens, n_seqs, s_off,
         sq1, sq2, sq3,
         sv1, sv2, sv3,
         sb1, sb2, sb3,
-        rq1, rq3
+        rq1, rq3,
+        scale
     };
-
-    std::array<uint32_t, 3> elements = { H, n_seqs, 1 };
 
     ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
         {src_buf[0], src_buf[1], src_buf[2], src_buf[3], src_buf[4], src_buf[5], dst_buf},
-        pc, elements);
+        pc, { H, n_seqs, 1u });
 }
 
 static void ggml_vk_ssm_scan(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst) {
@@ -15542,11 +15536,11 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     return false;
                 }
                 for (int i = 0; i < 6; i++) {
-                    if (op->src[i] && ggml_is_quantized(op->src[i]->type)) {
+                    if (op->src[i] == nullptr || op->src[i]->type != GGML_TYPE_F32) {
                         return false;
                     }
                 }
-                return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
+                return op->type == GGML_TYPE_F32;
             }
         case GGML_OP_SSM_SCAN:
             {

@@ -16,28 +16,25 @@ layout(push_constant) uniform Parameters {
     uint sv1, sv2, sv3;
     uint sb1, sb2, sb3;
     uint rq1, rq3;
+    float scale;
 };
 
-layout(binding = 0) readonly  buffer QBuf     { float q_in[];     };
-layout(binding = 1) readonly  buffer KBuf     { float k_in[];     };
-layout(binding = 2) readonly  buffer VBuf     { float v_in[];     };
-layout(binding = 3) readonly  buffer GBuf     { float g_in[];     };
-layout(binding = 4) readonly  buffer BetaBuf  { float beta_in[];  };
-layout(binding = 5) readonly  buffer StateBuf { float state_in[]; };
-layout(binding = 6) buffer         DstBuf     { float dst[];      };
+layout(binding = 0) readonly  buffer QBuf     { A_TYPE data_q[];     };
+layout(binding = 1) readonly  buffer KBuf     { A_TYPE data_k[];     };
+layout(binding = 2) readonly  buffer VBuf     { A_TYPE data_v[];     };
+layout(binding = 3) readonly  buffer GBuf     { A_TYPE data_g[];     };
+layout(binding = 4) readonly  buffer BetaBuf  { A_TYPE data_beta[];  };
+layout(binding = 5) readonly  buffer StateBuf { A_TYPE data_state[]; };
+layout(binding = 6) buffer         DstBuf     { D_TYPE data_dst[];   };
 
-shared float s_k[S_V];
-shared float s_q[S_V];
-shared float s_g[S_V]; // KDA only: cached exp(g[i])
+shared A_TYPE s_k[S_V];
+shared A_TYPE s_q[S_V];
+shared A_TYPE s_g[S_V]; // KDA only: cached exp(g[i])
 
 void main() {
     const uint head_id = gl_WorkGroupID.x;
     const uint seq_id  = gl_WorkGroupID.y;
     const uint col     = gl_LocalInvocationID.x;
-
-    if (col >= S_V) {
-        return;
-    }
 
     const uint iq1 = head_id / rq1;
     const uint iq3 = seq_id / rq3;
@@ -45,11 +42,9 @@ void main() {
     const uint state_size = S_V * S_V;
     const uint state_base = (seq_id * H + head_id) * state_size;
 
-    const float scale = 1.0 / sqrt(float(S_V));
-
-    float state[S_V];
+    FLOAT_TYPE state[S_V];
     [[unroll]] for (uint i = 0; i < S_V; i++) {
-        state[i] = state_in[state_base + i * S_V + col];
+        state[i] = FLOAT_TYPE(data_state[state_base + i * S_V + col]);
     }
 
     uint attn_off = (seq_id * n_tokens * H + head_id) * S_V;
@@ -59,26 +54,25 @@ void main() {
         const uint k_off = q_off;
         const uint v_off = seq_id * sv3 + t * sv2 + head_id * sv1;
 
-        s_q[col] = q_in[q_off + col];
-        s_k[col] = k_in[k_off + col];
+        s_q[col] = data_q[q_off + col];
+        s_k[col] = data_k[k_off + col];
 
         const uint gb_off = seq_id * sb3 + t * sb2 + head_id * sb1;
 
         if (KDA != 0) {
             const uint g_base = gb_off * S_V;
-            s_g[col] = exp(g_in[g_base + col]);
+            s_g[col] = A_TYPE(exp(FLOAT_TYPE(data_g[g_base + col])));
         }
 
         barrier();
 
-        const float v_val = v_in[v_off + col];
-        const float beta_val = beta_in[gb_off];
+        const FLOAT_TYPE v_val = FLOAT_TYPE(data_v[v_off + col]);
+        const FLOAT_TYPE beta_val = FLOAT_TYPE(data_beta[gb_off]);
 
         if (KDA == 0) {
-            const float g_val = exp(g_in[gb_off]);
+            const FLOAT_TYPE g_val = exp(FLOAT_TYPE(data_g[gb_off]));
 
-            // vec4 dot product: S^T @ k
-            float kv_col = 0.0;
+            FLOAT_TYPE kv_col = 0.0;
             [[unroll]] for (uint i = 0; i < S_V; i += 4) {
                 kv_col += dot(
                     vec4(state[i], state[i+1], state[i+2], state[i+3]),
@@ -86,10 +80,9 @@ void main() {
                 );
             }
 
-            float delta_col = (v_val - g_val * kv_col) * beta_val;
+            FLOAT_TYPE delta_col = (v_val - g_val * kv_col) * beta_val;
 
-            // Fused vec4 decay + rank-1 update + readout
-            float attn_col = 0.0;
+            FLOAT_TYPE attn_col = 0.0;
             [[unroll]] for (uint i = 0; i < S_V; i += 4) {
                 vec4 sv = vec4(state[i], state[i+1], state[i+2], state[i+3]);
                 vec4 kv = vec4(s_k[i], s_k[i+1], s_k[i+2], s_k[i+3]);
@@ -99,10 +92,9 @@ void main() {
                 attn_col += dot(sv, vec4(s_q[i], s_q[i+1], s_q[i+2], s_q[i+3]));
             }
 
-            dst[attn_off + col] = attn_col * scale;
+            data_dst[attn_off + col] = D_TYPE(attn_col * FLOAT_TYPE(scale));
         } else {
-            // KDA: vec4 with cached exp(g) from shared memory
-            float kv_col = 0.0;
+            FLOAT_TYPE kv_col = 0.0;
             [[unroll]] for (uint i = 0; i < S_V; i += 4) {
                 vec4 gv = vec4(s_g[i], s_g[i+1], s_g[i+2], s_g[i+3]);
                 vec4 sv = vec4(state[i], state[i+1], state[i+2], state[i+3]);
@@ -110,9 +102,9 @@ void main() {
                 kv_col += dot(gv * sv, kv);
             }
 
-            float delta_col = (v_val - kv_col) * beta_val;
+            FLOAT_TYPE delta_col = (v_val - kv_col) * beta_val;
 
-            float attn_col = 0.0;
+            FLOAT_TYPE attn_col = 0.0;
             [[unroll]] for (uint i = 0; i < S_V; i += 4) {
                 vec4 gv = vec4(s_g[i], s_g[i+1], s_g[i+2], s_g[i+3]);
                 vec4 sv = vec4(state[i], state[i+1], state[i+2], state[i+3]);
@@ -123,7 +115,7 @@ void main() {
                 attn_col += dot(sv, vec4(s_q[i], s_q[i+1], s_q[i+2], s_q[i+3]));
             }
 
-            dst[attn_off + col] = attn_col * scale;
+            data_dst[attn_off + col] = D_TYPE(attn_col * FLOAT_TYPE(scale));
         }
 
         attn_off += S_V * H;
@@ -131,6 +123,6 @@ void main() {
     }
 
     [[unroll]] for (uint i = 0; i < S_V; i++) {
-        dst[s_off + state_base + i * S_V + col] = state[i];
+        data_dst[s_off + state_base + i * S_V + col] = D_TYPE(state[i]);
     }
 }
