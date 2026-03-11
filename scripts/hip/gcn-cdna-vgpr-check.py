@@ -3,12 +3,13 @@
 import sys
 from collections import defaultdict
 
+
 def parse_log_file(filepath):
     """Parse log file and extract function VGPR usage."""
     import re
-    
+
     functions = defaultdict(lambda: {'vgprs': 0, 'spill': 0, 'location': ''})
-    
+
     try:
         with open(filepath, 'r') as f:
             content = f.read()
