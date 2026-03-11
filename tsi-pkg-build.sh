@@ -1,76 +1,159 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# tsi-pkg-build.sh  (source-safe)
+# tsi-pkg-build.sh (source-safe)
 #
 # USAGE (source is recommended)
 # ============================
 #
-#   source tsi-pkg-build.sh [build-mode] [flags...] [MLIR_COMPILER_DIR] [TOOLBOX_DIR]
+# source tsi-pkg-build.sh [build-mode] [flags...] [MLIR_COMPILER_DIR] [TOOLBOX_DIR]
 #
 # Build modes (optional):
-#   release | debug | debug-detail
-#     - release      : GGML_PERF_RELEASE
-#     - debug        : GGML_PERF_DETAIL
-#     - debug-detail : GGML_PERF_DETAIL + TMU_DEBUG_VALIDATE
+#   release
+#   debug
+#   debug-tmu
+#   debug-tmu-detail
+#
+# - release        : GGML_PERF_RELEASE
+# - debug          : POSIX => GGML_PERF_DETAIL
+#                   FPGA  => GGML_PERF  (GGML_PERF_DETAIL disabled to avoid expensive file logging)
+# - debug-tmu      : GGML_PERF_DETAIL + TMU_DEBUG
+# - debug-tmu-detail : GGML_PERF_DETAIL + TMU_DEBUG + TMU_DEBUG_VALIDATE
 #
 # Submodules:
-#   - First run in a fresh repo checkout: auto "git submodule update --init --recursive"
-#   - Later runs: submodule update is OPTIONAL unless you pass:
-#       git-submodule-pull
-#   - If ggml-tsi-kernel is missing, script forces submodule init even without the flag.
+# - First run in a fresh repo checkout: auto "git submodule update --init --recursive"
+# - Later runs: submodule update is OPTIONAL unless pass:
+#     git-submodule-pull
+# - If ggml-tsi-kernel is missing, script forces submodule init even without the flag.
 #
 # Blob build (OFF by default):
-#   build-fpga-blobs     : build blobs in ggml-tsi-kernel/fpga-kernel only
-#   build-posix-blobs    : build blobs in ggml-tsi-kernel/posix-kernel only
-#   build-all-blobs      : build blobs for both fpga+posix kernels
+#   build-fpga-blobs  : build blobs in ggml-tsi-kernel/fpga-kernel only
+#   build-posix-blobs : build blobs in ggml-tsi-kernel/posix-kernel only
+#   build-all-blobs   : build blobs for both fpga+posix kernels
 #
 # Auto blob safeguards (ON by default):
-#   - If you deleted ggml-tsi-kernel (rm -rf) or host objects are missing:
-#       * POSIX build auto-builds POSIX blobs if required for link
-#       * FPGA build auto-builds FPGA blobs if required for link
-#   Disable both with:
-#       no-auto-blobs
+# - If deleted ggml-tsi-kernel (rm -rf) or host objects are missing:
+#   * POSIX build auto-builds POSIX blobs if required for link
+#   * FPGA build auto-builds FPGA blobs if required for link
+# Disable both with:
+#   no-auto-blobs
 #
-# Python virtual env:
-#   overwrite-venv       : delete blob-creation venv and recreate it (installs deps)
-#                          NOTE: this alone does NOT build blobs unless blob flag is also set.
-#   git-submodule-pull   : ALSO forces overwrite-venv AND build-all-blobs (as requested)
+# Python virtual env (only used for blob generation):
+#   overwrite-venv : delete blob-creation venv and recreate it (installs deps)
+# NOTE: this alone does NOT build blobs unless blob flag is also set.
+# git-submodule-pull : ALSO forces overwrite-venv AND build-all-blobs (as requested)
 #
 # Build selection:
-#   Default (no build-selection flags): build-posix + build-fpga + package
-#   build-posix          : only build posix C/C++
-#   build-fpga           : only build fpga target
-#   package              : only package fpga bundle (requires fpga already built)
-#   (You can combine them: e.g. build-posix build-fpga)
+# Default (no build-selection flags): build-posix + build-fpga + package
+#
+#   build-posix
+#     * Build POSIX ggml/llama.cpp with TMU + TVU enabled
+#     * Output directory: ./build-posix
+#
+#   build-posix-tmu-only
+#     * Build POSIX ggml/llama.cpp with TMU enabled and TVU disabled
+#     * Output directory: ./build-posix-tmu-only
+#
+#   build-posix-tmu-disable
+#     * Build POSIX ggml/llama.cpp with TVU enabled and TMU disabled
+#     * Output directory: ./build-posix-tmu-disable
+#
+#   build-fpga
+#     * Build FPGA ggml/llama.cpp with TMU + TVU enabled
+#     * Output directory: ./build-fpga
+#
+#   build-fpga-tmu-only
+#     * Build FPGA ggml/llama.cpp with TMU enabled and TVU disabled
+#     * Output directory: ./build-fpga-tmu-only
+#
+#   build-fpga-tmu-disable
+#     * Build FPGA ggml/llama.cpp with TVU enabled and TMU disabled
+#     * Output directory: ./build-fpga-tmu-disable
+#
+#   package
+#     * Package FPGA bundle (requires an FPGA build dir already built)
 #
 # Incremental build:
-#   incremental          : do not rm -rf build dirs (both llama.cpp + kernels)
+#   incremental : do not rm -rf build dirs (both llama.cpp + kernels)
 #
 # Cleanup:
-#   clean                : rm -rf build-posix build-fpga (llama.cpp) and kernel build dirs in ggml-tsi-kernel
-#   clean-all            : clean + remove python venv blob-creation
+#   clean     : rm -rf build-* (llama.cpp) and kernel build dirs in ggml-tsi-kernel
+#   clean-all : clean + remove python venv blob-creation
 #
 # Coverage:
-#   enable_coverage      : adds -DENABLE_COVERAGE=ON
+#   enable_coverage : adds -DENABLE_COVERAGE=ON
 #
 # Help:
-#   help | -h | --help
+#   help  | -h | --help | -help
+#
+# ==============================================================================
+#
+# EXAMPLES
+# ========
+#
+# 1) Default (posix + fpga + package) with default build-type (debug):
+#    source tsi-pkg-build.sh
+#
+# 2) POSIX only:
+#    source tsi-pkg-build.sh debug build-posix
+#
+# 3) POSIX TMU-only:
+#    source tsi-pkg-build.sh debug build-posix-tmu-only
+#
+# 4) POSIX TMU disabled (TVU-only):
+#    source tsi-pkg-build.sh debug build-posix-tmu-disable
+#
+# 5) FPGA only (TMU+TVU):
+#    source tsi-pkg-build.sh debug build-fpga
+#
+# 6) FPGA TMU-only:
+#    source tsi-pkg-build.sh debug build-fpga-tmu-only
+#
+# 7) FPGA TMU disabled (TVU-only):
+#    source tsi-pkg-build.sh debug build-fpga-tmu-disable
+#
+# 8) Debug TMU:
+#    source tsi-pkg-build.sh debug-tmu build-fpga
+#
+# 9) Debug TMU detail (adds TMU_DEBUG_VALIDATE):
+#    source tsi-pkg-build.sh debug-tmu-detail build-posix build-fpga
+#
+# 10) Build blobs explicitly:
+#    source tsi-pkg-build.sh build-all-blobs
+#    source tsi-pkg-build.sh build-fpga-blobs
+#    source tsi-pkg-build.sh build-posix-blobs
+#
+# 11) Incremental builds (do not delete build dirs):
+#    source tsi-pkg-build.sh incremental build-posix build-fpga
+#
+# 12) Provide explicit paths:
+#    source tsi-pkg-build.sh debug build-fpga /path/to/compiler /path/to/toolbox/install-fpga
 #
 # ==============================================================================
 
 log_error(){ echo "ERROR: $*" >&2; }
-log_info(){  echo "INFO:  $*"; }
+log_info(){ echo "INFO: $*"; }
 
 __TSI_SOURCED=0
-(return 0 2>/dev/null) && __TSI_SOURCED=1 || true
+(return 0 2>/dev/null) && __TSI_SOURCED=1
+
 __TSI_OLD_SET="$(set +o)"
+__TSI_SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
 
 # --- VENV TRACKING (FIX) ---
-# If script activates blob-creation venv, we must restore previous env when sourced.
+# If script activates blob-creation venv, restore previous env when sourced.
 __OLD_VIRTUAL_ENV=""
 __TSI_CHANGED_VENV=0
 
-run() { "$@"; local rc=$?; [ $rc -eq 0 ] || log_error "cmd failed ($rc): $*"; return $rc; }
+run() {
+  "$@"
+  local rc=$?
+  if [ $rc -ne 0 ]; then
+    log_error "cmd failed ($rc): $*"
+    return $rc
+  fi
+  return 0
+}
+
 absdir() { (cd "$1" 2>/dev/null && pwd); }
 tolower(){ echo "$1" | tr '[:upper:]' '[:lower:]'; }
 
@@ -81,14 +164,10 @@ die() {
 
 cleanup() {
   # --- VENV RESTORE (FIX) ---
-  # If we changed the venv, undo it. This runs on RETURN (sourced) or EXIT (executed).
   if [ "${__TSI_CHANGED_VENV:-0}" -eq 1 ]; then
-    # deactivate exists only if we successfully sourced an activate script.
     if declare -F deactivate >/dev/null 2>&1; then
       deactivate >/dev/null 2>&1 || true
     else
-      # Fallback: if deactivate isn't defined, at least unset VIRTUAL_ENV.
-      # (PATH restoration without deactivate is risky, so keep it minimal.)
       unset VIRTUAL_ENV 2>/dev/null || true
     fi
 
@@ -106,7 +185,17 @@ cleanup() {
 }
 
 usage() {
-  sed -n '1,220p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'
+  local p="${__TSI_SCRIPT_PATH}"
+  if [ -r "$p" ]; then
+    sed -n '1,320p' "$p" 2>/dev/null | sed 's/^# \{0,1\}//'
+    return 0
+  fi
+  # fallback (should rarely happen)
+  cat <<'EOF'
+tsi-pkg-build.sh: unable to read script header for help output.
+Try:  cat tsi-pkg-build.sh | sed -n '1,320p'
+EOF
+  return 0
 }
 
 select_arch() {
@@ -130,15 +219,16 @@ submodule_self_heal_if_needed() {
     if [ ! -d "${SUBMODULE_DIR}/.git" ] && [ -n "$(ls -A "${SUBMODULE_DIR}" 2>/dev/null || true)" ]; then
       log_info "${SUBMODULE_DIR} exists and is non-empty (stale). Cleaning to allow submodule clone."
       run git submodule deinit -f -- "${SUBMODULE_DIR}" || true
-      run rm -rf "${SUBMODULE_DIR}" || return 1
-      run rm -rf ".git/modules/${SUBMODULE_DIR}" || return 1
+      run rm -rf "${SUBMODULE_DIR}" || true
+      run rm -rf ".git/modules/${SUBMODULE_DIR}" || true
+      return 1
     fi
   fi
   return 0
 }
 
 ensure_submodules() {
-  local want_update="$1"   # 0/1 from user flag
+  local want_update="$1" # 0/1 from user flag
   local force=0
 
   # If submodule directory missing, ALWAYS force init.
@@ -146,19 +236,17 @@ ensure_submodules() {
     log_info "${SUBMODULE_DIR} missing; forcing submodule init"
     force=1
   fi
-
   # If marker missing, treat as first-time repo.
   if [ ! -f "${MARKER_FILE}" ]; then
     force=1
   fi
-
   # User asked explicitly.
   if [ "${want_update}" -eq 1 ]; then
     force=1
   fi
 
   if [ "${force}" -eq 1 ]; then
-    submodule_self_heal_if_needed || return 1
+    submodule_self_heal_if_needed || true
     run git submodule update --init --recursive || die "git submodule update failed"
     : > "${MARKER_FILE}" || true
   else
@@ -173,8 +261,9 @@ ensure_submodules() {
 # Args/flags
 # -------------------------
 parse_args() {
-  BUILD_TYPE=""
+  SHOW_HELP=0
 
+  BUILD_TYPE=""
   MLIR_COMPILER_DIR_IN="${MLIR_COMPILER_DIR:-}"
   TOOLBOX_DIR_IN="${TOOLBOX_DIR:-}"
   ENABLE_COVERAGE_FLAG=""
@@ -191,7 +280,13 @@ parse_args() {
 
   # build selection (default: posix+fpga+package)
   DO_BUILD_POSIX=1
+  DO_BUILD_POSIX_TMU_ONLY=0
+  DO_BUILD_POSIX_TMU_DISABLE=0
+
   DO_BUILD_FPGA=1
+  DO_BUILD_FPGA_TMU_ONLY=0
+  DO_BUILD_FPGA_TMU_DISABLE=0
+
   DO_PACKAGE_FPGA=1
   __USER_BUILD_SELECT=0
 
@@ -206,14 +301,17 @@ parse_args() {
   # auto blobs (default ON; applies to POSIX+FPGA host object link safety)
   AUTO_BLOBS=1
 
+  # packaging selection
+  PACKAGE_FPGA_BUILD_DIR=""
+
   local a
   for a in "$@"; do
     case "$(tolower "$a")" in
-      help|-h|--help)
-        usage
-        if [ "$__TSI_SOURCED" -eq 1 ]; then return 0; else exit 0; fi
+      help|-h|--help|-help)
+        SHOW_HELP=1
+        return 0
         ;;
-      release|debug|debug-detail)
+      release|debug|debug-tmu|debug-tmu-detail)
         [ -z "${BUILD_TYPE}" ] && BUILD_TYPE="$a"
         ;;
       enable_coverage)
@@ -252,21 +350,73 @@ parse_args() {
         ;;
       build-posix|posix)
         if [ "$__USER_BUILD_SELECT" -eq 0 ]; then
-          DO_BUILD_POSIX=0; DO_BUILD_FPGA=0; DO_PACKAGE_FPGA=0; __USER_BUILD_SELECT=1
+          DO_BUILD_POSIX=0; DO_BUILD_POSIX_TMU_ONLY=0; DO_BUILD_POSIX_TMU_DISABLE=0
+          DO_BUILD_FPGA=0; DO_BUILD_FPGA_TMU_ONLY=0; DO_BUILD_FPGA_TMU_DISABLE=0
+          DO_PACKAGE_FPGA=0
+          __USER_BUILD_SELECT=1
         fi
         DO_BUILD_POSIX=1
         log_info "build-posix selected"
         ;;
+      build-posix-tmu-only)
+        if [ "$__USER_BUILD_SELECT" -eq 0 ]; then
+          DO_BUILD_POSIX=0; DO_BUILD_POSIX_TMU_ONLY=0; DO_BUILD_POSIX_TMU_DISABLE=0
+          DO_BUILD_FPGA=0; DO_BUILD_FPGA_TMU_ONLY=0; DO_BUILD_FPGA_TMU_DISABLE=0
+          DO_PACKAGE_FPGA=0
+          __USER_BUILD_SELECT=1
+        fi
+        DO_BUILD_POSIX_TMU_ONLY=1
+        log_info "build-posix-tmu-only selected"
+        ;;
+      build-posix-tmu-disable)
+        if [ "$__USER_BUILD_SELECT" -eq 0 ]; then
+          DO_BUILD_POSIX=0; DO_BUILD_POSIX_TMU_ONLY=0; DO_BUILD_POSIX_TMU_DISABLE=0
+          DO_BUILD_FPGA=0; DO_BUILD_FPGA_TMU_ONLY=0; DO_BUILD_FPGA_TMU_DISABLE=0
+          DO_PACKAGE_FPGA=0
+          __USER_BUILD_SELECT=1
+        fi
+        DO_BUILD_POSIX_TMU_DISABLE=1
+        log_info "build-posix-tmu-disable selected"
+        ;;
       build-fpga|fpga)
         if [ "$__USER_BUILD_SELECT" -eq 0 ]; then
-          DO_BUILD_POSIX=0; DO_BUILD_FPGA=0; DO_PACKAGE_FPGA=0; __USER_BUILD_SELECT=1
+          DO_BUILD_POSIX=0; DO_BUILD_POSIX_TMU_ONLY=0; DO_BUILD_POSIX_TMU_DISABLE=0
+          DO_BUILD_FPGA=0; DO_BUILD_FPGA_TMU_ONLY=0; DO_BUILD_FPGA_TMU_DISABLE=0
+          DO_PACKAGE_FPGA=0
+          __USER_BUILD_SELECT=1
         fi
         DO_BUILD_FPGA=1
+        PACKAGE_FPGA_BUILD_DIR="build-fpga"
         log_info "build-fpga selected"
+        ;;
+      build-fpga-tmu-only)
+        if [ "$__USER_BUILD_SELECT" -eq 0 ]; then
+          DO_BUILD_POSIX=0; DO_BUILD_POSIX_TMU_ONLY=0; DO_BUILD_POSIX_TMU_DISABLE=0
+          DO_BUILD_FPGA=0; DO_BUILD_FPGA_TMU_ONLY=0; DO_BUILD_FPGA_TMU_DISABLE=0
+          DO_PACKAGE_FPGA=0
+          __USER_BUILD_SELECT=1
+        fi
+        DO_BUILD_FPGA_TMU_ONLY=1
+        PACKAGE_FPGA_BUILD_DIR="build-fpga-tmu-only"
+        log_info "build-fpga-tmu-only selected"
+        ;;
+      build-fpga-tmu-disable)
+        if [ "$__USER_BUILD_SELECT" -eq 0 ]; then
+          DO_BUILD_POSIX=0; DO_BUILD_POSIX_TMU_ONLY=0; DO_BUILD_POSIX_TMU_DISABLE=0
+          DO_BUILD_FPGA=0; DO_BUILD_FPGA_TMU_ONLY=0; DO_BUILD_FPGA_TMU_DISABLE=0
+          DO_PACKAGE_FPGA=0
+          __USER_BUILD_SELECT=1
+        fi
+        DO_BUILD_FPGA_TMU_DISABLE=1
+        PACKAGE_FPGA_BUILD_DIR="build-fpga-tmu-disable"
+        log_info "build-fpga-tmu-disable selected"
         ;;
       package|bundle)
         if [ "$__USER_BUILD_SELECT" -eq 0 ]; then
-          DO_BUILD_POSIX=0; DO_BUILD_FPGA=0; DO_PACKAGE_FPGA=0; __USER_BUILD_SELECT=1
+          DO_BUILD_POSIX=0; DO_BUILD_POSIX_TMU_ONLY=0; DO_BUILD_POSIX_TMU_DISABLE=0
+          DO_BUILD_FPGA=0; DO_BUILD_FPGA_TMU_ONLY=0; DO_BUILD_FPGA_TMU_DISABLE=0
+          DO_PACKAGE_FPGA=0
+          __USER_BUILD_SELECT=1
         fi
         DO_PACKAGE_FPGA=1
         log_info "package selected"
@@ -299,7 +449,11 @@ parse_args() {
   fi
 
   # Default build type if none provided
-  [ -n "${BUILD_TYPE}" ] || BUILD_TYPE="debug"
+  if [ -z "${BUILD_TYPE}" ]; then
+    BUILD_TYPE="debug"
+  fi
+
+  return 0
 }
 
 resolve_paths() {
@@ -309,7 +463,6 @@ resolve_paths() {
     MLIR_SDK_VERSION="${MLIR_SDK_VERSION:-/proj/rel/sw/sdk-r.0.2.5/${arch}}"
     MLIR_COMPILER_DIR_IN="${MLIR_SDK_VERSION}/compiler"
   fi
-
   if [ -z "${TOOLBOX_DIR_IN}" ]; then
     MLIR_SDK_VERSION="${MLIR_SDK_VERSION:-$(dirname "${MLIR_COMPILER_DIR_IN}")}"
     TOOLBOX_DIR_IN="${MLIR_SDK_VERSION}/toolbox/build/install-fpga"
@@ -335,7 +488,7 @@ setup_toolchain() {
 }
 
 # -------------------------
-# Python venv (only when needed)
+# Python venv (only when needed for blob generation)
 # -------------------------
 setup_python() {
   # Save the caller's current VIRTUAL_ENV (if any). This allows restore.
@@ -350,7 +503,6 @@ setup_python() {
     run bash -c 'source blob-creation/bin/activate && python -V >/dev/null' || return 1
     # shellcheck disable=SC1091
     source blob-creation/bin/activate || return 1
-    # Mark changed only if we actually switched envs
     [ "${VIRTUAL_ENV:-}" != "${__OLD_VIRTUAL_ENV:-}" ] && __TSI_CHANGED_VENV=1 || true
     return 0
   fi
@@ -411,102 +563,184 @@ build_posix_blobs() {
 }
 
 # -------------------------
-# POSIX build (clean rebuild by default)
+# PERF/DEBUG defs
 # -------------------------
-build_posix() {
-  log_info "building llama.cpp/ggml for posix"
-
-  if [ "${DO_CLEAN_BUILD_DIRS}" -eq 1 ]; then
-    log_info "clean rebuild: rm -rf ./build-posix"
-    rm -rf build-posix || return 1
-  fi
-
+compute_perf_and_debug_defs() {
+  local target="$1" # posix|fpga
   local bt; bt="$(tolower "${BUILD_TYPE}")"
-  local common="-DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix -DGGML_NATIVE=ON -DGGML_AMX_TILE=OFF -DGGML_AMX_INT8=OFF -DGGML_AMX_BF16=OFF -DGGML_AVX512_BF16=OFF -DGGML_AVX_VNNI=OFF"
-  local cflags_base="-DGGML_TARGET_POSIX -DGGML_TSAVORITE -mno-amx-tile -mno-amx-int8 -mno-amx-bf16 -mno-avx512bf16 -mno-avxvnni"
-  local perf="-DGGML_PERF"
-  local tmu_debug=""
 
-  [ "$bt" = "release" ] && perf="-DGGML_PERF_RELEASE"
-  [ "$bt" = "debug" ] && perf="-DGGML_PERF_DETAIL"
-  if [ "$bt" = "debug-detail" ]; then
-    perf="-DGGML_PERF_DETAIL"
-    tmu_debug="-DTMU_DEBUG_VALIDATE"
-    log_info "TMU_DEBUG_VALIDATE ENABLED (debug-detail build)"
+  PERF_DEF="-DGGML_PERF"
+  DBG_DEFS=""
+
+  if [ "$bt" = "release" ]; then
+    PERF_DEF="-DGGML_PERF_RELEASE"
+    DBG_DEFS=""
+    return 0
   fi
 
-  run cmake -B build-posix ${common} \
-    -DCMAKE_C_COMPILER="${CC}" -DCMAKE_CXX_COMPILER="${CXX}" \
-    -DCMAKE_C_FLAGS="${perf} ${tmu_debug} ${cflags_base}" \
-    -DCMAKE_CXX_FLAGS="${perf} ${tmu_debug} ${cflags_base}" \
-    ${ENABLE_COVERAGE_FLAG} || return 1
+  if [ "$bt" = "debug" ]; then
+    if [ "$target" = "fpga" ]; then
+      # FPGA debug: disable GGML_PERF_DETAIL (expensive file logging on FPGA)
+      PERF_DEF="-DGGML_PERF"
+    else
+      PERF_DEF="-DGGML_PERF_DETAIL"
+    fi
+    DBG_DEFS=""
+    return 0
+  fi
 
-  run cmake --build build-posix --config Release || return 1
+  if [ "$bt" = "debug-tmu" ]; then
+    PERF_DEF="-DGGML_PERF_DETAIL"
+    DBG_DEFS="-DTMU_DEBUG"
+    return 0
+  fi
+
+  if [ "$bt" = "debug-tmu-detail" ]; then
+    PERF_DEF="-DGGML_PERF_DETAIL"
+    DBG_DEFS="-DTMU_DEBUG -DTMU_DEBUG_VALIDATE"
+    return 0
+  fi
+
   return 0
 }
 
-wrap_glibc_bins() {
-  log_info "fixing GLIBC compatibility for TSI binaries"
+# -------------------------
+# POSIX build (clean rebuild by default)
+# -------------------------
+build_posix_impl() {
+  local build_dir="$1"  # build-posix / build-posix-tmu-only / build-posix-tmu-disable
+  local want_tmu="$2"   # 1/0
+  local want_tvu="$3"   # 1/0
 
-  [ -f build-posix/bin/simple-backend-tsi ] || return 0
-  [ -f build-posix/bin/simple-backend-tsi-original ] || mv build-posix/bin/simple-backend-tsi build-posix/bin/simple-backend-tsi-original || return 1
-  cat > build-posix/bin/simple-backend-tsi <<'EOL'
+  log_info "building llama.cpp/ggml for posix (${build_dir})"
+  if [ "${DO_CLEAN_BUILD_DIRS}" -eq 1 ]; then
+    log_info "clean rebuild: rm -rf ./${build_dir}"
+    rm -rf "${build_dir}" || return 1
+  fi
+
+  compute_perf_and_debug_defs "posix"
+
+  local common="-DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix -DGGML_NATIVE=ON -DGGML_AMX_TILE=OFF -DGGML_AMX_INT8=OFF -DGGML_AMX_BF16=OFF -DGGML_AVX512_BF16=OFF -DGGML_AVX_VNNI=OFF"
+
+  local supported=""
+  [ "${want_tmu}" -eq 1 ] && supported="${supported} -DTMU_SUPPORTED"
+  [ "${want_tvu}" -eq 1 ] && supported="${supported} -DTVU_SUPPORTED"
+
+  local cflags_base="-DGGML_TARGET_POSIX -DGGML_TSAVORITE ${supported} -mno-amx-tile -mno-amx-int8 -mno-amx-bf16 -mno-avx512bf16 -mno-avxvnni"
+
+  run cmake -B "${build_dir}" ${common} \
+    -DCMAKE_C_COMPILER="${CC}" -DCMAKE_CXX_COMPILER="${CXX}" \
+    -DCMAKE_C_FLAGS="${PERF_DEF} ${DBG_DEFS} ${cflags_base}" \
+    -DCMAKE_CXX_FLAGS="${PERF_DEF} ${DBG_DEFS} ${cflags_base}" \
+    ${ENABLE_COVERAGE_FLAG} || return 1
+
+  run cmake --build "${build_dir}" --config Release || return 1
+  return 0
+}
+
+build_posix() { build_posix_impl "build-posix" 1 1; }
+build_posix_tmu_only() { build_posix_impl "build-posix-tmu-only" 1 0; }
+build_posix_tmu_disable() { build_posix_impl "build-posix-tmu-disable" 0 1; }
+
+wrap_glibc_bins() {
+  local build_dir="$1"
+  log_info "fixing GLIBC compatibility for TSI binaries (${build_dir})"
+
+  if [ -f "${build_dir}/bin/simple-backend-tsi" ] && [ ! -f "${build_dir}/bin/simple-backend-tsi-original" ]; then
+    mv "${build_dir}/bin/simple-backend-tsi" "${build_dir}/bin/simple-backend-tsi-original" || return 1
+    cat > "${build_dir}/bin/simple-backend-tsi" <<'EOL'
 #!/bin/bash
 export LD_LIBRARY_PATH="/proj/local/gcc-13.3.0/lib64:$LD_LIBRARY_PATH"
 exec "$(dirname "$0")/simple-backend-tsi-original" "$@"
 EOL
-  chmod +x build-posix/bin/simple-backend-tsi || return 1
+    chmod +x "${build_dir}/bin/simple-backend-tsi" || return 1
+  fi
 
-  [ -f build-posix/bin/llama-cli ] || return 0
-  [ -f build-posix/bin/llama-cli-original ] || mv build-posix/bin/llama-cli build-posix/bin/llama-cli-original || return 1
-  cat > build-posix/bin/llama-cli <<'EOL'
+  if [ -f "${build_dir}/bin/llama-cli" ] && [ ! -f "${build_dir}/bin/llama-cli-original" ]; then
+    mv "${build_dir}/bin/llama-cli" "${build_dir}/bin/llama-cli-original" || return 1
+    cat > "${build_dir}/bin/llama-cli" <<'EOL'
 #!/bin/bash
 export LD_LIBRARY_PATH="/proj/local/gcc-13.3.0/lib64:$LD_LIBRARY_PATH"
 exec "$(dirname "$0")/llama-cli-original" "$@"
 EOL
-  chmod +x build-posix/bin/llama-cli || return 1
+    chmod +x "${build_dir}/bin/llama-cli" || return 1
+  fi
+
   return 0
 }
 
 # -------------------------
 # FPGA build (clean rebuild by default)
 # -------------------------
-build_fpga() {
-  log_info "building llama.cpp/ggml for fpga"
+build_fpga_impl() {
+  local build_dir="$1"  # build-fpga / build-fpga-tmu-only / build-fpga-tmu-disable
+  local want_tmu="$2"   # 1/0
+  local want_tvu="$3"   # 1/0
 
+  log_info "building llama.cpp/ggml for fpga (${build_dir})"
   if [ "${DO_CLEAN_BUILD_DIRS}" -eq 1 ]; then
-    log_info "clean rebuild: rm -rf ./build-fpga"
-    rm -rf build-fpga || return 1
+    log_info "clean rebuild: rm -rf ./${build_dir}"
+    rm -rf "${build_dir}" || return 1
   fi
 
-  local bt; bt="$(tolower "${BUILD_TYPE}")"
-  local ARM_TOOLCHAIN_FILE="${TOOLBOX_DIR}/lib/cmake/toolchains/arm.cmake"
-  local perf="-DGGML_PERF"
-  [ "$bt" = "release" ] && perf="-DGGML_PERF_RELEASE"
-  [ "$bt" = "debug" ] && perf="-DGGML_PERF_DETAIL"
-  [ "$bt" = "debug-detail" ] && perf="-DGGML_PERF_DETAIL"
+  compute_perf_and_debug_defs "fpga"
 
-  run cmake -B build-fpga \
+  local ARM_TOOLCHAIN_FILE="${TOOLBOX_DIR}/lib/cmake/toolchains/arm.cmake"
+
+  local supported=""
+  [ "${want_tmu}" -eq 1 ] && supported="${supported} -DTMU_SUPPORTED"
+  [ "${want_tvu}" -eq 1 ] && supported="${supported} -DTVU_SUPPORTED"
+
+  run cmake -B "${build_dir}" \
     -DCMAKE_TOOLCHAIN_FILE="${ARM_TOOLCHAIN_FILE}" \
     -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=fpga -DLLAMA_CURL=OFF \
-    -DCMAKE_C_FLAGS="${perf} -DGGML_TSAVORITE" \
-    -DCMAKE_CXX_FLAGS="${perf} -DGGML_TSAVORITE" \
+    -DCMAKE_C_FLAGS="${PERF_DEF} ${DBG_DEFS} -DGGML_TSAVORITE ${supported}" \
+    -DCMAKE_CXX_FLAGS="${PERF_DEF} ${DBG_DEFS} -DGGML_TSAVORITE ${supported}" \
     ${ENABLE_COVERAGE_FLAG} || return 1
 
-  run cmake --build build-fpga --config Release || return 1
+  run cmake --build "${build_dir}" --config Release || return 1
+  return 0
+}
+
+build_fpga() { build_fpga_impl "build-fpga" 1 1; }
+build_fpga_tmu_only() { build_fpga_impl "build-fpga-tmu-only" 1 0; }
+build_fpga_tmu_disable() { build_fpga_impl "build-fpga-tmu-disable" 0 1; }
+
+choose_existing_fpga_build_dir_for_package() {
+  # If user explicitly selected a package build dir, prefer it.
+  if [ -n "${PACKAGE_FPGA_BUILD_DIR}" ] && [ -f "${PACKAGE_FPGA_BUILD_DIR}/bin/llama-cli" ]; then
+    echo "${PACKAGE_FPGA_BUILD_DIR}"
+    return 0
+  fi
+
+  # Otherwise, pick the first viable build dir in priority order.
+  local d
+  for d in build-fpga build-fpga-tmu-only build-fpga-tmu-disable; do
+    if [ -f "${d}/bin/llama-cli" ]; then
+      echo "${d}"
+      return 0
+    fi
+  done
+
+  # None found.
+  echo ""
   return 0
 }
 
 bundle_fpga() {
-  log_info "creating tar bundle for fpga"
+  local build_dir="$1"
+
+  log_info "creating tar bundle for fpga (${build_dir})"
+
   local TSI_GGML_VERSION=0.2.5
   local TSI_GGML_BUNDLE_INSTALL_DIR=tsi-ggml
   local GGML_TSI_INSTALL_DIR=ggml-tsi-kernel
   local TSI_GGML_RELEASE_DIR=/proj/rel/sw/ggml
   local TSI_BLOB_INSTALL_DIR
+
   TSI_BLOB_INSTALL_DIR="$(pwd)/${GGML_TSI_INSTALL_DIR}/fpga-kernel/build-fpga"
 
-  [ -f "build-fpga/bin/llama-cli" ] || die "package requested but build-fpga/bin/llama-cli not found. Run with build-fpga first."
+  [ -f "${build_dir}/bin/llama-cli" ] || die "package requested but ${build_dir}/bin/llama-cli not found. Run an FPGA build first."
 
   mkdir -p "${TSI_GGML_BUNDLE_INSTALL_DIR}"
   rm -f "${TSI_GGML_BUNDLE_INSTALL_DIR}/ggml.sh"
@@ -514,10 +748,8 @@ bundle_fpga() {
   cat > "./${TSI_GGML_BUNDLE_INSTALL_DIR}/ggml.sh" <<'EOL'
 #!/bin/bash
 export LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:$(pwd)
-
 tsi_kernels=("add" "sub" "mult" "div" "abs" "inv" "neg" "sin" "sqrt" "sqr" "sigmoid" "silu" "rms_norm" "swiglu" \
 "add_16" "sub_16" "mult_16" "div_16" "abs_16" "inv_16" "neg_16" "sin_16" "sqrt_16" "sqr_16" "sigmoid_16" "silu_16" "rms_norm_16" "swiglu_16")
-
 for kernel in "${tsi_kernels[@]}"; do
   mkdir -p __TSI_BLOB_INSTALL_DIR__/txe_${kernel}
   cp blobs __TSI_BLOB_INSTALL_DIR__/txe_${kernel}/ -r
@@ -528,22 +760,25 @@ EOL
   chmod +x "./${TSI_GGML_BUNDLE_INSTALL_DIR}/ggml.sh" || return 1
 
   cp "${GGML_TSI_INSTALL_DIR}/fpga/blobs" "${TSI_GGML_BUNDLE_INSTALL_DIR}/" -r || return 1
-  cp build-fpga/bin/llama-cli "${TSI_GGML_BUNDLE_INSTALL_DIR}/" || return 1
-  cp build-fpga/bin/libggml*.so "${TSI_GGML_BUNDLE_INSTALL_DIR}/" || return 1
-  cp build-fpga/bin/libllama*.so "${TSI_GGML_BUNDLE_INSTALL_DIR}/" || return 1
-  cp build-fpga/bin/simple-backend-tsi "${TSI_GGML_BUNDLE_INSTALL_DIR}/" || return 1
+  cp "${build_dir}/bin/llama-cli" "${TSI_GGML_BUNDLE_INSTALL_DIR}/" || return 1
+  cp "${build_dir}/bin/libggml"*.so "${TSI_GGML_BUNDLE_INSTALL_DIR}/" || return 1
+  cp "${build_dir}/bin/libllama"*.so "${TSI_GGML_BUNDLE_INSTALL_DIR}/" || return 1
+  cp "${build_dir}/bin/simple-backend-tsi" "${TSI_GGML_BUNDLE_INSTALL_DIR}/" || return 1
 
   tar -cvzf "${TSI_GGML_BUNDLE_INSTALL_DIR}-${TSI_GGML_VERSION}.tz" "${TSI_GGML_BUNDLE_INSTALL_DIR}"/* || return 1
 
   if [ "$(tolower "$BUILD_TYPE")" = "release" ]; then
     cp "${TSI_GGML_BUNDLE_INSTALL_DIR}-${TSI_GGML_VERSION}.tz" "${TSI_GGML_RELEASE_DIR}/" || return 1
+
     local LATEST_TZ="${TSI_GGML_BUNDLE_INSTALL_DIR}-${TSI_GGML_VERSION}.tz"
     local LATEST_FULL_PATH="${TSI_GGML_RELEASE_DIR}/$(basename "$LATEST_TZ")"
+
     rm -f "${TSI_GGML_RELEASE_DIR}/tsi-ggml-aws-latest.tz" "${TSI_GGML_RELEASE_DIR}/tsi-ggml-latest.tz"
     ln -s "/aws${LATEST_FULL_PATH}" "${TSI_GGML_RELEASE_DIR}/tsi-ggml-aws-latest.tz"
     ln -s "${LATEST_FULL_PATH}" "${TSI_GGML_RELEASE_DIR}/tsi-ggml-latest.tz"
     log_info "Symlinks updated to point to $(basename "$LATEST_FULL_PATH")"
   fi
+
   return 0
 }
 
@@ -552,7 +787,10 @@ EOL
 # -------------------------
 do_clean() {
   log_info "clean: removing build directories"
-  rm -rf build-posix build-fpga 2>/dev/null || true
+  rm -rf \
+    build-posix build-posix-tmu-only build-posix-tmu-disable \
+    build-fpga build-fpga-tmu-only build-fpga-tmu-disable 2>/dev/null || true
+
   if [ -d "${SUBMODULE_DIR}" ]; then
     rm -rf "${SUBMODULE_DIR}/fpga-kernel/build-fpga" 2>/dev/null || true
     rm -rf "${SUBMODULE_DIR}/posix-kernel/build-posix" 2>/dev/null || true
@@ -572,15 +810,20 @@ do_clean_all() {
 main() {
   set -o pipefail
 
-  local arch; arch="$(select_arch)" || return $?
-  parse_args "$@"
+  local arch
+  arch="$(select_arch)" || return $?
+
+  parse_args "$@" || return $?
+  if [ "${SHOW_HELP}" -eq 1 ]; then
+    usage
+    return 0
+  fi
 
   if [ "${DO_CLEAN_ALL}" -eq 1 ]; then do_clean_all; return 0; fi
   if [ "${DO_CLEAN}" -eq 1 ]; then do_clean; return 0; fi
 
   resolve_paths "$arch" || return $?
   setup_toolchain || return 1
-
   ensure_submodules "${GIT_SUBMODULE_PULL}" || return 1
 
   local need_python=0
@@ -594,7 +837,7 @@ main() {
   if [ "${AUTO_BLOBS}" -eq 1 ]; then
     cd "${SUBMODULE_DIR}" || return 1
 
-    if [ "${DO_BUILD_POSIX}" -eq 1 ]; then
+    if [ "${DO_BUILD_POSIX}" -eq 1 ] || [ "${DO_BUILD_POSIX_TMU_ONLY}" -eq 1 ] || [ "${DO_BUILD_POSIX_TMU_DISABLE}" -eq 1 ]; then
       if ! posix_host_objs_present; then
         auto_posix_blob=1
         log_info "POSIX host objects missing => auto-building POSIX blobs to avoid undefined _mlir_ciface_*_host"
@@ -603,7 +846,7 @@ main() {
       fi
     fi
 
-    if [ "${DO_BUILD_FPGA}" -eq 1 ]; then
+    if [ "${DO_BUILD_FPGA}" -eq 1 ] || [ "${DO_BUILD_FPGA_TMU_ONLY}" -eq 1 ] || [ "${DO_BUILD_FPGA_TMU_DISABLE}" -eq 1 ]; then
       if ! fpga_host_objs_present; then
         auto_fpga_blob=1
         log_info "FPGA host objects missing => auto-building FPGA blobs to avoid undefined _mlir_ciface_*_host"
@@ -615,30 +858,49 @@ main() {
     cd .. || return 1
   fi
 
-  if [ "${need_python}" -eq 1 ] || [ "${DO_BLOB_FPGA}" -eq 1 ] || [ "${DO_BLOB_POSIX}" -eq 1 ]; then
+  if [ "${need_python}" -eq 1 ] && ( [ "${DO_BLOB_FPGA}" -eq 1 ] || [ "${DO_BLOB_POSIX}" -eq 1 ] ); then
     cd "${SUBMODULE_DIR}" || die "cannot enter ggml-tsi-kernel"
-
-    if [ "${need_python}" -eq 1 ]; then
-      setup_python || return 1
-    fi
-
-    if [ "${DO_BLOB_FPGA}" -eq 1 ]; then build_fpga_blobs || return 1; fi
-    if [ "${DO_BLOB_POSIX}" -eq 1 ]; then build_posix_blobs || return 1; fi
-
+    setup_python || return 1
+    [ "${DO_BLOB_FPGA}" -eq 1 ] && build_fpga_blobs || return 1
+    [ "${DO_BLOB_POSIX}" -eq 1 ] && build_posix_blobs || return 1
     cd .. || return 1
   fi
 
   if [ "${DO_BUILD_POSIX}" -eq 1 ]; then
     build_posix || return 1
-    wrap_glibc_bins || return 1
+    wrap_glibc_bins "build-posix" || return 1
+  fi
+
+  if [ "${DO_BUILD_POSIX_TMU_ONLY}" -eq 1 ]; then
+    build_posix_tmu_only || return 1
+    wrap_glibc_bins "build-posix-tmu-only" || return 1
+  fi
+
+  if [ "${DO_BUILD_POSIX_TMU_DISABLE}" -eq 1 ]; then
+    build_posix_tmu_disable || return 1
+    wrap_glibc_bins "build-posix-tmu-disable" || return 1
   fi
 
   if [ "${DO_BUILD_FPGA}" -eq 1 ]; then
     build_fpga || return 1
+    PACKAGE_FPGA_BUILD_DIR="${PACKAGE_FPGA_BUILD_DIR:-build-fpga}"
+  fi
+
+  if [ "${DO_BUILD_FPGA_TMU_ONLY}" -eq 1 ]; then
+    build_fpga_tmu_only || return 1
+    PACKAGE_FPGA_BUILD_DIR="${PACKAGE_FPGA_BUILD_DIR:-build-fpga-tmu-only}"
+  fi
+
+  if [ "${DO_BUILD_FPGA_TMU_DISABLE}" -eq 1 ]; then
+    build_fpga_tmu_disable || return 1
+    PACKAGE_FPGA_BUILD_DIR="${PACKAGE_FPGA_BUILD_DIR:-build-fpga-tmu-disable}"
   fi
 
   if [ "${DO_PACKAGE_FPGA}" -eq 1 ]; then
-    bundle_fpga || return 1
+    local pkg_dir
+    pkg_dir="$(choose_existing_fpga_build_dir_for_package)"
+    [ -n "${pkg_dir}" ] || die "package requested but no FPGA build output found (expected build-fpga / build-fpga-tmu-only / build-fpga-tmu-disable)."
+    bundle_fpga "${pkg_dir}" || return 1
   fi
 
   if [ "${auto_posix_blob}" -eq 1 ]; then
@@ -658,7 +920,6 @@ else
 fi
 
 main "$@"; __rc=$?
-
 if [ "$__TSI_SOURCED" -eq 1 ]; then
   return "$__rc"
 else

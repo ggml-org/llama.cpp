@@ -7456,6 +7456,9 @@ void ggml_perf_write_detailed_csv(struct ggml_cgraph * cgraph, FILE *fp) {
     for (int i = 0; i < cgraph->n_nodes; ++i) {
         struct ggml_tensor * node = cgraph->nodes[i];
         if (node->perf_runs == 0) continue;
+	#ifdef TMU_DEBUG
+            if (node->op != GGML_OP_MUL_MAT) continue;
+	#endif /* TMU_DEBUG */
 
         double t_ms   = node->perf_time_us / 1000.0;
         double avg_ms = t_ms / node->perf_runs;
