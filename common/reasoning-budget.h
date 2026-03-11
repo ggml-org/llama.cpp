@@ -3,7 +3,6 @@
 #include "llama.h"
 
 #include <cstdint>
-#include <string>
 #include <vector>
 
 enum common_reasoning_budget_state {

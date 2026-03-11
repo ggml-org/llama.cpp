@@ -4,7 +4,6 @@
 
 #include "log.h"
 
-#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <string>
