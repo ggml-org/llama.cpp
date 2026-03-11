@@ -145,7 +145,7 @@ static void test_example_native(testing & t) {
         common_reasoning_format reasoning_format;
         json                    json_schema;
         bool                    parallel_tool_calls;
-        bool                    thinking_forced_open;
+        std::string             reasoning_prefill;
         std::string             input;
 
         // Expect
@@ -157,14 +157,8 @@ static void test_example_native(testing & t) {
     auto build_parser = [](const test_case & tc) {
         return build_chat_peg_parser([&](common_chat_peg_builder & p) {
             auto reasoning_in_content = (tc.reasoning_format == COMMON_REASONING_FORMAT_NONE);
-            auto reasoning            = p.eps();
-            if (tc.thinking_forced_open) {
-                // If thinking is forced open, expect a closing tag
-                reasoning = p.reasoning(p.until("</think>")) + "</think>" + p.space();
-            } else {
-                // Otherwise, optionally accept thinking wrapped in tags
-                reasoning = p.optional("<think>" + p.reasoning(p.until("</think>")) + "</think>" + p.space());
-            }
+            // Always use optional TAG_BASED pattern; reasoning_prefill is prepended to input
+            auto reasoning = p.optional("<think>" + p.reasoning(p.until("</think>")) + "</think>" + p.space());
 
             // tool calling parser
             if (tc.tools.is_array() && !tc.tools.empty()) {
@@ -190,78 +184,91 @@ static void test_example_native(testing & t) {
 
     std::vector<test_case> test_cases = std::vector<test_case>{
         {
-         /* .name =                 */ "content with thinking_forced_open = false",
+         /* .name =                 */ "content with reasoning (no prefill)",
          /* .tools =                */ {},
          /* .tool_choice =          */ COMMON_CHAT_TOOL_CHOICE_NONE,
          /* .reasoning_format =     */ COMMON_REASONING_FORMAT_AUTO,
          /* .json_schema =          */ {},
          /* .parallel_tool_calls =  */ false,
-         /* .thinking_forced_open = */ false,
+         /* .reasoning_prefill =    */ "",
          /* .input =                */ ("<think>The user said hello, I must say hello back</think>\nHello"),
          /* .expect_reasoning =     */ "The user said hello, I must say hello back",
          /* .expect_content =       */ "Hello",
          /* .expect_tool_calls =    */ {},
          },
         {
-         /* .name =                 */ "content with thinking_forced_open = false and no reasoning",
+         /* .name =                 */ "content without reasoning (no prefill)",
          /* .tools =                */ {},
          /* .tool_choice =          */ COMMON_CHAT_TOOL_CHOICE_NONE,
          /* .reasoning_format =     */ COMMON_REASONING_FORMAT_AUTO,
          /* .json_schema =          */ {},
          /* .parallel_tool_calls =  */ false,
-         /* .thinking_forced_open = */ false,
+         /* .reasoning_prefill =    */ "",
          /* .input =                */ ("Hello"),
          /* .expect_reasoning =     */ "",
          /* .expect_content =       */ "Hello",
          /* .expect_tool_calls =    */ {},
          },
         {
-         /* .name =                 */ "content with thinking_forced_open = false and reasoning_format = none",
+         /* .name =                 */ "content with reasoning_format = none (tags appear in content)",
          /* .tools =                */ {},
          /* .tool_choice =          */ COMMON_CHAT_TOOL_CHOICE_NONE,
          /* .reasoning_format =     */ COMMON_REASONING_FORMAT_NONE,
          /* .json_schema =          */ {},
          /* .parallel_tool_calls =  */ false,
-         /* .thinking_forced_open = */ true,
+         /* .reasoning_prefill =    */ "",
          /* .input =                */ ("<think>The user said hello, I must say hello back</think>\nHello"),
          /* .expect_reasoning =     */ "",
          /* .expect_content =       */ "<think>The user said hello, I must say hello back</think>\nHello",
          /* .expect_tool_calls =    */ {},
          },
         {
-         /* .name =                 */ "content with thinking_forced_open = true",
+         /* .name =                 */ "content with reasoning prefill",
          /* .tools =                */ {},
          /* .tool_choice =          */ COMMON_CHAT_TOOL_CHOICE_NONE,
          /* .reasoning_format =     */ COMMON_REASONING_FORMAT_AUTO,
          /* .json_schema =          */ {},
          /* .parallel_tool_calls =  */ false,
-         /* .thinking_forced_open = */ true,
+         /* .reasoning_prefill =    */ "<think>",
          /* .input =                */ ("The user said hello, I must say hello back</think>\nHello"),
          /* .expect_reasoning =     */ "The user said hello, I must say hello back",
          /* .expect_content =       */ "Hello",
          /* .expect_tool_calls =    */ {},
          },
         {
-         /* .name =                 */ "content with thinking_forced_open = true and reasoning_format = none",
+         /* .name =                 */ "content with reasoning prefill and reasoning_format = none",
          /* .tools =                */ {},
          /* .tool_choice =          */ COMMON_CHAT_TOOL_CHOICE_NONE,
          /* .reasoning_format =     */ COMMON_REASONING_FORMAT_NONE,
          /* .json_schema =          */ {},
          /* .parallel_tool_calls =  */ false,
-         /* .thinking_forced_open = */ true,
+         /* .reasoning_prefill =    */ "",
          /* .input =                */ ("The user said hello, I must say hello back</think>\nHello"),
          /* .expect_reasoning =     */ "",
          /* .expect_content =       */ "The user said hello, I must say hello back</think>\nHello",
          /* .expect_tool_calls =    */ {},
          },
         {
-         /* .name =                 */ "tools with tool_choice = auto and no parallel_tool_calls",
+         /* .name =                 */ "content with closed reasoning prefill (empty reasoning discarded)",
+         /* .tools =                */ {},
+         /* .tool_choice =          */ COMMON_CHAT_TOOL_CHOICE_NONE,
+         /* .reasoning_format =     */ COMMON_REASONING_FORMAT_AUTO,
+         /* .json_schema =          */ {},
+         /* .parallel_tool_calls =  */ false,
+         /* .reasoning_prefill =    */ "<think></think>",
+         /* .input =                */ ("Hello"),
+         /* .expect_reasoning =     */ "",
+         /* .expect_content =       */ "Hello",
+         /* .expect_tool_calls =    */ {},
+         },
+        {
+         /* .name =                 */ "tools with reasoning prefill",
          /* .tools =                */ create_tools(),
          /* .tool_choice =          */ COMMON_CHAT_TOOL_CHOICE_AUTO,
          /* .reasoning_format =     */ COMMON_REASONING_FORMAT_AUTO,
          /* .json_schema =          */ {},
          /* .parallel_tool_calls =  */ false,
-         /* .thinking_forced_open = */ true,
+         /* .reasoning_prefill =    */ "<think>",
          /* .input =                */
             ("I must get the weather in New York</think>\n"
              "<tool_call>["
@@ -277,13 +284,13 @@ static void test_example_native(testing & t) {
             } },
          },
         {
-         /* .name =                 */ "tools with tool_choice = auto and parallel_tool_calls",
+         /* .name =                 */ "parallel tools with reasoning prefill",
          /* .tools =                */ create_tools(),
          /* .tool_choice =          */ COMMON_CHAT_TOOL_CHOICE_AUTO,
          /* .reasoning_format =     */ COMMON_REASONING_FORMAT_AUTO,
          /* .json_schema =          */ {},
          /* .parallel_tool_calls =  */ true,
-         /* .thinking_forced_open = */ true,
+         /* .reasoning_prefill =    */ "<think>",
          /* .input =                */
             ("I must get the weather in New York and San Francisco and a 3 day forecast of each.</think>\nLet me "
              "search that for you."
@@ -321,7 +328,7 @@ static void test_example_native(testing & t) {
               } },
          },
         {
-         /* .name =                 */ "response_format with thinking_forced_open = true",
+         /* .name =                 */ "response_format with reasoning prefill",
          /* .tools =                */ {},
          /* .tool_choice =          */ COMMON_CHAT_TOOL_CHOICE_NONE,
          /* .reasoning_format =     */ COMMON_REASONING_FORMAT_AUTO,
@@ -333,7 +340,7 @@ static void test_example_native(testing & t) {
                   { "due_date", { { "type", "string" } } } } },
               { "required", { "invoice_number", "amount", "due_date" } } },
          /* .parallel_tool_calls =  */ false,
-         /* .thinking_forced_open = */ true,
+         /* .reasoning_prefill =    */ "<think>",
          /* .input =                */
             ("I must produce the invoice in the requested format</think>\n"
              R"({"invoice_number": "INV-2025-001", "amount": 1250.50, "due_date": "2025-12-31"})"),
@@ -361,7 +368,8 @@ static void test_example_native(testing & t) {
                 t.log(line);
             }
 
-            common_peg_parse_context ctx(tc.input);
+            std::string              effective_input = tc.reasoning_prefill + tc.input;
+            common_peg_parse_context ctx(effective_input);
             auto                     result = parser.parse(ctx);
 
             t.assert_true("success", result.success());

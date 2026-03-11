@@ -164,7 +164,7 @@ export interface ApiLlamaCppServerProps {
 			chat_format: string;
 			reasoning_format: string;
 			reasoning_in_content: boolean;
-			thinking_forced_open: boolean;
+			reasoning_prefill: string;
 			samplers: string[];
 			backend_sampling: boolean;
 			'speculative.n_max': number;
@@ -332,7 +332,7 @@ export interface ApiSlotData {
 		chat_format: string;
 		reasoning_format: string;
 		reasoning_in_content: boolean;
-		thinking_forced_open: boolean;
+		reasoning_prefill: string;
 		samplers: string[];
 		backend_sampling: boolean;
 		'speculative.n_max': number;

@@ -77,11 +77,7 @@ struct templates_params {
 // Reasoning handling mode (derived from R1-R3 comparisons)
 enum class reasoning_mode {
     NONE,           // No reasoning markers detected
-    TAG_BASED,      // Standard tag-based: <think>...</think>
-    DELIMITER,      // Delimiter-based: [BEGIN FINAL RESPONSE] (reasoning ends at delimiter)
-    FORCED_OPEN,    // Template ends with open reasoning tag (empty start, non-empty end)
-    FORCED_CLOSED,  // Template ends with open reasoning tag on enabled thinking but
-                    // with both opened and closed tag for disabled thinking
+    TAG_BASED,      // Tag-based: <think>...</think> (start can be empty for delimiter-style)
     TOOLS_ONLY      // Only reason on tool calls, not on normal content
 };
 
@@ -91,12 +87,6 @@ inline std::ostream & operator<<(std::ostream & os, const reasoning_mode & mode)
             return os << "NONE";
         case reasoning_mode::TAG_BASED:
             return os << "TAG_BASED";
-        case reasoning_mode::DELIMITER:
-            return os << "DELIMITER";
-        case reasoning_mode::FORCED_OPEN:
-            return os << "FORCED_OPEN";
-        case reasoning_mode::FORCED_CLOSED:
-            return os << "FORCED_CLOSED";
         case reasoning_mode::TOOLS_ONLY:
             return os << "TOOLS_ONLY";
         default:

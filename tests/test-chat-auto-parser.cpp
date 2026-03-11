@@ -1295,8 +1295,8 @@ static void test_nemotron_reasoning_detection(testing & t) {
     t.assert_equal("reasoning_end should be '</think>\\n'", "</think>\n", analysis.reasoning.end);
 
     // Check reasoning mode detection
-    // Nemotron uses forced closed reasoning with add_generation_prompt
-    t.assert_equal("reasoning should be FORCED_CLOSED", reasoning_mode::FORCED_CLOSED, analysis.reasoning.mode);
+    // Nemotron uses tag-based reasoning (formerly FORCED_CLOSED; prefill handles the template's forced markers)
+    t.assert_equal("reasoning should be TAG_BASED", reasoning_mode::TAG_BASED, analysis.reasoning.mode);
 
     // Make sure reasoning markers don't spill over to content markers
     t.assert_equal("content start should be empty", "", analysis.content.start);

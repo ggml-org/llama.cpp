@@ -1713,14 +1713,20 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
         LOG_DBG("No parser definition detected, assuming pure content parser.");
     }
 
-    LOG_DBG("Parsing PEG input with format %s: %s\n", common_chat_format_name(params.format), input.c_str());
+    // Prepend reasoning prefill (e.g. <think> or <think></think> from template prompt)
+    // so the parser can detect reasoning markers that were part of the template output.
+    const std::string effective_input = params.reasoning_prefill.empty()
+        ? input
+        : params.reasoning_prefill + input;
+
+    LOG_DBG("Parsing PEG input with format %s: %s\n", common_chat_format_name(params.format), effective_input.c_str());
 
     common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_LENIENT;
     if (params.debug) {
         flags |= COMMON_PEG_PARSE_FLAG_DEBUG;
     }
 
-    common_peg_parse_context ctx(input, flags);
+    common_peg_parse_context ctx(effective_input, flags);
     auto result = parser.parse(ctx);
 
     if (result.fail()) {

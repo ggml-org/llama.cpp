@@ -32,7 +32,7 @@ static std::vector<std::function<void(const common_chat_template & tmpl, autopar
           if (tmpl.src.find("content.split('</think>')") != std::string::npos &&
               tmpl.src.find("reasoning_content") == std::string::npos &&
               analysis.reasoning.mode == reasoning_mode::NONE) {
-              analysis.reasoning.mode  = reasoning_mode::FORCED_OPEN;
+              analysis.reasoning.mode  = reasoning_mode::TAG_BASED;
               analysis.reasoning.start = "<think>";
               analysis.reasoning.end   = "</think>";
               analysis.preserved_tokens.push_back("<think>");
@@ -295,15 +295,11 @@ void analyze_reasoning::compare_reasoning_presence() {
         }
         if (result.result.success()) {
             if (!result.tags["pre"].empty() && !result.tags["post"].empty()) {
-                if (parser_wrapped.parse_anywhere_and_extract(diff.right).result.success()) { // both tags in the diff = no forced close
-                    mode = reasoning_mode::TAG_BASED;
-                } else {
-                    mode = reasoning_mode::FORCED_CLOSED;
-                }
+                mode = reasoning_mode::TAG_BASED;
                 start = trim_whitespace(result.tags["pre"]);
                 end   = result.tags["post"];
             } else if (!result.tags["post"].empty()) {
-                mode = reasoning_mode::DELIMITER;
+                mode = reasoning_mode::TAG_BASED;
                 end = result.tags["post"];
             }
         }
@@ -338,17 +334,17 @@ void analyze_reasoning::compare_thinking_enabled() {
         if (!right_trimmed.empty() && string_ends_with(comparison->output_B, right_trimmed)) {
             if (start.empty()) {
                 start = right_trimmed;
-                mode  = reasoning_mode::FORCED_OPEN;
+                mode  = reasoning_mode::TAG_BASED;
             }
         }
     }
 
-    if (start.empty() && !end.empty()) {
-        mode = reasoning_mode::DELIMITER;
+    if (mode == reasoning_mode::NONE && start.empty() && !end.empty()) {
+        mode = reasoning_mode::TAG_BASED;
     }
 
-    // Check for FORCED_CLOSED: when enable_thinking=false produces both start and end markers,
-    // but enable_thinking=true produces only the start marker
+    // Check for start+end pattern: when enable_thinking=false produces both start and end markers,
+    // but enable_thinking=true produces only the start marker. Both cases are TAG_BASED.
     if (!comparison->output_A.empty() && !comparison->output_B.empty()) {
         auto parser_start = build_tagged_peg_parser([&](common_peg_parser_builder &p) {
             return p.literal(start) + p.space() + p.literal(end) + p.rest();
@@ -358,12 +354,12 @@ void analyze_reasoning::compare_thinking_enabled() {
         });
         if (!start.empty() && parser_start_end.parse_anywhere_and_extract(comparison->output_A).result.success() &&
             parser_start.parse_anywhere_and_extract(comparison->output_B).result.success()) {
-            mode = reasoning_mode::FORCED_CLOSED;
+            mode = reasoning_mode::TAG_BASED;
         } else if (!end.empty()) { // we extract the starting marker now since we didn't get it earlier
             auto result = parser_start_end.parse_anywhere_and_extract(comparison->output_A);
             if (result.result.success()) {
                 start = result.tags["pre"];
-                mode  = reasoning_mode::FORCED_CLOSED;
+                mode  = reasoning_mode::TAG_BASED;
             }
         }
     }
@@ -373,7 +369,7 @@ void analyze_reasoning::compare_thinking_enabled() {
             auto seg_A = segmentize_markers(trim_trailing_whitespace(diff.left));
             auto seg_B = segmentize_markers(trim_trailing_whitespace(diff.right));
             if (seg_A.size() == 1 && seg_B.size() == 1) {
-                mode = reasoning_mode::FORCED_CLOSED;
+                mode = reasoning_mode::TAG_BASED;
                 start = seg_B[0].value;
                 end = seg_A[0].value;
             }
