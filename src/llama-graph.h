@@ -658,6 +658,7 @@ public:
     // important graph nodes
     ggml_tensor * t_inp_tokens  = nullptr;
     ggml_tensor * t_inp_embd    = nullptr; // [n_embd_inp, n_tokens]
+    ggml_tensor * t_kv_direct_capture = nullptr;  // KV Direct: captured embedding for residual pool
     ggml_tensor * t_logits      = nullptr;
     ggml_tensor * t_embd        = nullptr;
     ggml_tensor * t_embd_pooled = nullptr;
@@ -746,6 +747,10 @@ struct llm_graph_context {
 
     const llm_graph_cb & cb_func;
 
+    // KV Direct: layer-0 embedding capture
+    bool kv_direct_enabled = false;
+    ggml_tensor * kv_direct_capture = nullptr;  // [n_embd, n_tokens] — set during build_inp_embd
+
     llm_graph_result * res;
 
     ggml_context * ctx0 = nullptr;
@@ -763,6 +768,10 @@ struct llm_graph_context {
     ggml_tensor * build_cvec(
              ggml_tensor * cur,
                      int   il) const;
+
+    // KV Direct: capture the input embedding (layer-0 residual)
+    // Called from build_inp_embd() — replaces the old per-layer capture.
+    void build_kv_direct_capture_embd(ggml_tensor * embd) const;
 
     // do mat_mul, while optionally apply lora and per-tensor scale
     ggml_tensor * build_lora_mm(
