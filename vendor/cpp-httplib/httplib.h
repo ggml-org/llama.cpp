@@ -8,8 +8,8 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.35.0"
-#define CPPHTTPLIB_VERSION_NUM "0x002300"
+#define CPPHTTPLIB_VERSION "0.37.0"
+#define CPPHTTPLIB_VERSION_NUM "0x002500"
 
 /*
  * Platform compatibility check
@@ -573,6 +573,14 @@ inline unsigned char to_lower(int c) {
       255,
   };
   return table[(unsigned char)(char)c];
+}
+
+inline std::string to_lower(const std::string &s) {
+  std::string result = s;
+  std::transform(
+      result.begin(), result.end(), result.begin(),
+      [](unsigned char c) { return static_cast<char>(to_lower(c)); });
+  return result;
 }
 
 inline bool equal(const std::string &a, const std::string &b) {
@@ -1859,23 +1867,23 @@ public:
       : res_(std::move(res)), err_(err),
         request_headers_(std::move(request_headers)), ssl_error_(ssl_error) {}
   Result(std::unique_ptr<Response> &&res, Error err, Headers &&request_headers,
-         int ssl_error, unsigned long ssl_backend_error)
+         int ssl_error, uint64_t ssl_backend_error)
       : res_(std::move(res)), err_(err),
         request_headers_(std::move(request_headers)), ssl_error_(ssl_error),
         ssl_backend_error_(ssl_backend_error) {}
 
   int ssl_error() const { return ssl_error_; }
-  unsigned long ssl_backend_error() const { return ssl_backend_error_; }
+  uint64_t ssl_backend_error() const { return ssl_backend_error_; }
 
 private:
   int ssl_error_ = 0;
-  unsigned long ssl_backend_error_ = 0;
+  uint64_t ssl_backend_error_ = 0;
 #endif
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
 public:
   [[deprecated("Use ssl_backend_error() instead")]]
-  unsigned long ssl_openssl_error() const {
+  uint64_t ssl_openssl_error() const {
     return ssl_backend_error_;
   }
 #endif
@@ -2345,7 +2353,7 @@ protected:
   bool server_hostname_verification_ = true;
   std::string ca_cert_pem_; // Store CA cert PEM for redirect transfer
   int last_ssl_error_ = 0;
-  unsigned long last_backend_error_ = 0;
+  uint64_t last_backend_error_ = 0;
 #endif
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
