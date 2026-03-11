@@ -62,15 +62,12 @@
 		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])
 	);
 
-	let previousConversationModel: string | null = null;
-
 	$effect(() => {
-		if (conversationModel && conversationModel !== previousConversationModel) {
-			previousConversationModel = conversationModel;
-
-			if (!isRouter || modelsStore.isModelLoaded(conversationModel)) {
-				modelsStore.selectModelByName(conversationModel);
-			}
+		if (conversationModel) {
+			modelsStore.selectModelByName(conversationModel);
+		} else if (isRouter && modelsStore.loadedModelIds.length > 0) {
+			const first = modelOptions().find((m) => modelsStore.loadedModelIds.includes(m.model));
+			if (first) modelsStore.selectModelById(first.id);
 		}
 	});
 
