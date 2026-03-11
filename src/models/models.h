@@ -166,12 +166,16 @@ struct llm_build_deci : public llm_graph_context {
     llm_build_deci(const llama_model & model, const llm_graph_params & params);
 };
 
+struct llm_build_deepseek : public llm_graph_context {
+    llm_build_deepseek(const llama_model & model, const llm_graph_params & params);
+};
+
 struct llm_build_deepseek2 : public llm_graph_context {
     llm_build_deepseek2(const llama_model & model, const llm_graph_params & params);
 };
 
-struct llm_build_deepseek : public llm_graph_context {
-    llm_build_deepseek(const llama_model & model, const llm_graph_params & params);
+struct llm_build_deepseek32 : public llm_graph_context {
+    llm_build_deepseek32(const llama_model & model, const llm_graph_params & params);
 };
 
 struct llm_build_dots1 : public llm_graph_context {

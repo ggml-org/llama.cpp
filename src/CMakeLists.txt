@@ -57,6 +57,7 @@ add_library(llama
             models/deci.cpp
             models/deepseek.cpp
             models/deepseek2.cpp
+            models/deepseek32.cpp
             models/delta-net-base.cpp
             models/dots1.cpp
             models/dream.cpp
