@@ -1250,37 +1250,15 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         auto * kvc = dynamic_cast<llama_kv_cache *>(memory.get());
         if (kvc && kvc->is_kv_direct_enabled()) {
             const uint32_t n_embd_cap = (uint32_t)res->t_kv_direct_capture->ne[0];
-            const uint32_t n_tokens   = ubatch.n_tokens;
 
             // Read capture tensor from backend to temporary host buffer
-            std::vector<float> host_buf((size_t)n_embd_cap * n_tokens);
+            std::vector<float> host_buf((size_t)n_embd_cap * ubatch.n_tokens);
             ggml_backend_tensor_get(res->t_kv_direct_capture,
                                     host_buf.data(), 0,
                                     host_buf.size() * sizeof(float));
 
-            // Store each token's embedding to the pool at its position
-            for (uint32_t t = 0; t < n_tokens; ++t) {
-                const llama_pos    pos    = ubatch.pos[t];
-                const llama_seq_id seq_id = ubatch.seq_id[t][0];
-                kvc->kv_direct.pool_store(pos, seq_id,
-                                          host_buf.data() + (size_t)t * n_embd_cap);
-            }
-
-            // Touch LRU for cells that were just populated by this batch
-            for (uint32_t s = 0; s < kvc->v_cells.size(); ++s) {
-                const auto & cells = kvc->v_cells[s];
-                for (uint32_t t = 0; t < n_tokens; ++t) {
-                    for (uint32_t i = 0; i < cells.size(); ++i) {
-                        if (!cells.is_empty(i) && cells.pos_get(i) == ubatch.pos[t]) {
-                            kvc->kv_direct.lru_touch(s, i);
-                            break;
-                        }
-                    }
-                }
-            }
-
-            // Increment the LRU step counter
-            kvc->kv_direct.lru_step();
+            // Delegate pool store + LRU touch to the cache
+            kvc->store_residuals(host_buf.data(), n_embd_cap, ubatch);
         }
     }
 

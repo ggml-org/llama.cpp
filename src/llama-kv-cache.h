@@ -106,7 +106,8 @@ public:
                      uint32_t   n_swa,
                llama_swa_type   swa_type,
         const layer_filter_cb & filter,
-        const  layer_reuse_cb & reuse);
+        const  layer_reuse_cb & reuse,
+                     uint32_t   budget_tokens = 0);
 
     ~llama_kv_cache() = default;
 
@@ -151,6 +152,22 @@ public:
     uint32_t get_n_stream() const;
 
     bool get_has_shift() const;
+
+    bool     is_kv_direct_enabled() const { return kv_direct.enabled; }
+    uint32_t get_kv_direct_budget() const { return kv_direct.budget_tokens; }
+
+    // KV Direct: evict oldest positions if cache exceeds budget
+    // returns number of positions evicted
+    uint32_t evict_if_over_budget();
+
+    // KV Direct: recompute K/V for recently evicted positions from residual pool.
+    // ctx is needed to call llama_decode for the recompute pass.
+    uint32_t recompute_evicted(struct llama_context * ctx);
+
+    // KV Direct: store captured residuals from a decoded ubatch into the pool.
+    // Called by llama_context after graph_compute.
+    void store_residuals(const float * host_buf, uint32_t n_embd_cap,
+                         const llama_ubatch & ubatch);
 
     //
     // graph_build API
@@ -215,6 +232,49 @@ private:
         std::vector<ggml_tensor *> v_stream;
     };
 
+    // ---- KV Direct: residual pool + LRU eviction ----
+
+    // Metadata for one slot in the residual ring buffer.
+    struct residual_slot {
+        llama_pos    pos    = -1;   // token position (-1 = empty)
+        llama_seq_id seq_id = -1;   // sequence that owns this slot
+        bool         valid  = false;
+    };
+
+    struct kv_direct_state {
+        uint32_t budget_tokens = 0;
+        bool     enabled       = false;
+
+        // ---- Residual ring buffer (host memory) ----
+        uint32_t               pool_capacity = 0;  // = budget_tokens
+        uint32_t               n_embd        = 0;  // embedding dimension
+        std::vector<float>     pool_data;           // [pool_capacity * n_embd] floats
+        std::vector<residual_slot> pool_meta;       // [pool_capacity] metadata
+
+        // ---- LRU tracking ----
+        // Parallel to v_cells — indexed [stream][cell_idx].
+        // Updated on cell population and on restore.
+        uint32_t kv_step = 0;  // monotonic counter, incremented per decode
+        std::vector<std::vector<uint32_t>> last_used;  // [n_stream][n_cells]
+
+        // ---- Recently evicted positions (for miss detection) ----
+        std::vector<llama_pos> recently_evicted;  // positions evicted since last recompute
+
+        explicit kv_direct_state(uint32_t budget = 0)
+            : budget_tokens(budget), enabled(budget > 0) {}
+
+        // Pool operations
+        void pool_init(uint32_t capacity, uint32_t embd_dim);
+        void pool_store(llama_pos pos, llama_seq_id seq_id, const float * data);
+        const float * pool_lookup(llama_pos pos, llama_seq_id seq_id) const;
+        void pool_invalidate(llama_pos pos);
+
+        // LRU operations
+        void lru_init(uint32_t n_streams, uint32_t n_cells);
+        void lru_touch(uint32_t stream, uint32_t cell_idx);
+        void lru_step();  // increment kv_step
+    };
+
     bool v_trans = true;  // the value tensor is transposed
 
     const uint32_t n_seq_max = 1;
@@ -228,6 +288,8 @@ private:
 
     // env: LLAMA_KV_CACHE_DEBUG
     int debug = 0;
+
+    kv_direct_state kv_direct;
 
     // this is the SWA type of the cache - not to be confused with the model SWA type
     const llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
@@ -353,6 +415,9 @@ public:
     void set_input_k_shift   (ggml_tensor * dst) const;
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
+
+    // KV Direct: check if the underlying cache has KV Direct enabled
+    bool is_kv_direct_enabled() const { return kv && kv->is_kv_direct_enabled(); }
 
 private:
     llama_memory_status status;

@@ -2423,6 +2423,37 @@ void llama_kv_cache::kv_direct_state::lru_step() {
     kv_step++;
 }
 
+void llama_kv_cache::store_residuals(const float * host_buf, uint32_t n_embd_cap,
+                                     const llama_ubatch & ubatch) {
+    if (!kv_direct.enabled) return;
+
+    const uint32_t n_tokens = ubatch.n_tokens;
+
+    // Store each token's embedding to the pool at its position
+    for (uint32_t t = 0; t < n_tokens; ++t) {
+        const llama_pos    pos    = ubatch.pos[t];
+        const llama_seq_id seq_id = ubatch.seq_id[t][0];
+        kv_direct.pool_store(pos, seq_id,
+                             host_buf + (size_t)t * n_embd_cap);
+    }
+
+    // Touch LRU for cells that were just populated by this batch
+    for (uint32_t s = 0; s < v_cells.size(); ++s) {
+        const auto & cells = v_cells[s];
+        for (uint32_t t = 0; t < n_tokens; ++t) {
+            for (uint32_t i = 0; i < cells.size(); ++i) {
+                if (!cells.is_empty(i) && cells.pos_get(i) == ubatch.pos[t]) {
+                    kv_direct.lru_touch(s, i);
+                    break;
+                }
+            }
+        }
+    }
+
+    // Increment the LRU step counter
+    kv_direct.lru_step();
+}
+
 uint32_t llama_kv_cache::recompute_evicted(llama_context * ctx) {
     if (!kv_direct.enabled || kv_direct.recently_evicted.empty()) {
         return 0;
