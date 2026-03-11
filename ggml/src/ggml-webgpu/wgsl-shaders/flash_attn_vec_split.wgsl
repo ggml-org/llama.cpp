@@ -41,7 +41,6 @@ enable chromium_experimental_subgroup_matrix;
 #endif
 #define F16_PER_THREAD (NQ / WEIGHTS_PER_F16)
 
-// Ok not to put these in a define block, compiler will remove if unused
 fn get_byte(value: u32, index: u32) -> u32 {
     return (value >> (index * 8)) & 0xFF;
 }
@@ -162,15 +161,13 @@ const kv_shmem_size = KV_TILE * max(HEAD_DIM_QK, HEAD_DIM_V);
 var<workgroup> kv_shmem: array<f16, kv_shmem_size>;
 #endif
 
-var<workgroup> o_shmem: array<f16, Q_TILE * HEAD_DIM_V>; // output shmem
+var<workgroup> o_shmem: array<f16, Q_TILE * HEAD_DIM_V>;
 
 #ifdef MASK
 // storage for mask values
 var<workgroup> mask_shmem: array<f16, Q_TILE * KV_TILE>;
 #endif
 
-// storage for output of Q*K^T scores for online softmax (S matrix from paper)
-// also storage for diagonal matrix during online softmax (P matrix from paper)
 // note that we reuse the same storage for both since we only need one at a time
 var<workgroup> inter_shmem: array<f16, Q_TILE * KV_TILE>;
 
@@ -401,7 +398,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                     }
                   }
                   var sum = partial_sum;
-                  // Reduce over tx lanes (NL) for this ty stripe.
+                  // Reduce over tx threads (NL) for this ty stripe.
                   var tx_delta = num_of_threads >> 1u;
                   loop {
                       if (tx_delta == 0u) {
@@ -452,7 +449,6 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                   break;
               }
 
-              // initialize running max for this row
               var prev_max = row_max_shmem[q_tile_row];
               var final_max = prev_max;
               // pass 1: compute final max across the full KV tile in chunks
@@ -571,17 +567,17 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
       if (!skip_tile) {
           // we have P (Q_TILE x KV_TILE) in inter_shmem and V (KV_TILE x head_dim_v) in kv_shmem
           // we want to compute O += P * V across the full KV tile
-          let ne_lanes : u32 = VEC_NE;
-          let nl_lanes = max(1u, subgroup_size / ne_lanes);
-          let tx_pv = sg_inv_id % nl_lanes;
-          let ty_pv = sg_inv_id / nl_lanes;
+          let ne_threads : u32 = VEC_NE;
+          let nl_threads = max(1u, subgroup_size / ne_threads);
+          let tx_pv = sg_inv_id % nl_threads;
+          let ty_pv = sg_inv_id / nl_threads;
           for (var q_tile_row = subgroup_id;
                q_tile_row < Q_TILE;
                q_tile_row += num_subgroups) {
-              for (var vec_col = tx_pv; vec_col < (HEAD_DIM_V / 4u); vec_col += nl_lanes) {
+              for (var vec_col = tx_pv; vec_col < (HEAD_DIM_V / 4u); vec_col += nl_threads) {
                   var lo = vec4<f32>(0.0, 0.0, 0.0, 0.0);
-                  for (var cc = 0u; cc < KV_TILE / ne_lanes; cc += 1u) {
-                      let kv_idx = cc * ne_lanes + ty_pv;
+                  for (var cc = 0u; cc < KV_TILE / ne_threads; cc += 1u) {
+                      let kv_idx = cc * ne_threads + ty_pv;
                       let v_row = kv_tile + kv_idx;
                       if (v_row >= params.seq_len_kv) {
                           continue;
@@ -606,17 +602,17 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                   var lo_y = lo.y;
                   var lo_z = lo.z;
                   var lo_w = lo.w;
-                  // Reduce over ty lanes (NE) for this tx lane.
-                  var ty_delta = ne_lanes >> 1u;
+                  // Reduce over ty threads (NE) for this tx thread.
+                  var ty_delta = ne_threads >> 1u;
                   loop {
                       if (ty_delta == 0u) {
                           break;
                       }
-                      let lane_delta = ty_delta * nl_lanes;
-                      let shx = subgroupShuffleDown(lo_x, lane_delta);
-                      let shy = subgroupShuffleDown(lo_y, lane_delta);
-                      let shz = subgroupShuffleDown(lo_z, lane_delta);
-                      let shw = subgroupShuffleDown(lo_w, lane_delta);
+                      let thread_delta = ty_delta * nl_threads;
+                      let shx = subgroupShuffleDown(lo_x, thread_delta);
+                      let shy = subgroupShuffleDown(lo_y, thread_delta);
+                      let shz = subgroupShuffleDown(lo_z, thread_delta);
+                      let shw = subgroupShuffleDown(lo_w, thread_delta);
                       if (ty_pv < ty_delta) {
                           lo_x += shx;
                           lo_y += shy;

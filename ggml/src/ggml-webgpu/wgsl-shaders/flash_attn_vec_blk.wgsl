@@ -8,7 +8,6 @@ struct Params {
     offset_mask: u32,
     seq_len_q: u32,
     seq_len_kv: u32,
-    // plane b base = offset_mask + b * stride_mask3.
     stride_mask3: u32,
     // Number of KV blocks and Q blocks per batch.
     // nblk0 = ceil(seq_len_kv / KV_TILE), nblk1 = ceil(seq_len_q / Q_TILE).

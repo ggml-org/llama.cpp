@@ -42,25 +42,25 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     let dst3_stride = dst2_stride * params.seq_len_q;
     let row_base = params.offset_dst + batch_idx * dst3_stride + q_row * dst2_stride + head_idx * HEAD_DIM_V;
 
-    let lane = sg_inv_id;
+    let thread = sg_inv_id;
     if (params.nwg > subgroup_size) {
         return;
     }
 
     let stats_base = params.tmp_stats_base + rid * (2u * params.nwg);
-    let active_lane = lane < params.nwg;
-    let si = select(0.0, tmp[stats_base + 2u * lane + 0u], active_lane);
-    let mi = select(FLOAT_MIN, tmp[stats_base + 2u * lane + 1u], active_lane);
+    let active_thread = thread < params.nwg;
+    let si = select(0.0, tmp[stats_base + 2u * thread + 0u], active_thread);
+    let mi = select(FLOAT_MIN, tmp[stats_base + 2u * thread + 1u], active_thread);
     let m = subgroupMax(mi);
-    let ms = select(0.0, exp(mi - m), active_lane);
+    let ms = select(0.0, exp(mi - m), active_thread);
     let s = subgroupAdd(si * ms);
     let inv_s = select(0.0, 1.0 / s, s != 0.0);
 
     let row_tmp_base = params.tmp_data_base + rid * (HEAD_DIM_V * params.nwg);
     for (var elem_base = subgroup_id * 4u; elem_base < HEAD_DIM_V; elem_base += num_subgroups * 4u) {
         var weighted = vec4<f32>(0.0, 0.0, 0.0, 0.0);
-        if (active_lane) {
-            let src = row_tmp_base + lane * HEAD_DIM_V + elem_base;
+        if (active_thread) {
+            let src = row_tmp_base + thread * HEAD_DIM_V + elem_base;
             weighted = vec4<f32>(tmp[src + 0u], tmp[src + 1u], tmp[src + 2u], tmp[src + 3u]) * ms;
         }
 
@@ -69,7 +69,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
         let sum_z = subgroupAdd(weighted.z);
         let sum_w = subgroupAdd(weighted.w);
 
-        if (lane == 0u) {
+        if (thread == 0u) {
             let dst_vec_index = (row_base + elem_base) >> 2u;
             dst[dst_vec_index] = vec4<f32>(sum_x, sum_y, sum_z, sum_w) * inv_s;
         }
