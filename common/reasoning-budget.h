@@ -16,11 +16,12 @@ enum common_reasoning_budget_state {
 // Creates a reasoning budget sampler that limits token generation inside a
 // reasoning block (e.g. between <think> and </think>).
 //
-// State machine: IDLE -> COUNTING -> FORCING -> DONE
-//   IDLE:     passthrough, watching for start_tokens sequence
-//   COUNTING: counting down remaining tokens, watching for natural end_tokens
-//   FORCING:  forces forced_tokens token-by-token (all other logits -> -inf)
-//   DONE:     passthrough forever
+// State machine: IDLE -> COUNTING -> WAITING_UTF8 -> FORCING -> DONE
+//   IDLE:         passthrough, watching for start_tokens sequence
+//   COUNTING:     counting down remaining tokens, watching for natural end_tokens
+//   WAITING_UTF8: budget exhausted, allowing tokens to complete a UTF-8 sequence
+//   FORCING:      forces forced_tokens token-by-token (all other logits -> -inf)
+//   DONE:         passthrough forever
 //
 // Parameters:
 //   vocab         - vocabulary (used for UTF-8 boundary detection; can be nullptr)
