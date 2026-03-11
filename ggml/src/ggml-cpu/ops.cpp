@@ -10443,8 +10443,8 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
 
     const float * state_in_base = (const float *)src_state->data;
 
-    const int64_t rq1 = nev1 / neq1;
-    const int64_t rk1 = nev1 / nek1;
+  //const int64_t rq1 = nev1 / neq1;
+  //const int64_t rk1 = nev1 / nek1;
     const int64_t rq3 = nev3 / neq3;
     const int64_t rk3 = nev3 / nek3;
 
@@ -10454,8 +10454,8 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
         const int64_t iv1 = ir % H; // head_index
         const int64_t iv3 = ir / H; // sequence
 
-        const int64_t iq1 = iv1 / rq1;
-        const int64_t ik1 = iv1 / rk1;
+        const int64_t iq1 = iv1 % neq1;
+        const int64_t ik1 = iv1 % nek1;
 
         const int64_t iq3 = iv3 / rq3;
         const int64_t ik3 = iv3 / rk3;
@@ -10475,7 +10475,7 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
             const float * v_d = (const float *)((const char *)src_v->data + iv3 * nbv3 + t * nbv2 + iv1 * nbv1);
 
             const float beta_val = *(const float *)((const char *)src_beta->data + iv3 * nbb3 + t * nbb2 + iv1 * nbb1);
-            const float * g_d   =  (const float *)((const char *)src_g->data    + iv3 * nbg3 + t * nbg2 + iv1 * nbg1);
+            const float * g_d    =  (const float *)((const char *)src_g->data    + iv3 * nbg3 + t * nbg2 + iv1 * nbg1);
 
             if (kda) {
                 for (int64_t i = 0; i < S_v; ++i) {
@@ -10508,7 +10508,6 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
 
             attn_data += S_v * H; // advance to next token
         }
-
     }
 }
 
