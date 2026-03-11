@@ -623,6 +623,28 @@ struct moe_expert_meta {
 static std::vector<moe_expert_meta> g_moe_expert_meta;
 static std::mutex                   g_moe_expert_meta_mutex;
 
+// Forward declarations needed by moe_prestage_popular_experts (defined later in file).
+static ggml_sycl_cache_id ggml_sycl_get_moe_expert_cache_key(const ggml_tensor *     tensor,
+                                                             ggml_tensor_extra_gpu * extra,
+                                                             int                     expert_id);
+struct ggml_sycl_reorder_fill_ctx {
+    ggml_type type;
+
+    int64_t ncols;
+    int64_t nrows;
+
+    size_t      nbytes;
+    size_t      dst_bytes;
+    layout_mode layout;
+    bool        src_is_device;
+    int         device_id;
+};
+static sycl::event ggml_sycl_fill_reordered_host(sycl::queue & queue, void * dst, size_t dst_size,
+                                                  const void * src, size_t src_size, const void * ctx_void,
+                                                  const std::vector<sycl::event> & deps);
+static size_t ggml_sycl_layout_bytes_for_dims(ggml_type type, int64_t ncols, int64_t nrows,
+                                              layout_mode layout, int device_id);
+
 // ---------------------------------------------------------------------------
 // Proactive pre-staging: upload popular experts to GPU0 VRAM after warmup.
 // Called immediately after moe_apply_popularity_placement() sets popularity ranks.
@@ -764,11 +786,6 @@ static int moe_cache_layer_id(const char * name) {
     return static_cast<int>(h & 0x7FFFFFFF);
 }
 
-// Forward declaration: cache key generation for MoE expert weights (defined later).
-static ggml_sycl_cache_id ggml_sycl_get_moe_expert_cache_key(const ggml_tensor *     tensor,
-                                                             ggml_tensor_extra_gpu * extra,
-                                                             int                     expert_id);
-
 // Forward declaration: assign a persistent cache UUID to a tensor extra (defined later).
 static uint64_t ggml_sycl_assign_cache_uuid(ggml_tensor_extra_gpu * extra);
 
@@ -776,27 +793,6 @@ static uint64_t ggml_sycl_assign_cache_uuid(ggml_tensor_extra_gpu * extra);
 static bool ggml_sycl_is_device_vram_buffer(const ggml_tensor * t);
 // Forward declaration: check if tensor's weights are host-resident (defined after buffer context struct).
 static bool ggml_sycl_is_host_resident_weight(const ggml_tensor * src0, sycl::queue * stream);
-// SOA reorder fill context: passed to ggml_sycl_fill_reordered_host for AOS→SOA reordering.
-// Defined here (before moe_hybrid_init_once) so Phase 2 distribution can use it for
-// secondary GPU expert caching with SOA layout.
-struct ggml_sycl_reorder_fill_ctx {
-    ggml_type type;
-
-    int64_t ncols;
-    int64_t nrows;
-
-    size_t      nbytes;
-    size_t      dst_bytes;
-    layout_mode layout;
-    bool        src_is_device;
-    int         device_id;
-};
-// Forward declarations for secondary GPU expert caching.
-static sycl::event ggml_sycl_fill_reordered_host(sycl::queue & queue, void * dst, size_t dst_size,
-                                                  const void * src, size_t src_size, const void * ctx_void,
-                                                  const std::vector<sycl::event> & deps);
-static size_t ggml_sycl_layout_bytes_for_dims(ggml_type type, int64_t ncols, int64_t nrows,
-                                              layout_mode layout, int device_id);
 
 // ---------------------------------------------------------------------------
 // Gate+Up tensor pairing for fused CPU expert dispatch
@@ -4000,6 +3996,10 @@ static void ggml_sycl_moe_ids_cache_new_graph() {
 struct moe_layer_ids_cache_entry {
     std::vector<int32_t> ids_host;       // Expert IDs (copied D2H once at GATE)
     uint64_t             graph_epoch;    // Graph epoch for staleness detection
+    // Task 1E: Pre-resolved expert pointers from GATE, reused at UP/DOWN.
+    // Avoids redundant placement table lookups, cache queries, and stats tracking.
+    std::vector<void *> expert_ptrs;     // Resolved host-side pointer table (indexed by expert_id)
+    bool                ptrs_valid = false;  // Set after GATE resolves pointers
 };
 // Keyed by block-number layer_id (parsed from tensor name). Cleared each graph epoch.
 static thread_local std::unordered_map<int, moe_layer_ids_cache_entry> g_moe_layer_ids_cache;
@@ -21014,6 +21014,28 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
                     from_layer_cache = true;
                     GGML_SYCL_DEBUG("[MOE-PTR-1E] Reusing cached IDs for layer %d (%s)\n",
                                     blk_id, src0->name ? src0->name : "?");
+                    // Task 1E: If pointers were also cached at GATE, short-circuit
+                    // the entire function — skip placement table lookups, cache queries,
+                    // stats tracking, prediction, and hotset updates.
+                    if (it->second.ptrs_valid &&
+                        it->second.expert_ptrs.size() == static_cast<size_t>(n_experts)) {
+                        auto & cached_ptrs = it->second.expert_ptrs;
+                        std::copy(cached_ptrs.begin(), cached_ptrs.end(),
+                                  host_ptrs.begin());
+                        // H2D memcpy of the pointer table
+                        if (extra->moe_expert_ptrs_device[device] != nullptr) {
+                            sycl::event ev = stream->memcpy(
+                                extra->moe_expert_ptrs_device[device],
+                                host_ptrs.data(),
+                                host_ptrs.size() * sizeof(void *));
+                            if (out_event) {
+                                *out_event = ev;
+                            }
+                        }
+                        GGML_SYCL_DEBUG("[MOE-PTR-1E] Fast-path: reused cached ptrs for layer %d (%s)\n",
+                                        blk_id, src0->name ? src0->name : "?");
+                        return true;
+                    }
                 }
             }
             if (!from_layer_cache) {
@@ -21386,6 +21408,21 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
             *out_event = table_event;
         }
     }
+
+    // Task 1E: Cache resolved pointer table at GATE for UP/DOWN reuse.
+    // This eliminates redundant placement table lookups, cache queries,
+    // and stats tracking for the 2 subsequent sub-ops in this MoE block.
+    if (!need_all_experts && src0->name && strstr(src0->name, "ffn_gate")) {
+        const int blk_id = parse_layer_id_from_name(src0->name);
+        if (blk_id >= 0) {
+            auto & entry = g_moe_layer_ids_cache[blk_id];
+            entry.expert_ptrs.assign(host_ptrs.begin(), host_ptrs.end());
+            entry.ptrs_valid = true;
+            GGML_SYCL_DEBUG("[MOE-PTR-1E] Cached %zu expert ptrs for layer %d\n",
+                            host_ptrs.size(), blk_id);
+        }
+    }
+
     return true;
 }
 
