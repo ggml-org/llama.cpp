@@ -39,15 +39,11 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
 common_chat_params peg_generator::generate_parser(const common_chat_template &    tmpl,
                                                   const struct templates_params & inputs,
                                                   const autoparser &              autoparser) {
-    // Build the parser using the analysis results
-    auto parser = autoparser.build_parser(inputs);
-
     // Create the result structure
     common_chat_params data;
     data.prompt           = common_chat_template_direct_apply(tmpl, inputs);
     data.format           = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.preserved_tokens = autoparser.preserved_tokens;
-    data.parser           = parser.save();
 
     // Extract reasoning prefill from the end of the rendered prompt.
     // If the template added reasoning markers (e.g. <think> or <think></think>) at the end,
@@ -57,33 +53,52 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
         !autoparser.reasoning.end.empty()) {
         const auto & r_start = autoparser.reasoning.start;
         const auto & r_end   = autoparser.reasoning.end;
-        // Trim trailing whitespace from the prompt for suffix matching
-        auto prompt_trimmed = data.prompt;
-        while (!prompt_trimmed.empty() &&
-               (prompt_trimmed.back() == ' ' || prompt_trimmed.back() == '\n' ||
-                prompt_trimmed.back() == '\r' || prompt_trimmed.back() == '\t')) {
-            prompt_trimmed.pop_back();
-        }
-        if (!r_start.empty()) {
+
+        // Helper to trim trailing whitespace from a string
+        auto rtrim = [](std::string s) {
+            while (!s.empty() && (s.back() == ' ' || s.back() == '\n' ||
+                                  s.back() == '\r' || s.back() == '\t')) {
+                s.pop_back();
+            }
+            return s;
+        };
+
+        // Trim both the prompt and markers for suffix matching (markers may have trailing \n)
+        auto prompt_trimmed  = rtrim(data.prompt);
+        auto r_end_trimmed   = rtrim(r_end);
+        auto r_start_trimmed = rtrim(r_start);
+
+        if (!r_start_trimmed.empty()) {
             // Check for start+end at end of prompt (e.g. <think></think>)
-            if (string_ends_with(prompt_trimmed, r_end)) {
-                auto before_end = prompt_trimmed.substr(0, prompt_trimmed.size() - r_end.size());
-                while (!before_end.empty() &&
-                       (before_end.back() == ' ' || before_end.back() == '\n' ||
-                        before_end.back() == '\r' || before_end.back() == '\t')) {
-                    before_end.pop_back();
-                }
-                if (string_ends_with(before_end, r_start)) {
-                    // Prompt ends with start + whitespace + end: extract from start to end of trimmed prompt
-                    data.reasoning_prefill = prompt_trimmed.substr(before_end.size() - r_start.size());
+            if (string_ends_with(prompt_trimmed, r_end_trimmed)) {
+                auto before_end = rtrim(prompt_trimmed.substr(0, prompt_trimmed.size() - r_end_trimmed.size()));
+                if (string_ends_with(before_end, r_start_trimmed)) {
+                    // Prompt ends with start + end markers (reasoning closed).
+                    // Use the canonical markers from the analyzer to ensure whitespace
+                    // (e.g. trailing \n in </think>\n) is preserved, even if the template
+                    // rendered them without intermediate whitespace.
+                    data.reasoning_prefill = r_start + r_end;
                 }
             }
-            // Check for just start at end of prompt (e.g. <think>)
-            if (data.reasoning_prefill.empty() && string_ends_with(prompt_trimmed, r_start)) {
-                data.reasoning_prefill = r_start;
+            // Check for just start at end of prompt (e.g. <think>\n)
+            if (data.reasoning_prefill.empty() && string_ends_with(prompt_trimmed, r_start_trimmed)) {
+                // Extract from the original prompt to preserve trailing whitespace
+                auto start_pos = prompt_trimmed.size() - r_start_trimmed.size();
+                data.reasoning_prefill = data.prompt.substr(start_pos);
             }
         }
     }
+
+    fprintf(stderr, "DEBUG reasoning_prefill: '%s' (start='%s', end='%s', mode=%d, reasoning_format=%d)\n",
+            data.reasoning_prefill.c_str(),
+            autoparser.reasoning.start.c_str(),
+            autoparser.reasoning.end.c_str(),
+            (int) autoparser.reasoning.mode,
+            (int) inputs.reasoning_format);
+
+    // Build the parser using the analysis results.
+    common_peg_arena parser = autoparser.build_parser(inputs);
+    data.parser = parser.save();
 
     // Build grammar if tools are present
     bool has_tools =

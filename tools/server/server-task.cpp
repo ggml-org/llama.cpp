@@ -403,6 +403,7 @@ task_params server_task::params_from_json_cmpl(
         params.chat_parser_params.reasoning_format = reasoning_format;
         params.chat_parser_params.reasoning_in_content = params.stream && (reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
         params.chat_parser_params.reasoning_prefill = json_value(data, "reasoning_prefill", std::string());
+        params.sampling.grammar_prefill = params.chat_parser_params.reasoning_prefill;
         params.chat_parser_params.parse_tool_calls = json_value(data, "parse_tool_calls", false);
         if (data.contains("chat_parser")) {
             params.chat_parser_params.parser.load(data.at("chat_parser").get<std::string>());
@@ -469,10 +470,7 @@ task_params server_task::params_from_json_cmpl(
             const auto start_tag = json_value(data, "reasoning_budget_start_tag", std::string());
             const auto end_tag   = json_value(data, "reasoning_budget_end_tag", std::string());
             const auto message   = json_value(data, "reasoning_budget_message", std::string());
-            const bool activate_imm   = json_value(data, "reasoning_budget_activate_immediately", false);
-
             params.sampling.reasoning_budget_tokens = budget;
-            params.sampling.reasoning_budget_activate_immediately = activate_imm;
 
             if (!start_tag.empty()) {
                 params.sampling.reasoning_budget_start = common_tokenize(vocab, start_tag, false, true);
@@ -482,8 +480,8 @@ task_params server_task::params_from_json_cmpl(
                 params.sampling.reasoning_budget_forced = common_tokenize(vocab, message + end_tag, false, true);
             }
 
-            SRV_DBG("reasoning budget: tokens=%d, activate_immediately=%s, start=%zu toks, end=%zu toks, forced=%zu toks\n",
-                budget, activate_imm ? "true" : "false",
+            SRV_DBG("reasoning budget: tokens=%d, grammar_prefill='%s', start=%zu toks, end=%zu toks, forced=%zu toks\n",
+                budget, params.sampling.grammar_prefill.c_str(),
                 params.sampling.reasoning_budget_start.size(),
                 params.sampling.reasoning_budget_end.size(),
                 params.sampling.reasoning_budget_forced.size());
