@@ -3993,6 +3993,344 @@ struct moe_fusion_state {
 
 static thread_local moe_fusion_state g_moe_fusion;
 
+// ---------------------------------------------------------------------------
+// MoE Per-Phase Profiling (GGML_SYCL_MOE_PROFILE=1)
+// ---------------------------------------------------------------------------
+// Measures exact per-phase timings in the 120B MoE token generation path.
+// Zero overhead when the env var is not set.
+
+static bool g_moe_profile_enabled = false;
+static bool g_moe_profile_initialized = false;
+
+static inline void moe_profile_init() {
+    if (g_moe_profile_initialized) return;
+    g_moe_profile_initialized = true;
+    const char * env = getenv("GGML_SYCL_MOE_PROFILE");
+    g_moe_profile_enabled = (env && std::atoi(env) != 0);
+    if (g_moe_profile_enabled) {
+        fprintf(stderr, "[MOE-PROFILE] Enabled: %d warmup + %d profiled tokens\n", 2, 10);
+    }
+}
+
+struct moe_profile_layer {
+    double ids_d2h_us      = 0;  // IDs D2H copy time
+    double routing_us      = 0;  // Expert routing/partitioning
+    double cpu_compute_us  = 0;  // CPU expert compute (gate+up+silu+down)
+    double gpu_compute_us  = 0;  // GPU expert compute (secondary dispatch)
+    double scatter_us      = 0;  // H2D scatter of results
+    double layer_total_us  = 0;  // Total MoE layer time (entry to exit)
+    int    n_cpu_experts   = 0;  // Number of CPU-dispatched experts
+    int    n_gpu_experts   = 0;  // Number of GPU-dispatched experts
+    int    n_calls         = 0;  // Number of MUL_MAT_ID calls in this layer (gate/up/down)
+};
+
+struct moe_profile_token {
+    double token_start_us   = 0;
+    double token_total_us   = 0;
+    double moe_total_us     = 0;  // Sum of all MoE layer times
+    double attention_us     = 0;  // Time between MoE layers (non-MoE ops)
+    double other_us         = 0;  // Everything else (norms, embed, etc.)
+    int    n_moe_layers     = 0;
+    std::vector<moe_profile_layer> layers;
+};
+
+struct moe_profile_state {
+    using hrc = std::chrono::high_resolution_clock;
+
+    // Per-token state
+    hrc::time_point token_start;
+    hrc::time_point last_moe_exit;       // When the last MoE op finished
+    hrc::time_point moe_entry;           // Current MoE layer entry
+    bool            in_moe_layer = false;
+    int             current_layer = -1;
+    double          non_moe_accum_us = 0; // Accumulated non-MoE time
+
+    // Current layer accumulator (across gate/up/down calls)
+    moe_profile_layer cur_layer;
+
+    // Per-MUL_MAT_ID sub-phase timestamps
+    hrc::time_point op_start;
+    hrc::time_point ids_done;
+    hrc::time_point routing_done;
+    hrc::time_point compute_done;
+    hrc::time_point scatter_done;
+    int             op_n_cpu = 0;
+    int             op_n_gpu = 0;
+
+    // Collected tokens
+    std::vector<moe_profile_token> tokens;
+    int n_tokens_seen = 0;
+    int n_warmup = 2;       // Skip first N tokens
+    int n_profile = 10;     // Profile N tokens after warmup
+    bool token_active = false;
+
+    // Helper
+    static double us(hrc::time_point a, hrc::time_point b) {
+        return std::chrono::duration<double, std::micro>(b - a).count();
+    }
+
+    void begin_token() {
+        n_tokens_seen++;
+        if (n_tokens_seen <= n_warmup || n_tokens_seen > n_warmup + n_profile) {
+            token_active = false;
+            return;
+        }
+        token_active = true;
+        token_start = hrc::now();
+        last_moe_exit = token_start;
+        in_moe_layer = false;
+        current_layer = -1;
+        non_moe_accum_us = 0;
+        cur_layer = {};
+        // Push a new token entry for this token
+        tokens.emplace_back();
+        tokens.back().token_start_us = 0;
+    }
+
+    void end_token() {
+        if (!token_active) return;
+        auto now = hrc::now();
+
+        // Finalize current layer if still open
+        if (in_moe_layer) {
+            cur_layer.layer_total_us = us(moe_entry, now);
+            if (!tokens.empty()) {
+                moe_profile_token & tok = tokens.back();
+                tok.layers.push_back(cur_layer);
+                tok.moe_total_us += cur_layer.layer_total_us;
+            }
+            in_moe_layer = false;
+        }
+
+        if (tokens.empty()) {
+            // No MoE ops seen — create a minimal entry
+            tokens.emplace_back();
+        }
+        moe_profile_token & tok = tokens.back();
+        tok.token_total_us = us(token_start, now);
+
+        // Non-MoE time = everything outside MoE layers (attention, norms, embed, etc.)
+        tok.attention_us = tok.token_total_us - tok.moe_total_us;
+        tok.other_us = 0;  // Not splitting further
+        tok.n_moe_layers = static_cast<int>(tok.layers.size());
+
+        token_active = false;
+
+        // Print report when done collecting
+        if (static_cast<int>(tokens.size()) >= n_profile) {
+            print_report();
+        }
+    }
+
+    // Called at MoE MUL_MAT_ID entry
+    void moe_op_begin(int layer_id) {
+        if (!token_active) return;
+
+        auto now = hrc::now();
+
+        // If this is a new layer or first MoE call in this token
+        if (!in_moe_layer || layer_id != current_layer) {
+            // Finalize previous layer if any
+            if (in_moe_layer) {
+                cur_layer.layer_total_us = us(moe_entry, now);
+                moe_profile_token & tok = tokens.back();
+                tok.layers.push_back(cur_layer);
+                tok.moe_total_us += cur_layer.layer_total_us;
+
+                // Time between last MoE op exit and NOW = non-MoE time (attention/norms)
+                non_moe_accum_us += us(last_moe_exit, now);
+            } else {
+                // First MoE op in token — accumulate pre-MoE time
+                non_moe_accum_us += us(last_moe_exit, now);
+            }
+
+            // Start new layer
+            cur_layer = {};
+            current_layer = layer_id;
+            in_moe_layer = true;
+            moe_entry = now;
+        }
+
+        op_start     = hrc::now();
+        ids_done     = op_start;  // Default: no IDs D2H
+        routing_done = op_start;  // Default: no routing
+        compute_done = op_start;  // Default: no compute
+        op_n_cpu = 0;
+        op_n_gpu = 0;
+    }
+
+    // Sub-phase timestamps within a MUL_MAT_ID call
+    void moe_ids_done()     { if (token_active) ids_done = hrc::now(); }
+    void moe_routing_done() { if (token_active) routing_done = hrc::now(); }
+    void moe_compute_done(int n_cpu, int n_gpu) {
+        if (!token_active) return;
+        compute_done = hrc::now();
+        op_n_cpu = n_cpu;
+        op_n_gpu = n_gpu;
+    }
+    void moe_scatter_done() { if (token_active) scatter_done = hrc::now(); }
+
+    // Called at MoE MUL_MAT_ID exit
+    void moe_op_end() {
+        if (!token_active) return;
+        auto now = hrc::now();
+
+        // Default unset timestamps to op_start to avoid garbage values
+        auto ids_t     = (ids_done     > op_start) ? ids_done     : op_start;
+        auto routing_t = (routing_done > op_start) ? routing_done : ids_t;
+        auto compute_t = (compute_done > op_start) ? compute_done : routing_t;
+
+        cur_layer.ids_d2h_us     += us(op_start, ids_t);
+        cur_layer.routing_us     += us(ids_t, routing_t);
+        cur_layer.cpu_compute_us += us(routing_t, compute_t);
+        cur_layer.scatter_us     += us(compute_t, now);
+        cur_layer.n_cpu_experts  += op_n_cpu;
+        cur_layer.n_gpu_experts  += op_n_gpu;
+        cur_layer.n_calls++;
+
+        last_moe_exit = now;
+    }
+
+    // Called when fusion completes a full gate+up+silu+down cycle
+    void moe_fusion_phase(double ids_us, double routing_us_val, double compute_us_val,
+                          double scatter_us_val, int n_cpu, int n_gpu) {
+        if (!token_active) return;
+        cur_layer.ids_d2h_us     += ids_us;
+        cur_layer.routing_us     += routing_us_val;
+        cur_layer.cpu_compute_us += compute_us_val;
+        cur_layer.scatter_us     += scatter_us_val;
+        cur_layer.n_cpu_experts  += n_cpu;
+        cur_layer.n_gpu_experts  += n_gpu;
+        cur_layer.n_calls++;
+        last_moe_exit = hrc::now();
+    }
+
+    void print_report() {
+        if (tokens.empty()) return;
+
+        // Print per-token summary table
+        fprintf(stderr, "\n=== MoE Per-Phase Profile (%d tokens, %d warmup skipped) ===\n",
+                static_cast<int>(tokens.size()), n_warmup);
+
+        // Compute averages across all profiled tokens
+        double avg_ids = 0, avg_routing = 0, avg_cpu = 0, avg_gpu = 0;
+        double avg_scatter = 0, avg_attn = 0, avg_other = 0, avg_total = 0;
+        double avg_moe = 0;
+        int    avg_layers = 0, avg_cpu_experts = 0, avg_gpu_experts = 0;
+
+        for (auto & tok : tokens) {
+            double tok_ids = 0, tok_routing = 0, tok_cpu = 0, tok_gpu = 0, tok_scatter = 0;
+            int    tok_cpu_exp = 0, tok_gpu_exp = 0;
+            for (auto & lay : tok.layers) {
+                tok_ids     += lay.ids_d2h_us;
+                tok_routing += lay.routing_us;
+                tok_cpu     += lay.cpu_compute_us;
+                tok_gpu     += lay.gpu_compute_us;
+                tok_scatter += lay.scatter_us;
+                tok_cpu_exp += lay.n_cpu_experts;
+                tok_gpu_exp += lay.n_gpu_experts;
+            }
+            avg_ids     += tok_ids;
+            avg_routing += tok_routing;
+            avg_cpu     += tok_cpu;
+            avg_gpu     += tok_gpu;
+            avg_scatter += tok_scatter;
+            avg_attn    += tok.attention_us;
+            avg_other   += tok.other_us;
+            avg_total   += tok.token_total_us;
+            avg_moe     += tok.moe_total_us;
+            avg_layers  += tok.n_moe_layers;
+            avg_cpu_experts += tok_cpu_exp;
+            avg_gpu_experts += tok_gpu_exp;
+        }
+
+        const int nt = static_cast<int>(tokens.size());
+        avg_ids     /= nt;  avg_routing /= nt;  avg_cpu     /= nt;
+        avg_gpu     /= nt;  avg_scatter /= nt;  avg_attn    /= nt;
+        avg_other   /= nt;  avg_total   /= nt;  avg_moe     /= nt;
+
+        // Print one detailed token first (token index 2, or last if fewer)
+        int detail_idx = std::min(2, nt - 1);
+        auto & dtok = tokens[detail_idx];
+        fprintf(stderr, "\n--- Detailed breakdown: profiled token #%d (%d MoE layers) ---\n",
+                detail_idx + 1, dtok.n_moe_layers);
+        fprintf(stderr, "%-25s | %10s | %13s | %8s\n",
+                "Phase", "Total(ms)", "Per-Layer(ms)", "% Token");
+        fprintf(stderr, "%-25s-+-%10s-+-%13s-+-%8s\n",
+                "-------------------------", "----------", "-------------", "--------");
+
+        auto print_row = [&](const char * name, double total_us, int n_layers_d) {
+            double pct = dtok.token_total_us > 0 ? 100.0 * total_us / dtok.token_total_us : 0;
+            double per_layer = n_layers_d > 0 ? total_us / 1000.0 / n_layers_d : 0;
+            fprintf(stderr, "%-25s | %10.1f | %13.2f | %7.1f%%\n",
+                    name, total_us / 1000.0, per_layer, pct);
+        };
+
+        double dtok_ids = 0, dtok_routing = 0, dtok_cpu = 0, dtok_gpu = 0, dtok_scatter = 0;
+        int dtok_cpu_exp = 0, dtok_gpu_exp = 0;
+        for (auto & lay : dtok.layers) {
+            dtok_ids     += lay.ids_d2h_us;
+            dtok_routing += lay.routing_us;
+            dtok_cpu     += lay.cpu_compute_us;
+            dtok_gpu     += lay.gpu_compute_us;
+            dtok_scatter += lay.scatter_us;
+            dtok_cpu_exp += lay.n_cpu_experts;
+            dtok_gpu_exp += lay.n_gpu_experts;
+        }
+
+        print_row("MoE total",            dtok.moe_total_us, dtok.n_moe_layers);
+        // Sub-phase breakdown (only when instrumented, i.e., non-zero)
+        if (dtok_ids > 0 || dtok_routing > 0 || dtok_cpu > 0 || dtok_gpu > 0) {
+            print_row("  IDs D2H",           dtok_ids,     dtok.n_moe_layers);
+            print_row("  Expert routing",     dtok_routing, dtok.n_moe_layers);
+            print_row("  CPU expert compute", dtok_cpu,     dtok.n_moe_layers);
+            print_row("  GPU expert compute", dtok_gpu,     dtok.n_moe_layers);
+            print_row("  Scatter H2D",        dtok_scatter, dtok.n_moe_layers);
+        }
+        print_row("Non-MoE (attn+norms)",  dtok.attention_us, dtok.n_moe_layers);
+        fprintf(stderr, "%-25s-+-%10s-+-%13s-+-%8s\n",
+                "-------------------------", "----------", "-------------", "--------");
+        fprintf(stderr, "%-25s | %10.1f |               | %7.1f%%\n",
+                "Token total", dtok.token_total_us / 1000.0, 100.0);
+        fprintf(stderr, "  Experts: %d CPU, %d GPU | MoE layers: %d\n",
+                dtok_cpu_exp, dtok_gpu_exp, dtok.n_moe_layers);
+
+        // Print averages
+        fprintf(stderr, "\n--- Averages across %d profiled tokens ---\n", nt);
+        fprintf(stderr, "%-25s | %10s | %13s | %8s\n",
+                "Phase", "Total(ms)", "Per-Layer(ms)", "% Token");
+        fprintf(stderr, "%-25s-+-%10s-+-%13s-+-%8s\n",
+                "-------------------------", "----------", "-------------", "--------");
+
+        int avg_nl = avg_layers / nt;
+        auto print_avg = [&](const char * name, double total_us) {
+            double pct = avg_total > 0 ? 100.0 * total_us / avg_total : 0;
+            double per_layer = avg_nl > 0 ? total_us / 1000.0 / avg_nl : 0;
+            fprintf(stderr, "%-25s | %10.1f | %13.2f | %7.1f%%\n",
+                    name, total_us / 1000.0, per_layer, pct);
+        };
+
+        print_avg("MoE total",            avg_moe);
+        if (avg_ids > 0 || avg_routing > 0 || avg_cpu > 0 || avg_gpu > 0) {
+            print_avg("  IDs D2H",           avg_ids);
+            print_avg("  Expert routing",     avg_routing);
+            print_avg("  CPU expert compute", avg_cpu);
+            print_avg("  GPU expert compute", avg_gpu);
+            print_avg("  Scatter H2D",        avg_scatter);
+        }
+        print_avg("Non-MoE (attn+norms)",  avg_attn);
+        fprintf(stderr, "%-25s-+-%10s-+-%13s-+-%8s\n",
+                "-------------------------", "----------", "-------------", "--------");
+        fprintf(stderr, "%-25s | %10.1f |               | %7.1f%%\n",
+                "Token total", avg_total / 1000.0, 100.0);
+        fprintf(stderr, "  Avg experts/token: %d CPU, %d GPU | MoE layers: %d\n",
+                avg_cpu_experts / nt, avg_gpu_experts / nt, avg_nl);
+        fprintf(stderr, "  Token rate: %.2f tok/s\n\n", avg_total > 0 ? 1e6 / avg_total : 0);
+    }
+};
+
+static thread_local moe_profile_state g_moe_profile;
+
 // MoE activation variant detected from graph structure.
 // Set once during first graph_compute, used by fusion to select correct activation.
 static std::atomic<int> g_moe_fused_act_variant{ -1 };  // -1 = not yet detected
@@ -26228,6 +26566,17 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
 
+    // MoE profiling: instrument entry with layer ID from tensor name
+    if (g_moe_profile_enabled) {
+        const int prof_layer = parse_layer_id_from_name(src0->name ? src0->name : "");
+        g_moe_profile.moe_op_begin(prof_layer);
+    }
+    // RAII guard to call moe_op_end at ALL exit points
+    struct moe_profile_guard_t {
+        bool active;
+        ~moe_profile_guard_t() { if (active) g_moe_profile.moe_op_end(); }
+    } moe_profile_guard_{ g_moe_profile_enabled };
+
     static int call_count = 0;
     if (call_count < 3) {
         GGML_SYCL_DEBUG("[XMX-DEBUG] ggml_sycl_mul_mat_id call #%d: src0->type=%d (%s)\n", call_count, src0->type,
@@ -26401,8 +26750,14 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                             }
                         }
 
+                        if (g_moe_profile_enabled) { g_moe_profile.moe_routing_done(); }
+
                         if (n_cpu_f > 0) {
                             ggml_sycl_cpu_expert_fused_gate_up_silu_batched(ft, static_cast<int>(n_cpu_f));
+                        }
+
+                        if (g_moe_profile_enabled) {
+                            g_moe_profile.moe_compute_done(static_cast<int>(n_cpu_f), 0);
                         }
 
                         // Dispatch secondary GPU experts for GATE sub-tensor
@@ -26469,6 +26824,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         entry.wait();
                         ids_data_f       = entry.host_ids.data();
                     }
+
+                    if (g_moe_profile_enabled) { g_moe_profile.moe_ids_done(); }
 
                     // Resolve activation
                     const float * act_f = nullptr;
@@ -26567,6 +26924,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     // ids_data still contains ALL expert IDs; cpu_indices/sec_indices index into it.
                     g_moe_fusion.n_ids = g_moe_fusion.cpu_indices.size();
 
+                    if (g_moe_profile_enabled) { g_moe_profile.moe_routing_done(); }
+
                     // Dispatch secondary GPU experts for GATE computation.
                     // Results scatter to dst slots so downstream SiLU/multiply
                     // ops see correct values for secondary experts.
@@ -26652,6 +27011,10 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                             }
                             ggml_sycl_cpu_expert_mul_mat_batched(gt, static_cast<int>(n_cpu_gate));
 
+                            if (g_moe_profile_enabled) {
+                                g_moe_profile.moe_compute_done(static_cast<int>(n_cpu_gate), 0);
+                            }
+
                             // Scatter gate results H2D
                             char * dst_d_gate = static_cast<char *>(ggml_sycl_get_data_ptr(dst, ctx.device));
                             std::vector<sycl::event> scatter_events;
@@ -26694,6 +27057,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         entry.wait();
                         ids_data_f       = entry.host_ids.data();
                     }
+
+                    if (g_moe_profile_enabled) { g_moe_profile.moe_ids_done(); }
 
                     // Resolve activation
                     const float * act_f = nullptr;
@@ -26791,6 +27156,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
                     g_moe_fusion.n_ids = g_moe_fusion.cpu_indices.size();
 
+                    if (g_moe_profile_enabled) { g_moe_profile.moe_routing_done(); }
+
                     // Dispatch secondary GPU experts for UP computation
                     if (!g_moe_fusion.sec_indices.empty()) {
                         const int n_gpu_devs_up_s = ggml_sycl_info().total_gpu_count;
@@ -26883,8 +27250,14 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         }
                     }
 
+                    if (g_moe_profile_enabled) { g_moe_profile.moe_routing_done(); }
+
                     if (n_cpu_f > 0) {
                         ggml_sycl_cpu_expert_fused_gate_up_silu_batched(ft, static_cast<int>(n_cpu_f));
+                    }
+
+                    if (g_moe_profile_enabled) {
+                        g_moe_profile.moe_compute_done(static_cast<int>(n_cpu_f), 0);
                     }
 
                     // Dispatch secondary GPU experts for the UP sub-tensor
@@ -26991,8 +27364,14 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         dt[fi].N           = static_cast<int>(N_d);
                     }
 
+                    if (g_moe_profile_enabled) { g_moe_profile.moe_routing_done(); }
+
                     if (n_cpu_d > 0) {
                         ggml_sycl_cpu_expert_mul_mat_batched(dt, static_cast<int>(n_cpu_d));
+                    }
+
+                    if (g_moe_profile_enabled) {
+                        g_moe_profile.moe_compute_done(static_cast<int>(n_cpu_d), 0);
                     }
 
                     // Scatter down results H2D — use original ci indices for correct dst slots
@@ -27124,6 +27503,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             }
 
             if (prof_enabled) { t1 = hrc::now(); }
+            if (g_moe_profile_enabled) { g_moe_profile.moe_ids_done(); }
 
             // Disable graphs for this op (host sync is incompatible)
             ctx.moe_graphs_disabled_once = true;
@@ -27187,6 +27567,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             }
 
             if (prof_enabled) { t2 = hrc::now(); }
+            if (g_moe_profile_enabled) { g_moe_profile.moe_routing_done(); }
 
             // --- Build tasks and compute inline ---
             // Use pinned host output buffer for direct DMA scatter to device.
@@ -27672,6 +28053,10 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     if (!ggml_sycl_copy_ids_to_host(ctx, ids, ids_host)) {
         GGML_LOG_ERROR("[MoE] Failed to copy ids to host for %s\n", src0->name ? src0->name : "?");
         return;
+    }
+    // MoE profiling: IDs D2H complete
+    if (g_moe_profile_enabled) {
+        g_moe_profile.moe_ids_done();
     }
     // Debug: print expert IDs and input values
     if (g_moe_debug_enabled) {
@@ -28331,6 +28716,11 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
                 }
 
+                // MoE profiling: routing/placement complete
+                if (g_moe_profile_enabled) {
+                    g_moe_profile.moe_routing_done();
+                }
+
                 // --- MoE dispatch stats for CPU-TG path ---
                 if (ggml_sycl::MoeDispatchStats::enabled()) {
                     auto & stats = ggml_sycl::get_moe_dispatch_stats(ctx.device);
@@ -28694,6 +29084,13 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             // Placed AFTER GPU0 dispatch: CPU tasks don't compete for GPU queues,
             // and the shared activation is already on host from the event wait.
             dispatch_cpu_and_scatter(cpu_entries);
+
+            // MoE profiling: compute complete (GPU0 + CPU dispatch done)
+            if (g_moe_profile_enabled) {
+                g_moe_profile.moe_compute_done(
+                    static_cast<int>(cpu_entries.size()),
+                    static_cast<int>(gpu_entries.size()));
+            }
 
             // Secondary scatter deferred to selective flush at consumption points.
             // The flush_pending_secondary_scatter_if_consumed() calls in the
@@ -31213,6 +31610,12 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     GGML_SYCL_PROFILE_SCOPE_GRAPH("graph_compute");
     init_sycl_tg_trace();
 
+    // MoE per-phase profiling: initialize once, begin token timing
+    moe_profile_init();
+    if (g_moe_profile_enabled) {
+        g_moe_profile.begin_token();
+    }
+
     // Safety net: drain any leftover merge events from a prior graph.
     // Should be empty if the previous graph ended cleanly, but guarantees
     // no stale events leak across graph boundaries.
@@ -32681,6 +33084,11 @@ gpu_dispatch:
         pipe.reset_graph();
     }
 #endif
+
+    // MoE per-phase profiling: end token timing
+    if (g_moe_profile_enabled) {
+        g_moe_profile.end_token();
+    }
 
     // DEBUG: Check L31 weight at END of graph compute (disabled - TP working correctly)
     static int end_pass_dbg = 0;
