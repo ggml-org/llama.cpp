@@ -35,7 +35,7 @@
 #define N_R0_Q4_K 2
 #define N_SG_Q4_K 2
 
-#define N_R0_Q5_K 2
+#define N_R0_Q5_K 1
 #define N_SG_Q5_K 2
 
 #define N_R0_Q6_K 2
