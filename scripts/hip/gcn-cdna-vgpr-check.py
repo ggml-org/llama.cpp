@@ -16,7 +16,7 @@ def parse_log_file(filepath):
             # Find all function entries with VGPR usage including location
             pattern = r'([^:]+:\d+):.*?Function Name: (\S+).*?VGPRs: (\d+).*?VGPRs Spill: (\d+)'
             matches = re.findall(pattern, content, re.DOTALL)
-            
+
             for location, func_name, vgprs, spill in matches:
                 functions[func_name]['vgprs'] = int(vgprs)
                 functions[func_name]['spill'] = int(spill)
