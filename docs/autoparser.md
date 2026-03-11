@@ -50,7 +50,13 @@ All structs are defined in [common/chat-auto-parser.h](common/chat-auto-parser.h
 | `TAG_BASED`     | Tag-based: `<think>...</think>` (start can be empty for delimiter-style formats)  |
 | `TOOLS_ONLY`    | Reasoning only appears in tool call responses, not plain content                  |
 
-**Reasoning Prefill**: When a template adds reasoning markers (e.g., `<think>` or `<think></think>`) at the end of the prompt, these are extracted as `reasoning_prefill` and prepended to the model output before parsing. This allows the parser to always use an optional TAG_BASED pattern while correctly handling templates that force thinking mode open or closed. Whitespace-only reasoning content (from `<think></think>` prefill) is automatically discarded.
+**Reasoning Prefill**: Extracted in `generate_parser()` by inspecting the rendered prompt suffix. Three cases:
+
+1. **Start+end at prompt end** (e.g. `<think></think>`): prefill = canonical `start + end` markers (preserving the analyzer's whitespace, e.g. trailing `\n`). The parser sees reasoning as opened and immediately closed.
+2. **Just start at prompt end** (e.g. `<think>\n`): prefill = extracted from the prompt to preserve trailing whitespace. The parser sees reasoning as already opened.
+3. **Start marker in prompt suffix but not at end** (e.g. Apriel's `<|begin_assistant|>` followed by template boilerplate): the start marker is a template artifact falsely detected by the diff analyzer. It is cleared from the parser so reasoning uses delimiter-style (empty start). The distinction from case 2 vs a genuinely model-generated start marker (e.g. `<think>` for Granite) is whether the marker appears in the prompt suffix at all.
+
+The prefill is prepended to model output before PEG parsing, fed to the grammar sampler via `llama_sampler_accept`, and used to determine the reasoning budget sampler's initial state (COUNTING if prefill starts with the reasoning start tokens, IDLE otherwise).
 
 **`content_mode`**: How the template wraps assistant content.
 
@@ -361,7 +367,7 @@ Each analyzer struct (`analyze_reasoning`, `analyze_content`, `analyze_tools`) i
 | `TAG_BASED` or `TOOLS_ONLY` (non-empty start) | `optional(start + reasoning(until(end)) + end)`          |
 | `TAG_BASED` or `TOOLS_ONLY` (empty start)     | `optional(reasoning(until(end)) + end)` — delimiter-style|
 
-Note: Templates that add reasoning markers to the prompt (e.g., `<think>`) have these extracted as `reasoning_prefill` and prepended to model output before parsing. The parser always uses the optional TAG_BASED pattern.
+Note: The start marker may be empty either because the analyzer detected delimiter-style reasoning, or because `generate_parser()` cleared a template artifact start marker (see Reasoning Prefill above). The reasoning prefill is prepended to model output before parsing.
 
 #### Content Parser (`analyze_content::build_parser`)
 
@@ -517,7 +523,7 @@ To support a new template format:
 
 ## Edge Cases and Quirks
 
-1. **Reasoning Prefill**: When `enable_thinking=true` and the model prompt ends with reasoning markers (e.g., `<think>` or `<think></think>`), these are extracted as `reasoning_prefill` and prepended to model output before parsing. The parser always uses optional TAG_BASED reasoning, so it handles both thinking and non-thinking outputs dynamically. Whitespace-only reasoning content (from closed prefill like `<think></think>`) is discarded.
+1. **Reasoning Prefill**: See the `reasoning_mode` enum section above for the full description. Key detail: template artifact detection (case 3) checks the last 500 characters of the rendered prompt for the start marker. If found but not at the very end, the start marker is cleared from the parser.
 2. **Per-Call vs Per-Section Markers**: Some templates wrap each tool call individually (`per_call_start/end`); others wrap the entire section (`section_start/end`). T2 (`check_per_call_markers()`) disambiguates by checking if the second call in a two-call output starts with the section marker.
 3. **Python Dict Format**: The Seed template family uses single-quoted JSON (`'key': 'value'`). The `uses_python_dicts` flag causes the PEG builder to register a flexible `json-string` rule accepting both quote styles before any JSON rules are built.
 4. **Tag Boundary Fixing**: `calculate_diff_split()` iteratively adjusts prefix/suffix boundaries to avoid splitting `<tag>` or `[marker]` tokens, ensuring clean extraction.
