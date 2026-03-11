@@ -126,7 +126,7 @@ def main():
         total_vgprs = data['vgprs'] + data['spill']
         if total_vgprs > 256 and func_name in ignored and func_name not in printed_ignored:
             location = data.get('location', log_file)
-            print(f"{location}: {func_name} - Total VGPRs: {total_vgprs} ({data['vgprs']} + {data['spill']}) [IGNORED]")
+            print(f"{location}: {func_name} - Total VGPRs: {total_vgprs} ({data['vgprs']} + {data['spill']}) [IGNORED]") # noqa: NP100
             printed_ignored.add(func_name)
 
     # Then print new functions with issues in red
