@@ -571,6 +571,55 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
 
     test({
         SUCCESS,
+        "array with empty items",
+        R"""({
+            "type": "array",
+            "items": {}
+        })""",
+        R"""(
+            array ::= "[" space ( value ("," space value)* )? "]" space
+            boolean ::= ("true" | "false") space
+            char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+            decimal-part ::= [0-9]{1,16}
+            integral-part ::= [0] | [1-9] [0-9]{0,15}
+            item ::= object
+            null ::= "null" space
+            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
+            object ::= "{" space ( string ":" space value ("," space string ":" space value)* )? "}" space
+            root ::= "[" space (item ("," space item)*)? "]" space
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            string ::= "\"" char* "\"" space
+            value ::= object | array | string | number | boolean | null
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "array with empty items and prefixItems",
+        R"""({
+            "type": "array",
+            "items": {},
+            "prefixItems": { "type": "string" }
+        })""",
+        R"""(
+            array ::= "[" space ( value ("," space value)* )? "]" space
+            boolean ::= ("true" | "false") space
+            char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+            decimal-part ::= [0-9]{1,16}
+            integral-part ::= [0] | [1-9] [0-9]{0,15}
+            item ::= object
+            null ::= "null" space
+            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
+            object ::= "{" space ( string ":" space value ("," space string ":" space value)* )? "}" space
+            root ::= "[" space (item ("," space item)*)? "]" space
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            string ::= "\"" char* "\"" space
+            value ::= object | array | string | number | boolean | null
+        )"""
+    });
+
+    test({
+        SUCCESS,
         "number",
         R"""({
             "type": "number"

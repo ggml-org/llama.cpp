@@ -213,6 +213,8 @@ struct common_chat_params {
     bool                                grammar_lazy         = false;
     bool                                thinking_forced_open = false;
     bool                                supports_thinking    = false;
+    std::string                         thinking_start_tag;  // e.g., "<think>"
+    std::string                         thinking_end_tag;    // e.g., "</think>"
     std::vector<common_grammar_trigger> grammar_triggers;
     std::vector<std::string>            preserved_tokens;
     std::vector<std::string>            additional_stops;

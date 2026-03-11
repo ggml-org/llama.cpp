@@ -134,6 +134,15 @@ __global__ void gated_delta_net_cuda(const float * q,
     }
 }
 
+static size_t calculate_smem(const int sv, int cc)
+{
+    size_t smem = 0;
+    if ((GGML_CUDA_CC_IS_AMD(cc) && !GGML_CUDA_CC_IS_RDNA3(cc) && !GGML_CUDA_CC_IS_RDNA4(cc)) || GGML_CUDA_CC_IS_MTHREADS(cc)) {
+        smem = sv * sv * sizeof(float);
+    }
+    return smem;
+}
+
 template <bool KDA>
 static void launch_gated_delta_net(
         const float * q_d, const float * k_d, const float * v_d,
@@ -154,6 +163,8 @@ static void launch_gated_delta_net(
     const uint3 neqk1_magic = init_fastdiv_values(neqk1);
     const uint3 rq3_magic   = init_fastdiv_values(rq3);
 
+    int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+
     switch (S_v) {
         case 16:
             gated_delta_net_cuda<16, KDA><<<grid_dims, block_dims, 0, stream>>>(
@@ -167,18 +178,24 @@ static void launch_gated_delta_net(
                 n_tokens, n_seqs, sq1, sq2, sq3, sv1, sv2, sv3,
                 sb1, sb2, sb3, neqk1_magic, rq3_magic, scale);
             break;
-        case 64:
-            gated_delta_net_cuda<64, KDA><<<grid_dims, block_dims, 0, stream>>>(
+        case 64: {
+            constexpr int sv = 64;
+            size_t smem = calculate_smem(sv, cc);
+            gated_delta_net_cuda<sv, KDA><<<grid_dims, block_dims, smem, stream>>>(
                 q_d, k_d, v_d, g_d, b_d, s_d, dst_d, H,
                 n_tokens, n_seqs, sq1, sq2, sq3, sv1, sv2, sv3,
                 sb1, sb2, sb3, neqk1_magic, rq3_magic, scale);
             break;
-        case 128:
-            gated_delta_net_cuda<128, KDA><<<grid_dims, block_dims, 0, stream>>>(
+        }
+        case 128: {
+            constexpr int sv = 128;
+            size_t smem = calculate_smem(sv, cc);
+            gated_delta_net_cuda<sv, KDA><<<grid_dims, block_dims, smem, stream>>>(
                 q_d, k_d, v_d, g_d, b_d, s_d, dst_d, H,
                 n_tokens, n_seqs, sq1, sq2, sq3, sv1, sv2, sv3,
                 sb1, sb2, sb3, neqk1_magic, rq3_magic, scale);
             break;
+        }
         default:
             GGML_ABORT("fatal error");
             break;
