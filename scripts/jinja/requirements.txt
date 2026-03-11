@@ -1,2 +1,0 @@
-PySide6
-jinja2
