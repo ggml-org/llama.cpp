@@ -27931,6 +27931,165 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 n_tasks++;
             }
 
+            // ---------------------------------------------------------------
+            // GPU MMVQ Probe: measure real GPU dispatch overhead for MXFP4
+            // experts by force-dispatching a subset through mmvq_moe_batched_dispatch.
+            // Output is discarded (CPU path produces correct results).
+            // Only active when GGML_SYCL_MOE_PROFILE=1 (auto) or GGML_SYCL_MOE_GPU_PROBE=N.
+            // ---------------------------------------------------------------
+            {
+                static std::atomic<int> s_moe_gpu_probe_count{-1};
+                {
+                    int probe_n = s_moe_gpu_probe_count.load(std::memory_order_acquire);
+                    if (probe_n < 0) {
+                        const char * env = getenv("GGML_SYCL_MOE_GPU_PROBE");
+                        int new_val = env ? std::atoi(env) : 0;
+                        if (new_val == 0 && g_moe_profile_enabled) new_val = 8;
+                        s_moe_gpu_probe_count.compare_exchange_strong(probe_n, new_val,
+                            std::memory_order_release, std::memory_order_acquire);
+                    }
+                }
+                const int n_gpu_probe = s_moe_gpu_probe_count.load(std::memory_order_acquire);
+
+                if (n_gpu_probe > 0 && n_tasks > 0 && src0->type == GGML_TYPE_MXFP4) {
+                    using hrc_p = std::chrono::high_resolution_clock;
+                    auto * probe_src0_extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
+
+                    // Persistent probe buffer (one expert)
+                    static thread_local void * s_probe_dev = nullptr;
+                    static thread_local size_t s_probe_sz  = 0;
+                    const size_t expert_bytes = nb02;
+
+                    if (!s_probe_dev || s_probe_sz < expert_bytes) {
+                        if (s_probe_dev) sycl::free(s_probe_dev, *stream);
+                        s_probe_dev = sycl::malloc_device(expert_bytes, *stream);
+                        s_probe_sz  = expert_bytes;
+                        if (g_moe_profile_enabled) {
+                            fprintf(stderr, "[MOE-PROBE] Alloc probe buf: %zu bytes (%p), "
+                                    "layout=AOS, type=%d, K=%lld, N=%lld\n",
+                                    expert_bytes, s_probe_dev,
+                                    (int) src0->type,
+                                    (long long) K, (long long) N);
+                        }
+                    }
+
+                    if (s_probe_dev && probe_src0_extra) {
+                        const int n_probe = std::min(n_gpu_probe, n_tasks);
+
+                        // Copy first probe expert's weights to device
+                        auto t_h2d_0 = hrc_p::now();
+                        stream->memcpy(s_probe_dev, tasks_ptr[0].weight_host,
+                                       expert_bytes).wait();
+                        auto t_h2d_1 = hrc_p::now();
+
+                        // Build expert IDs and slot arrays for batched dispatch
+                        std::vector<int32_t> probe_eids(n_probe);
+                        std::vector<int64_t> probe_iid1s(n_probe);
+                        std::vector<int64_t> probe_ids_arr(n_probe);
+                        for (int pi = 0; pi < n_probe; pi++) {
+                            probe_eids[pi]    = ids_data[pi];
+                            probe_iid1s[pi]   = static_cast<int64_t>(pi / n_ids_f);
+                            probe_ids_arr[pi] = static_cast<int64_t>(pi);
+                        }
+
+                        // Ensure pointer table: all experts -> probe buffer
+                        ggml_sycl_ensure_moe_ptr_table(probe_src0_extra, ctx.device,
+                            static_cast<int>(n_as), *stream);
+                        auto & host_ptrs = probe_src0_extra->moe_expert_ptrs_host[ctx.device];
+                        if (host_ptrs.size() != static_cast<size_t>(n_as)) {
+                            host_ptrs.resize(static_cast<size_t>(n_as), nullptr);
+                        }
+                        for (size_t e = 0; e < static_cast<size_t>(n_as); e++) {
+                            host_ptrs[e] = s_probe_dev;
+                        }
+                        stream->memcpy(
+                            probe_src0_extra->moe_expert_ptrs_device[ctx.device],
+                            host_ptrs.data(),
+                            host_ptrs.size() * sizeof(void *)).wait();
+
+                        const void * const * expert_ptrs_dev =
+                            static_cast<const void * const *>(
+                                probe_src0_extra->moe_expert_ptrs_device[ctx.device]);
+
+                        // Dispatch GPU MMVQ with timing
+                        auto t_dispatch_0 = hrc_p::now();
+                        bool ok = mmvq_moe_batched_dispatch(
+                            ctx, src0, src1, dst,
+                            expert_ptrs_dev,
+                            probe_eids.data(),
+                            probe_iid1s.data(),
+                            probe_ids_arr.data(),
+                            n_probe,
+                            static_cast<int>(n_as),
+                            n_ids_f,
+                            GGML_LAYOUT_AOS);
+                        auto t_dispatch_1 = hrc_p::now();
+
+                        // Wait for GPU execution to complete
+                        stream->wait();
+                        auto t_wait_1 = hrc_p::now();
+
+                        // Report timing
+                        if (g_moe_profile_enabled) {
+                            auto us = [](hrc_p::time_point a, hrc_p::time_point b) {
+                                return std::chrono::duration<double, std::micro>(b - a).count();
+                            };
+                            double h2d_us      = us(t_h2d_0, t_h2d_1);
+                            double dispatch_us = us(t_dispatch_0, t_dispatch_1);
+                            double gpu_wait_us = us(t_dispatch_1, t_wait_1);
+                            double total_us    = us(t_h2d_0, t_wait_1);
+
+                            g_moe_profile.moe_gpu_compute_done();
+
+                            static thread_local struct {
+                                double h2d_us       = 0;
+                                double dispatch_us  = 0;
+                                double gpu_wait_us  = 0;
+                                double total_us     = 0;
+                                int    n_calls      = 0;
+                                int    n_experts    = 0;
+                                int    n_dispatch_ok = 0;
+                            } probe_accum;
+
+                            probe_accum.h2d_us      += h2d_us;
+                            probe_accum.dispatch_us += dispatch_us;
+                            probe_accum.gpu_wait_us += gpu_wait_us;
+                            probe_accum.total_us    += total_us;
+                            probe_accum.n_calls++;
+                            probe_accum.n_experts   += n_probe;
+                            if (ok) probe_accum.n_dispatch_ok++;
+
+                            static thread_local int s_probe_report_count = 0;
+                            if (probe_accum.n_calls >= 108) {
+                                s_probe_report_count++;
+                                const int nc = probe_accum.n_calls;
+                                const int ne = probe_accum.n_experts;
+                                fprintf(stderr,
+                                    "\n[MOE-GPU-PROBE] Report #%d (%d calls, %d experts, "
+                                    "%d OK dispatches)\n"
+                                    "  H2D weight copy:   %7.0f us total, %5.1f us/call\n"
+                                    "  Host dispatch:     %7.0f us total, %5.1f us/call, "
+                                    "%5.1f us/expert\n"
+                                    "  GPU execution:     %7.0f us total, %5.1f us/call, "
+                                    "%5.1f us/expert\n"
+                                    "  Total (H2D+disp+GPU): %7.0f us, %5.1f us/call, "
+                                    "%5.1f us/expert\n",
+                                    s_probe_report_count, nc, ne,
+                                    probe_accum.n_dispatch_ok,
+                                    probe_accum.h2d_us, probe_accum.h2d_us / nc,
+                                    probe_accum.dispatch_us, probe_accum.dispatch_us / nc,
+                                    ne > 0 ? probe_accum.dispatch_us / ne : 0.0,
+                                    probe_accum.gpu_wait_us, probe_accum.gpu_wait_us / nc,
+                                    ne > 0 ? probe_accum.gpu_wait_us / ne : 0.0,
+                                    probe_accum.total_us, probe_accum.total_us / nc,
+                                    ne > 0 ? probe_accum.total_us / ne : 0.0);
+                                probe_accum = {};
+                            }
+                        }
+                    }
+                }
+            }
+
             // Call batched compute inline — no thread pool, no future, no deferred scatter.
             // ggml_sycl_cpu_expert_mul_mat_batched handles activation pre-quantization
             // and TBB parallel row dispatch with multi-row SIMD kernels internally.
@@ -28831,121 +28990,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 dispatch_experts_secondary_gpu_impl(entries, target_device, sctx, cpu_entries);
             };
 
-            bool probe_partition_done = false;
-
-            // ---------------------------------------------------------------
-            // GPU MMVQ Probe: when MOE_PROFILE is active, force-dispatch
-            // selected experts to GPU via temp device buffer to measure real
-            // GPU MMVQ dispatch overhead (host-side + kernel execution).
-            // ---------------------------------------------------------------
-            static std::atomic<int> s_moe_gpu_probe_count{-1};
-            {
-                int probe_n = s_moe_gpu_probe_count.load(std::memory_order_acquire);
-                if (probe_n < 0) {
-                    const char * env = getenv("GGML_SYCL_MOE_GPU_PROBE");
-                    int new_val = env ? std::atoi(env) : 0;
-                    // Auto-enable when profiling is on: probe 8 experts
-                    if (new_val == 0 && g_moe_profile_enabled) new_val = 8;
-                    s_moe_gpu_probe_count.compare_exchange_strong(probe_n, new_val,
-                        std::memory_order_release, std::memory_order_acquire);
-                }
-            }
-            const int n_gpu_probe = s_moe_gpu_probe_count.load(std::memory_order_acquire);
-
-            // Persistent device-side probe buffer: one expert's worth of VRAM.
-            // Allocated once, reused across layers/tokens to avoid alloc overhead
-            // polluting the timing measurement.
-            static thread_local void * s_probe_device_buf = nullptr;
-            static thread_local size_t s_probe_buf_size   = 0;
-
-            if (n_gpu_probe > 0 && src0->data && expert_size > 0) {
-                // Ensure probe buffer is large enough
-                if (!s_probe_device_buf || s_probe_buf_size < expert_size) {
-                    if (s_probe_device_buf) {
-                        sycl::free(s_probe_device_buf, *stream);
-                    }
-                    s_probe_device_buf = sycl::malloc_device(expert_size, *stream);
-                    s_probe_buf_size   = expert_size;
-                    if (g_moe_profile_enabled) {
-                        fprintf(stderr, "[MOE-PROBE] Alloc probe buf: %zu bytes, ptr=%p, "
-                                "layout=%d, type=%d\n",
-                                expert_size, s_probe_device_buf,
-                                (int) route_layout, (int) src0->type);
-                    }
-                }
-
-                if (s_probe_device_buf) {
-                    // Determine which experts to probe (first N_GPU_PROBE from ids)
-                    const int n_probe = std::min(n_gpu_probe,
-                        static_cast<int>(ids->ne[1] * n_ids));
-
-                    for (int pi = 0; pi < n_probe; pi++) {
-                        const int32_t eid = ids_host[pi];
-                        if (eid < 0 || eid >= n_as) continue;
-
-                        // Copy this expert from host mmap to device probe buffer
-                        const char * host_expert_ptr =
-                            static_cast<const char *>(src0->data) + eid * nb02;
-                        stream->memcpy(s_probe_device_buf, host_expert_ptr,
-                                       expert_size).wait();
-
-                        // Add to gpu_entries with probe device pointer
-                        const int64_t iid1 = pi / n_ids;
-                        const int64_t id   = pi % n_ids;
-                        gpu_entries.push_back({ iid1, id, eid, s_probe_device_buf });
-                    }
-
-                    // Build device pointer table: all point to probe buffer
-                    // (single expert re-used — results won't be correct but
-                    // timing is real)
-                    if (!gpu_entries.empty() && src0_extra) {
-                        ggml_sycl_ensure_moe_ptr_table(src0_extra, ctx.device,
-                            static_cast<int>(n_as), *stream);
-
-                        auto & host_ptrs =
-                            src0_extra->moe_expert_ptrs_host[ctx.device];
-                        if (host_ptrs.size() != static_cast<size_t>(n_as)) {
-                            host_ptrs.resize(static_cast<size_t>(n_as), nullptr);
-                        }
-                        for (int e = 0; e < n_as; e++) {
-                            host_ptrs[e] = s_probe_device_buf;
-                        }
-                        stream->memcpy(
-                            src0_extra->moe_expert_ptrs_device[ctx.device],
-                            host_ptrs.data(),
-                            host_ptrs.size() * sizeof(void *)).wait();
-                    }
-
-                    // Remaining experts go to CPU
-                    for (int pi = n_probe;
-                         pi < static_cast<int>(ids->ne[1] * n_ids); pi++) {
-                        const int32_t eid = ids_host[pi];
-                        if (eid < 0 || eid >= n_as) continue;
-                        const int64_t iid1 = pi / n_ids;
-                        const int64_t id   = pi % n_ids;
-                        cpu_entries.push_back({ iid1, id, eid, nullptr });
-                    }
-
-                    probe_partition_done = true;
-
-                    static thread_local int s_probe_log_count = 0;
-                    if (g_moe_profile_enabled && s_probe_log_count < 3) {
-                        s_probe_log_count++;
-                        fprintf(stderr, "[MOE-PROBE] Partitioned: %zu GPU, %zu CPU "
-                                "(probe=%d, n_ids=%lld, ne[1]=%lld)\n",
-                                gpu_entries.size(), cpu_entries.size(),
-                                n_probe,
-                                (long long) n_ids, (long long) ids->ne[1]);
-                    }
-                }
-            }
-
-            // ---------------------------------------------------------------
-            // CPU-primary expert TG: hybrid GPU+CPU dispatch.
-            // VRAM-resident experts → GPU (380 GB/s), host-resident → CPU
-            // (70 GB/s). Skips prediction/prefetch overhead for batch=1 TG.
-            // ---------------------------------------------------------------
-            if (probe_partition_done) {
+            if (false) {  // GPU probe now in CPU-TG path above
                 // GPU probe handled partition — skip to shared dispatch
             } else if (cpu_expert_tg_active) {
                 auto & placement_table = ggml_sycl::get_expert_placement_table();
