@@ -469,6 +469,7 @@ jobs:
           cd build
           export GGML_VK_VISIBLE_DEVICES=0
           export GGML_VK_DISABLE_F16=1
+          export GGML_VK_DISABLE_COOPMAT=1
           # This is using llvmpipe and runs slower than other backends
           ctest -L main --verbose --timeout 4800
 

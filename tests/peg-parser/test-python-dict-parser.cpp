@@ -197,7 +197,7 @@ void test_python_dict_parser(testing &t) {
     // Test single-quoted string content parser directly
     t.test("single-quoted string content parser", [](testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p) {
-            return p.sequence({ p.literal("'"), p.single_quoted_string_content(), p.literal("'"), p.space() });
+            return p.sequence({ p.literal("'"), p.string_content('\''), p.literal("'"), p.space() });
         });
 
         t.test("simple string", [&](testing &t) {

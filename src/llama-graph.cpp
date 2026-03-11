@@ -250,7 +250,7 @@ void llm_graph_input_cls::set_input(const llama_ubatch * ubatch) {
 
         const bool last = (
              cparams.pooling_type == LLAMA_POOLING_TYPE_LAST ||
-            (cparams.pooling_type == LLAMA_POOLING_TYPE_RANK && arch == LLM_ARCH_QWEN3) // qwen3 reranking & embedding models use last token
+            (cparams.pooling_type == LLAMA_POOLING_TYPE_RANK && (arch == LLM_ARCH_QWEN3 || arch == LLM_ARCH_QWEN3VL)) // qwen3 reranking & embedding models use last token
         );
 
         for (int i = 0; i < n_tokens; ++i) {
@@ -849,13 +849,13 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     ubatch           (params.ubatch),
     n_embd           (hparams.n_embd),
     n_layer          (hparams.n_layer),
-    n_rot            (hparams.n_rot),
+    n_rot            (hparams.n_rot()),
     n_ctx            (cparams.n_ctx),
     n_head           (hparams.n_head()),
     n_head_kv        (hparams.n_head_kv()),
-    n_embd_head_k    (hparams.n_embd_head_k),
+    n_embd_head_k    (hparams.n_embd_head_k()),
     n_embd_k_gqa     (hparams.n_embd_k_gqa()),
-    n_embd_head_v    (hparams.n_embd_head_v),
+    n_embd_head_v    (hparams.n_embd_head_v()),
     n_embd_v_gqa     (hparams.n_embd_v_gqa()),
     n_expert         (hparams.n_expert),
     n_expert_used    (cparams.warmup ? hparams.n_expert : hparams.n_expert_used),
@@ -2552,7 +2552,7 @@ void llm_graph_context::build_pooling(
                 }
 
                 // softmax for qwen3 reranker
-                if (arch == LLM_ARCH_QWEN3) {
+                if (arch == LLM_ARCH_QWEN3 || arch == LLM_ARCH_QWEN3VL) {
                     cur = ggml_soft_max(ctx0, cur);
                 }
             } break;

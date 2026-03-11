@@ -597,9 +597,9 @@ void test_command7_parser_compare(testing & t) {
 
         auto response = "<|START_RESPONSE|>" << p.content(p.until("<|END_RESPONSE|>")) << "<|END_RESPONSE|>";
 
-        auto tool_call_id = p.atomic("\"tool_call_id\"" << (":" << ("\"" + p.tool_id(p.json_string_content()) + "\"")));
+        auto tool_call_id = p.atomic("\"tool_call_id\"" << (":" << ("\"" + p.tool_id(p.string_content('"')) + "\"")));
         auto tool_call_name =
-            p.atomic("\"tool_name\"" << (":" << ("\"" + p.tool_name(p.json_string_content()) + "\"")));
+            p.atomic("\"tool_name\"" << (":" << ("\"" + p.tool_name(p.string_content('"')) + "\"")));
         auto tool_call_args = "\"parameters\"" << (":" << p.tool_args(p.json()));
 
         auto tool_call_fields = p.rule("tool-call-fields", tool_call_id | tool_call_name | tool_call_args);
