@@ -465,7 +465,7 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
 
         ctx->n_nodes_per_cb = (ctx->n_nodes_1 + ctx->n_cb - 1) / ctx->n_cb;
 
-        if (ctx->capture_compute > 0) {
+        if (ctx->capture_compute >= 0) {
             ctx->capture_compute--;
         }
 
