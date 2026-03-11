@@ -89,6 +89,7 @@ extern "C" {
             float beta2; // second AdamW momentum
             float eps;   // epsilon for numerical stability
             float wd;    // weight decay - 0.0f to disable
+            float gclip; // element-wise gradient clipping threshold - 0.0f to disable
         } adamw;
         struct {
             float alpha; // learning rate

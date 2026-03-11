@@ -230,6 +230,7 @@ struct ggml_opt_optimizer_params ggml_opt_get_default_optimizer_params(void * us
     result.adamw.beta2 = 0.999f;
     result.adamw.eps   = 1e-8f;
     result.adamw.wd    = 0.0f;
+    result.adamw.gclip = 0.0f;
 
     result.sgd.alpha   = 1e-3f;
     result.sgd.wd      = 0.0f;
@@ -503,7 +504,7 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
     // gb_opt == graph backward optimize, forward pass, then backward pass to calculate gradients, then optimizer step.
     opt_ctx->gb_opt = ggml_graph_dup(opt_ctx->ctx_compute, opt_ctx->gb_grad, /*force_grads =*/ true);
 
-    opt_ctx->opt_step_params = ggml_new_tensor_1d(opt_ctx->ctx_cpu, GGML_TYPE_F32, need_momenta ? 7 : 2);
+    opt_ctx->opt_step_params = ggml_new_tensor_1d(opt_ctx->ctx_cpu, GGML_TYPE_F32, need_momenta ? 8 : 2);
     ggml_tensor * adamw_params = opt_ctx->opt_step_params;
     ggml_set_input(adamw_params);
     const char * optimizer_name = ggml_opt_optimizer_name(opt_ctx->optimizer);
@@ -726,6 +727,17 @@ void ggml_opt_alloc(ggml_opt_context_t opt_ctx, bool backward) {
     if (opt_ctx->build_type == GGML_OPT_BUILD_TYPE_OPT && opt_ctx->opt_period > 1 && opt_ctx->opt_i == 0) {
         ggml_graph_reset(opt_ctx->gb_grad);
     }
+
+    // For non-static graphs the compute graph is rebuilt every call, so ggml_graph_reset
+    // is not called and grad_accs may carry over values from the previous accumulation window.
+    // Explicitly zero them at the start of each gradient-accumulation cycle.
+    if (!opt_ctx->static_graphs && backward && opt_ctx->opt_i == 0) {
+        for (struct ggml_tensor * ga : opt_ctx->grad_accs) {
+            if (ga) {
+                ggml_set_zero(ga);
+            }
+        }
+    }
     if (backward) {
         const int32_t opt_i_next = (opt_ctx->opt_i + 1) % opt_ctx->opt_period;
         opt_ctx->build_type = opt_i_next == 0 ? GGML_OPT_BUILD_TYPE_OPT : GGML_OPT_BUILD_TYPE_GRAD;
@@ -793,6 +805,7 @@ void ggml_opt_eval(ggml_opt_context_t opt_ctx, ggml_opt_result_t result) {
                 GGML_ASSERT(opt_pars.adamw.eps >= 0.0f);
                 GGML_ASSERT(opt_pars.adamw.wd >= 0.0f);
                 GGML_ASSERT(opt_pars.adamw.wd <= 1.0f);
+                GGML_ASSERT(opt_pars.adamw.gclip >= 0.0f);
 
                 // beta1, beta2 after applying warmup
                 const float beta1h = 1.0f / (1.0f - powf(opt_pars.adamw.beta1, opt_ctx->iter));
@@ -806,6 +819,7 @@ void ggml_opt_eval(ggml_opt_context_t opt_ctx, ggml_opt_result_t result) {
                 adamw_par_data[4] = opt_pars.adamw.wd;
                 adamw_par_data[5] = beta1h;
                 adamw_par_data[6] = beta2h;
+                adamw_par_data[7] = opt_pars.adamw.gclip;
             } break;
             case GGML_OPT_OPTIMIZER_TYPE_SGD: {
                 GGML_ASSERT(opt_pars.sgd.alpha > 0.0f);
