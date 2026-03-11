@@ -4,6 +4,7 @@
 #include "llama-impl.h"
 #include "llama-batch.h"
 #include "llama-io.h"
+#include "llama-kv-cache.h"
 #include "llama-memory.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
@@ -272,10 +273,23 @@ llama_context::llama_context(
 
     // init the memory module
     if (!hparams.vocab_only) {
+        uint32_t eff_kv_budget = 0;
+        if (params.kv_budget_tokens > 0) {
+            eff_kv_budget = params.kv_budget_tokens;
+        } else if (params.kv_budget_bytes > 0) {
+            const uint32_t n_layer_kv = hparams.n_layer_kv();
+            const size_t bytes_per_token = (size_t)n_layer_kv * 2 *
+                hparams.n_embd_k_gqa() * ggml_type_size(params.type_k);
+            if (bytes_per_token > 0) {
+                eff_kv_budget = (uint32_t)(params.kv_budget_bytes / bytes_per_token);
+            }
+        }
+
         llama_memory_params params_mem = {
-            /*.type_k   =*/ params.type_k,
-            /*.type_v   =*/ params.type_v,
-            /*.swa_full =*/ params.swa_full,
+            /*.type_k            =*/ params.type_k,
+            /*.type_v            =*/ params.type_v,
+            /*.swa_full          =*/ params.swa_full,
+            /*.kv_budget_tokens  =*/ eff_kv_budget,
         };
 
         memory.reset(model.create_memory(params_mem, cparams));
@@ -1231,6 +1245,45 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         return nullptr;
     }
 
+    // KV Direct: store captured layer-0 embeddings to residual pool
+    if (res->t_kv_direct_capture) {
+        auto * kvc = dynamic_cast<llama_kv_cache *>(memory.get());
+        if (kvc && kvc->is_kv_direct_enabled()) {
+            const uint32_t n_embd_cap = (uint32_t)res->t_kv_direct_capture->ne[0];
+            const uint32_t n_tokens   = ubatch.n_tokens;
+
+            // Read capture tensor from backend to temporary host buffer
+            std::vector<float> host_buf((size_t)n_embd_cap * n_tokens);
+            ggml_backend_tensor_get(res->t_kv_direct_capture,
+                                    host_buf.data(), 0,
+                                    host_buf.size() * sizeof(float));
+
+            // Store each token's embedding to the pool at its position
+            for (uint32_t t = 0; t < n_tokens; ++t) {
+                const llama_pos    pos    = ubatch.pos[t];
+                const llama_seq_id seq_id = ubatch.seq_id[t][0];
+                kvc->kv_direct.pool_store(pos, seq_id,
+                                          host_buf.data() + (size_t)t * n_embd_cap);
+            }
+
+            // Touch LRU for cells that were just populated by this batch
+            for (uint32_t s = 0; s < kvc->v_cells.size(); ++s) {
+                const auto & cells = kvc->v_cells[s];
+                for (uint32_t t = 0; t < n_tokens; ++t) {
+                    for (uint32_t i = 0; i < cells.size(); ++i) {
+                        if (!cells.is_empty(i) && cells.pos_get(i) == ubatch.pos[t]) {
+                            kvc->kv_direct.lru_touch(s, i);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Increment the LRU step counter
+            kvc->kv_direct.lru_step();
+        }
+    }
+
     ret = GGML_STATUS_SUCCESS;
 
     return res;
@@ -1873,6 +1926,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     // wait for the computation to finish (automatically done when obtaining the model output)
     //synchronize();
+
+    // KV Direct eviction was previously called here, but this is unsafe:
+    // graph_compute is async and may still be running. Eviction now lives in
+    // llama_kv_direct_evict() which the caller invokes between decode calls.
 
     return 0;
 }
@@ -2900,6 +2957,9 @@ llama_context_params llama_context_default_params() {
         /*.yarn_beta_slow              =*/ -1.0f,
         /*.yarn_orig_ctx               =*/ 0,
         /*.defrag_thold                =*/ -1.0f,
+        /*.kv_budget_bytes             =*/ 0,
+        /*.kv_budget_tokens            =*/ 0,
+        /*._kv_pad                     =*/ 0,
         /*.cb_eval                     =*/ nullptr,
         /*.cb_eval_user_data           =*/ nullptr,
         /*.type_k                      =*/ GGML_TYPE_F16,
@@ -3296,6 +3356,25 @@ bool llama_memory_can_shift(llama_memory_t mem) {
     }
 
     return mem->get_can_shift();
+}
+
+uint32_t llama_kv_direct_evict(llama_context * ctx) {
+    if (!ctx) {
+        return 0;
+    }
+
+    // Ensure all async GPU work from the previous decode is complete before
+    // touching KV cache metadata.  This is critical: graph_compute is async,
+    // so without sync the backend scheduler may still hold references to
+    // tensors backed by the cells we are about to free.
+    ctx->synchronize();
+
+    auto * kvc = dynamic_cast<llama_kv_cache *>(ctx->get_memory());
+    if (!kvc || !kvc->is_kv_direct_enabled()) {
+        return 0;
+    }
+
+    return kvc->evict_if_over_budget();
 }
 
 // llama state API
