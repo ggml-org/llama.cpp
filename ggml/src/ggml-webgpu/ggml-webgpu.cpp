@@ -1339,9 +1339,9 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
     const uint32_t v_offset_elems = (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, V) / ggml_type_size(V->type));
     const bool f16_vec4_aligned   = (k_offset_elems % 4u == 0u) && (v_offset_elems % 4u == 0u);
 
-    bool kv_direct = (K->type == GGML_TYPE_F16) && f16_vec4_aligned &&
-                     (Q->ne[0] % ctx->global_ctx->capabilities.sg_mat_k == 0) &&
-                     (K->ne[1] % GGML_WEBGPU_KV_SEQ_PAD == 0);
+    const bool kv_direct = (K->type == GGML_TYPE_F16) && f16_vec4_aligned &&
+                           (Q->ne[0] % ctx->global_ctx->capabilities.sg_mat_k == 0) &&
+                           (K->ne[1] % GGML_WEBGPU_KV_SEQ_PAD == 0);
 
     const bool kv_vec_type_supported = K->type == GGML_TYPE_F16 || K->type == GGML_TYPE_Q4_0 || K->type == GGML_TYPE_Q8_0;
     const bool use_vec = (Q->ne[1] < 20) &&
@@ -1353,8 +1353,7 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
 
     const uint32_t vec_nwg_cap =
         std::max(1u, std::min<uint32_t>(32u, ctx->global_ctx->capabilities.max_subgroup_size));
-    const bool use_vec_split = use_vec && vec_nwg_cap > 1u;
-    const bool use_blk = use_vec_split && has_mask;
+    const bool use_blk = use_vec && has_mask;
 
     ggml_webgpu_flash_attn_pipeline_key key = {
         .kv_type            = K->type,
@@ -1365,8 +1364,6 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
         .has_sinks          = static_cast<bool>(has_sinks),
         .uses_logit_softcap = logit_softcap != 0.0f,
         .use_vec            = use_vec,
-        .use_vec_split      = use_vec_split,
-        .use_blk            = use_blk,
     };
 
     webgpu_pipeline pipeline;
@@ -1384,7 +1381,7 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
         };
 
         ggml_webgpu_processed_shader processed;
-        if (use_vec_split) {
+        if (use_vec) {
             processed = ggml_webgpu_preprocess_flash_attn_shader(ctx->p, wgsl_flash_attn_vec_split, shader_lib_ctx);
         } else {
             processed = ggml_webgpu_preprocess_flash_attn_shader(ctx->p, wgsl_flash_attn, shader_lib_ctx);
@@ -1400,24 +1397,20 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
     uint32_t wg_per_head = CEIL_DIV(Q->ne[1], decisions->q_tile);
     uint32_t wg_x        = wg_per_head * Q->ne[2] * Q->ne[3];  // wg per head * number of heads * number of batches
 
-    uint32_t vec_nwg = 1u;
-    if (use_vec_split) {
-        const uint64_t kv_span = (uint64_t) std::max(1u, decisions->kv_tile);
-        while ((2u * vec_nwg * kv_span) < (uint64_t) K->ne[1] && vec_nwg < vec_nwg_cap) {
-            vec_nwg <<= 1;
-        }
-        vec_nwg = std::min(vec_nwg, vec_nwg_cap);
-    }
-
-    bool         have_blk_buf    = false;
     wgpu::Buffer blk_buf         = {};
     uint64_t     blk_size_bytes  = 0;
     uint32_t     blk_nblk0       = 0;
     uint32_t     blk_nblk1       = 0;
     uint32_t     blk_batch_count = 0;
 
-    if (use_vec_split) {
-        const uint32_t nwg = vec_nwg;
+    if (use_vec) {
+        uint32_t nwg = 1u;
+        const uint64_t kv_span = (uint64_t) std::max(1u, decisions->kv_tile);
+        while ((2u * nwg * kv_span) < (uint64_t) K->ne[1] && nwg < vec_nwg_cap) {
+            nwg <<= 1;
+        }
+        nwg = std::min(nwg, vec_nwg_cap);
+
         GGML_ASSERT(nwg <= ctx->global_ctx->capabilities.max_subgroup_size);
         const uint64_t nrows = (uint64_t) Q->ne[1] * Q->ne[2] * Q->ne[3];
         // For a single split workgroup there is nothing to merge.
@@ -1466,8 +1459,6 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
             ggml_webgpu_create_buffer(ctx->global_ctx->device, blk_buf, blk_size_bytes,
                                       wgpu::BufferUsage::Storage,
                                       "flash_attn_vec_blk");
-            have_blk_buf = true;
-
             const ggml_webgpu_flash_attn_blk_pipeline_key blk_key = {
                 .q_tile  = decisions->q_tile,
                 .kv_tile = decisions->kv_tile,
@@ -1542,7 +1533,6 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
                                       .size    = ggml_webgpu_tensor_binding_size(ctx, sinks) });
         }
         if (use_blk) {
-            GGML_ASSERT(have_blk_buf);
             split_entries.push_back({ .binding = split_binding_index++,
                                       .buffer  = blk_buf,
                                       .offset  = 0,
