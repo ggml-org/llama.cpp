@@ -45,16 +45,15 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
     data.format           = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.preserved_tokens = autoparser.preserved_tokens;
 
-    // Extract reasoning prefill from the end of the rendered prompt.
-    // If the template added reasoning markers (e.g. <think> or <think></think>) at the end,
-    // store them so they can be prepended to model output before parsing.
+    // Extract reasoning prefill and detect template artifact start markers.
+    // See docs/autoparser.md "Reasoning Prefill" for details.
+    bool clear_reasoning_start = false;
     if (inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE &&
         autoparser.reasoning.mode != reasoning_mode::NONE &&
         !autoparser.reasoning.end.empty()) {
         const auto & r_start = autoparser.reasoning.start;
         const auto & r_end   = autoparser.reasoning.end;
 
-        // Helper to trim trailing whitespace from a string
         auto rtrim = [](std::string s) {
             while (!s.empty() && (s.back() == ' ' || s.back() == '\n' ||
                                   s.back() == '\r' || s.back() == '\t')) {
@@ -63,41 +62,41 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
             return s;
         };
 
-        // Trim both the prompt and markers for suffix matching (markers may have trailing \n)
         auto prompt_trimmed  = rtrim(data.prompt);
         auto r_end_trimmed   = rtrim(r_end);
         auto r_start_trimmed = rtrim(r_start);
 
         if (!r_start_trimmed.empty()) {
-            // Check for start+end at end of prompt (e.g. <think></think>)
             if (string_ends_with(prompt_trimmed, r_end_trimmed)) {
                 auto before_end = rtrim(prompt_trimmed.substr(0, prompt_trimmed.size() - r_end_trimmed.size()));
                 if (string_ends_with(before_end, r_start_trimmed)) {
-                    // Prompt ends with start + end markers (reasoning closed).
-                    // Use the canonical markers from the analyzer to ensure whitespace
-                    // (e.g. trailing \n in </think>\n) is preserved, even if the template
-                    // rendered them without intermediate whitespace.
+                    // Start+end at prompt end — use canonical markers to preserve whitespace.
                     data.reasoning_prefill = r_start + r_end;
                 }
             }
-            // Check for just start at end of prompt (e.g. <think>\n)
             if (data.reasoning_prefill.empty() && string_ends_with(prompt_trimmed, r_start_trimmed)) {
-                // Extract from the original prompt to preserve trailing whitespace
                 auto start_pos = prompt_trimmed.size() - r_start_trimmed.size();
                 data.reasoning_prefill = data.prompt.substr(start_pos);
+            }
+            // Template artifact detection: start marker in prompt but not at end.
+            if (data.reasoning_prefill.empty()) {
+                auto suffix_len = std::min(data.prompt.size(), (size_t) 500);
+                auto suffix     = data.prompt.substr(data.prompt.size() - suffix_len);
+                if (suffix.find(r_start_trimmed) != std::string::npos) {
+                    clear_reasoning_start = true;
+                }
             }
         }
     }
 
-    fprintf(stderr, "DEBUG reasoning_prefill: '%s' (start='%s', end='%s', mode=%d, reasoning_format=%d)\n",
-            data.reasoning_prefill.c_str(),
-            autoparser.reasoning.start.c_str(),
-            autoparser.reasoning.end.c_str(),
-            (int) autoparser.reasoning.mode,
-            (int) inputs.reasoning_format);
-
-    // Build the parser using the analysis results.
-    common_peg_arena parser = autoparser.build_parser(inputs);
+    common_peg_arena parser;
+    if (clear_reasoning_start) {
+        struct autoparser modified = autoparser;
+        modified.reasoning.start.clear();
+        parser = modified.build_parser(inputs);
+    } else {
+        parser = autoparser.build_parser(inputs);
+    }
     data.parser = parser.save();
 
     // Build grammar if tools are present
