@@ -43,28 +43,19 @@ llm_build_llama<embed>::llm_build_llama(const llama_model & model, const llm_gra
             ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
 
             // compute Q and K and RoPE them
-            ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
-            if (model.layers[il].wq_s) {
-                Qcur = ggml_mul(ctx0, Qcur, model.layers[il].wq_s);
-            }
+            ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur, model.layers[il].wq_s);
             cb(Qcur, "Qcur", il);
             if (model.layers[il].bq) {
                 Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
                 cb(Qcur, "Qcur", il);
             }
-            ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
-            if (model.layers[il].wk_s) {
-                Kcur = ggml_mul(ctx0, Kcur, model.layers[il].wk_s);
-            }
+            ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur, model.layers[il].wk_s);
             cb(Kcur, "Kcur", il);
             if (model.layers[il].bk) {
                 Kcur = ggml_add(ctx0, Kcur, model.layers[il].bk);
                 cb(Kcur, "Kcur", il);
             }
-            ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
-            if (model.layers[il].wv_s) {
-                Vcur = ggml_mul(ctx0, Vcur, model.layers[il].wv_s);
-            }
+            ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur, model.layers[il].wv_s);
             cb(Vcur, "Vcur", il);
             if (model.layers[il].bv) {
                 Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
