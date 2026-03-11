@@ -30,9 +30,11 @@ llama_kv_cache::llama_kv_cache(
                  uint32_t   n_swa,
            llama_swa_type   swa_type,
     const layer_filter_cb & filter,
-    const  layer_reuse_cb & reuse) :
+    const  layer_reuse_cb & reuse,
+                 uint32_t   budget_tokens) :
     model(model), hparams(model.hparams), v_trans(v_trans),
-    n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type) {
+    n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type),
+    kv_direct(budget_tokens) {
 
     GGML_ASSERT(kv_size % n_pad == 0);
 
@@ -207,6 +209,13 @@ llama_kv_cache::llama_kv_cache(
                 (float)(memory_size_k + memory_size_v) / (1024.0f * 1024.0f), kv_size, (int) layers.size(), n_seq_max, n_stream,
                 ggml_type_name(type_k), (float)memory_size_k / (1024.0f * 1024.0f),
                 ggml_type_name(type_v), (float)memory_size_v / (1024.0f * 1024.0f));
+    }
+
+    if (kv_direct.enabled) {
+        LLAMA_LOG_INFO("%s: KV Direct enabled, budget = %u tokens\n", __func__, kv_direct.budget_tokens);
+        const uint32_t embd_dim = hparams.n_embd;
+        kv_direct.pool_init(kv_direct.budget_tokens, embd_dim);
+        kv_direct.lru_init(n_stream, kv_size);
     }
 
     const char * LLAMA_KV_CACHE_DEBUG = getenv("LLAMA_KV_CACHE_DEBUG");
@@ -2281,4 +2290,211 @@ void llama_kv_cache_context::set_input_kq_mask(ggml_tensor * dst, const llama_ub
 
 void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const {
     kv->set_input_pos_bucket(dst, ubatch);
+}
+
+uint32_t llama_kv_cache::evict_if_over_budget() {
+    if (!kv_direct.enabled || kv_direct.budget_tokens == 0) {
+        return 0;
+    }
+
+    uint32_t n_used = 0;
+    for (const auto & cells : v_cells) {
+        n_used += cells.get_used();
+    }
+
+    if (n_used <= kv_direct.budget_tokens) {
+        return 0;
+    }
+
+    const uint32_t n_to_evict = n_used - kv_direct.budget_tokens;
+
+    struct evict_candidate {
+        llama_pos pos;
+        uint32_t  stream_idx;
+        uint32_t  cell_idx;
+        uint32_t  lru_time;
+    };
+
+    std::vector<evict_candidate> candidates;
+    candidates.reserve(n_used);
+
+    for (uint32_t s = 0; s < v_cells.size(); ++s) {
+        const auto & cells = v_cells[s];
+        for (uint32_t i = 0; i < cells.size(); ++i) {
+            if (!cells.is_empty(i)) {
+                uint32_t lru = 0;
+                if (s < kv_direct.last_used.size() && i < kv_direct.last_used[s].size()) {
+                    lru = kv_direct.last_used[s][i];
+                }
+                candidates.push_back({cells.pos_get(i), s, i, lru});
+            }
+        }
+    }
+
+    std::sort(candidates.begin(), candidates.end(),
+        [](const evict_candidate & a, const evict_candidate & b) {
+            return a.lru_time < b.lru_time;
+        });
+
+    uint32_t evicted = 0;
+    for (uint32_t i = 0; i < candidates.size() && evicted < n_to_evict; ++i) {
+        const auto & ec = candidates[i];
+        auto & cells = v_cells[ec.stream_idx];
+        auto & head  = v_heads[ec.stream_idx];
+
+        if (cells.is_empty(ec.cell_idx)) {
+            continue;
+        }
+
+        kv_direct.recently_evicted.push_back(ec.pos);
+
+        cells.rm(ec.cell_idx);
+
+        if (ec.cell_idx < head) {
+            head = ec.cell_idx;
+        }
+
+        evicted++;
+    }
+
+    if (evicted > 0) {
+        LLAMA_LOG_DEBUG("%s: KV Direct evicted %u positions (budget=%u, was=%u, lru)\n",
+                        __func__, evicted, kv_direct.budget_tokens, n_used);
+    }
+
+    return evicted;
+}
+
+// ---- KV Direct: residual pool implementation ----
+
+void llama_kv_cache::kv_direct_state::pool_init(uint32_t capacity, uint32_t embd_dim) {
+    pool_capacity = capacity;
+    n_embd        = embd_dim;
+    pool_data.resize((size_t)capacity * embd_dim, 0.0f);
+    pool_meta.resize(capacity);
+    LLAMA_LOG_INFO("%s: KV Direct residual pool: %u slots x %u floats = %.1f MB\n",
+                   __func__, capacity, embd_dim,
+                   (double)(capacity * embd_dim * sizeof(float)) / (1024.0 * 1024.0));
+}
+
+void llama_kv_cache::kv_direct_state::pool_store(
+        llama_pos pos, llama_seq_id seq_id, const float * data) {
+    if (pool_capacity == 0 || !data) return;
+    const uint32_t slot = (uint32_t)(pos % (llama_pos)pool_capacity);
+    memcpy(pool_data.data() + (size_t)slot * n_embd, data, n_embd * sizeof(float));
+    pool_meta[slot] = { pos, seq_id, true };
+}
+
+const float * llama_kv_cache::kv_direct_state::pool_lookup(
+        llama_pos pos, llama_seq_id seq_id) const {
+    if (pool_capacity == 0) return nullptr;
+    const uint32_t slot = (uint32_t)(pos % (llama_pos)pool_capacity);
+    const auto & meta = pool_meta[slot];
+    if (meta.valid && meta.pos == pos && meta.seq_id == seq_id) {
+        return pool_data.data() + (size_t)slot * n_embd;
+    }
+    return nullptr;
+}
+
+void llama_kv_cache::kv_direct_state::pool_invalidate(llama_pos pos) {
+    if (pool_capacity == 0) return;
+    const uint32_t slot = (uint32_t)(pos % (llama_pos)pool_capacity);
+    if (pool_meta[slot].pos == pos) {
+        pool_meta[slot].valid = false;
+    }
+}
+
+// ---- LRU implementation ----
+
+void llama_kv_cache::kv_direct_state::lru_init(uint32_t n_streams, uint32_t n_cells) {
+    last_used.resize(n_streams);
+    for (auto & v : last_used) {
+        v.assign(n_cells, 0);
+    }
+}
+
+void llama_kv_cache::kv_direct_state::lru_touch(uint32_t stream, uint32_t cell_idx) {
+    if (stream < last_used.size() && cell_idx < last_used[stream].size()) {
+        last_used[stream][cell_idx] = kv_step;
+    }
+}
+
+void llama_kv_cache::kv_direct_state::lru_step() {
+    kv_step++;
+}
+
+uint32_t llama_kv_cache::recompute_evicted(llama_context * ctx) {
+    if (!kv_direct.enabled || kv_direct.recently_evicted.empty()) {
+        return 0;
+    }
+
+    // Cap recompute batch to avoid excessive GPU work per decode cycle.
+    const uint32_t max_recompute = 64;
+
+    // Collect positions we can restore (have valid residuals in pool)
+    struct restore_entry {
+        llama_pos    pos;
+        llama_seq_id seq_id;
+        const float * residual;
+    };
+
+    std::vector<restore_entry> to_restore;
+
+    for (const auto & pos : kv_direct.recently_evicted) {
+        if (to_restore.size() >= max_recompute) break;
+
+        // Use seq_id 0 for now (single-sequence assumption)
+        const float * res = kv_direct.pool_lookup(pos, 0);
+        if (res) {
+            to_restore.push_back({ pos, 0, res });
+        }
+    }
+
+    // Clear the evicted list regardless of how many we restore
+    kv_direct.recently_evicted.clear();
+
+    if (to_restore.empty()) {
+        return 0;
+    }
+
+    // Sort by position ascending (required for causal attention ordering)
+    std::sort(to_restore.begin(), to_restore.end(),
+        [](const auto & a, const auto & b) { return a.pos < b.pos; });
+
+    const uint32_t n_restore = (uint32_t)to_restore.size();
+    const uint32_t n_embd    = kv_direct.n_embd;
+
+    // Build an embd batch with saved residuals
+    llama_batch batch = llama_batch_init((int32_t)n_restore, (int32_t)n_embd, 1);
+    batch.n_tokens = (int32_t)n_restore;
+
+    for (uint32_t i = 0; i < n_restore; ++i) {
+        const auto & entry = to_restore[i];
+
+        // Copy residual into batch embd
+        memcpy(batch.embd + (size_t)i * n_embd,
+               entry.residual, n_embd * sizeof(float));
+
+        batch.pos[i]      = entry.pos;
+        batch.n_seq_id[i] = 1;
+        batch.seq_id[i][0] = entry.seq_id;
+        batch.logits[i]   = 0;  // no logits needed for recompute
+    }
+
+    // Run the recompute forward pass.
+    // This populates K/V cache entries at the restored positions.
+    // The embd path in build_inp_embd skips token lookup.
+    int32_t rc = llama_decode(ctx, batch);
+
+    llama_batch_free(batch);
+
+    if (rc != 0) {
+        LLAMA_LOG_WARN("%s: recompute decode failed (rc=%d), %u positions lost\n",
+                       __func__, rc, n_restore);
+        return 0;
+    }
+
+    LLAMA_LOG_DEBUG("%s: KV Direct recomputed %u positions\n", __func__, n_restore);
+
+    return n_restore;
 }

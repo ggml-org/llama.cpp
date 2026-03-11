@@ -3377,6 +3377,21 @@ uint32_t llama_kv_direct_evict(llama_context * ctx) {
     return kvc->evict_if_over_budget();
 }
 
+uint32_t llama_kv_direct_recompute_misses(llama_context * ctx) {
+    if (!ctx) {
+        return 0;
+    }
+
+    ctx->synchronize();
+
+    auto * kvc = dynamic_cast<llama_kv_cache *>(ctx->get_memory());
+    if (!kvc || !kvc->is_kv_direct_enabled()) {
+        return 0;
+    }
+
+    return kvc->recompute_evicted(ctx);
+}
+
 // llama state API
 
 // deprecated

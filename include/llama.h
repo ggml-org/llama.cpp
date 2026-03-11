@@ -349,6 +349,11 @@ extern "C" {
         uint32_t yarn_orig_ctx;    // YaRN original context size
         float    defrag_thold;     // [DEPRECATED] defragment the KV cache if holes/size > thold, <= 0 disabled (default)
 
+        // KV Direct: cap KV cache size. 0 = unbounded (default).
+        uint64_t kv_budget_bytes;   // 0 = unbounded (default)
+        uint32_t kv_budget_tokens;  // 0 = unbounded; takes precedence if both set
+        uint32_t _kv_pad;           // padding for 8-byte alignment
+
         ggml_backend_sched_eval_callback cb_eval;
         void * cb_eval_user_data;
 
@@ -767,6 +772,18 @@ extern "C" {
 
     // Check if the memory supports shifting
     LLAMA_API bool llama_memory_can_shift(llama_memory_t mem);
+
+    // KV Direct: enforce KV budget by evicting oldest positions.
+    // Must be called BETWEEN decode calls, not during.
+    // Synchronizes the context before eviction to ensure GPU is idle.
+    // Returns the number of positions evicted (0 if within budget or disabled).
+    LLAMA_API uint32_t llama_kv_direct_evict(struct llama_context * ctx);
+
+    // KV Direct: recompute KV entries for recently evicted positions.
+    // Uses saved residual embeddings to rebuild cache entries via llama_decode.
+    // Must be called BETWEEN decode calls, after llama_kv_direct_evict.
+    // Returns the number of positions recomputed (0 if nothing to restore).
+    LLAMA_API uint32_t llama_kv_direct_recompute_misses(struct llama_context * ctx);
 
     //
     // State / sessions
