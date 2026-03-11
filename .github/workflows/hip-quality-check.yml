@@ -52,15 +52,28 @@ jobs:
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
-      - name: Build with Werror and check for major VGPR spills
+      - name: Build with Werror
         id: cmake_build
         run: |
           cmake -B build -S . \
             -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
             -DGPU_TARGETS=gfx908 \
             -DGGML_HIP=ON \
-            -DGGML_HIP_EXPORT_METRICS=On \
+            -DGGML_HIP_EXPORT_METRICS=Off \
             -DCMAKE_HIP_FLAGS="-Werror -Wno-tautological-compare" \
+            -DCMAKE_BUILD_TYPE=Release
+          cd build
+          make -j $(nproc)
+
+      - name: Check for major VGPR spills
+        id: vgpr_check
+        run: |
+          cmake -B build -S . \
+            -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
+            -DGPU_TARGETS=gfx908 \
+            -DGGML_HIP=ON \
+            -DGGML_HIP_EXPORT_METRICS=On \
+            -DCMAKE_HIP_FLAGS="" \
             -DCMAKE_BUILD_TYPE=Release
           cd build
           make -j $(nproc) 2>&1 | tee metrics.log | grep -v 'Rpass-analysis=kernel-resource-usage\|remark:\|^$'
