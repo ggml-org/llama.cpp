@@ -1350,9 +1350,49 @@ class tensor_traits : public ggml::cpu::tensor_traits {
 
 public:
     int repack(struct ggml_tensor * tensor, const void * data, size_t data_size) {
-        GGML_ASSERT(tensor->type == GGML_TYPE_Q4_0 || tensor->type == GGML_TYPE_Q8_0);
+        GGML_ASSERT(tensor->type == GGML_TYPE_Q4_0 || tensor->type == GGML_TYPE_Q8_0 || tensor->type == GGML_TYPE_Q2_0C);
         const size_t n = tensor->ne[1];
         const size_t k = tensor->ne[0];
+
+        if (tensor->type == GGML_TYPE_Q2_0C) {
+            if (!ctx.kernels_q2c || !ctx.kernels_q2c->rhs_info.pack_func_lut_ex) {
+                return -1;
+            }
+
+            static const int32_t lut_i8_i2[4] = {-3, -1, 1, 3};
+            const size_t bytes_per_block = QKQ2_0C / 4;
+            const size_t blocks_per_row = k / QKQ2_0C;
+            const size_t total_blocks   = n * blocks_per_row;
+
+            const block_q2_0c * src = reinterpret_cast<const block_q2_0c *>(data);
+
+            std::vector<uint8_t> values_buf(total_blocks * bytes_per_block);
+            std::vector<float>   scales_buf(n);
+
+            split_values_scales_offsets_per_channel(src, n, k, values_buf.data(), scales_buf.data());
+
+            const size_t nr = ctx.kernels_q2c->gemm.get_nr();
+            const size_t kr = ctx.kernels_q2c->gemm.get_kr();
+            const size_t sr = ctx.kernels_q2c->gemm.get_sr();
+
+            struct kai_rhs_pack_qs4cxs1s0_param params;
+            params.lhs_zero_point = 1;
+            params.rhs_zero_point = 2;
+
+            ctx.kernels_q2c->rhs_info.pack_func_lut_ex(
+                1, n, k,
+                nr, kr, sr,
+                0, 0,
+                values_buf.data(),
+                nullptr,
+                scales_buf.data(),
+                tensor->data,
+                0, &params,
+                &lut_i8_i2[0]);
+
+            GGML_UNUSED(data_size);
+            return 0;
+        }
 
         kleidiai_weight_header * header = kleidiai_weight_header_from_ptr(tensor->data);
         if (!header) {
@@ -1536,12 +1576,25 @@ static size_t ggml_backend_cpu_kleidiai_buffer_type_get_alignment(ggml_backend_b
 static size_t ggml_backend_cpu_kleidiai_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const struct ggml_tensor * tensor) {
     GGML_UNUSED(buft);
 
-    if (tensor->type != GGML_TYPE_Q4_0 && tensor->type != GGML_TYPE_Q8_0) {
+    if (tensor->type != GGML_TYPE_Q4_0 &&
+        tensor->type != GGML_TYPE_Q8_0 &&
+        tensor->type != GGML_TYPE_Q2_0C) {
         return ggml_nbytes(tensor);
     }
 
     const size_t n = tensor->ne[1];
     const size_t k = tensor->ne[0];
+
+    if (tensor->type == GGML_TYPE_Q2_0C) {
+        if (!ctx.kernels_q2c || !ctx.kernels_q2c->rhs_info.packed_size_ex) {
+            return ggml_nbytes(tensor);
+        }
+        const size_t nr = ctx.kernels_q2c->gemm.get_nr();
+        const size_t kr = ctx.kernels_q2c->gemm.get_kr();
+        const size_t sr = ctx.kernels_q2c->gemm.get_sr();
+        const size_t packed = ctx.kernels_q2c->rhs_info.packed_size_ex(n, k, nr, kr, sr);
+        return std::max(packed, ggml_nbytes(tensor));
+    }
 
     size_t cursor = sizeof(kleidiai_weight_header);
     cursor = align_up(cursor, GGML_KLEIDIAI_PACK_ALIGN);
