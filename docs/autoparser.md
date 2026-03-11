@@ -47,11 +47,10 @@ All structs are defined in [common/chat-auto-parser.h](common/chat-auto-parser.h
 | Value           | Description                                                                       |
 |-----------------|-----------------------------------------------------------------------------------|
 | `NONE`          | No reasoning markers detected                                                     |
-| `TAG_BASED`     | Standard tag-based: `<think>...</think>`                                          |
-| `DELIMITER`     | Delimiter-based: reasoning ends at a delimiter (e.g., `[BEGIN FINAL RESPONSE]`)   |
-| `FORCED_OPEN`   | Template ends with open reasoning tag when `enable_thinking=true`                 |
-| `FORCED_CLOSED` | `enable_thinking=false` emits both tags; `enable_thinking=true` emits only start  |
+| `TAG_BASED`     | Tag-based: `<think>...</think>` (start can be empty for delimiter-style formats)  |
 | `TOOLS_ONLY`    | Reasoning only appears in tool call responses, not plain content                  |
+
+**Reasoning Prefill**: When a template adds reasoning markers (e.g., `<think>` or `<think></think>`) at the end of the prompt, these are extracted as `reasoning_prefill` and prepended to the model output before parsing. This allows the parser to always use an optional TAG_BASED pattern while correctly handling templates that force thinking mode open or closed. Whitespace-only reasoning content (from `<think></think>` prefill) is automatically discarded.
 
 **`content_mode`**: How the template wraps assistant content.
 
@@ -263,14 +262,15 @@ Text is segmentized into markers and non-marker fragments using `segmentize_mark
 - Uses PEG parsers to find surrounding markers:
   - If both pre/post markers found in `diff.right` → `TAG_BASED` (both tags visible in diff = no forced close)
   - If both found but post marker only in the full output B → `FORCED_CLOSED`
-  - If only post marker found → `DELIMITER`
+  - If only post marker found → `TAG_BASED` (delimiter-style, empty start)
 - Sets `reasoning.start` and `reasoning.end`
 
 **R2 — `compare_thinking_enabled()`**: Compares `enable_thinking=false` vs `true` with a generation prompt.
 
-- Detects `FORCED_OPEN`: `enable_thinking=true` adds a non-empty marker at the end of the prompt (where model will start generating) — sets `reasoning.start`, mode = `FORCED_OPEN`
-- Detects `FORCED_CLOSED`: `enable_thinking=false` produces both start+end markers; `enable_thinking=true` produces only start marker
+- Detects template-added reasoning markers: `enable_thinking=true` adds a non-empty marker at the end of the prompt — sets `reasoning.start`, mode = `TAG_BASED`
+- Detects start+end pattern: `enable_thinking=false` produces both start+end markers; `enable_thinking=true` produces only start marker — both classified as `TAG_BASED`
 - Handles the reverse case: if both start and end are still empty, looks for a single-segment diff on each side to extract both markers
+- The reasoning prefill (markers added by the template) is later extracted in `generate_parser()` and prepended to model output before parsing
 
 **R3 — `compare_reasoning_scope()`**: Compares assistant message with reasoning+text-content vs reasoning+tool-calls.
 
@@ -358,9 +358,10 @@ Each analyzer struct (`analyze_reasoning`, `analyze_content`, `analyze_tools`) i
 | Mode                              | Parser                                                              |
 |-----------------------------------|---------------------------------------------------------------------|
 | Not extracting reasoning          | `eps()`                                                             |
-| `FORCED_OPEN` or `FORCED_CLOSED`  | `reasoning(until(end)) + end` — opening tag was in the prompt       |
-| `TAG_BASED` or `TOOLS_ONLY`       | `optional(start + reasoning(until(end)) + end)`                     |
-| `DELIMITER`                       | `optional(reasoning(until(end)) + end)` — no start marker           |
+| `TAG_BASED` or `TOOLS_ONLY` (non-empty start) | `optional(start + reasoning(until(end)) + end)`          |
+| `TAG_BASED` or `TOOLS_ONLY` (empty start)     | `optional(reasoning(until(end)) + end)` — delimiter-style|
+
+Note: Templates that add reasoning markers to the prompt (e.g., `<think>`) have these extracted as `reasoning_prefill` and prepended to model output before parsing. The parser always uses the optional TAG_BASED pattern.
 
 #### Content Parser (`analyze_content::build_parser`)
 
@@ -516,7 +517,7 @@ To support a new template format:
 
 ## Edge Cases and Quirks
 
-1. **Forced Thinking**: When `enable_thinking=true` and the model prompt ends with an open reasoning tag (e.g., `<think>`), the parser enters forced thinking mode and immediately expects reasoning content without waiting for a start marker.
+1. **Reasoning Prefill**: When `enable_thinking=true` and the model prompt ends with reasoning markers (e.g., `<think>` or `<think></think>`), these are extracted as `reasoning_prefill` and prepended to model output before parsing. The parser always uses optional TAG_BASED reasoning, so it handles both thinking and non-thinking outputs dynamically. Whitespace-only reasoning content (from closed prefill like `<think></think>`) is discarded.
 2. **Per-Call vs Per-Section Markers**: Some templates wrap each tool call individually (`per_call_start/end`); others wrap the entire section (`section_start/end`). T2 (`check_per_call_markers()`) disambiguates by checking if the second call in a two-call output starts with the section marker.
 3. **Python Dict Format**: The Seed template family uses single-quoted JSON (`'key': 'value'`). The `uses_python_dicts` flag causes the PEG builder to register a flexible `json-string` rule accepting both quote styles before any JSON rules are built.
 4. **Tag Boundary Fixing**: `calculate_diff_split()` iteratively adjusts prefix/suffix boundaries to avoid splitting `<tag>` or `[marker]` tokens, ensuring clean extraction.

@@ -211,7 +211,7 @@ struct common_chat_params {
     std::string                         prompt;
     std::string                         grammar;
     bool                                grammar_lazy         = false;
-    bool                                thinking_forced_open = false;
+    std::string                         reasoning_prefill;
     bool                                supports_thinking    = false;
     std::string                         thinking_start_tag;  // e.g., "<think>"
     std::string                         thinking_end_tag;    // e.g., "</think>"
@@ -228,14 +228,14 @@ struct common_chat_parser_params {
     common_reasoning_format reasoning_format     = COMMON_REASONING_FORMAT_NONE; // TODO: refactor this to "bool parse_reasoning"
     // Whether reasoning_content should be inlined in the content (e.g. for reasoning_format=deepseek in stream mode)
     bool                    reasoning_in_content = false;
-    bool                    thinking_forced_open = false;
+    std::string             reasoning_prefill;
     bool                    parse_tool_calls     = true;
     bool                    debug                = false;  // Enable debug output for PEG parser
     common_peg_arena        parser               = {};
     common_chat_parser_params() = default;
     common_chat_parser_params(const common_chat_params & chat_params) {
         format               = chat_params.format;
-        thinking_forced_open = chat_params.thinking_forced_open;
+        reasoning_prefill    = chat_params.reasoning_prefill;
     }
 };
 

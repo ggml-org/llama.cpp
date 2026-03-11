@@ -49,6 +49,42 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
     data.preserved_tokens = autoparser.preserved_tokens;
     data.parser           = parser.save();
 
+    // Extract reasoning prefill from the end of the rendered prompt.
+    // If the template added reasoning markers (e.g. <think> or <think></think>) at the end,
+    // store them so they can be prepended to model output before parsing.
+    if (inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE &&
+        autoparser.reasoning.mode != reasoning_mode::NONE &&
+        !autoparser.reasoning.end.empty()) {
+        const auto & r_start = autoparser.reasoning.start;
+        const auto & r_end   = autoparser.reasoning.end;
+        // Trim trailing whitespace from the prompt for suffix matching
+        auto prompt_trimmed = data.prompt;
+        while (!prompt_trimmed.empty() &&
+               (prompt_trimmed.back() == ' ' || prompt_trimmed.back() == '\n' ||
+                prompt_trimmed.back() == '\r' || prompt_trimmed.back() == '\t')) {
+            prompt_trimmed.pop_back();
+        }
+        if (!r_start.empty()) {
+            // Check for start+end at end of prompt (e.g. <think></think>)
+            if (string_ends_with(prompt_trimmed, r_end)) {
+                auto before_end = prompt_trimmed.substr(0, prompt_trimmed.size() - r_end.size());
+                while (!before_end.empty() &&
+                       (before_end.back() == ' ' || before_end.back() == '\n' ||
+                        before_end.back() == '\r' || before_end.back() == '\t')) {
+                    before_end.pop_back();
+                }
+                if (string_ends_with(before_end, r_start)) {
+                    // Prompt ends with start + whitespace + end: extract from start to end of trimmed prompt
+                    data.reasoning_prefill = prompt_trimmed.substr(before_end.size() - r_start.size());
+                }
+            }
+            // Check for just start at end of prompt (e.g. <think>)
+            if (data.reasoning_prefill.empty() && string_ends_with(prompt_trimmed, r_start)) {
+                data.reasoning_prefill = r_start;
+            }
+        }
+    }
+
     // Build grammar if tools are present
     bool has_tools =
         autoparser.tools.format.mode != tool_format::NONE && inputs.tools.is_array() && !inputs.tools.empty();
@@ -96,9 +132,8 @@ common_peg_arena autoparser::build_parser(const templates_params & inputs) const
 
         parser_build_context ctx(p, inputs);
         bool                 extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
-        bool                 enable_thinking   = inputs.enable_thinking;
 
-        ctx.extracting_reasoning = extract_reasoning && enable_thinking && reasoning.mode != reasoning_mode::NONE;
+        ctx.extracting_reasoning = extract_reasoning && reasoning.mode != reasoning_mode::NONE;
         ctx.content              = &content;
 
         // Build reasoning parser
@@ -130,24 +165,15 @@ common_peg_parser analyze_reasoning::build_parser(parser_build_context & ctx) co
         return p.eps();
     }
 
-    bool thinking_forced_open   = (mode == reasoning_mode::FORCED_OPEN);
-    bool thinking_forced_closed = (mode == reasoning_mode::FORCED_CLOSED);
-
-    if (thinking_forced_open || thinking_forced_closed) {
-        // Thinking is forced open OR forced closed with enable_thinking=true
-        // In both cases, expect only the closing tag (opening was in template)
-        // However, since we might have incorrectly detected the open/close pattern,
-        // we admit an optional starting marker
-        return p.optional(p.literal(start)) + p.reasoning(p.until(end)) + end;
-    }
     if (mode == reasoning_mode::TAG_BASED || mode == reasoning_mode::TOOLS_ONLY) {
-        // Standard tag-based reasoning OR tools-only mode (reasoning appears with tools)
-        // Both use the same tag-based pattern if markers are available
-        if (!start.empty() && !end.empty()) {
-            return p.optional(start + p.reasoning(p.until(end)) + end);
+        if (!end.empty()) {
+            if (!start.empty()) {
+                // Standard tag-based: optional(<think>reasoning</think>)
+                return p.optional(start + p.reasoning(p.until(end)) + end);
+            }
+            // Delimiter-style (empty start): optional(reasoning[DELIMITER])
+            return p.optional(p.reasoning(p.until(end)) + end);
         }
-    } else if (mode == reasoning_mode::DELIMITER) {
-        return p.optional(p.reasoning(p.until(end)) + end);
     }
 
     return p.eps();
