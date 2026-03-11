@@ -1380,7 +1380,6 @@ static void repack_mxfp4x4x2_mxfp4(void * data, const ggml_tensor * t, size_t si
     ggml_aligned_free(buf_rp, row_size_rp);
 }
 
-
 static void ggml_backend_hexagon_buffer_set_tensor(ggml_backend_buffer_t buffer,
                                                    ggml_tensor *         tensor,
                                                    const void *          data,
@@ -1394,7 +1393,6 @@ static void ggml_backend_hexagon_buffer_set_tensor(ggml_backend_buffer_t buffer,
 
     switch (tensor->type) {
         case GGML_TYPE_Q4_0:
-        case GGML_TYPE_IQ4_NL:   // IQ4_NL uses same binary layout as Q4_0
             GGML_ASSERT(offset == 0);
             GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
             repack_q4_0_q4x4x2(tensor, data, size);
@@ -1431,7 +1429,6 @@ static void ggml_backend_hexagon_buffer_get_tensor(ggml_backend_buffer_t buffer,
 
     switch (tensor->type) {
         case GGML_TYPE_Q4_0:
-        case GGML_TYPE_IQ4_NL:
             GGML_ASSERT(offset == 0);
             GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
             repack_q4x4x2_q4_0(data, tensor, size);
@@ -1843,25 +1840,6 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
             }
             break;
 
-        case GGML_TYPE_IQ4_NL:
-            // IQ4_NL only supported on v73+ (HMX path)
-            if (opt_arch < 73) {
-                return false;
-            }
-            if (src0->ne[0] % 32) {
-                return false;
-            }
-            if (src0->ne[1] > 16 * 1024) {
-                return false;
-            }
-            if ((src1->ne[2] != 1 || src1->ne[3] != 1)) {
-                return false;
-            }
-            if (src0->buffer && !ggml_backend_buffer_is_hexagon_repack(src0->buffer)) {
-                return false;
-            }
-            break;
-
         case GGML_TYPE_F16:
             if (src0->nb[1] < src0->nb[0]) {
                 GGML_LOG_DEBUG("ggml_hexagon_supported_mul_mat: permuted F16 src0 not supported\n");
@@ -1908,18 +1886,6 @@ static bool ggml_hexagon_supported_mul_mat_id(const struct ggml_hexagon_session 
             }
 
             // src0 (weights) must be repacked
-            if (src0->buffer && !ggml_backend_buffer_is_hexagon_repack(src0->buffer)) {
-                return false;
-            }
-            break;
-
-        case GGML_TYPE_IQ4_NL:
-            if (opt_arch < 73) {
-                return false;
-            }
-            if (src0->ne[0] % 32) {
-                return false;
-            }
             if (src0->buffer && !ggml_backend_buffer_is_hexagon_repack(src0->buffer)) {
                 return false;
             }

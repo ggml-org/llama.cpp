@@ -23,7 +23,6 @@ include(${HEXAGON_SDK_ROOT}/build/cmake/hexagon_fun.cmake)
 include(ExternalProject)
 
 option(GGML_HEXAGON_HTP_DEBUG "ggml-hexagon: enable HTP debug output" OFF)
-option(GGML_HEXAGON_ENV_FORCE_HVX "ggml-hexagon: allow GGML_HEXAGON_FORCE_HVX env to switch between HVX and HMX backends at runtime" ON)
 set(GGML_HEXAGON_HTP_CERT  "$ENV{HEXAGON_HTP_CERT}" CACHE PATH "ggml-hexagon: enable HTP library signing using certificate")
 set(GGML_HEXAGON_FP32_QUANTIZE_GROUP_SIZE 128 CACHE STRING "ggml-hexagon: quantize group size (32, 64, or 128)")
 
@@ -58,10 +57,6 @@ ggml_add_backend_library(${TARGET_NAME}
 
 target_link_libraries(${TARGET_NAME} PRIVATE htp_iface)
 target_include_directories(${TARGET_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/htp ${CMAKE_CURRENT_BINARY_DIR})
-
-if (GGML_HEXAGON_ENV_FORCE_HVX)
-    target_compile_definitions(${TARGET_NAME} PRIVATE GGML_HEXAGON_ENV_FORCE_HVX)
-endif()
 
 # Build HTP skels
 set(HTP_SKELS)

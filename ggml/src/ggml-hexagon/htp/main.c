@@ -1077,16 +1077,6 @@ static void proc_flash_attn_ext_req(struct htp_context *     ctx,
 // VTCM, DMA and thread dispatch are managed inside the HMX kernels.
 // ---------------------------------------------------------------------------
 
-// Debug: set to 1 to run both HMX and HVX for the first N matmuls and compare outputs.
-// Comparison metrics are returned to the host via htp_cmp_data in the response.
-#define HMX_DEBUG_COMPARE_HVX 0
-#define HMX_DEBUG_COMPARE_COUNT 200  // compare first N matmul invocations
-
-#if HMX_DEBUG_COMPARE_HVX
-static int hmx_matmul_invocation_count = 0;
-static struct htp_cmp_data hmx_cmp_result;  // filled per-op, sent in response
-#endif
-
 static void proc_hmx_matmul_req(struct htp_context *     ctx,
                                 struct htp_general_req * req,
                                 struct dspqueue_buffer * bufs,
@@ -1247,85 +1237,6 @@ static void proc_hmx_matmul_req(struct htp_context *     ctx,
             return;
         }
         vtcm_release(ctx);
-
-#if HMX_DEBUG_COMPARE_HVX
-        // Compare HMX output with HVX output for the first N matmuls.
-        // Save 64 HMX samples spread across the output, then run HVX and compare.
-        hmx_matmul_invocation_count++;
-        if (!is_batched && hmx_matmul_invocation_count <= HMX_DEBUG_COMPARE_COUNT) {
-            const int total_elems = m_hmx * n;
-            const int n_samples = (total_elems < 64) ? total_elems : 64;
-            const int stride = total_elems / n_samples;
-
-            // Save sampled HMX output values
-            float hmx_samples[64];
-            for (int _i = 0; _i < n_samples; _i++) {
-                hmx_samples[_i] = dst[_i * stride];
-            }
-
-            // Compute HMX output sum (lightweight checksum over ALL elements)
-            double hmx_sum = 0.0;
-            for (int _i = 0; _i < total_elems; _i++) hmx_sum += (double)dst[_i];
-
-            // Run HVX on same input data for comparison
-            struct htp_ops_context cmp_octx = { 0 };
-            cmp_octx.ctx       = ctx;
-            cmp_octx.src0      = req->src0;
-            cmp_octx.src1      = req->src1;
-            cmp_octx.src1.ne[1] = m_hmx;
-            cmp_octx.dst       = req->dst;
-            cmp_octx.dst.ne[1]  = m_hmx;
-            cmp_octx.flags     = req->flags & ~HTP_OPFLAGS_SKIP_QUANTIZE;
-            cmp_octx.op        = req->op;
-            cmp_octx.n_threads = ctx->n_threads;
-            cmp_octx.src0.data = (uint32_t) bufs[0].ptr;
-            cmp_octx.src1.data = (uint32_t) bufs[1].ptr;
-            cmp_octx.dst.data  = (uint32_t) bufs[2].ptr;
-
-            if (vtcm_acquire(ctx) == AEE_SUCCESS) {
-                op_matmul(&cmp_octx);
-                vtcm_release(ctx);
-            }
-
-            // Compute comparison metrics over sampled positions
-            float max_abs_diff = 0.0f, max_rel_diff = 0.0f;
-            double sum_sq_diff = 0.0;
-            for (int _i = 0; _i < n_samples; _i++) {
-                float hvx_val = dst[_i * stride];
-                float diff = hmx_samples[_i] - hvx_val;
-                if (diff < 0) diff = -diff;
-                double dd = (double)(hmx_samples[_i] - hvx_val);
-                sum_sq_diff += dd * dd;
-                if (diff > max_abs_diff) { max_abs_diff = diff; }
-                float ref = hvx_val < 0 ? -hvx_val : hvx_val;
-                if (ref > 1e-6f && diff / ref > max_rel_diff) max_rel_diff = diff / ref;
-            }
-            float rmse_sq = (float)(sum_sq_diff / n_samples);
-            float rmse = rmse_sq;
-            if (rmse > 0.0f) {
-                for (int _it = 0; _it < 5; _it++) rmse = 0.5f * (rmse + rmse_sq / rmse);
-            }
-
-            // Compute HVX output sum for global comparison
-            double hvx_sum = 0.0;
-            for (int _i = 0; _i < total_elems; _i++) hvx_sum += (double)dst[_i];
-
-            // Store comparison metrics in shared struct (sent to host in response)
-            hmx_cmp_result.flags      = HTP_CMP_FLAG_VALID;
-            hmx_cmp_result.invocation = (uint32_t)hmx_matmul_invocation_count;
-            hmx_cmp_result.m          = (uint32_t)m_hmx;
-            hmx_cmp_result.k          = (uint32_t)k;
-            hmx_cmp_result.n          = (uint32_t)n;
-            hmx_cmp_result.rmse       = rmse;
-            hmx_cmp_result.max_abs    = max_abs_diff;
-            hmx_cmp_result.max_rel    = max_rel_diff;
-            hmx_cmp_result.hmx_sum    = (float)hmx_sum;
-            hmx_cmp_result.hvx_sum    = (float)hvx_sum;
-            hmx_cmp_result.type       = req->src0.type;
-
-            // Leave HVX results in dst for correct downstream execution.
-        }
-#endif
     }
 
     // --- Phase 2: HVX on the remaining m_tail rows ---
@@ -1367,27 +1278,7 @@ static void proc_hmx_matmul_req(struct htp_context *     ctx,
 
     profile_stop(&prof);
 
-#if HMX_DEBUG_COMPARE_HVX
-    // Send response with comparison data embedded in the unused/cmp union
-    {
-        struct htp_general_rsp rsp;
-        memset(&rsp, 0, sizeof(rsp));
-        rsp.op          = req->op;
-        rsp.status      = rsp_status;
-        rsp.prof_usecs  = prof.usecs;
-        rsp.prof_cycles = prof.cycles;
-        rsp.prof_pkts   = prof.pkts;
-        rsp.cmp         = hmx_cmp_result;
-        // Clear for next invocation
-        hmx_cmp_result.flags = 0;
-
-        dspqueue_write(ctx->queue, 0, 1, rsp_bufs,
-                       sizeof(rsp), (const uint8_t *)&rsp,
-                       DSPQUEUE_TIMEOUT_NONE);
-    }
-#else
     send_htp_rsp(ctx, req->op, rsp_status, rsp_bufs, 1, &prof);
-#endif
 }
 
 #endif // HTP_HAS_HMX
