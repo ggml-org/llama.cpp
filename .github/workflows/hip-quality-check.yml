@@ -14,23 +14,9 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     paths: [
-      '.github/workflows/build.yml',
-      '.github/workflows/build-linux-cross.yml',
-      '.github/workflows/build-cmake-pkg.yml',
-      '**/CMakeLists.txt',
-      '**/.cmake',
-      '**/*.h',
-      '**/*.hpp',
-      '**/*.c',
-      '**/*.cpp',
+      '.github/workflows/hip-quality-check.yml',
       '**/*.cu',
-      '**/*.cuh',
-      '**/*.swift',
-      '**/*.m',
-      '**/*.metal',
-      '**/*.comp',
-      '**/*.glsl',
-      '**/*.wgsl'
+      '**/*.cuh'
     ]
 
 concurrency:
