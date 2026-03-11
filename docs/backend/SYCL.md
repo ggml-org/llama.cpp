@@ -787,7 +787,7 @@ use 1 SYCL GPUs: [0] with Max compute units:512
   ```
 
 ### **GitHub contribution**:
-Please add the `SYCL :` prefix/tag in issues/PRs titles to help the SYCL contributors to check/address them without delay.
+Please add the `[SYCL]` prefix/tag in issues/PRs titles to help the SYCL contributors to check/address them without delay.
 
 ## TODO
 
