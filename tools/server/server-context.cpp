@@ -2651,11 +2651,20 @@ private:
                     const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx), slot.id);
                     const auto pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx), slot.id);
 
-                    // no need for empty or small checkpoints
-                    do_checkpoint = do_checkpoint && (pos_min >= 0 && pos_max >= 64);
+                    {
+                        // for hybrid/recurrent models, even short prompts need checkpoints
+                        // to enable multi-turn cache reuse (recurrent state can't be rolled
+                        // back without one). SWA-only models can use a higher threshold.
+                        const bool is_hybrid_or_recurrent = llama_model_is_hybrid(model) || llama_model_is_recurrent(model);
+                        const int min_pos_max = is_hybrid_or_recurrent ? 0 : 64;
+                        const int min_spacing = is_hybrid_or_recurrent ? 0 : 64;
 
-                    // no need to create checkpoints that are too close together
-                    do_checkpoint = do_checkpoint && (slot.prompt.checkpoints.empty() || pos_max > slot.prompt.checkpoints.back().pos_max + 64);
+                        // no need for empty or small checkpoints
+                        do_checkpoint = do_checkpoint && (pos_min >= 0 && pos_max >= min_pos_max);
+
+                        // no need to create checkpoints that are too close together
+                        do_checkpoint = do_checkpoint && (slot.prompt.checkpoints.empty() || pos_max > slot.prompt.checkpoints.back().pos_max + min_spacing);
+                    }
 
                     // note: we create the checkpoint before calling llama_decode(), so the current batch is not
                     //       yet processed and therefore it is not part of the checkpoint.
