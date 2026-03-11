@@ -2444,12 +2444,64 @@ private:
                     SLT_INF(slot, "n_tokens = %d, memory_seq_rm [%d, end)\n", slot.prompt.n_tokens(), p0);
 
                     if (!llama_memory_seq_rm(llama_get_memory(ctx), slot.id, p0, -1)) {
-                        SLT_WRN(slot, "failed to truncate tokens with position >= %d - clearing the memory\n", p0);
+                        SLT_WRN(slot, "failed to truncate tokens with position >= %d, searching for a checkpoint to restore\n", p0);
 
-                        slot.prompt_clear(true);
+                        // for hybrid/recurrent models, seq_rm fails because the recurrent
+                        // memory has no cell-level checkpoint at position p0.
+                        // try to restore the nearest server-level checkpoint before p0.
+                        bool restored = false;
 
-                        // there is no common part left
-                        slot.n_prompt_tokens_cache = 0;
+                        if (!slot.prompt.checkpoints.empty()) {
+                            const auto it = std::find_if(
+                                slot.prompt.checkpoints.rbegin(),
+                                slot.prompt.checkpoints.rend(),
+                                [&](const auto & cur) {
+                                    return cur.pos_max < p0;
+                                }
+                            );
+
+                            if (it != slot.prompt.checkpoints.rend()) {
+                                const size_t checkpoint_size = it->data.size();
+                                const size_t n = llama_state_seq_set_data_ext(ctx, it->data.data(), checkpoint_size, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+
+                                if (n == checkpoint_size) {
+                                    const llama_pos pos_restored = std::max(it->pos_min + 1, it->pos_max);
+                                    size_t n_past_new = std::min(slot.prompt.tokens.size_up_to_pos(pos_restored), (size_t) it->n_tokens);
+
+                                    // [TAG_PROMPT_LOGITS] guarantee at least 1 token for evaluation
+                                    if (n_past_new == (size_t) slot.task->n_tokens() && n_past_new > 0) {
+                                        n_past_new--;
+                                    }
+
+                                    SLT_WRN(slot, "restored checkpoint at seq_rm failure (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB), n_past: %d -> %zu\n",
+                                            it->pos_min, it->pos_max, it->n_tokens, (float) checkpoint_size / 1024 / 1024,
+                                            slot.prompt.n_tokens(), n_past_new);
+
+                                    slot.prompt.tokens.keep_first(n_past_new);
+                                    slot.n_prompt_tokens_cache = n_past_new;
+                                    restored = true;
+
+                                    // erase checkpoints beyond the restored position
+                                    for (auto cit = slot.prompt.checkpoints.begin(); cit != slot.prompt.checkpoints.end();) {
+                                        if (cit->pos_max >= p0) {
+                                            cit = slot.prompt.checkpoints.erase(cit);
+                                        } else {
+                                            ++cit;
+                                        }
+                                    }
+                                } else {
+                                    SLT_ERR(slot, "failed to restore checkpoint (pos_min = %d, pos_max = %d, size = %.3f MiB)\n",
+                                            it->pos_min, it->pos_max, (float) checkpoint_size / 1024 / 1024);
+                                }
+                            }
+                        }
+
+                        if (!restored) {
+                            SLT_WRN(slot, "no suitable checkpoint found for p0 = %d, clearing the memory\n", p0);
+
+                            slot.prompt_clear(true);
+                            slot.n_prompt_tokens_cache = 0;
+                        }
                     }
 
                     bool do_checkpoint = params_base.n_ctx_checkpoints > 0;
