@@ -27005,6 +27005,22 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
                     if (g_moe_profile_enabled) { g_moe_profile.moe_ids_done(); }
 
+                    // Record expert activations for warmup profiling (fusion GATE-first path)
+                    if (!g_moe_warmup.warmup_done.load(std::memory_order_acquire)) {
+                        int seq_layer_id_fuse = -1;
+                        auto & seq_map_fuse = g_moe_layer_seq[ctx.device];
+                        auto   it_fuse      = seq_map_fuse.find(cur_layer_fast);
+                        if (it_fuse != seq_map_fuse.end()) {
+                            seq_layer_id_fuse = it_fuse->second;
+                        }
+                        if (seq_layer_id_fuse >= 0) {
+                            g_moe_warmup.record(seq_layer_id_fuse, ids_data_f, static_cast<int>(ids_n_elem));
+                            if (g_moe_warmup.tick_token()) {
+                                moe_apply_popularity_placement();
+                            }
+                        }
+                    }
+
                     // Resolve activation
                     const float * act_f = nullptr;
 
@@ -27248,6 +27264,22 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
 
                     if (g_moe_profile_enabled) { g_moe_profile.moe_ids_done(); }
+
+                    // Record expert activations for warmup profiling (fusion UP-first path)
+                    if (!g_moe_warmup.warmup_done.load(std::memory_order_acquire)) {
+                        int seq_layer_id_fuse = -1;
+                        auto & seq_map_fuse = g_moe_layer_seq[ctx.device];
+                        auto   it_fuse      = seq_map_fuse.find(cur_layer_fast);
+                        if (it_fuse != seq_map_fuse.end()) {
+                            seq_layer_id_fuse = it_fuse->second;
+                        }
+                        if (seq_layer_id_fuse >= 0) {
+                            g_moe_warmup.record(seq_layer_id_fuse, ids_data_f, static_cast<int>(ids_n_elem));
+                            if (g_moe_warmup.tick_token()) {
+                                moe_apply_popularity_placement();
+                            }
+                        }
+                    }
 
                     // Resolve activation
                     const float * act_f = nullptr;
