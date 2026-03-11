@@ -5062,7 +5062,7 @@ class Phi2Model(TextModel):
         self.gguf_writer.add_add_bos_token(False)
 
 
-@ModelBase.register("Phi3ForCausalLM")
+@ModelBase.register("Phi3ForCausalLM", "Phi4ForCausalLMV")
 class Phi3MiniModel(TextModel):
     model_arch = gguf.MODEL_ARCH.PHI3
 
@@ -5236,6 +5236,129 @@ class Phi3MiniModel(TextModel):
 
         yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FACTORS_LONG), torch.tensor(long_factors, dtype=torch.float32))
         yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FACTORS_SHORT), torch.tensor(short_factors, dtype=torch.float32))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith(("model.vision_tower.", "vision_tower.", "model.mm_projector.", "mm_projector.")):
+            return
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("Phi4ForCausalLMV")
+class Phi4VisionMmprojModel(MmprojModel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.hparams_vision is not None
+
+        self.vision_total_layers = int(self.find_vparam(self.n_block_keys))
+        if self.vision_total_layers < 2:
+            raise ValueError(
+                f"Phi-4 vision mmproj conversion requires at least 2 vision layers, got {self.vision_total_layers}"
+            )
+
+        # Phi-4 uses SigLIP2 hidden_states[-2], so export one fewer encoder block and
+        # drop post-layernorm/head weights. This makes the GGUF runtime output match
+        # the feature map consumed by the patched siglip.cpp Phi-4 projector path.
+        self.vision_export_layers = self.vision_total_layers - 1
+        self.vision_last_layer_idx = self.vision_total_layers - 1
+
+        for key in self.n_block_keys:
+            if key in self.hparams_vision:
+                self.hparams_vision[key] = self.vision_export_layers
+                break
+
+        self.block_count = self.vision_export_layers
+        self.tensor_map = gguf.get_tensor_name_map(gguf.MODEL_ARCH.MMPROJ, self.block_count)
+
+        patch_size = self.preprocessor_config.get("patch_size")
+        if patch_size is None:
+            raise KeyError("Phi-4 vision mmproj conversion requires patch_size in preprocessor_config.json")
+
+        self.hparams_vision["patch_size"] = patch_size
+
+        pos_emb_name = next(
+            (
+                name for name in self.model_tensors
+                if name.endswith("vision_model.embeddings.position_embedding.weight")
+            ),
+            None,
+        )
+        if pos_emb_name is None:
+            raise KeyError("Phi-4 vision mmproj conversion could not find position_embedding.weight")
+
+        pos_emb_shape = self.model_tensors[pos_emb_name]().shape
+        base_grid_tokens = int(pos_emb_shape[0])
+        grid_side = math.isqrt(base_grid_tokens)
+        if grid_side * grid_side != base_grid_tokens:
+            raise ValueError(f"Unexpected Phi-4 position embedding shape: {tuple(pos_emb_shape)}")
+
+        self.hparams_vision["image_size"] = grid_side * patch_size
+
+        min_num_patches = self.preprocessor_config.get("min_num_patches", self.global_config.get("min_num_patches"))
+        max_num_patches = self.preprocessor_config.get("max_num_patches", self.global_config.get("max_num_patches"))
+        if min_num_patches is None or max_num_patches is None:
+            raise KeyError("Phi-4 vision mmproj conversion requires min_num_patches and max_num_patches")
+
+        self.min_pixels = int(min_num_patches) * patch_size * patch_size
+        self.max_pixels = int(max_num_patches) * patch_size * patch_size
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        assert self.hparams_vision is not None
+
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.PHI4)
+        self.gguf_writer.add_vision_min_pixels(self.min_pixels)
+        self.gguf_writer.add_vision_max_pixels(self.max_pixels)
+        self.gguf_writer.add_vision_use_gelu(True)
+        self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams_vision.get("layer_norm_eps", 1e-6))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith(("model.vision_tower.vision_tower.", "vision_tower.")):
+            if ".vision_model.head." in name:
+                return
+
+            new_name = name.replace("model.vision_tower.vision_tower.", "vision_tower.")
+
+            if ".vision_model.post_layernorm." in new_name:
+                return
+
+            if bid is not None and bid == self.vision_last_layer_idx:
+                return
+
+            if new_name.endswith("vision_model.embeddings.patch_embedding.weight"):
+                assert self.hparams_vision is not None
+                if data_torch.ndim != 2:
+                    raise ValueError(f"Unexpected Phi-4 patch embedding shape: {tuple(data_torch.shape)}")
+
+                patch_area = self.hparams_vision["patch_size"] ** 2
+                in_features = data_torch.shape[1]
+                if in_features % patch_area != 0:
+                    raise ValueError(
+                        f"Phi-4 patch embedding input dim {in_features} is not divisible by patch area {patch_area}"
+                    )
+
+                num_channels = in_features // patch_area
+                patch_size = self.hparams_vision["patch_size"]
+                data_torch = data_torch.view(data_torch.shape[0], patch_size, patch_size, num_channels)
+                data_torch = data_torch.permute(0, 3, 1, 2)
+
+            yield from super().modify_tensors(data_torch, new_name, bid)
+            return
+
+        if name.startswith(("model.mm_projector.", "mm_projector.")):
+            local_name = name
+            local_name = local_name.replace("model.mm_projector.", "")
+            local_name = local_name.replace("mm_projector.", "")
+
+            if not (local_name.startswith("0.") or local_name.startswith("2.")):
+                return
+
+            suffix = ".bias" if local_name.endswith(".bias") else ".weight"
+            mm_idx = int(local_name.split(".", maxsplit=1)[0])
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.V_MMPROJ, mm_idx, suffix=suffix), data_torch)
+            return
+
+        return
 
 
 @ModelBase.register("PhiMoEForCausalLM")
