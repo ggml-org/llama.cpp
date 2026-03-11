@@ -1238,9 +1238,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
     quantize_state_impl qs(model, params);
 
-    // these need to be set to n_layer by default
-    qs.n_ffn_down = qs.n_ffn_gate = qs.n_ffn_up = (int)model.hparams.n_layer;
-
     if (params->only_copy) {
         ftype = ml.ftype;
     }
@@ -1347,6 +1344,49 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     // compute tensor metadata once and cache it
     std::vector<tensor_metadata> metadata(tensors.size());
 
+    // initialize quantization state before preliminary loop (counters for use_more_bits)
+    {
+        for (size_t i = 0; i < tensors.size(); ++i) {
+            const auto cat = tensor_get_category(tensors[i]->tensor->name);
+            if (category_is_attn_v(cat)) {
+                ++qs.n_attention_wv;
+            }
+            else if (cat == tensor_category::ATTENTION_QKV) {
+                ++qs.n_attn_qkv;
+            }
+            else if (cat == tensor_category::FFN_GATE_EXPS) {
+                ++qs.n_ffn_gate_exps;
+            }
+            else if (cat == tensor_category::FFN_GATE_SHEXP) {
+                ++qs.n_ffn_gate_shexp;
+            }
+            else if (cat == tensor_category::FFN_DOWN_EXPS) {
+                ++qs.n_ffn_down_exps;
+            }
+            else if (cat == tensor_category::FFN_DOWN_SHEXP) {
+                ++qs.n_ffn_down_shexp;
+            }
+            else if (cat == tensor_category::FFN_UP_EXPS) {
+                ++qs.n_ffn_up_exps;
+            }
+            else if (cat == tensor_category::FFN_UP_SHEXP) {
+                ++qs.n_ffn_up_shexp;
+            }
+            else if (cat == tensor_category::SSM_OUT) {
+                ++qs.n_ssm_out;
+            }
+            else if (cat == tensor_category::ATTENTION_Q) {
+                ++qs.n_attn_q;
+            }
+            if (cat == tensor_category::OUTPUT) {
+                qs.has_tied_embeddings = false;
+            }
+            metadata[i].category = cat; // save and re-use the category while we're at it
+        }
+        // these also need to be set to n_layer by default
+        qs.n_ffn_down = qs.n_ffn_gate = qs.n_ffn_up = (int)qs.model.hparams.n_layer;
+    }
+
     // flag for --dry-run
     bool will_require_imatrix = false;
 
@@ -1363,38 +1403,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
         if (category_is_attn_v(metadata[i].category)) {
             ++qs.n_attention_wv;
-        }
-        else if (metadata[i].category == tensor_category::ATTENTION_QKV) {
-            ++qs.n_attn_qkv;
-        }
-        else if (metadata[i].category == tensor_category::FFN_GATE_EXPS) {
-            ++qs.n_ffn_gate_exps;
-        }
-        else if (metadata[i].category == tensor_category::FFN_GATE_SHEXP) {
-            ++qs.n_ffn_gate_shexp;
-        }
-        else if (metadata[i].category == tensor_category::FFN_DOWN_EXPS) {
-            ++qs.n_ffn_down_exps;
-        }
-        else if (metadata[i].category == tensor_category::FFN_DOWN_SHEXP) {
-            ++qs.n_ffn_down_shexp;
-        }
-        else if (metadata[i].category == tensor_category::FFN_UP_EXPS) {
-            ++qs.n_ffn_up_exps;
-        }
-        else if (metadata[i].category == tensor_category::FFN_UP_SHEXP) {
-            ++qs.n_ffn_up_shexp;
-        }
-        else if (metadata[i].category == tensor_category::SSM_OUT) {
-            ++qs.n_ssm_out;
-        }
-        else if (metadata[i].category == tensor_category::ATTENTION_Q) {
-            ++qs.n_attn_q;
-        }
-
-        if (tensor_name_match_output_weight(name.c_str())) {
-            qs.has_tied_embeddings = false;
-        }
 
         uint16_t i_split = params->keep_split ? it->idx : 0;
         if (!ctx_outs[i_split]) {
