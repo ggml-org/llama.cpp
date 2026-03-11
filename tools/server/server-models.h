@@ -52,6 +52,8 @@ static std::string server_model_status_to_string(server_model_status status) {
 struct server_model_meta {
     common_preset preset;
     std::string name;
+    std::set<std::string> aliases; // additional names that resolve to this model
+    std::set<std::string> tags;    // informational tags, not used for routing
     int port = 0;
     server_model_status status = SERVER_MODEL_STATUS_UNLOADED;
     int64_t last_used = 0; // for LRU unloading
@@ -178,6 +180,7 @@ struct server_http_proxy : server_http_res {
     std::function<void()> cleanup = nullptr;
 public:
     server_http_proxy(const std::string & method,
+                      const std::string & scheme,
                       const std::string & host,
                       int port,
                       const std::string & path,

@@ -631,7 +631,7 @@ int ggml_metal_op_acc(ggml_metal_op_t ctx, int idx) {
     const bool inplace = (bool) ((const int32_t *) op->op_params)[4];
 
     if (!inplace) {
-        // run a separete kernel to cpy src->dst
+        // run a separate kernel to cpy src->dst
         // not sure how to avoid this
         // TODO: make a simpler cpy_bytes kernel
 
@@ -1644,7 +1644,7 @@ int ggml_metal_op_set(ggml_metal_op_t ctx, int idx) {
     const bool inplace = (bool) ((const int32_t *) op->op_params)[4];
 
     if (!inplace) {
-        // run a separete kernel to cpy src->dst
+        // run a separate kernel to cpy src->dst
         // not sure how to avoid this
         // TODO: make a simpler cpy_bytes kernel
 
@@ -1963,6 +1963,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
           (
            op->src[0]->type == GGML_TYPE_F32  || // TODO: helper function
            op->src[0]->type == GGML_TYPE_F16  ||
+           op->src[0]->type == GGML_TYPE_BF16 ||
            op->src[0]->type == GGML_TYPE_Q4_0 ||
            op->src[0]->type == GGML_TYPE_Q4_1 ||
            op->src[0]->type == GGML_TYPE_Q5_0 ||
@@ -1977,6 +1978,8 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
            op->src[0]->type == GGML_TYPE_Q4_K ||
            op->src[0]->type == GGML_TYPE_Q5_K ||
            op->src[0]->type == GGML_TYPE_Q6_K ||
+           op->src[0]->type == GGML_TYPE_Q2_K ||
+           op->src[0]->type == GGML_TYPE_Q3_K ||
            false) && (ne11 >= 4 && ne11 <= 8)
          )
         )
@@ -2005,7 +2008,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         const int16_t r0ptg  = nypsg*nsg;         // num src0 rows per threadgroup
               int16_t r1ptg  = 4;                 // num src1 rows per threadgroup
 
-        // note: not sure how optimal are those across all different hardware. there might be someting cleverer
+        // note: not sure how optimal are those across all different hardware. there might be something cleverer
         switch (ne11) {
             case 2:
                 r1ptg = 2; break;
@@ -3729,32 +3732,43 @@ int ggml_metal_op_upscale(ggml_metal_op_t ctx, int idx) {
     GGML_TENSOR_LOCALS( int32_t, ne,  op,         ne);
     GGML_TENSOR_LOCALS(uint64_t, nb,  op,         nb);
 
-    const float sf0 = (float)ne0/op->src[0]->ne[0];
-    const float sf1 = (float)ne1/op->src[0]->ne[1];
-    const float sf2 = (float)ne2/op->src[0]->ne[2];
-    const float sf3 = (float)ne3/op->src[0]->ne[3];
+    float sf0 = (float)ne0/op->src[0]->ne[0];
+    float sf1 = (float)ne1/op->src[0]->ne[1];
+    float sf2 = (float)ne2/op->src[0]->ne[2];
+    float sf3 = (float)ne3/op->src[0]->ne[3];
+
+    const int32_t mode_flags = ggml_get_op_params_i32(op, 0);
+
+    float poffs = 0.5f;
+
+    if (mode_flags & GGML_SCALE_FLAG_ALIGN_CORNERS) {
+        poffs = 0.0f;
+        sf0 = ne0 > 1 && ne00 > 1 ? (float)(ne0 - 1) / (ne00 - 1) : sf0;
+        sf1 = ne1 > 1 && ne01 > 1 ? (float)(ne1 - 1) / (ne01 - 1) : sf1;
+    }
 
     ggml_metal_kargs_upscale args = {
-        /*.ne00 =*/ ne00,
-        /*.ne01 =*/ ne01,
-        /*.ne02 =*/ ne02,
-        /*.ne03 =*/ ne03,
-        /*.nb00 =*/ nb00,
-        /*.nb01 =*/ nb01,
-        /*.nb02 =*/ nb02,
-        /*.nb03 =*/ nb03,
-        /*.ne0 =*/ ne0,
-        /*.ne1 =*/ ne1,
-        /*.ne2 =*/ ne2,
-        /*.ne3 =*/ ne3,
-        /*.nb0 =*/ nb0,
-        /*.nb1 =*/ nb1,
-        /*.nb2 =*/ nb2,
-        /*.nb3 =*/ nb3,
-        /*.sf0 =*/ sf0,
-        /*.sf1 =*/ sf1,
-        /*.sf2 =*/ sf2,
-        /*.sf3 =*/ sf3
+        /*.ne00  =*/ ne00,
+        /*.ne01  =*/ ne01,
+        /*.ne02  =*/ ne02,
+        /*.ne03  =*/ ne03,
+        /*.nb00  =*/ nb00,
+        /*.nb01  =*/ nb01,
+        /*.nb02  =*/ nb02,
+        /*.nb03  =*/ nb03,
+        /*.ne0   =*/ ne0,
+        /*.ne1   =*/ ne1,
+        /*.ne2   =*/ ne2,
+        /*.ne3   =*/ ne3,
+        /*.nb0   =*/ nb0,
+        /*.nb1   =*/ nb1,
+        /*.nb2   =*/ nb2,
+        /*.nb3   =*/ nb3,
+        /*.sf0   =*/ sf0,
+        /*.sf1   =*/ sf1,
+        /*.sf2   =*/ sf2,
+        /*.sf3   =*/ sf3,
+        /*.poffs =*/ poffs,
     };
 
     auto pipeline = ggml_metal_library_get_pipeline_upscale(lib, op);

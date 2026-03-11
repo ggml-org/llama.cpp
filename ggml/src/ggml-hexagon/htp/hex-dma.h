@@ -102,7 +102,7 @@ static inline bool dma_queue_push(dma_queue * q,
     dmlink(q->tail, desc);
     q->tail = desc;
 
-    // FARF(ERROR, "dma-push: i %u len %u dst %p src %p\n", q->push_idx, len, dst, src);
+    // FARF(ERROR, "dma-push: i %u width %u nrows %d dst %p src %p\n", q->push_idx, width, nrows, dptr.dst, dptr.src);
     q->push_idx = (q->push_idx + 1) & q->idx_mask;
     return true;
 }
@@ -144,9 +144,35 @@ static inline dma_ptr dma_queue_pop(dma_queue * q) {
 
     dptr = q->dptr[q->pop_idx];
 
-    // FARF(ERROR, "dma-pop: i %u dst %p\n", q->pop_idx, dst);
+    // FARF(ERROR, "dma-pop: i %u dst %p src %p\n", q->pop_idx, dptr.dst, dptr.src);
     q->pop_idx = (q->pop_idx + 1) & q->idx_mask;
     return dptr;
+}
+
+static inline dma_ptr dma_queue_pop_nowait(dma_queue * q) {
+    dma_ptr dptr  = { NULL };
+
+    if (q->push_idx == q->pop_idx) {
+        return dptr;
+    }
+
+    dptr = q->dptr[q->pop_idx];
+
+    // FARF(ERROR, "dma-pop-nowait: i %u dst %p src %p\n", q->pop_idx, dptr.dst, dptr.src);
+    q->pop_idx = (q->pop_idx + 1) & q->idx_mask;
+    return dptr;
+}
+
+static inline bool dma_queue_empty(dma_queue * q) {
+    return q->push_idx == q->pop_idx;
+}
+
+static inline uint32_t dma_queue_depth(dma_queue * q) {
+    return (q->push_idx - q->pop_idx) & q->idx_mask;
+}
+
+static inline uint32_t dma_queue_capacity(dma_queue * q) {
+    return q->capacity;
 }
 
 #ifdef __cplusplus

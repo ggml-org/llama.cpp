@@ -3,7 +3,7 @@
 #include "llama-model.h"
 #include "llama-graph.h"
 
-// note: almost all graphs require atleast sqrtf, so include cmath globally
+// note: almost all graphs require at least sqrtf, so include cmath globally
 #include <cmath>
 
 //
@@ -422,6 +422,10 @@ struct llm_build_nemotron_h : public llm_build_mamba_base {
 
 struct llm_build_neo_bert : public llm_graph_context {
     llm_build_neo_bert(const llama_model & model, const llm_graph_params & params);
+};
+
+struct llm_build_eurobert : public llm_graph_context {
+    llm_build_eurobert(const llama_model & model, const llm_graph_params & params);
 };
 
 template <bool iswa>

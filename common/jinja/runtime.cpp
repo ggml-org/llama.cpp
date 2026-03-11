@@ -85,7 +85,7 @@ value identifier::execute_impl(context & ctx) {
     auto builtins = global_builtins();
     if (!it->is_undefined()) {
         if (ctx.is_get_stats) {
-            it->stats.used = true;
+            value_t::stats_t::mark_used(it);
         }
         JJ_DEBUG("Identifier '%s' found, type = %s", val.c_str(), it->type().c_str());
         return it;
@@ -114,8 +114,10 @@ value binary_expression::execute_impl(context & ctx) {
 
     // Logical operators
     if (op.value == "and") {
+        JJ_DEBUG("Executing logical test: %s AND %s", left->type().c_str(), right->type().c_str());
         return left_val->as_bool() ? right->execute(ctx) : std::move(left_val);
     } else if (op.value == "or") {
+        JJ_DEBUG("Executing logical test: %s OR %s", left->type().c_str(), right->type().c_str());
         return left_val->as_bool() ? std::move(left_val) : right->execute(ctx);
     }
 
@@ -277,7 +279,7 @@ value binary_expression::execute_impl(context & ctx) {
 static value try_builtin_func(context & ctx, const std::string & name, value & input, bool undef_on_missing = false) {
     JJ_DEBUG("Trying built-in function '%s' for type %s", name.c_str(), input->type().c_str());
     if (ctx.is_get_stats) {
-        input->stats.used = true;
+        value_t::stats_t::mark_used(input);
         input->stats.ops.insert(name);
     }
     auto builtins = input->get_builtins();
@@ -448,7 +450,7 @@ value for_statement::execute_impl(context & ctx) {
 
     // mark the variable being iterated as used for stats
     if (ctx.is_get_stats) {
-        iterable_val->stats.used = true;
+        value_t::stats_t::mark_used(iterable_val);
         iterable_val->stats.ops.insert("array_access");
     }
 
@@ -470,7 +472,7 @@ value for_statement::execute_impl(context & ctx) {
             items.push_back(std::move(tuple));
         }
         if (ctx.is_get_stats) {
-            iterable_val->stats.used = true;
+            value_t::stats_t::mark_used(iterable_val);
             iterable_val->stats.ops.insert("object_access");
         }
     } else {
@@ -480,7 +482,7 @@ value for_statement::execute_impl(context & ctx) {
             items.push_back(item);
         }
         if (ctx.is_get_stats) {
-            iterable_val->stats.used = true;
+            value_t::stats_t::mark_used(iterable_val);
             iterable_val->stats.ops.insert("array_access");
         }
     }
@@ -721,6 +723,8 @@ value member_expression::execute_impl(context & ctx) {
         int64_t arr_size = 0;
         if (is_val<value_array>(object)) {
             arr_size = object->as_array().size();
+        } else if (is_val<value_string>(object)) {
+            arr_size = object->as_string().length();
         }
 
         if (is_stmt<slice_expression>(this->property)) {
@@ -817,8 +821,9 @@ value member_expression::execute_impl(context & ctx) {
     }
 
     if (ctx.is_get_stats && val && object && property) {
-        val->stats.used = true;
-        object->stats.used = true;
+        value_t::stats_t::mark_used(val);
+        value_t::stats_t::mark_used(object);
+        value_t::stats_t::mark_used(property);
         if (is_val<value_int>(property)) {
             object->stats.ops.insert("array_access");
         } else if (is_val<value_string>(property)) {
@@ -835,7 +840,7 @@ value call_expression::execute_impl(context & ctx) {
     for (auto & arg_stmt : this->args) {
         auto arg_val = arg_stmt->execute(ctx);
         JJ_DEBUG("  Argument type: %s", arg_val->type().c_str());
-        args.push_back(std::move(arg_val));
+        args.push_back(arg_val);
     }
     // execute callee
     value callee_val = callee->execute(ctx);

@@ -145,8 +145,31 @@ class RemotingCodebaseGenerator:
         enum_lines.append(f"  APIR_BACKEND_DISPATCH_TABLE_COUNT = {total_count},")
         enum_lines.append("} ApirBackendCommandType;")
 
+        # Generate function name mapping
+        func_lines = []
+        func_lines.append("static inline const char * apir_dispatch_command_name(ApirBackendCommandType type) {")
+        func_lines.append("    switch (type) {")
+
+        current_group = None
+        for func in functions:
+            # Add comment for new group
+            if func['group_name'] != current_group:
+                func_lines.append(f"        /* {func['group_description']} */")
+                current_group = func['group_name']
+
+            # Generate clean function name without backend_ prefix
+            clean_name = f"{func['group_name']}_{func['function_name']}"
+            func_lines.append(f"        case {func['enum_name']}:")
+            func_lines.append(f"            return \"{clean_name}\";")
+
+        func_lines.append("")
+        func_lines.append("        default:")
+        func_lines.append("            return \"unknown\";")
+        func_lines.append("    }")
+        func_lines.append("}")
+
         # Full header template
-        header_content = NL.join(enum_lines) + "\n"
+        header_content = NL.join(enum_lines) + "\n\n" + NL.join(func_lines) + "\n"
 
         return header_content
 
@@ -170,19 +193,6 @@ class RemotingCodebaseGenerator:
 
             decl_lines.append(f"{signature} {func['backend_function']}({params});")
 
-        # Switch cases
-        switch_lines = []
-        current_group = None
-
-        for func in functions:
-            if func['group_name'] != current_group:
-                switch_lines.append(f"  /* {func['group_description']} */")
-                current_group = func['group_name']
-
-            deprecated = " (DEPRECATED)" if func['deprecated'] else ""
-
-            switch_lines.append(f"  case {func['enum_name']}: return \"{func['backend_function']}{deprecated}\";")
-
         # Dispatch table
         table_lines = []
         current_group = None
@@ -200,15 +210,6 @@ class RemotingCodebaseGenerator:
 #pragma once
 
 {NL.join(decl_lines)}
-
-static inline const char *backend_dispatch_command_name(ApirBackendCommandType type)
-{{
-  switch (type) {{
-{NL.join(switch_lines)}
-
-  default: return "unknown";
-  }}
-}}
 
 extern "C" {{
 static const backend_dispatch_t apir_backend_dispatch_table[APIR_BACKEND_DISPATCH_TABLE_COUNT] = {{
