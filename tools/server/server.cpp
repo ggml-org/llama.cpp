@@ -107,6 +107,10 @@ int main(int argc, char ** argv) {
     llama_backend_init();
     llama_numa_init(params.numa);
 
+    if (!set_process_priority(params.cpuparams.priority)) {
+        LOG_WRN("%s: failed to set process priority\n", __func__);
+    }
+
     LOG_INF("system info: n_threads = %d, n_threads_batch = %d, total_threads = %d\n", params.cpuparams.n_threads, params.cpuparams_batch.n_threads, std::thread::hardware_concurrency());
     LOG_INF("\n");
     LOG_INF("%s\n", common_params_get_system_info(params).c_str());
