@@ -318,6 +318,12 @@ class AgenticStore {
 		const maxTurns = agenticConfig.maxTurns;
 		const maxToolPreviewLines = agenticConfig.maxToolPreviewLines;
 
+		// Resolve effective model for vision capability checks.
+		// In ROUTER mode, options.model is always set by the caller.
+		// In MODEL mode, options.model is undefined; use the single loaded model
+		// which carries modalities bridged from /props.
+		const effectiveModel = options.model || modelsStore.models[0]?.model || '';
+
 		for (let turn = 0; turn < maxTurns; turn++) {
 			this.updateSession(conversationId, { currentTurn: turn + 1 });
 			agenticTimings.turns = turn + 1;
@@ -571,14 +577,14 @@ class AgenticStore {
 				];
 				for (const attachment of attachments) {
 					if (attachment.type === AttachmentType.IMAGE) {
-						if (modelsStore.modelSupportsVision(options.model ?? '')) {
+						if (modelsStore.modelSupportsVision(effectiveModel)) {
 							contentParts.push({
 								type: ContentPartType.IMAGE_URL,
 								image_url: { url: (attachment as DatabaseMessageExtraImageFile).base64Url }
 							});
 						} else {
 							console.info(
-								`[AgenticStore] Skipping image attachment (model "${options.model}" does not support vision)`
+								`[AgenticStore] Skipping image attachment (model "${effectiveModel}" does not support vision)`
 							);
 						}
 					}
