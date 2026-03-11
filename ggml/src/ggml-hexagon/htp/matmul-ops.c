@@ -97,15 +97,20 @@ static inline HVX_Vector_x8 hvx_vec_load_q4x4x8(const uint8_t * restrict ptr) {
     HVX_Vector v6 = Q6_V_vand_VV(v6_7, mask_h4);  // & 0x0F
     HVX_Vector v7 = Q6_Vub_vlsr_VubR(v6_7, 4);    // >> 4
 
+    HVX_VectorPair v0_1_p = Q6_W_vshuff_VVR(v1, v0, -1);
+    HVX_VectorPair v2_3_p = Q6_W_vshuff_VVR(v3, v2, -1);
+    HVX_VectorPair v4_5_p = Q6_W_vshuff_VVR(v5, v4, -1);
+    HVX_VectorPair v6_7_p = Q6_W_vshuff_VVR(v7, v6, -1);
+
     // Convert uint4 to int4 (i.e. x - 8)
-    v0 = Q6_Vb_vsub_VbVb(v0, i8);
-    v1 = Q6_Vb_vsub_VbVb(v1, i8);
-    v2 = Q6_Vb_vsub_VbVb(v2, i8);
-    v3 = Q6_Vb_vsub_VbVb(v3, i8);
-    v4 = Q6_Vb_vsub_VbVb(v4, i8);
-    v5 = Q6_Vb_vsub_VbVb(v5, i8);
-    v6 = Q6_Vb_vsub_VbVb(v6, i8);
-    v7 = Q6_Vb_vsub_VbVb(v7, i8);
+    v0 = Q6_Vb_vsub_VbVb(Q6_V_lo_W(v0_1_p), i8);
+    v1 = Q6_Vb_vsub_VbVb(Q6_V_hi_W(v0_1_p), i8);
+    v2 = Q6_Vb_vsub_VbVb(Q6_V_lo_W(v2_3_p), i8);
+    v3 = Q6_Vb_vsub_VbVb(Q6_V_hi_W(v2_3_p), i8);
+    v4 = Q6_Vb_vsub_VbVb(Q6_V_lo_W(v4_5_p), i8);
+    v5 = Q6_Vb_vsub_VbVb(Q6_V_hi_W(v4_5_p), i8);
+    v6 = Q6_Vb_vsub_VbVb(Q6_V_lo_W(v6_7_p), i8);
+    v7 = Q6_Vb_vsub_VbVb(Q6_V_hi_W(v6_7_p), i8);
 
     HVX_Vector_x8 r = { v0, v1, v2, v3, v4, v5, v6, v7 };
     return r;
@@ -131,14 +136,19 @@ static inline HVX_Vector_x8 hvx_vec_load_mxfp4x4x8(const uint8_t * restrict ptr)
     HVX_Vector v6 = Q6_V_vand_VV(v6_7, mask_h4);  // & 0x0F
     HVX_Vector v7 = Q6_Vub_vlsr_VubR(v6_7, 4);    // >> 4
 
-    v0 = Q6_Vb_vlut32_VbVbI(v0, lut, 0);
-    v1 = Q6_Vb_vlut32_VbVbI(v1, lut, 0);
-    v2 = Q6_Vb_vlut32_VbVbI(v2, lut, 0);
-    v3 = Q6_Vb_vlut32_VbVbI(v3, lut, 0);
-    v4 = Q6_Vb_vlut32_VbVbI(v4, lut, 0);
-    v5 = Q6_Vb_vlut32_VbVbI(v5, lut, 0);
-    v6 = Q6_Vb_vlut32_VbVbI(v6, lut, 0);
-    v7 = Q6_Vb_vlut32_VbVbI(v7, lut, 0);
+    HVX_VectorPair v0_1_p = Q6_W_vshuff_VVR(v1, v0, -1);
+    HVX_VectorPair v2_3_p = Q6_W_vshuff_VVR(v3, v2, -1);
+    HVX_VectorPair v4_5_p = Q6_W_vshuff_VVR(v5, v4, -1);
+    HVX_VectorPair v6_7_p = Q6_W_vshuff_VVR(v7, v6, -1);
+
+    v0 = Q6_Vb_vlut32_VbVbI(Q6_V_lo_W(v0_1_p), lut, 0);
+    v1 = Q6_Vb_vlut32_VbVbI(Q6_V_hi_W(v0_1_p), lut, 0);
+    v2 = Q6_Vb_vlut32_VbVbI(Q6_V_lo_W(v2_3_p), lut, 0);
+    v3 = Q6_Vb_vlut32_VbVbI(Q6_V_hi_W(v2_3_p), lut, 0);
+    v4 = Q6_Vb_vlut32_VbVbI(Q6_V_lo_W(v4_5_p), lut, 0);
+    v5 = Q6_Vb_vlut32_VbVbI(Q6_V_hi_W(v4_5_p), lut, 0);
+    v6 = Q6_Vb_vlut32_VbVbI(Q6_V_lo_W(v6_7_p), lut, 0);
+    v7 = Q6_Vb_vlut32_VbVbI(Q6_V_hi_W(v6_7_p), lut, 0);
 
     HVX_Vector_x8 r = { v0, v1, v2, v3, v4, v5, v6, v7 };
     return r;

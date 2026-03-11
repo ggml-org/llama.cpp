@@ -437,7 +437,7 @@ static void repack_row_q4x4x2(uint8_t * y, const block_q4_0 * x, int64_t k) {
 
         uint8_t * q = y_q + (i * qblk_size);
         for (int j = 0; j < qk / 2; j++) {
-            q[j] = (qs[j + 128] << 4) | qs[j];
+            q[j] = (qs[j*2+1] << 4) | qs[j*2+0];
         }
     }
 
@@ -487,8 +487,8 @@ static void unpack_row_q4x4x2(block_q4_0 * x, const uint8_t * y, int64_t k) {
 
         const uint8_t * q = y_q + (i * qblk_size);
         for (int j = 0; j < qk / 2; j++) {
-            qs[j]       = q[j] & 0xf;
-            qs[j + 128] = q[j] >> 4;
+            qs[j*2+0] = q[j] & 0xf;
+            qs[j*2+1] = q[j] >> 4;
         }
 
         pack_q4_0_quants(&x[i * 8 + 0], qs, 0);
@@ -1114,7 +1114,7 @@ static void repack_row_mxfp4x4x2(uint8_t * y, const block_mxfp4 * x, int64_t k) 
 
         uint8_t * q = y_q + (i * qblk_size);
         for (int j = 0; j < qk / 2; j++) {
-            q[j] = (qs[j + 128] << 4) | qs[j];
+            q[j] = (qs[j*2+1] << 4) | qs[j*2+0];
         }
     }
 
@@ -1164,8 +1164,8 @@ static void unpack_row_mxfp4x4x2(block_mxfp4 * x, const uint8_t * y, int64_t k) 
 
         const uint8_t * q = y_q + (i * qblk_size);
         for (int j = 0; j < qk / 2; j++) {
-            qs[j]       = q[j] & 0xf;
-            qs[j + 128] = q[j] >> 4;
+            qs[j*2+0] = q[j] & 0xf;
+            qs[j*2+1] = q[j] >> 4;
         }
 
         pack_mxfp4_quants(&x[i * 8 + 0], qs, 0);
