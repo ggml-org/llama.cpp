@@ -90,6 +90,27 @@ static bool has_avxvnniint8() {
 }
 
 // ---------------------------------------------------------------------------
+// Runtime-dispatched signed int8 dot product (8 × int32 lane sums).
+// Uses VNNI _mm256_dpbssd_epi32 when available at runtime, falls back to
+// sign-trick + maddubs + madd on AVX2-only CPUs.  Prevents SIGILL when
+// a VNNI-compiled binary runs on a non-VNNI CPU.
+// ---------------------------------------------------------------------------
+#if defined(__x86_64__) && defined(__AVX2__)
+static inline __m256i ggml_sycl_dot_i8(__m256i qx, __m256i qy) {
+#if defined(__AVXVNNIINT8__)
+    if (has_avxvnniint8()) {
+        return _mm256_dpbssd_epi32(_mm256_setzero_si256(), qx, qy);
+    }
+#endif
+    const __m256i ax   = _mm256_sign_epi8(qx, qx);
+    const __m256i sy   = _mm256_sign_epi8(qy, qx);
+    const __m256i dot  = _mm256_maddubs_epi16(ax, sy);
+    const __m256i ones = _mm256_set1_epi16(1);
+    return _mm256_madd_epi16(ones, dot);
+}
+#endif
+
+// ---------------------------------------------------------------------------
 // Host pointer registry: stores original mmap pointers for weight tensors.
 // Populated during set_tensor (when the host data from the GGUF mmap is still
 // available) and read during CPU dispatch to access quantized weight data
@@ -2510,17 +2531,8 @@ static inline void simd_mul_mat_q4_0_q8_0_4row(
             const float d  = cpu_half_to_f32(x0[ib].d) * q8_d;
             __m256i     qx = ggml_sycl_bytes_from_nibbles_32(x0[ib].qs);
             qx             = _mm256_sub_epi8(qx, off);
-#if defined(__AVXVNNIINT8__)
-            const __m256i prod = _mm256_dpbssd_epi32(_mm256_setzero_si256(), qx, qy);
-            acc0 = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod), acc0);
-#else
-            const __m256i ax     = _mm256_sign_epi8(qx, qx);
-            const __m256i sy     = _mm256_sign_epi8(qy, qx);
-            const __m256i dot    = _mm256_maddubs_epi16(ax, sy);
-            const __m256i ones   = _mm256_set1_epi16(1);
-            const __m256i summed = _mm256_madd_epi16(ones, dot);
-            acc0 = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(summed), acc0);
-#endif
+            const __m256i prod0 = ggml_sycl_dot_i8(qx, qy);
+            acc0 = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod0), acc0);
         }
 
         // --- Row 1 ---
@@ -2528,17 +2540,8 @@ static inline void simd_mul_mat_q4_0_q8_0_4row(
             const float d  = cpu_half_to_f32(x1[ib].d) * q8_d;
             __m256i     qx = ggml_sycl_bytes_from_nibbles_32(x1[ib].qs);
             qx             = _mm256_sub_epi8(qx, off);
-#if defined(__AVXVNNIINT8__)
-            const __m256i prod = _mm256_dpbssd_epi32(_mm256_setzero_si256(), qx, qy);
-            acc1 = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod), acc1);
-#else
-            const __m256i ax     = _mm256_sign_epi8(qx, qx);
-            const __m256i sy     = _mm256_sign_epi8(qy, qx);
-            const __m256i dot    = _mm256_maddubs_epi16(ax, sy);
-            const __m256i ones   = _mm256_set1_epi16(1);
-            const __m256i summed = _mm256_madd_epi16(ones, dot);
-            acc1 = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(summed), acc1);
-#endif
+            const __m256i prod1 = ggml_sycl_dot_i8(qx, qy);
+            acc1 = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod1), acc1);
         }
 
         // --- Row 2 ---
@@ -2546,17 +2549,8 @@ static inline void simd_mul_mat_q4_0_q8_0_4row(
             const float d  = cpu_half_to_f32(x2[ib].d) * q8_d;
             __m256i     qx = ggml_sycl_bytes_from_nibbles_32(x2[ib].qs);
             qx             = _mm256_sub_epi8(qx, off);
-#if defined(__AVXVNNIINT8__)
-            const __m256i prod = _mm256_dpbssd_epi32(_mm256_setzero_si256(), qx, qy);
-            acc2 = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod), acc2);
-#else
-            const __m256i ax     = _mm256_sign_epi8(qx, qx);
-            const __m256i sy     = _mm256_sign_epi8(qy, qx);
-            const __m256i dot    = _mm256_maddubs_epi16(ax, sy);
-            const __m256i ones   = _mm256_set1_epi16(1);
-            const __m256i summed = _mm256_madd_epi16(ones, dot);
-            acc2 = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(summed), acc2);
-#endif
+            const __m256i prod2 = ggml_sycl_dot_i8(qx, qy);
+            acc2 = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod2), acc2);
         }
 
         // --- Row 3 ---
@@ -2564,17 +2558,8 @@ static inline void simd_mul_mat_q4_0_q8_0_4row(
             const float d  = cpu_half_to_f32(x3[ib].d) * q8_d;
             __m256i     qx = ggml_sycl_bytes_from_nibbles_32(x3[ib].qs);
             qx             = _mm256_sub_epi8(qx, off);
-#if defined(__AVXVNNIINT8__)
-            const __m256i prod = _mm256_dpbssd_epi32(_mm256_setzero_si256(), qx, qy);
-            acc3 = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod), acc3);
-#else
-            const __m256i ax     = _mm256_sign_epi8(qx, qx);
-            const __m256i sy     = _mm256_sign_epi8(qy, qx);
-            const __m256i dot    = _mm256_maddubs_epi16(ax, sy);
-            const __m256i ones   = _mm256_set1_epi16(1);
-            const __m256i summed = _mm256_madd_epi16(ones, dot);
-            acc3 = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(summed), acc3);
-#endif
+            const __m256i prod3 = ggml_sycl_dot_i8(qx, qy);
+            acc3 = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod3), acc3);
         }
     }
 
@@ -2629,24 +2614,12 @@ static inline void simd_mul_mat_mxfp4_q8_0_4row(
             GGML_MXFP4_DOT_ACCUM(qx, qy, d, accr) \
         }
 
-        // Dispatch based on available instructions
-#if defined(__AVXVNNIINT8__)
+        // Dispatch via runtime-checked ggml_sycl_dot_i8()
 #define GGML_MXFP4_DOT_ACCUM(qx, qy, d, acc) \
             { \
-                const __m256i prod = _mm256_dpbssd_epi32(_mm256_setzero_si256(), qx, qy); \
+                const __m256i prod = ggml_sycl_dot_i8(qx, qy); \
                 acc = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod), acc); \
             }
-#else
-#define GGML_MXFP4_DOT_ACCUM(qx, qy, d, acc) \
-            { \
-                const __m256i ax     = _mm256_sign_epi8(qx, qx); \
-                const __m256i sy     = _mm256_sign_epi8(qy, qx); \
-                const __m256i dot    = _mm256_maddubs_epi16(ax, sy); \
-                const __m256i ones   = _mm256_set1_epi16(1); \
-                const __m256i summed = _mm256_madd_epi16(ones, dot); \
-                acc = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(summed), acc); \
-            }
-#endif
 
         MXFP4_DOT_ROW(x0, acc0)
         MXFP4_DOT_ROW(x1, acc1)
@@ -2700,23 +2673,11 @@ static inline void simd_mxfp4_q8_0_4row_tile(
             GGML_MXFP4_DOT_ACCUM_TILE(qx, qy, d, accr) \
         }
 
-#if defined(__AVXVNNIINT8__)
 #define GGML_MXFP4_DOT_ACCUM_TILE(qx, qy, d, acc) \
             { \
-                const __m256i prod = _mm256_dpbssd_epi32(_mm256_setzero_si256(), qx, qy); \
+                const __m256i prod = ggml_sycl_dot_i8(qx, qy); \
                 acc = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod), acc); \
             }
-#else
-#define GGML_MXFP4_DOT_ACCUM_TILE(qx, qy, d, acc) \
-            { \
-                const __m256i ax     = _mm256_sign_epi8(qx, qx); \
-                const __m256i sy     = _mm256_sign_epi8(qy, qx); \
-                const __m256i dot    = _mm256_maddubs_epi16(ax, sy); \
-                const __m256i ones   = _mm256_set1_epi16(1); \
-                const __m256i summed = _mm256_madd_epi16(ones, dot); \
-                acc = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(summed), acc); \
-            }
-#endif
 
         MXFP4_DOT_ROW_TILE(x0, acc0)
         MXFP4_DOT_ROW_TILE(x1, acc1)
@@ -2766,23 +2727,11 @@ static inline void simd_mxfp4_1row_4act_tile(
             GGML_MXFP4_DOT_ACT_ACCUM(qx, qy, d, accr) \
         }
 
-#if defined(__AVXVNNIINT8__)
 #define GGML_MXFP4_DOT_ACT_ACCUM(qx, qy, d, acc) \
             { \
-                const __m256i prod = _mm256_dpbssd_epi32(_mm256_setzero_si256(), qx, qy); \
+                const __m256i prod = ggml_sycl_dot_i8(qx, qy); \
                 acc = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod), acc); \
             }
-#else
-#define GGML_MXFP4_DOT_ACT_ACCUM(qx, qy, d, acc) \
-            { \
-                const __m256i ax     = _mm256_sign_epi8(qx, qx); \
-                const __m256i sy     = _mm256_sign_epi8(qy, qx); \
-                const __m256i dot    = _mm256_maddubs_epi16(ax, sy); \
-                const __m256i ones   = _mm256_set1_epi16(1); \
-                const __m256i summed = _mm256_madd_epi16(ones, dot); \
-                acc = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(summed), acc); \
-            }
-#endif
 
         MXFP4_DOT_ACT_TILE(y0, acc0)
         MXFP4_DOT_ACT_TILE(y1, acc1)
@@ -3277,17 +3226,8 @@ static inline void simd_fused_gate_up_silu_q4_0_q8_0(
             const float d  = cpu_half_to_f32(xg[ib].d) * q8_d;
             __m256i     qx = ggml_sycl_bytes_from_nibbles_32(xg[ib].qs);
             qx             = _mm256_sub_epi8(qx, off);
-#if defined(__AVXVNNIINT8__)
-            const __m256i prod = _mm256_dpbssd_epi32(_mm256_setzero_si256(), qx, qy);
-            acc_gate = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod), acc_gate);
-#else
-            const __m256i ax     = _mm256_sign_epi8(qx, qx);
-            const __m256i sy     = _mm256_sign_epi8(qy, qx);
-            const __m256i dot    = _mm256_maddubs_epi16(ax, sy);
-            const __m256i ones   = _mm256_set1_epi16(1);
-            const __m256i summed = _mm256_madd_epi16(ones, dot);
-            acc_gate = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(summed), acc_gate);
-#endif
+            const __m256i prod_g = ggml_sycl_dot_i8(qx, qy);
+            acc_gate = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod_g), acc_gate);
         }
 
         // Up row
@@ -3295,17 +3235,8 @@ static inline void simd_fused_gate_up_silu_q4_0_q8_0(
             const float d  = cpu_half_to_f32(xu[ib].d) * q8_d;
             __m256i     qx = ggml_sycl_bytes_from_nibbles_32(xu[ib].qs);
             qx             = _mm256_sub_epi8(qx, off);
-#if defined(__AVXVNNIINT8__)
-            const __m256i prod = _mm256_dpbssd_epi32(_mm256_setzero_si256(), qx, qy);
-            acc_up = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod), acc_up);
-#else
-            const __m256i ax     = _mm256_sign_epi8(qx, qx);
-            const __m256i sy     = _mm256_sign_epi8(qy, qx);
-            const __m256i dot    = _mm256_maddubs_epi16(ax, sy);
-            const __m256i ones   = _mm256_set1_epi16(1);
-            const __m256i summed = _mm256_madd_epi16(ones, dot);
-            acc_up = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(summed), acc_up);
-#endif
+            const __m256i prod_u = ggml_sycl_dot_i8(qx, qy);
+            acc_up = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod_u), acc_up);
         }
     }
 
