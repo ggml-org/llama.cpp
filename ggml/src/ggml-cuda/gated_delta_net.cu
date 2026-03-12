@@ -152,7 +152,6 @@ __global__ void gated_delta_net_cuda(const float * q,
 
     if (tokens_to_process != n_tokens) {
         // handle tail case
-// handle tail
 #pragma unroll
         for (int i = 0; i < n_tokens_per_loop; i++) {
             const int t = tokens_to_process + i;
