@@ -4424,7 +4424,8 @@ get_range_offset_and_length(Range r, size_t content_length) {
   assert(r.first <= r.second &&
          r.second < static_cast<ssize_t>(content_length));
   (void)(content_length);
-  return std::make_pair(r.first, static_cast<size_t>(r.second - r.first) + 1);
+  return std::make_pair(static_cast<size_t>(r.first),
+                        static_cast<size_t>(r.second - r.first) + 1);
 }
 
 std::string make_content_range_header_field(
@@ -8616,11 +8617,17 @@ ClientImpl::open_stream(const std::string &method, const std::string &path,
   handle.body_reader_.stream = handle.stream_;
   handle.body_reader_.payload_max_length = payload_max_length_;
 
-  auto content_length_str = handle.response->get_header_value("Content-Length");
-  if (!content_length_str.empty()) {
+  if (handle.response->has_header("Content-Length")) {
+    bool is_invalid = false;
+    auto content_length = detail::get_header_value_u64(
+        handle.response->headers, "Content-Length", 0, 0, is_invalid);
+    if (is_invalid) {
+      handle.error = Error::Read;
+      handle.response.reset();
+      return handle;
+    }
     handle.body_reader_.has_content_length = true;
-    handle.body_reader_.content_length =
-        static_cast<size_t>(std::stoull(content_length_str));
+    handle.body_reader_.content_length = content_length;
   }
 
   auto transfer_encoding =
