@@ -45,6 +45,12 @@ __global__ void gated_delta_net_cuda(const float * q,
     static_assert(S_v % warp_size == 0, "S_v must be a multiple of warp_size");
     constexpr int rows_per_lane = (S_v + warp_size - 1) / warp_size;
     float         s_shard[rows_per_lane];
+    float         qs[n_tokens_per_loop][rows_per_lane];
+    float         ks[n_tokens_per_loop][rows_per_lane];
+    float         vs[n_tokens_per_loop];
+    float         beta_ts[n_tokens_per_loop];
+    // non-KDA has one g per column, KDA has one g per row
+    float         g_vals[n_tokens_per_loop][rows_per_lane];
     int           idx[rows_per_lane];
     // state is stored transposed: M[col][i] = S[i][col], row col is contiguous
 #pragma unroll
@@ -54,41 +60,54 @@ __global__ void gated_delta_net_cuda(const float * q,
         idx[r]      = i;
     }
 
-    for (int ts = 0; ts < n_tokens; ts += n_tokens_per_loop) {
+    for (int ts = 0; ts < n_tokens; ts+= n_tokens_per_loop) {
 #pragma unroll
         for (int i = 0; i < n_tokens_per_loop; i++) {
-            const int t = ts + i;
-            const float * q_t = q + iq3 * sq3 + t * sq2 + iq1 * sq1;
-            const float * k_t = k + iq3 * sq3 + t * sq2 + iq1 * sq1;
-            const float * v_t = v + sequence * sv3 + t * sv2 + h_idx * sv1;
-
+            const int     t         = ts + i;
+            const float * q_t       = q + iq3 * sq3 + t * sq2 + iq1 * sq1;
+            const float * k_t       = k + iq3 * sq3 + t * sq2 + iq1 * sq1;
+            const float * v_t       = v + sequence * sv3 + t * sv2 + h_idx * sv1;
             const int64_t gb_offset = sequence * sb3 + t * sb2 + h_idx * sb1;
             const float * beta_t    = beta + gb_offset;
             const float * g_t       = g + gb_offset * (KDA ? S_v : 1);
 
-            const float beta_val = *beta_t;
-
+            beta_ts[i] = *beta_t;
+            vs[i]      = v_t[col];
             if constexpr (!KDA) {
-                const float g_val = expf(*g_t);
+                g_vals[i][0] = expf(*g_t);
+            }
+#pragma unroll
+            for (int r = 0; r < rows_per_lane; r++) {
+                qs[i][r] = q_t[idx[r]];
+                ks[i][r] = k_t[idx[r]];
+                if constexpr (KDA) {
+                    g_vals[i][r] = expf(g_t[idx[r]]);
+                }
+            }
+        }
+#pragma unroll
+        for (int i = 0; i < n_tokens_per_loop; i++) {
+            if constexpr (!KDA) {
+                const float g_val = g_vals[i][0];
 
                 // kv[col] = (S^T @ k)[col] = sum_i S[i][col] * k[i]
                 float kv_shard = 0.0f;
 #pragma unroll
                 for (int r = 0; r < rows_per_lane; r++) {
-                    kv_shard += s_shard[r] * k_t[idx[r]];
+                    kv_shard += s_shard[r] * ks[i][r];
                 }
                 float kv_col = warp_reduce_sum<warp_size>(kv_shard);
 
                 // delta[col] = (v[col] - g * kv[col]) * beta
-                float delta_col = (v_t[col] - g_val * kv_col) * beta_val;
+                float delta_col = (vs[i] - g_val * kv_col) * beta_ts[i];
 
                 // fused: S[i][col] = g * S[i][col] + k[i] * delta[col]
                 // attn[col] = (S^T @ q)[col] = sum_i S[i][col] * q[i]
                 float attn_partial = 0.0f;
 #pragma unroll
                 for (int r = 0; r < rows_per_lane; r++) {
-                    s_shard[r]  = g_val * s_shard[r] + k_t[idx[r]] * delta_col;
-                    attn_partial += s_shard[r] * q_t[idx[r]];
+                    s_shard[r] = g_val * s_shard[r] + ks[i][r] * delta_col;
+                    attn_partial += s_shard[r] * qs[i][r];
                 }
 
                 float attn_col = warp_reduce_sum<warp_size>(attn_partial);
@@ -101,21 +120,21 @@ __global__ void gated_delta_net_cuda(const float * q,
                 float kv_shard = 0.0f;
 #pragma unroll
                 for (int r = 0; r < rows_per_lane; r++) {
-                    kv_shard += expf(g_t[idx[r]]) * s_shard[r] * k_t[idx[r]];
+                    kv_shard += g_vals[i][r] * s_shard[r] * ks[i][r];
                 }
 
                 float kv_col = warp_reduce_sum<warp_size>(kv_shard);
 
                 // delta[col] = (v[col] - kv[col]) * beta
-                float delta_col = (v_t[col] - kv_col) * beta_val;
+                float delta_col = (vs[i] - kv_col) * beta_ts[i];
 
                 // fused: S[i][col] = g[i] * S[i][col] + k[i] * delta[col]
                 // attn[col] = (S^T @ q)[col] = sum_i S[i][col] * q[i]
                 float attn_partial = 0.0f;
 #pragma unroll
                 for (int r = 0; r < rows_per_lane; r++) {
-                    s_shard[r]  = expf(g_t[idx[r]]) * s_shard[r] + k_t[idx[r]] * delta_col;
-                    attn_partial += s_shard[r] * q_t[idx[r]];
+                    s_shard[r] = g_vals[i][r] * s_shard[r] + ks[i][r] * delta_col;
+                    attn_partial += s_shard[r] * qs[i][r];
                 }
 
                 float attn_col = warp_reduce_sum<warp_size>(attn_partial);
@@ -132,8 +151,7 @@ __global__ void gated_delta_net_cuda(const float * q,
     // Write state back to global memory (transposed layout)
 #pragma unroll
     for (int r = 0; r < rows_per_lane; r++) {
-        const int i          = r * warp_size + lane;
-        state[col * S_v + i] = s_shard[r];
+        state[col * S_v + idx[r]] = s_shard[r];
     }
 }
 
@@ -161,8 +179,8 @@ static void launch_gated_delta_net(
 
     switch (S_v) {
         case 16:
-            if (n_tokens >= 4){
-                gated_delta_net_cuda<16, KDA, 4><<<grid_dims, block_dims, 0, stream>>>(
+            if (n_tokens >= 24){
+                gated_delta_net_cuda<16, KDA, 24><<<grid_dims, block_dims, 0, stream>>>(
                 q_d, k_d, v_d, g_d, b_d, s_d, dst_d, H,
                 n_tokens, n_seqs, sq1, sq2, sq3, sv1, sv2, sv3,
                 sb1, sb2, sb3, neqk1_magic, rq3_magic, scale);
@@ -174,8 +192,8 @@ static void launch_gated_delta_net(
             }
             break;
         case 32:
-            if (n_tokens >= 4){
-                gated_delta_net_cuda<32, KDA, 4><<<grid_dims, block_dims, 0, stream>>>(
+            if (n_tokens >= 24){
+                gated_delta_net_cuda<32, KDA, 24><<<grid_dims, block_dims, 0, stream>>>(
                 q_d, k_d, v_d, g_d, b_d, s_d, dst_d, H,
                 n_tokens, n_seqs, sq1, sq2, sq3, sv1, sv2, sv3,
                 sb1, sb2, sb3, neqk1_magic, rq3_magic, scale);
@@ -187,8 +205,8 @@ static void launch_gated_delta_net(
             }
             break;
         case 64: {
-            if (n_tokens >= 4){
-                gated_delta_net_cuda<64, KDA, 4><<<grid_dims, block_dims, 0, stream>>>(
+            if (n_tokens >= 24){
+                gated_delta_net_cuda<64, KDA, 24><<<grid_dims, block_dims, 0, stream>>>(
                 q_d, k_d, v_d, g_d, b_d, s_d, dst_d, H,
                 n_tokens, n_seqs, sq1, sq2, sq3, sv1, sv2, sv3,
                 sb1, sb2, sb3, neqk1_magic, rq3_magic, scale);
@@ -201,8 +219,8 @@ static void launch_gated_delta_net(
             break;
         }
         case 128: {
-            if (n_tokens >= 4){
-                gated_delta_net_cuda<128, KDA, 4><<<grid_dims, block_dims, 0, stream>>>(
+            if (n_tokens >= 24){
+                gated_delta_net_cuda<128, KDA, 24><<<grid_dims, block_dims, 0, stream>>>(
                 q_d, k_d, v_d, g_d, b_d, s_d, dst_d, H,
                 n_tokens, n_seqs, sq1, sq2, sq3, sv1, sv2, sv3,
                 sb1, sb2, sb3, neqk1_magic, rq3_magic, scale);
