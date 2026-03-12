@@ -62,7 +62,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          source scl_source enable gcc-toolset-12
+          set +u; source scl_source enable gcc-toolset-12; set -u
           cat /etc/os-release || true
           uname -a
           gcc --version
@@ -74,7 +74,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          source scl_source enable gcc-toolset-12
+          set +u; source scl_source enable gcc-toolset-12; set -u
           cmake -S . -B build \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
@@ -87,7 +87,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          source scl_source enable gcc-toolset-12
+          set +u; source scl_source enable gcc-toolset-12; set -u
           cmake --build build --config ${BUILD_TYPE} -j"$(nproc)"
 
       - name: Prepare release payload
