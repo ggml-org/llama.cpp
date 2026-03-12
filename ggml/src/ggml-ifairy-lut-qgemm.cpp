@@ -66,6 +66,105 @@ static inline int ggml_ifairy_u8_to_s8_int(uint8_t v) {
 // 终极优化 1：向量化 Preprocess（拯救 TG256 首Token延迟）
 // 修复了复数点乘的 LUT 构建逻辑，彻底解耦实部与虚部！
 // ===========================================================================
+static void ggml_ifairy_lut_preprocess_lut16_one(const block_ifairy_q16 * act_blocks,
+                                                 int64_t                  blocks,
+                                                 int64_t                  groups_per_block,
+                                                 float *                  scales_out,
+                                                 int8_t *                 lut_out,
+                                                 int64_t                  g0,
+                                                 int64_t                  gstep) {
+#if defined(__AVX2__)
+    const __m256i c0_ac_bc = _mm256_setr_epi8(-1, 1, 0, 0, -1, 1, 0, 0, -1, 1, 0, 0, -1, 1, 0, 0,  // lower = c0_r
+                                              0, 0, -1, 1, 0, 0, -1, 1, 0, 0, -1, 1, 0, 0, -1, 1   // upper = c0_i
+    );
+    const __m256i c1_ac_bc = _mm256_setr_epi8(-1, -1, -1, -1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0,  // lower = c1_r
+                                              0, 0, 0, 0, 0, 0, 0, 0, -1, -1, -1, -1, 1, 1, 1, 1   // upper = c1_i
+    );
+
+    const __m256i c0_bd_ad = _mm256_setr_epi8(0, 0, 1, -1, 0, 0, 1, -1, 0, 0, 1, -1, 0, 0, 1, -1,  // lower = -c0_i
+                                              -1, 1, 0, 0, -1, 1, 0, 0, -1, 1, 0, 0, -1, 1, 0, 0   // upper = c0_r
+    );
+    const __m256i c1_bd_ad = _mm256_setr_epi8(0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, -1, -1, -1, -1,  // lower = -c1_i
+                                              -1, -1, -1, -1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0   // upper = c1_r
+    );
+#endif
+
+    for (int64_t blk = 0; blk < blocks; ++blk) {
+        scales_out[blk * 2 + 0] = GGML_FP16_TO_FP32(act_blocks[blk].d_real);
+        scales_out[blk * 2 + 1] = GGML_FP16_TO_FP32(act_blocks[blk].d_imag);
+    }
+
+    const int64_t groups = blocks * groups_per_block;
+    for (int64_t g = g0; g < groups; g += gstep) {
+        const int64_t blk      = g / groups_per_block;
+        const int64_t base_off = (g % groups_per_block) * 2;
+
+        int xr0 = ggml_ifairy_u8_to_s8_int(act_blocks[blk].x_real[base_off + 0]);
+        int xi0 = ggml_ifairy_u8_to_s8_int(act_blocks[blk].x_imag[base_off + 0]);
+        int xr1 = ggml_ifairy_u8_to_s8_int(act_blocks[blk].x_real[base_off + 1]);
+        int xi1 = ggml_ifairy_u8_to_s8_int(act_blocks[blk].x_imag[base_off + 1]);
+
+        const int r0 = xr0;
+        const int r1 = xr1;
+        const int i0 = -xi0;
+        const int i1 = -xi1;
+
+        int8_t * tbl = lut_out + (size_t) g * k_ifairy_lut_group_bytes;
+
+#if defined(__AVX2__)
+        const __m256i v_r0 = _mm256_set1_epi8((char) r0);
+        const __m256i v_r1 = _mm256_set1_epi8((char) r1);
+        const __m256i v_i0 = _mm256_set1_epi8((char) i0);
+        const __m256i v_i1 = _mm256_set1_epi8((char) i1);
+
+        __m256i tbl_ac_bc = _mm256_adds_epi8(_mm256_sign_epi8(v_r0, c0_ac_bc), _mm256_sign_epi8(v_r1, c1_ac_bc));
+        __m256i tbl_bd_ad = _mm256_adds_epi8(_mm256_sign_epi8(v_i0, c0_bd_ad), _mm256_sign_epi8(v_i1, c1_bd_ad));
+
+        _mm_storeu_si128((__m128i *) (tbl + 0), _mm256_castsi256_si128(tbl_ac_bc));
+        _mm_storeu_si128((__m128i *) (tbl + 16), _mm256_castsi256_si128(tbl_bd_ad));
+        _mm_storeu_si128((__m128i *) (tbl + 32), _mm256_extracti128_si256(tbl_ac_bc, 1));
+        _mm_storeu_si128((__m128i *) (tbl + 48), _mm256_extracti128_si256(tbl_bd_ad, 1));
+#else
+        alignas(16) int8_t ac_tbl[16] = {
+            ggml_ifairy_lut_sat_s8(-r0 - r1), ggml_ifairy_lut_sat_s8(+r0 - r1), ggml_ifairy_lut_sat_s8(-r1),
+            ggml_ifairy_lut_sat_s8(-r1),      ggml_ifairy_lut_sat_s8(-r0 + r1), ggml_ifairy_lut_sat_s8(+r0 + r1),
+            ggml_ifairy_lut_sat_s8(+r1),      ggml_ifairy_lut_sat_s8(+r1),      ggml_ifairy_lut_sat_s8(-r0),
+            ggml_ifairy_lut_sat_s8(+r0),      0,                                 0,
+            ggml_ifairy_lut_sat_s8(-r0),      ggml_ifairy_lut_sat_s8(+r0),      0,
+            0,
+        };
+        alignas(16) int8_t bd_tbl[16] = {
+            0,                                 0,                                 ggml_ifairy_lut_sat_s8(+i0),
+            ggml_ifairy_lut_sat_s8(-i0),      0,                                 0,
+            ggml_ifairy_lut_sat_s8(+i0),      ggml_ifairy_lut_sat_s8(-i0),      ggml_ifairy_lut_sat_s8(+i1),
+            ggml_ifairy_lut_sat_s8(+i1),      ggml_ifairy_lut_sat_s8(+i0 + i1), ggml_ifairy_lut_sat_s8(-i0 + i1),
+            ggml_ifairy_lut_sat_s8(-i1),      ggml_ifairy_lut_sat_s8(-i1),      ggml_ifairy_lut_sat_s8(+i0 - i1),
+            ggml_ifairy_lut_sat_s8(-i0 - i1),
+        };
+        alignas(16) int8_t bc_tbl[16] = {
+            0,                                 0,                                 ggml_ifairy_lut_sat_s8(-r0),
+            ggml_ifairy_lut_sat_s8(+r0),      0,                                 0,
+            ggml_ifairy_lut_sat_s8(-r0),      ggml_ifairy_lut_sat_s8(+r0),      ggml_ifairy_lut_sat_s8(-r1),
+            ggml_ifairy_lut_sat_s8(-r1),      ggml_ifairy_lut_sat_s8(-r0 - r1), ggml_ifairy_lut_sat_s8(+r0 - r1),
+            ggml_ifairy_lut_sat_s8(+r1),      ggml_ifairy_lut_sat_s8(+r1),      ggml_ifairy_lut_sat_s8(-r0 + r1),
+            ggml_ifairy_lut_sat_s8(+r0 + r1),
+        };
+        alignas(16) int8_t ad_tbl[16] = {
+            ggml_ifairy_lut_sat_s8(-i0 - i1), ggml_ifairy_lut_sat_s8(+i0 - i1), ggml_ifairy_lut_sat_s8(-i1),
+            ggml_ifairy_lut_sat_s8(-i1),      ggml_ifairy_lut_sat_s8(-i0 + i1), ggml_ifairy_lut_sat_s8(+i0 + i1),
+            ggml_ifairy_lut_sat_s8(+i1),      ggml_ifairy_lut_sat_s8(+i1),      ggml_ifairy_lut_sat_s8(-i0),
+            ggml_ifairy_lut_sat_s8(+i0),      0,                                 0,
+            ggml_ifairy_lut_sat_s8(-i0),      ggml_ifairy_lut_sat_s8(+i0),      0,
+            0,
+        };
+        memcpy(tbl + 0, ac_tbl, 16);
+        memcpy(tbl + 16, bd_tbl, 16);
+        memcpy(tbl + 32, bc_tbl, 16);
+        memcpy(tbl + 48, ad_tbl, 16);
+#endif
+    }
+}
+
 static void ggml_ifairy_lut_preprocess_lut16(int          m,
                                              int          k,
                                              int          n,
@@ -93,154 +192,16 @@ static void ggml_ifairy_lut_preprocess_lut16(int          m,
 
     const int col_start = shard_by_col ? ith : 0;
     const int col_step  = shard_by_col ? nth : 1;
-
-#if defined(__AVX2__)
-    // 重新设计掩码：让一个 256 位寄存器的高、低 128 位分别生成两个不同的独立表，避免叠加污染
-
-    // c0_ac_bc: 低128位放 W_r 符号(生成 ac)；高128位放 W_i 符号(生成 bc)
-    const __m256i c0_ac_bc = _mm256_setr_epi8(-1, 1, 0, 0, -1, 1, 0, 0, -1, 1, 0, 0, -1, 1, 0, 0,  // lower = c0_r
-                                              0, 0, -1, 1, 0, 0, -1, 1, 0, 0, -1, 1, 0, 0, -1, 1   // upper = c0_i
-    );
-    const __m256i c1_ac_bc = _mm256_setr_epi8(-1, -1, -1, -1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0,  // lower = c1_r
-                                              0, 0, 0, 0, 0, 0, 0, 0, -1, -1, -1, -1, 1, 1, 1, 1   // upper = c1_i
-    );
-
-    // c0_bd_ad: 低128位放 -W_i 符号(生成 bd)；高128位放 W_r 符号(生成 ad)
-    const __m256i c0_bd_ad = _mm256_setr_epi8(0, 0, 1, -1, 0, 0, 1, -1, 0, 0, 1, -1, 0, 0, 1, -1,  // lower = -c0_i
-                                              -1, 1, 0, 0, -1, 1, 0, 0, -1, 1, 0, 0, -1, 1, 0, 0   // upper = c0_r
-    );
-    const __m256i c1_bd_ad = _mm256_setr_epi8(0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, -1, -1, -1, -1,  // lower = -c1_i
-                                              -1, -1, -1, -1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0   // upper = c1_r
-    );
-#endif
+    const int64_t g0    = shard_by_col ? 0 : ith;
+    const int64_t gstep = shard_by_col ? 1 : (int64_t) nth;
 
     for (int col = col_start; col < n; col += col_step) {
         const uint8_t *          act_col_bytes = (const uint8_t *) act + (size_t) col * act_stride;
         const block_ifairy_q16 * act_blocks    = (const block_ifairy_q16 *) act_col_bytes;
         float *                  scales_out    = (float *) lut_scales + (size_t) col * (size_t) blocks * 2;
+        int8_t *                 lut_out = (int8_t *) ((uint8_t *) lut_buf + (size_t) col * (size_t) groups * k_ifairy_lut_group_bytes);
 
-        if (shard_by_col || ith == 0) {
-            for (int64_t blk = 0; blk < blocks; ++blk) {
-                scales_out[blk * 2 + 0] = GGML_FP16_TO_FP32(act_blocks[blk].d_real);
-                scales_out[blk * 2 + 1] = GGML_FP16_TO_FP32(act_blocks[blk].d_imag);
-            }
-        }
-
-        int8_t * lut_out = (int8_t *) ((uint8_t *) lut_buf + (size_t) col * (size_t) groups * k_ifairy_lut_group_bytes);
-        const int64_t g0 = shard_by_col ? 0 : ith;
-        const int64_t gstep = shard_by_col ? 1 : (int64_t) nth;
-
-        for (int64_t g = g0; g < groups; g += gstep) {
-            const int64_t blk      = g / groups_per_block;
-            const int64_t base_off = (g % groups_per_block) * 2;
-
-            int xr0 = ggml_ifairy_u8_to_s8_int(act_blocks[blk].x_real[base_off + 0]);
-            int xi0 = ggml_ifairy_u8_to_s8_int(act_blocks[blk].x_imag[base_off + 0]);
-            int xr1 = ggml_ifairy_u8_to_s8_int(act_blocks[blk].x_real[base_off + 1]);
-            int xi1 = ggml_ifairy_u8_to_s8_int(act_blocks[blk].x_imag[base_off + 1]);
-
-            const int r0 = xr0;
-            const int r1 = xr1;
-            const int i0 = -xi0;
-            const int i1 = -xi1;  // Pre-negate imag (保留原优良设计)
-
-            int8_t * tbl = lut_out + (size_t) g * k_ifairy_lut_group_bytes;
-
-#if defined(__AVX2__)
-            const __m256i v_r0 = _mm256_set1_epi8((char) r0);
-            const __m256i v_r1 = _mm256_set1_epi8((char) r1);
-            const __m256i v_i0 = _mm256_set1_epi8((char) i0);
-            const __m256i v_i1 = _mm256_set1_epi8((char) i1);
-
-            // 完美解耦复数相乘：一次 _mm256_adds_epi8 生成完全不同的高低 128 位数据表
-            __m256i tbl_ac_bc = _mm256_adds_epi8(_mm256_sign_epi8(v_r0, c0_ac_bc), _mm256_sign_epi8(v_r1, c1_ac_bc));
-            __m256i tbl_bd_ad = _mm256_adds_epi8(_mm256_sign_epi8(v_i0, c0_bd_ad), _mm256_sign_epi8(v_i1, c1_bd_ad));
-
-            // 严格按序写入 {ac, bd, bc, ad} 以供 QGEMM 提取
-            _mm_storeu_si128((__m128i *) (tbl + 0), _mm256_castsi256_si128(tbl_ac_bc));        // ac
-            _mm_storeu_si128((__m128i *) (tbl + 16), _mm256_castsi256_si128(tbl_bd_ad));       // bd
-            _mm_storeu_si128((__m128i *) (tbl + 32), _mm256_extracti128_si256(tbl_ac_bc, 1));  // bc
-            _mm_storeu_si128((__m128i *) (tbl + 48), _mm256_extracti128_si256(tbl_bd_ad, 1));  // ad
-#else
-            // 修正后的标量版表，确保符号和各项匹配准确无误（对应 AC=W_r*r0, BD=-W_i*i0, BC=W_i*r0, AD=W_r*i0）
-            alignas(16) int8_t ac_tbl[16] = {
-                ggml_ifairy_lut_sat_s8(-r0 - r1),
-                ggml_ifairy_lut_sat_s8(+r0 - r1),
-                ggml_ifairy_lut_sat_s8(-r1),
-                ggml_ifairy_lut_sat_s8(-r1),
-                ggml_ifairy_lut_sat_s8(-r0 + r1),
-                ggml_ifairy_lut_sat_s8(+r0 + r1),
-                ggml_ifairy_lut_sat_s8(+r1),
-                ggml_ifairy_lut_sat_s8(+r1),
-                ggml_ifairy_lut_sat_s8(-r0),
-                ggml_ifairy_lut_sat_s8(+r0),
-                0,
-                0,
-                ggml_ifairy_lut_sat_s8(-r0),
-                ggml_ifairy_lut_sat_s8(+r0),
-                0,
-                0,
-            };
-            alignas(16) int8_t bd_tbl[16] = {
-                0,
-                0,
-                ggml_ifairy_lut_sat_s8(+i0),
-                ggml_ifairy_lut_sat_s8(-i0),
-                0,
-                0,
-                ggml_ifairy_lut_sat_s8(+i0),
-                ggml_ifairy_lut_sat_s8(-i0),
-                ggml_ifairy_lut_sat_s8(+i1),
-                ggml_ifairy_lut_sat_s8(+i1),
-                ggml_ifairy_lut_sat_s8(+i0 + i1),
-                ggml_ifairy_lut_sat_s8(-i0 + i1),
-                ggml_ifairy_lut_sat_s8(-i1),
-                ggml_ifairy_lut_sat_s8(-i1),
-                ggml_ifairy_lut_sat_s8(+i0 - i1),
-                ggml_ifairy_lut_sat_s8(-i0 - i1),
-            };
-            alignas(16) int8_t bc_tbl[16] = {
-                0,
-                0,
-                ggml_ifairy_lut_sat_s8(-r0),
-                ggml_ifairy_lut_sat_s8(+r0),
-                0,
-                0,
-                ggml_ifairy_lut_sat_s8(-r0),
-                ggml_ifairy_lut_sat_s8(+r0),
-                ggml_ifairy_lut_sat_s8(-r1),
-                ggml_ifairy_lut_sat_s8(-r1),
-                ggml_ifairy_lut_sat_s8(-r0 - r1),
-                ggml_ifairy_lut_sat_s8(+r0 - r1),
-                ggml_ifairy_lut_sat_s8(+r1),
-                ggml_ifairy_lut_sat_s8(+r1),
-                ggml_ifairy_lut_sat_s8(-r0 + r1),
-                ggml_ifairy_lut_sat_s8(+r0 + r1),
-            };
-            alignas(16) int8_t ad_tbl[16] = {
-                ggml_ifairy_lut_sat_s8(-i0 - i1),
-                ggml_ifairy_lut_sat_s8(+i0 - i1),
-                ggml_ifairy_lut_sat_s8(-i1),
-                ggml_ifairy_lut_sat_s8(-i1),
-                ggml_ifairy_lut_sat_s8(-i0 + i1),
-                ggml_ifairy_lut_sat_s8(+i0 + i1),
-                ggml_ifairy_lut_sat_s8(+i1),
-                ggml_ifairy_lut_sat_s8(+i1),
-                ggml_ifairy_lut_sat_s8(-i0),
-                ggml_ifairy_lut_sat_s8(+i0),
-                0,
-                0,
-                ggml_ifairy_lut_sat_s8(-i0),
-                ggml_ifairy_lut_sat_s8(+i0),
-                0,
-                0,
-            };
-            memcpy(tbl + 0, ac_tbl, 16);
-            memcpy(tbl + 16, bd_tbl, 16);
-            memcpy(tbl + 32, bc_tbl, 16);
-            memcpy(tbl + 48, ad_tbl, 16);
-#endif
-        }
+        ggml_ifairy_lut_preprocess_lut16_one(act_blocks, blocks, groups_per_block, scales_out, lut_out, g0, gstep);
     }
 }
 
@@ -775,8 +736,10 @@ void ggml_ifairy_lut_qgemm_fused_lut16(int          m,
     for (int col = 0; col < n; ++col) {
         const void * act_col = act_bytes + (size_t) col * act_stride;
         uint8_t *    dst_col = dst_bytes + (size_t) col * dst_col_stride;
+        const block_ifairy_q16 * act_blocks = (const block_ifairy_q16 *) act_col;
 
-        ggml_ifairy_lut_preprocess_lut16(m, k, 1, act_col, act_stride, lut_scales_tmp, lut_tmp, 0, 1);
+        ggml_ifairy_lut_preprocess_lut16_one(act_blocks, blocks, groups_per_block, (float *) lut_scales_tmp,
+                                             (int8_t *) lut_tmp, 0, 1);
         ggml_ifairy_lut_qgemm_lut16_one(blocks, groups_per_block, groups, m, wtiles, (const int8_t *) lut_tmp,
                                         (const float *) lut_scales_tmp, dst_col, dst_row_stride, pack_bf16, add);
     }
