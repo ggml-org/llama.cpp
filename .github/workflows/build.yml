@@ -1828,7 +1828,7 @@ jobs:
          run: |
            GG_BUILD_KLEIDIAI=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
-  ggml-ci-x64-intel-openvino-gpu:
+  ggml-ci-x64-intel-openvino-gpu-low-perf:
     runs-on: [self-hosted, Linux, X64, Intel]
 
     env:
@@ -1866,7 +1866,7 @@ jobs:
         id: ggml-ci
         run: |
           source ./openvino_toolkit/setupvars.sh
-          GG_BUILD_OPENVINO=1 GGML_OPENVINO_DEVICE=GPU bash ./ci/run.sh ./tmp/results ./tmp/mnt
+          GG_BUILD_OPENVINO=1 GGML_OPENVINO_DEVICE=GPU GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ubuntu-cpu-cmake-riscv64-native:
     runs-on: RISCV64

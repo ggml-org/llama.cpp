@@ -173,7 +173,7 @@ Invoke-WebRequest -Uri https://huggingface.co/unsloth/Llama-3.2-1B-Instruct-GGUF
 
 # Windows Command Line
 mkdir C:\models
-curl -L https://huggingface.co/unsloth/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_0.gguf -o C:\models\Llama-3.2-1B-Instruct-Q4_0.gguf 
+curl -L https://huggingface.co/unsloth/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_0.gguf -o C:\models\Llama-3.2-1B-Instruct-Q4_0.gguf
 ```
 
 ### 4. Run Inference with OpenVINO Backend
