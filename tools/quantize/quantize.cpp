@@ -291,15 +291,8 @@ static int load_imatrix(const std::string & imatrix_file, std::vector<std::strin
         for (int64_t j = 0; j < ne1; ++j) {
             const float count = ((const float *) counts->data)[j];
             if (count > 0.0f) {
-                float sumw = 0.0f;
                 for (int64_t i = 0; i < ne0; ++i) {
-                    sumw += ((const float *) sums->data)[j*ne0 + i];
-                }
-                // the neutral prior is equal weights, and it should reduce the variance by weighted-averaging with the mean
-                const float prior_value = sumw / ne0;
-
-                for (int64_t i = 0; i < ne0; ++i) {
-                    e[j*ne0 + i] = (((const float *) sums->data)[j*ne0 + i] + prior_value * prior_weight) / (count + prior_weight);
+                    e[j*ne0 + i] = (((const float *) sums->data)[j*ne0 + i] + prior_weight) / (count + prior_weight);
                 }
             } else {
                 // Partial imatrix data, this tensor never got any input during calibration
