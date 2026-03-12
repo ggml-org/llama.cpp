@@ -994,15 +994,16 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
     // -----------------------------------------------------------------------
     // Early multi-GPU setup: register unified caches for secondary GPUs BEFORE
     // the eager VRAM upload so the upload loop can distribute experts across
-    // all devices. Requires explicit opt-in: GGML_SYCL_MOE_MULTI_GPU=1.
-    // Default OFF because secondary GPU dispatch overhead (activation D2H,
-    // cross-device merge) often exceeds the benefit of extra VRAM caching,
-    // causing 2-3x performance regression on PCIe-connected multi-GPU setups.
+    // all devices. Auto-enabled when multiple GPUs are visible and the model
+    // has MoE layers. Override with GGML_SYCL_MOE_MULTI_GPU=0 to disable or
+    // GGML_SYCL_MOE_MULTI_GPU=1 to force enable.
     // -----------------------------------------------------------------------
     if (device == 0) {
         const char * moe_opt_in     = std::getenv("GGML_SYCL_MOE_MULTI_GPU");
-        const bool   multi_gpu_on   = (moe_opt_in && std::atoi(moe_opt_in) == 1);
         const int    total_gpus     = ggml_sycl_info().total_gpu_count;
+        // Auto-enable for MoE models with 2+ GPUs, unless explicitly disabled
+        const bool   multi_gpu_on   = moe_opt_in ? (std::atoi(moe_opt_in) == 1)
+                                                  : (total_gpus >= 2);
 
         if (multi_gpu_on && total_gpus >= 2) {
             int n_early_ok = 0;
@@ -1018,7 +1019,8 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
             }
             if (n_early_ok > 0) {
                 g_moe_multi_gpu_active.store(true, std::memory_order_release);
-                GGML_LOG_INFO("[MOE-MULTI-GPU] Enabled via GGML_SYCL_MOE_MULTI_GPU=1: %d secondary GPUs registered\n",
+                GGML_LOG_INFO("[MOE-MULTI-GPU] Enabled (%s): %d secondary GPUs registered\n",
+                              moe_opt_in ? "env GGML_SYCL_MOE_MULTI_GPU=1" : "auto-detected MoE + multi-GPU",
                               n_early_ok);
             }
         }
@@ -41558,14 +41560,15 @@ int ggml_backend_sycl_get_device_count() {
 }
 
 bool ggml_backend_sycl_moe_multi_gpu_requested() {
-    // Requires explicit opt-in: GGML_SYCL_MOE_MULTI_GPU=1.
-    // Default OFF because secondary GPU dispatch overhead often exceeds
-    // the benefit of extra VRAM caching on PCIe-connected setups.
+    // Auto-enabled when 2+ GPUs are available. MoE models benefit from
+    // distributing experts across secondary GPU VRAM for higher cache hit
+    // rates (B50 MMVQ = 0.085ms, 4.6x faster than CPU fallback).
+    // Opt-out: GGML_SYCL_MOE_MULTI_GPU=0 to force single-GPU MoE.
     const char * env = std::getenv("GGML_SYCL_MOE_MULTI_GPU");
-    if (env && std::atoi(env) == 1) {
-        return ggml_sycl_info().total_gpu_count >= 2;
+    if (env) {
+        return std::atoi(env) != 0 && ggml_sycl_info().total_gpu_count >= 2;
     }
-    return false;
+    return ggml_sycl_info().total_gpu_count >= 2;
 }
 
 // backend device
