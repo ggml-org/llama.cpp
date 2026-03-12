@@ -498,19 +498,40 @@ struct moe_warmup_state {
     int                   n_layers      = 0;
     int                   n_experts     = 0;
 
+    // Periodic re-ranking state (active after initial warmup completes)
+    std::atomic<uint32_t> epoch_counts[MOE_MAX_LAYERS][MOE_MAX_EXPERTS] = {};
+    std::atomic<int>      epoch_token_count{0};
+    std::atomic<bool>     reranking_enabled{false};
+    int                   rerank_interval = 100;  // tokens between re-ranks
+
     void init(int nl, int ne) {
         n_layers  = std::min(nl, MOE_MAX_LAYERS);
         n_experts = std::min(ne, MOE_MAX_EXPERTS);
         // Read env var for warmup token count
         const char * env = getenv("GGML_SYCL_MOE_WARMUP_TOKENS");
         if (env) warmup_tokens = std::max(1, std::atoi(env));
-        GGML_LOG_INFO("[MOE-WARMUP] Profiling %d layers × %d experts for %d tokens\n",
-                      n_layers, n_experts, warmup_tokens);
+        // Read env var for re-rank interval (0 disables periodic re-ranking)
+        const char * rerank_env = getenv("GGML_SYCL_MOE_RERANK_INTERVAL");
+        if (rerank_env) rerank_interval = std::max(0, std::atoi(rerank_env));
+        GGML_LOG_INFO("[MOE-WARMUP] Profiling %d layers × %d experts for %d tokens, "
+                      "re-rank every %d tokens\n",
+                      n_layers, n_experts, warmup_tokens, rerank_interval);
     }
 
     void record(int layer_id, const int32_t * expert_ids, int n_selected) {
-        if (warmup_done.load(std::memory_order_acquire)) return;
         if (layer_id < 0 || layer_id >= n_layers) return;
+        // Always record into epoch counters (for periodic re-ranking)
+        if (reranking_enabled.load(std::memory_order_acquire)) {
+            for (int i = 0; i < n_selected; i++) {
+                int eid = expert_ids[i];
+                if (eid >= 0 && eid < n_experts) {
+                    epoch_counts[layer_id][eid].fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+            return;  // Warmup counters frozen after initial warmup
+        }
+        // During initial warmup: record into warmup counters
+        if (warmup_done.load(std::memory_order_acquire)) return;
         for (int i = 0; i < n_selected; i++) {
             int eid = expert_ids[i];
             if (eid >= 0 && eid < n_experts) {
@@ -528,6 +549,31 @@ struct moe_warmup_state {
             return true;
         }
         return false;
+    }
+
+    // Called once per token after warmup.  Returns true when a re-rank epoch completes.
+    bool tick_epoch() {
+        if (!reranking_enabled.load(std::memory_order_acquire)) return false;
+        if (rerank_interval <= 0) return false;
+        int t = epoch_token_count.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (t >= rerank_interval) {
+            epoch_token_count.store(0, std::memory_order_relaxed);
+            return true;
+        }
+        return false;
+    }
+
+    // Enable periodic re-ranking (called after initial warmup + prestage completes)
+    void enable_reranking() {
+        if (rerank_interval <= 0) return;
+        // Zero out epoch counters for fresh accumulation
+        for (int l = 0; l < n_layers; l++) {
+            for (int e = 0; e < n_experts; e++) {
+                epoch_counts[l][e].store(0, std::memory_order_relaxed);
+            }
+        }
+        epoch_token_count.store(0, std::memory_order_relaxed);
+        reranking_enabled.store(true, std::memory_order_release);
     }
 };
 
@@ -757,6 +803,72 @@ static void moe_prestage_popular_experts() {
     GGML_LOG_INFO("[MOE-PRESTAGE] Pre-staged %d popular experts to GPU0 VRAM "
                   "(%d already cached, %zu slots/layer, %d layers)\n",
                   prestaged, skipped, slots_per_layer, n_layers);
+}
+
+// ---------------------------------------------------------------------------
+// Periodic re-ranking: re-evaluate expert popularity from epoch counters and
+// update placement table ranks.  Called every rerank_interval tokens after the
+// initial warmup.  Only updates ranks — does NOT trigger re-staging (the
+// prefetcher's LRU eviction naturally promotes newly-popular experts).
+// ---------------------------------------------------------------------------
+static void moe_periodic_rerank() {
+    auto & ptable = ggml_sycl::get_expert_placement_table();
+    if (!ptable.is_initialized()) return;
+
+    const int nl = g_moe_warmup.n_layers;
+    const int ne = g_moe_warmup.n_experts;
+
+    // Build reverse map: sequential layer index -> hash-based layer_id.
+    std::unordered_map<int, int> seq_to_hash;
+    for (const auto & [hash_id, seq_id] : g_moe_layer_seq[0]) {
+        seq_to_hash[seq_id] = hash_id;
+    }
+
+    int ranks_changed = 0;
+    for (int l = 0; l < nl; l++) {
+        auto it = seq_to_hash.find(l);
+        if (it == seq_to_hash.end()) continue;
+        int hash_layer_id = it->second;
+
+        // Collect epoch counts and sort descending
+        std::vector<std::pair<uint32_t, int>> sorted_experts;
+        sorted_experts.reserve(ne);
+        for (int e = 0; e < ne; e++) {
+            uint32_t c = g_moe_warmup.epoch_counts[l][e].load(std::memory_order_relaxed);
+            sorted_experts.push_back({c, e});
+        }
+        std::sort(sorted_experts.begin(), sorted_experts.end(),
+                  [](const auto & a, const auto & b) { return a.first > b.first; });
+
+        // Update ranks, count changes
+        for (int rank = 0; rank < (int) sorted_experts.size(); rank++) {
+            int eid      = sorted_experts[rank].second;
+            auto old     = ptable.get(hash_layer_id, eid);
+            int old_rank = old.popularity_rank;
+            if (old_rank != rank) {
+                ranks_changed++;
+            }
+            ptable.set_popularity(hash_layer_id, eid, rank);
+        }
+
+        // Reset epoch counters for this layer for the next epoch
+        for (int e = 0; e < ne; e++) {
+            g_moe_warmup.epoch_counts[l][e].store(0, std::memory_order_relaxed);
+        }
+    }
+
+    // Query VRAM budget for logging
+    size_t vram_avail = ggml_sycl::unified_cache_available_for_compute(0);
+
+    GGML_SYCL_DEBUG("[MOE-RERANK] Periodic re-rank complete: %d rank changes, "
+                    "VRAM available=%.1f MB\n",
+                    ranks_changed, vram_avail / (1024.0 * 1024.0));
+
+    // If significant rank changes occurred, trigger pre-staging of newly
+    // popular experts that may not yet be in VRAM.
+    if (ranks_changed > 0) {
+        moe_prestage_popular_experts();
+    }
 }
 
 // Per-secondary-GPU staging buffers (malloc_host, readable from primary GPU).
@@ -27454,6 +27566,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                             if (g_moe_warmup.tick_token()) {
                                 moe_apply_popularity_placement();
                                 moe_prestage_popular_experts();
+                                g_moe_warmup.enable_reranking();
+                            } else if (g_moe_warmup.tick_epoch()) {
+                                moe_periodic_rerank();
                             }
                         }
                     }
@@ -27823,6 +27938,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                             if (g_moe_warmup.tick_token()) {
                                 moe_apply_popularity_placement();
                                 moe_prestage_popular_experts();
+                                g_moe_warmup.enable_reranking();
+                            } else if (g_moe_warmup.tick_epoch()) {
+                                moe_periodic_rerank();
                             }
                         }
                     }
@@ -29914,6 +30032,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     if (g_moe_warmup.tick_token()) {
                         moe_apply_popularity_placement();
                         moe_prestage_popular_experts();
+                        g_moe_warmup.enable_reranking();
+                    } else if (g_moe_warmup.tick_epoch()) {
+                        moe_periodic_rerank();
                     }
                 }
 
@@ -30190,6 +30311,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 if (g_moe_warmup.tick_token()) {
                     moe_apply_popularity_placement();
                     moe_prestage_popular_experts();
+                    g_moe_warmup.enable_reranking();
+                } else if (g_moe_warmup.tick_epoch()) {
+                    moe_periodic_rerank();
                 }
             }
 
