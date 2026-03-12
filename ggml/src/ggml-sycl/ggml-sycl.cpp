@@ -8590,7 +8590,12 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
     // For AOS layouts: DO NOT materialize eagerly here. The unified cache will
     // handle AOS tensors on-demand during inference, checking live free memory
     // to avoid OOM when KV cache and other buffers compete for VRAM.
-    const bool should_materialize = (adjusted_layout != GGML_LAYOUT_AOS);
+    //
+    // MoE expert weights are ALSO deferred: they stay AOS in host memory and get
+    // SOA-converted on-demand by the expert cache when promoted to VRAM.  Eagerly
+    // reordering 59 GB of experts (120B model) would take minutes and double RAM.
+    const bool is_moe_expert      = (usage == tensor_usage::MOE_EXPERT_WEIGHT);
+    const bool should_materialize = (adjusted_layout != GGML_LAYOUT_AOS) && !is_moe_expert;
     if (use_unified_cache && should_materialize && !has_preconverted_tiled) {
         // Prefer existing layout choice if already finalized/registered.
 
