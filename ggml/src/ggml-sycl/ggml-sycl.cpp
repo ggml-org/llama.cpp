@@ -27294,7 +27294,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         if (g_moe_profile_enabled) { g_moe_profile.moe_routing_done(); }
 
                         // Task 1E: Submit GPU work BEFORE CPU compute for overlap.
-                        // Dispatch secondary GPU experts for GATE sub-tensor
+                        // Dispatch secondary GPU experts for GATE sub-tensor.
+                        // Use cached partition indices but re-resolve device_ptr for
+                        // GATE weight tensor (sec_indices.device_ptr is from UP).
                         if (!g_moe_fusion.sec_indices.empty()) {
                             const int64_t n_ids_gate_uf = ids->ne[0];
                             const int n_gpu_devs_gate_uf = ggml_sycl_info().total_gpu_count;
@@ -27303,8 +27305,12 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                 const int32_t eid = g_moe_fusion.ids_data[sec.ci];
                                 const int64_t iid1 = static_cast<int64_t>(sec.ci / static_cast<size_t>(n_ids_gate_uf));
                                 const int64_t id   = static_cast<int64_t>(sec.ci % static_cast<size_t>(n_ids_gate_uf));
+                                // Re-resolve device_ptr for GATE weight (UP cached a different tensor's ptr)
+                                auto pl = placement_table_pre.get(cur_layer_hash, eid);
+                                void * resolved_ptr = (pl.device_id == sec.device_id && pl.device_ptr)
+                                                          ? pl.device_ptr : sec.device_ptr;
                                 sec_entries_gate_uf[sec.device_id].push_back(
-                                    { iid1, id, eid, sec.device_ptr, sec.device_id });
+                                    { iid1, id, eid, resolved_ptr, sec.device_id });
                             }
                             char * dst_d_gate_uf = static_cast<char *>(ggml_sycl_get_data_ptr(dst, ctx.device));
                             secondary_dispatch_ctx sctx_gate_uf = {
@@ -27499,55 +27505,75 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         }
                     }
                     // Partition experts: CPU-only vs secondary GPU vs GPU0-cached
+                    // Task 1E: Check cached partition first to avoid redundant placement lookups.
                     g_moe_fusion.cpu_indices.clear();
                     g_moe_fusion.sec_indices.clear();
                     g_moe_fusion.gpu0_cached_indices.clear();
-                    g_moe_fusion.cpu_indices.reserve(ids_n_elem);
 
-                    if (placement_table_pre.is_initialized() && cur_layer_fast >= 0) {
-                        const int n_gpu_devs_gate = ggml_sycl_info().total_gpu_count;
-                        auto & pf_gate = g_expert_prefetchers[ctx.device];
-                        for (size_t ci = 0; ci < ids_n_elem; ci++) {
-                            const int32_t eid = ids_data_f[ci];
-                            auto placement = placement_table_pre.get(cur_layer_hash, eid);
-                            if (have_secondary_pre
-                                && placement.device_id >= 1
-                                && placement.device_id < n_gpu_devs_gate
-                                && placement.device_ptr != nullptr
-                                && g_secondary_queues[placement.device_id] != nullptr) {
-                                g_moe_fusion.sec_indices.push_back({ci, placement.device_id, placement.device_ptr});
-                            } else if (placement.device_id == 0 && placement.device_ptr != nullptr) {
-                                g_moe_fusion.gpu0_cached_indices.push_back(ci);
-                            } else if (pf_gate.is_initialized() && pf_gate.get_cached_ptr(cur_layer_hash, eid)) {
-                                g_moe_fusion.gpu0_cached_indices.push_back(ci);
-                            } else {
-                                // Check secondary GPU prefetcher pools before CPU fallback.
-                                bool found_sec = false;
-                                for (int d = 1; d < n_gpu_devs_gate && !found_sec; d++) {
-                                    auto & pf_d = g_expert_prefetchers[d];
-                                    if (!pf_d.is_initialized()) continue;
-                                    void * cached = pf_d.get_cached_ptr(cur_layer_hash, eid);
-                                    if (cached && g_secondary_queues[d] != nullptr) {
-                                        g_moe_fusion.sec_indices.push_back({ci, d, cached});
-                                        found_sec = true;
-                                    }
-                                }
-                                if (!found_sec) {
-                                    g_moe_fusion.cpu_indices.push_back(ci);
-                                }
+                    bool partition_from_cache = false;
+                    {
+                        const uint64_t cur_epoch_part = g_moe_graph_epoch.load(std::memory_order_relaxed);
+                        auto part_it = g_moe_layer_ids_cache.find(cur_layer_fast);
+                        if (part_it != g_moe_layer_ids_cache.end() &&
+                            part_it->second.graph_epoch == cur_epoch_part &&
+                            part_it->second.partition.valid) {
+                            auto & cp = part_it->second.partition;
+                            g_moe_fusion.cpu_indices = cp.cpu_indices;
+                            g_moe_fusion.sec_indices.reserve(cp.sec_indices.size());
+                            for (const auto & s : cp.sec_indices) {
+                                g_moe_fusion.sec_indices.push_back({s.ci, s.device_id, s.device_ptr});
                             }
-                        }
-                    } else {
-                        for (size_t ci = 0; ci < ids_n_elem; ci++) {
-                            g_moe_fusion.cpu_indices.push_back(ci);
+                            g_moe_fusion.gpu0_cached_indices = cp.gpu0_cached_indices;
+                            partition_from_cache = true;
+                            GGML_SYCL_DEBUG("[MoE-1E] GATE reusing cached partition for layer %d: %zu cpu, %zu sec, %zu gpu0\n",
+                                            cur_layer_fast, cp.cpu_indices.size(),
+                                            cp.sec_indices.size(), cp.gpu0_cached_indices.size());
                         }
                     }
-                    // n_ids now reflects CPU-only count (secondary/GPU0 experts tracked separately).
-                    // ids_data still contains ALL expert IDs; cpu_indices/sec_indices/gpu0_cached_indices index into it.
-                    g_moe_fusion.n_ids = g_moe_fusion.cpu_indices.size();
 
-                    // Task 1E: Cache partitioning for UP/DOWN reuse (avoids re-resolving placement table).
-                    {
+                    if (!partition_from_cache) {
+                        g_moe_fusion.cpu_indices.reserve(ids_n_elem);
+
+                        if (placement_table_pre.is_initialized() && cur_layer_fast >= 0) {
+                            const int n_gpu_devs_gate = ggml_sycl_info().total_gpu_count;
+                            auto & pf_gate = g_expert_prefetchers[ctx.device];
+                            for (size_t ci = 0; ci < ids_n_elem; ci++) {
+                                const int32_t eid = ids_data_f[ci];
+                                auto placement = placement_table_pre.get(cur_layer_hash, eid);
+                                if (have_secondary_pre
+                                    && placement.device_id >= 1
+                                    && placement.device_id < n_gpu_devs_gate
+                                    && placement.device_ptr != nullptr
+                                    && g_secondary_queues[placement.device_id] != nullptr) {
+                                    g_moe_fusion.sec_indices.push_back({ci, placement.device_id, placement.device_ptr});
+                                } else if (placement.device_id == 0 && placement.device_ptr != nullptr) {
+                                    g_moe_fusion.gpu0_cached_indices.push_back(ci);
+                                } else if (pf_gate.is_initialized() && pf_gate.get_cached_ptr(cur_layer_hash, eid)) {
+                                    g_moe_fusion.gpu0_cached_indices.push_back(ci);
+                                } else {
+                                    // Check secondary GPU prefetcher pools before CPU fallback.
+                                    bool found_sec = false;
+                                    for (int d = 1; d < n_gpu_devs_gate && !found_sec; d++) {
+                                        auto & pf_d = g_expert_prefetchers[d];
+                                        if (!pf_d.is_initialized()) continue;
+                                        void * cached = pf_d.get_cached_ptr(cur_layer_hash, eid);
+                                        if (cached && g_secondary_queues[d] != nullptr) {
+                                            g_moe_fusion.sec_indices.push_back({ci, d, cached});
+                                            found_sec = true;
+                                        }
+                                    }
+                                    if (!found_sec) {
+                                        g_moe_fusion.cpu_indices.push_back(ci);
+                                    }
+                                }
+                            }
+                        } else {
+                            for (size_t ci = 0; ci < ids_n_elem; ci++) {
+                                g_moe_fusion.cpu_indices.push_back(ci);
+                            }
+                        }
+
+                        // Cache partitioning for subsequent sub-ops in this MoE block.
                         auto & lentry = g_moe_layer_ids_cache[cur_layer_fast];
                         lentry.graph_epoch = g_moe_graph_epoch.load(std::memory_order_relaxed);
                         lentry.partition.cpu_indices = g_moe_fusion.cpu_indices;
@@ -27562,6 +27588,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                         cur_layer_fast, g_moe_fusion.cpu_indices.size(),
                                         g_moe_fusion.sec_indices.size(), g_moe_fusion.gpu0_cached_indices.size());
                     }
+                    // n_ids now reflects CPU-only count (secondary/GPU0 experts tracked separately).
+                    // ids_data still contains ALL expert IDs; cpu_indices/sec_indices/gpu0_cached_indices index into it.
+                    g_moe_fusion.n_ids = g_moe_fusion.cpu_indices.size();
 
                     if (g_moe_profile_enabled) { g_moe_profile.moe_routing_done(); }
 
@@ -27837,53 +27866,75 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
 
                     // Partition experts: CPU-only vs secondary GPU vs GPU0-cached
+                    // Task 1E: Check cached partition first to avoid redundant placement lookups.
                     g_moe_fusion.cpu_indices.clear();
                     g_moe_fusion.sec_indices.clear();
                     g_moe_fusion.gpu0_cached_indices.clear();
-                    g_moe_fusion.cpu_indices.reserve(ids_n_elem);
 
-                    if (placement_table_pre.is_initialized() && cur_layer_fast >= 0) {
-                        const int n_gpu_devs_up = ggml_sycl_info().total_gpu_count;
-                        auto & pf_up = g_expert_prefetchers[ctx.device];
-                        for (size_t ci = 0; ci < ids_n_elem; ci++) {
-                            const int32_t eid = ids_data_f[ci];
-                            auto placement = placement_table_pre.get(cur_layer_hash, eid);
-                            if (have_secondary_pre
-                                && placement.device_id >= 1
-                                && placement.device_id < n_gpu_devs_up
-                                && placement.device_ptr != nullptr
-                                && g_secondary_queues[placement.device_id] != nullptr) {
-                                g_moe_fusion.sec_indices.push_back({ci, placement.device_id, placement.device_ptr});
-                            } else if (placement.device_id == 0 && placement.device_ptr != nullptr) {
-                                g_moe_fusion.gpu0_cached_indices.push_back(ci);
-                            } else if (pf_up.is_initialized() && pf_up.get_cached_ptr(cur_layer_hash, eid)) {
-                                g_moe_fusion.gpu0_cached_indices.push_back(ci);
-                            } else {
-                                // Check secondary GPU prefetcher pools before CPU fallback.
-                                bool found_sec_up = false;
-                                for (int d = 1; d < n_gpu_devs_up && !found_sec_up; d++) {
-                                    auto & pf_d = g_expert_prefetchers[d];
-                                    if (!pf_d.is_initialized()) continue;
-                                    void * cached = pf_d.get_cached_ptr(cur_layer_hash, eid);
-                                    if (cached && g_secondary_queues[d] != nullptr) {
-                                        g_moe_fusion.sec_indices.push_back({ci, d, cached});
-                                        found_sec_up = true;
-                                    }
-                                }
-                                if (!found_sec_up) {
-                                    g_moe_fusion.cpu_indices.push_back(ci);
-                                }
+                    bool partition_from_cache_up = false;
+                    {
+                        const uint64_t cur_epoch_part_up = g_moe_graph_epoch.load(std::memory_order_relaxed);
+                        auto part_it = g_moe_layer_ids_cache.find(cur_layer_fast);
+                        if (part_it != g_moe_layer_ids_cache.end() &&
+                            part_it->second.graph_epoch == cur_epoch_part_up &&
+                            part_it->second.partition.valid) {
+                            auto & cp = part_it->second.partition;
+                            g_moe_fusion.cpu_indices = cp.cpu_indices;
+                            g_moe_fusion.sec_indices.reserve(cp.sec_indices.size());
+                            for (const auto & s : cp.sec_indices) {
+                                g_moe_fusion.sec_indices.push_back({s.ci, s.device_id, s.device_ptr});
                             }
-                        }
-                    } else {
-                        for (size_t ci = 0; ci < ids_n_elem; ci++) {
-                            g_moe_fusion.cpu_indices.push_back(ci);
+                            g_moe_fusion.gpu0_cached_indices = cp.gpu0_cached_indices;
+                            partition_from_cache_up = true;
+                            GGML_SYCL_DEBUG("[MoE-1E] UP reusing cached partition for layer %d: %zu cpu, %zu sec, %zu gpu0\n",
+                                            cur_layer_fast, cp.cpu_indices.size(),
+                                            cp.sec_indices.size(), cp.gpu0_cached_indices.size());
                         }
                     }
-                    g_moe_fusion.n_ids = g_moe_fusion.cpu_indices.size();
 
-                    // Task 1E: Cache partitioning for GATE reuse (UP-first ordering).
-                    {
+                    if (!partition_from_cache_up) {
+                        g_moe_fusion.cpu_indices.reserve(ids_n_elem);
+
+                        if (placement_table_pre.is_initialized() && cur_layer_fast >= 0) {
+                            const int n_gpu_devs_up = ggml_sycl_info().total_gpu_count;
+                            auto & pf_up = g_expert_prefetchers[ctx.device];
+                            for (size_t ci = 0; ci < ids_n_elem; ci++) {
+                                const int32_t eid = ids_data_f[ci];
+                                auto placement = placement_table_pre.get(cur_layer_hash, eid);
+                                if (have_secondary_pre
+                                    && placement.device_id >= 1
+                                    && placement.device_id < n_gpu_devs_up
+                                    && placement.device_ptr != nullptr
+                                    && g_secondary_queues[placement.device_id] != nullptr) {
+                                    g_moe_fusion.sec_indices.push_back({ci, placement.device_id, placement.device_ptr});
+                                } else if (placement.device_id == 0 && placement.device_ptr != nullptr) {
+                                    g_moe_fusion.gpu0_cached_indices.push_back(ci);
+                                } else if (pf_up.is_initialized() && pf_up.get_cached_ptr(cur_layer_hash, eid)) {
+                                    g_moe_fusion.gpu0_cached_indices.push_back(ci);
+                                } else {
+                                    // Check secondary GPU prefetcher pools before CPU fallback.
+                                    bool found_sec_up = false;
+                                    for (int d = 1; d < n_gpu_devs_up && !found_sec_up; d++) {
+                                        auto & pf_d = g_expert_prefetchers[d];
+                                        if (!pf_d.is_initialized()) continue;
+                                        void * cached = pf_d.get_cached_ptr(cur_layer_hash, eid);
+                                        if (cached && g_secondary_queues[d] != nullptr) {
+                                            g_moe_fusion.sec_indices.push_back({ci, d, cached});
+                                            found_sec_up = true;
+                                        }
+                                    }
+                                    if (!found_sec_up) {
+                                        g_moe_fusion.cpu_indices.push_back(ci);
+                                    }
+                                }
+                            }
+                        } else {
+                            for (size_t ci = 0; ci < ids_n_elem; ci++) {
+                                g_moe_fusion.cpu_indices.push_back(ci);
+                            }
+                        }
+
+                        // Cache partitioning for subsequent sub-ops in this MoE block.
                         auto & lentry = g_moe_layer_ids_cache[cur_layer_fast];
                         lentry.graph_epoch = g_moe_graph_epoch.load(std::memory_order_relaxed);
                         lentry.partition.cpu_indices = g_moe_fusion.cpu_indices;
@@ -27898,6 +27949,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                         cur_layer_fast, g_moe_fusion.cpu_indices.size(),
                                         g_moe_fusion.sec_indices.size(), g_moe_fusion.gpu0_cached_indices.size());
                     }
+                    g_moe_fusion.n_ids = g_moe_fusion.cpu_indices.size();
 
                     if (g_moe_profile_enabled) { g_moe_profile.moe_routing_done(); }
 
@@ -28024,7 +28076,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     // GPU dispatches are non-blocking queue submissions; CPU fused kernel
                     // runs in parallel while GPU processes secondary/GPU0 experts.
 
-                    // Dispatch secondary GPU experts for the UP sub-tensor
+                    // Dispatch secondary GPU experts for the UP sub-tensor.
+                    // Re-resolve device_ptr for UP weight tensor (GATE cached a different tensor's ptr).
                     if (!g_moe_fusion.sec_indices.empty()) {
                         const int64_t n_ids_up = ids->ne[0];
                         const int n_gpu_devs_up = ggml_sycl_info().total_gpu_count;
@@ -28033,8 +28086,12 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                             const int32_t eid = g_moe_fusion.ids_data[sec.ci];
                             const int64_t iid1 = static_cast<int64_t>(sec.ci / static_cast<size_t>(n_ids_up));
                             const int64_t id   = static_cast<int64_t>(sec.ci % static_cast<size_t>(n_ids_up));
+                            // Re-resolve device_ptr for UP weight (GATE cached a different tensor's ptr)
+                            auto pl = placement_table_pre.get(cur_layer_hash, eid);
+                            void * resolved_ptr = (pl.device_id == sec.device_id && pl.device_ptr)
+                                                      ? pl.device_ptr : sec.device_ptr;
                             sec_entries_up[sec.device_id].push_back(
-                                { iid1, id, eid, sec.device_ptr, sec.device_id });
+                                { iid1, id, eid, resolved_ptr, sec.device_id });
                         }
                         // Build dispatch context for UP sub-tensor
                         char * dst_d_up = static_cast<char *>(ggml_sycl_get_data_ptr(dst, ctx.device));
@@ -28170,7 +28227,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     std::vector<sycl::event> down_events;
                     down_events.reserve(n_cpu_d + 8);
 
-                    // Dispatch secondary GPU experts for the DOWN sub-tensor
+                    // Dispatch secondary GPU experts for the DOWN sub-tensor.
+                    // Re-resolve device_ptr for DOWN weight tensor (GATE/UP cached a different tensor's ptr).
                     if (!g_moe_fusion.sec_indices.empty()) {
                         const int n_gpu_devs_dn = ggml_sycl_info().total_gpu_count;
                         std::vector<std::vector<expert_dispatch_entry>> sec_entries_dn(n_gpu_devs_dn);
@@ -28178,8 +28236,12 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                             const int32_t eid = g_moe_fusion.ids_data[sec.ci];
                             const int64_t iid1 = static_cast<int64_t>(sec.ci / static_cast<size_t>(n_ids_d));
                             const int64_t id   = static_cast<int64_t>(sec.ci % static_cast<size_t>(n_ids_d));
+                            // Re-resolve device_ptr for DOWN weight (GATE/UP cached a different tensor's ptr)
+                            auto pl = placement_table_pre.get(cur_layer_hash, eid);
+                            void * resolved_ptr = (pl.device_id == sec.device_id && pl.device_ptr)
+                                                      ? pl.device_ptr : sec.device_ptr;
                             sec_entries_dn[sec.device_id].push_back(
-                                { iid1, id, eid, sec.device_ptr, sec.device_id });
+                                { iid1, id, eid, resolved_ptr, sec.device_id });
                         }
                         // For DOWN, activation is on device (output of SiLU/multiply)
                         char * src1_d = static_cast<char *>(ggml_sycl_get_data_ptr(src1, ctx.device));
