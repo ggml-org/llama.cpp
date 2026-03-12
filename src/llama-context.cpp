@@ -538,6 +538,14 @@ void llama_context::sched_reserve() {
             }
         }
 
+        // the fused kernel uses a transposed state layout, so both paths must agree
+        // to avoid a state layout mismatch when switching between AR and chunked
+        if (cparams.fused_gdn_ar != cparams.fused_gdn_ch) {
+            cparams.fused_gdn_ar = false;
+            cparams.fused_gdn_ch = false;
+            LLAMA_LOG_WARN("%s: fused Gated Delta Net AR/chunked support mismatch, disabling both\n", __func__);
+        }
+
         cparams.auto_fgdn = false;
     }
 
