@@ -1,4 +1,3 @@
-#include "llama.h"
 #include "llama-quant.h"
 #include "llama-impl.h"
 #include "llama-model.h"
@@ -9,7 +8,6 @@
 #include <cinttypes>
 #include <cmath>
 #include <csignal>
-#include <cstring>
 #include <fstream>
 #include <mutex>
 #include <numeric>

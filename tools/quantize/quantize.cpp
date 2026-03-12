@@ -3,11 +3,8 @@
 #include "gguf.h"
 
 #include <algorithm>
-#include <cctype>
 #include <clocale>
-#include <cmath>
 #include <cstdio>
-#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <map>
