@@ -20610,6 +20610,58 @@ static layout_mode ggml_sycl_moe_mmvq_layout(const ggml_tensor * tensor, bool al
     return GGML_LAYOUT_AOS;
 }
 
+// Forward declaration — defined below after this helper.
+static void ggml_sycl_ensure_moe_ptr_table(ggml_tensor_extra_gpu * extra,
+                                           int                     device,
+                                           int64_t                 n_experts,
+                                           sycl::queue &           queue);
+
+// Populate moe_expert_ptrs_device for GPU0-routed experts in the fusion path.
+// The standard path uses update_moe_ptr_table() which is expensive and designed
+// for the full routing flow.  The fusion path only needs pointers for a small
+// subset of experts whose device_ptr is already known from the placement table.
+// Returns the device-side pointer table, or nullptr on failure.
+static const void * const * moe_fusion_ensure_gpu0_ptrs(
+    ggml_backend_sycl_context & ctx,
+    const ggml_tensor *         src0,
+    const int32_t *             expert_ids,
+    size_t                      n_experts_routed,
+    int                         layer_hash) {
+    auto * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
+    if (!extra) return nullptr;
+
+    const int     device    = ctx.device;
+    const int64_t n_experts = src0->ne[2] > 0 ? src0->ne[2] : 1;
+    sycl::queue & q         = *ctx.stream();
+
+    // Ensure device-side table is allocated
+    ggml_sycl_ensure_moe_ptr_table(extra, device, static_cast<int>(n_experts), q);
+    if (!extra->moe_expert_ptrs_device[device]) return nullptr;
+
+    auto & host_ptrs = extra->moe_expert_ptrs_host[device];
+    auto & ptable    = ggml_sycl::get_expert_placement_table();
+
+    // Write placement table device_ptrs for routed experts
+    bool any_updated = false;
+    for (size_t i = 0; i < n_experts_routed; i++) {
+        const int eid = expert_ids[i];
+        if (eid < 0 || eid >= n_experts) continue;
+        auto placement = ptable.get(layer_hash, eid);
+        if (placement.device_ptr != nullptr && placement.device_id == 0) {
+            host_ptrs[static_cast<size_t>(eid)] = placement.device_ptr;
+            any_updated = true;
+        }
+    }
+    if (!any_updated) return nullptr;
+
+    // H2D copy of the pointer table
+    q.memcpy(extra->moe_expert_ptrs_device[device],
+             host_ptrs.data(),
+             host_ptrs.size() * sizeof(void *));
+
+    return static_cast<const void * const *>(extra->moe_expert_ptrs_device[device]);
+}
+
 static void ggml_sycl_ensure_moe_ptr_table(ggml_tensor_extra_gpu * extra,
                                            int                     device,
                                            int64_t                 n_experts,
@@ -27269,23 +27321,19 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
                         // Dispatch GPU0-cached experts via unfused MMVQ for GATE sub-tensor (UP-first)
                         if (!g_moe_fusion.gpu0_cached_indices.empty()) {
-                            auto * src0_extra_g0 = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
-                            const void * const * expert_ptrs_dev_g0 = nullptr;
-                            if (src0_extra_g0 && ctx.device >= 0 && ctx.device < GGML_SYCL_MAX_DEVICES) {
-                                expert_ptrs_dev_g0 = static_cast<const void * const *>(
-                                    src0_extra_g0->moe_expert_ptrs_device[ctx.device]);
+                            const size_t n_g0 = g_moe_fusion.gpu0_cached_indices.size();
+                            std::vector<int32_t> g0_eids(n_g0);
+                            std::vector<int64_t> g0_iid1s(n_g0);
+                            std::vector<int64_t> g0_ids(n_g0);
+                            for (size_t gi = 0; gi < n_g0; gi++) {
+                                const size_t ci = g_moe_fusion.gpu0_cached_indices[gi];
+                                g0_eids[gi]  = g_moe_fusion.ids_data[ci];
+                                g0_iid1s[gi] = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_f));
+                                g0_ids[gi]   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_f));
                             }
+                            const void * const * expert_ptrs_dev_g0 =
+                                moe_fusion_ensure_gpu0_ptrs(ctx, src0, g0_eids.data(), n_g0, cur_layer_hash);
                             if (expert_ptrs_dev_g0) {
-                                const size_t n_g0 = g_moe_fusion.gpu0_cached_indices.size();
-                                std::vector<int32_t> g0_eids(n_g0);
-                                std::vector<int64_t> g0_iid1s(n_g0);
-                                std::vector<int64_t> g0_ids(n_g0);
-                                for (size_t gi = 0; gi < n_g0; gi++) {
-                                    const size_t ci = g_moe_fusion.gpu0_cached_indices[gi];
-                                    g0_eids[gi]  = g_moe_fusion.ids_data[ci];
-                                    g0_iid1s[gi] = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_f));
-                                    g0_ids[gi]   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_f));
-                                }
                                 mmvq_moe_batched_dispatch(
                                     ctx, src0, src1, dst,
                                     expert_ptrs_dev_g0,
@@ -27586,23 +27634,19 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
                     // Dispatch GPU0-cached experts via unfused MMVQ (writes directly to dst slots)
                     if (!g_moe_fusion.gpu0_cached_indices.empty()) {
-                        auto * src0_extra_g0 = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
-                        const void * const * expert_ptrs_dev_g0 = nullptr;
-                        if (src0_extra_g0 && ctx.device >= 0 && ctx.device < GGML_SYCL_MAX_DEVICES) {
-                            expert_ptrs_dev_g0 = static_cast<const void * const *>(
-                                src0_extra_g0->moe_expert_ptrs_device[ctx.device]);
+                        const size_t n_g0 = g_moe_fusion.gpu0_cached_indices.size();
+                        std::vector<int32_t> g0_eids(n_g0);
+                        std::vector<int64_t> g0_iid1s(n_g0);
+                        std::vector<int64_t> g0_ids(n_g0);
+                        for (size_t gi = 0; gi < n_g0; gi++) {
+                            const size_t ci = g_moe_fusion.gpu0_cached_indices[gi];
+                            g0_eids[gi]  = g_moe_fusion.ids_data[ci];
+                            g0_iid1s[gi] = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_f));
+                            g0_ids[gi]   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_f));
                         }
+                        const void * const * expert_ptrs_dev_g0 =
+                            moe_fusion_ensure_gpu0_ptrs(ctx, src0, g0_eids.data(), n_g0, cur_layer_hash);
                         if (expert_ptrs_dev_g0) {
-                            const size_t n_g0 = g_moe_fusion.gpu0_cached_indices.size();
-                            std::vector<int32_t> g0_eids(n_g0);
-                            std::vector<int64_t> g0_iid1s(n_g0);
-                            std::vector<int64_t> g0_ids(n_g0);
-                            for (size_t gi = 0; gi < n_g0; gi++) {
-                                const size_t ci = g_moe_fusion.gpu0_cached_indices[gi];
-                                g0_eids[gi]  = g_moe_fusion.ids_data[ci];
-                                g0_iid1s[gi] = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_f));
-                                g0_ids[gi]   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_f));
-                            }
                             mmvq_moe_batched_dispatch(
                                 ctx, src0, src1, dst,
                                 expert_ptrs_dev_g0,
@@ -27817,23 +27861,19 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
                     // Dispatch GPU0-cached experts via unfused MMVQ for UP sub-tensor
                     if (!g_moe_fusion.gpu0_cached_indices.empty()) {
-                        auto * src0_extra_g0 = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
-                        const void * const * expert_ptrs_dev_g0 = nullptr;
-                        if (src0_extra_g0 && ctx.device >= 0 && ctx.device < GGML_SYCL_MAX_DEVICES) {
-                            expert_ptrs_dev_g0 = static_cast<const void * const *>(
-                                src0_extra_g0->moe_expert_ptrs_device[ctx.device]);
+                        const size_t n_g0 = g_moe_fusion.gpu0_cached_indices.size();
+                        std::vector<int32_t> g0_eids(n_g0);
+                        std::vector<int64_t> g0_iid1s(n_g0);
+                        std::vector<int64_t> g0_ids(n_g0);
+                        for (size_t gi = 0; gi < n_g0; gi++) {
+                            const size_t ci = g_moe_fusion.gpu0_cached_indices[gi];
+                            g0_eids[gi]  = g_moe_fusion.ids_data[ci];
+                            g0_iid1s[gi] = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_f));
+                            g0_ids[gi]   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_f));
                         }
+                        const void * const * expert_ptrs_dev_g0 =
+                            moe_fusion_ensure_gpu0_ptrs(ctx, src0, g0_eids.data(), n_g0, cur_layer_hash);
                         if (expert_ptrs_dev_g0) {
-                            const size_t n_g0 = g_moe_fusion.gpu0_cached_indices.size();
-                            std::vector<int32_t> g0_eids(n_g0);
-                            std::vector<int64_t> g0_iid1s(n_g0);
-                            std::vector<int64_t> g0_ids(n_g0);
-                            for (size_t gi = 0; gi < n_g0; gi++) {
-                                const size_t ci = g_moe_fusion.gpu0_cached_indices[gi];
-                                g0_eids[gi]  = g_moe_fusion.ids_data[ci];
-                                g0_iid1s[gi] = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_f));
-                                g0_ids[gi]   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_f));
-                            }
                             mmvq_moe_batched_dispatch(
                                 ctx, src0, src1, dst,
                                 expert_ptrs_dev_g0,
@@ -27946,24 +27986,20 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
                     // Dispatch GPU0-cached experts via unfused MMVQ for UP sub-tensor
                     if (!g_moe_fusion.gpu0_cached_indices.empty()) {
-                        auto * src0_extra_g0 = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
-                        const void * const * expert_ptrs_dev_g0 = nullptr;
-                        if (src0_extra_g0 && ctx.device >= 0 && ctx.device < GGML_SYCL_MAX_DEVICES) {
-                            expert_ptrs_dev_g0 = static_cast<const void * const *>(
-                                src0_extra_g0->moe_expert_ptrs_device[ctx.device]);
+                        const int64_t n_ids_up_g0 = ids->ne[0];
+                        const size_t n_g0 = g_moe_fusion.gpu0_cached_indices.size();
+                        std::vector<int32_t> g0_eids(n_g0);
+                        std::vector<int64_t> g0_iid1s(n_g0);
+                        std::vector<int64_t> g0_ids(n_g0);
+                        for (size_t gi = 0; gi < n_g0; gi++) {
+                            const size_t ci = g_moe_fusion.gpu0_cached_indices[gi];
+                            g0_eids[gi]  = g_moe_fusion.ids_data[ci];
+                            g0_iid1s[gi] = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_up_g0));
+                            g0_ids[gi]   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_up_g0));
                         }
+                        const void * const * expert_ptrs_dev_g0 =
+                            moe_fusion_ensure_gpu0_ptrs(ctx, src0, g0_eids.data(), n_g0, cur_layer_hash);
                         if (expert_ptrs_dev_g0) {
-                            const int64_t n_ids_up_g0 = ids->ne[0];
-                            const size_t n_g0 = g_moe_fusion.gpu0_cached_indices.size();
-                            std::vector<int32_t> g0_eids(n_g0);
-                            std::vector<int64_t> g0_iid1s(n_g0);
-                            std::vector<int64_t> g0_ids(n_g0);
-                            for (size_t gi = 0; gi < n_g0; gi++) {
-                                const size_t ci = g_moe_fusion.gpu0_cached_indices[gi];
-                                g0_eids[gi]  = g_moe_fusion.ids_data[ci];
-                                g0_iid1s[gi] = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_up_g0));
-                                g0_ids[gi]   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_up_g0));
-                            }
                             mmvq_moe_batched_dispatch(
                                 ctx, src0, src1, dst,
                                 expert_ptrs_dev_g0,
@@ -28113,23 +28149,19 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
                     // Dispatch GPU0-cached experts via unfused MMVQ for DOWN sub-tensor
                     if (!g_moe_fusion.gpu0_cached_indices.empty()) {
-                        auto * src0_extra_g0 = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
-                        const void * const * expert_ptrs_dev_g0 = nullptr;
-                        if (src0_extra_g0 && ctx.device >= 0 && ctx.device < GGML_SYCL_MAX_DEVICES) {
-                            expert_ptrs_dev_g0 = static_cast<const void * const *>(
-                                src0_extra_g0->moe_expert_ptrs_device[ctx.device]);
+                        const size_t n_g0 = g_moe_fusion.gpu0_cached_indices.size();
+                        std::vector<int32_t> g0_eids(n_g0);
+                        std::vector<int64_t> g0_iid1s(n_g0);
+                        std::vector<int64_t> g0_ids(n_g0);
+                        for (size_t gi = 0; gi < n_g0; gi++) {
+                            const size_t ci = g_moe_fusion.gpu0_cached_indices[gi];
+                            g0_eids[gi]  = g_moe_fusion.ids_data[ci];
+                            g0_iid1s[gi] = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_d));
+                            g0_ids[gi]   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_d));
                         }
+                        const void * const * expert_ptrs_dev_g0 =
+                            moe_fusion_ensure_gpu0_ptrs(ctx, src0, g0_eids.data(), n_g0, cur_layer_hash);
                         if (expert_ptrs_dev_g0) {
-                            const size_t n_g0 = g_moe_fusion.gpu0_cached_indices.size();
-                            std::vector<int32_t> g0_eids(n_g0);
-                            std::vector<int64_t> g0_iid1s(n_g0);
-                            std::vector<int64_t> g0_ids(n_g0);
-                            for (size_t gi = 0; gi < n_g0; gi++) {
-                                const size_t ci = g_moe_fusion.gpu0_cached_indices[gi];
-                                g0_eids[gi]  = g_moe_fusion.ids_data[ci];
-                                g0_iid1s[gi] = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_d));
-                                g0_ids[gi]   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_d));
-                            }
                             mmvq_moe_batched_dispatch(
                                 ctx, src0, src1, dst,
                                 expert_ptrs_dev_g0,
