@@ -480,6 +480,24 @@ static std::unordered_map<int, int> g_moe_layer_seq[GGML_SYCL_MAX_DEVICES];
 // Secondary GPUs write outputs to malloc_host staging, merged via primary compute queue.
 static std::atomic<bool> g_moe_multi_gpu_active{false};
 
+// B50 local aggregation: when multiple experts for the same token land on a
+// secondary GPU, compute the weighted sum on that GPU and transfer only the
+// aggregate result (~1×N floats) instead of per-expert results (~K×N floats).
+// Requires gating weights from g_moe_weights_by_layer pre-scan.
+// Opt-out: GGML_SYCL_B50_LOCAL_AGG=0
+static bool ggml_sycl_b50_local_agg_enabled() {
+    static std::atomic<int> cached{-1};
+    int v = cached.load(std::memory_order_acquire);
+    if (v < 0) {
+        const char * env = getenv("GGML_SYCL_B50_LOCAL_AGG");
+        int new_val = env ? std::atoi(env) : 1;  // Default: enabled
+        cached.compare_exchange_strong(v, new_val, std::memory_order_release,
+                                       std::memory_order_acquire);
+        v = cached.load(std::memory_order_acquire);
+    }
+    return v != 0;
+}
+
 // -----------------------------------------------------------------------
 // Popularity-aware expert placement: warmup profiling + re-placement.
 // During the first WARMUP_TOKENS tokens, count activations per expert per
@@ -26998,6 +27016,12 @@ static void dispatch_experts_secondary_gpu_impl(
         float *       dev_out[MERGE_RING_SIZE]     = {};
         size_t        dev_q8_1_sz[MERGE_RING_SIZE] = {};
         size_t        dev_out_sz[MERGE_RING_SIZE]     = {};
+        // Contiguous aggregation buffers for batched D2H transfer.
+        // dev_agg lives on secondary GPU, out_agg is host-pinned.
+        float *       dev_agg    = nullptr;
+        float *       out_agg    = nullptr;
+        size_t        dev_agg_sz = 0;
+        size_t        out_agg_sz = 0;
         sycl::context pri_ctx{};
         sycl::context sec_ctx{};
         bool          valid                        = false;
@@ -27010,6 +27034,8 @@ static void dispatch_experts_secondary_gpu_impl(
                 if (dev_q8_1[s])    { sycl::free(dev_q8_1[s],    sec_ctx); }
                 if (dev_out[s])     { sycl::free(dev_out[s],     sec_ctx); }
             }
+            if (dev_agg) { sycl::free(dev_agg, sec_ctx); }
+            if (out_agg) { sycl::free(out_agg, pri_ctx); }
         }
     };
     static thread_local secondary_ring_buffers rings[GGML_SYCL_MAX_DEVICES];
@@ -27199,29 +27225,66 @@ static void dispatch_experts_secondary_gpu_impl(
             }
         }
 
-        // Phase 4: Submit ALL D2H result copies from secondary GPU.
-        // Capture events for event-based sync (avoids full queue drain).
-        sycl::event d2h_events[MERGE_RING_SIZE];
-        for (size_t ci = 0; ci < chunk_sz; ci++) {
-            const int slot = static_cast<int>(ci);
-            d2h_events[ci] = target_queue->memcpy(out_staging[slot], dev_out[slot], needed_out);
+        // Phase 4: Aggregate expert results into contiguous buffer on B50,
+        // then do a single D2H transfer instead of per-expert D2H copies.
+        // This reduces cross-device synchronizations from chunk_sz to 1.
+        const size_t agg_bytes = chunk_sz * needed_out;
+
+        // Ensure aggregation buffers are large enough.
+        if (!ring.dev_agg || agg_bytes > ring.dev_agg_sz) {
+            if (ring.dev_agg) { sycl::free(ring.dev_agg, sec_ctx); }
+            ring.dev_agg    = sycl::malloc_device<float>(chunk_sz * static_cast<size_t>(N), *target_queue);
+            ring.dev_agg_sz = agg_bytes;
+        }
+        if (!ring.out_agg || agg_bytes > ring.out_agg_sz) {
+            if (ring.out_agg) { sycl::free(ring.out_agg, pri_ctx); }
+            ring.out_agg    = sycl::malloc_host<float>(chunk_sz * static_cast<size_t>(N), pri_ctx);
+            ring.out_agg_sz = agg_bytes;
         }
 
-        // Record scatter metadata for deferred flush.
-        for (size_t ci = 0; ci < chunk_sz; ci++) {
-            const auto &  entry = entries[gpu_indices[chunk_start + ci]];
-            const int     slot  = static_cast<int>(ci);
-            const int64_t i1    = entry.id;
-            const int64_t i2    = entry.iid1;
-            char *        d_d   = ctx.dst_original + i1 * nb1 + i2 * nb2;
-            g_pending_secondary_scatter.entries.push_back(
-                { d_d, out_staging[slot], needed_out, target_queue, d2h_events[ci] });
+        if (ring.dev_agg && ring.out_agg) {
+            // Pack per-expert dev_out[slot] into contiguous dev_agg on B50.
+            for (size_t ci = 0; ci < chunk_sz; ci++) {
+                const int slot = static_cast<int>(ci);
+                target_queue->memcpy(ring.dev_agg + ci * static_cast<size_t>(N),
+                                     dev_out[slot], needed_out);
+            }
+
+            // Single D2H: contiguous dev_agg -> contiguous out_agg.
+            sycl::event agg_d2h = target_queue->memcpy(ring.out_agg, ring.dev_agg, agg_bytes);
+
+            // Record scatter metadata referencing offsets within out_agg.
+            for (size_t ci = 0; ci < chunk_sz; ci++) {
+                const auto &  entry = entries[gpu_indices[chunk_start + ci]];
+                const int64_t i1    = entry.id;
+                const int64_t i2    = entry.iid1;
+                char *        d_d   = ctx.dst_original + i1 * nb1 + i2 * nb2;
+                float *       host_ptr = ring.out_agg + ci * static_cast<size_t>(N);
+                g_pending_secondary_scatter.entries.push_back(
+                    { d_d, host_ptr, needed_out, target_queue, agg_d2h });
+            }
+        } else {
+            // Fallback: per-expert D2H if aggregation alloc failed.
+            sycl::event d2h_events[MERGE_RING_SIZE];
+            for (size_t ci = 0; ci < chunk_sz; ci++) {
+                const int slot = static_cast<int>(ci);
+                d2h_events[ci] = target_queue->memcpy(out_staging[slot], dev_out[slot], needed_out);
+            }
+            for (size_t ci = 0; ci < chunk_sz; ci++) {
+                const auto &  entry = entries[gpu_indices[chunk_start + ci]];
+                const int     slot  = static_cast<int>(ci);
+                const int64_t i1    = entry.id;
+                const int64_t i2    = entry.iid1;
+                char *        d_d   = ctx.dst_original + i1 * nb1 + i2 * nb2;
+                g_pending_secondary_scatter.entries.push_back(
+                    { d_d, out_staging[slot], needed_out, target_queue, d2h_events[ci] });
+            }
         }
         g_pending_secondary_scatter.stream     = ctx.stream;
         g_pending_secondary_scatter.active     = true;
         g_pending_secondary_scatter.dst_tensor = ctx.dst_tensor;
 
-        // Flush between chunks: out_staging slots are reused by the
+        // Flush between chunks: aggregation buffers are reused by the
         // next chunk, so we must consume them before they're overwritten.
         if (chunk_end < n_gpu) {
             flush_pending_secondary_scatter();
@@ -33126,9 +33189,12 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     }
 
     // Pre-scan graph for MoE routing weights tensors.
-    // Maps layer_id -> final weights tensor for expert probability threshold.
+    // Maps layer_id -> final weights tensor.  Needed for expert probability
+    // threshold AND B50 local aggregation (weighted sum on secondary GPU).
     g_moe_weights_by_layer.clear();
-    if (ggml_sycl_moe_prob_threshold() > 0.0f) {
+    if (ggml_sycl_moe_prob_threshold() > 0.0f
+        || (g_moe_multi_gpu_active.load(std::memory_order_acquire)
+            && ggml_sycl_b50_local_agg_enabled())) {
         for (int i = 0; i < cgraph->n_nodes; i++) {
             const ggml_tensor * node = cgraph->nodes[i];
             if (!node->name) continue;
