@@ -1552,6 +1552,12 @@ extern "C" {
         void * get_opt_pars_ud;                     // userdata for calculating optimizer parameters
 
         enum ggml_opt_optimizer_type optimizer_type;
+
+        // Gradient checkpointing: mark every Nth forward graph node as persistent so the
+        // allocator cannot reuse its memory during backward.  Reduces peak activation VRAM
+        // at the cost of ~0 extra compute (activations are kept, not recomputed).
+        // Set to 0 (default) to disable.  Good values: 32–64 nodes ≈ every 1–2 transformer layers.
+        int32_t grad_checkpoint_interval;
     };
 
     LLAMA_API void llama_opt_init(struct llama_context * lctx, struct llama_model * model, struct llama_opt_params lopt_params);

@@ -58,10 +58,13 @@ struct ggml_opt_context {
     std::vector<struct ggml_tensor *> grad_accs;
     std::vector<struct ggml_tensor *> grad_m;
     std::vector<struct ggml_tensor *> grad_v;
+    std::vector<ggml_backend_buffer_t> bufs_momenta;  // per-param moment buffers (one per param node)
+    std::vector<struct ggml_context *> ctxs_momenta;  // corresponding ggml contexts (keep alive for tensor metadata)
 
     int64_t iter               = 1;
     int32_t opt_period         = 1;
     int32_t opt_i              = 0;
+    int32_t grad_checkpoint_interval = 0;
     bool    loss_per_datapoint = false;
 
     ggml_opt_get_optimizer_params get_opt_pars    = nullptr;
@@ -254,9 +257,10 @@ struct ggml_opt_params ggml_opt_default_params(
         /*loss_type       =*/ loss_type,
         /*build_type      =*/ GGML_OPT_BUILD_TYPE_OPT,
         /*opt_period      =*/ 1,
-        /*get_opt_pars    =*/ ggml_opt_get_default_optimizer_params,
-        /*get_opt_pars_ud =*/ nullptr,
-        /*optimizer       =*/ GGML_OPT_OPTIMIZER_TYPE_ADAMW,
+        /*get_opt_pars              =*/ ggml_opt_get_default_optimizer_params,
+        /*get_opt_pars_ud          =*/ nullptr,
+        /*grad_checkpoint_interval =*/ 0,
+        /*optimizer                =*/ GGML_OPT_OPTIMIZER_TYPE_ADAMW,
     };
 }
 
@@ -476,13 +480,53 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
             for (int i = 0; i < n_nodes; ++i) {
                 ggml_tensor * node = opt_ctx->gf->nodes[i];
                 if (node->flags & GGML_TENSOR_FLAG_PARAM) {
-                    opt_ctx->grad_m[i] = ggml_new_tensor(opt_ctx->ctx_static, GGML_TYPE_F32, GGML_MAX_DIMS, node->ne);
-                    opt_ctx->grad_v[i] = ggml_new_tensor(opt_ctx->ctx_static, GGML_TYPE_F32, GGML_MAX_DIMS, node->ne);
+                    // Allocate moments on the same buffer type as the param tensor so
+                    // the ADAMW op runs on the correct backend (avoids cross-device mismatch
+                    // when some LoRA tensors are on CPU and others on GPU with partial offload).
+                    ggml_backend_buffer_type_t param_buft = node->buffer
+                        ? ggml_backend_buffer_get_type(node->buffer)
+                        : ggml_backend_cpu_buffer_type();
+
+                    // Allocate a tiny context + buffer for this pair of moment tensors.
+                    const size_t sz = 2 * ggml_tensor_overhead();
+                    struct ggml_init_params mip = { sz, nullptr, true };
+                    struct ggml_context * mctx = ggml_init(mip);
+                    opt_ctx->grad_m[i] = ggml_new_tensor(mctx, GGML_TYPE_F32, GGML_MAX_DIMS, node->ne);
+                    opt_ctx->grad_v[i] = ggml_new_tensor(mctx, GGML_TYPE_F32, GGML_MAX_DIMS, node->ne);
+                    ggml_backend_buffer_t mbuf = ggml_backend_alloc_ctx_tensors_from_buft(mctx, param_buft);
+                    ggml_backend_buffer_clear(mbuf, 0);
+                    opt_ctx->bufs_momenta.push_back(mbuf);
+                    opt_ctx->ctxs_momenta.push_back(mctx); // keep alive for tensor metadata
                 } else {
                     opt_ctx->grad_m[i] = nullptr;
                     opt_ctx->grad_v[i] = nullptr;
                 }
             }
+        }
+    }
+
+    // Gradient checkpointing: mark every Nth forward node as OUTPUT so the allocator
+    // keeps its memory alive through the backward pass.  The backward graph already
+    // contains the forward ops (gb_grad is a superset of gf), so the checkpointed
+    // activations are naturally available for backward matmuls without recomputation.
+    // This prevents the allocator from aliasing those buffers to later ops, cutting
+    // peak activation VRAM at the cost of slightly larger static allocation.
+    if (opt_ctx->grad_checkpoint_interval > 0) {
+        const int interval = opt_ctx->grad_checkpoint_interval;
+        const int n_fwd    = opt_ctx->gf->n_nodes;
+        int ckpt_count = 0;
+        for (int i = interval - 1; i < n_fwd; i += interval) {
+            struct ggml_tensor * node = opt_ctx->gf->nodes[i];
+            // Only checkpoint F32 compute nodes — skip I32 index tensors and already-output nodes.
+            if (node->type != GGML_TYPE_F32) continue;
+            if (node->flags & GGML_TENSOR_FLAG_OUTPUT)  continue;
+            if (node->flags & GGML_TENSOR_FLAG_INPUT)   continue;
+            node->flags |= GGML_TENSOR_FLAG_OUTPUT;
+            ckpt_count++;
+        }
+        if (ckpt_count > 0) {
+            GGML_LOG_DEBUG("%s: gradient checkpointing: marked %d/%d nodes as persistent (interval=%d)\n",
+                __func__, ckpt_count, n_fwd, interval);
         }
     }
 
@@ -556,10 +600,11 @@ ggml_opt_context_t ggml_opt_init(struct ggml_opt_params params) {
     result->build_type_alloc = params.build_type;
     result->inputs           = params.inputs;
     result->outputs          = params.outputs;
-    result->opt_period       = params.opt_period;
-    result->get_opt_pars     = params.get_opt_pars;
-    result->get_opt_pars_ud  = params.get_opt_pars_ud;
-    result->optimizer        = params.optimizer;
+    result->opt_period                = params.opt_period;
+    result->grad_checkpoint_interval  = params.grad_checkpoint_interval;
+    result->get_opt_pars              = params.get_opt_pars;
+    result->get_opt_pars_ud           = params.get_opt_pars_ud;
+    result->optimizer                 = params.optimizer;
 
     GGML_ASSERT(result->opt_period >= 1);
 
@@ -588,6 +633,12 @@ void ggml_opt_free(ggml_opt_context_t opt_ctx) {
     }
     ggml_backend_buffer_free(opt_ctx->buf_static);
     ggml_backend_buffer_free(opt_ctx->buf_cpu);
+    for (ggml_backend_buffer_t buf : opt_ctx->bufs_momenta) {
+        ggml_backend_buffer_free(buf);
+    }
+    for (struct ggml_context * ctx : opt_ctx->ctxs_momenta) {
+        ggml_free(ctx);
+    }
     ggml_free(opt_ctx->ctx_static);
     ggml_free(opt_ctx->ctx_cpu);
     delete opt_ctx;
