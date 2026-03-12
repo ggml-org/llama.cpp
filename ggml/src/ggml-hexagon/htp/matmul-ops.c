@@ -285,15 +285,44 @@ static inline HVX_Vector hvx_vec_rmpy_x8_n(HVX_Vector_x8 x, HVX_Vector_x8 y, uns
 }
 
 static inline HVX_Vector hvx_vec_rmpy_x8_full(HVX_Vector_x8 x, HVX_Vector_x8 y) {
-    return hvx_vec_rmpy_x8_n(x, y, 1024);
+    HVX_Vector r0 = Q6_Vw_vrmpy_VbVb(x.v[0], y.v[0]);
+    HVX_Vector r1 = Q6_Vw_vrmpy_VbVb(x.v[1], y.v[1]);
+    HVX_Vector r2 = Q6_Vw_vrmpy_VbVb(x.v[2], y.v[2]);
+    HVX_Vector r3 = Q6_Vw_vrmpy_VbVb(x.v[3], y.v[3]);
+    HVX_Vector r4 = Q6_Vw_vrmpy_VbVb(x.v[4], y.v[4]);
+    HVX_Vector r5 = Q6_Vw_vrmpy_VbVb(x.v[5], y.v[5]);
+    HVX_Vector r6 = Q6_Vw_vrmpy_VbVb(x.v[6], y.v[6]);
+    HVX_Vector r7 = Q6_Vw_vrmpy_VbVb(x.v[7], y.v[7]);
+
+    HVX_VectorPair p0 = Q6_W_vdeal_VVR(r1, r0, -4);
+    HVX_VectorPair p1 = Q6_W_vdeal_VVR(r3, r2, -4);
+    HVX_VectorPair p2 = Q6_W_vdeal_VVR(r5, r4, -4);
+    HVX_VectorPair p3 = Q6_W_vdeal_VVR(r7, r6, -4);
+
+    r0 = Q6_Vw_vadd_VwVw(Q6_V_lo_W(p0), Q6_V_hi_W(p0));
+    r1 = Q6_Vw_vadd_VwVw(Q6_V_lo_W(p1), Q6_V_hi_W(p1));
+    r2 = Q6_Vw_vadd_VwVw(Q6_V_lo_W(p2), Q6_V_hi_W(p2));
+    r3 = Q6_Vw_vadd_VwVw(Q6_V_lo_W(p3), Q6_V_hi_W(p3));
+
+    p0 = Q6_W_vdeal_VVR(r1, r0, -4);
+    p1 = Q6_W_vdeal_VVR(r3, r2, -4);
+
+    r0 = Q6_Vw_vadd_VwVw(Q6_V_lo_W(p0), Q6_V_hi_W(p0));
+    r1 = Q6_Vw_vadd_VwVw(Q6_V_lo_W(p1), Q6_V_hi_W(p1));
+
+    p0 = Q6_W_vdeal_VVR(r1, r0, -4);
+    r0 = Q6_Vw_vadd_VwVw(Q6_V_lo_W(p0), Q6_V_hi_W(p0));
+
+    return r0;
 }
 
-// Handle most common cases of tensors not multiple of 1024.
 static inline HVX_Vector hvx_vec_rmpy_x8_partial(HVX_Vector_x8 x, HVX_Vector_x8 y, unsigned int n) {
-    if (n <= 256) { return hvx_vec_rmpy_x8_n(x, y, 256); };
-    if (n <= 512) { return hvx_vec_rmpy_x8_n(x, y, 512); };
-    if (n <= 768) { return hvx_vec_rmpy_x8_n(x, y, 768); };
-    return hvx_vec_rmpy_x8_n(x, y, 1024);
+    return hvx_vec_rmpy_x8_full(x, y);
+
+    if (n >= 512)
+        return hvx_vec_rmpy_x8_full(x, y);
+
+    return hvx_vec_rmpy_x8_partial(x, y, 512);
 }
 
 static void vec_dot_q4x4x2_q8x4x2_1x1(const int n, float * restrict s0, const void * restrict vx0, const void * restrict vy0) {
