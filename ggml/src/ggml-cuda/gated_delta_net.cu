@@ -52,6 +52,8 @@ __global__ void gated_delta_net_cuda_no_tail(const float * q,
     // non-KDA has one g per column, KDA has one g per row
     float         g_vals[n_tokens_per_loop][rows_per_lane];
     int           idx[rows_per_lane];
+    float         attn_col_values[n_tokens_per_loop];
+
     // state is stored transposed: M[col][i] = S[i][col], row col is contiguous
 #pragma unroll
     for (int r = 0; r < rows_per_lane; r++) {
@@ -112,9 +114,7 @@ __global__ void gated_delta_net_cuda_no_tail(const float * q,
 
                 float attn_col = warp_reduce_sum<warp_size>(attn_partial);
 
-                if (lane == 0) {
-                    attn_data[col] = attn_col * scale;
-                }
+                attn_col_values[i] = attn_col * scale;
             } else {
                 // kv[col] = sum_i g[i] * S[i][col] * k[i]
                 float kv_shard = 0.0f;
@@ -139,13 +139,24 @@ __global__ void gated_delta_net_cuda_no_tail(const float * q,
 
                 float attn_col = warp_reduce_sum<warp_size>(attn_partial);
 
-                if (lane == 0) {
-                    attn_data[col] = attn_col * scale;
+                attn_col_values[i] = attn_col * scale;
+            }
+        }
+
+        // Pulling the writes out of the loop is compiler-friendly
+        if constexpr (warp_size < n_tokens_per_loop) {
+            for (int i = lane; i < n_tokens_per_loop; i += warp_size) {
+                if (i < n_tokens_per_loop) {
+                    attn_data[i * S_v * H + col] = attn_col_values[i];
                 }
             }
-
-            attn_data += S_v * H;
+        } else {
+            if (lane < n_tokens_per_loop) {
+                attn_data[lane * S_v * H + col] = attn_col_values[lane];
+            }
         }
+
+        attn_data += n_tokens_per_loop * S_v * H;
     }
     // Write state back to global memory (transposed layout)
 #pragma unroll
