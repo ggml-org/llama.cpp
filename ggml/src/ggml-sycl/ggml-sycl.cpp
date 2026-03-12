@@ -4019,7 +4019,12 @@ static float ggml_sycl_moe_prob_threshold() {
     static float threshold = -1.0f;
     if (threshold < 0.0f) {
         const char * env = getenv("GGML_SYCL_MOE_PROB_THRESHOLD");
-        threshold = env ? std::atof(env) : 0.0f;  // Default: disabled
+        float val = env ? std::atof(env) : 0.0f;  // Default: disabled
+        if (val < 0.0f || val >= 1.0f) {
+            GGML_LOG_WARN("[MOE-SKIP] GGML_SYCL_MOE_PROB_THRESHOLD=%.4f out of range [0, 1), disabled\n", val);
+            val = 0.0f;
+        }
+        threshold = val;
     }
     return threshold;
 }
@@ -28308,13 +28313,24 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                            n_cpu * sizeof(float)).wait();
 
                             float w_total = 0.0f, w_kept = 0.0f;
+                            int n_kept = 0;
                             for (size_t ci = 0; ci < n_cpu; ci++) {
                                 w_total += wt_host[ci];
                                 if (wt_host[ci] < prob_threshold) {
                                     skip_flags[ci] = 1;
                                 } else {
                                     w_kept += wt_host[ci];
+                                    n_kept++;
                                 }
+                            }
+
+                            // Safety: never skip ALL experts — always keep at
+                            // least K_min=1 (the highest-probability expert at
+                            // index 0, since ids are sorted descending).
+                            if (n_kept == 0 && n_cpu > 0) {
+                                skip_flags[0] = 0;
+                                w_kept = wt_host[0];
+                                n_kept = 1;
                             }
 
                             // Renormalize: scale remaining outputs by total/kept
