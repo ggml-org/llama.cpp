@@ -1428,7 +1428,10 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         if (statistics_data) {
             if (auto it = statistics_data->find(remapped_name); it != statistics_data->end() && !it->second.empty()) {
                 const auto & ts = it->second;
-                scaling_factor = 1.0f + std::log1p(std::max(0.0f, ts[KURTOSIS])) * std::max(1.0f, std::isnan(ts[GAIN]) ? 1.0f : ts[GAIN]);
+                const float gain = std::isnan(ts[GAIN]) ? 1.0f : ts[GAIN];
+                const float alignment = std::isfinite(ts[COSSIM]) ? std::max(0.0f, 1.0f - ts[COSSIM]) : 0.0f;
+                const float concentration = 1.0f - std::clamp(ts[H_NORM], 0.0f, 100.0f) / 100.0f;
+                scaling_factor = 1.0f + std::log1p(std::max(0.0f, ts[KURTOSIS])) * std::max(1.0f, gain) * (1.0f + alignment) * (1.0f + concentration);
             }
         }
 
