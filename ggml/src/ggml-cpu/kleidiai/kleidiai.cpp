@@ -187,7 +187,7 @@ static void init_kleidiai_context(void) {
         initialized = true;
 
         const char *env_sme     = getenv("GGML_KLEIDIAI_SME");
-        const char *env_threads = getenv("LLAMA_ARG_THREADS");
+        const char *env_threads = getenv("GGML_TOTAL_THREADS");
 
         const bool cpu_has_sme = ggml_cpu_has_sme();
         size_t detected_smcus = 0;
