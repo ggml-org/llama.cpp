@@ -1445,17 +1445,17 @@ void ggml_compute_forward_mul_mat(
 
             uint8_t * dst_base = (uint8_t *) dst->data;
             if (N >= nth) {
-                const int64_t col0 = (N * ith) / nth;
-                const int64_t col1 = (N * (ith + 1)) / nth;
+                const int64_t col0  = (N * ith) / nth;
+                const int64_t col1  = (N * (ith + 1)) / nth;
                 const int64_t ncols = col1 - col0;
 
                 if (ncols > 0) {
                     const size_t lut_col_bytes = (size_t) blocks_per_col * (size_t) QK_IFAIRY_GROUPS_PER_BLOCK *
                                                  (size_t) k_ifairy_lut_group_bytes;
-                    const void * act_src_col = (const uint8_t *) act_src + (size_t) col0 * act_stride;
-                    void *       lut_col     = (uint8_t *) lut + (size_t) col0 * lut_col_bytes;
-                    float *      scales_col  = scales + (size_t) col0 * (size_t) blocks_per_col * 2u;
-                    float *      dst_col     = (float *) (dst_base + (size_t) col0 * nb1);
+                    const void * act_src_col   = (const uint8_t *) act_src + (size_t) col0 * act_stride;
+                    void *       lut_col       = (uint8_t *) lut + (size_t) col0 * lut_col_bytes;
+                    float *      scales_col    = scales + (size_t) col0 * (size_t) blocks_per_col * 2u;
+                    float *      dst_col       = (float *) (dst_base + (size_t) col0 * nb1);
 
                     if (impl == GGML_IFAIRY_LUT_IMPL_LUT_C) {
                         ggml_ifairy_lut_qgemm_fused_lut_c((int) M, (int) K, (int) ncols, packed_w, act_src_col,
@@ -1463,12 +1463,40 @@ void ggml_compute_forward_mul_mat(
                                                           /*pack_bf16*/ true, /*add*/ false);
                     } else {
                         ggml_ifairy_lut_qgemm_fused_lut16((int) M, (int) K, (int) ncols, packed_w, act_src_col,
-                                                           act_stride, lut_col, scales_col, dst_col, nb1, nb0,
-                                                           /*pack_bf16*/ true, /*add*/ false);
+                                                          act_stride, lut_col, scales_col, dst_col, nb1, nb0,
+                                                          /*pack_bf16*/ true, /*add*/ false);
                     }
                 }
             } else {
-                // Small-N decode-like path: keep the existing whole-LUT build and row-sharded compute.
+                const int64_t tiles_total = (M + 15) / 16;
+                const int64_t tile0       = (tiles_total * ith) / nth;
+                const int64_t tile1       = (tiles_total * (ith + 1)) / nth;
+
+                const int64_t row0  = tile0 * 16;
+                const int64_t row1  = tile1 * 16 > M ? M : tile1 * 16;
+                const int64_t nrows = row1 - row0;
+
+                // Decode-like N==1 path: use per-thread fused preprocess+qgemm to keep the tiny LUT hot in
+                // thread-local cache and avoid the shared-LUT/barrier overhead that regressed 2w on Apple Silicon.
+                if (N == 1) {
+                    if (nrows > 0) {
+                        const struct ifairy_lut_wtile_16 * w_tile = packed_w + (size_t) tile0 * (size_t) blocks_per_col;
+                        float *                            dst_f  = (float *) (dst_base + (size_t) row0 * nb0);
+
+                        if (impl == GGML_IFAIRY_LUT_IMPL_LUT_C) {
+                            ggml_ifairy_lut_qgemm_fused_lut_c((int) nrows, (int) K, 1, w_tile, act_src, act_stride,
+                                                              NULL, NULL, dst_f, nb1, nb0, /*pack_bf16*/ true,
+                                                              /*add*/ false);
+                        } else {
+                            ggml_ifairy_lut_qgemm_fused_lut16((int) nrows, (int) K, 1, w_tile, act_src, act_stride,
+                                                              NULL, NULL, dst_f, nb1, nb0, /*pack_bf16*/ true,
+                                                              /*add*/ false);
+                        }
+                    }
+                    return;
+                }
+
+                // Small-N decode-like path: keep the shared-LUT build for N>1 to avoid duplicated preprocess work.
                 if (impl == GGML_IFAIRY_LUT_IMPL_LUT_C) {
                     ggml_ifairy_lut_preprocess_ex_lut_c((int) M, (int) K, (int) N, act_src, act_stride, scales, lut,
                                                         ith, nth);
@@ -1478,24 +1506,16 @@ void ggml_compute_forward_mul_mat(
                 }
                 ggml_barrier(params->threadpool);
 
-                const int64_t tiles_total = (M + 15) / 16;
-                const int64_t tile0       = (tiles_total * ith) / nth;
-                const int64_t tile1       = (tiles_total * (ith + 1)) / nth;
-
-                const int64_t row0  = tile0 * 16;
-                const int64_t row1  = tile1 * 16 > M ? M : tile1 * 16;
-                const int64_t nrows = row1 - row0;
-
                 if (nrows > 0) {
                     const struct ifairy_lut_wtile_16 * w_tile = packed_w + (size_t) tile0 * (size_t) blocks_per_col;
                     float *                            dst_f  = (float *) (dst_base + (size_t) row0 * nb0);
 
                     if (impl == GGML_IFAIRY_LUT_IMPL_LUT_C) {
-                        ggml_ifairy_lut_qgemm_lut_c((int) nrows, (int) K, (int) N, w_tile, lut, scales, dst_f, nb1,
-                                                    nb0, /*pack_bf16*/ true, /*add*/ false);
+                        ggml_ifairy_lut_qgemm_lut_c((int) nrows, (int) K, (int) N, w_tile, lut, scales, dst_f, nb1, nb0,
+                                                    /*pack_bf16*/ true, /*add*/ false);
                     } else {
-                        ggml_ifairy_lut_qgemm_lut16((int) nrows, (int) K, (int) N, w_tile, lut, scales, dst_f, nb1,
-                                                    nb0, /*pack_bf16*/ true, /*add*/ false);
+                        ggml_ifairy_lut_qgemm_lut16((int) nrows, (int) K, (int) N, w_tile, lut, scales, dst_f, nb1, nb0,
+                                                    /*pack_bf16*/ true, /*add*/ false);
                     }
                 }
             }
@@ -1545,7 +1565,7 @@ UseGgmlGemm1:;
 
         const char * ifairy_act_tensor_env = getenv("GGML_IFAIRY_VEC_DOT_ACT_TENSOR");
         const bool   ifairy_act_tensor = (src0->type == GGML_TYPE_IFAIRY) && (vec_dot_type == GGML_TYPE_IFAIRY_Q16) &&
-                                       (ifairy_act_tensor_env != NULL) && (strcmp(ifairy_act_tensor_env, "0") != 0);
+                                         (ifairy_act_tensor_env != NULL) && (strcmp(ifairy_act_tensor_env, "0") != 0);
 
 #if 0
         for (int64_t i13 = 0; i13 < ne13; ++i13) {

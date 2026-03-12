@@ -1,6 +1,6 @@
 # iFairy ARM 3W LUT (V2) — 状态 / 性能记录
 
-Status: Draft (2026-01-25)
+Status: Draft (2026-03-12)
 
 本文件用于替代旧的 `../legacy/IFAIRY_ARM_3W_LUT_STATUS.md` 的后续增量记录（旧文件不再修改）。
 
@@ -52,6 +52,37 @@ Status: Draft (2026-01-25)
 ## 变更记录（Changelog）
 
 按日期追加（YYYY-MM-DD）：
+
+### 2026-03-12 (build `ac58bc67`; baseline `b12bfdb6`)
+- 变更摘要：
+  - 将 x86 上的 2-weight merged LUT layout 迁移到 ARM LUT16 路径。
+  - 对 `N == 1` 的 decode 小批量场景改为每线程 fused preprocess + qgemm，避免共享 LUT/barrier 开销。
+- Correctness:
+  - `./build-rel/bin/test-ifairy --ifairy-lut-only`: PASS
+  - `./build-rel-lut/bin/test-ifairy --ifairy-lut-only`: PASS
+- `llama-bench`（Machine: Mac16,12 / Apple M4；model=`models/Fairy-plus-minus-i-700M/ifairy.gguf`; threads=4; repetitions=3）：
+  - Command (current):
+    - `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_IMPL=lut16 ./build-rel/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 3`
+  - Result (current `ac58bc67`):
+    - `pp128`: `143.99 ± 7.42 tok/s`
+    - `tg256`: `69.32 ± 1.03 tok/s`
+  - Command (baseline `b12bfdb6`):
+    - `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_IMPL=lut16 ./build-rel/bin/llama-bench -m /Users/liweitao/Downloads/Codefield/cpp/llama.cpp/models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 3`
+  - Result (baseline `b12bfdb6`):
+    - `pp128`: `102.99 ± 1.57 tok/s`
+    - `tg256`: `63.83 ± 1.13 tok/s`
+  - Delta vs baseline:
+    - `pp128`: `+39.8%`
+    - `tg256`: `+8.6%`
+- backend 诊断（输出 hash 一致）：
+  - `./build-rel/bin/test-ifairy --ifairy-lut-backend-bench 4096 1 1536 4 10 100`
+    - current `ac58bc67`: `lut16_ms_per_iter=0.128064`, `output_hash=0x3553f5fa20e46383`
+    - baseline `b12bfdb6`: `lut16_ms_per_iter=0.141745`, `output_hash=0x3553f5fa20e46383`
+    - delta: `+9.7%`
+  - `./build-rel/bin/test-ifairy --ifairy-lut-backend-bench 4096 64 1536 4 5 20`
+    - current `ac58bc67`: `lut16_ms_per_iter=4.076835`, `output_hash=0x54cc415c8e1c8383`
+    - baseline `b12bfdb6`: `lut16_ms_per_iter=5.736187`, `output_hash=0x54cc415c8e1c8383`
+    - delta: `+28.9%`
 
 ### 2026-01-28 (build `35a9928b`)
 - Correctness:
