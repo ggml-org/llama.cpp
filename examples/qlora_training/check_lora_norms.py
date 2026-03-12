@@ -42,10 +42,10 @@ def read_gguf(path):
         pos = f.tell()
         align = 32
         data_start = (pos + align - 1) & ~(align - 1)
-        
+
         print(f"\nFile: {path}")
         print(f"Tensors: {n_tensors}")
-        
+
         for name, dims, dtype, offset in tensors[:10]:  # first 10
             if dtype != 0:  # only F32 (type 0)
                 print(f"  {name}: dims={dims} type={dtype} (non-F32, skipping norm)")
