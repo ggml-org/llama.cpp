@@ -4,55 +4,55 @@ on:
   workflow_call:
 
 jobs:
-  ubuntu-24-riscv64-cpu-cross:
-    runs-on: ubuntu-24.04
+  # ubuntu-24-riscv64-cpu-cross:
+  #   runs-on: ubuntu-24.04
 
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup Riscv
-        run: |
-          sudo dpkg --add-architecture riscv64
+  #   steps:
+  #     - uses: actions/checkout@v6
+  #     - name: Setup Riscv
+  #       run: |
+  #         sudo dpkg --add-architecture riscv64
 
-          # Add arch-specific repositories for non-amd64 architectures
-          cat << EOF | sudo tee /etc/apt/sources.list.d/riscv64-ports.list
-          deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble main universe
-          deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble-updates main universe
-          deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble-security main universe
-          deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble-backports main universe
-          EOF
+  #         # Add arch-specific repositories for non-amd64 architectures
+  #         cat << EOF | sudo tee /etc/apt/sources.list.d/riscv64-ports.list
+  #         deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble main universe
+  #         deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble-updates main universe
+  #         deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble-security main universe
+  #         deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble-backports main universe
+  #         EOF
 
-          sudo apt-get update || true    ;# Prevent failure due to missing URLs.
+  #         sudo apt-get update || true    ;# Prevent failure due to missing URLs.
 
-          sudo apt-get install -y --no-install-recommends \
-                  build-essential \
-                  gcc-14-riscv64-linux-gnu \
-                  g++-14-riscv64-linux-gnu
+  #         sudo apt-get install -y --no-install-recommends \
+  #                 build-essential \
+  #                 gcc-14-riscv64-linux-gnu \
+  #                 g++-14-riscv64-linux-gnu
 
-      - name: Build
-        run: |
-          cmake -B build -DLLAMA_CURL=OFF \
-                         -DCMAKE_BUILD_TYPE=Release \
-                         -DGGML_OPENMP=OFF \
-                         -DLLAMA_BUILD_EXAMPLES=ON \
-                         -DLLAMA_BUILD_TOOLS=ON \
-                         -DLLAMA_BUILD_TESTS=OFF \
-                         -DCMAKE_SYSTEM_NAME=Linux \
-                         -DCMAKE_SYSTEM_PROCESSOR=riscv64 \
-                         -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
-                         -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14 \
-                         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-                         -DCMAKE_FIND_ROOT_PATH=/usr/lib/riscv64-linux-gnu \
-                         -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
-                         -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
-                         -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
+  #     - name: Build
+  #       run: |
+  #         cmake -B build -DLLAMA_OPENSSL=OFF \
+  #                        -DCMAKE_BUILD_TYPE=Release \
+  #                        -DGGML_OPENMP=OFF \
+  #                        -DLLAMA_BUILD_EXAMPLES=ON \
+  #                        -DLLAMA_BUILD_TOOLS=ON \
+  #                        -DLLAMA_BUILD_TESTS=OFF \
+  #                        -DCMAKE_SYSTEM_NAME=Linux \
+  #                        -DCMAKE_SYSTEM_PROCESSOR=riscv64 \
+  #                        -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
+  #                        -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14 \
+  #                        -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+  #                        -DCMAKE_FIND_ROOT_PATH=/usr/lib/riscv64-linux-gnu \
+  #                        -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
+  #                        -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
+  #                        -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
 
-          cmake --build build --config Release -j $(nproc)
+  #         cmake --build build --config Release -j $(nproc)
 
   # ubuntu-24-riscv64-vulkan-cross:
   #   runs-on: ubuntu-24.04
 
   #   steps:
-  #     - uses: actions/checkout@v4
+  #     - uses: actions/checkout@v6
   #     - name: Setup Riscv
   #       run: |
   #         sudo dpkg --add-architecture riscv64
@@ -76,7 +76,7 @@ jobs:
 
   #     - name: Build
   #       run: |
-  #         cmake -B build -DLLAMA_CURL=OFF \
+  #         cmake -B build -DLLAMA_OPENSSL=OFF \
   #                        -DCMAKE_BUILD_TYPE=Release \
   #                        -DGGML_VULKAN=ON \
   #                        -DGGML_OPENMP=OFF \
@@ -99,7 +99,7 @@ jobs:
   #   runs-on: ubuntu-24.04
 
   #   steps:
-  #     - uses: actions/checkout@v4
+  #     - uses: actions/checkout@v6
   #     - name: Setup Arm64
   #       run: |
   #         sudo dpkg --add-architecture arm64
@@ -122,7 +122,7 @@ jobs:
 
   #     - name: Build
   #       run: |
-  #         cmake -B build -DLLAMA_CURL=OFF \
+  #         cmake -B build -DLLAMA_OPENSSL=OFF \
   #                        -DCMAKE_BUILD_TYPE=Release \
   #                        -DGGML_VULKAN=ON \
   #                        -DGGML_OPENMP=OFF \
@@ -141,103 +141,12 @@ jobs:
 
   #         cmake --build build --config Release -j $(nproc)
 
-  ubuntu-24-ppc64el-cpu-cross:
-    runs-on: ubuntu-24.04
-
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup PowerPC64le
-        run: |
-          sudo dpkg --add-architecture ppc64el
-
-          # Add arch-specific repositories for non-amd64 architectures
-          cat << EOF | sudo tee /etc/apt/sources.list.d/ppc64el-ports.list
-          deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble main universe
-          deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble-updates main universe
-          deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble-security main universe
-          deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble-backports main universe
-          EOF
-
-          sudo apt-get update || true    ;# Prevent failure due to missing URLs.
-
-          sudo apt-get install -y --no-install-recommends \
-                  build-essential \
-                  gcc-14-powerpc64le-linux-gnu \
-                  g++-14-powerpc64le-linux-gnu
-
-      - name: Build
-        run: |
-          cmake -B build -DLLAMA_CURL=OFF \
-                         -DCMAKE_BUILD_TYPE=Release \
-                         -DGGML_OPENMP=OFF \
-                         -DLLAMA_BUILD_EXAMPLES=ON \
-                         -DLLAMA_BUILD_TOOLS=ON \
-                         -DLLAMA_BUILD_TESTS=OFF \
-                         -DCMAKE_SYSTEM_NAME=Linux \
-                         -DCMAKE_SYSTEM_PROCESSOR=ppc64 \
-                         -DCMAKE_C_COMPILER=powerpc64le-linux-gnu-gcc-14 \
-                         -DCMAKE_CXX_COMPILER=powerpc64le-linux-gnu-g++-14 \
-                         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-                         -DCMAKE_FIND_ROOT_PATH=/usr/lib/powerpc64le-linux-gnu \
-                         -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
-                         -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
-                         -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
-
-          cmake --build build --config Release -j $(nproc)
-
-  # ubuntu-24-ppc64el-vulkan-cross:
-  #   runs-on: ubuntu-24.04
-
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - name: Setup PowerPC64le
-  #       run: |
-  #         sudo dpkg --add-architecture ppc64el
-
-  #         # Add arch-specific repositories for non-amd64 architectures
-  #         cat << EOF | sudo tee /etc/apt/sources.list.d/ppc64el-ports.list
-  #         deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble main universe
-  #         deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble-updates main universe
-  #         deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble-security main universe
-  #         deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble-backports main universe
-  #         EOF
-
-  #         sudo apt-get update || true    ;# Prevent failure due to missing URLs.
-
-  #         sudo apt-get install -y --no-install-recommends \
-  #                 build-essential \
-  #                 glslc \
-  #                 gcc-14-powerpc64le-linux-gnu \
-  #                 g++-14-powerpc64le-linux-gnu \
-  #                 libvulkan-dev:ppc64el
-
-  #     - name: Build
-  #       run: |
-  #         cmake -B build -DLLAMA_CURL=OFF \
-  #                        -DCMAKE_BUILD_TYPE=Release \
-  #                        -DGGML_VULKAN=ON \
-  #                        -DGGML_OPENMP=OFF \
-  #                        -DLLAMA_BUILD_EXAMPLES=ON \
-  #                        -DLLAMA_BUILD_TOOLS=ON \
-  #                        -DLLAMA_BUILD_TESTS=OFF \
-  #                        -DCMAKE_SYSTEM_NAME=Linux \
-  #                        -DCMAKE_SYSTEM_PROCESSOR=ppc64 \
-  #                        -DCMAKE_C_COMPILER=powerpc64le-linux-gnu-gcc-14 \
-  #                        -DCMAKE_CXX_COMPILER=powerpc64le-linux-gnu-g++-14 \
-  #                        -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-  #                        -DCMAKE_FIND_ROOT_PATH=/usr/lib/powerpc64le-linux-gnu \
-  #                        -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
-  #                        -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
-  #                        -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
-
-  #         cmake --build build --config Release -j $(nproc)
-
   debian-13-loongarch64-cpu-cross:
     runs-on: ubuntu-24.04
     container: debian@sha256:653dfb9f86c3782e8369d5f7d29bb8faba1f4bff9025db46e807fa4c22903671
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Setup LoongArch
         run: |
           rm -f /etc/apt/sources.list.d/*
@@ -269,7 +178,7 @@ jobs:
 
       - name: Build
         run: |
-          cmake -B build -DLLAMA_CURL=OFF \
+          cmake -B build -DLLAMA_OPENSSL=OFF \
                          -DCMAKE_BUILD_TYPE=Release \
                          -DGGML_OPENMP=OFF \
                          -DLLAMA_BUILD_EXAMPLES=ON \
@@ -292,7 +201,7 @@ jobs:
     container: debian@sha256:653dfb9f86c3782e8369d5f7d29bb8faba1f4bff9025db46e807fa4c22903671
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Setup LoongArch
         run: |
           rm -f /etc/apt/sources.list.d/*
@@ -326,7 +235,7 @@ jobs:
 
       - name: Build
         run: |
-          cmake -B build -DLLAMA_CURL=OFF \
+          cmake -B build -DLLAMA_OPENSSL=OFF \
                          -DCMAKE_BUILD_TYPE=Release \
                          -DGGML_VULKAN=ON \
                          -DGGML_OPENMP=OFF \
@@ -342,5 +251,48 @@ jobs:
                          -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
                          -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
                          -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
+
+          cmake --build build --config Release -j $(nproc)
+
+  ubuntu-24-riscv64-cpu-spacemit-ime-cross:
+    runs-on: ubuntu-24.04
+
+    env:
+      # Make sure this is in sync with build-cache.yml
+      SPACEMIT_IME_TOOLCHAIN_VERSION: "1.1.2"
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Use SpacemiT Toolchain Cache
+        uses: actions/cache@v5
+        id: cache-toolchain
+        with:
+          path: ./spacemit_toolchain
+          key: spacemit-ime-toolchain-v${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}-${{ runner.os }}
+
+      - name: Setup SpacemiT Toolchain
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+        uses: ./.github/actions/linux-setup-spacemit
+        with:
+          path: ./spacemit_toolchain
+          version: ${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}
+
+      - name: Build
+        run: |
+          export RISCV_ROOT_PATH=${PWD}/spacemit_toolchain
+          cmake -B build -DLLAMA_OPENSSL=OFF \
+                         -DCMAKE_BUILD_TYPE=Release \
+                         -DGGML_OPENMP=OFF \
+                         -DLLAMA_BUILD_EXAMPLES=ON \
+                         -DLLAMA_BUILD_TOOLS=ON \
+                         -DLLAMA_BUILD_TESTS=OFF \
+                         -DGGML_CPU_RISCV64_SPACEMIT=ON \
+                         -DGGML_RVV=ON \
+                         -DGGML_RV_ZFH=ON \
+                         -DGGML_RV_ZICBOP=ON \
+                         -DGGML_RV_ZIHINTPAUSE=ON \
+                         -DRISCV64_SPACEMIT_IME_SPEC=RISCV64_SPACEMIT_IME1 \
+                         -DCMAKE_TOOLCHAIN_FILE=${PWD}/cmake/riscv64-spacemit-linux-gnu-gcc.cmake
 
           cmake --build build --config Release -j $(nproc)

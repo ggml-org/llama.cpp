@@ -17,14 +17,13 @@ LLM inference in C/C++
 
 ## Hot topics
 
-- **[guide : running gpt-oss with llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/15396)**
-- **[[FEEDBACK] Better packaging for llama.cpp to support downstream consumers 🤗](https://github.com/ggml-org/llama.cpp/discussions/15313)**
+- **[guide : using the new WebUI of llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/16938)**
+- [guide : running gpt-oss with llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/15396)
+- [[FEEDBACK] Better packaging for llama.cpp to support downstream consumers 🤗](https://github.com/ggml-org/llama.cpp/discussions/15313)
 - Support for the `gpt-oss` model with native MXFP4 format has been added | [PR](https://github.com/ggml-org/llama.cpp/pull/15091) | [Collaboration with NVIDIA](https://blogs.nvidia.com/blog/rtx-ai-garage-openai-oss) | [Comment](https://github.com/ggml-org/llama.cpp/discussions/15095)
-- Hot PRs: [All](https://github.com/ggml-org/llama.cpp/pulls?q=is%3Apr+label%3Ahot+) | [Open](https://github.com/ggml-org/llama.cpp/pulls?q=is%3Apr+label%3Ahot+is%3Aopen)
 - Multimodal support arrived in `llama-server`: [#12898](https://github.com/ggml-org/llama.cpp/pull/12898) | [documentation](./docs/multimodal.md)
 - VS Code extension for FIM completions: https://github.com/ggml-org/llama.vscode
 - Vim/Neovim plugin for FIM completions: https://github.com/ggml-org/llama.vim
-- Introducing GGUF-my-LoRA https://github.com/ggml-org/llama.cpp/discussions/10123
 - Hugging Face Inference Endpoints now support GGUF out of the box! https://github.com/ggml-org/llama.cpp/discussions/9669
 - Hugging Face GGUF editor: [discussion](https://github.com/ggml-org/llama.cpp/discussions/9268) | [tool](https://huggingface.co/spaces/CISCai/gguf-editor)
 
@@ -62,6 +61,7 @@ range of hardware - locally and in the cloud.
 - Plain C/C++ implementation without any dependencies
 - Apple silicon is a first-class citizen - optimized via ARM NEON, Accelerate and Metal frameworks
 - AVX, AVX2, AVX512 and AMX support for x86 architectures
+- RVV, ZVFH, ZFH, ZICBOP and ZIHINTPAUSE support for RISC-V architectures
 - 1.5-bit, 2-bit, 3-bit, 4-bit, 5-bit, 6-bit, and 8-bit integer quantization for faster inference and reduced memory use
 - Custom CUDA kernels for running LLMs on NVIDIA GPUs (support for AMD GPUs via HIP and Moore Threads GPUs via MUSA)
 - Vulkan and SYCL backend support
@@ -84,6 +84,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 - [X] [Mistral 7B](https://huggingface.co/mistralai/Mistral-7B-v0.1)
 - [x] [Mixtral MoE](https://huggingface.co/models?search=mistral-ai/Mixtral)
 - [x] [DBRX](https://huggingface.co/databricks/dbrx-instruct)
+- [x] [Jamba](https://huggingface.co/ai21labs)
 - [X] [Falcon](https://huggingface.co/models?search=tiiuae/falcon)
 - [X] [Chinese LLaMA / Alpaca](https://github.com/ymcui/Chinese-LLaMA-Alpaca) and [Chinese LLaMA-2 / Alpaca-2](https://github.com/ymcui/Chinese-LLaMA-Alpaca-2)
 - [X] [Vigogne (French)](https://github.com/bofenghuang/vigogne)
@@ -131,12 +132,15 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 - [x] [FalconMamba Models](https://huggingface.co/collections/tiiuae/falconmamba-7b-66b9a580324dd1598b0f6d4a)
 - [x] [Jais](https://huggingface.co/inceptionai/jais-13b-chat)
 - [x] [Bielik-11B-v2.3](https://huggingface.co/collections/speakleash/bielik-11b-v23-66ee813238d9b526a072408a)
+- [x] [RWKV-7](https://huggingface.co/collections/shoumenchougou/rwkv7-gxx-gguf)
 - [x] [RWKV-6](https://github.com/BlinkDL/RWKV-LM)
 - [x] [QRWKV-6](https://huggingface.co/recursal/QRWKV6-32B-Instruct-Preview-v0.1)
 - [x] [GigaChat-20B-A3B](https://huggingface.co/ai-sage/GigaChat-20B-A3B-instruct)
 - [X] [Trillion-7B-preview](https://huggingface.co/trillionlabs/Trillion-7B-preview)
 - [x] [Ling models](https://huggingface.co/collections/inclusionAI/ling-67c51c85b34a7ea0aba94c32)
 - [x] [LFM2 models](https://huggingface.co/collections/LiquidAI/lfm2-686d721927015b2ad73eaa38)
+- [x] [Hunyuan models](https://huggingface.co/collections/tencent/hunyuan-dense-model-6890632cda26b19119c9c5e7)
+- [x] [BailingMoeV2 (Ring/Ling 2.0) models](https://huggingface.co/collections/inclusionAI/ling-v2-68bf1dd2fc34c306c1fa6f86)
 
 #### Multimodal
 
@@ -177,6 +181,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 - Clojure: [phronmophobic/llama.clj](https://github.com/phronmophobic/llama.clj)
 - React Native: [mybigday/llama.rn](https://github.com/mybigday/llama.rn)
 - Java: [kherud/java-llama.cpp](https://github.com/kherud/java-llama.cpp)
+- Java: [QuasarByte/llama-cpp-jna](https://github.com/QuasarByte/llama-cpp-jna)
 - Zig: [deins/llama.cpp.zig](https://github.com/Deins/llama.cpp.zig)
 - Flutter/Dart: [netdur/llama_cpp_dart](https://github.com/netdur/llama_cpp_dart)
 - Flutter: [xuegao-tzx/Fllama](https://github.com/xuegao-tzx/Fllama)
@@ -185,6 +190,8 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 - Swift [srgtuszy/llama-cpp-swift](https://github.com/srgtuszy/llama-cpp-swift)
 - Swift [ShenghaiWang/SwiftLlama](https://github.com/ShenghaiWang/SwiftLlama)
 - Delphi [Embarcadero/llama-cpp-delphi](https://github.com/Embarcadero/llama-cpp-delphi)
+- Go (no CGo needed): [hybridgroup/yzma](https://github.com/hybridgroup/yzma)
+- Android: [llama.android](/examples/llama.android)
 
 </details>
 
@@ -194,6 +201,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 *(to have a project listed here, it should clearly state that it depends on `llama.cpp`)*
 
 - [AI Sublime Text plugin](https://github.com/yaroslavyaroslav/OpenAI-sublime-text) (MIT)
+- [BonzAI App](https://apps.apple.com/us/app/bonzai-your-local-ai-agent/id6752847988) (proprietary)
 - [cztomsik/ava](https://github.com/cztomsik/ava) (MIT)
 - [Dot](https://github.com/alexpinel/Dot) (GPL)
 - [eva](https://github.com/ylsdamxssjxxdd/eva) (MIT)
@@ -205,6 +213,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 - [llama.vim](https://github.com/ggml-org/llama.vim) (MIT)
 - [LARS](https://github.com/abgulati/LARS) (AGPL)
 - [Llama Assistant](https://github.com/vietanhdev/llama-assistant) (GPL)
+- [LlamaLib](https://github.com/undreamai/LlamaLib) (Apache-2.0)
 - [LLMFarm](https://github.com/guinmoon/LLMFarm?tab=readme-ov-file) (MIT)
 - [LLMUnity](https://github.com/undreamai/LLMUnity) (MIT)
 - [LMStudio](https://lmstudio.ai/) (proprietary)
@@ -237,6 +246,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 - [crashr/gppm](https://github.com/crashr/gppm) – launch llama.cpp instances utilizing NVIDIA Tesla P40 or P100 GPUs with reduced idle power consumption
 - [gpustack/gguf-parser](https://github.com/gpustack/gguf-parser-go/tree/main/cmd/gguf-parser) - review/check the GGUF file and estimate the memory usage
 - [Styled Lines](https://marketplace.unity.com/packages/tools/generative-ai/styled-lines-llama-cpp-model-292902) (proprietary licensed, async wrapper of inference part for game development in Unity3d with pre-built Mobile and Web platform wrappers and a model example)
+- [unslothai/unsloth](https://github.com/unslothai/unsloth) – 🦥 exports/saves fine-tuned and trained models to GGUF (Apache-2.0)
 
 </details>
 
@@ -249,6 +259,8 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 - [llama-swap](https://github.com/mostlygeek/llama-swap) - transparent proxy that adds automatic model switching with llama-server
 - [Kalavai](https://github.com/kalavai-net/kalavai-client) - Crowdsource end to end LLM deployment at any scale
 - [llmaz](https://github.com/InftyAI/llmaz) - ☸️ Easy, advanced inference platform for large language models on Kubernetes.
+- [LLMKube](https://github.com/defilantech/llmkube) - Kubernetes operator for llama.cpp with multi-GPU and Apple Silicon Metal
+  support"
 </details>
 
 <details>
@@ -270,11 +282,15 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 | [MUSA](docs/build.md#musa) | Moore Threads GPU |
 | [CUDA](docs/build.md#cuda) | Nvidia GPU |
 | [HIP](docs/build.md#hip) | AMD GPU |
+| [ZenDNN](docs/build.md#zendnn) | AMD CPU |
 | [Vulkan](docs/build.md#vulkan) | GPU |
 | [CANN](docs/build.md#cann) | Ascend NPU |
 | [OpenCL](docs/backend/OPENCL.md) | Adreno GPU |
+| [IBM zDNN](docs/backend/zDNN.md) | IBM Z & LinuxONE |
 | [WebGPU [In Progress]](docs/build.md#webgpu) | All |
 | [RPC](https://github.com/ggml-org/llama.cpp/tree/master/tools/rpc) | All |
+| [Hexagon [In Progress]](docs/backend/snapdragon/README.md) | Snapdragon |
+| [VirtGPU](docs/backend/VirtGPU.md) | VirtGPU APIR |
 
 ## Obtaining and quantizing models
 
@@ -304,7 +320,7 @@ The Hugging Face platform provides a variety of online tools for converting, qua
 
 To learn more about model quantization, [read this documentation](tools/quantize/README.md)
 
-## [`llama-cli`](tools/main)
+## [`llama-cli`](tools/cli)
 
 #### A CLI tool for accessing and experimenting with most of `llama.cpp`'s functionality.
 
@@ -334,19 +350,6 @@ To learn more about model quantization, [read this documentation](tools/quantize
 
     # use a custom template
     llama-cli -m model.gguf -cnv --in-prefix 'User: ' --reverse-prompt 'User:'
-    ```
-
-    </details>
-
-- <details>
-    <summary>Run simple text completion</summary>
-
-    To disable conversation mode explicitly, use `-no-cnv`
-
-    ```bash
-    llama-cli -m model.gguf -p "I believe the meaning of life is" -n 128 -no-cnv
-
-    # I believe the meaning of life is to find your own truth and to live in accordance with it. For me, this means being true to myself and following my passions, even if they don't align with societal expectations. I think that's what I love about yoga – it's not just a physical practice, but a spiritual one too. It's about connecting with yourself, listening to your inner voice, and honoring your own unique journey.
     ```
 
     </details>
@@ -485,21 +488,6 @@ To learn more about model quantization, [read this documentation](tools/quantize
 
     </details>
 
-## [`llama-run`](tools/run)
-
-#### A comprehensive example for running `llama.cpp` models. Useful for inferencing. Used with RamaLama [^3].
-
-- <details>
-    <summary>Run a model with a specific prompt (by default it's pulled from Ollama registry)</summary>
-
-    ```bash
-    llama-run granite-code
-    ```
-
-    </details>
-
-[^3]: [RamaLama](https://github.com/containers/ramalama)
-
 ## [`llama-simple`](examples/simple)
 
 #### A minimal example for implementing apps with `llama.cpp`. Useful for developers.
@@ -519,8 +507,8 @@ To learn more about model quantization, [read this documentation](tools/quantize
 ## Contributing
 
 - Contributors can open PRs
-- Collaborators can push to branches in the `llama.cpp` repo and merge PRs into the `master` branch
 - Collaborators will be invited based on contributions
+- Maintainers can push to branches in the `llama.cpp` repo and merge PRs into the `master` branch
 - Any help with managing issues, PRs and projects is very appreciated!
 - See [good first issues](https://github.com/ggml-org/llama.cpp/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) for tasks suitable for first contributions
 - Read the [CONTRIBUTING.md](CONTRIBUTING.md) for more information
@@ -529,7 +517,8 @@ To learn more about model quantization, [read this documentation](tools/quantize
 
 ## Other documentation
 
-- [main (cli)](tools/main/README.md)
+- [cli](tools/cli/README.md)
+- [completion](tools/completion/README.md)
 - [server](tools/server/README.md)
 - [GBNF grammars](grammars/README.md)
 
@@ -601,7 +590,5 @@ $ echo "source ~/.llama-completion.bash" >> ~/.bashrc
 - [yhirose/cpp-httplib](https://github.com/yhirose/cpp-httplib) - Single-header HTTP server, used by `llama-server` - MIT license
 - [stb-image](https://github.com/nothings/stb) - Single-header image format decoder, used by multimodal subsystem - Public domain
 - [nlohmann/json](https://github.com/nlohmann/json) - Single-header JSON library, used by various tools/examples - MIT License
-- [minja](https://github.com/google/minja) - Minimal Jinja parser in C++, used by various tools/examples - MIT License
-- [linenoise.cpp](./tools/run/linenoise.cpp/linenoise.cpp) - C++ library that provides readline-like line editing capabilities, used by `llama-run` - BSD 2-Clause License
-- [curl](https://curl.se/) - Client-side URL transfer library, used by various tools/examples - [CURL License](https://curl.se/docs/copyright.html)
 - [miniaudio.h](https://github.com/mackron/miniaudio) - Single-header audio format decoder, used by multimodal subsystem - Public domain
+- [subprocess.h](https://github.com/sheredom/subprocess.h) - Single-header process launching solution for C and C++ - Public domain

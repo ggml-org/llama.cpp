@@ -5,6 +5,7 @@
 #include "arg.h"
 #include "common.h"
 
+#include <clocale>
 #include <map>
 #include <vector>
 #include <string>
@@ -190,7 +191,7 @@ struct lora_merge_ctx {
         gguf_set_val_u32(ctx_out, "general.file_type", LLAMA_FTYPE_MOSTLY_F16);
 
         // check if all lora adapters have the same tensors
-        // TODO: remove this when we can support merging subset of adapters. Ref: https://github.com/ggerganov/llama.cpp/pull/8607#discussion_r1686027777
+        // TODO: remove this when we can support merging subset of adapters. Ref: https://github.com/ggml-org/llama.cpp/pull/8607#discussion_r1686027777
         static const char * err_no_subset_adapter = "Input adapters do not have the same list of tensors. This is not yet supported. Please merge the adapter one-by-one instead of merging all at once.";
         if (adapters.size() > 1) {
             for (size_t i = 1; i < adapters.size(); ++i) {
@@ -411,6 +412,8 @@ static void print_usage(int, char ** argv) {
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     common_params params;
 
     params.out_file = "ggml-lora-merged-f16.gguf";

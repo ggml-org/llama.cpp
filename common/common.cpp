@@ -1,19 +1,17 @@
-#if defined(_MSC_VER)
-#define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
-#endif
-
 #include "ggml.h"
 #include "gguf.h"
 
 #include "common.h"
 #include "log.h"
 #include "llama.h"
+#include "sampling.h"
+#include "unicode.h"
 
 #include <algorithm>
 #include <cinttypes>
 #include <climits>
 #include <cmath>
-#include <codecvt>
+#include <chrono>
 #include <cstdarg>
 #include <cstring>
 #include <ctime>
@@ -25,7 +23,6 @@
 #include <sstream>
 #include <string>
 #include <thread>
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -50,9 +47,22 @@
 #include <unistd.h>
 #endif
 
+#if defined(__linux__)
+#include <sys/types.h>
+#include <pwd.h>
+#endif
+
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
 #endif
+
+common_time_meas::common_time_meas(int64_t & t_acc, bool disable) : t_start_us(disable ? -1 : ggml_time_us()), t_acc(t_acc) {}
+
+common_time_meas::~common_time_meas() {
+    if (t_start_us >= 0) {
+        t_acc += ggml_time_us() - t_start_us;
+    }
+}
 
 //
 // CPU utils
@@ -237,7 +247,7 @@ bool set_process_priority(enum ggml_sched_priority prio) {
         case GGML_SCHED_PRIO_REALTIME: p = -20; break;
     }
 
-    if (!setpriority(PRIO_PROCESS, 0, p)) {
+    if (setpriority(PRIO_PROCESS, 0, p) != 0) {
         LOG_WRN("failed to set process priority %d : %s (%d)\n", prio, strerror(errno), errno);
         return false;
     }
@@ -349,11 +359,7 @@ bool parse_cpu_mask(const std::string & mask, bool (&boolmask)[GGML_MAX_N_THREAD
 }
 
 void common_init() {
-    llama_log_set([](ggml_log_level level, const char * text, void * /*user_data*/) {
-        if (LOG_DEFAULT_LLAMA <= common_log_verbosity_thold) {
-            common_log_add(common_log_main(), level, "%s", text);
-        }
-    }, NULL);
+    llama_log_set(common_log_default_callback, NULL);
 
 #ifdef NDEBUG
     const char * build_type = "";
@@ -444,34 +450,6 @@ void string_replace_all(std::string & s, const std::string & search, const std::
     }
     builder.append(s, last_pos, std::string::npos);
     s = std::move(builder);
-}
-
-bool string_ends_with(const std::string_view & str, const std::string_view & suffix) {
-    return str.size() >= suffix.size() && str.compare(str.size()-suffix.size(), suffix.size(), suffix) == 0;
-}
-
-bool string_remove_suffix(std::string & str, const std::string_view & suffix) {
-    bool has_suffix = string_ends_with(str, suffix);
-    if (has_suffix) {
-        str = str.substr(0, str.size() - suffix.size());
-    }
-    return has_suffix;
-}
-
-size_t string_find_partial_stop(const std::string_view & str, const std::string_view & stop) {
-    if (!str.empty() && !stop.empty()) {
-        const char text_last_char = str.back();
-        for (int64_t char_index = stop.size() - 1; char_index >= 0; char_index--) {
-            if (stop[char_index] == text_last_char) {
-                const auto current_partial = stop.substr(0, char_index + 1);
-                if (string_ends_with(str, current_partial)) {
-                    return str.size() - char_index - 1;
-                }
-            }
-        }
-    }
-
-    return std::string::npos;
 }
 
 std::string regex_escape(const std::string & s) {
@@ -684,7 +662,7 @@ bool string_parse_kv_override(const char * data, std::vector<llama_model_kv_over
 
 // Validate if a filename is safe to use
 // To validate a full path, split the path by the OS-specific path separator, and validate each part with this function
-bool fs_validate_filename(const std::string & filename) {
+bool fs_validate_filename(const std::string & filename, bool allow_subdirs) {
     if (!filename.length()) {
         // Empty filename invalid
         return false;
@@ -696,45 +674,28 @@ bool fs_validate_filename(const std::string & filename) {
         return false;
     }
 
-    std::u32string filename_utf32;
-    try {
-#if defined(__clang__)
-        // disable C++17 deprecation warning for std::codecvt_utf8
-#    pragma clang diagnostic push
-#    pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#elif defined(__GNUC__)
-#    pragma GCC diagnostic push
-#    pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-#endif
+    size_t offset = 0;
+    while (offset < filename.size()) {
+        utf8_parse_result result = common_parse_utf8_codepoint(filename, offset);
 
-        std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> converter;
-
-#if defined(__clang__)
-#    pragma clang diagnostic pop
-#elif defined(__GNUC__)
-#    pragma GCC diagnostic pop
-#endif
-
-        filename_utf32 = converter.from_bytes(filename);
-
-        // If the reverse conversion mismatches, it means overlong UTF-8 sequences were used,
-        // or invalid encodings were encountered. Reject such attempts
-        std::string filename_reencoded = converter.to_bytes(filename_utf32);
-        if (filename_reencoded != filename) {
+        if (result.status != utf8_parse_result::SUCCESS) {
             return false;
         }
-    } catch (const std::exception &) {
-        return false;
-    }
+        uint32_t c = result.codepoint;
 
-    // Check for forbidden codepoints:
-    // - Control characters
-    // - Unicode equivalents of illegal characters
-    // - UTF-16 surrogate pairs
-    // - UTF-8 replacement character
-    // - Byte order mark (BOM)
-    // - Illegal characters: / \ : * ? " < > |
-    for (char32_t c : filename_utf32) {
+        if ((result.bytes_consumed == 2 && c < 0x80) ||
+            (result.bytes_consumed == 3 && c < 0x800) ||
+            (result.bytes_consumed == 4 && c < 0x10000)) {
+            return false;
+        }
+
+        // Check for forbidden codepoints:
+        // - Control characters
+        // - Unicode equivalents of illegal characters
+        // - UTF-16 surrogate pairs
+        // - UTF-8 replacement character
+        // - Byte order mark (BOM)
+        // - Illegal characters: / \ : * ? " < > |
         if (c <= 0x1F // Control characters (C0)
             || c == 0x7F // Control characters (DEL)
             || (c >= 0x80 && c <= 0x9F) // Control characters (C1)
@@ -742,12 +703,18 @@ bool fs_validate_filename(const std::string & filename) {
             || c == 0x2215 // Division Slash (forward slash equivalent)
             || c == 0x2216 // Set Minus (backslash equivalent)
             || (c >= 0xD800 && c <= 0xDFFF) // UTF-16 surrogate pairs
+            || c > 0x10FFFF // Max Unicode limit
             || c == 0xFFFD // Replacement Character (UTF-8)
             || c == 0xFEFF // Byte Order Mark (BOM)
-            || c == '/' || c == '\\' || c == ':' || c == '*' // Illegal characters
+            || c == ':' || c == '*' // Illegal characters
             || c == '?' || c == '"' || c == '<' || c == '>' || c == '|') {
             return false;
         }
+        if (!allow_subdirs && (c == '/' || c == '\\')) {
+            // Subdirectories not allowed, reject path separators
+            return false;
+        }
+        offset += result.bytes_consumed;
     }
 
     // Reject any leading or trailing ' ', or any trailing '.', these are stripped on Windows and will cause a different filename
@@ -772,11 +739,29 @@ bool fs_validate_filename(const std::string & filename) {
 #include <iostream>
 
 
+#ifdef _WIN32
+static std::wstring utf8_to_wstring(const std::string & str) {
+    if (str.empty()) {
+        return std::wstring();
+    }
+
+    int size = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.size(), NULL, 0);
+
+    if (size <= 0) {
+        return std::wstring();
+    }
+
+    std::wstring wstr(size, 0);
+    MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.size(), &wstr[0], size);
+
+    return wstr;
+}
+#endif
+
 // returns true if successful, false otherwise
 bool fs_create_directory_with_parents(const std::string & path) {
 #ifdef _WIN32
-    std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
-    std::wstring wpath = converter.from_bytes(path);
+    std::wstring wpath = utf8_to_wstring(path);
 
     // if the path already exists, check whether it's a directory
     const DWORD attributes = GetFileAttributesW(wpath.c_str());
@@ -849,6 +834,11 @@ bool fs_create_directory_with_parents(const std::string & path) {
 #endif // _WIN32
 }
 
+bool fs_is_directory(const std::string & path) {
+    std::filesystem::path dir(path);
+    return std::filesystem::exists(dir) && std::filesystem::is_directory(dir);
+}
+
 std::string fs_get_cache_directory() {
     std::string cache_directory = "";
     auto ensure_trailing_slash = [](std::string p) {
@@ -861,16 +851,31 @@ std::string fs_get_cache_directory() {
     if (getenv("LLAMA_CACHE")) {
         cache_directory = std::getenv("LLAMA_CACHE");
     } else {
-#if defined(__linux__) || defined(__FreeBSD__) || defined(_AIX) || defined(__OpenBSD__)
+#if defined(__linux__) || defined(__FreeBSD__) || defined(_AIX) || \
+        defined(__OpenBSD__) || defined(__NetBSD__)
         if (std::getenv("XDG_CACHE_HOME")) {
             cache_directory = std::getenv("XDG_CACHE_HOME");
-        } else {
+        } else if (std::getenv("HOME")) {
             cache_directory = std::getenv("HOME") + std::string("/.cache/");
+        } else {
+#if defined(__linux__)
+            /* no $HOME is defined, fallback to getpwuid */
+            struct passwd *pw = getpwuid(getuid());
+            if ((!pw) || (!pw->pw_dir)) {
+                throw std::runtime_error("Failed to find $HOME directory");
+            }
+
+            cache_directory = std::string(pw->pw_dir) + std::string("/.cache/");
+#else /* defined(__linux__) */
+            throw std::runtime_error("Failed to find $HOME directory");
+#endif /* defined(__linux__) */
         }
 #elif defined(__APPLE__)
         cache_directory = std::getenv("HOME") + std::string("/Library/Caches/");
 #elif defined(_WIN32)
         cache_directory = std::getenv("LOCALAPPDATA");
+#elif defined(__EMSCRIPTEN__)
+        GGML_ABORT("not implemented on this platform");
 #else
 #  error Unknown architecture
 #endif
@@ -890,31 +895,292 @@ std::string fs_get_cache_file(const std::string & filename) {
     return cache_directory + filename;
 }
 
+std::vector<common_file_info> fs_list(const std::string & path, bool include_directories) {
+    std::vector<common_file_info> files;
+    if (path.empty()) return files;
+
+    std::filesystem::path dir(path);
+    if (!std::filesystem::exists(dir) || !std::filesystem::is_directory(dir)) {
+        return files;
+    }
+
+    for (const auto & entry : std::filesystem::directory_iterator(dir)) {
+        try {
+            // Only include regular files (skip directories)
+            const auto & p = entry.path();
+            if (std::filesystem::is_regular_file(p)) {
+                common_file_info info;
+                info.path   = p.string();
+                info.name   = p.filename().string();
+                info.is_dir = false;
+                try {
+                    info.size = static_cast<size_t>(std::filesystem::file_size(p));
+                } catch (const std::filesystem::filesystem_error &) {
+                    info.size = 0;
+                }
+                files.push_back(std::move(info));
+            } else if (include_directories && std::filesystem::is_directory(p)) {
+                common_file_info info;
+                info.path   = p.string();
+                info.name   = p.filename().string();
+                info.size   = 0; // Directories have no size
+                info.is_dir = true;
+                files.push_back(std::move(info));
+            }
+        } catch (const std::filesystem::filesystem_error &) {
+            // skip entries we cannot inspect
+            continue;
+        }
+    }
+
+    return files;
+}
+
+//
+// TTY utils
+//
+
+bool tty_can_use_colors() {
+    // Check NO_COLOR environment variable (https://no-color.org/)
+    if (const char * no_color = std::getenv("NO_COLOR")) {
+        if (no_color[0] != '\0') {
+            return false;
+        }
+    }
+
+    // Check TERM environment variable
+    if (const char * term = std::getenv("TERM")) {
+        if (std::strcmp(term, "dumb") == 0) {
+            return false;
+        }
+    }
+
+    // Check if stdout and stderr are connected to a terminal
+    // We check both because log messages can go to either
+    bool stdout_is_tty = isatty(fileno(stdout));
+    bool stderr_is_tty = isatty(fileno(stderr));
+
+    return stdout_is_tty || stderr_is_tty;
+}
 
 //
 // Model utils
 //
 
-struct common_init_result common_init_from_params(common_params & params) {
-    common_init_result iparams;
+// TODO: move to common/sampling
+static void common_init_sampler_from_model(
+    const llama_model * model,
+    common_params_sampling & sparams) {
+
+    const uint64_t config = sparams.user_sampling_config;
+
+    auto get_int32 = [&](const char * key, int32_t & dst, uint64_t user_config) {
+        if (config & user_config) {
+            return;
+        }
+
+        char buf[64] = {0};
+        if (llama_model_meta_val_str(model, key, buf, sizeof(buf)) > 0) {
+            char * end = nullptr;
+            int32_t v = strtol(buf, &end, 10);
+            if (end && end != buf) {
+                dst = v;
+            }
+        }
+    };
+
+    auto get_float = [&](const char * key, float & dst, uint64_t user_config) {
+        if (config & user_config) {
+            return;
+        }
+
+        char buf[128] = {0};
+        if (llama_model_meta_val_str(model, key, buf, sizeof(buf)) > 0) {
+            char * end = nullptr;
+            float v = strtof(buf, &end);
+            if (end && end != buf) {
+                dst = v;
+            }
+        }
+    };
+
+    // Sampling sequence
+    if (!(config & common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_SAMPLERS)) {
+        char buf[512] = {0};
+        if (llama_model_meta_val_str(model, llama_model_meta_key_str(LLAMA_MODEL_META_KEY_SAMPLING_SEQUENCE), buf, sizeof(buf)) > 0) {
+            const std::vector<std::string> sampler_names = string_split<std::string>(std::string(buf), ';');
+            if (!sampler_names.empty()) {
+                sparams.samplers = common_sampler_types_from_names(sampler_names, true);
+            }
+        }
+    }
+
+    get_int32(llama_model_meta_key_str(LLAMA_MODEL_META_KEY_SAMPLING_TOP_K),           sparams.top_k,           common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_TOP_K);
+    get_float(llama_model_meta_key_str(LLAMA_MODEL_META_KEY_SAMPLING_TOP_P),           sparams.top_p,           common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_TOP_P);
+    get_float(llama_model_meta_key_str(LLAMA_MODEL_META_KEY_SAMPLING_MIN_P),           sparams.min_p,           common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_MIN_P);
+    get_float(llama_model_meta_key_str(LLAMA_MODEL_META_KEY_SAMPLING_XTC_PROBABILITY), sparams.xtc_probability, common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_XTC_PROBABILITY);
+    get_float(llama_model_meta_key_str(LLAMA_MODEL_META_KEY_SAMPLING_XTC_THRESHOLD),   sparams.xtc_threshold,   common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_XTC_THRESHOLD);
+    get_float(llama_model_meta_key_str(LLAMA_MODEL_META_KEY_SAMPLING_TEMP),            sparams.temp,            common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_TEMP);
+    get_int32(llama_model_meta_key_str(LLAMA_MODEL_META_KEY_SAMPLING_PENALTY_LAST_N),  sparams.penalty_last_n,  common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_LAST_N);
+    get_float(llama_model_meta_key_str(LLAMA_MODEL_META_KEY_SAMPLING_PENALTY_REPEAT),  sparams.penalty_repeat,  common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_REPEAT);
+    get_int32(llama_model_meta_key_str(LLAMA_MODEL_META_KEY_SAMPLING_MIROSTAT),        sparams.mirostat,        common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT);
+    get_float(llama_model_meta_key_str(LLAMA_MODEL_META_KEY_SAMPLING_MIROSTAT_TAU),    sparams.mirostat_tau,    common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_TAU);
+    get_float(llama_model_meta_key_str(LLAMA_MODEL_META_KEY_SAMPLING_MIROSTAT_ETA),    sparams.mirostat_eta,    common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_ETA);
+}
+
+struct common_init_result::impl {
+    impl() = default;
+    ~impl() = default;
+
+    // note: the order in which model, context, etc. are declared matters because their destructors will be called bottom-to-top
+
+    llama_model_ptr   model;
+    llama_context_ptr context;
+
+    std::vector<llama_adapter_lora_ptr> lora;
+
+    std::vector<common_sampler_ptr> samplers;
+    std::vector<llama_sampler_seq_config> samplers_seq_config;
+};
+
+common_init_result::common_init_result(common_params & params) :
+    pimpl(new impl{}) {
     auto mparams = common_model_params_to_llama(params);
+    auto cparams = common_context_params_to_llama(params);
+
+    if (params.fit_params) {
+        LOG_INF("%s: fitting params to device memory, for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on\n", __func__);
+        llama_params_fit(params.model.path.c_str(), &mparams, &cparams,
+            params.tensor_split,
+            params.tensor_buft_overrides.data(),
+            params.fit_params_target.data(),
+            params.fit_params_min_ctx,
+            params.verbosity >= 4 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
+    }
 
     llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
     if (model == NULL) {
-        LOG_ERR("%s: failed to load model '%s'\n", __func__, params.model.path.c_str());
-        return iparams;
+        return;
     }
+
+    pimpl->model.reset(model);
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
-    auto cparams = common_context_params_to_llama(params);
+    // load and optionally apply lora adapters (must be loaded before context creation)
+    for (auto & la : params.lora_adapters) {
+        llama_adapter_lora_ptr lora;
+        lora.reset(llama_adapter_lora_init(model, la.path.c_str()));
+        if (lora == nullptr) {
+            LOG_ERR("%s: failed to load lora adapter '%s'\n", __func__, la.path.c_str());
+            pimpl->model.reset(model);
+            return;
+        }
+
+        char buf[1024];
+        la.ptr = lora.get();
+        llama_adapter_meta_val_str(la.ptr, "adapter.lora.task_name", buf, sizeof(buf));
+        la.task_name = buf;
+        llama_adapter_meta_val_str(la.ptr, "adapter.lora.prompt_prefix", buf, sizeof(buf));
+        la.prompt_prefix = buf;
+        pimpl->lora.emplace_back(std::move(lora)); // copy to list of loaded adapters
+    }
+
+    // updates params.sampling
+    // TODO: fix naming
+    common_init_sampler_from_model(model, params.sampling);
+
+    if (params.sampling.ignore_eos && llama_vocab_eos(vocab) == LLAMA_TOKEN_NULL) {
+        LOG_WRN("%s: warning: vocab does not have an EOS token, ignoring --ignore-eos\n", __func__);
+        params.sampling.ignore_eos = false;
+    }
+
+    // initialize once
+    for (llama_token i = 0; i < llama_vocab_n_tokens(vocab); i++) {
+        if (llama_vocab_is_eog(vocab, i)) {
+            LOG_INF("%s: added %s logit bias = %f\n", __func__, common_token_to_piece(vocab, i).c_str(), -INFINITY);
+            params.sampling.logit_bias_eog.push_back({i, -INFINITY});
+        }
+    }
+
+    if (params.sampling.ignore_eos) {
+        // add EOG biases to the active set of logit biases
+        params.sampling.logit_bias.insert(
+                params.sampling.logit_bias.end(),
+                params.sampling.logit_bias_eog.begin(), params.sampling.logit_bias_eog.end());
+    }
+
+    //if (params.sampling.penalty_last_n == -1) {
+    //    LOG_INF("%s: setting penalty_last_n to ctx_size = %d\n", __func__, llama_n_ctx(lctx));
+    //    params.sampling.penalty_last_n = llama_n_ctx(lctx);
+    //}
+
+    //if (params.sampling.dry_penalty_last_n == -1) {
+    //    LOG_INF("%s: setting dry_penalty_last_n to ctx_size = %d\n", __func__, llama_n_ctx(lctx));
+    //    params.sampling.dry_penalty_last_n = llama_n_ctx(lctx);
+    //}
+
+    // init the backend samplers as part of the context creation
+    pimpl->samplers.resize(cparams.n_seq_max);
+    pimpl->samplers_seq_config.resize(cparams.n_seq_max);
+
+    for (int i = 0; i < (int) cparams.n_seq_max; ++i) {
+        pimpl->samplers[i].reset(common_sampler_init(model, params.sampling));
+        pimpl->samplers_seq_config[i] = { i, common_sampler_get(pimpl->samplers[i].get()) };
+    }
+
+    if (params.sampling.backend_sampling) {
+        cparams.samplers   = pimpl->samplers_seq_config.data();
+        cparams.n_samplers = pimpl->samplers_seq_config.size();
+    }
 
     llama_context * lctx = llama_init_from_model(model, cparams);
     if (lctx == NULL) {
         LOG_ERR("%s: failed to create context with model '%s'\n", __func__, params.model.path.c_str());
-        llama_model_free(model);
-        return iparams;
+        return;
     }
+
+    pimpl->context.reset(lctx);
+}
+
+llama_model * common_init_result::model() {
+    return pimpl->model.get();
+}
+
+llama_context * common_init_result::context() {
+    return pimpl->context.get();
+}
+
+common_sampler * common_init_result::sampler(llama_seq_id seq_id) {
+    return pimpl->samplers[seq_id].get();
+}
+
+void common_init_result::reset_samplers() {
+    for (int i = 0; i < (int) pimpl->samplers.size(); ++i) {
+        llama_sampler_reset(common_sampler_get(pimpl->samplers[i].get()));
+    }
+}
+
+std::vector<llama_adapter_lora_ptr> & common_init_result::lora() {
+    return pimpl->lora;
+}
+
+common_init_result_ptr common_init_from_params(common_params & params) {
+    common_init_result_ptr res(new common_init_result(params));
+
+    llama_model * model = res->model();
+    if (model == NULL) {
+        LOG_ERR("%s: failed to load model '%s'\n", __func__, params.model.path.c_str());
+        return res;
+    }
+
+    llama_context * lctx = res->context();
+    if (lctx == NULL) {
+        LOG_ERR("%s: failed to create context with model '%s'\n", __func__, params.model.path.c_str());
+        return res;
+    }
+
+    const llama_vocab * vocab = llama_model_get_vocab(model);
 
     if (params.ctx_shift && !llama_memory_can_shift(llama_get_memory(lctx))) {
         LOG_WRN("%s: KV cache shifting is not supported for this context, disabling KV cache shifting\n", __func__);
@@ -927,13 +1193,10 @@ struct common_init_result common_init_from_params(common_params & params) {
 
         const auto cvec = common_control_vector_load(params.control_vectors);
         if (cvec.n_embd == -1) {
-            llama_free(lctx);
-            llama_model_free(model);
-
-            return iparams;
+            return res;
         }
 
-        int err = llama_apply_adapter_cvec(
+        int err = llama_set_adapter_cvec(
                 lctx,
                 cvec.data.data(),
                 cvec.data.size(),
@@ -941,10 +1204,7 @@ struct common_init_result common_init_from_params(common_params & params) {
                 params.control_vector_layer_start,
                 params.control_vector_layer_end);
         if (err) {
-            llama_free(lctx);
-            llama_model_free(model);
-
-            return iparams;
+            return res;
         }
     }
 
@@ -958,72 +1218,22 @@ struct common_init_result common_init_from_params(common_params & params) {
 
         bool has_eos = llama_vocab_eos(vocab) != LLAMA_TOKEN_NULL;
         bool has_sep = llama_vocab_sep(vocab) != LLAMA_TOKEN_NULL;
+        bool has_rerank_prompt = llama_model_chat_template(model, "rerank") != NULL;
 
-        if (!has_eos && !has_sep) {
-            LOG_WRN("%s: warning: vocab does not have an EOS token or SEP token, reranking will not work\n", __func__);
+        if (!has_eos && !has_sep && !has_rerank_prompt) {
+            LOG_WRN("%s: warning: vocab does not have an EOS token, SEP token, or rerank prompt. Reranking will not work\n", __func__);
             ok = false;
         } else if (!has_eos) {
             LOG_WRN("%s: warning: vocab does not have an EOS token, using SEP token as fallback\n", __func__);
-        } else if (!has_sep) {
-            LOG_WRN("%s: warning: vocab does not have a SEP token, reranking will not work\n", __func__);
-            ok = false;
         }
 
         if (!ok) {
-            llama_free(lctx);
-            llama_model_free(model);
-
-            return iparams;
+            return res;
         }
-    }
-
-    // load and optionally apply lora adapters
-    for (auto & la : params.lora_adapters) {
-        llama_adapter_lora_ptr lora;
-        lora.reset(llama_adapter_lora_init(model, la.path.c_str()));
-        if (lora == nullptr) {
-            LOG_ERR("%s: failed to apply lora adapter '%s'\n", __func__, la.path.c_str());
-            llama_free(lctx);
-            llama_model_free(model);
-            return iparams;
-        }
-
-        la.ptr = lora.get();
-        iparams.lora.emplace_back(std::move(lora)); // copy to list of loaded adapters
     }
 
     if (!params.lora_init_without_apply) {
         common_set_adapter_lora(lctx, params.lora_adapters);
-    }
-
-    if (params.sampling.ignore_eos && llama_vocab_eos(vocab) == LLAMA_TOKEN_NULL) {
-        LOG_WRN("%s: warning: vocab does not have an EOS token, ignoring --ignore-eos\n", __func__);
-        params.sampling.ignore_eos = false;
-    }
-
-    // initialize once
-    for (llama_token i = 0; i < llama_vocab_n_tokens(vocab); i++) {
-        if (llama_vocab_is_eog(vocab, i)) {
-            LOG_INF("%s: added %s logit bias = %f\n", __func__, common_token_to_piece(lctx, i).c_str(), -INFINITY);
-            params.sampling.logit_bias_eog.push_back({i, -INFINITY});
-        }
-    }
-
-    if (params.sampling.ignore_eos) {
-        // add EOG biases to the active set of logit biases
-        params.sampling.logit_bias.insert(
-                params.sampling.logit_bias.end(),
-                params.sampling.logit_bias_eog.begin(), params.sampling.logit_bias_eog.end());
-    }
-
-    if (params.sampling.penalty_last_n == -1) {
-        LOG_INF("%s: setting penalty_last_n to ctx_size = %d\n", __func__, llama_n_ctx(lctx));
-        params.sampling.penalty_last_n = llama_n_ctx(lctx);
-    }
-
-    if (params.sampling.dry_penalty_last_n == -1) {
-        LOG_INF("%s: setting dry_penalty_last_n to ctx_size = %d\n", __func__, llama_n_ctx(lctx));
-        params.sampling.dry_penalty_last_n = llama_n_ctx(lctx);
     }
 
     if (params.warmup) {
@@ -1062,13 +1272,15 @@ struct common_init_result common_init_from_params(common_params & params) {
         llama_synchronize(lctx);
         llama_perf_context_reset(lctx);
         llama_set_warmup(lctx, false);
+
+        // reset samplers to reset RNG state after warmup to the seeded state
+        res->reset_samplers();
     }
 
-    iparams.model.reset(model);
-    iparams.context.reset(lctx);
-
-    return iparams;
+    return res;
 }
+
+common_init_result::~common_init_result() = default;
 
 std::string get_model_endpoint() {
     const char * model_endpoint_env = getenv("MODEL_ENDPOINT");
@@ -1078,18 +1290,23 @@ std::string get_model_endpoint() {
     std::string model_endpoint = "https://huggingface.co/";
     if (endpoint_env) {
         model_endpoint = endpoint_env;
-        if (model_endpoint.back() != '/') model_endpoint += '/';
+        if (model_endpoint.back() != '/') {
+            model_endpoint += '/';
+        }
     }
     return model_endpoint;
 }
 
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora) {
-    llama_clear_adapter_lora(ctx);
-    for (auto & la : lora) {
-        if (la.scale != 0.0f) {
-            llama_set_adapter_lora(ctx, la.ptr, la.scale);
-        }
+    std::vector<llama_adapter_lora *> loras;
+    std::vector<float> scales;
+
+    for (auto & la: lora) {
+        loras.push_back(la.ptr);
+        scales.push_back(la.scale);
     }
+
+    llama_set_adapters_lora(ctx, loras.data(), loras.size(), scales.data());
 }
 
 struct llama_model_params common_model_params_to_llama(common_params & params) {
@@ -1099,17 +1316,16 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
         mparams.devices = params.devices.data();
     }
 
-    if (params.n_gpu_layers != -1) {
-        mparams.n_gpu_layers = params.n_gpu_layers;
-    }
-
+    mparams.n_gpu_layers    = params.n_gpu_layers;
     mparams.main_gpu        = params.main_gpu;
     mparams.split_mode      = params.split_mode;
     mparams.tensor_split    = params.tensor_split;
     mparams.use_mmap        = params.use_mmap;
+    mparams.use_direct_io   = params.use_direct_io;
     mparams.use_mlock       = params.use_mlock;
     mparams.check_tensors   = params.check_tensors;
     mparams.use_extra_bufts = !params.no_extra_bufts;
+    mparams.no_host         = params.no_host;
 
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;
@@ -1152,10 +1368,10 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.yarn_orig_ctx     = params.yarn_orig_ctx;
     cparams.pooling_type      = params.pooling_type;
     cparams.attention_type    = params.attention_type;
+    cparams.flash_attn_type   = params.flash_attn_type;
     cparams.cb_eval           = params.cb_eval;
     cparams.cb_eval_user_data = params.cb_eval_user_data;
     cparams.offload_kqv       = !params.no_kv_offload;
-    cparams.flash_attn        = params.flash_attn;
     cparams.no_perf           = params.no_perf;
     cparams.op_offload        = !params.no_op_offload;
     cparams.swa_full          = params.swa_full;
@@ -1208,66 +1424,6 @@ void common_batch_add(
     batch.logits  [batch.n_tokens] = logits;
 
     batch.n_tokens++;
-}
-
-//
-// Token utils
-//
-
-size_t common_lcp(const llama_tokens & a, const llama_tokens & b) {
-    size_t i;
-    for (i = 0; i < a.size() && i < b.size() && a[i] == b[i]; i++) {}
-
-    return i;
-}
-
-size_t common_lcs(const llama_tokens & a, const llama_tokens & b) {
-    // check for empty sequences
-    if (a.empty() || b.empty()) {
-        return 0;
-    }
-
-    // get the lengths of the input sequences
-    size_t a_len = a.size();
-    size_t b_len = b.size();
-
-    // initialize the maximum length of the longest common subsequence (LCS)
-    size_t max_length = 0;
-
-    // use two rows instead of a 2D matrix to optimize space
-    std::vector<size_t> prev_row(b_len + 1, 0);
-    std::vector<size_t> curr_row(b_len + 1, 0);
-
-    // iterate through the elements of a
-    for (size_t i = 1; i <= a_len; i++) {
-        // iterate through the elements of b
-        for (size_t j = 1; j <= b_len; j++) {
-            // if elements at the current positions match
-            if (a[i - 1] == b[j - 1]) {
-                // if it's the first element of either sequences, set LCS length to 1
-                if (i == 1 || j == 1) {
-                    curr_row[j] = 1;
-                } else {
-                    // increment LCS length by 1 compared to the previous element
-                    curr_row[j] = prev_row[j - 1] + 1;
-                }
-
-                // update max_length if necessary
-                if (curr_row[j] > max_length) {
-                    max_length = curr_row[j];
-                }
-            } else {
-                // reset LCS length if elements don't match
-                curr_row[j] = 0;
-            }
-        }
-
-        // update the previous row for the next iteration
-        prev_row = curr_row;
-    }
-
-    // return the maximum length of the LCS
-    return max_length;
 }
 
 //
@@ -1603,4 +1759,66 @@ float lr_opt::get_lr(float epoch) const {
         lr0 * std::pow(0.5f, epoch * scale_epoch);
     LOG_INF("epoch %.2g lr=%.2g\n", epoch, r);
     return r;
+}
+
+bool common_replay_last_token(struct llama_context * ctx, llama_token last_token, int32_t pos) {
+    llama_batch batch = llama_batch_get_one(&last_token, 1);
+    batch.pos = &pos;
+    if (llama_decode(ctx, batch)) {
+        LOG_ERR("%s: failed to replay last token\n", __func__);
+        return false;
+    }
+    return true;
+}
+
+bool common_prompt_batch_decode(
+              struct llama_context * ctx,
+    const std::vector<llama_token> & tokens,
+                               int & n_past,
+                               int   n_batch,
+                  std::string_view   state_path,
+                              bool   save_state) {
+    const int n_eval = tokens.size();
+    if (n_eval == 0) {
+        return true;
+    }
+
+    if (save_state && n_eval > 1) {
+        const int n_tokens_before_last = n_eval - 1;
+
+        GGML_ASSERT(n_eval <= n_batch);
+
+        // Decode all but the last token so we can save the memory state before decoding the last token.
+        // This is done so we can restore the session state later and replay the last token.
+        // Memory implementations in recurrent/hybrid models don't support removing tokens from their
+        // memory, so we can't just remove the last token from the memory and replay the last token which
+        // is the reason for this logic.
+        if (llama_decode(ctx, llama_batch_get_one(const_cast<llama_token*>(tokens.data()), n_tokens_before_last))) {
+            LOG_ERR("%s : failed to eval\n", __func__);
+            return false;
+        }
+        n_past += n_tokens_before_last;
+
+        llama_state_save_file(ctx, state_path.data(), tokens.data(), n_tokens_before_last);
+        LOG_INF("saved session before last token to %s, n_tokens = %d\n", state_path.data(), n_tokens_before_last);
+
+        llama_token last_token = tokens.back();
+        llama_batch batch = llama_batch_get_one(&last_token, 1);
+        int32_t pos = n_past;
+        batch.pos = &pos;
+
+        if (llama_decode(ctx, batch)) {
+            LOG_ERR("%s : failed to eval last token\n", __func__);
+            return false;
+        }
+        n_past++;
+    } else {
+        if (llama_decode(ctx, llama_batch_get_one(const_cast<llama_token*>(tokens.data()), n_eval))) {
+            LOG_ERR("%s : failed to eval\n", __func__);
+            return false;
+        }
+        n_past += n_eval;
+    }
+
+    return true;
 }

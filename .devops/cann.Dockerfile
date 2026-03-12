@@ -3,7 +3,8 @@
 # ==============================================================================
 
 # Define the CANN base image for easier version updates later
-ARG CANN_BASE_IMAGE=quay.io/ascend/cann:8.1.rc1-910b-openeuler22.03-py3.10
+ARG CHIP_TYPE=910b
+ARG CANN_BASE_IMAGE=quay.io/ascend/cann:8.3.rc2-${CHIP_TYPE}-openeuler24.03-py3.11
 
 # ==============================================================================
 # BUILD STAGE
@@ -11,11 +12,8 @@ ARG CANN_BASE_IMAGE=quay.io/ascend/cann:8.1.rc1-910b-openeuler22.03-py3.10
 # ==============================================================================
 FROM ${CANN_BASE_IMAGE} AS build
 
-# Define the Ascend chip model for compilation. Default is Ascend910B3
-ARG ASCEND_SOC_TYPE=Ascend910B3
-
 # -- Install build dependencies --
-RUN yum install -y gcc g++ cmake make git libcurl-devel python3 python3-pip && \
+RUN yum install -y gcc g++ cmake make git openssl-devel python3 python3-pip && \
     yum clean all && \
     rm -rf /var/cache/yum
 
@@ -36,20 +34,22 @@ ENV LD_LIBRARY_PATH=${ASCEND_TOOLKIT_HOME}/runtime/lib64/stub:$LD_LIBRARY_PATH
 # For brevity, only core variables are listed here. You can paste the original ENV list here.
 
 # -- Build llama.cpp --
-# Use the passed ASCEND_SOC_TYPE argument and add general build options
+# Use the passed CHIP_TYPE argument and add general build options
+ARG CHIP_TYPE
 RUN source /usr/local/Ascend/ascend-toolkit/set_env.sh --force \
     && \
     cmake -B build \
         -DGGML_CANN=ON \
         -DCMAKE_BUILD_TYPE=Release \
-        -DSOC_TYPE=${ASCEND_SOC_TYPE} \
+        -DSOC_TYPE=ascend${CHIP_TYPE} \
+        -DUSE_ACL_GRAPH=ON \
         . && \
     cmake --build build --config Release -j$(nproc)
 
 # -- Organize build artifacts for copying in later stages --
 # Create a lib directory to store all .so files
 RUN mkdir -p /app/lib && \
-    find build -name "*.so" -exec cp {} /app/lib \;
+    find build -name "*.so*" -exec cp -P {} /app/lib \;
 
 # Create a full directory to store all executables and Python scripts
 RUN mkdir -p /app/full && \
@@ -108,11 +108,11 @@ ENTRYPOINT ["/app/tools.sh"]
 # ENTRYPOINT ["/app/llama-server"]
 
 ### Target: light
-# Lightweight image containing only llama-cli
+# Lightweight image containing only llama-cli and llama-completion
 # ==============================================================================
 FROM base AS light
 
-COPY --from=build /app/full/llama-cli /app
+COPY --from=build /app/full/llama-cli /app/full/llama-completion /app
 
 ENTRYPOINT [ "/app/llama-cli" ]
 

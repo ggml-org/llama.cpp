@@ -1,4 +1,6 @@
 
+#!/usr/bin/env bash
+
 COLLECTION_SLUG=$(python ./create_collection.py --return-slug)
 echo "Created collection: $COLLECTION_SLUG"
 

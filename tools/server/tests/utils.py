@@ -7,6 +7,7 @@ import subprocess
 import os
 import re
 import json
+from json import JSONDecodeError
 import sys
 import requests
 import time
@@ -26,7 +27,7 @@ from re import RegexFlag
 import wget
 
 
-DEFAULT_HTTP_TIMEOUT = 30
+DEFAULT_HTTP_TIMEOUT = 60
 
 
 class ServerResponse:
@@ -35,19 +36,27 @@ class ServerResponse:
     body: dict | Any
 
 
+class ServerError(Exception):
+    def __init__(self, code, body):
+        self.code = code
+        self.body = body
+
+
 class ServerProcess:
     # default options
     debug: bool = False
     server_port: int = 8080
     server_host: str = "127.0.0.1"
-    model_hf_repo: str = "ggml-org/models"
+    model_hf_repo: str | None = "ggml-org/models"
     model_hf_file: str | None = "tinyllamas/stories260K.gguf"
     model_alias: str = "tinyllama-2"
     temperature: float = 0.8
     seed: int = 42
+    offline: bool = False
 
     # custom options
     model_alias: str | None = None
+    model_tags: str | None = None
     model_url: str | None = None
     model_file: str | None = None
     model_draft: str | None = None
@@ -66,15 +75,19 @@ class ServerProcess:
     n_slots: int | None = None
     ctk: str | None = None
     ctv: str | None = None
-    fa: bool | None = None
+    fa: str | None = None
     server_continuous_batching: bool | None = False
     server_embeddings: bool | None = False
     server_reranking: bool | None = False
     server_metrics: bool | None = False
+    kv_unified: bool | None = False
     server_slots: bool | None = False
     pooling: str | None = None
     draft: int | None = None
     api_key: str | None = None
+    models_dir: str | None = None
+    models_max: int | None = None
+    no_models_autoload: bool | None = None
     lora_files: List[str] | None = None
     enable_ctx_shift: int | None = False
     draft_min: int | None = None
@@ -87,6 +100,9 @@ class ServerProcess:
     chat_template_file: str | None = None
     server_path: str | None = None
     mmproj_url: str | None = None
+    media_path: str | None = None
+    sleep_idle_seconds: int | None = None
+    webui_mcp_proxy: bool = False
 
     # session variables
     process: subprocess.Popen | None = None
@@ -98,8 +114,12 @@ class ServerProcess:
             self.debug = True
         if "PORT" in os.environ:
             self.server_port = int(os.environ["PORT"])
+        self.external_server = "DEBUG_EXTERNAL" in os.environ
 
     def start(self, timeout_seconds: int | None = DEFAULT_HTTP_TIMEOUT) -> None:
+        if self.external_server:
+            print(f"[external_server]: Assuming external server running on {self.server_host}:{self.server_port}")
+            return
         if self.server_path is not None:
             server_path = self.server_path
         elif "LLAMA_SERVER_BIN_PATH" in os.environ:
@@ -118,6 +138,8 @@ class ServerProcess:
             "--seed",
             self.seed,
         ]
+        if self.offline:
+            server_args.append("--offline")
         if self.model_file:
             server_args.extend(["--model", self.model_file])
         if self.model_url:
@@ -128,6 +150,10 @@ class ServerProcess:
             server_args.extend(["--hf-repo", self.model_hf_repo])
         if self.model_hf_file:
             server_args.extend(["--hf-file", self.model_hf_file])
+        if self.models_dir:
+            server_args.extend(["--models-dir", self.models_dir])
+        if self.models_max is not None:
+            server_args.extend(["--models-max", self.models_max])
         if self.n_batch:
             server_args.extend(["--batch-size", self.n_batch])
         if self.n_ubatch:
@@ -146,12 +172,18 @@ class ServerProcess:
             server_args.append("--reranking")
         if self.server_metrics:
             server_args.append("--metrics")
+        if self.kv_unified:
+            server_args.append("--kv-unified")
         if self.server_slots:
             server_args.append("--slots")
+        else:
+            server_args.append("--no-slots")
         if self.pooling:
             server_args.extend(["--pooling", self.pooling])
         if self.model_alias:
             server_args.extend(["--alias", self.model_alias])
+        if self.model_tags:
+            server_args.extend(["--tags", self.model_tags])
         if self.n_ctx:
             server_args.extend(["--ctx-size", self.n_ctx])
         if self.n_slots:
@@ -161,7 +193,7 @@ class ServerProcess:
         if self.ctv:
             server_args.extend(["-ctv", self.ctv])
         if self.fa is not None:
-            server_args.append("-fa")
+            server_args.extend(["-fa", self.fa])
         if self.n_predict:
             server_args.extend(["--n-predict", self.n_predict])
         if self.slot_save_path:
@@ -185,8 +217,12 @@ class ServerProcess:
             server_args.extend(["--draft-min", self.draft_min])
         if self.no_webui:
             server_args.append("--no-webui")
+        if self.no_models_autoload:
+            server_args.append("--no-models-autoload")
         if self.jinja:
             server_args.append("--jinja")
+        else:
+            server_args.append("--no-jinja")
         if self.reasoning_format is not None:
             server_args.extend(("--reasoning-format", self.reasoning_format))
         if self.reasoning_budget is not None:
@@ -197,6 +233,12 @@ class ServerProcess:
             server_args.extend(["--chat-template-file", self.chat_template_file])
         if self.mmproj_url:
             server_args.extend(["--mmproj-url", self.mmproj_url])
+        if self.media_path:
+            server_args.extend(["--media-path", self.media_path])
+        if self.sleep_idle_seconds is not None:
+            server_args.extend(["--sleep-idle-seconds", self.sleep_idle_seconds])
+        if self.webui_mcp_proxy:
+            server_args.append("--webui-mcp-proxy")
 
         args = [str(arg) for arg in [server_path, *server_args]]
         print(f"tests: starting server with: {' '.join(args)}")
@@ -239,6 +281,9 @@ class ServerProcess:
         raise TimeoutError(f"Server did not start within {timeout_seconds} seconds")
 
     def stop(self) -> None:
+        if self.external_server:
+            print("[external_server]: Not stopping external server")
+            return
         if self in server_instances:
             server_instances.remove(self)
         if self.process:
@@ -269,7 +314,13 @@ class ServerProcess:
         result = ServerResponse()
         result.headers = dict(response.headers)
         result.status_code = response.status_code
-        result.body = response.json() if parse_body else None
+        if parse_body:
+            try:
+                result.body = response.json()
+            except JSONDecodeError:
+                result.body = response.text
+        else:
+            result.body = None
         print("Response from server", json.dumps(result.body, indent=2))
         return result
 
@@ -285,6 +336,8 @@ class ServerProcess:
             response = requests.post(url, headers=headers, json=data, stream=True)
         else:
             raise ValueError(f"Unimplemented method: {method}")
+        if response.status_code != 200:
+            raise ServerError(response.status_code, response.json())
         for line_bytes in response.iter_lines():
             line = line_bytes.decode("utf-8")
             if '[DONE]' in line:
@@ -391,10 +444,24 @@ server_instances: Set[ServerProcess] = set()
 
 class ServerPreset:
     @staticmethod
+    def load_all() -> None:
+        """ Load all server presets to ensure model files are cached. """
+        servers: List[ServerProcess] = [
+            method()
+            for name, method in ServerPreset.__dict__.items()
+            if callable(method) and name != "load_all"
+        ]
+        for server in servers:
+            server.offline = False
+            server.start()
+            server.stop()
+
+    @staticmethod
     def tinyllama2() -> ServerProcess:
         server = ServerProcess()
-        server.model_hf_repo = "ggml-org/models"
-        server.model_hf_file = "tinyllamas/stories260K.gguf"
+        server.offline = True # will be downloaded by load_all()
+        server.model_hf_repo = "ggml-org/test-model-stories260K"
+        server.model_hf_file = None
         server.model_alias = "tinyllama-2"
         server.n_ctx = 512
         server.n_batch = 32
@@ -406,6 +473,7 @@ class ServerPreset:
     @staticmethod
     def bert_bge_small() -> ServerProcess:
         server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
         server.model_hf_repo = "ggml-org/models"
         server.model_hf_file = "bert-bge-small/ggml-model-f16.gguf"
         server.model_alias = "bert-bge-small"
@@ -420,6 +488,7 @@ class ServerPreset:
     @staticmethod
     def bert_bge_small_with_fa() -> ServerProcess:
         server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
         server.model_hf_repo = "ggml-org/models"
         server.model_hf_file = "bert-bge-small/ggml-model-f16.gguf"
         server.model_alias = "bert-bge-small"
@@ -427,7 +496,7 @@ class ServerPreset:
         server.n_batch = 300
         server.n_ubatch = 300
         server.n_slots = 2
-        server.fa = True
+        server.fa = "on"
         server.seed = 42
         server.server_embeddings = True
         return server
@@ -435,8 +504,9 @@ class ServerPreset:
     @staticmethod
     def tinyllama_infill() -> ServerProcess:
         server = ServerProcess()
-        server.model_hf_repo = "ggml-org/models"
-        server.model_hf_file = "tinyllamas/stories260K-infill.gguf"
+        server.offline = True # will be downloaded by load_all()
+        server.model_hf_repo = "ggml-org/test-model-stories260K-infill"
+        server.model_hf_file = None
         server.model_alias = "tinyllama-infill"
         server.n_ctx = 2048
         server.n_batch = 1024
@@ -449,6 +519,7 @@ class ServerPreset:
     @staticmethod
     def stories15m_moe() -> ServerProcess:
         server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
         server.model_hf_repo = "ggml-org/stories15M_MOE"
         server.model_hf_file = "stories15M_MOE-F16.gguf"
         server.model_alias = "stories15m-moe"
@@ -463,6 +534,7 @@ class ServerPreset:
     @staticmethod
     def jina_reranker_tiny() -> ServerProcess:
         server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
         server.model_hf_repo = "ggml-org/models"
         server.model_hf_file = "jina-reranker-v1-tiny-en/ggml-model-f16.gguf"
         server.model_alias = "jina-reranker"
@@ -476,15 +548,31 @@ class ServerPreset:
     @staticmethod
     def tinygemma3() -> ServerProcess:
         server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
         # mmproj is already provided by HF registry API
-        server.model_hf_repo = "ggml-org/tinygemma3-GGUF"
-        server.model_hf_file = "tinygemma3-Q8_0.gguf"
-        server.mmproj_url = "https://huggingface.co/ggml-org/tinygemma3-GGUF/resolve/main/mmproj-tinygemma3.gguf"
+        server.model_hf_file = None
+        server.model_hf_repo = "ggml-org/tinygemma3-GGUF:Q8_0"
         server.model_alias = "tinygemma3"
         server.n_ctx = 1024
         server.n_batch = 32
         server.n_slots = 2
         server.n_predict = 4
+        server.seed = 42
+        return server
+
+    @staticmethod
+    def router() -> ServerProcess:
+        server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
+        # router server has no models
+        server.model_file = None
+        server.model_alias = None
+        server.model_hf_repo = None
+        server.model_hf_file = None
+        server.n_ctx = 1024
+        server.n_batch = 16
+        server.n_slots = 1
+        server.n_predict = 16
         server.seed = 42
         return server
 

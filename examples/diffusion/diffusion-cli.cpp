@@ -7,6 +7,7 @@
 #include <limits.h>
 
 #include <algorithm>
+#include <clocale>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -510,19 +511,27 @@ static void diffusion_generate(llama_context *          ctx,
     n_generated = params.max_length;
 }
 
-static std::string format_input_text(const std::string & prompt, bool use_chat_template, llama_model * model) {
+static std::string format_input_text(const std::string & prompt, const std::string & system_prompt, bool use_chat_template, llama_model * model) {
     if (!use_chat_template) {
         return prompt;
     }
 
     auto chat_templates = common_chat_templates_init(model, "");
-
     common_chat_templates_inputs inputs;
-    common_chat_msg              user_msg;
-    user_msg.role                = "user";
-    user_msg.content             = prompt;
-    inputs.add_generation_prompt = true;
+    common_chat_msg system_msg;
+
+    if (!system_prompt.empty()) {
+        system_msg.role = "system";
+        system_msg.content = system_prompt;
+        inputs.messages.push_back(system_msg);
+    }
+
+    common_chat_msg user_msg;
+    user_msg.role = "user";
+    user_msg.content = prompt;
+
     inputs.messages.push_back(user_msg);
+    inputs.add_generation_prompt = true;
 
     auto result = common_chat_templates_apply(chat_templates.get(), inputs);
 
@@ -530,6 +539,8 @@ static std::string format_input_text(const std::string & prompt, bool use_chat_t
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     ggml_time_init();
 
     common_params params;
@@ -545,6 +556,7 @@ int main(int argc, char ** argv) {
     model_params.n_gpu_layers       = params.n_gpu_layers;
     model_params.devices            = params.devices.data();
     model_params.use_mmap           = params.use_mmap;
+    model_params.use_direct_io      = params.use_direct_io;
     model_params.use_mlock          = params.use_mlock;
     model_params.check_tensors      = params.check_tensors;
 
@@ -564,7 +576,7 @@ int main(int argc, char ** argv) {
     ctx_params.n_ctx                = params.n_ctx;
     ctx_params.n_batch              = params.n_batch;
     ctx_params.n_ubatch             = params.n_ubatch;
-    ctx_params.flash_attn           = params.flash_attn;
+    ctx_params.flash_attn_type      = params.flash_attn_type;
     ctx_params.no_perf              = params.no_perf;
     ctx_params.type_k               = params.cache_type_k;
     ctx_params.type_v               = params.cache_type_v;
@@ -579,7 +591,8 @@ int main(int argc, char ** argv) {
     llama_set_n_threads(ctx, params.cpuparams.n_threads, params.cpuparams_batch.n_threads);
 
     const llama_vocab * vocab            = llama_model_get_vocab(model);
-    std::string         formatted_prompt = format_input_text(params.prompt, params.enable_chat_template, model);
+
+    std::string         formatted_prompt = format_input_text(params.prompt, params.system_prompt, params.enable_chat_template, model);
 
     std::vector<llama_token> input_tokens = common_tokenize(vocab,
                                                             formatted_prompt,
@@ -596,6 +609,7 @@ int main(int argc, char ** argv) {
     }
 
     llama_token mask_token_id = llama_vocab_mask(vocab);
+
     GGML_ASSERT(mask_token_id != LLAMA_TOKEN_NULL);
 
     bool visual_mode = params.diffusion.visual_mode;

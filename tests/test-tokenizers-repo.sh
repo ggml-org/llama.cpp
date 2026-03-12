@@ -23,6 +23,13 @@ if [ -d $folder ] && [ -d $folder/.git ]; then
     (cd $folder; git pull)
 else
     git clone $repo $folder
+
+    # byteswap models if on big endian
+    if [ "$(uname -m)" = s390x ]; then
+        for f in $folder/*/*.gguf; do
+            echo YES | python3 "$(dirname $0)/../gguf-py/gguf/scripts/gguf_convert_endian.py" $f big
+        done
+    fi
 fi
 
 shopt -s globstar

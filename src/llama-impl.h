@@ -37,7 +37,7 @@ void llama_log_callback_default(ggml_log_level level, const char * text, void * 
 template <typename T>
 struct no_init {
     T value;
-    no_init() { /* do nothing */ }
+    no_init() = default;
 };
 
 struct time_meas {
@@ -47,6 +47,16 @@ struct time_meas {
     const int64_t t_start_us;
 
     int64_t & t_acc;
+};
+
+template <typename T>
+struct buffer_view {
+    T * data;
+    size_t size = 0;
+
+    bool has_data() const {
+        return data && size > 0;
+    }
 };
 
 void replace_all(std::string & s, const std::string & search, const std::string & replace);
@@ -59,3 +69,7 @@ std::string llama_format_tensor_shape(const std::vector<int64_t> & ne);
 std::string llama_format_tensor_shape(const struct ggml_tensor * t);
 
 std::string gguf_kv_to_str(const struct gguf_context * ctx_gguf, int i);
+
+#define LLAMA_TENSOR_NAME_FATTN   "__fattn__"
+#define LLAMA_TENSOR_NAME_FGDN_AR "__fgdn_ar__"
+#define LLAMA_TENSOR_NAME_FGDN_CH "__fgdn_ch__"

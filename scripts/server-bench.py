@@ -151,12 +151,6 @@ def benchmark(
     if os.environ.get("LLAMA_ARG_N_PARALLEL") is None:
         logger.info("LLAMA_ARG_N_PARALLEL not explicitly set, using 32")
         os.environ["LLAMA_ARG_N_PARALLEL"] = "32"
-    if not external_server and os.environ.get("LLAMA_ARG_N_GPU_LAYERS") is None:
-        logger.info("LLAMA_ARG_N_GPU_LAYERS not explicitly set, using 999")
-        os.environ["LLAMA_ARG_N_GPU_LAYERS"] = "999"
-    if not external_server and os.environ.get("LLAMA_ARG_FLASH_ATTN") is None:
-        logger.info("LLAMA_ARG_FLASH_ATTN not explicitly set, using 'true'")
-        os.environ["LLAMA_ARG_FLASH_ATTN"] = "true"
 
     parallel: int = int(os.environ.get("LLAMA_ARG_N_PARALLEL")) # type: ignore
     prompts: Union[None, list[str], list[list[int]]] = get_prompts_text(prompt_source, n_prompts)
@@ -298,6 +292,6 @@ if __name__ == "__main__":
         "--n_predict_min", type=int, default=1024,
         help="Min. number of tokens to predict per prompt (supported for synthetic prompts only)")
     parser.add_argument("--seed_offset", type=int, default=0, help="Offset for determining the seeds for pseudorandom prompt/generation lengths. "
-                        "Corelations between seeds can occur when set >= 1000. Negative values mean no seed.")
+                        "Correlations between seeds can occur when set >= 1000. Negative values mean no seed.")
     args = parser.parse_args()
     benchmark(**vars(args))

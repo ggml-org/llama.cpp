@@ -23,7 +23,6 @@ import warnings
 import numpy as np
 import torch
 import torch.nn.functional as F
-import torch.utils.checkpoint
 from torch import nn
 from torch.nn.init import _calculate_fan_in_and_fan_out
 
@@ -187,7 +186,7 @@ def trunc_normal_tf_(
     best when :math:`a \\leq \text{mean} \\leq b`.
     NOTE: this 'tf' variant behaves closer to Tensorflow / JAX impl where the
     bounds [a, b] are applied when sampling the normal distribution with mean=0, std=1.0
-    and the result is subsquently scaled and shifted by the mean and std args.
+    and the result is subsequently scaled and shifted by the mean and std args.
     Args:
         tensor: an n-dimensional `torch.Tensor`
         mean: the mean of the normal distribution
@@ -413,7 +412,8 @@ import re
 
 import numpy as np
 from gguf import *
-from transformers.models.idefics2.modeling_idefics2 import Idefics2VisionTransformer, Idefics2VisionConfig
+from transformers.models.idefics2.modeling_idefics2 import Idefics2VisionTransformer
+from transformers.models.idefics2.configuration_idefics2 import Idefics2VisionConfig
 
 TEXT = "clip.text"
 VISION = "clip.vision"
@@ -501,7 +501,7 @@ default_image_mean = [0.5, 0.5, 0.5]
 default_image_std = [0.5, 0.5, 0.5]
 ap.add_argument('--image-mean', type=float, nargs='+', help='Mean of the images for normalization (overrides processor) ', default=None)
 ap.add_argument('--image-std', type=float, nargs='+', help='Standard deviation of the images for normalization (overrides processor)', default=None)
-ap.add_argument('--minicpmv_version', type=int, help='minicpmv_version: MiniCPM-V-2 use 1; MiniCPM-V-2.5 use 2; MiniCPM-V-2.6 use 3; MiniCPM-o-2.6 use 4; MiniCPM-V 4.0 use 5; MiniCPM-o-4.0 use 6', default=2)
+ap.add_argument('--minicpmv_version', type=int, help='minicpmv_version: MiniCPM-V-2 use 1; MiniCPM-V-2.5 use 2; MiniCPM-V-2.6 use 3; MiniCPM-o-2.6 use 4; MiniCPM-V 4.0 use 5; MiniCPM-o-4.0 use 6; MiniCPM-o-4.5 use 100045', default=2)
 
 # with proper
 args = ap.parse_args()
@@ -610,6 +610,9 @@ else:
     elif minicpmv_version == 6:
         emb_dim = 4096
         block_count = 27
+    elif minicpmv_version == 100045:
+        emb_dim = 4096
+        block_count = 27
 
     default_vision_config = {
             "hidden_size": 1152,
@@ -634,6 +637,10 @@ elif minicpmv_version == 5:
     vision_config = SiglipVisionConfig(**default_vision_config)
     model = SiglipVisionTransformer(vision_config)
 elif minicpmv_version == 6:
+    default_vision_config["model_type"] = "siglip_vision_model"
+    vision_config = SiglipVisionConfig(**default_vision_config)
+    model = SiglipVisionTransformer(vision_config)
+elif minicpmv_version == 100045:
     default_vision_config["model_type"] = "siglip_vision_model"
     vision_config = SiglipVisionConfig(**default_vision_config)
     model = SiglipVisionTransformer(vision_config)

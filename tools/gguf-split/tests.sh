@@ -19,7 +19,7 @@ fi
 set -x
 
 SPLIT=$1/llama-gguf-split
-MAIN=$1/llama-cli
+MAIN=$1/llama-completion
 WORK_PATH=$TMP_DIR/gguf-split
 ROOT_DIR=$(realpath $(dirname $0)/../../)
 
@@ -31,27 +31,27 @@ rm -f $WORK_PATH/ggml-model-split*.gguf $WORK_PATH/ggml-model-merge*.gguf
 # 1. Get a model
 (
 cd $WORK_PATH
-"$ROOT_DIR"/scripts/hf.sh --repo ggml-org/gemma-1.1-2b-it-Q8_0-GGUF --file gemma-1.1-2b-it.Q8_0.gguf
+"$ROOT_DIR"/scripts/hf.sh --repo ggml-org/Qwen3-0.6B-GGUF --file Qwen3-0.6B-Q8_0.gguf
 )
 echo PASS
 
 # 2. Split with max tensors strategy
-$SPLIT --split-max-tensors 28  $WORK_PATH/gemma-1.1-2b-it.Q8_0.gguf $WORK_PATH/ggml-model-split
+$SPLIT --split-max-tensors 28  $WORK_PATH/Qwen3-0.6B-Q8_0.gguf $WORK_PATH/ggml-model-split
 echo PASS
 echo
 
 # 2b. Test the sharded model is loading properly
-$MAIN -no-cnv --model $WORK_PATH/ggml-model-split-00001-of-00006.gguf --n-predict 32
+$MAIN -no-cnv --model $WORK_PATH/ggml-model-split-00001-of-00012.gguf -p "I believe the meaning of life is" --n-predict 32
 echo PASS
 echo
 
 # 3. Merge
-$SPLIT --merge $WORK_PATH/ggml-model-split-00001-of-00006.gguf $WORK_PATH/ggml-model-merge.gguf
+$SPLIT --merge $WORK_PATH/ggml-model-split-00001-of-00012.gguf $WORK_PATH/ggml-model-merge.gguf
 echo PASS
 echo
 
 # 3b. Test the merged model is loading properly
-$MAIN -no-cnv --model $WORK_PATH/ggml-model-merge.gguf --n-predict 32
+$MAIN -no-cnv --model $WORK_PATH/ggml-model-merge.gguf -p "I believe the meaning of life is" --n-predict 32
 echo PASS
 echo
 
@@ -61,12 +61,12 @@ echo PASS
 echo
 
 # 4b. Test the sharded model is loading properly
-$MAIN -no-cnv --model $WORK_PATH/ggml-model-split-32-tensors-00001-of-00007.gguf --n-predict 32
+$MAIN -no-cnv --model $WORK_PATH/ggml-model-split-32-tensors-00001-of-00011.gguf -p "I believe the meaning of life is" --n-predict 32
 echo PASS
 echo
 
 # 5. Merge
-#$SPLIT --merge $WORK_PATH/ggml-model-split-32-tensors-00001-of-00006.gguf $WORK_PATH/ggml-model-merge-2.gguf
+#$SPLIT --merge $WORK_PATH/ggml-model-split-32-tensors-00001-of-00012.gguf $WORK_PATH/ggml-model-merge-2.gguf
 #echo PASS
 #echo
 
@@ -76,12 +76,12 @@ echo
 #echo
 
 # 6. Split with size strategy
-$SPLIT --split-max-size 2G $WORK_PATH/ggml-model-merge.gguf $WORK_PATH/ggml-model-split-2G
+$SPLIT --split-max-size 500M $WORK_PATH/ggml-model-merge.gguf $WORK_PATH/ggml-model-split-500M
 echo PASS
 echo
 
 # 6b. Test the sharded model is loading properly
-$MAIN -no-cnv --model $WORK_PATH/ggml-model-split-2G-00001-of-00002.gguf --n-predict 32
+$MAIN -no-cnv --model $WORK_PATH/ggml-model-split-500M-00001-of-00002.gguf -p "I believe the meaning of life is" --n-predict 32
 echo PASS
 echo
 
