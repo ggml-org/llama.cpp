@@ -8596,6 +8596,14 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
     // reordering 59 GB of experts (120B model) would take minutes and double RAM.
     const bool is_moe_expert      = (usage == tensor_usage::MOE_EXPERT_WEIGHT);
     const bool should_materialize = (adjusted_layout != GGML_LAYOUT_AOS) && !is_moe_expert;
+    // Register AOS as the layout choice for MoE expert weights so layout
+    // assertions pass during inference.  Expert cache handles SOA on-demand.
+    if (use_unified_cache && is_moe_expert) {
+        ggml_sycl_cache_id cache_key = ggml_backend_sycl_get_weight_cache_key(tensor, ctx->device);
+        if (cache_key.valid) {
+            ggml_sycl_register_layout_choice(cache_key, ctx->device, GGML_LAYOUT_AOS, tensor->type, tensor->name);
+        }
+    }
     if (use_unified_cache && should_materialize && !has_preconverted_tiled) {
         // Prefer existing layout choice if already finalized/registered.
 
