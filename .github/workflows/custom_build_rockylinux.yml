@@ -40,8 +40,7 @@ jobs:
           dnf -y install \
             git \
             cmake \
-            gcc \
-            gcc-c++ \
+            gcc-toolset-12 \
             make \
             ninja-build \
             tar \
@@ -63,6 +62,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+          source scl_source enable gcc-toolset-12
           cat /etc/os-release || true
           uname -a
           gcc --version
@@ -74,17 +74,20 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+          source scl_source enable gcc-toolset-12
           cmake -S . -B build \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
             -DGGML_CUDA=ON \
             -DCMAKE_CUDA_COMPILER=$(command -v nvcc) \
-            -DCMAKE_CUDA_ARCHITECTURES="${{ github.event.inputs.gpu_arch }}"
+            -DCMAKE_CUDA_ARCHITECTURES="${{ github.event.inputs.gpu_arch }}" \
+            -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined
 
       - name: Build
         shell: bash
         run: |
           set -euxo pipefail
+          source scl_source enable gcc-toolset-12
           cmake --build build --config ${BUILD_TYPE} -j"$(nproc)"
 
       - name: Prepare release payload
