@@ -7,6 +7,11 @@ on:
         description: 'Create new release'
         required: true
         type: boolean
+      gpu_arch:
+        description: 'nvidia gpu arch numbers (semicolon-separated, e.g. 70;75;80;86)'
+        required: false
+        type: string
+        default: '70;75;80;86;89'
   release:
     types: [published]
 
@@ -73,7 +78,8 @@ jobs:
             -G Ninja \
             -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
             -DGGML_CUDA=ON \
-            -DCMAKE_CUDA_COMPILER=$(command -v nvcc)
+            -DCMAKE_CUDA_COMPILER=$(command -v nvcc) \
+            -DCMAKE_CUDA_ARCHITECTURES="${{ github.event.inputs.gpu_arch }}"
 
       - name: Build
         shell: bash
