@@ -31,14 +31,15 @@ Usage:
         --keep_n 32
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import re
-import sys
 from pathlib import Path
 
 import numpy as np
-from gguf import GGUFReader, GGUFWriter, GGMLQuantizationType, GGUFValueType
+from gguf import GGUFReader, GGUFWriter, GGUFValueType
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -187,7 +188,7 @@ def main():
     kept: dict[int, list[int]] = {}
     for tensor in reader.tensors:
         il, suffix = layer_and_suffix(tensor.name)
-        if il is None or not is_expert_suffix(suffix):
+        if il is None or suffix is None or not is_expert_suffix(suffix):
             continue
         if il in kept:
             continue  # already computed for this layer
@@ -222,9 +223,10 @@ def main():
     n_pruned = 0
     for tensor in reader.tensors:
         il, suffix = layer_and_suffix(tensor.name)
-        is_expert = il is not None and is_expert_suffix(suffix)
+        is_expert = il is not None and suffix is not None and is_expert_suffix(suffix)
 
         if is_expert:
+            assert il is not None
             k = kept[il]
             data = slice_expert_axis(tensor.data, k)
             writer.add_tensor(
