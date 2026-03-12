@@ -32,7 +32,6 @@ jobs:
           # dnf -y update
           dnf -y install epel-release
           dnf config-manager --set-enabled powertools
-          dnf config-manager --set-enabled crb
           dnf -y install \
             git \
             cmake \
