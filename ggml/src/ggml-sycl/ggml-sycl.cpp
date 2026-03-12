@@ -27160,6 +27160,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 const bool   is_up_fast     = (strstr(tname_fast, "ffn_up") != nullptr);
                 const bool   is_down_fast   = (strstr(tname_fast, "ffn_down") != nullptr);
                 const int    cur_layer_fast = parse_layer_id_from_name(tname_fast);
+                // Hash-based layer ID for placement table / prefetcher lookups
+                // (moe_cache_layer_id produces FNV-1a hashes matching init-time registration)
+                const int    cur_layer_hash = moe_cache_layer_id(tname_fast);
 
                 // GATE: resolve IDs + activation, save state (or fuse if UP already pending)
                 if (ggml_sycl_moe_fusion_enabled() && is_gate_fast && cur_layer_fast >= 0) {
@@ -27289,7 +27292,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                     g0_eids.data(), g0_iid1s.data(), g0_ids.data(),
                                     static_cast<int>(n_g0),
                                     static_cast<int>(n_as_f), n_ids_f,
-                                    GGML_LAYOUT_AOS);
+                                    GGML_LAYOUT_SOA);
                             }
                         }
 
@@ -27333,7 +27336,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     if (!g_moe_warmup.warmup_done.load(std::memory_order_acquire)) {
                         int seq_layer_id_fuse = -1;
                         auto & seq_map_fuse = g_moe_layer_seq[ctx.device];
-                        auto   it_fuse      = seq_map_fuse.find(cur_layer_fast);
+                        auto   it_fuse      = seq_map_fuse.find(cur_layer_hash);
                         if (it_fuse != seq_map_fuse.end()) {
                             seq_layer_id_fuse = it_fuse->second;
                         }
@@ -27426,7 +27429,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         auto & pf_gate = g_expert_prefetchers[ctx.device];
                         for (size_t ci = 0; ci < ids_n_elem; ci++) {
                             const int32_t eid = ids_data_f[ci];
-                            auto placement = placement_table_pre.get(cur_layer_fast, eid);
+                            auto placement = placement_table_pre.get(cur_layer_hash, eid);
                             if (have_secondary_pre
                                 && placement.device_id >= 1
                                 && placement.device_id < n_gpu_devs_gate
@@ -27435,7 +27438,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                 g_moe_fusion.sec_indices.push_back({ci, placement.device_id, placement.device_ptr});
                             } else if (placement.device_id == 0 && placement.device_ptr != nullptr) {
                                 g_moe_fusion.gpu0_cached_indices.push_back(ci);
-                            } else if (pf_gate.is_initialized() && pf_gate.get_cached_ptr(cur_layer_fast, eid)) {
+                            } else if (pf_gate.is_initialized() && pf_gate.get_cached_ptr(cur_layer_hash, eid)) {
                                 g_moe_fusion.gpu0_cached_indices.push_back(ci);
                             } else {
                                 // Check secondary GPU prefetcher pools before CPU fallback.
@@ -27443,7 +27446,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                 for (int d = 1; d < n_gpu_devs_gate && !found_sec; d++) {
                                     auto & pf_d = g_expert_prefetchers[d];
                                     if (!pf_d.is_initialized()) continue;
-                                    void * cached = pf_d.get_cached_ptr(cur_layer_fast, eid);
+                                    void * cached = pf_d.get_cached_ptr(cur_layer_hash, eid);
                                     if (cached && g_secondary_queues[d] != nullptr) {
                                         g_moe_fusion.sec_indices.push_back({ci, d, cached});
                                         found_sec = true;
@@ -27606,7 +27609,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                 g0_eids.data(), g0_iid1s.data(), g0_ids.data(),
                                 static_cast<int>(n_g0),
                                 static_cast<int>(n_as_f), n_ids_f,
-                                GGML_LAYOUT_AOS);
+                                GGML_LAYOUT_SOA);
                         }
                     }
                     return;
@@ -27643,7 +27646,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     if (!g_moe_warmup.warmup_done.load(std::memory_order_acquire)) {
                         int seq_layer_id_fuse = -1;
                         auto & seq_map_fuse = g_moe_layer_seq[ctx.device];
-                        auto   it_fuse      = seq_map_fuse.find(cur_layer_fast);
+                        auto   it_fuse      = seq_map_fuse.find(cur_layer_hash);
                         if (it_fuse != seq_map_fuse.end()) {
                             seq_layer_id_fuse = it_fuse->second;
                         }
@@ -27737,7 +27740,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         auto & pf_up = g_expert_prefetchers[ctx.device];
                         for (size_t ci = 0; ci < ids_n_elem; ci++) {
                             const int32_t eid = ids_data_f[ci];
-                            auto placement = placement_table_pre.get(cur_layer_fast, eid);
+                            auto placement = placement_table_pre.get(cur_layer_hash, eid);
                             if (have_secondary_pre
                                 && placement.device_id >= 1
                                 && placement.device_id < n_gpu_devs_up
@@ -27746,7 +27749,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                 g_moe_fusion.sec_indices.push_back({ci, placement.device_id, placement.device_ptr});
                             } else if (placement.device_id == 0 && placement.device_ptr != nullptr) {
                                 g_moe_fusion.gpu0_cached_indices.push_back(ci);
-                            } else if (pf_up.is_initialized() && pf_up.get_cached_ptr(cur_layer_fast, eid)) {
+                            } else if (pf_up.is_initialized() && pf_up.get_cached_ptr(cur_layer_hash, eid)) {
                                 g_moe_fusion.gpu0_cached_indices.push_back(ci);
                             } else {
                                 // Check secondary GPU prefetcher pools before CPU fallback.
@@ -27754,7 +27757,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                 for (int d = 1; d < n_gpu_devs_up && !found_sec_up; d++) {
                                     auto & pf_d = g_expert_prefetchers[d];
                                     if (!pf_d.is_initialized()) continue;
-                                    void * cached = pf_d.get_cached_ptr(cur_layer_fast, eid);
+                                    void * cached = pf_d.get_cached_ptr(cur_layer_hash, eid);
                                     if (cached && g_secondary_queues[d] != nullptr) {
                                         g_moe_fusion.sec_indices.push_back({ci, d, cached});
                                         found_sec_up = true;
@@ -27837,7 +27840,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                 g0_eids.data(), g0_iid1s.data(), g0_ids.data(),
                                 static_cast<int>(n_g0),
                                 static_cast<int>(n_as_f), n_ids_f,
-                                GGML_LAYOUT_AOS);
+                                GGML_LAYOUT_SOA);
                         }
                     }
                     return;
@@ -27967,7 +27970,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                 g0_eids.data(), g0_iid1s.data(), g0_ids.data(),
                                 static_cast<int>(n_g0),
                                 static_cast<int>(g_moe_fusion.n_as), n_ids_up_g0,
-                                GGML_LAYOUT_AOS);
+                                GGML_LAYOUT_SOA);
                         }
                     }
 
@@ -28133,7 +28136,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                 g0_eids.data(), g0_iid1s.data(), g0_ids.data(),
                                 static_cast<int>(n_g0),
                                 static_cast<int>(g_moe_fusion.n_as), n_ids_d,
-                                GGML_LAYOUT_AOS);
+                                GGML_LAYOUT_SOA);
                         }
                     }
 
