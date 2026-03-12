@@ -1449,7 +1449,7 @@ struct vk_op_gated_delta_net_push_constants {
     uint32_t sq1, sq2, sq3;
     uint32_t sv1, sv2, sv3;
     uint32_t sb1, sb2, sb3;
-    uint32_t rq1, rq3;
+    uint32_t neq1, rq3;
     float scale;
 };
 
@@ -10388,8 +10388,8 @@ static void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& s
     const uint32_t sb2 = (uint32_t)(src_beta->nb[2] / sizeof(float));
     const uint32_t sb3 = (uint32_t)(src_beta->nb[3] / sizeof(float));
 
-    const uint32_t rq1 = (uint32_t)(src_v->ne[1] / src_q->ne[1]);
-    const uint32_t rq3 = (uint32_t)(src_v->ne[3] / src_q->ne[3]);
+    const uint32_t neq1 = (uint32_t)src_q->ne[1];
+    const uint32_t rq3  = (uint32_t)(src_v->ne[3] / src_q->ne[3]);
 
     const float scale = 1.0f / sqrtf((float)S_v);
     const vk_op_gated_delta_net_push_constants pc = {
@@ -10397,7 +10397,7 @@ static void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& s
         sq1, sq2, sq3,
         sv1, sv2, sv3,
         sb1, sb2, sb3,
-        rq1, rq3,
+        neq1, rq3,
         scale
     };
 
