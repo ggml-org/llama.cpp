@@ -1002,7 +1002,7 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
         const char * moe_opt_in     = std::getenv("GGML_SYCL_MOE_MULTI_GPU");
         const int    total_gpus     = ggml_sycl_info().total_gpu_count;
         // Auto-enable for MoE models with 2+ GPUs, unless explicitly disabled
-        const bool   multi_gpu_on   = moe_opt_in ? (std::atoi(moe_opt_in) == 1)
+        const bool   multi_gpu_on   = moe_opt_in ? (std::atoi(moe_opt_in) != 0)
                                                   : (total_gpus >= 2);
 
         if (multi_gpu_on && total_gpus >= 2) {
