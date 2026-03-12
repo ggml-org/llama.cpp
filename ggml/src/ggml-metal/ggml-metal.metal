@@ -51,24 +51,34 @@ constexpr constant static float kvalues_mxfp4_f[16] = {
 };
 
 // UE4M3 scale lookup table (128 entries, unsigned E4M3 with bias=7)
-constexpr constant static float kvalues_ue4m3_f[128] = {
-    0.f,         1.953125e-03f, 3.906250e-03f, 5.859375e-03f, 7.812500e-03f, 9.765625e-03f, 1.171875e-02f, 1.367188e-02f,
-    1.562500e-02f, 1.757813e-02f, 1.953125e-02f, 2.148438e-02f, 2.343750e-02f, 2.539063e-02f, 2.734375e-02f, 2.929688e-02f,
-    3.125000e-02f, 3.515625e-02f, 3.906250e-02f, 4.296875e-02f, 4.687500e-02f, 5.078125e-02f, 5.468750e-02f, 5.859375e-02f,
-    6.250000e-02f, 7.031250e-02f, 7.812500e-02f, 8.593750e-02f, 9.375000e-02f, 1.015625e-01f, 1.093750e-01f, 1.171875e-01f,
-    1.250000e-01f, 1.406250e-01f, 1.562500e-01f, 1.718750e-01f, 1.875000e-01f, 2.031250e-01f, 2.187500e-01f, 2.343750e-01f,
-    2.500000e-01f, 2.812500e-01f, 3.125000e-01f, 3.437500e-01f, 3.750000e-01f, 4.062500e-01f, 4.375000e-01f, 4.687500e-01f,
-    5.000000e-01f, 5.625000e-01f, 6.250000e-01f, 6.875000e-01f, 7.500000e-01f, 8.125000e-01f, 8.750000e-01f, 9.375000e-01f,
-    1.000000e+00f, 1.125000e+00f, 1.250000e+00f, 1.375000e+00f, 1.500000e+00f, 1.625000e+00f, 1.750000e+00f, 1.875000e+00f,
-    2.000000e+00f, 2.250000e+00f, 2.500000e+00f, 2.750000e+00f, 3.000000e+00f, 3.250000e+00f, 3.500000e+00f, 3.750000e+00f,
-    4.000000e+00f, 4.500000e+00f, 5.000000e+00f, 5.500000e+00f, 6.000000e+00f, 6.500000e+00f, 7.000000e+00f, 7.500000e+00f,
-    8.000000e+00f, 9.000000e+00f, 1.000000e+01f, 1.100000e+01f, 1.200000e+01f, 1.300000e+01f, 1.400000e+01f, 1.500000e+01f,
-    1.600000e+01f, 1.800000e+01f, 2.000000e+01f, 2.200000e+01f, 2.400000e+01f, 2.600000e+01f, 2.800000e+01f, 3.000000e+01f,
-    3.200000e+01f, 3.600000e+01f, 4.000000e+01f, 4.400000e+01f, 4.800000e+01f, 5.200000e+01f, 5.600000e+01f, 6.000000e+01f,
-    6.400000e+01f, 7.200000e+01f, 8.000000e+01f, 8.800000e+01f, 9.600000e+01f, 1.040000e+02f, 1.120000e+02f, 1.200000e+02f,
-    1.280000e+02f, 1.440000e+02f, 1.600000e+02f, 1.760000e+02f, 1.920000e+02f, 2.080000e+02f, 2.240000e+02f, 2.400000e+02f,
-    2.560000e+02f, 2.880000e+02f, 3.200000e+02f, 3.520000e+02f, 3.840000e+02f, 4.160000e+02f, 4.480000e+02f, 0.f,
+// Computed at compile time from the UE4M3 format definition
+struct ue4m3_table {
+    float data[128];
+    constexpr ue4m3_table() : data{} {
+        for (int x = 0; x < 128; ++x) {
+            if (x == 0 || x == 0x7F) {
+                data[x] = 0.0f;
+            } else {
+                int exp = (x >> 3) & 0xF;
+                int man = x & 0x7;
+                if (exp == 0) {
+                    // subnormal: man * 2^(-9)
+                    data[x] = (float)man / 512.0f;
+                } else {
+                    // normal: (1 + man/8) * 2^(exp-7)
+                    float mantissa = 1.0f + (float)man / 8.0f;
+                    float scale = 1.0f;
+                    int e = exp - 7;
+                    if (e > 0) { for (int i = 0; i < e;  ++i) scale *= 2.0f; }
+                    if (e < 0) { for (int i = 0; i < -e; ++i) scale *= 0.5f; }
+                    data[x] = mantissa * scale;
+                }
+            }
+        }
+    }
 };
+constexpr constant static ue4m3_table kvalues_ue4m3_table = ue4m3_table();
+#define kvalues_ue4m3_f kvalues_ue4m3_table.data
 
 static inline int best_index_int8(int n, constant float * val, float x) {
     if (x <= val[0]) return 0;
