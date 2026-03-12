@@ -139,10 +139,13 @@ class GGUFWriter:
                 size = prod(shape)
 
                 if "_exps." in name:
-                    expert_count = shape[-2 if ".bias" in name else -3]
-                    expert_params += (size // expert_count)
-                    expert_sum += expert_count
-                    n_expert_tensors += 1
+                    if len(shape) >= 3:
+                        expert_count = shape[-2 if ".bias" in name else -3]
+                        expert_params += (size // expert_count)
+                        expert_sum += expert_count
+                        n_expert_tensors += 1
+                    else:
+                        shared_params += size
                 else:
                     shared_params += size
 
@@ -858,6 +861,9 @@ class GGUFWriter:
 
     def add_moe_every_n_layers(self, value: int) -> None:
         self.add_uint32(Keys.LLM.MOE_EVERY_N_LAYERS.format(arch=self.arch), value)
+
+    def add_moe_latent_size(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.MOE_LATENT_SIZE.format(arch=self.arch), value)
 
     def add_nextn_predict_layers(self, count: int) -> None:
         self.add_uint32(Keys.LLM.NEXTN_PREDICT_LAYERS.format(arch=self.arch), count)
