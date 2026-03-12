@@ -4224,6 +4224,7 @@ struct pending_cpu_scatter {
 
     int    device_id;         // Device index for pool release
     bool   from_pool;         // Whether buffers came from pool
+    bool   owns_buffers;      // Whether flush should free out_pinned/act_pinned
     bool   active;            // Whether there's a pending scatter
 
     // Deferred scatter tracking: the MUL_MAT_ID output tensor that this
@@ -4232,8 +4233,8 @@ struct pending_cpu_scatter {
     const ggml_tensor * dst_tensor;
 
     pending_cpu_scatter() : out_pinned(nullptr), act_pinned(nullptr),
-        stream(nullptr), sycl_ctx(), device_id(-1), from_pool(false), active(false),
-        dst_tensor(nullptr) {}
+        stream(nullptr), sycl_ctx(), device_id(-1), from_pool(false),
+        owns_buffers(true), active(false), dst_tensor(nullptr) {}
 };
 
 static thread_local pending_cpu_scatter g_pending_scatter = {};
@@ -4966,27 +4967,31 @@ static void flush_pending_cpu_scatter() {
         GGML_LOG_ERROR("[CPU-TG] Deferred scatter failed: %s\n", ex.what());
     }
 
-    // Release pinned host buffers
-    if (g_pending_scatter.from_pool) {
-        g_pinned_buffer_pools[g_pending_scatter.device_id].release(
-            {g_pending_scatter.act_pinned, g_pending_scatter.out_pinned});
-    } else {
-        if (g_pending_scatter.act_pinned) {
-            sycl::free(g_pending_scatter.act_pinned, g_pending_scatter.sycl_ctx);
-        }
-        if (g_pending_scatter.out_pinned) {
-            sycl::free(g_pending_scatter.out_pinned, g_pending_scatter.sycl_ctx);
+    // Release pinned host buffers (skip when !owns_buffers, e.g. fusion-deferred
+    // scatters where tl_down_out manages its own thread_local memory).
+    if (g_pending_scatter.owns_buffers) {
+        if (g_pending_scatter.from_pool) {
+            g_pinned_buffer_pools[g_pending_scatter.device_id].release(
+                {g_pending_scatter.act_pinned, g_pending_scatter.out_pinned});
+        } else {
+            if (g_pending_scatter.act_pinned) {
+                sycl::free(g_pending_scatter.act_pinned, g_pending_scatter.sycl_ctx);
+            }
+            if (g_pending_scatter.out_pinned) {
+                sycl::free(g_pending_scatter.out_pinned, g_pending_scatter.sycl_ctx);
+            }
         }
     }
 
     g_pending_scatter.entries.clear();
     g_pending_scatter.tasks.clear();
-    g_pending_scatter.out_pinned = nullptr;
-    g_pending_scatter.act_pinned = nullptr;
-    g_pending_scatter.stream     = nullptr;
-    g_pending_scatter.sycl_ctx   = sycl::context();  // release ref
-    g_pending_scatter.active     = false;
-    g_pending_scatter.dst_tensor = nullptr;
+    g_pending_scatter.out_pinned  = nullptr;
+    g_pending_scatter.act_pinned  = nullptr;
+    g_pending_scatter.stream      = nullptr;
+    g_pending_scatter.sycl_ctx    = sycl::context();  // release ref
+    g_pending_scatter.active      = false;
+    g_pending_scatter.owns_buffers = true;
+    g_pending_scatter.dst_tensor  = nullptr;
 }
 
 // Selective flush: only flush if the pending scatter's destination tensor
@@ -27617,6 +27622,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         const int64_t  N_f     = ne01;
                         const size_t   n_cpu_f = g_moe_fusion.cpu_indices.size();
                         const size_t   fused_floats = n_cpu_f * static_cast<size_t>(N_f);
+                        // Flush any deferred DOWN scatter before overwriting fused_output
+                        flush_pending_cpu_scatter();
                         g_moe_fusion.ensure_fused_buf(fused_floats, *stream);
 
                         constexpr size_t                   STACK_F = 16;
@@ -28424,6 +28431,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     const int64_t   N_f          = ne01;
                     const size_t    n_cpu_f      = g_moe_fusion.cpu_indices.size();
                     const size_t    fused_floats = n_cpu_f * static_cast<size_t>(N_f);
+                    // Flush any deferred DOWN scatter before overwriting fused_output
+                    flush_pending_cpu_scatter();
                     g_moe_fusion.ensure_fused_buf(fused_floats, *stream);
 
                     constexpr size_t                   STACK_F = 16;
@@ -28728,41 +28737,67 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         }
                     }
 
-                    // CPU down mul_mat — runs in parallel with GPU work above
+                    // CPU down mul_mat — defer via g_pending_scatter for overlap
+                    // with subsequent GPU ops (same pattern as hybrid path).
                     if (n_cpu_d > 0) {
-                        ggml_sycl_cpu_expert_mul_mat_batched(dt, static_cast<int>(n_cpu_d));
+                        // Store tasks in g_pending_scatter to keep the array alive
+                        // until flush (the async compute captures a raw pointer).
+                        g_pending_scatter.tasks.clear();
+                        g_pending_scatter.tasks.reserve(n_cpu_d);
+                        for (size_t fi = 0; fi < n_cpu_d; fi++) {
+                            g_pending_scatter.tasks.push_back(dt[fi]);
+                        }
+
+                        // Submit to CPU thread pool
+                        auto * tasks_ptr = g_pending_scatter.tasks.data();
+                        int    n_tasks   = static_cast<int>(n_cpu_d);
+                        auto & cpu_pool  = g_cpu_expert_pools[ctx.device];
+
+                        std::future<void> fut;
+                        if (cpu_pool.is_active()) {
+                            fut = cpu_pool.submit_batch(tasks_ptr, n_tasks);
+                        } else {
+                            fut = std::async(std::launch::async, [tasks_ptr, n_tasks]() {
+                                ggml_sycl_cpu_expert_mul_mat_batched(tasks_ptr, n_tasks);
+                            });
+                        }
+
+                        // Populate deferred scatter entries
+                        g_pending_scatter.entries.clear();
+                        g_pending_scatter.entries.reserve(n_cpu_d);
+                        for (size_t fi = 0; fi < n_cpu_d; fi++) {
+                            const size_t  ci   = g_moe_fusion.cpu_indices[fi];
+                            const int64_t iid1 = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_d));
+                            const int64_t id   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_d));
+                            char *        slot = dst_d + id * nb1 + iid1 * nb2;
+                            g_pending_scatter.entries.push_back(
+                                { slot, static_cast<int>(N_d) });
+                        }
+
+                        // Set up deferred scatter metadata.  owns_buffers=false because
+                        // tl_down_out is a thread_local static that manages its own memory.
+                        g_pending_scatter.future      = std::move(fut);
+                        g_pending_scatter.out_pinned  = tl_down_out.ptr;
+                        g_pending_scatter.act_pinned  = nullptr;
+                        g_pending_scatter.stream      = stream;
+                        g_pending_scatter.sycl_ctx    = stream->get_context();
+                        g_pending_scatter.device_id   = ctx.device;
+                        g_pending_scatter.from_pool   = false;
+                        g_pending_scatter.owns_buffers = false;
+                        g_pending_scatter.active      = true;
+                        g_pending_scatter.dst_tensor  = dst;
+                    } else {
+                        // No CPU experts — just wait for GPU events
+                        sycl::event::wait(down_events);
                     }
 
                     if (g_moe_profile_enabled) {
                         g_moe_profile.moe_compute_done(static_cast<int>(n_cpu_d), 0);
                     }
 
-                    // Scatter down results H2D — use original ci indices for correct dst slots
-                    auto down_scatter_t0 = std::chrono::high_resolution_clock::now();
-                    double down_scatter_bytes = 0;
-                    for (size_t fi = 0; fi < n_cpu_d; fi++) {
-                        const size_t  ci   = g_moe_fusion.cpu_indices[fi];
-                        const int64_t iid1 = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_d));
-                        const int64_t id   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_d));
-                        char *        slot = dst_d + id * nb1 + iid1 * nb2;
-                        down_events.push_back(stream->memcpy(slot, tl_down_out.ptr + fi * static_cast<size_t>(N_d),
-                                       static_cast<size_t>(N_d) * sizeof(float)));
-                        down_scatter_bytes += static_cast<double>(N_d) * sizeof(float);
-                    }
-                    auto down_scatter_t1 = std::chrono::high_resolution_clock::now();
-
-                    sycl::event::wait(down_events);
-                    auto down_scatter_t2 = std::chrono::high_resolution_clock::now();
-                    if (g_moe_profile_enabled) {
-                        double submit_us = std::chrono::duration<double, std::micro>(down_scatter_t1 - down_scatter_t0).count();
-                        double wait_us   = std::chrono::duration<double, std::micro>(down_scatter_t2 - down_scatter_t1).count();
-                        g_moe_profile.moe_scatter_detail(0, submit_us, wait_us,
-                            static_cast<int>(n_cpu_d), down_scatter_bytes);
-                    }
-
                     static std::atomic<int> flog3{ 0 };
                     if (flog3.fetch_add(1, std::memory_order_relaxed) < 3) {
-                        GGML_LOG_INFO("[CPU-TG-FUSE] Down with fused activation for layer %d, %zu CPU + %zu secondary + %zu GPU0 experts\n",
+                        GGML_LOG_INFO("[CPU-TG-FUSE] Down with fused activation for layer %d, %zu CPU + %zu secondary + %zu GPU0 experts (deferred)\n",
                                       cur_layer_fast, n_cpu_d, g_moe_fusion.sec_indices.size(),
                                       g_moe_fusion.gpu0_cached_indices.size());
                     }
