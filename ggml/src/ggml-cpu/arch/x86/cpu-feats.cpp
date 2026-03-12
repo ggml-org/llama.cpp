@@ -6,6 +6,13 @@
 #include <intrin.h>
 #endif
 
+// On Darwin/macOS, AVX-512 context save is lazy: XCR0 bits 5-7 are not set
+// until the process first executes an AVX-512 instruction, even on capable
+// hardware.  We query the OS via sysctl instead of reading XCR0 directly.
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
+#endif
+
 #include <cstring>
 #include <vector>
 #include <bitset>
@@ -127,14 +134,28 @@ struct cpuid_x86 {
     }
 
     // Returns true when the OS saves ZMM registers (required for all AVX-512 variants).
-    // Checks os_saves_ymm() then XCR0[7:5] == 0b111 (opmask + ZMM hi256 + ZMM hi16).
+    //
+    // On Darwin/macOS, AVX-512 context save is lazy: XCR0 bits 5-7 remain clear
+    // until the process first executes an AVX-512 instruction, even on fully
+    // capable hardware.  Reading XCR0 therefore gives a false negative before
+    // the first AVX-512 use.  We query hw.optional.avx512f via sysctl instead,
+    // which reflects true hardware capability regardless of lazy-enable state.
+    // See: https://github.com/google/cpu_features/blob/main/src/impl_x86_macos.c
     bool os_saves_zmm(void) {
         if (!os_saves_ymm()) { return false; }
-        return (xgetbv(0u) & 0xE0u) == 0xE0u; // XCR0 bits 5, 6, 7
+#if defined(__APPLE__)
+        int val = 0;
+        size_t len = sizeof(val);
+        return sysctlbyname("hw.optional.avx512f", &val, &len, nullptr, 0) == 0 && val != 0;
+#else
+        return (xgetbv(0u) & 0xE0u) == 0xE0u; // XCR0 bits 5 (opmask), 6 (ZMM hi256), 7 (ZMM hi16)
+#endif
     }
 
     // Returns true when the OS saves AMX tile state (required for AMX-* instructions).
     // Checks os_saves_zmm() then XCR0[18:17] == 0b11 (XTILECFG + XTILEDATA).
+    // Note: Intel AMX is not available on macOS hardware; os_saves_zmm() will
+    // return false on macOS, making this check safe on all platforms.
     bool os_saves_amx(void) {
         if (!os_saves_zmm()) { return false; }
         return (xgetbv(0u) & 0x60000u) == 0x60000u; // XCR0 bits 17 and 18
