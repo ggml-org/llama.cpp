@@ -83,7 +83,7 @@ int main(int argc, char ** argv) {
 
     for (lr.epoch = 0; lr.epoch < lr.epochs; ++lr.epoch) {
         llama_opt_epoch(ctx, dataset, result_train, result_eval, idata_split,
-                        ggml_opt_epoch_callback_progress_bar, ggml_opt_epoch_callback_progress_bar);
+                        ggml_opt_epoch_callback_progress_bar, ggml_opt_epoch_callback_progress_bar, /*shuffle=*/false);
         fprintf(stderr, "\n");
 
         ggml_opt_result_reset(result_train);
