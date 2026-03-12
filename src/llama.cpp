@@ -45,6 +45,18 @@ const char * llama_flash_attn_type_name(enum llama_flash_attn_type flash_attn_ty
     GGML_ABORT("fatal error");
 }
 
+const char * llama_fused_gdn_type_name(enum llama_fused_gdn_type fused_gdn_type) {
+    switch (fused_gdn_type) {
+        case LLAMA_FUSED_GDN_TYPE_AUTO:
+            return "auto";
+        case LLAMA_FUSED_GDN_TYPE_DISABLED:
+            return "disabled";
+        case LLAMA_FUSED_GDN_TYPE_ENABLED:
+            return "enabled";
+    }
+    GGML_ABORT("fatal error");
+}
+
 struct llama_device_memory_data {
     int64_t total;
     int64_t free;
