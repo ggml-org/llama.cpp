@@ -64,7 +64,30 @@ namespace ggml_sycl_tbb = tbb;
 
 #ifdef __x86_64__
 #    include <immintrin.h>
+#    include <cpuid.h>
 #endif
+
+// ---------------------------------------------------------------------------
+// Runtime AVX-VNNI INT8 detection via CPUID.
+// CPUID leaf 7 sub-leaf 1, EAX bit 4 = AVX-VNNI, EDX bit 4 = AVX-VNNI-INT8.
+// Cached after first call for zero-overhead dispatch.
+// ---------------------------------------------------------------------------
+static bool has_avxvnniint8() {
+#if defined(__x86_64__) && defined(__AVXVNNIINT8__)
+    static const bool supported = []() {
+        unsigned int eax = 0, ebx = 0, ecx = 0, edx = 0;
+        // Check max sub-leaf for leaf 7
+        __cpuid_count(7, 0, eax, ebx, ecx, edx);
+        if (eax < 1) return false;
+        // Sub-leaf 1: EDX bit 4 = AVX-VNNI-INT8
+        __cpuid_count(7, 1, eax, ebx, ecx, edx);
+        return (edx & (1u << 4)) != 0;
+    }();
+    return supported;
+#else
+    return false;
+#endif
+}
 
 // ---------------------------------------------------------------------------
 // Host pointer registry: stores original mmap pointers for weight tensors.
@@ -382,6 +405,7 @@ void ggml_sycl_cpu_vec_dot_rows(ggml_type type, int ne00,
 #if defined(__AVX2__)
                     if (type == GGML_TYPE_Q4_0) {
 #if defined(__AVXVNNIINT8__)
+                        if (has_avxvnniint8()) {
                         // 16-row VNNI kernel: maximum activation amortization
                         for (; i + 15 < r.end(); i += 16) {
                             const void * row_ptrs[16];
@@ -404,6 +428,7 @@ void ggml_sycl_cpu_vec_dot_rows(ggml_type type, int ne00,
                                 (const char *) src0_host + (size_t)(i + 7) * row_stride,
                                 src1_q_data);
                         }
+                        } // has_avxvnniint8
 #endif
                         // 4-row kernel (AVX2, with or without VNNI)
                         for (; i + 3 < r.end(); i += 4) {
@@ -428,6 +453,7 @@ void ggml_sycl_cpu_vec_dot_rows(ggml_type type, int ne00,
                         }
                     } else if (type == GGML_TYPE_MXFP4) {
 #if defined(__AVXVNNIINT8__)
+                        if (has_avxvnniint8()) {
                         for (; i + 15 < r.end(); i += 16) {
                             const void * row_ptrs[16];
                             for (int k = 0; k < 16; k++) {
@@ -448,6 +474,7 @@ void ggml_sycl_cpu_vec_dot_rows(ggml_type type, int ne00,
                                 (const char *) src0_host + (size_t)(i + 7) * row_stride,
                                 src1_q_data);
                         }
+                        } // has_avxvnniint8
 #endif
                         // 4-row MXFP4 kernel (AVX2 with or without VNNI)
                         for (; i + 3 < r.end(); i += 4) {
@@ -921,6 +948,7 @@ void ggml_sycl_cpu_expert_mul_mat_batched(
                         float *      out   = t.output_host + local_r;
 
 #if defined(__AVXVNNIINT8__)
+                        if (has_avxvnniint8()) {
                         // 16-row VNNI kernel
                         for (; i + 15 < chunk; i += 16) {
                             const void * row_ptrs[16];
@@ -944,6 +972,7 @@ void ggml_sycl_cpu_expert_mul_mat_batched(
                                 wbase + (size_t)(i + 7) * m.row_stride,
                                 (const uint8_t *) act_q);
                         }
+                        } // has_avxvnniint8
 #endif
                         // 4-row AVX2 kernel
                         for (; i + 3 < chunk; i += 4) {
@@ -977,6 +1006,7 @@ void ggml_sycl_cpu_expert_mul_mat_batched(
                         float *      out   = t.output_host + local_r;
 
 #if defined(__AVXVNNIINT8__)
+                        if (has_avxvnniint8()) {
                         // VNNI fast path: 16-row → 8-row → 4-row tile fallback.
                         // Self-contained kernels (no K-tiling needed: activation
                         // for K=2880 is only 3060 bytes, fits L1 easily).
@@ -1000,6 +1030,7 @@ void ggml_sycl_cpu_expert_mul_mat_batched(
                                 wbase + (size_t)(i + 7) * m.row_stride,
                                 act_q);
                         }
+                        } // has_avxvnniint8
 #endif
                         // 4-row K-tiled fallback (AVX2 or VNNI remainder).
                         // For remaining rows < 8 (VNNI) or all rows (non-VNNI).
@@ -5268,6 +5299,7 @@ bool ggml_sycl_cpu_pp_gemm(ggml_type weight_type,
 #if defined(__AVX2__)
                             if (weight_type == GGML_TYPE_Q4_0) {
 #if defined(__AVXVNNIINT8__)
+                                if (has_avxvnniint8()) {
                                 for (; n + 15 < r.end(); n += 16) {
                                     const void * row_ptrs[16];
                                     for (int k = 0; k < 16; k++) {
@@ -5288,6 +5320,7 @@ bool ggml_sycl_cpu_pp_gemm(ggml_type weight_type,
                                         weight_bytes + static_cast<int64_t>(n + 7) * nb01,
                                         act_q);
                                 }
+                                } // has_avxvnniint8
 #endif
                                 for (; n + 3 < r.end(); n += 4) {
                                     simd_mul_mat_q4_0_q8_0_4row(
