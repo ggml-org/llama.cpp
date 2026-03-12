@@ -646,13 +646,12 @@ static void signal_handler(int) { bpw_stop.store(true, std::memory_order_relaxed
 // Returns tensor type overrides that meet a global file size or bpw target
 static std::unordered_map<std::string, ggml_type> target_bpw_type(
     llama_model_loader & ml,
-    const llama_model & model,
+    quantize_state_impl & qs,
     const std::vector<const llama_model_loader::llama_tensor_weight *> & tensors,
     const std::map<int, std::string> & mapped,
     const std::unordered_map<std::string, std::vector<float>> * values_data,
     const std::unordered_map<std::string, std::vector<float>> * activations_data,
     const std::unordered_map<std::string, std::vector<float>> * statistics_data,
-    const llama_model_quantize_params * params,
     int nthread
 ) {
     bpw_stop.store(false, std::memory_order_relaxed);
@@ -743,38 +742,10 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         return blck <= 1 || gt->ne[0] % blck == 0;
     };
 
-    auto fallback_type = [](const enum ggml_type new_type) {
-        switch (new_type) {
-            case GGML_TYPE_TQ1_0:
-            case GGML_TYPE_TQ2_0:
-                return GGML_TYPE_Q4_0; // symmetric-ish fallback
-            case GGML_TYPE_IQ2_XXS:
-            case GGML_TYPE_IQ2_XS:
-            case GGML_TYPE_IQ2_S:
-            case GGML_TYPE_IQ3_XXS:
-            case GGML_TYPE_IQ3_S:
-            case GGML_TYPE_IQ1_S:
-            case GGML_TYPE_IQ1_M:
-            case GGML_TYPE_Q2_K:
-            case GGML_TYPE_Q3_K:
-            case GGML_TYPE_IQ4_XS:
-                return GGML_TYPE_IQ4_NL;
-            case GGML_TYPE_Q4_K:
-                return GGML_TYPE_Q5_0;
-            case GGML_TYPE_Q5_K:
-                return GGML_TYPE_Q5_1;
-            case GGML_TYPE_Q6_K:
-                return GGML_TYPE_Q8_0;
-            default:
-                return new_type;
-        }
-    };
-
     // Get suitable fallback for type
     auto make_compatible = [&](const ggml_tensor * gt, const ggml_type gq) -> ggml_type {
         if (is_compatible(gt, gq)) { return gq; }
-        // const ggml_type fb = tensor_type_fallback(gq);
-        const ggml_type fb = fallback_type(gq);
+        const ggml_type fb = tensor_type_fallback(qs, gt, gq);
         return is_compatible(gt, fb) ? fb : GGML_TYPE_F16;
     };
 
@@ -799,7 +770,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     // Check if tensor can be quantized
     auto can_quantize = [&](const ggml_tensor * gt) -> bool {
         if (ggml_n_dims(gt) < 2 || ggml_n_dims(gt) > 3) { return false; } // skip 1D & 4D+ tensors
-        return tensor_allows_quantization(params, model.arch, gt);
+        return tensor_allows_quantization(qs.params, qs.model.arch, gt);
     };
 
     // DJB2 hashing algorithm
@@ -1009,14 +980,14 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
         const bool has_vals = values_sample != nullptr;
         const bool has_acts = activations_sample != nullptr;
-        const bool do_wce = valid_wce && has_acts && has_vals;
+        const bool use_wce_for_tensor = has_acts && has_vals && is_angle_sensitive(t->name);
 
         // Sampled stats for MSE
         std::vector<double> local_row_sq_norm;
         const std::vector<double> * ptr_row_sq_norm = nullptr;
 
         // Setup reference stats pointers for MSE
-        if (!do_wce) {
+        if (!use_wce_for_tensor) {
             if (ref_mse) {
                 ptr_row_sq_norm = & ref_mse->row_sq_norm;
             } else {
@@ -1089,8 +1060,8 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             return std::accumulate(v.begin() + k, v.end() - k, 0.0) / std::max(1.0, (double)(n - 2 * k));
         };
 
-        // Weighted Cosine Error (WCE) - Experimental
-        if (do_wce) {
+        // Weighted Cosine Error (WCE)
+        if (use_wce_for_tensor) {
             double total_cos_error = 0.0;
             size_t off = 0;
             size_t sample_idx = 0;
@@ -1113,7 +1084,6 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                     double nx = 0.0;
                     const bool calc_nx = !cached_norm_x;
 
-                    // SIMD-friendly loops
                     if (calc_nx) {
                         for (int64_t j = 0; j < n_per_row; ++j) {
                             const double w = std::max(0.0f, v[j]);
@@ -1220,9 +1190,8 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         return qe;
     };
 
-
     std::unordered_map<std::string, type_choice> bpw_data;
-    if (params->state_file && !checkpoint_file.empty()) { bpw_data = load_state(); } // ToDo: rethink this condition
+    if (qs.params->state_file && !checkpoint_file.empty()) { bpw_data = load_state(); } // ToDo: rethink this condition
 
     // Parallelize tensor processing (courtesy of https://github.com/ddh0)
     auto process_tensor = [&](
@@ -1270,7 +1239,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
         // Compute rows based on tensor shape and slice count
         auto sample_count = [&](const int64_t n, const int64_t rows, const int64_t n2, const bool has_acts) {
-            const double k_scale = valid_wce ? 2.0 : 1.0;
+            constexpr double k_scale = 1.0;
             const double tensor_budget = (has_acts ? 1.0 : 0.5) * k_scale * 1024.0 * 1024.0;
             const double scale = std::clamp(std::sqrt(std::max(1.0, (double)rows) / 4096.0), 0.5, 2.0); // more rows for large tensors
             const double slice_budget = tensor_budget * scale / std::max<int64_t>(1, n2);
