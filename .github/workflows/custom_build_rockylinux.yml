@@ -1,0 +1,130 @@
+name: build-linux-cuda
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux-cuda:
+    runs-on: ubuntu-latest
+
+    container:
+      image: nvidia/cuda:12.8.0-devel-rockylinux8
+
+    env:
+      BUILD_TYPE: Release
+      ARCHIVE_BASENAME: llama-bin-linux-cuda-12.8-rockylinux8
+
+    steps:
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          yum -y update
+          yum -y install \
+            git \
+            cmake \
+            gcc \
+            gcc-c++ \
+            make \
+            ninja-build \
+            tar \
+            gzip \
+            zip \
+            findutils \
+            file \
+            which
+          yum clean all
+
+      - name: Checkout source at release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Show build environment
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cat /etc/os-release || true
+          uname -a
+          gcc --version
+          g++ --version
+          cmake --version
+          nvcc --version
+
+      - name: Configure
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake -S . -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+            -DGGML_CUDA=ON \
+            -DCMAKE_CUDA_COMPILER=$(command -v nvcc)
+
+      - name: Build
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build build --config ${BUILD_TYPE} -j"$(nproc)"
+
+      - name: Prepare release payload
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          TAG="${{ github.event.release.tag_name }}"
+          OUTDIR="${ARCHIVE_BASENAME}-${TAG}"
+          mkdir -p "${OUTDIR}/bin" "${OUTDIR}/lib" "${OUTDIR}/meta"
+
+          if [[ -d build/bin ]]; then
+            find build/bin -maxdepth 1 -type f \( -name 'llama-*' -o -name 'ggml-*' \) -exec cp -av {} "${OUTDIR}/bin/" \;
+          fi
+
+          find build -maxdepth 3 -type f \( -name 'libllama*' -o -name 'libggml*' \) -exec cp -av {} "${OUTDIR}/lib/" \; || true
+
+          git rev-parse HEAD > "${OUTDIR}/meta/git-commit.txt"
+          git describe --tags --always > "${OUTDIR}/meta/git-describe.txt" || true
+          cat /etc/os-release > "${OUTDIR}/meta/os-release.txt" || true
+          gcc --version > "${OUTDIR}/meta/gcc-version.txt"
+          g++ --version > "${OUTDIR}/meta/gxx-version.txt"
+          cmake --version > "${OUTDIR}/meta/cmake-version.txt"
+          nvcc --version > "${OUTDIR}/meta/nvcc-version.txt"
+
+          if compgen -G "${OUTDIR}/bin/*" > /dev/null; then
+            file "${OUTDIR}"/bin/* > "${OUTDIR}/meta/file-bin.txt" || true
+            ldd "${OUTDIR}"/bin/* > "${OUTDIR}/meta/ldd-bin.txt" || true
+          fi
+
+          if compgen -G "${OUTDIR}/lib/*" > /dev/null; then
+            file "${OUTDIR}"/lib/* > "${OUTDIR}/meta/file-lib.txt" || true
+            ldd "${OUTDIR}"/lib/* > "${OUTDIR}/meta/ldd-lib.txt" || true
+          fi
+
+          tar -czf "${OUTDIR}.tar.gz" "${OUTDIR}"
+          sha256sum "${OUTDIR}.tar.gz" > "${OUTDIR}.tar.gz.sha256"
+
+      - name: Upload tarball to release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./llama-bin-linux-cuda-12.8-rockylinux8-${{ github.event.release.tag_name }}.tar.gz
+          asset_name: llama-bin-linux-cuda-12.8-rockylinux8-${{ github.event.release.tag_name }}.tar.gz
+          asset_content_type: application/gzip
+
+      - name: Upload checksum to release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./llama-bin-linux-cuda-12.8-rockylinux8-${{ github.event.release.tag_name }}.tar.gz.sha256
+          asset_name: llama-bin-linux-cuda-12.8-rockylinux8-${{ github.event.release.tag_name }}.tar.gz.sha256
+          asset_content_type: text/plain
