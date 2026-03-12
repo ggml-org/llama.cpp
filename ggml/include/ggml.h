@@ -503,6 +503,7 @@ extern "C" {
         GGML_OP_MUL_MAT,
         GGML_OP_MUL_MAT_ID,
         GGML_OP_OUT_PROD,
+        GGML_OP_OUT_PROD_ID, // scattered outer-product for MUL_MAT_ID backward (MoE LoRA)
 
         GGML_OP_SCALE,
         GGML_OP_SET,
@@ -1425,6 +1426,21 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
+
+    // Scattered outer-product for the MUL_MAT_ID backward pass (MoE LoRA gradient).
+    //
+    //   a:   [cols, n_expert_used, n_tokens]  F32  — activations
+    //   b:   [rows, n_expert_used, n_tokens]  F32  — upstream gradient
+    //   ids: [n_expert_used, n_tokens]        I32  — expert dispatch indices
+    //   result: [cols, rows, n_expert, 1]     F32
+    //
+    //   result[:, :, e] += sum_{(i,t): ids[i,t]==e} a[:, i, t] ⊗ b[:, i, t]
+    GGML_API struct ggml_tensor * ggml_out_prod_id(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            struct ggml_tensor  * ids,
+            int64_t               n_expert);
 
     //
     // operations on tensors without backpropagation
