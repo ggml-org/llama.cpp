@@ -86,11 +86,6 @@ struct quantize_state_impl {
 ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_model_quantize_params * params, const ggml_tensor * tensor, ggml_type default_type, const tensor_metadata & tm);
 ggml_type llama_ftype_get_default_type(llama_ftype ftype);
 
-// Ftype name <-> enum conversions.
-// Returns (llama_ftype)-1 on failure.
-llama_ftype  llama_ftype_from_name(const char * name);
-const char * llama_ftype_to_name(llama_ftype ftype);
-
 // Initialize quantize_state_impl counters and populate tensor_metadata categories.
 // metadata: vector with name fields already set, will have category field populated.
 void init_quantize_state_counters(quantize_state_impl & qs, std::vector<tensor_metadata> & metadata);

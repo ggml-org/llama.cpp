@@ -755,64 +755,6 @@ ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
     }
 }
 
-struct ftype_name_entry {
-    const char * name;
-    llama_ftype  ftype;
-};
-
-static const ftype_name_entry ftype_name_table[] = {
-    { "F32",        LLAMA_FTYPE_ALL_F32 },
-    { "F16",        LLAMA_FTYPE_MOSTLY_F16 },
-    { "BF16",       LLAMA_FTYPE_MOSTLY_BF16 },
-    { "Q4_0",       LLAMA_FTYPE_MOSTLY_Q4_0 },
-    { "Q4_1",       LLAMA_FTYPE_MOSTLY_Q4_1 },
-    { "Q5_0",       LLAMA_FTYPE_MOSTLY_Q5_0 },
-    { "Q5_1",       LLAMA_FTYPE_MOSTLY_Q5_1 },
-    { "Q8_0",       LLAMA_FTYPE_MOSTLY_Q8_0 },
-    { "Q2_K",       LLAMA_FTYPE_MOSTLY_Q2_K },
-    { "Q2_K_S",     LLAMA_FTYPE_MOSTLY_Q2_K_S },
-    { "Q3_K_S",     LLAMA_FTYPE_MOSTLY_Q3_K_S },
-    { "Q3_K_M",     LLAMA_FTYPE_MOSTLY_Q3_K_M },
-    { "Q3_K_L",     LLAMA_FTYPE_MOSTLY_Q3_K_L },
-    { "Q4_K_S",     LLAMA_FTYPE_MOSTLY_Q4_K_S },
-    { "Q4_K_M",     LLAMA_FTYPE_MOSTLY_Q4_K_M },
-    { "Q5_K_S",     LLAMA_FTYPE_MOSTLY_Q5_K_S },
-    { "Q5_K_M",     LLAMA_FTYPE_MOSTLY_Q5_K_M },
-    { "Q6_K",       LLAMA_FTYPE_MOSTLY_Q6_K },
-    { "IQ1_S",      LLAMA_FTYPE_MOSTLY_IQ1_S },
-    { "IQ1_M",      LLAMA_FTYPE_MOSTLY_IQ1_M },
-    { "IQ2_XXS",    LLAMA_FTYPE_MOSTLY_IQ2_XXS },
-    { "IQ2_XS",     LLAMA_FTYPE_MOSTLY_IQ2_XS },
-    { "IQ2_S",      LLAMA_FTYPE_MOSTLY_IQ2_S },
-    { "IQ2_M",      LLAMA_FTYPE_MOSTLY_IQ2_M },
-    { "IQ3_XXS",    LLAMA_FTYPE_MOSTLY_IQ3_XXS },
-    { "IQ3_XS",     LLAMA_FTYPE_MOSTLY_IQ3_XS },
-    { "IQ3_S",      LLAMA_FTYPE_MOSTLY_IQ3_S },
-    { "IQ3_M",      LLAMA_FTYPE_MOSTLY_IQ3_M },
-    { "IQ4_NL",     LLAMA_FTYPE_MOSTLY_IQ4_NL },
-    { "IQ4_XS",     LLAMA_FTYPE_MOSTLY_IQ4_XS },
-    { "TQ1_0",      LLAMA_FTYPE_MOSTLY_TQ1_0 },
-    { "TQ2_0",      LLAMA_FTYPE_MOSTLY_TQ2_0 },
-    { "MXFP4_MOE",  LLAMA_FTYPE_MOSTLY_MXFP4_MOE },
-};
-
-llama_ftype llama_ftype_from_name(const char * name) {
-    for (const auto & e : ftype_name_table) {
-        if (strcmp(name, e.name) == 0) {
-            return e.ftype;
-        }
-    }
-    return (llama_ftype)-1;
-}
-
-const char * llama_ftype_to_name(llama_ftype ftype) {
-    for (const auto & e : ftype_name_table) {
-        if (e.ftype == ftype) {
-            return e.name;
-        }
-    }
-    return nullptr;
-}
 
 void init_quantize_state_counters(quantize_state_impl & qs, std::vector<tensor_metadata> & metadata) {
     for (auto & tm : metadata) {
