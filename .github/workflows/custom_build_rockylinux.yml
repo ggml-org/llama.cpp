@@ -1,6 +1,12 @@
 name: build-linux-cuda
 
 on:
+  workflow_dispatch: # allows manual triggering
+    inputs:
+      create_release:
+        description: 'Create new release'
+        required: true
+        type: boolean
   release:
     types: [published]
 
