@@ -134,6 +134,26 @@ static bool category_is_attn_v(tensor_category cat) {
            cat == tensor_category::ATTENTION_KV_B;
 }
 
+struct compiled_tensor_type_patterns {
+    std::vector<std::pair<std::regex, ggml_type>> patterns;
+};
+
+quantize_state_impl::quantize_state_impl(const llama_model & model, const llama_model_quantize_params * params)
+    : model(model), params(params)
+{
+    if (params->tensor_types) {
+        const auto & tensor_types = *static_cast<const std::vector<tensor_type_option> *>(params->tensor_types);
+        if (!tensor_types.empty()) {
+            tensor_type_patterns = std::make_unique<compiled_tensor_type_patterns>();
+            for (const auto & [tname, qtype] : tensor_types) {
+                tensor_type_patterns->patterns.emplace_back(std::regex(tname), qtype);
+            }
+        }
+    }
+}
+
+quantize_state_impl::~quantize_state_impl() = default;
+
 //
 // dequantization
 //
@@ -598,9 +618,9 @@ ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_model_quan
     if (!params->pure && ggml_is_quantized(default_type)) {
         // if the user provided tensor types - use those
         bool manual = false;
-        if (!qs.tensor_type_patterns.empty()) {
+        if (qs.tensor_type_patterns) {
             const std::string tensor_name(tensor->name);
-            for (const auto & [pattern, qtype] : qs.tensor_type_patterns) {
+            for (const auto & [pattern, qtype] : qs.tensor_type_patterns->patterns) {
                 if (std::regex_search(tensor_name, pattern)) {
                     if (qtype != new_type) {
                         LLAMA_LOG_WARN("%s: %-36s - applying manual override: %s -> %s\n",
@@ -939,8 +959,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     for (size_t i = 0; i < tensors.size(); ++i) {
         const auto * it = tensors[i];
         const struct ggml_tensor * tensor = it->tensor;
-
-        metadata[i].category = tensor_get_category(name);
 
         uint16_t i_split = params->keep_split ? it->idx : 0;
         if (!ctx_outs[i_split]) {

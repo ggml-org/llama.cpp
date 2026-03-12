@@ -6,7 +6,7 @@
 
 #include "llama-arch.h"
 
-#include <regex>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -46,6 +46,8 @@ struct tensor_type_option {
     ggml_type   type = GGML_TYPE_COUNT;
 };
 
+struct compiled_tensor_type_patterns;
+
 struct quantize_state_impl {
     const llama_model                 & model;
     const llama_model_quantize_params * params;
@@ -67,20 +69,11 @@ struct quantize_state_impl {
     // used to figure out if a model has tied embeddings (tok_embd shares weights with output)
     bool has_tied_embeddings = true; // assume tied until we see output.weight
 
-    // tensor type override patterns (compiled once, used twice)
-    std::vector<std::pair<std::regex, ggml_type>> tensor_type_patterns;
+    // tensor type override patterns (compiled once, used in llama_tensor_get_type)
+    std::unique_ptr<compiled_tensor_type_patterns> tensor_type_patterns;
 
-    quantize_state_impl(const llama_model & model, const llama_model_quantize_params * params):
-        model(model), params(params)
-    {
-        // compile regex patterns once - they are expensive
-        if (params->tensor_types) {
-            const auto & tensor_types = *static_cast<const std::vector<tensor_type_option> *>(params->tensor_types);
-            for (const auto & [tname, qtype] : tensor_types) {
-                tensor_type_patterns.emplace_back(std::regex(tname), qtype);
-            }
-        }
-    }
+    quantize_state_impl(const llama_model & model, const llama_model_quantize_params * params);
+    ~quantize_state_impl();
 };
 
 ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_model_quantize_params * params, const ggml_tensor * tensor, ggml_type default_type, const tensor_metadata & tm);
