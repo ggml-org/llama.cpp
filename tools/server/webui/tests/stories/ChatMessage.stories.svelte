@@ -86,6 +86,21 @@
 	});
 </script>
 
+<script lang="ts">
+	import { setChatActionsContext } from '$lib/contexts';
+
+	setChatActionsContext({
+		copy: () => {},
+		delete: () => {},
+		navigateToSibling: () => {},
+		editWithBranching: () => {},
+		editWithReplacement: () => {},
+		editUserMessagePreserveResponses: () => {},
+		regenerateWithBranching: () => {},
+		continueAssistantMessage: () => {}
+	});
+</script>
+
 <Story
 	name="User"
 	args={{

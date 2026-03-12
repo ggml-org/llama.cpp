@@ -1,4 +1,6 @@
-import { getJsonHeaders, formatAttachmentText, isAbortError } from '$lib/utils';
+import { getJsonHeaders } from '$lib/utils/api-headers';
+import { isAbortError } from '$lib/utils/abort';
+import { formatAttachmentText } from '$lib/utils/formatters';
 import {
 	AGENTIC_REGEX,
 	ATTACHMENT_LABEL_PDF_FILE,
@@ -110,6 +112,7 @@ export class ChatService {
 			backend_sampling,
 			custom,
 			timings_per_token,
+			tool_choice,
 			// Config options
 			disableReasoningParsing
 		} = options;
@@ -164,6 +167,7 @@ export class ChatService {
 				// Strip reasoning tags/content from the prompt to avoid polluting KV cache.
 				// TODO: investigate backend expectations for reasoning tags and add a toggle if needed.
 				content: ChatService.stripReasoningContent(msg.content),
+				reasoning_content: msg.reasoning_content,
 				tool_calls: msg.tool_calls,
 				tool_call_id: msg.tool_call_id
 			})),
@@ -223,6 +227,10 @@ export class ChatService {
 			} catch (error) {
 				console.warn('Failed to parse custom parameters:', error);
 			}
+		}
+
+		if (tool_choice) {
+			requestBody.tool_choice = tool_choice;
 		}
 
 		try {
@@ -803,6 +811,12 @@ export class ChatService {
 			role: message.role as MessageRole,
 			content: contentParts
 		};
+		if (message.role === MessageRole.ASSISTANT && message.thinking) {
+			result.reasoning_content = message.thinking;
+		}
+		if (message.toolCallId) {
+			result.tool_call_id = message.toolCallId;
+		}
 		if (toolCalls && toolCalls.length > 0) {
 			result.tool_calls = toolCalls;
 		}
