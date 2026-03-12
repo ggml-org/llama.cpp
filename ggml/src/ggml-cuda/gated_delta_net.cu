@@ -45,10 +45,11 @@ __global__ void gated_delta_net_cuda(const float * q,
     static_assert(S_v % warp_size == 0, "S_v must be a multiple of warp_size");
     constexpr int rows_per_lane = (S_v + warp_size - 1) / warp_size;
     float         s_shard[rows_per_lane];
+    // state is stored transposed: M[col][i] = S[i][col], row col is contiguous
 #pragma unroll
     for (int r = 0; r < rows_per_lane; r++) {
         const int i = r * warp_size + lane;
-        s_shard[r]  = curr_state[i * S_v + col];
+        s_shard[r]  = curr_state[col * S_v + i];
     }
 
     for (int t = 0; t < n_tokens; t++) {
@@ -126,11 +127,11 @@ __global__ void gated_delta_net_cuda(const float * q,
         attn_data += S_v * H;
     }
 
-    // Write state back to global memory
+    // Write state back to global memory (transposed layout)
 #pragma unroll
     for (int r = 0; r < rows_per_lane; r++) {
         const int i          = r * warp_size + lane;
-        state[i * S_v + col] = s_shard[r];
+        state[col * S_v + i] = s_shard[r];
     }
 }
 

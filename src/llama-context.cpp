@@ -150,9 +150,9 @@ llama_context::llama_context(
     cparams.flash_attn = params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED;
     cparams.auto_fa    = params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO;
 
-    cparams.fused_gdn_ar = true;
-    cparams.fused_gdn_ch = true;
-    cparams.auto_fgdn    = true;
+    cparams.fused_gdn_ar = params.fused_gdn_type != LLAMA_FUSED_GDN_TYPE_DISABLED;
+    cparams.fused_gdn_ch = params.fused_gdn_type != LLAMA_FUSED_GDN_TYPE_DISABLED;
+    cparams.auto_fgdn    = params.fused_gdn_type == LLAMA_FUSED_GDN_TYPE_AUTO;
 
     // with causal attention, the batch size is limited by the context size
     cparams.n_batch = cparams.causal_attn ? std::min(cparams.n_ctx, params.n_batch) : params.n_batch;
@@ -200,6 +200,7 @@ llama_context::llama_context(
     LLAMA_LOG_INFO("%s: n_ubatch      = %u\n",   __func__, cparams.n_ubatch);
     LLAMA_LOG_INFO("%s: causal_attn   = %d\n",   __func__, cparams.causal_attn);
     LLAMA_LOG_INFO("%s: flash_attn    = %s\n",   __func__, llama_flash_attn_type_name(params.flash_attn_type));
+    LLAMA_LOG_INFO("%s: fused_gdn     = %s\n",   __func__, llama_fused_gdn_type_name(params.fused_gdn_type));
     LLAMA_LOG_INFO("%s: kv_unified    = %s\n",   __func__, cparams.kv_unified ? "true" : "false");
     LLAMA_LOG_INFO("%s: freq_base     = %.1f\n", __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale    = %g\n",   __func__, cparams.rope_freq_scale);
@@ -2869,6 +2870,7 @@ llama_context_params llama_context_default_params() {
         /*.pooling_type                =*/ LLAMA_POOLING_TYPE_UNSPECIFIED,
         /*.attention_type              =*/ LLAMA_ATTENTION_TYPE_UNSPECIFIED,
         /*.flash_attn_type             =*/ LLAMA_FLASH_ATTN_TYPE_AUTO,
+        /*.fused_gdn_type              =*/ LLAMA_FUSED_GDN_TYPE_AUTO,
         /*.rope_freq_base              =*/ 0.0f,
         /*.rope_freq_scale             =*/ 0.0f,
         /*.yarn_ext_factor             =*/ -1.0f,
