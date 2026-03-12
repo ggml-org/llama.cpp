@@ -29,9 +29,11 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          # yum -y update
-          yum -y install epel-release
-          yum -y install \
+          # dnf -y update
+          dnf -y install epel-release
+          dnf config-manager --set-enabled powertools
+          dnf config-manager --set-enabled crb
+          dnf -y install \
             git \
             cmake \
             gcc \
@@ -44,7 +46,7 @@ jobs:
             findutils \
             file \
             which
-          yum clean all
+          dnf clean all
 
       - name: Checkout source at release tag
         uses: actions/checkout@v4
