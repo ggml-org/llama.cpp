@@ -6,7 +6,7 @@ server = ServerPreset.tinyllama2()
 
 TEST_API_KEY = "sk-this-is-the-secret-key"
 
-@pytest.fixture(scope="module", autouse=True)
+@pytest.fixture(autouse=True)
 def create_server():
     global server
     server = ServerPreset.tinyllama2()
@@ -49,6 +49,19 @@ def test_correct_api_key():
     assert "content" in res.body
 
 
+def test_correct_api_key_anthropic_header():
+    global server
+    server.start()
+    res = server.make_request("POST", "/completions", data={
+        "prompt": "I believe the meaning of life is",
+    }, headers={
+        "X-Api-Key": TEST_API_KEY,
+    })
+    assert res.status_code == 200
+    assert "error" not in res.body
+    assert "content" in res.body
+
+
 def test_openai_library_correct_api_key():
     global server
     server.start()
@@ -81,3 +94,34 @@ def test_cors_options(origin: str, cors_header: str, cors_header_value: str):
     assert res.status_code == 200
     assert cors_header in res.headers
     assert res.headers[cors_header] == cors_header_value
+
+
+@pytest.mark.parametrize(
+    "media_path, image_url, success",
+    [
+        (None,             "file://mtmd/test-1.jpeg",    False), # disabled media path, should fail
+        ("../../../tools", "file://mtmd/test-1.jpeg",    True),
+        ("../../../tools", "file:////mtmd//test-1.jpeg", True),  # should be the same file as above
+        ("../../../tools", "file://mtmd/notfound.jpeg",  False), # non-existent file
+        ("../../../tools", "file://../mtmd/test-1.jpeg", False), # no directory traversal
+    ]
+)
+def test_local_media_file(media_path, image_url, success,):
+    server = ServerPreset.tinygemma3()
+    server.media_path = media_path
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "max_tokens": 1,
+        "messages": [
+            {"role": "user", "content": [
+                {"type": "text", "text": "test"},
+                {"type": "image_url", "image_url": {
+                    "url": image_url,
+                }},
+            ]},
+        ],
+    })
+    if success:
+        assert res.status_code == 200
+    else:
+        assert res.status_code == 400

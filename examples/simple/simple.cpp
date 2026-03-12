@@ -1,4 +1,5 @@
 #include "llama.h"
+#include <clocale>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -11,6 +12,8 @@ static void print_usage(int, char ** argv) {
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     // path to the model gguf file
     std::string model_path;
     // prompt to generate text from
@@ -144,6 +147,20 @@ int main(int argc, char ** argv) {
     // prepare a batch for the prompt
 
     llama_batch batch = llama_batch_get_one(prompt_tokens.data(), prompt_tokens.size());
+
+    if (llama_model_has_encoder(model)) {
+        if (llama_encode(ctx, batch)) {
+            fprintf(stderr, "%s : failed to eval\n", __func__);
+            return 1;
+        }
+
+        llama_token decoder_start_token_id = llama_model_decoder_start_token(model);
+        if (decoder_start_token_id == LLAMA_TOKEN_NULL) {
+            decoder_start_token_id = llama_vocab_bos(vocab);
+        }
+
+        batch = llama_batch_get_one(&decoder_start_token_id, 1);
+    }
 
     // main loop
 

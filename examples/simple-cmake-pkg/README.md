@@ -18,6 +18,7 @@ cd llama.cpp
 cmake -S . -B build
 cmake --build build
 cmake --install build --prefix inst
+```
 
 ### Build simple-cmake-pkg
 

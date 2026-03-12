@@ -12,7 +12,7 @@ from enum import Enum
 
 server: ServerProcess
 
-TIMEOUT_SERVER_START = 15*60
+TIMEOUT_START_SLOW = 15 * 60 # this is needed for real model tests
 TIMEOUT_HTTP_REQUEST = 60
 
 @pytest.fixture(autouse=True)
@@ -22,6 +22,8 @@ def create_server():
     server.model_alias = "tinyllama-2-tool-call"
     server.server_port = 8081
     server.n_slots = 1
+    server.n_ctx = 8192
+    server.n_batch = 2048
 
 class CompletionMode(Enum):
     NORMAL = "normal"
@@ -98,18 +100,19 @@ def do_test_completion_with_required_tool_tiny(server: ServerProcess, tool: dict
     assert choice["message"].get("content") in (None, ""), f'Expected no content in {choice["message"]}'
     # assert len(tool_call.get("id", "")) > 0, f'Expected non empty tool call id in {tool_call}'
     expected_function_name = "python" if tool["type"] == "code_interpreter" else tool["function"]["name"]
-    assert expected_function_name == tool_call["function"]["name"]
+    assert expected_function_name == tool_call["function"]["name"], f'Expected tool name to be {tool_call["function"]["name"]} in {choice["message"]}'
     actual_arguments = tool_call["function"]["arguments"]
-    assert isinstance(actual_arguments, str)
+    assert isinstance(actual_arguments, dict) or isinstance(actual_arguments, str), f'Expected arguments to be a dict or str, got: {actual_arguments}'
     if argument_key is not None:
-        actual_arguments = json.loads(actual_arguments)
-        assert argument_key in actual_arguments, f"tool arguments: {json.dumps(actual_arguments)}, expected: {argument_key}"
+        if (isinstance(actual_arguments, str)):
+            actual_arguments = json.loads(actual_arguments)
+        assert argument_key in actual_arguments, f"tool arguments: {actual_arguments}, expected: {argument_key}"
 
 
 @pytest.mark.parametrize("stream", [CompletionMode.NORMAL, CompletionMode.STREAMED])
 @pytest.mark.parametrize("template_name,tool,argument_key", [
-    ("google-gemma-2-2b-it",                          TEST_TOOL,            "success"),
-    ("google-gemma-2-2b-it",                          TEST_TOOL,            "success"),
+    ("Qwen3-Coder",                                   TEST_TOOL,            "success"),
+    ("Qwen3-Coder",                                   TEST_TOOL,            "success"),
     ("meta-llama-Llama-3.3-70B-Instruct",             TEST_TOOL,            "success"),
     ("meta-llama-Llama-3.3-70B-Instruct",             TEST_TOOL,            "success"),
     ("meta-llama-Llama-3.3-70B-Instruct",             PYTHON_TOOL,          "code"),
@@ -122,7 +125,7 @@ def test_completion_with_required_tool_tiny_fast(template_name: str, tool: dict,
     server.jinja = True
     server.n_predict = n_predict
     server.chat_template_file = f'../../../models/templates/{template_name}.jinja'
-    server.start(timeout_seconds=TIMEOUT_SERVER_START)
+    server.start()
     do_test_completion_with_required_tool_tiny(server, tool, argument_key, n_predict, stream=stream == CompletionMode.STREAMED, temperature=0.0, top_k=1, top_p=1.0)
 
 
@@ -166,7 +169,7 @@ def test_completion_with_required_tool_tiny_slow(template_name: str, tool: dict,
     server.jinja = True
     server.n_predict = n_predict
     server.chat_template_file = f'../../../models/templates/{template_name}.jinja'
-    server.start(timeout_seconds=TIMEOUT_SERVER_START)
+    server.start(timeout_seconds=TIMEOUT_START_SLOW)
     do_test_completion_with_required_tool_tiny(server, tool, argument_key, n_predict, stream=stream == CompletionMode.STREAMED)
 
 
@@ -238,7 +241,7 @@ def test_completion_with_required_tool_real_model(tool: dict, argument_key: str 
         assert os.path.exists(server.chat_template_file), f"Template file {server.chat_template_file} does not exist. Run `python scripts/get_chat_template.py {template_hf_repo} {template_variant} > {server.chat_template_file}` to download the template."
     elif isinstance(template_override, str):
         server.chat_template = template_override
-    server.start(timeout_seconds=TIMEOUT_SERVER_START)
+    server.start(timeout_seconds=TIMEOUT_START_SLOW)
     body = server.make_any_request("POST", "/v1/chat/completions", data={
         "max_tokens": n_predict,
         "messages": [
@@ -293,7 +296,7 @@ def test_completion_without_tool_call_fast(template_name: str, n_predict: int, t
     server.n_predict = n_predict
     server.jinja = True
     server.chat_template_file = f'../../../models/templates/{template_name}.jinja'
-    server.start(timeout_seconds=TIMEOUT_SERVER_START)
+    server.start()
     do_test_completion_without_tool_call(server, n_predict, tools, tool_choice, stream=stream == CompletionMode.STREAMED)
 
 
@@ -315,7 +318,7 @@ def test_completion_without_tool_call_slow(template_name: str, n_predict: int, t
     server.n_predict = n_predict
     server.jinja = True
     server.chat_template_file = f'../../../models/templates/{template_name}.jinja'
-    server.start(timeout_seconds=TIMEOUT_SERVER_START)
+    server.start(timeout_seconds=TIMEOUT_START_SLOW)
     do_test_completion_without_tool_call(server, n_predict, tools, tool_choice, stream=stream == CompletionMode.STREAMED)
 
 
@@ -375,7 +378,7 @@ def test_weather(hf_repo: str, template_override: str | Tuple[str, str | None] |
         assert os.path.exists(server.chat_template_file), f"Template file {server.chat_template_file} does not exist. Run `python scripts/get_chat_template.py {template_hf_repo} {template_variant} > {server.chat_template_file}` to download the template."
     elif isinstance(template_override, str):
         server.chat_template = template_override
-    server.start(timeout_seconds=TIMEOUT_SERVER_START)
+    server.start()
     do_test_weather(server, stream=stream == CompletionMode.STREAMED, max_tokens=n_predict)
 
 
@@ -434,7 +437,7 @@ def test_calc_result(result_override: str | None, n_predict: int, hf_repo: str, 
         assert os.path.exists(server.chat_template_file), f"Template file {server.chat_template_file} does not exist. Run `python scripts/get_chat_template.py {template_hf_repo} {template_variant} > {server.chat_template_file}` to download the template."
     elif isinstance(template_override, str):
         server.chat_template = template_override
-    server.start(timeout_seconds=TIMEOUT_SERVER_START)
+    server.start(timeout_seconds=TIMEOUT_START_SLOW)
     do_test_calc_result(server, result_override, n_predict, stream=stream == CompletionMode.STREAMED)
 
 
@@ -522,7 +525,7 @@ def test_thoughts(n_predict: int, reasoning_format: Literal['deepseek', 'none'] 
         assert os.path.exists(server.chat_template_file), f"Template file {server.chat_template_file} does not exist. Run `python scripts/get_chat_template.py {template_hf_repo} {template_variant} > {server.chat_template_file}` to download the template."
     elif isinstance(template_override, str):
         server.chat_template = template_override
-    server.start(timeout_seconds=TIMEOUT_SERVER_START)
+    server.start()
     body = server.make_any_request("POST", "/v1/chat/completions", data={
         "max_tokens": n_predict,
         "messages": [
@@ -595,7 +598,7 @@ def test_hello_world(hf_repo: str, template_override: str | Tuple[str, str | Non
         assert os.path.exists(server.chat_template_file), f"Template file {server.chat_template_file} does not exist. Run `python scripts/get_chat_template.py {template_hf_repo} {template_variant} > {server.chat_template_file}` to download the template."
     elif isinstance(template_override, str):
         server.chat_template = template_override
-    server.start(timeout_seconds=TIMEOUT_SERVER_START)
+    server.start(timeout_seconds=TIMEOUT_START_SLOW)
 
     do_test_hello_world(server, stream=stream == CompletionMode.STREAMED, max_tokens=n_predict)
 

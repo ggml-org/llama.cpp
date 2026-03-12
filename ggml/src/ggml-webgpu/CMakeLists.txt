@@ -20,8 +20,8 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADER_OUTPUT_DIR}
     COMMAND ${CMAKE_COMMAND} -E env PYTHONIOENCODING=utf-8
         ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/wgsl-shaders/embed_wgsl.py
-            --input "${SHADER_DIR}"
-            --output "${SHADER_HEADER}"
+            --input_dir "${SHADER_DIR}"
+            --output_file "${SHADER_HEADER}"
     DEPENDS ${WGSL_SHADER_FILES} ${CMAKE_CURRENT_SOURCE_DIR}/wgsl-shaders/embed_wgsl.py
     VERBATIM
 )
@@ -39,8 +39,23 @@ add_dependencies(ggml-webgpu generate_shaders)
 if(EMSCRIPTEN)
     set(EMDAWNWEBGPU_DIR "" CACHE PATH "Path to emdawnwebgpu_pkg")
 
-    target_compile_options(ggml-webgpu PRIVATE "--use-port=${EMDAWNWEBGPU_DIR}/emdawnwebgpu.port.py")
-    target_link_options(ggml-webgpu PRIVATE "--use-port=${EMDAWNWEBGPU_DIR}/emdawnwebgpu.port.py")
+    if(NOT EMDAWNWEBGPU_DIR)
+        # default built-in port
+        target_compile_options(ggml-webgpu PRIVATE "--use-port=emdawnwebgpu")
+        target_link_options(ggml-webgpu INTERFACE "--use-port=emdawnwebgpu")
+    else()
+        # custom port
+        target_compile_options(ggml-webgpu PRIVATE "--use-port=${EMDAWNWEBGPU_DIR}/emdawnwebgpu.port.py")
+        target_link_options(ggml-webgpu INTERFACE "--use-port=${EMDAWNWEBGPU_DIR}/emdawnwebgpu.port.py")
+    endif()
+
+    if (GGML_WEBGPU_JSPI)
+        target_compile_options(ggml-webgpu PRIVATE "-fwasm-exceptions")
+        target_link_options(ggml-webgpu INTERFACE "-sJSPI" "-fwasm-exceptions")
+    else()
+        target_compile_options(ggml-webgpu PRIVATE "-fexceptions")
+        target_link_options(ggml-webgpu INTERFACE "-sASYNCIFY" "-exceptions")
+    endif()
 else()
     find_package(Dawn REQUIRED)
     set(DawnWebGPU_TARGET dawn::webgpu_dawn)
@@ -48,6 +63,17 @@ endif()
 
 if (GGML_WEBGPU_DEBUG)
     target_compile_definitions(ggml-webgpu PRIVATE GGML_WEBGPU_DEBUG=1)
+    if(EMSCRIPTEN)
+        target_link_options(ggml-webgpu INTERFACE "-sASSERTIONS=2")
+    endif()
+endif()
+
+if (GGML_WEBGPU_CPU_PROFILE)
+    target_compile_definitions(ggml-webgpu PRIVATE GGML_WEBGPU_CPU_PROFILE=1)
+endif()
+
+if (GGML_WEBGPU_GPU_PROFILE)
+    target_compile_definitions(ggml-webgpu PRIVATE GGML_WEBGPU_GPU_PROFILE=1)
 endif()
 
 target_include_directories(ggml-webgpu PRIVATE ${SHADER_OUTPUT_DIR})

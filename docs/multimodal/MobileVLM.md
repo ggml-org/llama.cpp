@@ -194,7 +194,7 @@ llama_print_timings:       total time =   44411.01 ms /   377 tokens
 ## Orin compile and run
 ### compile
 ```sh
-make GGML_CUDA=1 CUDA_DOCKER_ARCH=sm_87 GGML_CUDA_F16=1 -j 32
+make GGML_CUDA=1 CUDA_DOCKER_ARCH=sm_87 -j 32
 ```
 ### run on Orin
 ### case 1
@@ -281,7 +281,7 @@ llama_print_timings:       total time =    5990.25 ms /   202 tokens
 
 Just the same as above.
 
-**ouput**
+**output**
 ```sh
 encode_image_with_clip: image embedding created: 144 tokens
 
@@ -305,7 +305,7 @@ llama_print_timings:       total time =   15513.95 ms /   412 tokens
 ## Run on Intel(R) Core(TM) Ultra7 115H
 ### operation system
 Windows11
-### comiple
+### compile
 ```sh
 make -j32
 ```
