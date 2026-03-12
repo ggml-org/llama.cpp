@@ -27521,7 +27521,11 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                             g_moe_fusion.cpu_indices = cp.cpu_indices;
                             g_moe_fusion.sec_indices.reserve(cp.sec_indices.size());
                             for (const auto & s : cp.sec_indices) {
-                                g_moe_fusion.sec_indices.push_back({s.ci, s.device_id, s.device_ptr});
+                                // Re-resolve device_ptr for GATE weight (cached ptr is from a different tensor)
+                                auto pl = placement_table_pre.get(cur_layer_hash, ids_data_f[s.ci]);
+                                void * ptr = (pl.device_id == s.device_id && pl.device_ptr)
+                                                 ? pl.device_ptr : s.device_ptr;
+                                g_moe_fusion.sec_indices.push_back({s.ci, s.device_id, ptr});
                             }
                             g_moe_fusion.gpu0_cached_indices = cp.gpu0_cached_indices;
                             partition_from_cache = true;
@@ -27882,7 +27886,11 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                             g_moe_fusion.cpu_indices = cp.cpu_indices;
                             g_moe_fusion.sec_indices.reserve(cp.sec_indices.size());
                             for (const auto & s : cp.sec_indices) {
-                                g_moe_fusion.sec_indices.push_back({s.ci, s.device_id, s.device_ptr});
+                                // Re-resolve device_ptr for UP weight (cached ptr is from a different tensor)
+                                auto pl = placement_table_pre.get(cur_layer_hash, ids_data_f[s.ci]);
+                                void * ptr = (pl.device_id == s.device_id && pl.device_ptr)
+                                                 ? pl.device_ptr : s.device_ptr;
+                                g_moe_fusion.sec_indices.push_back({s.ci, s.device_id, ptr});
                             }
                             g_moe_fusion.gpu0_cached_indices = cp.gpu0_cached_indices;
                             partition_from_cache_up = true;
@@ -28168,8 +28176,33 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     const queue_ptr stream       = ctx.stream();
                     const int64_t   K_d          = ne00;
                     const int64_t   N_d          = ne01;
-                    const size_t    n_cpu_d      = g_moe_fusion.cpu_indices.size();
                     const int64_t   n_ids_d      = ids->ne[0];
+
+                    // Task 1E: Read cached partition for sec/gpu0 indices with correct device_ptr.
+                    // cpu_indices comes from g_moe_fusion (tied to fused_output buffer ordering).
+                    {
+                        const uint64_t cur_epoch_dn = g_moe_graph_epoch.load(std::memory_order_relaxed);
+                        auto part_it = g_moe_layer_ids_cache.find(cur_layer_fast);
+                        if (part_it != g_moe_layer_ids_cache.end() &&
+                            part_it->second.graph_epoch == cur_epoch_dn &&
+                            part_it->second.partition.valid) {
+                            auto & cp = part_it->second.partition;
+                            // Refresh sec_indices with re-resolved device_ptr for DOWN weight
+                            g_moe_fusion.sec_indices.clear();
+                            g_moe_fusion.sec_indices.reserve(cp.sec_indices.size());
+                            for (const auto & s : cp.sec_indices) {
+                                auto pl = placement_table_pre.get(cur_layer_hash, g_moe_fusion.ids_data[s.ci]);
+                                void * ptr = (pl.device_id == s.device_id && pl.device_ptr)
+                                                 ? pl.device_ptr : s.device_ptr;
+                                g_moe_fusion.sec_indices.push_back({s.ci, s.device_id, ptr});
+                            }
+                            g_moe_fusion.gpu0_cached_indices = cp.gpu0_cached_indices;
+                            GGML_SYCL_DEBUG("[MoE-1E] DOWN reusing cached partition for layer %d: %zu sec, %zu gpu0\n",
+                                            cur_layer_fast, cp.sec_indices.size(), cp.gpu0_cached_indices.size());
+                        }
+                    }
+
+                    const size_t    n_cpu_d      = g_moe_fusion.cpu_indices.size();
 
                     struct pinned_out_d {
                         float *       ptr = nullptr;
