@@ -95,43 +95,87 @@ static inline uint32_t calc_block_size(struct htp_binary_context * bctx, uint32_
 }
 
 // Macro for scalar op switch
-#define COMPUTE_SCALAR_OP(DST, SRC, VAL, N) \
-    switch (octx->op) { \
-        case HTP_OP_ADD: hvx_add_scalar_f32_aa(DST, SRC, VAL, N); break; \
-        case HTP_OP_SUB: hvx_sub_scalar_f32_aa(DST, SRC, VAL, N); break; \
-        case HTP_OP_MUL: hvx_mul_scalar_f32_aa(DST, SRC, VAL, N); break; \
-        case HTP_OP_DIV: hvx_mul_scalar_f32_aa(DST, SRC, 1.0f / (VAL), N); break; \
-        default: break; \
+#define COMPUTE_SCALAR_OP(DST, SRC, VAL, TYPE, N) \
+    if(TYPE == HTP_TYPE_F32) { \
+        switch (octx->op) { \
+            case HTP_OP_ADD: hvx_add_scalar_f32_aa(DST, SRC, *(float *)VAL, N); break; \
+            case HTP_OP_SUB: hvx_sub_scalar_f32_aa(DST, SRC, *(float *)VAL, N); break; \
+            case HTP_OP_MUL: hvx_mul_scalar_f32_aa(DST, SRC, *(float *)VAL, N); break; \
+            case HTP_OP_DIV: hvx_mul_scalar_f32_aa(DST, SRC, 1.0f / (*(float *)VAL), N); break; \
+            default: break; \
+        } \
+    } \
+    else { \
+        switch (octx->op) { \
+            case HTP_OP_ADD: hvx_add_scalar_f16_aa(DST, SRC, *(_Float16 *)VAL, N); break; \
+            case HTP_OP_SUB: hvx_sub_scalar_f16_aa(DST, SRC, *(_Float16 *)VAL, N); break; \
+            case HTP_OP_MUL: hvx_mul_scalar_f16_aa(DST, SRC, *(_Float16 *)VAL, N); break; \
+            case HTP_OP_DIV: hvx_div_scalar_f16_aa(DST, SRC, *(_Float16 *)VAL, N); break; \
+            default: break; \
+        } \
     }
 
 // Macro for vector op switch (All Aligned)
-#define COMPUTE_VECTOR_OP_AAA(DST, SRC0, SRC1, N) \
-    switch (octx->op) { \
-        case HTP_OP_ADD: hvx_add_f32_aaa(DST, SRC0, SRC1, N); break; \
-        case HTP_OP_SUB: hvx_sub_f32_aaa(DST, SRC0, SRC1, N); break; \
-        case HTP_OP_MUL: hvx_mul_f32_aaa(DST, SRC0, SRC1, N); break; \
-        case HTP_OP_DIV: hvx_div_f32_aaa(DST, SRC0, SRC1, N); break; \
-        default: break; \
+#define COMPUTE_VECTOR_OP_AAA(DST, SRC0, SRC1, TYPE, N) \
+    if(TYPE == HTP_TYPE_F32) { \
+        switch (octx->op) { \
+            case HTP_OP_ADD: hvx_add_f32_aaa(DST, SRC0, SRC1, N); break; \
+            case HTP_OP_SUB: hvx_sub_f32_aaa(DST, SRC0, SRC1, N); break; \
+            case HTP_OP_MUL: hvx_mul_f32_aaa(DST, SRC0, SRC1, N); break; \
+            case HTP_OP_DIV: hvx_div_f32_aaa(DST, SRC0, SRC1, N); break; \
+            default: break; \
+        } \
+    } \
+    else { \
+        switch (octx->op) { \
+            case HTP_OP_ADD: hvx_add_f16_aaa(DST, SRC0, SRC1, N); break; \
+            case HTP_OP_SUB: hvx_sub_f16_aaa(DST, SRC0, SRC1, N); break; \
+            case HTP_OP_MUL: hvx_mul_f16_aaa(DST, SRC0, SRC1, N); break; \
+            case HTP_OP_DIV: hvx_div_f16_aaa(DST, SRC0, SRC1, N); break; \
+            default: break; \
+        } \
     }
 
 // Macro for vector op switch (Dst Aligned, Src0 Aligned, Src1 Unaligned)
-#define COMPUTE_VECTOR_OP_AAU(DST, SRC0, SRC1, N) \
-    switch (octx->op) { \
-        case HTP_OP_ADD: hvx_add_f32_aau(DST, SRC0, SRC1, N); break; \
-        case HTP_OP_SUB: hvx_sub_f32_aau(DST, SRC0, SRC1, N); break; \
-        case HTP_OP_MUL: hvx_mul_f32_aau(DST, SRC0, SRC1, N); break; \
-        case HTP_OP_DIV: hvx_div_f32_aau(DST, SRC0, SRC1, N); break; \
-        default: break; \
+#define COMPUTE_VECTOR_OP_AAU(DST, SRC0, SRC1, TYPE, N) \
+    if(TYPE == HTP_TYPE_F32) { \
+        switch (octx->op) { \
+            case HTP_OP_ADD: hvx_add_f32_aau(DST, SRC0, SRC1, N); break; \
+            case HTP_OP_SUB: hvx_sub_f32_aau(DST, SRC0, SRC1, N); break; \
+            case HTP_OP_MUL: hvx_mul_f32_aau(DST, SRC0, SRC1, N); break; \
+            case HTP_OP_DIV: hvx_div_f32_aau(DST, SRC0, SRC1, N); break; \
+            default: break; \
+        } \
+    } \
+    else { \
+        switch (octx->op) { \
+            case HTP_OP_ADD: hvx_add_f16_aau(DST, SRC0, SRC1, N); break; \
+            case HTP_OP_SUB: hvx_sub_f16_aau(DST, SRC0, SRC1, N); break; \
+            case HTP_OP_MUL: hvx_mul_f16_aau(DST, SRC0, SRC1, N); break; \
+            case HTP_OP_DIV: hvx_div_f16_aau(DST, SRC0, SRC1, N); break; \
+            default: break; \
+        } \
     }
 
 // Macro for vector op switch (All Unaligned - generic loop used in element repeat)
-#define COMPUTE_VECTOR_OP_UUU(DST, SRC0, SRC1, N) \
-    switch (octx->op) { \
-        case HTP_OP_ADD: hvx_add_f32_uuu(DST, SRC0, SRC1, N); break; \
-        case HTP_OP_SUB: hvx_sub_f32_uuu(DST, SRC0, SRC1, N); break; \
-        case HTP_OP_MUL: hvx_mul_f32_uuu(DST, SRC0, SRC1, N); break; \
-        case HTP_OP_DIV: hvx_div_f32_uuu(DST, SRC0, SRC1, N); break; \
-        default: break; \
+#define COMPUTE_VECTOR_OP_UUU(DST, SRC0, SRC1, TYPE, N) \
+    if(TYPE == HTP_TYPE_F32) { \
+        switch (octx->op) { \
+            case HTP_OP_ADD: hvx_add_f32_uuu(DST, SRC0, SRC1, N); break; \
+            case HTP_OP_SUB: hvx_sub_f32_uuu(DST, SRC0, SRC1, N); break; \
+            case HTP_OP_MUL: hvx_mul_f32_uuu(DST, SRC0, SRC1, N); break; \
+            case HTP_OP_DIV: hvx_div_f32_uuu(DST, SRC0, SRC1, N); break; \
+            default: break; \
+        } \
+    } \
+    else { \
+        switch (octx->op) { \
+            case HTP_OP_ADD: hvx_add_f16_uuu(DST, SRC0, SRC1, N); break; \
+            case HTP_OP_SUB: hvx_sub_f16_uuu(DST, SRC0, SRC1, N); break; \
+            case HTP_OP_MUL: hvx_mul_f16_uuu(DST, SRC0, SRC1, N); break; \
+            case HTP_OP_DIV: hvx_div_f16_uuu(DST, SRC0, SRC1, N); break; \
+            default: break; \
+        } \
     }
 
 // 1. Scalar src1 (ne10 == 1)
@@ -140,6 +184,8 @@ static void binary_job_scalar(unsigned int nth, unsigned int ith, void * data) {
     struct htp_ops_context * octx = bctx->octx;
     htp_binary_preamble;
 
+    const uint32_t src0_type = octx->src0.type;
+    const uint32_t row_size_bytes = (src0_type == HTP_TYPE_F32) ? ne00 * sizeof(float) : ne00 * sizeof(_Float16);
     const uint32_t total_rows = ne01 * ne02 * ne03;
     const uint32_t start_row = bctx->nrows_per_thread * ith;
     const uint32_t end_row   = MIN(start_row + bctx->nrows_per_thread, total_rows);
@@ -170,7 +216,7 @@ static void binary_job_scalar(unsigned int nth, unsigned int ith, void * data) {
         uint8_t * d_spad  = dst_spad_base  + spad_idx * dst_spad_half;
 
         dma_queue_push_vtcm_to_ddr(q, dma_make_ptr(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, 0);
-        dma_queue_push(q, dma_make_ptr(s0_spad, src0_curr), bctx->src0_row_size_aligned, nb01, ne00 * sizeof(float), current_block_size);
+        dma_queue_push(q, dma_make_ptr(s0_spad, src0_curr), bctx->src0_row_size_aligned, nb01, row_size_bytes, current_block_size);
         ir_prefetch += current_block_size;
         spad_idx ^= 1;
     }
@@ -199,13 +245,12 @@ static void binary_job_scalar(unsigned int nth, unsigned int ith, void * data) {
         for (uint32_t r = 0; r < current_block_size; r++) {
             uint8_t * r_src0 = s0_spad + r * bctx->src0_row_size_aligned;
             uint8_t * r_dst  = d_spad + r * bctx->dst_row_size_aligned;
-            float val = *(float *)src1_ptr;
+            COMPUTE_SCALAR_OP(r_dst, r_src0, src1_ptr, src0_type, ne00);
             src1_ptr += s1_stride;
-            COMPUTE_SCALAR_OP(r_dst, r_src0, val, ne00);
         }
 
         uint8_t * dst_curr = (uint8_t *)dst->data + i03 * nb3 + i02 * nb2 + i01 * nb1;
-        dma_queue_push(q, dma_make_ptr(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, ne00 * sizeof(float), current_block_size);
+        dma_queue_push(q, dma_make_ptr(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, row_size_bytes, current_block_size);
 
         if (ir_prefetch < end_row) {
              uint32_t next_block_size = calc_block_size(bctx, ir_prefetch, end_row, ne01, ne02);
@@ -216,7 +261,7 @@ static void binary_job_scalar(unsigned int nth, unsigned int ith, void * data) {
              p01 = prem - p02 * ne01;
              uint8_t * s0_next = (uint8_t *)src0->data + p03 * nb03 + p02 * nb02 + p01 * nb01;
 
-             dma_queue_push(q, dma_make_ptr(s0_spad, s0_next), bctx->src0_row_size_aligned, nb01, ne00 * sizeof(float), next_block_size);
+             dma_queue_push(q, dma_make_ptr(s0_spad, s0_next), bctx->src0_row_size_aligned, nb01, row_size_bytes, next_block_size);
              ir_prefetch += next_block_size;
         }
         ir += current_block_size;
@@ -230,6 +275,8 @@ static void binary_job_vector_same_shape(unsigned int nth, unsigned int ith, voi
     struct htp_ops_context * octx = bctx->octx;
     htp_binary_preamble;
 
+    const uint32_t src0_type = octx->src0.type;
+    const uint32_t row_size_bytes = (src0_type == HTP_TYPE_F32) ? ne00 * sizeof(float) : ne00 * sizeof(_Float16);
     const uint32_t total_rows = ne01 * ne02 * ne03;
     const uint32_t start_row = bctx->nrows_per_thread * ith;
     const uint32_t end_row   = MIN(start_row + bctx->nrows_per_thread, total_rows);
@@ -268,8 +315,8 @@ static void binary_job_vector_same_shape(unsigned int nth, unsigned int ith, voi
         uint8_t * d_spad  = dst_spad_base  + spad_idx * dst_spad_half;
 
         dma_queue_push_vtcm_to_ddr(q, dma_make_ptr(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, 0);
-        dma_queue_push(q, dma_make_ptr(s0_spad, src0_curr), bctx->src0_row_size_aligned, nb01, ne00 * sizeof(float), current_block_size);
-        dma_queue_push(q, dma_make_ptr(s1_spad, src1_base), bctx->src1_row_size_aligned, bctx->src1_dma_stride, ne00 * sizeof(float), current_block_size);
+        dma_queue_push(q, dma_make_ptr(s0_spad, src0_curr), bctx->src0_row_size_aligned, nb01, row_size_bytes, current_block_size);
+        dma_queue_push(q, dma_make_ptr(s1_spad, src1_base), bctx->src1_row_size_aligned, bctx->src1_dma_stride, row_size_bytes, current_block_size);
         ir_prefetch += current_block_size;
         spad_idx ^= 1;
     }
@@ -284,7 +331,7 @@ static void binary_job_vector_same_shape(unsigned int nth, unsigned int ith, voi
             uint8_t * r_src0 = s0_spad + r * bctx->src0_row_size_aligned;
             uint8_t * r_src1 = s1_spad + r * bctx->src1_row_size_aligned;
             uint8_t * r_dst  = d_spad  + r * bctx->dst_row_size_aligned;
-            COMPUTE_VECTOR_OP_AAA(r_dst, r_src0, r_src1, ne00);
+            COMPUTE_VECTOR_OP_AAA(r_dst, r_src0, r_src1, src0_type, ne00);
         }
 
         uint32_t i03, i02, i01, rem;
@@ -293,7 +340,7 @@ static void binary_job_vector_same_shape(unsigned int nth, unsigned int ith, voi
         i02 = fastdiv(rem, &bctx->dim1_div);
         i01 = rem - i02 * ne01;
         uint8_t * dst_curr = (uint8_t *)dst->data + i03 * nb3 + i02 * nb2 + i01 * nb1;
-        dma_queue_push(q, dma_make_ptr(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, ne00 * sizeof(float), current_block_size);
+        dma_queue_push(q, dma_make_ptr(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, row_size_bytes, current_block_size);
 
         if (ir_prefetch < end_row) {
              uint32_t next_block_size = calc_block_size(bctx, ir_prefetch, end_row, ne01, ne02);
@@ -310,8 +357,8 @@ static void binary_job_vector_same_shape(unsigned int nth, unsigned int ith, voi
              uint8_t * s0_next = (uint8_t *)src0->data + p03 * nb03 + p02 * nb02 + p01 * nb01;
              uint8_t * s1_next = (uint8_t *)src1->data + p13 * nb13 + p12 * nb12 + p11 * nb11;
 
-             dma_queue_push(q, dma_make_ptr(s0_spad, s0_next), bctx->src0_row_size_aligned, nb01, ne00 * sizeof(float), next_block_size);
-             dma_queue_push(q, dma_make_ptr(s1_spad, s1_next), bctx->src1_row_size_aligned, bctx->src1_dma_stride, ne00 * sizeof(float), next_block_size);
+             dma_queue_push(q, dma_make_ptr(s0_spad, s0_next), bctx->src0_row_size_aligned, nb01, row_size_bytes, next_block_size);
+             dma_queue_push(q, dma_make_ptr(s1_spad, s1_next), bctx->src1_row_size_aligned, bctx->src1_dma_stride, row_size_bytes, next_block_size);
 
              ir_prefetch += next_block_size;
         }
@@ -326,6 +373,8 @@ static void binary_job_vector_row_broadcast(unsigned int nth, unsigned int ith, 
     struct htp_ops_context * octx = bctx->octx;
     htp_binary_preamble;
 
+    const uint32_t src0_type = octx->src0.type;
+    const uint32_t row_size_bytes = (src0_type == HTP_TYPE_F32) ? ne00 * sizeof(float) : ne00 * sizeof(_Float16);
     const uint32_t total_rows = ne01 * ne02 * ne03;
     const uint32_t start_row = bctx->nrows_per_thread * ith;
     const uint32_t end_row   = MIN(start_row + bctx->nrows_per_thread, total_rows);
@@ -359,7 +408,7 @@ static void binary_job_vector_row_broadcast(unsigned int nth, unsigned int ith, 
         uint8_t * d_spad  = dst_spad_base  + spad_idx * dst_spad_half;
 
         dma_queue_push_vtcm_to_ddr(q, dma_make_ptr(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, 0);
-        dma_queue_push(q, dma_make_ptr(s0_spad, src0_curr), bctx->src0_row_size_aligned, nb01, ne00 * sizeof(float), current_block_size);
+        dma_queue_push(q, dma_make_ptr(s0_spad, src0_curr), bctx->src0_row_size_aligned, nb01, row_size_bytes, current_block_size);
         ir_prefetch += current_block_size;
         spad_idx ^= 1;
     }
@@ -373,7 +422,7 @@ static void binary_job_vector_row_broadcast(unsigned int nth, unsigned int ith, 
             uint8_t * r_src0 = s0_spad + r * bctx->src0_row_size_aligned;
             uint8_t * r_src1 = (uint8_t *)s1_ptr; // Constant
             uint8_t * r_dst  = d_spad + r * bctx->dst_row_size_aligned;
-            COMPUTE_VECTOR_OP_AAA(r_dst, r_src0, r_src1, ne00);
+            COMPUTE_VECTOR_OP_AAA(r_dst, r_src0, r_src1, src0_type, ne00);
         }
 
         uint32_t i03, i02, i01, rem;
@@ -382,7 +431,7 @@ static void binary_job_vector_row_broadcast(unsigned int nth, unsigned int ith, 
         i02 = fastdiv(rem, &bctx->dim1_div);
         i01 = rem - i02 * ne01;
         uint8_t * dst_curr = (uint8_t *)dst->data + i03 * nb3 + i02 * nb2 + i01 * nb1;
-        dma_queue_push(q, dma_make_ptr(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, ne00 * sizeof(float), current_block_size);
+        dma_queue_push(q, dma_make_ptr(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, row_size_bytes, current_block_size);
 
         if (ir_prefetch < end_row) {
              uint32_t next_block_size = calc_block_size(bctx, ir_prefetch, end_row, ne01, ne02);
@@ -392,7 +441,7 @@ static void binary_job_vector_row_broadcast(unsigned int nth, unsigned int ith, 
              p02 = fastdiv(prem, &bctx->dim1_div);
              p01 = prem - p02 * ne01;
              uint8_t * s0_next = (uint8_t *)src0->data + p03 * nb03 + p02 * nb02 + p01 * nb01;
-             dma_queue_push(q, dma_make_ptr(s0_spad, s0_next), bctx->src0_row_size_aligned, nb01, ne00 * sizeof(float), next_block_size);
+             dma_queue_push(q, dma_make_ptr(s0_spad, s0_next), bctx->src0_row_size_aligned, nb01, row_size_bytes, next_block_size);
              ir_prefetch += next_block_size;
         }
         ir += current_block_size;
@@ -406,6 +455,8 @@ static void binary_job_vector_complex(unsigned int nth, unsigned int ith, void *
     struct htp_ops_context * octx = bctx->octx;
     htp_binary_preamble;
 
+    const uint32_t src0_type = octx->src0.type;
+    const uint32_t row_size_bytes = (src0_type == HTP_TYPE_F32) ? ne00 * sizeof(float) : ne00 * sizeof(_Float16);
     const uint32_t total_rows = ne01 * ne02 * ne03;
     const uint32_t start_row = bctx->nrows_per_thread * ith;
     const uint32_t end_row   = MIN(start_row + bctx->nrows_per_thread, total_rows);
@@ -435,7 +486,7 @@ static void binary_job_vector_complex(unsigned int nth, unsigned int ith, void *
         uint8_t * d_spad  = dst_spad_base  + spad_idx * dst_spad_half;
 
         dma_queue_push_vtcm_to_ddr(q, dma_make_ptr(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, 0);
-        dma_queue_push(q, dma_make_ptr(s0_spad, src0_curr), bctx->src0_row_size_aligned, nb01, ne00 * sizeof(float), current_block_size);
+        dma_queue_push(q, dma_make_ptr(s0_spad, src0_curr), bctx->src0_row_size_aligned, nb01, row_size_bytes, current_block_size);
         ir_prefetch += current_block_size;
         spad_idx ^= 1;
     }
@@ -462,11 +513,11 @@ static void binary_job_vector_complex(unsigned int nth, unsigned int ith, void *
             uint8_t * r_dst  = d_spad + r * bctx->dst_row_size_aligned;
 
             // Read src1 from DDR (unaligned)
-            COMPUTE_VECTOR_OP_AAU(r_dst, r_src0, r_src1, ne00);
+            COMPUTE_VECTOR_OP_AAU(r_dst, r_src0, r_src1, src0_type, ne00);
         }
 
         uint8_t * dst_curr = (uint8_t *)dst->data + i03 * nb3 + i02 * nb2 + i01 * nb1;
-        dma_queue_push(q, dma_make_ptr(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, ne00 * sizeof(float), current_block_size);
+        dma_queue_push(q, dma_make_ptr(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, row_size_bytes, current_block_size);
 
         if (ir_prefetch < end_row) {
              uint32_t next_block_size = calc_block_size(bctx, ir_prefetch, end_row, ne01, ne02);
@@ -476,7 +527,7 @@ static void binary_job_vector_complex(unsigned int nth, unsigned int ith, void *
              p02 = fastdiv(prem, &bctx->dim1_div);
              p01 = prem - p02 * ne01;
              uint8_t * s0_next = (uint8_t *)src0->data + p03 * nb03 + p02 * nb02 + p01 * nb01;
-             dma_queue_push(q, dma_make_ptr(s0_spad, s0_next), bctx->src0_row_size_aligned, nb01, ne00 * sizeof(float), next_block_size);
+             dma_queue_push(q, dma_make_ptr(s0_spad, s0_next), bctx->src0_row_size_aligned, nb01, row_size_bytes, next_block_size);
              ir_prefetch += next_block_size;
         }
         ir += current_block_size;
@@ -490,6 +541,9 @@ static void binary_job_element_repeat(unsigned int nth, unsigned int ith, void *
     struct htp_ops_context * octx = bctx->octx;
     htp_binary_preamble;
 
+    const uint32_t src0_type = octx->src0.type;
+    const uint32_t elem_size_bytes = (src0_type == HTP_TYPE_F32) ? sizeof(float) : sizeof(_Float16);
+    const uint32_t row_size_bytes = ne00 * elem_size_bytes;;
     const uint32_t total_rows = ne01 * ne02 * ne03;
     const uint32_t start_row = bctx->nrows_per_thread * ith;
     const uint32_t end_row   = MIN(start_row + bctx->nrows_per_thread, total_rows);
@@ -519,7 +573,7 @@ static void binary_job_element_repeat(unsigned int nth, unsigned int ith, void *
         uint8_t * d_spad  = dst_spad_base  + spad_idx * dst_spad_half;
 
         dma_queue_push_vtcm_to_ddr(q, dma_make_ptr(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, 0);
-        dma_queue_push(q, dma_make_ptr(s0_spad, src0_curr), bctx->src0_row_size_aligned, nb01, ne00 * sizeof(float), current_block_size);
+        dma_queue_push(q, dma_make_ptr(s0_spad, src0_curr), bctx->src0_row_size_aligned, nb01, row_size_bytes, current_block_size);
         ir_prefetch += current_block_size;
         spad_idx ^= 1;
     }
@@ -549,12 +603,12 @@ static void binary_job_element_repeat(unsigned int nth, unsigned int ith, void *
             for (uint32_t c = 0; c < ne00; c += ne10) {
                 uint32_t len = MIN(ne10, ne00 - c);
                 // Use UUU for speed and simplicity
-                COMPUTE_VECTOR_OP_UUU(r_dst + c * sizeof(float), r_src0 + c * sizeof(float), r_src1_row, len);
+                COMPUTE_VECTOR_OP_UUU(r_dst + c * elem_size_bytes, r_src0 + c * elem_size_bytes, r_src1_row, src0_type, len);
             }
         }
 
         uint8_t * dst_curr = (uint8_t *)dst->data + i03 * nb3 + i02 * nb2 + i01 * nb1;
-        dma_queue_push(q, dma_make_ptr(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, ne00 * sizeof(float), current_block_size);
+        dma_queue_push(q, dma_make_ptr(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, row_size_bytes, current_block_size);
 
         if (ir_prefetch < end_row) {
              uint32_t next_block_size = calc_block_size(bctx, ir_prefetch, end_row, ne01, ne02);
@@ -564,7 +618,7 @@ static void binary_job_element_repeat(unsigned int nth, unsigned int ith, void *
              p02 = fastdiv(prem, &bctx->dim1_div);
              p01 = prem - p02 * ne01;
              uint8_t * s0_next = (uint8_t *)src0->data + p03 * nb03 + p02 * nb02 + p01 * nb01;
-             dma_queue_push(q, dma_make_ptr(s0_spad, s0_next), bctx->src0_row_size_aligned, nb01, ne00 * sizeof(float), next_block_size);
+             dma_queue_push(q, dma_make_ptr(s0_spad, s0_next), bctx->src0_row_size_aligned, nb01, row_size_bytes, next_block_size);
              ir_prefetch += next_block_size;
         }
         ir += current_block_size;
@@ -672,18 +726,20 @@ static void binary_job_add_id(unsigned int nth, unsigned int ith, void * data) {
     dma_queue_flush(q);
 }
 
-static int execute_op_binary_f32(struct htp_ops_context * octx) {
+static int execute_op_binary(struct htp_ops_context * octx) {
     const struct htp_tensor * src0 = &octx->src0;
     const struct htp_tensor * src1 = &octx->src1;
     struct htp_tensor *       dst  = &octx->dst;
 
-    const uint32_t n_threads  = octx->n_threads;
     const uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
+    const uint32_t n_threads  = MIN(octx->n_threads, src0_nrows);
 
     // Use packed row sizes for VTCM allocation
-    const size_t src0_row_size = src0->ne[0] * sizeof(float);
-    const size_t src1_row_size = src1->ne[0] * sizeof(float);
-    const size_t dst_row_size  = dst->ne[0] * sizeof(float);
+    const uint32_t src0_type = octx->src0.type;
+    const size_t elem_size = (src0_type == HTP_TYPE_F32) ? sizeof(float) : sizeof(_Float16);
+    const size_t src0_row_size = src0->ne[0] * elem_size;
+    const size_t src1_row_size = src1->ne[0] * elem_size;
+    const size_t dst_row_size  = dst->ne[0] * elem_size;
 
     // Align to VLEN
     const size_t src0_row_size_aligned = hex_round_up(src0_row_size, VLEN);
@@ -694,7 +750,7 @@ static int execute_op_binary_f32(struct htp_ops_context * octx) {
     bool is_scalar = !is_add_id && (src1->ne[0] == 1);
 
     // Determine which kernel we will use to alloc memory and dispatch
-    bool use_vector_same = !is_add_id && !is_scalar && src1->ne[0] == src0->ne[0] &&
+    bool use_vector_same = !is_add_id && !is_scalar && ((src0->nb[1] % VLEN) == 0) && (src1->ne[0] == src0->ne[0]) &&
                (src1->ne[1] == src0->ne[1] || src1->ne[1] == 1) &&
                (src1->ne[2] == src0->ne[2] || src1->ne[2] == 1) &&
                (src1->ne[3] == src0->ne[3] || src1->ne[3] == 1);
@@ -726,7 +782,7 @@ static int execute_op_binary_f32(struct htp_ops_context * octx) {
     }
 
     if (rows_per_buffer < 1) {
-         FARF(ERROR, "binary-f32: VTCM too small\n");
+         FARF(ERROR, "binary: VTCM too small\n");
          return HTP_STATUS_VTCM_TOO_SMALL;
     }
 
@@ -761,16 +817,14 @@ static int execute_op_binary_f32(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
-    uint32_t n_jobs = MIN(n_threads, src0_nrows);
-
     dma_queue * q = octx->ctx->dma[0];
     if (is_row_bcast) {
-        dma_queue_push(q, dma_make_ptr(octx->src1_spad.data, (const void *) src1->data), src1_row_size_aligned, 0, src1->ne[0] * sizeof(float), 1);
+        dma_queue_push(q, dma_make_ptr(octx->src1_spad.data, (const void *) src1->data), src1_row_size_aligned, 0, src1->ne[0] * elem_size, 1);
     }
 
     struct htp_binary_context bctx;
     bctx.octx = octx;
-    bctx.nrows_per_thread = (src0_nrows + n_jobs - 1) / n_jobs;
+    bctx.nrows_per_thread = (src0_nrows + n_threads - 1) / n_threads;
     bctx.block_max = rows_per_buffer;
     bctx.src0_row_size_aligned = src0_row_size_aligned;
     bctx.src1_row_size_aligned = src1_row_size_aligned;
@@ -814,14 +868,24 @@ static int execute_op_binary_f32(struct htp_ops_context * octx) {
         dma_queue_pop(q);
     }
 
-    worker_pool_run_func(octx->ctx->worker_pool, worker_func, &bctx, n_jobs);
+    worker_pool_run_func(octx->ctx->worker_pool, worker_func, &bctx, n_threads);
 
     return HTP_STATUS_OK;
 }
 
 int op_binary(struct htp_ops_context * octx) {
-    if (octx->src0.type == HTP_TYPE_F32) {
-        return execute_op_binary_f32(octx);
+
+    // Does not support permutations of src1
+    const struct htp_tensor * src1 = &octx->src1;
+    if (src1->nb[1] < src1->nb[0]) {
+        return HTP_STATUS_NO_SUPPORT;
     }
+
+    const uint32_t src0_type = octx->src0.type;
+    if ((src0_type == HTP_TYPE_F32) || (src0_type == HTP_TYPE_F16)) {
+        return execute_op_binary(octx);
+    }
+
     return HTP_STATUS_NO_SUPPORT;
 }
+

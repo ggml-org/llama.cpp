@@ -180,6 +180,7 @@ struct server_http_proxy : server_http_res {
     std::function<void()> cleanup = nullptr;
 public:
     server_http_proxy(const std::string & method,
+                      const std::string & scheme,
                       const std::string & host,
                       int port,
                       const std::string & path,

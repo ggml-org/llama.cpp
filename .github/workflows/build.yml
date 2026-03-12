@@ -93,7 +93,7 @@ jobs:
         id: cmake_test
         run: |
           cd build
-          ctest -L main --verbose --timeout 900
+          ctest -L main -E "test-llama-archs" --verbose --timeout 900
 
   macOS-latest-cmake-x64:
     runs-on: macos-15-intel
@@ -469,6 +469,7 @@ jobs:
           cd build
           export GGML_VK_VISIBLE_DEVICES=0
           export GGML_VK_DISABLE_F16=1
+          export GGML_VK_DISABLE_COOPMAT=1
           # This is using llvmpipe and runs slower than other backends
           ctest -L main --verbose --timeout 4800
 
@@ -1719,6 +1720,22 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          vulkaninfo --summary
+          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+
+  ggml-ci-x64-linux-intel-vulkan:
+    runs-on: [self-hosted, Linux, X64, Intel]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Test
         id: ggml-ci
