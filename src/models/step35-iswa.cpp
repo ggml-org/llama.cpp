@@ -52,7 +52,7 @@ llm_build_step35_iswa::llm_build_step35_iswa(const llama_model & model, const ll
             // RoPE (partial rotary factors per layer)
             const bool is_swa = hparams.is_swa(il);
             ggml_tensor * rope_factors = is_swa ? nullptr : model.get_rope_factors(cparams, il);
-            const int64_t n_rot_l = is_swa ? hparams.n_rot : (hparams.n_rot / 2);
+            const int64_t n_rot_l = hparams.n_rot(il);
             Qcur = ggml_rope_ext(
                 ctx0, Qcur, inp_pos, rope_factors,
                 n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
@@ -119,9 +119,6 @@ llm_build_step35_iswa::llm_build_step35_iswa(const llama_model & model, const ll
             cb(cur, "ffn_out", il);
         } else {
             // MoE routed experts
-            const bool  norm_w  = hparams.expert_weights_norm;
-            const float w_scale = hparams.expert_weights_scale;
-            const bool  scale_w = w_scale != 0.0f;
             ggml_tensor * moe_out = build_moe_ffn(cur,
                     model.layers[il].ffn_gate_inp,
                     model.layers[il].ffn_up_exps,
@@ -129,8 +126,8 @@ llm_build_step35_iswa::llm_build_step35_iswa(const llama_model & model, const ll
                     model.layers[il].ffn_down_exps,
                     model.layers[il].ffn_exp_probs_b,
                     n_expert, n_expert_used,
-                    LLM_FFN_SILU,
-                    norm_w, scale_w, w_scale,
+                    LLM_FFN_SILU, hparams.expert_weights_norm,
+                    hparams.expert_weights_scale,
                     (llama_expert_gating_func_type) hparams.expert_gating_func,
                     il);
             cb(moe_out, "ffn_moe_out", il);

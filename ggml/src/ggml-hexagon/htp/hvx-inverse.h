@@ -67,7 +67,7 @@ static inline HVX_Vector hvx_vec_inverse_f16(HVX_Vector vals) {
 
     HVX_Vector vcl0 = Q6_Vuh_vcl0_Vuh(rm);  //count leading zeros
 
-    // Get mantissa for 16-bit represenation
+    // Get mantissa for 16-bit representation
     HVX_Vector mant_recip = Q6_V_vand_VV(Q6_Vh_vasr_VhR(Q6_Vh_vasl_VhVh(rm, vcl0), 5), Q6_Vh_vsplat_R(0x03FF));
 
     //Compute Reciprocal Exponent
@@ -137,40 +137,74 @@ static inline HVX_Vector hvx_vec_inverse_f32_guard(HVX_Vector v_sf, HVX_Vector n
         }                                                                    \
     } while(0)
 
-static inline void hvx_inverse_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
-    assert((unsigned long) dst % 128 == 0);
-    assert((unsigned long) src % 128 == 0);
-    hvx_inverse_f32_loop_body(HVX_Vector, HVX_Vector, hvx_vec_store_a);
+static inline HVX_Vector hvx_vec_inverse_f16_guard(HVX_Vector v_sf, HVX_Vector nan_inf_mask) {
+    HVX_Vector out = hvx_vec_inverse_f16(v_sf);
+
+    HVX_Vector     masked_out = Q6_V_vand_VV(out, nan_inf_mask);
+    const HVX_VectorPred pred = Q6_Q_vcmp_eq_VhVh(nan_inf_mask, masked_out);
+
+    return Q6_V_vmux_QVV(pred, Q6_V_vzero(), out);
 }
 
-static inline void hvx_inverse_f32_au(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
-    assert((unsigned long) dst % 128 == 0);
-    hvx_inverse_f32_loop_body(HVX_Vector, HVX_UVector, hvx_vec_store_a);
+#define hvx_inverse_f16_loop_body(dst_type, src_type, vec_store)             \
+    do {                                                                     \
+        dst_type * restrict vdst = (dst_type *) dst;                         \
+        src_type * restrict vsrc = (src_type *) src;                         \
+                                                                             \
+        const HVX_Vector nan_inf_mask = Q6_Vh_vsplat_R(0x7c00);              \
+                                                                             \
+        const uint32_t nvec = n / VLEN_FP16;                                 \
+        const uint32_t nloe = n % VLEN_FP16;                                 \
+                                                                             \
+        uint32_t i = 0;                                                      \
+                                                                             \
+        _Pragma("unroll(4)")                                                 \
+        for (; i < nvec; i++) {                                              \
+             vdst[i] = hvx_vec_inverse_f16_guard(vsrc[i], nan_inf_mask);     \
+        }                                                                    \
+        if (nloe) {                                                          \
+            HVX_Vector v = hvx_vec_inverse_f16_guard(vsrc[i], nan_inf_mask); \
+            vec_store((void *) &vdst[i], nloe * SIZEOF_FP16, v);             \
+        }                                                                    \
+    } while(0)
+
+// Generic macro to define alignment permutations for an op
+#define DEFINE_HVX_INV_OP_VARIANTS(OP_NAME, OP_LOOP_BODY) \
+static inline void OP_NAME##_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) { \
+    assert((uintptr_t) dst % 128 == 0); \
+    assert((uintptr_t) src % 128 == 0); \
+    OP_LOOP_BODY(HVX_Vector, HVX_Vector, hvx_vec_store_a); \
+} \
+static inline void OP_NAME##_au(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) { \
+    assert((uintptr_t) dst % 128 == 0); \
+    OP_LOOP_BODY(HVX_Vector, HVX_UVector, hvx_vec_store_a); \
+} \
+static inline void OP_NAME##_ua(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) { \
+    assert((uintptr_t) src % 128 == 0); \
+    OP_LOOP_BODY(HVX_UVector, HVX_Vector, hvx_vec_store_u); \
+} \
+static inline void OP_NAME##_uu(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) { \
+    OP_LOOP_BODY(HVX_UVector, HVX_UVector, hvx_vec_store_u); \
+} \
+
+// Dispatcher logic
+#define HVX_INV_DISPATCHER(OP_NAME) \
+static inline void OP_NAME(uint8_t * restrict dst, const uint8_t * restrict src, const uint32_t num_elems) { \
+    if (hex_is_aligned((void *) dst, 128) && hex_is_aligned((void *) src, 128)) { \
+        OP_NAME##_aa(dst, src, num_elems); \
+    } else if (hex_is_aligned((void *) dst, 128)) { \
+        OP_NAME##_au(dst, src, num_elems); \
+    } else if (hex_is_aligned((void *) src, 128)) { \
+        OP_NAME##_ua(dst, src, num_elems); \
+    } else { \
+        OP_NAME##_uu(dst, src, num_elems); \
+    } \
 }
 
-static inline void hvx_inverse_f32_ua(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
-    assert((unsigned long) src % 128 == 0);
-    hvx_inverse_f32_loop_body(HVX_UVector, HVX_Vector, hvx_vec_store_u);
-}
+DEFINE_HVX_INV_OP_VARIANTS(hvx_inverse_f32, hvx_inverse_f32_loop_body)
+DEFINE_HVX_INV_OP_VARIANTS(hvx_inverse_f16, hvx_inverse_f16_loop_body)
 
-static inline void hvx_inverse_f32_uu(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
-    hvx_inverse_f32_loop_body(HVX_UVector, HVX_UVector, hvx_vec_store_u);
-}
-
-static inline void hvx_inverse_f32(uint8_t * restrict dst, uint8_t * restrict src, const int num_elems) {
-    if ((unsigned long) dst % 128 == 0) {
-        if ((unsigned long) src % 128 == 0) {
-            hvx_inverse_f32_aa(dst, src, num_elems);
-        } else {
-            hvx_inverse_f32_au(dst, src, num_elems);
-        }
-    } else {
-        if ((unsigned long) src % 128 == 0) {
-            hvx_inverse_f32_ua(dst, src, num_elems);
-        } else {
-            hvx_inverse_f32_uu(dst, src, num_elems);
-        }
-    }
-}
+HVX_INV_DISPATCHER(hvx_inverse_f32)
+HVX_INV_DISPATCHER(hvx_inverse_f16)
 
 #endif // HVX_INVERSE_H

@@ -4,6 +4,7 @@
 
 #include <string>
 #include <set>
+#include <vector>
 
 //
 // gguf constants (sync with gguf.py)
@@ -233,11 +234,14 @@ enum llm_kv {
     LLM_KV_ATTENTION_TEMPERATURE_SCALE,
     LLM_KV_ATTENTION_KEY_LENGTH_MLA,
     LLM_KV_ATTENTION_VALUE_LENGTH_MLA,
+    LLM_KV_ATTENTION_KEY_LENGTH_SWA,
+    LLM_KV_ATTENTION_VALUE_LENGTH_SWA,
     LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,
     LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,
     LLM_KV_ATTENTION_INDEXER_TOP_K,
 
     LLM_KV_ROPE_DIMENSION_COUNT,
+    LLM_KV_ROPE_DIMENSION_COUNT_SWA,
     LLM_KV_ROPE_DIMENSION_SECTIONS,
     LLM_KV_ROPE_FREQ_BASE,
     LLM_KV_ROPE_FREQ_BASE_SWA,
@@ -607,6 +611,8 @@ struct llm_tensor_info {
     llm_tensor_layer layer;
     ggml_op op;
 };
+
+std::vector<llm_arch> llm_arch_all();
 
 const char * llm_arch_name(llm_arch arch);
 
