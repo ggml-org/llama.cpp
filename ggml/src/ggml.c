@@ -6095,7 +6095,7 @@ struct ggml_tensor * ggml_opt_step_adamw(
     GGML_ASSERT(ggml_are_same_shape(a, m));
     GGML_ASSERT(ggml_are_same_shape(a, v));
     GGML_ASSERT(adamw_params->type == GGML_TYPE_F32);
-    GGML_ASSERT(ggml_nelements(adamw_params) == 7);
+    GGML_ASSERT(ggml_nelements(adamw_params) == 8);
 
     struct ggml_tensor * result = ggml_view_tensor(ctx, a);
 
