@@ -4279,7 +4279,8 @@ struct moe_profile_state {
 
         // Finalize current layer if still open
         if (in_moe_layer) {
-            cur_layer.layer_total_us = us(moe_entry, now);
+            // Layer total = entry to last op exit (not to token end)
+            cur_layer.layer_total_us = has_last_op_end ? us(moe_entry, last_op_end) : us(moe_entry, now);
             if (!tokens.empty()) {
                 moe_profile_token & tok = tokens.back();
                 tok.layers.push_back(cur_layer);
@@ -4318,7 +4319,8 @@ struct moe_profile_state {
         if (!in_moe_layer || layer_id != current_layer) {
             // Finalize previous layer if any
             if (in_moe_layer) {
-                cur_layer.layer_total_us = us(moe_entry, now);
+                // Layer total = entry to last op exit (NOT to next layer start)
+                cur_layer.layer_total_us = us(moe_entry, last_moe_exit);
                 moe_profile_token & tok = tokens.back();
                 tok.layers.push_back(cur_layer);
                 tok.moe_total_us += cur_layer.layer_total_us;
@@ -29957,7 +29959,60 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             // ----- CPU path: dispatch cache-miss experts via shared helper -----
             // Placed AFTER GPU0 dispatch: CPU tasks don't compete for GPU queues,
             // and the shared activation is already on host from the event wait.
-            dispatch_cpu_and_scatter(cpu_entries);
+            //
+            // Expert deferral (KTransformers-style): split CPU experts into
+            // "hot" (high-probability, compute+scatter immediately) and "cold"
+            // (low-probability, defer to overlap with next layer's GPU attention).
+            // The ids tensor is sorted descending by router probability, so the
+            // last entries (highest slot index) are the coldest experts.
+            {
+                static std::atomic<int> moe_defer_count{ -1 };
+                int defer_n = moe_defer_count.load(std::memory_order_acquire);
+                if (defer_n < 0) {
+                    const char * env = getenv("GGML_SYCL_MOE_DEFER_COUNT");
+                    int new_val = env ? std::atoi(env) : 1;
+                    if (new_val < 0) new_val = 0;
+                    if (new_val > 3) new_val = 3;
+                    moe_defer_count.compare_exchange_strong(defer_n, new_val,
+                        std::memory_order_release, std::memory_order_acquire);
+                    defer_n = moe_defer_count.load(std::memory_order_acquire);
+                }
+
+                if (defer_n == 0 || static_cast<int>(cpu_entries.size()) <= defer_n) {
+                    // Deferral disabled or all CPU experts are cold — dispatch all together.
+                    // When all would be deferred, just use the normal deferred path.
+                    dispatch_cpu_and_scatter(cpu_entries);
+                } else {
+                    // Partition: entries with slot index >= (n_ids - defer_n) are cold.
+                    const int64_t cold_threshold = n_ids - defer_n;
+                    std::vector<expert_dispatch_entry> hot_entries;
+                    std::vector<expert_dispatch_entry> cold_entries;
+                    hot_entries.reserve(cpu_entries.size());
+                    cold_entries.reserve(static_cast<size_t>(defer_n));
+
+                    for (const auto & e : cpu_entries) {
+                        if (e.id >= cold_threshold) {
+                            cold_entries.push_back(e);
+                        } else {
+                            hot_entries.push_back(e);
+                        }
+                    }
+
+                    GGML_SYCL_DEBUG("[MoE-DEFER] L%d: hot=%zu cold=%zu (defer_n=%d threshold=%lld)\n",
+                                    layer_id, hot_entries.size(), cold_entries.size(),
+                                    defer_n, (long long) cold_threshold);
+
+                    // Hot experts: dispatch and flush immediately (blocking).
+                    if (!hot_entries.empty()) {
+                        dispatch_cpu_and_scatter(hot_entries);
+                        flush_pending_cpu_scatter();
+                    }
+
+                    // Cold experts: dispatch via deferred path — scatter overlaps
+                    // with next layer's GPU attention window (~381us).
+                    dispatch_cpu_and_scatter(cold_entries);
+                }
+            }
 
             // MoE profiling: compute complete (GPU0 + CPU dispatch done)
             if (g_moe_profile_enabled) {
