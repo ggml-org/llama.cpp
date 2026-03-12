@@ -28325,11 +28325,16 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                             }
 
                             // Safety: never skip ALL experts — always keep at
-                            // least K_min=1 (the highest-probability expert at
-                            // index 0, since ids are sorted descending).
+                            // least K_min=1 (the highest-weight expert).
+                            // Scan for actual max rather than assuming index 0,
+                            // in case ids are not sorted descending.
                             if (n_kept == 0 && n_cpu > 0) {
-                                skip_flags[0] = 0;
-                                w_kept = wt_host[0];
+                                int best = 0;
+                                for (int ci = 1; ci < n_cpu; ci++) {
+                                    if (wt_host[ci] > wt_host[best]) best = ci;
+                                }
+                                skip_flags[best] = 0;
+                                w_kept = wt_host[best];
                                 n_kept = 1;
                             }
 
