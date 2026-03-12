@@ -403,7 +403,6 @@ extern "C" {
         bool save_state;                      // keep bpw state file
         void * state_file;                    // pointer to bpw state file
         float importance_pct;                 // identify up to pct% of tensors as important
-        bool use_wce;                         // optimize for WCE instead of MSE
     } llama_model_quantize_params;
 
     typedef struct llama_logit_bias {

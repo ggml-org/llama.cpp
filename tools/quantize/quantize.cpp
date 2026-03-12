@@ -3,8 +3,11 @@
 #include "gguf.h"
 
 #include <algorithm>
+#include <cctype>
 #include <clocale>
+#include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -710,8 +713,6 @@ int main(int argc, char ** argv) {
             if (arg_idx == argc-1 || !parse_target_size(argv[++arg_idx], target_size)) {
                 usage(argv[0]);
             }
-        } else if (strcmp(argv[arg_idx], "--use-wce") == 0) {
-            params.use_wce = true;
         } else if (strcmp(argv[arg_idx], "--importance-pct") == 0) {
             if (arg_idx == argc-1 || !parse_importance_pct(argv[++arg_idx], importance_pct)) {
                 usage(argv[0]);
