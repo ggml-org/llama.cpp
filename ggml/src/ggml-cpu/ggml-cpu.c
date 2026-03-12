@@ -1458,15 +1458,13 @@ void ggml_compute_forward_mul_mat(
                     float *      dst_col     = (float *) (dst_base + (size_t) col0 * nb1);
 
                     if (impl == GGML_IFAIRY_LUT_IMPL_LUT_C) {
-                        ggml_ifairy_lut_preprocess_ex_lut_c((int) M, (int) K, (int) ncols, act_src_col, act_stride,
-                                                            scales_col, lut_col, 0, 1);
-                        ggml_ifairy_lut_qgemm_lut_c((int) M, (int) K, (int) ncols, packed_w, lut_col, scales_col,
-                                                    dst_col, nb1, nb0, /*pack_bf16*/ true, /*add*/ false);
+                        ggml_ifairy_lut_qgemm_fused_lut_c((int) M, (int) K, (int) ncols, packed_w, act_src_col,
+                                                          act_stride, lut_col, scales_col, dst_col, nb1, nb0,
+                                                          /*pack_bf16*/ true, /*add*/ false);
                     } else {
-                        ggml_ifairy_lut_preprocess_ex_lut16((int) M, (int) K, (int) ncols, act_src_col, act_stride,
-                                                            scales_col, lut_col, 0, 1);
-                        ggml_ifairy_lut_qgemm_lut16((int) M, (int) K, (int) ncols, packed_w, lut_col, scales_col,
-                                                    dst_col, nb1, nb0, /*pack_bf16*/ true, /*add*/ false);
+                        ggml_ifairy_lut_qgemm_fused_lut16((int) M, (int) K, (int) ncols, packed_w, act_src_col,
+                                                           act_stride, lut_col, scales_col, dst_col, nb1, nb0,
+                                                           /*pack_bf16*/ true, /*add*/ false);
                     }
                 }
             } else {

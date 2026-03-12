@@ -760,6 +760,36 @@ void ggml_ifairy_lut_qgemm_lut16(int          m,
     }
 }
 
+void ggml_ifairy_lut_qgemm_fused_lut16(int          m,
+                                       int          k,
+                                       int          n,
+                                       const void * packed_wtiles,
+                                       const void * act,
+                                       size_t       act_stride,
+                                       void *       lut_tmp,
+                                       void *       lut_scales_tmp,
+                                       float *      dst,
+                                       size_t       dst_col_stride,
+                                       size_t       dst_row_stride,
+                                       bool         pack_bf16,
+                                       bool         add) {
+    if (!packed_wtiles || !act || !lut_tmp || !lut_scales_tmp || !dst || m <= 0 || k <= 0 || n <= 0) {
+        return;
+    }
+
+    const uint8_t * act_bytes = (const uint8_t *) act;
+    uint8_t *       dst_bytes = (uint8_t *) dst;
+
+    for (int col = 0; col < n; ++col) {
+        const void * act_col = act_bytes + (size_t) col * act_stride;
+        float *      dst_col = (float *) (dst_bytes + (size_t) col * dst_col_stride);
+
+        ggml_ifairy_lut_preprocess_lut16(m, k, 1, act_col, act_stride, lut_scales_tmp, lut_tmp, 0, 1);
+        ggml_ifairy_lut_qgemm_lut16(m, k, 1, packed_wtiles, lut_tmp, lut_scales_tmp, dst_col, dst_col_stride,
+                                    dst_row_stride, pack_bf16, add);
+    }
+}
+
 void ggml_ifairy_lut_qgemm_lut_c(int          m,
                                  int          k,
                                  int          n,
@@ -773,6 +803,23 @@ void ggml_ifairy_lut_qgemm_lut_c(int          m,
                                  bool         add) {
     ggml_ifairy_lut_qgemm_lut16(m, k, n, packed_wtiles, lut, lut_scales, dst, dst_col_stride, dst_row_stride, pack_bf16,
                                 add);
+}
+
+void ggml_ifairy_lut_qgemm_fused_lut_c(int          m,
+                                       int          k,
+                                       int          n,
+                                       const void * packed_wtiles,
+                                       const void * act,
+                                       size_t       act_stride,
+                                       void *       lut_tmp,
+                                       void *       lut_scales_tmp,
+                                       float *      dst,
+                                       size_t       dst_col_stride,
+                                       size_t       dst_row_stride,
+                                       bool         pack_bf16,
+                                       bool         add) {
+    ggml_ifairy_lut_qgemm_fused_lut16(m, k, n, packed_wtiles, act, act_stride, lut_tmp, lut_scales_tmp, dst,
+                                      dst_col_stride, dst_row_stride, pack_bf16, add);
 }
 
 // 专属 Thread-Local 内存池管理器：零开销规避系统缺页中断
