@@ -3,7 +3,7 @@
 analyze_stats.py  --  Summarize expert_stats.json and model size projections.
 Usage: python analyze_stats.py [stats_file] [--keep 0.5]
 """
-import json, sys, statistics, argparse
+import json, statistics, argparse
 
 parser = argparse.ArgumentParser()
 parser.add_argument("stats", nargs="?", default="expert_stats_reap.json")
