@@ -10495,11 +10495,8 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
 
             // delta[j] = sum_i S[i][j] * k[i] = dot(row j of M, k)
             for (int64_t j = 0; j < S_v; ++j) {
-                const float * row_j = s_out + j * S_v;
                 float sum = 0.0f;
-                for (int64_t i = 0; i < S_v; ++i) {
-                    sum += row_j[i] * k_d[i];
-                }
+                ggml_vec_dot_f32(S_v, &sum, 0, &s_out[j * S_v], 0, k_d, 0, 1);
                 delta[j] = (v_d[j] - sum) * beta_val;
             }
 
@@ -10510,11 +10507,8 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
 
             // attn_out[j] = sum_i S[i][j] * q[i] = dot(row j of M, q)
             for (int64_t j = 0; j < S_v; ++j) {
-                const float * row_j = s_out + j * S_v;
                 float sum = 0.0f;
-                for (int64_t i = 0; i < S_v; ++i) {
-                    sum += row_j[i] * q_d[i];
-                }
+                ggml_vec_dot_f32(S_v, &sum, 0, &s_out[j * S_v], 0, q_d, 0, 1);
                 attn_data[j] = sum * scale;
             }
 
