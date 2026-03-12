@@ -1444,34 +1444,61 @@ void ggml_compute_forward_mul_mat(
             const void * act_src = (src1->type == GGML_TYPE_F32) ? (const void *) act_q : src1->data;
 
             uint8_t * dst_base = (uint8_t *) dst->data;
-            // V2 core path: build LUT once, shared across all threads (parallelize preprocess across threads)
-            if (impl == GGML_IFAIRY_LUT_IMPL_LUT_C) {
-                ggml_ifairy_lut_preprocess_ex_lut_c((int) M, (int) K, (int) N, act_src, act_stride, scales, lut, ith,
-                                                    nth);
+            if (N >= nth) {
+                const int64_t col0 = (N * ith) / nth;
+                const int64_t col1 = (N * (ith + 1)) / nth;
+                const int64_t ncols = col1 - col0;
+
+                if (ncols > 0) {
+                    const size_t lut_col_bytes = (size_t) blocks_per_col * (size_t) QK_IFAIRY_GROUPS_PER_BLOCK *
+                                                 (size_t) k_ifairy_lut_group_bytes;
+                    const void * act_src_col = (const uint8_t *) act_src + (size_t) col0 * act_stride;
+                    void *       lut_col     = (uint8_t *) lut + (size_t) col0 * lut_col_bytes;
+                    float *      scales_col  = scales + (size_t) col0 * (size_t) blocks_per_col * 2u;
+                    float *      dst_col     = (float *) (dst_base + (size_t) col0 * nb1);
+
+                    if (impl == GGML_IFAIRY_LUT_IMPL_LUT_C) {
+                        ggml_ifairy_lut_preprocess_ex_lut_c((int) M, (int) K, (int) ncols, act_src_col, act_stride,
+                                                            scales_col, lut_col, 0, 1);
+                        ggml_ifairy_lut_qgemm_lut_c((int) M, (int) K, (int) ncols, packed_w, lut_col, scales_col,
+                                                    dst_col, nb1, nb0, /*pack_bf16*/ true, /*add*/ false);
+                    } else {
+                        ggml_ifairy_lut_preprocess_ex_lut16((int) M, (int) K, (int) ncols, act_src_col, act_stride,
+                                                            scales_col, lut_col, 0, 1);
+                        ggml_ifairy_lut_qgemm_lut16((int) M, (int) K, (int) ncols, packed_w, lut_col, scales_col,
+                                                    dst_col, nb1, nb0, /*pack_bf16*/ true, /*add*/ false);
+                    }
+                }
             } else {
-                ggml_ifairy_lut_preprocess_ex_lut16((int) M, (int) K, (int) N, act_src, act_stride, scales, lut, ith,
-                                                    nth);
-            }
-            ggml_barrier(params->threadpool);
-
-            const int64_t tiles_total = (M + 15) / 16;
-            const int64_t tile0       = (tiles_total * ith) / nth;
-            const int64_t tile1       = (tiles_total * (ith + 1)) / nth;
-
-            const int64_t row0  = tile0 * 16;
-            const int64_t row1  = tile1 * 16 > M ? M : tile1 * 16;
-            const int64_t nrows = row1 - row0;
-
-            if (nrows > 0) {
-                const struct ifairy_lut_wtile_16 * w_tile = packed_w + (size_t) tile0 * (size_t) blocks_per_col;
-                float *                            dst_f  = (float *) (dst_base + (size_t) row0 * nb0);
-
+                // Small-N decode-like path: keep the existing whole-LUT build and row-sharded compute.
                 if (impl == GGML_IFAIRY_LUT_IMPL_LUT_C) {
-                    ggml_ifairy_lut_qgemm_lut_c((int) nrows, (int) K, (int) N, w_tile, lut, scales, dst_f, nb1, nb0,
-                                                /*pack_bf16*/ true, /*add*/ false);
+                    ggml_ifairy_lut_preprocess_ex_lut_c((int) M, (int) K, (int) N, act_src, act_stride, scales, lut,
+                                                        ith, nth);
                 } else {
-                    ggml_ifairy_lut_qgemm_lut16((int) nrows, (int) K, (int) N, w_tile, lut, scales, dst_f, nb1, nb0,
-                                                /*pack_bf16*/ true, /*add*/ false);
+                    ggml_ifairy_lut_preprocess_ex_lut16((int) M, (int) K, (int) N, act_src, act_stride, scales, lut,
+                                                        ith, nth);
+                }
+                ggml_barrier(params->threadpool);
+
+                const int64_t tiles_total = (M + 15) / 16;
+                const int64_t tile0       = (tiles_total * ith) / nth;
+                const int64_t tile1       = (tiles_total * (ith + 1)) / nth;
+
+                const int64_t row0  = tile0 * 16;
+                const int64_t row1  = tile1 * 16 > M ? M : tile1 * 16;
+                const int64_t nrows = row1 - row0;
+
+                if (nrows > 0) {
+                    const struct ifairy_lut_wtile_16 * w_tile = packed_w + (size_t) tile0 * (size_t) blocks_per_col;
+                    float *                            dst_f  = (float *) (dst_base + (size_t) row0 * nb0);
+
+                    if (impl == GGML_IFAIRY_LUT_IMPL_LUT_C) {
+                        ggml_ifairy_lut_qgemm_lut_c((int) nrows, (int) K, (int) N, w_tile, lut, scales, dst_f, nb1,
+                                                    nb0, /*pack_bf16*/ true, /*add*/ false);
+                    } else {
+                        ggml_ifairy_lut_qgemm_lut16((int) nrows, (int) K, (int) N, w_tile, lut, scales, dst_f, nb1,
+                                                    nb0, /*pack_bf16*/ true, /*add*/ false);
+                    }
                 }
             }
             return;
