@@ -41003,6 +41003,9 @@ normal_dispatch:
     // is still set by MoE paths but no longer disables graphs — it signals
     // that selective re-record mode is needed.
     if (sycl_ctx->moe_graphs_disabled_once) {
+        if (!sycl_ctx->moe_graph_rerecord) {
+            GGML_LOG_INFO("[SYCL] MoE model detected — enabling selective graph replay (skip MoE ops, replay attention/norms)\n");
+        }
         sycl_ctx->moe_graph_rerecord       = true;
         sycl_ctx->moe_graphs_disabled_once = false;
         GGML_SYCL_DEBUG("[SYCL-GRAPH] MoE detected — enabling selective graph re-record\n");
@@ -41310,19 +41313,20 @@ normal_dispatch:
         // Enable with GGML_SYCL_GRAPH_RERECORD=1 to test if stale recording causes perf issues.
         static bool rerecord_mode = (getenv("GGML_SYCL_GRAPH_RERECORD") != nullptr);
 
-        // MoE selective graph: invalidate cached graph so we re-record every
-        // token.  MoE ops execute outside the graph (via pause/resume recording)
-        // and need fresh dispatch each token — pure replay would miss them.
-        if (sycl_ctx->exec_graph && sycl_ctx->moe_graph_rerecord && !rerecord_mode) {
-            GGML_SYCL_DEBUG("[SYCL-GRAPH] MoE selective re-record: invalidating cached graph\n");
-            sycl_ctx->exec_graph.reset();
-            sycl_ctx->exec_graph_n_nodes = 0;
-            sycl_ctx->exec_graph_hash    = 0;
-        }
+        // MoE selective graph: MoE ops execute outside the graph (via
+        // pause/resume recording) and need fresh dispatch each token.
+        // Instead of invalidating + re-finalizing (expensive), re-record
+        // the graph and update the existing executable — same approach as
+        // rerecord_mode but triggered automatically by MoE detection.
+        const bool needs_rerecord = rerecord_mode || sycl_ctx->moe_graph_rerecord;
 
-        if (sycl_ctx->exec_graph && rerecord_mode) {
-            // Re-record + update: matches master's strategy (re-record every call)
-            GGML_SYCL_DEBUG("[SYCL-GRAPH] re-record + update...\n");
+        if (sycl_ctx->exec_graph && needs_rerecord) {
+            // Re-record + update: re-record the graph topology and update the
+            // cached executable.  For MoE, this re-records non-MoE ops while
+            // MoE ops execute via pause/resume (line ~33953).  For explicit
+            // rerecord_mode, this matches master's re-record-every-call strategy.
+            GGML_SYCL_DEBUG("[SYCL-GRAPH] re-record + update (%s)...\n",
+                            sycl_ctx->moe_graph_rerecord ? "MoE selective" : "rerecord_mode");
             try {
                 sycl_ex::command_graph model_sycl_graph(*(sycl_ctx->stream()),
                                                         { sycl_ex::property::graph::assume_buffer_outlives_graph{} });
@@ -41426,8 +41430,12 @@ normal_dispatch:
 
                 g_ggml_sycl_graph_recording_depth.fetch_sub(1, std::memory_order_acq_rel);
                 GGML_SYCL_DEBUG("[SYCL-GRAPH] finalize (new graph)...\n");
-                auto exec_graph = rerecord_mode ? model_sycl_graph.finalize(sycl_ex::property::graph::updatable{}) :
-                                                  model_sycl_graph.finalize();
+                // Finalize as updatable when re-record will be needed (MoE or explicit rerecord_mode).
+                // This allows subsequent tokens to use update() instead of full re-finalization.
+                const bool need_updatable = rerecord_mode || sycl_ctx->moe_graph_rerecord;
+                auto exec_graph = need_updatable
+                    ? model_sycl_graph.finalize(sycl_ex::property::graph::updatable{})
+                    : model_sycl_graph.finalize();
                 GGML_SYCL_DEBUG("[SYCL-GRAPH] finalize done, creating unique_ptr...\n");
                 sycl_ctx->exec_graph =
                     std::make_unique<sycl_ex::command_graph<sycl_ex::graph_state::executable>>(exec_graph);
