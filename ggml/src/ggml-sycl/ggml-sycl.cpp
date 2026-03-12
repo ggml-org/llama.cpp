@@ -27421,20 +27421,37 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     g_moe_fusion.gpu0_cached_indices.clear();
                     g_moe_fusion.cpu_indices.reserve(ids_n_elem);
 
-                    if (have_secondary_pre && cur_layer_fast >= 0) {
+                    if (placement_table_pre.is_initialized() && cur_layer_fast >= 0) {
                         const int n_gpu_devs_gate = ggml_sycl_info().total_gpu_count;
+                        auto & pf_gate = g_expert_prefetchers[ctx.device];
                         for (size_t ci = 0; ci < ids_n_elem; ci++) {
                             const int32_t eid = ids_data_f[ci];
                             auto placement = placement_table_pre.get(cur_layer_fast, eid);
-                            if (placement.device_id >= 1
+                            if (have_secondary_pre
+                                && placement.device_id >= 1
                                 && placement.device_id < n_gpu_devs_gate
                                 && placement.device_ptr != nullptr
                                 && g_secondary_queues[placement.device_id] != nullptr) {
                                 g_moe_fusion.sec_indices.push_back({ci, placement.device_id, placement.device_ptr});
                             } else if (placement.device_id == 0 && placement.device_ptr != nullptr) {
                                 g_moe_fusion.gpu0_cached_indices.push_back(ci);
+                            } else if (pf_gate.is_initialized() && pf_gate.get_cached_ptr(cur_layer_fast, eid)) {
+                                g_moe_fusion.gpu0_cached_indices.push_back(ci);
                             } else {
-                                g_moe_fusion.cpu_indices.push_back(ci);
+                                // Check secondary GPU prefetcher pools before CPU fallback.
+                                bool found_sec = false;
+                                for (int d = 1; d < n_gpu_devs_gate && !found_sec; d++) {
+                                    auto & pf_d = g_expert_prefetchers[d];
+                                    if (!pf_d.is_initialized()) continue;
+                                    void * cached = pf_d.get_cached_ptr(cur_layer_fast, eid);
+                                    if (cached && g_secondary_queues[d] != nullptr) {
+                                        g_moe_fusion.sec_indices.push_back({ci, d, cached});
+                                        found_sec = true;
+                                    }
+                                }
+                                if (!found_sec) {
+                                    g_moe_fusion.cpu_indices.push_back(ci);
+                                }
                             }
                         }
                     } else {
@@ -27715,20 +27732,37 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     g_moe_fusion.gpu0_cached_indices.clear();
                     g_moe_fusion.cpu_indices.reserve(ids_n_elem);
 
-                    if (have_secondary_pre && cur_layer_fast >= 0) {
+                    if (placement_table_pre.is_initialized() && cur_layer_fast >= 0) {
                         const int n_gpu_devs_up = ggml_sycl_info().total_gpu_count;
+                        auto & pf_up = g_expert_prefetchers[ctx.device];
                         for (size_t ci = 0; ci < ids_n_elem; ci++) {
                             const int32_t eid = ids_data_f[ci];
                             auto placement = placement_table_pre.get(cur_layer_fast, eid);
-                            if (placement.device_id >= 1
+                            if (have_secondary_pre
+                                && placement.device_id >= 1
                                 && placement.device_id < n_gpu_devs_up
                                 && placement.device_ptr != nullptr
                                 && g_secondary_queues[placement.device_id] != nullptr) {
                                 g_moe_fusion.sec_indices.push_back({ci, placement.device_id, placement.device_ptr});
                             } else if (placement.device_id == 0 && placement.device_ptr != nullptr) {
                                 g_moe_fusion.gpu0_cached_indices.push_back(ci);
+                            } else if (pf_up.is_initialized() && pf_up.get_cached_ptr(cur_layer_fast, eid)) {
+                                g_moe_fusion.gpu0_cached_indices.push_back(ci);
                             } else {
-                                g_moe_fusion.cpu_indices.push_back(ci);
+                                // Check secondary GPU prefetcher pools before CPU fallback.
+                                bool found_sec_up = false;
+                                for (int d = 1; d < n_gpu_devs_up && !found_sec_up; d++) {
+                                    auto & pf_d = g_expert_prefetchers[d];
+                                    if (!pf_d.is_initialized()) continue;
+                                    void * cached = pf_d.get_cached_ptr(cur_layer_fast, eid);
+                                    if (cached && g_secondary_queues[d] != nullptr) {
+                                        g_moe_fusion.sec_indices.push_back({ci, d, cached});
+                                        found_sec_up = true;
+                                    }
+                                }
+                                if (!found_sec_up) {
+                                    g_moe_fusion.cpu_indices.push_back(ci);
+                                }
                             }
                         }
                     } else {
@@ -29558,8 +29592,26 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                             gpu_entries.push_back(
                                 { iid1, id, i02, const_cast<void *>(expert_ptrs_host[i02]) });
                         } else {
-                            // No GPU has this expert cached — CPU fallback
-                            cpu_entries.push_back({ iid1, id, i02, nullptr, /* device_id */ 0 });
+                            // Check prefetcher VRAM pool before CPU fallback.
+                            // ExpertPrefetcher LRU cache may hold this expert
+                            // from a previous demand_load or hint().
+                            bool found_cached = false;
+                            for (int d = 0; d < n_gpu_devs && !found_cached; d++) {
+                                auto & pf = g_expert_prefetchers[d];
+                                if (!pf.is_initialized()) continue;
+                                void * cached = pf.get_cached_ptr(layer_id, i02);
+                                if (cached) {
+                                    if (d == 0) {
+                                        gpu_entries.push_back({ iid1, id, i02, cached, 0 });
+                                    } else if (g_secondary_queues[d] != nullptr) {
+                                        per_gpu_entries[d].push_back({ iid1, id, i02, cached });
+                                    }
+                                    found_cached = true;
+                                }
+                            }
+                            if (!found_cached) {
+                                cpu_entries.push_back({ iid1, id, i02, nullptr, /* device_id */ 0 });
+                            }
                         }
                     }
                 }
@@ -29607,6 +29659,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
                 }
 
+                // Increment global token counter (shared with hybrid path).
+                moe_token_counter.fetch_add(1, std::memory_order_relaxed);
+
                 // MoE profiling: routing/placement complete
                 if (g_moe_profile_enabled) {
                     g_moe_profile.moe_routing_done();
@@ -29635,17 +29690,17 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         actual_ids_cputg.push_back(e.expert_id);
                     }
 
-                    // Record for predictor + tick token boundary
+                    // Token boundary: tick when seq_layer wraps (ALWAYS, even without predictor)
+                    static thread_local int last_seq_layer_cputg = -1;
+                    if (seq_layer_id_cputg >= 0 && seq_layer_id_cputg <= last_seq_layer_cputg) {
+                        stats.tick_token();
+                    }
+                    last_seq_layer_cputg = seq_layer_id_cputg;
+
+                    // Predictor recording (only when active)
                     auto & predictor_cputg = g_expert_predictors[ctx.device];
                     if (predictor_cputg.is_active() && seq_layer_id_cputg >= 0) {
                         predictor_cputg.record_actual(seq_layer_id_cputg, actual_ids_cputg);
-
-                        // Token boundary: tick when seq_layer wraps
-                        static thread_local int last_seq_layer_cputg = -1;
-                        if (seq_layer_id_cputg <= last_seq_layer_cputg) {
-                            stats.tick_token();
-                        }
-                        last_seq_layer_cputg = seq_layer_id_cputg;
                     }
                 }
 
