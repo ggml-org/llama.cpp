@@ -3,3 +3,6 @@ export const API_MODELS = {
 	LOAD: '/models/load',
 	UNLOAD: '/models/unload'
 };
+
+/** CORS proxy endpoint path */
+export const CORS_PROXY_ENDPOINT = '/cors-proxy';

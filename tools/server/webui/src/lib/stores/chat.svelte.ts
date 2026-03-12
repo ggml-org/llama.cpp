@@ -15,6 +15,8 @@ import { SvelteMap } from 'svelte/reactivity';
 import { DatabaseService, ChatService } from '$lib/services';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { config } from '$lib/stores/settings.svelte';
+import { agenticStore } from '$lib/stores/agentic.svelte';
+import { mcpStore } from '$lib/stores/mcp.svelte';
 import { contextSize, isRouterMode } from '$lib/stores/server.svelte';
 import {
 	selectedModelName,
@@ -468,6 +470,10 @@ class ChatStore {
 		const activeConv = conversationsStore.activeConversation;
 		if (activeConv && this.isChatLoadingInternal(activeConv.id)) return;
 
+		// Consume MCP resource attachments - converts them to extras and clears the live store
+		const resourceExtras = mcpStore.consumeResourceAttachmentsAsExtras();
+		const allExtras = resourceExtras.length > 0 ? [...(extras || []), ...resourceExtras] : extras;
+
 		let isNewConversation = false;
 		if (!activeConv) {
 			await conversationsStore.createConversation();
@@ -499,7 +505,7 @@ class ChatStore {
 				content,
 				MessageType.TEXT,
 				parentIdForUserMessage ?? '-1',
-				extras
+				allExtras
 			);
 			if (isNewConversation && content)
 				await conversationsStore.updateConversationName(currentConv.id, content.trim());
@@ -626,6 +632,10 @@ class ChatStore {
 				);
 			},
 			onModel: (modelName: string) => recordModel(modelName),
+			onTurnComplete: (intermediateTimings: ChatMessageTimings) => {
+				const idx = conversationsStore.findMessageIndex(assistantMessage.id);
+				conversationsStore.updateMessageAtIndex(idx, { timings: intermediateTimings });
+			},
 			onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
 				const tokensPerSecond =
 					timings?.predicted_ms && timings?.predicted_n
@@ -706,6 +716,20 @@ class ChatStore {
 				if (onError) onError(error);
 			}
 		};
+		const perChatOverrides = conversationsStore.activeConversation?.mcpServerOverrides;
+
+		const agenticConfig = agenticStore.getConfig(config(), perChatOverrides);
+		if (agenticConfig.enabled) {
+			const agenticResult = await agenticStore.runAgenticFlow({
+				conversationId: assistantMessage.convId,
+				messages: allMessages,
+				options: { ...this.getApiOptions(), ...(effectiveModel ? { model: effectiveModel } : {}) },
+				callbacks: streamCallbacks,
+				signal: abortController.signal,
+				perChatOverrides
+			});
+			if (agenticResult.handled) return;
+		}
 
 		const completionOptions = {
 			...this.getApiOptions(),

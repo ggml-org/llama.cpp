@@ -428,9 +428,9 @@
 	>
 		<div class="w-full max-w-[48rem] px-4">
 			<div class="mb-10 text-center" in:fade={{ duration: 300 }}>
-				<h1 class="mb-2 text-3xl font-semibold tracking-tight">llama.cpp</h1>
+				<h1 class="mb-2 text-2xl font-semibold tracking-tight md:text-3xl">llama.cpp</h1>
 
-				<p class="text-lg text-muted-foreground">
+				<p class="text-muted-foreground md:text-lg">
 					{serverStore.props?.modalities?.audio
 						? 'Record audio, type a message '
 						: 'Type a message'} or upload files to get started
@@ -441,8 +441,10 @@
 				<div class="mb-4" in:fly={{ y: 10, duration: 250 }}>
 					<Alert.Root variant="destructive">
 						<AlertTriangle class="h-4 w-4" />
+
 						<Alert.Title class="flex items-center justify-between">
 							<span>Server unavailable</span>
+
 							<button
 								onclick={() => serverStore.fetch()}
 								disabled={isServerLoading}
@@ -452,6 +454,7 @@
 								{isServerLoading ? 'Retrying...' : 'Retry'}
 							</button>
 						</Alert.Title>
+
 						<Alert.Description>{serverError()}</Alert.Description>
 					</Alert.Root>
 				</div>
@@ -467,7 +470,7 @@
 					onSend={handleSendMessage}
 					onStop={() => chatStore.stopGeneration()}
 					onSystemPromptAdd={handleSystemPromptAdd}
-					showHelperText={true}
+					showHelperText
 					bind:uploadedFiles
 				/>
 			</div>

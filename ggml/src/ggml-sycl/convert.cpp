@@ -482,6 +482,63 @@ static void dequantize_row_mxfp4_sycl(const void * vx, dst_t * y, const int64_t 
         });
 }
 
+template <int qk, int qr, dequantize_kernel_t dequantize_kernel, typename dst_t>
+static void dequantize_block_nc(const void * __restrict__ vx, dst_t * __restrict__ y,
+        const int64_t ne00, const int64_t ne01, const int64_t ne02,
+        const int64_t s01, const int64_t s02, const int64_t s03) {
+    auto          item_ct1 = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
+    const int64_t i00 = 2 * (int64_t(item_ct1.get_local_range(2)) * item_ct1.get_group(2) + item_ct1.get_local_id(2));
+
+    if (i00 >= ne00) {
+        return;
+    }
+
+    const int64_t i01 = item_ct1.get_group(1);
+    const int64_t i02 = item_ct1.get_group(0) % ne02;
+    const int64_t i03 = item_ct1.get_group(0) / ne02;
+
+    const int64_t ibx0 = i03*s03 + i02*s02 + i01*s01;
+
+    const int64_t ib = ibx0 + i00/qk; // block index
+    const int64_t iqs = (i00%qk)/qr; // quant index
+    const int64_t iybs = i00 - i00%qk; // y block start index
+    const int64_t y_offset = qr == 1 ? 1 : qk/2;
+
+    // dequantize
+    #ifdef GGML_SYCL_F16
+        sycl::half2 v;
+    #else
+        sycl::float2 v;
+    #endif
+
+    dequantize_kernel(vx, ib, iqs, v);
+
+    const int64_t iy0 = ((i03*ne02 + i02)*ne01 + i01)*ne00 + iybs + iqs;
+    y[iy0 + 0]        = ggml_sycl_cast<dst_t>(v.x());
+    y[iy0 + y_offset] = ggml_sycl_cast<dst_t>(v.y());
+}
+
+
+template <int qk, int qr, dequantize_kernel_t dequantize_kernel, typename dst_t>
+static void dequantize_block_nc_sycl(const void *    vx,
+                                  dst_t *         y,
+                                  const int64_t   ne00,
+                                  const int64_t   ne01,
+                                  const int64_t   ne02,
+                                  const int64_t   ne03,
+                                  const int64_t   s01,
+                                  const int64_t   s02,
+                                  const int64_t   s03,
+                                  dpct::queue_ptr stream) {
+    const dpct::dim3 num_blocks((ne00 + 2 * SYCL_DEQUANTIZE_BLOCK_SIZE - 1) / (2 * SYCL_DEQUANTIZE_BLOCK_SIZE), ne01,
+                                ne02 * ne03);
+    stream->parallel_for(sycl::nd_range<3>(num_blocks * sycl::range<3>(1, 1, SYCL_DEQUANTIZE_BLOCK_SIZE),
+                                           sycl::range<3>(1, 1, SYCL_DEQUANTIZE_BLOCK_SIZE)),
+                         [=](sycl::nd_item<3> item_ct1) {
+                             GGML_UNUSED(item_ct1);
+                             dequantize_block_nc<qk, qr, dequantize_kernel>(vx, y, ne00, ne01, ne02, s01, s02, s03);
+                         });
+}
 template <typename src_t, typename dst_t>
 static void convert_unary_nc(const void * __restrict__ vx, dst_t * __restrict__ y, const int64_t ne00, const int64_t ne01,
                           const int64_t ne02, const int64_t s01, const int64_t s02, const int64_t s03,
@@ -662,7 +719,8 @@ to_fp32_sycl_t ggml_get_to_fp32_sycl(ggml_type type, ggml_tensor *dst) {
     }
 }
 
-to_fp16_nc_sycl_t get_to_fp16_nc_sycl(ggml_type type) {
+
+to_fp16_nc_sycl_t ggml_get_to_fp16_nc_sycl(ggml_type type) {
     switch (type) {
         case GGML_TYPE_F32:
             return convert_unary_nc_sycl<float>;
@@ -670,6 +728,16 @@ to_fp16_nc_sycl_t get_to_fp16_nc_sycl(ggml_type type) {
         case GGML_TYPE_BF16:
             return convert_unary_nc_sycl<sycl::ext::oneapi::bfloat16>;
 #endif
+        case GGML_TYPE_Q4_0:
+            return dequantize_block_nc_sycl<QK4_0, QR4_0, dequantize_q4_0>;
+        case GGML_TYPE_Q4_1:
+            return dequantize_block_nc_sycl<QK4_1, QR4_1, dequantize_q4_1>;
+        case GGML_TYPE_Q5_0:
+            return dequantize_block_nc_sycl<QK5_0, QR5_0, dequantize_q5_0>;
+        case GGML_TYPE_Q5_1:
+            return dequantize_block_nc_sycl<QK5_1, QR5_1, dequantize_q5_1>;
+        case GGML_TYPE_Q8_0:
+            return dequantize_block_nc_sycl<QK8_0, QR8_0, dequantize_q8_0>;
         default:
             return nullptr;
     }

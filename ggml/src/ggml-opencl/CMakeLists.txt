@@ -116,6 +116,7 @@ set(GGML_OPENCL_KERNELS
     neg
     norm
     relu
+    l2_norm
     rms_norm
     rope
     scale
@@ -131,6 +132,7 @@ set(GGML_OPENCL_KERNELS
     ssm_conv
     sub
     sum_rows
+    cumsum
     transpose
     concat
     tsembd

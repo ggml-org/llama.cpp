@@ -114,8 +114,10 @@ value binary_expression::execute_impl(context & ctx) {
 
     // Logical operators
     if (op.value == "and") {
+        JJ_DEBUG("Executing logical test: %s AND %s", left->type().c_str(), right->type().c_str());
         return left_val->as_bool() ? right->execute(ctx) : std::move(left_val);
     } else if (op.value == "or") {
+        JJ_DEBUG("Executing logical test: %s OR %s", left->type().c_str(), right->type().c_str());
         return left_val->as_bool() ? std::move(left_val) : right->execute(ctx);
     }
 
@@ -838,7 +840,7 @@ value call_expression::execute_impl(context & ctx) {
     for (auto & arg_stmt : this->args) {
         auto arg_val = arg_stmt->execute(ctx);
         JJ_DEBUG("  Argument type: %s", arg_val->type().c_str());
-        args.push_back(std::move(arg_val));
+        args.push_back(arg_val);
     }
     // execute callee
     value callee_val = callee->execute(ctx);
