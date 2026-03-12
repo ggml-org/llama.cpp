@@ -790,18 +790,25 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
             }
         }
 #elif defined(AMD_WMMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE)
-#if defined(AMD_MFMA_AVAILABLE)
-        const float2 KQ_max_scale_h2 = make_float2(
-            KQ_max_scale[0], KQ_max_scale[0]);
-#else
-        const half2 KQ_max_scale_h2 = make_half2(
-            KQ_max_scale[0], KQ_max_scale[0]);
-#endif // defined(AMD_MFMA_AVAILABLE)
+        if constexpr (std::is_same_v<typename T_C_VKQ::value_type, float>) {
+            const float2 KQ_max_scale_f2 = make_float2(
+                KQ_max_scale[0], KQ_max_scale[0]);
 #pragma unroll
-        for (int i = 0; i < (DV/2)/T_C_VKQ::J; ++i) {
+            for (int i = 0; i < DV/T_C_VKQ::J; ++i) {
 #pragma unroll
-            for (int l = 0; l < T_C_VKQ::ne; ++l) {
-                VKQ_C[i].x[l] *= KQ_max_scale_h2;
+                for (int l = 0; l < T_C_VKQ::ne; l +=2) {
+                    reinterpret_cast<float2&>(VKQ_C[i].x[l]) *= KQ_max_scale_f2;
+                }
+            }
+        } else {
+            const half2 KQ_max_scale_h2 = make_half2(
+                KQ_max_scale[0], KQ_max_scale[0]);
+#pragma unroll
+            for (int i = 0; i < (DV/2)/T_C_VKQ::J; ++i) {
+#pragma unroll
+                for (int l = 0; l < T_C_VKQ::ne; ++l) {
+                    VKQ_C[i].x[l] *= KQ_max_scale_h2;
+                }
             }
         }
 #else // Volta
@@ -874,7 +881,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
         const half2 * tile_V_i = !V_is_K_view || i0_stop > 2*nbatch_K2 ? tile_V : tile_V + i0_start/2;
 
 #if defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE)
-        constexpr int i0_stride = cols_per_warp == 8 ? T_C_VKQ::I : 2*T_C_VKQ::J;
+        constexpr int i0_stride = cols_per_warp == 8 ? T_C_VKQ::I : (std::is_same_v<typename T_C_VKQ::value_type, float> ? T_C_VKQ::J : 2*T_C_VKQ::J);
 #pragma unroll
         for (int i_VKQ_0 = i0_start; i_VKQ_0 < i0_stop; i_VKQ_0 += i0_stride) {
             static_assert((nbatch_fa/2) % (np*T_A_VKQ::J) == 0, "bad loop size");
@@ -968,23 +975,19 @@ template<> struct mma_tile_sizes<8> {
     using T_B_VKQ = tile< 8,  8, half2>; // column-major
     using T_C_VKQ = tile<16,  4, half2>; // row-major
 };
-#elif defined(AMD_WMMA_AVAILABLE)
+#elif defined(AMD_WMMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE)
 template<int ncols> struct mma_tile_sizes {
     using T_A_KQ  = tile<16,  8, half2>; // row-major
     using T_B_KQ  = tile<16,  8, half2>; // column-major
     using T_C_KQ  = tile<16, 16, float>; // column-major
     using T_A_VKQ = tile<16,  8, half2>; // row-major
     using T_B_VKQ = tile<16,  8, half2>; // column-major
+#if defined(CDNA3)
+    // TODO: use this for all CDNA in the future.
+    using T_C_VKQ = tile<16, 16, float>; // column-major
+#else
     using T_C_VKQ = tile<16,  8, half2>; // column-major
-};
-#elif defined(AMD_MFMA_AVAILABLE)
-template<int ncols> struct mma_tile_sizes {
-    using T_A_KQ  = tile<16,  8, half2>;  // row-major
-    using T_B_KQ  = tile<16,  8, half2>;  // column-major
-    using T_C_KQ  = tile<16, 16, float>;  // column-major
-    using T_A_VKQ = tile<16,  8, half2>;  // row-major
-    using T_B_VKQ = tile<16,  8, half2>;  // column-major
-    using T_C_VKQ = tile<16,  8, float2>; // column-major
+#endif // defined(CDNA3)
 };
 #else // Volta
 template<int ncols> struct mma_tile_sizes {
@@ -1066,7 +1069,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
 #if defined(TURING_MMA_AVAILABLE)
     T_C_VKQ VKQ_C[cols_per_warp == 8 ? DV/T_C_VKQ::I : DV/(2*T_C_VKQ::J)];
 #elif defined(AMD_WMMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE)
-    T_C_VKQ VKQ_C[                                     DV/(2*T_C_VKQ::J)];
+    T_C_VKQ VKQ_C[std::is_same_v<typename T_C_VKQ::value_type, float> ? DV/T_C_VKQ::J : DV/(2*T_C_VKQ::J)];
 #else // Volta
     T_C_VKQ VKQ_C[                                     DV/(2*T_C_VKQ::J)];
 #endif // defined(TURING_MMA_AVAILABLE)
@@ -1273,18 +1276,25 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
             }
         }
 #elif defined(AMD_WMMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE)
-#if defined(AMD_MFMA_AVAILABLE)
-        const float2 KQ_max_scale_h2 = make_float2(
-            KQ_max_scale[0], KQ_max_scale[0]);
-#else
-        const half2 KQ_max_scale_h2 = make_half2(
-            KQ_max_scale[0], KQ_max_scale[0]);
-#endif // defined(AMD_MFMA_AVAILABLE)
+        if constexpr (std::is_same_v<typename T_C_VKQ::value_type, float>) {
+            const float2 KQ_max_scale_f2 = make_float2(
+                KQ_max_scale[0], KQ_max_scale[0]);
 #pragma unroll
-        for (int i = 0; i < (DV/2)/T_C_VKQ::J; ++i) {
+            for (int i = 0; i < DV/T_C_VKQ::J; ++i) {
 #pragma unroll
-            for (int l = 0; l < T_C_VKQ::ne; ++l) {
-                VKQ_C[i].x[l] *= KQ_max_scale_h2;
+                for (int l = 0; l < T_C_VKQ::ne; l +=2) {
+                    reinterpret_cast<float2&>(VKQ_C[i].x[l]) *= KQ_max_scale_f2;
+                }
+            }
+        } else {
+            const half2 KQ_max_scale_h2 = make_half2(
+                KQ_max_scale[0], KQ_max_scale[0]);
+#pragma unroll
+            for (int i = 0; i < (DV/2)/T_C_VKQ::J; ++i) {
+#pragma unroll
+                for (int l = 0; l < T_C_VKQ::ne; ++l) {
+                    VKQ_C[i].x[l] *= KQ_max_scale_h2;
+                }
             }
         }
 #else // Volta
@@ -1457,14 +1467,25 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
             }
         } else {
             const int j0 = threadIdx.y*cols_per_warp;
+            constexpr int k1_stride = std::is_same_v<typename T_C_VKQ::value_type, float> ? T_C_VKQ::J/2 : T_C_VKQ::J;
 #pragma unroll
-            for (int k1 = 0; k1 < nbatch_combine; k1 += T_C_VKQ::J) {
+            for (int k1 = 0; k1 < nbatch_combine; k1 += k1_stride) {
+                if constexpr (std::is_same_v<typename T_C_VKQ::value_type, float>) {
 #pragma unroll
-                for (int l = 0; l < T_C_VKQ::ne; ++l) {
-                    const int j = j0 + T_C_VKQ::get_i(l);
-                    const int k = k1 + T_C_VKQ::get_j(l);
+                    for (int l = 0; l < T_C_VKQ::ne; l+=2) {
+                        const int j = j0 + T_C_VKQ::get_i(l);
+                        const int k = k1 + T_C_VKQ::get_j(l)/2;
 
-                    tile_Q[j*tile_stride + k] = ggml_cuda_cast<half2>(VKQ_C[(k00 + k1)/T_C_VKQ::J].x[l]);
+                        tile_Q[j*tile_stride + k] = ggml_cuda_cast<half2>(reinterpret_cast<float2&>(VKQ_C[(k00 + k1)/k1_stride].x[l]));
+                    }
+                } else {
+#pragma unroll
+                    for (int l = 0; l < T_C_VKQ::ne; ++l) {
+                        const int j = j0 + T_C_VKQ::get_i(l);
+                        const int k = k1 + T_C_VKQ::get_j(l);
+
+                        tile_Q[j*tile_stride + k] = VKQ_C[(k00 + k1)/k1_stride].x[l];
+                    }
                 }
             }
         }
