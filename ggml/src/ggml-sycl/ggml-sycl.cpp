@@ -4232,6 +4232,19 @@ struct pending_cpu_scatter {
     // the next op doesn't consume our destination tensor.
     const ggml_tensor * dst_tensor;
 
+    // Deferred buffer cleanup: when we skip stream->wait() (async scatter),
+    // the source buffers can't be freed until the memcpys complete.  We defer
+    // cleanup to the next flush call — by then, at least one kernel on the
+    // in-order queue has executed, guaranteeing the memcpys finished.
+    struct deferred_bufs {
+        float *       out     = nullptr;
+        float *       act     = nullptr;
+        sycl::context ctx;
+        int           dev_id  = -1;
+        bool          pool    = false;
+        bool          pending = false;
+    } prev_bufs;
+
     pending_cpu_scatter() : out_pinned(nullptr), act_pinned(nullptr),
         stream(nullptr), sycl_ctx(), device_id(-1), from_pool(false),
         owns_buffers(true), active(false), dst_tensor(nullptr) {}
@@ -4915,8 +4928,32 @@ static bool ggml_sycl_moe_fusion_enabled() {
 // Flush any pending deferred CPU scatter.  Called:
 //  - At the start of each CPU-TG MUL_MAT_ID entry
 //  - At graph boundaries (graph_compute_impl)
+// Free deferred buffers from a previous async scatter.  By the time this
+// is called, the in-order compute queue has processed at least one kernel
+// after the memcpys, guaranteeing the copies have completed.
+static void flush_prev_scatter_bufs() {
+    auto & pb = g_pending_scatter.prev_bufs;
+    if (!pb.pending) return;
+    if (pb.pool) {
+        g_pinned_buffer_pools[pb.dev_id].release({pb.act, pb.out});
+    } else {
+        if (pb.act) sycl::free(pb.act, pb.ctx);
+        if (pb.out) sycl::free(pb.out, pb.ctx);
+    }
+    pb.out     = nullptr;
+    pb.act     = nullptr;
+    pb.ctx     = sycl::context();
+    pb.dev_id  = -1;
+    pb.pool    = false;
+    pb.pending = false;
+}
+
 static void flush_pending_cpu_scatter() {
     if (!g_pending_scatter.active) return;
+
+    // Free buffers from the PREVIOUS async scatter (safe now — in-order
+    // queue has processed past those memcpys).
+    flush_prev_scatter_bufs();
 
     using hrc = std::chrono::high_resolution_clock;
     auto t0 = hrc::now();
@@ -4929,7 +4966,10 @@ static void flush_pending_cpu_scatter() {
 
         auto t1 = hrc::now();  // After CPU future.get()
 
-        // Scatter results H2D
+        // Scatter results H2D — submit memcpys to the in-order compute queue.
+        // Subsequent GPU kernels on this queue will wait for the copies to
+        // complete (same-device in-order guarantee).  We skip stream->wait()
+        // to let the host proceed to dispatch the next layer immediately.
         double total_bytes = 0;
         int    n_entries   = 0;
         if (g_pending_scatter.stream && g_pending_scatter.out_pinned) {
@@ -4944,18 +4984,13 @@ static void flush_pending_cpu_scatter() {
                 src += e.N;
             }
 
-            auto t2 = hrc::now();  // After memcpy submissions (before wait)
+            auto t2 = hrc::now();  // After memcpy submissions
 
-            g_pending_scatter.stream->wait();
-
-            auto t3 = hrc::now();  // After stream->wait()
-
-            // Record scatter decomposition if profiling
+            // Record scatter timing (no event_wait since we skip stream->wait)
             if (g_moe_profile_enabled) {
-                double cpu_wait_us   = std::chrono::duration<double, std::micro>(t1 - t0).count();
-                double submit_us     = std::chrono::duration<double, std::micro>(t2 - t1).count();
-                double event_wait_us = std::chrono::duration<double, std::micro>(t3 - t2).count();
-                g_moe_profile.moe_scatter_detail(cpu_wait_us, submit_us, event_wait_us,
+                double cpu_wait_us = std::chrono::duration<double, std::micro>(t1 - t0).count();
+                double submit_us   = std::chrono::duration<double, std::micro>(t2 - t1).count();
+                g_moe_profile.moe_scatter_detail(cpu_wait_us, submit_us, 0,
                                                  n_entries, total_bytes);
             }
         } else if (g_moe_profile_enabled) {
@@ -4967,20 +5002,17 @@ static void flush_pending_cpu_scatter() {
         GGML_LOG_ERROR("[CPU-TG] Deferred scatter failed: %s\n", ex.what());
     }
 
-    // Release pinned host buffers (skip when !owns_buffers, e.g. fusion-deferred
-    // scatters where tl_down_out manages its own thread_local memory).
+    // Defer buffer cleanup: memcpys are submitted but may not have executed
+    // yet.  Move buffers to prev_bufs for cleanup at the next flush call
+    // (by then, the in-order queue guarantees completion).
     if (g_pending_scatter.owns_buffers) {
-        if (g_pending_scatter.from_pool) {
-            g_pinned_buffer_pools[g_pending_scatter.device_id].release(
-                {g_pending_scatter.act_pinned, g_pending_scatter.out_pinned});
-        } else {
-            if (g_pending_scatter.act_pinned) {
-                sycl::free(g_pending_scatter.act_pinned, g_pending_scatter.sycl_ctx);
-            }
-            if (g_pending_scatter.out_pinned) {
-                sycl::free(g_pending_scatter.out_pinned, g_pending_scatter.sycl_ctx);
-            }
-        }
+        auto & pb       = g_pending_scatter.prev_bufs;
+        pb.out          = g_pending_scatter.out_pinned;
+        pb.act          = g_pending_scatter.act_pinned;
+        pb.ctx          = g_pending_scatter.sycl_ctx;
+        pb.dev_id       = g_pending_scatter.device_id;
+        pb.pool         = g_pending_scatter.from_pool;
+        pb.pending      = true;
     }
 
     g_pending_scatter.entries.clear();
@@ -5137,6 +5169,7 @@ static void flush_pending_secondary_scatter_if_consumed(const ggml_tensor * dst)
 // Public entry point for graph boundary flush
 void ggml_sycl_cpu_tg_flush_pending() {
     flush_pending_cpu_scatter();
+    flush_prev_scatter_bufs();  // Final cleanup for last async scatter
     flush_pending_secondary_scatter();
 }
 
