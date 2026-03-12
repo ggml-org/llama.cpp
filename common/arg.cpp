@@ -732,23 +732,28 @@ static void common_params_print_completion(common_params_context & ctx_arg) {
         "llama-completion",
         "llama-convert-llama2c-to-ggml",
         "llama-cvector-generator",
+        "llama-debug",
+        "llama-diffusion-cli",
         "llama-embedding",
         "llama-eval-callback",
         "llama-export-lora",
+        "llama-finetune",
+        "llama-fit-params",
+        "llama-gemma3-cli",
         "llama-gen-docs",
         "llama-gguf",
         "llama-gguf-hash",
         "llama-gguf-split",
-        "llama-gritlm",
+        "llama-idle",
         "llama-imatrix",
-        "llama-infill",
-        "llama-mtmd-cli",
-        "llama-llava-clip-quantize-cli",
+        "llama-llava-cli",
         "llama-lookahead",
         "llama-lookup",
         "llama-lookup-create",
         "llama-lookup-merge",
         "llama-lookup-stats",
+        "llama-minicpmv-cli",
+        "llama-mtmd-cli",
         "llama-parallel",
         "llama-passkey",
         "llama-perplexity",
@@ -2666,7 +2671,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.out_file = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_CVECTOR_GENERATOR, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_FINETUNE, LLAMA_EXAMPLE_RESULTS}));
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_CVECTOR_GENERATOR, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_FINETUNE,
+                    LLAMA_EXAMPLE_RESULTS, LLAMA_EXAMPLE_EXPORT_GRAPH_OPS}));
     add_opt(common_arg(
         {"-ofreq", "--output-frequency"}, "N",
         string_format("output the imatrix every N iterations (default: %d)", params.n_out_freq),
