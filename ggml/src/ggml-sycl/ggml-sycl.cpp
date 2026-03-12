@@ -4018,7 +4018,25 @@ struct moe_layer_ids_cache_entry {
 // Keyed by block-number layer_id (parsed from tensor name). Cleared each graph epoch.
 static thread_local std::unordered_map<int, moe_layer_ids_cache_entry> g_moe_layer_ids_cache;
 
+// Task 1E helper: re-resolve a secondary expert's device_ptr for the current sub-op's
+// weight tensor.  The cached partition stores the pointer from whichever sub-op first
+// populated it (e.g. GATE), but UP/DOWN weights live at different device addresses.
+// Returns the freshly-resolved pointer, or nullptr if the expert is no longer on the
+// expected device (evicted between sub-ops).
+static inline void * moe_1e_re_resolve_sec_ptr(
+        int cur_layer_hash, int32_t expert_id, int expected_device_id) {
+    auto & pt = ggml_sycl::get_expert_placement_table();
+    auto pl = pt.get(cur_layer_hash, expert_id);
+    if (pl.device_id == expected_device_id && pl.device_ptr) {
+        return pl.device_ptr;
+    }
+    return nullptr;  // expert moved/evicted — caller must skip or CPU-fallback
+}
+
 static void ggml_sycl_moe_layer_ids_cache_new_graph() {
+    for (auto & [_, entry] : g_moe_layer_ids_cache) {
+        entry.partition.valid = false;
+    }
     g_moe_layer_ids_cache.clear();
 }
 
@@ -27295,8 +27313,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
                         // Task 1E: Submit GPU work BEFORE CPU compute for overlap.
                         // Dispatch secondary GPU experts for GATE sub-tensor.
-                        // Use cached partition indices but re-resolve device_ptr for
-                        // GATE weight tensor (sec_indices.device_ptr is from UP).
+                        // In UP-first fused path, sec_indices hold UP weight ptrs — re-resolve for GATE.
                         if (!g_moe_fusion.sec_indices.empty()) {
                             const int64_t n_ids_gate_uf = ids->ne[0];
                             const int n_gpu_devs_gate_uf = ggml_sycl_info().total_gpu_count;
@@ -27306,9 +27323,13 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                 const int64_t iid1 = static_cast<int64_t>(sec.ci / static_cast<size_t>(n_ids_gate_uf));
                                 const int64_t id   = static_cast<int64_t>(sec.ci % static_cast<size_t>(n_ids_gate_uf));
                                 // Re-resolve device_ptr for GATE weight (UP cached a different tensor's ptr)
-                                auto pl = placement_table_pre.get(cur_layer_hash, eid);
-                                void * resolved_ptr = (pl.device_id == sec.device_id && pl.device_ptr)
-                                                          ? pl.device_ptr : sec.device_ptr;
+                                void * resolved_ptr = moe_1e_re_resolve_sec_ptr(
+                                    cur_layer_hash, eid, sec.device_id);
+                                if (!resolved_ptr) {
+                                    GGML_SYCL_DEBUG("[MoE-1E] GATE expert %d evicted from dev %d, skip\n",
+                                                    eid, sec.device_id);
+                                    continue;  // expert evicted — skip secondary dispatch
+                                }
                                 sec_entries_gate_uf[sec.device_id].push_back(
                                     { iid1, id, eid, resolved_ptr, sec.device_id });
                             }
@@ -27521,17 +27542,22 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                             g_moe_fusion.cpu_indices = cp.cpu_indices;
                             g_moe_fusion.sec_indices.reserve(cp.sec_indices.size());
                             for (const auto & s : cp.sec_indices) {
-                                // Re-resolve device_ptr for GATE weight (cached ptr is from a different tensor)
-                                auto pl = placement_table_pre.get(cur_layer_hash, ids_data_f[s.ci]);
-                                void * ptr = (pl.device_id == s.device_id && pl.device_ptr)
-                                                 ? pl.device_ptr : s.device_ptr;
-                                g_moe_fusion.sec_indices.push_back({s.ci, s.device_id, ptr});
+                                void * ptr = moe_1e_re_resolve_sec_ptr(
+                                    cur_layer_hash, ids_data_f[s.ci], s.device_id);
+                                if (ptr) {
+                                    g_moe_fusion.sec_indices.push_back({s.ci, s.device_id, ptr});
+                                } else {
+                                    g_moe_fusion.cpu_indices.push_back(s.ci);
+                                }
                             }
                             g_moe_fusion.gpu0_cached_indices = cp.gpu0_cached_indices;
                             partition_from_cache = true;
                             GGML_SYCL_DEBUG("[MoE-1E] GATE reusing cached partition for layer %d: %zu cpu, %zu sec, %zu gpu0\n",
                                             cur_layer_fast, cp.cpu_indices.size(),
                                             cp.sec_indices.size(), cp.gpu0_cached_indices.size());
+                        } else if (part_it != g_moe_layer_ids_cache.end()) {
+                            // Epoch mismatch — defensively invalidate stale partition
+                            part_it->second.partition.valid = false;
                         }
                     }
 
@@ -27588,7 +27614,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         }
                         lentry.partition.gpu0_cached_indices = g_moe_fusion.gpu0_cached_indices;
                         lentry.partition.valid = true;
-                        GGML_SYCL_DEBUG("[MOE-1E] Cached partition for layer %d: %zu cpu, %zu sec, %zu gpu0\n",
+                        GGML_SYCL_DEBUG("[MoE-1E] Cached partition for layer %d: %zu cpu, %zu sec, %zu gpu0\n",
                                         cur_layer_fast, g_moe_fusion.cpu_indices.size(),
                                         g_moe_fusion.sec_indices.size(), g_moe_fusion.gpu0_cached_indices.size());
                     }
@@ -27886,17 +27912,22 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                             g_moe_fusion.cpu_indices = cp.cpu_indices;
                             g_moe_fusion.sec_indices.reserve(cp.sec_indices.size());
                             for (const auto & s : cp.sec_indices) {
-                                // Re-resolve device_ptr for UP weight (cached ptr is from a different tensor)
-                                auto pl = placement_table_pre.get(cur_layer_hash, ids_data_f[s.ci]);
-                                void * ptr = (pl.device_id == s.device_id && pl.device_ptr)
-                                                 ? pl.device_ptr : s.device_ptr;
-                                g_moe_fusion.sec_indices.push_back({s.ci, s.device_id, ptr});
+                                void * ptr = moe_1e_re_resolve_sec_ptr(
+                                    cur_layer_hash, ids_data_f[s.ci], s.device_id);
+                                if (ptr) {
+                                    g_moe_fusion.sec_indices.push_back({s.ci, s.device_id, ptr});
+                                } else {
+                                    g_moe_fusion.cpu_indices.push_back(s.ci);
+                                }
                             }
                             g_moe_fusion.gpu0_cached_indices = cp.gpu0_cached_indices;
                             partition_from_cache_up = true;
                             GGML_SYCL_DEBUG("[MoE-1E] UP reusing cached partition for layer %d: %zu cpu, %zu sec, %zu gpu0\n",
                                             cur_layer_fast, cp.cpu_indices.size(),
                                             cp.sec_indices.size(), cp.gpu0_cached_indices.size());
+                        } else if (part_it != g_moe_layer_ids_cache.end()) {
+                            // Epoch mismatch — defensively invalidate stale partition
+                            part_it->second.partition.valid = false;
                         }
                     }
 
@@ -27953,7 +27984,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         }
                         lentry.partition.gpu0_cached_indices = g_moe_fusion.gpu0_cached_indices;
                         lentry.partition.valid = true;
-                        GGML_SYCL_DEBUG("[MOE-1E] Cached partition (UP-first) for layer %d: %zu cpu, %zu sec, %zu gpu0\n",
+                        GGML_SYCL_DEBUG("[MoE-1E] Cached partition (UP-first) for layer %d: %zu cpu, %zu sec, %zu gpu0\n",
                                         cur_layer_fast, g_moe_fusion.cpu_indices.size(),
                                         g_moe_fusion.sec_indices.size(), g_moe_fusion.gpu0_cached_indices.size());
                     }
@@ -28085,7 +28116,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     // runs in parallel while GPU processes secondary/GPU0 experts.
 
                     // Dispatch secondary GPU experts for the UP sub-tensor.
-                    // Re-resolve device_ptr for UP weight tensor (GATE cached a different tensor's ptr).
+                    // In GATE-first fused path, sec_indices hold GATE weight ptrs — re-resolve for UP.
                     if (!g_moe_fusion.sec_indices.empty()) {
                         const int64_t n_ids_up = ids->ne[0];
                         const int n_gpu_devs_up = ggml_sycl_info().total_gpu_count;
@@ -28095,9 +28126,13 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                             const int64_t iid1 = static_cast<int64_t>(sec.ci / static_cast<size_t>(n_ids_up));
                             const int64_t id   = static_cast<int64_t>(sec.ci % static_cast<size_t>(n_ids_up));
                             // Re-resolve device_ptr for UP weight (GATE cached a different tensor's ptr)
-                            auto pl = placement_table_pre.get(cur_layer_hash, eid);
-                            void * resolved_ptr = (pl.device_id == sec.device_id && pl.device_ptr)
-                                                      ? pl.device_ptr : sec.device_ptr;
+                            void * resolved_ptr = moe_1e_re_resolve_sec_ptr(
+                                cur_layer_hash, eid, sec.device_id);
+                            if (!resolved_ptr) {
+                                GGML_SYCL_DEBUG("[MoE-1E] UP expert %d evicted from dev %d, skip\n",
+                                                eid, sec.device_id);
+                                continue;  // expert evicted — skip secondary dispatch
+                            }
                             sec_entries_up[sec.device_id].push_back(
                                 { iid1, id, eid, resolved_ptr, sec.device_id });
                         }
@@ -28169,7 +28204,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     return;
                 }
 
-                // DOWN: use fused output as activation
+                // DOWN: multiply fused gate+up+SiLU output by down-projection weights.
+                // Reuses cpu_indices/sec_indices/gpu0_cached_indices from GATE/UP partition.
                 if (ggml_sycl_moe_fusion_enabled() && is_down_fast && cur_layer_fast >= 0 &&
                     g_moe_fusion.fused_pending && g_moe_fusion.layer_id == cur_layer_fast) {
                     ctx.moe_graphs_disabled_once = true;
@@ -28179,6 +28215,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     const int64_t   n_ids_d      = ids->ne[0];
 
                     // Task 1E: Read cached partition for sec/gpu0 indices with correct device_ptr.
+                    // DOWN only reads the cached partition — it never populates it (GATE or UP does).
                     // cpu_indices comes from g_moe_fusion (tied to fused_output buffer ordering).
                     {
                         const uint64_t cur_epoch_dn = g_moe_graph_epoch.load(std::memory_order_relaxed);
@@ -28191,14 +28228,20 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                             g_moe_fusion.sec_indices.clear();
                             g_moe_fusion.sec_indices.reserve(cp.sec_indices.size());
                             for (const auto & s : cp.sec_indices) {
-                                auto pl = placement_table_pre.get(cur_layer_hash, g_moe_fusion.ids_data[s.ci]);
-                                void * ptr = (pl.device_id == s.device_id && pl.device_ptr)
-                                                 ? pl.device_ptr : s.device_ptr;
-                                g_moe_fusion.sec_indices.push_back({s.ci, s.device_id, ptr});
+                                void * ptr = moe_1e_re_resolve_sec_ptr(
+                                    cur_layer_hash, g_moe_fusion.ids_data[s.ci], s.device_id);
+                                if (ptr) {
+                                    g_moe_fusion.sec_indices.push_back({s.ci, s.device_id, ptr});
+                                } else {
+                                    g_moe_fusion.cpu_indices.push_back(s.ci);
+                                }
                             }
                             g_moe_fusion.gpu0_cached_indices = cp.gpu0_cached_indices;
                             GGML_SYCL_DEBUG("[MoE-1E] DOWN reusing cached partition for layer %d: %zu sec, %zu gpu0\n",
                                             cur_layer_fast, cp.sec_indices.size(), cp.gpu0_cached_indices.size());
+                        } else if (part_it != g_moe_layer_ids_cache.end()) {
+                            // Epoch mismatch — defensively invalidate stale partition
+                            part_it->second.partition.valid = false;
                         }
                     }
 
@@ -28261,7 +28304,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     down_events.reserve(n_cpu_d + 8);
 
                     // Dispatch secondary GPU experts for the DOWN sub-tensor.
-                    // Re-resolve device_ptr for DOWN weight tensor (GATE/UP cached a different tensor's ptr).
+                    // sec_indices already hold DOWN-resolved ptrs from the cached partition read above.
                     if (!g_moe_fusion.sec_indices.empty()) {
                         const int n_gpu_devs_dn = ggml_sycl_info().total_gpu_count;
                         std::vector<std::vector<expert_dispatch_entry>> sec_entries_dn(n_gpu_devs_dn);
@@ -28269,12 +28312,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                             const int32_t eid = g_moe_fusion.ids_data[sec.ci];
                             const int64_t iid1 = static_cast<int64_t>(sec.ci / static_cast<size_t>(n_ids_d));
                             const int64_t id   = static_cast<int64_t>(sec.ci % static_cast<size_t>(n_ids_d));
-                            // Re-resolve device_ptr for DOWN weight (GATE/UP cached a different tensor's ptr)
-                            auto pl = placement_table_pre.get(cur_layer_hash, eid);
-                            void * resolved_ptr = (pl.device_id == sec.device_id && pl.device_ptr)
-                                                      ? pl.device_ptr : sec.device_ptr;
                             sec_entries_dn[sec.device_id].push_back(
-                                { iid1, id, eid, resolved_ptr, sec.device_id });
+                                { iid1, id, eid, sec.device_ptr, sec.device_id });
                         }
                         // For DOWN, activation is on device (output of SiLU/multiply)
                         char * src1_d = static_cast<char *>(ggml_sycl_get_data_ptr(src1, ctx.device));
