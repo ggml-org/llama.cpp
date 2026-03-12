@@ -34,7 +34,6 @@ Python → C++ stdin:
 import argparse
 import logging
 import math
-import os
 import re
 import subprocess
 import sys
@@ -99,6 +98,7 @@ def read_ipc(proc: subprocess.Popen, timeout: float = 120.0) -> Optional[Tuple[s
     Returns None on EOF.
     Raises TimeoutError if nothing arrives within `timeout` seconds.
     """
+    assert proc.stdout is not None
     deadline = time.monotonic() + timeout
     while True:
         remaining = deadline - time.monotonic()
@@ -120,6 +120,7 @@ def read_ipc(proc: subprocess.Popen, timeout: float = 120.0) -> Optional[Tuple[s
 
 def write_cmd(proc: subprocess.Popen, cmd: str):
     """Write one command line to the subprocess stdin."""
+    assert proc.stdin is not None
     try:
         proc.stdin.write(cmd + "\n")
         proc.stdin.flush()
@@ -268,7 +269,8 @@ def run_grpo(args: argparse.Namespace):
         raise
     finally:
         try:
-            proc.stdin.close()
+            if proc.stdin is not None:
+                proc.stdin.close()
         except Exception:
             pass
         rc = proc.wait(timeout=30)
