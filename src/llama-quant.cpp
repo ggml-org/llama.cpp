@@ -948,6 +948,15 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         std::vector<double> row_sq_norm;
     };
 
+    // Determine optimization strategy
+    auto is_angle_sensitive = [](const std::string & name) -> bool {
+        return name.find("attn_q.weight") != std::string::npos ||
+               name.find("attn_k.weight") != std::string::npos ||
+               name.find("attn_qkv.weight") != std::string::npos ||
+               name.find("attn_q_a.weight") != std::string::npos ||
+               name.find("attn_q_b.weight") != std::string::npos;
+    };
+
     // Estimate error for a given type using a sampled subset of rows
     auto compute_quant_error = [&](
         const ggml_tensor * t,
@@ -1105,18 +1114,17 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                         }
                     }
 
-                    // Concordance correlation coefficient (magnitude-Aware WCE)
-                    double ccc;
-                    const double norm_sum = nx + ny;
+                    // Cosine Distance
+                    double cos_sim;
+                    const double norm_prod = nx * ny;
 
-                    if (norm_sum <= EPSILON) { ccc = nx <= EPSILON && ny <= EPSILON ? 1.0 : 0.0; }
-                    else { ccc = 2.0 * dot / norm_sum; }
+                    if (norm_prod <= EPSILON) { cos_sim = nx <= EPSILON && ny <= EPSILON ? 1.0 : 0.0; }
+                    else { cos_sim = dot / std::sqrt(norm_prod); }
 
+                    if (cos_sim > 1.0) { cos_sim = 1.0; }
+                    else if (cos_sim < -1.0) { cos_sim = -1.0; }
 
-                    if (ccc > 1.0) { ccc = 1.0; }
-                    else if (ccc < -1.0) { ccc = -1.0; }
-
-                    slice_sum += 1.0 - ccc;
+                    slice_sum += 1.0 - cos_sim;
                     off += (size_t) n_per_row;
                 }
 
@@ -1325,13 +1333,15 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         prepare_broadcast(val_ptr, val_sz, val_storage, val_vec_ptr);
         prepare_broadcast(act_ptr, act_sz, act_storage, act_vec_ptr);
 
+        const bool use_wce_for_tensor = val_vec_ptr && act_vec_ptr && is_angle_sensitive(remapped_name);
+
         // Precompute WCE reference stats
         wce_cache ref_wce;
         mse_cache ref_mse;
         size_t total_rows_sampled = 0;
         for (int64_t r : rows_sample) { total_rows_sampled += r; }
 
-        if (valid_wce && val_vec_ptr && act_vec_ptr) {
+        if (use_wce_for_tensor) {
             ref_wce.row_sq_norm.reserve(total_rows_sampled);
             size_t off = 0;
             for (int64_t s = 0; s < ne2; ++s) {
@@ -1424,8 +1434,8 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
         for (ggml_type vt : valid_types) {
             if (bpw_stop.load(std::memory_order_relaxed)) { return std::nullopt; }
-            const wce_cache * ptr_ref_wce = valid_wce && !ref_wce.row_sq_norm.empty() ? & ref_wce : nullptr;
-            const mse_cache * ptr_ref_mse = !valid_wce && !ref_mse.row_sq_norm.empty() ? & ref_mse : nullptr;
+            const wce_cache * ptr_ref_wce = use_wce_for_tensor && !ref_wce.row_sq_norm.empty() ? & ref_wce : nullptr;
+            const mse_cache * ptr_ref_mse = !use_wce_for_tensor && !ref_mse.row_sq_norm.empty() ? & ref_mse : nullptr;
 
             quant_error qe = compute_quant_error(
                 tensor,
@@ -1536,7 +1546,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     }
 
     check_signal_handler(all_tensors);
-    if (params->save_state) { save_state(all_tensors); }
+    if (qs.params->save_state) { save_state(all_tensors); }
     if (all_tensors.empty()) { return {}; }
 
     // Compute total elements across all tensors and bytes for non-quantizable tensors
@@ -1557,21 +1567,21 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
     size_t budget_bytes = 0;
 
-    if (params->target_size != -1) {
+    if (qs.params->target_size != -1) {
         const auto metadata_size = gguf_get_meta_size(ml.metadata);
         // Budget for quantizable weights = target - metadata - Non-Quantizable Weights
-        int64_t available = (int64_t)params->target_size - (int64_t)metadata_size - (int64_t)nq_bytes;
+        int64_t available = (int64_t)qs.params->target_size - (int64_t)metadata_size - (int64_t)nq_bytes;
 
         // Clamp to the absolute minimum possible size for the variable tensors
         if (available < (int64_t)min_total_bytes) {
             LLAMA_LOG_WARN("%s: requested file size %zu is smaller than minimum possible model size (~%zu), clamping to minimum.\n",
-                func, (size_t)params->target_size, min_total_bytes + nq_bytes + metadata_size);
+                func, (size_t)qs.params->target_size, min_total_bytes + nq_bytes + metadata_size);
             budget_bytes = min_total_bytes;
         } else {
             budget_bytes = (size_t)available;
         }
     } else {
-        const double target_bpw = params->target_bpw;
+        const double target_bpw = qs.params->target_bpw;
         size_t target_total_bytes = std::llround(target_bpw * (double)nq_elements / 8.0);
         budget_bytes = target_total_bytes >= nq_bytes ? target_total_bytes - nq_bytes : min_total_bytes;
     }
@@ -1628,12 +1638,12 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     };
 
     float cutoff = std::numeric_limits<float>::quiet_NaN();
-    if (statistics_data && !statistics_data->empty()) { cutoff = threshold_score(* statistics_data, params->importance_pct); }
+    if (statistics_data && !statistics_data->empty()) { cutoff = threshold_score(* statistics_data, qs.params->importance_pct); }
 
     // Certain tensors have a higher impact on model quality, so we apply a lower penalty to them
     auto is_important = [&](const std::string & tensor_name) -> bool {
         if (tensor_name == "output.weight") { return true; }
-        if (params->importance_pct == 0.0f) { return false; }
+        if (qs.params->importance_pct == 0.0f) { return false; }
         if (std::isfinite(cutoff)) {
             if (auto it = statistics_data->find(remap_imatrix(tensor_name, mapped)); it != statistics_data->end() && !it->second.empty()) {
                 return importance_score(it->second) >= cutoff;
@@ -2070,7 +2080,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     std::unordered_map<std::string, ggml_type> bpw_overrides = {};
     if ((params->target_bpw != -1.0f || params->target_size != -1) && !params->only_copy) {
         if (params->imatrix) {
-            if (params->output_tensor_type || params->tensor_types || params->token_embedding_type || params->pure) {
+            if (params->tensor_types || params->pure) {
                 LLAMA_LOG_WARN("%s: --target-bpw/--target-size specified, ignoring all other type overrides\n", __func__);
             }
             if (params->activations) {
