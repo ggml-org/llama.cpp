@@ -4607,7 +4607,14 @@ static void ggml_backend_cuda_device_get_memory(ggml_backend_dev_t dev, size_t *
 
     // Check if UMA is explicitly enabled via environment variable
     bool uma_env = getenv("GGML_CUDA_ENABLE_UNIFIED_MEMORY") != nullptr;
+
+#if defined(GGML_USE_HIP)
+    // On AMD APUs, prop.integrated is true but hipMemGetInfo() already returns
+    // the correct TTM-backed memory. Only use the UMA path when explicitly requested.
+    bool is_uma = uma_env;
+#else
     bool is_uma = prop.integrated > 0 || uma_env;
+#endif
 
     if (is_uma) {
         // For UMA systems (like DGX Spark), use system memory info
