@@ -1344,21 +1344,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                                    string_format("error: unknown value for --flash-attn: '%s'\n", value.c_str()));
                            }
                        }).set_env("LLAMA_ARG_FLASH_ATTN"));
-    add_opt(common_arg({ "-fgdn", "--fused-gdn" }, "[on|off|auto]",
-                       string_format("set fused Gated Delta Net kernel use ('on', 'off', or 'auto', default: '%s')",
-                                     llama_fused_gdn_type_name(params.fused_gdn_type)),
-                       [](common_params & params, const std::string & value) {
-                           if (is_truthy(value)) {
-                               params.fused_gdn_type = LLAMA_FUSED_GDN_TYPE_ENABLED;
-                           } else if (is_falsey(value)) {
-                               params.fused_gdn_type = LLAMA_FUSED_GDN_TYPE_DISABLED;
-                           } else if (is_autoy(value)) {
-                               params.fused_gdn_type = LLAMA_FUSED_GDN_TYPE_AUTO;
-                           } else {
-                               throw std::runtime_error(
-                                   string_format("error: unknown value for --fused-gdn: '%s'\n", value.c_str()));
-                           }
-                       }).set_env("LLAMA_ARG_FUSED_GDN"));
     add_opt(common_arg(
         {"-p", "--prompt"}, "PROMPT",
         "prompt to start generation with; for system message, use -sys",
