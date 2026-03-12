@@ -104,18 +104,8 @@ static inline float e8m0_to_fp32(uint8_t x) {
 }
 
 // UE4M3: unsigned, 4 exp bits (bias=7), 3 mantissa bits
-// Branchless using additive bias to avoid FP32 denormals on GPU
+// Only used to populate the threadgroup LUT in kernel_mul_mv_nvfp4_f32
 static inline float ue4m3_to_fp32(uint8_t x) {
-    // Add bias of 16 to exponent to keep all values in FP32 normal range
-    // UE4M3 bits: [6:3]=exp, [2:0]=man
-    // With biased exp: FP32 value = (1 + man/8) * 2^(exp+16-127) for normal
-    // We want (1 + man/8) * 2^(exp-7), so divide by 2^(16-127+7) = multiply by 2^(127-23) = 2^104
-    // But for exp=0 (subnormal): value should be man * 2^(-9)
-    // With bias: we get (1 + man/8) * 2^(16-127) which is wrong for subnormals
-    // So this approach doesn't handle subnormals correctly.
-    // Since UE4M3 subnormals (exp=0, man=1..7) represent tiny values (max 7*2^-9 ≈ 0.0137),
-    // and these are scale factors, they're extremely rare in practice.
-    // Use select to handle the zero case, keep branches for subnormal.
     if (x == 0) {
         return 0.0f;
     }
