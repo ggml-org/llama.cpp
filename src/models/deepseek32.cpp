@@ -11,6 +11,11 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
     const int64_t n_embd_head_qk_rope = hparams.n_rot();
     const int64_t n_embd_head_qk_nope = n_embd_head_k - n_embd_head_qk_rope;
 
+    const int64_t n_indexer_head = hparams.indexer_n_head;
+    const int64_t n_embd_indexer_head = hparams.indexer_head_size;
+    const int64_t n_embd_indexer_head_rope = hparams.n_rot();
+    const int64_t n_embd_indexer_head_nope = n_embd_indexer_head - n_embd_indexer_head_rope;
+
     const uint32_t kv_lora_rank = hparams.n_lora_kv;
 
     // We have to pre-scale kq_scale and attn_factor to make the YaRN RoPE work correctly.
@@ -49,17 +54,76 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
 
         // self_attention
         {
-            ggml_tensor * q = NULL;
+            ggml_tensor * qr = ggml_mul_mat(ctx0, model.layers[il].wq_a, cur);
+            cb(qr, "qr", il);
 
-            const bool is_lite = model.layers[il].wq;
+            qr = build_norm(qr, model.layers[il].attn_q_a_norm, nullptr, LLM_NORM_RMS, il);
+            cb(qr, "qr", il);
 
-            q = ggml_mul_mat(ctx0, model.layers[il].wq_a, cur);
-            cb(q, "q", il);
+            // lightning indexer
+            {
+                ggml_tensor * indexer_q = ggml_mul_mat(ctx0, model.layers[il].indexer_attn_q_b, qr);
+                cb(indexer_q, "indexer_q", il);
 
-            q = build_norm(q, model.layers[il].attn_q_a_norm, nullptr, LLM_NORM_RMS, il);
-            cb(q, "q", il);
+                // split into {n_embd_indexer_head_rope, n_indexer_head, n_tokens}
+                ggml_tensor * indexer_q_pe =
+                    ggml_view_3d(ctx0, indexer_q, n_embd_indexer_head_rope, n_indexer_head, n_tokens,
+                                 ggml_row_size(indexer_q->type, n_embd_indexer_head), 
+                                 ggml_row_size(indexer_q->type, n_embd_indexer_head) * n_indexer_head, 0); 
+                cb(indexer_q_pe, "indexer_q_pe", il);
 
-            q = ggml_mul_mat(ctx0, model.layers[il].wq_b, q);
+                // and {n_embd_indexer_head_nope, n_indexer_head, n_tokens}
+                ggml_tensor * indexer_q_nope =
+                    ggml_view_3d(ctx0, indexer_q, n_embd_indexer_head_nope, n_indexer_head, n_tokens,
+                                 ggml_row_size(indexer_q->type, n_embd_indexer_head), 
+                                 ggml_row_size(indexer_q->type, n_embd_indexer_head) * n_indexer_head,
+                                 ggml_row_size(indexer_q->type, n_embd_indexer_head_nope));
+                cb(indexer_q_nope, "indexer_q_nope", il);
+
+                indexer_q_pe = ggml_rope_ext(ctx0, indexer_q_pe, inp_pos, nullptr, n_rot, 
+                                     LLAMA_ROPE_TYPE_NEOX, n_ctx_orig, freq_base, freq_scale,
+                                     ext_factor, attn_factor, beta_fast, beta_slow);
+                cb(indexer_q_pe, "indexer_q_pe", il);
+
+                // {n_embd_indexer_head_qk_rope + n_embd_indexer_head_qk_nope, n_head, n_tokens}
+                indexer_q = ggml_concat(ctx0, indexer_q_pe, indexer_q_nope, 0);
+                cb(indexer_q, "indexer_q", il);
+
+                ggml_tensor * indexer_k = ggml_mul_mat(ctx0, model.layers[il].indexer_attn_k, cur);
+                cb(indexer_k, "indexer_k", il);
+
+                indexer_k = build_norm(indexer_k, model.layers[il].indexer_k_norm, model.layers[il].indexer_k_norm_b, LLM_NORM, il);
+                cb(indexer_k, "indexer_k", il);
+
+                // split into {n_embd_indexer_head_qk_rope, 1, n_tokens}
+                ggml_tensor * indexer_k_pe =
+                    ggml_view_3d(ctx0, indexer_k, n_embd_indexer_head_rope, 1, n_tokens,
+                                 ggml_row_size(indexer_k->type, n_embd_indexer_head), 
+                                 ggml_row_size(indexer_k->type, n_embd_indexer_head) * 1, 0); 
+                cb(indexer_k_pe, "indexer_k_pe", il);
+
+                // and {n_embd_indexer_head_qk_nope, 1, n_tokens}
+                ggml_tensor * indexer_k_nope =
+                    ggml_view_3d(ctx0, indexer_k, n_embd_indexer_head_nope, 1, n_tokens,
+                                 ggml_row_size(indexer_k->type, n_embd_indexer_head), 
+                                 ggml_row_size(indexer_k->type, n_embd_indexer_head) * 1,
+                                 ggml_row_size(indexer_k->type, n_embd_indexer_head_nope));
+                cb(indexer_k_nope, "indexer_k_nope", il);
+
+                indexer_k_pe = ggml_rope_ext(ctx0, indexer_k_pe, inp_pos, nullptr, n_rot, 
+                                     LLAMA_ROPE_TYPE_NEOX, n_ctx_orig, freq_base, freq_scale,
+                                     ext_factor, attn_factor, beta_fast, beta_slow);
+                cb(indexer_k_pe, "indexer_k_pe", il);
+
+                // {n_embd_indexer_head_qk_rope + n_embd_indexer_head_qk_nope, 1, n_tokens}
+                indexer_k = ggml_concat(ctx0, indexer_k_pe, indexer_k_nope, 0);
+                cb(indexer_k, "indexer_k", il);
+
+                ggml_build_forward_expand(gf, indexer_q);
+                ggml_build_forward_expand(gf, indexer_k);
+            }
+
+            ggml_tensor * q = ggml_mul_mat(ctx0, model.layers[il].wq_b, qr);
             cb(q, "q", il);
 
             // split into {n_embd_head_qk_nope, n_head, n_tokens}
