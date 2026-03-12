@@ -5073,9 +5073,12 @@ static void flush_pending_secondary_scatter() {
     if (!g_pending_secondary_scatter.active) return;
 
     try {
-        // Wait on specific D2H memcpy events instead of draining entire queues
+        // Wait on specific D2H memcpy events instead of draining entire queues.
+        // Skip zero-scatter entries (null target_queue) from B50 local aggregation.
         for (auto & e : g_pending_secondary_scatter.entries) {
-            e.last_event.wait();
+            if (e.target_queue) {
+                e.last_event.wait();
+            }
         }
 
         // Scatter results H2D to primary GPU dst, then drain
@@ -5085,6 +5088,11 @@ static void flush_pending_secondary_scatter() {
                 if (e.dst_device && e.out_staging) {
                     g_pending_secondary_scatter.stream->memcpy(
                         e.dst_device, e.out_staging, e.bytes);
+                } else if (e.dst_device && !e.out_staging) {
+                    // B50 local aggregation: zero-fill remaining expert slots
+                    // whose contributions were folded into the aggregate.
+                    g_pending_secondary_scatter.stream->memset(
+                        e.dst_device, 0, e.bytes);
                 }
             }
         }
@@ -27022,6 +27030,15 @@ static void dispatch_experts_secondary_gpu_impl(
         float *       out_agg    = nullptr;
         size_t        dev_agg_sz = 0;
         size_t        out_agg_sz = 0;
+        // B50 local aggregation: weighted reduction buffer on secondary GPU.
+        // dev_reduce holds the weighted sum of multiple experts for one token.
+        // gate_dev holds gating weights copied H2D for the reduction kernel.
+        float *       dev_reduce    = nullptr;
+        float *       gate_dev      = nullptr;
+        float *       out_reduce    = nullptr;  // host-pinned for aggregate D2H
+        size_t        dev_reduce_sz = 0;
+        size_t        gate_dev_sz   = 0;
+        size_t        out_reduce_sz = 0;
         sycl::context pri_ctx{};
         sycl::context sec_ctx{};
         bool          valid                        = false;
@@ -27034,8 +27051,11 @@ static void dispatch_experts_secondary_gpu_impl(
                 if (dev_q8_1[s])    { sycl::free(dev_q8_1[s],    sec_ctx); }
                 if (dev_out[s])     { sycl::free(dev_out[s],     sec_ctx); }
             }
-            if (dev_agg) { sycl::free(dev_agg, sec_ctx); }
-            if (out_agg) { sycl::free(out_agg, pri_ctx); }
+            if (dev_agg)    { sycl::free(dev_agg,    sec_ctx); }
+            if (out_agg)    { sycl::free(out_agg,    pri_ctx); }
+            if (dev_reduce) { sycl::free(dev_reduce, sec_ctx); }
+            if (gate_dev)   { sycl::free(gate_dev,   sec_ctx); }
+            if (out_reduce) { sycl::free(out_reduce, pri_ctx); }
         }
     };
     static thread_local secondary_ring_buffers rings[GGML_SYCL_MAX_DEVICES];
@@ -27225,59 +27245,214 @@ static void dispatch_experts_secondary_gpu_impl(
             }
         }
 
-        // Phase 4: Aggregate expert results into contiguous buffer on B50,
-        // then do a single D2H transfer instead of per-expert D2H copies.
-        // This reduces cross-device synchronizations from chunk_sz to 1.
-        const size_t agg_bytes = chunk_sz * needed_out;
+        // Phase 4: B50 local aggregation.
+        // When multiple experts for the same token land on this secondary GPU,
+        // compute the weighted sum on-device and transfer only the aggregate
+        // (~1×N floats) instead of per-expert results (~K×N floats).
+        // Requires pre-scanned gating weights in g_moe_weights_by_layer.
+        //
+        // Math:  agg = sum_k(w_k * expert_k_output)
+        // Write  agg / w_first  to first expert slot in dst.
+        // Write  0             to remaining expert slots in dst.
+        // Downstream: MUL(slots, weights) + SUM gives w_first * (agg/w_first) = agg. ✓
 
-        // Ensure aggregation buffers are large enough.
-        if (!ring.dev_agg || agg_bytes > ring.dev_agg_sz) {
-            if (ring.dev_agg) { sycl::free(ring.dev_agg, sec_ctx); }
-            ring.dev_agg    = sycl::malloc_device<float>(chunk_sz * static_cast<size_t>(N), *target_queue);
-            ring.dev_agg_sz = agg_bytes;
+        // Check if local aggregation is possible for this chunk:
+        // (1) feature enabled, (2) batch=1, (3) >1 expert in chunk, (4) gating weights available
+        bool do_local_agg = false;
+        const float * gate_weights_host = nullptr;
+        float gate_w_stack[MERGE_RING_SIZE] = {};
+        int agg_layer_id = -1;
+
+        if (ggml_sycl_b50_local_agg_enabled() && batch1 && chunk_sz > 1) {
+            agg_layer_id = parse_layer_id_from_name(ctx.src0->name ? ctx.src0->name : "");
+            if (agg_layer_id >= 0) {
+                auto wit = g_moe_weights_by_layer.find(agg_layer_id);
+                if (wit != g_moe_weights_by_layer.end()) {
+                    const ggml_tensor * wt = wit->second;
+                    // weights shape: [1, n_expert_used, n_tokens] or [n_expert_used, n_tokens]
+                    // For batch=1 TG: n_expert_used contiguous floats on device.
+                    // n_expert_used = max(wt->ne[0], wt->ne[1]) covers both layouts.
+                    const int64_t n_expert_used = std::max(wt->ne[0], wt->ne[1]);
+                    if (wt->data && n_expert_used <= MERGE_RING_SIZE) {
+                        const size_t wt_bytes = static_cast<size_t>(n_expert_used) * sizeof(float);
+                        ctx.stream->memcpy(gate_w_stack, wt->data, wt_bytes).wait();
+                        gate_weights_host = gate_w_stack;
+
+                        // Verify first B50 expert slot has non-zero weight
+                        const auto & first_entry = entries[gpu_indices[chunk_start]];
+                        const float w_first_val = gate_w_stack[first_entry.id];
+                        if (w_first_val > 1e-8f) {
+                            do_local_agg = true;
+                        }
+                    }
+                }
+            }
         }
-        if (!ring.out_agg || agg_bytes > ring.out_agg_sz) {
-            if (ring.out_agg) { sycl::free(ring.out_agg, pri_ctx); }
-            ring.out_agg    = sycl::malloc_host<float>(chunk_sz * static_cast<size_t>(N), pri_ctx);
-            ring.out_agg_sz = agg_bytes;
+
+        if (do_local_agg) {
+            // --- B50 local aggregation: weighted reduce on secondary GPU ---
+
+            // Ensure reduction buffers on B50 and host.
+            if (!ring.dev_reduce || needed_out > ring.dev_reduce_sz) {
+                if (ring.dev_reduce) { sycl::free(ring.dev_reduce, sec_ctx); }
+                ring.dev_reduce    = sycl::malloc_device<float>(N, *target_queue);
+                ring.dev_reduce_sz = needed_out;
+            }
+            if (!ring.out_reduce || needed_out > ring.out_reduce_sz) {
+                if (ring.out_reduce) { sycl::free(ring.out_reduce, pri_ctx); }
+                ring.out_reduce    = sycl::malloc_host<float>(N, pri_ctx);
+                ring.out_reduce_sz = needed_out;
+            }
+            if (!ring.gate_dev || chunk_sz * sizeof(float) > ring.gate_dev_sz) {
+                if (ring.gate_dev) { sycl::free(ring.gate_dev, sec_ctx); }
+                ring.gate_dev    = sycl::malloc_device<float>(MERGE_RING_SIZE, *target_queue);
+                ring.gate_dev_sz = MERGE_RING_SIZE * sizeof(float);
+            }
+
+            if (ring.dev_reduce && ring.out_reduce && ring.gate_dev) {
+                // Collect gating weights for the experts in this chunk and
+                // compute the inverse of the first expert's weight for the
+                // slot-0 compensation trick.
+                float gate_w_chunk[MERGE_RING_SIZE] = {};
+                const auto & first_entry = entries[gpu_indices[chunk_start]];
+                const float w_first_val = gate_weights_host[first_entry.id];
+                const float inv_w_first = 1.0f / w_first_val;
+
+                for (size_t ci = 0; ci < chunk_sz; ci++) {
+                    const auto & entry = entries[gpu_indices[chunk_start + ci]];
+                    gate_w_chunk[ci] = gate_weights_host[entry.id];
+                }
+
+                // H2D gating weights to secondary GPU.
+                target_queue->memcpy(ring.gate_dev, gate_w_chunk, chunk_sz * sizeof(float));
+
+                // Weighted reduction kernel on B50:
+                // dev_reduce[j] = inv_w_first * sum_k(gate_w[k] * dev_out[k][j])
+                const int     n_elems  = static_cast<int>(N);
+                const int     n_experts_chunk = static_cast<int>(chunk_sz);
+                float *       reduce_dst = ring.dev_reduce;
+                float * const * out_ptrs_host = dev_out;  // dev_out[slot] are device pointers
+                const float * gate_d   = ring.gate_dev;
+
+                // Copy dev_out pointers to device via a small staging buffer.
+                // dev_out[0..chunk_sz-1] are device-side pointers we pass to kernel.
+                // Use dev_agg as a pointer table (reuse existing buffer).
+                const size_t ptr_table_bytes = chunk_sz * sizeof(float *);
+                if (!ring.dev_agg || ptr_table_bytes > ring.dev_agg_sz) {
+                    if (ring.dev_agg) { sycl::free(ring.dev_agg, sec_ctx); }
+                    ring.dev_agg    = sycl::malloc_device<float>(
+                        (ptr_table_bytes + sizeof(float) - 1) / sizeof(float), *target_queue);
+                    ring.dev_agg_sz = ptr_table_bytes;
+                }
+                float ** ptr_table_dev = reinterpret_cast<float **>(ring.dev_agg);
+                float *  ptr_table_host[MERGE_RING_SIZE];
+                for (size_t ci = 0; ci < chunk_sz; ci++) {
+                    ptr_table_host[ci] = dev_out[static_cast<int>(ci)];
+                }
+                target_queue->memcpy(ptr_table_dev, ptr_table_host, chunk_sz * sizeof(float *));
+
+                // Launch weighted reduction kernel.
+                target_queue->submit([&](sycl::handler & cgh) {
+                    cgh.parallel_for(sycl::range<1>(static_cast<size_t>(n_elems)),
+                        [=](sycl::id<1> idx) {
+                            const int j = static_cast<int>(idx[0]);
+                            float acc = 0.0f;
+                            for (int k = 0; k < n_experts_chunk; k++) {
+                                acc += gate_d[k] * ptr_table_dev[k][j];
+                            }
+                            reduce_dst[j] = acc * inv_w_first;
+                        });
+                });
+
+                // Single D2H: dev_reduce -> out_reduce (1×N floats).
+                sycl::event reduce_d2h = target_queue->memcpy(
+                    ring.out_reduce, ring.dev_reduce, needed_out);
+
+                // Record scatter: aggregate goes to first expert's slot,
+                // remaining B50 expert slots get zero via memset on primary queue.
+                const int64_t i1_first = first_entry.id;
+                const int64_t i2_first = first_entry.iid1;
+                char * d_first = ctx.dst_original + i1_first * nb1 + i2_first * nb2;
+                g_pending_secondary_scatter.entries.push_back(
+                    { d_first, ring.out_reduce, needed_out, target_queue, reduce_d2h });
+
+                // Zero remaining expert slots on primary GPU (async memset).
+                for (size_t ci = 1; ci < chunk_sz; ci++) {
+                    const auto &  entry = entries[gpu_indices[chunk_start + ci]];
+                    const int64_t i1    = entry.id;
+                    const int64_t i2    = entry.iid1;
+                    char *        d_d   = ctx.dst_original + i1 * nb1 + i2 * nb2;
+                    // Push a zero-scatter entry: null staging pointer signals memset.
+                    g_pending_secondary_scatter.entries.push_back(
+                        { d_d, nullptr, needed_out, nullptr, sycl::event{} });
+                }
+
+                static std::atomic<int> agg_log{0};
+                if (agg_log.fetch_add(1, std::memory_order_relaxed) < 5) {
+                    GGML_LOG_INFO("[B50-AGG] Local aggregation: %zu experts -> 1 transfer "
+                                  "(layer %d, N=%ld, saved %.1f KB)\n",
+                                  chunk_sz, agg_layer_id, (long)N,
+                                  (chunk_sz - 1) * needed_out / 1024.0);
+                }
+            } else {
+                // Allocation failed — fall through to standard path.
+                do_local_agg = false;
+            }
         }
 
-        if (ring.dev_agg && ring.out_agg) {
-            // Pack per-expert dev_out[slot] into contiguous dev_agg on B50.
-            for (size_t ci = 0; ci < chunk_sz; ci++) {
-                const int slot = static_cast<int>(ci);
-                target_queue->memcpy(ring.dev_agg + ci * static_cast<size_t>(N),
-                                     dev_out[slot], needed_out);
+        if (!do_local_agg) {
+            // Standard path: coalesced D2H or per-expert D2H.
+            const size_t agg_bytes = chunk_sz * needed_out;
+
+            // Ensure aggregation buffers are large enough.
+            if (!ring.dev_agg || agg_bytes > ring.dev_agg_sz) {
+                if (ring.dev_agg) { sycl::free(ring.dev_agg, sec_ctx); }
+                ring.dev_agg    = sycl::malloc_device<float>(chunk_sz * static_cast<size_t>(N), *target_queue);
+                ring.dev_agg_sz = agg_bytes;
+            }
+            if (!ring.out_agg || agg_bytes > ring.out_agg_sz) {
+                if (ring.out_agg) { sycl::free(ring.out_agg, pri_ctx); }
+                ring.out_agg    = sycl::malloc_host<float>(chunk_sz * static_cast<size_t>(N), pri_ctx);
+                ring.out_agg_sz = agg_bytes;
             }
 
-            // Single D2H: contiguous dev_agg -> contiguous out_agg.
-            sycl::event agg_d2h = target_queue->memcpy(ring.out_agg, ring.dev_agg, agg_bytes);
+            if (ring.dev_agg && ring.out_agg) {
+                // Pack per-expert dev_out[slot] into contiguous dev_agg on B50.
+                for (size_t ci = 0; ci < chunk_sz; ci++) {
+                    const int slot = static_cast<int>(ci);
+                    target_queue->memcpy(ring.dev_agg + ci * static_cast<size_t>(N),
+                                         dev_out[slot], needed_out);
+                }
 
-            // Record scatter metadata referencing offsets within out_agg.
-            for (size_t ci = 0; ci < chunk_sz; ci++) {
-                const auto &  entry = entries[gpu_indices[chunk_start + ci]];
-                const int64_t i1    = entry.id;
-                const int64_t i2    = entry.iid1;
-                char *        d_d   = ctx.dst_original + i1 * nb1 + i2 * nb2;
-                float *       host_ptr = ring.out_agg + ci * static_cast<size_t>(N);
-                g_pending_secondary_scatter.entries.push_back(
-                    { d_d, host_ptr, needed_out, target_queue, agg_d2h });
-            }
-        } else {
-            // Fallback: per-expert D2H if aggregation alloc failed.
-            sycl::event d2h_events[MERGE_RING_SIZE];
-            for (size_t ci = 0; ci < chunk_sz; ci++) {
-                const int slot = static_cast<int>(ci);
-                d2h_events[ci] = target_queue->memcpy(out_staging[slot], dev_out[slot], needed_out);
-            }
-            for (size_t ci = 0; ci < chunk_sz; ci++) {
-                const auto &  entry = entries[gpu_indices[chunk_start + ci]];
-                const int     slot  = static_cast<int>(ci);
-                const int64_t i1    = entry.id;
-                const int64_t i2    = entry.iid1;
-                char *        d_d   = ctx.dst_original + i1 * nb1 + i2 * nb2;
-                g_pending_secondary_scatter.entries.push_back(
-                    { d_d, out_staging[slot], needed_out, target_queue, d2h_events[ci] });
+                // Single D2H: contiguous dev_agg -> contiguous out_agg.
+                sycl::event agg_d2h = target_queue->memcpy(ring.out_agg, ring.dev_agg, agg_bytes);
+
+                // Record scatter metadata referencing offsets within out_agg.
+                for (size_t ci = 0; ci < chunk_sz; ci++) {
+                    const auto &  entry = entries[gpu_indices[chunk_start + ci]];
+                    const int64_t i1    = entry.id;
+                    const int64_t i2    = entry.iid1;
+                    char *        d_d   = ctx.dst_original + i1 * nb1 + i2 * nb2;
+                    float *       host_ptr = ring.out_agg + ci * static_cast<size_t>(N);
+                    g_pending_secondary_scatter.entries.push_back(
+                        { d_d, host_ptr, needed_out, target_queue, agg_d2h });
+                }
+            } else {
+                // Fallback: per-expert D2H if aggregation alloc failed.
+                sycl::event d2h_events[MERGE_RING_SIZE];
+                for (size_t ci = 0; ci < chunk_sz; ci++) {
+                    const int slot = static_cast<int>(ci);
+                    d2h_events[ci] = target_queue->memcpy(out_staging[slot], dev_out[slot], needed_out);
+                }
+                for (size_t ci = 0; ci < chunk_sz; ci++) {
+                    const auto &  entry = entries[gpu_indices[chunk_start + ci]];
+                    const int     slot  = static_cast<int>(ci);
+                    const int64_t i1    = entry.id;
+                    const int64_t i2    = entry.iid1;
+                    char *        d_d   = ctx.dst_original + i1 * nb1 + i2 * nb2;
+                    g_pending_secondary_scatter.entries.push_back(
+                        { d_d, out_staging[slot], needed_out, target_queue, d2h_events[ci] });
+                }
             }
         }
         g_pending_secondary_scatter.stream     = ctx.stream;
