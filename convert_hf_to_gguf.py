@@ -2194,12 +2194,14 @@ class GPTNeoXModel(TextModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         n_head = self.hparams.get("n_head", self.hparams.get("num_attention_heads"))
         n_embed = self.hparams.get("hidden_size", self.hparams.get("n_embed"))
+        assert n_head is not None
+        assert n_embed is not None
 
         if re.match(r"gpt_neox\.layers\.\d+\.attention\.query_key_value\.weight", name):
             # Map bloom-style qkv_linear to gpt-style qkv_linear
             # bloom: https://github.com/huggingface/transformers/blob/main/src/transformers/models/bloom/modeling_bloom.py#L238-L252  # noqa
             # gpt-2: https://github.com/huggingface/transformers/blob/main/src/transformers/models/gpt2/modeling_gpt2.py#L312  # noqa
-            qkv_weights = data_torch.reshape((n_head, 3, n_embed // n_head, n_embed))
+            qkv_weights = data_torch.reshape(n_head, 3, n_embed // n_head, n_embed)
             data_torch = torch.cat(
                 (
                     qkv_weights[:, 0, :, :].reshape((-1, n_embed)),
@@ -2231,6 +2233,8 @@ class BloomModel(TextModel):
     def set_gguf_parameters(self):
         n_embed = self.hparams.get("hidden_size", self.hparams.get("n_embed"))
         n_head = self.hparams.get("n_head", self.hparams.get("num_attention_heads"))
+        assert n_head is not None
+        assert n_embed is not None
         self.gguf_writer.add_context_length(self.hparams.get("seq_length", n_embed))
         self.gguf_writer.add_embedding_length(n_embed)
         self.gguf_writer.add_feed_forward_length(4 * n_embed)
@@ -2243,6 +2247,8 @@ class BloomModel(TextModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         n_head = self.hparams.get("n_head", self.hparams.get("num_attention_heads"))
         n_embed = self.hparams.get("hidden_size", self.hparams.get("n_embed"))
+        assert n_head is not None
+        assert n_embed is not None
 
         name = re.sub(r'transformer\.', '', name)
 
@@ -2250,7 +2256,7 @@ class BloomModel(TextModel):
             # Map bloom-style qkv_linear to gpt-style qkv_linear
             # bloom: https://github.com/huggingface/transformers/blob/main/src/transformers/models/bloom/modeling_bloom.py#L238-L252  # noqa
             # gpt-2: https://github.com/huggingface/transformers/blob/main/src/transformers/models/gpt2/modeling_gpt2.py#L312  # noqa
-            qkv_weights = data_torch.reshape((n_head, 3, n_embed // n_head, n_embed))
+            qkv_weights = data_torch.reshape(n_head, 3, n_embed // n_head, n_embed)
             data_torch = torch.cat(
                 (
                     qkv_weights[:, 0, :, :].reshape((-1, n_embed)),
@@ -3853,6 +3859,7 @@ class LLaDAModel(TextModel):
 
         if (rope_dim := hparams.get("head_dim")) is None:
             n_heads = hparams.get("num_attention_heads", hparams.get("n_heads"))
+            assert n_heads is not None
             rope_dim = hparams.get("hidden_size", hparams.get("d_model")) // n_heads
         self.gguf_writer.add_rope_dimension_count(rope_dim)
 
@@ -3884,6 +3891,7 @@ class LLaDAModel(TextModel):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         n_head = self.hparams.get("num_attention_heads", self.hparams.get("n_heads"))
+        assert n_head is not None
         n_kv_head = self.hparams.get("num_key_value_heads", self.hparams.get("n_kv_heads"))
 
         if self.undo_permute:
@@ -9485,7 +9493,9 @@ class ChatGLMModel(TextModel):
 
     def set_gguf_parameters(self):
         n_embed = self.hparams.get("hidden_size", self.hparams.get("n_embed"))
+        assert n_embed is not None
         n_head = self.hparams.get("n_head", self.hparams.get("num_attention_heads"))
+        assert n_head is not None
         n_head_kv = self.hparams.get("multi_query_group_num", self.hparams.get("num_key_value_heads", n_head))
         self.gguf_writer.add_context_length(self.hparams.get("seq_length", n_embed))
         self.gguf_writer.add_embedding_length(n_embed)
