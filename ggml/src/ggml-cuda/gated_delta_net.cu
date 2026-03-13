@@ -39,7 +39,7 @@ gated_delta_net_cuda(const float * q,
 
     const int64_t state_offset = (sequence * H + h_idx) * S_v * S_v;
     state += state_offset;
-    curr_state += state_offset;
+    curr_state += state_offset + col * S_v;
     attn_data += (sequence * n_tokens * H + h_idx) * S_v;
 
     constexpr int warp_size = ggml_cuda_get_physical_warp_size() < S_v ? ggml_cuda_get_physical_warp_size() : S_v;
@@ -47,10 +47,11 @@ gated_delta_net_cuda(const float * q,
     constexpr int rows_per_lane = (S_v + warp_size - 1) / warp_size;
     float         s_shard[rows_per_lane];
     // state is stored transposed: M[col][i] = S[i][col], row col is contiguous
+
 #pragma unroll
     for (int r = 0; r < rows_per_lane; r++) {
         const int i = r * warp_size + lane;
-        s_shard[r]  = curr_state[col * S_v + i];
+        s_shard[r]  = curr_state[i];
     }
 
     for (int t = 0; t < n_tokens; t++) {
