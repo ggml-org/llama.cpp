@@ -97,7 +97,7 @@ static const uint num_subgroups = SubGroupSize == 0 ? 0 : WorkGroupSize / SubGro
 // If SubGroupSize is set to 0 then only use shmem reductions
 static const uint tmpsh_size = (SubGroupSize > 0) ? (row_split == 1 ? num_subgroups * D_split : num_subgroups) : WorkGroupSize;
 groupshared float tmpsh[tmpsh_size];
-struct ShMemFloat: ISharedMemory<float> {
+struct ShMemFloat: ISharedMemory<float, 1> {
     static float get(uint idx) {
         return tmpsh[idx];
     }
@@ -106,7 +106,7 @@ struct ShMemFloat: ISharedMemory<float> {
     }
 }
 groupshared vector<FLOAT, 4> tmpshv4[tmpsh_size];
-struct ShMemFloat4: ISharedMemory<vector<FLOAT, 4>> {
+struct ShMemFloat4: ISharedMemory<FLOAT, 4> {
     static vector<FLOAT, 4> get(uint idx) {
         return tmpshv4[idx];
     }
@@ -583,7 +583,7 @@ void main(
         float rowmaxf = Mf[r];
 
         // Compute max across the row
-        rowmaxf = reduce<float, MaxOp<float>, ShMemFloat>(rowmaxf, D_split, threads_per_rowgroup);
+        rowmaxf = reduce<float, 1, MaxOp<float, 1>, ShMemFloat>(rowmaxf, D_split, threads_per_rowgroup, tid, SubGroupSize);
 
         float Moldf = Mf[r];
 
@@ -595,12 +595,12 @@ void main(
         Lf[r] = eMf*Lf[r];
 
         // Compute sum across the row
-        Lf[r] = reduce<float, SumOp<float>, ShMemFloat>(Lf[r], D_split, threads_per_rowgroup);
+        Lf[r] = reduce<float, 1, SumOp<float, 1>, ShMemFloat>(Lf[r], D_split, threads_per_rowgroup, tid, SubGroupSize);
 
         [unroll] for (uint d = 0; d < HSV_per_thread / 4; ++d) {
             Of[r][d] = FLOAT(eMf) * Of[r][d];
 
-            reduceVec<FLOAT, 4, SumVecOp<FLOAT, 4>, ShMemFloat4>(Of[r][d], D_split, threads_per_rowgroup, OLD_AMD_WINDOWS);
+            Of[r][d] = reduce<FLOAT, 4, SumOp<FLOAT, 4>, ShMemFloat4>(Of[r][d], D_split, threads_per_rowgroup, tid, SubGroupSize, OLD_AMD_WINDOWS);
         }
     }
 
