@@ -60,8 +60,7 @@ struct cli_context {
     int reasoning_budget = -1;
     std::string reasoning_budget_message;
     common_reasoning_format reasoning_format;
-    bool file_streaming = false;
-    std::ofstream * file_out = nullptr;
+    std::optional<std::ofstream *> file_out = std::nullopt;
 
     // thread for showing "loading" animation
     std::atomic<bool> loading_show;
@@ -84,7 +83,7 @@ struct cli_context {
         reasoning_format = params.reasoning_format;
     }
 
-    std::string generate_completion(result_timings & out_timings, std::ofstream * file_to_use = nullptr) {
+    std::string generate_completion(result_timings & out_timings) {
         server_response_reader rd = ctx_server.get_response_reader();
         auto chat_params = format_chat();
         {
@@ -131,9 +130,6 @@ struct cli_context {
             console::set_display(DISPLAY_TYPE_RESET);
         }
 
-        // check if we are doing file output
-        file_out = file_to_use;
-        file_streaming  = (file_out != nullptr && file_out->is_open());
         append_file_out(
             "[Prompt]: " + messages.back()["content"].get<std::string>() + "\n\n", 
             chat_params.prompt
@@ -230,15 +226,15 @@ struct cli_context {
     }
 
     void append_file_out(const std::string & content, const std::optional<std::string> & special_characters_content = std::nullopt) {
-        if (!file_streaming) {
+        if (!file_out.has_value()) {
             return;
         }
         if (defaults.special_characters && special_characters_content.has_value()) {
-            *file_out << special_characters_content.value();
+            *file_out.value() << special_characters_content.value();
         } else {
-            *file_out << content;
+            *file_out.value() << content;
         }
-        file_out->flush();
+        file_out.value()->flush();
     }
 
     common_chat_params format_chat() {
@@ -409,11 +405,13 @@ int main(int argc, char ** argv) {
     std::ofstream output_file;
     if (!params.out_file.empty()) {
         output_file.open(params.out_file, std::ios::binary);
-        if (!output_file) {
+        if (!output_file || !output_file.is_open()) {
             console::error("Failed to open output file '%s'\n", params.out_file.c_str());
             return 1;
         }
+        ctx_cli.file_out = &output_file;
     }
+    
     console::set_display(DISPLAY_TYPE_RESET);
     console::set_completion_callback(auto_completion_callback);
 
@@ -604,7 +602,7 @@ int main(int argc, char ** argv) {
             cur_msg.clear();
         }
         result_timings timings;
-        std::string assistant_content = ctx_cli.generate_completion(timings, params.out_file.empty() ? nullptr : &output_file);
+        std::string assistant_content = ctx_cli.generate_completion(timings);
         ctx_cli.messages.push_back({
             {"role",    "assistant"},
             {"content", assistant_content}
