@@ -1024,6 +1024,13 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_SSM_IN,
                 LLM_TENSOR_SSM_NORM,
                 LLM_TENSOR_SSM_OUT,
+                LLM_TENSOR_FFN_NORM,
+                LLM_TENSOR_NEXTN_EH_PROJ,
+                LLM_TENSOR_NEXTN_EMBED_TOKENS,
+                LLM_TENSOR_NEXTN_ENORM,
+                LLM_TENSOR_NEXTN_HNORM,
+                LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD,
+                LLM_TENSOR_NEXTN_SHARED_HEAD_NORM,
             };
         case LLM_ARCH_QWEN35:
             return {
@@ -1082,6 +1089,13 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_SSM_ALPHA,
                 LLM_TENSOR_SSM_NORM,
                 LLM_TENSOR_SSM_OUT,
+                LLM_TENSOR_FFN_NORM,
+                LLM_TENSOR_NEXTN_EH_PROJ,
+                LLM_TENSOR_NEXTN_EMBED_TOKENS,
+                LLM_TENSOR_NEXTN_ENORM,
+                LLM_TENSOR_NEXTN_HNORM,
+                LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD,
+                LLM_TENSOR_NEXTN_SHARED_HEAD_NORM,
             };
         case LLM_ARCH_QWEN3VL:
         case LLM_ARCH_CHAMELEON:

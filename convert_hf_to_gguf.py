@@ -4662,9 +4662,49 @@ class Qwen3NextModel(Qwen2MoeModel):
             rope_dim = self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
         self.gguf_writer.add_rope_dimension_count(int(rope_dim * self.hparams.get("partial_rotary_factor", 0.25)))
 
+        # MTP (multi-token prediction) support
+        n_mtp = self.hparams.get("mtp_num_hidden_layers", 0)
+        if n_mtp > 0:
+            self.block_count = self.hparams["num_hidden_layers"] + n_mtp
+            self.gguf_writer.add_block_count(self.block_count)
+            self.gguf_writer.add_nextn_predict_layers(n_mtp)
+
+    _mtp_remapper = {
+        "mtp.fc":                  "model.layers.{bid}.eh_proj",
+        "mtp.pre_fc_norm_embedding": "model.layers.{bid}.enorm",
+        "mtp.pre_fc_norm_hidden":  "model.layers.{bid}.hnorm",
+        "mtp.norm":                "model.layers.{bid}.shared_head.norm",
+    }
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name.startswith("mtp"):
-            return  # ignore MTP layers for now
+        if name.startswith("mtp."):
+            n_main = self.hparams["num_hidden_layers"]
+            n_mtp = self.hparams.get("mtp_num_hidden_layers", 0)
+            if n_mtp == 0:
+                return  # MTP not configured
+
+            if "layers." in name:
+                # mtp.layers.{i}.* -> model.layers.{n_main + i}.*
+                import re
+                m = re.match(r"mtp\.layers\.(\d+)\.(.*)", name)
+                if m:
+                    mtp_idx = int(m.group(1))
+                    rest = m.group(2)
+                    name = f"model.layers.{n_main + mtp_idx}.{rest}"
+                    bid = n_main + mtp_idx
+            else:
+                # Non-layer MTP tensors (fc, norms): map to NEXTN names
+                stem = name.rsplit(".", 1)[0]  # e.g. "mtp.fc"
+                suffix = "." + name.rsplit(".", 1)[1]  # e.g. ".weight"
+                if stem in self._mtp_remapper:
+                    template = self._mtp_remapper[stem]
+                    for mtp_bid in range(n_main, n_main + n_mtp):
+                        new_name = template.format(bid=mtp_bid) + suffix
+                        yield from super().modify_tensors(data_torch, new_name, mtp_bid)
+                    return
+                else:
+                    logger.warning(f"Unknown MTP tensor: {name}")
+                    return
         if name.endswith(".A_log"):
             data_torch = -torch.exp(data_torch)
         elif name.endswith(".dt_bias"):
