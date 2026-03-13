@@ -13,10 +13,6 @@
 #include <future>
 #include <regex>
 
-#ifndef _WIN32
-#include <unistd.h>
-#endif // _WIN32
-
 static const size_t kiB = 1024;
 static const size_t MiB = 1024*kiB;
 static const size_t GiB = 1024*MiB;
@@ -514,7 +510,7 @@ llama_model_loader::llama_model_loader(
         void * set_tensor_data_ud,
         const std::string & fname,
         std::vector<std::string> & splits,
-        int fd,
+        FILE * file,
         bool use_mmap,
         bool use_direct_io,
         bool check_tensors,
@@ -662,35 +658,23 @@ llama_model_loader::llama_model_loader(
 
             LLAMA_LOG_INFO("%s: additional %d GGUFs metadata loaded.\n",  __func__, n_split - 1);
         }
-    } else if (fd >= 0) {
-        const int fd_duped = dup(fd);
-        if (fd_duped < 0) {
-            throw std::runtime_error(format("%s: failed to dup fd %d: %s", __func__, fd, strerror(errno)));
-        }
-
-        FILE * f = fdopen(fd_duped, "rb");
-        if (!f) {
-            close(fd_duped);
-            throw std::runtime_error(format("%s: failed to fdopen fd %d: %s", __func__, fd, strerror(errno)));
-        }
-
+    } else if (file) {
         struct ggml_context * ctx = NULL;
         struct gguf_init_params params = {
             /*.no_alloc = */ true,
             /*.ctx      = */ &ctx,
         };
 
-        metadata_ptr.reset(gguf_init_from_file_ptr(f, params));
-        fclose(f);
+        metadata_ptr.reset(gguf_init_from_file_ptr(file, params));
         metadata = metadata_ptr.get();
         if (metadata == nullptr) {
-            throw std::runtime_error(format("%s: failed to load model from fd %d", __func__, fd));
+            throw std::runtime_error(format("%s: failed to load model from file pointer", __func__));
         }
 
         get_key(llm_kv(LLM_KV_GENERAL_ARCHITECTURE), arch_name, false);
         llm_kv = LLM_KV(llm_arch_from_string(arch_name));
 
-        files.emplace_back(new llama_file(fd));
+        files.emplace_back(new llama_file(fileno(file)));
         contexts.emplace_back(ctx);
 
         // Save tensors data offset info of the main file.
@@ -715,7 +699,7 @@ llama_model_loader::llama_model_loader(
     fver = (enum llama_fver) gguf_get_version(metadata);
 
     LLAMA_LOG_INFO("%s: loaded meta data with %d key-value pairs and %d tensors from %s (version %s)\n",
-            __func__, n_kv, n_tensors, fname.empty() ? "(fd)" : fname.c_str(), llama_file_version_name(fver));
+            __func__, n_kv, n_tensors, fname.empty() ? "(file*)" : fname.c_str(), llama_file_version_name(fver));
 
     // determine file type based on the number of tensors for each quantization and print meta data
     // TODO: make optional

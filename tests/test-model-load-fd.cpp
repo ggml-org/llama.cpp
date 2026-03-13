@@ -24,20 +24,27 @@ int main(int argc, char ** argv) {
         return EXIT_FAILURE;
     }
 
+    FILE * f = fdopen(dup(fd), "rb");
+    close(fd);
+    if (!f) {
+        fprintf(stderr, "failed to fdopen\n");
+        return EXIT_FAILURE;
+    }
+
     auto params = llama_model_default_params();
     params.use_mmap = true;
     params.vocab_only = true;
 
-    struct llama_model * model = llama_model_load_from_fd(fd, params);
-    close(fd);
+    struct llama_model * model = llama_model_load_from_file_ptr(f, params);
+    fclose(f);
 
     if (model == nullptr) {
-        fprintf(stderr, "load from fd failed\n");
+        fprintf(stderr, "load from file pointer failed\n");
         return EXIT_FAILURE;
     }
 
     const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
-    fprintf(stderr, "loaded %d tokens from fd\n", n_vocab);
+    fprintf(stderr, "loaded %d tokens via file pointer\n", n_vocab);
 
     llama_model_free(model);
     llama_backend_free();

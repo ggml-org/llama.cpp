@@ -828,7 +828,7 @@ int64_t llama_time_us(void) {
 
 // Returns 0 on success, -1 on error, and -2 on cancellation via llama_progress_callback
 static int llama_model_load(struct gguf_context * metadata, llama_model_set_tensor_data_t set_tensor_data, void * set_tensor_data_ud,
-        const std::string & fname, std::vector<std::string> & splits, int fd, llama_model & model, llama_model_params & params) {
+        const std::string & fname, std::vector<std::string> & splits, FILE * file, llama_model & model, llama_model_params & params) {
     // loading time will be recalculated after the first eval, so
     // we take page faults deferred by mmap() into consideration
     model.t_load_us = 0;
@@ -837,7 +837,7 @@ static int llama_model_load(struct gguf_context * metadata, llama_model_set_tens
     model.t_start_us = tm.t_start_us;
 
     try {
-        llama_model_loader ml(metadata, set_tensor_data, set_tensor_data_ud, fname, splits, fd, params.use_mmap, params.use_direct_io,
+        llama_model_loader ml(metadata, set_tensor_data, set_tensor_data_ud, fname, splits, file, params.use_mmap, params.use_direct_io,
             params.check_tensors, params.no_alloc, params.kv_overrides, params.tensor_buft_overrides);
 
         ml.print_info();
@@ -889,9 +889,9 @@ static struct llama_model * llama_model_load_from_file_impl(
         void * set_tensor_data_ud,
         const std::string & path_model,
         std::vector<std::string> & splits,
-        int fd,
+        FILE * file,
         struct llama_model_params params) {
-    if (metadata == nullptr && path_model.empty() && fd < 0) {
+    if (metadata == nullptr && path_model.empty() && !file) {
         LLAMA_LOG_ERROR("%s: no model source provided\n", __func__);
         return nullptr;
     }
@@ -1015,7 +1015,7 @@ static struct llama_model * llama_model_load_from_file_impl(
                 props.memory_free/1024/1024);
     }
 
-    const int status = llama_model_load(metadata, set_tensor_data, set_tensor_data_ud, path_model, splits, fd, *model, params);
+    const int status = llama_model_load(metadata, set_tensor_data, set_tensor_data_ud, path_model, splits, file, *model, params);
     GGML_ASSERT(status <= 0);
     if (status < 0) {
         if (status == -1) {
@@ -1041,7 +1041,7 @@ struct llama_model * llama_model_init_from_user(
     std::vector<std::string> splits = {};
     params.use_mmap = false;
     params.use_extra_bufts = false;
-    return llama_model_load_from_file_impl(metadata, set_tensor_data, set_tensor_data_ud, path_model, splits, /*fd*/ -1, params);
+    return llama_model_load_from_file_impl(metadata, set_tensor_data, set_tensor_data_ud, path_model, splits, /*file*/ nullptr, params);
 }
 // deprecated
 struct llama_model * llama_load_model_from_file(
@@ -1054,7 +1054,7 @@ struct llama_model * llama_model_load_from_file(
         const char * path_model,
         struct llama_model_params params) {
     std::vector<std::string> splits = {};
-    return llama_model_load_from_file_impl(nullptr, nullptr, nullptr, path_model, splits, /*fd*/ -1, params);
+    return llama_model_load_from_file_impl(nullptr, nullptr, nullptr, path_model, splits, /*file*/ nullptr, params);
 }
 
 struct llama_model * llama_model_load_from_splits(
@@ -1070,20 +1070,17 @@ struct llama_model * llama_model_load_from_splits(
     for (size_t i = 0; i < n_paths; ++i) {
         splits.push_back(paths[i]);
     }
-    return llama_model_load_from_file_impl(nullptr, nullptr, nullptr, splits.front(), splits, /*fd*/ -1, params);
+    return llama_model_load_from_file_impl(nullptr, nullptr, nullptr, splits.front(), splits, /*file*/ nullptr, params);
 }
 
-struct llama_model * llama_model_load_from_fd(int fd, struct llama_model_params params) {
-#ifdef _WIN32
-    LLAMA_LOG_ERROR("%s: fd-based loading is not supported on Windows\n", __func__);
-    GGML_UNUSED(fd);
-    GGML_UNUSED(params);
-    return nullptr;
-#else
+struct llama_model * llama_model_load_from_file_ptr(FILE * file, struct llama_model_params params) {
+    if (!file) {
+        LLAMA_LOG_ERROR("%s: file is NULL\n", __func__);
+        return nullptr;
+    }
     std::string path_model;
     std::vector<std::string> splits = {};
-    return llama_model_load_from_file_impl(nullptr, nullptr, nullptr, path_model, splits, fd, params);
-#endif // _WIN32
+    return llama_model_load_from_file_impl(nullptr, nullptr, nullptr, path_model, splits, file, params);
 }
 
 void llama_model_save_to_file(const struct llama_model * model, const char * path_model) {
