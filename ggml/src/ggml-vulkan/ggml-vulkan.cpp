@@ -831,6 +831,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_gated_delta_net_chunk_inter;
     vk_pipeline pipeline_gated_delta_net_chunk_output;
     vk_pipeline pipeline_gated_delta_net_chunk_output_cm;
+    vk_pipeline pipeline_gated_delta_net_chunk_fused_cm;
     vk_pipeline pipeline_ssm_scan_f32_d128;
     vk_pipeline pipeline_ssm_scan_f32_d256;
     vk_pipeline pipeline_ssm_conv_f32;
@@ -4629,6 +4630,9 @@ static void ggml_vk_load_shaders(vk_device& device) {
         ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_chunk_output_cm, "gated_delta_net_chunk_output_cm1_f32_d128",
             gated_delta_net_chunk_output_cm1_f32_len, gated_delta_net_chunk_output_cm1_f32_data, "main",
             6, sizeof(vk_op_gated_delta_net_chunk_push_constants), {1, 1, 1}, {256, 64, 128}, 1, true);
+        ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_chunk_fused_cm, "gated_delta_net_chunk_fused_cm_f32_d128",
+            gated_delta_net_chunk_fused_cm_f32_len, gated_delta_net_chunk_fused_cm_f32_data, "main",
+            8, sizeof(vk_op_gated_delta_net_chunk_push_constants), {1, 1, 1}, {256, 64, 128}, 1, true);
     }
 
     if (device->subgroup_arithmetic && device->subgroup_require_full_support) {
@@ -10470,45 +10474,12 @@ static void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& s
     // Chunked parallel path (PP acceleration)
     const uint32_t n_chunks = (n_tokens + GDN_CHUNK_SIZE - 1) / GDN_CHUNK_SIZE;
 
-    vk_pipeline pl_intra  = ctx->device->pipeline_gated_delta_net_chunk_intra;
-    vk_pipeline pl_inter  = ctx->device->pipeline_gated_delta_net_chunk_inter;
-    vk_pipeline pl_output = ctx->device->pipeline_gated_delta_net_chunk_output_cm
-                          ? ctx->device->pipeline_gated_delta_net_chunk_output_cm
-                          : ctx->device->pipeline_gated_delta_net_chunk_output;
+    vk_pipeline pl_intra = ctx->device->pipeline_gated_delta_net_chunk_intra;
+    vk_pipeline pl_fused = ctx->device->pipeline_gated_delta_net_chunk_fused_cm;
 
-    ggml_pipeline_request_descriptor_sets(ctx, pl_intra, 1);
-    ggml_pipeline_request_descriptor_sets(ctx, pl_inter, 1);
-    ggml_pipeline_request_descriptor_sets(ctx, pl_output, 1);
-
-    // Scratch buffer layout within prealloc_split_k
-    const size_t wu_size   = (size_t)n_seqs * n_chunks * H * GDN_CHUNK_SIZE * S_v * sizeof(float);
-    const size_t d_size    = (size_t)n_seqs * n_chunks * H * sizeof(float);
-    const size_t g_size    = (size_t)n_seqs * n_chunks * H * GDN_CHUNK_SIZE * sizeof(float);
-    const size_t h_size    = (size_t)n_seqs * n_chunks * H * S_v * S_v * sizeof(float);
-
-    const size_t w_off    = 0;
-    const size_t u_off    = wu_size;
-    const size_t vn_off   = 2 * wu_size;
-    const size_t dec_off  = 3 * wu_size;
-    const size_t gcum_off = dec_off + d_size;
-    const size_t h_off    = gcum_off + g_size;
-    const size_t total_scratch = h_off + h_size;
-
-    if (ctx->prealloc_size_split_k < total_scratch) {
-        ctx->prealloc_size_split_k = total_scratch;
-        ggml_vk_preallocate_buffers(ctx, subctx);
-    }
-
-    if (ctx->prealloc_split_k_need_sync) {
-        ggml_vk_sync_buffers(ctx, subctx);
-    }
-
-    vk_subbuffer scratch_w    = { ctx->prealloc_split_k, w_off,    wu_size };
-    vk_subbuffer scratch_u    = { ctx->prealloc_split_k, u_off,    wu_size };
-    vk_subbuffer scratch_vnew = { ctx->prealloc_split_k, vn_off,   wu_size };
-    vk_subbuffer scratch_dec  = { ctx->prealloc_split_k, dec_off,  d_size  };
-    vk_subbuffer scratch_gcum = { ctx->prealloc_split_k, gcum_off, g_size  };
-    vk_subbuffer scratch_h    = { ctx->prealloc_split_k, h_off,    h_size  };
+    const size_t wu_size = (size_t)n_seqs * n_chunks * H * GDN_CHUNK_SIZE * S_v * sizeof(float);
+    const size_t d_size  = (size_t)n_seqs * n_chunks * H * sizeof(float);
+    const size_t g_size  = (size_t)n_seqs * n_chunks * H * GDN_CHUNK_SIZE * sizeof(float);
 
     const vk_op_gated_delta_net_chunk_push_constants pc = {
         H, n_tokens, n_seqs,
@@ -10519,29 +10490,95 @@ static void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& s
         n_chunks, s_off
     };
 
-    // Dispatch 1: Intra-chunk (parallel across chunks)
-    // Bindings: K, V, G, Beta, W_out, U_out, Decay_out, GCum_out
-    ggml_vk_dispatch_pipeline(ctx, subctx, pl_intra,
-        {src_buf[1], src_buf[2], src_buf[3], src_buf[4],
-         scratch_w, scratch_u, scratch_dec, scratch_gcum},
-        pc, { n_chunks * H, n_seqs, 1u });
+    if (pl_fused) {
+        // Fused inter+output path: 2 dispatches, no vnew/h scratch
+        ggml_pipeline_request_descriptor_sets(ctx, pl_intra, 1);
+        ggml_pipeline_request_descriptor_sets(ctx, pl_fused, 1);
 
-    ggml_vk_sync_buffers(ctx, subctx);
+        const size_t w_off    = 0;
+        const size_t u_off    = wu_size;
+        const size_t dec_off  = 2 * wu_size;
+        const size_t gcum_off = dec_off + d_size;
+        const size_t total_scratch = gcum_off + g_size;
 
-    // Dispatch 2: Inter-chunk state propagation (sequential across chunks)
-    // Bindings: K, W, U, Decay, GCum, State, H_out, VNew_out, Final(dst)
-    ggml_vk_dispatch_pipeline(ctx, subctx, pl_inter,
-        {src_buf[1], scratch_w, scratch_u, scratch_dec, scratch_gcum,
-         src_buf[5], scratch_h, scratch_vnew, dst_buf},
-        pc, { H, n_seqs, 1u });
+        if (ctx->prealloc_size_split_k < total_scratch) {
+            ctx->prealloc_size_split_k = total_scratch;
+            ggml_vk_preallocate_buffers(ctx, subctx);
+        }
 
-    ggml_vk_sync_buffers(ctx, subctx);
+        if (ctx->prealloc_split_k_need_sync) {
+            ggml_vk_sync_buffers(ctx, subctx);
+        }
 
-    // Dispatch 3: Output (parallel across chunks)
-    // Bindings: Q, K, H, VNew, GCum, Dst
-    ggml_vk_dispatch_pipeline(ctx, subctx, pl_output,
-        {src_buf[0], src_buf[1], scratch_h, scratch_vnew, scratch_gcum, dst_buf},
-        pc, { n_chunks * H, n_seqs, 1u });
+        vk_subbuffer scratch_w    = { ctx->prealloc_split_k, w_off,    wu_size };
+        vk_subbuffer scratch_u    = { ctx->prealloc_split_k, u_off,    wu_size };
+        vk_subbuffer scratch_dec  = { ctx->prealloc_split_k, dec_off,  d_size  };
+        vk_subbuffer scratch_gcum = { ctx->prealloc_split_k, gcum_off, g_size  };
+
+        ggml_vk_dispatch_pipeline(ctx, subctx, pl_intra,
+            {src_buf[1], src_buf[2], src_buf[3], src_buf[4],
+             scratch_w, scratch_u, scratch_dec, scratch_gcum},
+            pc, { n_chunks * H, n_seqs, 1u });
+
+        ggml_vk_sync_buffers(ctx, subctx);
+
+        // Bindings: Q, K, W, U, Decay, GCum, State, Dst
+        ggml_vk_dispatch_pipeline(ctx, subctx, pl_fused,
+            {src_buf[0], src_buf[1], scratch_w, scratch_u,
+             scratch_dec, scratch_gcum, src_buf[5], dst_buf},
+            pc, { H, n_seqs, 1u });
+    } else {
+        // Fallback: 3-dispatch path (no coopmat)
+        vk_pipeline pl_inter  = ctx->device->pipeline_gated_delta_net_chunk_inter;
+        vk_pipeline pl_output = ctx->device->pipeline_gated_delta_net_chunk_output;
+
+        ggml_pipeline_request_descriptor_sets(ctx, pl_intra, 1);
+        ggml_pipeline_request_descriptor_sets(ctx, pl_inter, 1);
+        ggml_pipeline_request_descriptor_sets(ctx, pl_output, 1);
+
+        const size_t h_size = (size_t)n_seqs * n_chunks * H * S_v * S_v * sizeof(float);
+        const size_t w_off    = 0;
+        const size_t u_off    = wu_size;
+        const size_t vn_off   = 2 * wu_size;
+        const size_t dec_off  = 3 * wu_size;
+        const size_t gcum_off = dec_off + d_size;
+        const size_t h_off    = gcum_off + g_size;
+        const size_t total_scratch = h_off + h_size;
+
+        if (ctx->prealloc_size_split_k < total_scratch) {
+            ctx->prealloc_size_split_k = total_scratch;
+            ggml_vk_preallocate_buffers(ctx, subctx);
+        }
+
+        if (ctx->prealloc_split_k_need_sync) {
+            ggml_vk_sync_buffers(ctx, subctx);
+        }
+
+        vk_subbuffer scratch_w    = { ctx->prealloc_split_k, w_off,    wu_size };
+        vk_subbuffer scratch_u    = { ctx->prealloc_split_k, u_off,    wu_size };
+        vk_subbuffer scratch_vnew = { ctx->prealloc_split_k, vn_off,   wu_size };
+        vk_subbuffer scratch_dec  = { ctx->prealloc_split_k, dec_off,  d_size  };
+        vk_subbuffer scratch_gcum = { ctx->prealloc_split_k, gcum_off, g_size  };
+        vk_subbuffer scratch_h    = { ctx->prealloc_split_k, h_off,    h_size  };
+
+        ggml_vk_dispatch_pipeline(ctx, subctx, pl_intra,
+            {src_buf[1], src_buf[2], src_buf[3], src_buf[4],
+             scratch_w, scratch_u, scratch_dec, scratch_gcum},
+            pc, { n_chunks * H, n_seqs, 1u });
+
+        ggml_vk_sync_buffers(ctx, subctx);
+
+        ggml_vk_dispatch_pipeline(ctx, subctx, pl_inter,
+            {src_buf[1], scratch_w, scratch_u, scratch_dec, scratch_gcum,
+             src_buf[5], scratch_h, scratch_vnew, dst_buf},
+            pc, { H, n_seqs, 1u });
+
+        ggml_vk_sync_buffers(ctx, subctx);
+
+        ggml_vk_dispatch_pipeline(ctx, subctx, pl_output,
+            {src_buf[0], src_buf[1], scratch_h, scratch_vnew, scratch_gcum, dst_buf},
+            pc, { n_chunks * H, n_seqs, 1u });
+    }
 
     ctx->prealloc_split_k_need_sync = true;
 }
