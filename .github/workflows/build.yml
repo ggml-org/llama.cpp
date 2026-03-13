@@ -61,7 +61,7 @@ env:
 jobs:
 
   ubuntu-24-llguidance:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ${{ 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
 
     steps:
       - name: Clone
@@ -89,7 +89,7 @@ jobs:
           ctest -L main --verbose --timeout 900
 
   ubuntu-24-cmake-rpc:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ${{ 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
 
     continue-on-error: true
 
@@ -97,12 +97,6 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
-
-      # - name: ccache
-      #   uses: ggml-org/ccache-action@v1.2.16
-      #   with:
-      #     key: ubuntu-24-cmake-rpc
-      #     evict-old-files: 1d
 
       - name: Dependencies
         id: depends
