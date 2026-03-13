@@ -145,10 +145,10 @@ struct common_speculative_state {
 };
 
 struct common_speculative_checkpoint {
-    llama_pos pos_min;
-    llama_pos pos_max;
+    llama_pos pos_min  = 0;
+    llama_pos pos_max  = 0;
 
-    int64_t n_tokens;
+    int64_t   n_tokens = 0;
 
     std::vector<uint8_t> data;
 
@@ -156,7 +156,7 @@ struct common_speculative_checkpoint {
         return data.size();
     }
 
-    size_t ckpt_size;
+    size_t ckpt_size   = 0;
 };
 
 struct common_speculative_state_draft : public common_speculative_state {
