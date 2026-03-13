@@ -43,8 +43,6 @@ Before submitting your PR:
     - provide [perplexity](https://github.com/ggml-org/llama.cpp/tree/master/tools/perplexity) comparisons to FP16/BF16 (whichever is the native precision) as well as to types of similar size
     - provide KL divergence data calculated vs. the FP16/BF16 (whichever is the native precision) version for both the new type as well as types of similar size
     - provide [performance data](https://github.com/ggml-org/llama.cpp/tree/master/tools/llama-bench) for the new type in comparison to types of similar size on pure CPU
-  - Avoid combining unrelated changes in a single PR
-  - For intricate features, consider opening a feature request first to discuss and align expectations
 - Consider allowing write access to your branch for faster reviews, as reviewers can push commits directly
 - If you are a new contributor, limit your open PRs to 1.
 
