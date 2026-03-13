@@ -9624,7 +9624,7 @@ void ggml_compute_forward_win_unpart(
     }
 }
 
-//gmml_compute_forward_unary
+//ggml_compute_forward_unary
 
 void ggml_compute_forward_unary(
         const ggml_compute_params * params,

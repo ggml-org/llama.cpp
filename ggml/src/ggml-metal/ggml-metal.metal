@@ -3006,7 +3006,7 @@ kernel void kernel_l2_norm_impl(
     sumf = shmem_f32[tiisg];
     sumf = simd_sum(sumf);
 
-    const float scale = 1.0f/sqrt(max(sumf, args.eps));
+    const float scale = 1.0f/max(sqrt(sumf), args.eps);
 
     for (int i00 = tpitg.x; i00 < args.ne00; i00 += ntg.x) {
         y[i00] = x[i00] * scale;

@@ -253,7 +253,7 @@ option(GGML_OPENCL_PROFILING                "ggml: use OpenCL profiling (increas
 option(GGML_OPENCL_EMBED_KERNELS            "ggml: embed kernels"                             ON)
 option(GGML_OPENCL_USE_ADRENO_KERNELS       "ggml: use optimized kernels for Adreno"          ON)
 set   (GGML_OPENCL_TARGET_VERSION "300" CACHE STRING
-                                            "gmml: OpenCL API version to target")
+                                            "ggml: OpenCL API version to target")
 
 option(GGML_HEXAGON                         "ggml: enable Hexagon backend"                    OFF)
 set(GGML_HEXAGON_FP32_QUANTIZE_GROUP_SIZE 128 CACHE STRING "ggml: quantize group size (32, 64, or 128)")
