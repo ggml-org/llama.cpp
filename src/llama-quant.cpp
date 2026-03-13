@@ -36,12 +36,12 @@ extern "C" {
     void   q4dpt_set_levels(const int8_t * levels);
 }
 
-// Q2_KPT levels functions (defined in ggml-quants.c)
-extern "C" {
-    void   q2kpt_train_levels(const float * data, int64_t nrow, int64_t n_per_row,
-                               const float * imatrix, float levels_out[4]);
-    void   q2kpt_set_levels(const float * levels);
-}
+// Q2_KPT levels are handled internally by quantize_q2_kpt
+#define Q2KPT_N_LEVELS 4
+#define QK_K 256
+extern "C" const float * q2kpt_get_levels(void);
+extern "C" void          q2kpt_prepare_levels(int64_t nrows, int64_t n_per_row);
+extern "C" void          q2kpt_free_levels(void);
 
 // Quantization types. Changes to this struct must be replicated in quantize.cpp
 struct tensor_quantization {
@@ -1045,12 +1045,16 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         LLAMA_LOG_INFO("%s: Q4_DPT pass 1 complete.\n", __func__);
     }
 
-    // Q2_KPT two-pass approach: train all per-tensor float levels BEFORE opening the output
-    static const size_t Q2KPT_N_LEVELS_SZ = 4;
-    std::vector<float> q2kpt_all_levels;
+    // Q2_KPT two-pass approach: train all per-block levels BEFORE opening the output
+    // file, so the levels KV entry is already populated at the time of the metadata placeholder.
+    // Per-block levels: 4 floats per 256-element block.
+    struct q2kpt_tensor_levels {
+        std::string name;
+        std::vector<float> levels;  // nrows * (n_per_row / QK_K) * Q2KPT_N_LEVELS floats
+    };
+    std::vector<q2kpt_tensor_levels> q2kpt_all_levels;
     if (ftype == LLAMA_FTYPE_MOSTLY_Q2_KPT && !params->dry_run) {
-        LLAMA_LOG_INFO("%s: Q2_KPT pass 1: training per-tensor levels...\n", __func__);
-        q2kpt_all_levels.assign(tensors.size() * Q2KPT_N_LEVELS_SZ, 0.0f);
+        LLAMA_LOG_INFO("%s: Q2_KPT pass 1: training per-block levels...\n", __func__);
 
         std::vector<no_init<uint8_t>> p1_read_data;
         std::vector<no_init<float>>   p1_f32_buf;
@@ -1061,6 +1065,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             ggml_tensor * tensor = tensors[ti]->tensor;
             const std::string tname = ggml_get_name(tensor);
 
+            // Determine whether this tensor will be Q2_KPT (mirror the pass-2 logic)
             bool quantize = tname.rfind("weight") == tname.size() - 6;
             quantize &= (ggml_n_dims(tensor) >= 2);
             quantize &= tname.find("_norm.weight")        == std::string::npos;
@@ -1080,6 +1085,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             }
             if (new_type != GGML_TYPE_Q2_KPT) { continue; }
 
+            // Load tensor data
             const size_t tsz = ggml_nbytes(tensor);
             if (!ml.use_mmap) {
                 if (p1_read_data.size() < tsz) { p1_read_data.resize(tsz); }
@@ -1087,6 +1093,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             }
             ml.load_data_for(tensor);
 
+            // Dequantize to f32 if needed
             const int64_t nelements = ggml_nelements(tensor);
             float * f32_data;
             if (tensor->type == GGML_TYPE_F32) {
@@ -1096,6 +1103,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 f32_data = (float *) p1_f32_buf.data();
             }
 
+            // Resolve imatrix
             const float * imatrix = nullptr;
             if (imatrix_data) {
                 auto it2 = imatrix_data->find(remap_imatrix(tensor->name, mapped));
@@ -1108,15 +1116,49 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             const int64_t n_per_row = tensor->ne[0];
             const int64_t nrows     = tensor->ne[1];
 
-            LLAMA_LOG_INFO("%s: Q2_KPT levels for [%zu/%zu] %s\n", __func__, ti+1, tensors.size(), tensor->name);
-            q2kpt_train_levels(f32_data, nrows, n_per_row, imatrix,
-                               q2kpt_all_levels.data() + ti * Q2KPT_N_LEVELS_SZ);
+            // Allocate levels buffer for this tensor
+            const int nb = n_per_row / QK_K;
+            const size_t n_levels = (size_t)nrows * tensor->ne[2] * nb * Q2KPT_N_LEVELS;
+            q2kpt_all_levels.push_back({tname, std::vector<float>(n_levels)});
+
+            LLAMA_LOG_INFO("%s: Q2_KPT levels for [%zu/%zu] %s (%zu floats)\n",
+                           __func__, ti+1, tensors.size(), tensor->name, n_levels);
+
+            // Train levels by running quantization internally
+            // We need to quantize to f32 -> Q2_KPT -> f32 to get the trained levels
+            std::vector<no_init<uint8_t>> p1_qbuf(ggml_nbytes(tensor));
+            const size_t row_size = ggml_row_size(GGML_TYPE_Q2_KPT, n_per_row);
+
+            // Prepare levels buffer for this tensor
+            q2kpt_free_levels();
+            q2kpt_prepare_levels(nrows * tensor->ne[2], n_per_row);
+
+            // Quantize each expert slice
+            const int64_t nelements_matrix = tensor->ne[0] * tensor->ne[1];
+            for (int64_t i03 = 0; i03 < tensor->ne[2]; ++i03) {
+                const float * f32_data_03 = f32_data + i03 * nelements_matrix;
+                void * q_data_03 = (char *)p1_qbuf.data() + row_size * i03 * nrows;
+                const float * imatrix_03 = imatrix ? imatrix + i03 * n_per_row : nullptr;
+
+                // start_row must be the absolute row index for correct levels indexing
+                ggml_quantize_chunk(GGML_TYPE_Q2_KPT, f32_data_03, q_data_03, i03 * nrows, nrows, n_per_row, imatrix_03);
+            }
+
+            // Copy trained levels to our storage
+            const float * trained_levels = q2kpt_get_levels();
+            if (trained_levels) {
+                memcpy(q2kpt_all_levels.back().levels.data(), trained_levels, n_levels * sizeof(float));
+            }
         }
 
-        for (auto & ctx : ctx_outs) {
-            if (ctx) {
-                gguf_set_arr_data(ctx.get(), "q2_kpt.levels", GGUF_TYPE_FLOAT32,
-                                  q2kpt_all_levels.data(), q2kpt_all_levels.size());
+        // Store all levels in GGUF metadata before the file is opened
+        for (const auto & tl : q2kpt_all_levels) {
+            for (auto & ctx : ctx_outs) {
+                if (ctx) {
+                    const std::string key = tl.name + ".q2kpt_levels";
+                    gguf_set_arr_data(ctx.get(), key.c_str(), GGUF_TYPE_FLOAT32,
+                                      tl.levels.data(), tl.levels.size());
+                }
             }
         }
         LLAMA_LOG_INFO("%s: Q2_KPT pass 1 complete.\n", __func__);
@@ -1403,17 +1445,13 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                     q4dpt_set_levels(q4dpt_all_levels.data() + tensor_pass2_idx * Q4DPT_N_LEVELS);
                 }
 
-                // Q2_KPT: set the per-tensor levels (trained in pass 1) as global for quantization
+                // Q2_KPT: quantize_q2_kpt trains per-block levels internally.
+                // Levels were already trained and saved to GGUF in pass 1.
+                // We still need to allocate the levels buffer for quantization to work correctly.
                 if (new_type == GGML_TYPE_Q2_KPT) {
-                    q2kpt_set_levels(q2kpt_all_levels.data() + tensor_pass2_idx * Q2KPT_N_LEVELS_SZ);
-                    // DIAGNOSTIC: print levels being used for quantization
-                    static int q2kpt_pass2_diag = 0;
-                    if (q2kpt_pass2_diag < 5) {
-                        const float * lv = q2kpt_all_levels.data() + tensor_pass2_idx * Q2KPT_N_LEVELS_SZ;
-                        LLAMA_LOG_INFO("%s: [Q2_KPT pass2 diag] ti=%zu tensor='%s' levels=[%.4f,%.4f,%.4f,%.4f]\n",
-                                       __func__, tensor_pass2_idx, ggml_get_name(tensor), lv[0], lv[1], lv[2], lv[3]);
-                        q2kpt_pass2_diag++;
-                    }
+                    const int64_t total_rows = nrows * tensor->ne[2];
+                    q2kpt_free_levels();  // Clear any stale levels from previous tensor
+                    q2kpt_prepare_levels(total_rows, n_per_row);  // Allocate for this tensor
                 }
 
                 // quantize each expert separately since they have different importance matrices
@@ -1424,29 +1462,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                     const float * imatrix_03 = imatrix ? imatrix + i03 * n_per_row : nullptr;
 
                     new_size += llama_tensor_quantize_impl(new_type, f32_data_03, new_data_03, chunk_size, nrows, n_per_row, imatrix_03, workers, nthread_use);
-
-                    // TODO: temporary sanity check that the F16 -> MXFP4 is lossless
-#if 0
-                    if (new_type == GGML_TYPE_MXFP4) {
-                        auto * x = f32_data_03;
-
-                        //LLAMA_LOG_INFO("nrows = %d, n_per_row = %d\n", nrows, n_per_row);
-                        std::vector<float> deq(nrows*n_per_row);
-                        const ggml_type_traits * qtype = ggml_get_type_traits(new_type);
-                        qtype->to_float(new_data_03, deq.data(), deq.size(), nullptr);
-
-                        double err = 0.0f;
-                        for (int i = 0; i < (int) deq.size(); ++i) {
-                            err += fabsf(deq[i] - x[i]);
-                            //if (fabsf(deq[i] - x[i]) > 0.00001 && i < 256) {
-                            if (deq[i] != x[i]) {
-                                LLAMA_LOG_INFO("deq[%d] = %f, x[%d] = %f\n", i, deq[i], i, x[i]);
-                            }
-                        }
-                        //LLAMA_LOG_INFO("err = %f\n", err);
-                        GGML_ASSERT(err == 0.00000);
-                    }
-#endif
                 }
                 LLAMA_LOG_INFO("size = %8.2f MiB -> %8.2f MiB\n", tensor_size/1024.0/1024.0, new_size/1024.0/1024.0);
             }

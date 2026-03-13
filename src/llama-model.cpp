@@ -7873,7 +7873,6 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             { GGML_TYPE_Q3_PT,  "q3_pt.levels",  8, sizeof(float) },
             { GGML_TYPE_Q3_KPT, "q3_kpt.levels", 8, sizeof(float) },
             { GGML_TYPE_Q4_DPT, "q4_dpt.levels", 16, sizeof(int8_t) },
-            { GGML_TYPE_Q2_KPT, "q2_kpt.levels", 4, sizeof(float) },
         };
 
         for (const auto & lt : level_types) {
@@ -7914,6 +7913,31 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             if (tensor_count > 0) {
                 LLAMA_LOG_INFO("%s: loaded %zu %s per-tensor level tables\n",
                                __func__, tensor_count, lt.gguf_key);
+            }
+        }
+
+        // Q2_KPT: per-block levels stored as per-tensor GGUF keys "{tensor_name}.q2kpt_levels"
+        // Each key holds n_blocks * Q2KPT_N_LEVELS floats for that tensor (4 floats per 256-element block).
+        {
+            size_t q2kpt_loaded = 0;
+            for (auto & [tname, t] : name_to_tensor) {
+                if (t->type != GGML_TYPE_Q2_KPT) { continue; }
+                const std::string key = tname + ".q2kpt_levels";
+                int64_t lv_idx = gguf_find_key(ml.meta.get(), key.c_str());
+                if (lv_idx < 0) { continue; }
+
+                const uint8_t * lv_raw  = (const uint8_t *)gguf_get_arr_data(ml.meta.get(), lv_idx);
+                const size_t    lv_n    = gguf_get_arr_n(ml.meta.get(), lv_idx);
+
+                auto & aux = tensor_aux_data[t];
+                aux.type = GGML_TYPE_Q2_KPT;
+                aux.host_data.assign(lv_raw, lv_raw + lv_n * sizeof(float));
+                aux.aux_tensor = nullptr;
+                t->quant_levels = aux.host_data.data();
+                q2kpt_loaded++;
+            }
+            if (q2kpt_loaded > 0) {
+                LLAMA_LOG_INFO("%s: loaded %zu Q2_KPT per-block level tables\n", __func__, q2kpt_loaded);
             }
         }
     }

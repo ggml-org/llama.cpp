@@ -414,6 +414,7 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .vec_dot                  = ggml_vec_dot_q2_kpt_q8_K,
         .vec_dot_type             = GGML_TYPE_Q8_K,
         .nrows                    = 1,
+        .levels_row_stride        = 0,  // computed dynamically: (ne0/QK_K)*Q2KPT_N_LEVELS*sizeof(float)
     },
     [GGML_TYPE_I32] = {
         .from_float               = (ggml_from_float_t) ggml_cpu_fp32_to_i32,
@@ -1184,8 +1185,15 @@ static void ggml_compute_forward_mul_mat_one_chunk(
 
     const bool src1_cont = ggml_is_contiguous(src1);
 
-    ggml_vec_dot_t const vec_dot      = type_traits_cpu[type].vec_dot;
-    enum ggml_type const vec_dot_type = type_traits_cpu[type].vec_dot_type;
+    ggml_vec_dot_t const vec_dot           = type_traits_cpu[type].vec_dot;
+    enum ggml_type const vec_dot_type      = type_traits_cpu[type].vec_dot_type;
+    // For Q2_KPT, levels are per-block: stride = (ne00 / QK_K) * Q2KPT_N_LEVELS * sizeof(float)
+    // ne00 is the number of elements per row in src0 (input dimension), NOT ne0 (= ne01 = output rows).
+    // For non-square matrices (e.g. ffn_up: [hidden, intermediate]) ne00 != ne01, so ne00 is correct.
+    // For other types, use the static stride from type_traits_cpu
+    const size_t levels_row_stride = (type == GGML_TYPE_Q2_KPT)
+        ? (ne00 / QK_K) * Q2KPT_N_LEVELS * sizeof(float)
+        : type_traits_cpu[type].levels_row_stride;
 
     // broadcast factors
     const int64_t r2 = ne12 / ne02;
@@ -1246,7 +1254,11 @@ static void ggml_compute_forward_mul_mat_one_chunk(
                 //}
 
                 for (int64_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ir0 += num_rows_per_vec_dot) {
-                    vec_dot(ne00, &tmp[ir0 - iir0], (num_rows_per_vec_dot > 1 ? 16 : 0), src0_row + ir0 * nb01, (num_rows_per_vec_dot > 1 ? nb01 : 0), src1_col, (num_rows_per_vec_dot > 1 ? src1_col_stride : 0), num_rows_per_vec_dot, src0->quant_levels);
+                    // For Q2_KPT, levels are stored per-expert: [expert0_rows, expert1_rows, ...]
+                    // So for 3D tensors we need to index by (i03 * ne01 + ir0)
+                    const size_t levels_row_idx = (type == GGML_TYPE_Q2_KPT && ne03 > 1) ? (i03 * ne01 + ir0) : ir0;
+                    const void * row_levels = (const char*)src0->quant_levels + levels_row_idx * levels_row_stride;
+                    vec_dot(ne00, &tmp[ir0 - iir0], (num_rows_per_vec_dot > 1 ? 16 : 0), src0_row + ir0 * nb01, (num_rows_per_vec_dot > 1 ? nb01 : 0), src1_col, (num_rows_per_vec_dot > 1 ? src1_col_stride : 0), num_rows_per_vec_dot, row_levels);
                 }
 
                 for (int cn = 0; cn < num_rows_per_vec_dot; ++cn) {
@@ -1482,8 +1494,14 @@ static void ggml_compute_forward_mul_mat_id_one_chunk(
 
     const enum ggml_type type = src0->type;
 
-    ggml_vec_dot_t    const vec_dot      = type_traits_cpu[type].vec_dot;
-    enum ggml_type    const vec_dot_type = type_traits_cpu[type].vec_dot_type;
+    ggml_vec_dot_t    const vec_dot           = type_traits_cpu[type].vec_dot;
+    enum ggml_type    const vec_dot_type      = type_traits_cpu[type].vec_dot_type;
+    // For Q2_KPT, levels are per-block: stride = (ne00 / QK_K) * Q2KPT_N_LEVELS * sizeof(float)
+    // ne00 is the input dimension (elements per row in src0), NOT ne0 (= ne01 = output rows).
+    // For other types, use the static stride from type_traits_cpu
+    const size_t      levels_row_stride = (type == GGML_TYPE_Q2_KPT)
+        ? (ne00 / QK_K) * Q2KPT_N_LEVELS * sizeof(float)
+        : type_traits_cpu[type].levels_row_stride;
 
     const int64_t blck_0 = 16;
     const int64_t blck_1 = 16;
@@ -1516,7 +1534,8 @@ static void ggml_compute_forward_mul_mat_id_one_chunk(
                 float * dst_col = (float *) ((char *) dst->data + (i1*nb1 + i2*nb2));
 
                 for (int64_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ++ir0) {
-                    vec_dot(ne00, &tmp[ir0 - iir0], 0, src0_cur + ir0*nb01, 0, src1_col, 0, 1, src0->quant_levels);
+                    const void * row_levels = (const char*)src0->quant_levels + (cur_a * ne01 + ir0) * levels_row_stride;
+                    vec_dot(ne00, &tmp[ir0 - iir0], 0, src0_cur + ir0*nb01, 0, src1_col, 0, 1, row_levels);
                 }
 
                 memcpy(&dst_col[iir0], tmp, (MIN(iir0 + blck_0, ir0_end) - iir0)*sizeof(float));

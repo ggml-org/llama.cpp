@@ -8,6 +8,19 @@
 #include "unary-ops.h"
 #include "vec.h"
 
+// Helper: compute quant_levels stride for a given row.
+// For most types this is the constant levels_row_stride from type_traits.
+// For Q2_KPT (per-block levels), stride depends on tensor width (ne[0]).
+static inline size_t ggml_quant_levels_stride(ggml_type type, size_t constant_stride, int64_t ne0) {
+    if (type == GGML_TYPE_Q2_KPT) {
+        // Q2_KPT has Q2KPT_N_LEVELS floats per 256-element block
+        // Stride = (ne0 / 256) * Q2KPT_N_LEVELS * sizeof(float)
+        return (size_t)(ne0 / 256) * 4 * sizeof(float);
+    }
+    return constant_stride;
+}
+
+
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
@@ -517,9 +530,11 @@ static void ggml_compute_forward_dup_from_q(
         const int64_t i10 = i - i13*ne10*ne11*ne12 - i12*ne10*ne11 - i11*ne10;
         const int64_t dst_offset = i10*nb10 + i11*nb11 + i12*nb12 + i13*nb13;
 
+        const size_t q_lrs0 = ggml_quant_levels_stride(src0->type, ggml_get_type_traits_cpu(src0->type)->levels_row_stride, src0->ne[0]);
         dequantize_row_q(
                 (const void *) ((char *) src0->data + x_offset),
-                     (float *) ((char *)  dst->data + dst_offset), qk, src0->quant_levels);
+                     (float *) ((char *)  dst->data + dst_offset), qk,
+                (const char*)src0->quant_levels + i01 * q_lrs0);
     }
 }
 
@@ -639,7 +654,8 @@ static void ggml_compute_forward_add_q_f32(
         assert(ne00 % 32 == 0);
 
         // unquantize row from src0 to temp buffer
-        dequantize_row_q(src0_row, wdata, ne00, src0->quant_levels);
+        const size_t q_lrs_add = ggml_quant_levels_stride(src0->type, ggml_get_type_traits_cpu(src0->type)->levels_row_stride, src0->ne[0]);
+        dequantize_row_q(src0_row, wdata, ne00, (const char*)src0->quant_levels + i1 * q_lrs_add);
         // add src1
         ggml_vec_acc_f32(ne00, wdata, src1_row);
         // quantize row to dst
@@ -972,7 +988,8 @@ static void ggml_compute_forward_add1_q_f32(
         assert(ne0 % 32 == 0);
 
         // unquantize row from src0 to temp buffer
-        dequantize_row_q(src0_row, wdata, ne0, src0->quant_levels);
+        const size_t q_lrs_add = ggml_quant_levels_stride(src0->type, ggml_get_type_traits_cpu(src0->type)->levels_row_stride, src0->ne[0]);
+        dequantize_row_q(src0_row, wdata, ne00, (const char*)src0->quant_levels + i1 * q_lrs_add);
         // add src1
         ggml_vec_acc1_f32(ne0, wdata, v);
         // quantize row to dst
@@ -4315,7 +4332,8 @@ static void ggml_compute_forward_out_prod_q_f32(
             float * s1 = (float *) ((char *) src1->data + (i1*nb10 + i11*nb11 + i12*nb12 + i13*nb13));
             float * d  = (float *) ((char *)  dst->data + (          i1*nb1 + i2*nb2 + i3*nb3));
 
-            dequantize_row_q(s0, wdata, ne0, src0->quant_levels);
+            const size_t q_lrs_op = ggml_quant_levels_stride(src0->type, ggml_get_type_traits_cpu(src0->type)->levels_row_stride, src0->ne[0]);
+            dequantize_row_q(s0, wdata, ne0, (const char*)src0->quant_levels + i01 * q_lrs_op);
             ggml_vec_mad_f32(ne0, d, wdata, *s1);
         }
     }
@@ -4688,9 +4706,21 @@ static void ggml_compute_forward_get_rows_q(
 
         GGML_ASSERT(i01 >= 0 && i01 < ne01);
 
+        const size_t q_lrs_gr = ggml_quant_levels_stride(src0->type, ggml_get_type_traits_cpu(src0->type)->levels_row_stride, src0->ne[0]);
+        // For Q2_KPT with 3D tensors, levels are indexed by [i12 * ne02 * ne01 + i11 * ne01 + i01]
+        // For 2D tensors, levels are indexed by [i11 * ne01 + i01] (or just [i01] if ne02 == 1)
+        size_t levels_row_idx;
+        if (type == GGML_TYPE_Q2_KPT && ne03 > 1) {
+            levels_row_idx = (i12 * ne02 + i11) * ne01 + i01;
+        } else if (type == GGML_TYPE_Q2_KPT) {
+            levels_row_idx = i11 * ne01 + i01;
+        } else {
+            levels_row_idx = i01;
+        }
         dequantize_row_q(
                 (const void *) ((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03),
-                     (float *) ((char *)  dst->data + i10*nb1  + i11*nb2  + i12*nb3), nc, src0->quant_levels);
+                     (float *) ((char *)  dst->data + i10*nb1  + i11*nb2  + i12*nb3), nc,
+                (const char*)src0->quant_levels + levels_row_idx * q_lrs_gr);
     }
 }
 
@@ -5572,6 +5602,8 @@ void ggml_compute_forward_clamp(
         case GGML_TYPE_IQ4_NL:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_Q3_PT:
+        case GGML_TYPE_Q2_KPT:
+        case GGML_TYPE_Q2_DPT:
         case GGML_TYPE_IQ3_S:
         case GGML_TYPE_IQ2_S:
         case GGML_TYPE_Q8_K:

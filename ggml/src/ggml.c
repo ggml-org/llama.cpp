@@ -945,6 +945,7 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .is_quantized             = true,
         .to_float                 = (ggml_to_float_t) dequantize_row_q2_kpt,
         .from_float_ref           = (ggml_from_float_t) quantize_row_q2_kpt_ref,
+        .levels_row_stride        = 0,  // computed dynamically: (ne[0]/256)*4*sizeof(float)
     },
 };
 
@@ -7667,7 +7668,7 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_Q3_PT:  result = quantize_q3_pt (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q3_KPT:  result = quantize_q3_kpt (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q4_DPT:  result = quantize_q4_dpt (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
-        case GGML_TYPE_Q2_KPT:  result = quantize_q2_kpt (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_Q2_KPT:  result = quantize_q2_kpt (src + start, (char *) dst + start_row * row_size, start_row, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_F16:
             {
                 size_t elemsize = sizeof(ggml_fp16_t);

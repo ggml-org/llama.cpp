@@ -153,18 +153,24 @@ GGML_API void           q2dpt_train_levels(const float * data, int64_t nrow, int
 // Q2_KPT: Q2_K with learned per-tensor float levels
 GGML_API void dequantize_row_q2_kpt(const block_q2_kpt * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels);
 GGML_API void quantize_row_q2_kpt_ref(const float * GGML_RESTRICT x, block_q2_kpt * GGML_RESTRICT y, int64_t k);
-GGML_API size_t quantize_q2_kpt(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+GGML_API size_t quantize_q2_kpt(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t start_row, int64_t nrows, int64_t n_per_row, const float * imatrix);
 
 // Q2_KPT levels management (per-tensor float levels in [0,1])
 GGML_API void          q2kpt_set_levels(const float * levels);
 GGML_API const float * q2kpt_get_levels(void);
 GGML_API void          q2kpt_free_levels(void);
+// Prepare levels buffer for a tensor with given dimensions (call before parallel quantization)
+GGML_API void          q2kpt_prepare_levels(int64_t nrows, int64_t n_per_row);
 
 // Train 4 Lloyd-Max float levels from tensor data for Q2_KPT.
 // Bins normalized sub-block values in [0,1], runs weighted k-means for 4 centroids.
 // Also sets the global levels via q2kpt_set_levels().
 GGML_API void          q2kpt_train_levels(const float * data, int64_t nrow, int64_t n_per_row,
                                            const float * imatrix, float levels_out[Q2KPT_N_LEVELS]);
+
+// Train per-row levels for all rows: writes nrow * Q2KPT_N_LEVELS floats to out_levels.
+GGML_API void          q2kpt_train_all_row_levels(const float * data, int64_t nrow, int64_t n_per_row,
+                                                   const float * imatrix, float * out_levels);
 
 // Train 16 Lloyd-Max int8 levels from tensor data.
 // Bins normalized values (x/amax) in [-1,1], runs weighted k-means, rounds to sorted int8[16].

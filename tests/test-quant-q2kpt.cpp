@@ -23,13 +23,16 @@
 // ---------------------------------------------------------------------------
 // Declarations for Q2_KPT internals (all in libggml-base.so)
 // ---------------------------------------------------------------------------
+#define Q2KPT_N_LEVELS 4
+
 extern "C" {
     void         q2kpt_train_levels(const float * data, int64_t nrow, int64_t n_per_row,
                                      const float * imatrix, float levels_out[4]);
     void         q2kpt_set_levels(const float * levels);
+    void         q2kpt_prepare_levels(int64_t nrows, int64_t n_per_row);
     const float *q2kpt_get_levels(void);
     size_t       quantize_q2_kpt(const float * src, void * dst,
-                                  int64_t nrows, int64_t n_per_row,
+                                  int64_t start_row, int64_t nrows, int64_t n_per_row,
                                   const float * imatrix);
 }
 
@@ -62,14 +65,22 @@ static float std_quant_rmse(ggml_type type, const float * data,
 }
 
 // Train Q2_KPT levels on data, quantize (with imatrix=1), dequantize, return RMSE.
+// Q2_KPT has per-block levels (4 floats per 256-elem block), so we need to handle that.
 static float q2kpt_rmse(const float * data, size_t nrow, size_t n_per_row,
                           float out_levels[4]) {
     std::vector<float> imatrix(n_per_row, 1.0f);
 
+    // Train initial levels (used as starting point, but quantize will train per-row)
     q2kpt_train_levels(data, (int64_t)nrow, (int64_t)n_per_row,
                         imatrix.data(), out_levels);
-    q2kpt_set_levels(out_levels);
+    
+    const int nb = (int)(n_per_row / MY_QK_K);  // blocks per row
+    const size_t total_levels = nrow * nb * Q2KPT_N_LEVELS;
+    std::vector<float> all_levels(total_levels);
 
+    // Prepare level storage for per-block levels
+    q2kpt_prepare_levels((int64_t)nrow, (int64_t)n_per_row);
+    
     const size_t         rs = ggml_row_size(GGML_TYPE_Q2_KPT, n_per_row);
     std::vector<uint8_t> qb(nrow * rs);
     std::vector<float>   dq(nrow * n_per_row);
@@ -77,14 +88,21 @@ static float q2kpt_rmse(const float * data, size_t nrow, size_t n_per_row,
     for (size_t r = 0; r < nrow; ++r) {
         quantize_q2_kpt(data + r * n_per_row,
                          qb.data() + r * rs,
-                         1, (int64_t)n_per_row,
+                         r, 1, (int64_t)n_per_row,
                          imatrix.data());
     }
+    
+    // Get the trained per-block levels
+    const float * trained_levels = q2kpt_get_levels();
+    memcpy(all_levels.data(), trained_levels, total_levels * sizeof(float));
+    
+    // Dequant each row with its own per-block levels
     const ggml_type_traits * tr = ggml_get_type_traits(GGML_TYPE_Q2_KPT);
     for (size_t r = 0; r < nrow; ++r) {
         tr->to_float(qb.data() + r * rs,
                      dq.data() + r * n_per_row,
-                     (int64_t)n_per_row, out_levels);
+                     (int64_t)n_per_row, 
+                     all_levels.data() + r * nb * Q2KPT_N_LEVELS);
     }
     return rmse(data, dq.data(), nrow * n_per_row);
 }
@@ -178,8 +196,8 @@ int main(void) {
     // -----------------------------------------------------------------------
     printf("=== Section 3: Uniform-level baseline ===\n");
     {
-        float uniform_levels[4] = {0.0f, 1.0f/3.0f, 2.0f/3.0f, 1.0f};
-        q2kpt_set_levels(uniform_levels);
+        float uniform_levels_4[4] = {0.0f, 1.0f/3.0f, 2.0f/3.0f, 1.0f};
+        q2kpt_set_levels(uniform_levels_4);
 
         std::vector<float> data(nrow * n_per_row);
         std::normal_distribution<float> dist(0.0f, 0.02f);
@@ -189,16 +207,25 @@ int main(void) {
         float r_q2k = std_quant_rmse(GGML_TYPE_Q2_K, data.data(), nrow, n_per_row);
 
         // Q2_KPT with uniform levels (no re-training)
+        // Need per-block levels: repeat uniform_levels for each block
+        const int nb = n_per_row / MY_QK_K;  // blocks per row
+        std::vector<float> uniform_levels(nb * 4);
+        for (int b = 0; b < nb; ++b) {
+            for (int k = 0; k < 4; ++k) {
+                uniform_levels[b * 4 + k] = uniform_levels_4[k];
+            }
+        }
+
         const size_t rs = ggml_row_size(GGML_TYPE_Q2_KPT, n_per_row);
         std::vector<uint8_t> qb(nrow * rs);
         std::vector<float>   dq(nrow * n_per_row);
         for (size_t r = 0; r < nrow; ++r) {
             quantize_q2_kpt(data.data() + r * n_per_row,
-                             qb.data() + r * rs, 1, (int64_t)n_per_row, nullptr);
+                             qb.data() + r * rs, r, 1, (int64_t)n_per_row, nullptr);
         }
         const ggml_type_traits * tr = ggml_get_type_traits(GGML_TYPE_Q2_KPT);
         for (size_t r = 0; r < nrow; ++r) {
-            tr->to_float(qb.data() + r * rs, dq.data() + r * n_per_row, (int64_t)n_per_row, uniform_levels);
+            tr->to_float(qb.data() + r * rs, dq.data() + r * n_per_row, (int64_t)n_per_row, uniform_levels.data());
         }
         float r_kpt_unif = rmse(data.data(), dq.data(), nrow * n_per_row);
         float ratio = r_kpt_unif / (r_q2k + 1e-10f);
@@ -233,7 +260,7 @@ int main(void) {
         std::vector<uint8_t> qb(rs);
         std::vector<float>   dq(MY_QK_K);
 
-        quantize_q2_kpt(data.data(), qb.data(), 1, MY_QK_K, nullptr);
+        quantize_q2_kpt(data.data(), qb.data(), 0, 1, MY_QK_K, nullptr);
         const ggml_type_traits * tr = ggml_get_type_traits(GGML_TYPE_Q2_KPT);
         tr->to_float(qb.data(), dq.data(), MY_QK_K, ulev);
 
@@ -296,7 +323,7 @@ int main(void) {
         const size_t rs = ggml_row_size(GGML_TYPE_Q2_KPT, ne0);
         std::vector<uint8_t> qw(ne1 * rs);
         for (int r = 0; r < ne1; ++r)
-            quantize_q2_kpt(weights.data() + r * ne0, qw.data() + r * rs, 1, ne0, nullptr);
+            quantize_q2_kpt(weights.data() + r * ne0, qw.data() + r * rs, r, 1, ne0, nullptr);
 
         // Reference: dequant weights x float acts
         const ggml_type_traits * tr = ggml_get_type_traits(GGML_TYPE_Q2_KPT);

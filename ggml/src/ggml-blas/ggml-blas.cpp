@@ -1,5 +1,15 @@
 #include "ggml-impl.h"
 #include "ggml-blas.h"
+
+// Helper: compute quant_levels stride for a given row.
+// For Q2_KPT (per-block levels), stride depends on tensor width.
+static inline size_t ggml_quant_levels_stride(ggml_type type, size_t constant_stride, int64_t ne0) {
+    if (type == GGML_TYPE_Q2_KPT) {
+        return (size_t)(ne0 / 256) * 4 * sizeof(float);
+    }
+    return constant_stride;
+}
+
 #include "ggml-backend-impl.h"
 
 #include <future>
@@ -77,10 +87,11 @@ static void ggml_backend_blas_mul_mat(ggml_backend_blas_context * ctx, struct gg
                 const int min_rows_per_thread = std::max((int)(min_cols_per_thread/ne00), 1);
                 const int n_threads = std::max(std::min(ctx->n_threads, (int)(ne01/min_rows_per_thread)), 1);
 
+                const size_t lrs = ggml_quant_levels_stride(src0->type, ggml_get_type_traits(src0->type)->levels_row_stride, src0->ne[0]);
 #ifdef GGML_USE_OPENMP
                 #pragma omp parallel for num_threads(n_threads)
                 for (int64_t i01 = 0; i01 < ne01; i01++) {
-                    to_float((const char *) x + i01*nb01, wplane + i01*ne00, ne00, src0->quant_levels);
+                    to_float((const char *) x + i01*nb01, wplane + i01*ne00, ne00, (const char*)src0->quant_levels + i01*lrs);
                 }
 #else
                 for (int i = 1; i < n_threads; i++) {
@@ -89,7 +100,7 @@ static void ggml_backend_blas_mul_mat(ggml_backend_blas_context * ctx, struct gg
                     if (start < end) {
                         ctx->tasks.push_back(std::async(std::launch::async, [=]() {
                             for (int64_t i01 = start; i01 < end; i01++) {
-                                to_float((const char *) x + i01*nb01, wplane + i01*ne00, ne00, src0->quant_levels);
+                                to_float((const char *) x + i01*nb01, wplane + i01*ne00, ne00, (const char*)src0->quant_levels + i01*lrs);
                             }
                         }));
                     }
@@ -99,7 +110,7 @@ static void ggml_backend_blas_mul_mat(ggml_backend_blas_context * ctx, struct gg
                     const int64_t start = 0;
                     const int64_t end   = ne01/n_threads;
                     for (int64_t i01 = start; i01 < end; i01++) {
-                        to_float((const char *) x + i01*nb01, wplane + i01*ne00, ne00, src0->quant_levels);
+                        to_float((const char *) x + i01*nb01, wplane + i01*ne00, ne00, (const char*)src0->quant_levels + i01*lrs);
                     }
                 }
 #endif

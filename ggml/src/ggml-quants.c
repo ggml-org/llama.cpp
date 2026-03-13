@@ -5346,17 +5346,338 @@ void quantize_row_q2_dpt_ref(const float * GGML_RESTRICT x, block_q2_dpt * GGML_
 static float q2kpt_levels[Q2KPT_N_LEVELS];
 static bool  q2kpt_levels_set = false;
 
+// Global level storage for Q2_KPT (per-block levels for last quantized tensor)
+static float *q2kpt_block_levels = NULL;
+static size_t q2kpt_max_levels   = 0;
+static size_t q2kpt_cur_levels   = 0;
+
+// Prepare the levels buffer for a tensor with given dimensions.
+// This should be called before parallel quantization to pre-allocate storage.
+void q2kpt_prepare_levels(int64_t nrows, int64_t n_per_row) {
+    const int nb = (int)(n_per_row / QK_K);
+    const size_t total_levels = (size_t)nrows * nb * Q2KPT_N_LEVELS;
+    if (total_levels > q2kpt_max_levels) {
+        q2kpt_block_levels = (float *) realloc(q2kpt_block_levels, total_levels * sizeof(float));
+        q2kpt_max_levels = total_levels;
+    }
+    q2kpt_cur_levels = total_levels;
+}
+
 void q2kpt_set_levels(const float * levels) {
     memcpy(q2kpt_levels, levels, Q2KPT_N_LEVELS * sizeof(float));
     q2kpt_levels_set = true;
 }
 
 const float * q2kpt_get_levels(void) {
+    // Return per-block levels if available, otherwise global levels
+    if (q2kpt_block_levels && q2kpt_cur_levels > 0) {
+        return q2kpt_block_levels;
+    }
     return q2kpt_levels_set ? q2kpt_levels : NULL;
 }
 
 void q2kpt_free_levels(void) {
     q2kpt_levels_set = false;
+    if (q2kpt_block_levels) {
+        free(q2kpt_block_levels);
+        q2kpt_block_levels = NULL;
+        q2kpt_max_levels = 0;
+        q2kpt_cur_levels = 0;
+    }
+}
+
+// Train 4 Lloyd-Max float levels for a single 256-element block.
+// Normalizes sub-block values to [0,1] using Q2_K-style scale+min estimation, then runs k-means.
+// Forward declaration (defined later in this file)
+static float make_q2kpt_quants(int n, const float * GGML_RESTRICT x,
+                                uint8_t * GGML_RESTRICT L, float * GGML_RESTRICT the_min,
+                                const float * mapped_levels, const float * weight);
+
+// ---- q2kpt_quantize_block_given_levels ----------------------------------------
+// Quantize one QK_K-element block using caller-specified levels (no training).
+// block_x:      QK_K floats of original data
+// y:            output block_q2_kpt (filled in place)
+// quant_weights: QK_K importance weights (or NULL → use x[i]²)
+// sigma2:       mean(x²) for the block (for weight formula)
+// levels:       Q2KPT_N_LEVELS values in [0,1], must be sorted ascending
+// -------------------------------------------------------------------------------
+static void q2kpt_quantize_block_given_levels(
+        const float *  GGML_RESTRICT block_x,
+        block_q2_kpt * GGML_RESTRICT y,
+        const float *  GGML_RESTRICT quant_weights,
+        float          sigma2,
+        const float    levels[Q2KPT_N_LEVELS]) {
+
+    float mapped_levels[Q2KPT_N_LEVELS];
+    float bounds[Q2KPT_N_LEVELS - 1];
+    for (int k = 0; k < Q2KPT_N_LEVELS; ++k) mapped_levels[k] = levels[k] * 3.0f;
+    for (int k = 0; k < Q2KPT_N_LEVELS - 1; ++k)
+        bounds[k] = 0.5f * (mapped_levels[k] + mapped_levels[k + 1]);
+
+    uint8_t  L[QK_K];
+    float    mins[QK_K / 16], scales[QK_K / 16], sw[QK_K / 16];
+    float    weight[16];
+    uint8_t  Ls[QK_K / 16], Lm[QK_K / 16];
+
+    memset(sw, 0, sizeof(sw));
+    float sumx2 = sigma2 * QK_K;  // reconstitute (or recompute below)
+
+    for (int j = 0; j < QK_K / 16; ++j) {
+        const float * bx = block_x + 16 * j;
+        if (quant_weights) {
+            const float * qw = quant_weights + 16 * j;
+            for (int l = 0; l < 16; ++l)
+                weight[l] = qw[l] * sqrtf(sigma2 + bx[l] * bx[l]);
+        } else {
+            for (int l = 0; l < 16; ++l)
+                weight[l] = bx[l] * bx[l];
+        }
+        for (int l = 0; l < 16; ++l) sw[j] += weight[l];
+        scales[j] = make_q2kpt_quants(16, bx, L + 16 * j, &mins[j], mapped_levels, weight);
+    }
+
+    float dm = make_qp_quants(QK_K / 16, 15, scales, Ls, sw);
+    float mm = make_qp_quants(QK_K / 16, 15, mins,   Lm, sw);
+
+    y->d    = GGML_FP32_TO_FP16(dm);
+    y->dmin = GGML_FP32_TO_FP16(mm);
+    dm = GGML_FP16_TO_FP32(y->d);
+    mm = GGML_FP16_TO_FP32(y->dmin);
+
+    for (int j = 0; j < QK_K / 16; ++j) y->scales[j] = Ls[j] | (Lm[j] << 4);
+
+    // Second pass: reassign with quantized scales
+    for (int j = 0; j < QK_K / 16; ++j) {
+        const float d = dm * (y->scales[j] & 0xF);
+        if (!d) {
+            int zero_k = 0;
+            float zero_d = fabsf(mapped_levels[0]);
+            for (int k = 1; k < Q2KPT_N_LEVELS; ++k) {
+                if (fabsf(mapped_levels[k]) < zero_d) { zero_d = fabsf(mapped_levels[k]); zero_k = k; }
+            }
+            for (int ii = 0; ii < 16; ++ii) L[16 * j + ii] = zero_k;
+            continue;
+        }
+        const float m = mm * (y->scales[j] >> 4);
+        for (int ii = 0; ii < 16; ++ii) {
+            float scaled  = (block_x[16 * j + ii] + m) / d;
+            L[16 * j + ii] = (scaled > bounds[0]) + (scaled > bounds[1]) + (scaled > bounds[2]);
+        }
+    }
+
+    // Pack 2-bit indices (Q2_K layout)
+    for (int j = 0; j < QK_K; j += 128) {
+        for (int l = 0; l < 32; ++l) {
+            y->qs[j / 4 + l] = L[j + l] | (L[j + l + 32] << 2)
+                              | (L[j + l + 64] << 4) | (L[j + l + 96] << 6);
+        }
+    }
+
+    (void)sumx2;
+}
+
+// ---- Histogram Lloyd-Max helper ----------------------------------------------
+// Runs weighted Lloyd-Max iterations on a pre-built histogram.
+// bin_centers[b]: representative value for bin b (weighted centroid)
+// bin_w[b]:       total weight of data in bin b
+// levels[]:       centroids, in/out (must be sorted ascending on entry)
+// -------------------------------------------------------------------------------
+static void q2kpt_histogram_lloyd_max(
+        int n_bins, const float * bin_centers, const float * bin_w,
+        float * levels, int n_levels, int n_iter) {
+
+    for (int iter = 0; iter < n_iter; ++iter) {
+        float sum_w[Q2KPT_N_LEVELS]  = { 0.0f };
+        float sum_wt[Q2KPT_N_LEVELS] = { 0.0f };
+
+        for (int b = 0; b < n_bins; ++b) {
+            float w = bin_w[b];
+            if (w < 1e-30f) continue;
+            float t = bin_centers[b];
+            int best = 0;
+            float bd2 = (t - levels[0]) * (t - levels[0]);
+            for (int k = 1; k < n_levels; ++k) {
+                float d2 = (t - levels[k]) * (t - levels[k]);
+                if (d2 < bd2) { bd2 = d2; best = k; }
+            }
+            sum_w[best]  += w;
+            sum_wt[best] += w * t;
+        }
+
+        float new_levels[Q2KPT_N_LEVELS];
+        float max_delta = 0.0f;
+        for (int k = 0; k < n_levels; ++k) {
+            new_levels[k] = (sum_w[k] > 1e-30f) ? sum_wt[k] / sum_w[k] : levels[k];
+        }
+        // Sort ascending (insertion sort, n_levels=4)
+        for (int k = 1; k < n_levels; ++k) {
+            float v = new_levels[k]; int m = k - 1;
+            while (m >= 0 && new_levels[m] > v) { new_levels[m + 1] = new_levels[m]; --m; }
+            new_levels[m + 1] = v;
+        }
+        for (int k = 0; k < n_levels; ++k)
+            max_delta = fmaxf(max_delta, fabsf(new_levels[k] - levels[k]));
+        memcpy(levels, new_levels, n_levels * sizeof(float));
+        if (max_delta < 1e-7f) break;
+    }
+}
+
+// ---- q2kpt_optimize_block_levels ----------------------------------------------
+// Full closed-loop EM training for one QK_K block using histogram binning:
+//   1. Init: histogram Lloyd-Max on normalized [0,1] sub-block values
+//   2. EM cycles: full E-step → build effective-T histogram → cheap Lloyd-Max
+//   3. Final quantize with best levels seen
+//
+// block_x:       QK_K floats of original data
+// block_y:       workspace / output (holds the best quantization on return)
+// quant_weights: QK_K per-element importance weights (or NULL → use x[i]²)
+// sigma2:        mean(x²) for the block
+// levels_out:    Q2KPT_N_LEVELS trained levels in [0,1], ascending
+// -------------------------------------------------------------------------------
+#define Q2KPT_N_BINS          128   // histogram bins
+#define Q2KPT_INIT_LLOYD      10    // Lloyd-Max iters on init histogram
+#define Q2KPT_N_EM_CYCLES     4     // number of full E-step calls
+#define Q2KPT_LLOYD_PER_CYCLE 10    // cheap histogram Lloyd-Max iters per cycle
+
+static void q2kpt_optimize_block_levels(
+        const float *  GGML_RESTRICT block_x,
+        block_q2_kpt * GGML_RESTRICT block_y,
+        const float *  GGML_RESTRICT quant_weights,
+        float          sigma2,
+        float          levels_out[Q2KPT_N_LEVELS]) {
+
+    const float inv_bins = 1.0f / Q2KPT_N_BINS;
+
+    // ---- Build per-element weights and sub-block-normalised values -----------
+    float weights[QK_K];
+    float norm_vals[QK_K];
+
+    for (int sb = 0; sb < QK_K / 16; ++sb) {
+        const float * xsb = block_x + sb * 16;
+        float xmin = xsb[0], xmax = xsb[0];
+        for (int l = 1; l < 16; ++l) {
+            if (xsb[l] < xmin) xmin = xsb[l];
+            if (xsb[l] > xmax) xmax = xsb[l];
+        }
+        if (xmin > 0.0f) xmin = 0.0f;
+        float range     = xmax - xmin;
+        float inv_range = (range > 1e-10f) ? 1.0f / range : 0.0f;
+
+        for (int l = 0; l < 16; ++l) {
+            int   el = sb * 16 + l;
+            float t  = (range > 1e-10f) ?
+                       fmaxf(0.0f, fminf(1.0f, (xsb[l] - xmin) * inv_range)) : 0.0f;
+            norm_vals[el] = t;
+
+            float w;
+            if (quant_weights) {
+                w = quant_weights[el] * sqrtf(sigma2 + xsb[l] * xsb[l]);
+            } else {
+                w = xsb[l] * xsb[l];
+            }
+            // Scale by range² so normalised-space errors match actual-space
+            weights[el] = fmaxf(w * range * range, 1e-30f);
+        }
+    }
+
+    // ---- Phase 1: Init levels via histogram Lloyd-Max on norm_vals ----------
+    float bin_w[Q2KPT_N_BINS];
+    float bin_wt[Q2KPT_N_BINS];
+    float bin_centers[Q2KPT_N_BINS];
+
+    memset(bin_w,  0, sizeof(bin_w));
+    memset(bin_wt, 0, sizeof(bin_wt));
+
+    for (int i = 0; i < QK_K; ++i) {
+        float t = norm_vals[i];
+        int b = (int)(t * Q2KPT_N_BINS);
+        if (b >= Q2KPT_N_BINS) b = Q2KPT_N_BINS - 1;
+        bin_w[b]  += weights[i];
+        bin_wt[b] += weights[i] * t;
+    }
+    for (int b = 0; b < Q2KPT_N_BINS; ++b)
+        bin_centers[b] = (bin_w[b] > 1e-30f) ? bin_wt[b] / bin_w[b] : (b + 0.5f) * inv_bins;
+
+    float levels[Q2KPT_N_LEVELS];
+    for (int k = 0; k < Q2KPT_N_LEVELS; ++k)
+        levels[k] = (float)k / (Q2KPT_N_LEVELS - 1);
+
+    q2kpt_histogram_lloyd_max(Q2KPT_N_BINS, bin_centers, bin_w,
+                               levels, Q2KPT_N_LEVELS, Q2KPT_INIT_LLOYD);
+
+    // ---- Phase 2: EM cycles -------------------------------------------------
+    // Each cycle: full E-step → build effective-T histogram → cheap Lloyd-Max.
+    // Effective-T: T_i = (x_i + B_i) / A_i,  W_i = w_i * A_i²
+    // The M-step optimal level for class k is the W-weighted mean of T_i in k.
+    float best_levels[Q2KPT_N_LEVELS];
+    memcpy(best_levels, levels, sizeof(levels));
+    float best_err = 1e38f;
+
+    float eff_bin_w[Q2KPT_N_BINS];
+    float eff_bin_wt[Q2KPT_N_BINS];
+    float eff_bin_centers[Q2KPT_N_BINS];
+
+    for (int cycle = 0; cycle < Q2KPT_N_EM_CYCLES; ++cycle) {
+
+        // Full E-step
+        q2kpt_quantize_block_given_levels(block_x, block_y, quant_weights, sigma2, levels);
+
+        float d_all_q = GGML_FP16_TO_FP32(block_y->d);
+        float dmin_q  = GGML_FP16_TO_FP32(block_y->dmin);
+
+        memset(eff_bin_w,  0, sizeof(eff_bin_w));
+        memset(eff_bin_wt, 0, sizeof(eff_bin_wt));
+        float err = 0.0f;
+
+        for (int el = 0; el < QK_K; ++el) {
+            int sb  = el / 16;
+            int k_j = block_y->scales[sb] & 0xF;
+            int m_j = block_y->scales[sb] >> 4;
+
+            float A  = d_all_q * (float)k_j * 3.0f;
+            float mn = dmin_q  * (float)m_j;
+
+            int qs_byte = (el / 128) * 32 + el % 32;
+            int shift   = ((el % 128) / 32) * 2;
+            int idx     = (block_y->qs[qs_byte] >> shift) & 3;
+
+            float w = quant_weights ?
+                      quant_weights[el] * sqrtf(sigma2 + block_x[el] * block_x[el]) :
+                      block_x[el] * block_x[el];
+            w = fmaxf(w, 1e-30f);
+
+            float y_approx = A * levels[idx] - mn;
+            float diff     = y_approx - block_x[el];
+            err += w * diff * diff;
+
+            // Build effective-T histogram for histogram Lloyd-Max M-step
+            if (A > 1e-10f) {
+                float T = fmaxf(0.0f, fminf(1.0f, (block_x[el] + mn) / A));
+                float W = w * A * A;
+                int b = (int)(T * Q2KPT_N_BINS);
+                if (b >= Q2KPT_N_BINS) b = Q2KPT_N_BINS - 1;
+                eff_bin_w[b]  += W;
+                eff_bin_wt[b] += W * T;
+            }
+        }
+
+        if (err < best_err) {
+            best_err = err;
+            memcpy(best_levels, levels, sizeof(levels));
+        }
+
+        for (int b = 0; b < Q2KPT_N_BINS; ++b)
+            eff_bin_centers[b] = (eff_bin_w[b] > 1e-30f)
+                                 ? eff_bin_wt[b] / eff_bin_w[b]
+                                 : (b + 0.5f) * inv_bins;
+
+        q2kpt_histogram_lloyd_max(Q2KPT_N_BINS, eff_bin_centers, eff_bin_w,
+                                   levels, Q2KPT_N_LEVELS, Q2KPT_LLOYD_PER_CYCLE);
+    }
+
+    // Final quantize with the best levels found across all cycles
+    memcpy(levels_out, best_levels, sizeof(best_levels));
+    q2kpt_quantize_block_given_levels(block_x, block_y, quant_weights, sigma2, best_levels);
 }
 
 // Train 4 Lloyd-Max float levels from tensor data for Q2_KPT.
@@ -5472,13 +5793,16 @@ void dequantize_row_q2_kpt(const block_q2_kpt * GGML_RESTRICT x, float * GGML_RE
     const float * lv = (const float *)levels;
     GGML_ASSERT(lv != NULL && "Q2_KPT levels not set for tensor");
 
-    // Precompute mapped levels: ml[k] = levels[k] * 3.0
-    float ml[Q2KPT_N_LEVELS];
-    for (int i = 0; i < Q2KPT_N_LEVELS; ++i) {
-        ml[i] = lv[i] * 3.0f;
-    }
-
     for (int i = 0; i < nb; i++) {
+        // Per-block levels: block i uses lv[i*4 + 0..3]
+        const float * block_lv = lv + i * Q2KPT_N_LEVELS;
+
+        // Precompute mapped levels: ml[k] = levels[k] * 3.0
+        float ml[Q2KPT_N_LEVELS];
+        for (int j = 0; j < Q2KPT_N_LEVELS; ++j) {
+            ml[j] = block_lv[j] * 3.0f;
+        }
+
         const float     d_all = GGML_FP16_TO_FP32(x[i].d);
         const float     m_all = GGML_FP16_TO_FP32(x[i].dmin);
         const uint8_t * q     = x[i].qs;
@@ -5545,17 +5869,15 @@ static float make_q2kpt_quants(int                         n,
     float best_obj   = 0;
     bool  first      = true;
 
-    // Try multiple trial scales (perturbations around initial estimate)
+    // Grid search: try multiple trial scales
     for (int is = -9; is <= 36; ++is) {
         float iscale = (ml_max + 0.1f * is) / (xmax - xmin);
         float trial_min = -xmin;
 
-        // Assign each element to nearest mapped level
         float sum_l  = 0, sum_l2 = 0, sum_lx = 0;
         float sum_x  = 0, sum_w  = 0;
         for (int i = 0; i < n; ++i) {
             float scaled = iscale * (x[i] + trial_min);
-            // Nearest level assignment
             int best_k = (scaled > bounds[0]) + (scaled > bounds[1]) + (scaled > bounds[2]);
             float ml_val = mapped_levels[best_k];
             float w = weight ? weight[i] : x[i] * x[i];
@@ -5566,14 +5888,11 @@ static float make_q2kpt_quants(int                         n,
             sum_w  += w;
         }
 
-        // 2D least-squares: x[i] ≈ A * ml[L[i]] + B
-        // Normal equations: [sum_l2, sum_l; sum_l, sum_w] [A; B] = [sum_lx; sum_x]
         float D = sum_w * sum_l2 - sum_l * sum_l;
         if (D > 0) {
             float this_scale = (sum_w * sum_lx - sum_x * sum_l) / D;
             float this_min   = (sum_l2 * sum_x - sum_l * sum_lx) / D;
 
-            // min_offset = -B, must be >= 0  (i.e. B <= 0)
             if (this_min > 0) {
                 this_min = 0;
                 this_scale = sum_lx / sum_l2;
@@ -5593,140 +5912,138 @@ static float make_q2kpt_quants(int                         n,
                 best_scale = this_scale;
                 best_min   = this_min;
                 first      = false;
-
-                // Store assignment
-                for (int i = 0; i < n; ++i) {
-                    float scaled = (x[i] - best_min) / (best_scale > 1e-15f ? best_scale : 1e-15f);
-                    int best_k = (scaled > bounds[0]) + (scaled > bounds[1]) + (scaled > bounds[2]);
-                    L[i] = best_k;
-                }
             }
         }
     }
 
-    *the_min = -best_min;  // Store as positive offset (Q2_K convention: ml = dmin * min_q)
+    // Inner EM refinement from best found by grid search: iterate
+    // assign→refit→assign until convergence (fixes Problem 3)
+    for (int refine = 0; refine < 8; ++refine) {
+        float sum_l  = 0, sum_l2 = 0, sum_lx = 0, sum_x = 0, sum_w = 0;
+        for (int i = 0; i < n; ++i) {
+            float scaled = (x[i] - best_min) / (best_scale > 1e-15f ? best_scale : 1e-15f);
+            int best_k   = (scaled > bounds[0]) + (scaled > bounds[1]) + (scaled > bounds[2]);
+            float ml_val = mapped_levels[best_k];
+            float w = weight ? weight[i] : x[i] * x[i];
+            sum_l  += w * ml_val;
+            sum_l2 += w * ml_val * ml_val;
+            sum_lx += w * ml_val * x[i];
+            sum_x  += w * x[i];
+            sum_w  += w;
+        }
+        float D = sum_w * sum_l2 - sum_l * sum_l;
+        if (D <= 0) break;
+        float new_scale = (sum_w * sum_lx - sum_x * sum_l) / D;
+        float new_min   = (sum_l2 * sum_x - sum_l * sum_lx) / D;
+        if (new_min > 0) {
+            new_min   = 0;
+            new_scale = sum_l2 > 1e-30f ? sum_lx / sum_l2 : 0.f;
+        }
+        float cur_error = 0;
+        for (int i = 0; i < n; ++i) {
+            float scaled = (x[i] - new_min) / (new_scale > 1e-15f ? new_scale : 1e-15f);
+            int best_k   = (scaled > bounds[0]) + (scaled > bounds[1]) + (scaled > bounds[2]);
+            float diff   = new_scale * mapped_levels[best_k] + new_min - x[i];
+            float w = weight ? weight[i] : x[i] * x[i];
+            cur_error += w * diff * diff;
+        }
+        if (cur_error >= best_obj - 1e-12f * best_obj) { break; }
+        best_obj   = cur_error;
+        best_scale = new_scale;
+        best_min   = new_min;
+    }
+
+    // Final assignment with best (scale, min)
+    for (int i = 0; i < n; ++i) {
+        float scaled = (x[i] - best_min) / (best_scale > 1e-15f ? best_scale : 1e-15f);
+        L[i] = (scaled > bounds[0]) + (scaled > bounds[1]) + (scaled > bounds[2]);
+    }
+
+    *the_min = -best_min;
     return best_scale;
 }
 
 static void quantize_row_q2_kpt_impl(const float * GGML_RESTRICT  x,
                                       block_q2_kpt * GGML_RESTRICT y,
                                       int64_t                      n_per_row,
-                                      const float * GGML_RESTRICT  quant_weights) {
+                                      const float * GGML_RESTRICT  quant_weights,
+                                      const float * GGML_RESTRICT  imatrix,
+                                      float * GGML_RESTRICT        block_levels) {
     assert(n_per_row % QK_K == 0);
-    const int     nb     = n_per_row / QK_K;
-    const float * levels = q2kpt_get_levels();
-    GGML_ASSERT(levels != NULL && "Q2_KPT levels not set - call q2kpt_set_levels() first");
+    const int nb = n_per_row / QK_K;
+    GGML_ASSERT(block_levels != NULL && "block_levels buffer must be provided");
 
-    // Precompute mapped levels: ml[k] = levels[k] * 3.0
-    float mapped_levels[Q2KPT_N_LEVELS];
-    for (int k = 0; k < Q2KPT_N_LEVELS; ++k) {
-        mapped_levels[k] = levels[k] * 3.0f;
-    }
+    for (int i = 0; i < nb; ++i) {
+        const float * block_x = x + i * QK_K;
 
-    // Precompute boundaries for nearest-level assignment
-    float bounds[Q2KPT_N_LEVELS - 1];
-    for (int k = 0; k < Q2KPT_N_LEVELS - 1; ++k) {
-        bounds[k] = 0.5f * (mapped_levels[k] + mapped_levels[k + 1]);
-    }
+        // Per-block quant_weights and imatrix slices (fixes the imatrix offset bug:
+        // previously the full-row imatrix was passed and indexed from 0 for every block)
+        const float * block_qw = quant_weights ? quant_weights + i * QK_K : NULL;
+        const float * block_im = imatrix       ? imatrix       + i * QK_K : NULL;
 
-    uint8_t L[QK_K];
-    float   mins[QK_K/16];
-    float   scales[QK_K/16];
-    float   sw[QK_K/16];
-    float   weight[16];
-    uint8_t Ls[QK_K/16], Lm[QK_K/16];
-
-    for (int i = 0; i < nb; i++) {
-        memset(sw, 0, QK_K/16*sizeof(float));
-        float sumx2 = 0;
-        for (int j = 0; j < QK_K; ++j) sumx2 += x[j] * x[j];
+        float sumx2 = 0.0f;
+        for (int j = 0; j < QK_K; ++j) sumx2 += block_x[j] * block_x[j];
         float sigma2 = sumx2 / QK_K;
 
-        // First pass: find per-sub-block scales optimized for mapped levels
-        for (int j = 0; j < QK_K/16; ++j) {
-            if (quant_weights) {
-                const float * qw = quant_weights + QK_K * i + 16 * j;
-                for (int l = 0; l < 16; ++l)
-                    weight[l] = qw[l] * sqrtf(sigma2 + x[16*j + l] * x[16*j + l]);
-            } else {
-                for (int l = 0; l < 16; ++l)
-                    weight[l] = x[16*j + l] * x[16*j + l];
-            }
-            for (int l = 0; l < 16; ++l) sw[j] += weight[l];
+        float block_lv[Q2KPT_N_LEVELS];
+        // Runs k-means init + EM loop; fills block_lv AND writes the best
+        // quantized block into y[i] as a side-effect.
+        q2kpt_optimize_block_levels(block_x, &y[i], block_qw, sigma2, block_lv);
 
-            scales[j] = make_q2kpt_quants(16, x + 16*j, L + 16*j, &mins[j],
-                                           mapped_levels, weight);
-        }
+        memcpy(block_levels + i * Q2KPT_N_LEVELS, block_lv, Q2KPT_N_LEVELS * sizeof(float));
 
-        // Two-tier scale quantization (identical to Q2_K):
-        // Quantize scales [0..15] and mins [0..15] separately using make_qp_quants
-        float dm = make_qp_quants(QK_K/16, 15, scales, Ls, sw);
-        float mm = make_qp_quants(QK_K/16, 15, mins,   Lm, sw);
-
-        y[i].d    = GGML_FP32_TO_FP16(dm);
-        y[i].dmin = GGML_FP32_TO_FP16(mm);
-        dm        = GGML_FP16_TO_FP32(y[i].d);
-        mm        = GGML_FP16_TO_FP32(y[i].dmin);
-
-        for (int j = 0; j < QK_K/16; ++j) {
-            y[i].scales[j] = Ls[j] | (Lm[j] << 4);
-        }
-
-        // Second pass: re-assign with quantized scales using nearest mapped level
-        for (int j = 0; j < QK_K/16; ++j) {
-            const float d = dm * (y[i].scales[j] & 0xF);
-            if (!d) {
-                // Assign to level closest to 0 for zero-scale sub-blocks
-                int zero_k = 0;
-                float zero_d = fabsf(mapped_levels[0]);
-                for (int k = 1; k < Q2KPT_N_LEVELS; ++k) {
-                    if (fabsf(mapped_levels[k]) < zero_d) {
-                        zero_d = fabsf(mapped_levels[k]);
-                        zero_k = k;
-                    }
-                }
-                for (int ii = 0; ii < 16; ++ii) L[16*j + ii] = zero_k;
-                continue;
-            }
-            const float m = mm * (y[i].scales[j] >> 4);
-            for (int ii = 0; ii < 16; ++ii) {
-                float scaled = (x[16*j + ii] + m) / d;
-                // Nearest mapped level assignment
-                int best_k = (scaled > bounds[0]) + (scaled > bounds[1]) + (scaled > bounds[2]);
-                L[16*j + ii] = best_k;
-            }
-        }
-
-        // Pack 2-bit indices (same layout as Q2_K)
-        for (int j = 0; j < QK_K; j += 128) {
-            for (int l = 0; l < 32; ++l) {
-                y[i].qs[j/4 + l] = L[j + l] | (L[j + l + 32] << 2)
-                                  | (L[j + l + 64] << 4) | (L[j + l + 96] << 6);
-            }
-        }
-
-        x += QK_K;
+        (void)block_im;  // imatrix is folded into block_qw; retained for future use
     }
 }
 
 size_t quantize_q2_kpt(const float * GGML_RESTRICT src,
                         void * GGML_RESTRICT        dst,
+                        int64_t                     start_row,
                         int64_t                     nrow,
                         int64_t                     n_per_row,
                         const float *               imatrix) {
     size_t row_size = ggml_row_size(GGML_TYPE_Q2_KPT, n_per_row);
     char * qrow = (char *) dst;
+    const int nb = (int)(n_per_row / QK_K);
+    const size_t total_levels = (size_t)nrow * nb * Q2KPT_N_LEVELS;
+    const size_t levels_needed = (size_t)(start_row + nrow) * nb * Q2KPT_N_LEVELS;
+
+    // Ensure buffer is large enough (should have been pre-allocated via q2kpt_prepare_levels)
+    if (levels_needed > q2kpt_max_levels) {
+        q2kpt_block_levels = (float *) realloc(q2kpt_block_levels, levels_needed * sizeof(float));
+        q2kpt_max_levels = levels_needed;
+    }
+    q2kpt_cur_levels = levels_needed;
+
+    // Temporary buffer for one row's block levels
+    float * row_block_levels = (float *) malloc(nb * Q2KPT_N_LEVELS * sizeof(float));
+
     for (int64_t row = 0; row < nrow; ++row) {
-        quantize_row_q2_kpt_impl(src, (block_q2_kpt *) qrow, n_per_row, imatrix);
+        // Quantize row with per-block trained levels
+        quantize_row_q2_kpt_impl(src, (block_q2_kpt *) qrow, n_per_row, imatrix, imatrix, row_block_levels);
+        // Copy this row's block levels to the global buffer at the correct offset
+        memcpy(q2kpt_block_levels + (start_row + row) * nb * Q2KPT_N_LEVELS, row_block_levels,
+               nb * Q2KPT_N_LEVELS * sizeof(float));
         src  += n_per_row;
         qrow += row_size;
     }
+    free(row_block_levels);
     return nrow * row_size;
+}
+
+// Train per-row levels for all rows of a tensor and write to out_levels.
+// out_levels must be pre-allocated to nrow * Q2KPT_N_LEVELS floats.
+void q2kpt_train_all_row_levels(const float * data, int64_t nrow, int64_t n_per_row,
+                                 const float * imatrix, float * out_levels) {
+    for (int64_t r = 0; r < nrow; ++r) {
+        q2kpt_train_levels(data + r * n_per_row, 1, n_per_row, imatrix,
+                           out_levels + r * Q2KPT_N_LEVELS);
+    }
 }
 
 void quantize_row_q2_kpt_ref(const float * GGML_RESTRICT x, block_q2_kpt * GGML_RESTRICT y, int64_t k) {
     assert(k % QK_K == 0);
-    quantize_q2_kpt(x, y, 1, k, NULL);
+    quantize_q2_kpt(x, y, 0, 1, k, NULL);
 }
 
 // Global levels (used during quantization for the current tensor)

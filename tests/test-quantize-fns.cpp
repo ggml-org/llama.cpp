@@ -91,7 +91,7 @@ static float dot_product_error(const ggml_type_traits * qfns, const ggml_type_tr
     vdot->from_float(test_data2, tmp_q2.data(), test_size);
 
     float result = INFINITY;
-    qfns_cpu->vec_dot(test_size, &result, 0, tmp_q1.data(), 0, tmp_q2.data(), 0, 1);
+    qfns_cpu->vec_dot(test_size, &result, 0, tmp_q1.data(), 0, tmp_q2.data(), 0, 1, nullptr);
 
     const float dot_ref = dot_product(test_data1, test_data2, test_size);
 
