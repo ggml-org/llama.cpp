@@ -4614,7 +4614,7 @@ static void ggml_backend_cuda_device_get_memory(ggml_backend_dev_t dev, size_t *
     bool is_uma = uma_env;
 #else
     bool is_uma = prop.integrated > 0 || uma_env;
-#endif
+#endif // defined(GGML_USE_HIP)
 
     if (is_uma) {
         // For UMA systems (like DGX Spark), use system memory info
