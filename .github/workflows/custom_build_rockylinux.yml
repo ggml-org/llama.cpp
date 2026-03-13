@@ -121,7 +121,12 @@ jobs:
             find build/bin -maxdepth 1 -type f \( -name 'llama-*' -o -name 'ggml-*' \) -exec cp -av {} "${OUTDIR}/bin/" \;
           fi
 
-          find build -maxdepth 3 -type f \( -name 'libllama*' -o -name 'libggml*' \) -exec cp -av {} "${OUTDIR}/lib/" \; || true
+          # Keep both files and symlinks so SONAME links (for example libmtmd.so.0) survive packaging.
+          find build -maxdepth 3 \( -type f -o -type l \) \( -name 'libllama*' -o -name 'libggml*' -o -name 'libmtmd*' \) -exec cp -av {} "${OUTDIR}/lib/" \; || true
+
+          # Fail fast if required runtime library links are missing from the payload.
+          test -e "${OUTDIR}/lib/libmtmd.so.0"
+          test -e "${OUTDIR}/lib/libllama.so.0"
 
           git config --global --add safe.directory "${GITHUB_WORKSPACE:-/__w/llama.cpp/llama.cpp}"
 
