@@ -105,6 +105,8 @@ jobs:
 
           find build -maxdepth 3 -type f \( -name 'libllama*' -o -name 'libggml*' \) -exec cp -av {} "${OUTDIR}/lib/" \; || true
 
+          git config --global --add safe.directory "${GITHUB_WORKSPACE:-/__w/llama.cpp/llama.cpp}"
+
           git rev-parse HEAD > "${OUTDIR}/meta/git-commit.txt"
           git describe --tags --always > "${OUTDIR}/meta/git-describe.txt" || true
           cat /etc/os-release > "${OUTDIR}/meta/os-release.txt" || true
