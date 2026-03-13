@@ -13,6 +13,10 @@
 #include <future>
 #include <regex>
 
+#ifndef _WIN32
+#include <unistd.h>
+#endif // _WIN32
+
 static const size_t kiB = 1024;
 static const size_t MiB = 1024*kiB;
 static const size_t GiB = 1024*MiB;
@@ -659,13 +663,25 @@ llama_model_loader::llama_model_loader(
             LLAMA_LOG_INFO("%s: additional %d GGUFs metadata loaded.\n",  __func__, n_split - 1);
         }
     } else if (fd >= 0) {
+        const int fd_duped = dup(fd);
+        if (fd_duped < 0) {
+            throw std::runtime_error(format("%s: failed to dup fd %d: %s", __func__, fd, strerror(errno)));
+        }
+
+        FILE * f = fdopen(fd_duped, "rb");
+        if (!f) {
+            close(fd_duped);
+            throw std::runtime_error(format("%s: failed to fdopen fd %d: %s", __func__, fd, strerror(errno)));
+        }
+
         struct ggml_context * ctx = NULL;
         struct gguf_init_params params = {
             /*.no_alloc = */ true,
             /*.ctx      = */ &ctx,
         };
 
-        metadata_ptr.reset(gguf_init_from_fd(fd, params));
+        metadata_ptr.reset(gguf_init_from_file_ptr(f, params));
+        fclose(f);
         metadata = metadata_ptr.get();
         if (metadata == nullptr) {
             throw std::runtime_error(format("%s: failed to load model from fd %d", __func__, fd));
@@ -674,8 +690,8 @@ llama_model_loader::llama_model_loader(
         get_key(llm_kv(LLM_KV_GENERAL_ARCHITECTURE), arch_name, false);
         llm_kv = LLM_KV(llm_arch_from_string(arch_name));
 
-        contexts.emplace_back(ctx);
         files.emplace_back(new llama_file(fd));
+        contexts.emplace_back(ctx);
 
         // Save tensors data offset info of the main file.
         for (ggml_tensor * cur = ggml_get_first_tensor(ctx); cur; cur = ggml_get_next_tensor(ctx, cur)) {

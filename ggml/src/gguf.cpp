@@ -15,10 +15,6 @@
 #include <string>
 #include <vector>
 
-#ifndef _WIN32
-#include <unistd.h>
-#endif
-
 #define GGUF_MAX_STRING_LENGTH  (1024*1024*1024)
 #define GGUF_MAX_ARRAY_ELEMENTS (1024*1024*1024)
 
@@ -857,33 +853,12 @@ struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_p
     return result;
 }
 
-#ifndef _WIN32
-struct gguf_context * gguf_init_from_fd(int fd, struct gguf_init_params params) {
-    const int fd_duped = dup(fd);
-    if (fd_duped < 0) {
-        GGML_LOG_ERROR("%s: failed to dup fd %d: %s\n", __func__, fd, strerror(errno));
-        return nullptr;
-    }
-
-    FILE * file = fdopen(fd_duped, "rb");
+struct gguf_context * gguf_init_from_file_ptr(FILE * file, struct gguf_init_params params) {
     if (!file) {
-        close(fd_duped);
-        GGML_LOG_ERROR("%s: failed to fdopen fd %d: %s\n", __func__, fd, strerror(errno));
         return nullptr;
     }
-
-    struct gguf_context * result = gguf_init_from_file_impl(file, params);
-    fclose(file);
-    return result;
+    return gguf_init_from_file_impl(file, params);
 }
-#else
-struct gguf_context * gguf_init_from_fd(int fd, struct gguf_init_params params) {
-    GGML_LOG_ERROR("%s: fd-based loading is not supported on Windows\n", __func__);
-    GGML_UNUSED(fd);
-    GGML_UNUSED(params);
-    return nullptr;
-}
-#endif
 
 void gguf_free(struct gguf_context * ctx) {
     if (ctx == nullptr) {

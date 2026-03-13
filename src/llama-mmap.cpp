@@ -220,12 +220,12 @@ struct llama_file::impl {
     void init_from_fd(int fd_src) {
         const int fd_duped = dup(fd_src);
         if (fd_duped < 0) {
-            throw std::runtime_error(format("llama_file: failed to dup fd %d: %s", fd_src, strerror(errno)));
+            throw std::runtime_error(format("failed to dup fd %d: %s", fd_src, strerror(errno)));
         }
         fp = fdopen(fd_duped, "rb");
         if (!fp) {
             close(fd_duped);
-            throw std::runtime_error(format("llama_file: failed to fdopen fd %d: %s", fd_src, strerror(errno)));
+            throw std::runtime_error(format("failed to fdopen fd %d: %s", fd_src, strerror(errno)));
         }
         seek(0, SEEK_END);
         size = tell();

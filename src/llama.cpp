@@ -1083,7 +1083,7 @@ struct llama_model * llama_model_load_from_fd(int fd, struct llama_model_params 
     std::string path_model;
     std::vector<std::string> splits = {};
     return llama_model_load_from_file_impl(nullptr, nullptr, nullptr, path_model, splits, fd, params);
-#endif
+#endif // _WIN32
 }
 
 void llama_model_save_to_file(const struct llama_model * model, const char * path_model) {

@@ -44,4 +44,4 @@ int main(int argc, char ** argv) {
 
     return n_vocab > 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
-#endif
+#endif // _WIN32
