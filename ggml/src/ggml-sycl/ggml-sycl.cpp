@@ -30946,6 +30946,20 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             return;
         }
 #endif
+        // PP fallback: per-expert dispatch with contiguous gather/scatter.
+        // Use raw byte copy and byte-offset indexing (matching CUDA/master)
+        // to correctly handle non-contiguous ids VIEW tensors from argsort.
+        std::vector<char>   ids_host_raw(ggml_nbytes(ids));
+        const char *        ids_raw_src = static_cast<const char *>(ids->data);
+        const bool          ids_on_host_pp = ids->buffer && ggml_backend_buffer_is_host(ids->buffer);
+        if (ids_on_host_pp) {
+            std::memcpy(ids_host_raw.data(), ids_raw_src, ggml_nbytes(ids));
+        } else {
+            SYCL_CHECK(CHECK_TRY_ERROR(
+                stream->memcpy(ids_host_raw.data(), ids_raw_src, ggml_nbytes(ids))));
+            SYCL_CHECK(CHECK_TRY_ERROR(stream->wait()));
+        }
+
         ggml_sycl_pool_alloc<char> src1_contiguous(ctx.pool(), sizeof(float) * ggml_nelements(src1));
         ggml_sycl_pool_alloc<char> dst_contiguous(ctx.pool(), sizeof(float) * ggml_nelements(dst));
         src1_row.data = src1_contiguous.get();
@@ -30955,7 +30969,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             int64_t num_src1_rows = 0;
             for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
                 for (int64_t id = 0; id < n_ids; id++) {
-                    const int32_t row_id_i = ids_host[static_cast<size_t>(iid1 * n_ids + id)];
+                    const int32_t row_id_i = *(const int32_t *) (ids_host_raw.data()
+                                              + iid1 * ids->nb[1] + id * ids->nb[0]);
                     GGML_ASSERT(row_id_i >= 0 && row_id_i < n_as);
                     if (row_id_i != i02) {
                         continue;
