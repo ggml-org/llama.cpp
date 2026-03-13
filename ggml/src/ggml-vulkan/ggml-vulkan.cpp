@@ -15717,7 +15717,9 @@ static void ggml_backend_vk_device_event_synchronize(ggml_backend_dev_t dev, ggm
     auto device = ggml_vk_get_device(ctx->device);
     vk_event *vkev = (vk_event *)event->context;
 
-    vk::SemaphoreWaitInfo swi{vk::SemaphoreWaitFlags{}, { vkev->tl_semaphore.s }, { vkev->tl_semaphore.value }};
+    vk::Semaphore sem = vkev->tl_semaphore.s;
+    uint64_t val = vkev->tl_semaphore.value;
+    vk::SemaphoreWaitInfo swi{vk::SemaphoreWaitFlags{}, sem, val};
     VK_CHECK(device->device.waitSemaphores(swi, UINT64_MAX), "event_synchronize");
 
     // Finished using current command buffer so we flag for reuse
