@@ -2220,6 +2220,7 @@ private:
                                                          "tokens), try increasing it",
                                                          slot.task->n_tokens(), slot.n_ctx),
                                            ERROR_TYPE_EXCEED_CONTEXT_SIZE);
+                                n_empty_consecutive = 0; // Reset server kill-switch counter, client error should not kill the server
                                 slot.release();
                                 continue;
                             }
