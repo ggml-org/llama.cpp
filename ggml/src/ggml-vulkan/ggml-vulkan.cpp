@@ -14881,8 +14881,6 @@ static void ggml_backend_vk_event_wait(ggml_backend_t backend, ggml_backend_even
     vk_context compute_ctx = ggml_vk_get_compute_ctx(ctx);
 
     ggml_vk_wait_events(compute_ctx, {vkev->event});
-    ggml_vk_ctx_end(compute_ctx);
-    ctx->compute_ctx.reset();
 }
 
 // TODO: enable async and synchronize
@@ -15705,6 +15703,7 @@ static void ggml_backend_vk_device_event_synchronize(ggml_backend_dev_t dev, ggm
     // Finished using current command buffer so we flag for reuse
     if (vkev->cmd_buffer) {
         vkev->cmd_buffer->in_use = false;
+        vkev->cmd_buffer = nullptr;
     }
 }
 
