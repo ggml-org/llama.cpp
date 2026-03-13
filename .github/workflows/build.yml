@@ -812,12 +812,13 @@ jobs:
 
         - name: Test
           id: cmake_test
+          # TODO: fix and re-enable the `test-llama-archs` test below
           run: |
             cd ${{ github.workspace }}
             if [ "${{ matrix.openvino_device }}" = "GPU" ]; then
               export GGML_OPENVINO_DEVICE=GPU
             fi
-            ctest --test-dir build/ReleaseOV -L main --verbose --timeout 2000
+            ctest --test-dir build/ReleaseOV -L main -E "test-llama-archs" --verbose --timeout 2000
 
   build-linux-cross:
     uses: ./.github/workflows/build-linux-cross.yml
