@@ -115,6 +115,17 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 #define VK_LOG_DEBUG(msg) ((void) 0)
 #endif // GGML_VULKAN_DEBUG
 
+// Synchronization tracing for multi-GPU deadlock debugging.
+// Enable with GGML_VK_SYNC_LOG=1 environment variable.
+static bool vk_sync_log_enabled = false;
+#define VK_SYNC_LOG(dev_name, msg) do { \
+    if (vk_sync_log_enabled) { \
+        fprintf(stderr, "[VK_SYNC %s tid=%lu] %s\n", \
+            (dev_name).c_str(), (unsigned long)std::hash<std::thread::id>{}(std::this_thread::get_id()) % 10000, \
+            ((std::ostringstream&)(std::ostringstream() << msg)).str().c_str()); \
+    } \
+} while (0)
+
 struct ggml_backend_vk_context;
 
 #define MAX_PARAMETER_COUNT 12
@@ -255,7 +266,7 @@ static ggml_backend_buffer_type_i ggml_backend_vk_buffer_type_interface = {
 class vk_memory_logger;
 class vk_perf_logger;
 static void ggml_vk_destroy_buffer(vk_buffer& buf);
-static void ggml_vk_synchronize(ggml_backend_vk_context * ctx);
+static void ggml_vk_synchronize(ggml_backend_vk_context * ctx, const char * caller = "unknown");
 
 static constexpr uint32_t mul_mat_vec_max_cols = 8;
 static constexpr uint32_t p021_max_gqa_ratio = 8;
@@ -5743,6 +5754,7 @@ static void ggml_vk_instance_init() {
     vk_perf_logger_concurrent = getenv("GGML_VK_PERF_LOGGER_CONCURRENT") != nullptr;
     vk_enable_sync_logger = getenv("GGML_VK_SYNC_LOGGER") != nullptr;
     vk_memory_logger_enabled = getenv("GGML_VK_MEMORY_LOGGER") != nullptr;
+    vk_sync_log_enabled = getenv("GGML_VK_SYNC_LOG") != nullptr;
     const char* GGML_VK_PIPELINE_STATS = getenv("GGML_VK_PIPELINE_STATS");
     if (GGML_VK_PIPELINE_STATS != nullptr) {
         vk_pipeline_stats_filter = GGML_VK_PIPELINE_STATS;
@@ -6508,10 +6520,12 @@ static void ggml_vk_ctx_begin(vk_device& device, vk_context& subctx) {
     subctx->s = subctx->seqs[subctx->seqs.size() - 1].data();
 }
 
-static vk_context ggml_vk_get_compute_ctx(ggml_backend_vk_context * ctx) {
+static vk_context ggml_vk_get_compute_ctx(ggml_backend_vk_context * ctx, const char * caller = "unknown") {
     if (!ctx->compute_ctx.expired()) {
         return ctx->compute_ctx.lock();
     }
+
+    VK_SYNC_LOG(ctx->name, "get_compute_ctx: CREATING NEW compute_ctx, caller=" << caller);
 
     vk_context result = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
 
@@ -12665,7 +12679,7 @@ static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_contex
         ggml_vk_ctx_end(subctx);
         ggml_vk_submit(subctx, {});
         ctx->submit_pending = true;
-        ggml_vk_synchronize(ctx);
+        ggml_vk_synchronize(ctx, "preallocate_buffers");
         GGML_ASSERT(ctx->compute_ctx.expired());
         ggml_vk_ctx_begin(ctx->device, subctx);
         ctx->compute_ctx = subctx;
@@ -12742,7 +12756,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         }
     }
 
-    vk_context compute_ctx = ggml_vk_get_compute_ctx(ctx);
+    vk_context compute_ctx = ggml_vk_get_compute_ctx(ctx, "build_graph");
 
     {
         // This logic detects dependencies between modes in the graph and calls ggml_vk_sync_buffers
@@ -13241,7 +13255,7 @@ static void ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_cgraph *
         ctx->submit_pending = true;
 
 #ifdef GGML_VULKAN_CHECK_RESULTS
-        ggml_vk_synchronize(ctx);
+        ggml_vk_synchronize(ctx, "check_results");
         ggml_vk_check_results_1(ctx, cgraph, tensor_idx);
 #endif
     }
@@ -13300,7 +13314,7 @@ static void ggml_vk_cleanup(ggml_backend_vk_context * ctx) {
     // discard any unsubmitted command buffers
     ctx->compute_ctx.reset();
     // wait for any pending command buffers to finish
-    ggml_vk_synchronize(ctx);
+    ggml_vk_synchronize(ctx, "cleanup");
 
     ggml_vk_graph_cleanup(ctx);
 
@@ -13619,6 +13633,7 @@ static ggml_backend_buffer_type_t ggml_backend_vk_get_default_buffer_type(ggml_b
 static void ggml_backend_vk_set_tensor_async(ggml_backend_t backend, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     VK_LOG_DEBUG("ggml_backend_vk_set_tensor_async(" << size << ")");
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
+    VK_SYNC_LOG(ctx->name, "set_tensor_async: tensor=" << tensor->name << " size=" << size);
     GGML_ASSERT((tensor->buffer->buft == ggml_backend_vk_get_default_buffer_type(backend) || tensor->buffer->buft == ggml_backend_vk_host_buffer_type()) && "unsupported buffer type");
 
     if (size == 0) {
@@ -13639,7 +13654,7 @@ static void ggml_backend_vk_set_tensor_async(ggml_backend_t backend, ggml_tensor
             cpy_ctx = ctx->transfer_ctx.lock();
         }
     } else {
-        cpy_ctx = ggml_vk_get_compute_ctx(ctx);
+        cpy_ctx = ggml_vk_get_compute_ctx(ctx, "set_tensor_async");
     }
 
     vk_buffer buf = buf_ctx->dev_buffer;
@@ -13659,13 +13674,14 @@ static void ggml_backend_vk_set_tensor_async(ggml_backend_t backend, ggml_tensor
 
         cpy_ctx->s->buffer->buf.copyBuffer(ctx->sync_staging->buffer, buf->buffer, { buffer_cpy });
         deferred_memcpy(ctx->sync_staging->ptr, data, size, &cpy_ctx->in_memcpys);
-        ggml_vk_synchronize(ctx);
+        ggml_vk_synchronize(ctx, "set_tensor_async_staging");
     }
 }
 
 static void ggml_backend_vk_get_tensor_async(ggml_backend_t backend, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
     VK_LOG_DEBUG("ggml_backend_vk_get_tensor_async(" << size << ")");
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
+    VK_SYNC_LOG(ctx->name, "get_tensor_async: tensor=" << tensor->name << " size=" << size);
     GGML_ASSERT((tensor->buffer->buft == ggml_backend_vk_get_default_buffer_type(backend) || tensor->buffer->buft == ggml_backend_vk_host_buffer_type()) && "unsupported buffer type");
 
     if (size == 0) {
@@ -13674,7 +13690,7 @@ static void ggml_backend_vk_get_tensor_async(ggml_backend_t backend, const ggml_
 
     ggml_backend_vk_buffer_context * buf_ctx = (ggml_backend_vk_buffer_context *)tensor->buffer->context;
 
-    vk_context compute_ctx = ggml_vk_get_compute_ctx(ctx);
+    vk_context compute_ctx = ggml_vk_get_compute_ctx(ctx, "get_tensor_async");
 
     vk_buffer buf = buf_ctx->dev_buffer;
 
@@ -13693,13 +13709,17 @@ static void ggml_backend_vk_get_tensor_async(ggml_backend_t backend, const ggml_
 
         compute_ctx->s->buffer->buf.copyBuffer(buf->buffer, ctx->sync_staging->buffer, { buffer_cpy });
         deferred_memcpy(data, ctx->sync_staging->ptr, size, &compute_ctx->out_memcpys);
-        ggml_vk_synchronize(ctx);
+        ggml_vk_synchronize(ctx, "get_tensor_async_staging");
     }
 }
 
 static bool ggml_backend_vk_cpy_tensor_async(ggml_backend_t backend_src, ggml_backend_t backend_dst, const ggml_tensor * src, ggml_tensor * dst) {
     VK_LOG_DEBUG("ggml_backend_vk_cpy_tensor_async(" << src << " -> " << dst << ", size=" << ggml_nbytes(src) << ")");
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend_dst->context;
+    VK_SYNC_LOG(ctx->name, "cpy_tensor_async: BEGIN " << src->name << " -> " << dst->name
+        << " size=" << ggml_nbytes(src)
+        << " src_is_vk=" << ggml_backend_buffer_is_vk(src->buffer)
+        << " src_is_host=" << ggml_backend_buffer_is_host(src->buffer));
 
     // Skip zero-size tensors
     if (ggml_nbytes(src) == 0) {
@@ -13721,7 +13741,7 @@ static bool ggml_backend_vk_cpy_tensor_async(ggml_backend_t backend_src, ggml_ba
             return false;
         }
 
-        vk_context compute_ctx = ggml_vk_get_compute_ctx(ctx);
+        vk_context compute_ctx = ggml_vk_get_compute_ctx(ctx, "cpy_tensor_async_vk2vk");
 
         ggml_vk_buffer_copy_async(compute_ctx, dst_buf, vk_tensor_offset(dst) + dst->view_offs,
                                    src_buf_ctx->dev_buffer, vk_tensor_offset(src) + src->view_offs,
@@ -13734,6 +13754,7 @@ static bool ggml_backend_vk_cpy_tensor_async(ggml_backend_t backend_src, ggml_ba
         size_t pinned_offset = 0;
         ggml_vk_host_get(ctx->device, src->data, pinned_buf, pinned_offset);
         if (pinned_buf == nullptr) {
+            VK_SYNC_LOG(ctx->name, "cpy_tensor_async: host src not pinned, returning false");
             return false;
         }
 
@@ -13743,26 +13764,33 @@ static bool ggml_backend_vk_cpy_tensor_async(ggml_backend_t backend_src, ggml_ba
                 cpy_ctx = ggml_vk_create_context(ctx, ctx->transfer_cmd_pool);
                 ctx->transfer_ctx = cpy_ctx;
                 ggml_vk_ctx_begin(ctx->device, cpy_ctx);
+                VK_SYNC_LOG(ctx->name, "cpy_tensor_async: created new transfer_ctx");
             } else {
                 cpy_ctx = ctx->transfer_ctx.lock();
             }
+            VK_SYNC_LOG(ctx->name, "cpy_tensor_async: using transfer queue for host->dev copy");
         } else {
-            cpy_ctx = ggml_vk_get_compute_ctx(ctx);
+            cpy_ctx = ggml_vk_get_compute_ctx(ctx, "cpy_tensor_async_host2dev");
+            VK_SYNC_LOG(ctx->name, "cpy_tensor_async: using compute queue for host->dev copy");
         }
 
-        return ggml_vk_buffer_write_async(cpy_ctx, dst_buf,
+        bool ret = ggml_vk_buffer_write_async(cpy_ctx, dst_buf,
                                           vk_tensor_offset(dst) + dst->view_offs,
                                           src->data, ggml_nbytes(src));
+        VK_SYNC_LOG(ctx->name, "cpy_tensor_async: host->dev write_async returned " << ret);
+        return ret;
     }
 
     GGML_UNUSED(backend_src);
     return false;
 }
 
-static void ggml_vk_synchronize(ggml_backend_vk_context * ctx) {
+static void ggml_vk_synchronize(ggml_backend_vk_context * ctx, const char * caller) {
     VK_LOG_DEBUG("ggml_vk_synchronize()");
 
     bool do_transfer = !ctx->compute_ctx.expired();
+
+    VK_SYNC_LOG(ctx->name, "vk_synchronize: do_transfer=" << do_transfer << " submit_pending=" << ctx->submit_pending << " caller=" << caller);
 
     if (ggml_vk_submit_transfer_ctx(ctx)) {
         ctx->submit_pending = true;
@@ -13787,6 +13815,7 @@ static void ggml_vk_synchronize(ggml_backend_vk_context * ctx) {
     }
 
     if (ctx->submit_pending) {
+        VK_SYNC_LOG(ctx->name, "vk_synchronize: waiting for fence...");
         if (ctx->device->async_use_transfer_queue && ctx->transfer_semaphore_last_submitted < ctx->transfer_semaphore.value) {
             vk::TimelineSemaphoreSubmitInfo tl_info{
                 1, &ctx->transfer_semaphore.value,
@@ -13826,9 +13855,16 @@ static void ggml_backend_vk_synchronize(ggml_backend_t backend) {
     VK_LOG_DEBUG("ggml_backend_vk_synchronize()");
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
 
-    ggml_vk_synchronize(ctx);
+    VK_SYNC_LOG(ctx->name, "synchronize: BEGIN submit_pending=" << ctx->submit_pending
+        << " compute_ctx_alive=" << !ctx->compute_ctx.expired());
+
+    ggml_vk_synchronize(ctx, "backend_synchronize");
+
+    VK_SYNC_LOG(ctx->name, "synchronize: fence done, calling graph_cleanup");
 
     ggml_vk_graph_cleanup(ctx);
+
+    VK_SYNC_LOG(ctx->name, "synchronize: DONE");
 }
 
 static bool ggml_vk_is_empty(ggml_tensor * node) {
@@ -14247,6 +14283,10 @@ static int32_t find_first_set(uint32_t x) {
 static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     VK_LOG_DEBUG("ggml_backend_vk_graph_compute(" << cgraph->n_nodes << " nodes)");
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
+    VK_SYNC_LOG(ctx->name, "graph_compute: BEGIN nodes=" << cgraph->n_nodes
+        << " compute_ctx_alive=" << !ctx->compute_ctx.expired()
+        << " transfer_ctx_alive=" << !ctx->transfer_ctx.expired()
+        << " submit_pending=" << ctx->submit_pending);
 
     if (vk_instance.debug_utils_support) {
         vk::DebugUtilsLabelEXT dul = {};
@@ -14299,7 +14339,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         std::fill(ctx->query_node_idx.begin(), ctx->query_node_idx.end(), 0);
 
         GGML_ASSERT(ctx->compute_ctx.expired());
-        compute_ctx = ggml_vk_get_compute_ctx(ctx);
+        compute_ctx = ggml_vk_get_compute_ctx(ctx, "graph_compute_perf");
         ctx->query_idx = 0;
         compute_ctx->s->buffer->buf.writeTimestamp(vk::PipelineStageFlagBits::eAllCommands, ctx->query_pool, ctx->query_idx++);
     }
@@ -14309,7 +14349,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
 
     if (ctx->prealloc_size_add_rms_partials) {
         ggml_vk_preallocate_buffers(ctx, nullptr);
-        compute_ctx = ggml_vk_get_compute_ctx(ctx);
+        compute_ctx = ggml_vk_get_compute_ctx(ctx, "graph_compute_rms_partials");
         // initialize partial sums to zero.
         ggml_vk_buffer_memset_async(compute_ctx, ctx->prealloc_add_rms_partials, 0, 0, ctx->prealloc_size_add_rms_partials);
         ggml_vk_sync_buffers(ctx, compute_ctx);
@@ -14532,7 +14572,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         bool enqueued = ggml_vk_build_graph(ctx, cgraph, i, cgraph->nodes[submit_node_idx], submit_node_idx, i + ctx->num_additional_fused_ops >= last_node, almost_ready, submit);
 
         if (vk_perf_logger_enabled && enqueued) {
-            compute_ctx = ggml_vk_get_compute_ctx(ctx);
+            compute_ctx = ggml_vk_get_compute_ctx(ctx, "graph_compute_perf_timestamp");
             if (!vk_perf_logger_concurrent) {
                 // track a single node/fusion for the current query
                 ctx->query_nodes[ctx->query_idx] = cgraph->nodes[i];
@@ -14615,8 +14655,12 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
     }
 
     if (!ctx->device->support_async) {
-        ggml_vk_synchronize(ctx);
+        VK_SYNC_LOG(ctx->name, "graph_compute: sync (support_async=false)");
+        ggml_vk_synchronize(ctx, "graph_compute_no_async");
     }
+
+    VK_SYNC_LOG(ctx->name, "graph_compute: DONE submit_pending=" << ctx->submit_pending
+        << " compute_ctx_alive=" << !ctx->compute_ctx.expired());
 
     return GGML_STATUS_SUCCESS;
 
@@ -14867,29 +14911,38 @@ static void ggml_backend_vk_event_record(ggml_backend_t backend, ggml_backend_ev
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
     vk_event *vkev = (vk_event *)event->context;
 
+    VK_SYNC_LOG(ctx->name, "event_record: BEGIN event=" << event
+        << " compute_ctx_alive=" << !ctx->compute_ctx.expired()
+        << " submit_pending=" << ctx->submit_pending);
+
     ggml_vk_submit_transfer_ctx(ctx);
 
-    vk_context compute_ctx = ggml_vk_get_compute_ctx(ctx);
+    vk_context compute_ctx = ggml_vk_get_compute_ctx(ctx, "event_record");
     auto* cmd_buf = compute_ctx->s->buffer; // retrieve pointer before it gets reset
 
     // Grab the next event and record it, create one if necessary
     if (vkev->next_event_idx == vkev->events.size()) {
+        VK_SYNC_LOG(ctx->name, "event_record: create new event");
         vkev->events.push_back(ctx->device->device.createEvent({}));
     }
 
     vk::Event& cur_event = vkev->events[vkev->next_event_idx];
     vkev->next_event_idx++;
+    VK_SYNC_LOG(ctx->name, "event_record: host resetEvent + resetFences, event=" << (VkEvent)cur_event);
     ggml_vk_set_event(compute_ctx, cur_event);
 
     vkev->tl_semaphore.value++;
     compute_ctx->s->signal_semaphores.push_back(vkev->tl_semaphore);
     ggml_vk_ctx_end(compute_ctx);
 
+    VK_SYNC_LOG(ctx->name, "event_record: submitting cmd_buf=" << cmd_buf << ", event=" << (VkEvent)cur_event);
     ggml_vk_submit(compute_ctx, {});
     ctx->submit_pending = true;
     vkev->cmd_buffer = cmd_buf;
     vkev->cmd_buffer_use_counter = cmd_buf->use_counter;
     ctx->compute_ctx.reset();
+
+    VK_SYNC_LOG(ctx->name, "event_record: DONE event=" << event);
 }
 
 static void ggml_backend_vk_event_wait(ggml_backend_t backend, ggml_backend_event_t event) {
@@ -14897,12 +14950,16 @@ static void ggml_backend_vk_event_wait(ggml_backend_t backend, ggml_backend_even
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
     vk_event *vkev = (vk_event *)event->context;
 
-    vk_context compute_ctx = ggml_vk_get_compute_ctx(ctx);
+    vk_context compute_ctx = ggml_vk_get_compute_ctx(ctx, "event_wait");
 
     if (vkev->next_event_idx > 0) {
         // Wait for latest event
         vk::Event& cur_event = vkev->events[vkev->next_event_idx - 1];
+        VK_SYNC_LOG(ctx->name, "event_wait: recording vkCmdWaitEvents, event=" << event
+            << " vk_event=" << (VkEvent)cur_event
+            << " compute_ctx_alive=" << !ctx->compute_ctx.expired());
         ggml_vk_wait_events(compute_ctx, { cur_event });
+        VK_SYNC_LOG(ctx->name, "event_wait: DONE (cmd recorded, not yet submitted)");
     }
 }
 
@@ -15729,10 +15786,13 @@ static void ggml_backend_vk_device_event_synchronize(ggml_backend_dev_t dev, ggm
 
     // Only do something if the event has actually been used
     if (vkev->next_event_idx > 0) {
+	VK_SYNC_LOG(device->name, "event_synchronize: BEGIN waiting on timeline semaphore, event=" << event);
         vk::Semaphore sem = vkev->tl_semaphore.s;
         uint64_t val = vkev->tl_semaphore.value;
         vk::SemaphoreWaitInfo swi{vk::SemaphoreWaitFlags{}, sem, val};
         VK_CHECK(device->device.waitSemaphores(swi, UINT64_MAX), "event_synchronize");
+
+        VK_SYNC_LOG(device->name, "event_synchronize: timeline semaphore wait done, event=" << event);
 
         // Reset all events and flag for for reuse
         for (size_t i = 0; i < vkev->next_event_idx; i++) {

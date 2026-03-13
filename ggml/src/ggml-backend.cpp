@@ -1450,10 +1450,18 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     std::vector<int32_t> ids;
     std::vector<ggml_bitset_t> used_ids;
 
+    static bool vk_sched_sync_log = getenv("GGML_VK_SYNC_LOG") != nullptr;
+
     for (int split_id = 0; split_id < sched->n_splits; split_id++) {
         struct ggml_backend_sched_split * split = &splits[split_id];
         int split_backend_id = split->backend_id;
         ggml_backend_t split_backend = sched->backends[split_backend_id];
+
+        if (vk_sched_sync_log) {
+            fprintf(stderr, "[VK_SYNC sched] split %d/%d backend_id=%d name=%s n_inputs=%d n_nodes=%d\n",
+                split_id, sched->n_splits, split_backend_id,
+                ggml_backend_name(split_backend), split->n_inputs, split->graph.n_nodes);
+        }
 
         // copy the input tensors to the split backend
         for (int input_id = 0; input_id < split->n_inputs; input_id++) {
@@ -1464,16 +1472,28 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
             if (input->flags & GGML_TENSOR_FLAG_INPUT) {
                 // inputs from the user must be copied immediately to prevent the user overwriting the data before the copy is done
                 if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+                    if (vk_sched_sync_log) {
+                        fprintf(stderr, "[VK_SYNC sched]   input %s: event_synchronize (INPUT flag)\n", input->name);
+                    }
                     ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
                 } else {
+                    if (vk_sched_sync_log) {
+                        fprintf(stderr, "[VK_SYNC sched]   input %s: backend_synchronize (INPUT flag, no event)\n", input->name);
+                    }
                     ggml_backend_synchronize(split_backend);
                 }
                 ggml_backend_tensor_copy(input, input_cpy);
             } else {
                 // wait for the split backend to finish using the input before overwriting it
                 if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+                    if (vk_sched_sync_log) {
+                        fprintf(stderr, "[VK_SYNC sched]   input %s: event_wait\n", input->name);
+                    }
                     ggml_backend_event_wait(split_backend, sched->events[split_backend_id][sched->cur_copy]);
                 } else {
+                    if (vk_sched_sync_log) {
+                        fprintf(stderr, "[VK_SYNC sched]   input %s: backend_synchronize (no event)\n", input->name);
+                    }
                     ggml_backend_synchronize(split_backend);
                 }
 
@@ -1565,7 +1585,14 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 } else {
                     // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
                     // TODO: add public function to facilitate this, since applications do not have direct access to the backend interface
-                    if (!split_backend->iface.cpy_tensor_async || !split_backend->iface.cpy_tensor_async(input_backend, split_backend, input, input_cpy)) {
+                    bool async_ok = split_backend->iface.cpy_tensor_async && split_backend->iface.cpy_tensor_async(input_backend, split_backend, input, input_cpy);
+                    if (vk_sched_sync_log) {
+                        fprintf(stderr, "[VK_SYNC sched]   input %s: cpy_tensor_async=%s\n", input->name, async_ok ? "true" : "false");
+                    }
+                    if (!async_ok) {
+                        if (vk_sched_sync_log) {
+                            fprintf(stderr, "[VK_SYNC sched]   input %s: fallback sync copy\n", input->name);
+                        }
                         ggml_backend_synchronize(input_backend);
                         if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                             ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
@@ -1579,6 +1606,10 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         }
 
         if (!sched->callback_eval) {
+            if (vk_sched_sync_log) {
+                fprintf(stderr, "[VK_SYNC sched]   graph_compute_async on %s (%d nodes)\n",
+                    ggml_backend_name(split_backend), split->graph.n_nodes);
+            }
             enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &split->graph);
             if (ec != GGML_STATUS_SUCCESS) {
                 return ec;
@@ -1620,6 +1651,9 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         // record the event of this copy
         if (split->n_inputs > 0) {
             if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+                if (vk_sched_sync_log) {
+                    fprintf(stderr, "[VK_SYNC sched]   event_record on %s\n", ggml_backend_name(split_backend));
+                }
                 ggml_backend_event_record(sched->events[split_backend_id][sched->cur_copy], split_backend);
             }
         }
