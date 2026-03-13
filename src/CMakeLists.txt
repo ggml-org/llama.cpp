@@ -167,3 +167,13 @@ if (BUILD_SHARED_LIBS)
     target_compile_definitions(llama PRIVATE LLAMA_BUILD)
     target_compile_definitions(llama PUBLIC  LLAMA_SHARED)
 endif()
+
+
+if (GGML_USING_HUGE_PAGE_2M)
+message(STATUS " GGML_USING_HUGE_PAGE_2M is set in cmake")
+    target_compile_definitions(llama PRIVATE GGML_USING_HUGE_PAGE_2M=1)
+endif()
+if (GGML_USING_HUGE_PAGE_1G)
+message(STATUS " GGML_USING_HUGE_PAGE_1G is set in cmake")
+    target_compile_definitions(llama PRIVATE GGML_USING_HUGE_PAGE_1G=1)
+endif()
