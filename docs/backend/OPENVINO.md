@@ -180,8 +180,10 @@ curl -L https://huggingface.co/unsloth/Llama-3.2-1B-Instruct-GGUF/resolve/main/L
 When using the OpenVINO backend, the first inference token may have slightly higher latency due to on-the-fly conversion to the OpenVINO graph. Subsequent tokens and runs will be faster.
 
 ```bash
-# Linux
 # If device is unset or unavailable, defaults to CPU.
+# If the system has multiple GPUs, use GPU.0 or GPU.1 to explicitly target a specific GPU.
+
+# Linux
 export GGML_OPENVINO_DEVICE=GPU
 # To run llama-simple:
 ./build/ReleaseOV/bin/llama-simple -m ~/models/Llama-3.2-1B-Instruct-Q4_0.gguf -n 50 "The story of AI is "
@@ -199,6 +201,9 @@ build\ReleaseOV\bin\llama-simple.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_0.gg
 build\ReleaseOV\bin\llama-cli.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_0.gguf"
 
 ```
+> [!NOTE]
+> On systems with multiple GPUs, use `GPU.0` or `GPU.1` to explicitly target specific GPU. See [OpenVINO GPU Device](https://docs.openvino.ai/2026/openvino-workflow/running-inference/inference-devices-and-modes/gpu-device.html) for more details.
+
 
 ### Docker Build
 
@@ -265,7 +270,7 @@ The OpenVINO backend can be configured using the following environment variables
 
 | Variable                          | Default    | Description                                                                                                 |
 |-----------------------------------|------------|-------------------------------------------------------------------------------------------------------------|
-| `GGML_OPENVINO_DEVICE`            | `CPU`      | Specify the target device. When set to **NPU**, static compilation mode is enabled for optimal performance. |
+| `GGML_OPENVINO_DEVICE`            | `CPU`      | Specify the target device (CPU, GPU, NPU). On systems with multiple GPUs, use `GPU.0` or `GPU.1` to explicitly target specific GPU. See [OpenVINO GPU Device](https://docs.openvino.ai/2026/openvino-workflow/running-inference/inference-devices-and-modes/gpu-device.html). When set to **NPU**, static compilation mode is enabled for optimal performance. |
 | `GGML_OPENVINO_CACHE_DIR`         | `not set`  | Directory for OpenVINO model caching (recommended: `/tmp/ov_cache`). Enables model caching when set. **Not supported on NPU devices.** |
 | `GGML_OPENVINO_PREFILL_CHUNK_SIZE`| `256`      | Token chunk size for **NPU** prefill.                                                                       |
 | `GGML_OPENVINO_STATEFUL_EXECUTION`| `0`        | Enable stateful KV cache on for better performance. Recommended on CPU, GPU.                                |
@@ -284,6 +289,8 @@ The OpenVINO backend can be configured using the following environment variables
 #### GPU Inference with Profiling
 
 ```bash
+# If the system has multiple GPUs, use GPU.0 or GPU.1 to explicitly target a specific GPU.
+
 # Linux
 export GGML_OPENVINO_CACHE_DIR=/tmp/ov_cache
 export GGML_OPENVINO_PROFILING=1
