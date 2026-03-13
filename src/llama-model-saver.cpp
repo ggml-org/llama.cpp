@@ -2,6 +2,7 @@
 
 #include "gguf.h"
 
+#include "llama-arch.h"
 #include "llama.h"
 #include "llama-hparams.h"
 #include "llama-model.h"
@@ -105,7 +106,10 @@ void llama_model_saver::add_tensor(const struct ggml_tensor * tensor) {
         return;
     }
     if (gguf_find_tensor(gguf_ctx, tensor->name) >= 0) {
-        GGML_ASSERT(std::string(tensor->name) == "rope_freqs.weight"); // FIXME
+        const std::string tensor_name = tensor->name;
+        GGML_ASSERT(
+            tensor_name == "rope_freqs.weight" || tensor_name == "rope_factors_long.weight" ||
+            tensor_name == "rope_factors_short.weight"); // FIXME
         return;
     }
     gguf_add_tensor(gguf_ctx, tensor);
@@ -127,6 +131,7 @@ void llama_model_saver::add_kv_from_model() {
             tokens[id] = token_data.text;
             scores[id] = token_data.score;
 
+            // FIXME should this be treated as flags?
             switch(token_data.attr) {
                 case LLAMA_TOKEN_ATTR_UNKNOWN:      token_types[id] = LLAMA_TOKEN_TYPE_UNKNOWN;      break;
                 case LLAMA_TOKEN_ATTR_UNUSED:       token_types[id] = LLAMA_TOKEN_TYPE_UNUSED;       break;
@@ -134,6 +139,9 @@ void llama_model_saver::add_kv_from_model() {
                 case LLAMA_TOKEN_ATTR_CONTROL:      token_types[id] = LLAMA_TOKEN_TYPE_CONTROL;      break;
                 case LLAMA_TOKEN_ATTR_USER_DEFINED: token_types[id] = LLAMA_TOKEN_TYPE_USER_DEFINED; break;
                 case LLAMA_TOKEN_ATTR_BYTE:         token_types[id] = LLAMA_TOKEN_TYPE_BYTE;         break;
+                // case LLAMA_TOKEN_ATTR_NORMALIZED:   ???
+                // case LLAMA_TOKEN_ATTR_LSTRIP:       ???
+                // case LLAMA_TOKEN_ATTR_RSTRIP:       ???
                 case LLAMA_TOKEN_ATTR_UNDEFINED:
                 default:                            token_types[id] = LLAMA_TOKEN_TYPE_UNDEFINED;    break;
             }
@@ -144,6 +152,19 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_GENERAL_ARCHITECTURE,              model->arch_name());
     // add_kv(LLM_KV_GENERAL_QUANTIZATION_VERSION,      ???);
     // add_kv(LLM_KV_GENERAL_ALIGNMENT,                 ???);
+    // add_kv(LLM_KV_GENERAL_FILE_TYPE,                 ???);
+    // add_kv(LLM_KV_GENERAL_SAMPLING_SEQUENCE,         ???);
+    // add_kv(LLM_KV_GENERAL_SAMPLING_TOP_K,            ???);
+    // add_kv(LLM_KV_GENERAL_SAMPLING_TOP_P,            ???);
+    // add_kv(LLM_KV_GENERAL_SAMPLING_MIN_P,            ???);
+    // add_kv(LLM_KV_GENERAL_SAMPLING_XTC_PROBABILITY,  ???);
+    // add_kv(LLM_KV_GENERAL_SAMPLING_XTC_THRESHOLD,    ???);
+    // add_kv(LLM_KV_GENERAL_SAMPLING_TEMP,             ???);
+    // add_kv(LLM_KV_GENERAL_SAMPLING_PENALTY_LAST_N,   ???);
+    // add_kv(LLM_KV_GENERAL_SAMPLING_PENALTY_REPEAT,   ???);
+    // add_kv(LLM_KV_GENERAL_SAMPLING_MIROSTAT,         ???);
+    // add_kv(LLM_KV_GENERAL_SAMPLING_MIROSTAT_TAU,     ???);
+    // add_kv(LLM_KV_GENERAL_SAMPLING_MIROSTAT_ETA,     ???);
     add_kv(LLM_KV_GENERAL_NAME,                      model->name);
     // add_kv(LLM_KV_GENERAL_AUTHOR,                    ???);
     // add_kv(LLM_KV_GENERAL_VERSION,                   ???);
@@ -163,17 +184,31 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_LEADING_DENSE_BLOCK_COUNT,         hparams.n_layer_dense_lead);
     add_kv(LLM_KV_FEED_FORWARD_LENGTH,               hparams.n_ff_arr, true);
     add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp);
-    add_kv(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_exp);
+    add_kv(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp);
+    add_kv(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_chexp);
+    add_kv(LLM_KV_SWIGLU_CLAMP_EXP,                  hparams.swiglu_clamp_exp);
+    add_kv(LLM_KV_SWIGLU_CLAMP_SHEXP,                hparams.swiglu_clamp_shexp);
     add_kv(LLM_KV_USE_PARALLEL_RESIDUAL,             hparams.use_par_res);
     // add_kv(LLM_KV_TENSOR_DATA_LAYOUT,                ???);
     add_kv(LLM_KV_EXPERT_COUNT,                      hparams.n_expert);
     add_kv(LLM_KV_EXPERT_USED_COUNT,                 hparams.n_expert_used);
     add_kv(LLM_KV_EXPERT_SHARED_COUNT,               hparams.n_expert_shared);
+    add_kv(LLM_KV_EXPERT_GROUP_COUNT,                hparams.n_expert_groups);
+    add_kv(LLM_KV_EXPERT_GROUP_USED_COUNT,           hparams.n_group_used);
     add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE,              hparams.expert_weights_scale);
+    add_kv(LLM_KV_EXPERT_WEIGHTS_NORM,               hparams.expert_weights_norm);
+    add_kv(LLM_KV_EXPERT_GATING_FUNC,                hparams.expert_gating_func);
+    add_kv(LLM_KV_EXPERT_GROUP_SCALE,                hparams.expert_group_scale);
+    add_kv(LLM_KV_EXPERTS_PER_GROUP,                 hparams.n_group_experts);
+    add_kv(LLM_KV_MOE_EVERY_N_LAYERS,                hparams.moe_every_n_layers);
+    add_kv(LLM_KV_NEXTN_PREDICT_LAYERS,              hparams.nextn_predict_layers);
+    add_kv(LLM_KV_NUM_DEEPSTACK_LAYERS,              hparams.n_deepstack_layers);
     add_kv(LLM_KV_POOLING_TYPE,                      uint32_t(hparams.pooling_type));
     add_kv(LLM_KV_LOGIT_SCALE,                       hparams.f_logit_scale);
     add_kv(LLM_KV_DECODER_START_TOKEN_ID,            hparams.dec_start_token_id);
+    add_kv(LLM_KV_DECODER_BLOCK_COUNT,               hparams.dec_n_layer);
     add_kv(LLM_KV_ATTN_LOGIT_SOFTCAPPING,            hparams.f_attn_logit_softcapping);
+    add_kv(LLM_KV_ROUTER_LOGIT_SOFTCAPPING,          hparams.f_router_logit_softcapping);
     add_kv(LLM_KV_FINAL_LOGIT_SOFTCAPPING,           hparams.f_final_logit_softcapping);
     add_kv(LLM_KV_SWIN_NORM,                         hparams.swin_norm);
     add_kv(LLM_KV_RESCALE_EVERY_N_LAYERS,            hparams.rescale_every_n_layers);
@@ -181,6 +216,9 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_TIME_DECAY_EXTRA_DIM,              hparams.time_decay_extra_dim);
     add_kv(LLM_KV_RESIDUAL_SCALE,                    hparams.f_residual_scale);
     add_kv(LLM_KV_EMBEDDING_SCALE,                   hparams.f_embedding_scale);
+    add_kv(LLM_KV_TOKEN_SHIFT_COUNT,                 hparams.token_shift_count);
+    add_kv(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,         hparams.n_moe_layer_step);
+    // add_kv(LLM_KV_FULL_ATTENTION_INTERVAL,           ???);
 
     add_kv(LLM_KV_ATTENTION_HEAD_COUNT,              hparams.n_head_arr, true);
     add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV,           hparams.n_head_kv_arr, true);
@@ -188,22 +226,39 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_ATTENTION_CLAMP_KQV,               hparams.f_clamp_kqv);
     add_kv(LLM_KV_ATTENTION_KEY_LENGTH,              hparams.n_embd_head_k_full);
     add_kv(LLM_KV_ATTENTION_VALUE_LENGTH,            hparams.n_embd_head_v_full);
-    add_kv(LLM_KV_ATTENTION_KEY_LENGTH_SWA,          hparams.n_embd_head_k_swa);
-    add_kv(LLM_KV_ATTENTION_VALUE_LENGTH_SWA,        hparams.n_embd_head_v_swa);
     add_kv(LLM_KV_ATTENTION_LAYERNORM_EPS,           hparams.f_norm_eps);
     add_kv(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
+    add_kv(LLM_KV_ATTENTION_GROUPNORM_EPS,           hparams.f_norm_group_eps);
+    add_kv(LLM_KV_ATTENTION_GROUPNORM_GROUPS,        hparams.n_norm_groups);
     add_kv(LLM_KV_ATTENTION_CAUSAL,                  hparams.causal_attn);
     add_kv(LLM_KV_ATTENTION_Q_LORA_RANK,             hparams.n_lora_q);
     add_kv(LLM_KV_ATTENTION_KV_LORA_RANK,            hparams.n_lora_kv);
+    add_kv(LLM_KV_ATTENTION_DECAY_LORA_RANK,         hparams.n_lora_decay);
+    add_kv(LLM_KV_ATTENTION_ICLR_LORA_RANK,          hparams.n_lora_iclr);
+    add_kv(LLM_KV_ATTENTION_VALUE_RESIDUAL_MIX_LORA_RANK, hparams.n_lora_value_res_mix);
+    add_kv(LLM_KV_ATTENTION_GATE_LORA_RANK,          hparams.n_lora_gate);
     add_kv(LLM_KV_ATTENTION_RELATIVE_BUCKETS_COUNT,  hparams.n_rel_attn_bkts);
     add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW,          hparams.n_swa);
+    // add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN,  ???);
     add_kv(LLM_KV_ATTENTION_SCALE,                   hparams.f_attention_scale);
+    add_kv(LLM_KV_ATTENTION_OUTPUT_SCALE,            hparams.f_attn_out_scale);
+    add_kv(LLM_KV_ATTENTION_TEMPERATURE_LENGTH,      hparams.attn_temp_length);
+    add_kv(LLM_KV_ATTENTION_TEMPERATURE_SCALE,       hparams.f_attn_temp_scale);
+    add_kv(LLM_KV_ATTENTION_KEY_LENGTH_MLA,          hparams.n_embd_head_k_mla_impl);
+    add_kv(LLM_KV_ATTENTION_VALUE_LENGTH_MLA,        hparams.n_embd_head_v_mla_impl);
+    add_kv(LLM_KV_ATTENTION_KEY_LENGTH_SWA,          hparams.n_embd_head_k_swa);
+    add_kv(LLM_KV_ATTENTION_VALUE_LENGTH_SWA,        hparams.n_embd_head_v_swa);
+    add_kv(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,      hparams.indexer_n_head);
+    add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,      hparams.indexer_head_size);
+    add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,           hparams.indexer_top_k);
 
     const float rope_scaling_factor = hparams.rope_freq_scale_train == 1.0f ? 0.0f : 1.0f/hparams.rope_freq_scale_train;
 
     add_kv(LLM_KV_ROPE_DIMENSION_COUNT,              hparams.n_rot_full);
     add_kv(LLM_KV_ROPE_DIMENSION_COUNT_SWA,          hparams.n_rot_swa);
+    add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS,           hparams.rope_sections);
     add_kv(LLM_KV_ROPE_FREQ_BASE,                    hparams.rope_freq_base_train);
+    add_kv(LLM_KV_ROPE_FREQ_BASE_SWA,                hparams.rope_freq_base_train_swa);
     // add_kv(LLM_KV_ROPE_SCALE_LINEAR,                 rope_scaling_factor); // old name
     add_kv(LLM_KV_ROPE_SCALING_TYPE,                 llama_rope_scaling_type_name(hparams.rope_scaling_type_train));
     add_kv(LLM_KV_ROPE_SCALING_FACTOR,               rope_scaling_factor);
@@ -211,6 +266,10 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_ROPE_SCALING_ORIG_CTX_LEN,         hparams.n_ctx_orig_yarn);
     add_kv(LLM_KV_ROPE_SCALING_FINETUNED,            hparams.rope_finetuned);
     add_kv(LLM_KV_ROPE_SCALING_YARN_LOG_MUL,         hparams.rope_yarn_log_mul);
+    add_kv(LLM_KV_ROPE_SCALING_YARN_EXT_FACTOR,      hparams.yarn_ext_factor);
+    add_kv(LLM_KV_ROPE_SCALING_YARN_ATTN_FACTOR,     hparams.yarn_attn_factor);
+    add_kv(LLM_KV_ROPE_SCALING_YARN_BETA_FAST,       hparams.yarn_beta_fast);
+    add_kv(LLM_KV_ROPE_SCALING_YARN_BETA_SLOW,       hparams.yarn_beta_slow);
 
     // TODO: implement split file support
     // add_kv(LLM_KV_SPLIT_NO,                          ???);
@@ -221,7 +280,10 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_SSM_CONV_KERNEL,                   hparams.ssm_d_conv);
     add_kv(LLM_KV_SSM_STATE_SIZE,                    hparams.ssm_d_state);
     add_kv(LLM_KV_SSM_TIME_STEP_RANK,                hparams.ssm_dt_rank);
+    add_kv(LLM_KV_SSM_GROUP_COUNT,                   hparams.ssm_n_group);
     add_kv(LLM_KV_SSM_DT_B_C_RMS,                    hparams.ssm_dt_b_c_rms);
+
+    add_kv(LLM_KV_KDA_HEAD_DIM,                      hparams.n_embd_head_kda);
 
     add_kv(LLM_KV_WKV_HEAD_SIZE,                     hparams.wkv_head_size);
 
@@ -260,15 +322,39 @@ void llama_model_saver::add_kv_from_model() {
     // TODO: implement LoRA support
     // add_kv(LLM_KV_ADAPTER_TYPE,                      ???);
     // add_kv(LLM_KV_ADAPTER_LORA_ALPHA,                ???);
+    // add_kv(LLM_KV_ADAPTER_LORA_TASK_NAME,            ???);
+    // add_kv(LLM_KV_ADAPTER_LORA_PROMPT_PREFIX,        ???);
+    // add_kv(LLM_KV_ADAPTER_ALORA_INVOCATION_TOKENS,   ???);
+
+    add_kv(LLM_KV_POSNET_EMBEDDING_LENGTH,           hparams.posnet.n_embd);
+    add_kv(LLM_KV_POSNET_BLOCK_COUNT,                hparams.posnet.n_layer);
+
+    add_kv(LLM_KV_CONVNEXT_EMBEDDING_LENGTH,         hparams.convnext.n_embd);
+    add_kv(LLM_KV_CONVNEXT_BLOCK_COUNT,              hparams.convnext.n_layer);
+
+    add_kv(LLM_KV_CLASSIFIER_OUTPUT_LABELS,          model->classifier_labels);
+
+    add_kv(LLM_KV_SHORTCONV_L_CACHE,                 hparams.n_shortconv_l_cache);
+
+    add_kv(LLM_KV_XIELU_ALPHA_N,                     hparams.xielu_alpha_n);
+    add_kv(LLM_KV_XIELU_ALPHA_P,                     hparams.xielu_alpha_p);
+    add_kv(LLM_KV_XIELU_BETA,                        hparams.xielu_beta);
+    add_kv(LLM_KV_XIELU_EPS,                         hparams.xielu_eps);
 
     // deprecated
     // add_kv(LLM_KV_TOKENIZER_PREFIX_ID,               ???);
     // add_kv(LLM_KV_TOKENIZER_SUFFIX_ID,               ???);
     // add_kv(LLM_KV_TOKENIZER_MIDDLE_ID,               ???);
+
+    add_kv(LLM_KV_DENSE_2_FEAT_IN,                   hparams.dense_2_feat_in);
+    add_kv(LLM_KV_DENSE_2_FEAT_OUT,                  hparams.dense_2_feat_out);
+    add_kv(LLM_KV_DENSE_3_FEAT_IN,                   hparams.dense_3_feat_in);
+    add_kv(LLM_KV_DENSE_3_FEAT_OUT,                  hparams.dense_3_feat_out);
 }
 
 void llama_model_saver::add_tensors_from_model() {
-    if (std::string(model->output->name) != std::string(model->tok_embd->name)) {
+    if (model->output != nullptr &&
+            std::string(model->output->name) != std::string(model->tok_embd->name)) {
         add_tensor(model->tok_embd); // some models use the same tensor for tok_embd and output
     }
     add_tensor(model->type_embd);
