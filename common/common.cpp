@@ -45,6 +45,7 @@
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <sched.h>
 #endif
 
 #if defined(__linux__)
@@ -127,6 +128,7 @@ int32_t cpu_get_num_physical_cores() {
     return num_physical_cores > 0 ? num_physical_cores : default_threads;
 #endif
     unsigned int n_threads = std::thread::hardware_concurrency();
+    LOG_INF("n_threads: %d\n", n_threads);
     return n_threads > 0 ? (n_threads <= 4 ? n_threads : n_threads / 2) : 4;
 }
 
@@ -180,6 +182,113 @@ static int cpu_count_math_cpus(int n_cpu) {
 
 #endif // __x86_64__ && __linux__
 
+#if defined(__aarch64__) && defined(__linux__) && !defined(__ANDROID__)
+
+static int pin_cpu(int cpu) {
+    cpu_set_t mask;
+    CPU_ZERO(&mask);
+    CPU_SET(cpu, &mask);
+    return pthread_setaffinity_np(pthread_self(), sizeof(mask), &mask);
+}
+
+static bool is_hybrid_cpu(void) {
+    // detect if the cpu is hybrid by reading the max frequency of each cpu
+    std::vector<int> cpu_freqs;
+    
+    for (uint32_t cpu = 0; cpu < UINT32_MAX; ++cpu) {
+        std::ifstream freq_file("/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/cpufreq/cpuinfo_max_freq");
+        if (!freq_file.is_open()) {
+            break;
+        }
+        
+        int freq;
+        if (freq_file >> freq) {
+            cpu_freqs.push_back(freq);
+        }
+    }
+    
+    if (cpu_freqs.size() < 2) {
+        return false;
+    }
+    
+    int first_freq = cpu_freqs[0];
+    for (int freq : cpu_freqs) {
+        if (freq != first_freq) {
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+static bool is_running_on_efficiency_core(void) {
+    int current_cpu = sched_getcpu();
+    if (current_cpu < 0) {
+        return false;
+    }
+    
+    std::ifstream freq_file("/sys/devices/system/cpu/cpu" + std::to_string(current_cpu) + "/cpufreq/cpuinfo_max_freq");
+    if (!freq_file.is_open()) {
+        return false;
+    }
+    
+    int current_freq;
+    if (!(freq_file >> current_freq)) {
+        return false;
+    }
+    
+    int max_freq = 0;
+    for (uint32_t cpu = 0; cpu < UINT32_MAX; ++cpu) {
+        std::ifstream other_freq_file("/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/cpufreq/cpuinfo_max_freq");
+        if (!other_freq_file.is_open()) {
+            break;
+        }
+        
+        int freq;
+        if (other_freq_file >> freq) {
+            max_freq = std::max(max_freq, freq);
+        }
+    }
+    
+    return current_freq < max_freq;
+}
+
+static int cpu_count_math_cpus(int n_cpu) {
+    int result = 0;
+    std::vector<int> big_cores;
+    
+    int max_freq = 0;
+    std::vector<int> cpu_freqs(n_cpu);
+    
+    for (int cpu = 0; cpu < n_cpu; ++cpu) {
+        std::ifstream freq_file("/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/cpufreq/cpuinfo_max_freq");
+        if (!freq_file.is_open()) {
+            cpu_freqs[cpu] = 0;
+            continue;
+        }
+        
+        int freq;
+        if (freq_file >> freq) {
+            cpu_freqs[cpu] = freq;
+            max_freq = std::max(max_freq, freq);
+        } else {
+            cpu_freqs[cpu] = 0;
+        }
+    }
+    
+    for (int cpu = 0; cpu < n_cpu; ++cpu) {
+        if (cpu_freqs[cpu] >= max_freq) {
+            big_cores.push_back(cpu);
+        }
+    }
+    
+    result = big_cores.size();
+    
+    return result;
+}
+
+#endif // __aarch64__ && __linux__
+
 /**
  * Returns number of CPUs on system that are useful for math.
  */
@@ -200,6 +309,24 @@ int32_t cpu_get_num_math() {
         }
     }
 #endif
+
+#if defined(__aarch64__) && defined(__linux__) && !defined(__ANDROID__)
+    int n_cpu = sysconf(_SC_NPROCESSORS_ONLN);
+    if (n_cpu < 1) {
+        return cpu_get_num_physical_cores();
+    }  
+    if (is_hybrid_cpu()) {
+        cpu_set_t affinity;
+        if (!pthread_getaffinity_np(pthread_self(), sizeof(affinity), &affinity)) {
+            int result = cpu_count_math_cpus(n_cpu);
+            pthread_setaffinity_np(pthread_self(), sizeof(affinity), &affinity);
+            if (result > 0) {
+                return result;
+            }
+        }
+    }
+#endif
+    
     return cpu_get_num_physical_cores();
 }
 
