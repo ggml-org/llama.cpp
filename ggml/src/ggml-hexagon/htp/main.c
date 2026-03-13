@@ -255,7 +255,7 @@ static void vtcm_free(struct htp_context * ctx) {
 static void htp_packet_callback(dspqueue_t queue, int error, void * context);
 static void htp_error_callback(dspqueue_t queue, int error, void * context);
 
-AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_queue_id, uint32 n_hvx, uint32 force_hvx) {
+AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_queue_id, uint32 n_hvx, uint32 use_hmx) {
     struct htp_context * ctx = (struct htp_context *) handle;
 
     if (!ctx) {
@@ -290,17 +290,17 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_que
     }
 
 #ifdef HTP_HAS_HMX
-    if (force_hvx) {
-        // Host requested HVX-only mode: skip HMX initialisation so the
-        // dispatch loop falls through to the HVX compute paths.
-        ctx->hmx_enabled       = 0;
-        ctx->vtcm_scratch_size = ctx->vtcm_size;
-        FARF(HIGH, "HMX disabled (force_hvx): vtcm-scratch %zu", ctx->vtcm_scratch_size);
-    } else {
+    if (use_hmx) {
         ctx->vtcm_scratch_size = ctx->vtcm_size;
         ctx->hmx_enabled       = 1;
 
         FARF(HIGH, "HMX enabled: vtcm-scratch %zu", ctx->vtcm_scratch_size);
+    } else {
+        // HMX disabled: skip HMX initialisation so the
+        // dispatch loop falls through to the HVX compute paths.
+        ctx->hmx_enabled       = 0;
+        ctx->vtcm_scratch_size = ctx->vtcm_size;
+        FARF(HIGH, "HMX disabled (use_hmx=0): vtcm-scratch %zu", ctx->vtcm_scratch_size);
     }
 #endif
 
