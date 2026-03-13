@@ -239,14 +239,14 @@ static inline HVX_Vector_x8 hvx_vec_load_q8x4x8_partial(const uint8_t * restrict
 // if() checks are optimized out at compile time -- make sure to pass N as a constexpr.
 
 static inline HVX_Vector hvx_vec_rmpy_x8_n(HVX_Vector_x8 x, HVX_Vector_x8 y, unsigned int n) {
-    HVX_Vector r0 = Q6_V_vsplat_R(0);
-    HVX_Vector r1 = Q6_V_vsplat_R(0);
-    HVX_Vector r2 = Q6_V_vsplat_R(0);
-    HVX_Vector r3 = Q6_V_vsplat_R(0);
-    HVX_Vector r4 = Q6_V_vsplat_R(0);
-    HVX_Vector r5 = Q6_V_vsplat_R(0);
-    HVX_Vector r6 = Q6_V_vsplat_R(0);
-    HVX_Vector r7 = Q6_V_vsplat_R(0);
+    HVX_Vector r0 = Q6_V_vzero();
+    HVX_Vector r1 = Q6_V_vzero();
+    HVX_Vector r2 = Q6_V_vzero();
+    HVX_Vector r3 = Q6_V_vzero();
+    HVX_Vector r4 = Q6_V_vzero();
+    HVX_Vector r5 = Q6_V_vzero();
+    HVX_Vector r6 = Q6_V_vzero();
+    HVX_Vector r7 = Q6_V_vzero();
 
     HVX_VectorPair p3;
     HVX_VectorPair p2;
@@ -347,7 +347,7 @@ static void vec_dot_q4x4x2_q8x4x2_1x1(const int n, float * restrict s0, const vo
     const uint8_t * restrict y_d = ((const uint8_t *) vy0 + y_qrow_size);     // then scales
 
     // Row sum (sf)
-    HVX_Vector r0_sum = Q6_V_vsplat_R(0);
+    HVX_Vector r0_sum = Q6_V_vzero();
 
     // Multiply and accumulate into int32.
     // Compute combined scale (fp32).
@@ -427,8 +427,8 @@ static void vec_dot_q4x4x2_q8x4x2_2x1(const int n, float * restrict s0,
     const uint8_t * restrict y_d = ((const uint8_t *) vy0 + y_qrow_size);     // then scales
 
     // Row sum (sf)
-    HVX_Vector r0_sum = Q6_V_vsplat_R(0);
-    HVX_Vector r1_sum = Q6_V_vsplat_R(0);
+    HVX_Vector r0_sum = Q6_V_vzero();
+    HVX_Vector r1_sum = Q6_V_vzero();
 
     // Multiply and accumulate into int32.
     // Compute combined scale (fp32).
@@ -524,10 +524,10 @@ static void vec_dot_q4x4x2_q8x4x2_2x2(const int n, float * restrict s0, float * 
     const uint8_t * restrict y1_d = ((const uint8_t *) vy1) + y_qrow_size;    // then scales
 
     // Row sums (sf) - 4 accumulators for 2×2 tile
-    HVX_Vector r0_c0_sum = Q6_V_vsplat_R(0);
-    HVX_Vector r0_c1_sum = Q6_V_vsplat_R(0);
-    HVX_Vector r1_c0_sum = Q6_V_vsplat_R(0);
-    HVX_Vector r1_c1_sum = Q6_V_vsplat_R(0);
+    HVX_Vector r0_c0_sum = Q6_V_vzero();
+    HVX_Vector r0_c1_sum = Q6_V_vzero();
+    HVX_Vector r1_c0_sum = Q6_V_vzero();
+    HVX_Vector r1_c1_sum = Q6_V_vzero();
 
     const uint32_t nb   = n / qk;  // num full blocks
     const uint32_t nloe = n % qk;  // num leftover elements
@@ -646,7 +646,7 @@ static void vec_dot_q8x4x2_q8x4x2_1x1(const int n, float * restrict s0, const vo
     const uint8_t * restrict y_d = ((const uint8_t *) vy0 + y_qrow_size);    // then scales
 
     // Row sum (sf)
-    HVX_Vector r0_sum = Q6_V_vsplat_R(0);
+    HVX_Vector r0_sum = Q6_V_vzero();
 
     // Multiply and accumulate into int32.
     // Compute combined scale (fp32).
@@ -726,8 +726,8 @@ static void vec_dot_q8x4x2_q8x4x2_2x1(const int n, float * restrict s0,
     const uint8_t * restrict y_d = ((const uint8_t *) vy0 + y_qrow_size);     // then scales
 
     // Row sum (qf32)
-    HVX_Vector r0_sum = Q6_V_vsplat_R(0);
-    HVX_Vector r1_sum = Q6_V_vsplat_R(0);
+    HVX_Vector r0_sum = Q6_V_vzero();
+    HVX_Vector r1_sum = Q6_V_vzero();
 
     // Multiply and accumulate into int32.
     // Compute combined scale (fp32).
@@ -823,10 +823,10 @@ static void vec_dot_q8x4x2_q8x4x2_2x2(const int n, float * restrict s0, float * 
     const uint8_t * restrict y1_d = ((const uint8_t *) vy1) + y_qrow_size;    // then scales
 
     // Row sums (sf) - 4 accumulators for 2×2 tile
-    HVX_Vector r0_c0_sum = Q6_V_vsplat_R(0);
-    HVX_Vector r0_c1_sum = Q6_V_vsplat_R(0);
-    HVX_Vector r1_c0_sum = Q6_V_vsplat_R(0);
-    HVX_Vector r1_c1_sum = Q6_V_vsplat_R(0);
+    HVX_Vector r0_c0_sum = Q6_V_vzero();
+    HVX_Vector r0_c1_sum = Q6_V_vzero();
+    HVX_Vector r1_c0_sum = Q6_V_vzero();
+    HVX_Vector r1_c1_sum = Q6_V_vzero();
 
     const uint32_t nb   = n / qk;  // num full blocks
     const uint32_t nloe = n % qk;  // num leftover elements
@@ -945,7 +945,7 @@ static void vec_dot_mxfp4x4x2_q8x4x2_1x1(const int n, float * restrict s0, const
     const uint8_t * restrict y_d = ((const uint8_t *) vy0 + y_qrow_size);    // then scales
 
     // Row sum (sf)
-    HVX_Vector r0_sum = Q6_V_vsplat_R(0);
+    HVX_Vector r0_sum = Q6_V_vzero();
 
     // Multiply and accumulate into int32.
     // Compute combined scale (fp32).
@@ -1055,8 +1055,8 @@ static void vec_dot_mxfp4x4x2_q8x4x2_2x1(const int n, float * restrict s0,
     const uint8_t * restrict y_d = ((const uint8_t *) vy0) + y_qrow_size;     // then scales
 
     // Row sum (sf)
-    HVX_Vector r0_sum = Q6_V_vsplat_R(0);
-    HVX_Vector r1_sum = Q6_V_vsplat_R(0);
+    HVX_Vector r0_sum = Q6_V_vzero();
+    HVX_Vector r1_sum = Q6_V_vzero();
 
     // Multiply and accumulate into int32.
     // Compute combined scale (fp32).
@@ -1188,10 +1188,10 @@ static void vec_dot_mxfp4x4x2_q8x4x2_2x2(const int n, float * restrict s0, float
     const uint8_t * restrict y1_d = ((const uint8_t *) vy1) + y_qrow_size;    // then scales
 
     // Row sums (sf) - 4 accumulators for 2×2 tile
-    HVX_Vector r0_c0_sum = Q6_V_vsplat_R(0);
-    HVX_Vector r0_c1_sum = Q6_V_vsplat_R(0);
-    HVX_Vector r1_c0_sum = Q6_V_vsplat_R(0);
-    HVX_Vector r1_c1_sum = Q6_V_vsplat_R(0);
+    HVX_Vector r0_c0_sum = Q6_V_vzero();
+    HVX_Vector r0_c1_sum = Q6_V_vzero();
+    HVX_Vector r1_c0_sum = Q6_V_vzero();
+    HVX_Vector r1_c1_sum = Q6_V_vzero();
 
     const uint32_t nb   = n / qk;  // num full blocks
     const uint32_t nloe = n % qk;  // num leftover elements
@@ -1335,7 +1335,7 @@ static void vec_dot_f16_f16_aa_1x1(const int n, float * restrict s, const void *
     uint32_t nvec = n / VLEN_FP16; // num full fp16 hvx vectors
     uint32_t nloe = n % VLEN_FP16; // leftover elements
 
-    HVX_VectorPair rsum_p = Q6_W_vcombine_VV(Q6_V_vsplat_R(0), Q6_V_vsplat_R(0));
+    HVX_VectorPair rsum_p = Q6_W_vzero();
 
     uint32_t i = 0;
 
@@ -1365,8 +1365,8 @@ static void vec_dot_f16_f16_aa_2x1(const int n, float * restrict s0,
     uint32_t nvec = n / VLEN_FP16;
     uint32_t nloe = n % VLEN_FP16;
 
-    HVX_VectorPair rsum0_p = Q6_W_vcombine_VV(Q6_V_vsplat_R(0), Q6_V_vsplat_R(0));
-    HVX_VectorPair rsum1_p = Q6_W_vcombine_VV(Q6_V_vsplat_R(0), Q6_V_vsplat_R(0));
+    HVX_VectorPair rsum0_p = Q6_W_vzero();
+    HVX_VectorPair rsum1_p = Q6_W_vzero();
 
     uint32_t i = 0;
 
@@ -1404,10 +1404,10 @@ static void vec_dot_f16_f16_aa_2x2(const int n, float * restrict s0, float * res
     uint32_t nloe = n % VLEN_FP16;
 
     // Row sums (sf) - 4 accumulators for 2×2 tile
-    HVX_VectorPair r0_c0_sum_p = Q6_W_vcombine_VV(Q6_V_vsplat_R(0), Q6_V_vsplat_R(0));
-    HVX_VectorPair r0_c1_sum_p = Q6_W_vcombine_VV(Q6_V_vsplat_R(0), Q6_V_vsplat_R(0));
-    HVX_VectorPair r1_c0_sum_p = Q6_W_vcombine_VV(Q6_V_vsplat_R(0), Q6_V_vsplat_R(0));
-    HVX_VectorPair r1_c1_sum_p = Q6_W_vcombine_VV(Q6_V_vsplat_R(0), Q6_V_vsplat_R(0));
+    HVX_VectorPair r0_c0_sum_p = Q6_W_vzero();
+    HVX_VectorPair r0_c1_sum_p = Q6_W_vzero();
+    HVX_VectorPair r1_c0_sum_p = Q6_W_vzero();
+    HVX_VectorPair r1_c1_sum_p = Q6_W_vzero();
 
     uint32_t i = 0;
 
@@ -1459,7 +1459,7 @@ static void vec_dot_f16_f16_uu_1x1(const int n, float * restrict s, const void *
     uint32_t nvec = n / VLEN_FP16; // num full fp16 hvx vectors
     uint32_t nloe = n % VLEN_FP16; // leftover elements
 
-    HVX_Vector rsum = Q6_V_vsplat_R(0);
+    HVX_Vector rsum = Q6_V_vzero();
 
     uint32_t i = 0;
 
@@ -1489,9 +1489,9 @@ static void vec_dot_f16_f32_uu_1x1(const int n, float * restrict s, const void *
     uint32_t nvec = n / VLEN_FP16; // num full fp16 hvx vectors
     uint32_t nloe = n % VLEN_FP16; // leftover elements
 
-    const HVX_Vector zero = Q6_V_vsplat_R(0);
+    const HVX_Vector zero = Q6_V_vzero();
 
-    HVX_Vector       rsum = Q6_V_vsplat_R(0);
+    HVX_Vector       rsum = Q6_V_vzero();
 
     uint32_t i = 0;
 
@@ -2074,7 +2074,7 @@ static inline void quantize_block_f32_q8x1(float * restrict x, uint8_t * restric
     assert((unsigned long) y_q % 128 == 0);
 
     HVX_Vector * vx = (HVX_Vector *) x;
-    HVX_Vector zero   = Q6_V_vsplat_R(0);
+    HVX_Vector zero   = Q6_V_vzero();
 
     // Use reduce max fp32 to find max(abs(e)) first
     HVX_Vector vmax0_sf = hvx_vec_reduce_max_f32(hvx_vec_abs_f32(vx[0]));
@@ -2135,7 +2135,7 @@ static inline void quantize_block_f32_q8x2(float * restrict x, uint8_t * restric
     HVX_Vector * vx = (HVX_Vector *) x;
 
     // Load and convert into QF32
-    HVX_Vector zero   = Q6_V_vsplat_R(0);
+    HVX_Vector zero   = Q6_V_vzero();
     HVX_Vector vx0_qf = Q6_Vqf32_vsub_VsfVsf(vx[0], zero);  // 32 elements
     HVX_Vector vx1_qf = Q6_Vqf32_vsub_VsfVsf(vx[1], zero);  // 32 elements
     HVX_Vector vx2_qf = Q6_Vqf32_vsub_VsfVsf(vx[2], zero);  // 32 elements
@@ -2178,7 +2178,7 @@ static inline void quantize_block_f32_q8x4(float * restrict x, uint8_t * restric
     HVX_Vector * vx = (HVX_Vector *) x;
 
     // Load and convert into QF32
-    HVX_Vector zero   = Q6_V_vsplat_R(0);
+    HVX_Vector zero   = Q6_V_vzero();
     HVX_Vector vx0_qf = Q6_Vqf32_vsub_VsfVsf(vx[0], zero);  // 32 elements
     HVX_Vector vx1_qf = Q6_Vqf32_vsub_VsfVsf(vx[1], zero);  // 32 elements
     HVX_Vector vx2_qf = Q6_Vqf32_vsub_VsfVsf(vx[2], zero);  // 32 elements
