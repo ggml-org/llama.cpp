@@ -165,6 +165,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 - Python: [ddh0/easy-llama](https://github.com/ddh0/easy-llama)
 - Python: [abetlen/llama-cpp-python](https://github.com/abetlen/llama-cpp-python)
 - Go: [go-skynet/go-llama.cpp](https://github.com/go-skynet/go-llama.cpp)
+- Go: [AshkanYarmoradi/go-llama.cpp](https://github.com/AshkanYarmoradi/go-llama.cpp)
 - Node.js: [withcatai/node-llama-cpp](https://github.com/withcatai/node-llama-cpp)
 - JS/TS (llama.cpp server client): [lgrammel/modelfusion](https://modelfusion.dev/integration/model-provider/llamacpp)
 - JS/TS (Programmable Prompt Engine CLI): [offline-ai/cli](https://github.com/offline-ai/cli)
