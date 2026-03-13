@@ -187,7 +187,7 @@ void ggml_hexagon_session::flush() {
                                 (uint8_t *) &rsp,        // Message
                                 DSPQUEUE_TIMEOUT);       // Timeout
 
-        if (err == AEE_EEXPIRED || err == AEE_EINTERRUPTED) {
+        if (err == AEE_EEXPIRED) {
             // TODO: might need to bail out if the HTP is stuck on something
             continue;
         }
@@ -202,7 +202,8 @@ void ggml_hexagon_session::flush() {
         }
 
         if (rsp.status != HTP_STATUS_OK) {
-            GGML_ABORT("ggml-hex: dspcall FATAL: dsp-rsp: %s\n", status_to_str(rsp.status));
+            GGML_LOG_ERROR("ggml-hex: dspcall : dsp-rsp: %s\n", status_to_str(rsp.status));
+            // TODO: handle errors
         }
 
         // TODO: update profiling implementation, currently only works for opt_opsync mode

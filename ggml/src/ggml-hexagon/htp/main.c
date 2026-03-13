@@ -29,10 +29,7 @@
 #include "hmx/hmx-ops.h"
 #endif // HTP_HAS_HMX
 
-// Set to 1 to enable lightweight sample-value tracing via FARF(ALWAYS, ...).
-#ifndef HMX_DEBUG_TRACE_VALUES
-#define HMX_DEBUG_TRACE_VALUES 0
-#endif
+
 
 AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
     struct htp_context * ctx;
@@ -1160,11 +1157,6 @@ static void proc_hmx_matmul_req(struct htp_context *     ctx,
     int k = (int) req->src0.ne[0];  // inner dimension
     int n = (int) req->src0.ne[1];  // weight columns
 
-#if HMX_DEBUG_TRACE_VALUES
-    FARF(ALWAYS, "proc_hmx_matmul: m=%d(hmx=%d tail=%d) k=%d n=%d type=%u  wgt=%p(%zu) act=%p(%zu) dst=%p(%zu)",
-         m_total, m_hmx, m_tail, k, n, req->src0.type,
-         wgt, bufs[0].size, act, bufs[1].size, dst, bufs[2].size);
-#endif
 
     struct profile_data prof;
     profile_start(&prof);
@@ -1223,10 +1215,7 @@ static void proc_hmx_matmul_req(struct htp_context *     ctx,
                                                        m_hmx, k, n, (int) req->src0.type);
                 break;
         }
-#if HMX_DEBUG_TRACE_VALUES
-        FARF(ALWAYS, "proc_hmx_matmul: hmx ret=%d  dst[0..3] = %.6f %.6f %.6f %.6f",
-             ret, dst[0], dst[1], dst[2], dst[3]);
-#endif
+
         if (ret == 0) {
             rsp_status = HTP_STATUS_OK;
         } else {
@@ -1365,18 +1354,12 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
                 break;
 
             case HTP_OP_RMS_NORM:
-                if (n_bufs != 2) {
-                    FARF(ERROR, "Bad unary-req buffer list");
-                    continue;
-                }
-                proc_unary_req(ctx, &req, bufs);
-                break;
-
             case HTP_OP_SCALE:
                 if (n_bufs != 2) {
                     FARF(ERROR, "Bad unary-req buffer list");
                     continue;
                 }
+
                 proc_unary_req(ctx, &req, bufs);
                 break;
 
