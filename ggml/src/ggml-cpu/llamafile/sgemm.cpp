@@ -1593,27 +1593,24 @@ class tinyBLAS_Q0_AVX {
                     __m128 da = _mm_set1_ps(unhalf((A[lda * (ii + i) + l].d)));
                     // Computation of product of delta values for four blocks and replicate it across 256 bit lane
                     __m256 dvec =  _mm256_castps128_ps256(_mm_mul_ps(da, db));
+                    __m256i avec = load(A + lda * (ii + i) + l);
                     dvec = _mm256_permute2f128_ps(dvec ,dvec, 0);
                     // Computation of dot product and multiplication with appropriate delta value products
                     Cv[0][i] = madd(_mm256_shuffle_ps(dvec, dvec, 0),
-                                    updot(_mm256_sign_epi8(load(A + lda * (ii + i) + l),
-                                                            load(A + lda * (ii + i) + l)),
-                                            _mm256_sign_epi8(bvec0, load(A + lda * (ii + i) + l))),
+                                    updot(_mm256_sign_epi8(avec, avec),
+                                            _mm256_sign_epi8(bvec0, avec)),
                                     Cv[0][i]);
                     Cv[1][i] = madd(_mm256_shuffle_ps(dvec, dvec, 85),
-                                    updot(_mm256_sign_epi8(load(A + lda * (ii + i) + l),
-                                                            load(A + lda * (ii + i) + l)),
-                                            _mm256_sign_epi8(bvec1, load(A + lda * (ii + i) + l))),
+                                    updot(_mm256_sign_epi8(avec, avec),
+                                            _mm256_sign_epi8(bvec1, avec)),
                                     Cv[1][i]);
                     Cv[2][i] = madd(_mm256_shuffle_ps(dvec, dvec, 170),
-                                    updot(_mm256_sign_epi8(load(A + lda * (ii + i) + l),
-                                                            load(A + lda * (ii + i) + l)),
-                                            _mm256_sign_epi8(bvec2, load(A + lda * (ii + i) + l))),
+                                    updot(_mm256_sign_epi8(avec, avec),
+                                            _mm256_sign_epi8(bvec2, avec)),
                                     Cv[2][i]);
                     Cv[3][i] = madd(_mm256_shuffle_ps(dvec, dvec, 255),
-                                    updot(_mm256_sign_epi8(load(A + lda * (ii + i) + l),
-                                                            load(A + lda * (ii + i) + l)),
-                                            _mm256_sign_epi8(bvec3, load(A + lda * (ii + i) + l))),
+                                    updot(_mm256_sign_epi8(avec, avec),
+                                            _mm256_sign_epi8(bvec3, avec)),
                                     Cv[3][i]);
                 }
             }
