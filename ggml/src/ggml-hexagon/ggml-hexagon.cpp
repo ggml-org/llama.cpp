@@ -1823,12 +1823,12 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
                 return false;
             }
 
-            if (src0->ne[1] > 16 * 1024) {
+            if (ggml_nrows(src0) > 16 * 1024) {
                 return false;  // typically the lm-head which would be too large for VTCM
             }
 
-            if ((src1->ne[2] != 1 || src1->ne[3] != 1)) {
-                return false;
+            if (ggml_nrows(src1) > 1024 || src1->ne[2] != 1 || src1->ne[3] != 1) {
+                return false;  // no huge batches or broadcasting (for now)
             }
 
             // src0 (weights) must be repacked
@@ -1841,6 +1841,9 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
             if (src0->nb[1] < src0->nb[0]) {
                 GGML_LOG_DEBUG("ggml_hexagon_supported_mul_mat: permuted F16 src0 not supported\n");
                 return false;
+            }
+            if (ggml_nrows(src1) > 1024) {
+                return false;  // no huge batches (for now)
             }
             break;
 
