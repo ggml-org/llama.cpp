@@ -91,6 +91,7 @@ json format_error_response(const std::string & message, const enum error_type ty
 std::string random_string();
 std::string gen_chatcmplid();
 std::string gen_tool_call_id();
+std::string ltrim(std::string s);
 
 //
 // lora utils
@@ -200,6 +201,10 @@ public:
         map_idx_to_media.clear();
         tokens.clear();
     }
+
+    llama_token back() const { return tokens.back(); }
+
+    void pop_back() { tokens.pop_back(); }
 
     void keep_first(size_t n);
 
