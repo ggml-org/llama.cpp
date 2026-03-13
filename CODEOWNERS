@@ -56,7 +56,7 @@
 /ggml/src/ggml-cpu/                     @ggerganov
 /ggml/src/ggml-cpu/spacemit/            @alex-spacemit
 /ggml/src/ggml-cuda/fattn*              @ggml-org/ggml-cuda
-/ggml/src/ggml-cuda/mmf.*               @ggml-org/ggml-cuda @am17an
+/ggml/src/ggml-cuda/mmf.*               @ggml-org/ggml-cuda
 /ggml/src/ggml-cuda/mmq.*               @ggml-org/ggml-cuda
 /ggml/src/ggml-cuda/mmvf.*              @ggml-org/ggml-cuda
 /ggml/src/ggml-cuda/mmvq.*              @ggml-org/ggml-cuda
@@ -93,6 +93,7 @@
 /src/models/                            @CISC
 /tests/                                 @ggerganov
 /tests/test-chat.*                      @pwilkin
+/tests/test-llama-archs.cpp             @JohannesGaessler
 /tools/batched-bench/                   @ggerganov
 /tools/cli/                             @ngxson
 /tools/completion/                      @ggerganov
@@ -101,8 +102,8 @@
 /tools/parser/                          @pwilkin
 /tools/quantize/                        @ggerganov
 /tools/rpc/                             @ggml-org/ggml-rpc
-/tools/server/*                         @ngxson @ggerganov # no subdir
-/tools/server/webui/                    @allozaur
+/tools/server/*                         @ggml-org/server # no subdir
+/tools/server/webui/                    @ggml-org/webui
 /tools/tokenize/                        @ggerganov
 /tools/tts/                             @ggerganov
 /vendor/                                @ggerganov
