@@ -135,9 +135,8 @@ The following models have been validated for functionality on Intel® Core™ Ul
 Clone the OpenVINO-enabled llama.cpp fork and build it:
 
 ```bash
-git clone https://github.com/ravi9/llama.cpp.git
+git clone https://github.com/ggml-org/llama.cpp
 cd llama.cpp
-git switch dev_backend_openvino
 ```
 
 - **Linux:**
