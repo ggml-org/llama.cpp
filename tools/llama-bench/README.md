@@ -58,6 +58,7 @@ test parameters:
   -ts, --tensor-split <ts0/ts1/..>          (default: 0)
   -ot --override-tensors <tensor name pattern>=<buffer type>;...
                                             (default: disabled)
+  -dev, --device <dev1,dev2,..>             (default: auto, none = disable offload)
   -nopo, --no-op-offload <0|1>              (default: 0)
 
 Multiple values can be given for each parameter by separating them with ','

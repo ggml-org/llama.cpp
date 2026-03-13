@@ -504,6 +504,7 @@ static bool common_download_file_single(const std::string & url,
                     std::this_thread::sleep_for(std::chrono::milliseconds(exponential_backoff_delay));
                 } else {
                     LOG_ERR("%s: curl_easy_perform() failed after %d attempts\n", __func__, max_attempts);
+                    return false;
                 }
 
                 continue;

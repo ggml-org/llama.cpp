@@ -85,6 +85,7 @@ option(GGML_CCACHE "ggml: use ccache if available"                   ON)
 option(GGML_ALL_WARNINGS           "ggml: enable all compiler warnings"                   ON)
 option(GGML_ALL_WARNINGS_3RD_PARTY "ggml: enable all compiler warnings in 3rd party libs" OFF)
 option(GGML_GPROF                  "ggml: enable gprof"                                   OFF)
+option(GGML_IFAIRY_LUT_CPU         "ggml: enable iFairy 3-weight LUT (CPU-only route)"     ON)
 
 # build
 option(GGML_FATAL_WARNINGS    "ggml: enable -Werror flag"    OFF)
@@ -213,6 +214,67 @@ option(GGML_OPENCL_EMBED_KERNELS            "ggml: embed kernels"               
 option(GGML_OPENCL_USE_ADRENO_KERNELS       "ggml: use optimized kernels for Adreno"          ON)
 set   (GGML_OPENCL_TARGET_VERSION "300" CACHE STRING
                                             "gmml: OpenCL API version to target")
+
+if (GGML_IFAIRY_LUT_CPU)
+    message(STATUS "GGML_IFAIRY_LUT_CPU=ON: enforcing CPU-only build (disabling accelerator backends)")
+
+    function(_ggml_ifairy_force_backend_off opt)
+        if (NOT DEFINED ${opt})
+            return()
+        endif()
+        if (NOT "${${opt}}" STREQUAL "OFF")
+            message(WARNING "GGML_IFAIRY_LUT_CPU=ON: forcing ${opt}=OFF for the CPU-only iFairy LUT path")
+        endif()
+        set(${opt} OFF CACHE BOOL "" FORCE)
+    endfunction()
+
+    set(_GGML_IFAIRY_FORCED_BACKENDS
+        GGML_METAL
+        GGML_METAL_EMBED_LIBRARY
+        GGML_METAL_NDEBUG
+        GGML_METAL_SHADER_DEBUG
+        GGML_CUDA
+        GGML_CUDA_FORCE_MMQ
+        GGML_CUDA_FORCE_CUBLAS
+        GGML_CUDA_NO_PEER_COPY
+        GGML_CUDA_NO_VMM
+        GGML_CUDA_FA
+        GGML_CUDA_FA_ALL_QUANTS
+        GGML_CUDA_GRAPHS
+        GGML_HIP
+        GGML_HIP_GRAPHS
+        GGML_HIP_NO_VMM
+        GGML_HIP_ROCWMMA_FATTN
+        GGML_HIP_FORCE_ROCWMMA_FATTN_GFX12
+        GGML_HIP_MMQ_MFMA
+        GGML_HIP_EXPORT_METRICS
+        GGML_MUSA
+        GGML_MUSA_GRAPHS
+        GGML_MUSA_MUDNN_COPY
+        GGML_VULKAN
+        GGML_VULKAN_CHECK_RESULTS
+        GGML_VULKAN_DEBUG
+        GGML_VULKAN_MEMORY_DEBUG
+        GGML_VULKAN_SHADER_DEBUG_INFO
+        GGML_VULKAN_VALIDATE
+        GGML_VULKAN_RUN_TESTS
+        GGML_WEBGPU
+        GGML_WEBGPU_DEBUG
+        GGML_ZDNN
+        GGML_SYCL
+        GGML_SYCL_F16
+        GGML_SYCL_GRAPH
+        GGML_SYCL_DNN
+        GGML_OPENCL
+        GGML_OPENCL_PROFILING
+        GGML_OPENCL_EMBED_KERNELS
+        GGML_OPENCL_USE_ADRENO_KERNELS
+    )
+
+    foreach(opt IN LISTS _GGML_IFAIRY_FORCED_BACKENDS)
+        _ggml_ifairy_force_backend_off(${opt})
+    endforeach()
+endif()
 
 # toolchain for vulkan-shaders-gen
 set   (GGML_VULKAN_SHADERS_GEN_TOOLCHAIN "" CACHE FILEPATH "ggml: toolchain file for vulkan-shaders-gen")

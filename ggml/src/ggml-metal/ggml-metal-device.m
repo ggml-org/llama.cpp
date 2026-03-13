@@ -450,11 +450,20 @@ ggml_metal_device_t ggml_metal_device_init(void) {
     if (dev->mtl_device == nil) {
         dev->mtl_device = MTLCreateSystemDefaultDevice();
 
-        if (dev->mtl_device) {
-            dev->mtl_queue = [dev->mtl_device newCommandQueue];
-            if (dev->mtl_queue == nil) {
-                GGML_LOG_ERROR("%s: error: failed to create command queue\n", __func__);
-            }
+        if (dev->mtl_device == nil) {
+            GGML_LOG_ERROR("%s: error: no Metal device found (disabling Metal backend)\n", __func__);
+            free(dev);
+            return NULL;
+        }
+
+        dev->mtl_queue = [dev->mtl_device newCommandQueue];
+        if (dev->mtl_queue == nil) {
+            GGML_LOG_ERROR("%s: error: failed to create command queue (disabling Metal backend)\n", __func__);
+            [dev->mtl_device release];
+            dev->mtl_device = nil;
+            free(dev);
+            return NULL;
+        }
 
             dev->props.has_simdgroup_reduction  = [dev->mtl_device supportsFamily:MTLGPUFamilyApple7];
             dev->props.has_simdgroup_reduction |= [dev->mtl_device supportsFamily:MTLGPUFamilyMetal3_GGML];
@@ -486,7 +495,9 @@ ggml_metal_device_t ggml_metal_device_init(void) {
 
             dev->library = ggml_metal_library_init(dev);
             if (!dev->library) {
-                GGML_LOG_ERROR("%s: error: failed to create library\n", __func__);
+                GGML_LOG_ERROR("%s: error: failed to create library (disabling Metal backend)\n", __func__);
+                ggml_metal_device_free(dev);
+                return NULL;
             }
 
             // --------------------------------------------------
@@ -532,7 +543,6 @@ ggml_metal_device_t ggml_metal_device_init(void) {
                 GGML_LOG_INFO("%s: recommendedMaxWorkingSetSize  = %8.2f MB\n", __func__, dev->props.max_working_set_size / 1e6);
             }
 #endif
-        }
     }
 
     return dev;
@@ -583,6 +593,17 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
     const bool has_simdgroup_mm        = dev->props.has_simdgroup_mm;
     const bool has_simdgroup_reduction = dev->props.has_simdgroup_reduction;
     const bool has_bfloat              = dev->props.has_bfloat;
+
+    // custom complex ifairy types are CPU-only for now
+    if (op->type == GGML_TYPE_IFAIRY || op->type == GGML_TYPE_IFAIRY_Q16) {
+        return false;
+    }
+    for (size_t i = 0, n = 3; i < n; ++i) {
+        if (op->src[i] != NULL &&
+            (op->src[i]->type == GGML_TYPE_IFAIRY || op->src[i]->type == GGML_TYPE_IFAIRY_Q16)) {
+            return false;
+        }
+    }
 
     if (!has_bfloat) {
         if (op->type == GGML_TYPE_BF16) {

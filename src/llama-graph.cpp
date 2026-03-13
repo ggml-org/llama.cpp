@@ -635,6 +635,16 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
     return res;
 }
 
+ggml_tensor * llm_graph_context::ifairy_build_norm(ggml_tensor * cur, ggml_tensor * mw, int il) const {
+    cur = ggml_ifairy_split(ctx0, cur);
+    cur = ggml_ifairy_rms_norm(ctx0, cur, hparams.f_norm_rms_eps);
+    cb(cur, "norm", il);
+    cur = ggml_mul(ctx0, cur,
+                   mw);  // mw should be fp32, sized hidden_size * 2, shape [hidden_size_real, hidden_size_imag]
+    cur = ggml_ifairy_merge(ctx0, cur);
+    return cur;
+}
+
 ggml_tensor * llm_graph_context::build_norm(
          ggml_tensor * cur,
          ggml_tensor * mw,
@@ -667,6 +677,24 @@ ggml_tensor * llm_graph_context::build_norm(
         cur = ggml_add(ctx0, cur, mb);
     }
 
+    return cur;
+}
+
+ggml_tensor * llm_graph_context::ifairy_build_ffn(ggml_tensor * cur,
+                                                  ggml_tensor * up,
+                                                  ggml_tensor * gate,
+                                                  ggml_tensor * down,
+                                                  ggml_tensor * norm_weight,
+                                                  int           il) const {
+    ggml_tensor * gate_res = build_lora_mm(gate, cur);
+    cb(gate_res, "ffn_gate", il);
+    gate_res = ggml_ifairy_relu2(ctx0, gate_res);
+    cur      = build_lora_mm(up, cur);
+    cb(cur, "ffn_up", il);
+    cur = ggml_ifairy_mul(ctx0, cur, gate_res);
+    cur = ifairy_build_norm(cur, norm_weight, il);
+    cur = build_lora_mm(down, cur);
+    cb(cur, "ffn_down", il);
     return cur;
 }
 
@@ -1292,6 +1320,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         }
 
         // this can happen when KV cache is not used (e.g. an embedding model with non-causal attn)
+        // todo_liweitao 这里会被cast 么？
         if (k->type == GGML_TYPE_F32) {
             k = ggml_cast(ctx0, k, GGML_TYPE_F16);
         }
@@ -1490,6 +1519,52 @@ llm_graph_input_attn_kv * llm_graph_context::build_attn_inp_kv() const {
     auto inp = build_attn_inp_kv_impl(ctx0, ubatch, hparams, cparams, mctx_cur);
 
     return (llm_graph_input_attn_kv *) res->add_input(std::move(inp));
+}
+
+ggml_tensor * llm_graph_context::ifairy_build_attn(llm_graph_input_attn_kv * inp,
+                                                   ggml_tensor * q_cur,  // [n_embd_head_q * 2, n_head_q, n_tokens]
+                                                   ggml_tensor * k_cur,  // [n_embd_head_k * 2, n_head_k, n_tokens]
+                                                   ggml_tensor * v_cur,  // [n_embd_head_v * 2, n_head_v, n_tokens]);
+                                                   float         kq_scale,
+                                                   int           il) const {
+    ggml_build_forward_expand(gf, q_cur);
+    ggml_build_forward_expand(gf, k_cur);
+    ggml_build_forward_expand(gf, v_cur);
+
+    const auto * mctx_cur = inp->mctx;
+
+    // store to KV cache
+    {
+        const auto & k_idxs = inp->get_k_idxs();
+        const auto & v_idxs = inp->get_v_idxs();
+        //LLAMA_LOG("ready to set k,v cache at il=%d, k_cur->ne0 = %ld, k_cur->ne1 = %ld\n", il, k_cur->ne[0], k_cur->ne[1]);
+        //LLAMA_LOG("ready to set k,v cache at il=%d, v_cur->ne0 = %ld, v_cur->ne1 = %ld\n", il, v_cur->ne[0], v_cur->ne[1]);
+        ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
+        ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il));
+    }
+
+    const auto & kq_mask = inp->get_kq_mask();
+
+    ggml_tensor * q = q_cur;
+    ggml_tensor * k = mctx_cur->get_k(ctx0, il);
+    ggml_tensor * v = mctx_cur->get_v(ctx0, il);
+
+    //LLAMA_LOG("before attention, k->ne0 = %ld, k->ne1 = %ld\n", k->ne[0], k->ne[1]);
+    //LLAMA_LOG("before attention, v->ne0 = %ld, v->ne1 = %ld\n", v->ne[0], v->ne[1]);
+
+    ggml_tensor * cur = build_attn_mha(q, k, v, NULL, kq_mask, NULL, NULL, kq_scale, il);
+
+    //LLAMA_LOG("cur shape after mha: %ld x %ld\n", cur->ne[0], cur->ne[1]);
+
+    cur = ggml_reshape_3d(ctx0, cur, cur->ne[0] / n_head_kv, n_head_kv, n_tokens);
+    //LLAMA_LOG("cur shape after mha: %ld x %ld x %ld\n", cur->ne[0], cur->ne[1], cur->ne[2]);
+
+    cur = ggml_ifairy_merge(ctx0, cur);
+
+    cur = ggml_reshape_2d(ctx0, cur, cur->ne[0] * cur->ne[1], cur->ne[2]);
+    cb(cur, "kqv_out", il);
+
+    return cur;
 }
 
 ggml_tensor * llm_graph_context::build_attn(

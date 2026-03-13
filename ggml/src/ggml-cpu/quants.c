@@ -104,6 +104,63 @@ void quantize_row_tq2_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, 
     quantize_row_tq2_0_ref(x, y, k);
 }
 
+// ====================== Fairy±i complex 2-bit quantization
+void quantize_row_ifairy(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    assert(k % QK_IFAIRY == 0);
+    block_ifairy * GGML_RESTRICT y = vy;
+
+    const int64_t nb = k / QK_IFAIRY;
+
+    float d_real = 0.0f;
+    float d_imag = 0.0f;
+
+    for (int64_t i = 0; i < k; ++i) {
+        const float * x_com = x + i;
+
+        const ggml_bf16_t x_real_bf16 = ((const ggml_bf16_t *) x_com)[0];
+        const ggml_bf16_t x_imag_bf16 = ((const ggml_bf16_t *) x_com)[1];
+
+        const float x_real = GGML_BF16_TO_FP32(x_real_bf16);
+        const float x_imag = GGML_BF16_TO_FP32(x_imag_bf16);
+
+        d_real = MAX(d_real, fabsf(x_real));
+        d_imag = MAX(d_imag, fabsf(x_imag));
+    }
+
+    for (int64_t ib = 0; ib < nb; ++ib) {
+        y[ib].d_real = GGML_FP32_TO_FP16(d_real);
+        y[ib].d_imag = GGML_FP32_TO_FP16(d_imag);
+
+        for (int chunk = 0; chunk < 4; ++chunk) {
+            uint8_t packed[16] = { 0 };
+
+            for (int part = 0; part < 4; ++part) {
+                for (int lane = 0; lane < 16; ++lane) {
+                    const int     idx   = chunk * 64 + part * 16 + lane;
+                    const float * x_com = x + ib * QK_IFAIRY + idx;
+
+                    const ggml_bf16_t x_real_bf16 = ((const ggml_bf16_t *) x_com)[0];
+                    const ggml_bf16_t x_imag_bf16 = ((const ggml_bf16_t *) x_com)[1];
+
+                    const float x_real = GGML_BF16_TO_FP32(x_real_bf16);
+                    const float x_imag = GGML_BF16_TO_FP32(x_imag_bf16);
+
+                    int code;
+                    if (x_real == 0.0f) {
+                        code = (x_imag > 0.0f) ? 3 : 2;
+                    } else {
+                        code = (x_real > 0.0f) ? 1 : 0;
+                    }
+
+                    packed[lane] |= (uint8_t) (code << (2 * part));
+                }
+            }
+
+            memcpy(y[ib].qs + chunk * 16, packed, sizeof(packed));
+        }
+    }
+}
+
 //===================================== Q8_K ==============================================
 
 void quantize_row_q8_K_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
@@ -414,6 +471,110 @@ void ggml_vec_dot_tq2_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
     }
 
     *s = sumf;
+}
+
+// Complex 2-bit quantization dot product for Fairy±i model
+// Computes: result = sum((real_w + i*imag_w) * (real_act + i*imag_act)) (要对激活取共轭)
+// We use q8_K for both real and imaginary activation parts stored sequentially
+void ggml_vec_dot_ifairy_q16_K_generic(int                        n,
+                                       float * GGML_RESTRICT      s,
+                                       size_t                     bs,
+                                       const void * GGML_RESTRICT vx,
+                                       size_t                     bx,
+                                       const void * GGML_RESTRICT vy,
+                                       size_t                     by,
+                                       int                        nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_ifairy * GGML_RESTRICT     w = (const block_ifairy *) vx;
+    const block_ifairy_q16 * GGML_RESTRICT x = (const block_ifairy_q16 *) vy;
+
+    const int nb = n / QK_IFAIRY;
+
+    const float coeff_w_real = GGML_CPU_FP16_TO_FP32(w[0].d_real);
+    const float coeff_w_imag = GGML_CPU_FP16_TO_FP32(w[0].d_imag);
+
+    float sum_real_total = 0.0f;
+    float sum_imag_total = 0.0f;
+
+    float acc_ac_xr = 0.0f;
+    float acc_bd_xi = 0.0f;
+    float acc_bc_xr = 0.0f;
+    float acc_ad_xi = 0.0f;
+
+    for (int i = 0; i < nb; ++i) {
+        const uint8_t * GGML_RESTRICT w_ptr   = w[i].qs;
+        const int8_t * GGML_RESTRICT  x_r_ptr = (const int8_t *) x[i].x_real;
+        const int8_t * GGML_RESTRICT  x_i_ptr = (const int8_t *) x[i].x_imag;
+
+        // 这四个是每个 block 内部的 dot 结果（int32 累加）
+        int32_t sum_ac = 0;  // Σ xr * wr
+        int32_t sum_ad = 0;  // Σ xi * wr
+        int32_t sum_bc = 0;  // Σ xr * wi
+        int32_t sum_bd = 0;  // Σ xi * wi
+
+        // QK_IFAIRY 个元素，每 4 个权重 packed 在一个 byte 里
+        for (int j = 0; j < QK_IFAIRY; ++j) {
+            const int chunk    = j >> 6;          // 0..3 blocks of 64
+            const int lane     = j & 0xF;         // 0..15 within each 16-lane stripe
+            const int part     = (j >> 4) & 0x3;  // which 16-lane group inside the chunk
+            const int byte_idx = (chunk << 4) + lane;
+            const int bit_off  = part * 2;
+
+            const uint8_t packed = w_ptr[byte_idx];
+            const uint8_t code   = (packed >> bit_off) & 0x3;
+
+            // 相位编码 -> (wr, wi) ∈ {-1,0,1}
+            int wr = 0;
+            int wi = 0;
+            switch (code) {
+                case 0:  // 00 -> -1
+                    wr = -1;
+                    wi = 0;
+                    break;
+                case 1:  // 01 -> +1
+                    wr = 1;
+                    wi = 0;
+                    break;
+                case 2:  // 10 -> -i
+                    wr = 0;
+                    wi = -1;
+                    break;
+                case 3:  // 11 -> +i
+                    wr = 0;
+                    wi = 1;
+                    break;
+                default:
+                    GGML_UNREACHABLE();
+            }
+
+            const int xr = (int) x_r_ptr[j];
+            const int xi = (int) x_i_ptr[j];
+
+            sum_ac += xr * wr;
+            sum_ad += xi * wr;
+            sum_bc += xr * wi;
+            sum_bd += xi * wi;
+        }
+
+        const float x_real = GGML_CPU_FP16_TO_FP32(x[i].d_real);
+        const float x_imag = GGML_CPU_FP16_TO_FP32(x[i].d_imag);
+
+        acc_ac_xr += x_real * (float) sum_ac;
+        acc_bd_xi += x_imag * (float) sum_bd;
+        acc_bc_xr += x_real * (float) sum_bc;
+        acc_ad_xi += x_imag * (float) sum_ad;
+    }
+
+    sum_real_total = coeff_w_real * acc_ac_xr + coeff_w_imag * acc_bd_xi;
+    sum_imag_total = coeff_w_imag * acc_bc_xr - coeff_w_real * acc_ad_xi;
+
+    ((ggml_bf16_t *) s)[0] = GGML_FP32_TO_BF16(sum_real_total);
+    ((ggml_bf16_t *) s)[1] = GGML_FP32_TO_BF16(sum_imag_total);
 }
 
 void ggml_vec_dot_q2_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {

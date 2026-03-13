@@ -1016,67 +1016,40 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM:    "blk.{bid}.nextn.shared_head_norm",
 
     # ifairy
-    MODEL_TENSOR.TOKEN_EMBD_REAL:           "token_embd_real",
-    MODEL_TENSOR.TOKEN_EMBD_IMAG:           "token_embd_imag",
-    MODEL_TENSOR.FINAL_NORM_IMAG:           "final_norm_imag",
-    MODEL_TENSOR.FINAL_NORM_REAL:           "final_norm_real",
-    MODEL_TENSOR.FINAL_NORM:                "final_norm",
-    MODEL_TENSOR.FFN_DOWN_IMAG:             "blk.{bid}.ffn_down_imag",
-    MODEL_TENSOR.FFN_DOWN_REAL:             "blk.{bid}.ffn_down_real",
-    MODEL_TENSOR.FFN_UP_IMAG:               "blk.{bid}.ffn_up_imag",
-    MODEL_TENSOR.FFN_UP_REAL:               "blk.{bid}.ffn_up_real",
-    MODEL_TENSOR.FFN_SUB_NORM_IMAG:         "blk.{bid}.ffn_sub_norm_imag",
-    MODEL_TENSOR.FFN_SUB_NORM_REAL:         "blk.{bid}.ffn_sub_norm_real",
-    MODEL_TENSOR.FFN_GATE_IMAG:             "blk.{bid}.ffn_gate_imag",
-    MODEL_TENSOR.FFN_GATE_REAL:             "blk.{bid}.ffn_gate_real",
-    MODEL_TENSOR.POST_NORM_IMAG:            "blk.{bid}.post_norm_imag",
-    MODEL_TENSOR.POST_NORM_REAL:            "blk.{bid}.post_norm_real",
-    MODEL_TENSOR.POST_NORM:                 "blk.{bid}.post_norm",
-    MODEL_TENSOR.PRE_NORM_IMAG:             "blk.{bid}.pre_norm_imag",
-    MODEL_TENSOR.PRE_NORM_REAL:             "blk.{bid}.pre_norm_real",
-    MODEL_TENSOR.PRE_NORM:                  "blk.{bid}.pre_norm",
-    MODEL_TENSOR.ATTN_LAYERNORM:            "blk.{bid}.attn_layernorm",
-    MODEL_TENSOR.ATTN_LAYERNORM_IMAG:       "blk.{bid}.attn_layernorm_imag",
-    MODEL_TENSOR.ATTN_LAYERNORM_REAL:       "blk.{bid}.attn_layernorm_real",
-    MODEL_TENSOR.ATTN_Q_IMAG:               "blk.{bid}.attn_q_imag",
-    MODEL_TENSOR.ATTN_Q_REAL:               "blk.{bid}.attn_q_real",
-    MODEL_TENSOR.ATTN_K_IMAG:               "blk.{bid}.attn_k_imag",
-    MODEL_TENSOR.ATTN_K_REAL:               "blk.{bid}.attn_k_real",
-    MODEL_TENSOR.ATTN_V_IMAG:               "blk.{bid}.attn_v_imag",
-    MODEL_TENSOR.ATTN_V_REAL:               "blk.{bid}.attn_v_real",
-    MODEL_TENSOR.ATTN_OUT_IMAG:             "blk.{bid}.attn_output_imag",
-    MODEL_TENSOR.ATTN_OUT_REAL:             "blk.{bid}.attn_output_real",
+    MODEL_TENSOR.TOKEN_EMBD_REAL:                "token_embd_real",
+    MODEL_TENSOR.TOKEN_EMBD_IMAG:                "token_embd_imag",
+    MODEL_TENSOR.FINAL_NORM_IMAG:                "final_norm_imag",
+    MODEL_TENSOR.FINAL_NORM_REAL:                "final_norm_real",
+    MODEL_TENSOR.FINAL_NORM:                     "output_norm",
+    MODEL_TENSOR.POST_NORM_IMAG:                 "blk.{bid}.post_norm_imag",
+    MODEL_TENSOR.POST_NORM_REAL:                 "blk.{bid}.post_norm_real",
+    MODEL_TENSOR.POST_NORM:                      "blk.{bid}.ffn_norm",
+    MODEL_TENSOR.PRE_NORM_IMAG:                  "blk.{bid}.pre_norm_imag",
+    MODEL_TENSOR.PRE_NORM_REAL:                  "blk.{bid}.pre_norm_real",
+    MODEL_TENSOR.PRE_NORM:                       "blk.{bid}.attn_norm",
+    MODEL_TENSOR.ATTN_LAYERNORM_IMAG:            "blk.{bid}.attn_layernorm_imag",
+    MODEL_TENSOR.ATTN_LAYERNORM_REAL:            "blk.{bid}.attn_layernorm_real",
+    MODEL_TENSOR.ATTN_LAYERNORM:                 "blk.{bid}.attn_sub_norm",
+    MODEL_TENSOR.FFN_SUB_NORM_REAL:              "blk.{bid}.ffn_sub_norm_real",
+    MODEL_TENSOR.FFN_SUB_NORM_IMAG:              "blk.{bid}.ffn_sub_norm_imag",
 }
 
 MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
     # newly added for ifairy
     MODEL_ARCH.IFAIRY: [
-        MODEL_TENSOR.TOKEN_EMBD_IMAG,
-        MODEL_TENSOR.TOKEN_EMBD_REAL,
-        MODEL_TENSOR.FINAL_NORM_IMAG,
-        MODEL_TENSOR.FINAL_NORM_REAL,
-        MODEL_TENSOR.FFN_DOWN_IMAG,
-        MODEL_TENSOR.FFN_DOWN_REAL,
-        MODEL_TENSOR.FFN_UP_IMAG,
-        MODEL_TENSOR.FFN_UP_REAL,
-        MODEL_TENSOR.FFN_SUB_NORM_IMAG,
-        MODEL_TENSOR.FFN_SUB_NORM_REAL,
-        MODEL_TENSOR.FFN_GATE_IMAG,
-        MODEL_TENSOR.FFN_GATE_REAL,
-        MODEL_TENSOR.POST_NORM_IMAG,
-        MODEL_TENSOR.POST_NORM_REAL,
-        MODEL_TENSOR.PRE_NORM_IMAG,
-        MODEL_TENSOR.PRE_NORM_REAL,
-        MODEL_TENSOR.ATTN_LAYERNORM_IMAG,
-        MODEL_TENSOR.ATTN_LAYERNORM_REAL,
-        MODEL_TENSOR.ATTN_Q_IMAG,
-        MODEL_TENSOR.ATTN_Q_REAL,
-        MODEL_TENSOR.ATTN_K_IMAG,
-        MODEL_TENSOR.ATTN_K_REAL,
-        MODEL_TENSOR.ATTN_V_IMAG,
-        MODEL_TENSOR.ATTN_V_REAL,
-        MODEL_TENSOR.ATTN_OUT_IMAG,
-        MODEL_TENSOR.ATTN_OUT_REAL,
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_SUB_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.POST_NORM,
+        MODEL_TENSOR.PRE_NORM,
+        MODEL_TENSOR.ATTN_LAYERNORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
         MODEL_TENSOR.OUTPUT,
     ],
     MODEL_ARCH.MMPROJ: [
@@ -2934,7 +2907,7 @@ class GGMLQuantizationType(IntEnum):
     TQ1_0   = 34
     TQ2_0   = 35
     MXFP4   = 39
-    F16_I2  = 40 # newly added for ifairy 暂时用这个，实际上还是F32格式来存，但是为了量化时候要有这么一个枚举类型先
+    F16_I2  = 40 # newly added for ifairy，2-bit codes + fp16 scales
     IFAIRY  = 41 # newly added for ifairy
 
 
@@ -2987,6 +2960,8 @@ class LlamaFileType(IntEnum):
     # MOSTLY_Q4_0_8_8      = 35  # removed from gguf files, use Q4_0 and runtime repack
     MOSTLY_TQ1_0         = 36  # except 1d tensors
     MOSTLY_TQ2_0         = 37  # except 1d tensors
+    MOSTLY_IFAIRY        = 40
+
 
     GUESSED              = 1024  # not specified in the model file
 
@@ -3046,6 +3021,7 @@ class VisionProjectorType:
 
 # Items here are (block size, type size)
 QK_K = 256
+QK_IFAIRY = 256
 GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.F32:     (1, 4),
     GGMLQuantizationType.F16:     (1, 2),
@@ -3079,7 +3055,7 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.TQ1_0:   (256, 2 + 4 * 13),
     GGMLQuantizationType.TQ2_0:   (256, 2 + 64),
     GGMLQuantizationType.MXFP4:   (32, 1 + 16),
-    GGMLQuantizationType.F16_I2:  (1, 2), # newly added for ifairy, 实际上还是F16格式来存
+    GGMLQuantizationType.F16_I2:  (QK_IFAIRY, 4 + QK_IFAIRY // 4), # newly added for ifairy
     GGMLQuantizationType.IFAIRY:  (4, 1), # newly added for ifairy
 }
 

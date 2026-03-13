@@ -23,6 +23,15 @@
 
 #define UNUSED GGML_UNUSED
 
+static inline bool ggml_ifairy_vecdot_act_tensor_enabled(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char * env = getenv("GGML_IFAIRY_VEC_DOT_ACT_TENSOR");
+        cached           = (env && strcmp(env, "0") != 0) ? 1 : 0;
+    }
+    return cached != 0;
+}
+
 #if defined(__ARM_NEON)
 #define B1(c,s,n)  0x ## n ## c ,  0x ## n ## s
 #define B2(c,s,n) B1(c,s,n ## c), B1(c,s,n ## s)
@@ -127,6 +136,338 @@ void quantize_row_q8_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
     GGML_UNUSED(nb);
     // scalar
     quantize_row_q8_1_ref(x, y, k);
+#endif
+}
+
+void quantize_row_ifairy_q16(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    assert(k % QK_IFAIRY == 0);
+    const int nb = k / QK_IFAIRY;
+
+    block_ifairy_q16 * GGML_RESTRICT y = vy;
+
+#if defined(__ARM_NEON) && defined(__aarch64__)
+    const float32x4_t vmin_init = vdupq_n_f32(1e-5f);
+
+    for (int ib = 0; ib < nb; ++ib) {
+        const uint16_t * GGML_RESTRICT src_base = (const uint16_t *) (x + ib * QK_IFAIRY);
+
+        float32x4_t max_real = vmin_init;
+        float32x4_t max_imag = vmin_init;
+
+        // pass 1: find max |real| / |imag|
+        {
+            const uint16_t * GGML_RESTRICT src = src_base;
+            int                            cnt = QK_IFAIRY * 2;  // number of bf16 halves to process
+
+            __asm__ volatile(
+                "1:\n"
+                "ld1            {v0.8h}, [%[src]], #16\n"
+                "ushll          v1.4s, v0.4h, #0\n"
+                "ushll2         v2.4s, v0.8h, #0\n"
+                "shl            v1.4s, v1.4s, #16\n"
+                "shl            v2.4s, v2.4s, #16\n"
+                "uzp1           v3.4s, v1.4s, v2.4s\n"
+                "uzp2           v4.4s, v1.4s, v2.4s\n"
+                "fabs           v3.4s, v3.4s\n"
+                "fabs           v4.4s, v4.4s\n"
+                "fmax           %[maxr].4s, %[maxr].4s, v3.4s\n"
+                "fmax           %[maxi].4s, %[maxi].4s, v4.4s\n"
+                "subs           %w[cnt], %w[cnt], #8\n"
+                "b.gt           1b\n"
+                : [maxr] "+w"(max_real), [maxi] "+w"(max_imag), [src] "+r"(src), [cnt] "+r"(cnt)
+                :
+                : "v0", "v1", "v2", "v3", "v4", "cc", "memory");
+        }
+
+        const float max_r = vmaxvq_f32(max_real);
+        const float max_i = vmaxvq_f32(max_imag);
+
+        const float iscale_r = 42.6f / max_r;
+        const float iscale_i = 42.6f / max_i;
+
+        y[ib].d_real = GGML_CPU_FP32_TO_FP16(1.f / iscale_r);
+        y[ib].d_imag = GGML_CPU_FP32_TO_FP16(1.f / iscale_i);
+
+        // pass 2: quantize
+        {
+            const uint16_t * GGML_RESTRICT src  = src_base;
+            int8_t * GGML_RESTRICT         yr   = (int8_t *) y[ib].x_real;
+            int8_t * GGML_RESTRICT         yi   = (int8_t *) y[ib].x_imag;
+            float32x4_t                    vs_r = vdupq_n_f32(iscale_r);
+            float32x4_t                    vs_i = vdupq_n_f32(iscale_i);
+            int                            cnt  = QK_IFAIRY;  // number of complex values
+
+            __asm__ volatile(
+                "1:\n"
+                "ld1            {v0.8h}, [%[src]], #16\n"
+                "ushll          v1.4s, v0.4h, #0\n"
+                "ushll2         v2.4s, v0.8h, #0\n"
+                "shl            v1.4s, v1.4s, #16\n"
+                "shl            v2.4s, v2.4s, #16\n"
+                "uzp1           v3.4s, v1.4s, v2.4s\n"
+                "uzp2           v4.4s, v1.4s, v2.4s\n"
+                "fmul           v3.4s, v3.4s, %[sr].4s\n"
+                "fmul           v4.4s, v4.4s, %[si].4s\n"
+                "fcvtns         v3.4s, v3.4s\n"
+                "fcvtns         v4.4s, v4.4s\n"
+                "sqxtn          v5.4h, v3.4s\n"
+                "sqxtn          v6.4h, v4.4s\n"
+                "sqxtn          v5.8b, v5.8h\n"
+                "sqxtn          v6.8b, v6.8h\n"
+                "st1            {v5.s}[0], [%[yr]], #4\n"
+                "st1            {v6.s}[0], [%[yi]], #4\n"
+                "subs           %w[cnt], %w[cnt], #4\n"
+                "b.gt           1b\n"
+                : [src] "+r"(src), [yr] "+r"(yr), [yi] "+r"(yi), [cnt] "+r"(cnt)
+                : [sr] "w"(vs_r), [si] "w"(vs_i)
+                : "v0", "v1", "v2", "v3", "v4", "v5", "v6", "cc", "memory");
+        }
+    }
+#else
+    GGML_UNUSED(nb);
+    quantize_row_ifairy_q16_ref(x, y, k);
+#endif
+}
+
+void quantize_row_ifairy_q16_lut_c(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    assert(k % QK_IFAIRY == 0);
+    const int nb = k / QK_IFAIRY;
+
+    block_ifairy_q16 * GGML_RESTRICT y = vy;
+
+#if defined(__ARM_NEON) && defined(__aarch64__)
+    const float32x4_t vmin_init  = vdupq_n_f32(1e-5f);
+    const float       k_scale_q8 = 42.6f;
+
+    for (int ib = 0; ib < nb; ++ib) {
+        const uint16_t * GGML_RESTRICT src_base = (const uint16_t *) (x + ib * QK_IFAIRY);
+
+        float32x4_t max_real = vmin_init;
+        float32x4_t max_imag = vmin_init;
+
+        // pass 1: find max |real| / |imag|
+        {
+            const uint16_t * GGML_RESTRICT src = src_base;
+            int                            cnt = QK_IFAIRY * 2;  // number of bf16 halves to process
+
+            __asm__ volatile(
+                "1:\n"
+                "ld1            {v0.8h}, [%[src]], #16\n"
+                "ushll          v1.4s, v0.4h, #0\n"
+                "ushll2         v2.4s, v0.8h, #0\n"
+                "shl            v1.4s, v1.4s, #16\n"
+                "shl            v2.4s, v2.4s, #16\n"
+                "uzp1           v3.4s, v1.4s, v2.4s\n"
+                "uzp2           v4.4s, v1.4s, v2.4s\n"
+                "fabs           v3.4s, v3.4s\n"
+                "fabs           v4.4s, v4.4s\n"
+                "fmax           %[maxr].4s, %[maxr].4s, v3.4s\n"
+                "fmax           %[maxi].4s, %[maxi].4s, v4.4s\n"
+                "subs           %w[cnt], %w[cnt], #8\n"
+                "b.gt           1b\n"
+                : [maxr] "+w"(max_real), [maxi] "+w"(max_imag), [src] "+r"(src), [cnt] "+r"(cnt)
+                :
+                : "v0", "v1", "v2", "v3", "v4", "cc", "memory");
+        }
+
+        const float max_r = vmaxvq_f32(max_real);
+        const float max_i = vmaxvq_f32(max_imag);
+
+        const float iscale_r = k_scale_q8 / max_r;
+        const float iscale_i = k_scale_q8 / max_i;
+
+        y[ib].d_real = GGML_CPU_FP32_TO_FP16(1.f / iscale_r);
+        y[ib].d_imag = GGML_CPU_FP32_TO_FP16(1.f / iscale_i);
+
+        // pass 2: quantize to [-42, 42] to keep 3-sum within int8 range.
+        {
+            const uint16_t * GGML_RESTRICT src  = src_base;
+            int8_t * GGML_RESTRICT         yr   = (int8_t *) y[ib].x_real;
+            int8_t * GGML_RESTRICT         yi   = (int8_t *) y[ib].x_imag;
+            float32x4_t                    vs_r = vdupq_n_f32(iscale_r);
+            float32x4_t                    vs_i = vdupq_n_f32(iscale_i);
+            int                            cnt  = QK_IFAIRY;  // number of complex values
+
+            __asm__ volatile(
+                "movi           v7.4s, #42\n"
+                "neg            v8.4s, v7.4s\n"
+                "1:\n"
+                "ld1            {v0.8h}, [%[src]], #16\n"
+                "ushll          v1.4s, v0.4h, #0\n"
+                "ushll2         v2.4s, v0.8h, #0\n"
+                "shl            v1.4s, v1.4s, #16\n"
+                "shl            v2.4s, v2.4s, #16\n"
+                "uzp1           v3.4s, v1.4s, v2.4s\n"
+                "uzp2           v4.4s, v1.4s, v2.4s\n"
+                "fmul           v3.4s, v3.4s, %[sr].4s\n"
+                "fmul           v4.4s, v4.4s, %[si].4s\n"
+                "fcvtns         v3.4s, v3.4s\n"
+                "fcvtns         v4.4s, v4.4s\n"
+                "smax           v3.4s, v3.4s, v8.4s\n"
+                "smin           v3.4s, v3.4s, v7.4s\n"
+                "smax           v4.4s, v4.4s, v8.4s\n"
+                "smin           v4.4s, v4.4s, v7.4s\n"
+                "sqxtn          v5.4h, v3.4s\n"
+                "sqxtn          v6.4h, v4.4s\n"
+                "sqxtn          v5.8b, v5.8h\n"
+                "sqxtn          v6.8b, v6.8h\n"
+                "st1            {v5.s}[0], [%[yr]], #4\n"
+                "st1            {v6.s}[0], [%[yi]], #4\n"
+                "subs           %w[cnt], %w[cnt], #4\n"
+                "b.gt           1b\n"
+                : [src] "+r"(src), [yr] "+r"(yr), [yi] "+r"(yi), [cnt] "+r"(cnt)
+                : [sr] "w"(vs_r), [si] "w"(vs_i)
+                : "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "cc", "memory");
+        }
+    }
+#else
+    const float k_scale_q8 = 42.6f;
+
+    for (int ib = 0; ib < nb; ++ib) {
+        float max_real = 1e-5f;
+        float max_imag = 1e-5f;
+
+        for (int j = 0; j < QK_IFAIRY; ++j) {
+            const float * x_com = x + (int64_t) ib * QK_IFAIRY + j;
+
+            const ggml_bf16_t xr_bf16 = ((const ggml_bf16_t *) (x_com))[0];
+            const ggml_bf16_t xi_bf16 = ((const ggml_bf16_t *) (x_com))[1];
+
+            const float xr = GGML_BF16_TO_FP32(xr_bf16);
+            const float xi = GGML_BF16_TO_FP32(xi_bf16);
+
+            max_real = fmaxf(max_real, fabsf(xr));
+            max_imag = fmaxf(max_imag, fabsf(xi));
+        }
+
+        const float scale_real = max_real / k_scale_q8;
+        const float scale_imag = max_imag / k_scale_q8;
+
+        const float inv_scale_real = 1.0f / scale_real;
+        const float inv_scale_imag = 1.0f / scale_imag;
+
+        y[ib].d_real = GGML_CPU_FP32_TO_FP16(scale_real);
+        y[ib].d_imag = GGML_CPU_FP32_TO_FP16(scale_imag);
+
+        int8_t * xr_out = (int8_t *) y[ib].x_real;
+        int8_t * xi_out = (int8_t *) y[ib].x_imag;
+
+        for (int j = 0; j < QK_IFAIRY; ++j) {
+            const float * x_com = x + (int64_t) ib * QK_IFAIRY + j;
+
+            const ggml_bf16_t xr_bf16 = ((const ggml_bf16_t *) (x_com))[0];
+            const ggml_bf16_t xi_bf16 = ((const ggml_bf16_t *) (x_com))[1];
+
+            const float xr = GGML_BF16_TO_FP32(xr_bf16);
+            const float xi = GGML_BF16_TO_FP32(xi_bf16);
+
+            int vr = (int) lrintf(xr * inv_scale_real);
+            int vi = (int) lrintf(xi * inv_scale_imag);
+
+            vr = vr > 42 ? 42 : (vr < -42 ? -42 : vr);
+            vi = vi > 42 ? 42 : (vi < -42 ? -42 : vi);
+
+            xr_out[j] = (int8_t) vr;
+            xi_out[j] = (int8_t) vi;
+        }
+    }
+#endif
+}
+
+void quantize_row_ifairy_q16_tensor(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    assert(k % QK_IFAIRY == 0);
+    const int nb = k / QK_IFAIRY;
+
+    block_ifairy_q16 * GGML_RESTRICT y = vy;
+
+#if defined(__ARM_NEON) && defined(__aarch64__)
+    const float32x4_t vmin_init  = vdupq_n_f32(1e-5f);
+    const float       k_scale_q8 = 42.6f;
+
+    float32x4_t max_real = vmin_init;
+    float32x4_t max_imag = vmin_init;
+
+    // pass 1: global max |real| / |imag| over entire tensor (k elements)
+    for (int ib = 0; ib < nb; ++ib) {
+        const uint16_t * GGML_RESTRICT src = (const uint16_t *) (x + ib * QK_IFAIRY);
+        int                            cnt = QK_IFAIRY * 2;  // number of bf16 halves to process
+
+        __asm__ volatile(
+            "1:\n"
+            "ld1            {v0.8h}, [%[src]], #16\n"
+            "ushll          v1.4s, v0.4h, #0\n"
+            "ushll2         v2.4s, v0.8h, #0\n"
+            "shl            v1.4s, v1.4s, #16\n"
+            "shl            v2.4s, v2.4s, #16\n"
+            "uzp1           v3.4s, v1.4s, v2.4s\n"
+            "uzp2           v4.4s, v1.4s, v2.4s\n"
+            "fabs           v3.4s, v3.4s\n"
+            "fabs           v4.4s, v4.4s\n"
+            "fmax           %[maxr].4s, %[maxr].4s, v3.4s\n"
+            "fmax           %[maxi].4s, %[maxi].4s, v4.4s\n"
+            "subs           %w[cnt], %w[cnt], #8\n"
+            "b.gt           1b\n"
+            : [maxr] "+w"(max_real), [maxi] "+w"(max_imag), [src] "+r"(src), [cnt] "+r"(cnt)
+            :
+            : "v0", "v1", "v2", "v3", "v4", "cc", "memory");
+    }
+
+    const float max_r = vmaxvq_f32(max_real);
+    const float max_i = vmaxvq_f32(max_imag);
+
+    const float iscale_r = k_scale_q8 / max_r;
+    const float iscale_i = k_scale_q8 / max_i;
+
+    const ggml_half d_real = GGML_CPU_FP32_TO_FP16(1.f / iscale_r);
+    const ggml_half d_imag = GGML_CPU_FP32_TO_FP16(1.f / iscale_i);
+
+    // pass 2: quantize per block with shared scale; clamp to [-42, 42] so 3-way sums fit int8 LUT entries.
+    const float32x4_t vs_r = vdupq_n_f32(iscale_r);
+    const float32x4_t vs_i = vdupq_n_f32(iscale_i);
+
+    for (int ib = 0; ib < nb; ++ib) {
+        const uint16_t * GGML_RESTRICT src = (const uint16_t *) (x + ib * QK_IFAIRY);
+        int8_t * GGML_RESTRICT         yr  = (int8_t *) y[ib].x_real;
+        int8_t * GGML_RESTRICT         yi  = (int8_t *) y[ib].x_imag;
+        int                            cnt = QK_IFAIRY;  // number of complex values
+
+        y[ib].d_real = d_real;
+        y[ib].d_imag = d_imag;
+
+        __asm__ volatile(
+            "movi           v7.4s, #42\n"
+            "neg            v8.4s, v7.4s\n"
+            "1:\n"
+            "ld1            {v0.8h}, [%[src]], #16\n"
+            "ushll          v1.4s, v0.4h, #0\n"
+            "ushll2         v2.4s, v0.8h, #0\n"
+            "shl            v1.4s, v1.4s, #16\n"
+            "shl            v2.4s, v2.4s, #16\n"
+            "uzp1           v3.4s, v1.4s, v2.4s\n"
+            "uzp2           v4.4s, v1.4s, v2.4s\n"
+            "fmul           v3.4s, v3.4s, %[sr].4s\n"
+            "fmul           v4.4s, v4.4s, %[si].4s\n"
+            "fcvtns         v3.4s, v3.4s\n"
+            "fcvtns         v4.4s, v4.4s\n"
+            "smax           v3.4s, v3.4s, v8.4s\n"
+            "smin           v3.4s, v3.4s, v7.4s\n"
+            "smax           v4.4s, v4.4s, v8.4s\n"
+            "smin           v4.4s, v4.4s, v7.4s\n"
+            "sqxtn          v5.4h, v3.4s\n"
+            "sqxtn          v6.4h, v4.4s\n"
+            "sqxtn          v5.8b, v5.8h\n"
+            "sqxtn          v6.8b, v6.8h\n"
+            "st1            {v5.s}[0], [%[yr]], #4\n"
+            "st1            {v6.s}[0], [%[yi]], #4\n"
+            "subs           %w[cnt], %w[cnt], #4\n"
+            "b.gt           1b\n"
+            : [src] "+r"(src), [yr] "+r"(yr), [yi] "+r"(yi), [cnt] "+r"(cnt)
+            : [sr] "w"(vs_r), [si] "w"(vs_i)
+            : "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "cc", "memory");
+    }
+#else
+    GGML_UNUSED(nb);
+    quantize_row_ifairy_q16_tensor_ref(x, y, k);
 #endif
 }
 
@@ -1412,6 +1753,392 @@ void ggml_vec_dot_tq2_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     UNUSED(y);
     UNUSED(nb);
     ggml_vec_dot_tq2_0_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+#endif
+}
+
+// Complex 2-bit quantization dot product with ARM NEON acceleration for iFairy
+// Computes: result = sum((w_r + i*w_i) * (a_r + i*a_i))
+// 共轭乘法
+// where w_r, w_i are 2-bit quantized weights
+// and a_r, a_i are activations stored in separate ifairy_q16 blocks
+
+void ggml_vec_dot_ifairy_q16_K(int                        n,
+                               float * GGML_RESTRICT      s,
+                               size_t                     bs,
+                               const void * GGML_RESTRICT vx,
+                               size_t                     bx,
+                               const void * GGML_RESTRICT vy,
+                               size_t                     by,
+                               int                        nrc) {
+    (void) nrc;
+    (void) bx;
+    (void) by;
+    (void) bs;
+
+#if defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
+    const block_ifairy * GGML_RESTRICT     w  = vx;
+    const block_ifairy_q16 * GGML_RESTRICT x  = vy;
+    const int                              nb = n / QK_IFAIRY;
+
+    // 最终累加的 Scalar 结果
+    float sum_real_total = 0.0f;
+    float sum_imag_total = 0.0f;
+
+    const bool act_tensor = ggml_ifairy_vecdot_act_tensor_enabled();
+
+    // 权重按 |0 16 32 48|1 17 33 49|...|15 31 47 63| 排列
+    // 每个 byte 存 4 个 2-bit code：bits[1:0], bits[3:2], bits[5:4], bits[7:6]
+    // 这里用 nibble (4-bit) 直接查两套 LUT，避免 3x shift + 3x mask。
+    const uint8x16_t v_mask_0f = vdupq_n_u8(0x0F);
+    const int32x4_t  vzero     = vdupq_n_s32(0);
+
+    // 2bit index → {real, imag} 查表
+    // 约定编码：00(-1) 01(1) 10(-i) 11(i)
+    static const int8_t lut_real_data[16] = {
+        -1, 1, 0, 0, -1, 1, 0, 0, -1, 1, 0, 0, -1, 1, 0, 0,
+    };
+    static const int8_t lut_imag_data[16] = {
+        0, 0, -1, 1, 0, 0, -1, 1, 0, 0, -1, 1, 0, 0, -1, 1,
+    };
+    static const int8_t lut_wr_idx1_data[16] = {
+        -1, -1, -1, -1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+    };
+    static const int8_t lut_wi_idx1_data[16] = {
+        0, 0, 0, 0, 0, 0, 0, 0, -1, -1, -1, -1, 1, 1, 1, 1,
+    };
+
+    const int8x16_t v_lut_wr_i0 = vld1q_s8(lut_real_data);
+    const int8x16_t v_lut_wi_i0 = vld1q_s8(lut_imag_data);
+    const int8x16_t v_lut_wr_i1 = vld1q_s8(lut_wr_idx1_data);
+    const int8x16_t v_lut_wi_i1 = vld1q_s8(lut_wi_idx1_data);
+
+    register uint8x16_t v_mask_0f_reg __asm__("v27")   = v_mask_0f;
+    register int8x16_t  v_lut_wr_i0_reg __asm__("v28") = v_lut_wr_i0;
+    register int8x16_t  v_lut_wi_i0_reg __asm__("v29") = v_lut_wi_i0;
+    register int8x16_t  v_lut_wr_i1_reg __asm__("v30") = v_lut_wr_i1;
+    register int8x16_t  v_lut_wi_i1_reg __asm__("v31") = v_lut_wi_i1;
+
+    if (act_tensor) {
+        int32_t sum_ac_total = 0;
+        int32_t sum_ad_total = 0;
+        int32_t sum_bc_total = 0;
+        int32_t sum_bd_total = 0;
+
+        for (int i = 0; i < nb; ++i) {
+            __builtin_prefetch(w + i + 1, 0, 1);
+            __builtin_prefetch(x + i + 1, 0, 1);
+
+            // 累加器初始化（绑定到 caller-saved NEON 寄存器，避免使用 v8..v15 触发函数序言保存/恢复）
+            register int32x4_t acc_ac0 __asm__("v20") = vzero;
+            register int32x4_t acc_ad0 __asm__("v21") = vzero;
+            register int32x4_t acc_bc0 __asm__("v22") = vzero;
+            register int32x4_t acc_bd0 __asm__("v23") = vzero;
+            register int32x4_t acc_ac1 __asm__("v24") = vzero;
+            register int32x4_t acc_ad1 __asm__("v25") = vzero;
+            register int32x4_t acc_bc1 __asm__("v26") = vzero;
+            register int32x4_t acc_bd1 __asm__("v7")  = vzero;
+
+            const uint8_t * GGML_RESTRICT w_ptr   = w[i].qs;
+            const uint8_t * GGML_RESTRICT x_r_ptr = x[i].x_real;
+            const uint8_t * GGML_RESTRICT x_i_ptr = x[i].x_imag;
+
+            // QK_IFAIRY=256, 每次循环处理 128 个元素 (两个 64 组)，核心 dot 用内联汇编
+            for (int j = 0; j < QK_IFAIRY; j += 128) {
+                const uint8_t * GGML_RESTRICT w_iter = w_ptr + (j >> 2);
+                const uint8_t * GGML_RESTRICT xr     = x_r_ptr + j;
+                const uint8_t * GGML_RESTRICT xi     = x_i_ptr + j;
+
+                __asm__ volatile(
+                    // ---- block 0: weights 0..63 ----
+                    "ldr            q0, [%[w]]                  \n"  // w_all_0
+                    "and            v1.16b, v0.16b, %[m0f].16b  \n"  // lo nibble
+                    "ushr           v2.16b, v0.16b, #4          \n"  // hi nibble
+
+                    // Use caller-saved NEON regs (avoid v8..v15) to reduce prologue
+                    // save/restore overhead for this very hot function.
+                    //
+                    // xr0/xr1 -> v3/v4, xi0/xi1 -> v5/v6
+                    "ldp            q3,  q4,  [%[xr]]           \n"
+                    "ldp            q5,  q6,  [%[xi]]           \n"
+
+                    // lo nibble: idx0 -> v16/v17, idx1 -> v18/v19
+                    "tbl            v16.16b, {%[wr0].16b}, v1.16b \n"
+                    "tbl            v17.16b, {%[wi0].16b}, v1.16b \n"
+                    "tbl            v18.16b, {%[wr1].16b}, v1.16b \n"
+                    "tbl            v19.16b, {%[wi1].16b}, v1.16b \n"
+
+                    "sdot           %[ac0].4s, v3.16b,  v16.16b \n"
+                    "sdot           %[ad0].4s, v5.16b,  v16.16b \n"
+                    "sdot           %[bc0].4s, v3.16b,  v17.16b \n"
+                    "sdot           %[bd0].4s, v5.16b,  v17.16b \n"
+
+                    // Accumulator banking: v3/v5 -> bank0, v4/v6 -> bank1.
+                    "sdot           %[ac1].4s, v4.16b,  v18.16b \n"
+                    "sdot           %[ad1].4s, v6.16b,  v18.16b \n"
+                    "sdot           %[bc1].4s, v4.16b,  v19.16b \n"
+                    "sdot           %[bd1].4s, v6.16b,  v19.16b \n"
+
+                    // xr2/xr3 -> v3/v4, xi2/xi3 -> v5/v6
+                    "ldp            q3,  q4,  [%[xr], #32]      \n"
+                    "ldp            q5,  q6,  [%[xi], #32]      \n"
+
+                    // hi nibble: idx2 -> v16/v17, idx3 -> v18/v19
+                    "tbl            v16.16b, {%[wr0].16b}, v2.16b \n"
+                    "tbl            v17.16b, {%[wi0].16b}, v2.16b \n"
+                    "tbl            v18.16b, {%[wr1].16b}, v2.16b \n"
+                    "tbl            v19.16b, {%[wi1].16b}, v2.16b \n"
+
+                    "sdot           %[ac0].4s, v3.16b,  v16.16b \n"
+                    "sdot           %[ad0].4s, v5.16b,  v16.16b \n"
+                    "sdot           %[bc0].4s, v3.16b,  v17.16b \n"
+                    "sdot           %[bd0].4s, v5.16b,  v17.16b \n"
+
+                    "sdot           %[ac1].4s, v4.16b,  v18.16b \n"
+                    "sdot           %[ad1].4s, v6.16b,  v18.16b \n"
+                    "sdot           %[bc1].4s, v4.16b,  v19.16b \n"
+                    "sdot           %[bd1].4s, v6.16b,  v19.16b \n"
+
+                    // ---- block 1: weights 64..127 ----
+                    "ldr            q0, [%[w],  #16]            \n"
+                    "and            v1.16b, v0.16b, %[m0f].16b  \n"
+                    "ushr           v2.16b, v0.16b, #4          \n"
+
+                    "ldp            q3,  q4,  [%[xr], #64]      \n"
+                    "ldp            q5,  q6,  [%[xi], #64]      \n"
+
+                    "tbl            v16.16b, {%[wr0].16b}, v1.16b \n"
+                    "tbl            v17.16b, {%[wi0].16b}, v1.16b \n"
+                    "tbl            v18.16b, {%[wr1].16b}, v1.16b \n"
+                    "tbl            v19.16b, {%[wi1].16b}, v1.16b \n"
+
+                    "sdot           %[ac0].4s, v3.16b,  v16.16b \n"
+                    "sdot           %[ad0].4s, v5.16b,  v16.16b \n"
+                    "sdot           %[bc0].4s, v3.16b,  v17.16b \n"
+                    "sdot           %[bd0].4s, v5.16b,  v17.16b \n"
+
+                    "sdot           %[ac1].4s, v4.16b,  v18.16b \n"
+                    "sdot           %[ad1].4s, v6.16b,  v18.16b \n"
+                    "sdot           %[bc1].4s, v4.16b,  v19.16b \n"
+                    "sdot           %[bd1].4s, v6.16b,  v19.16b \n"
+
+                    "ldp            q3,  q4,  [%[xr], #96]      \n"
+                    "ldp            q5,  q6,  [%[xi], #96]      \n"
+
+                    "tbl            v16.16b, {%[wr0].16b}, v2.16b \n"
+                    "tbl            v17.16b, {%[wi0].16b}, v2.16b \n"
+                    "tbl            v18.16b, {%[wr1].16b}, v2.16b \n"
+                    "tbl            v19.16b, {%[wi1].16b}, v2.16b \n"
+
+                    "sdot           %[ac0].4s, v3.16b,  v16.16b \n"
+                    "sdot           %[ad0].4s, v5.16b,  v16.16b \n"
+                    "sdot           %[bc0].4s, v3.16b,  v17.16b \n"
+                    "sdot           %[bd0].4s, v5.16b,  v17.16b \n"
+
+                    "sdot           %[ac1].4s, v4.16b,  v18.16b \n"
+                    "sdot           %[ad1].4s, v6.16b,  v18.16b \n"
+                    "sdot           %[bc1].4s, v4.16b,  v19.16b \n"
+                    "sdot           %[bd1].4s, v6.16b,  v19.16b \n"
+                    : [ac0] "+w"(acc_ac0), [ad0] "+w"(acc_ad0), [bc0] "+w"(acc_bc0), [bd0] "+w"(acc_bd0),
+                      [ac1] "+w"(acc_ac1), [ad1] "+w"(acc_ad1), [bc1] "+w"(acc_bc1), [bd1] "+w"(acc_bd1)
+                    : [w] "r"(w_iter), [xr] "r"(xr), [xi] "r"(xi), [m0f] "w"(v_mask_0f_reg), [wr0] "w"(v_lut_wr_i0_reg),
+                      [wi0] "w"(v_lut_wi_i0_reg), [wr1] "w"(v_lut_wr_i1_reg), [wi1] "w"(v_lut_wi_i1_reg)
+                    : "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v16", "v17", "v18", "v19", "memory");
+            }  // j loop
+
+            // 合并两个累加 Bank
+            acc_ac0 = vaddq_s32(acc_ac0, acc_ac1);
+            acc_ad0 = vaddq_s32(acc_ad0, acc_ad1);
+            acc_bc0 = vaddq_s32(acc_bc0, acc_bc1);
+            acc_bd0 = vaddq_s32(acc_bd0, acc_bd1);
+
+            // 水平求和
+            const int32_t sum_ac = vaddvq_s32(acc_ac0);
+            const int32_t sum_ad = vaddvq_s32(acc_ad0);
+            const int32_t sum_bc = vaddvq_s32(acc_bc0);
+            const int32_t sum_bd = vaddvq_s32(acc_bd0);
+
+            sum_ac_total += sum_ac;
+            sum_bd_total += sum_bd;
+            sum_bc_total += sum_bc;
+            sum_ad_total += sum_ad;
+        }
+
+        // Load these scales late to reduce register pressure in the hot loop.
+        const float coeff_w_real = GGML_CPU_FP16_TO_FP32(w[0].d_real);
+        const float coeff_w_imag = GGML_CPU_FP16_TO_FP32(w[0].d_imag);
+
+        const float x_real_uniform = GGML_CPU_FP16_TO_FP32(x[0].d_real);
+        const float x_imag_uniform = GGML_CPU_FP16_TO_FP32(x[0].d_imag);
+
+        const float acc_ac_xr_fused = x_real_uniform * (float) sum_ac_total;
+        const float acc_bd_xi_fused = x_imag_uniform * (float) sum_bd_total;
+        const float acc_bc_xr_fused = x_real_uniform * (float) sum_bc_total;
+        const float acc_ad_xi_fused = x_imag_uniform * (float) sum_ad_total;
+
+        sum_real_total = coeff_w_real * acc_ac_xr_fused + coeff_w_imag * acc_bd_xi_fused;
+        sum_imag_total = coeff_w_imag * acc_bc_xr_fused - coeff_w_real * acc_ad_xi_fused;
+    } else {
+        // Accumulate with per-block activation scales (matches generic semantics).
+        float acc_ac_xr = 0.0f;
+        float acc_bd_xi = 0.0f;
+        float acc_bc_xr = 0.0f;
+        float acc_ad_xi = 0.0f;
+
+        for (int i = 0; i < nb; ++i) {
+            __builtin_prefetch(w + i + 1, 0, 1);
+            __builtin_prefetch(x + i + 1, 0, 1);
+
+            // 累加器初始化（绑定到 caller-saved NEON 寄存器，避免使用 v8..v15 触发函数序言保存/恢复）
+            register int32x4_t acc_ac0 __asm__("v20") = vzero;
+            register int32x4_t acc_ad0 __asm__("v21") = vzero;
+            register int32x4_t acc_bc0 __asm__("v22") = vzero;
+            register int32x4_t acc_bd0 __asm__("v23") = vzero;
+            register int32x4_t acc_ac1 __asm__("v24") = vzero;
+            register int32x4_t acc_ad1 __asm__("v25") = vzero;
+            register int32x4_t acc_bc1 __asm__("v26") = vzero;
+            register int32x4_t acc_bd1 __asm__("v7")  = vzero;
+
+            const uint8_t * GGML_RESTRICT w_ptr   = w[i].qs;
+            const uint8_t * GGML_RESTRICT x_r_ptr = x[i].x_real;
+            const uint8_t * GGML_RESTRICT x_i_ptr = x[i].x_imag;
+
+            // QK_IFAIRY=256, 每次循环处理 128 个元素 (两个 64 组)，核心 dot 用内联汇编
+            for (int j = 0; j < QK_IFAIRY; j += 128) {
+                const uint8_t * GGML_RESTRICT w_iter = w_ptr + (j >> 2);
+                const uint8_t * GGML_RESTRICT xr     = x_r_ptr + j;
+                const uint8_t * GGML_RESTRICT xi     = x_i_ptr + j;
+
+                __asm__ volatile(
+                    // ---- block 0: weights 0..63 ----
+                    "ldr            q0, [%[w]]                  \n"  // w_all_0
+                    "and            v1.16b, v0.16b, %[m0f].16b  \n"  // lo nibble
+                    "ushr           v2.16b, v0.16b, #4          \n"  // hi nibble
+
+                    // Use caller-saved NEON regs (avoid v8..v15) to reduce prologue
+                    // save/restore overhead for this very hot function.
+                    //
+                    // xr0/xr1 -> v3/v4, xi0/xi1 -> v5/v6
+                    "ldp            q3,  q4,  [%[xr]]           \n"
+                    "ldp            q5,  q6,  [%[xi]]           \n"
+
+                    // lo nibble: idx0 -> v16/v17, idx1 -> v18/v19
+                    "tbl            v16.16b, {%[wr0].16b}, v1.16b \n"
+                    "tbl            v17.16b, {%[wi0].16b}, v1.16b \n"
+                    "tbl            v18.16b, {%[wr1].16b}, v1.16b \n"
+                    "tbl            v19.16b, {%[wi1].16b}, v1.16b \n"
+
+                    "sdot           %[ac0].4s, v3.16b,  v16.16b \n"
+                    "sdot           %[ad0].4s, v5.16b,  v16.16b \n"
+                    "sdot           %[bc0].4s, v3.16b,  v17.16b \n"
+                    "sdot           %[bd0].4s, v5.16b,  v17.16b \n"
+
+                    // Accumulator banking: v3/v5 -> bank0, v4/v6 -> bank1.
+                    "sdot           %[ac1].4s, v4.16b,  v18.16b \n"
+                    "sdot           %[ad1].4s, v6.16b,  v18.16b \n"
+                    "sdot           %[bc1].4s, v4.16b,  v19.16b \n"
+                    "sdot           %[bd1].4s, v6.16b,  v19.16b \n"
+
+                    // xr2/xr3 -> v3/v4, xi2/xi3 -> v5/v6
+                    "ldp            q3,  q4,  [%[xr], #32]      \n"
+                    "ldp            q5,  q6,  [%[xi], #32]      \n"
+
+                    // hi nibble: idx2 -> v16/v17, idx3 -> v18/v19
+                    "tbl            v16.16b, {%[wr0].16b}, v2.16b \n"
+                    "tbl            v17.16b, {%[wi0].16b}, v2.16b \n"
+                    "tbl            v18.16b, {%[wr1].16b}, v2.16b \n"
+                    "tbl            v19.16b, {%[wi1].16b}, v2.16b \n"
+
+                    "sdot           %[ac0].4s, v3.16b,  v16.16b \n"
+                    "sdot           %[ad0].4s, v5.16b,  v16.16b \n"
+                    "sdot           %[bc0].4s, v3.16b,  v17.16b \n"
+                    "sdot           %[bd0].4s, v5.16b,  v17.16b \n"
+
+                    "sdot           %[ac1].4s, v4.16b,  v18.16b \n"
+                    "sdot           %[ad1].4s, v6.16b,  v18.16b \n"
+                    "sdot           %[bc1].4s, v4.16b,  v19.16b \n"
+                    "sdot           %[bd1].4s, v6.16b,  v19.16b \n"
+
+                    // ---- block 1: weights 64..127 ----
+                    "ldr            q0, [%[w],  #16]            \n"
+                    "and            v1.16b, v0.16b, %[m0f].16b  \n"
+                    "ushr           v2.16b, v0.16b, #4          \n"
+
+                    "ldp            q3,  q4,  [%[xr], #64]      \n"
+                    "ldp            q5,  q6,  [%[xi], #64]      \n"
+
+                    "tbl            v16.16b, {%[wr0].16b}, v1.16b \n"
+                    "tbl            v17.16b, {%[wi0].16b}, v1.16b \n"
+                    "tbl            v18.16b, {%[wr1].16b}, v1.16b \n"
+                    "tbl            v19.16b, {%[wi1].16b}, v1.16b \n"
+
+                    "sdot           %[ac0].4s, v3.16b,  v16.16b \n"
+                    "sdot           %[ad0].4s, v5.16b,  v16.16b \n"
+                    "sdot           %[bc0].4s, v3.16b,  v17.16b \n"
+                    "sdot           %[bd0].4s, v5.16b,  v17.16b \n"
+
+                    "sdot           %[ac1].4s, v4.16b,  v18.16b \n"
+                    "sdot           %[ad1].4s, v6.16b,  v18.16b \n"
+                    "sdot           %[bc1].4s, v4.16b,  v19.16b \n"
+                    "sdot           %[bd1].4s, v6.16b,  v19.16b \n"
+
+                    "ldp            q3,  q4,  [%[xr], #96]      \n"
+                    "ldp            q5,  q6,  [%[xi], #96]      \n"
+
+                    "tbl            v16.16b, {%[wr0].16b}, v2.16b \n"
+                    "tbl            v17.16b, {%[wi0].16b}, v2.16b \n"
+                    "tbl            v18.16b, {%[wr1].16b}, v2.16b \n"
+                    "tbl            v19.16b, {%[wi1].16b}, v2.16b \n"
+
+                    "sdot           %[ac0].4s, v3.16b,  v16.16b \n"
+                    "sdot           %[ad0].4s, v5.16b,  v16.16b \n"
+                    "sdot           %[bc0].4s, v3.16b,  v17.16b \n"
+                    "sdot           %[bd0].4s, v5.16b,  v17.16b \n"
+
+                    "sdot           %[ac1].4s, v4.16b,  v18.16b \n"
+                    "sdot           %[ad1].4s, v6.16b,  v18.16b \n"
+                    "sdot           %[bc1].4s, v4.16b,  v19.16b \n"
+                    "sdot           %[bd1].4s, v6.16b,  v19.16b \n"
+                    : [ac0] "+w"(acc_ac0), [ad0] "+w"(acc_ad0), [bc0] "+w"(acc_bc0), [bd0] "+w"(acc_bd0),
+                      [ac1] "+w"(acc_ac1), [ad1] "+w"(acc_ad1), [bc1] "+w"(acc_bc1), [bd1] "+w"(acc_bd1)
+                    : [w] "r"(w_iter), [xr] "r"(xr), [xi] "r"(xi), [m0f] "w"(v_mask_0f_reg), [wr0] "w"(v_lut_wr_i0_reg),
+                      [wi0] "w"(v_lut_wi_i0_reg), [wr1] "w"(v_lut_wr_i1_reg), [wi1] "w"(v_lut_wi_i1_reg)
+                    : "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v16", "v17", "v18", "v19", "memory");
+            }  // j loop
+
+            // 合并两个累加 Bank
+            acc_ac0 = vaddq_s32(acc_ac0, acc_ac1);
+            acc_ad0 = vaddq_s32(acc_ad0, acc_ad1);
+            acc_bc0 = vaddq_s32(acc_bc0, acc_bc1);
+            acc_bd0 = vaddq_s32(acc_bd0, acc_bd1);
+
+            // 水平求和
+            const int32_t sum_ac = vaddvq_s32(acc_ac0);
+            const int32_t sum_ad = vaddvq_s32(acc_ad0);
+            const int32_t sum_bc = vaddvq_s32(acc_bc0);
+            const int32_t sum_bd = vaddvq_s32(acc_bd0);
+
+            const float x_real = GGML_CPU_FP16_TO_FP32(x[i].d_real);
+            const float x_imag = GGML_CPU_FP16_TO_FP32(x[i].d_imag);
+
+            acc_ac_xr += x_real * (float) sum_ac;
+            acc_bd_xi += x_imag * (float) sum_bd;
+            acc_bc_xr += x_real * (float) sum_bc;
+            acc_ad_xi += x_imag * (float) sum_ad;
+        }
+
+        // Load these scales late to reduce register pressure in the hot loop.
+        const float coeff_w_real = GGML_CPU_FP16_TO_FP32(w[0].d_real);
+        const float coeff_w_imag = GGML_CPU_FP16_TO_FP32(w[0].d_imag);
+
+        sum_real_total = coeff_w_real * acc_ac_xr + coeff_w_imag * acc_bd_xi;
+        sum_imag_total = coeff_w_imag * acc_bc_xr - coeff_w_real * acc_ad_xi;
+    }
+
+    ((ggml_bf16_t *) s)[0] = GGML_FP32_TO_BF16(sum_real_total);
+    ((ggml_bf16_t *) s)[1] = GGML_FP32_TO_BF16(sum_imag_total);
+
+#else
+    ggml_vec_dot_ifairy_q16_K_generic(n, s, bs, vx, bx, vy, by, nrc);
 #endif
 }
 
@@ -3647,4 +4374,3 @@ void ggml_vec_dot_iq4_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
     ggml_vec_dot_iq4_xs_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
 #endif
 }
-

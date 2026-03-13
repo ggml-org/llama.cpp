@@ -70,6 +70,8 @@ enum llm_arch {
     LLM_ARCH_GLM4,
     LLM_ARCH_GLM4_MOE,
     LLM_ARCH_BITNET,
+    LLM_ARCH_IFAIRY,
+    LLM_ARCH_FAIRY2I,
     LLM_ARCH_T5,
     LLM_ARCH_T5ENCODER,
     LLM_ARCH_JAIS,
@@ -264,6 +266,8 @@ enum llm_kv {
 
 enum llm_tensor {
     LLM_TENSOR_TOKEN_EMBD,
+    LLM_TENSOR_TOKEN_EMBD_IMAG,
+    LLM_TENSOR_TOKEN_EMBD_REAL,
     LLM_TENSOR_TOKEN_EMBD_NORM,
     LLM_TENSOR_TOKEN_TYPES,
     LLM_TENSOR_POS_EMBD,
@@ -295,7 +299,7 @@ enum llm_tensor {
     LLM_TENSOR_FFN_GATE_EXP,
     LLM_TENSOR_FFN_UP_EXP,
     LLM_TENSOR_FFN_NORM_EXPS,
-    LLM_TENSOR_FFN_DOWN_EXPS, // merged experts
+    LLM_TENSOR_FFN_DOWN_EXPS,  // merged experts
     LLM_TENSOR_FFN_GATE_EXPS,
     LLM_TENSOR_FFN_UP_EXPS,
     LLM_TENSOR_FFN_DOWN_SHEXP,
@@ -307,22 +311,22 @@ enum llm_tensor {
     LLM_TENSOR_LAYER_OUT_NORM,
     LLM_TENSOR_POST_ATTN_NORM,
     LLM_TENSOR_POST_MLP_NORM,
-    LLM_TENSOR_PER_LAYER_TOKEN_EMBD, // gemma3n
-    LLM_TENSOR_PER_LAYER_MODEL_PROJ, // gemma3n
-    LLM_TENSOR_PER_LAYER_INP_GATE,   // gemma3n
-    LLM_TENSOR_PER_LAYER_PROJ,       // gemma3n
-    LLM_TENSOR_PER_LAYER_PROJ_NORM,  // gemma3n
-    LLM_TENSOR_PER_LAYER_POST_NORM,  // gemma3n
-    LLM_TENSOR_ALTUP_PROJ,           // gemma3n
-    LLM_TENSOR_ALTUP_UNEMBD_PROJ,    // gemma3n
-    LLM_TENSOR_ALTUP_CORRECT_COEF,   // gemma3n
-    LLM_TENSOR_ALTUP_CORRECT_SCALE,  // gemma3n
-    LLM_TENSOR_ALTUP_PREDICT_COEF,   // gemma3n
-    LLM_TENSOR_ALTUP_ROUTER,         // gemma3n
-    LLM_TENSOR_ALTUP_ROUTER_NORM,    // gemma3n
-    LLM_TENSOR_LAUREL_L,             // gemma3n
-    LLM_TENSOR_LAUREL_R,             // gemma3n
-    LLM_TENSOR_LAUREL_POST_NORM,     // gemma3n
+    LLM_TENSOR_PER_LAYER_TOKEN_EMBD,  // gemma3n
+    LLM_TENSOR_PER_LAYER_MODEL_PROJ,  // gemma3n
+    LLM_TENSOR_PER_LAYER_INP_GATE,    // gemma3n
+    LLM_TENSOR_PER_LAYER_PROJ,        // gemma3n
+    LLM_TENSOR_PER_LAYER_PROJ_NORM,   // gemma3n
+    LLM_TENSOR_PER_LAYER_POST_NORM,   // gemma3n
+    LLM_TENSOR_ALTUP_PROJ,            // gemma3n
+    LLM_TENSOR_ALTUP_UNEMBD_PROJ,     // gemma3n
+    LLM_TENSOR_ALTUP_CORRECT_COEF,    // gemma3n
+    LLM_TENSOR_ALTUP_CORRECT_SCALE,   // gemma3n
+    LLM_TENSOR_ALTUP_PREDICT_COEF,    // gemma3n
+    LLM_TENSOR_ALTUP_ROUTER,          // gemma3n
+    LLM_TENSOR_ALTUP_ROUTER_NORM,     // gemma3n
+    LLM_TENSOR_LAUREL_L,              // gemma3n
+    LLM_TENSOR_LAUREL_R,              // gemma3n
+    LLM_TENSOR_LAUREL_POST_NORM,      // gemma3n
     LLM_TENSOR_SSM_IN,
     LLM_TENSOR_SSM_CONV1D,
     LLM_TENSOR_SSM_X,

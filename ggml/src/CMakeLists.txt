@@ -206,11 +206,20 @@ add_library(ggml-base
             ggml-threading.h
             ggml-quants.c
             ggml-quants.h
+            ggml-ifairy-lut.cpp
+            ggml-ifairy-lut-impl.h
+            ggml-ifairy-lut-preprocess.cpp
+            ggml-ifairy-lut-qgemm.cpp
+            ggml-ifairy-lut-transform.cpp
             gguf.cpp)
 
 target_include_directories(ggml-base PRIVATE .)
 if (GGML_BACKEND_DL)
     target_compile_definitions(ggml-base PUBLIC GGML_BACKEND_DL)
+endif()
+
+if (GGML_IFAIRY_LUT_CPU)
+    target_compile_definitions(ggml-base PUBLIC GGML_IFAIRY_LUT_CPU)
 endif()
 
 add_library(ggml
