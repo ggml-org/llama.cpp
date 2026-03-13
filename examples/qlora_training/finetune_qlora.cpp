@@ -217,11 +217,12 @@ static std::vector<training_sample> load_jsonl(
                         break;
                     }
                 }
-                if (last_assistant_content.find("Error:") != std::string::npos ||
-                    last_assistant_content.find("error:") != std::string::npos) {
-                    LOG_DBG("%s: skipping line %d — assistant response contains error marker\n", __func__, lineno);
-                    continue;
-                }
+                // // this should be done on the python side...
+                // if (last_assistant_content.find("Error:") != std::string::npos ||
+                //     last_assistant_content.find("error:") != std::string::npos) {
+                //     LOG_DBG("%s: skipping line %d — assistant response contains error marker\n", __func__, lineno);
+                //     continue;
+                // }
             }
 
             // Split into prompt (no loss) + last assistant response (loss).
@@ -262,11 +263,12 @@ static std::vector<training_sample> load_jsonl(
             }
         } else if (j.contains("prompt") && j.contains("response")) {
             response_text = j["response"].get<std::string>();
-            if (response_text.find("Error:") != std::string::npos ||
-                response_text.find("error:") != std::string::npos) {
-                LOG_DBG("%s: skipping line %d — response contains error marker\n", __func__, lineno);
-                continue;
-            }
+            // // this should be done on the python side...
+            // if (response_text.find("Error:") != std::string::npos ||
+            //     response_text.find("error:") != std::string::npos) {
+            //     LOG_DBG("%s: skipping line %d — response contains error marker\n", __func__, lineno);
+            //     continue;
+            // }
             prompt_text = j["prompt"].get<std::string>();
         } else if (j.contains("text")) {
             response_text = j["text"].get<std::string>();
