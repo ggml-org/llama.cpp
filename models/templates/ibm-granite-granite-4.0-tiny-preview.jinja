@@ -1,0 +1,45 @@
+{# Granite 4.0 Chat Template #}
+{# Alias tools -> available_tools for OpenAI-compatible API #}
+{%- if tools and not available_tools -%}
+    {%- set available_tools = tools -%}
+{%- endif -%}
+{%- if messages[0]['role'] == 'system' %}
+     {%- set system_message = messages[0]['content'] %}
+     {%- set loop_messages = messages[1:] %}
+ {%- else %}
+     {%- set system_message = "Knowledge Cutoff Date: April 2025. Today's Date: " + strftime_now('%B %d, %Y') + ". You are Granite, developed by IBM." %}
+     {%- if available_tools %}
+         {%- set system_message = system_message + " You are a helpful assistant with access to the following tools. When a tool is required to answer the user's query, respond only with <|tool_call|> followed by a JSON list of tools used. If a tool does not exist in the provided list of tools, notify the user that you do not have the ability to fulfill the request." %}
+     {%- else %}
+         {%- set system_message = system_message + " You are a helpful AI assistant." %}
+     {%- endif %}
+     {%- set loop_messages = messages %}
+ {%- endif %}
+ {{- '<|start_of_role|>system<|end_of_role|>' + system_message + '<|end_of_text|>
+' }}
+ {%- if available_tools %}
+     {{- '<|start_of_role|>available_tools<|end_of_role|>' }}
+     {{- available_tools | tojson(indent=4) }}
+     {{- '<|end_of_text|>
+' }}
+ {%- endif %}
+ {%- for message in loop_messages %}
+     {%- if message['role'] == 'assistant' and message.get('tool_calls') %}
+         {{- '<|start_of_role|>assistant<|end_of_role|><|tool_call|>' }}
+         {{- message['tool_calls'] | tojson }}
+         {{- '<|end_of_text|>
+' }}
+     {%- elif message['role'] == 'assistant_tool_call' %}
+         {{- '<|start_of_role|>assistant<|end_of_role|><|tool_call|>' + message['content'] + '<|end_of_text|>
+' }}
+     {%- elif message['role'] == 'tool' or message['role'] == 'tool_response' %}
+         {{- '<|start_of_role|>tool_response<|end_of_role|>' + message['content'] + '<|end_of_text|>
+' }}
+     {%- else %}
+         {{- '<|start_of_role|>' + message['role'] + '<|end_of_role|>' + message['content'] + '<|end_of_text|>
+' }}
+     {%- endif %}
+     {%- if loop.last and add_generation_prompt %}
+         {{- '<|start_of_role|>assistant<|end_of_role|>' }}
+     {%- endif %}
+ {%- endfor %}
