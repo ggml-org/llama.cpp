@@ -13800,6 +13800,7 @@ static void ggml_vk_synchronize(ggml_backend_vk_context * ctx) {
         ctx->submit_pending = false;
         if (cmd_buf) {
             cmd_buf->in_use = false;
+            cmd_buf->buf.reset();
         }
     }
 
@@ -15709,6 +15710,7 @@ static void ggml_backend_vk_device_event_synchronize(ggml_backend_dev_t dev, ggm
         // Only flag for reuse if it hasn't been reused already
         if (vkev->cmd_buffer_use_counter == vkev->cmd_buffer->use_counter) {
             vkev->cmd_buffer->in_use = false;
+            vkev->cmd_buffer->buf.reset();
         }
         vkev->cmd_buffer = nullptr;
     }
