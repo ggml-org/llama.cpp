@@ -8,28 +8,8 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.37.0"
-#define CPPHTTPLIB_VERSION_NUM "0x002500"
-
-/*
- * Platform compatibility check
- */
-
-#if defined(_WIN32) && !defined(_WIN64)
-#if defined(_MSC_VER)
-#pragma message(                                                               \
-    "cpp-httplib doesn't support 32-bit Windows. Please use a 64-bit compiler.")
-#else
-#warning                                                                       \
-    "cpp-httplib doesn't support 32-bit Windows. Please use a 64-bit compiler."
-#endif
-#elif defined(__SIZEOF_POINTER__) && __SIZEOF_POINTER__ < 8
-#warning                                                                       \
-    "cpp-httplib doesn't support 32-bit platforms. Please use a 64-bit compiler."
-#elif defined(__SIZEOF_SIZE_T__) && __SIZEOF_SIZE_T__ < 8
-#warning                                                                       \
-    "cpp-httplib doesn't support platforms where size_t is less than 64 bits."
-#endif
+#define CPPHTTPLIB_VERSION "0.37.1"
+#define CPPHTTPLIB_VERSION_NUM "0x002501"
 
 #ifdef _WIN32
 #if defined(_WIN32_WINNT) && _WIN32_WINNT < 0x0A00
@@ -2797,7 +2777,7 @@ inline size_t get_header_value_u64(const Headers &headers,
   std::advance(it, static_cast<ssize_t>(id));
   if (it != rng.second) {
     if (is_numeric(it->second)) {
-      return std::strtoull(it->second.data(), nullptr, 10);
+      return static_cast<size_t>(std::strtoull(it->second.data(), nullptr, 10));
     } else {
       is_invalid_value = true;
     }
