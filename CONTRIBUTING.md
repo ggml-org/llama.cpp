@@ -45,7 +45,6 @@ Before submitting your PR:
     - provide [performance data](https://github.com/ggml-org/llama.cpp/tree/master/tools/llama-bench) for the new type in comparison to types of similar size on pure CPU
   - Avoid combining unrelated changes in a single PR
   - For intricate features, consider opening a feature request first to discuss and align expectations
-  - When adding support for a new model or feature, focus on **CPU support only** in the initial PR unless you have a good reason not to. Add support for other backends like CUDA in follow-up PRs
 - Consider allowing write access to your branch for faster reviews, as reviewers can push commits directly
 - If you are a new contributor, limit your open PRs to 1.
 
