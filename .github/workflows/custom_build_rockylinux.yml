@@ -56,12 +56,25 @@ jobs:
             which
           dnf clean all
 
-      - name: Checkout source at release tag
+      - name: Checkout source
         uses: actions/checkout@v4
         with:
-          ref: ${{ env.TAG_NAME }}
           submodules: recursive
           fetch-depth: 0
+
+      - name: Create tag if it does not exist
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git config --global --add safe.directory "${GITHUB_WORKSPACE:-/__w/llama.cpp/llama.cpp}"
+          if git rev-parse "refs/tags/${TAG_NAME}" >/dev/null 2>&1; then
+            echo "Tag ${TAG_NAME} already exists, checking out."
+            git checkout "${TAG_NAME}"
+          else
+            echo "Tag ${TAG_NAME} does not exist, creating it on HEAD."
+            git tag "${TAG_NAME}"
+            git push origin "refs/tags/${TAG_NAME}"
+          fi
 
       - name: Show build environment
         shell: bash
