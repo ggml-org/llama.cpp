@@ -1,3 +1,4 @@
+#include "llama.h"
 #include "sampling.h"
 #include "log.h"
 
@@ -164,19 +165,21 @@ static LlgTokenizer * llama_sampler_llg_new_tokenizer(const llama_vocab * vocab)
 
         llama_token token = i;
         auto        dp    = (char *) token_bytes + offset;
-        auto        size  = llama_detokenize(vocab, &token, 1, dp, max_token, false, false);
+
+        const auto attrs      = llama_vocab_get_attr(vocab, token);
+        bool       is_special = (attrs & LLAMA_TOKEN_ATTR_CONTROL) || (attrs & LLAMA_TOKEN_ATTR_USER_DEFINED);
+
+        if (is_special) {
+            *dp = '\xff'; // special token prefix marker
+            dp += 1;
+        }
+
+        auto size = llama_detokenize(vocab, &token, 1, dp, max_token, false, true);
         if (size < 0) {
             GGML_ABORT("llama_detokenize failed\n");
         }
-        if (size == 0) {
-            size = llama_detokenize(vocab, &token, 1, dp + 1, max_token - 1, false, true);
-            if (size < 0) {
-                GGML_ABORT("llama_detokenize failed\n");
-            }
-            if (size != 0) {
-                *dp = '\xff';  // special token prefix marker
-                size += 1;
-            }
+        if (is_special) {
+            size += 1;
         }
 
         token_lens[i] = size;
