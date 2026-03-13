@@ -138,9 +138,8 @@ static void ggml_dyn_tallocr_insert_block(struct tallocr_chunk * chunk, size_t o
         insert_pos++;
     }
     // shift all blocks from insert_pos onward to make room for the new block
-    for (int i = chunk->n_free_blocks; i > insert_pos; i--) {
-        chunk->free_blocks[i] = chunk->free_blocks[i-1];
-    }
+    memmove(&chunk->free_blocks[insert_pos + 1], &chunk->free_blocks[insert_pos], (chunk->n_free_blocks - insert_pos) * sizeof(struct free_block));
+
     // insert the new block
     chunk->free_blocks[insert_pos].offset = offset;
     chunk->free_blocks[insert_pos].size = size;
