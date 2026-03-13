@@ -3,6 +3,7 @@
 #include "chat.h"
 #include "common.h"
 #include "json-schema-to-grammar.h"
+#include "log.h"
 #include "nlohmann/json.hpp"
 
 #include <stdexcept>
@@ -182,7 +183,10 @@ common_peg_parser analyze_tools::build_parser(parser_build_context & ctx) const 
         case tool_format::TAG_WITH_TAGGED:
             return build_tool_parser_tag_tagged(ctx);
         default:
-            GGML_ABORT("Unable to create tool parser");
+            LOG_ERR("[ERROR] Template seems to support tool calls, but failed to determine tool format. Tool calling will not work properly. "
+                "Check for a fixed template for your model in the models/templates directory of your llama.cpp installation or "
+                "report an issue at https://github.com/ggml-org/llama.cpp/issues\n");
+            return ctx.p.eps();
     }
 }
 
