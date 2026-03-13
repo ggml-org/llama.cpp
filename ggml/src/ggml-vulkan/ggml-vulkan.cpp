@@ -827,6 +827,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_rwkv_wkv7_f32;
     // [size_idx][kda] where size_idx: 0=d32, 1=d64, 2=d128
     vk_pipeline pipeline_gated_delta_net[3][2];
+    vk_pipeline pipeline_gated_delta_net_f16[3][2];
     vk_pipeline pipeline_ssm_scan_f32_d128;
     vk_pipeline pipeline_ssm_scan_f32_d256;
     vk_pipeline pipeline_ssm_conv_f32;
@@ -4589,12 +4590,23 @@ static void ggml_vk_load_shaders(vk_device& device) {
             {"gated_delta_net_f32_d64",     "gated_delta_net_f32_d64_kda"},
             {"gated_delta_net_f32_d128",    "gated_delta_net_f32_d128_kda"},
         };
+        const char * gdn_names_f16[][2] = {
+            {"gated_delta_net_f16_d32",     "gated_delta_net_f16_d32_kda"},
+            {"gated_delta_net_f16_d64",     "gated_delta_net_f16_d64_kda"},
+            {"gated_delta_net_f16_d128",    "gated_delta_net_f16_d128_kda"},
+        };
         for (uint32_t si = 0; si < 3; si++) {
             for (uint32_t kda = 0; kda < 2; kda++) {
                 ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net[si][kda],
                     gdn_names[si][kda], gated_delta_net_f32_len, gated_delta_net_f32_data,
                     "main", 7, sizeof(vk_op_gated_delta_net_push_constants),
                     {1, 1, 1}, {gdn_sizes[si], kda}, 1);
+                if (device->fp16) {
+                    ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_f16[si][kda],
+                        gdn_names_f16[si][kda], gated_delta_net_f16_len, gated_delta_net_f16_data,
+                        "main", 7, sizeof(vk_op_gated_delta_net_push_constants),
+                        {1, 1, 1}, {gdn_sizes[si], kda}, 1);
+                }
             }
         }
     }
@@ -9539,6 +9551,9 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
                 case 64:  si = 1; break;
                 case 128: si = 2; break;
                 default: return nullptr;
+            }
+            if (ctx->device->fp16 && ctx->device->pipeline_gated_delta_net_f16[si][kda]) {
+                return ctx->device->pipeline_gated_delta_net_f16[si][kda];
             }
             return ctx->device->pipeline_gated_delta_net[si][kda];
         }
