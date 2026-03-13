@@ -939,20 +939,20 @@ struct vk_subbuffer {
     }
 };
 
+struct vk_semaphore {
+    vk::Semaphore s;
+    uint64_t value;
+};
+
 // vk_event is used for the event-related backend interfaces. It uses 'event' for
-// event_wait and 'fence' for event_synchronize. Polling on an event for
+// event_wait and a timeline semaphore for event_synchronize. Polling on an event for
 // event_synchronize wouldn't be sufficient to wait for command buffers to complete,
 // and would lead to validation errors.
 struct vk_event {
     vk::Event event;
-    vk::Fence fence;
+    vk_semaphore tl_semaphore;
     vk_command_buffer* cmd_buffer = nullptr;
     uint64_t cmd_buffer_use_counter = 0;
-};
-
-struct vk_semaphore {
-    vk::Semaphore s;
-    uint64_t value;
 };
 
 struct vk_submission {
@@ -2787,6 +2787,15 @@ static void ggml_vk_sync_buffers(ggml_backend_vk_context* ctx, vk_context& subct
         } },
         {},
         {}
+    );
+}
+
+static void ggml_vk_reset_event(vk_context& ctx, vk::Event& event) {
+    VK_LOG_DEBUG("ggml_vk_set_event()");
+
+    ctx->s->buffer->buf.resetEvent(
+        event,
+        ctx->p->q->stage_flags
     );
 }
 
@@ -14864,14 +14873,14 @@ static void ggml_backend_vk_event_record(ggml_backend_t backend, ggml_backend_ev
 
     // the backend interface doesn't have an explicit reset, so reset it here
     // before we record the command to set it
-    ctx->device->device.resetEvent(vkev->event);
-    ctx->device->device.resetFences({ vkev->fence });
-
+    ggml_vk_reset_event(compute_ctx, vkev->event);
     ggml_vk_set_event(compute_ctx, vkev->event);
 
+    vkev->tl_semaphore.value++;
+    compute_ctx->s->signal_semaphores.push_back(vkev->tl_semaphore);
     ggml_vk_ctx_end(compute_ctx);
 
-    ggml_vk_submit(compute_ctx, {vkev->fence});
+    ggml_vk_submit(compute_ctx, {});
     ctx->submit_pending = true;
     vkev->cmd_buffer = cmd_buf;
     vkev->cmd_buffer_use_counter = cmd_buf->use_counter;
@@ -15677,8 +15686,12 @@ static ggml_backend_event_t ggml_backend_vk_device_event_new(ggml_backend_dev_t 
 
     // The event/fence is expected to initially be in the signaled state.
     vkev->event = device->device.createEvent({});
-    vkev->fence = device->device.createFence({vk::FenceCreateFlagBits::eSignaled});
     device->device.setEvent(vkev->event);
+
+    vk::SemaphoreTypeCreateInfo tci{ vk::SemaphoreType::eTimeline, 0 };
+    vk::SemaphoreCreateInfo ci{};
+    ci.setPNext(&tci);
+    vkev->tl_semaphore = { device->device.createSemaphore(ci), 0 };
 
     return new ggml_backend_event {
         /* .device  = */ dev,
@@ -15692,7 +15705,7 @@ static void ggml_backend_vk_device_event_free(ggml_backend_dev_t dev, ggml_backe
 
     vk_event *vkev = (vk_event *)event->context;
 
-    device->device.destroyFence(vkev->fence);
+    device->device.destroySemaphore(vkev->tl_semaphore.s);
     device->device.destroyEvent(vkev->event);
     delete vkev;
     delete event;
@@ -15704,7 +15717,9 @@ static void ggml_backend_vk_device_event_synchronize(ggml_backend_dev_t dev, ggm
     auto device = ggml_vk_get_device(ctx->device);
     vk_event *vkev = (vk_event *)event->context;
 
-    VK_CHECK(device->device.waitForFences({ vkev->fence }, true, UINT64_MAX), "event_synchronize");
+    vk::SemaphoreWaitInfo swi{vk::SemaphoreWaitFlags{}, { vkev->tl_semaphore.s }, { vkev->tl_semaphore.value }};
+    VK_CHECK(device->device.waitSemaphores(swi, UINT64_MAX), "event_synchronize");
+
     // Finished using current command buffer so we flag for reuse
     if (vkev->cmd_buffer) {
         // Only flag for reuse if it hasn't been reused already
