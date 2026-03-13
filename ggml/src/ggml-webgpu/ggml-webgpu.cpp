@@ -529,14 +529,17 @@ static void ggml_backend_webgpu_wait(webgpu_global_context &          ctx,
 
     if (block) {
         for (auto & sub : subs) {
-            // TODO: bubble this status up to caller?
+#ifdef GGML_WEBGPU_GPU_PROFILE
             bool failed = false;
+#endif
             while (!sub.submit_done.completed) {
                 auto waitStatus = ctx->instance.WaitAny(1, &sub.submit_done, UINT64_MAX);
                 if (!ggml_backend_webgpu_handle_wait_status(waitStatus)) {
                     // Since we wait with UINT64_MAX, we should not time out and only error here.
                     // Ignore the profiling future.
+#ifdef GGML_WEBGPU_GPU_PROFILE
                     failed = true;
+#endif
                     break;
                 }
             }
