@@ -5,7 +5,7 @@ on:
 
 jobs:
   linux:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@v6
         with:
@@ -14,7 +14,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt update
-          sudo apt install -y build-essential tcl
+          sudo apt install -y build-essential tcl cmake
 
       - name: Build
         run: |
