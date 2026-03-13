@@ -2746,7 +2746,7 @@ static block_q4_0x4 make_block_q4_0x4(block_q4_0 * in, unsigned int blck_size_in
         out.d[i] = in[i].d;
     }
 
-    // Q4_0 = 32, so what has 16 bytes per block? 16 * 4 = 64 bytes total 
+    // Q4_0 = 32, so what has 16 bytes per block? 16 * 4 = 64 bytes total
     static_assert(sizeof(block_q4_0x4::qs) == 64, "Unexpected block_q4_0x4 size");
     static_assert(sizeof(block_q4_0::qs) == 16, "Unexpected block_q4_0 size");
 
@@ -2765,7 +2765,7 @@ static block_q4_0x4 make_block_q4_0x4(block_q4_0 * in, unsigned int blck_size_in
             }
 
             // Copies 8 bytes with memcpy (but GCC still gives a warning)
-            // Solution: use memcpy with a temporary pointer to avoid aliasing problems 
+            // Solution: use memcpy with a temporary pointer to avoid aliasing problems
             uint64_t elems;
             std::memcpy(&elems, &in[src_id].qs[src_offset], sizeof(uint64_t));
             elems ^= xor_mask;
@@ -2796,25 +2796,25 @@ static block_q4_0x4 make_block_q4_0x4(block_q4_0 * in, unsigned int blck_size_in
 
 static block_q4_Kx8 make_block_q4_Kx8(block_q4_K * in, unsigned int blck_size_interleave) {
     block_q4_Kx8 out;
-    
-    // Copy deltas and dmins (8 blocks) 
+
+    // Copy deltas and dmins (8 blocks)
     for (int i = 0; i < 8; i++) {
         out.d[i] = in[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d;
         out.dmin[i] = in[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.dmin;
     }
 
-    // Guaranteed size (QK_K = 256 → qs = 128 bytes/block → 128*8 = 1024 bytes) 
+    // Guaranteed size (QK_K = 256 → qs = 128 bytes/block → 128*8 = 1024 bytes)
     static_assert(sizeof(block_q4_Kx8::qs) == 1024, "Unexpected block_q4_Kx8::qs size");
     static_assert(sizeof(block_q4_K::qs) == 128, "Unexpected block_q4_K::qs size");
 
     const int end = QK_K * 4 / blck_size_interleave; // 1024 / blck_size_interleave
 
-    // Only supports interleave 8 (as used in repackaging). 
+    // Only supports interleave 8 (as used in repackaging).
     if (blck_size_interleave != 8) {
         GGML_ASSERT(false && "Unsupported interleave block size for q4_Kx8");
     }
 
-    // Interleave Q4_K quants: 8 bytes at a time 
+    // Interleave Q4_K quants: 8 bytes at a time
     for (int i = 0; i < end; ++i) {
         int src_id = i % 8;
         int src_offset = (i / 8) * blck_size_interleave; // 0, 8, ..., 112
