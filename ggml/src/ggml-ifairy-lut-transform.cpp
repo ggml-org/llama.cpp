@@ -53,7 +53,7 @@ struct ifairy_lut_index_cache_entry {
 static std::unordered_map<ifairy_lut_index_cache_key, ifairy_lut_index_cache_entry, ifairy_lut_index_cache_key_hash>
     g_ifairy_lut_index_cache;
 
-// iFairy 3-weight LUT implementation (CPU backend).
+// iFairy 2-weight LUT implementation (CPU backend).
 // Integrated into ggml mul_mat routing under GGML_IFAIRY_LUT_CPU.
 
 void ggml_ifairy_lut_init(void) {
