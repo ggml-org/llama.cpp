@@ -830,6 +830,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_gated_delta_net_chunk_intra;
     vk_pipeline pipeline_gated_delta_net_chunk_inter;
     vk_pipeline pipeline_gated_delta_net_chunk_output;
+    vk_pipeline pipeline_gated_delta_net_chunk_output_cm;
     vk_pipeline pipeline_ssm_scan_f32_d128;
     vk_pipeline pipeline_ssm_scan_f32_d256;
     vk_pipeline pipeline_ssm_conv_f32;
@@ -4623,6 +4624,12 @@ static void ggml_vk_load_shaders(vk_device& device) {
     ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_chunk_output, "gated_delta_net_chunk_output_f32_d128",
         gated_delta_net_chunk_output_f32_len, gated_delta_net_chunk_output_f32_data, "main",
         6, sizeof(vk_op_gated_delta_net_chunk_push_constants), {1, 1, 1}, {128, 64}, 1);
+
+    if (device->coopmat_support && device->coopmat_acc_f32_support) {
+        ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_chunk_output_cm, "gated_delta_net_chunk_output_cm1_f32_d128",
+            gated_delta_net_chunk_output_cm1_f32_len, gated_delta_net_chunk_output_cm1_f32_data, "main",
+            6, sizeof(vk_op_gated_delta_net_chunk_push_constants), {1, 1, 1}, {256, 64, 128}, 1, true);
+    }
 
     if (device->subgroup_arithmetic && device->subgroup_require_full_support) {
         ggml_vk_create_pipeline(device, device->pipeline_ssm_scan_f32_d128, "ssm_scan_128_f32", ssm_scan_subgroup_f32_len, ssm_scan_subgroup_f32_data, "main", 8, sizeof(vk_op_ssm_scan_push_constants), {1, 1, 1}, {128, device->subgroup_size}, 1, true, true);
