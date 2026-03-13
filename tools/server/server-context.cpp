@@ -1190,6 +1190,7 @@ private:
             : SLOT_STATE_STARTED;
 
         SLT_INF(slot, "processing task, is_child = %d\n", slot.task->is_child());
+        n_empty_consecutive = 0; // Reset server kill-switch counter
         return true;
     }
 
@@ -2220,7 +2221,6 @@ private:
                                                          "tokens), try increasing it",
                                                          slot.task->n_tokens(), slot.n_ctx),
                                            ERROR_TYPE_EXCEED_CONTEXT_SIZE);
-                                n_empty_consecutive = 0; // Reset server kill-switch counter, client error should not kill the server
                                 slot.release();
                                 continue;
                             }
