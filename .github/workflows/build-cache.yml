@@ -74,10 +74,10 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         id: cache-openvino
         with:
           path: ./openvino_toolkit

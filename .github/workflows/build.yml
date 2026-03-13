@@ -765,7 +765,7 @@ jobs:
       steps:
         - name: Clone
           id: checkout
-          uses: actions/checkout@v4
+          uses: actions/checkout@v6
 
         - name: ccache
           uses: ggml-org/ccache-action@v1.2.16
@@ -778,10 +778,10 @@ jobs:
           run: |
             sudo apt-get update
             sudo apt-get install -y build-essential libssl-dev libtbb12 cmake ninja-build python3-pip
-            sudo apt install ocl-icd-opencl-dev opencl-headers opencl-clhpp-headers intel-opencl-icd
+            sudo apt-get install -y ocl-icd-opencl-dev opencl-headers opencl-clhpp-headers intel-opencl-icd
 
         - name: Use OpenVINO Toolkit Cache
-          uses: actions/cache@v4
+          uses: actions/cache@v5
           id: cache-openvino
           with:
             path: ./openvino_toolkit
@@ -1830,7 +1830,7 @@ jobs:
            GG_BUILD_KLEIDIAI=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-x64-intel-openvino-gpu-low-perf:
-    runs-on: [self-hosted, Linux, X64, Intel]
+    runs-on: [self-hosted, Linux, X64, Intel, OpenVINO]
 
     env:
       # Sync versions in build.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
@@ -1840,10 +1840,10 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Use OpenVINO Toolkit Cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         id: cache-openvino
         with:
           path: ./openvino_toolkit
