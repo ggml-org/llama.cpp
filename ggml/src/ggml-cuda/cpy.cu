@@ -85,6 +85,8 @@ static __global__ void cpy_scalar_transpose(const char * cx, char * cdst, const 
                 dst[imat*n + (ty+j)*ne00 + tx] = tile2[col];
             }
         }
+
+        __syncthreads();
     }
 
     GGML_UNUSED_VARS(ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11,
