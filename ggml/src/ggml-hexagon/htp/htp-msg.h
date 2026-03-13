@@ -7,17 +7,10 @@
 
 // Mask to enable various stages of the Ops.
 // Used for debugging and profiling.
-enum {
+enum htp_op_mask {
     HTP_OPMASK_QUEUE    = (1 << 0),  // Enable Queueing (ie calls into the DSP)
     HTP_OPMASK_QUANTIZE = (1 << 1),  // Enable Quantize
     HTP_OPMASK_COMPUTE  = (1 << 2),  // Enable Compute
-};
-
-// Op flags
-enum {
-    HTP_OPFLAGS_SKIP_QUANTIZE = (1 << 0),  // Skip dynamic quantization (reuse quantized tensors)
-    HTP_OPFLAGS_SKIP_COMPUTE  = (1 << 1),  // Skip actual computation (used for profiling)
-    HTP_OPFLAGS_EARLY_WAKEUP  = (1 << 2)   // Send early wakeup notification
 };
 
 enum htp_status {
@@ -40,11 +33,11 @@ enum htp_data_type {
     HTP_TYPE_I32    = 26,
     HTP_TYPE_I64    = 27,
     HTP_TYPE_MXFP4  = 39,
-    HTP_TYPE_COUNT
+    HTP_TYPE_INVALID
 };
 
 // Do not reorder first 4 (used as an index)
-enum htp_op {
+enum htp_op_code {
     HTP_OP_MUL = 0,
     HTP_OP_ADD = 1,
     HTP_OP_SUB = 2,
@@ -76,91 +69,68 @@ enum htp_op {
     HTP_OP_SSM_CONV,
     HTP_OP_REPEAT,
     HTP_OP_CUMSUM,
-    INVALID
+    HTP_OP_INVALID
 };
-
-static inline size_t htp_t_block_size(uint32_t t) {
-    switch (t) {
-        case HTP_TYPE_F32:
-            return 1;
-        case HTP_TYPE_F16:
-            return 1;
-        case HTP_TYPE_Q4_0:
-            return QK4_0;
-        case HTP_TYPE_Q8_0:
-            return QK8_0;
-        case HTP_TYPE_IQ4_NL:
-            return QK4_NL;
-        case HTP_TYPE_MXFP4:
-            return QK_MXFP4;
-        default:
-            assert(0 && "unsupported HTP data type");
-    }
-    return 0;
-}
-
-static inline size_t htp_type_nbytes(uint32_t t) {
-    switch (t) {
-        case HTP_TYPE_F32:
-            return 4;
-        case HTP_TYPE_F16:
-            return 2;
-        case HTP_TYPE_Q4_0:
-            return sizeof(block_q4_0);
-        case HTP_TYPE_Q8_0:
-            return sizeof(block_q8_0);
-        case HTP_TYPE_IQ4_NL:
-            return sizeof(block_iq4_nl);
-        case HTP_TYPE_MXFP4:
-            return sizeof(block_mxfp4);
-        default:
-            assert(0 && "unsupported HTP data type");
-    }
-    return 0;
-}
 
 // Internal types
-#define QK_Q4_0x4x2  256  // 4x Q4_0 blocks packed with next 4x Q4_0 blocks (size in bytes 128)
-#define QK_Q8_0x4x2  256  // 4x Q8_0 blocks concat with next 4x Q8_0 blocks
+#define QK_Q4_0x4x2  256  // 4x Q4_0  blocks packed with next 4x Q4_0 blocks (size in bytes 128)
+#define QK_Q8_0x4x2  256  // 4x Q8_0  blocks concat with next 4x Q8_0 blocks
 #define QK_MXFP4x4x2 256  // 4x MXFP4 blocks concat with next 4x MXFP4 blocks
 
-#define HTP_MAX_DIMS 4
+#define HTP_OP_MAX_DIMS    4    // aka GGML_MAX_DIMS
+#define HTP_OP_MAX_INPUTS  6    // aka GGML_MAX_SRCS
+#define HTP_OP_MAX_PARAMS  64   // ala GGML_MAX_OP_PARAMS
+#define HTP_OP_MAX_BUFS    8
+#define HTP_OP_MAX_REQS    128
 
 struct htp_tensor {
-    uint32_t data;                // Buffer offset in the messages, and data pointer on the NSP
-    uint32_t type;                // Data type
-    uint32_t ne[HTP_MAX_DIMS];    // Number of elements
-    uint32_t nb[HTP_MAX_DIMS];    // Stride in bytes (see ggml.h ggml_tensor)
+    uint32_t data;                 // Buffer offset in the messages, and data pointer on the NPU
+    uint16_t type;                 // Data type
+    uint16_t bi;                   // Buffer index
+    uint32_t ne[HTP_OP_MAX_DIMS];  // Number of elements
+    uint32_t nb[HTP_OP_MAX_DIMS];  // Stride in bytes (see ggml.h ggml_tensor)
 };
 
-#define HTP_MAX_OP_PARAMS 64
+enum htp_op_buf_flags {
+    HTP_OP_BUF_INPUT  = (1U << 0),
+    HTP_OP_BUF_OUTPUT = (1U << 1)
+};
+
+struct htp_op_buf {
+    uint64_t base;     // base address
+    uint64_t size;     // total size
+    uint64_t begin;    // start offset (used for cache maint.)
+    uint64_t end;      // end offset   (used for cache maint.)
+    uint32_t fd;       // file desc
+    uint32_t flags;    // buffer flags
+}; // sizeof() must be multiple of 8
+
+enum htp_op_flags {
+    HTP_OPFLAGS_SKIP_QUANTIZE = (1U << 0),  // Skip dynamic quantization (reuse quantized tensors)
+    HTP_OPFLAGS_SKIP_COMPUTE  = (1U << 1),  // Skip actual computation   (used for profiling)
+    HTP_OPFLAGS_EARLY_WAKEUP  = (1U << 2)   // Send early wakeup notification
+};
+
+struct htp_op_req {
+    struct htp_tensor src[HTP_OP_MAX_INPUTS]; // Input tensors
+    struct htp_tensor dst;                    // Output tensor
+    uint32_t          opcode; // GGML/HTP Op
+    uint32_t          flags;  // OPFLAGS
+    int32_t           params[HTP_OP_MAX_PARAMS / sizeof(int32_t)]; // Params for the op, e.g. epsilon of RMS norm
+};
 
 struct htp_general_req {
-    uint32_t op;  // GGML/HTP Op
-    int32_t  op_params[HTP_MAX_OP_PARAMS / sizeof(int32_t)];
-    // Params for the op, e.g. epsilon of RMS norm
-    uint32_t flags;          // Request flags
-
-    struct htp_tensor src0;  // Input0 tensor
-    struct htp_tensor src1;  // Input1 tensor
-    struct htp_tensor src2;  // Input2 tensor
-    struct htp_tensor src3;  // Input3 tensor
-    struct htp_tensor src4;  // Input4 tensor
-    struct htp_tensor dst;   // Output tensor
-
-    // should be multiple of 64 bytes (cacheline)
+    uint32_t n_bufs;       // Number of buffers
+    uint32_t n_ops;        // Number of ops
+    // struct htp_op_buf  bufs[0];
+    // struct htp_op_req  ops[0];
 };
 
 struct htp_general_rsp {
-    uint32_t op;           // GGML/HTP Op
     uint32_t status;       // HTP_STATUS_...
     uint32_t prof_usecs;   // Number of usec per request
     uint32_t prof_cycles;  // Number of cycles per request
     uint32_t prof_pkts;    // Number of instruction packets per request
-    uint8_t  unused[44];   // Pad to 64 bytes
 };
-
-#define HTP_MAX_MESSAGE_SIZE   sizeof(struct htp_general_req)
-#define HTP_MAX_PACKET_BUFFERS 8
 
 #endif /* HTP_MSG_H */

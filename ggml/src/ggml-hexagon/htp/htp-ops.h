@@ -22,14 +22,16 @@ struct htp_spad {
 struct htp_ops_context {
     struct htp_context * ctx;
 
-    enum htp_op op;
-    int32_t     op_params[HTP_MAX_OP_PARAMS / sizeof(int32_t)];
+    enum htp_op_code op; // FIXME: rename to opcode
+    int32_t          op_params[HTP_OP_MAX_PARAMS / sizeof(int32_t)];
 
+    // FIXME: redo these as an array
     struct htp_tensor src0;
     struct htp_tensor src1;
     struct htp_tensor src2;
     struct htp_tensor src3;
     struct htp_tensor src4;
+    struct htp_tensor src5;
     struct htp_tensor dst;
 
     struct htp_spad src0_spad;
@@ -38,9 +40,7 @@ struct htp_ops_context {
     struct htp_spad src3_spad;
     struct htp_spad dst_spad;
 
-    worker_pool_context_t * wpool;      // worker pool
-    uint32_t                n_threads;  // num threads
-
+    uint32_t n_threads;
     uint32_t flags;
 };
 

@@ -18,6 +18,7 @@
 #include "htp-ctx.h"
 #include "htp-msg.h"
 #include "htp-ops.h"
+#include "hmx-ops.h"
 
 #define MM_SPAD_SRC0_NROWS 16
 #define MM_SPAD_SRC1_NROWS 16
@@ -2800,7 +2801,7 @@ static void htp_mminit_spad(struct htp_ops_context * octx,
     octx->dst_spad.size  = octx->dst_spad.size_per_thread * octx->n_threads;
 }
 
-int op_matmul(struct htp_ops_context * octx) {
+static int op_matmul_hvx(struct htp_ops_context * octx) {
     htp_matmul_tensors_preamble;
 
     struct htp_matmul_context mmctx_struct = {0};
@@ -2942,6 +2943,133 @@ int op_matmul(struct htp_ops_context * octx) {
 
     return HTP_STATUS_OK;
 }
+
+int op_matmul(struct htp_ops_context * octx) {
+    htp_matmul_tensors_preamble;
+
+#ifdef HTP_HAS_HMX
+    // HMX weight tile requires N to be 32-aligned.
+    if (src0->ne[1] % 32 != 0) {
+        return op_matmul_hvx(octx);
+    }
+
+    // HMX supports F16, Q4_0, Q8_0, IQ4_NL, MXFP4 weights.
+    // Other types fall back to HVX.
+    uint32_t wtype = src0->type;
+    if (wtype != HTP_TYPE_F16 && wtype != HTP_TYPE_Q4_0 && wtype != HTP_TYPE_Q8_0 && wtype != HTP_TYPE_IQ4_NL && wtype != HTP_TYPE_MXFP4) {
+        return op_matmul_hvx(octx);
+    }
+
+    // Quantised HMX path requires K aligned to 256 (x4x2 super-block).
+    // F16 HMX path requires K aligned to 32 (tile width).
+    if (wtype != HTP_TYPE_F16 && src0->ne[0] % 256 != 0) {
+        return op_matmul_hvx(octx);
+    }
+
+    if (wtype == HTP_TYPE_F16 && src0->ne[0] % 32 != 0) {
+        return op_matmul_hvx(octx);
+    }
+
+    const bool is_batched = (src0->ne[2] * src0->ne[3] > 1 || src1->ne[2] * src1->ne[3] > 1);
+
+    // Quantised HMX kernels only handle flat 2D matmul (host already rejects
+    // batched quantised, but guard here too).  F16 batched matmul is handled
+    // by the dedicated wrapper in hmx-matmul-ops.c.
+    if (is_batched && src0->type != HTP_TYPE_F16) {
+        return op_matmul_hvx(octx);
+    }
+
+    // HMX assumes contiguous row-major layout.  Fall back for permuted
+    // tensors where strides are non-monotonic (e.g. transposed KV cache).
+    if (src0->nb[0] > src0->nb[1] || src1->nb[0] > src1->nb[1]) {
+        return op_matmul_hvx(octx);
+    }
+
+    // M alignment: when M > 32 but not 32-aligned, we split into
+    // HMX (first m_hmx = M & ~31 rows) + HVX (remaining m_tail rows).
+    // When M <= 32 and not 32-aligned, fall back entirely to HVX.
+    const int m_total = (int) src1->ne[1];
+    const int m_tail  = m_total % 32;
+    const int m_hmx   = m_total - m_tail;
+
+    if (m_hmx == 0) {
+        return op_matmul_hvx(octx);
+    }
+
+    int k = (int) src0->ne[0];  // inner dimension
+    int n = (int) src0->ne[1];  // weight columns
+
+    // --- Phase 1: HMX on the first m_hmx (32-aligned) rows ---
+    int ret = -1;
+
+    // Row strides in elements. For compact tensors these equal k; for
+    // permuted attention views they can be larger, so pass the real stride.
+    const int act_stride = (int)(src1->nb[1] / sizeof(float));
+    const int wgt_stride = (int)(src0->nb[1] / sizeof(__fp16));
+
+    if (src0->type == HTP_TYPE_F16) {
+        if (is_batched) {
+            hmx_matmul_w16a32_batched_params_t batch_params = {
+                .dst             = (float *) dst->data,
+                .activation      = (float *) src1->data,
+                .permuted_weight = (const __fp16 *) src0->data,
+                .m               = m_hmx,
+                .k               = k,
+                .n               = n,
+                .act_stride      = act_stride,
+                .weight_stride   = wgt_stride,
+                .dst_stride      = (int) (dst->nb[1] / sizeof(float)),
+                .ne02            = ne02,
+                .ne03            = ne03,
+                .ne12            = ne12,
+                .ne13            = ne13,
+                .src0_nb2        = src0->nb[2],
+                .src0_nb3        = src0->nb[3],
+                .src1_nb2        = src1->nb[2],
+                .src1_nb3        = src1->nb[3],
+                .dst_nb2         = dst->nb[2],
+                .dst_nb3         = dst->nb[3],
+            };
+            ret = hmx_mat_mul_permuted_w16a32_batched(octx->ctx, &batch_params);
+        } else {
+            ret = hmx_mat_mul_permuted_w16a32(octx->ctx,
+                    (float*) dst->data, (float*) src1->data, (const __fp16 *) src0->data,
+                    m_hmx, k, n, act_stride, wgt_stride);
+        }
+    } else {
+        ret = hmx_mat_mul_permuted_qk_0_d16a32(octx->ctx,
+                    (float*) dst->data, (float*) src1->data, (const uint8_t *) src0->data,
+                    m_hmx, k, n, (int) src0->type);
+    }
+
+    if (ret != 0) {
+        FARF(HIGH, "HMX matmul failed (ret=%d), falling back to HVX", ret);
+        octx->flags &= ~HTP_OPFLAGS_SKIP_QUANTIZE;
+        return op_matmul(octx);
+    }
+
+    // --- Phase 2: HVX on the remaining m_tail rows ---
+    if (m_tail > 0) {
+        src1->ne[1] = m_tail; // only tail rows
+        dst->ne[1]  = m_tail; // only tail rows
+
+        // Always re-quantize tail src1: HMX Phase 1 overwrites VTCM,
+        // so any previously cached quantized data (SKIP_QUANTIZE pipeline) is invalid.
+        octx->flags &= ~HTP_OPFLAGS_SKIP_QUANTIZE;
+
+        // Offset activation and dst pointers past the HMX-processed rows.
+        // Use nb[1] (row stride in bytes) to compute the byte offset.
+        src1->data += (uint32_t) m_hmx * src1->nb[1];
+        dst->data  += (uint32_t) m_hmx * dst->nb[1];
+
+        FARF(HIGH, "hmx-matmul: HVX tail m_tail %d src1 %p dst %p", m_tail, (void *) src1->data, (void *) dst->data);
+        return op_matmul_hvx(octx);
+    }
+#endif // HTP_HAS_HMX
+
+    return op_matmul_hvx(octx);
+}
+
 
 int op_matmul_id(struct htp_ops_context * octx) {
     htp_matmul_tensors_preamble;
