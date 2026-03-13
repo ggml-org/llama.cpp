@@ -231,19 +231,77 @@ server_tokens::server_tokens(mtmd::input_chunks & mtmd_chunks, bool has_mtmd) : 
 server_tokens::server_tokens(const llama_tokens & tokens, bool has_mtmd) : has_mtmd(has_mtmd), tokens(tokens) {
 }
 
-llama_pos server_tokens::pos_next() const {
+llama_pos server_tokens::pos_next(int64_t n_tokens) const {
     if (!has_mtmd) {
-        return tokens.size();
+        if (n_tokens < 0) {
+            return tokens.size();
+        }
+
+        return n_tokens;
     }
 
-    llama_pos res = tokens.size();
+    if (n_tokens < 0) {
+        llama_pos res = tokens.size();
 
-    for (auto it = map_idx_to_media.begin(); it != map_idx_to_media.end(); ++it) {
-        const auto & chunk = it->second;
-        res += mtmd_input_chunk_get_n_pos(chunk.get()) - mtmd_input_chunk_get_n_tokens(chunk.get());
+        for (auto it = map_idx_to_media.begin(); it != map_idx_to_media.end(); ++it) {
+            const auto & chunk = it->second;
+            res += mtmd_input_chunk_get_n_pos(chunk.get()) - mtmd_input_chunk_get_n_tokens(chunk.get());
+        }
+
+        return res;
     }
 
-    return res;
+    int64_t idx = 0;
+    llama_pos pos = 0;
+
+    GGML_ASSERT(n_tokens <= (int64_t)tokens.size());
+
+    while (idx < n_tokens) {
+        const auto media_it = map_idx_to_media.find(idx);
+        if (media_it != map_idx_to_media.end()) {
+            const auto & chunk = media_it->second;
+            const llama_pos n_pos = mtmd_input_chunk_get_n_pos(chunk.get());
+            const size_t n_tok = mtmd_input_chunk_get_n_tokens(chunk.get());
+
+            pos += n_pos;
+            idx += n_tok;
+        } else {
+            pos++;
+            idx++;
+        }
+    }
+
+    return pos;
+}
+
+size_t server_tokens::size_up_to_pos(llama_pos max_pos) const {
+    if (!has_mtmd) {
+        return std::min((size_t)max_pos, tokens.size());
+    }
+
+    size_t idx = 0;
+    llama_pos pos = 0;
+
+    while (idx < tokens.size()) {
+        const auto media_it = map_idx_to_media.find(idx);
+        if (media_it != map_idx_to_media.end()) {
+            const auto & chunk = media_it->second;
+            const llama_pos n_pos = mtmd_input_chunk_get_n_pos(chunk.get());
+            const size_t n_tok = mtmd_input_chunk_get_n_tokens(chunk.get());
+
+            pos += n_pos;
+            idx += n_tok;
+        } else {
+            pos++;
+            idx++;
+        }
+
+        if (pos >= max_pos) {
+            break;
+        }
+    }
+
+    return idx;
 }
 
 std::string server_tokens::str() const {
@@ -1043,6 +1101,22 @@ json oaicompat_chat_params_parse(
         llama_params["chat_parser"] = chat_params.parser;
     }
 
+    // Reasoning budget: pass parameters through to sampling layer
+    {
+        int reasoning_budget = opt.reasoning_budget;
+        if (reasoning_budget == -1 && body.contains("thinking_budget_tokens")) {
+            reasoning_budget = json_value(body, "thinking_budget_tokens", -1);
+        }
+
+        if (reasoning_budget >= 0 && !chat_params.thinking_end_tag.empty()) {
+            llama_params["reasoning_budget_tokens"] = reasoning_budget;
+            llama_params["reasoning_budget_start_tag"] = chat_params.thinking_start_tag;
+            llama_params["reasoning_budget_end_tag"] = chat_params.thinking_end_tag;
+            llama_params["reasoning_budget_message"] = opt.reasoning_budget_message;
+            llama_params["reasoning_budget_activate_immediately"] = chat_params.thinking_forced_open;
+        }
+    }
+
     // Handle "logprobs" field
     // TODO: The response format of this option is not yet OAI-compatible, but seems like no one really using it; We may need to fix it in the future
     if (json_value(body, "logprobs", false)) {
@@ -1105,6 +1179,8 @@ json convert_responses_to_chatcmpl(const json & response_body) {
         };
 
         for (json item : input_value) {
+            bool merge_prev = !chatcmpl_messages.empty() && chatcmpl_messages.back().value("role", "") == "assistant";
+
             if (exists_and_is_string(item, "content")) {
                 // #responses_create-input-input_item_list-input_message-content-text_input
                 // Only "Input message" contains item["content"]::string
@@ -1193,7 +1269,7 @@ json convert_responses_to_chatcmpl(const json & response_body) {
                 item.at("type") == "message"
             ) {
                 // #responses_create-input-input_item_list-item-output_message
-                std::vector<json> chatcmpl_content;
+                auto chatcmpl_content = json::array();
 
                 for (const auto & output_text : item.at("content")) {
                     const std::string type = json_value(output_text, "type", std::string());
@@ -1210,10 +1286,19 @@ json convert_responses_to_chatcmpl(const json & response_body) {
                     });
                 }
 
-                item.erase("status");
-                item.erase("type");
-                item["content"] = chatcmpl_content;
-                chatcmpl_messages.push_back(item);
+                if (merge_prev) {
+                    auto & prev_msg = chatcmpl_messages.back();
+                    if (!exists_and_is_array(prev_msg, "content")) {
+                        prev_msg["content"] = json::array();
+                    }
+                    auto & prev_content = prev_msg["content"];
+                    prev_content.insert(prev_content.end(), chatcmpl_content.begin(), chatcmpl_content.end());
+                } else {
+                    item.erase("status");
+                    item.erase("type");
+                    item["content"] = chatcmpl_content;
+                    chatcmpl_messages.push_back(item);
+                }
             } else if (exists_and_is_string(item, "arguments") &&
                 exists_and_is_string(item, "call_id") &&
                 exists_and_is_string(item, "name") &&
@@ -1221,24 +1306,27 @@ json convert_responses_to_chatcmpl(const json & response_body) {
                 item.at("type") == "function_call"
             ) {
                 // #responses_create-input-input_item_list-item-function_tool_call
-                json msg = json {
-                    {"role", "assistant"},
-                    {"tool_calls", json::array({ json {
-                        {"function", json {
-                            {"arguments", item.at("arguments")},
-                            {"name",      item.at("name")},
-                        }},
-                        {"id",   item.at("call_id")},
-                        {"type", "function"},
-                    }})},
+                json tool_call = {
+                    {"function", json {
+                        {"arguments", item.at("arguments")},
+                        {"name",      item.at("name")},
+                    }},
+                    {"id",   item.at("call_id")},
+                    {"type", "function"},
                 };
 
-                if (!chatcmpl_messages.empty() && chatcmpl_messages.back().contains("reasoning_content")) {
-                    // Move reasoning content from dummy message to tool call message
-                    msg["reasoning_content"] = chatcmpl_messages.back().at("reasoning_content");
-                    chatcmpl_messages.pop_back();
+                if (merge_prev) {
+                    auto & prev_msg = chatcmpl_messages.back();
+                    if (!exists_and_is_array(prev_msg, "tool_calls")) {
+                        prev_msg["tool_calls"] = json::array();
+                    }
+                    prev_msg["tool_calls"].push_back(tool_call);
+                } else {
+                    chatcmpl_messages.push_back(json {
+                        {"role",       "assistant"},
+                        {"tool_calls", json::array({tool_call})}
+                    });
                 }
-                chatcmpl_messages.push_back(msg);
             } else if (exists_and_is_string(item, "call_id") &&
                 (exists_and_is_string(item, "output") || exists_and_is_array(item, "output")) &&
                 exists_and_is_string(item, "type") &&
@@ -1282,12 +1370,16 @@ json convert_responses_to_chatcmpl(const json & response_body) {
                     throw std::invalid_argument("item['content']['text'] is not a string");
                 }
 
-                // Pack reasoning content in dummy message
-                chatcmpl_messages.push_back(json {
-                    {"role", "assistant"},
-                    {"content", json::array()},
-                    {"reasoning_content", item.at("content")[0].at("text")},
-                });
+                if (merge_prev) {
+                    auto & prev_msg = chatcmpl_messages.back();
+                    prev_msg["reasoning_content"] = item.at("content")[0].at("text");
+                } else {
+                    chatcmpl_messages.push_back(json {
+                        {"role", "assistant"},
+                        {"content", json::array()},
+                        {"reasoning_content", item.at("content")[0].at("text")},
+                    });
+                }
             } else {
                 throw std::invalid_argument("Cannot determine type of 'item'");
             }
@@ -1295,20 +1387,6 @@ json convert_responses_to_chatcmpl(const json & response_body) {
     } else {
         throw std::invalid_argument("'input' must be a string or array of objects");
     }
-
-    // Remove unused dummy message which contains
-    // reasoning content not followed by tool call
-    chatcmpl_messages.erase(std::remove_if(
-        chatcmpl_messages.begin(),
-        chatcmpl_messages.end(),
-        [](const json & x){ return x.contains("role") &&
-            x.at("role") == "assistant" &&
-            x.contains("content") &&
-            x.at("content") == json::array() &&
-            x.contains("reasoning_content");
-        }),
-        chatcmpl_messages.end()
-    );
 
     chatcmpl_body["messages"] = chatcmpl_messages;
 
@@ -1401,6 +1479,7 @@ json convert_anthropic_to_oai(const json & body) {
             json tool_calls = json::array();
             json converted_content = json::array();
             json tool_results = json::array();
+            std::string reasoning_content;
             bool has_tool_calls = false;
 
             for (const auto & block : content) {
@@ -1408,6 +1487,8 @@ json convert_anthropic_to_oai(const json & body) {
 
                 if (type == "text") {
                     converted_content.push_back(block);
+                } else if (type == "thinking") {
+                    reasoning_content += json_value(block, "thinking", std::string());
                 } else if (type == "image") {
                     json source = json_value(block, "source", json::object());
                     std::string source_type = json_value(source, "type", std::string());
@@ -1466,15 +1547,18 @@ json convert_anthropic_to_oai(const json & body) {
                 }
             }
 
-            if (!converted_content.empty() || has_tool_calls) {
+            if (!converted_content.empty() || has_tool_calls || !reasoning_content.empty()) {
                 json new_msg = {{"role", role}};
                 if (!converted_content.empty()) {
                     new_msg["content"] = converted_content;
-                } else if (has_tool_calls) {
+                } else if (has_tool_calls || !reasoning_content.empty()) {
                     new_msg["content"] = "";
                 }
                 if (!tool_calls.empty()) {
                     new_msg["tool_calls"] = tool_calls;
+                }
+                if (!reasoning_content.empty()) {
+                    new_msg["reasoning_content"] = reasoning_content;
                 }
                 oai_messages.push_back(new_msg);
             }

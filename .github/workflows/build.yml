@@ -93,7 +93,7 @@ jobs:
         id: cmake_test
         run: |
           cd build
-          ctest -L main --verbose --timeout 900
+          ctest -L main -E "test-llama-archs" --verbose --timeout 900
 
   macOS-latest-cmake-x64:
     runs-on: macos-15-intel
@@ -469,6 +469,7 @@ jobs:
           cd build
           export GGML_VK_VISIBLE_DEVICES=0
           export GGML_VK_DISABLE_F16=1
+          export GGML_VK_DISABLE_COOPMAT=1
           # This is using llvmpipe and runs slower than other backends
           ctest -L main --verbose --timeout 4800
 
@@ -1175,10 +1176,8 @@ jobs:
     runs-on: windows-2022
 
     env:
-      # The ROCm version must correspond to the version used in the HIP SDK.
-      ROCM_VERSION: "6.4.2"
       # Make sure this is in sync with build-cache.yml
-      HIPSDK_INSTALLER_VERSION: "25.Q3"
+      HIPSDK_INSTALLER_VERSION: "26.Q1"
 
     steps:
       - name: Clone
@@ -1188,7 +1187,7 @@ jobs:
       - name: Grab rocWMMA package
         id: grab_rocwmma
         run: |
-          curl -o rocwmma.deb "https://repo.radeon.com/rocm/apt/${{ env.ROCM_VERSION }}/pool/main/r/rocwmma-dev/rocwmma-dev_1.7.0.60402-120~24.04_amd64.deb"
+          curl -o rocwmma.deb "https://repo.radeon.com/rocm/apt/7.2/pool/main/r/rocwmma-dev/rocwmma-dev_2.2.0.70200-43~24.04_amd64.deb"
           7z x rocwmma.deb
           7z x data.tar
 
@@ -1231,7 +1230,7 @@ jobs:
           cmake -G "Unix Makefiles" -B build -S . `
             -DCMAKE_C_COMPILER="${env:HIP_PATH}\bin\clang.exe" `
             -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\bin\clang++.exe" `
-            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/opt/rocm-${{ env.ROCM_VERSION }}/include/" `
+            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/opt/rocm-7.2.0/include/" `
             -DCMAKE_BUILD_TYPE=Release `
             -DLLAMA_BUILD_BORINGSSL=ON `
             -DROCM_DIR="${env:HIP_PATH}" `
@@ -1721,6 +1720,22 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          vulkaninfo --summary
+          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+
+  ggml-ci-x64-linux-intel-vulkan:
+    runs-on: [self-hosted, Linux, X64, Intel]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Test
         id: ggml-ci

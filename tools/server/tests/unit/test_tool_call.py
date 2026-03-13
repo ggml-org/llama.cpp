@@ -100,18 +100,19 @@ def do_test_completion_with_required_tool_tiny(server: ServerProcess, tool: dict
     assert choice["message"].get("content") in (None, ""), f'Expected no content in {choice["message"]}'
     # assert len(tool_call.get("id", "")) > 0, f'Expected non empty tool call id in {tool_call}'
     expected_function_name = "python" if tool["type"] == "code_interpreter" else tool["function"]["name"]
-    assert expected_function_name == tool_call["function"]["name"]
+    assert expected_function_name == tool_call["function"]["name"], f'Expected tool name to be {tool_call["function"]["name"]} in {choice["message"]}'
     actual_arguments = tool_call["function"]["arguments"]
-    assert isinstance(actual_arguments, str)
+    assert isinstance(actual_arguments, dict) or isinstance(actual_arguments, str), f'Expected arguments to be a dict or str, got: {actual_arguments}'
     if argument_key is not None:
-        actual_arguments = json.loads(actual_arguments)
-        assert argument_key in actual_arguments, f"tool arguments: {json.dumps(actual_arguments)}, expected: {argument_key}"
+        if (isinstance(actual_arguments, str)):
+            actual_arguments = json.loads(actual_arguments)
+        assert argument_key in actual_arguments, f"tool arguments: {actual_arguments}, expected: {argument_key}"
 
 
 @pytest.mark.parametrize("stream", [CompletionMode.NORMAL, CompletionMode.STREAMED])
 @pytest.mark.parametrize("template_name,tool,argument_key", [
-    ("google-gemma-2-2b-it",                          TEST_TOOL,            "success"),
-    ("google-gemma-2-2b-it",                          TEST_TOOL,            "success"),
+    ("Qwen3-Coder",                                   TEST_TOOL,            "success"),
+    ("Qwen3-Coder",                                   TEST_TOOL,            "success"),
     ("meta-llama-Llama-3.3-70B-Instruct",             TEST_TOOL,            "success"),
     ("meta-llama-Llama-3.3-70B-Instruct",             TEST_TOOL,            "success"),
     ("meta-llama-Llama-3.3-70B-Instruct",             PYTHON_TOOL,          "code"),

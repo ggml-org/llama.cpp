@@ -56,6 +56,7 @@ class ServerProcess:
 
     # custom options
     model_alias: str | None = None
+    model_tags: str | None = None
     model_url: str | None = None
     model_file: str | None = None
     model_draft: str | None = None
@@ -94,13 +95,14 @@ class ServerProcess:
     no_webui: bool | None = None
     jinja: bool | None = None
     reasoning_format: Literal['deepseek', 'none', 'nothink'] | None = None
-    reasoning_budget: int | None = None
+    reasoning: Literal['on', 'off', 'auto'] | None = None
     chat_template: str | None = None
     chat_template_file: str | None = None
     server_path: str | None = None
     mmproj_url: str | None = None
     media_path: str | None = None
     sleep_idle_seconds: int | None = None
+    webui_mcp_proxy: bool = False
 
     # session variables
     process: subprocess.Popen | None = None
@@ -180,6 +182,8 @@ class ServerProcess:
             server_args.extend(["--pooling", self.pooling])
         if self.model_alias:
             server_args.extend(["--alias", self.model_alias])
+        if self.model_tags:
+            server_args.extend(["--tags", self.model_tags])
         if self.n_ctx:
             server_args.extend(["--ctx-size", self.n_ctx])
         if self.n_slots:
@@ -221,8 +225,8 @@ class ServerProcess:
             server_args.append("--no-jinja")
         if self.reasoning_format is not None:
             server_args.extend(("--reasoning-format", self.reasoning_format))
-        if self.reasoning_budget is not None:
-            server_args.extend(("--reasoning-budget", self.reasoning_budget))
+        if self.reasoning is not None:
+            server_args.extend(("--reasoning", self.reasoning))
         if self.chat_template:
             server_args.extend(["--chat-template", self.chat_template])
         if self.chat_template_file:
@@ -233,6 +237,8 @@ class ServerProcess:
             server_args.extend(["--media-path", self.media_path])
         if self.sleep_idle_seconds is not None:
             server_args.extend(["--sleep-idle-seconds", self.sleep_idle_seconds])
+        if self.webui_mcp_proxy:
+            server_args.append("--webui-mcp-proxy")
 
         args = [str(arg) for arg in [server_path, *server_args]]
         print(f"tests: starting server with: {' '.join(args)}")
