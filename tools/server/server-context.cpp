@@ -1189,8 +1189,10 @@ private:
             ? SLOT_STATE_WAIT_OTHER // wait for the parent to process prompt
             : SLOT_STATE_STARTED;
 
+        // reset server kill-switch counter
+        n_empty_consecutive = 0;
+
         SLT_INF(slot, "processing task, is_child = %d\n", slot.task->is_child());
-        n_empty_consecutive = 0; // Reset server kill-switch counter
         return true;
     }
 
