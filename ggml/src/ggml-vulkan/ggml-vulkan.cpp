@@ -191,6 +191,7 @@ struct vk_queue;
 
 struct vk_command_buffer {
     vk::CommandBuffer buf;
+    uint64_t use_counter = 0;
     bool in_use = false;
 };
 
@@ -946,6 +947,7 @@ struct vk_event {
     vk::Event event;
     vk::Fence fence;
     vk_command_buffer* cmd_buffer = nullptr;
+    uint64_t cmd_buffer_use_counter = 0;
 };
 
 struct vk_semaphore {
@@ -2319,7 +2321,7 @@ static vk_command_buffer* ggml_vk_create_cmd_buffer(vk_device& device, vk_comman
         vk::CommandBufferLevel::ePrimary,
         1);
     const std::vector<vk::CommandBuffer> cmd_buffers = device->device.allocateCommandBuffers(command_buffer_alloc_info);
-    p.cmd_buffers.push_back({ cmd_buffers.front(), true });
+    p.cmd_buffers.push_back({ cmd_buffers.front(), 0, true });
     return &p.cmd_buffers[p.cmd_buffers.size()-1];
 }
 
@@ -6392,6 +6394,7 @@ static vk_subbuffer ggml_vk_tensor_subbuffer(
 static vk_command_buffer* ggml_vk_get_or_create_cmd_buffer(vk_device& device, vk_command_pool& pool) {
     for (auto& cmd_buffer : pool.cmd_buffers) {
         if (!cmd_buffer.in_use) {
+            cmd_buffer.use_counter++;
             cmd_buffer.in_use = true;
             return &cmd_buffer;
         }
@@ -14870,6 +14873,7 @@ static void ggml_backend_vk_event_record(ggml_backend_t backend, ggml_backend_ev
     ggml_vk_submit(compute_ctx, {vkev->fence});
     ctx->submit_pending = true;
     vkev->cmd_buffer = cmd_buf;
+    vkev->cmd_buffer_use_counter = cmd_buf->use_counter;
     ctx->compute_ctx.reset();
 }
 
@@ -15702,7 +15706,10 @@ static void ggml_backend_vk_device_event_synchronize(ggml_backend_dev_t dev, ggm
     VK_CHECK(device->device.waitForFences({ vkev->fence }, true, UINT64_MAX), "event_synchronize");
     // Finished using current command buffer so we flag for reuse
     if (vkev->cmd_buffer) {
-        vkev->cmd_buffer->in_use = false;
+        // Only flag for reuse if it hasn't been reused already
+        if (vkev->cmd_buffer_use_counter == vkev->cmd_buffer->use_counter) {
+            vkev->cmd_buffer->in_use = false;
+        }
         vkev->cmd_buffer = nullptr;
     }
 }
