@@ -7,6 +7,10 @@ on:
         description: 'Create new release'
         required: true
         type: boolean
+      tag_name:
+        description: 'Tag name for the release (required for manual trigger)'
+        required: true
+        type: string
       gpu_arch:
         description: 'nvidia gpu arch numbers (semicolon-separated, e.g. 70;75;80;86)'
         required: false
@@ -28,6 +32,7 @@ jobs:
     env:
       BUILD_TYPE: Release
       ARCHIVE_BASENAME: llama-bin-linux-cuda-12.8-rockylinux8
+      TAG_NAME: ${{ github.event.release.tag_name || github.event.inputs.tag_name }}
 
     steps:
       - name: Install build dependencies
@@ -54,7 +59,7 @@ jobs:
       - name: Checkout source at release tag
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ env.TAG_NAME }}
           submodules: recursive
           fetch-depth: 0
 
@@ -95,7 +100,7 @@ jobs:
         run: |
           set -euxo pipefail
 
-          TAG="${{ github.event.release.tag_name }}"
+          TAG="${TAG_NAME}"
           OUTDIR="${ARCHIVE_BASENAME}-${TAG}"
           mkdir -p "${OUTDIR}/bin" "${OUTDIR}/lib" "${OUTDIR}/meta"
 
@@ -128,22 +133,11 @@ jobs:
           tar -czf "${OUTDIR}.tar.gz" "${OUTDIR}"
           sha256sum "${OUTDIR}.tar.gz" > "${OUTDIR}.tar.gz.sha256"
 
-      - name: Upload tarball to release
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload release assets
+        if: github.event_name == 'release' || github.event.inputs.create_release == 'true'
+        uses: softprops/action-gh-release@v2
         with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ./llama-bin-linux-cuda-12.8-rockylinux8-${{ github.event.release.tag_name }}.tar.gz
-          asset_name: llama-bin-linux-cuda-12.8-rockylinux8-${{ github.event.release.tag_name }}.tar.gz
-          asset_content_type: application/gzip
-
-      - name: Upload checksum to release
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ./llama-bin-linux-cuda-12.8-rockylinux8-${{ github.event.release.tag_name }}.tar.gz.sha256
-          asset_name: llama-bin-linux-cuda-12.8-rockylinux8-${{ github.event.release.tag_name }}.tar.gz.sha256
-          asset_content_type: text/plain
+          tag_name: ${{ env.TAG_NAME }}
+          files: |
+            ./${{ env.ARCHIVE_BASENAME }}-${{ env.TAG_NAME }}.tar.gz
+            ./${{ env.ARCHIVE_BASENAME }}-${{ env.TAG_NAME }}.tar.gz.sha256
