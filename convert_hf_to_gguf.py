@@ -803,7 +803,7 @@ class ModelBase:
             if self._is_nvfp4:
                 if name.endswith(".weight") and name.replace(".weight", ".weight_scale") in self.model_tensors:
                     continue
-                if name.endswith((".weight_scale", ".weight_scale_2", ".input_scale")):
+                if name.endswith((".weight_scale", ".weight_scale_2", ".input_scale", ".k_scale", ".v_scale")):
                     continue
 
             old_dtype = data_torch.dtype
