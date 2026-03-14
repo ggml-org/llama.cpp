@@ -39,11 +39,17 @@ template<typename dst_t, typename src_t>
         return sycl::ext::oneapi::bfloat16(float(x));
     } else if constexpr (std::is_same_v<src_t, sycl::ext::oneapi::bfloat16>) {
         return static_cast<float>(x);
+    } else if constexpr (std::is_same_v<src_t, sycl::float2> && std::is_same_v<dst_t, sycl::half2>) {
+        return x.template convert<sycl::half, sycl::rounding_mode::rte>();
+    } else if constexpr (std::is_same_v<src_t, sycl::float2> &&
+                         std::is_same_v<dst_t, sycl::vec<sycl::ext::oneapi::bfloat16, 2>>) {
+        return {x.x, x.y};
     } else if constexpr(std::is_same_v<dst_t, int32_t>) {
         return int32_t(x);
     } else {
         return float(x);
     }
 }
+
 
 #endif  // GGML_SYCL_CONVERT_HPP
