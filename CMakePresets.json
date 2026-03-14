@@ -30,6 +30,7 @@
     { "name": "static",   "hidden": true, "cacheVariables": { "GGML_STATIC":      "ON" } },
     { "name": "sycl_f16", "hidden": true, "cacheVariables": { "GGML_SYCL_F16":    "ON" } },
     { "name": "vulkan",   "hidden": true, "cacheVariables": { "GGML_VULKAN":      "ON" } },
+    { "name": "hip",      "hidden": true, "cacheVariables": { "GGML_HIP":         "ON" } },
 
     {
         "name": "x64-windows-llvm", "hidden": true,
@@ -90,6 +91,9 @@
     { "name": "x64-windows-sycl-release-f16", "inherits": [ "sycl-base", "release", "sycl_f16" ] },
 
     { "name": "x64-windows-vulkan-debug", "inherits": [ "base", "vulkan", "debug" ] },
-    { "name": "x64-windows-vulkan-release", "inherits": [ "base", "vulkan", "release" ] }
+    { "name": "x64-windows-vulkan-release", "inherits": [ "base", "vulkan", "release" ] },
+    
+    { "name": "x64-windows-hip-debug", "inherits": [ "base", "hip", "debug" ] },
+    { "name": "x64-windows-hip-release", "inherits": [ "base", "hip", "release" ] }
   ]
 }
