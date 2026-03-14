@@ -328,6 +328,7 @@ class SettingsStore {
 		}
 
 		this.saveConfig();
+		console.log('User overrides after sync:', Array.from(this.userOverrides));
 	}
 
 	/**
