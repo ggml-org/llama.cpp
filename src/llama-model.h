@@ -418,6 +418,16 @@ struct llama_layer {
     struct ggml_tensor * laurel_r             = nullptr;
     struct ggml_tensor * laurel_post_norm     = nullptr;
 
+    // yuan localized filtering
+    struct ggml_tensor * attn_lf_conv1   = nullptr;
+    struct ggml_tensor * attn_lf_conv1_b = nullptr;
+    struct ggml_tensor * attn_lf_conv2   = nullptr;
+    struct ggml_tensor * attn_lf_conv2_b = nullptr;
+    struct ggml_tensor * attn_lf_norm    = nullptr;
+
+    // yuan attention-based MoE router
+    struct ggml_tensor * ffn_gate_inp_qkv = nullptr;
+
     // openai-moe
     struct ggml_tensor * attn_sinks = nullptr;
 

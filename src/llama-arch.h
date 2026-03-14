@@ -133,6 +133,7 @@ enum llm_arch {
     LLM_ARCH_LLAMA_EMBED,
     LLM_ARCH_MAINCODER,
     LLM_ARCH_KIMI_LINEAR,
+    LLM_ARCH_YUAN,
     LLM_ARCH_UNKNOWN,
 };
 
@@ -543,6 +544,10 @@ enum llm_tensor {
     LLM_TENSOR_NEXTN_HNORM,
     LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD,
     LLM_TENSOR_NEXTN_SHARED_HEAD_NORM,
+    LLM_TENSOR_ATTN_LF_CONV1,       // yuan localized filtering
+    LLM_TENSOR_ATTN_LF_CONV2,       // yuan localized filtering
+    LLM_TENSOR_ATTN_LF_NORM,        // yuan localized filtering
+    LLM_TENSOR_FFN_GATE_INP_QKV,    // yuan attention-based MoE router
 };
 
 enum llm_tensor_layer {

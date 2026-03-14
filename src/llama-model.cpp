@@ -993,6 +993,17 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_YUAN:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp, false);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,         hparams.expert_weights_norm, false);
+
+                switch (hparams.n_layer) {
+                    case 24: type = LLM_TYPE_UNKNOWN; break;
+                    default: type = LLM_TYPE_UNKNOWN;
+                }
+            } break;
         case LLM_ARCH_QWEN3:
             {
                 ml.get_key(LLM_KV_POOLING_TYPE, hparams.pooling_type, false);
@@ -3622,6 +3633,49 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_gate_shexp = create_tensor(tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {    n_embd, n_ff_shexp}, 0);
                         layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {n_ff_shexp,     n_embd}, 0);
                         layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {    n_embd, n_ff_shexp}, 0);
+                    }
+                } break;
+            case LLM_ARCH_YUAN:
+                {
+                    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+
+                    // output
+                    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, 0);
+
+                    const int64_t n_embd_head_k = hparams.n_embd_head_k();
+                    const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff;
+
+                    for (int i = 0; i < n_layer; ++i) {
+                        auto & layer = layers[i];
+
+                        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+
+                        // Q, K, V projections (head_dim=256, n_head=16, projection_size=4096)
+                        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_head * n_embd_head_k}, 0);
+                        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_head_kv * n_embd_head_k}, 0);
+                        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_head_kv * n_embd_head_k}, 0);
+                        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_head * n_embd_head_k, n_embd}, 0);
+
+                        // localized filtering (Conv2d weights reshaped to 2D: [in_ch, 2*out_ch])
+                        // first out_ch rows = W0 (kernel pos 0, current), next out_ch rows = W1 (kernel pos 1, previous)
+                        const int64_t lf_mid = n_embd / 2;
+                        layer.attn_lf_conv1   = create_tensor(tn(LLM_TENSOR_ATTN_LF_CONV1, "weight", i), {n_embd, 2*lf_mid}, 0);
+                        layer.attn_lf_conv1_b = create_tensor(tn(LLM_TENSOR_ATTN_LF_CONV1, "bias",   i), {lf_mid}, 0);
+                        layer.attn_lf_conv2   = create_tensor(tn(LLM_TENSOR_ATTN_LF_CONV2, "weight", i), {lf_mid, 2*n_embd}, 0);
+                        layer.attn_lf_conv2_b = create_tensor(tn(LLM_TENSOR_ATTN_LF_CONV2, "bias",   i), {n_embd}, 0);
+                        layer.attn_lf_norm    = create_tensor(tn(LLM_TENSOR_ATTN_LF_NORM,  "weight", i), {n_embd}, 0);
+
+                        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+
+                        // MoE attention-based router
+                        // router QKV weight: [3 * n_expert, n_embd] -> used for attention routing
+                        layer.ffn_gate_inp_qkv = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP_QKV, "weight", i), {n_embd, 3 * n_expert}, 0);
+
+                        // expert FFN weights
+                        layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert}, 0);
+                        layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert}, 0);
+                        layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert}, 0);
                     }
                 } break;
             case LLM_ARCH_QWEN3:
@@ -8247,6 +8301,10 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             {
                 llm = std::make_unique<llm_build_qwen2moe>(*this, params);
             } break;
+        case LLM_ARCH_YUAN:
+            {
+                llm = std::make_unique<llm_build_yuan>(*this, params);
+            } break;
         case LLM_ARCH_QWEN3:
             {
                 llm = std::make_unique<llm_build_qwen3>(*this, params);
@@ -8878,6 +8936,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_QWEN3NEXT:
         case LLM_ARCH_MIMO2:
         case LLM_ARCH_STEP35:
+        case LLM_ARCH_YUAN:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:

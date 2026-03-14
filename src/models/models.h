@@ -515,6 +515,10 @@ struct llm_build_qwen2moe : public llm_graph_context {
     llm_build_qwen2moe(const llama_model & model, const llm_graph_params & params);
 };
 
+struct llm_build_yuan : public llm_graph_context {
+    llm_build_yuan(const llama_model & model, const llm_graph_params & params);
+};
+
 struct llm_build_qwen2vl : public llm_graph_context {
     llm_build_qwen2vl(const llama_model & model, const llm_graph_params & params);
 };

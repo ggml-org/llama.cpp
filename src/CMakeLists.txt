@@ -148,6 +148,7 @@ add_library(llama
             models/t5-enc.cpp
             models/wavtokenizer-dec.cpp
             models/xverse.cpp
+            models/yuan.cpp
             )
 
 set_target_properties(llama PROPERTIES

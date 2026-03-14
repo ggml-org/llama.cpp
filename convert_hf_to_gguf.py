@@ -877,7 +877,7 @@ class ModelBase:
         try:
             # for security reason, we don't allow loading remote code by default
             # if a model need remote code, we will fallback to config.json
-            config = AutoConfig.from_pretrained(dir_model, trust_remote_code=True).to_dict()
+            config = AutoConfig.from_pretrained(dir_model, trust_remote_code=False).to_dict()
         except Exception as e:
             logger.warning(f"Failed to load model config from {dir_model}: {e}")
             logger.warning("Trying to load config.json instead")
@@ -12314,28 +12314,67 @@ class YuanModel(TextModel):
     def set_vocab(self):
         self._set_vocab_sentencepiece()
 
+    def _create_vocab_sentencepiece(self):
+        from sentencepiece import SentencePieceProcessor
+
+        tokens, scores, toktypes = super()._create_vocab_sentencepiece()
+
+        # The SP model doesn't include added special tokens like <|Assistant|>,
+        # <think>, etc. and added_tokens_decoder is empty, so they remain as
+        # [PAD...] placeholders. Patch them in from additional_special_tokens.
+        tokenizer_path = self.dir_model / 'tokenizer.model'
+        tokenizer = SentencePieceProcessor()
+        tokenizer.LoadFromFile(str(tokenizer_path))
+        sp_vocab_size = tokenizer.vocab_size()
+
+        tokenizer_config_file = self.dir_model / 'tokenizer_config.json'
+        if tokenizer_config_file.is_file():
+            with open(tokenizer_config_file, "r", encoding="utf-8") as f:
+                tokenizer_config = json.load(f)
+            added_special = tokenizer_config.get("additional_special_tokens", [])
+            next_id = sp_vocab_size
+            for tok in added_special:
+                if tokenizer.PieceToId(tok) != tokenizer.unk_id() or tok == '<unk>':
+                    continue
+                if next_id < len(tokens):
+                    tokens[next_id] = tok.encode("utf-8")
+                    scores[next_id] = -1000.0
+                    toktypes[next_id] = SentencePieceTokenTypes.CONTROL
+                next_id += 1
+
+        return tokens, scores, toktypes
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hparams = self.hparams
 
-        self.gguf_writer.add_vocab_size(hparams["vocab_size"])
+        # Yuan VL models have nested llm_config for text model parameters
+        # Use llm_config if available, otherwise fall back to top-level hparams
+        llm_config = hparams.get("llm_config", {})
+        if not llm_config:
+            llm_config = hparams
+
+        # vocab_size may be in llm_config or top-level
+        vocab_size = llm_config.get("vocab_size") or hparams.get("vocab_size")
+        if vocab_size:
+            self.gguf_writer.add_vocab_size(vocab_size)
 
         # Yuan uses rotary_percent to determine rope dimension
         # head_dim * rotary_percent = rope_dim
-        head_dim = hparams.get("head_dim", 256)
-        rotary_percent = hparams.get("rotary_percent", 0.5)
+        head_dim = llm_config.get("head_dim", 256)
+        rotary_percent = llm_config.get("rotary_percent", 0.5)
         rope_dim = int(head_dim * rotary_percent)
         self.gguf_writer.add_rope_dimension_count(rope_dim)
 
-        if (rope_base := hparams.get("rotary_base")) is not None:
+        if (rope_base := llm_config.get("rotary_base")) is not None:
             self.gguf_writer.add_rope_freq_base(rope_base)
 
         # head_dim differs from hidden_size / num_heads due to attention_projection_size
         self.gguf_writer.add_key_length(head_dim)
         self.gguf_writer.add_value_length(head_dim)
 
-        # MoE parameters from nested moe_config
-        moe_config = hparams.get("moe_config", {})
+        # MoE parameters from nested moe_config (in llm_config for VL models)
+        moe_config = llm_config.get("moe_config", {})
         if moe_config:
             n_experts = moe_config.get("moe_num_experts", 0)
             n_experts_used = moe_config.get("moe_top_k", 0)
@@ -12343,7 +12382,7 @@ class YuanModel(TextModel):
                 self.gguf_writer.add_expert_count(n_experts)
             if n_experts_used:
                 self.gguf_writer.add_expert_used_count(n_experts_used)
-            ffn_size = moe_config.get("ffn_hidden_size", hparams.get("intermediate_size"))
+            ffn_size = moe_config.get("ffn_hidden_size", llm_config.get("intermediate_size"))
             if ffn_size:
                 self.gguf_writer.add_expert_feed_forward_length(ffn_size)
             if moe_config.get("norm_topk_prob", False):
@@ -12363,10 +12402,18 @@ class YuanModel(TextModel):
         # split fused query+key into separate Q and K
         if name.endswith(".self_attn.get_query_key.weight"):
             # get_query_key shape: [2 * num_heads * head_dim, hidden_size]
-            # split into q_proj and k_proj
-            half = data_torch.shape[0] // 2
-            q_data = data_torch[:half]
-            k_data = data_torch[half:]
+            # HF splits per-head: view as [num_heads, 2*head_dim] then split on last dim
+            # so the layout is [Q_h0, K_h0, Q_h1, K_h1, ...] interleaved per head
+            llm_config = self.hparams.get("llm_config", {})
+            if not llm_config:
+                llm_config = self.hparams
+            num_heads = llm_config["num_attention_heads"]
+            head_dim = llm_config.get("head_dim", data_torch.shape[0] // (2 * num_heads))
+            hidden_size = data_torch.shape[1]
+
+            data_torch = data_torch.view(num_heads, 2 * head_dim, hidden_size)
+            q_data = data_torch[:, :head_dim, :].reshape(num_heads * head_dim, hidden_size)
+            k_data = data_torch[:, head_dim:, :].reshape(num_heads * head_dim, hidden_size)
 
             name_q = name.replace("get_query_key", "q_proj")
             name_k = name.replace("get_query_key", "k_proj")
@@ -12416,6 +12463,17 @@ class YuanModel(TextModel):
                 return
             else:
                 return
+
+        # reshape Conv2d weights from 4D [out_ch, in_ch, 2, 1] to 2D [2*out_ch, in_ch]
+        # PyTorch Conv2d cross-correlation with prepended zero padding:
+        #   output[t] = weight[:,:,1] @ input[t] + weight[:,:,0] @ input[t-1]
+        # GGML expects: first block = current token, second block = previous token
+        # So we store [kernel_pos_1, kernel_pos_0] (swapped)
+        if "lf_gate.conv1.weight" in name or "lf_gate.conv2.weight" in name:
+            data_torch = data_torch.squeeze(-1)       # [out_ch, in_ch, 2]
+            w_current  = data_torch[:, :, 1]           # kernel pos 1 → current token
+            w_previous = data_torch[:, :, 0]           # kernel pos 0 → previous token
+            data_torch = torch.cat([w_current, w_previous], dim=0)  # [2*out_ch, in_ch]
 
         yield from super().modify_tensors(data_torch, name, bid)
 
