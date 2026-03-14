@@ -11,6 +11,12 @@
 // Operation: dst[indices[i]] = src[i] for i = 0..num_source_rows
 // This is the inverse of GET_ROWS operation
 //
+// Parallelization strategy (non-cache-coherent processor, 64B cache lines):
+// - Cache-aligned rows (ne00 aligned to dst cache line): distribute cache
+//   lines across threads. Each thread owns complete cache lines, no conflicts.
+// - Non-aligned rows: distribute rows across threads, use atomic global
+//   stores (amoswapg.w / shg) which bypass local caches.
+//
 // Features supported:
 // - F32 source data (always F32 input)
 // - F32 and F16 destination data (with transcoding)
@@ -26,69 +32,66 @@
 #include "platform.h"
 #include "math_fp.h"
 
+#define CACHE_LINE_SIZE_BYTES  64
+#define CACHE_LINE_F32_ELEMS  16   // 64 / 4
+#define CACHE_LINE_F16_ELEMS  32   // 64 / 2
+
 struct ggml_et_set_rows_params {
     struct ggml_tensor src0;     // F32 source data tensor
     struct ggml_tensor src1;     // I64 row indices tensor
     struct ggml_tensor dst;      // F32/F16 destination tensor
 };
 
-// Copy a row of F32 data to F32 destination (no conversion)
-static void copy_f32_to_f32_row(float* dst, const float* src, int64_t num_elements) {
-    for (int64_t i = 0; i < num_elements; i++) {
-        dst[i] = src[i];
-    }
+// Copy exactly one cache line (64 bytes = 16 F32 elements) using wide loads/stores
+static void copy_cache_aligned_f32(float* dst, const float* src) {
+    __asm__ volatile (
+        "flq2 f0, 0(%[src]) \n\t"    // Load 32 bytes
+        "flq2 f1, 32(%[src]) \n\t"   // Load next 32 bytes
+        "fsq2 f0, 0(%[dst]) \n\t"    // Store 32 bytes
+        "fsq2 f1, 32(%[dst]) \n\t"   // Store next 32 bytes
+        :
+        : [src] "r"(src), [dst] "r"(dst)
+        : "f0", "f1", "memory"
+    );
 }
 
-// Copy a row of F32 data to F16 destination (with SIMD conversion)
-static void copy_f32_to_f16_row(uint16_t* dst, const float* src, int64_t num_elements) {
+// Convert and copy one dst cache line worth of F32->F16 (32 elements src -> 64 bytes dst)
+static void copy_cache_aligned_f16(uint16_t* dst, const float* src) {
     unsigned long mask_temp;
-    int64_t i = 0;
 
-    // Process 8 elements at a time using SIMD
-    const int64_t vec_size = 8;
-    const int64_t num_vec = num_elements / vec_size;
+    // Build offset vector for consecutive 16-bit stores: [0, 2, 4, 6, 8, 10, 12, 14]
+    float offset_vec_storage[8];
+    uint32_t* offsets = (uint32_t*)offset_vec_storage;
+    for (int j = 0; j < 8; j++) {
+        offsets[j] = j * 2;
+    }
 
-    if (num_vec > 0) {
-        // Build offset vector for consecutive 16-bit stores: [0, 2, 4, 6, 8, 10, 12, 14]
-        // These are byte offsets for consecutive uint16_t values
-        float offset_vec_storage[8];
-        uint32_t* offsets = (uint32_t*)offset_vec_storage;
-        for (int j = 0; j < 8; j++) {
-            offsets[j] = j * 2;  // Byte offsets
-        }
+    __asm__ volatile (
+        "mova.x.m  %[mask_temp]         \n\t"
+        "mov.m.x   m0, x0, 0xFF         \n\t"
+        "flw.ps    f1, 0(%[offsets])    \n\t"
+        : [mask_temp] "=&r"(mask_temp)
+        : [offsets] "r"(offset_vec_storage)
+        : "f1"
+    );
 
+    // 4 iterations of 8 elements = 32 F16 elements = 64 bytes = 1 cache line
+    for (int i = 0; i < 32; i += 8) {
         __asm__ volatile (
-            "mova.x.m  %[mask_temp]         \n\t"  // Save mask
-            "mov.m.x   m0, x0, 0xFF         \n\t"  // Enable all 8 elements
-            "flw.ps    f1, 0(%[offsets])    \n\t"  // Load offset vector into f1
-            : [mask_temp] "=&r"(mask_temp)
-            : [offsets] "r"(offset_vec_storage)
-            : "f1"
-        );
-
-        // Process vectors
-        for (i = 0; i < num_vec * vec_size; i += vec_size) {
-            __asm__ volatile (
-                "flw.ps    f2, 0(%[src_ptr])    \n\t"  // Load 8 F32 values
-                "fcvt.f16.ps f3, f2             \n\t"  // Convert to F16 (in lower 16 bits)
-                "fsch.ps   f3, f1(%[dst_ptr])   \n\t"  // Scatter 8 F16 values: dst_ptr + offsets
-                :
-                : [src_ptr] "r"(src + i), [dst_ptr] "r"(dst + i)
-                : "f2", "f3", "memory"
-            );
-        }
-
-        __asm__ volatile (
-            "mova.m.x  %[mask_temp]         \n\t"  // Restore mask
+            "flw.ps    f2, 0(%[src_ptr])    \n\t"
+            "fcvt.f16.ps f3, f2             \n\t"
+            "fsch.ps   f3, f1(%[dst_ptr])   \n\t"
             :
-            : [mask_temp] "r"(mask_temp)
+            : [src_ptr] "r"(src + i), [dst_ptr] "r"(dst + i)
+            : "f2", "f3", "memory"
         );
     }
 
-    // Handle remainder elements (scalar)
-    for (; i < num_elements; i++) {
-        dst[i] = fp32_to_fp16(src[i]);
-    }
+    __asm__ volatile (
+        "mova.m.x  %[mask_temp]         \n\t"
+        :
+        : [mask_temp] "r"(mask_temp)
+    );
 }
 
 int entry_point(struct ggml_et_set_rows_params* params, void* env) {
@@ -102,12 +105,6 @@ int entry_point(struct ggml_et_set_rows_params* params, void* env) {
     int num_threads = get_num_threads(kernel_env->shire_mask);
 
     if (thread_id < 0) {
-        return 0;
-    }
-
-    // Single-threaded implementation: only thread 0 does the work
-    // All other threads return early
-    if (thread_id != 0) {
         return 0;
     }
 
@@ -163,37 +160,95 @@ int entry_point(struct ggml_et_set_rows_params* params, void* env) {
         return -1; // Number of indices must match number of source rows
     }
 
-    // Naive single-threaded implementation - process all rows sequentially
-    for (int64_t i03 = 0; i03 < ne03; i03++) {
-        for (int64_t i02 = 0; i02 < ne02; i02++) {
-            for (int64_t i01 = 0; i01 < ne01; i01++) {
-                // Calculate byte offset in indices tensor using strides
-                const int64_t i12 = i03 % ne12;
-                const int64_t i11 = i02 % ne11;
-                const int64_t i10 = i01;
+    const int64_t total_rows = ne01 * ne02 * ne03;
 
-                // Get destination row index using stride-based addressing (in bytes)
-                const int64_t index_byte_offset = i10*nb10 + i11*nb11 + i12*nb12;
-                const int64_t dst_row_index = *(int64_t*)((char*)src1_data + index_byte_offset);
+    // Determine cache-line element count based on destination type
+    const int64_t dst_cl_elems = (dst->type == GGML_TYPE_F16) ? CACHE_LINE_F16_ELEMS
+                                                               : CACHE_LINE_F32_ELEMS;
 
-                if (dst_row_index < 0 || dst_row_index >= ne_dst1) {
-                    return -1; // Index out of bounds
+    // Check if rows are cache-line aligned in the destination
+    const bool row_cache_aligned = (ne00 >= dst_cl_elems) && (ne00 % dst_cl_elems == 0);
+
+    if (row_cache_aligned) {
+        // Cache-aligned path: distribute dst cache lines across threads
+        // Each thread owns complete cache lines -> no coherence conflicts
+        const int64_t cls_per_row    = ne00 / dst_cl_elems;
+        const int64_t total_cls      = total_rows * cls_per_row;
+        const int64_t cls_per_thread = (total_cls + num_threads - 1) / num_threads;
+        const int64_t my_start       = thread_id * cls_per_thread;
+        int64_t       my_end         = my_start + cls_per_thread;
+        if (my_end > total_cls) my_end = total_cls;
+        if (my_start >= total_cls) return 0;
+
+        for (int64_t cl = my_start; cl < my_end; cl++) {
+            // Map flat cache-line index -> (row, offset within row)
+            const int64_t row_flat  = cl / cls_per_row;
+            const int64_t cl_in_row = cl % cls_per_row;
+
+            // Decompose flat row -> (i03, i02, i01)
+            const int64_t i01 = row_flat % ne01;
+            const int64_t tmp = row_flat / ne01;
+            const int64_t i02 = tmp % ne02;
+            const int64_t i03 = tmp / ne02;
+
+            // Look up destination row index
+            const int64_t i12 = i03 % ne12;
+            const int64_t i11 = i02 % ne11;
+            const int64_t i10 = i01;
+            const int64_t index_byte_offset = i10*nb10 + i11*nb11 + i12*nb12;
+            const int64_t dst_row_index = *(int64_t*)((char*)src1_data + index_byte_offset);
+
+            if (dst_row_index < 0 || dst_row_index >= ne_dst1) {
+                return -1;
+            }
+
+            // Source pointer: row base + cache-line offset (always F32 source)
+            const int64_t elem_offset = cl_in_row * dst_cl_elems;
+            const float* src_ptr = (const float*)((char*)src0_data + i01*nb01 + i02*nb02 + i03*nb03) + elem_offset;
+
+            // Destination pointer: scattered row base + cache-line offset
+            char* dst_row_base = (char*)dst_data + dst_row_index*nb1 + i02*nb2 + i03*nb3;
+
+            if (dst->type == GGML_TYPE_F32) {
+                float* dst_ptr = (float*)dst_row_base + elem_offset;
+                copy_cache_aligned_f32(dst_ptr, src_ptr);
+            } else {
+                uint16_t* dst_ptr = (uint16_t*)dst_row_base + elem_offset;
+                copy_cache_aligned_f16(dst_ptr, src_ptr);
+            }
+        }
+    } else {
+        // Non-aligned path: distribute rows across threads, atomic stores
+        // amoswapg.w / shg bypass local caches -> safe on non-coherent HW
+        for (int64_t row_flat = thread_id; row_flat < total_rows; row_flat += num_threads) {
+            const int64_t i01 = row_flat % ne01;
+            const int64_t tmp = row_flat / ne01;
+            const int64_t i02 = tmp % ne02;
+            const int64_t i03 = tmp / ne02;
+
+            // Look up destination row index
+            const int64_t i12 = i03 % ne12;
+            const int64_t i11 = i02 % ne11;
+            const int64_t i10 = i01;
+            const int64_t index_byte_offset = i10*nb10 + i11*nb11 + i12*nb12;
+            const int64_t dst_row_index = *(int64_t*)((char*)src1_data + index_byte_offset);
+
+            if (dst_row_index < 0 || dst_row_index >= ne_dst1) {
+                return -1;
+            }
+
+            const float* src_row = (const float*)((char*)src0_data + i01*nb01 + i02*nb02 + i03*nb03);
+            char* dst_row_base = (char*)dst_data + dst_row_index*nb1 + i02*nb2 + i03*nb3;
+
+            if (dst->type == GGML_TYPE_F32) {
+                volatile float* dst_row = (volatile float*)dst_row_base;
+                for (int64_t i = 0; i < ne00; i++) {
+                    atomic_store_f32(dst_row + i, src_row[i]);
                 }
-
-                const char* src_row_ptr = (char*)src0_data + i01*nb01 + i02*nb02 + i03*nb03;
-                const float* src_row = (const float*)src_row_ptr;
-
-                char* dst_row_ptr = (char*)dst_data + dst_row_index*nb1 + i02*nb2 + i03*nb3;
-
-                if (dst->type == GGML_TYPE_F32) {
-                    // F32 destination: direct copy
-                    float* dst_row = (float*)dst_row_ptr;
-                    copy_f32_to_f32_row(dst_row, src_row, ne00);
-
-                } else if (dst->type == GGML_TYPE_F16) {
-                    // F16 destination: convert while copying
-                    uint16_t* dst_row = (uint16_t*)dst_row_ptr;
-                    copy_f32_to_f16_row(dst_row, src_row, ne00);
+            } else {
+                volatile uint16_t* dst_row = (volatile uint16_t*)dst_row_base;
+                for (int64_t i = 0; i < ne00; i++) {
+                    atomic_store_f16(dst_row + i, fp32_to_fp16(src_row[i]));
                 }
             }
         }
