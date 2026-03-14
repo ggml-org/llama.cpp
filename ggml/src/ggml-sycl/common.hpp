@@ -2317,6 +2317,12 @@ struct ggml_backend_sycl_context {
         if (entry.current == nullptr || scratchpad_size > entry.current->actual_size) {
             auto buffer = std::make_unique<ggml_sycl_pool_alloc<uint8_t>>(this->pool());
             buffer->alloc(scratchpad_size);
+            if (buffer->get() == nullptr) {
+                throw std::runtime_error(
+                    "[SYCL] oneDNN scratchpad allocation failed (" + std::to_string(scratchpad_size) +
+                    " bytes) — VRAM likely exhausted. "
+                    "Try GGML_SYCL_ONEDNN_PP=0 or GGML_SYCL_VRAM_BUDGET_PCT=50");
+            }
             entry.current = buffer.get();
             entry.buffers.push_back(std::move(buffer));
         }
