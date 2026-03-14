@@ -558,30 +558,42 @@ int ExpertPrefetcher::acquire_vram_slot_lru(int layer_idx, int expert_idx) {
         }
     }
 
-    // All slots occupied — evict the LRU cached entry.
+    // All slots occupied — evict the LEAST FREQUENTLY USED cached entry.
     // Only evict from cached_slots_ (not in-flight entries — those have active DMA).
+    // Uses frequency from warmup/re-ranking epoch counters as primary signal,
+    // with LRU (last_used_token) as tiebreaker among equally-frequent experts.
     // NOTE: O(n) linear scan over cached_slots_ is intentional at the current
     // pool cap of [8, 2048] slots. If the cap ever exceeds 2048, consider replacing
-    // this with a min-heap keyed on last_used_token for O(log n) eviction.
-    int    lru_slot  = -1;
-    int64_t lru_time = INT64_MAX;
+    // this with a min-heap keyed on (freq, last_used_token) for O(log n) eviction.
+    int      evict_slot = -1;
+    uint32_t min_freq   = UINT32_MAX;
+    int64_t  min_token  = INT64_MAX;  // Tiebreaker: LRU among equally-frequent
+
     for (const auto & [ck, si] : cached_slots_) {
         // Skip slots that are currently in-flight (shouldn't happen, but be safe).
         if (inflight_.count(ck)) {
             continue;
         }
-        if (vram_pool_[si].last_used_token < lru_time && vram_pool_[si].ptr) {
-            lru_time = vram_pool_[si].last_used_token;
-            lru_slot = si;
+        if (!vram_pool_[si].ptr) {
+            continue;
+        }
+
+        uint32_t freq = get_expert_frequency(ck.layer, ck.expert_id);
+
+        // Evict lowest frequency; break ties by LRU
+        if (freq < min_freq || (freq == min_freq && vram_pool_[si].last_used_token < min_token)) {
+            min_freq   = freq;
+            min_token  = vram_pool_[si].last_used_token;
+            evict_slot = si;
         }
     }
 
-    if (lru_slot < 0) {
+    if (evict_slot < 0) {
         return -1;  // Cannot evict (all slots in-flight or invalid)
     }
 
-    // Evict the LRU entry: clear placement table, remove from cache map.
-    expert_key evicted_key = vram_pool_[lru_slot].cached_key;
+    // Evict the least-frequent entry: clear placement table, remove from cache map.
+    expert_key evicted_key = vram_pool_[evict_slot].cached_key;
     auto & ptable = get_expert_placement_table();
     if (ptable.is_initialized()) {
         ptable.set_device_ptr(evicted_key.layer, evicted_key.expert_id, 0, nullptr);
@@ -589,17 +601,17 @@ int ExpertPrefetcher::acquire_vram_slot_lru(int layer_idx, int expert_idx) {
     cached_slots_.erase(evicted_key);
     lru_evictions_++;
 
-    GGML_SYCL_DEBUG("[PREFETCH] LRU evict L%d E%d (token %lld) for L%d E%d\n",
+    GGML_SYCL_DEBUG("[PREFETCH] freq-evict L%d E%d (freq=%u token=%lld) for L%d E%d\n",
                     evicted_key.layer, evicted_key.expert_id,
-                    (long long)vram_pool_[lru_slot].last_used_token,
+                    min_freq, (long long)vram_pool_[evict_slot].last_used_token,
                     layer_idx, expert_idx);
 
     // Reset slot metadata (ptr stays valid, just reused).
-    vram_pool_[lru_slot].free            = false;
-    vram_pool_[lru_slot].cached_key      = { -1, -1 };
-    vram_pool_[lru_slot].last_used_token = -1;
+    vram_pool_[evict_slot].free            = false;
+    vram_pool_[evict_slot].cached_key      = { -1, -1 };
+    vram_pool_[evict_slot].last_used_token = -1;
 
-    return lru_slot;
+    return evict_slot;
 }
 
 void ExpertPrefetcher::release_vram_slot(int slot) {

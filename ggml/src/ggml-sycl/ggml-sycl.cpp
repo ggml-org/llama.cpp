@@ -911,6 +911,17 @@ void * moe_expert_ensure_soa_cached(int layer_idx, int expert_idx, int device_id
 
     return nullptr;
 }
+
+uint32_t get_expert_frequency(int layer_hash, int expert_id) {
+    auto & seq_map = g_moe_layer_seq[0];
+    auto it = seq_map.find(layer_hash);
+    if (it == seq_map.end()) return 0;
+    int seq_layer = it->second;
+    if (seq_layer < 0 || seq_layer >= g_moe_warmup.n_layers) return 0;
+    if (expert_id < 0 || expert_id >= g_moe_warmup.n_experts) return 0;
+    return g_moe_warmup.epoch_counts[seq_layer][expert_id].load(std::memory_order_relaxed);
+}
+
 }  // namespace ggml_sycl
 
 // ---------------------------------------------------------------------------
@@ -18908,6 +18919,12 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx,
     static_assert(false,
                   "Either GGML_SYCL_DNNL or GGML_SYCL_HAS_ONEAPI_MATH must be defined for batch GEMM operations");
 #endif
+} catch (const dnnl::error & e) {
+    std::cerr << "[SYCL] oneDNN error in batched mul_mat: " << e.what()
+              << " (status=" << e.status << ")"
+              << " at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
+    std::cerr << "[SYCL] Hint: set GGML_SYCL_ONEDNN_PP=0 to bypass oneDNN for prompt processing" << std::endl;
+    std::exit(1);
 } catch (const sycl::exception & exc) {
     std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
     std::exit(1);
@@ -32292,6 +32309,20 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
 #endif
     return true;
 
+} catch (const dnnl::error & e) {
+    if (g_ggml_sycl_graph_recording) {
+        throw;
+    }
+    std::cerr << "[SYCL] oneDNN error: " << e.what()
+              << " (status=" << e.status << ")"
+              << " at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
+    std::cerr << "Error OP " << ggml_op_name(dst->op) << std::endl;
+    if (g_ggml_sycl_debug) {
+        ggml_sycl_debug_dump_tensor_meta("ERROR dst", dst);
+        ggml_sycl_debug_dump_tensor_meta("ERROR src0", dst->src[0]);
+        ggml_sycl_debug_dump_tensor_meta("ERROR src1", dst->src[1]);
+    }
+    std::exit(1);
 } catch (sycl::exception & e) {
     // During graph recording, re-throw so the outer handler can
     // gracefully disable graphs and fall back to direct execution.

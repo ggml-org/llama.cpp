@@ -42,6 +42,11 @@ namespace ggml_sycl {
 // Thread-safe: acquires g_moe_expert_meta_mutex and unified cache locks internally.
 void * moe_expert_ensure_soa_cached(int layer_idx, int expert_idx, int device_id);
 
+// Look up expert frequency from epoch counters (recorded during MoE warmup/re-ranking).
+// Maps hash-based layer_id → sequential index, then reads atomic epoch_counts.
+// Returns 0 if the expert has no recorded frequency (unknown layer or expert).
+uint32_t get_expert_frequency(int layer_hash, int expert_id);
+
 // Tracks a single in-flight DMA prefetch operation.
 struct prefetch_request {
     expert_key  key;
