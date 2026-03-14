@@ -125,7 +125,7 @@
 	 *
 	 */
 
-    let widthClasses = $derived(chatWidthClasses());
+	let widthClasses = $derived(chatWidthClasses());
 
 	// Configuration
 	let currentConfig = $derived(config());
@@ -576,8 +576,7 @@
 	/>
 
 	<div
-		class="{INPUT_CLASSES} mx-auto {widthClasses
-			.class} overflow-hidden rounded-3xl backdrop-blur-md {disabled
+		class="{INPUT_CLASSES} mx-auto {widthClasses.class} overflow-hidden rounded-3xl backdrop-blur-md {disabled
 			? 'cursor-not-allowed opacity-60'
 			: ''}"
 		data-slot="input-area"
