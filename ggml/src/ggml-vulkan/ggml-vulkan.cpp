@@ -944,12 +944,13 @@ struct vk_semaphore {
     uint64_t value;
 };
 
-// vk_event is used for the event-related backend interfaces. It uses 'event' for
+// vk_event is used for the event-related backend interfaces. It uses vk::Events for
 // event_wait and a timeline semaphore for event_synchronize. Polling on an event for
 // event_synchronize wouldn't be sufficient to wait for command buffers to complete,
 // and would lead to validation errors.
 struct vk_event {
-    vk::Event event;
+    std::vector<vk::Event> events;
+    size_t next_event_idx;
     vk_semaphore tl_semaphore;
     vk_command_buffer* cmd_buffer = nullptr;
     uint64_t cmd_buffer_use_counter = 0;
@@ -14871,10 +14872,14 @@ static void ggml_backend_vk_event_record(ggml_backend_t backend, ggml_backend_ev
     vk_context compute_ctx = ggml_vk_get_compute_ctx(ctx);
     auto* cmd_buf = compute_ctx->s->buffer; // retrieve pointer before it gets reset
 
-    // the backend interface doesn't have an explicit reset, so reset it here
-    // before we record the command to set it
-    ggml_vk_reset_event(compute_ctx, vkev->event);
-    ggml_vk_set_event(compute_ctx, vkev->event);
+    // Grab the next event and record it, create one if necessary
+    if (vkev->next_event_idx == vkev->events.size()) {
+        vkev->events.push_back(ctx->device->device.createEvent({}));
+    }
+
+    vk::Event& cur_event = vkev->events[vkev->next_event_idx];
+    vkev->next_event_idx++;
+    ggml_vk_set_event(compute_ctx, cur_event);
 
     vkev->tl_semaphore.value++;
     compute_ctx->s->signal_semaphores.push_back(vkev->tl_semaphore);
@@ -14894,7 +14899,11 @@ static void ggml_backend_vk_event_wait(ggml_backend_t backend, ggml_backend_even
 
     vk_context compute_ctx = ggml_vk_get_compute_ctx(ctx);
 
-    ggml_vk_wait_events(compute_ctx, {vkev->event});
+    if (vkev->next_event_idx > 0) {
+        // Wait for latest event
+        vk::Event& cur_event = vkev->events[vkev->next_event_idx - 1];
+        ggml_vk_wait_events(compute_ctx, { cur_event });
+    }
 }
 
 // TODO: enable async and synchronize
@@ -15684,9 +15693,8 @@ static ggml_backend_event_t ggml_backend_vk_device_event_new(ggml_backend_dev_t 
         return nullptr;
     }
 
-    // The event/fence is expected to initially be in the signaled state.
-    vkev->event = device->device.createEvent({});
-    device->device.setEvent(vkev->event);
+    // No events initially, they get created on demand
+    vkev->next_event_idx = 0;
 
     vk::SemaphoreTypeCreateInfo tci{ vk::SemaphoreType::eTimeline, 0 };
     vk::SemaphoreCreateInfo ci{};
@@ -15706,7 +15714,9 @@ static void ggml_backend_vk_device_event_free(ggml_backend_dev_t dev, ggml_backe
     vk_event *vkev = (vk_event *)event->context;
 
     device->device.destroySemaphore(vkev->tl_semaphore.s);
-    device->device.destroyEvent(vkev->event);
+    for (auto& event : vkev->events) {
+        device->device.destroyEvent(event);
+    }
     delete vkev;
     delete event;
 }
@@ -15717,19 +15727,28 @@ static void ggml_backend_vk_device_event_synchronize(ggml_backend_dev_t dev, ggm
     auto device = ggml_vk_get_device(ctx->device);
     vk_event *vkev = (vk_event *)event->context;
 
-    vk::Semaphore sem = vkev->tl_semaphore.s;
-    uint64_t val = vkev->tl_semaphore.value;
-    vk::SemaphoreWaitInfo swi{vk::SemaphoreWaitFlags{}, sem, val};
-    VK_CHECK(device->device.waitSemaphores(swi, UINT64_MAX), "event_synchronize");
+    // Only do something if the event has actually been used
+    if (vkev->next_event_idx > 0) {
+        vk::Semaphore sem = vkev->tl_semaphore.s;
+        uint64_t val = vkev->tl_semaphore.value;
+        vk::SemaphoreWaitInfo swi{vk::SemaphoreWaitFlags{}, sem, val};
+        VK_CHECK(device->device.waitSemaphores(swi, UINT64_MAX), "event_synchronize");
 
-    // Finished using current command buffer so we flag for reuse
-    if (vkev->cmd_buffer) {
-        // Only flag for reuse if it hasn't been reused already
-        if (vkev->cmd_buffer_use_counter == vkev->cmd_buffer->use_counter) {
-            vkev->cmd_buffer->in_use = false;
-            vkev->cmd_buffer->buf.reset();
+        // Reset all events and flag for for reuse
+        for (size_t i = 0; i < vkev->next_event_idx; i++) {
+            device->device.resetEvent(vkev->events[i]);
         }
-        vkev->cmd_buffer = nullptr;
+        vkev->next_event_idx = 0;
+
+        // Finished using current command buffer so we flag for reuse
+        if (vkev->cmd_buffer) {
+            // Only flag for reuse if it hasn't been reused already
+            if (vkev->cmd_buffer_use_counter == vkev->cmd_buffer->use_counter) {
+                vkev->cmd_buffer->in_use = false;
+                vkev->cmd_buffer->buf.reset();
+            }
+            vkev->cmd_buffer = nullptr;
+        }
     }
 }
 
