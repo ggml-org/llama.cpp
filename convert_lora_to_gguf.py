@@ -200,8 +200,6 @@ class LoraTorchTensor:
 
         if func is torch.permute:
             return type(args[0]).permute(*args, **kwargs)
-        elif func is torch.contiguous:
-            return type(args[0]).contiguous(*args, **kwargs)
         elif func is torch.reshape:
             return type(args[0]).reshape(*args, **kwargs)
         elif func is torch.stack:
