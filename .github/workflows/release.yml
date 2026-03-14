@@ -34,7 +34,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
-          key: macOS-latest-cmake-arm64
+          key: macOS-latest-arm64
           evict-old-files: 1d
 
       - name: Build
@@ -81,7 +81,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
-          key: macOS-latest-cmake-x64
+          key: macOS-latest-x64
           evict-old-files: 1d
 
       - name: Build
@@ -140,7 +140,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
-          key: ubuntu-cpu-cmake-${{ matrix.build }}
+          key: ubuntu-cpu-${{ matrix.build }}
           evict-old-files: 1d
 
       - name: Dependencies
@@ -191,7 +191,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
-          key: ubuntu-22-cmake-vulkan
+          key: ubuntu-22-vulkan
           evict-old-files: 1d
 
       - name: Dependencies
@@ -256,7 +256,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
-          key: ubuntu-24-cmake-openvino-release-no-preset-v1
+          key: ubuntu-24-openvino-release-no-preset-v1
           evict-old-files: 1d
 
       - name: Dependencies
@@ -329,7 +329,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
-          key: windows-latest-cmake-cpu-${{ matrix.arch }}
+          key: windows-latest-cpu-${{ matrix.arch }}
           variant: ccache
           evict-old-files: 1d
 
@@ -390,7 +390,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
-          key: windows-latest-cmake-${{ matrix.backend }}-${{ matrix.arch }}
+          key: windows-latest-${{ matrix.backend }}-${{ matrix.arch }}
           variant: ccache
           evict-old-files: 1d
 
@@ -536,7 +536,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
-          key: windows-latest-cmake-sycl
+          key: windows-latest-sycl
           variant: ccache
           evict-old-files: 1d
 
@@ -616,7 +616,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
-          key: ubuntu-rocm-cmake-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
+          key: ubuntu-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
           evict-old-files: 1d
 
       - name: Dependencies
@@ -726,7 +726,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
-          key: windows-latest-cmake-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}-x64
+          key: windows-latest-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}-x64
           evict-old-files: 1d
 
       - name: Install ROCm
