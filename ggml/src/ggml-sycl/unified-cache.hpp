@@ -766,6 +766,13 @@ class unified_cache {
     // Returns actual bytes freed
     size_t evict(size_t bytes_needed);
 
+    // Evict cache entries and synchronously flush deferred frees so that
+    // used_ is decremented and VRAM is truly released.  Unlike evict(),
+    // which defers actual sycl::free behind barrier events, this method
+    // waits on the queue and processes deferred frees before returning.
+    // Used by unified_alloc() to make room for runtime allocations.
+    size_t evict_and_flush(size_t bytes_needed);
+
     // === Stats ===
 
     size_t hits() const { return hits_.load(); }

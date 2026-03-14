@@ -3932,6 +3932,33 @@ size_t unified_cache::evict(size_t bytes_needed) {
     return freed;
 }
 
+size_t unified_cache::evict_and_flush(size_t bytes_needed) {
+    // Phase 1: evict entries (defers the actual sycl::free behind barrier events)
+    size_t evicted = evict(bytes_needed);
+    if (evicted == 0) {
+        return 0;
+    }
+
+    // Phase 2: wait on the queue so all pending operations complete, making
+    //          the deferred frees eligible for processing.
+    try {
+        queue_.wait_and_throw();
+    } catch (const sycl::exception & e) {
+        GGML_LOG_WARN("[UNIFIED-CACHE] evict_and_flush: queue wait failed: %s\n", e.what());
+    } catch (...) {
+        GGML_LOG_WARN("[UNIFIED-CACHE] evict_and_flush: queue wait failed (unknown)\n");
+    }
+
+    // Phase 3: process deferred frees — this calls sycl::free and
+    //          saturating_sub_used, so used_ reflects the freed memory.
+    {
+        std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+        process_deferred_frees();
+    }
+
+    return evicted;
+}
+
 static int eviction_tier(const unified_cache_entry & entry) {
     // Tiered eviction priority (lower = evict first):
     // -1: host-resident (already slow, evict first to reclaim tracking)
@@ -5261,6 +5288,15 @@ static bool unified_free_record(const runtime_alloc_record & rec) {
         if (rec.handle.tier == alloc_tier::MMAP_TRACKED) {
             return true;
         }
+        // Check if this pointer was allocated via regular malloc (pinned cap overflow).
+        // The alloc_registry tracks these as MMAP type.  Using sycl::free on them
+        // would crash, so use ::free instead.
+        const auto * reg_info = ggml_sycl::alloc_registry::instance().lookup(rec.handle.ptr);
+        if (reg_info && reg_info->type == ggml_sycl::alloc_type::MMAP) {
+            ggml_sycl::alloc_registry::instance().unregister_alloc(rec.handle.ptr);
+            ::free(rec.handle.ptr);
+            return true;
+        }
         if (rec.uses_pinned_pool) {
             if (auto * hcache = get_host_cache_for_device(rec.handle.device)) {
                 hcache->free_pinned_runtime(rec.handle.ptr, rec.handle.size);
@@ -5341,13 +5377,6 @@ bool unified_alloc(const alloc_request & req_in, alloc_handle * out) {
     const size_t alloc_size     = std::max<size_t>(req.size, 1);
     bool         reserve_device = (tier == alloc_tier::DEVICE_VRAM);
     bool         reserve_host   = (tier == alloc_tier::HOST_PINNED);
-    if (reserve_device) {
-        unified_cache_add_runtime_bytes(req.device, alloc_size, cat);
-        unified_managed_add_device_bytes(req.device, alloc_size);
-    } else if (reserve_host) {
-        unified_cache_add_runtime_host_bytes(alloc_size);
-        unified_managed_add_host_bytes(alloc_size);
-    }
 
     bool   uses_pinned_pool = false;
     void * ptr              = nullptr;
@@ -5361,22 +5390,48 @@ bool unified_alloc(const alloc_request & req_in, alloc_handle * out) {
             const size_t runtime_vram  = g_runtime_managed_reserved_bytes[req.device].load(std::memory_order_relaxed);
             // Include weight cache usage (SOA entries on device VRAM)
             size_t       cache_vram    = 0;
-            if (auto * cache = get_unified_cache_for_device(req.device)) {
+            auto *       cache         = get_unified_cache_for_device(req.device);
+            if (cache) {
                 cache_vram = cache->used();
             }
-            const size_t used_vram = runtime_vram + cache_vram;
+            size_t used_vram = runtime_vram + cache_vram;
             if (total_vram > 0 && used_vram + alloc_size > total_vram) {
-                GGML_SYCL_DEBUG("[UNIFIED-ALLOC] Device %d VRAM overcommit guard: "
-                                "used=%.1f MB + alloc=%.1f MB > total=%.1f MB, failing\n",
-                                req.device, used_vram / (1024.0f * 1024.0f),
-                                alloc_size / (1024.0f * 1024.0f),
-                                total_vram / (1024.0f * 1024.0f));
-                // Roll back the reserve we just added above
-                if (reserve_device) {
-                    unified_cache_sub_runtime_bytes(req.device, alloc_size, cat);
-                    unified_managed_sub_device_bytes(req.device, alloc_size);
+                // Try evicting cache entries to make room before failing.
+                // This is the key mechanism that lets the 120B model work:
+                // model load fills VRAM with cached weights, then compute
+                // buffer allocation triggers eviction to free space.
+                if (cache) {
+                    const size_t needed = used_vram + alloc_size - total_vram;
+                    GGML_LOG_INFO("[UNIFIED-ALLOC] Device %d VRAM pressure: "
+                                  "used=%.1f MB + alloc=%.1f MB > total=%.1f MB, "
+                                  "evicting %.1f MB from cache\n",
+                                  req.device, used_vram / (1024.0 * 1024.0),
+                                  alloc_size / (1024.0 * 1024.0),
+                                  total_vram / (1024.0 * 1024.0),
+                                  needed / (1024.0 * 1024.0));
+                    const size_t freed = cache->evict_and_flush(needed);
+                    // Re-check after eviction
+                    cache_vram = cache->used();
+                    used_vram  = g_runtime_managed_reserved_bytes[req.device].load(std::memory_order_relaxed)
+                               + cache_vram;
+                    if (freed > 0) {
+                        GGML_LOG_INFO("[UNIFIED-ALLOC] Evicted %.1f MB, "
+                                      "used now=%.1f MB (cache=%.1f MB + runtime=%.1f MB)\n",
+                                      freed / (1024.0 * 1024.0),
+                                      used_vram / (1024.0 * 1024.0),
+                                      cache_vram / (1024.0 * 1024.0),
+                                      g_runtime_managed_reserved_bytes[req.device].load(std::memory_order_relaxed)
+                                          / (1024.0 * 1024.0));
+                    }
                 }
-                return false;
+                if (total_vram > 0 && used_vram + alloc_size > total_vram) {
+                    GGML_SYCL_DEBUG("[UNIFIED-ALLOC] Device %d VRAM overcommit guard: "
+                                    "used=%.1f MB + alloc=%.1f MB > total=%.1f MB, failing\n",
+                                    req.device, used_vram / (1024.0f * 1024.0f),
+                                    alloc_size / (1024.0f * 1024.0f),
+                                    total_vram / (1024.0f * 1024.0f));
+                    return false;
+                }
             }
         }
         ptr = ggml_sycl_malloc_device(alloc_size, *req.queue, "unified_alloc:device");
@@ -5393,14 +5448,16 @@ bool unified_alloc(const alloc_request & req_in, alloc_handle * out) {
     }
 
     if (!ptr) {
-        if (reserve_device) {
-            unified_cache_sub_runtime_bytes(req.device, alloc_size, cat);
-            unified_managed_sub_device_bytes(req.device, alloc_size);
-        } else if (reserve_host) {
-            unified_cache_sub_runtime_host_bytes(alloc_size);
-            unified_managed_sub_host_bytes(alloc_size);
-        }
         return false;
+    }
+
+    // Track the allocation now that it succeeded.
+    if (reserve_device) {
+        unified_cache_add_runtime_bytes(req.device, alloc_size, cat);
+        unified_managed_add_device_bytes(req.device, alloc_size);
+    } else if (reserve_host) {
+        unified_cache_add_runtime_host_bytes(alloc_size);
+        unified_managed_add_host_bytes(alloc_size);
     }
 
     runtime_alloc_record rec;

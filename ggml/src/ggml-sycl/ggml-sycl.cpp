@@ -8681,51 +8681,66 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
         }
         reorder_buf = nullptr;
     } else {
-        constexpr size_t                  STAGING_CHUNK_SIZE = 64ull * 1024ull * 1024ull;
-        const size_t                      stage_chunk        = std::min(size, STAGING_CHUNK_SIZE);
-        ggml_sycl::offload_buffer_request req{};
-        req.queue                               = stream;
-        req.device                              = ctx->device;
-        req.size                                = stage_chunk;
-        req.role                                = ggml_sycl::offload_buffer_role::SET_TENSOR_STAGE;
-        req.intent.role                         = ggml_sycl::alloc_role::STAGING;
-        req.intent.category                     = ggml_sycl::runtime_category::STAGING;
-        req.intent.cohort_id                    = "set_tensor:upload";
-        req.intent.constraints.must_host_pinned = true;
+        // Check if destination is host-accessible.  When the model buffer was
+        // allocated as host-pinned (because the model exceeds VRAM), both data
+        // and tensor->data are host pointers.  Using stream->memcpy for
+        // host-to-host copies submits to the GPU's BCS engine, which can
+        // trigger DEVICE_LOST under heavy traffic (observed on 120B models
+        // with ~14K tensors).  Direct memcpy avoids the GPU entirely.
+        const bool dst_host_accessible =
+            ggml_sycl::alloc_registry::instance().is_host_accessible(tensor->data);
 
-        ggml_sycl::offload_buffer_lease stage_lease{};
-        if (!ggml_sycl::acquire_offload_buffer(req, &stage_lease) || !stage_lease.valid || !stage_lease.handle.ptr) {
-            GGML_ABORT("set_tensor staged upload allocation failed");
-        }
+        if (dst_host_accessible) {
+            // Direct host memcpy — no GPU involvement needed
+            std::memcpy((char *) tensor->data + offset, data, size);
+        } else {
+            constexpr size_t                  STAGING_CHUNK_SIZE = 64ull * 1024ull * 1024ull;
+            const size_t                      stage_chunk        = std::min(size, STAGING_CHUNK_SIZE);
+            ggml_sycl::offload_buffer_request req{};
+            req.queue                               = stream;
+            req.device                              = ctx->device;
+            req.size                                = stage_chunk;
+            req.role                                = ggml_sycl::offload_buffer_role::SET_TENSOR_STAGE;
+            req.intent.role                         = ggml_sycl::alloc_role::STAGING;
+            req.intent.category                     = ggml_sycl::runtime_category::STAGING;
+            req.intent.cohort_id                    = "set_tensor:upload";
+            req.intent.constraints.must_host_pinned = true;
 
-        char * stage_ptr    = static_cast<char *>(stage_lease.handle.ptr);
-        size_t bytes_copied = 0;
-        while (bytes_copied < size) {
-            const size_t chunk_size = std::min(stage_chunk, size - bytes_copied);
-            memcpy(stage_ptr, (const char *) data + bytes_copied, chunk_size);
-            auto err = CHECK_TRY_ERROR(
-                (*stream)
-                    .memcpy((char *) tensor->data + offset + bytes_copied, stage_ptr, chunk_size)
-                    .wait());
-            if (err != 0) {
-                // Retry once on DEVICE_LOST — xe driver may recover after
-                // engine reset triggered by heavy model loading traffic.
-                GGML_LOG_WARN("[SET_TENSOR] H2D copy failed (err=%d) for %s at offset %zu, retrying\n",
-                              err, tensor->name ? tensor->name : "?", offset + bytes_copied);
-                err = CHECK_TRY_ERROR(
+            ggml_sycl::offload_buffer_lease stage_lease{};
+            if (!ggml_sycl::acquire_offload_buffer(req, &stage_lease) || !stage_lease.valid ||
+                !stage_lease.handle.ptr) {
+                GGML_ABORT("set_tensor staged upload allocation failed");
+            }
+
+            char * stage_ptr    = static_cast<char *>(stage_lease.handle.ptr);
+            size_t bytes_copied = 0;
+            while (bytes_copied < size) {
+                const size_t chunk_size = std::min(stage_chunk, size - bytes_copied);
+                memcpy(stage_ptr, (const char *) data + bytes_copied, chunk_size);
+                auto err = CHECK_TRY_ERROR(
                     (*stream)
                         .memcpy((char *) tensor->data + offset + bytes_copied, stage_ptr, chunk_size)
                         .wait());
                 if (err != 0) {
-                    GGML_ABORT("set_tensor H2D copy failed after retry (err=%d) for %s", err,
-                               tensor->name ? tensor->name : "?");
+                    // Retry once on DEVICE_LOST — xe driver may recover after
+                    // engine reset triggered by heavy model loading traffic.
+                    GGML_LOG_WARN("[SET_TENSOR] H2D copy failed (err=%d) for %s at offset %zu, retrying\n",
+                                  err, tensor->name ? tensor->name : "?", offset + bytes_copied);
+                    err = CHECK_TRY_ERROR(
+                        (*stream)
+                            .memcpy((char *) tensor->data + offset + bytes_copied, stage_ptr, chunk_size)
+                            .wait());
+                    if (err != 0) {
+                        GGML_ABORT("set_tensor H2D copy failed after retry (err=%d) for %s", err,
+                                   tensor->name ? tensor->name : "?");
+                    }
+                    GGML_LOG_INFO("[SET_TENSOR] H2D retry succeeded for %s\n",
+                                  tensor->name ? tensor->name : "?");
                 }
-                GGML_LOG_INFO("[SET_TENSOR] H2D retry succeeded for %s\n",
-                              tensor->name ? tensor->name : "?");
+                bytes_copied += chunk_size;
             }
-            bytes_copied += chunk_size;
+            (void) ggml_sycl::release_offload_buffer(stage_lease);
         }
-        (void) ggml_sycl::release_offload_buffer(stage_lease);
     }
     // Mark tensor as reordered if we did CPU-side reorder
     if (do_cpu_reorder && extra && !has_preconverted_tiled) {
@@ -8757,7 +8772,19 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
     // SOA-converted on-demand by the expert cache when promoted to VRAM.  Eagerly
     // reordering 59 GB of experts (120B model) would take minutes and double RAM.
     const bool is_moe_expert      = (usage == tensor_usage::MOE_EXPERT_WEIGHT);
-    const bool should_materialize = (adjusted_layout != GGML_LAYOUT_AOS) && !is_moe_expert;
+    // When the model buffer is host-pinned (model too large for VRAM), defer
+    // layout materialization to inference time.  Eagerly materializing device
+    // layouts during set_tensor fills the layout pool with pinned 256 MB chunks
+    // that cannot be evicted, exhausting VRAM and triggering L0 DEVICE_LOST on
+    // large models (120B MoE).  On-demand materialization during inference
+    // checks live VRAM and falls back to host.
+    //
+    // Check the buffer's managed_alloc tier: if it's HOST_PINNED, the model
+    // didn't fit in VRAM and we shouldn't eagerly fill VRAM with layouts.
+    const bool buffer_is_host_pinned =
+        ctx->managed_alloc.tier == ggml_sycl::alloc_tier::HOST_PINNED;
+    const bool should_materialize =
+        (adjusted_layout != GGML_LAYOUT_AOS) && !is_moe_expert && !buffer_is_host_pinned;
     // Register AOS as the layout choice for MoE expert weights so layout
     // assertions pass during inference.  Expert cache handles SOA on-demand.
     if (use_unified_cache && is_moe_expert) {
@@ -9781,18 +9808,35 @@ struct tiered_kv_buffer_context {
     queue_ptr stream;
 };
 
+// Free a KV buffer pointer using the correct method based on alloc_registry type.
+// sycl::free must NOT be called on regular malloc pointers (MMAP type).
+static void tiered_kv_free_ptr(void * ptr, size_t size, sycl::queue * stream) {
+    if (!ptr) return;
+    const auto * info = ggml_sycl::alloc_registry::instance().lookup(ptr);
+    ggml_sycl::alloc_registry::instance().unregister_alloc(ptr);
+    if (info && info->type == ggml_sycl::alloc_type::MMAP) {
+        std::free(ptr);  // Was allocated via aligned_alloc (pinned cap overflow)
+    } else {
+        SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ptr, *stream)));
+    }
+    (void)size;
+}
+
 static void tiered_kv_buffer_free(ggml_backend_buffer_t buffer) {
     auto * ctx = static_cast<tiered_kv_buffer_context *>(buffer->context);
     ggml_sycl_set_device(ctx->device);
     if (ctx->hot_base) {
-        ggml_sycl::alloc_registry::instance().unregister_alloc(ctx->hot_base);
-        ggml_sycl::unified_cache_sub_runtime_bytes(ctx->device, ctx->hot_size, ggml_sycl::runtime_category::KV_CACHE);
-        SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ctx->hot_base, *ctx->stream)));
+        // hot_base may be device VRAM (original) or host memory (after migration)
+        const auto * info = ggml_sycl::alloc_registry::instance().lookup(ctx->hot_base);
+        if (info && info->type == ggml_sycl::alloc_type::DEVICE) {
+            ggml_sycl::unified_cache_sub_runtime_bytes(
+                ctx->device, ctx->hot_size, ggml_sycl::runtime_category::KV_CACHE);
+        }
+        tiered_kv_free_ptr(ctx->hot_base, ctx->hot_size, ctx->stream);
     }
     if (ctx->cold_base) {
-        ggml_sycl::alloc_registry::instance().unregister_alloc(ctx->cold_base);
         ggml_sycl::unified_cache_sub_runtime_host_bytes(ctx->cold_size);
-        SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ctx->cold_base, *ctx->stream)));
+        tiered_kv_free_ptr(ctx->cold_base, ctx->cold_size, ctx->stream);
     }
     delete ctx;
 }
@@ -9838,12 +9882,20 @@ static void tiered_kv_buffer_memset_tensor(ggml_backend_buffer_t buffer,
     auto * ctx = static_cast<tiered_kv_buffer_context *>(buffer->context);
     ggml_sycl_set_device(ctx->device);
     void * dst = static_cast<char *>(tensor->data) + offset;
-    // Detect whether this tensor lives in the cold (host-pinned) region.
-    // Level Zero GPU queue cannot memset host USM pointers (UR_RESULT_ERROR_DEVICE_LOST).
+    // Detect whether this tensor lives in host memory (cold region, or hot
+    // region after migration to host).  GPU queue memset fails on host
+    // pointers (UR_RESULT_ERROR_DEVICE_LOST on Level Zero).
     const bool in_cold = ctx->cold_base && ctx->cold_size > 0
                          && dst >= ctx->cold_base
                          && dst < static_cast<char *>(ctx->cold_base) + ctx->cold_size;
-    if (in_cold) {
+    // After memset-fail migration, hot_base is host memory (HOST_PINNED or MMAP)
+    const bool hot_is_host = ctx->hot_base &&
+        ggml_sycl::alloc_registry::instance().is_host_accessible(ctx->hot_base) &&
+        !ggml_sycl::alloc_registry::instance().is_device(ctx->hot_base);
+    const bool in_migrated_hot = hot_is_host && ctx->hot_base && ctx->hot_size > 0
+                                 && dst >= ctx->hot_base
+                                 && dst < static_cast<char *>(ctx->hot_base) + ctx->hot_size;
+    if (in_cold || in_migrated_hot) {
         ::memset(dst, value, size);
     } else {
         SYCL_CHECK(CHECK_TRY_ERROR(ctx->stream->memset(dst, value, size).wait()));
@@ -9857,8 +9909,18 @@ static void tiered_kv_buffer_set_tensor(ggml_backend_buffer_t buffer,
                                         size_t                size) {
     auto * ctx = static_cast<tiered_kv_buffer_context *>(buffer->context);
     ggml_sycl_set_device(ctx->device);
-    // queue.memcpy works for both device and host USM pointers
-    SYCL_CHECK(CHECK_TRY_ERROR(ctx->stream->memcpy(static_cast<char *>(tensor->data) + offset, data, size).wait()));
+    void * dst = static_cast<char *>(tensor->data) + offset;
+    // Use direct memcpy for non-USM (regular malloc) destinations.
+    // sycl::queue::memcpy may not support system-to-system copies.
+    if (ggml_sycl::alloc_registry::instance().is_host_accessible(dst) &&
+        !ggml_sycl::alloc_registry::instance().is_device(dst)) {
+        const auto * info = ggml_sycl::alloc_registry::instance().lookup(dst);
+        if (info && info->type == ggml_sycl::alloc_type::MMAP) {
+            std::memcpy(dst, data, size);
+            return;
+        }
+    }
+    SYCL_CHECK(CHECK_TRY_ERROR(ctx->stream->memcpy(dst, data, size).wait()));
 }
 
 static void tiered_kv_buffer_get_tensor(ggml_backend_buffer_t buffer,
@@ -9868,8 +9930,18 @@ static void tiered_kv_buffer_get_tensor(ggml_backend_buffer_t buffer,
                                         size_t                size) {
     auto * ctx = static_cast<tiered_kv_buffer_context *>(buffer->context);
     ggml_sycl_set_device(ctx->device);
+    const void * src = static_cast<const char *>(tensor->data) + offset;
+    // Use direct memcpy for non-USM (regular malloc) sources.
+    if (ggml_sycl::alloc_registry::instance().is_host_accessible(src) &&
+        !ggml_sycl::alloc_registry::instance().is_device(src)) {
+        const auto * info = ggml_sycl::alloc_registry::instance().lookup(src);
+        if (info && info->type == ggml_sycl::alloc_type::MMAP) {
+            std::memcpy(data, src, size);
+            return;
+        }
+    }
     SYCL_CHECK(
-        CHECK_TRY_ERROR(ctx->stream->memcpy(data, static_cast<const char *>(tensor->data) + offset, size).wait()));
+        CHECK_TRY_ERROR(ctx->stream->memcpy(data, src, size).wait()));
 }
 
 static void tiered_kv_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
@@ -9888,16 +9960,18 @@ static void tiered_kv_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) 
                               ctx->device, err);
                 // Fallback: migrate hot KV from device to host-pinned memory.
                 // Free the device allocation and replace with host-pinned.
+                // Use ggml_sycl_malloc_host (with pinned cap) to avoid
+                // overflowing GPU page tables on large models.
                 sycl::free(ctx->hot_base, *ctx->stream);
                 ggml_sycl::alloc_registry::instance().unregister_alloc(ctx->hot_base);
-                void * host_replacement = sycl::malloc_host(ctx->hot_size, *ctx->stream);
+                ggml_sycl::unified_cache_sub_runtime_bytes(
+                    ctx->device, ctx->hot_size, ggml_sycl::runtime_category::KV_CACHE);
+                void * host_replacement = ggml_sycl_malloc_host(
+                    ctx->hot_size, *ctx->stream, "kv_tier:hot_migrate");
                 if (host_replacement) {
                     ::memset(host_replacement, value, ctx->hot_size);
-                    ggml_sycl::alloc_registry::instance().register_alloc(
-                        host_replacement, ctx->hot_size, ctx->device,
-                        ggml_sycl::alloc_type::HOST_PINNED);
                     ctx->hot_base = host_replacement;
-                    GGML_LOG_INFO("[KV-TIER] Device %d: hot KV migrated to host-pinned (%zu bytes)\n",
+                    GGML_LOG_INFO("[KV-TIER] Device %d: hot KV migrated to host (%zu bytes)\n",
                                  ctx->device, ctx->hot_size);
                 } else {
                     // Last resort: host malloc also failed, zero in-place
@@ -10048,16 +10122,15 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
         }
     }
 
-    // Allocate cold region (host pinned memory)
+    // Allocate cold region (host memory, pinned if within cap)
     // In all-cold mode (hot_size == 0), this holds the entire KV cache.
+    // Uses ggml_sycl_malloc_host which respects the pinned memory cap to
+    // prevent GPU page table overflow on large models.  Falls back to
+    // aligned_alloc automatically when the cap is exceeded.
     if (cold_size > 0) {
-        SYCL_CHECK(CHECK_TRY_ERROR(cold_base = sycl::malloc_host(cold_size, *buft_ctx->stream)));
-        if (cold_base) {
-            ggml_sycl::alloc_registry::instance().register_alloc(cold_base, cold_size, -1,
-                                                                 ggml_sycl::alloc_type::HOST_PINNED);
-        }
+        cold_base = ggml_sycl_malloc_host(cold_size, *buft_ctx->stream, "kv_tier:cold");
         if (!cold_base) {
-            GGML_LOG_ERROR("[KV-TIER] Failed to allocate %zu bytes host pinned memory for cold region\n", cold_size);
+            GGML_LOG_ERROR("[KV-TIER] Failed to allocate %zu bytes host memory for cold region\n", cold_size);
             if (hot_base) {
                 ggml_sycl::alloc_registry::instance().unregister_alloc(hot_base);
                 ggml_sycl::unified_cache_sub_runtime_bytes(device, hot_size, ggml_sycl::runtime_category::KV_CACHE);
@@ -12922,6 +12995,9 @@ void * ggml_sycl_malloc_device(size_t size, const sycl::queue & queue, const cha
             return nullptr;
         }
     }
+
+
+
     void * ptr = nullptr;
     try {
         ptr = sycl::malloc_device(size, queue);
@@ -12944,7 +13020,59 @@ void * ggml_sycl_malloc_device(size_t size, const sycl::queue & queue, const cha
     return ptr;
 }
 
+// Track total host-pinned allocations for diagnostic logging.
+static std::atomic<size_t> g_total_host_pinned_bytes{0};
+
 void * ggml_sycl_malloc_host(size_t size, const sycl::queue & queue, const char * tag) {
+    // Guard against oversized pinned allocations that overflow GPU page tables.
+    // sycl::malloc_host maps into the GPU's GGTT (Global Graphics Translation
+    // Table).  Large allocations (model weight buffers for 120B+ models, up to
+    // 10+ GB each) overflow GGTT and trigger DEVICE_LOST engine resets on
+    // Level Zero.
+    //
+    // Only intercept allocations that are individually large enough to be
+    // dangerous.  Small allocations (staging, layout pool, KV cache cold
+    // regions) are safe and MUST remain pinned for GPU zero-copy access.
+    // The threshold of total_vram/2 (~6 GB on Arc B580) targets model weight
+    // chunks which are typically VRAM-sized.
+    //
+    // Model weight buffers that exceed the threshold use regular aligned_alloc.
+    // The unified cache handles GPU access by copying hot weights to device
+    // VRAM on-demand.  CPU expert compute reads from host directly.
+    // The alloc_registry tracks these as MMAP so unified_free skips sycl::free.
+    {
+        const size_t total_vram = ggml_sycl_info().devices[0].total_vram;
+        const size_t big_alloc_threshold = total_vram > 0 ? total_vram / 2 : 4ull * 1024 * 1024 * 1024;
+        if (size > big_alloc_threshold) {
+            // Use 128-byte aligned allocation.  The SYCL backend requires
+            // 128-byte alignment (see get_alignment).  The ggml tensor
+            // allocator computes aligned_offset(base, 0, 128) which
+            // consumes up to 112 bytes if the base is only 16-byte aligned
+            // (glibc malloc).  This causes "not enough space in the buffer"
+            // when the buffer was sized exactly for the tensors.  Using
+            // aligned_alloc returns a 128-aligned pointer so the tallocr
+            // offset is 0 and the full buffer is available.
+            // aligned_alloc requires size to be a multiple of alignment.
+            const size_t alloc_size = (size + 127) & ~(size_t)127;
+            void * ptr = std::aligned_alloc(128, alloc_size);
+            if (ptr) {
+                ggml_sycl::alloc_registry::instance().register_alloc(ptr, size, -1,
+                    ggml_sycl::alloc_type::MMAP);
+                static std::atomic<int> cap_count{0};
+                int count = cap_count.fetch_add(1, std::memory_order_relaxed) + 1;
+                if (count <= 5 || count % 10 == 0) {
+                    const size_t current = g_total_host_pinned_bytes.load(std::memory_order_relaxed);
+                    GGML_LOG_INFO("[SYCL] malloc_host: oversized alloc %.1f MB > threshold %.1f MB, "
+                                  "using aligned_alloc (pinned=%.1f GB, tag=%s, count=%d)\n",
+                                  size / (1024.0 * 1024.0),
+                                  big_alloc_threshold / (1024.0 * 1024.0),
+                                  current / (1024.0 * 1024.0 * 1024.0),
+                                  tag ? tag : "?", count);
+                }
+            }
+            return ptr;
+        }
+    }
     void * ptr = nullptr;
     try {
         ptr = sycl::malloc_host(size, queue);
@@ -12956,6 +13084,7 @@ void * ggml_sycl_malloc_host(size_t size, const sycl::queue & queue, const char 
         return nullptr;
     }
     if (ptr != nullptr) {
+        g_total_host_pinned_bytes.fetch_add(size, std::memory_order_relaxed);
         ggml_sycl::alloc_registry::instance().register_alloc(ptr, size, -1, ggml_sycl::alloc_type::HOST_PINNED);
         ggml_sycl_alloc_trace_record("host", size, tag);
         ggml_sycl::offload_stats_note_host_alloc(tag ? tag : "malloc_host", size);
@@ -32755,7 +32884,29 @@ static void ggml_backend_sycl_synchronize(ggml_backend_t backend) try {
         (void) ggml_sycl::unified_alloc_validate_registry(sycl_ctx->device, "pre_synchronize");
     }
     const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
-    SYCL_CHECK(CHECK_TRY_ERROR(stream->wait_and_throw()));
+    auto err = CHECK_TRY_ERROR(stream->wait_and_throw());
+    if (err != 0) {
+        // Dump VRAM diagnostics before aborting
+        const int dev = sycl_ctx->device;
+        size_t cache_used   = 0;
+        size_t cache_budget = 0;
+        size_t free_mem     = 0;
+        size_t total_mem    = 0;
+        if (auto * cache = ggml_sycl::get_unified_cache_for_device(dev)) {
+            cache_used   = cache->used();
+            cache_budget = cache->budget();
+        }
+        try {
+            ggml_backend_sycl_get_device_memory(dev, &free_mem, &total_mem);
+        } catch (...) {}
+        GGML_LOG_ERROR(
+            "[SYCL-SYNC-DIAG] DEVICE_LOST on device %d: "
+            "cache_used=%.1f MB, cache_budget=%.1f MB, "
+            "L0_free=%.1f MB, L0_total=%.1f MB\n",
+            dev, cache_used / (1024.0 * 1024.0), cache_budget / (1024.0 * 1024.0),
+            free_mem / (1024.0 * 1024.0), total_mem / (1024.0 * 1024.0));
+    }
+    SYCL_CHECK(err);
     if (ggml_sycl::unified_alloc_strict_mode()) {
         (void) ggml_sycl::unified_alloc_validate_registry(sycl_ctx->device, "post_synchronize");
     }

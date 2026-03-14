@@ -8,6 +8,7 @@
 #define GGML_SYCL_ALLOC_REGISTRY_HPP
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
@@ -65,9 +66,16 @@ class alloc_registry {
                                                                   [](const alloc_info & a, const alloc_info & b) { return a.base < b.base; });
         // Check for duplicate base address (re-registration after realloc)
         if (it != entries_.end() && it->base == addr) {
+            // Update: subtract old, add new
+            if (it->type == alloc_type::DEVICE && it->device_id >= 0 && it->device_id < MAX_DEVICES) {
+                device_bytes_[it->device_id].fetch_sub(it->size, std::memory_order_relaxed);
+            }
             *it = info;  // Update in place
         } else {
             entries_.insert(it, info);
+        }
+        if (type == alloc_type::DEVICE && device_id >= 0 && device_id < MAX_DEVICES) {
+            device_bytes_[device_id].fetch_add(size, std::memory_order_relaxed);
         }
     }
 
@@ -81,6 +89,9 @@ class alloc_registry {
         auto                                it = std::lower_bound(entries_.begin(), entries_.end(), addr,
                                                                   [](const alloc_info & a, uintptr_t val) { return a.base < val; });
         if (it != entries_.end() && it->base == addr) {
+            if (it->type == alloc_type::DEVICE && it->device_id >= 0 && it->device_id < MAX_DEVICES) {
+                device_bytes_[it->device_id].fetch_sub(it->size, std::memory_order_relaxed);
+            }
             entries_.erase(it);
         }
     }
@@ -141,6 +152,14 @@ class alloc_registry {
         return info ? info->device_id : -1;
     }
 
+    // Total device bytes tracked for a given device (lock-free atomic read).
+    size_t total_device_bytes(int device_id) const {
+        if (device_id < 0 || device_id >= MAX_DEVICES) {
+            return 0;
+        }
+        return device_bytes_[device_id].load(std::memory_order_relaxed);
+    }
+
     // Number of registered allocations (for debugging/testing).
     size_t size() const {
         std::shared_lock<std::shared_mutex> lock(mu_);
@@ -153,13 +172,19 @@ class alloc_registry {
         entries_.clear();
     }
 
+    static constexpr int MAX_DEVICES = 16;
+
   private:
     alloc_registry() {
         entries_.reserve(4096);  // Pre-allocate for typical model weight count
+        for (int i = 0; i < MAX_DEVICES; ++i) {
+            device_bytes_[i].store(0, std::memory_order_relaxed);
+        }
     }
 
-    mutable std::shared_mutex mu_;
-    std::vector<alloc_info>   entries_;
+    mutable std::shared_mutex            mu_;
+    std::vector<alloc_info>              entries_;
+    std::atomic<size_t>                  device_bytes_[MAX_DEVICES]{};
 };
 
 // Convert alloc_type to sycl::usm::alloc (for interop with existing code).
