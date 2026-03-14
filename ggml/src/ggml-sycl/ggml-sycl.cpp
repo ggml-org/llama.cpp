@@ -9878,8 +9878,24 @@ static void tiered_kv_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) 
             if (err != 0) {
                 GGML_LOG_WARN("[KV-TIER] Device %d: memset retry failed (err=%d), zeroing via host\n",
                               ctx->device, err);
-                // Fallback: clear via host memset (works for USM device memory
-                // on some drivers, or at least won't crash)
+                // Fallback: migrate hot KV from device to host-pinned memory.
+                // Free the device allocation and replace with host-pinned.
+                sycl::free(ctx->hot_base, *ctx->stream);
+                ggml_sycl::alloc_registry::instance().unregister_alloc(ctx->hot_base);
+                void * host_replacement = sycl::malloc_host(ctx->hot_size, *ctx->stream);
+                if (host_replacement) {
+                    ::memset(host_replacement, value, ctx->hot_size);
+                    ggml_sycl::alloc_registry::instance().register_alloc(
+                        host_replacement, ctx->hot_size, ctx->device,
+                        ggml_sycl::alloc_type::HOST_PINNED);
+                    ctx->hot_base = host_replacement;
+                    GGML_LOG_INFO("[KV-TIER] Device %d: hot KV migrated to host-pinned (%zu bytes)\n",
+                                 ctx->device, ctx->hot_size);
+                } else {
+                    // Last resort: host malloc also failed, zero in-place
+                    // (may work for USM device memory on some drivers)
+                    ::memset(ctx->hot_base, value, ctx->hot_size);
+                }
             } else {
                 GGML_LOG_INFO("[KV-TIER] Device %d: memset retry succeeded\n", ctx->device);
             }
