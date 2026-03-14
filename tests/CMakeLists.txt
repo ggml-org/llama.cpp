@@ -285,5 +285,10 @@ target_link_libraries(${TEST_TARGET} PRIVATE llama)
 llama_build_and_test(test-alloc.cpp)
 target_include_directories(test-alloc PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src)
 
+if (GGML_CUDA AND NOT GGML_BACKEND_DL)
+    llama_build_and_test(test-nvfp4-repack.cpp)
+    target_include_directories(test-nvfp4-repack PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src)
+endif()
+
 llama_build(export-graph-ops.cpp)
 target_include_directories(export-graph-ops PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src)
