@@ -1180,6 +1180,9 @@ static void llama_sampler_dist_backend_apply(
     struct ggml_tensor * idxf = ggml_sum(ctx, mask);
     ggml_set_name(idxf, "dist_index_f32");
 
+    // Clamp to prevent out-of-bounds access when computing the index.
+    idxf = ggml_clamp(ctx, idxf, 1.0f, mask->ne[0]);
+
     // Use ggml_scale_bias to scale the index value by -1 and then add the size
     // of the mask to that value so we get the correct index ((-1 * idxf) + n).
     struct ggml_tensor * idx = ggml_cast(ctx, ggml_scale_bias(ctx, idxf, -1.0f, mask->ne[0]), GGML_TYPE_I32);
