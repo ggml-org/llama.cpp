@@ -63,7 +63,7 @@ kernel void kernel_l2_norm_f32(
 
     barrier(CLK_LOCAL_MEM_FENCE);
 
-    const float scale = 1.0f/sqrt(max(sum[0], eps));
+    const float scale = 1.0f/max(sqrt(sum[0]), eps);
 
     for (int i00 = get_local_id(0); i00 < ne00; i00 += get_local_size(0)) {
         y[i00] = x[i00] * scale;
