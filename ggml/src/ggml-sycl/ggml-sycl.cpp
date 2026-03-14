@@ -899,6 +899,12 @@ void * moe_expert_ensure_soa_cached(int layer_idx, int expert_idx, int device_id
     }
     if (!meta) return nullptr;
 
+    // Validate data pointer — skip if corrupt (non-canonical address on x86-64)
+    const uintptr_t data_addr = reinterpret_cast<uintptr_t>(meta->data_ptr);
+    if (data_addr == 0 || (data_addr >> 47) != 0) {
+        return nullptr;
+    }
+
     // Get unified cache for target device
     unified_cache * cache = get_unified_cache_for_device(device_id);
     if (!cache) return nullptr;
@@ -1185,6 +1191,21 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
         // may have been unmapped after model loading.  We store the pointer as-is
         // and resolve host accessibility at Phase 2 upload time.
         auto * src0_extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
+
+        // Validate src0->data before computing expert offsets.
+        // With aligned_alloc host buffers, some tensor data pointers may be
+        // corrupt if the buffer wasn't properly allocated or mapped.
+        const uintptr_t src0_addr = reinterpret_cast<uintptr_t>(src0->data);
+        if (src0_addr == 0 || (src0_addr >> 47) != 0) {
+            // Null or non-canonical address (bits 47+ set = kernel space on x86-64)
+            GGML_LOG_WARN("[MOE-HYBRID] Skipping MUL_MAT_ID node with invalid src0->data=%p "
+                          "(tensor=%s, buffer=%s)\n",
+                          src0->data,
+                          src0->name ? src0->name : "?",
+                          src0->buffer ? ggml_backend_buffer_name(src0->buffer) : "none");
+            continue;
+        }
+
         for (int e = 0; e < n_experts; e++) {
             const void * ptr = static_cast<const char *>(src0->data)
                                     + static_cast<size_t>(e) * nb02;
@@ -13020,67 +13041,24 @@ void * ggml_sycl_malloc_device(size_t size, const sycl::queue & queue, const cha
     return ptr;
 }
 
-// Track total host-pinned allocations for diagnostic logging.
+// Track total host-pinned allocations for diagnostics.
 static std::atomic<size_t> g_total_host_pinned_bytes{0};
 
 void * ggml_sycl_malloc_host(size_t size, const sycl::queue & queue, const char * tag) {
-    // Guard against oversized pinned allocations that overflow GPU page tables.
-    // sycl::malloc_host maps into the GPU's GGTT (Global Graphics Translation
-    // Table).  Large allocations (model weight buffers for 120B+ models, up to
-    // 10+ GB each) overflow GGTT and trigger DEVICE_LOST engine resets on
-    // Level Zero.
-    //
-    // Only intercept allocations that are individually large enough to be
-    // dangerous.  Small allocations (staging, layout pool, KV cache cold
-    // regions) are safe and MUST remain pinned for GPU zero-copy access.
-    // The threshold of total_vram/2 (~6 GB on Arc B580) targets model weight
-    // chunks which are typically VRAM-sized.
-    //
-    // Model weight buffers that exceed the threshold use regular aligned_alloc.
-    // The unified cache handles GPU access by copying hot weights to device
-    // VRAM on-demand.  CPU expert compute reads from host directly.
-    // The alloc_registry tracks these as MMAP so unified_free skips sycl::free.
-    {
-        const size_t total_vram = ggml_sycl_info().devices[0].total_vram;
-        const size_t big_alloc_threshold = total_vram > 0 ? total_vram / 2 : 4ull * 1024 * 1024 * 1024;
-        if (size > big_alloc_threshold) {
-            // Use 128-byte aligned allocation.  The SYCL backend requires
-            // 128-byte alignment (see get_alignment).  The ggml tensor
-            // allocator computes aligned_offset(base, 0, 128) which
-            // consumes up to 112 bytes if the base is only 16-byte aligned
-            // (glibc malloc).  This causes "not enough space in the buffer"
-            // when the buffer was sized exactly for the tensors.  Using
-            // aligned_alloc returns a 128-aligned pointer so the tallocr
-            // offset is 0 and the full buffer is available.
-            // aligned_alloc requires size to be a multiple of alignment.
-            const size_t alloc_size = (size + 127) & ~(size_t)127;
-            void * ptr = std::aligned_alloc(128, alloc_size);
-            if (ptr) {
-                ggml_sycl::alloc_registry::instance().register_alloc(ptr, size, -1,
-                    ggml_sycl::alloc_type::MMAP);
-                static std::atomic<int> cap_count{0};
-                int count = cap_count.fetch_add(1, std::memory_order_relaxed) + 1;
-                if (count <= 5 || count % 10 == 0) {
-                    const size_t current = g_total_host_pinned_bytes.load(std::memory_order_relaxed);
-                    GGML_LOG_INFO("[SYCL] malloc_host: oversized alloc %.1f MB > threshold %.1f MB, "
-                                  "using aligned_alloc (pinned=%.1f GB, tag=%s, count=%d)\n",
-                                  size / (1024.0 * 1024.0),
-                                  big_alloc_threshold / (1024.0 * 1024.0),
-                                  current / (1024.0 * 1024.0 * 1024.0),
-                                  tag ? tag : "?", count);
-                }
-            }
-            return ptr;
-        }
-    }
+    // Always use sycl::malloc_host — pinned host memory with GPU DMA access.
+    // Verified: 60 GB pinned works fine on Xe2/BMG (test-sycl-pinned-memory).
+    // The GGTT overflow hypothesis was disproven — modern Intel GPUs use
+    // per-process page tables, not a fixed-size GGTT for USM allocations.
     void * ptr = nullptr;
     try {
         ptr = sycl::malloc_host(size, queue);
     } catch (const sycl::exception & e) {
-        GGML_SYCL_DEBUG("[SYCL] malloc_host failed (%zu bytes, %s): %s\n", size, tag ? tag : "unknown", e.what());
+        GGML_LOG_WARN("[SYCL] malloc_host failed (%zu bytes, %s): %s\n",
+                      size, tag ? tag : "unknown", e.what());
         return nullptr;
     } catch (const std::exception & e) {
-        GGML_SYCL_DEBUG("[SYCL] malloc_host failed (%zu bytes, %s): %s\n", size, tag ? tag : "unknown", e.what());
+        GGML_LOG_WARN("[SYCL] malloc_host failed (%zu bytes, %s): %s\n",
+                      size, tag ? tag : "unknown", e.what());
         return nullptr;
     }
     if (ptr != nullptr) {
