@@ -281,6 +281,7 @@
 {:else if message.role === MessageRole.USER}
 	<ChatMessageUser
 		class={className}
+		{style}
 		{deletionInfo}
 		{message}
 		onConfirmDelete={handleConfirmDelete}
