@@ -245,7 +245,7 @@
 					</div>
 
 					{#if isDisabled}
-						<p class="text-xs text-muted-foreground">Disabled when automative width is enabled.</p>
+						<p class="text-xs text-muted-foreground">Disabled when automatic width is enabled.</p>
 					{:else if field.help || SETTING_CONFIG_INFO[field.key]}
 						<p class="text-xs text-muted-foreground">
 							{field.help || SETTING_CONFIG_INFO[field.key]}
