@@ -35,6 +35,7 @@
 #endif
 #include <sycl/half_type.hpp>
 
+#include "ggml.h"
 #include "ggml-sycl.h"
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
@@ -43,17 +44,18 @@
 #include "ggml-sycl/backend.hpp"
 #include "ggml-sycl/common.hpp"
 #include "ggml-sycl/element_wise.hpp"
+#include "ggml-sycl/gated_delta_net.hpp"
+#include "ggml-sycl/gemm.hpp"
+#include "ggml-sycl/getrows.hpp"
 #include "ggml-sycl/norm.hpp"
 #include "ggml-sycl/presets.hpp"
-#include "ggml-sycl/gemm.hpp"
+#include "ggml-sycl/quantize.hpp"
+#include "ggml-sycl/repeat_back.hpp"
 #include "ggml-sycl/set_rows.hpp"
 #include "ggml-sycl/set.hpp"
-#include "ggml-sycl/sycl_hw.hpp"
-#include "ggml-sycl/getrows.hpp"
-#include "ggml-sycl/repeat_back.hpp"
-#include "ggml-sycl/quantize.hpp"
 #include "ggml-sycl/ssm_conv.hpp"
-#include "ggml.h"
+#include "ggml-sycl/sycl_hw.hpp"
+
 
 static bool g_sycl_loaded = false;
 int g_ggml_sycl_debug = 0;
@@ -99,6 +101,8 @@ static ggml_sycl_device_info ggml_sycl_init() {
         info.devices[i].nsm = prop.get_max_compute_units() / 16; //16: Number of Xe Cores
         info.devices[i].opt_feature.reorder = device.ext_oneapi_architecture_is(syclex::arch_category::intel_gpu);
         info.devices[i].smpbo = prop.get_local_mem_size();
+        info.devices[i].warp_size = WARP_SIZE;
+
         info.max_work_group_sizes[i] = prop.get_max_work_group_size();
         info.devices[i].max_wg_per_cu = info.max_work_group_sizes[i] / prop.get_max_compute_units();
 
@@ -4181,6 +4185,9 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
         case GGML_OP_GATED_LINEAR_ATTN:
             ggml_sycl_op_gated_linear_attn(ctx, dst);
             break;
+        case GGML_OP_GATED_DELTA_NET:
+            ggml_sycl_gated_delta_net(ctx, dst);
+            break;
         case GGML_OP_SSM_CONV:
             ggml_sycl_ssm_conv(ctx, dst);
             break;
@@ -4890,6 +4897,7 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_RWKV_WKV6:
         case GGML_OP_RWKV_WKV7:
         case GGML_OP_GATED_LINEAR_ATTN:
+        case GGML_OP_GATED_DELTA_NET:
             return true;
         case GGML_OP_SSM_CONV:
             return op->type == GGML_TYPE_F32 &&
