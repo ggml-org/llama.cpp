@@ -238,7 +238,7 @@ jobs:
       openvino_version: ${{ steps.openvino_version.outputs.value }}
 
     env:
-      # Sync versions in build.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
+      # Sync versions in build.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
       OPENVINO_VERSION_MAJOR: "2026.0"
       OPENVINO_VERSION_FULL: "2026.0.0.20965.c6d6a13a886"
 
