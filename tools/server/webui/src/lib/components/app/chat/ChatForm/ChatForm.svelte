@@ -125,6 +125,8 @@
 	 *
 	 */
 
+    let widthClasses = $derived(chatWidthClasses());
+
 	// Configuration
 	let currentConfig = $derived(config());
 	let pasteLongTextToFileLength = $derived.by(() => {
@@ -574,7 +576,7 @@
 	/>
 
 	<div
-		class="{INPUT_CLASSES} mx-auto {chatWidthClasses()
+		class="{INPUT_CLASSES} mx-auto {widthClasses
 			.class} overflow-hidden rounded-3xl backdrop-blur-md {disabled
 			? 'cursor-not-allowed opacity-60'
 			: ''}"
