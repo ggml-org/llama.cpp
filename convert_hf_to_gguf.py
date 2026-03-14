@@ -877,7 +877,7 @@ class ModelBase:
         try:
             # for security reason, we don't allow loading remote code by default
             # if a model need remote code, we will fallback to config.json
-            config = AutoConfig.from_pretrained(dir_model, trust_remote_code=False).to_dict()
+            config = AutoConfig.from_pretrained(dir_model, trust_remote_code=True).to_dict()
         except Exception as e:
             logger.warning(f"Failed to load model config from {dir_model}: {e}")
             logger.warning("Trying to load config.json instead")
@@ -12305,6 +12305,126 @@ def split_str_to_n_bytes(split_str: str) -> int:
         raise ValueError(f"Invalid split size: {split_str}, must be positive")
 
     return n
+
+
+@ModelBase.register("YuanForCausalLM")
+class YuanModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.YUAN
+
+    def set_vocab(self):
+        self._set_vocab_sentencepiece()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+
+        self.gguf_writer.add_vocab_size(hparams["vocab_size"])
+
+        # Yuan uses rotary_percent to determine rope dimension
+        # head_dim * rotary_percent = rope_dim
+        head_dim = hparams.get("head_dim", 256)
+        rotary_percent = hparams.get("rotary_percent", 0.5)
+        rope_dim = int(head_dim * rotary_percent)
+        self.gguf_writer.add_rope_dimension_count(rope_dim)
+
+        if (rope_base := hparams.get("rotary_base")) is not None:
+            self.gguf_writer.add_rope_freq_base(rope_base)
+
+        # head_dim differs from hidden_size / num_heads due to attention_projection_size
+        self.gguf_writer.add_key_length(head_dim)
+        self.gguf_writer.add_value_length(head_dim)
+
+        # MoE parameters from nested moe_config
+        moe_config = hparams.get("moe_config", {})
+        if moe_config:
+            n_experts = moe_config.get("moe_num_experts", 0)
+            n_experts_used = moe_config.get("moe_top_k", 0)
+            if n_experts:
+                self.gguf_writer.add_expert_count(n_experts)
+            if n_experts_used:
+                self.gguf_writer.add_expert_used_count(n_experts_used)
+            ffn_size = moe_config.get("ffn_hidden_size", hparams.get("intermediate_size"))
+            if ffn_size:
+                self.gguf_writer.add_expert_feed_forward_length(ffn_size)
+            if moe_config.get("norm_topk_prob", False):
+                self.gguf_writer.add_expert_weights_norm(True)
+
+    _experts: list[dict[str, Tensor]] | None = None
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # skip vision and image projection tensors
+        if name.startswith("vision_model.") or name.startswith("imagemlp") or name.startswith("imagemlp_layernorm"):
+            return
+
+        # strip "language_model." prefix
+        if name.startswith("language_model."):
+            name = name.removeprefix("language_model.")
+
+        # split fused query+key into separate Q and K
+        if name.endswith(".self_attn.get_query_key.weight"):
+            # get_query_key shape: [2 * num_heads * head_dim, hidden_size]
+            # split into q_proj and k_proj
+            half = data_torch.shape[0] // 2
+            q_data = data_torch[:half]
+            k_data = data_torch[half:]
+
+            name_q = name.replace("get_query_key", "q_proj")
+            name_k = name.replace("get_query_key", "k_proj")
+
+            yield from super().modify_tensors(q_data, name_q, bid)
+            yield from super().modify_tensors(k_data, name_k, bid)
+            return
+
+        # handle MoE expert tensors: collect, split fused w1, and merge
+        if "mlp.experts" in name and "router" not in name:
+            moe_config = self.hparams.get("moe_config", {})
+            n_experts = moe_config.get("moe_num_experts", 32)
+            assert bid is not None
+
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+
+            self._experts[bid][name] = data_torch
+
+            # Each expert has w1 and w2, so wait for all n_experts * 2 tensors
+            if len(self._experts[bid]) >= n_experts * 2:
+                for w_name, split_names in [
+                    # w1 is fused gate+up: [2*ffn_size, hidden] -> gate [ffn_size, hidden] + up [ffn_size, hidden]
+                    ("w1", ("gate_proj", "up_proj")),
+                    # w2 is down: [hidden, ffn_size]
+                    ("w2", ("down_proj",)),
+                ]:
+                    datas_per_split: list[list[Tensor]] = [[] for _ in split_names]
+
+                    for xid in range(n_experts):
+                        ename = f"model.layers.{bid}.mlp.experts.{w_name}.{xid}.weight"
+                        expert_data = self._experts[bid][ename]
+                        del self._experts[bid][ename]
+
+                        if len(split_names) == 2:
+                            # split fused gate+up
+                            half = expert_data.shape[0] // 2
+                            datas_per_split[0].append(expert_data[:half])
+                            datas_per_split[1].append(expert_data[half:])
+                        else:
+                            datas_per_split[0].append(expert_data)
+
+                    for split_name, datas in zip(split_names, datas_per_split):
+                        merged = torch.stack(datas, dim=0)
+                        merged_name = f"model.layers.{bid}.mlp.experts.{split_name}.weight"
+                        yield from super().modify_tensors(merged, merged_name, bid)
+                return
+            else:
+                return
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+
+        if self._experts is not None:
+            remaining = sum(len(e) for e in self._experts)
+            assert remaining == 0, f"Unprocessed expert tensors: {remaining}"
 
 
 def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> str:

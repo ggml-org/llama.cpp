@@ -571,6 +571,22 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.experts.gate_up_proj",
         ),
 
+        # Yuan localized filtering attention
+        MODEL_TENSOR.ATTN_LF_CONV1: (
+            "model.layers.{bid}.self_attn.lf_gate.conv1",  # yuan
+        ),
+        MODEL_TENSOR.ATTN_LF_CONV2: (
+            "model.layers.{bid}.self_attn.lf_gate.conv2",  # yuan
+        ),
+        MODEL_TENSOR.ATTN_LF_NORM: (
+            "model.layers.{bid}.self_attn.lf_gate.output_layernorm",  # yuan
+        ),
+
+        # Yuan attention-based MoE router
+        MODEL_TENSOR.FFN_GATE_INP_QKV: (
+            "model.layers.{bid}.mlp.router.query_key_value",  # yuan
+        ),
+
         MODEL_TENSOR.MOE_LATENT_DOWN: (
             "backbone.layers.{bid}.mixer.fc1_latent_proj",                 # nemotron 3 super
         ),

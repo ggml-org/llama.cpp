@@ -484,6 +484,7 @@ class MODEL_ARCH(IntEnum):
     LLAMA_EMBED      = auto()
     MAINCODER        = auto()
     KIMI_LINEAR      = auto()
+    YUAN             = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -691,6 +692,10 @@ class MODEL_TENSOR(IntEnum):
     INDEXER_PROJ         = auto()
     INDEXER_ATTN_K       = auto()
     INDEXER_ATTN_Q_B     = auto()
+    ATTN_LF_CONV1        = auto() # yuan localized filtering
+    ATTN_LF_CONV2        = auto() # yuan localized filtering
+    ATTN_LF_NORM         = auto() # yuan localized filtering
+    FFN_GATE_INP_QKV     = auto() # yuan attention-based MoE router
     # vision
     V_MMPROJ             = auto()
     V_MMPROJ_FC          = auto()
@@ -930,6 +935,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.LLAMA_EMBED:      "llama-embed",
     MODEL_ARCH.MAINCODER:        "maincoder",
     MODEL_ARCH.KIMI_LINEAR:      "kimi-linear",
+    MODEL_ARCH.YUAN:             "yuan",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -1065,6 +1071,10 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.CHANNEL_MIX_KEY:           "blk.{bid}.channel_mix_key",
     MODEL_TENSOR.CHANNEL_MIX_RECEPTANCE:    "blk.{bid}.channel_mix_receptance",
     MODEL_TENSOR.CHANNEL_MIX_VALUE:         "blk.{bid}.channel_mix_value",
+    MODEL_TENSOR.ATTN_LF_CONV1:             "blk.{bid}.attn_lf_conv1",
+    MODEL_TENSOR.ATTN_LF_CONV2:             "blk.{bid}.attn_lf_conv2",
+    MODEL_TENSOR.ATTN_LF_NORM:              "blk.{bid}.attn_lf_norm",
+    MODEL_TENSOR.FFN_GATE_INP_QKV:          "blk.{bid}.ffn_gate_inp_qkv",
     MODEL_TENSOR.ATTN_Q_A:                  "blk.{bid}.attn_q_a",
     MODEL_TENSOR.ATTN_Q_B:                  "blk.{bid}.attn_q_b",
     MODEL_TENSOR.ATTN_KV_A_MQA:             "blk.{bid}.attn_kv_a_mqa",
@@ -3660,6 +3670,24 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE_SHEXP,
         MODEL_TENSOR.FFN_DOWN_SHEXP,
         MODEL_TENSOR.FFN_UP_SHEXP,
+    ],
+    MODEL_ARCH.YUAN: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_LF_CONV1,
+        MODEL_TENSOR.ATTN_LF_CONV2,
+        MODEL_TENSOR.ATTN_LF_NORM,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE_INP_QKV,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
     ],
     # TODO
 }
