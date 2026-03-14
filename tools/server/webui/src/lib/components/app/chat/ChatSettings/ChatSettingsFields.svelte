@@ -34,25 +34,15 @@
 		}
 		return (serverStore.defaultParams ?? {}) as Record<string, unknown>;
 	});
-
-	// Helper function to get parameter source info for syncable parameters
-	function getParameterSourceInfo(key: string) {
-		if (!settingsStore.canSyncParameter(key)) {
-			return null;
-		}
-
-		return settingsStore.getParameterInfo(key);
-	}
 </script>
 
 {#each fields as field (field.key)}
 	<div class="space-y-2">
 		{#if field.type === SettingsFieldType.INPUT}
-			{@const paramInfo = getParameterSourceInfo(field.key)}
 			{@const currentValue = String(localConfig[field.key] ?? '')}
-			{@const propsDefault = paramInfo?.serverDefault}
+			{@const serverDefault = sp[field.key]}
 			{@const isCustomRealTime = (() => {
-				if (!paramInfo || propsDefault === undefined) return false;
+				if (serverDefault == null) return false;
 				if (currentValue === '') return false;
 
 				const numericInput = parseFloat(currentValue);
@@ -60,9 +50,9 @@
 					? Math.round(numericInput * 1000000) / 1000000
 					: currentValue;
 				const normalizedDefault =
-					typeof propsDefault === 'number'
-						? Math.round(propsDefault * 1000000) / 1000000
-						: propsDefault;
+					typeof serverDefault === 'number'
+						? Math.round(serverDefault * 1000000) / 1000000
+						: serverDefault;
 
 				return normalizedInput !== normalizedDefault;
 			})()}
@@ -88,7 +78,9 @@
 						// Update local config immediately for real-time badge feedback
 						onConfigChange(field.key, e.currentTarget.value);
 					}}
-					placeholder={sp[field.key] != null ? `Default: ${normalizeFloatingPoint(sp[field.key])}` : ''}
+					placeholder={sp[field.key] != null
+						? `Default: ${normalizeFloatingPoint(sp[field.key])}`
+						: ''}
 					class="w-full {isCustomRealTime ? 'pr-8' : ''}"
 				/>
 				{#if isCustomRealTime}
@@ -152,13 +144,12 @@
 				(opt: { value: string; label: string; icon?: Component }) =>
 					opt.value === localConfig[field.key]
 			)}
-			{@const paramInfo = getParameterSourceInfo(field.key)}
 			{@const currentValue = localConfig[field.key]}
-			{@const propsDefault = paramInfo?.serverDefault}
+			{@const serverDefault = sp[field.key]}
 			{@const isCustomRealTime = (() => {
-				if (!paramInfo || propsDefault === undefined) return false;
+				if (serverDefault == null) return false;
 				if (currentValue === '' || currentValue === undefined) return false;
-				return currentValue !== propsDefault;
+				return currentValue !== serverDefault;
 			})()}
 
 			<div class="flex items-center gap-2">
