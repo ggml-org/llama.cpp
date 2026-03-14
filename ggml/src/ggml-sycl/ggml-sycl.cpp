@@ -832,6 +832,43 @@ static void moe_prestage_popular_experts() {
     GGML_LOG_INFO("[MOE-PRESTAGE] Pre-staged %d popular experts to GPU0 VRAM "
                   "(%d already cached, %zu slots/layer, %d layers)\n",
                   prestaged, skipped, slots_per_layer, n_layers);
+
+    // Phase 2: Fill secondary GPUs with overflow popular experts (expert-split).
+    // Experts already placed on GPU0 are skipped; next-most-popular overflow
+    // experts fill secondary GPU VRAM (e.g. B50).  The fused MoE routing path
+    // already checks placement.device_id and dispatches to the correct GPU.
+    for (int dev = 1; dev < GGML_SYCL_MAX_DEVICES; dev++) {
+        if (!g_expert_prefetchers[dev].is_initialized()) continue;
+
+        ggml_sycl::unified_cache * sec_cache = ggml_sycl::get_unified_cache_for_device(dev);
+        if (!sec_cache) continue;
+
+        size_t sec_avail = ggml_sycl::unified_cache_available_for_compute(dev);
+        size_t sec_slots = (expert_bytes > 0) ? sec_avail / expert_bytes : 0;
+        if (sec_slots == 0) continue;
+        size_t sec_per_layer = std::max(size_t(1), sec_slots / static_cast<size_t>(n_layers));
+
+        int sec_staged = 0;
+        for (auto & [lid, experts] : by_layer) {
+            size_t staged_this = 0;
+            for (const auto * meta : experts) {
+                if (staged_this >= sec_per_layer) break;
+                auto placement = ptable.get(meta->layer_id, meta->expert_idx);
+                if (placement.device_ptr != nullptr) continue;  // Already on some GPU
+
+                void * ptr = ggml_sycl::moe_expert_ensure_soa_cached(
+                    meta->layer_id, meta->expert_idx, dev);
+                if (ptr) {
+                    sec_staged++;
+                    staged_this++;
+                }
+            }
+        }
+        if (sec_staged > 0) {
+            GGML_LOG_INFO("[MOE-PRESTAGE] Secondary GPU %d: %d experts pre-staged (expert-split)\n",
+                          dev, sec_staged);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
