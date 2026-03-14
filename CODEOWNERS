@@ -6,25 +6,9 @@
 /.github/workflows/                     @ggml-org/ci
 /ci/                                    @ggerganov
 /cmake/                                 @ggerganov
-/common/CMakeLists.txt                  @ggerganov
-/common/arg.*                           @ggerganov
-/common/base64.hpp.*                    @ggerganov
-/common/build-info.*                    @ggerganov
-/common/chat.*                          @pwilkin
-/common/chat-auto*.*                    @pwilkin
-/common/chat-diff-analyzer.*            @pwilkin
-/common/chat-peg-parser.*               @aldehir
-/common/common.*                        @ggerganov
-/common/console.*                       @ggerganov
-/common/http.*                          @angt
-/common/jinja/                          @ngxson @CISC @aldehir
-/common/llguidance.*                    @ggerganov
-/common/log.*                           @ggerganov
+/common/                                @ggml-org/llama-common
+/common/jinja/                          @CISC
 /common/ngram-map.*                     @srogmann
-/common/peg-parser.*                    @aldehir
-/common/sampling.*                      @ggerganov
-/common/speculative.*                   @ggerganov
-/common/unicode.*                       @aldehir
 /convert_*.py                           @CISC
 /examples/batched.swift/                @ggerganov
 /examples/batched/                      @ggerganov
@@ -69,7 +53,7 @@
 /ggml/src/ggml-threading.*              @ggerganov
 /ggml/src/ggml-vulkan/                  @ggml-org/ggml-vulkan
 /ggml/src/ggml-virtgpu/                 @kpouget
-/ggml/src/ggml-webgpu/                  @reeselevine
+/ggml/src/ggml-webgpu/                  @ggml-org/ggml-webgpu
 /ggml/src/ggml-zdnn/                    @ggml-org/ggml-zdnn @Andreas-Krebbel @AlekseiNikiforovIBM
 /ggml/src/ggml-openvino/                @cavusmustafa @wine99
 /ggml/src/ggml.c                        @ggerganov
