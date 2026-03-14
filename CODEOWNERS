@@ -78,12 +78,12 @@
 /tools/batched-bench/                   @ggerganov
 /tools/cli/                             @ngxson
 /tools/completion/                      @ggerganov
-/tools/mtmd/                            @ggml-org/mtmd
+/tools/mtmd/                            @ggml-org/llama-mtmd
 /tools/perplexity/                      @ggerganov
 /tools/parser/                          @pwilkin
 /tools/quantize/                        @ggerganov
 /tools/rpc/                             @ggml-org/ggml-rpc
-/tools/server/*                         @ggml-org/server # no subdir
+/tools/server/*                         @ggml-org/llama-server # no subdir
 /tools/server/webui/                    @ggml-org/webui
 /tools/tokenize/                        @ggerganov
 /tools/tts/                             @ggerganov
