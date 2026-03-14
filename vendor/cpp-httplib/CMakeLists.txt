@@ -1,17 +1,23 @@
 set(TARGET cpp-httplib)
+license_add_file("cpp-httplib" "LICENSE")
 
 find_package(Threads REQUIRED)
 
+llama_add_compile_flags()
+
 add_library(${TARGET} STATIC httplib.cpp httplib.h)
-if (NOT MSVC)
-    # disable warnings in 3rd party code
+
+# disable warnings in 3rd party code
+if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    target_compile_options(${TARGET} PRIVATE /w)
+else()
     target_compile_options(${TARGET} PRIVATE -w)
 endif()
 
-target_link_libraries  (${TARGET} PRIVATE Threads::Threads)
+target_link_libraries(${TARGET} PRIVATE Threads::Threads)
 
 if (WIN32 AND NOT MSVC)
-    target_link_libraries(${TARGET} PRIVATE ws2_32)
+    target_link_libraries(${TARGET} PUBLIC ws2_32)
 endif()
 
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
@@ -33,7 +39,7 @@ if (LLAMA_BUILD_BORINGSSL)
     set(FIPS OFF CACHE BOOL "Enable FIPS (BoringSSL)")
 
     set(BORINGSSL_GIT "https://boringssl.googlesource.com/boringssl" CACHE STRING "BoringSSL git repository")
-    set(BORINGSSL_VERSION "0.20251002.0" CACHE STRING "BoringSSL version")
+    set(BORINGSSL_VERSION "0.20260211.0" CACHE STRING "BoringSSL version")
 
     message(STATUS "Fetching BoringSSL version ${BORINGSSL_VERSION}")
 
@@ -66,6 +72,8 @@ if (LLAMA_BUILD_BORINGSSL)
 
     set(BUILD_SHARED_LIBS ${SAVED_BUILD_SHARED_LIBS})
     set(BUILD_TESTING ${SAVED_BUILD_TESTING})
+
+    license_add_file("BoringSSL" "${boringssl_SOURCE_DIR}/LICENSE")
 
     set(CPPHTTPLIB_OPENSSL_SUPPORT TRUE)
     target_link_libraries(${TARGET} PUBLIC ssl crypto)
@@ -108,6 +116,8 @@ elseif (LLAMA_BUILD_LIBRESSL)
     set(BUILD_SHARED_LIBS ${SAVED_BUILD_SHARED_LIBS})
     set(BUILD_TESTING ${SAVED_BUILD_TESTING})
 
+    license_add_file("LibreSSL" "${libressl_SOURCE_DIR}/COPYING")
+
     set(CPPHTTPLIB_OPENSSL_SUPPORT TRUE)
     target_link_libraries(${TARGET} PUBLIC ssl crypto)
 
@@ -137,14 +147,30 @@ elseif (LLAMA_OPENSSL)
             target_link_libraries(${TARGET} PUBLIC OpenSSL::SSL OpenSSL::Crypto)
         endif()
     else()
-        message(STATUS "OpenSSL not found, SSL support disabled")
+        message(WARNING "OpenSSL not found, HTTPS support disabled")
+    endif()
+endif()
+
+# disable warnings in 3rd party code
+if(LLAMA_BUILD_BORINGSSL OR LLAMA_BUILD_LIBRESSL)
+    if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+        target_compile_options(ssl PRIVATE /w)
+        target_compile_options(crypto PRIVATE /w)
+        if(LLAMA_BUILD_BORINGSSL)
+            target_compile_options(fipsmodule PRIVATE /w)
+        endif()
+    else()
+        target_compile_options(ssl PRIVATE -w)
+        target_compile_options(crypto PRIVATE -w)
+        if(LLAMA_BUILD_BORINGSSL)
+            target_compile_options(fipsmodule PRIVATE -w)
+        endif()
     endif()
 endif()
 
 if (CPPHTTPLIB_OPENSSL_SUPPORT)
     target_compile_definitions(${TARGET} PUBLIC CPPHTTPLIB_OPENSSL_SUPPORT) # used in server.cpp
     if (APPLE AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-        target_compile_definitions(${TARGET} PRIVATE CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN)
         find_library(CORE_FOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
         find_library(SECURITY_FRAMEWORK Security REQUIRED)
         target_link_libraries(${TARGET} PUBLIC ${CORE_FOUNDATION_FRAMEWORK} ${SECURITY_FRAMEWORK})

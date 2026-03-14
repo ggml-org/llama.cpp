@@ -10,6 +10,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <clocale>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
@@ -536,6 +537,8 @@ static std::string audio_data_from_speaker(json speaker, const outetts_version t
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     common_params params;
 
     params.out_file = "output.wav";
@@ -1036,7 +1039,7 @@ lovely<|t_0.56|><|code_start|><|634|><|596|><|1766|><|1556|><|1306|><|1285|><|14
 
 #if 1
     // spectral operations
-    const int n_embd = llama_model_n_embd(model_cts);
+    const int n_embd = llama_model_n_embd_out(model_cts);
     const float * embd = llama_get_embeddings(ctx_cts);
 
     auto audio = embd_to_audio(embd, n_codes, n_embd, params.cpuparams.n_threads);

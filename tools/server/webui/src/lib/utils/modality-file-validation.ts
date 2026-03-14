@@ -4,23 +4,8 @@
  */
 
 import { getFileTypeCategory } from '$lib/utils';
-import {
-	FileExtensionAudio,
-	FileExtensionImage,
-	FileExtensionPdf,
-	FileExtensionText,
-	MimeTypeAudio,
-	MimeTypeImage,
-	MimeTypeApplication,
-	MimeTypeText,
-	FileTypeCategory
-} from '$lib/enums';
-
-/** Modality capabilities for file validation */
-export interface ModalityCapabilities {
-	hasVision: boolean;
-	hasAudio: boolean;
-}
+import { FileTypeCategory } from '$lib/enums';
+import type { ModalityCapabilities } from '$lib/types';
 
 /**
  * Check if a file type is supported by the given modalities
@@ -170,29 +155,3 @@ export function generateModalityErrorMessage(
  * @param capabilities - The modality capabilities to check against
  * @returns Accept string for HTML file input element
  */
-export function generateModalityAwareAcceptString(capabilities: ModalityCapabilities): string {
-	const { hasVision, hasAudio } = capabilities;
-
-	const acceptedExtensions: string[] = [];
-	const acceptedMimeTypes: string[] = [];
-
-	// Always include text files and PDFs
-	acceptedExtensions.push(...Object.values(FileExtensionText));
-	acceptedMimeTypes.push(...Object.values(MimeTypeText));
-	acceptedExtensions.push(...Object.values(FileExtensionPdf));
-	acceptedMimeTypes.push(...Object.values(MimeTypeApplication));
-
-	// Include images only if vision is supported
-	if (hasVision) {
-		acceptedExtensions.push(...Object.values(FileExtensionImage));
-		acceptedMimeTypes.push(...Object.values(MimeTypeImage));
-	}
-
-	// Include audio only if audio is supported
-	if (hasAudio) {
-		acceptedExtensions.push(...Object.values(FileExtensionAudio));
-		acceptedMimeTypes.push(...Object.values(MimeTypeAudio));
-	}
-
-	return [...acceptedExtensions, ...acceptedMimeTypes].join(',');
-}

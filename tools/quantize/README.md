@@ -100,7 +100,7 @@ Examples:
 ## Memory/Disk Requirements
 
 When running the larger models, make sure you have enough disk space to store all the intermediate files.
-As the models are currently fully loaded into memory, you will need adequate disk space to save them and sufficient RAM to load them. At the moment, memory and disk requirements are the same. For exmaple (Llama 3.1):
+As the models are currently fully loaded into memory, you will need adequate disk space to save them and sufficient RAM to load them. At the moment, memory and disk requirements are the same. For example (Llama 3.1):
 
 | Model | Original size | Quantized size (Q4_K_M) |
 | ----: | ------------: | ----------------------: |

@@ -7,10 +7,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef HTP_DEBUG
-#    define FARF_HIGH 1
-#endif
-
 #include "HAP_farf.h"
 
 #define WORKER_THREAD_STACK_SZ  (2 * 16384)
@@ -60,7 +56,7 @@ static void worker_pool_main(void * context) {
         unsigned int n = atomic_load(&pool->n_jobs);
         unsigned int i = atomic_fetch_add(&pool->next_job, 1);
         if (i >= n) {
-            // Spurios wakeup
+            // Spurious wakeup
             continue;
         }
 

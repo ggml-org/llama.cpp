@@ -3,6 +3,11 @@
 import os
 import sys
 import torch
+import transformers
+import json
+import textwrap
+import numpy as np
+from pathlib import Path
 
 
 def get_model_name_from_env_path(env_path_name):
@@ -148,3 +153,147 @@ def setup_rope_debug(model_module_path: str, function_name: str = "apply_rotary_
     # Patch it
     setattr(module, function_name, debug_rope)
     print(f"RoPE debug patching applied to {model_module_path}.{function_name}")
+
+
+def save_output_data(data, tokens, prompt, model_name, type_suffix="", output_dir="data"):
+    """
+    Save output data (logits/embeddings), tokens, and prompt to files.
+
+    Args:
+        data:        numpy array of floats (logits or embeddings)
+        tokens:      list or array of token IDs
+        prompt:      string containing the input prompt
+        model_name:  name of the model
+        type_suffix: optional suffix like "-embeddings" (default: "")
+        output_dir:  directory to save files (default: "data")
+
+    Creates the following files in output_dir:
+        - pytorch-{model_name}{type_suffix}.bin
+        - pytorch-{model_name}{type_suffix}.txt
+        - pytorch-{model_name}{type_suffix}-prompt.txt
+        - pytorch-{model_name}{type_suffix}-tokens.bin
+    """
+    data_dir = Path(output_dir)
+    data_dir.mkdir(exist_ok=True)
+    base_path = data_dir / f"pytorch-{model_name}{type_suffix}"
+
+    # Convert and flatten logits/embeddings
+    data = data.cpu().numpy() if isinstance(data, torch.Tensor) else np.asarray(data)
+    data = data.flatten() if data.ndim > 1 else data
+
+    # Save logits/embedding files
+    data.astype(np.float32).tofile(f"{base_path}.bin")
+    print(f"Data saved to {base_path}.bin")
+
+    with open(f"{base_path}.txt", "w") as f:
+        f.writelines(f"{i}: {value:.6f}\n" for i, value in enumerate(data))
+    print(f"Data saved to {base_path}.txt")
+
+    # Convert and flatten tokens
+    tokens = tokens.cpu().numpy() if isinstance(tokens, torch.Tensor) else np.asarray(tokens)
+    tokens = tokens.flatten() if tokens.ndim > 1 else tokens
+
+    # Save token binary file
+    tokens.astype(np.int32).tofile(f"{base_path}-tokens.bin")
+    print(f"Tokens saved to {base_path}-tokens.bin")
+
+    # Save prompt file
+    with open(f"{base_path}-prompt.txt", "w") as f:
+        f.write(f"prompt: {prompt}\n")
+        f.write(f"n_tokens: {len(tokens)}\n")
+        f.write(f"token ids: {', '.join(str(int(tid)) for tid in tokens)}\n")
+    print(f"Prompt saved to {base_path}-prompt.txt")
+
+
+def compare_tokens(original, converted, type_suffix="", output_dir="data"):
+    data_dir = Path(output_dir)
+
+    # Read tokens from both models
+    tokens1_file = data_dir / f"{original}{type_suffix}-tokens.bin"
+    tokens2_file = data_dir / f"{converted}{type_suffix}-tokens.bin"
+
+    if not tokens1_file.exists():
+        print(f"Error: Token file not found: {tokens1_file}")
+        return False
+
+    if not tokens2_file.exists():
+        print(f"Error: Token file not found: {tokens2_file}")
+        return False
+
+    tokens1 = np.fromfile(tokens1_file, dtype=np.int32)
+    tokens2 = np.fromfile(tokens2_file, dtype=np.int32)
+
+    print(f"\nComparing tokens between:")
+    print(f"  Original : {original} ({len(tokens1)} tokens)")
+    print(f"  Converted: {converted} ({len(tokens2)} tokens)")
+
+    if len(tokens1) != len(tokens2):
+        print(f"\n❌ Token count mismatch: {len(tokens1)} vs {len(tokens2)}")
+        return False
+
+    if np.array_equal(tokens1, tokens2):
+        print(f"\n✅ All {len(tokens1)} tokens match!")
+        return True
+
+    mismatches = np.where(tokens1 != tokens2)[0]
+    print(f"\n❌ Found {len(mismatches)} mismatched tokens:")
+
+    num_to_show = min(len(mismatches), 10)
+    for idx in mismatches[:num_to_show]:
+        print(f"  Position {idx}: {tokens1[idx]} vs {tokens2[idx]}")
+
+    if len(mismatches) > num_to_show:
+        print(f"  ... and {len(mismatches) - num_to_show} more mismatches")
+
+    return False
+
+
+def show_version_warning(current_version, model_version):
+    if not model_version:
+        return False
+
+    try:
+        from packaging.version import parse, InvalidVersion
+        try:
+            return parse(current_version) < parse(model_version)
+        except InvalidVersion:
+            return current_version != model_version
+    except ImportError:
+        return current_version != model_version
+
+def get_model_transformers_version(model_path):
+    if not model_path:
+        return None
+
+    config_path = Path(model_path) / "config.json"
+    if not config_path.is_file():
+        return None
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        return config.get("transformers_version")
+    except (IOError, json.JSONDecodeError) as e:
+        print(f"Warning: Could not read or parse {config_path}: {e}", file=sys.stderr)
+        return None
+
+def exit_with_warning(message, model_path):
+    print(message)
+
+    if model_path and transformers is not None:
+        model_transformers_version = get_model_transformers_version(model_path)
+        transformers_version       = transformers.__version__
+        if show_version_warning(transformers_version, model_transformers_version):
+            warning_message = f"""
+                =====================================================================
+                Verification failure might be due to a transformers version mismatch:
+
+                Current transformers version: {transformers_version}
+                Model's required version    : {model_transformers_version}
+
+                Consider installing the version specified by the model's config:
+                pip install transformers=={model_transformers_version}
+                =====================================================================
+            """
+            print(textwrap.dedent(warning_message))
+    sys.exit(1)

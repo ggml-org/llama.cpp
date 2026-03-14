@@ -36,12 +36,16 @@ jobs:
 
     strategy:
       matrix:
-        sanitizer: [ADDRESS, UNDEFINED] # THREAD is broken
+        sanitizer: [ADDRESS, UNDEFINED] # THREAD is very slow
         build_type: [RelWithDebInfo]
         include:
           - build_type: Release
             sanitizer: ""
-      fail-fast: false # While -DLLAMA_SANITIZE_THREAD=ON is broken
+            extra_args: ""
+          - build_type: Release
+            sanitizer: ""
+            extra_args: "LLAMA_ARG_BACKEND_SAMPLING=1"
+      fail-fast: false
 
     steps:
       - name: Dependencies
@@ -60,29 +64,7 @@ jobs:
 
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
-
-      - name: Python setup
-        id: setup_python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Tests dependencies
-        id: test_dependencies
-        run: |
-          pip install -r tools/server/tests/requirements.txt
-
-  server-windows:
-    runs-on: windows-2022
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
@@ -90,19 +72,63 @@ jobs:
       - name: Build
         id: cmake_build
         run: |
-          cmake -B build -DLLAMA_CURL=OFF -DLLAMA_BUILD_BORINGSSL=ON
+          cmake -B build \
+            -DLLAMA_BUILD_BORINGSSL=ON \
+            -DGGML_SCHED_NO_REALLOC=ON \
+            -DGGML_SANITIZE_ADDRESS=${{ matrix.sanitizer == 'ADDRESS' }} \
+            -DGGML_SANITIZE_THREAD=${{ matrix.sanitizer == 'THREAD' }} \
+            -DGGML_SANITIZE_UNDEFINED=${{ matrix.sanitizer == 'UNDEFINED' }} \
+            -DLLAMA_SANITIZE_ADDRESS=${{ matrix.sanitizer == 'ADDRESS' }} \
+            -DLLAMA_SANITIZE_THREAD=${{ matrix.sanitizer == 'THREAD' }} \
+            -DLLAMA_SANITIZE_UNDEFINED=${{ matrix.sanitizer == 'UNDEFINED' }}
+          cmake --build build --config ${{ matrix.build_type }} -j $(nproc) --target llama-server
+
+      - name: Python setup
+        id: setup_python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          pip-install: -r tools/server/tests/requirements.txt
+
+      - name: Tests
+        id: server_integration_tests
+        if: ${{ (!matrix.disabled_on_pr || !github.event.pull_request) }}
+        run: |
+          cd tools/server/tests
+          export ${{ matrix.extra_args }}
+          pytest -v -x -m "not slow"
+
+      - name: Slow tests
+        id: server_integration_tests_slow
+        if: ${{ (github.event.schedule || github.event.inputs.slow_tests == 'true') && matrix.build_type == 'Release' }}
+        run: |
+          cd tools/server/tests
+          export ${{ matrix.extra_args }}
+          SLOW_TESTS=1 pytest -v -x
+
+  server-windows:
+    runs-on: windows-2022
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build -DLLAMA_BUILD_BORINGSSL=ON -DGGML_SCHED_NO_REALLOC=ON
           cmake --build build --config Release -j ${env:NUMBER_OF_PROCESSORS} --target llama-server
 
       - name: Python setup
         id: setup_python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
-
-      - name: Tests dependencies
-        id: test_dependencies
-        run: |
-          pip install -r tools/server/tests/requirements.txt
+          pip-install: -r tools/server/tests/requirements.txt
 
       - name: Tests
         id: server_integration_tests

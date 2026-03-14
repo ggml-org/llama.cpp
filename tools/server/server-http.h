@@ -36,7 +36,8 @@ using server_http_res_ptr = std::unique_ptr<server_http_res>;
 struct server_http_req {
     std::map<std::string, std::string> params; // path_params + query_params
     std::map<std::string, std::string> headers; // reserved for future use
-    std::string path; // reserved for future use
+    std::string path;
+    std::string query_string; // query parameters string (e.g. "action=save")
     std::string body;
     const std::function<bool()> & should_stop;
 

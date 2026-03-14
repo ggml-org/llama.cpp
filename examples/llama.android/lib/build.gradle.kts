@@ -26,7 +26,7 @@ android {
 
                 arguments += "-DBUILD_SHARED_LIBS=ON"
                 arguments += "-DLLAMA_BUILD_COMMON=ON"
-                arguments += "-DLLAMA_CURL=OFF"
+                arguments += "-DLLAMA_OPENSSL=OFF"
 
                 arguments += "-DGGML_NATIVE=OFF"
                 arguments += "-DGGML_BACKEND_DL=ON"

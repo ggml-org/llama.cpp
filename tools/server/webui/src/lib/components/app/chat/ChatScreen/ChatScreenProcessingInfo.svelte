@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import { PROCESSING_INFO_TIMEOUT } from '$lib/constants/processing-info';
+	import { PROCESSING_INFO_TIMEOUT } from '$lib/constants';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { chatStore, isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
 	import { activeMessages, activeConversation } from '$lib/stores/conversations.svelte';
@@ -12,7 +12,7 @@
 	let isCurrentConversationLoading = $derived(isLoading());
 	let isStreaming = $derived(isChatStreaming());
 	let hasProcessingData = $derived(processingState.processingState !== null);
-	let processingDetails = $derived(processingState.getProcessingDetails());
+	let processingDetails = $derived(processingState.getTechnicalDetails());
 
 	let showProcessingInfo = $derived(
 		isCurrentConversationLoading || isStreaming || config().keepStatsVisible || hasProcessingData
@@ -67,7 +67,7 @@
 		style={chatWidthClasses().style}
 	>
 		{#each processingDetails as detail (detail)}
-			<span class="chat-processing-info-detail pointer-events-auto">{detail}</span>
+			<span class="chat-processing-info-detail pointer-events-auto backdrop-blur-sm">{detail}</span>
 		{/each}
 	</div>
 </div>
@@ -77,7 +77,7 @@
 		position: sticky;
 		top: 0;
 		z-index: 10;
-		padding: 1.5rem 1rem;
+		padding: 0 1rem 0.75rem;
 		opacity: 0;
 		transform: translateY(50%);
 		transition:
@@ -103,7 +103,6 @@
 		color: var(--muted-foreground);
 		font-size: 0.75rem;
 		padding: 0.25rem 0.75rem;
-		background: var(--muted);
 		border-radius: 0.375rem;
 		font-family:
 			ui-monospace, SFMono-Regular, 'SF Mono', Consolas, 'Liberation Mono', Menlo, monospace;

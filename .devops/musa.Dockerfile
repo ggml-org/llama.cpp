@@ -18,7 +18,7 @@ RUN apt-get update && \
     python3 \
     python3-pip \
     git \
-    libcurl4-openssl-dev \
+    libssl-dev \
     libgomp1
 
 WORKDIR /app

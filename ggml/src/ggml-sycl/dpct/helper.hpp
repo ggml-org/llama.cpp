@@ -15,18 +15,9 @@
 
 #include <sycl/sycl.hpp>
 #include <sycl/half_type.hpp>
-#include <syclcompat/math.hpp>
-#include <map>
-
-#ifdef GGML_SYCL_USE_INTEL_ONEMKL
 #include <oneapi/mkl.hpp>
-// Allow to use the same namespace for Intel oneMKL and oneMath
-namespace oneapi {
-    namespace math = mkl;
-}
-#else
-#include <oneapi/math.hpp>
-#endif
+
+#include <map>
 
 #include "ggml.h"
 
@@ -92,31 +83,12 @@ inline std::string get_device_backend_and_type(const sycl::device &device) {
 }
 
 template <typename Ts> struct matrix_info_t {
-    oneapi::math::transpose transpose_info[2];
+    oneapi::mkl::transpose transpose_info[2];
     Ts                     value_info[2];
     std::int64_t           size_info[3];
     std::int64_t           ld_info[3];
     std::int64_t           groupsize_info;
 };
-
-inline auto get_onemath_backend(sycl::queue& queue)
-#if defined(GGML_SYCL_GENERIC) || defined(GGML_SYCL_USE_INTEL_ONEMKL)
-  -> sycl::queue&
-#endif
-{
-// If the backend is known at compile-time, use oneMath backend_selector to use
-// compile-time dispatching and avoid the need to dlopen libraries. Otherwise
-// fallback to runtime dispatching.
-#if defined(GGML_SYCL_NVIDIA)
-    return oneapi::math::backend_selector<oneapi::math::backend::cublas>{ queue };
-#elif defined(GGML_SYCL_AMD)
-    return oneapi::math::backend_selector<oneapi::math::backend::rocblas>{ queue };
-#elif defined(GGML_SYCL_GENERIC) || defined(GGML_SYCL_USE_INTEL_ONEMKL)
-    return queue;
-#else
-    static_assert(false, "Unsupported backend");
-#endif
-}
 
 namespace dpct
 {
@@ -1735,7 +1707,7 @@ namespace dpct
     namespace detail
     {
     template <class Ta, class Tb, class Tc, class Ts>
-    inline void gemm_impl(sycl::queue & q, oneapi::math::transpose a_trans, oneapi::math::transpose b_trans, int m,
+    inline void gemm_impl(sycl::queue & q, oneapi::mkl::transpose a_trans, oneapi::mkl::transpose b_trans, int m,
                           int n, int k, const void * alpha, const void * a, int lda, const void * b, int ldb,
                           const void * beta, void * c, int ldc) {
         Ts   alpha_value = dpct::get_value(reinterpret_cast<const Ts *>(alpha), q);
@@ -1743,7 +1715,7 @@ namespace dpct
         auto data_a      = get_memory<const Ta>(a);
         auto data_b      = get_memory<const Tb>(b);
         auto data_c      = get_memory<Tc>(c);
-        oneapi::math::blas::column_major::gemm(get_onemath_backend(q), a_trans, b_trans, m, n, k, alpha_value, data_a,
+        oneapi::mkl::blas::column_major::gemm(q, a_trans, b_trans, m, n, k, alpha_value, data_a,
                                                lda, data_b, ldb, beta_value, data_c, ldc);
     }
 
@@ -1775,7 +1747,7 @@ namespace dpct
         };
 
         template <class Ta, class Tb, class Tc, class Ts>
-        inline void gemm_batch_impl(sycl::queue & q, oneapi::math::transpose a_trans, oneapi::math::transpose b_trans,
+        inline void gemm_batch_impl(sycl::queue & q, oneapi::mkl::transpose a_trans, oneapi::mkl::transpose b_trans,
                                     int m, int n, int k, const void * alpha, const void ** a, int lda, const void ** b,
                                     int ldb, const void * beta, void ** c, int ldc, int batch_size,
                                     matrix_info_t<float> * matrix_info) {
@@ -1794,8 +1766,8 @@ namespace dpct
             matrix_info->ld_info[2] = ldc;
             matrix_info->groupsize_info = batch_size;
 
-            sycl::event e = oneapi::math::blas::column_major::gemm_batch(
-                get_onemath_backend(q), matrix_info->transpose_info, matrix_info->transpose_info + 1,
+            sycl::event e = oneapi::mkl::blas::column_major::gemm_batch(
+                q, matrix_info->transpose_info, matrix_info->transpose_info + 1,
                 matrix_info->size_info, matrix_info->size_info + 1, matrix_info->size_info + 2,
                 reinterpret_cast<Ts *>(matrix_info->value_info), reinterpret_cast<const Ta **>(a), matrix_info->ld_info,
                 reinterpret_cast<const Tb **>(b), matrix_info->ld_info + 1,
@@ -1804,7 +1776,7 @@ namespace dpct
         }
 
         template <class Ta, class Tb, class Tc, class Ts>
-        inline void gemm_batch_impl(sycl::queue & q, oneapi::math::transpose a_trans, oneapi::math::transpose b_trans,
+        inline void gemm_batch_impl(sycl::queue & q, oneapi::mkl::transpose a_trans, oneapi::mkl::transpose b_trans,
                                     int m, int n, int k, const void * alpha, const void * a, int lda,
                                     long long int stride_a, const void * b, int ldb, long long int stride_b,
                                     const void * beta, void * c, int ldc, long long int stride_c, int batch_size) {
@@ -1813,7 +1785,7 @@ namespace dpct
             auto data_a = get_memory<const Ta>(a);
             auto data_b = get_memory<const Tb>(b);
             auto data_c = get_memory<Tc>(c);
-            oneapi::math::blas::column_major::gemm_batch(get_onemath_backend(q), a_trans, b_trans, m, n, k, alpha_value,
+            oneapi::mkl::blas::column_major::gemm_batch(q, a_trans, b_trans, m, n, k, alpha_value,
                                                          data_a, lda, stride_a, data_b, ldb, stride_b, beta_value,
                                                          data_c, ldc, stride_c, batch_size);
         }
@@ -2300,7 +2272,7 @@ namespace dpct
                            sycl::range<3>(x, y, 1), direction);
     }
 
-    inline void gemm(sycl::queue & q, oneapi::math::transpose a_trans, oneapi::math::transpose b_trans, int m, int n,
+    inline void gemm(sycl::queue & q, oneapi::mkl::transpose a_trans, oneapi::mkl::transpose b_trans, int m, int n,
                      int k, const void * alpha, const void * a, library_data_t a_type, int lda, const void * b,
                      library_data_t b_type, int ldb, const void * beta, void * c, library_data_t c_type, int ldc,
                      library_data_t scaling_type) {
@@ -2367,7 +2339,7 @@ namespace dpct
             library_data_t::real_bfloat16, library_data_t::real_bfloat16,
             library_data_t::real_float, library_data_t::real_float):
         {
-            detail::gemm_impl<oneapi::math::bfloat16, oneapi::math::bfloat16, float, float>(
+            detail::gemm_impl<oneapi::mkl::bfloat16, oneapi::mkl::bfloat16, float, float>(
                 q, a_trans, b_trans, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc);
             break;
         }
@@ -2406,7 +2378,7 @@ namespace dpct
             library_data_t::real_bfloat16, library_data_t::real_bfloat16,
             library_data_t::real_bfloat16, library_data_t::real_float):
         {
-            detail::gemm_impl<oneapi::math::bfloat16, oneapi::math::bfloat16, oneapi::math::bfloat16, float>(
+            detail::gemm_impl<oneapi::mkl::bfloat16, oneapi::mkl::bfloat16, oneapi::mkl::bfloat16, float>(
                 q, a_trans, b_trans, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc);
             break;
         }
@@ -2448,7 +2420,7 @@ namespace dpct
     /// \param [in] ldc Leading dimension of C.
     /// \param [in] batch_size Specifies the number of matrix multiply operations to perform.
     /// \param [in] scaling_type Data type of the scaling factors.
-    inline void gemm_batch(sycl::queue & q, oneapi::math::transpose a_trans, oneapi::math::transpose b_trans, int m,
+    inline void gemm_batch(sycl::queue & q, oneapi::mkl::transpose a_trans, oneapi::mkl::transpose b_trans, int m,
                            int n, int k, const void * alpha, const void * a[], library_data_t a_type, int lda,
                            const void * b[], library_data_t b_type, int ldb, const void * beta, void * c[],
                            library_data_t c_type, int ldc, int batch_size, library_data_t scaling_type,
@@ -2486,7 +2458,7 @@ namespace dpct
             library_data_t::real_bfloat16, library_data_t::real_bfloat16,
             library_data_t::real_bfloat16, library_data_t::real_float):
         {
-            detail::gemm_batch_impl<oneapi::math::bfloat16, oneapi::math::bfloat16, oneapi::math::bfloat16, float>(
+            detail::gemm_batch_impl<oneapi::mkl::bfloat16, oneapi::mkl::bfloat16, oneapi::mkl::bfloat16, float>(
                 q, a_trans, b_trans, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc, batch_size, matrix_info);
             break;
         }
@@ -2494,7 +2466,7 @@ namespace dpct
             library_data_t::real_bfloat16, library_data_t::real_bfloat16,
             library_data_t::real_float, library_data_t::real_float):
         {
-            detail::gemm_batch_impl<oneapi::math::bfloat16, oneapi::math::bfloat16, float, float>(
+            detail::gemm_batch_impl<oneapi::mkl::bfloat16, oneapi::mkl::bfloat16, float, float>(
                 q, a_trans, b_trans, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc, batch_size, matrix_info);
             break;
         }
@@ -2570,7 +2542,7 @@ namespace dpct
     /// \param [in] stride_c Stride between the different C matrices.
     /// \param [in] batch_size Specifies the number of matrix multiply operations to perform.
     /// \param [in] scaling_type Data type of the scaling factors.
-    inline void gemm_batch(sycl::queue & q, oneapi::math::transpose a_trans, oneapi::math::transpose b_trans, int m,
+    inline void gemm_batch(sycl::queue & q, oneapi::mkl::transpose a_trans, oneapi::mkl::transpose b_trans, int m,
                            int n, int k, const void * alpha, const void * a, library_data_t a_type, int lda,
                            long long int stride_a, const void * b, library_data_t b_type, int ldb,
                            long long int stride_b, const void * beta, void * c, library_data_t c_type, int ldc,
@@ -2643,7 +2615,7 @@ namespace dpct
             library_data_t::real_bfloat16, library_data_t::real_bfloat16,
             library_data_t::real_bfloat16, library_data_t::real_float):
         {
-            detail::gemm_batch_impl<oneapi::math::bfloat16, oneapi::math::bfloat16, oneapi::math::bfloat16, float>(
+            detail::gemm_batch_impl<oneapi::mkl::bfloat16, oneapi::mkl::bfloat16, oneapi::mkl::bfloat16, float>(
                 q, a_trans, b_trans, m, n, k, alpha, a, lda, stride_a, b, ldb, stride_b, beta, c, ldc, stride_c,
                 batch_size);
             break;
@@ -2652,7 +2624,7 @@ namespace dpct
             library_data_t::real_bfloat16, library_data_t::real_bfloat16,
             library_data_t::real_float, library_data_t::real_float):
         {
-            detail::gemm_batch_impl<oneapi::math::bfloat16, oneapi::math::bfloat16, float, float>(
+            detail::gemm_batch_impl<oneapi::mkl::bfloat16, oneapi::mkl::bfloat16, float, float>(
                 q, a_trans, b_trans, m, n, k, alpha, a, lda, stride_a, b, ldb, stride_b, beta, c, ldc, stride_c,
                 batch_size);
             break;
@@ -3025,6 +2997,778 @@ namespace dpct
       return 0;
     }
 
+    template <int n_nondefault_params, int n_default_params, typename T>
+    class args_selector;
+
+    /// args_selector is a helper class for extracting arguments from an
+    /// array of pointers to arguments or buffer of arguments to pass to a
+    /// kernel function.
+    ///
+    /// \param R(Ts...) The type of the kernel
+    /// \param n_nondefault_params The number of nondefault parameters of the
+    /// kernel (excluding parameters that like sycl::nd_item, etc.) \param
+    /// n_default_params The number of default parameters of the kernel
+    ///
+    /// Example usage:
+    /// With the following kernel:
+    ///   void foo(sycl::float2 *x, int n, sycl::nd_item<3> item_ct1, float
+    ///   f=.1) {}
+    /// and with the declaration:
+    ///   args_selector<2, 1, decltype(foo)> selector(kernelParams, extra);
+    /// we have:
+    ///   selector.get<0>() returns a reference to sycl::float*,
+    ///   selector.get<1>() returns a reference to int,
+    ///   selector.get<2>() returns a reference to float
+    template <int n_nondefault_params, int n_default_params, typename R,
+              typename... Ts>
+    class args_selector<n_nondefault_params, n_default_params, R(Ts...)> {
+      private:
+        void **kernel_params;
+        char *args_buffer;
+
+        template <int i> static constexpr int account_for_default_params() {
+            constexpr int n_total_params = sizeof...(Ts);
+            if constexpr (i >= n_nondefault_params) {
+                return n_total_params - n_default_params +
+                       (i - n_nondefault_params);
+            } else {
+                return i;
+            }
+        }
+
+      public:
+        /// Get the type of the ith argument of R(Ts...)
+        /// \param [in] i Index of parameter to get
+        /// \returns Type of ith parameter
+        template <int i>
+        using arg_type = std::tuple_element_t<account_for_default_params<i>(),
+                                              std::tuple<Ts...>>;
+        static constexpr int params_num = sizeof...(Ts);
+
+      private:
+        template <int i> static constexpr int get_offset() {
+            if constexpr (i == 0) {
+                // we can assume args_buffer is properly aligned to the
+                // first argument
+                return 0;
+            } else {
+                constexpr int prev_off = get_offset<i - 1>();
+                constexpr int prev_past_end =
+                    prev_off + sizeof(arg_type<i - 1>);
+                using T = arg_type<i>;
+                // is the past-the-end of the i-1st element properly aligned
+                // with the ith element's alignment?
+                if constexpr (prev_past_end % alignof(T) == 0) {
+                    return prev_past_end;
+                }
+                // otherwise bump prev_past_end to match alignment
+                else {
+                    return prev_past_end +
+                           (alignof(T) - (prev_past_end % alignof(T)));
+                }
+            }
+        }
+
+        static char *get_args_buffer(void **extra) {
+            if (!extra)
+                return nullptr;
+            for (; (std::size_t)*extra != 0; ++extra) {
+                if ((std::size_t)*extra == 1) {
+                    return static_cast<char *>(*(extra + 1));
+                }
+            }
+            return nullptr;
+        }
+
+      public:
+        /// If kernel_params is nonnull, then args_selector will
+        /// extract arguments from kernel_params. Otherwise, it
+        /// will extract them from extra.
+        /// \param [in] kernel_params Array of pointers to arguments
+        /// a or null pointer.
+        /// \param [in] extra Array containing pointer to argument buffer.
+        args_selector(void **kernel_params, void **extra)
+            : kernel_params(kernel_params),
+              args_buffer(get_args_buffer(extra)) {}
+
+        /// Get a reference to the ith argument extracted from kernel_params
+        /// or extra.
+        /// \param [in] i Index of argument to get
+        /// \returns Reference to the ith argument
+        template <int i> arg_type<i> &get() {
+            if (kernel_params) {
+                return *static_cast<arg_type<i> *>(kernel_params[i]);
+            } else {
+                return *reinterpret_cast<arg_type<i> *>(args_buffer +
+                                                        get_offset<i>());
+            }
+        }
+    }; // COPY from DPCT head file
+       // /opt/intel/oneapi/dpcpp-ct/latest/include/dpct/util.hpp
+
+    /// Utility class for launching SYCL kernels through kernel
+    /// function wrapper.
+    /// For example:
+    /// A SYCL kernel function:
+    ///   void kernel_func(int *ptr, sycl::nd_item<3> item);
+    /// Kernel function wrapper:
+    ///   void kernel_func_wrapper(int *ptr) {
+    ///     sycl::queue queue = *dpct::kernel_launcher::_que;
+    ///     unsigned int localMemSize = dpct::kernel_launcher::_local_mem_size;
+    ///     sycl::nd_range<3> nr = dpct::kernel_launcher::_nr;
+    ///     queue.parallel_for(
+    ///       nr,
+    ///       [=](sycl::nd_item<3> item_ct1) {
+    ///         kernel_func(ptr, item_ct1);
+    ///       });
+    ///   }
+    /// Then launch the kernel through wrapper like:
+    ///   typedef void(*fpt)(int *);
+    ///   fpt fp = kernel_func_wrapper;
+    ///   dpct::kernel_launcher::launch(fp, dpct::dim3(1), dpct::dim3(1), 0, 0,
+    ///   device_ptr);
+    /// If the origin function type is erased, then need to register it first:
+    ///   void *fp = (void *)wrapper_register(&kernel_func_wrapper).get();
+    ///   dpct::kernel_launcher::launch(fp, dpct::dim3(1), dpct::dim3(1), args,
+    ///   0, 0);
+    class kernel_launcher {
+        template <typename FuncT, typename ArgSelector, std::size_t... Index>
+        static void launch_helper(FuncT &&func, ArgSelector &selector,
+                                  std::index_sequence<Index...>) {
+            func(selector.template get<Index>()...);
+        }
+        static void set_execution_config(dim3 group_range, dim3 local_range,
+                                         unsigned int local_mem_size,
+                                         queue_ptr que) {
+            if (que) {
+                _que = que;
+            } else {
+                _que = &get_default_queue();
+            }
+            _nr = sycl::nd_range<3>(
+                static_cast<sycl::range<3>>(group_range * local_range),
+                static_cast<sycl::range<3>>(local_range));
+            _local_mem_size = local_mem_size;
+
+
+        };
+        static inline std::mutex kernel_function_ptr_map_mutex;
+
+      public:
+        /// Variables for storing execution configuration.
+        static inline thread_local sycl::queue *_que = nullptr;
+        static inline thread_local sycl::nd_range<3> _nr = sycl::nd_range<3>();
+        static inline thread_local unsigned int _local_mem_size = 0;
+        /// Map for retrieving launchable functor from a raw pointer.
+        static inline std::map<
+            const void *,
+            std::function<void(dim3, dim3, void **, unsigned int, queue_ptr)>>
+            kernel_function_ptr_map = {};
+
+        /// Registers a kernel function pointer with a corresponding launchable
+        /// functor.
+        /// \param [in] func Pointer to the kernel function.
+        /// \param [in] launcher Functor to handle kernel invocation.
+        static void register_kernel_ptr(
+            const void *func,
+            std::function<void(dim3, dim3, void **, unsigned int, queue_ptr)>
+                launcher) {
+            std::lock_guard<std::mutex> lock(kernel_function_ptr_map_mutex);
+            kernel_function_ptr_map[func] = std::move(launcher);
+        }
+        /// Launches a kernel function with arguments provided directly through
+        /// kernel function wrapper.
+        /// \tparam FuncT Type of the kernel function wrapper.
+        /// \tparam ArgsT Types of kernel arguments.
+        /// \param [in] func Pointer to the kernel function wrapper.
+        /// \param [in] group_range SYCL group range.
+        /// \param [in] local_range SYCL local range.
+        /// \param [in] local_mem_size The size of local memory required by the
+        /// kernel function. \param [in] que SYCL queue used to execute kernel.
+        /// \param [in] args Kernel arguments.
+        template <typename FuncT, typename... ArgsT>
+        static std::enable_if_t<std::is_invocable_v<FuncT *, ArgsT...>, void>
+        launch(FuncT *func, dim3 group_range, dim3 local_range,
+               unsigned int local_mem_size, queue_ptr que, ArgsT... args) {
+            set_execution_config(group_range, local_range, local_mem_size, que);
+            func(args...);
+        }
+        /// Launches a kernel function through registered kernel function
+        /// wrapper. \param [in] func Pointer to the registered kernel function
+        /// wrapper. \param [in] group_range SYCL group range. \param [in]
+        /// local_range SYCL local range. \param [in] args Array of pointers to
+        /// kernel arguments. \param [in] local_mem_size The size of local
+        /// memory required by the kernel function. \param [in] que SYCL queue
+        /// used to execute kernel.
+        static void launch(const void *func, dim3 group_range, dim3 local_range,
+                           void **args, unsigned int local_mem_size,
+                           queue_ptr que) {
+            std::lock_guard<std::mutex> lock(kernel_function_ptr_map_mutex);
+            auto Iter = kernel_function_ptr_map.find(func);
+            if (Iter == kernel_function_ptr_map.end()) {
+                throw std::runtime_error("dpct::launch() : no registered "
+                                         "kernel function wrapper found.");
+            }
+            (Iter->second)(group_range, local_range, args, local_mem_size, que);
+        }
+        /// Launches a kernel function with packed arguments through kernel
+        /// function wrapper.
+        /// \tparam FuncT Type of the kernel function wrapper.
+        /// \param [in] func Pointer to the kernel function wrapper.
+        /// \param [in] group_range SYCL group range.
+        /// \param [in] local_range SYCL local range.
+        /// \param [in] args Array of pointers to kernel arguments.
+        /// \param [in] local_mem_size The size of local memory required by the
+        /// kernel function. \param [in] que SYCL queue used to execute kernel.
+        template <typename FuncT>
+        static std::enable_if_t<std::is_function_v<FuncT>, void>
+        launch(FuncT *func, dim3 group_range, dim3 local_range, void **args,
+               unsigned int local_mem_size, queue_ptr que) {
+            constexpr size_t p_num = args_selector<0, 0, FuncT>::params_num;
+            set_execution_config(group_range, local_range, local_mem_size, que);
+            args_selector<p_num, p_num, FuncT> selector(args, nullptr);
+            launch_helper(func, selector, std::make_index_sequence<p_num>{});
+        }
+    }; // COPY from DPCT head file
+       // /opt/intel/oneapi/dpcpp-ct/latest/include/dpct/kernel.hpp
+
+    // /opt/intel/oneapi/dpcpp-ct/latest/include/dpct/util.hpp
+    template <typename T>
+    T select_from_sub_group(
+        sycl::sub_group g,
+        T x,
+        int remote_local_id,
+        int logical_sub_group_size = 32) {
+      unsigned int start_index = g.get_local_linear_id() /
+                                 logical_sub_group_size *
+                                 logical_sub_group_size;
+      return sycl::select_from_group(
+          g, x, start_index + remote_local_id % logical_sub_group_size);
+    }
+
+    // /opt/intel/oneapi/dpcpp-ct/latest/include/dpct/math.hpp
+    template <typename T>
+    void ldmatrix(uintptr_t addr, T* m, bool trans = false, unsigned mat = 0) {
+      auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
+      int lane = sg.get_local_linear_id();
+
+      int lane_group8_row = lane / 8;
+      int lane_group8_col = lane % 8;
+
+      if (!trans) {
+        // calculate the source lane
+        int src_lane = 2 * lane_group8_row;
+        if (lane_group8_col >= 4)
+          src_lane += 1;
+
+        // Broadcast the address from the source lane
+        auto recv_addr_uintp =
+            dpct::select_from_sub_group(sg, addr, mat * 8 + src_lane);
+
+        // Cast the received address from uintptr_t to the type of 'm'
+        auto recv_addr = reinterpret_cast<T*>(recv_addr_uintp);
+
+        // Non-transposed load
+        *m = recv_addr[lane_group8_col % 4];
+      } else {
+        // calculate the source lane
+        int src_lane = (lane % 4) * 2;
+
+        // Broadcast the address from the source lane
+        auto recv_addr_uintp_1 =
+            dpct::select_from_sub_group(sg, addr, mat * 8 + src_lane);
+        auto recv_addr_uintp_2 =
+            dpct::select_from_sub_group(sg, addr, mat * 8 + src_lane + 1);
+
+        // Cast the received address from uintptr_t to 'half *'
+        auto recv_addr_1 = reinterpret_cast<sycl::half*>(recv_addr_uintp_1);
+        auto recv_addr_2 = reinterpret_cast<sycl::half*>(recv_addr_uintp_2);
+
+        // Transposed load
+        int index = lane / 4;
+        sycl::half val0 = recv_addr_1[index];
+        sycl::half val1 = recv_addr_2[index];
+
+        // Combine the two 16-bits into one 32-bit value
+        sycl::half2 val = sycl::half2(val0, val1);
+        *m = *reinterpret_cast<T*>(&val);
+      }
+    }
+
+    template <typename T>
+    void ldmatrix(uintptr_t addr, T* m1, T* m2, bool trans = false) {
+      // Load 1st matrix
+      ldmatrix(addr, m1, trans, 0);
+      // Load 2nd matrix
+      ldmatrix(addr, m2, trans, 1);
+    }
+
+    template <typename T>
+    void ldmatrix(
+        uintptr_t addr, T* m1, T* m2, T* m3, T* m4, bool trans = false) {
+      // Load 1st matrix
+      ldmatrix(addr, m1, trans, 0);
+      // Load 2nd matrix
+      ldmatrix(addr, m2, trans, 1);
+      // Load 3rd matrix
+      ldmatrix(addr, m3, trans, 2);
+      // Load 4th matrix
+      ldmatrix(addr, m4, trans, 3);
+    }
+
+    // /opt/intel/oneapi/dpcpp-ct/latest/include/dpct/math.hpp
+
+    /// A helper struct that defines the pack type for the input matrix
+    /// fragments
+    /// of mma() function based on the type of input matrix fragments.
+    /// The MMAType struct is specialized for different types of input matrices.
+    /// Currently, the specialization for f16, bf16 and s8 types is defined
+    /// below. \tparam [in] T The type of the input matrix fragments
+    template <typename T>
+    struct MMAType {
+      using PackType = uint32_t;
+    };
+
+    /// Each work item of a sub-group (limited to size 32) calling this function
+    /// calculates a subset fragment for the output matrix D using MAD operation
+    /// on A, B & C matrix fragments (D = A * B + C). Current supported shapes &
+    /// types:
+    /// - m8n8k4 (f32.f16.f16.f32)
+    /// - m8n8k16 (s32.s8.s8.s32)
+    /// - m16n8k8 (f32.f16.f16.f32 & f32.bf16.bf16.f32)
+    /// - m16n8k16 (f32.f16.f16.f32 & s32.s8.s8.s32)
+    /// - m16n8k32 (s32.s8.s8.s32)
+    /// Here, m, n & k define the shapes of A, B & C matrices respectively
+    /// (A = [m x k], B = [k x n], C = [m x n]).
+    /// \tparam [in] M The rows of A, C & D matrices
+    /// \tparam [in] N The columns of B, C, D matrices
+    /// \tparam [in] K The columns & rows of A & B matrices respectively
+    /// \tparam [in] ABType The type of the input matrix (A & B) fragment
+    /// \tparam [in] CDType The type of the output matrix (C & D) fragment
+    /// \param [out] d_mat_frag The fragment of the output matrix D to store the
+    /// result of A * B + C
+    /// \param [in] a_mat_frag The fragment of the input matrix A to be
+    /// multiplied with B matrix fragment \param [in] b_mat_frag The fragment of
+    /// the input matrix B to be multiplied with A matrix fragment \param [in]
+    /// c_mat_frag The fragment of the input matrix C to be added with the
+    /// result of A * B fragments
+    template <int M, int N, int K, typename ABType, typename CDType>
+    void mma(
+        volatile void** d_mat_frag,
+        void* a_mat_frag,
+        void* b_mat_frag,
+        void* c_mat_frag) {
+      auto d = reinterpret_cast<volatile CDType**>(d_mat_frag);
+      auto a =
+          reinterpret_cast<typename MMAType<ABType>::PackType*>(a_mat_frag);
+      auto b =
+          reinterpret_cast<typename MMAType<ABType>::PackType*>(b_mat_frag);
+      auto c = reinterpret_cast<CDType*>(c_mat_frag);
+
+      auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
+      int lane = sg.get_local_linear_id();
+
+      static_assert(
+          (M == 8 && N == 8 && K == 4) || (M == 8 && N == 8 && K == 16) ||
+              (M == 16 && N == 8 && K == 8) || (M == 16 && N == 8 && K == 16) ||
+              (M == 16 && N == 8 && K == 32),
+          "Unsupported MMA shape!");
+
+      short row_load_offset = 4 * (lane >> 2);
+      short col_load_offset = 8 * (lane % 4);
+
+      if constexpr (M == 8 && N == 8 && K == 4) {
+        if constexpr (std::is_floating_point_v<CDType>) {
+          col_load_offset = row_load_offset % 16;
+
+          // Init D matrix with fragments of C matrix
+          *d[0] = c[0];
+          *d[1] = c[1];
+          *d[2] = c[2];
+          *d[3] = c[3];
+          *d[4] = c[4];
+          *d[5] = c[5];
+          *d[6] = c[6];
+          *d[7] = c[7];
+
+          // Calculate the row and col offset indices to iterate through the row
+          // & col fragments of A & B matrices
+          int r_ind = (lane % 2) ? 1 : 0;
+          int c_ind = ((lane % 4) / 2) ? 2 : 0;
+
+          // Each sub-group is responsible for computing a fragment size of 8*8
+          // elements of matrix D for each of 4 MMA computations.
+          // Each work item computes 8 elements of matrix D by gathering
+          // their corresponding col & row matrix fragments of length k (4)
+          // from A & B matrices respectively using below mapping logic:
+          // row0 = (i % 4) if (lane < 16) else (i % 4) + 4
+          // col0 = (lane % 4)
+          // As each row & col fragment of A & B matrices is distributed across
+          // 4 work items, each iteration of below loop loads a partial fragment
+          // of matrix A (row) and matrix B (col) using the row & col offsets.
+          typename MMAType<ABType>::PackType recv_a[2], recv_b[2];
+
+          for (int i = 0; i < 4; i++) {
+            // Load partial fragment from col0 of matrix A ({a0, a1})
+            recv_a[0] =
+                dpct::select_from_sub_group(sg, a[0], row_load_offset + i);
+            // Load partial fragment from col0 of matrix A ({a2, a3})
+            recv_a[1] =
+                dpct::select_from_sub_group(sg, a[1], row_load_offset + i);
+
+            // Load partial fragment from row0 of matrix B ({b0, b1})
+            recv_b[0] =
+                dpct::select_from_sub_group(sg, b[0], col_load_offset + i);
+            // Load partial fragment from row0 of matrix B ({b2, b3})
+            recv_b[1] =
+                dpct::select_from_sub_group(sg, b[1], col_load_offset + i);
+
+            auto ra = reinterpret_cast<ABType*>(recv_a);
+            auto rb = reinterpret_cast<ABType*>(recv_b);
+
+            // Each work item calculates a partial product of A & B matrix
+            // fragments and adds it to the corresponding D matrix fragment (for
+            // even work item indices) d0 += col0{ a0 } * row0{ b0 } d1 += col0{
+            // a0 } * row0{ b1 } d2 += col1{ a2 } * row0{ b0 } d3 += col1{ a2 }
+            // * row0{ b1 } (for odd work item indices) d0 += col0{ a1 } * row0{
+            // b2 } d1 += col0{ a1 } * row0{ b3 } d2 += col1{ a3 } * row0{ b2 }
+            // d3 += col1{ a3 } * row0{ b3 }
+            *d[0] +=
+                static_cast<float>(ra[r_ind]) * static_cast<float>(rb[c_ind]);
+            *d[1] += static_cast<float>(ra[r_ind]) *
+                     static_cast<float>(rb[c_ind + 1]);
+            *d[2] += static_cast<float>(ra[r_ind + 2]) *
+                     static_cast<float>(rb[c_ind]);
+            *d[3] += static_cast<float>(ra[r_ind + 2]) *
+                     static_cast<float>(rb[c_ind + 1]);
+
+            // Load partial fragment from row1 of matrix B ({b0, b1})
+            recv_b[0] =
+                dpct::select_from_sub_group(sg, b[0], col_load_offset + i + 16);
+            // Load partial fragment from row1 of matrix B ({b2, b3})
+            recv_b[1] =
+                dpct::select_from_sub_group(sg, b[1], col_load_offset + i + 16);
+
+            // (for even work item indices)
+            // d0 += col0{ a0 } * row1{ b0 }
+            // d1 += col0{ a0 } * row1{ b1 }
+            // d2 += col1{ a2 } * row1{ b0 }
+            // d3 += col1{ a2 } * row1{ b1 }
+            // (for odd work item indices)
+            // d0 += col0{ a1 } * row1{ b2 }
+            // d1 += col0{ a1 } * row1{ b3 }
+            // d2 += col1{ a3 } * row1{ b2 }
+            // d3 += col1{ a3 } * row1{ b3 }
+            *d[4] +=
+                static_cast<float>(ra[r_ind]) * static_cast<float>(rb[c_ind]);
+            *d[5] += static_cast<float>(ra[r_ind]) *
+                     static_cast<float>(rb[c_ind + 1]);
+            *d[6] += static_cast<float>(ra[r_ind + 2]) *
+                     static_cast<float>(rb[c_ind]);
+            *d[7] += static_cast<float>(ra[r_ind + 2]) *
+                     static_cast<float>(rb[c_ind + 1]);
+          }
+        }
+      } else if constexpr (M == 8 && N == 8 && K == 16) {
+        if constexpr (std::is_integral_v<ABType>) {
+          // Init D matrix with fragments of C matrix
+          *d[0] = c[0];
+          *d[1] = c[1];
+
+          // Each sub-group is responsible for computing a fragment size of 16*8
+          // elements of matrix D.
+          // Each work item computes 2 elements of matrix D by gathering
+          // their corresponding row & col matrix fragments of length k (16)
+          // from A & B matrices respectively using below mapping logic:
+          // row0 = ((lane % 4) * 4) + i
+          // col0 = (lane >> 2)
+          // As each row & col fragment of A & B matrices is distributed across
+          // 4 work items, each iteration of below loop loads a partial fragment
+          // of matrix A (row) and matrix B (col) using the row & col offsets.
+          for (int i = 0; i < 4; i++) {
+            typename MMAType<ABType>::PackType recv_a, recv_b[2];
+
+            // Load partial fragment from row0 of matrix A ({a0, a1, a2, a3})
+            recv_a = dpct::select_from_sub_group(sg, a[0], row_load_offset + i);
+            // Load partial fragment from col0 of matrix B ({b0, b1, b2, b3})
+            recv_b[0] =
+                dpct::select_from_sub_group(sg, b[0], col_load_offset + i);
+            // Load partial fragment from col1 of matrix B ({b0, b1, b2, b3})
+            recv_b[1] =
+                dpct::select_from_sub_group(sg, b[0], col_load_offset + i + 4);
+
+            auto a = reinterpret_cast<ABType*>(&recv_a);
+            auto b = reinterpret_cast<ABType*>(recv_b);
+
+            // Each work item calculates a partial product of A & B matrix
+            // fragments and adds it to the corresponding D matrix fragment d0
+            // += row0{ a0, a1, a2, a3 } * col0{ b0, b1, b2, b3 } d1 += row0{
+            // a0, a1, a2, a3 } * col1{ b0, b1, b2, b3 } d2 += row0{ a0, a1, a2,
+            // a3 } * col0{ b0, b1, b2, b3 } d3 += row0{ a0, a1, a2, a3 } *
+            // col1{ b0, b1, b2, b3 }
+            for (int j = 0; j < 4; j++) {
+              *d[0] += a[j] * b[j];
+              *d[1] += a[j] * b[j + 4];
+            }
+          }
+        }
+      } else if constexpr (M == 16 && N == 8 && K == 8) {
+        if constexpr (std::is_floating_point_v<CDType>) {
+          // Init D matrix fragment with C matrix fragment
+          *d[0] = c[0];
+          *d[1] = c[1];
+          *d[2] = c[2];
+          *d[3] = c[3];
+
+          // Each sub-group is responsible for computing a fragment size of 16*8
+          // elements of matrix D.
+          // Each work item computes 4 elements of matrix D by gathering
+          // their corresponding row & col matrix fragments of length k (8)
+          // from A & B matrices respectively using below mapping logic:
+          // row0 = (lane >> 2) & row1 = (lane >> 2) + 8
+          // col0 = (lane % 4) * 2 + (i & 0x1)
+          // As each row & col fragment of A & B matrices is distributed across
+          // 4 work items, each iteration of below loop loads a partial fragment
+          // of matrix A (row) and matrix B (col) using the row & col offsets.
+          for (int i = 0; i < 4; i++) {
+            typename MMAType<ABType>::PackType recv_a[2], recv_b[2];
+
+            // Load partial fragment from row0 of matrix A ({a0, a1})
+            recv_a[0] =
+                dpct::select_from_sub_group(sg, a[0], row_load_offset + i);
+            // Load partial fragment from row1 of matrix A ({a2, a3})
+            recv_a[1] =
+                dpct::select_from_sub_group(sg, a[1], row_load_offset + i);
+            // Load partial fragment from col0 of matrix B ({b0, b1})
+            recv_b[0] =
+                dpct::select_from_sub_group(sg, b[0], col_load_offset + i);
+            // Load partial fragment from col1 of matrix B ({b0, b1})
+            recv_b[1] =
+                dpct::select_from_sub_group(sg, b[0], col_load_offset + i + 4);
+
+            auto ra = reinterpret_cast<ABType*>(recv_a);
+            auto rb = reinterpret_cast<ABType*>(recv_b);
+
+            // Each work item calculates a partial product of A & B matrix
+            // fragments and adds it to the corresponding D matrix fragment d0
+            // += row0{ a0, a1 } * col0{ b0, b1 } d1 += row0{ a0, a1 } * col1{
+            // b0, b1 } d2 += row1{ a2, a3 } * col0{ b0, b1 } d3 += row1{ a2, a3
+            // } * col1{ b0, b1 }
+            for (int j = 0; j < 2; j++) {
+              *d[0] += static_cast<float>(ra[j]) * static_cast<float>(rb[j]);
+              *d[1] +=
+                  static_cast<float>(ra[j]) * static_cast<float>(rb[j + 2]);
+              *d[2] +=
+                  static_cast<float>(ra[j + 2]) * static_cast<float>(rb[j]);
+              *d[3] +=
+                  static_cast<float>(ra[j + 2]) * static_cast<float>(rb[j + 2]);
+            }
+          }
+        }
+      } else if constexpr (M == 16 && N == 8 && K == 16) {
+        if constexpr (std::is_floating_point_v<CDType>) {
+          // Init D matrix fragment with C matrix fragment
+          *d[0] = c[0];
+          *d[1] = c[1];
+          *d[2] = c[2];
+          *d[3] = c[3];
+
+          // Each sub-group is responsible for computing a fragment size of 16*8
+          // elements of matrix D.
+          // Each work item computes 4 elements of matrix D by gathering
+          // their corresponding row & col matrix fragments of length k (8)
+          // from A & B matrices respectively using below mapping logic:
+          // row0 = (lane >> 2)    & row1 = (lane >> 2) + 8
+          // col0 = (lane % 4) * 2 & col1 = (lane % 4) * 2 + 1
+          // As each row & col fragment of A & B matrices is distributed across
+          // 4 work items, each iteration of below loop loads a partial fragment
+          // of matrix A (row) and matrix B (col) using the row & col offsets.
+          for (int i = 0; i < 4; i++) {
+            typename MMAType<ABType>::PackType recv_a[4], recv_b[4];
+
+            // Load partial fragment from row0 of matrix A ({a0, a1})
+            recv_a[0] =
+                dpct::select_from_sub_group(sg, a[0], row_load_offset + i);
+            // Load partial fragment from row0 of matrix A ({a2, a3})
+            recv_a[1] =
+                dpct::select_from_sub_group(sg, a[2], row_load_offset + i);
+            // Load partial fragment from row1 of matrix A ({a0, a1})
+            recv_a[2] =
+                dpct::select_from_sub_group(sg, a[1], row_load_offset + i);
+            // Load partial fragment from row1 of matrix A ({a2, a3})
+            recv_a[3] =
+                dpct::select_from_sub_group(sg, a[3], row_load_offset + i);
+
+            // Load partial fragment from col0 of matrix B ({b0, b1})
+            recv_b[0] =
+                dpct::select_from_sub_group(sg, b[0], col_load_offset + i);
+            // Load partial fragment from col0 of matrix B ({b2, b3})
+            recv_b[1] =
+                dpct::select_from_sub_group(sg, b[1], col_load_offset + i);
+            // Load partial fragment from col1 of matrix B ({b0, b1})
+            recv_b[2] =
+                dpct::select_from_sub_group(sg, b[0], col_load_offset + 4 + i);
+            // Load partial fragment from col1 of matrix B ({b2, b3})
+            recv_b[3] =
+                dpct::select_from_sub_group(sg, b[1], col_load_offset + 4 + i);
+
+            auto ra = reinterpret_cast<ABType*>(recv_a);
+            auto rb = reinterpret_cast<ABType*>(recv_b);
+
+            // Each work item calculates a partial product of A & B matrix
+            // fragments and adds it to the corresponding D matrix fragment d0
+            // += row0{ a0, a1, a2, a3 } * col0{ b0, b1, b2, b3 } d1 += row0{
+            // a0, a1, a2, a3 } * col1{ b0, b1, b2, b3 } d2 += row1{ a0, a1, a2,
+            // a3 } * col0{ b0, b1, b2, b3 } d3 += row1{ a0, a1, a2, a3 } *
+            // col1{ b0, b1, b2, b3 }
+            for (int j = 0; j < 4; j++) {
+              *d[0] += static_cast<CDType>(ra[j]) * static_cast<CDType>(rb[j]);
+              *d[1] +=
+                  static_cast<CDType>(ra[j]) * static_cast<CDType>(rb[j + 4]);
+              *d[2] +=
+                  static_cast<CDType>(ra[j + 4]) * static_cast<CDType>(rb[j]);
+              *d[3] += static_cast<CDType>(ra[j + 4]) *
+                       static_cast<CDType>(rb[j + 4]);
+            }
+          }
+        } else if constexpr (std::is_integral_v<ABType>) {
+          // Init D matrix with fragments of C matrix
+          *d[0] = c[0];
+          *d[1] = c[1];
+          *d[2] = c[2];
+          *d[3] = c[3];
+
+          // Each sub-group is responsible for computing a fragment size of 16*8
+          // elements of matrix D.
+          // Each work item computes 4 elements of matrix D by gathering
+          // their corresponding row & col matrix fragments of length k (8)
+          // from A & B matrices respectively using below mapping logic:
+          // row0 = (lane >> 2)    & row1 = (lane >> 2) + 8
+          // col0 = (lane % 4) * 2 & col1 = (lane % 4) * 2 + 1
+          // As each row & col fragment of A & B matrices is distributed across
+          // 4 work items, each iteration of below loop loads a partial fragment
+          // of matrix A (row) and matrix B (col) using the row & col offsets.
+          for (int i = 0; i < 4; i++) {
+            typename MMAType<ABType>::PackType recv_a[2], recv_b[2];
+
+            // Load partial fragment from row0 of matrix A ({a0, a1, a2, a3})
+            recv_a[0] =
+                dpct::select_from_sub_group(sg, a[0], row_load_offset + i);
+            // Load partial fragment from row1 of matrix A ({a4, a5, a6, a7})
+            recv_a[1] =
+                dpct::select_from_sub_group(sg, a[1], row_load_offset + i);
+            // Load partial fragment from col0 of matrix B ({b0, b1, b2, b3})
+            recv_b[0] =
+                dpct::select_from_sub_group(sg, b[0], col_load_offset + i);
+            // Load partial fragment from col1 of matrix B ({b4, b5, b6, b7})
+            recv_b[1] =
+                dpct::select_from_sub_group(sg, b[0], col_load_offset + i + 4);
+
+            auto ra = reinterpret_cast<ABType*>(recv_a);
+            auto rb = reinterpret_cast<ABType*>(recv_b);
+
+            // Each work item calculates a partial product of A & B matrix
+            // fragments and adds it to the corresponding D matrix fragment d0
+            // += row0{ a0, a1, a2, a3 } * col0{ b0, b1, b2, b3 } d1 += row0{
+            // a0, a1, a2, a3 } * col1{ b4, b5, b6, b7 } d2 += row1{ a4, a5, a6,
+            // a7 } * col0{ b0, b1, b2, b3 } d3 += row1{ a4, a5, a6, a7 } *
+            // col1{ b4, b5, b6, b7 }
+            for (int i = 0; i < 4; i++) {
+              *d[0] += ra[i] * rb[i];
+              *d[1] += ra[i] * rb[i + 4];
+              *d[2] += ra[i + 4] * rb[i];
+              *d[3] += ra[i + 4] * rb[i + 4];
+            }
+          }
+        }
+      } else if constexpr (M == 16 && N == 8 && K == 32) {
+        if constexpr (std::is_integral_v<ABType>) {
+          // Init D matrix with fragments of C matrix
+          *d[0] = c[0];
+          *d[1] = c[1];
+          *d[2] = c[2];
+          *d[3] = c[3];
+
+          // Each sub-group is responsible for computing a fragment size of 16*8
+          // elements of matrix D.
+          // Each work item computes 4 elements of matrix D by gathering
+          // their corresponding row & col matrix fragments of length k (32)
+          // from A & B matrices respectively using below mapping logic:
+          // row0 = (lane >> 2)    & row1 = (lane >> 2) + 8
+          // col0 = ((lane % 4) * 4) + (i & 0x3) & col1 = ((lane % 4) * 4) + (i
+          // & 0x3) As each row & col fragment of A & B matrices is distributed
+          // across 4 work items, each iteration of below loop loads a partial
+          // fragment of matrix A (row) and matrix B (col) using the row & col
+          // offsets.
+          for (int i = 0; i < 4; i++) {
+            typename MMAType<ABType>::PackType recv_a[2], recv_b[2];
+
+            // Load partial fragment from row0 of matrix A ({a0, a1, a2, a3})
+            recv_a[0] =
+                dpct::select_from_sub_group(sg, a[0], row_load_offset + i);
+            // Load partial fragment from row1 of matrix A ({a4, a5, a6, a7})
+            recv_a[1] =
+                dpct::select_from_sub_group(sg, a[1], row_load_offset + i);
+            // Load partial fragment from col0 of matrix B ({b0, b1, b2, b3})
+            recv_b[0] =
+                dpct::select_from_sub_group(sg, b[0], col_load_offset + i);
+            // Load partial fragment from col1 of matrix B ({b0, b1, b2, b3})
+            recv_b[1] =
+                dpct::select_from_sub_group(sg, b[0], col_load_offset + i + 4);
+
+            auto a = reinterpret_cast<ABType*>(recv_a);
+            auto b = reinterpret_cast<ABType*>(recv_b);
+
+            // Each work item calculates a partial product of A & B matrix
+            // fragments and adds it to the corresponding D matrix fragment d0
+            // += row0{ a0, a1, a2, a3 } * col0{ b0, b1, b2, b3 } d1 += row0{
+            // a0, a1, a2, a3 } * col1{ b0, b1, b2, b3 } d2 += row1{ a4, a5, a6,
+            // a7 } * col0{ b0, b1, b2, b3 } d3 += row1{ a4, a5, a6, a7 } *
+            // col1{ b0, b1, b2, b3 }
+            for (int j = 0; j < 4; j++) {
+              *d[0] += a[j] * b[j];
+              *d[1] += a[j] * b[j + 4];
+              *d[2] += a[j + 4] * b[j];
+              *d[3] += a[j + 4] * b[j + 4];
+            }
+          }
+
+          for (int i = 0; i < 4; i++) {
+            typename MMAType<ABType>::PackType recv_a[2], recv_b[2];
+
+            // Load partial fragment from row0 of matrix A ({a8, a9, a10, a11})
+            recv_a[0] =
+                dpct::select_from_sub_group(sg, a[2], row_load_offset + i);
+            // Load partial fragment from row1 of matrix A ({a12, a13, a14,
+            // a15})
+            recv_a[1] =
+                dpct::select_from_sub_group(sg, a[3], row_load_offset + i);
+            // Load partial fragment from col0 of matrix B ({b4, b5, b6, b7})
+            recv_b[0] =
+                dpct::select_from_sub_group(sg, b[1], col_load_offset + i);
+            // Load partial fragment from col1 of matrix B ({b4, b5, b6, b7})
+            recv_b[1] =
+                dpct::select_from_sub_group(sg, b[1], col_load_offset + i + 4);
+
+            auto a = reinterpret_cast<ABType*>(recv_a);
+            auto b = reinterpret_cast<ABType*>(recv_b);
+
+            // Each work item calculates a partial product of A & B matrix
+            // fragments and adds it to the corresponding D matrix fragment d0
+            // += row0{ a8, a9, a10, a11 } * col0{ b4, b5, b6, b7 } d1 += row0{
+            // a8, a9, a10, a11 } * col1{ b4, b5, b6, b7 } d2 += row1{ a12, a13,
+            // a14, a15 } * col0{ b4, b5, b6, b7 } d3 += row1{ a12, a13, a14,
+            // a15 } * col1{ b4, b5, b6, b7 }
+            for (int j = 0; j < 4; j++) {
+              *d[0] += a[j] * b[j];
+              *d[1] += a[j] * b[j + 4];
+              *d[2] += a[j + 4] * b[j];
+              *d[3] += a[j + 4] * b[j + 4];
+            }
+          }
+        }
+      }
+    }
 } // COPY from DPCT head files
 
 #endif // GGML_SYCL_DPCT_HELPER_HPP

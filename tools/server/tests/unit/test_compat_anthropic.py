@@ -805,3 +805,225 @@ def test_anthropic_vs_openai_different_response_format():
     assert "input_tokens" in anthropic_res.body["usage"]
     assert "completion_tokens" in openai_res.body["usage"]
     assert "output_tokens" in anthropic_res.body["usage"]
+
+
+# Extended thinking tests with reasoning models
+
+# The next two tests cover the input path (conversation history):
+# Client sends thinking blocks -> convert_anthropic_to_oai -> reasoning_content -> template
+
+def test_anthropic_thinking_history_in_count_tokens():
+    """Test that interleaved thinking blocks in conversation history are not dropped during conversion."""
+    global server
+    server.jinja = True
+    server.chat_template_file = '../../../models/templates/Qwen-Qwen3-0.6B.jinja'
+    server.start()
+
+    tool = {
+        "name": "list_files",
+        "description": "List files",
+        "input_schema": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"]
+        }
+    }
+
+    messages_without_thinking = [
+        {"role": "user", "content": "Fix the bug"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "call_1", "name": "list_files", "input": {"path": "."}}
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "call_1", "content": "main.py"}
+            ]
+        },
+    ]
+
+    messages_with_thinking = [
+        {"role": "user", "content": "Fix the bug"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "I should check the project structure first to understand the codebase layout."},
+                {"type": "tool_use", "id": "call_1", "name": "list_files", "input": {"path": "."}}
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "call_1", "content": "main.py"}
+            ]
+        },
+    ]
+
+    res_without = server.make_request("POST", "/v1/messages/count_tokens", data={
+        "model": "test",
+        "messages": messages_without_thinking,
+        "tools": [tool],
+    })
+    assert res_without.status_code == 200, f"Expected 200: {res_without.body}"
+
+    res_with = server.make_request("POST", "/v1/messages/count_tokens", data={
+        "model": "test",
+        "messages": messages_with_thinking,
+        "tools": [tool],
+    })
+    assert res_with.status_code == 200, f"Expected 200: {res_with.body}"
+
+    # Thinking blocks should increase the token count
+    assert res_with.body["input_tokens"] > res_without.body["input_tokens"], \
+        f"Expected more tokens with thinking ({res_with.body['input_tokens']}) than without ({res_without.body['input_tokens']})"
+
+
+def test_anthropic_thinking_history_in_template():
+    """Test that reasoning_content from converted interleaved thinking blocks renders in the prompt."""
+    global server
+    server.jinja = True
+    server.chat_template_file = '../../../models/templates/Qwen-Qwen3-0.6B.jinja'
+    server.start()
+
+    reasoning_1 = "I should check the project structure first."
+    reasoning_2 = "Now I need to read the main file."
+
+    res = server.make_request("POST", "/apply-template", data={
+        "messages": [
+            {"role": "user", "content": "Fix the bug in main.py"},
+            {
+                "role": "assistant",
+                "content": "",
+                "reasoning_content": reasoning_1,
+                "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "list_files", "arguments": "{\"path\": \".\"}"}
+                }]
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "main.py\nutils.py"},
+            {
+                "role": "assistant",
+                "content": "",
+                "reasoning_content": reasoning_2,
+                "tool_calls": [{
+                    "id": "call_2",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": "{\"path\": \"main.py\"}"}
+                }]
+            },
+            {"role": "tool", "tool_call_id": "call_2", "content": "print('hello')"},
+        ],
+        "tools": [{
+            "type": "function",
+            "function": {
+                "name": "list_files",
+                "description": "List files",
+                "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+            }
+        }, {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "description": "Read a file",
+                "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+            }
+        }],
+    })
+    assert res.status_code == 200, f"Expected 200, got {res.status_code}: {res.body}"
+    prompt = res.body["prompt"]
+
+    # Both reasoning_content values should be rendered in <think> tags
+    assert reasoning_1 in prompt, f"Expected first reasoning text in prompt: {prompt}"
+    assert reasoning_2 in prompt, f"Expected second reasoning text in prompt: {prompt}"
+    assert prompt.count("<think>") >= 2, f"Expected at least 2 <think> blocks in prompt: {prompt}"
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("stream", [False, True])
+def test_anthropic_thinking_with_reasoning_model(stream):
+    """Test that thinking content blocks are properly returned for reasoning models"""
+    global server
+    server = ServerProcess()
+    server.model_hf_repo = "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF"
+    server.model_hf_file = "DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf"
+    server.reasoning_format = "deepseek"
+    server.jinja = True
+    server.n_ctx = 8192
+    server.n_predict = 1024
+    server.server_port = 8084
+    server.start(timeout_seconds=600)  # large model needs time to download
+
+    if stream:
+        res = server.make_stream_request("POST", "/v1/messages", data={
+            "model": "test",
+            "max_tokens": 1024,
+            "thinking": {
+                "type": "enabled",
+                "budget_tokens": 500
+            },
+            "messages": [
+                {"role": "user", "content": "What is 2+2?"}
+            ],
+            "stream": True
+        })
+
+        events = list(res)
+
+        # should have thinking content block events
+        thinking_starts = [e for e in events if
+            e.get("type") == "content_block_start" and
+            e.get("content_block", {}).get("type") == "thinking"]
+        assert len(thinking_starts) > 0, "Should have thinking content_block_start event"
+        assert thinking_starts[0]["index"] == 0, "Thinking block should be at index 0"
+
+        # should have thinking_delta events
+        thinking_deltas = [e for e in events if
+            e.get("type") == "content_block_delta" and
+            e.get("delta", {}).get("type") == "thinking_delta"]
+        assert len(thinking_deltas) > 0, "Should have thinking_delta events"
+
+        # should have signature_delta event before thinking block closes (Anthropic API requirement)
+        signature_deltas = [e for e in events if
+            e.get("type") == "content_block_delta" and
+            e.get("delta", {}).get("type") == "signature_delta"]
+        assert len(signature_deltas) > 0, "Should have signature_delta event for thinking block"
+
+        # should have text block after thinking
+        text_starts = [e for e in events if
+            e.get("type") == "content_block_start" and
+            e.get("content_block", {}).get("type") == "text"]
+        assert len(text_starts) > 0, "Should have text content_block_start event"
+        assert text_starts[0]["index"] == 1, "Text block should be at index 1 (after thinking)"
+    else:
+        res = server.make_request("POST", "/v1/messages", data={
+            "model": "test",
+            "max_tokens": 1024,
+            "thinking": {
+                "type": "enabled",
+                "budget_tokens": 500
+            },
+            "messages": [
+                {"role": "user", "content": "What is 2+2?"}
+            ]
+        })
+
+        assert res.status_code == 200
+        assert res.body["type"] == "message"
+
+        content = res.body["content"]
+        assert len(content) >= 2, "Should have at least thinking and text blocks"
+
+        # first block should be thinking
+        thinking_blocks = [b for b in content if b.get("type") == "thinking"]
+        assert len(thinking_blocks) > 0, "Should have thinking content block"
+        assert "thinking" in thinking_blocks[0], "Thinking block should have 'thinking' field"
+        assert len(thinking_blocks[0]["thinking"]) > 0, "Thinking content should not be empty"
+        assert "signature" in thinking_blocks[0], "Thinking block should have 'signature' field (Anthropic API requirement)"
+
+        # should also have text block
+        text_blocks = [b for b in content if b.get("type") == "text"]
+        assert len(text_blocks) > 0, "Should have text content block"

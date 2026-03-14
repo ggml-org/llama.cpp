@@ -69,7 +69,7 @@ Command line arguments take precedence over environment variables when both are 
 
 In cases where the transformer implementation for the model has not been released
 yet it is possible to set the environment variable `UNRELEASED_MODEL_NAME` which
-will then cause the transformer implementation to be loaded explicitely and not
+will then cause the transformer implementation to be loaded explicitly and not
 use AutoModelForCausalLM:
 ```
 export UNRELEASED_MODEL_NAME=SomeNewModel
@@ -120,7 +120,7 @@ The converted model can be inspected using the following command:
 (venv) $ make causal-run-converted-model
 ```
 
-### Model logits verfication
+### Model logits verification
 The following target will run the original model and the converted model and
 compare the logits:
 ```console
@@ -198,20 +198,30 @@ model, and the other is a text file which allows for manual visual inspection.
 
 #### Using SentenceTransformer with numbered layers
 For models that have numbered SentenceTransformer layers (01_Pooling, 02_Dense,
-03_Dense, 04_Normalize), use the `-st` targets to apply all these layers:
+03_Dense, 04_Normalize), these will be applied automatically when running the
+converted model but currently there is a separate target to run the original
+version:
 
 ```console
 # Run original model with SentenceTransformer (applies all numbered layers)
 (venv) $ make embedding-run-original-model-st
-
-# Run converted model with pooling enabled
-(venv) $ make embedding-run-converted-model-st
 ```
 
 This will use the SentenceTransformer library to load and run the model, which
 automatically applies all the numbered layers in the correct order. This is
 particularly useful when comparing with models that should include these
 additional transformation layers beyond just the base model output.
+
+The type of normalization can be specified for the converted model but is not
+strictly necessary as the verification uses cosine similarity and the magnitude
+of the output vectors does not affect this. But the normalization type can be
+specified as an argument to the target which might be useful for manual
+inspection:
+```console
+(venv) $ make embedding-verify-logits-st EMBD_NORMALIZE=1
+```
+The original model will apply the normalization according to the normalization
+layer specified in the modules.json configuration file.
 
 ### Model conversion
 After updates have been made to [gguf-py](../../gguf-py) to add support for the
@@ -225,7 +235,7 @@ new model the model can be converted to GGUF format using the following command:
 (venv) $ make embedding-run-converted-model
 ```
 
-### Model logits verfication
+### Model logits verification
 The following target will run the original model and the converted model (which
 was done manually in the previous steps) and compare the logits:
 ```console
@@ -325,7 +335,7 @@ $ make perplexity-run-full QUANTIZED_MODEL=~/path/to/quantized/model-Qxx.gguf LO
 
 ## HuggingFace utilities
 The following targets are useful for creating collections and model repositories
-on Hugging Face in the the ggml-org. These can be used when preparing a relase
+on Hugging Face in the the ggml-org. These can be used when preparing a release
 to script the process for new model releases.
 
 For the following targets a `HF_TOKEN` environment variable is required.
@@ -337,7 +347,7 @@ For the following targets a `HF_TOKEN` environment variable is required.
 > $ unset HF_TOKEN
 
 ### Create a new Hugging Face Model (model repository)
-This will create a new model repsository on Hugging Face with the specified
+This will create a new model repository on Hugging Face with the specified
 model name.
 ```console
 (venv) $ make hf-create-model MODEL_NAME='TestModel' NAMESPACE="danbev" ORIGINAL_BASE_MODEL="some-base-model"

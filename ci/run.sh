@@ -45,14 +45,15 @@ sd=`dirname $0`
 cd $sd/../
 SRC=`pwd`
 
-CMAKE_EXTRA="-DLLAMA_FATAL_WARNINGS=${LLAMA_FATAL_WARNINGS:-ON} -DLLAMA_CURL=ON -DGGML_SCHED_NO_REALLOC=ON"
+CMAKE_EXTRA="-DLLAMA_FATAL_WARNINGS=${LLAMA_FATAL_WARNINGS:-ON} -DLLAMA_OPENSSL=OFF -DGGML_SCHED_NO_REALLOC=ON"
 
 if [ ! -z ${GG_BUILD_METAL} ]; then
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_METAL=ON"
 fi
 
 if [ ! -z ${GG_BUILD_CUDA} ]; then
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_CUDA=ON"
+    # TODO: Remove GGML_CUDA_CUB_3DOT2 flag once CCCL 3.2 is bundled within CTK and that CTK version is used in this project
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_CUDA=ON -DGGML_CUDA_CUB_3DOT2=ON"
 
     if command -v nvidia-smi >/dev/null 2>&1; then
         CUDA_ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d '.')
@@ -104,7 +105,20 @@ if [ ! -z ${GG_BUILD_VULKAN} ]; then
 fi
 
 if [ ! -z ${GG_BUILD_WEBGPU} ]; then
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_WEBGPU=1"
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_WEBGPU=1 -DGGML_METAL=OFF -DGGML_BLAS=OFF"
+
+    if [ ! -z "${GG_BUILD_WEBGPU_DAWN_PREFIX}" ]; then
+        if [ -z "${CMAKE_PREFIX_PATH}" ]; then
+            export CMAKE_PREFIX_PATH="${GG_BUILD_WEBGPU_DAWN_PREFIX}"
+        else
+            export CMAKE_PREFIX_PATH="${GG_BUILD_WEBGPU_DAWN_PREFIX}:${CMAKE_PREFIX_PATH}"
+        fi
+    fi
+
+    # For some systems, Dawn_DIR needs to be set explicitly, e.g., the lib64 path
+    if [ ! -z "${GG_BUILD_WEBGPU_DAWN_DIR}" ]; then
+        CMAKE_EXTRA="${CMAKE_EXTRA} -DDawn_DIR=${GG_BUILD_WEBGPU_DAWN_DIR}"
+    fi
 fi
 
 if [ ! -z ${GG_BUILD_MUSA} ]; then
@@ -240,7 +254,7 @@ function gg_run_ctest_release {
     (time make -j$(nproc)                                    ) 2>&1 | tee -a $OUT/${ci}-make.log
 
     if [ -z ${GG_BUILD_LOW_PERF} ]; then
-        (time ctest --output-on-failure -L main ) 2>&1 | tee -a $OUT/${ci}-ctest.log
+        (time ctest --output-on-failure -L 'main|python' ) 2>&1 | tee -a $OUT/${ci}-ctest.log
     else
         (time ctest --output-on-failure -L main -E test-opt ) 2>&1 | tee -a $OUT/${ci}-ctest.log
     fi
@@ -283,7 +297,8 @@ function gg_sum_test_scripts {
 }
 
 function gg_get_model {
-    local gguf_0="$MNT/models/qwen3/0.6B/ggml-model-f16.gguf"
+    #local gguf_0="$MNT/models/qwen3/0.6B/ggml-model-f16.gguf"
+    local gguf_0="$MNT/models/qwen3/0.6B/ggml-model-q4_0.gguf"
     if [[ -s $gguf_0 ]]; then
         echo -n "$gguf_0"
     else
@@ -620,6 +635,29 @@ function gg_check_build_requirements {
     fi
 }
 
+function gg_run_test_backend_ops_cpu {
+    cd ${SRC}
+
+    cd build-ci-release
+
+    set -e
+
+    (time ./bin/test-backend-ops -b CPU ) 2>&1 | tee -a $OUT/${ci}-test-backend-ops-cpu.log
+
+    set +e
+}
+
+function gg_sum_test_backend_ops_cpu {
+    gg_printf '### %s\n\n' "${ci}"
+
+    gg_printf 'Runs test-backend-ops for CPU backend\n'
+    gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
+    gg_printf '```\n'
+    gg_printf '%s\n' "$(cat $OUT/${ci}-test-backend-ops-cpu.log)"
+    gg_printf '```\n'
+    gg_printf '\n'
+}
+
 ## main
 
 export LLAMA_LOG_PREFIX=1
@@ -647,6 +685,10 @@ ret=0
 
 test $ret -eq 0 && gg_run ctest_debug
 test $ret -eq 0 && gg_run ctest_release
+
+if [ ! -z ${GG_BUILD_HIGH_PERF} ]; then
+    test $ret -eq 0 && gg_run test_backend_ops_cpu
+fi
 
 if [ -z ${GG_BUILD_LOW_PERF} ]; then
     test $ret -eq 0 && gg_run embd_bge_small

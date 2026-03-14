@@ -23,7 +23,7 @@ export {
 } from './pdf-processing';
 
 // File conversion utilities (depends on pdf-processing)
-export { parseFilesToMessageExtras, type FileProcessingResult } from './convert-files-to-extra';
+export { parseFilesToMessageExtras } from './convert-files-to-extra';
 
 // File upload processing utilities (depends on pdf-processing, svg-to-png, webp-to-png)
 export { processFilesToChatUploaded } from './process-uploaded-files';

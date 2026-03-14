@@ -139,10 +139,13 @@ class GGUFWriter:
                 size = prod(shape)
 
                 if "_exps." in name:
-                    expert_count = shape[-2 if ".bias" in name else -3]
-                    expert_params += (size // expert_count)
-                    expert_sum += expert_count
-                    n_expert_tensors += 1
+                    if len(shape) >= 3:
+                        expert_count = shape[-2 if ".bias" in name else -3]
+                        expert_params += (size // expert_count)
+                        expert_sum += expert_count
+                        n_expert_tensors += 1
+                    else:
+                        shared_params += size
                 else:
                     shared_params += size
 
@@ -501,6 +504,8 @@ class GGUFWriter:
         self.add_uint32(Keys.General.QUANTIZATION_VERSION, quantization_version)
 
     def add_custom_alignment(self, alignment: int) -> None:
+        if alignment <= 0 or (alignment & (alignment - 1)) != 0:
+            raise ValueError('Invalid alignment: must be a non-zero power of two')
         self.data_alignment = alignment
         self.add_uint32(Keys.General.ALIGNMENT, alignment)
 
@@ -681,6 +686,9 @@ class GGUFWriter:
     def add_embedding_length(self, length: int) -> None:
         self.add_uint32(Keys.LLM.EMBEDDING_LENGTH.format(arch=self.arch), length)
 
+    def add_embedding_length_out(self, length: int) -> None:
+        self.add_uint32(Keys.LLM.EMBEDDING_LENGTH_OUT.format(arch=self.arch), length)
+
     def add_features_length(self, length: int) -> None:
         self.add_uint32(Keys.LLM.FEATURES_LENGTH.format(arch=self.arch), length)
 
@@ -704,6 +712,9 @@ class GGUFWriter:
 
     def add_leading_dense_block_count(self, length: int) -> None:
         self.add_uint32(Keys.LLM.LEADING_DENSE_BLOCK_COUNT.format(arch=self.arch), length)
+
+    def add_full_attention_interval(self, interval: int) -> None:
+        self.add_uint32(Keys.LLM.FULL_ATTENTION_INTERVAL.format(arch=self.arch), interval)
 
     def add_feed_forward_length(self, length: int | Sequence[int]) -> None:
         if isinstance(length, int):
@@ -765,6 +776,21 @@ class GGUFWriter:
     def add_value_length_mla(self, length: int) -> None:
         self.add_uint32(Keys.Attention.VALUE_LENGTH_MLA.format(arch=self.arch), length)
 
+    def add_key_length_swa(self, length: int) -> None:
+        self.add_uint32(Keys.Attention.KEY_LENGTH_SWA.format(arch=self.arch), length)
+
+    def add_value_length_swa(self, length: int) -> None:
+        self.add_uint32(Keys.Attention.VALUE_LENGTH_SWA.format(arch=self.arch), length)
+
+    def add_indexer_head_count(self, count: int) -> None:
+        self.add_uint32(Keys.Attention.Indexer.HEAD_COUNT.format(arch=self.arch), count)
+
+    def add_indexer_key_length(self, length: int) -> None:
+        self.add_uint32(Keys.Attention.Indexer.KEY_LENGTH.format(arch=self.arch), length)
+
+    def add_indexer_top_k(self, top_k: int) -> None:
+        self.add_uint32(Keys.Attention.Indexer.TOP_K.format(arch=self.arch), top_k)
+
     def add_max_alibi_bias(self, bias: float) -> None:
         self.add_float32(Keys.Attention.MAX_ALIBI_BIAS.format(arch=self.arch), bias)
 
@@ -821,6 +847,12 @@ class GGUFWriter:
     def add_expert_gating_func(self, value: ExpertGatingFuncType) -> None:
         self.add_uint32(Keys.LLM.EXPERT_GATING_FUNC.format(arch=self.arch), value.value)
 
+    def add_swiglu_clamp_exp(self, values: Sequence[float]) -> None:
+        self.add_array(Keys.LLM.SWIGLU_CLAMP_EXP.format(arch=self.arch), values)
+
+    def add_swiglu_clamp_shexp(self, values: Sequence[float]) -> None:
+        self.add_array(Keys.LLM.SWIGLU_CLAMP_SHEXP.format(arch=self.arch), values)
+
     def add_expert_group_scale(self, value: float) -> None:
         self.add_float32(Keys.LLM.EXPERT_GROUP_SCALE.format(arch=self.arch), value)
 
@@ -829,6 +861,9 @@ class GGUFWriter:
 
     def add_moe_every_n_layers(self, value: int) -> None:
         self.add_uint32(Keys.LLM.MOE_EVERY_N_LAYERS.format(arch=self.arch), value)
+
+    def add_moe_latent_size(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.MOE_LATENT_SIZE.format(arch=self.arch), value)
 
     def add_nextn_predict_layers(self, count: int) -> None:
         self.add_uint32(Keys.LLM.NEXTN_PREDICT_LAYERS.format(arch=self.arch), count)
@@ -923,6 +958,9 @@ class GGUFWriter:
     def add_rope_dimension_count(self, count: int) -> None:
         self.add_uint32(Keys.Rope.DIMENSION_COUNT.format(arch=self.arch), count)
 
+    def add_rope_dimension_count_swa(self, count: int) -> None:
+        self.add_uint32(Keys.Rope.DIMENSION_COUNT_SWA.format(arch=self.arch), count)
+
     def add_rope_dimension_sections(self, dims: Sequence[int]) -> None:
         self.add_array(Keys.Rope.DIMENSION_SECTIONS.format(arch=self.arch), dims)
 
@@ -976,6 +1014,9 @@ class GGUFWriter:
 
     def add_ssm_dt_b_c_rms(self, value: bool) -> None:
         self.add_bool(Keys.SSM.DT_B_C_RMS.format(arch=self.arch), value)
+
+    def add_kda_head_dim(self, value: int) -> None:
+        self.add_uint32(Keys.KDA.HEAD_DIM.format(arch=self.arch), value)
 
     def add_tokenizer_model(self, model: str) -> None:
         self.add_string(Keys.Tokenizer.MODEL, model)
@@ -1083,6 +1124,9 @@ class GGUFWriter:
     def add_clip_projector_type(self, value: str) -> None:
         self.add_string(Keys.Clip.PROJECTOR_TYPE, value)
 
+    def add_clip_vision_projector_type(self, value: str) -> None:
+        self.add_string(Keys.ClipVision.PROJECTOR_TYPE, value)
+
     def add_vision_projection_dim(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.PROJECTION_DIM, value)
 
@@ -1106,6 +1150,12 @@ class GGUFWriter:
 
     def add_vision_image_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.IMAGE_SIZE, value)
+
+    def add_vision_max_pixels(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.IMAGE_MAX_PIXELS, value)
+
+    def add_vision_min_pixels(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.IMAGE_MIN_PIXELS, value)
 
     def add_vision_preproc_image_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.PREPROC_IMAGE_SIZE, value)
@@ -1164,6 +1214,9 @@ class GGUFWriter:
         self.add_uint32(Keys.ClipVision.WINDOW_SIZE, value)
 
     # audio models
+
+    def add_clip_audio_projector_type(self, value: str) -> None:
+        self.add_string(Keys.ClipAudio.PROJECTOR_TYPE, value)
 
     def add_audio_projection_dim(self, value: int) -> None:
         self.add_uint32(Keys.ClipAudio.PROJECTION_DIM, value)

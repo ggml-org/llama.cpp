@@ -1,4 +1,5 @@
 #include "arg.h"
+#include "debug.h"
 #include "log.h"
 #include "common.h"
 #include "sampling.h"
@@ -12,6 +13,7 @@
 #include <vector>
 #include <limits.h>
 #include <cinttypes>
+#include <clocale>
 
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
 #include <signal.h>
@@ -88,6 +90,8 @@ struct mtmd_cli_context {
     int n_threads    = 1;
     llama_pos n_past = 0;
 
+    base_callback_data cb_data;
+
     mtmd_cli_context(common_params & params) : llama_init(common_init_from_params(params)) {
         model = llama_init->model();
         lctx = llama_init->context();
@@ -139,6 +143,10 @@ struct mtmd_cli_context {
         mparams.warmup           = params.warmup;
         mparams.image_min_tokens = params.image_min_tokens;
         mparams.image_max_tokens = params.image_max_tokens;
+        if (std::getenv("MTMD_DEBUG_GRAPH") != nullptr) {
+            mparams.cb_eval_user_data = &cb_data;
+            mparams.cb_eval = common_debug_cb_eval<false>;
+        }
         ctx_vision.reset(mtmd_init_from_file(clip_path, model, mparams));
         if (!ctx_vision.get()) {
             LOG_ERR("Failed to load vision model from %s\n", clip_path);
@@ -267,6 +275,8 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     ggml_time_init();
 
     common_params params;

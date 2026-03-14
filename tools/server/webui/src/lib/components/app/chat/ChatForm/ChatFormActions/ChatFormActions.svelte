@@ -2,19 +2,25 @@
 	import { Square } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import {
-		ChatFormActionFileAttachments,
+		ChatFormActionAttachmentsDropdown,
+		ChatFormActionAttachmentsSheet,
 		ChatFormActionRecord,
 		ChatFormActionSubmit,
-		ModelsSelector
+		McpServersSelector,
+		ModelsSelector,
+		ModelsSelectorSheet
 	} from '$lib/components/app';
+	import { DialogChatSettings } from '$lib/components/app/dialogs';
+	import { SETTINGS_SECTION_TITLES } from '$lib/constants';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { FileTypeCategory } from '$lib/enums';
 	import { getFileTypeCategory } from '$lib/utils';
 	import { config } from '$lib/stores/settings.svelte';
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
-	import { isRouterMode } from '$lib/stores/server.svelte';
+	import { isRouterMode, serverError } from '$lib/stores/server.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
-	import { activeMessages, usedModalities } from '$lib/stores/conversations.svelte';
-	import { useModelChangeValidation } from '$lib/hooks/use-model-change-validation.svelte';
+	import { activeMessages, conversationsStore } from '$lib/stores/conversations.svelte';
+	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
 
 	interface Props {
 		canSend?: boolean;
@@ -24,9 +30,12 @@
 		isRecording?: boolean;
 		hasText?: boolean;
 		uploadedFiles?: ChatUploadedFile[];
-		onFileUpload?: (fileType?: FileTypeCategory) => void;
+		onFileUpload?: () => void;
 		onMicClick?: () => void;
 		onStop?: () => void;
+		onSystemPromptClick?: () => void;
+		onMcpPromptClick?: () => void;
+		onMcpResourcesClick?: () => void;
 	}
 
 	let {
@@ -39,22 +48,26 @@
 		uploadedFiles = [],
 		onFileUpload,
 		onMicClick,
-		onStop
+		onStop,
+		onSystemPromptClick,
+		onMcpPromptClick,
+		onMcpResourcesClick
 	}: Props = $props();
 
 	let currentConfig = $derived(config());
 	let isRouter = $derived(isRouterMode());
+	let isOffline = $derived(!!serverError());
 
 	let conversationModel = $derived(
 		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])
 	);
 
-	let previousConversationModel: string | null = null;
-
 	$effect(() => {
-		if (conversationModel && conversationModel !== previousConversationModel) {
-			previousConversationModel = conversationModel;
+		if (conversationModel) {
 			modelsStore.selectModelByName(conversationModel);
+		} else if (isRouter && modelsStore.loadedModelIds.length > 0) {
+			const first = modelOptions().find((m) => modelsStore.loadedModelIds.includes(m.model));
+			if (first) modelsStore.selectModelById(first.id);
 		}
 	});
 
@@ -147,48 +160,97 @@
 		return '';
 	});
 
-	let selectorModelRef: ModelsSelector | undefined = $state(undefined);
+	let selectorModelRef: ModelsSelector | ModelsSelectorSheet | undefined = $state(undefined);
+
+	let isMobile = new IsMobile();
 
 	export function openModelSelector() {
 		selectorModelRef?.open();
 	}
 
-	const { handleModelChange } = useModelChangeValidation({
-		getRequiredModalities: () => usedModalities(),
-		onValidationFailure: async (previousModelId) => {
-			if (previousModelId) {
-				await modelsStore.selectModelById(previousModelId);
-			}
-		}
+	let showChatSettingsDialogWithMcpSection = $state(false);
+
+	let hasMcpPromptsSupport = $derived.by(() => {
+		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
+
+		return mcpStore.hasPromptsCapability(perChatOverrides);
+	});
+
+	let hasMcpResourcesSupport = $derived.by(() => {
+		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
+
+		return mcpStore.hasResourcesCapability(perChatOverrides);
 	});
 </script>
 
 <div class="flex w-full items-center gap-3 {className}" style="container-type: inline-size">
-	<ChatFormActionFileAttachments
-		class="mr-auto"
-		{disabled}
-		{hasAudioModality}
-		{hasVisionModality}
-		{onFileUpload}
-	/>
+	<div class="mr-auto flex items-center gap-2">
+		{#if isMobile.current}
+			<ChatFormActionAttachmentsSheet
+				{disabled}
+				{hasAudioModality}
+				{hasVisionModality}
+				{hasMcpPromptsSupport}
+				{hasMcpResourcesSupport}
+				{onFileUpload}
+				{onSystemPromptClick}
+				{onMcpPromptClick}
+				{onMcpResourcesClick}
+				onMcpSettingsClick={() => (showChatSettingsDialogWithMcpSection = true)}
+			/>
+		{:else}
+			<ChatFormActionAttachmentsDropdown
+				{disabled}
+				{hasAudioModality}
+				{hasVisionModality}
+				{hasMcpPromptsSupport}
+				{hasMcpResourcesSupport}
+				{onFileUpload}
+				{onSystemPromptClick}
+				{onMcpPromptClick}
+				{onMcpResourcesClick}
+				onMcpSettingsClick={() => (showChatSettingsDialogWithMcpSection = true)}
+			/>
+		{/if}
 
-	<ModelsSelector
-		{disabled}
-		bind:this={selectorModelRef}
-		currentModel={conversationModel}
-		forceForegroundText={true}
-		useGlobalSelection={true}
-		onModelChange={handleModelChange}
-	/>
+		<McpServersSelector
+			{disabled}
+			onSettingsClick={() => (showChatSettingsDialogWithMcpSection = true)}
+		/>
+	</div>
+
+	<div class="ml-auto flex items-center gap-1.5">
+		{#if isMobile.current}
+			<ModelsSelectorSheet
+				disabled={disabled || isOffline}
+				bind:this={selectorModelRef}
+				currentModel={conversationModel}
+				forceForegroundText
+				useGlobalSelection
+			/>
+		{:else}
+			<ModelsSelector
+				disabled={disabled || isOffline}
+				bind:this={selectorModelRef}
+				currentModel={conversationModel}
+				forceForegroundText
+				useGlobalSelection
+			/>
+		{/if}
+	</div>
 
 	{#if isLoading}
 		<Button
 			type="button"
+			variant="secondary"
 			onclick={onStop}
-			class="h-8 w-8 bg-transparent p-0 hover:bg-destructive/20"
+			class="group h-8 w-8 rounded-full p-0 hover:bg-destructive/10!"
 		>
 			<span class="sr-only">Stop</span>
-			<Square class="h-8 w-8 fill-destructive stroke-destructive" />
+
+			<Square
+				class="h-8 w-8 fill-muted-foreground stroke-muted-foreground group-hover:fill-destructive group-hover:stroke-destructive hover:fill-destructive hover:stroke-destructive"
+			/>
 		</Button>
 	{:else if shouldShowRecordButton}
 		<ChatFormActionRecord {disabled} {hasAudioModality} {isLoading} {isRecording} {onMicClick} />
@@ -202,3 +264,9 @@
 		/>
 	{/if}
 </div>
+
+<DialogChatSettings
+	open={showChatSettingsDialogWithMcpSection}
+	onOpenChange={(open) => (showChatSettingsDialogWithMcpSection = open)}
+	initialSection={SETTINGS_SECTION_TITLES.MCP}
+/>

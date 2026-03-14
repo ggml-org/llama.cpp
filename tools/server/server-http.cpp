@@ -28,14 +28,20 @@ server_http_context::server_http_context()
 server_http_context::~server_http_context() = default;
 
 static void log_server_request(const httplib::Request & req, const httplib::Response & res) {
-    // skip GH copilot requests when using default port
-    if (req.path == "/v1/health") {
+    // skip logging requests that are regularly sent, to avoid log spam
+    if (req.path == "/health"
+        || req.path == "/v1/health"
+        || req.path == "/models"
+        || req.path == "/v1/models"
+        || req.path == "/props"
+        || req.path == "/metrics"
+    ) {
         return;
     }
 
     // reminder: this function is not covered by httplib's exception handler; if someone does more complicated stuff, think about wrapping it in try-catch
 
-    SRV_INF("request: %s %s %s %d\n", req.method.c_str(), req.path.c_str(), req.remote_addr.c_str(), res.status);
+    SRV_INF("done request: %s %s %s %d\n", req.method.c_str(), req.path.c_str(), req.remote_addr.c_str(), res.status);
 
     SRV_DBG("request:  %s\n", req.body.c_str());
     SRV_DBG("response: %s\n", res.body.c_str());
@@ -333,6 +339,17 @@ static std::map<std::string, std::string> get_headers(const httplib::Request & r
     return headers;
 }
 
+static std::string build_query_string(const httplib::Request & req) {
+    std::string qs;
+    for (const auto & [key, value] : req.params) {
+        if (!qs.empty()) {
+            qs += '&';
+        }
+        qs += httplib::encode_query_component(key) + "=" + httplib::encode_query_component(value);
+    }
+    return qs;
+}
+
 // using unique_ptr for request to allow safe capturing in lambdas
 using server_http_req_ptr = std::unique_ptr<server_http_req>;
 
@@ -376,6 +393,7 @@ void server_http_context::get(const std::string & path, const server_http_contex
             get_params(req),
             get_headers(req),
             req.path,
+            build_query_string(req),
             req.body,
             req.is_connection_closed
         });
@@ -390,6 +408,7 @@ void server_http_context::post(const std::string & path, const server_http_conte
             get_params(req),
             get_headers(req),
             req.path,
+            build_query_string(req),
             req.body,
             req.is_connection_closed
         });

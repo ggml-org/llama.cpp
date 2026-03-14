@@ -129,11 +129,3 @@ void common_params_add_preset_options(std::vector<common_arg> & args);
 
 // initialize argument parser context - used by test-arg-parser and preset
 common_params_context common_params_parser_init(common_params & params, llama_example ex, void(*print_usage)(int, char **) = nullptr);
-
-struct common_remote_params {
-    std::vector<std::string> headers;
-    long timeout = 0; // CURLOPT_TIMEOUT, in seconds ; 0 means no timeout
-    long max_size = 0; // max size of the response ; unlimited if 0 ; max is 2GB
-};
-// get remote file content, returns <http_code, raw_response_body>
-std::pair<long, std::vector<char>> common_remote_get_content(const std::string & url, const common_remote_params & params);

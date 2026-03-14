@@ -1,13 +1,16 @@
+import { ColorMode } from '$lib/enums/ui';
+import { Monitor, Moon, Sun } from '@lucide/svelte';
+
 export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> = {
 	// Note: in order not to introduce breaking changes, please keep the same data type (number, string, etc) if you want to change the default value. Do not use null or undefined for default value.
 	// Do not use nested objects, keep it single level. Prefix the key if you need to group them.
 	apiKey: '',
 	systemMessage: '',
 	showSystemMessage: true,
-	theme: 'system',
+	theme: ColorMode.SYSTEM,
 	showThoughtInProgress: false,
-	showToolCalls: false,
-	disableReasoningFormat: false,
+	disableReasoningParsing: false,
+	showRawOutputSwitch: false,
 	keepStatsVisible: false,
 	autoChatWidth: false,
 	customChatWidth: '',
@@ -21,8 +24,17 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	alwaysShowSidebarOnDesktop: false,
 	autoShowSidebarOnNewChat: true,
 	autoMicOnEmpty: false,
+	fullHeightCodeBlocks: false,
+	showRawModelNames: false,
+	mcpServers: '[]',
+	mcpServerUsageStats: '{}', // JSON object: { [serverId]: usageCount }
+	agenticMaxTurns: 10,
+	agenticMaxToolPreviewLines: 25,
+	showToolCallInProgress: false,
+	alwaysShowAgenticTurns: false,
 	// make sure these default values are in sync with `common.h`
 	samplers: 'top_k;typ_p;top_p;min_p;temperature',
+	backend_sampling: false,
 	temperature: 0.8,
 	dynatemp_range: 0.0,
 	dynatemp_exponent: 1.0,
@@ -59,6 +71,8 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 		'When copying a message with text attachments, combine them into a single plain text string instead of a special format that can be pasted back as attachments.',
 	samplers:
 		'The order at which samplers are applied, in simplified way. Default is "top_k;typ_p;top_p;min_p;temperature": top_k->typ_p->top_p->min_p->temperature',
+	backend_sampling:
+		'Enable backend-based samplers. When enabled, supported samplers run on the accelerator backend for faster sampling.',
 	temperature:
 		'Controls the randomness of the generated text by affecting the probability distribution of the output tokens. Higher = more random, lower = more focused.',
 	dynatemp_range:
@@ -89,10 +103,10 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	max_tokens: 'The maximum number of token per output. Use -1 for infinite (no limit).',
 	custom: 'Custom JSON parameters to send to the API. Must be valid JSON format.',
 	showThoughtInProgress: 'Expand thought process by default when generating messages.',
-	showToolCalls:
-		'Display tool call labels and payloads from Harmony-compatible delta.tool_calls data below assistant messages.',
-	disableReasoningFormat:
-		'Show raw LLM output without backend parsing and frontend Markdown rendering to inspect streaming across different models.',
+	disableReasoningParsing:
+		'Send reasoning_format=none to prevent server-side extraction of reasoning tokens into separate field',
+	showRawOutputSwitch:
+		'Show toggle button to display messages as plain text instead of Markdown-formatted content',
 	keepStatsVisible: 'Keep processing statistics visible after generation finishes.',
 	autoChatWidth:
 		'Automatically adapt the chat width to your screen size. If enabled, this ignores the custom width setting.',
@@ -113,8 +127,28 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 		'Automatically show sidebar when starting a new chat. Disable to keep the sidebar hidden until you click on it.',
 	autoMicOnEmpty:
 		'Automatically show microphone button instead of send button when textarea is empty for models with audio modality support.',
+	fullHeightCodeBlocks:
+		'Always display code blocks at their full natural height, overriding any height limits.',
+	showRawModelNames:
+		'Display full raw model identifiers (e.g. "unsloth/Qwen3.5-27B-GGUF:BF16") instead of parsed names with badges.',
+	mcpServers:
+		'Configure MCP servers as a JSON list. Use the form in the MCP Client settings section to edit.',
+	mcpServerUsageStats:
+		'Usage statistics for MCP servers. Tracks how many times tools from each server have been used.',
+	agenticMaxTurns:
+		'Maximum number of tool execution cycles before stopping (prevents infinite loops).',
+	agenticMaxToolPreviewLines:
+		'Number of lines shown in tool output previews (last N lines). Only these previews and the final LLM response persist after the agentic loop completes.',
+	showToolCallInProgress:
+		'Automatically expand tool call details while executing and keep them expanded after completion.',
 	pyInterpreterEnabled:
 		'Enable Python interpreter using Pyodide. Allows running Python code in markdown code blocks.',
 	enableContinueGeneration:
 		'Enable "Continue" button for assistant messages. Currently works only with non-reasoning models.'
 };
+
+export const SETTINGS_COLOR_MODES_CONFIG = [
+	{ value: ColorMode.SYSTEM, label: 'System', icon: Monitor },
+	{ value: ColorMode.LIGHT, label: 'Light', icon: Sun },
+	{ value: ColorMode.DARK, label: 'Dark', icon: Moon }
+];

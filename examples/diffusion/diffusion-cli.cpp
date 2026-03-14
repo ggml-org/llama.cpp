@@ -7,6 +7,7 @@
 #include <limits.h>
 
 #include <algorithm>
+#include <clocale>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -538,6 +539,8 @@ static std::string format_input_text(const std::string & prompt, const std::stri
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     ggml_time_init();
 
     common_params params;
@@ -553,6 +556,7 @@ int main(int argc, char ** argv) {
     model_params.n_gpu_layers       = params.n_gpu_layers;
     model_params.devices            = params.devices.data();
     model_params.use_mmap           = params.use_mmap;
+    model_params.use_direct_io      = params.use_direct_io;
     model_params.use_mlock          = params.use_mlock;
     model_params.check_tensors      = params.check_tensors;
 

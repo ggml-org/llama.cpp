@@ -7,6 +7,7 @@ struct common_http_url {
     std::string user;
     std::string password;
     std::string host;
+    int port;
     std::string path;
 };
 
@@ -47,6 +48,20 @@ static common_http_url common_http_parse_url(const std::string & url) {
         parts.host = rest;
         parts.path = "/";
     }
+
+    auto colon_pos = parts.host.find(':');
+
+    if (colon_pos != std::string::npos) {
+        parts.port = std::stoi(parts.host.substr(colon_pos + 1));
+        parts.host = parts.host.substr(0, colon_pos);
+    } else if (parts.scheme == "http") {
+        parts.port = 80;
+    } else if (parts.scheme == "https") {
+        parts.port = 443;
+    } else {
+        throw std::runtime_error("unsupported URL scheme: " + parts.scheme);
+    }
+
     return parts;
 }
 
@@ -57,7 +72,18 @@ static std::pair<httplib::Client, common_http_url> common_http_client(const std:
         throw std::runtime_error("error: invalid URL format");
     }
 
-    httplib::Client cli(parts.scheme + "://" + parts.host);
+#ifndef CPPHTTPLIB_OPENSSL_SUPPORT
+    if (parts.scheme == "https") {
+        throw std::runtime_error(
+            "HTTPS is not supported. Please rebuild with one of:\n"
+            "  -DLLAMA_BUILD_BORINGSSL=ON\n"
+            "  -DLLAMA_BUILD_LIBRESSL=ON\n"
+            "  -DLLAMA_OPENSSL=ON (default, requires OpenSSL dev files installed)"
+        );
+    }
+#endif
+
+    httplib::Client cli(parts.scheme + "://" + parts.host + ":" + std::to_string(parts.port));
 
     if (!parts.user.empty()) {
         cli.set_basic_auth(parts.user, parts.password);

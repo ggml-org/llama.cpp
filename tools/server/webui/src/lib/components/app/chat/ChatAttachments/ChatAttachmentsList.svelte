@@ -1,8 +1,21 @@
 <script lang="ts">
-	import { ChatAttachmentThumbnailImage, ChatAttachmentThumbnailFile } from '$lib/components/app';
+	import {
+		ChatAttachmentMcpPrompt,
+		ChatAttachmentMcpResource,
+		ChatAttachmentThumbnailImage,
+		ChatAttachmentThumbnailFile,
+		HorizontalScrollCarousel,
+		DialogChatAttachmentPreview,
+		DialogChatAttachmentsViewAll,
+		DialogMcpResourcePreview
+	} from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
-	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
-	import { DialogChatAttachmentPreview, DialogChatAttachmentsViewAll } from '$lib/components/app';
+	import { AttachmentType } from '$lib/enums';
+	import type {
+		DatabaseMessageExtraMcpPrompt,
+		DatabaseMessageExtraMcpResource,
+		MCPResourceAttachment
+	} from '$lib/types';
 	import { getAttachmentDisplayItems } from '$lib/utils';
 
 	interface Props {
@@ -41,12 +54,12 @@
 
 	let displayItems = $derived(getAttachmentDisplayItems({ uploadedFiles, attachments }));
 
-	let canScrollLeft = $state(false);
-	let canScrollRight = $state(false);
+	let carouselRef: HorizontalScrollCarousel | undefined = $state();
 	let isScrollable = $state(false);
 	let previewDialogOpen = $state(false);
 	let previewItem = $state<ChatAttachmentPreviewItem | null>(null);
-	let scrollContainer: HTMLDivElement | undefined = $state();
+	let mcpResourcePreviewOpen = $state(false);
+	let mcpResourcePreviewExtra = $state<DatabaseMessageExtraMcpResource | null>(null);
 	let showViewAll = $derived(limitToSingleRow && displayItems.length > 0 && isScrollable);
 	let viewAllDialogOpen = $state(false);
 
@@ -65,41 +78,29 @@
 		previewDialogOpen = true;
 	}
 
-	function scrollLeft(event?: MouseEvent) {
-		event?.stopPropagation();
-		event?.preventDefault();
-
-		if (!scrollContainer) return;
-
-		scrollContainer.scrollBy({ left: scrollContainer.clientWidth * -0.67, behavior: 'smooth' });
+	function openMcpResourcePreview(extra: DatabaseMessageExtraMcpResource) {
+		mcpResourcePreviewExtra = extra;
+		mcpResourcePreviewOpen = true;
 	}
 
-	function scrollRight(event?: MouseEvent) {
-		event?.stopPropagation();
-		event?.preventDefault();
-
-		if (!scrollContainer) return;
-
-		scrollContainer.scrollBy({ left: scrollContainer.clientWidth * 0.67, behavior: 'smooth' });
-	}
-
-	function updateScrollButtons() {
-		if (!scrollContainer) return;
-
-		const { scrollLeft, scrollWidth, clientWidth } = scrollContainer;
-
-		canScrollLeft = scrollLeft > 0;
-		canScrollRight = scrollLeft < scrollWidth - clientWidth - 1;
-		isScrollable = scrollWidth > clientWidth;
+	function toMcpResourceAttachment(
+		extra: DatabaseMessageExtraMcpResource,
+		id: string
+	): MCPResourceAttachment {
+		return {
+			id,
+			resource: {
+				uri: extra.uri,
+				name: extra.name,
+				title: extra.name,
+				serverName: extra.serverName
+			}
+		};
 	}
 
 	$effect(() => {
-		if (scrollContainer && displayItems.length) {
-			scrollContainer.scrollLeft = 0;
-
-			setTimeout(() => {
-				updateScrollButtons();
-			}, 0);
+		if (carouselRef && displayItems.length) {
+			carouselRef.resetScroll();
 		}
 	});
 </script>
@@ -107,67 +108,74 @@
 {#if displayItems.length > 0}
 	<div class={className} {style}>
 		{#if limitToSingleRow}
-			<div class="relative">
-				<button
-					class="absolute top-1/2 left-4 z-10 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full bg-foreground/15 shadow-md backdrop-blur-xs transition-opacity hover:bg-foreground/35 {canScrollLeft
-						? 'opacity-100'
-						: 'pointer-events-none opacity-0'}"
-					onclick={scrollLeft}
-					aria-label="Scroll left"
-				>
-					<ChevronLeft class="h-4 w-4" />
-				</button>
-
-				<div
-					class="scrollbar-hide flex items-start gap-3 overflow-x-auto"
-					bind:this={scrollContainer}
-					onscroll={updateScrollButtons}
-				>
-					{#each displayItems as item (item.id)}
-						{#if item.isImage && item.preview}
-							<ChatAttachmentThumbnailImage
-								class="flex-shrink-0 cursor-pointer {limitToSingleRow
+			<HorizontalScrollCarousel
+				bind:this={carouselRef}
+				onScrollableChange={(scrollable) => (isScrollable = scrollable)}
+			>
+				{#each displayItems as item (item.id)}
+					{#if item.isMcpPrompt}
+						{@const mcpPrompt =
+							item.attachment?.type === AttachmentType.MCP_PROMPT
+								? (item.attachment as DatabaseMessageExtraMcpPrompt)
+								: item.uploadedFile?.mcpPrompt
+									? {
+											type: AttachmentType.MCP_PROMPT as const,
+											name: item.name,
+											serverName: item.uploadedFile.mcpPrompt.serverName,
+											promptName: item.uploadedFile.mcpPrompt.promptName,
+											content: item.textContent ?? '',
+											arguments: item.uploadedFile.mcpPrompt.arguments
+										}
+									: null}
+						{#if mcpPrompt}
+							<ChatAttachmentMcpPrompt
+								class="max-w-[300px] min-w-[200px] flex-shrink-0 {limitToSingleRow
 									? 'first:ml-4 last:mr-4'
 									: ''}"
-								id={item.id}
-								name={item.name}
-								preview={item.preview}
+								prompt={mcpPrompt}
 								{readonly}
-								onRemove={onFileRemove}
-								height={imageHeight}
-								width={imageWidth}
-								{imageClass}
-								onClick={(event) => openPreview(item, event)}
-							/>
-						{:else}
-							<ChatAttachmentThumbnailFile
-								class="flex-shrink-0 cursor-pointer {limitToSingleRow
-									? 'first:ml-4 last:mr-4'
-									: ''}"
-								id={item.id}
-								name={item.name}
-								size={item.size}
-								{readonly}
-								onRemove={onFileRemove}
-								textContent={item.textContent}
-								attachment={item.attachment}
-								uploadedFile={item.uploadedFile}
-								onClick={(event) => openPreview(item, event)}
+								isLoading={item.isLoading}
+								loadError={item.loadError}
+								onRemove={onFileRemove ? () => onFileRemove(item.id) : undefined}
 							/>
 						{/if}
-					{/each}
-				</div>
+					{:else if item.isMcpResource && item.attachment?.type === AttachmentType.MCP_RESOURCE}
+						{@const mcpResource = item.attachment as DatabaseMessageExtraMcpResource}
 
-				<button
-					class="absolute top-1/2 right-4 z-10 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full bg-foreground/15 shadow-md backdrop-blur-xs transition-opacity hover:bg-foreground/35 {canScrollRight
-						? 'opacity-100'
-						: 'pointer-events-none opacity-0'}"
-					onclick={scrollRight}
-					aria-label="Scroll right"
-				>
-					<ChevronRight class="h-4 w-4" />
-				</button>
-			</div>
+						<ChatAttachmentMcpResource
+							class="flex-shrink-0 {limitToSingleRow ? 'first:ml-4 last:mr-4' : ''}"
+							attachment={toMcpResourceAttachment(mcpResource, item.id)}
+							onClick={() => openMcpResourcePreview(mcpResource)}
+						/>
+					{:else if item.isImage && item.preview}
+						<ChatAttachmentThumbnailImage
+							class="flex-shrink-0 cursor-pointer {limitToSingleRow ? 'first:ml-4 last:mr-4' : ''}"
+							id={item.id}
+							name={item.name}
+							preview={item.preview}
+							{readonly}
+							onRemove={onFileRemove}
+							height={imageHeight}
+							width={imageWidth}
+							{imageClass}
+							onClick={(event) => openPreview(item, event)}
+						/>
+					{:else}
+						<ChatAttachmentThumbnailFile
+							class="flex-shrink-0 cursor-pointer {limitToSingleRow ? 'first:ml-4 last:mr-4' : ''}"
+							id={item.id}
+							name={item.name}
+							size={item.size}
+							{readonly}
+							onRemove={onFileRemove}
+							textContent={item.textContent}
+							attachment={item.attachment}
+							uploadedFile={item.uploadedFile}
+							onClick={(event) => openPreview(item, event)}
+						/>
+					{/if}
+				{/each}
+			</HorizontalScrollCarousel>
 
 			{#if showViewAll}
 				<div class="mt-2 -mr-2 flex justify-end px-4">
@@ -185,7 +193,39 @@
 		{:else}
 			<div class="flex flex-wrap items-start justify-end gap-3">
 				{#each displayItems as item (item.id)}
-					{#if item.isImage && item.preview}
+					{#if item.isMcpPrompt}
+						{@const mcpPrompt =
+							item.attachment?.type === AttachmentType.MCP_PROMPT
+								? (item.attachment as DatabaseMessageExtraMcpPrompt)
+								: item.uploadedFile?.mcpPrompt
+									? {
+											type: AttachmentType.MCP_PROMPT as const,
+											name: item.name,
+											serverName: item.uploadedFile.mcpPrompt.serverName,
+											promptName: item.uploadedFile.mcpPrompt.promptName,
+											content: item.textContent ?? '',
+											arguments: item.uploadedFile.mcpPrompt.arguments
+										}
+									: null}
+
+						{#if mcpPrompt}
+							<ChatAttachmentMcpPrompt
+								class="max-w-[300px] min-w-[200px]"
+								prompt={mcpPrompt}
+								{readonly}
+								isLoading={item.isLoading}
+								loadError={item.loadError}
+								onRemove={onFileRemove ? () => onFileRemove(item.id) : undefined}
+							/>
+						{/if}
+					{:else if item.isMcpResource && item.attachment?.type === AttachmentType.MCP_RESOURCE}
+						{@const mcpResource = item.attachment as DatabaseMessageExtraMcpResource}
+
+						<ChatAttachmentMcpResource
+							attachment={toMcpResourceAttachment(mcpResource, item.id)}
+							onClick={() => openMcpResourcePreview(mcpResource)}
+						/>
+					{:else if item.isImage && item.preview}
 						<ChatAttachmentThumbnailImage
 							class="cursor-pointer"
 							id={item.id}
@@ -241,3 +281,7 @@
 	{imageClass}
 	{activeModelId}
 />
+
+{#if mcpResourcePreviewExtra}
+	<DialogMcpResourcePreview bind:open={mcpResourcePreviewOpen} extra={mcpResourcePreviewExtra} />
+{/if}

@@ -130,6 +130,7 @@ poetry.toml
 # Local scripts
 /run-vim.sh
 /run-chat.sh
+/run-spec.sh
 /.ccache/
 
 # IDE

@@ -57,10 +57,13 @@ set(GGML_OPENCL_KERNELS
     add
     add_id
     argsort
+    tri
+    fill
     clamp
     cpy
     cvt
     diag_mask_inf
+    diag
     div
     gelu
     gemv_noshuffle_general
@@ -68,6 +71,7 @@ set(GGML_OPENCL_KERNELS
     get_rows
     glu
     group_norm
+    solve_tri
     im2col_f32
     im2col_f16
     mean
@@ -82,7 +86,11 @@ set(GGML_OPENCL_KERNELS
     mul_mv_q4_0_f32_8x_flat
     mul_mv_q4_0_f32_1d_8x_flat
     mul_mv_q4_0_f32_1d_16x_flat
-    mul_mv_q6_k
+    mul_mv_q4_1_f32
+    mul_mv_q4_1_f32_flat
+    mul_mv_q4_k_f32
+    mul_mv_q6_k_f32
+    mul_mv_q6_k_f32_flat
     mul_mv_q8_0_f32
     mul_mv_q8_0_f32_flat
     mul_mv_mxfp4_f32
@@ -96,10 +104,19 @@ set(GGML_OPENCL_KERNELS
     gemv_moe_mxfp4_f32
     mul_mm_f32_f32_l4_lm
     mul_mm_f16_f32_l4_lm
+    mul_mm_q4_0_f32_l4_lm
+    mul_mm_q4_1_f32_l4_lm
     mul_mm_q8_0_f32_l4_lm
+    mul_mm_q6_k_f32_l4_lm
+    mul_mm_q8_0_f32_8x4
+    gemv_noshuffle_q4_1_f32
+    gemm_noshuffle_q4_1_f32
+    gemv_noshuffle_general_q8_0_f32
     mul
+    neg
     norm
     relu
+    l2_norm
     rms_norm
     rope
     scale
@@ -115,11 +132,15 @@ set(GGML_OPENCL_KERNELS
     ssm_conv
     sub
     sum_rows
+    cumsum
     transpose
     concat
     tsembd
     upscale
     tanh
+    exp
+    expm1
+    softplus
     pad
     repeat
     mul_mat_f16_f32
