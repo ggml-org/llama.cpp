@@ -10519,8 +10519,6 @@ static void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& s
         n_chunks, s_off
     };
 
-    // Dispatch 1: Intra-chunk (parallel across chunks)
-    // Bindings: K, V, G, Beta, W_out, U_out, Decay_out, GCum_out
     ggml_vk_dispatch_pipeline(ctx, subctx, pl_intra,
         {src_buf[1], src_buf[2], src_buf[3], src_buf[4],
          scratch_w, scratch_u, scratch_dec, scratch_gcum},
@@ -10528,8 +10526,6 @@ static void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& s
 
     ggml_vk_sync_buffers(ctx, subctx);
 
-    // Dispatch 2: Inter-chunk state propagation (sequential across chunks)
-    // Bindings: K, W, U, Decay, GCum, State, H_out, VNew_out, Final(dst)
     ggml_vk_dispatch_pipeline(ctx, subctx, pl_inter,
         {src_buf[1], scratch_w, scratch_u, scratch_dec, scratch_gcum,
          src_buf[5], scratch_h, scratch_vnew, dst_buf},
@@ -10537,8 +10533,6 @@ static void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& s
 
     ggml_vk_sync_buffers(ctx, subctx);
 
-    // Dispatch 3: Output (parallel across chunks)
-    // Bindings: Q, K, H, VNew, GCum, Dst
     ggml_vk_dispatch_pipeline(ctx, subctx, pl_output,
         {src_buf[0], src_buf[1], scratch_h, scratch_vnew, scratch_gcum, dst_buf},
         pc, { n_chunks * H, n_seqs, 1u });

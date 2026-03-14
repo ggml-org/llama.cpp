@@ -1,26 +1,12 @@
 #version 450
 
 #extension GL_EXT_control_flow_attributes : enable
-#extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
-#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
 #extension GL_KHR_shader_subgroup_basic : enable
-#extension GL_KHR_shader_subgroup_arithmetic : enable
 #extension GL_KHR_memory_scope_semantics : enable
 #extension GL_KHR_cooperative_matrix : enable
 
 #include "types.glsl"
-
-// Coopmat output kernel for chunked gated delta net
-//
-// Phase 1: A = Q @ K^T  (coopmat, f16→f32)
-// Phase 2: Decay mask → sh_adecay (f16) + vnew → sh_kv (f16, pre-scaled)
-// Pass 1:  O_inter = Q @ S → dst (scalar, 128 threads)
-// Pass 2:  O_intra = A_decayed @ vnew → dst (coopmat GEMM, full chunks)
-//          Partial last chunk: scalar fallback.  3 barriers total.
-//
-// Grid: (n_chunks * H, n_seqs, 1)
-// Workgroup: WG_SIZE threads = 4 subgroups
 
 layout(constant_id = 0) const uint WG_SIZE = 256;
 layout(constant_id = 1) const uint CHUNK_SIZE = 64;
@@ -51,16 +37,16 @@ const uint TM = 16;
 const uint TN = 16;
 const uint TK = 16;
 
-const uint C_TILES = CHUNK_SIZE / TM;  // 4
-const uint D_TILES = S_V / TN;         // 8
+const uint C_TILES = CHUNK_SIZE / TM;
+const uint D_TILES = S_V / TN;
 
 // Shared memory strides in f16vec4 units, padded for bank conflicts
-const uint QK_STRIDE = S_V / 4 + 2;             // 34
-const uint ATTN_V4_STRIDE = CHUNK_SIZE / 4 + 2; // 18
+const uint QK_STRIDE = S_V / 4 + 2;
+const uint ATTN_V4_STRIDE = CHUNK_SIZE / 4 + 2;
 
-shared f16vec4 sh_q[CHUNK_SIZE * QK_STRIDE];         // Q (f16) for coopmat Phase 1
-shared f16vec4 sh_kv[CHUNK_SIZE * QK_STRIDE];        // K (f16) for coopmat Phase 1
-shared vec4    sh_attn[CHUNK_SIZE * ATTN_V4_STRIDE]; // attention matrix (f32)
+shared f16vec4 sh_q[CHUNK_SIZE * QK_STRIDE];
+shared f16vec4 sh_kv[CHUNK_SIZE * QK_STRIDE];
+shared vec4    sh_attn[CHUNK_SIZE * ATTN_V4_STRIDE];
 shared f16vec4 sh_adecay[CHUNK_SIZE * ATTN_V4_STRIDE];
 shared float   sh_gcum[CHUNK_SIZE];
 
@@ -79,10 +65,6 @@ void main() {
     const uint chunk_start = chunk_id * CHUNK_SIZE;
     const uint chunk_len   = min(CHUNK_SIZE, n_tokens - chunk_start);
     const float scale = 1.0 / sqrt(float(S_V));
-
-    // ================================================================
-    // Load Q, K, gcum to shared memory
-    // ================================================================
 
     if (tid < CHUNK_SIZE) {
         const uint gcum_base = ((seq_id * n_chunks + chunk_id) * H + head_id) * CHUNK_SIZE;
@@ -105,10 +87,7 @@ void main() {
 
     barrier();
 
-    // ================================================================
-    // Phase 1: A = Q @ K^T  [C×D] × [D×C] → [C×C]  (coopmat)
-    // ================================================================
-
+    // A = Q @ K^T (coopmat)
     coopmat<float, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> A_acc[C_TILES];
     [[unroll]] for (uint tj = 0; tj < C_TILES; tj++) {
         A_acc[tj] = coopmat<float, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator>(0.0);
@@ -133,7 +112,6 @@ void main() {
         }
     }
 
-    // Store A to sh_attn as f32
     [[unroll]] for (uint tj = 0; tj < C_TILES; tj++) {
         coopMatStore(A_acc[tj], sh_attn,
             sg_id * TM * ATTN_V4_STRIDE + tj * (TN / 4),
@@ -142,16 +120,10 @@ void main() {
 
     barrier();
 
-    // ================================================================
-    // Phase 2: Decay mask + vnew load  (all 256 threads)
-    // Pass 1:  Inter-chunk Q@S → dst   (128 active threads)
-    // No shared-memory write conflicts — runs without intermediate barrier.
-    // ================================================================
-
     const uint wu_base = ((seq_id * n_chunks + chunk_id) * H + head_id) * CHUNK_SIZE * S_V;
     const uint attn_off = (seq_id * n_tokens * H + head_id) * S_V;
 
-    // Phase 2a: A_decayed = causal_decay_mask(A) → sh_adecay (f16)
+    // Causal decay mask (f16)
     for (uint idx = tid; idx < CHUNK_SIZE * (CHUNK_SIZE / 4); idx += WG_SIZE) {
         const uint t  = idx / (CHUNK_SIZE / 4);
         const uint j4 = idx % (CHUNK_SIZE / 4);
@@ -170,7 +142,7 @@ void main() {
         sh_adecay[t * ATTN_V4_STRIDE + j4] = val;
     }
 
-    // Phase 2b: vnew → sh_kv (f16, pre-scaled by 1/√S_V)
+    // vnew to f16, pre-scaled
     for (uint idx = tid; idx < CHUNK_SIZE * (S_V / 4); idx += WG_SIZE) {
         const uint row  = idx / (S_V / 4);
         const uint col4 = idx % (S_V / 4);
@@ -186,7 +158,7 @@ void main() {
         sh_kv[row * QK_STRIDE + col4] = val;
     }
 
-    // Pass 1: Inter-chunk (128 active threads, write directly to dst)
+    // O_inter = Q @ state
     {
         const uint col = tid;
         const bool col_active = (col < S_V);
@@ -216,12 +188,7 @@ void main() {
 
     barrier();
 
-    // ================================================================
-    // Pass 2: Intra-chunk  A_decayed[C×C] @ vnew[C×S_V] → [C×S_V]
-    // Full chunks: coopmat GEMM (accumulates onto inter results in dst).
-    // Partial (last) chunk: scalar fallback.
-    // ================================================================
-
+    // O_intra = A_decayed @ vnew (coopmat GEMM, scalar fallback for partial chunks)
     if (chunk_len == CHUNK_SIZE) {
         coopmat<float16_t, gl_ScopeSubgroup, TM, TK, gl_MatrixUseA> A_mat;
         coopmat<float16_t, gl_ScopeSubgroup, TK, TN, gl_MatrixUseB> V_mat;

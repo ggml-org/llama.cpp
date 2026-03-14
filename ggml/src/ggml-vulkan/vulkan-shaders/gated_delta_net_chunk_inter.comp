@@ -3,17 +3,6 @@
 #extension GL_EXT_control_flow_attributes : require
 
 // Inter-chunk state propagation for chunked gated delta net
-//
-// Sequential across chunks, parallel across state columns.
-// For each chunk c:
-//   1. Store state snapshot h[c] for output kernel
-//   2. v_corrected = U - W @ S   (C x d)
-//   3. S_next = exp(g_total) * S + K_gated^T @ v_corrected  (d x d)
-//
-// where K_gated[t] = k[t] * exp(g_total - g_cumsum[t])
-//
-// Grid: (H, n_seqs, 1)
-// Workgroup: S_V threads (one per state column)
 
 layout(constant_id = 0) const uint S_V = 128;
 layout(constant_id = 1) const uint CHUNK_SIZE = 64;

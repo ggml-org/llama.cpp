@@ -2,21 +2,7 @@
 
 #extension GL_EXT_control_flow_attributes : require
 
-// Intra-chunk kernel for chunked gated delta net (non-KDA scalar gate)
-//
-// For each chunk of C=64 tokens, computes W and U using the WY representation.
-// Uses a single A matrix with gates, compensates W by multiplying k by exp(g).
-//
-// Algorithm (FLA-equivalent):
-//   1. g_cumsum[j] = cumsum(g[0..j]) within chunk (log-space)
-//   2. A[i][j] = -beta[i] * dot(k[i], k[j]) * exp(g_cumsum[i] - g_cumsum[j])  for i > j
-//   3. T = (I + A)^{-1}  via forward substitution (row-by-row parallel)
-//   4. U[i] = sum_j T[i][j] * beta[j] * v[j]
-//   5. W[i] = sum_j T[i][j] * beta[j] * exp(g_cumsum[j]) * k[j]
-//   6. Output g_cumsum[C-1] as total chunk decay
-//
-// Grid: (n_chunks * H, n_seqs, 1)
-// Workgroup: CHUNK_SIZE threads (one per token in chunk)
+// Intra-chunk WY decomposition for chunked gated delta net
 
 layout(constant_id = 0) const uint S_V = 128;
 layout(constant_id = 1) const uint CHUNK_SIZE = 64;
@@ -78,7 +64,6 @@ void main() {
     }
     barrier();
 
-    // Step 1: Prefix sum of log-gates
     if (tid == 0) {
         for (uint i = 1; i < chunk_len; i++) {
             s_decay[i] += s_decay[i - 1];
@@ -86,13 +71,11 @@ void main() {
     }
     barrier();
 
-    // Output per-token g_cumsum for inter-chunk and output kernels
     if (valid) {
         const uint gcum_base = ((seq_id * n_chunks + chunk_id) * H + head_id) * CHUNK_SIZE;
         gcum_out[gcum_base + tid] = s_decay[tid];
     }
 
-    // Load my k vector into registers
     float my_k[S_V];
     if (valid) {
         const uint k_off = iq3 * sq3 + global_t * sq2 + iq1 * sq1;
@@ -105,17 +88,12 @@ void main() {
         }
     }
 
-    // Step 2: Build A matrix using shared memory broadcast for k[j]
-    // A[i][j] = -beta[i] * dot(k[i], k[j]) * exp(g_cumsum[i] - g_cumsum[j])  for i > j
-    // Initialize to zero
     for (uint j = 0; j < CHUNK_SIZE; j++) {
         A(tid, j) = 0.0;
     }
     barrier();
 
-    // For each column j, broadcast k[j] via shared memory, all threads compute their row
     for (uint j = 0; j < chunk_len; j++) {
-        // Broadcast k[j] — need multiple passes when S_V > CHUNK_SIZE
         {
             const uint j_global = chunk_start + j;
             const uint kj_off = iq3 * sq3 + j_global * sq2 + iq1 * sq1;
@@ -140,12 +118,8 @@ void main() {
         barrier();
     }
 
-    // Step 3: Forward substitution  T = (I + A)^{-1}
-    // Process row by row. For row i, all threads j < i compute in parallel:
-    //   T[i][j] += sum_m T[i][m] * T[m][j]  for m in [j..i-1]
-    // The A matrix is modified in-place to become T.
+    // Forward substitution: T = (I + A)^{-1}, in-place
     for (uint i = 1; i < chunk_len; i++) {
-        // Each thread with tid < i computes T[i][tid]
         if (tid < i) {
             float sum = 0.0;
             for (uint m = tid; m < i; m++) {
@@ -156,19 +130,12 @@ void main() {
         barrier();
     }
 
-    // Add identity
     if (valid) {
         A(tid, tid) = 1.0;
     }
     barrier();
 
-    // Step 4+5: Compute W and U via shared memory broadcast + register accumulation
-    // U[tid][d] = sum_j T[tid][j] * beta[j] * v[j][d]
-    // W[tid][d] = sum_j T[tid][j] * beta[j] * exp(g_cumsum[j]) * k[j][d]
-    //
-    // For each j, broadcast k[j]*exp(g[j]) and v[j] via shared memory.
-    // Accumulate in d-tiles of 32 to limit register pressure.
-
+    // W and U via tiled broadcast accumulation
     const uint out_base = ((seq_id * n_chunks + chunk_id) * H + head_id) * CHUNK_SIZE * S_V;
     const uint TILE_D = 32;
 
