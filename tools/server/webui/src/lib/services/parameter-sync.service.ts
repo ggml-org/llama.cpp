@@ -159,18 +159,6 @@ export const SYNCABLE_PARAMETERS: SyncableParameter[] = [
 		serverKey: 'fullHeightCodeBlocks',
 		type: SyncableParameterType.BOOLEAN,
 		canSync: true
-	},
-	{
-		key: 'autoChatWidth',
-		serverKey: 'autoChatWidth',
-		type: SyncableParameterType.BOOLEAN,
-		canSync: true
-	},
-	{
-		key: 'customChatWidth',
-		serverKey: 'customChatWidth',
-		type: SyncableParameterType.STRING,
-		canSync: true
 	}
 ];
 
