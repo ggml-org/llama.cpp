@@ -542,7 +542,7 @@ jobs:
         run: |
           cd build
           # This is using llvmpipe and runs slower than other backends
-          ctest -L main --verbose --timeout 3600
+          ctest -L main --verbose --timeout 900
 
   ubuntu-24-wasm-webgpu:
     runs-on: ubuntu-24.04
