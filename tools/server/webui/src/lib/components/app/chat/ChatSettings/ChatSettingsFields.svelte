@@ -258,12 +258,7 @@
 				<Checkbox
 					id={field.key}
 					checked={Boolean(localConfig[field.key])}
-					onCheckedChange={(checked) => {
-						onConfigChange(field.key, checked);
-						if (field.key === SETTINGS_KEYS.AUTO_CHAT_WIDTH && checked) {
-							onConfigChange(SETTINGS_KEYS.CUSTOM_CHAT_WIDTH, '');
-						}
-					}}
+					onCheckedChange={(checked) => onConfigChange(field.key, checked)}
 					class="mt-1"
 				/>
 
