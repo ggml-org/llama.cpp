@@ -1111,6 +1111,7 @@ template [[host_name("kernel_unary_f16_f16_4")]] kernel kernel_unary_t kernel_un
 constant short FC_bin_op [[function_constant(FC_BIN + 0)]];
 constant short FC_bin_f  [[function_constant(FC_BIN + 1)]];
 constant bool  FC_bin_rb [[function_constant(FC_BIN + 2)]];
+constant bool  FC_bin_cb [[function_constant(FC_BIN + 3)]];
 
 template <typename T0, typename T1, typename T>
 kernel void kernel_bin_fuse_impl(
@@ -1124,11 +1125,12 @@ kernel void kernel_bin_fuse_impl(
 #define FC_OP FC_bin_op
 #define FC_F  FC_bin_f
 #define FC_RB FC_bin_rb
+#define FC_CB FC_bin_cb
 
     if (FC_RB) {
         // row broadcast
-        const uint i0 = tgpig.x;
-        const uint i1 = i0%args.ne10;
+        const uint i0 = tgpig.y*args.ne00 + tgpig.x;
+        const uint i1 = FC_CB ? tgpig.x%args.ne10 : tgpig.x;
 
         device const T0 * src0_row = (device const T0 *) (src0);
         device       T  * dst_row  = (device       T  *) (dst);
@@ -1200,7 +1202,7 @@ kernel void kernel_bin_fuse_impl(
             device const T1 * src1_ptr = (device const T1 *) (src1 + args.o1[0] + i13*args.nb13 + i12*args.nb12 + i11*args.nb11);
 
             for (int i0 = tpitg.x; i0 < args.ne0; i0 += ntg.x) {
-                const int i10 = i0%args.ne10;
+                const int i10 = FC_CB ? i0%args.ne10 : i0;
 
                 if (FC_OP == 0) {
                     dst_ptr[i0] = src0_ptr[i0] + src1_ptr[i10];
@@ -1225,7 +1227,7 @@ kernel void kernel_bin_fuse_impl(
             }
 
             for (int i0 = tpitg.x; i0 < args.ne0; i0 += ntg.x) {
-                const int i10 = i0%args.ne10;
+                const int i10 = FC_CB ? i0%args.ne10 : i0;
 
                 T res = src0_ptr[i0];
 
@@ -1261,6 +1263,7 @@ kernel void kernel_bin_fuse_impl(
 #undef FC_OP
 #undef FC_F
 #undef FC_RB
+#undef FC_CB
 }
 
 typedef decltype(kernel_bin_fuse_impl<float, float, float>) kernel_bin_fuse_t;
@@ -2434,6 +2437,228 @@ kernel void kernel_rwkv_wkv7_f32(
     }
 }
 
+constant short FC_gated_delta_net_ne20 [[function_constant(FC_GATED_DELTA_NET + 0)]];
+constant short FC_gated_delta_net_ne30 [[function_constant(FC_GATED_DELTA_NET + 1)]];
+
+#if 1
+template<short NSG>
+kernel void kernel_gated_delta_net_impl(
+        constant ggml_metal_kargs_gated_delta_net & args,
+        device const char * q,
+        device const char * k,
+        device const char * v,
+        device const char * g,
+        device const char * b,
+        device const char * s,
+        device       char * dst,
+        uint3 tgpig[[threadgroup_position_in_grid]],
+        uint3 tpitg[[thread_position_in_threadgroup]],
+        uint3   ntg[[threads_per_threadgroup]])  {
+#define S_v FC_gated_delta_net_ne20
+#define G   FC_gated_delta_net_ne30
+
+    const uint tx = tpitg.x;
+    const uint ty = tpitg.y;
+
+    const uint i23 = tgpig.z; // B
+    const uint i21 = tgpig.y; // H
+    const uint i20 = tgpig.x*NSG + ty;
+
+    const uint i01 = i21 % args.ne01;
+    const uint i11 = i21 % args.ne11;
+
+    const float scale = 1.0f / sqrt((float)S_v);
+
+    // state is stored transposed: M[i20][is] = S[is][i20], so row i20 is contiguous
+    device const float * s_ptr = (device const float *) (s) + (i23*args.ne21 + i21)*S_v*S_v + i20*S_v;
+
+    float ls[NSG];
+
+    FOR_UNROLL (short j = 0; j < NSG; j++) {
+        const short is = tx*NSG + j;
+        ls[j] = s_ptr[is];
+    }
+
+    device float * dst_attn = (device float *) (dst) + (i23*args.ne22*args.ne21 + i21)*S_v + i20;
+
+    device const float * q_ptr = (device const float *) (q + i23*args.nb03 + i01*args.nb01);
+    device const float * k_ptr = (device const float *) (k + i23*args.nb13 + i11*args.nb11);
+    device const float * v_ptr = (device const float *) (v + i23*args.nb23 + i21*args.nb21);
+
+    device const float * b_ptr = (device const float *) (b) + (i23*args.ne22*args.ne21 + i21);
+    device const float * g_ptr = (device const float *) (g) + (i23*args.ne22*args.ne21 + i21)*G;
+
+    for (short t = 0; t < args.ne22; t++) {
+        float s_k = 0.0f;
+
+        if (G == 1) {
+            const float g_exp = exp(g_ptr[0]);
+
+            FOR_UNROLL (short j = 0; j < NSG; j++) {
+                const short is = tx*NSG + j;
+                ls[j] *= g_exp;
+
+                s_k += ls[j]*k_ptr[is];
+            }
+        } else {
+            // KDA
+            FOR_UNROLL (short j = 0; j < NSG; j++) {
+                const short is = tx*NSG + j;
+                ls[j] *= exp(g_ptr[is]);
+
+                s_k += ls[j]*k_ptr[is];
+            }
+        }
+
+        s_k = simd_sum(s_k);
+
+        const float d = (v_ptr[i20] - s_k)*b_ptr[0];
+
+        float y = 0.0f;
+
+        FOR_UNROLL (short j = 0; j < NSG; j++) {
+            const short is = tx*NSG + j;
+            ls[j] += k_ptr[is]*d;
+
+            y += ls[j]*q_ptr[is];
+        }
+
+        y = simd_sum(y);
+
+        if (tx == 0) {
+            dst_attn[t*args.ne21*S_v] = y*scale;
+        }
+
+        q_ptr += args.ns02;
+        k_ptr += args.ns12;
+        v_ptr += args.ns22;
+
+        b_ptr += args.ne21;
+        g_ptr += args.ne21*G;
+    }
+
+    device float * dst_state = (device float *) (dst) + args.ne23*args.ne22*args.ne21*S_v + (i23*args.ne21 + i21)*S_v*S_v + i20*S_v;
+
+    FOR_UNROLL (short j = 0; j < NSG; j++) {
+        const short is = tx*NSG + j;
+        dst_state[is] = ls[j];
+    }
+
+#undef S_v
+#undef G
+}
+
+typedef decltype(kernel_gated_delta_net_impl<4>) kernel_gated_delta_net_t;
+
+template [[host_name("kernel_gated_delta_net_f32_1")]] kernel kernel_gated_delta_net_t kernel_gated_delta_net_impl<1>;
+template [[host_name("kernel_gated_delta_net_f32_2")]] kernel kernel_gated_delta_net_t kernel_gated_delta_net_impl<2>;
+template [[host_name("kernel_gated_delta_net_f32_4")]] kernel kernel_gated_delta_net_t kernel_gated_delta_net_impl<4>;
+
+#else
+// a simplified version of the above
+// no performance improvement, so keep the above version for now
+
+template<typename T, short NSG>
+kernel void kernel_gated_delta_net_impl(
+        constant ggml_metal_kargs_gated_delta_net & args,
+        device const char * q,
+        device const char * k,
+        device const char * v,
+        device const char * g,
+        device const char * b,
+        device const char * s,
+        device       char * dst,
+        uint3 tgpig[[threadgroup_position_in_grid]],
+        uint3 tpitg[[thread_position_in_threadgroup]],
+        uint3   ntg[[threads_per_threadgroup]])  {
+#define S_v FC_gated_delta_net_ne20
+#define G   FC_gated_delta_net_ne30
+
+    const uint tx = tpitg.x;
+    const uint ty = tpitg.y;
+
+    const uint i23 = tgpig.z; // B
+    const uint i21 = tgpig.y; // H
+    const uint i20 = tgpig.x*NSG + ty;
+
+    const uint i01 = i21 % args.ne01;
+    const uint i11 = i21 % args.ne11;
+
+    const float scale = 1.0f / sqrt((float)S_v);
+
+    device const float * s_ptr = (device const float *) (s) + (i23*args.ne21 + i21)*S_v*S_v + i20;
+
+    float lsf[NSG];
+
+    FOR_UNROLL (short j = 0; j < NSG; j++) {
+        const short is = tx*NSG + j;
+        lsf[j] = s_ptr[is*S_v];
+    }
+
+    thread T * ls = (thread T *) (lsf);
+
+    device float * dst_attn = (device float *) (dst) + (i23*args.ne22*args.ne21 + i21)*S_v + i20;
+
+    device const float * q_ptr = (device const float *) (q + i23*args.nb03 + i01*args.nb01);
+    device const float * k_ptr = (device const float *) (k + i23*args.nb13 + i11*args.nb11);
+    device const float * v_ptr = (device const float *) (v + i23*args.nb23 + i21*args.nb21);
+
+    device const float * b_ptr  = (device const float *) (b) + (i23*args.ne22*args.ne21 + i21);
+    device const float * g_ptr  = (device const float *) (g) + (i23*args.ne22*args.ne21 + i21)*G;
+
+    for (short t = 0; t < args.ne22; t++) {
+        device const T * qt_ptr = (device const T *) (q_ptr);
+        device const T * kt_ptr = (device const T *) (k_ptr);
+        device const T * gt_ptr = (device const T *) (g_ptr);
+
+        if (G == 1) {
+            *ls *= exp(g_ptr[0]);
+        } else {
+            // KDA
+            *ls *= exp(gt_ptr[tx]);
+        }
+
+        const float s_k = simd_sum(dot(*ls, kt_ptr[tx]));
+
+        const float d = (v_ptr[i20] - s_k)*b_ptr[0];
+
+        *ls += kt_ptr[tx]*d;
+
+        const float y = simd_sum(dot(*ls, qt_ptr[tx]));
+
+        if (tx == 0) {
+            *dst_attn = y*scale;
+        }
+
+        q_ptr += args.ns02;
+        k_ptr += args.ns12;
+        v_ptr += args.ns22;
+
+        b_ptr += args.ne21;
+        g_ptr += args.ne21*G;
+
+        dst_attn += args.ne21*S_v;
+    }
+
+    device float * dst_state  = (device float *) (dst) + args.ne23*args.ne22*args.ne21*S_v + (i23*args.ne21 + i21)*S_v*S_v + i20;
+    device T     * dstt_state = (device T     *) (dst_state);
+
+    FOR_UNROLL (short j = 0; j < NSG; j++) {
+        const short is = tx*NSG + j;
+        dst_state[is*S_v] = lsf[j];
+    }
+
+#undef S_v
+#undef G
+}
+
+typedef decltype(kernel_gated_delta_net_impl<float4, 4>) kernel_gated_delta_net_t;
+
+template [[host_name("kernel_gated_delta_net_f32_1")]] kernel kernel_gated_delta_net_t kernel_gated_delta_net_impl<float,  1>;
+template [[host_name("kernel_gated_delta_net_f32_2")]] kernel kernel_gated_delta_net_t kernel_gated_delta_net_impl<float2, 2>;
+template [[host_name("kernel_gated_delta_net_f32_4")]] kernel kernel_gated_delta_net_t kernel_gated_delta_net_impl<float4, 4>;
+#endif
+
 constant short FC_solve_tri_nsg [[function_constant(FC_SOLVE_TRI + 0)]];
 constant short FC_solve_tri_n   [[function_constant(FC_SOLVE_TRI + 1)]];
 constant short FC_solve_tri_k   [[function_constant(FC_SOLVE_TRI + 2)]];
@@ -2782,7 +3007,7 @@ kernel void kernel_l2_norm_impl(
     sumf = shmem_f32[tiisg];
     sumf = simd_sum(sumf);
 
-    const float scale = 1.0f/sqrt(max(sumf, args.eps));
+    const float scale = 1.0f/max(sqrt(sumf), args.eps);
 
     for (int i00 = tpitg.x; i00 < args.ne00; i00 += ntg.x) {
         y[i00] = x[i00] * scale;
@@ -3481,6 +3706,13 @@ template [[host_name("kernel_mul_mv_ext_f16_f32_r1_3")]]    kernel mul_mv_ext_q4
 template [[host_name("kernel_mul_mv_ext_f16_f32_r1_4")]]    kernel mul_mv_ext_q4_f32_t kernel_mul_mv_ext_q4_f32_disp<4, half4,        4,  dequantize_f16_t4>;
 template [[host_name("kernel_mul_mv_ext_f16_f32_r1_5")]]    kernel mul_mv_ext_q4_f32_t kernel_mul_mv_ext_q4_f32_disp<5, half4,        4,  dequantize_f16_t4>;
 
+#if defined(GGML_METAL_HAS_BF16)
+template [[host_name("kernel_mul_mv_ext_bf16_f32_r1_2")]]   kernel mul_mv_ext_q4_f32_t kernel_mul_mv_ext_q4_f32_disp<2, bfloat4,      4,  dequantize_bf16_t4>;
+template [[host_name("kernel_mul_mv_ext_bf16_f32_r1_3")]]   kernel mul_mv_ext_q4_f32_t kernel_mul_mv_ext_q4_f32_disp<3, bfloat4,      4,  dequantize_bf16_t4>;
+template [[host_name("kernel_mul_mv_ext_bf16_f32_r1_4")]]   kernel mul_mv_ext_q4_f32_t kernel_mul_mv_ext_q4_f32_disp<4, bfloat4,      4,  dequantize_bf16_t4>;
+template [[host_name("kernel_mul_mv_ext_bf16_f32_r1_5")]]   kernel mul_mv_ext_q4_f32_t kernel_mul_mv_ext_q4_f32_disp<5, bfloat4,      4,  dequantize_bf16_t4>;
+#endif
+
 template [[host_name("kernel_mul_mv_ext_q4_0_f32_r1_2")]]   kernel mul_mv_ext_q4_f32_t kernel_mul_mv_ext_q4_f32_disp<2, block_q4_0,   32, dequantize_q4_0_t4>;
 template [[host_name("kernel_mul_mv_ext_q4_0_f32_r1_3")]]   kernel mul_mv_ext_q4_f32_t kernel_mul_mv_ext_q4_f32_disp<3, block_q4_0,   32, dequantize_q4_0_t4>;
 template [[host_name("kernel_mul_mv_ext_q4_0_f32_r1_4")]]   kernel mul_mv_ext_q4_f32_t kernel_mul_mv_ext_q4_f32_disp<4, block_q4_0,   32, dequantize_q4_0_t4>;
@@ -3530,6 +3762,16 @@ template [[host_name("kernel_mul_mv_ext_q6_K_f32_r1_2")]] kernel mul_mv_ext_q4x4
 template [[host_name("kernel_mul_mv_ext_q6_K_f32_r1_3")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<3, block_q6_K, 256, dequantize_q6_K>;
 template [[host_name("kernel_mul_mv_ext_q6_K_f32_r1_4")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<4, block_q6_K, 256, dequantize_q6_K>;
 template [[host_name("kernel_mul_mv_ext_q6_K_f32_r1_5")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<5, block_q6_K, 256, dequantize_q6_K>;
+
+template [[host_name("kernel_mul_mv_ext_q2_K_f32_r1_2")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<2, block_q2_K, 256, dequantize_q2_K>;
+template [[host_name("kernel_mul_mv_ext_q2_K_f32_r1_3")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<3, block_q2_K, 256, dequantize_q2_K>;
+template [[host_name("kernel_mul_mv_ext_q2_K_f32_r1_4")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<4, block_q2_K, 256, dequantize_q2_K>;
+template [[host_name("kernel_mul_mv_ext_q2_K_f32_r1_5")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<5, block_q2_K, 256, dequantize_q2_K>;
+
+template [[host_name("kernel_mul_mv_ext_q3_K_f32_r1_2")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<2, block_q3_K, 256, dequantize_q3_K>;
+template [[host_name("kernel_mul_mv_ext_q3_K_f32_r1_3")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<3, block_q3_K, 256, dequantize_q3_K>;
+template [[host_name("kernel_mul_mv_ext_q3_K_f32_r1_4")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<4, block_q3_K, 256, dequantize_q3_K>;
+template [[host_name("kernel_mul_mv_ext_q3_K_f32_r1_5")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<5, block_q3_K, 256, dequantize_q3_K>;
 
 template<typename T0, typename T1, short NR0, typename args_t>
 void kernel_mul_mv_t_t_impl(
@@ -4218,7 +4460,7 @@ kernel void kernel_im2col(
 template [[host_name("kernel_im2col_f32")]] kernel im2col_t kernel_im2col<float>;
 template [[host_name("kernel_im2col_f16")]] kernel im2col_t kernel_im2col<half>;
 
-// TODO: obolete -- remove
+// TODO: obsolete -- remove
 //typedef void (im2col_ext_t)(
 //        constant ggml_metal_kargs_im2col & args,
 //        device const float * x,
@@ -4530,7 +4772,9 @@ kernel void kernel_conv_transpose_2d<half>(
     uint3   tpitg[[thread_position_in_threadgroup]],
     uint3     ntg[[threads_per_threadgroup]]);
 
-kernel void kernel_upscale_f32(
+constant bool FC_upscale_aa [[function_constant(FC_UPSCALE + 0)]];
+
+kernel void kernel_upscale_nearest_f32(
     constant ggml_metal_kargs_upscale & args,
     device  const char * src0,
     device        char * dst,
@@ -4553,6 +4797,156 @@ kernel void kernel_upscale_f32(
         device       float * dst_ptr  = (device       float *) (dst  +  i3*args.nb3  +  i2*args.nb2  +  i1*args.nb1  +  i0*args.nb0);
 
         dst_ptr[0] = src0_ptr[0];
+    }
+}
+
+static inline float bilinear_tri(float x) {
+    return MAX(0.0f, 1.0f - fabs(x));
+}
+
+kernel void kernel_upscale_bilinear_f32(
+    constant ggml_metal_kargs_upscale & args,
+    device  const char * src0,
+    device        char * dst,
+    uint3 tgpig[[threadgroup_position_in_grid]],
+    uint3 tpitg[[thread_position_in_threadgroup]],
+    uint3   ntg[[threads_per_threadgroup]]) {
+
+    const int64_t i3 = tgpig.z;
+    const int64_t i2 = tgpig.y;
+    const int64_t i1 = tgpig.x;
+
+    const int64_t i03 = i3 / args.sf3;
+    const int64_t i02 = i2 / args.sf2;
+
+    const float   f01  = ((float)i1 + args.poffs) / args.sf1 - args.poffs;
+    const int64_t i01  = MAX(0, MIN(args.ne01 - 1, (int64_t)floor(f01)));
+    const int64_t i01p = MAX(0, MIN(args.ne01 - 1, i01 + 1));
+    const float   fd1  = MAX(0.0f, MIN(1.0f, f01 - (float)i01));
+
+    src0 += i03*args.nb03 + i02*args.nb02;
+
+    device float * dst_ptr = (device float *)(dst + i3*args.nb3 + i2*args.nb2 + i1*args.nb1);
+
+    if (FC_upscale_aa) {
+        const float support0  = MAX(1.0f, 1.0f / args.sf0);
+        const float invscale0 = 1.0f / support0;
+        const float support1  = MAX(1.0f, 1.0f / args.sf1);
+        const float invscale1 = 1.0f / support1;
+
+        for (int i0 = tpitg.x; i0 < args.ne0; i0 += ntg.x) {
+            const float f00 = ((float)i0 + args.poffs) / args.sf0 - args.poffs;
+
+            int64_t x_min = MAX((int64_t)0, (int64_t)floor(f00 - support0 + args.poffs));
+            int64_t x_max = MIN(args.ne00,  (int64_t)ceil (f00 + support0 + args.poffs));
+
+            int64_t y_min = MAX((int64_t)0, (int64_t)floor(f01 - support1 + args.poffs));
+            int64_t y_max = MIN(args.ne01,  (int64_t)ceil (f01 + support1 + args.poffs));
+
+            float sum = 0.0f;
+            float wsum = 0.0f;
+
+            for (int64_t sy = y_min; sy < y_max; ++sy) {
+                const float wy = MAX(0.0f, 1.0f - fabs((float)sy - f01) * invscale1);
+                for (int64_t sx = x_min; sx < x_max; ++sx) {
+                    const float wx = MAX(0.0f, 1.0f - fabs((float)sx - f00) * invscale0);
+                    const float w  = wx * wy;
+                    const device const float * src_ptr = (device const float *)(src0 + sy*args.nb01 + sx*args.nb00);
+                    sum  += (*src_ptr) * w;
+                    wsum += w;
+                }
+            }
+
+            const float v = (wsum > 0.0f) ? (sum / wsum) : 0.0f;
+            dst_ptr[i0] = v;
+        }
+    } else {
+        for (int i0 = tpitg.x; i0 < args.ne0; i0 += ntg.x) {
+            const float   f00  = ((float)i0 + args.poffs) / args.sf0 - args.poffs;
+            const int64_t i00  = MAX(0, MIN(args.ne00 - 1, (int64_t)floor(f00)));
+            const int64_t i00p = MAX(0, MIN(args.ne00 - 1, i00 + 1));
+            const float   fd0  = MAX(0.0f, MIN(1.0f, f00 - (float)i00));
+
+            device const float * src00 = (device const float *)(src0 + i01*args.nb01  + i00*args.nb00);
+            device const float * src10 = (device const float *)(src0 + i01*args.nb01  + i00p*args.nb00);
+            device const float * src01 = (device const float *)(src0 + i01p*args.nb01 + i00*args.nb00);
+            device const float * src11 = (device const float *)(src0 + i01p*args.nb01 + i00p*args.nb00);
+
+            const float v =
+                (*src00) * (1.0f - fd0) * (1.0f - fd1) +
+                (*src10) * fd0          * (1.0f - fd1) +
+                (*src01) * (1.0f - fd0) * fd1 +
+                (*src11) * fd0          * fd1;
+
+            dst_ptr[i0] = v;
+        }
+    }
+}
+
+static inline float bicubic_weight1(float x) {
+    const float a = -0.75f;
+    return ((a + 2) * x - (a + 3)) * x * x + 1;
+}
+
+static inline float bicubic_weight2(float x) {
+    const float a = -0.75f;
+    return ((a * x - 5 * a) * x + 8 * a) * x - 4 * a;
+}
+
+kernel void kernel_upscale_bicubic_f32(
+    constant ggml_metal_kargs_upscale & args,
+    device  const char * src0,
+    device        char * dst,
+    uint3 tgpig[[threadgroup_position_in_grid]],
+    uint3 tpitg[[thread_position_in_threadgroup]],
+    uint3   ntg[[threads_per_threadgroup]]) {
+
+    const int64_t i3 = tgpig.z;
+    const int64_t i2 = tgpig.y;
+    const int64_t i1 = tgpig.x;
+
+    const int64_t i03 = i3 / args.sf3;
+    const int64_t i02 = i2 / args.sf2;
+
+    const float   f01 = ((float)i1 + args.poffs) / args.sf1 - args.poffs;
+    const int64_t i01 = (int64_t)floor(f01);
+    const float   fd1 = f01 - (float)i01;
+
+    const float w_y0 = bicubic_weight2(fd1 + 1.0f);
+    const float w_y1 = bicubic_weight1(fd1);
+    const float w_y2 = bicubic_weight1(1.0f - fd1);
+    const float w_y3 = bicubic_weight2(2.0f - fd1);
+
+    const device const char * src_slice = src0 + i03 * args.nb03 + i02 * args.nb02;
+
+    device float * dst_ptr = (device float *)(dst + i3 * args.nb3 + i2 * args.nb2 + i1 * args.nb1);
+
+    for (int i0 = tpitg.x; i0 < args.ne0; i0 += ntg.x) {
+        const float   f00 = ((float)i0 + args.poffs) / args.sf0 - args.poffs;
+        const int64_t i00 = (int64_t)floor(f00);
+        const float   fd0 = f00 - (float)i00;
+
+        const float w_x0 = bicubic_weight2(fd0 + 1.0f);
+        const float w_x1 = bicubic_weight1(fd0);
+        const float w_x2 = bicubic_weight1(1.0f - fd0);
+        const float w_x3 = bicubic_weight2(2.0f - fd0);
+
+        float sum = 0.0f;
+
+        for (int dy = -1; dy <= 2; ++dy) {
+            const int64_t iy = MAX(0, MIN(args.ne01 - 1, i01 + dy));
+            const float wy = (dy == -1) ? w_y0 : (dy == 0) ? w_y1 : (dy == 1) ? w_y2 : w_y3;
+
+            for (int dx = -1; dx <= 2; ++dx) {
+                const int64_t ix = MAX(0, MIN(args.ne00 - 1, i00 + dx));
+                const float wx = (dx == -1) ? w_x0 : (dx == 0) ? w_x1 : (dx == 1) ? w_x2 : w_x3;
+
+                const device const float * src_ptr = (device const float *)(src_slice + iy * args.nb01 + ix * args.nb00);
+                sum += (*src_ptr) * wx * wy;
+            }
+        }
+
+        dst_ptr[i0] = sum;
     }
 }
 
@@ -8912,6 +9306,7 @@ template [[host_name("kernel_mul_mm_id_map0_ne20_6" )]] kernel kernel_mul_mm_id_
 template [[host_name("kernel_mul_mm_id_map0_ne20_8" )]] kernel kernel_mul_mm_id_map0_t kernel_mul_mm_id_map0<8>;
 template [[host_name("kernel_mul_mm_id_map0_ne20_10")]] kernel kernel_mul_mm_id_map0_t kernel_mul_mm_id_map0<10>;
 template [[host_name("kernel_mul_mm_id_map0_ne20_16")]] kernel kernel_mul_mm_id_map0_t kernel_mul_mm_id_map0<16>;
+template [[host_name("kernel_mul_mm_id_map0_ne20_22")]] kernel kernel_mul_mm_id_map0_t kernel_mul_mm_id_map0<22>;
 
 template<typename S0, typename S0_4x4, typename S0_8x8, typename S1, typename S1_2x4, typename S1_8x8, typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread S0_4x4 &), typename T0, typename T0_4x4, typename T1, typename T1_2x4>
 kernel void kernel_mul_mm_id(

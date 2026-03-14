@@ -3,7 +3,7 @@ import {
 	IMAGE_FILE_TYPES,
 	PDF_FILE_TYPES,
 	TEXT_FILE_TYPES
-} from '$lib/constants/supported-file-types';
+} from '$lib/constants';
 import {
 	FileExtensionAudio,
 	FileExtensionImage,

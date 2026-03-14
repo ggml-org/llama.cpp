@@ -9,6 +9,11 @@ export interface ChatUploadedFile {
 	file: File;
 	preview?: string;
 	textContent?: string;
+	mcpPrompt?: {
+		serverName: string;
+		promptName: string;
+		arguments?: Record<string, string>;
+	};
 	isLoading?: boolean;
 	loadError?: string;
 }
@@ -19,6 +24,8 @@ export interface ChatAttachmentDisplayItem {
 	size?: number;
 	preview?: string;
 	isImage: boolean;
+	isMcpPrompt?: boolean;
+	isMcpResource?: boolean;
 	isLoading?: boolean;
 	loadError?: string;
 	uploadedFile?: ChatUploadedFile;
@@ -56,6 +63,39 @@ export interface ChatMessageTimings {
 	predicted_n?: number;
 	prompt_ms?: number;
 	prompt_n?: number;
+	agentic?: ChatMessageAgenticTimings;
+}
+
+export interface ChatMessageAgenticTimings {
+	turns: number;
+	toolCallsCount: number;
+	toolsMs: number;
+	toolCalls?: ChatMessageToolCallTiming[];
+	perTurn?: ChatMessageAgenticTurnStats[];
+	llm: {
+		predicted_n: number;
+		predicted_ms: number;
+		prompt_n: number;
+		prompt_ms: number;
+	};
+}
+
+export interface ChatMessageAgenticTurnStats {
+	turn: number;
+	llm: {
+		predicted_n: number;
+		predicted_ms: number;
+		prompt_n: number;
+		prompt_ms: number;
+	};
+	toolCalls: ChatMessageToolCallTiming[];
+	toolsMs: number;
+}
+
+export interface ChatMessageToolCallTiming {
+	name: string;
+	duration_ms: number;
+	success: boolean;
 }
 
 /**
@@ -75,6 +115,7 @@ export interface ChatStreamCallbacks {
 		toolCallContent?: string
 	) => void;
 	onError?: (error: Error) => void;
+	onTurnComplete?: (intermediateTimings: ChatMessageTimings) => void;
 }
 
 /**

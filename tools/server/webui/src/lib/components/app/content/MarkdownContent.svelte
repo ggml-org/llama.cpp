@@ -22,15 +22,12 @@
 		IMAGE_NOT_ERROR_BOUND_SELECTOR,
 		DATA_ERROR_BOUND_ATTR,
 		DATA_ERROR_HANDLED_ATTR,
-		BOOL_TRUE_STRING
-	} from '$lib/constants/markdown';
-	import { UrlPrefix } from '$lib/enums';
+		BOOL_TRUE_STRING,
+		SETTINGS_KEYS
+	} from '$lib/constants';
+	import { ColorMode, UrlProtocol } from '$lib/enums';
 	import { FileTypeText } from '$lib/enums/files';
-	import {
-		highlightCode,
-		detectIncompleteCodeBlock,
-		type IncompleteCodeBlock
-	} from '$lib/utils/code';
+	import { highlightCode, detectIncompleteCodeBlock, type IncompleteCodeBlock } from '$lib/utils';
 	import '$styles/katex-custom.scss';
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
@@ -39,7 +36,6 @@
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import type { DatabaseMessageExtra } from '$lib/types/database';
 	import { config } from '$lib/stores/settings.svelte';
-	import { SETTINGS_KEYS } from '$lib/constants/settings-keys';
 
 	interface Props {
 		attachments?: DatabaseMessageExtra[];
@@ -505,7 +501,7 @@
 
 		// Don't handle data URLs or already-handled images
 		if (
-			img.src.startsWith(UrlPrefix.DATA) ||
+			img.src.startsWith(UrlProtocol.DATA) ||
 			img.dataset[DATA_ERROR_HANDLED_ATTR] === BOOL_TRUE_STRING
 		)
 			return;
@@ -560,7 +556,7 @@
 
 	$effect(() => {
 		const currentMode = mode.current;
-		const isDark = currentMode === 'dark';
+		const isDark = currentMode === ColorMode.DARK;
 
 		loadHighlightTheme(isDark);
 	});
@@ -622,7 +618,7 @@
 				<ActionIconsCodeBlock
 					code={incompleteCodeBlock.code}
 					language={incompleteCodeBlock.language || 'text'}
-					disabled={true}
+					disabled
 					onPreview={(code, lang) => {
 						previewCode = code;
 						previewLanguage = lang;

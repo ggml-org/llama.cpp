@@ -3,7 +3,7 @@
 #include "llama-model.h"
 #include "llama-graph.h"
 
-// note: almost all graphs require atleast sqrtf, so include cmath globally
+// note: almost all graphs require at least sqrtf, so include cmath globally
 #include <cmath>
 
 //
@@ -44,6 +44,26 @@ struct llm_build_delta_net_base : public llm_graph_context {
                 ggml_tensor * b,
                 ggml_tensor * s,
                 int           il);
+
+    // use the ggml_gated_delta_net fused operator
+    std::pair<ggml_tensor *, ggml_tensor *> build_delta_net_fused(
+                ggml_tensor * q,
+                ggml_tensor * k,
+                ggml_tensor * v,
+                ggml_tensor * g,
+                ggml_tensor * b,
+                ggml_tensor * s,
+                        int   il);
+
+    // choose one of two implementations above based on the number of tokens
+    std::pair<ggml_tensor *, ggml_tensor *> build_delta_net(
+                ggml_tensor * q,
+                ggml_tensor * k,
+                ggml_tensor * v,
+                ggml_tensor * g,
+                ggml_tensor * b,
+                ggml_tensor * s,
+                        int   il);
 };
 
 struct llm_build_rwkv6_base : public llm_graph_context {

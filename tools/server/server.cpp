@@ -1,6 +1,7 @@
 #include "server-context.h"
 #include "server-http.h"
 #include "server-models.h"
+#include "server-cors-proxy.h"
 
 #include "arg.h"
 #include "common.h"
@@ -8,6 +9,7 @@
 #include "log.h"
 
 #include <atomic>
+#include <clocale>
 #include <exception>
 #include <signal.h>
 #include <thread> // for std::thread::hardware_concurrency
@@ -67,6 +69,8 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     // own arguments required by this example
     common_params params;
 
@@ -198,6 +202,15 @@ int main(int argc, char ** argv) {
     // Save & load slots
     ctx_http.get ("/slots",               ex_wrapper(routes.get_slots));
     ctx_http.post("/slots/:id_slot",      ex_wrapper(routes.post_slots));
+    // CORS proxy (EXPERIMENTAL, only used by the Web UI for MCP)
+    if (params.webui_mcp_proxy) {
+        SRV_WRN("%s", "-----------------\n");
+        SRV_WRN("%s", "CORS proxy is enabled, do not expose server to untrusted environments\n");
+        SRV_WRN("%s", "This feature is EXPERIMENTAL and may be removed or changed in future versions\n");
+        SRV_WRN("%s", "-----------------\n");
+        ctx_http.get ("/cors-proxy",      ex_wrapper(proxy_handler_get));
+        ctx_http.post("/cors-proxy",      ex_wrapper(proxy_handler_post));
+    }
 
     //
     // Start the server

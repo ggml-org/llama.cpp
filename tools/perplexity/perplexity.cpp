@@ -3,10 +3,11 @@
 #include "log.h"
 #include "llama.h"
 
-#include <chrono>
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
+#include <clocale>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -2004,6 +2005,8 @@ static void kl_divergence(llama_context * ctx, const common_params & params) {
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     common_params params;
 
     params.n_ctx = 512;
@@ -2022,21 +2025,14 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    const bool ppl = !params.hellaswag && !params.winogrande && !params.multiple_choice && !params.kl_divergence;
-
-    if (ppl || params.kl_divergence) {
-        const int32_t n_seq = std::max(1, params.n_batch / n_ctx);
-        const int32_t n_kv = n_seq * n_ctx;
-
-        params.n_parallel = n_seq;
-        params.n_ctx      = n_kv;
-
-        params.n_batch = std::min(params.n_batch, n_kv);
-    } else {
-        params.n_batch = std::min(params.n_batch, params.n_ctx);
-        // ensure there's at least enough seq_ids for HellaSwag
+    if (params.hellaswag || params.winogrande || params.multiple_choice) {
         params.n_parallel = std::max(4, params.n_parallel);
+        params.kv_unified = true;
+    } else { // Perplexity & KL divergence
+        params.n_parallel = std::max(1, params.n_batch / n_ctx);
     }
+    params.n_ctx = params.n_parallel * n_ctx;
+    params.n_batch = std::min(params.n_batch, params.n_ctx);
 
     if (params.ppl_stride > 0) {
         LOG_INF("Will perform strided perplexity calculation -> adjusting context size from %d to %d\n",

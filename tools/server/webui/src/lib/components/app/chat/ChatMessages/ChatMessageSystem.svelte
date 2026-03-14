@@ -4,7 +4,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { MarkdownContent } from '$lib/components/app';
 	import { getMessageEditContext } from '$lib/contexts';
-	import { INPUT_CLASSES } from '$lib/constants/css-classes';
+	import { INPUT_CLASSES } from '$lib/constants';
 	import { config } from '$lib/stores/settings.svelte';
 	import { isIMEComposing } from '$lib/utils';
 	import ChatMessageActions from './ChatMessageActions.svelte';
@@ -146,7 +146,7 @@
 					<Card
 						class="overflow-y-auto rounded-[1.125rem] !border-2 !border-dashed !border-border/50 bg-muted px-3.75 py-1.5 data-[multiline]:py-2.5"
 						data-multiline={isMultiline ? '' : undefined}
-						style="border: 2px dashed hsl(var(--border)); max-height: var(--max-message-height);"
+						style="border: 2px dashed hsl(var(--border)); max-height: var(--max-message-height); overflow-wrap: anywhere; word-break: break-word;"
 					>
 						<div
 							class="relative transition-all duration-300 {isExpanded
@@ -157,9 +157,9 @@
 								: 'max-height: none;'}
 						>
 							{#if currentConfig.renderUserContentAsMarkdown}
-								<div bind:this={messageElement} class="text-md {isExpanded ? 'cursor-text' : ''}">
+								<div bind:this={messageElement} class={isExpanded ? 'cursor-text' : ''}>
 									<MarkdownContent
-										class="markdown-system-content overflow-auto"
+										class="markdown-system-content -my-4"
 										content={message.content}
 									/>
 								</div>
