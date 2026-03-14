@@ -674,7 +674,7 @@ llama_model_loader::llama_model_loader(
         get_key(llm_kv(LLM_KV_GENERAL_ARCHITECTURE), arch_name, false);
         llm_kv = LLM_KV(llm_arch_from_string(arch_name));
 
-        files.emplace_back(new llama_file(fileno(file)));
+        files.emplace_back(new llama_file(file));
         contexts.emplace_back(ctx);
 
         // Save tensors data offset info of the main file.

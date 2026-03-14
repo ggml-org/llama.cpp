@@ -86,8 +86,12 @@ struct llama_file::impl {
         seek(0, SEEK_SET);
     }
 
-    impl(int /*fd_src*/) {
-        throw std::runtime_error("fd-based loading is not supported on Windows");
+    impl(FILE * file) : owns_fp(false) {
+        fp = file;
+        fp_win32 = (HANDLE) _get_osfhandle(_fileno(fp));
+        seek(0, SEEK_END);
+        size = tell();
+        seek(0, SEEK_SET);
     }
 
     size_t tell() const {
@@ -163,7 +167,7 @@ struct llama_file::impl {
     }
 
     ~impl() {
-        if (fp) {
+        if (fp && owns_fp) {
             std::fclose(fp);
         }
     }
@@ -213,20 +217,8 @@ struct llama_file::impl {
         seek(0, SEEK_SET);
     }
 
-    impl(int fd_src) : fname("(fd:" + std::to_string(fd_src) + ")") {
-        init_from_fd(fd_src);
-    }
-
-    void init_from_fd(int fd_src) {
-        const int fd_duped = dup(fd_src);
-        if (fd_duped < 0) {
-            throw std::runtime_error(format("failed to dup fd %d: %s", fd_src, strerror(errno)));
-        }
-        fp = fdopen(fd_duped, "rb");
-        if (!fp) {
-            close(fd_duped);
-            throw std::runtime_error(format("failed to fdopen fd %d: %s", fd_src, strerror(errno)));
-        }
+    impl(FILE * file) : fname("(file*)"), owns_fp(false) {
+        fp = file;
         seek(0, SEEK_END);
         size = tell();
         seek(0, SEEK_SET);
@@ -376,7 +368,7 @@ struct llama_file::impl {
     ~impl() {
         if (fd != -1) {
             close(fd);
-        } else {
+        } else if (owns_fp) {
             std::fclose(fp);
         }
     }
@@ -392,12 +384,13 @@ struct llama_file::impl {
 
     FILE * fp{};
     size_t size{};
+    bool owns_fp = true;
 };
 
 llama_file::llama_file(const char * fname, const char * mode, const bool use_direct_io) :
     pimpl(std::make_unique<impl>(fname, mode, use_direct_io)) {}
 
-llama_file::llama_file(int fd) : pimpl(std::make_unique<impl>(fd)) {}
+llama_file::llama_file(FILE * file) : pimpl(std::make_unique<impl>(file)) {}
 
 llama_file::~llama_file() = default;
 

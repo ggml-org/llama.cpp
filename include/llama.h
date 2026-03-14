@@ -465,7 +465,9 @@ extern "C" {
               struct llama_model_params   params);
 
     // Load a model from an open FILE pointer
-    LLAMA_API struct llama_model * llama_model_load_from_file_ptr(FILE * file, struct llama_model_params params);
+    LLAMA_API struct llama_model * llama_model_load_from_file_ptr(
+                                   FILE * file,
+              struct llama_model_params   params);
 
     // Load a model from multiple splits (support custom naming scheme)
     // The paths must be in the correct order

@@ -742,7 +742,7 @@ static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
             /*ctx      =*/ hft >= offset_has_data ? &ctx : nullptr,
         };
 
-        struct gguf_context * gguf_ctx = gguf_init_from_file_impl(file, gguf_params);
+        struct gguf_context * gguf_ctx = gguf_init_from_file_ptr(file, gguf_params);
 
         if (expect_context_not_null(hft)) {
             printf("%s:   - context_not_null: ", __func__);
@@ -1137,7 +1137,7 @@ static std::pair<int, int> test_roundtrip(ggml_backend_dev_t dev, const unsigned
         /*no_alloc =*/ false,
         /*ctx      =*/ only_meta ? nullptr : &ctx_1,
     };
-    struct gguf_context * gguf_ctx_1 = gguf_init_from_file_impl(file, gguf_params);
+    struct gguf_context * gguf_ctx_1 = gguf_init_from_file_ptr(file, gguf_params);
 
     printf("%s: same_version: ", __func__);
     if (gguf_get_version(gguf_ctx_0) == gguf_get_version(gguf_ctx_1)) {
