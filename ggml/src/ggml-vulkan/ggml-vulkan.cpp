@@ -6513,14 +6513,15 @@ static void ggml_vk_ctx_begin(vk_device& device, vk_context& subctx) {
 }
 
 static vk_context ggml_vk_get_compute_ctx(ggml_backend_vk_context * ctx) {
+    vk_context result;
     if (!ctx->compute_ctx.expired()) {
-        return ctx->compute_ctx.lock();
+        result = ctx->compute_ctx.lock();
+    } else {
+        result = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
+
+        ctx->compute_ctx = result;
+        ggml_vk_ctx_begin(ctx->device, result);
     }
-
-    vk_context result = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
-
-    ctx->compute_ctx = result;
-    ggml_vk_ctx_begin(ctx->device, result);
 
     if (ctx->device->async_use_transfer_queue && ctx->transfer_semaphore_last_submitted < ctx->transfer_semaphore.value) {
         result->s->wait_semaphores.push_back(ctx->transfer_semaphore);
