@@ -84,9 +84,13 @@ class ChatStore {
 
 	get chatWidthClasses(): { class: string; style?: string } {
 		const currentConfig = config();
+		const autoChatWidth = currentConfig.autoChatWidth;
 		const customChatWidth = currentConfig.customChatWidth;
 
-		// Custom width takes priority if set
+		if (autoChatWidth) {
+			return { class: AUTO_WIDTH_CLASSES };
+		}
+
 		if (customChatWidth) {
 			let pixelValue: number | null = null;
 
@@ -105,7 +109,7 @@ class ChatStore {
 			}
 		}
 
-		return currentConfig.autoChatWidth ? { class: AUTO_WIDTH_CLASSES } : { class: DEFAULT_WIDTH };
+		return { class: DEFAULT_WIDTH };
 	}
 
 	private setChatLoading(convId: string, loading: boolean): void {
