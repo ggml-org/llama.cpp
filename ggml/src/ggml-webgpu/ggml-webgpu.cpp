@@ -370,13 +370,13 @@ struct webgpu_global_context_struct {
     std::unordered_map<std::string, double> cpu_detail_ms;
 #endif
 
-#ifdef GGML_WEBGPU_GPU_PROFILE
-    // Profiling: per-shader GPU time in ms
-    std::unordered_map<std::string, double> shader_gpu_time_ms;
-    // Profiling: pool of timestamp query buffers (one per operation)
-    webgpu_profile_buf_pool                 timestamp_query_buf_pool;
-    std::vector<wgpu::FutureWaitInfo>       profiling_futures;
-#endif
+// #ifdef GGML_WEBGPU_GPU_PROFILE
+//     // Profiling: per-shader GPU time in ms
+//     std::unordered_map<std::string, double> shader_gpu_time_ms;
+//     // Profiling: pool of timestamp query buffers (one per operation)
+//     webgpu_profile_buf_pool                 timestamp_query_buf_pool;
+//     std::vector<wgpu::FutureWaitInfo>       profiling_futures;
+// #endif
 
 #ifdef GGML_WEBGPU_DEBUG
     wgpu::Buffer debug_host_buf;
@@ -430,6 +430,13 @@ struct webgpu_context_struct {
     std::map<int, std::map<int, std::map<int, webgpu_pipeline>>> soft_max_pipelines;  // mask_type, has_sink, inplace
 
     size_t memset_bytes_per_thread;
+#ifdef GGML_WEBGPU_GPU_PROFILE
+    // Profiling: per-shader GPU time in ms
+    std::unordered_map<std::string, double> shader_gpu_time_ms;
+    // Profiling: pool of timestamp query buffers (one per operation)
+    webgpu_profile_buf_pool                 timestamp_query_buf_pool;
+    std::vector<wgpu::FutureWaitInfo>       profiling_futures;
+#endif
 };
 
 typedef std::shared_ptr<webgpu_context_struct> webgpu_context;
@@ -843,13 +850,41 @@ static void ggml_backend_webgpu_free(ggml_backend_t backend) {
 
 #ifdef GGML_WEBGPU_GPU_PROFILE
     // resolve any stragglers
-    wgpu::CommandEncoder encoder = ctx->webgpu_ctx->global_ctx->device.CreateCommandEncoder();
-    for (auto & ts_bufs : ctx->webgpu_ctx->global_ctx->timestamp_query_buf_pool.in_use) {
-        encoder.ResolveQuerySet(ts_bufs.query_set, 0, 2, ts_bufs.dev_buf, 0);
-        encoder.CopyBufferToBuffer(ts_bufs.dev_buf, 0, ts_bufs.host_buf, 0, ts_bufs.host_buf.GetSize());
-        ggml_backend_webgpu_wait_profile_futures(ctx->webgpu_ctx->global_ctx,
-                                                 ctx->webgpu_ctx->global_ctx->profiling_futures, true);
+    auto & global_ctx = ctx->webgpu_ctx->global_ctx;
+
+    // Copy out the current in-use buffers so callbacks/free_bufs() can't
+    // invalidate iteration while we're working.
+    std::vector<webgpu_profile_bufs> stragglers;
+    {
+        std::lock_guard<std::mutex> lock(global_ctx->timestamp_query_buf_pool.mutex);
+        stragglers = global_ctx->timestamp_query_buf_pool.in_use;
     }
+    std::cout << "Stragglers size: " << stragglers.size() << "\n";
+    if (!stragglers.empty()) {
+        wgpu::CommandEncoder encoder = global_ctx->device.CreateCommandEncoder();
+
+        for (auto & ts_bufs : stragglers) {
+            encoder.ResolveQuerySet(ts_bufs.query_set, 0, 2, ts_bufs.dev_buf, 0);
+            encoder.CopyBufferToBuffer(
+                ts_bufs.dev_buf, 0,
+                ts_bufs.host_buf, 0,
+                ts_bufs.host_buf.GetSize());
+        }
+
+        wgpu::CommandBuffer commands = encoder.Finish();
+        global_ctx->queue.Submit(1, &commands);
+
+        // If your backend needs event pumping for callbacks/progress, do it once here.
+        global_ctx->instance.ProcessEvents();
+
+        // Now wait for the profiling futures. These futures should already have been
+        // created by MapAsync when the profile buffers were originally queued.
+        ggml_backend_webgpu_wait_profile_futures(
+            global_ctx,
+            global_ctx->profiling_futures,
+            true);
+    }
+
 
     std::cout << "\n[ggml_webgpu gpu profiling summary]\n";
     double total_gpu = 0.0;
@@ -2908,14 +2943,6 @@ static bool create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
                                                  wgpu::BufferUsage::CopySrc | wgpu::BufferUsage::MapWrite);
     ctx->webgpu_global_ctx->queue = ctx->webgpu_global_ctx->device.GetQueue();
 
-#ifdef GGML_WEBGPU_GPU_PROFILE
-    // Initialize buffer pool for timestamp queries, used for profiling
-    ctx->webgpu_global_ctx->timestamp_query_buf_pool.init(
-        ctx->webgpu_global_ctx->device, WEBGPU_NUM_TIMESTAMP_QUERY_BUFS, WEBGPU_TIMESTAMP_QUERY_BUF_SIZE_BYTES,
-        wgpu::BufferUsage::QueryResolve | wgpu::BufferUsage::CopySrc,
-        wgpu::BufferUsage::MapRead | wgpu::BufferUsage::CopyDst);
-#endif
-
     GGML_LOG_INFO(
         "ggml_webgpu: adapter_info: vendor_id: %u | vendor: %s | architecture: %s | device_id: %u | name: %s | "
         "device_desc: %s\n",
@@ -2932,6 +2959,13 @@ static webgpu_context initialize_webgpu_context(ggml_backend_dev_t dev) {
     webgpu_ctx->param_buf_pool.init(webgpu_ctx->global_ctx->device, WEBGPU_NUM_PARAM_BUFS, WEBGPU_PARAMS_BUF_SIZE_BYTES,
                                     wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Uniform,
                                     wgpu::BufferUsage::CopySrc | wgpu::BufferUsage::MapWrite, true);
+#ifdef GGML_WEBGPU_GPU_PROFILE
+    // Initialize buffer pool for timestamp queries, used for profiling
+    webgpu_ctx->timestamp_query_buf_pool.init(
+        webgpu_ctx->global_ctx->device, WEBGPU_NUM_TIMESTAMP_QUERY_BUFS, WEBGPU_TIMESTAMP_QUERY_BUF_SIZE_BYTES,
+        wgpu::BufferUsage::QueryResolve | wgpu::BufferUsage::CopySrc,
+        wgpu::BufferUsage::MapRead | wgpu::BufferUsage::CopyDst);
+#endif
     ggml_webgpu_create_buffer(webgpu_ctx->global_ctx->device, webgpu_ctx->set_rows_dev_error_buf,
                               WEBGPU_SET_ROWS_ERROR_BUF_SIZE_BYTES,
                               wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopySrc, "set_rows_dev_error_buf");
