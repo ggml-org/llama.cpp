@@ -4,6 +4,7 @@
 
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <string>
 #include <string_view>
 #include <functional>
@@ -111,6 +112,8 @@ class common_peg_ast_arena {
 
     void visit(common_peg_ast_id id, const common_peg_ast_visitor & visitor) const;
     void visit(const common_peg_parse_result & result, const common_peg_ast_visitor & visitor) const;
+
+    std::string dump();
 };
 
 struct common_peg_parse_result {
@@ -136,21 +139,43 @@ struct common_peg_parse_result {
     bool success() const { return type == COMMON_PEG_PARSE_RESULT_SUCCESS; }
 };
 
+enum common_peg_parse_flags {
+    COMMON_PEG_PARSE_FLAG_NONE    = 0,
+    COMMON_PEG_PARSE_FLAG_LENIENT = 1 << 0,
+    COMMON_PEG_PARSE_FLAG_DEBUG   = 1 << 1,
+};
+
+inline common_peg_parse_flags operator|(common_peg_parse_flags a, common_peg_parse_flags b) {
+    return static_cast<common_peg_parse_flags>(int(a) | int(b));
+}
+
+inline common_peg_parse_flags & operator|=(common_peg_parse_flags & a, common_peg_parse_flags b) {
+    return a = a | b;
+}
+
+inline common_peg_parse_flags operator&(common_peg_parse_flags a, common_peg_parse_flags b) {
+    return static_cast<common_peg_parse_flags>(int(a) & int(b));
+}
+
+inline common_peg_parse_flags operator~(common_peg_parse_flags a) {
+    return static_cast<common_peg_parse_flags>(~int(a));
+}
+
 struct common_peg_parse_context {
     std::string input;
-    bool is_partial;
+    common_peg_parse_flags flags;
     common_peg_ast_arena ast;
 
     int parse_depth;
 
-    common_peg_parse_context()
-        : is_partial(false), parse_depth(0) {}
+    common_peg_parse_context(common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_NONE)
+        : flags(flags), parse_depth(0) {}
 
-    common_peg_parse_context(const std::string & input)
-        : input(input), is_partial(false), parse_depth(0) {}
+    common_peg_parse_context(const std::string & input, common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_NONE)
+        : input(input), flags(flags), parse_depth(0) {}
 
-    common_peg_parse_context(const std::string & input, bool is_partial)
-        : input(input), is_partial(is_partial), parse_depth(0) {}
+    bool is_lenient() const { return flags & COMMON_PEG_PARSE_FLAG_LENIENT; }
+    bool is_debug() const { return flags & COMMON_PEG_PARSE_FLAG_DEBUG; }
 };
 
 class common_peg_arena;
@@ -206,7 +231,9 @@ struct common_peg_chars_parser {
     int max_count;  // -1 for unbounded
 };
 
-struct common_peg_json_string_parser {};
+struct common_peg_string_parser {
+    char delimiter;
+};
 
 struct common_peg_until_parser {
     std::vector<std::string> delimiters;
@@ -254,7 +281,7 @@ using common_peg_parser_variant = std::variant<
     common_peg_any_parser,
     common_peg_space_parser,
     common_peg_chars_parser,
-    common_peg_json_string_parser,
+    common_peg_string_parser,
     common_peg_until_parser,
     common_peg_schema_parser,
     common_peg_rule_parser,
@@ -299,6 +326,8 @@ class common_peg_arena {
     friend class common_peg_parser_builder;
 
   private:
+    std::string dump_impl(common_peg_parser_id id, std::unordered_set<common_peg_parser_id> & visited) const;
+
     common_peg_parser_id add_parser(common_peg_parser_variant parser);
     void add_rule(const std::string & name, common_peg_parser_id id);
 
@@ -404,6 +433,18 @@ class common_peg_parser_builder {
     //   S -> A{n}
     common_peg_parser repeat(const common_peg_parser & p, int n) { return repeat(p, n, n); }
 
+    // Matches a double-quoted string: '"' content '"' space
+    common_peg_parser double_quoted_string();
+
+    // Matches a single-quoted string: "'" content "'" space
+    common_peg_parser single_quoted_string();
+
+    // Matches a string that accepts both double-quoted and single-quoted styles.
+    common_peg_parser quoted_string();
+
+    // Matches string content without the surrounding delimiter.
+    common_peg_parser string_content(char delimiter);
+
     // Creates a complete JSON parser supporting objects, arrays, strings, numbers, booleans, and null.
     //   value -> object | array | string | number | true | false | null
     common_peg_parser json();
@@ -414,13 +455,23 @@ class common_peg_parser_builder {
     common_peg_parser json_bool();
     common_peg_parser json_null();
 
-    // Matches JSON string content without the surrounding quotes.
-    // Useful for extracting content within a JSON string.
-    common_peg_parser json_string_content();
-
     // Matches a JSON object member with a key and associated parser as the
     // value.
     common_peg_parser json_member(const std::string & key, const common_peg_parser & p);
+
+    // Creates a complete Python format parser supporting dicts, arrays, strings, numbers, booleans, and None.
+    // Differs from JSON: uses True/False/None, accepts both single and double-quoted strings.
+    //   value -> dict | array | string | number | True | False | None
+    common_peg_parser python_value();
+    common_peg_parser python_dict();
+    common_peg_parser python_string();
+    common_peg_parser python_array();
+    common_peg_parser python_number();
+    common_peg_parser python_bool();
+    common_peg_parser python_null();
+
+    // A marker, i.e. text delimited by a pair of <> or []
+    common_peg_parser marker();
 
     // Wraps a parser with JSON schema metadata for grammar generation.
     // Used internally to convert JSON schemas to GBNF grammar rules.

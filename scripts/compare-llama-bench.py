@@ -293,6 +293,10 @@ class LlamaBenchData:
         for t in self.repo.tags:
             if t.name == name:
                 return t.commit.hexsha[:self.build_len]
+        for remote in self.repo.remotes:
+            for ref in remote.refs:
+                if ref.name == name or ref.remote_head == name:
+                    return ref.commit.hexsha[:self.build_len]
         for c in self.repo.iter_commits("--all"):
             if c.hexsha[:self.build_len] == name[:self.build_len]:
                 return c.hexsha[:self.build_len]
