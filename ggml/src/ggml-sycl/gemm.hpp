@@ -313,6 +313,9 @@ public:
             matmul_args.insert({ DNNL_ARG_DST, c_mem });
             if (scratchpad_size > 0) {
                 auto scratchpad_mem = ctx.get_scratchpad_mem(scratchpad_md, eng, q);
+                if (scratchpad_mem.get(true) == nullptr) {
+                    throw std::runtime_error("oneDNN scratchpad allocation failed");
+                }
                 matmul_args.insert({ DNNL_ARG_SCRATCHPAD, scratchpad_mem });
             }
             matmul_prim.execute(stream, matmul_args);
@@ -331,6 +334,9 @@ public:
         matmul_args.insert({ DNNL_ARG_DST, c_mem });
         if (scratchpad_size > 0) {
             auto scratchpad_mem = ctx.get_scratchpad_mem(cached->scratchpad_md, eng, q);
+            if (scratchpad_mem.get(true) == nullptr) {
+                throw std::runtime_error("oneDNN scratchpad allocation failed");
+            }
             matmul_args.insert({ DNNL_ARG_SCRATCHPAD, scratchpad_mem });
         }
 
@@ -533,6 +539,9 @@ private:
         args.insert({DNNL_ARG_ATTR_ZERO_POINTS | DNNL_ARG_WEIGHTS, zp_mem});
         if (cached->scratchpad_size > 0) {
             auto scratchpad_mem = ctx.get_scratchpad_mem(cached->scratchpad_md, eng, q);
+            if (scratchpad_mem.get(true) == nullptr) {
+                throw std::runtime_error("oneDNN scratchpad allocation failed");
+            }
             args.insert({DNNL_ARG_SCRATCHPAD, scratchpad_mem});
         }
 
@@ -641,13 +650,18 @@ public:
             auto c_mem = dnnl::memory(matmul_pd.dst_desc(), eng, c);
             auto scratchpad_md = matmul_pd.scratchpad_desc();
             auto scratchpad_mem = ctx.get_scratchpad_mem(scratchpad_md, eng, q);
+            if (scratchpad_mem.get(true) == nullptr && scratchpad_md.get_size() > 0) {
+                throw std::runtime_error("oneDNN scratchpad allocation failed");
+            }
             auto matmul_prim = dnnl::matmul(matmul_pd);
 
             std::unordered_map<int, dnnl::memory> args;
             args.insert({DNNL_ARG_SRC, a_mem});
             args.insert({DNNL_ARG_WEIGHTS, b_mem});
             args.insert({DNNL_ARG_DST, c_mem});
-            args.insert({DNNL_ARG_SCRATCHPAD, scratchpad_mem});
+            if (scratchpad_md.get_size() > 0) {
+                args.insert({DNNL_ARG_SCRATCHPAD, scratchpad_mem});
+            }
             matmul_prim.execute(stream, args);
             return;
         }
@@ -657,6 +671,9 @@ public:
         auto b_mem = dnnl::memory(cached->b_md, eng, const_cast<void*>(b));
         auto c_mem = dnnl::memory(cached->c_md, eng, c);
         auto scratchpad_mem = ctx.get_scratchpad_mem(cached->scratchpad_md, eng, q);
+        if (scratchpad_mem.get(true) == nullptr && cached->scratchpad_md.get_size() > 0) {
+            throw std::runtime_error("oneDNN scratchpad allocation failed");
+        }
 
         std::unordered_map<int, dnnl::memory> args;
         args.insert({DNNL_ARG_SRC, a_mem});

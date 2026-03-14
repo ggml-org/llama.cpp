@@ -18974,20 +18974,17 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx,
 #endif
 } catch (const dnnl::error & e) {
     if (g_ggml_sycl_graph_recording) { throw; }
-    std::cerr << "[SYCL] oneDNN error in batched mul_mat: " << e.what()
-              << " (status=" << e.status << ")"
-              << " at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
-    std::cerr << "[SYCL] Hint: set GGML_SYCL_ONEDNN_PP=0 to bypass oneDNN for prompt processing" << std::endl;
-    std::exit(1);
+    GGML_LOG_WARN("[SYCL] oneDNN error in batched mul_mat: %s (status=%d) — re-throwing for fallback\n",
+                  e.what(), static_cast<int>(e.status));
+    throw;
 } catch (const sycl::exception & exc) {
     if (g_ggml_sycl_graph_recording) { throw; }
     std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
     std::exit(1);
 } catch (const std::exception & e) {
     if (g_ggml_sycl_graph_recording) { throw; }
-    std::cerr << "[SYCL] Error in batched mul_mat: " << e.what()
-              << " at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
-    std::exit(1);
+    GGML_LOG_WARN("[SYCL] Error in batched mul_mat: %s — re-throwing for fallback\n", e.what());
+    throw;
 }
 
 enum class mul_mat_algo {
@@ -25052,7 +25049,13 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
         } else {
             // The kernel from the if path is faster for that specific case, but does not support all mul mats.
             GGML_SYCL_KTRACE("mul_mat_f16_batched", " ne3=%lld", (long long) src0->ne[3]);
-            ggml_sycl_mul_mat_batched_sycl(ctx, src0, src1, dst);
+            try {
+                ggml_sycl_mul_mat_batched_sycl(ctx, src0, src1, dst);
+            } catch (const std::exception & e) {
+                GGML_LOG_WARN("[SYCL] oneDNN batched mul_mat failed: %s\n", e.what());
+                GGML_ABORT("[SYCL] No fallback available for batched F16 mul_mat — "
+                           "try GGML_SYCL_ONEDNN_PP=0 or reduce VRAM usage");
+            }
         }
     } else if (!split && src0->type == GGML_TYPE_F16 && !ggml_is_contiguous(src0) && !ggml_is_transposed(src1) &&
                src1->ne[1] == 1 && src1->ne[3] == 1) {
@@ -25064,7 +25067,13 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
         // KQ + KQV multi-batch
         GGML_SYCL_KTRACE("mul_mat_f16_kqkv_multi", " batches=%lld", (long long) (src1->ne[2] * src1->ne[3]));
         if (!force_simple_kqv) {
-            ggml_sycl_mul_mat_batched_sycl(ctx, src0, src1, dst);
+            try {
+                ggml_sycl_mul_mat_batched_sycl(ctx, src0, src1, dst);
+            } catch (const std::exception & e) {
+                GGML_LOG_WARN("[SYCL] oneDNN batched mul_mat failed: %s\n", e.what());
+                GGML_ABORT("[SYCL] No fallback available for batched F16 mul_mat — "
+                           "try GGML_SYCL_ONEDNN_PP=0 or reduce VRAM usage");
+            }
         } else {
             GGML_SYCL_DEBUG("[SYCL] KQV debug override: routing through non-batched mul_mat path\n");
         }
@@ -25322,16 +25331,22 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                                             // B = src0 (weights) [N, K] - needs transpose
                                             // C = dst [M, N]
                                             // Use row_gemm which handles the transpose correctly
-                                            DnnlGemmWrapper::row_gemm(
-                                                ctx,
-                                                static_cast<int>(N),  // row_diff = N (output cols)
-                                                static_cast<int>(M),  // src1_ncols = M (batch)
-                                                static_cast<int>(K),  // ne10 = K (reduction)
-                                                fp16_weights_ptr, DnnlGemmWrapper::to_dt<sycl::half>(),
-                                                activations_scratch, DnnlGemmWrapper::to_dt<sycl::half>(),
-                                                dst_data, DnnlGemmWrapper::to_dt<float>(), ctx.stream());
+                                            try {
+                                                DnnlGemmWrapper::row_gemm(
+                                                    ctx,
+                                                    static_cast<int>(N),  // row_diff = N (output cols)
+                                                    static_cast<int>(M),  // src1_ncols = M (batch)
+                                                    static_cast<int>(K),  // ne10 = K (reduction)
+                                                    fp16_weights_ptr, DnnlGemmWrapper::to_dt<sycl::half>(),
+                                                    activations_scratch, DnnlGemmWrapper::to_dt<sycl::half>(),
+                                                    dst_data, DnnlGemmWrapper::to_dt<float>(), ctx.stream());
 
-                                            used_onednn_fp16 = true;
+                                                used_onednn_fp16 = true;
+                                            } catch (const std::exception & e) {
+                                                GGML_LOG_WARN("[SYCL] oneDNN PP failed, falling back to unified kernel: %s\n",
+                                                              e.what());
+                                                used_onednn_fp16 = false;
+                                            }
                                             GGML_SYCL_DEBUG(
                                                 "[UNIFIED] OneDNN FP16: M=%lld K=%lld N=%lld type=%d "
                                                 "scratch=%s fp16_cache=%s pipeline=%s\n",

@@ -73,6 +73,9 @@ public:
 
         auto scratchpad_md = softmax_pd.scratchpad_desc();
         auto scratchpad_mem = ctx.get_scratchpad_mem(scratchpad_md, eng, q);
+        if (scratchpad_mem.get(true) == nullptr && scratchpad_md.get_size() > 0) {
+            throw std::runtime_error("oneDNN scratchpad allocation failed");
+        }
 
         auto softmax_prim = dnnl::softmax_forward(softmax_pd);
 
@@ -174,6 +177,9 @@ public:
 
         auto scratchpad_md = eltwise_pd.scratchpad_desc();
         auto scratchpad_mem = ctx.get_scratchpad_mem(scratchpad_md, eng, q);
+        if (scratchpad_mem.get(true) == nullptr && scratchpad_md.get_size() > 0) {
+            throw std::runtime_error("oneDNN scratchpad allocation failed");
+        }
 
         auto eltwise_prim = dnnl::eltwise_forward(eltwise_pd);
 
@@ -269,6 +275,9 @@ public:
 
         auto scratchpad_md = binary_pd.scratchpad_desc();
         auto scratchpad_mem = ctx.get_scratchpad_mem(scratchpad_md, eng, q);
+        if (scratchpad_mem.get(true) == nullptr && scratchpad_md.get_size() > 0) {
+            throw std::runtime_error("oneDNN scratchpad allocation failed");
+        }
 
         auto binary_prim = dnnl::binary(binary_pd);
 
@@ -359,6 +368,9 @@ public:
 
         auto scratchpad_md = reduction_pd.scratchpad_desc();
         auto scratchpad_mem = ctx.get_scratchpad_mem(scratchpad_md, eng, q);
+        if (scratchpad_mem.get(true) == nullptr && scratchpad_md.get_size() > 0) {
+            throw std::runtime_error("oneDNN scratchpad allocation failed");
+        }
 
         auto reduction_prim = dnnl::reduction(reduction_pd);
 
