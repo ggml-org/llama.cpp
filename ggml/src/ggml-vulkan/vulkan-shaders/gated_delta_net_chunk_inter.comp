@@ -60,7 +60,7 @@ void main() {
 
     float state[S_V];
     [[unroll]] for (uint i = 0; i < S_V; i++) {
-        state[i] = state_in[state_base + i * S_V + col];
+        state[i] = state_in[state_base + col * S_V + i];
     }
 
     for (uint c = 0; c < n_chunks; c++) {
@@ -121,6 +121,6 @@ void main() {
 
     // Write final state to dst at s_off
     [[unroll]] for (uint i = 0; i < S_V; i++) {
-        final_out[s_off + state_base + i * S_V + col] = state[i];
+        final_out[s_off + state_base + col * S_V + i] = state[i];
     }
 }
