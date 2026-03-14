@@ -18920,13 +18920,20 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx,
                   "Either GGML_SYCL_DNNL or GGML_SYCL_HAS_ONEAPI_MATH must be defined for batch GEMM operations");
 #endif
 } catch (const dnnl::error & e) {
+    if (g_ggml_sycl_graph_recording) { throw; }
     std::cerr << "[SYCL] oneDNN error in batched mul_mat: " << e.what()
               << " (status=" << e.status << ")"
               << " at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
     std::cerr << "[SYCL] Hint: set GGML_SYCL_ONEDNN_PP=0 to bypass oneDNN for prompt processing" << std::endl;
     std::exit(1);
 } catch (const sycl::exception & exc) {
+    if (g_ggml_sycl_graph_recording) { throw; }
     std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
+    std::exit(1);
+} catch (const std::exception & e) {
+    if (g_ggml_sycl_graph_recording) { throw; }
+    std::cerr << "[SYCL] Error in batched mul_mat: " << e.what()
+              << " at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
     std::exit(1);
 }
 
@@ -32336,6 +32343,14 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
         ggml_sycl_debug_dump_tensor_meta("ERROR src0", dst->src[0]);
         ggml_sycl_debug_dump_tensor_meta("ERROR src1", dst->src[1]);
     }
+    std::exit(1);
+} catch (const std::exception & e) {
+    if (g_ggml_sycl_graph_recording) {
+        throw;
+    }
+    std::cerr << "[SYCL] Error: " << e.what()
+              << " at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
+    std::cerr << "Error OP " << ggml_op_name(dst->op) << std::endl;
     std::exit(1);
 }
 
