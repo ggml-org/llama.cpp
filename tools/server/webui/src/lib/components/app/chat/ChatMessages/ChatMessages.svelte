@@ -18,6 +18,7 @@
 
 	let allConversationMessages = $state<DatabaseMessage[]>([]);
 	const currentConfig = config();
+	let widthClasses = $derived(chatWidthClasses());
 
 	setChatActionsContext({
 		copy: async (message: DatabaseMessage) => {
@@ -144,8 +145,8 @@
 <div class="flex h-full flex-col space-y-10 pt-24 {className}" style="height: auto; ">
 	{#each displayMessages as { message, isLastAssistantMessage, siblingInfo } (message.id)}
 		<ChatMessage
-			class="mx-auto w-full {chatWidthClasses().class}"
-			style={chatWidthClasses().style}
+			class="mx-auto w-full {widthClasses.class}"
+			style={widthClasses.style}
 			{message}
 			{isLastAssistantMessage}
 			{siblingInfo}

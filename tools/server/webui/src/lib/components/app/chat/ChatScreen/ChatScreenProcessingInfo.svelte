@@ -8,7 +8,8 @@
 	import { chatWidthClasses } from '$lib/stores/chat.svelte';
 
 	const processingState = useProcessingState();
-
+    
+	let widthClasses = $derived(chatWidthClasses());
 	let isCurrentConversationLoading = $derived(isLoading());
 	let isStreaming = $derived(isChatStreaming());
 	let hasProcessingData = $derived(processingState.processingState !== null);
@@ -63,8 +64,8 @@
 
 <div class="chat-processing-info-container pointer-events-none" class:visible={showProcessingInfo}>
 	<div
-		class="chat-processing-info-content {chatWidthClasses().class}"
-		style={chatWidthClasses().style}
+		class="chat-processing-info-content {widthClasses.class}"
+		style={widthClasses.style}
 	>
 		{#each processingDetails as detail (detail)}
 			<span class="chat-processing-info-detail pointer-events-auto backdrop-blur-sm">{detail}</span>
