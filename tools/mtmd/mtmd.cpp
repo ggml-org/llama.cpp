@@ -912,7 +912,7 @@ bool mtmd_support_audio(mtmd_context * ctx) {
     return ctx->ctx_a != nullptr;
 }
 
-int mtmd_get_audio_bitrate(mtmd_context * ctx) {
+int mtmd_get_audio_sample_rate(mtmd_context * ctx) {
     if (!ctx->ctx_a) {
         return -1;
     }

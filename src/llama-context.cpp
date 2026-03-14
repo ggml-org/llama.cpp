@@ -342,6 +342,14 @@ llama_context::llama_context(
 
         if (cparams.pipeline_parallel) {
             LLAMA_LOG_INFO("%s: pipeline parallelism enabled\n", __func__);
+
+            if (!graph_reuse_disable) {
+                // TODO: figure out a way to make graph reuse work with pipeline parallelism
+                // ref: https://github.com/ggml-org/llama.cpp/pull/20463
+                LLAMA_LOG_WARN("%s: graph reuse is currently not compatible with pipeline parallelism - disabling\n", __func__);
+
+                graph_reuse_disable = true;
+            }
         }
 
         sched_reserve();
@@ -504,7 +512,12 @@ void llama_context::sched_reserve() {
 
         if (cparams.fused_gdn_ch) {
             // more than one token in the batch per sequence in order to take the chunked path
-            auto * gf = graph_reserve(16*n_seqs, n_seqs, n_outputs, mctx.get(), true);
+            // note: n_outputs must match n_tokens for embedding models with mean/rank pooling,
+            // because build_pooling creates inp_mean with shape [n_tokens, n_seqs] and multiplies
+            // it with t_embd which is reduced to [n_outputs, ...] via out_ids. if n_outputs != n_tokens,
+            // the ggml_mul_mat assertion fails. this matches the pp reservation below (line ~553).
+            const uint32_t n_tokens_ch = 16*n_seqs;
+            auto * gf = graph_reserve(n_tokens_ch, n_seqs, n_tokens_ch, mctx.get(), true);
             if (!gf) {
                 throw std::runtime_error("failed to reserve graph for fused Gated Delta Net check (chunked)");
             }

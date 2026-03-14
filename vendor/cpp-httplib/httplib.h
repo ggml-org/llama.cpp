@@ -8,8 +8,8 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.37.1"
-#define CPPHTTPLIB_VERSION_NUM "0x002501"
+#define CPPHTTPLIB_VERSION "0.37.2"
+#define CPPHTTPLIB_VERSION_NUM "0x002502"
 
 #ifdef _WIN32
 #if defined(_WIN32_WINNT) && _WIN32_WINNT < 0x0A00
@@ -687,6 +687,18 @@ inline from_chars_result<double> from_chars(const char *first, const char *last,
     return {first + (endptr - s.c_str()), std::errc::result_out_of_range};
   }
   return {first + (endptr - s.c_str()), std::errc{}};
+}
+
+inline bool parse_port(const char *s, size_t len, int &port) {
+  int val = 0;
+  auto r = from_chars(s, s + len, val);
+  if (r.ec != std::errc{} || val < 1 || val > 65535) { return false; }
+  port = val;
+  return true;
+}
+
+inline bool parse_port(const std::string &s, int &port) {
+  return parse_port(s.data(), s.size(), port);
 }
 
 } // namespace detail
