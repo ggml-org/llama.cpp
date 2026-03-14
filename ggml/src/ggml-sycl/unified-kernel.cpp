@@ -6490,19 +6490,33 @@ UnifiedKernel::~UnifiedKernel() {
     // Free micro-graph resources
     micro_graph_.reset();
     if (micro_tile_counters_) {
+        if (micro_tile_counters_n_ > 0 && device_id_ >= 0) {
+            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, micro_tile_counters_n_ * sizeof(int),
+                                                       ggml_sycl::runtime_category::GRAPH);
+        }
         sycl::free(micro_tile_counters_, queue_);
         micro_tile_counters_ = nullptr;
+        micro_tile_counters_n_ = 0;
     }
     if (micro_generation_) {
         sycl::free(micro_generation_, queue_);
         micro_generation_ = nullptr;
     }
     // Free MMVQ micro-graph Q8 and scratch buffers
+    if (mmvq_q8_buf_size_ > 0 && device_id_ >= 0) {
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, 2 * mmvq_q8_buf_size_,
+                                                   ggml_sycl::runtime_category::GRAPH);
+    }
     for (int i = 0; i < 2; i++) {
         if (mmvq_q8_bufs_[i]) {
             sycl::free(mmvq_q8_bufs_[i], queue_);
             mmvq_q8_bufs_[i] = nullptr;
         }
+    }
+    mmvq_q8_buf_size_ = 0;
+    if (mmvq_gate_scratch_sz_ > 0 && device_id_ >= 0) {
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, 2 * mmvq_gate_scratch_sz_,
+                                                   ggml_sycl::runtime_category::GRAPH);
     }
     if (mmvq_gate_scratch_) {
         sycl::free(mmvq_gate_scratch_, queue_);
@@ -6512,6 +6526,7 @@ UnifiedKernel::~UnifiedKernel() {
         sycl::free(mmvq_up_scratch_, queue_);
         mmvq_up_scratch_ = nullptr;
     }
+    mmvq_gate_scratch_sz_ = 0;
 }
 
 void UnifiedKernel::configure(const ggml_sycl_unified::XMXConfig & xmx_config) {
@@ -6787,6 +6802,13 @@ void UnifiedKernel::build_dag(const std::vector<std::vector<int>> & successors,
 
     // Reallocate if pool is too small
     if (n_ops > dag_pool_n_ops_ || n_edges > dag_pool_n_edges_) {
+        // Untrack old DAG device bytes from budget
+        if (dag_allocated_ && device_id_ >= 0) {
+            const size_t old_dag_bytes = (3 * dag_pool_n_ops_ + 1) * sizeof(int);  // ready+claimed+done + completed
+            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, old_dag_bytes,
+                                                       ggml_sycl::runtime_category::GRAPH);
+            runtime_tracked_bytes_ -= old_dag_bytes;
+        }
         // Free old allocations
         if (dag_allocated_) {
             sycl::free(dag_state_.ready_counter, queue_);
@@ -6809,6 +6831,13 @@ void UnifiedKernel::build_dag(const std::vector<std::vector<int>> & successors,
         dag_state_.completed_count  = sycl::malloc_device<int>(1, queue_);
         dag_pool_n_ops_   = alloc_ops;
         dag_pool_n_edges_ = alloc_edges;
+        // Track new DAG device bytes (3 arrays of alloc_ops + 1 completed_count)
+        if (device_id_ >= 0) {
+            const size_t new_dag_bytes = (3 * alloc_ops + 1) * sizeof(int);
+            ggml_sycl::unified_cache_add_runtime_bytes(device_id_, new_dag_bytes,
+                                                       ggml_sycl::runtime_category::GRAPH);
+            runtime_tracked_bytes_ += new_dag_bytes;
+        }
     }
     dag_state_.n_ops = n_ops;
     dag_allocated_   = true;
@@ -7179,6 +7208,14 @@ void UnifiedKernel::build_role_schedule(const std::vector<DeviceOperation> & hos
         role_schedule_.elem_barrier_sense= sync_block + alloc_sync * 2 + CL_INTS * 2;     // CL-aligned slot 2
         role_schedule_.mm_barrier_cnt    = sync_block + alloc_sync * 2 + CL_INTS * 3;     // CL-aligned slot 3
         role_schedule_.mm_barrier_sense  = sync_block + alloc_sync * 2 + CL_INTS * 4;     // CL-aligned slot 4
+
+        // Track role schedule device bytes (sync_block is the only device allocation)
+        if (device_id_ >= 0) {
+            const size_t role_dev_bytes = total_ints * sizeof(int);
+            ggml_sycl::unified_cache_add_runtime_bytes(device_id_, role_dev_bytes,
+                                                       ggml_sycl::runtime_category::GRAPH);
+            runtime_tracked_bytes_ += role_dev_bytes;
+        }
 
         role_pool_n_elem_   = alloc_elem;
         role_pool_n_matmul_ = alloc_matmul;
@@ -9192,9 +9229,19 @@ void UnifiedKernel::record_micro_graph() {
     const int total_phase_ops   = host_phase_offset_.back();  // last offset = total entries
     const int n_counters_needed = n_phases + total_phase_ops + 16;
     if (n_counters_needed > micro_tile_counters_n_) {
+        // Untrack old allocation
+        if (micro_tile_counters_n_ > 0 && device_id_ >= 0) {
+            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, micro_tile_counters_n_ * sizeof(int),
+                                                       ggml_sycl::runtime_category::GRAPH);
+        }
         if (micro_tile_counters_) sycl::free(micro_tile_counters_, queue_);
         micro_tile_counters_   = sycl::malloc_device<int>(n_counters_needed, queue_);
         micro_tile_counters_n_ = n_counters_needed;
+        // Track new allocation
+        if (device_id_ >= 0) {
+            ggml_sycl::unified_cache_add_runtime_bytes(device_id_, n_counters_needed * sizeof(int),
+                                                       ggml_sycl::runtime_category::GRAPH);
+        }
         // Zero counters once at allocation (generation starts at 0)
         queue_.memset(micro_tile_counters_, 0, n_counters_needed * sizeof(int)).wait();
     }
@@ -9229,20 +9276,40 @@ void UnifiedKernel::record_micro_graph() {
         const size_t q8_size       = std::max(q8_hidden, q8_inter);
 
         if (mmvq_q8_buf_size_ < q8_size) {
+            // Untrack old allocations
+            if (mmvq_q8_buf_size_ > 0 && device_id_ >= 0) {
+                ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, 2 * mmvq_q8_buf_size_,
+                                                           ggml_sycl::runtime_category::GRAPH);
+            }
             for (int i = 0; i < 2; i++) {
                 if (mmvq_q8_bufs_[i]) sycl::free(mmvq_q8_bufs_[i], queue_);
                 mmvq_q8_bufs_[i] = sycl::malloc_device(q8_size, queue_);
             }
             mmvq_q8_buf_size_ = q8_size;
+            // Track new allocations
+            if (device_id_ >= 0) {
+                ggml_sycl::unified_cache_add_runtime_bytes(device_id_, 2 * q8_size,
+                                                           ggml_sycl::runtime_category::GRAPH);
+            }
         }
 
         const size_t gate_scratch_sz = intermediate_dim * sizeof(float);
         if (mmvq_gate_scratch_sz_ < gate_scratch_sz) {
+            // Untrack old allocations
+            if (mmvq_gate_scratch_sz_ > 0 && device_id_ >= 0) {
+                ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, 2 * mmvq_gate_scratch_sz_,
+                                                           ggml_sycl::runtime_category::GRAPH);
+            }
             if (mmvq_gate_scratch_) sycl::free(mmvq_gate_scratch_, queue_);
             if (mmvq_up_scratch_)   sycl::free(mmvq_up_scratch_, queue_);
             mmvq_gate_scratch_ = static_cast<float *>(sycl::malloc_device(gate_scratch_sz, queue_));
             mmvq_up_scratch_   = static_cast<float *>(sycl::malloc_device(gate_scratch_sz, queue_));
             mmvq_gate_scratch_sz_ = gate_scratch_sz;
+            // Track new allocations
+            if (device_id_ >= 0) {
+                ggml_sycl::unified_cache_add_runtime_bytes(device_id_, 2 * gate_scratch_sz,
+                                                           ggml_sycl::runtime_category::GRAPH);
+            }
         }
     }
 
@@ -10841,10 +10908,23 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
 
         // Allocate light barrier flags (device memory, one int per phase).
         if (n_light > 0 && n_final_phases > light_flags_size_) {
+            // Untrack old allocation
+            if (light_flags_size_ > 0 && device_id_ >= 0) {
+                ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, light_flags_size_ * sizeof(int),
+                                                           ggml_sycl::runtime_category::GRAPH);
+                runtime_tracked_bytes_ -= light_flags_size_ * sizeof(int);
+            }
             if (light_flags_) sycl::free(light_flags_, queue_);
             const int alloc_size = n_final_phases + 16;
             light_flags_      = sycl::malloc_device<int>(alloc_size, queue_);
             light_flags_size_ = alloc_size;
+            // Track new allocation
+            if (device_id_ >= 0) {
+                const size_t light_bytes = alloc_size * sizeof(int);
+                ggml_sycl::unified_cache_add_runtime_bytes(device_id_, light_bytes,
+                                                           ggml_sycl::runtime_category::GRAPH);
+                runtime_tracked_bytes_ += light_bytes;
+            }
         }
 
         // Copy phase_type to host-pinned buffer

@@ -88,11 +88,14 @@ bool layer_stream_manager::allocate_buffers(sycl::queue & queue) {
     // Store context for sycl::free() in shutdown()
     ctx_ = queue.get_context();
 
+    device_id_ = ggml_sycl_get_device_id_from_queue(queue);
+
     for (int i = 0; i < 2; i++) {
         buffers_[i] = sycl::malloc_device(buffer_size_, queue);
         if (buffers_[i]) {
             alloc_registry::instance().register_alloc(buffers_[i], buffer_size_,
-                                                      ggml_sycl_get_device_id_from_queue(queue), alloc_type::DEVICE);
+                                                      device_id_, alloc_type::DEVICE);
+            unified_cache_add_runtime_bytes(device_id_, buffer_size_, runtime_category::STAGING);
         }
         if (!buffers_[i]) {
             GGML_LOG_ERROR("[LAYER-STREAM] Failed to allocate buffer %d (%.1f MB)\n",
@@ -126,6 +129,9 @@ void layer_stream_manager::shutdown() {
     for (int i = 0; i < 2; i++) {
         if (buffers_[i]) {
             alloc_registry::instance().unregister_alloc(buffers_[i]);
+            if (device_id_ >= 0) {
+                unified_cache_sub_runtime_bytes(device_id_, buffer_size_, runtime_category::STAGING);
+            }
             sycl::free(buffers_[i], ctx_);
             buffers_[i] = nullptr;
         }

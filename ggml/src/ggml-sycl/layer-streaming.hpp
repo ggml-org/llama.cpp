@@ -121,6 +121,7 @@ class layer_stream_manager {
     void *        buffers_[2]       = {nullptr, nullptr};
     size_t        buffer_size_      = 0;
     int           loaded_layers_[2] = {-1, -1};  // Which layer is in each buffer (-1 = empty)
+    int           device_id_        = -1;         // Device ID for VRAM budget tracking
     sycl::context ctx_;              // Stored at allocation time for sycl::free()
 
     // Async prefetch state

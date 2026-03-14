@@ -668,6 +668,11 @@ ExpertPredictor::~ExpertPredictor() {
     // Free pre-allocated device scores buffer.
     // Skip during static destruction (SYCL context may be invalid).
     if (scores_dev_ && scores_queue_ && !ggml_sycl_is_shutting_down()) {
+        if (scores_dev_n_ > 0) {
+            int scores_device = ggml_sycl_get_device_id_from_queue(*scores_queue_);
+            unified_cache_sub_runtime_bytes(scores_device, scores_dev_n_ * sizeof(float),
+                                            runtime_category::EXPERT_CACHE);
+        }
         try {
             sycl::free(scores_dev_, *scores_queue_);
         } catch (...) {
@@ -988,7 +993,12 @@ std::vector<int> ExpertPredictor::predict_pregate(int           next_layer_idx,
     // Reuse pre-allocated device buffer for output scores, or allocate on first use.
     // This avoids sycl::malloc_device/free per call (3 calls with 3-layer lookahead).
     if (!scores_dev_ || scores_dev_n_ < M) {
+        int scores_device = ggml_sycl_get_device_id_from_queue(compute_q);
         if (scores_dev_ && scores_queue_) {
+            if (scores_dev_n_ > 0) {
+                unified_cache_sub_runtime_bytes(scores_device, scores_dev_n_ * sizeof(float),
+                                                runtime_category::EXPERT_CACHE);
+            }
             sycl::free(scores_dev_, *scores_queue_);
         }
         scores_dev_   = sycl::malloc_device<float>(M, compute_q);
@@ -999,6 +1009,7 @@ std::vector<int> ExpertPredictor::predict_pregate(int           next_layer_idx,
             GGML_LOG_WARN("[EXPERT-PREDICT] Failed to allocate device scores buffer, falling back to heuristic\n");
             return predict(next_layer_idx);
         }
+        unified_cache_add_runtime_bytes(scores_device, M * sizeof(float), runtime_category::EXPERT_CACHE);
     }
     float * scores_dev = scores_dev_;
 

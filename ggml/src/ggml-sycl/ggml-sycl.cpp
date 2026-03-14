@@ -189,10 +189,11 @@ struct fp16_weight_cache {
     bool                                           enabled     = false;
 
     // Slab allocator: single large VRAM block, sub-allocated linearly
-    char *  slab_ptr    = nullptr;
-    size_t  slab_size   = 0;
-    size_t  slab_offset = 0;
-    bool    slab_ready  = false;
+    char *  slab_ptr       = nullptr;
+    size_t  slab_size      = 0;
+    size_t  slab_offset    = 0;
+    bool    slab_ready     = false;
+    int     slab_device_id = -1;
 
     std::once_flag init_flag_;
 
@@ -225,9 +226,12 @@ struct fp16_weight_cache {
             slab_ptr = nullptr;
         }
         if (slab_ptr) {
+            int slab_device = ggml_sycl_get_device_id_from_queue(queue);
             ggml_sycl::alloc_registry::instance().register_alloc(slab_ptr, limit_bytes,
-                                                                 ggml_sycl_get_device_id_from_queue(queue),
+                                                                 slab_device,
                                                                  ggml_sycl::alloc_type::DEVICE);
+            ggml_sycl::unified_cache_add_runtime_bytes(slab_device, limit_bytes, ggml_sycl::runtime_category::OTHER);
+            slab_device_id = slab_device;
             slab_size = limit_bytes;
             GGML_LOG_INFO("[SYCL] FP16 weight cache: allocated %.1fMB VRAM slab\n",
                           limit_bytes / (1024.0f * 1024.0f));
@@ -277,9 +281,13 @@ struct fp16_weight_cache {
         if (slab_ptr) {
             queue.wait();  // Drain any pending copies
             ggml_sycl::alloc_registry::instance().unregister_alloc(slab_ptr);
+            if (slab_device_id >= 0 && slab_size > 0) {
+                ggml_sycl::unified_cache_sub_runtime_bytes(slab_device_id, slab_size, ggml_sycl::runtime_category::OTHER);
+            }
             sycl::free(slab_ptr, queue);
-            slab_ptr  = nullptr;
-            slab_size = 0;
+            slab_ptr       = nullptr;
+            slab_size      = 0;
+            slab_device_id = -1;
         }
         entries.clear();
         slab_offset = 0;
@@ -23401,6 +23409,8 @@ static void ensure_split_persistent_resources(
             GGML_LOG_WARN("[PERSISTENT-TG-SPLIT] sycl::malloc_device failed for progress_counter\n");
             return;
         }
+        int pri_dev = ggml_sycl_get_device_id_from_queue(primary_queue);
+        ggml_sycl::unified_cache_add_runtime_bytes(pri_dev, sizeof(int), ggml_sycl::runtime_category::GRAPH);
     }
     // Allocate host-pinned staging for D2H progress reads.
     if (!r.h_progress) {
@@ -23418,6 +23428,8 @@ static void ensure_split_persistent_resources(
             GGML_LOG_WARN("[PERSISTENT-TG-SPLIT] sycl::malloc_device failed for merge_complete\n");
             return;
         }
+        int pri_dev = ggml_sycl_get_device_id_from_queue(primary_queue);
+        ggml_sycl::unified_cache_add_runtime_bytes(pri_dev, sizeof(int), ggml_sycl::runtime_category::GRAPH);
     }
     // Safe on primary_queue: runs before kernel launch, no concurrent access
     int zero = 0;
@@ -23426,7 +23438,12 @@ static void ensure_split_persistent_resources(
 
     // Allocate q8_1 staging buffer on secondary device for input quantization
     if (r.q8_staging_size < need_q8) {
+        int sec_dev = ggml_sycl_get_device_id_from_queue(secondary_queue);
         if (r.q8_staging) {
+            if (r.q8_staging_size > 0) {
+                ggml_sycl::unified_cache_sub_runtime_bytes(sec_dev, r.q8_staging_size,
+                                                           ggml_sycl::runtime_category::STAGING);
+            }
             sycl::free(r.q8_staging, secondary_queue);
         }
         r.q8_staging = sycl::malloc_device<char>(need_q8, secondary_queue);
@@ -23437,6 +23454,7 @@ static void ensure_split_persistent_resources(
             return;
         }
         r.q8_staging_size = need_q8;
+        ggml_sycl::unified_cache_add_runtime_bytes(sec_dev, need_q8, ggml_sycl::runtime_category::STAGING);
     }
 
     // Create OOQ on primary device for coordinator D2H/H2D memcpy operations.
@@ -23746,15 +23764,36 @@ static struct {
 } g_split_secondary_gpu;
 
 static void split_secondary_gpu_ensure(size_t q8_bytes, size_t f32_bytes, sycl::queue * q) {
+    int sec_device = ggml_sycl_get_device_id_from_queue(*q);
     if (g_split_secondary_gpu.q8_size < q8_bytes) {
-        if (g_split_secondary_gpu.q8_dev) sycl::free(g_split_secondary_gpu.q8_dev, *q);
+        if (g_split_secondary_gpu.q8_dev) {
+            if (g_split_secondary_gpu.q8_size > 0) {
+                ggml_sycl::unified_cache_sub_runtime_bytes(sec_device, g_split_secondary_gpu.q8_size,
+                                                           ggml_sycl::runtime_category::STAGING);
+            }
+            sycl::free(g_split_secondary_gpu.q8_dev, *q);
+        }
         g_split_secondary_gpu.q8_dev = (char *) sycl::malloc_device(q8_bytes, *q);
         g_split_secondary_gpu.q8_size = g_split_secondary_gpu.q8_dev ? q8_bytes : 0;
+        if (g_split_secondary_gpu.q8_size > 0) {
+            ggml_sycl::unified_cache_add_runtime_bytes(sec_device, g_split_secondary_gpu.q8_size,
+                                                       ggml_sycl::runtime_category::STAGING);
+        }
     }
     if (g_split_secondary_gpu.f32_size < f32_bytes) {
-        if (g_split_secondary_gpu.f32_dev) sycl::free(g_split_secondary_gpu.f32_dev, *q);
+        if (g_split_secondary_gpu.f32_dev) {
+            if (g_split_secondary_gpu.f32_size > 0) {
+                ggml_sycl::unified_cache_sub_runtime_bytes(sec_device, g_split_secondary_gpu.f32_size,
+                                                           ggml_sycl::runtime_category::STAGING);
+            }
+            sycl::free(g_split_secondary_gpu.f32_dev, *q);
+        }
         g_split_secondary_gpu.f32_dev = (float *) sycl::malloc_device(f32_bytes, *q);
         g_split_secondary_gpu.f32_size = g_split_secondary_gpu.f32_dev ? f32_bytes : 0;
+        if (g_split_secondary_gpu.f32_size > 0) {
+            ggml_sycl::unified_cache_add_runtime_bytes(sec_device, g_split_secondary_gpu.f32_size,
+                                                       ggml_sycl::runtime_category::STAGING);
+        }
     }
 }
 
@@ -24055,9 +24094,20 @@ static bool ggml_sycl_mul_mat_tensor_split(
             if (!s_second_out_ring[ring_slot]) return false;
             // Ensure device output buffer
             if (s_second_out_dev_sz < second_out_bytes) {
-                if (s_second_out_dev) sycl::free(s_second_out_dev, *stream_second);
+                int sec_dev = ggml_sycl_get_device_id_from_queue(*stream_second);
+                if (s_second_out_dev) {
+                    if (s_second_out_dev_sz > 0) {
+                        ggml_sycl::unified_cache_sub_runtime_bytes(sec_dev, s_second_out_dev_sz,
+                                                                   ggml_sycl::runtime_category::STAGING);
+                    }
+                    sycl::free(s_second_out_dev, *stream_second);
+                }
                 s_second_out_dev = (float *) sycl::malloc_device(second_out_bytes, *stream_second);
                 s_second_out_dev_sz = s_second_out_dev ? second_out_bytes : 0;
+                if (s_second_out_dev_sz > 0) {
+                    ggml_sycl::unified_cache_add_runtime_bytes(sec_dev, s_second_out_dev_sz,
+                                                               ggml_sycl::runtime_category::STAGING);
+                }
             }
             if (!s_second_out_dev) return false;
 
@@ -27397,18 +27447,36 @@ static void dispatch_experts_secondary_gpu_impl(
             return;
         }
         if (!dev_q8_1[s] || needed_q81 > dev_q8_1_sz[s]) {
+            int sec_dev = ggml_sycl_get_device_id_from_queue(*target_queue);
             if (dev_q8_1[s]) {
+                if (dev_q8_1_sz[s] > 0) {
+                    ggml_sycl::unified_cache_sub_runtime_bytes(sec_dev, dev_q8_1_sz[s],
+                                                               ggml_sycl::runtime_category::STAGING);
+                }
                 sycl::free(dev_q8_1[s], sec_ctx);
             }
             dev_q8_1[s]    = sycl::malloc_device(needed_q81, *target_queue);
             dev_q8_1_sz[s] = needed_q81;
+            if (dev_q8_1[s]) {
+                ggml_sycl::unified_cache_add_runtime_bytes(sec_dev, needed_q81,
+                                                           ggml_sycl::runtime_category::STAGING);
+            }
         }
         if (!dev_out[s] || needed_out > dev_out_sz[s]) {
+            int sec_dev = ggml_sycl_get_device_id_from_queue(*target_queue);
             if (dev_out[s]) {
+                if (dev_out_sz[s] > 0) {
+                    ggml_sycl::unified_cache_sub_runtime_bytes(sec_dev, dev_out_sz[s],
+                                                               ggml_sycl::runtime_category::STAGING);
+                }
                 sycl::free(dev_out[s], sec_ctx);
             }
             dev_out[s]    = sycl::malloc_device<float>(N, *target_queue);
             dev_out_sz[s] = needed_out;
+            if (dev_out[s]) {
+                ggml_sycl::unified_cache_add_runtime_bytes(sec_dev, needed_out,
+                                                           ggml_sycl::runtime_category::STAGING);
+            }
         }
         if (!dev_q8_1[s] || !dev_out[s]) {
             GGML_LOG_WARN(
@@ -27572,9 +27640,20 @@ static void dispatch_experts_secondary_gpu_impl(
 
             // Ensure reduction buffers on B50 and host.
             if (!ring.dev_reduce || needed_out > ring.dev_reduce_sz) {
-                if (ring.dev_reduce) { sycl::free(ring.dev_reduce, sec_ctx); }
+                int sec_dev = ggml_sycl_get_device_id_from_queue(*target_queue);
+                if (ring.dev_reduce) {
+                    if (ring.dev_reduce_sz > 0) {
+                        ggml_sycl::unified_cache_sub_runtime_bytes(sec_dev, ring.dev_reduce_sz,
+                                                                   ggml_sycl::runtime_category::STAGING);
+                    }
+                    sycl::free(ring.dev_reduce, sec_ctx);
+                }
                 ring.dev_reduce    = sycl::malloc_device<float>(N, *target_queue);
                 ring.dev_reduce_sz = needed_out;
+                if (ring.dev_reduce) {
+                    ggml_sycl::unified_cache_add_runtime_bytes(sec_dev, needed_out,
+                                                               ggml_sycl::runtime_category::STAGING);
+                }
             }
             if (!ring.out_reduce || needed_out > ring.out_reduce_sz) {
                 if (ring.out_reduce) { sycl::free(ring.out_reduce, pri_ctx); }
@@ -27582,9 +27661,20 @@ static void dispatch_experts_secondary_gpu_impl(
                 ring.out_reduce_sz = needed_out;
             }
             if (!ring.gate_dev || chunk_sz * sizeof(float) > ring.gate_dev_sz) {
-                if (ring.gate_dev) { sycl::free(ring.gate_dev, sec_ctx); }
+                int sec_dev = ggml_sycl_get_device_id_from_queue(*target_queue);
+                if (ring.gate_dev) {
+                    if (ring.gate_dev_sz > 0) {
+                        ggml_sycl::unified_cache_sub_runtime_bytes(sec_dev, ring.gate_dev_sz,
+                                                                   ggml_sycl::runtime_category::STAGING);
+                    }
+                    sycl::free(ring.gate_dev, sec_ctx);
+                }
                 ring.gate_dev    = sycl::malloc_device<float>(MERGE_RING_SIZE, *target_queue);
                 ring.gate_dev_sz = MERGE_RING_SIZE * sizeof(float);
+                if (ring.gate_dev) {
+                    ggml_sycl::unified_cache_add_runtime_bytes(sec_dev, ring.gate_dev_sz,
+                                                               ggml_sycl::runtime_category::STAGING);
+                }
             }
 
             if (ring.dev_reduce && ring.out_reduce && ring.gate_dev) {
@@ -27617,10 +27707,21 @@ static void dispatch_experts_secondary_gpu_impl(
                 // Use dev_agg as a pointer table (reuse existing buffer).
                 const size_t ptr_table_bytes = chunk_sz * sizeof(float *);
                 if (!ring.dev_agg || ptr_table_bytes > ring.dev_agg_sz) {
-                    if (ring.dev_agg) { sycl::free(ring.dev_agg, sec_ctx); }
+                    int sec_dev = ggml_sycl_get_device_id_from_queue(*target_queue);
+                    if (ring.dev_agg) {
+                        if (ring.dev_agg_sz > 0) {
+                            ggml_sycl::unified_cache_sub_runtime_bytes(sec_dev, ring.dev_agg_sz,
+                                                                       ggml_sycl::runtime_category::STAGING);
+                        }
+                        sycl::free(ring.dev_agg, sec_ctx);
+                    }
                     ring.dev_agg    = sycl::malloc_device<float>(
                         (ptr_table_bytes + sizeof(float) - 1) / sizeof(float), *target_queue);
                     ring.dev_agg_sz = ptr_table_bytes;
+                    if (ring.dev_agg) {
+                        ggml_sycl::unified_cache_add_runtime_bytes(sec_dev, ptr_table_bytes,
+                                                                   ggml_sycl::runtime_category::STAGING);
+                    }
                 }
                 float ** ptr_table_dev = reinterpret_cast<float **>(ring.dev_agg);
                 float *  ptr_table_host[MERGE_RING_SIZE];
@@ -27684,9 +27785,20 @@ static void dispatch_experts_secondary_gpu_impl(
 
             // Ensure aggregation buffers are large enough.
             if (!ring.dev_agg || agg_bytes > ring.dev_agg_sz) {
-                if (ring.dev_agg) { sycl::free(ring.dev_agg, sec_ctx); }
+                int sec_dev = ggml_sycl_get_device_id_from_queue(*target_queue);
+                if (ring.dev_agg) {
+                    if (ring.dev_agg_sz > 0) {
+                        ggml_sycl::unified_cache_sub_runtime_bytes(sec_dev, ring.dev_agg_sz,
+                                                                   ggml_sycl::runtime_category::STAGING);
+                    }
+                    sycl::free(ring.dev_agg, sec_ctx);
+                }
                 ring.dev_agg    = sycl::malloc_device<float>(chunk_sz * static_cast<size_t>(N), *target_queue);
                 ring.dev_agg_sz = agg_bytes;
+                if (ring.dev_agg) {
+                    ggml_sycl::unified_cache_add_runtime_bytes(sec_dev, agg_bytes,
+                                                               ggml_sycl::runtime_category::STAGING);
+                }
             }
             if (!ring.out_agg || agg_bytes > ring.out_agg_sz) {
                 if (ring.out_agg) { sycl::free(ring.out_agg, pri_ctx); }
@@ -29501,9 +29613,20 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     const size_t expert_bytes = nb02;
 
                     if (!s_probe_dev || s_probe_sz < expert_bytes) {
-                        if (s_probe_dev) sycl::free(s_probe_dev, *stream);
+                        int probe_dev = ggml_sycl_get_device_id_from_queue(*stream);
+                        if (s_probe_dev) {
+                            if (s_probe_sz > 0) {
+                                ggml_sycl::unified_cache_sub_runtime_bytes(probe_dev, s_probe_sz,
+                                                                           ggml_sycl::runtime_category::STAGING);
+                            }
+                            sycl::free(s_probe_dev, *stream);
+                        }
                         s_probe_dev = sycl::malloc_device(expert_bytes, *stream);
                         s_probe_sz  = expert_bytes;
+                        if (s_probe_dev) {
+                            ggml_sycl::unified_cache_add_runtime_bytes(probe_dev, expert_bytes,
+                                                                       ggml_sycl::runtime_category::STAGING);
+                        }
                         if (g_moe_profile_enabled) {
                             fprintf(stderr, "[MOE-PROBE] Alloc probe buf: %zu bytes (%p), "
                                     "layout=AOS, type=%d, K=%lld, N=%lld\n",
@@ -34195,10 +34318,15 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
             }
 
             // Ensure double-buffer scratch is allocated (reuse across graphs)
+            int pipe_dev = ggml_sycl_get_device_id_from_queue(*pipe.dma_queue);
             for (int b = 0; b < 2; b++) {
                 if (pipe.scratch_size[b] < max_weight_bytes) {
                     // Free old buffer
                     if (pipe.scratch_buf[b]) {
+                        if (pipe.scratch_size[b] > 0) {
+                            ggml_sycl::unified_cache_sub_runtime_bytes(pipe_dev, pipe.scratch_size[b],
+                                                                       ggml_sycl::runtime_category::STAGING);
+                        }
                         sycl::free(pipe.scratch_buf[b], *pipe.dma_queue);
                         pipe.scratch_buf[b]  = nullptr;
                         pipe.scratch_size[b] = 0;
@@ -34207,6 +34335,8 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                     try {
                         pipe.scratch_buf[b]  = sycl::malloc_device(max_weight_bytes, *pipe.dma_queue);
                         pipe.scratch_size[b] = max_weight_bytes;
+                        ggml_sycl::unified_cache_add_runtime_bytes(pipe_dev, max_weight_bytes,
+                                                                   ggml_sycl::runtime_category::STAGING);
                     } catch (const sycl::exception & e) {
                         GGML_LOG_WARN("[SYCL] PP pipeline: scratch buf[%d] alloc failed (%.1f MB): %s\n",
                                       b, max_weight_bytes / (1024.0 * 1024.0), e.what());
