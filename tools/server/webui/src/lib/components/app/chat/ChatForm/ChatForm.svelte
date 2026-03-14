@@ -28,7 +28,7 @@
 	import { config } from '$lib/stores/settings.svelte';
 	import { modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
-	import { chatStore, chatWidthClasses } from '$lib/stores/chat.svelte';
+	import { chatStore } from '$lib/stores/chat.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { mcpHasResourceAttachments } from '$lib/stores/mcp-resources.svelte';
 	import { conversationsStore, activeMessages } from '$lib/stores/conversations.svelte';
@@ -124,8 +124,6 @@
 	 *
 	 *
 	 */
-
-	let widthClasses = $derived(chatWidthClasses());
 
 	// Configuration
 	let currentConfig = $derived(config());
@@ -576,7 +574,7 @@
 	/>
 
 	<div
-		class="{INPUT_CLASSES} mx-auto {widthClasses.class} overflow-hidden rounded-3xl backdrop-blur-md {disabled
+		class="{INPUT_CLASSES} overflow-hidden rounded-3xl backdrop-blur-md {disabled
 			? 'cursor-not-allowed opacity-60'
 			: ''}"
 		data-slot="input-area"
