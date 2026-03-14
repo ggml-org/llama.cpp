@@ -29,7 +29,7 @@ concurrency:
 jobs:
   webui-check:
     name: WebUI Checks
-    runs-on: ubuntu-latest
+    runs-on: ${{ 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     continue-on-error: true
     steps:
       - name: Checkout code

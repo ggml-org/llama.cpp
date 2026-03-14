@@ -952,7 +952,7 @@ jobs:
     permissions:
         contents: write # for creating release
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
 
     needs:
       - windows

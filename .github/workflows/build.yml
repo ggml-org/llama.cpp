@@ -317,8 +317,8 @@ jobs:
           cd build
           ctest -L main --verbose --timeout 900
 
-  ubuntu-latest-llguidance:
-    runs-on: ubuntu-latest
+  ubuntu-24-llguidance:
+    runs-on: ${{ 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
 
     steps:
       - name: Clone
@@ -345,8 +345,8 @@ jobs:
           cd build
           ctest -L main --verbose --timeout 900
 
-  ubuntu-latest-cmake-rpc:
-    runs-on: ubuntu-latest
+  ubuntu-24-cmake-rpc:
+    runs-on: ${{ 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
 
     continue-on-error: true
 
@@ -354,12 +354,6 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
-
-      # - name: ccache
-      #   uses: ggml-org/ccache-action@v1.2.16
-      #   with:
-      #     key: ubuntu-latest-cmake-rpc
-      #     evict-old-files: 1d
 
       - name: Dependencies
         id: depends
@@ -381,19 +375,12 @@ jobs:
           ctest -L main --verbose
 
   ubuntu-24-cmake-vulkan-deb:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
-        with:
-          key: ubuntu-24-cmake-vulkan-deb
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dependencies
         id: depends
@@ -545,19 +532,12 @@ jobs:
           ctest -L main --verbose --timeout 900
 
   ubuntu-24-wasm-webgpu:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
-        with:
-          key: ubuntu-latest-wasm-webgpu
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Install Emscripten
         run: |
