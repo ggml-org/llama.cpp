@@ -34,6 +34,14 @@
 
 namespace ggml_sycl {
 
+// SOA-correct expert caching via unified cache.
+// Looks up expert metadata, performs AOS→SOA layout conversion, and uploads
+// to VRAM on the specified device using ensure_cached_layout().
+// Returns device pointer if expert was successfully cached in SOA layout.
+// Returns nullptr if caching failed (no metadata, VRAM full, etc.).
+// Thread-safe: acquires g_moe_expert_meta_mutex and unified cache locks internally.
+void * moe_expert_ensure_soa_cached(int layer_idx, int expert_idx, int device_id);
+
 // Tracks a single in-flight DMA prefetch operation.
 struct prefetch_request {
     expert_key  key;

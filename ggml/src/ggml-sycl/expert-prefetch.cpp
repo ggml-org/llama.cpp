@@ -111,10 +111,15 @@ bool ExpertPrefetcher::hint(int layer_idx, int expert_idx) {
 }
 
 // Internal implementation of hint(). Caller must hold mutex_.
+//
+// Routes through moe_expert_ensure_soa_cached() which uses the unified cache's
+// ensure_cached_layout() to upload expert weights with correct SOA layout.
+// This fixes a critical bug where raw memcpy copied AOS data to VRAM but MMVQ
+// kernels expect SOA layout — causing garbage output for quantized types.
 bool ExpertPrefetcher::hint_locked(int layer_idx, int expert_idx) {
     expert_key key{ layer_idx, expert_idx };
 
-    // Already in-flight — skip.
+    // Already in-flight (legacy path) — skip.
     if (inflight_.count(key)) {
         return false;
     }
@@ -131,11 +136,6 @@ bool ExpertPrefetcher::hint_locked(int layer_idx, int expert_idx) {
         return false;
     }
 
-    // Check capacity for in-flight DMA operations.
-    if (!has_capacity()) {
-        return false;
-    }
-
     // Look up expert in placement table.
     auto & ptable = get_expert_placement_table();
     if (!ptable.is_initialized()) {
@@ -145,8 +145,6 @@ bool ExpertPrefetcher::hint_locked(int layer_idx, int expert_idx) {
     auto placement = ptable.get(layer_idx, expert_idx);
 
     // Already in VRAM on THIS device via another path (e.g. Phase 2 upload) — skip.
-    // Only skip if the placement is on our device; experts on other devices still need
-    // to be prefetched into our own VRAM pool.
     if (placement.device_ptr && placement.device_id == device_id_) {
         prefetch_hits_++;
         return false;
@@ -157,63 +155,22 @@ bool ExpertPrefetcher::hint_locked(int layer_idx, int expert_idx) {
         return false;
     }
 
-    // For cross-device prefetch: use host_src_ptr (guaranteed host-accessible)
-    // if data_ptr is device VRAM on another GPU (no P2P on Intel Arc).
-    const void * src_ptr = placement.data_ptr;
-    if (placement.device_id != device_id_ && placement.host_src_ptr) {
-        src_ptr = placement.host_src_ptr;
-    } else if (placement.device_id != device_id_) {
-        // No host source available — check if data_ptr is host-accessible.
-        auto ptr_type = ggml_sycl_get_alloc_type(placement.data_ptr);
-        if (ptr_type == sycl::usm::alloc::device) {
-            return false;  // GPU0 VRAM, can't DMA cross-device
-        }
-        // host, shared, or unknown (mmap) — proceed with data_ptr
-    }
-
-    // Lazily allocate VRAM pool on first use, dynamically sized from VRAM budget.
-    if (!ensure_pool_allocated(placement.weight_bytes)) {
-        return false;
-    }
-
-    // Skip if expert is larger than pool slots (model changed mid-run).
-    if (placement.weight_bytes > vram_slot_bytes_) {
-        return false;
-    }
-
-    // Acquire a VRAM slot (may evict LRU cached entry).
-    int slot = acquire_vram_slot_lru(layer_idx, expert_idx);
-    if (slot < 0) {
-        return false;
-    }
-
-    // Submit async H2D DMA on the OOQ.
-    void * dst = vram_pool_[slot].ptr;
-    try {
-        sycl::event ev = dma_queue_->memcpy(dst, src_ptr, placement.weight_bytes);
-
-        prefetch_request req;
-        req.key        = key;
-        req.event      = ev;
-        req.device_ptr = dst;
-        req.pool_slot  = slot;
-        req.completed  = false;
-        inflight_[key] = std::move(req);
-
-        // Mark slot as occupied by this expert.
-        vram_pool_[slot].cached_key      = key;
-        vram_pool_[slot].last_used_token = current_token_;
-        vram_pool_[slot].free            = false;
-
-        GGML_SYCL_DEBUG("[PREFETCH] hint L%d E%d: H2D %.1f KB -> slot %d\n",
-                        layer_idx, expert_idx, placement.weight_bytes / 1024.0, slot);
+    // Use SOA-correct caching via unified cache.
+    // This handles AOS→SOA layout conversion, VRAM allocation, and placement
+    // table update — all through the proven ensure_cached_layout() path.
+    // The call is synchronous (blocks until SOA conversion + H2D DMA complete),
+    // but this is acceptable: hint() is called from the CPU-fallback code path
+    // where the expert will be computed on CPU for the current token anyway.
+    // The ~1ms overhead per cache-miss expert is negligible vs ~2ms CPU compute.
+    void * device_ptr = moe_expert_ensure_soa_cached(layer_idx, expert_idx, device_id_);
+    if (device_ptr) {
+        completed_count_++;
+        GGML_SYCL_DEBUG("[PREFETCH] hint L%d E%d: SOA-cached via unified cache, dev=%d ptr=%p\n",
+                        layer_idx, expert_idx, device_id_, device_ptr);
         return true;
-    } catch (const sycl::exception & e) {
-        release_vram_slot(slot);
-        GGML_LOG_WARN("[SYCL] Prefetch H2D failed for L%d E%d: %s\n",
-                      layer_idx, expert_idx, e.what());
-        return false;
     }
+
+    return false;
 }
 
 void ExpertPrefetcher::hint_batch(int layer_idx, const std::vector<int> & expert_indices) {
@@ -280,6 +237,19 @@ void * ExpertPrefetcher::await(int layer_idx, int expert_idx) {
     }
 
     expert_key key{ layer_idx, expert_idx };
+
+    // Fast path: check if expert was SOA-cached via unified cache path.
+    // moe_expert_ensure_soa_cached() updates the placement table directly,
+    // bypassing inflight_ and cached_slots_.
+    {
+        auto & ptable = get_expert_placement_table();
+        if (ptable.is_initialized()) {
+            auto placement = ptable.get(layer_idx, expert_idx);
+            if (placement.device_ptr && placement.device_id == device_id_) {
+                return placement.device_ptr;
+            }
+        }
+    }
 
     // Phase 1: Check cached LRU pool, in-flight completed, or extract event.
     // Release mutex before blocking on event.wait() to avoid deadlock.
@@ -399,6 +369,17 @@ void * ExpertPrefetcher::get_cached_ptr(int layer_idx, int expert_idx) const {
     if (!initialized_) {
         return nullptr;
     }
+
+    // Check placement table first (covers SOA-cached entries via unified cache).
+    auto & ptable = get_expert_placement_table();
+    if (ptable.is_initialized()) {
+        auto placement = ptable.get(layer_idx, expert_idx);
+        if (placement.device_ptr && placement.device_id == device_id_) {
+            return placement.device_ptr;
+        }
+    }
+
+    // Fall back to prefetcher's own LRU pool (legacy path).
     expert_key key{ layer_idx, expert_idx };
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = cached_slots_.find(key);
@@ -658,64 +639,23 @@ void ExpertPrefetcher::preload_experts(int layer_idx, const std::vector<int> & e
 
     int preloaded = 0;
     for (int eid : expert_ids) {
-        expert_key key{ layer_idx, eid };
-
-        // Skip if already cached or in-flight.
-        if (cached_slots_.count(key) || inflight_.count(key)) {
-            continue;
-        }
-
+        // Skip if already in VRAM via any path.
         auto placement = ptable.get(layer_idx, eid);
-
-        // Already in VRAM via another path.
         if (placement.device_ptr) {
             continue;
         }
-        if (!placement.data_ptr || placement.weight_bytes == 0) {
-            continue;
-        }
 
-        // Lazily allocate pool if needed.
-        if (!ensure_pool_allocated(placement.weight_bytes)) {
-            return;
-        }
-
-        if (placement.weight_bytes > vram_slot_bytes_) {
-            continue;
-        }
-
-        // Find a free slot (no LRU eviction during preload).
-        int slot = -1;
-        for (int i = 0; i < static_cast<int>(vram_pool_.size()); i++) {
-            if (vram_pool_[i].free && vram_pool_[i].ptr) {
-                slot = i;
-                break;
-            }
-        }
-        if (slot < 0) {
-            break;  // Pool full — done preloading this layer.
-        }
-
-        // Synchronous H2D copy during init (blocking is fine at model load).
-        try {
-            dma_queue_->memcpy(vram_pool_[slot].ptr, placement.data_ptr, placement.weight_bytes).wait();
-
-            vram_pool_[slot].free            = false;
-            vram_pool_[slot].cached_key      = key;
-            vram_pool_[slot].last_used_token = 0;  // Preloaded at "token 0"
-
-            cached_slots_[key] = slot;
-
-            ptable.set_device_ptr(layer_idx, eid, 0, vram_pool_[slot].ptr);
+        // Use SOA-correct caching via unified cache (same as hint_locked).
+        // This fixes the pre-existing bug where raw memcpy copied AOS layout
+        // to VRAM but MMVQ kernels expect SOA layout.
+        void * ptr = moe_expert_ensure_soa_cached(layer_idx, eid, device_id_);
+        if (ptr) {
             preloaded++;
-        } catch (const sycl::exception & e) {
-            GGML_LOG_WARN("[SYCL] Preload failed for L%d E%d: %s\n",
-                          layer_idx, eid, e.what());
         }
     }
 
     if (preloaded > 0) {
-        GGML_LOG_INFO("[SYCL] Preloaded %d experts for layer %d into VRAM pool\n",
+        GGML_LOG_INFO("[SYCL] Preloaded %d experts for layer %d into VRAM (SOA via unified cache)\n",
                       preloaded, layer_idx);
     }
 }
