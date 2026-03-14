@@ -3,6 +3,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { DialogConversationSelection, DialogConfirmation } from '$lib/components/app';
 	import { createMessageCountMap, downloadConversationFile } from '$lib/utils';
+	import { ISO_DATE_TIME_SEPARATOR } from '$lib/constants';
 	import { conversationsStore, conversations } from '$lib/stores/conversations.svelte';
 	import { toast } from 'svelte-sonner';
 
@@ -57,7 +58,7 @@
 
 			downloadConversationFile(
 				allData,
-				`${new Date().toISOString().split('T')[0]}_conversations.json`
+				`${new Date().toISOString().split(ISO_DATE_TIME_SEPARATOR)[0]}_conversations.json`
 			);
 
 			exportedConversations = selectedConversations;

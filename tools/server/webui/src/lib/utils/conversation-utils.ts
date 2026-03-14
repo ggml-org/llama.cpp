@@ -2,18 +2,18 @@
  * Utility functions for conversation data manipulation
  */
 import type { ExportedConversations, DatabaseMessage } from '$lib/types';
-
-// Conversation filename constants
-
-// Length of the trimmed conversation ID in the filename
-export const CONV_ID_TRIM_LENGTH = 8;
-// Maximum length of the sanitized conversation name snippet
-export const CONV_NAME_SUFFIX_MAX_LENGTH = 20;
-// Characters to keep in the ISO timestamp. 19 keeps 2026-01-01T00:00:00
-export const ISO_TIMESTAMP_SLICE_LENGTH = 19;
-// Regex
-export const NON_ALPHANUMERIC_REGEX = /[^a-z0-9]/gi;
-export const MULTIPLE_UNDERSCORE_REGEX = /_+/g;
+import {
+	ISO_DATE_TIME_SEPARATOR,
+	ISO_DATE_TIME_SEPARATOR_REPLACEMENT,
+	ISO_TIMESTAMP_SLICE_LENGTH,
+	EXPORT_CONV_ID_TRIM_LENGTH,
+	EXPORT_CONV_NONALNUM_REPLACEMENT,
+	EXPORT_CONV_NAME_SUFFIX_MAX_LENGTH,
+	ISO_TIME_SEPARATOR,
+	ISO_TIME_SEPARATOR_REPLACEMENT,
+	NON_ALPHANUMERIC_REGEX,
+	MULTIPLE_UNDERSCORE_REGEX
+} from '$lib/constants';
 
 /**
  * Creates a map of conversation IDs to their message counts from exported conversation data
@@ -55,9 +55,9 @@ export function generateConversationFilename(
 	const conversationName = (conversation.name ?? '').trim().toLowerCase();
 
 	const sanitizedName = conversationName
-		.replace(NON_ALPHANUMERIC_REGEX, '_')
+		.replace(NON_ALPHANUMERIC_REGEX, EXPORT_CONV_NONALNUM_REPLACEMENT)
 		.replace(MULTIPLE_UNDERSCORE_REGEX, '_')
-		.substring(0, CONV_NAME_SUFFIX_MAX_LENGTH);
+		.substring(0, EXPORT_CONV_NAME_SUFFIX_MAX_LENGTH);
 
 	// If we have messages, use the timestamp of the newest message
 	const referenceDate = msgs?.length
@@ -65,8 +65,10 @@ export function generateConversationFilename(
 		: new Date();
 
 	const iso = referenceDate.toISOString().slice(0, ISO_TIMESTAMP_SLICE_LENGTH);
-	const formattedDate = iso.replace('T', '_').replaceAll(':', '-');
-	const trimmedConvId = conversation.id?.slice(0, CONV_ID_TRIM_LENGTH) ?? '';
+	const formattedDate = iso
+		.replace(ISO_DATE_TIME_SEPARATOR, ISO_DATE_TIME_SEPARATOR_REPLACEMENT)
+		.replaceAll(ISO_TIME_SEPARATOR, ISO_TIME_SEPARATOR_REPLACEMENT);
+	const trimmedConvId = conversation.id?.slice(0, EXPORT_CONV_ID_TRIM_LENGTH) ?? '';
 	return `${formattedDate}_conv_${trimmedConvId}_${sanitizedName}.json`;
 }
 
