@@ -5441,7 +5441,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         ggml_vk_load_shaders(device);
 
-        const bool prefers_transfer_queue = device->vendor_id == VK_VENDOR_ID_AMD && device->architecture != AMD_GCN;
+        const bool prefers_transfer_queue = device->vendor_id == VK_VENDOR_ID_AMD && device->architecture != AMD_GCN && !device->uma;
 
         if (!device->single_queue) {
             const uint32_t transfer_queue_index = compute_queue_family_index == transfer_queue_family_index ? 1 : 0;
