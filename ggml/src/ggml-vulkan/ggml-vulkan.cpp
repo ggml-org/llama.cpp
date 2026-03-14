@@ -14949,7 +14949,7 @@ static void ggml_backend_vk_event_record(ggml_backend_t backend, ggml_backend_ev
     compute_ctx->s->signal_semaphores.push_back(vkev->tl_semaphore);
     ggml_vk_ctx_end(compute_ctx);
 
-    VK_SYNC_LOG(ctx->name, "event_record: set event, submit cmd_buf=" << cmd_buf << ", vk_event=" << (VkEvent)vkev->event);
+    VK_SYNC_LOG(ctx->name, "event_record: set event, submit cmd_buf=" << cmd_buf->buf << ", vk_event=" << (VkEvent)vkev->event);
     ggml_vk_submit(compute_ctx, {});
     ctx->submit_pending = true;
     vkev->cmd_buffer = cmd_buf;
@@ -15818,6 +15818,7 @@ static void ggml_backend_vk_device_event_synchronize(ggml_backend_dev_t dev, ggm
 
         // Reset and move submitted events
         for (auto& event : vkev->events_submitted) {
+            VK_SYNC_LOG(device->name, "event_synchronize: resetting vkevent=" << event);
             device->device.resetEvent(event);
         }
         vkev->events_free.insert(vkev->events_free.end(), vkev->events_submitted.begin(), vkev->events_submitted.end());
