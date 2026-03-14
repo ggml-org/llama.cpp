@@ -1093,7 +1093,7 @@ json oaicompat_chat_params_parse(
     }
     llama_params["grammar_triggers"] = grammar_triggers;
     llama_params["preserved_tokens"] = chat_params.preserved_tokens;
-    llama_params["reasoning_prefill"]        = chat_params.reasoning_prefill;
+    llama_params["prefill"]        = chat_params.prefill;
     for (const auto & stop : chat_params.additional_stops) {
         llama_params["stop"].push_back(stop);
     }

@@ -145,7 +145,7 @@ static void test_example_native(testing & t) {
         common_reasoning_format reasoning_format;
         json                    json_schema;
         bool                    parallel_tool_calls;
-        std::string             reasoning_prefill;
+        std::string             prefill;
         std::string             input;
 
         // Expect
@@ -157,7 +157,7 @@ static void test_example_native(testing & t) {
     auto build_parser = [](const test_case & tc) {
         return build_chat_peg_parser([&](common_chat_peg_builder & p) {
             auto reasoning_in_content = (tc.reasoning_format == COMMON_REASONING_FORMAT_NONE);
-            // Always use optional TAG_BASED pattern; reasoning_prefill is prepended to input
+            // Always use optional TAG_BASED pattern; prefill is prepended to input
             auto reasoning = p.optional("<think>" + p.reasoning(p.until("</think>")) + "</think>" + p.space());
 
             // tool calling parser
@@ -190,7 +190,7 @@ static void test_example_native(testing & t) {
          /* .reasoning_format =     */ COMMON_REASONING_FORMAT_AUTO,
          /* .json_schema =          */ {},
          /* .parallel_tool_calls =  */ false,
-         /* .reasoning_prefill =    */ "",
+         /* .prefill =    */ "",
          /* .input =                */ ("<think>The user said hello, I must say hello back</think>\nHello"),
          /* .expect_reasoning =     */ "The user said hello, I must say hello back",
          /* .expect_content =       */ "Hello",
@@ -203,7 +203,7 @@ static void test_example_native(testing & t) {
          /* .reasoning_format =     */ COMMON_REASONING_FORMAT_AUTO,
          /* .json_schema =          */ {},
          /* .parallel_tool_calls =  */ false,
-         /* .reasoning_prefill =    */ "",
+         /* .prefill =    */ "",
          /* .input =                */ ("Hello"),
          /* .expect_reasoning =     */ "",
          /* .expect_content =       */ "Hello",
@@ -216,7 +216,7 @@ static void test_example_native(testing & t) {
          /* .reasoning_format =     */ COMMON_REASONING_FORMAT_NONE,
          /* .json_schema =          */ {},
          /* .parallel_tool_calls =  */ false,
-         /* .reasoning_prefill =    */ "",
+         /* .prefill =    */ "",
          /* .input =                */ ("<think>The user said hello, I must say hello back</think>\nHello"),
          /* .expect_reasoning =     */ "",
          /* .expect_content =       */ "<think>The user said hello, I must say hello back</think>\nHello",
@@ -229,7 +229,7 @@ static void test_example_native(testing & t) {
          /* .reasoning_format =     */ COMMON_REASONING_FORMAT_AUTO,
          /* .json_schema =          */ {},
          /* .parallel_tool_calls =  */ false,
-         /* .reasoning_prefill =    */ "<think>",
+         /* .prefill =    */ "<think>",
          /* .input =                */ ("The user said hello, I must say hello back</think>\nHello"),
          /* .expect_reasoning =     */ "The user said hello, I must say hello back",
          /* .expect_content =       */ "Hello",
@@ -242,7 +242,7 @@ static void test_example_native(testing & t) {
          /* .reasoning_format =     */ COMMON_REASONING_FORMAT_NONE,
          /* .json_schema =          */ {},
          /* .parallel_tool_calls =  */ false,
-         /* .reasoning_prefill =    */ "",
+         /* .prefill =    */ "",
          /* .input =                */ ("The user said hello, I must say hello back</think>\nHello"),
          /* .expect_reasoning =     */ "",
          /* .expect_content =       */ "The user said hello, I must say hello back</think>\nHello",
@@ -255,7 +255,7 @@ static void test_example_native(testing & t) {
          /* .reasoning_format =     */ COMMON_REASONING_FORMAT_AUTO,
          /* .json_schema =          */ {},
          /* .parallel_tool_calls =  */ false,
-         /* .reasoning_prefill =    */ "<think></think>",
+         /* .prefill =    */ "<think></think>",
          /* .input =                */ ("Hello"),
          /* .expect_reasoning =     */ "",
          /* .expect_content =       */ "Hello",
@@ -268,7 +268,7 @@ static void test_example_native(testing & t) {
          /* .reasoning_format =     */ COMMON_REASONING_FORMAT_AUTO,
          /* .json_schema =          */ {},
          /* .parallel_tool_calls =  */ false,
-         /* .reasoning_prefill =    */ "<think>",
+         /* .prefill =    */ "<think>",
          /* .input =                */
             ("I must get the weather in New York</think>\n"
              "<tool_call>["
@@ -290,7 +290,7 @@ static void test_example_native(testing & t) {
          /* .reasoning_format =     */ COMMON_REASONING_FORMAT_AUTO,
          /* .json_schema =          */ {},
          /* .parallel_tool_calls =  */ true,
-         /* .reasoning_prefill =    */ "<think>",
+         /* .prefill =    */ "<think>",
          /* .input =                */
             ("I must get the weather in New York and San Francisco and a 3 day forecast of each.</think>\nLet me "
              "search that for you."
@@ -340,7 +340,7 @@ static void test_example_native(testing & t) {
                   { "due_date", { { "type", "string" } } } } },
               { "required", { "invoice_number", "amount", "due_date" } } },
          /* .parallel_tool_calls =  */ false,
-         /* .reasoning_prefill =    */ "<think>",
+         /* .prefill =    */ "<think>",
          /* .input =                */
             ("I must produce the invoice in the requested format</think>\n"
              R"({"invoice_number": "INV-2025-001", "amount": 1250.50, "due_date": "2025-12-31"})"),
@@ -368,7 +368,7 @@ static void test_example_native(testing & t) {
                 t.log(line);
             }
 
-            std::string              effective_input = tc.reasoning_prefill + tc.input;
+            std::string              effective_input = tc.prefill + tc.input;
             common_peg_parse_context ctx(effective_input);
             auto                     result = parser.parse(ctx);
 

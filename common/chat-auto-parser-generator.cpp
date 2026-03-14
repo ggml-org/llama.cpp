@@ -46,36 +46,48 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
     data.format           = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.preserved_tokens = autoparser.preserved_tokens;
 
-    // Extract reasoning prefill and detect template artifact start markers.
-    // See docs/autoparser.md "Reasoning Prefill" for details.
+    // Extract what the template appends when add_generation_prompt=true (the generation prompt suffix).
+    std::string gen_prompt_suffix;
+    {
+        template_params tparams;
+        tparams.messages              = json::array({ json{ {"role", "user"}, {"content", "x"} } });
+        tparams.add_generation_prompt = false;
+        tparams.enable_thinking       = inputs.enable_thinking;
+        auto result = compare_variants(tmpl, tparams, [](template_params & p) {
+            p.add_generation_prompt = true;
+        });
+        if (result) {
+            gen_prompt_suffix = result->diff.right;
+        }
+    }
+
+    // Fallback for templates that ignore add_generation_prompt: search the rendered prompt.
+    // Excluded for TOOLS_ONLY: the start tag there is model-generated and may appear in prior turns.
+    const std::string & prompt_to_search =
+        (gen_prompt_suffix.empty() && autoparser.reasoning.mode != reasoning_mode::TOOLS_ONLY)
+            ? data.prompt
+            : gen_prompt_suffix;
+
     bool clear_reasoning_start = false;
     if (inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE &&
         autoparser.reasoning.mode != reasoning_mode::NONE &&
         !autoparser.reasoning.end.empty()) {
-        const auto & r_start = autoparser.reasoning.start;
-        const auto & r_end   = autoparser.reasoning.end;
+        const auto & r_start    = autoparser.reasoning.start;
+        const auto & r_end      = autoparser.reasoning.end;
+        auto         r_end_t    = trim_trailing_whitespace(r_end);
+        auto         r_start_t  = trim_trailing_whitespace(r_start);
 
-        auto prompt_trimmed  = trim_trailing_whitespace(data.prompt);
-        auto r_end_trimmed   = trim_trailing_whitespace(r_end);
-        auto r_start_trimmed = trim_trailing_whitespace(r_start);
+        if (!r_start_t.empty()) {
+            auto start_pos = prompt_to_search.rfind(r_start_t);
+            if (start_pos != std::string::npos) {
+                std::string from_start = prompt_to_search.substr(start_pos);
+                auto         fs_trimmed = trim_trailing_whitespace(from_start);
 
-        if (!r_start_trimmed.empty()) {
-            if (string_ends_with(prompt_trimmed, r_end_trimmed)) {
-                auto before_end = trim_trailing_whitespace(prompt_trimmed.substr(0, prompt_trimmed.size() - r_end_trimmed.size()));
-                if (string_ends_with(before_end, r_start_trimmed)) {
-                    // Start+end at prompt end — use canonical markers to preserve whitespace.
-                    data.reasoning_prefill = r_start + r_end;
-                }
-            }
-            if (data.reasoning_prefill.empty() && string_ends_with(prompt_trimmed, r_start_trimmed)) {
-                auto start_pos = prompt_trimmed.size() - r_start_trimmed.size();
-                data.reasoning_prefill = data.prompt.substr(start_pos);
-            }
-            // Template artifact detection: start marker in prompt but not at end.
-            if (data.reasoning_prefill.empty()) {
-                auto suffix_len = std::min(data.prompt.size(), (size_t) 500);
-                auto suffix     = data.prompt.substr(data.prompt.size() - suffix_len);
-                if (suffix.find(r_start_trimmed) != std::string::npos) {
+                if (string_ends_with(fs_trimmed, r_end_t)) {
+                    data.prefill = r_start + r_end;
+                } else if (string_ends_with(fs_trimmed, r_start_t)) {
+                    data.prefill = from_start;
+                } else {
                     clear_reasoning_start = true;
                 }
             }

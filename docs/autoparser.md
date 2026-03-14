@@ -50,11 +50,11 @@ All structs are defined in [common/chat-auto-parser.h](common/chat-auto-parser.h
 | `TAG_BASED`     | Tag-based: `<think>...</think>` (start can be empty for delimiter-style formats)  |
 | `TOOLS_ONLY`    | Reasoning only appears in tool call responses, not plain content                  |
 
-**Reasoning Prefill**: Extracted in `generate_parser()` by inspecting the rendered prompt suffix. Three cases:
+**Reasoning Prefill**: Extracted in `generate_parser()` using `compare_variants(add_generation_prompt=false, add_generation_prompt=true)` on a minimal single-user-message input to get exactly what the template appends as its generation prompt. The start marker is then located within this suffix using `rfind`. Three outcomes:
 
-1. **Start+end at prompt end** (e.g. `<think></think>`): prefill = canonical `start + end` markers (preserving the analyzer's whitespace, e.g. trailing `\n`). The parser sees reasoning as opened and immediately closed.
-2. **Just start at prompt end** (e.g. `<think>\n`): prefill = extracted from the prompt to preserve trailing whitespace. The parser sees reasoning as already opened.
-3. **Start marker in prompt suffix but not at end** (e.g. Apriel's `<|begin_assistant|>` followed by template boilerplate): the start marker is a template artifact falsely detected by the diff analyzer. It is cleared from the parser so reasoning uses delimiter-style (empty start). The distinction from case 2 vs a genuinely model-generated start marker (e.g. `<think>` for Granite) is whether the marker appears in the prompt suffix at all.
+1. **Start+end in generation prompt** (e.g. `<think></think>\n`): `prefill = start + end`. The parser sees reasoning as opened and immediately closed.
+2. **Only start in generation prompt** (e.g. `<think>\n`): `prefill = from_start` (substring from the marker's position to the end, preserving whitespace). The parser sees reasoning as already open.
+3. **Start marker in the generation prompt but not at its end** (e.g. Apriel's `<|begin_assistant|>` followed by boilerplate): the marker is a template artifact. The start literal is cleared from the parser so reasoning uses delimiter-style (end-only). For templates that ignore `add_generation_prompt` (empty diff), the rendered `data.prompt` is used as fallback — but only for non-TOOLS_ONLY modes, since in TOOLS_ONLY the start tag is model-generated and may appear in prior conversation turns.
 
 The prefill is prepended to model output before PEG parsing, fed to the grammar sampler via `llama_sampler_accept`, and used to determine the reasoning budget sampler's initial state (COUNTING if prefill starts with the reasoning start tokens, IDLE otherwise).
 
@@ -523,7 +523,7 @@ To support a new template format:
 
 ## Edge Cases and Quirks
 
-1. **Reasoning Prefill**: See the `reasoning_mode` enum section above for the full description. Key detail: template artifact detection (case 3) checks the last 500 characters of the rendered prompt for the start marker. If found but not at the very end, the start marker is cleared from the parser.
+1. **Reasoning Prefill**: See the `reasoning_mode` enum section above for the full description. Key detail: the generation prompt suffix is extracted via `compare_variants(add_generation_prompt=false, add_generation_prompt=true)` to avoid false positives from prior conversation turns.
 2. **Per-Call vs Per-Section Markers**: Some templates wrap each tool call individually (`per_call_start/end`); others wrap the entire section (`section_start/end`). T2 (`check_per_call_markers()`) disambiguates by checking if the second call in a two-call output starts with the section marker.
 3. **Python Dict Format**: The Seed template family uses single-quoted JSON (`'key': 'value'`). The `uses_python_dicts` flag causes the PEG builder to register a flexible `json-string` rule accepting both quote styles before any JSON rules are built.
 4. **Tag Boundary Fixing**: `calculate_diff_split()` iteratively adjusts prefix/suffix boundaries to avoid splitting `<tag>` or `[marker]` tokens, ensuring clean extraction.

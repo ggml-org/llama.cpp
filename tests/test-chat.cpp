@@ -1001,8 +1001,8 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
         // already placed the opening tag in the prompt.
         // For lazy grammars, the grammar only activates from the trigger position, so the
         // reasoning prefill is irrelevant — reasoning is handled by the PEG parser.
-        if (!parser.params_.reasoning_prefill.empty() && earliest_trigger_pos == std::string::npos) {
-            constrained = parser.params_.reasoning_prefill + constrained;
+        if (!parser.params_.prefill.empty() && earliest_trigger_pos == std::string::npos) {
+            constrained = parser.params_.prefill + constrained;
         }
 
         // Test the constrained portion against the grammar

@@ -72,7 +72,7 @@ json task_params::to_json(bool only_metrics) const {
             {"chat_format",               common_chat_format_name(chat_parser_params.format)},
             {"reasoning_format",          common_reasoning_format_name(chat_parser_params.reasoning_format)},
             {"reasoning_in_content",      chat_parser_params.reasoning_in_content},
-            {"reasoning_prefill",         chat_parser_params.reasoning_prefill},
+            {"prefill",         chat_parser_params.prefill},
             {"samplers",                  samplers},
             {"speculative.n_max",         speculative.n_max},
             {"speculative.n_min",         speculative.n_min},
@@ -135,7 +135,7 @@ json task_params::to_json(bool only_metrics) const {
         {"chat_format",               common_chat_format_name(chat_parser_params.format)},
         {"reasoning_format",          common_reasoning_format_name(chat_parser_params.reasoning_format)},
         {"reasoning_in_content",      chat_parser_params.reasoning_in_content},
-        {"reasoning_prefill",         chat_parser_params.reasoning_prefill},
+        {"prefill",         chat_parser_params.prefill},
         {"samplers",                  samplers},
         {"speculative.n_max",         speculative.n_max},
         {"speculative.n_min",         speculative.n_min},
@@ -402,8 +402,8 @@ task_params server_task::params_from_json_cmpl(
         }
         params.chat_parser_params.reasoning_format = reasoning_format;
         params.chat_parser_params.reasoning_in_content = params.stream && (reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
-        params.chat_parser_params.reasoning_prefill = json_value(data, "reasoning_prefill", std::string());
-        params.sampling.grammar_prefill = params.chat_parser_params.reasoning_prefill;
+        params.chat_parser_params.prefill = json_value(data, "prefill", std::string());
+        params.sampling.grammar_prefill = params.chat_parser_params.prefill;
         params.chat_parser_params.parse_tool_calls = json_value(data, "parse_tool_calls", false);
         if (data.contains("chat_parser")) {
             params.chat_parser_params.parser.load(data.at("chat_parser").get<std::string>());
