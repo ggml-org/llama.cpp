@@ -317,8 +317,6 @@ static inline HVX_Vector hvx_vec_rmpy_x8_full(HVX_Vector_x8 x, HVX_Vector_x8 y) 
 }
 
 static inline HVX_Vector hvx_vec_rmpy_x8_partial(HVX_Vector_x8 x, HVX_Vector_x8 y, unsigned int n) {
-    return hvx_vec_rmpy_x8_full(x, y);
-
     if (n >= 512)
         return hvx_vec_rmpy_x8_full(x, y);
 
