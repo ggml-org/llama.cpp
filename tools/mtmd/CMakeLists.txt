@@ -62,6 +62,10 @@ set_target_properties(mtmd
     PROPERTIES
     PUBLIC_HEADER "${MTMD_PUBLIC_HEADERS}")
 
+set_target_properties(mtmd
+    PROPERTIES
+    PRIVATE_HEADER debug/mtmd-debug.h)
+
 install(TARGETS mtmd LIBRARY PUBLIC_HEADER)
 
 if (NOT MSVC)
@@ -96,3 +100,9 @@ if(LLAMA_TOOLS_INSTALL)
 endif()
 target_link_libraries  (${TARGET} PRIVATE common mtmd Threads::Threads)
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
+
+# mtmd-debug tool
+add_executable(llama-mtmd-debug debug/mtmd-debug.cpp)
+set_target_properties(llama-mtmd-debug PROPERTIES OUTPUT_NAME llama-mtmd-debug)
+target_link_libraries(llama-mtmd-debug PRIVATE common mtmd Threads::Threads)
+target_compile_features(llama-mtmd-debug PRIVATE cxx_std_17)
