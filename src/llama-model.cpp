@@ -51,7 +51,8 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     const std::regex pattern_ffn_up_gate_weight("blk\\.\\d*\\.ffn_(up|gate)(_exps)?.weight");
     const std::regex pattern_ffn_up_gate_bias("blk\\.\\d*\\.ffn_(up|gate)(_exps)?.bias");
     const std::regex pattern_ffn_down_weight("blk\\.\\d*\\.ffn_down(_exps)?.weight");
-    const std::regex pattern_ffn_down_bias("blk\\.\\d*\\.ffn_down(_exps)?.bias");
+    const std::regex pattern_ffn_down_bias("blk\\.\\d*\\.ffn_down.bias");
+    const std::regex pattern_ffn_down_exps_bias("blk\\.\\d*\\.ffn_down_exps.bias");
     const std::regex pattern_output_weight("output\\.weight");
     const std::regex pattern_output_bias("output\\.bias");
 
@@ -128,6 +129,9 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
         }
         if (std::regex_match(tensor_name, pattern_ffn_down_bias)) {
             return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_MIRRORED);
+        }
+        if (std::regex_match(tensor_name, pattern_ffn_down_exps_bias)) {
+            return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_PARTIAL);
         }
 
         // output
