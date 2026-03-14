@@ -93,12 +93,7 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_bf16(
         ggml_cuda_memcpy_1<sizeof(tmp)>(tmp, K_bf16 + k_KQ_0 + (threadIdx.x % nthreads)*cpy_ne);
 #pragma unroll
         for (int k_KQ_1 = 0; k_KQ_1 < cpy_ne; ++k_KQ_1) {
-#ifdef V_DOT2_F32_F16_AVAILABLE
-            const float2 bf16_f2 = __bfloat1622float2(tmp[k_KQ_1]);
-            ggml_cuda_mad(sum, make_half2(bf16_f2.x, bf16_f2.y), ((const half2 *) Q_v)[k_KQ_0/nthreads + k_KQ_1]);
-#else
-            ggml_cuda_mad(sum, __bfloat1622float2(tmp[k_KQ_1]), ((const float2 *) Q_v)[k_KQ_0/nthreads + k_KQ_1]);
-#endif // V_DOT2_F32_F16_AVAILABLE
+            ggml_cuda_mad(sum, ggml_cuda_cast<float2>(tmp[k_KQ_1]), ((const float2 *) Q_v)[k_KQ_0/nthreads + k_KQ_1]);
         }
     }
 
@@ -354,27 +349,14 @@ static __device__ __forceinline__ void dequantize_V_f16(const void * __restrict_
 
 template <typename T, int ne>
 static __device__ __forceinline__ void dequantize_V_bf16(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
-    if constexpr (std::is_same_v<T, half>) {
-        static_assert(ne % 2 == 0, "bad ne");
-        __align__(16) nv_bfloat162 tmp[ne/2];
-        ggml_cuda_memcpy_1<ne*sizeof(nv_bfloat16)>(tmp, (const nv_bfloat16 *) vx + i0);
-        half2 * dst_h2 = (half2 *) dst;
+    static_assert(std::is_same_v<T, float>, "BF16 V dequantization only supports float output");
+    static_assert(ne % 2 == 0, "bad ne");
+    __align__(16) nv_bfloat162 tmp[ne/2];
+    ggml_cuda_memcpy_1<ne*sizeof(nv_bfloat16)>(tmp, (const nv_bfloat16 *) vx + i0);
+    float2 * dst_f2 = (float2 *) dst;
 #pragma unroll
-        for (int l = 0; l < ne/2; ++l) {
-            const float2 f2 = __bfloat1622float2(tmp[l]);
-            dst_h2[l] = make_half2(f2.x, f2.y);
-        }
-    } else if constexpr (std::is_same_v<T, float>) {
-        static_assert(ne % 2 == 0, "bad ne");
-        __align__(16) nv_bfloat162 tmp[ne/2];
-        ggml_cuda_memcpy_1<ne*sizeof(nv_bfloat16)>(tmp, (const nv_bfloat16 *) vx + i0);
-        float2 * dst_f2 = (float2 *) dst;
-#pragma unroll
-        for (int l = 0; l < ne/2; ++l) {
-            dst_f2[l] = __bfloat1622float2(tmp[l]);
-        }
-    } else {
-        static_assert(std::is_same_v<T, void>, "unsupported type");
+    for (int l = 0; l < ne/2; ++l) {
+        dst_f2[l] = ggml_cuda_cast<float2>(tmp[l]);
     }
 }
 
@@ -842,8 +824,7 @@ static __global__ void flash_attn_combine_results(
 template <int DV, int ncols1, int ncols2>
 void launch_fattn(
     ggml_backend_cuda_context & ctx, ggml_tensor * dst, fattn_kernel_t fattn_kernel, const int nwarps, const size_t nbytes_shared,
-    const int nbatch_fa, const bool need_f16_K, const bool need_f16_V, const bool stream_k, const int warp_size = WARP_SIZE,
-    const bool need_bf16_K = false, const bool need_bf16_V = false
+    const int nbatch_fa, const bool need_f16_K, const bool need_f16_V, const bool stream_k, const int warp_size = WARP_SIZE
 ) {
     constexpr int ncols = ncols1 * ncols2;
 
@@ -860,8 +841,6 @@ void launch_fattn(
 
     GGML_ASSERT(Q->type == GGML_TYPE_F32);
     GGML_ASSERT(KQV->type == GGML_TYPE_F32);
-    GGML_ASSERT(!(need_f16_K && need_bf16_K));
-    GGML_ASSERT(!(need_f16_V && need_bf16_V));
 
     GGML_ASSERT(Q->nb[0] == ggml_element_size(Q));
     GGML_ASSERT(K->nb[0] == ggml_element_size(K));
@@ -875,13 +854,11 @@ void launch_fattn(
     const int cc  = ggml_cuda_info().devices[id].cc;
     const int nsm = ggml_cuda_info().devices[id].nsm;
 
-    ggml_cuda_pool_alloc<half>          K_f16(pool);
-    ggml_cuda_pool_alloc<half>          V_f16(pool);
-    ggml_cuda_pool_alloc<nv_bfloat16>   K_bf16(pool);
-    ggml_cuda_pool_alloc<nv_bfloat16>   V_bf16(pool);
-    ggml_cuda_pool_alloc<int>           KV_max(pool);
-    ggml_cuda_pool_alloc<float>         dst_tmp(pool);
-    ggml_cuda_pool_alloc<float2>        dst_tmp_meta(pool);
+    ggml_cuda_pool_alloc<half>   K_f16(pool);
+    ggml_cuda_pool_alloc<half>   V_f16(pool);
+    ggml_cuda_pool_alloc<int>    KV_max(pool);
+    ggml_cuda_pool_alloc<float>  dst_tmp(pool);
+    ggml_cuda_pool_alloc<float2> dst_tmp_meta(pool);
 
     const char * K_data = (const char *) K->data;
     size_t nb11 = K->nb[1];
@@ -952,68 +929,6 @@ void launch_fattn(
                 nb23 = V->ne[2] * nb22;
             }
             V_data = (char *) V_f16.ptr;
-        }
-    }
-
-    if (need_bf16_K && K->type != GGML_TYPE_BF16) {
-        const size_t bs = ggml_blck_size(K->type);
-        const size_t ts = ggml_type_size(K->type);
-
-        K_bf16.alloc(ggml_nelements(K));
-        if (ggml_is_contiguously_allocated(K)) {
-            to_bf16_cuda_t to_bf16 = ggml_get_to_bf16_cuda(K->type);
-            to_bf16(K_data, K_bf16.ptr, ggml_nelements(K), main_stream);
-
-            nb11 = nb11*bs*sizeof(nv_bfloat16)/ts;
-            nb12 = nb12*bs*sizeof(nv_bfloat16)/ts;
-            nb13 = nb13*bs*sizeof(nv_bfloat16)/ts;
-        } else {
-            GGML_ASSERT(K->nb[0] == ts);
-            to_bf16_nc_cuda_t to_bf16 = ggml_get_to_bf16_nc_cuda(K->type);
-            const int64_t s01 = nb11 / ts;
-            const int64_t s02 = nb12 / ts;
-            const int64_t s03 = nb13 / ts;
-            to_bf16(K_data, K_bf16.ptr, K->ne[0], K->ne[1], K->ne[2], K->ne[3], s01, s02, s03, main_stream);
-
-            nb11 = K->ne[0] * sizeof(nv_bfloat16);
-            nb12 = K->ne[1] * nb11;
-            nb13 = K->ne[2] * nb12;
-        }
-        K_data = (char *) K_bf16.ptr;
-    }
-
-    if (need_bf16_V && V->type != GGML_TYPE_BF16) {
-        if (V_is_K_view) {
-            V_data = K_data;
-            nb21   = nb11;
-            nb22   = nb12;
-            nb23   = nb13;
-        } else {
-            const size_t bs = ggml_blck_size(V->type);
-            const size_t ts = ggml_type_size(V->type);
-
-            V_bf16.alloc(ggml_nelements(V));
-            if (ggml_is_contiguously_allocated(V)) {
-                to_bf16_cuda_t to_bf16 = ggml_get_to_bf16_cuda(V->type);
-                to_bf16(V_data, V_bf16.ptr, ggml_nelements(V), main_stream);
-                V_data = (char *) V_bf16.ptr;
-
-                nb21 = nb21*bs*sizeof(nv_bfloat16)/ts;
-                nb22 = nb22*bs*sizeof(nv_bfloat16)/ts;
-                nb23 = nb23*bs*sizeof(nv_bfloat16)/ts;
-            } else {
-                GGML_ASSERT(V->nb[0] == ts);
-                to_bf16_nc_cuda_t to_bf16 = ggml_get_to_bf16_nc_cuda(V->type);
-                const int64_t s01 = nb21 / ts;
-                const int64_t s02 = nb22 / ts;
-                const int64_t s03 = nb23 / ts;
-                to_bf16(V_data, V_bf16.ptr, V->ne[0], V->ne[1], V->ne[2], V->ne[3], s01, s02, s03, main_stream);
-
-                nb21 = V->ne[0] * sizeof(nv_bfloat16);
-                nb22 = V->ne[1] * nb21;
-                nb23 = V->ne[2] * nb22;
-            }
-            V_data = (char *) V_bf16.ptr;
         }
     }
 
