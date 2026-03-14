@@ -409,6 +409,7 @@ struct llama_layer {
     struct ggml_tensor * ffn_gate_shexp_s = nullptr;
     struct ggml_tensor * ffn_up_shexp_s   = nullptr;
     struct ggml_tensor * ffn_down_shexp_s = nullptr;
+    struct ggml_tensor * ssm_in_s  = nullptr;
     struct ggml_tensor * ssm_out_s  = nullptr;
     struct ggml_tensor * ssm_alpha_s = nullptr;
     struct ggml_tensor * ssm_beta_s  = nullptr;
