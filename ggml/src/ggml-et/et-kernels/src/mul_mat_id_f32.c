@@ -90,14 +90,6 @@ int entry_point(struct ggml_et_mul_mat_id_params* params, void* env) {
         return -1;
     }
 
-    // FIXME: temporary, run F16 in single thread
-    if (src0->type == GGML_TYPE_F16) {
-        effective_num_threads = 1;
-        if (effective_thread_id != 0) {
-            return 0;
-        }
-    }
-
     // Get data pointers
     const void* src0_data = src0->data;           // Expert matrices (Q8_0/F16/F32)
     const float* src1_data = (const float*)src1->data;  // Activations (F32)
@@ -219,62 +211,58 @@ int entry_point(struct ggml_et_mul_mat_id_params* params, void* env) {
             const int64_t col_idx = n_idx % src1->ne[1];
             float sum = 0.0f;
 
-            // Process full blocks
-            for (int64_t kb = 0; kb < K_blocks; kb++) {
-                // Get pointer to activation column at row kb*block_size
-                const float* b_col_start = (const float*)((const char*)src1_data +
-                                                         (kb * block_size) * src1->nb[0] +
-                                                         col_idx * nb11 + batch_idx * nb12);
+            // Type switch hoisted outside block loop: one branch per element, not per block
+            const char* expert_row_base = (const char*)src0_data + m * nb01 + expert_id * nb02;
 
-                // Compute block dot product based on expert matrix type
-                switch (src0->type) {
-                    case GGML_TYPE_Q8_0: {
-                        const block_q8_0* expert_row = (const block_q8_0*)((const char*)src0_data +
-                                                                           m * nb01 + expert_id * nb02);
-                        sum += compute_block_dot_product_q8_0(&expert_row[kb], b_col_start);
-                        break;
+            switch (src0->type) {
+                case GGML_TYPE_Q8_0: {
+                    const block_q8_0* q8_row = (const block_q8_0*)expert_row_base;
+                    for (int64_t kb = 0; kb < K_blocks; kb++) {
+                        const float* b_col_ptr = (const float*)((const char*)src1_data +
+                                                               (kb * block_size) * sizeof(float) +
+                                                               col_idx * nb11 + batch_idx * nb12);
+                        sum += compute_block_dot_product_q8_0(&q8_row[kb], b_col_ptr);
                     }
-                    case GGML_TYPE_F16: {
-                        const uint16_t* expert_row = (const uint16_t*)((const char*)src0_data +
-                                                                       m * nb01 + expert_id * nb02);
-                        sum += compute_block_dot_product_f16_naive(&expert_row[kb * block_size], b_col_start);
-                        break;
-                    }
-                    case GGML_TYPE_F32: {
-                        const float* expert_row = (const float*)((const char*)src0_data +
-                                                                 m * nb01 + expert_id * nb02);
-                        sum += compute_block_dot_product_f32(&expert_row[kb * block_size], b_col_start);
-                        break;
-                    }
-                    default:
-                        return -1;
+                    break;
                 }
-            }
-
-            // Handle partial block (remainder) for F32 and F16
-            const int64_t K_remainder = K % block_size;
-            if (K_remainder > 0 && src0->type != GGML_TYPE_Q8_0) {
-                const int64_t remainder_offset = K_blocks * block_size;
-                const float* b_col_start = (const float*)((const char*)src1_data +
-                                                         remainder_offset * src1->nb[0] +
-                                                         col_idx * nb11 + batch_idx * nb12);
-
-                switch (src0->type) {
-                    case GGML_TYPE_F16: {
-                        const uint16_t* expert_row = (const uint16_t*)((const char*)src0_data +
-                                                                       m * nb01 + expert_id * nb02);
-                        sum += compute_block_dot_product_f16_partial(&expert_row[remainder_offset], b_col_start, K_remainder);
-                        break;
+                case GGML_TYPE_F16: {
+                    const uint16_t* f16_row = (const uint16_t*)expert_row_base;
+                    const int64_t K_remainder = K % block_size;
+                    for (int64_t kb = 0; kb < K_blocks; kb++) {
+                        const float* b_col_ptr = (const float*)((const char*)src1_data +
+                                                               (kb * block_size) * sizeof(float) +
+                                                               col_idx * nb11 + batch_idx * nb12);
+                        sum += compute_block_dot_product_f16_naive(&f16_row[kb * block_size], b_col_ptr);
                     }
-                    case GGML_TYPE_F32: {
-                        const float* expert_row = (const float*)((const char*)src0_data +
-                                                                 m * nb01 + expert_id * nb02);
-                        sum += compute_block_dot_product_f32_partial(&expert_row[remainder_offset], b_col_start, K_remainder);
-                        break;
+                    if (K_remainder > 0) {
+                        const int64_t offset = K_blocks * block_size;
+                        const float* b_col_ptr = (const float*)((const char*)src1_data +
+                                                               offset * sizeof(float) +
+                                                               col_idx * nb11 + batch_idx * nb12);
+                        sum += compute_block_dot_product_f16_partial(&f16_row[offset], b_col_ptr, K_remainder);
                     }
-                    default:
-                        break;
+                    break;
                 }
+                case GGML_TYPE_F32: {
+                    const float* f32_row = (const float*)expert_row_base;
+                    const int64_t K_remainder = K % block_size;
+                    for (int64_t kb = 0; kb < K_blocks; kb++) {
+                        const float* b_col_ptr = (const float*)((const char*)src1_data +
+                                                               (kb * block_size) * sizeof(float) +
+                                                               col_idx * nb11 + batch_idx * nb12);
+                        sum += compute_block_dot_product_f32(&f32_row[kb * block_size], b_col_ptr);
+                    }
+                    if (K_remainder > 0) {
+                        const int64_t offset = K_blocks * block_size;
+                        const float* b_col_ptr = (const float*)((const char*)src1_data +
+                                                               offset * sizeof(float) +
+                                                               col_idx * nb11 + batch_idx * nb12);
+                        sum += compute_block_dot_product_f32_partial(&f32_row[offset], b_col_ptr, K_remainder);
+                    }
+                    break;
+                }
+                default:
+                    return -1;
             }
 
             // Store result using atomic store to avoid cache coherency issues
