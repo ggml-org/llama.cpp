@@ -284,9 +284,9 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .nrows                    = 1,
     },
     [GGML_TYPE_MXFP6_E2M3] = {
-        .from_float               = quantize_row_mxfp6_e2m3,
-        .to_float                 = dequantize_row_mxfp6_e2m3_cpu,
-        .vec_dot                  = ggml_vec_dot_mxfp6_e2m3_q8_0,
+        .from_float               = quantize_row_mxfp6,
+        .to_float                 = dequantize_row_mxfp6_cpu,
+        .vec_dot                  = ggml_vec_dot_mxfp6_q8_0,
         .vec_dot_type             = GGML_TYPE_Q8_0,
         .nrows                    = 1,
     },

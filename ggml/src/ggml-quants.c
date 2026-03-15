@@ -797,11 +797,11 @@ void dequantize_row_mxfp8(const block_mxfp8 * GGML_RESTRICT x, float * GGML_REST
     dequantize_row_mxfp8_impl(x, y, k, &mxfp8_e4m3_traits);
 }
 
-void quantize_row_mxfp6_e2m3_ref(const float * GGML_RESTRICT x, block_mxfp6 * GGML_RESTRICT y, int64_t k) {
+void quantize_row_mxfp6_ref(const float * GGML_RESTRICT x, block_mxfp6 * GGML_RESTRICT y, int64_t k) {
     quantize_row_mxfp6_impl(x, y, k, &mxfp6_e2m3_traits);
 }
 
-void dequantize_row_mxfp6_e2m3(const block_mxfp6 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+void dequantize_row_mxfp6(const block_mxfp6 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
     dequantize_row_mxfp6_impl(x, y, k, &mxfp6_e2m3_traits);
 }
 
@@ -2627,9 +2627,9 @@ size_t quantize_mxfp8(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
     return nrow * ggml_row_size(GGML_TYPE_MXFP8_E4M3, n_per_row);
 }
 
-size_t quantize_mxfp6_e2m3(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+size_t quantize_mxfp6(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
     GGML_UNUSED(quant_weights);
-    quantize_row_mxfp6_e2m3_ref(src, dst, (int64_t)nrow*n_per_row);
+    quantize_row_mxfp6_ref(src, dst, (int64_t)nrow*n_per_row);
     return nrow * ggml_row_size(GGML_TYPE_MXFP6_E2M3, n_per_row);
 }
 

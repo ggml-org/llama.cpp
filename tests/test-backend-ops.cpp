@@ -181,6 +181,7 @@ static void init_tensor_mxfp_soa(ggml_tensor * tensor, float min = -1.0f, float 
     const size_t  block_size = ggml_type_size(tensor->type);
     const size_t  head_row_sz = ggml_row_size(tensor->type, tensor->ne[0]);
     if (soa_bytes == 0) { soa_bytes = head_row_sz; }
+    GGML_ASSERT(soa_bytes % block_size == 0 && "soa_bytes must be a multiple of block_size");
     const int64_t soa_elems  = (int64_t)(soa_bytes / block_size) * qk;
 
     std::default_random_engine gen(42);

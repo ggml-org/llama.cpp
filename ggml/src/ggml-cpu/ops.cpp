@@ -5061,14 +5061,13 @@ static void ggml_compute_forward_set_rows_f32(
                 char * dst_row = ((char *) dst->data + i1*nb1 + i02*nb2 + i03*nb3);
 
                 if (apply_hadamard) {
-                    GGML_ASSERT(nc <= 1024);
-                    float tmp[1024];
-                    memcpy(tmp, src_row, nc * sizeof(float));
-                    ggml_apply_hadamard_blocks(tmp, nc);
+                    std::vector<float> tmp(nc);
+                    memcpy(tmp.data(), src_row, nc * sizeof(float));
+                    ggml_apply_hadamard_blocks(tmp.data(), nc);
                     if (mxfp_soa_quantize) {
-                        mxfp_soa_quantize(tmp, dst_row, nc);
+                        mxfp_soa_quantize(tmp.data(), dst_row, nc);
                     } else {
-                        from_float(tmp, dst_row, nc);
+                        from_float(tmp.data(), dst_row, nc);
                     }
                 } else {
                     if (mxfp_soa_quantize) {
@@ -8418,6 +8417,10 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
 
     int ith = params->ith;
 
+    // Pre-allocate dequant buffers for MXFP SoA (avoids per-iteration allocation)
+    std::vector<float> k_dequant_buf(is_mxfp_k ? mxfp.k_soa_elems : 0);
+    std::vector<float> v_dequant_buf(is_mxfp_v ? mxfp.v_soa_elems : 0);
+
     for (int ir = ir0; ir < ir1; ++ir) {
         // q indices
         const int iq3 = ir/(neq2*neq1);
@@ -8497,10 +8500,8 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
                 const char * k_soa_base = mxfp.k_multihead
                     ? ((const char *) k->data + ic*nbk1 + ik3*nbk3)
                     : k_data;
-                float k_soa_f32[4096];
-                GGML_ASSERT(mxfp.k_soa_elems <= 4096);
-                mxfp.k_dequantize(k_soa_base, k_soa_f32, mxfp.k_soa_elems);
-                const float * k_head = k_soa_f32 + (mxfp.k_multihead ? ik2 * DK : 0);
+                mxfp.k_dequantize(k_soa_base, k_dequant_buf.data(), mxfp.k_soa_elems);
+                const float * k_head = k_dequant_buf.data() + (mxfp.k_multihead ? ik2 * DK : 0);
                 ggml_vec_dot_f32(DK, &s, 0, k_head, 0, Q_f32, 0, 1);
             } else {
                 kq_vec_dot(DK, &s, 0, k_data, 0, Q_q, 0, 1);
@@ -8554,10 +8555,8 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
                     const char * v_soa_base = mxfp.v_multihead
                         ? ((const char *) v->data + ic*nbv1 + iv3*nbv3)
                         : v_data;
-                    float v_soa_f32[4096];
-                    GGML_ASSERT(mxfp.v_soa_elems <= 4096);
-                    mxfp.v_dequantize(v_soa_base, v_soa_f32, mxfp.v_soa_elems);
-                    ggml_vec_mad_f32(DV, VKQ32, v_soa_f32 + (mxfp.v_multihead ? iv2 * DV : 0), vs);
+                    mxfp.v_dequantize(v_soa_base, v_dequant_buf.data(), mxfp.v_soa_elems);
+                    ggml_vec_mad_f32(DV, VKQ32, v_dequant_buf.data() + (mxfp.v_multihead ? iv2 * DV : 0), vs);
                 } else if (v_to_float) {
                     v_to_float(v_data, V32, DV);
                     ggml_vec_mad_f32(DV, VKQ32, V32, vs);
@@ -8765,7 +8764,8 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
                         ggml_apply_hadamard_blocks(Q_f32 + tq * DK, DK);
                     }
                     // SoA round-trip: quantize Q to SoA, then dequant back to float.
-                    uint8_t q_mxfp_buf[1024];
+                    uint8_t q_mxfp_buf[512]; // max: DK=256 * 33/32 = 264 bytes (MXFP8)
+                    GGML_ASSERT(ggml_row_size(k->type, DK) <= sizeof(q_mxfp_buf));
                     mxfp.q_quantize(Q_f32 + tq * DK, q_mxfp_buf, DK);
                     mxfp.k_dequantize(q_mxfp_buf, Q_f32 + tq * DK, DK);
                 }

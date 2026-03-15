@@ -3995,7 +3995,7 @@ static inline void ggml_vec_dot_mxfp6_q8_0_avx2(
 }
 #endif
 
-void ggml_vec_dot_mxfp6_e2m3_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void ggml_vec_dot_mxfp6_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc); UNUSED(bs); UNUSED(bx); UNUSED(by);
 #if defined(__AVX2__)
@@ -4004,7 +4004,7 @@ void ggml_vec_dot_mxfp6_e2m3_q8_0(int n, float * GGML_RESTRICT s, size_t bs, con
         MXFP6_E2M3_EXP_MASK, MXFP6_E2M3_MANT_MASK, MXFP6_E2M3_EXP_SHIFT,
         MXFP6_E2M3_IEEE_EXP_OFF, MXFP6_E2M3_MANT_SHIFT, MXFP6_E2M3_SUB_SCALE);
 #else
-    ggml_vec_dot_mxfp6_e2m3_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
+    ggml_vec_dot_mxfp6_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
 #endif
 }
 
@@ -4130,13 +4130,13 @@ void dequantize_row_mxfp8_cpu(const void * GGML_RESTRICT x, float * GGML_RESTRIC
 #endif
 }
 
-void dequantize_row_mxfp6_e2m3_cpu(const void * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+void dequantize_row_mxfp6_cpu(const void * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
 #if defined(__AVX2__)
     dequantize_row_mxfp6_avx2(x, y, k, sizeof(block_mxfp6),
         MXFP6_E2M3_EXP_MASK, MXFP6_E2M3_MANT_MASK, MXFP6_E2M3_EXP_SHIFT,
         MXFP6_E2M3_IEEE_EXP_OFF, MXFP6_E2M3_MANT_SHIFT, MXFP6_E2M3_SUB_SCALE);
 #else
-    dequantize_row_mxfp6_e2m3_cpu_generic(x, y, k);
+    dequantize_row_mxfp6_cpu_generic(x, y, k);
 #endif
 }
 

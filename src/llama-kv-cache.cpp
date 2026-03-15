@@ -141,6 +141,7 @@ llama_kv_cache::llama_kv_cache(
         const bool is_mxfp_k = ggml_is_type_mxfp(type_k);
         if (is_mxfp_k) {
             const int qk = (int)ggml_blck_size(type_k);              // 32 for all MXFP types
+            GGML_ASSERT(n_embd_k_gqa % qk == 0 && "MXFP K cache requires n_embd_k_gqa divisible by block size");
             const int blocks = (int)n_embd_k_gqa / qk;
             const int blocks_aligned = (blocks + 15) & ~15;          // align to 16
             n_embd_k_alloc = (uint32_t)(blocks_aligned * qk);
