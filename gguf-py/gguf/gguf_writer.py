@@ -82,6 +82,20 @@ class GGUFWriter:
         GGUFValueType.FLOAT64: "d",
         GGUFValueType.BOOL:    "?",
     }
+    _integer_value_types = {
+        GGUFValueType.UINT8,
+        GGUFValueType.INT8,
+        GGUFValueType.UINT16,
+        GGUFValueType.INT16,
+        GGUFValueType.UINT32,
+        GGUFValueType.INT32,
+        GGUFValueType.UINT64,
+        GGUFValueType.INT64,
+    }
+    _float_value_types = {
+        GGUFValueType.FLOAT32,
+        GGUFValueType.FLOAT64,
+    }
 
     def __init__(
         self, path: os.PathLike[str] | str | None, arch: str, use_temp_file: bool = False, endianess: GGUFEndian = GGUFEndian.LITTLE,
@@ -278,7 +292,40 @@ class GGUFWriter:
         if any(key in kv_data for kv_data in self.kv_data):
             logger.warning(f'Duplicated key name {key!r}, overwriting it with new value {val!r} of type {vtype.name}')
 
+        if not self._is_valid_metadata_value(val, vtype, sub_type=sub_type):
+            raise ValueError(
+                f"Invalid GGUF metadata value for key {key!r}: declared {vtype.name}, got {type(val).__name__}"
+            )
+
         self.kv_data[0][key] = GGUFValue(value=val, type=vtype, sub_type=sub_type)
+
+    @classmethod
+    def _is_valid_metadata_value(
+        cls, val: Any, vtype: GGUFValueType, sub_type: GGUFValueType | None = None
+    ) -> bool:
+        if vtype == GGUFValueType.STRING:
+            return isinstance(val, (str, bytes, bytearray))
+        if vtype == GGUFValueType.ARRAY:
+            if not isinstance(val, Sequence):
+                return False
+            if len(val) == 0:
+                return False
+            if sub_type is not None:
+                return all(cls._is_valid_metadata_value(item, sub_type) for item in val)
+            if isinstance(val, bytes):
+                return True
+            try:
+                item_type = GGUFValueType.get_type(val[0])
+                return all(GGUFValueType.get_type(item) is item_type for item in val[1:])
+            except ValueError:
+                return False
+        if vtype == GGUFValueType.BOOL:
+            return isinstance(val, (bool, np.bool_))
+        if vtype in cls._integer_value_types:
+            return isinstance(val, (int, np.integer)) and not isinstance(val, (bool, np.bool_))
+        if vtype in cls._float_value_types:
+            return isinstance(val, (float, np.floating))
+        return True
 
     def add_uint8(self, key: str, val: int) -> None:
         self.add_key_value(key,val, GGUFValueType.UINT8)
