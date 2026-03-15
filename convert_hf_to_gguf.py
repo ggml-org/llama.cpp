@@ -1444,6 +1444,9 @@ class TextModel(ModelBase):
         if chkhsh == "e4d54df1ebc1f2b91acd986c5b51aa50837d5faf7c7398e73c1f9e9ee5d19869":
             # ref: https://huggingface.co/kakaocorp/kanana-2-30b-a3b-instruct-2601
             res = "kanana2"
+        if chkhsh == "62f6fb0a6fd5098caeabb19b07a5c1099cafc8b9c40eab6ea89ece4ec02fbc57":
+            # ref: https://huggingface.co/sarvamai/sarvam-30b
+            res = "sarvam-moe"
 
         if res is None:
             logger.warning("\n")
@@ -10339,6 +10342,112 @@ class BailingMoeV2Model(TextModel):
             return
 
         if name.endswith(".expert_bias"):
+            name = name.replace(".expert_bias", ".expert_bias.bias")
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+
+        if self._experts is not None:
+            # flatten `list[dict[str, Tensor]]` into `list[str]`
+            experts = [k for d in self._experts for k in d.keys()]
+            if len(experts) > 0:
+                raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@ModelBase.register("SarvamMoEForCausalLM", "modeling_sarvam_moe.SarvamMoEForCausalLM")
+class SarvamMoEModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.SARVAM_MOE
+
+    @staticmethod
+    def _build_gpt2_byte_encoder() -> dict[int, str]:
+        """Build GPT-2 bytes_to_unicode mapping (cached on first call)."""
+        bs = list(range(ord("!"), ord("~") + 1)) + list(range(ord("¡"), ord("¬") + 1)) + list(range(ord("®"), ord("ÿ") + 1))
+        cs = bs[:]
+        n = 0
+        for b in range(256):
+            if b not in bs:
+                bs.append(b)
+                cs.append(256 + n)
+                n += 1
+        return dict(zip(bs, [chr(c) for c in cs]))
+
+    def _sp_to_gpt2(self, token: str) -> str:
+        """Convert SentencePiece-style token (▁ = space) to GPT-2 byte-level encoding."""
+        if not hasattr(self, '_byte_encoder'):
+            self._byte_encoder = self._build_gpt2_byte_encoder()
+        token = token.replace("\u2581", " ")
+        return "".join(self._byte_encoder[b] for b in token.encode("utf-8"))
+
+    def set_vocab(self):
+        # Sarvam uses SentencePiece-style BPE (▁ as space) but llama.cpp's BPE
+        # expects GPT-2 byte-level encoding. Convert tokens and merges.
+        tokens, toktypes, tokpre = self.get_vocab_base()
+        for i, toktype in enumerate(toktypes):
+            if toktype == gguf.TokenType.NORMAL:
+                tokens[i] = self._sp_to_gpt2(tokens[i])
+        self.gguf_writer.add_tokenizer_model("gpt2")
+        self.gguf_writer.add_tokenizer_pre(tokpre)
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_types(toktypes)
+        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        # Convert merges from SentencePiece to GPT-2 encoding
+        special_vocab.merges = [
+            " ".join(self._sp_to_gpt2(part) for part in merge.split(" "))
+            for merge in special_vocab.merges
+        ]
+        special_vocab.add_to_gguf(self.gguf_writer)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+        if (rope_dim := hparams.get("head_dim")) is None:
+            rope_dim = hparams["hidden_size"] // hparams["num_attention_heads"]
+
+        # Sarvam uses full rotary embedding (no partial_rotary_factor)
+        self.gguf_writer.add_rope_dimension_count(rope_dim)
+        self.gguf_writer.add_leading_dense_block_count(hparams["first_k_dense_replace"])
+        self.gguf_writer.add_vocab_size(hparams["vocab_size"])
+        self.gguf_writer.add_expert_feed_forward_length(hparams["moe_intermediate_size"])
+        self.gguf_writer.add_expert_shared_feed_forward_length(hparams.get("moe_shared_expert_intermediate_size", hparams["moe_intermediate_size"] * hparams["num_shared_experts"]))
+        self.gguf_writer.add_expert_weights_scale(hparams["routed_scaling_factor"])
+        self.gguf_writer.add_expert_shared_count(hparams["num_shared_experts"])
+        self.gguf_writer.add_expert_weights_norm(hparams["norm_topk_prob"])
+        self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+
+    _experts: list[dict[str, Tensor]] | None = None
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if "mlp.experts" in name:
+            n_experts = self.find_hparam(["num_local_experts", "num_experts"])
+            assert bid is not None
+
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+
+            self._experts[bid][name] = data_torch
+
+            if len(self._experts[bid]) >= n_experts * 3:
+                # merge the experts into a single 3d tensor
+                for w_name in ["down_proj", "gate_proj", "up_proj"]:
+                    datas: list[Tensor] = []
+
+                    for xid in range(n_experts):
+                        ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
+                        datas.append(self._experts[bid][ename])
+                        del self._experts[bid][ename]
+
+                    data_torch = torch.stack(datas, dim=0)
+
+                    merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
+
+                    yield from super().modify_tensors(data_torch, merged_name, bid)
+            return
+
+        if name.endswith(".expert_bias"):
+            # Zero-mean normalization for expert bias (Sarvam-specific)
+            data_torch = data_torch - data_torch.mean()
             name = name.replace(".expert_bias", ".expert_bias.bias")
 
         yield from super().modify_tensors(data_torch, name, bid)
