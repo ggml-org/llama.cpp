@@ -210,6 +210,7 @@ def test_completion_with_response_format(response_format: dict, n_predicted: int
 def test_completion_with_json_schema(jinja: bool, json_schema: dict, n_predicted: int, re_content: str):
     global server
     server.jinja = jinja
+    server.debug = True
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
         "max_tokens": n_predicted,

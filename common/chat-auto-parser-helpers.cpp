@@ -1,9 +1,11 @@
 #include "chat-auto-parser-helpers.h"
 
 #include "chat-auto-parser.h"
+#include "chat-peg-parser.h"
 #include "chat.h"
 #include "log.h"
 #include "nlohmann/json.hpp"
+#include "peg-parser.h"
 
 #include <cctype>
 #include <numeric>
@@ -291,10 +293,26 @@ std::vector<segment> prune_whitespace_segments(const std::vector<segment> & segm
     return result;
 }
 
+common_peg_parser wrap_for_generation_prompt(common_chat_peg_builder &             p,
+                                             const common_peg_parser &             prs,
+                                             const autoparser::generation_params & inputs,
+                                             const autoparser::analyze_reasoning & reasoning) {
+    auto parser = prs;
+    if (!inputs.generation_prompt.empty()) {
+        size_t end_pos = inputs.generation_prompt.size();
+        if (!reasoning.start.empty() && inputs.generation_prompt.find(reasoning.start) != std::string::npos) {
+            end_pos = inputs.generation_prompt.find(reasoning.start);
+        }
+        std::string cut_genprompt = inputs.generation_prompt.substr(0, end_pos);
+        parser                    = p.literal(cut_genprompt) + parser;
+    }
+    return parser;
+}
+
 namespace autoparser {
 
 std::string apply_template(const common_chat_template & tmpl, const template_params & params) {
-    templates_params tmpl_params;
+    generation_params tmpl_params;
     tmpl_params.messages              = params.messages;
     tmpl_params.tools                 = params.tools;
     tmpl_params.add_generation_prompt = params.add_generation_prompt;

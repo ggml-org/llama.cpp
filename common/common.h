@@ -231,15 +231,21 @@ struct common_params_sampling {
     std::string                         grammar; // optional BNF-like grammar to constrain sampling
     bool                                grammar_lazy = false;
     std::vector<common_grammar_trigger> grammar_triggers; // optional triggers (for lazy grammars)
+    bool                                grammar_external = false; // is the grammar set by the user explicitly?
+                                                                  // if so, we must not pass extra grammar prefill to it
     std::set<llama_token>               preserved_tokens;
 
     std::vector<llama_logit_bias> logit_bias;     // logit biases to apply
     std::vector<llama_logit_bias> logit_bias_eog; // pre-calculated logit biases for EOG tokens
 
+    // Grammar prefill: tokens already present in the prompt generation message.
+    // Fed to the grammar sampler (to advance past pre-existing tokens) and used
+    // to determine the reasoning budget sampler's initial state.
+    std::string grammar_prefill;
+
     // reasoning budget sampler parameters
     // these are populated by the server/CLI based on chat template params
     int32_t                  reasoning_budget_tokens   = -1;   // -1 = disabled, >= 0 = token budget
-    bool                     reasoning_budget_activate_immediately = false;
     std::vector<llama_token> reasoning_budget_start;           // start tag token sequence
     std::vector<llama_token> reasoning_budget_end;             // end tag token sequence
     std::vector<llama_token> reasoning_budget_forced;          // forced sequence (message + end tag)

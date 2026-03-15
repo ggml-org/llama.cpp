@@ -5,9 +5,11 @@
 #include "reasoning-budget.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <unordered_map>
+#include <vector>
 
 // the ring buffer works similarly to std::deque, but with a fixed capacity
 // TODO: deduplicate with llama-impl.h
@@ -251,15 +253,60 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
         }
     }
 
+    // Feed grammar prefill tokens to the grammar sampler so it advances past
+    // reasoning markers that the template already placed in the prompt.
+    std::vector<llama_token> prefill_tokens;
+    if (!params.grammar_prefill.empty() && vocab && !params.grammar_external) {
+        prefill_tokens = common_tokenize(vocab, params.grammar_prefill, false, true);
+        if (!prefill_tokens.empty()) {
+            std::string first_token = common_token_to_piece(vocab, prefill_tokens[0], true);
+            if (std::isspace(first_token[0]) && !std::isspace(params.grammar_prefill[0])) {
+                // Some tokenizers will add a space before the first special token, need to remove
+                prefill_tokens = std::vector<llama_token>(prefill_tokens.begin() + 1, prefill_tokens.end());
+            }
+        }
+
+        if (grmr) {
+            for (const auto & token : prefill_tokens) {
+                llama_sampler_accept(grmr, token);
+                LOG_DBG("%s: accepted prefill token (%d)\n", __func__, token);
+            }
+        }
+    }
+
     // reasoning budget sampler — added first so it can force tokens before other samplers
     if (params.reasoning_budget_tokens >= 0 && !params.reasoning_budget_forced.empty()) {
+        // Determine initial state from the grammar prefill: if the prefill tokens
+        // match the start sequence, reasoning is already open → start COUNTING.
+        bool activate_immediately = false;
+        if (!prefill_tokens.empty() && !params.reasoning_budget_start.empty() &&
+            prefill_tokens.size() >= params.reasoning_budget_start.size()) {
+            activate_immediately = std::equal(
+                params.reasoning_budget_start.begin(),
+                params.reasoning_budget_start.end(),
+                prefill_tokens.begin());
+            // But if the prefill also contains the end sequence after the start,
+            // reasoning was opened and closed — start IDLE instead.
+            if (activate_immediately &&
+                prefill_tokens.size() >= params.reasoning_budget_start.size() + params.reasoning_budget_end.size()) {
+                auto end_begin = prefill_tokens.begin() + (ptrdiff_t) params.reasoning_budget_start.size();
+                // Check if remaining tokens after start match the end sequence
+                // (possibly with whitespace tokens in between, but for simplicity check suffix)
+                auto end_start = prefill_tokens.end() - (ptrdiff_t) params.reasoning_budget_end.size();
+                if (end_start >= end_begin &&
+                    std::equal(params.reasoning_budget_end.begin(), params.reasoning_budget_end.end(), end_start)) {
+                    activate_immediately = false;
+                }
+            }
+        }
+
         samplers.push_back(common_reasoning_budget_init(
             vocab,
             params.reasoning_budget_start,
             params.reasoning_budget_end,
             params.reasoning_budget_forced,
             params.reasoning_budget_tokens,
-            params.reasoning_budget_activate_immediately ? REASONING_BUDGET_COUNTING : REASONING_BUDGET_IDLE));
+            activate_immediately ? REASONING_BUDGET_COUNTING : REASONING_BUDGET_IDLE));
     }
 
     if (params.has_logit_bias()) {

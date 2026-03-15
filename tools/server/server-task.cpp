@@ -38,53 +38,53 @@ json task_params::to_json(bool only_metrics) const {
     }
 
     if (only_metrics) {
-        return json {
-            {"seed",                      sampling.seed},
-            {"temperature",               sampling.temp},
-            {"dynatemp_range",            sampling.dynatemp_range},
-            {"dynatemp_exponent",         sampling.dynatemp_exponent},
-            {"top_k",                     sampling.top_k},
-            {"top_p",                     sampling.top_p},
-            {"min_p",                     sampling.min_p},
-            {"top_n_sigma",               sampling.top_n_sigma},
-            {"xtc_probability",           sampling.xtc_probability},
-            {"xtc_threshold",             sampling.xtc_threshold},
-            {"typical_p",                 sampling.typ_p},
-            {"repeat_last_n",             sampling.penalty_last_n},
-            {"repeat_penalty",            sampling.penalty_repeat},
-            {"presence_penalty",          sampling.penalty_present},
-            {"frequency_penalty",         sampling.penalty_freq},
-            {"dry_multiplier",            sampling.dry_multiplier},
-            {"dry_base",                  sampling.dry_base},
-            {"dry_allowed_length",        sampling.dry_allowed_length},
-            {"dry_penalty_last_n",        sampling.dry_penalty_last_n},
-            {"mirostat",                  sampling.mirostat},
-            {"mirostat_tau",              sampling.mirostat_tau},
-            {"mirostat_eta",              sampling.mirostat_eta},
-            {"max_tokens",                n_predict},
-            {"n_predict",                 n_predict}, // TODO: deduplicate?
-            {"n_keep",                    n_keep},
-            {"n_discard",                 n_discard},
-            {"ignore_eos",                sampling.ignore_eos},
-            {"stream",                    stream},
-            {"n_probs",                   sampling.n_probs},
-            {"min_keep",                  sampling.min_keep},
-            {"chat_format",               common_chat_format_name(chat_parser_params.format)},
-            {"reasoning_format",          common_reasoning_format_name(chat_parser_params.reasoning_format)},
-            {"reasoning_in_content",      chat_parser_params.reasoning_in_content},
-            {"thinking_forced_open",      chat_parser_params.thinking_forced_open},
-            {"samplers",                  samplers},
-            {"speculative.n_max",         speculative.n_max},
-            {"speculative.n_min",         speculative.n_min},
-            {"speculative.p_min",         speculative.p_min},
-            {"speculative.type",          common_speculative_type_to_str(speculative.type)},
-            {"speculative.ngram_size_n",  speculative.ngram_size_n},
-            {"speculative.ngram_size_m",  speculative.ngram_size_m},
-            {"speculative.ngram_m_hits",  speculative.ngram_min_hits},
-            {"timings_per_token",         timings_per_token},
-            {"post_sampling_probs",       post_sampling_probs},
-            {"backend_sampling",          sampling.backend_sampling},
-            {"lora",                      lora},
+        return json{
+            { "seed",                     sampling.seed                                                     },
+            { "temperature",              sampling.temp                                                     },
+            { "dynatemp_range",           sampling.dynatemp_range                                           },
+            { "dynatemp_exponent",        sampling.dynatemp_exponent                                        },
+            { "top_k",                    sampling.top_k                                                    },
+            { "top_p",                    sampling.top_p                                                    },
+            { "min_p",                    sampling.min_p                                                    },
+            { "top_n_sigma",              sampling.top_n_sigma                                              },
+            { "xtc_probability",          sampling.xtc_probability                                          },
+            { "xtc_threshold",            sampling.xtc_threshold                                            },
+            { "typical_p",                sampling.typ_p                                                    },
+            { "repeat_last_n",            sampling.penalty_last_n                                           },
+            { "repeat_penalty",           sampling.penalty_repeat                                           },
+            { "presence_penalty",         sampling.penalty_present                                          },
+            { "frequency_penalty",        sampling.penalty_freq                                             },
+            { "dry_multiplier",           sampling.dry_multiplier                                           },
+            { "dry_base",                 sampling.dry_base                                                 },
+            { "dry_allowed_length",       sampling.dry_allowed_length                                       },
+            { "dry_penalty_last_n",       sampling.dry_penalty_last_n                                       },
+            { "mirostat",                 sampling.mirostat                                                 },
+            { "mirostat_tau",             sampling.mirostat_tau                                             },
+            { "mirostat_eta",             sampling.mirostat_eta                                             },
+            { "max_tokens",               n_predict                                                         },
+            { "n_predict",                n_predict                                                         }, // TODO: deduplicate?
+            { "n_keep",                   n_keep                                                            },
+            { "n_discard",                n_discard                                                         },
+            { "ignore_eos",               sampling.ignore_eos                                               },
+            { "stream",                   stream                                                            },
+            { "n_probs",                  sampling.n_probs                                                  },
+            { "min_keep",                 sampling.min_keep                                                 },
+            { "chat_format",              common_chat_format_name(chat_parser_params.format)                },
+            { "reasoning_format",         common_reasoning_format_name(chat_parser_params.reasoning_format) },
+            { "reasoning_in_content",     chat_parser_params.reasoning_in_content                           },
+            { "generation_prompt",        chat_parser_params.generation_prompt                              },
+            { "samplers",                 samplers                                                          },
+            { "speculative.n_max",        speculative.n_max                                                 },
+            { "speculative.n_min",        speculative.n_min                                                 },
+            { "speculative.p_min",        speculative.p_min                                                 },
+            { "speculative.type",         common_speculative_type_to_str(speculative.type)                  },
+            { "speculative.ngram_size_n", speculative.ngram_size_n                                          },
+            { "speculative.ngram_size_m", speculative.ngram_size_m                                          },
+            { "speculative.ngram_m_hits", speculative.ngram_min_hits                                        },
+            { "timings_per_token",        timings_per_token                                                 },
+            { "post_sampling_probs",      post_sampling_probs                                               },
+            { "backend_sampling",         sampling.backend_sampling                                         },
+            { "lora",                     lora                                                              },
         };
     }
 
@@ -135,7 +135,7 @@ json task_params::to_json(bool only_metrics) const {
         {"chat_format",               common_chat_format_name(chat_parser_params.format)},
         {"reasoning_format",          common_reasoning_format_name(chat_parser_params.reasoning_format)},
         {"reasoning_in_content",      chat_parser_params.reasoning_in_content},
-        {"thinking_forced_open",      chat_parser_params.thinking_forced_open},
+        {"generation_prompt",         chat_parser_params.generation_prompt},
         {"samplers",                  samplers},
         {"speculative.n_max",         speculative.n_max},
         {"speculative.n_min",         speculative.n_min},
@@ -382,7 +382,8 @@ task_params server_task::params_from_json_cmpl(
             throw std::runtime_error(std::string("\"json_schema\": ") + e.what());
         }
     } else {
-        params.sampling.grammar      = json_value(data, "grammar", defaults.sampling.grammar);
+        params.sampling.grammar          = json_value(data, "grammar", defaults.sampling.grammar);
+        params.sampling.grammar_external = json_value(data, "grammar_external", params.sampling.grammar_external);
         SRV_DBG("Grammar: %s\n", params.sampling.grammar.c_str());
         params.sampling.grammar_lazy = json_value(data, "grammar_lazy", defaults.sampling.grammar_lazy);
         SRV_DBG("Grammar lazy: %s\n", params.sampling.grammar_lazy ? "true" : "false");
@@ -402,7 +403,8 @@ task_params server_task::params_from_json_cmpl(
         }
         params.chat_parser_params.reasoning_format = reasoning_format;
         params.chat_parser_params.reasoning_in_content = params.stream && (reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
-        params.chat_parser_params.thinking_forced_open = json_value(data, "thinking_forced_open", false);
+        params.chat_parser_params.generation_prompt = json_value(data, "generation_prompt", std::string());
+        params.sampling.grammar_prefill = params.chat_parser_params.generation_prompt;
         params.chat_parser_params.parse_tool_calls = json_value(data, "parse_tool_calls", false);
         if (data.contains("chat_parser")) {
             params.chat_parser_params.parser.load(data.at("chat_parser").get<std::string>());
@@ -469,10 +471,7 @@ task_params server_task::params_from_json_cmpl(
             const auto start_tag = json_value(data, "reasoning_budget_start_tag", std::string());
             const auto end_tag   = json_value(data, "reasoning_budget_end_tag", std::string());
             const auto message   = json_value(data, "reasoning_budget_message", std::string());
-            const bool activate_imm   = json_value(data, "reasoning_budget_activate_immediately", false);
-
             params.sampling.reasoning_budget_tokens = budget;
-            params.sampling.reasoning_budget_activate_immediately = activate_imm;
 
             if (!start_tag.empty()) {
                 params.sampling.reasoning_budget_start = common_tokenize(vocab, start_tag, false, true);
@@ -482,8 +481,8 @@ task_params server_task::params_from_json_cmpl(
                 params.sampling.reasoning_budget_forced = common_tokenize(vocab, message + end_tag, false, true);
             }
 
-            SRV_DBG("reasoning budget: tokens=%d, activate_immediately=%s, start=%zu toks, end=%zu toks, forced=%zu toks\n",
-                budget, activate_imm ? "true" : "false",
+            SRV_DBG("reasoning budget: tokens=%d, grammar_prefill='%s', start=%zu toks, end=%zu toks, forced=%zu toks\n",
+                budget, params.sampling.grammar_prefill.c_str(),
                 params.sampling.reasoning_budget_start.size(),
                 params.sampling.reasoning_budget_end.size(),
                 params.sampling.reasoning_budget_forced.size());

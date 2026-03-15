@@ -1080,20 +1080,21 @@ json oaicompat_chat_params_parse(
         }
     }
 
-    llama_params["chat_format"]      = static_cast<int>(chat_params.format);
-    llama_params["prompt"]           = chat_params.prompt;
+    llama_params["chat_format"] = static_cast<int>(chat_params.format);
+    llama_params["prompt"]      = chat_params.prompt;
     if (!chat_params.grammar.empty()) {
         llama_params["grammar"] = chat_params.grammar;
     }
     llama_params["grammar_lazy"]     = chat_params.grammar_lazy;
-    auto grammar_triggers = json::array();
+    llama_params["grammar_external"] = body.contains("grammar");
+    auto grammar_triggers        = json::array();
     for (const auto & trigger : chat_params.grammar_triggers) {
         server_grammar_trigger ct(trigger);
         grammar_triggers.push_back(ct.to_json());
     }
-    llama_params["grammar_triggers"] = grammar_triggers;
-    llama_params["preserved_tokens"] = chat_params.preserved_tokens;
-    llama_params["thinking_forced_open"]     = chat_params.thinking_forced_open;
+    llama_params["grammar_triggers"]  = grammar_triggers;
+    llama_params["preserved_tokens"]  = chat_params.preserved_tokens;
+    llama_params["generation_prompt"] = chat_params.generation_prompt;
     for (const auto & stop : chat_params.additional_stops) {
         llama_params["stop"].push_back(stop);
     }
@@ -1113,7 +1114,6 @@ json oaicompat_chat_params_parse(
             llama_params["reasoning_budget_start_tag"] = chat_params.thinking_start_tag;
             llama_params["reasoning_budget_end_tag"] = chat_params.thinking_end_tag;
             llama_params["reasoning_budget_message"] = opt.reasoning_budget_message;
-            llama_params["reasoning_budget_activate_immediately"] = chat_params.thinking_forced_open;
         }
     }
 
