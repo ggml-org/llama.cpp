@@ -1608,7 +1608,8 @@ inline void ggml_sycl_free_host_tracked_t(T * ptr, size_t count, sycl::queue & q
 // sycl::malloc_host / sycl::free calls during SOA weight conversion.
 // Thread-safe.  Buffers are pinned host memory (sycl::malloc_host) and are
 // GPU DMA-accessible.  The pool grows on demand and never shrinks until
-// destruction.
+// shutdown/destruction.  In practice, pool size stabilizes at ~6-8 slots
+// for typical models (one per concurrent SOA conversion buffer size).
 // --------------------------------------------------------------------------
 struct staging_buffer_pool {
     struct slot {
@@ -1616,6 +1617,19 @@ struct staging_buffer_pool {
         size_t size = 0;
         bool   in_use = false;
     };
+
+    ~staging_buffer_pool() {
+        // The pool is a Meyers singleton — its destructor runs during static
+        // destruction.  At that point sycl::free() is unsafe (the SYCL
+        // runtime may already be torn down).  Normal cleanup happens via
+        // shutdown() called from ggml_backend_sycl_free().  The destructor
+        // only subtracts the host budget to keep accounting consistent; the
+        // OS reclaims all process memory at exit.
+        size_t freed = total_bytes_.load(std::memory_order_relaxed);
+        if (freed > 0 && !ggml_sycl::ggml_sycl_is_shutting_down()) {
+            ggml_sycl::unified_cache_sub_runtime_host_bytes(freed);
+        }
+    }
 
     // Acquire a pinned host buffer of at least `needed` bytes.
     // Returns an existing free slot whose size >= needed, or allocates a new one.
@@ -1652,7 +1666,9 @@ struct staging_buffer_pool {
         ggml_sycl::alloc_registry::instance().register_alloc(
             ptr, needed, -1, ggml_sycl::alloc_type::HOST_PINNED);
         slots_.push_back({ ptr, needed, true });
-        total_bytes_ += needed;
+        total_bytes_.fetch_add(needed, std::memory_order_relaxed);
+        // Track pinned host allocation against the unified cache host budget.
+        ggml_sycl::unified_cache_add_runtime_host_bytes(needed);
         return ptr;
     }
 
@@ -1675,6 +1691,7 @@ struct staging_buffer_pool {
     // Free all pooled buffers.  Must be called while no acquire is in flight.
     void shutdown(sycl::queue & queue) {
         std::lock_guard<std::mutex> lock(mutex_);
+        size_t freed = total_bytes_.load(std::memory_order_relaxed);
         for (auto & s : slots_) {
             if (s.ptr) {
                 ggml_sycl::alloc_registry::instance().unregister_alloc(s.ptr);
@@ -1682,16 +1699,22 @@ struct staging_buffer_pool {
             }
         }
         slots_.clear();
-        total_bytes_ = 0;
+        total_bytes_.store(0, std::memory_order_relaxed);
+        if (freed > 0) {
+            ggml_sycl::unified_cache_sub_runtime_host_bytes(freed);
+        }
     }
 
-    size_t total_bytes() const { return total_bytes_; }
-    size_t slot_count()  const { return slots_.size(); }
+    size_t total_bytes() const { return total_bytes_.load(std::memory_order_relaxed); }
+    size_t slot_count()  const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return slots_.size();
+    }
 
 private:
     std::vector<slot> slots_;
-    std::mutex        mutex_;
-    size_t            total_bytes_ = 0;
+    mutable std::mutex mutex_;
+    std::atomic<size_t> total_bytes_{ 0 };
 };
 
 // Global staging buffer pool for SOA weight conversion in fill_reordered_host.

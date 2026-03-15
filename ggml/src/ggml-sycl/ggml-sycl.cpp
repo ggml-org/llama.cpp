@@ -32746,6 +32746,9 @@ static void ggml_backend_sycl_free(ggml_backend_t backend) {
         g_cpu_expert_pools[d].shutdown();
         g_pinned_buffer_pools[d].shutdown();
     }
+    // Free staging buffer pool while SYCL context is still alive.
+    // shutdown() is idempotent — safe if pool was never used.
+    ggml_sycl_staging_pool().shutdown(*sycl_ctx->stream(sycl_ctx->device, 0));
     // Drain any pending merge events before teardown
     split_merge_drain();
     // Free ring buffer staging entries
