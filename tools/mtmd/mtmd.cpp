@@ -24,9 +24,11 @@
 
 // represents raw image data, layout is RGBRGBRGB...
 // length of data must be nx * ny * 3
+// for video: data is n_frames sequential RGB frames, each nx * ny * 3 bytes
 struct mtmd_bitmap {
     uint32_t nx;
     uint32_t ny;
+    uint32_t n_frames = 0; // 0 for single images, >= 2 (even) for video
     std::vector<unsigned char> data;
     std::string id; // optional user-defined id, for ex: can be set to image hash, useful for KV cache tracking
     bool is_audio = false; // true if the bitmap is audio
@@ -35,8 +37,9 @@ struct mtmd_bitmap {
 struct mtmd_image_tokens {
     uint32_t nx; // number of tokens in x direction
     uint32_t ny; // number of tokens in y direction
+    uint32_t nt = 1; // number of temporal positions (1 for images, > 1 for video)
     bool use_mrope_pos = false; // use M-RoPE position counting (the whole image is 1 temporal position)
-    uint32_t n_tokens() const { return nx * ny; }
+    uint32_t n_tokens() const { return nt * nx * ny; }
     clip_image_f32_batch batch_f32; // preprocessed image patches
     std::string id; // optional user-defined ID, useful for KV cache tracking
 
@@ -44,6 +47,7 @@ struct mtmd_image_tokens {
         return mtmd_image_tokens{
             nx,
             ny,
+            nt,
             use_mrope_pos,
             batch_f32.clone(),
             id
@@ -553,6 +557,10 @@ struct mtmd_tokenizer {
     }
 
     int32_t add_media(const mtmd_bitmap * bitmap) {
+        if (bitmap->n_frames >= 2) {
+            return add_video(bitmap);
+        }
+
         if (!bitmap->is_audio) {
             // handle image
 
@@ -743,6 +751,102 @@ struct mtmd_tokenizer {
         return 0;
     }
 
+    // preprocess video frames and create an image chunk with temporal dimension
+    // frames are paired (even+odd), each pair becomes one 6-channel image
+    // each pair is encoded independently through the ViT (per-frame attention)
+    int32_t add_video(const mtmd_bitmap * bitmap) {
+        if (!ctx->ctx_v) {
+            LOG_ERR("%s: error: model does not support vision input\n", __func__);
+            return 2;
+        }
+
+        const uint32_t n_frames = bitmap->n_frames;
+        const uint32_t n_pairs  = n_frames / 2;
+        const size_t   frame_bytes = (size_t)bitmap->nx * bitmap->ny * 3;
+
+        if (!ctx->img_beg.empty()) {
+            add_text(ctx->img_beg, true);
+        }
+
+        // preprocess each frame individually
+        clip_image_f32_batch all_frames;
+        for (uint32_t f = 0; f < n_frames; f++) {
+            clip_image_u8_ptr img_u8(clip_image_u8_init());
+            img_u8->nx = bitmap->nx;
+            img_u8->ny = bitmap->ny;
+            img_u8->buf.resize(frame_bytes);
+            std::memcpy(img_u8->buf.data(), bitmap->data.data() + f * frame_bytes, frame_bytes);
+
+            clip_image_f32_batch frame_batch;
+            bool ok = clip_image_preprocess(ctx->ctx_v, img_u8.get(), &frame_batch);
+            if (!ok) {
+                LOG_ERR("Unable to preprocess video frame %u\n", f);
+                return 2;
+            }
+            GGML_ASSERT(frame_batch.entries.size() == 1);
+            all_frames.entries.push_back(std::move(frame_batch.entries[0]));
+        }
+
+        const int frame_nx = all_frames.entries[0]->nx;
+        const int frame_ny = all_frames.entries[0]->ny;
+        const int n_pixels = frame_nx * frame_ny;
+
+        // interleave frame pairs into 6-channel images (even_rgb + odd_rgb)
+        // each pair is a separate batch entry, encoded independently
+        clip_image_f32_batch pair_batch;
+        for (uint32_t p = 0; p < n_pairs; p++) {
+            const auto & even = all_frames.entries[p * 2];
+            const auto & odd  = all_frames.entries[p * 2 + 1];
+            GGML_ASSERT(even->nx == frame_nx && even->ny == frame_ny);
+            GGML_ASSERT(odd->nx  == frame_nx && odd->ny  == frame_ny);
+
+            clip_image_f32_ptr pair(clip_image_f32_init());
+            pair->nx = frame_nx;
+            pair->ny = frame_ny;
+            pair->buf.resize((size_t)n_pixels * 6);
+
+            for (int i = 0; i < n_pixels; i++) {
+                const int dst = i * 6;
+                const int src = i * 3;
+                pair->buf[dst + 0] = even->buf[src + 0];
+                pair->buf[dst + 1] = even->buf[src + 1];
+                pair->buf[dst + 2] = even->buf[src + 2];
+                pair->buf[dst + 3] = odd->buf[src + 0];
+                pair->buf[dst + 4] = odd->buf[src + 1];
+                pair->buf[dst + 5] = odd->buf[src + 2];
+            }
+            pair_batch.entries.push_back(std::move(pair));
+        }
+
+        const uint32_t tokens_x = clip_n_output_tokens_x(ctx->ctx_v, pair_batch.entries[0].get());
+        const uint32_t tokens_y = clip_n_output_tokens_y(ctx->ctx_v, pair_batch.entries[0].get());
+
+        mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
+        image_tokens->nx = tokens_x;
+        image_tokens->ny = tokens_y;
+        image_tokens->nt = n_pairs;
+        image_tokens->use_mrope_pos = true;
+        image_tokens->batch_f32 = std::move(pair_batch);
+        image_tokens->id = bitmap->id;
+
+        LOG_DBG("video: nt=%u, nx=%u, ny=%u, n_tokens=%u\n",
+                image_tokens->nt, image_tokens->nx, image_tokens->ny, image_tokens->n_tokens());
+
+        mtmd_input_chunk chunk{
+            MTMD_INPUT_CHUNK_TYPE_IMAGE,
+            {}, // text tokens
+            std::move(image_tokens),
+            nullptr, // audio tokens
+        };
+        cur.entries.emplace_back(std::move(chunk));
+
+        if (!ctx->img_end.empty()) {
+            add_text(ctx->img_end, true);
+        }
+
+        return 0;
+    }
+
     std::vector<mtmd_input_chunk> split_batch_to_chunk(clip_image_f32_batch && batch_f32, const std::string & id) {
         std::vector<mtmd_input_chunk> chunks;
 
@@ -855,10 +959,13 @@ int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) 
     ctx->image_embd_v.resize(image_tokens->n_tokens() * n_mmproj_embd);
     bool ok = false;
 
-    if (clip_is_llava(ctx_clip)
+    if (image_tokens->nt > 1
+        || clip_is_llava(ctx_clip)
         || clip_is_minicpmv(ctx_clip)
         || clip_is_glm(ctx_clip)) {
-        // TODO @ngxson : llava does not support batched encoding ; this should be fixed inside clip_image_batch_encode()
+        // encode each batch entry independently
+        // video: each entry is one frame pair, encoded with per-frame attention
+        // llava/minicpmv/glm: does not support batched encoding
         const auto & entries = image_tokens->batch_f32.entries;
         for (size_t i = 0; i < entries.size(); i++) {
             int n_tokens_per_image = clip_n_output_tokens(ctx_clip, entries[i].get());
@@ -938,6 +1045,21 @@ mtmd_bitmap * mtmd_bitmap_init(uint32_t nx,
     return bitmap;
 }
 
+mtmd_bitmap * mtmd_bitmap_init_from_video(uint32_t nx,
+                                          uint32_t ny,
+                                          uint32_t n_frames,
+                                          const unsigned char * data) {
+    GGML_ASSERT(n_frames >= 2 && n_frames % 2 == 0);
+    mtmd_bitmap * bitmap = new mtmd_bitmap;
+    bitmap->nx = nx;
+    bitmap->ny = ny;
+    bitmap->n_frames = n_frames;
+    size_t data_size = (size_t)nx * ny * 3 * n_frames;
+    bitmap->data.resize(data_size);
+    std::memcpy(bitmap->data.data(), data, data_size);
+    return bitmap;
+}
+
 mtmd_bitmap * mtmd_bitmap_init_from_audio(size_t n_samples,
                                           const float * data) {
     mtmd_bitmap * bitmap = new mtmd_bitmap;
@@ -968,6 +1090,14 @@ size_t mtmd_bitmap_get_n_bytes(const mtmd_bitmap * bitmap) {
 
 bool mtmd_bitmap_is_audio(const mtmd_bitmap * bitmap) {
     return bitmap->is_audio;
+}
+
+bool mtmd_bitmap_is_video(const mtmd_bitmap * bitmap) {
+    return bitmap->n_frames >= 2;
+}
+
+uint32_t mtmd_bitmap_get_n_frames(const mtmd_bitmap * bitmap) {
+    return bitmap->n_frames;
 }
 
 const char * mtmd_bitmap_get_id(const mtmd_bitmap * bitmap) {
@@ -1106,15 +1236,18 @@ size_t mtmd_image_tokens_get_ny(const mtmd_image_tokens * image_tokens) {
     return image_tokens->ny;
 }
 
+size_t mtmd_image_tokens_get_nt(const mtmd_image_tokens * image_tokens) {
+    return image_tokens->nt;
+}
+
 const char * mtmd_image_tokens_get_id(const mtmd_image_tokens * image_tokens) {
     return image_tokens->id.c_str();
 }
 
 llama_pos mtmd_image_tokens_get_n_pos(const mtmd_image_tokens * image_tokens) {
     if (image_tokens->use_mrope_pos) {
-        // for M-RoPE, temporal dimension = max(t,h,w)
-        // t is omitted as we don't support video input
-        return std::max(image_tokens->nx, image_tokens->ny);
+        // for M-RoPE, n_pos = max(t, h, w)
+        return (llama_pos)std::max({image_tokens->nt, image_tokens->nx, image_tokens->ny});
     }
     return image_tokens->n_tokens();
 }
