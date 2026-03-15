@@ -214,6 +214,12 @@ extern "C" {
 
     typedef bool (*llama_progress_callback)(float progress, void * user_data);
 
+    // called after graph build but before memory allocation in llama_decode/llama_encode
+    // use ggml_backend_sched_set_tensor_backend() to reassign graph nodes to a different backend
+    // NOTE: not called when a previous graph is reused; assignments from the last invocation
+    //       persist. set LLAMA_GRAPH_REUSE_DISABLE=1 for per-decode control.
+    typedef void (*llama_pre_alloc_callback)(ggml_backend_sched_t sched, struct ggml_cgraph * gf, void * user_data);
+
     // Input data for llama_encode/llama_decode
     // A llama_batch object can contain input about one or many sequences
     // The provided arrays (i.e. token, embd, pos, etc.) must have size of n_tokens
@@ -351,6 +357,11 @@ extern "C" {
 
         ggml_backend_sched_eval_callback cb_eval;
         void * cb_eval_user_data;
+
+        // called after graph build but before memory allocation
+        // allows reassigning tensor backends via ggml_backend_sched_set_tensor_backend()
+        llama_pre_alloc_callback cb_pre_alloc;
+        void * cb_pre_alloc_user_data;
 
         enum ggml_type type_k; // data type for K cache [EXPERIMENTAL]
         enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]

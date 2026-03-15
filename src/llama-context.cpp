@@ -63,6 +63,9 @@ llama_context::llama_context(
     cparams.cb_eval           = params.cb_eval;
     cparams.cb_eval_user_data = params.cb_eval_user_data;
 
+    cparams.cb_pre_alloc           = params.cb_pre_alloc;
+    cparams.cb_pre_alloc_user_data = params.cb_pre_alloc_user_data;
+
     // Initialize backend samplers here so they are part of the sampling graph
     // before the reserve passes run later in this function. This avoids a later
     // re-reserve when graph nodes change.
@@ -1204,6 +1207,10 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
             LLAMA_LOG_ERROR("%s: failed to initialize graph\n", __func__);
             ret = GGML_STATUS_FAILED;
             return nullptr;
+        }
+
+        if (cparams.cb_pre_alloc) {
+            cparams.cb_pre_alloc(sched.get(), gf, cparams.cb_pre_alloc_user_data);
         }
 
         if (!ggml_backend_sched_alloc_graph(sched.get(), gf)) {
@@ -2893,6 +2900,8 @@ llama_context_params llama_context_default_params() {
         /*.defrag_thold                =*/ -1.0f,
         /*.cb_eval                     =*/ nullptr,
         /*.cb_eval_user_data           =*/ nullptr,
+        /*.cb_pre_alloc                =*/ nullptr,
+        /*.cb_pre_alloc_user_data      =*/ nullptr,
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,
         /*.abort_callback              =*/ nullptr,
