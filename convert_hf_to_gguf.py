@@ -4329,6 +4329,12 @@ class YuanVisionModel(InternVisionModel):
         downsample_ratio = self.global_config.get("downsample_ratio")
         assert downsample_ratio is not None
         self.gguf_writer.add_vision_projector_scale_factor(int(1.0 / downsample_ratio))
+        # dynamic resolution: max_dynamic_patch -> image_max_pixels
+        max_dynamic_patch = self.global_config.get("max_dynamic_patch", 1)
+        image_size = self.hparams_vision["image_size"]
+        if isinstance(image_size, list):
+            image_size = image_size[0]
+        self.gguf_writer.add_vision_max_pixels(max_dynamic_patch * image_size * image_size)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # handle imagemlp and imagemlp_layernorm projector tensors

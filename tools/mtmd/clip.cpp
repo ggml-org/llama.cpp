@@ -1135,9 +1135,13 @@ struct clip_model_loader {
                     } break;
                 case PROJECTOR_TYPE_INTERNVL:
                 case PROJECTOR_TYPE_NEMOTRON_V2_VL:
+                    {
+                        get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
+                    } break;
                 case PROJECTOR_TYPE_YUANVL:
                     {
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
+                        get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels, false);
                     } break;
                 case PROJECTOR_TYPE_IDEFICS3:
                     {
@@ -3154,15 +3158,99 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_INTERNVL: // TODO @ngxson : support dynamic resolution
         case PROJECTOR_TYPE_NEMOTRON_V2_VL:
-        case PROJECTOR_TYPE_YUANVL:
             {
                 clip_image_u8 resized_image;
                 int sz = params.image_size;
                 img_tool::resize(*img, resized_image, {sz, sz}, img_tool::RESIZE_ALGO_BILINEAR);
                 clip_image_f32_ptr img_f32(clip_image_f32_init());
-                //clip_image_save_to_bmp(resized_image, "resized.bmp");
                 normalize_image_u8_to_f32(resized_image, *img_f32, params.image_mean, params.image_std);
                 res_imgs->entries.push_back(std::move(img_f32));
+            } break;
+
+        case PROJECTOR_TYPE_YUANVL:
+            {
+                const int sz = params.image_size; // 448
+                const int max_num = params.image_max_pixels > 0
+                    ? params.image_max_pixels / (sz * sz)
+                    : 1; // fallback to single tile if not configured
+
+                if (max_num <= 1 || (original_size.width <= sz && original_size.height <= sz)) {
+                    // single tile: just resize to image_size x image_size
+                    clip_image_u8 resized_image;
+                    img_tool::resize(*img, resized_image, {sz, sz}, img_tool::RESIZE_ALGO_BICUBIC);
+                    clip_image_f32_ptr img_f32(clip_image_f32_init());
+                    normalize_image_u8_to_f32(resized_image, *img_f32, params.image_mean, params.image_std);
+                    res_imgs->entries.push_back(std::move(img_f32));
+                } else {
+                    // InternVL-style dynamic resolution
+                    // Step 1: find best aspect ratio grid
+                    const float aspect_ratio = (float)original_size.width / original_size.height;
+                    int best_grid_w = 1, best_grid_h = 1;
+                    float best_ratio_diff = 1e9f;
+                    for (int n = 1; n <= max_num; n++) {
+                        for (int gw = 1; gw <= n; gw++) {
+                            for (int gh = 1; gh <= n; gh++) {
+                                if (gw * gh > max_num || gw * gh < 1) continue;
+                                float target_ar = (float)gw / gh;
+                                float ratio_diff = std::abs(aspect_ratio - target_ar);
+                                float size_diff = std::abs(
+                                    ((float)(gw * sz + gh * sz) - (original_size.width + original_size.height))
+                                    / (original_size.width + original_size.height));
+                                if (size_diff > 1.0f) continue; // threshold=1
+                                if (ratio_diff < best_ratio_diff) {
+                                    best_ratio_diff = ratio_diff;
+                                    best_grid_w = gw;
+                                    best_grid_h = gh;
+                                } else if (ratio_diff == best_ratio_diff) {
+                                    if (original_size.width * original_size.height > 0.5f * sz * sz * gw * gh) {
+                                        best_grid_w = gw;
+                                        best_grid_h = gh;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    const int target_width  = sz * best_grid_w;
+                    const int target_height = sz * best_grid_h;
+                    const int n_tiles = best_grid_w * best_grid_h;
+
+                    LOG_INF("%s: dynamic resolution: %dx%d -> %dx%d grid (%d tiles)\n",
+                            __func__, original_size.width, original_size.height,
+                            best_grid_w, best_grid_h, n_tiles);
+
+                    // Step 2: resize to grid dimensions
+                    clip_image_u8 resized;
+                    img_tool::resize(*img, resized, {target_width, target_height}, img_tool::RESIZE_ALGO_BICUBIC);
+
+                    // Step 3: split into tiles
+                    for (int i = 0; i < n_tiles; i++) {
+                        int tile_x = (i % best_grid_w) * sz;
+                        int tile_y = (i / best_grid_w) * sz;
+
+                        clip_image_u8 tile;
+                        tile.nx = sz;
+                        tile.ny = sz;
+                        tile.buf.resize(sz * sz * 3);
+                        for (int y = 0; y < sz; y++) {
+                            memcpy(tile.buf.data() + y * sz * 3,
+                                   resized.buf.data() + (tile_y + y) * target_width * 3 + tile_x * 3,
+                                   sz * 3);
+                        }
+                        clip_image_f32_ptr img_f32(clip_image_f32_init());
+                        normalize_image_u8_to_f32(tile, *img_f32, params.image_mean, params.image_std);
+                        res_imgs->entries.push_back(std::move(img_f32));
+                    }
+
+                    // Step 4: add thumbnail (whole image resized to image_size x image_size)
+                    if (n_tiles > 1) {
+                        clip_image_u8 thumbnail;
+                        img_tool::resize(*img, thumbnail, {sz, sz}, img_tool::RESIZE_ALGO_BICUBIC);
+                        clip_image_f32_ptr img_f32(clip_image_f32_init());
+                        normalize_image_u8_to_f32(thumbnail, *img_f32, params.image_mean, params.image_std);
+                        res_imgs->entries.push_back(std::move(img_f32));
+                    }
+                }
             } break;
 
         case PROJECTOR_TYPE_GEMMA3NV:
