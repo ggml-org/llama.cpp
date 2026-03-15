@@ -2,29 +2,13 @@
 # multiplie collaborators per item can be specified
 
 /.devops/*.Dockerfile                   @ngxson
-/.github/actions/                       @CISC
-/.github/workflows/                     @CISC
+/.github/actions/                       @ggml-org/ci
+/.github/workflows/                     @ggml-org/ci
 /ci/                                    @ggerganov
 /cmake/                                 @ggerganov
-/common/CMakeLists.txt                  @ggerganov
-/common/arg.*                           @ggerganov
-/common/base64.hpp.*                    @ggerganov
-/common/build-info.*                    @ggerganov
-/common/chat.*                          @pwilkin
-/common/chat-auto*.*                    @pwilkin
-/common/chat-diff-analyzer.*            @pwilkin
-/common/chat-peg-parser.*               @aldehir
-/common/common.*                        @ggerganov
-/common/console.*                       @ggerganov
-/common/http.*                          @angt
-/common/jinja/                          @ngxson @CISC @aldehir
-/common/llguidance.*                    @ggerganov
-/common/log.*                           @ggerganov
+/common/                                @ggml-org/llama-common
+/common/jinja/                          @CISC
 /common/ngram-map.*                     @srogmann
-/common/peg-parser.*                    @aldehir
-/common/sampling.*                      @ggerganov
-/common/speculative.*                   @ggerganov
-/common/unicode.*                       @aldehir
 /convert_*.py                           @CISC
 /examples/batched.swift/                @ggerganov
 /examples/batched/                      @ggerganov
@@ -51,29 +35,27 @@
 /examples/speculative/                  @ggerganov
 /ggml/cmake/                            @ggerganov
 /ggml/include/                          @ggerganov
+/ggml/src/ggml-cann/                    @ggml-org/ggml-cann
 /ggml/src/ggml-common.h                 @ggerganov
 /ggml/src/ggml-cpu/                     @ggerganov
 /ggml/src/ggml-cpu/spacemit/            @alex-spacemit
-/ggml/src/ggml-cuda/fattn*              @JohannesGaessler
-/ggml/src/ggml-cuda/mmf.*               @JohannesGaessler @am17an
-/ggml/src/ggml-cuda/mmq.*               @JohannesGaessler
-/ggml/src/ggml-cuda/mmvf.*              @JohannesGaessler
-/ggml/src/ggml-cuda/mmvq.*              @JohannesGaessler
+/ggml/src/ggml-cuda/                    @ggml-org/ggml-cuda
 /ggml/src/ggml-cuda/fattn-wmma*         @IMbackK
 /ggml/src/ggml-hip/                     @IMbackK
 /ggml/src/ggml-cuda/vendors/hip.h       @IMbackK
 /ggml/src/ggml-impl.h                   @ggerganov
-/ggml/src/ggml-metal/                   @ggerganov
-/ggml/src/ggml-opencl/                  @lhez @max-krasnyansky
-/ggml/src/ggml-hexagon/                 @max-krasnyansky @lhez
+/ggml/src/ggml-metal/                   @ggml-org/ggml-metal
+/ggml/src/ggml-opencl/                  @ggml-org/ggml-opencl
+/ggml/src/ggml-hexagon/                 @ggml-org/ggml-hexagon
 /ggml/src/ggml-opt.cpp                  @JohannesGaessler
 /ggml/src/ggml-quants.*                 @ggerganov
-/ggml/src/ggml-rpc/                     @rgerganov
+/ggml/src/ggml-rpc/                     @ggml-org/ggml-rpc
+/ggml/src/ggml-sycl/                    @ggml-org/ggml-sycl
 /ggml/src/ggml-threading.*              @ggerganov
-/ggml/src/ggml-vulkan/                  @0cc4m
+/ggml/src/ggml-vulkan/                  @ggml-org/ggml-vulkan
 /ggml/src/ggml-virtgpu/                 @kpouget
-/ggml/src/ggml-webgpu/                  @reeselevine
-/ggml/src/ggml-zdnn/                    @taronaeo @Andreas-Krebbel @AlekseiNikiforovIBM
+/ggml/src/ggml-webgpu/                  @ggml-org/ggml-webgpu
+/ggml/src/ggml-zdnn/                    @ggml-org/ggml-zdnn @Andreas-Krebbel @AlekseiNikiforovIBM
 /ggml/src/ggml-openvino/                @cavusmustafa @wine99
 /ggml/src/ggml.c                        @ggerganov
 /ggml/src/ggml.cpp                      @ggerganov
@@ -93,16 +75,17 @@
 /src/models/                            @CISC
 /tests/                                 @ggerganov
 /tests/test-chat.*                      @pwilkin
+/tests/test-llama-archs.cpp             @JohannesGaessler
 /tools/batched-bench/                   @ggerganov
 /tools/cli/                             @ngxson
 /tools/completion/                      @ggerganov
-/tools/mtmd/                            @ngxson
+/tools/mtmd/                            @ggml-org/llama-mtmd
 /tools/perplexity/                      @ggerganov
 /tools/parser/                          @pwilkin
 /tools/quantize/                        @ggerganov
-/tools/rpc/                             @rgerganov
-/tools/server/*                         @ngxson @ggerganov # no subdir
-/tools/server/webui/                    @allozaur
+/tools/rpc/                             @ggml-org/ggml-rpc
+/tools/server/*                         @ggml-org/llama-server # no subdir
+/tools/server/webui/                    @ggml-org/llama-webui
 /tools/tokenize/                        @ggerganov
 /tools/tts/                             @ggerganov
 /vendor/                                @ggerganov
