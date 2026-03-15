@@ -24,7 +24,7 @@ using json = nlohmann::ordered_json;
 struct common_chat_templates;
 
 namespace autoparser {
-struct templates_params;
+struct generation_params;
 }  // namespace autoparser
 
 struct common_chat_tool_call {
@@ -212,7 +212,7 @@ struct common_chat_params {
     std::string                         prompt;
     std::string                         grammar;
     bool                                grammar_lazy         = false;
-    std::string                         prefill;
+    std::string                         generation_prompt;
     bool                                supports_thinking    = false;
     std::string                         thinking_start_tag;  // e.g., "<think>"
     std::string                         thinking_end_tag;    // e.g., "</think>"
@@ -229,14 +229,14 @@ struct common_chat_parser_params {
     common_reasoning_format reasoning_format     = COMMON_REASONING_FORMAT_NONE; // TODO: refactor this to "bool parse_reasoning"
     // Whether reasoning_content should be inlined in the content (e.g. for reasoning_format=deepseek in stream mode)
     bool                    reasoning_in_content = false;
-    std::string             prefill;
+    std::string             generation_prompt;
     bool                    parse_tool_calls     = true;
     bool                    debug                = false;  // Enable debug output for PEG parser
     common_peg_arena        parser               = {};
     common_chat_parser_params() = default;
     common_chat_parser_params(const common_chat_params & chat_params) {
-        format               = chat_params.format;
-        prefill    = chat_params.prefill;
+        format  = chat_params.format;
+        generation_prompt = chat_params.generation_prompt;
     }
 };
 
@@ -302,7 +302,7 @@ std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_tem
 
 std::string common_chat_template_direct_apply(
     const common_chat_template & tmpl,
-    const autoparser::templates_params & inputs,
+    const autoparser::generation_params & inputs,
     const std::optional<json> & messages_override = std::nullopt,
     const std::optional<json> & tools_override = std::nullopt,
     const std::optional<json> & additional_context = std::nullopt);

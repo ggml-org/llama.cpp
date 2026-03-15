@@ -1081,20 +1081,20 @@ json oaicompat_chat_params_parse(
         }
     }
 
-    llama_params["chat_format"]      = static_cast<int>(chat_params.format);
-    llama_params["prompt"]           = chat_params.prompt;
+    llama_params["chat_format"] = static_cast<int>(chat_params.format);
+    llama_params["prompt"]      = chat_params.prompt;
     if (!chat_params.grammar.empty()) {
         llama_params["grammar"] = chat_params.grammar;
     }
-    llama_params["grammar_lazy"]     = chat_params.grammar_lazy;
-    auto grammar_triggers = json::array();
+    llama_params["grammar_lazy"] = chat_params.grammar_lazy;
+    auto grammar_triggers        = json::array();
     for (const auto & trigger : chat_params.grammar_triggers) {
         server_grammar_trigger ct(trigger);
         grammar_triggers.push_back(ct.to_json());
     }
-    llama_params["grammar_triggers"] = grammar_triggers;
-    llama_params["preserved_tokens"] = chat_params.preserved_tokens;
-    llama_params["prefill"]        = chat_params.prefill;
+    llama_params["grammar_triggers"]  = grammar_triggers;
+    llama_params["preserved_tokens"]  = chat_params.preserved_tokens;
+    llama_params["generation_prompt"] = chat_params.generation_prompt;
     for (const auto & stop : chat_params.additional_stops) {
         llama_params["stop"].push_back(stop);
     }
