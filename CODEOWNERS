@@ -50,6 +50,7 @@
 /ggml/src/ggml-opt.cpp                  @JohannesGaessler
 /ggml/src/ggml-quants.*                 @ggerganov
 /ggml/src/ggml-rpc/                     @ggml-org/ggml-rpc
+/ggml/src/ggml-sycl/                    @ggml-org/ggml-sycl
 /ggml/src/ggml-threading.*              @ggerganov
 /ggml/src/ggml-vulkan/                  @ggml-org/ggml-vulkan
 /ggml/src/ggml-virtgpu/                 @kpouget
