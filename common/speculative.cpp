@@ -144,9 +144,27 @@ struct common_speculative_state {
     virtual void accept(uint16_t n_accepted) = 0;
 };
 
+struct common_speculative_checkpoint {
+    llama_pos pos_min  = 0;
+    llama_pos pos_max  = 0;
+
+    int64_t   n_tokens = 0;
+
+    std::vector<uint8_t> data;
+
+    size_t size() const {
+        return data.size();
+    }
+
+    size_t ckpt_size   = 0;
+};
+
 struct common_speculative_state_draft : public common_speculative_state {
     llama_context * ctx_tgt; // only used for retokenizing from ctx_dft
     llama_context * ctx_dft;
+
+    struct common_speculative_checkpoint ckpt;
+    bool                                 use_checkpoint;
 
     common_sampler * smpl;
 
@@ -160,10 +178,12 @@ struct common_speculative_state_draft : public common_speculative_state {
             enum common_speculative_type type,
             llama_context * ctx_tgt,
             llama_context * ctx_dft,
-            const std::vector<std::pair<std::string, std::string>> & replacements)
+            const std::vector<std::pair<std::string, std::string>> & replacements,
+            bool use_checkpoint)
         : common_speculative_state(type)
         , ctx_tgt(ctx_tgt)
         , ctx_dft(ctx_dft)
+        , use_checkpoint(use_checkpoint)
     {
         batch = llama_batch_init(llama_n_batch(ctx_dft), 0, 1);
         smpl = nullptr;
@@ -218,7 +238,48 @@ struct common_speculative_state_draft : public common_speculative_state {
     }
 
     void begin(const llama_tokens & prompt) override {
-        GGML_UNUSED(prompt);
+        if (use_checkpoint && ckpt.size() > 0) {
+            // delete checkpoint
+            LOG_DBG("%s: delete checkpoint, prompt.size=%zu, pos_min=%d, pos_max=%d, n_tokens=%zu, size=%.3f MiB\n",
+                    __func__, prompt.size(),
+                    ckpt.pos_min, ckpt.pos_max, ckpt.n_tokens, (float) ckpt.data.size() / 1024 / 1024);
+            ckpt.pos_min   = 0;
+            ckpt.pos_max   = 0;
+            ckpt.n_tokens  = 0;
+            ckpt.ckpt_size = 0;
+            ckpt.data.clear();
+        }
+    }
+
+    size_t draft_init_checkpoint(int n_tokens_prompt, int n_tokens_batch) {
+        int slot_id = 0;
+        const size_t checkpoint_size = llama_state_seq_get_size_ext(ctx_dft, slot_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+
+        ckpt.pos_min  = llama_memory_seq_pos_min(llama_get_memory(ctx_dft), slot_id);
+        ckpt.pos_max  = llama_memory_seq_pos_max(llama_get_memory(ctx_dft), slot_id);
+        ckpt.n_tokens = n_tokens_prompt - n_tokens_batch;
+        ckpt.data.resize(checkpoint_size);
+
+        const size_t n = llama_state_seq_get_data_ext(ctx_dft, ckpt.data.data(), checkpoint_size, slot_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+        if (n != checkpoint_size) {
+            GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", checkpoint_size, n);
+        }
+
+        LOG_DBG("%s: pos_min = %d, pos_max = %d, size = %.3f MiB\n", __func__,
+                ckpt.pos_min, ckpt.pos_max, (float) ckpt.data.size() / 1024 / 1024);
+        return n;
+    }
+
+    size_t draft_restore_checkpoint(size_t ckpt_size_part_expected) {
+        int slot_id = 0;
+        LOG_DBG("%s: pos_min = %d, pos_max = %d\n", __func__, ckpt.pos_min, ckpt.pos_max);
+        const size_t n = llama_state_seq_set_data_ext(ctx_dft,
+                ckpt.data.data(), ckpt.size(), slot_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+        if (n != ckpt_size_part_expected) {
+            GGML_ABORT("%s: failed to restore context checkpoint (pos_min=%d, pos_max=%d, size=%zu, get_data_ext->%zu, set_data_ext->%zu",
+                        __func__, ckpt.pos_min, ckpt.pos_max, ckpt.size(), ckpt_size_part_expected, n);
+        }
+        return n;
     }
 
     void draft(
@@ -236,8 +297,8 @@ struct common_speculative_state_draft : public common_speculative_state {
 
         auto * mem_dft = llama_get_memory(ctx_dft);
 
-        int reuse_i = 0;
-        int reuse_n = 0;
+        int reuse_i = 0; // index of part to be reused in prompt_dft
+        int reuse_n = 0; // length of part to be reused in prompt_dft
 
         const int n_ctx = llama_n_ctx(ctx_dft) - params.n_max;
 
@@ -287,18 +348,26 @@ struct common_speculative_state_draft : public common_speculative_state {
             }
         }
 
-        LOG_DBG("%s: reuse_i = %d, reuse_n = %d, prompt = %d\n", __func__, reuse_i, reuse_n, (int) prompt_dft.size());
+        LOG_DBG("%s: reuse_i = %d, reuse_n = %d, #prompt_dft = %zu, #prompt_cur = %zu\n",
+                __func__, reuse_i, reuse_n, prompt_dft.size(), prompt_cur.size());
+        if (use_checkpoint && ckpt.ckpt_size == 0 && reuse_n > 0) {
+            LOG_DBG("%s: no checkpoint available, no reuse, (reuse_i=%d, reuse_n=%d) -> (0, 0)\n",
+                    __func__, reuse_i, reuse_n);
+            reuse_i = 0;
+            reuse_n = 0;
+        }
 
         result.clear();
         result.reserve(params.n_max);
 
-        if (reuse_n == 0) {
+        bool needs_ckpt = use_checkpoint && prompt_dft.size() > 0;
+        if (reuse_n == 0 || (use_checkpoint && reuse_i > 0)) {
             llama_memory_clear(mem_dft, false);
             prompt_dft.clear();
         } else {
             // this happens when a previous draft has been discarded (for example, due to being too small), but the
             // target model agreed with it. in this case, we simply pass back the previous results to save compute
-            if (reuse_i + reuse_n < (int) prompt_dft.size() && prompt_dft[reuse_i + reuse_n] == id_last) {
+            if (reuse_i + reuse_n < (int64_t) prompt_dft.size() && prompt_dft[reuse_i + reuse_n] == id_last) {
                 for (int i = reuse_i + reuse_n + 1; i < (int) prompt_dft.size(); ++i) {
                     result.push_back(prompt_dft[i]);
 
@@ -310,17 +379,48 @@ struct common_speculative_state_draft : public common_speculative_state {
                 return;
             }
 
+            bool do_restore = false;
+            if (prompt_dft.size() > prompt_cur.size() && reuse_i + reuse_n < (int64_t) prompt_dft.size()) {
+                // This can happen after a partial acceptance (speculative decoding with checkpoints)
+                LOG_DBG("%s: #prompt_dft=%zu, #prompt_cur=%zu, shorten draft\n",
+                        __func__, prompt_dft.size(), prompt_cur.size());
+                prompt_dft.resize(prompt_cur.size());
+                do_restore = true;
+            }
+
             if (reuse_i > 0) {
-                llama_memory_seq_rm (mem_dft, 0, 0, reuse_i);
+                bool is_removed = llama_memory_seq_rm (mem_dft, 0, 0, reuse_i);
+                if (!is_removed) {
+                    LOG_ERR("%s: llama_memory_seq_rm failed, reuse_i=%d\n", __func__, reuse_i);
+                }
                 llama_memory_seq_add(mem_dft, 0, reuse_i, -1, -reuse_i);
 
                 prompt_dft.erase(prompt_dft.begin(), prompt_dft.begin() + reuse_i);
             }
 
-            if (reuse_n < (int) prompt_dft.size()) {
-                llama_memory_seq_rm (mem_dft, 0, reuse_n, -1);
-                prompt_dft.erase(prompt_dft.begin() + reuse_n, prompt_dft.end());
+            if (reuse_n < (int) prompt_dft.size() || do_restore) {
+                if (use_checkpoint) {
+                    if (ckpt.n_tokens > (int64_t) prompt_dft.size()) {
+                        LOG_INF("%s: checkpoint is too large, prompt_tgt.size=%zu, ckpt.n_tokens=%zu, reuse_n=%d, prompt_dft.size=%zu\n",
+                                __func__, prompt_tgt.size(), ckpt.n_tokens, reuse_n, prompt_dft.size());
+                    }
+                    draft_restore_checkpoint(ckpt.ckpt_size);
+                    reuse_n = ckpt.n_tokens;
+                    prompt_dft.resize(reuse_n);
+                    needs_ckpt = false;
+                } else {
+                    bool is_removed = llama_memory_seq_rm (mem_dft, 0, reuse_n, -1);
+                    if (!is_removed) {
+                        LOG_ERR("%s: llama_memory_seq_rm failed, reuse_n=%d, prompt_dft.size=%zu\n",
+                                __func__, reuse_n, prompt_dft.size());
+                    }
+                    prompt_dft.erase(prompt_dft.begin() + reuse_n, prompt_dft.end());
+                }
             }
+        }
+
+        if (needs_ckpt && use_checkpoint) {
+            ckpt.ckpt_size = draft_init_checkpoint(prompt_dft.size(), batch.n_tokens);
         }
 
         // prepare a batch to evaluate any new tokens in the prompt
@@ -337,7 +437,11 @@ struct common_speculative_state_draft : public common_speculative_state {
         if (batch.n_tokens > 0) {
             //LOG_DBG("%s: draft prompt batch: %s\n", __func__, string_from(ctx, batch).c_str());
 
-            llama_decode(ctx_dft, batch);
+            int ret = llama_decode(ctx_dft, batch);
+            if (ret != 0 && ret != 1) {
+                LOG_WRN("%s: llama_decode returned %d, prompt_cur.size=%zu\n",
+                        __func__, ret, prompt_cur.size());
+            }
         }
 
         const llama_pos n_past = prompt_dft.size();
@@ -351,7 +455,11 @@ struct common_speculative_state_draft : public common_speculative_state {
 
         LOG_DBG("%s: draft prompt: %s\n", __func__, string_from(ctx_dft, prompt_dft).c_str());
 
-        llama_decode(ctx_dft, batch);
+        int ret = llama_decode(ctx_dft, batch);
+        if (ret != 0 && ret != 1) {
+            LOG_WRN("%s: llama_decode returned %d, prompt_cur.size=%zu, prompt_dft.size=%zu\n",
+                    __func__, ret, prompt_cur.size(), prompt_dft.size());
+        }
 
         common_sampler_reset(smpl);
 
@@ -387,7 +495,11 @@ struct common_speculative_state_draft : public common_speculative_state {
             common_batch_add(batch, id, n_past + i + 1, { 0 }, true);
 
             // evaluate the drafted tokens on the draft model
-            llama_decode(ctx_dft, batch);
+            ret = llama_decode(ctx_dft, batch);
+            if (ret != 0) {
+                LOG_WRN("%s: llama_decode[%d] returned %d, prompt_cur.size=%zu, prompt_dft.size=%zu\n",
+                        __func__, i, ret, prompt_cur.size(), prompt_dft.size());
+            }
 
             prompt_dft.push_back(id);
         }
@@ -909,9 +1021,10 @@ common_speculative * common_speculative_init(
                 break;
             case COMMON_SPECULATIVE_TYPE_DRAFT: {
                 impls.push_back(std::make_unique<common_speculative_state_draft>(config.type,
-                    /* .ctx_tgt      = */ ctx_tgt,
-                    /* .ctx_dft      = */ ctx_dft,
-                    /* .replacements = */ params.replacements
+                    /* .ctx_tgt       = */ ctx_tgt,
+                    /* .ctx_dft       = */ ctx_dft,
+                    /* .replacements  = */ params.replacements,
+                    /* .use_checkpoint= */ params.use_checkpoints
                 ));
                 break;
             }
@@ -1072,3 +1185,267 @@ void common_speculative_print_stats(const common_speculative * spec) {
                 str_perf.c_str());
     }
 }
+
+
+// server callbacks
+//
+
+common_speculative_callback::~common_speculative_callback() = default;
+
+// server session
+//
+struct common_speculative_session::impl {
+    common_speculative_callback & callback;
+    common_params_speculative params_spec;
+
+    llama_context * ctx_tgt = nullptr;
+
+    common_speculative * spec = nullptr;
+
+    // `i_batch_dft`, idx of draft tokens in the main batch are stored in the caller
+
+    llama_tokens draft;
+
+    // use of checkpoints in speculative mode
+    bool        spec_has_ckpt        = false; // true if a checkpoint for rollback after partial speculation has been created
+    uint16_t    spec_ckpt_n_denials  = 0;     // number of drafts not accepted at the current position (0 or 1)
+    size_t      spec_ckpt_size_part  = 0;     // size of partial checkpoint
+
+    // Speculative decoding stats
+    int32_t n_draft_total    = 0;   // Total draft tokens generated
+    int32_t n_draft_accepted = 0;   // Draft tokens actually accepted
+
+    impl(common_speculative_callback    & callback,
+        const common_params_speculative & params,
+        llama_context                   * ctx_tgt)
+        : callback(callback), params_spec(params), ctx_tgt(ctx_tgt) {
+        spec = common_speculative_init(params_spec, ctx_tgt);
+    }
+
+    void begin(const llama_tokens & prompt_history) {
+        common_speculative_begin(spec, prompt_history);
+    }
+
+    bool has_batch_dft() {
+        return !draft.empty();
+    }
+
+    void clear_draft() {
+        draft.clear();
+        spec_ckpt_n_denials  = 0;
+    }
+
+    llama_tokens compute_draft(
+               const llama_tokens & cached_text_tokens,
+                     llama_token    id_last,
+               const int            n_draft_max) {
+        if (spec == nullptr) {
+            // no implementation, nothing to do
+            clear_draft();
+            return draft;
+        }
+
+        if (n_draft_max == 0) {
+            clear_draft();
+            return draft;
+        }
+        if (params_spec.use_checkpoints && spec_ckpt_n_denials > 1) {
+            // We shouldn't get two denials.
+            LOG_WRN("%s: #tokens=%zu, spec_ckpt_n_denials=%d, id_last=%d, #draft=%zu\n", __func__,
+                    cached_text_tokens.size(), spec_ckpt_n_denials, id_last, draft.size());
+            clear_draft();
+            return draft;
+        }
+
+        if (spec_ckpt_n_denials == 1) {
+            // there is a previous speculation which wasn't accepted in full length
+            if (draft.empty()) {
+                // switch to non-draft inference
+                LOG_DBG("%s: draft of length 0 after denied checkpoint\n", __func__);
+                clear_draft();
+                return draft;
+            }
+            // we use the shortened draft of previous speculation
+            LOG_DBG("%s: reuse shortened draft, #tokens=%zu, id_last=%d, size=%zu\n", __func__,
+                    cached_text_tokens.size(), id_last, draft.size());
+        } else if (spec_ckpt_n_denials > 1) {
+            GGML_ABORT("illegal state: spec_ckpt_n_denials = %d > 1", spec_ckpt_n_denials);
+        } else {
+            // call the speculative implementation to create a draft
+            draft = common_speculative_draft(spec, params_spec, cached_text_tokens, id_last);
+            LOG_DBG("draft: id_last=%d, #draft=%zu\n", id_last, draft.size());
+            if (draft.empty()) {
+                clear_draft();
+                return draft;
+            }
+        }
+
+        if (draft.size() > (size_t) n_draft_max) {
+            LOG_WRN("draft size %d exceeds max %d, truncating\n", (int) draft.size(), n_draft_max);
+            draft.resize(n_draft_max);
+        }
+
+        bool do_checkpoint = !draft.empty() && params_spec.use_checkpoints;
+        if (do_checkpoint && cached_text_tokens.size() > 5 && draft.size() >= 3) {
+            LOG_DBG("%s: #tokens=%zu, draft.size=%zu, n_spec_denials=%d, do_checkpoint=%s, id_last=%d, tokens=[..., %d, %d, %d], draft=[%d, %d, %d, ...]\n",
+                __func__,
+                cached_text_tokens.size(),
+                draft.size(), spec_ckpt_n_denials,
+                do_checkpoint ? "yes" : "no", id_last,
+                cached_text_tokens[cached_text_tokens.size() - 3],
+                cached_text_tokens[cached_text_tokens.size() - 2],
+                cached_text_tokens[cached_text_tokens.size() - 1],
+                draft[0], draft[1], draft[2]);
+        }
+
+        if (params_spec.n_min > (int) draft.size()) {
+            LOG_DBG("ignoring small draft: %d < %d\n", (int) draft.size(), params_spec.n_min);
+            clear_draft();
+            return draft;
+        }
+
+        if (do_checkpoint) {
+            const size_t n = callback.create_checkpoint();
+            if (n == 0) {
+                LOG_WRN("%s: checkpoint creation failed (#tokens=%zu)\n", __func__, cached_text_tokens.size());
+                clear_draft();
+                return draft;
+            }
+            spec_ckpt_size_part = n;
+            spec_has_ckpt = true;
+        }
+
+        // add last sampled token to the batch
+        callback.batch_add_token(id_last, true);
+
+        // add all drafted tokens to the batch
+        for (size_t i = 0; i < draft.size(); i++) {
+            callback.batch_add_token(draft[i], true);
+        }
+
+        return draft;
+    }
+
+    common_speculative_accept_response sample_and_accept() {
+        const size_t n_draft = draft.size();
+
+        // the accepted tokens from the speculation
+        auto ids = callback.sampler_sample_and_accept_n(draft);
+
+        LOG_DBG("%s: n_draft=%zu, ids.size=%zu\n", __func__, n_draft, ids.size());
+        if (ids.size() < n_draft + 1) {
+            // the main model rejected some tokens
+
+            // we shorten the draft
+            draft.resize(ids.size() - 1);
+            if (spec_has_ckpt) {
+                // we need to rollback to the state before sampling the draft tokens
+                // (restore_checkpoint shortens context and slot.prompt.tokens)
+                const size_t n = callback.restore_checkpoint(spec_ckpt_size_part);
+                LOG_DBG("%s: partial acceptance: %zu < %zu, restored checkpoint: got %zu bytes\n",
+                        __func__,
+                        ids.size() - 1, n_draft, n);
+
+                // delete Checkpoint
+                callback.delete_checkpoint();
+                spec_has_ckpt = false;
+
+                spec_ckpt_n_denials++;
+                if (ids.size() > 1u + static_cast<std::size_t>(params_spec.n_min) && spec_ckpt_n_denials == 1) {
+                    // we will do the batch again but with the shortened draft
+                    //return common_speculative_accept_response(std::move(ids), n_draft, true);
+                    LOG_DBG("%s: partial draft disabled\n", __func__);
+                }
+
+                LOG_DBG("%s: don't accept partial draft, n_draft=%zu, ids.size=%zu\n", __func__, n_draft, ids.size());
+                draft.clear();
+
+                // use the sampled token only
+                ids.resize(1);
+                // drafted tokens in prompt have been deleted in restore_checkpoint(...).
+
+                // skip acceptance, don't calculate a new draft
+                return common_speculative_accept_response{std::move(ids), 0, true};
+            }
+        }
+        const size_t draft_size_accepted = draft.size();
+        LOG_DBG("%s: draft.size=%zu, ids.size=%zu\n", __func__, draft_size_accepted, ids.size());
+        common_speculative_accept(spec, draft_size_accepted);
+        draft.clear();
+
+        return common_speculative_accept_response{std::move(ids), n_draft, false};
+    }
+
+    void rewind(const llama_pos p0) {
+        spec_ckpt_n_denials = 0;
+        if (spec_has_ckpt) {
+            // Delete Checkpoint
+            callback.delete_checkpoint();
+            spec_has_ckpt = false;
+        } else {
+            callback.memory_seq_rm(p0, -1);
+        }
+    }
+
+    void print_stats() const {
+        if (spec == nullptr) {
+            return;
+        }
+
+        common_speculative_print_stats(spec);
+    }
+
+    void reset() {
+        if (spec == nullptr) {
+            return;
+        }
+
+        clear_draft();
+
+        spec_has_ckpt        = false;
+        spec_ckpt_size_part  = 0;
+    }
+};
+
+common_speculative_session::common_speculative_session(
+        common_speculative_callback     & callback,
+        const common_params_speculative & params,
+        llama_context                   * ctx_tgt) : p_impl(new impl{callback, params, ctx_tgt}) {
+}
+
+common_speculative_session::~common_speculative_session() {
+    common_speculative_free(p_impl->spec);
+    delete p_impl;
+}
+
+void common_speculative_session::begin(const llama_tokens & prompt_history) {
+    p_impl->begin(prompt_history);
+}
+
+bool common_speculative_session::has_batch_dft() {
+    return !p_impl->has_batch_dft();
+}
+
+llama_tokens common_speculative_session::compute_draft(
+       const llama_tokens & prompt,
+             llama_token    id_last,
+             int            n_draft_max_slot) {
+    return p_impl->compute_draft(prompt, id_last, n_draft_max_slot);
+}
+
+common_speculative_accept_response common_speculative_session::sample_and_accept() {
+    return p_impl->sample_and_accept();
+}
+
+void common_speculative_session::rewind(const llama_pos p0) {
+    p_impl->rewind(p0);
+}
+
+void common_speculative_session::print_stats() const {
+    p_impl->print_stats();
+}
+
+void common_speculative_session::reset() {
+    p_impl->reset();
+}
+
