@@ -641,42 +641,67 @@ static void ggml_ifairy_lut_qgemm_lut16_one(int64_t                            b
 
     const int tiles_per_pass = 4;
 
-    // AVX2: 固定每次处理 4 个 16-row tiles，但每个 byte_idx 的 LUT 仅加载一次并扇出给全部 tiles。
+    // AVX2: 固定每次处理 4 个 16-row tiles，确保每个 byte_idx 的 LUT 只加载一次并扇出给所有 tiles。
     for (int t0 = 0; t0 < tiles; t0 += tiles_per_pass) {
-        int tile_idx[tiles_per_pass];
-        int nt = 0;
-        for (int j = 0; j < tiles_per_pass; ++j) {
-            const int tt = t0 + j;
-            if (tt < tiles) {
-                tile_idx[nt++] = tt;
-            }
-        }
-        if (nt == 0) {
-            break;
-        }
+        const int t1    = t0 + 1;
+        const int t2    = t0 + 2;
+        const int t3    = t0 + 3;
+        const bool has1 = t1 < tiles;
+        const bool has2 = t2 < tiles;
+        const bool has3 = t3 < tiles;
 
-        __m256 acc_r_lo[tiles_per_pass];
-        __m256 acc_r_hi[tiles_per_pass];
-        __m256 acc_i_lo[tiles_per_pass];
-        __m256 acc_i_hi[tiles_per_pass];
-        for (int j = 0; j < nt; ++j) {
-            acc_r_lo[j] = _mm256_setzero_ps();
-            acc_r_hi[j] = _mm256_setzero_ps();
-            acc_i_lo[j] = _mm256_setzero_ps();
-            acc_i_hi[j] = _mm256_setzero_ps();
-        }
+        __m256 acc0_r_lo = _mm256_setzero_ps();
+        __m256 acc0_r_hi = _mm256_setzero_ps();
+        __m256 acc0_i_lo = _mm256_setzero_ps();
+        __m256 acc0_i_hi = _mm256_setzero_ps();
+
+        __m256 acc1_r_lo = _mm256_setzero_ps();
+        __m256 acc1_r_hi = _mm256_setzero_ps();
+        __m256 acc1_i_lo = _mm256_setzero_ps();
+        __m256 acc1_i_hi = _mm256_setzero_ps();
+
+        __m256 acc2_r_lo = _mm256_setzero_ps();
+        __m256 acc2_r_hi = _mm256_setzero_ps();
+        __m256 acc2_i_lo = _mm256_setzero_ps();
+        __m256 acc2_i_hi = _mm256_setzero_ps();
+
+        __m256 acc3_r_lo = _mm256_setzero_ps();
+        __m256 acc3_r_hi = _mm256_setzero_ps();
+        __m256 acc3_i_lo = _mm256_setzero_ps();
+        __m256 acc3_i_hi = _mm256_setzero_ps();
 
         for (int64_t blk = 0; blk < blocks; ++blk) {
-            __m256i sum_01_lo[tiles_per_pass];
-            __m256i sum_01_hi[tiles_per_pass];
-            __m256i sum_23_lo[tiles_per_pass];
-            __m256i sum_23_hi[tiles_per_pass];
-            for (int j = 0; j < nt; ++j) {
-                sum_01_lo[j] = _mm256_setzero_si256();
-                sum_01_hi[j] = _mm256_setzero_si256();
-                sum_23_lo[j] = _mm256_setzero_si256();
-                sum_23_hi[j] = _mm256_setzero_si256();
-            }
+            const struct ifairy_lut_wtile_16 * wt0 =
+                wtiles + (size_t) t0 * (size_t) blocks + (size_t) blk;
+            const struct ifairy_lut_wtile_16 * wt1 = has1
+                ? wtiles + (size_t) t1 * (size_t) blocks + (size_t) blk
+                : nullptr;
+            const struct ifairy_lut_wtile_16 * wt2 = has2
+                ? wtiles + (size_t) t2 * (size_t) blocks + (size_t) blk
+                : nullptr;
+            const struct ifairy_lut_wtile_16 * wt3 = has3
+                ? wtiles + (size_t) t3 * (size_t) blocks + (size_t) blk
+                : nullptr;
+
+            __m256i sum0_01_lo = _mm256_setzero_si256();
+            __m256i sum0_01_hi = _mm256_setzero_si256();
+            __m256i sum0_23_lo = _mm256_setzero_si256();
+            __m256i sum0_23_hi = _mm256_setzero_si256();
+
+            __m256i sum1_01_lo = _mm256_setzero_si256();
+            __m256i sum1_01_hi = _mm256_setzero_si256();
+            __m256i sum1_23_lo = _mm256_setzero_si256();
+            __m256i sum1_23_hi = _mm256_setzero_si256();
+
+            __m256i sum2_01_lo = _mm256_setzero_si256();
+            __m256i sum2_01_hi = _mm256_setzero_si256();
+            __m256i sum2_23_lo = _mm256_setzero_si256();
+            __m256i sum2_23_hi = _mm256_setzero_si256();
+
+            __m256i sum3_01_lo = _mm256_setzero_si256();
+            __m256i sum3_01_hi = _mm256_setzero_si256();
+            __m256i sum3_23_lo = _mm256_setzero_si256();
+            __m256i sum3_23_hi = _mm256_setzero_si256();
 
             const int8_t * lut_blk   = lut_col + blk * groups_per_block * k_ifairy_lut_group_bytes;
             const int      num_bytes = groups_per_block / 2;
@@ -685,23 +710,23 @@ static void ggml_ifairy_lut_qgemm_lut16_one(int64_t                            b
 #        pragma GCC unroll 2
 #    endif
             for (int byte_idx = 0; byte_idx < num_bytes; ++byte_idx) {
-                const int8_t * lut_base = lut_blk + (size_t) byte_idx * 2u * (size_t) k_ifairy_lut_group_bytes;
+                const int8_t * lut_base =
+                    lut_blk + (size_t) byte_idx * 2u * (size_t) k_ifairy_lut_group_bytes;
 
                 const __m256i lut01_0 = _mm256_loadu_si256((const __m256i *) (lut_base + 0));
                 const __m256i lut23_0 = _mm256_loadu_si256((const __m256i *) (lut_base + 32));
                 const __m256i lut01_1 = _mm256_loadu_si256((const __m256i *) (lut_base + 64));
                 const __m256i lut23_1 = _mm256_loadu_si256((const __m256i *) (lut_base + 96));
 
-                for (int j = 0; j < nt; ++j) {
-                    const int tile = tile_idx[j];
-                    const struct ifairy_lut_wtile_16 * wt =
-                        wtiles + (size_t) tile * (size_t) blocks + (size_t) blk;
-
-                    const __m128i packed_128 = _mm_load_si128((const __m128i *) &wt->qs[byte_idx]);
-                    const __m256i packed     = _mm256_broadcastsi128_si256(packed_128);
+                // tile 0（必定存在）
+                {
+                    const __m128i packed_128 =
+                        _mm_loadu_si128((const __m128i *) &wt0->qs[byte_idx]);
+                    const __m256i packed = _mm256_broadcastsi128_si256(packed_128);
 
                     const __m256i idx_lo = _mm256_and_si256(packed, mask_idx);
-                    const __m256i idx_hi = _mm256_and_si256(_mm256_srli_epi16(packed, 4), mask_idx);
+                    const __m256i idx_hi =
+                        _mm256_and_si256(_mm256_srli_epi16(packed, 4), mask_idx);
 
                     const __m256i out01_0 = _mm256_shuffle_epi8(lut01_0, idx_lo);
                     const __m256i out23_0 = _mm256_shuffle_epi8(lut23_0, idx_lo);
@@ -710,58 +735,154 @@ static void ggml_ifairy_lut_qgemm_lut16_one(int64_t                            b
 
                     const __m256i lo01 = _mm256_unpacklo_epi8(out01_0, out01_1);
                     const __m256i hi01 = _mm256_unpackhi_epi8(out01_0, out01_1);
-                    sum_01_lo[j]       = _mm256_add_epi16(sum_01_lo[j], _mm256_maddubs_epi16(one, lo01));
-                    sum_01_hi[j]       = _mm256_add_epi16(sum_01_hi[j], _mm256_maddubs_epi16(one, hi01));
+                    sum0_01_lo         =
+                        _mm256_add_epi16(sum0_01_lo, _mm256_maddubs_epi16(one, lo01));
+                    sum0_01_hi =
+                        _mm256_add_epi16(sum0_01_hi, _mm256_maddubs_epi16(one, hi01));
 
                     const __m256i lo23 = _mm256_unpacklo_epi8(out23_0, out23_1);
                     const __m256i hi23 = _mm256_unpackhi_epi8(out23_0, out23_1);
-                    sum_23_lo[j]       = _mm256_add_epi16(sum_23_lo[j], _mm256_maddubs_epi16(one, lo23));
-                    sum_23_hi[j]       = _mm256_add_epi16(sum_23_hi[j], _mm256_maddubs_epi16(one, hi23));
+                    sum0_23_lo         =
+                        _mm256_add_epi16(sum0_23_lo, _mm256_maddubs_epi16(one, lo23));
+                    sum0_23_hi =
+                        _mm256_add_epi16(sum0_23_hi, _mm256_maddubs_epi16(one, hi23));
+                }
+
+                if (has1) {
+                    const __m128i packed_128 =
+                        _mm_loadu_si128((const __m128i *) &wt1->qs[byte_idx]);
+                    const __m256i packed = _mm256_broadcastsi128_si256(packed_128);
+
+                    const __m256i idx_lo = _mm256_and_si256(packed, mask_idx);
+                    const __m256i idx_hi =
+                        _mm256_and_si256(_mm256_srli_epi16(packed, 4), mask_idx);
+
+                    const __m256i out01_0 = _mm256_shuffle_epi8(lut01_0, idx_lo);
+                    const __m256i out23_0 = _mm256_shuffle_epi8(lut23_0, idx_lo);
+                    const __m256i out01_1 = _mm256_shuffle_epi8(lut01_1, idx_hi);
+                    const __m256i out23_1 = _mm256_shuffle_epi8(lut23_1, idx_hi);
+
+                    const __m256i lo01 = _mm256_unpacklo_epi8(out01_0, out01_1);
+                    const __m256i hi01 = _mm256_unpackhi_epi8(out01_0, out01_1);
+                    sum1_01_lo         =
+                        _mm256_add_epi16(sum1_01_lo, _mm256_maddubs_epi16(one, lo01));
+                    sum1_01_hi =
+                        _mm256_add_epi16(sum1_01_hi, _mm256_maddubs_epi16(one, hi01));
+
+                    const __m256i lo23 = _mm256_unpacklo_epi8(out23_0, out23_1);
+                    const __m256i hi23 = _mm256_unpackhi_epi8(out23_0, out23_1);
+                    sum1_23_lo         =
+                        _mm256_add_epi16(sum1_23_lo, _mm256_maddubs_epi16(one, lo23));
+                    sum1_23_hi =
+                        _mm256_add_epi16(sum1_23_hi, _mm256_maddubs_epi16(one, hi23));
+                }
+
+                if (has2) {
+                    const __m128i packed_128 =
+                        _mm_loadu_si128((const __m128i *) &wt2->qs[byte_idx]);
+                    const __m256i packed = _mm256_broadcastsi128_si256(packed_128);
+
+                    const __m256i idx_lo = _mm256_and_si256(packed, mask_idx);
+                    const __m256i idx_hi =
+                        _mm256_and_si256(_mm256_srli_epi16(packed, 4), mask_idx);
+
+                    const __m256i out01_0 = _mm256_shuffle_epi8(lut01_0, idx_lo);
+                    const __m256i out23_0 = _mm256_shuffle_epi8(lut23_0, idx_lo);
+                    const __m256i out01_1 = _mm256_shuffle_epi8(lut01_1, idx_hi);
+                    const __m256i out23_1 = _mm256_shuffle_epi8(lut23_1, idx_hi);
+
+                    const __m256i lo01 = _mm256_unpacklo_epi8(out01_0, out01_1);
+                    const __m256i hi01 = _mm256_unpackhi_epi8(out01_0, out01_1);
+                    sum2_01_lo         =
+                        _mm256_add_epi16(sum2_01_lo, _mm256_maddubs_epi16(one, lo01));
+                    sum2_01_hi =
+                        _mm256_add_epi16(sum2_01_hi, _mm256_maddubs_epi16(one, hi01));
+
+                    const __m256i lo23 = _mm256_unpacklo_epi8(out23_0, out23_1);
+                    const __m256i hi23 = _mm256_unpackhi_epi8(out23_0, out23_1);
+                    sum2_23_lo         =
+                        _mm256_add_epi16(sum2_23_lo, _mm256_maddubs_epi16(one, lo23));
+                    sum2_23_hi =
+                        _mm256_add_epi16(sum2_23_hi, _mm256_maddubs_epi16(one, hi23));
+                }
+
+                if (has3) {
+                    const __m128i packed_128 =
+                        _mm_loadu_si128((const __m128i *) &wt3->qs[byte_idx]);
+                    const __m256i packed = _mm256_broadcastsi128_si256(packed_128);
+
+                    const __m256i idx_lo = _mm256_and_si256(packed, mask_idx);
+                    const __m256i idx_hi =
+                        _mm256_and_si256(_mm256_srli_epi16(packed, 4), mask_idx);
+
+                    const __m256i out01_0 = _mm256_shuffle_epi8(lut01_0, idx_lo);
+                    const __m256i out23_0 = _mm256_shuffle_epi8(lut23_0, idx_lo);
+                    const __m256i out01_1 = _mm256_shuffle_epi8(lut01_1, idx_hi);
+                    const __m256i out23_1 = _mm256_shuffle_epi8(lut23_1, idx_hi);
+
+                    const __m256i lo01 = _mm256_unpacklo_epi8(out01_0, out01_1);
+                    const __m256i hi01 = _mm256_unpackhi_epi8(out01_0, out01_1);
+                    sum3_01_lo         =
+                        _mm256_add_epi16(sum3_01_lo, _mm256_maddubs_epi16(one, lo01));
+                    sum3_01_hi =
+                        _mm256_add_epi16(sum3_01_hi, _mm256_maddubs_epi16(one, hi01));
+
+                    const __m256i lo23 = _mm256_unpacklo_epi8(out23_0, out23_1);
+                    const __m256i hi23 = _mm256_unpackhi_epi8(out23_0, out23_1);
+                    sum3_23_lo         =
+                        _mm256_add_epi16(sum3_23_lo, _mm256_maddubs_epi16(one, lo23));
+                    sum3_23_hi =
+                        _mm256_add_epi16(sum3_23_hi, _mm256_maddubs_epi16(one, hi23));
                 }
             }
 
             const __m256 v_lr = _mm256_set1_ps(scales[blk * 2 + 0]);
             const __m256 v_li = _mm256_set1_ps(scales[blk * 2 + 1]);
 
-            for (int j = 0; j < nt; ++j) {
-                const int tile = tile_idx[j];
-                const struct ifairy_lut_wtile_16 * wt =
-                    wtiles + (size_t) tile * (size_t) blocks + (size_t) blk;
+            // tile 0
+            {
+                const __m128i sum_ac_lo_s16 = _mm256_castsi256_si128(sum0_01_lo);
+                const __m128i sum_bd_lo_s16 = _mm256_extracti128_si256(sum0_01_lo, 1);
+                const __m128i sum_ac_hi_s16 = _mm256_castsi256_si128(sum0_01_hi);
+                const __m128i sum_bd_hi_s16 = _mm256_extracti128_si256(sum0_01_hi, 1);
 
-                const __m128i sum_ac_lo_s16 = _mm256_castsi256_si128(sum_01_lo[j]);
-                const __m128i sum_bd_lo_s16 = _mm256_extracti128_si256(sum_01_lo[j], 1);
-                const __m128i sum_ac_hi_s16 = _mm256_castsi256_si128(sum_01_hi[j]);
-                const __m128i sum_bd_hi_s16 = _mm256_extracti128_si256(sum_01_hi[j], 1);
+                const __m128i sum_bc_lo_s16 = _mm256_castsi256_si128(sum0_23_lo);
+                const __m128i sum_ad_lo_s16 = _mm256_extracti128_si256(sum0_23_lo, 1);
+                const __m128i sum_bc_hi_s16 = _mm256_castsi256_si128(sum0_23_hi);
+                const __m128i sum_ad_hi_s16 = _mm256_extracti128_si256(sum0_23_hi, 1);
 
-                const __m128i sum_bc_lo_s16 = _mm256_castsi256_si128(sum_23_lo[j]);
-                const __m128i sum_ad_lo_s16 = _mm256_extracti128_si256(sum_23_lo[j], 1);
-                const __m128i sum_bc_hi_s16 = _mm256_castsi256_si128(sum_23_hi[j]);
-                const __m128i sum_ad_hi_s16 = _mm256_extracti128_si256(sum_23_hi[j], 1);
+                const __m256 v_ac_lo =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_ac_lo_s16));
+                const __m256 v_ac_hi =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_ac_hi_s16));
+                const __m256 v_bc_lo =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_bc_lo_s16));
+                const __m256 v_bc_hi =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_bc_hi_s16));
+                const __m256 v_ad_lo =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_ad_lo_s16));
+                const __m256 v_ad_hi =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_ad_hi_s16));
+                const __m256 v_bd_lo =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_bd_lo_s16));
+                const __m256 v_bd_hi =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_bd_hi_s16));
 
-                const __m256 v_ac_lo = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_ac_lo_s16));
-                const __m256 v_ac_hi = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_ac_hi_s16));
-                const __m256 v_bc_lo = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_bc_lo_s16));
-                const __m256 v_bc_hi = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_bc_hi_s16));
-                const __m256 v_ad_lo = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_ad_lo_s16));
-                const __m256 v_ad_hi = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_ad_hi_s16));
-                const __m256 v_bd_lo = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_bd_lo_s16));
-                const __m256 v_bd_hi = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_bd_hi_s16));
-
-                const __m256 wr_lo = _mm256_load_ps(wt->d_real + 0);
-                const __m256 wr_hi = _mm256_load_ps(wt->d_real + 8);
-                const __m256 wi_lo = _mm256_load_ps(wt->d_imag + 0);
-                const __m256 wi_hi = _mm256_load_ps(wt->d_imag + 8);
+                const __m256 wr_lo = _mm256_loadu_ps(wt0->d_real + 0);
+                const __m256 wr_hi = _mm256_loadu_ps(wt0->d_real + 8);
+                const __m256 wi_lo = _mm256_loadu_ps(wt0->d_imag + 0);
+                const __m256 wi_hi = _mm256_loadu_ps(wt0->d_imag + 8);
 
 #    ifdef __FMA__
-                acc_r_lo[j] = _mm256_fmadd_ps(v_ac_lo, _mm256_mul_ps(v_lr, wr_lo), acc_r_lo[j]);
-                acc_r_lo[j] = _mm256_fmadd_ps(v_bd_lo, _mm256_mul_ps(v_li, wi_lo), acc_r_lo[j]);
-                acc_r_hi[j] = _mm256_fmadd_ps(v_ac_hi, _mm256_mul_ps(v_lr, wr_hi), acc_r_hi[j]);
-                acc_r_hi[j] = _mm256_fmadd_ps(v_bd_hi, _mm256_mul_ps(v_li, wi_hi), acc_r_hi[j]);
+                acc0_r_lo = _mm256_fmadd_ps(v_ac_lo, _mm256_mul_ps(v_lr, wr_lo), acc0_r_lo);
+                acc0_r_lo = _mm256_fmadd_ps(v_bd_lo, _mm256_mul_ps(v_li, wi_lo), acc0_r_lo);
+                acc0_r_hi = _mm256_fmadd_ps(v_ac_hi, _mm256_mul_ps(v_lr, wr_hi), acc0_r_hi);
+                acc0_r_hi = _mm256_fmadd_ps(v_bd_hi, _mm256_mul_ps(v_li, wi_hi), acc0_r_hi);
 
-                acc_i_lo[j] = _mm256_fmadd_ps(v_bc_lo, _mm256_mul_ps(v_lr, wi_lo), acc_i_lo[j]);
-                acc_i_lo[j] = _mm256_fmadd_ps(v_ad_lo, _mm256_mul_ps(v_li, wr_lo), acc_i_lo[j]);
-                acc_i_hi[j] = _mm256_fmadd_ps(v_bc_hi, _mm256_mul_ps(v_lr, wi_hi), acc_i_hi[j]);
-                acc_i_hi[j] = _mm256_fmadd_ps(v_ad_hi, _mm256_mul_ps(v_li, wr_hi), acc_i_hi[j]);
+                acc0_i_lo = _mm256_fmadd_ps(v_bc_lo, _mm256_mul_ps(v_lr, wi_lo), acc0_i_lo);
+                acc0_i_lo = _mm256_fmadd_ps(v_ad_lo, _mm256_mul_ps(v_li, wr_lo), acc0_i_lo);
+                acc0_i_hi = _mm256_fmadd_ps(v_bc_hi, _mm256_mul_ps(v_lr, wi_hi), acc0_i_hi);
+                acc0_i_hi = _mm256_fmadd_ps(v_ad_hi, _mm256_mul_ps(v_li, wr_hi), acc0_i_hi);
 #    else
                 const __m256 lr_wr_lo = _mm256_mul_ps(v_lr, wr_lo);
                 const __m256 lr_wr_hi = _mm256_mul_ps(v_lr, wr_hi);
@@ -772,22 +893,228 @@ static void ggml_ifairy_lut_qgemm_lut16_one(int64_t                            b
                 const __m256 li_wr_lo = _mm256_mul_ps(v_li, wr_lo);
                 const __m256 li_wr_hi = _mm256_mul_ps(v_li, wr_hi);
 
-                acc_r_lo[j] = _mm256_add_ps(acc_r_lo[j], _mm256_mul_ps(v_ac_lo, lr_wr_lo));
-                acc_r_lo[j] = _mm256_add_ps(acc_r_lo[j], _mm256_mul_ps(v_bd_lo, li_wi_lo));
-                acc_r_hi[j] = _mm256_add_ps(acc_r_hi[j], _mm256_mul_ps(v_ac_hi, lr_wr_hi));
-                acc_r_hi[j] = _mm256_add_ps(acc_r_hi[j], _mm256_mul_ps(v_bd_hi, li_wi_hi));
+                acc0_r_lo = _mm256_add_ps(acc0_r_lo, _mm256_mul_ps(v_ac_lo, lr_wr_lo));
+                acc0_r_lo = _mm256_add_ps(acc0_r_lo, _mm256_mul_ps(v_bd_lo, li_wi_lo));
+                acc0_r_hi = _mm256_add_ps(acc0_r_hi, _mm256_mul_ps(v_ac_hi, lr_wr_hi));
+                acc0_r_hi = _mm256_add_ps(acc0_r_hi, _mm256_mul_ps(v_bd_hi, li_wi_hi));
 
-                acc_i_lo[j] = _mm256_add_ps(acc_i_lo[j], _mm256_mul_ps(v_bc_lo, lr_wi_lo));
-                acc_i_lo[j] = _mm256_add_ps(acc_i_lo[j], _mm256_mul_ps(v_ad_lo, li_wr_lo));
-                acc_i_hi[j] = _mm256_add_ps(acc_i_hi[j], _mm256_mul_ps(v_bc_hi, lr_wi_hi));
-                acc_i_hi[j] = _mm256_add_ps(acc_i_hi[j], _mm256_mul_ps(v_ad_hi, li_wr_hi));
+                acc0_i_lo = _mm256_add_ps(acc0_i_lo, _mm256_mul_ps(v_bc_lo, lr_wi_lo));
+                acc0_i_lo = _mm256_add_ps(acc0_i_lo, _mm256_mul_ps(v_ad_lo, li_wr_lo));
+                acc0_i_hi = _mm256_add_ps(acc0_i_hi, _mm256_mul_ps(v_bc_hi, lr_wi_hi));
+                acc0_i_hi = _mm256_add_ps(acc0_i_hi, _mm256_mul_ps(v_ad_hi, li_wr_hi));
+#    endif
+            }
+
+            if (has1) {
+                const __m128i sum_ac_lo_s16 = _mm256_castsi256_si128(sum1_01_lo);
+                const __m128i sum_bd_lo_s16 = _mm256_extracti128_si256(sum1_01_lo, 1);
+                const __m128i sum_ac_hi_s16 = _mm256_castsi256_si128(sum1_01_hi);
+                const __m128i sum_bd_hi_s16 = _mm256_extracti128_si256(sum1_01_hi, 1);
+
+                const __m128i sum_bc_lo_s16 = _mm256_castsi256_si128(sum1_23_lo);
+                const __m128i sum_ad_lo_s16 = _mm256_extracti128_si256(sum1_23_lo, 1);
+                const __m128i sum_bc_hi_s16 = _mm256_castsi256_si128(sum1_23_hi);
+                const __m128i sum_ad_hi_s16 = _mm256_extracti128_si256(sum1_23_hi, 1);
+
+                const __m256 v_ac_lo =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_ac_lo_s16));
+                const __m256 v_ac_hi =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_ac_hi_s16));
+                const __m256 v_bc_lo =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_bc_lo_s16));
+                const __m256 v_bc_hi =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_bc_hi_s16));
+                const __m256 v_ad_lo =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_ad_lo_s16));
+                const __m256 v_ad_hi =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_ad_hi_s16));
+                const __m256 v_bd_lo =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_bd_lo_s16));
+                const __m256 v_bd_hi =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_bd_hi_s16));
+
+                const __m256 wr_lo = _mm256_loadu_ps(wt1->d_real + 0);
+                const __m256 wr_hi = _mm256_loadu_ps(wt1->d_real + 8);
+                const __m256 wi_lo = _mm256_loadu_ps(wt1->d_imag + 0);
+                const __m256 wi_hi = _mm256_loadu_ps(wt1->d_imag + 8);
+
+#    ifdef __FMA__
+                acc1_r_lo = _mm256_fmadd_ps(v_ac_lo, _mm256_mul_ps(v_lr, wr_lo), acc1_r_lo);
+                acc1_r_lo = _mm256_fmadd_ps(v_bd_lo, _mm256_mul_ps(v_li, wi_lo), acc1_r_lo);
+                acc1_r_hi = _mm256_fmadd_ps(v_ac_hi, _mm256_mul_ps(v_lr, wr_hi), acc1_r_hi);
+                acc1_r_hi = _mm256_fmadd_ps(v_bd_hi, _mm256_mul_ps(v_li, wi_hi), acc1_r_hi);
+
+                acc1_i_lo = _mm256_fmadd_ps(v_bc_lo, _mm256_mul_ps(v_lr, wi_lo), acc1_i_lo);
+                acc1_i_lo = _mm256_fmadd_ps(v_ad_lo, _mm256_mul_ps(v_li, wr_lo), acc1_i_lo);
+                acc1_i_hi = _mm256_fmadd_ps(v_bc_hi, _mm256_mul_ps(v_lr, wi_hi), acc1_i_hi);
+                acc1_i_hi = _mm256_fmadd_ps(v_ad_hi, _mm256_mul_ps(v_li, wr_hi), acc1_i_hi);
+#    else
+                const __m256 lr_wr_lo = _mm256_mul_ps(v_lr, wr_lo);
+                const __m256 lr_wr_hi = _mm256_mul_ps(v_lr, wr_hi);
+                const __m256 li_wi_lo = _mm256_mul_ps(v_li, wi_lo);
+                const __m256 li_wi_hi = _mm256_mul_ps(v_li, wi_hi);
+                const __m256 lr_wi_lo = _mm256_mul_ps(v_lr, wi_lo);
+                const __m256 lr_wi_hi = _mm256_mul_ps(v_lr, wi_hi);
+                const __m256 li_wr_lo = _mm256_mul_ps(v_li, wr_lo);
+                const __m256 li_wr_hi = _mm256_mul_ps(v_li, wr_hi);
+
+                acc1_r_lo = _mm256_add_ps(acc1_r_lo, _mm256_mul_ps(v_ac_lo, lr_wr_lo));
+                acc1_r_lo = _mm256_add_ps(acc1_r_lo, _mm256_mul_ps(v_bd_lo, li_wi_lo));
+                acc1_r_hi = _mm256_add_ps(acc1_r_hi, _mm256_mul_ps(v_ac_hi, lr_wr_hi));
+                acc1_r_hi = _mm256_add_ps(acc1_r_hi, _mm256_mul_ps(v_bd_hi, li_wi_hi));
+
+                acc1_i_lo = _mm256_add_ps(acc1_i_lo, _mm256_mul_ps(v_bc_lo, lr_wi_lo));
+                acc1_i_lo = _mm256_add_ps(acc1_i_lo, _mm256_mul_ps(v_ad_lo, li_wr_lo));
+                acc1_i_hi = _mm256_add_ps(acc1_i_hi, _mm256_mul_ps(v_bc_hi, lr_wi_hi));
+                acc1_i_hi = _mm256_add_ps(acc1_i_hi, _mm256_mul_ps(v_ad_hi, li_wr_hi));
+#    endif
+            }
+
+            if (has2) {
+                const __m128i sum_ac_lo_s16 = _mm256_castsi256_si128(sum2_01_lo);
+                const __m128i sum_bd_lo_s16 = _mm256_extracti128_si256(sum2_01_lo, 1);
+                const __m128i sum_ac_hi_s16 = _mm256_castsi256_si128(sum2_01_hi);
+                const __m128i sum_bd_hi_s16 = _mm256_extracti128_si256(sum2_01_hi, 1);
+
+                const __m128i sum_bc_lo_s16 = _mm256_castsi256_si128(sum2_23_lo);
+                const __m128i sum_ad_lo_s16 = _mm256_extracti128_si256(sum2_23_lo, 1);
+                const __m128i sum_bc_hi_s16 = _mm256_castsi256_si128(sum2_23_hi);
+                const __m128i sum_ad_hi_s16 = _mm256_extracti128_si256(sum2_23_hi, 1);
+
+                const __m256 v_ac_lo =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_ac_lo_s16));
+                const __m256 v_ac_hi =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_ac_hi_s16));
+                const __m256 v_bc_lo =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_bc_lo_s16));
+                const __m256 v_bc_hi =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_bc_hi_s16));
+                const __m256 v_ad_lo =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_ad_lo_s16));
+                const __m256 v_ad_hi =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_ad_hi_s16));
+                const __m256 v_bd_lo =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_bd_lo_s16));
+                const __m256 v_bd_hi =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_bd_hi_s16));
+
+                const __m256 wr_lo = _mm256_loadu_ps(wt2->d_real + 0);
+                const __m256 wr_hi = _mm256_loadu_ps(wt2->d_real + 8);
+                const __m256 wi_lo = _mm256_loadu_ps(wt2->d_imag + 0);
+                const __m256 wi_hi = _mm256_loadu_ps(wt2->d_imag + 8);
+
+#    ifdef __FMA__
+                acc2_r_lo = _mm256_fmadd_ps(v_ac_lo, _mm256_mul_ps(v_lr, wr_lo), acc2_r_lo);
+                acc2_r_lo = _mm256_fmadd_ps(v_bd_lo, _mm256_mul_ps(v_li, wi_lo), acc2_r_lo);
+                acc2_r_hi = _mm256_fmadd_ps(v_ac_hi, _mm256_mul_ps(v_lr, wr_hi), acc2_r_hi);
+                acc2_r_hi = _mm256_fmadd_ps(v_bd_hi, _mm256_mul_ps(v_li, wi_hi), acc2_r_hi);
+
+                acc2_i_lo = _mm256_fmadd_ps(v_bc_lo, _mm256_mul_ps(v_lr, wi_lo), acc2_i_lo);
+                acc2_i_lo = _mm256_fmadd_ps(v_ad_lo, _mm256_mul_ps(v_li, wr_lo), acc2_i_lo);
+                acc2_i_hi = _mm256_fmadd_ps(v_bc_hi, _mm256_mul_ps(v_lr, wi_hi), acc2_i_hi);
+                acc2_i_hi = _mm256_fmadd_ps(v_ad_hi, _mm256_mul_ps(v_li, wr_hi), acc2_i_hi);
+#    else
+                const __m256 lr_wr_lo = _mm256_mul_ps(v_lr, wr_lo);
+                const __m256 lr_wr_hi = _mm256_mul_ps(v_lr, wr_hi);
+                const __m256 li_wi_lo = _mm256_mul_ps(v_li, wi_lo);
+                const __m256 li_wi_hi = _mm256_mul_ps(v_li, wi_hi);
+                const __m256 lr_wi_lo = _mm256_mul_ps(v_lr, wi_lo);
+                const __m256 lr_wi_hi = _mm256_mul_ps(v_lr, wi_hi);
+                const __m256 li_wr_lo = _mm256_mul_ps(v_li, wr_lo);
+                const __m256 li_wr_hi = _mm256_mul_ps(v_li, wr_hi);
+
+                acc2_r_lo = _mm256_add_ps(acc2_r_lo, _mm256_mul_ps(v_ac_lo, lr_wr_lo));
+                acc2_r_lo = _mm256_add_ps(acc2_r_lo, _mm256_mul_ps(v_bd_lo, li_wi_lo));
+                acc2_r_hi = _mm256_add_ps(acc2_r_hi, _mm256_mul_ps(v_ac_hi, lr_wr_hi));
+                acc2_r_hi = _mm256_add_ps(acc2_r_hi, _mm256_mul_ps(v_bd_hi, li_wi_hi));
+
+                acc2_i_lo = _mm256_add_ps(acc2_i_lo, _mm256_mul_ps(v_bc_lo, lr_wi_lo));
+                acc2_i_lo = _mm256_add_ps(acc2_i_lo, _mm256_mul_ps(v_ad_lo, li_wr_lo));
+                acc2_i_hi = _mm256_add_ps(acc2_i_hi, _mm256_mul_ps(v_bc_hi, lr_wi_hi));
+                acc2_i_hi = _mm256_add_ps(acc2_i_hi, _mm256_mul_ps(v_ad_hi, li_wr_hi));
+#    endif
+            }
+
+            if (has3) {
+                const __m128i sum_ac_lo_s16 = _mm256_castsi256_si128(sum3_01_lo);
+                const __m128i sum_bd_lo_s16 = _mm256_extracti128_si256(sum3_01_lo, 1);
+                const __m128i sum_ac_hi_s16 = _mm256_castsi256_si128(sum3_01_hi);
+                const __m128i sum_bd_hi_s16 = _mm256_extracti128_si256(sum3_01_hi, 1);
+
+                const __m128i sum_bc_lo_s16 = _mm256_castsi256_si128(sum3_23_lo);
+                const __m128i sum_ad_lo_s16 = _mm256_extracti128_si256(sum3_23_lo, 1);
+                const __m128i sum_bc_hi_s16 = _mm256_castsi256_si128(sum3_23_hi);
+                const __m128i sum_ad_hi_s16 = _mm256_extracti128_si256(sum3_23_hi, 1);
+
+                const __m256 v_ac_lo =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_ac_lo_s16));
+                const __m256 v_ac_hi =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_ac_hi_s16));
+                const __m256 v_bc_lo =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_bc_lo_s16));
+                const __m256 v_bc_hi =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_bc_hi_s16));
+                const __m256 v_ad_lo =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_ad_lo_s16));
+                const __m256 v_ad_hi =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_ad_hi_s16));
+                const __m256 v_bd_lo =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_bd_lo_s16));
+                const __m256 v_bd_hi =
+                    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_bd_hi_s16));
+
+                const __m256 wr_lo = _mm256_loadu_ps(wt3->d_real + 0);
+                const __m256 wr_hi = _mm256_loadu_ps(wt3->d_real + 8);
+                const __m256 wi_lo = _mm256_loadu_ps(wt3->d_imag + 0);
+                const __m256 wi_hi = _mm256_loadu_ps(wt3->d_imag + 8);
+
+#    ifdef __FMA__
+                acc3_r_lo = _mm256_fmadd_ps(v_ac_lo, _mm256_mul_ps(v_lr, wr_lo), acc3_r_lo);
+                acc3_r_lo = _mm256_fmadd_ps(v_bd_lo, _mm256_mul_ps(v_li, wi_lo), acc3_r_lo);
+                acc3_r_hi = _mm256_fmadd_ps(v_ac_hi, _mm256_mul_ps(v_lr, wr_hi), acc3_r_hi);
+                acc3_r_hi = _mm256_fmadd_ps(v_bd_hi, _mm256_mul_ps(v_li, wi_hi), acc3_r_hi);
+
+                acc3_i_lo = _mm256_fmadd_ps(v_bc_lo, _mm256_mul_ps(v_lr, wi_lo), acc3_i_lo);
+                acc3_i_lo = _mm256_fmadd_ps(v_ad_lo, _mm256_mul_ps(v_li, wr_lo), acc3_i_lo);
+                acc3_i_hi = _mm256_fmadd_ps(v_bc_hi, _mm256_mul_ps(v_lr, wi_hi), acc3_i_hi);
+                acc3_i_hi = _mm256_fmadd_ps(v_ad_hi, _mm256_mul_ps(v_li, wr_hi), acc3_i_hi);
+#    else
+                const __m256 lr_wr_lo = _mm256_mul_ps(v_lr, wr_lo);
+                const __m256 lr_wr_hi = _mm256_mul_ps(v_lr, wr_hi);
+                const __m256 li_wi_lo = _mm256_mul_ps(v_li, wi_lo);
+                const __m256 li_wi_hi = _mm256_mul_ps(v_li, wi_hi);
+                const __m256 lr_wi_lo = _mm256_mul_ps(v_lr, wi_lo);
+                const __m256 lr_wi_hi = _mm256_mul_ps(v_lr, wi_hi);
+                const __m256 li_wr_lo = _mm256_mul_ps(v_li, wr_lo);
+                const __m256 li_wr_hi = _mm256_mul_ps(v_li, wr_hi);
+
+                acc3_r_lo = _mm256_add_ps(acc3_r_lo, _mm256_mul_ps(v_ac_lo, lr_wr_lo));
+                acc3_r_lo = _mm256_add_ps(acc3_r_lo, _mm256_mul_ps(v_bd_lo, li_wi_lo));
+                acc3_r_hi = _mm256_add_ps(acc3_r_hi, _mm256_mul_ps(v_ac_hi, lr_wr_hi));
+                acc3_r_hi = _mm256_add_ps(acc3_r_hi, _mm256_mul_ps(v_bd_hi, li_wi_hi));
+
+                acc3_i_lo = _mm256_add_ps(acc3_i_lo, _mm256_mul_ps(v_bc_lo, lr_wi_lo));
+                acc3_i_lo = _mm256_add_ps(acc3_i_lo, _mm256_mul_ps(v_ad_lo, li_wr_lo));
+                acc3_i_hi = _mm256_add_ps(acc3_i_hi, _mm256_mul_ps(v_bc_hi, lr_wi_hi));
+                acc3_i_hi = _mm256_add_ps(acc3_i_hi, _mm256_mul_ps(v_ad_hi, li_wr_hi));
 #    endif
             }
         }
 
-        for (int j = 0; j < nt; ++j) {
-            ggml_ifairy_lut_store_tile_avx2(tile_idx[j], m, dst_col, dst_row_stride, pack_bf16, acc_r_lo[j],
-                                            acc_r_hi[j], acc_i_lo[j], acc_i_hi[j]);
+        // store tiles handled in this pass
+        ggml_ifairy_lut_store_tile_avx2(t0, m, dst_col, dst_row_stride, pack_bf16,
+                                        acc0_r_lo, acc0_r_hi, acc0_i_lo, acc0_i_hi);
+        if (has1) {
+            ggml_ifairy_lut_store_tile_avx2(t1, m, dst_col, dst_row_stride, pack_bf16,
+                                            acc1_r_lo, acc1_r_hi, acc1_i_lo, acc1_i_hi);
+        }
+        if (has2) {
+            ggml_ifairy_lut_store_tile_avx2(t2, m, dst_col, dst_row_stride, pack_bf16,
+                                            acc2_r_lo, acc2_r_hi, acc2_i_lo, acc2_i_hi);
+        }
+        if (has3) {
+            ggml_ifairy_lut_store_tile_avx2(t3, m, dst_col, dst_row_stride, pack_bf16,
+                                            acc3_r_lo, acc3_r_hi, acc3_i_lo, acc3_i_hi);
         }
     }
     return;
