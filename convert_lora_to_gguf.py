@@ -128,6 +128,12 @@ class LoraTorchTensor:
         assert dim is None
         return self.shape
 
+    def contiguous(self) -> LoraTorchTensor:
+        return LoraTorchTensor(
+            self._lora_A.contiguous(),
+            self._lora_B.contiguous(),
+        )
+
     def reshape(self, *shape: int | tuple[int, ...]) -> LoraTorchTensor:
         if isinstance(shape[0], tuple):
             new_shape: tuple[int, ...] = shape[0]
