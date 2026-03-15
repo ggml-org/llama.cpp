@@ -113,6 +113,12 @@ export const SYNCABLE_PARAMETERS: SyncableParameter[] = [
 		canSync: true
 	},
 	{
+		key: 'autoChatWidth',
+		serverKey: 'autoChatWidth',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
 		key: 'showMessageStats',
 		serverKey: 'showMessageStats',
 		type: SyncableParameterType.BOOLEAN,

@@ -398,7 +398,6 @@
 
 	.raw-output {
 		width: 100%;
-		max-width: 48rem;
 		margin-top: 1.5rem;
 		padding: 1rem 1.25rem;
 		border-radius: 1rem;

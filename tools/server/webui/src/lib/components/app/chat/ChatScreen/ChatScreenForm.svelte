@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { afterNavigate } from '$app/navigation';
 	import { ChatFormHelperText, ChatForm } from '$lib/components/app';
+	import { chatWidthClasses } from '$lib/stores/chat.svelte';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -48,6 +49,7 @@
 		onSystemPromptAdd?.({ message, files: uploadedFiles });
 	}
 
+	let widthClasses = $derived(chatWidthClasses());
 	let hasLoadingAttachments = $derived(uploadedFiles.some((f) => f.isLoading));
 
 	async function handleSubmit() {
@@ -102,7 +104,7 @@
 	});
 </script>
 
-<div class="relative mx-auto max-w-[48rem]">
+<div class="relative mx-auto {widthClasses.class}">
 	<ChatForm
 		bind:this={chatFormRef}
 		bind:value={message}
