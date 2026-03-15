@@ -166,6 +166,13 @@
 	let showModelDialog = $state(false);
 	let infoModelId = $state<string | null>(null);
 
+	// key of the first "available" (non-loaded, non-favourite) group
+	// used to render the "Available models" separator exactly once
+	let firstAvailableOrgKey = $derived.by(() => {
+		const g = groupedFilteredOptions.find((g) => !g.isLoadedGroup && !g.isFavouritesGroup);
+		return g ? (g.orgName ?? '') : null;
+	});
+
 	function handleInfoClick(modelName: string) {
 		infoModelId = modelName;
 		showModelDialog = true;
@@ -433,12 +440,19 @@
 									<p class="px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none">
 										Favourite models
 									</p>
-								{:else if group.orgName}
-									<p
-										class="px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none [&:not(:first-child)]:mt-2"
-									>
-										{group.orgName}
-									</p>
+								{:else}
+									{#if (group.orgName ?? '') === firstAvailableOrgKey}
+										<p class="px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none">
+											Available models
+										</p>
+									{/if}
+									{#if group.orgName}
+										<p
+											class="px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none [&:not(:first-child)]:mt-2"
+										>
+											{group.orgName}
+										</p>
+									{/if}
 								{/if}
 
 								{#each group.items as { option, flatIndex } (group.isLoadedGroup ? `loaded-${option.id}` : group.isFavouritesGroup ? `fav-${option.id}` : option.id)}
