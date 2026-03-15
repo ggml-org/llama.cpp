@@ -70,6 +70,11 @@
 					type: SettingsFieldType.CHECKBOX
 				},
 				{
+					key: SETTINGS_KEYS.COPY_WITHOUT_THINKING,
+					label: 'Copy response without thinking content',
+					type: SettingsFieldType.CHECKBOX
+				},
+				{
 					key: SETTINGS_KEYS.ENABLE_CONTINUE_GENERATION,
 					label: 'Enable "Continue" button',
 					type: SettingsFieldType.CHECKBOX,
