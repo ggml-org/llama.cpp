@@ -51,7 +51,7 @@ foreach(KERNEL ${KERNELS})
     target_compile_options(${KERNEL}.elf PRIVATE
         $<$<COMPILE_LANGUAGE:C>:-fno-zero-initialized-in-bss>
         $<$<COMPILE_LANGUAGE:C>:-ffreestanding>
-        $<$<COMPILE_LANGUAGE:C>:-std=c99>
+        $<$<COMPILE_LANGUAGE:C>:-std=gnu99>
         $<$<COMPILE_LANGUAGE:C>:-ffat-lto-objects>
         $<$<COMPILE_LANGUAGE:C>:-mcmodel=medany>
         $<$<COMPILE_LANGUAGE:C>:-mabi=lp64f>
