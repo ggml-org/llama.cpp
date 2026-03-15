@@ -84,6 +84,46 @@ static ggml_et_cpu_compare_config set_rows_cpu_compare_config = {
     /* .max_log_elements = */ 2048
 };
 
+bool ggml_et_op_rms_norm_mul(ggml_backend_et_device_context* dev_ctx,
+                             const ggml_tensor* rms_norm_node,
+                             const ggml_tensor* mul_node) {
+    ET_PERF_START();
+
+    if (!dev_ctx || !rms_norm_node || !mul_node) {
+        GGML_LOG_ERROR("ET: Invalid parameters for fused RMS_NORM_MUL operation\n");
+        return false;
+    }
+
+    if (!rms_norm_node->src[0]) {
+        GGML_LOG_ERROR("ET: Fused RMS_NORM_MUL missing required input\n");
+        return false;
+    }
+
+    // Extract weights: the MUL operand that isn't the rms_norm output
+    const ggml_tensor * weights = (mul_node->src[0] == rms_norm_node)
+                                ? mul_node->src[1] : mul_node->src[0];
+
+    if (!weights) {
+        GGML_LOG_ERROR("ET: Fused RMS_NORM_MUL missing weights tensor\n");
+        return false;
+    }
+
+    float eps;
+    memcpy(&eps, rms_norm_node->op_params, sizeof(float));
+
+    ggml_et_rms_norm_mul_params params;
+    params.src0 = *rms_norm_node->src[0];  // input to normalize
+    params.src1 = *weights;                // normalization weights
+    params.dst  = *mul_node;               // final output
+    params.eps  = eps;
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, "rms_norm_mul_f32",
+                                &params, sizeof(params), 0xFFFFFFFF);
+
+    ET_PERF_END_EXT("RMS_NORM_MUL", "rms_norm_mul_f32", mul_node, "eps=%.6f", (double)eps);
+    return kernel_result;
+}
+
 bool ggml_et_op_mul(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
     // Delegate to generic element map operation
     return ggml_et_op_elmap(dev_ctx, node);

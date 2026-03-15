@@ -533,6 +533,53 @@ static void ggml_backend_et_synchronize(ggml_backend_t backend) {
     abort();
 }
 
+static bool ggml_et_can_fuse(const struct ggml_cgraph * cgraph, int node_idx,
+                             std::initializer_list<enum ggml_op> ops) {
+    if (!ggml_can_fuse(cgraph, node_idx, ops)) {
+        return false;
+    }
+
+    if (ops.size() == 2 &&
+        ops.begin()[0] == GGML_OP_RMS_NORM &&
+        ops.begin()[1] == GGML_OP_MUL) {
+
+        const ggml_tensor * rms_norm = cgraph->nodes[node_idx];
+        const ggml_tensor * mul      = cgraph->nodes[node_idx + 1];
+
+        // ET only supports F32
+        if (rms_norm->src[0]->type != GGML_TYPE_F32 ||
+            mul->type != GGML_TYPE_F32) {
+            return false;
+        }
+
+        // Identify the weights tensor (the MUL operand that isn't rms_norm output)
+        const ggml_tensor * weights = (mul->src[0] == rms_norm) ? mul->src[1] : mul->src[0];
+
+        if (weights->type != GGML_TYPE_F32) {
+            return false;
+        }
+
+        // Both inputs must be contiguous (ET hardware requirement)
+        if (!ggml_is_contiguous(rms_norm->src[0]) ||
+            !ggml_is_contiguous_rows(weights)) {
+            return false;
+        }
+
+        // ET requires cache-aligned rows (ne[0] % 16 == 0)
+        if (rms_norm->src[0]->ne[0] % 16 != 0 ||
+            weights->ne[0] % 16 != 0) {
+            return false;
+        }
+
+        // Fused kernel doesn't handle dim-0 broadcasting
+        if (weights->ne[0] != rms_norm->src[0]->ne[0]) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     ggml_backend_et_device_context * dev_ctx = (ggml_backend_et_device_context *)backend->device->context;
 
@@ -540,6 +587,13 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
         ggml_tensor * node = cgraph->nodes[i];
 
         if (node->op == GGML_OP_NONE) {
+            continue;
+        }
+
+        // --- Fusion checks (before regular dispatch) ---
+        if (ggml_et_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL })) {
+            ggml_et_op_rms_norm_mul(dev_ctx, node, cgraph->nodes[i + 1]);
+            i++;  // skip the MUL node
             continue;
         }
 
@@ -731,6 +785,7 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_RMS_NORM:
             supported = op->type == GGML_TYPE_F32 &&
                        op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
+                       op->ne[0] % 16 == 0 &&
                        ggml_is_contiguous(op) &&
                        ggml_is_contiguous(op->src[0]);
             break;
