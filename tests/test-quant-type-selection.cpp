@@ -1,10 +1,8 @@
-#include "../src/llama-arch.h"
-#include "../src/llama-model.h"
-#include "../src/llama-quant.h"
-#include "ggml-cpp.h"
-#include "ggml.h"
-#include "gguf-model-data.h"
 #include "llama.h"
+
+#include "../src/llama-ext.h"
+
+#include "gguf-model-data.h"
 
 #include <cstdio>
 #include <cstring>
@@ -323,13 +321,15 @@ static std::string read_file_contents(const std::string & path) {
 // ---------------------------------------------------------------------------
 
 // Returns {tensor_name, assigned_type} for each tensor, in order.
+// TODO: should likely be moved as a member function of llama_quant and expose through the `llama-ext.h` interface
 static std::vector<std::pair<std::string, ggml_type>> compute_quant_types(llama_model &                    mdl,
                                                                           const std::vector<mock_tensor> & tensors,
                                                                           llama_ftype                      ftype) {
     llama_model_quantize_params qparams = llama_model_quantize_default_params();
     qparams.ftype                       = ftype;
 
-    quantize_state_impl qs(mdl, &qparams);
+    // TODO: call llama_quant_init(...)
+    llama_quant qs(mdl, &qparams);
 
     std::vector<tensor_metadata> metadata(tensors.size());
     for (size_t i = 0; i < tensors.size(); ++i) {

@@ -2,6 +2,7 @@
 #include "llama-impl.h"
 #include "llama-model.h"
 #include "llama-model-loader.h"
+#include "llama-ext.h"
 
 #include <algorithm>
 #include <cmath>
@@ -138,7 +139,7 @@ struct compiled_tensor_type_patterns {
     std::vector<std::pair<std::regex, ggml_type>> patterns;
 };
 
-quantize_state_impl::quantize_state_impl(const llama_model & model, const llama_model_quantize_params * params)
+llama_quant::llama_quant(const llama_model & model, const llama_model_quantize_params * params)
     : model(model), params(params)
 {
     if (params->tensor_types) {
@@ -152,7 +153,7 @@ quantize_state_impl::quantize_state_impl(const llama_model & model, const llama_
     }
 }
 
-quantize_state_impl::~quantize_state_impl() = default;
+llama_quant::~llama_quant() = default;
 
 //
 // dequantization
@@ -302,7 +303,7 @@ bool tensor_allows_quantization(const llama_model_quantize_params * params, llm_
 //
 
 // incompatible tensor shapes are handled here - fallback to a compatible type
-static ggml_type tensor_type_fallback(quantize_state_impl & qs, const ggml_tensor * t, const ggml_type target_type) {
+static ggml_type tensor_type_fallback(llama_quant & qs, const ggml_tensor * t, const ggml_type target_type) {
     ggml_type return_type = target_type;
 
     const int64_t ncols = t->ne[0];
@@ -351,7 +352,7 @@ static ggml_type tensor_type_fallback(quantize_state_impl & qs, const ggml_tenso
 }
 
 // internal standard logic for selecting the target tensor type based on tensor category, ftype, and model arch
-static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type new_type, const ggml_tensor * tensor, llama_ftype ftype, tensor_category category) {
+static ggml_type llama_tensor_get_type_impl(llama_quant & qs, ggml_type new_type, const ggml_tensor * tensor, llama_ftype ftype, tensor_category category) {
     const std::string name = ggml_get_name(tensor);
 
     // TODO: avoid hardcoded tensor names - use the TN_* constants
@@ -601,7 +602,7 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
 }
 
 // outer wrapper: determine the ggml_type that this tensor should be quantized to
-ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_model_quantize_params * params, const ggml_tensor * tensor, ggml_type default_type, const tensor_metadata & tm) {
+ggml_type llama_tensor_get_type(llama_quant & qs, const llama_model_quantize_params * params, const ggml_tensor * tensor, ggml_type default_type, const tensor_metadata & tm) {
     if (!tensor_allows_quantization(params, qs.model.arch, tensor)) {
         return tensor->type;
     }
@@ -776,7 +777,7 @@ ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
 }
 
 
-void init_quantize_state_counters(quantize_state_impl & qs, std::vector<tensor_metadata> & metadata) {
+void init_quantize_state_counters(llama_quant & qs, std::vector<tensor_metadata> & metadata) {
     for (auto & tm : metadata) {
         tensor_category cat = tensor_get_category(tm.name);
         tm.category = cat;
@@ -835,7 +836,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     model.load_hparams(ml);
     model.load_stats  (ml);
 
-    quantize_state_impl qs(model, params);
+    llama_quant qs(model, params);
 
     if (params->only_copy) {
         ftype = ml.ftype;

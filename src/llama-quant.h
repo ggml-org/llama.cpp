@@ -2,15 +2,12 @@
 
 #include "llama.h"
 
-#include "ggml.h"
-
-#include "llama-arch.h"
-
 #include <memory>
 #include <string>
-#include <vector>
 
 struct llama_model;
+
+// TODO: use llama_quant_ prefix to name these consistently:
 
 // tensor categorization - used to avoid repeated string matching in quantization logic.
 // this is different from LLM_TN - we want broad categories, not specific tensor names per arch.
@@ -30,6 +27,7 @@ enum class tensor_category {
 };
 
 // per-tensor metadata, computed in the preliminary loop and used in the main loop
+// TODO: probably should belong to llama_quant
 struct tensor_metadata {
     std::string     name;
     ggml_type       target_type;
@@ -48,7 +46,7 @@ struct tensor_type_option {
 
 struct compiled_tensor_type_patterns;
 
-struct quantize_state_impl {
+struct llama_quant {
     const llama_model                 & model;
     const llama_model_quantize_params * params;
 
@@ -72,16 +70,6 @@ struct quantize_state_impl {
     // tensor type override patterns (compiled once, used in llama_tensor_get_type)
     std::unique_ptr<compiled_tensor_type_patterns> tensor_type_patterns;
 
-    quantize_state_impl(const llama_model & model, const llama_model_quantize_params * params);
-    ~quantize_state_impl();
+    llama_quant(const llama_model & model, const llama_model_quantize_params * params);
+    ~llama_quant();
 };
-
-ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_model_quantize_params * params, const ggml_tensor * tensor, ggml_type default_type, const tensor_metadata & tm);
-ggml_type llama_ftype_get_default_type(llama_ftype ftype);
-
-// Initialize quantize_state_impl counters and populate tensor_metadata categories.
-// metadata: vector with name fields already set, will have category field populated.
-void init_quantize_state_counters(quantize_state_impl & qs, std::vector<tensor_metadata> & metadata);
-
-// Returns true if this tensor should be quantized (based on name, dims, params).
-bool tensor_allows_quantization(const llama_model_quantize_params * params, llm_arch arch, const ggml_tensor * tensor);
