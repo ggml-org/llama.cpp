@@ -81,15 +81,11 @@ class ChatStore {
 	private _pendingDraftMessage = $state<string>('');
 	private _pendingDraftFiles = $state<ChatUploadedFile[]>([]);
 
-	get chatWidthClasses(): { class: string; style?: string } {
+	get chatWidthClasses(): { class: string } {
 		const currentConfig = config();
-		const autoChatWidth = currentConfig.autoChatWidth;
-
-		if (autoChatWidth) {
-			return { class: AUTO_WIDTH_CLASSES };
-		}
-
-		return { class: DEFAULT_WIDTH_CLASS };
+		return currentConfig.customChatWidth
+			? { class: AUTO_WIDTH_CLASSES }
+			: { class: DEFAULT_WIDTH_CLASS };
 	}
 
 	private setChatLoading(convId: string, loading: boolean): void {

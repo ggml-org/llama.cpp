@@ -63,7 +63,7 @@
 </script>
 
 <div class="chat-processing-info-container pointer-events-none" class:visible={showProcessingInfo}>
-	<div class="chat-processing-info-content {widthClasses.class}" style={widthClasses.style}>
+	<div class="chat-processing-info-content {widthClasses.class}">
 		{#each processingDetails as detail (detail)}
 			<span class="chat-processing-info-detail pointer-events-auto backdrop-blur-sm">{detail}</span>
 		{/each}
