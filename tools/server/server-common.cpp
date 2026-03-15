@@ -1086,7 +1086,8 @@ json oaicompat_chat_params_parse(
     if (!chat_params.grammar.empty()) {
         llama_params["grammar"] = chat_params.grammar;
     }
-    llama_params["grammar_lazy"] = chat_params.grammar_lazy;
+    llama_params["grammar_lazy"]     = chat_params.grammar_lazy;
+    llama_params["grammar_external"] = body.contains("grammar");
     auto grammar_triggers        = json::array();
     for (const auto & trigger : chat_params.grammar_triggers) {
         server_grammar_trigger ct(trigger);
