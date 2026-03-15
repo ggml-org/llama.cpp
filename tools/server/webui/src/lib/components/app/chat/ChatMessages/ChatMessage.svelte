@@ -18,7 +18,6 @@
 
 	interface Props {
 		class?: string;
-		style?: string;
 		message: DatabaseMessage;
 		isLastAssistantMessage?: boolean;
 		siblingInfo?: ChatMessageSiblingInfo | null;
@@ -26,7 +25,6 @@
 
 	let {
 		class: className = '',
-		style,
 		message,
 		isLastAssistantMessage = false,
 		siblingInfo = null
@@ -281,7 +279,6 @@
 {:else if message.role === MessageRole.USER}
 	<ChatMessageUser
 		class={className}
-		{style}
 		{deletionInfo}
 		{message}
 		onConfirmDelete={handleConfirmDelete}
@@ -297,7 +294,6 @@
 	<ChatMessageAssistant
 		bind:textareaElement
 		class={className}
-		{style}
 		{deletionInfo}
 		{isLastAssistantMessage}
 		{message}

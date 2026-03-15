@@ -104,7 +104,7 @@
 	});
 </script>
 
-<div class="relative mx-auto {widthClasses.class}" style={widthClasses.style}>
+<div class="relative mx-auto {widthClasses.class}">
 	<ChatForm
 		bind:this={chatFormRef}
 		bind:value={message}

@@ -36,8 +36,7 @@ import {
 	REASONING_TAGS,
 	SYSTEM_MESSAGE_PLACEHOLDER,
 	AUTO_WIDTH_CLASSES,
-	CUSTOM_WIDTH_PRESETS,
-	DEFAULT_WIDTH
+	DEFAULT_WIDTH_CLASS
 } from '$lib/constants';
 import type {
 	ChatMessageTimings,
@@ -85,31 +84,12 @@ class ChatStore {
 	get chatWidthClasses(): { class: string; style?: string } {
 		const currentConfig = config();
 		const autoChatWidth = currentConfig.autoChatWidth;
-		const customChatWidth = currentConfig.customChatWidth;
 
 		if (autoChatWidth) {
 			return { class: AUTO_WIDTH_CLASSES };
 		}
 
-		if (customChatWidth) {
-			let pixelValue: number | null = null;
-
-			if (customChatWidth in CUSTOM_WIDTH_PRESETS) {
-				const preset = customChatWidth as keyof typeof CUSTOM_WIDTH_PRESETS;
-				pixelValue = CUSTOM_WIDTH_PRESETS[preset];
-			} else {
-				// User typed a number directly instead of selecting a preset
-				const number = Number(customChatWidth);
-				if (!isNaN(number) && number > 0) {
-					pixelValue = number;
-				}
-			}
-			if (pixelValue !== null) {
-				return { class: '', style: `max-width: ${pixelValue}px` };
-			}
-		}
-
-		return { class: DEFAULT_WIDTH };
+		return { class: DEFAULT_WIDTH_CLASS };
 	}
 
 	private setChatLoading(convId: string, loading: boolean): void {

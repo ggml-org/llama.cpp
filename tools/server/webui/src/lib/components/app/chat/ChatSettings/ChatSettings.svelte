@@ -97,11 +97,6 @@
 					type: SettingsFieldType.CHECKBOX
 				},
 				{
-					key: SETTINGS_KEYS.CUSTOM_CHAT_WIDTH,
-					label: 'Custom width',
-					type: SettingsFieldType.COMBOBOX
-				},
-				{
 					key: SETTINGS_KEYS.SHOW_MESSAGE_STATS,
 					label: 'Show message generation statistics',
 					type: SettingsFieldType.CHECKBOX

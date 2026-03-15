@@ -54,7 +54,6 @@ export const SETTINGS_KEYS = {
 	SHOW_TOOL_CALL_IN_PROGRESS: 'showToolCallInProgress',
 	// Chat width
 	AUTO_CHAT_WIDTH: 'autoChatWidth',
-	CUSTOM_CHAT_WIDTH: 'customChatWidth',
 	// Developer
 	DISABLE_REASONING_PARSING: 'disableReasoningParsing',
 	SHOW_RAW_OUTPUT_SWITCH: 'showRawOutputSwitch',

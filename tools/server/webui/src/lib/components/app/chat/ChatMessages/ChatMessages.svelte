@@ -146,7 +146,6 @@
 	{#each displayMessages as { message, isLastAssistantMessage, siblingInfo } (message.id)}
 		<ChatMessage
 			class="mx-auto w-full {widthClasses.class}"
-			style={widthClasses.style}
 			{message}
 			{isLastAssistantMessage}
 			{siblingInfo}

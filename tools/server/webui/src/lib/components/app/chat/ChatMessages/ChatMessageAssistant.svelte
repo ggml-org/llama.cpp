@@ -27,7 +27,6 @@
 
 	interface Props {
 		class?: string;
-		style?: string;
 		deletionInfo: {
 			totalCount: number;
 			userMessages: number;
@@ -52,7 +51,6 @@
 
 	let {
 		class: className = '',
-		style,
 		deletionInfo,
 		isLastAssistantMessage = false,
 		message,
@@ -197,12 +195,11 @@
 
 <div
 	class="text-md group w-full leading-7.5 {className}"
-	{style}
 	role="group"
 	aria-label="Assistant message with actions"
 >
 	{#if showProcessingInfoTop}
-		<div class="mt-6 w-full {className}" {style} in:fade>
+		<div class="mt-6 w-full {className}" in:fade>
 			<div class="processing-container">
 				<span class="processing-text">
 					{processingState.getPromptProgressText() ??
