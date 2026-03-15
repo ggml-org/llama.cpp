@@ -4465,6 +4465,17 @@ struct moe_fusion_state {
     const float *   gate_bias_data; // Gate bias base pointer (float32, or nullptr if no bias)
     const float *   up_bias_data;   // Up bias base pointer (float32, or nullptr if no bias)
     size_t          bias_nb;        // Bias expert stride in bytes (nb11 from bias tensor)
+    sycl::event     act_d2h_event;  // Async activation D2H event (valid when act_d2h_pending)
+    bool            act_d2h_pending = false; // Whether act_d2h_event needs waiting
+
+    // Drain the activation D2H event if pending.  Must be called before
+    // any code path reads act_host data.
+    void wait_act_d2h() {
+        if (act_d2h_pending) {
+            act_d2h_event.wait();
+            act_d2h_pending = false;
+        }
+    }
 
     moe_fusion_state() :
         gate_data(nullptr),
@@ -4508,6 +4519,8 @@ struct moe_fusion_state {
     }
 
     void reset() {
+        // Drain any pending activation D2H before resetting state
+        wait_act_d2h();
         gate_pending    = false;
         up_pending      = false;
         fused_pending   = false;
@@ -27989,6 +28002,15 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
         ~moe_profile_guard_t() { if (active) g_moe_profile.moe_op_end(); }
     } moe_profile_guard_{ g_moe_profile_enabled };
 
+    // --- Drain deferred scatter from previous CPU-TG call ---
+    // The previous call's H2D scatter may still be in-flight reading from
+    // thread-local pinned buffers.  Drain before those buffers are reused.
+    static thread_local std::vector<sycl::event> tl_pending_scatter;
+    if (!tl_pending_scatter.empty()) {
+        sycl::event::wait(tl_pending_scatter);
+        tl_pending_scatter.clear();
+    }
+
     static int call_count = 0;
     if (call_count < 3) {
         GGML_SYCL_DEBUG("[XMX-DEBUG] ggml_sycl_mul_mat_id call #%d: src0->type=%d (%s)\n", call_count, src0->type,
@@ -28139,6 +28161,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         const cpu_expert_fused_act act_v = (av == CPU_EXPERT_FUSED_ACT_SWIGLU_OAI) ?
                                                                CPU_EXPERT_FUSED_ACT_SWIGLU_OAI :
                                                                CPU_EXPERT_FUSED_ACT_SILU;
+
+                        // Ensure async activation D2H has completed before CPU reads
+                        g_moe_fusion.wait_act_d2h();
 
                         for (size_t fi = 0; fi < n_cpu_f; fi++) {
                             const size_t  ci   = g_moe_fusion.cpu_indices[fi];
@@ -28355,9 +28380,13 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     if (src1_host_f) {
                         act_f = static_cast<const float *>(src1->data);
                     } else {
+                        // Submit D2H asynchronously — the DMA completes before the
+                        // fused UP/DOWN path reads act_host via wait_act_d2h().
                         tl_gate_act.ensure(static_cast<size_t>(K_f), *stream);
-                        stream->memcpy(tl_gate_act.ptr, ggml_sycl_get_data_ptr(src1, ctx.device),
-                                       static_cast<size_t>(K_f) * sizeof(float)).wait();
+                        g_moe_fusion.act_d2h_event = stream->memcpy(
+                            tl_gate_act.ptr, ggml_sycl_get_data_ptr(src1, ctx.device),
+                            static_cast<size_t>(K_f) * sizeof(float));
+                        g_moe_fusion.act_d2h_pending = true;
                         act_f = tl_gate_act.ptr;
                     }
 
@@ -28584,6 +28613,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                             const int64_t N_gate_f = ne01;
                             tl_gate_out.ensure(n_cpu_gate * static_cast<size_t>(N_gate_f), *stream);
 
+                            // Ensure async activation D2H has completed before CPU reads
+                            g_moe_fusion.wait_act_d2h();
+
                             for (size_t fi = 0; fi < n_cpu_gate; fi++) {
                                 const size_t  ci  = g_moe_fusion.cpu_indices[fi];
                                 const int32_t eid = g_moe_fusion.ids_data[ci];
@@ -28601,10 +28633,10 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                 g_moe_profile.moe_compute_done(static_cast<int>(n_cpu_gate), 0);
                             }
 
-                            // Scatter gate results H2D
+                            // Scatter gate results H2D — deferred to next mul_mat_id entry.
+                            // The drain at the top of ggml_sycl_mul_mat_id ensures
+                            // tl_gate_out is safe to reuse before the next gate compute.
                             char * dst_d_gate = static_cast<char *>(ggml_sycl_get_data_ptr(dst, ctx.device));
-                            std::vector<sycl::event> scatter_events;
-                            scatter_events.reserve(n_cpu_gate);
                             auto scatter_t0 = std::chrono::high_resolution_clock::now();
                             double gate_scatter_bytes = 0;
                             for (size_t fi = 0; fi < n_cpu_gate; fi++) {
@@ -28612,17 +28644,14 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                 const int64_t iid1 = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_f));
                                 const int64_t id   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_f));
                                 char * slot = dst_d_gate + id * nb1 + iid1 * nb2;
-                                scatter_events.push_back(stream->memcpy(slot, tl_gate_out.ptr + fi * static_cast<size_t>(N_gate_f),
+                                tl_pending_scatter.push_back(stream->memcpy(slot, tl_gate_out.ptr + fi * static_cast<size_t>(N_gate_f),
                                                static_cast<size_t>(N_gate_f) * sizeof(float)));
                                 gate_scatter_bytes += static_cast<double>(N_gate_f) * sizeof(float);
                             }
                             auto scatter_t1 = std::chrono::high_resolution_clock::now();
-                            sycl::event::wait(scatter_events);
-                            auto scatter_t2 = std::chrono::high_resolution_clock::now();
                             if (g_moe_profile_enabled) {
                                 double submit_us = std::chrono::duration<double, std::micro>(scatter_t1 - scatter_t0).count();
-                                double wait_us   = std::chrono::duration<double, std::micro>(scatter_t2 - scatter_t1).count();
-                                g_moe_profile.moe_scatter_detail(0, submit_us, wait_us,
+                                g_moe_profile.moe_scatter_detail(0, submit_us, 0,
                                     static_cast<int>(n_cpu_gate), gate_scatter_bytes);
                             }
                         }
@@ -28730,9 +28759,13 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     if (src1_host_f) {
                         act_f = static_cast<const float *>(src1->data);
                     } else {
+                        // Submit D2H asynchronously — the DMA completes before the
+                        // fused GATE/DOWN path reads act_host via wait_act_d2h().
                         tl_up_act.ensure(static_cast<size_t>(K_f), *stream);
-                        stream->memcpy(tl_up_act.ptr, ggml_sycl_get_data_ptr(src1, ctx.device),
-                                       static_cast<size_t>(K_f) * sizeof(float)).wait();
+                        g_moe_fusion.act_d2h_event = stream->memcpy(
+                            tl_up_act.ptr, ggml_sycl_get_data_ptr(src1, ctx.device),
+                            static_cast<size_t>(K_f) * sizeof(float));
+                        g_moe_fusion.act_d2h_pending = true;
                         act_f = tl_up_act.ptr;
                     }
 
@@ -28951,6 +28984,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     const cpu_expert_fused_act act_v = (av == CPU_EXPERT_FUSED_ACT_SWIGLU_OAI) ?
                                                            CPU_EXPERT_FUSED_ACT_SWIGLU_OAI :
                                                            CPU_EXPERT_FUSED_ACT_SILU;
+
+                    // Ensure async activation D2H has completed before CPU reads
+                    g_moe_fusion.wait_act_d2h();
 
                     for (size_t fi = 0; fi < n_cpu_f; fi++) {
                         const size_t  ci   = g_moe_fusion.cpu_indices[fi];
@@ -29457,6 +29493,12 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 src1_on_host = (pt == sycl::usm::alloc::host || pt == sycl::usm::alloc::shared);
             }
 
+            // Submit activation D2H asynchronously — the DMA runs in parallel
+            // with the routing/placement work below.  We defer the wait until
+            // just before CPU compute actually reads the data.
+            sycl::event act_d2h_evt;
+            bool        act_d2h_pending = false;
+
             if (src1_on_host) {
                 // Zero-copy: use src1 data directly from host
                 act_host_ptr = static_cast<const float *>(src1->data);
@@ -29467,8 +29509,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 tl_act_pinned.ensure(act_floats, *stream);
                 const char * src1_dev = static_cast<const char *>(
                     ggml_sycl_get_data_ptr(src1, ctx.device));
-                stream->memcpy(tl_act_pinned.ptr, src1_dev, act_floats * sizeof(float)).wait();
-                act_host_ptr = tl_act_pinned.ptr;
+                act_d2h_evt     = stream->memcpy(tl_act_pinned.ptr, src1_dev, act_floats * sizeof(float));
+                act_d2h_pending = true;
+                act_host_ptr    = tl_act_pinned.ptr;
             }
 
             if (prof_enabled) { t2 = hrc::now(); }
@@ -29909,6 +29952,13 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             // ggml_sycl_cpu_expert_mul_mat_batched handles activation pre-quantization
             // and TBB parallel row dispatch with multi-row SIMD kernels internally.
             if (n_tasks > 0) {
+                // Wait for activation D2H to complete before CPU reads the data.
+                // The DMA was submitted earlier and has been running in parallel
+                // with routing/placement work above.
+                if (act_d2h_pending) {
+                    act_d2h_evt.wait();
+                    act_d2h_pending = false;
+                }
                 ggml_sycl_cpu_expert_mul_mat_batched(tasks_ptr, n_tasks);
 
                 // Renormalize non-skipped expert outputs so the downstream
@@ -29994,10 +30044,14 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             const float * out_src = tl_out_pinned.ptr;
             const bool scatter_contiguous = (nb1 == static_cast<size_t>(N) * sizeof(float));
 
+            // Defer scatter completion to start of next call — the H2D copies
+            // run asynchronously while the host proceeds with other graph ops.
+            // The deferred wait at the top of this path drains tl_pending_scatter
+            // before tl_out_pinned is reused, preventing data races.
             if (scatter_contiguous && ne12 == 1 && n_gpu0 == 0) {
                 // Single bulk H2D copy — safe only when ALL slots are CPU-computed.
-                stream->memcpy(dst_d, out_src,
-                               n_cpu * static_cast<size_t>(N) * sizeof(float)).wait();
+                tl_pending_scatter.push_back(stream->memcpy(dst_d, out_src,
+                               n_cpu * static_cast<size_t>(N) * sizeof(float)));
             } else {
                 // Per-slot scatter: skip GPU0-routed and secondary-routed slots
                 // whose results are written directly to device dst by MMVQ.
@@ -30008,19 +30062,14 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                 static_cast<size_t>(g0_ids[gi]);
                     gpu0_slots.insert(ci);
                 }
-                std::vector<sycl::event> scatter_events;
-                scatter_events.reserve(n_cpu);
                 for (size_t ci = 0; ci < n_cpu; ci++) {
                     // Skip slots handled by GPU0 MMVQ — results written directly to device dst
                     if (gpu0_slots.count(ci)) continue;
                     const int64_t iid1 = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_f));
                     const int64_t id   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_f));
                     char * dst_slot = dst_d + id * nb1 + iid1 * nb2;
-                    scatter_events.push_back(stream->memcpy(dst_slot, out_src + ci * static_cast<size_t>(N),
+                    tl_pending_scatter.push_back(stream->memcpy(dst_slot, out_src + ci * static_cast<size_t>(N),
                                    static_cast<size_t>(N) * sizeof(float)));
-                }
-                if (!scatter_events.empty()) {
-                    sycl::event::wait(scatter_events);
                 }
             }
 
