@@ -150,6 +150,91 @@ static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float m
     }
 }
 
+// SoA quantize/dequantize functions — declared here because ggml-quants.h is not in the test include path.
+typedef void (*mxfp_soa_dequantize_fn)(const void *, float *, int64_t);
+extern "C" {
+    void quantize_row_mxfp4_soa(const float * GGML_RESTRICT x, void * GGML_RESTRICT dst, int64_t k);
+    void quantize_row_mxfp8_soa(const float * GGML_RESTRICT x, void * GGML_RESTRICT dst, int64_t k);
+    void quantize_row_mxfp6_soa(const float * GGML_RESTRICT x, void * GGML_RESTRICT dst, int64_t k);
+    void dequantize_row_mxfp4_soa(const void * GGML_RESTRICT src, float * GGML_RESTRICT y, int64_t k);
+    void dequantize_row_mxfp8_soa(const void * GGML_RESTRICT src, float * GGML_RESTRICT y, int64_t k);
+    void dequantize_row_mxfp6_soa(const void * GGML_RESTRICT src, float * GGML_RESTRICT y, int64_t k);
+}
+
+// Initialize an MXFP tensor with SoA (Struct-of-Arrays) layout.
+// soa_bytes: byte width of one SoA region. Default 0 = ne[0] elements (one ggml row).
+//   For FA K/V tensors, pass nb[1] so that when heads are physically contiguous
+//   within one KV-position stride, the SoA region spans all heads (matching FA's read pattern).
+static void init_tensor_mxfp_soa(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f, size_t soa_bytes = 0) {
+    GGML_ASSERT(ggml_is_type_mxfp(tensor->type));
+
+    typedef void (*soa_quantize_fn)(const float *, void *, int64_t);
+    soa_quantize_fn quantize_soa = nullptr;
+    switch (tensor->type) {
+        case GGML_TYPE_MXFP4_E2M1: quantize_soa = quantize_row_mxfp4_soa;  break;
+        case GGML_TYPE_MXFP8_E4M3: quantize_soa = quantize_row_mxfp8_soa;  break;
+        case GGML_TYPE_MXFP6_E2M3: quantize_soa = quantize_row_mxfp6_soa;  break;
+        default: GGML_ABORT("unsupported MXFP type for SoA init");
+    }
+
+    const int     qk         = (int)ggml_blck_size(tensor->type);
+    const size_t  block_size = ggml_type_size(tensor->type);
+    const size_t  head_row_sz = ggml_row_size(tensor->type, tensor->ne[0]);
+    if (soa_bytes == 0) { soa_bytes = head_row_sz; }
+    const int64_t soa_elems  = (int64_t)(soa_bytes / block_size) * qk;
+
+    std::default_random_engine gen(42);
+    std::uniform_real_distribution<float> dist(min, max);
+    std::vector<float> region_f32(soa_elems);
+
+    // Iterate over logical SoA regions using tensor strides.
+    // Each SoA region is soa_bytes wide at the innermost stride level.
+    // Outer dimensions (those with stride > soa_bytes) are iterated explicitly.
+    const size_t nb1 = tensor->nb[1];
+    const size_t nb2 = tensor->nb[2];
+    const size_t nb3 = tensor->nb[3];
+    const int64_t ne1 = tensor->ne[1];
+    const int64_t ne2 = tensor->ne[2];
+    const int64_t ne3 = tensor->ne[3];
+
+    // Determine iteration: if soa_bytes == nb1, iterate over (ne1 * ne2 * ne3) regions.
+    // If soa_bytes < nb1 (per-head), iterate over (ne1 * ne2 * ne3) regions with stride nb1.
+    // We use strides to compute offsets, handling views and permutations correctly.
+    const int64_t heads_per_region = (int64_t)(soa_bytes / head_row_sz);
+
+    // For multi-head regions, we step by nb1 (KV-position stride) between regions.
+    // For per-head, we step through all dimensions.
+    std::vector<uint8_t> buf(ggml_nbytes(tensor), 0);
+
+    if (heads_per_region > 1) {
+        // Multi-head SoA: iterate over (kv_positions * batches), each region = nb1 bytes
+        for (int64_t i3 = 0; i3 < ne3; i3++) {
+            // ne2/heads_per_region = number of head groups (for GQA broadcast, usually 1)
+            const int64_t n_groups = ne2 / heads_per_region;
+            for (int64_t ig = 0; ig < n_groups; ig++) {
+                for (int64_t i1 = 0; i1 < ne1; i1++) {
+                    size_t offset = i3*nb3 + ig*heads_per_region*nb2 + i1*nb1;
+                    for (int64_t j = 0; j < soa_elems; j++) { region_f32[j] = dist(gen); }
+                    quantize_soa(region_f32.data(), buf.data() + offset, soa_elems);
+                }
+            }
+        }
+    } else {
+        // Per-head SoA: one SoA region per ggml row
+        for (int64_t i3 = 0; i3 < ne3; i3++) {
+            for (int64_t i2 = 0; i2 < ne2; i2++) {
+                for (int64_t i1 = 0; i1 < ne1; i1++) {
+                    size_t offset = i3*nb3 + i2*nb2 + i1*nb1;
+                    for (int64_t j = 0; j < soa_elems; j++) { region_f32[j] = dist(gen); }
+                    quantize_soa(region_f32.data(), buf.data() + offset, soa_elems);
+                }
+            }
+        }
+    }
+
+    ggml_backend_tensor_set(tensor, buf.data(), 0, buf.size());
+}
+
 // generate an F16 mask where certain blocks are randomly masked with -INF value
 static void init_tensor_kq_mask(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f) {
     GGML_ASSERT(tensor->type == GGML_TYPE_F16);
@@ -239,11 +324,30 @@ static std::vector<float> tensor_to_float(const ggml_tensor * t) {
     size_t bs = ggml_blck_size(t->type);
     std::vector<float> vq(ggml_blck_size(t->type));
     bool quantized = ggml_is_quantized(t->type);
+    const bool is_mxfp = ggml_is_type_mxfp(t->type);
+
+    // SoA dequant for MXFP readback
+    mxfp_soa_dequantize_fn mxfp_dequant_soa = nullptr;
+    if (is_mxfp) {
+        switch (t->type) {
+            case GGML_TYPE_MXFP4_E2M1: mxfp_dequant_soa = dequantize_row_mxfp4_soa;      break;
+            case GGML_TYPE_MXFP8_E4M3: mxfp_dequant_soa = dequantize_row_mxfp8_soa;      break;
+            case GGML_TYPE_MXFP6_E2M3: mxfp_dequant_soa = dequantize_row_mxfp6_soa; break;
+            default: GGML_ABORT("unsupported MXFP type in tensor_to_float");
+        }
+    }
 
     // access elements by index to avoid gaps in views
     for (int64_t i3 = 0; i3 < t->ne[3]; i3++) {
         for (int64_t i2 = 0; i2 < t->ne[2]; i2++) {
             for (int64_t i1 = 0; i1 < t->ne[1]; i1++) {
+                if (is_mxfp) {
+                    size_t row_off = i3*t->nb[3] + i2*t->nb[2] + i1*t->nb[1];
+                    std::vector<float> row_f32(t->ne[0]);
+                    mxfp_dequant_soa(&buf[row_off], row_f32.data(), t->ne[0]);
+                    tv.insert(tv.end(), row_f32.begin(), row_f32.end());
+                    continue;
+                }
                 for (int64_t i0 = 0; i0 < t->ne[0]; i0 += bs) {
                     size_t i = i3*t->nb[3] + i2*t->nb[2] + i1*t->nb[1] + i0/bs*t->nb[0];
                     if (t->type == GGML_TYPE_F16) {
@@ -2309,8 +2413,12 @@ struct test_set_rows : public test_case {
     const std::array<int, 2> nr23; // broadcast only dims 2 and 3
     const int r; // rows to set
     const bool v; // view (non-contiguous src1)
+    const bool hadamard; // apply Walsh-Hadamard rotation before quantization
 
     std::string vars() override {
+        if (hadamard) {
+            return VARS_TO_STR6(type, type_idx, ne, nr23, r, v) + ",hadamard=1";
+        }
         return VARS_TO_STR6(type, type_idx, ne, nr23, r, v);
     }
 
@@ -2318,8 +2426,8 @@ struct test_set_rows : public test_case {
             ggml_type type_idx,
             std::array<int64_t, 4> ne,
             std::array<int, 2> nr23,
-            int r, bool v = false)
-        : type(type), type_idx(type_idx), ne(ne), nr23(nr23), r(r), v(v) {}
+            int r, bool v = false, bool hadamard = false)
+        : type(type), type_idx(type_idx), ne(ne), nr23(nr23), r(r), v(v), hadamard(hadamard) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * dst = ggml_new_tensor_4d(ctx, type,          ne[0], ne[1], ne[2]*nr23[0], ne[3]*nr23[1]);
@@ -2338,6 +2446,11 @@ struct test_set_rows : public test_case {
         }
 
         ggml_tensor * out = ggml_set_rows(ctx, dst, src, row_idxs);
+
+        if (hadamard) {
+            ((int32_t *)out->op_params)[0] = 1;
+        }
+
         ggml_set_name(out, "out");
 
         return out;
@@ -2351,6 +2464,10 @@ struct test_set_rows : public test_case {
                 }
 
                 init_set_rows_row_ids(t, ne[1]);
+            } else if (ggml_is_type_mxfp(t->type)) {
+                // MXFP dst tensors must use SoA layout — set_rows writes SoA,
+                // and tensor_to_float reads back assuming SoA for MXFP types.
+                init_tensor_mxfp_soa(t);
             } else {
                 init_tensor_uniform(t);
             }
@@ -3798,7 +3915,7 @@ struct test_mul_mat : public test_case {
 
     double max_nmse_err(ggml_backend_t backend) override {
         // for blackwell we quantize activations to mxfp4 instead of q8_1 so we add higher tolerance
-        if (type_a == GGML_TYPE_MXFP4 && backend_has_feature(backend, "BLACKWELL_NATIVE_FP4")) {
+        if (type_a == GGML_TYPE_MXFP4_E2M1 && backend_has_feature(backend, "BLACKWELL_NATIVE_FP4")) {
             return 2e-2;
         }
         return max_nmse_err();
@@ -3932,9 +4049,10 @@ struct test_mul_mat_id : public test_case {
         return 5e-4;
     }
 
+    // Same Blackwell FP4 tolerance as test_mul_mat above.
     double max_nmse_err(ggml_backend_t backend) override {
         // for blackwell we quantize activations to mxfp4 instead of q8_1 so we add higher tolerance
-        if (type_a == GGML_TYPE_MXFP4 && backend_has_feature(backend, "BLACKWELL_NATIVE_FP4")) {
+        if (type_a == GGML_TYPE_MXFP4_E2M1 && backend_has_feature(backend, "BLACKWELL_NATIVE_FP4")) {
             return 2e-2;
         }
         return max_nmse_err();
@@ -6180,9 +6298,14 @@ struct test_flash_attn_ext : public test_case {
 
     const ggml_prec prec;
     const ggml_type type_KV;
+    const ggml_type type_V; // V type, defaults to type_KV for same-type K/V
     std::array<int32_t, 4> permute;
 
     std::string vars() override {
+        if (type_V != type_KV) {
+            return VARS_TO_STR13(hsk, hsv, nh, nr23, kv, nb, mask, sinks, max_bias, logit_softcap, prec, type_KV, permute)
+                + ",type_V=" + ggml_type_name(type_V);
+        }
         return VARS_TO_STR13(hsk, hsv, nh, nr23, kv, nb, mask, sinks, max_bias, logit_softcap, prec, type_KV, permute);
     }
 
@@ -6199,12 +6322,14 @@ struct test_flash_attn_ext : public test_case {
 
     test_flash_attn_ext(int64_t hsk = 128, int64_t hsv = 128, int64_t nh = 32, std::array<int64_t, 2> nr23 = {1, 1}, int64_t kv = 96, int64_t nb = 8,
                         bool mask = true, bool sinks = false, float max_bias = 0.0f, float logit_softcap = 0.0f, ggml_prec prec = GGML_PREC_F32,
-                        ggml_type type_KV = GGML_TYPE_F16, std::array<int32_t, 4> permute = {0, 1, 2, 3})
-        : hsk(hsk), hsv(hsv), nh(nh), nr23(nr23), kv(kv), nb(nb), mask(mask), sinks(sinks), max_bias(max_bias), logit_softcap(logit_softcap), prec(prec), type_KV(type_KV), permute(permute) {}
+                        ggml_type type_KV = GGML_TYPE_F16, std::array<int32_t, 4> permute = {0, 1, 2, 3},
+                        ggml_type type_V_override = GGML_TYPE_COUNT)
+        : hsk(hsk), hsv(hsv), nh(nh), nr23(nr23), kv(kv), nb(nb), mask(mask), sinks(sinks), max_bias(max_bias), logit_softcap(logit_softcap), prec(prec), type_KV(type_KV),
+          type_V(type_V_override == GGML_TYPE_COUNT ? type_KV : type_V_override), permute(permute) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         const int64_t hsk_padded = GGML_PAD(hsk, ggml_blck_size(type_KV));
-        const int64_t hsv_padded = GGML_PAD(hsv, ggml_blck_size(type_KV));
+        const int64_t hsv_padded = GGML_PAD(hsv, ggml_blck_size(type_V));
 
         auto const &create_permuted = [&](ggml_type type, int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3, bool is_view) -> ggml_tensor * {
             int64_t ne[4] = {ne0, ne1, ne2, ne3};
@@ -6242,7 +6367,7 @@ struct test_flash_attn_ext : public test_case {
             //   - https://github.com/ggml-org/llama.cpp/pull/18986
             v = ggml_view_4d(ctx, k, hsv_padded, kv, nh, nr23[1], k->nb[1], k->nb[2], k->nb[3], 0);
         } else {
-            v = create_permuted(type_KV,       hsv_padded, kv, nh,         nr23[1], true); // the V tensor is usually a view of the V cache
+            v = create_permuted(type_V,        hsv_padded, kv, nh,         nr23[1], true); // the V tensor is usually a view of the V cache
         }
         ggml_set_name(v, "v");
 
@@ -6273,6 +6398,11 @@ struct test_flash_attn_ext : public test_case {
                 init_tensor_uniform(t, -10.0f, 10.0f);
             } else if (strcmp(t->name, "m") == 0) {
                 init_tensor_kq_mask(t);
+            } else if ((strcmp(t->name, "k") == 0 || strcmp(t->name, "v") == 0) && ggml_is_type_mxfp(t->type)) {
+                // MXFP K/V tensors use SoA layout. Pass nb[1] (KV-position stride) as the
+                // SoA region width — when heads are physically contiguous within that stride,
+                // the FA kernel dequants the full multi-head region as one SoA block.
+                init_tensor_mxfp_soa(t, -1.0f, 1.0f, t->nb[1]);
             } else {
                 init_tensor_uniform(t);
             }
@@ -7279,7 +7409,8 @@ static const ggml_type all_types[] = {
     GGML_TYPE_Q4_0, GGML_TYPE_Q4_1,
     GGML_TYPE_Q5_0, GGML_TYPE_Q5_1,
     GGML_TYPE_Q8_0,
-    GGML_TYPE_MXFP4,
+    GGML_TYPE_MXFP4_E2M1, GGML_TYPE_MXFP8_E4M3,
+    GGML_TYPE_MXFP6_E2M3,
     GGML_TYPE_Q2_K, GGML_TYPE_Q3_K,
     GGML_TYPE_Q4_K, GGML_TYPE_Q5_K,
     GGML_TYPE_Q6_K,
@@ -7295,7 +7426,7 @@ static const ggml_type base_types[] = {
     GGML_TYPE_Q4_0,
     GGML_TYPE_Q4_1, // for I8MM tests
     GGML_TYPE_Q4_K,
-    GGML_TYPE_MXFP4, // TODO: or "other"
+    GGML_TYPE_MXFP4_E2M1,
     GGML_TYPE_IQ2_XXS
 };
 
@@ -7411,6 +7542,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                 }
             }
         }
+    }
+
+    // SET_ROWS with Hadamard rotation (exercises the op_params[0] flag used by MXFP KV cache)
+    for (ggml_type type : {GGML_TYPE_MXFP4_E2M1, GGML_TYPE_MXFP8_E4M3,
+                           GGML_TYPE_MXFP6_E2M3}) {
+        // ne[0] must be divisible by 32 (Hadamard block size)
+        test_cases.emplace_back(new test_set_rows(type, GGML_TYPE_I64, { 128, 5, 1, 1 }, { 1, 1 }, 1, false, true));
+        test_cases.emplace_back(new test_set_rows(type, GGML_TYPE_I64, { 256, 5, 1, 3 }, { 1, 1 }, 1, false, true));
     }
 
     for (int mode : { GGML_ROPE_TYPE_NORMAL, GGML_ROPE_TYPE_NEOX, GGML_ROPE_TYPE_MROPE, GGML_ROPE_TYPE_VISION }) {
@@ -8143,7 +8282,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_id_fusion(GGML_TYPE_F16, GGML_TYPE_F32, 16, 16, false, 32, 32, 32, 3));
 
     // gpt-oss issue with Vulkan mmq_id
-    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_MXFP4, GGML_TYPE_F32, 32, 2, false, 2880, 32, 2880));
+    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_MXFP4_E2M1, GGML_TYPE_F32, 32, 2, false, 2880, 32, 2880));
 
     for (ggml_type type_a : base_types) {
         for (ggml_type type_b : {GGML_TYPE_F32 /*, GGML_TYPE_F16 */}) {
@@ -8603,8 +8742,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                                             for (int nb : { 1, 3, 32, 75, }) {
                                                 for (ggml_prec prec : {GGML_PREC_F32, GGML_PREC_DEFAULT}) {
                                                     if (hsk != 128 && prec == GGML_PREC_DEFAULT) continue;
-                                                    for (ggml_type type_KV : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0}) {
-                                                        if (type_KV != GGML_TYPE_F16 && hsk != 64 && hsk != 72) continue;
+                                                    for (ggml_type type_KV : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0,
+                                                                                GGML_TYPE_MXFP4_E2M1, GGML_TYPE_MXFP8_E4M3, GGML_TYPE_MXFP6_E2M3,
+                                                                                }) {
+                                                        // Non-F16 types: test at D=64, D=72, and D=128.
+                                                        if (type_KV != GGML_TYPE_F16 && hsk != 64 && hsk != 72 && hsk != 128) continue;
+                                                        // MXFP types require D % 32 == 0, skip D=72.
+                                                        if (ggml_is_type_mxfp(type_KV) && hsk == 72) continue;
                                                         test_cases.emplace_back(new test_flash_attn_ext(
                                                                     hsk, hsv, nh, {nr2, nr3}, kv, nb, mask, sinks, max_bias, logit_softcap, prec, type_KV));
                                                         // run fewer test cases permuted
@@ -8623,6 +8767,26 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                     }
                 }
             }
+        }
+    }
+
+    // MXFP-specific K/V type combinations (mixed and same-type)
+    // Mixed: mxfp8 K + mxfp4 V, mxfp6 K + mxfp4 V (our recommended configs)
+    for (ggml_type type_K : {GGML_TYPE_MXFP8_E4M3, GGML_TYPE_MXFP6_E2M3}) {
+        for (ggml_type type_V : {GGML_TYPE_MXFP4_E2M1}) {
+            if (type_K == type_V) continue;
+            for (int nb : {1, 3, 32}) {
+                //                     hsk  hsv  nh  nr23    kv   nb  mask  sinks  bias  softcap prec           type_K  permute             type_V
+                test_cases.emplace_back(new test_flash_attn_ext(
+                    128, 128, 4, {1, 1}, 512, nb, true, false, 0.0f, 0.0f, GGML_PREC_F32, type_K, {0, 1, 2, 3}, type_V));
+            }
+        }
+    }
+    // Same-type: mxfp8/mxfp8, mxfp6/mxfp6
+    for (ggml_type type_KV : {GGML_TYPE_MXFP8_E4M3, GGML_TYPE_MXFP6_E2M3}) {
+        for (int nb : {1, 3, 32}) {
+            test_cases.emplace_back(new test_flash_attn_ext(
+                128, 128, 4, {1, 1}, 512, nb, true, false, 0.0f, 0.0f, GGML_PREC_F32, type_KV, {0, 1, 2, 3}, type_KV));
         }
     }
 
@@ -8849,7 +9013,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
 
     // gpt-oss-20b
     for (int bs : {1, 4, 8, 512}) {
-        for (ggml_type type_a : {GGML_TYPE_MXFP4}) {
+        for (ggml_type type_a : {GGML_TYPE_MXFP4_E2M1}) {
             for (ggml_type type_b : {GGML_TYPE_F32}) {
                 test_cases.emplace_back(new test_mul_mat_id(type_a, type_b, 32, 4, false, 2880, bs, 2880));
                 test_cases.emplace_back(new test_mul_mat_id_fusion(type_a, type_b, 32, 4, false, 2880, bs, 2880, 1));

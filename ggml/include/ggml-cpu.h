@@ -115,6 +115,7 @@ extern "C" {
 
     struct ggml_type_traits_cpu {
         ggml_from_float_t        from_float;
+        ggml_to_float_t          to_float;  // SIMD-optimized dequant (NULL = use global to_float)
         ggml_vec_dot_t           vec_dot;
         enum ggml_type           vec_dot_type;
         int64_t                  nrows; // number of rows to process simultaneously

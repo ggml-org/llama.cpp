@@ -264,7 +264,7 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .vec_dot_type             = GGML_TYPE_Q8_1,
         .nrows                    = 1,
     },
-    [GGML_TYPE_MXFP4] = {
+    [GGML_TYPE_MXFP4_E2M1] = {
         .from_float               = quantize_row_mxfp4,
         .vec_dot                  = ggml_vec_dot_mxfp4_q8_0,
         .vec_dot_type             = GGML_TYPE_Q8_0,
@@ -273,6 +273,20 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
     [GGML_TYPE_NVFP4] = {
         .from_float               = quantize_row_nvfp4,
         .vec_dot                  = ggml_vec_dot_nvfp4_q8_0,
+        .vec_dot_type             = GGML_TYPE_Q8_0,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_MXFP8_E4M3] = {
+        .from_float               = quantize_row_mxfp8,
+        .to_float                 = dequantize_row_mxfp8_cpu,
+        .vec_dot                  = ggml_vec_dot_mxfp8_q8_0,
+        .vec_dot_type             = GGML_TYPE_Q8_0,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_MXFP6_E2M3] = {
+        .from_float               = quantize_row_mxfp6_e2m3,
+        .to_float                 = dequantize_row_mxfp6_e2m3_cpu,
+        .vec_dot                  = ggml_vec_dot_mxfp6_e2m3_q8_0,
         .vec_dot_type             = GGML_TYPE_Q8_0,
         .nrows                    = 1,
     },
