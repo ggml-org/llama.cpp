@@ -661,57 +661,6 @@ jobs:
             fi
             ctest --test-dir build/ReleaseOV -L main -E "test-llama-archs" --verbose --timeout 2000
 
-  windows-msys2:
-    runs-on: windows-2025
-
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { sys: UCRT64,  env: ucrt-x86_64,  build: Release }
-          - { sys: CLANG64, env: clang-x86_64, build: Release }
-
-    steps:
-      - name: Clone
-        uses: actions/checkout@v6
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
-        with:
-          key: windows-msys2
-          variant: ccache
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-      - name: Setup ${{ matrix.sys }}
-        uses: msys2/setup-msys2@v2
-        with:
-          update: true
-          msystem: ${{matrix.sys}}
-          install: >-
-            base-devel
-            git
-            mingw-w64-${{matrix.env}}-toolchain
-            mingw-w64-${{matrix.env}}-cmake
-            mingw-w64-${{matrix.env}}-openblas
-
-      - name: Build using CMake
-        shell: msys2 {0}
-        run: |
-            cmake -B build
-            cmake --build build --config ${{ matrix.build }} -j $(nproc)
-
-      - name: Clean after building using CMake
-        shell: msys2 {0}
-        run: |
-            rm -rf build
-
-      - name: Build using CMake w/ OpenBLAS
-        shell: msys2 {0}
-        run: |
-            cmake -B build -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS
-            cmake --build build --config ${{ matrix.build }} -j $(nproc)
-
   windows-latest:
     runs-on: windows-2025
 
