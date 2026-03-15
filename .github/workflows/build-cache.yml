@@ -37,31 +37,31 @@ jobs:
           path: ./vulkan_sdk
           version: ${{ env.VULKAN_SDK_VERSION }}
 
-  ubuntu-24-spacemit-cache:
-    runs-on: ubuntu-24.04
+  #ubuntu-24-spacemit-cache:
+  #  runs-on: ubuntu-24.04
 
-    env:
-      # Make sure this is in sync with build-linux-cross.yml
-      SPACEMIT_IME_TOOLCHAIN_VERSION: "1.1.2"
+  #  env:
+  #    # Make sure this is in sync with build-linux-cross.yml
+  #    SPACEMIT_IME_TOOLCHAIN_VERSION: "1.1.2"
 
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
+  #  steps:
+  #    - name: Clone
+  #      id: checkout
+  #      uses: actions/checkout@v6
 
-      - name: Setup Cache
-        uses: actions/cache@v5
-        id: cache-toolchain
-        with:
-          path: ./spacemit_toolchain
-          key: spacemit-ime-toolchain-v${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}-${{ runner.os }}
+  #    - name: Setup Cache
+  #      uses: actions/cache@v5
+  #      id: cache-toolchain
+  #      with:
+  #        path: ./spacemit_toolchain
+  #        key: spacemit-ime-toolchain-v${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}-${{ runner.os }}
 
-      - name: Setup SpacemiT Toolchain
-        if: steps.cache-toolchain.outputs.cache-hit != 'true'
-        uses: ./.github/actions/linux-setup-spacemit
-        with:
-          path: ./spacemit_toolchain
-          version: ${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}
+  #    - name: Setup SpacemiT Toolchain
+  #      if: steps.cache-toolchain.outputs.cache-hit != 'true'
+  #      uses: ./.github/actions/linux-setup-spacemit
+  #      with:
+  #        path: ./spacemit_toolchain
+  #        version: ${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}
 
   ubuntu-24-openvino-cache:
     runs-on: ubuntu-24.04
