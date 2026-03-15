@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { CircleAlert, Heart, HeartOff, Loader2, Power, PowerOff, RotateCw } from '@lucide/svelte';
+	import { CircleAlert, Heart, HeartOff, Loader2, Power, PowerOff, RotateCw, BadgeInfo } from '@lucide/svelte';
 	import { cn } from '$lib/components/ui/utils';
 	import { ActionIcon, ModelId } from '$lib/components/app';
 	import type { ModelOption } from '$lib/types/models';
@@ -15,6 +15,7 @@
 		onSelect: (modelId: string) => void;
 		onMouseEnter: () => void;
 		onKeyDown: (e: KeyboardEvent) => void;
+		onShowInfo: () => void;
 	}
 
 	let {
@@ -25,7 +26,8 @@
 		showOrgName = false,
 		onSelect,
 		onMouseEnter,
-		onKeyDown
+		onKeyDown,
+		onShowInfo
 	}: Props = $props();
 
 	let currentRouterModels = $derived(routerModels());
@@ -33,6 +35,7 @@
 		const model = currentRouterModels.find((m) => m.id === option.model);
 		return (model?.status?.value as ServerModelStatus) ?? null;
 	});
+
 	let isOperationInProgress = $derived(modelsStore.isModelOperationInProgress(option.model));
 	let isFailed = $derived(serverStatus === ServerModelStatus.FAILED);
 	let isLoaded = $derived(serverStatus === ServerModelStatus.LOADED && !isOperationInProgress);
@@ -107,12 +110,17 @@
 				</div>
 			</div>
 		{:else if isLoaded}
-			<div class="flex w-4 items-center justify-center">
-				<span class="h-2 w-2 rounded-full bg-green-500 group-hover:hidden"></span>
+			<div class="flex w-fit items-center justify-center gap-1"> <span class="h-2 w-2 rounded-full bg-green-500 group-hover:hidden"></span>
 
-				<!-- svelte-ignore a11y_no_static_element_interactions -->
-				<!-- svelte-ignore a11y_click_events_have_key_events -->
-				<div class="hidden group-hover:flex" onclick={(e) => e.stopPropagation()}>
+				<div class="hidden group-hover:flex items-center gap-1" onclick={(e) => e.stopPropagation()}>
+					<ActionIcon
+						iconSize="h-2.5 w-2.5"
+						icon={BadgeInfo}
+						tooltip="Model information"
+						class="h-3 w-3 hover:text-primary"
+						onclick={() => onShowInfo()}
+					/>
+
 					<ActionIcon
 						iconSize="h-2.5 w-2.5"
 						icon={PowerOff}
