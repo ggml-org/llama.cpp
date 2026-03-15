@@ -199,7 +199,7 @@
 	aria-label="Assistant message with actions"
 >
 	{#if showProcessingInfoTop}
-		<div class="mt-6 w-full {className}" in:fade>
+		<div class="mt-6 w-full max-w-[48rem]" in:fade>
 			<div class="processing-container">
 				<span class="processing-text">
 					{processingState.getPromptProgressText() ??
