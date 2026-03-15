@@ -14,7 +14,16 @@ on:
   push:
     branches:
       - master
-    paths: ['.github/workflows/server-sanitize.yml', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', 'tools/server/**.*']
+    paths: [
+      '.github/workflows/server-sanitize.yml',
+      '**/CMakeLists.txt',
+      '**/Makefile',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp',
+      'tools/server/**.*'
+    ]
 
 env:
   LLAMA_LOG_COLORS: 1

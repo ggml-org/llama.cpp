@@ -17,6 +17,13 @@ on:
       '**/*.glsl'
     ]
 
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: [
+      '.github/workflows/build-vulkan.yml',
+      'ggml/src/ggml-vulkan/**'
+    ]
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true

@@ -14,10 +14,34 @@ on:
   push:
     branches:
       - master
-    paths: ['.github/workflows/server.yml', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.swift', '**/*.m', 'tools/server/**.*']
+    paths: [
+      '.github/workflows/server.yml',
+      '**/CMakeLists.txt',
+      '**/Makefile',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp',
+      '**/*.cu',
+      '**/*.swift',
+      '**/*.m',
+      'tools/server/**.*'
+    ]
   pull_request:
     types: [opened, synchronize, reopened]
-    paths: ['.github/workflows/server.yml', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.swift', '**/*.m', 'tools/server/**.*']
+    paths: [
+      '.github/workflows/server.yml',
+      '**/CMakeLists.txt',
+      '**/Makefile',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp',
+      '**/*.cu',
+      '**/*.swift',
+      '**/*.m',
+      'tools/server/**.*'
+    ]
 
 env:
   LLAMA_LOG_COLORS: 1

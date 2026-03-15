@@ -15,6 +15,13 @@ on:
       '**/*.cpp'
     ]
 
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: [
+      '.github/workflows/build-cann.yml',
+      'ggml/src/ggml-cann/**'
+    ]
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true
