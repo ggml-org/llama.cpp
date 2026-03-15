@@ -2681,6 +2681,8 @@ private:
         }
 
         int32_t i_next = 0;
+        int32_t n_retries = 0;
+        const int32_t max_retries = 10;
 
         // process the created batch of tokens
         for (int32_t i = 0; i < batch.n_tokens; i = i_next) {
@@ -2740,14 +2742,20 @@ private:
                 }
 
                 // retry with half the batch size to try to find a free slot in the KV cache
-                if (!try_clear_idle_slots()) {
-                    n_batch /= 2;
+                bool cleared_slot = try_clear_idle_slots();
+                n_retries++;
+                if (n_retries >= max_retries || (!cleared_slot && n_batch > 1)) {
+                    n_batch = std::max(1, n_batch / 2);
+                    n_retries = 0;
+                    SRV_WRN("reducing batch size to %d after %d retries (cleared_slot = %d)\n", n_batch, n_retries, cleared_slot);
                 }
 
-                SRV_WRN("failed to find free space in the KV cache, retrying with smaller batch size, i = %d, n_batch = %d, ret = %d\n", i, n_batch, ret);
+                SRV_WRN("failed to find free space in the KV cache, retrying (attempt %d/%d), i = %d, n_batch = %d, ret = %d\n",
+                        n_retries, max_retries, i, n_batch, ret);
 
                 continue; // continue loop of n_batch
             }
+            n_retries = 0;
 
             // move the head of the batch forward with the number of tokens we just processed
             i_next = i + n_tokens;
