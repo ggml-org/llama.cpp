@@ -235,7 +235,7 @@
 				<div class="space-y-1">
 					<Label
 						for={field.key}
-						class="flex cursor-pointer items-center gap-1.5 text-sm font-medium"
+						class="flex cursor-pointer items-center gap-1.5 pt-1 pb-0.5 text-sm leading-none font-medium"
 					>
 						{field.label}
 
