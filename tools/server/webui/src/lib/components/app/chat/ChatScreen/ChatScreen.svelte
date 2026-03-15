@@ -353,7 +353,7 @@
 	<div
 		bind:this={chatScrollContainer}
 		aria-label="Chat interface with file drop zone"
-		class="flex h-full flex-col overflow-y-auto px-4 md:px-6"
+		class="flex h-full flex-col overflow-y-auto px-4 md:px-6 {widthClasses.class} mx-auto"
 		ondragenter={handleDragEnter}
 		ondragleave={handleDragLeave}
 		ondragover={handleDragOver}
@@ -377,10 +377,7 @@
 			<ChatScreenProcessingInfo />
 
 			{#if hasPropsError}
-				<div
-					class="pointer-events-auto mx-auto mb-4 {widthClasses.class} px-1"
-					in:fly={{ y: 10, duration: 250 }}
-				>
+				<div class="pointer-events-auto mx-auto mb-4 px-1" in:fly={{ y: 10, duration: 250 }}>
 					<Alert.Root variant="destructive">
 						<AlertTriangle class="h-4 w-4" />
 						<Alert.Title class="flex items-center justify-between">
