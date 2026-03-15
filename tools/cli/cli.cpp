@@ -215,7 +215,20 @@ struct cli_context {
         inputs.parallel_tool_calls   = false;
         inputs.add_generation_prompt = true;
         inputs.reasoning_format      = COMMON_REASONING_FORMAT_DEEPSEEK;
-        inputs.enable_thinking       = common_chat_templates_support_enable_thinking(chat_params.tmpls.get());
+        inputs.enable_thinking       = chat_params.enable_thinking;
+        inputs.chat_template_kwargs  = chat_params.chat_template_kwargs;
+
+        // sync enable_thinking with kwargs (mirrors server-common.cpp)
+        {
+            auto it = inputs.chat_template_kwargs.find("enable_thinking");
+            if (it != inputs.chat_template_kwargs.end()) {
+                if (it->second == "true") {
+                    inputs.enable_thinking = true;
+                } else if (it->second == "false") {
+                    inputs.enable_thinking = false;
+                }
+            }
+        }
 
         // Apply chat template to the list of messages
         return common_chat_templates_apply(chat_params.tmpls.get(), inputs);
