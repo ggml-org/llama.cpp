@@ -1590,6 +1590,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_MM_POST_NORM: (
             "visual.merger.post_projection_norm", # glm4v
+            "imagemlp_layernorm", # yuanvl
         ),
 
         MODEL_TENSOR.V_MM_INP_PROJ: (
@@ -1685,16 +1686,19 @@ class TensorNameMap:
         MODEL_TENSOR.V_MM_UP: (
             "model.vision.linear_proj.dense_h_to_4h", # cogvlm
             "visual.merger.up_proj", # glm4v
+            "imagemlp.up_proj", # yuanvl
         ),
 
         MODEL_TENSOR.V_MM_DOWN: (
             "model.vision.linear_proj.dense_4h_to_h", # cogvlm
             "visual.merger.down_proj", # glm4v
+            "imagemlp.down_proj", # yuanvl
         ),
 
         MODEL_TENSOR.V_MM_GATE: (
             "model.vision.linear_proj.gate_proj", # cogvlm
             "visual.merger.gate_proj", # glm4v
+            "imagemlp.gate_proj", # yuanvl
         ),
 
         MODEL_TENSOR.V_TOK_BOI: (

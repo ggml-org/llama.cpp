@@ -3934,6 +3934,7 @@ class VisionProjectorType:
     GLM4V = "glm4v"
     YOUTUVL = "youtuvl"
     NEMOTRON_V2_VL = "nemotron_v2_vl"
+    YUANVL = "yuanvl"
 
 
 # Items here are (block size, type size)

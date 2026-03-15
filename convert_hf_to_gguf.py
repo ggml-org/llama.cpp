@@ -4304,6 +4304,48 @@ class InternVisionModel(MmprojModel):
                 yield from super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("YuanVLChatModel")
+class YuanVisionModel(InternVisionModel):
+    def set_gguf_parameters(self):
+        assert self.hparams_vision is not None
+        if isinstance(self.hparams_vision['image_size'], list):
+            self.hparams_vision['image_size'] = self.hparams_vision['image_size'][0]
+        if isinstance(self.hparams_vision['patch_size'], list):
+            self.hparams_vision['patch_size'] = self.hparams_vision['patch_size'][0]
+        # call grandparent (MmprojModel) set_gguf_parameters, skip InternVisionModel's
+        super(InternVisionModel, self).set_gguf_parameters()
+
+        hparams = self.hparams
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.YUANVL)
+        self.gguf_writer.add_vision_attention_layernorm_eps(hparams["layer_norm_eps"])
+        # InternViT 300M uses GELU activation
+        if hparams["hidden_act"] == "silu":
+            self.gguf_writer.add_vision_use_silu(True)
+        elif hparams["hidden_act"] == "gelu":
+            self.gguf_writer.add_vision_use_gelu(True)
+        else:
+            raise ValueError(f"Unsupported hidden_act: {hparams['hidden_act']}")
+        # downsample_ratio
+        downsample_ratio = self.global_config.get("downsample_ratio")
+        assert downsample_ratio is not None
+        self.gguf_writer.add_vision_projector_scale_factor(int(1.0 / downsample_ratio))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # handle imagemlp and imagemlp_layernorm projector tensors
+        if name.startswith("imagemlp_layernorm") or name.startswith("imagemlp."):
+            if not name.endswith(".weight"):
+                name += ".weight"
+            yield from super(InternVisionModel, self).modify_tensors(data_torch, name, bid)
+            return
+
+        # skip language model tensors
+        if name.startswith("language_model."):
+            return
+
+        # delegate vision_model tensors to InternVisionModel (handles QKV split, etc.)
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
 @ModelBase.register(
     "NemotronH_Nano_VL_V2",
     "RADIOModel",
@@ -12500,8 +12542,13 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
     # if "architectures" is found in the sub-config, use that instead
     if model_type == ModelType.TEXT and text_config.get("architectures") is not None:
         arch = text_config["architectures"][0]
-    elif model_type == ModelType.MMPROJ and vision_config.get("architectures") is not None:
-        arch = vision_config["architectures"][0]
+    elif model_type == ModelType.MMPROJ:
+        # prefer top-level architecture if it's registered as MMPROJ (e.g. YuanVLChatModel)
+        # otherwise fall back to vision_config architecture (e.g. InternVisionModel)
+        if arch is not None and arch in ModelBase._model_classes.get(ModelType.MMPROJ, {}):
+            pass  # keep the top-level arch
+        elif vision_config.get("architectures") is not None:
+            arch = vision_config["architectures"][0]
     if arch is None:
         raise ValueError("Failed to detect model architecture")
     return arch

@@ -822,6 +822,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 builder = std::make_unique<clip_graph_internvl>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_YUANVL:
+            {
+                builder = std::make_unique<clip_graph_yuanvl>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_NEMOTRON_V2_VL:
             {
                 builder = std::make_unique<clip_graph_nemotron_v2_vl>(ctx, img);
@@ -1131,6 +1135,7 @@ struct clip_model_loader {
                     } break;
                 case PROJECTOR_TYPE_INTERNVL:
                 case PROJECTOR_TYPE_NEMOTRON_V2_VL:
+                case PROJECTOR_TYPE_YUANVL:
                     {
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
                     } break;
@@ -1803,6 +1808,15 @@ struct clip_model_loader {
                     model.mm_1_b = get_tensor(string_format(TN_MVLM_PROJ_MLP, 1, "bias"));
                     model.mm_3_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 3, "weight"));
                     model.mm_3_b = get_tensor(string_format(TN_MVLM_PROJ_MLP, 3, "bias"));
+                } break;
+            case PROJECTOR_TYPE_YUANVL:
+                {
+                    // SwiGLU MLP projector (no bias)
+                    model.mm_ffn_up_w   = get_tensor(string_format(TN_MM_UP,   "weight"));
+                    model.mm_ffn_gate_w = get_tensor(string_format(TN_MM_GATE, "weight"));
+                    model.mm_ffn_down_w = get_tensor(string_format(TN_MM_DOWN, "weight"));
+                    // RMSNorm after projector
+                    model.mm_post_norm_w = get_tensor(string_format(TN_MM_POST_NORM, "weight"));
                 } break;
             case PROJECTOR_TYPE_NEMOTRON_V2_VL:
                 {
@@ -3140,6 +3154,7 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_INTERNVL: // TODO @ngxson : support dynamic resolution
         case PROJECTOR_TYPE_NEMOTRON_V2_VL:
+        case PROJECTOR_TYPE_YUANVL:
             {
                 clip_image_u8 resized_image;
                 int sz = params.image_size;
@@ -3454,6 +3469,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
         case PROJECTOR_TYPE_IDEFICS3:
         case PROJECTOR_TYPE_INTERNVL:
         case PROJECTOR_TYPE_NEMOTRON_V2_VL:
+        case PROJECTOR_TYPE_YUANVL:
         case PROJECTOR_TYPE_LLAMA4:
             {
                 // both X and Y are downscaled by the scale factor
@@ -3894,6 +3910,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         case PROJECTOR_TYPE_IDEFICS3:
         case PROJECTOR_TYPE_INTERNVL:
         case PROJECTOR_TYPE_NEMOTRON_V2_VL:
+        case PROJECTOR_TYPE_YUANVL:
         case PROJECTOR_TYPE_QWEN2A:
         case PROJECTOR_TYPE_GLMA:
         case PROJECTOR_TYPE_ULTRAVOX:
@@ -4077,6 +4094,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_LFM2A:
             return ctx->model.position_embeddings->ne[0];
         case PROJECTOR_TYPE_GLM4V:
+        case PROJECTOR_TYPE_YUANVL:
             return ctx->model.mm_ffn_down_w->ne[1];
         default:
             GGML_ABORT("Unknown projector type");

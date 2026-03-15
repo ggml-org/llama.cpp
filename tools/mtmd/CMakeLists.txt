@@ -31,6 +31,7 @@ add_library(mtmd
             models/siglip.cpp
             models/whisper-enc.cpp
             models/mobilenetv5.cpp
+            models/yuanvl.cpp
             models/youtuvl.cpp
             )
 
