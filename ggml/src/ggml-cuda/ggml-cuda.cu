@@ -253,8 +253,11 @@ static ggml_cuda_device_info ggml_cuda_init() {
 
         // cudaMemGetInfo returns info for the current device
         size_t free_mem;
+        // Pass a dummy variable for total memory instead of NULL, because some third-party
+        // CUDA implementations do not validate the pointer and will segfault on NULL.
+        size_t total_mem_dummy;
         CUDA_CHECK(cudaSetDevice(id));
-        CUDA_CHECK(cudaMemGetInfo(&free_mem, NULL));
+        CUDA_CHECK(cudaMemGetInfo(&free_mem, &total_mem_dummy));
 
 #if defined(GGML_USE_HIP)
         info.devices[id].smpbo = prop.sharedMemPerBlock;
