@@ -483,7 +483,15 @@ static ggml_type ggml_type_from_name(const std::string & s) {
     if (s == "iq4_nl") {
         return GGML_TYPE_IQ4_NL;
     }
-
+    if (s == "mxfp4" || s == "mxfp4_e2m1") {
+        return GGML_TYPE_MXFP4_E2M1;
+    }
+    if (s == "mxfp8" || s == "mxfp8_e4m3") {
+        return GGML_TYPE_MXFP8_E4M3;
+    }
+    if (s == "mxfp6" || s == "mxfp6_e2m3") {
+        return GGML_TYPE_MXFP6_E2M3;
+    }
     return GGML_TYPE_COUNT;
 }
 

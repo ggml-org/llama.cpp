@@ -71,6 +71,9 @@ typedef sycl::half2 ggml_half2;
 #define GGML_COMMON_DECL
 #endif
 
+// Pure numeric constants needed by both DECL and IMPL sections.
+#define MXFP_HADAMARD_32_NORM  0.17677669529663689f  // 1/sqrt(32)
+
 #if defined(GGML_COMMON_DECL)
 
 #ifndef __cplusplus
@@ -104,6 +107,12 @@ typedef sycl::half2 ggml_half2;
 
 #define QI_NVFP4 (QK_NVFP4 / (4 * QR_NVFP4))
 #define QR_NVFP4 2
+
+#define QI_MXFP8 (QK_MXFP8 / (4 * QR_MXFP8))
+#define QR_MXFP8 1
+
+#define QI_MXFP6 (QK_MXFP6 / (4 * QR_MXFP6))
+#define QR_MXFP6 1
 
 #define QI5_0 (QK5_0 / (4 * QR5_0))
 #define QR5_0 2
@@ -190,6 +199,74 @@ typedef struct {
 } block_q4_1;
 static_assert(sizeof(block_q4_1) == 2 * sizeof(ggml_half) + QK4_1 / 2, "wrong q4_1 block size/padding");
 
+// MXFP E8M0 shared exponent constants (OCP MX v1.0 §5.3).
+// EMAX_OFFSET: ceil(log2(max_finite)) for each element type — used to center the E8M0 scale.
+// MSE_RANGE: search radius around round(log2(amax)). Tests 2*range+1 candidate exponents,
+// picking the one that minimizes total round-trip quantization error per block.
+// Inspired by "Four Over Six" (arXiv:2512.02010); generalized to all MX types.
+#define MXFP_E8M0_MSE_RANGE      2
+#define MXFP4_E2M1_EMAX_OFFSET   2   // ceil(log2(6.0))
+#define MXFP6_E2M3_EMAX_OFFSET   3   // ceil(log2(7.5))
+#define MXFP6_E3M2_EMAX_OFFSET   5   // ceil(log2(28.0))
+#define MXFP8_E4M3_EMAX_OFFSET   8   // ceil(log2(448))
+#define MXFP8_E5M2_EMAX_OFFSET  16   // ceil(log2(57344))
+
+// MXFP type properties — single source of truth for all backends.
+// Bits per element, quantized bytes per block, and Hadamard rotation flag.
+// USE_HADAMARD: 1 for types with >= 3-bit mantissa (E2M1, E4M3, E2M3).
+//               0 for 2-bit mantissa types (E5M2, E3M2) where Hadamard provides
+//               no quality benefit and hurts models with D_head ≤ 64.
+#define MXFP_BITS_PER_ELEM_E2M1  4
+#define MXFP_BITS_PER_ELEM_E4M3  8
+#define MXFP_BITS_PER_ELEM_E5M2  8
+#define MXFP_BITS_PER_ELEM_E2M3  6
+#define MXFP_BITS_PER_ELEM_E3M2  6
+
+#define MXFP_QS_PER_BLOCK_E2M1  16   // 32 * 4 / 8
+#define MXFP_QS_PER_BLOCK_E4M3  32   // 32 * 8 / 8
+#define MXFP_QS_PER_BLOCK_E5M2  32
+#define MXFP_QS_PER_BLOCK_E2M3  24   // 32 * 6 / 8
+#define MXFP_QS_PER_BLOCK_E3M2  24
+
+#define MXFP_USE_HADAMARD_E2M1   1
+#define MXFP_USE_HADAMARD_E4M3   1
+#define MXFP_USE_HADAMARD_E5M2   0
+#define MXFP_USE_HADAMARD_E2M3   1
+#define MXFP_USE_HADAMARD_E3M2   0
+
+// SIMD dequant constants for IEEE-754 bit reconstruction of FP8/FP6 elements.
+// For a format with sign(1), exp(E), mant(M), bias(B):
+//   EXP_MASK   = (1<<E)-1      MANT_MASK  = (1<<M)-1      EXP_SHIFT  = M
+//   IEEE_EXP_OFF = 127-B       MANT_SHIFT = 23-M           SUB_SCALE  = 2^(1-B-M)
+// Used by x86 AVX2 and ARM NEON vectorized dequant in dot product, AoS dequant, SoA dequant.
+#define MXFP8_E4M3_EXP_MASK       0xF       // (1<<4)-1
+#define MXFP8_E4M3_MANT_MASK      0x7       // (1<<3)-1
+#define MXFP8_E4M3_EXP_SHIFT      3
+#define MXFP8_E4M3_IEEE_EXP_OFF   120       // 127-7
+#define MXFP8_E4M3_MANT_SHIFT     20        // 23-3
+#define MXFP8_E4M3_SUB_SCALE      (1.0f/512.0f)   // 2^(-9) = 2^(1-7-3)
+
+#define MXFP8_E5M2_EXP_MASK       0x1F      // (1<<5)-1
+#define MXFP8_E5M2_MANT_MASK      0x3       // (1<<2)-1
+#define MXFP8_E5M2_EXP_SHIFT      2
+#define MXFP8_E5M2_IEEE_EXP_OFF   112       // 127-15
+#define MXFP8_E5M2_MANT_SHIFT     21        // 23-2
+#define MXFP8_E5M2_SUB_SCALE      (1.0f/65536.0f) // 2^(-16) = 2^(1-15-2)
+
+#define MXFP6_E2M3_EXP_MASK       0x3       // (1<<2)-1
+#define MXFP6_E2M3_MANT_MASK      0x7       // (1<<3)-1
+#define MXFP6_E2M3_EXP_SHIFT      3
+#define MXFP6_E2M3_IEEE_EXP_OFF   126       // 127-1
+#define MXFP6_E2M3_MANT_SHIFT     20        // 23-3
+#define MXFP6_E2M3_SUB_SCALE      (1.0f/8.0f)     // 2^(-3) = 2^(1-1-3)
+
+#define MXFP6_E3M2_EXP_MASK       0x7       // (1<<3)-1
+#define MXFP6_E3M2_MANT_MASK      0x3       // (1<<2)-1
+#define MXFP6_E3M2_EXP_SHIFT      2
+#define MXFP6_E3M2_IEEE_EXP_OFF   124       // 127-3
+#define MXFP6_E3M2_MANT_SHIFT     21        // 23-2
+#define MXFP6_E3M2_SUB_SCALE      (1.0f/16.0f)    // 2^(-4) = 2^(1-3-2)
+
 #define QK_MXFP4 32
 typedef struct {
     uint8_t e; // E8M0
@@ -204,6 +281,34 @@ typedef struct {
     uint8_t qs[QK_NVFP4/2];           // packed 4-bit E2M1 values (32 bytes)
 } block_nvfp4;
 static_assert(sizeof(block_nvfp4) == sizeof(uint8_t)*(QK_NVFP4/QK_NVFP4_SUB) + QK_NVFP4/2, "wrong nvfp4 block size/padding");
+
+#define QK_MXFP8 32
+typedef struct {
+    uint8_t e;              // E8M0 shared exponent
+    uint8_t qs[QK_MXFP8];  // 32 FP8 values (1 byte each), used for E4M3 and E5M2
+} block_mxfp8;
+static_assert(sizeof(block_mxfp8) == sizeof(uint8_t) + QK_MXFP8, "wrong mxfp8 block size/padding");
+
+#define QK_MXFP6 32
+typedef struct {
+    uint8_t e;                     // E8M0 shared exponent
+    uint8_t qs[QK_MXFP6 * 6 / 8]; // 24 bytes: 32 six-bit values tightly packed, used for E2M3 and E3M2
+} block_mxfp6;
+static_assert(sizeof(block_mxfp6) == sizeof(uint8_t) + QK_MXFP6 * 6 / 8, "wrong mxfp6 block size/padding");
+
+// SoA (Struct-of-Arrays) layout constants for MXFP KV cache.
+// Per row: [qs_block0|qs_block1|...][e8m0_0|e8m0_1|...]
+// Total bytes per row is IDENTICAL to AoS — same tensor strides, just rearranged.
+// Aliases for the canonical MXFP_QS_PER_BLOCK_* defines above.
+#define MXFP4_SOA_QS_PER_BLOCK  MXFP_QS_PER_BLOCK_E2M1   // 16 bytes
+#define MXFP8_SOA_QS_PER_BLOCK  MXFP_QS_PER_BLOCK_E4M3   // 32 bytes
+#define MXFP6_SOA_QS_PER_BLOCK  MXFP_QS_PER_BLOCK_E2M3   // 24 bytes
+
+// SoA offset helpers — single source of truth for the SoA memory layout contract.
+// qs region: blocks 0..nblocks-1 at contiguous qs_per_block-byte strides.
+// e8m0 region: starts immediately after all qs blocks.
+#define MXFP_SOA_QS_OFFSET(block_idx, qs_per_block)     ((block_idx) * (qs_per_block))
+#define MXFP_SOA_E8M0_OFFSET(nblocks, qs_per_block)     ((nblocks) * (qs_per_block))
 
 #define QK5_0 32
 typedef struct {
@@ -447,16 +552,36 @@ static_assert(sizeof(block_iq4_xs) == sizeof(ggml_half) + sizeof(uint16_t) + QK_
 
 #if defined(GGML_COMMON_IMPL_C)
 #include <stdint.h>
+#include <string.h>
+#include <math.h>
 
 #define GGML_TABLE_BEGIN(type, name, size) static const type name[size] = {
 #define GGML_TABLE_END() };
+#define GGML_MXFP_FUNC static inline
+static inline uint32_t ggml_mxfp_f32_as_u32_(float f) { uint32_t u; memcpy(&u, &f, sizeof(u)); return u; }
+static inline float    ggml_mxfp_u32_as_f32_(uint32_t u) { float f; memcpy(&f, &u, sizeof(f)); return f; }
+#define GGML_MXFP_F32_AS_U32(f) ggml_mxfp_f32_as_u32_(f)
+#define GGML_MXFP_U32_AS_F32(u) ggml_mxfp_u32_as_f32_(u)
+#define GGML_MXFP_LDEXPF(x, n)  ldexpf(x, n)
+#define GGML_MXFP_THREAD
+#define GGML_MXFP_UNROLL
 
 #define GGML_COMMON_IMPL
 #elif defined(GGML_COMMON_IMPL_CPP)
 #include <cstdint>
+#include <cstring>
+#include <cmath>
 
 #define GGML_TABLE_BEGIN(type, name, size) static const type name[size] = {
 #define GGML_TABLE_END() };
+#define GGML_MXFP_FUNC static inline
+static inline uint32_t ggml_mxfp_f32_as_u32_(float f) { uint32_t u; memcpy(&u, &f, sizeof(u)); return u; }
+static inline float    ggml_mxfp_u32_as_f32_(uint32_t u) { float f; memcpy(&f, &u, sizeof(f)); return f; }
+#define GGML_MXFP_F32_AS_U32(f) ggml_mxfp_f32_as_u32_(f)
+#define GGML_MXFP_U32_AS_F32(u) ggml_mxfp_u32_as_f32_(u)
+#define GGML_MXFP_LDEXPF(x, n)  ldexpf(x, n)
+#define GGML_MXFP_THREAD
+#define GGML_MXFP_UNROLL
 
 #define GGML_COMMON_IMPL
 #elif defined(GGML_COMMON_IMPL_METAL)
@@ -464,21 +589,44 @@ static_assert(sizeof(block_iq4_xs) == sizeof(ggml_half) + sizeof(uint16_t) + QK_
 
 #define GGML_TABLE_BEGIN(type, name, size) static const constant type name[size] = {
 #define GGML_TABLE_END() };
+#define GGML_MXFP_FUNC static inline
+#define GGML_MXFP_F32_AS_U32(f) as_type<uint32_t>(f)
+#define GGML_MXFP_U32_AS_F32(u) as_type<float>(u)
+#define GGML_MXFP_LDEXPF(x, n)  metal::ldexp(x, n)
+#define GGML_MXFP_THREAD thread
+#define GGML_MXFP_UNROLL _Pragma("unroll")
 
 #define GGML_COMMON_IMPL
 #elif defined(GGML_COMMON_IMPL_CUDA) || defined(GGML_COMMON_IMPL_HIP) || defined(GGML_COMMON_IMPL_MUSA)
 #include <cstdint>
+#include <cstring>
 
 #define GGML_TABLE_BEGIN(type, name, size) static const __device__ type name[size] = {
 #define GGML_TABLE_END() };
+#define GGML_MXFP_FUNC static __device__ __forceinline__
+#define GGML_MXFP_F32_AS_U32(f) __float_as_uint(f)
+#define GGML_MXFP_U32_AS_F32(u) __uint_as_float(u)
+#define GGML_MXFP_LDEXPF(x, n)  ldexpf(x, n)
+#define GGML_MXFP_THREAD
+#define GGML_MXFP_UNROLL _Pragma("unroll")
 
 #define GGML_COMMON_IMPL
 #elif defined(GGML_COMMON_IMPL_SYCL)
 
 #include <cstdint>
+#include <cstring>
+#include <cmath>
 
 #define GGML_TABLE_BEGIN(type, name, size) static const type name[size] = {
 #define GGML_TABLE_END() };
+#define GGML_MXFP_FUNC static inline
+static inline uint32_t ggml_mxfp_f32_as_u32_(float f) { uint32_t u; memcpy(&u, &f, sizeof(u)); return u; }
+static inline float    ggml_mxfp_u32_as_f32_(uint32_t u) { float f; memcpy(&f, &u, sizeof(f)); return f; }
+#define GGML_MXFP_F32_AS_U32(f) ggml_mxfp_f32_as_u32_(f)
+#define GGML_MXFP_U32_AS_F32(u) ggml_mxfp_u32_as_f32_(u)
+#define GGML_MXFP_LDEXPF(x, n)  ldexpf(x, n)
+#define GGML_MXFP_THREAD
+#define GGML_MXFP_UNROLL
 
 #define GGML_COMMON_IMPL
 #endif
@@ -1100,11 +1248,414 @@ GGML_TABLE_BEGIN(int8_t, kvalues_iq4nl, 16)
     -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113,
 GGML_TABLE_END()
 
-// e2m1 values (doubled)
+// Canonical E2M1 values (true FP4 magnitudes).
 // ref: https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
+GGML_TABLE_BEGIN(float, kvalues_mxfp4_float, 16)
+    0.0f, 0.5f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f, 6.0f,
+    -0.0f, -0.5f, -1.0f, -1.5f, -2.0f, -3.0f, -4.0f, -6.0f,
+GGML_TABLE_END()
+
+// E2M1 values doubled (implementation detail for CPU/CUDA integer arithmetic).
+// Used with GGML_E8M0_TO_FP32_HALF(e) = scale/2 so that int8 × half_scale = true value.
+// Canonical values are in kvalues_mxfp4_float above.
 GGML_TABLE_BEGIN(int8_t, kvalues_mxfp4, 16)
     0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12,
 GGML_TABLE_END()
+
+// FP6 E2M3 dequantization LUT: 6-bit value → float (64 entries).
+// Generated from ggml_mxfp_fp6_e2m3_to_float(). Indices 0-31 positive, 32-63 negative.
+GGML_TABLE_BEGIN(float, kvalues_mxfp6_e2m3, 64)
+     0.0f,  0.125f,   0.25f,  0.375f,    0.5f,  0.625f,   0.75f,  0.875f,
+     1.0f,  1.125f,   1.25f,  1.375f,    1.5f,  1.625f,   1.75f,  1.875f,
+     2.0f,   2.25f,    2.5f,   2.75f,    3.0f,   3.25f,    3.5f,   3.75f,
+     4.0f,    4.5f,    5.0f,    5.5f,    6.0f,    6.5f,    7.0f,    7.5f,
+    -0.0f, -0.125f,  -0.25f, -0.375f,   -0.5f, -0.625f,  -0.75f, -0.875f,
+    -1.0f, -1.125f,  -1.25f, -1.375f,   -1.5f, -1.625f,  -1.75f, -1.875f,
+    -2.0f,  -2.25f,   -2.5f,  -2.75f,   -3.0f,  -3.25f,   -3.5f,  -3.75f,
+    -4.0f,   -4.5f,   -5.0f,   -5.5f,   -6.0f,   -6.5f,   -7.0f,   -7.5f,
+GGML_TABLE_END()
+
+// FP6 E3M2 dequantization LUT: 6-bit value → float (64 entries).
+// Generated from ggml_mxfp_fp6_e3m2_to_float(). No NaN/Inf — all bit patterns are valid.
+GGML_TABLE_BEGIN(float, kvalues_mxfp6_e3m2, 64)
+      0.0f,  0.0625f,  0.125f, 0.1875f,   0.25f, 0.3125f,  0.375f, 0.4375f,
+      0.5f,  0.625f,    0.75f,  0.875f,    1.0f,   1.25f,    1.5f,   1.75f,
+      2.0f,    2.5f,     3.0f,    3.5f,    4.0f,    5.0f,    6.0f,    7.0f,
+      8.0f,   10.0f,    12.0f,   14.0f,   16.0f,   20.0f,   24.0f,   28.0f,
+     -0.0f, -0.0625f, -0.125f,-0.1875f,  -0.25f,-0.3125f, -0.375f,-0.4375f,
+     -0.5f,  -0.625f,  -0.75f, -0.875f,   -1.0f,  -1.25f,   -1.5f,  -1.75f,
+     -2.0f,   -2.5f,    -3.0f,   -3.5f,   -4.0f,   -5.0f,   -6.0f,   -7.0f,
+     -8.0f,  -10.0f,   -12.0f,  -14.0f,  -16.0f,  -20.0f,  -24.0f,  -28.0f,
+GGML_TABLE_END()
+
+// FP8 E4M3 dequantization LUT: byte → float (256 entries).
+// Generated from ggml_mxfp_fp8_e4m3_to_float(). Entry 127 = 448 (max finite), 255 = NaN.
+GGML_TABLE_BEGIN(float, kvalues_mxfp8_e4m3, 256)
+           0.0f, 0.001953125f,  0.00390625f, 0.005859375f,   0.0078125f, 0.009765625f,  0.01171875f, 0.013671875f,
+      0.015625f, 0.017578125f,  0.01953125f, 0.021484375f,   0.0234375f, 0.025390625f,  0.02734375f, 0.029296875f,
+       0.03125f,  0.03515625f,   0.0390625f,  0.04296875f,    0.046875f,  0.05078125f,   0.0546875f,  0.05859375f,
+        0.0625f,   0.0703125f,    0.078125f,   0.0859375f,     0.09375f,   0.1015625f,    0.109375f,   0.1171875f,
+         0.125f,    0.140625f,     0.15625f,    0.171875f,      0.1875f,    0.203125f,     0.21875f,    0.234375f,
+          0.25f,     0.28125f,      0.3125f,     0.34375f,       0.375f,     0.40625f,      0.4375f,     0.46875f,
+           0.5f,      0.5625f,       0.625f,      0.6875f,        0.75f,      0.8125f,       0.875f,      0.9375f,
+           1.0f,       1.125f,        1.25f,       1.375f,         1.5f,       1.625f,        1.75f,       1.875f,
+           2.0f,        2.25f,         2.5f,        2.75f,         3.0f,        3.25f,         3.5f,        3.75f,
+           4.0f,         4.5f,         5.0f,         5.5f,         6.0f,         6.5f,         7.0f,         7.5f,
+           8.0f,         9.0f,        10.0f,        11.0f,        12.0f,        13.0f,        14.0f,        15.0f,
+          16.0f,        18.0f,        20.0f,        22.0f,        24.0f,        26.0f,        28.0f,        30.0f,
+          32.0f,        36.0f,        40.0f,        44.0f,        48.0f,        52.0f,        56.0f,        60.0f,
+          64.0f,        72.0f,        80.0f,        88.0f,        96.0f,       104.0f,       112.0f,       120.0f,
+         128.0f,       144.0f,       160.0f,       176.0f,       192.0f,       208.0f,       224.0f,       240.0f,
+         256.0f,       288.0f,       320.0f,       352.0f,       384.0f,       416.0f,       448.0f,          NAN,
+          -0.0f,-0.001953125f, -0.00390625f,-0.005859375f,  -0.0078125f,-0.009765625f, -0.01171875f,-0.013671875f,
+     -0.015625f,-0.017578125f, -0.01953125f,-0.021484375f,  -0.0234375f,-0.025390625f, -0.02734375f,-0.029296875f,
+      -0.03125f, -0.03515625f,  -0.0390625f, -0.04296875f,   -0.046875f, -0.05078125f,  -0.0546875f, -0.05859375f,
+       -0.0625f,  -0.0703125f,   -0.078125f,  -0.0859375f,    -0.09375f,  -0.1015625f,   -0.109375f,  -0.1171875f,
+        -0.125f,   -0.140625f,    -0.15625f,   -0.171875f,     -0.1875f,   -0.203125f,    -0.21875f,   -0.234375f,
+         -0.25f,    -0.28125f,     -0.3125f,    -0.34375f,      -0.375f,    -0.40625f,     -0.4375f,    -0.46875f,
+          -0.5f,     -0.5625f,      -0.625f,     -0.6875f,       -0.75f,     -0.8125f,      -0.875f,     -0.9375f,
+          -1.0f,      -1.125f,       -1.25f,      -1.375f,        -1.5f,      -1.625f,       -1.75f,      -1.875f,
+          -2.0f,       -2.25f,        -2.5f,       -2.75f,        -3.0f,       -3.25f,        -3.5f,       -3.75f,
+          -4.0f,        -4.5f,        -5.0f,        -5.5f,        -6.0f,        -6.5f,        -7.0f,        -7.5f,
+          -8.0f,        -9.0f,       -10.0f,       -11.0f,       -12.0f,       -13.0f,       -14.0f,       -15.0f,
+         -16.0f,       -18.0f,       -20.0f,       -22.0f,       -24.0f,       -26.0f,       -28.0f,       -30.0f,
+         -32.0f,       -36.0f,       -40.0f,       -44.0f,       -48.0f,       -52.0f,       -56.0f,       -60.0f,
+         -64.0f,       -72.0f,       -80.0f,       -88.0f,       -96.0f,      -104.0f,      -112.0f,      -120.0f,
+        -128.0f,      -144.0f,      -160.0f,      -176.0f,      -192.0f,      -208.0f,      -224.0f,      -240.0f,
+        -256.0f,      -288.0f,      -320.0f,      -352.0f,      -384.0f,      -416.0f,      -448.0f,          NAN,
+GGML_TABLE_END()
+
+// FP8 E5M2 dequantization LUT: byte → float (256 entries).
+// Generated from ggml_mxfp_fp8_e5m2_to_float(). Entries 124-127 = {Inf, NaN, NaN, NaN}.
+GGML_TABLE_BEGIN(float, kvalues_mxfp8_e5m2, 256)
+       0.0f, 1.525879e-05f, 3.051758e-05f, 4.577637e-05f, 6.103516e-05f, 7.629395e-05f, 9.155273e-05f, 1.068115e-04f,
+    1.220703e-04f, 1.525879e-04f, 1.831055e-04f, 2.136230e-04f, 2.441406e-04f, 3.051758e-04f, 3.662109e-04f, 4.272461e-04f,
+    4.882812e-04f, 6.103516e-04f, 7.324219e-04f, 8.544922e-04f, 9.765625e-04f, 1.220703e-03f, 1.464844e-03f, 1.708984e-03f,
+    1.953125e-03f, 2.441406e-03f, 2.929688e-03f, 3.417969e-03f, 3.906250e-03f, 4.882812e-03f, 5.859375e-03f, 6.835938e-03f,
+    7.812500e-03f, 9.765625e-03f, 1.171875e-02f, 1.367188e-02f, 1.562500e-02f, 1.953125e-02f, 2.343750e-02f, 2.734375e-02f,
+    3.125000e-02f, 3.906250e-02f, 4.687500e-02f, 5.468750e-02f, 6.250000e-02f, 7.812500e-02f, 9.375000e-02f, 1.093750e-01f,
+         0.125f,      0.15625f,       0.1875f,      0.21875f,        0.25f,       0.3125f,        0.375f,       0.4375f,
+           0.5f,        0.625f,         0.75f,        0.875f,         1.0f,         1.25f,          1.5f,         1.75f,
+           2.0f,          2.5f,          3.0f,          3.5f,         4.0f,          5.0f,          6.0f,          7.0f,
+           8.0f,         10.0f,         12.0f,         14.0f,        16.0f,         20.0f,         24.0f,         28.0f,
+          32.0f,         40.0f,         48.0f,         56.0f,        64.0f,         80.0f,         96.0f,        112.0f,
+         128.0f,        160.0f,        192.0f,        224.0f,       256.0f,        320.0f,        384.0f,        448.0f,
+         512.0f,        640.0f,        768.0f,        896.0f,      1024.0f,       1280.0f,       1536.0f,       1792.0f,
+        2048.0f,       2560.0f,       3072.0f,       3584.0f,      4096.0f,       5120.0f,       6144.0f,       7168.0f,
+        8192.0f,      10240.0f,      12288.0f,      14336.0f,     16384.0f,      20480.0f,      24576.0f,      28672.0f,
+       32768.0f,      40960.0f,      49152.0f,      57344.0f,     INFINITY,          NAN,          NAN,          NAN,
+         -0.0f,-1.525879e-05f,-3.051758e-05f,-4.577637e-05f,-6.103516e-05f,-7.629395e-05f,-9.155273e-05f,-1.068115e-04f,
+   -1.220703e-04f,-1.525879e-04f,-1.831055e-04f,-2.136230e-04f,-2.441406e-04f,-3.051758e-04f,-3.662109e-04f,-4.272461e-04f,
+   -4.882812e-04f,-6.103516e-04f,-7.324219e-04f,-8.544922e-04f,-9.765625e-04f,-1.220703e-03f,-1.464844e-03f,-1.708984e-03f,
+   -1.953125e-03f,-2.441406e-03f,-2.929688e-03f,-3.417969e-03f,-3.906250e-03f,-4.882812e-03f,-5.859375e-03f,-6.835938e-03f,
+   -7.812500e-03f,-9.765625e-03f,-1.171875e-02f,-1.367188e-02f,-1.562500e-02f,-1.953125e-02f,-2.343750e-02f,-2.734375e-02f,
+   -3.125000e-02f,-3.906250e-02f,-4.687500e-02f,-5.468750e-02f,-6.250000e-02f,-7.812500e-02f,-9.375000e-02f,-1.093750e-01f,
+        -0.125f,     -0.15625f,      -0.1875f,     -0.21875f,       -0.25f,      -0.3125f,       -0.375f,      -0.4375f,
+          -0.5f,       -0.625f,        -0.75f,       -0.875f,        -1.0f,        -1.25f,         -1.5f,        -1.75f,
+          -2.0f,         -2.5f,         -3.0f,         -3.5f,        -4.0f,         -5.0f,         -6.0f,         -7.0f,
+          -8.0f,        -10.0f,        -12.0f,        -14.0f,       -16.0f,        -20.0f,        -24.0f,        -28.0f,
+         -32.0f,        -40.0f,        -48.0f,        -56.0f,       -64.0f,        -80.0f,        -96.0f,       -112.0f,
+        -128.0f,       -160.0f,       -192.0f,       -224.0f,      -256.0f,       -320.0f,       -384.0f,       -448.0f,
+        -512.0f,       -640.0f,       -768.0f,       -896.0f,     -1024.0f,      -1280.0f,      -1536.0f,      -1792.0f,
+       -2048.0f,      -2560.0f,      -3072.0f,      -3584.0f,     -4096.0f,      -5120.0f,      -6144.0f,      -7168.0f,
+       -8192.0f,     -10240.0f,     -12288.0f,     -14336.0f,    -16384.0f,     -20480.0f,     -24576.0f,     -28672.0f,
+      -32768.0f,     -40960.0f,     -49152.0f,     -57344.0f,    -INFINITY,          NAN,          NAN,          NAN,
+GGML_TABLE_END()
+
+// ------------------------------------------------------------------------------------------------------------------
+// Canonical MXFP element converters — portable IEEE-754 bit manipulation.
+// Single source of truth for CPU, CUDA, HIP, MUSA, SYCL. Metal/Vulkan keep MSL/GLSL copies.
+// ------------------------------------------------------------------------------------------------------------------
+#if defined(GGML_MXFP_FUNC)
+
+// --- FP4 E2M1: [S(1) | E(2) | M(1)] — max normal = 6.0 ---
+// Canonical converters using true E2M1 values {0, 0.5, 1, 1.5, 2, 3, 4, 6}.
+// The int8 kvalues_mxfp4 LUT stores doubled values {0,1,2,3,4,6,8,12} for
+// CPU/CUDA nibble-indexed integer arithmetic — that doubling is an implementation detail.
+
+GGML_MXFP_FUNC float ggml_mxfp_fp4_e2m1_to_float(uint8_t v) {
+    const float sign = (v & 0x8) ? -1.0f : 1.0f;
+    const int exp  = (v >> 1) & 0x3;
+    const int mant = v & 0x1;
+    if (exp == 0) return sign * (float)mant * 0.5f;
+    return sign * (1.0f + mant * 0.5f) * (float)(1 << (exp - 1));
+}
+
+GGML_MXFP_FUNC uint8_t ggml_mxfp_float_to_fp4_e2m1(float x) {
+    uint8_t sign = 0;
+    if (x < 0) { sign = 0x8; x = -x; }
+    if (x == 0) return sign;
+    if (x >= 6.0f) return sign | 0x7;  // max finite
+    // Decision boundaries (midpoints of adjacent canonical values):
+    // {0.25, 0.75, 1.25, 1.75, 2.5, 3.5, 5.0}
+    if      (x < 0.25f) return sign | 0x0;  // 0
+    else if (x < 0.75f) return sign | 0x1;  // 0.5
+    else if (x < 1.25f) return sign | 0x2;  // 1.0
+    else if (x < 1.75f) return sign | 0x3;  // 1.5
+    else if (x < 2.5f)  return sign | 0x4;  // 2.0
+    else if (x < 3.5f)  return sign | 0x5;  // 3.0
+    else if (x < 5.0f)  return sign | 0x6;  // 4.0
+    else                 return sign | 0x7;  // 6.0
+}
+
+// --- FP6 E2M3: [S(1) | E(2) | M(3)] — max normal = 7.5 ---
+
+GGML_MXFP_FUNC float ggml_mxfp_fp6_e2m3_to_float(uint8_t v) {
+    const float sign = (v & 0x20) ? -1.0f : 1.0f;
+    const int exp  = (v >> 3) & 0x3;
+    const int mant = v & 0x7;
+    if (exp == 0) return sign * (float)mant * 0.125f;
+    return sign * (1.0f + mant * 0.125f) * (float)(1 << (exp - 1));
+}
+
+GGML_MXFP_FUNC uint8_t ggml_mxfp_float_to_fp6_e2m3(float x) {
+    uint8_t sign = 0;
+    if (x < 0) { sign = 0x20; x = -x; }
+    if (x == 0) return sign;
+    if (x >= 7.5f) return sign | 0x1F;  // max finite
+
+    uint32_t bits = GGML_MXFP_F32_AS_U32(x);
+    int f32_exp = (int)((bits >> 23) & 0xFF) - 127;
+
+    if (f32_exp < 0) {
+        // Subnormal in E2M3: mant * 2^(-3)
+        float scaled = x * 8.0f;
+        int mant = (int)(scaled + 0.5f);
+        if (mant > 7) return sign | 0x08;  // smallest normal
+        return sign | (uint8_t)mant;
+    }
+    if (f32_exp > 2) f32_exp = 2;
+
+    float mantf = (x / (float)(1 << f32_exp)) - 1.0f;
+    int mant = (int)(mantf * 8.0f + 0.5f);
+    if (mant > 7) { mant = 0; f32_exp++; }
+    if (f32_exp > 2) return sign | 0x1F;
+    return sign | (uint8_t)(((f32_exp + 1) << 3) | mant);
+}
+
+// --- FP6 E3M2: [S(1) | E(3) | M(2)] — max normal = 28.0, no NaN/Inf ---
+
+GGML_MXFP_FUNC float ggml_mxfp_fp6_e3m2_to_float(uint8_t v) {
+    const float sign = (v & 0x20) ? -1.0f : 1.0f;
+    const int exp  = (v >> 2) & 0x7;
+    const int mant = v & 0x3;
+    if (exp == 0) return sign * (float)mant * 0.0625f;  // 2^(-4)
+    // MX E3M2 has no NaN/Inf — exp=7 is a valid normal value (max finite = 28.0).
+    return sign * GGML_MXFP_LDEXPF(1.0f + mant * 0.25f, exp - 3);
+}
+
+GGML_MXFP_FUNC uint8_t ggml_mxfp_float_to_fp6_e3m2(float x) {
+    uint8_t sign = 0;
+    if (x < 0) { sign = 0x20; x = -x; }
+    if (x == 0) return sign;
+    if (x >= 28.0f) return sign | 0x1F;  // max finite
+
+    uint32_t bits = GGML_MXFP_F32_AS_U32(x);
+    int f32_exp = (int)((bits >> 23) & 0xFF) - 127;
+    int biased_exp = f32_exp + 3;
+
+    if (biased_exp <= 0) {
+        // Subnormal in E3M2: mant * 2^(-4)
+        float scaled = x * 16.0f;
+        int mant = (int)(scaled + 0.5f);
+        if (mant > 3) return sign | 0x04;  // smallest normal
+        return sign | (uint8_t)mant;
+    }
+    if (biased_exp > 7) return sign | 0x1F;
+
+    float pow2 = (f32_exp >= 0) ? (float)(1 << f32_exp) : 1.0f / (float)(1 << (-f32_exp));
+    float mantf = (x / pow2) - 1.0f;
+    int mant = (int)(mantf * 4.0f + 0.5f);
+    if (mant > 3) { mant = 0; biased_exp++; }
+    if (biased_exp > 7) return sign | 0x1F;
+    return sign | (uint8_t)((biased_exp << 2) | mant);
+}
+
+// --- FP8 E4M3: [S(1) | E(4) | M(3)] — bias=7, max finite=448 ---
+
+GGML_MXFP_FUNC float ggml_mxfp_fp8_e4m3_to_float(uint8_t v) {
+    uint32_t sign = ((uint32_t)(v & 0x80)) << 24;
+    uint32_t exp  = (v >> 3) & 0xF;
+    uint32_t mant = v & 0x7;
+
+    if (exp == 0) {
+        if (mant == 0) return GGML_MXFP_U32_AS_F32(sign);
+        // Subnormal: mant * 2^(1-7) * 2^(-3) = mant * 2^(-9)
+        float val = (float)mant * (1.0f / 512.0f);
+        uint32_t vb = GGML_MXFP_F32_AS_U32(val);
+        vb = (vb & 0x7FFFFFFFu) | sign;
+        return GGML_MXFP_U32_AS_F32(vb);
+    }
+    if (exp == 15 && mant == 7) {
+        return GGML_MXFP_U32_AS_F32(sign | 0x7FC00000u);
+    }
+    // Normal: (-1)^S * 2^(E-7) * (1 + M/8) → F32 exp = E-7+127 = E+120
+    return GGML_MXFP_U32_AS_F32(sign | ((exp + 120) << 23) | (mant << 20));
+}
+
+GGML_MXFP_FUNC uint8_t ggml_mxfp_float_to_fp8_e4m3(float x) {
+    uint32_t bits = GGML_MXFP_F32_AS_U32(x);
+    uint8_t sign = (bits >> 24) & 0x80;
+    bits &= 0x7FFFFFFFu;
+    if (bits == 0) return sign;
+
+    uint32_t f32_exp  = (bits >> 23) & 0xFF;
+    uint32_t f32_mant = bits & 0x7FFFFF;
+    int e4m3_exp = (int)f32_exp - 120;
+
+    if (e4m3_exp <= 0) {
+        // Subnormal in E4M3
+        int shift = 1 - e4m3_exp;
+        uint32_t full_mant = (1u << 23) | f32_mant;
+        int total_shift = 20 + shift;
+        if (total_shift >= 32) return sign;
+        uint32_t mant3 = full_mant >> total_shift;
+        if (total_shift > 0 && total_shift < 32) {
+            uint32_t round_bit = (full_mant >> (total_shift - 1)) & 1;
+            uint32_t sticky = (total_shift > 1) ? (full_mant & ((1u << (total_shift - 1)) - 1)) : 0;
+            if (round_bit && (sticky || (mant3 & 1))) mant3++;
+        }
+        if (mant3 > 7) return sign | 0x08;
+        return sign | (uint8_t)mant3;
+    }
+
+    uint32_t round_bit = (f32_mant >> 19) & 1;
+    uint32_t sticky = f32_mant & ((1u << 19) - 1);
+    uint32_t mant3 = f32_mant >> 20;
+    if (round_bit && (sticky || (mant3 & 1))) {
+        mant3++;
+        if (mant3 > 7) { mant3 = 0; e4m3_exp++; }
+    }
+    if (e4m3_exp > 15 || (e4m3_exp == 15 && mant3 >= 7)) return sign | 0x7E; // max finite
+    return sign | (uint8_t)((e4m3_exp << 3) | mant3);
+}
+
+// --- FP8 E5M2: [S(1) | E(5) | M(2)] — bias=15, max finite=57344 ---
+
+GGML_MXFP_FUNC float ggml_mxfp_fp8_e5m2_to_float(uint8_t v) {
+    uint32_t sign = ((uint32_t)(v & 0x80)) << 24;
+    uint32_t exp  = (v >> 2) & 0x1F;
+    uint32_t mant = v & 0x3;
+
+    if (exp == 0) {
+        if (mant == 0) return GGML_MXFP_U32_AS_F32(sign);
+        // Subnormal: mant * 2^(1-15) * 2^(-2) = mant/4 * 2^(-14)
+        float val = (float)mant * 0.25f * (1.0f / 16384.0f);
+        uint32_t vb = GGML_MXFP_F32_AS_U32(val);
+        vb = (vb & 0x7FFFFFFFu) | sign;
+        return GGML_MXFP_U32_AS_F32(vb);
+    }
+    if (exp == 31) {
+        return GGML_MXFP_U32_AS_F32(sign | 0x7F800000u | (mant ? 0x400000u : 0));
+    }
+    // Normal: F32 exp = E-15+127 = E+112
+    return GGML_MXFP_U32_AS_F32(sign | ((exp + 112) << 23) | (mant << 21));
+}
+
+GGML_MXFP_FUNC uint8_t ggml_mxfp_float_to_fp8_e5m2(float x) {
+    uint32_t bits = GGML_MXFP_F32_AS_U32(x);
+    uint8_t sign = (bits >> 24) & 0x80;
+    bits &= 0x7FFFFFFFu;
+    if (bits == 0) return sign;
+
+    uint32_t f32_exp  = (bits >> 23) & 0xFF;
+    uint32_t f32_mant = bits & 0x7FFFFF;
+    int e5m2_exp = (int)f32_exp - 112;
+
+    if (e5m2_exp <= 0) {
+        int shift = 1 - e5m2_exp;
+        uint32_t full_mant = (1u << 23) | f32_mant;
+        int total_shift = 21 + shift;
+        if (total_shift >= 32) return sign;
+        uint32_t mant2 = full_mant >> total_shift;
+        if (total_shift > 0 && total_shift < 32) {
+            uint32_t round_bit = (full_mant >> (total_shift - 1)) & 1;
+            uint32_t sticky = (total_shift > 1) ? (full_mant & ((1u << (total_shift - 1)) - 1)) : 0;
+            if (round_bit && (sticky || (mant2 & 1))) mant2++;
+        }
+        if (mant2 > 3) return sign | 0x04;
+        return sign | (uint8_t)mant2;
+    }
+
+    uint32_t round_bit = (f32_mant >> 20) & 1;
+    uint32_t sticky = f32_mant & ((1u << 20) - 1);
+    uint32_t mant2 = f32_mant >> 21;
+    if (round_bit && (sticky || (mant2 & 1))) {
+        mant2++;
+        if (mant2 > 3) { mant2 = 0; e5m2_exp++; }
+    }
+    if (e5m2_exp >= 31) return sign | 0x7B; // max finite
+    return sign | (uint8_t)((e5m2_exp << 2) | mant2);
+}
+
+// --- FP6 packing/unpacking ---
+
+// Pack 4 six-bit values into 3 bytes
+GGML_MXFP_FUNC void ggml_mxfp_pack_fp6x4(const uint8_t v[4], uint8_t out[3]) {
+    uint32_t packed = (v[0] & 0x3F) | ((v[1] & 0x3F) << 6) |
+                      ((v[2] & 0x3F) << 12) | ((v[3] & 0x3F) << 18);
+    out[0] = (uint8_t)(packed);
+    out[1] = (uint8_t)(packed >> 8);
+    out[2] = (uint8_t)(packed >> 16);
+}
+
+// Unpack 3 bytes into 4 six-bit values
+GGML_MXFP_FUNC void ggml_mxfp_unpack_fp6x4(const uint8_t in[3], uint8_t v[4]) {
+    uint32_t packed = (uint32_t)in[0] | ((uint32_t)in[1] << 8) | ((uint32_t)in[2] << 16);
+    v[0] = packed & 0x3F;
+    v[1] = (packed >> 6) & 0x3F;
+    v[2] = (packed >> 12) & 0x3F;
+    v[3] = (packed >> 18) & 0x3F;
+}
+
+// E8M0 shared exponent → float conversion.
+// E8M0 encoding: value = 2^(x - 127) for x > 0, 2^(-127) for x == 0.
+GGML_MXFP_FUNC float ggml_mxfp_e8m0_to_fp32(uint8_t x) {
+    uint32_t bits = (x == 0) ? 0x00400000u : ((uint32_t)x << 23);
+    return GGML_MXFP_U32_AS_F32(bits);
+}
+
+// E8M0 → float/2. Used with MXFP4 since E2M1 values are doubled in kvalues_mxfp4.
+GGML_MXFP_FUNC float ggml_mxfp_e8m0_to_fp32_half(uint8_t x) {
+    uint32_t bits = (x < 2) ? (0x00200000u << x) : ((uint32_t)(x - 1) << 23);
+    return GGML_MXFP_U32_AS_F32(bits);
+}
+
+// E8M0 base exponent estimate: round(log2(amax)) - emax_offset + 127.
+// Uses integer bit extraction — no log2f() SFU dependency.
+// Caller must ensure amax > 0 and finite. Returns unclamped e_base.
+GGML_MXFP_FUNC int ggml_mxfp_e8m0_base_estimate(float amax, int emax_offset) {
+    uint32_t amax_bits = GGML_MXFP_F32_AS_U32(amax);
+    const int floor_log2 = (int)((amax_bits >> 23) & 0xFF) - 127;
+    // Round: add 1 if mantissa >= sqrt(2)-1 (0x3504F3 in 23-bit IEEE mantissa).
+    const int round_log2 = floor_log2 + ((amax_bits & 0x7FFFFF) >= 0x3504F3 ? 1 : 0);
+    return round_log2 - emax_offset + 127;
+}
+
+// Block-32 Walsh-Hadamard Transform, normalized by 1/sqrt(32).
+// Spreads outlier energy across all elements sharing an E8M0 exponent,
+// improving quantization quality (see QuaRot arXiv:2404.00456).
+GGML_MXFP_FUNC void ggml_mxfp_hadamard_32_inplace(GGML_MXFP_THREAD float * vals) {
+    GGML_MXFP_UNROLL
+    for (int stride = 1; stride < 32; stride *= 2) {
+        GGML_MXFP_UNROLL
+        for (int i = 0; i < 32; i += 2 * stride) {
+            GGML_MXFP_UNROLL
+            for (int j = 0; j < stride; ++j) {
+                const float a = vals[i + j];
+                const float b = vals[i + j + stride];
+                vals[i + j]          = a + b;
+                vals[i + j + stride] = a - b;
+            }
+        }
+    }
+    GGML_MXFP_UNROLL
+    for (int i = 0; i < 32; ++i) {
+        vals[i] *= MXFP_HADAMARD_32_NORM;
+    }
+}
+
+#endif // GGML_MXFP_FUNC
 
 #define NGRID_IQ1S 2048
 #define IQ1S_DELTA 0.125f

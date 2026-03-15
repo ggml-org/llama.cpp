@@ -54,6 +54,14 @@ void quantize_row_nvfp4(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, i
     quantize_row_nvfp4_ref(x, y, k);
 }
 
+void quantize_row_mxfp8(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_mxfp8_ref(x, y, k);
+}
+
+void quantize_row_mxfp6_e2m3(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_mxfp6_e2m3_ref(x, y, k);
+}
+
 //
 // 2-6 bit quantization in super-blocks
 //
@@ -256,6 +264,70 @@ void ggml_vec_dot_nvfp4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, 
     *s = sumf;
 }
 
+// Generic MXFP-to-Q8_0 dot product. Dequants one MX block (32 elements)
+// to float via the existing public dequantize_row functions, then dots
+// against Q8_0 int8 values. Reference implementation — not SIMD-optimized.
+static void ggml_vec_dot_mxfp_q8_0_impl(
+        int n, float * GGML_RESTRICT s,
+        const void * GGML_RESTRICT vx, size_t block_size,
+        const void * GGML_RESTRICT vy,
+        ggml_to_float_t dequant) {
+    assert(n % QK8_0 == 0);
+    const int nb = n / QK8_0;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+    float sumf = 0;
+
+    for (int ib = 0; ib < nb; ib++) {
+        float tmp[QK8_0];
+        dequant((const char *)vx + ib * block_size, tmp, QK8_0);
+
+        const float y_d = GGML_CPU_FP16_TO_FP32(y[ib].d);
+        float block_sum = 0;
+        for (int j = 0; j < QK8_0; j++) {
+            block_sum += tmp[j] * (float)y[ib].qs[j];
+        }
+        sumf += block_sum * y_d;
+    }
+    *s = sumf;
+}
+
+void ggml_vec_dot_mxfp8_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    ggml_vec_dot_mxfp_q8_0_impl(n, s, vx, sizeof(block_mxfp8), vy,
+            (ggml_to_float_t)dequantize_row_mxfp8);
+}
+
+void ggml_vec_dot_mxfp6_e2m3_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    ggml_vec_dot_mxfp_q8_0_impl(n, s, vx, sizeof(block_mxfp6), vy,
+            (ggml_to_float_t)dequantize_row_mxfp6_e2m3);
+}
+
+// Generic (scalar) dequant wrappers — delegates to ggml-quants.c reference implementations.
+// On x86/ARM, arch-specific SIMD versions override these via the fallback.h mapping.
+void dequantize_row_mxfp8_cpu_generic(const void * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    dequantize_row_mxfp8(x, y, k);
+}
+void dequantize_row_mxfp6_e2m3_cpu_generic(const void * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    dequantize_row_mxfp6_e2m3(x, y, k);
+}
+void dequantize_row_mxfp4_soa_cpu_generic(const void * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    dequantize_row_mxfp4_soa(x, y, k);
+}
+void dequantize_row_mxfp8_soa_cpu_generic(const void * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    dequantize_row_mxfp8_soa(x, y, k);
+}
+void dequantize_row_mxfp6_soa_cpu_generic(const void * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    dequantize_row_mxfp6_soa(x, y, k);
+}
 void ggml_vec_dot_q5_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     const int qk = QK8_0;
     const int nb = n / qk;

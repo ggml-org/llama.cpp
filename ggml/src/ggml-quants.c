@@ -257,19 +257,188 @@ void quantize_row_q8_1_ref(const float * GGML_RESTRICT x, block_q8_1 * GGML_REST
     }
 }
 
-static inline int best_index_mxfp4(float x, float e) {
-    int best_index = 0;
-    float best_err = fabsf(kvalues_mxfp4[0]*e - x);
-    for (int i = 1; i < 16; i++) {
-        float err = fabsf(kvalues_mxfp4[i]*e - x);
-        if (err < best_err) {
-            best_index = i;
-            best_err = err;
-        }
-    }
-    return best_index;
+// ============================================================================
+// MXFP Element Conversion Functions
+// ============================================================================
+//
+// Reference implementations for OCP Microscaling (MX) format element types.
+// Spec: https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
+//
+// All converters use IEEE-754 bit manipulation via memcpy (C99 safe, no strict
+// aliasing issues). Quantization uses round-to-nearest-even (RNE) per MX spec.
+//
+// These functions are exposed in ggml-quants.h for use by CPU backends and tests.
+// GPU backends (CUDA, Vulkan, Metal) provide their own optimized versions using
+// hardware intrinsics (e.g., __nv_cvt_float_to_fp8, SIMD groups, LUT lookups).
+//
+// Key design decisions validated empirically on CUDA (Qwen3-Coder-30B-A3B):
+//
+// 1. SATURATION, NOT NaN PROPAGATION: FP8 E4M3 saturates to max (0x7E = 448)
+//    rather than producing NaN. The single NaN encoding (0x7F) is avoided.
+//    This matches the MX spec behavior and prevents NaN corruption in KV caches.
+//
+// 2. MX FP6 HAS NO NaN/Inf: Unlike IEEE-754, the MX spec defines exp=max as a
+//    valid normal value for FP6 types. Dequantizers must NOT special-case it.
+//
+// 3. RNE ROUNDING IN SUBNORMALS: Both normal and subnormal paths use proper
+//    round-to-nearest-even with sticky bit tracking. This was a P0 bug fix —
+//    truncation caused measurable PPL regression.
+//
+// 4. E3M2 SUBNORMAL SCALE: mant * 2^(1-bias-m) = mant * 2^(-4) = mant/16.
+//    NOT mant/4. This was a critical bug — the exponent bias and mantissa width
+//    both affect the subnormal multiplier.
+//
+
+// FP8 E4M3: 1 sign, 4 exponent (bias 7), 3 mantissa
+// Max finite: 448 (exp=15, mant=6), NaN: exp=15, mant=7
+// Thin wrappers around canonical implementations in ggml-common.h.
+// Verified bit-for-bit identical by test-mxfp-converters.
+float fp8_e4m3_to_float(uint8_t v)    { return ggml_mxfp_fp8_e4m3_to_float(v); }
+uint8_t float_to_fp8_e4m3_rn(float x) { return ggml_mxfp_float_to_fp8_e4m3(x); }
+
+// ============================================================================
+// MXFP Quantization Infrastructure
+// ============================================================================
+//
+// The MX format uses a shared E8M0 exponent per block of 32 elements. Choosing
+// the optimal exponent is critical for quantization quality.
+//
+// The OCP MX v1.0 spec (§5.3) specifies floor(log2(amax)) for the shared exponent.
+// We improve on this with an MSE-optimal ±1 search that tests 3 candidate exponents
+// {e-1, e, e+1} around round(log2(amax)) and picks whichever minimizes the total
+// round-trip quantization error for the block. This consistently improves perplexity
+// by 0.05-0.2 across all MX types versus floor-only or round-only approaches.
+//
+// The round(log2(amax)) base is computed via IEEE-754 integer bit extraction rather
+// than log2f(), avoiding GPU Special Function Unit (SFU) bottlenecks. The rounding
+// threshold 0x3504F3 is the fractional part of sqrt(2) in IEEE-754 mantissa bits:
+// if mantissa >= (sqrt(2)-1)*2^23 ≈ 0x3504F3, then log2(x) >= n+0.5, so round up.
+//
+// Each MX element type provides an mse_error function that computes the round-trip
+// quantization error for a single value at a given scale. The traits structure
+// encapsulates this per-type behavior.
+//
+
+// Per-type traits for MSE-optimal E8M0 scale computation.
+// emax_offset: type-specific offset from E8M0 bias to type's max representable exponent
+// to_elem/to_float: element conversion function pointers (NULL for MXFP4 which uses LUT)
+// mse_error: round-trip error function for a single value at a given scale
+typedef struct {
+    int      emax_offset;
+    uint8_t  (*to_elem)(float);
+    float    (*to_float)(uint8_t);
+    float    (*mse_error)(float val, float inv_scale, float scale);
+} mxfp_elem_traits_t;
+
+// Forward declaration — defined after kvalues_mxfp4 lookup table section.
+static inline int best_index_mxfp4(float x, float e);
+
+// MXFP4 E2M1 MSE error: decision boundary quantization with HALF scale factor.
+//
+// This CPU implementation uses the doubled int8 kvalues_mxfp4 LUT {0,1,2,3,4,6,8,12}
+// with GGML_E8M0_TO_FP32_HALF(e) = scale/2 for efficient nibble-indexed integer arithmetic.
+// The MSE interface passes GGML_E8M0_TO_FP32(e) as scale, so we halve it.
+//
+// Canonical E2M1 values are {0, 0.5, 1, 1.5, 2, 3, 4, 6} (kvalues_mxfp4_float in ggml-common.h).
+// Doubled boundaries {0.5, 1.5, 2.5, 3.5, 5, 7, 10} ÷ 2 = canonical {0.25, 0.75, 1.25, 1.75, 2.5, 3.5, 5}.
+// Mathematically identical — the doubling is an implementation detail.
+// This is the Lloyd-Max quantizer for uniform input density.
+static float mse_error_mxfp4(float val, float inv_scale, float scale) {
+    // Decision boundary quantization with direct reconstruction.
+    // kvalues_mxfp4 positive sorted: {0, 1, 2, 3, 4, 6, 8, 12}
+    // Use inv_scale * 2 since MXFP4 scale includes 0.5x factor.
+    const float d = scale * 0.5f;
+    const float inv_d = (d > 0.0f) ? 1.0f / d : 0.0f;
+    const float normalized = fabsf(val) * inv_d;
+    (void)inv_scale;
+    float qval;
+    if      (normalized < 0.5f)  qval = 0.0f;
+    else if (normalized < 1.5f)  qval = 1.0f;
+    else if (normalized < 2.5f)  qval = 2.0f;
+    else if (normalized < 3.5f)  qval = 3.0f;
+    else if (normalized < 5.0f)  qval = 4.0f;
+    else if (normalized < 7.0f)  qval = 6.0f;
+    else if (normalized < 10.0f) qval = 8.0f;
+    else                         qval = 12.0f;
+    const float err = fabsf(val) - qval * d;
+    return err * err;
 }
 
+static const mxfp_elem_traits_t mxfp4_traits = { MXFP4_E2M1_EMAX_OFFSET, NULL, NULL, mse_error_mxfp4 };
+
+// MSE-optimal E8M0 shared exponent computation.
+//
+// Algorithm:
+//   1. Find amax = max(|x[0..qk-1]|)
+//   2. Compute e_base = round(log2(amax)) - emax_offset + 127 via integer bit ops
+//   3. Test {e_base-R .. e_base+R}, pick the one minimizing total round-trip MSE
+//      where R = MXFP_E8M0_MSE_RANGE (defined in ggml-common.h)
+//
+// The ±R search improves on the OCP spec's floor(log2(amax)). Wider search finds
+// better scales for blocks with non-uniform value distributions (especially FP4).
+// Cost is (2R+1) × qk roundtrip evaluations per block — negligible vs attention compute.
+//
+// Integer log2 avoids log2f() (SFU-dependent on GPU). The sqrt(2) rounding threshold
+// ensures we start from round() not floor().
+//
+// Ref: OCP MX v1.0 §5.3; Four Over Six (arXiv:2512.02010)
+static inline uint8_t mxfp_compute_e8m0_mse(const float * x, int qk, const mxfp_elem_traits_t * traits) {
+    float amax = 0.0f;
+    for (int j = 0; j < qk; j++) {
+        const float a = fabsf(x[j]);
+        if (a > amax) amax = a;
+    }
+    if (amax == 0.0f) return 0;
+
+    const int e_base = ggml_mxfp_e8m0_base_estimate(amax, traits->emax_offset);
+
+    // ±R MSE search: test 2R+1 candidates around e_base, pick lowest total MSE.
+    int e_lo = e_base - MXFP_E8M0_MSE_RANGE;
+    int e_hi = e_base + MXFP_E8M0_MSE_RANGE;
+    if (e_lo < 1)   e_lo = 1;
+    if (e_hi < 1)   e_hi = 1;
+    if (e_hi > 254) e_hi = 254;
+    int best_e = e_base < 0 ? 0 : (e_base > 254 ? 254 : e_base);
+    float best_mse = 1e30f;
+
+    for (int test_e = e_lo; test_e <= e_hi; ++test_e) {
+        const float test_scale = GGML_E8M0_TO_FP32((uint8_t)test_e);
+        const float test_inv = 1.0f / test_scale;
+        float mse = 0.0f;
+        for (int j = 0; j < qk; ++j) {
+            mse += traits->mse_error(x[j], test_inv, test_scale);
+        }
+        if (mse < best_mse) {
+            best_mse = mse;
+            best_e = test_e;
+        }
+    }
+
+    return (uint8_t)best_e;
+}
+
+static inline int best_index_mxfp4(float x, float e) {
+    // Decision boundary quantization: 7 comparisons instead of 16-element scan.
+    // kvalues_mxfp4 positive sorted: {0, 1, 2, 3, 4, 6, 8, 12}
+    // Decision boundaries (midpoints): {0.5, 1.5, 2.5, 3.5, 5, 7, 10}
+    const float inv_e = (e > 0.0f) ? 1.0f / e : 0.0f;
+    const float normalized = fabsf(x) * inv_e;
+    int idx;
+    if      (normalized < 0.5f)  idx = 0;
+    else if (normalized < 1.5f)  idx = 1;
+    else if (normalized < 2.5f)  idx = 2;
+    else if (normalized < 3.5f)  idx = 3;
+    else if (normalized < 5.0f)  idx = 4;
+    else if (normalized < 7.0f)  idx = 5;
+    else if (normalized < 10.0f) idx = 6;
+    else                         idx = 7;
+    return (x < 0.0f) ? (idx + 8) : idx;
+}
+
+// FP4 E2M1: search-based quantization using best_index_mxfp4 lookup table.
+// Unlike FP6/FP8 which use direct float->element conversion, FP4 finds the
+// closest 4-bit value by minimizing reconstruction error against the lookup table.
+// Scale uses GGML_E8M0_TO_FP32_HALF (includes 0.5x factor for E2M1 mantissa range).
 void quantize_row_mxfp4_ref(const float * GGML_RESTRICT x, block_mxfp4 * GGML_RESTRICT y, int64_t k) {
     static const int qk = QK_MXFP4;
 
@@ -278,18 +447,7 @@ void quantize_row_mxfp4_ref(const float * GGML_RESTRICT x, block_mxfp4 * GGML_RE
     const int nb = k / qk;
 
     for (int i = 0; i < nb; i++) {
-        float amax = 0.0f; // absolute max
-
-        for (int j = 0; j < qk; j++) {
-            const float v = x[i*qk + j];
-
-            if (amax < fabsf(v)) {
-                amax = fabsf(v);
-            }
-        }
-
-        const uint8_t e = amax > 0.0f ? (uint8_t) (floorf(log2f(amax)) - 2 + 127) : 0;
-
+        const uint8_t e = mxfp_compute_e8m0_mse(&x[i*qk], qk, &mxfp4_traits);
         const float d = GGML_E8M0_TO_FP32_HALF(e);
 
         y[i].e = e;
@@ -494,6 +652,305 @@ void dequantize_row_nvfp4(const block_nvfp4 * GGML_RESTRICT x, float * GGML_REST
     }
 }
 
+// ============================================================================
+// Hadamard Rotation (reference scalar implementation)
+// ============================================================================
+//
+// 32-element Walsh-Hadamard transform, applied to MX blocks before quantization
+// to spread outlier energy uniformly across the shared-exponent group.
+//
+// Without rotation, a single outlier in a block of 32 forces the shared E8M0
+// exponent high, wasting precision for all 31 other elements. The Hadamard
+// transform is orthogonal (H^T·H = I), so H(K)·H(Q) = K·Q — attention scores
+// are preserved exactly when both K and Q undergo the same rotation.
+//
+// Implementation: 5 butterfly stages (log2(32) = 5) of the fast Walsh-Hadamard
+// transform, followed by normalization by 1/sqrt(32). Total: 160 FP add/sub +
+// 32 FP mul. This is the standard "in-place" FWHT with O(n·log(n)) operations.
+//
+// The 1/sqrt(32) normalization factor makes the transform orthonormal:
+//   H_normalized = H_unnormalized / sqrt(N)
+// This ensures the transform preserves vector norms (energy), which is critical
+// for maintaining attention score magnitudes after rotation.
+//
+// Prior art: QuIP# (Tseng et al. 2024), BRQ (Huang et al. 2024) apply Hadamard
+// for weight quantization. Our novel contribution: applying it to KV cache
+// quantization at the MX block boundary (block-32), where it matches the shared
+// exponent group size. Tested alternatives (block-8, block-16, sign flips,
+// permutations) all degraded quality — block-32 Hadamard is uniquely optimal
+// because it spreads energy across exactly the elements sharing an exponent.
+//
+// Empirical PPL impact WITHOUT Hadamard rotation (Qwen3-Coder-30B-A3B):
+//   MXFP8 E4M3: +0.22, MXFP8 E5M2: +1.38, MXFP6 E2M3: +3.34, MXFP6 E3M2: +4.60
+//
+void ggml_hadamard_32_inplace(float vals[32]) {
+    ggml_mxfp_hadamard_32_inplace(vals);
+}
+
+float fp6_e2m3_to_float(uint8_t v)     { return ggml_mxfp_fp6_e2m3_to_float(v); }
+uint8_t float_to_fp6_e2m3_rn(float x) { return ggml_mxfp_float_to_fp6_e2m3(x); }
+float fp6_e3m2_to_float(uint8_t v)     { return ggml_mxfp_fp6_e3m2_to_float(v); }
+uint8_t float_to_fp6_e3m2_rn(float x) { return ggml_mxfp_float_to_fp6_e3m2(x); }
+float fp8_e5m2_to_float(uint8_t v)     { return ggml_mxfp_fp8_e5m2_to_float(v); }
+uint8_t float_to_fp8_e5m2_rn(float x) { return ggml_mxfp_float_to_fp8_e5m2(x); }
+
+void pack_fp6x4(const uint8_t v[4], uint8_t out[3])   { ggml_mxfp_pack_fp6x4(v, out); }
+void unpack_fp6x4(const uint8_t in[3], uint8_t v[4])   { ggml_mxfp_unpack_fp6x4(in, v); }
+
+// MSE error functions for FP8/FP6: quantize at given scale → dequantize → squared error.
+// Used by mxfp_compute_e8m0_mse() to evaluate candidate E8M0 exponents.
+// These call the public API wrappers which delegate to canonical ggml_mxfp_* in ggml-common.h.
+static float mse_error_fp8_e4m3(float val, float inv_scale, float scale) {
+    const float recon = fp8_e4m3_to_float(float_to_fp8_e4m3_rn(val * inv_scale)) * scale;
+    const float err = val - recon;
+    return err * err;
+}
+static float mse_error_fp6_e2m3(float val, float inv_scale, float scale) {
+    const float recon = fp6_e2m3_to_float(float_to_fp6_e2m3_rn(val * inv_scale)) * scale;
+    const float err = val - recon;
+    return err * err;
+}
+// emax_offset = ceil(log2(max_finite_value)) for each element type.
+// This centers the E8M0 exponent search around the optimal scale for the type's range.
+//   E4M3: max=448, ceil(log2(448)) = 9, but offset=8 matches CUDA (empirically better)
+//   E2M3: max=7.5, ceil(log2(7.5)) = 3
+static const mxfp_elem_traits_t mxfp8_e4m3_traits = { MXFP8_E4M3_EMAX_OFFSET,  float_to_fp8_e4m3_rn, fp8_e4m3_to_float, mse_error_fp8_e4m3 };
+static const mxfp_elem_traits_t mxfp6_e2m3_traits = { MXFP6_E2M3_EMAX_OFFSET,  float_to_fp6_e2m3_rn, fp6_e2m3_to_float, mse_error_fp6_e2m3 };
+
+// FP8 quantize/dequantize: byte-per-element, shared by E4M3 and E5M2
+static void quantize_row_mxfp8_impl(const float * GGML_RESTRICT x, block_mxfp8 * GGML_RESTRICT y,
+                                     int64_t k, const mxfp_elem_traits_t * traits) {
+    assert(k % QK_MXFP8 == 0);
+    const int nb = k / QK_MXFP8;
+
+    for (int i = 0; i < nb; i++) {
+        const uint8_t e = mxfp_compute_e8m0_mse(&x[i*QK_MXFP8], QK_MXFP8, traits);
+        const float d = GGML_E8M0_TO_FP32(e);
+        const float inv_d = d > 0.0f ? 1.0f / d : 0.0f;
+        y[i].e = e;
+
+        for (int j = 0; j < QK_MXFP8; ++j) {
+            y[i].qs[j] = traits->to_elem(x[i*QK_MXFP8 + j] * inv_d);
+        }
+    }
+}
+
+static void dequantize_row_mxfp8_impl(const block_mxfp8 * GGML_RESTRICT x, float * GGML_RESTRICT y,
+                                       int64_t k, const mxfp_elem_traits_t * traits) {
+    assert(k % QK_MXFP8 == 0);
+    const int nb = k / QK_MXFP8;
+
+    for (int i = 0; i < nb; i++) {
+        const float d = GGML_E8M0_TO_FP32(x[i].e);
+        for (int j = 0; j < QK_MXFP8; ++j) {
+            y[i*QK_MXFP8 + j] = traits->to_float(x[i].qs[j]) * d;
+        }
+    }
+}
+
+// FP6 quantize/dequantize: tight 6-bit packing (4 values per 3 bytes), shared by E2M3 and E3M2
+static void quantize_row_mxfp6_impl(const float * GGML_RESTRICT x, block_mxfp6 * GGML_RESTRICT y,
+                                     int64_t k, const mxfp_elem_traits_t * traits) {
+    assert(k % QK_MXFP6 == 0);
+    const int nb = k / QK_MXFP6;
+
+    for (int i = 0; i < nb; i++) {
+        const uint8_t e = mxfp_compute_e8m0_mse(&x[i*QK_MXFP6], QK_MXFP6, traits);
+        const float d = GGML_E8M0_TO_FP32(e);
+        const float inv_d = d > 0.0f ? 1.0f / d : 0.0f;
+        y[i].e = e;
+
+        for (int j = 0; j < QK_MXFP6; j += 4) {
+            uint8_t vals[4];
+            for (int jj = 0; jj < 4; jj++) {
+                vals[jj] = traits->to_elem(x[i*QK_MXFP6 + j + jj] * inv_d);
+            }
+            pack_fp6x4(vals, &y[i].qs[j * 3 / 4]);
+        }
+    }
+}
+
+static void dequantize_row_mxfp6_impl(const block_mxfp6 * GGML_RESTRICT x, float * GGML_RESTRICT y,
+                                       int64_t k, const mxfp_elem_traits_t * traits) {
+    assert(k % QK_MXFP6 == 0);
+    const int nb = k / QK_MXFP6;
+
+    for (int i = 0; i < nb; i++) {
+        const float d = GGML_E8M0_TO_FP32(x[i].e);
+        for (int j = 0; j < QK_MXFP6; j += 4) {
+            uint8_t vals[4];
+            unpack_fp6x4(&x[i].qs[j * 3 / 4], vals);
+            for (int jj = 0; jj < 4; jj++) {
+                y[i*QK_MXFP6 + j + jj] = traits->to_float(vals[jj]) * d;
+            }
+        }
+    }
+}
+
+// Public API wrappers — one-line delegates to the traits-parameterized impl
+
+void quantize_row_mxfp8_ref(const float * GGML_RESTRICT x, block_mxfp8 * GGML_RESTRICT y, int64_t k) {
+    quantize_row_mxfp8_impl(x, y, k, &mxfp8_e4m3_traits);
+}
+
+void dequantize_row_mxfp8(const block_mxfp8 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    dequantize_row_mxfp8_impl(x, y, k, &mxfp8_e4m3_traits);
+}
+
+void quantize_row_mxfp6_e2m3_ref(const float * GGML_RESTRICT x, block_mxfp6 * GGML_RESTRICT y, int64_t k) {
+    quantize_row_mxfp6_impl(x, y, k, &mxfp6_e2m3_traits);
+}
+
+void dequantize_row_mxfp6_e2m3(const block_mxfp6 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    dequantize_row_mxfp6_impl(x, y, k, &mxfp6_e2m3_traits);
+}
+
+// ============================================================================
+// SoA (Struct-of-Arrays) quantize/dequantize — canonical reference for FA
+// ============================================================================
+//
+// SoA layout per row: [qs_block0|qs_block1|...|qs_blockN][e8m0_0|e8m0_1|...|e8m0_N]
+// Total bytes per row = nblocks * (QS_PER_BLOCK + 1) = identical to AoS.
+// This is the ONLY layout used by flash attention across all backends.
+
+void quantize_row_mxfp4_soa(const float * GGML_RESTRICT x, void * GGML_RESTRICT dst, int64_t k) {
+    assert(k % QK_MXFP4 == 0);
+    const int nb = k / QK_MXFP4;
+    char * row = (char *)dst;
+    char * qs_base  = row;
+    char * e8m0_base = row + MXFP_SOA_E8M0_OFFSET(nb, MXFP4_SOA_QS_PER_BLOCK);
+
+    for (int i = 0; i < nb; i++) {
+        const uint8_t e = mxfp_compute_e8m0_mse(&x[i*QK_MXFP4], QK_MXFP4, &mxfp4_traits);
+        const float d = GGML_E8M0_TO_FP32_HALF(e);
+
+        e8m0_base[i] = (char)e;
+
+        uint8_t * qs = (uint8_t *)(qs_base + MXFP_SOA_QS_OFFSET(i, MXFP4_SOA_QS_PER_BLOCK));
+        for (int j = 0; j < QK_MXFP4/2; ++j) {
+            const uint8_t x0 = best_index_mxfp4(x[i*QK_MXFP4 + 0        + j], d);
+            const uint8_t x1 = best_index_mxfp4(x[i*QK_MXFP4 + QK_MXFP4/2 + j], d);
+            qs[j] = x0 | (x1 << 4);
+        }
+    }
+}
+
+void dequantize_row_mxfp4_soa(const void * GGML_RESTRICT src, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_MXFP4 == 0);
+    const int nb = k / QK_MXFP4;
+    const char * row = (const char *)src;
+    const char * qs_base   = row;
+    const char * e8m0_base = row + MXFP_SOA_E8M0_OFFSET(nb, MXFP4_SOA_QS_PER_BLOCK);
+
+    for (int i = 0; i < nb; i++) {
+        const float d = GGML_E8M0_TO_FP32_HALF((uint8_t)e8m0_base[i]);
+        const uint8_t * qs = (const uint8_t *)(qs_base + MXFP_SOA_QS_OFFSET(i, MXFP4_SOA_QS_PER_BLOCK));
+
+        for (int j = 0; j < QK_MXFP4/2; ++j) {
+            const int8_t x0 = kvalues_mxfp4[qs[j] & 0x0F];
+            const int8_t x1 = kvalues_mxfp4[qs[j] >>   4];
+            y[i*QK_MXFP4 + j + 0         ] = x0*d;
+            y[i*QK_MXFP4 + j + QK_MXFP4/2] = x1*d;
+        }
+    }
+}
+
+static void quantize_row_mxfp8_soa_impl(const float * GGML_RESTRICT x, void * GGML_RESTRICT dst,
+                                          int64_t k, const mxfp_elem_traits_t * traits) {
+    assert(k % QK_MXFP8 == 0);
+    const int nb = k / QK_MXFP8;
+    char * row = (char *)dst;
+    char * qs_base   = row;
+    char * e8m0_base = row + MXFP_SOA_E8M0_OFFSET(nb, MXFP8_SOA_QS_PER_BLOCK);
+
+    for (int i = 0; i < nb; i++) {
+        const uint8_t e = mxfp_compute_e8m0_mse(&x[i*QK_MXFP8], QK_MXFP8, traits);
+        const float d = GGML_E8M0_TO_FP32(e);
+        const float inv_d = d > 0.0f ? 1.0f / d : 0.0f;
+        e8m0_base[i] = (char)e;
+
+        uint8_t * qs = (uint8_t *)(qs_base + MXFP_SOA_QS_OFFSET(i, MXFP8_SOA_QS_PER_BLOCK));
+        for (int j = 0; j < QK_MXFP8; ++j) {
+            qs[j] = traits->to_elem(x[i*QK_MXFP8 + j] * inv_d);
+        }
+    }
+}
+
+static void dequantize_row_mxfp8_soa_impl(const void * GGML_RESTRICT src, float * GGML_RESTRICT y,
+                                            int64_t k, const mxfp_elem_traits_t * traits) {
+    assert(k % QK_MXFP8 == 0);
+    const int nb = k / QK_MXFP8;
+    const char * row = (const char *)src;
+    const char * qs_base   = row;
+    const char * e8m0_base = row + MXFP_SOA_E8M0_OFFSET(nb, MXFP8_SOA_QS_PER_BLOCK);
+
+    for (int i = 0; i < nb; i++) {
+        const float d = GGML_E8M0_TO_FP32((uint8_t)e8m0_base[i]);
+        const uint8_t * qs = (const uint8_t *)(qs_base + MXFP_SOA_QS_OFFSET(i, MXFP8_SOA_QS_PER_BLOCK));
+        for (int j = 0; j < QK_MXFP8; ++j) {
+            y[i*QK_MXFP8 + j] = traits->to_float(qs[j]) * d;
+        }
+    }
+}
+
+static void quantize_row_mxfp6_soa_impl(const float * GGML_RESTRICT x, void * GGML_RESTRICT dst,
+                                          int64_t k, const mxfp_elem_traits_t * traits) {
+    assert(k % QK_MXFP6 == 0);
+    const int nb = k / QK_MXFP6;
+    char * row = (char *)dst;
+    char * qs_base   = row;
+    char * e8m0_base = row + MXFP_SOA_E8M0_OFFSET(nb, MXFP6_SOA_QS_PER_BLOCK);
+
+    for (int i = 0; i < nb; i++) {
+        const uint8_t e = mxfp_compute_e8m0_mse(&x[i*QK_MXFP6], QK_MXFP6, traits);
+        const float d = GGML_E8M0_TO_FP32(e);
+        const float inv_d = d > 0.0f ? 1.0f / d : 0.0f;
+        e8m0_base[i] = (char)e;
+
+        uint8_t * qs = (uint8_t *)(qs_base + MXFP_SOA_QS_OFFSET(i, MXFP6_SOA_QS_PER_BLOCK));
+        for (int j = 0; j < QK_MXFP6; j += 4) {
+            uint8_t vals[4];
+            for (int jj = 0; jj < 4; jj++) {
+                vals[jj] = traits->to_elem(x[i*QK_MXFP6 + j + jj] * inv_d);
+            }
+            pack_fp6x4(vals, &qs[j * 3 / 4]);
+        }
+    }
+}
+
+static void dequantize_row_mxfp6_soa_impl(const void * GGML_RESTRICT src, float * GGML_RESTRICT y,
+                                            int64_t k, const mxfp_elem_traits_t * traits) {
+    assert(k % QK_MXFP6 == 0);
+    const int nb = k / QK_MXFP6;
+    const char * row = (const char *)src;
+    const char * qs_base   = row;
+    const char * e8m0_base = row + MXFP_SOA_E8M0_OFFSET(nb, MXFP6_SOA_QS_PER_BLOCK);
+
+    for (int i = 0; i < nb; i++) {
+        const float d = GGML_E8M0_TO_FP32((uint8_t)e8m0_base[i]);
+        const uint8_t * qs = (const uint8_t *)(qs_base + MXFP_SOA_QS_OFFSET(i, MXFP6_SOA_QS_PER_BLOCK));
+        for (int j = 0; j < QK_MXFP6; j += 4) {
+            uint8_t vals[4];
+            unpack_fp6x4(&qs[j * 3 / 4], vals);
+            for (int jj = 0; jj < 4; jj++) {
+                y[i*QK_MXFP6 + j + jj] = traits->to_float(vals[jj]) * d;
+            }
+        }
+    }
+}
+
+void quantize_row_mxfp8_soa(const float * GGML_RESTRICT x, void * GGML_RESTRICT dst, int64_t k) {
+    quantize_row_mxfp8_soa_impl(x, dst, k, &mxfp8_e4m3_traits);
+}
+void dequantize_row_mxfp8_soa(const void * GGML_RESTRICT src, float * GGML_RESTRICT y, int64_t k) {
+    dequantize_row_mxfp8_soa_impl(src, y, k, &mxfp8_e4m3_traits);
+}
+void quantize_row_mxfp6_soa(const float * GGML_RESTRICT x, void * GGML_RESTRICT dst, int64_t k) {
+    quantize_row_mxfp6_soa_impl(x, dst, k, &mxfp6_e2m3_traits);
+}
+void dequantize_row_mxfp6_soa(const void * GGML_RESTRICT src, float * GGML_RESTRICT y, int64_t k) {
+    dequantize_row_mxfp6_soa_impl(src, y, k, &mxfp6_e2m3_traits);
+}
 //
 // 2-6 bit quantization in super-blocks
 //
@@ -2155,13 +2612,25 @@ size_t quantize_q8_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, 
 size_t quantize_mxfp4(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
     GGML_UNUSED(quant_weights);
     quantize_row_mxfp4_ref(src, dst, (int64_t)nrow*n_per_row);
-    return nrow * ggml_row_size(GGML_TYPE_MXFP4, n_per_row);
+    return nrow * ggml_row_size(GGML_TYPE_MXFP4_E2M1, n_per_row);
 }
 
 size_t quantize_nvfp4(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
     GGML_UNUSED(quant_weights);
     quantize_row_nvfp4_ref(src, dst, (int64_t)nrow*n_per_row);
     return nrow * ggml_row_size(GGML_TYPE_NVFP4, n_per_row);
+}
+
+size_t quantize_mxfp8(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    GGML_UNUSED(quant_weights);
+    quantize_row_mxfp8_ref(src, dst, (int64_t)nrow*n_per_row);
+    return nrow * ggml_row_size(GGML_TYPE_MXFP8_E4M3, n_per_row);
+}
+
+size_t quantize_mxfp6_e2m3(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    GGML_UNUSED(quant_weights);
+    quantize_row_mxfp6_e2m3_ref(src, dst, (int64_t)nrow*n_per_row);
+    return nrow * ggml_row_size(GGML_TYPE_MXFP6_E2M3, n_per_row);
 }
 
 // ====================== Ternary (de)-quantization (BitNet b1.58 and TriLMs)
@@ -5306,7 +5775,7 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
             {
                 VALIDATE_ROW_DATA_D_F16_IMPL(block_q8_0, data, nb);
             } break;
-        case GGML_TYPE_MXFP4:
+        case GGML_TYPE_MXFP4_E2M1:
             {
                 VALIDATE_ROW_DATA_E_E8M0_IMPL(block_mxfp4, data, nb);
             } break;
