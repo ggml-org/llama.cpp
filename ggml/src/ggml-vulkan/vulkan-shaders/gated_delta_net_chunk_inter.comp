@@ -105,7 +105,6 @@ void main() {
         }
     }
 
-    // Write final state to dst at s_off
     [[unroll]] for (uint i = 0; i < S_V; i++) {
         final_out[s_off + state_base + col * S_V + i] = state[i];
     }
