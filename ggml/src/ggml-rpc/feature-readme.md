@@ -37,7 +37,7 @@ Client                              Server
   |<--- HELLO rsp + RDMA rsp ---------|
   |     (version + QPN, PSN, GID)      |
   |                                    |
-  | [rdma_activate: INIT→RTR→RTS]      | [rdma_activate: INIT→RTR→RTS]
+  | [rdma_activate: INIT->RTR->RTS]      | [rdma_activate: INIT->RTR->RTS]
   | [swap fn_send/fn_recv to RDMA]     | [swap fn_send/fn_recv to RDMA]
   |                                    |
   |==== All subsequent data via RDMA ==|
@@ -70,7 +70,7 @@ Transport is selected once at connection time by swapping function pointers. All
 **3. Two-phase RDMA setup**
 
 - `rdma_probe()` -- Before HELLO: opens RDMA device, creates QP (stays in RESET state), allocates and registers buffers. Returns local QPN/GID for the HELLO exchange.
-- `rdma_activate()` -- After HELLO: given remote QPN/GID, transitions QP through INIT→RTR→RTS and pre-posts the receive ring.
+- `rdma_activate()` -- After HELLO: given remote QPN/GID, transitions QP through INIT->RTR->RTS and pre-posts the receive ring.
 
 This split is necessary because both sides need the other's QPN before they can complete the QP state machine.
 
@@ -95,10 +95,10 @@ The data transport layer uses several optimizations developed through iterative 
 
 | Scenario | Behavior |
 | -------- | -------- |
-| New client → old server | Client sends extended HELLO (24 bytes input). Old server treats extra bytes as unknown input, responds with standard 3-byte HELLO. Client sees no RDMA fields, stays on TCP. |
-| Old client → new server | Client sends standard HELLO (0 bytes input). Server detects `input_size == 0`, responds with standard HELLO. No RDMA negotiation attempted. |
-| New client → new server, no RDMA hardware | `rdma_probe()` returns nullptr. Client sends standard HELLO. Normal TCP operation. |
-| New client → new server, RDMA available | Full auto-negotiation. RDMA transport activated after HELLO. |
+| New client -> old server | Client sends extended HELLO (24 bytes input). Old server treats extra bytes as unknown input, responds with standard 3-byte HELLO. Client sees no RDMA fields, stays on TCP. |
+| Old client -> new server | Client sends standard HELLO (0 bytes input). Server detects `input_size == 0`, responds with standard HELLO. No RDMA negotiation attempted. |
+| New client -> new server, no RDMA hardware | `rdma_probe()` returns nullptr. Client sends standard HELLO. Normal TCP operation. |
+| New client -> new server, RDMA available | Full auto-negotiation. RDMA transport activated after HELLO. |
 
 ## Files changed
 
@@ -120,6 +120,9 @@ cmake -B build \
 cmake --build build --target rpc-server llama-bench -j$(nproc)
 ```
 
-Requires `libibverbs-dev` (Ubuntu: `apt install libibverbs-dev`).
-
-Without `-DGGML_RPC_RDMA=ON`, the build produces a standard TCP-only binary with no RDMA code compiled in.
+Requires `libibverbs-dev` (Ubuntu: `apt install libibverbs-dev rdma-core`).
+This is an optional dependency -- without `-DGGML_RPC_RDMA=ON`, the build
+produces a standard TCP-only binary with no RDMA code or libibverbs linkage.
+The libibverbs library is part of rdma-core and is available on all major
+Linux distributions. RDMA transport is Linux-only; Windows and macOS builds
+are unaffected.
