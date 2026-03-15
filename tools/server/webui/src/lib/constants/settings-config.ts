@@ -12,7 +12,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	disableReasoningParsing: false,
 	showRawOutputSwitch: false,
 	keepStatsVisible: false,
-	autoChatWidth: false,
+	autoChatWidth: true,
 	showMessageStats: true,
 	askForTitleConfirmation: false,
 	pasteLongTextToFileLen: 2500,
