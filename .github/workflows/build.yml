@@ -7,7 +7,6 @@ on:
       - master
     paths: [
       '.github/workflows/build.yml',
-      '.github/workflows/build-linux-cross.yml',
       '.github/workflows/build-cmake-pkg.yml',
       '**/CMakeLists.txt',
       '**/.cmake',
@@ -29,7 +28,6 @@ on:
     types: [opened, synchronize, reopened]
     paths: [
       '.github/workflows/build.yml',
-      '.github/workflows/build-linux-cross.yml',
       '.github/workflows/build-cmake-pkg.yml',
       '**/CMakeLists.txt',
       '**/.cmake',
@@ -59,9 +57,6 @@ env:
   LLAMA_LOG_TIMESTAMPS: 1
 
 jobs:
-  build-linux-cross:
-    uses: ./.github/workflows/build-linux-cross.yml
-
   build-cmake-pkg:
     uses: ./.github/workflows/build-cmake-pkg.yml
 
