@@ -705,16 +705,18 @@ class ModelBase:
     def prepare_tensors(self):
         # detect NVFP4 quantization (ModelOpt format)
         quant_algo = (self.hparams.get("quantization_config") or {}).get("quant_algo")
+        quant_layers = (self.hparams.get("quantization_config") or {}).get("quantized_layers") or {}
         quant_config_file = self.dir_model / "hf_quant_config.json"
 
-        if not quant_algo and quant_config_file.is_file():
+        if (not quant_algo or not quant_layers) and quant_config_file.is_file():
             with open(quant_config_file, "r", encoding="utf-8") as f:
-                quant_algo = (json.load(f).get("quantization") or {}).get("quant_algo")
+                quant_config = json.load(f).get("quantization") or {}
+                quant_algo = quant_config.get("quant_algo", quant_algo)
+                quant_layers = quant_config.get("quantized_layers", quant_layers) or {}
 
         # Some models use per-tensor quant_algo (e.g. "MIXED_PRECISION" with
         # per-layer NVFP4/FP8) instead of a single global "NVFP4" value.
         if quant_algo != "NVFP4":
-            quant_layers = (self.hparams.get("quantization_config") or {}).get("quantized_layers", {})
             if any(v.get("quant_algo") == "NVFP4" for v in quant_layers.values() if isinstance(v, dict)):
                 quant_algo = "NVFP4"
 
