@@ -84,6 +84,8 @@
 #include <vector>
 #include <unordered_set>
 
+// add some comments to trigger CI
+
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
 
 [[noreturn]]
