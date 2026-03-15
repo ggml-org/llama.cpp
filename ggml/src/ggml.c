@@ -492,7 +492,7 @@ void ggml_fp32_to_bf16_row(const float * x, ggml_bf16_t * y, int64_t n) {
     }
 }
 
-bool ggml_guid_matches(ggml_guid_t guid_a, ggml_guid_t guid_b) {
+bool ggml_guid_matches(const ggml_guid * guid_a, const ggml_guid * guid_b) {
     return memcmp(guid_a, guid_b, sizeof(ggml_guid)) == 0;
 }
 
