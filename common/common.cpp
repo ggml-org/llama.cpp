@@ -252,7 +252,7 @@ bool set_process_priority(enum ggml_sched_priority prio) {
     }
 
     if (setpriority(PRIO_PROCESS, 0, p) != 0) {
-        LOG_WRN("failed to set process priority %d : %s (%d)\n", prio, strerror(errno), errno);
+        LOG_WRN("failed to set process priority %d : %s (%d). Higher priorities may require elevated privileges (sudo).\n",prio, strerror(errno), errno);
         return false;
     }
     return true;
