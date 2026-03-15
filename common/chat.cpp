@@ -933,17 +933,12 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
 
     // Copy reasoning to the "thinking" field as expected by the gpt-oss template
     auto adjusted_messages = json::array();
-    for (const auto & msg : inputs.messages) {
-        auto has_reasoning_content = msg.contains("reasoning_content") && msg.at("reasoning_content").is_string();
-        auto has_tool_calls        = msg.contains("tool_calls") && msg.at("tool_calls").is_array();
-
-        if (has_reasoning_content && has_tool_calls) {
-            auto adjusted_message        = msg;
-            adjusted_message["thinking"] = msg.at("reasoning_content");
-            adjusted_messages.push_back(adjusted_message);
-        } else {
-            adjusted_messages.push_back(msg);
+    for (auto msg : inputs.messages) {
+        if (msg.contains("reasoning_content") && msg.at("reasoning_content").is_string()) {
+            msg["thinking"] = msg.at("reasoning_content");
+            msg.erase("content");
         }
+        adjusted_messages.push_back(msg);
     }
 
     auto prompt = common_chat_template_direct_apply(tmpl, inputs, /* messages_override= */ adjusted_messages);
@@ -969,45 +964,31 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
         "<|channel|>", "<|constrain|>", "<|message|>", "<|start|>", "<|end|>",
     };
 
-    auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
-    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
-    auto include_grammar   = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE && has_tools;
+    auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
+    auto has_response_format = !inputs.json_schema.is_null() && inputs.json_schema.is_object();
+    auto include_grammar     = has_response_format || (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE);
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
-        const std::string END                = "<|end|>";
-        const std::string START              = "<|start|>";
-        const std::string MESSAGE            = "<|message|>";
-        const std::string CHANNEL            = "<|channel|>";
-        const std::string CONSTRAIN          = "<|constrain|>";
-        const std::string START_ASSISTANT    = START + "assistant";
-        const std::string CHANNEL_ANALYSIS   = CHANNEL + "analysis";
-        const std::string CHANNEL_COMMENTARY = CHANNEL + "commentary";
-        const std::string CHANNEL_FINAL      = CHANNEL + "final";
+        auto start           = p.rule("start", p.literal("<|start|>assistant"));
+        auto end             = p.rule("end", p.literal("<|end|>"));
+        auto content         = p.rule("message-content", p.until("<|end|>"));
+        auto channel         = p.literal("<|channel|>") + (p.literal("commentary") | p.literal("analysis"));
+        auto constrain_type  = p.chars("[A-Za-z0-9_-]", 1, -1);
 
-        auto the_end = END | p.end();
+        auto analysis = p.rule("analysis", p.literal("<|channel|>analysis<|message|>") + p.reasoning(content) + end);
+        auto preamble = p.rule("preamble", p.literal("<|channel|>commentary<|message|>") + p.content(content) + end);
+        auto final = p.rule("final", p.literal("<|channel|>final<|message|>") + p.content(content));
+        auto any = p.rule("any", preamble | analysis);
 
-        const std::string analysis_header  = CHANNEL_ANALYSIS + MESSAGE;
-        auto              segment_content  = p.until(END);
-        auto              analysis_segment = extract_reasoning ?
-                                                 p.literal(analysis_header) + p.reasoning(segment_content) + p.until(END) + the_end :
-                                                 p.content(analysis_header + p.until(END) + the_end);
+        if (has_response_format) {
+            auto constraint = p.optional(p.space() + p.literal("<|constrain|>") + constrain_type);
+            auto response_format = p.rule("response-format",
+                p.literal("<|channel|>final") + constraint + p.literal("<|message|>") +
+                p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema)));
 
-        auto channel_header_content = p.until_one_of({ " to=functions.", MESSAGE });
-        auto content_header         = p.choice({ p.literal(CHANNEL_COMMENTARY), p.literal(CHANNEL_FINAL) });
-        auto content_segment        = p.rule("content-segment", content_header + channel_header_content + MESSAGE +
-                                                                    p.content(segment_content) + the_end);
-
-        if (!inputs.json_schema.is_null()) {
-            auto final_header = p.literal(CHANNEL_FINAL);
-            auto constraint   = p.optional(p.space() + p.literal(CONSTRAIN) + channel_header_content);
-            return p.optional(analysis_segment) + final_header + constraint + MESSAGE +
-                   p.content(p.schema(p.json(), "response-format", inputs.json_schema));
+            return response_format | (analysis + p.zero_or_more(start + analysis) + start + response_format);
         }
 
-        auto segment  = p.optional(START_ASSISTANT + p.space()) + p.choice({ content_segment, analysis_segment });
-        auto contents = p.optional(segment + p.repeat(p.optional(p.space()) + segment, 0, -1)) + p.end();
-
-        // Tool call parser
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
             auto tool_choice = p.choice();
 
@@ -1016,42 +997,37 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
                 std::string  name     = function.at("name");
                 const auto & params   = function.at("parameters");
 
-                // Tool call can appear as:
-                // 1. In role header: " to=functions.NAME<|channel|>..."
-                // 2. In channel: "<|channel|>(analysis|commentary) to=functions.NAME..."
-                auto func_name = p.literal(" to=functions.") + p.tool_name(p.literal(name));
-
-                auto channel    = p.literal(CHANNEL_COMMENTARY) | p.literal(CHANNEL_ANALYSIS);
-                auto constraint = p.space() + p.optional(p.literal(CONSTRAIN) + channel_header_content);
+                auto func_name  = p.literal(" to=functions.") + p.tool_name(p.literal(name));
+                auto constraint = p.optional(p.space() + p.literal("<|constrain|>") + constrain_type);
                 auto args       = p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", params));
 
-                // Pattern 1: recipient in role header
-                // " to=functions.NAME<|channel|>(analysis|commentary)[constraint]<|message|>ARGS"
-                auto tool_in_role = p.tool(p.tool_open(func_name + channel) + constraint + MESSAGE + args);
+                // recipient in role header
+                //   <|start|>assistant to=functions.NAME<|channel|>(commentary|analysis)[constraint]<|message|>ARGS
+                auto tool_in_role = p.tool(p.tool_open(func_name + channel + constraint + p.literal("<|message|>")) + args);
 
-                // Pattern 2: recipient in channel header
-                // "<|channel|>(analysis|commentary) to=functions.NAME[constraint]<|message|>ARGS"
-                auto tool_in_channel = p.tool(channel + p.tool_open(func_name + constraint + MESSAGE) + args);
+                // recipient in channel header
+                //   <|channel|>(commentary|analysis) to=functions.NAME[constraint]<|message|>ARGS
+                auto tool_in_channel = p.tool(p.tool_open(channel + func_name + constraint + p.literal("<|message|>")) + args);
 
-                tool_choice |= tool_in_role | tool_in_channel;
+                tool_choice |= p.rule("tool-" + name, tool_in_role | tool_in_channel);
             });
 
-            auto min_calls = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0;
-            auto max_calls = inputs.parallel_tool_calls ? -1 : 1;
+            auto tool_call  = p.trigger_rule("tool-call", tool_choice);
 
-            auto role_start = p.optional(p.space() + p.literal(START_ASSISTANT));
-            auto tool_call  = p.rule("tool-call", p.repeat(role_start + tool_choice, min_calls, max_calls) + p.end());
+            if (inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED) {
+                return tool_call | ( any + p.zero_or_more(start + any) + start + tool_call);
+            }
 
-            return p.choice({ p.trigger_rule("single-tool", tool_call), p.trigger_rule("tools", p.one_or_more(segment) + tool_call) });
+            return tool_call | final | (any + p.zero_or_more(start + any) + start + (tool_call | final));
         }
 
-        return contents;
+        return final | (any + p.zero_or_more(start + any) + start + final);
     });
 
     data.parser = parser.save();
 
     if (include_grammar) {
-        data.grammar_lazy = has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
+        data.grammar_lazy = !(has_response_format || (has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED));
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
             foreach_function(inputs.tools, [&](const json & tool) {
                 const auto & function = tool.at("function");
@@ -1062,10 +1038,9 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
         });
 
         data.grammar_triggers = {
-            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "^(?:<\\|start\\|>assistant\\s*)?(\\s+to=functions)"               },
-            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "(?:<\\|end\\|>)(?:<\\|start\\|>assistant\\s*)?(\\s+to=functions)" },
-            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN,
-             "(?:<\\|start\\|>assistant\\s*)?(<\\|channel\\|>(?:commentary|analysis)\\s+to=functions)"                }
+            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "^\\s+to$" },
+            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "<\\|start\\|>assistant(\\s+to)" },
+            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "<\\|start\\|>assistant(<\\|channel\\|>(?:commentary|analysis)\\s+to)" }
         };
     }
 
