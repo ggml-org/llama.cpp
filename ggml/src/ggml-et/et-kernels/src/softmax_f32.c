@@ -55,88 +55,255 @@ static float find_max_f32(const float* x, int n) {
 
 #define LOG2E_F 1.4426950408889634f
 
-// Compute softmax for a single row
-static void compute_softmax_row(
-    float* dst,           // Output row
-    const float* src,     // Input row
-    const float* mask,    // Mask row (can be NULL)
-    int ne00,             // Input row length
-    int ne10,             // Mask row length (guaranteed equal to ne00 in ggml)
-    float scale,          // Scale factor
-    float slope,          // ALiBi slope factor
-    float sink_value,     // Sink value for this head (or -INFINITY if no sinks)
-    bool use_sinks)       // Whether sinks are enabled
+typedef struct {
+    float max_val;
+    float sum_val;
+    uint32_t valid_mask;
+} softmax_params_t;
+
+static inline bool softmax_lane_is_valid(float x) {
+    return (x == x) && (x != -INFINITY) && (x != INFINITY);
+}
+
+static inline softmax_params_t softmax_params_empty(void) {
+    softmax_params_t p;
+    p.max_val = -INFINITY;
+    p.sum_val = 0.0f;
+    p.valid_mask = 0;
+    return p;
+}
+
+static inline softmax_params_t softmax_params_merge(softmax_params_t a, softmax_params_t b) {
+    if (a.valid_mask == 0) return b;
+    if (b.valid_mask == 0) return a;
+
+    softmax_params_t out;
+    out.max_val = (a.max_val >= b.max_val) ? a.max_val : b.max_val;
+    out.sum_val =
+        a.sum_val * et_expf(a.max_val - out.max_val) +
+        b.sum_val * et_expf(b.max_val - out.max_val);
+    out.valid_mask = a.valid_mask | b.valid_mask;
+    return out;
+}
+
+// chunk_transform_ps_8_branchless_mask
+//
+// Vector transform for 8 logits:
+//
+//   x = src * scale + (mask ? mask * slope : 0)
+//
+// Implemented branchlessly so masked and unmasked paths share the same
+// instruction stream. Used by pass1 and pass2 vector loops.
+static inline void chunk_transform_ps_8_branchless_mask(
+    float       *tmp8,
+    const float *src,
+    const float *mask,
+    float scale,
+    float slope)
 {
-    (void)ne10;
     unsigned long ms;
-    // Real online softmax:
-    // Pass 1: track running max and running normalized sum only (no dst writes).
-    // TODO: Vectorize this
-    float running_max = -INFINITY;
-    float running_sum = 0.0f;
+    const float zero = 0.0f;
+    const unsigned long mask_load_m0 = (mask != NULL) ? 0xFFul : 0x00ul;
+    const float *mp = (mask != NULL) ? mask : &zero;
 
-    for (int i = 0; i < ne00; i++) {
-        float v = src[i] * scale;
-        if (mask != NULL) {
-            // In ggml softmax: ne10 == ne00 (dimension 0 must match exactly)
-            v += slope * mask[i];
+    __asm__ volatile (
+        "mova.x.m  %[ms]                \n\t"
+
+        "mov.m.x   m0, x0, 0xFF         \n\t"
+        "fbc.ps    f10, 0(%[p_scale])   \n\t"
+        "fbc.ps    f11, 0(%[p_slope])   \n\t"
+
+        "mov.m.x   m0, %[maskm0], 0     \n\t" // load mask if needed
+        "flw.ps    f1, 0(%[mp])         \n\t"
+
+        "mov.m.x   m0, x0, 0xFF         \n\t"
+
+        "flw.ps    f0, 0(%[sp])         \n\t"
+        "fmul.ps   f0, f0, f10          \n\t"
+        "fmul.ps   f1, f1, f11          \n\t"
+        "fadd.ps   f0, f0, f1, rne      \n\t"
+        "fsw.ps    f0, 0(%[tp])         \n\t"
+
+        "mova.m.x  %[ms]                \n\t"
+        : [ms] "=&r"(ms)
+        : [tp]      "r"(tmp8),
+          [sp]      "r"(src),
+          [mp]      "r"(mp),
+          [p_zero]  "r"(&zero),
+          [p_scale] "r"(&scale),
+          [p_slope] "r"(&slope),
+          [maskm0]  "r"(mask_load_m0)
+        : "f0", "f1", "f10", "f11", "memory"
+    );
+}
+
+// softmax_pass1_range
+//
+// Computes the numerically-stable softmax scan over a sub-range of a row.
+//
+// This implements the 1st paass of online softmax
+//
+//   max' = max(max, x)
+//   sum' = sum * exp(old_max - max') + exp(x - max')
+//
+// and returns a partial result containing:
+//
+//   - max_val : maximum logit observed in this range
+//   - sum_val : exp-normalized sum relative to max_val
+//
+// These partial results can be merged with softmax_params_merge() to obtain
+// the result for the full row.
+static inline softmax_params_t softmax_pass1_range(
+    const float *src,
+    const float *mask,
+    int begin,
+    int end,
+    float scale,
+    float slope)
+{
+    __attribute__((aligned(32))) float lane_max[8];
+    __attribute__((aligned(32))) float lane_sum[8];
+    __attribute__((aligned(32))) float tmp[8];
+
+    uint8_t valid_mask = 0;
+
+    const float one_f   = 1.0f;
+    const float zero_f  = 0.0f;
+    const float neg_inf = -INFINITY;
+    const float log2e   = LOG2E_F;
+
+    unsigned long ms;
+
+    __asm__ volatile (
+        "mova.x.m  %[ms]                \n\t"
+        "mov.m.x   m0, x0, 0xFF         \n\t"
+        "fbc.ps    f20, 0(%[p_ninf])    \n\t"
+        "fbc.ps    f21, 0(%[p_zero])    \n\t"
+        "fbc.ps    f22, 0(%[p_one])     \n\t"
+        "fbc.ps    f23, 0(%[p_log2e])   \n\t"
+        : [ms] "=&r"(ms)
+        : [p_ninf]  "r"(&neg_inf),
+          [p_zero]  "r"(&zero_f),
+          [p_one]   "r"(&one_f),
+          [p_log2e] "r"(&log2e)
+        : "f20", "f21", "f22", "f23"
+    );
+
+    int i = begin;
+    for (; i < end; i += 8) {
+        chunk_transform_ps_8_branchless_mask(tmp, src + i, mask ? (mask + i) : NULL, scale, slope);
+
+        uint8_t cur_mask = 0;
+        for (int j = 0; j < 8; ++j) {
+            if (softmax_lane_is_valid(tmp[j])) {
+                cur_mask |= (uint8_t)(1u << j);
+            }
         }
 
-        if (v <= running_max) {
-            running_sum += et_expf(v - running_max);
-        } else {
-            float r = et_expf(running_max - v);
-            running_sum = running_sum * r + 1.0f;
-            running_max = v;
+        const uint8_t init_mask = (uint8_t)(cur_mask & ~valid_mask);
+        const uint8_t upd_mask  = (uint8_t)(cur_mask &  valid_mask);
+
+        if (init_mask || upd_mask) {
+            __asm__ volatile (
+                "flw.ps    f0, 0(%[p_tmp])       \n\t"
+
+                "mov.m.x   m0, %[initm], 0       \n\t"
+                "fcmovm.ps f20, f0,  f20         \n\t"
+                "fcmovm.ps f21, f22, f21         \n\t"
+
+                "mov.m.x   m0, %[updm], 0        \n\t"
+                "fmax.ps   f1, f20, f0           \n\t"
+
+                "fsub.ps   f2, f20, f1, rne      \n\t"
+                "fmul.ps   f2, f2,  f23          \n\t"
+                "fexp.ps   f2, f2                \n\t"
+
+                "fsub.ps   f3, f0,  f1, rne      \n\t"
+                "fmul.ps   f3, f3,  f23          \n\t"
+                "fexp.ps   f3, f3                \n\t"
+
+                "fmul.ps   f21, f21, f2          \n\t"
+                "fadd.ps   f21, f21, f3, rne     \n\t"
+                "fcmovm.ps f20, f1,  f20         \n\t"
+
+                "mov.m.x   m0, x0, 0xFF          \n\t"
+                :
+                : [p_tmp] "r"(tmp),
+                  [initm] "r"((unsigned long)init_mask),
+                  [updm]  "r"((unsigned long)upd_mask)
+                : "f0", "f1", "f2", "f3", "memory"
+            );
+
+            valid_mask |= cur_mask;
         }
     }
 
-    // Include optional sink term in a numerically stable way
-    if (use_sinks) {
-        if (sink_value <= running_max) {
-            running_sum += et_expf(sink_value - running_max);
-        } else {
-            float r = et_expf(running_max - sink_value);
-            running_sum = running_sum * r + 1.0f;
-            running_max = sink_value;
+    __asm__ volatile (
+        "mov.m.x   m0, x0, 0xFF         \n\t"
+        "fsw.ps    f20, 0(%[p_lmax])    \n\t"
+        "fsw.ps    f21, 0(%[p_lsum])    \n\t"
+        "mova.m.x  %[ms]                \n\t"
+        :
+        : [p_lmax] "r"(lane_max),
+          [p_lsum] "r"(lane_sum),
+          [ms]     "r"(ms)
+        : "memory"
+    );
+
+    softmax_params_t out = softmax_params_empty();
+    out.valid_mask = valid_mask;
+
+    for (int k = 0; k < 8; ++k) {
+        if (valid_mask & (1u << k)) {
+            if (out.valid_mask == (1u << k) || out.max_val == -INFINITY || lane_max[k] > out.max_val) {
+                out.max_val = lane_max[k];
+            }
         }
     }
 
-    // Pass 2: write final probabilities
-    // the algorithm implements the following in vectorized form
-    // if (running_sum > 0.0f) {
-    //     float inv_sum = et_fdiv(1.0f, running_sum);
-    //     for (int i = 0; i < ne00; i++) {
-    //         float v = src[i] * scale;
-    //         if (mask != NULL) {
-    //             v += slope * mask[i];
-    //         }
-    //         dst[i] = et_expf(v - running_max) * inv_sum;
-    //     }
-    // }
-    if (running_sum <= 0.0f) {
+    if (out.max_val != -INFINITY) {
+        for (int k = 0; k < 8; ++k) {
+            if (valid_mask & (1u << k)) {
+                out.sum_val += lane_sum[k] * et_expf(lane_max[k] - out.max_val);
+            }
+        }
+    }
+
+    return out;
+}
+
+// Pass 2 over [begin, end), where begin/end are column indices and must be multiples of 16.
+static inline void softmax_pass2_range(
+    float *dst,
+    const float *src,
+    const float *mask,
+    int begin,
+    int end,
+    float scale,
+    float slope,
+    softmax_params_t params)
+{
+    if (params.sum_val <= 0.0f) {
         return;
     }
 
-    const float inv_sum = et_fdiv(1.0f, running_sum);
+    const float inv_sum = et_fdiv(1.0f, params.sum_val);
     const float s2      = scale * LOG2E_F;
     const float sl2     = slope * LOG2E_F;
-    const float neg_ml2 = -running_max * LOG2E_F;
+    const float neg_ml2 = -params.max_val * LOG2E_F;
+
+    unsigned long ms;
 
     __asm__ volatile (
-        // Vector mask setup
         "mova.x.m  %[ms]                \n\t"
         "mov.m.x   m0, x0, 0xFF         \n\t"
-
-        // Broadcast loop-invariant constants
         "fbc.ps    f10, 0(%[p_s2])      \n\t"
         "fbc.ps    f12, 0(%[p_nml2])    \n\t"
         "fbc.ps    f13, 0(%[p_inv])     \n\t"
-
         : [ms] "=&r"(ms)
         : [p_s2]   "r"(&s2),
-            [p_nml2] "r"(&neg_ml2),
-            [p_inv]  "r"(&inv_sum)
+          [p_nml2] "r"(&neg_ml2),
+          [p_inv]  "r"(&inv_sum)
         : "f10", "f12", "f13"
     );
 
@@ -148,7 +315,7 @@ static void compute_softmax_row(
             : "f11"
         );
 
-        for (int c = 0; c < ne00; c+=8) {
+        for (int c = begin; c < end; c += 8) {
             const float* sp = src  + c;
             const float* mp = mask + c;
             float*       dp = dst  + c;
@@ -156,8 +323,8 @@ static void compute_softmax_row(
             __asm__ volatile (
                 "flw.ps    f0, 0(%[sp])           \n\t"
                 "flw.ps    f1, 0(%[mp])           \n\t"
-                "fmadd.ps  f0, f0, f10, f12       \n\t"  // src*s2 + neg_ml2
-                "fmadd.ps  f0, f1, f11, f0        \n\t"  // + mask*sl2
+                "fmadd.ps  f0, f0, f10, f12       \n\t"
+                "fmadd.ps  f0, f1, f11, f0        \n\t"
                 "fexp.ps   f0, f0                 \n\t"
                 "fmul.ps   f0, f0, f13            \n\t"
                 "fsw.ps    f0, 0(%[dp])           \n\t"
@@ -167,7 +334,7 @@ static void compute_softmax_row(
             );
         }
     } else {
-        for (int c = 0; c < ne00; c+=8) {
+        for (int c = begin; c < end; c += 8) {
             const float* sp = src + c;
             float*       dp = dst + c;
 
@@ -184,12 +351,38 @@ static void compute_softmax_row(
         }
     }
 
-    // Restore mask state
     __asm__ volatile (
         "mova.m.x  %[ms] \n\t"
         :: [ms] "r"(ms)
     );
+}
 
+// Single-core row path using the new structure.
+static inline void compute_softmax_row(
+    float *dst,
+    const float *src,
+    const float *mask,
+    int cols,
+    float scale,
+    float slope,
+    float sink_value,
+    bool use_sinks)
+{
+    softmax_params_t params = softmax_pass1_range(src, mask, 0, cols, scale, slope);
+
+    if (use_sinks) {
+        softmax_params_t sink;
+        sink.max_val = sink_value;
+        sink.sum_val = 1.0f;
+        sink.valid_mask = 1;
+        params = softmax_params_merge(params, sink);
+    }
+
+    if (params.sum_val <= 0.0f) {
+        return;
+    }
+
+    softmax_pass2_range(dst, src, mask, 0, cols, scale, slope, params);
 }
 
 // Main entry point for Softmax kernel
@@ -352,7 +545,7 @@ int entry_point(struct ggml_et_softmax_params* params, void* env) {
             mask_row = mask_data + mask_offset;
         }
 
-        compute_softmax_row(dst_row, src_row, mask_row, (int)ne00, (int)ne10, scale, slope, sink_value, use_sinks);
+        compute_softmax_row(dst_row, src_row, mask_row, (int)ne00, scale, slope, sink_value, use_sinks);
     }
 
     return 0; // Success
