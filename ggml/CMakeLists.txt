@@ -222,6 +222,7 @@ option(GGML_VULKAN_MEMORY_DEBUG             "ggml: enable Vulkan memory debug ou
 option(GGML_VULKAN_SHADER_DEBUG_INFO        "ggml: enable Vulkan shader debug info"           OFF)
 option(GGML_VULKAN_VALIDATE                 "ggml: enable Vulkan validation"                  OFF)
 option(GGML_VULKAN_RUN_TESTS                "ggml: run Vulkan tests"                          OFF)
+option(GGML_VULKAN_SPARSE_TESTING           "ggml: enable sparse binding fault injection"      OFF)
 option(GGML_WEBGPU                          "ggml: use WebGPU"                                OFF)
 option(GGML_WEBGPU_DEBUG                    "ggml: enable WebGPU debug output"                OFF)
 option(GGML_WEBGPU_CPU_PROFILE              "ggml: enable WebGPU profiling (CPU)"             OFF)
