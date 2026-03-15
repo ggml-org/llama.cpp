@@ -5,7 +5,6 @@
 #if defined(__INTEL_LLVM_COMPILER)
     #if __has_include(<sycl/ext/oneapi/bfloat16.hpp>)
         #include <sycl/ext/oneapi/bfloat16.hpp>
-        #define GGML_SYCL_HAS_BF16
     #endif
 #endif
 
