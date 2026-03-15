@@ -71,11 +71,30 @@ if ! RESULT=$($BENCH -m "$MODEL" -ngl 99 -fa 1 -n 128 -p 512,1024,2048 --output 
 fi
 
 {
-    echo "## Throughput"
+    echo "## Throughput (default ubatch)"
     echo ""
     echo "$RESULT" | grep -E "^\|"
     echo ""
 } >> "$OUT"
+
+echo "Running n_ubatch sweep (PP-2048)..."
+{
+    echo "## Throughput by n_ubatch (PP-2048)"
+    echo ""
+} >> "$OUT"
+
+for UB in 256 512 1024 2048; do
+    echo "  ubatch=$UB..."
+    UB_RESULT=$($BENCH -m "$MODEL" -ngl 99 -fa 1 -n 0 -p 2048 -ub $UB --output md 2>&1) || true
+    UB_LINE=$(echo "$UB_RESULT" | grep "pp2048" | head -1)
+    if [ -n "$UB_LINE" ]; then
+        if [ "$UB" = "256" ]; then
+            echo "$UB_RESULT" | grep -E "^\| (model|---)" | head -2 >> "$OUT"
+        fi
+        echo "$UB_LINE" >> "$OUT"
+    fi
+done
+echo "" >> "$OUT"
 
 echo "Running GDN kernel profiling (PP-512)..."
 PROF=$(GGML_VK_PERF_LOGGER=1 GGML_VK_PERF_LOGGER_FREQUENCY=9999 $BENCH -m "$MODEL" -ngl 99 -fa 1 -n 0 -p 512 2>&1 | grep "GATED_DELTA" | head -5)
