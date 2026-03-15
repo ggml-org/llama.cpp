@@ -520,7 +520,7 @@ struct moe_warmup_state {
     std::atomic<uint32_t> counts[MOE_MAX_LAYERS][MOE_MAX_EXPERTS] = {};
     std::atomic<int>      token_count{0};
     std::atomic<bool>     warmup_done{false};
-    int                   warmup_tokens = 32;  // configurable via env
+    int                   warmup_tokens = 8;   // configurable via env
     int                   n_layers      = 0;
     int                   n_experts     = 0;
 
@@ -30137,6 +30137,26 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     if ((!has_override || override_layout == GGML_LAYOUT_AOS) &&
         ggml_sycl_mul_mat_id_fused(ctx, src0, src1, ids, dst)) {
         GGML_SYCL_DEBUG("[MoE] Fused ESIMD dispatch successful for type %d\n", src0->type);
+        // Record expert activations for warmup profiling (fused PP path)
+        if (!g_moe_warmup.warmup_done.load(std::memory_order_acquire)) {
+            const int cur_layer_hash = moe_cache_layer_id(src0->name);
+            auto &    seq_map        = g_moe_layer_seq[ctx.device];
+            auto      it             = seq_map.find(cur_layer_hash);
+            if (it != seq_map.end()) {
+                int seq_layer_id = it->second;
+                // Copy ids to host for recording
+                std::vector<int32_t> ids_host_fused;
+                if (ggml_sycl_copy_ids_to_host(ctx, ids, ids_host_fused)) {
+                    g_moe_warmup.record(seq_layer_id, ids_host_fused.data(),
+                                        static_cast<int>(ids_host_fused.size()));
+                    if (g_moe_warmup.tick_token()) {
+                        moe_apply_popularity_placement();
+                        moe_prestage_popular_experts();
+                        g_moe_warmup.enable_reranking();
+                    }
+                }
+            }
+        }
         return;
     }
     auto try_mmvq_layout = [&](layout_mode layout) -> bool {
@@ -41512,6 +41532,29 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
         }
     }
     ggml_sycl::offload_stats_set_phase(cached_is_decode ? ggml_sycl::offload_phase::TG : ggml_sycl::offload_phase::PP);
+
+    // PP→TG transition: force-fire warmup completion if it hasn't triggered yet.
+    // During PP, the fused MoE kernel records expert activations.  If PP ends
+    // before warmup_tokens is reached (short prompt), we force-complete warmup
+    // so that TG starts with popular experts pre-staged in VRAM.
+    {
+        static bool prev_was_decode = true;  // start true to avoid false trigger on first call
+        if (cached_is_decode && !prev_was_decode) {
+            // Transition from PP to TG detected
+            if (!g_moe_warmup.warmup_done.load(std::memory_order_acquire) &&
+                g_moe_warmup.token_count.load(std::memory_order_relaxed) > 0) {
+                GGML_LOG_INFO("[MOE-WARMUP] PP→TG transition: force-completing warmup "
+                              "(%d/%d tokens recorded)\n",
+                              g_moe_warmup.token_count.load(std::memory_order_relaxed),
+                              g_moe_warmup.warmup_tokens);
+                g_moe_warmup.warmup_done.store(true, std::memory_order_release);
+                moe_apply_popularity_placement();
+                moe_prestage_popular_experts();
+                g_moe_warmup.enable_reranking();
+            }
+        }
+        prev_was_decode = cached_is_decode;
+    }
 
     // NOTE: split_config_init is NOT called here — calling it before graph
     // recording creates a shared SYCL context that interferes with per-op
