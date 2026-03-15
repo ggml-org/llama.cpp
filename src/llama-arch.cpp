@@ -543,6 +543,10 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
         case LLM_ARCH_CLIP:
             return {};
         case LLM_ARCH_LLAMA:
+        case LLM_ARCH_REFACT:
+        case LLM_ARCH_MINICPM:
+        case LLM_ARCH_GRANITE:
+        case LLM_ARCH_GRANITE_MOE:
         case LLM_ARCH_DECI:
         case LLM_ARCH_MISTRAL3:
         case LLM_ARCH_LLAMA_EMBED:
@@ -743,11 +747,9 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_ATTN_Q_NORM,
                 LLM_TENSOR_ATTN_K_NORM,
             };
-        case LLM_ARCH_REFACT:
         case LLM_ARCH_QWEN2:
         case LLM_ARCH_QWEN2VL:
         case LLM_ARCH_INTERNLM2:
-        case LLM_ARCH_GRANITE:
         case LLM_ARCH_ERNIE4_5:
         case LLM_ARCH_PADDLEOCR:
         case LLM_ARCH_SMOLLM3:
@@ -758,6 +760,7 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_TOKEN_EMBD,
                 LLM_TENSOR_OUTPUT_NORM,
                 LLM_TENSOR_OUTPUT,
+                LLM_TENSOR_ROPE_FREQS,
                 LLM_TENSOR_ATTN_NORM,
                 LLM_TENSOR_ATTN_Q,
                 LLM_TENSOR_ATTN_K,
@@ -1231,29 +1234,6 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_FFN_DOWN,
                 LLM_TENSOR_FFN_UP,
             };
-        case LLM_ARCH_MINICPM:
-            return {
-                LLM_TENSOR_TOKEN_EMBD,
-                LLM_TENSOR_OUTPUT_NORM,
-                LLM_TENSOR_OUTPUT,
-                LLM_TENSOR_ROPE_FREQS,
-                LLM_TENSOR_ROPE_FACTORS_LONG,
-                LLM_TENSOR_ROPE_FACTORS_SHORT,
-                LLM_TENSOR_ATTN_NORM,
-                LLM_TENSOR_ATTN_Q,
-                LLM_TENSOR_ATTN_K,
-                LLM_TENSOR_ATTN_V,
-                LLM_TENSOR_ATTN_OUT,
-                LLM_TENSOR_ATTN_ROT_EMBD,
-                LLM_TENSOR_FFN_GATE_INP,
-                LLM_TENSOR_FFN_NORM,
-                LLM_TENSOR_FFN_GATE,
-                LLM_TENSOR_FFN_DOWN,
-                LLM_TENSOR_FFN_UP,
-                LLM_TENSOR_FFN_GATE_EXP,
-                LLM_TENSOR_FFN_DOWN_EXP,
-                LLM_TENSOR_FFN_UP_EXP,
-            };
         case LLM_ARCH_MINICPM3:
             return {
                 LLM_TENSOR_TOKEN_EMBD,
@@ -1441,6 +1421,7 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_TOKEN_EMBD,
                 LLM_TENSOR_OUTPUT,
                 LLM_TENSOR_OUTPUT_NORM,
+                LLM_TENSOR_ROPE_FREQS,
                 LLM_TENSOR_ATTN_NORM,
                 LLM_TENSOR_ATTN_Q,
                 LLM_TENSOR_ATTN_K,
@@ -1655,7 +1636,9 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_ROPE_FREQS,
                 LLM_TENSOR_OUTPUT_NORM,
                 LLM_TENSOR_OUTPUT,
+                LLM_TENSOR_TOKEN_EMBD,
                 LLM_TENSOR_ATTN_NORM,
+                LLM_TENSOR_ATTN_QKV,
                 LLM_TENSOR_ATTN_Q,
                 LLM_TENSOR_ATTN_K,
                 LLM_TENSOR_ATTN_V,
@@ -2059,30 +2042,12 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_FFN_DOWN,
                 LLM_TENSOR_FFN_UP,
             };
-        case LLM_ARCH_GRANITE_MOE:
-            return {
-                LLM_TENSOR_TOKEN_EMBD,
-                LLM_TENSOR_OUTPUT_NORM,
-                LLM_TENSOR_OUTPUT,
-                LLM_TENSOR_ATTN_NORM,
-                LLM_TENSOR_ATTN_Q,
-                LLM_TENSOR_ATTN_K,
-                LLM_TENSOR_ATTN_V,
-                LLM_TENSOR_ATTN_OUT,
-                LLM_TENSOR_FFN_NORM,
-                LLM_TENSOR_FFN_GATE_INP,
-                LLM_TENSOR_FFN_GATE_EXPS,
-                LLM_TENSOR_FFN_DOWN_EXPS,
-                LLM_TENSOR_FFN_UP_EXPS,
-                LLM_TENSOR_FFN_GATE_SHEXP,
-                LLM_TENSOR_FFN_DOWN_SHEXP,
-                LLM_TENSOR_FFN_UP_SHEXP,
-            };
         case LLM_ARCH_GRANITE_HYBRID:
             return {
                 LLM_TENSOR_TOKEN_EMBD,
                 LLM_TENSOR_OUTPUT_NORM,
                 LLM_TENSOR_OUTPUT,
+                LLM_TENSOR_ROPE_FREQS,
                 LLM_TENSOR_ATTN_NORM,
                 LLM_TENSOR_SSM_IN,
                 LLM_TENSOR_SSM_CONV1D,
@@ -2410,6 +2375,7 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_TOKEN_EMBD,
                 LLM_TENSOR_OUTPUT_NORM,
                 LLM_TENSOR_OUTPUT,
+                LLM_TENSOR_ROPE_FREQS,
                 LLM_TENSOR_ATTN_NORM,
                 LLM_TENSOR_ATTN_QKV,
                 LLM_TENSOR_ATTN_OUT,
@@ -2787,7 +2753,12 @@ std::string LLM_TN_IMPL::str() const {
     }
 
     if (model_tensors.find(tensor) == model_tensors.end()) {
-        return LLM_TENSOR_NAMES.at(tensor);
+        const char * name = LLM_TENSOR_NAMES.at(tensor);
+        if (suffix != nullptr || bid != -1 || xid != -1) {
+            LLAMA_LOG_ERROR("%s: cannot properly format tensor name %s with suffix=%s bid=%d xid=%d\n",
+                __func__, name, suffix, bid, xid);
+        }
+        return name;
     }
 
     std::string name = ::format(LLM_TENSOR_NAMES.at(tensor), bid, xid);
