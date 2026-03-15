@@ -112,6 +112,7 @@ static inline void chunk_transform_ps_8_branchless_mask(
         "mov.m.x   m0, x0, 0xFF         \n\t"
         "fbc.ps    f10, 0(%[p_scale])   \n\t"
         "fbc.ps    f11, 0(%[p_slope])   \n\t"
+        "fbc.ps    f1, 0(%[p_zero])    \n\t"
 
         "mov.m.x   m0, %[maskm0], 0     \n\t" // load mask if needed
         "flw.ps    f1, 0(%[mp])         \n\t"

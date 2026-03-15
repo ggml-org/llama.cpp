@@ -307,11 +307,16 @@ static inline void compute_rope_cache(
                 theta_mix = theta_interp * (1.0f - ramp_mix) + theta_extrap * ramp_mix;
             }
 
-            theta_block[i] = theta_mix * mscale;
+            theta_block[i] = theta_mix;
             theta_local *= theta_scale;
         }
 
         rope_sincos_block8(&sin_cache[dim_idx], &cos_cache[dim_idx], theta_block);
+
+        for (int i = 0; i < ROPE_VEC_WIDTH; ++i) {
+            sin_cache[dim_idx + i] *= mscale;
+            cos_cache[dim_idx + i] *= mscale;
+        }
 
         theta = theta_local;
     }
