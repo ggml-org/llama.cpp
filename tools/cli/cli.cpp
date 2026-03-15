@@ -361,6 +361,10 @@ int main(int argc, char ** argv) {
     llama_backend_init();
     llama_numa_init(params.numa);
 
+    if (!set_process_priority(params.cpuparams.priority)) {
+        LOG_WRN("%s: failed to set process priority\n", __func__);
+    }
+
     // TODO: avoid using atexit() here by making `console` a singleton
     console::init(params.simple_io, params.use_color);
     atexit([]() { console::cleanup(); });
