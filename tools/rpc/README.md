@@ -95,6 +95,12 @@ $ bin/rpc-server -c
 
 By default, the cache is stored in the `$HOME/.cache/llama.cpp/rpc` directory and can be controlled via the `LLAMA_CACHE` environment variable.
 
+### RDMA transport
+
+On Linux systems with RoCEv2-capable NICs (e.g. Mellanox ConnectX), the RPC backend can use RDMA instead of TCP for lower latency and higher throughput. Build with `-DGGML_RPC_RDMA=ON` and the transport is negotiated automatically -- no changes to command-line usage are required.
+
+See [docs/backend/RPC-RDMA.md](/docs/backend/RPC-RDMA.md) for setup, hardware requirements, and configuration details.
+
 ### Troubleshooting
 
 Use the `GGML_RPC_DEBUG` environment variable to enable debug messages from `rpc-server`:
