@@ -737,6 +737,7 @@ void llm_graph_result::reset() {
     t_logits      = nullptr;
     t_embd        = nullptr;
     t_embd_pooled = nullptr;
+    t_attn.clear();
     t_sampled.clear();
     t_sampled_probs.clear();
     t_sampled_logits.clear();
@@ -1882,6 +1883,10 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         kq = ggml_soft_max_ext(ctx0, kq, kq_mask, kq_scale, hparams.f_max_alibi_bias);
         ggml_soft_max_add_sinks(kq, sinks);
         cb(kq, "kq_soft_max", il);
+
+        if (!cparams.attn_layers.empty() && cparams.attn_layers.count(il)) {
+            res->t_attn[il] = kq;
+        }
 
         if (!v_trans) {
             // note: avoid this branch
