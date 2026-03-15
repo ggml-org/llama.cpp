@@ -50,7 +50,7 @@ namespace autoparser {
 // High-level params for parser generation
 // ============================================================================
 
-struct templates_params {
+struct generation_params {
     json                                  messages;
     json                                  tools;
     common_chat_tool_choice               tool_choice = COMMON_CHAT_TOOL_CHOICE_AUTO;
@@ -62,6 +62,7 @@ struct templates_params {
     bool                                  add_generation_prompt = false;
     bool                                  enable_thinking       = true;
     std::chrono::system_clock::time_point now                   = std::chrono::system_clock::now();
+    std::string                           generation_prompt;
     json                                  extra_context;
     bool                                  add_bos       = false;
     bool                                  add_eos       = false;
@@ -174,7 +175,6 @@ struct tool_format_analysis {
 
     bool fun_name_is_key = false;       // In JSON format function name is JSON key, i.e. { "<funname>": { ... arguments ... } }
     bool tools_array_wrapped = false;   // Tool calls wrapped in JSON array [...]
-    bool uses_python_dicts = false;     // Tool call args use Python dict format (single-quoted strings)
 
     std::string              function_field = "function";
     std::string              name_field     = "name";
@@ -215,12 +215,12 @@ struct analyze_content;
 
 struct parser_build_context {
     common_chat_peg_builder & p;
-    const templates_params &          inputs;
+    const generation_params &          inputs;
     common_peg_parser                 reasoning_parser;
     bool                              extracting_reasoning = false;
     const analyze_content *           content              = nullptr;
 
-    parser_build_context(common_chat_peg_builder & p, const templates_params & inputs);
+    parser_build_context(common_chat_peg_builder & p, const generation_params & inputs);
 };
 
 // ============================================================================
@@ -250,6 +250,7 @@ struct analyze_reasoning : analyze_base {
 
     analyze_reasoning() = default;
     analyze_reasoning(const common_chat_template & tmpl, bool supports_tools);
+    analyze_reasoning(std::string start_, std::string end_) : start(std::move(start_)), end(std::move(end_)) {}
 
     common_peg_parser build_parser(parser_build_context & ctx) const override;
 
@@ -371,7 +372,7 @@ struct autoparser {
     void analyze_template(const common_chat_template & tmpl);
 
     // Build the PEG parser for this template
-    common_peg_arena build_parser(const templates_params & inputs) const;
+    common_peg_arena build_parser(const generation_params & inputs) const;
 
   private:
     // Collect tokens from entire analysis to preserve
@@ -385,10 +386,10 @@ struct autoparser {
 class peg_generator {
   public:
     static common_chat_params generate_parser(const common_chat_template &    tmpl,
-                                              const struct templates_params & inputs);
+                                              const struct generation_params & inputs);
 
     static common_chat_params generate_parser(const common_chat_template &    tmpl,
-                                              const struct templates_params & inputs,
+                                              const struct generation_params & inputs,
                                               const autoparser &              autoparser);
 };
 

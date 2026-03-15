@@ -1,5 +1,5 @@
-#include "chat-auto-parser.h"
 #include "chat-auto-parser-helpers.h"
+#include "chat-auto-parser.h"
 #include "chat-peg-parser.h"
 #include "chat.h"
 #include "common.h"
@@ -24,13 +24,13 @@ static void foreach_function(const json & tools, const std::function<void(const 
 
 namespace autoparser {
 
-parser_build_context::parser_build_context(common_chat_peg_builder & p, const templates_params & inputs) :
+parser_build_context::parser_build_context(common_chat_peg_builder & p, const generation_params & inputs) :
     p(p),
     inputs(inputs),
     reasoning_parser(p.eps()) {}
 
 common_chat_params peg_generator::generate_parser(const common_chat_template &    tmpl,
-                                                  const struct templates_params & inputs) {
+                                                  const struct generation_params & inputs) {
     // Run differential analysis to extract template structure
     struct autoparser autoparser;
     autoparser.analyze_template(tmpl);
@@ -38,7 +38,7 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
 }
 
 common_chat_params peg_generator::generate_parser(const common_chat_template &    tmpl,
-                                                  const struct templates_params & inputs,
+                                                  const struct generation_params & inputs,
                                                   const autoparser &              autoparser) {
     // Create the result structure
     common_chat_params data;
@@ -46,62 +46,7 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
     data.format           = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.preserved_tokens = autoparser.preserved_tokens;
 
-    // Extract what the template appends when add_generation_prompt=true (the generation prompt suffix).
-    std::string gen_prompt_suffix;
-    {
-        template_params tparams;
-        tparams.messages              = json::array({ json{ {"role", "user"}, {"content", "x"} } });
-        tparams.add_generation_prompt = false;
-        tparams.enable_thinking       = inputs.enable_thinking;
-        auto result = compare_variants(tmpl, tparams, [](template_params & p) {
-            p.add_generation_prompt = true;
-        });
-        if (result) {
-            gen_prompt_suffix = result->diff.right;
-        }
-    }
-
-    // Fallback for templates that ignore add_generation_prompt: search the rendered prompt.
-    // Excluded for TOOLS_ONLY: the start tag there is model-generated and may appear in prior turns.
-    const std::string & prompt_to_search =
-        (gen_prompt_suffix.empty() && autoparser.reasoning.mode != reasoning_mode::TOOLS_ONLY)
-            ? data.prompt
-            : gen_prompt_suffix;
-
-    bool clear_reasoning_start = false;
-    if (inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE &&
-        autoparser.reasoning.mode != reasoning_mode::NONE &&
-        !autoparser.reasoning.end.empty()) {
-        const auto & r_start    = autoparser.reasoning.start;
-        const auto & r_end      = autoparser.reasoning.end;
-        auto         r_end_t    = trim_trailing_whitespace(r_end);
-        auto         r_start_t  = trim_trailing_whitespace(r_start);
-
-        if (!r_start_t.empty()) {
-            auto start_pos = prompt_to_search.rfind(r_start_t);
-            if (start_pos != std::string::npos) {
-                std::string from_start = prompt_to_search.substr(start_pos);
-                auto         fs_trimmed = trim_trailing_whitespace(from_start);
-
-                if (string_ends_with(fs_trimmed, r_end_t)) {
-                    data.prefill = r_start + r_end;
-                } else if (string_ends_with(fs_trimmed, r_start_t)) {
-                    data.prefill = from_start;
-                } else {
-                    clear_reasoning_start = true;
-                }
-            }
-        }
-    }
-
-    common_peg_arena parser;
-    if (clear_reasoning_start) {
-        struct autoparser modified = autoparser;
-        modified.reasoning.start.clear();
-        parser = modified.build_parser(inputs);
-    } else {
-        parser = autoparser.build_parser(inputs);
-    }
+    auto parser = autoparser.build_parser(inputs);
     data.parser = parser.save();
 
     // Build grammar if tools are present
@@ -137,18 +82,11 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
     return data;
 }
 
-common_peg_arena autoparser::build_parser(const templates_params & inputs) const {
+common_peg_arena autoparser::build_parser(const generation_params & inputs) const {
     if (!analysis_complete) {
         throw std::invalid_argument("Cannot call build_parser on autoparser without performing analysis first, call analyze_template(...)");
     }
     return build_chat_peg_parser([&](common_chat_peg_builder & p) {
-        // If the template uses Python dict format (single-quoted strings in JSON structures),
-        // pre-register a json-string rule that accepts both quote styles. This must happen
-        // before any call to p.json() so that all JSON parsing inherits the flexible rule.
-        if (tools.format.uses_python_dicts) {
-            p.rule("json-string", p.quoted_string());
-        }
-
         parser_build_context ctx(p, inputs);
         bool                 extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
 
@@ -158,22 +96,24 @@ common_peg_arena autoparser::build_parser(const templates_params & inputs) const
         // Build reasoning parser
         ctx.reasoning_parser = reasoning.build_parser(ctx);
 
+        auto parser = p.eps();
+
         bool has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
         bool has_response_format = inputs.json_schema.is_object() && !inputs.json_schema.empty();
 
         if (has_response_format) {
             auto response_format = p.rule("response-format", p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema)));
-            return ctx.reasoning_parser + p.space() + p.choice({
+            parser = ctx.reasoning_parser + p.space() + p.choice({
                 p.literal("```json") + p.space() + response_format + p.space() + p.literal("```"),
                 response_format
             }) + p.end();
+        } else if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE && jinja_caps.supports_tool_calls) {
+            parser = tools.build_parser(ctx);
+        } else {
+            parser = content.build_parser(ctx);
         }
-
-        if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE && jinja_caps.supports_tool_calls) {
-            return tools.build_parser(ctx);
-        }
-
-        return content.build_parser(ctx);
+        parser = wrap_for_generation_prompt(p, parser, inputs, reasoning);
+        return parser;
     });
 }
 
@@ -188,10 +128,10 @@ common_peg_parser analyze_reasoning::build_parser(parser_build_context & ctx) co
         if (!end.empty()) {
             if (!start.empty()) {
                 // Standard tag-based: optional(<think>reasoning</think>)
-                return p.optional(start + p.reasoning(p.until(end)) + end);
+                return p.optional(start + p.reasoning(p.until(end)) + end + p.space());
             }
             // Delimiter-style (empty start)
-            return p.optional(p.reasoning(p.until(end)) + end);
+            return p.optional(p.reasoning(p.until(end)) + end + p.space());
         }
     }
 
@@ -380,7 +320,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
                                                                      "tool-" + name + "-arg-" + param_name + "-schema",
                                                                      param_schema, true)) :
                                     p.tool_arg_json_value(p.schema(
-                                        p.json(), "tool-" + name + "-arg-" + param_name + "-schema", param_schema, format.uses_python_dicts)) +
+                                        p.json(), "tool-" + name + "-arg-" + param_name + "-schema", param_schema, false)) +
                                         p.space()) +
                 p.tool_arg_close(p.literal(arguments.value_suffix)));
 

@@ -105,7 +105,7 @@ struct cli_context {
                     llama_get_model(ctx_server.get_llama_context()));
 
                 task.params.sampling.reasoning_budget_tokens = reasoning_budget;
-                task.params.sampling.grammar_prefill = chat_params.prefill;
+                task.params.sampling.grammar_prefill = chat_params.generation_prompt;
 
                 if (!chat_params.thinking_start_tag.empty()) {
                     task.params.sampling.reasoning_budget_start =
@@ -215,7 +215,7 @@ struct cli_context {
         inputs.parallel_tool_calls   = false;
         inputs.add_generation_prompt = true;
         inputs.reasoning_format      = COMMON_REASONING_FORMAT_DEEPSEEK;
-        inputs.enable_thinking       = common_chat_templates_support_enable_thinking(chat_params.tmpls.get());
+        inputs.enable_thinking       = chat_params.enable_thinking ? common_chat_templates_support_enable_thinking(chat_params.tmpls.get()) : false;
 
         // Apply chat template to the list of messages
         return common_chat_templates_apply(chat_params.tmpls.get(), inputs);
