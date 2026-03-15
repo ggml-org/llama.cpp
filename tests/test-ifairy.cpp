@@ -361,6 +361,7 @@ static bool parse_cli_int(const char * name, const char * arg, int * value) {
 
 // ============================================================================
 // 2-weight LUT 索引缓冲构造
+// 2-weight LUT 索引缓冲构造
 // ============================================================================
 
 static void set_ifairy_code(block_ifairy & blk, int idx, uint8_t code) {
@@ -375,6 +376,7 @@ static void set_ifairy_code(block_ifairy & blk, int idx, uint8_t code) {
 }
 
 static bool test_ifairy_lut_index() {
+    printf("\n=== Test 2: iFairy 2-weight index encoding ===\n");
     printf("\n=== Test 2: iFairy 2-weight index encoding ===\n");
 
     const int64_t k              = QK_IFAIRY;
@@ -403,11 +405,15 @@ static bool test_ifairy_lut_index() {
 
     const ggml_ifairy_2w_index_info info     = ggml_ifairy_2w_get_index_info(k);
     const size_t                    required = ggml_ifairy_2w_index_buffer_size(&info, rows);
+    const ggml_ifairy_2w_index_info info     = ggml_ifairy_2w_get_index_info(k);
+    const size_t                    required = ggml_ifairy_2w_index_buffer_size(&info, rows);
 
     std::vector<uint8_t> index(required);
 
     const bool ok = ggml_ifairy_2w_encode(weights.data(), k, rows, index.data(), index.size());
+    const bool ok = ggml_ifairy_2w_encode(weights.data(), k, rows, index.data(), index.size());
     if (!ok) {
+        fprintf(stderr, "Failed to encode iFairy 2-weight index buffer\n");
         fprintf(stderr, "Failed to encode iFairy 2-weight index buffer\n");
         return false;
     }
@@ -468,6 +474,8 @@ static bool test_ifairy_lut_transform_cache() {
         weights.push_back(w);
     }
 
+    const ggml_ifairy_2w_index_info info     = ggml_ifairy_2w_get_index_info(k);
+    const size_t                    expected = ggml_ifairy_2w_index_buffer_size(&info, rows);
     const ggml_ifairy_2w_index_info info     = ggml_ifairy_2w_get_index_info(k);
     const size_t                    expected = ggml_ifairy_2w_index_buffer_size(&info, rows);
 
@@ -568,6 +576,9 @@ static bool test_ifairy_lut_index_alignment() {
     const ggml_ifairy_2w_index_info info    = ggml_ifairy_2w_get_index_info(k);
     const size_t                    raw     = ggml_ifairy_2w_index_buffer_size(&info, rows);
     const size_t                    aligned = ggml_ifairy_2w_index_buffer_size_aligned64(&info, rows);
+    const ggml_ifairy_2w_index_info info    = ggml_ifairy_2w_get_index_info(k);
+    const size_t                    raw     = ggml_ifairy_2w_index_buffer_size(&info, rows);
+    const size_t                    aligned = ggml_ifairy_2w_index_buffer_size_aligned64(&info, rows);
 
     if (raw == 0 || aligned == 0 || aligned < raw || (aligned & 63u) != 0) {
         fprintf(stderr, "index alignment mismatch: raw=%zu aligned=%zu\n", raw, aligned);
@@ -576,6 +587,7 @@ static bool test_ifairy_lut_index_alignment() {
 
     std::vector<uint8_t> buf(raw + 1);
     uint8_t *            misaligned = buf.data() + 1;
+    const bool           ok         = ggml_ifairy_2w_encode(weights.data(), k, rows, misaligned, raw);
     const bool           ok         = ggml_ifairy_2w_encode(weights.data(), k, rows, misaligned, raw);
     if (!ok) {
         fprintf(stderr, "index encoding failed on misaligned buffer\n");
@@ -602,12 +614,15 @@ static bool test_ifairy_lut_index_encode_failure() {
 
     const ggml_ifairy_2w_index_info info = ggml_ifairy_2w_get_index_info(k);
     const size_t                    raw  = ggml_ifairy_2w_index_buffer_size(&info, rows);
+    const ggml_ifairy_2w_index_info info = ggml_ifairy_2w_get_index_info(k);
+    const size_t                    raw  = ggml_ifairy_2w_index_buffer_size(&info, rows);
     if (raw < 2) {
         fprintf(stderr, "unexpected raw index buffer size: %zu\n", raw);
         return false;
     }
 
     std::vector<uint8_t> buf(raw - 1);
+    const bool           ok = ggml_ifairy_2w_encode(weights.data(), k, rows, buf.data(), buf.size());
     const bool           ok = ggml_ifairy_2w_encode(weights.data(), k, rows, buf.data(), buf.size());
     if (ok) {
         fprintf(stderr, "index encoding unexpectedly succeeded with short buffer\n");
