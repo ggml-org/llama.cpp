@@ -381,7 +381,27 @@ static inline void simd_mxfp4_q8_0_16row(
     int K_elem, float * GGML_RESTRICT out,
     const void * GGML_RESTRICT rows[16],
     const void * GGML_RESTRICT vy);
-#endif
+// 4-row MXFP4 x Q8_0 VNNI-native kernel: no runtime branch, 2-block unrolled.
+static inline void simd_mxfp4_q8_0_4row_vnni(int                        K_elem,
+                                             float * GGML_RESTRICT      out,
+                                             const void * GGML_RESTRICT vx0,
+                                             const void * GGML_RESTRICT vx1,
+                                             const void * GGML_RESTRICT vx2,
+                                             const void * GGML_RESTRICT vx3,
+                                             const void * GGML_RESTRICT vy);
+// 4-row MXFP4 x Q8_0 VNNI-native tiled kernel: partial blocks [ib_start, ib_end).
+static inline void simd_mxfp4_q8_0_4row_tile_vnni(int                        ib_start,
+                                                  int                        ib_end,
+                                                  const void * GGML_RESTRICT vx0,
+                                                  const void * GGML_RESTRICT vx1,
+                                                  const void * GGML_RESTRICT vx2,
+                                                  const void * GGML_RESTRICT vx3,
+                                                  const void * GGML_RESTRICT vy,
+                                                  __m256 &                   acc0,
+                                                  __m256 &                   acc1,
+                                                  __m256 &                   acc2,
+                                                  __m256 &                   acc3);
+#    endif
 #endif
 
 void ggml_sycl_cpu_vec_dot_rows(ggml_type type, int ne00,
@@ -495,18 +515,28 @@ void ggml_sycl_cpu_vec_dot_rows(ggml_type type, int ne00,
                                 (const char *) src0_host + (size_t)(i + 7) * row_stride,
                                 src1_q_data);
                         }
-                        } // has_avxvnniint8
-#endif
-                        // 4-row MXFP4 kernel (AVX2 with or without VNNI)
+                        // VNNI-native 4-row kernel for remainder (no runtime branch)
                         for (; i + 3 < r.end(); i += 4) {
-                            simd_mul_mat_mxfp4_q8_0_4row(
-                                ne00, output + i,
-                                (const char *) src0_host + (size_t)(i + 0) * row_stride,
-                                (const char *) src0_host + (size_t)(i + 1) * row_stride,
-                                (const char *) src0_host + (size_t)(i + 2) * row_stride,
-                                (const char *) src0_host + (size_t)(i + 3) * row_stride,
-                                src1_q_data);
+                            simd_mxfp4_q8_0_4row_vnni(
+                                ne00, output + i, (const char *) src0_host + (size_t) (i + 0) * row_stride,
+                                (const char *) src0_host + (size_t) (i + 1) * row_stride,
+                                (const char *) src0_host + (size_t) (i + 2) * row_stride,
+                                (const char *) src0_host + (size_t) (i + 3) * row_stride, src1_q_data);
                         }
+                        }  // has_avxvnniint8
+                        else {
+#endif
+                            // 4-row MXFP4 kernel (AVX2 fallback, runtime-dispatched dot)
+                            for (; i + 3 < r.end(); i += 4) {
+                                simd_mul_mat_mxfp4_q8_0_4row(
+                                    ne00, output + i, (const char *) src0_host + (size_t) (i + 0) * row_stride,
+                                    (const char *) src0_host + (size_t) (i + 1) * row_stride,
+                                    (const char *) src0_host + (size_t) (i + 2) * row_stride,
+                                    (const char *) src0_host + (size_t) (i + 3) * row_stride, src1_q_data);
+                            }
+#        if defined(__AVXVNNIINT8__)
+                        }  // !has_avxvnniint8
+#        endif
                     }
 #endif
                     // Remainder: generic single-row path
@@ -1051,19 +1081,16 @@ void ggml_sycl_cpu_expert_mul_mat_batched(
                                 wbase + (size_t)(i + 7) * m.row_stride,
                                 act_q);
                         }
-                        } // has_avxvnniint8
-#endif
-                        // 4-row K-tiled fallback (AVX2 or VNNI remainder).
-                        // For remaining rows < 8 (VNNI) or all rows (non-VNNI).
+                        // VNNI-native 4-row tiled for remainder after 16/8
                         {
                             static constexpr int TILE_BLOCKS = 16;
-                            const int nb        = t.K / QK_MXFP4;
-                            const int remaining = chunk - i;
-                            const int chunk4    = remaining & ~3;
+                            const int            nb          = t.K / QK_MXFP4;
+                            const int            remaining   = chunk - i;
+                            const int            chunk4      = remaining & ~3;
 
-                            __m256 accs_stack[256];
+                            __m256              accs_stack[256];
                             std::vector<__m256> accs_heap;
-                            __m256 * accs;
+                            __m256 *            accs;
                             if (chunk4 <= 256) {
                                 accs = accs_stack;
                             } else {
@@ -1077,15 +1104,12 @@ void ggml_sycl_cpu_expert_mul_mat_batched(
                             for (int ib_start = 0; ib_start < nb; ib_start += TILE_BLOCKS) {
                                 int ib_end = std::min(ib_start + TILE_BLOCKS, nb);
                                 for (int j = 0; j + 3 < chunk4; j += 4) {
-                                    simd_mxfp4_q8_0_4row_tile(
-                                        ib_start, ib_end,
-                                        wbase + (size_t)(i + j + 0) * m.row_stride,
-                                        wbase + (size_t)(i + j + 1) * m.row_stride,
-                                        wbase + (size_t)(i + j + 2) * m.row_stride,
-                                        wbase + (size_t)(i + j + 3) * m.row_stride,
-                                        act_q,
-                                        accs[j + 0], accs[j + 1],
-                                        accs[j + 2], accs[j + 3]);
+                                    simd_mxfp4_q8_0_4row_tile_vnni(ib_start, ib_end,
+                                                                   wbase + (size_t) (i + j + 0) * m.row_stride,
+                                                                   wbase + (size_t) (i + j + 1) * m.row_stride,
+                                                                   wbase + (size_t) (i + j + 2) * m.row_stride,
+                                                                   wbase + (size_t) (i + j + 3) * m.row_stride, act_q,
+                                                                   accs[j + 0], accs[j + 1], accs[j + 2], accs[j + 3]);
                                 }
                             }
 
@@ -1094,6 +1118,49 @@ void ggml_sycl_cpu_expert_mul_mat_batched(
                             }
                             i += chunk4;
                         }
+                        }  // has_avxvnniint8
+                        else {
+#endif
+                            // 4-row K-tiled fallback (AVX2, no VNNI).
+                            {
+                                static constexpr int TILE_BLOCKS = 16;
+                                const int            nb          = t.K / QK_MXFP4;
+                                const int            remaining   = chunk - i;
+                                const int            chunk4      = remaining & ~3;
+
+                                __m256              accs_stack[256];
+                                std::vector<__m256> accs_heap;
+                                __m256 *            accs;
+                                if (chunk4 <= 256) {
+                                    accs = accs_stack;
+                                } else {
+                                    accs_heap.resize(chunk4);
+                                    accs = accs_heap.data();
+                                }
+                                for (int j = 0; j < chunk4; j++) {
+                                    accs[j] = _mm256_setzero_ps();
+                                }
+
+                                for (int ib_start = 0; ib_start < nb; ib_start += TILE_BLOCKS) {
+                                    int ib_end = std::min(ib_start + TILE_BLOCKS, nb);
+                                    for (int j = 0; j + 3 < chunk4; j += 4) {
+                                        simd_mxfp4_q8_0_4row_tile(ib_start, ib_end,
+                                                                  wbase + (size_t) (i + j + 0) * m.row_stride,
+                                                                  wbase + (size_t) (i + j + 1) * m.row_stride,
+                                                                  wbase + (size_t) (i + j + 2) * m.row_stride,
+                                                                  wbase + (size_t) (i + j + 3) * m.row_stride, act_q,
+                                                                  accs[j + 0], accs[j + 1], accs[j + 2], accs[j + 3]);
+                                    }
+                                }
+
+                                for (int j = 0; j < chunk4; j++) {
+                                    out[i + j] = ggml_sycl_hsum_float_8(accs[j]);
+                                }
+                                i += chunk4;
+                            }
+#        if defined(__AVXVNNIINT8__)
+                        }  // !has_avxvnniint8
+#        endif
                     }
 #endif
                     // Remainder: single-row generic vec_dot
@@ -2784,32 +2851,70 @@ static inline void simd_mxfp4_q8_0_8row(
     __m256 acc6 = _mm256_setzero_ps();
     __m256 acc7 = _mm256_setzero_ps();
 
-    for (int ib = 0; ib < nb; ib++) {
-        const float   q8_d = cpu_half_to_f32(y[ib].d);
-        const __m256i qy   = _mm256_loadu_si256((const __m256i *)y[ib].qs);
+    // Macro: dequant MXFP4 block via pshufb, VNNI dot, FMA accumulate.
+#        define MXFP4_ROW_8(xr, accr, block_idx)                                                         \
+            {                                                                                            \
+                const __m128i q4bits = _mm_loadu_si128((const __m128i *) (xr)[block_idx].qs);            \
+                const __m256i qx     = GGML_SYCL_MM256_SET_M128I(                                        \
+                    _mm_shuffle_epi8(values128, _mm_and_si128(_mm_srli_epi16(q4bits, 4), m4b)),      \
+                    _mm_shuffle_epi8(values128, _mm_and_si128(q4bits, m4b)));                        \
+                const float   d    = q8_d * GGML_E8M0_TO_FP32_HALF((xr)[block_idx].e);                   \
+                const __m256i prod = _mm256_dpbssd_epi32(_mm256_setzero_si256(), qx, qy);                \
+                accr               = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod), accr); \
+            }
 
-#define MXFP4_ROW_8(xr, accr) \
-        { \
-            const __m128i q4bits = _mm_loadu_si128((const __m128i *)(xr)[ib].qs); \
-            const __m256i qx = GGML_SYCL_MM256_SET_M128I( \
-                _mm_shuffle_epi8(values128, _mm_and_si128(_mm_srli_epi16(q4bits, 4), m4b)), \
-                _mm_shuffle_epi8(values128, _mm_and_si128(q4bits, m4b))); \
-            const float d = q8_d * GGML_E8M0_TO_FP32_HALF((xr)[ib].e); \
-            const __m256i prod = _mm256_dpbssd_epi32(_mm256_setzero_si256(), qx, qy); \
-            accr = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod), accr); \
+    // 2-block unrolled main loop: process two activation blocks per iteration
+    // to improve ILP (dual FMA ports on Arrow Lake P-core).
+    int ib = 0;
+    for (; ib + 1 < nb; ib += 2) {
+        // Prefetch next pair of activation blocks into L1
+        if (ib + 2 < nb) {
+            _mm_prefetch((const char *) &y[ib + 2], _MM_HINT_T0);
         }
 
-        MXFP4_ROW_8(x0, acc0)
-        MXFP4_ROW_8(x1, acc1)
-        MXFP4_ROW_8(x2, acc2)
-        MXFP4_ROW_8(x3, acc3)
-        MXFP4_ROW_8(x4, acc4)
-        MXFP4_ROW_8(x5, acc5)
-        MXFP4_ROW_8(x6, acc6)
-        MXFP4_ROW_8(x7, acc7)
+        // Block A
+        const float   q8_d = cpu_half_to_f32(y[ib].d);
+        const __m256i qy   = _mm256_loadu_si256((const __m256i *) y[ib].qs);
 
-#undef MXFP4_ROW_8
+        MXFP4_ROW_8(x0, acc0, ib)
+        MXFP4_ROW_8(x1, acc1, ib)
+        MXFP4_ROW_8(x2, acc2, ib)
+        MXFP4_ROW_8(x3, acc3, ib)
+        MXFP4_ROW_8(x4, acc4, ib)
+        MXFP4_ROW_8(x5, acc5, ib)
+        MXFP4_ROW_8(x6, acc6, ib)
+        MXFP4_ROW_8(x7, acc7, ib)
+
+        // Block B (ib+1): separate scope to reuse q8_d/qy names
+        {
+            const float   q8_d = cpu_half_to_f32(y[ib + 1].d);
+            const __m256i qy   = _mm256_loadu_si256((const __m256i *) y[ib + 1].qs);
+
+            MXFP4_ROW_8(x0, acc0, ib + 1)
+            MXFP4_ROW_8(x1, acc1, ib + 1)
+            MXFP4_ROW_8(x2, acc2, ib + 1)
+            MXFP4_ROW_8(x3, acc3, ib + 1)
+            MXFP4_ROW_8(x4, acc4, ib + 1)
+            MXFP4_ROW_8(x5, acc5, ib + 1)
+            MXFP4_ROW_8(x6, acc6, ib + 1)
+            MXFP4_ROW_8(x7, acc7, ib + 1)
+        }
     }
+    // Remainder: odd block count
+    for (; ib < nb; ib++) {
+        const float   q8_d = cpu_half_to_f32(y[ib].d);
+        const __m256i qy   = _mm256_loadu_si256((const __m256i *) y[ib].qs);
+
+        MXFP4_ROW_8(x0, acc0, ib)
+        MXFP4_ROW_8(x1, acc1, ib)
+        MXFP4_ROW_8(x2, acc2, ib)
+        MXFP4_ROW_8(x3, acc3, ib)
+        MXFP4_ROW_8(x4, acc4, ib)
+        MXFP4_ROW_8(x5, acc5, ib)
+        MXFP4_ROW_8(x6, acc6, ib)
+        MXFP4_ROW_8(x7, acc7, ib)
+    }
+#        undef MXFP4_ROW_8
 
     out[0] = ggml_sycl_hsum_float_8(acc0);
     out[1] = ggml_sycl_hsum_float_8(acc1);
@@ -2843,7 +2948,46 @@ static inline void simd_mxfp4_q8_0_16row(
         acc[r] = _mm256_setzero_ps();
     }
 
-    for (int ib = 0; ib < nb; ib++) {
+    // 2-block unrolled main loop for better ILP.
+    int ib = 0;
+    for (; ib + 1 < nb; ib += 2) {
+        if (ib + 2 < nb) {
+            _mm_prefetch((const char *) &y[ib + 2], _MM_HINT_T0);
+        }
+
+        // Block A
+        const float   q8_d_a = cpu_half_to_f32(y[ib].d);
+        const __m256i qy_a   = _mm256_loadu_si256((const __m256i *) y[ib].qs);
+
+        // Block B
+        const float   q8_d_b = cpu_half_to_f32(y[ib + 1].d);
+        const __m256i qy_b   = _mm256_loadu_si256((const __m256i *) y[ib + 1].qs);
+
+        for (int r = 0; r < 16; r++) {
+            // Block A
+            {
+                const __m128i q4bits = _mm_loadu_si128((const __m128i *) xr[r][ib].qs);
+                const __m256i qx     = GGML_SYCL_MM256_SET_M128I(
+                    _mm_shuffle_epi8(values128, _mm_and_si128(_mm_srli_epi16(q4bits, 4), m4b)),
+                    _mm_shuffle_epi8(values128, _mm_and_si128(q4bits, m4b)));
+                const float   d    = q8_d_a * GGML_E8M0_TO_FP32_HALF(xr[r][ib].e);
+                const __m256i prod = _mm256_dpbssd_epi32(_mm256_setzero_si256(), qx, qy_a);
+                acc[r]             = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod), acc[r]);
+            }
+            // Block B
+            {
+                const __m128i q4bits = _mm_loadu_si128((const __m128i *) xr[r][ib + 1].qs);
+                const __m256i qx     = GGML_SYCL_MM256_SET_M128I(
+                    _mm_shuffle_epi8(values128, _mm_and_si128(_mm_srli_epi16(q4bits, 4), m4b)),
+                    _mm_shuffle_epi8(values128, _mm_and_si128(q4bits, m4b)));
+                const float   d    = q8_d_b * GGML_E8M0_TO_FP32_HALF(xr[r][ib + 1].e);
+                const __m256i prod = _mm256_dpbssd_epi32(_mm256_setzero_si256(), qx, qy_b);
+                acc[r]             = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod), acc[r]);
+            }
+        }
+    }
+    // Remainder: odd block count
+    for (; ib < nb; ib++) {
         const float   q8_d = cpu_half_to_f32(y[ib].d);
         const __m256i qy   = _mm256_loadu_si256((const __m256i *)y[ib].qs);
 
@@ -2863,7 +3007,132 @@ static inline void simd_mxfp4_q8_0_16row(
     }
 }
 
-#endif // defined(__AVXVNNIINT8__)
+// ---------------------------------------------------------------------------
+// VNNI-native 4-row MXFP4 x Q8_0 kernel (full and tiled variants)
+// Eliminates the runtime branch in ggml_sycl_dot_i8() by using
+// _mm256_dpbssd_epi32 directly, with 2-block unrolling for ILP.
+// ---------------------------------------------------------------------------
+
+static inline void simd_mxfp4_q8_0_4row_vnni(int                        K_elem,
+                                             float * GGML_RESTRICT      out,
+                                             const void * GGML_RESTRICT vx0,
+                                             const void * GGML_RESTRICT vx1,
+                                             const void * GGML_RESTRICT vx2,
+                                             const void * GGML_RESTRICT vx3,
+                                             const void * GGML_RESTRICT vy) {
+    const int nb = K_elem / QK_MXFP4;
+
+    const block_mxfp4 * GGML_RESTRICT x0 = (const block_mxfp4 *) vx0;
+    const block_mxfp4 * GGML_RESTRICT x1 = (const block_mxfp4 *) vx1;
+    const block_mxfp4 * GGML_RESTRICT x2 = (const block_mxfp4 *) vx2;
+    const block_mxfp4 * GGML_RESTRICT x3 = (const block_mxfp4 *) vx3;
+    const block_q8_0 * GGML_RESTRICT  y  = (const block_q8_0 *) vy;
+
+    const __m128i values128 = _mm_loadu_si128((const __m128i *) kvalues_mxfp4);
+    const __m128i m4b       = _mm_set1_epi8(0x0f);
+
+    __m256 acc0 = _mm256_setzero_ps();
+    __m256 acc1 = _mm256_setzero_ps();
+    __m256 acc2 = _mm256_setzero_ps();
+    __m256 acc3 = _mm256_setzero_ps();
+
+#        define MXFP4_VNNI_4ROW(xr, accr, bi)                                                            \
+            {                                                                                            \
+                const __m128i q4bits = _mm_loadu_si128((const __m128i *) (xr)[bi].qs);                   \
+                const __m256i qx     = GGML_SYCL_MM256_SET_M128I(                                        \
+                    _mm_shuffle_epi8(values128, _mm_and_si128(_mm_srli_epi16(q4bits, 4), m4b)),      \
+                    _mm_shuffle_epi8(values128, _mm_and_si128(q4bits, m4b)));                        \
+                const float   d    = q8_d * GGML_E8M0_TO_FP32_HALF((xr)[bi].e);                          \
+                const __m256i prod = _mm256_dpbssd_epi32(_mm256_setzero_si256(), qx, qy);                \
+                accr               = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod), accr); \
+            }
+
+    // 2-block unrolled main loop
+    int ib = 0;
+    for (; ib + 1 < nb; ib += 2) {
+        if (ib + 2 < nb) {
+            _mm_prefetch((const char *) &y[ib + 2], _MM_HINT_T0);
+        }
+
+        {
+            const float   q8_d = cpu_half_to_f32(y[ib].d);
+            const __m256i qy   = _mm256_loadu_si256((const __m256i *) y[ib].qs);
+            MXFP4_VNNI_4ROW(x0, acc0, ib)
+            MXFP4_VNNI_4ROW(x1, acc1, ib)
+            MXFP4_VNNI_4ROW(x2, acc2, ib)
+            MXFP4_VNNI_4ROW(x3, acc3, ib)
+        }
+        {
+            const float   q8_d = cpu_half_to_f32(y[ib + 1].d);
+            const __m256i qy   = _mm256_loadu_si256((const __m256i *) y[ib + 1].qs);
+            MXFP4_VNNI_4ROW(x0, acc0, ib + 1)
+            MXFP4_VNNI_4ROW(x1, acc1, ib + 1)
+            MXFP4_VNNI_4ROW(x2, acc2, ib + 1)
+            MXFP4_VNNI_4ROW(x3, acc3, ib + 1)
+        }
+    }
+    for (; ib < nb; ib++) {
+        const float   q8_d = cpu_half_to_f32(y[ib].d);
+        const __m256i qy   = _mm256_loadu_si256((const __m256i *) y[ib].qs);
+        MXFP4_VNNI_4ROW(x0, acc0, ib)
+        MXFP4_VNNI_4ROW(x1, acc1, ib)
+        MXFP4_VNNI_4ROW(x2, acc2, ib)
+        MXFP4_VNNI_4ROW(x3, acc3, ib)
+    }
+#        undef MXFP4_VNNI_4ROW
+
+    out[0] = ggml_sycl_hsum_float_8(acc0);
+    out[1] = ggml_sycl_hsum_float_8(acc1);
+    out[2] = ggml_sycl_hsum_float_8(acc2);
+    out[3] = ggml_sycl_hsum_float_8(acc3);
+}
+
+// Tiled variant: partial dot product over blocks [ib_start, ib_end).
+// VNNI-native (no runtime branch), accumulates into caller-owned accumulators.
+static inline void simd_mxfp4_q8_0_4row_tile_vnni(int                        ib_start,
+                                                  int                        ib_end,
+                                                  const void * GGML_RESTRICT vx0,
+                                                  const void * GGML_RESTRICT vx1,
+                                                  const void * GGML_RESTRICT vx2,
+                                                  const void * GGML_RESTRICT vx3,
+                                                  const void * GGML_RESTRICT vy,
+                                                  __m256 &                   acc0,
+                                                  __m256 &                   acc1,
+                                                  __m256 &                   acc2,
+                                                  __m256 &                   acc3) {
+    const block_mxfp4 * GGML_RESTRICT x0 = (const block_mxfp4 *) vx0;
+    const block_mxfp4 * GGML_RESTRICT x1 = (const block_mxfp4 *) vx1;
+    const block_mxfp4 * GGML_RESTRICT x2 = (const block_mxfp4 *) vx2;
+    const block_mxfp4 * GGML_RESTRICT x3 = (const block_mxfp4 *) vx3;
+    const block_q8_0 * GGML_RESTRICT  y  = (const block_q8_0 *) vy;
+
+    const __m128i values128 = _mm_loadu_si128((const __m128i *) kvalues_mxfp4);
+    const __m128i m4b       = _mm_set1_epi8(0x0f);
+
+#        define MXFP4_VNNI_TILE(xr, accr)                                                                \
+            {                                                                                            \
+                const __m128i q4bits = _mm_loadu_si128((const __m128i *) (xr)[ib].qs);                   \
+                const __m256i qx     = GGML_SYCL_MM256_SET_M128I(                                        \
+                    _mm_shuffle_epi8(values128, _mm_and_si128(_mm_srli_epi16(q4bits, 4), m4b)),      \
+                    _mm_shuffle_epi8(values128, _mm_and_si128(q4bits, m4b)));                        \
+                const float   d    = q8_d * GGML_E8M0_TO_FP32_HALF((xr)[ib].e);                          \
+                const __m256i prod = _mm256_dpbssd_epi32(_mm256_setzero_si256(), qx, qy);                \
+                accr               = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod), accr); \
+            }
+
+    for (int ib = ib_start; ib < ib_end; ib++) {
+        const float   q8_d = cpu_half_to_f32(y[ib].d);
+        const __m256i qy   = _mm256_loadu_si256((const __m256i *) y[ib].qs);
+
+        MXFP4_VNNI_TILE(x0, acc0)
+        MXFP4_VNNI_TILE(x1, acc1)
+        MXFP4_VNNI_TILE(x2, acc2)
+        MXFP4_VNNI_TILE(x3, acc3)
+    }
+#        undef MXFP4_VNNI_TILE
+}
+
+#    endif  // defined(__AVXVNNIINT8__)
 
 // INT4 fast-path: 4-row Q4_0 x Q8_0 dot product WITHOUT zero-point offset.
 // Treats nibbles as unsigned [0,15] and uses _mm256_maddubs_epi16 directly
@@ -5272,6 +5541,48 @@ bool ggml_sycl_cpu_pp_gemm(ggml_type weight_type,
                                         weight_bytes + static_cast<int64_t>(n + 3) * nb01,
                                         act_q);
                                 }
+                            } else if (weight_type == GGML_TYPE_MXFP4) {
+#        if defined(__AVXVNNIINT8__)
+                                if (has_avxvnniint8()) {
+                                    // VNNI fast path: 16-row -> 8-row -> 4-row
+                                    for (; n + 15 < r.end(); n += 16) {
+                                        const void * row_ptrs[16];
+                                        for (int k = 0; k < 16; k++) {
+                                            row_ptrs[k] = weight_bytes + static_cast<int64_t>(n + k) * nb01;
+                                        }
+                                        simd_mxfp4_q8_0_16row(K_int, dst_m + n, row_ptrs, act_q);
+                                    }
+                                    for (; n + 7 < r.end(); n += 8) {
+                                        simd_mxfp4_q8_0_8row(K_int, dst_m + n,
+                                                             weight_bytes + static_cast<int64_t>(n + 0) * nb01,
+                                                             weight_bytes + static_cast<int64_t>(n + 1) * nb01,
+                                                             weight_bytes + static_cast<int64_t>(n + 2) * nb01,
+                                                             weight_bytes + static_cast<int64_t>(n + 3) * nb01,
+                                                             weight_bytes + static_cast<int64_t>(n + 4) * nb01,
+                                                             weight_bytes + static_cast<int64_t>(n + 5) * nb01,
+                                                             weight_bytes + static_cast<int64_t>(n + 6) * nb01,
+                                                             weight_bytes + static_cast<int64_t>(n + 7) * nb01, act_q);
+                                    }
+                                    for (; n + 3 < r.end(); n += 4) {
+                                        simd_mxfp4_q8_0_4row_vnni(
+                                            K_int, dst_m + n, weight_bytes + static_cast<int64_t>(n + 0) * nb01,
+                                            weight_bytes + static_cast<int64_t>(n + 1) * nb01,
+                                            weight_bytes + static_cast<int64_t>(n + 2) * nb01,
+                                            weight_bytes + static_cast<int64_t>(n + 3) * nb01, act_q);
+                                    }
+                                } else {
+#        endif
+                                    // AVX2 fallback: 4-row with runtime-dispatched dot
+                                    for (; n + 3 < r.end(); n += 4) {
+                                        simd_mul_mat_mxfp4_q8_0_4row(
+                                            K_int, dst_m + n, weight_bytes + static_cast<int64_t>(n + 0) * nb01,
+                                            weight_bytes + static_cast<int64_t>(n + 1) * nb01,
+                                            weight_bytes + static_cast<int64_t>(n + 2) * nb01,
+                                            weight_bytes + static_cast<int64_t>(n + 3) * nb01, act_q);
+                                    }
+#        if defined(__AVXVNNIINT8__)
+                                }  // !has_avxvnniint8
+#        endif
                             }
 #endif
                             // Remainder: single-row generic path
