@@ -84,7 +84,7 @@
 /tools/quantize/                        @ggerganov
 /tools/rpc/                             @ggml-org/ggml-rpc
 /tools/server/*                         @ggml-org/llama-server # no subdir
-/tools/server/webui/                    @ggml-org/webui
+/tools/server/webui/                    @ggml-org/llama-webui
 /tools/tokenize/                        @ggerganov
 /tools/tts/                             @ggerganov
 /vendor/                                @ggerganov
