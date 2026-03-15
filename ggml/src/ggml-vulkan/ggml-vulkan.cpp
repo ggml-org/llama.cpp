@@ -961,7 +961,6 @@ struct vk_semaphore {
 // and would lead to validation errors.
 struct vk_event {
     std::vector<vk::Event> events_free; // Events available for reuse
-    std::vector<vk::Event> events_pending; // Events that may still be waited on
     std::vector<vk::Event> events_submitted; // Events that are fully submitted and can be reused on next synchronize
     vk::Event event;
     bool has_event;
@@ -14925,11 +14924,8 @@ static void ggml_backend_vk_event_record(ggml_backend_t backend, ggml_backend_ev
     auto* cmd_buf = compute_ctx->s->buffer; // retrieve pointer before it gets reset
 
     if (vkev->has_event) {
-        // Move pending to submitted
-        vkev->events_submitted.insert(vkev->events_submitted.end(), vkev->events_pending.begin(), vkev->events_pending.end());
-        vkev->events_pending.clear();
-        // Move existing event into pending
-        vkev->events_pending.push_back(vkev->event);
+        // Move existing event into submitted
+        vkev->events_submitted.push_back(vkev->event);
     }
 
     // Grab the next event and record it, create one if necessary
@@ -15785,9 +15781,6 @@ static void ggml_backend_vk_device_event_free(ggml_backend_dev_t dev, ggml_backe
 
     device->device.destroySemaphore(vkev->tl_semaphore.s);
     for (auto& event : vkev->events_free) {
-        device->device.destroyEvent(event);
-    }
-    for (auto& event : vkev->events_pending) {
         device->device.destroyEvent(event);
     }
     for (auto& event : vkev->events_submitted) {
