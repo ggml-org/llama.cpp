@@ -1897,6 +1897,9 @@ import sys
 from datetime import datetime
 from jinja2.sandbox import SandboxedEnvironment
 
+# Force LF print even on Windows so test results match expected
+sys.stdout.reconfigure(newline="\n")
+
 tmpl = json.loads(sys.argv[1])
 vars_json = json.loads(sys.argv[2])
 
@@ -1921,8 +1924,9 @@ print(result, end='')
 static void test_template_py(testing & t, const std::string & name, const std::string & tmpl, const json & vars, const std::string & expect) {
     t.test(name, [&tmpl, &vars, &expect](testing & t) {
         // Prepare arguments
-        std::string tmpl_json = json(tmpl).dump();
-        std::string vars_json = vars.dump();
+        // Force Ascii only JSON to prevent mismatch on Windows
+        std::string tmpl_json = json(tmpl).dump(-1, ' ', true);
+        std::string vars_json = vars.dump(-1, ' ', true);
 
 #ifdef _WIN32
         const char * python_executable = "python.exe";
