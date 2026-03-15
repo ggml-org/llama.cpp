@@ -479,6 +479,7 @@ analyze_content::analyze_content(const common_chat_template & tmpl, const analyz
 
     if (!comparison_with_tools || !comparison_with_reasoning) {
         LOG_DBG(ANSI_ORANGE "%s: Template application failed\n" ANSI_RESET, __func__);
+        return;
     }
 
     const auto & diff_tools     = comparison_with_tools->diff;
@@ -911,8 +912,10 @@ void analyze_tools::extract_function_markers() {
             // we'll have to rely on an extra diff with no-calls version
             auto notool_comp = compare_variants(
                 *tmpl, params, [&](template_params & p) { p.messages = json::array({ user_msg, assistant_nocall }); });
-            auto nt_diff  = notool_comp->diff;
-            closer_suffix = nt_diff.left.substr(nt_diff.left.find("YYYY") + 4);
+            if (notool_comp) {
+                auto nt_diff  = notool_comp->diff;
+                closer_suffix = nt_diff.left.substr(nt_diff.left.find("YYYY") + 4);
+            }
         } else {
             closer_suffix = diff.suffix.substr(0, diff.suffix.find(suffix_marker));
         }
