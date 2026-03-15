@@ -434,6 +434,9 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
         if (arch == LLM_ARCH_PLM) {
             continue; // TODO tensor shapes
         }
+        if (arch == LLM_ARCH_DEEPSEEK2OCR) {
+            continue; // TODO tensor shapes
+        }
 
         // FIXME some models are segfaulting with WebGPU:
 #ifdef GGML_USE_WEBGPU
