@@ -83,7 +83,8 @@ static inline void compute_2d_workgroups(uint32_t total_wg, uint32_t max_per_dim
 
 #define WEBGPU_NUM_PARAM_BUFS                96u
 #define WEBGPU_COMMAND_SUBMIT_BATCH_SIZE     32u
-#define WEBGPU_WAIT_ANY_TIMEOUT_MS           0
+// This timeout is used for WaitAny calls. It is long enough that it should not be hit under normal circumstances, but short enough to prevent hanging indefinitely if something goes wrong. Implementations are expected to return immediately when the future is completed, so this should not cause unnecessary delays.
+#define WEBGPU_WAIT_ANY_TIMEOUT_NS           3e10
 // Maximum number of in-flight submissions per-thread, to avoid exhausting the
 // parameter buffer pool
 #define WEBGPU_MAX_INFLIGHT_SUBS_PER_THREAD  (WEBGPU_NUM_PARAM_BUFS / WEBGPU_COMMAND_SUBMIT_BATCH_SIZE)
@@ -488,16 +489,16 @@ static void ggml_backend_webgpu_wait_profile_futures(webgpu_global_context &    
         return;
     }
 
-    uint64_t timeout_ms = block ? UINT64_MAX : 0;
+    uint64_t timeout_ns = block ? UINT64_MAX : WEBGPU_WAIT_ANY_TIMEOUT_NS;
     if (block) {
         while (!futures.empty()) {
-            auto waitStatus = ctx->instance.WaitAny(futures.size(), futures.data(), timeout_ms);
+            auto waitStatus = ctx->instance.WaitAny(futures.size(), futures.data(), timeout_ns);
             if (ggml_backend_webgpu_handle_wait_status(waitStatus)) {
                 ggml_backend_webgpu_erase_completed_futures(futures);
             }
         }
     } else {
-        auto waitStatus = ctx->instance.WaitAny(futures.size(), futures.data(), timeout_ms);
+        auto waitStatus = ctx->instance.WaitAny(futures.size(), futures.data(), timeout_ns);
         if (ggml_backend_webgpu_handle_wait_status(waitStatus, true)) {
             ggml_backend_webgpu_erase_completed_futures(futures);
         }
@@ -514,7 +515,9 @@ static void ggml_backend_webgpu_wait(webgpu_global_context &          ctx,
         return;
     }
     while (subs.size() >= WEBGPU_MAX_INFLIGHT_SUBS_PER_THREAD) {
-        auto waitStatus = ctx->instance.WaitAny(1, &subs[0].submit_done, UINT64_MAX);
+      printf("waiting in throttling\n");
+        auto waitStatus = ctx->instance.WaitAny(1, &subs[0].submit_done, WEBGPU_WAIT_ANY_TIMEOUT_NS);
+      printf("done waiting in throttling\n");
         if (ggml_backend_webgpu_handle_wait_status(waitStatus)) {
 #ifdef GGML_WEBGPU_GPU_PROFILE
             ggml_backend_webgpu_wait_profile_futures(ctx, subs[0].profile_futures, true);
@@ -530,7 +533,9 @@ static void ggml_backend_webgpu_wait(webgpu_global_context &          ctx,
     if (block) {
         for (auto & sub : subs) {
             while (!sub.submit_done.completed) {
-                auto waitStatus = ctx->instance.WaitAny(1, &sub.submit_done, UINT64_MAX);
+              printf("waiting in blocking\n");
+                auto waitStatus = ctx->instance.WaitAny(1, &sub.submit_done, WEBGPU_WAIT_ANY_TIMEOUT_NS);
+              printf("done waiting in blocking\n");
                 ggml_backend_webgpu_handle_wait_status(waitStatus);
             }
 #ifdef GGML_WEBGPU_GPU_PROFILE
@@ -541,7 +546,9 @@ static void ggml_backend_webgpu_wait(webgpu_global_context &          ctx,
     } else {
         // Poll each submit future once and remove completed submissions.
         for (auto sub = subs.begin(); sub != subs.end();) {
+          printf("waiting in non-blocking\n");
             auto waitStatus = ctx->instance.WaitAny(1, &sub->submit_done, 0);
+            printf("done waiting in non-blocking\n");
             ggml_backend_webgpu_handle_wait_status(waitStatus, true);
 #ifdef GGML_WEBGPU_GPU_PROFILE
             ggml_backend_webgpu_wait_profile_futures(ctx, sub->profile_futures, false);
@@ -569,7 +576,7 @@ static void ggml_backend_webgpu_map_buffer(webgpu_global_context & ctx,
                                                                  message.data);
                                               }
                                           }),
-                          UINT64_MAX);
+                          WEBGPU_WAIT_ANY_TIMEOUT_NS);
 }
 
 #ifdef GGML_WEBGPU_DEBUG
@@ -2396,7 +2403,7 @@ static void ggml_backend_webgpu_buffer_set_tensor(ggml_backend_buffer_t buffer,
                                                                          std::string(message).c_str());
                                                       }
                                                   }),
-                                              UINT64_MAX);
+                                              WEBGPU_WAIT_ANY_TIMEOUT_NS);
     }
     WEBGPU_CPU_PROFILE_TOTAL_END(set_tensor, buf_ctx->global_ctx);
 }
@@ -2774,7 +2781,7 @@ static bool create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
                 }
                 ctx->webgpu_global_ctx->adapter = std::move(adapter);
             }),
-        UINT64_MAX);
+        WEBGPU_WAIT_ANY_TIMEOUT_NS);
     GGML_ASSERT(ctx->webgpu_global_ctx->adapter != nullptr);
 
     ctx->webgpu_global_ctx->adapter.GetLimits(&ctx->webgpu_global_ctx->capabilities.limits);
@@ -2877,7 +2884,7 @@ static bool create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
                 }
                 ctx->webgpu_global_ctx->device = std::move(device);
             }),
-        UINT64_MAX);
+        WEBGPU_WAIT_ANY_TIMEOUT_NS);
     GGML_ASSERT(ctx->webgpu_global_ctx->device != nullptr);
 
     ggml_webgpu_init_memset_pipeline(ctx->webgpu_global_ctx);
