@@ -2677,11 +2677,71 @@ void llama_context::opt_init(struct llama_model * model, struct llama_opt_params
     GGML_ASSERT(model->hparams.n_ctx_train % n_batch  == 0);
     GGML_ASSERT(n_batch                    % n_ubatch == 0);
 
+    // Recreate the scheduler and gf_res_prev with a training-inflated graph size before
+    // creating opt_ctx, so opt_ctx captures the new (larger) scheduler pointer.
+    // The backward graph (gb_grad) duplicates gf and adds ~2-3x more nodes+leafs;
+    // gb_opt adds optimizer step nodes on top.
+    //
+    // We measure the actual training forward graph node count at n_ubatch here,
+    // then multiply by 4 to cover gf + gb_grad + gb_opt.  This is exact for any
+    // model size — no magic constant needed.
+    {
+        uint32_t train_fwd_nodes = 0;
+
+        // Build a real training-ubatch forward graph in split-only mode (no buffer realloc)
+        // so we can count its actual nodes.  Fall back to n_tensors formula if it fails.
+        if (memory) {
+            auto mctx_tmp = memory->init_full();
+            if (mctx_tmp) {
+                // graph_reserve() uses gf_res_reserve to build the graph, so both
+                // must be large enough to hold the training forward graph.
+                // Use 16x n_tensors as a generous temporary cap for the measurement pass.
+                const uint32_t tmp_cap = std::max<uint32_t>(4096u, 16u * model->n_tensors());
+                gf_res_prev.reset(new llm_graph_result(tmp_cap));
+                gf_res_reserve.reset(new llm_graph_result(tmp_cap));
+                // split_only=true: only splits the graph, doesn't reallocate compute buffers
+                auto * gf_train = graph_reserve(n_ubatch, 1, n_ubatch, mctx_tmp.get(), /*split_only=*/true);
+                if (gf_train) {
+                    train_fwd_nodes = (uint32_t)ggml_graph_n_nodes(gf_train);
+                    LLAMA_LOG_INFO("%s: measured training graph nodes = %u (n_ubatch=%u)\n",
+                                   __func__, train_fwd_nodes, n_ubatch);
+                }
+            }
+        }
+
+        if (train_fwd_nodes == 0) {
+            // Fallback: use n_tensors formula
+            train_fwd_nodes = std::max<uint32_t>(1024u, 8u * model->n_tensors());
+            LLAMA_LOG_WARN("%s: could not measure training graph, using fallback nodes=%u\n",
+                           __func__, train_fwd_nodes);
+        }
+
+        // gf + gb_grad + gb_opt each need ~train_fwd_nodes; multiply by 4 for safety headroom.
+        // Multiply by 2 again for the scheduler's n_nodes + n_leafs check.
+        const int64_t inflated   = (int64_t)std::max<uint32_t>(train_fwd_nodes, 1024u) * 4;
+        const int64_t sched_size = inflated * 2;
+        // Both gf_res_prev and gf_res_reserve are used to build forward graphs
+        // (graph_reserve uses gf_res_reserve; opt_epoch_iter uses gf_res_prev).
+        // Both must have capacity for the full backward graph.
+        gf_res_prev.reset(new llm_graph_result(inflated));
+        gf_res_reserve.reset(new llm_graph_result(inflated));
+        sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(),
+                                           sched_size, cparams.pipeline_parallel, cparams.op_offload));
+        // Suppress the next sched_reserve() call so that llama_decode() during GRPO inference
+        // steps does NOT replace the training sched with a smaller inference sched.
+        // opt_ctx->backend_sched stores a raw pointer to sched.get(); replacing sched while
+        // opt_ctx is alive would leave that pointer dangling and crash on the next opt_epoch.
+        sched_need_reserve = false;
+        LLAMA_LOG_INFO("%s: training graph capacity = %lld (train_fwd_nodes=%u x4)\n",
+                       __func__, (long long)inflated, train_fwd_nodes);
+    }
+
     ggml_opt_params opt_params = ggml_opt_default_params(sched.get(), GGML_OPT_LOSS_TYPE_CROSS_ENTROPY);
-    opt_params.opt_period      = n_batch / n_ubatch;
-    opt_params.get_opt_pars    = lopt_params.get_opt_pars;
-    opt_params.get_opt_pars_ud = lopt_params.get_opt_pars_ud;
-    opt_params.optimizer       = lopt_params.optimizer_type;
+    opt_params.opt_period                = n_batch / n_ubatch;
+    opt_params.get_opt_pars              = lopt_params.get_opt_pars;
+    opt_params.get_opt_pars_ud           = lopt_params.get_opt_pars_ud;
+    opt_params.optimizer                 = lopt_params.optimizer_type;
+    opt_params.grad_checkpoint_interval  = lopt_params.grad_checkpoint_interval;
     opt_ctx = ggml_opt_init(opt_params);
 
     llama_opt_param_filter param_filter = lopt_params.param_filter;
@@ -2716,6 +2776,7 @@ void llama_context::opt_epoch_iter(
         const std::vector<llama_token> & tokens,
         const std::vector<llama_token> & labels_sparse,
         llama_batch                    & batch,
+        float                            reward_scale,
         ggml_opt_epoch_callback          callback,
         bool                             train,
         int64_t                          idata_in_loop,
@@ -2764,6 +2825,8 @@ void llama_context::opt_epoch_iter(
         };
 
         uint32_t pos_batch = 0;
+        static bool timings_printed = false;  // print per-ubatch timings only for the first window
+        struct ggml_context * ctx_compute_opt = nullptr;
         do {
             const auto & ubatch = mctx->get_ubatch();
 
@@ -2776,47 +2839,88 @@ void llama_context::opt_epoch_iter(
 
             auto * res = gf_res_prev.get();
 
+            const int64_t t0_build = ggml_time_ms();
             const auto gparams = graph_params(res, ubatch, mctx.get(), LLM_GRAPH_TYPE_DEFAULT);
 
             res->reset();
 
             auto * gf = model.build_graph(gparams);
 
-            struct ggml_context * ctx_compute_opt;
-            {
+            // Allocate the tensor metadata context once, then reset it each iteration.
+            // ggml_reset() is much cheaper than ggml_free()+ggml_init() — it just resets the
+            // allocation pointer without freeing/reallocating the backing memory buffer.
+            if (!ctx_compute_opt) {
                 const size_t size_gf = ggml_graph_size(gf);
-                const size_t size_meta = 4*size_gf*ggml_tensor_overhead() + 2*ggml_graph_overhead_custom(size_gf, /*grads = */ true);
+                const size_t size_meta = 4*size_gf*ggml_tensor_overhead() + 3*ggml_graph_overhead_custom(size_gf, /*grads = */ true);
                 struct ggml_init_params params = {
                     /*.mem_size   =*/ size_meta,
                     /*.mem_buffer =*/ nullptr,
                     /*.no_alloc   =*/ true,
                 };
                 ctx_compute_opt = ggml_init(params);
+                if (!timings_printed) {
+                    LLAMA_LOG_INFO("%s: [timing] graph capacity=%zu n_nodes=%d size_meta=%.1fMB\n", __func__,
+                            size_gf, ggml_graph_n_nodes(gf), (double)size_meta / (1024*1024));
+                }
+            } else {
+                ggml_reset(ctx_compute_opt);
             }
+
+            const int64_t t1_alloc = ggml_time_ms();
             ggml_opt_prepare_alloc(opt_ctx, ctx_compute_opt, gf, res->get_inp_tokens(), res->get_logits());
             ggml_opt_alloc(opt_ctx, train);
 
+            const int64_t t2_inputs = ggml_time_ms();
             res->set_inputs(&ubatch);
             {
                 struct ggml_tensor * labels = ggml_opt_labels(opt_ctx);
                 GGML_ASSERT(labels->ne[1] == n_ubatch);
                 ggml_set_zero(labels);
-                const float onef = 1.0f;
                 for (uint32_t pos_ubatch = 0; pos_ubatch < n_ubatch; ++pos_ubatch) {
                     const uint32_t ilabel = pos_ctx + pos_batch + pos_ubatch;
+                    // -1 sentinel means "masked position" (prompt token, BOS separator, etc).
+                    // Leave the label tensor zeroed at this position → zero cross-entropy
+                    // contribution.  Do NOT write anything — ggml_set_zero already handled it.
+                    if (labels_sparse[ilabel] < 0) continue;
                     GGML_ASSERT(labels_sparse[ilabel] < labels->ne[0]);
-                    ggml_backend_tensor_set(labels, &onef, (pos_ubatch*labels->ne[0] + labels_sparse[ilabel])*sizeof(float), sizeof(float));
+                    ggml_backend_tensor_set(labels, &reward_scale, (pos_ubatch*labels->ne[0] + labels_sparse[ilabel])*sizeof(float), sizeof(float));
                 }
             }
+
+            const int64_t t3_eval = ggml_time_ms();
             ggml_opt_eval(opt_ctx, result);
+
+            const int64_t t4_done = ggml_time_ms();
+            if (!timings_printed) {
+                LLAMA_LOG_INFO("%s: [timing] build=%" PRId64 "ms alloc=%" PRId64 "ms inputs=%" PRId64 "ms eval=%" PRId64 "ms total=%" PRId64 "ms\n",
+                        __func__,
+                        t1_alloc - t0_build,
+                        t2_inputs - t1_alloc,
+                        t3_eval - t2_inputs,
+                        t4_done - t3_eval,
+                        t4_done - t0_build);
+                timings_printed = true;
+            }
+
             if (callback) {
                 callback(train, opt_ctx, dataset, result, idata_in_loop + (pos_ctx + pos_batch)/n_ubatch + 1, ndata_in_loop, t_loop_start);
             }
-            ggml_free(ctx_compute_opt);
 
             pos_batch += ubatch.n_tokens;
         } while (mctx->next());
+        ggml_free(ctx_compute_opt);
     }
+}
+
+// Optional per-window reward weights for reward-weighted SFT.
+// Set via llama_opt_set_reward_weights() before calling llama_opt_epoch().
+// Null/0 means all rewards are 1.0 (standard SFT).
+static thread_local const float * g_reward_weights   = nullptr;
+static thread_local int64_t       g_reward_weights_n = 0;
+
+void llama_opt_set_reward_weights(const float * weights, int64_t n_weights) {
+    g_reward_weights   = weights;
+    g_reward_weights_n = n_weights;
 }
 
 void llama_context::opt_epoch(
@@ -2825,7 +2929,8 @@ void llama_context::opt_epoch(
         ggml_opt_result_t         result_eval,
         int64_t                   idata_split,
         ggml_opt_epoch_callback   callback_train,
-        ggml_opt_epoch_callback   callback_eval) {
+        ggml_opt_epoch_callback   callback_eval,
+        bool                      shuffle) {
     const uint32_t n_ctx    = this->n_ctx();
     const uint32_t n_batch  = std::min(cparams.n_batch,  n_ctx);
     const uint32_t n_ubatch = std::min(cparams.n_ubatch, n_batch);
@@ -2833,6 +2938,10 @@ void llama_context::opt_epoch(
 
     GGML_ASSERT(idata_split >= 0);
     GGML_ASSERT(idata_split <= ndata);
+
+    if (shuffle && idata_split > 1) {
+        ggml_opt_dataset_shuffle(opt_ctx, dataset, idata_split);
+    }
 
     const uint32_t ubatch_per_ctx = n_ctx / n_ubatch;
 
@@ -2847,9 +2956,11 @@ void llama_context::opt_epoch(
     for (; idata < idata_split; ++idata) {
         constexpr bool train = true;
         const int64_t idata_in_loop = idata*ubatch_per_ctx;
+        const float reward = (g_reward_weights && idata < g_reward_weights_n)
+                             ? g_reward_weights[idata] : 1.0f;
 
         ggml_opt_dataset_get_batch_host(dataset, tokens.data(), n_ctx*sizeof(llama_token), labels_sparse.data(), idata);
-        opt_epoch_iter(dataset, result_train, tokens, labels_sparse, batch,
+        opt_epoch_iter(dataset, result_train, tokens, labels_sparse, batch, reward,
             callback_train, train, idata_in_loop, ndata_in_loop, t_loop_start);
     }
 
@@ -2860,7 +2971,7 @@ void llama_context::opt_epoch(
         const int64_t idata_in_loop = (idata - idata_split)*ubatch_per_ctx;
 
         ggml_opt_dataset_get_batch_host(dataset, tokens.data(), n_ctx*sizeof(llama_token), labels_sparse.data(), idata);
-        opt_epoch_iter(dataset, result_eval, tokens, labels_sparse, batch,
+        opt_epoch_iter(dataset, result_eval, tokens, labels_sparse, batch, 1.0f,
             callback_eval, train, idata_in_loop, ndata_in_loop, t_loop_start);
     }
 
@@ -3622,12 +3733,14 @@ void llama_opt_epoch(
         ggml_opt_result_t         result_eval,
         int64_t                   idata_split,
         ggml_opt_epoch_callback   callback_train,
-        ggml_opt_epoch_callback   callback_eval) {
+        ggml_opt_epoch_callback   callback_eval,
+        bool                      shuffle) {
     ctx->opt_epoch(
         dataset,
         result_train,
         result_eval,
         idata_split,
         callback_train,
-        callback_eval);
+        callback_eval,
+        shuffle);
 }
