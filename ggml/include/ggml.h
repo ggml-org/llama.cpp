@@ -558,6 +558,7 @@ extern "C" {
         GGML_OP_SOLVE_TRI,
         GGML_OP_GATED_DELTA_NET,
         GGML_OP_HADAMARD,
+        GGML_OP_WHERE_ID,
 
         GGML_OP_UNARY,
 
@@ -2478,6 +2479,12 @@ extern "C" {
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
         int                   n);
+
+    GGML_API struct ggml_tensor * ggml_where_id(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        struct ggml_tensor  * ids);
 
     // custom operators
 

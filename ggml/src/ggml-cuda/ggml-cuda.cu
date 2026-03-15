@@ -62,6 +62,7 @@
 #include "ggml-cuda/cumsum.cuh"
 #include "ggml-cuda/fill.cuh"
 #include "ggml-cuda/hadamard.cuh"
+#include "ggml-cuda/where-id.cuh"
 #include "ggml.h"
 
 #include <algorithm>
@@ -2775,6 +2776,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_HADAMARD:
             ggml_cuda_op_hadamard(ctx, dst);
             break;
+        case GGML_OP_WHERE_ID:
+            ggml_cuda_op_where_id(ctx, dst);
+            break;
         default:
             return false;
     }
@@ -5016,6 +5020,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_TRI:
         case GGML_OP_DIAG:
         case GGML_OP_SOLVE_TRI:
+        case GGML_OP_WHERE_ID:
             return true;
         case GGML_OP_HADAMARD:
             return (op->ne[0] == 64 || op->ne[0] == 128 || op->ne[0] == 256) && op->type == GGML_TYPE_F32 && op->src[0]->type == GGML_TYPE_F32;

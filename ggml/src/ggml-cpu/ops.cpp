@@ -11256,3 +11256,81 @@ void ggml_compute_forward_hadamard(
             }
     }
 }
+
+// ggml_compute_forward_where_id
+
+static void ggml_compute_forward_where_id_f32(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+    const ggml_tensor * src2 = dst->src[2];
+
+    GGML_ASSERT(ggml_are_same_shape(src0, src1) && ggml_are_same_shape(src0, dst));
+
+    GGML_ASSERT(dst->type  == GGML_TYPE_F32);
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT(src2->type == GGML_TYPE_I32);
+
+    GGML_ASSERT(src0->nb[0] == sizeof(float));
+    GGML_ASSERT(src1->nb[0] == sizeof(float));
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int nr  = ggml_nrows(src0);
+
+    GGML_TENSOR_TERNARY_OP_LOCALS
+
+    GGML_ASSERT( nb0 == sizeof(float));
+    GGML_ASSERT(nb00 == sizeof(float));
+
+    // rows per thread
+    const int dr = (nr + nth - 1)/nth;
+
+    // row range for this thread
+    const int ir0 = dr*ith;
+    const int ir1 = MIN(ir0 + dr, nr);
+
+    for (int ir = ir0; ir < ir1; ++ir) {
+        // src0 indices
+        const int i3 = ir/(ne2*ne1);
+        const int i2 = (ir - i3*ne2*ne1)/ne1;
+        const int i1 = (ir - i3*ne2*ne1 - i2*ne1);
+
+        const float * src0_ptr = (float *) ((char *) src0->data  + i3*nb3  + i2*nb2  + i1*nb1 );
+        const float * src1_ptr = (float *) ((char *) src1->data  + i3*nb13  + i2*nb12  + i1*nb11 );
+        const int32_t * ids_ptr = (int32_t *) ((char *) src2->data + i3*nb23 + i2*nb22 + i1*nb21);
+        float * dst_ptr = (float *) ((char *) dst->data  + i3*nb3  + i2*nb2  + i1*nb1 );
+
+        // copy whole row from src1
+        ggml_vec_cpy_f32(ne00, dst_ptr, src1_ptr);
+
+        // copy only values from src0 indicated by indices in src2
+        for (int j = 0; j < ne20; ++j) {
+            int id = ids_ptr[j];
+            GGML_ASSERT(id >= 0 && id < ne00);
+            dst_ptr[id] = src0_ptr[id];
+        }
+    }
+}
+
+void ggml_compute_forward_where_id(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_where_id_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("unsupported type for ggml_compute_forward_where_id: %s", ggml_type_name(src0->type));
+            }
+    }
+}
