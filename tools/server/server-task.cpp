@@ -382,7 +382,8 @@ task_params server_task::params_from_json_cmpl(
             throw std::runtime_error(std::string("\"json_schema\": ") + e.what());
         }
     } else {
-        params.sampling.grammar      = json_value(data, "grammar", defaults.sampling.grammar);
+        params.sampling.grammar          = json_value(data, "grammar", defaults.sampling.grammar);
+        params.sampling.grammar_external = json_value(data, "grammar_external", params.sampling.grammar_external);
         SRV_DBG("Grammar: %s\n", params.sampling.grammar.c_str());
         params.sampling.grammar_lazy = json_value(data, "grammar_lazy", defaults.sampling.grammar_lazy);
         SRV_DBG("Grammar lazy: %s\n", params.sampling.grammar_lazy ? "true" : "false");

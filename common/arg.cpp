@@ -1833,6 +1833,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         string_format("BNF-like grammar to constrain generations (see samples in grammars/ dir) (default: '%s')", params.sampling.grammar.c_str()),
         [](common_params & params, const std::string & value) {
             params.sampling.grammar = value;
+            params.sampling.grammar_external = true;
         }
     ).set_sparam());
     add_opt(common_arg(
@@ -1840,6 +1841,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "file to read grammar from",
         [](common_params & params, const std::string & value) {
             params.sampling.grammar = read_file(value);
+            params.sampling.grammar_external = true;
         }
     ).set_sparam());
     add_opt(common_arg(

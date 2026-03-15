@@ -1629,7 +1629,7 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
     }
 
     try {
-        LOG_DBG("Using differential autoparser\n");
+        LOG_DBG("%s: using differential autoparser\n", __func__);
         struct autoparser::autoparser autoparser;
         autoparser.analyze_template(tmpl);
         auto auto_params = autoparser::peg_generator::generate_parser(tmpl, params, autoparser);
@@ -1639,6 +1639,9 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
             auto_params.thinking_end_tag   = autoparser.reasoning.end;
         }
         auto_params.generation_prompt = params.generation_prompt;
+        common_peg_arena arena;
+        arena.load(auto_params.parser);
+        LOG_DBG("%s: generated parser:\n%s\n\nparser generation prompt: %s\n", __func__, arena.dump(arena.root()).c_str(), auto_params.generation_prompt.c_str());
         return auto_params;
     } catch (const std::exception & e) {
         throw std::invalid_argument(std::string("Unable to generate parser for this template. Automatic parser generation failed: ") + e.what());

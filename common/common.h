@@ -231,12 +231,14 @@ struct common_params_sampling {
     std::string                         grammar; // optional BNF-like grammar to constrain sampling
     bool                                grammar_lazy = false;
     std::vector<common_grammar_trigger> grammar_triggers; // optional triggers (for lazy grammars)
+    bool                                grammar_external = false; // is the grammar set by the user explicitly?
+                                                                  // if so, we must not pass extra grammar prefill to it
     std::set<llama_token>               preserved_tokens;
 
     std::vector<llama_logit_bias> logit_bias;     // logit biases to apply
     std::vector<llama_logit_bias> logit_bias_eog; // pre-calculated logit biases for EOG tokens
 
-    // Grammar prefill: reasoning markers already present in the prompt suffix.
+    // Grammar prefill: tokens already present in the prompt generation message.
     // Fed to the grammar sampler (to advance past pre-existing tokens) and used
     // to determine the reasoning budget sampler's initial state.
     std::string grammar_prefill;
