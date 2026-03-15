@@ -152,6 +152,12 @@
 
 	let sheetOpen = $state(false);
 	let showModelDialog = $state(false);
+	let infoModelId = $state<string | null>(null);
+
+	function handleInfoClick(modelName: string) {
+		infoModelId = modelName;
+		showModelDialog = true;
+	}
 
 	onMount(() => {
 		modelsStore.fetch().catch((error) => {
@@ -366,6 +372,7 @@
 										{isFav}
 										showOrgName={group.isFavouritesGroup || group.isLoadedGroup}
 										onSelect={handleSelect}
+										onInfoClick={handleInfoClick}
 										onMouseEnter={() => {}}
 										onKeyDown={() => {}}
 									/>
@@ -403,6 +410,6 @@
 	{/if}
 </div>
 
-{#if showModelDialog && !isRouter}
-	<DialogModelInformation bind:open={showModelDialog} />
+{#if showModelDialog}
+	<DialogModelInformation bind:open={showModelDialog} modelId={infoModelId} />
 {/if}

@@ -1,5 +1,14 @@
 <script lang="ts">
-	import { CircleAlert, Heart, HeartOff, Loader2, Power, PowerOff, RotateCw } from '@lucide/svelte';
+	import {
+		CircleAlert,
+		Heart,
+		HeartOff,
+		Info,
+		Loader2,
+		Power,
+		PowerOff,
+		RotateCw
+	} from '@lucide/svelte';
 	import { cn } from '$lib/components/ui/utils';
 	import { ActionIcon, ModelId } from '$lib/components/app';
 	import type { ModelOption } from '$lib/types/models';
@@ -15,6 +24,7 @@
 		onSelect: (modelId: string) => void;
 		onMouseEnter: () => void;
 		onKeyDown: (e: KeyboardEvent) => void;
+		onInfoClick?: (modelName: string) => void;
 	}
 
 	let {
@@ -25,7 +35,8 @@
 		showOrgName = false,
 		onSelect,
 		onMouseEnter,
-		onKeyDown
+		onKeyDown,
+		onInfoClick
 	}: Props = $props();
 
 	let currentRouterModels = $derived(routerModels());
@@ -88,6 +99,23 @@
 				/>
 			{/if}
 		</div>
+		<!-- info button: only shown when model is loaded and callback is provided -->
+		{#if isLoaded && onInfoClick}
+			<!-- svelte-ignore a11y_no_static_element_interactions -->
+			<!-- svelte-ignore a11y_click_events_have_key_events -->
+			<div
+				class="pointer-events-none flex w-4 items-center justify-center opacity-0 group-hover:pointer-events-auto group-hover:opacity-100"
+				onclick={(e) => e.stopPropagation()}
+			>
+				<ActionIcon
+					iconSize="h-2.5 w-2.5"
+					icon={Info}
+					tooltip="Model information"
+					class="h-3 w-3 hover:text-foreground"
+					onclick={() => onInfoClick(option.model)}
+				/>
+			</div>
+		{/if}
 		{#if isLoading}
 			<Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
 		{:else if isFailed}

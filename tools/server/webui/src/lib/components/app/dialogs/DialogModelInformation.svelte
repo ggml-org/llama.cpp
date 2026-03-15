@@ -5,21 +5,38 @@
 	import { serverStore } from '$lib/stores/server.svelte';
 	import { modelsStore, modelOptions, modelsLoading } from '$lib/stores/models.svelte';
 	import { formatFileSize, formatParameters, formatNumber } from '$lib/utils';
+	import type { ApiLlamaCppServerProps } from '$lib/types';
 
 	interface Props {
 		open?: boolean;
 		onOpenChange?: (open: boolean) => void;
+		// when set, fetch props from the child process (router mode)
+		modelId?: string | null;
 	}
 
-	let { open = $bindable(), onOpenChange }: Props = $props();
+	let { open = $bindable(), onOpenChange, modelId = null }: Props = $props();
 
-	let serverProps = $derived(serverStore.props);
-	let modelName = $derived(modelsStore.singleModelName);
+	let isRouter = $derived(serverStore.isRouterMode);
+
+	// per-model props fetched from the child process
+	let routerModelProps = $state<ApiLlamaCppServerProps | null>(null);
+	let isLoadingRouterProps = $state(false);
+
+	// in router mode use per-model props, otherwise use global props
+	let serverProps = $derived(isRouter && modelId ? routerModelProps : serverStore.props);
+
+	let modelName = $derived(isRouter && modelId ? modelId : modelsStore.singleModelName);
 	let models = $derived(modelOptions());
 	let isLoadingModels = $derived(modelsLoading());
 
-	// Get the first model for single-model mode display
-	let firstModel = $derived(models[0] ?? null);
+	// in router mode, find the model option matching modelId
+	// in single mode, use the first model as before
+	let firstModel = $derived.by(() => {
+		if (isRouter && modelId) {
+			return models.find((m) => m.model === modelId) ?? null;
+		}
+		return models[0] ?? null;
+	});
 
 	// Get modalities from modelStore using the model ID from the first model
 	let modalities = $derived.by(() => {
@@ -31,6 +48,27 @@
 	$effect(() => {
 		if (open && models.length === 0) {
 			modelsStore.fetch();
+		}
+	});
+
+	// fetch per-model props from child process when dialog opens in router mode
+	$effect(() => {
+		if (open && isRouter && modelId) {
+			isLoadingRouterProps = true;
+			modelsStore
+				.fetchModelProps(modelId)
+				.then((props) => {
+					routerModelProps = props;
+				})
+				.catch(() => {
+					routerModelProps = null;
+				})
+				.finally(() => {
+					isLoadingRouterProps = false;
+				});
+		}
+		if (!open) {
+			routerModelProps = null;
 		}
 	});
 </script>
@@ -52,7 +90,7 @@
 		</Dialog.Header>
 
 		<div class="space-y-6 py-4">
-			{#if isLoadingModels}
+			{#if isLoadingModels || isLoadingRouterProps}
 				<div class="flex items-center justify-center py-8">
 					<div class="text-sm text-muted-foreground">Loading model information...</div>
 				</div>
