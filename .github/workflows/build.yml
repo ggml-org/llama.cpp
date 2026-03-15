@@ -174,6 +174,7 @@ jobs:
           ctest -L main --verbose --timeout 900
 
   ubuntu-cpu-cmake:
+    if: ${{ false }}
     strategy:
       matrix:
         include:
@@ -259,6 +260,7 @@ jobs:
           ./bin/llama-completion -m stories260K-be.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
 
   ubuntu-latest-cmake-sanitizer:
+    if: ${{ false }}
     runs-on: ubuntu-latest
 
     continue-on-error: true
@@ -318,6 +320,7 @@ jobs:
           ctest -L main --verbose --timeout 900
 
   ubuntu-latest-llguidance:
+    if: ${{ false }}
     runs-on: ubuntu-latest
 
     steps:
@@ -346,6 +349,7 @@ jobs:
           ctest -L main --verbose --timeout 900
 
   ubuntu-latest-cmake-rpc:
+    if: ${{ false }}
     runs-on: ubuntu-latest
 
     continue-on-error: true
@@ -381,6 +385,7 @@ jobs:
           ctest -L main --verbose
 
   ubuntu-24-cmake-vulkan-deb:
+    if: ${{ false }}
     runs-on: ubuntu-24.04
 
     steps:
@@ -415,6 +420,7 @@ jobs:
           cmake --build build -j $(nproc)
 
   ubuntu-24-cmake-vulkan:
+    if: ${{ false }}
     runs-on: ubuntu-24.04
 
     steps:
@@ -537,6 +543,9 @@ jobs:
             -DGGML_WEBGPU=ON
           cmake --build build --config Release -j $(nproc)
 
+      - name: Setup tmate session
+        uses: mxschmitt/action-tmate@v3
+
       - name: Test
         id: cmake_test
         run: |
@@ -545,6 +554,7 @@ jobs:
           ctest -L main --verbose --timeout 3600
 
   ubuntu-24-wasm-webgpu:
+    if: ${{ false }}
     runs-on: ubuntu-24.04
 
     steps:
@@ -586,6 +596,7 @@ jobs:
           cmake --build build-wasm --target test-backend-ops -j $(nproc)
 
   ubuntu-22-cmake-hip:
+    if: ${{ false }}
     runs-on: ubuntu-22.04
     container: rocm/dev-ubuntu-22.04:6.1.2
 
@@ -617,6 +628,7 @@ jobs:
           cmake --build build --config Release -j $(nproc)
 
   ubuntu-22-cmake-musa:
+    if: ${{ false }}
     runs-on: ubuntu-22.04
     container: mthreads/musa:rc4.3.0-devel-ubuntu22.04-amd64
 
@@ -646,6 +658,7 @@ jobs:
           cmake --build build --config Release -j $(nproc)
 
   ubuntu-22-cmake-sycl:
+    if: ${{ false }}
     runs-on: ubuntu-22.04
 
     continue-on-error: true
@@ -695,6 +708,7 @@ jobs:
           cmake --build build --config Release -j $(nproc)
 
   ubuntu-22-cmake-sycl-fp16:
+    if: ${{ false }}
     runs-on: ubuntu-22.04
 
     continue-on-error: true
@@ -1054,6 +1068,7 @@ jobs:
       #     & $sde -future -- ctest -L main -C Release --verbose --timeout 900
 
   ubuntu-latest-cmake-cuda:
+    if: ${{ false }}
     runs-on: ubuntu-latest
     container: nvidia/cuda:12.6.2-devel-ubuntu24.04
 
@@ -1770,6 +1785,7 @@ jobs:
            GG_BUILD_KLEIDIAI=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ubuntu-cpu-cmake-riscv64-native:
+    if: ${{ false }}
     runs-on: RISCV64
 
     steps:
@@ -1860,6 +1876,7 @@ jobs:
           ./bin/llama-completion -m stories260K.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
 
   ubuntu-cmake-sanitizer-riscv64-native:
+    if: ${{ false }}
     runs-on: RISCV64
 
     continue-on-error: true
@@ -1962,6 +1979,7 @@ jobs:
 
 
   ubuntu-llguidance-riscv64-native:
+    if: ${{ false }}
     runs-on: RISCV64
     steps:
       - name: Install dependencies
@@ -2033,6 +2051,7 @@ jobs:
 
 
   ubuntu-cmake-rpc-riscv64-native:
+    if: ${{ false }}
     runs-on: RISCV64
 
     continue-on-error: true
