@@ -178,6 +178,12 @@ enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_COUNT          // number of types, unknown type
 };
 
+enum common_host_family {
+    COMMON_HOST_FAMILY_AF_UNSPEC,
+    COMMON_HOST_FAMILY_AF_INET,
+    COMMON_HOST_FAMILY_AF_INET6,
+};
+
 // sampling parameters
 struct common_params_sampling {
     uint32_t seed = LLAMA_DEFAULT_SEED; // the seed used to initialize llama_sampler
@@ -538,10 +544,11 @@ struct common_params {
     int32_t checkpoint_every_nt = 8192;   // make a checkpoint every n tokens during prefill
     int32_t cache_ram_mib       = 8192;  // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
 
-    std::string hostname      = "127.0.0.1";
-    std::string public_path   = "";                                                                         // NOLINT
-    std::string api_prefix    = "";                                                                         // NOLINT
-    std::string chat_template = "";                                                                         // NOLINT
+    std::string hostname           = "127.0.0.1";
+    common_host_family host_family = COMMON_HOST_FAMILY_AF_UNSPEC;                                          // NOLINT
+    std::string public_path        = "";                                                                    // NOLINT
+    std::string api_prefix         = "";                                                                    // NOLINT
+    std::string chat_template      = "";                                                                    // NOLINT
     bool use_jinja = true;                                                                                  // NOLINT
     bool enable_chat_template = true;
     common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;

@@ -59,6 +59,7 @@ struct server_http_context {
 
     std::string path_prefix;
     std::string hostname;
+    int host_family;
     int port;
 
     server_http_context();
