@@ -264,65 +264,6 @@ jobs:
           wget https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories260K-be.gguf
           ./bin/llama-completion -m stories260K-be.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
 
-  ubuntu-latest-sanitizer:
-    runs-on: ubuntu-latest
-
-    continue-on-error: true
-
-    strategy:
-      matrix:
-        sanitizer: [ADDRESS, THREAD, UNDEFINED]
-        build_type: [Debug]
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
-        with:
-          key: ubuntu-latest-sanitizer-${{ matrix.sanitizer }}
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-      - name: Dependencies
-        id: depends
-        run: |
-          sudo apt-get update
-          sudo apt-get install build-essential libssl-dev
-
-      - name: Build
-        id: cmake_build
-        if: ${{ matrix.sanitizer != 'THREAD' }}
-        run: |
-          cmake -B build \
-            -DLLAMA_FATAL_WARNINGS=ON \
-            -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
-            -DGGML_SANITIZE_${{ matrix.sanitizer }}=ON \
-            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
-
-          cmake --build build --config ${{ matrix.build_type }} -j $(nproc)
-
-      - name: Build (no OpenMP)
-        id: cmake_build_no_openmp
-        if: ${{ matrix.sanitizer == 'THREAD' }}
-        run: |
-          cmake -B build \
-            -DLLAMA_FATAL_WARNINGS=ON \
-            -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
-            -DGGML_SANITIZE_${{ matrix.sanitizer }}=ON \
-            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-            -DGGML_OPENMP=OFF
-
-          cmake --build build --config ${{ matrix.build_type }} -j $(nproc)
-
-      - name: Test
-        id: cmake_test
-        run: |
-          cd build
-          ctest -L main --verbose --timeout 900
-
   ubuntu-latest-rpc:
     runs-on: ubuntu-latest
 
