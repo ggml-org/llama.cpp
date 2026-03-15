@@ -7001,21 +7001,13 @@ static sycl::event ggml_sycl_fill_reordered_host(sycl::queue &                  
         ggml_sycl_staging_pool().release(host_src);
     }
 
-    // Wait for any deps before starting the copy, but ONLY if they weren't already consumed.
-    // NOTE: Avoid ext_oneapi_submit_barrier which can corrupt Level Zero event state.
-    if (!deps_consumed) {
-        for (const auto & dep : deps) {
-            try {
-                // sycl::event::wait() is non-const, so use const_cast
-                const_cast<sycl::event &>(dep).wait();
-            } catch (...) {
-                // Ignore - event may have issues
-            }
-        }
-    }
+    // Build the dependency list for the H2D copy.
+    // If deps were already consumed by the D2H staging copy (src_is_device path),
+    // the in-order queue serializes them implicitly.  Otherwise, chain unconsumed
+    // deps into the memcpy submission so the GPU waits without blocking the host.
+    const std::vector<sycl::event> no_deps;
+    const std::vector<sycl::event> & copy_deps = deps_consumed ? no_deps : deps;
 
-    // Copy reordered data to destination and wait for completion.
-    // NOTE: We do synchronous wait and free to avoid host_task issues with Level Zero driver.
     GGML_SYCL_DEBUG("[DEBUG-FILL] memcpy dst=%p src=%p size=%zu\n", dst, reorder_buf, dst_size);
 
     // Check destination pointer type
@@ -7026,25 +7018,35 @@ static sycl::event ggml_sycl_fill_reordered_host(sycl::queue &                  
     GGML_SYCL_DEBUG("[DEBUG-FILL] dst_align64=%zu dst_align4096=%zu\n", static_cast<size_t>(dst_addr % 64),
                     static_cast<size_t>(dst_addr % 4096));
 
-    // For host→host copies, use CPU memcpy to avoid device staging (prevents OOM when device is full)
+    // For host->host copies, use CPU memcpy to avoid device staging (prevents OOM when device is full)
     const bool  dst_is_host = (dst_type == sycl::usm::alloc::host || dst_type == sycl::usm::alloc::shared);
     sycl::event copy_event;
+    void *      staging_ptr = reorder_buf_raw ? reorder_buf_raw : reorder_buf;
     if (dst_is_host) {
-        // CPU memcpy for host→host: faster and doesn't require device memory staging
-        GGML_SYCL_DEBUG("[DEBUG-FILL] Using CPU memcpy for host→host copy\n");
+        // CPU memcpy for host->host: faster and doesn't require device memory staging
+        GGML_SYCL_DEBUG("[DEBUG-FILL] Using CPU memcpy for host->host copy\n");
         std::memcpy(dst, reorder_buf, dst_size);
+        // Synchronous -- staging buffer is safe to release immediately.
+        ggml_sycl_staging_pool().release(staging_ptr);
         // Return a completed barrier event since no async work was done
         std::vector<sycl::event> empty_deps;
         copy_event = queue.ext_oneapi_submit_barrier(empty_deps);
     } else {
-        // GPU memcpy for host→device
-        copy_event = queue.memcpy(dst, reorder_buf, dst_size);
-        copy_event.wait();
+        // GPU memcpy for host->device -- submit asynchronously, no host wait.
+        // The caller (ensure_cached_layout) waits on the returned event.
+        if (copy_deps.empty()) {
+            copy_event = queue.memcpy(dst, reorder_buf, dst_size);
+        } else {
+            copy_event = queue.submit([&](sycl::handler & cgh) {
+                cgh.depends_on(copy_deps);
+                cgh.memcpy(dst, reorder_buf, dst_size);
+            });
+        }
+        // Release staging buffer with the pending event.  The pool defers
+        // reuse until the event completes, so the H2D copy reads valid data.
+        ggml_sycl_staging_pool().release(staging_ptr, copy_event);
     }
 
-    ggml_sycl_staging_pool().release(reorder_buf_raw ? reorder_buf_raw : reorder_buf);
-    // Return the copy_event - it's now complete and safe to wait on again.
-    // Avoiding ext_oneapi_submit_barrier() which can produce corrupt events on Level Zero.
     return copy_event;
 }
 

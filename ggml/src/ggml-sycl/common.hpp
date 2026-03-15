@@ -1613,9 +1613,11 @@ inline void ggml_sycl_free_host_tracked_t(T * ptr, size_t count, sycl::queue & q
 // --------------------------------------------------------------------------
 struct staging_buffer_pool {
     struct slot {
-        void * ptr  = nullptr;
-        size_t size = 0;
-        bool   in_use = false;
+        void *      ptr               = nullptr;
+        size_t      size              = 0;
+        bool        in_use            = false;
+        bool        has_pending_event = false;
+        sycl::event pending_event;
     };
 
     ~staging_buffer_pool() {
@@ -1647,8 +1649,18 @@ struct staging_buffer_pool {
             }
         }
         if (best_idx != SIZE_MAX) {
-            slots_[best_idx].in_use = true;
-            return slots_[best_idx].ptr;
+            auto & best = slots_[best_idx];
+            // Wait for any pending async copy before reusing the buffer.
+            if (best.has_pending_event) {
+                try {
+                    best.pending_event.wait();
+                } catch (...) {
+                    // Event may be invalid after device reset — safe to ignore.
+                }
+                best.has_pending_event = false;
+            }
+            best.in_use = true;
+            return best.ptr;
         }
 
         // No suitable slot — allocate a new pinned buffer.
@@ -1685,6 +1697,26 @@ struct staging_buffer_pool {
             }
         }
         // ptr not found — should not happen; log but don't crash.
+        GGML_LOG_WARN("[staging_buffer_pool] release called with unknown ptr %p\n", ptr);
+    }
+
+    // Mark buffer as available for reuse with a pending async event.
+    // The next acquire() that selects this slot will wait on the event
+    // before returning the buffer, ensuring the async copy completes
+    // before the buffer contents are overwritten.
+    void release(void * ptr, sycl::event evt) {
+        if (!ptr) {
+            return;
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (auto & s : slots_) {
+            if (s.ptr == ptr) {
+                s.in_use            = false;
+                s.has_pending_event = true;
+                s.pending_event     = std::move(evt);
+                return;
+            }
+        }
         GGML_LOG_WARN("[staging_buffer_pool] release called with unknown ptr %p\n", ptr);
     }
 
