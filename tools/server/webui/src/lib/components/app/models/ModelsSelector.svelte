@@ -53,6 +53,7 @@
 	let activeId = $derived(selectedModelId());
 	let isRouter = $derived(isRouterMode());
 	let serverModel = $derived(singleModelName());
+	let infoModelId = $state<string | null>(null);
 
 	let isHighlightedCurrentModelActive = $derived.by(() => {
 		if (!isRouter || !currentModel) return false;
@@ -95,7 +96,6 @@
 			items: { option: ModelOption; flatIndex: number }[];
 		}[] = [];
 
-		// Loaded models group (top)
 		const loadedItems: { option: ModelOption; flatIndex: number }[] = [];
 		for (let i = 0; i < filteredOptions.length; i++) {
 			if (modelsStore.isModelLoaded(filteredOptions[i].model)) {
@@ -112,7 +112,6 @@
 			});
 		}
 
-		// Favourites group
 		const loadedModelIds = new Set(loadedItems.map((item) => item.option.model));
 		const favItems: { option: ModelOption; flatIndex: number }[] = [];
 		for (let i = 0; i < filteredOptions.length; i++) {
@@ -130,7 +129,6 @@
 			});
 		}
 
-		// Org groups (excluding loaded and favourites)
 		const orgGroups = new SvelteMap<string, { option: ModelOption; flatIndex: number }[]>();
 		for (let i = 0; i < filteredOptions.length; i++) {
 			const option = filteredOptions[i];
@@ -399,7 +397,6 @@
 					>
 						<div class="models-list">
 							{#if !isCurrentModelInCache && currentModel}
-								<!-- Show unavailable model as first option (disabled) -->
 								<button
 									type="button"
 									class="flex w-full cursor-not-allowed items-center bg-red-400/10 p-2 text-left text-sm text-red-400"
@@ -454,6 +451,11 @@
 												handleSelect(option.id);
 											}
 										}}
+										onShowInfo={async () => {
+											infoModelId = option.id; // ID merken
+											handleOpenChange(false);
+											showModelDialog = true;
+										}}
 									/>
 								{/each}
 							{/each}
@@ -500,6 +502,9 @@
 	{/if}
 </div>
 
-{#if showModelDialog && !isRouter}
-	<DialogModelInformation bind:open={showModelDialog} />
+{#if showModelDialog}
+	<DialogModelInformation 
+		bind:open={showModelDialog} 
+		modelId={infoModelId} 
+	/>
 {/if}

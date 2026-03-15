@@ -2,32 +2,41 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Table from '$lib/components/ui/table';
 	import { BadgeModality, ActionIconCopyToClipboard } from '$lib/components/app';
-	import { serverStore } from '$lib/stores/server.svelte';
 	import { modelsStore, modelOptions, modelsLoading } from '$lib/stores/models.svelte';
 	import { formatFileSize, formatParameters, formatNumber } from '$lib/utils';
 
 	interface Props {
 		open?: boolean;
 		onOpenChange?: (open: boolean) => void;
+		modelId?: string | null; // Neue Prop für das gewählte Modell
 	}
 
-	let { open = $bindable(), onOpenChange }: Props = $props();
+	let { open = $bindable(), onOpenChange, modelId = null }: Props = $props();
 
-	let serverProps = $derived(serverStore.props);
-	let modelName = $derived(modelsStore.singleModelName);
 	let models = $derived(modelOptions());
 	let isLoadingModels = $derived(modelsLoading());
 
-	// Get the first model for single-model mode display
-	let firstModel = $derived(models[0] ?? null);
-
-	// Get modalities from modelStore using the model ID from the first model
-	let modalities = $derived.by(() => {
-		if (!firstModel?.id) return [];
-		return modelsStore.getModelModalitiesArray(firstModel.id);
+	// Finde das spezifische Modell anhand der ID oder nimm das erste als Fallback
+	let selectedModel = $derived.by(() => {
+		if (modelId) {
+			return models.find(m => m.id === modelId) || models[0];
+		}
+		return models[0] ?? null;
 	});
 
-	// Ensure models are fetched when dialog opens
+	// Hol die spezifischen Server-Props für dieses Modell aus dem modelStore
+	let serverProps = $derived.by(() => {
+		if (!selectedModel) return null;
+		return modelsStore.getModelProps(selectedModel.model);
+	});
+
+	let modelName = $derived(selectedModel?.model ?? '');
+
+	let modalities = $derived.by(() => {
+		if (!selectedModel?.id) return [];
+		return modelsStore.getModelModalitiesArray(selectedModel.id);
+	});
+
 	$effect(() => {
 		if (open && models.length === 0) {
 			modelsStore.fetch();
@@ -56,8 +65,8 @@
 				<div class="flex items-center justify-center py-8">
 					<div class="text-sm text-muted-foreground">Loading model information...</div>
 				</div>
-			{:else if firstModel}
-				{@const modelMeta = firstModel.meta}
+			{:else if selectedModel}
+				{@const modelMeta = selectedModel.meta}
 
 				{#if serverProps}
 					<Table.Root>
