@@ -563,7 +563,7 @@ def test_cancel_request():
     except requests.exceptions.ReadTimeout:
         pass # expected
     # make sure the slot is free
-    time.sleep(1) # wait for HTTP_POLLING_SECONDS
+    time.sleep(2)
     res = server.make_request("GET", "/slots")
     assert res.body[0]["is_processing"] == False
 
