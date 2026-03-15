@@ -713,9 +713,9 @@ class ModelBase:
 
         # Some models use per-tensor quant_algo (e.g. "MIXED_PRECISION" with
         # per-layer NVFP4/FP8) instead of a single global "NVFP4" value.
-        # Detect NVFP4 by checking for weight_scale tensors in the model.
         if quant_algo != "NVFP4":
-            if any(k.endswith(".weight_scale") for k in self.model_tensors.keys()):
+            quant_layers = (self.hparams.get("quantization_config") or {}).get("quantized_layers", {})
+            if any(v.get("quant_algo") == "NVFP4" for v in quant_layers.values() if isinstance(v, dict)):
                 quant_algo = "NVFP4"
 
         self._is_nvfp4 = quant_algo == "NVFP4"
