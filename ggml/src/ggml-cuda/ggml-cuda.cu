@@ -119,12 +119,6 @@ int ggml_cuda_get_device() {
 
 static cudaError_t ggml_cuda_device_malloc(void ** ptr, size_t size, int device) {
     ggml_cuda_set_device(device);
-    {
-        size_t mem_free = 0, mem_total = 0;
-        cudaMemGetInfo(&mem_free, &mem_total);
-        GGML_LOG_DEBUG("%s: before alloc %.2f MiB, free %.2f MiB / total %.2f MiB\n",
-            __func__, size/1024.0/1024.0, mem_free/1024.0/1024.0, mem_total/1024.0/1024.0);
-    }
     cudaError_t err;
     if (getenv("GGML_CUDA_ENABLE_UNIFIED_MEMORY") != nullptr) {
         err = cudaMallocManaged(ptr, size);
@@ -247,7 +241,6 @@ static ggml_cuda_device_info ggml_cuda_init() {
 
         info.default_tensor_split[id] = total_vram;
         total_vram += prop.totalGlobalMem;
-        info.devices[id].total_vram = prop.totalGlobalMem;
         info.devices[id].integrated = false; // Temporarily disabled due to issues with corrupted output (e.g. #15034)
         info.devices[id].nsm        = prop.multiProcessorCount;
         info.devices[id].smpb       = prop.sharedMemPerBlock;
