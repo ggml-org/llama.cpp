@@ -999,6 +999,19 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp, false);
                 ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,         hparams.expert_weights_norm, false);
 
+                // Yuan uses a double causal Conv2d (kernel_size=2) for localized filtering.
+                // We cache 2 previous pre-LF hidden states per layer via the recurrent state infrastructure.
+                // ssm_d_conv=3 → n_embd_r = (3-1)*n_embd = 2*n_embd (two cached states)
+                // ssm_d_inner=n_embd, ssm_d_state=0 → n_embd_s = 0 (no SSM state)
+                // The two cached states allow exact computation of both conv1 and conv2
+                // at sequence boundaries (conv2 needs the previous conv1 output, which in
+                // turn needs two consecutive pre-LF hidden states).
+                hparams.ssm_d_conv  = 3;
+                hparams.ssm_d_inner = hparams.n_embd;
+
+                // All layers have both attention and recurrent (conv) components
+                std::fill(hparams.recurrent_layer_arr.begin(), hparams.recurrent_layer_arr.end(), true);
+
                 switch (hparams.n_layer) {
                     case 24: type = LLM_TYPE_UNKNOWN; break;
                     default: type = LLM_TYPE_UNKNOWN;
@@ -7845,7 +7858,8 @@ void llama_model::print_info() const {
         arch == LLM_ARCH_QWEN35 ||
         arch == LLM_ARCH_QWEN35MOE ||
         arch == LLM_ARCH_NEMOTRON_H ||
-        arch == LLM_ARCH_NEMOTRON_H_MOE) {
+        arch == LLM_ARCH_NEMOTRON_H_MOE ||
+        arch == LLM_ARCH_YUAN) {
         LLAMA_LOG_INFO("%s: ssm_d_conv            = %u\n",     __func__, hparams.ssm_d_conv);
         LLAMA_LOG_INFO("%s: ssm_d_inner           = %u\n",     __func__, hparams.ssm_d_inner);
         LLAMA_LOG_INFO("%s: ssm_d_state           = %u\n",     __func__, hparams.ssm_d_state);
@@ -8080,7 +8094,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                     // layer filters, so pick the right one here
                     llama_memory_hybrid::layer_filter_cb filter_attn = nullptr;
                     llama_memory_hybrid::layer_filter_cb filter_recr = nullptr;
-                    if (arch == LLM_ARCH_FALCON_H1) {
+                    if (arch == LLM_ARCH_FALCON_H1 || arch == LLM_ARCH_YUAN) {
                         filter_attn = [&](int32_t) { return true; };
                         filter_recr = [&](int32_t) { return true; };
                     } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {

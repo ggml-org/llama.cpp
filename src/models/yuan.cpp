@@ -1,5 +1,8 @@
 #include "models.h"
 
+#include "llama-memory-hybrid.h"
+#include "llama-memory-recurrent.h"
+
 llm_build_yuan::llm_build_yuan(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
@@ -13,9 +16,16 @@ llm_build_yuan::llm_build_yuan(const llama_model & model, const llm_graph_params
     // inp_pos - contains the positions
     ggml_tensor * inp_pos = build_inp_pos();
 
-    auto * inp_attn = build_attn_inp_kv();
+    // hybrid memory: KV cache (attention) + recurrent state cache (conv states)
+    auto * inp = build_inp_mem_hybrid();
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
+
+    const auto * mctx_cur = static_cast<const llama_memory_hybrid_context *>(mctx);
+    const auto * mctx_recr = mctx_cur->get_recr();
+    const auto   kv_head = mctx_recr->get_head();
+    const int64_t n_seqs = ubatch.n_seqs;
+    const int64_t n_seq_tokens = ubatch.n_seq_tokens;
 
     for (int il = 0; il < n_layer; ++il) {
         ggml_tensor * inpSA = inpL;
@@ -30,64 +40,109 @@ llm_build_yuan::llm_build_yuan(const llama_model & model, const llm_graph_params
         ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
         cb(Vcur, "Vcur", il);
 
-        // localized filtering (causal conv2d with kernel_size=2)
-        // output[t] = W0 @ input[t] + W1 @ input[t-1] + bias  (input[-1] = 0)
+        // localized filtering (double causal Conv2d, kernel_size=2)
+        // Uses 2 cached pre-LF hidden states for exact causal continuity.
         //
-        // Weight stored as [in_ch, 2*out_ch]: W0||W1 concatenated in output dim.
-        // One matmul produces both parts, then we split and shift W1's part.
+        // Cache layout: [n_embd, 2] per layer per sequence = two previous hidden states.
+        // With 2 cached states we can exactly compute:
+        //   - conv1 boundary output (from cached[-2] and cached[-1])
+        //   - conv2 with proper previous conv1 output at sequence boundary
         {
             const int64_t lf_mid = n_embd / 2;
-            const int64_t n_seq = cur->ne[1];  // actual sequence length
+            const int64_t n_embd_r = hparams.n_embd_r(); // 2 * n_embd
 
-            // conv1: cur [n_embd, n_seq] @ weight [n_embd, 2*lf_mid] -> [2*lf_mid, n_seq]
-            ggml_tensor * conv1_full = ggml_mul_mat(ctx0, model.layers[il].attn_lf_conv1, cur);
+            // load 2 cached pre-LF hidden states: [2*n_embd, n_seqs] -> [n_embd, 2, n_seqs]
+            ggml_tensor * conv_states_all = mctx_recr->get_r_l(il);
+            ggml_tensor * conv_state = build_rs(inp->get_recr(), conv_states_all, n_embd_r, n_seqs);
+            conv_state = ggml_reshape_3d(ctx0, conv_state, n_embd, 2, n_seqs);
+
+            // reshape cur to 3D: [n_embd, n_seq_tokens, n_seqs]
+            ggml_tensor * cur_3d = ggml_reshape_3d(ctx0, cur, n_embd, n_seq_tokens, n_seqs);
+
+            // prepend 2 cached states: [n_embd, 2+n_seq_tokens, n_seqs]
+            ggml_tensor * cur_ext = ggml_concat(ctx0, conv_state, cur_3d, 1);
+
+            // save last 2 pre-LF hidden states back to cache
+            ggml_tensor * last_states = ggml_view_3d(ctx0, cur_ext,
+                    n_embd, 2, n_seqs,
+                    cur_ext->nb[1], cur_ext->nb[2],
+                    n_seq_tokens * cur_ext->nb[1]);
+            ggml_build_forward_expand(gf,
+                    ggml_cpy(ctx0, last_states,
+                        ggml_view_1d(ctx0, conv_states_all,
+                            n_embd_r * n_seqs,
+                            kv_head * n_embd_r * ggml_element_size(conv_states_all))));
+
+            // conv1 on extended sequence [n_embd, 2+n_seq_tokens, n_seqs]
+            // Weight [n_embd, 2*lf_mid]: W_current || W_previous in output dim
+            ggml_tensor * cur_ext_2d = ggml_reshape_2d(ctx0, cur_ext, n_embd, (2 + n_seq_tokens) * n_seqs);
+            ggml_tensor * conv1_full = ggml_mul_mat(ctx0, model.layers[il].attn_lf_conv1, cur_ext_2d);
+            conv1_full = ggml_reshape_3d(ctx0, conv1_full, 2 * lf_mid, 2 + n_seq_tokens, n_seqs);
             cb(conv1_full, "lf_conv1_full", il);
 
-            // split: part0 = W0@cur [lf_mid, n_seq], part1 = W1@cur [lf_mid, n_seq]
-            ggml_tensor * c1_part0 = ggml_cont(ctx0, ggml_view_2d(ctx0, conv1_full,
-                    lf_mid, n_seq, conv1_full->nb[1], 0));
-            ggml_tensor * c1_part1 = ggml_cont(ctx0, ggml_view_2d(ctx0, conv1_full,
-                    lf_mid, n_seq, conv1_full->nb[1],
-                    lf_mid * ggml_element_size(conv1_full)));
+            // part0[i] = W_current @ ext[i], part1[i] = W_previous @ ext[i]
+            ggml_tensor * c1_part0 = ggml_view_3d(ctx0, conv1_full,
+                    lf_mid, 2 + n_seq_tokens, n_seqs,
+                    conv1_full->nb[1], conv1_full->nb[2], 0);
+            ggml_tensor * c1_part1 = ggml_view_3d(ctx0, conv1_full,
+                    lf_mid, 2 + n_seq_tokens, n_seqs,
+                    conv1_full->nb[1], conv1_full->nb[2],
+                    lf_mid * ggml_element_size(conv1_full));
 
-            ggml_tensor * conv1_out;
-            if (n_seq > 1) {
-                // causal shift: shifted[0] = 0, shifted[t] = part1[t-1]
-                ggml_tensor * c1_zero = ggml_scale(ctx0, ggml_view_2d(ctx0, c1_part0,
-                        lf_mid, 1, c1_part0->nb[1], 0), 0.0f);
-                ggml_tensor * c1_prev = ggml_view_2d(ctx0, c1_part1,
-                        lf_mid, n_seq - 1, c1_part1->nb[1], 0);
-                ggml_tensor * c1_shifted = ggml_concat(ctx0, c1_zero, c1_prev, 1);
-                conv1_out = ggml_add(ctx0, c1_part0, c1_shifted);
-            } else {
-                // single token: W1 contribution is zero (no previous token)
-                conv1_out = c1_part0;
-            }
+            // conv1 boundary output (for conv2's causal shift):
+            //   boundary = W_current @ ext[1] + W_previous @ ext[0] + bias
+            //            = W_current @ cached[-1] + W_previous @ cached[-2] + bias
+            ggml_tensor * c1_bnd_cur = ggml_cont(ctx0, ggml_view_3d(ctx0, c1_part0,
+                    lf_mid, 1, n_seqs, c1_part0->nb[1], c1_part0->nb[2],
+                    1 * c1_part0->nb[1]));
+            ggml_tensor * c1_bnd_prev = ggml_cont(ctx0, ggml_view_3d(ctx0, c1_part1,
+                    lf_mid, 1, n_seqs, c1_part1->nb[1], c1_part1->nb[2], 0));
+            ggml_tensor * conv1_boundary = ggml_add(ctx0, c1_bnd_cur, c1_bnd_prev);
+            conv1_boundary = ggml_add(ctx0, conv1_boundary, model.layers[il].attn_lf_conv1_b);
+
+            // conv1 real outputs for positions 0..n_seq_tokens-1:
+            //   out[t] = W_current @ ext[t+2] + W_previous @ ext[t+1] + bias
+            ggml_tensor * c1_cur = ggml_cont(ctx0, ggml_view_3d(ctx0, c1_part0,
+                    lf_mid, n_seq_tokens, n_seqs,
+                    c1_part0->nb[1], c1_part0->nb[2],
+                    2 * c1_part0->nb[1]));
+            ggml_tensor * c1_prev = ggml_cont(ctx0, ggml_view_3d(ctx0, c1_part1,
+                    lf_mid, n_seq_tokens, n_seqs,
+                    c1_part1->nb[1], c1_part1->nb[2],
+                    1 * c1_part1->nb[1]));
+            ggml_tensor * conv1_out = ggml_add(ctx0, c1_cur, c1_prev);
             conv1_out = ggml_add(ctx0, conv1_out, model.layers[il].attn_lf_conv1_b);
             cb(conv1_out, "lf_conv1_out", il);
 
-            // conv2: conv1_out [lf_mid, n_seq] @ weight [lf_mid, 2*n_embd] -> [2*n_embd, n_seq]
-            ggml_tensor * conv2_full = ggml_mul_mat(ctx0, model.layers[il].attn_lf_conv2, conv1_out);
+            // conv2: prepend boundary conv1 output for causal shift
+            // [lf_mid, 1+n_seq_tokens, n_seqs]
+            ggml_tensor * conv1_ext = ggml_concat(ctx0, conv1_boundary, conv1_out, 1);
+
+            ggml_tensor * conv1_ext_2d = ggml_reshape_2d(ctx0, conv1_ext, lf_mid, (1 + n_seq_tokens) * n_seqs);
+            ggml_tensor * conv2_full = ggml_mul_mat(ctx0, model.layers[il].attn_lf_conv2, conv1_ext_2d);
+            conv2_full = ggml_reshape_3d(ctx0, conv2_full, 2 * n_embd, 1 + n_seq_tokens, n_seqs);
             cb(conv2_full, "lf_conv2_full", il);
 
-            ggml_tensor * c2_part0 = ggml_cont(ctx0, ggml_view_2d(ctx0, conv2_full,
-                    n_embd, n_seq, conv2_full->nb[1], 0));
-            ggml_tensor * c2_part1 = ggml_cont(ctx0, ggml_view_2d(ctx0, conv2_full,
-                    n_embd, n_seq, conv2_full->nb[1],
-                    n_embd * ggml_element_size(conv2_full)));
+            // conv2 output: out[t] = W_current @ conv1_ext[t+1] + W_previous @ conv1_ext[t]
+            ggml_tensor * c2_part0 = ggml_view_3d(ctx0, conv2_full,
+                    n_embd, 1 + n_seq_tokens, n_seqs,
+                    conv2_full->nb[1], conv2_full->nb[2], 0);
+            ggml_tensor * c2_part1 = ggml_view_3d(ctx0, conv2_full,
+                    n_embd, 1 + n_seq_tokens, n_seqs,
+                    conv2_full->nb[1], conv2_full->nb[2],
+                    n_embd * ggml_element_size(conv2_full));
 
-            ggml_tensor * conv2_out;
-            if (n_seq > 1) {
-                ggml_tensor * c2_zero = ggml_scale(ctx0, ggml_view_2d(ctx0, c2_part0,
-                        n_embd, 1, c2_part0->nb[1], 0), 0.0f);
-                ggml_tensor * c2_prev = ggml_view_2d(ctx0, c2_part1,
-                        n_embd, n_seq - 1, c2_part1->nb[1], 0);
-                ggml_tensor * c2_shifted = ggml_concat(ctx0, c2_zero, c2_prev, 1);
-                conv2_out = ggml_add(ctx0, c2_part0, c2_shifted);
-            } else {
-                conv2_out = c2_part0;
-            }
+            ggml_tensor * c2_cur = ggml_cont(ctx0, ggml_view_3d(ctx0, c2_part0,
+                    n_embd, n_seq_tokens, n_seqs,
+                    c2_part0->nb[1], c2_part0->nb[2],
+                    1 * c2_part0->nb[1]));
+            ggml_tensor * c2_prev = ggml_cont(ctx0, ggml_view_3d(ctx0, c2_part1,
+                    n_embd, n_seq_tokens, n_seqs,
+                    c2_part1->nb[1], c2_part1->nb[2], 0));
+
+            ggml_tensor * conv2_out = ggml_add(ctx0, c2_cur, c2_prev);
             conv2_out = ggml_add(ctx0, conv2_out, model.layers[il].attn_lf_conv2_b);
+            conv2_out = ggml_reshape_2d(ctx0, conv2_out, n_embd, n_tokens);
             cb(conv2_out, "lf_conv2_out", il);
 
             // residual + RMSNorm
@@ -126,14 +181,9 @@ llm_build_yuan::llm_build_yuan(const llama_model & model, const llm_graph_params
             cb(Kcur, "Kcur", il);
             cb(Vcur, "Vcur", il);
 
-            cur = build_attn(inp_attn,
+            cur = build_attn(inp->get_attn(),
                     model.layers[il].wo, NULL,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
-        }
-
-        if (il == n_layer - 1 && inp_out_ids) {
-            cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
-            inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
 
         ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
@@ -191,6 +241,10 @@ llm_build_yuan::llm_build_yuan(const llama_model & model, const llm_graph_params
         cb(cur, "ffn_moe_out", il);
 
         cur = ggml_add(ctx0, cur, ffn_inp);
+
+        if (il == n_layer - 1 && inp_out_ids) {
+            cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+        }
 
         cur = build_cvec(cur, il);
         cb(cur, "l_out", il);
