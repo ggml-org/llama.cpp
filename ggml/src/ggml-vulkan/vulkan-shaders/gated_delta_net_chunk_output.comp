@@ -1,0 +1,124 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : require
+
+// Output kernel for chunked gated delta net
+//
+// For each chunk, combines inter-chunk and intra-chunk contributions:
+//   o[t] = q[t]^T @ (exp(g_cumsum[t]) * S_chunk) + causal_attn(q, k, v_corrected)
+//
+// Grid: (n_chunks * H, n_seqs, 1)
+// Workgroup: S_V threads (one per output column)
+
+layout(constant_id = 0) const uint S_V = 128;
+layout(constant_id = 1) const uint CHUNK_SIZE = 64;
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform Parameters {
+    uint H;
+    uint n_tokens;
+    uint n_seqs;
+    uint sq1, sq2, sq3;
+    uint sv1, sv2, sv3;
+    uint sb1, sb2, sb3;
+    uint neq1, rq3;
+    uint n_chunks;
+    uint s_off;
+};
+
+layout(binding = 0) readonly  buffer QBuf     { float q_in[];    };
+layout(binding = 1) readonly  buffer KBuf     { float k_in[];    };
+layout(binding = 2) readonly  buffer HBuf     { float h_in[];    };
+layout(binding = 3) readonly  buffer VNewBuf  { float vnew_in[]; };
+layout(binding = 4) readonly  buffer GCumBuf  { float gcum_in[]; };
+layout(binding = 5) buffer         DstBuf     { float dst[];     };
+
+shared float s_q[S_V];
+shared float s_k[S_V];
+shared float s_gcum[CHUNK_SIZE];
+
+void main() {
+    const uint chunk_head = gl_WorkGroupID.x;
+    const uint seq_id     = gl_WorkGroupID.y;
+    const uint col        = gl_LocalInvocationID.x;
+
+    if (col >= S_V) return;
+
+    const uint head_id  = chunk_head % H;
+    const uint chunk_id = chunk_head / H;
+
+    const uint iq1 = head_id % neq1;
+    const uint iq3 = seq_id / rq3;
+
+    const uint chunk_start = chunk_id * CHUNK_SIZE;
+    const uint chunk_len = min(CHUNK_SIZE, n_tokens - chunk_start);
+
+    const float scale = 1.0 / sqrt(float(S_V));
+
+    const uint state_size = S_V * S_V;
+    const uint h_base = ((seq_id * n_chunks + chunk_id) * H + head_id) * state_size;
+
+    float state_col[S_V];
+    [[unroll]] for (uint i = 0; i < S_V; i++) {
+        state_col[i] = h_in[h_base + i * S_V + col];
+    }
+
+    const uint wu_base = ((seq_id * n_chunks + chunk_id) * H + head_id) * CHUNK_SIZE * S_V;
+
+    const uint gcum_base = ((seq_id * n_chunks + chunk_id) * H + head_id) * CHUNK_SIZE;
+    if (col < CHUNK_SIZE) {
+        s_gcum[col] = (col < chunk_len) ? gcum_in[gcum_base + col] : 0.0;
+    }
+
+    // Preload vnew[j][col] into registers
+    float my_vnew[CHUNK_SIZE];
+    for (uint j = 0; j < chunk_len; j++) {
+        my_vnew[j] = vnew_in[wu_base + j * S_V + col];
+    }
+    barrier();
+
+    uint attn_off = (seq_id * n_tokens * H + head_id) * S_V;
+
+    for (uint t = 0; t < chunk_len; t++) {
+        const uint t_global = chunk_start + t;
+
+        const uint q_off = iq3 * sq3 + t_global * sq2 + iq1 * sq1;
+        s_q[col] = q_in[q_off + col];
+        barrier();
+
+        // Inter-chunk: o_inter = q^T @ (exp(g_cumsum[t]) * S)
+        float decay_t = exp(s_gcum[t]);
+        float o_inter = 0.0;
+        [[unroll]] for (uint i = 0; i < S_V; i += 4) {
+            o_inter += dot(
+                vec4(s_q[i], s_q[i+1], s_q[i+2], s_q[i+3]),
+                decay_t * vec4(state_col[i], state_col[i+1], state_col[i+2], state_col[i+3])
+            );
+        }
+
+        // Intra-chunk: o_intra = sum_{j<=t} dot(q[t], k[j]) * decay_mask * vnew[j][col]
+        float o_intra = 0.0;
+        for (uint j = 0; j <= t; j++) {
+            const uint j_global = chunk_start + j;
+            const uint kj_off = iq3 * sq3 + j_global * sq2 + iq1 * sq1;
+            s_k[col] = k_in[kj_off + col];
+            barrier();
+
+            float qk = 0.0;
+            [[unroll]] for (uint i = 0; i < S_V; i += 4) {
+                qk += dot(
+                    vec4(s_q[i], s_q[i+1], s_q[i+2], s_q[i+3]),
+                    vec4(s_k[i], s_k[i+1], s_k[i+2], s_k[i+3])
+                );
+            }
+
+            float mask = exp(s_gcum[t] - s_gcum[j]);
+            o_intra += qk * mask * my_vnew[j];
+
+            barrier();
+        }
+
+        dst[attn_off + t_global * S_V * H + col] = (o_inter + o_intra) * scale;
+    }
+}

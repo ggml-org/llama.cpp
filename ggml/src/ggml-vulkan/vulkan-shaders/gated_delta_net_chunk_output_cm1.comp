@@ -1,0 +1,243 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : enable
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_KHR_shader_subgroup_basic : enable
+#extension GL_KHR_memory_scope_semantics : enable
+#extension GL_KHR_cooperative_matrix : enable
+
+#include "types.glsl"
+
+layout(constant_id = 0) const uint WG_SIZE = 256;
+layout(constant_id = 1) const uint CHUNK_SIZE = 64;
+layout(constant_id = 2) const uint S_V = 128;
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform Parameters {
+    uint H;
+    uint n_tokens;
+    uint n_seqs;
+    uint sq1, sq2, sq3;
+    uint sv1, sv2, sv3;
+    uint sb1, sb2, sb3;
+    uint neq1, rq3;
+    uint n_chunks;
+    uint s_off;
+};
+
+layout(binding = 0) readonly  buffer QBuf     { float q_in[];    };
+layout(binding = 1) readonly  buffer KBuf     { float k_in[];    };
+layout(binding = 2) readonly  buffer HBuf     { float h_in[];    };
+layout(binding = 3) readonly  buffer VNewBuf  { float vnew_in[]; };
+layout(binding = 4) readonly  buffer GCumBuf  { float gcum_in[]; };
+layout(binding = 5) buffer         DstBuf     { float dst[];     };
+
+const uint TM = 16;
+const uint TN = 16;
+const uint TK = 16;
+
+const uint C_TILES = CHUNK_SIZE / TM;
+const uint D_TILES = S_V / TN;
+
+// Padded strides for bank conflict avoidance
+const uint QK_STRIDE = S_V / 4 + 2;
+const uint ATTN_V4_STRIDE = CHUNK_SIZE / 4 + 2;
+
+shared f16vec4 sh_q[CHUNK_SIZE * QK_STRIDE];
+shared f16vec4 sh_kv[CHUNK_SIZE * QK_STRIDE];
+shared vec4    sh_attn[CHUNK_SIZE * ATTN_V4_STRIDE];
+shared f16vec4 sh_adecay[CHUNK_SIZE * ATTN_V4_STRIDE];
+shared float   sh_gcum[CHUNK_SIZE];
+
+void main() {
+    const uint tid = gl_LocalInvocationIndex;
+    const uint sg_id = gl_SubgroupID;
+
+    const uint chunk_head = gl_WorkGroupID.x;
+    const uint seq_id     = gl_WorkGroupID.y;
+
+    const uint head_id  = chunk_head % H;
+    const uint chunk_id = chunk_head / H;
+    const uint iq1 = head_id % neq1;
+    const uint iq3 = seq_id / rq3;
+
+    const uint chunk_start = chunk_id * CHUNK_SIZE;
+    const uint chunk_len   = min(CHUNK_SIZE, n_tokens - chunk_start);
+    const float scale = 1.0 / sqrt(float(S_V));
+
+    if (tid < CHUNK_SIZE) {
+        const uint gcum_base = ((seq_id * n_chunks + chunk_id) * H + head_id) * CHUNK_SIZE;
+        sh_gcum[tid] = (tid < chunk_len) ? gcum_in[gcum_base + tid] : 0.0;
+    }
+
+    for (uint idx = tid; idx < CHUNK_SIZE * (S_V / 4); idx += WG_SIZE) {
+        const uint row = idx / (S_V / 4);
+        const uint col4 = idx % (S_V / 4);
+        f16vec4 q_val = f16vec4(0.0);
+        f16vec4 k_val = f16vec4(0.0);
+        if (row < chunk_len) {
+            const uint off = iq3 * sq3 + (chunk_start + row) * sq2 + iq1 * sq1 + col4 * 4;
+            q_val = f16vec4(q_in[off], q_in[off + 1], q_in[off + 2], q_in[off + 3]);
+            k_val = f16vec4(k_in[off], k_in[off + 1], k_in[off + 2], k_in[off + 3]);
+        }
+        sh_q[row * QK_STRIDE + col4] = q_val;
+        sh_kv[row * QK_STRIDE + col4] = k_val;
+    }
+
+    barrier();
+
+    // A = Q @ K^T (coopmat)
+    coopmat<float, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> A_acc[C_TILES];
+    [[unroll]] for (uint tj = 0; tj < C_TILES; tj++) {
+        A_acc[tj] = coopmat<float, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator>(0.0);
+    }
+
+    {
+        coopmat<float16_t, gl_ScopeSubgroup, TM, TK, gl_MatrixUseA> Q_mat;
+        coopmat<float16_t, gl_ScopeSubgroup, TK, TN, gl_MatrixUseB> KT_mat;
+
+        [[unroll]] for (uint dk = 0; dk < D_TILES; dk++) {
+            coopMatLoad(Q_mat, sh_q,
+                sg_id * TM * QK_STRIDE + dk * (TK / 4),
+                QK_STRIDE, gl_CooperativeMatrixLayoutRowMajor);
+
+            [[unroll]] for (uint tj = 0; tj < C_TILES; tj++) {
+                coopMatLoad(KT_mat, sh_kv,
+                    tj * TN * QK_STRIDE + dk * (TK / 4),
+                    QK_STRIDE, gl_CooperativeMatrixLayoutColumnMajor);
+
+                A_acc[tj] = coopMatMulAdd(Q_mat, KT_mat, A_acc[tj]);
+            }
+        }
+    }
+
+    [[unroll]] for (uint tj = 0; tj < C_TILES; tj++) {
+        coopMatStore(A_acc[tj], sh_attn,
+            sg_id * TM * ATTN_V4_STRIDE + tj * (TN / 4),
+            ATTN_V4_STRIDE, gl_CooperativeMatrixLayoutRowMajor);
+    }
+
+    barrier();
+
+    const uint wu_base = ((seq_id * n_chunks + chunk_id) * H + head_id) * CHUNK_SIZE * S_V;
+    const uint attn_off = (seq_id * n_tokens * H + head_id) * S_V;
+
+    // Causal decay mask (f16)
+    for (uint idx = tid; idx < CHUNK_SIZE * (CHUNK_SIZE / 4); idx += WG_SIZE) {
+        const uint t  = idx / (CHUNK_SIZE / 4);
+        const uint j4 = idx % (CHUNK_SIZE / 4);
+        f16vec4 val = f16vec4(0.0);
+        if (t < chunk_len) {
+            const float g_t = sh_gcum[t];
+            [[unroll]] for (uint k = 0; k < 4; k++) {
+                const uint j = j4 * 4 + k;
+                if (j <= t && j < chunk_len) {
+                    val[k] = float16_t(clamp(
+                        exp(g_t - sh_gcum[j]) * sh_attn[t * ATTN_V4_STRIDE + j4][k],
+                        -65504.0, 65504.0));
+                }
+            }
+        }
+        sh_adecay[t * ATTN_V4_STRIDE + j4] = val;
+    }
+
+    // vnew to f16, pre-scaled
+    for (uint idx = tid; idx < CHUNK_SIZE * (S_V / 4); idx += WG_SIZE) {
+        const uint row  = idx / (S_V / 4);
+        const uint col4 = idx % (S_V / 4);
+        f16vec4 val = f16vec4(0.0);
+        if (row < chunk_len) {
+            const uint off = wu_base + row * S_V + col4 * 4;
+            val = f16vec4(
+                float16_t(clamp(vnew_in[off    ] * scale, -65504.0, 65504.0)),
+                float16_t(clamp(vnew_in[off + 1] * scale, -65504.0, 65504.0)),
+                float16_t(clamp(vnew_in[off + 2] * scale, -65504.0, 65504.0)),
+                float16_t(clamp(vnew_in[off + 3] * scale, -65504.0, 65504.0)));
+        }
+        sh_kv[row * QK_STRIDE + col4] = val;
+    }
+
+    // O_inter = Q @ state
+    {
+        const uint col = tid;
+        const bool col_active = (col < S_V);
+        const uint state_size = S_V * S_V;
+        const uint h_base = ((seq_id * n_chunks + chunk_id) * H + head_id) * state_size;
+
+        float state_col[S_V];
+        if (col_active) {
+            [[unroll]] for (uint i = 0; i < S_V; i++) {
+                state_col[i] = h_in[h_base + i * S_V + col];
+            }
+        }
+
+        if (col_active) {
+            for (uint t = 0; t < chunk_len; t++) {
+                float o_inter = 0.0;
+                [[unroll]] for (uint i = 0; i < S_V / 4; i++) {
+                    vec4 q_f32 = vec4(sh_q[t * QK_STRIDE + i]);
+                    o_inter += dot(q_f32,
+                        vec4(state_col[i*4], state_col[i*4+1],
+                             state_col[i*4+2], state_col[i*4+3]));
+                }
+                dst[attn_off + (chunk_start + t) * S_V * H + col] = exp(sh_gcum[t]) * o_inter * scale;
+            }
+        }
+    }
+
+    barrier();
+
+    // O_intra = A_decayed @ vnew (coopmat GEMM, scalar fallback for partial chunks)
+    if (chunk_len == CHUNK_SIZE) {
+        coopmat<float16_t, gl_ScopeSubgroup, TM, TK, gl_MatrixUseA> A_mat;
+        coopmat<float16_t, gl_ScopeSubgroup, TK, TN, gl_MatrixUseB> V_mat;
+
+        [[unroll]] for (uint dn = 0; dn < D_TILES; dn++) {
+            coopmat<float, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> O_acc;
+
+            coopMatLoad(O_acc, dst,
+                attn_off + (chunk_start + sg_id * TM) * S_V * H + dn * TN,
+                S_V * H, gl_CooperativeMatrixLayoutRowMajor);
+
+            [[unroll]] for (uint dk = 0; dk < C_TILES; dk++) {
+                coopMatLoad(A_mat, sh_adecay,
+                    sg_id * TM * ATTN_V4_STRIDE + dk * (TK / 4),
+                    ATTN_V4_STRIDE, gl_CooperativeMatrixLayoutRowMajor);
+
+                coopMatLoad(V_mat, sh_kv,
+                    dk * TK * QK_STRIDE + dn * (TN / 4),
+                    QK_STRIDE, gl_CooperativeMatrixLayoutRowMajor);
+
+                O_acc = coopMatMulAdd(A_mat, V_mat, O_acc);
+            }
+
+            coopMatStore(O_acc, dst,
+                attn_off + (chunk_start + sg_id * TM) * S_V * H + dn * TN,
+                S_V * H, gl_CooperativeMatrixLayoutRowMajor);
+        }
+    } else {
+        const uint col = tid;
+        if (col < S_V) {
+            const uint col4 = col / 4;
+            const uint comp = col % 4;
+
+            vec4 my_vnew_v4[CHUNK_SIZE / 4];
+            [[unroll]] for (uint j4 = 0; j4 < CHUNK_SIZE / 4; j4++) {
+                my_vnew_v4[j4] = vec4(
+                    float(sh_kv[(j4*4  ) * QK_STRIDE + col4][comp]),
+                    float(sh_kv[(j4*4+1) * QK_STRIDE + col4][comp]),
+                    float(sh_kv[(j4*4+2) * QK_STRIDE + col4][comp]),
+                    float(sh_kv[(j4*4+3) * QK_STRIDE + col4][comp]));
+            }
+
+            for (uint t = 0; t < chunk_len; t++) {
+                float o_intra = 0.0;
+                [[unroll]] for (uint j4 = 0; j4 < CHUNK_SIZE / 4; j4++) {
+                    o_intra += dot(vec4(sh_adecay[t * ATTN_V4_STRIDE + j4]), my_vnew_v4[j4]);
+                }
+                dst[attn_off + (chunk_start + t) * S_V * H + col] += o_intra;
+            }
+        }
+    }
+}
