@@ -4981,9 +4981,9 @@ static vk_device ggml_vk_get_device(size_t idx) {
         std::vector<vk::QueueFamilyProperties> queue_family_props = device->physical_device.getQueueFamilyProperties();
 
         // Try to find a non-graphics compute queue and transfer-focused queues
-        // On AMD GPUs with RADV driver, the graphics queue seems to be faster, so don't avoid it
-        // Avoid on small GPUs to prevent interfering with graphics tasks
-        const vk::QueueFlagBits graphics_flag = (device->vendor_id == VK_VENDOR_ID_AMD && device->driver_id == vk::DriverId::eMesaRadv && device->shader_core_count > 16) ? (vk::QueueFlagBits)0 : vk::QueueFlagBits::eGraphics;
+        // Allow overriding avoiding the graphics queue because it can increase performance on RADV
+        const bool allow_graphics_queue = (getenv("GGML_VK_ALLOW_GRAPHICS_QUEUE") != nullptr);
+        const vk::QueueFlagBits graphics_flag = allow_graphics_queue ? (vk::QueueFlagBits)0 : vk::QueueFlagBits::eGraphics;
         const uint32_t compute_queue_family_index = ggml_vk_find_queue_family_index(queue_family_props, vk::QueueFlagBits::eCompute, graphics_flag, -1, 1);
         const uint32_t transfer_queue_family_index = ggml_vk_find_queue_family_index(queue_family_props, vk::QueueFlagBits::eTransfer, vk::QueueFlagBits::eCompute | graphics_flag, compute_queue_family_index, 1);
 
