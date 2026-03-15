@@ -94,6 +94,7 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 #define VK_VENDOR_ID_INTEL 0x8086
 #define VK_VENDOR_ID_NVIDIA 0x10de
 #define VK_VENDOR_ID_QUALCOMM 0x5143
+#define VK_VENDOR_ID_IMAGINATION 0x1010
 
 #define VK_DEVICE_DESCRIPTOR_POOL_SIZE 256
 
@@ -4002,13 +4003,20 @@ static void ggml_vk_load_shaders(vk_device& device) {
         const uint32_t wg_size_subgroup   = (w == DMMV_WG_SIZE_SUBGROUP) ? subgroup_size : (subgroup_size * 4);
         const uint32_t wg_size_subgroup16 = (w == DMMV_WG_SIZE_SUBGROUP) ? subgroup_size16 : (subgroup_size16 * 4);
 
-        const shader_reduction_mode reduc = (use_subgroups && w == DMMV_WG_SIZE_SUBGROUP) ? SHADER_REDUCTION_MODE_SUBGROUP :
-                                            (use_subgroups && w == DMMV_WG_SIZE_LARGE) ? SHADER_REDUCTION_MODE_HYBRID :
-                                            SHADER_REDUCTION_MODE_SHMEM;
+        shader_reduction_mode reduc = (use_subgroups && w == DMMV_WG_SIZE_SUBGROUP) ? SHADER_REDUCTION_MODE_SUBGROUP :
+                                      (use_subgroups && w == DMMV_WG_SIZE_LARGE) ? SHADER_REDUCTION_MODE_HYBRID :
+                                      SHADER_REDUCTION_MODE_SHMEM;
 
-        const shader_reduction_mode reduc16 = (use_subgroups16 && w == DMMV_WG_SIZE_SUBGROUP) ? SHADER_REDUCTION_MODE_SUBGROUP :
-                                              (use_subgroups16 && w == DMMV_WG_SIZE_LARGE) ? SHADER_REDUCTION_MODE_HYBRID :
-                                              SHADER_REDUCTION_MODE_SHMEM;
+        shader_reduction_mode reduc16 = (use_subgroups16 && w == DMMV_WG_SIZE_SUBGROUP) ? SHADER_REDUCTION_MODE_SUBGROUP :
+                                        (use_subgroups16 && w == DMMV_WG_SIZE_LARGE) ? SHADER_REDUCTION_MODE_HYBRID :
+                                        SHADER_REDUCTION_MODE_SHMEM;
+
+        // PowerVR DXT: subgroup_no_shmem variant crashes driver compiler with NUM_COLS >= 2.
+        // Fall back to hybrid (subgroup + shared memory) which works correctly.
+        if (device->vendor_id == VK_VENDOR_ID_IMAGINATION) {
+            if (reduc == SHADER_REDUCTION_MODE_SUBGROUP) reduc = SHADER_REDUCTION_MODE_HYBRID;
+            if (reduc16 == SHADER_REDUCTION_MODE_SUBGROUP) reduc16 = SHADER_REDUCTION_MODE_HYBRID;
+        }
 
         for (uint32_t i = 0; i < mul_mat_vec_max_cols; ++i) {
             ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_f32_f32[w][GGML_TYPE_F32 ][i], "mul_mat_vec_f32_f32_f32",  arr_dmmv_f32_f32_f32_len[reduc],  arr_dmmv_f32_f32_f32_data[reduc],  "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {1, 1, 1}, {wg_size_subgroup, 1, i+1}, 1, false, use_subgroups, force_subgroup_size);
