@@ -166,7 +166,7 @@ static inline bool is_base64(uint8_t c) {
     return (isalnum(c) || (c == '+') || (c == '/'));
 }
 
-static inline raw_buffer base64_decode(const std::string & encoded_string) {
+raw_buffer base64_decode(const std::string & encoded_string) {
     int i = 0;
     int j = 0;
     int in_ = 0;
@@ -232,7 +232,7 @@ server_tokens::server_tokens(const llama_tokens & tokens, bool has_mtmd) : has_m
 }
 
 llama_pos server_tokens::pos_next(int64_t n_tokens) const {
-    if (!has_mtmd) {
+    if (!has_mtmd && !has_precomputed) {
         if (n_tokens < 0) {
             return tokens.size();
         }
@@ -258,6 +258,7 @@ llama_pos server_tokens::pos_next(int64_t n_tokens) const {
 
     while (idx < n_tokens) {
         const auto media_it = map_idx_to_media.find(idx);
+        const auto precomp_it = map_idx_to_precomputed.find(idx);
         if (media_it != map_idx_to_media.end()) {
             const auto & chunk = media_it->second;
             const llama_pos n_pos = mtmd_input_chunk_get_n_pos(chunk.get());
@@ -265,6 +266,10 @@ llama_pos server_tokens::pos_next(int64_t n_tokens) const {
 
             pos += n_pos;
             idx += n_tok;
+        } else if (precomp_it != map_idx_to_precomputed.end()) {
+            const auto & img = precomp_it->second;
+            pos += img.n_tokens; // n_pos == n_tokens for precomputed
+            idx += img.n_tokens;
         } else {
             pos++;
             idx++;
@@ -395,7 +400,7 @@ void server_tokens::set_token(llama_pos pos, llama_token id) {
 
 void server_tokens::keep_first(size_t n) {
     GGML_ASSERT(n <= tokens.size());
-    if (has_mtmd) {
+    if (has_mtmd || has_precomputed) {
         if (n == tokens.size()) {
             return; // nothing to do
         }
@@ -409,9 +414,14 @@ void server_tokens::keep_first(size_t n) {
             // make sure we never remove tokens in the middle of an image
             // note that the case where we keep a full image at the end is allowed:
             //   tokens[n - 1] == LLAMA_TOKEN_NULL && tokens[n] != LLAMA_TOKEN_NULL
-            if (tokens[n - 1] == LLAMA_TOKEN_NULL && tokens[n] == LLAMA_TOKEN_NULL) {
-                find_chunk(n - 1); // will throw an error if the token is not begin-of-chunk
+            if (has_precomputed) { //if it is precomputed, we only need to check if the previous token is precomputed.
+                    find_precomputed(n - 1); // must be find_precomputed but not find_chunk.because it knows more than mtmd chunk
             }
+            else if (tokens[n - 1] == LLAMA_TOKEN_NULL && tokens[n] == LLAMA_TOKEN_NULL) {
+                    find_chunk(n - 1); // will throw an error if the token is not begin-of-chunk
+            }
+          
+        }
         }
         // remove all image chunks that are not used anymore
         for (auto it = map_idx_to_media.begin(); it != map_idx_to_media.end(); ) {
@@ -422,7 +432,14 @@ void server_tokens::keep_first(size_t n) {
                 ++it;
             }
         }
-    }
+        for (auto it = map_idx_to_precomputed.begin(); it != map_idx_to_precomputed.end(); ) {
+            size_t idx = it->first;
+            if (idx >= n) {
+                it = map_idx_to_precomputed.erase(it);
+            } else {
+                ++it;
+            }
+        }
     tokens.resize(n);
 }
 
@@ -495,13 +512,24 @@ bool server_tokens::validate(const struct llama_context * ctx) const {
     for (size_t i = 0; i < tokens.size(); ++i) {
         const auto & t = tokens[i];
         if (t == LLAMA_TOKEN_NULL) {
-            try {
-                const auto & chunk = find_chunk(i);
-                size_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk.get());
-                i += n_tokens - 1; // will be +1 by the for loop
-            } catch (const std::exception & e) {
-                return false;
+            // check mtmd chunk first
+            auto media_it = map_idx_to_media.find(i);
+            if (media_it != map_idx_to_media.end()) {
+                try {
+                    size_t n_tokens = mtmd_input_chunk_get_n_tokens(media_it->second.get());
+                    i += n_tokens - 1;
+                } catch (const std::exception & e) {
+                    return false;
+                }
+                continue;
             }
+            // check precomputed
+            auto precomp_it = map_idx_to_precomputed.find(i);
+            if (precomp_it != map_idx_to_precomputed.end()) {
+                i += precomp_it->second.n_tokens - 1;
+                continue;
+            }
+            return false;
         } else if (t < 0 || t >= n_vocab) {
             return false;
         }
@@ -539,16 +567,104 @@ int32_t server_tokens::process_chunk(
     n_tokens_out = mtmd_input_chunk_get_n_tokens(chunk.get());
     return 0;
 }
+//it is not duplicated with the process_chunk function
+int32_t server_tokens::process_precomputed_chunk(
+            llama_context * ctx,
+            size_t idx,
+            llama_pos pos,
+            int32_t seq_id,
+            size_t & n_tokens_out) const {
+    const auto & img = find_precomputed(idx);
+    SRV_INF("processing pre-computed image embeddings (%d tokens, %d embd)...\n", img.n_tokens, img.n_embd);
 
+    int32_t n_batch = llama_n_batch(ctx);
+    int64_t t0 = ggml_time_ms();
+
+    int32_t n_img_batches = (img.n_tokens + n_batch - 1) / n_batch;
+
+    for (int32_t i_batch = 0; i_batch < n_img_batches; i_batch++) {
+        int32_t pos_offset = i_batch * n_batch;
+        int32_t n_tokens_batch = std::min(n_batch, img.n_tokens - pos_offset);
+
+        llama_batch batch = {
+            /*n_tokens       =*/ n_tokens_batch,
+            /*tokens         =*/ nullptr,
+            /*embd           =*/ const_cast<float *>(img.embedding.data() + (size_t)pos_offset * img.n_embd),
+            /*pos            =*/ nullptr,
+            /*n_seq_id       =*/ nullptr,
+            /*seq_id         =*/ nullptr,
+            /*logits         =*/ nullptr,
+        };
+
+        // allocate temporary arrays for pos, n_seq_id, seq_id, logits
+        std::vector<llama_pos>       batch_pos(n_tokens_batch);
+        std::vector<int32_t>         batch_n_seq_id(n_tokens_batch);
+        std::vector<llama_seq_id *>  batch_seq_id(n_tokens_batch);
+        std::vector<int8_t>          batch_logits(n_tokens_batch, false);
+        std::vector<llama_seq_id>    batch_seq_id_0(1, seq_id);
+
+        for (int32_t j = 0; j < n_tokens_batch; j++) {
+            batch_pos[j]      = pos + pos_offset + j;
+            batch_n_seq_id[j] = 1;
+            batch_seq_id[j]   = batch_seq_id_0.data();
+        }
+
+        // set logits for last token of the last batch
+        if (i_batch == n_img_batches - 1) {
+            batch_logits[n_tokens_batch - 1] = true;
+        }
+
+        batch.pos      = batch_pos.data();
+        batch.n_seq_id = batch_n_seq_id.data();
+        batch.seq_id   = batch_seq_id.data();
+        batch.logits   = batch_logits.data();
+
+        SRV_INF("decoding pre-computed image batch %d/%d, n_tokens_batch = %d\n", i_batch + 1, n_img_batches, n_tokens_batch);
+
+        int32_t ret = llama_decode(ctx, batch);
+        if (ret != 0) {
+            LOG_ERR("failed to decode pre-computed image embeddings, ret = %d\n", ret);
+            n_tokens_out = 0;
+            return ret;
+        }
+    }
+
+    SRV_INF("pre-computed image processed in %" PRId64 " ms\n", ggml_time_ms() - t0);
+    n_tokens_out = img.n_tokens;
+    return 0;
+}
+
+void server_tokens::push_back_precomputed(const server_precomputed_image & img) {
+    size_t start_idx = tokens.size();
+    for (int32_t i = 0; i < img.n_tokens; ++i) {
+        tokens.emplace_back(LLAMA_TOKEN_NULL);
+    }
+    map_idx_to_precomputed[start_idx] = img;
+    has_precomputed = true;
+}
+
+bool server_tokens::has_precomputed_at(size_t idx) const {
+    return map_idx_to_precomputed.find(idx) != map_idx_to_precomputed.end();
+}
+
+const server_precomputed_image & server_tokens::find_precomputed(size_t idx) const {
+    auto it = map_idx_to_precomputed.find(idx);
+    if (it != map_idx_to_precomputed.end()) {
+        return it->second;
+    }
+    throw std::runtime_error("Pre-computed image embeddings not found at index " + std::to_string(idx));
+}
 server_tokens server_tokens::clone() const {
     server_tokens res;
     res.has_mtmd = has_mtmd;
+    res.has_precomputed = has_precomputed;
     res.tokens   = tokens;
     for (auto it = map_idx_to_media.begin(); it != map_idx_to_media.end(); ++it) {
         size_t idx = it->first;
         const mtmd::input_chunk_ptr & chunk = it->second;
         res.map_idx_to_media[idx] = mtmd::input_chunk_ptr(mtmd_input_chunk_copy(chunk.get()));
     }
+    res.map_idx_to_precomputed = map_idx_to_precomputed;
     return res;
 }
 
@@ -725,6 +841,58 @@ server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::
     return result;
 }
 
+server_tokens process_precomputed_image_prompt(
+        const llama_vocab * vocab,
+        const std::string & prompt,
+        const std::vector<server_precomputed_image> & precomputed_images) {
+    // Split prompt by the media marker <__media__>
+    const std::string marker = mtmd_default_marker();
+    server_tokens result;
+    result.has_precomputed = true;
+
+    std::string remaining = prompt;
+    size_t img_idx = 0;
+
+    while (true) {
+        size_t pos = remaining.find(marker);
+        if (pos == std::string::npos) {
+            // no more markers, tokenize the rest
+            if (!remaining.empty()) {
+                llama_tokens text_tokens = common_tokenize(vocab, remaining, img_idx == 0, true);
+                for (auto tok : text_tokens) {
+                    result.push_back(tok);
+                }
+            }
+            break;
+        }
+
+        // tokenize text before marker
+        std::string before = remaining.substr(0, pos);
+        if (!before.empty()) {
+            llama_tokens text_tokens = common_tokenize(vocab, before, img_idx == 0, true);
+            for (auto tok : text_tokens) {
+                result.push_back(tok);
+            }
+        }
+
+        // insert precomputed image embeddings
+        if (img_idx < precomputed_images.size()) {
+            result.push_back_precomputed(precomputed_images[img_idx]);
+            img_idx++;
+        } else {
+            throw std::runtime_error("Not enough precomputed images for the number of media markers in prompt");
+        }
+
+        remaining = remaining.substr(pos + marker.size());
+    }
+
+    if (img_idx != precomputed_images.size()) {
+        throw std::runtime_error("Number of precomputed images does not match the number of media markers in prompt");
+    }
+
+    return result;
+}
+
 /**
  * break the input "prompt" object into multiple prompt if needed, then tokenize them
  * use tokenize_input_prompts() if the input could be an array.
@@ -889,7 +1057,8 @@ static void handle_media(
 json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
-    std::vector<raw_buffer> & out_files)
+    std::vector<raw_buffer> & out_files,
+    std::vector<server_precomputed_image> & out_precomputed_images)
 {
     json llama_params;
 
@@ -978,7 +1147,48 @@ json oaicompat_chat_params_parse(
                 p["text"] = mtmd_default_marker();
                 p.erase("image_url");
 
-            } else if (type == "input_audio") {
+            } else if (type=="image_embedding" || type=="image_embedding_b64"){
+                json emb_data = json_value(p, type, json::object());
+                if (!emb_data.contains("n_tokens") || !emb_data.contains("n_embd")) {
+                    throw std::invalid_argument(type + " must contain 'n_tokens', and 'n_embd'");
+                }
+                if(type=="image_embedding" && !emb_data.contains("embedding")) {
+                    throw std::invalid_argument(type + " must contain 'embedding'");
+                }
+                if(type=="image_embedding_b64" && !emb_data.contains("embedding_b64")) {
+                    throw std::invalid_argument(type + " must contain 'embedding_b64'");
+                }
+
+                server_precomputed_image img;
+                img.n_tokens = emb_data.at("n_tokens").get<int32_t>();
+                img.n_embd   = emb_data.at("n_embd").get<int32_t>();
+
+                if(type=="image_embedding"){
+                    const auto & embd_arr = emb_data.at("embedding");
+                    if (!embd_arr.is_array()) {
+                        throw std::invalid_argument(type + ".embedding must be an array of floats");
+                    }
+                    img.embedding.reserve(embd_arr.size());
+                    for (const auto & v : embd_arr) {
+                        img.embedding.push_back(v.get<float>());
+                    }
+                } else {
+                    const std::string & embd_b64 = emb_data.at("embedding_b64").get_ref<const std::string &>();
+                    raw_buffer raw_bytes = base64_decode(embd_b64);
+                    size_t expected_bytes = (size_t)img.n_tokens * img.n_embd * sizeof(float);
+                    if (raw_bytes.size() != expected_bytes) {
+                        throw std::invalid_argument(type + ".embedding size mismatch: expected " +
+                            std::to_string(expected_bytes) + " bytes, got " + std::to_string(raw_bytes.size()));
+                    }
+                    const float * float_ptr = reinterpret_cast<const float *>(raw_bytes.data());
+                    img.embedding.assign(float_ptr, float_ptr + (size_t)img.n_tokens * img.n_embd);
+                }
+                out_precomputed_images.push_back(std::move(img));
+
+                p["type"] = "media_marker";
+                p["text"] = mtmd_default_marker();
+                p.erase(type);
+            }else if (type == "input_audio") {
                 if (!opt.allow_audio) {
                     throw std::runtime_error("audio input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
                 }

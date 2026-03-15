@@ -158,6 +158,7 @@ int main(int argc, char ** argv) {
         routes.post_lora_adapters          = models_routes->proxy_post;
         routes.get_slots                   = models_routes->proxy_get;
         routes.post_slots                  = models_routes->proxy_post;
+        routes.post_vision_embedding        = models_routes->proxy_post;
 
         // custom routes for router
         routes.get_props  = models_routes->get_router_props;
@@ -196,6 +197,7 @@ int main(int argc, char ** argv) {
     ctx_http.post("/tokenize",            ex_wrapper(routes.post_tokenize));
     ctx_http.post("/detokenize",          ex_wrapper(routes.post_detokenize));
     ctx_http.post("/apply-template",      ex_wrapper(routes.post_apply_template));
+    ctx_http.post("/vision/embedding",      ex_wrapper(routes.post_vision_embedding));
     // LoRA adapters hotswap
     ctx_http.get ("/lora-adapters",       ex_wrapper(routes.get_lora_adapters));
     ctx_http.post("/lora-adapters",       ex_wrapper(routes.post_lora_adapters));

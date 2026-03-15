@@ -115,6 +115,18 @@ bool are_lora_equal(
 std::vector<size_t> lora_get_enabled_ids(const std::vector<common_adapter_lora_info> & loras);
 
 //
+// pre-computed image embeddings (from /vision/embedding)
+//
+
+raw_buffer base64_decode(const std::string & encoded_string);
+
+struct server_precomputed_image {
+    std::vector<float> embedding; // float array: n_tokens * n_embd
+    int32_t n_tokens;
+    int32_t n_embd;
+};
+
+//
 // server_tokens
 //
 
@@ -124,8 +136,12 @@ std::vector<size_t> lora_get_enabled_ids(const std::vector<common_adapter_lora_i
  */
 struct server_tokens {
     bool has_mtmd = false;
+    bool has_precomputed = false; // set to true when pre-computed image embeddings are used
 
 private: // disallow accessing these members directly, risking out-of-sync
+
+    // map a **start** index in tokens to pre-computed image embeddings (from /vision/tokenize)
+    std::map<size_t, server_precomputed_image> map_idx_to_precomputed;
 
     // map a **start** index in tokens to the image chunk
     // note: the order need to be in-sync with tokens
@@ -198,6 +214,7 @@ public:
 
     void clear() {
         map_idx_to_media.clear();
+        map_idx_to_precomputed.clear();
         tokens.clear();
     }
 
@@ -218,6 +235,23 @@ public:
                 llama_pos pos,
                 int32_t seq_id,
                 size_t & n_tokens_out) const;
+
+    // decode pre-computed image embeddings (no CLIP encoding needed)
+    int32_t process_precomputed_chunk(
+                llama_context * ctx,
+                size_t idx,
+                llama_pos pos,
+                int32_t seq_id,
+                size_t & n_tokens_out) const;
+
+    // push pre-computed image embedding tokens
+    void push_back_precomputed(const server_precomputed_image & img);
+
+    // check if a position has pre-computed embeddings
+    bool has_precomputed_at(size_t idx) const;
+
+    // find pre-computed embeddings at a position
+    const server_precomputed_image & find_precomputed(size_t idx) const;
 
     server_tokens clone() const;
 };
@@ -252,6 +286,12 @@ size_t validate_utf8(const std::string& text);
 
 // process mtmd prompt, return the server_tokens containing both text tokens and media chunks
 server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::vector<raw_buffer> files);
+
+// process prompt with pre-computed image embeddings, return server_tokens without requiring mtmd_context
+server_tokens process_precomputed_image_prompt(
+    const llama_vocab * vocab,
+    const std::string & prompt,
+    const std::vector<server_precomputed_image> & precomputed_images);
 
 /**
  * break the input "prompt" object into multiple prompt if needed, then tokenize them
@@ -299,7 +339,8 @@ json oaicompat_completion_params_parse(const json & body);
 json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
-    std::vector<raw_buffer> & out_files);
+    std::vector<raw_buffer> & out_files,
+    std::vector<server_precomputed_image> & out_precomputed_images);
 
 // convert OpenAI Responses API format to OpenAI Chat Completions API format
 json convert_responses_to_chatcmpl(const json & body);
