@@ -1603,6 +1603,101 @@ inline void ggml_sycl_free_host_tracked_t(T * ptr, size_t count, sycl::queue & q
 #define GGML_SYCL_MALLOC_HOST_T(T, count, queue) ggml_sycl_malloc_host_t<T>((count), (queue), GGML_SYCL_ALLOC_TAG)
 #define GGML_SYCL_MALLOC_SHARED_T(T, count, queue) ggml_sycl_malloc_shared_t<T>((count), (queue), GGML_SYCL_ALLOC_TAG)
 
+// --------------------------------------------------------------------------
+// staging_buffer_pool: reuses pinned host buffers to avoid repeated
+// sycl::malloc_host / sycl::free calls during SOA weight conversion.
+// Thread-safe.  Buffers are pinned host memory (sycl::malloc_host) and are
+// GPU DMA-accessible.  The pool grows on demand and never shrinks until
+// destruction.
+// --------------------------------------------------------------------------
+struct staging_buffer_pool {
+    struct slot {
+        void * ptr  = nullptr;
+        size_t size = 0;
+        bool   in_use = false;
+    };
+
+    // Acquire a pinned host buffer of at least `needed` bytes.
+    // Returns an existing free slot whose size >= needed, or allocates a new one.
+    void * acquire(size_t needed, sycl::queue & queue) {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        // First pass: find smallest free slot that fits (best-fit).
+        size_t best_idx  = SIZE_MAX;
+        size_t best_size = SIZE_MAX;
+        for (size_t i = 0; i < slots_.size(); ++i) {
+            auto & s = slots_[i];
+            if (!s.in_use && s.size >= needed && s.size < best_size) {
+                best_idx  = i;
+                best_size = s.size;
+            }
+        }
+        if (best_idx != SIZE_MAX) {
+            slots_[best_idx].in_use = true;
+            return slots_[best_idx].ptr;
+        }
+
+        // No suitable slot — allocate a new pinned buffer.
+        void * ptr = nullptr;
+        try {
+            ptr = sycl::malloc_host(needed, queue);
+        } catch (const sycl::exception & e) {
+            GGML_LOG_ERROR("[staging_buffer_pool] malloc_host failed (%zu bytes): %s\n",
+                           needed, e.what());
+            return nullptr;
+        }
+        if (!ptr) {
+            return nullptr;
+        }
+        ggml_sycl::alloc_registry::instance().register_alloc(
+            ptr, needed, -1, ggml_sycl::alloc_type::HOST_PINNED);
+        slots_.push_back({ ptr, needed, true });
+        total_bytes_ += needed;
+        return ptr;
+    }
+
+    // Mark a previously acquired buffer as available for reuse.
+    void release(void * ptr) {
+        if (!ptr) {
+            return;
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (auto & s : slots_) {
+            if (s.ptr == ptr) {
+                s.in_use = false;
+                return;
+            }
+        }
+        // ptr not found — should not happen; log but don't crash.
+        GGML_LOG_WARN("[staging_buffer_pool] release called with unknown ptr %p\n", ptr);
+    }
+
+    // Free all pooled buffers.  Must be called while no acquire is in flight.
+    void shutdown(sycl::queue & queue) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (auto & s : slots_) {
+            if (s.ptr) {
+                ggml_sycl::alloc_registry::instance().unregister_alloc(s.ptr);
+                sycl::free(s.ptr, queue);
+            }
+        }
+        slots_.clear();
+        total_bytes_ = 0;
+    }
+
+    size_t total_bytes() const { return total_bytes_; }
+    size_t slot_count()  const { return slots_.size(); }
+
+private:
+    std::vector<slot> slots_;
+    std::mutex        mutex_;
+    size_t            total_bytes_ = 0;
+};
+
+// Global staging buffer pool for SOA weight conversion in fill_reordered_host.
+// Lives for the process lifetime; freed on shutdown or at exit.
+staging_buffer_pool & ggml_sycl_staging_pool();
+
 template <typename T> struct ggml_sycl_pool_alloc {
     ggml_sycl_pool * pool        = nullptr;
     T *              ptr         = nullptr;

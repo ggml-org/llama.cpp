@@ -488,6 +488,15 @@ static std::unordered_map<int, int> g_moe_layer_seq[GGML_SYCL_MAX_DEVICES];
 // Secondary GPUs write outputs to malloc_host staging, merged via primary compute queue.
 static std::atomic<bool> g_moe_multi_gpu_active{false};
 
+// ---------------------------------------------------------------------------
+// Staging buffer pool for SOA weight conversion in fill_reordered_host.
+// Reuses pinned host allocations instead of malloc_host/free per conversion.
+// ---------------------------------------------------------------------------
+staging_buffer_pool & ggml_sycl_staging_pool() {
+    static staging_buffer_pool pool;
+    return pool;
+}
+
 // B50 local aggregation: when multiple experts for the same token land on a
 // secondary GPU, compute the weighted sum on that GPU and transfer only the
 // aggregate result (~1×N floats) instead of per-expert results (~K×N floats).
@@ -6903,7 +6912,7 @@ static sycl::event ggml_sycl_fill_reordered_host(sycl::queue &                  
 
     if (src_is_device) {
         // Source is device memory - need to copy to host staging for CPU reorder
-        host_src = ggml_sycl_malloc_host_tracked_bytes(src_size, queue, "reorder_host_src");
+        host_src = ggml_sycl_staging_pool().acquire(src_size, queue);
         if (!host_src) {
             GGML_LOG_ERROR("[UNIFIED-CACHE] reorder host staging alloc failed (%zu bytes)\n", src_size);
             return queue.memcpy(dst, src, std::min(dst_size, src_size), deps);
@@ -6924,7 +6933,7 @@ static sycl::event ggml_sycl_fill_reordered_host(sycl::queue &                  
         // Source is non-USM (mmap'd) memory - use CPU memcpy to pinned staging buffer
         // SYCL queue.memcpy() cannot access mmap'd memory, so we must use std::memcpy
         GGML_SYCL_DEBUG("[DEBUG-FILL] Non-USM source detected (alloc=%d), using CPU memcpy staging\n", (int) src_alloc);
-        host_src = ggml_sycl_malloc_host_tracked_bytes(src_size, queue, "reorder_host_src");
+        host_src = ggml_sycl_staging_pool().acquire(src_size, queue);
         if (!host_src) {
             GGML_LOG_ERROR("[UNIFIED-CACHE] reorder host staging alloc failed for non-USM source (%zu bytes)\n",
                            src_size);
@@ -6944,7 +6953,7 @@ static sycl::event ggml_sycl_fill_reordered_host(sycl::queue &                  
             reorder_guard = k_reorder_guard_bytes;
         }
         const size_t alloc_size = dst_size + (reorder_guard * 2);
-        reorder_buf_raw         = ggml_sycl_malloc_host_tracked_bytes(alloc_size, queue, "reorder_host_buf");
+        reorder_buf_raw         = ggml_sycl_staging_pool().acquire(alloc_size, queue);
         if (reorder_buf_raw && reorder_guard > 0) {
             std::memset(reorder_buf_raw, k_reorder_guard_pattern, reorder_guard);
 
@@ -6958,7 +6967,7 @@ static sycl::event ggml_sycl_fill_reordered_host(sycl::queue &                  
     if (!reorder_buf) {
         GGML_LOG_ERROR("[UNIFIED-CACHE] reorder buffer alloc failed (%zu bytes)\n", dst_size);
         if (host_src) {
-            ggml_sycl_free_host_tracked_bytes(host_src, src_size, queue);
+            ggml_sycl_staging_pool().release(host_src);
         }
 
         return ggml_sycl_safe_memcpy(queue, dst, src, std::min(dst_size, src_size), deps);
@@ -6976,7 +6985,7 @@ static sycl::event ggml_sycl_fill_reordered_host(sycl::queue &                  
         GGML_ABORT("reorder guard corrupted");
     }
     if (host_src) {
-        ggml_sycl_free_host_tracked_bytes(host_src, src_size, queue);
+        ggml_sycl_staging_pool().release(host_src);
     }
 
     // Wait for any deps before starting the copy, but ONLY if they weren't already consumed.
@@ -7020,8 +7029,7 @@ static sycl::event ggml_sycl_fill_reordered_host(sycl::queue &                  
         copy_event.wait();
     }
 
-    const size_t reorder_alloc_size = dst_size + (reorder_guard * 2);
-    ggml_sycl_free_host_tracked_bytes(reorder_buf_raw ? reorder_buf_raw : reorder_buf, reorder_alloc_size, queue);
+    ggml_sycl_staging_pool().release(reorder_buf_raw ? reorder_buf_raw : reorder_buf);
     // Return the copy_event - it's now complete and safe to wait on again.
     // Avoiding ext_oneapi_submit_barrier() which can produce corrupt events on Level Zero.
     return copy_event;
