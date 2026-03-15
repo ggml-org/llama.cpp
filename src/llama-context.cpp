@@ -1167,7 +1167,11 @@ bool llama_context::set_adapter_cvec(
 
     // TODO: should we reserve?
 
-    return cvec->apply(model, data, len, n_embd, il_start, il_end);
+    bool res = cvec->apply(model, data, len, n_embd, il_start, il_end);
+
+    gf_res_prev->reset();
+
+    return res;
 }
 
 llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
