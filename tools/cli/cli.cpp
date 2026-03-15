@@ -216,6 +216,7 @@ struct cli_context {
         inputs.add_generation_prompt = true;
         inputs.reasoning_format      = COMMON_REASONING_FORMAT_DEEPSEEK;
         inputs.enable_thinking       = common_chat_templates_support_enable_thinking(chat_params.tmpls.get());
+        inputs.force_pure_content    = chat_params.force_pure_content;
 
         // Apply chat template to the list of messages
         return common_chat_templates_apply(chat_params.tmpls.get(), inputs);

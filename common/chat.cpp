@@ -1559,6 +1559,21 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         }
     }
 
+    if (inputs.force_pure_content) {
+        LOG_WRN("Forcing pure content template, will not render reasoning or tools separately.");
+        // Create the result structure
+        common_chat_params data;
+        auto params_copy               = params;
+        params_copy.reasoning_format   = COMMON_REASONING_FORMAT_NONE;
+        data.prompt                    = common_chat_template_direct_apply(tmpl, params_copy);
+        data.format                    = COMMON_CHAT_FORMAT_PEG_NATIVE;
+        auto parser                    = build_chat_peg_parser([](common_chat_peg_builder &p) {
+            return p.content(p.rest());
+        });
+        data.parser                    = parser.save();
+        return data;
+    }
+
     // Ministral/Mistral Large 3 - uses special reasoning structure fixes, can't use autoparser
     // Note: Mistral Small 3.2 uses [CALL_ID] which Ministral doesn't have, so we can distinguish them
     if (src.find("[SYSTEM_PROMPT]") != std::string::npos && src.find("[TOOL_CALLS]") != std::string::npos &&
