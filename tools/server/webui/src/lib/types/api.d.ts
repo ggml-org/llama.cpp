@@ -164,7 +164,7 @@ export interface ApiLlamaCppServerProps {
 			chat_format: string;
 			reasoning_format: string;
 			reasoning_in_content: boolean;
-			prefill: string;
+			generation_prompt: string;
 			samplers: string[];
 			backend_sampling: boolean;
 			'speculative.n_max': number;

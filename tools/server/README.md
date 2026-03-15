@@ -907,7 +907,7 @@ If query param `?fail_on_no_slot=1` is set, this endpoint will respond with stat
       "chat_format": "GPT-OSS",
       "reasoning_format": "none",
       "reasoning_in_content": false,
-      "prefill": "",
+      "generation_prompt": "",
       "samplers": [
         "penalties",
         "dry",
@@ -972,7 +972,7 @@ If query param `?fail_on_no_slot=1` is set, this endpoint will respond with stat
       "chat_format": "GPT-OSS",
       "reasoning_format": "none",
       "reasoning_in_content": false,
-      "prefill": "",
+      "generation_prompt": "",
       "samplers": [
         "penalties",
         "dry",
@@ -1193,7 +1193,7 @@ The `response_format` parameter supports both plain JSON output (e.g. `{"type": 
 
 `reasoning_format`: The reasoning format to be parsed. If set to `none`, it will output the raw generated text.
 
-`prefill`: The reasoning markers that were prefilled in the prompt by the template. Prepended to model output before parsing to handle dynamic thinking/non-thinking modes.
+`generation_prompt`: The generation prompt that was prefilled in by the template. Prepended to model output before parsing.
 
 `parse_tool_calls`: Whether to parse the generated tool call.
 
