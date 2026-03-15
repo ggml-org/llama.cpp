@@ -491,10 +491,11 @@ task_params server_task::params_from_json_cmpl(
     }
 
     {
-        params.sampling.logit_bias.clear();
+        params.sampling.logit_bias = params_base.sampling.logit_bias;
 
         const auto & logit_bias = data.find("logit_bias");
         if (logit_bias != data.end() && logit_bias->is_array()) {
+            params.sampling.logit_bias.clear();
             const int n_vocab = llama_vocab_n_tokens(vocab);
             for (const auto & el : *logit_bias) {
                 // TODO: we may want to throw errors here, in case "el" is incorrect
@@ -522,6 +523,7 @@ task_params server_task::params_from_json_cmpl(
                 }
             }
         } else if (logit_bias != data.end() && logit_bias->is_object()) {
+            params.sampling.logit_bias.clear();
             const int n_vocab = llama_vocab_n_tokens(vocab);
             for (const auto & el : logit_bias->items()) {
                 float bias;
