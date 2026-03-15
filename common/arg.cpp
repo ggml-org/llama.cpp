@@ -3010,6 +3010,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(
+        common_arg(
+            { "--security-log-folder" }, "PATH",
+            "directory for security audit logs; creates dated log files security_YYYY-MM-DD.log (default: disabled)",
+            [](common_params & params, const std::string & value) {
+                params.security_log_folder = value;
+                if (!fs_is_directory(params.security_log_folder)) {
+                    throw std::invalid_argument("not a directory: " + value);
+                }
+                // if doesn't end with DIRECTORY_SEPARATOR, add it
+                if (!params.security_log_folder.empty() &&
+                    params.security_log_folder[params.security_log_folder.size() - 1] != DIRECTORY_SEPARATOR) {
+                    params.security_log_folder += DIRECTORY_SEPARATOR;
+                }
+            })
+            .set_examples({ LLAMA_EXAMPLE_SERVER }));
     add_opt(common_arg(
         {"--models-dir"}, "PATH",
         "directory containing models for the router server (default: disabled)",
