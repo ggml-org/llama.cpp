@@ -1,2 +1,11 @@
 src/ggml-vulkan-shaders.hpp
 src/ggml-vulkan-shaders.cpp
+ifairy_lut_annotate_1.txt
+ifairy_lut_annotate_2.txt
+ifairy_lut_annotate_3.txt
+ifairy_lut_annotate.txt
+ifairy_lut_flamegraph.svgs
+ifairy_lut_perf_report.md
+perf.data
+perf.data.old
+profile_flamegraph.sh
