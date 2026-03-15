@@ -7801,7 +7801,7 @@ void llama_model::print_info() const {
             LLAMA_LOG_INFO("%s: n_cls_out             = %u\n", __func__, hparams.n_cls_out);
 
             size_t i = 0;
-            for (auto label : classifier_labels) {
+            for (const auto & label : classifier_labels) {
                 LLAMA_LOG_INFO("%s: cls_label[%2zu]         = %s\n", __func__, i++, label.c_str());
             }
         }
@@ -8081,7 +8081,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             /* n_seq_max         */ cparams.n_seq_max,
                             /* offload           */ cparams.offload_kqv,
                             /* unified           */ cparams.kv_unified,
-                            /* filter_attn       */ std::move(filter_attn),
+                            /* filter_attn       */ filter_attn,
                             /* filter_recr       */ std::move(filter_recr));
                     } else {
                         res = new llama_memory_hybrid(
@@ -8099,7 +8099,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             /* n_seq_max         */ cparams.n_seq_max,
                             /* offload           */ cparams.offload_kqv,
                             /* unified           */ cparams.kv_unified,
-                            /* filter_attn       */ std::move(filter_attn),
+                            /* filter_attn       */ filter_attn,
                             /* filter_recr       */ std::move(filter_recr));
                     }
                 } else {
