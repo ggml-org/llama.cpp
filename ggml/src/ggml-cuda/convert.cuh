@@ -42,7 +42,11 @@ template<typename dst_t, typename src_t>
     } else if constexpr(std::is_same_v<src_t, float2> && std::is_same_v<dst_t, half2>) {
         return __float22half2_rn(x);
     } else if constexpr(std::is_same_v<src_t, nv_bfloat162> && std::is_same_v<dst_t, float2>) {
+#if !defined(GGML_USE_HIP) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
         return __bfloat1622float2(x);
+#else
+        return make_float2(__bfloat162float(__low2bfloat16(x)), __bfloat162float(__high2bfloat16(x)));
+#endif
     } else if constexpr(std::is_same_v<src_t, float2> && std::is_same_v<dst_t, nv_bfloat162>) {
         // bypass compile error on cuda 12.0.1
 #ifdef GGML_USE_HIP
