@@ -83,7 +83,7 @@ class ChatStore {
 
 	get chatWidthClasses(): { class: string } {
 		const currentConfig = config();
-		return currentConfig.customChatWidth
+		return currentConfig.autoChatWidth
 			? { class: AUTO_WIDTH_CLASSES }
 			: { class: DEFAULT_WIDTH_CLASS };
 	}
