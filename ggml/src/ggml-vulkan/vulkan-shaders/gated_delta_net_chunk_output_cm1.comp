@@ -40,7 +40,7 @@ const uint TK = 16;
 const uint C_TILES = CHUNK_SIZE / TM;
 const uint D_TILES = S_V / TN;
 
-// Shared memory strides in f16vec4 units, padded for bank conflicts
+// Padded strides for bank conflict avoidance
 const uint QK_STRIDE = S_V / 4 + 2;
 const uint ATTN_V4_STRIDE = CHUNK_SIZE / 4 + 2;
 
