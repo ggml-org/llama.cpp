@@ -36,6 +36,7 @@ set(KERNELS
     mul_mat_f16
     rope_f32
     rms_norm_f32
+    rms_norm_mul_f32
     softmax_f32
     get_rows_f32
     cont_f32

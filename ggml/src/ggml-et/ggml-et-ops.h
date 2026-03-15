@@ -111,6 +111,13 @@ struct ggml_et_set_rows_params {
     ggml_tensor dst;      // F32/F16 destination tensor
 };
 
+struct ggml_et_rms_norm_mul_params {
+    ggml_tensor src0;      // F32 input tensor (to be normalized)
+    ggml_tensor src1;      // F32 weights tensor (element-wise multiply)
+    ggml_tensor dst;       // F32 output tensor
+    float eps;             // Epsilon for numerical stability
+};
+
 struct ggml_et_mul_mat_id_params {
     ggml_tensor src0;     // Expert weight matrices (Q8_0/F16/F32) [K, M, n_expert]
     ggml_tensor src1;     // Activations (F32) [K, n_expert_used, batch]
@@ -131,3 +138,6 @@ bool ggml_et_op_get_rows(ggml_backend_et_device_context* dev_ctx, const ggml_ten
 bool ggml_et_op_set_rows(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_cont(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_elmap(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
+bool ggml_et_op_rms_norm_mul(ggml_backend_et_device_context* dev_ctx,
+                             const ggml_tensor* rms_norm_node,
+                             const ggml_tensor* mul_node);
