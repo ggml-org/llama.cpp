@@ -13,14 +13,8 @@ on:
       '**/*.hpp',
       '**/*.c',
       '**/*.cpp',
-      '**/*.cu',
-      '**/*.cuh',
-      '**/*.swift',
-      '**/*.m',
-      '**/*.metal',
       '**/*.comp',
-      '**/*.glsl',
-      '**/*.wgsl'
+      '**/*.glsl'
     ]
 
 concurrency:
