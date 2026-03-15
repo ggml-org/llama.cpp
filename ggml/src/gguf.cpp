@@ -394,7 +394,11 @@ bool gguf_read_emplace_helper(const struct gguf_reader & gr, std::vector<struct 
     return true;
 }
 
-struct gguf_context * gguf_init_from_file_impl(FILE * file, struct gguf_init_params params) {
+struct gguf_context * gguf_init_from_file_ptr(FILE * file, struct gguf_init_params params) {
+    if (!file) {
+        return nullptr;
+    }
+
     const struct gguf_reader gr(file);
     struct gguf_context * ctx = new gguf_context;
 
@@ -848,7 +852,7 @@ struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_p
         return nullptr;
     }
 
-    struct gguf_context * result = gguf_init_from_file_impl(file, params);
+    struct gguf_context * result = gguf_init_from_file_ptr(file, params);
     fclose(file);
     return result;
 }

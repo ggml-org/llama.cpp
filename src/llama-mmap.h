@@ -15,12 +15,13 @@ using llama_mlocks = std::vector<std::unique_ptr<llama_mlock>>;
 
 struct llama_file {
     llama_file(const char * fname, const char * mode, bool use_direct_io = false);
+    llama_file(FILE * file);
     ~llama_file();
 
     size_t tell() const;
     size_t size() const;
 
-    int file_id() const; // fileno overload
+    int file_id() const;
 
     void seek(size_t offset, int whence) const;
 
