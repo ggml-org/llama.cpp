@@ -31000,29 +31000,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                     found_cached = true;
                                 }
                             }
-                            // Try demand_load on GPU0 before CPU fallback.
-                            // demand_load() synchronously DMA's the expert to
-                            // VRAM (~4ms), but GPU MMVQ is ~20x faster than CPU
-                            // vec_dot, so it's a net win once cached.
-                            if (!found_cached) {
-                                auto & pf_primary = g_expert_prefetchers[0];
-                                if (pf_primary.is_initialized()) {
-                                    void * loaded = pf_primary.demand_load(layer_id, i02);
-                                    if (loaded) {
-                                        gpu_entries.push_back({ iid1, id, i02, loaded, 0 });
-                                        found_cached = true;
-                                    }
-                                }
-                            }
                             if (!found_cached) {
                                 cpu_entries.push_back({ iid1, id, i02, nullptr, /* device_id */ 0 });
-                                // Async-promote for next token: hint the
-                                // primary GPU prefetcher so a future dispatch
-                                // finds this expert in VRAM cache.
-                                auto & pf_hint = g_expert_prefetchers[0];
-                                if (pf_hint.is_initialized()) {
-                                    pf_hint.hint(layer_id, i02);
-                                }
                             }
                         }
                     }
@@ -31269,25 +31248,10 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                 if (!ptr && expert_ptrs_host && i02 < n_as) {
                                     ptr = const_cast<void *>(expert_ptrs_host[i02]);
                                 }
-                                // Try demand_load on GPU0 if no static ptr
-                                if (!ptr) {
-                                    auto & pf0 = g_expert_prefetchers[0];
-                                    if (pf0.is_initialized()) {
-                                        ptr = pf0.demand_load(layer_id, i02);
-                                        if (ptr) {
-                                            n_demand_loaded++;
-                                        }
-                                    }
-                                }
                                 if (ptr) {
                                     gpu_entries.push_back({ iid1, id, i02, ptr });
                                 } else {
                                     cpu_entries.push_back({ iid1, id, i02, nullptr });
-                                    // Async hint for next-token promotion
-                                    auto & pf_h = g_expert_prefetchers[0];
-                                    if (pf_h.is_initialized()) {
-                                        pf_h.hint(layer_id, i02);
-                                    }
                                 }
                             } else if (multi_gpu && placement.device_ptr != nullptr
                                        && placement.device_id < n_gpu_devs
@@ -31311,18 +31275,6 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                         found_cached = true;
                                     }
                                 }
-                                // Try demand_load: GPU0 first, then secondary GPUs.
-                                if (!found_cached) {
-                                    auto & pf0 = g_expert_prefetchers[0];
-                                    if (pf0.is_initialized()) {
-                                        void * loaded = pf0.demand_load(layer_id, i02);
-                                        if (loaded) {
-                                            n_demand_loaded++;
-                                            gpu_entries.push_back({ iid1, id, i02, loaded });
-                                            found_cached = true;
-                                        }
-                                    }
-                                }
                                 if (!found_cached && multi_gpu) {
                                     // Try on-demand DMA to secondary GPUs before CPU fallback.
                                     for (int d = 1; d < n_gpu && !found_cached; d++) {
@@ -31342,22 +31294,11 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                 }
                                 if (!found_cached) {
                                     cpu_entries.push_back({ iid1, id, i02, nullptr });
-                                    // Async hint: promote for next token
-                                    auto & pf_h = g_expert_prefetchers[0];
-                                    if (pf_h.is_initialized()) {
-                                        pf_h.hint(layer_id, i02);
-                                    }
                                 }
                             }
                         } else {
                             // CPU-only expert (device_id == -1).
-                            // Still hint for async promotion — active use
-                            // signals the expert may be worth caching.
                             cpu_entries.push_back({ iid1, id, i02, nullptr });
-                            auto & pf_neg = g_expert_prefetchers[0];
-                            if (pf_neg.is_initialized()) {
-                                pf_neg.hint(layer_id, i02);
-                            }
                         }
                     } else {
                         // Fallback: use moe_expert_ptrs_host table from update_moe_ptr_table.
@@ -31366,11 +31307,6 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                 { iid1, id, i02, const_cast<void *>(expert_ptrs_host[i02]) });
                         } else {
                             cpu_entries.push_back({ iid1, id, i02, nullptr });
-                            // No placement table — hint GPU0 for promotion
-                            auto & pf_npt = g_expert_prefetchers[0];
-                            if (pf_npt.is_initialized()) {
-                                pf_npt.hint(layer_id, i02);
-                            }
                         }
                     }
                 }
