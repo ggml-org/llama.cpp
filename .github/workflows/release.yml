@@ -23,7 +23,8 @@ on:
       '**/*.swift',
       '**/*.m',
       '**/*.metal',
-      '**/*.comp'
+      '**/*.comp',
+      '**/*.glsl'
     ]
 
 concurrency:
