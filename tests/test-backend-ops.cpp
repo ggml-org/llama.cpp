@@ -8982,6 +8982,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 128, 1024, 1)); // 4h PP-1024
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 64, 1, 1, false, true)); // KDA PP-64
 
+    // rms_norm: float4 vectorized path (ncols divisible by 4) and scalar fallback (ncols not divisible by 4)
+    for (uint32_t n : {4, 128, 256, 512, 768, 1024, 2048, 3072, 4096, 5120, 8192, 3, 5, 13, 127, 4097}) {
+        for (int64_t nrows : {1, 32, 512}) {
+            test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {n, nrows, 1, 1}, false, 1e-6f));
+        }
+    }
+
     return test_cases;
 }
 
