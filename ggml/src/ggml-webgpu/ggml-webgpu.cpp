@@ -75,7 +75,9 @@ static inline void compute_2d_workgroups(uint32_t total_wg, uint32_t max_per_dim
 #endif  // GGML_WEBGPU_CPU_PROFILE
 
 #ifdef GGML_WEBGPU_GPU_PROFILE
-#    define WEBGPU_NUM_TIMESTAMP_QUERY_BUFS       32
+#    define WEBGPU_NUM_INFLIGHT_PROFILE_SUBS \
+        32  // we can have maximum 64 in-flight futures at once and max 32 QuerySets
+#    define WEBGPU_NUM_TIMESTAMP_QUERY_BUFS       WEBGPU_NUM_INFLIGHT_PROFILE_SUBS
 #    define WEBGPU_TIMESTAMP_QUERY_BUF_SIZE_BYTES 16  // e.g. enough for two timestamps
 #endif
 
@@ -205,18 +207,20 @@ struct webgpu_buf_pool {
 };
 
 #ifdef GGML_WEBGPU_GPU_PROFILE
-struct webgpu_gpu_profile_bufs {
+// Holds a host and device buffer for profiling,
+// along with a query_set to execute the timestampQuery
+struct webgpu_profile_bufs {
+    int            id;
     wgpu::Buffer   host_buf;
     wgpu::Buffer   dev_buf;
     wgpu::QuerySet query_set;
 };
 
-// Holds a pool of parameter buffers for WebGPU operations
-struct webgpu_gpu_profile_buf_pool {
-    std::vector<webgpu_gpu_profile_bufs> free;
+struct webgpu_profile_buf_pool {
+    std::vector<webgpu_profile_bufs> free;
+    std::vector<webgpu_profile_bufs> in_use;
 
-    std::mutex mutex;
-
+    std::mutex              mutex;
     std::condition_variable cv;
 
     void init(wgpu::Device      device,
@@ -224,47 +228,99 @@ struct webgpu_gpu_profile_buf_pool {
               size_t            buf_size,
               wgpu::BufferUsage dev_buf_usage,
               wgpu::BufferUsage host_buf_usage) {
+        std::lock_guard<std::mutex> lock(mutex);
+
         for (int i = 0; i < num_bufs; i++) {
             wgpu::Buffer host_buf;
             wgpu::Buffer dev_buf;
+
             ggml_webgpu_create_buffer(device, host_buf, buf_size, host_buf_usage, "ggml_webgpu_host_profile_buf");
             ggml_webgpu_create_buffer(device, dev_buf, buf_size, dev_buf_usage, "ggml_webgpu_dev_profile_buf");
-            // Create a query set for 2 timestamps
-            wgpu::QuerySetDescriptor ts_query_set_desc = {};
 
-            ts_query_set_desc.type      = wgpu::QueryType::Timestamp;
-            ts_query_set_desc.count     = 2;
+            wgpu::QuerySetDescriptor ts_query_set_desc = {};
+            ts_query_set_desc.type                     = wgpu::QueryType::Timestamp;
+            ts_query_set_desc.count                    = 2;
+
             wgpu::QuerySet ts_query_set = device.CreateQuerySet(&ts_query_set_desc);
 
-            free.push_back({ host_buf, dev_buf, ts_query_set });
+            free.push_back({ i, host_buf, dev_buf, ts_query_set });
         }
     }
 
-    webgpu_gpu_profile_bufs alloc_bufs() {
+    webgpu_profile_bufs alloc_bufs() {
         std::unique_lock<std::mutex> lock(mutex);
         cv.wait(lock, [this] { return !free.empty(); });
-        webgpu_gpu_profile_bufs bufs = free.back();
+
+        in_use.push_back(free.back());
         free.pop_back();
-        return bufs;
+
+        return in_use.back();
     }
 
-    void free_bufs(std::vector<webgpu_gpu_profile_bufs> bufs) {
+    void free_bufs(const std::vector<webgpu_profile_bufs> & bufs) {
         std::lock_guard<std::mutex> lock(mutex);
-        free.insert(free.end(), bufs.begin(), bufs.end());
+
+        for (const auto & buf : bufs) {
+            auto it = std::find_if(in_use.begin(), in_use.end(),
+                                   [&](const webgpu_profile_bufs & x) { return x.id == buf.id; });
+
+            if (it != in_use.end()) {
+                free.push_back(*it);
+                in_use.erase(it);
+            }
+        }
+
         cv.notify_all();
+    }
+
+    size_t num_free_bufs() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return free.size();
+    }
+
+    size_t num_in_use_bufs() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return in_use.size();
     }
 
     void cleanup() {
         std::lock_guard<std::mutex> lock(mutex);
+
         for (auto & bufs : free) {
-            bufs.host_buf.Destroy();
-            bufs.dev_buf.Destroy();
-            bufs.query_set.Destroy();
+            if (bufs.host_buf) {
+                if (bufs.host_buf.GetMapState() == wgpu::BufferMapState::Mapped) {
+                    bufs.host_buf.Unmap();
+                }
+                bufs.host_buf.Destroy();
+            }
+            if (bufs.dev_buf) {
+                bufs.dev_buf.Destroy();
+            }
+            if (bufs.query_set) {
+                bufs.query_set.Destroy();
+            }
         }
+
+        for (auto & bufs : in_use) {
+            if (bufs.host_buf) {
+                if (bufs.host_buf.GetMapState() == wgpu::BufferMapState::Mapped) {
+                    bufs.host_buf.Unmap();
+                }
+                bufs.host_buf.Destroy();
+            }
+            if (bufs.dev_buf) {
+                bufs.dev_buf.Destroy();
+            }
+            if (bufs.query_set) {
+                bufs.query_set.Destroy();
+            }
+        }
+
         free.clear();
+        in_use.clear();
     }
 
-    ~webgpu_gpu_profile_buf_pool() { this->cleanup(); }
+    ~webgpu_profile_buf_pool() { cleanup(); }
 };
 #endif
 
@@ -273,8 +329,8 @@ struct webgpu_command {
     wgpu::CommandBuffer       commands;
     std::vector<wgpu::Buffer> params_bufs;
 #ifdef GGML_WEBGPU_GPU_PROFILE
-    webgpu_gpu_profile_bufs timestamp_query_bufs;
-    std::string             pipeline_name;
+    webgpu_profile_bufs timestamp_query_bufs;
+    std::string         pipeline_name;
 #endif
 };
 
@@ -301,7 +357,7 @@ struct webgpu_global_context_struct {
     webgpu_capabilities  capabilities;
     // Shared buffer to move data from device to host
     wgpu::Buffer         get_tensor_staging_buf;
-    // Global mutex for pipeline and staging buffer, will be refactored to exclude pipeline caches.
+    // Global mutex for pipeline and staging buffer
     std::recursive_mutex mutex;
 
     webgpu_buf_pool                memset_buf_pool;
@@ -318,7 +374,8 @@ struct webgpu_global_context_struct {
     // Profiling: per-shader GPU time in ms
     std::unordered_map<std::string, double> shader_gpu_time_ms;
     // Profiling: pool of timestamp query buffers (one per operation)
-    webgpu_gpu_profile_buf_pool             timestamp_query_buf_pool;
+    webgpu_profile_buf_pool                 timestamp_query_buf_pool;
+    std::vector<wgpu::FutureWaitInfo>       profiling_futures;
 #endif
 
 #ifdef GGML_WEBGPU_DEBUG
@@ -491,10 +548,15 @@ static void ggml_backend_webgpu_wait_profile_futures(webgpu_global_context &    
     uint64_t timeout_ms = block ? UINT64_MAX : 0;
     if (block) {
         while (!futures.empty()) {
-            auto waitStatus = ctx->instance.WaitAny(futures.size(), futures.data(), timeout_ms);
-            if (ggml_backend_webgpu_handle_wait_status(waitStatus)) {
-                ggml_backend_webgpu_erase_completed_futures(futures);
+            // We can only wait on 64 futures at a time
+            size_t count = std::min<size_t>(WEBGPU_NUM_INFLIGHT_PROFILE_SUBS, futures.size());
+
+            auto waitStatus = ctx->instance.WaitAny(count, futures.data(), UINT64_MAX);
+            if (!ggml_backend_webgpu_handle_wait_status(waitStatus)) {
+                break;
             }
+
+            ggml_backend_webgpu_erase_completed_futures(futures);
         }
     } else {
         auto waitStatus = ctx->instance.WaitAny(futures.size(), futures.data(), timeout_ms);
@@ -516,9 +578,6 @@ static void ggml_backend_webgpu_wait(webgpu_global_context &          ctx,
     while (subs.size() >= WEBGPU_MAX_INFLIGHT_SUBS_PER_THREAD) {
         auto waitStatus = ctx->instance.WaitAny(1, &subs[0].submit_done, UINT64_MAX);
         if (ggml_backend_webgpu_handle_wait_status(waitStatus)) {
-#ifdef GGML_WEBGPU_GPU_PROFILE
-            ggml_backend_webgpu_wait_profile_futures(ctx, subs[0].profile_futures, true);
-#endif
             subs.erase(subs.begin());
         }
     }
@@ -533,9 +592,6 @@ static void ggml_backend_webgpu_wait(webgpu_global_context &          ctx,
                 auto waitStatus = ctx->instance.WaitAny(1, &sub.submit_done, UINT64_MAX);
                 ggml_backend_webgpu_handle_wait_status(waitStatus);
             }
-#ifdef GGML_WEBGPU_GPU_PROFILE
-            ggml_backend_webgpu_wait_profile_futures(ctx, sub.profile_futures, true);
-#endif
         }
         subs.clear();
     } else {
@@ -543,12 +599,7 @@ static void ggml_backend_webgpu_wait(webgpu_global_context &          ctx,
         for (auto sub = subs.begin(); sub != subs.end();) {
             auto waitStatus = ctx->instance.WaitAny(1, &sub->submit_done, 0);
             ggml_backend_webgpu_handle_wait_status(waitStatus, true);
-#ifdef GGML_WEBGPU_GPU_PROFILE
-            ggml_backend_webgpu_wait_profile_futures(ctx, sub->profile_futures, false);
-            if (sub->submit_done.completed && sub->profile_futures.empty()) {
-#else
             if (sub->submit_done.completed) {
-#endif
                 sub = subs.erase(sub);
             } else {
                 ++sub;
@@ -595,7 +646,7 @@ static webgpu_submission ggml_backend_webgpu_submit(webgpu_global_context &     
     std::vector<wgpu::Buffer>        params_bufs;
     webgpu_submission                submission;
 #ifdef GGML_WEBGPU_GPU_PROFILE
-    std::vector<std::pair<std::string, webgpu_gpu_profile_bufs>> pipeline_name_and_ts_bufs;
+    std::vector<std::pair<std::string, webgpu_profile_bufs>> pipeline_name_and_ts_bufs;
 #endif
 
     for (const auto & command : commands) {
@@ -634,7 +685,7 @@ static webgpu_submission ggml_backend_webgpu_submit(webgpu_global_context &     
                 // We can't unmap in here due to WebGPU reentrancy limitations.
                 ctx->timestamp_query_buf_pool.free_bufs({ ts_bufs });
             });
-        submission.profile_futures.push_back({ f });
+        ctx->profiling_futures.push_back({ f, false });
     }
 #endif
     return submission;
@@ -678,7 +729,18 @@ static webgpu_command ggml_backend_webgpu_build_multi(
     }
 
 #ifdef GGML_WEBGPU_GPU_PROFILE
-    webgpu_gpu_profile_bufs ts_bufs = ctx->timestamp_query_buf_pool.alloc_bufs();
+    // Only copy timestamp query results if we have no more timestamp buffers available
+    if (ctx->timestamp_query_buf_pool.num_free_bufs() == 0) {
+        for (auto & ts_bufs : ctx->timestamp_query_buf_pool.in_use) {
+            encoder.ResolveQuerySet(ts_bufs.query_set, 0, 2, ts_bufs.dev_buf, 0);
+            encoder.CopyBufferToBuffer(ts_bufs.dev_buf, 0, ts_bufs.host_buf, 0, ts_bufs.host_buf.GetSize());
+        }
+
+        // buffers are freed within the future, and futures are deleted here
+        ggml_backend_webgpu_wait_profile_futures(ctx, ctx->profiling_futures, true);
+    }
+
+    webgpu_profile_bufs ts_bufs = ctx->timestamp_query_buf_pool.alloc_bufs();
     if (ts_bufs.host_buf.GetMapState() == wgpu::BufferMapState::Mapped) {
         ts_bufs.host_buf.Unmap();
     }
@@ -697,11 +759,6 @@ static webgpu_command ggml_backend_webgpu_build_multi(
         pass.DispatchWorkgroups(workgroups_list[i].first, workgroups_list[i].second, 1);
     }
     pass.End();
-
-#ifdef GGML_WEBGPU_GPU_PROFILE
-    encoder.ResolveQuerySet(ts_bufs.query_set, 0, 2, ts_bufs.dev_buf, 0);
-    encoder.CopyBufferToBuffer(ts_bufs.dev_buf, 0, ts_bufs.host_buf, 0, ts_bufs.host_buf.GetSize());
-#endif
 
     wgpu::CommandBuffer commands = encoder.Finish();
     webgpu_command      result   = {};
@@ -785,6 +842,15 @@ static void ggml_backend_webgpu_free(ggml_backend_t backend) {
 #endif
 
 #ifdef GGML_WEBGPU_GPU_PROFILE
+    // resolve any stragglers
+    wgpu::CommandEncoder encoder = ctx->webgpu_ctx->global_ctx->device.CreateCommandEncoder();
+    for (auto & ts_bufs : ctx->webgpu_ctx->global_ctx->timestamp_query_buf_pool.in_use) {
+        encoder.ResolveQuerySet(ts_bufs.query_set, 0, 2, ts_bufs.dev_buf, 0);
+        encoder.CopyBufferToBuffer(ts_bufs.dev_buf, 0, ts_bufs.host_buf, 0, ts_bufs.host_buf.GetSize());
+        ggml_backend_webgpu_wait_profile_futures(ctx->webgpu_ctx->global_ctx,
+                                                 ctx->webgpu_ctx->global_ctx->profiling_futures, true);
+    }
+
     std::cout << "\n[ggml_webgpu gpu profiling summary]\n";
     double total_gpu = 0.0;
     for (const auto & kv : ctx->webgpu_ctx->global_ctx->shader_gpu_time_ms) {
