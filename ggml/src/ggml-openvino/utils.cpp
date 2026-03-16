@@ -472,6 +472,9 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
     return GGML_STATUS_SUCCESS;
 }
 
+// Detect whether a cgraph is a split subgraph or not.
+// Step 1 compares each node's recorded use_count with actual fan-out references in node->src.
+// Step 2 verifies that node inputs come from model nodes/weights/leafs; external sources imply split.
 bool is_model_splitted(ggml_cgraph * cgraph) {
     // check the nodes of the model are used by the following nodes, through compare the node's use count and the count of nodes that use it as input. If does not match, return true, else return false.
     for (int i = 0; i < cgraph->n_nodes; i++) {

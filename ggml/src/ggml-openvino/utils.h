@@ -117,6 +117,11 @@ ov::Tensor create_ov_output_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
 
 bool is_naive(struct ggml_cgraph * cgraph);
 
+/**
+ * @brief Heuristically checks whether the given computation graph is a split-model fragment.
+ * @param cgraph Pointer to the GGML computation graph to analyze.
+ * @return true if the graph is identified as split; otherwise false.
+ */
 bool is_model_splitted(struct ggml_cgraph * cgraph);
 
 enum ggml_status naive_compute(struct ggml_cgraph * cgraph,
