@@ -85,6 +85,24 @@ MTMD_API int32_t mtmd_helper_decode_image_chunk(mtmd_context * ctx,
                                                 int32_t n_batch,
                                                 llama_pos * new_n_past);
 
+// helper function for Voxtral Realtime dual-stream transcription
+// loads token embeddings from the GGUF model file, encodes audio,
+// sums audio + text embeddings at each position, runs prefill then autoregressive decode
+// the caller provides a common_sampler for token sampling
+// model_path is the path to the main model GGUF file (needed to extract token embeddings)
+// output_text receives the transcribed text
+// returns 0 on success
+MTMD_API int32_t mtmd_helper_eval_voxtral_realtime(
+    mtmd_context * ctx,
+    struct llama_context * lctx,
+    const char * model_path,
+    const float * pcm_samples,
+    size_t n_samples,
+    int32_t n_batch,
+    int32_t max_tokens,
+    llama_pos * new_n_past,
+    std::vector<llama_token> * output_tokens);
+
 #ifdef __cplusplus
 } // extern "C"
 #endif
