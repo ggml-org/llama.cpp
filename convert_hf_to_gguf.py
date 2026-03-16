@@ -401,7 +401,6 @@ class ModelBase:
                     if name.endswith(".weight_scale_inv") or name.endswith("_scale_inv"):
                         weight_name = name.removesuffix("_scale_inv")
                         w = self.model_tensors[weight_name]
-                        self.model_tensors[weight_name] = w
                         s = self.model_tensors[name]
                         self.model_tensors[weight_name] = lambda w=w, s=s, bs=block_size: dequant_simple(w(), s(), bs)
                         tensors_to_remove.append(name)
@@ -3039,13 +3038,11 @@ class LlavaVisionModel(MmprojModel):
     def get_token_id(self, token: str) -> int:
         tokenizer_config_file = self.dir_model / 'tokenizer_config.json'
         with open(tokenizer_config_file, "r", encoding="utf-8") as f:
-            try:
-                added_tokens_decoder = json.load(f)['added_tokens_decoder']
-                for id_, token_data in added_tokens_decoder.items():
-                    if token_data["content"] == token:
-                        return int(id_)
-            except KeyError:
-                pass # fallthrough to tokenizer.json
+            added_tokens_decoder = json.load(f).get('added_tokens_decoder') or {}
+            for id_, token_data in added_tokens_decoder.items():
+                if token_data.get("content") == token:
+                    return int(id_)
+            # fallthrough to tokenizer.json
         with open(self.dir_model / "tokenizer.json", "r", encoding="utf-8") as f:
             tokenizer_json = json.load(f)
             for token_data in tokenizer_json["added_tokens"]:
@@ -8488,6 +8485,7 @@ class Mistral3Model(TextModel):
 
     model_arch = gguf.MODEL_ARCH.MISTRAL3 # unused
     impl: TextModel
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if self.hparams.get("model_type") == "mistral4":
