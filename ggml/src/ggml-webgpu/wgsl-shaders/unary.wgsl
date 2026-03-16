@@ -45,6 +45,9 @@ struct Params {
     beta: f32,
     eps: f32,
 #endif
+#ifdef TRI
+    tri_type: u32,
+#endif
 
 };
 
@@ -183,6 +186,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 #ifdef COS
     let res_f32 = cos(f32(src[params.offset_src + src_idx]));
     let res = TYPE(res_f32);
+#endif
+#ifdef TRI
+    let tri_keep =
+        (params.tri_type == 0u && i0 >= i1) ||
+        (params.tri_type == 1u && i0 >  i1) ||
+        (params.tri_type == 2u && i0 <= i1) ||
+        (params.tri_type == 3u && i0 <  i1);
+    let res = select(TYPE(0.0), src[params.offset_src + src_idx], tri_keep);
 #endif
 
 #ifdef INPLACE

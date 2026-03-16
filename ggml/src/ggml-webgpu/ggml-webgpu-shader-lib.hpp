@@ -131,6 +131,26 @@ struct ggml_webgpu_set_rows_shader_decisions {
     uint32_t wg_size;
 };
 
+/** Set **/
+
+struct ggml_webgpu_set_pipeline_key {
+    ggml_type type;
+    bool      inplace;
+
+    bool operator==(const ggml_webgpu_set_pipeline_key & other) const {
+        return type == other.type && inplace == other.inplace;
+    }
+};
+
+struct ggml_webgpu_set_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_set_pipeline_key & key) const {
+        size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.type);
+        ggml_webgpu_hash_combine(seed, key.inplace);
+        return seed;
+    }
+};
+
 /** Get Rows **/
 
 struct ggml_webgpu_get_rows_pipeline_key {
@@ -177,6 +197,26 @@ struct ggml_webgpu_scale_pipeline_key {
 struct ggml_webgpu_scale_pipeline_key_hash {
     size_t operator()(const ggml_webgpu_scale_pipeline_key & key) const {
         size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.inplace);
+        return seed;
+    }
+};
+
+/** Row Norm **/
+
+struct ggml_webgpu_row_norm_pipeline_key {
+    int op;
+    int inplace;
+
+    bool operator==(const ggml_webgpu_row_norm_pipeline_key & other) const {
+        return op == other.op && inplace == other.inplace;
+    }
+};
+
+struct ggml_webgpu_row_norm_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_row_norm_pipeline_key & key) const {
+        size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.op);
         ggml_webgpu_hash_combine(seed, key.inplace);
         return seed;
     }
@@ -441,6 +481,8 @@ class ggml_webgpu_shader_lib {
         unary_pipelines;                                               // type/op/inplace
     std::unordered_map<ggml_webgpu_scale_pipeline_key, webgpu_pipeline, ggml_webgpu_scale_pipeline_key_hash>
         scale_pipelines;                                               // inplace
+    std::unordered_map<ggml_webgpu_row_norm_pipeline_key, webgpu_pipeline, ggml_webgpu_row_norm_pipeline_key_hash>
+        row_norm_pipelines;                                            // op/inplace
     std::unordered_map<ggml_webgpu_pad_pipeline_key, webgpu_pipeline, ggml_webgpu_pad_pipeline_key_hash>
         pad_pipelines;                                                 // circular/non-circular
     std::unordered_map<ggml_webgpu_binary_pipeline_key, webgpu_pipeline, ggml_webgpu_binary_pipeline_key_hash>
@@ -462,6 +504,8 @@ class ggml_webgpu_shader_lib {
 
     std::unordered_map<ggml_webgpu_set_rows_pipeline_key, webgpu_pipeline, ggml_webgpu_set_rows_pipeline_key_hash>
         set_rows_pipelines;
+    std::unordered_map<ggml_webgpu_set_pipeline_key, webgpu_pipeline, ggml_webgpu_set_pipeline_key_hash>
+        set_pipelines;
 
   public:
     ggml_webgpu_shader_lib(wgpu::Device device) { this->device = device; }
@@ -544,6 +588,46 @@ class ggml_webgpu_shader_lib {
         set_rows_pipelines[key]         = ggml_webgpu_create_pipeline(device, processed, variant);
         set_rows_pipelines[key].context = decisions;
         return set_rows_pipelines[key];
+    }
+
+    webgpu_pipeline get_set_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        ggml_webgpu_set_pipeline_key key = { .type = context.dst->type, .inplace = context.inplace };
+
+        auto it = set_pipelines.find(key);
+        if (it != set_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines;
+        std::string              variant = "set";
+
+        switch (key.type) {
+            case GGML_TYPE_F32:
+                defines.push_back("TYPE_F32");
+                variant += "_f32";
+                break;
+            case GGML_TYPE_I32:
+                defines.push_back("TYPE_I32");
+                variant += "_i32";
+                break;
+            default:
+                GGML_ABORT("Unsupported type for set shader");
+        }
+
+        if (key.inplace) {
+            defines.push_back("INPLACE");
+            variant += "_inplace";
+        }
+
+        defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+        auto processed           = preprocessor.preprocess(wgsl_set, defines);
+        auto decisions           = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        decisions->wg_size       = context.max_wg_size;
+        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
+        pipeline.context         = decisions;
+        set_pipelines[key]       = pipeline;
+        return set_pipelines[key];
     }
 
     webgpu_pipeline get_cumsum_pipeline(const ggml_webgpu_shader_lib_context & context) {
@@ -729,6 +813,46 @@ class ggml_webgpu_shader_lib {
         pipeline.context         = decisions;
         scale_pipelines[key]     = pipeline;
         return scale_pipelines[key];
+    }
+
+    webgpu_pipeline get_row_norm_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        ggml_webgpu_row_norm_pipeline_key key = {
+            .op      = context.dst->op,
+            .inplace = context.inplace,
+        };
+
+        auto it = row_norm_pipelines.find(key);
+        if (it != row_norm_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines;
+        std::string              variant = "row_norm";
+
+        switch (key.op) {
+            case GGML_OP_RMS_NORM:
+                defines.push_back("RMS_NORM");
+                variant += "_rms_norm";
+                break;
+            case GGML_OP_L2_NORM:
+                defines.push_back("L2_NORM");
+                variant += "_l2_norm";
+                break;
+            default:
+                GGML_ABORT("Unsupported op for row_norm shader");
+        }
+
+        if (key.inplace) {
+            defines.push_back("INPLACE");
+            variant += "_inplace";
+        }
+
+        defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+        auto processed           = preprocessor.preprocess(wgsl_row_norm, defines);
+        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
+        row_norm_pipelines[key]  = pipeline;
+        return row_norm_pipelines[key];
     }
 
     webgpu_pipeline get_pad_pipeline(const ggml_webgpu_shader_lib_context & context) {
