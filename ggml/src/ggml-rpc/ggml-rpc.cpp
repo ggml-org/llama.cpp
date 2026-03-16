@@ -547,14 +547,21 @@ static inline bool rdma_poll(struct ibv_cq * cq, struct ibv_wc * wc, int tcp_fd 
         }
         if (n < 0) return false;
         if ((s & 0xFFFFF) == 0 && s > 0) {
-            if (tcp_fd >= 0 && tcp_peer_closed(tcp_fd)) {
-                return false;
-            }
-            struct timespec now;
-            clock_gettime(CLOCK_MONOTONIC_COARSE, &now);
-            if (now.tv_sec - t0.tv_sec >= 30) {
-                GGML_LOG_ERROR("RDMA CQ poll timeout\n");
-                return false;
+            if (tcp_fd >= 0) {
+                // TCP FD available: use it as the authoritative liveness check.
+                // Abort immediately on peer close; otherwise wait indefinitely
+                // (the connection may be idle between inference requests).
+                if (tcp_peer_closed(tcp_fd)) {
+                    return false;
+                }
+            } else {
+                // No TCP FD: fall back to a hard 30s timeout as safety net.
+                struct timespec now;
+                clock_gettime(CLOCK_MONOTONIC_COARSE, &now);
+                if (now.tv_sec - t0.tv_sec >= 30) {
+                    GGML_LOG_ERROR("RDMA CQ poll timeout\n");
+                    return false;
+                }
             }
         }
     }
