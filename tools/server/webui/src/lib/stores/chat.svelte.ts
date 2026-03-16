@@ -34,7 +34,9 @@ import {
 	MAX_INACTIVE_CONVERSATION_STATES,
 	INACTIVE_CONVERSATION_STATE_MAX_AGE_MS,
 	REASONING_TAGS,
-	SYSTEM_MESSAGE_PLACEHOLDER
+	SYSTEM_MESSAGE_PLACEHOLDER,
+	AUTO_WIDTH_CLASSES,
+	DEFAULT_WIDTH_CLASS
 } from '$lib/constants';
 import type {
 	ChatMessageTimings,
@@ -78,6 +80,13 @@ class ChatStore {
 		| null = null;
 	private _pendingDraftMessage = $state<string>('');
 	private _pendingDraftFiles = $state<ChatUploadedFile[]>([]);
+
+	get chatWidthClasses(): { class: string } {
+		const currentConfig = config();
+		return currentConfig.autoChatWidth
+			? { class: AUTO_WIDTH_CLASSES }
+			: { class: DEFAULT_WIDTH_CLASS };
+	}
 
 	private setChatLoading(convId: string, loading: boolean): void {
 		this.touchConversationState(convId);
@@ -1554,3 +1563,4 @@ export const isChatStreaming = () => chatStore.isStreaming();
 export const isEditing = () => chatStore.isEditing();
 export const isLoading = () => chatStore.isLoading;
 export const pendingEditMessageId = () => chatStore.pendingEditMessageId;
+export const chatWidthClasses = () => chatStore.chatWidthClasses;

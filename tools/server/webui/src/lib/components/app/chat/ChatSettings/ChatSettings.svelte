@@ -92,6 +92,11 @@
 			icon: Monitor,
 			fields: [
 				{
+					key: SETTINGS_KEYS.AUTO_CHAT_WIDTH,
+					label: 'Automatic width',
+					type: SettingsFieldType.CHECKBOX
+				},
+				{
 					key: SETTINGS_KEYS.SHOW_MESSAGE_STATS,
 					label: 'Show message generation statistics',
 					type: SettingsFieldType.CHECKBOX

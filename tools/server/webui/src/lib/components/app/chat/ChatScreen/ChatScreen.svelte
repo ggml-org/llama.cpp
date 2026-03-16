@@ -12,6 +12,7 @@
 	} from '$lib/components/app';
 	import * as Alert from '$lib/components/ui/alert';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
+	import { chatWidthClasses } from '$lib/stores/chat.svelte';
 	import { INITIAL_SCROLL_DELAY } from '$lib/constants';
 	import { KeyboardKey } from '$lib/enums';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
@@ -77,6 +78,7 @@
 	let activeErrorDialog = $derived(errorDialog());
 	let isServerLoading = $derived(serverLoading());
 	let hasPropsError = $derived(!!serverError());
+	let widthClasses = $derived(chatWidthClasses());
 
 	let isCurrentConversationLoading = $derived(isLoading() || isChatStreaming());
 
@@ -376,7 +378,7 @@
 
 			{#if hasPropsError}
 				<div
-					class="pointer-events-auto mx-auto mb-4 max-w-[48rem] px-1"
+					class="pointer-events-auto mx-auto mb-4 {widthClasses.class} px-1"
 					in:fly={{ y: 10, duration: 250 }}
 				>
 					<Alert.Root variant="destructive">
@@ -426,7 +428,7 @@
 		ondrop={handleDrop}
 		role="main"
 	>
-		<div class="w-full max-w-[48rem] px-4">
+		<div class="w-full {widthClasses.class} px-4">
 			<div class="mb-10 text-center" in:fade={{ duration: 300 }}>
 				<h1 class="mb-2 text-2xl font-semibold tracking-tight md:text-3xl">llama.cpp</h1>
 

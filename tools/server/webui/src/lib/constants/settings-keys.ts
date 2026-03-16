@@ -52,6 +52,8 @@ export const SETTINGS_KEYS = {
 	ALWAYS_SHOW_AGENTIC_TURNS: 'alwaysShowAgenticTurns',
 	AGENTIC_MAX_TOOL_PREVIEW_LINES: 'agenticMaxToolPreviewLines',
 	SHOW_TOOL_CALL_IN_PROGRESS: 'showToolCallInProgress',
+	// Chat width
+	AUTO_CHAT_WIDTH: 'autoChatWidth',
 	// Developer
 	DISABLE_REASONING_PARSING: 'disableReasoningParsing',
 	SHOW_RAW_OUTPUT_SWITCH: 'showRawOutputSwitch',

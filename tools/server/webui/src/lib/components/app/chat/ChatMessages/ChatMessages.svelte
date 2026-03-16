@@ -6,6 +6,7 @@
 	import { conversationsStore, activeConversation } from '$lib/stores/conversations.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import { copyToClipboard, formatMessageForClipboard, getMessageSiblings } from '$lib/utils';
+	import { chatWidthClasses } from '$lib/stores/chat.svelte';
 
 	interface Props {
 		class?: string;
@@ -17,6 +18,7 @@
 
 	let allConversationMessages = $state<DatabaseMessage[]>([]);
 	const currentConfig = config();
+	let widthClasses = $derived(chatWidthClasses());
 
 	setChatActionsContext({
 		copy: async (message: DatabaseMessage) => {
@@ -143,7 +145,7 @@
 <div class="flex h-full flex-col space-y-10 pt-24 {className}" style="height: auto; ">
 	{#each displayMessages as { message, isLastAssistantMessage, siblingInfo } (message.id)}
 		<ChatMessage
-			class="mx-auto w-full max-w-[48rem]"
+			class="mx-auto w-full {widthClasses.class}"
 			{message}
 			{isLastAssistantMessage}
 			{siblingInfo}
