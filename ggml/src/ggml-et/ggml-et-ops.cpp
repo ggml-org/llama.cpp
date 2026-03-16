@@ -124,6 +124,42 @@ bool ggml_et_op_rms_norm_mul(ggml_backend_et_device_context* dev_ctx,
     return kernel_result;
 }
 
+bool ggml_et_op_scale(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
+    if (!dev_ctx || !node) {
+        GGML_LOG_ERROR("ET: Invalid parameters for SCALE operation\n");
+        return false;
+    }
+
+    if (!node->src[0]) {
+        GGML_LOG_ERROR("ET: SCALE operation missing required input\n");
+        return false;
+    }
+
+    if (node->type != GGML_TYPE_F32 || node->src[0]->type != GGML_TYPE_F32) {
+        GGML_LOG_ERROR("ET: SCALE operation with unsupported types: dst=%s src0=%s\n",
+                       ggml_type_name(node->type),
+                       ggml_type_name(node->src[0]->type));
+        return false;
+    }
+
+    float scale, bias;
+    memcpy(&scale, (const float*)node->op_params + 0, sizeof(float));
+    memcpy(&bias,  (const float*)node->op_params + 1, sizeof(float));
+
+    ggml_et_scale_params params;
+    params.src0  = *node->src[0];
+    params.dst   = *node;
+    params.scale = scale;
+    params.bias  = bias;
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, "scale_f32", &params, sizeof(params), 0xFFFFFFFF);
+
+    ET_PERF_END_EXT("SCALE", "scale_f32", node, "scale=%.6f|bias=%.6f", (double)scale, (double)bias);
+    return kernel_result;
+}
+
 bool ggml_et_op_mul(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
     // Delegate to generic element map operation
     return ggml_et_op_elmap(dev_ctx, node);
@@ -220,9 +256,9 @@ bool ggml_et_op_glu(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* 
     int32_t glu_op_type = ggml_get_op_params_i32(node, 0);  // GLU variant (REGLU, GEGLU, SWIGLU, etc.)
     int32_t swapped = ggml_get_op_params_i32(node, 1);      // Whether gate/value are swapped
 
-    // Only support SWIGLU for now
-    if (glu_op_type != GGML_GLU_OP_SWIGLU) {
-        GGML_LOG_ERROR("ET: GLU operation with unsupported variant: %s (only SWIGLU supported)\n",
+    // Support SWIGLU and GEGLU
+    if (glu_op_type != GGML_GLU_OP_SWIGLU && glu_op_type != GGML_GLU_OP_GEGLU) {
+        GGML_LOG_ERROR("ET: GLU operation with unsupported variant: %s (only SWIGLU and GEGLU supported)\n",
                        ggml_glu_op_name((ggml_glu_op)glu_op_type));
         return false;
     }
