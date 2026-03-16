@@ -68,6 +68,7 @@ enum htp_op {
     HTP_OP_SQR,
     HTP_OP_SQRT,
     HTP_OP_SUM_ROWS,
+    HTP_OP_SSM_CONV,
     INVALID
 };
 

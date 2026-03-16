@@ -7,7 +7,6 @@ on:
       - master
     paths: [
       '.github/workflows/build.yml',
-      '.github/workflows/build-linux-cross.yml',
       '.github/workflows/build-cmake-pkg.yml',
       '**/CMakeLists.txt',
       '**/.cmake',
@@ -29,7 +28,6 @@ on:
     types: [opened, synchronize, reopened]
     paths: [
       '.github/workflows/build.yml',
-      '.github/workflows/build-linux-cross.yml',
       '.github/workflows/build-cmake-pkg.yml',
       '**/CMakeLists.txt',
       '**/.cmake',
@@ -59,7 +57,10 @@ env:
   LLAMA_LOG_TIMESTAMPS: 1
 
 jobs:
-  macOS-latest-cmake-arm64:
+  build-cmake-pkg:
+    uses: ./.github/workflows/build-cmake-pkg.yml
+
+  macOS-latest-arm64:
     runs-on: macos-latest
 
     steps:
@@ -70,7 +71,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
-          key: macOS-latest-cmake-arm64
+          key: macOS-latest-arm64
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
@@ -93,9 +94,9 @@ jobs:
         id: cmake_test
         run: |
           cd build
-          ctest -L main --verbose --timeout 900
+          ctest -L main -E "test-llama-archs" --verbose --timeout 900
 
-  macOS-latest-cmake-x64:
+  macOS-latest-x64:
     runs-on: macos-15-intel
 
     steps:
@@ -106,7 +107,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
-          key: macOS-latest-cmake-x64
+          key: macOS-latest-x64
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
@@ -131,7 +132,7 @@ jobs:
           cd build
           ctest -L main --verbose --timeout 900
 
-  macOS-latest-cmake-arm64-webgpu:
+  macOS-latest-arm64-webgpu:
     runs-on: macos-latest
 
     steps:
@@ -142,7 +143,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
-          key: macOS-latest-cmake-arm64-webgpu
+          key: macOS-latest-arm64-webgpu
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
@@ -173,7 +174,7 @@ jobs:
           cd build
           ctest -L main --verbose --timeout 900
 
-  ubuntu-cpu-cmake:
+  ubuntu-cpu:
     strategy:
       matrix:
         include:
@@ -196,7 +197,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
-          key: ubuntu-cpu-cmake-${{ matrix.build }}
+          key: ubuntu-cpu-${{ matrix.build }}
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
@@ -258,94 +259,7 @@ jobs:
           wget https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories260K-be.gguf
           ./bin/llama-completion -m stories260K-be.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
 
-  ubuntu-latest-cmake-sanitizer:
-    runs-on: ubuntu-latest
-
-    continue-on-error: true
-
-    strategy:
-      matrix:
-        sanitizer: [ADDRESS, THREAD, UNDEFINED]
-        build_type: [Debug]
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
-        with:
-          key: ubuntu-latest-cmake-sanitizer-${{ matrix.sanitizer }}
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-      - name: Dependencies
-        id: depends
-        run: |
-          sudo apt-get update
-          sudo apt-get install build-essential libssl-dev
-
-      - name: Build
-        id: cmake_build
-        if: ${{ matrix.sanitizer != 'THREAD' }}
-        run: |
-          cmake -B build \
-            -DLLAMA_FATAL_WARNINGS=ON \
-            -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
-            -DGGML_SANITIZE_${{ matrix.sanitizer }}=ON \
-            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
-
-          cmake --build build --config ${{ matrix.build_type }} -j $(nproc)
-
-      - name: Build (no OpenMP)
-        id: cmake_build_no_openmp
-        if: ${{ matrix.sanitizer == 'THREAD' }}
-        run: |
-          cmake -B build \
-            -DLLAMA_FATAL_WARNINGS=ON \
-            -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
-            -DGGML_SANITIZE_${{ matrix.sanitizer }}=ON \
-            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-            -DGGML_OPENMP=OFF
-
-          cmake --build build --config ${{ matrix.build_type }} -j $(nproc)
-
-      - name: Test
-        id: cmake_test
-        run: |
-          cd build
-          ctest -L main --verbose --timeout 900
-
-  ubuntu-latest-llguidance:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: Dependencies
-        id: depends
-        run: |
-          sudo apt-get update
-          sudo apt-get install build-essential libssl-dev
-
-      - name: Build
-        id: cmake_build
-        run: |
-          cmake -B build \
-            -DLLAMA_FATAL_WARNINGS=ON \
-            -DLLAMA_LLGUIDANCE=ON
-          cmake --build build --config Release -j $(nproc)
-
-      - name: Test
-        id: cmake_test
-        run: |
-          cd build
-          ctest -L main --verbose --timeout 900
-
-  ubuntu-latest-cmake-rpc:
+  ubuntu-latest-rpc:
     runs-on: ubuntu-latest
 
     continue-on-error: true
@@ -354,12 +268,6 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
-
-      # - name: ccache
-      #   uses: ggml-org/ccache-action@v1.2.16
-      #   with:
-      #     key: ubuntu-latest-cmake-rpc
-      #     evict-old-files: 1d
 
       - name: Dependencies
         id: depends
@@ -380,20 +288,13 @@ jobs:
           cd build
           ctest -L main --verbose
 
-  ubuntu-24-cmake-vulkan-deb:
-    runs-on: ubuntu-24.04
+  ubuntu-24-vulkan:
+    runs-on: ${{ 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
-        with:
-          key: ubuntu-24-cmake-vulkan-deb
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dependencies
         id: depends
@@ -414,7 +315,7 @@ jobs:
         run: |
           cmake --build build -j $(nproc)
 
-  ubuntu-24-cmake-vulkan:
+  ubuntu-24-webgpu:
     runs-on: ubuntu-24.04
 
     steps:
@@ -425,65 +326,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
-          key: ubuntu-24-cmake-vulkan
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-      - name: Dependencies
-        id: depends
-        run: |
-          sudo add-apt-repository -y ppa:kisak/kisak-mesa
-          sudo apt-get update -y
-          sudo apt-get install -y build-essential mesa-vulkan-drivers libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libssl-dev
-
-      - name: Get latest Vulkan SDK version
-        id: vulkan_sdk_version
-        run: |
-          echo "VULKAN_SDK_VERSION=$(curl https://vulkan.lunarg.com/sdk/latest/linux.txt)" >> "$GITHUB_ENV"
-
-      - name: Use Vulkan SDK Cache
-        uses: actions/cache@v5
-        id: cache-sdk
-        with:
-          path: ./vulkan_sdk
-          key: vulkan-sdk-${{ env.VULKAN_SDK_VERSION }}-${{ runner.os }}
-
-      - name: Setup Vulkan SDK
-        if: steps.cache-sdk.outputs.cache-hit != 'true'
-        uses: ./.github/actions/linux-setup-vulkan
-        with:
-          path: ./vulkan_sdk
-          version: ${{ env.VULKAN_SDK_VERSION }}
-
-      - name: Build
-        id: cmake_build
-        run: |
-          source ./vulkan_sdk/setup-env.sh
-          cmake -B build \
-            -DGGML_VULKAN=ON
-          cmake --build build --config Release -j $(nproc)
-
-      - name: Test
-        id: cmake_test
-        run: |
-          cd build
-          export GGML_VK_VISIBLE_DEVICES=0
-          export GGML_VK_DISABLE_F16=1
-          # This is using llvmpipe and runs slower than other backends
-          ctest -L main --verbose --timeout 4800
-
-  ubuntu-24-cmake-webgpu:
-    runs-on: ubuntu-24.04
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
-        with:
-          key: ubuntu-24-cmake-webgpu
+          key: ubuntu-24-webgpu
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
@@ -541,22 +384,15 @@ jobs:
         run: |
           cd build
           # This is using llvmpipe and runs slower than other backends
-          ctest -L main --verbose --timeout 3600
+          ctest -L main --verbose --timeout 900
 
-  ubuntu-24-wasm-webgpu:
-    runs-on: ubuntu-24.04
+  ubuntu-24-webgpu-wasm:
+    runs-on: ${{ 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
-        with:
-          key: ubuntu-latest-wasm-webgpu
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Install Emscripten
         run: |
@@ -584,7 +420,7 @@ jobs:
 
           cmake --build build-wasm --target test-backend-ops -j $(nproc)
 
-  ubuntu-22-cmake-hip:
+  ubuntu-22-hip:
     runs-on: ubuntu-22.04
     container: rocm/dev-ubuntu-22.04:6.1.2
 
@@ -602,7 +438,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
-          key: ubuntu-22-cmake-hip
+          key: ubuntu-22-hip
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
@@ -615,7 +451,7 @@ jobs:
             -DGGML_HIP=ON
           cmake --build build --config Release -j $(nproc)
 
-  ubuntu-22-cmake-musa:
+  ubuntu-22-musa:
     runs-on: ubuntu-22.04
     container: mthreads/musa:rc4.3.0-devel-ubuntu22.04-amd64
 
@@ -633,7 +469,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
-          key: ubuntu-22-cmake-musa
+          key: ubuntu-22-musa
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
@@ -644,7 +480,7 @@ jobs:
             -DGGML_MUSA=ON
           cmake --build build --config Release -j $(nproc)
 
-  ubuntu-22-cmake-sycl:
+  ubuntu-22-sycl:
     runs-on: ubuntu-22.04
 
     continue-on-error: true
@@ -679,7 +515,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
-          key: ubuntu-22-cmake-sycl
+          key: ubuntu-22-sycl
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
@@ -693,7 +529,7 @@ jobs:
             -DCMAKE_CXX_COMPILER=icpx
           cmake --build build --config Release -j $(nproc)
 
-  ubuntu-22-cmake-sycl-fp16:
+  ubuntu-22-sycl-fp16:
     runs-on: ubuntu-22.04
 
     continue-on-error: true
@@ -728,7 +564,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
-          key: ubuntu-22-cmake-sycl-fp16
+          key: ubuntu-22-sycl-fp16
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
@@ -743,194 +579,87 @@ jobs:
             -DGGML_SYCL_F16=ON
           cmake --build build --config Release -j $(nproc)
 
-  build-linux-cross:
-    uses: ./.github/workflows/build-linux-cross.yml
+  ubuntu-24-openvino:
+      name: ubuntu-24-openvino-${{ matrix.openvino_device }}
+      strategy:
+        matrix:
+          include:
+            - variant: cpu
+              runner: '"ubuntu-24.04"'
+              openvino_device: "CPU"
+            - variant: gpu
+              runner: '["self-hosted","Linux","X64","Intel"]'
+              openvino_device: "GPU"
 
-  build-cmake-pkg:
-    uses: ./.github/workflows/build-cmake-pkg.yml
+      runs-on: ${{ fromJSON(matrix.runner) }}
 
-  macOS-latest-cmake-ios:
-    runs-on: macos-latest
+      env:
+        # Sync versions in build.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
+        OPENVINO_VERSION_MAJOR: "2026.0"
+        OPENVINO_VERSION_FULL: "2026.0.0.20965.c6d6a13a886"
 
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
+      steps:
+        - name: Clone
+          id: checkout
+          uses: actions/checkout@v6
 
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
-        with:
-          key: macOS-latest-cmake-ios
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        - name: ccache
+          if: runner.environment == 'github-hosted'
+          uses: ggml-org/ccache-action@v1.2.16
+          with:
+            key: ubuntu-24-openvino-${{ matrix.variant }}-no-preset-v1
+            evict-old-files: 1d
+            save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
-      - name: Build
-        id: cmake_build
-        run: |
-          sysctl -a
-          cmake -B build -G Xcode \
-            -DGGML_METAL_USE_BF16=ON \
-            -DGGML_METAL_EMBED_LIBRARY=ON \
-            -DLLAMA_BUILD_COMMON=OFF \
-            -DLLAMA_BUILD_EXAMPLES=OFF \
-            -DLLAMA_BUILD_TOOLS=OFF \
-            -DLLAMA_BUILD_TESTS=OFF \
-            -DLLAMA_BUILD_SERVER=OFF \
-            -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
-            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
-          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
+        - name: Dependencies
+          id: depends
+          run: |
+            sudo apt-get update
+            sudo apt-get install -y build-essential libssl-dev libtbb12 cmake ninja-build python3-pip
+            sudo apt-get install -y ocl-icd-opencl-dev opencl-headers opencl-clhpp-headers intel-opencl-icd
 
-  macOS-latest-cmake-tvos:
-    runs-on: macos-latest
+        - name: Use OpenVINO Toolkit Cache
+          if: runner.environment == 'github-hosted'
+          uses: actions/cache@v5
+          id: cache-openvino
+          with:
+            path: ./openvino_toolkit
+            key: openvino-toolkit-v${{ env.OPENVINO_VERSION_FULL }}-${{ runner.os }}
 
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
+        - name: Setup OpenVINO Toolkit
+          if: steps.cache-openvino.outputs.cache-hit != 'true'
+          uses: ./.github/actions/linux-setup-openvino
+          with:
+            path: ./openvino_toolkit
+            version_major: ${{ env.OPENVINO_VERSION_MAJOR }}
+            version_full: ${{ env.OPENVINO_VERSION_FULL }}
 
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
-        with:
-          key: macOS-latest-cmake-tvos
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        - name: Install OpenVINO dependencies
+          run: |
+            cd ./openvino_toolkit
+            chmod +x ./install_dependencies/install_openvino_dependencies.sh
+            echo "Y" | sudo -E ./install_dependencies/install_openvino_dependencies.sh
 
-      - name: Build
-        id: cmake_build
-        run: |
-          sysctl -a
-          cmake -B build -G Xcode \
-            -DGGML_METAL_USE_BF16=ON \
-            -DGGML_METAL_EMBED_LIBRARY=ON \
-            -DLLAMA_BUILD_COMMON=OFF \
-            -DLLAMA_BUILD_EXAMPLES=OFF \
-            -DLLAMA_BUILD_TOOLS=OFF \
-            -DLLAMA_BUILD_TESTS=OFF \
-            -DLLAMA_BUILD_SERVER=OFF \
-            -DCMAKE_SYSTEM_NAME=tvOS \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
-            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
-          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
+        - name: Build
+          id: cmake_build
+          run: |
+            source ./openvino_toolkit/setupvars.sh
+            cmake -B build/ReleaseOV -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DGGML_OPENVINO=ON
+            cmake --build build/ReleaseOV --config Release -j $(nproc)
 
-  macOS-latest-cmake-visionos:
-    runs-on: macos-latest
+        - name: Test
+          id: cmake_test
+          # TODO: fix and re-enable the `test-llama-archs` test below
+          run: |
+            cd ${{ github.workspace }}
+            if [ "${{ matrix.openvino_device }}" = "GPU" ]; then
+              export GGML_OPENVINO_DEVICE=GPU
+            fi
+            ctest --test-dir build/ReleaseOV -L main -E "test-llama-archs" --verbose --timeout 2000
 
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: Build
-        id: cmake_build
-        run: |
-          sysctl -a
-          cmake -B build -G Xcode \
-            -DGGML_METAL_USE_BF16=ON \
-            -DGGML_METAL_EMBED_LIBRARY=ON \
-            -DLLAMA_BUILD_COMMON=OFF \
-            -DLLAMA_BUILD_EXAMPLES=OFF \
-            -DLLAMA_BUILD_TOOLS=OFF \
-            -DLLAMA_BUILD_TESTS=OFF \
-            -DLLAMA_BUILD_SERVER=OFF \
-            -DCMAKE_SYSTEM_NAME=visionOS \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=1.0 \
-            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
-          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
-
-  macOS-latest-swift:
-    runs-on: macos-latest
-    needs: ios-xcode-build
-
-    strategy:
-      matrix:
-        destination: ['generic/platform=macOS', 'generic/platform=iOS', 'generic/platform=tvOS']
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
-        with:
-          key: macOS-latest-swift
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-      - name: Download xcframework artifact
-        uses: actions/download-artifact@v7
-        with:
-          name: llama-xcframework
-          path: build-apple/llama.xcframework/
-
-      - name: Build llama.cpp with CMake
-        id: cmake_build
-        run: |
-          sysctl -a
-          cmake -B build -G Xcode \
-            -DGGML_METAL_USE_BF16=ON \
-            -DGGML_METAL_EMBED_LIBRARY=ON \
-            -DLLAMA_OPENSSL=OFF \
-            -DLLAMA_BUILD_EXAMPLES=OFF \
-            -DLLAMA_BUILD_TOOLS=OFF \
-            -DLLAMA_BUILD_TESTS=OFF \
-            -DLLAMA_BUILD_SERVER=OFF \
-            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
-          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
-
-  windows-msys2:
-    runs-on: windows-2025
-
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { sys: UCRT64,  env: ucrt-x86_64,  build: Release }
-          - { sys: CLANG64, env: clang-x86_64, build: Release }
-
-    steps:
-      - name: Clone
-        uses: actions/checkout@v6
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
-        with:
-          key: windows-msys2
-          variant: ccache
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-      - name: Setup ${{ matrix.sys }}
-        uses: msys2/setup-msys2@v2
-        with:
-          update: true
-          msystem: ${{matrix.sys}}
-          install: >-
-            base-devel
-            git
-            mingw-w64-${{matrix.env}}-toolchain
-            mingw-w64-${{matrix.env}}-cmake
-            mingw-w64-${{matrix.env}}-openblas
-
-      - name: Build using CMake
-        shell: msys2 {0}
-        run: |
-            cmake -B build
-            cmake --build build --config ${{ matrix.build }} -j $(nproc)
-
-      - name: Clean after building using CMake
-        shell: msys2 {0}
-        run: |
-            rm -rf build
-
-      - name: Build using CMake w/ OpenBLAS
-        shell: msys2 {0}
-        run: |
-            cmake -B build -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS
-            cmake --build build --config ${{ matrix.build }} -j $(nproc)
-
-  windows-latest-cmake:
+  windows-latest:
     runs-on: windows-2025
 
     env:
@@ -965,7 +694,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
-          key: windows-latest-cmake-${{ matrix.build }}
+          key: windows-latest-${{ matrix.build }}
           variant: ccache
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
@@ -1052,7 +781,7 @@ jobs:
       #     $env:LLAMA_SKIP_TESTS_SLOW_ON_EMULATOR = 1
       #     & $sde -future -- ctest -L main -C Release --verbose --timeout 900
 
-  ubuntu-latest-cmake-cuda:
+  ubuntu-latest-cuda:
     runs-on: ubuntu-latest
     container: nvidia/cuda:12.6.2-devel-ubuntu24.04
 
@@ -1071,7 +800,7 @@ jobs:
         - name: ccache
           uses: ggml-org/ccache-action@v1.2.16
           with:
-            key: ubuntu-latest-cmake-cuda
+            key: ubuntu-latest-cuda
             evict-old-files: 1d
             save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
@@ -1088,7 +817,7 @@ jobs:
               -DGGML_CUDA_CUB_3DOT2=ON
             cmake --build build
 
-  windows-2022-cmake-cuda:
+  windows-2022-cuda:
     runs-on: windows-2022
 
     strategy:
@@ -1137,7 +866,7 @@ jobs:
           cmake --build build --config Release -j %NINJA_JOBS% -t ggml
           cmake --build build --config Release
 
-  windows-latest-cmake-sycl:
+  windows-latest-sycl:
     runs-on: windows-2022
 
     defaults:
@@ -1156,7 +885,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
-          key: windows-latest-cmake-sycl
+          key: windows-latest-sycl
           variant: ccache
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
@@ -1171,14 +900,12 @@ jobs:
         id: cmake_build
         run:  examples/sycl/win-build-sycl.bat
 
-  windows-latest-cmake-hip:
+  windows-latest-hip:
     runs-on: windows-2022
 
     env:
-      # The ROCm version must correspond to the version used in the HIP SDK.
-      ROCM_VERSION: "6.4.2"
       # Make sure this is in sync with build-cache.yml
-      HIPSDK_INSTALLER_VERSION: "25.Q3"
+      HIPSDK_INSTALLER_VERSION: "26.Q1"
 
     steps:
       - name: Clone
@@ -1188,7 +915,7 @@ jobs:
       - name: Grab rocWMMA package
         id: grab_rocwmma
         run: |
-          curl -o rocwmma.deb "https://repo.radeon.com/rocm/apt/${{ env.ROCM_VERSION }}/pool/main/r/rocwmma-dev/rocwmma-dev_1.7.0.60402-120~24.04_amd64.deb"
+          curl -o rocwmma.deb "https://repo.radeon.com/rocm/apt/7.2/pool/main/r/rocwmma-dev/rocwmma-dev_2.2.0.70200-43~24.04_amd64.deb"
           7z x rocwmma.deb
           7z x data.tar
 
@@ -1231,7 +958,7 @@ jobs:
           cmake -G "Unix Makefiles" -B build -S . `
             -DCMAKE_C_COMPILER="${env:HIP_PATH}\bin\clang.exe" `
             -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\bin\clang++.exe" `
-            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/opt/rocm-${{ env.ROCM_VERSION }}/include/" `
+            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/opt/rocm-7.2.0/include/" `
             -DCMAKE_BUILD_TYPE=Release `
             -DLLAMA_BUILD_BORINGSSL=ON `
             -DROCM_DIR="${env:HIP_PATH}" `
@@ -1240,223 +967,95 @@ jobs:
             -DGGML_RPC=ON
           cmake --build build -j ${env:NUMBER_OF_PROCESSORS}
 
-  ios-xcode-build:
-    runs-on: macos-latest
+  ubuntu-cpu-riscv64-native:
+    runs-on: RISCV64
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-
-      - name: Setup Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: latest-stable
-
-      - name: Build
-        id: cmake_build
+      - name: Install dependencies
         run: |
-          sysctl -a
-          cmake -B build -G Xcode \
-            -DGGML_METAL_USE_BF16=ON \
-            -DGGML_METAL_EMBED_LIBRARY=ON \
-            -DLLAMA_OPENSSL=OFF \
-            -DLLAMA_BUILD_EXAMPLES=OFF \
-            -DLLAMA_BUILD_TOOLS=OFF \
-            -DLLAMA_BUILD_TESTS=OFF \
-            -DLLAMA_BUILD_SERVER=OFF \
-            -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
-            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
-          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
+          sudo apt-get update
 
-      - name: xcodebuild for swift package
-        id: xcodebuild
-        run: |
-          ./build-xcframework.sh
+          # Install necessary packages
+          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential libssl-dev wget ccache git-lfs
 
-      - name: Upload xcframework artifact
-        uses: actions/upload-artifact@v6
-        with:
-          name: llama-xcframework
-          path: build-apple/llama.xcframework/
-          retention-days: 1
+          # Set gcc-14 and g++-14 as the default compilers
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
+          sudo ln -sf /usr/bin/gcc-14 /usr/bin/gcc
+          sudo ln -sf /usr/bin/g++-14 /usr/bin/g++
 
-      - name: Build Xcode project
-        run: |
-          xcodebuild -downloadPlatform iOS
-          xcodebuild -project examples/llama.swiftui/llama.swiftui.xcodeproj -scheme llama.swiftui -sdk iphoneos CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= -destination 'generic/platform=iOS' FRAMEWORK_FOLDER_PATH=./build-ios build
+          # Install Rust stable version
+          rustup install stable
+          rustup default stable
 
-  android-build:
-    runs-on: ubuntu-latest
+          git lfs install
 
-    steps:
-      - name: Clone
-        uses: actions/checkout@v6
-
-      # Disabled due to size (400MB) and always 0 cache hits
-      # - name: ccache
-      #   uses: ggml-org/ccache-action@v1.2.16
-      #   with:
-      #     key: android-build
-      #     evict-old-files: 1d
-
-      - name: Set up JDK
-        uses: actions/setup-java@v5
-        with:
-          java-version: 17
-          distribution: zulu
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          log-accepted-android-sdk-licenses: false
-
-      - name: Build
-        run: |
-          cd examples/llama.android
-          ./gradlew build --no-daemon
-
-  android-ndk-build:
-    runs-on: ubuntu-latest
-
-    env:
-      OPENCL_VERSION: 2025.07.22
-
-    strategy:
-      matrix:
-        include:
-          - build: 'arm64-cpu'
-            defines: '-D ANDROID_ABI=arm64-v8a -D ANDROID_PLATFORM=android-31 -D CMAKE_TOOLCHAIN_FILE=${ANDROID_NDK_ROOT}/build/cmake/android.toolchain.cmake -D GGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8.5-a+fp16+i8mm -G Ninja -D LLAMA_OPENSSL=OFF -D GGML_OPENMP=OFF'
-          - build: 'arm64-snapdragon'
-            defines: '--preset arm64-android-snapdragon-release'
-
-    steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
 
-      - name: Install OpenCL Headers and Libs
-        id: install_opencl
-        if: ${{ matrix.build == 'arm64-snapdragon' }}
+      - name: Check environment
         run: |
-          mkdir opencl
-          curl -L -o opencl/clhpp.tar.gz      https://github.com/KhronosGroup/OpenCL-CLHPP/archive/refs/tags/v${OPENCL_VERSION}.tar.gz
-          curl -L -o opencl/headers.tar.gz    https://github.com/KhronosGroup/OpenCL-Headers/archive/refs/tags/v${OPENCL_VERSION}.tar.gz
-          curl -L -o opencl/icd-loader.tar.gz https://github.com/KhronosGroup/OpenCL-ICD-Loader/archive/refs/tags/v${OPENCL_VERSION}.tar.gz
-          tar -xaf opencl/headers.tar.gz    -C opencl
-          tar -xaf opencl/clhpp.tar.gz      -C opencl
-          tar -xaf opencl/icd-loader.tar.gz -C opencl
-          sudo cp -r opencl/OpenCL-Headers-${OPENCL_VERSION}/CL         ${ANDROID_NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include
-          sudo cp -r opencl/OpenCL-CLHPP-${OPENCL_VERSION}/include/CL/* ${ANDROID_NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/CL
-          cd opencl/OpenCL-ICD-Loader-${OPENCL_VERSION}
-          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK_ROOT}/build/cmake/android.toolchain.cmake -DOPENCL_ICD_LOADER_HEADERS_DIR=${ANDROID_NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=31 -DANDROID_STL=c++_shared
-          cmake --build build
-          sudo cp build/libOpenCL.so ${ANDROID_NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android
-          rm -rf opencl
+          uname -a
+          gcc --version
+          g++ --version
+          ldd --version
+          cmake --version
+          rustc --version
 
-      - name: Install Hexagon SDK
-        id: install_hexsdk
-        if: ${{ matrix.build == 'arm64-snapdragon' }}
-        env:
-          HEXSDK_VER: 6.4.0.2
-          HEXTLS_VER: 19.0.04
+      - name: Setup ccache
         run: |
-          curl -L -o hex-sdk.tar.gz https://github.com/snapdragon-toolchain/hexagon-sdk/releases/download/v$HEXSDK_VER/hexagon-sdk-v$HEXSDK_VER-amd64-lnx.tar.xz
-          mkdir hex-sdk
-          tar -xaf hex-sdk.tar.gz -C hex-sdk
-          ls -l hex-sdk
-          sudo mv hex-sdk /opt/hexagon
-          echo "HEXAGON_SDK_ROOT=/opt/hexagon/$HEXSDK_VER"                                     >> "$GITHUB_ENV"
-          echo "HEXAGON_TOOLS_ROOT=/opt/hexagon/$HEXSDK_VER/tools/HEXAGON_Tools/$HEXTLS_VER"   >> "$GITHUB_ENV"
-          echo "DEFAULT_HLOS_ARCH=64"                                                          >> "$GITHUB_ENV"
-          echo "DEFAULT_TOOLS_VARIANT=toolv19"                                                 >> "$GITHUB_ENV"
-          echo "DEFAULT_NO_QURT_INC=0"                                                         >> "$GITHUB_ENV"
-          echo "DEFAULT_DSP_ARCH=v73"                                                          >> "$GITHUB_ENV"
+          # Set unique cache directory for this job
+          export CCACHE_DIR="$HOME/.ccache/cpu-cmake-rv64-native"
+          mkdir -p "$CCACHE_DIR"
 
-      - name: Update CMake presets
-        id: update_presets
-        if: ${{ matrix.build == 'arm64-snapdragon' }}
-        run: |
-          cp docs/backend/snapdragon/CMakeUserPresets.json .
+          # Configure ccache for optimal performance
+          ccache --set-config=max_size=5G
+          ccache --set-config=compression=true
+          ccache --set-config=compression_level=6
+          ccache --set-config=cache_dir="$CCACHE_DIR"
+
+          # Enable more aggressive caching
+          ccache --set-config=sloppiness=file_macro,time_macros,include_file_mtime,include_file_ctime
+          ccache --set-config=hash_dir=false
+
+          # Export for subsequent steps
+          echo "CCACHE_DIR=$CCACHE_DIR" >> $GITHUB_ENV
+          echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
 
       - name: Build
-        id: ndk_build
+        id: cmake_build
         run: |
-          cmake ${{ matrix.defines }} -B build
-          cmake --build build
-          cmake --install build --prefix pkg-adb/llama.cpp
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_OPENMP=OFF \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_TESTS=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DGGML_RPC=ON \
+            -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
+            -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14
+
+          cmake --build build --config Release -j $(nproc)
 
       - name: Test
         id: cmake_test
         run: |
-          echo "FIXME: test on devices"
+          cd build
+          ctest -L main --verbose --timeout 900
 
-  openEuler-latest-cmake-cann:
-    defaults:
-      run:
-        shell: bash -el {0}
-    strategy:
-      matrix:
-        arch: [x86, aarch64]
-        chip_type: ['910b', '310p']
-        build: ['Release']
-        use_acl_graph: ['on', 'off']
-        exclude:
-          # 310P does not support USE_ACL_GRAPH=on
-          - chip_type: '310p'
-            use_acl_graph: 'on'
-    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Free up disk space
-        uses: ggml-org/free-disk-space@v1.3.1
-        with:
-          tool-cache: true
-
-      - name: Set container image
-        id: cann-image
+      - name: Test llama2c conversion
+        id: llama2c_test
         run: |
-          image="ascendai/cann:${{ matrix.chip_type == '910b' &&  '8.3.rc2-910b-openeuler24.03-py3.11' || '8.3.rc2-310p-openeuler24.03-py3.11' }}"
-          echo "image=${image}" >> "${GITHUB_OUTPUT}"
-
-      - name: Pull container image
-        run: docker pull "${{ steps.cann-image.outputs.image }}"
-
-      - name: Build
-        env:
-          BUILD_TYPE: ${{ matrix.build }}
-          SOC_TYPE: ascend${{ matrix.chip_type }}
-          USE_ACL_GRAPH: ${{ matrix.use_acl_graph }}
-        run: |
-          HOST_UID=$(id -u)
-          HOST_GID=$(id -g)
-
-          docker run --rm \
-            -v "${PWD}:/workspace" \
-            -w /workspace \
-            -e SOC_TYPE=${SOC_TYPE} \
-            -e BUILD_TYPE=${BUILD_TYPE} \
-            -e USE_ACL_GRAPH=${USE_ACL_GRAPH} \
-            "${{ steps.cann-image.outputs.image }}" \
-            bash -lc '
-              set -e
-              yum install -y --setopt=install_weak_deps=False --setopt=tsflags=nodocs git gcc gcc-c++ make cmake openssl-devel
-              yum clean all && rm -rf /var/cache/yum
-              git config --global --add safe.directory "/workspace"
-              export LD_LIBRARY_PATH=${ASCEND_TOOLKIT_HOME}/lib64:${ASCEND_TOOLKIT_HOME}/$(uname -m)-linux/devlib/:${LD_LIBRARY_PATH}
-              cmake -S . -B build \
-                  -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
-                  -DGGML_CANN=on \
-                  -DSOC_TYPE=${SOC_TYPE} \
-                  -DUSE_ACL_GRAPH=${USE_ACL_GRAPH}
-              cmake --build build -j $(nproc)
-
-              chown -R '"${HOST_UID}"':'"${HOST_GID}"' /workspace/build
-            '
+          cd build
+          echo "Fetch tokenizer"
+          wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories260K/tok512.bin
+          echo "Fetch llama2c model"
+          wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories260K/stories260K.bin
+          ./bin/llama-convert-llama2c-to-ggml --copy-vocab-from-model ./tok512.bin --llama2c-model stories260K.bin --llama2c-output-model stories260K.gguf
+          ./bin/llama-completion -m stories260K.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
 
 # TODO: simplify the following workflows using a matrix
 # TODO: run lighter CI on PRs and the full CI only on master (if needed)
@@ -1590,144 +1189,6 @@ jobs:
         run: |
           LLAMA_ARG_THREADS=$(nproc) GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
-  ggml-ci-x64-nvidia-cuda:
-    runs-on: [self-hosted, Linux, X64, NVIDIA]
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: Test
-        id: ggml-ci
-        run: |
-          nvidia-smi
-          GG_BUILD_CUDA=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
-
-  ggml-ci-x64-nvidia-vulkan-cm:
-    runs-on: [self-hosted, Linux, X64, NVIDIA]
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: Test
-        id: ggml-ci
-        run: |
-          vulkaninfo --summary
-          GG_BUILD_VULKAN=1 GGML_VK_DISABLE_COOPMAT2=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
-
-  ggml-ci-x64-nvidia-vulkan-cm2:
-    runs-on: [self-hosted, Linux, X64, NVIDIA, COOPMAT2]
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: Test
-        id: ggml-ci
-        run: |
-          vulkaninfo --summary
-          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
-
-  ggml-ci-x64-cpu-amx:
-    runs-on: [self-hosted, Linux, X64, CPU, AMX]
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: Test
-        id: ggml-ci
-        run: |
-          bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
-
-  # ggml-ci-x64-amd-vulkan:
-  #   runs-on: [self-hosted, Linux, X64, AMD]
-
-  #   steps:
-  #     - name: Clone
-  #       id: checkout
-  #       uses: actions/checkout@v6
-
-  #     - name: Test
-  #       id: ggml-ci
-  #       run: |
-  #         vulkaninfo --summary
-  #         GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
-
-  # ggml-ci-x64-amd-rocm:
-  #   runs-on: [self-hosted, Linux, X64, AMD]
-
-  #   steps:
-  #     - name: Clone
-  #       id: checkout
-  #       uses: actions/checkout@v6
-
-  #     - name: Test
-  #       id: ggml-ci
-  #       run: |
-  #         amd-smi static
-  #         GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS="gfx1101" bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
-
-  ggml-ci-mac-metal:
-    runs-on: [self-hosted, macOS, ARM64]
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: Test
-        id: ggml-ci
-        run: |
-          GG_BUILD_METAL=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
-
-  ggml-ci-mac-webgpu:
-    runs-on: [self-hosted, macOS, ARM64]
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: Dawn Dependency
-        id: dawn-depends
-        run: |
-          DAWN_VERSION="v2.0.0"
-          DAWN_OWNER="reeselevine"
-          DAWN_REPO="dawn"
-          DAWN_ASSET_NAME="Dawn-5e9a4865b1635796ccc77dd30057f2b4002a1355-macos-latest-Release"
-          echo "Fetching release asset from https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.zip"
-          curl -L -o artifact.zip \
-            "https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.zip"
-          mkdir dawn
-          unzip artifact.zip
-          tar -xvf ${DAWN_ASSET_NAME}.tar.gz -C dawn --strip-components=1
-
-      - name: Test
-        id: ggml-ci
-        run: |
-          GG_BUILD_WEBGPU=1 GG_BUILD_WEBGPU_DAWN_PREFIX="$GITHUB_WORKSPACE/dawn" \
-            bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
-
-  ggml-ci-mac-vulkan:
-    runs-on: [self-hosted, macOS, ARM64]
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: Test
-        id: ggml-ci
-        run: |
-          vulkaninfo --summary
-          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
-
   ggml-ci-arm64-cpu-kleidiai:
      runs-on: ubuntu-22.04-arm
 
@@ -1754,342 +1215,7 @@ jobs:
          run: |
            GG_BUILD_KLEIDIAI=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
-  ubuntu-cpu-cmake-riscv64-native:
-    runs-on: RISCV64
-
-    steps:
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-
-          # Install necessary packages
-          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential libssl-dev wget ccache git-lfs
-
-          # Set gcc-14 and g++-14 as the default compilers
-          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
-          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
-          sudo ln -sf /usr/bin/gcc-14 /usr/bin/gcc
-          sudo ln -sf /usr/bin/g++-14 /usr/bin/g++
-
-          # Install Rust stable version
-          rustup install stable
-          rustup default stable
-
-          git lfs install
-
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: Check environment
-        run: |
-          uname -a
-          gcc --version
-          g++ --version
-          ldd --version
-          cmake --version
-          rustc --version
-
-      - name: Setup ccache
-        run: |
-          # Set unique cache directory for this job
-          export CCACHE_DIR="$HOME/.ccache/cpu-cmake-rv64-native"
-          mkdir -p "$CCACHE_DIR"
-
-          # Configure ccache for optimal performance
-          ccache --set-config=max_size=5G
-          ccache --set-config=compression=true
-          ccache --set-config=compression_level=6
-          ccache --set-config=cache_dir="$CCACHE_DIR"
-
-          # Enable more aggressive caching
-          ccache --set-config=sloppiness=file_macro,time_macros,include_file_mtime,include_file_ctime
-          ccache --set-config=hash_dir=false
-
-          # Export for subsequent steps
-          echo "CCACHE_DIR=$CCACHE_DIR" >> $GITHUB_ENV
-          echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
-
-      - name: Build
-        id: cmake_build
-        run: |
-          cmake -B build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DGGML_OPENMP=OFF \
-            -DLLAMA_BUILD_EXAMPLES=ON \
-            -DLLAMA_BUILD_TOOLS=ON \
-            -DLLAMA_BUILD_TESTS=ON \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DGGML_RPC=ON \
-            -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
-            -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14
-
-          cmake --build build --config Release -j $(nproc)
-
-      - name: Test
-        id: cmake_test
-        run: |
-          cd build
-          ctest -L main --verbose --timeout 900
-
-      - name: Test llama2c conversion
-        id: llama2c_test
-        run: |
-          cd build
-          echo "Fetch tokenizer"
-          wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories260K/tok512.bin
-          echo "Fetch llama2c model"
-          wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories260K/stories260K.bin
-          ./bin/llama-convert-llama2c-to-ggml --copy-vocab-from-model ./tok512.bin --llama2c-model stories260K.bin --llama2c-output-model stories260K.gguf
-          ./bin/llama-completion -m stories260K.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
-
-  ubuntu-cmake-sanitizer-riscv64-native:
-    runs-on: RISCV64
-
-    continue-on-error: true
-
-    strategy:
-      matrix:
-        sanitizer: [ADDRESS, THREAD, UNDEFINED]
-        build_type: [Debug]
-
-    steps:
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-
-          # Install necessary packages
-          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential wget ccache git-lfs
-
-          # Set gcc-14 and g++-14 as the default compilers
-          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
-          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
-          sudo ln -sf /usr/bin/gcc-14 /usr/bin/gcc
-          sudo ln -sf /usr/bin/g++-14 /usr/bin/g++
-
-          # Install Rust stable version
-          rustup install stable
-          rustup default stable
-
-          git lfs install
-
-      - name: GCC version check
-        run: |
-          gcc --version
-          g++ --version
-
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: Setup ccache
-        run: |
-          # Unique cache directory per matrix combination
-          export CCACHE_DIR="$HOME/.ccache/sanitizer-${{ matrix.sanitizer }}-${{ matrix.build_type }}"
-          mkdir -p "$CCACHE_DIR"
-
-          # Configure ccache
-          ccache --set-config=max_size=5G
-          ccache --set-config=compression=true
-          ccache --set-config=compression_level=6
-          ccache --set-config=cache_dir="$CCACHE_DIR"
-          ccache --set-config=sloppiness=file_macro,time_macros,include_file_mtime,include_file_ctime
-          ccache --set-config=hash_dir=false
-
-          # Export for subsequent steps
-          echo "CCACHE_DIR=$CCACHE_DIR" >> $GITHUB_ENV
-          echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
-
-      - name: Build
-        id: cmake_build
-        if: ${{ matrix.sanitizer != 'THREAD' }}
-        run: |
-          cmake -B build \
-            -DLLAMA_OPENSSL=OFF \
-            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-            -DGGML_OPENMP=ON \
-            -DLLAMA_BUILD_EXAMPLES=ON \
-            -DLLAMA_BUILD_TOOLS=ON \
-            -DLLAMA_BUILD_TESTS=OFF \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
-            -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
-            -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14
-
-          cmake --build build --config ${{ matrix.build_type }} -j $(nproc)
-
-      - name: Build (no OpenMP)
-        id: cmake_build_no_openmp
-        if: ${{ matrix.sanitizer == 'THREAD' }}
-        run: |
-          cmake -B build \
-            -DLLAMA_OPENSSL=OFF \
-            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-            -DGGML_OPENMP=OFF \
-            -DLLAMA_BUILD_EXAMPLES=ON \
-            -DLLAMA_BUILD_TOOLS=ON \
-            -DLLAMA_BUILD_TESTS=OFF \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
-            -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
-            -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14
-
-          cmake --build build --config ${{ matrix.build_type }} -j $(nproc)
-
-      - name: Test
-        id: cmake_test
-        run: |
-          cd build
-          ctest -L main --verbose --timeout 900
-
-
-  ubuntu-llguidance-riscv64-native:
-    runs-on: RISCV64
-    steps:
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-
-          # Install necessary packages
-          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential wget ccache git-lfs
-
-          # Set gcc-14 and g++-14 as the default compilers
-          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
-          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
-          sudo ln -sf /usr/bin/gcc-14 /usr/bin/gcc
-          sudo ln -sf /usr/bin/g++-14 /usr/bin/g++
-
-          # Install Rust stable version
-          rustup install stable
-          rustup default stable
-
-          git lfs install
-
-      - name: GCC version check
-        run: |
-          gcc --version
-          g++ --version
-
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: Setup ccache
-        run: |
-          export CCACHE_DIR="$HOME/.ccache/llguidance-riscv64"
-          mkdir -p "$CCACHE_DIR"
-
-          ccache --set-config=max_size=5G
-          ccache --set-config=compression=true
-          ccache --set-config=compression_level=6
-          ccache --set-config=cache_dir="$CCACHE_DIR"
-          ccache --set-config=sloppiness=file_macro,time_macros,include_file_mtime,include_file_ctime
-          ccache --set-config=hash_dir=false
-
-          echo "CCACHE_DIR=$CCACHE_DIR" >> $GITHUB_ENV
-          echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
-
-      - name: Build
-        id: cmake_build
-        run: |
-          cmake -B build \
-            -DLLAMA_OPENSSL=OFF \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DGGML_OPENMP=OFF \
-            -DLLAMA_BUILD_EXAMPLES=ON \
-            -DLLAMA_BUILD_TOOLS=ON \
-            -DLLAMA_BUILD_TESTS=OFF \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DLLAMA_LLGUIDANCE=ON \
-            -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
-            -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14
-
-          cmake --build build --config Release -j $(nproc)
-
-      - name: Test
-        id: cmake_test
-        run: |
-          cd build
-          ctest -L main --verbose --timeout 900
-
-
-  ubuntu-cmake-rpc-riscv64-native:
-    runs-on: RISCV64
-
-    continue-on-error: true
-
-    steps:
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-
-          # Install necessary packages
-          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential libssl-dev wget ccache git-lfs
-
-          # Set gcc-14 and g++-14 as the default compilers
-          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
-          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
-          sudo ln -sf /usr/bin/gcc-14 /usr/bin/gcc
-          sudo ln -sf /usr/bin/g++-14 /usr/bin/g++
-
-          # Install Rust stable version
-          rustup install stable
-          rustup default stable
-
-          git lfs install
-
-      - name: GCC version check
-        run: |
-          gcc --version
-          g++ --version
-
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: Setup ccache
-        run: |
-          export CCACHE_DIR="$HOME/.ccache/rpc-riscv64"
-          mkdir -p "$CCACHE_DIR"
-
-          ccache --set-config=max_size=5G
-          ccache --set-config=compression=true
-          ccache --set-config=compression_level=6
-          ccache --set-config=cache_dir="$CCACHE_DIR"
-          ccache --set-config=sloppiness=file_macro,time_macros,include_file_mtime,include_file_ctime
-          ccache --set-config=hash_dir=false
-
-          echo "CCACHE_DIR=$CCACHE_DIR" >> $GITHUB_ENV
-          echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
-
-      - name: Build
-        id: cmake_build
-        run: |
-          cmake -B build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DGGML_OPENMP=OFF \
-            -DLLAMA_BUILD_EXAMPLES=ON \
-            -DLLAMA_BUILD_TOOLS=ON \
-            -DLLAMA_BUILD_TESTS=ON \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
-            -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14 \
-            -DGGML_RPC=ON
-
-          cmake --build build --config Release -j $(nproc)
-
-      - name: Test
-        id: cmake_test
-        run: |
-          cd build
-          ctest -L main --verbose
-
-  ggml-ci-arm64-graviton4-kleidiai:
+  ggml-ci-arm64-cpu-kleidiai-graviton4:
      runs-on: ah-ubuntu_22_04-c8g_8x
 
      steps:
@@ -2126,7 +1252,7 @@ jobs:
        - name: ccache
          uses: ggml-org/ccache-action@v1.2.16
          with:
-           key: ggml-ci-arm64-graviton4-kleidiai
+           key: ggml-ci-arm64-cpu-kleidiai-graviton4
            evict-old-files: 1d
            save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 

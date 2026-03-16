@@ -15,4 +15,12 @@
 #include "hvx-div.h"
 #include "hvx-base.h"
 
+#ifndef GATHER_TYPE
+#    if defined(__hexagon__)
+#        define GATHER_TYPE(_a) (intptr_t) _a
+#    else
+#        define GATHER_TYPE(_a) (HVX_Vector *) _a
+#    endif
+#endif
+
 #endif /* HVX_UTILS_H */

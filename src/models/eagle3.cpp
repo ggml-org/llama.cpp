@@ -41,9 +41,9 @@ llm_build_eagle3_encode::llm_build_eagle3_encode(const llama_model & model, cons
 // Input: draft tokens + g_embeddings from encoder
 // Output: draft logits
 llm_build_eagle3_decode::llm_build_eagle3_decode(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
-    const int64_t n_embd_head = hparams.n_embd_head_v;
+    const int64_t n_embd_head = hparams.n_embd_head_v();
 
-    GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
+    GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
     GGML_ASSERT(n_layer == 1);  // EAGLE-3 has only one decoder layer
 
     ggml_tensor * cur;

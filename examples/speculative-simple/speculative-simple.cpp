@@ -6,12 +6,15 @@
 #include "llama.h"
 #include "chat.h"
 
+#include <clocale>
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     common_params params;
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SPECULATIVE)) {

@@ -5,6 +5,10 @@ import type { AttachmentType } from '$lib/enums';
  */
 
 /**
+ * Common utility types used across the application
+ */
+
+/**
  * Represents a key-value pair.
  * Used for headers, environment variables, query parameters, etc.
  */
@@ -35,11 +39,29 @@ export interface ClipboardTextAttachment {
 }
 
 /**
- * Parsed result from clipboard content.
+ * Format for MCP prompt attachments when copied to clipboard
+ */
+export interface ClipboardMcpPromptAttachment {
+	type: typeof AttachmentType.MCP_PROMPT;
+	name: string;
+	serverName: string;
+	promptName: string;
+	content: string;
+	arguments?: Record<string, string>;
+}
+
+/**
+ * Union type for all clipboard attachment types
+ */
+export type ClipboardAttachment = ClipboardTextAttachment | ClipboardMcpPromptAttachment;
+
+/**
+ * Parsed result from clipboard content
  */
 export interface ParsedClipboardContent {
 	message: string;
 	textAttachments: ClipboardTextAttachment[];
+	mcpPromptAttachments: ClipboardMcpPromptAttachment[];
 }
 
 export type MimeTypeUnion = MimeTypeAudio | MimeTypeImage | MimeTypeApplication | MimeTypeText;

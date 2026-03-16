@@ -567,6 +567,18 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.chunk_experts.gate_proj",           # grovemoe
         ),
 
+        MODEL_TENSOR.FFN_GATE_UP_EXP: (
+            "model.layers.{bid}.mlp.experts.gate_up_proj",
+        ),
+
+        MODEL_TENSOR.MOE_LATENT_DOWN: (
+            "backbone.layers.{bid}.mixer.fc1_latent_proj",                 # nemotron 3 super
+        ),
+
+        MODEL_TENSOR.MOE_LATENT_UP: (
+            "backbone.layers.{bid}.mixer.fc2_latent_proj",                 # nemotron 3 super
+        ),
+
         # Feed-forward down
         MODEL_TENSOR.FFN_DOWN: (
             "gpt_neox.layers.{bid}.mlp.dense_4h_to_h",                # gptneox

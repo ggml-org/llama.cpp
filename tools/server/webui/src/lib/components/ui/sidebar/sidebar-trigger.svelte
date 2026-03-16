@@ -20,8 +20,10 @@
 	data-sidebar="trigger"
 	data-slot="sidebar-trigger"
 	variant="ghost"
-	size="icon"
-	class="rounded-full backdrop-blur-lg {className} h-9! w-9!"
+	size="icon-lg"
+	class="rounded-full backdrop-blur-lg {className} md:left-{sidebar.open
+		? 'unset'
+		: '2'} -top-2 -left-2 md:top-0"
 	type="button"
 	onclick={(e) => {
 		onclick?.(e);

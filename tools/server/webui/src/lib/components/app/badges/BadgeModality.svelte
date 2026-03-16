@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { ModelModality } from '$lib/enums';
-	import { MODALITY_ICONS, MODALITY_LABELS } from '$lib/constants/icons';
+	import { MODALITY_ICONS, MODALITY_LABELS } from '$lib/constants';
 	import { cn } from '$lib/components/ui/utils';
 
 	type DisplayableModality = ModelModality.VISION | ModelModality.AUDIO;

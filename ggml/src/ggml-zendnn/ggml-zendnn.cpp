@@ -41,13 +41,13 @@ static bool ggml_zendnn_matmul(ggml_backend_zendnn_context * ctx, int64_t m, int
                                const TA * A, int64_t lda, const TB * B, int64_t ldb, TC * C,
                                int64_t ldc) {
 
-    zendnnl::lowoha::lowoha_params params;
+    zendnnl::lowoha::matmul::matmul_params params;
     params.dtypes.src = ggml_to_zendnn_type<TB>();
     params.dtypes.wei = ggml_to_zendnn_type<TA>();
     params.dtypes.dst = ggml_to_zendnn_type<TC>();
     params.num_threads = ctx->n_threads;
 
-    zendnnl::lowoha::status_t status = zendnnl::lowoha::matmul_direct(
+    zendnnl::error_handling::status_t status = zendnnl::lowoha::matmul::matmul_direct(
         'r', false, true,   // row-major, don't transpose B, transpose A (because it's column-major)
         n,                  // M: rows of B and C
         m,                  // N: cols of A^T and C
@@ -63,7 +63,7 @@ static bool ggml_zendnn_matmul(ggml_backend_zendnn_context * ctx, int64_t m, int
         params              // params
     );
 
-    if (status != zendnnl::lowoha::status_t::success) {
+    if (status != zendnnl::error_handling::status_t::success) {
         GGML_LOG_ERROR("%s, ZenDNN matmul failed: status=%d\n", __func__, static_cast<int>(status));
         return false;
     }

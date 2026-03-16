@@ -139,7 +139,7 @@ struct ggml_hexagon_session {
 };
 
 void ggml_hexagon_session::enqueue(struct htp_general_req &req, struct dspqueue_buffer *bufs, uint32_t n_bufs, bool sync) {
-    // Bump pending flag (cleared in the session::flush once we get the responce)
+    // Bump pending flag (cleared in the session::flush once we get the response)
     this->op_pending++;  // atomic inc
 
     int err = dspqueue_write(this->queue,
@@ -402,6 +402,7 @@ static void pack_q4_0_quants(block_q4_0 * x, const uint8_t * qs, unsigned int bi
 static void repack_row_q4x4x2(uint8_t * y, const block_q4_0 * x, int64_t k) {
     static const int qk = QK_Q4_0x4x2;
     const int        nb = (k + qk - 1) / qk;  // number of blocks (padded)
+    const int        nloe = k % qk;           // leftovers
 
     const int dblk_size = 8 * 2;              // 8x __fp16
     const int qblk_size = qk / 2;             // int4
@@ -435,15 +436,17 @@ static void repack_row_q4x4x2(uint8_t * y, const block_q4_0 * x, int64_t k) {
         unpack_q4_0_quants(qs, &x[i * 8 + 6], 6);
         unpack_q4_0_quants(qs, &x[i * 8 + 7], 7);
 
+        bool partial = (nloe && i == nb-1);
+
         uint8_t * q = y_q + (i * qblk_size);
         for (int j = 0; j < qk / 2; j++) {
-            q[j] = (qs[j + 128] << 4) | qs[j];
+            q[j] = partial ? (qs[j*2+1] << 4) | qs[j*2+0] : (qs[j+128] << 4) | qs[j+000];
         }
     }
 
     // Repack the scales
     // Note: Do not combine with the loop above. For tensor sizes not multiple of 256 (QK_Q4_0x4x2)
-    // the last block is truncated and overriden by the scales.
+    // the last block is truncated and overridden by the scales.
     for (int i = 0; i < nb; i++) {
         // Repack the scales
         ggml_half * d = (ggml_half *) (y_d + i * dblk_size);
@@ -467,6 +470,7 @@ static void repack_row_q4x4x2(uint8_t * y, const block_q4_0 * x, int64_t k) {
 static void unpack_row_q4x4x2(block_q4_0 * x, const uint8_t * y, int64_t k) {
     static const int qk = QK_Q4_0x4x2;
     const int        nb = (k + qk - 1) / qk;  // number of blocks (padded)
+    const int        nloe = k % qk;           // leftovers
 
     const int dblk_size = 8 * 2;              // 8x __fp16
     const int qblk_size = qk / 2;             // int4
@@ -485,10 +489,17 @@ static void unpack_row_q4x4x2(block_q4_0 * x, const uint8_t * y, int64_t k) {
     for (int i = 0; i < nb; i++) {
         uint8_t qs[QK_Q4_0x4x2];  // unpacked quants
 
+        bool partial = (nloe && i == nb-1);
+
         const uint8_t * q = y_q + (i * qblk_size);
         for (int j = 0; j < qk / 2; j++) {
-            qs[j]       = q[j] & 0xf;
-            qs[j + 128] = q[j] >> 4;
+            if (partial) {
+                qs[j*2+0] = q[j] & 0xf;
+                qs[j*2+1] = q[j] >> 4;
+            } else {
+                qs[j+000] = q[j] & 0xf;
+                qs[j+128] = q[j] >> 4;
+            }
         }
 
         pack_q4_0_quants(&x[i * 8 + 0], qs, 0);
@@ -503,7 +514,7 @@ static void unpack_row_q4x4x2(block_q4_0 * x, const uint8_t * y, int64_t k) {
 
     // Repack the scales
     // Note: Do not combine with the loop above. For tensor sizes not multiple of 256 (QK_Q4_0x4x2)
-    // the last block is truncated and overriden by the scales.
+    // the last block is truncated and overridden by the scales.
     for (int i = 0; i < nb; i++) {
         // Unpack the scales
         const ggml_half * d = (const ggml_half *) (y_d + i * dblk_size);
@@ -552,7 +563,7 @@ static void init_row_q4x4x2(block_q4_0 * x, int64_t k) {
 
     // Init the scales
     // Note: Do not combine with the loop above. For tensor sizes not multiple of 256 (QK_Q4_0x4x2)
-    // the last block is truncated and overriden by the scales.
+    // the last block is truncated and overridden by the scales.
     for (int i = 0; i < nb; i++) {
         // Unpack the scales
         x[i * 8 + 0].d = 0;
@@ -770,7 +781,7 @@ static void repack_row_q8x4x2(uint8_t * y, const block_q8_0 * x, int64_t k) {
 
     // Repack the scales
     // Note: Do not combine with the loop above. For tensor sizes not multiple of 256 (QK_Q4_0x4x2)
-    // the last block is truncated and overriden by the scales.
+    // the last block is truncated and overridden by the scales.
     for (int i = 0; i < nb; i++) {
         // Repack the scales
         ggml_half * d = (ggml_half *) (y_d + i * dblk_size);
@@ -829,7 +840,7 @@ static void unpack_row_q8x4x2(block_q8_0 * x, const uint8_t * y, int64_t k) {
 
     // Repack the scales
     // Note: Do not combine with the loop above. For tensor sizes not multiple of 256 (QK_Q4_0x4x2)
-    // the last block is truncated and overriden by the scales.
+    // the last block is truncated and overridden by the scales.
     for (int i = 0; i < nb; i++) {
         // Unpack the scales
         const ggml_half * d = (const ggml_half *) (y_d + i * dblk_size);
@@ -878,7 +889,7 @@ static void init_row_q8x4x2(block_q8_0 * x, int64_t k) {
 
     // Init the scales
     // Note: Do not combine with the loop above. For tensor sizes not multiple of 256 (QK_Q8_0x4x2)
-    // the last block is truncated and overriden by the scales.
+    // the last block is truncated and overridden by the scales.
     for (int i = 0; i < nb; i++) {
         // Unpack the scales
         x[i * 8 + 0].d = 0;
@@ -1078,6 +1089,7 @@ static void pack_mxfp4_quants(block_mxfp4 * x, const uint8_t * qs, unsigned int 
 static void repack_row_mxfp4x4x2(uint8_t * y, const block_mxfp4 * x, int64_t k) {
     static const int qk = QK_MXFP4x4x2;
     const int        nb = (k + qk - 1) / qk;  // number of blocks (padded)
+    const int        nloe = k % qk;           // leftovers
 
     const int eblk_size = 8 * 1;              // 8x E8M0
     const int qblk_size = qk / 2;             // int4
@@ -1112,15 +1124,17 @@ static void repack_row_mxfp4x4x2(uint8_t * y, const block_mxfp4 * x, int64_t k) 
         unpack_mxfp4_quants(qs, &x[i * 8 + 6], 6);
         unpack_mxfp4_quants(qs, &x[i * 8 + 7], 7);
 
+        bool partial = (nloe && i == nb-1);
+
         uint8_t * q = y_q + (i * qblk_size);
         for (int j = 0; j < qk / 2; j++) {
-            q[j] = (qs[j + 128] << 4) | qs[j];
+            q[j] = partial ? (qs[j*2+1] << 4) | qs[j*2+0] : (qs[j+128] << 4) | qs[j+000];
         }
     }
 
     // Repack the scales
     // Note: Do not combine with the loop above. For tensor sizes not multiple of 256 (QK_MXFP4x4x2)
-    // the last block is truncated and overriden by the scales.
+    // the last block is truncated and overridden by the scales.
     for (int i = 0; i < nb; i++) {
         // Repack the scales
         uint8_t * e = (uint8_t *) (y_e + i * eblk_size);
@@ -1144,6 +1158,7 @@ static void repack_row_mxfp4x4x2(uint8_t * y, const block_mxfp4 * x, int64_t k) 
 static void unpack_row_mxfp4x4x2(block_mxfp4 * x, const uint8_t * y, int64_t k) {
     static const int qk = QK_MXFP4x4x2;
     const int        nb = (k + qk - 1) / qk;  // number of blocks (padded)
+    const int        nloe = k % qk;           // leftovers
 
     const int eblk_size = 8 * 1;              // 8x E8M0
     const int qblk_size = qk / 2;             // int4
@@ -1162,10 +1177,17 @@ static void unpack_row_mxfp4x4x2(block_mxfp4 * x, const uint8_t * y, int64_t k) 
     for (int i = 0; i < nb; i++) {
         uint8_t qs[QK_MXFP4x4x2];  // unpacked quants
 
+        bool partial = (nloe && i == nb-1);
+
         const uint8_t * q = y_q + (i * qblk_size);
         for (int j = 0; j < qk / 2; j++) {
-            qs[j]       = q[j] & 0xf;
-            qs[j + 128] = q[j] >> 4;
+            if (partial) {
+                qs[j*2+0] = q[j] & 0xf;
+                qs[j*2+1] = q[j] >> 4;
+            } else {
+                qs[j+000] = q[j] & 0xf;
+                qs[j+128] = q[j] >> 4;
+            }
         }
 
         pack_mxfp4_quants(&x[i * 8 + 0], qs, 0);
@@ -1180,7 +1202,7 @@ static void unpack_row_mxfp4x4x2(block_mxfp4 * x, const uint8_t * y, int64_t k) 
 
     // Repack the scales
     // Note: Do not combine with the loop above. For tensor sizes not multiple of 256 (QK_MXFP4_0x4x2)
-    // the last block is truncated and overriden by the scales.
+    // the last block is truncated and overridden by the scales.
     for (int i = 0; i < nb; i++) {
         // Unpack the scales
         const uint8_t * e = (const uint8_t *) (y_e + i * eblk_size);
@@ -1229,7 +1251,7 @@ static void init_row_mxfp4x4x2(block_mxfp4 * x, int64_t k) {
 
     // Init the scales
     // Note: Do not combine with the loop above. For tensor sizes not multiple of 256 (QK_MXFP4x4x2)
-    // the last block is truncated and overriden by the scales.
+    // the last block is truncated and overridden by the scales.
     for (int i = 0; i < nb; i++) {
         // Unpack the scales
         x[i * 8 + 0].e = 0;
@@ -1749,23 +1771,6 @@ static inline bool ggml_backend_buffer_is_hexagon_repack(const struct ggml_backe
     return b->buft->iface.alloc_buffer == ggml_backend_hexagon_repack_buffer_type_alloc_buffer;
 }
 
-static bool hex_supported_dims2(const struct ggml_tensor * x, const struct ggml_tensor * y) {
-    if (x->ne[0] != y->ne[0]) {
-        return false;
-    }
-    if (x->ne[1] != y->ne[1]) {
-        return false;
-    }
-    if (x->ne[2] != y->ne[2]) {
-        return false;
-    }
-    if (x->ne[3] != y->ne[3]) {
-        return false;
-    }
-
-    return true;
-}
-
 static bool ggml_hexagon_supported_flash_attn_ext(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * src1 = op->src[1];
@@ -1797,43 +1802,6 @@ static bool ggml_hexagon_supported_flash_attn_ext(const struct ggml_hexagon_sess
     return opt_experimental;
 }
 
-static bool hex_supported_src0_type(ggml_type t) {
-    return t == GGML_TYPE_F32;
-}
-
-static bool hex_supported_src1_type(ggml_type t) {
-    return t == GGML_TYPE_F32;
-}
-
-static bool hex_supported_src2_type(ggml_type t) {
-    return t == GGML_TYPE_F32;
-}
-
-static bool hex_supported_src1_type2(ggml_type t) {
-    return t == GGML_TYPE_F16;
-}
-
-static bool hex_supported_src1_type3(ggml_type t) {
-    return t == GGML_TYPE_I32;
-}
-
-static bool hex_supported_dst_type(ggml_type t) {
-    return t == GGML_TYPE_F32;
-}
-
-static bool hex_supported_dims(const struct ggml_tensor * x, const struct ggml_tensor * y) {
-    // TODO: support broadcast for ne[2 and 3]
-    if (x->ne[0] != y->ne[0]) {
-        return false;
-    }
-    if (x->ne[2] != y->ne[2]) {
-        return false;
-    }
-    if (x->ne[3] != y->ne[3]) {
-        return false;
-    }
-    return true;
-}
 
 static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * sess, const struct ggml_tensor * dst) {
     const struct ggml_tensor * src0 = dst->src[0];
@@ -1855,12 +1823,12 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
                 return false;
             }
 
-            if (src0->ne[1] > 16 * 1024) {
+            if (ggml_nrows(src0) > 16 * 1024) {
                 return false;  // typically the lm-head which would be too large for VTCM
             }
 
-            if ((src1->ne[2] != 1 || src1->ne[3] != 1)) {
-                return false;
+            if (ggml_nrows(src1) > 1024 || src1->ne[2] != 1 || src1->ne[3] != 1) {
+                return false;  // no huge batches or broadcasting (for now)
             }
 
             // src0 (weights) must be repacked
@@ -1873,6 +1841,9 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
             if (src0->nb[1] < src0->nb[0]) {
                 GGML_LOG_DEBUG("ggml_hexagon_supported_mul_mat: permuted F16 src0 not supported\n");
                 return false;
+            }
+            if (ggml_nrows(src1) > 1024) {
+                return false;  // no huge batches (for now)
             }
             break;
 
@@ -1919,19 +1890,30 @@ static bool ggml_hexagon_supported_binary(const struct ggml_hexagon_session * se
     const struct ggml_tensor * src1 = op->src[1];
     const struct ggml_tensor * dst  = op;
 
-    if (!hex_supported_src0_type(src0->type)) {
+    if (src0->type == GGML_TYPE_F32) {
+        if (src1->type != GGML_TYPE_F32) {
+            return false;
+        }
+        if (dst->type != GGML_TYPE_F32) {
+            return false;
+        }
+    }
+    else if (src0->type == GGML_TYPE_F16) {
+        if (src1->type != GGML_TYPE_F16) {
+            return false;
+        }
+        if (dst->type != GGML_TYPE_F16) {
+            return false;
+        }
+    }
+    else {
         return false;
     }
-    if (!hex_supported_src1_type(src1->type)) {
+
+    if (!ggml_are_same_shape(src0, dst)) {
         return false;
     }
-    if (!hex_supported_dst_type(dst->type)) {
-        return false;
-    }
-    if (!hex_supported_dims2(src0, dst)) {
-        return false;
-    }
-    if (!ggml_can_repeat(src1, src0)) {
+    if (!ggml_can_repeat(src1, src0) || ggml_is_permuted(src1)) {
         return false;
     }
 
@@ -1943,16 +1925,16 @@ static bool ggml_hexagon_supported_add_id(const struct ggml_hexagon_session * se
     const struct ggml_tensor * src1 = op->src[1];
     const struct ggml_tensor * dst  = op;
 
-    if (!hex_supported_src0_type(src0->type)) {
+    if (src0->type != GGML_TYPE_F32) {
         return false;
     }
-    if (!hex_supported_src1_type(src1->type)) {
+    if (src1->type != GGML_TYPE_F32) {
         return false;
     }
-    if (!hex_supported_dst_type(dst->type)) {
+    if (dst->type != GGML_TYPE_F32) {
         return false;
     }
-    if (!hex_supported_dims2(src0, dst)) {
+    if (!ggml_are_same_shape(src0, dst)) {
         return false;
     }
 
@@ -1968,13 +1950,13 @@ static bool ggml_hexagon_supported_unary(const struct ggml_hexagon_session * ses
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * dst  = op;
 
-    if (!hex_supported_src0_type(src0->type)) {
+    if (src0->type != GGML_TYPE_F32) {
         return false;
     }
-    if (!hex_supported_dst_type(dst->type)) {
+    if (dst->type != GGML_TYPE_F32) {
         return false;
     }
-    if (!hex_supported_dims2(src0, dst)) {
+    if (!ggml_are_same_shape(src0, dst)) {
         return false;
     }
 
@@ -1990,10 +1972,10 @@ static bool ggml_hexagon_supported_sum_rows(const struct ggml_hexagon_session * 
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * dst  = op;
 
-    if (!hex_supported_src0_type(src0->type)) {
+    if (src0->type != GGML_TYPE_F32) {
         return false;
     }
-    if (!hex_supported_dst_type(dst->type)) {
+    if (dst->type != GGML_TYPE_F32) {
         return false;
     }
 
@@ -2011,10 +1993,10 @@ static bool ggml_hexagon_supported_activations(const struct ggml_hexagon_session
     const struct ggml_tensor * src1 = op->src[1];
     const struct ggml_tensor * dst  = op;
 
-    if (!hex_supported_src0_type(src0->type)) {
+    if (src0->type != GGML_TYPE_F32) {
         return false;
     }
-    if (!hex_supported_dst_type(dst->type)) {
+    if (dst->type != GGML_TYPE_F32) {
         return false;
     }
 
@@ -2023,10 +2005,10 @@ static bool ggml_hexagon_supported_activations(const struct ggml_hexagon_session
     }
 
     if (src1) {
-        if (!hex_supported_src1_type(src1->type)) {
+        if (src1->type != GGML_TYPE_F32) {
             return false;
         }
-        if (!hex_supported_dims2(src0, src1)) {
+        if (!ggml_are_same_shape(src0, src1)) {
             return false;
         }
         if (!ggml_is_contiguous(src1)) {
@@ -2047,15 +2029,15 @@ static bool ggml_hexagon_supported_softmax(const struct ggml_hexagon_session * s
         return false;  // FIXME: add support for sinks
     }
 
-    if (!hex_supported_src0_type(src0->type)) {
+    if (src0->type != GGML_TYPE_F32) {
         return false;
     }
-    if (!hex_supported_dst_type(dst->type)) {
+    if (dst->type != GGML_TYPE_F32) {
         return false;
     }
 
     if (src1) {
-        if (!hex_supported_src1_type(src1->type) && !hex_supported_src1_type2(src1->type)) {
+        if (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_F16) {
             return false;
         }
         if (src0->ne[0] != src1->ne[0]) {
@@ -2162,17 +2144,17 @@ static bool ggml_hexagon_supported_rope(const struct ggml_hexagon_session * sess
     const struct ggml_tensor * src2 = op->src[2];
     const struct ggml_tensor * dst  = op;
 
-    if (!hex_supported_src0_type(src0->type)) {
+    if (src0->type != GGML_TYPE_F32) {
         return false;  // FIXME: add support for GGML_TYPE_F16 for src0
     }
-    if (!hex_supported_dst_type(dst->type)) {
+    if (dst->type != GGML_TYPE_F32) {
         return false;
     }
-    if (!hex_supported_src1_type3(src1->type)) {
+    if (src1->type != GGML_TYPE_I32) {
         return false;
     }
     if (src2) {
-        if (!hex_supported_src2_type(src2->type)) {
+        if (src2->type != GGML_TYPE_F32) {
             return false;
         }
         int n_dims = op_params[1];
@@ -2190,6 +2172,44 @@ static bool ggml_hexagon_supported_rope(const struct ggml_hexagon_session * sess
         if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1) || !ggml_is_contiguous(dst)) {
             return false;
         }
+    }
+
+    return true;
+}
+
+static bool ggml_hexagon_supported_ssm_conv(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    const struct ggml_tensor * src0 = op->src[0];
+    const struct ggml_tensor * src1 = op->src[1];
+    const struct ggml_tensor * dst  = op;
+
+    // Only support FP32 for now
+    if (src0->type != GGML_TYPE_F32 || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    // Check IO tensor shapes and dims
+    if (src0->ne[3] != 1 || src1->ne[2] != 1 || src1->ne[3] != 1 || dst->ne[3] != 1) {
+        return false; // src0 should be effectively 3D
+    }
+
+    const int d_conv = src1->ne[0];
+    const int d_inner = src0->ne[1];
+    const int n_t = dst->ne[1];
+    const int n_s = dst->ne[2];
+
+    if (src0->ne[0] != d_conv - 1 + n_t || src0->ne[1] != d_inner || src0->ne[2] != n_s) {
+        return false;
+    }
+    if (src1->ne[0] != d_conv || src1->ne[1] != d_inner) {
+        return false;
+    }
+    if (dst->ne[0] != d_inner || dst->ne[1] != n_t || dst->ne[2] != n_s) {
+        return false;
+    }
+
+    // TODO: add support for non-contiguous tensors
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1) || !ggml_is_contiguous(dst)) {
+        return false;
     }
 
     return true;
@@ -2511,6 +2531,17 @@ static inline size_t init_flash_attn_ext_req(htp_general_req * req, dspqueue_buf
     return n_bufs;
 }
 
+static inline size_t init_ssm_conv_req(htp_general_req * req, dspqueue_buffer * bufs, const ggml_tensor * t) {
+    req->op = HTP_OP_SSM_CONV;
+
+    size_t n_bufs = 0;
+    n_bufs += htp_req_buff_init(&req->src0, &bufs[n_bufs], t->src[0], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
+    n_bufs += htp_req_buff_init(&req->src1, &bufs[n_bufs], t->src[1], DSPQBUF_TYPE_CONSTANT);
+    n_bufs += htp_req_buff_init(&req->dst,  &bufs[n_bufs], t,         DSPQBUF_TYPE_DSP_WRITE_CPU_READ);
+
+    return n_bufs;
+}
+
 static const char * ggml_backend_hexagon_name(ggml_backend_t backend) {
     auto sess = static_cast<ggml_hexagon_session *>(backend->context);
     return sess->name.c_str();
@@ -2649,6 +2680,10 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
                 ggml_hexagon_dispatch_op<init_argsort_req>(sess, node, flags);
                 break;
 
+            case GGML_OP_SSM_CONV:
+                ggml_hexagon_dispatch_op<init_ssm_conv_req>(sess, node, flags);
+                break;
+
             default:
                 GGML_ABORT("\nggml-hex: graph-compute %s is not supported\n", ggml_op_desc(node));
         }
@@ -2724,7 +2759,7 @@ static std::vector<int> ggml_hexagon_graph_optimize_reorder(const std::vector<no
     // The main goal here is to stack the MUL_MAT ops with the same src1 input.
     // This allows use to reuse dynamically quantized src1 in VTCM.
 
-    // TODO: the current version might do incorrect reodering in cases where quantized src0
+    // TODO: the current version might do incorrect reordering in cases where quantized src0
     //       input is an output of another Op.
 
     for (int i0 = 0; i0 < n; i0++) {
@@ -3065,6 +3100,10 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
 
         case GGML_OP_ARGSORT:
             supp = ggml_hexagon_supported_argsort(sess, op);
+            break;
+
+        case GGML_OP_SSM_CONV:
+            supp = ggml_hexagon_supported_ssm_conv(sess, op);
             break;
 
         default:

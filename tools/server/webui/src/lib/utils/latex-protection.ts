@@ -3,7 +3,7 @@ import {
 	LATEX_MATH_AND_CODE_PATTERN,
 	LATEX_LINEBREAK_REGEXP,
 	MHCHEM_PATTERN_MAP
-} from '$lib/constants/latex-protection';
+} from '$lib/constants';
 
 /**
  * Replaces inline LaTeX expressions enclosed in `$...$` with placeholders, avoiding dollar signs

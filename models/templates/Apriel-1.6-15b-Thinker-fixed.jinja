@@ -1,0 +1,172 @@
+{# ---------------------------------------------------------------------- #}
+{# ƛƬ Default setup and flags                                             #}
+{# ---------------------------------------------------------------------- #}
+{%- set messages = messages or [] -%}
+{%- set tools = tools or [] -%}
+{%- set add_generation_prompt = add_generation_prompt or false -%}
+{%- set available_tool_string = '' -%}
+{%- set add_tool_id = true -%}
+{%- set add_thoughts = true -%}            {# whether to include <thinking> reasoning blocks #}
+{%- set add_generation_prompt = true -%}      {# whether to emit reasoning starter before assistant response #}
+{# Optional token placeholders (safe defaults) #}
+{%- set bos_token = bos_token or '' -%}
+{%- set eos_token = eos_token or '' -%}
+{# ---------------------------------------------------------------------- #}
+{# Core reasoning prompt and assistant reasoning prefix                 #}
+{# ---------------------------------------------------------------------- #}
+{%- set reasoning_prompt -%}
+    You are a thoughtful, systematic AI assistant from ServiceNow Language Models (SLAM) lab.
+    Analyze each question carefully, present your reasoning step-by-step, then provide the final
+    response after the marker [BEGIN FINAL RESPONSE].
+{%- endset -%}
+{%- set reasoning_asst_turn_start = 'Here are my reasoning steps:\n' -%}
+{# ---------------------------------------------------------------------- #}
+{# Tool list and tool call output format                                  #}
+{# ---------------------------------------------------------------------- #}
+{%- if tools|length > 0 -%}
+    {%- set available_tool_string -%}
+        You are provided with function signatures within <available_tools></available_tools> XML tags.
+        You may call one or more functions to assist with the user query.
+        Don't make assumptions about the arguments. You should infer the argument values from previous
+        user responses and the system message.
+        Here are the available tools: 
+        <available_tools>
+        {% for tool in tools %}{{ tool|string }}{% endfor %}
+        
+        </available_tools>.
+
+        Return all function calls as a list of JSON objects within <tool_calls></tool_calls> XML tags.
+        Each JSON object should contain a function name and arguments as follows:
+        <tool_calls>[
+            {"name": <function-name-1>, "arguments": <args-dict-1>},
+            {"name": <function-name-2>, "arguments": <args-dict-2>},
+            ...
+        ]</tool_calls>
+    {%- endset -%}
+{%- endif -%}
+{# ---------------------------------------------------------------------- #}
+{# Start system block if first message is not system                      #}
+{# ---------------------------------------------------------------------- #}
+{%- if messages|length > 0 and messages[0]['role'] != 'system' -%}
+    {%- if tools|length > 0 -%}
+        {{ bos_token + '<|begin_system|>\n' + reasoning_prompt + '\n' + available_tool_string + '\n' }}
+    {%- else -%}
+        {{ bos_token + '<|begin_system|>\n' + reasoning_prompt + '\n' }}
+    {%- endif -%}
+{%- endif -%}
+{# ---------------------------------------------------------------------- #}
+{# Iterate through messages                                             #}
+{# ---------------------------------------------------------------------- #}
+{%- for message in messages -%}
+
+    {# ---------------- USER MESSAGE ---------------- #}
+    {%- if message['role'] == 'user' -%}
+        {{ '<|begin_user|>\n' }}
+        {%- if message['content'] is not string -%}
+            {%- for chunk in message['content'] -%}
+                {%- if chunk['type'] == 'text' -%}
+                    {{ chunk['text'] }}
+                {%- elif chunk['type'] in ['image', 'image_url'] -%}
+                    {{ '[IMG]' }}
+                {%- else -%}
+                    {{ raise_exception('Unrecognized content type!') }}
+                {%- endif -%}
+            {%- endfor -%}
+        {%- else -%}
+            {{ message['content'] }}
+        {%- endif -%}
+
+    {# ---------------- SYSTEM MESSAGE ---------------- #}
+    {%- elif message['role'] == 'system' -%}
+        {%- set sys_content = message.get('content', '') -%}
+        {%- if sys_content and sys_content|length > 0 -%}
+            {%- if sys_content is string -%}
+                {%- set system_message = sys_content -%}
+            {%- else -%}
+                {%- set system_message = sys_content[0]['text'] -%}
+            {%- endif -%}
+        {%- else -%}
+            {%- set system_message = '' -%}
+        {%- endif -%}
+
+        {%- if tools|length > 0 -%}
+            {{ bos_token + '<|begin_system|>\n' + reasoning_prompt + '\n' + system_message + '\n' + available_tool_string + '\n' }}
+        {%- else -%}
+            {{ bos_token + '<|begin_system|>\n' + reasoning_prompt + '\n' + system_message + '\n' }}
+        {%- endif -%}
+
+    {# ---------------- ASSISTANT MESSAGE ---------------- #}
+    {%- elif message['role'] == 'assistant' -%}
+        {%- if loop.last -%}
+            {%- set add_tool_id = false -%}
+        {%- endif -%}
+
+        {{ '\n<|begin_assistant|>\n' }}
+
+        {%- if add_thoughts and message.get('reasoning_content') and loop.last -%}
+            {{ message['reasoning_content'] + '\n[BEGIN FINAL RESPONSE]\n' }}
+        {%- endif -%}
+
+        {%- set asst_content = message.get('content', '') -%}
+        {%- if asst_content and asst_content|length > 0 -%}
+            {%- if asst_content is not string -%}
+                {%- set asst_text = asst_content[0]['text'] -%}
+            {%- else -%}
+                {%- set asst_text = asst_content -%}
+            {%- endif -%}
+            {# For historical turns (not the last), strip reasoning and keep only final response #}
+            {%- if not loop.last and '[BEGIN FINAL RESPONSE]' in asst_text -%}
+                {{- asst_text.split('[BEGIN FINAL RESPONSE]')[-1] | trim -}}
+            {%- else -%}
+                {{- asst_text -}}
+            {%- endif -%}
+        {%- elif message.get('chosen') and message['chosen']|length > 0 -%}
+            {{ message['chosen'][0] }}
+        {%- endif -%}
+
+        {# Tool call output #}
+        {%- set tool_calls = message.get('tool_calls', []) -%}
+        {%- if tool_calls and tool_calls|length > 0 -%}
+            {{ '\n<tool_calls>[' }}
+            {%- for tool_call in tool_calls -%}
+                {{ '{"name": "' + tool_call['function']['name'] + '", "arguments": ' + tool_call['function']['arguments']|tojson }}
+                {%- if add_tool_id == true and 'id' in tool_call -%}
+                    {{ ', "id": "' + tool_call['id'] + '"' }}
+                {%- endif -%}
+                {{ '}' }}
+                {%- if not loop.last -%}{{ ', ' }}{%- endif -%}
+            {%- endfor -%}
+            {{ ']</tool_calls>' }}
+        {%- endif -%}
+
+        {%- set training_prompt = training_prompt if (training_prompt is defined) else false -%}
+        {%- if not loop.last or training_prompt -%}
+            {{ '\n<|end|>\n' }}
+        {%- endif -%}
+
+    {# ---------------- TOOL RESULT MESSAGE ---------------- #}
+    {%- elif message['role'] == 'tool' -%}
+        {%- set tool_content = message.get('content', '') -%}
+        {%- if tool_content is string -%}
+            {%- set tool_message = tool_content -%}
+        {%- else -%}
+            {%- set tool_message = tool_content[0]['text'] if tool_content else '' -%}
+        {%- endif -%}
+        {{ '<|begin_tool_result|>\n' + tool_message|string + '\n' }}
+
+    {# ---------------- CONTENT MESSAGE ---------------- #}
+    {%- elif message['role'] == 'content' -%}
+        {%- set msg_content = message.get('content', '') -%}
+        {%- if msg_content is not string -%}
+            {{ '<|begin_content|>\n' + msg_content[0]['text'] + '\n' }}
+        {%- else -%}
+            {{ '<|begin_content|>\n' + msg_content + '\n' }}
+        {%- endif -%}
+    {%- endif -%}
+
+    {# ---------------- REASONING PROMPT BEFORE NEXT ASSISTANT ---------------- #}
+    {%- if loop.last and add_generation_prompt and message['role'] != 'assistant' -%}
+        {{ '\n<|begin_assistant|>\n' + reasoning_asst_turn_start }}
+    {%- endif -%} 
+
+{%- endfor -%}

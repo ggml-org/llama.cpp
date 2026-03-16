@@ -679,19 +679,24 @@ struct MulMatParams {
 @group(0) @binding(3) var<uniform> params: MulMatParams;
 
 @compute @workgroup_size(256)
-fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn main(@builtin(local_invocation_id) local_id: vec3<u32>,
+        @builtin(workgroup_id) wg_id: vec3<u32>,
+        @builtin(num_workgroups) num_wg: vec3<u32>) {
+    let wg_linear = wg_id.y * num_wg.x + wg_id.x;
+    let global_idx = wg_linear * 256u + local_id.x;
+
     let total = params.m * params.n * params.bs02 * params.broadcast2 * params.bs03 * params.broadcast3;
-    if (global_id.x >= total) {
+    if (global_idx >= total) {
         return;
     }
 
     let dst2_stride = params.m * params.n;
     let dst3_stride = dst2_stride * params.bs02 * params.broadcast2;
 
-    let dst3_idx = global_id.x / dst3_stride;
+    let dst3_idx = global_idx / dst3_stride;
     let src03_idx = dst3_idx / params.broadcast3; // src0 may be broadcast along the third dimension
     let src13_idx = dst3_idx; // src1 is not broadcast
-    let dst3_rem = global_id.x % dst3_stride;
+    let dst3_rem = global_idx % dst3_stride;
 
     let dst2_idx = dst3_rem / dst2_stride;
     let src02_idx = dst2_idx / params.broadcast2; // src0 may also be broadcast along the second dimension

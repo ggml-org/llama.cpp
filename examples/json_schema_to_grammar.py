@@ -633,7 +633,7 @@ class SchemaConverter:
             return self._add_rule(rule_name, self._build_object_rule(properties, required, hybrid_name, additional_properties=None))
 
         elif schema_type in (None, 'array') and ('items' in schema or 'prefixItems' in schema):
-            items = schema.get('items') or schema['prefixItems']
+            items = schema.get('items', schema.get('prefixItems'))
             if isinstance(items, list):
                 return self._add_rule(
                     rule_name,
@@ -688,6 +688,11 @@ class SchemaConverter:
 
         elif (schema_type == 'object') or (len(schema) == 0):
             return self._add_rule(rule_name, self._add_primitive('object', PRIMITIVE_RULES['object']))
+
+        elif schema_type is None and isinstance(schema, dict):
+            # No type constraint and no recognized structural keywords (e.g. {"description": "..."}).
+            # Per JSON Schema semantics this is equivalent to {} and accepts any value.
+            return self._add_rule(rule_name, self._add_primitive('value', PRIMITIVE_RULES['value']))
 
         else:
             assert schema_type in PRIMITIVE_RULES, f'Unrecognized schema: {schema}'

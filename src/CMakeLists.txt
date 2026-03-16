@@ -63,6 +63,7 @@ add_library(llama
             models/eagle3.cpp
             models/ernie4-5-moe.cpp
             models/ernie4-5.cpp
+            models/eurobert.cpp
             models/exaone-moe.cpp
             models/exaone.cpp
             models/exaone4.cpp

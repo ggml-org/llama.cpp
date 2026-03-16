@@ -241,6 +241,9 @@ int op_argsort(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
+    const uint32_t total_rows = octx->src0.ne[1] * octx->src0.ne[2] * octx->src0.ne[3];
+    const uint32_t n_threads = MIN(total_rows, octx->n_threads);
+
     // Allocate scratchpad
     // We need 1 row of float + 1 row of int32 per thread.
     uint32_t ne00 = octx->src0.ne[0];
@@ -251,7 +254,7 @@ int op_argsort(struct htp_ops_context * octx) {
     // Make sure we round up to 256 for alignment requirements
     spad_per_thread = hex_round_up(spad_per_thread, 256);
 
-    size_t total_spad_size = spad_per_thread * octx->n_threads;
+    size_t total_spad_size = spad_per_thread * n_threads;
 
     if (octx->ctx->vtcm_size < total_spad_size) {
         FARF(ERROR, "argsort: VTCM size too small. Needed %zu, have %zu", total_spad_size, octx->ctx->vtcm_size);
@@ -267,15 +270,12 @@ int op_argsort(struct htp_ops_context * octx) {
          octx->dst.ne[0], octx->dst.ne[1], octx->dst.ne[2], octx->dst.ne[3],
          octx->src0.data, octx->dst.data);
 
-    uint32_t total_rows = octx->src0.ne[1] * octx->src0.ne[2] * octx->src0.ne[3];
-    uint32_t n_jobs = MIN(total_rows, octx->n_threads);
-
     struct htp_argsort_context actx;
     actx.octx = octx;
-    actx.nrows_per_thread = (total_rows + n_jobs - 1) / n_jobs;
+    actx.nrows_per_thread = (total_rows + n_threads - 1) / n_threads;
 
     // Run jobs
-    worker_pool_run_func(octx->ctx->worker_pool, htp_argsort_f32, &actx, n_jobs);
+    worker_pool_run_func(octx->ctx->worker_pool, htp_argsort_f32, &actx, n_threads);
 
     return HTP_STATUS_OK;
 }

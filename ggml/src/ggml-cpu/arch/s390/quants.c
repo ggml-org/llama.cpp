@@ -181,11 +181,11 @@ void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
         const int8x16_t v_yh = vec_xl(QK8_0/2, y[ib].qs);
 
         const int16x8_t v_xylso = vec_mulo(v_xls, v_yl);
-        const int16x8_t v_xylse = vec_mule(v_xls, v_yl);
+        const int16x8_t v_xyl = vec_meadd(v_xls, v_yl, v_xylso);
         const int16x8_t v_xyhso = vec_mulo(v_xhs, v_yh);
-        const int16x8_t v_xyhse = vec_mule(v_xhs, v_yh);
+        const int16x8_t v_xyh = vec_meadd(v_xhs, v_yh, v_xyhso);
 
-        int16x8_t v_xy_ = v_xylso + v_xylse + v_xyhso + v_xyhse; v_xy_ += vec_reve(v_xy_);
+        int16x8_t v_xy_ = v_xyl + v_xyh; v_xy_ += vec_reve(v_xy_);
 
         const float32x4_t v_xy = vec_float(vec_unpackh(v_xy_));
         const float32x4_t v_d = vec_splats(GGML_CPU_FP16_TO_FP32(x[ib].d) * GGML_CPU_FP16_TO_FP32(y[ib].d));
@@ -890,8 +890,7 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
         const int16x8_t v_minsh = (int16x8_t)vec_unpackh((uint8x16_t)v_mins8);
 
         const int32x4_t v_minso = vec_mulo(v_ysums, v_minsh);
-        const int32x4_t v_minse = vec_mule(v_ysums, v_minsh);
-        const int32x4_t v_mins = v_minso + v_minse;
+        const int32x4_t v_mins = vec_meadd(v_ysums, v_minsh, v_minso);
         sumf -= dmin * (v_mins[0] + v_mins[1] + v_mins[2] + v_mins[3]);
 
         const uint8_t * scales = (const uint8_t *)utmp;
@@ -1004,8 +1003,7 @@ void ggml_vec_dot_q5_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
         const int16x8_t v_minsh = (int16x8_t)vec_unpackh(v_mins8);
 
         const int32x4_t v_minsho = vec_mulo(v_ysums, v_minsh);
-        const int32x4_t v_minshe = vec_mule(v_ysums, v_minsh);
-        const int32x4_t v_mins = vec_add(v_minsho, v_minshe);
+        const int32x4_t v_mins = vec_meadd(v_ysums, v_minsh, v_minsho);
         const int32_t mins = vec_hsum_i32x4(v_mins);
 
         const uint8_t * scales = (const uint8_t *)utmp;
@@ -1110,10 +1108,10 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
         const int16x8_t v_scaleh = vec_unpackl(v_scale);
 
         const int32x4_t v_minslo = vec_mulo(v_ysumsl, v_scalel);
-        const int32x4_t v_minsle = vec_mule(v_ysumsl, v_scalel);
+        const int32x4_t v_minsl = vec_meadd(v_ysumsl, v_scalel, v_minslo);
         const int32x4_t v_minsho = vec_mulo(v_ysumsh, v_scaleh);
-        const int32x4_t v_minshe = vec_mule(v_ysumsh, v_scaleh);
-        const int32x4_t v_mins = v_minslo + v_minsle + v_minsho + v_minshe;
+        const int32x4_t v_minsh = vec_meadd(v_ysumsh, v_scaleh, v_minsho);
+        const int32x4_t v_mins = vec_add(v_minsl, v_minsh);
 
         const int32_t mins = vec_hsum_i32x4(v_mins);
 

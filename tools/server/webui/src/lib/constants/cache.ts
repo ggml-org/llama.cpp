@@ -28,6 +28,18 @@ export const MODEL_PROPS_CACHE_TTL_MS = 10 * 60 * 1000;
 export const MODEL_PROPS_CACHE_MAX_ENTRIES = 50;
 
 /**
+ * Maximum number of MCP resources to cache
+ * @default 50
+ */
+export const MCP_RESOURCE_CACHE_MAX_ENTRIES = 50;
+
+/**
+ * TTL for MCP resource cache entries in milliseconds
+ * @default 5 minutes
+ */
+export const MCP_RESOURCE_CACHE_TTL_MS = 5 * 60 * 1000;
+
+/**
  * Maximum number of inactive conversation states to keep in memory
  * States for conversations beyond this limit will be cleaned up
  * @default 10

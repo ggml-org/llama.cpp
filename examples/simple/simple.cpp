@@ -1,4 +1,5 @@
 #include "llama.h"
+#include <clocale>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -11,6 +12,8 @@ static void print_usage(int, char ** argv) {
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     // path to the model gguf file
     std::string model_path;
     // prompt to generate text from

@@ -22,7 +22,7 @@ import {
 	COPY_CODE_BTN_CLASS,
 	PREVIEW_CODE_BTN_CLASS,
 	RELATIVE_CLASS
-} from '$lib/constants/code-blocks';
+} from '$lib/constants';
 
 declare global {
 	interface Window {

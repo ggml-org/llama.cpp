@@ -2,7 +2,7 @@
 
 This is a utility intended to help debug a model by registering a callback that
 logs GGML operations and tensor data. It can also store the generated logits or
-embeddings as well as the prompt and token ids for comparision with the original
+embeddings as well as the prompt and token ids for comparison with the original
 model.
 
 ### Usage
