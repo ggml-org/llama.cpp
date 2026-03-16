@@ -618,7 +618,6 @@ int32_t mtmd_helper_eval_voxtral_realtime(
     LOG_INF("voxtral_rt: prefill done, n_past = %d, n_audio_tokens = %d\n", (int)n_past, n_audio_tokens);
 
     // 7. Autoregressive decoding with dual-stream continuation
-    const llama_token eos_token = llama_vocab_eos(vocab);
     int n_decoded = 0;
 
     for (int i = 0; i < max_tokens && n_decoded < max_tokens; i++) {
@@ -640,7 +639,8 @@ int32_t mtmd_helper_eval_voxtral_realtime(
             }
         }
 
-        if (best_token == eos_token) break;
+        // stop on any end-of-generation token
+        if (llama_vocab_is_eog(vocab, best_token)) break;
 
         if (output_tokens) {
             output_tokens->push_back(best_token);

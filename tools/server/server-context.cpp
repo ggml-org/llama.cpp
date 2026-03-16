@@ -1627,30 +1627,25 @@ private:
             return;
         }
 
-        // detokenize and clean up streaming tokens
+        // detokenize, skipping special/control tokens
         std::string text;
         for (const auto & tok : output_tokens) {
-            text += common_token_to_piece(ctx, tok);
-        }
-
-        // remove [STREAMING_PAD] and [STREAMING_WORD] tokens
-        std::string clean;
-        size_t pos = 0;
-        while (pos < text.size()) {
-            if (text.compare(pos, 15, "[STREAMING_PAD]") == 0) {
-                pos += 15;
-            } else if (text.compare(pos, 16, "[STREAMING_WORD]") == 0) {
-                pos += 16;
-            } else {
-                clean += text[pos];
-                pos++;
+            // skip special tokens (STREAMING_PAD, STREAMING_WORD, etc.)
+            if (llama_vocab_is_control(vocab, tok)) {
+                continue;
             }
+            std::string piece = common_token_to_piece(ctx, tok);
+            // skip known streaming markers that may not be flagged as control
+            if (piece == "[STREAMING_PAD]" || piece == "[STREAMING_WORD]") {
+                continue;
+            }
+            text += piece;
         }
 
-        // collapse whitespace
+        // collapse whitespace and trim
         std::string final_text;
-        bool last_was_space = false;
-        for (char c : clean) {
+        bool last_was_space = true; // true to trim leading spaces
+        for (char c : text) {
             if (c == ' ' || c == '\n' || c == '\t') {
                 if (!last_was_space) {
                     final_text += ' ';
@@ -1661,10 +1656,26 @@ private:
                 last_was_space = false;
             }
         }
-
-        // trim
-        while (!final_text.empty() && final_text.front() == ' ') final_text.erase(final_text.begin());
+        // trim trailing
         while (!final_text.empty() && final_text.back() == ' ') final_text.pop_back();
+
+        // remove trailing artifacts from the model (e.g. "courtiers.ished.")
+        // look for the last ". " or "." that ends a real sentence, then check if
+        // there's a short artifact glued after it without a space
+        if (final_text.size() > 2) {
+            // find the second-to-last sentence-ending punctuation
+            size_t last_dot = final_text.find_last_of(".!?");
+            if (last_dot != std::string::npos && last_dot > 0) {
+                size_t prev_dot = final_text.find_last_of(".!?", last_dot - 1);
+                if (prev_dot != std::string::npos) {
+                    // check if text between prev_dot and last_dot has no space (artifact)
+                    std::string between = final_text.substr(prev_dot + 1, last_dot - prev_dot);
+                    if (between.find(' ') == std::string::npos && between.size() < 15) {
+                        final_text = final_text.substr(0, prev_dot + 1);
+                    }
+                }
+            }
+        }
 
         res->text     = final_text;
         res->language = "en"; // TODO: detect language from model output
