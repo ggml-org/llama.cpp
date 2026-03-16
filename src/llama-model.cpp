@@ -7501,6 +7501,9 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             }
 
             // recurrent / linear-attention weight scales (per-tensor, shape {1})
+            if (!layer.ssm_in_s && layer.ssm_in) {
+                layer.ssm_in_s = create_tensor(tn(LLM_TENSOR_SSM_IN, "scale", i), {1}, TENSOR_NOT_REQUIRED);
+            }
             if (!layer.ssm_out_s && layer.ssm_out) {
                 layer.ssm_out_s = create_tensor(tn(LLM_TENSOR_SSM_OUT, "scale", i), {1}, TENSOR_NOT_REQUIRED);
             }
