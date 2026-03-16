@@ -13,7 +13,7 @@
 
 // ROPE constants (matching GGML definitions)
 #define GGML_ROPE_TYPE_NEOX 2
-#define MAX_ROPE_HALF_DIMS 64  // supports up to n_dims=128
+#define MAX_ROPE_HALF_DIMS 128  // supports up to n_dims=256
 
 #define ROPE_VEC_WIDTH 8
 
