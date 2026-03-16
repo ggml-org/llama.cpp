@@ -4034,22 +4034,40 @@ void server_routes::init_routes() {
             return res;
         }
 
-        const json body = json::parse(req.body);
+        // support two input formats:
+        // 1. multipart/form-data (OpenAI standard): -F file=@audio.wav -F language=en
+        // 2. JSON with base64 (fallback): {"file": "<base64>", "format": "wav"}
+        raw_buffer audio_bytes;
+        std::string language = "en";
 
-        // expect: { "file": "<base64 audio>", "format": "wav"|"mp3"|"flac", "language": "en", "model": "..." }
-        std::string audio_b64 = json_value(body, "file", std::string());
-        if (audio_b64.empty()) {
-            res->error(format_error_response("\"file\" field with base64-encoded audio is required", ERROR_TYPE_INVALID_REQUEST));
+        if (req.has_multipart_file("file")) {
+            // multipart/form-data (standard OpenAI Whisper API)
+            const auto & file = req.multipart_files.at("file");
+            audio_bytes.assign(
+                reinterpret_cast<const uint8_t *>(file.content.data()),
+                reinterpret_cast<const uint8_t *>(file.content.data()) + file.content.size());
+
+            auto it = req.multipart_fields.find("language");
+            if (it != req.multipart_fields.end()) {
+                language = it->second;
+            }
+        } else if (!req.body.empty()) {
+            // JSON with base64-encoded audio
+            const json body = json::parse(req.body);
+            std::string audio_b64 = json_value(body, "file", std::string());
+            if (audio_b64.empty()) {
+                res->error(format_error_response("\"file\" field is required (base64 audio or multipart)", ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
+            audio_bytes = server_base64_decode(audio_b64);
+            language = json_value(body, "language", std::string("en"));
+        } else {
+            res->error(format_error_response("request body is empty", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
 
-        std::string format   = json_value(body, "format",   std::string("wav"));
-        std::string language = json_value(body, "language",  std::string("en"));
-
-        // decode base64 audio to raw bytes
-        auto audio_bytes = server_base64_decode(audio_b64);
         if (audio_bytes.empty()) {
-            res->error(format_error_response("failed to decode base64 audio data", ERROR_TYPE_INVALID_REQUEST));
+            res->error(format_error_response("failed to read audio data", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
 
