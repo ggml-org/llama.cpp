@@ -430,13 +430,16 @@ static inline ggml_fp16_t ggml_compute_fp32_to_fp16(float f) {
 #define GGML_FP16_TO_FP32(x) GGML_COMPUTE_FP16_TO_FP32(x)
 #define GGML_FP32_TO_FP16(x) GGML_COMPUTE_FP32_TO_FP16(x)
 
-// E8M0 shared exponent to float. Canonical source: ggml_mxfp_e8m0_to_fp32() in ggml-common.h.
+// E8M0 shared exponent to float: returns 2^(x - 127).
+// Canonical source: ggml_mxfp_e8m0_to_fp32() in ggml-common.h.
 // Kept here because ggml-impl.h cannot depend on ggml-common.h IMPL section.
+// NaN (x == 0xFF) is not handled — callers guarantee valid exponents.
 static inline float ggml_e8m0_to_fp32(uint8_t x) {
     uint32_t bits;
     if (x == 0) {
-        bits = 0x00400000;  // 2^(-127)
+        bits = 0x00400000;  // denorm: 0.5 * 2^(-126) = 2^(-127)
     } else {
+        // normalized: exponent x placed in bits [30:23], mantissa = 0 → 2^(x-127)
         bits = (uint32_t) x << 23;
     }
     float result;
@@ -444,12 +447,16 @@ static inline float ggml_e8m0_to_fp32(uint8_t x) {
     return result;
 }
 
-// E8M0 to float/2. Canonical source: ggml_mxfp_e8m0_to_fp32_half() in ggml-common.h.
+// E8M0 to float/2: returns 2^(x - 128).  Equal to ggml_e8m0_to_fp32(x) / 2.
+// Useful with MXFP4 because the E2M1 kvalues table stores 2 * float_value.
+// Canonical source: ggml_mxfp_e8m0_to_fp32_half() in ggml-common.h.
 static inline float ggml_e8m0_to_fp32_half(uint8_t x) {
     uint32_t bits;
     if (x < 2) {
+        // x=0 → 2^(-128), x=1 → 2^(-127): denormal bit patterns
         bits = 0x00200000 << x;
     } else {
+        // 0.5 * 2^(x-127) = 2^(x-128): normalized with exponent (x-1)
         bits = (uint32_t)(x - 1) << 23;
     }
     float result;
@@ -460,37 +467,42 @@ static inline float ggml_e8m0_to_fp32_half(uint8_t x) {
 #define GGML_E8M0_TO_FP32(x) ggml_e8m0_to_fp32(x)
 #define GGML_E8M0_TO_FP32_HALF(x) ggml_e8m0_to_fp32_half(x)
 
-// UE4M3: unsigned, 4 exp bits (bias=7), 3 mantissa bits
-// Returns value * 0.5 to match kvalues_mxfp4 convention (kvalues = 2 * E2M1_float)
+// UE4M3 (unsigned E4M3): 4 exponent bits (bias 7), 3 mantissa bits, no sign.
+// Range: [0, 448], with 0x7F = NaN treated as zero.
+// Returns value * 0.5 to match kvalues_mxfp4 convention (kvalues = 2 * E2M1_float).
 static inline float ggml_ue4m3_to_fp32(uint8_t x) {
     if (x == 0 || x == 0x7F) {
-        return 0.0f;
+        return 0.0f;  // zero and NaN → 0
     }
     int   exp = (x >> 3) & 0xF;
     int   man = x & 0x7;
     float raw;
     if (exp == 0) {
+        // subnormal: value = man * 2^(1 - bias - mantissa_bits) = man * 2^(-9)
         raw = ldexpf((float) man, -9);
     } else {
+        // normalized: value = (1 + man/8) * 2^(exp - 7)
         raw = ldexpf(1.0f + (float) man / 8.0f, exp - 7);
     }
     return raw * 0.5f;
 }
 
+// Float32 to UE4M3 with round-to-nearest-even.
+// Clamps to [0, 448]. Max representable: 0x7E = (1 + 7/8) * 2^8 = 448.
 static inline uint8_t ggml_fp32_to_ue4m3(float x) {
     if (!(x > 0.0f)) {
-        return 0;
+        return 0;  // negative, zero, NaN → 0
     }
     if (x > 448.0f) {
-        x = 448.0f;
+        x = 448.0f;  // clamp to max representable
     }
     uint32_t bits;
     memcpy(&bits, &x, 4);
     int fp32_exp  = ((bits >> 23) & 0xFF) - 127;
-    int fp32_man  = (bits >> 20) & 0x7;
-    int ue4m3_exp = fp32_exp + 7;
+    int fp32_man  = (bits >> 20) & 0x7;  // top 3 mantissa bits
+    int ue4m3_exp = fp32_exp + 7;        // rebias: FP32 bias 127 → UE4M3 bias 7
     if (ue4m3_exp <= 0) {
-        // subnormal: value = man * 2^-9, man = round(x * 2^9)
+        // subnormal: value = man * 2^(-9), so man = round(x * 512)
         int man = (int) (x * 512.0f + 0.5f);
         if (man > 7) {
             man = 7;
@@ -501,15 +513,17 @@ static inline uint8_t ggml_fp32_to_ue4m3(float x) {
         return (uint8_t) man;
     }
     if (ue4m3_exp >= 15) {
-        return 0x7E;
+        return 0x7E;  // max normal
     }
+    // round-to-nearest using bit 19 (first bit below UE4M3 mantissa)
     int round_bit = (bits >> 19) & 1;
     int ue4m3_man = fp32_man + round_bit;
     if (ue4m3_man > 7) {
+        // mantissa overflow → carry into exponent
         ue4m3_man = 0;
         ue4m3_exp++;
         if (ue4m3_exp >= 15) {
-            return 0x7E;
+            return 0x7E;  // max normal
         }
     }
     return (uint8_t) ((ue4m3_exp << 3) | ue4m3_man);

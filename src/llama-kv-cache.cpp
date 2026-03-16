@@ -136,7 +136,7 @@ llama_kv_cache::llama_kv_cache(
         const bool has_k = true;
         const bool has_v = !is_mla;
 
-        // MXFP K cache: align block count to 16 for cp.async.
+        // MXFP: align block count to 16 for cp.async
         uint32_t n_embd_k_alloc = n_embd_k_gqa;
         const bool is_mxfp_k = ggml_is_type_mxfp(type_k);
         if (is_mxfp_k) {
@@ -1037,8 +1037,7 @@ ggml_tensor * llama_kv_cache::get_k(ggml_context * ctx, int32_t il, uint32_t n_k
 
     auto * k = layers[ikv].k;
 
-    // For MXFP types: k->ne[0] may include alignment padding (blocks aligned to 16).
-    // The row stride (k->nb[1]) reflects the padded allocation.
+    // note: for MXFP types, k->ne[0] may be padded for block alignment; use nb[] for strides
     const uint32_t ns = sinfo.s1 - sinfo.s0 + 1;
 
     return ggml_view_4d(ctx, k,
@@ -1107,14 +1106,13 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
         assert(kv_size == k->ne[1]);
 
         // merge the buffer across all streams because the idxs are global
-        // Use view_2d to preserve nb[1] (which includes alignment padding for MXFP types)
+        // note: use view_2d to preserve nb[1] (includes MXFP alignment padding)
         k = ggml_view_2d(ctx, k, k->ne[0], kv_size*n_stream, k->nb[1], 0);
     }
 
     const bool is_mxfp = ggml_is_type_mxfp(k->type);
 
-    // For MXFP: ne[0] may be padded for block alignment, but k_cur has n_embd_gqa.
-    // Create view with ne[0]=n_embd_gqa, preserving the larger row stride nb[1].
+    // for MXFP: ne[0] may be padded, narrow view to n_embd_gqa while keeping row stride
     ggml_tensor * k_dst = k;
     if (is_mxfp) {
         k_dst = ggml_view_2d(ctx, k, n_embd_gqa, k->ne[1], k->nb[1], 0);
@@ -1123,11 +1121,8 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
     // store the current K values into the cache
     ggml_tensor * result = ggml_set_rows(ctx, k_dst, k_cur, k_idxs);
 
-    // Flag K cache writes for Walsh-Hadamard rotation (QuaRot, arXiv:2404.00456; BRQ, arXiv:2511.04214).
-    // The flash attention kernel applies matching rotation to Q so H(Q)·H(K)^T = Q·K^T.
-    // V cache writes are NOT rotated (op_params[0] defaults to 0).
-    // Skipped for: MLA (V is a view of K — rotation would corrupt V),
-    //              E5M2/E3M2 (2-bit mantissa — Hadamard provides no quality benefit).
+    // enable Hadamard rotation for MXFP K cache (QuaRot arXiv:2404.00456, BRQ arXiv:2511.04214)
+    // skipped for MLA (V is a view of K) and E5M2/E3M2 (2-bit mantissa, no benefit)
     if (is_mxfp && !hparams.is_mla() && ggml_mxfp_use_hadamard(k->type)) {
         ((int32_t *)result->op_params)[0] = 1;
     }
