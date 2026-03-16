@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { SvelteMap } from 'svelte/reactivity';
 	import { ChevronDown, Loader2, Package } from '@lucide/svelte';
 	import * as Sheet from '$lib/components/ui/sheet';
 	import { cn } from '$lib/components/ui/utils';
@@ -15,11 +14,12 @@
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import {
 		DialogModelInformation,
+		ModelsSelectorList,
 		SearchInput,
-		TruncatedText,
-		ModelsSelectorOption
+		TruncatedText
 	} from '$lib/components/app';
 	import type { ModelOption } from '$lib/types/models';
+	import { filterModelOptions, groupModelOptions } from './utils';
 
 	interface Props {
 		class?: string;
@@ -73,93 +73,17 @@
 
 	let searchTerm = $state('');
 
-	let filteredOptions: ModelOption[] = $derived.by(() => {
-		const term = searchTerm.trim().toLowerCase();
-		if (!term) return options;
+	let filteredOptions = $derived(filterModelOptions(options, searchTerm));
 
-		return options.filter(
-			(option) =>
-				option.model.toLowerCase().includes(term) ||
-				option.name?.toLowerCase().includes(term) ||
-				option.aliases?.some((alias: string) => alias.toLowerCase().includes(term)) ||
-				option.tags?.some((tag: string) => tag.toLowerCase().includes(term))
-		);
-	});
-
-	let groupedFilteredOptions = $derived.by(() => {
-		const favIds = modelsStore.favouriteModelIds;
-		const result: {
-			orgName: string | null;
-			isFavouritesGroup: boolean;
-			isLoadedGroup: boolean;
-			items: { option: ModelOption; flatIndex: number }[];
-		}[] = [];
-
-		// Loaded models group (top)
-		const loadedItems: { option: ModelOption; flatIndex: number }[] = [];
-		for (let i = 0; i < filteredOptions.length; i++) {
-			if (modelsStore.isModelLoaded(filteredOptions[i].model)) {
-				loadedItems.push({ option: filteredOptions[i], flatIndex: i });
-			}
-		}
-		if (loadedItems.length > 0) {
-			result.push({
-				orgName: null,
-				isFavouritesGroup: false,
-				isLoadedGroup: true,
-				items: loadedItems
-			});
-		}
-
-		// Favourites group
-		const loadedModelIds = new Set(loadedItems.map((item) => item.option.model));
-		const favItems: { option: ModelOption; flatIndex: number }[] = [];
-		for (let i = 0; i < filteredOptions.length; i++) {
-			if (favIds.has(filteredOptions[i].model) && !loadedModelIds.has(filteredOptions[i].model)) {
-				favItems.push({ option: filteredOptions[i], flatIndex: i });
-			}
-		}
-		if (favItems.length > 0) {
-			result.push({
-				orgName: null,
-				isFavouritesGroup: true,
-				isLoadedGroup: false,
-				items: favItems
-			});
-		}
-
-		// Org groups (excluding loaded and favourites)
-		const orgGroups = new SvelteMap<string, { option: ModelOption; flatIndex: number }[]>();
-		for (let i = 0; i < filteredOptions.length; i++) {
-			const option = filteredOptions[i];
-			if (loadedModelIds.has(option.model) || favIds.has(option.model)) continue;
-			const orgName = option.parsedId?.orgName ?? null;
-			const key = orgName ?? '';
-			if (!orgGroups.has(key)) orgGroups.set(key, []);
-			orgGroups.get(key)!.push({ option, flatIndex: i });
-		}
-		for (const [orgName, items] of orgGroups) {
-			result.push({
-				orgName: orgName || null,
-				isFavouritesGroup: false,
-				isLoadedGroup: false,
-				items
-			});
-		}
-
-		return result;
-	});
+	let groupedFilteredOptions = $derived(
+		groupModelOptions(filteredOptions, modelsStore.favouriteModelIds, (m) =>
+			modelsStore.isModelLoaded(m)
+		)
+	);
 
 	let sheetOpen = $state(false);
 	let showModelDialog = $state(false);
 	let infoModelId = $state<string | null>(null);
-
-	// key of the first "available" (non-loaded, non-favourite) group
-	// used to render the "Available models" separator exactly once
-	let firstAvailableOrgKey = $derived.by(() => {
-		const g = groupedFilteredOptions.find((g) => !g.isLoadedGroup && !g.isFavouritesGroup);
-		return g ? (g.orgName ?? '') : null;
-	});
 
 	function handleInfoClick(modelName: string) {
 		infoModelId = modelName;
@@ -352,46 +276,15 @@
 								<p class="px-3 py-3 text-center text-sm text-muted-foreground">No models found.</p>
 							{/if}
 
-							{#each groupedFilteredOptions as group (group.isLoadedGroup ? '__loaded__' : group.isFavouritesGroup ? '__favourites__' : group.orgName)}
-								{#if group.isLoadedGroup}
-									<p class="px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none">
-										Loaded models
-									</p>
-								{:else if group.isFavouritesGroup}
-									<p class="px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none">
-										Favourite models
-									</p>
-								{:else}
-									{#if (group.orgName ?? '') === firstAvailableOrgKey}
-										<p class="px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none">
-											Available models
-										</p>
-									{/if}
-									{#if group.orgName}
-										<p
-											class="px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none [&:not(:first-child)]:mt-2"
-										>
-											{group.orgName}
-										</p>
-									{/if}
-								{/if}
-
-								{#each group.items as { option } (group.isLoadedGroup ? `loaded-${option.id}` : group.isFavouritesGroup ? `fav-${option.id}` : option.id)}
-									{@const isSelected = currentModel === option.model || activeId === option.id}
-									{@const isFav = modelsStore.favouriteModelIds.has(option.model)}
-									<ModelsSelectorOption
-										{option}
-										{isSelected}
-										isHighlighted={false}
-										{isFav}
-										showOrgName={group.isFavouritesGroup || group.isLoadedGroup}
-										onSelect={handleSelect}
-										onInfoClick={handleInfoClick}
-										onMouseEnter={() => {}}
-										onKeyDown={() => {}}
-									/>
-								{/each}
-							{/each}
+							<ModelsSelectorList
+								groups={groupedFilteredOptions}
+								{currentModel}
+								{activeId}
+								sectionHeaderClass="px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none"
+								orgHeaderClass="px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none [&:not(:first-child)]:mt-2"
+								onSelect={handleSelect}
+								onInfoClick={handleInfoClick}
+							/>
 						</div>
 					</div>
 				</Sheet.Content>
