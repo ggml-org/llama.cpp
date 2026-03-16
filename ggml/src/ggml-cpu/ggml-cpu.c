@@ -3078,7 +3078,8 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
                 struct ggml_tensor * glu   = cgraph->nodes[node_n + 2];
                 // Fused path for `--n-cpu-moe` when n_tokens = 1
                 if (node->src[1] == node1->src[1] && node->src[2] == node1->src[2] &&
-                        node->src[1]->ne[2] == 1 && ggml_get_glu_op(glu) == GGML_GLU_OP_SWIGLU) {
+                        ggml_nrows(node->src[1]) == 1 &&
+                        ggml_get_glu_op(glu) == GGML_GLU_OP_SWIGLU) {
                     ggml_compute_forward_fused_moe_silu(&params, node, node1, glu);
                     fused_nodes = 2;
                 }
