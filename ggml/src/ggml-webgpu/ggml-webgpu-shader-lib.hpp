@@ -95,6 +95,12 @@ struct ggml_webgpu_generic_shader_decisions {
     uint32_t wg_size = 0;
 };
 
+struct ggml_webgpu_ssm_conv_shader_decisions {
+    uint32_t block_size;
+    uint32_t tokens_per_wg;
+    bool     vectorized;
+};
+
 /** Argsort **/
 
 struct ggml_webgpu_argsort_shader_lib_context {
@@ -218,6 +224,25 @@ struct ggml_webgpu_solve_tri_pipeline_key_hash {
         ggml_webgpu_hash_combine(seed, key.type);
         ggml_webgpu_hash_combine(seed, key.n);
         ggml_webgpu_hash_combine(seed, key.k);
+        return seed;
+    }
+};
+
+/** SSM Conv **/
+struct ggml_webgpu_ssm_conv_pipeline_key {
+    int type;
+    int vectorized;
+
+    bool operator==(const ggml_webgpu_ssm_conv_pipeline_key & other) const {
+        return type == other.type && vectorized == other.vectorized;
+    }
+};
+
+struct ggml_webgpu_ssm_conv_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_ssm_conv_pipeline_key & key) const {
+        size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.type);
+        ggml_webgpu_hash_combine(seed, key.vectorized);
         return seed;
     }
 };
@@ -521,6 +546,8 @@ class ggml_webgpu_shader_lib {
         diag_pipelines;                                                // type
     std::unordered_map<ggml_webgpu_solve_tri_pipeline_key, webgpu_pipeline, ggml_webgpu_solve_tri_pipeline_key_hash>
         solve_tri_pipelines;                                           // type
+    std::unordered_map<ggml_webgpu_ssm_conv_pipeline_key, webgpu_pipeline, ggml_webgpu_ssm_conv_pipeline_key_hash>
+        ssm_conv_pipelines;                                            // type/vectorized
     std::unordered_map<ggml_webgpu_row_norm_pipeline_key, webgpu_pipeline, ggml_webgpu_row_norm_pipeline_key_hash>
         row_norm_pipelines;                                            // op/inplace
     std::unordered_map<ggml_webgpu_pad_pipeline_key, webgpu_pipeline, ggml_webgpu_pad_pipeline_key_hash>
@@ -924,6 +951,50 @@ class ggml_webgpu_shader_lib {
         pipeline.context         = decisions;
         solve_tri_pipelines[key] = pipeline;
         return solve_tri_pipelines[key];
+    }
+
+    webgpu_pipeline get_ssm_conv_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        ggml_webgpu_ssm_conv_pipeline_key key = {
+            .type       = context.dst->type,
+            .vectorized = context.src1->ne[0] == 4,
+        };
+
+        auto it = ssm_conv_pipelines.find(key);
+        if (it != ssm_conv_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines;
+        std::string              variant = "ssm_conv";
+
+        switch (key.type) {
+            case GGML_TYPE_F32:
+                variant += "_f32";
+                break;
+            default:
+                GGML_ABORT("Unsupported type for ssm_conv shader");
+        }
+
+        if (key.vectorized) {
+            defines.push_back("VECTORIZED");
+            variant += "_vec4";
+        }
+
+        constexpr uint32_t block_size = 32u;
+        constexpr uint32_t tokens_per_wg = 8u;
+
+        defines.push_back("BLOCK_SIZE=" + std::to_string(block_size) + "u");
+        defines.push_back("TOKENS_PER_WG=" + std::to_string(tokens_per_wg) + "u");
+
+        auto processed           = preprocessor.preprocess(wgsl_ssm_conv, defines);
+        auto decisions           = std::make_shared<ggml_webgpu_ssm_conv_shader_decisions>();
+        decisions->block_size    = block_size;
+        decisions->tokens_per_wg = tokens_per_wg;
+        decisions->vectorized    = key.vectorized;
+        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
+        pipeline.context         = decisions;
+        ssm_conv_pipelines[key]  = pipeline;
+        return ssm_conv_pipelines[key];
     }
 
     webgpu_pipeline get_row_norm_pipeline(const ggml_webgpu_shader_lib_context & context) {
