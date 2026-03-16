@@ -90,6 +90,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         n_embd = 64;
         n_head = 1;
         n_ff   = 96;
+        n_layer = 22; // hparams.n_layer_kv_from_start = 20 is hardcoded
     } else if (arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_KIMI_LINEAR) {
         n_embd = 128;
         n_head = 1;
@@ -98,8 +99,6 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         n_layer = 3;
     } else if (arch == LLM_ARCH_CHAMELEON) {
         n_vocab = 10240;
-    } else if (arch == LLM_ARCH_GEMMA3N) {
-        n_layer = 22; // hparams.n_layer_kv_from_start = 20 is hardcoded
     }
 
     const uint32_t n_embd_head = n_embd / n_head;
@@ -344,7 +343,6 @@ static bool moe_implemented(const llm_arch arch) {
 }
 
 static int save_models(const llm_arch target_arch, const size_t seed, const ggml_log_level log_level, const std::string & dir) {
-    GGML_ABORT("llama_model_save_to_file is broken");
     struct user_data_t {
         struct {
             ggml_log_callback callback;
@@ -368,6 +366,16 @@ static int save_models(const llm_arch target_arch, const size_t seed, const ggml
         }
         if (arch == LLM_ARCH_CLIP || arch == LLM_ARCH_GPTJ || arch == LLM_ARCH_UNKNOWN) {
             continue; // These models don't have usable implementations.
+        }
+        if (arch == LLM_ARCH_RWKV6 || arch == LLM_ARCH_RWKV6QWEN2 || arch == LLM_ARCH_RWKV7 || arch == LLM_ARCH_ARWKV7) {
+            continue; // FIXME
+        }
+        if (arch == LLM_ARCH_BERT || arch == LLM_ARCH_MODERN_BERT || arch == LLM_ARCH_NOMIC_BERT || arch == LLM_ARCH_NOMIC_BERT_MOE ||
+                arch == LLM_ARCH_NEO_BERT || arch == LLM_ARCH_JINA_BERT_V2 || arch == LLM_ARCH_JINA_BERT_V3 || arch == LLM_ARCH_EUROBERT) {
+            continue; // TODO vocab
+        }
+        if (arch == LLM_ARCH_PLM) {
+            continue; // TODO tensor shapes
         }
         for (bool moe : {false, true}) {
             if (moe && !moe_implemented(arch)) {

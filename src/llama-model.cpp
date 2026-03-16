@@ -1623,7 +1623,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
 
                 // (optional) temperature tuning - used by mistral-large
                 ml.get_key(LLM_KV_ATTENTION_TEMPERATURE_SCALE,  hparams.f_attn_temp_scale,       false);
-                ml.get_key(LLM_KV_ATTENTION_TEMPERATURE_LENGTH, hparams.n_attn_temp_floor_scale, false);
+                ml.get_key(LLM_KV_ATTENTION_TEMPERATURE_LENGTH, hparams.n_attn_temp_floor_scale, false); // FIXME why not use temperature_length?
 
                 hparams.f_attn_temp_offset = 0.0f;
 
@@ -7446,6 +7446,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
         // generic pass: load optional per-tensor/per-expert ".scale" tensors (e.g. NVFP4 scale2)
         // this avoids having to add scale loading to every architecture
+        if (arch != LLM_ARCH_T5) {
         for (int i = 0; i < n_layer; ++i) {
             auto & layer = layers[i];
 
@@ -7514,6 +7515,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 layer.ssm_beta_s = create_tensor(tn(LLM_TENSOR_SSM_BETA, "scale", i), {1}, TENSOR_NOT_REQUIRED);
             }
         }
+    }
     }
 
     ml.done_getting_tensors();
