@@ -97,19 +97,21 @@ jobs:
           vulkaninfo --summary
           GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
 
-  ggml-ci-cpu-amx:
-    runs-on: [self-hosted, Linux, CPU, AMX]
+  # TODO: provision AMX-compatible machine
+  #ggml-ci-cpu-amx:
+  #  runs-on: [self-hosted, Linux, CPU, AMX]
 
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
+  #  steps:
+  #    - name: Clone
+  #      id: checkout
+  #      uses: actions/checkout@v6
 
-      - name: Test
-        id: ggml-ci
-        run: |
-          bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+  #    - name: Test
+  #      id: ggml-ci
+  #      run: |
+  #        bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
 
+  # TODO: provision AMD GPU machine
   # ggml-ci-amd-vulkan:
   #   runs-on: [self-hosted, Linux, AMD]
 
@@ -124,6 +126,7 @@ jobs:
   #         vulkaninfo --summary
   #         GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
 
+  # TODO: provision AMD GPU machine
   # ggml-ci-amd-rocm:
   #   runs-on: [self-hosted, Linux, AMD]
 
