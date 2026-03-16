@@ -1,160 +1,183 @@
 //******************************************************************************
-// Memory Operations Kernel
-// Handles memset operations on device memory
+// Memory Operations Kernel — tensor_store based memset
+//
+// Uses the tensor engine's store path (bypasses L1+L2 caches) to achieve hiher
+// performance. Unrolled vector writes can write at ~25GB/s and tensor writes
+// can so ~71 GB/s. Only even harts (hart 0 per minion) participate, as due to
+// hardware design (only thye have matrix engine access and co-op stores seems
+// slower)
 //******************************************************************************
 
+#include <etsoc/common/utils.h>
 #include <stdint.h>
-#include <stddef.h>
 #include "platform.h"
-
-#define CACHE_LINE_SIZE_BYTES 64
+#include "tensor.h"
 
 // Operation identifiers for memops kernel
 enum ggml_et_memop_type {
     GGML_ET_MEMOP_MEMSET = 0,
 };
 
-// Memset operation parameters
+// Memset operation parameters (must match host-side struct in ggml-et-memops.cpp)
 struct memset_params {
-    uint32_t op_type;      // GGML_ET_MEMOP_MEMSET
-    uint32_t value;        // Value to set (extended to uint32_t for alignment)
-    void* dst_ptr;         // Destination device pointer
-    size_t size;           // Number of bytes to set
+    uint32_t op_type;
+    uint32_t value;
+    void* dst_ptr;
+    size_t size;
 };
 
-static void* vectorized_memset(void* dest, int val, size_t n) {
-    char* d = (char*)dest;
-    size_t i = 0;
-    uint64_t temp_mask;
-    __asm__ volatile("mova.x.m %0" : "=r"(temp_mask));  // Save current mask
-
-
-    // Replicate the 8-bit value across a 32-bit word
-    uint32_t v = (uint8_t)val;
-    uint32_t fill_word = v | (v << 8) | (v << 16) | (v << 24);
-
-    if (n >= 32) {
-        // Set the mask register m0 to 0xFF (all 8 lanes active)
-        __asm__ volatile ("mov.m.x m0, zero, 0xFF");
-
-        // Broadcast the 32-bit fill_word to all 8 lanes of the 256-bit register f0
-        __asm__ volatile (
-            "fbcx.ps f0, %0\n\t"
-            :
-            : "r"(fill_word)
-            : "f0"
-        );
-
-        // unrolled by 4 to write 128 bytes per iteration.
-        // FSQ2 ignores m0 and writes the full 256 bits unconditionally.
-        if (n >= 128) {
-            for (; i <= n - 128; i += 128) {
-                __asm__ volatile (
-                    "fsq2    f0, 0(%0)\n\t"
-                    "fsq2    f0, 32(%0)\n\t"
-                    "fsq2    f0, 64(%0)\n\t"
-                    "fsq2    f0, 96(%0)\n\t"
-                    :
-                    : "r"(d + i)
-                    : "memory"
-                );
-            }
-        }
-
-        // Process any remaining full 32-byte chunks
-        for (; i <= n - 32; i += 32) {
-            __asm__ volatile (
-                "fsq2    f0, 0(%0)\n\t"
-                :
-                : "r"(d + i)
-                : "memory"
-            );
-        }
-    }
-    __asm__ volatile("mova.m.x %0" :: "r"(temp_mask));
-
-    // Handle the unaligned tail (0 to 31 bytes).
-    // As with memcpy, a scalar loop is used to avoid overwriting or accessing
-    // out-of-bounds bytes that aren't perfectly aligned to 32-bit boundaries.
-    for (; i < n; ++i) {
-        d[i] = (char)val;
-    }
-
-    return dest;
+// Fill all 32 f-regs with a replicated byte pattern
+static inline void __attribute__((always_inline))
+fill_fregs(uint32_t fill32)
+{
+    register uint64_t val __asm__("a2") = fill32;
+    __asm__ __volatile__(
+        "fbcx.ps f0, %[v]\n\t"
+        "fbcx.ps f1, %[v]\n\t"
+        "fbcx.ps f2, %[v]\n\t"
+        "fbcx.ps f3, %[v]\n\t"
+        "fbcx.ps f4, %[v]\n\t"
+        "fbcx.ps f5, %[v]\n\t"
+        "fbcx.ps f6, %[v]\n\t"
+        "fbcx.ps f7, %[v]\n\t"
+        "fbcx.ps f8, %[v]\n\t"
+        "fbcx.ps f9, %[v]\n\t"
+        "fbcx.ps f10, %[v]\n\t"
+        "fbcx.ps f11, %[v]\n\t"
+        "fbcx.ps f12, %[v]\n\t"
+        "fbcx.ps f13, %[v]\n\t"
+        "fbcx.ps f14, %[v]\n\t"
+        "fbcx.ps f15, %[v]\n\t"
+        "fbcx.ps f16, %[v]\n\t"
+        "fbcx.ps f17, %[v]\n\t"
+        "fbcx.ps f18, %[v]\n\t"
+        "fbcx.ps f19, %[v]\n\t"
+        "fbcx.ps f20, %[v]\n\t"
+        "fbcx.ps f21, %[v]\n\t"
+        "fbcx.ps f22, %[v]\n\t"
+        "fbcx.ps f23, %[v]\n\t"
+        "fbcx.ps f24, %[v]\n\t"
+        "fbcx.ps f25, %[v]\n\t"
+        "fbcx.ps f26, %[v]\n\t"
+        "fbcx.ps f27, %[v]\n\t"
+        "fbcx.ps f28, %[v]\n\t"
+        "fbcx.ps f29, %[v]\n\t"
+        "fbcx.ps f30, %[v]\n\t"
+        "fbcx.ps f31, %[v]\n\t"
+        :: [v] "r"(val)
+        : "f0","f1","f2","f3","f4","f5","f6","f7",
+          "f8","f9","f10","f11","f12","f13","f14","f15",
+          "f16","f17","f18","f19","f20","f21","f22","f23",
+          "f24","f25","f26","f27","f28","f29","f30","f31"
+    );
 }
 
+// Fill a partial region [start, end) using tensor_store for 16-byte-aligned
+// chunks and byte stores for any remainder < 16 bytes.
+// Assumes f-regs are already loaded with the fill pattern.
+static void memset_tail(uint8_t* start, uint8_t* end, uint8_t val)
+{
+    uint8_t* cur = start;
 
-// Main entry point for memory operations kernel
-int entry_point(struct memset_params* params, void* env) {
-    kernel_environment_t* kernel_env = (kernel_environment_t*)env;
+    // Full 64-byte rows via tensor_store (up to 16 at a time = 1KB)
+    while (cur + 64 <= end) {
+        size_t rows = (end - cur) / 64;
+        if (rows > 16) rows = 16;
+        tensor_store(0, 0, 3, rows - 1, (uintptr_t)cur, 0, 64);
+        cur += rows * 64;
+    }
 
-    if (!kernel_env) {
+    // Remaining 16-byte aligned chunk (16, 32, or 48 bytes)
+    if (cur + 16 <= end) {
+        size_t cols = (end - cur) / 16;
+        tensor_store(0, 0, cols - 1, 0, (uintptr_t)cur, 0, 64);
+        cur += cols * 16;
+    }
+
+    tensor_wait(TENSOR_STORE_WAIT);
+
+    // Final < 16 bytes with byte stores
+    while (cur < end) {
+        *(volatile uint8_t*)cur = val;
+        cur++;
+    }
+}
+
+#define ALIGN_UP(ptr, align) ((uint8_t*)(((uintptr_t)(ptr) + (align) - 1) & ~((uintptr_t)(align) - 1)))
+
+int entry_point(struct memset_params* params, kernel_environment_t* env) {
+    uint64_t hart_id = get_hart_id();
+
+    // Only even harts have tensor engine access
+    if (hart_id & 1) {
+        return 0;
+    }
+
+    if (!params || ((uintptr_t)params & 0x7) != 0) {
         return -1;
     }
 
-    // Get thread info - we only use thread 0 for memops
-    int thread_id = get_relative_thread_id(kernel_env->shire_mask);
-    int num_threads = get_num_threads(kernel_env->shire_mask);
-
-    if (params == 0 || ((uint64_t)params & 0x7) != 0) {
-        return -1; // Invalid pointer
-    }
-
     if (params->op_type != GGML_ET_MEMOP_MEMSET) {
-        return -1; // Unsupported operation
+        return -1;
     }
 
     uint8_t* dst = (uint8_t*)params->dst_ptr;
-    uint8_t value = (uint8_t)params->value;
     size_t size = params->size;
 
     if (!dst || size == 0) {
-        return -1; // Invalid parameters
+        return -1;
     }
 
-    // Perform memset operation
-    // Use optimized 8-byte writes when possible for better performance
+    // Dynamic hart count from shire_mask
+    int num_even_harts = manual_popcountll(env->shire_mask) * SOC_MINIONS_PER_SHIRE;
 
-    // Handle unaligned start
-    // XXX: Does this cause UB or us writing to someone else's address?
-    while (size > 0 && ((uint64_t)dst & 0x7) != 0) {
-        *dst++ = value;
-        size--;
+    // global_id: shire * 32 + minion (for even harts)
+    uint64_t global_id = ((hart_id >> 6) << 5) + ((hart_id >> 1) & 0x1F);
+
+    uint8_t val = params->value & 0xFF;
+    uint32_t fill32 = val | ((uint32_t)val << 8) | ((uint32_t)val << 16) | ((uint32_t)val << 24);
+
+    uint8_t* end = dst + size;
+
+    setup_cache_scp();
+    CLEAR_TENSOR_ERROR;
+    fill_fregs(fill32);
+
+    // Align to 16 bytes (tensor_store minimum alignment)
+    uint8_t* base = ALIGN_UP(dst, 16);
+    if (base > end) base = end;
+
+    // Hart 0 handles head bytes before alignment
+    if (global_id == 0) {
+        volatile uint8_t* p = dst;
+        while (p < (volatile uint8_t*)base) {
+            *p++ = val;
+        }
     }
 
-    // Split work across threads. Except for the last thread, each thread's
-    // write range starts and ends on a CACHE_LINE_SIZE_BYTES boundary.
-    uint64_t thread_work_size = 0;
-    uint64_t start_offset = 0;
-    uint64_t end_offset = 0;
+    // Bulk: 1KB blocks distributed across all harts (base is already 16-byte aligned)
+    size_t aligned_size = end - base;
+    size_t total_blocks = aligned_size / 1024;
 
-    uint64_t total_size = (uint64_t)size;
-    uint64_t aligned_total = total_size & ~((uint64_t)(CACHE_LINE_SIZE_BYTES - 1));
+    if (total_blocks > 0) {
+        size_t blocks_per_hart = total_blocks / num_even_harts;
+        size_t extra = total_blocks % num_even_harts;
+        size_t my_start = blocks_per_hart * global_id + (global_id < extra ? global_id : extra);
+        size_t my_count = blocks_per_hart + (global_id < extra ? 1 : 0);
 
-    uint64_t chunks = aligned_total / CACHE_LINE_SIZE_BYTES;
-    uint64_t worker_count = (uint64_t)(num_threads - 1);
-    uint64_t chunks_per_thread = chunks / worker_count;
-    uint64_t extra_chunks = chunks % worker_count;
-
-    uint64_t tid = (uint64_t)thread_id;
-    uint64_t my_chunks = chunks_per_thread + (unsigned)(tid < extra_chunks);
-    uint64_t prior_chunks =
-        chunks_per_thread * tid +
-        (tid < extra_chunks ? tid : extra_chunks);
-
-    start_offset = prior_chunks * CACHE_LINE_SIZE_BYTES;
-    end_offset = start_offset + my_chunks * CACHE_LINE_SIZE_BYTES;
-
-    // Last thread handles any remaining aligned chunks and all tail bytes.
-    if (thread_id == num_threads - 1) {
-        end_offset = total_size;
+        uint8_t* addr = base + my_start * 1024;
+        for (size_t b = 0; b < my_count; b++) {
+            tensor_store(0, 0, 3, 15, (uintptr_t)addr, 0, 64);
+            addr += 1024;
+        }
+        tensor_wait(TENSOR_STORE_WAIT);
     }
 
-    thread_work_size = end_offset - start_offset;
-
-    if (thread_work_size > 0) {
-        vectorized_memset(dst + start_offset, value, (size_t)thread_work_size);
+    // Hart 0 handles the tail after the last full 1KB block
+    if (global_id == 0) {
+        memset_tail(base + total_blocks * 1024, end, val);
     }
 
+    FENCE;
     return 0;
 }
