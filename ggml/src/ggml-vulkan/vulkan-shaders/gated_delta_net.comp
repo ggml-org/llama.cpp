@@ -1,11 +1,39 @@
 #version 450
 
 #extension GL_EXT_control_flow_attributes : require
+#extension GL_KHR_shader_subgroup_basic : enable
+#ifndef USE_SUBGROUP_ADD
+#define USE_SUBGROUP_ADD 1
+#endif
+#if USE_SUBGROUP_ADD
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+#endif
+#define IN_BOUNDS(i) ((S_V % SUBGROUP_SIZE == 0u) || ((i) < S_V))
 
 layout(constant_id = 0) const uint S_V = 128;
 layout(constant_id = 1) const uint KDA = 0;
+layout(constant_id = 2) const uint SUBGROUP_SIZE = 32;
 
-layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+const uint NUM_SUBGROUPS   = 4u;
+const uint ROWS_PER_LANE   = (S_V + SUBGROUP_SIZE - 1u) / SUBGROUP_SIZE;
+
+#if !USE_SUBGROUP_ADD
+shared FLOAT_TYPE temp[NUM_SUBGROUPS * SUBGROUP_SIZE];
+
+FLOAT_TYPE reduce_add_shmem(FLOAT_TYPE partial) {
+    const uint base = gl_SubgroupID * SUBGROUP_SIZE;
+    const uint lane = gl_SubgroupInvocationID;
+    temp[base + lane] = partial;
+    barrier();
+    for (uint s = SUBGROUP_SIZE / 2u; s > 0u; s >>= 1u) {
+        if (lane < s) temp[base + lane] += temp[base + lane + s];
+        barrier();
+    }
+    return temp[base];
+}
+#endif
+
+layout(local_size_x_id = 2, local_size_y = 4, local_size_z = 1) in;
 
 layout(push_constant) uniform Parameters {
     uint H;
@@ -27,102 +55,95 @@ layout(binding = 4) readonly  buffer BetaBuf  { FLOAT_TYPE data_beta[];  };
 layout(binding = 5) readonly  buffer StateBuf { FLOAT_TYPE data_state[]; };
 layout(binding = 6)           buffer DstBuf   { FLOAT_TYPE data_dst[];   };
 
-shared FLOAT_TYPE s_k[S_V];
-shared FLOAT_TYPE s_q[S_V];
-shared FLOAT_TYPE s_g[S_V]; // KDA only: cached exp(g[i])
-
 void main() {
-    const uint head_id = gl_WorkGroupID.x;
-    const uint seq_id  = gl_WorkGroupID.y;
-    const uint col     = gl_LocalInvocationID.x;
+    const uint head_id  = gl_WorkGroupID.x;
+    const uint seq_id   = gl_WorkGroupID.y;
+    const uint lane     = gl_SubgroupInvocationID;
+    const uint col      = gl_WorkGroupID.z * NUM_SUBGROUPS + gl_SubgroupID;
 
     const uint iq1 = head_id % neq1;
     const uint iq3 = seq_id / rq3;
 
     const uint state_size = S_V * S_V;
     const uint state_base = (seq_id * H + head_id) * state_size;
+    const uint curr_state_col = state_base + col * S_V;
 
-    FLOAT_TYPE state[S_V];
-    [[unroll]] for (uint i = 0; i < S_V; i++) {
-        state[i] = FLOAT_TYPE(data_state[state_base + col * S_V + i]);
+    FLOAT_TYPE s_shard[ROWS_PER_LANE];
+    [[unroll]] for (uint r = 0u; r < ROWS_PER_LANE; r++) {
+        const uint i = r * SUBGROUP_SIZE + lane;
+        s_shard[r] = IN_BOUNDS(i) ? FLOAT_TYPE(data_state[curr_state_col + i]) : FLOAT_TYPE(0.0);
     }
 
     uint attn_off = (seq_id * n_tokens * H + head_id) * S_V;
 
-    for (uint t = 0; t < n_tokens; t++) {
+    for (uint t = 0u; t < n_tokens; t++) {
         const uint q_off = iq3 * sq3 + t * sq2 + iq1 * sq1;
         const uint k_off = q_off;
         const uint v_off = seq_id * sv3 + t * sv2 + head_id * sv1;
-
-        s_q[col] = FLOAT_TYPE(data_q[q_off + col]);
-        s_k[col] = FLOAT_TYPE(data_k[k_off + col]);
-
         const uint gb_off = seq_id * sb3 + t * sb2 + head_id * sb1;
 
-        if (KDA != 0) {
-            const uint g_base = gb_off * S_V;
-            s_g[col] = exp(FLOAT_TYPE(data_g[g_base + col]));
+        FLOAT_TYPE k_reg[ROWS_PER_LANE];
+        FLOAT_TYPE q_reg[ROWS_PER_LANE];
+        [[unroll]] for (uint r = 0u; r < ROWS_PER_LANE; r++) {
+            const uint i = r * SUBGROUP_SIZE + lane;
+            FLOAT_TYPE ki = IN_BOUNDS(i) ? FLOAT_TYPE(data_k[k_off + i]) : FLOAT_TYPE(0.0);
+            FLOAT_TYPE qi = IN_BOUNDS(i) ? FLOAT_TYPE(data_q[q_off + i]) : FLOAT_TYPE(0.0);
+            k_reg[r] = ki;
+            q_reg[r] = qi;
         }
 
-        barrier();
-
-        const FLOAT_TYPE v_val = FLOAT_TYPE(data_v[v_off + col]);
         const FLOAT_TYPE beta_val = FLOAT_TYPE(data_beta[gb_off]);
+        const FLOAT_TYPE v_val    = FLOAT_TYPE(data_v[v_off + col]);
 
-        if (KDA == 0) {
+        FLOAT_TYPE g_exp[ROWS_PER_LANE];
+        if (KDA == 0u) {
             const FLOAT_TYPE g_val = exp(FLOAT_TYPE(data_g[gb_off]));
-
-            FLOAT_TYPE kv_col = 0.0;
-            [[unroll]] for (uint i = 0; i < S_V; i += 4) {
-                kv_col += dot(
-                    vec4(state[i], state[i+1], state[i+2], state[i+3]),
-                    vec4(s_k[i], s_k[i+1], s_k[i+2], s_k[i+3])
-                );
+            [[unroll]] for (uint r = 0u; r < ROWS_PER_LANE; r++) {
+                g_exp[r] = g_val;
             }
-
-            FLOAT_TYPE delta_col = (v_val - g_val * kv_col) * beta_val;
-
-            FLOAT_TYPE attn_col = 0.0;
-            [[unroll]] for (uint i = 0; i < S_V; i += 4) {
-                vec4 sv = vec4(state[i], state[i+1], state[i+2], state[i+3]);
-                vec4 kv = vec4(s_k[i], s_k[i+1], s_k[i+2], s_k[i+3]);
-                sv = g_val * sv + kv * delta_col;
-                state[i] = sv.x; state[i+1] = sv.y; state[i+2] = sv.z; state[i+3] = sv.w;
-
-                attn_col += dot(sv, vec4(s_q[i], s_q[i+1], s_q[i+2], s_q[i+3]));
-            }
-
-            data_dst[attn_off + col] = attn_col * scale;
         } else {
-            FLOAT_TYPE kv_col = 0.0;
-            [[unroll]] for (uint i = 0; i < S_V; i += 4) {
-                vec4 gv = vec4(s_g[i], s_g[i+1], s_g[i+2], s_g[i+3]);
-                vec4 sv = vec4(state[i], state[i+1], state[i+2], state[i+3]);
-                vec4 kv = vec4(s_k[i], s_k[i+1], s_k[i+2], s_k[i+3]);
-                kv_col += dot(gv * sv, kv);
+            const uint g_base = gb_off * S_V;
+            [[unroll]] for (uint r = 0u; r < ROWS_PER_LANE; r++) {
+                const uint i = r * SUBGROUP_SIZE + lane;
+                g_exp[r] = IN_BOUNDS(i) ? exp(FLOAT_TYPE(data_g[g_base + i])) : FLOAT_TYPE(0.0);
             }
+        }
 
-            FLOAT_TYPE delta_col = (v_val - kv_col) * beta_val;
+        FLOAT_TYPE kv_shard = 0.0;
+        [[unroll]] for (uint r = 0u; r < ROWS_PER_LANE; r++) {
+            kv_shard += g_exp[r] * s_shard[r] * k_reg[r];
+        }
+#if USE_SUBGROUP_ADD
+        FLOAT_TYPE kv_col = subgroupAdd(kv_shard);
+#else
+        FLOAT_TYPE kv_col = reduce_add_shmem(kv_shard);
+#endif
 
-            FLOAT_TYPE attn_col = 0.0;
-            [[unroll]] for (uint i = 0; i < S_V; i += 4) {
-                vec4 gv = vec4(s_g[i], s_g[i+1], s_g[i+2], s_g[i+3]);
-                vec4 sv = vec4(state[i], state[i+1], state[i+2], state[i+3]);
-                vec4 kv = vec4(s_k[i], s_k[i+1], s_k[i+2], s_k[i+3]);
-                sv = gv * sv + kv * delta_col;
-                state[i] = sv.x; state[i+1] = sv.y; state[i+2] = sv.z; state[i+3] = sv.w;
+        FLOAT_TYPE delta_col = (v_val - kv_col) * beta_val;
 
-                attn_col += dot(sv, vec4(s_q[i], s_q[i+1], s_q[i+2], s_q[i+3]));
-            }
+        FLOAT_TYPE attn_partial = 0.0;
+        [[unroll]] for (uint r = 0u; r < ROWS_PER_LANE; r++) {
+            s_shard[r] = g_exp[r] * s_shard[r] + k_reg[r] * delta_col;
+            attn_partial += s_shard[r] * q_reg[r];
+        }
+#if USE_SUBGROUP_ADD
+        FLOAT_TYPE attn_col = subgroupAdd(attn_partial);
+#else
+        FLOAT_TYPE attn_col = reduce_add_shmem(attn_partial);
+#endif
 
+        if (gl_SubgroupInvocationID == 0u) {
             data_dst[attn_off + col] = attn_col * scale;
         }
 
         attn_off += S_V * H;
-        barrier();
     }
 
-    [[unroll]] for (uint i = 0; i < S_V; i++) {
-        data_dst[s_off + state_base + col * S_V + i] = state[i];
+    const uint dst_state_base = s_off + state_base + col * S_V;
+    [[unroll]] for (uint r = 0u; r < ROWS_PER_LANE; r++) {
+        const uint i = r * SUBGROUP_SIZE + lane;
+        if (IN_BOUNDS(i)) {
+            data_dst[dst_state_base + i] = s_shard[r];
+        }
     }
 }

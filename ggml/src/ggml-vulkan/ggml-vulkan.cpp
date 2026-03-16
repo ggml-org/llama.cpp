@@ -4589,12 +4589,14 @@ static void ggml_vk_load_shaders(vk_device& device) {
             {"gated_delta_net_f32_d64",     "gated_delta_net_f32_d64_kda"},
             {"gated_delta_net_f32_d128",    "gated_delta_net_f32_d128_kda"},
         };
+        const bool use_subgroup_reduce = device->subgroup_arithmetic;
+        const size_t gdn_len = use_subgroup_reduce ? gated_delta_net_f32_len : gated_delta_net_f32_shmem_len;
+        const void * gdn_data = use_subgroup_reduce ? (const void *)gated_delta_net_f32_data : (const void *)gated_delta_net_f32_shmem_data;
         for (uint32_t si = 0; si < 3; si++) {
             for (uint32_t kda = 0; kda < 2; kda++) {
                 ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net[si][kda],
-                    gdn_names[si][kda], gated_delta_net_f32_len, gated_delta_net_f32_data,
-                    "main", 7, sizeof(vk_op_gated_delta_net_push_constants),
-                    {1, 1, 1}, {gdn_sizes[si], kda}, 1);
+                    gdn_names[si][kda], gdn_len, gdn_data, "main", 7, sizeof(vk_op_gated_delta_net_push_constants),
+                    {1, 1, 4}, {gdn_sizes[si], kda, device->subgroup_size}, 1, true, use_subgroup_reduce, device->subgroup_size);
             }
         }
     }
@@ -10423,7 +10425,7 @@ static void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& s
 
     ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
         {src_buf[0], src_buf[1], src_buf[2], src_buf[3], src_buf[4], src_buf[5], dst_buf},
-        pc, { H, n_seqs, 1u });
+        pc, { H, n_seqs, S_v });
 }
 
 static void ggml_vk_ssm_scan(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst) {
