@@ -231,7 +231,7 @@
 				<Sidebar.Trigger
 					class="transition-left absolute left-0 z-[900] duration-200 ease-linear {sidebarOpen
 						? 'md:left-[var(--sidebar-width)]'
-						: ''}"
+						: 'md:left-0!'}"
 					style="translate: 1rem 1rem;"
 				/>
 			{/if}

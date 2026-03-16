@@ -20,6 +20,7 @@
  */
 
 import { browser } from '$app/environment';
+import { base } from '$app/paths';
 import { MCPService } from '$lib/services/mcp.service';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { mcpResourceStore } from '$lib/stores/mcp-resources.svelte';
@@ -42,6 +43,7 @@ import {
 	ToolCallType
 } from '$lib/enums';
 import {
+	CORS_PROXY_ENDPOINT,
 	DEFAULT_CACHE_TTL_MS,
 	DEFAULT_MCP_CONFIG,
 	EXPECTED_THEMED_ICON_PAIR_COUNT,
@@ -78,165 +80,13 @@ import type { ListChangedHandlers } from '@modelcontextprotocol/sdk/types.js';
 import type { DatabaseMessageExtraMcpResource, McpServerOverride } from '$lib/types/database';
 import type { SettingsConfigType } from '$lib/types/settings';
 
-export function buildMcpClientConfig(
-	cfg: SettingsConfigType,
-	perChatOverrides?: McpServerOverride[]
-): MCPClientConfig | undefined {
-	return buildMcpClientConfigInternal(cfg, perChatOverrides);
-}
-
-/**
- * Internal helper to build MCP client config.
- * Kept as standalone function for external use and tests.
- */
-export function buildMcpClientConfigInternal(
-	cfg: SettingsConfigType,
-	perChatOverrides?: McpServerOverride[]
-): MCPClientConfig | undefined {
-	const rawServers = parseServerSettings(cfg.mcpServers);
-	if (!rawServers.length) {
-		return undefined;
-	}
-
-	const servers: Record<string, MCPServerConfig> = {};
-
-	for (const [index, entry] of rawServers.entries()) {
-		if (!checkServerEnabled(entry, perChatOverrides)) continue;
-		const normalized = buildServerConfig(entry);
-		if (normalized) servers[generateMcpServerId(entry.id, index)] = normalized;
-	}
-
-	if (Object.keys(servers).length === 0) {
-		return undefined;
-	}
-
-	return {
-		protocolVersion: DEFAULT_MCP_CONFIG.protocolVersion,
-		capabilities: DEFAULT_MCP_CONFIG.capabilities,
-		clientInfo: DEFAULT_MCP_CONFIG.clientInfo,
-		requestTimeoutMs: Math.round(DEFAULT_MCP_CONFIG.requestTimeoutSeconds * 1000),
-		servers
-	};
-}
-
-/**
- * Generates a unique server ID from an optional ID string or index.
- * @deprecated Use MCPStore.#generateServerId instead
- */
-function generateMcpServerId(id: unknown, index: number): string {
-	if (typeof id === 'string' && id.trim()) {
-		return id.trim();
-	}
-
-	return `${MCP_SERVER_ID_PREFIX}-${index + 1}`;
-}
-
-/**
- * Parses raw server settings from config into MCPServerSettingsEntry array.
- * @deprecated Use MCPStore.#parseServerSettings instead
- */
-function parseServerSettings(rawServers: unknown): MCPServerSettingsEntry[] {
-	if (!rawServers) {
-		return [];
-	}
-
-	let parsed: unknown;
-	if (typeof rawServers === 'string') {
-		const trimmed = rawServers.trim();
-		if (!trimmed) {
-			return [];
-		}
-
-		try {
-			parsed = JSON.parse(trimmed);
-		} catch (error) {
-			console.warn('[MCP] Failed to parse mcpServers JSON:', error);
-
-			return [];
-		}
-	} else {
-		parsed = rawServers;
-	}
-	if (!Array.isArray(parsed)) {
-		return [];
-	}
-
-	return parsed.map((entry, index) => {
-		const url = typeof entry?.url === 'string' ? entry.url.trim() : '';
-		const headers = typeof entry?.headers === 'string' ? entry.headers.trim() : undefined;
-
-		return {
-			id: generateMcpServerId((entry as { id?: unknown })?.id, index),
-			enabled: Boolean((entry as { enabled?: unknown })?.enabled),
-			url,
-			name: (entry as { name?: string })?.name,
-			requestTimeoutSeconds: DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
-			headers: headers || undefined,
-			useProxy: Boolean((entry as { useProxy?: unknown })?.useProxy)
-		} satisfies MCPServerSettingsEntry;
-	});
-}
-
-/**
- * Builds server configuration from a settings entry.
- * @deprecated Use MCPStore.#buildServerConfig instead
- */
-function buildServerConfig(
-	entry: MCPServerSettingsEntry,
-	connectionTimeoutMs = DEFAULT_MCP_CONFIG.connectionTimeoutMs
-): MCPServerConfig | undefined {
-	if (!entry?.url) {
-		return undefined;
-	}
-
-	let headers: Record<string, string> | undefined;
-	if (entry.headers) {
-		try {
-			const parsed = JSON.parse(entry.headers);
-			if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed))
-				headers = parsed as Record<string, string>;
-		} catch {
-			console.warn('[MCP] Failed to parse custom headers JSON:', entry.headers);
-		}
-	}
-
-	return {
-		url: entry.url,
-		transport: detectMcpTransportFromUrl(entry.url),
-		handshakeTimeoutMs: connectionTimeoutMs,
-		requestTimeoutMs: Math.round(entry.requestTimeoutSeconds * 1000),
-		headers,
-		useProxy: entry.useProxy
-	};
-}
-
-/**
- * Checks if a server is enabled, considering per-chat overrides.
- * @deprecated Use MCPStore.#checkServerEnabled instead
- */
-function checkServerEnabled(
-	server: MCPServerSettingsEntry,
-	perChatOverrides?: McpServerOverride[]
-): boolean {
-	if (!server.enabled) {
-		return false;
-	}
-
-	if (perChatOverrides) {
-		const override = perChatOverrides.find((o) => o.serverId === server.id);
-
-		return override?.enabled ?? false;
-	}
-
-	return false;
-}
-
 class MCPStore {
 	private _isInitializing = $state(false);
 	private _error = $state<string | null>(null);
 	private _toolCount = $state(0);
 	private _connectedServers = $state<string[]>([]);
 	private _healthChecks = $state<Record<string, HealthCheckState>>({});
+	private _proxyAvailable = $state(false);
 
 	private connections = new Map<string, MCPConnection>();
 	private toolsIndex = new Map<string, string>();
@@ -245,6 +95,29 @@ class MCPStore {
 	private configSignature: string | null = null;
 	private initPromise: Promise<boolean> | null = null;
 	private activeFlowCount = 0;
+
+	constructor() {
+		if (browser) {
+			this.probeProxy();
+		}
+	}
+
+	/**
+	 * Probes the CORS proxy endpoint to determine availability.
+	 * The endpoint is only registered when llama-server runs with --webui-mcp-proxy.
+	 */
+	async probeProxy(): Promise<void> {
+		try {
+			const response = await fetch(`${base}${CORS_PROXY_ENDPOINT}`, { method: 'HEAD' });
+			this._proxyAvailable = response.status !== 404;
+		} catch {
+			this._proxyAvailable = false;
+		}
+	}
+
+	get isProxyAvailable(): boolean {
+		return this._proxyAvailable;
+	}
 
 	/**
 	 * Generates a unique server ID from an optional ID string or index.
@@ -520,6 +393,7 @@ class MCPStore {
 
 	getServerLabel(server: MCPServerSettingsEntry): string {
 		const healthState = this.getHealthCheckState(server.id);
+
 		if (healthState?.status === HealthCheckStatus.SUCCESS)
 			return (
 				healthState.serverInfo?.title || healthState.serverInfo?.name || server.name || server.url
@@ -603,6 +477,7 @@ class MCPStore {
 	 */
 	#proxyIconSrc(src: string): string {
 		if (src.startsWith('data:')) return src;
+		if (!this._proxyAvailable) return src;
 
 		return getProxiedUrlString(src);
 	}
@@ -629,7 +504,7 @@ class MCPStore {
 			}
 		}
 
-		return getFaviconUrl(server.url);
+		return getFaviconUrl(server.url, this._proxyAvailable);
 	}
 
 	isAnyServerLoading(): boolean {
@@ -2072,6 +1947,7 @@ export const mcpIsInitializing = () => mcpStore.isInitializing;
 export const mcpIsInitialized = () => mcpStore.isInitialized;
 export const mcpError = () => mcpStore.error;
 export const mcpIsEnabled = () => mcpStore.isEnabled;
+export const mcpIsProxyAvailable = () => mcpStore.isProxyAvailable;
 export const mcpAvailableTools = () => mcpStore.availableTools;
 export const mcpConnectedServerCount = () => mcpStore.connectedServerCount;
 export const mcpConnectedServerNames = () => mcpStore.connectedServerNames;

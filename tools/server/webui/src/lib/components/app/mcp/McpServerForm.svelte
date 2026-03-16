@@ -6,6 +6,7 @@
 	import { parseHeadersToArray, serializeHeaders } from '$lib/utils';
 	import { UrlProtocol } from '$lib/enums';
 	import { MCP_SERVER_URL_PLACEHOLDER } from '$lib/constants';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
 
 	interface Props {
 		url: string;
@@ -62,14 +63,33 @@
 		{/if}
 
 		{#if !isWebSocket && onUseProxyChange}
-			<label class="mt-3 flex cursor-pointer items-center gap-2">
+			<label
+				class="mt-3 flex items-start gap-2"
+				class:cursor-pointer={mcpStore.isProxyAvailable}
+				class:opacity-80={!mcpStore.isProxyAvailable}
+			>
 				<Switch
+					class="mt-1"
 					id="use-proxy-{id}"
 					checked={useProxy}
+					disabled={!mcpStore.isProxyAvailable}
 					onCheckedChange={(checked) => onUseProxyChange?.(checked)}
 				/>
 
-				<span class="text-xs text-muted-foreground">Use llama-server proxy</span>
+				<span>
+					<span class="text-xs text-muted-foreground">Use llama-server proxy</span>
+
+					<br />
+
+					{#if !mcpStore.isProxyAvailable}
+						<span class="inline-flex gap-0.75 text-xs text-muted-foreground/60"
+							>(Run <pre>llama-server</pre>
+							with
+							<pre>--webui-mcp-proxy</pre>
+							flag)</span
+						>
+					{/if}
+				</span>
 			</label>
 		{/if}
 	</div>
