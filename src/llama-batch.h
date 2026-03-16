@@ -81,7 +81,8 @@ public:
             const llama_memory_i * memory,
             uint32_t n_embd,
             uint32_t n_seq_max,
-            bool output_all);
+            bool output_all,
+            bool allow_non_contiguous_pos = false);
 
     const llama_batch & get_batch() const;
 

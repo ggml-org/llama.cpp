@@ -1281,6 +1281,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_SWA_FULL"));
     add_opt(common_arg(
+        {"-mtp", "--multi-token-prediction"},
+        "enable multi-token prediction (load MTP weights and auto-enable MTP speculative)",
+        [](common_params & params) {
+            params.mtp = true;
+            if (params.speculative.type == COMMON_SPECULATIVE_TYPE_NONE) {
+                params.speculative.type = COMMON_SPECULATIVE_TYPE_MTP;
+            }
+        }
+    ).set_env("LLAMA_ARG_MTP"));
+    add_opt(common_arg(
         {"-ctxcp", "--ctx-checkpoints", "--swa-checkpoints"}, "N",
         string_format("max number of context checkpoints to create per slot (default: %d)"
             "[(more info)](https://github.com/ggml-org/llama.cpp/pull/15293)", params.n_ctx_checkpoints),
@@ -3497,7 +3507,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
-        {"--spec-type"}, "[none|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]",
+        {"--spec-type"}, "[none|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod|mtp]",
         string_format("type of speculative decoding to use when no draft model is provided (default: %s)\n",
             common_speculative_type_to_str(params.speculative.type).c_str()),
         [](common_params & params, const std::string & value) {
@@ -3513,6 +3523,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V;
             } else if (value == "ngram-mod") {
                 params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_MOD;
+            } else if (value == "mtp") {
+                params.speculative.type = COMMON_SPECULATIVE_TYPE_MTP;
             } else {
                 throw std::invalid_argument("unknown speculative decoding type without draft model");
             }

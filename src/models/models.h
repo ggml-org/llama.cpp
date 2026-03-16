@@ -696,6 +696,16 @@ struct llm_build_starcoder : public llm_graph_context {
 
 struct llm_build_step35_iswa : public llm_graph_context {
     llm_build_step35_iswa(const llama_model & model, const llm_graph_params & params);
+
+private:
+    const llama_model & model;
+
+    ggml_tensor * build_layer(
+            ggml_tensor * inpL,
+                    int   il,
+            ggml_tensor * inp_pos,
+            llm_graph_input_attn_kv_iswa * inp_attn,
+            ggml_tensor * inp_out_ids);
 };
 
 struct llm_build_t5_dec : public llm_graph_context {

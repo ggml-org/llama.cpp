@@ -92,6 +92,7 @@ struct server_slot {
     bool has_next_token = true;
     bool has_new_line   = false;
     bool truncated      = false;
+    bool mtp_cache_reused = false;
 
     stop_type stop;
 
@@ -148,6 +149,7 @@ struct server_slot {
 
     llama_token  sampled; // in speculative mode, this is the last accepted token
     llama_tokens drafted;
+    std::vector<float> mtp_prompt_hidden;
 
     // stats
     size_t n_sent_text = 0; // number of sent text character
@@ -179,6 +181,8 @@ struct server_slot {
 
         drafted.clear();
         i_batch_dft.clear();
+        mtp_prompt_hidden.clear();
+        mtp_cache_reused = false;
         generated_tokens.clear();
         generated_token_probs.clear();
         json_schema = json();
@@ -226,8 +230,9 @@ struct server_slot {
         GGML_ASSERT(task);
 
         return
-            !task->need_embd() ||
-            (llama_get_memory(ctx) && llama_pooling_type(ctx) == LLAMA_POOLING_TYPE_LAST);
+            !need_embd() ||
+            (llama_get_memory(ctx) && llama_pooling_type(ctx) == LLAMA_POOLING_TYPE_LAST) ||
+            (llama_get_memory(ctx) && llama_pooling_type(ctx) == LLAMA_POOLING_TYPE_NONE);
     }
 
     bool can_batch_with(server_slot & other_slot) const {
@@ -259,7 +264,17 @@ struct server_slot {
     }
 
     bool can_speculate() const {
-        return !!spec;
+        return !!spec && !(task && task->params.speculative.type == COMMON_SPECULATIVE_TYPE_MTP && mtp_cache_reused);
+    }
+
+    bool need_embd() const {
+        if (!task) {
+            return false;
+        }
+        if (task->need_embd()) {
+            return true;
+        }
+        return can_speculate() && task->params.speculative.type == COMMON_SPECULATIVE_TYPE_MTP;
     }
 
     void add_token(const completion_token_output & token) {
@@ -451,9 +466,51 @@ struct server_slot {
         other.n_prompt_tokens_processed = n_prompt_tokens_processed;
 
         other.prompt = prompt.clone();
+        other.mtp_prompt_hidden = mtp_prompt_hidden;
         other.init_sampler();
     }
 };
+
+static void server_slot_append_mtp_prompt_hidden(
+        server_slot &       slot,
+        llama_context *     ctx,
+        const llama_batch & batch_view) {
+    if (slot.spec == nullptr ||
+            slot.task == nullptr ||
+            slot.task->params.speculative.type != COMMON_SPECULATIVE_TYPE_MTP ||
+            (slot.state != SLOT_STATE_PROCESSING_PROMPT && slot.state != SLOT_STATE_DONE_PROMPT)) {
+        return;
+    }
+
+    const int32_t n_embd = llama_model_n_embd(llama_get_model(ctx));
+
+    int32_t output_idx = 0;
+    for (int32_t i = 0; i < batch_view.n_tokens; ++i) {
+        const bool is_output = batch_view.logits ? batch_view.logits[i] != 0 : i == batch_view.n_tokens - 1;
+        if (!is_output) {
+            continue;
+        }
+
+        bool matches_slot = false;
+        if (batch_view.seq_id != nullptr && batch_view.n_seq_id != nullptr) {
+            for (int32_t s = 0; s < batch_view.n_seq_id[i]; ++s) {
+                if (batch_view.seq_id[i][s] == slot.id) {
+                    matches_slot = true;
+                    break;
+                }
+            }
+        }
+
+        if (matches_slot) {
+            float * hidden = llama_get_embeddings_ith(ctx, output_idx);
+            if (hidden != nullptr) {
+                slot.mtp_prompt_hidden.insert(slot.mtp_prompt_hidden.end(), hidden, hidden + n_embd);
+            }
+        }
+
+        output_idx++;
+    }
+}
 
 
 
@@ -655,9 +712,7 @@ private:
 
         add_bos_token = llama_vocab_get_add_bos(vocab);
 
-        if (params_base.speculative.has_dft()) {
-            SRV_INF("loading draft model '%s'\n", params_base.speculative.mparams_dft.path.c_str());
-
+        if (params_base.speculative.type == COMMON_SPECULATIVE_TYPE_MTP || params_base.speculative.has_dft()) {
             const auto & params_spec = params_base.speculative;
 
             auto params_dft = params_base;
@@ -677,17 +732,23 @@ private:
             }
 
             params_dft.tensor_buft_overrides = params_spec.tensor_buft_overrides;
-
-            auto mparams_dft = common_model_params_to_llama(params_dft);
-
-            model_dft.reset(llama_model_load_from_file(params_dft.model.path.c_str(), mparams_dft));
-            if (model_dft == nullptr) {
-                SRV_ERR("failed to load draft model, '%s'\n", params_dft.model.path.c_str());
-                return false;
-            }
-
-            params_base.speculative.model_dft = model_dft.get();
             params_base.speculative.cparams_dft = common_context_params_to_llama(params_dft);
+
+            if (params_base.speculative.requires_dft() && params_base.speculative.has_dft()) {
+                SRV_INF("loading draft model '%s'\n", params_base.speculative.mparams_dft.path.c_str());
+
+                params_dft.model = params_spec.mparams_dft;
+
+                auto mparams_dft = common_model_params_to_llama(params_dft);
+
+                model_dft.reset(llama_model_load_from_file(params_dft.model.path.c_str(), mparams_dft));
+                if (model_dft == nullptr) {
+                    SRV_ERR("failed to load draft model, '%s'\n", params_dft.model.path.c_str());
+                    return false;
+                }
+
+                params_base.speculative.model_dft = model_dft.get();
+            }
         }
 
         std::string & mmproj_path = params_base.mmproj.path;
@@ -1046,6 +1107,10 @@ private:
 
                 if (!ret->prompt_load(*prompt_cache, task.tokens)) {
                     ret->prompt_clear(false);
+                } else if (task.params.speculative.type == COMMON_SPECULATIVE_TYPE_MTP) {
+                    ret->mtp_prompt_hidden.clear();
+                    ret->mtp_cache_reused = true;
+                    SLT_WRN(*ret, "%s", "disabling MTP speculative on prompt-cache reuse until hidden-state reconstruction is implemented\n");
                 }
 
                 prompt_cache->update();
@@ -2076,6 +2141,7 @@ private:
 
         // track if given slot can be batched with slots already in the batch
         server_slot * slot_batched = nullptr;
+        bool batch_need_embd = false;
 
         auto accept_special_token = [&](server_slot & slot, llama_token token) {
             return params_base.special ||
@@ -2094,6 +2160,7 @@ private:
             } else if (!slot_batched->can_batch_with(slot)) {
                 continue;
             }
+            batch_need_embd = batch_need_embd || slot.need_embd();
 
             // generate draft tokens in speculative decoding mode
             // TODO: rework to have a single draft llama_context shared across all slots [TAG_SERVER_SPEC_REWORK]
@@ -2566,7 +2633,7 @@ private:
                             cur_tok,
                             slot.prompt.tokens.pos_next(),
                             { slot.id },
-                            slot.task->need_embd());
+                            slot.need_embd());
                         slot.prompt.tokens.push_back(cur_tok);
 
                         slot.n_prompt_tokens_processed++;
@@ -2686,6 +2753,7 @@ private:
                 if (!slot_batched) {
                     slot_batched = &slot;
                 }
+                batch_need_embd = batch_need_embd || slot.need_embd();
 
                 if (batch.n_tokens >= n_batch) {
                     break;
@@ -2706,7 +2774,7 @@ private:
                 slot_batched->lora[alora_disabled_id].scale = alora_scale;
             }
 
-            llama_set_embeddings(ctx, slot_batched->task->need_embd());
+            llama_set_embeddings(ctx, batch_need_embd);
         }
 
         if (batch.n_tokens == 0) {
@@ -2794,6 +2862,10 @@ private:
             // on successful decode, restore the original batch size
             n_batch = llama_n_batch(ctx);
 
+            for (auto & slot : slots) {
+                server_slot_append_mtp_prompt_hidden(slot, ctx, batch_view);
+            }
+
             // handle `n_cmpl > 1` tasks - when the main prompt is processed, activate all child tasks too
             for (auto & slot : slots) {
                 if (slot.state == SLOT_STATE_DONE_PROMPT && slot.task->is_parent()) {
@@ -2851,7 +2923,15 @@ private:
                     slot.state = SLOT_STATE_GENERATING;
 
                     if (slot.can_speculate()) {
-                        common_speculative_begin(slot.spec, slot.prompt.tokens.get_text_tokens());
+                        const auto & prompt_tokens = slot.prompt.tokens.get_text_tokens();
+                        common_speculative_begin(slot.spec, prompt_tokens);
+                        if (slot.task->params.speculative.type == COMMON_SPECULATIVE_TYPE_MTP && !prompt_tokens.empty()) {
+                            common_speculative_set_prompt_hidden_states(
+                                    slot.spec,
+                                    slot.mtp_prompt_hidden.data(),
+                                    prompt_tokens.size(),
+                                    llama_model_n_embd(model));
+                        }
                     }
                 } else if (slot.state != SLOT_STATE_GENERATING) {
                     continue; // continue loop of slots
@@ -2912,6 +2992,7 @@ private:
 
                 // the accepted tokens from the speculation
                 const auto ids = common_sampler_sample_and_accept_n(slot.smpl.get(), ctx, slot.i_batch_dft, slot.drafted);
+                const std::vector<int32_t> batch_idxs = slot.i_batch_dft;
                 slot.i_batch_dft.clear();
                 slot.drafted.clear();
 
@@ -2925,7 +3006,7 @@ private:
                 slot.n_draft_accepted += ids.size() - 1;
 
                 // inform the speculative decoding about the number of accepted tokens
-                common_speculative_accept(slot.spec, ids.size() - 1);
+                common_speculative_accept(slot.spec, ids.size() - 1, batch_idxs);
 
                 // rollback to the state before sampling the draft tokens
                 slot.prompt.tokens.keep_first(slot.prompt.n_tokens() - n_draft);

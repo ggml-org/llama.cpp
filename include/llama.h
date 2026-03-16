@@ -197,6 +197,11 @@ extern "C" {
         LLAMA_SPLIT_MODE_ROW   = 2, // split layers and KV across GPUs, use tensor parallelism if supported
     };
 
+    enum llama_mtp_op_type {
+        LLAMA_MTP_OP_NONE      = 0,
+        LLAMA_MTP_OP_DRAFT_GEN = 1,
+    };
+
     // TODO: simplify (https://github.com/ggml-org/llama.cpp/pull/9294#pullrequestreview-2286561979)
     typedef struct llama_token_data {
         llama_token id; // token id
@@ -318,6 +323,7 @@ extern "C" {
         bool use_extra_bufts; // use extra buffer types (used for weight repacking)
         bool no_host;         // bypass host buffer allowing extra buffers to be used
         bool no_alloc;        // only load metadata and simulate memory allocations
+        bool mtp;             // enable multi-token prediction (load MTP weights)
     };
 
     struct llama_sampler_seq_config {
@@ -573,6 +579,9 @@ extern "C" {
     LLAMA_API int32_t llama_model_n_head     (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_head_kv  (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_swa      (const struct llama_model * model);
+
+    // number of MTP (multi-token prediction) layers; 0 if model has none
+    LLAMA_API int32_t llama_model_n_nextn_predict_layers(const struct llama_model * model);
 
     // Get the model's RoPE frequency scaling factor
     LLAMA_API float llama_model_rope_freq_scale_train(const struct llama_model * model);
@@ -982,6 +991,11 @@ extern "C" {
     // Set whether the model is in warmup mode or not
     // If true, all model tensors are activated during llama_decode() to load and cache their weights.
     LLAMA_API void llama_set_warmup(struct llama_context * ctx, bool warmup);
+
+    // MTP (Multi-Token Prediction) API
+    LLAMA_API void llama_set_mtp_op_type(struct llama_context * ctx, enum llama_mtp_op_type op);
+    LLAMA_API void llama_set_mtp_layer_idx(struct llama_context * ctx, int32_t layer_idx);
+    LLAMA_API void llama_set_draft_input_hidden_state(struct llama_context * ctx, const float * hidden_state);
 
     // Set abort callback
     LLAMA_API void llama_set_abort_callback(struct llama_context * ctx, ggml_abort_callback abort_callback, void * abort_callback_data);

@@ -27,6 +27,12 @@ void common_speculative_free(common_speculative * spec);
 // optionally call once at the beginning of a new generation
 void common_speculative_begin(common_speculative * spec, const llama_tokens & prompt);
 
+void common_speculative_set_prompt_hidden_states(
+        common_speculative * spec,
+              const float * hidden_states,
+                    int32_t n_tokens,
+                    int32_t n_embd);
+
 // sample up to n_draft tokens and add them to the batch using the draft model
 llama_tokens common_speculative_draft(
                      common_speculative * spec,
@@ -35,7 +41,7 @@ llama_tokens common_speculative_draft(
                             llama_token   id_last);
 
 // informs the speculative decoder that n_accepted tokens were accepted by the target model
-void common_speculative_accept(common_speculative * spec, uint16_t n_accepted);
+void common_speculative_accept(common_speculative * spec, uint16_t n_accepted, const std::vector<int32_t> & batch_idxs);
 
 // print statistics about the speculative decoding
 void common_speculative_print_stats(const common_speculative * spec);

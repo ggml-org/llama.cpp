@@ -119,6 +119,12 @@ public:
             uint32_t n_ubatch,
             bool embd_all) override;
 
+    llama_memory_context_ptr init_batch_with_sinfos(
+            llama_batch_allocr & balloc,
+            uint32_t n_ubatch,
+            const slot_info_vec_t & sinfos,
+            bool is_inplace_update);
+
     llama_memory_context_ptr init_full() override;
 
     llama_memory_context_ptr init_update(llama_context * lctx, bool optimize) override;
@@ -185,7 +191,8 @@ public:
     slot_info find_slot(const llama_ubatch & ubatch, bool cont) const;
 
     // emplace the ubatch context into slot: [sinfo.idxs[0...ubatch.n_tokens - 1]]
-    void apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch);
+    // when is_inplace is true, only writes KV tensor data, does not modify cell metadata
+    void apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch, bool is_inplace = false);
 
     //
     // input API
@@ -326,6 +333,11 @@ public:
             llama_kv_cache * kv,
             slot_info_vec_t sinfos,
             std::vector<llama_ubatch> ubatches);
+    llama_kv_cache_context(
+            llama_kv_cache * kv,
+            slot_info_vec_t sinfos,
+            std::vector<llama_ubatch> ubatches,
+            bool is_inplace_update);
 
     virtual ~llama_kv_cache_context();
 
@@ -379,6 +391,7 @@ public:
 
     void set_input_k_rot(ggml_tensor * dst) const;
     void set_input_v_rot(ggml_tensor * dst) const;
+    const slot_info_vec_t & get_sinfos() const { return sinfos; }
 
 private:
     llama_memory_status status;
@@ -404,6 +417,8 @@ private:
     slot_info_vec_t sinfos;
 
     std::vector<llama_ubatch> ubatches;
+
+    bool is_inplace = false;
 
     //
     // data needed for building the compute graph for the current ubatch:

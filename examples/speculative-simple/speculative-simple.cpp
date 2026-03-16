@@ -27,7 +27,7 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    if (params.speculative.mparams_dft.path.empty()) {
+    if (params.speculative.requires_dft() && !params.speculative.has_dft()) {
         LOG_ERR("%s: --model-draft is required\n", __func__);
         return 1;
     }
@@ -48,7 +48,7 @@ int main(int argc, char ** argv) {
 
     const llama_vocab * vocab = llama_model_get_vocab(model_tgt);
 
-    // load the draft model
+    // load the draft model or configure the dedicated MTP draft context
     llama_model_ptr model_dft;
 
     // TODO: simplify this logic
@@ -58,10 +58,11 @@ int main(int argc, char ** argv) {
         auto params_dft = params;
 
         params_dft.n_parallel   = 1;
-        params_dft.n_ctx        = params_spec.n_ctx;
+        params_dft.n_ctx        = params_spec.n_ctx == 0 ? (int32_t) llama_n_ctx_seq(ctx_tgt) : params_spec.n_ctx;
         params_dft.n_batch      = llama_n_ctx_seq(ctx_tgt);
+        params_dft.cache_type_k = params_spec.cache_type_k;
+        params_dft.cache_type_v = params_spec.cache_type_v;
         params_dft.devices      = params_spec.devices;
-        params_dft.model        = params_spec.mparams_dft;
         params_dft.n_gpu_layers = params_spec.n_gpu_layers;
 
         if (params_spec.cpuparams.n_threads > 0) {
@@ -71,16 +72,21 @@ int main(int argc, char ** argv) {
 
         params_dft.tensor_buft_overrides = params.speculative.tensor_buft_overrides;
 
-        auto mparams_dft = common_model_params_to_llama(params_dft);
-
-        model_dft.reset(llama_model_load_from_file(params_dft.model.path.c_str(), mparams_dft));
-        if (model_dft == nullptr) {
-            LOG_ERR("failed to load draft model, '%s'\n", params_dft.model.path.c_str());
-            return 1;
-        }
-
-        params.speculative.model_dft = model_dft.get();
         params.speculative.cparams_dft = common_context_params_to_llama(params_dft);
+
+        if (params_spec.requires_dft()) {
+            params_dft.model = params_spec.mparams_dft;
+
+            auto mparams_dft = common_model_params_to_llama(params_dft);
+
+            model_dft.reset(llama_model_load_from_file(params_dft.model.path.c_str(), mparams_dft));
+            if (model_dft == nullptr) {
+                LOG_ERR("failed to load draft model, '%s'\n", params_dft.model.path.c_str());
+                return 1;
+            }
+
+            params.speculative.model_dft = model_dft.get();
+        }
     }
 
     // Tokenize the prompt
@@ -122,7 +128,16 @@ int main(int argc, char ** argv) {
     struct common_sampler * smpl = common_sampler_init(model_tgt, params.sampling);
 
     // eval the prompt
-    llama_decode(ctx_tgt, llama_batch_get_one(inp.data(), inp.size() - 1));
+    if (params.speculative.type == COMMON_SPECULATIVE_TYPE_MTP) {
+        llama_batch prompt_batch = llama_batch_init(inp.size() - 1, 0, 1);
+        for (size_t i = 0; i + 1 < inp.size(); ++i) {
+            common_batch_add(prompt_batch, inp[i], i, { 0 }, true);
+        }
+        llama_decode(ctx_tgt, prompt_batch);
+        llama_batch_free(prompt_batch);
+    } else {
+        llama_decode(ctx_tgt, llama_batch_get_one(inp.data(), inp.size() - 1));
+    }
 
     // note: keep the last token separate!
     llama_token id_last = inp.back();
@@ -140,6 +155,21 @@ int main(int argc, char ** argv) {
 
     common_speculative_begin(spec, prompt_tgt);
 
+    if (params.speculative.type == COMMON_SPECULATIVE_TYPE_MTP && !prompt_tgt.empty()) {
+        std::vector<float> prompt_hidden((int64_t) prompt_tgt.size()*llama_model_n_embd(model_tgt));
+        for (size_t i = 0; i < prompt_tgt.size(); ++i) {
+            float * hidden = llama_get_embeddings_ith(ctx_tgt, i);
+            GGML_ASSERT(hidden != nullptr);
+            std::memcpy(prompt_hidden.data() + i*llama_model_n_embd(model_tgt), hidden,
+                    llama_model_n_embd(model_tgt)*sizeof(float));
+        }
+        common_speculative_set_prompt_hidden_states(
+                spec,
+                prompt_hidden.data(),
+                prompt_tgt.size(),
+                llama_model_n_embd(model_tgt));
+    }
+
     llama_batch batch_tgt = llama_batch_init(llama_n_batch(ctx_tgt), 0, 1);
 
     const auto t_enc_end = ggml_time_us();
@@ -155,6 +185,7 @@ int main(int argc, char ** argv) {
         // from a cache or lookup tables.
         //
         llama_tokens draft = common_speculative_draft(spec, params_spec, prompt_tgt, id_last);
+        const bool had_draft = !draft.empty();
 
         //LOG_DBG("draft: %s\n", string_from(ctx_dft, draft).c_str());
 
@@ -195,6 +226,10 @@ int main(int argc, char ** argv) {
         n_drafted += draft.size(); // note: we ignore the discarded small drafts
         n_accept  += ids.size() - 1;
         n_predict += ids.size();
+
+        if (had_draft) {
+            common_speculative_accept(spec, ids.size() - 1, {});
+        }
 
         // process the accepted tokens and update contexts
         //

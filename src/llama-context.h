@@ -105,6 +105,10 @@ struct llama_context {
     void set_causal_attn(bool value);
     void set_warmup(bool value);
 
+    void set_mtp_op_type(llama_mtp_op_type op);
+    void set_mtp_layer_idx(int32_t layer_idx);
+    void set_draft_input_hidden_state(const float * hidden_state);
+
     void set_adapters_lora(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
 
     bool adapters_lora_are_same(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
@@ -334,6 +338,11 @@ private:
 
     llm_graph_result_ptr gf_res_prev;
     llm_graph_result_ptr gf_res_reserve;
+
+    // MTP state
+    llama_mtp_op_type       mtp_op_type       = LLAMA_MTP_OP_NONE;
+    int32_t                 mtp_layer_idx     = -1;
+    const float *           draft_input_hidden_state = nullptr;
 
     // host buffer for the model output (logits and embeddings)
     ggml_backend_buffer_ptr buf_output;

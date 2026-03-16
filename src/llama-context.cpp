@@ -4,11 +4,13 @@
 #include "llama-impl.h"
 #include "llama-batch.h"
 #include "llama-io.h"
+#include "llama-kv-cache-iswa.h"
 #include "llama-memory.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "llama-ext.h"
 
+#include <algorithm>
 #include <cinttypes>
 #include <cmath>
 #include <cstring>
@@ -1061,6 +1063,18 @@ void llama_context::set_warmup(bool value) {
     //sched_need_reserve = true;
 }
 
+void llama_context::set_mtp_op_type(llama_mtp_op_type op) {
+    mtp_op_type = op;
+}
+
+void llama_context::set_mtp_layer_idx(int32_t layer_idx) {
+    mtp_layer_idx = layer_idx;
+}
+
+void llama_context::set_draft_input_hidden_state(const float * hidden_state) {
+    draft_input_hidden_state = hidden_state;
+}
+
 bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
     if (!sampler && sampling.samplers.count(seq_id) == 0) {
         return true;
@@ -1575,7 +1589,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
     }
 
-    if (!balloc->init(batch_inp, vocab, memory.get(), n_embd, n_seq_max, output_all)) {
+    const llama_memory_i * memory_for_batch = memory.get();
+    const bool allow_non_contiguous_pos = false;
+
+    if (!balloc->init(batch_inp, vocab, memory_for_batch, n_embd, n_seq_max, output_all, allow_non_contiguous_pos)) {
         LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
         return -1;
     }
@@ -1616,6 +1633,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     while (true) {
         mctx = memory->init_batch(*balloc, cparams.n_ubatch, output_all);
+
         if (!mctx) {
             return -2;
         }
@@ -1730,8 +1748,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
             t_embd = res->get_embd_pooled();
         }
 
+        const bool mtp_skip_output = false;
+
         // extract logits
-        if (logits.data && t_logits && n_outputs > 0 && needs_raw_logits(ubatch, sampling.samplers)) {
+        if (!mtp_skip_output && logits.data && t_logits && n_outputs > 0 && needs_raw_logits(ubatch, sampling.samplers)) {
             ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t_logits);
             GGML_ASSERT(backend_res != nullptr);
             GGML_ASSERT(logits.data != nullptr);
@@ -1746,7 +1766,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
 
         // extract embeddings
-        if (embd.data && t_embd && n_outputs > 0) {
+        if (!mtp_skip_output && embd.data && t_embd && n_outputs > 0) {
             ggml_backend_t backend_embd = ggml_backend_sched_get_tensor_backend(sched.get(), t_embd);
             GGML_ASSERT(backend_embd != nullptr);
 
@@ -2146,22 +2166,33 @@ llm_graph_params llama_context::graph_params(
                       const llama_ubatch & ubatch,
             const llama_memory_context_i * mctx,
                           llm_graph_type   gtype) const {
+    llm_mtp_op_type mtp_op = LLM_MTP_OP_NONE;
+    switch (mtp_op_type) {
+        case LLAMA_MTP_OP_NONE:      mtp_op = LLM_MTP_OP_NONE;      break;
+        case LLAMA_MTP_OP_DRAFT_GEN: mtp_op = LLM_MTP_OP_DRAFT_GEN; break;
+    }
+
+    const float * mtp_hidden = mtp_op_type == LLAMA_MTP_OP_DRAFT_GEN ? draft_input_hidden_state : nullptr;
+
     return {
-        /*.arch        =*/ model.arch,
-        /*.hparams     =*/ model.hparams,
-        /*.cparams     =*/ cparams,
-        /*.ubatch      =*/ ubatch,
-        /*.gtype       =*/ gtype,
-        /*.sched       =*/ sched.get(),
-        /*.backend_cpu =*/ backend_cpu,
-        /*.cvec        =*/ cvec.get(),
-        /*.loras       =*/ loras.get(),
-        /*.mctx        =*/ mctx,
-        /*.cross       =*/ &cross,
-        /*.samplers    =*/ sampling.samplers,
-        /*.n_outputs   =*/ n_outputs,
-        /*.cb          =*/ graph_get_cb(),
-        /*.res         =*/ res,
+        /*.arch               =*/ model.arch,
+        /*.hparams            =*/ model.hparams,
+        /*.cparams            =*/ cparams,
+        /*.ubatch             =*/ ubatch,
+        /*.gtype              =*/ gtype,
+        /*.sched              =*/ sched.get(),
+        /*.backend_cpu        =*/ backend_cpu,
+        /*.cvec               =*/ cvec.get(),
+        /*.loras              =*/ loras.get(),
+        /*.mctx               =*/ mctx,
+        /*.cross              =*/ &cross,
+        /*.mtp_op_type        =*/ mtp_op,
+        /*.mtp_layer_idx      =*/ mtp_layer_idx,
+        /*.mtp_hidden_state   =*/ mtp_hidden,
+        /*.samplers           =*/ sampling.samplers,
+        /*.n_outputs          =*/ n_outputs,
+        /*.cb                 =*/ graph_get_cb(),
+        /*.res                =*/ res,
     };
 }
 
@@ -3062,6 +3093,18 @@ void llama_set_causal_attn(llama_context * ctx, bool causal_attn) {
 
 void llama_set_warmup(llama_context * ctx, bool warmup) {
     ctx->set_warmup(warmup);
+}
+
+void llama_set_mtp_op_type(llama_context * ctx, llama_mtp_op_type op) {
+    ctx->set_mtp_op_type(op);
+}
+
+void llama_set_mtp_layer_idx(llama_context * ctx, int32_t layer_idx) {
+    ctx->set_mtp_layer_idx(layer_idx);
+}
+
+void llama_set_draft_input_hidden_state(llama_context * ctx, const float * hidden_state) {
+    ctx->set_draft_input_hidden_state(hidden_state);
 }
 
 void llama_synchronize(llama_context * ctx) {

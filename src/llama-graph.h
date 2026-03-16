@@ -33,6 +33,11 @@ enum llm_graph_type {
     LLM_GRAPH_TYPE_DECODER,
 };
 
+enum llm_mtp_op_type {
+    LLM_MTP_OP_NONE      = 0,
+    LLM_MTP_OP_DRAFT_GEN = 1,
+};
+
 enum llm_ffn_op_type {
     LLM_FFN_SILU,
     LLM_FFN_GELU,
@@ -256,6 +261,18 @@ public:
     ggml_tensor * cross_embd; // F32 [n_embd, n_outputs_enc]
 
     const llama_cross * cross;
+};
+
+class llm_graph_input_mtp_hidden_state : public llm_graph_input_i {
+public:
+    llm_graph_input_mtp_hidden_state(const float * data) : data(data) {}
+    virtual ~llm_graph_input_mtp_hidden_state() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    ggml_tensor * hidden_state = nullptr; // F32 [n_embd, n_tokens]
+
+    const float * data = nullptr;
 };
 
 class llm_graph_input_attn_no_cache : public llm_graph_input_i {
@@ -542,6 +559,10 @@ struct llm_graph_params {
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
 
+    llm_mtp_op_type mtp_op_type = LLM_MTP_OP_NONE;
+    int             mtp_layer_idx = -1;
+    const float *   mtp_hidden_state = nullptr;
+
     std::map<llama_seq_id, llama_sampler *> samplers;
 
     static bool samplers_equal(
@@ -627,7 +648,9 @@ struct llm_graph_params {
             gtype == other.gtype &&
             cvec  == other.cvec  &&
             loras == other.loras &&
-            cross == other.cross;
+            cross == other.cross &&
+            mtp_op_type   == other.mtp_op_type   &&
+            mtp_layer_idx == other.mtp_layer_idx;
     }
 };
 
@@ -750,6 +773,10 @@ struct llm_graph_context {
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
 
+    const llm_mtp_op_type mtp_op_type;
+    const int             mtp_layer_idx;
+    const float *         mtp_hidden_state;
+
     std::map<llama_seq_id, llama_sampler *> samplers;
 
     const llm_graph_cb & cb_func;
@@ -864,6 +891,7 @@ struct llm_graph_context {
     ggml_tensor * build_inp_mean() const;
     ggml_tensor * build_inp_cls() const;
 
+    ggml_tensor * build_inp_mtp_hidden_state() const;
     ggml_tensor * build_inp_cross_embd() const;
     ggml_tensor * build_inp_pos_bucket_enc() const;
     ggml_tensor * build_inp_pos_bucket_dec() const;

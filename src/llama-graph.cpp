@@ -332,6 +332,14 @@ bool llm_graph_input_rs::can_reuse(const llm_graph_params & params) {
     return res;
 }
 
+void llm_graph_input_mtp_hidden_state::set_input(const llama_ubatch * ubatch) {
+    GGML_UNUSED(ubatch);
+
+    if (hidden_state && data) {
+        ggml_backend_tensor_set(hidden_state, data, 0, ggml_nbytes(hidden_state));
+    }
+}
+
 void llm_graph_input_cross_embd::set_input(const llama_ubatch * ubatch) {
     GGML_UNUSED(ubatch);
 
@@ -494,15 +502,21 @@ bool llm_graph_input_attn_k::can_reuse(const llm_graph_params & params) {
 }
 
 void llm_graph_input_attn_kv_iswa::set_input(const llama_ubatch * ubatch) {
-    mctx->get_base()->set_input_k_idxs(self_k_idxs, ubatch);
-    mctx->get_base()->set_input_v_idxs(self_v_idxs, ubatch);
+    // base tensors may not be allocated if the graph uses only SWA layers
+    if (self_k_idxs && self_k_idxs->buffer) {
+        mctx->get_base()->set_input_k_idxs(self_k_idxs, ubatch);
+        mctx->get_base()->set_input_v_idxs(self_v_idxs, ubatch);
 
-    mctx->get_base()->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
+        mctx->get_base()->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
+    }
 
-    mctx->get_swa()->set_input_k_idxs(self_k_idxs_swa, ubatch);
-    mctx->get_swa()->set_input_v_idxs(self_v_idxs_swa, ubatch);
+    // swa tensors may not be allocated if the graph uses only base layers
+    if (self_k_idxs_swa && self_k_idxs_swa->buffer) {
+        mctx->get_swa()->set_input_k_idxs(self_k_idxs_swa, ubatch);
+        mctx->get_swa()->set_input_v_idxs(self_v_idxs_swa, ubatch);
 
-    mctx->get_swa()->set_input_kq_mask(self_kq_mask_swa, ubatch, cparams.causal_attn);
+        mctx->get_swa()->set_input_kq_mask(self_kq_mask_swa, ubatch, cparams.causal_attn);
+    }
 
     if (self_k_rot) {
         mctx->get_base()->set_input_k_rot(self_k_rot);
@@ -520,14 +534,21 @@ bool llm_graph_input_attn_kv_iswa::can_reuse(const llm_graph_params & params) {
 
     bool res = true;
 
-    res &= self_k_idxs->ne[0] == params.ubatch.n_tokens;
-  //res &= self_v_idxs->ne[0] == params.ubatch.n_tokens; // TODO: need to move this to the unified cache and check there
+    // base tensors may not be allocated if the graph uses only SWA layers
+    if (self_k_idxs && self_k_idxs->buffer) {
+        res &= self_k_idxs->ne[0] == params.ubatch.n_tokens;
+      //res &= self_v_idxs->ne[0] == params.ubatch.n_tokens; // TODO: need to move this to the unified cache and check there
 
-    res &= self_k_idxs_swa->ne[0] == params.ubatch.n_tokens;
-  //res &= self_v_idxs_swa->ne[0] == params.ubatch.n_tokens; // TODO: need to move this to the unified cache and check there
+        res &= can_reuse_kq_mask(self_kq_mask, mctx->get_base(), params.ubatch, params.cparams);
+    }
 
-    res &= can_reuse_kq_mask(self_kq_mask,     mctx->get_base(), params.ubatch, params.cparams);
-    res &= can_reuse_kq_mask(self_kq_mask_swa, mctx->get_swa(),  params.ubatch, params.cparams);
+    // swa tensors may not be allocated if the graph uses only base layers
+    if (self_k_idxs_swa && self_k_idxs_swa->buffer) {
+        res &= self_k_idxs_swa->ne[0] == params.ubatch.n_tokens;
+      //res &= self_v_idxs_swa->ne[0] == params.ubatch.n_tokens; // TODO: need to move this to the unified cache and check there
+
+        res &= can_reuse_kq_mask(self_kq_mask_swa, mctx->get_swa(), params.ubatch, params.cparams);
+    }
 
     return res;
 }
@@ -929,6 +950,9 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     loras            (params.loras),
     mctx             (params.mctx),
     cross            (params.cross),
+    mtp_op_type      (params.mtp_op_type),
+    mtp_layer_idx    (params.mtp_layer_idx),
+    mtp_hidden_state (params.mtp_hidden_state),
     samplers         (params.samplers),
     cb_func          (params.cb),
     res              (params.res),
@@ -1754,6 +1778,19 @@ ggml_tensor * llm_graph_context::build_inp_cls() const {
     auto & cur = inp->cls;
 
     cur = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_seqs_unq);
+    ggml_set_input(cur);
+
+    res->add_input(std::move(inp));
+
+    return cur;
+}
+
+ggml_tensor * llm_graph_context::build_inp_mtp_hidden_state() const {
+    auto inp = std::make_unique<llm_graph_input_mtp_hidden_state>(mtp_hidden_state);
+
+    auto & cur = inp->hidden_state;
+
+    cur = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_tokens);
     ggml_set_input(cur);
 
     res->add_input(std::move(inp));

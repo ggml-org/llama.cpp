@@ -9145,6 +9145,13 @@ class MimoV2Model(TextModel):
 class Step35Model(TextModel):
     model_arch = gguf.MODEL_ARCH.STEP35
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        nextn = self.hparams.get("num_nextn_predict_layers", 0)
+        if nextn > 0:
+            self.block_count = self.hparams["num_hidden_layers"] + nextn
+            self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
     def set_gguf_parameters(self):
         rope_theta = self.hparams.get("rope_theta")
         if isinstance(rope_theta, list):
@@ -9171,6 +9178,10 @@ class Step35Model(TextModel):
         head_arr = [n_head_swa if lt == "sliding_attention" else n_head_base for lt in layer_types]
         kv_arr = [n_kv_swa if lt == "sliding_attention" else n_kv_base for lt in layer_types]
         swa_pat = [lt == "sliding_attention" for lt in layer_types]
+
+        nextn = self.hparams.get("num_nextn_predict_layers", 0)
+        if nextn > 0:
+            self.gguf_writer.add_nextn_predict_layers(nextn)
 
         self.gguf_writer.add_head_count(head_arr)
         self.gguf_writer.add_head_count_kv(kv_arr)
@@ -9212,12 +9223,19 @@ class Step35Model(TextModel):
             self.gguf_writer.add_swiglu_clamp_shexp(limits_shared_f)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
-        # remove mtp layers
+        n_main = int(self.hparams.get("num_hidden_layers", self.block_count))
+
         if (m := re.match(r"model\.layers\.(\d+)\.", name)) is not None:
             il = int(m.group(1))
-            n_main = int(self.hparams.get("num_hidden_layers", self.block_count))
             if il >= n_main:
-                return
+                name = name.replace(f"model.layers.{il}.transformer.", f"model.layers.{il}.")
+
+                if "shared_head.output" in name:
+                    name = name.replace("shared_head.output", "shared_head.head")
+                elif "embed_tokens" in name:
+                    if il > n_main:
+                        return
+
         if name.endswith("norm.weight"):
             data_torch += 1.0
         # Map router bias (expert selection bias) to a GGUF bias tensor
