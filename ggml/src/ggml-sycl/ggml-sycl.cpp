@@ -856,28 +856,48 @@ static void moe_prestage_popular_experts() {
                   "(%d already cached, %zu slots/layer, %d layers, avail=%zu)\n",
                   prestaged, skipped, slots_per_layer, n_layers, avail);
 
-    // Phase 2: Fill secondary GPUs with overflow popular experts (expert-split).
-    // Experts already placed on GPU0 are skipped; next-most-popular overflow
-    // experts fill secondary GPU VRAM (e.g. B50).  The fused MoE routing path
-    // already checks placement.device_id and dispatches to the correct GPU.
+    // Phase 2: Fill secondary GPUs with the MOST POPULAR experts (expert-split).
+    // After warmup profiling, we know which experts are hot.  Secondary GPUs
+    // may already be full from init-time uploads (sorted by expert_idx), but
+    // those may not be the most popular.  Unpin old entries so the cache can
+    // evict cold experts and replace them with hot ones.
     for (int dev = 1; dev < GGML_SYCL_MAX_DEVICES; dev++) {
         if (!g_expert_prefetchers[dev].is_initialized()) continue;
 
         ggml_sycl::unified_cache * sec_cache = ggml_sycl::get_unified_cache_for_device(dev);
         if (!sec_cache) continue;
 
-        size_t sec_avail = ggml_sycl::unified_cache_available_for_compute(dev);
-        size_t sec_slots = (expert_bytes > 0) ? sec_avail / expert_bytes : 0;
+        // Use total cache capacity for slot calculation, not just free space.
+        // The cache may be full from init-time uploads, but those entries are
+        // evictable after unpinning.  ensure_cached_layout handles eviction.
+        const size_t sec_budget = ggml_sycl::unified_cache_total_managed(dev);
+        size_t sec_slots = (expert_bytes > 0) ? sec_budget / expert_bytes : 0;
         if (sec_slots == 0) continue;
+
+        // Unpin expert entries so the cache can evict cold experts when full.
+        // Init-time uploads pin entries via pool allocation; without unpinning,
+        // the cache cannot make room for newly-popular experts.
+        sec_cache->unpin_experts();
+
         size_t sec_per_layer = std::max(size_t(1), sec_slots / static_cast<size_t>(n_layers));
 
-        int sec_staged = 0;
+        int sec_staged  = 0;
+        int sec_skipped = 0;
         for (auto & [lid, experts] : by_layer) {
             size_t staged_this = 0;
             for (const auto * meta : experts) {
                 if (staged_this >= sec_per_layer) break;
                 auto placement = ptable.get(meta->layer_id, meta->expert_idx);
-                if (placement.device_ptr != nullptr) continue;  // Already on some GPU
+                // Skip experts already cached on THIS secondary device
+                if (placement.device_ptr != nullptr && placement.device_id == dev) {
+                    sec_skipped++;
+                    staged_this++;  // Count toward per-layer limit
+                    continue;
+                }
+                // Skip experts already on GPU0 (they're served from GPU0's cache)
+                if (placement.device_ptr != nullptr && placement.device_id == 0) {
+                    continue;
+                }
 
                 void * ptr = ggml_sycl::moe_expert_ensure_soa_cached(
                     meta->layer_id, meta->expert_idx, dev);
@@ -887,9 +907,10 @@ static void moe_prestage_popular_experts() {
                 }
             }
         }
-        if (sec_staged > 0) {
-            GGML_LOG_INFO("[MOE-PRESTAGE] Secondary GPU %d: %d experts pre-staged (expert-split)\n",
-                          dev, sec_staged);
+        if (sec_staged > 0 || sec_skipped > 0) {
+            GGML_LOG_INFO("[MOE-PRESTAGE] Secondary GPU %d: %d experts staged, %d already cached "
+                          "(%zu slots, %zu/layer)\n",
+                          dev, sec_staged, sec_skipped, sec_slots, sec_per_layer);
         }
     }
 }
