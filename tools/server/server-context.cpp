@@ -1599,6 +1599,9 @@ private:
         res->id    = slot.task->id;
         res->index = slot.task->index;
 
+        // clear the KV cache for this slot — the dual-stream helper manages its own decode
+        llama_memory_seq_rm(llama_get_memory(ctx), slot.id, 0, -1);
+
         // the audio PCM data is stored in cli_files[0]
         if (slot.task->cli_files.empty()) {
             SLT_ERR(slot, "%s", "audio transcription task has no audio data\n");
