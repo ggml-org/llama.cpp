@@ -348,6 +348,9 @@ struct mtmd_context {
             case PROJECTOR_TYPE_QWEN2A:
             case PROJECTOR_TYPE_QWEN25O:
             case PROJECTOR_TYPE_ULTRAVOX:
+            case PROJECTOR_TYPE_VOXTRAL_REALTIME:
+                audio_preproc = std::make_unique<mtmd_audio_preprocessor_voxtral_rt>(ctx_a);
+                break;
             case PROJECTOR_TYPE_VOXTRAL:
             case PROJECTOR_TYPE_GLMA:
             case PROJECTOR_TYPE_MUSIC_FLAMINGO:
@@ -911,6 +914,10 @@ bool mtmd_support_vision(mtmd_context * ctx) {
 
 bool mtmd_support_audio(mtmd_context * ctx) {
     return ctx->ctx_a != nullptr;
+}
+
+bool mtmd_support_voxtral_realtime(mtmd_context * ctx) {
+    return ctx->proj_type_a() == PROJECTOR_TYPE_VOXTRAL_REALTIME;
 }
 
 int mtmd_get_audio_sample_rate(mtmd_context * ctx) {
