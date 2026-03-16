@@ -2,14 +2,7 @@
 #include <stdint.h>
 #include "ggml_tensor.h"
 #include "platform.h"
-// #include "tensor.h"
-
-#include "math_fp.h"
-#include "quants.h"
-#include "block_ops.h"
-
-#include <stdio.h>
-
+#include "tensor.h"
 
 /*
  * Minimal single TensorFMA32 test for GGML MUL_MAT on ET-SoC-1.
@@ -41,57 +34,9 @@
 #define L1D_NUM_WAYS      4
 #define L1D_LINE_SIZE     64
 
-#define NOP   __asm__ __volatile__ ("nop\n");
-#define FENCE __asm__ __volatile__ ("fence\n");
-#define WFI   __asm__ __volatile__ ("wfi\n");
-
-#define WAIT_TENSOR_LOAD_0     __asm__ __volatile__ ( "csrwi 0x830, 0\n" : : );
-#define WAIT_TENSOR_LOAD_1     __asm__ __volatile__ ( "csrwi 0x830, 1\n" : : );
-#define WAIT_TENSOR_LOAD_L2_0  __asm__ __volatile__ ( "csrwi 0x830, 2\n" : : );
-#define WAIT_TENSOR_LOAD_L2_1  __asm__ __volatile__ ( "csrwi 0x830, 3\n" : : );
-#define WAIT_PREFETCH_0        __asm__ __volatile__ ( "csrwi 0x830, 4\n" : : );
-#define WAIT_PREFETCH_1        __asm__ __volatile__ ( "csrwi 0x830, 5\n" : : );
-#define WAIT_CACHEOPS          __asm__ __volatile__ ( "csrwi 0x830, 6\n" : : );
-#define WAIT_TENSOR_FMA        __asm__ __volatile__ ( "csrwi 0x830, 7\n" : : );
-#define WAIT_TENSOR_STORE      __asm__ __volatile__ ( "csrwi 0x830, 8\n" : : );
-#define WAIT_TENSOR_REDUCE     __asm__ __volatile__ ( "csrwi 0x830, 9\n" : : );
-#define WAIT_TENSOR_QUANT      __asm__ __volatile__ ( "csrwi 0x830, 10\n" : : );
-#define STALL                  __asm__ __volatile__ ( "csrw stall, x0\n" : : );
-#define CLEAR_TENSOR_ERROR     __asm__ __volatile__ ( "csrwi 0x808, 0" : : );
-
 #define TILE      16  // hardware tile size
 #define NUM_HARTS 1024
 
-/*
- * ucache_control is CSR 0x810
- *
- * Bit layout:
- *   [10:6] CacheOpMax  (0 = no limit)
- *   [4:2]  RepRate     (0 = no delay)
- *   [1]    ScpEnable
- *   [0]    D1Split     (read-only from U-mode; set by runtime M-mode firmware)
- *
- * Precondition: D1Split must already be 1 (set by M-mode before kernel launch).
- * Writing ScpEnable while D1Split=0 is silently ignored per PRM.
- */
-static inline void __attribute__((always_inline))
-ucache_control(uint64_t scp_en, uint64_t cacheop_rate, uint64_t cacheop_max)
-{
-    uint64_t csr_enc = ((cacheop_max & 0x1F) << 6) |
-                       ((cacheop_rate & 0x7) << 2) |
-                       ((scp_en & 0x1) << 1);
-
-    __asm__ __volatile__("csrw 0x810, %[csr_enc]\n" : : [csr_enc] "r"(csr_enc) : "x31");
-}
-
-static void setup_cache_scp(void)
-{
-    FENCE;              // Drain pending stores before cache reconfiguration
-    ucache_control(1, 0, 0);  // ScpEnable=1 (D1Split already 1 from runtime)
-    WAIT_CACHEOPS;      // Wait for SCP mode transition + zeroing to complete
-}
-
-#include "tensor.h"
 int entry_point(struct ggml_et_binary_params* params, void* env) {
     uint64_t hart_id = get_hart_id();
 

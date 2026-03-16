@@ -75,6 +75,93 @@ static inline int get_num_threads(uint64_t shire_mask) {
 }
 
 //******************************************************************************
+// Synchronization Primitives
+//******************************************************************************
+
+#define NOP   __asm__ __volatile__ ("nop\n");
+#define FENCE __asm__ __volatile__ ("fence\n");
+#define WFI   __asm__ __volatile__ ("wfi\n");
+
+//******************************************************************************
+// Tensor Engine Wait & Error Macros
+//
+// These write to CSR 0x830 (tensor_wait) to stall the hart until the specified
+// tensor unit completes its current operation.  The immediate encodes which
+// unit to wait on.
+//******************************************************************************
+
+#define WAIT_TENSOR_LOAD_0     __asm__ __volatile__ ( "csrwi 0x830, 0\n"  : : );
+#define WAIT_TENSOR_LOAD_1     __asm__ __volatile__ ( "csrwi 0x830, 1\n"  : : );
+#define WAIT_TENSOR_LOAD_L2_0  __asm__ __volatile__ ( "csrwi 0x830, 2\n"  : : );
+#define WAIT_TENSOR_LOAD_L2_1  __asm__ __volatile__ ( "csrwi 0x830, 3\n"  : : );
+#define WAIT_PREFETCH_0        __asm__ __volatile__ ( "csrwi 0x830, 4\n"  : : );
+#define WAIT_PREFETCH_1        __asm__ __volatile__ ( "csrwi 0x830, 5\n"  : : );
+#define WAIT_CACHEOPS          __asm__ __volatile__ ( "csrwi 0x830, 6\n"  : : );
+#define WAIT_TENSOR_FMA        __asm__ __volatile__ ( "csrwi 0x830, 7\n"  : : );
+#define WAIT_TENSOR_STORE      __asm__ __volatile__ ( "csrwi 0x830, 8\n"  : : );
+#define WAIT_TENSOR_REDUCE     __asm__ __volatile__ ( "csrwi 0x830, 9\n"  : : );
+#define WAIT_TENSOR_QUANT      __asm__ __volatile__ ( "csrwi 0x830, 10\n" : : );
+#define STALL                  __asm__ __volatile__ ( "csrw stall, x0\n"  : : );
+
+// Write 0 to CSR 0x808 (tensor_error) to clear any latched tensor error bits.
+// Must be issued before the first tensor operation in a kernel to avoid stale
+// errors from a previous invocation causing spurious faults.
+#define CLEAR_TENSOR_ERROR     __asm__ __volatile__ ( "csrwi 0x808, 0" : : );
+
+//******************************************************************************
+// L1 Data Cache / Scratchpad (SCP) Configuration
+//
+// The ET-SoC-1 L1 data cache can be split so that half its ways operate as a
+// software-managed scratchpad (SCP).  Tensor load/store/FMA instructions
+// require SCP mode to be active.
+//
+// CSR 0x810 — ucache_control:
+//
+//   Bit(s)  Field         Description
+//   ──────  ────────────  ──────────────────────────────────────────────────
+//   [0]     D1Split       1 = L1 is split (half cache, half SCP).
+//                          Read-only from U-mode; set by M-mode firmware
+//                          before kernel launch.  Writing ScpEnable while
+//                          D1Split=0 is silently ignored.
+//   [1]     ScpEnable     1 = scratchpad is active and zeroed.
+//   [4:2]   RepRate       Cache-op replay rate (0 = no delay between ops).
+//   [10:6]  CacheOpMax    Max outstanding cache ops (0 = unlimited).
+//
+// Typical kernel prologue for tensor operations:
+//     setup_cache_scp();   // enables SCP, waits for zeroing
+//     CLEAR_TENSOR_ERROR;  // clear stale error bits
+//******************************************************************************
+
+// Write the ucache_control CSR (0x810).
+//
+//   scp_en       — 1 to enable SCP mode (requires D1Split already set)
+//   cacheop_rate — cache-op replay rate (0–7; 0 = no delay)
+//   cacheop_max  — max outstanding cache ops (0–31; 0 = unlimited)
+static inline void __attribute__((always_inline))
+ucache_control(uint64_t scp_en, uint64_t cacheop_rate, uint64_t cacheop_max)
+{
+    uint64_t csr_enc = ((cacheop_max & 0x1F) << 6) |
+                       ((cacheop_rate & 0x7)  << 2) |
+                       ((scp_en & 0x1)        << 1);
+
+    __asm__ __volatile__("csrw 0x810, %[csr_enc]\n" : : [csr_enc] "r"(csr_enc) : "x31");
+}
+
+// Enable L1 scratchpad mode and wait for the transition to complete.
+// After this call the SCP lines are zeroed and ready for tensor operations.
+//
+// Prerequisites:
+//   - D1Split must already be 1 (set by M-mode firmware at boot).
+//   - Only even harts (hart 0 per minion) should call this, as only they
+//     can issue tensor instructions.
+static inline void setup_cache_scp(void)
+{
+    FENCE;                    // drain pending stores before reconfiguring cache
+    ucache_control(1, 0, 0);  // ScpEnable=1
+    WAIT_CACHEOPS;            // wait for SCP mode transition + zeroing
+}
+
+//******************************************************************************
 // Atomic Operations
 //******************************************************************************
 
@@ -103,74 +190,6 @@ static inline void atomic_add_f32(volatile float* addr, float value) {
         : "memory"
     );
 }
-
-// static inline void atomic_add_f32(volatile float* addr, float value) {
-//     // We use the "f" constraint to ensure 'value' is in a floating-point register (fs1)
-//     // and "r" for the address in an integer register (rs2)
-//     __asm__ volatile(
-//         "famoaddg.pi zero, %1, (%0)"
-//         :
-//         : "r"(addr), "f"(value)
-//         : "memory"
-//     );
-// }
-
-// // Atomic Floating Point Swap/Store Global
-// static inline void atomic_store_f32(volatile float* addr, float value) {
-//     uint32_t value_bits = *(uint32_t*)&value;
-//     __asm__ volatile(
-//         "famoswapg.pi zero, %1, (%0)"
-//         :
-//         : "r"(addr), "f"(value)
-//         : "memory"
-//     );
-// }
-
-// static inline void atomic_add_f32(float *addr, float value) {
-//     uint32_t old_bits;
-//     uint32_t expected;
-//     uint32_t desired;
-
-//     do {
-//         // Load current value
-//         __asm__ volatile (
-//             "lw %0, 0(%1)"
-//             : "=r"(old_bits)
-//             : "r"(addr)
-//             : "memory"
-//         );
-
-//         float old_f;
-//         __builtin_memcpy(&old_f, &old_bits, sizeof(old_f));
-//         float new_f = old_f + value;
-//         __builtin_memcpy(&desired, &new_f, sizeof(desired));
-
-//         expected = old_bits;
-
-//         // CAS: rd, expected, desired, (addr)
-//         __asm__ volatile (
-//             "amocmpswapg.w %0, %1, %2, (%3)"
-//             : "=r"(old_bits)
-//             : "r"(expected), "r"(desired), "r"(addr)
-//             : "memory"
-//         );
-
-//     } while (old_bits != expected);
-// }
-
-
-// static inline void atomic_store_f32(float *addr, float value) {
-//     uint32_t bits;
-//     __builtin_memcpy(&bits, &value, sizeof(bits));
-
-//     __asm__ volatile (
-//         "amoswapg.w zero, %1, (%0)"
-//         :
-//         : "r"(addr), "r"(bits)
-//         : "memory"
-//     );
-// }
-
 
 // Atomic store for F16 values to global memory
 // Uses ET hardware's custom shg instruction (store halfword global)
