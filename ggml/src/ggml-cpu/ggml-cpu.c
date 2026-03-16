@@ -1687,27 +1687,27 @@ static void ggml_compute_forward_fused_moe_silu(
         struct ggml_tensor * node1,
         struct ggml_tensor * glu_node) {
 
-    const struct ggml_tensor * gate_weights;
-    const struct ggml_tensor * up_weights;
+    const struct ggml_tensor * weights_gate;
+    const struct ggml_tensor * weights_up;
 
     if (glu_node->src[0] == node0) {
-        gate_weights = node0->src[0];
-        up_weights   = node1->src[0];
+        weights_gate = node0->src[0];
+        weights_up   = node1->src[0];
     } else {
-        gate_weights = node1->src[0];
-        up_weights   = node0->src[0];
+        weights_gate = node1->src[0];
+        weights_up   = node0->src[0];
     }
 
     const struct ggml_tensor * src1 = node0->src[1];
     const struct ggml_tensor * ids  = node0->src[2];
 
-    const int64_t ne00 = gate_weights->ne[0];
-    const int64_t ne01 = gate_weights->ne[1];
+    const int64_t ne00 = weights_gate->ne[0];
+    const int64_t ne01 = weights_gate->ne[1];
 
-    const size_t gate_nb01 = gate_weights->nb[1];
-    const size_t gate_nb02 = gate_weights->nb[2];
-    const size_t up_nb01   = up_weights->nb[1];
-    const size_t up_nb02   = up_weights->nb[2];
+    const size_t gate_nb01 = weights_gate->nb[1];
+    const size_t gate_nb02 = weights_gate->nb[2];
+    const size_t up_nb01   = weights_up->nb[1];
+    const size_t up_nb02   = weights_up->nb[2];
 
     const int64_t ne10 = src1->ne[0];
     const int64_t ne11 = src1->ne[1];
@@ -1718,7 +1718,7 @@ static void ggml_compute_forward_fused_moe_silu(
     const int ith = params->ith;
     const int nth = params->nth;
 
-    const enum ggml_type type = gate_weights->type;
+    const enum ggml_type type = weights_gate->type;
 
     ggml_vec_dot_t    const vec_dot      = type_traits_cpu[type].vec_dot;
     enum ggml_type    const vec_dot_type = type_traits_cpu[type].vec_dot_type;
@@ -1730,7 +1730,7 @@ static void ggml_compute_forward_fused_moe_silu(
 
     const char * src1_q = (const char *) src1->data;
     if (src1->type != vec_dot_type) {
-        char * wdata = (char *) params->wdata + ith * ne11 * row_size;
+        char * wdata = (char *) params->wdata + ith * (ne11 * row_size + CACHE_LINE_SIZE);
         GGML_ASSERT(src1->type == GGML_TYPE_F32);
         for (int64_t i11 = 0; i11 < ne11; ++i11) {
             from_float((float *)((char *) src1->data + i11*nb11),
@@ -1744,8 +1744,8 @@ static void ggml_compute_forward_fused_moe_silu(
     for (int id = 0; id < n_ids; ++id) {
         const int32_t expert_idx = *(const int32_t *) ((const char *) ids->data + id*ids->nb[0]);
 
-        const char * gate_cur = (const char *) gate_weights->data + expert_idx * gate_nb02;
-        const char * up_cur   = (const char *) up_weights->data   + expert_idx * up_nb02;
+        const char * gate_cur = (const char *) weights_gate->data + expert_idx * gate_nb02;
+        const char * up_cur   = (const char *) weights_up->data   + expert_idx * up_nb02;
         const char * src1_col = src1_q;
 
         float * glu_col = (float *) ((char *) glu_node->data + id*glu_nb1);
