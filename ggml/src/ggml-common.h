@@ -267,6 +267,47 @@ static_assert(sizeof(block_q4_1) == 2 * sizeof(ggml_half) + QK4_1 / 2, "wrong q4
 #define MXFP6_E3M2_MANT_SHIFT     21        // 23-2
 #define MXFP6_E3M2_SUB_SCALE      (1.0f/16.0f)    // 2^(-4) = 2^(1-3-2)
 
+// Unified MXFP dequantization traits for SIMD backends (CPU x86/ARM, CUDA, Metal, Vulkan).
+// Contains all parameters needed for IEEE-754 bit reconstruction of FP8/FP6 elements.
+// FP4 uses LUT-based dequant and does not need this struct.
+typedef struct {
+    int   exp_mask;       // (1<<E)-1: exponent field mask
+    int   mant_mask;      // (1<<M)-1: mantissa field mask
+    int   exp_shift;      // M: right-shift to extract exponent
+    int   ieee_exp_off;   // 127-bias: offset to convert to IEEE exponent
+    int   mant_shift;     // 23-M: left-shift to align mantissa in IEEE float
+    float sub_scale;      // 2^(1-bias-M): subnormal scale factor
+    int   sign_mask;      // 0x80 for 8-bit, 0x20 for 6-bit formats
+    int   sign_shift;     // 24 for 8-bit, 26 for 6-bit formats
+    int   qs_per_block;   // bytes of quantized data per 32-element block
+    int   emax_offset;    // type-specific offset for E8M0 MSE search
+} mxfp_dequant_traits_t;
+
+// Static const trait instances for each MXFP format.
+// Gated by GGML_COMMON_IMPL to ensure single definition per translation unit.
+#if defined(GGML_COMMON_IMPL)
+static const mxfp_dequant_traits_t MXFP_TRAITS_E4M3 = {
+    MXFP8_E4M3_EXP_MASK, MXFP8_E4M3_MANT_MASK, MXFP8_E4M3_EXP_SHIFT,
+    MXFP8_E4M3_IEEE_EXP_OFF, MXFP8_E4M3_MANT_SHIFT, MXFP8_E4M3_SUB_SCALE,
+    0x80, 24, MXFP_QS_PER_BLOCK_E4M3, MXFP8_E4M3_EMAX_OFFSET
+};
+static const mxfp_dequant_traits_t MXFP_TRAITS_E5M2 = {
+    MXFP8_E5M2_EXP_MASK, MXFP8_E5M2_MANT_MASK, MXFP8_E5M2_EXP_SHIFT,
+    MXFP8_E5M2_IEEE_EXP_OFF, MXFP8_E5M2_MANT_SHIFT, MXFP8_E5M2_SUB_SCALE,
+    0x80, 24, MXFP_QS_PER_BLOCK_E5M2, MXFP8_E5M2_EMAX_OFFSET
+};
+static const mxfp_dequant_traits_t MXFP_TRAITS_E2M3 = {
+    MXFP6_E2M3_EXP_MASK, MXFP6_E2M3_MANT_MASK, MXFP6_E2M3_EXP_SHIFT,
+    MXFP6_E2M3_IEEE_EXP_OFF, MXFP6_E2M3_MANT_SHIFT, MXFP6_E2M3_SUB_SCALE,
+    0x20, 26, MXFP_QS_PER_BLOCK_E2M3, MXFP6_E2M3_EMAX_OFFSET
+};
+static const mxfp_dequant_traits_t MXFP_TRAITS_E3M2 = {
+    MXFP6_E3M2_EXP_MASK, MXFP6_E3M2_MANT_MASK, MXFP6_E3M2_EXP_SHIFT,
+    MXFP6_E3M2_IEEE_EXP_OFF, MXFP6_E3M2_MANT_SHIFT, MXFP6_E3M2_SUB_SCALE,
+    0x20, 26, MXFP_QS_PER_BLOCK_E3M2, MXFP6_E3M2_EMAX_OFFSET
+};
+#endif // GGML_COMMON_IMPL
+
 #define QK_MXFP4 32
 typedef struct {
     uint8_t e; // E8M0

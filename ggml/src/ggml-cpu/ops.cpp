@@ -8297,8 +8297,8 @@ static mxfp_fa_params mxfp_fa_params_init(
 
     if (is_mxfp_k) {
         switch (k->type) {
-            case GGML_TYPE_MXFP4_E2M1: p.q_quantize = quantize_row_mxfp4_soa;      p.k_dequantize = dequantize_row_mxfp4_soa_cpu;      break;
-            case GGML_TYPE_MXFP8_E4M3: p.q_quantize = quantize_row_mxfp8_soa;      p.k_dequantize = dequantize_row_mxfp8_soa_cpu;      break;
+            case GGML_TYPE_MXFP4_E2M1: p.q_quantize = quantize_row_mxfp4_soa; p.k_dequantize = dequantize_row_mxfp4_soa_cpu; break;
+            case GGML_TYPE_MXFP8_E4M3: p.q_quantize = quantize_row_mxfp8_soa; p.k_dequantize = dequantize_row_mxfp8_soa_cpu; break;
             case GGML_TYPE_MXFP6_E2M3: p.q_quantize = quantize_row_mxfp6_soa; p.k_dequantize = dequantize_row_mxfp6_soa_cpu; break;
             default: GGML_ABORT("unsupported MXFP K type");
         }
@@ -8306,8 +8306,8 @@ static mxfp_fa_params mxfp_fa_params_init(
 
     if (is_mxfp_v) {
         switch (v->type) {
-            case GGML_TYPE_MXFP4_E2M1: p.v_dequantize = dequantize_row_mxfp4_soa_cpu;      break;
-            case GGML_TYPE_MXFP8_E4M3: p.v_dequantize = dequantize_row_mxfp8_soa_cpu;      break;
+            case GGML_TYPE_MXFP4_E2M1: p.v_dequantize = dequantize_row_mxfp4_soa_cpu; break;
+            case GGML_TYPE_MXFP8_E4M3: p.v_dequantize = dequantize_row_mxfp8_soa_cpu; break;
             case GGML_TYPE_MXFP6_E2M3: p.v_dequantize = dequantize_row_mxfp6_soa_cpu; break;
             default: GGML_ABORT("unsupported MXFP V type");
         }
@@ -8328,6 +8328,7 @@ static mxfp_fa_params mxfp_fa_params_init(
 
     // Per-head SoA addressing for multihead mode.
     // Precompute byte offsets so the hot loop can skip per-head pointer math.
+    // qs_per_block values from centralized MXFP_QS_PER_BLOCK_* defines in ggml-common.h.
     auto mxfp_qs_per_block = [](ggml_type type) -> int {
         switch (type) {
             case GGML_TYPE_MXFP4_E2M1: return MXFP4_SOA_QS_PER_BLOCK;
@@ -8341,7 +8342,6 @@ static mxfp_fa_params mxfp_fa_params_init(
         p.k_qs_per_block    = mxfp_qs_per_block(k->type);
         p.k_blocks_per_head = (int)(DK / 32);
         p.k_head_qs_bytes   = p.k_blocks_per_head * p.k_qs_per_block;
-        // e8m0 offset from row start = total_blocks * qs_per_block
         const int64_t k_total_blocks = p.k_multihead ? nek2 * p.k_blocks_per_head : p.k_blocks_per_head;
         p.k_head_e8m0_offset = k_total_blocks * p.k_qs_per_block;
     }
