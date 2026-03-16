@@ -202,6 +202,7 @@ static void init_tensor_mxfp_soa(ggml_tensor * tensor, float min = -1.0f, float 
     // If soa_bytes < nb1 (per-head), iterate over (ne1 * ne2 * ne3) regions with stride nb1.
     // We use strides to compute offsets, handling views and permutations correctly.
     const int64_t heads_per_region = (int64_t)(soa_bytes / head_row_sz);
+    GGML_ASSERT(soa_bytes % head_row_sz == 0 && "soa_bytes must be a multiple of head_row_sz");
 
     // For multi-head regions, we step by nb1 (KV-position stride) between regions.
     // For per-head, we step through all dimensions.
@@ -210,7 +211,6 @@ static void init_tensor_mxfp_soa(ggml_tensor * tensor, float min = -1.0f, float 
     if (heads_per_region > 1) {
         // Multi-head SoA: iterate over (kv_positions * batches), each region = nb1 bytes
         for (int64_t i3 = 0; i3 < ne3; i3++) {
-            // ne2/heads_per_region = number of head groups (for GQA broadcast, usually 1)
             const int64_t n_groups = ne2 / heads_per_region;
             for (int64_t ig = 0; ig < n_groups; ig++) {
                 for (int64_t i1 = 0; i1 < ne1; i1++) {
