@@ -433,22 +433,28 @@
 
 							{#each groupedFilteredOptions as group (group.isLoadedGroup ? '__loaded__' : group.isFavouritesGroup ? '__favourites__' : group.orgName)}
 								{#if group.isLoadedGroup}
-									<p class="px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none">
+									<p
+										class="my-1 px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none"
+									>
 										Loaded models
 									</p>
 								{:else if group.isFavouritesGroup}
-									<p class="px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none">
+									<p
+										class="my-1 px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none"
+									>
 										Favourite models
 									</p>
 								{:else}
 									{#if (group.orgName ?? '') === firstAvailableOrgKey}
-										<p class="px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none">
+										<p
+											class="my-1 px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none"
+										>
 											Available models
 										</p>
 									{/if}
 									{#if group.orgName}
 										<p
-											class="px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none [&:not(:first-child)]:mt-2"
+											class="px-2 py-2 text-[11px] font-semibold text-muted-foreground/50 select-none [&:not(:first-child)]:mt-2"
 										>
 											{group.orgName}
 										</p>
