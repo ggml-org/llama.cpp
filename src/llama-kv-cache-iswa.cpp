@@ -209,38 +209,6 @@ llama_memory_context_ptr llama_kv_cache_iswa::init_batch(llama_batch_allocr & ba
     return std::make_unique<llama_kv_cache_iswa_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
 }
 
-llama_memory_context_ptr llama_kv_cache_iswa::init_batch_with_sinfos(
-        llama_batch_allocr & balloc,
-        uint32_t n_ubatch,
-        const llama_kv_cache::slot_info_vec_t & sinfos,
-        bool is_inplace_update) {
-    if (sinfos.empty()) {
-        return std::make_unique<llama_kv_cache_iswa_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
-    }
-
-    balloc.split_reset();
-
-    std::vector<llama_ubatch> ubatches;
-    const uint32_t n_stream = kv_base->get_n_stream();
-    while (true) {
-        auto ubatch = n_stream == 1 ? balloc.split_simple(n_ubatch) : balloc.split_equal(n_ubatch, true);
-        if (ubatch.n_tokens == 0) {
-            break;
-        }
-        ubatches.push_back(std::move(ubatch)); // NOLINT
-    }
-
-    if (ubatches.size() != sinfos.size()) {
-        return std::make_unique<llama_kv_cache_iswa_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
-    }
-
-    auto sinfos_base = sinfos;
-    auto sinfos_swa  = sinfos;
-
-    return std::make_unique<llama_kv_cache_iswa_context>(
-            this, std::move(sinfos_base), std::move(sinfos_swa), std::move(ubatches), is_inplace_update);
-}
-
 llama_memory_context_ptr llama_kv_cache_iswa::init_full() {
     return std::make_unique<llama_kv_cache_iswa_context>(this);
 }
@@ -279,6 +247,20 @@ llama_kv_cache * llama_kv_cache_iswa::get_swa() const {
     return kv_swa.get();
 }
 
+void llama_kv_cache_iswa::set_swa_reuse_guard(llama_pos query_pos) {
+    kv_base->clear_swa_reuse_guard();
+    kv_swa->set_swa_reuse_guard(query_pos);
+}
+
+void llama_kv_cache_iswa::clear_swa_reuse_guard() {
+    kv_base->clear_swa_reuse_guard();
+    kv_swa->clear_swa_reuse_guard();
+}
+
+bool llama_kv_cache_iswa::consume_swa_reuse_guard_block_prepare() {
+    return kv_swa->consume_swa_reuse_guard_block_prepare();
+}
+
 //
 // llama_kv_cache_iswa_context
 //
@@ -310,19 +292,6 @@ llama_kv_cache_iswa_context::llama_kv_cache_iswa_context(
     // note: here we copy the ubatches. not sure if this is ideal
     ctx_base(new llama_kv_cache_context(kv->get_base(), std::move(sinfos_base), this->ubatches)),
     ctx_swa (new llama_kv_cache_context(kv->get_swa (), std::move(sinfos_swa),  this->ubatches)),
-    status(llama_memory_status_combine(ctx_base->get_status(), ctx_swa->get_status())) {
-}
-
-llama_kv_cache_iswa_context::llama_kv_cache_iswa_context(
-        llama_kv_cache_iswa * kv,
-        slot_info_vec_t sinfos_base,
-        slot_info_vec_t sinfos_swa,
-        std::vector<llama_ubatch> ubatches,
-        bool is_inplace_update) :
-    ubatches(std::move(ubatches)),
-    // note: here we copy the ubatches. not sure if this is ideal
-    ctx_base(new llama_kv_cache_context(kv->get_base(), std::move(sinfos_base), this->ubatches, is_inplace_update)),
-    ctx_swa (new llama_kv_cache_context(kv->get_swa (), std::move(sinfos_swa),  this->ubatches, is_inplace_update)),
     status(llama_memory_status_combine(ctx_base->get_status(), ctx_swa->get_status())) {
 }
 
@@ -372,13 +341,4 @@ const llama_kv_cache_context * llama_kv_cache_iswa_context::get_swa()  const {
     assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
 
     return static_cast<const llama_kv_cache_context *>(ctx_swa.get());
-}
-
-void llama_kv_cache_iswa_context::set_inplace(bool value) {
-    auto * base = const_cast<llama_kv_cache_context *>(
-            static_cast<const llama_kv_cache_context *>(ctx_base.get()));
-    auto * swa  = const_cast<llama_kv_cache_context *>(
-            static_cast<const llama_kv_cache_context *>(ctx_swa.get()));
-    if (base) { base->set_inplace(value); }
-    if (swa)  { swa ->set_inplace(value); }
 }

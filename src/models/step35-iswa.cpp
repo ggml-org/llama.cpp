@@ -47,7 +47,7 @@ ggml_tensor * llm_build_step35_iswa::build_layer(
 
         const bool is_swa = hparams.is_swa(il);
         ggml_tensor * rope_factors = is_swa ? nullptr : model.get_rope_factors(cparams, il);
-        const int64_t n_rot_l = is_swa ? hparams.n_rot : (hparams.n_rot / 2);
+        const int64_t n_rot_l = hparams.n_rot(il);
         Qcur = ggml_rope_ext(
             ctx0, Qcur, inp_pos, rope_factors,
             n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
@@ -111,7 +111,6 @@ ggml_tensor * llm_build_step35_iswa::build_layer(
     } else {
         const bool  norm_w  = hparams.expert_weights_norm;
         const float w_scale = hparams.expert_weights_scale;
-        const bool  scale_w = w_scale != 0.0f;
         ggml_tensor * moe_out = build_moe_ffn(cur,
                 model.layers[il].ffn_gate_inp,
                 model.layers[il].ffn_up_exps,
@@ -120,7 +119,7 @@ ggml_tensor * llm_build_step35_iswa::build_layer(
                 model.layers[il].ffn_exp_probs_b,
                 n_expert, n_expert_used,
                 LLM_FFN_SILU,
-                norm_w, scale_w, w_scale,
+                norm_w, w_scale,
                 (llama_expert_gating_func_type) hparams.expert_gating_func,
                 il);
         cb(moe_out, "ffn_moe_out", il);

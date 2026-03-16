@@ -39,12 +39,6 @@ public:
             uint32_t n_ubatch,
             bool embd_all) override;
 
-    llama_memory_context_ptr init_batch_with_sinfos(
-            llama_batch_allocr & balloc,
-            uint32_t n_ubatch,
-            const llama_kv_cache::slot_info_vec_t & sinfos,
-            bool is_inplace_update);
-
     llama_memory_context_ptr init_full() override;
 
     llama_memory_context_ptr init_update(llama_context * lctx, bool optimize) override;
@@ -75,6 +69,11 @@ public:
 
     llama_kv_cache * get_base() const;
     llama_kv_cache * get_swa () const;
+
+    void set_swa_reuse_guard(llama_pos query_pos);
+    void clear_swa_reuse_guard();
+
+    bool consume_swa_reuse_guard_block_prepare();
 
 private:
     const llama_hparams & hparams;
@@ -108,12 +107,6 @@ public:
             slot_info_vec_t sinfos_base,
             slot_info_vec_t sinfos_swa,
             std::vector<llama_ubatch> ubatches);
-    llama_kv_cache_iswa_context(
-            llama_kv_cache_iswa * kv,
-            slot_info_vec_t sinfos_base,
-            slot_info_vec_t sinfos_swa,
-            std::vector<llama_ubatch> ubatches,
-            bool is_inplace_update);
 
     virtual ~llama_kv_cache_iswa_context();
 
@@ -133,8 +126,6 @@ public:
 
     const llama_kv_cache_context * get_base() const;
     const llama_kv_cache_context * get_swa()  const;
-
-    void set_inplace(bool value);
 
 private:
     //llama_kv_cache_iswa * kv;

@@ -163,11 +163,13 @@ int main(int argc, char ** argv) {
             std::memcpy(prompt_hidden.data() + i*llama_model_n_embd(model_tgt), hidden,
                     llama_model_n_embd(model_tgt)*sizeof(float));
         }
-        common_speculative_set_prompt_hidden_states(
+        common_speculative_set_first_pass_source(
                 spec,
+                prompt_tgt,
                 prompt_hidden.data(),
                 prompt_tgt.size(),
-                llama_model_n_embd(model_tgt));
+                llama_model_n_embd(model_tgt),
+                0);
     }
 
     llama_batch batch_tgt = llama_batch_init(llama_n_batch(ctx_tgt), 0, 1);

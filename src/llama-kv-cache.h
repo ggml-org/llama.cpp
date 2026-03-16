@@ -13,6 +13,11 @@ struct llama_hparams;
 struct llama_model;
 struct llama_context;
 
+struct llama_kv_swa_guard_state {
+    bool active = false;
+    llama_pos query_pos = 0;
+};
+
 //
 // llama_kv_cache
 //
@@ -119,12 +124,6 @@ public:
             uint32_t n_ubatch,
             bool embd_all) override;
 
-    llama_memory_context_ptr init_batch_with_sinfos(
-            llama_batch_allocr & balloc,
-            uint32_t n_ubatch,
-            const slot_info_vec_t & sinfos,
-            bool is_inplace_update);
-
     llama_memory_context_ptr init_full() override;
 
     llama_memory_context_ptr init_update(llama_context * lctx, bool optimize) override;
@@ -160,6 +159,10 @@ public:
 
     ggml_type type_k() const;
     ggml_type type_v() const;
+    void set_swa_reuse_guard(llama_pos query_pos);
+    void clear_swa_reuse_guard();
+
+    bool consume_swa_reuse_guard_block_prepare();
 
     //
     // graph_build API
@@ -191,8 +194,7 @@ public:
     slot_info find_slot(const llama_ubatch & ubatch, bool cont) const;
 
     // emplace the ubatch context into slot: [sinfo.idxs[0...ubatch.n_tokens - 1]]
-    // when is_inplace is true, only writes KV tensor data, does not modify cell metadata
-    void apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch, bool is_inplace = false);
+    void apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch);
 
     //
     // input API
@@ -270,6 +272,9 @@ private:
     // pending stream copies that will be applied during the next update
     stream_copy_info sc_info;
 
+    llama_kv_swa_guard_state swa_reuse_guard;
+    mutable bool swa_reuse_guard_blocked_prepare = false;
+
     std::vector<kv_layer> layers;
 
     // model layer id -> KV cache layer id
@@ -333,11 +338,6 @@ public:
             llama_kv_cache * kv,
             slot_info_vec_t sinfos,
             std::vector<llama_ubatch> ubatches);
-    llama_kv_cache_context(
-            llama_kv_cache * kv,
-            slot_info_vec_t sinfos,
-            std::vector<llama_ubatch> ubatches,
-            bool is_inplace_update);
 
     virtual ~llama_kv_cache_context();
 
@@ -417,8 +417,6 @@ private:
     slot_info_vec_t sinfos;
 
     std::vector<llama_ubatch> ubatches;
-
-    bool is_inplace = false;
 
     //
     // data needed for building the compute graph for the current ubatch:

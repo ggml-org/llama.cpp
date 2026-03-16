@@ -76,6 +76,21 @@ static ggml_tensor * ggml_mul_mat_aux(
 // llama_kv_cache
 //
 
+static bool llama_kv_cache_is_swa_cell_reusable_for_query(
+        uint32_t       n_swa,
+        llama_swa_type swa_type,
+        llama_pos      pos_cell,
+        llama_pos      query_pos) {
+    if (n_swa == 0 || swa_type == LLAMA_SWA_TYPE_NONE) {
+        return false;
+    }
+
+    GGML_ASSERT(pos_cell >= 0);
+    GGML_ASSERT(query_pos >= 0);
+
+    return llama_hparams::is_masked_swa(n_swa, swa_type, pos_cell, query_pos);
+}
+
 llama_kv_cache::llama_kv_cache(
         const llama_model & model,
                 ggml_type   type_k,
@@ -648,34 +663,6 @@ llama_memory_context_ptr llama_kv_cache::init_batch(
     return std::make_unique<llama_kv_cache_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
 }
 
-llama_memory_context_ptr llama_kv_cache::init_batch_with_sinfos(
-        llama_batch_allocr & balloc,
-        uint32_t n_ubatch,
-        const slot_info_vec_t & sinfos,
-        bool is_inplace_update) {
-    if (sinfos.empty()) {
-        return std::make_unique<llama_kv_cache_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
-    }
-
-    balloc.split_reset();
-
-    std::vector<llama_ubatch> ubatches;
-    while (true) {
-        auto ubatch = n_stream == 1 ? balloc.split_simple(n_ubatch) : balloc.split_equal(n_ubatch, true);
-        if (ubatch.n_tokens == 0) {
-            break;
-        }
-        ubatches.push_back(std::move(ubatch)); // NOLINT
-    }
-
-    if (ubatches.size() != sinfos.size()) {
-        return std::make_unique<llama_kv_cache_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
-    }
-
-    return std::make_unique<llama_kv_cache_context>(
-            this, sinfos, std::move(ubatches), is_inplace_update);
-}
-
 llama_memory_context_ptr llama_kv_cache::init_full() {
     return std::make_unique<llama_kv_cache_context>(this);
 }
@@ -701,6 +688,8 @@ llama_kv_cache::slot_info_vec_t llama_kv_cache::prepare(const std::vector<llama_
 
     // remember the old state of the cells so we can restore it in the end
     std::vector<state_t> states;
+
+    swa_reuse_guard_blocked_prepare = false;
 
     bool success = true;
 
@@ -947,6 +936,7 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
         }
 
         uint32_t n_tested = 0;
+        bool guard_blocked = false;
 
         // for continuous slots, we test that all tokens in the ubatch fit, starting from the current head
         // for non-continuous slots, we test the tokens one by one
@@ -987,9 +977,28 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
 
                     if (!can_use) {
                         const llama_seq_id seq_id_cell = cells.seq_get(idx);
+                        const llama_pos query_pos_default = cells.seq_pos_max(seq_id_cell) + 1;
 
                         // SWA mask
-                        if (llama_hparams::is_masked_swa(n_swa, swa_type, pos_cell, cells.seq_pos_max(seq_id_cell) + 1)) {
+                        if (swa_reuse_guard.active) {
+                            const bool can_use_default = llama_kv_cache_is_swa_cell_reusable_for_query(
+                                    n_swa,
+                                    swa_type,
+                                    pos_cell,
+                                    query_pos_default);
+                            const bool can_use_guarded = llama_kv_cache_is_swa_cell_reusable_for_query(
+                                    n_swa,
+                                    swa_type,
+                                    pos_cell,
+                                    swa_reuse_guard.query_pos);
+
+                            can_use = can_use_guarded;
+                            guard_blocked = guard_blocked || (can_use_default && !can_use_guarded);
+                        } else if (llama_kv_cache_is_swa_cell_reusable_for_query(
+                                           n_swa,
+                                           swa_type,
+                                           pos_cell,
+                                           query_pos_default)) {
                             can_use = true;
                         }
                     }
@@ -1013,6 +1022,7 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
             }
 
             if (n_tested >= cells.size()) {
+                swa_reuse_guard_blocked_prepare = swa_reuse_guard_blocked_prepare || guard_blocked;
                 //LLAMA_LOG_ERROR("%s: failed to find a slot for %d tokens\n", __func__, n_tokens);
                 return { };
             }
@@ -1029,11 +1039,7 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
     return res;
 }
 
-void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch, bool is_inplace) {
-    if (is_inplace) {
-        return;
-    }
-
+void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch) {
     // keep track of the max sequence position that we would overwrite with this ubatch
     // for non-SWA cache, this would be always empty
     llama_seq_id seq_pos_max_rm[LLAMA_MAX_SEQ];
@@ -1143,6 +1149,25 @@ ggml_type llama_kv_cache::type_k() const {
 
 ggml_type llama_kv_cache::type_v() const {
     return layers[0].v->type;
+}
+
+void llama_kv_cache::set_swa_reuse_guard(llama_pos query_pos) {
+    GGML_ASSERT(query_pos >= 0);
+
+    swa_reuse_guard.active = true;
+    swa_reuse_guard.query_pos = query_pos;
+    swa_reuse_guard_blocked_prepare = false;
+}
+
+void llama_kv_cache::clear_swa_reuse_guard() {
+    swa_reuse_guard.active = false;
+    swa_reuse_guard.query_pos = 0;
+}
+
+bool llama_kv_cache::consume_swa_reuse_guard_block_prepare() {
+    const bool blocked = swa_reuse_guard_blocked_prepare;
+    swa_reuse_guard_blocked_prepare = false;
+    return blocked;
 }
 
 uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {
@@ -2413,13 +2438,6 @@ llama_kv_cache_context::llama_kv_cache_context(
         std::vector<llama_ubatch> ubatches) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv), sinfos(std::move(sinfos)), ubatches(std::move(ubatches)) {
 }
 
-llama_kv_cache_context::llama_kv_cache_context(
-        llama_kv_cache * kv,
-        llama_kv_cache::slot_info_vec_t sinfos,
-        std::vector<llama_ubatch> ubatches,
-        bool is_inplace_update) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv), sinfos(std::move(sinfos)), ubatches(std::move(ubatches)), is_inplace(is_inplace_update) {
-}
-
 llama_kv_cache_context::~llama_kv_cache_context() = default;
 
 bool llama_kv_cache_context::next() {
@@ -2442,7 +2460,7 @@ bool llama_kv_cache_context::apply() {
         return true;
     }
 
-    kv->apply_ubatch(sinfos[i_cur], ubatches[i_cur], is_inplace);
+    kv->apply_ubatch(sinfos[i_cur], ubatches[i_cur]);
     n_kv = kv->get_n_kv(sinfos[i_cur]);
 
     return true;

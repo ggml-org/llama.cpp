@@ -28,8 +28,7 @@ bool llama_batch_allocr::init(
         const llama_memory_i * memory,
         uint32_t n_embd,
         uint32_t n_seq_max,
-        bool output_all,
-        bool allow_non_contiguous_pos) {
+        bool output_all) {
     clear();
 
     batch = batch_inp;
@@ -314,11 +313,9 @@ bool llama_batch_allocr::init(
                 }
             }
 
-            if (!allow_non_contiguous_pos) {
-                if (seq_pos_max(s) - seq_pos_min(s) + 1 > (int) seq_pos[s].size()) {
-                    LLAMA_LOG_ERROR("%s: sequence %d positions are not continuous\n", __func__, s);
-                    return false;
-                }
+            if (seq_pos_max(s) - seq_pos_min(s) + 1 > (int) seq_pos[s].size()) {
+                LLAMA_LOG_ERROR("%s: sequence %d positions are not continuous\n", __func__, s);
+                return false;
             }
         }
     }

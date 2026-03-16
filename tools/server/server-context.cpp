@@ -93,6 +93,7 @@ struct server_slot {
     bool has_new_line   = false;
     bool truncated      = false;
     bool mtp_cache_reused = false;
+    llama_pos mtp_common_prefix_len = 0;
 
     stop_type stop;
 
@@ -183,6 +184,7 @@ struct server_slot {
         i_batch_dft.clear();
         mtp_prompt_hidden.clear();
         mtp_cache_reused = false;
+        mtp_common_prefix_len = 0;
         generated_tokens.clear();
         generated_token_probs.clear();
         json_schema = json();
@@ -467,6 +469,7 @@ struct server_slot {
 
         other.prompt = prompt.clone();
         other.mtp_prompt_hidden = mtp_prompt_hidden;
+        other.mtp_common_prefix_len = 0;
         other.init_sampler();
     }
 };
@@ -477,6 +480,7 @@ static void server_slot_append_mtp_prompt_hidden(
         const llama_batch & batch_view) {
     if (slot.spec == nullptr ||
             slot.task == nullptr ||
+            !slot.can_speculate() ||
             slot.task->params.speculative.type != COMMON_SPECULATIVE_TYPE_MTP ||
             (slot.state != SLOT_STATE_PROCESSING_PROMPT && slot.state != SLOT_STATE_DONE_PROMPT)) {
         return;
@@ -1108,8 +1112,10 @@ private:
                 if (!ret->prompt_load(*prompt_cache, task.tokens)) {
                     ret->prompt_clear(false);
                 } else if (task.params.speculative.type == COMMON_SPECULATIVE_TYPE_MTP) {
+                    common_speculative_invalidate_retained_state(ret->spec);
                     ret->mtp_prompt_hidden.clear();
                     ret->mtp_cache_reused = true;
+                    ret->mtp_common_prefix_len = 0;
                     SLT_WRN(*ret, "%s", "disabling MTP speculative on prompt-cache reuse until hidden-state reconstruction is implemented\n");
                 }
 
@@ -2255,6 +2261,8 @@ private:
                     if (slot.state == SLOT_STATE_STARTED) {
                         slot.t_start_process_prompt = ggml_time_us();
                         slot.t_start_generation = 0;
+                        slot.mtp_prompt_hidden.clear();
+                        slot.mtp_common_prefix_len = 0;
 
                         slot.state = SLOT_STATE_PROCESSING_PROMPT;
 
@@ -2338,7 +2346,15 @@ private:
                                     n_past = std::min(n_past, slot.alora_invocation_start - 1);
                                 }
 
-                                const auto n_cache_reuse = slot.task->params.n_cache_reuse;
+                                auto n_cache_reuse = slot.task->params.n_cache_reuse;
+                                const bool is_mtp_request =
+                                    slot.spec != nullptr &&
+                                    slot.task->params.speculative.type == COMMON_SPECULATIVE_TYPE_MTP;
+
+                                if (is_mtp_request && n_cache_reuse > 0) {
+                                    SLT_WRN(slot, "MTP only supports continuous prefix reuse for now - ignoring n_cache_reuse = %d\n", n_cache_reuse);
+                                    n_cache_reuse = 0;
+                                }
 
                                 const bool can_cache_reuse =
                                     llama_memory_can_shift(llama_get_memory(ctx)) &&
@@ -2523,7 +2539,15 @@ private:
                             SLT_WRN(slot, "n_past was set to %d\n", n_past);
                         }
 
-                        slot.n_prompt_tokens_cache = n_past;
+                        if (slot.spec != nullptr &&
+                                slot.can_speculate() &&
+                                slot.task->params.speculative.type == COMMON_SPECULATIVE_TYPE_MTP) {
+                            const llama_pos target_prefix_len = std::max<llama_pos>(n_past, 0);
+                            const llama_pos draft_prefix_len = common_speculative_get_committed_prefix_len(slot.spec);
+                            slot.mtp_common_prefix_len = std::min(target_prefix_len, draft_prefix_len);
+                        }
+
+                        slot.n_prompt_tokens_cache     = n_past;
                         slot.n_prompt_tokens_processed = 0;
 
                         slot.prompt.tokens.keep_first(n_past);
@@ -2924,13 +2948,39 @@ private:
 
                     if (slot.can_speculate()) {
                         const auto & prompt_tokens = slot.prompt.tokens.get_text_tokens();
-                        common_speculative_begin(slot.spec, prompt_tokens);
-                        if (slot.task->params.speculative.type == COMMON_SPECULATIVE_TYPE_MTP && !prompt_tokens.empty()) {
-                            common_speculative_set_prompt_hidden_states(
-                                    slot.spec,
-                                    slot.mtp_prompt_hidden.data(),
-                                    prompt_tokens.size(),
-                                    llama_model_n_embd(model));
+                        if (slot.task->params.speculative.type == COMMON_SPECULATIVE_TYPE_MTP) {
+                            const int32_t n_embd = llama_model_n_embd(model);
+                            const llama_pos reuse_len = std::min<llama_pos>(
+                                    slot.mtp_common_prefix_len,
+                                    (llama_pos) prompt_tokens.size());
+                            llama_tokens prompt_tail_tokens(
+                                    prompt_tokens.begin() + reuse_len,
+                                    prompt_tokens.end());
+
+                            common_speculative_begin(slot.spec, prompt_tokens, reuse_len);
+
+                            const int64_t expected_hidden = (int64_t) prompt_tail_tokens.size()*n_embd;
+                            if ((int64_t) slot.mtp_prompt_hidden.size() != expected_hidden) {
+                                SLT_WRN(slot, "MTP prompt tail hidden size mismatch (%zu vs %lld) - clearing initial source\n",
+                                        slot.mtp_prompt_hidden.size(), (long long) expected_hidden);
+                                common_speculative_set_first_pass_source(
+                                        slot.spec,
+                                        llama_tokens(),
+                                        nullptr,
+                                        0,
+                                        n_embd,
+                                        reuse_len);
+                            } else {
+                                common_speculative_set_first_pass_source(
+                                        slot.spec,
+                                        prompt_tail_tokens,
+                                        expected_hidden > 0 ? slot.mtp_prompt_hidden.data() : nullptr,
+                                        prompt_tail_tokens.size(),
+                                        n_embd,
+                                        reuse_len);
+                            }
+                        } else {
+                            common_speculative_begin(slot.spec, prompt_tokens);
                         }
                     }
                 } else if (slot.state != SLOT_STATE_GENERATING) {
