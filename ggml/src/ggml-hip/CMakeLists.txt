@@ -11,8 +11,19 @@ endif()
 list(APPEND CMAKE_PREFIX_PATH  ${ROCM_PATH})
 list(APPEND CMAKE_PREFIX_PATH "${ROCM_PATH}/lib64/cmake")
 
-if (NOT DEFINED CMAKE_HIP_FLAGS_DEBUG)
-    set(CMAKE_HIP_FLAGS_DEBUG "-g -O2")
+if (WIN32)
+	# CMake on Windows doesn't support the HIP language yet
+	if (NOT DEFINED CMAKE_CXX_FLAGS_DEBUG)
+		set(CMAKE_CXX_FLAGS_DEBUG "-g -O2")
+	else()
+		string(REPLACE "-O0" "-O2" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
+		message(WARNING "Replaced CXX compiler's debug flag '-O0' with '-O2' due to bug at HIP compiler.")
+		set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g")
+	endif()
+else()
+	if (NOT DEFINED CMAKE_HIP_FLAGS_DEBUG)
+		set(CMAKE_HIP_FLAGS_DEBUG "-g -O2")
+	endif()
 endif()
 
 # CMake on Windows doesn't support the HIP language yet
