@@ -1897,8 +1897,9 @@ import sys
 from datetime import datetime
 from jinja2.sandbox import SandboxedEnvironment
 
-tmpl = json.loads(sys.argv[1])
-vars_json = json.loads(sys.argv[2])
+merged_input = json.loads(sys.stdin.buffer.read().decode("utf-8"))
+tmpl = merged_input["tmpl"]
+vars_json = merged_input["vars"]
 
 env = SandboxedEnvironment(
     trim_blocks=True,
@@ -1921,9 +1922,9 @@ print(result, end='')
 static void test_template_py(testing & t, const std::string & name, const std::string & tmpl, const json & vars, const std::string & expect) {
     t.test(name, [&tmpl, &vars, &expect](testing & t) {
         // Prepare arguments
-        // Force Ascii only JSON to prevent mismatch on Windows
-        std::string tmpl_json = json(tmpl).dump(-1, ' ', true);
-        std::string vars_json = vars.dump(-1, ' ', true);
+        json merged;
+        merged["tmpl"] = json(tmpl);
+        merged["vars"] = vars;
 
 #ifdef _WIN32
         const char * python_executable = "python.exe";
@@ -1931,7 +1932,7 @@ static void test_template_py(testing & t, const std::string & name, const std::s
         const char * python_executable = "python3";
 #endif
 
-        const char * command_line[] = {python_executable, "-c", py_script.c_str(), tmpl_json.c_str(), vars_json.c_str(), NULL};
+        const char * command_line[] = {python_executable, "-c", py_script.c_str(), NULL};
 
         struct subprocess_s subprocess;
         int options = subprocess_option_combined_stdout_stderr
@@ -1945,6 +1946,19 @@ static void test_template_py(testing & t, const std::string & name, const std::s
             t.assert_true("subprocess creation", false);
             return;
         }
+        FILE * p_stdin = subprocess_stdin(&subprocess);
+
+        // Write input
+        std::string input = merged.dump();
+        auto written = fwrite(input.c_str(), 1, input.size(), p_stdin);
+        if (written != input.size()) {
+            t.log("Failed to write complete input to subprocess stdin");
+            t.assert_true("subprocess stdin write", false);
+            subprocess_destroy(&subprocess);
+            return;
+        }
+        fflush(p_stdin);
+        fclose(p_stdin); // Close stdin to signal EOF to the Python process
 
         // Read output
         std::string output;
