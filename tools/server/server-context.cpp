@@ -1594,6 +1594,85 @@ private:
         queue_results.send(std::move(res));
     }
 
+    void send_audio_transcription(const server_slot & slot) {
+        auto res = std::make_unique<server_task_result_audio_transcription>();
+        res->id    = slot.task->id;
+        res->index = slot.task->index;
+
+        // the audio PCM data is stored in cli_files[0]
+        if (slot.task->cli_files.empty()) {
+            SLT_ERR(slot, "%s", "audio transcription task has no audio data\n");
+            send_error(*slot.task, "no audio data provided", ERROR_TYPE_INVALID_REQUEST);
+            return;
+        }
+
+        const auto & audio_buf = slot.task->cli_files[0];
+        const float * pcm_data = reinterpret_cast<const float *>(audio_buf.data());
+        size_t n_samples = audio_buf.size() / sizeof(float);
+
+        // run dual-stream transcription
+        llama_pos n_past = 0;
+        std::vector<llama_token> output_tokens;
+        int32_t ret = mtmd_helper_eval_voxtral_realtime(
+            mctx, ctx,
+            params_base.model.path.c_str(),
+            pcm_data, n_samples,
+            llama_n_batch(ctx),
+            512, // max_tokens
+            &n_past, &output_tokens);
+
+        if (ret != 0) {
+            SLT_ERR(slot, "audio transcription failed, ret = %d\n", ret);
+            send_error(*slot.task, "audio transcription failed", ERROR_TYPE_SERVER);
+            return;
+        }
+
+        // detokenize and clean up streaming tokens
+        std::string text;
+        for (const auto & tok : output_tokens) {
+            text += common_token_to_piece(ctx, tok);
+        }
+
+        // remove [STREAMING_PAD] and [STREAMING_WORD] tokens
+        std::string clean;
+        size_t pos = 0;
+        while (pos < text.size()) {
+            if (text.compare(pos, 15, "[STREAMING_PAD]") == 0) {
+                pos += 15;
+            } else if (text.compare(pos, 16, "[STREAMING_WORD]") == 0) {
+                pos += 16;
+            } else {
+                clean += text[pos];
+                pos++;
+            }
+        }
+
+        // collapse whitespace
+        std::string final_text;
+        bool last_was_space = false;
+        for (char c : clean) {
+            if (c == ' ' || c == '\n' || c == '\t') {
+                if (!last_was_space) {
+                    final_text += ' ';
+                    last_was_space = true;
+                }
+            } else {
+                final_text += c;
+                last_was_space = false;
+            }
+        }
+
+        // trim
+        while (!final_text.empty() && final_text.front() == ' ') final_text.erase(final_text.begin());
+        while (!final_text.empty() && final_text.back() == ' ') final_text.pop_back();
+
+        res->text     = final_text;
+        res->language = "en"; // TODO: detect language from model output
+
+        SLT_DBG(slot, "sending audio transcription, text = '%s'\n", res->text.c_str());
+        queue_results.send(std::move(res));
+    }
+
     //
     // Functions to process the task
     //
@@ -1680,6 +1759,7 @@ private:
             case SERVER_TASK_TYPE_INFILL:
             case SERVER_TASK_TYPE_EMBEDDING:
             case SERVER_TASK_TYPE_RERANK:
+            case SERVER_TASK_TYPE_AUDIO_TRANSCRIPTION:
                 {
                     // special case: if input is provided via CLI, tokenize it first
                     // otherwise, no need to tokenize as it's already done inside the HTTP thread
@@ -2810,6 +2890,14 @@ private:
                         continue; // continue loop of slots
                     }
 
+                    if (slot.task->type == SERVER_TASK_TYPE_AUDIO_TRANSCRIPTION) {
+                        // audio transcription uses dual-stream decode
+                        send_audio_transcription(slot);
+                        slot.release();
+                        slot.i_batch = -1;
+                        continue; // continue loop of slots
+                    }
+
                     GGML_ASSERT(slot.task->need_sampling());
 
                     // prompt evaluated for next-token prediction
@@ -3932,6 +4020,94 @@ void server_routes::init_routes() {
             top_n);
 
         res->ok(root);
+        return res;
+    };
+
+    this->post_audio_transcriptions = [this](const server_http_req & req) {
+        auto res = create_response();
+
+        if (!ctx_server.mctx || !mtmd_support_audio(ctx_server.mctx)) {
+            res->error(format_error_response(
+                "This server does not support audio transcription. "
+                "Start it with an audio-capable model and --mmproj",
+                ERROR_TYPE_NOT_SUPPORTED));
+            return res;
+        }
+
+        const json body = json::parse(req.body);
+
+        // expect: { "file": "<base64 audio>", "format": "wav"|"mp3"|"flac", "language": "en", "model": "..." }
+        std::string audio_b64 = json_value(body, "file", std::string());
+        if (audio_b64.empty()) {
+            res->error(format_error_response("\"file\" field with base64-encoded audio is required", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        std::string format   = json_value(body, "format",   std::string("wav"));
+        std::string language = json_value(body, "language",  std::string("en"));
+
+        // decode base64 audio to raw bytes
+        auto audio_bytes = server_base64_decode(audio_b64);
+        if (audio_bytes.empty()) {
+            res->error(format_error_response("failed to decode base64 audio data", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        // convert audio bytes to PCM float using mtmd helper
+        int sample_rate = mtmd_get_audio_sample_rate(ctx_server.mctx);
+        if (sample_rate < 0) {
+            res->error(format_error_response("model does not support audio input", ERROR_TYPE_NOT_SUPPORTED));
+            return res;
+        }
+
+        mtmd_bitmap * bmp = mtmd_helper_bitmap_init_from_buf(ctx_server.mctx, audio_bytes.data(), audio_bytes.size());
+        if (!bmp) {
+            res->error(format_error_response("failed to decode audio file", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        // extract PCM data from bitmap
+        const float * pcm = reinterpret_cast<const float *>(mtmd_bitmap_get_data(bmp));
+        size_t n_bytes = mtmd_bitmap_get_n_bytes(bmp);
+        size_t n_samples = n_bytes / sizeof(float);
+
+        // store PCM in a buffer that will be passed to the task
+        const unsigned char * pcm_bytes = reinterpret_cast<const unsigned char *>(pcm);
+        raw_buffer pcm_buf(pcm_bytes, pcm_bytes + n_bytes);
+
+        mtmd_bitmap_free(bmp);
+
+        // create task with audio data
+        auto & rd = res->rd;
+        {
+            server_task task = server_task(SERVER_TASK_TYPE_AUDIO_TRANSCRIPTION);
+            task.id = rd.get_new_id();
+
+            // use a minimal prompt (just BOS) to trigger the slot pipeline
+            server_tokens prompt_tokens;
+            llama_token bos = llama_vocab_bos(ctx_server.vocab);
+            prompt_tokens.push_back(bos);
+            task.tokens = std::move(prompt_tokens);
+
+            // store the PCM audio in cli_files
+            task.cli_files.push_back(std::move(pcm_buf));
+
+            rd.post_task(std::move(task));
+        }
+
+        // wait for the result
+        auto result = rd.next(req.should_stop);
+        if (!result) {
+            return res; // connection closed
+        }
+
+        if (result->is_error()) {
+            res->error(result->to_json());
+            return res;
+        }
+
+        GGML_ASSERT(dynamic_cast<server_task_result_audio_transcription*>(result.get()) != nullptr);
+        res->ok(result->to_json());
         return res;
     };
 

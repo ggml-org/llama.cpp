@@ -218,6 +218,10 @@ static inline raw_buffer base64_decode(const std::string & encoded_string) {
     return ret;
 }
 
+raw_buffer server_base64_decode(const std::string & encoded_string) {
+    return base64_decode(encoded_string);
+}
+
 //
 // server_tokens implementation
 //
