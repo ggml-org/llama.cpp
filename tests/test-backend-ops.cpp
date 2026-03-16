@@ -150,7 +150,8 @@ static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float m
     }
 }
 
-// SoA quantize/dequantize functions — declared here because ggml-quants.h is not in the test include path.
+// MXFP SoA quantize/dequantize (from ggml-quants.h, which is internal to ggml
+// and not in the test include path). Signatures must match ggml-quants.h exactly.
 typedef void (*mxfp_soa_dequantize_fn)(const void *, float *, int64_t);
 extern "C" {
     void quantize_row_mxfp4_soa(const float * GGML_RESTRICT x, void * GGML_RESTRICT dst, int64_t k);

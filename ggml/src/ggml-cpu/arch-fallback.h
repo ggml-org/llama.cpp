@@ -16,8 +16,8 @@
 #define ggml_vec_dot_q8_0_q8_0_generic ggml_vec_dot_q8_0_q8_0
 #define ggml_vec_dot_mxfp4_q8_0_generic ggml_vec_dot_mxfp4_q8_0
 #define ggml_vec_dot_nvfp4_q8_0_generic ggml_vec_dot_nvfp4_q8_0
-#define ggml_vec_dot_mxfp8_q8_0_generic       ggml_vec_dot_mxfp8_q8_0
-#define ggml_vec_dot_mxfp6_q8_0_generic  ggml_vec_dot_mxfp6_q8_0
+#define ggml_vec_dot_mxfp8_q8_0_generic ggml_vec_dot_mxfp8_q8_0
+#define ggml_vec_dot_mxfp6_q8_0_generic ggml_vec_dot_mxfp6_q8_0
 #define ggml_vec_dot_tq1_0_q8_K_generic ggml_vec_dot_tq1_0_q8_K
 #define ggml_vec_dot_tq2_0_q8_K_generic ggml_vec_dot_tq2_0_q8_K
 #define ggml_vec_dot_q2_K_q8_K_generic ggml_vec_dot_q2_K_q8_K
@@ -348,9 +348,9 @@
 // All other targets use the scalar generic as the public cpu function.
 #if !defined(__aarch64__) && !defined(__arm__) && !defined(_M_ARM) && !defined(_M_ARM64) && \
     !defined(__x86_64__) && !defined(__i386__) && !defined(_M_IX86) && !defined(_M_X64)
-#define dequantize_row_mxfp8_cpu_generic       dequantize_row_mxfp8_cpu
-#define dequantize_row_mxfp6_cpu_generic  dequantize_row_mxfp6_cpu
-#define dequantize_row_mxfp4_soa_cpu_generic      dequantize_row_mxfp4_soa_cpu
-#define dequantize_row_mxfp8_soa_cpu_generic      dequantize_row_mxfp8_soa_cpu
+#define dequantize_row_mxfp8_cpu_generic     dequantize_row_mxfp8_cpu
+#define dequantize_row_mxfp6_cpu_generic     dequantize_row_mxfp6_cpu
+#define dequantize_row_mxfp4_soa_cpu_generic dequantize_row_mxfp4_soa_cpu
+#define dequantize_row_mxfp8_soa_cpu_generic dequantize_row_mxfp8_soa_cpu
 #define dequantize_row_mxfp6_soa_cpu_generic dequantize_row_mxfp6_soa_cpu
 #endif
