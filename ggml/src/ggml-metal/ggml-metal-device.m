@@ -1616,10 +1616,19 @@ void ggml_metal_buffer_set_tensor(ggml_metal_buffer_t buf, struct ggml_tensor * 
     @autoreleasepool {
         // src
         void * data_ptr = (void *)(uintptr_t) data; // "const cast" the src data
-        id<MTLBuffer> buf_src = [buf->dev->mtl_device newBufferWithBytesNoCopy:data_ptr
-                                                               length:size
-                                                              options:MTLResourceStorageModeShared
-                                                          deallocator:nil];
+        id<MTLBuffer> buf_src;
+        if (buf->dev->props.has_unified_memory) {
+            buf_src = [buf->dev->mtl_device newBufferWithBytesNoCopy:data_ptr
+                                                             length:size
+                                                            options:MTLResourceStorageModeShared
+                                                        deallocator:nil];
+        } else {
+            // Discrete GPU (e.g. AMD FirePro D500): NoCopy+Shared not supported.
+            // Must copy data into a Managed buffer for blit transfer.
+            buf_src = [buf->dev->mtl_device newBufferWithBytes:data_ptr
+                                                       length:size
+                                                      options:MTLResourceStorageModeManaged];
+        }
 
         GGML_ASSERT(buf_src);
 
@@ -1673,10 +1682,17 @@ void ggml_metal_buffer_get_tensor(ggml_metal_buffer_t buf, const struct ggml_ten
         bid_src.offs += offset;
 
         // dst
-        id<MTLBuffer> buf_dst = [buf->dev->mtl_device newBufferWithBytesNoCopy:data
-                                                               length:size
-                                                              options:MTLResourceStorageModeShared
-                                                          deallocator:nil];
+        id<MTLBuffer> buf_dst;
+        if (buf->dev->props.has_unified_memory) {
+            buf_dst = [buf->dev->mtl_device newBufferWithBytesNoCopy:data
+                                                             length:size
+                                                            options:MTLResourceStorageModeShared
+                                                        deallocator:nil];
+        } else {
+            // Discrete GPU: allocate Managed buffer, will copy results back after blit
+            buf_dst = [buf->dev->mtl_device newBufferWithLength:size
+                                                       options:MTLResourceStorageModeManaged];
+        }
 
         GGML_ASSERT(buf_dst);
 
@@ -1696,6 +1712,11 @@ void ggml_metal_buffer_get_tensor(ggml_metal_buffer_t buf, const struct ggml_ten
 
         [cmd_buf commit];
         [cmd_buf waitUntilCompleted];
+
+        // Discrete GPU: copy data from Managed buffer back to host pointer
+        if (!buf->dev->props.has_unified_memory) {
+            memcpy(data, [buf_dst contents], size);
+        }
     }
 }
 
