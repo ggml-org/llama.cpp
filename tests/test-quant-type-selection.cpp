@@ -2,13 +2,13 @@
 
 #include "../src/llama-ext.h"
 
+#include "ggml-cpp.h"
 #include "gguf-model-data.h"
 
 #include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <map>
-#include <memory>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -78,36 +78,8 @@ static const char * llama_ftype_to_name(llama_ftype ftype) {
 }
 
 // ---------------------------------------------------------------------------
-// Mock tensor construction - may be better to extract this in the future
+// ggml_type name lookup
 // ---------------------------------------------------------------------------
-
-struct mock_tensor {
-    ggml_context_ptr ctx;
-    ggml_tensor *    tensor;
-};
-
-static mock_tensor make_mock_tensor(const std::string & name,
-                                    int64_t             ne0,
-                                    int64_t             ne1,
-                                    int64_t             ne2 = 1,
-                                    int64_t             ne3 = 1) {
-    struct ggml_init_params params = {
-        /*.mem_size   =*/ 2 * ggml_tensor_overhead(),
-        /*.mem_buffer =*/ nullptr,
-        /*.no_alloc   =*/ true,
-    };
-    ggml_context_ptr ctx(ggml_init(params));
-    ggml_tensor * t;
-    if (ne3 > 1) {
-        t = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F32, ne0, ne1, ne2, ne3);
-    } else if (ne2 > 1) {
-        t = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, ne0, ne1, ne2);
-    } else {
-        t = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, ne0, ne1);
-    }
-    ggml_set_name(t, name.c_str());
-    return { std::move(ctx), t };
-}
 
 static ggml_type ggml_type_from_name(const std::string & name) {
     for (int i = 0; i < GGML_TYPE_COUNT; i++) {
@@ -260,94 +232,44 @@ static const remote_model_spec model_specs[] = {
 
 static const int n_model_specs = (int) (sizeof(model_specs) / sizeof(model_specs[0]));
 
-// Determine llm_type from metadata.
-// Only LLM_TYPE_70B matters -> probably can/should be dropped in the future
-static llm_type infer_llm_type(llm_arch arch, const gguf_remote_model & remote) {
-    if (arch == LLM_ARCH_LLAMA && remote.n_layer == 80 && remote.n_head != remote.n_head_kv) {
-        return LLM_TYPE_70B;
-    }
-    return LLM_TYPE_UNKNOWN;
+static llama_model * build_mock_model_from_remote(const gguf_remote_model & remote) {
+    llama_quant_model_desc desc = {};
+    desc.architecture  = remote.architecture.c_str();
+    desc.n_embd        = remote.n_embd;
+    desc.n_ff          = remote.n_ff;
+    desc.n_layer       = remote.n_layer;
+    desc.n_head        = remote.n_head;
+    desc.n_head_kv     = remote.n_head_kv;
+    desc.n_expert      = remote.n_expert;
+    desc.n_embd_head_k = remote.n_embd_head_k;
+    desc.n_embd_head_v = remote.n_embd_head_v;
+    return llama_quant_model_from_metadata(&desc);
 }
 
-static std::unique_ptr<llama_model> build_mock_model_from_remote(const gguf_remote_model & remote) {
-    struct llama_model_params mparams = llama_model_default_params();
-    auto                      model   = std::make_unique<llama_model>(mparams);
+// Single ggml context holding all quantizable tensors for a model.
+struct mock_tensors {
+    ggml_context_ptr           ctx;
+    std::vector<ggml_tensor *> tensors;
+};
 
-    model->arch = llm_arch_from_string(remote.architecture);
-    model->type = infer_llm_type(model->arch, remote);
+static mock_tensors build_mock_tensors(const llama_quant *       qnt,
+                                       const gguf_remote_model & remote) {
+    const size_t ctx_size = remote.tensors.size() * ggml_tensor_overhead();
+    struct ggml_init_params params = { ctx_size, nullptr, true };
+    ggml_context_ptr ctx(ggml_init(params));
 
-    model->hparams.n_embd        = remote.n_embd;
-    model->hparams.n_embd_head_k_full = remote.n_embd_head_k;
-    model->hparams.n_embd_head_v_full = remote.n_embd_head_v;
-    model->hparams.n_layer       = remote.n_layer;
-    model->hparams.n_expert      = remote.n_expert;
-
-    for (uint32_t i = 0; i < remote.n_layer; i++) {
-        model->hparams.n_head_arr[i]    = remote.n_head;
-        model->hparams.n_head_kv_arr[i] = remote.n_head_kv;
-        model->hparams.n_ff_arr[i]      = remote.n_ff;
-    }
-
-    return model;
-}
-
-static std::vector<mock_tensor> build_mock_tensors(const gguf_remote_model &           remote,
-                                                   llm_arch                            arch,
-                                                   const llama_model_quantize_params & qparams) {
-    std::vector<mock_tensor> result;
+    std::vector<ggml_tensor *> result;
 
     for (const auto & t : remote.tensors) {
-        auto mt = make_mock_tensor(t.name, t.ne[0], t.ne[1], t.ne[2], t.ne[3]);
-        if (tensor_allows_quantization(&qparams, arch, mt.tensor)) {
-            result.push_back(std::move(mt));
+        ggml_tensor * gt = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F32,
+                                               t.ne[0], t.ne[1], t.ne[2], t.ne[3]);
+        ggml_set_name(gt, t.name.c_str());
+        if (llama_quant_tensor_allows_quantization(qnt, gt)) {
+            result.push_back(gt);
         }
     }
 
-    return result;
-}
-
-static std::string read_file_contents(const std::string & path) {
-    std::ifstream f(path);
-    if (!f.good()) {
-        return "";
-    }
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    return ss.str();
-}
-
-// ---------------------------------------------------------------------------
-// Compute quantization type assignments per target ftype
-// ---------------------------------------------------------------------------
-
-// Returns {tensor_name, assigned_type} for each tensor, in order.
-// TODO: should likely be moved as a member function of llama_quant and expose through the `llama-ext.h` interface
-static std::vector<std::pair<std::string, ggml_type>> compute_quant_types(llama_model &                    mdl,
-                                                                          const std::vector<mock_tensor> & tensors,
-                                                                          llama_ftype                      ftype) {
-    llama_model_quantize_params qparams = llama_model_quantize_default_params();
-    qparams.ftype                       = ftype;
-
-    // TODO: call llama_quant_init(...)
-    llama_quant qs(mdl, &qparams);
-
-    std::vector<tensor_metadata> metadata(tensors.size());
-    for (size_t i = 0; i < tensors.size(); ++i) {
-        metadata[i].name = tensors[i].tensor->name;
-    }
-    init_quantize_state_counters(qs, metadata);
-
-    ggml_type default_type = llama_ftype_get_default_type(ftype);
-
-    std::vector<std::pair<std::string, ggml_type>> result;
-    result.reserve(tensors.size());
-
-    for (size_t i = 0; i < tensors.size(); ++i) {
-        ggml_type got = llama_tensor_get_type(qs, &qparams, tensors[i].tensor, default_type, metadata[i]);
-        result.push_back({ metadata[i].name, got });
-    }
-
-    return result;
+    return { std::move(ctx), std::move(result) };
 }
 
 // ---------------------------------------------------------------------------
@@ -355,10 +277,10 @@ static std::vector<std::pair<std::string, ggml_type>> compute_quant_types(llama_
 // Use this when either adding new models or modifying quants
 // ---------------------------------------------------------------------------
 
-static std::string generate_snapshot(const std::string &              name,
-                                     const gguf_remote_model &        remote,
-                                     llama_model &                    mdl,
-                                     const std::vector<mock_tensor> & tensors) {
+static std::string generate_snapshot(const std::string &       name,
+                                     const gguf_remote_model & remote,
+                                     llama_quant *             qnt,
+                                     mock_tensors &            mt) {
     std::ostringstream out;
 
     out << "# Model: " << name << "\n";
@@ -380,12 +302,13 @@ static std::string generate_snapshot(const std::string &              name,
             continue;
         }
 
-        auto types = compute_quant_types(mdl, tensors, ft);
+        std::vector<ggml_type> result_types(mt.tensors.size());
+        llama_quant_compute_types(qnt, ft, mt.tensors.data(), result_types.data(), mt.tensors.size());
 
         out << "\n[" << fname << "] " << ggml_type_name(default_type) << "\n";
-        for (const auto & [name, type] : types) {
-            if (type != default_type) {
-                out << name << " " << ggml_type_name(type) << "\n";
+        for (size_t j = 0; j < mt.tensors.size(); j++) {
+            if (result_types[j] != default_type) {
+                out << ggml_get_name(mt.tensors[j]) << " " << ggml_type_name(result_types[j]) << "\n";
             }
         }
     }
@@ -418,21 +341,26 @@ static int run_generate(const std::string & snapshot_dir) {
         }
 
         const auto &                remote  = result.value();
-        auto                        model   = build_mock_model_from_remote(remote);
+        llama_model *               model   = build_mock_model_from_remote(remote);
         llama_model_quantize_params qparams = llama_model_quantize_default_params();
-        auto                        tensors = build_mock_tensors(remote, model->arch, qparams);
+        llama_quant *               qnt     = llama_quant_init(model, &qparams);
+        auto                        mt      = build_mock_tensors(qnt, remote);
 
-        std::string content = generate_snapshot(name, remote, *model, tensors);
+        std::string content = generate_snapshot(name, remote, qnt, mt);
         std::string path    = snapshot_dir + "/" + snapshot_file_from_name(name) + ".schema";
 
         std::ofstream f(path);
         if (!f.good()) {
             fprintf(stderr, "ERROR: could not write %s\n", path.c_str());
+            llama_quant_free(qnt);
+            llama_model_free(model);
             return 1;
         }
         f << content;
         n_written++;
         fprintf(stderr, "  wrote %s\n", path.c_str());
+        llama_quant_free(qnt);
+        llama_model_free(model);
     }
 
     fprintf(stderr, "%d files written\n", n_written);
@@ -443,9 +371,9 @@ static int run_generate(const std::string & snapshot_dir) {
 // Test mode: compare against snapshot files
 // ---------------------------------------------------------------------------
 
-static bool run_test_section(llama_model &                    mdl,
-                             const std::vector<mock_tensor> & tensors,
-                             const snapshot_section &         section) {
+static bool run_test_section(llama_quant *            qnt,
+                             mock_tensors &           mt,
+                             const snapshot_section & section) {
     // verify default_type matches what llama_ftype_get_default_type returns
     ggml_type computed_default = llama_ftype_get_default_type(section.ftype);
     if (computed_default != section.default_type) {
@@ -454,14 +382,18 @@ static bool run_test_section(llama_model &                    mdl,
         return false;
     }
 
-    auto types = compute_quant_types(mdl, tensors, section.ftype);
+    std::vector<ggml_type> result_types(mt.tensors.size());
+    llama_quant_compute_types(qnt, section.ftype, mt.tensors.data(), result_types.data(), mt.tensors.size());
 
     std::map<std::string, ggml_type> override_map(section.overrides.begin(), section.overrides.end());
 
     bool all_pass         = true;
     int  n_override_found = 0;
 
-    for (const auto & [name, got] : types) {
+    for (size_t i = 0; i < mt.tensors.size(); i++) {
+        const char * name = ggml_get_name(mt.tensors[i]);
+        ggml_type    got  = result_types[i];
+
         ggml_type expected = section.default_type;
         auto      it       = override_map.find(name);
         if (it != override_map.end()) {
@@ -470,7 +402,7 @@ static bool run_test_section(llama_model &                    mdl,
         }
 
         if (got != expected) {
-            printf("  FAIL  %-50s %-10s expected %s, got %s\n", name.c_str(), llama_ftype_to_name(section.ftype), ggml_type_name(expected), ggml_type_name(got));
+            printf("  FAIL  %-50s %-10s expected %s, got %s\n", name, llama_ftype_to_name(section.ftype), ggml_type_name(expected), ggml_type_name(got));
             all_pass = false;
         }
     }
@@ -502,14 +434,17 @@ static int run_remote_tests(const std::string & snapshot_dir, const char * argv0
         }
 
         const auto &                remote  = result.value();
-        auto                        model   = build_mock_model_from_remote(remote);
+        llama_model *               model   = build_mock_model_from_remote(remote);
         llama_model_quantize_params qparams = llama_model_quantize_default_params();
-        auto                        tensors = build_mock_tensors(remote, model->arch, qparams);
+        llama_quant *               qnt     = llama_quant_init(model, &qparams);
+        auto                        mt      = build_mock_tensors(qnt, remote);
 
         std::string                   snapshot_path = snapshot_dir + "/" + snapshot_file_from_name(name) + ".schema";
         std::vector<snapshot_section> sections;
         if (!parse_snapshot_file(snapshot_path, sections)) {
             printf("  SKIP  (could not read snapshot file: %s)\n\n", snapshot_path.c_str());
+            llama_quant_free(qnt);
+            llama_model_free(model);
             total_skip++;
             continue;
         }
@@ -518,7 +453,7 @@ static int run_remote_tests(const std::string & snapshot_dir, const char * argv0
         int model_fail = 0;
 
         for (const auto & section : sections) {
-            bool pass = run_test_section(*model, tensors, section);
+            bool pass = run_test_section(qnt, mt, section);
             if (pass) {
                 model_pass++;
             } else {
@@ -527,7 +462,7 @@ static int run_remote_tests(const std::string & snapshot_dir, const char * argv0
         }
 
         printf("  %s  %s: %d/%d ftype sections passed (%d tensors)\n", model_fail == 0 ? "PASS" : "FAIL", name.c_str(),
-               model_pass, model_pass + model_fail, (int) tensors.size());
+               model_pass, model_pass + model_fail, (int) mt.tensors.size());
         printf("\n");
 
         if (model_fail == 0) {
@@ -535,6 +470,9 @@ static int run_remote_tests(const std::string & snapshot_dir, const char * argv0
         } else {
             total_fail++;
         }
+
+        llama_quant_free(qnt);
+        llama_model_free(model);
     }
 
     printf("%d/%d models passed", total_pass, total_pass + total_fail);
@@ -556,10 +494,10 @@ int main(int argc, char ** argv) {
     bool        generate     = false;
 
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--snapshot-dir") == 0 && i + 1 < argc) {
-            snapshot_dir = argv[++i];
-        } else if (strcmp(argv[i], "--generate") == 0) {
+        if (strcmp(argv[i], "--generate") == 0) {
             generate = true;
+        } else if (strcmp(argv[i], "--snapshot-dir") == 0 && i + 1 < argc) {
+            snapshot_dir = argv[++i];
         }
     }
 
