@@ -298,10 +298,15 @@ class ModelBase:
                 scale = scale.float()
 
                 if block_size is not None:
+                    dim_offset = scale.ndim - len(block_size)
                     for i, size in enumerate(block_size):
-                        scale = scale.repeat_interleave(size, i)
+                        scale = scale.repeat_interleave(size, dim_offset + i)
                     # unpad the scale (e.g. when the tensor size isn't a multiple of the block size)
                     scale = scale[tuple(slice(0, size) for size in weight.shape)]
+
+                # align scale dims to weight for correct broadcasting (e.g. [128] -> [128, 1, 1])
+                while scale.ndim < weight.ndim:
+                    scale = scale.unsqueeze(-1)
 
                 return weight.float() * scale
 
@@ -393,13 +398,16 @@ class ModelBase:
             elif quant_method == "fp8":
                 block_size = quant_config.get("weight_block_size")
                 for name in self.model_tensors.keys():
-                    if name.endswith(".weight_scale_inv"):
+                    if name.endswith(".weight_scale_inv") or name.endswith("_scale_inv"):
                         weight_name = name.removesuffix("_scale_inv")
                         w = self.model_tensors[weight_name]
+                        self.model_tensors[weight_name] = w
                         s = self.model_tensors[name]
                         self.model_tensors[weight_name] = lambda w=w, s=s, bs=block_size: dequant_simple(w(), s(), bs)
                         tensors_to_remove.append(name)
                     if name.endswith(".activation_scale"):  # unused
+                        tensors_to_remove.append(name)
+                    if name.endswith("_activation_scale"):  # Mistral-Small-4-119B-2602, unused
                         tensors_to_remove.append(name)
                     # mistral format
                     if name.endswith(".qscale_weight"):
@@ -3031,10 +3039,18 @@ class LlavaVisionModel(MmprojModel):
     def get_token_id(self, token: str) -> int:
         tokenizer_config_file = self.dir_model / 'tokenizer_config.json'
         with open(tokenizer_config_file, "r", encoding="utf-8") as f:
-            added_tokens_decoder = json.load(f)['added_tokens_decoder']
-            for id_, token_data in added_tokens_decoder.items():
+            try:
+                added_tokens_decoder = json.load(f)['added_tokens_decoder']
+                for id_, token_data in added_tokens_decoder.items():
+                    if token_data["content"] == token:
+                        return int(id_)
+            except KeyError:
+                pass # fallthrough to tokenizer.json
+        with open(self.dir_model / "tokenizer.json", "r", encoding="utf-8") as f:
+            tokenizer_json = json.load(f)
+            for token_data in tokenizer_json["added_tokens"]:
                 if token_data["content"] == token:
-                    return int(id_)
+                    return int(token_data["id"])
         raise ValueError(f"Token '{token}' not found in tokenizer config.")
 
     def set_gguf_parameters(self):
@@ -3196,40 +3212,6 @@ class Llama4VisionModel(MmprojModel):
                 yield (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_MMPROJ_FC] + '.weight', data_torch)
             else:
                 yield from super().modify_tensors(data_torch, name, bid)
-
-
-@ModelBase.register(
-    "Mistral3ForConditionalGeneration",
-    "Ministral3ForCausalLM",
-)
-class Mistral3Model(LlamaModel):
-    model_arch = gguf.MODEL_ARCH.MISTRAL3
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # for compatibility, we use LLAMA arch for older models
-        # TODO: remove this once everyone has migrated to newer version of llama.cpp
-        if self.hparams.get("model_type") != "ministral3":
-            self.model_arch = gguf.MODEL_ARCH.LLAMA
-            self.gguf_writer.arch = gguf.MODEL_ARCH_NAMES[self.model_arch]
-            self.gguf_writer.add_architecture()
-            self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
-
-    def set_gguf_parameters(self):
-        super().set_gguf_parameters()
-        rope_params = self.rope_parameters
-        if self.hparams.get("model_type") == "ministral3":
-            assert rope_params, "ministral3 must have 'rope_parameters' config"
-            assert rope_params["rope_type"] == "yarn", "ministral3 rope_type must be 'yarn'"
-            self.gguf_writer.add_rope_scaling_yarn_log_mul(rope_params["mscale_all_dim"])
-            self.gguf_writer.add_attn_temperature_scale(rope_params["llama_4_scaling_beta"])
-
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
-        name = name.replace("language_model.", "")
-        if "multi_modal_projector" in name or "vision_tower" in name:
-            return
-
-        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("DeciLMForCausalLM")
@@ -8271,6 +8253,8 @@ class DeepseekV2Model(TextModel):
     # TODO @ngxson : remove this when we support MTP for deepseek models
     skip_mtp = True
 
+    merge_expert = True
+
     def set_vocab(self):
         try:
             self._set_vocab_gpt2()
@@ -8409,7 +8393,7 @@ class DeepseekV2Model(TextModel):
                 return
 
         # process the experts separately
-        if name.find("mlp.experts") != -1:
+        if self.merge_expert and name.find("mlp.experts") != -1:
             n_experts = self.hparams["n_routed_experts"]
             assert bid is not None
 
@@ -8466,6 +8450,68 @@ class DeepseekV2Model(TextModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@ModelBase.register(
+    "Mistral3ForConditionalGeneration",
+    "Ministral3ForCausalLM",
+)
+class Mistral3Model(TextModel):
+    class Ministral3Model(LlamaModel):
+        model_arch = gguf.MODEL_ARCH.MISTRAL3
+
+        def set_gguf_parameters(self):
+            super().set_gguf_parameters()
+            rope_params = self.rope_parameters
+            if self.hparams.get("model_type") == "ministral3":
+                assert rope_params, "ministral3 must have 'rope_parameters' config"
+                assert rope_params["rope_type"] == "yarn", "ministral3 rope_type must be 'yarn'"
+                self.gguf_writer.add_rope_scaling_yarn_log_mul(rope_params["mscale_all_dim"])
+                self.gguf_writer.add_attn_temperature_scale(rope_params["llama_4_scaling_beta"])
+
+        def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
+            name = name.replace("language_model.", "")
+            if "multi_modal_projector" in name or "vision_tower" in name:
+                return
+
+            yield from super().modify_tensors(data_torch, name, bid)
+
+    class Mistral4Model(DeepseekV2Model):
+        model_arch = gguf.MODEL_ARCH.MISTRAL4
+        skip_mtp = False # model contains no MTP layers, so no need to skip
+        merge_expert = False # experts are already stacked as 3D
+
+        def modify_tensors(self, data_torch, name, bid):
+            if name.endswith(".down_proj") or name.endswith(".gate_up_proj"):
+                name = name + ".weight"
+            yield from super().modify_tensors(data_torch, name, bid)
+
+    model_arch = gguf.MODEL_ARCH.MISTRAL3 # unused
+    impl: TextModel
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.hparams.get("model_type") == "mistral4":
+            self.impl = Mistral3Model.Mistral4Model(*args, **kwargs)
+        else:
+            self.impl = Mistral3Model.Ministral3Model(*args, **kwargs)
+
+    def set_vocab(self):
+        self.impl.set_vocab()
+
+    def set_gguf_parameters(self):
+        self.impl.set_gguf_parameters()
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
+        yield from self.impl.modify_tensors(data_torch, name, bid)
+
+    def prepare_tensors(self):
+        self.impl.prepare_tensors()
+
+    def write_vocab(self):
+        self.impl.write_vocab()
+
+    def write(self):
+        self.impl.write()
 
 
 @ModelBase.register("MiniMaxM2ForCausalLM")
