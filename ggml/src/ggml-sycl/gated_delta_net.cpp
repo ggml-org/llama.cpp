@@ -55,7 +55,7 @@ void gated_delta_net_sycl(const float *     q,
 #pragma unroll
     for (int r = 0; r < rows_per_lane; r++) {
         const int i = r * warp_size + lane;
-        s_shard[r]  = curr_state[i * S_v + col];
+        s_shard[r]  = curr_state[col * S_v + i];
     }
 
     for (int t = 0; t < n_tokens; t++) {
@@ -137,7 +137,7 @@ void gated_delta_net_sycl(const float *     q,
 #pragma unroll
     for (int r = 0; r < rows_per_lane; r++) {
         const int i          = r * warp_size + lane;
-        state[i * S_v + col] = s_shard[r];
+        state[col * S_v + i] = s_shard[r];
     }
 }
 
