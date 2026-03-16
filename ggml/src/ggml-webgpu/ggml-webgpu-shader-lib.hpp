@@ -186,6 +186,42 @@ struct ggml_webgpu_pad_pipeline_key_hash {
     }
 };
 
+/** Diag **/
+struct ggml_webgpu_diag_pipeline_key {
+    int type;
+
+    bool operator==(const ggml_webgpu_diag_pipeline_key & other) const { return type == other.type; }
+};
+
+struct ggml_webgpu_diag_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_diag_pipeline_key & key) const {
+        size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.type);
+        return seed;
+    }
+};
+
+/** Solve Tri **/
+struct ggml_webgpu_solve_tri_pipeline_key {
+    int type;
+    int n;
+    int k;
+
+    bool operator==(const ggml_webgpu_solve_tri_pipeline_key & other) const {
+        return type == other.type && n == other.n && k == other.k;
+    }
+};
+
+struct ggml_webgpu_solve_tri_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_solve_tri_pipeline_key & key) const {
+        size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.type);
+        ggml_webgpu_hash_combine(seed, key.n);
+        ggml_webgpu_hash_combine(seed, key.k);
+        return seed;
+    }
+};
+
 /** Scale **/
 
 struct ggml_webgpu_scale_pipeline_key {
@@ -481,6 +517,10 @@ class ggml_webgpu_shader_lib {
         unary_pipelines;                                               // type/op/inplace
     std::unordered_map<ggml_webgpu_scale_pipeline_key, webgpu_pipeline, ggml_webgpu_scale_pipeline_key_hash>
         scale_pipelines;                                               // inplace
+    std::unordered_map<ggml_webgpu_diag_pipeline_key, webgpu_pipeline, ggml_webgpu_diag_pipeline_key_hash>
+        diag_pipelines;                                                // type
+    std::unordered_map<ggml_webgpu_solve_tri_pipeline_key, webgpu_pipeline, ggml_webgpu_solve_tri_pipeline_key_hash>
+        solve_tri_pipelines;                                           // type
     std::unordered_map<ggml_webgpu_row_norm_pipeline_key, webgpu_pipeline, ggml_webgpu_row_norm_pipeline_key_hash>
         row_norm_pipelines;                                            // op/inplace
     std::unordered_map<ggml_webgpu_pad_pipeline_key, webgpu_pipeline, ggml_webgpu_pad_pipeline_key_hash>
@@ -504,8 +544,7 @@ class ggml_webgpu_shader_lib {
 
     std::unordered_map<ggml_webgpu_set_rows_pipeline_key, webgpu_pipeline, ggml_webgpu_set_rows_pipeline_key_hash>
         set_rows_pipelines;
-    std::unordered_map<ggml_webgpu_set_pipeline_key, webgpu_pipeline, ggml_webgpu_set_pipeline_key_hash>
-        set_pipelines;
+    std::unordered_map<ggml_webgpu_set_pipeline_key, webgpu_pipeline, ggml_webgpu_set_pipeline_key_hash> set_pipelines;
 
   public:
     ggml_webgpu_shader_lib(wgpu::Device device) { this->device = device; }
@@ -815,6 +854,78 @@ class ggml_webgpu_shader_lib {
         return scale_pipelines[key];
     }
 
+    webgpu_pipeline get_diag_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        ggml_webgpu_diag_pipeline_key key = { .type = context.dst->type };
+
+        auto it = diag_pipelines.find(key);
+        if (it != diag_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines;
+        std::string              variant = "diag";
+
+        switch (key.type) {
+            case GGML_TYPE_F32:
+                variant += "_f32";
+                break;
+            default:
+                GGML_ABORT("Unsupported type for diag shader");
+        }
+
+        defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+        auto processed           = preprocessor.preprocess(wgsl_diag, defines);
+        auto decisions           = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        decisions->wg_size       = context.max_wg_size;
+        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
+        pipeline.context         = decisions;
+        diag_pipelines[key]      = pipeline;
+        return diag_pipelines[key];
+    }
+
+    webgpu_pipeline get_solve_tri_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        ggml_webgpu_solve_tri_pipeline_key key = {
+            .type = context.dst->type,
+            .n    = (int) context.src0->ne[0],
+            .k    = (int) context.src1->ne[0],
+        };
+
+        auto it = solve_tri_pipelines.find(key);
+        if (it != solve_tri_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines;
+        std::string              variant = "solve_tri";
+
+        switch (key.type) {
+            case GGML_TYPE_F32:
+                variant += "_f32";
+                break;
+            default:
+                GGML_ABORT("Unsupported type for solve_tri shader");
+        }
+
+        const uint32_t wg_size       = std::min((uint32_t) key.n, context.max_wg_size);
+        const uint32_t k_tile        = wg_size;
+        const uint32_t bytes_per_row = ((uint32_t) key.n + wg_size) * GGML_WEBGPU_F32_SIZE_BYTES;
+        const uint32_t batch_n       = (uint32_t) (context.wg_mem_limit_bytes / bytes_per_row);
+
+        defines.push_back(std::string("N=") + std::to_string(key.n));
+        defines.push_back(std::string("WG_SIZE=") + std::to_string(wg_size));
+        defines.push_back(std::string("K_TILE=") + std::to_string(k_tile));
+        defines.push_back(std::string("BATCH_N=") + std::to_string(batch_n));
+
+        auto processed           = preprocessor.preprocess(wgsl_solve_tri, defines);
+        auto decisions           = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        decisions->wg_size       = wg_size;
+        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
+        pipeline.context         = decisions;
+        solve_tri_pipelines[key] = pipeline;
+        return solve_tri_pipelines[key];
+    }
+
     webgpu_pipeline get_row_norm_pipeline(const ggml_webgpu_shader_lib_context & context) {
         ggml_webgpu_row_norm_pipeline_key key = {
             .op      = context.dst->op,
@@ -849,9 +960,9 @@ class ggml_webgpu_shader_lib {
 
         defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
 
-        auto processed           = preprocessor.preprocess(wgsl_row_norm, defines);
-        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
-        row_norm_pipelines[key]  = pipeline;
+        auto            processed = preprocessor.preprocess(wgsl_row_norm, defines);
+        webgpu_pipeline pipeline  = ggml_webgpu_create_pipeline(device, processed, variant);
+        row_norm_pipelines[key]   = pipeline;
         return row_norm_pipelines[key];
     }
 
