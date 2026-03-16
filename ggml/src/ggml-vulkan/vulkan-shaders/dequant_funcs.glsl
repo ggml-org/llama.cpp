@@ -23,6 +23,7 @@ vec2 dequantize(uint ib, uint iqs, uint a_offset) {
 #endif
 
 #if defined(DATA_A_Q4_0)
+
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     const uint vui = uint(data_a[a_offset + ib].qs[iqs]);
     return (vec2(vui & 0xF, vui >> 4) - 8.0f);
@@ -31,6 +32,21 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
     const uint vui = uint(data_a_packed16[a_offset + ib].qs[iqs/2]);
     return (vec4(vui & 0xF, (vui >> 4) & 0xF, (vui >> 8) & 0xF, vui >> 12) - 8.0f);
 }
+
+#extension GL_EXT_shader_explicit_arithmetic_types: enable
+#if defined(GL_EXT_shader_explicit_arithmetic_types)
+
+f16vec2 dequantize_hf(uint ib, uint iqs, uint a_offset) {
+    const uint vui = uint(data_a[a_offset + ib].qs[iqs]);
+    return (f16vec2(vui & 0xF, vui >> 4) - float16_t(8.0));
+}
+f16vec4 dequantize4_hf(uint ib, uint iqs, uint a_offset) {
+    const uint vui = uint(data_a_packed16[a_offset + ib].qs[iqs/2]);
+    return (f16vec4(vui & 0xF, (vui >> 4) & 0xF, (vui >> 8) & 0xF, vui >> 12) - float16_t(8.0));
+}
+
+#endif //GL_EXT_shader_explicit_arithmetic_types
+
 #endif
 
 #if defined(DATA_A_Q4_1)
@@ -488,6 +504,16 @@ vec2 get_dm(uint ib, uint a_offset) {
 vec2 get_dm(uint ib, uint a_offset) {
     return vec2(float(data_a[a_offset + ib].d), 0);
 }
+
+#extension GL_EXT_shader_explicit_arithmetic_types: enable
+#ifdef GL_EXT_shader_explicit_arithmetic_types
+
+f16vec2 get_dm_hf(uint ib, uint a_offset) {
+    return f16vec2(data_a[a_offset + ib].d, 0);
+}
+
+#endif //GL_EXT_shader_explicit_arithmetic_types
+
 #endif
 
 #if defined(DATA_A_Q1_0)
