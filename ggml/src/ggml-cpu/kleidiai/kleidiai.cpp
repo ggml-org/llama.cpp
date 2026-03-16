@@ -1473,7 +1473,7 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
             if (op->src[0]->buffer && op->src[0]->buffer->buft == ggml_backend_cpu_kleidiai_buffer_type()) {
                 return (ggml::cpu::tensor_traits *) op->src[0]->extra;
             } else {
-                if(op->src[0]->type != GGML_TYPE_F16) {
+                if (op->src[0]->type != GGML_TYPE_F16) {
                     return nullptr;
                 }
                 std::array<ggml_kleidiai_kernels *, GGML_KLEIDIAI_MAX_KERNEL_SLOTS> kernel_chain;
