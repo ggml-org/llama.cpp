@@ -1257,9 +1257,6 @@ json convert_responses_to_chatcmpl(const json & response_body) {
 
                 for (const auto & output_text : item.at("content")) {
                     const std::string type = json_value(output_text, "type", std::string());
-                    if (type != "output_text" && type != "refusal") {
-                        throw std::invalid_argument("'type' must be 'output_text' or 'refusal'");
-                    }
                     if (type == "output_text") {
                         if (!exists_and_is_string(output_text, "text")) {
                             throw std::invalid_argument("'Output text' requires 'text'");
