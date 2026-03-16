@@ -1278,6 +1278,116 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
     return data;
 }
 
+// MiroThinker - uses MCP style toolcalling
+static common_chat_params common_chat_params_init_mirothinker(const common_chat_template &    tmpl,
+                                                          const autoparser::templates_params & inputs) {
+    common_chat_params data;
+
+    data.prompt             = common_chat_template_direct_apply(tmpl, inputs);
+    data.format             = COMMON_CHAT_FORMAT_PEG_NATIVE;
+    data.supports_thinking  = true;
+    data.thinking_start_tag = "<think>";
+    data.thinking_end_tag   = "</think>";
+    data.preserved_tokens  = {
+        "<think>",
+        "</think>",
+    };
+
+    auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
+    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+    auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+
+    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+        // MiroThinker Thinking format:
+        // - Reasoning: <think>{reasoning}</think>
+        // - Content: text after reasoning
+        // - Tool calls section:
+        //   <use_mcp_tool>
+        //   <server_name>{server_name}</server_name>
+        //   <tool_name>{tool_name}</tool_name>
+        //   <arguments>
+        //   {json_args}
+        //   </arguments>
+        //   ...
+        //   </use_mcp_tool>
+
+        auto reasoning = extract_reasoning ? p.optional("<think>" + p.reasoning(p.until("</think>")) + "</think>") : p.eps();
+
+        // Tool call markers
+        const std::string SECTION_BEGIN = "<use_mcp_tool>";
+        const std::string SECTION_END   = "</use_mcp_tool>";
+        const std::string CALL_BEGIN    = "<server_name>";
+        const std::string ARGS_BEGIN    = "<arguments>";
+        const std::string CALL_END      = "</arguments>";
+
+        auto end = p.end();
+
+        // Content only parser (no tools)
+        if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
+            return reasoning + p.content(p.rest()) + end;
+        }
+
+        // Build tool call parsers for each available function
+        // Function name format is: <tool_name>{tool_name}</tool_name>
+        // We need to match: {what_ever}</server_name>{spaces}<tool_name>{tool_name}</tool_name>
+        auto tool_choice = p.choice();
+        foreach_function(inputs.tools, [&](const json & tool) {
+            const auto & function = tool.at("function");
+            std::string  name     = function.at("name");
+            const auto & schema   = function.at("parameters");
+
+            // Match: {what_ever}</server_name>{spaces}<tool_name>{tool_name}</tool_name>
+            auto tool_parser = p.tool(
+                p.tool_open(
+                    p.until("</server_name>") +
+                    p.literal("</server_name>") +
+                    p.space() +
+                    p.literal("<tool_name>") +
+                    p.tool_name(p.literal(name)) +
+                    p.literal(ARGS_BEGIN)
+                ) + p.space() +
+                p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", schema)) +
+                p.space() + p.tool_close(p.literal(CALL_END))
+            );
+
+            tool_choice |= p.rule("tool-" + name, tool_parser);
+        });
+
+        // Tool calls section: <use_mcp_tool> tool_calls </use_mcp_tool>
+        auto min_calls  = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0;
+        auto max_calls  = inputs.parallel_tool_calls ? -1 : 1;
+        auto tool_calls = p.trigger_rule("tool-calls",
+            p.literal(SECTION_BEGIN) + p.space() +
+            p.rule("tool-call", p.repeat(CALL_BEGIN + tool_choice, min_calls, max_calls) +
+            p.space() + p.literal(SECTION_END))
+        );
+
+        auto content_before_tools = p.content(p.until(SECTION_BEGIN));
+
+        return reasoning + content_before_tools + tool_calls + end;
+    });
+
+    data.parser = parser.save();
+
+    if (include_grammar) {
+        data.grammar_lazy = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
+        data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function = tool.at("function");
+                auto         schema   = function.at("parameters");
+                builder.resolve_refs(schema);
+            });
+            parser.build_grammar(builder, data.grammar_lazy);
+        });
+
+        data.grammar_triggers = {
+            { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<use_mcp_tool>" }
+        };
+    }
+
+    return data;
+}
+
 // LFM2 format:
 // - Reasoning: <think>{reasoning}</think> (optional, only if enable_thinking is true)
 // - Content: text after reasoning (optional)
@@ -1586,6 +1696,14 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         src.find("<|tool_call_begin|>") != std::string::npos) {
         LOG_DBG("Using specialized template: Kimi K2 Thinking\n");
         return common_chat_params_init_kimi_k2(tmpl, params);
+    }
+
+    // MiroThinker - uses MCP style toolcalling <use_mcp_tool> ... </use_mcp_tool>
+    // Detection: template has "</use_mcp_tool>" and "</server_name>"
+    if (src.find("</use_mcp_tool>") != std::string::npos &&
+        src.find("</server_name>") != std::string::npos) {
+        LOG_DBG("Using specialized template: MiroThinker\n");
+        return common_chat_params_init_mirothinker(tmpl, params);
     }
 
     // LFM2 - uses <|tool_list_start|>/<|tool_list_end|> markers and <|tool_call_start|>[name(args)]<|tool_call_end|> format
