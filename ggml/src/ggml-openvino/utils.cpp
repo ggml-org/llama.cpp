@@ -495,7 +495,7 @@ bool is_model_splitted(ggml_cgraph * cgraph) {
         }
     }
     // if all nodes's src node's src is not come from the nodes in the model, we think the model is splitted. This is a complementary check for the above check, because for some special case like the output node is not used by any node, the use count and input use count are both 0, we can not determine whether the model is splitted or not just based on the first check.
-    auto model_weights = GgmlOvDecoder::create_weight_nodes(cgraph);
+    auto model_weights = GgmlOvDecoder::create_weight_nodes(cgraph, true);
     std::set<ggml_tensor *> model_nodes(cgraph->nodes, cgraph->nodes + cgraph->n_nodes);
     // leaf nodes
     std::set<ggml_tensor *> model_leafs(cgraph->leafs, cgraph->leafs + cgraph->n_leafs);
