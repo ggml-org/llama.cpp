@@ -748,14 +748,6 @@ static void moe_prestage_popular_experts() {
     std::lock_guard<std::mutex> lock(g_moe_expert_meta_mutex);
     if (g_moe_expert_meta.empty()) return;
 
-    // Get GPU0 unified cache and available VRAM
-    const int device = 0;
-    size_t avail = ggml_sycl::unified_cache_available_for_compute(device);
-    if (avail == 0) return;
-
-    ggml_sycl::unified_cache * cache = ggml_sycl::get_unified_cache_for_device(device);
-    if (!cache) return;
-
     // Group experts by layer_id, sort each group by popularity rank
     std::unordered_map<int, std::vector<const moe_expert_meta *>> by_layer;
     for (const auto & meta : g_moe_expert_meta) {
@@ -765,17 +757,19 @@ static void moe_prestage_popular_experts() {
     const int n_layers = static_cast<int>(by_layer.size());
     if (n_layers == 0) return;
 
-    // Compute slots per layer: spread VRAM budget evenly across layers
     const size_t expert_bytes = g_moe_expert_meta[0].bytes;
     if (expert_bytes == 0) return;
-    const size_t total_slots  = avail / expert_bytes;
-    const size_t slots_per_layer = std::max(size_t(1), total_slots / static_cast<size_t>(n_layers));
 
-    int prestaged = 0;
-    int skipped   = 0;
+    // Phase 1: Pre-stage popular experts to GPU0 VRAM (skip if no budget).
+    // When GPU0 VRAM is fully used for dense weights + KV cache (e.g. 120B model),
+    // avail == 0 and Phase 1 is skipped entirely. Phase 2 still runs for secondary GPUs.
+    const int device = 0;
+    size_t avail = ggml_sycl::unified_cache_available_for_compute(device);
+    ggml_sycl::unified_cache * cache = ggml_sycl::get_unified_cache_for_device(device);
 
+    // Sort all layers by popularity rank BEFORE Phase 1 or Phase 2 —
+    // both phases iterate experts in popularity order.
     for (auto & [lid, experts] : by_layer) {
-        // Sort by popularity rank (lower = more popular)
         std::sort(experts.begin(), experts.end(),
                   [&](const moe_expert_meta * a, const moe_expert_meta * b) {
                       auto pa = ptable.get(a->layer_id, a->expert_idx);
@@ -784,71 +778,83 @@ static void moe_prestage_popular_experts() {
                       int rb = (pb.popularity_rank >= 0) ? pb.popularity_rank : INT_MAX;
                       return ra < rb;
                   });
+    }
 
-        size_t staged_this_layer = 0;
-        for (const auto * meta : experts) {
-            if (staged_this_layer >= slots_per_layer) break;
+    int prestaged = 0;
+    int skipped   = 0;
+    size_t slots_per_layer = 0;
 
-            // Skip experts already in VRAM
-            auto placement = ptable.get(meta->layer_id, meta->expert_idx);
-            if (placement.device_ptr != nullptr) {
-                skipped++;
-                continue;
-            }
+    if (avail > 0 && cache) {
+        // Compute slots per layer: spread VRAM budget evenly across layers
+        const size_t total_slots  = avail / expert_bytes;
+        slots_per_layer = std::max(size_t(1), total_slots / static_cast<size_t>(n_layers));
 
-            // Build cache key
-            ggml_sycl_cache_id key = ggml_sycl_get_moe_expert_cache_key(
-                meta->tensor, meta->extra, meta->expert_idx);
-            if (!key.valid) continue;
+        for (auto & [lid, experts] : by_layer) {
+            size_t staged_this_layer = 0;
+            for (const auto * meta : experts) {
+                if (staged_this_layer >= slots_per_layer) break;
 
-            // Build SOA layout request
-            const size_t soa_bytes = ggml_sycl_layout_bytes_for_dims(
-                meta->type, meta->ne0, meta->ne1, GGML_LAYOUT_SOA, device);
-            const size_t dst_bytes = (soa_bytes > 0) ? soa_bytes : meta->bytes;
-
-            ggml_sycl_reorder_fill_ctx reorder_ctx{};
-            reorder_ctx.type        = meta->type;
-            reorder_ctx.ncols       = meta->ne0;
-            reorder_ctx.nrows       = meta->ne1;
-            reorder_ctx.nbytes      = meta->bytes;
-            reorder_ctx.dst_bytes   = dst_bytes;
-            reorder_ctx.layout      = GGML_LAYOUT_SOA;
-            reorder_ctx.src_is_device = false;
-            reorder_ctx.device_id   = device;
-
-            ggml_sycl::cache_layout_request req{};
-            req.key              = key;
-            req.src_ptr          = meta->data_ptr;
-            req.src_size         = meta->bytes;
-            req.dst_size         = dst_bytes;
-            req.type             = ggml_sycl::cache_entry_type::MOE_EXPERT;
-            req.layer_id         = meta->layer_id;
-            req.expert_id        = meta->expert_idx;
-            req.layout           = GGML_LAYOUT_SOA;
-            req.validate_content = false;
-            req.fill_fn          = ggml_sycl_fill_reordered_host;
-            req.fill_ctx         = &reorder_ctx;
-
-            try {
-                auto result = cache->ensure_cached_layout(req, {});
-                if (result.status == ggml_sycl::cache_layout_status::READY ||
-                    result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
-                    if (result.device_ptr) {
-                        ptable.set_device_ptr(meta->layer_id, meta->expert_idx, device, result.device_ptr);
-                    }
-                    prestaged++;
-                    staged_this_layer++;
+                // Skip experts already in VRAM
+                auto placement = ptable.get(meta->layer_id, meta->expert_idx);
+                if (placement.device_ptr != nullptr) {
+                    skipped++;
+                    continue;
                 }
-            } catch (...) {
-                // VRAM exhausted — stop pre-staging
-                break;
+
+                // Build cache key
+                ggml_sycl_cache_id key = ggml_sycl_get_moe_expert_cache_key(
+                    meta->tensor, meta->extra, meta->expert_idx);
+                if (!key.valid) continue;
+
+                // Build SOA layout request
+                const size_t soa_bytes = ggml_sycl_layout_bytes_for_dims(
+                    meta->type, meta->ne0, meta->ne1, GGML_LAYOUT_SOA, device);
+                const size_t dst_bytes = (soa_bytes > 0) ? soa_bytes : meta->bytes;
+
+                ggml_sycl_reorder_fill_ctx reorder_ctx{};
+                reorder_ctx.type        = meta->type;
+                reorder_ctx.ncols       = meta->ne0;
+                reorder_ctx.nrows       = meta->ne1;
+                reorder_ctx.nbytes      = meta->bytes;
+                reorder_ctx.dst_bytes   = dst_bytes;
+                reorder_ctx.layout      = GGML_LAYOUT_SOA;
+                reorder_ctx.src_is_device = false;
+                reorder_ctx.device_id   = device;
+
+                ggml_sycl::cache_layout_request req{};
+                req.key              = key;
+                req.src_ptr          = meta->data_ptr;
+                req.src_size         = meta->bytes;
+                req.dst_size         = dst_bytes;
+                req.type             = ggml_sycl::cache_entry_type::MOE_EXPERT;
+                req.layer_id         = meta->layer_id;
+                req.expert_id        = meta->expert_idx;
+                req.layout           = GGML_LAYOUT_SOA;
+                req.validate_content = false;
+                req.fill_fn          = ggml_sycl_fill_reordered_host;
+                req.fill_ctx         = &reorder_ctx;
+
+                try {
+                    auto result = cache->ensure_cached_layout(req, {});
+                    if (result.status == ggml_sycl::cache_layout_status::READY ||
+                        result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
+                        if (result.device_ptr) {
+                            ptable.set_device_ptr(meta->layer_id, meta->expert_idx, device, result.device_ptr);
+                        }
+                        prestaged++;
+                        staged_this_layer++;
+                    }
+                } catch (...) {
+                    // VRAM exhausted — stop pre-staging
+                    break;
+                }
             }
         }
     }
 
     GGML_LOG_INFO("[MOE-PRESTAGE] Pre-staged %d popular experts to GPU0 VRAM "
-                  "(%d already cached, %zu slots/layer, %d layers)\n",
-                  prestaged, skipped, slots_per_layer, n_layers);
+                  "(%d already cached, %zu slots/layer, %d layers, avail=%zu)\n",
+                  prestaged, skipped, slots_per_layer, n_layers, avail);
 
     // Phase 2: Fill secondary GPUs with overflow popular experts (expert-split).
     // Experts already placed on GPU0 are skipped; next-most-popular overflow
@@ -28489,7 +28495,12 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                         g_moe_fusion.cpu_indices.push_back(ci);
                                         // Async-promote this expert to VRAM for the next token.
                                         // Uses SOA-correct caching via unified cache (Change 0+1).
-                                        g_expert_prefetchers[ctx.device].hint(cur_layer_hash, eid);
+                                        // Skip hint on GPU0 when it has no expert cache budget
+                                        // (all VRAM used for dense weights + KV cache).
+                                        if (pf_gate.is_initialized()
+                                            && ggml_sycl::unified_cache_available_for_compute(ctx.device) > 0) {
+                                            pf_gate.hint(cur_layer_hash, eid);
+                                        }
                                     }
                                 }
                             }
@@ -29743,6 +29754,24 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 n_tasks++;
             }
 
+            // One-shot routing diagnostic for CPU-TG fast path
+            {
+                size_t n_secondary_total = 0;
+                if (have_secondary_fast) {
+                    for (int d = 1; d < n_gpu_devs_fast; d++) {
+                        n_secondary_total += sec_entries_fast[d].size();
+                    }
+                }
+                static std::atomic<int> route_log_fast{0};
+                if (route_log_fast.fetch_add(1, std::memory_order_relaxed) < 5) {
+                    GGML_LOG_INFO("[CPU-TG-ROUTE] layer=%d: GPU0=%zu secondary=%zu CPU=%d "
+                                  "skipped=%d ptable=%d\n",
+                                  layer_id_fast, n_gpu0, n_secondary_total, n_tasks,
+                                  n_sec_skipped,
+                                  placement_table_pre.is_initialized() ? 1 : 0);
+                }
+            }
+
             // ---------------------------------------------------------------
             // GPU MMVQ Probe: measure real GPU dispatch overhead for MXFP4
             // experts by force-dispatching a subset through mmvq_moe_batched_dispatch.
@@ -29950,34 +29979,10 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 }
             }
 
-            // Call batched compute inline — no thread pool, no future, no deferred scatter.
-            // ggml_sycl_cpu_expert_mul_mat_batched handles activation pre-quantization
-            // and TBB parallel row dispatch with multi-row SIMD kernels internally.
-            if (n_tasks > 0) {
-                // Wait for activation D2H to complete before CPU reads the data.
-                // The DMA was submitted earlier and has been running in parallel
-                // with routing/placement work above.
-                if (act_d2h_pending) {
-                    act_d2h_evt.wait();
-                    act_d2h_pending = false;
-                }
-                ggml_sycl_cpu_expert_mul_mat_batched(tasks_ptr, n_tasks);
-
-                // Renormalize non-skipped expert outputs so the downstream
-                // weighted sum preserves the original magnitude.
-                if (renorm_scale != 1.0f) {
-                    for (int ti = 0; ti < n_tasks; ti++) {
-                        float * out = tasks_ptr[ti].output_host;
-                        for (int j = 0; j < tasks_ptr[ti].N; j++) {
-                            out[j] *= renorm_scale;
-                        }
-                    }
-                }
-            }
-
-            // --- Dispatch secondary GPU experts (multi-GPU mode) ---
-            // These run concurrently with CPU compute above.  Results are
-            // deferred to flush_pending_secondary_scatter_if_consumed().
+            // --- Dispatch secondary GPU experts FIRST (multi-GPU mode) ---
+            // Submit B50 MMVQ kernels BEFORE CPU compute so they run
+            // concurrently on B50's IOQ while CPU threads do vec_dot.
+            // Results are deferred to flush_pending_secondary_scatter_if_consumed().
             bool any_secondary_dispatched = false;
             if (have_secondary_fast) {
                 for (int d = 1; d < n_gpu_devs_fast; d++) {
@@ -30006,7 +30011,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                             sec_entries_fast[d], d, sctx, cpu_fallback_fast);
                     }
                 }
-                // CPU fallback for any experts that failed secondary dispatch
+                // CPU fallback for any experts that failed secondary dispatch —
+                // add to task array so they are included in the batched CPU call below.
                 if (!cpu_fallback_fast.empty()) {
                     for (const auto & e : cpu_fallback_fast) {
                         const size_t ci_fb = static_cast<size_t>(e.iid1) * static_cast<size_t>(n_ids_f) + static_cast<size_t>(e.id);
@@ -30020,8 +30026,32 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         tasks_ptr[n_tasks].N           = static_cast<int>(N);
                         n_tasks++;
                     }
-                    ggml_sycl_cpu_expert_mul_mat_batched(tasks_ptr + (n_tasks - static_cast<int>(cpu_fallback_fast.size())),
-                                                        static_cast<int>(cpu_fallback_fast.size()));
+                }
+            }
+
+            // --- CPU expert compute (runs concurrent with B50 kernels above) ---
+            // ggml_sycl_cpu_expert_mul_mat_batched handles activation pre-quantization
+            // and TBB parallel row dispatch with multi-row SIMD kernels internally.
+            // Includes both originally-routed CPU tasks and secondary GPU fallbacks.
+            if (n_tasks > 0) {
+                // Wait for activation D2H to complete before CPU reads the data.
+                // The DMA was submitted earlier and has been running in parallel
+                // with routing/placement work above.
+                if (act_d2h_pending) {
+                    act_d2h_evt.wait();
+                    act_d2h_pending = false;
+                }
+                ggml_sycl_cpu_expert_mul_mat_batched(tasks_ptr, n_tasks);
+
+                // Renormalize non-skipped expert outputs so the downstream
+                // weighted sum preserves the original magnitude.
+                if (renorm_scale != 1.0f) {
+                    for (int ti = 0; ti < n_tasks; ti++) {
+                        float * out = tasks_ptr[ti].output_host;
+                        for (int j = 0; j < tasks_ptr[ti].N; j++) {
+                            out[j] *= renorm_scale;
+                        }
+                    }
                 }
             }
 
@@ -30050,23 +30080,35 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             // run asynchronously while the host proceeds with other graph ops.
             // The deferred wait at the top of this path drains tl_pending_scatter
             // before tl_out_pinned is reused, preventing data races.
-            if (scatter_contiguous && ne12 == 1 && n_gpu0 == 0) {
-                // Single bulk H2D copy — safe only when ALL slots are CPU-computed.
+            if (scatter_contiguous && ne12 == 1 && n_gpu0 == 0 && !any_secondary_dispatched) {
+                // Single bulk H2D copy — safe only when ALL slots are CPU-computed
+                // (no GPU0 MMVQ results and no secondary GPU results to preserve).
                 tl_pending_scatter.push_back(stream->memcpy(dst_d, out_src,
                                n_cpu * static_cast<size_t>(N) * sizeof(float)));
             } else {
                 // Per-slot scatter: skip GPU0-routed and secondary-routed slots
                 // whose results are written directly to device dst by MMVQ.
-                // Build a set of GPU0-routed slot indices for O(1) lookup.
-                std::unordered_set<size_t> gpu0_slots;
+                // Build a set of GPU-routed slot indices for O(1) lookup.
+                std::unordered_set<size_t> gpu_routed_slots;
                 for (size_t gi = 0; gi < n_gpu0; gi++) {
                     size_t ci = static_cast<size_t>(g0_iid1s[gi]) * static_cast<size_t>(n_ids_f) +
                                 static_cast<size_t>(g0_ids[gi]);
-                    gpu0_slots.insert(ci);
+                    gpu_routed_slots.insert(ci);
+                }
+                // Also skip slots routed to secondary GPUs — results arrive via
+                // g_pending_secondary_scatter and are written directly to device dst.
+                if (any_secondary_dispatched) {
+                    for (int d = 1; d < n_gpu_devs_fast; d++) {
+                        for (const auto & e : sec_entries_fast[d]) {
+                            size_t ci = static_cast<size_t>(e.iid1) * static_cast<size_t>(n_ids_f) +
+                                        static_cast<size_t>(e.id);
+                            gpu_routed_slots.insert(ci);
+                        }
+                    }
                 }
                 for (size_t ci = 0; ci < n_cpu; ci++) {
-                    // Skip slots handled by GPU0 MMVQ — results written directly to device dst
-                    if (gpu0_slots.count(ci)) continue;
+                    // Skip slots handled by GPU MMVQ — results written directly to device dst
+                    if (gpu_routed_slots.count(ci)) continue;
                     const int64_t iid1 = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_f));
                     const int64_t id   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_f));
                     char * dst_slot = dst_d + id * nb1 + iid1 * nb2;
@@ -31154,14 +31196,20 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 // get prefetched into that device's LRU pool.
                 auto & placement_tbl = ggml_sycl::get_expert_placement_table();
                 const int n_gpu_hint = ggml_sycl_info().total_gpu_count;
+                // Skip GPU0 expert hint() when GPU0 has no expert cache budget.
+                // All GPU0 VRAM is used for dense layer weights + KV cache.
+                // This avoids ~2-5us overhead per hint (mutex + hash lookups)
+                // for 36 MoE layers * N predicted experts per token.
+                const bool gpu0_has_expert_budget =
+                    g_expert_prefetchers[ctx.device].is_initialized()
+                    && ggml_sycl::unified_cache_available_for_compute(ctx.device) > 0;
                 auto route_hint_to_device = [&](int hint_layer_id, const std::vector<int> & experts) {
                     for (int eid : experts) {
-                        // Route to GPU0's prefetcher (always, for VRAM-resident experts).
-                        auto & pf0 = g_expert_prefetchers[ctx.device];
-                        if (pf0.is_initialized()) {
-                            pf0.hint(hint_layer_id, eid);
+                        // Route to GPU0's prefetcher only if it has expert cache budget.
+                        if (gpu0_has_expert_budget) {
+                            g_expert_prefetchers[ctx.device].hint(hint_layer_id, eid);
                         }
-                        // Also route to secondary GPUs' prefetchers for demand-driven LRU caching.
+                        // Route to secondary GPUs' prefetchers for demand-driven LRU caching.
                         // hint_locked() will skip experts whose data_ptr is device
                         // VRAM (no P2P), and only prefetch host-accessible experts.
                         for (int d = 1; d < n_gpu_hint; d++) {
