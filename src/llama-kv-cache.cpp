@@ -1608,7 +1608,7 @@ size_t llama_kv_cache::size_ik_bytes() const {
     size_t size_ik_bytes = 0;
 
     for (const auto & layer : layers) {
-        size_ik_bytes += ggml_nbytes(layer.ik);
+        size_ik_bytes += layer.ik ? ggml_nbytes(layer.ik) : 0;
     }
 
     return size_ik_bytes;
