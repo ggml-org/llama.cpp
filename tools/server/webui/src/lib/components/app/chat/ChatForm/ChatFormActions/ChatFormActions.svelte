@@ -65,7 +65,8 @@
 	$effect(() => {
 		if (conversationModel) {
 			modelsStore.selectModelByName(conversationModel);
-		} else if (isRouter && modelsStore.loadedModelIds.length > 0) {
+		} else if (isRouter && !modelsStore.selectedModelId && modelsStore.loadedModelIds.length > 0) {
+			// auto-select the first loaded model only when nothing is selected yet
 			const first = modelOptions().find((m) => modelsStore.loadedModelIds.includes(m.model));
 			if (first) modelsStore.selectModelById(first.id);
 		}
