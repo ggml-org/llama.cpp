@@ -29,7 +29,7 @@
         {%- endif %}
         {{- "### Tool name: " + function_name(tool) + "\n" }}
         {{- "Description: " + function_description(tool) + "\n" }}
-        {{- "Input JSON schema: " + (function_parameters(tool) | tojson(ensure_ascii=False)) + "\n" }}
+        {{- "Input JSON schema: " + (function_parameters(tool) | tojson) + "\n" }}
         {{- "\n" }}
     {%- endif %}
 {%- endmacro %}
@@ -56,7 +56,7 @@
             {{- "</server_name>\n<tool_name>" }}
             {{- function.name }}
             {{- "</tool_name>\n<arguments>\n" }}
-            {{- function.arguments | tojson(ensure_ascii=False) }}
+            {{- function.arguments | tojson }}
             {{- "\n</arguments>" }}
         {%- endfor %}
         {{- "\n</use_mcp_tool>" }}
