@@ -54,6 +54,7 @@ static const std::vector<std::string> ALL_TEMPLATE_PATHS = {
     "models/templates/fireworks-ai-llama-3-firefunction-v2.jinja",
     "models/templates/google-gemma-2-2b-it.jinja",
     "models/templates/ibm-granite-granite-3.3-2B-Instruct.jinja",
+    "models/templates/ibm-granite-granite-4.0.jinja",
     "models/templates/llama-cpp-deepseek-r1.jinja",
     "models/templates/meetkai-functionary-medium-v3.1.jinja",
     "models/templates/meetkai-functionary-medium-v3.2.jinja",
