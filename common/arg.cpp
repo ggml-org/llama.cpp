@@ -3,6 +3,7 @@
 #include "chat.h"
 #include "common.h"
 #include "download.h"
+#include "hf-cache.h"
 #include "json-schema-to-grammar.h"
 #include "log.h"
 #include "sampling.h"
@@ -326,60 +327,48 @@ struct handle_model_result {
     common_params_model mmproj;
 };
 
-static handle_model_result common_params_handle_model(
-        struct common_params_model & model,
-        const std::string & bearer_token,
-        bool offline) {
+static handle_model_result common_params_handle_model(struct common_params_model & model,
+                                                      const std::string          & bearer_token,
+                                                      bool                         offline) {
     handle_model_result result;
-    // handle pre-fill default model path and url based on hf_repo and hf_file
-    {
-        if (!model.docker_repo.empty()) {  // Handle Docker URLs by resolving them to local paths
-            model.path = common_docker_resolve_model(model.docker_repo);
-            model.name = model.docker_repo; // set name for consistency
-        } else if (!model.hf_repo.empty()) {
-            // short-hand to avoid specifying --hf-file -> default it to --model
-            if (model.hf_file.empty()) {
-                if (model.path.empty()) {
-                    auto auto_detected = common_get_hf_file(model.hf_repo, bearer_token, offline);
-                    if (auto_detected.repo.empty() || auto_detected.ggufFile.empty()) {
-                        exit(1); // error message already printed
-                    }
-                    model.name    = model.hf_repo;      // repo name with tag
-                    model.hf_repo = auto_detected.repo; // repo name without tag
-                    model.hf_file = auto_detected.ggufFile;
-                    if (!auto_detected.mmprojFile.empty()) {
-                        result.found_mmproj   = true;
-                        result.mmproj.hf_repo = model.hf_repo;
-                        result.mmproj.hf_file = auto_detected.mmprojFile;
-                    }
-                } else {
-                    model.hf_file = model.path;
-                }
-            }
 
-            std::string model_endpoint = get_model_endpoint();
-            model.url = model_endpoint + model.hf_repo + "/resolve/main/" + model.hf_file;
-            // make sure model path is present (for caching purposes)
-            if (model.path.empty()) {
-                // this is to avoid different repo having same file name, or same file name in different subdirs
-                std::string filename = clean_file_name(model.hf_repo + "_" + model.hf_file);
-                model.path = fs_get_cache_file(filename);
-            }
-
-        } else if (!model.url.empty()) {
-            if (model.path.empty()) {
-                auto f = string_split<std::string>(model.url, '#').front();
-                f = string_split<std::string>(f, '?').front();
-                model.path = fs_get_cache_file(string_split<std::string>(f, '/').back());
-            }
-
+    if (!model.docker_repo.empty()) {
+        model.path = common_docker_resolve_model(model.docker_repo);
+        model.name = model.docker_repo;
+    } else if (!model.hf_repo.empty()) {
+        // If -m was used with -hf, treat the model "path" as the hf_file to download
+        if (model.hf_file.empty() && !model.path.empty()) {
+            model.hf_file = model.path;
+            model.path = "";
         }
-    }
+        common_download_model_opts opts;
+        opts.download_mmproj = true;
+        opts.offline = offline;
+        auto download_result = common_download_model(model, bearer_token, opts);
 
-    // then, download it if needed
-    if (!model.url.empty()) {
-        bool ok = common_download_model(model, bearer_token, offline);
-        if (!ok) {
+        if (download_result.model_path.empty()) {
+            LOG_ERR("error: failed to download model from Hugging Face\n");
+            exit(1);
+        }
+
+        model.name = model.hf_repo;
+        model.path = download_result.model_path;
+
+        if (!download_result.mmproj_path.empty()) {
+            result.found_mmproj = true;
+            result.mmproj.path  = download_result.mmproj_path;
+        }
+    } else if (!model.url.empty()) {
+        if (model.path.empty()) {
+            auto f = string_split<std::string>(model.url, '#').front();
+            f = string_split<std::string>(f, '?').front();
+            model.path = fs_get_cache_file(string_split<std::string>(f, '/').back());
+        }
+
+        common_download_model_opts opts;
+        opts.offline = offline;
+        auto download_result = common_download_model(model, bearer_token, opts);
+        if (download_result.model_path.empty()) {
             LOG_ERR("error: failed to download model from %s\n", model.url.c_str());
             exit(1);
         }
@@ -538,6 +527,13 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
 
     // parse the first time to get -hf option (used for remote preset)
     parse_cli_args();
+
+    // TODO: Remove later
+    try {
+        hf_cache::migrate_old_cache_to_hf_cache(params.hf_token, params.offline);
+    } catch (const std::exception & e) {
+        LOG_WRN("HF cache migration failed: %s\n", e.what());
+    }
 
     // maybe handle remote preset
     if (!params.model.hf_repo.empty()) {
@@ -1061,12 +1057,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"-cl", "--cache-list"},
         "show list of models in cache",
         [](common_params &) {
-            printf("model cache directory: %s\n", fs_get_cache_directory().c_str());
             auto models = common_list_cached_models();
             printf("number of models in cache: %zu\n", models.size());
             for (size_t i = 0; i < models.size(); i++) {
-                auto & model = models[i];
-                printf("%4d. %s\n", (int) i + 1, model.to_string().c_str());
+                printf("%4zu. %s\n", i + 1, models[i].c_str());
             }
             exit(0);
         }

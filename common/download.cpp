@@ -1,9 +1,9 @@
 #include "arg.h"
 
 #include "common.h"
-#include "gguf.h" // for reading GGUF splits
 #include "log.h"
 #include "download.h"
+#include "hf-cache.h"
 
 #define JSON_ASSERT GGML_ASSERT
 #include <nlohmann/json.hpp>
@@ -15,6 +15,7 @@
 #include <map>
 #include <mutex>
 #include <regex>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -35,8 +36,6 @@
 #endif
 #endif
 
-#define LLAMA_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
-
 // isatty
 #if defined(_WIN32)
 #include <io.h>
@@ -51,31 +50,6 @@ using json = nlohmann::ordered_json;
 //
 
 // validate repo name format: owner/repo
-static bool validate_repo_name(const std::string & repo) {
-    static const std::regex repo_regex(R"(^[A-Za-z0-9_.\-]+\/[A-Za-z0-9_.\-]+$)");
-    return std::regex_match(repo, repo_regex);
-}
-
-static std::string get_manifest_path(const std::string & repo, const std::string & tag) {
-    // we use "=" to avoid clashing with other component, while still being allowed on windows
-    std::string fname = "manifest=" + repo + "=" + tag + ".json";
-    if (!validate_repo_name(repo)) {
-        throw std::runtime_error("error: repo name must be in the format 'owner/repo'");
-    }
-    string_replace_all(fname, "/", "=");
-    return fs_get_cache_file(fname);
-}
-
-static std::string read_file(const std::string & fname) {
-    std::ifstream file(fname);
-    if (!file) {
-        throw std::runtime_error(string_format("error: failed to open file '%s'\n", fname.c_str()));
-    }
-    std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-    file.close();
-    return content;
-}
-
 static void write_file(const std::string & fname, const std::string & content) {
     const std::string fname_tmp = fname + ".tmp";
     std::ofstream     file(fname_tmp);
@@ -132,7 +106,7 @@ static bool is_http_status_ok(int status) {
 
 std::pair<std::string, std::string> common_download_split_repo_tag(const std::string & hf_repo_with_tag) {
     auto parts = string_split<std::string>(hf_repo_with_tag, ':');
-    std::string tag = parts.size() > 1 ? parts.back() : "latest";
+    std::string tag = parts.size() > 1 ? parts.back() : "";
     std::string hf_repo = parts[0];
     if (string_split<std::string>(hf_repo, '/').size() != 2) {
         throw std::invalid_argument("error: invalid HF repo format, expected <user>/<model>[:quant]\n");
@@ -290,7 +264,8 @@ static bool common_pull_file(httplib::Client & cli,
 static int common_download_file_single_online(const std::string        & url,
                                               const std::string        & path,
                                               const std::string        & bearer_token,
-                                              const common_header_list & custom_headers) {
+                                              const common_header_list & custom_headers,
+                                              bool                       skip_etag = false) {
     static const int max_attempts        = 3;
     static const int retry_delay_seconds = 2;
 
@@ -309,6 +284,11 @@ static int common_download_file_single_online(const std::string        & url,
     cli.set_default_headers(headers);
 
     const bool file_exists = std::filesystem::exists(path);
+
+    if (file_exists && skip_etag) {
+        LOG_INF("%s: using cached file: %s\n", __func__, path.c_str());
+        return 304; // 304 Not Modified - fake cached response
+    }
 
     std::string last_etag;
     if (file_exists) {
@@ -361,6 +341,12 @@ static int common_download_file_single_online(const std::string        & url,
         }
     }
 
+    { // silent
+        std::error_code ec;
+        std::filesystem::path p(path);
+        std::filesystem::create_directories(p.parent_path(), ec);
+    }
+
     const std::string path_temporary = path + ".downloadInProgress";
     int delay = retry_delay_seconds;
 
@@ -391,7 +377,7 @@ static int common_download_file_single_online(const std::string        & url,
                 LOG_ERR("%s: unable to rename file: %s to %s\n", __func__, path_temporary.c_str(), path.c_str());
                 return -1;
             }
-            if (!etag.empty()) {
+            if (!etag.empty() && !skip_etag) {
                 write_etag(path, etag);
             }
             return head->status;
@@ -440,9 +426,10 @@ int common_download_file_single(const std::string & url,
                                 const std::string & path,
                                 const std::string & bearer_token,
                                 bool offline,
-                                const common_header_list & headers) {
+                                const common_header_list & headers,
+                                bool skip_etag) {
     if (!offline) {
-        return common_download_file_single_online(url, path, bearer_token, headers);
+        return common_download_file_single_online(url, path, bearer_token, headers, skip_etag);
     }
 
     if (!std::filesystem::exists(path)) {
@@ -454,193 +441,234 @@ int common_download_file_single(const std::string & url,
     return 304; // Not Modified - fake cached response
 }
 
-// download multiple files from remote URLs to local paths
-// the input is a vector of pairs <url, path>
-static bool common_download_file_multiple(const std::vector<std::pair<std::string, std::string>> & urls,
-                                          const std::string & bearer_token,
-                                          bool offline,
-                                          const common_header_list & headers) {
-    // Prepare download in parallel
-    std::vector<std::future<bool>> futures_download;
-    futures_download.reserve(urls.size());
-
-    for (auto const & item : urls) {
-        futures_download.push_back(
-            std::async(
-                std::launch::async,
-                [&bearer_token, offline, &headers](const std::pair<std::string, std::string> & it) -> bool {
-                    const int http_status = common_download_file_single(it.first, it.second, bearer_token, offline, headers);
-                    return is_http_status_ok(http_status);
-                },
-                item
-            )
-        );
+// "subdir/model-00001-of-00002.gguf" -> "subdir/model", 1, 2
+static std::tuple<std::string, int, int> get_gguf_split_info(const std::string & path) {
+    if (path.empty()) {
+        return {};
     }
 
-    // Wait for all downloads to complete
-    for (auto & f : futures_download) {
-        if (!f.get()) {
-            return false;
-        }
-    }
+    static const std::regex re(R"(^(.+)-([0-9]+)-of-([0-9]+)\.gguf$)", std::regex::icase);
 
-    return true;
+    std::smatch m;
+    if (std::regex_match(path, m, re)) {
+        return {m[1].str(), std::stoi(m[2].str()), std::stoi(m[3].str())};
+    }
+    return {};
 }
 
-bool common_download_model(const common_params_model & model,
-                           const std::string & bearer_token,
-                           bool offline,
-                           const common_header_list & headers) {
-    // Basic validation of the model.url
-    if (model.url.empty()) {
-        LOG_ERR("%s: invalid model url\n", __func__);
-        return false;
-    }
+static hf_cache::hf_files get_split_files(const hf_cache::hf_files & all_files,
+                                          const hf_cache::hf_file & primary_file) {
+    hf_cache::hf_files result;
+    auto [prefix, idx, count] = get_gguf_split_info(primary_file.path);
 
-    const int http_status = common_download_file_single(model.url, model.path, bearer_token, offline, headers);
-    if (!is_http_status_ok(http_status)) {
-        return false;
-    }
-
-    // check for additional GGUFs split to download
-    int n_split = 0;
-    {
-        struct gguf_init_params gguf_params = {
-            /*.no_alloc = */ true,
-            /*.ctx      = */ NULL,
-        };
-        auto * ctx_gguf = gguf_init_from_file(model.path.c_str(), gguf_params);
-        if (!ctx_gguf) {
-            LOG_ERR("\n%s:  failed to load input GGUF from %s\n", __func__, model.path.c_str());
-            return false;
-        }
-
-        auto key_n_split = gguf_find_key(ctx_gguf, LLM_KV_SPLIT_COUNT);
-        if (key_n_split >= 0) {
-            n_split = gguf_get_val_u16(ctx_gguf, key_n_split);
-        }
-
-        gguf_free(ctx_gguf);
-    }
-
-    if (n_split > 1) {
-        char split_prefix[PATH_MAX] = {0};
-        char split_url_prefix[LLAMA_MAX_URL_LENGTH] = {0};
-
-        // Verify the first split file format
-        // and extract split URL and PATH prefixes
-        {
-            if (!llama_split_prefix(split_prefix, sizeof(split_prefix), model.path.c_str(), 0, n_split)) {
-                LOG_ERR("\n%s: unexpected model file name: %s n_split=%d\n", __func__, model.path.c_str(), n_split);
-                return false;
-            }
-
-            if (!llama_split_prefix(split_url_prefix, sizeof(split_url_prefix), model.url.c_str(), 0, n_split)) {
-                LOG_ERR("\n%s: unexpected model url: %s n_split=%d\n", __func__, model.url.c_str(), n_split);
-                return false;
+    if (count > 1) {
+        for (const auto & f : all_files) {
+            auto [sprefix, sidx, scount] = get_gguf_split_info(f.path);
+            if (scount == count && sprefix == prefix) {
+                result.push_back(f);
             }
         }
-
-        std::vector<std::pair<std::string, std::string>> urls;
-        for (int idx = 1; idx < n_split; idx++) {
-            char split_path[PATH_MAX] = {0};
-            llama_split_path(split_path, sizeof(split_path), split_prefix, idx, n_split);
-
-            char split_url[LLAMA_MAX_URL_LENGTH] = {0};
-            llama_split_path(split_url, sizeof(split_url), split_url_prefix, idx, n_split);
-
-            if (std::string(split_path) == model.path) {
-                continue; // skip the already downloaded file
-            }
-
-            urls.push_back({split_url, split_path});
-        }
-
-        // Download in parallel
-        common_download_file_multiple(urls, bearer_token, offline, headers);
-    }
-
-    return true;
-}
-
-common_hf_file_res common_get_hf_file(const std::string & hf_repo_with_tag,
-                                      const std::string & bearer_token,
-                                      bool offline,
-                                      const common_header_list & custom_headers) {
-    // the returned hf_repo is without tag
-    auto [hf_repo, tag] = common_download_split_repo_tag(hf_repo_with_tag);
-
-    std::string url = get_model_endpoint() + "v2/" + hf_repo + "/manifests/" + tag;
-
-    // headers
-    common_header_list headers = custom_headers;
-    headers.push_back({"Accept", "application/json"});
-    if (!bearer_token.empty()) {
-        headers.push_back({"Authorization", "Bearer " + bearer_token});
-    }
-    // Important: the User-Agent must be "llama-cpp" to get the "ggufFile" field in the response
-    // User-Agent header is already set in common_remote_get_content, no need to set it here
-
-    // make the request
-    common_remote_params params;
-    params.headers = headers;
-    long res_code = 0;
-    std::string res_str;
-    bool use_cache = false;
-    std::string cached_response_path = get_manifest_path(hf_repo, tag);
-    if (!offline) {
-        try {
-            auto res = common_remote_get_content(url, params);
-            res_code = res.first;
-            res_str = std::string(res.second.data(), res.second.size());
-        } catch (const std::exception & e) {
-            LOG_WRN("error: failed to get manifest at %s: %s\n", url.c_str(), e.what());
-        }
-    }
-    if (res_code == 0) {
-        if (std::filesystem::exists(cached_response_path)) {
-            LOG_WRN("trying to read manifest from cache: %s\n", cached_response_path.c_str());
-            res_str = read_file(cached_response_path);
-            res_code = 200;
-            use_cache = true;
-        } else {
-            throw std::runtime_error(
-                offline ? "error: failed to get manifest (offline mode)"
-                : "error: failed to get manifest (check your internet connection)");
-        }
-    }
-    std::string ggufFile;
-    std::string mmprojFile;
-
-    if (res_code == 200 || res_code == 304) {
-        try {
-            auto j = json::parse(res_str);
-
-            if (j.contains("ggufFile") && j["ggufFile"].contains("rfilename")) {
-                ggufFile = j["ggufFile"]["rfilename"].get<std::string>();
-            }
-            if (j.contains("mmprojFile") && j["mmprojFile"].contains("rfilename")) {
-                mmprojFile = j["mmprojFile"]["rfilename"].get<std::string>();
-            }
-        } catch (const std::exception & e) {
-            throw std::runtime_error(std::string("error parsing manifest JSON: ") + e.what());
-        }
-        if (!use_cache) {
-            // if not using cached response, update the cache file
-            write_file(cached_response_path, res_str);
-        }
-    } else if (res_code == 401) {
-        throw std::runtime_error("error: model is private or does not exist; if you are accessing a gated model, please provide a valid HF token");
     } else {
-        throw std::runtime_error(string_format("error from HF API (%s), response code: %ld, data: %s", url.c_str(), res_code, res_str.c_str()));
+        result.push_back(primary_file);
+    }
+    return result;
+}
+
+static hf_cache::hf_files filter_gguf_by_quant(const hf_cache::hf_files & files,
+                                               const std::string & quant_tag) {
+    hf_cache::hf_files matches;
+    std::regex pattern(quant_tag + "[.-]", std::regex::icase);
+
+    for (const auto & f : files) {
+        if (!string_ends_with(f.path, ".gguf")) {
+            continue;
+        }
+        if (f.path.find("mmproj") != std::string::npos) {
+            continue;
+        }
+        if (std::regex_search(f.path, pattern)) {
+            matches.push_back(f);
+        }
+    }
+    return matches;
+}
+
+static void list_available_gguf_files(const hf_cache::hf_files & files) {
+    LOG_INF("Available GGUF files:\n");
+    for (const auto & f : files) {
+        if (string_ends_with(f.path, ".gguf")) {
+            LOG_INF(" - %s\n", f.path.c_str());
+        }
+    }
+}
+
+struct hf_plan {
+    hf_cache::hf_file primary;
+    hf_cache::hf_file mmproj;
+    bool has_primary = false;
+    bool has_mmproj = false;
+    hf_cache::hf_files files;
+};
+
+static hf_plan get_hf_plan(const common_params_model        & model,
+                           const std::string                & token,
+                           const common_download_model_opts & opts) {
+    hf_plan plan;
+    auto [repo, tag] = common_download_split_repo_tag(model.hf_repo);
+
+    auto all = opts.offline ? hf_cache::get_cached_files(repo)
+                            : hf_cache::get_repo_files(repo, token);
+    if (all.empty()) {
+        return plan;
     }
 
-    // check response
-    if (ggufFile.empty()) {
-        throw std::runtime_error("error: model does not have ggufFile");
+    hf_cache::hf_files candidates;
+
+    if (!model.hf_file.empty()) {
+        const hf_cache::hf_file * found_file = nullptr;
+        for (const auto & f : all) {
+            if (f.path == model.hf_file) {
+                found_file = &f;
+                break;
+            }
+        }
+
+        if (!found_file) {
+            LOG_ERR("%s: --hf-file '%s' not found in repository\n", __func__, model.hf_file.c_str());
+            list_available_gguf_files(all);
+            return plan;
+        }
+
+        plan.primary = *found_file;
+        plan.has_primary = true;
+        candidates = get_split_files(all, *found_file);
+    } else {
+        std::vector<std::string> search_priority = {!tag.empty() ? tag : "Q4_K_M", "Q4_0"};
+
+        for (const auto & q : search_priority) {
+            candidates = filter_gguf_by_quant(all, q);
+            if (!candidates.empty()) {
+                candidates = get_split_files(all, candidates[0]);
+                break;
+            }
+        }
+
+        if (candidates.empty()) {
+            for (const auto & f : all) {
+                if (string_ends_with(f.path, ".gguf") &&
+                    f.path.find("mmproj") == std::string::npos) {
+                    candidates = get_split_files(all, f);
+                    break;
+                }
+            }
+        }
+
+        if (candidates.empty()) {
+            LOG_ERR("%s: no GGUF files found in repository %s\n", __func__, repo.c_str());
+            list_available_gguf_files(all);
+            return plan;
+        }
+
+        plan.primary = candidates[0];
+        plan.has_primary = true;
     }
 
-    return { hf_repo, ggufFile, mmprojFile };
+    for (const auto & f : candidates) {
+        plan.files.push_back(f);
+    }
+
+    if (opts.download_mmproj) {
+        for (const auto & f : all) {
+            if (string_ends_with(f.path, ".gguf") &&
+                f.path.find("mmproj") != std::string::npos) {
+                plan.mmproj = f;
+                plan.has_mmproj = true;
+                plan.files.push_back(f);
+                break;
+            }
+        }
+    }
+
+    return plan;
+}
+
+static std::vector<std::pair<std::string, std::string>> get_url_tasks(const common_params_model & model) {
+    auto [prefix_url, idx, count] = get_gguf_split_info(model.url);
+
+    if (count <= 1) {
+        return {{model.url, model.path}};
+    }
+
+    std::vector<std::pair<std::string, std::string>> files;
+
+    size_t pos = prefix_url.rfind('/');
+    std::string prefix_filename = (pos != std::string::npos) ? prefix_url.substr(pos + 1) : prefix_url;
+    std::string prefix_path = (std::filesystem::path(model.path).parent_path() / prefix_filename).string();
+
+    for (int i = 1; i <= count; i++) {
+        std::string suffix = string_format("-%05d-of-%05d.gguf", i, count);
+        files.emplace_back(prefix_url + suffix, prefix_path + suffix);
+    }
+    return files;
+}
+
+common_download_model_result common_download_model(const common_params_model        & model,
+                                                   const std::string                & bearer_token,
+                                                   const common_download_model_opts & opts,
+                                                   const common_header_list         & headers) {
+    common_download_model_result result;
+    std::vector<std::pair<std::string, std::string>> to_download;
+    hf_plan hf;
+
+    bool is_hf = !model.hf_repo.empty();
+
+    if (is_hf) {
+        hf = get_hf_plan(model, bearer_token, opts);
+        for (const auto & f : hf.files) {
+            to_download.emplace_back(f.url, f.local_path);
+        }
+    } else if (!model.url.empty()) {
+        to_download = get_url_tasks(model);
+    } else {
+        result.model_path = model.path;
+        return result;
+    }
+
+    if (to_download.empty()) {
+        return result;
+    }
+
+    std::vector<std::future<bool>> futures;
+    for (const auto & item : to_download) {
+        futures.push_back(std::async(std::launch::async,
+            [u = item.first, p = item.second, &bearer_token, offline = opts.offline, &headers, is_hf]() {
+                int status = common_download_file_single(u, p, bearer_token, offline, headers, is_hf);
+                return is_http_status_ok(status);
+            }
+        ));
+    }
+
+    for (auto & f : futures) {
+        if (!f.get()) {
+            return {};
+        }
+    }
+
+    if (is_hf) {
+        for (const auto & f : hf.files) {
+            hf_cache::finalize_file(f);
+        }
+        if (hf.has_primary) {
+            result.model_path = hf_cache::finalize_file(hf.primary);
+        }
+        if (hf.has_mmproj) {
+            result.mmproj_path = hf_cache::finalize_file(hf.mmproj);
+        }
+    } else {
+        result.model_path = model.path;
+    }
+
+    return result;
 }
 
 //
@@ -764,29 +792,48 @@ std::string common_docker_resolve_model(const std::string & docker) {
     }
 }
 
-std::vector<common_cached_model_info> common_list_cached_models() {
-    std::vector<common_cached_model_info> models;
-    const std::string cache_dir = fs_get_cache_directory();
-    const std::vector<common_file_info> files = fs_list(cache_dir, false);
-    for (const auto & file : files) {
-        if (string_starts_with(file.name, "manifest=") && string_ends_with(file.name, ".json")) {
-            common_cached_model_info model_info;
-            model_info.manifest_path = file.path;
-            std::string fname = file.name;
-            string_replace_all(fname, ".json", ""); // remove extension
-            auto parts = string_split<std::string>(fname, '=');
-            if (parts.size() == 4) {
-                // expect format: manifest=<user>=<model>=<tag>=<other>
-                model_info.user  = parts[1];
-                model_info.model = parts[2];
-                model_info.tag   = parts[3];
-            } else {
-                // invalid format
-                continue;
+std::vector<std::string> common_list_cached_models() {
+    auto files = hf_cache::get_cached_files("");
+    std::set<std::string> models;
+
+    for (const auto & f : files) {
+        std::string tmp = f.path;
+
+        if (!string_remove_suffix(tmp, ".gguf")) {
+            continue;
+        }
+        if (tmp.find("mmproj") != std::string::npos) {
+            continue;
+        }
+        auto split_pos = tmp.find("-00001-of-");
+
+        if (split_pos == std::string::npos &&
+            tmp.find("-of-") != std::string::npos) {
+            continue;
+        }
+        if (split_pos != std::string::npos) {
+            tmp.erase(split_pos);
+        }
+        auto sep_pos = tmp.find_last_of("-.");
+
+        if (sep_pos == std::string::npos || sep_pos == tmp.size() - 1) {
+            continue;
+        }
+        tmp.erase(0, sep_pos + 1);
+
+        bool is_valid = true;
+        for (char & c : tmp) {
+            unsigned char uc = c;
+            if (!std::isalnum(uc) && uc != '_') {
+                is_valid = false;
+                break;
             }
-            model_info.size = 0; // TODO: get GGUF size, not manifest size
-            models.push_back(model_info);
+            c = std::toupper(uc);
+        }
+        if (is_valid) {
+            models.insert(f.repo_id + ":" + tmp);
         }
     }
-    return models;
+
+    return {models.begin(), models.end()};
 }
