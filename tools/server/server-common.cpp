@@ -1043,6 +1043,28 @@ json oaicompat_chat_params_parse(
         throw std::invalid_argument("invalid type for \"enable_thinking\" (expected boolean, got string)");
     }
 
+    // OpenRouter compatible API
+    if (body.contains("reasoning")) {
+        const auto& reasoning = body["reasoning"];
+
+        if (reasoning.is_boolean()) {
+            bool enabled = reasoning.get<bool>();
+            inputs.enable_thinking = enabled;
+        }
+        else if (reasoning.is_object()) {
+            bool enabled = reasoning.value("enabled", true);
+            inputs.enable_thinking = enabled;
+
+            auto effort = reasoning.value("effort", "auto");
+            if (effort != "auto") {
+                inputs.enable_thinking = effort != "none";
+
+                // For custom template only
+                //inputs.chat_template_kwargs["reasoning_effort"] = effort;
+            }
+        }
+    }
+
     // if the assistant message appears at the end of list, we do not add end-of-turn token
     // for ex. this can be useful to modify the reasoning process in reasoning models
     bool prefill_assistant_message = !inputs.messages.empty() && inputs.messages.back().role == "assistant" && opt.prefill_assistant;
