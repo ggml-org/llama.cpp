@@ -5059,8 +5059,13 @@ static unified_cache * create_cache_for_device(int device_id, size_t * deferred_
     const size_t staging_bytes = resolve_host_staging_bytes();
     try {
         g_device_caches[device_id]  = std::make_unique<unified_cache>(queue, budget, staging_bytes, dma_reserve_bytes);
+        // Always baseline pre-existing runtime reservations so they don't
+        // eat into the cache's weight budget.  Allocations that existed before
+        // cache creation (DMA pre-reserve, probe residuals) are already
+        // accounted for in the budget calculation — only NEW runtime
+        // allocations after this point should reduce available cache space.
         const size_t reserved_total = runtime_reserved_bytes_nolock(device_id);
-        const size_t baseline       = budget_capped_to_free ? reserved_total : 0;
+        const size_t baseline       = reserved_total;
         g_runtime_reserved_baseline[device_id].store(baseline, std::memory_order_relaxed);
         const size_t reserved_adjusted = runtime_reserved_adjusted_nolock(device_id);
         // Defer update_reserved_bytes to caller (after releasing g_cache_mutex)
@@ -5911,7 +5916,22 @@ size_t unified_cache_available_for_compute(int device) {
     if (it == g_device_caches.end() || !it->second) {
         return 0;
     }
-    return it->second->available_for_compute();
+
+    // Query actual free VRAM from the driver as ground truth.
+    // The budget-based calculation (base_budget - reserved - used) can return 0
+    // when g_runtime_reserved_bytes includes pre-emptive reservations (DMA staging,
+    // headroom) or when the weight buffer allocation exceeds the 90% budget cap.
+    // Actual free VRAM is the most reliable indicator of what's available for
+    // new cache entries (expert caching, SOA conversions, etc.).
+    size_t free_vram = 0, total_vram = 0;
+    ggml_backend_sycl_get_device_memory(effective_device, &free_vram, &total_vram);
+    if (free_vram == 0) {
+        return it->second->available_for_compute();  // fallback to budget-based
+    }
+    // Reserve 256 MB headroom for driver structures, compute scratch, and
+    // transient allocations that come and go during inference.
+    const size_t headroom = size_t(256) << 20;
+    return free_vram > headroom ? free_vram - headroom : 0;
 }
 
 size_t unified_cache_total_managed(int device) {

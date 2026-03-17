@@ -9609,10 +9609,16 @@ static ggml_backend_buffer_t ggml_backend_sycl_buffer_type_alloc_buffer(ggml_bac
     const bool is_compute_buft = buft_ctx->name.find("_Compute") != std::string::npos ||
                                  buft_ctx->name.find("HostCompute") != std::string::npos ||
                                  buft_ctx->name.find("CpuOffloadCompute") != std::string::npos;
+    // KV buffer types use KV_AUTO policy; standard device buffer types (SYCL0,
+    // SYCL1, ...) store model weights and should be classified as WEIGHT so
+    // they don't compete with the unified cache's weight budget.
+    const bool is_kv_buft = buft_ctx->mem_policy == GGML_SYCL_MEM_POLICY_KV_AUTO;
     const ggml_sycl::alloc_role alloc_role =
-        is_compute_buft ? ggml_sycl::alloc_role::COMPUTE : ggml_sycl::alloc_role::KV;
+        is_compute_buft ? ggml_sycl::alloc_role::COMPUTE
+                        : (is_kv_buft ? ggml_sycl::alloc_role::KV : ggml_sycl::alloc_role::WEIGHT);
     const ggml_sycl::runtime_category alloc_cat =
-        is_compute_buft ? ggml_sycl::runtime_category::COMPUTE : ggml_sycl::runtime_category::KV_CACHE;
+        is_compute_buft ? ggml_sycl::runtime_category::COMPUTE
+                        : (is_kv_buft ? ggml_sycl::runtime_category::KV_CACHE : ggml_sycl::runtime_category::OTHER);
 
     // In TP mode, use the shared-context queue for the main allocation if available.
     queue_ptr alloc_stream = buft_ctx->stream;
