@@ -1324,6 +1324,8 @@ class TensorNameMap:
             "model.vision_tower.embeddings.cls_token", # Intern-S1
             "vision_model.class_embedding", # llama 4
             "model.vision.patch_embedding.cls_embedding", # cogvlm
+            "vision_model.embeddings.class_embedding", # ernie4.5-vl-moe
+            "vision_model.patch_embed.cls_embedding", # ernie4.5-vl-moe
         ),
 
         MODEL_TENSOR.V_ENC_EMBD_PATCH: (
@@ -1338,10 +1340,13 @@ class TensorNameMap:
             "vision_tower.patch_embed.proj", # kimi-vl
             "model.vision.patch_embedding.proj", # cogvlm
             "siglip2.vision_model.embeddings.patch_embedding",
+            "vision_model.embeddings.patch_embedding", # ernie4.5-vl-moe
+            "vision_model.patch_embed.proj", # ernie4.5-vl-moe
         ),
 
         MODEL_TENSOR.V_ENC_EMBD_NORM: (
             "visual.post_conv_layernorm", # glm4v
+            "vision_model.ln", # ernie4.5-vl-moe
         ),
 
         MODEL_TENSOR.V_ENC_EMBD_POS: (
@@ -1354,11 +1359,14 @@ class TensorNameMap:
             "visual.pos_embed", # qwen3vl
             "model.vision.patch_embedding.position_embedding", # cogvlm
             "visual.embeddings.position_embedding", # glm4v
+            "vision_model.embeddings.position_embedding", # ernie4.5-vl-moe
+            "vision_model.patch_embed.pos_emb", # ernie4.5-vl-moe
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_QKV: (
             "visual.blocks.{bid}.attn.qkv", # qwen3vl
             "model.vision.transformer.layers.{bid}.attention.query_key_value", # cogvlm
+            "vision_model.blocks.{bid}.attn.qkv", # ernie4.5-vl-moe
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_Q: (
@@ -1372,6 +1380,7 @@ class TensorNameMap:
             "visual.blocks.{bid}.attn.q", # qwen2vl, generated
             "vision_tower.encoder.blocks.{bid}.wq", # kimi-vl, generated
             "siglip2.vision_model.encoder.layers.{bid}.self_attn.q_proj", # youtuvl
+            "vision_model.blocks.{bid}.attn.q", # ernie4.5-vl-moe
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_Q_NORM: (
@@ -1390,6 +1399,7 @@ class TensorNameMap:
             "visual.blocks.{bid}.attn.k", # qwen2vl, generated
             "vision_tower.encoder.blocks.{bid}.wk", # kimi-vl, generated
             "siglip2.vision_model.encoder.layers.{bid}.self_attn.k_proj",
+            "vision_model.blocks.{bid}.attn.k", # ernie4.5-vl-moe
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_K_NORM: (
@@ -1408,6 +1418,7 @@ class TensorNameMap:
             "visual.blocks.{bid}.attn.v", # qwen2vl, generated
             "vision_tower.encoder.blocks.{bid}.wv", # kimi-vl, generated
             "siglip2.vision_model.encoder.layers.{bid}.self_attn.v_proj",
+            "vision_model.blocks.{bid}.attn.v", # ernie4.5-vl-moe
         ),
 
         MODEL_TENSOR.V_ENC_INPUT_NORM: (
@@ -1421,6 +1432,7 @@ class TensorNameMap:
             "vision_model.model.layers.{bid}.input_layernorm", # llama4
             "visual.blocks.{bid}.norm1", # qwen2vl
             "vision_tower.encoder.blocks.{bid}.norm0", # kimi-vl (norm0/norm1)
+            "vision_model.blocks.{bid}.norm1", # ernie4.5-vl-moe
             "model.vision.transformer.layers.{bid}.input_layernorm", # cogvlm
             "siglip2.vision_model.encoder.layers.{bid}.layer_norm1",
         ),
@@ -1428,6 +1440,7 @@ class TensorNameMap:
         MODEL_TENSOR.V_ENC_ATTN_O: (
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.out_proj",
             "vision_tower.vision_model.encoder.layers.{bid}.attn.proj", # InternVL
+            "vision_model.blocks.{bid}.attn.proj", # ernie4.5-vl-moe
             "model.vision_tower.encoder.layer.{bid}.attention.projection_layer", # Intern-S1
             "vpm.encoder.layers.{bid}.self_attn.out_proj",
             "model.vision_model.encoder.layers.{bid}.self_attn.out_proj", # SmolVLM
@@ -1452,6 +1465,7 @@ class TensorNameMap:
             "vision_encoder.transformer.layers.{bid}.ffn_norm", # pixtral
             "visual.blocks.{bid}.norm2", # qwen2vl
             "vision_tower.encoder.blocks.{bid}.norm1", # kimi-vl (norm0/norm1)
+            "vision_model.blocks.{bid}.norm2", # ernie4.5-vl-moe
             "model.vision.transformer.layers.{bid}.post_attention_layernorm", # cogvlm
             "siglip2.vision_model.encoder.layers.{bid}.layer_norm2",
         ),
@@ -1467,6 +1481,7 @@ class TensorNameMap:
             "visual.blocks.{bid}.mlp.fc1", # qwen2vl
             "visual.blocks.{bid}.mlp.up_proj", # qwen2.5vl
             "visual.blocks.{bid}.mlp.linear_fc1", # qwen3vl
+            "vision_model.blocks.{bid}.mlp.fc1", # ernie4.5-vl-moe
             "vision_tower.encoder.blocks.{bid}.mlp.fc0", # kimi-vl (fc0/fc1)
             "model.vision.transformer.layers.{bid}.mlp.fc1", # cogvlm
             "siglip2.vision_model.encoder.layers.{bid}.mlp.fc1",
@@ -1489,6 +1504,7 @@ class TensorNameMap:
             "visual.blocks.{bid}.mlp.fc2", # qwen2vl
             "visual.blocks.{bid}.mlp.down_proj", # qwen2.5vl
             "visual.blocks.{bid}.mlp.linear_fc2", # qwen3vl
+            "vision_model.blocks.{bid}.mlp.fc2", # ernie4.5-vl-moe
             "vision_tower.encoder.blocks.{bid}.mlp.fc1", # kimi-vl (fc0/fc1)
             "model.vision.transformer.layers.{bid}.mlp.fc2", # cogvlm
             "siglip2.vision_model.encoder.layers.{bid}.mlp.fc2",
@@ -1519,6 +1535,7 @@ class TensorNameMap:
             "vision_tower.encoder.final_layernorm", # kimi-vl
             "visual.post_layernorm", # glm4v
             "siglip2.vision_model.post_layernorm",
+            "vision_model.post_layernorm", # ernie4.5-vl-moe
         ),
 
         MODEL_TENSOR.V_MM_POST_NORM: (
@@ -1544,18 +1561,22 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_RESMPL_POS_EMBD_K: (
             "resampler.pos_embed_k",
+            "resampler_model.pos_embed_k", # ernie4.5-vl-moe
         ),
 
         MODEL_TENSOR.V_RESMPL_ATTN_Q: (
             "resampler.attn.in_proj_q", # tensor generated from resampler.attn.in_proj
+            "resampler_model.attn.in_proj_q", # ernie4.5-vl-moe
         ),
 
         MODEL_TENSOR.V_RESMPL_ATTN_K: (
             "resampler.attn.in_proj_k", # tensor generated from resampler.attn.in_proj
+            "resampler_model.attn.in_proj_k", # ernie4.5-vl-moe
         ),
 
         MODEL_TENSOR.V_RESMPL_ATTN_V: (
             "resampler.attn.in_proj_v", # tensor generated from resampler.attn.in_proj
+            "resampler_model.attn.in_proj_v", # ernie4.5-vl-moe
         ),
 
         MODEL_TENSOR.V_RESMPL_ATTN_OUT: (
@@ -1584,6 +1605,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_RESMPL_QUERY: (
             "resampler.query",
+            "resampler_model.query", # ernie4.5-vl-moe
         ),
 
         MODEL_TENSOR.V_TOK_EMBD_IMG_BREAK: (
@@ -1633,6 +1655,26 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_TOK_EOI: (
             "model.vision.eoi", # cogvlm
+        ),
+
+        MODEL_TENSOR.V_FFN_GATE_INP: (
+            "model.layers.{bid}.mlp.gate.vision", # ernie4.5-vl-moe
+        ),
+
+        MODEL_TENSOR.V_FFN_GATE_EXPS: (
+            "model.vision.layers.{bid}.mlp.experts.gate_proj", # ernie4.5-vl-moe
+        ),
+
+        MODEL_TENSOR.V_FFN_DOWN_EXPS: (
+            "model.vision.layers.{bid}.mlp.experts.down_proj", # ernie4.5-vl-moe
+        ),
+
+        MODEL_TENSOR.V_FFN_UP_EXPS: (
+            "model.vision.layers.{bid}.mlp.experts.up_proj", # ernie4.5-vl-moe
+        ),
+
+        MODEL_TENSOR.V_FFN_EXP_PROBS_B: (
+            "model.layers.{bid}.mlp.moe_statics.e_score_correction.vision", # ernie4.5-vl-moe
         ),
 
         # audio (mtmd)

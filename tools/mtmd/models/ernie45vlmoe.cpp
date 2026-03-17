@@ -5,10 +5,11 @@ ggml_cgraph * clip_graph_ernie45vlmoe::build() {
     // 1. ViT encoder with 2D position embeddings and M-RoPE support
     // 2. Resampler with spatial conv (2x2 grouping) + optional temporal + MLP + RMS norm
 
-    const int n_pos             = n_patches;
-    const int spatial_conv_size = hparams.spatial_conv_size;  // 2
+    const int n_pos = n_patches;
+    // Use n_merge for patch merge size (same as spatial_conv_size = 2)
+    const int spatial_merge_size = hparams.n_merge > 0 ? hparams.n_merge : 2;
 
-    GGML_ASSERT(spatial_conv_size == 2 && "ERNIE-4.5-VL-MoE requires spatial_conv_size=2");
+    GGML_ASSERT(spatial_merge_size == 2 && "ERNIE-4.5-VL-MoE requires n_merge=2");
 
     // ERNIE-VL Vision uses 2D position lookup RoPE:
     // - Front half of frequencies use h_position
@@ -22,6 +23,8 @@ ggml_cgraph * clip_graph_ernie45vlmoe::build() {
     ggml_set_name(positions, "positions");
     ggml_set_input(positions);
 
+    // Use the standard build_inp() which handles Conv2D patch embeddings
+    // The Python conversion now converts linear weights to Conv2D format
     ggml_tensor * inp = build_inp();
 
     // Build ViT encoder using the generic build_vit() with M-RoPE position encoding
@@ -44,29 +47,19 @@ ggml_cgraph * clip_graph_ernie45vlmoe::build() {
     // Resampler projection
     // -------------------------------------------
     // Group 2x2 patches: 40x40 -> 20x20, output shape [n_embd*4, n_groups]
-    embeddings = build_patch_merge_permute(embeddings, spatial_conv_size);
+    embeddings = build_patch_merge_permute(embeddings, spatial_merge_size);
     cb(embeddings, "spatial_reshape", -1);
 
     // Spatial linear path: Linear -> GELU -> Linear -> LayerNorm
-    // Note: weights were transposed (.t()) during GGUF conversion, so we must
-    // undo that with ggml_transpose before ggml_mul_mat
+    // Weights are expected to be already transposed in GGUF format
     ggml_tensor * spatial_out = embeddings;
 
-    // First linear
-    ggml_tensor * spatial_0_w = ggml_cont(ctx0, ggml_transpose(ctx0, model.mm_0_w));
-    spatial_out = ggml_mul_mat(ctx0, spatial_0_w, spatial_out);
-    spatial_out = ggml_add(ctx0, spatial_out, model.mm_0_b);
-    cb(spatial_out, "spatial_linear_0", -1);
-
-    // GELU
-    spatial_out = ggml_gelu(ctx0, spatial_out);
-    cb(spatial_out, "spatial_gelu", -1);
-
-    // Second linear
-    ggml_tensor * spatial_2_w = ggml_cont(ctx0, ggml_transpose(ctx0, model.mm_2_w));
-    spatial_out = ggml_mul_mat(ctx0, spatial_2_w, spatial_out);
-    spatial_out = ggml_add(ctx0, spatial_out, model.mm_2_b);
-    cb(spatial_out, "spatial_linear_2", -1);
+    spatial_out = build_ffn(spatial_out,
+                        model.mm_0_w, model.mm_0_b,
+                        nullptr, nullptr,
+                        model.mm_2_w, model.mm_2_b,
+                        FFN_GELU,
+                        -1);
 
     // LayerNorm
     spatial_out = build_norm(spatial_out, model.mm_post_norm_w, model.mm_post_norm_b, NORM_TYPE_NORMAL, eps, -1);
@@ -76,36 +69,23 @@ ggml_cgraph * clip_graph_ernie45vlmoe::build() {
 
     // Temporal processing for single images (t=1):
     // Following ERNIE-VL original: when t=1, slice_offsets and slice_offsets2 both point to the same frame
-    // So we concat(x, x, dim=-1) which in GGML's [hidden, seq] layout is dim=0
-    // This doubles the hidden dimension: [5120, 400] -> [10240, 400]
     resampler_out = ggml_concat(ctx0, resampler_out, resampler_out, 0);
 
     // Temporal linear path: Linear -> GELU -> Linear -> LayerNorm
-    // Weights were transposed (.t()) during GGUF conversion, undo with ggml_transpose
-
-    // First temporal linear
-    ggml_tensor * temp_0_w = ggml_cont(ctx0, ggml_transpose(ctx0, model.mm_1_w));
-    resampler_out = ggml_mul_mat(ctx0, temp_0_w, resampler_out);
-    resampler_out = ggml_add(ctx0, resampler_out, model.mm_1_b);
-    cb(resampler_out, "temporal_linear_0", -1);
-
-    // GELU
-    resampler_out = ggml_gelu(ctx0, resampler_out);
-    cb(resampler_out, "temporal_gelu", -1);
-
-    // Second temporal linear
-    ggml_tensor * temp_2_w = ggml_cont(ctx0, ggml_transpose(ctx0, model.mm_3_w));
-    resampler_out = ggml_mul_mat(ctx0, temp_2_w, resampler_out);
-    resampler_out = ggml_add(ctx0, resampler_out, model.mm_3_b);
-    cb(resampler_out, "temporal_linear_2", -1);
+    // Weights are expected to be already transposed in GGUF format
+    resampler_out = build_ffn(resampler_out,
+                        model.mm_1_w, model.mm_1_b,
+                        nullptr, nullptr,
+                        model.mm_3_w, model.mm_3_b,
+                        FFN_GELU,
+                        -1);
 
     // LayerNorm
     resampler_out = build_norm(resampler_out, model.mm_input_norm_w, model.mm_input_norm_b, NORM_TYPE_NORMAL, eps, -1);
     cb(resampler_out, "temporal_norm", -1);
 
-    // Final MLP
-    ggml_tensor * mlp_w = ggml_cont(ctx0, ggml_transpose(ctx0, model.mm_fc_w));
-    resampler_out = ggml_mul_mat(ctx0, mlp_w, resampler_out);
+    // Final MLP: Linear (weights are expected to be already transposed in GGUF format)
+    resampler_out = ggml_mul_mat(ctx0, model.mm_fc_w, resampler_out);
     resampler_out = ggml_add(ctx0, resampler_out, model.mm_fc_b);
     cb(resampler_out, "mlp", -1);
 

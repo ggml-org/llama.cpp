@@ -725,6 +725,17 @@ class MODEL_TENSOR(IntEnum):
     V_DS_NORM            = auto() # qwen3vl
     V_DS_FC1             = auto() # qwen3vl
     V_DS_FC2             = auto() # qwen3vl
+    V_FFN_GATE_INP       = auto() # ernie45vlmoe
+    V_FFN_UP_EXPS        = auto() # ernie45vlmoe
+    V_FFN_DOWN_EXPS      = auto() # ernie45vlmoe
+    V_FFN_NORM_EXPS      = auto() # ernie45vlmoe
+    V_FFN_GATE_EXPS      = auto() # ernie45vlmoe
+    V_FFN_GATE_SHEXP     = auto() # ernie45vlmoe
+    V_FFN_UP_SHEXP       = auto() # ernie45vlmoe
+    V_FFN_DOWN_SHEXP     = auto() # ernie45vlmoe
+    V_FFN_GATE_INP_SHEXP = auto() # ernie45vlmoe
+    V_FFN_NORM_SHEXP     = auto() # ernie45vlmoe
+    V_FFN_EXP_PROBS_B    = auto() # ernie45vlmoe
     V_MM_POST_FC_NORM    = auto() # cogvlm
     V_MM_UP              = auto() # cogvlm
     V_MM_DOWN            = auto() # cogvlm
@@ -1162,6 +1173,11 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_MM_GATE:                 "mm.gate",
     MODEL_TENSOR.V_TOK_BOI:                 "v.boi",
     MODEL_TENSOR.V_TOK_EOI:                 "v.eoi",
+    MODEL_TENSOR.V_FFN_GATE_INP:            "blk.{bid}.v_ffn_gate_inp",
+    MODEL_TENSOR.V_FFN_GATE_EXPS:           "blk.{bid}.v_ffn_gate_exps",
+    MODEL_TENSOR.V_FFN_DOWN_EXPS:           "blk.{bid}.v_ffn_down_exps",
+    MODEL_TENSOR.V_FFN_UP_EXPS:             "blk.{bid}.v_ffn_up_exps",
+    MODEL_TENSOR.V_FFN_EXP_PROBS_B:         "blk.{bid}.v_exp_probs_b",
     # audio (mtmd)
     # note: all audio tensor names must use prefix "a." or "mm.a."
     MODEL_TENSOR.A_ENC_EMBD_POS:            "a.position_embd",

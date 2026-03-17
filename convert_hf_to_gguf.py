@@ -552,7 +552,6 @@ class ModelBase:
                     break
 
             for new_name, data_torch in (self.modify_tensors(data_torch, name, bid)):
-                # TODO: why do we squeeze here?
                 # data = data_torch.squeeze().numpy()
                 data = data_torch.numpy()
 
@@ -645,6 +644,9 @@ class ModelBase:
 
                 # n_dims is implicit in the shape
                 logger.info(f"{f'%-{max_name_len}s' % f'{new_name},'} {old_dtype} --> {data_qtype.name}, shape = {shape_str}")
+
+                # Debug: print all tensors being added
+                print(f"DEBUG ADD: {new_name}, shape={data.shape}")
 
                 self.gguf_writer.add_tensor(new_name, data, raw_dtype=data_qtype)
 
@@ -3856,8 +3858,9 @@ class Ernie4_5VLMoeModel(Ernie4_5MoeModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # Skip vision and multimodal tensors - they are not part of the text model
         if name.startswith("vision_model") or name.startswith("resampler_model") or \
-           name.startswith("model.vision_model") or name.startswith("model.resampler_model"):
-            return []
+           name.startswith("model.vision_model") or name.startswith("model.resampler_model") or \
+           name.endswith(".rotary_emb.original_inv_freq") or name.endswith(".rotary_emb.inv_freq"):
+            return
 
         # todo(megemini): gate_inp weight/weight_1
         # weight
@@ -3876,7 +3879,8 @@ class Ernie4_5VLMoeModel(Ernie4_5MoeModel):
             # Map the tensor name and ensure it has .weight suffix
             mapped_name = self.map_tensor_name(name)
 
-            return [(mapped_name, data_torch)]
+            yield (mapped_name, data_torch)
+            return
 
         # todo(megemini): e_score_correction.bias/bias_1 for weight/weight_1
         if name.endswith(".mlp.moe_statics.e_score_correction_bias"):
@@ -3886,8 +3890,9 @@ class Ernie4_5VLMoeModel(Ernie4_5MoeModel):
             name_vision = name.replace("e_score_correction_bias", "e_score_correction.vision.bias")
             data_torch_vision = data_torch[1, :]
 
-            return [(self.map_tensor_name(name_text), data_torch_text),
-                    (self.map_tensor_name(name_vision), data_torch_vision)]
+            yield (self.map_tensor_name(name_text), data_torch_text)
+            yield (self.map_tensor_name(name_vision), data_torch_vision)
+            return
 
         # process the experts separately
         if name.find("mlp.experts") != -1:
@@ -3965,10 +3970,13 @@ class Ernie4_5VLMoeModel(Ernie4_5MoeModel):
                         new_name = self.map_tensor_name(merged_name)
                         tensors.append((new_name, data_torch))
 
-                return tensors
+                for tensor_tuple in tensors:
+                    yield tensor_tuple
+                return
             else:
-                return []
-        return [(self.map_tensor_name(name), data_torch)]
+                return
+        yield (self.map_tensor_name(name), data_torch)
+        return
 
     def prepare_tensors(self):
         super().prepare_tensors()
@@ -3978,6 +3986,142 @@ class Ernie4_5VLMoeModel(Ernie4_5MoeModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@ModelBase.register("Ernie4_5_VLMoeForConditionalGeneration")
+class Ernie4_5VLMoeVisionModel(MmprojModel):
+    # Resampler tensor name mapping: HF name -> GGUF name
+    _resampler_mapping = {
+        "model.resampler_model.spatial_linear.0": "mm.0",
+        "model.resampler_model.spatial_linear.2": "mm.2",
+        "model.resampler_model.spatial_linear.3": "mm.3",
+        "model.resampler_model.temporal_linear.0": "mm_temp.0",
+        "model.resampler_model.temporal_linear.2": "mm_temp.2",
+        "model.resampler_model.temporal_linear.3": "mm_temp.3",
+        "model.resampler_model.mlp": "mm.mlp",
+        "model.resampler_model.after_norm": "mm.norm",
+    }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.hparams_vision is not None
+        # Set default vision parameters for ERNIE-4.5-VL
+        if "image_size" not in self.hparams_vision:
+            self.hparams_vision["image_size"] = 448  # default for ERNIE-4.5-VL
+        if "patch_size" not in self.hparams_vision:
+            self.hparams_vision["patch_size"] = 14
+        if "hidden_size" not in self.hparams_vision:
+            self.hparams_vision["hidden_size"] = self.hparams_vision.get("embed_dim", 1280)
+        if "intermediate_size" not in self.hparams_vision:
+            self.hparams_vision["intermediate_size"] = self.hparams_vision.get("mlp_ratio", 4) * self.hparams_vision["hidden_size"]
+        if "num_attention_heads" not in self.hparams_vision:
+            self.hparams_vision["num_attention_heads"] = self.hparams_vision.get("num_heads", 16)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.ERNIE45VLMOE)
+        self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams_vision.get("layer_norm_eps", 1e-6))
+        # ERNIE-VL uses quick_gelu activation (C++ default when neither use_gelu nor use_silu is set)
+        ffn_op = self.hparams_vision.get("hidden_act", "quick_gelu")
+        if ffn_op == "gelu":
+            self.gguf_writer.add_vision_use_gelu(True)
+        elif ffn_op == "silu":
+            self.gguf_writer.add_vision_use_silu(True)
+        # quick_gelu: don't set either flag, C++ defaults to FFN_GELU_QUICK
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        # Handle resampler tensors: bias should be F32, weights F16
+        # new_name is already mapped by modify_tensors (e.g., "mm.0.weight", "mm.0.bias")
+        if new_name.startswith("mm.") or new_name.startswith("mm_"):
+            if new_name.endswith(".bias"):
+                return gguf.GGMLQuantizationType.F32
+            else:
+                return gguf.GGMLQuantizationType.F16
+        # Let parent handle other tensors
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    def prepare_tensors(self):
+        # Call parent prepare_tensors - resampler tensors will be handled by modify_tensors
+        # and their types will be controlled by tensor_force_quant
+        super().prepare_tensors()
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Handle resampler tensors with manual mapping
+        for hf_prefix, gguf_prefix in self._resampler_mapping.items():
+            if name.startswith(hf_prefix):
+                suffix = name[len(hf_prefix):]  # e.g. ".weight" or ".bias"
+                new_name = gguf_prefix + suffix
+                print(f"DEBUG: Resampler mapping: {name} -> {new_name}, shape={data_torch.shape}")
+                # Yield the tensor - it will be handled by prepare_tensors
+                yield (new_name, data_torch)
+                return
+
+        # Debug: print all model.* tensors that are being skipped
+        if name.startswith("model."):
+            print(f"DEBUG: Skipping model tensor: {name}")
+
+        # Handle vision encoder tensors
+        if name.startswith("vision_model."):
+            # Split fused QKV into separate Q, K, V
+            if ".attn.qkv." in name:
+                if data_torch.ndim == 2:  # weight
+                    c3, _ = data_torch.shape
+                else:  # bias
+                    c3 = data_torch.shape[0]
+                assert c3 % 3 == 0
+                c = c3 // 3
+                wq = data_torch[:c]
+                wk = data_torch[c: c * 2]
+                wv = data_torch[c * 2:]
+                yield from super().modify_tensors(wq, name.replace("qkv", "q"), bid)
+                yield from super().modify_tensors(wk, name.replace("qkv", "k"), bid)
+                yield from super().modify_tensors(wv, name.replace("qkv", "v"), bid)
+            # Split Conv3D patch_embed into Conv2Ds (similar to QWEN2VL)
+            elif 'patch_embed.proj.weight' in name:
+                print(f"DEBUG: patch_embed.proj.weight shape = {data_torch.shape}")
+                if data_torch.ndim == 5:
+                    # Conv3D: [out_channels, in_channels, 2, height, width] for spatial merge
+                    c1, c2, kt, kh, kw = data_torch.shape
+                    del c1, c2, kh, kw  # unused
+                    assert kt == 2, "Current implementation only supports spatial_merge_size of 2"
+                    yield (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight", data_torch[:, :, 0, ...])
+                    yield (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight.1", data_torch[:, :, 1, ...])
+                elif data_torch.ndim == 4:
+                    # Conv2D: [out_channels, in_channels, height, width] - use as is
+                    yield (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight", data_torch)
+                elif data_torch.ndim == 2:
+                    # Linear projection: [out_features, in_features] = (1280, 588)
+                    # Convert to Conv2D: (out_channels, in_channels, height, width) = (1280, 3, 14, 14)
+                    # ERNIE-VL uses a linear layer, but we convert it to Conv2D for compatibility
+                    out_ch, in_ch = data_torch.shape
+                    patch_size = 14
+                    channels = 3
+                    assert in_ch == channels * patch_size * patch_size, \
+                        f"Expected in_features={channels * patch_size * patch_size}, got {in_ch}"
+                    # Reshape: (out_ch, in_ch) -> (out_ch, channels, patch_size, patch_size)
+                    # Note: data is stored as (out_ch, in_ch) = (1280, 588)
+                    # We need to reshape to (out_ch, channels, patch_size, patch_size) = (1280, 3, 14, 14)
+                    # The memory layout is contiguous, so we can view directly
+                    data_conv = data_torch.view(out_ch, channels, patch_size, patch_size)
+                    print(f"DEBUG: Converted linear to Conv2D: {data_conv.shape}")
+                    yield (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight", data_conv)
+                else:
+                    raise ValueError(f"Unexpected patch_embed.proj.weight shape: {data_torch.shape}")
+            # Handle patch_embed bias - it's used by the C++ code
+            # NOTE: The conv_2d output is f32 because inp_raw is created as f32 in build_inp_raw()
+            # So we must keep bias as f32 to match the output type of conv_2d
+            elif 'patch_embed.proj.bias' in name:
+                # Keep as f32 to match output type
+                if data_torch.dtype != torch.float32:
+                    data_torch = data_torch.to(torch.float32)
+                yield (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".bias", data_torch)
+            else:
+                yield from super().modify_tensors(data_torch, name, bid)
+        # Skip text model tensors (model.* but not model.resampler_model.* which is handled above)
+        elif name.startswith("model.") or name.startswith("ernie."):
+            return
+        else:
+            yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register(

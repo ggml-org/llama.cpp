@@ -1146,9 +1146,6 @@ struct clip_model_loader {
                 case PROJECTOR_TYPE_ERNIE45VLMOE:
                 {
                     hparams.n_merge = 2;
-                    hparams.spatial_conv_size  = 2;
-                    hparams.temporal_conv_size = 2;
-                    hparams.use_temporal_conv  = model.mm_1_w != nullptr;
                     hparams.set_limit_image_tokens(8, 1024);
                     hparams.set_warmup_n_tokens(256); // avoid OOM on warmup
                 } break;
@@ -3858,7 +3855,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_GLM4V:
             return ctx->model.mm_ffn_down_w->ne[1];
         case PROJECTOR_TYPE_ERNIE45VLMOE:
-            return ctx->model.mm_fc_w->ne[0];
+            return ctx->model.mm_fc_w->ne[1];
         default:
             GGML_ABORT("Unknown projector type");
     }
