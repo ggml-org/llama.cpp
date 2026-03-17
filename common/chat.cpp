@@ -1317,6 +1317,7 @@ static common_chat_params common_chat_params_init_mirothinker(const common_chat_
         const std::string SECTION_BEGIN = "<use_mcp_tool>";
         const std::string SECTION_END   = "</use_mcp_tool>";
         const std::string CALL_BEGIN    = "<server_name>";
+        const std::string CALL_BEGIN2   = "</server_name>";
         const std::string ARGS_BEGIN    = "<arguments>";
         const std::string CALL_END      = "</arguments>";
 
@@ -1339,8 +1340,8 @@ static common_chat_params common_chat_params_init_mirothinker(const common_chat_
             // Match: {what_ever}</server_name>{spaces}<tool_name>{tool_name}</tool_name>
             auto tool_parser = p.tool(
                 p.tool_open(
-                    p.until("</server_name>") +
-                    p.literal("</server_name>") +
+                    p.until(CALL_BEGIN2) +
+                    p.literal(CALL_BEGIN2) +
                     p.space() +
                     p.literal("<tool_name>") +
                     p.tool_name(p.literal(name)) +
