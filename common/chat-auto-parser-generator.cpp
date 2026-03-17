@@ -327,16 +327,22 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
                 }
             }
 
+            // Capture argument values with until(value_suffix) instead of
+            // schema-validated json(). Even with grammar constraints active
+            // during generation, small models can produce slightly malformed
+            // JSON (e.g. extra trailing braces). Strict json() validation
+            // causes PEG backtracking to wipe the entire AST (including
+            // reasoning + tool name that already parsed successfully).
+            // until(value_suffix) captures the raw value and lets the caller
+            // decide what to do with it.
+            auto value_parser = type == "string"
+                ? p.tool_arg_string_value(p.until(arguments.value_suffix))
+                : p.tool_arg_json_value(p.until(arguments.value_suffix));
             auto arg = p.tool_arg(
                 p.tool_arg_open(arguments.name_prefix + p.tool_arg_name(p.literal(param_name)) +
                                 arguments.name_suffix) +
                 arguments.value_prefix +
-                (type == "string" ? p.tool_arg_string_value(p.schema(p.until(arguments.value_suffix),
-                                                                     "tool-" + name + "-arg-" + param_name + "-schema",
-                                                                     param_schema, true)) :
-                                    p.tool_arg_json_value(p.schema(
-                                        p.json(), "tool-" + name + "-arg-" + param_name + "-schema", param_schema, format.uses_python_dicts)) +
-                                        p.space()) +
+                value_parser +
                 p.tool_arg_close(p.literal(arguments.value_suffix)));
 
             auto named_arg = p.rule("tool-" + name + "-arg-" + param_name, arg);

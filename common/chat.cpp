@@ -1747,9 +1747,14 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
     auto result = parser.parse(ctx);
 
     if (result.fail()) {
-        // During partial parsing, return partial results if any AST nodes were captured
-        // This allows streaming to work correctly for formats like FUNC_MARKDOWN_CODE_BLOCK
-        if (is_partial && result.end > 0) {
+        // Return partial results if any AST nodes were captured
+        // This allows streaming to work correctly.
+        // Generally, callers will call with is_partial=false at the end of generation. 
+        // If, for example, JSON ends up with an extra closing character, the full parse will fail.
+        // From the callers perspective, a tool call that was fully seen until the eog disappears.
+        // Additionally, callers do not expect this method to throw, and it is a core part of their
+        // inference loop. The exception should only be thrown in a truly exceptional situation.
+        if (result.end > 0) {
             // Try to extract any partial results from what was successfully parsed
             common_chat_msg msg;
             msg.role = "assistant";

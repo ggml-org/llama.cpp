@@ -1792,6 +1792,225 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             })
             .run();
     }
+    // =========================================================================
+    // Qwen3.5-0.8B: template + basic tool calling + malformed JSON regression
+    // =========================================================================
+    {
+        auto tst = peg_tester("models/templates/Qwen3.5-0.8B.jinja", /*detailed_debug=*/false);
+
+        tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
+
+        tst.test(
+               "<tool_call>\n"
+               "<function=special_function>\n"
+               "<parameter=arg1>\n"
+               "1\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+
+        tst.test(
+               "The user wants flashcards about California.\n"
+               "</think>\n"
+               "\n"
+               "<tool_call>\n"
+               "<function=special_function>\n"
+               "<parameter=arg1>\n"
+               "1\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ special_function_tool })
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect_reasoning("The user wants flashcards about California.\n")
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", {} },
+            })
+            .run();
+    }
+
+    // =========================================================================
+    // REGRESSION: Qwen3.5 TAG_WITH_TAGGED with malformed JSON in args.
+    //
+    // Real model output: Qwen3.5-0.8B produces an extra trailing } in the
+    // parameter value, e.g. [{"query":"CA","recall":"LA"}]} instead of
+    // [{"query":"CA","recall":"LA"}].
+    //
+    // Without patches:
+    //   chat-auto-parser-generator.cpp: schema(json()) rejects malformed JSON,
+    //     tool_call rule fails, PEG backtracks entire sequence, wipes AST
+    //   chat.cpp: final parse (is_partial=false) throws std::runtime_error
+    //     instead of using AST fallback
+    //   => complete data loss, no finish_reason, client hangs
+    //
+    // With patches:
+    //   chat-auto-parser-generator.cpp: until(value_suffix) captures raw value
+    //   chat.cpp: AST fallback fires for all parses, not just partial
+    //   => reasoning preserved, tool calls extracted
+    // =========================================================================
+    {
+        auto tmpls = common_chat_templates_ptr(
+            common_chat_templates_init(nullptr, read_file("models/templates/Qwen3.5-0.8B.jinja")));
+
+        static common_chat_tool flashcards_tool{
+            "flashcards", "Flashcards for studying",
+            R"({"type":"object","properties":{"flashcards":{"type":"array","items":{"type":"object","properties":{"query":{"type":"string"},"recall":{"type":"string"}},"required":["recall","query"]}}},"required":["flashcards"]})",
+        };
+
+        common_chat_templates_inputs inputs;
+        inputs.tools              = { flashcards_tool };
+        inputs.reasoning_format   = COMMON_REASONING_FORMAT_AUTO;
+        inputs.enable_thinking    = true;
+        inputs.add_generation_prompt = true;
+        inputs.use_jinja          = true;
+        inputs.messages           = {{ "user", "make a flashcard" }};
+
+        auto params = common_chat_templates_apply(tmpls.get(), inputs);
+        common_peg_arena arena;
+        arena.load(params.parser);
+
+        common_chat_parser_params pp;
+        pp.format = params.format;
+
+        // Regression tests: real Qwen3.5-0.8B output with malformed JSON
+        // Test 1: single tool call, malformed JSON (extra })
+        {
+            auto msg = common_chat_peg_parse(arena,
+                "I will make flashcards.\n"
+                "</think>\n\n"
+                "<tool_call>\n"
+                "<function=flashcards>\n"
+                "<parameter=flashcards>\n"
+                "[{\"query\": \"California\", \"recall\": \"Los Angeles\"}]}\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>",
+                /* is_partial */ false, pp);
+
+            assert(!msg.reasoning_content.empty()  && "[malformed-1] reasoning must be extracted");
+            assert(msg.content.empty()             && "[malformed-1] content must be empty");
+            assert(msg.tool_calls.size() == 1      && "[malformed-1] one tool call must be found");
+            assert(msg.tool_calls[0].name == "flashcards" && "[malformed-1] tool name");
+            assert(!msg.tool_calls[0].arguments.empty()   && "[malformed-1] arguments must not be empty");
+        }
+
+        // Test 2: two tool calls, both malformed — must find both
+        {
+            auto msg = common_chat_peg_parse(arena,
+                "Two sets.\n"
+                "</think>\n\n"
+                "<tool_call>\n"
+                "<function=flashcards>\n"
+                "<parameter=flashcards>\n"
+                "[{\"query\": \"CA\", \"recall\": \"LA\"}]}\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>\n"
+                "<tool_call>\n"
+                "<function=flashcards>\n"
+                "<parameter=flashcards>\n"
+                "[{\"query\": \"NY\", \"recall\": \"NYC\"}]}\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>",
+                /* is_partial */ false, pp);
+
+            assert(!msg.reasoning_content.empty()  && "[malformed-2] reasoning must be extracted");
+            assert(msg.tool_calls.size() == 2      && "[malformed-2] two tool calls must be found");
+            assert(msg.tool_calls[0].name == "flashcards" && "[malformed-2] tool 0 name");
+            assert(msg.tool_calls[1].name == "flashcards" && "[malformed-2] tool 1 name");
+        }
+
+        // Test 3: truncated tool call (model hit max_tokens mid-call)
+        // Without chat.cpp fix, this throws std::runtime_error on is_partial=false.
+        {
+            auto msg = common_chat_peg_parse(arena,
+                "I will make flashcards.\n"
+                "</think>\n\n"
+                "<tool_call>\n"
+                "<function=flashcards>\n"
+                "<parameter=flashcards>\n"
+                "[{\"query\": \"Califor",  // truncated mid-value
+                /* is_partial */ false, pp);
+
+            assert(!msg.reasoning_content.empty()  && "[truncated] reasoning must survive");
+        }
+
+        // Test 4: well-formed JSON — no regression
+        {
+            auto msg = common_chat_peg_parse(arena,
+                "Making cards.\n"
+                "</think>\n\n"
+                "<tool_call>\n"
+                "<function=flashcards>\n"
+                "<parameter=flashcards>\n"
+                "[{\"query\": \"CA\", \"recall\": \"LA\"}]\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>",
+                /* is_partial */ false, pp);
+
+            assert(!msg.reasoning_content.empty()  && "[wellformed] reasoning must be extracted");
+            assert(msg.tool_calls.size() == 1      && "[wellformed] one tool call");
+            assert(msg.tool_calls[0].name == "flashcards" && "[wellformed] tool name");
+        }
+
+        // Test from #20260: Qwen3.5-35B text between </think> and <tool_call>.
+        // Real model output: transition sentence after thinking, before tool call.
+        // "Failed to parse input at pos N" in agentic loops.
+        {
+            auto msg = common_chat_peg_parse(arena,
+                "Let me check some more information.\n"
+                "</think>\n"
+                "Let me review more key files.\n"
+                "<tool_call>\n"
+                "<function=flashcards>\n"
+                "<parameter=flashcards>\n"
+                "[{\"query\": \"CA\", \"recall\": \"LA\"}]\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>",
+                /* is_partial */ false, pp);
+
+            assert(!msg.reasoning_content.empty()  && "[#20260] reasoning must survive");
+            assert(msg.tool_calls.size() == 1      && "[#20260] tool call must be found");
+            assert(msg.tool_calls[0].name == "flashcards" && "[#20260] tool name");
+        }
+    }
+
+    // Test from #20344: GPT-OSS structured JSON output in final channel.
+    // Real error: "Failed to parse input at pos 416: <|start|>assistant<|channel|>final<|message|>{...}"
+    {
+        auto tmpls_gptoss = common_chat_templates_ptr(
+            common_chat_templates_init(nullptr, read_file("models/templates/openai-gpt-oss-120b.jinja")));
+
+        common_chat_templates_inputs inputs_gptoss;
+        inputs_gptoss.json_schema    = R"({"type":"object","properties":{"name":{"type":"string"},"age":{"type":"integer"}},"required":["name","age"]})";
+        inputs_gptoss.add_generation_prompt = true;
+        inputs_gptoss.use_jinja      = true;
+        inputs_gptoss.messages        = {{ "user", "give me a person" }};
+
+        auto params_gptoss = common_chat_templates_apply(tmpls_gptoss.get(), inputs_gptoss);
+        common_peg_arena arena_gptoss;
+        arena_gptoss.load(params_gptoss.parser);
+
+        common_chat_parser_params pp_gptoss;
+        pp_gptoss.format = params_gptoss.format;
+
+        auto msg = common_chat_peg_parse(arena_gptoss,
+            "<|channel|>final<|message|>{\n"
+            "  \"name\": \"John Doe\",\n"
+            "  \"age\": 30\n"
+            "}",
+            /* is_partial */ false, pp_gptoss);
+
+        assert(!msg.content.empty() && "[#20344] content must be extracted");
+    }
+
     {
         auto tst = peg_tester("models/templates/deepseek-ai-DeepSeek-V3.1.jinja", detailed_debug);
         tst.test(
