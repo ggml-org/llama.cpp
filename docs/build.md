@@ -516,6 +516,11 @@ Finally, after finishing your build, you should be able to do something like thi
 # ggml_vulkan: Using Intel(R) Graphics (ADL GT2) | uma: 1 | fp16: 1 | warp size: 32
 ```
 
+Note: With Intel's Mesa implementation the maximum amount of memory that Vulkan can allocate is limited as a percentage of system RAM, by default 75%. You can increase this with the environment variable `ANV_SYS_MEM_LIMIT`, for example:
+```bash
+ANV_SYS_MEM_LIMIT=90 llama-cpp -m model.gguf
+```
+
 ### For Mac users:
 
 Generally, follow LunarG's [Getting Started with the MacOS Vulkan SDK](https://vulkan.lunarg.com/doc/sdk/latest/mac/getting_started.html) guide for installation and setup of the Vulkan SDK. There are two options of Vulkan drivers on macOS, both of which implement translation layers to map Vulkan to Metal. They can be hot-swapped by setting the `VK_ICD_FILENAMES` environment variable to point to the respective ICD JSON file.
