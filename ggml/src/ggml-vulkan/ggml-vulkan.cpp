@@ -4590,13 +4590,41 @@ static void ggml_vk_load_shaders(vk_device& device) {
             {"gated_delta_net_f32_d128",    "gated_delta_net_f32_d128_kda"},
         };
         const bool use_subgroup_reduce = device->subgroup_arithmetic;
-        const size_t gdn_len = use_subgroup_reduce ? gated_delta_net_f32_len : gated_delta_net_f32_shmem_len;
-        const void * gdn_data = use_subgroup_reduce ? (const void *)gated_delta_net_f32_data : (const void *)gated_delta_net_f32_shmem_data;
         for (uint32_t si = 0; si < 3; si++) {
+            const uint32_t S_V = gdn_sizes[si];
+            GGML_ASSERT(is_pow2(S_V));
+
+            uint32_t lanes_per_column;
+            if (S_V >= 128u && device->subgroup_clustered) {
+                lanes_per_column = 8u;
+            } else {
+                // Use largest power-of-two that divides both S_V and subgroup_size so that
+                // (1) S_V % lanes_per_column == 0 and (2) S_V % (subgroup_size / lanes_per_column) == 0.
+                // This means we don't need extra bounds checking logic in the shader.
+                lanes_per_column = std::min(S_V, device->subgroup_size);
+            }
+
+            const bool need_clustered_shader = lanes_per_column != 1 && (lanes_per_column < device->subgroup_size);
+            size_t gdn_len;
+            const void * gdn_data;
+            if (use_subgroup_reduce && need_clustered_shader) {
+                gdn_len = gated_delta_net_f32_len;
+                gdn_data = (const void *)gated_delta_net_f32_data;
+            } else if (use_subgroup_reduce) {
+                gdn_len = gated_delta_net_f32_nocluster_len;
+                gdn_data = (const void *)gated_delta_net_f32_nocluster_data;
+            } else {
+                gdn_len = gated_delta_net_f32_shmem_len;
+                gdn_data = (const void *)gated_delta_net_f32_shmem_data;
+            }
+
+            const uint32_t cols_per_wg = device->subgroup_size / lanes_per_column;
+            const std::array<uint32_t, 3> wg_denoms = {1u, 1u, cols_per_wg};
+
             for (uint32_t kda = 0; kda < 2; kda++) {
                 ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net[si][kda],
                     gdn_names[si][kda], gdn_len, gdn_data, "main", 7, sizeof(vk_op_gated_delta_net_push_constants),
-                    {1, 1, 4}, {gdn_sizes[si], kda, device->subgroup_size}, 1, true, use_subgroup_reduce, device->subgroup_size);
+                    wg_denoms, {S_V, kda, device->subgroup_size, lanes_per_column}, 1, true, use_subgroup_reduce, device->subgroup_size);
             }
         }
     }
