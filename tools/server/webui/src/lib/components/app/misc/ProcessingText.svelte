@@ -2,7 +2,7 @@
 	import { fade } from 'svelte/transition';
 	let {
 		processingText,
-    cls
+		cls
 	}: {
 		processingText: string;
 		cls: string;
@@ -10,11 +10,11 @@
 </script>
 
 <div class="{cls} w-full max-w-[48rem]" in:fade>
-  <div class="processing-container">
-    <span class="processing-text">
-      {processingText}
-    </span>
-  </div>
+	<div class="processing-container">
+		<span class="processing-text">
+			{processingText}
+		</span>
+	</div>
 </div>
 
 <style>

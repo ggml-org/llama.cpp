@@ -96,11 +96,11 @@
 	);
 	const processingState = useProcessingState();
 
-  let processingText = $derived(
+	let processingText = $derived(
 		processingState.getPromptProgressText() ??
-		processingState.getProcessingMessage() ??
-	  'Processing...'
-  );
+			processingState.getProcessingMessage() ??
+			'Processing...'
+	);
 
 	let currentConfig = $derived(config());
 	let isRouter = $derived(isRouterMode());
@@ -205,7 +205,7 @@
 	aria-label="Assistant message with actions"
 >
 	{#if showProcessingInfoTop}
-    <ProcessingText cls="mt-6" {processingText} />
+		<ProcessingText cls="mt-6" {processingText} />
 	{/if}
 
 	{#if editCtx.isEditing}
@@ -271,7 +271,7 @@
 	{/if}
 
 	{#if showProcessingInfoBottom}
-    <ProcessingText cls="mt-4" {processingText} />
+		<ProcessingText cls="mt-4" {processingText} />
 	{/if}
 
 	<div class="info my-6 grid gap-4 tabular-nums">

@@ -37,7 +37,7 @@
 	let userScrolledUp = $state(false);
 
 	let isRouter = $derived(isRouterMode());
-  let processingState = $derived(notebookStore.processingState);
+	let processingState = $derived(notebookStore.processingState);
 
 	let errorDialog = $derived(notebookStore.error);
 	let canUndo = $derived(notebookStore.previousContent !== null && !notebookStore.isGenerating);
@@ -238,16 +238,13 @@
 		/>
 	</div>
 
-  {#if notebookStore.processingState?.status === 'preparing'}
-    <ProcessingText
-      cls='px-4 md:px-6'
-      processingText={notebookStore.getPromptProcessingText()}
-    />
-  {:else if showMessageStats}
-    <ProcessingInfo
-      visible={notebookStore.processingState?.status === 'generating'}
-      processingDetails={notebookStore.getProcessingDetails()}
-    />
+	{#if notebookStore.processingState?.status === 'preparing'}
+		<ProcessingText cls="px-4 md:px-6" processingText={notebookStore.getPromptProcessingText()} />
+	{:else if showMessageStats}
+		<ProcessingInfo
+			visible={notebookStore.processingState?.status === 'generating'}
+			processingDetails={notebookStore.getProcessingDetails()}
+		/>
 	{/if}
 
 	<div class="bg-background p-2 md:p-4">
