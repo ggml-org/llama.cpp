@@ -40,11 +40,17 @@ struct graph_key_hash {
     }
 };
 
+struct decoder_runtime_ctx {
+    decoder_runtime_ctx(std::shared_ptr<std::mutex> mutex) :
+        mutex(mutex) {}
+    std::shared_ptr<std::mutex> mutex;
+    std::shared_ptr<GgmlOvDecoder> ptr;
+};
+
 struct ov_runtime_context {
-    std::mutex ov_compute_mutex;
     std::string device;
     bool stateful;
-    std::unordered_map<graph_key, std::shared_ptr<GgmlOvDecoder>, graph_key_hash> decoder_cache;
+    std::unordered_map<graph_key, std::shared_ptr<decoder_runtime_ctx>, graph_key_hash> decoder_cache;
     std::unordered_map<graph_key, std::shared_ptr<ov::InferRequest>, graph_key_hash> infer_request_cache;
     std::unordered_map<graph_key, std::shared_ptr<ov::InferRequest>, graph_key_hash> infer_request_cache_prefill;
     std::unordered_map<graph_key, std::vector<std::string>, graph_key_hash> ov_input_names_cache;
