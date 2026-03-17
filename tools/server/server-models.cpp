@@ -783,6 +783,7 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
     }
     auto proxy = std::make_unique<server_http_proxy>(
             method,
+            "http",
             CHILD_ADDR,
             meta->port,
             proxy_path,
@@ -1079,6 +1080,7 @@ static bool should_strip_proxy_header(const std::string & header_name) {
 
 server_http_proxy::server_http_proxy(
         const std::string & method,
+        const std::string & scheme,
         const std::string & host,
         int port,
         const std::string & path,
@@ -1092,7 +1094,7 @@ server_http_proxy::server_http_proxy(
     auto cli  = std::make_shared<httplib::ClientImpl>(host, port);
     auto pipe = std::make_shared<pipe_t<msg_t>>();
 
-    if (port == 443) {
+    if (scheme == "https") {
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
         cli.reset(new httplib::SSLClient(host, port));
 #else

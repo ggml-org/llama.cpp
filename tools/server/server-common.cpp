@@ -276,7 +276,7 @@ llama_pos server_tokens::pos_next(int64_t n_tokens) const {
 
 size_t server_tokens::size_up_to_pos(llama_pos max_pos) const {
     if (!has_mtmd) {
-        return std::min((size_t)(max_pos + 1), tokens.size());
+        return std::min((size_t)max_pos, tokens.size());
     }
 
     size_t idx = 0;
@@ -296,7 +296,7 @@ size_t server_tokens::size_up_to_pos(llama_pos max_pos) const {
             idx++;
         }
 
-        if (pos > max_pos) {
+        if (pos >= max_pos) {
             break;
         }
     }
@@ -1065,6 +1065,7 @@ json oaicompat_chat_params_parse(
 
         inputs.add_generation_prompt = true;
     }
+    inputs.force_pure_content = opt.force_pure_content;
 
     // Apply chat template to the list of messages
     auto chat_params = common_chat_templates_apply(opt.tmpls.get(), inputs);
@@ -1099,6 +1100,22 @@ json oaicompat_chat_params_parse(
     }
     if (!chat_params.parser.empty()) {
         llama_params["chat_parser"] = chat_params.parser;
+    }
+
+    // Reasoning budget: pass parameters through to sampling layer
+    {
+        int reasoning_budget = opt.reasoning_budget;
+        if (reasoning_budget == -1 && body.contains("thinking_budget_tokens")) {
+            reasoning_budget = json_value(body, "thinking_budget_tokens", -1);
+        }
+
+        if (reasoning_budget >= 0 && !chat_params.thinking_end_tag.empty()) {
+            llama_params["reasoning_budget_tokens"] = reasoning_budget;
+            llama_params["reasoning_budget_start_tag"] = chat_params.thinking_start_tag;
+            llama_params["reasoning_budget_end_tag"] = chat_params.thinking_end_tag;
+            llama_params["reasoning_budget_message"] = opt.reasoning_budget_message;
+            llama_params["reasoning_budget_activate_immediately"] = chat_params.thinking_forced_open;
+        }
     }
 
     // Handle "logprobs" field
@@ -1257,17 +1274,27 @@ json convert_responses_to_chatcmpl(const json & response_body) {
 
                 for (const auto & output_text : item.at("content")) {
                     const std::string type = json_value(output_text, "type", std::string());
-                    if (type != "output_text") {
-                        throw std::invalid_argument("'type' must be 'output_text'");
+                    if (type == "output_text") {
+                        if (!exists_and_is_string(output_text, "text")) {
+                            throw std::invalid_argument("'Output text' requires 'text'");
+                            // Ignore annotations and logprobs for now
+                            chatcmpl_content.push_back({
+                                {"text", output_text.at("text")},
+                                {"type", "text"},
+                            });
+                        }
+                    } else if (type == "refusal") {
+                        if (!exists_and_is_string(output_text, "refusal")) {
+                            throw std::invalid_argument("'Refusal' requires 'refusal'");
+                            // Ignore annotations and logprobs for now
+                            chatcmpl_content.push_back({
+                                {"refusal", output_text.at("refusal")},
+                                {"type", "refusal"},
+                            });
+                        }
+                    } else {
+                        throw std::invalid_argument("'type' must be one of 'output_text' or 'refusal'");
                     }
-                    if (!exists_and_is_string(output_text, "text")) {
-                        throw std::invalid_argument("'Output text' requires 'text'");
-                    }
-                    // Ignore annotations and logprobs for now
-                    chatcmpl_content.push_back({
-                        {"text", output_text.at("text")},
-                        {"type", "text"},
-                    });
                 }
 
                 if (merge_prev) {
@@ -1463,6 +1490,7 @@ json convert_anthropic_to_oai(const json & body) {
             json tool_calls = json::array();
             json converted_content = json::array();
             json tool_results = json::array();
+            std::string reasoning_content;
             bool has_tool_calls = false;
 
             for (const auto & block : content) {
@@ -1470,6 +1498,8 @@ json convert_anthropic_to_oai(const json & body) {
 
                 if (type == "text") {
                     converted_content.push_back(block);
+                } else if (type == "thinking") {
+                    reasoning_content += json_value(block, "thinking", std::string());
                 } else if (type == "image") {
                     json source = json_value(block, "source", json::object());
                     std::string source_type = json_value(source, "type", std::string());
@@ -1528,15 +1558,18 @@ json convert_anthropic_to_oai(const json & body) {
                 }
             }
 
-            if (!converted_content.empty() || has_tool_calls) {
+            if (!converted_content.empty() || has_tool_calls || !reasoning_content.empty()) {
                 json new_msg = {{"role", role}};
                 if (!converted_content.empty()) {
                     new_msg["content"] = converted_content;
-                } else if (has_tool_calls) {
+                } else if (has_tool_calls || !reasoning_content.empty()) {
                     new_msg["content"] = "";
                 }
                 if (!tool_calls.empty()) {
                     new_msg["tool_calls"] = tool_calls;
+                }
+                if (!reasoning_content.empty()) {
+                    new_msg["reasoning_content"] = reasoning_content;
                 }
                 oai_messages.push_back(new_msg);
             }

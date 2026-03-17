@@ -402,6 +402,7 @@ static void pack_q4_0_quants(block_q4_0 * x, const uint8_t * qs, unsigned int bi
 static void repack_row_q4x4x2(uint8_t * y, const block_q4_0 * x, int64_t k) {
     static const int qk = QK_Q4_0x4x2;
     const int        nb = (k + qk - 1) / qk;  // number of blocks (padded)
+    const int        nloe = k % qk;           // leftovers
 
     const int dblk_size = 8 * 2;              // 8x __fp16
     const int qblk_size = qk / 2;             // int4
@@ -435,9 +436,11 @@ static void repack_row_q4x4x2(uint8_t * y, const block_q4_0 * x, int64_t k) {
         unpack_q4_0_quants(qs, &x[i * 8 + 6], 6);
         unpack_q4_0_quants(qs, &x[i * 8 + 7], 7);
 
+        bool partial = (nloe && i == nb-1);
+
         uint8_t * q = y_q + (i * qblk_size);
         for (int j = 0; j < qk / 2; j++) {
-            q[j] = (qs[j + 128] << 4) | qs[j];
+            q[j] = partial ? (qs[j*2+1] << 4) | qs[j*2+0] : (qs[j+128] << 4) | qs[j+000];
         }
     }
 
@@ -467,6 +470,7 @@ static void repack_row_q4x4x2(uint8_t * y, const block_q4_0 * x, int64_t k) {
 static void unpack_row_q4x4x2(block_q4_0 * x, const uint8_t * y, int64_t k) {
     static const int qk = QK_Q4_0x4x2;
     const int        nb = (k + qk - 1) / qk;  // number of blocks (padded)
+    const int        nloe = k % qk;           // leftovers
 
     const int dblk_size = 8 * 2;              // 8x __fp16
     const int qblk_size = qk / 2;             // int4
@@ -485,10 +489,17 @@ static void unpack_row_q4x4x2(block_q4_0 * x, const uint8_t * y, int64_t k) {
     for (int i = 0; i < nb; i++) {
         uint8_t qs[QK_Q4_0x4x2];  // unpacked quants
 
+        bool partial = (nloe && i == nb-1);
+
         const uint8_t * q = y_q + (i * qblk_size);
         for (int j = 0; j < qk / 2; j++) {
-            qs[j]       = q[j] & 0xf;
-            qs[j + 128] = q[j] >> 4;
+            if (partial) {
+                qs[j*2+0] = q[j] & 0xf;
+                qs[j*2+1] = q[j] >> 4;
+            } else {
+                qs[j+000] = q[j] & 0xf;
+                qs[j+128] = q[j] >> 4;
+            }
         }
 
         pack_q4_0_quants(&x[i * 8 + 0], qs, 0);
@@ -1078,6 +1089,7 @@ static void pack_mxfp4_quants(block_mxfp4 * x, const uint8_t * qs, unsigned int 
 static void repack_row_mxfp4x4x2(uint8_t * y, const block_mxfp4 * x, int64_t k) {
     static const int qk = QK_MXFP4x4x2;
     const int        nb = (k + qk - 1) / qk;  // number of blocks (padded)
+    const int        nloe = k % qk;           // leftovers
 
     const int eblk_size = 8 * 1;              // 8x E8M0
     const int qblk_size = qk / 2;             // int4
@@ -1112,9 +1124,11 @@ static void repack_row_mxfp4x4x2(uint8_t * y, const block_mxfp4 * x, int64_t k) 
         unpack_mxfp4_quants(qs, &x[i * 8 + 6], 6);
         unpack_mxfp4_quants(qs, &x[i * 8 + 7], 7);
 
+        bool partial = (nloe && i == nb-1);
+
         uint8_t * q = y_q + (i * qblk_size);
         for (int j = 0; j < qk / 2; j++) {
-            q[j] = (qs[j + 128] << 4) | qs[j];
+            q[j] = partial ? (qs[j*2+1] << 4) | qs[j*2+0] : (qs[j+128] << 4) | qs[j+000];
         }
     }
 
@@ -1144,6 +1158,7 @@ static void repack_row_mxfp4x4x2(uint8_t * y, const block_mxfp4 * x, int64_t k) 
 static void unpack_row_mxfp4x4x2(block_mxfp4 * x, const uint8_t * y, int64_t k) {
     static const int qk = QK_MXFP4x4x2;
     const int        nb = (k + qk - 1) / qk;  // number of blocks (padded)
+    const int        nloe = k % qk;           // leftovers
 
     const int eblk_size = 8 * 1;              // 8x E8M0
     const int qblk_size = qk / 2;             // int4
@@ -1162,10 +1177,17 @@ static void unpack_row_mxfp4x4x2(block_mxfp4 * x, const uint8_t * y, int64_t k) 
     for (int i = 0; i < nb; i++) {
         uint8_t qs[QK_MXFP4x4x2];  // unpacked quants
 
+        bool partial = (nloe && i == nb-1);
+
         const uint8_t * q = y_q + (i * qblk_size);
         for (int j = 0; j < qk / 2; j++) {
-            qs[j]       = q[j] & 0xf;
-            qs[j + 128] = q[j] >> 4;
+            if (partial) {
+                qs[j*2+0] = q[j] & 0xf;
+                qs[j*2+1] = q[j] >> 4;
+            } else {
+                qs[j+000] = q[j] & 0xf;
+                qs[j+128] = q[j] >> 4;
+            }
         }
 
         pack_mxfp4_quants(&x[i * 8 + 0], qs, 0);
@@ -1801,12 +1823,12 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
                 return false;
             }
 
-            if (src0->ne[1] > 16 * 1024) {
+            if (ggml_nrows(src0) > 16 * 1024) {
                 return false;  // typically the lm-head which would be too large for VTCM
             }
 
-            if ((src1->ne[2] != 1 || src1->ne[3] != 1)) {
-                return false;
+            if (ggml_nrows(src1) > 1024 || src1->ne[2] != 1 || src1->ne[3] != 1) {
+                return false;  // no huge batches or broadcasting (for now)
             }
 
             // src0 (weights) must be repacked
@@ -1819,6 +1841,9 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
             if (src0->nb[1] < src0->nb[0]) {
                 GGML_LOG_DEBUG("ggml_hexagon_supported_mul_mat: permuted F16 src0 not supported\n");
                 return false;
+            }
+            if (ggml_nrows(src1) > 1024) {
+                return false;  // no huge batches (for now)
             }
             break;
 
@@ -2152,6 +2177,44 @@ static bool ggml_hexagon_supported_rope(const struct ggml_hexagon_session * sess
     return true;
 }
 
+static bool ggml_hexagon_supported_ssm_conv(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    const struct ggml_tensor * src0 = op->src[0];
+    const struct ggml_tensor * src1 = op->src[1];
+    const struct ggml_tensor * dst  = op;
+
+    // Only support FP32 for now
+    if (src0->type != GGML_TYPE_F32 || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    // Check IO tensor shapes and dims
+    if (src0->ne[3] != 1 || src1->ne[2] != 1 || src1->ne[3] != 1 || dst->ne[3] != 1) {
+        return false; // src0 should be effectively 3D
+    }
+
+    const int d_conv = src1->ne[0];
+    const int d_inner = src0->ne[1];
+    const int n_t = dst->ne[1];
+    const int n_s = dst->ne[2];
+
+    if (src0->ne[0] != d_conv - 1 + n_t || src0->ne[1] != d_inner || src0->ne[2] != n_s) {
+        return false;
+    }
+    if (src1->ne[0] != d_conv || src1->ne[1] != d_inner) {
+        return false;
+    }
+    if (dst->ne[0] != d_inner || dst->ne[1] != n_t || dst->ne[2] != n_s) {
+        return false;
+    }
+
+    // TODO: add support for non-contiguous tensors
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1) || !ggml_is_contiguous(dst)) {
+        return false;
+    }
+
+    return true;
+}
+
 enum dspqbuf_type {
     DSPQBUF_TYPE_DSP_WRITE_CPU_READ = 0,
     DSPQBUF_TYPE_CPU_WRITE_DSP_READ,
@@ -2468,6 +2531,17 @@ static inline size_t init_flash_attn_ext_req(htp_general_req * req, dspqueue_buf
     return n_bufs;
 }
 
+static inline size_t init_ssm_conv_req(htp_general_req * req, dspqueue_buffer * bufs, const ggml_tensor * t) {
+    req->op = HTP_OP_SSM_CONV;
+
+    size_t n_bufs = 0;
+    n_bufs += htp_req_buff_init(&req->src0, &bufs[n_bufs], t->src[0], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
+    n_bufs += htp_req_buff_init(&req->src1, &bufs[n_bufs], t->src[1], DSPQBUF_TYPE_CONSTANT);
+    n_bufs += htp_req_buff_init(&req->dst,  &bufs[n_bufs], t,         DSPQBUF_TYPE_DSP_WRITE_CPU_READ);
+
+    return n_bufs;
+}
+
 static const char * ggml_backend_hexagon_name(ggml_backend_t backend) {
     auto sess = static_cast<ggml_hexagon_session *>(backend->context);
     return sess->name.c_str();
@@ -2604,6 +2678,10 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
             case GGML_OP_ARGSORT:
                 ggml_hexagon_dispatch_op<init_argsort_req>(sess, node, flags);
+                break;
+
+            case GGML_OP_SSM_CONV:
+                ggml_hexagon_dispatch_op<init_ssm_conv_req>(sess, node, flags);
                 break;
 
             default:
@@ -3022,6 +3100,10 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
 
         case GGML_OP_ARGSORT:
             supp = ggml_hexagon_supported_argsort(sess, op);
+            break;
+
+        case GGML_OP_SSM_CONV:
+            supp = ggml_hexagon_supported_ssm_conv(sess, op);
             break;
 
         default:

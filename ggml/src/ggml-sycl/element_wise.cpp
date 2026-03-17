@@ -9,23 +9,32 @@
 #define SYCL_LOCAL_ID_CALC(ITEM, IDX) \
     (ITEM.get_local_range(IDX) * ITEM.get_group(IDX) + ITEM.get_local_id(IDX))
 
+static void acc_f32(const float * x, const float * y, float * dst, const int64_t ne,
+        const int64_t ne10, const int64_t ne11, const int64_t ne12, const int64_t ne13,
+        const int64_t s11, const int64_t s12, const int64_t s13, const int64_t offset) {
+    auto item_ct1 = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
+    const int64_t i = SYCL_LOCAL_ID_CALC(item_ct1, 2);
 
-static void acc_f32(const float * x, const float * y, float * dst, const int ne,
-    const int ne10, const int ne11, const int ne12,
-    const int nb1, const int nb2, int offset, const sycl::nd_item<1> &item_ct1) {
-    const int i = SYCL_LOCAL_ID_CALC(item_ct1, 0);
     if (i >= ne) {
         return;
     }
-    int src1_idx = i - offset;
-    int oz = src1_idx / nb2;
-    int oy = (src1_idx - (oz * nb2)) / nb1;
-    int ox = src1_idx % nb1;
-    if (src1_idx >= 0 && ox < ne10 && oy < ne11 && oz < ne12) {
-        dst[i] = x[i] + y[ox + oy * ne10 + oz * ne10 * ne11];
-    } else {
-        dst[i] = x[i];
+
+    int64_t src1_idx = i - offset;
+
+    int64_t tmp = src1_idx;
+    const int64_t i13 = tmp / s13;
+    tmp -= i13 * s13;
+    const int64_t i12 = tmp / s12;
+    tmp -= i12 * s12;
+    const int64_t i11 = tmp / s11;
+    tmp -= i11 * s11;
+    const int64_t i10 = tmp;
+
+    float val = x[i];
+    if (src1_idx >= 0 && i10 < ne10 && i11 < ne11 && i12 < ne12 && i13 < ne13) {
+        val += y[((i13*ne12 + i12) * ne11 + i11) * ne10 + i10];
     }
+    dst[i] = val;
 }
 
 /* Unary OP funcs */
@@ -285,30 +294,6 @@ static void unary_op_trunc_kernel(const T * x, T * dst, const int k, const sycl:
     }
 }
 
-template<typename  T>
-static void upscale(const T  *x, T *dst, const int nb00, const int nb01,
-                        const int nb02, const int nb03, const int ne10, const int ne11,
-                        const int ne12, const int ne13, const float sf0, const float sf1,
-                        const float sf2, const float sf3, const sycl::nd_item<1> &item_ct1) {
-    int index = item_ct1.get_local_id(0) +
-               item_ct1.get_group(0) * item_ct1.get_local_range(0);
-    if (index >= ne10 * ne11 * ne12 * ne13) {
-        return;
-    }
-    // operation
-    int i10 = index % ne10;
-    int i11 = (index / ne10) % ne11;
-    int i12 = (index / (ne10 * ne11)) % ne12;
-    int i13 = (index / (ne10 * ne11 * ne12)) % ne13;
-
-    int i00 = static_cast<int>(i10 / sf0);
-    int i01 = static_cast<int>(i11 / sf1);
-    int i02 = static_cast<int>(i12 / sf2);
-    int i03 = static_cast<int>(i13 / sf3);
-
-    dst[index] = *(const T *)((const char *)x + i03 * nb03 + i02 * nb02 + i01 * nb01 + i00 * nb00);
-}
-
 template<typename T>
 static void clamp(const T * x, T * dst, const float min, const float max, const int k,
                       const sycl::nd_item<1> &item_ct1) {
@@ -364,18 +349,15 @@ static void gated_op_fused_geglu_quick(const T * x, const T * g, T * dst, const 
 
 namespace ggml_sycl_detail {
 static void acc_f32_sycl(const float *x, const float *y, float *dst,
-                         const int n_elements, const int ne10, const int ne11,
-                         const int ne12, const int nb1, const int nb2,
-                         const int offset, queue_ptr stream) {
-    int num_blocks = ceil_div(n_elements, SYCL_ACC_BLOCK_SIZE);
-    stream->parallel_for(
-        sycl::nd_range<1>(sycl::range<1>(num_blocks) *
-                              sycl::range<1>(SYCL_ACC_BLOCK_SIZE),
-                          sycl::range<1>(SYCL_ACC_BLOCK_SIZE)),
-        [=](sycl::nd_item<1> item_ct1) {
-            acc_f32(x, y, dst, n_elements, ne10, ne11, ne12, nb1, nb2, offset,
-                    item_ct1);
-        });
+                         const int64_t n_elements, const int64_t ne10, const int64_t ne11,
+                         const int64_t ne12, const int64_t ne13, const int64_t s1, const int64_t s2, const int64_t s3,
+                         const int64_t offset, queue_ptr stream) {
+    const int num_blocks = (n_elements + SYCL_ACC_BLOCK_SIZE - 1) / SYCL_ACC_BLOCK_SIZE;
+    stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_ACC_BLOCK_SIZE),
+                                           sycl::range<3>(1, 1, SYCL_ACC_BLOCK_SIZE)),
+                         [=](sycl::nd_item<3> item_ct1) {
+                             acc_f32(x, y, dst, n_elements, ne10, ne11, ne12, ne13, s1, s2, s3, offset);
+                         });
 }
 
 template<typename T>
@@ -386,41 +368,21 @@ static void arange_kernel(T * dst, const int k, T start, T step,
     }
 }
 
-template<typename T>
-static void upscale_sycl(const T *x, T *dst, const int nb00, const int nb01,
-                             const int nb02, const int nb03, const int ne10, const int ne11,
-                             const int ne12, const int ne13, const float sf0, const float sf1,
-                             const float sf2, const float sf3, queue_ptr stream) {
-    int dst_size = ne10 * ne11 * ne12 * ne13;
-    int num_blocks = ceil_div(dst_size, SYCL_UPSCALE_BLOCK_SIZE);
-    sycl::range<1> gridDim(num_blocks * SYCL_UPSCALE_BLOCK_SIZE);
-    stream->parallel_for(
-        sycl::nd_range<1>(gridDim, sycl::range<1>(SYCL_UPSCALE_BLOCK_SIZE)), [=](sycl::nd_item<1> item_ct1) {
-            upscale(x, dst, nb00, nb01, nb02, nb03, ne10, ne11, ne12, ne13, sf0, sf1, sf2, sf3, item_ct1);
-        });
-}
-
 template<typename KernelInvoker, typename... Args>
 static inline void dispatch_ggml_sycl_op_unary(ggml_backend_sycl_context & ctx, ggml_tensor * dst, KernelInvoker kernel_invoker, Args&&... args) {
-#if defined (GGML_SYCL_F16)
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32 || dst->src[0]->type == GGML_TYPE_F16);
     GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16);
-#else
-    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
-    GGML_ASSERT(dst->type == GGML_TYPE_F32);
-#endif
     GGML_ASSERT(dst->src[0]->type == dst->type);
+
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     switch (dst->type) {
-#if defined (GGML_SYCL_F16)
         case GGML_TYPE_F16:
             {
                 auto data_pts = cast_data<sycl::half>(dst);
                 kernel_invoker(data_pts.src, data_pts.dst, (int)ggml_nelements(dst->src[0]), main_stream, std::forward<Args>(args)...);
                 break;
             }
-#endif
         case GGML_TYPE_F32:
             {
                 auto data_pts = cast_data<float>(dst);
@@ -434,14 +396,10 @@ static inline void dispatch_ggml_sycl_op_unary(ggml_backend_sycl_context & ctx, 
 
 template<typename KernelInvoker, typename... Args>
 static inline void dispatch_ggml_sycl_op_fused_glu(ggml_backend_sycl_context & ctx, ggml_tensor * dst, KernelInvoker kernel_invoker, Args&&... args) {
-#if defined (GGML_SYCL_F16)
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32 || dst->src[0]->type == GGML_TYPE_F16);
     GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16);
-#else
-    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
-    GGML_ASSERT(dst->type == GGML_TYPE_F32);
-#endif
     GGML_ASSERT(dst->src[0]->type == dst->type);
+
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     const ggml_tensor * src0 = dst->src[0];
@@ -463,7 +421,6 @@ static inline void dispatch_ggml_sycl_op_fused_glu(ggml_backend_sycl_context & c
         GGML_ASSERT(src0->type == src1->type);
     }
     switch (dst->type) {
-#if defined (GGML_SYCL_F16)
         case GGML_TYPE_F16:
             {
                 sycl::half * src0_p = (sycl::half *) src0_d;
@@ -484,7 +441,6 @@ static inline void dispatch_ggml_sycl_op_fused_glu(ggml_backend_sycl_context & c
                                std::forward<Args>(args)...);
                 break;
             }
-#endif
         case GGML_TYPE_F32:
             {
                 float * src0_p = (float *) src0_d;
@@ -504,48 +460,6 @@ static inline void dispatch_ggml_sycl_op_fused_glu(ggml_backend_sycl_context & c
                                src1_o / sizeof(float),
                                main_stream,
                                std::forward<Args>(args)...);
-                break;
-            }
-        default:
-            GGML_ABORT("GGML tensor type not supported!\n");
-    }
-}
-
-template<typename KernelInvoker, typename... Args>
-static inline void dispatch_ggml_sycl_op_upscale(ggml_backend_sycl_context & ctx, ggml_tensor * dst, KernelInvoker kernel_invoker, Args&&... args) {
-#if defined (GGML_SYCL_F16)
-    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32 || dst->src[0]->type == GGML_TYPE_F16);
-    GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16);
-#else
-    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
-    GGML_ASSERT(dst->type == GGML_TYPE_F32);
-#endif
-    GGML_ASSERT(dst->src[0]->type == dst->type);
-
-    dpct::queue_ptr main_stream = ctx.stream();
-    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
-
-    const float sf0 = (float) dst->ne[0] / dst->src[0]->ne[0];
-    const float sf1 = (float) dst->ne[1] / dst->src[0]->ne[1];
-    const float sf2 = (float) dst->ne[2] / dst->src[0]->ne[2];
-    const float sf3 = (float) dst->ne[3] / dst->src[0]->ne[3];
-    switch (dst->type) {
-#if defined (GGML_SYCL_F16)
-        case GGML_TYPE_F16:
-            {
-                auto data_pts = cast_data<sycl::half>(dst);
-                kernel_invoker(data_pts.src, data_pts.dst, (int)dst->src[0]->nb[0], (int)dst->src[0]->nb[1], (int)dst->src[0]->nb[2],
-                               (int)dst->src[0]->nb[3], (int)dst->ne[0], (int)dst->ne[1], (int)dst->ne[2], (int)dst->ne[3], sf0, sf1, sf2, sf3,
-                               main_stream, std::forward<Args>(args)...);
-                break;
-            }
-#endif
-        case GGML_TYPE_F32:
-            {
-                auto data_pts = cast_data<float>(dst);
-                kernel_invoker(data_pts.src, data_pts.dst, (int)dst->src[0]->nb[0], (int)dst->src[0]->nb[1], (int)dst->src[0]->nb[2],
-                               (int)dst->src[0]->nb[3], (int)dst->ne[0], (int)dst->ne[1], (int)dst->ne[2], (int)dst->ne[3], sf0, sf1, sf2, sf3,
-                               main_stream, std::forward<Args>(args)...);
                 break;
             }
         default:
@@ -796,15 +710,6 @@ static inline void ggml_sycl_op_sqr(ggml_backend_sycl_context & ctx, ggml_tensor
         });
 }
 
-static inline void ggml_sycl_op_upscale(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    ggml_sycl_detail::dispatch_ggml_sycl_op_upscale(ctx, dst,
-        [](const auto* src, auto* dst_ptr, int nb00, int nb01, int nb02, int nb03,
-           int ne10, int ne11, int ne12, int ne13, float sf0, float sf1, float sf2, float sf3,
-           queue_ptr stream) {
-            ggml_sycl_detail::upscale_sycl(src, dst_ptr, nb00, nb01, nb02, nb03, ne10, ne11, ne12, ne13, sf0, sf1, sf2, sf3, stream);
-        });
-}
-
 static inline void ggml_sycl_op_clamp(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     float min_val;
     float max_val;
@@ -868,22 +773,31 @@ static inline void ggml_sycl_op_trunc(ggml_backend_sycl_context & ctx, ggml_tens
 }
 
 static inline void ggml_sycl_op_acc(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
-    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
-    GGML_ASSERT(dst->src[1]->type == GGML_TYPE_F32);
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+
+    const float * src0_d = (const float *) src0->data;
+    const float * src1_d = (const float *) src1->data;
+    float       * dst_d  = (float       *)  dst->data;
+
+    dpct::queue_ptr stream = ctx.stream();
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
-    GGML_ASSERT(dst->ne[3] == 1); // just 3D tensors supported
-    dpct::queue_ptr main_stream = ctx.stream();
-    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
-    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-    const float * src1_dd = static_cast<const float*>(dst->src[1]->data);
-    float *       dst_dd  = static_cast<float *>(dst->data);
 
-    int nb1 = dst->op_params[0] / 4; // 4 bytes of float32
-    int nb2 = dst->op_params[1] / 4; // 4 bytes of float32
-    // int nb3 = dst->op_params[2] / 4; // 4 bytes of float32 - unused
-    int offset = dst->op_params[3] / 4; // offset in bytes
+    GGML_ASSERT(ggml_is_contiguous(src1));
+    GGML_ASSERT(dst->nb[0] == ggml_element_size(dst));
+    GGML_ASSERT(ggml_is_contiguously_allocated(dst));
 
-    ggml_sycl_detail::acc_f32_sycl(src0_dd, src1_dd, dst_dd, (int)ggml_nelements(dst), (int)dst->src[1]->ne[0], (int)dst->src[1]->ne[1], (int)dst->src[1]->ne[2], nb1, nb2, offset, main_stream);
+    const int64_t s1     = dst->op_params[0] / sizeof(float);
+    const int64_t s2     = dst->op_params[1] / sizeof(float);
+    const int64_t s3     = dst->op_params[2] / sizeof(float);
+    const int64_t offset = dst->op_params[3] / sizeof(float);
+
+    ggml_sycl_detail::acc_f32_sycl(src0_d, src1_d, dst_d, ggml_nelements(dst),
+        src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3],
+        s1, s2, s3, offset, stream);
 }
 
 static inline void ggml_sycl_op_geglu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
@@ -1133,12 +1047,6 @@ void ggml_sycl_sqr(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_sqr(ctx, dst);
 }
-
-void ggml_sycl_upscale(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
-    ggml_sycl_op_upscale(ctx, dst);
-}
-
 
 void ggml_sycl_clamp(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);

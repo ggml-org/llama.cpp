@@ -159,6 +159,8 @@ struct clip_ctx {
     clip_flash_attn_type flash_attn_type = CLIP_FLASH_ATTN_TYPE_AUTO;
     bool is_allocated = false;
 
+    bool debug_output_embeddings = false;
+
     clip_ctx(clip_context_params & ctx_params) {
         flash_attn_type = ctx_params.flash_attn_type;
         backend_cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
@@ -205,6 +207,8 @@ struct clip_ctx {
         if (ctx_params.cb_eval != nullptr) {
             ggml_backend_sched_set_eval_callback(sched.get(), ctx_params.cb_eval, ctx_params.cb_eval_user_data);
         }
+
+        debug_output_embeddings = std::getenv("MTMD_DEBUG_EMBEDDINGS") != nullptr;
     }
 
     ~clip_ctx() {
@@ -792,6 +796,7 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
         case PROJECTOR_TYPE_IDEFICS3:
         case PROJECTOR_TYPE_LFM2:
         case PROJECTOR_TYPE_JANUS_PRO:
+        case PROJECTOR_TYPE_PHI4:
             {
                 builder = std::make_unique<clip_graph_siglip>(ctx, img);
             } break;
@@ -1143,6 +1148,13 @@ struct clip_model_loader {
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
                         // ref: https://huggingface.co/LiquidAI/LFM2.5-VL-1.6B/blob/main/processor_config.json
                         hparams.set_limit_image_tokens(64, 256);
+                    } break;
+                case PROJECTOR_TYPE_PHI4:
+                    {
+                        hparams.n_merge = 1;
+                        get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels);
+                        get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels);
+                        hparams.set_warmup_n_tokens(16*16);
                     } break;
                 case PROJECTOR_TYPE_PIXTRAL:
                 case PROJECTOR_TYPE_LIGHTONOCR:
@@ -1841,6 +1853,13 @@ struct clip_model_loader {
                     model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
                     model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"));
                 } break;
+            case PROJECTOR_TYPE_PHI4:
+                {
+                    model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
+                    model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
+                    model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                } break;
             case PROJECTOR_TYPE_LFM2A:
                 {
                     for (int i : {0, 2, 3, 5, 6}) {
@@ -2178,8 +2197,6 @@ struct clip_init_result clip_init(const char * fname, struct clip_context_params
             // TODO: we don't support audio for Gemma 3N, but GGUF contains audio tensors
             // we can remove this check when we implement audio support for Gemma 3N
             skip_audio = ctx_vision->model.proj_type == PROJECTOR_TYPE_GEMMA3NV;
-
-            // clip_debug_encode(ctx_vision, 24*14, 24*14, 0.5f);
         }
 
         if (loader.has_audio && !skip_audio) {
@@ -3157,6 +3174,7 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                 res_imgs->entries.push_back(std::move(img_f32));
             } break;
 
+        case PROJECTOR_TYPE_PHI4:
         case PROJECTOR_TYPE_PIXTRAL:
         case PROJECTOR_TYPE_LIGHTONOCR:
             {
@@ -3383,6 +3401,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
         case PROJECTOR_TYPE_MLP:
         case PROJECTOR_TYPE_MLP_NORM:
         case PROJECTOR_TYPE_JANUS_PRO:
+        case PROJECTOR_TYPE_PHI4:
             {
                 // do nothing
             } break;
@@ -3884,6 +3903,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         case PROJECTOR_TYPE_VOXTRAL:
         case PROJECTOR_TYPE_MUSIC_FLAMINGO:
         case PROJECTOR_TYPE_JANUS_PRO:
+        case PROJECTOR_TYPE_PHI4:
         case PROJECTOR_TYPE_COGVLM:
             {
                 // do nothing
@@ -3963,7 +3983,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     }
 
     // Debug: dump final embeddings if MTMD_DEBUG_EMBEDDINGS is set
-    if (std::getenv("MTMD_DEBUG_EMBEDDINGS") != nullptr) {
+    if (ctx->debug_output_embeddings) {
         const int64_t n_embd = embeddings->ne[0];
         const int64_t n_tokens = embeddings->ne[1];
         std::vector<float> emb_data(n_embd * n_tokens);
@@ -4013,6 +4033,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_LDPV2:
             return ctx->model.mm_model_peg_0_b->ne[0];
         case PROJECTOR_TYPE_MLP:
+        case PROJECTOR_TYPE_PHI4:
         case PROJECTOR_TYPE_PIXTRAL:
         case PROJECTOR_TYPE_LIGHTONOCR:
             return ctx->model.mm_2_w->ne[1];
@@ -4141,14 +4162,7 @@ const clip_hparams * clip_get_hparams(const struct clip_ctx * ctx) {
 //
 // API for debugging
 //
-void clip_debug_encode(clip_ctx * ctx, int h, int w, float fill_value) {
-    clip_image_f32 img;
-    img.nx = w;
-    img.ny = h;
-    img.buf.resize(h * w * 3);
-    for (int i = 0; i < h * w * 3; i++) {
-        img.buf[i] = static_cast<float>(fill_value);
-    }
-    clip_image_encode(ctx, 1, &img, nullptr);
-    GGML_ASSERT(img.buf.empty() && "expected, always stop here");
+
+void clip_set_debug_output_embeddings(clip_ctx * ctx, bool enable) {
+    ctx->debug_output_embeddings = enable;
 }

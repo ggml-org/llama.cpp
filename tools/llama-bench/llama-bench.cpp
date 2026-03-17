@@ -20,6 +20,7 @@
 #include <unordered_set>
 
 #include "common.h"
+#include "download.h"
 #include "ggml.h"
 #include "llama.h"
 
@@ -312,6 +313,9 @@ static std::vector<int> parse_int_range(const std::string & s) {
 
 struct cmd_params {
     std::vector<std::string>         model;
+    std::vector<std::string>         hf_repo;
+    std::vector<std::string>         hf_file;
+    std::string                      hf_token;
     std::vector<int>                 n_prompt;
     std::vector<int>                 n_gen;
     std::vector<std::pair<int, int>> n_pg;
@@ -351,6 +355,9 @@ struct cmd_params {
 
 static const cmd_params cmd_params_defaults = {
     /* model                */ { "models/7B/ggml-model-q4_0.gguf" },
+    /* hf_repo              */ {},
+    /* hf_file              */ {},
+    /* hf_token             */ "",
     /* n_prompt             */ { 512 },
     /* n_gen                */ { 128 },
     /* n_pg                 */ {},
@@ -372,7 +379,7 @@ static const cmd_params cmd_params_defaults = {
     /* devices              */ { {} },
     /* tensor_split         */ { std::vector<float>(llama_max_devices(), 0.0f) },
     /* tensor_buft_overrides*/ { std::vector<llama_model_tensor_buft_override>{ { nullptr, nullptr } } },
-    /* use_mmap             */ { false },
+    /* use_mmap             */ { true },
     /* use_direct_io        */ { false },
     /* embeddings           */ { false },
     /* no_op_offload        */ { false },
@@ -393,74 +400,57 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("\n");
     printf("options:\n");
     printf("  -h, --help\n");
-    printf("  --numa <distribute|isolate|numactl>       numa mode (default: disabled)\n");
-    printf("  -r, --repetitions <n>                     number of times to repeat each test (default: %d)\n",
-           cmd_params_defaults.reps);
-    printf("  --prio <-1|0|1|2|3>                          process/thread priority (default: %d)\n",
-           cmd_params_defaults.prio);
-    printf("  --delay <0...N> (seconds)                 delay between each test (default: %d)\n",
-           cmd_params_defaults.delay);
-    printf("  -o, --output <csv|json|jsonl|md|sql>      output format printed to stdout (default: %s)\n",
-           output_format_str(cmd_params_defaults.output_format));
-    printf("  -oe, --output-err <csv|json|jsonl|md|sql> output format printed to stderr (default: %s)\n",
-           output_format_str(cmd_params_defaults.output_format_stderr));
-    printf("  --list-devices                            list available devices and exit\n");
-    printf("  -v, --verbose                             verbose output\n");
-    printf("  --progress                                print test progress indicators\n");
-    printf("  --no-warmup                               skip warmup runs before benchmarking\n");
+    printf("  --numa <distribute|isolate|numactl>         numa mode (default: disabled)\n");
+    printf("  -r, --repetitions <n>                       number of times to repeat each test (default: %d)\n", cmd_params_defaults.reps);
+    printf("  --prio <-1|0|1|2|3>                         process/thread priority (default: %d)\n", cmd_params_defaults.prio);
+    printf("  --delay <0...N> (seconds)                   delay between each test (default: %d)\n", cmd_params_defaults.delay);
+    printf("  -o, --output <csv|json|jsonl|md|sql>        output format printed to stdout (default: %s)\n", output_format_str(cmd_params_defaults.output_format));
+    printf("  -oe, --output-err <csv|json|jsonl|md|sql>   output format printed to stderr (default: %s)\n", output_format_str(cmd_params_defaults.output_format_stderr));
+    printf("  --list-devices                              list available devices and exit\n");
+    printf("  -v, --verbose                               verbose output\n");
+    printf("  --progress                                  print test progress indicators\n");
+    printf("  --no-warmup                                 skip warmup runs before benchmarking\n");
     if (llama_supports_rpc()) {
-        printf("  -rpc, --rpc <rpc_servers>                 register RPC devices (comma separated)\n");
+        printf("  -rpc, --rpc <rpc_servers>                   register RPC devices (comma separated)\n");
     }
     printf("\n");
     printf("test parameters:\n");
-    printf("  -m, --model <filename>                    (default: %s)\n", join(cmd_params_defaults.model, ",").c_str());
-    printf("  -p, --n-prompt <n>                        (default: %s)\n",
-           join(cmd_params_defaults.n_prompt, ",").c_str());
-    printf("  -n, --n-gen <n>                           (default: %s)\n", join(cmd_params_defaults.n_gen, ",").c_str());
-    printf("  -pg <pp,tg>                               (default: %s)\n",
-           join(transform_to_str(cmd_params_defaults.n_pg, pair_str), ",").c_str());
-    printf("  -d, --n-depth <n>                         (default: %s)\n",
-           join(cmd_params_defaults.n_depth, ",").c_str());
-    printf("  -b, --batch-size <n>                      (default: %s)\n",
-           join(cmd_params_defaults.n_batch, ",").c_str());
-    printf("  -ub, --ubatch-size <n>                    (default: %s)\n",
-           join(cmd_params_defaults.n_ubatch, ",").c_str());
-    printf("  -ctk, --cache-type-k <t>                  (default: %s)\n",
-           join(transform_to_str(cmd_params_defaults.type_k, ggml_type_name), ",").c_str());
-    printf("  -ctv, --cache-type-v <t>                  (default: %s)\n",
-           join(transform_to_str(cmd_params_defaults.type_v, ggml_type_name), ",").c_str());
-    printf("  -t, --threads <n>                         (default: %s)\n",
-           join(cmd_params_defaults.n_threads, ",").c_str());
-    printf("  -C, --cpu-mask <hex,hex>                  (default: %s)\n",
-           join(cmd_params_defaults.cpu_mask, ",").c_str());
-    printf("  --cpu-strict <0|1>                        (default: %s)\n",
-           join(cmd_params_defaults.cpu_strict, ",").c_str());
-    printf("  --poll <0...100>                          (default: %s)\n", join(cmd_params_defaults.poll, ",").c_str());
-    printf("  -ngl, --n-gpu-layers <n>                  (default: %s)\n",
-           join(cmd_params_defaults.n_gpu_layers, ",").c_str());
-    printf("  -ncmoe, --n-cpu-moe <n>                   (default: %s)\n",
-           join(cmd_params_defaults.n_cpu_moe, ",").c_str());
-    printf("  -sm, --split-mode <none|layer|row>        (default: %s)\n",
-           join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
-    printf("  -mg, --main-gpu <i>                       (default: %s)\n",
-           join(cmd_params_defaults.main_gpu, ",").c_str());
-    printf("  -nkvo, --no-kv-offload <0|1>              (default: %s)\n",
-           join(cmd_params_defaults.no_kv_offload, ",").c_str());
-    printf("  -fa, --flash-attn <0|1>                   (default: %s)\n",
-           join(cmd_params_defaults.flash_attn, ",").c_str());
-    printf("  -dev, --device <dev0/dev1/...>            (default: auto)\n");
-    printf("  -mmp, --mmap <0|1>                        (default: %s)\n",
-           join(cmd_params_defaults.use_mmap, ",").c_str());
-    printf("  -dio, --direct-io <0|1>                   (default: %s)\n",
-           join(cmd_params_defaults.use_direct_io, ",").c_str());
-    printf("  -embd, --embeddings <0|1>                 (default: %s)\n",
-           join(cmd_params_defaults.embeddings, ",").c_str());
-    printf("  -ts, --tensor-split <ts0/ts1/..>          (default: 0)\n");
+    printf("  -m, --model <filename>                      (default: %s)\n", join(cmd_params_defaults.model, ",").c_str());
+    printf("  -hf, -hfr, --hf-repo <user>/<model>[:quant] Hugging Face model repository; quant is optional, case-insensitive\n");
+    printf("                                              default to Q4_K_M, or falls back to the first file in the repo if Q4_K_M doesn't exist.\n");
+    printf("                                              example: unsloth/phi-4-GGUF:Q4_K_M\n");
+    printf("                                              (default: unused)\n");
+    printf("  -hff, --hf-file <file>                      Hugging Face model file. If specified, it will override the quant in --hf-repo\n");
+    printf("                                              (default: unused)\n");
+    printf("  -hft, --hf-token <token>                    Hugging Face access token\n");
+    printf("                                              (default: value from HF_TOKEN environment variable)\n");
+    printf("  -p, --n-prompt <n>                          (default: %s)\n", join(cmd_params_defaults.n_prompt, ",").c_str());
+    printf("  -n, --n-gen <n>                             (default: %s)\n", join(cmd_params_defaults.n_gen, ",").c_str());
+    printf("  -pg <pp,tg>                                 (default: %s)\n", join(transform_to_str(cmd_params_defaults.n_pg, pair_str), ",").c_str());
+    printf("  -d, --n-depth <n>                           (default: %s)\n", join(cmd_params_defaults.n_depth, ",").c_str());
+    printf("  -b, --batch-size <n>                        (default: %s)\n", join(cmd_params_defaults.n_batch, ",").c_str());
+    printf("  -ub, --ubatch-size <n>                      (default: %s)\n", join(cmd_params_defaults.n_ubatch, ",").c_str());
+    printf("  -ctk, --cache-type-k <t>                    (default: %s)\n", join(transform_to_str(cmd_params_defaults.type_k, ggml_type_name), ",").c_str());
+    printf("  -ctv, --cache-type-v <t>                    (default: %s)\n", join(transform_to_str(cmd_params_defaults.type_v, ggml_type_name), ",").c_str());
+    printf("  -t, --threads <n>                           (default: %s)\n", join(cmd_params_defaults.n_threads, ",").c_str());
+    printf("  -C, --cpu-mask <hex,hex>                    (default: %s)\n", join(cmd_params_defaults.cpu_mask, ",").c_str());
+    printf("  --cpu-strict <0|1>                          (default: %s)\n", join(cmd_params_defaults.cpu_strict, ",").c_str());
+    printf("  --poll <0...100>                            (default: %s)\n", join(cmd_params_defaults.poll, ",").c_str());
+    printf("  -ngl, --n-gpu-layers <n>                    (default: %s)\n", join(cmd_params_defaults.n_gpu_layers, ",").c_str());
+    printf("  -ncmoe, --n-cpu-moe <n>                     (default: %s)\n", join(cmd_params_defaults.n_cpu_moe, ",").c_str());
+    printf("  -sm, --split-mode <none|layer|row>          (default: %s)\n", join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
+    printf("  -mg, --main-gpu <i>                         (default: %s)\n", join(cmd_params_defaults.main_gpu, ",").c_str());
+    printf("  -nkvo, --no-kv-offload <0|1>                (default: %s)\n", join(cmd_params_defaults.no_kv_offload, ",").c_str());
+    printf("  -fa, --flash-attn <0|1>                     (default: %s)\n", join(cmd_params_defaults.flash_attn, ",").c_str());
+    printf("  -dev, --device <dev0/dev1/...>              (default: auto)\n");
+    printf("  -mmp, --mmap <0|1>                          (default: %s)\n", join(cmd_params_defaults.use_mmap, ",").c_str());
+    printf("  -dio, --direct-io <0|1>                     (default: %s)\n", join(cmd_params_defaults.use_direct_io, ",").c_str());
+    printf("  -embd, --embeddings <0|1>                   (default: %s)\n", join(cmd_params_defaults.embeddings, ",").c_str());
+    printf("  -ts, --tensor-split <ts0/ts1/..>            (default: 0)\n");
     printf("  -ot --override-tensor <tensor name pattern>=<buffer type>;...\n");
-    printf("                                            (default: disabled)\n");
-    printf("  -nopo, --no-op-offload <0|1>              (default: 0)\n");
-    printf("  --no-host <0|1>                           (default: %s)\n",
-           join(cmd_params_defaults.no_host, ",").c_str());
+    printf("                                              (default: disabled)\n");
+    printf("  -nopo, --no-op-offload <0|1>                (default: 0)\n");
+    printf("  --no-host <0|1>                             (default: %s)\n", join(cmd_params_defaults.no_host, ",").c_str());
     printf("\n");
     printf(
         "Multiple values can be given for each parameter by separating them with ','\n"
@@ -514,6 +504,10 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     params.progress             = cmd_params_defaults.progress;
     params.no_warmup            = cmd_params_defaults.no_warmup;
 
+    if (const char * env = getenv("HF_TOKEN")) {
+        params.hf_token = env;
+    }
+
     for (int i = 1; i < argc; i++) {
         arg = argv[i];
         if (arg.compare(0, arg_prefix.size(), arg_prefix) == 0) {
@@ -531,6 +525,26 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = string_split<std::string>(argv[i], split_delim);
                 params.model.insert(params.model.end(), p.begin(), p.end());
+            } else if (arg == "-hf" || arg == "-hfr" || arg == "--hf-repo") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<std::string>(argv[i], split_delim);
+                params.hf_repo.insert(params.hf_repo.end(), p.begin(), p.end());
+            } else if (arg == "-hff" || arg == "--hf-file") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<std::string>(argv[i], split_delim);
+                params.hf_file.insert(params.hf_file.end(), p.begin(), p.end());
+            } else if (arg == "-hft" || arg == "--hf-token") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                params.hf_token = argv[i];
             } else if (arg == "-p" || arg == "--n-prompt") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -959,6 +973,44 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
         fprintf(stderr, "error: invalid parameter for argument: %s\n", arg.c_str());
         print_usage(argc, argv);
         exit(1);
+    }
+
+    if (!params.hf_repo.empty()) {
+        for (size_t i = 0; i < params.hf_repo.size(); i++) {
+            common_params_model model;
+
+            // step 1: no `-hff` provided, we auto-detect based on the `-hf` flag
+            if (params.hf_file.empty() || params.hf_file[i].empty()) {
+                auto auto_detected = common_get_hf_file(params.hf_repo[i], params.hf_token, false);
+                if (auto_detected.repo.empty() || auto_detected.ggufFile.empty()) {
+                    exit(1);
+                }
+
+                model.name    = params.hf_repo[i];
+                model.hf_repo = auto_detected.repo;
+                model.hf_file = auto_detected.ggufFile;
+            } else {
+                model.hf_file = params.hf_file[i];
+            }
+
+            // step 2: construct the model cache path
+            std::string clean_fname = model.hf_repo + "_" + model.hf_file;
+            string_replace_all(clean_fname, "\\", "_");
+            string_replace_all(clean_fname, "/", "_");
+            model.path = fs_get_cache_file(clean_fname);
+
+            // step 3: download the model if not exists
+            std::string model_endpoint = get_model_endpoint();
+            model.url = model_endpoint + model.hf_repo + "/resolve/main/" + model.hf_file;
+
+            bool ok = common_download_model(model, params.hf_token, false);
+            if (!ok) {
+                fprintf(stderr, "error: failed to download model from %s\n", model.url.c_str());
+                exit(1);
+            }
+
+            params.model.push_back(model.path);
+        }
     }
 
     // set defaults
