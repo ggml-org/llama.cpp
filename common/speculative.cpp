@@ -1563,6 +1563,7 @@ common_speculative * common_speculative_init(
                     cparams.n_threads_batch = llama_n_threads_batch(ctx_tgt);
                 }
 
+                llama_set_embeddings(ctx_tgt, true);
                 cparams.embeddings = true;
 
                 llama_context * ctx_mtp = llama_init_from_model(const_cast<llama_model *>(llama_get_model(ctx_tgt)), cparams);

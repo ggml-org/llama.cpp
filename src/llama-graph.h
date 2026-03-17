@@ -270,6 +270,8 @@ public:
 
     void set_input(const llama_ubatch * ubatch) override;
 
+    bool can_reuse(const llm_graph_params & params) override;
+
     ggml_tensor * hidden_state = nullptr; // F32 [n_embd, n_tokens]
 
     const float * data = nullptr;

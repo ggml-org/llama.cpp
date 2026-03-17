@@ -716,7 +716,7 @@ private:
 
         add_bos_token = llama_vocab_get_add_bos(vocab);
 
-        if (params_base.speculative.type == COMMON_SPECULATIVE_TYPE_MTP || params_base.speculative.has_dft()) {
+        if (params_base.speculative.has_dft()) {
             const auto & params_spec = params_base.speculative;
 
             auto params_dft = params_base;
@@ -736,23 +736,39 @@ private:
             }
 
             params_dft.tensor_buft_overrides = params_spec.tensor_buft_overrides;
-            params_base.speculative.cparams_dft = common_context_params_to_llama(params_dft);
 
-            if (params_base.speculative.requires_dft() && params_base.speculative.has_dft()) {
-                SRV_INF("loading draft model '%s'\n", params_base.speculative.mparams_dft.path.c_str());
+            SRV_INF("loading draft model '%s'\n", params_base.speculative.mparams_dft.path.c_str());
 
-                params_dft.model = params_spec.mparams_dft;
+            auto mparams_dft = common_model_params_to_llama(params_dft);
 
-                auto mparams_dft = common_model_params_to_llama(params_dft);
-
-                model_dft.reset(llama_model_load_from_file(params_dft.model.path.c_str(), mparams_dft));
-                if (model_dft == nullptr) {
-                    SRV_ERR("failed to load draft model, '%s'\n", params_dft.model.path.c_str());
-                    return false;
-                }
-
-                params_base.speculative.model_dft = model_dft.get();
+            model_dft.reset(llama_model_load_from_file(params_dft.model.path.c_str(), mparams_dft));
+            if (model_dft == nullptr) {
+                SRV_ERR("failed to load draft model, '%s'\n", params_dft.model.path.c_str());
+                return false;
             }
+
+            params_base.speculative.model_dft = model_dft.get();
+            params_base.speculative.cparams_dft = common_context_params_to_llama(params_dft);
+        } else if (params_base.speculative.type == COMMON_SPECULATIVE_TYPE_MTP) {
+            const auto & params_spec = params_base.speculative;
+
+            auto params_dft = params_base;
+
+            params_dft.n_parallel   = 1;
+            params_dft.n_ctx        = params_spec.n_ctx == 0 ? llama_n_ctx_seq(ctx) : params_spec.n_ctx;
+            params_dft.n_batch      = llama_n_ctx_seq(ctx);
+            params_dft.devices      = params_spec.devices;
+            params_dft.n_gpu_layers = params_spec.n_gpu_layers;
+            params_dft.cache_type_k = params_spec.cache_type_k;
+            params_dft.cache_type_v = params_spec.cache_type_v;
+
+            if (params_spec.cpuparams.n_threads > 0) {
+                params_dft.cpuparams.n_threads       = params_spec.cpuparams.n_threads;
+                params_dft.cpuparams_batch.n_threads = params_spec.cpuparams_batch.n_threads;
+            }
+
+            params_dft.tensor_buft_overrides = params_spec.tensor_buft_overrides;
+            params_base.speculative.cparams_dft = common_context_params_to_llama(params_dft);
         }
 
         std::string & mmproj_path = params_base.mmproj.path;
@@ -2196,10 +2212,16 @@ private:
 
                 if (slot.task->params.speculative.n_min > (int) draft.size()) {
                     SLT_DBG(slot, "ignoring small draft: %d < %d\n", (int) draft.size(), slot.task->params.speculative.n_min);
-                    // fallback to normal decoding
-                    slot.i_batch = slot.i_batch_dft[0];
                     slot.drafted.clear();
-                    slot.i_batch_dft.clear();
+                    if (slot.task->params.speculative.type != COMMON_SPECULATIVE_TYPE_MTP) {
+                        // Non-MTP speculation can safely fall back to plain decoding.
+                        slot.i_batch = slot.i_batch_dft[0];
+                        slot.i_batch_dft.clear();
+                    } else {
+                        // MTP still needs a 0-accept speculative round so accept() can stage
+                        // the frontier hidden state for the next shifted first pass.
+                        slot.i_batch = -1;
+                    }
                 } else {
                     // keep track of total number of drafted tokens tested
                     slot.n_draft_total += draft.size();

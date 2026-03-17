@@ -3525,6 +3525,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_MOD;
             } else if (value == "mtp") {
                 params.speculative.type = COMMON_SPECULATIVE_TYPE_MTP;
+                params.mtp = true;
             } else {
                 throw std::invalid_argument("unknown speculative decoding type without draft model");
             }

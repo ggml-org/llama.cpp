@@ -55,26 +55,23 @@ int main(int argc, char ** argv) {
     {
         const auto & params_spec = params.speculative;
 
-        auto params_dft = params;
+        if (params_spec.has_dft()) {
+            auto params_dft = params;
 
-        params_dft.n_parallel   = 1;
-        params_dft.n_ctx        = params_spec.n_ctx == 0 ? (int32_t) llama_n_ctx_seq(ctx_tgt) : params_spec.n_ctx;
-        params_dft.n_batch      = llama_n_ctx_seq(ctx_tgt);
-        params_dft.cache_type_k = params_spec.cache_type_k;
-        params_dft.cache_type_v = params_spec.cache_type_v;
-        params_dft.devices      = params_spec.devices;
-        params_dft.n_gpu_layers = params_spec.n_gpu_layers;
+            params_dft.n_parallel   = 1;
+            params_dft.n_ctx        = params_spec.n_ctx == 0 ? (int32_t) llama_n_ctx_seq(ctx_tgt) : params_spec.n_ctx;
+            params_dft.n_batch      = llama_n_ctx_seq(ctx_tgt);
+            params_dft.cache_type_k = params_spec.cache_type_k;
+            params_dft.cache_type_v = params_spec.cache_type_v;
+            params_dft.devices      = params_spec.devices;
+            params_dft.n_gpu_layers = params_spec.n_gpu_layers;
 
-        if (params_spec.cpuparams.n_threads > 0) {
-            params_dft.cpuparams.n_threads       = params.speculative.cpuparams.n_threads;
-            params_dft.cpuparams_batch.n_threads = params.speculative.cpuparams_batch.n_threads;
-        }
+            if (params_spec.cpuparams.n_threads > 0) {
+                params_dft.cpuparams.n_threads       = params.speculative.cpuparams.n_threads;
+                params_dft.cpuparams_batch.n_threads = params.speculative.cpuparams_batch.n_threads;
+            }
 
-        params_dft.tensor_buft_overrides = params.speculative.tensor_buft_overrides;
-
-        params.speculative.cparams_dft = common_context_params_to_llama(params_dft);
-
-        if (params_spec.requires_dft()) {
+            params_dft.tensor_buft_overrides = params.speculative.tensor_buft_overrides;
             params_dft.model = params_spec.mparams_dft;
 
             auto mparams_dft = common_model_params_to_llama(params_dft);
@@ -86,6 +83,25 @@ int main(int argc, char ** argv) {
             }
 
             params.speculative.model_dft = model_dft.get();
+            params.speculative.cparams_dft = common_context_params_to_llama(params_dft);
+        } else if (params_spec.type == COMMON_SPECULATIVE_TYPE_MTP) {
+            auto params_dft = params;
+
+            params_dft.n_parallel   = 1;
+            params_dft.n_ctx        = params_spec.n_ctx == 0 ? (int32_t) llama_n_ctx_seq(ctx_tgt) : params_spec.n_ctx;
+            params_dft.n_batch      = llama_n_ctx_seq(ctx_tgt);
+            params_dft.cache_type_k = params_spec.cache_type_k;
+            params_dft.cache_type_v = params_spec.cache_type_v;
+            params_dft.devices      = params_spec.devices;
+            params_dft.n_gpu_layers = params_spec.n_gpu_layers;
+
+            if (params_spec.cpuparams.n_threads > 0) {
+                params_dft.cpuparams.n_threads       = params.speculative.cpuparams.n_threads;
+                params_dft.cpuparams_batch.n_threads = params.speculative.cpuparams_batch.n_threads;
+            }
+
+            params_dft.tensor_buft_overrides = params.speculative.tensor_buft_overrides;
+            params.speculative.cparams_dft = common_context_params_to_llama(params_dft);
         }
     }
 

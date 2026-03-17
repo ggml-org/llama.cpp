@@ -340,6 +340,18 @@ void llm_graph_input_mtp_hidden_state::set_input(const llama_ubatch * ubatch) {
     }
 }
 
+bool llm_graph_input_mtp_hidden_state::can_reuse(const llm_graph_params & params) {
+    data = params.mtp_hidden_state;
+
+    bool res = true;
+
+    res &= hidden_state != nullptr;
+    res &= data != nullptr;
+    res &= hidden_state->ne[1] == params.ubatch.n_tokens;
+
+    return res;
+}
+
 void llm_graph_input_cross_embd::set_input(const llama_ubatch * ubatch) {
     GGML_UNUSED(ubatch);
 
