@@ -258,7 +258,7 @@
 					</Tooltip.Trigger>
 					<Tooltip.Content>
 						<p>Undo last generation</p>
-						<KeyboardShortcutInfo keys={['ctrl', 'z']} class="w-full justify-center opacity-100" />
+						<KeyboardShortcutInfo keys={['cmd', 'z']} class="w-full justify-center opacity-100" />
 					</Tooltip.Content>
 				</Tooltip.Root>
 
@@ -270,7 +270,7 @@
 					</Tooltip.Trigger>
 					<Tooltip.Content>
 						<p>Redo last generation</p>
-						<KeyboardShortcutInfo keys={['ctrl', 'y']} class="w-full justify-center opacity-100" />
+						<KeyboardShortcutInfo keys={['cmd', 'y']} class="w-full justify-center opacity-100" />
 					</Tooltip.Content>
 				</Tooltip.Root>
 

@@ -22,8 +22,6 @@
 			<ArrowBigUp class="size-4 {variant === 'destructive' ? 'text-destructive' : ''} -mr-1" />
 		{:else if key === 'cmd'}
 			<span class={variant === 'destructive' ? 'text-destructive' : ''}>⌘</span>
-		{:else if key === 'ctrl'}
-			<span class={variant === 'destructive' ? 'text-destructive' : ''}>Ctrl</span>
 		{:else}
 			{key.toUpperCase()}
 		{/if}
