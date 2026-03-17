@@ -45,6 +45,27 @@
 export { default as ModelsSelector } from './ModelsSelector.svelte';
 
 /**
+ * **ModelsSelectorList** - Grouped model options list
+ *
+ * Renders grouped model options (loaded, favourites, available) with section
+ * headers and org subgroups. Shared between ModelsSelector and ModelsSelectorSheet
+ * to avoid template duplication.
+ *
+ * Accepts an optional `renderOption` snippet to customize how each option is
+ * rendered (e.g., to add keyboard navigation or highlighting).
+ */
+export { default as ModelsSelectorList } from './ModelsSelectorList.svelte';
+
+/**
+ * **ModelsSelectorOption** - Single model option row
+ *
+ * Renders a single model option with selection state, favourite toggle,
+ * load/unload actions, status indicators, and an info button.
+ * Used inside ModelsSelectorList or directly in custom render snippets.
+ */
+export { default as ModelsSelectorOption } from './ModelsSelectorOption.svelte';
+
+/**
  * **ModelsSelectorSheet** - Mobile model selection sheet
  *
  * Bottom sheet variant of ModelsSelector optimized for touch interaction
@@ -80,5 +101,12 @@ export { default as ModelsSelectorSheet } from './ModelsSelectorSheet.svelte';
  * ```
  */
 export { default as ModelBadge } from './ModelBadge.svelte';
+
+/**
+ * **ModelId** - Parsed model identifier display
+ *
+ * Displays a model ID with optional org name, parameter badges, quantization,
+ * aliases, and tags. Supports raw mode to show the unprocessed model name.
+ * Respects the user's `showRawModelNames` setting.
+ */
 export { default as ModelId } from './ModelId.svelte';
-export { default as ModelsSelectorOption } from './ModelsSelectorOption.svelte';
