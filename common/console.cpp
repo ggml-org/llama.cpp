@@ -252,8 +252,11 @@ namespace console {
             if ((low_surrogate >= 0xDC00) && (low_surrogate <= 0xDFFF)) { // Check if the next wchar is a low surrogate
                 return (static_cast<char32_t>(wc & 0x03FF) << 10) + (low_surrogate & 0x03FF) + 0x10000;
             }
+            // High surrogate not followed by valid low surrogate - treat as standalone character
+            // (matching Windows behavior in the block above)
+            return static_cast<char32_t>(wc);
         }
-        if ((wc >= 0xD800) && (wc <= 0xDFFF)) { // Invalid surrogate pair
+        if ((wc >= 0xDC00) && (wc <= 0xDFFF)) { // Low surrogate without high surrogate
             return 0xFFFD; // Return the replacement character U+FFFD
         }
 #endif
