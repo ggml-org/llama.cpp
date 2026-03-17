@@ -204,6 +204,7 @@ struct common_chat_templates_inputs {
     std::map<std::string, std::string>    chat_template_kwargs;
     bool                                  add_bos = false;
     bool                                  add_eos = false;
+    bool                                  force_pure_content = false;
 };
 
 struct common_chat_params {
