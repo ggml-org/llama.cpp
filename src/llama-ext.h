@@ -15,13 +15,13 @@ LLAMA_API struct ggml_cgraph * llama_graph_reserve(
 LLAMA_API ggml_type llama_ftype_get_default_type(llama_ftype ftype);
 
 // Quantization state.
-struct llama_quant;
+struct quantize_state_impl;
 
-LLAMA_API llama_quant * llama_quant_init(
+LLAMA_API quantize_state_impl * llama_quant_init(
         const llama_model * model,
         const llama_model_quantize_params * params);
 
-LLAMA_API void llama_quant_free(llama_quant * qnt);
+LLAMA_API void llama_quant_free(quantize_state_impl * qs);
 
 // Descriptor for constructing a mock model for quantization testing.
 struct llama_quant_model_desc {
@@ -42,14 +42,14 @@ LLAMA_API llama_model * llama_quant_model_from_metadata(const llama_quant_model_
 
 // Returns true if this tensor should be quantized (based on name, dims, params).
 LLAMA_API bool llama_quant_tensor_allows_quantization(
-        const llama_quant * qnt,
+        const quantize_state_impl * qs,
         const ggml_tensor * tensor);
 
 // Compute quantization type assignments for a list of tensors.
 // All tensors should be quantizable (use llama_quant_tensor_allows_quantization to filter).
 // result_types: caller-allocated array of n_tensors elements, filled with assigned types.
 LLAMA_API void llama_quant_compute_types(
-        llama_quant * qnt,
+        quantize_state_impl * qs,
         llama_ftype ftype,
         ggml_tensor ** tensors,
         ggml_type * result_types,
