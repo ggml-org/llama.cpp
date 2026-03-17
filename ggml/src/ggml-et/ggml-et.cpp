@@ -839,9 +839,13 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             }
             break;
         case GGML_OP_GET_ROWS:
-            // Support F32/Q4_0/Q8_0 data with I32 indices -> F32 output
+            // Support F32/Q4_0/Q8_0/Q4_K data with I32 indices -> F32 output
             if (op->type == GGML_TYPE_F32 &&
-                op->src[0] && (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_Q4_0 || op->src[0]->type == GGML_TYPE_Q8_0) &&
+                op->src[0] &&
+                (op->src[0]->type == GGML_TYPE_F32 ||
+                    op->src[0]->type == GGML_TYPE_Q4_0 ||
+                    op->src[0]->type == GGML_TYPE_Q8_0 ||
+                    op->src[0]->type == GGML_TYPE_Q4_K) &&
                 op->src[1] && op->src[1]->type == GGML_TYPE_I32 &&
                 ggml_is_contiguous(op) &&
                 ggml_is_contiguous(op->src[0]) &&
@@ -856,7 +860,8 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             // Support F32->F32 and F16->F16 CONT operations (rearrange non-contiguous to contiguous)
             if ((op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) &&
                 op->src[0] && op->src[0]->type == op->type &&
-                ggml_is_contiguous(op)) {
+                ggml_is_contiguous(op) &&
+                op->nb[1] % 64 == 0) { // cache alignment
                 // Defensive check: ensure dst and src0 are not aliased (separate buffers)
                 // While GGML design currently guarantees this, check for future robustness
                 if (op->data && op->src[0]->data && op->data == op->src[0]->data) {
@@ -904,6 +909,9 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
         default:
             supported = false;
             break;
+    }
+    if(!supported) {
+        ggml_et_dump_operator_metadata(op);
     }
     return supported;
 }
