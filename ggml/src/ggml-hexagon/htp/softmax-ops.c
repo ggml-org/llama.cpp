@@ -195,7 +195,7 @@ static float hvx_softmax_f32(const uint8_t * restrict src,
                              const float max) {
     hvx_sub_scalar_f32(spad, src, max, num_elems);
 
-    hvx_exp_f32(spad, dst, num_elems, false);
+    hvx_exp_f32(dst, spad, num_elems, false);
 
     float sum = hvx_reduce_sum_f32(dst, num_elems);
 
