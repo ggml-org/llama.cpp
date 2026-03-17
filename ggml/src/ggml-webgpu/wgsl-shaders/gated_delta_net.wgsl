@@ -1,11 +1,3 @@
-#ifndef S_V
-#define S_V 128u
-#endif
-
-#ifndef WG_SIZE
-#define WG_SIZE S_V
-#endif
-
 @group(0) @binding(0)
 var<storage, read> src_q: array<f32>;
 

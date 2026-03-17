@@ -906,7 +906,7 @@ static webgpu_command ggml_webgpu_set(webgpu_context & ctx, ggml_tensor * src0, 
 
     auto * decisions = static_cast<ggml_webgpu_generic_shader_decisions *>(pipeline.context.get());
 
-    const uint32_t ne = inplace ? (uint32_t) ggml_nelements(src1) : (uint32_t) ggml_nelements(dst);
+    const uint32_t ne            = inplace ? (uint32_t) ggml_nelements(src1) : (uint32_t) ggml_nelements(dst);
     const uint32_t dst_type_size = (uint32_t) ggml_type_size(dst->type);
 
     std::vector<uint32_t> params = {
@@ -932,33 +932,22 @@ static webgpu_command ggml_webgpu_set(webgpu_context & ctx, ggml_tensor * src0, 
     };
 
     std::vector<wgpu::BindGroupEntry> entries;
-    if (inplace) {
-        entries = {
-            { .binding = 0,
-             .buffer  = ggml_webgpu_tensor_buf(src1),
-             .offset  = ggml_webgpu_tensor_align_offset(ctx, src1),
-             .size    = ggml_webgpu_tensor_binding_size(ctx, src1) },
-            { .binding = 1,
-             .buffer  = ggml_webgpu_tensor_buf(dst),
-             .offset  = ggml_webgpu_tensor_align_offset(ctx, dst),
-             .size    = ggml_webgpu_tensor_binding_size(ctx, dst) },
-        };
-    } else {
-        entries = {
-            { .binding = 0,
-             .buffer  = ggml_webgpu_tensor_buf(src0),
-             .offset  = ggml_webgpu_tensor_align_offset(ctx, src0),
-             .size    = ggml_webgpu_tensor_binding_size(ctx, src0) },
-            { .binding = 1,
-             .buffer  = ggml_webgpu_tensor_buf(src1),
-             .offset  = ggml_webgpu_tensor_align_offset(ctx, src1),
-             .size    = ggml_webgpu_tensor_binding_size(ctx, src1) },
-            { .binding = 2,
-             .buffer  = ggml_webgpu_tensor_buf(dst),
-             .offset  = ggml_webgpu_tensor_align_offset(ctx, dst),
-             .size    = ggml_webgpu_tensor_binding_size(ctx, dst) },
-        };
+    uint                              binding_index = 0;
+    if (!inplace) {
+        entries.push_back({ .binding = 0,
+                            .buffer  = ggml_webgpu_tensor_buf(src0),
+                            .offset  = ggml_webgpu_tensor_align_offset(ctx, src0),
+                            .size    = ggml_webgpu_tensor_binding_size(ctx, src0) });
+        binding_index++;
     }
+    entries.push_back({ .binding = binding_index,
+                        .buffer  = ggml_webgpu_tensor_buf(src1),
+                        .offset  = ggml_webgpu_tensor_align_offset(ctx, src1),
+                        .size    = ggml_webgpu_tensor_binding_size(ctx, src1) });
+    entries.push_back({ .binding = binding_index + 1,
+                        .buffer  = ggml_webgpu_tensor_buf(dst),
+                        .offset  = ggml_webgpu_tensor_align_offset(ctx, dst),
+                        .size    = ggml_webgpu_tensor_binding_size(ctx, dst) });
 
     uint32_t wg_x = CEIL_DIV(ne, decisions->wg_size);
     return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, pipeline, params, entries, wg_x);
@@ -1059,12 +1048,15 @@ static webgpu_command ggml_webgpu_diag(webgpu_context & ctx, ggml_tensor * src, 
     return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, pipeline, params, entries, wg_x);
 }
 
-static webgpu_command ggml_webgpu_solve_tri(webgpu_context & ctx, ggml_tensor * src0, ggml_tensor * src1, ggml_tensor * dst) {
+static webgpu_command ggml_webgpu_solve_tri(webgpu_context & ctx,
+                                            ggml_tensor *    src0,
+                                            ggml_tensor *    src1,
+                                            ggml_tensor *    dst) {
     ggml_webgpu_shader_lib_context shader_lib_ctx = {
-        .src0        = src0,
-        .src1        = src1,
-        .dst         = dst,
-        .max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup,
+        .src0               = src0,
+        .src1               = src1,
+        .dst                = dst,
+        .max_wg_size        = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup,
         .wg_mem_limit_bytes = ctx->global_ctx->capabilities.limits.maxComputeWorkgroupStorageSize,
     };
 
@@ -1109,7 +1101,7 @@ static webgpu_command ggml_webgpu_solve_tri(webgpu_context & ctx, ggml_tensor * 
         { .binding = 2,
          .buffer  = ggml_webgpu_tensor_buf(dst),
          .offset  = ggml_webgpu_tensor_align_offset(ctx, dst),
-         .size    = ggml_webgpu_tensor_binding_size(ctx, dst) }
+         .size    = ggml_webgpu_tensor_binding_size(ctx, dst)  }
     };
 
     const uint32_t wg_x = CEIL_DIV((uint32_t) src1->ne[0], decisions->wg_size);
@@ -1117,7 +1109,10 @@ static webgpu_command ggml_webgpu_solve_tri(webgpu_context & ctx, ggml_tensor * 
     return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, pipeline, params, entries, wg_x, wg_y);
 }
 
-static webgpu_command ggml_webgpu_ssm_conv(webgpu_context & ctx, ggml_tensor * src0, ggml_tensor * src1, ggml_tensor * dst) {
+static webgpu_command ggml_webgpu_ssm_conv(webgpu_context & ctx,
+                                           ggml_tensor *    src0,
+                                           ggml_tensor *    src1,
+                                           ggml_tensor *    dst) {
     ggml_webgpu_shader_lib_context shader_lib_ctx = {
         .src0        = src0,
         .src1        = src1,
@@ -1125,8 +1120,8 @@ static webgpu_command ggml_webgpu_ssm_conv(webgpu_context & ctx, ggml_tensor * s
         .max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup,
     };
 
-    webgpu_pipeline pipeline = ctx->shader_lib->get_ssm_conv_pipeline(shader_lib_ctx);
-    auto * decisions = static_cast<ggml_webgpu_ssm_conv_shader_decisions *>(pipeline.context.get());
+    webgpu_pipeline pipeline  = ctx->shader_lib->get_ssm_conv_pipeline(shader_lib_ctx);
+    auto *          decisions = static_cast<ggml_webgpu_ssm_conv_shader_decisions *>(pipeline.context.get());
 
     const uint32_t token_tiles = CEIL_DIV((uint32_t) dst->ne[1], decisions->tokens_per_wg);
 
@@ -1162,7 +1157,7 @@ static webgpu_command ggml_webgpu_ssm_conv(webgpu_context & ctx, ggml_tensor * s
         { .binding = 2,
          .buffer  = ggml_webgpu_tensor_buf(dst),
          .offset  = ggml_webgpu_tensor_align_offset(ctx, dst),
-         .size    = ggml_webgpu_tensor_binding_size(ctx, dst) }
+         .size    = ggml_webgpu_tensor_binding_size(ctx, dst)  }
     };
 
     const uint32_t wg_x = CEIL_DIV((uint32_t) src0->ne[1], decisions->block_size);
@@ -1170,16 +1165,21 @@ static webgpu_command ggml_webgpu_ssm_conv(webgpu_context & ctx, ggml_tensor * s
     return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, pipeline, params, entries, wg_x, wg_y);
 }
 
-static webgpu_command ggml_webgpu_gated_delta_net(
-    webgpu_context & ctx, ggml_tensor * src0, ggml_tensor * src1, ggml_tensor * src2, ggml_tensor * src3,
-    ggml_tensor * src4, ggml_tensor * src5, ggml_tensor * dst) {
+static webgpu_command ggml_webgpu_gated_delta_net(webgpu_context & ctx,
+                                                  ggml_tensor *    src0,
+                                                  ggml_tensor *    src1,
+                                                  ggml_tensor *    src2,
+                                                  ggml_tensor *    src3,
+                                                  ggml_tensor *    src4,
+                                                  ggml_tensor *    src5,
+                                                  ggml_tensor *    dst) {
     ggml_webgpu_shader_lib_context shader_lib_ctx = {
-        .src0 = src0,
-        .src1 = src1,
-        .src2 = src2,
-        .src3 = src3,
-        .src4 = src4,
-        .dst  = dst,
+        .src0        = src0,
+        .src1        = src1,
+        .src2        = src2,
+        .src3        = src3,
+        .src4        = src4,
+        .dst         = dst,
         .max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup,
     };
 
@@ -1244,7 +1244,7 @@ static webgpu_command ggml_webgpu_gated_delta_net(
         { .binding = 6,
          .buffer  = ggml_webgpu_tensor_buf(dst),
          .offset  = ggml_webgpu_tensor_align_offset(ctx, dst),
-         .size    = ggml_webgpu_tensor_binding_size(ctx, dst) }
+         .size    = ggml_webgpu_tensor_binding_size(ctx, dst)  }
     };
 
     return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, pipeline, params, entries, h, n_seqs);
@@ -1919,9 +1919,7 @@ static webgpu_command ggml_webgpu_repeat(webgpu_context & ctx, ggml_tensor * src
     return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, pipeline, params, entries, wg_x);
 }
 
-static webgpu_command ggml_webgpu_row_norm(webgpu_context &                    ctx,
-                                           ggml_tensor *                       src,
-                                           ggml_tensor *                       dst) {
+static webgpu_command ggml_webgpu_row_norm(webgpu_context & ctx, ggml_tensor * src, ggml_tensor * dst) {
     int inplace = ggml_webgpu_tensor_equal(src, dst);
 
     std::vector<uint32_t> params = {
@@ -1962,8 +1960,7 @@ static webgpu_command ggml_webgpu_row_norm(webgpu_context &                    c
                             .size    = ggml_webgpu_tensor_binding_size(ctx, dst) });
     }
 
-    return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, pipeline, params, entries,
-                                     ggml_nrows(src));
+    return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, pipeline, params, entries, ggml_nrows(src));
 }
 
 static webgpu_command ggml_webgpu_rope(webgpu_context & ctx,
@@ -3286,10 +3283,10 @@ static ggml_backend_buffer_type_t ggml_backend_webgpu_device_get_buffer_type(ggm
         /* .iface = */ {
                         /* .get_name         = */ ggml_backend_webgpu_buffer_type_get_name,
                         /* .alloc_buffer     = */
-            ggml_backend_webgpu_buffer_type_alloc_buffer,                                    /* .get_alignment    = */
-            ggml_backend_webgpu_buffer_type_get_alignment,                                   /* .get_max_size     = */
-            ggml_backend_webgpu_buffer_type_get_max_size,                                    /* .get_alloc_size   = */
-            ggml_backend_webgpu_buffer_type_get_alloc_size, /* .is_host          = */ NULL,  // defaults to false
+            ggml_backend_webgpu_buffer_type_alloc_buffer,  /* .get_alignment    = */
+            ggml_backend_webgpu_buffer_type_get_alignment, /* .get_max_size     = */
+            ggml_backend_webgpu_buffer_type_get_max_size,  /* .get_alloc_size   = */
+            ggml_backend_webgpu_buffer_type_get_alloc_size, /* .is_host          = */ NULL,                // defaults to false
         },
         /* .device  = */
         dev,
@@ -3377,9 +3374,8 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                           (op->type == GGML_TYPE_I32 && src0->type == GGML_TYPE_F32);
             break;
         case GGML_OP_SET:
-            supports_op = ggml_is_contiguous(src0) && ggml_is_contiguous(op) &&
-                          src0->type == src1->type && src0->type == op->type &&
-                          (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_I32);
+            supports_op = ggml_is_contiguous(src0) && ggml_is_contiguous(op) && src0->type == src1->type &&
+                          src0->type == op->type && (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_I32);
             break;
         case GGML_OP_SET_ROWS:
             supports_op = ((op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_F32) && src0->type == GGML_TYPE_F32 &&
@@ -3522,60 +3518,23 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
             }
             break;
         case GGML_OP_TRI:
-            supports_op = op->type == GGML_TYPE_F32 && src0->type == GGML_TYPE_F32 && ggml_is_contiguous(src0);
+            supports_op = op->type == GGML_TYPE_F32 && src0->type == GGML_TYPE_F32;
             break;
         case GGML_OP_DIAG:
-            supports_op = op->type == GGML_TYPE_F32 && src0->type == GGML_TYPE_F32 && ggml_is_contiguous(src0);
+            supports_op = op->type == GGML_TYPE_F32 && src0->type == GGML_TYPE_F32;
             break;
         case GGML_OP_SOLVE_TRI:
-            supports_op = op->type == GGML_TYPE_F32 &&
-                          src0->type == GGML_TYPE_F32 &&
-                          src1->type == GGML_TYPE_F32 &&
-                          ggml_is_contiguous(src0) &&
-                          ggml_is_contiguous(src1);
+            supports_op = op->type == GGML_TYPE_F32 && src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32;
             break;
         case GGML_OP_SSM_CONV:
-            {
-                constexpr uint32_t block_size = 32u;
-                constexpr uint32_t tokens_per_wg = 8u;
-                const uint32_t token_tiles = CEIL_DIV((uint32_t) op->ne[1], tokens_per_wg);
-                const uint32_t wg_x = CEIL_DIV((uint32_t) src0->ne[1], block_size);
-                const uint32_t wg_y = token_tiles * (uint32_t) op->ne[2];
-
-                supports_op = op->type == GGML_TYPE_F32 &&
-                              src0->type == GGML_TYPE_F32 &&
-                              src1->type == GGML_TYPE_F32 &&
-                              ggml_is_contiguous(src1) &&
-                              src0->nb[0] == sizeof(float) &&
-                              src1->nb[0] == sizeof(float) &&
-                              src0->nb[1] == src0->ne[0] * sizeof(float) &&
-                              wg_x <= ctx->webgpu_global_ctx->capabilities.limits.maxComputeWorkgroupsPerDimension &&
-                              wg_y <= ctx->webgpu_global_ctx->capabilities.limits.maxComputeWorkgroupsPerDimension;
-            }
+            supports_op = op->type == GGML_TYPE_F32;
             break;
         case GGML_OP_GATED_DELTA_NET:
             {
                 const uint32_t s_v = (uint32_t) src2->ne[0];
-                const size_t   max_binding_size = ctx->webgpu_global_ctx->capabilities.limits.maxStorageBufferBindingSize;
-                supports_op = op->type == GGML_TYPE_F32 &&
-                              src0->type == GGML_TYPE_F32 &&
-                              src1->type == GGML_TYPE_F32 &&
-                              src2->type == GGML_TYPE_F32 &&
-                              op->src[3]->type == GGML_TYPE_F32 &&
-                              op->src[4]->type == GGML_TYPE_F32 &&
-                              op->src[5]->type == GGML_TYPE_F32 &&
-                              ggml_is_contiguous_rows(src0) &&
-                              ggml_is_contiguous_rows(src1) &&
-                              ggml_is_contiguous_rows(src2) &&
-                              ggml_is_contiguous(op->src[3]) &&
-                              ggml_is_contiguous(op->src[4]) &&
-                              ggml_is_contiguous(op->src[5]) &&
-                              ggml_nbytes(op->src[3]) <= max_binding_size &&
-                              ggml_nbytes(op->src[4]) <= max_binding_size &&
-                              ggml_nbytes(op->src[5]) <= max_binding_size &&
-                              (s_v == 32u || s_v == 64u || s_v == 128u) &&
-                              (uint32_t) src2->ne[1] <= ctx->webgpu_global_ctx->capabilities.limits.maxComputeWorkgroupsPerDimension &&
-                              (uint32_t) src2->ne[3] <= ctx->webgpu_global_ctx->capabilities.limits.maxComputeWorkgroupsPerDimension &&
+                supports_op = op->type == GGML_TYPE_F32 && src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 &&
+                              src2->type == GGML_TYPE_F32 && op->src[3]->type == GGML_TYPE_F32 &&
+                              op->src[4]->type == GGML_TYPE_F32 && op->src[5]->type == GGML_TYPE_F32 &&
                               s_v <= ctx->webgpu_global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
             }
             break;
@@ -3634,9 +3593,6 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
     }
 
     if (!supports_op) {
-//        printf("ggml_webgpu op not supported: %s with types dst: %s, src0: %s, src1: %s, src2: %s\n", ggml_op_name(op->op),
-//               ggml_type_name(op->type), src0 ? ggml_type_name(src0->type) : "null",
-//               src1 ? ggml_type_name(src1->type) : "null", src2 ? ggml_type_name(src2->type) : "null");
         WEBGPU_LOG_DEBUG("ggml_webgpu op not supported: "
                          << ggml_op_name(op->op) << " with types dst: " << ggml_type_name(op->type)
                          << ", src0: " << (op->src[0] ? ggml_type_name(op->src[0]->type) : "null")

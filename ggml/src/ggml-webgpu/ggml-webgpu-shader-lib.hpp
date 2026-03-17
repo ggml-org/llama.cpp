@@ -98,12 +98,6 @@ struct ggml_webgpu_generic_shader_decisions {
 struct ggml_webgpu_ssm_conv_shader_decisions {
     uint32_t block_size;
     uint32_t tokens_per_wg;
-    bool     vectorized;
-};
-
-struct ggml_webgpu_gated_delta_net_shader_decisions {
-    uint32_t s_v;
-    bool     kda;
 };
 
 /** Argsort **/
@@ -577,17 +571,17 @@ class ggml_webgpu_shader_lib {
     std::unordered_map<ggml_webgpu_gated_delta_net_pipeline_key,
                        webgpu_pipeline,
                        ggml_webgpu_gated_delta_net_pipeline_key_hash>
-        gated_delta_net_pipelines;                                     // type/S_v/kda
+        gated_delta_net_pipelines;  // type/S_v/kda
     std::unordered_map<ggml_webgpu_row_norm_pipeline_key, webgpu_pipeline, ggml_webgpu_row_norm_pipeline_key_hash>
-        row_norm_pipelines;                                            // op/inplace
+        row_norm_pipelines;         // op/inplace
     std::unordered_map<ggml_webgpu_pad_pipeline_key, webgpu_pipeline, ggml_webgpu_pad_pipeline_key_hash>
-        pad_pipelines;                                                 // circular/non-circular
+        pad_pipelines;              // circular/non-circular
     std::unordered_map<ggml_webgpu_binary_pipeline_key, webgpu_pipeline, ggml_webgpu_binary_pipeline_key_hash>
-        binary_pipelines;                                              // type/op/inplace/overlap
+        binary_pipelines;           // type/op/inplace/overlap
     std::unordered_map<ggml_webgpu_concat_pipeline_key, webgpu_pipeline, ggml_webgpu_concat_pipeline_key_hash>
-        concat_pipelines;                                              // type
+        concat_pipelines;           // type
     std::unordered_map<ggml_webgpu_repeat_pipeline_key, webgpu_pipeline, ggml_webgpu_repeat_pipeline_key_hash>
-        repeat_pipelines;                                              // type
+        repeat_pipelines;           // type
     std::unordered_map<ggml_webgpu_flash_attn_pipeline_key, webgpu_pipeline, ggml_webgpu_flash_attn_pipeline_key_hash>
         flash_attn_pipelines;
     std::unordered_map<ggml_webgpu_legacy_mul_mat_pipeline_key,
@@ -1013,7 +1007,7 @@ class ggml_webgpu_shader_lib {
             variant += "_vec4";
         }
 
-        constexpr uint32_t block_size = 32u;
+        constexpr uint32_t block_size    = 32u;
         constexpr uint32_t tokens_per_wg = 8u;
 
         defines.push_back("BLOCK_SIZE=" + std::to_string(block_size) + "u");
@@ -1023,7 +1017,6 @@ class ggml_webgpu_shader_lib {
         auto decisions           = std::make_shared<ggml_webgpu_ssm_conv_shader_decisions>();
         decisions->block_size    = block_size;
         decisions->tokens_per_wg = tokens_per_wg;
-        decisions->vectorized    = key.vectorized;
         webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
         pipeline.context         = decisions;
         ssm_conv_pipelines[key]  = pipeline;
@@ -1053,15 +1046,6 @@ class ggml_webgpu_shader_lib {
                 GGML_ABORT("Unsupported type for gated_delta_net shader");
         }
 
-        switch (key.s_v) {
-            case 32:
-            case 64:
-            case 128:
-                break;
-            default:
-                GGML_ABORT("Unsupported S_v for gated_delta_net shader");
-        }
-
         if (key.kda) {
             defines.push_back("KDA");
             variant += "_kda";
@@ -1070,12 +1054,8 @@ class ggml_webgpu_shader_lib {
         defines.push_back("S_V=" + std::to_string(key.s_v) + "u");
         defines.push_back("WG_SIZE=" + std::to_string(key.s_v) + "u");
 
-        auto processed           = preprocessor.preprocess(wgsl_gated_delta_net, defines);
-        auto decisions           = std::make_shared<ggml_webgpu_gated_delta_net_shader_decisions>();
-        decisions->s_v           = (uint32_t) key.s_v;
-        decisions->kda           = key.kda;
-        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
-        pipeline.context         = decisions;
+        auto            processed      = preprocessor.preprocess(wgsl_gated_delta_net, defines);
+        webgpu_pipeline pipeline       = ggml_webgpu_create_pipeline(device, processed, variant);
         gated_delta_net_pipelines[key] = pipeline;
         return gated_delta_net_pipelines[key];
     }
