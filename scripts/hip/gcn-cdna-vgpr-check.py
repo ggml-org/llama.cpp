@@ -125,7 +125,7 @@ def main():
     # First print all ignored functions (deduplicated)
     printed_ignored = set()
     for func_name, data in sorted(functions.items()):
-        total_vgprs = data['vgprs'] + data['spill']
+        total_vgprs = int(data['vgprs']) + int(data['spill'])
         if total_vgprs > 256 and func_name in ignored and func_name not in printed_ignored:
             location = data.get('location', log_file)
             print(f"{location}: {func_name} - Total VGPRs: {total_vgprs} ({data['vgprs']} + {data['spill']}) [IGNORED]") # noqa: NP100
@@ -133,7 +133,7 @@ def main():
 
     # Then print new functions with issues in red
     for func_name, data in sorted(functions.items()):
-        total_vgprs = data['vgprs'] + data['spill']
+        total_vgprs = int(data['vgprs']) + int(data['spill'])
         if total_vgprs > 256 and func_name not in ignored:
             status = "[IGNORED]" if func_name in ignored else ""
             location = data.get('location', log_file)
