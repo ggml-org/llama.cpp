@@ -12,15 +12,7 @@ import {
 	ReasoningFormat,
 	UrlProtocol
 } from '$lib/enums';
-import type {
-	ApiChatCompletionRequest,
-	ApiChatCompletionResponse,
-	ApiChatCompletionStreamChunk,
-	ApiChatCompletionToolCall,
-	ApiChatCompletionToolCallDelta,
-	ApiChatMessageContentPart,
-	ApiChatMessageData
-} from '$lib/types/api';
+import type { ApiChatMessageContentPart, ApiChatCompletionToolCall } from '$lib/types/api';
 import type { DatabaseMessageExtraMcpPrompt, DatabaseMessageExtraMcpResource } from '$lib/types';
 import { modelsStore } from '$lib/stores/models.svelte';
 
