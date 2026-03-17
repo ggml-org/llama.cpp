@@ -10,7 +10,22 @@ on:
   push:
     branches:
       - master
-    paths: ['.github/workflows/release.yml', '**/CMakeLists.txt', '**/.cmake', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.cuh', '**/*.swift', '**/*.m', '**/*.metal', '**/*.comp']
+    paths: [
+      '.github/workflows/release.yml',
+      '**/CMakeLists.txt',
+      '**/.cmake',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp',
+      '**/*.cu',
+      '**/*.cuh',
+      '**/*.swift',
+      '**/*.m',
+      '**/*.metal',
+      '**/*.comp',
+      '**/*.glsl'
+    ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
@@ -32,9 +47,9 @@ jobs:
           fetch-depth: 0
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: macOS-latest-cmake-arm64
+          key: macOS-latest-arm64
           evict-old-files: 1d
 
       - name: Build
@@ -79,9 +94,9 @@ jobs:
           fetch-depth: 0
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: macOS-latest-cmake-x64
+          key: macOS-latest-x64
           evict-old-files: 1d
 
       - name: Build
@@ -138,9 +153,10 @@ jobs:
           fetch-depth: 0
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        if: ${{ matrix.build != 's390x' }}
+        uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ubuntu-cpu-cmake-${{ matrix.build }}
+          key: ubuntu-cpu-${{ matrix.build }}
           evict-old-files: 1d
 
       - name: Dependencies
@@ -189,9 +205,9 @@ jobs:
           fetch-depth: 0
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ubuntu-22-cmake-vulkan
+          key: ubuntu-22-vulkan
           evict-old-files: 1d
 
       - name: Dependencies
@@ -231,6 +247,86 @@ jobs:
           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.tar.gz
           name: llama-bin-ubuntu-vulkan-x64.tar.gz
 
+  ubuntu-24-openvino:
+    runs-on: ubuntu-24.04
+
+    outputs:
+      openvino_version: ${{ steps.openvino_version.outputs.value }}
+
+    env:
+      # Sync versions in build.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
+      OPENVINO_VERSION_MAJOR: "2026.0"
+      OPENVINO_VERSION_FULL: "2026.0.0.20965.c6d6a13a886"
+
+    steps:
+      - name: Set OpenVINO version output
+        id: openvino_version
+        run: echo "value=${{ env.OPENVINO_VERSION_MAJOR }}" >> $GITHUB_OUTPUT
+
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: ubuntu-24-openvino-release-no-preset-v1
+          evict-old-files: 1d
+
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev libtbb12 cmake ninja-build python3-pip
+          sudo apt install ocl-icd-opencl-dev opencl-headers opencl-clhpp-headers intel-opencl-icd
+
+      - name: Use OpenVINO Toolkit Cache
+        uses: actions/cache@v5
+        id: cache-openvino
+        with:
+          path: ./openvino_toolkit
+          key: openvino-toolkit-v${{ env.OPENVINO_VERSION_FULL }}-${{ runner.os }}
+
+      - name: Setup OpenVINO Toolkit
+        if: steps.cache-openvino.outputs.cache-hit != 'true'
+        uses: ./.github/actions/linux-setup-openvino
+        with:
+          path: ./openvino_toolkit
+          version_major: ${{ env.OPENVINO_VERSION_MAJOR }}
+          version_full: ${{ env.OPENVINO_VERSION_FULL }}
+
+      - name: Install OpenVINO dependencies
+        run: |
+          cd ./openvino_toolkit
+          chmod +x ./install_dependencies/install_openvino_dependencies.sh
+          echo "Y" | sudo -E ./install_dependencies/install_openvino_dependencies.sh
+
+      - name: Build
+        id: cmake_build
+        run: |
+          source ./openvino_toolkit/setupvars.sh
+          cmake -B build/ReleaseOV -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_OPENVINO=ON
+          cmake --build build/ReleaseOV --config Release -j $(nproc)
+
+      - name: Determine tag name
+        id: tag
+        uses: ./.github/actions/get-tag-name
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        run: |
+          cp LICENSE ./build/ReleaseOV/bin/
+          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.tar.gz --transform "s,./,llama-${{ steps.tag.outputs.name }}/," -C ./build/ReleaseOV/bin .
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.tar.gz
+          name: llama-bin-ubuntu-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.tar.gz
+
   windows-cpu:
     runs-on: windows-2025
 
@@ -247,9 +343,9 @@ jobs:
           fetch-depth: 0
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: windows-latest-cmake-cpu-${{ matrix.arch }}
+          key: windows-latest-cpu-${{ matrix.arch }}
           variant: ccache
           evict-old-files: 1d
 
@@ -308,9 +404,9 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: windows-latest-cmake-${{ matrix.backend }}-${{ matrix.arch }}
+          key: windows-latest-${{ matrix.backend }}-${{ matrix.arch }}
           variant: ccache
           evict-old-files: 1d
 
@@ -378,7 +474,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Install ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: windows-cuda-${{ matrix.cuda }}
           variant: ccache
@@ -454,9 +550,9 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: windows-latest-cmake-sycl
+          key: windows-latest-sycl
           variant: ccache
           evict-old-files: 1d
 
@@ -534,9 +630,9 @@ jobs:
           fetch-depth: 0
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ubuntu-rocm-cmake-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
+          key: ubuntu-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
           evict-old-files: 1d
 
       - name: Dependencies
@@ -644,9 +740,9 @@ jobs:
           key: rocm-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ runner.os }}
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: windows-latest-cmake-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}-x64
+          key: windows-latest-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}-x64
           evict-old-files: 1d
 
       - name: Install ROCm
@@ -872,7 +968,7 @@ jobs:
     permissions:
         contents: write # for creating release
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
 
     needs:
       - windows
@@ -883,6 +979,7 @@ jobs:
       - ubuntu-22-rocm
       - ubuntu-22-cpu
       - ubuntu-22-vulkan
+      - ubuntu-24-openvino
       - macOS-arm64
       - macOS-x64
       - ios-xcode-build
@@ -967,6 +1064,7 @@ jobs:
             - [Ubuntu x64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.tar.gz)
             - [Ubuntu x64 (ROCm 7.2)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-7.2-x64.tar.gz)
             - [Ubuntu s390x (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-s390x.tar.gz)
+            - [Ubuntu x64 (OpenVINO)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-${{ needs.ubuntu-24-openvino.outputs.openvino_version }}-x64.tar.gz)
 
             **Windows:**
             - [Windows x64 (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cpu-x64.zip)
