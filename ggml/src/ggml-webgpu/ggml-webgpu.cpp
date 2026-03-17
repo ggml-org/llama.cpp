@@ -932,7 +932,7 @@ static webgpu_command ggml_webgpu_set(webgpu_context & ctx, ggml_tensor * src0, 
     };
 
     std::vector<wgpu::BindGroupEntry> entries;
-    uint                              binding_index = 0;
+    uint32_t                              binding_index = 0;
     if (!inplace) {
         entries.push_back({ .binding = 0,
                             .buffer  = ggml_webgpu_tensor_buf(src0),
