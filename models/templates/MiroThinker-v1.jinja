@@ -1,20 +1,20 @@
 {#- ========== MiroThinker Tool Parsing Macro ========== #}
 
-{%- macro function_name() %}
+{%- macro function_name(tool) %}
     {%- if tool.function is defined %}
         {{- tool.function.name }}
     {%- elif tool.name is defined and tool.description is defined %}
         {{- tool.name }}
     {%- endif %}
 {%- endmacro %}
-{%- macro function_description() %}
+{%- macro function_description(tool) %}
     {%- if tool.function is defined %}
         {{- tool.function.description }}
     {%- elif tool.name is defined and tool.description is defined %}
         {{- tool.description }}
     {%- endif %}
 {%- endmacro %}
-{%- macro function_parameters() %}
+{%- macro function_parameters(tool) %}
     {%- if tool.function is defined %}
         {{- tool.function.parameters }}
     {%- elif tool.name is defined and tool.description is defined %}
@@ -22,38 +22,37 @@
     {%- endif %}
 {%- endmacro %}
 
-{%- macro render_tool(server_name) %}
+{%- macro render_tool(server_name, tool, last_server) %}
     {%- if tool.mt_visited is not defined %}
-        {%- if server_name != ns.last_server %}
+        {%- if server_name != last_server %}
             {{- "\n## Server name: " + server_name + "\n" }}
-            {%- set ns.last_server = server_name %}
         {%- endif %}
-        {{- "### Tool name: " + function_name() + "\n" }}
-        {{- "Description: " + function_description() + "\n" }}
-        {{- "Input JSON schema: " + (function_parameters() | tojson(ensure_ascii=False)) + "\n" }}
+        {{- "### Tool name: " + function_name(tool) + "\n" }}
+        {{- "Description: " + function_description(tool) + "\n" }}
+        {{- "Input JSON schema: " + (function_parameters(tool) | tojson(ensure_ascii=False)) + "\n" }}
         {{- "\n" }}
     {%- endif %}
 {%- endmacro %}
 
-{%- macro render_tool_server() %}
-    {%- if (function_name().split('_sandbox') | length > 1) or function_name().startswith('run_') or (function_name().split('python') | length > 1) %}
+{%- macro render_tool_server(tool) %}
+    {%- if (function_name(tool).split('_sandbox') | length > 1) or function_name(tool).startswith('run_') or (function_name(tool).split('python') | length > 1) %}
         {{- "tool-python" }}
-    {%- elif function_name().split('_search') | length > 1 %}
+    {%- elif function_name(tool).split('_search') | length > 1 %}
         {{- "search_and_scrape_webpage" }}
-    {%- elif function_name() == 'scrape_and_extract_info' %}
+    {%- elif function_name(tool) == 'scrape_and_extract_info' %}
         {{- "jina_scrape_llm_summary" }}
     {%- else %}
         {{- "generic-extras" }}
     {%- endif %}
 {%- endmacro %}
 
-{%- macro render_tool_call() %}
+{%- macro render_tool_call(message) %}
     {%- if message.tool_calls %}
         {{- "\n<use_mcp_tool>" }}
         {%- for tool_call in message.tool_calls %}
             {%- set function = tool_call.function %}
             {{- "\n<server_name>" }}
-            {{- render_tool_server() }}
+            {{- render_tool_server(tool_call) }}
             {{- "</server_name>\n<tool_name>" }}
             {{- function.name }}
             {{- "</tool_name>\n<arguments>\n" }}
@@ -74,12 +73,13 @@
 {%- endif %}
 {%- if tools %}
     {%- set system_message.content = "In this environment you have access to a set of tools you can use to answer the user's question. \n\nYou only have access to the tools provided below. You can only use one tool per message, and will receive the result of that tool in the user's next response. You use tools step-by-step to accomplish a given task, with each tool-use informed by the result of the previous tool-use. " + date_string + "\n\n# Tool-Use Formatting Instructions \n\nTool-use is formatted using XML-style tags. The tool-use is enclosed in <use_mcp_tool></use_mcp_tool> and each parameter is similarly enclosed within its own set of tags.\n\nThe Model Context Protocol (MCP) connects to servers that provide additional tools and resources to extend your capabilities. You can use the server's tools via the `use_mcp_tool`.\n\nDescription: \nRequest to use a tool provided by a MCP server. Each MCP server can provide multiple tools with different capabilities. Tools have defined input schemas that specify required and optional parameters.\n\nParameters:\n- server_name: (required) The name of the MCP server providing the tool\n- tool_name: (required) The name of the tool to execute\n- arguments: (required) A JSON object containing the tool's input parameters, following the tool's input schema, quotes within string must be properly escaped, ensure it's valid JSON\n\nUsage:\n<use_mcp_tool>\n<server_name>server name here</server_name>\n<tool_name>tool name here</tool_name>\n<arguments>\n{\n\"param1\": \"value1\",\n\"param2\": \"value2 \\\"escaped string\\\"\"\n}\n</arguments>\n</use_mcp_tool>\n\nImportant Notes:\n- Tool-use must be placed **at the end** of your response, **top-level**, and not nested within other tags.\n- Always adhere to this format for the tool use to ensure proper parsing and execution.\n\nString and scalar parameters should be specified as is, while lists and objects should use JSON format. Note that spaces for string values are not stripped. The output is not expected to be valid XML and is parsed with regular expressions.\nHere are the functions available in JSONSchema format:\n\n" %}
-    {%- set ns = namespace(formatted_tools='', last_server=None) %}
+    {%- set ns = namespace(formatted_tools = '', last_server=None) %}
     {%- for tool_server in ['tool-python', 'search_and_scrape_webpage', 'jina_scrape_llm_summary', 'generic-extras'] %}
         {%- for tool in tools %}
-            {%- set this_server = render_tool_server() %}
+            {%- set this_server = render_tool_server(tool) %}
             {%- if this_server == tool_server %}
-                {%- set ns.formatted_tools = ns.formatted_tools + render_tool(tool_server) %}
+                {%- set ns.formatted_tools = ns.formatted_tools + render_tool(tool_server, tool, ns.last_server) %}
+                {%- set ns.last_server = server_name %}
                 {%- set tool.mt_visited = 1 %}
             {%- endif %}
         {%- endfor %}
@@ -159,6 +159,7 @@
 
 {%- for message in messages %}
     {%- if message.role == 'assistant' %}
+    {%- if message.role == 'user' %}
         {%- if message.tool_calls %}
             {%- set message.content = message.content + render_tool_call() %}
             {%- set message.tool_calls = [] %}
