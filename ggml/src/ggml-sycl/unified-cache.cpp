@@ -5282,7 +5282,9 @@ alloc_tier unified_select_tier(const alloc_request & req) {
 static bool unified_free_record(const runtime_alloc_record & rec) {
     bool ok = true;
     if (rec.handle.tier == alloc_tier::DEVICE_VRAM) {
-        unified_cache_sub_runtime_bytes(rec.handle.device, rec.handle.size, rec.handle.category);
+        if (rec.handle.role != alloc_role::WEIGHT) {
+            unified_cache_sub_runtime_bytes(rec.handle.device, rec.handle.size, rec.handle.category);
+        }
         unified_managed_sub_device_bytes(rec.handle.device, rec.handle.size);
     } else if (rec.handle.tier == alloc_tier::HOST_PINNED || rec.handle.tier == alloc_tier::MMAP_TRACKED) {
         unified_cache_sub_runtime_host_bytes(rec.handle.size);
@@ -5324,7 +5326,9 @@ static bool unified_free_record(const runtime_alloc_record & rec) {
 
     if (!ok) {
         if (rec.handle.tier == alloc_tier::DEVICE_VRAM) {
-            unified_cache_add_runtime_bytes(rec.handle.device, rec.handle.size, rec.handle.category);
+            if (rec.handle.role != alloc_role::WEIGHT) {
+                unified_cache_add_runtime_bytes(rec.handle.device, rec.handle.size, rec.handle.category);
+            }
             unified_managed_add_device_bytes(rec.handle.device, rec.handle.size);
         } else if (rec.handle.tier == alloc_tier::HOST_PINNED || rec.handle.tier == alloc_tier::MMAP_TRACKED) {
             unified_cache_add_runtime_host_bytes(rec.handle.size);
@@ -5457,8 +5461,14 @@ bool unified_alloc(const alloc_request & req_in, alloc_handle * out) {
     }
 
     // Track the allocation now that it succeeded.
+    // Weight buffers are the primary model data allocated by ggml framework;
+    // they must NOT count against the cache budget (reserved_) because the
+    // cache manages SOA/XMX layouts in the REMAINING VRAM after weights.
+    // We still track them in g_runtime_managed_reserved_bytes (overcommit guard).
     if (reserve_device) {
-        unified_cache_add_runtime_bytes(req.device, alloc_size, cat);
+        if (req.intent.role != alloc_role::WEIGHT) {
+            unified_cache_add_runtime_bytes(req.device, alloc_size, cat);
+        }
         unified_managed_add_device_bytes(req.device, alloc_size);
     } else if (reserve_host) {
         unified_cache_add_runtime_host_bytes(alloc_size);
@@ -5485,7 +5495,9 @@ bool unified_alloc(const alloc_request & req_in, alloc_handle * out) {
             GGML_LOG_ERROR("[UNIFIED-ALLOC] duplicate pointer registration ptr=%p size=%zu tier=%s\n", ptr, alloc_size,
                            alloc_tier_name(tier));
             if (reserve_device) {
-                unified_cache_sub_runtime_bytes(req.device, alloc_size, cat);
+                if (req.intent.role != alloc_role::WEIGHT) {
+                    unified_cache_sub_runtime_bytes(req.device, alloc_size, cat);
+                }
                 unified_managed_sub_device_bytes(req.device, alloc_size);
             } else if (reserve_host) {
                 unified_cache_sub_runtime_host_bytes(alloc_size);
