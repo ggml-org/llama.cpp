@@ -1,20 +1,20 @@
 @group(0) @binding(0)
-var<storage, read> src_q: array<f32>;
+var<storage, read_write> src_q: array<f32>;
 
 @group(0) @binding(1)
-var<storage, read> src_k: array<f32>;
+var<storage, read_write> src_k: array<f32>;
 
 @group(0) @binding(2)
-var<storage, read> src_v: array<f32>;
+var<storage, read_write> src_v: array<f32>;
 
 @group(0) @binding(3)
-var<storage, read> src_g: array<f32>;
+var<storage, read_write> src_g: array<f32>;
 
 @group(0) @binding(4)
-var<storage, read> src_beta: array<f32>;
+var<storage, read_write> src_beta: array<f32>;
 
 @group(0) @binding(5)
-var<storage, read> src_state: array<f32>;
+var<storage, read_write> src_state: array<f32>;
 
 @group(0) @binding(6)
 var<storage, read_write> dst: array<f32>;
