@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cinttypes>
+#include <chrono>
 #include <cmath>
 #include <codecvt>
 #include <cstdarg>
