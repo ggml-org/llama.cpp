@@ -159,7 +159,6 @@
 
 {%- for message in messages %}
     {%- if message.role == 'assistant' %}
-    {%- if message.role == 'user' %}
         {%- if message.tool_calls %}
             {%- set message.content = message.content + render_tool_call() %}
             {%- set message.tool_calls = [] %}
