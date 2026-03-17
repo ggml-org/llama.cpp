@@ -3865,6 +3865,12 @@ void common_params_add_preset_options(std::vector<common_arg> & args) {
         [](common_params &, int) { /* unused */ }
     ).set_env(COMMON_ARG_PRESET_STOP_TIMEOUT).set_preset_only());
 
+    args.push_back(common_arg(
+        {"hidden"},
+        "in server router mode, hide this model from the /models endpoint",
+        [](common_params &) { /* unused */ }
+    ).set_env(COMMON_ARG_PRESET_HIDDEN).set_preset_only());
+
     // args.push_back(common_arg(
     //     {"pin"},
     //     "in server router mode, do not unload this model if models_max is exceeded",

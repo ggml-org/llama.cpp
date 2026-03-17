@@ -1553,6 +1553,7 @@ The precedence rule for preset options is as follows:
 We also offer additional options that are exclusive to presets (these aren't treated as command-line arguments):
 - `load-on-startup` (boolean): Controls whether the model loads automatically when the server starts
 - `stop-timeout` (int, seconds): After requested unload, wait for this many seconds before forcing termination (default: 10)
+- `hidden` (boolean): When true, excludes the model from the `GET /models` response; the model is still loadable and usable via the API (useful with `[*]` to hide all by default)
 
 ### Routing requests
 
