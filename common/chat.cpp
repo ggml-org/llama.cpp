@@ -1536,7 +1536,7 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
     }
 
     params.extra_context = common_chat_extra_context();
-    for (auto el : inputs.chat_template_kwargs) {
+    for (const auto & el : inputs.chat_template_kwargs) {
         params.extra_context[el.first] = json::parse(el.second);
     }
 

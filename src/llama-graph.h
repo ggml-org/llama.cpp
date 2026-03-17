@@ -598,7 +598,7 @@ struct llm_graph_params {
             return false;
         }
 
-        if (samplers.size() > 0) {
+        if (!samplers.empty()) {
             if (!ubatch.data || !other.ubatch.data) {
                 return false;
             }
