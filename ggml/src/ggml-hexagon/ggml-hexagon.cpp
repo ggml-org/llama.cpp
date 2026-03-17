@@ -1528,11 +1528,7 @@ static size_t ggml_backend_hexagon_buffer_type_get_max_size(ggml_backend_buffer_
 }
 
 static bool ggml_backend_hexagon_buffer_type_is_host(ggml_backend_buffer_type_t buft) {
-    // buffer stores quantized data in repacked format (e.g. q4x4x2 instead of q4_0),
-    // so raw tensor->data is not in standard host-readable format.
-    // returning false forces ggml_backend_tensor_copy to go through get_tensor/set_tensor
-    // which properly handles the format conversion.
-    return false;
+    return opt_hostbuf;
     GGML_UNUSED(buft);
 }
 
@@ -3023,7 +3019,7 @@ static void ggml_backend_hexagon_device_get_props(ggml_backend_dev_t dev, struct
     ggml_backend_hexagon_device_get_memory(dev, &props->memory_free, &props->memory_total);
     props->caps = {
         /* .async                 = */ true,
-        /* .host_buffer           = */ false,
+        /* .host_buffer           = */ (bool) opt_hostbuf,
         /* .buffer_from_host_ptr  = */ false,
         /* .events                = */ false,
     };
